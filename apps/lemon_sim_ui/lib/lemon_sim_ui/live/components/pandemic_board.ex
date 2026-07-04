@@ -1,4 +1,7 @@
 defmodule LemonSimUi.Live.Components.PandemicBoard do
+  @moduledoc """
+  Renders the Pandemic simulation board with region health, interventions, resources, and outbreak status.
+  """
   use Phoenix.Component
 
   alias LemonCore.MapHelpers

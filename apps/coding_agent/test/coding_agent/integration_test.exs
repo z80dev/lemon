@@ -59,7 +59,7 @@ defmodule CodingAgent.IntegrationTest do
     %SettingsManager{
       default_thinking_level: :off,
       compaction_enabled: true,
-      reserve_tokens: 16384
+      reserve_tokens: 16_384
     }
   end
 
@@ -201,7 +201,7 @@ defmodule CodingAgent.IntegrationTest do
           compaction_entries =
             Enum.filter(SessionManager.entries(state.session_manager), &(&1.type == :compaction))
 
-          assert length(compaction_entries) >= 1
+          assert compaction_entries != []
 
           # Save and reload session
           :ok = Session.save(session)
@@ -212,7 +212,7 @@ defmodule CodingAgent.IntegrationTest do
           loaded_compaction_entries =
             Enum.filter(SessionManager.entries(loaded_session), &(&1.type == :compaction))
 
-          assert length(loaded_compaction_entries) >= 1
+          assert loaded_compaction_entries != []
 
           # Verify the summary is preserved
           compaction_entry = hd(loaded_compaction_entries)
@@ -295,7 +295,7 @@ defmodule CodingAgent.IntegrationTest do
 
       # The messages should include the compaction summary as context
       # and messages after the compaction point
-      assert length(messages) >= 1
+      assert messages != []
     end
 
     @tag :tmp_dir

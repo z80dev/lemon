@@ -315,7 +315,7 @@ defmodule CodingAgent.SettingsManagerTest do
           compaction: %{
             enabled: false,
             reserve_tokens: 8192,
-            keep_recent_tokens: 10000
+            keep_recent_tokens: 10_000
           }
         },
         tui: %{},
@@ -328,7 +328,7 @@ defmodule CodingAgent.SettingsManagerTest do
 
       assert settings.compaction_enabled == false
       assert settings.reserve_tokens == 8192
-      assert settings.keep_recent_tokens == 10000
+      assert settings.keep_recent_tokens == 10_000
     end
 
     test "extracts retry settings from agent config" do
@@ -555,7 +555,7 @@ defmodule CodingAgent.SettingsManagerTest do
       settings = %SettingsManager{
         compaction_enabled: true,
         reserve_tokens: 8192,
-        keep_recent_tokens: 10000
+        keep_recent_tokens: 10_000
       }
 
       result = SettingsManager.get_compaction_settings(settings)
@@ -563,7 +563,7 @@ defmodule CodingAgent.SettingsManagerTest do
       assert result == %{
                enabled: true,
                reserve_tokens: 8192,
-               keep_recent_tokens: 10000
+               keep_recent_tokens: 10_000
              }
     end
 
@@ -701,7 +701,7 @@ defmodule CodingAgent.SettingsManagerTest do
           compaction: %{
             enabled: true,
             reserve_tokens: 8192,
-            keep_recent_tokens: 10000
+            keep_recent_tokens: 10_000
           },
           retry: %{
             enabled: true,

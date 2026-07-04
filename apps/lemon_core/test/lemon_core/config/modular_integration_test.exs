@@ -163,7 +163,7 @@ defmodule LemonCore.Config.ModularIntegrationTest do
       rescue
         e in ValidationError ->
           assert e.message =~ "Configuration validation failed"
-          assert length(e.errors) >= 1
+          assert e.errors != []
           assert Enum.any?(e.errors, &String.contains?(&1, "agent.default_model"))
       end
     end
@@ -194,7 +194,7 @@ defmodule LemonCore.Config.ModularIntegrationTest do
 
       assert {:error, errors} = Modular.load_with_validation()
       assert is_list(errors)
-      assert length(errors) >= 1
+      assert errors != []
     end
 
     test "includes specific error messages", %{mock_home: mock_home} do

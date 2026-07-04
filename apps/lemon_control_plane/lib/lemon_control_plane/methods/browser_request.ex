@@ -43,37 +43,37 @@ defmodule LemonControlPlane.Methods.BrowserRequest do
     force_local = params["local"] == true
     timeout_ms = params["timeoutMs"] || 30_000
 
-    with {:ok, method} <- normalize_method(method) do
-      # Find browser node
-      browser_node = if(force_local, do: nil, else: find_browser_node(node_id))
+    case normalize_method(method) do
+      {:ok, method} ->
+        # Find browser node
+        browser_node = if(force_local, do: nil, else: find_browser_node(node_id))
 
-      cond do
-        browser_node == nil and local_fallback_enabled?() ->
-          with {:ok, args, network_policy} <- prepare_request(method, args) do
-            run_local(method, args, timeout_ms, network_policy)
-          end
-
-        browser_node == nil ->
-          {:error, Errors.not_found("No browser node available. Pair a browser node first.")}
-
-        true ->
-          node = browser_node
-
-          # Get node ID (handle both atom and string keys)
-          actual_node_id = get_field(node, :id) || node_id
-          status = get_field(node, :status)
-
-          if status != :online and status != "online" do
-            {:error, Errors.unavailable("Browser node is not online")}
-          else
-            with {:ok, args, network_policy} <- prepare_request(method, args),
-                 {:ok, invoke} <-
-                   invoke_browser_node(actual_node_id, method, args, timeout_ms, ctx) do
-              complete_invoke(invoke, network_policy, await_result, timeout_ms)
+        cond do
+          browser_node == nil and local_fallback_enabled?() ->
+            with {:ok, args, network_policy} <- prepare_request(method, args) do
+              run_local(method, args, timeout_ms, network_policy)
             end
-          end
-      end
-    else
+
+          browser_node == nil ->
+            {:error, Errors.not_found("No browser node available. Pair a browser node first.")}
+
+          true ->
+            node = browser_node
+
+            # Get node ID (handle both atom and string keys)
+            actual_node_id = get_field(node, :id) || node_id
+            status = get_field(node, :status)
+
+            if status != :online and status != "online" do
+              {:error, Errors.unavailable("Browser node is not online")}
+            else
+              with {:ok, args, network_policy} <- prepare_request(method, args),
+                   {:ok, invoke} <-
+                     invoke_browser_node(actual_node_id, method, args, timeout_ms, ctx) do
+                complete_invoke(invoke, network_policy, await_result, timeout_ms)
+              end
+            end
+        end
       {:error, {:invalid_request, _message} = error} ->
         {:error, error}
 

@@ -20,7 +20,7 @@ defmodule LemonCore.Config.ValidatorTest do
           auto_resume: false,
           enable_telegram: false,
           require_engine_lock: true,
-          engine_lock_timeout_ms: 30000
+          engine_lock_timeout_ms: 30_000
         },
         logging: %{
           level: :info,
@@ -77,7 +77,7 @@ defmodule LemonCore.Config.ValidatorTest do
 
       assert {:error, errors} = Validator.validate(config)
       assert is_list(errors)
-      assert length(errors) > 0
+      assert errors != []
 
       # Check for specific errors
       assert Enum.any?(errors, &String.contains?(&1, "agent.default_model"))

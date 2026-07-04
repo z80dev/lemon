@@ -183,6 +183,7 @@ run_quality() {
   ensure_repo_root
   setup_test_env
   mix format --check-formatted
+  mix credo
   bash scripts/lint_ci_docs.sh
   bash scripts/test_contract.sh
   mix lemon.skill.lint

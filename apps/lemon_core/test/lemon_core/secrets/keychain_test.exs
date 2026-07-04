@@ -237,7 +237,7 @@ defmodule LemonCore.Secrets.KeychainTest do
     end
 
     test "returns {:error, :invalid_value} for non-binary value" do
-      result = Keychain.put_master_key(12345, [])
+      result = Keychain.put_master_key(12_345, [])
       assert {:error, :invalid_value} = result
 
       result = Keychain.put_master_key(nil, [])

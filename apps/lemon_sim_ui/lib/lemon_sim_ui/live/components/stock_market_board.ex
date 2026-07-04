@@ -1,4 +1,7 @@
 defmodule LemonSimUi.Live.Components.StockMarketBoard do
+  @moduledoc """
+  Renders the Stock Market simulation board with portfolio state, prices, orders, and market events.
+  """
   use Phoenix.Component
 
   alias LemonCore.MapHelpers
@@ -985,7 +988,7 @@ defmodule LemonSimUi.Live.Components.StockMarketBoard do
     current = portfolio_value(player_data, stocks)
 
     case trade_history do
-      hist when is_list(hist) and length(hist) > 0 ->
+      hist when is_list(hist) and hist != [] ->
         # Extract past portfolio values if available
         values =
           Enum.map(hist, fn entry ->

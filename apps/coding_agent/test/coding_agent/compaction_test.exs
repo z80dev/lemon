@@ -9,34 +9,34 @@ defmodule CodingAgent.CompactionTest do
     test "returns true when context exceeds threshold" do
       # context_window = 100000, reserve = 16384
       # context_tokens > 100000 - 16384 = 83616
-      assert Compaction.should_compact?(90000, 100_000, %{enabled: true, reserve_tokens: 16384})
+      assert Compaction.should_compact?(90_000, 100_000, %{enabled: true, reserve_tokens: 16_384})
     end
 
     test "returns false when context is within threshold" do
-      refute Compaction.should_compact?(50000, 100_000, %{enabled: true, reserve_tokens: 16384})
+      refute Compaction.should_compact?(50_000, 100_000, %{enabled: true, reserve_tokens: 16_384})
     end
 
     test "returns false when compaction disabled" do
-      refute Compaction.should_compact?(90000, 100_000, %{enabled: false})
+      refute Compaction.should_compact?(90_000, 100_000, %{enabled: false})
     end
 
     test "uses default reserve_tokens when not specified" do
       # Default is 16384
       # 90000 > 100000 - 16384 = 83616
-      assert Compaction.should_compact?(90000, 100_000, %{enabled: true})
+      assert Compaction.should_compact?(90_000, 100_000, %{enabled: true})
     end
 
     test "returns false when exactly at threshold" do
       # 83616 is not greater than 83616
-      refute Compaction.should_compact?(83616, 100_000, %{enabled: true, reserve_tokens: 16384})
+      refute Compaction.should_compact?(83_616, 100_000, %{enabled: true, reserve_tokens: 16_384})
     end
 
     test "defaults to enabled when not specified" do
-      assert Compaction.should_compact?(90000, 100_000, %{})
+      assert Compaction.should_compact?(90_000, 100_000, %{})
     end
 
     test "handles empty settings map" do
-      assert Compaction.should_compact?(90000, 100_000, %{})
+      assert Compaction.should_compact?(90_000, 100_000, %{})
     end
   end
 
@@ -182,7 +182,7 @@ defmodule CodingAgent.CompactionTest do
   describe "find_cut_point/2" do
     test "returns error when branch is empty" do
       branch = []
-      assert {:error, :cannot_compact} = Compaction.find_cut_point(branch, 20000)
+      assert {:error, :cannot_compact} = Compaction.find_cut_point(branch, 20_000)
     end
 
     test "returns error when no message entries" do
@@ -197,7 +197,7 @@ defmodule CodingAgent.CompactionTest do
         }
       ]
 
-      assert {:error, :cannot_compact} = Compaction.find_cut_point(branch, 20000)
+      assert {:error, :cannot_compact} = Compaction.find_cut_point(branch, 20_000)
     end
 
     test "returns error when cannot find enough tokens to keep" do
@@ -212,7 +212,7 @@ defmodule CodingAgent.CompactionTest do
         }
       ]
 
-      assert {:error, :cannot_compact} = Compaction.find_cut_point(branch, 20000)
+      assert {:error, :cannot_compact} = Compaction.find_cut_point(branch, 20_000)
     end
 
     test "finds valid cut point preserving recent tokens" do
@@ -437,10 +437,10 @@ defmodule CodingAgent.CompactionTest do
       ]
 
       # Without force, should return cannot_compact for short history
-      assert {:error, :cannot_compact} = Compaction.find_cut_point(branch, 20000)
+      assert {:error, :cannot_compact} = Compaction.find_cut_point(branch, 20_000)
 
       # With force, should find a cut point
-      assert {:ok, cut_id} = Compaction.find_cut_point(branch, 20000, force: true)
+      assert {:ok, cut_id} = Compaction.find_cut_point(branch, 20_000, force: true)
       # Should keep recent messages and cut at an earlier valid point
       assert cut_id in ["entry1", "entry2"]
     end
@@ -503,7 +503,7 @@ defmodule CodingAgent.CompactionTest do
 
       # With force and min_keep_messages: 2, should cut earlier in the conversation
       assert {:ok, cut_id} =
-               Compaction.find_cut_point(branch, 20000, force: true, min_keep_messages: 2)
+               Compaction.find_cut_point(branch, 20_000, force: true, min_keep_messages: 2)
 
       # Should cut at entry4 or entry5 to keep 2 messages
       assert cut_id in ["entry4", "entry5"]
@@ -555,7 +555,7 @@ defmodule CodingAgent.CompactionTest do
       ]
 
       # Force with min_keep=1 - should not cut between tool call (entry2) and result (entry3)
-      result = Compaction.find_cut_point(branch, 20000, force: true, min_keep_messages: 1)
+      result = Compaction.find_cut_point(branch, 20_000, force: true, min_keep_messages: 1)
 
       case result do
         {:ok, cut_id} ->
@@ -591,9 +591,9 @@ defmodule CodingAgent.CompactionTest do
       ]
 
       # Default (force: false) should return cannot_compact
-      assert {:error, :cannot_compact} = Compaction.find_cut_point(branch, 20000)
-      assert {:error, :cannot_compact} = Compaction.find_cut_point(branch, 20000, [])
-      assert {:error, :cannot_compact} = Compaction.find_cut_point(branch, 20000, force: false)
+      assert {:error, :cannot_compact} = Compaction.find_cut_point(branch, 20_000)
+      assert {:error, :cannot_compact} = Compaction.find_cut_point(branch, 20_000, [])
+      assert {:error, :cannot_compact} = Compaction.find_cut_point(branch, 20_000, force: false)
     end
 
     test "force: true with only one message returns cannot_compact" do
@@ -608,11 +608,11 @@ defmodule CodingAgent.CompactionTest do
       ]
 
       # Can't compact a single message even with force
-      assert {:error, :cannot_compact} = Compaction.find_cut_point(branch, 20000, force: true)
+      assert {:error, :cannot_compact} = Compaction.find_cut_point(branch, 20_000, force: true)
     end
 
     test "force: true with empty branch returns cannot_compact" do
-      assert {:error, :cannot_compact} = Compaction.find_cut_point([], 20000, force: true)
+      assert {:error, :cannot_compact} = Compaction.find_cut_point([], 20_000, force: true)
     end
   end
 

@@ -227,7 +227,7 @@ defmodule Ai.Providers.Bedrock do
       end
 
     body =
-      if length(context.tools) > 0 do
+      if context.tools != [] do
         tool_config = convert_tool_config(context.tools, opts)
         if tool_config, do: Map.put(body, "toolConfig", tool_config), else: body
       else
@@ -431,7 +431,7 @@ defmodule Ai.Providers.Bedrock do
   end
 
   defp add_cache_point_to_last_user_message(messages, model) do
-    if supports_prompt_caching?(model) and length(messages) > 0 do
+    if supports_prompt_caching?(model) and messages != [] do
       {last, rest} = List.pop_at(messages, -1)
 
       if last["role"] == "user" and is_list(last["content"]) do
@@ -445,7 +445,7 @@ defmodule Ai.Providers.Bedrock do
     end
   end
 
-  defp convert_tool_config(tools, opts) when is_list(tools) and length(tools) > 0 do
+  defp convert_tool_config(tools, opts) when is_list(tools) and tools != [] do
     # Check if tool_choice is "none" via headers
     tool_choice = Map.get(opts.headers, "tool_choice")
 
@@ -490,8 +490,8 @@ defmodule Ai.Providers.Bedrock do
           minimal: 1024,
           low: 2048,
           medium: 8192,
-          high: 16384,
-          xhigh: 16384
+          high: 16_384,
+          xhigh: 16_384
         }
 
         level = if opts.reasoning == :xhigh, do: :high, else: opts.reasoning

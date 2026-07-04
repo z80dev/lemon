@@ -273,8 +273,8 @@ defmodule AgentCore.LoopAbortTest do
       message_ends = Enum.filter(events, &match?({:message_end, _}, &1))
 
       # At minimum we have user message events and assistant message events
-      assert length(message_starts) >= 1
-      assert length(message_ends) >= 1
+      assert message_starts != []
+      assert message_ends != []
 
       # Aborted runs should not report normal completion
       refute Enum.any?(events, &match?({:agent_end, _}, &1))
@@ -557,7 +557,7 @@ defmodule AgentCore.LoopAbortTest do
 
       tool_ends = Enum.filter(events, &match?({:tool_execution_end, _, _, _, _}, &1))
 
-      assert length(tool_ends) >= 1
+      assert tool_ends != []
       assert length(tool_ends) <= 2
 
       # Instant tool should succeed

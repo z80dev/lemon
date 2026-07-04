@@ -269,7 +269,7 @@ config :ai, :circuit_breaker,
 **Manual Control**:
 
 ```elixir
-Ai.CircuitBreaker.is_open?(:anthropic)    # check state
+Ai.CircuitBreaker.open?(:anthropic)    # check state
 Ai.CircuitBreaker.reset(:anthropic)       # manual reset to closed
 Ai.CircuitBreaker.get_state(:anthropic)   # returns {:ok, map()}
 Ai.CircuitBreaker.record_success(:anthropic)

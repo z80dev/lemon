@@ -85,7 +85,7 @@ defmodule LemonGateway.Voice.AudioConversionTest do
       # In mu-law, larger magnitudes produce smaller numeric codes (after bit inversion).
       # This is a key property of the compression.
       small_mag = AudioConversion.encode_mulaw_sample(100)
-      large_mag = AudioConversion.encode_mulaw_sample(10000)
+      large_mag = AudioConversion.encode_mulaw_sample(10_000)
 
       # Strip sign bit for magnitude comparison
       small_code = Bitwise.band(small_mag, 0x7F)
@@ -170,8 +170,8 @@ defmodule LemonGateway.Voice.AudioConversionTest do
     test "all encoded values are valid bytes (0-255)" do
       # Test a range of PCM sample values
       samples = [
-        -32768,
-        -16384,
+        -32_768,
+        -16_384,
         -8192,
         -4096,
         -1024,
@@ -183,8 +183,8 @@ defmodule LemonGateway.Voice.AudioConversionTest do
         1024,
         4096,
         8192,
-        16384,
-        32767
+        16_384,
+        32_767
       ]
 
       Enum.each(samples, fn sample ->

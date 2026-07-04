@@ -225,8 +225,7 @@ defmodule LemonSim.Examples.Skirmish do
     result =
       case Runner.run_until_terminal(state, modules(), run_opts) do
         {:ok, final_state} ->
-          IO.puts("Final state:")
-          IO.inspect(final_state.world)
+          IO.puts("Final state: #{inspect(final_state.world)}")
 
           if game_log do
             step = final_state.version
@@ -240,8 +239,7 @@ defmodule LemonSim.Examples.Skirmish do
           {:ok, final_state}
 
         {:error, reason} = error ->
-          IO.puts("Driver failed:")
-          IO.inspect(reason)
+          IO.puts("Driver failed: #{inspect(reason)}")
           error
       end
 

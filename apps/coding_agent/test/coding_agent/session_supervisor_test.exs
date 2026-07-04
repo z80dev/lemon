@@ -91,7 +91,7 @@ defmodule CodingAgent.SessionSupervisorTest do
       health_results = SessionSupervisor.health_all()
       healthy_sessions = Enum.filter(health_results, &(&1.status == :healthy))
 
-      assert length(healthy_sessions) >= 1
+      assert healthy_sessions != []
     end
 
     test "sorts by status (unhealthy first)" do

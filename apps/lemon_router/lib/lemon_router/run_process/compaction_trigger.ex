@@ -561,23 +561,22 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
   defp compaction_trigger_ratio_or(_value, default), do: default
 
   defp reset_telegram_resume_state(session_key) when is_binary(session_key) do
-    with %{kind: :channel_peer, channel_id: "telegram"} = parsed <-
-           ChannelContext.parse_session_key(session_key) do
-      account_id = normalize_telegram_account_id(parsed)
+    case ChannelContext.parse_session_key(session_key) do
+      %{kind: :channel_peer, channel_id: "telegram"} = parsed ->
+        account_id = normalize_telegram_account_id(parsed)
 
-      chat_id = ChannelContext.parse_int(parsed.peer_id)
-      thread_id = ChannelContext.parse_int(parsed.thread_id)
+        chat_id = ChannelContext.parse_int(parsed.peer_id)
+        thread_id = ChannelContext.parse_int(parsed.thread_id)
 
-      _ = safe_delete_chat_state(session_key)
+        _ = safe_delete_chat_state(session_key)
 
-      if is_integer(chat_id) do
-        _ = LemonChannels.Runtime.clear_telegram_thread_state(account_id, chat_id, thread_id)
-      end
+        if is_integer(chat_id) do
+          _ = LemonChannels.Runtime.clear_telegram_thread_state(account_id, chat_id, thread_id)
+        end
 
-      Logger.warning(
-        "Reset Telegram resume state after context_length_exceeded for session_key=#{inspect(session_key)}"
-      )
-    else
+        Logger.warning(
+          "Reset Telegram resume state after context_length_exceeded for session_key=#{inspect(session_key)}"
+        )
       _ -> :ok
     end
 

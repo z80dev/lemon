@@ -15,7 +15,7 @@ defmodule CodingAgent.ToolsTest do
       tools = Tools.coding_tools(@test_cwd)
 
       assert is_list(tools)
-      assert length(tools) > 0
+      assert tools != []
 
       Enum.each(tools, fn tool ->
         assert %AgentTool{} = tool
@@ -123,7 +123,7 @@ defmodule CodingAgent.ToolsTest do
       tools = Tools.read_only_tools(@test_cwd)
 
       assert is_list(tools)
-      assert length(tools) > 0
+      assert tools != []
 
       Enum.each(tools, fn tool ->
         assert %AgentTool{} = tool

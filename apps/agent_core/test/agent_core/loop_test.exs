@@ -107,7 +107,7 @@ defmodule AgentCore.LoopTest do
       {:ok, messages} = EventStream.result(stream)
 
       # Should contain the prompt and the assistant response
-      assert length(messages) >= 1
+      assert messages != []
 
       # Find the assistant message
       assistant_msg = Enum.find(messages, fn m -> Map.get(m, :role) == :assistant end)
@@ -126,8 +126,8 @@ defmodule AgentCore.LoopTest do
       message_starts = Enum.filter(events, fn e -> match?({:message_start, _}, e) end)
       message_ends = Enum.filter(events, fn e -> match?({:message_end, _}, e) end)
 
-      assert length(message_starts) >= 1
-      assert length(message_ends) >= 1
+      assert message_starts != []
+      assert message_ends != []
     end
   end
 
@@ -144,7 +144,7 @@ defmodule AgentCore.LoopTest do
       events = Loop.stream([user_message("Test")], context, config) |> Enum.to_list()
 
       assert is_list(events)
-      assert length(events) > 0
+      assert events != []
     end
 
     test "includes agent lifecycle events" do
@@ -351,7 +351,7 @@ defmodule AgentCore.LoopTest do
       stream = Loop.agent_loop_continue(context, config, nil, nil)
 
       {:ok, messages} = EventStream.result(stream)
-      assert length(messages) >= 0
+      assert is_list(messages)
     end
   end
 
@@ -410,8 +410,8 @@ defmodule AgentCore.LoopTest do
       message_ends = Enum.filter(events, fn e -> match?({:message_end, _}, e) end)
 
       # At minimum, should have prompt message and assistant response
-      assert length(message_starts) >= 1
-      assert length(message_ends) >= 1
+      assert message_starts != []
+      assert message_ends != []
 
       # Each message_start should have a corresponding message_end
       assert length(message_starts) == length(message_ends)
@@ -722,7 +722,7 @@ defmodule AgentCore.LoopTest do
 
       # Should have events for the steering message
       # The exact behavior depends on implementation
-      assert length(events) > 0
+      assert events != []
     end
 
     test "applies queued system prompt to follow-up turns" do
@@ -845,7 +845,7 @@ defmodule AgentCore.LoopTest do
 
       # Should have multiple turns
       turn_starts = Enum.filter(events, fn e -> match?({:turn_start}, e) end)
-      assert length(turn_starts) >= 1
+      assert turn_starts != []
     end
   end
 
@@ -1137,7 +1137,7 @@ defmodule AgentCore.LoopTest do
       {:ok, messages} = EventStream.result(stream)
 
       # Should have at least the prompt
-      assert length(messages) >= 1
+      assert messages != []
     end
 
     test "result includes tool results" do
@@ -1157,7 +1157,7 @@ defmodule AgentCore.LoopTest do
 
       # Should include tool result message
       tool_results = Enum.filter(messages, fn m -> Map.get(m, :role) == :tool_result end)
-      assert length(tool_results) >= 1
+      assert tool_results != []
       assert Enum.all?(tool_results, &(&1.trust == :trusted))
     end
 

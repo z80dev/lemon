@@ -214,7 +214,7 @@ defmodule CodingAgent.CompactionHooksTest do
           # context_tokens
           9000,
           # context_window
-          10000,
+          10_000,
           "test_session",
           %{enabled: true, reserve_tokens: 2000}
         )
@@ -229,7 +229,7 @@ defmodule CodingAgent.CompactionHooksTest do
           # context_tokens
           1000,
           # context_window
-          10000,
+          10_000,
           "test_session",
           %{enabled: true, reserve_tokens: 2000}
         )
@@ -241,7 +241,7 @@ defmodule CodingAgent.CompactionHooksTest do
       result =
         CompactionHooks.should_compact_with_hooks?(
           9000,
-          10000,
+          10_000,
           "test_session",
           %{enabled: false, reserve_tokens: 2000}
         )

@@ -93,6 +93,8 @@ defmodule LemonGateway.Engines.CliAdapter do
     end
   end
 
+  # Resume-line detection keeps the LemonGateway.Engine callback name.
+  # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
   def is_resume_line(engine_id, line) do
     AgentResumeToken.is_resume_line(line, engine_id)
   end
@@ -244,11 +246,12 @@ defmodule LemonGateway.Engines.CliAdapter do
   defp consume_runner(runner_module, runner_pid, engine_id, sink_pid, run_ref) do
     stream = runner_module.stream(runner_pid)
 
-    AgentCore.EventStream.events(stream)
-    |> Enum.reduce(%{completed: false}, fn event, acc ->
-      acc = handle_stream_event(event, engine_id, sink_pid, run_ref, acc)
-      acc
-    end)
+    _ =
+      AgentCore.EventStream.events(stream)
+      |> Enum.reduce(%{completed: false}, fn event, acc ->
+        acc = handle_stream_event(event, engine_id, sink_pid, run_ref, acc)
+        acc
+      end)
 
     :ok
   end

@@ -918,7 +918,7 @@ defmodule CodingAgent.Tools.FindTest do
       # Find should still work (it just finds files, doesn't read them)
       assert %AgentToolResult{details: details} = result
       # Both files should be found - find doesn't need read permission
-      assert length(details.files) >= 1
+      assert details.files != []
     end
   end
 
@@ -1236,7 +1236,7 @@ defmodule CodingAgent.Tools.FindTest do
             )
 
           assert %AgentToolResult{details: details} = result
-          assert length(details.files) >= 1
+          assert details.files != []
 
         {:error, _} ->
           # Filesystem doesn't support newlines in filenames

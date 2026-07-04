@@ -338,7 +338,7 @@ Ai.CallDispatcher.get_state()
 ### Circuit Breaker Control
 
 ```elixir
-Ai.CircuitBreaker.is_open?(:anthropic)
+Ai.CircuitBreaker.open?(:anthropic)
 Ai.CircuitBreaker.reset(:anthropic)
 Ai.CircuitBreaker.get_state(:anthropic)
 ```

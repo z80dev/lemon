@@ -125,7 +125,7 @@ defmodule CodingAgent.Tools.WriteTest do
       path = Path.join(tmp_dir, "grow.txt")
       File.write!(path, "short")
 
-      long_content = String.duplicate("a", 10000)
+      long_content = String.duplicate("a", 10_000)
 
       result =
         Write.execute(

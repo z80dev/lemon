@@ -74,7 +74,7 @@ defmodule LemonSim.Examples.SupplyChain.ActionSpace do
     existing_tiers = @tier_order
 
     tools =
-      if length(adjacent) > 0 do
+      if adjacent != [] do
         [
           send_forecast_tool(actor_id, adjacent),
           request_info_tool(actor_id, adjacent, existing_tiers)

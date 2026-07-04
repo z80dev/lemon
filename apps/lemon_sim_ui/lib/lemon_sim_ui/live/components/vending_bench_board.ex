@@ -1,4 +1,7 @@
 defmodule LemonSimUi.Live.Components.VendingBenchBoard do
+  @moduledoc """
+  Renders the Vending Bench simulation board with machine inventory, cash, operations, and worker state.
+  """
   use Phoenix.Component
 
   alias LemonCore.MapHelpers

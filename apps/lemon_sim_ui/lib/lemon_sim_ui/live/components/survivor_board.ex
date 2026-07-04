@@ -1,4 +1,7 @@
 defmodule LemonSimUi.Live.Components.SurvivorBoard do
+  @moduledoc """
+  Renders the Survivor simulation board with tribes, alliances, challenges, votes, and elimination state.
+  """
   use Phoenix.Component
 
   alias LemonCore.MapHelpers
@@ -384,7 +387,7 @@ defmodule LemonSimUi.Live.Components.SurvivorBoard do
                       player_id={p_id}
                       player={p_data}
                       active={p_id == @active_actor}
-                      immune={is_immune?(p_id, @immune_player)}
+                      immune={immune?(p_id, @immune_player)}
                       jury_member={false}
                       tribe_color={tribe_color(get_val(p_data, :tribe, ""))}
                       all_players={@players}
@@ -411,7 +414,7 @@ defmodule LemonSimUi.Live.Components.SurvivorBoard do
                           player_id={member_id}
                           player={p_data}
                           active={member_id == @active_actor}
-                          immune={is_immune?(member_id, @immune_player)}
+                          immune={immune?(member_id, @immune_player)}
                           jury_member={to_string(member_id) in Enum.map(@jury, &to_string/1)}
                           tribe_color={tc}
                           all_players={@players}
@@ -1264,7 +1267,7 @@ defmodule LemonSimUi.Live.Components.SurvivorBoard do
 
   # ── Immunity Check ──────────────────────────────────────────────────
 
-  defp is_immune?(player_id, immune_player) do
+  defp immune?(player_id, immune_player) do
     immune_player != nil && to_string(player_id) == to_string(immune_player)
   end
 

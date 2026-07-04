@@ -133,7 +133,7 @@ defmodule Mix.Tasks.Lemon.EvalTest do
       # Should list individual results
       lines = String.split(output, "\n")
       result_lines = Enum.filter(lines, &String.contains?(&1, ":"))
-      assert length(result_lines) >= 1
+      assert result_lines != []
     end
 
     @tag :integration
@@ -157,7 +157,7 @@ defmodule Mix.Tasks.Lemon.EvalTest do
       assert is_integer(passed)
       assert is_integer(failed)
       assert is_list(results)
-      assert length(results) > 0
+      assert results != []
 
       # Check result structure
       first_result = hd(results)

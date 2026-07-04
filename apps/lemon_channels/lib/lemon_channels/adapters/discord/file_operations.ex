@@ -100,7 +100,7 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
     channel_id = inbound.meta[:channel_id]
 
     with true <- should_auto_put?(cfg),
-         true <- length(attachments) > 0,
+         true <- attachments != [],
          {:ok, root} <- resolve_project_root_from_inbound(inbound) do
       uploads_dir = cfg_get(cfg, :uploads_dir, "incoming")
 
@@ -158,7 +158,7 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
   def should_auto_put?(state, inbound) when is_map(state) do
     cfg = files_cfg(state)
     attachments = (inbound.meta[:attachments] || [])
-    should_auto_put?(cfg) and length(attachments) > 0
+    should_auto_put?(cfg) and attachments != []
   rescue
     _ -> false
   end

@@ -30,7 +30,7 @@ defmodule LemonChannels.Outbox.ChunkerTest do
       chunks = Chunker.chunk(text, chunk_size: 30)
 
       # Should try to keep sentences together
-      assert length(chunks) >= 1
+      assert chunks != []
     end
 
     test "handles text without spaces" do

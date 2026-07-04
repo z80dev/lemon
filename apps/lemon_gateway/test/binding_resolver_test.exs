@@ -47,7 +47,7 @@ defmodule LemonGateway.BindingResolverTest do
     test "returns nil when no bindings configured" do
       setup_config([])
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
 
       assert BindingResolver.resolve_binding(scope) == nil
     end
@@ -56,7 +56,7 @@ defmodule LemonGateway.BindingResolverTest do
       Application.put_env(:lemon_gateway, :config_path, "/nonexistent/path.toml")
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
 
       assert BindingResolver.resolve_binding(scope) == nil
     end
@@ -64,14 +64,14 @@ defmodule LemonGateway.BindingResolverTest do
     test "finds chat-level binding" do
       setup_config(
         bindings: [
-          %{transport: :telegram, chat_id: 12345, project: "myapp", default_engine: "codex"}
+          %{transport: :telegram, chat_id: 12_345, project: "myapp", default_engine: "codex"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
       binding = BindingResolver.resolve_binding(scope)
 
-      assert %Binding{transport: :telegram, chat_id: 12345} = binding
+      assert %Binding{transport: :telegram, chat_id: 12_345} = binding
       assert binding.project == "myapp"
       assert binding.default_engine == "codex"
     end
@@ -79,18 +79,18 @@ defmodule LemonGateway.BindingResolverTest do
     test "topic binding takes precedence over chat binding" do
       setup_config(
         bindings: [
-          %{transport: :telegram, chat_id: 12345, project: "chat_project"},
-          %{transport: :telegram, chat_id: 12345, topic_id: 999, project: "topic_project"}
+          %{transport: :telegram, chat_id: 12_345, project: "chat_project"},
+          %{transport: :telegram, chat_id: 12_345, topic_id: 999, project: "topic_project"}
         ]
       )
 
       # Chat-level scope gets chat binding
-      chat_scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      chat_scope = %ChatScope{transport: :telegram, chat_id: 12_345}
       chat_binding = BindingResolver.resolve_binding(chat_scope)
       assert chat_binding.project == "chat_project"
 
       # Topic scope gets topic binding
-      topic_scope = %ChatScope{transport: :telegram, chat_id: 12345, topic_id: 999}
+      topic_scope = %ChatScope{transport: :telegram, chat_id: 12_345, topic_id: 999}
       topic_binding = BindingResolver.resolve_binding(topic_scope)
       assert topic_binding.project == "topic_project"
     end
@@ -100,7 +100,7 @@ defmodule LemonGateway.BindingResolverTest do
         bindings: [
           %{
             transport: :telegram,
-            chat_id: 12345,
+            chat_id: 12_345,
             topic_id: 777,
             project: "topic_proj",
             default_engine: "topic_engine",
@@ -109,11 +109,11 @@ defmodule LemonGateway.BindingResolverTest do
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345, topic_id: 777}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345, topic_id: 777}
       binding = BindingResolver.resolve_binding(scope)
 
       assert binding.transport == :telegram
-      assert binding.chat_id == 12345
+      assert binding.chat_id == 12_345
       assert binding.topic_id == 777
       assert binding.project == "topic_proj"
       assert binding.default_engine == "topic_engine"
@@ -123,12 +123,12 @@ defmodule LemonGateway.BindingResolverTest do
     test "falls back to chat binding when no topic binding exists" do
       setup_config(
         bindings: [
-          %{transport: :telegram, chat_id: 12345, project: "chat_project"}
+          %{transport: :telegram, chat_id: 12_345, project: "chat_project"}
         ]
       )
 
       # Topic scope falls back to chat binding
-      topic_scope = %ChatScope{transport: :telegram, chat_id: 12345, topic_id: 888}
+      topic_scope = %ChatScope{transport: :telegram, chat_id: 12_345, topic_id: 888}
       binding = BindingResolver.resolve_binding(topic_scope)
       assert binding.project == "chat_project"
     end
@@ -136,12 +136,12 @@ defmodule LemonGateway.BindingResolverTest do
     test "does not match topic binding when scope has no topic_id" do
       setup_config(
         bindings: [
-          %{transport: :telegram, chat_id: 12345, topic_id: 999, project: "topic_only"}
+          %{transport: :telegram, chat_id: 12_345, topic_id: 999, project: "topic_only"}
         ]
       )
 
       # Chat scope should NOT match topic binding
-      chat_scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      chat_scope = %ChatScope{transport: :telegram, chat_id: 12_345}
       binding = BindingResolver.resolve_binding(chat_scope)
       assert binding == nil
     end
@@ -149,11 +149,11 @@ defmodule LemonGateway.BindingResolverTest do
     test "handles binding with nil topic_id as chat-level binding" do
       setup_config(
         bindings: [
-          %{transport: :telegram, chat_id: 12345, topic_id: nil, project: "chat_proj"}
+          %{transport: :telegram, chat_id: 12_345, topic_id: nil, project: "chat_proj"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
       binding = BindingResolver.resolve_binding(scope)
       assert binding.project == "chat_proj"
     end
@@ -163,7 +163,7 @@ defmodule LemonGateway.BindingResolverTest do
         bindings: [
           %{
             transport: :telegram,
-            chat_id: 12345,
+            chat_id: 12_345,
             project: "full_proj",
             default_engine: "full_engine",
             queue_mode: :collect
@@ -171,7 +171,7 @@ defmodule LemonGateway.BindingResolverTest do
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
       binding = BindingResolver.resolve_binding(scope)
 
       assert %Binding{} = binding
@@ -183,16 +183,16 @@ defmodule LemonGateway.BindingResolverTest do
     test "handles multiple bindings with different chat_ids" do
       setup_config(
         bindings: [
-          %{transport: :telegram, chat_id: 11111, project: "first_proj"},
-          %{transport: :telegram, chat_id: 22222, project: "second_proj"}
+          %{transport: :telegram, chat_id: 11_111, project: "first_proj"},
+          %{transport: :telegram, chat_id: 22_222, project: "second_proj"}
         ]
       )
 
-      scope1 = %ChatScope{transport: :telegram, chat_id: 11111}
+      scope1 = %ChatScope{transport: :telegram, chat_id: 11_111}
       binding1 = BindingResolver.resolve_binding(scope1)
       assert binding1.project == "first_proj"
 
-      scope2 = %ChatScope{transport: :telegram, chat_id: 22222}
+      scope2 = %ChatScope{transport: :telegram, chat_id: 22_222}
       binding2 = BindingResolver.resolve_binding(scope2)
       assert binding2.project == "second_proj"
     end
@@ -201,11 +201,11 @@ defmodule LemonGateway.BindingResolverTest do
       # ConfigLoader handles string keys by checking both atom and string keys
       setup_config(
         bindings: [
-          %{"transport" => "telegram", "chat_id" => 12345, "project" => "string_key_proj"}
+          %{"transport" => "telegram", "chat_id" => 12_345, "project" => "string_key_proj"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
       binding = BindingResolver.resolve_binding(scope)
 
       # ConfigLoader converts string keys to proper Binding struct
@@ -216,11 +216,11 @@ defmodule LemonGateway.BindingResolverTest do
     test "returns nil for non-matching transport" do
       setup_config(
         bindings: [
-          %{transport: :discord, chat_id: 12345, project: "discord_proj"}
+          %{transport: :discord, chat_id: 12_345, project: "discord_proj"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
       binding = BindingResolver.resolve_binding(scope)
       assert binding == nil
     end
@@ -228,11 +228,11 @@ defmodule LemonGateway.BindingResolverTest do
     test "returns nil for non-matching chat_id" do
       setup_config(
         bindings: [
-          %{transport: :telegram, chat_id: 99999, project: "other_proj"}
+          %{transport: :telegram, chat_id: 99_999, project: "other_proj"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
       binding = BindingResolver.resolve_binding(scope)
       assert binding == nil
     end
@@ -240,7 +240,7 @@ defmodule LemonGateway.BindingResolverTest do
     test "handles empty binding map" do
       setup_config(bindings: [%{}])
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
       binding = BindingResolver.resolve_binding(scope)
       assert binding == nil
     end
@@ -252,7 +252,7 @@ defmodule LemonGateway.BindingResolverTest do
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
       binding = BindingResolver.resolve_binding(scope)
       # chat_id won't match nil
       assert binding == nil
@@ -261,12 +261,12 @@ defmodule LemonGateway.BindingResolverTest do
     test "multiple chat bindings returns first matching" do
       setup_config(
         bindings: [
-          %{transport: :telegram, chat_id: 12345, project: "first_proj"},
-          %{transport: :telegram, chat_id: 12345, project: "second_proj"}
+          %{transport: :telegram, chat_id: 12_345, project: "first_proj"},
+          %{transport: :telegram, chat_id: 12_345, project: "second_proj"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
       binding = BindingResolver.resolve_binding(scope)
       assert binding.project == "first_proj"
     end
@@ -274,12 +274,12 @@ defmodule LemonGateway.BindingResolverTest do
     test "multiple topic bindings returns first matching" do
       setup_config(
         bindings: [
-          %{transport: :telegram, chat_id: 12345, topic_id: 999, project: "first_topic"},
-          %{transport: :telegram, chat_id: 12345, topic_id: 999, project: "second_topic"}
+          %{transport: :telegram, chat_id: 12_345, topic_id: 999, project: "first_topic"},
+          %{transport: :telegram, chat_id: 12_345, topic_id: 999, project: "second_topic"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345, topic_id: 999}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345, topic_id: 999}
       binding = BindingResolver.resolve_binding(scope)
       assert binding.project == "first_topic"
     end
@@ -290,11 +290,11 @@ defmodule LemonGateway.BindingResolverTest do
       setup_config(
         default_engine: "global_default",
         bindings: [
-          %{transport: :telegram, chat_id: 12345, default_engine: "binding_engine"}
+          %{transport: :telegram, chat_id: 12_345, default_engine: "binding_engine"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
       resume = %ResumeToken{engine: "resume_engine", value: "abc123"}
 
       # Resume token wins over everything
@@ -305,11 +305,11 @@ defmodule LemonGateway.BindingResolverTest do
       setup_config(
         default_engine: "global_default",
         bindings: [
-          %{transport: :telegram, chat_id: 12345, default_engine: "binding_engine"}
+          %{transport: :telegram, chat_id: 12_345, default_engine: "binding_engine"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
       # Create a map that mimics a resume token with nil engine
       resume = %{engine: nil, value: "abc123"}
 
@@ -321,11 +321,11 @@ defmodule LemonGateway.BindingResolverTest do
       setup_config(
         default_engine: "global_default",
         bindings: [
-          %{transport: :telegram, chat_id: 12345, default_engine: "binding_engine"}
+          %{transport: :telegram, chat_id: 12_345, default_engine: "binding_engine"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
 
       # Hint wins over binding
       assert BindingResolver.resolve_engine(scope, "hint_engine", nil) == "hint_engine"
@@ -335,12 +335,12 @@ defmodule LemonGateway.BindingResolverTest do
       setup_config(
         default_engine: "global_default",
         bindings: [
-          %{transport: :telegram, chat_id: 12345, default_engine: "chat_engine"},
-          %{transport: :telegram, chat_id: 12345, topic_id: 999, default_engine: "topic_engine"}
+          %{transport: :telegram, chat_id: 12_345, default_engine: "chat_engine"},
+          %{transport: :telegram, chat_id: 12_345, topic_id: 999, default_engine: "topic_engine"}
         ]
       )
 
-      topic_scope = %ChatScope{transport: :telegram, chat_id: 12345, topic_id: 999}
+      topic_scope = %ChatScope{transport: :telegram, chat_id: 12_345, topic_id: 999}
 
       # Topic binding engine wins
       assert BindingResolver.resolve_engine(topic_scope, nil, nil) == "topic_engine"
@@ -357,14 +357,14 @@ defmodule LemonGateway.BindingResolverTest do
         bindings: [
           %{
             transport: :telegram,
-            chat_id: 12345,
+            chat_id: 12_345,
             project: "test_proj",
             default_engine: "chat_engine"
           }
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
 
       # Chat binding engine wins over project
       assert BindingResolver.resolve_engine(scope, nil, nil) == "chat_engine"
@@ -379,11 +379,11 @@ defmodule LemonGateway.BindingResolverTest do
           "test_proj" => %{root: "/tmp/test_project2", default_engine: "project_engine"}
         },
         bindings: [
-          %{transport: :telegram, chat_id: 12345, project: "test_proj"}
+          %{transport: :telegram, chat_id: 12_345, project: "test_proj"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
 
       # Project engine wins over global
       assert BindingResolver.resolve_engine(scope, nil, nil) == "project_engine"
@@ -392,7 +392,7 @@ defmodule LemonGateway.BindingResolverTest do
     test "falls back to global default when no other engine specified" do
       setup_config(default_engine: "global_default")
 
-      scope = %ChatScope{transport: :telegram, chat_id: 99999}
+      scope = %ChatScope{transport: :telegram, chat_id: 99_999}
 
       assert BindingResolver.resolve_engine(scope, nil, nil) == "global_default"
     end
@@ -401,7 +401,7 @@ defmodule LemonGateway.BindingResolverTest do
       # Config module has a default_engine of "lemon" when not explicitly set
       setup_config([])
 
-      scope = %ChatScope{transport: :telegram, chat_id: 99999}
+      scope = %ChatScope{transport: :telegram, chat_id: 99_999}
 
       # Falls back to Config's default value
       assert BindingResolver.resolve_engine(scope, nil, nil) == "lemon"
@@ -411,7 +411,7 @@ defmodule LemonGateway.BindingResolverTest do
       assert Process.whereis(Config) == nil
       Application.put_env(:lemon_gateway, Config, default_engine: "loader_default")
 
-      scope = %ChatScope{transport: :telegram, chat_id: 99999}
+      scope = %ChatScope{transport: :telegram, chat_id: 99_999}
 
       assert BindingResolver.resolve_engine(scope, nil, nil) == "loader_default"
     end
@@ -419,7 +419,7 @@ defmodule LemonGateway.BindingResolverTest do
     test "falls back to lemon when Config process is not running and loader has no default" do
       assert Process.whereis(Config) == nil
 
-      scope = %ChatScope{transport: :telegram, chat_id: 99999}
+      scope = %ChatScope{transport: :telegram, chat_id: 99_999}
 
       assert BindingResolver.resolve_engine(scope, nil, nil) == "lemon"
     end
@@ -433,11 +433,11 @@ defmodule LemonGateway.BindingResolverTest do
           "test_proj" => %{root: "/tmp/test_project_no_engine"}
         },
         bindings: [
-          %{transport: :telegram, chat_id: 12345, project: "test_proj"}
+          %{transport: :telegram, chat_id: 12_345, project: "test_proj"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
 
       # Falls back to global since project has no default_engine
       assert BindingResolver.resolve_engine(scope, nil, nil) == "global_default"
@@ -448,11 +448,11 @@ defmodule LemonGateway.BindingResolverTest do
         default_engine: "global_default",
         projects: %{},
         bindings: [
-          %{transport: :telegram, chat_id: 12345, project: "nonexistent_proj"}
+          %{transport: :telegram, chat_id: 12_345, project: "nonexistent_proj"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
 
       # Falls back to global since project doesn't exist
       assert BindingResolver.resolve_engine(scope, nil, nil) == "global_default"
@@ -467,11 +467,11 @@ defmodule LemonGateway.BindingResolverTest do
           "proj" => %{root: "/tmp/test_project_for_nil", default_engine: "proj_engine"}
         },
         bindings: [
-          %{transport: :telegram, chat_id: 12345, project: "proj", default_engine: nil}
+          %{transport: :telegram, chat_id: 12_345, project: "proj", default_engine: nil}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
 
       # binding.default_engine is nil, so falls through to project engine
       assert BindingResolver.resolve_engine(scope, nil, nil) == "proj_engine"
@@ -481,11 +481,11 @@ defmodule LemonGateway.BindingResolverTest do
       setup_config(
         default_engine: "global_default",
         bindings: [
-          %{transport: :telegram, chat_id: 12345, default_engine: "binding_engine"}
+          %{transport: :telegram, chat_id: 12_345, default_engine: "binding_engine"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
 
       # Empty hint is treated as absent and falls through to binding/global resolution.
       assert BindingResolver.resolve_engine(scope, "", nil) == "binding_engine"
@@ -496,11 +496,11 @@ defmodule LemonGateway.BindingResolverTest do
         default_engine: "global_default",
         projects: %{},
         bindings: [
-          %{transport: :telegram, chat_id: 12345, project: "some_proj"}
+          %{transport: :telegram, chat_id: 12_345, project: "some_proj"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
 
       # Falls back to global since project doesn't exist
       assert BindingResolver.resolve_engine(scope, nil, nil) == "global_default"
@@ -515,11 +515,11 @@ defmodule LemonGateway.BindingResolverTest do
           "proj" => %{root: "/tmp/test_project_int_engine", default_engine: 123}
         },
         bindings: [
-          %{transport: :telegram, chat_id: 12345, project: "proj"}
+          %{transport: :telegram, chat_id: 12_345, project: "proj"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
 
       # Falls back to global since project engine is not a string
       assert BindingResolver.resolve_engine(scope, nil, nil) == "global_default"
@@ -536,15 +536,15 @@ defmodule LemonGateway.BindingResolverTest do
         bindings: [
           %{
             transport: :telegram,
-            chat_id: 12345,
+            chat_id: 12_345,
             project: "chain_proj",
             default_engine: "chat_engine"
           },
-          %{transport: :telegram, chat_id: 12345, topic_id: 999, default_engine: "topic_engine"}
+          %{transport: :telegram, chat_id: 12_345, topic_id: 999, default_engine: "topic_engine"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345, topic_id: 999}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345, topic_id: 999}
       resume = %ResumeToken{engine: "resume_engine", value: "abc"}
 
       # Test each level of priority by removing higher priority items
@@ -558,7 +558,7 @@ defmodule LemonGateway.BindingResolverTest do
       assert BindingResolver.resolve_engine(scope, nil, nil) == "topic_engine"
 
       # 4. Chat binding wins (chat scope, no hint)
-      chat_scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      chat_scope = %ChatScope{transport: :telegram, chat_id: 12_345}
       assert BindingResolver.resolve_engine(chat_scope, nil, nil) == "chat_engine"
     end
   end
@@ -567,7 +567,7 @@ defmodule LemonGateway.BindingResolverTest do
     test "returns nil when no binding exists" do
       setup_config([])
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
 
       assert BindingResolver.resolve_cwd(scope) == nil
     end
@@ -575,11 +575,11 @@ defmodule LemonGateway.BindingResolverTest do
     test "returns nil when binding has no project" do
       setup_config(
         bindings: [
-          %{transport: :telegram, chat_id: 12345, default_engine: "codex"}
+          %{transport: :telegram, chat_id: 12_345, default_engine: "codex"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
 
       assert BindingResolver.resolve_cwd(scope) == nil
     end
@@ -587,11 +587,11 @@ defmodule LemonGateway.BindingResolverTest do
     test "returns nil when binding project is nil" do
       setup_config(
         bindings: [
-          %{transport: :telegram, chat_id: 12345, project: nil}
+          %{transport: :telegram, chat_id: 12_345, project: nil}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
 
       assert BindingResolver.resolve_cwd(scope) == nil
     end
@@ -604,11 +604,11 @@ defmodule LemonGateway.BindingResolverTest do
           "myapp" => %{root: "/tmp/my_project"}
         },
         bindings: [
-          %{transport: :telegram, chat_id: 12345, project: "myapp"}
+          %{transport: :telegram, chat_id: 12_345, project: "myapp"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
 
       assert BindingResolver.resolve_cwd(scope) == "/tmp/my_project"
     end
@@ -617,11 +617,11 @@ defmodule LemonGateway.BindingResolverTest do
       setup_config(
         projects: %{},
         bindings: [
-          %{transport: :telegram, chat_id: 12345, project: "missing_project"}
+          %{transport: :telegram, chat_id: 12_345, project: "missing_project"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
 
       assert BindingResolver.resolve_cwd(scope) == nil
     end
@@ -632,11 +632,11 @@ defmodule LemonGateway.BindingResolverTest do
           "myapp" => %{default_engine: "codex"}
         },
         bindings: [
-          %{transport: :telegram, chat_id: 12345, project: "myapp"}
+          %{transport: :telegram, chat_id: 12_345, project: "myapp"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
 
       assert BindingResolver.resolve_cwd(scope) == nil
     end
@@ -644,14 +644,14 @@ defmodule LemonGateway.BindingResolverTest do
     test "returns nil when project root is not a string" do
       setup_config(
         projects: %{
-          "myapp" => %{root: 12345}
+          "myapp" => %{root: 12_345}
         },
         bindings: [
-          %{transport: :telegram, chat_id: 12345, project: "myapp"}
+          %{transport: :telegram, chat_id: 12_345, project: "myapp"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
 
       assert BindingResolver.resolve_cwd(scope) == nil
     end
@@ -662,11 +662,11 @@ defmodule LemonGateway.BindingResolverTest do
           "myapp" => %{root: nil}
         },
         bindings: [
-          %{transport: :telegram, chat_id: 12345, project: "myapp"}
+          %{transport: :telegram, chat_id: 12_345, project: "myapp"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
 
       assert BindingResolver.resolve_cwd(scope) == nil
     end
@@ -675,11 +675,11 @@ defmodule LemonGateway.BindingResolverTest do
       setup_config(
         projects: %{},
         bindings: [
-          %{transport: :telegram, chat_id: 12345, project: "myapp"}
+          %{transport: :telegram, chat_id: 12_345, project: "myapp"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
 
       assert BindingResolver.resolve_cwd(scope) == nil
     end
@@ -690,11 +690,11 @@ defmodule LemonGateway.BindingResolverTest do
           "myapp" => %{root: "~/some_project"}
         },
         bindings: [
-          %{transport: :telegram, chat_id: 12345, project: "myapp"}
+          %{transport: :telegram, chat_id: 12_345, project: "myapp"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
       result = BindingResolver.resolve_cwd(scope)
 
       # Path.expand will expand ~ to home directory
@@ -712,12 +712,12 @@ defmodule LemonGateway.BindingResolverTest do
           "chat_proj" => %{root: "/tmp/chat_project"}
         },
         bindings: [
-          %{transport: :telegram, chat_id: 12345, project: "chat_proj"},
-          %{transport: :telegram, chat_id: 12345, topic_id: 999, project: "topic_proj"}
+          %{transport: :telegram, chat_id: 12_345, project: "chat_proj"},
+          %{transport: :telegram, chat_id: 12_345, topic_id: 999, project: "topic_proj"}
         ]
       )
 
-      topic_scope = %ChatScope{transport: :telegram, chat_id: 12345, topic_id: 999}
+      topic_scope = %ChatScope{transport: :telegram, chat_id: 12_345, topic_id: 999}
 
       assert BindingResolver.resolve_cwd(topic_scope) == "/tmp/topic_project"
     end
@@ -727,7 +727,7 @@ defmodule LemonGateway.BindingResolverTest do
     test "returns nil when no binding exists" do
       setup_config([])
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
 
       assert BindingResolver.resolve_queue_mode(scope) == nil
     end
@@ -735,11 +735,11 @@ defmodule LemonGateway.BindingResolverTest do
     test "returns nil when binding has no queue_mode" do
       setup_config(
         bindings: [
-          %{transport: :telegram, chat_id: 12345, project: "myapp"}
+          %{transport: :telegram, chat_id: 12_345, project: "myapp"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
 
       assert BindingResolver.resolve_queue_mode(scope) == nil
     end
@@ -747,11 +747,11 @@ defmodule LemonGateway.BindingResolverTest do
     test "returns nil when binding queue_mode is nil" do
       setup_config(
         bindings: [
-          %{transport: :telegram, chat_id: 12345, queue_mode: nil}
+          %{transport: :telegram, chat_id: 12_345, queue_mode: nil}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
 
       assert BindingResolver.resolve_queue_mode(scope) == nil
     end
@@ -759,11 +759,11 @@ defmodule LemonGateway.BindingResolverTest do
     test "returns queue mode from binding" do
       setup_config(
         bindings: [
-          %{transport: :telegram, chat_id: 12345, queue_mode: :followup}
+          %{transport: :telegram, chat_id: 12_345, queue_mode: :followup}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
 
       assert BindingResolver.resolve_queue_mode(scope) == :followup
     end
@@ -771,11 +771,11 @@ defmodule LemonGateway.BindingResolverTest do
     test "normalizes string queue_mode 'steer' to atom" do
       setup_config(
         bindings: [
-          %{transport: :telegram, chat_id: 12345, queue_mode: "steer"}
+          %{transport: :telegram, chat_id: 12_345, queue_mode: "steer"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
 
       assert BindingResolver.resolve_queue_mode(scope) == :steer
     end
@@ -783,11 +783,11 @@ defmodule LemonGateway.BindingResolverTest do
     test "normalizes string queue_mode 'collect' to atom" do
       setup_config(
         bindings: [
-          %{transport: :telegram, chat_id: 12345, queue_mode: "collect"}
+          %{transport: :telegram, chat_id: 12_345, queue_mode: "collect"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
 
       assert BindingResolver.resolve_queue_mode(scope) == :collect
     end
@@ -795,11 +795,11 @@ defmodule LemonGateway.BindingResolverTest do
     test "normalizes string queue_mode 'followup' to atom" do
       setup_config(
         bindings: [
-          %{transport: :telegram, chat_id: 12345, queue_mode: "followup"}
+          %{transport: :telegram, chat_id: 12_345, queue_mode: "followup"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
 
       assert BindingResolver.resolve_queue_mode(scope) == :followup
     end
@@ -807,11 +807,11 @@ defmodule LemonGateway.BindingResolverTest do
     test "normalizes string queue_mode 'interrupt' to atom" do
       setup_config(
         bindings: [
-          %{transport: :telegram, chat_id: 12345, queue_mode: "interrupt"}
+          %{transport: :telegram, chat_id: 12_345, queue_mode: "interrupt"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
 
       assert BindingResolver.resolve_queue_mode(scope) == :interrupt
     end
@@ -819,11 +819,11 @@ defmodule LemonGateway.BindingResolverTest do
     test "preserves atom queue_mode unchanged" do
       setup_config(
         bindings: [
-          %{transport: :telegram, chat_id: 12345, queue_mode: :collect}
+          %{transport: :telegram, chat_id: 12_345, queue_mode: :collect}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
 
       assert BindingResolver.resolve_queue_mode(scope) == :collect
     end
@@ -831,12 +831,12 @@ defmodule LemonGateway.BindingResolverTest do
     test "topic binding queue_mode takes precedence" do
       setup_config(
         bindings: [
-          %{transport: :telegram, chat_id: 12345, queue_mode: :collect},
-          %{transport: :telegram, chat_id: 12345, topic_id: 999, queue_mode: :interrupt}
+          %{transport: :telegram, chat_id: 12_345, queue_mode: :collect},
+          %{transport: :telegram, chat_id: 12_345, topic_id: 999, queue_mode: :interrupt}
         ]
       )
 
-      topic_scope = %ChatScope{transport: :telegram, chat_id: 12345, topic_id: 999}
+      topic_scope = %ChatScope{transport: :telegram, chat_id: 12_345, topic_id: 999}
 
       assert BindingResolver.resolve_queue_mode(topic_scope) == :interrupt
     end
@@ -844,14 +844,14 @@ defmodule LemonGateway.BindingResolverTest do
     test "falls back to chat binding queue_mode when topic has none" do
       setup_config(
         bindings: [
-          %{transport: :telegram, chat_id: 12345, queue_mode: :steer},
-          %{transport: :telegram, chat_id: 12345, topic_id: 999, project: "topic_proj"}
+          %{transport: :telegram, chat_id: 12_345, queue_mode: :steer},
+          %{transport: :telegram, chat_id: 12_345, topic_id: 999, project: "topic_proj"}
         ]
       )
 
       # Topic binding exists but has no queue_mode, so use topic binding's nil queue_mode
       # (topic binding takes precedence, even if its queue_mode is nil)
-      topic_scope = %ChatScope{transport: :telegram, chat_id: 12345, topic_id: 999}
+      topic_scope = %ChatScope{transport: :telegram, chat_id: 12_345, topic_id: 999}
 
       # The topic binding is selected, but it has no queue_mode, so nil is returned
       assert BindingResolver.resolve_queue_mode(topic_scope) == nil
@@ -860,11 +860,11 @@ defmodule LemonGateway.BindingResolverTest do
     test "handles map binding with queue_mode" do
       setup_config(
         bindings: [
-          %{transport: :telegram, chat_id: 12345, queue_mode: :followup}
+          %{transport: :telegram, chat_id: 12_345, queue_mode: :followup}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
 
       assert BindingResolver.resolve_queue_mode(scope) == :followup
     end
@@ -872,11 +872,11 @@ defmodule LemonGateway.BindingResolverTest do
     test "map binding queue_mode string is normalized" do
       setup_config(
         bindings: [
-          %{transport: :telegram, chat_id: 12345, queue_mode: "steer"}
+          %{transport: :telegram, chat_id: 12_345, queue_mode: "steer"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
 
       assert BindingResolver.resolve_queue_mode(scope) == :steer
     end
@@ -888,7 +888,7 @@ defmodule LemonGateway.BindingResolverTest do
         bindings: [
           %{
             transport: :telegram,
-            chat_id: 12345,
+            chat_id: 12_345,
             topic_id: 999,
             project: "myproj",
             default_engine: "myengine",
@@ -897,12 +897,12 @@ defmodule LemonGateway.BindingResolverTest do
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345, topic_id: 999}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345, topic_id: 999}
       binding = BindingResolver.resolve_binding(scope)
 
       assert %Binding{} = binding
       assert binding.transport == :telegram
-      assert binding.chat_id == 12345
+      assert binding.chat_id == 12_345
       assert binding.topic_id == 999
       assert binding.project == "myproj"
       assert binding.default_engine == "myengine"
@@ -914,13 +914,13 @@ defmodule LemonGateway.BindingResolverTest do
         bindings: [
           %{
             transport: :telegram,
-            chat_id: 12345,
+            chat_id: 12_345,
             queue_mode: "interrupt"
           }
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
       binding = BindingResolver.resolve_binding(scope)
 
       assert binding.queue_mode == :interrupt
@@ -929,16 +929,16 @@ defmodule LemonGateway.BindingResolverTest do
     test "handles binding with missing optional fields" do
       setup_config(
         bindings: [
-          %{transport: :telegram, chat_id: 12345}
+          %{transport: :telegram, chat_id: 12_345}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
       binding = BindingResolver.resolve_binding(scope)
 
       assert %Binding{} = binding
       assert binding.transport == :telegram
-      assert binding.chat_id == 12345
+      assert binding.chat_id == 12_345
       assert binding.topic_id == nil
       assert binding.project == nil
       assert binding.default_engine == nil
@@ -950,7 +950,7 @@ defmodule LemonGateway.BindingResolverTest do
     test "uses Config.get(:bindings) for resolve_binding" do
       setup_config(
         bindings: [
-          %{transport: :telegram, chat_id: 11111, project: "proj1"}
+          %{transport: :telegram, chat_id: 11_111, project: "proj1"}
         ]
       )
 
@@ -959,7 +959,7 @@ defmodule LemonGateway.BindingResolverTest do
       assert is_list(bindings)
       assert length(bindings) == 1
 
-      scope = %ChatScope{transport: :telegram, chat_id: 11111}
+      scope = %ChatScope{transport: :telegram, chat_id: 11_111}
       binding = BindingResolver.resolve_binding(scope)
       assert binding.project == "proj1"
     end
@@ -972,7 +972,7 @@ defmodule LemonGateway.BindingResolverTest do
           "config_proj" => %{root: "/tmp/config_test_proj"}
         },
         bindings: [
-          %{transport: :telegram, chat_id: 12345, project: "config_proj"}
+          %{transport: :telegram, chat_id: 12_345, project: "config_proj"}
         ]
       )
 
@@ -981,7 +981,7 @@ defmodule LemonGateway.BindingResolverTest do
       assert is_map(projects)
       assert Map.has_key?(projects, "config_proj")
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
       assert BindingResolver.resolve_cwd(scope) == "/tmp/config_test_proj"
     end
 
@@ -991,7 +991,7 @@ defmodule LemonGateway.BindingResolverTest do
       # Verify Config.get returns expected default_engine
       assert Config.get(:default_engine) == "config_default_engine"
 
-      scope = %ChatScope{transport: :telegram, chat_id: 99999}
+      scope = %ChatScope{transport: :telegram, chat_id: 99_999}
       assert BindingResolver.resolve_engine(scope, nil, nil) == "config_default_engine"
     end
 
@@ -1001,7 +1001,7 @@ defmodule LemonGateway.BindingResolverTest do
       Application.put_env(:lemon_gateway, Config, [])
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
 
       # Should handle nil bindings gracefully
       assert BindingResolver.resolve_binding(scope) == nil
@@ -1012,7 +1012,7 @@ defmodule LemonGateway.BindingResolverTest do
     test "engine fallback: no binding -> global default" do
       setup_config(default_engine: "global_engine")
 
-      scope = %ChatScope{transport: :telegram, chat_id: 99999}
+      scope = %ChatScope{transport: :telegram, chat_id: 99_999}
       assert BindingResolver.resolve_engine(scope, nil, nil) == "global_engine"
     end
 
@@ -1020,11 +1020,11 @@ defmodule LemonGateway.BindingResolverTest do
       setup_config(
         default_engine: "global_engine",
         bindings: [
-          %{transport: :telegram, chat_id: 12345}
+          %{transport: :telegram, chat_id: 12_345}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
       assert BindingResolver.resolve_engine(scope, nil, nil) == "global_engine"
     end
 
@@ -1033,11 +1033,11 @@ defmodule LemonGateway.BindingResolverTest do
         default_engine: "global_engine",
         projects: %{},
         bindings: [
-          %{transport: :telegram, chat_id: 12345, project: "nonexistent"}
+          %{transport: :telegram, chat_id: 12_345, project: "nonexistent"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
       assert BindingResolver.resolve_engine(scope, nil, nil) == "global_engine"
     end
 
@@ -1050,29 +1050,29 @@ defmodule LemonGateway.BindingResolverTest do
           "no_engine" => %{root: "/tmp/no_engine_proj"}
         },
         bindings: [
-          %{transport: :telegram, chat_id: 12345, project: "no_engine"}
+          %{transport: :telegram, chat_id: 12_345, project: "no_engine"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
       assert BindingResolver.resolve_engine(scope, nil, nil) == "global_engine"
     end
 
     test "cwd fallback: no binding -> nil" do
       setup_config([])
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
       assert BindingResolver.resolve_cwd(scope) == nil
     end
 
     test "cwd fallback: binding without project -> nil" do
       setup_config(
         bindings: [
-          %{transport: :telegram, chat_id: 12345, default_engine: "engine"}
+          %{transport: :telegram, chat_id: 12_345, default_engine: "engine"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
       assert BindingResolver.resolve_cwd(scope) == nil
     end
 
@@ -1080,11 +1080,11 @@ defmodule LemonGateway.BindingResolverTest do
       setup_config(
         projects: %{},
         bindings: [
-          %{transport: :telegram, chat_id: 12345, project: "missing"}
+          %{transport: :telegram, chat_id: 12_345, project: "missing"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
       assert BindingResolver.resolve_cwd(scope) == nil
     end
 
@@ -1094,29 +1094,29 @@ defmodule LemonGateway.BindingResolverTest do
           "no_root" => %{default_engine: "engine"}
         },
         bindings: [
-          %{transport: :telegram, chat_id: 12345, project: "no_root"}
+          %{transport: :telegram, chat_id: 12_345, project: "no_root"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
       assert BindingResolver.resolve_cwd(scope) == nil
     end
 
     test "queue_mode fallback: no binding -> nil" do
       setup_config([])
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
       assert BindingResolver.resolve_queue_mode(scope) == nil
     end
 
     test "queue_mode fallback: binding without queue_mode -> nil" do
       setup_config(
         bindings: [
-          %{transport: :telegram, chat_id: 12345, project: "proj"}
+          %{transport: :telegram, chat_id: 12_345, project: "proj"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
       assert BindingResolver.resolve_queue_mode(scope) == nil
     end
   end
@@ -1125,7 +1125,7 @@ defmodule LemonGateway.BindingResolverTest do
     test "empty bindings list returns nil" do
       setup_config(bindings: [])
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
       assert BindingResolver.resolve_binding(scope) == nil
     end
 
@@ -1136,7 +1136,7 @@ defmodule LemonGateway.BindingResolverTest do
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
       assert BindingResolver.resolve_binding(scope) == nil
     end
 
@@ -1147,7 +1147,7 @@ defmodule LemonGateway.BindingResolverTest do
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
       # transport and chat_id are nil in the binding, won't match
       assert BindingResolver.resolve_binding(scope) == nil
     end
@@ -1159,7 +1159,7 @@ defmodule LemonGateway.BindingResolverTest do
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
       # chat_id is nil in binding, won't match
       assert BindingResolver.resolve_binding(scope) == nil
     end
@@ -1168,11 +1168,11 @@ defmodule LemonGateway.BindingResolverTest do
       setup_config(
         projects: %{},
         bindings: [
-          %{transport: :telegram, chat_id: 12345, project: "any"}
+          %{transport: :telegram, chat_id: 12_345, project: "any"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
       assert BindingResolver.resolve_cwd(scope) == nil
     end
 
@@ -1180,11 +1180,11 @@ defmodule LemonGateway.BindingResolverTest do
       setup_config(
         projects: %{"empty" => %{}},
         bindings: [
-          %{transport: :telegram, chat_id: 12345, project: "empty"}
+          %{transport: :telegram, chat_id: 12_345, project: "empty"}
         ]
       )
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
       assert BindingResolver.resolve_cwd(scope) == nil
     end
   end

@@ -2109,7 +2109,7 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
       assert budgets[:minimal] == 128
       assert budgets[:low] == 2048
       assert budgets[:medium] == 8192
-      assert budgets[:high] == 32768
+      assert budgets[:high] == 32_768
     end
 
     test "default budgets for 2.5 Flash model" do
@@ -2118,7 +2118,7 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
       assert budgets[:minimal] == 128
       assert budgets[:low] == 2048
       assert budgets[:medium] == 8192
-      assert budgets[:high] == 24576
+      assert budgets[:high] == 24_576
     end
 
     test "get_thinking_budget uses custom budget when provided" do

@@ -586,22 +586,21 @@ defmodule LemonRouter.StreamCoalescer do
   end
 
   defp build_intent(state, kind, text) when is_binary(text) do
-    with {:ok, route} <-
-           DeliveryRouteResolver.resolve(state.session_key, state.channel_id, state.meta || %{}) do
-      {:ok,
-       %DeliveryIntent{
-         intent_id: "#{state.run_id}:stream:#{state.last_seq}:#{Atom.to_string(kind)}",
-         run_id: state.run_id,
-         session_key: state.session_key,
-         route: route,
-         kind: kind,
-         body: %{
-           text: text,
-           seq: state.last_seq
-         },
-         meta: Map.put(state.meta || %{}, :surface, :answer)
-       }}
-    else
+    case DeliveryRouteResolver.resolve(state.session_key, state.channel_id, state.meta || %{}) do
+      {:ok, route} ->
+        {:ok,
+         %DeliveryIntent{
+           intent_id: "#{state.run_id}:stream:#{state.last_seq}:#{Atom.to_string(kind)}",
+           run_id: state.run_id,
+           session_key: state.session_key,
+           route: route,
+           kind: kind,
+           body: %{
+             text: text,
+             seq: state.last_seq
+           },
+           meta: Map.put(state.meta || %{}, :surface, :answer)
+         }}
       _ -> :error
     end
   end

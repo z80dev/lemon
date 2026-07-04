@@ -198,7 +198,7 @@ defmodule LemonCore.ConfigReloaderTest do
 
       paths = GenServer.call(pid, :watch_paths)
       assert is_list(paths)
-      assert length(paths) >= 1
+      assert paths != []
       assert Enum.any?(paths, &String.ends_with?(&1, "config.toml"))
     end
   end

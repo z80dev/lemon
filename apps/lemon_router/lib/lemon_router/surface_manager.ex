@@ -630,27 +630,27 @@ defmodule LemonRouter.SurfaceManager do
        do: :ok
 
   defp dispatch_direct_final_answer(state, channel_id, text, meta) do
-    with {:ok, route} <- DeliveryRouteResolver.resolve(state.session_key, channel_id, meta) do
-      intent = %DeliveryIntent{
-        intent_id: "#{state.run_id}:streamed-finalize",
-        run_id: state.run_id,
-        session_key: state.session_key,
-        route: route,
-        kind: :stream_finalize,
-        body: %{text: text, seq: 0},
-        meta: Map.put(meta, :surface, :answer)
-      }
+    case DeliveryRouteResolver.resolve(state.session_key, channel_id, meta) do
+      {:ok, route} ->
+        intent = %DeliveryIntent{
+          intent_id: "#{state.run_id}:streamed-finalize",
+          run_id: state.run_id,
+          session_key: state.session_key,
+          route: route,
+          kind: :stream_finalize,
+          body: %{text: text, seq: 0},
+          meta: Map.put(meta, :surface, :answer)
+        }
 
-      case dispatcher().dispatch(intent) do
-        :ok ->
-          :ok
+        case dispatcher().dispatch(intent) do
+          :ok ->
+            :ok
 
-        {:error, dispatch_reason} ->
-          Logger.warning(
-            "Streamed final dispatch failed for run_id=#{inspect(state.run_id)} reason=#{inspect(dispatch_reason)}"
-          )
-      end
-    else
+          {:error, dispatch_reason} ->
+            Logger.warning(
+              "Streamed final dispatch failed for run_id=#{inspect(state.run_id)} reason=#{inspect(dispatch_reason)}"
+            )
+        end
       _ ->
         Logger.warning(
           "Streamed final route resolution failed for run_id=#{inspect(state.run_id)}"
@@ -680,27 +680,27 @@ defmodule LemonRouter.SurfaceManager do
        do: :ok
 
   defp dispatch_fallback_final_answer(state, channel_id, text, meta, reason) do
-    with {:ok, route} <- DeliveryRouteResolver.resolve(state.session_key, channel_id, meta) do
-      intent = %DeliveryIntent{
-        intent_id: "#{state.run_id}:finalize-fallback",
-        run_id: state.run_id,
-        session_key: state.session_key,
-        route: route,
-        kind: :final_text,
-        body: %{text: text, seq: 0},
-        meta: Map.put(meta, :surface, :answer)
-      }
+    case DeliveryRouteResolver.resolve(state.session_key, channel_id, meta) do
+      {:ok, route} ->
+        intent = %DeliveryIntent{
+          intent_id: "#{state.run_id}:finalize-fallback",
+          run_id: state.run_id,
+          session_key: state.session_key,
+          route: route,
+          kind: :final_text,
+          body: %{text: text, seq: 0},
+          meta: Map.put(meta, :surface, :answer)
+        }
 
-      case dispatcher().dispatch(intent) do
-        :ok ->
-          :ok
+        case dispatcher().dispatch(intent) do
+          :ok ->
+            :ok
 
-        {:error, dispatch_reason} ->
-          Logger.warning(
-            "Fallback final dispatch failed for run_id=#{inspect(state.run_id)} reason=#{inspect(dispatch_reason)} coalescer_reason=#{inspect(reason)}"
-          )
-      end
-    else
+          {:error, dispatch_reason} ->
+            Logger.warning(
+              "Fallback final dispatch failed for run_id=#{inspect(state.run_id)} reason=#{inspect(dispatch_reason)} coalescer_reason=#{inspect(reason)}"
+            )
+        end
       _ ->
         Logger.warning(
           "Fallback final route resolution failed for run_id=#{inspect(state.run_id)} coalescer_reason=#{inspect(reason)}"
@@ -720,24 +720,23 @@ defmodule LemonRouter.SurfaceManager do
   # ---- Async task surface subscriber wiring ----
 
   defp maybe_start_async_task_surface_subscriber(state, action_event, surface) do
-    with {:ok, child_run_id, task_id, root_action_id} <-
-           async_task_child_binding_fields(action_event) do
-      fallback_binding = %{
-        task_id: task_id,
-        child_run_id: child_run_id,
-        parent_run_id: state.run_id,
-        parent_session_key: state.session_key,
-        parent_agent_id: Map.get(state, :agent_id, "default"),
-        root_action_id: root_action_id,
-        surface: surface
-      }
+    case async_task_child_binding_fields(action_event) do
+      {:ok, child_run_id, task_id, root_action_id} ->
+        fallback_binding = %{
+          task_id: task_id,
+          child_run_id: child_run_id,
+          parent_run_id: state.run_id,
+          parent_session_key: state.session_key,
+          parent_agent_id: Map.get(state, :agent_id, "default"),
+          root_action_id: root_action_id,
+          surface: surface
+        }
 
-      LemonRouter.AsyncTaskSurfaceSubscriber.start_for_child_run(
-        child_run_id,
-        fallback_binding: fallback_binding,
-        meta: coalescer_meta(state)
-      )
-    else
+        LemonRouter.AsyncTaskSurfaceSubscriber.start_for_child_run(
+          child_run_id,
+          fallback_binding: fallback_binding,
+          meta: coalescer_meta(state)
+        )
       _ -> :ok
     end
   rescue

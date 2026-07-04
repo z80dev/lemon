@@ -207,7 +207,7 @@ defmodule LemonSim.Examples.StartupIncubator.ActionSpace do
       active_offers = get_active_offers_for(world, actor_id, investors)
 
       tools =
-        if length(active_offers) > 0 do
+        if active_offers != [] do
           [
             counter_offer_tool(actor_id, active_offers),
             accept_deal_tool(actor_id, active_offers),
@@ -218,7 +218,7 @@ defmodule LemonSim.Examples.StartupIncubator.ActionSpace do
         end
 
       tools =
-        if length(other_founders) > 0 do
+        if other_founders != [] do
           tools ++ [merge_startups_tool(actor_id, other_founders)]
         else
           tools

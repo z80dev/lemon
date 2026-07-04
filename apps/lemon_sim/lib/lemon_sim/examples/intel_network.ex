@@ -315,8 +315,7 @@ defmodule LemonSim.Examples.IntelNetwork do
         {:ok, final_state}
 
       {:error, reason} = error ->
-        IO.puts("Simulation failed:")
-        IO.inspect(reason)
+        IO.puts("Simulation failed: #{inspect(reason)}")
         error
     end
   end

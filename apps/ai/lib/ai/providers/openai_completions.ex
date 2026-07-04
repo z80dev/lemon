@@ -327,7 +327,7 @@ defmodule Ai.Providers.OpenAICompletions do
     do: Map.put(params, "temperature", temp)
 
   defp maybe_add_tools(params, %{tools: tools}, _compat)
-       when is_list(tools) and length(tools) > 0 do
+       when is_list(tools) and tools != [] do
     Map.put(params, "tools", convert_tools(tools))
   end
 
@@ -487,7 +487,7 @@ defmodule Ai.Providers.OpenAICompletions do
       collect_tool_results([msg | rest], model, compat, [], [])
 
     converted = maybe_add_image_messages(tool_results, image_blocks, compat)
-    last_role = if length(image_blocks) > 0, do: :user, else: :tool_result
+    last_role = if image_blocks != [], do: :user, else: :tool_result
 
     case converted do
       [] -> {nil, remaining, last_role}
@@ -533,7 +533,7 @@ defmodule Ai.Providers.OpenAICompletions do
       |> Enum.filter(&match?(%TextContent{}, &1))
       |> Enum.filter(fn %TextContent{text: text} -> String.trim(text) != "" end)
 
-    if length(text_blocks) == 0 do
+    if text_blocks == [] do
       assistant_msg
     else
       add_text_content(assistant_msg, text_blocks, model.provider)
@@ -561,7 +561,7 @@ defmodule Ai.Providers.OpenAICompletions do
       |> Enum.filter(&match?(%ThinkingContent{}, &1))
       |> Enum.filter(fn %ThinkingContent{thinking: t} -> String.trim(t) != "" end)
 
-    if length(thinking_blocks) == 0 do
+    if thinking_blocks == [] do
       assistant_msg
     else
       add_thinking_content(assistant_msg, thinking_blocks, compat)
@@ -608,7 +608,7 @@ defmodule Ai.Providers.OpenAICompletions do
   defp add_tool_calls_to_message(assistant_msg, content, model, compat) do
     tool_calls = Enum.filter(content, &match?(%ToolCall{}, &1))
 
-    if length(tool_calls) == 0 do
+    if tool_calls == [] do
       assistant_msg
     else
       build_tool_call_message(assistant_msg, tool_calls, model, compat)
@@ -631,7 +631,7 @@ defmodule Ai.Providers.OpenAICompletions do
     reasoning_details = extract_reasoning_details(tool_calls)
     assistant_msg = Map.put(assistant_msg, "tool_calls", converted_calls)
 
-    if length(reasoning_details) > 0 do
+    if reasoning_details != [] do
       Map.put(assistant_msg, "reasoning_details", reasoning_details)
     else
       assistant_msg
@@ -657,7 +657,7 @@ defmodule Ai.Providers.OpenAICompletions do
   defp has_content?(nil), do: false
   defp has_content?(""), do: false
   defp has_content?(text) when is_binary(text), do: text != ""
-  defp has_content?(parts) when is_list(parts), do: length(parts) > 0
+  defp has_content?(parts) when is_list(parts), do: parts != []
 
   defp collect_tool_results([], _model, _compat, acc, images) do
     {Enum.reverse(acc), [], images}

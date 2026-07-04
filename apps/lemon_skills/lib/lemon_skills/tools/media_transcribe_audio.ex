@@ -432,7 +432,7 @@ defmodule LemonSkills.Tools.MediaTranscribeAudio do
         {:ok, response_body}
 
       {:ok, %{status: status, body: response_body}} ->
-        if is_transient_status(status) and remaining_retries > 0 do
+        if transient_status?(status) and remaining_retries > 0 do
           do_post_openai_transcription(runtime, url, request_opts, remaining_retries - 1)
         else
           {:error, {:openai_transcription_http_error, status, provider_error_kind(response_body)}}
@@ -476,7 +476,7 @@ defmodule LemonSkills.Tools.MediaTranscribeAudio do
         {:ok, response_body}
 
       {:ok, %{status: status, body: response_body}} ->
-        if is_transient_status(status) and remaining_retries > 0 do
+        if transient_status?(status) and remaining_retries > 0 do
           do_post_deepgram_transcription(runtime, url, request_opts, remaining_retries - 1)
         else
           {:error,
@@ -522,9 +522,9 @@ defmodule LemonSkills.Tools.MediaTranscribeAudio do
     IO.iodata_to_binary([field_parts, file_part])
   end
 
-  defp is_transient_status(status) when status in [408, 409, 425, 429], do: true
-  defp is_transient_status(status) when is_integer(status) and status >= 500, do: true
-  defp is_transient_status(_status), do: false
+  defp transient_status?(status) when status in [408, 409, 425, 429], do: true
+  defp transient_status?(status) when is_integer(status) and status >= 500, do: true
+  defp transient_status?(_status), do: false
 
   defp normalize_transcription_response(response, "json") when is_map(response) do
     text = optional_string(response["text"]) || optional_string(response[:text]) || ""

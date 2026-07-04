@@ -1,4 +1,7 @@
 defmodule LemonSimUi.Live.Components.SupplyChainBoard do
+  @moduledoc """
+  Renders the Supply Chain simulation board with inventory, suppliers, shipments, and disruption state.
+  """
   use Phoenix.Component
 
   alias LemonCore.MapHelpers

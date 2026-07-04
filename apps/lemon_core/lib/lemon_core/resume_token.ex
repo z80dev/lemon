@@ -170,6 +170,8 @@ defmodule LemonCore.ResumeToken do
 
   """
   @spec is_resume_line(String.t()) :: boolean()
+  # Resume-line detection keeps the LemonGateway.Engine callback name.
+  # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
   def is_resume_line(line) when is_binary(line) do
     line = String.trim(line)
 
@@ -194,12 +196,16 @@ defmodule LemonCore.ResumeToken do
     Enum.any?(patterns, fn regex -> Regex.match?(regex, line) end)
   end
 
+  # Resume-line detection keeps the LemonGateway.Engine callback name.
+  # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
   def is_resume_line(_), do: false
 
   @doc """
   Check if a line is a resume line for a specific engine.
   """
   @spec is_resume_line(String.t(), String.t()) :: boolean()
+  # Resume-line detection keeps the LemonGateway.Engine callback name.
+  # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
   def is_resume_line(line, engine) when is_binary(line) and is_binary(engine) do
     line = String.trim(line)
     regex = strict_resume_regex(engine)

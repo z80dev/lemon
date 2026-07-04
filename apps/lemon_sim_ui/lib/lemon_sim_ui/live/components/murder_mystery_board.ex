@@ -1,4 +1,7 @@
 defmodule LemonSimUi.Live.Components.MurderMysteryBoard do
+  @moduledoc """
+  Renders the Murder Mystery simulation board with guest roles, clues, accusations, and case status.
+  """
   use Phoenix.Component
 
   alias LemonCore.MapHelpers

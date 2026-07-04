@@ -253,8 +253,7 @@ defmodule LemonSim.Examples.Courtroom do
         {:ok, final_state}
 
       {:error, reason} = error ->
-        IO.puts("Trial failed:")
-        IO.inspect(reason)
+        IO.puts("Trial failed: #{inspect(reason)}")
         error
     end
   end

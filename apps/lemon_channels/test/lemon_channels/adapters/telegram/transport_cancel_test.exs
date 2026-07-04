@@ -365,7 +365,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
   end
 
   test "/model reply-keyboard flow accepts follow-up selections when Telegram sender ids are integers" do
-    chat_id = 333_005_1
+    chat_id = 3_330_051
     user_msg_id = 1_301
 
     CancelMockAPI.set_updates([message_update(chat_id, user_msg_id, "/model")])
@@ -390,8 +390,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
   end
 
   test "/model reply-keyboard flow accepts raw model ids and provider-qualified model specs" do
-    chat_id = 333_005_15
-    user_msg_id = 1_301_5
+    chat_id = 33_300_515
+    user_msg_id = 13_015
 
     CancelMockAPI.set_updates([message_update(chat_id, user_msg_id, "/model")])
 
@@ -443,7 +443,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
   end
 
   test "/model invalid provider text stays inside the picker flow" do
-    chat_id = 333_005_2
+    chat_id = 3_330_052
     user_msg_id = 1_302
 
     CancelMockAPI.set_updates([message_update(chat_id, user_msg_id, "/model")])
@@ -468,8 +468,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
   end
 
   test "/model reopens the picker when follow-up sender key does not match" do
-    chat_id = 333_005_21
-    user_msg_id = 1_302_1
+    chat_id = 33_300_521
+    user_msg_id = 13_021
 
     CancelMockAPI.set_updates([message_update(chat_id, user_msg_id, "/model")])
 
@@ -493,7 +493,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
   end
 
   test "/model invalid model text stays inside the picker flow" do
-    chat_id = 333_005_3
+    chat_id = 3_330_053
     user_msg_id = 1_303
 
     CancelMockAPI.set_updates([message_update(chat_id, user_msg_id, "/model")])
@@ -526,8 +526,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
   end
 
   test "/model minimax picker omits the broken highspeed variant" do
-    chat_id = 333_005_31
-    user_msg_id = 1_333_1
+    chat_id = 33_300_531
+    user_msg_id = 13_331
 
     System.put_env("MINIMAX_API_KEY", "test-minimax-key")
 
@@ -571,8 +571,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
   end
 
   test "/model google picker omits dead direct ids and prefers custom-tools preview" do
-    chat_id = 333_005_32
-    user_msg_id = 1_333_2
+    chat_id = 33_300_532
+    user_msg_id = 13_332
 
     System.put_env("GOOGLE_GENERATIVE_AI_API_KEY", "test-google-key")
 
@@ -617,8 +617,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
   end
 
   test "/model does not advertise google vertex when only direct google credentials exist" do
-    chat_id = 333_005_33
-    user_msg_id = 1_333_3
+    chat_id = 33_300_533
+    user_msg_id = 13_333
 
     System.put_env("GOOGLE_GENERATIVE_AI_API_KEY", "test-google-key")
 
@@ -646,7 +646,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
   end
 
   test "/model invalid scope text stays inside the picker flow" do
-    chat_id = 333_005_4
+    chat_id = 3_330_054
     user_msg_id = 1_304
 
     CancelMockAPI.set_updates([message_update(chat_id, user_msg_id, "/model")])

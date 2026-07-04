@@ -28,7 +28,7 @@ defmodule LemonCore.Quality.DocsCheckTest do
       try do
         assert {:error, report} = DocsCheck.run(root: tmp_dir)
         assert report.issue_count > 0
-        assert length(report.issues) > 0
+        assert report.issues != []
       after
         File.rm_rf!(tmp_dir)
       end
@@ -61,7 +61,7 @@ defmodule LemonCore.Quality.DocsCheckTest do
         assert {:error, report} = DocsCheck.run(root: tmp_dir)
 
         missing_entry_issues = Enum.filter(report.issues, &(&1.code == :missing_catalog_entry))
-        assert length(missing_entry_issues) > 0
+        assert missing_entry_issues != []
       after
         File.rm_rf!(tmp_dir)
       end
@@ -107,7 +107,7 @@ defmodule LemonCore.Quality.DocsCheckTest do
         assert {:error, report} = DocsCheck.run(root: tmp_dir)
 
         invalid_entry_issues = Enum.filter(report.issues, &(&1.code == :invalid_catalog_entry))
-        assert length(invalid_entry_issues) > 0
+        assert invalid_entry_issues != []
       after
         File.rm_rf!(tmp_dir)
       end
@@ -129,7 +129,7 @@ defmodule LemonCore.Quality.DocsCheckTest do
         assert {:error, report} = DocsCheck.run(root: tmp_dir)
 
         invalid_entry_issues = Enum.filter(report.issues, &(&1.code == :invalid_catalog_entry))
-        assert length(invalid_entry_issues) > 0
+        assert invalid_entry_issues != []
       after
         File.rm_rf!(tmp_dir)
       end
@@ -151,7 +151,7 @@ defmodule LemonCore.Quality.DocsCheckTest do
         assert {:error, report} = DocsCheck.run(root: tmp_dir)
 
         invalid_entry_issues = Enum.filter(report.issues, &(&1.code == :invalid_catalog_entry))
-        assert length(invalid_entry_issues) > 0
+        assert invalid_entry_issues != []
       after
         File.rm_rf!(tmp_dir)
       end
@@ -172,7 +172,7 @@ defmodule LemonCore.Quality.DocsCheckTest do
         assert {:error, report} = DocsCheck.run(root: tmp_dir)
 
         invalid_entry_issues = Enum.filter(report.issues, &(&1.code == :invalid_catalog_entry))
-        assert length(invalid_entry_issues) > 0
+        assert invalid_entry_issues != []
       after
         File.rm_rf!(tmp_dir)
       end
@@ -195,7 +195,7 @@ defmodule LemonCore.Quality.DocsCheckTest do
         assert {:error, report} = DocsCheck.run(root: tmp_dir)
 
         missing_file_issues = Enum.filter(report.issues, &(&1.code == :missing_doc_file))
-        assert length(missing_file_issues) > 0
+        assert missing_file_issues != []
         assert hd(missing_file_issues).path == "missing.md"
       after
         File.rm_rf!(tmp_dir)
@@ -242,7 +242,7 @@ defmodule LemonCore.Quality.DocsCheckTest do
         assert {:error, report} = DocsCheck.run(root: tmp_dir)
 
         stale_issues = Enum.filter(report.issues, &(&1.code == :stale_doc))
-        assert length(stale_issues) > 0
+        assert stale_issues != []
         assert hd(stale_issues).path == "stale.md"
       after
         File.rm_rf!(tmp_dir)
@@ -289,7 +289,7 @@ defmodule LemonCore.Quality.DocsCheckTest do
         assert {:error, report} = DocsCheck.run(root: tmp_dir)
 
         broken_link_issues = Enum.filter(report.issues, &(&1.code == :broken_link))
-        assert length(broken_link_issues) > 0
+        assert broken_link_issues != []
       after
         File.rm_rf!(tmp_dir)
       end
@@ -388,7 +388,7 @@ defmodule LemonCore.Quality.DocsCheckTest do
         assert report.issue_count > 0
 
         load_failed_issues = Enum.filter(report.issues, &(&1.code == :catalog_load_failed))
-        assert length(load_failed_issues) > 0
+        assert load_failed_issues != []
       after
         File.rm_rf!(tmp_dir)
       end
@@ -403,7 +403,7 @@ defmodule LemonCore.Quality.DocsCheckTest do
         assert report.issue_count > 0
 
         load_failed_issues = Enum.filter(report.issues, &(&1.code == :catalog_load_failed))
-        assert length(load_failed_issues) > 0
+        assert load_failed_issues != []
       after
         File.rm_rf!(tmp_dir)
       end
@@ -418,7 +418,7 @@ defmodule LemonCore.Quality.DocsCheckTest do
         assert report.issue_count > 0
 
         load_failed_issues = Enum.filter(report.issues, &(&1.code == :catalog_load_failed))
-        assert length(load_failed_issues) > 0
+        assert load_failed_issues != []
       after
         File.rm_rf!(tmp_dir)
       end

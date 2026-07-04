@@ -564,7 +564,7 @@ defmodule CodingAgent.CommandsTest do
       File.chmod!(unreadable_path, 0o644)
 
       # The readable command should be loaded, unreadable one skipped
-      assert length(commands) >= 1
+      assert commands != []
       names = Enum.map(commands, & &1.name)
       assert "readable" in names
     end

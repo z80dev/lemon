@@ -450,46 +450,46 @@ defmodule LemonChannels.PresentationState do
 
   defp maybe_flush_deferred_edit(state, key, entry, message_id)
        when is_integer(message_id) or (is_binary(message_id) and message_id != "") do
-    with [first_chunk | rest_chunks] <- deferred_chunks(entry) do
-      notify_ref = make_ref()
+    case deferred_chunks(entry) do
+      [first_chunk | rest_chunks] ->
+        notify_ref = make_ref()
 
-      payload =
-        OutboundPayload.edit(
-          entry.route.channel_id,
-          entry.route.account_id,
-          peer(entry.route),
-          to_string(message_id),
-          first_chunk,
-          meta: Map.put(entry.deferred_meta, :notify_tag, notify_tag()),
-          notify_pid: Process.whereis(__MODULE__),
-          notify_ref: notify_ref
-        )
+        payload =
+          OutboundPayload.edit(
+            entry.route.channel_id,
+            entry.route.account_id,
+            peer(entry.route),
+            to_string(message_id),
+            first_chunk,
+            meta: Map.put(entry.deferred_meta, :notify_tag, notify_tag()),
+            notify_pid: Process.whereis(__MODULE__),
+            notify_ref: notify_ref
+          )
 
-      case Outbox.enqueue(payload) do
-        {:ok, _} ->
-          entry = %{
-            entry
-            | pending_edit_ref: notify_ref,
-              pending_edit_at: System.monotonic_time(:millisecond),
-              last_seq: entry.deferred_seq || entry.last_seq,
-              last_text_hash: entry.deferred_hash || entry.last_text_hash,
-              deferred_text: nil,
-              deferred_chunks: nil,
-              pending_followup_chunks: rest_chunks,
-              deferred_seq: nil,
-              deferred_hash: nil,
-              deferred_meta: %{},
-              pending_followup_meta: followup_meta(entry.deferred_meta)
-          }
+        case Outbox.enqueue(payload) do
+          {:ok, _} ->
+            entry = %{
+              entry
+              | pending_edit_ref: notify_ref,
+                pending_edit_at: System.monotonic_time(:millisecond),
+                last_seq: entry.deferred_seq || entry.last_seq,
+                last_text_hash: entry.deferred_hash || entry.last_text_hash,
+                deferred_text: nil,
+                deferred_chunks: nil,
+                pending_followup_chunks: rest_chunks,
+                deferred_seq: nil,
+                deferred_hash: nil,
+                deferred_meta: %{},
+                pending_followup_meta: followup_meta(entry.deferred_meta)
+            }
 
-          state
-          |> put_entry(key, entry)
-          |> put_ref(notify_ref, {key, :edit})
+            state
+            |> put_entry(key, entry)
+            |> put_ref(notify_ref, {key, :edit})
 
-        _ ->
-          put_entry(state, key, entry)
-      end
-    else
+          _ ->
+            put_entry(state, key, entry)
+        end
       _ -> put_entry(state, key, entry)
     end
   rescue

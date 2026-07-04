@@ -247,9 +247,9 @@ defmodule LemonControlPlane.Methods.RunGraphGet do
   defp run_active?(_), do: false
 
   defp fetch_completed_status(run_id, store_record) do
-    with status when is_binary(status) <- derive_status_from_store_record(store_record) do
-      status
-    else
+    case derive_status_from_store_record(store_record) do
+      status when is_binary(status) ->
+        status
       _ ->
         if has_store_record?(store_record) do
           fetch_completed_status_from_introspection(run_id)

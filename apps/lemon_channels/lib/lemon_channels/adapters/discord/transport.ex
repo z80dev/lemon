@@ -2413,18 +2413,18 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     cond do
       is_binary(mention_pattern) and String.contains?(text, mention_pattern) -> true
       # Check if replying to bot
-      is_reply_to_bot?(inbound, state) -> true
+      reply_to_bot?(inbound, state) -> true
       true -> false
     end
   rescue
     _ -> false
   end
 
-  defp is_reply_to_bot?(%{meta: %{reply_to_author_id: author_id}}, %{bot_user_id: bot_id})
+  defp reply_to_bot?(%{meta: %{reply_to_author_id: author_id}}, %{bot_user_id: bot_id})
        when is_integer(author_id) and is_integer(bot_id),
        do: author_id == bot_id
 
-  defp is_reply_to_bot?(_inbound, _state), do: false
+  defp reply_to_bot?(_inbound, _state), do: false
 
   # ============================================================================
   # Approval Handling

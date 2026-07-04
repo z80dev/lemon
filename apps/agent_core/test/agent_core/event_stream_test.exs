@@ -1178,14 +1178,14 @@ defmodule AgentCore.EventStreamTest do
       {:ok, stream} = EventStream.start_link(max_queue: 15_000)
 
       # Push 10000 events
-      for i <- 1..10000 do
+      for i <- 1..10_000 do
         EventStream.push(stream, {:event, i})
       end
 
       EventStream.complete(stream, [])
 
       events = EventStream.events(stream) |> Enum.to_list()
-      assert length(events) == 10001
+      assert length(events) == 10_001
     end
   end
 end

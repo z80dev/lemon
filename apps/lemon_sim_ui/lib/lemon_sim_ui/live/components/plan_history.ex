@@ -1,4 +1,7 @@
 defmodule LemonSimUi.Live.Components.PlanHistory do
+  @moduledoc """
+  Renders recent model plans and plan revisions for a simulation run.
+  """
   use Phoenix.Component
 
   attr :plan_history, :list, required: true

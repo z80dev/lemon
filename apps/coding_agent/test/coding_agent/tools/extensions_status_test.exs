@@ -46,7 +46,7 @@ defmodule CodingAgent.Tools.ExtensionsStatusTest do
 
       assert %AgentToolResult{} = result
       assert is_list(result.content)
-      assert length(result.content) >= 1
+      assert result.content != []
 
       text = hd(result.content).text
       assert is_binary(text)

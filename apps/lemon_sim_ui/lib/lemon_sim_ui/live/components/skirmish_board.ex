@@ -1,4 +1,7 @@
 defmodule LemonSimUi.Live.Components.SkirmishBoard do
+  @moduledoc """
+  Renders the Skirmish simulation board with unit positions, objectives, orders, and combat state.
+  """
   use Phoenix.Component
 
   alias LemonCore.MapHelpers

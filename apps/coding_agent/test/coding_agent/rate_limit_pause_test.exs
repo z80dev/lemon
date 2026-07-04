@@ -276,7 +276,7 @@ defmodule CodingAgent.RateLimitPauseTest do
       assert {:ok, pause} = RateLimitPause.create(session_id, :anthropic, 60_000)
 
       # Cleanup with 1 hour max age - should not remove
-      count = RateLimitPause.cleanup_expired(3600_000)
+      count = RateLimitPause.cleanup_expired(3_600_000)
       assert count == 0
 
       # Verify it's still there

@@ -208,7 +208,7 @@ defmodule LemonSkills.McpSourceTest.OAuthTokenFixture do
     %{
       "jsonrpc" => "2.0",
       "id" => id,
-      "error" => %{"code" => -32601, "message" => "Method not found"}
+      "error" => %{"code" => -32_601, "message" => "Method not found"}
     }
   end
 

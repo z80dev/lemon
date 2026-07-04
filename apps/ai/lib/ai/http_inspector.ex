@@ -86,32 +86,33 @@ defmodule Ai.HttpInspector do
   defp save_error_dump(dump, status, error) do
     dir = Path.expand(@error_log_dir)
 
-    with :ok <- File.mkdir_p(dir) do
-      sanitized = sanitize_dump(dump)
-      timestamp = String.replace(dump.timestamp, ~r/[:\.]/, "-")
-      filename = "#{dump.provider}-#{status}-#{timestamp}.json"
-      path = Path.join(dir, filename)
+    case File.mkdir_p(dir) do
+      :ok ->
+        sanitized = sanitize_dump(dump)
+        timestamp = String.replace(dump.timestamp, ~r/[:\.]/, "-")
+        filename = "#{dump.provider}-#{status}-#{timestamp}.json"
+        path = Path.join(dir, filename)
 
-      json_safe_request = %{
-        sanitized
-        | headers: Map.new(sanitized.headers)
-      }
+        json_safe_request = %{
+          sanitized
+          | headers: Map.new(sanitized.headers)
+        }
 
-      payload = %{
-        request: json_safe_request,
-        error_status: status,
-        error_detail: inspect(error, limit: 200, printable_limit: 4_000)
-      }
+        payload = %{
+          request: json_safe_request,
+          error_status: status,
+          error_detail: inspect(error, limit: 200, printable_limit: 4_000)
+        }
 
-      case Jason.encode(payload, pretty: true) do
-        {:ok, json} ->
-          File.write(path, json)
-          Logger.debug("HttpInspector: saved error dump to #{path}")
+        case Jason.encode(payload, pretty: true) do
+          {:ok, json} ->
+            File.write(path, json)
+            Logger.debug("HttpInspector: saved error dump to #{path}")
 
-        {:error, reason} ->
-          Logger.warning("HttpInspector: failed to encode dump: #{inspect(reason)}")
-      end
-    else
+          {:error, reason} ->
+            Logger.warning("HttpInspector: failed to encode dump: #{inspect(reason)}")
+        end
+
       {:error, reason} ->
         Logger.warning("HttpInspector: failed to create log dir: #{inspect(reason)}")
     end

@@ -32,7 +32,7 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
     %SettingsManager{
       default_thinking_level: :off,
       compaction_enabled: false,
-      reserve_tokens: 16384,
+      reserve_tokens: 16_384,
       extension_paths: [],
       providers: %{}
     }
@@ -526,7 +526,7 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
 
       # Should have message update events
       updates = Enum.filter(events, &match?({:message_update, _, _}, &1))
-      assert length(updates) >= 1
+      assert updates != []
     end
 
     test "multiple subscribers receive events" do
@@ -600,7 +600,7 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
         end)
         |> Enum.to_list()
 
-      assert length(events) >= 1
+      assert events != []
     end
   end
 
@@ -968,10 +968,6 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
           _ ->
             false
         end)
-
-      unless aborted_terminal? or aborted_message_seen? or tool_abort_seen? do
-        IO.inspect(events, label: "failed events during abort tool test")
-      end
 
       assert aborted_terminal? or aborted_message_seen? or tool_abort_seen?
 

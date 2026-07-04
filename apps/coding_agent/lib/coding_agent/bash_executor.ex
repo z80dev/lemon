@@ -421,6 +421,8 @@ defmodule CodingAgent.BashExecutor do
       {:unix, _} ->
         # Try to kill process group first (negative PID)
         try do
+          # os_pid is guard-checked as an integer; shell process-tree kill syntax is deliberate.
+          # credo:disable-for-next-line Credo.Check.Warning.UnsafeExec
           :os.cmd(~c"kill -9 -#{os_pid} 2>/dev/null")
         catch
           _, _ -> :ok
@@ -428,6 +430,8 @@ defmodule CodingAgent.BashExecutor do
 
         # Also try single process as fallback
         try do
+          # os_pid is guard-checked as an integer; shell process-tree kill syntax is deliberate.
+          # credo:disable-for-next-line Credo.Check.Warning.UnsafeExec
           :os.cmd(~c"kill -9 #{os_pid} 2>/dev/null")
         catch
           _, _ -> :ok
@@ -437,6 +441,8 @@ defmodule CodingAgent.BashExecutor do
 
       {:win32, _} ->
         try do
+          # os_pid is guard-checked as an integer; shell process-tree kill syntax is deliberate.
+          # credo:disable-for-next-line Credo.Check.Warning.UnsafeExec
           :os.cmd(~c"taskkill /F /T /PID #{os_pid}")
         catch
           _, _ -> :ok

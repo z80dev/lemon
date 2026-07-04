@@ -292,8 +292,8 @@ defmodule CodingAgent.SessionBranchTest do
 
       # Messages should be different between branches
       # (same prefix from common ancestor, different branch content)
-      assert length(messages1) >= 1
-      assert length(messages2) >= 1
+      assert messages1 != []
+      assert messages2 != []
     end
 
     @tag :tmp_dir
@@ -321,7 +321,7 @@ defmodule CodingAgent.SessionBranchTest do
       wait_for_streaming_complete(session)
 
       messages = Session.get_messages(session)
-      assert length(messages) >= 1
+      assert messages != []
     end
 
     @tag :tmp_dir
@@ -522,7 +522,7 @@ defmodule CodingAgent.SessionBranchTest do
 
       state = Session.get_state(session)
 
-      if length(SessionManager.entries(state.session_manager)) >= 1 do
+      if SessionManager.entries(state.session_manager) != [] do
         entry_id = hd(SessionManager.entries(state.session_manager)).id
 
         # Concurrent operations
@@ -711,7 +711,7 @@ defmodule CodingAgent.SessionBranchTest do
 
       # Should load (will be at one of the branches)
       messages = Session.get_messages(session)
-      assert length(messages) >= 1
+      assert messages != []
 
       # Should be able to navigate to different branches
       children = SessionManager.get_children(sm, root_id)
@@ -815,7 +815,7 @@ defmodule CodingAgent.SessionBranchTest do
 
       messages = Session.get_messages(session)
       # Should have messages from successful prompt
-      assert length(messages) >= 1
+      assert messages != []
     end
 
     @tag :tmp_dir
@@ -1247,7 +1247,7 @@ defmodule CodingAgent.SessionBranchTest do
       # Context should include summary + kept messages
       messages = Session.get_messages(session)
       # Summary message + entries from first_kept_entry onwards
-      assert length(messages) >= 1
+      assert messages != []
     end
 
     test "empty session navigation" do

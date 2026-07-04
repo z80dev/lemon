@@ -59,11 +59,11 @@ defmodule Ai.CircuitBreakerTest do
     end
   end
 
-  describe "is_open?/1" do
+  describe "open?/1" do
     test "returns false when circuit is closed", %{provider: provider} do
       start_supervised!({CircuitBreaker, provider: provider})
 
-      refute CircuitBreaker.is_open?(provider)
+      refute CircuitBreaker.open?(provider)
     end
 
     test "returns true when circuit is open", %{provider: provider} do
@@ -73,7 +73,7 @@ defmodule Ai.CircuitBreakerTest do
       CircuitBreaker.record_failure(provider)
       CircuitBreaker.record_failure(provider)
 
-      assert CircuitBreaker.is_open?(provider)
+      assert CircuitBreaker.open?(provider)
     end
 
     test "returns false when circuit is half-open", %{provider: provider} do
@@ -85,19 +85,19 @@ defmodule Ai.CircuitBreakerTest do
       CircuitBreaker.record_failure(provider)
       CircuitBreaker.record_failure(provider)
 
-      assert CircuitBreaker.is_open?(provider)
+      assert CircuitBreaker.open?(provider)
 
       # Wait for half-open
       Process.sleep(50)
 
-      refute CircuitBreaker.is_open?(provider)
+      refute CircuitBreaker.open?(provider)
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :half_open
     end
 
     test "returns false for non-existent provider (auto-starts)", %{provider: provider} do
-      # Provider doesn't exist yet, but is_open? should auto-start it
-      refute CircuitBreaker.is_open?(provider)
+      # Provider doesn't exist yet, but open? should auto-start it
+      refute CircuitBreaker.open?(provider)
     end
   end
 
@@ -184,7 +184,7 @@ defmodule Ai.CircuitBreakerTest do
 
       # We can't directly check last_failure_time from public API,
       # but we verify the circuit opened
-      assert CircuitBreaker.is_open?(provider)
+      assert CircuitBreaker.open?(provider)
     end
 
     test "exposes last failure reason in state", %{provider: provider} do

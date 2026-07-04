@@ -767,7 +767,7 @@ defmodule LemonSim.Examples.Legislature.FrameRenderer do
           else
             ""
           end,
-          if length(amendments) > 0 do
+          if amendments != [] do
             ~s[<text x="#{bx + 22}" y="#{by + 44}" font-size="9" fill="#{@text_secondary}">#{length(amendments)} amendment(s)</text>\n]
           else
             ~s[<text x="#{bx + 22}" y="#{by + 44}" font-size="9" fill="#{@text_dim}">No amendments</text>\n]

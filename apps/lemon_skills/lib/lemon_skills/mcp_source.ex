@@ -970,10 +970,9 @@ defmodule LemonSkills.McpSource do
   defp call_mcp_entry(client_mod, client, {:tool, original_name}, params, opts) do
     timeout = Keyword.get(opts, :timeout_ms, @client_request_timeout_ms)
 
-    with {:ok, content} <-
-           client_call(client_mod, :call_tool, [client, original_name, params, timeout]) do
-      {:ok, %AgentToolResult{content: content_blocks(content), details: %{mcp: true}}}
-    else
+    case client_call(client_mod, :call_tool, [client, original_name, params, timeout]) do
+      {:ok, content} ->
+        {:ok, %AgentToolResult{content: content_blocks(content), details: %{mcp: true}}}
       {:error, {:tool_error, content}} ->
         {:error, {:tool_error, content_blocks(content)}}
 

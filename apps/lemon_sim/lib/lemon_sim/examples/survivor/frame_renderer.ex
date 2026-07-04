@@ -443,7 +443,7 @@ defmodule LemonSim.Examples.Survivor.FrameRenderer do
         ]
       end),
       # Elimination order summary
-      if length(elimination_log) > 0 do
+      if elimination_log != [] do
         base_y = cy - div(card_h, 2) + 116 + length(finalists) * 50 + 20
 
         [
@@ -837,7 +837,7 @@ defmodule LemonSim.Examples.Survivor.FrameRenderer do
         ]
       end),
       # Jury list (if any)
-      if length(ctx.jury) > 0 do
+      if ctx.jury != [] do
         jury_base_y = @header_h + 64 + length(ctx.elimination_log) * 22 + 20
 
         [
@@ -855,7 +855,7 @@ defmodule LemonSim.Examples.Survivor.FrameRenderer do
         ""
       end,
       # Vote history summary (last 5)
-      if length(ctx.vote_history) > 0 do
+      if ctx.vote_history != [] do
         base_y = @header_h + 64 + length(ctx.elimination_log) * 22 + length(ctx.jury) * 20 + 56
         recent_votes = Enum.take(ctx.vote_history, -5)
 

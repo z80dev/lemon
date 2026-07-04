@@ -776,7 +776,7 @@ defmodule Ai.EventStreamOverflowTest do
       # Complete and wait for consumer
       EventStream.complete(stream, make_message())
 
-      events = Task.await(consumer, 10000)
+      events = Task.await(consumer, 10_000)
 
       # Should have the done event
       assert Enum.any?(events, &match?({:done, _, _}, &1))

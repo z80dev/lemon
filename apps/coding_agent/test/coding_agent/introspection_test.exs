@@ -206,7 +206,7 @@ defmodule CodingAgent.IntrospectionTest do
       events = Introspection.list(session_key: session_key, limit: 20)
       started = Enum.filter(events, &(&1.event_type == :session_started))
 
-      assert length(started) >= 1
+      assert started != []
       [evt | _] = started
       assert evt.engine == "lemon"
       assert evt.run_id == run_id
@@ -247,7 +247,7 @@ defmodule CodingAgent.IntrospectionTest do
           evt.payload.session_id == session_id
         end)
 
-      assert length(ended) >= 1
+      assert ended != []
       [evt | _] = ended
       assert evt.engine == "lemon"
       assert is_integer(evt.payload.turn_count)
@@ -327,7 +327,7 @@ defmodule CodingAgent.IntrospectionTest do
           evt.payload.tool_call_id == "call_introspection_#{token}"
         end)
 
-      assert length(tool_events) >= 1
+      assert tool_events != []
       [evt | _] = tool_events
       assert evt.engine == "lemon"
       assert evt.run_id == run_id
@@ -520,7 +520,7 @@ defmodule CodingAgent.IntrospectionTest do
       Process.sleep(50)
       events = Introspection.list(session_key: session_key, limit: 20)
       started = Enum.filter(events, &(&1.event_type == :session_started))
-      assert length(started) >= 1
+      assert started != []
 
       GenServer.stop(session, :normal)
     end

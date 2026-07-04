@@ -505,14 +505,14 @@ defmodule Ai.Providers.GoogleGeminiCliComprehensiveTest do
       opts = %StreamOptions{
         api_key: default_api_key(),
         reasoning: :high,
-        thinking_budgets: %{budget_tokens: 16384}
+        thinking_budgets: %{budget_tokens: 16_384}
       }
 
       {:ok, _stream} = GoogleGeminiCli.stream(model, default_context(), opts)
 
       assert_receive {:request_body, body}, 1000
       assert body["request"]["generationConfig"]["thinkingConfig"]["includeThoughts"] == true
-      assert body["request"]["generationConfig"]["thinkingConfig"]["thinkingBudget"] == 16384
+      assert body["request"]["generationConfig"]["thinkingConfig"]["thinkingBudget"] == 16_384
     end
   end
 
@@ -1391,7 +1391,7 @@ defmodule Ai.Providers.GoogleGeminiCliComprehensiveTest do
 
       {:ok, stream} = GoogleGeminiCli.stream(default_model(), default_context(), default_opts())
 
-      assert {:error, result} = EventStream.result(stream, 10000)
+      assert {:error, result} = EventStream.result(stream, 10_000)
       assert result.stop_reason == :error
       assert result.error_message =~ "500"
     end

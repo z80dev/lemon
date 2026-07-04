@@ -1316,7 +1316,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
       |> Enum.reject(fn fields -> Enum.any?(fields, &(not is_nil(Map.get(params, &1)))) end)
       |> Enum.map(&Enum.join(&1, " or "))
 
-    if length(missing) > 0 or length(missing_any) > 0 do
+    if missing != [] or missing_any != [] do
       missing_parts =
         []
         |> maybe_missing("Missing required fields", missing)
@@ -1338,7 +1338,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
           "#{field}: expected #{format_type(expected_type)}, got #{typeof(value)}"
         end)
 
-      if length(type_errors) > 0 do
+      if type_errors != [] do
         {:error, "Type errors: #{Enum.join(type_errors, "; ")}"}
       else
         :ok

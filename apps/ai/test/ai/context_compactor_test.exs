@@ -72,7 +72,7 @@ defmodule Ai.ContextCompactorTest do
       assert is_boolean(metadata.has_summary)
 
       # Verify we still have messages
-      assert length(compacted.messages) > 0
+      assert compacted.messages != []
     end
 
     test "preserves system prompt when truncating" do

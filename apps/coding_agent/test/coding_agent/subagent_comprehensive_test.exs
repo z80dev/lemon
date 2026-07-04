@@ -41,7 +41,7 @@ defmodule CodingAgent.SubagentComprehensiveTest do
     %SettingsManager{
       default_thinking_level: :off,
       compaction_enabled: false,
-      reserve_tokens: 16384
+      reserve_tokens: 16_384
     }
   end
 
@@ -530,7 +530,7 @@ defmodule CodingAgent.SubagentComprehensiveTest do
           :ets.delete(updates)
 
           # Should have received some updates
-          assert length(all_updates) >= 0
+          assert is_list(all_updates)
 
           case result do
             %AgentToolResult{} -> assert true
@@ -623,7 +623,7 @@ defmodule CodingAgent.SubagentComprehensiveTest do
 
           # At least some should complete
           completed = Enum.filter(results, &(&1.status == :completed))
-          assert length(completed) >= 0
+          assert is_list(completed)
 
           GenServer.stop(coordinator)
       end
@@ -1062,7 +1062,7 @@ defmodule CodingAgent.SubagentComprehensiveTest do
           events = collect_events([], 30_000)
 
           # Should have received events
-          assert length(events) >= 0
+          assert is_list(events)
 
           # Should have message events if completed
           message_events =
@@ -1073,7 +1073,7 @@ defmodule CodingAgent.SubagentComprehensiveTest do
               _ -> false
             end)
 
-          assert length(message_events) >= 0
+          assert is_list(message_events)
 
           GenServer.stop(session)
       end
@@ -1168,7 +1168,7 @@ defmodule CodingAgent.SubagentComprehensiveTest do
           # Should have some results regardless of individual failures
           completed = Enum.filter(results, &(&1.status == :completed))
           # At least could attempt all
-          assert length(completed) >= 0
+          assert is_list(completed)
 
           GenServer.stop(coordinator)
       end
@@ -1240,7 +1240,7 @@ defmodule CodingAgent.SubagentComprehensiveTest do
                 end)
 
               # Either used tool or responded directly
-              assert text != "" or length(tool_events) > 0
+              assert text != "" or tool_events != []
 
             {:error, _reason, _events} ->
               # May fail but shouldn't crash

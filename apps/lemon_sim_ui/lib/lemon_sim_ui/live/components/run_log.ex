@@ -1,4 +1,7 @@
 defmodule LemonSimUi.Live.Components.RunLog do
+  @moduledoc """
+  Renders the live run status panel with world metrics, recent events, plans, and runner errors.
+  """
   use Phoenix.Component
 
   alias LemonCore.MapHelpers

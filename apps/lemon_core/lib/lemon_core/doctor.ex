@@ -1,4 +1,7 @@
 defmodule LemonCore.Doctor do
+  @moduledoc """
+  Runs the Lemon doctor check suite and builds the aggregate diagnostic report used by CLI and support tooling.
+  """
   alias LemonCore.Doctor.Checks.{
     ACP,
     Browser,

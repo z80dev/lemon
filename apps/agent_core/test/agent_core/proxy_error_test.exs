@@ -51,14 +51,15 @@ defmodule AgentCore.ProxyErrorTest do
         )
 
       unless close_early do
-        Enum.reduce_while(chunks, :ok, fn chunk, _acc ->
-          if delay > 0, do: Process.sleep(delay)
+        _ =
+          Enum.reduce_while(chunks, :ok, fn chunk, _acc ->
+            if delay > 0, do: Process.sleep(delay)
 
-          case send_chunk(socket, chunk) do
-            :ok -> {:cont, :ok}
-            :closed -> {:halt, :closed}
-          end
-        end)
+            case send_chunk(socket, chunk) do
+              :ok -> {:cont, :ok}
+              :closed -> {:halt, :closed}
+            end
+          end)
 
         _ = :gen_tcp.send(socket, "0\r\n\r\n")
       end

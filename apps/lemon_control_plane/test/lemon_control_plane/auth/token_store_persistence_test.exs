@@ -203,7 +203,7 @@ defmodule LemonControlPlane.Auth.TokenStorePersistenceTest do
       active = TokenStore.list_active()
 
       # Should only return the active token
-      assert length(active) >= 1
+      assert active != []
       tokens = Enum.map(active, fn info ->
         info[:token] || info["token"]
       end)

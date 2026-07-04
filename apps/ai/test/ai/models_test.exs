@@ -67,7 +67,7 @@ defmodule Ai.ModelsTest do
     test "returns a list of models for a known provider" do
       models = Models.get_models(:anthropic)
       assert is_list(models)
-      assert length(models) > 0
+      assert models != []
       assert Enum.all?(models, &match?(%Model{provider: :anthropic}, &1))
     end
 
@@ -77,7 +77,7 @@ defmodule Ai.ModelsTest do
 
     test "returns models for openai provider" do
       models = Models.get_models(:openai)
-      assert length(models) > 0
+      assert models != []
       assert Enum.all?(models, &match?(%Model{provider: :openai}, &1))
     end
   end
@@ -90,7 +90,7 @@ defmodule Ai.ModelsTest do
     test "returns a list of provider atoms" do
       providers = Models.get_providers()
       assert is_list(providers)
-      assert length(providers) > 0
+      assert match?([_ | _], providers)
       assert Enum.all?(providers, &is_atom/1)
     end
 
@@ -137,7 +137,7 @@ defmodule Ai.ModelsTest do
     test "returns model ID strings for a known provider" do
       ids = Models.get_model_ids(:anthropic)
       assert is_list(ids)
-      assert length(ids) > 0
+      assert ids != []
       assert Enum.all?(ids, &is_binary/1)
       assert "claude-sonnet-4-20250514" in ids
     end
@@ -464,7 +464,7 @@ defmodule Ai.ModelsTest do
     test "every provider in get_providers has at least one model" do
       for provider <- Models.get_providers() do
         models = Models.get_models(provider)
-        assert length(models) > 0, "provider #{provider} has no models"
+        assert models != [], "provider #{provider} has no models"
       end
     end
   end

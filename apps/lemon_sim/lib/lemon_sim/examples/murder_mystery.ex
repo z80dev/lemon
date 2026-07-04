@@ -326,8 +326,7 @@ defmodule LemonSim.Examples.MurderMystery do
         {:ok, final_state}
 
       {:error, reason} = error ->
-        IO.puts("Murder mystery sim failed:")
-        IO.inspect(reason)
+        IO.puts("Murder mystery sim failed: #{inspect(reason)}")
         error
     end
   end

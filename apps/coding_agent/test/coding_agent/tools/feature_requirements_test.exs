@@ -196,7 +196,7 @@ defmodule CodingAgent.Tools.FeatureRequirementsTest do
 
         assert is_map(requirements)
         assert is_binary(requirements.project_name)
-        assert length(requirements.features) > 0
+        assert requirements.features != []
 
         first_feature = hd(requirements.features)
         assert is_binary(first_feature.id)

@@ -182,7 +182,7 @@ defmodule LemonMCP.ClientTest.SSEFixture do
     %{
       "jsonrpc" => "2.0",
       "id" => id,
-      "error" => %{"code" => -32601, "message" => "Method not found"}
+      "error" => %{"code" => -32_601, "message" => "Method not found"}
     }
   end
 end
@@ -268,7 +268,7 @@ defmodule LemonMCP.ClientTest.StreamableHTTPFixture do
     {%{
        "jsonrpc" => "2.0",
        "id" => id,
-       "error" => %{"code" => -32601, "message" => "Method not found"}
+       "error" => %{"code" => -32_601, "message" => "Method not found"}
      }, :json}
   end
 end
@@ -441,7 +441,7 @@ defmodule LemonMCP.ClientTest.OAuthTokenFixture do
     %{
       "jsonrpc" => "2.0",
       "id" => id,
-      "error" => %{"code" => -32601, "message" => "Method not found"}
+      "error" => %{"code" => -32_601, "message" => "Method not found"}
     }
   end
 

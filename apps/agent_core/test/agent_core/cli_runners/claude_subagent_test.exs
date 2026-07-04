@@ -530,7 +530,7 @@ defmodule AgentCore.CliRunners.ClaudeSubagentTest do
         |> ClaudeSubagent.events()
         |> Enum.to_list()
 
-      assert length(normalized) >= 1
+      assert normalized != []
     end
   end
 

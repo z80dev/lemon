@@ -15,7 +15,7 @@ defmodule CodingAgent.Tools.TodoTest do
   end
 
   # ============================================================================
-  # TodoStore Tests
+  # Task Store Tests
   # ============================================================================
 
   describe "TodoStore.get/1" do
@@ -84,7 +84,7 @@ defmodule CodingAgent.Tools.TodoTest do
   end
 
   # ============================================================================
-  # TodoWrite Tool Tests
+  # Task Write Tool Tests
   # ============================================================================
 
   describe "TodoWrite.tool/2" do
@@ -210,7 +210,7 @@ defmodule CodingAgent.Tools.TodoTest do
   end
 
   # ============================================================================
-  # TodoRead Tool Tests
+  # Task Read Tool Tests
   # ============================================================================
 
   describe "TodoRead.tool/2" do

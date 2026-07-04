@@ -718,7 +718,7 @@ defmodule CodingAgent.Tools.PatchTest do
     test "handles moderately large files efficiently", %{tmp_dir: tmp_dir} do
       file = Path.join(tmp_dir, "moderate.txt")
       # 1MB file with numbered lines for unique context
-      lines = for i <- 1..10000, do: "line #{i}: #{String.duplicate("x", 90)}"
+      lines = for i <- 1..10_000, do: "line #{i}: #{String.duplicate("x", 90)}"
       File.write!(file, Enum.join(lines, "\n"))
 
       patch_text = """
@@ -1039,7 +1039,7 @@ defmodule CodingAgent.Tools.PatchTest do
     end
 
     test "handles patch_text that is not a string", %{tmp_dir: tmp_dir} do
-      result = Patch.execute("call_1", %{"patch_text" => 12345}, nil, nil, tmp_dir, [])
+      result = Patch.execute("call_1", %{"patch_text" => 12_345}, nil, nil, tmp_dir, [])
       assert {:error, "patch_text must be a string"} = result
 
       result = Patch.execute("call_1", %{"patch_text" => ["list"]}, nil, nil, tmp_dir, [])

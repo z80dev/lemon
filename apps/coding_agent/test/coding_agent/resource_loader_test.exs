@@ -85,7 +85,7 @@ defmodule CodingAgent.ResourceLoaderTest do
 
       result = ResourceLoader.load_instructions_list(tmp_dir)
       assert is_list(result)
-      assert length(result) >= 1
+      assert result != []
 
       file = Enum.find(result, &(&1.path =~ "CLAUDE.md"))
       assert file != nil

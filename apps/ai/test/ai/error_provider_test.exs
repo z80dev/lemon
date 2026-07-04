@@ -526,7 +526,7 @@ defmodule Ai.ErrorProviderTest do
 
       info = Error.extract_rate_limit_info(headers)
 
-      assert info.limit == 10000
+      assert info.limit == 10_000
       assert info.remaining == 9999
       assert DateTime.diff(info.reset_at, before, :millisecond) >= 0
     end
@@ -1162,7 +1162,7 @@ defmodule Ai.ErrorProviderTest do
     end
 
     test "handles message field as number" do
-      body = %{"error" => %{"message" => 12345}}
+      body = %{"error" => %{"message" => 12_345}}
 
       result = Error.parse_http_error(500, body, [])
 

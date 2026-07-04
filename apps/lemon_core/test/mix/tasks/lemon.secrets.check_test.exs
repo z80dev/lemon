@@ -106,7 +106,7 @@ defmodule Mix.Tasks.Lemon.Secrets.CheckTest do
     end
 
     test "known_secrets list is non-empty" do
-      assert length(Check.known_secrets()) > 0
+      assert match?([_ | _], Check.known_secrets())
     end
   end
 

@@ -138,12 +138,12 @@ defmodule LemonCore.ChatStateTest do
         ChatState.new(%{
           :last_engine => "atom_engine",
           "last_resume_token" => "string_token",
-          :updated_at => 12345
+          :updated_at => 12_345
         })
 
       assert state.last_engine == "atom_engine"
       assert state.last_resume_token == "string_token"
-      assert state.updated_at == 12345
+      assert state.updated_at == 12_345
     end
 
     test "false atom key value still uses atom key (falsy but not nil)" do
@@ -292,8 +292,8 @@ defmodule LemonCore.ChatStateTest do
     # These tests document behavior when non-standard types are used
     test "struct accepts any value type (no runtime type enforcement)" do
       # This documents that Elixir structs don't enforce @type at runtime
-      state = ChatState.new(%{last_engine: 12345})
-      assert state.last_engine == 12345
+      state = ChatState.new(%{last_engine: 12_345})
+      assert state.last_engine == 12_345
 
       state2 = ChatState.new(%{updated_at: "not_an_integer"})
       assert state2.updated_at == "not_an_integer"
@@ -531,7 +531,7 @@ defmodule LemonCore.ChatStateTest do
 
   describe "Store ChatState round-trip" do
     test "stores and retrieves ChatState" do
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
 
       original = %ChatState{
         last_engine: "codex",
@@ -563,13 +563,13 @@ defmodule LemonCore.ChatStateTest do
     end
 
     test "returns nil for missing chat state" do
-      scope = %ChatScope{transport: :telegram, chat_id: 99999}
+      scope = %ChatScope{transport: :telegram, chat_id: 99_999}
 
       assert Store.get_chat_state(scope) == nil
     end
 
     test "overwrites existing chat state" do
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
 
       first = %ChatState{last_engine: "first", last_resume_token: "token1", updated_at: 1000}
       second = %ChatState{last_engine: "second", last_resume_token: "token2", updated_at: 2000}
@@ -593,8 +593,8 @@ defmodule LemonCore.ChatStateTest do
     end
 
     test "different scopes have separate chat states" do
-      scope1 = %ChatScope{transport: :telegram, chat_id: 11111}
-      scope2 = %ChatScope{transport: :telegram, chat_id: 22222}
+      scope1 = %ChatScope{transport: :telegram, chat_id: 11_111}
+      scope2 = %ChatScope{transport: :telegram, chat_id: 22_222}
 
       state1 = %ChatState{last_engine: "engine1", last_resume_token: "t1", updated_at: 1000}
       state2 = %ChatState{last_engine: "engine2", last_resume_token: "t2", updated_at: 2000}

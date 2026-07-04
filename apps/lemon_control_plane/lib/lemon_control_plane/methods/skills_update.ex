@@ -94,7 +94,7 @@ defmodule LemonControlPlane.Methods.SkillsUpdate do
     # Check for errors
     errors = Enum.filter(results, fn {_key, result} -> result != :ok end)
 
-    if length(errors) > 0 do
+    if errors != [] do
       error_details =
         Enum.map(errors, fn {key, {:error, reason}} ->
           "#{key}: #{inspect(reason)}"

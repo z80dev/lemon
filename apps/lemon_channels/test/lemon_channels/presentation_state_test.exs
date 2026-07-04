@@ -40,7 +40,7 @@ defmodule LemonChannels.PresentationStateTest do
         :answer,
         ref,
         1,
-        12345
+        12_345
       )
 
       # Immediately, the ref should still be pending
@@ -88,7 +88,7 @@ defmodule LemonChannels.PresentationStateTest do
         :answer,
         ref,
         1,
-        12345
+        12_345
       )
 
       # The ref was just registered, so it should NOT be evicted

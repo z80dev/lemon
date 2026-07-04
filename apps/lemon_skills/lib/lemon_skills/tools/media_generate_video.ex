@@ -527,16 +527,16 @@ defmodule LemonSkills.Tools.MediaGenerateVideo do
   end
 
   defp download_openai_video(video, generation, runtime, api_key) do
-    with id when is_binary(id) <- video_id(video) do
-      url = String.trim_trailing(runtime.base_url, "/") <> "/videos/" <> id <> "/content"
+    case video_id(video) do
+      id when is_binary(id) ->
+        url = String.trim_trailing(runtime.base_url, "/") <> "/videos/" <> id <> "/content"
 
-      request_opts = [
-        headers: [{"authorization", "Bearer #{api_key}"}],
-        receive_timeout: 300_000
-      ]
+        request_opts = [
+          headers: [{"authorization", "Bearer #{api_key}"}],
+          receive_timeout: 300_000
+        ]
 
-      do_get(runtime, url, request_opts, generation.max_retries, :openai_video_download)
-    else
+        do_get(runtime, url, request_opts, generation.max_retries, :openai_video_download)
       _ -> {:error, :missing_openai_video_id}
     end
   end
@@ -680,16 +680,16 @@ defmodule LemonSkills.Tools.MediaGenerateVideo do
   end
 
   defp retry_or_error(retry_fun, retries, error_kind, status, body) do
-    if is_transient_status(status) and retries > 0 do
+    if transient_status?(status) and retries > 0 do
       retry_fun.()
     else
       {:error, {:"#{error_kind}_http_error", status, provider_error_kind(body)}}
     end
   end
 
-  defp is_transient_status(status) when status in [408, 409, 425, 429], do: true
-  defp is_transient_status(status) when is_integer(status) and status >= 500, do: true
-  defp is_transient_status(_status), do: false
+  defp transient_status?(status) when status in [408, 409, 425, 429], do: true
+  defp transient_status?(status) when is_integer(status) and status >= 500, do: true
+  defp transient_status?(_status), do: false
 
   defp wait_for_job(job_id, timeout_ms, signal) do
     receive do

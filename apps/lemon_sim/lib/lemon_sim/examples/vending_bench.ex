@@ -225,8 +225,7 @@ defmodule LemonSim.Examples.VendingBench do
         {:ok, final_state}
 
       {:error, reason} = error ->
-        IO.puts("Simulation failed:")
-        IO.inspect(reason)
+        IO.puts("Simulation failed: #{inspect(reason)}")
         error
     end
   end
@@ -448,14 +447,16 @@ defmodule LemonSim.Examples.VendingBench do
   end
 
   defp recover_live_step_failure(state, reason, actions, run_opts) do
-    with {:ok, reason_text} <- recoverable_live_step_failure(reason) do
-      if live_missed_turn_autowait?(reason_text, actions, run_opts) do
-        recover_live_missed_turn_autowait(state, reason_text)
-      else
-        recover_live_rejected_action(state, reason_text)
-      end
-    else
-      :error -> :error
+    case recoverable_live_step_failure(reason) do
+      {:ok, reason_text} ->
+        if live_missed_turn_autowait?(reason_text, actions, run_opts) do
+          recover_live_missed_turn_autowait(state, reason_text)
+        else
+          recover_live_rejected_action(state, reason_text)
+        end
+
+      :error ->
+        :error
     end
   end
 

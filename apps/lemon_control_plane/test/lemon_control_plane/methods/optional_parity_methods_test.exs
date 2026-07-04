@@ -196,7 +196,7 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsTest do
       {:ok, result} = TtsProviders.handle(%{}, @ctx)
 
       assert is_list(result["providers"])
-      assert length(result["providers"]) > 0
+      assert result["providers"] != []
 
       provider = hd(result["providers"])
       assert is_binary(provider["id"])

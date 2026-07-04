@@ -1,4 +1,7 @@
 defmodule LemonCore.Doctor.SupportBundle do
+  @moduledoc """
+  Builds sanitized support bundle archives from doctor reports, runtime diagnostics, proof metadata, and selected configuration files.
+  """
   alias LemonCore.Config.Modular
   alias LemonCore.Doctor.Report
 

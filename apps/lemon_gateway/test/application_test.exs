@@ -354,7 +354,7 @@ defmodule LemonGateway.ApplicationTest do
       assert is_pid(Process.whereis(LemonCore.Store))
 
       # Store should be functional
-      scope = {:test, 12345}
+      scope = {:test, 12_345}
       LemonCore.Store.put_chat_state(scope, %{test: true})
       Process.sleep(10)
       state = LemonCore.Store.get_chat_state(scope)

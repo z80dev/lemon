@@ -248,53 +248,53 @@ defmodule LemonEvals.Harness do
 
   @spec memory_topic_contract_eval(String.t()) :: eval_result()
   def memory_topic_contract_eval(_cwd) do
-    with {:ok, tmp_dir} <- create_tmp_dir() do
-      try do
-        workspace_dir = Path.join(tmp_dir, "workspace")
-        template_path = Path.join(workspace_dir, "memory/topics/TEMPLATE.md")
-        topic_path = Path.join(workspace_dir, "memory/topics/harness-contract.md")
+    case create_tmp_dir() do
+      {:ok, tmp_dir} ->
+        try do
+          workspace_dir = Path.join(tmp_dir, "workspace")
+          template_path = Path.join(workspace_dir, "memory/topics/TEMPLATE.md")
+          topic_path = Path.join(workspace_dir, "memory/topics/harness-contract.md")
 
-        File.mkdir_p!(Path.dirname(template_path))
-        File.write!(template_path, "# Topic: <topic-slug>\n\ncontract-template")
+          File.mkdir_p!(Path.dirname(template_path))
+          File.write!(template_path, "# Topic: <topic-slug>\n\ncontract-template")
 
-        result =
-          MemoryTopic.execute(
-            "eval-memory-topic",
-            %{"topic" => "Harness Contract"},
-            nil,
-            nil,
-            workspace_dir
-          )
+          result =
+            MemoryTopic.execute(
+              "eval-memory-topic",
+              %{"topic" => "Harness Contract"},
+              nil,
+              nil,
+              workspace_dir
+            )
 
-        cond do
-          not match?(%AgentToolResult{}, result) ->
-            contract_fail("memory_topic_contract", "unexpected result", %{result: inspect(result)})
+          cond do
+            not match?(%AgentToolResult{}, result) ->
+              contract_fail("memory_topic_contract", "unexpected result", %{result: inspect(result)})
 
-          result.details[:created] != true ->
-            contract_fail("memory_topic_contract", "topic was not created", result.details)
+            result.details[:created] != true ->
+              contract_fail("memory_topic_contract", "topic was not created", result.details)
 
-          result.details[:path] != topic_path ->
-            contract_fail("memory_topic_contract", "topic path drifted", result.details)
+            result.details[:path] != topic_path ->
+              contract_fail("memory_topic_contract", "topic path drifted", result.details)
 
-          not File.exists?(topic_path) ->
-            contract_fail("memory_topic_contract", "topic file missing", %{path: topic_path})
+            not File.exists?(topic_path) ->
+              contract_fail("memory_topic_contract", "topic file missing", %{path: topic_path})
 
-          not String.contains?(File.read!(topic_path), "# Topic: harness-contract") ->
-            contract_fail("memory_topic_contract", "template slug replacement failed", %{
-              path: topic_path
-            })
+            not String.contains?(File.read!(topic_path), "# Topic: harness-contract") ->
+              contract_fail("memory_topic_contract", "template slug replacement failed", %{
+                path: topic_path
+              })
 
-          true ->
-            %{
-              name: "memory_topic_contract",
-              status: :pass,
-              details: %{slug: result.details[:slug], path: result.details[:path]}
-            }
+            true ->
+              %{
+                name: "memory_topic_contract",
+                status: :pass,
+                details: %{slug: result.details[:slug], path: result.details[:path]}
+              }
+          end
+        after
+          File.rm_rf(tmp_dir)
         end
-      after
-        File.rm_rf(tmp_dir)
-      end
-    else
       {:error, reason} -> contract_fail("memory_topic_contract", format_reason(reason), %{})
     end
   rescue
@@ -303,68 +303,68 @@ defmodule LemonEvals.Harness do
 
   @spec auto_skill_prompt_contract_eval(String.t()) :: eval_result()
   def auto_skill_prompt_contract_eval(_cwd) do
-    with {:ok, tmp_dir} <- create_tmp_dir() do
-      try do
-        skill_dir = Path.join([tmp_dir, ".lemon", "skill", "hermes-memory"])
-        skill_path = Path.join(skill_dir, "SKILL.md")
-        sentinel = "FULL BODY SENTINEL MUST NOT BE IN PROMPT"
+    case create_tmp_dir() do
+      {:ok, tmp_dir} ->
+        try do
+          skill_dir = Path.join([tmp_dir, ".lemon", "skill", "hermes-memory"])
+          skill_path = Path.join(skill_dir, "SKILL.md")
+          sentinel = "FULL BODY SENTINEL MUST NOT BE IN PROMPT"
 
-        File.mkdir_p!(skill_dir)
+          File.mkdir_p!(skill_dir)
 
-        File.write!(skill_path, """
-        ---
-        name: hermes-memory
-        description: Hermes memory recall and durable profile discipline
-        keywords:
-          - hermes
-          - memory
-          - recall
-        ---
+          File.write!(skill_path, """
+          ---
+          name: hermes-memory
+          description: Hermes memory recall and durable profile discipline
+          keywords:
+            - hermes
+            - memory
+            - recall
+          ---
 
-        # Hermes Memory
+          # Hermes Memory
 
-        #{sentinel}
-        """)
+          #{sentinel}
+          """)
 
-        prompt =
-          PromptBuilder.build(tmp_dir, %{
-            base_prompt: "Base.",
-            context: "improve hermes memory recall and profile discipline",
-            include_skills: true,
-            include_commands: false,
-            include_mentions: false
-          })
-
-        cond do
-          not String.contains?(prompt, "<relevant-skills>") ->
-            contract_fail("auto_skill_prompt_contract", "missing relevant skills block", %{
-              prompt: prompt
+          prompt =
+            PromptBuilder.build(tmp_dir, %{
+              base_prompt: "Base.",
+              context: "improve hermes memory recall and profile discipline",
+              include_skills: true,
+              include_commands: false,
+              include_mentions: false
             })
 
-          not String.contains?(prompt, "<key>hermes-memory</key>") ->
-            contract_fail("auto_skill_prompt_contract", "missing relevant skill key", %{
-              prompt: prompt
-            })
+          cond do
+            not String.contains?(prompt, "<relevant-skills>") ->
+              contract_fail("auto_skill_prompt_contract", "missing relevant skills block", %{
+                prompt: prompt
+              })
 
-          not String.contains?(prompt, "Use `read_skill`") ->
-            contract_fail("auto_skill_prompt_contract", "missing read_skill loading reminder", %{
-              prompt: prompt
-            })
+            not String.contains?(prompt, "<key>hermes-memory</key>") ->
+              contract_fail("auto_skill_prompt_contract", "missing relevant skill key", %{
+                prompt: prompt
+              })
 
-          String.contains?(prompt, sentinel) ->
-            contract_fail("auto_skill_prompt_contract", "full skill body leaked into prompt", %{})
+            not String.contains?(prompt, "Use `read_skill`") ->
+              contract_fail("auto_skill_prompt_contract", "missing read_skill loading reminder", %{
+                prompt: prompt
+              })
 
-          true ->
-            %{
-              name: "auto_skill_prompt_contract",
-              status: :pass,
-              details: %{skill: "hermes-memory", progressive_disclosure: true}
-            }
+            String.contains?(prompt, sentinel) ->
+              contract_fail("auto_skill_prompt_contract", "full skill body leaked into prompt", %{})
+
+            true ->
+              %{
+                name: "auto_skill_prompt_contract",
+                status: :pass,
+                details: %{skill: "hermes-memory", progressive_disclosure: true}
+              }
+          end
+        after
+          File.rm_rf(tmp_dir)
         end
-      after
-        File.rm_rf(tmp_dir)
-      end
-    else
       {:error, reason} -> contract_fail("auto_skill_prompt_contract", format_reason(reason), %{})
     end
   rescue
@@ -373,75 +373,75 @@ defmodule LemonEvals.Harness do
 
   @spec dedicated_tool_preference_contract_eval(String.t()) :: eval_result()
   def dedicated_tool_preference_contract_eval(_cwd) do
-    with {:ok, tmp_dir} <- create_tmp_dir() do
-      try do
-        workspace_dir = Path.join(tmp_dir, "workspace")
-        File.mkdir_p!(workspace_dir)
-        File.write!(Path.join(workspace_dir, "AGENTS.md"), "agents")
+    case create_tmp_dir() do
+      {:ok, tmp_dir} ->
+        try do
+          workspace_dir = Path.join(tmp_dir, "workspace")
+          File.mkdir_p!(workspace_dir)
+          File.write!(Path.join(workspace_dir, "AGENTS.md"), "agents")
 
-        system_prompt =
-          CodingAgent.SystemPrompt.build(tmp_dir, %{
-            workspace_dir: workspace_dir,
-            session_scope: :main
-          })
+          system_prompt =
+            CodingAgent.SystemPrompt.build(tmp_dir, %{
+              workspace_dir: workspace_dir,
+              session_scope: :main
+            })
 
-        learning_prompt = PromptBuilder.build_learning_section()
+          learning_prompt = PromptBuilder.build_learning_section()
 
-        cond do
-          not String.contains?(system_prompt, "Prefer the dedicated memory and skill tools") ->
-            contract_fail(
-              "dedicated_tool_preference_contract",
-              "system prompt missing dedicated tool preference",
-              %{}
-            )
+          cond do
+            not String.contains?(system_prompt, "Prefer the dedicated memory and skill tools") ->
+              contract_fail(
+                "dedicated_tool_preference_contract",
+                "system prompt missing dedicated tool preference",
+                %{}
+              )
 
-          not String.contains?(
-            system_prompt,
-            "not for bypassing `search_memory`, `session_search`"
-          ) ->
-            contract_fail(
-              "dedicated_tool_preference_contract",
-              "system prompt does not protect dedicated memory tools from shell bypass",
-              %{}
-            )
+            not String.contains?(
+              system_prompt,
+              "not for bypassing `search_memory`, `session_search`"
+            ) ->
+              contract_fail(
+                "dedicated_tool_preference_contract",
+                "system prompt does not protect dedicated memory tools from shell bypass",
+                %{}
+              )
 
-          not String.contains?(learning_prompt, "Prefer dedicated memory and skill tools") ->
-            contract_fail(
-              "dedicated_tool_preference_contract",
-              "learning prompt missing dedicated tool preference",
-              %{}
-            )
+            not String.contains?(learning_prompt, "Prefer dedicated memory and skill tools") ->
+              contract_fail(
+                "dedicated_tool_preference_contract",
+                "learning prompt missing dedicated tool preference",
+                %{}
+              )
 
-          not Enum.all?(
-            [
-              "read_skill",
-              "search_memory",
-              "session_search",
-              "memory_topic",
-              "memory",
-              "skill_manage"
-            ],
-            fn tool ->
-              String.contains?(learning_prompt, "`#{tool}`")
-            end
-          ) ->
-            contract_fail(
-              "dedicated_tool_preference_contract",
-              "learning prompt missing dedicated memory or skill tool names",
-              %{prompt: learning_prompt}
-            )
+            not Enum.all?(
+              [
+                "read_skill",
+                "search_memory",
+                "session_search",
+                "memory_topic",
+                "memory",
+                "skill_manage"
+              ],
+              fn tool ->
+                String.contains?(learning_prompt, "`#{tool}`")
+              end
+            ) ->
+              contract_fail(
+                "dedicated_tool_preference_contract",
+                "learning prompt missing dedicated memory or skill tool names",
+                %{prompt: learning_prompt}
+              )
 
-          true ->
-            %{
-              name: "dedicated_tool_preference_contract",
-              status: :pass,
-              details: %{memory_and_skill_tools_preferred: true}
-            }
+            true ->
+              %{
+                name: "dedicated_tool_preference_contract",
+                status: :pass,
+                details: %{memory_and_skill_tools_preferred: true}
+              }
+          end
+        after
+          File.rm_rf(tmp_dir)
         end
-      after
-        File.rm_rf(tmp_dir)
-      end
-    else
       {:error, reason} ->
         contract_fail("dedicated_tool_preference_contract", format_reason(reason), %{})
     end
@@ -451,92 +451,92 @@ defmodule LemonEvals.Harness do
 
   @spec skill_curator_behavior_contract_eval(String.t()) :: eval_result()
   def skill_curator_behavior_contract_eval(_cwd) do
-    with {:ok, tmp_dir} <- create_tmp_dir() do
-      try do
-        tool_opts = [
-          run_id: "eval-skill-curator",
-          session_key: "agent:skill-curator-eval:main",
-          session_id: "agent:skill-curator-eval:main",
-          agent_id: "skill-curator-eval"
-        ]
+    case create_tmp_dir() do
+      {:ok, tmp_dir} ->
+        try do
+          tool_opts = [
+            run_id: "eval-skill-curator",
+            session_key: "agent:skill-curator-eval:main",
+            session_id: "agent:skill-curator-eval:main",
+            agent_id: "skill-curator-eval"
+          ]
 
-        skill_tool = SkillManage.tool(tmp_dir, tool_opts)
-        read_tool = ReadSkill.tool(tmp_dir, tool_opts)
+          skill_tool = SkillManage.tool(tmp_dir, tool_opts)
+          read_tool = ReadSkill.tool(tmp_dir, tool_opts)
 
-        with {:ok, _} <-
-               execute_tool(skill_tool, "seed-rollout-verify", %{
-                 "action" => "create",
-                 "name" => "kube-rollout-verify",
-                 "scope" => "project",
-                 "content" => narrow_skill_content("Kube Rollout Verify", "verify")
-               }),
-             {:ok, _} <-
-               execute_tool(skill_tool, "seed-rollout-rollback", %{
-                 "action" => "create",
-                 "name" => "kube-rollout-rollback",
-                 "scope" => "project",
-                 "content" => narrow_skill_content("Kube Rollout Rollback", "rollback")
-               }),
-             {:ok, curator_result} <-
-               Curator.run(
-                 scope: :project,
-                 cwd: tmp_dir,
-                 now: ~U[2026-05-06 00:00:00Z],
-                 interval_hours: 1
-               ),
-             :ok <- assert_curator_prompt(curator_result.review_prompt),
-             {:ok, verify_text} <-
-               execute_tool(read_tool, "read-rollout-verify", %{
-                 "key" => "kube-rollout-verify",
-                 "view" => "full"
-               }),
-             {:ok, rollback_text} <-
-               execute_tool(read_tool, "read-rollout-rollback", %{
-                 "key" => "kube-rollout-rollback",
-                 "view" => "full"
-               }),
-             :ok <- assert_contains(verify_text, "kubectl rollout status"),
-             :ok <- assert_contains(rollback_text, "kubectl rollout undo"),
-             {:ok, _} <-
-               execute_tool(skill_tool, "create-rollout-umbrella", %{
-                 "action" => "create",
-                 "name" => "kube-rollout-operations",
-                 "scope" => "project",
-                 "content" => umbrella_skill_content()
-               }),
-             {:ok, _} <-
-               execute_tool(skill_tool, "archive-rollout-verify", %{
-                 "action" => "archive",
-                 "name" => "kube-rollout-verify",
-                 "scope" => "project"
-               }),
-             {:ok, _} <-
-               execute_tool(skill_tool, "archive-rollout-rollback", %{
-                 "action" => "archive",
-                 "name" => "kube-rollout-rollback",
-                 "scope" => "project"
-               }),
-             :ok <- assert_archived(tmp_dir, "kube-rollout-verify"),
-             :ok <- assert_archived(tmp_dir, "kube-rollout-rollback"),
-             :ok <- assert_active_agent_skill(tmp_dir, "kube-rollout-operations") do
-          %{
-            name: "skill_curator_behavior_contract",
-            status: :pass,
-            details: %{
-              prompt_candidates: Enum.map(curator_result.candidates, & &1.name),
-              read_calls: ["kube-rollout-verify", "kube-rollout-rollback"],
-              created: "kube-rollout-operations",
-              archived: ["kube-rollout-verify", "kube-rollout-rollback"]
+          with {:ok, _} <-
+                 execute_tool(skill_tool, "seed-rollout-verify", %{
+                   "action" => "create",
+                   "name" => "kube-rollout-verify",
+                   "scope" => "project",
+                   "content" => narrow_skill_content("Kube Rollout Verify", "verify")
+                 }),
+               {:ok, _} <-
+                 execute_tool(skill_tool, "seed-rollout-rollback", %{
+                   "action" => "create",
+                   "name" => "kube-rollout-rollback",
+                   "scope" => "project",
+                   "content" => narrow_skill_content("Kube Rollout Rollback", "rollback")
+                 }),
+               {:ok, curator_result} <-
+                 Curator.run(
+                   scope: :project,
+                   cwd: tmp_dir,
+                   now: ~U[2026-05-06 00:00:00Z],
+                   interval_hours: 1
+                 ),
+               :ok <- assert_curator_prompt(curator_result.review_prompt),
+               {:ok, verify_text} <-
+                 execute_tool(read_tool, "read-rollout-verify", %{
+                   "key" => "kube-rollout-verify",
+                   "view" => "full"
+                 }),
+               {:ok, rollback_text} <-
+                 execute_tool(read_tool, "read-rollout-rollback", %{
+                   "key" => "kube-rollout-rollback",
+                   "view" => "full"
+                 }),
+               :ok <- assert_contains(verify_text, "kubectl rollout status"),
+               :ok <- assert_contains(rollback_text, "kubectl rollout undo"),
+               {:ok, _} <-
+                 execute_tool(skill_tool, "create-rollout-umbrella", %{
+                   "action" => "create",
+                   "name" => "kube-rollout-operations",
+                   "scope" => "project",
+                   "content" => umbrella_skill_content()
+                 }),
+               {:ok, _} <-
+                 execute_tool(skill_tool, "archive-rollout-verify", %{
+                   "action" => "archive",
+                   "name" => "kube-rollout-verify",
+                   "scope" => "project"
+                 }),
+               {:ok, _} <-
+                 execute_tool(skill_tool, "archive-rollout-rollback", %{
+                   "action" => "archive",
+                   "name" => "kube-rollout-rollback",
+                   "scope" => "project"
+                 }),
+               :ok <- assert_archived(tmp_dir, "kube-rollout-verify"),
+               :ok <- assert_archived(tmp_dir, "kube-rollout-rollback"),
+               :ok <- assert_active_agent_skill(tmp_dir, "kube-rollout-operations") do
+            %{
+              name: "skill_curator_behavior_contract",
+              status: :pass,
+              details: %{
+                prompt_candidates: Enum.map(curator_result.candidates, & &1.name),
+                read_calls: ["kube-rollout-verify", "kube-rollout-rollback"],
+                created: "kube-rollout-operations",
+                archived: ["kube-rollout-verify", "kube-rollout-rollback"]
+              }
             }
-          }
-        else
-          {:error, reason} ->
-            contract_fail("skill_curator_behavior_contract", format_reason(reason), %{})
+          else
+            {:error, reason} ->
+              contract_fail("skill_curator_behavior_contract", format_reason(reason), %{})
+          end
+        after
+          File.rm_rf(tmp_dir)
         end
-      after
-        File.rm_rf(tmp_dir)
-      end
-    else
       {:error, reason} ->
         contract_fail("skill_curator_behavior_contract", format_reason(reason), %{})
     end
@@ -546,97 +546,97 @@ defmodule LemonEvals.Harness do
 
   @spec learning_tool_trace_contract_eval(String.t()) :: eval_result()
   def learning_tool_trace_contract_eval(_cwd) do
-    with {:ok, tmp_dir} <- create_tmp_dir() do
-      try do
-        project_dir = Path.join(tmp_dir, "project")
-        home_dir = Path.join(tmp_dir, "home")
-        File.mkdir_p!(project_dir)
-        File.mkdir_p!(home_dir)
+    case create_tmp_dir() do
+      {:ok, tmp_dir} ->
+        try do
+          project_dir = Path.join(tmp_dir, "project")
+          home_dir = Path.join(tmp_dir, "home")
+          File.mkdir_p!(project_dir)
+          File.mkdir_p!(home_dir)
 
-        {:ok, search_calls} = Agent.start_link(fn -> [] end)
+          {:ok, search_calls} = Agent.start_link(fn -> [] end)
 
-        search_fn = fn query, opts ->
-          Agent.update(search_calls, &[{query, opts} | &1])
+          search_fn = fn query, opts ->
+            Agent.update(search_calls, &[{query, opts} | &1])
 
-          [
-            %{
-              doc_id: "prior-deployment-incident",
-              title: "Prior deployment incident",
-              scope_key: Keyword.fetch!(opts, :scope_key),
-              query: query
-            }
+            [
+              %{
+                doc_id: "prior-deployment-incident",
+                title: "Prior deployment incident",
+                scope_key: Keyword.fetch!(opts, :scope_key),
+                query: query
+              }
+            ]
+          end
+
+          format_results_fn = fn docs ->
+            docs
+            |> Enum.map(&Map.fetch!(&1, :doc_id))
+            |> Enum.join(",")
+          end
+
+          tool_opts = [
+            run_id: "eval-learning-tool-trace",
+            session_key: "agent:learning-tool-trace-eval:main",
+            session_id: "agent:learning-tool-trace-eval:main",
+            agent_id: "learning-tool-trace-eval"
           ]
-        end
 
-        format_results_fn = fn docs ->
-          docs
-          |> Enum.map(&Map.fetch!(&1, :doc_id))
-          |> Enum.join(",")
-        end
+          search_tool =
+            SearchMemory.tool(project_dir,
+              workspace_dir: home_dir,
+              search_fn: search_fn,
+              format_results_fn: format_results_fn
+            )
 
-        tool_opts = [
-          run_id: "eval-learning-tool-trace",
-          session_key: "agent:learning-tool-trace-eval:main",
-          session_id: "agent:learning-tool-trace-eval:main",
-          agent_id: "learning-tool-trace-eval"
-        ]
+          memory_tool = MemoryTopic.tool(project_dir, workspace_dir: project_dir)
+          skill_tool = SkillManage.tool(project_dir, tool_opts)
+          learning_prompt = PromptBuilder.build_learning_section()
 
-        search_tool =
-          SearchMemory.tool(project_dir,
-            workspace_dir: home_dir,
-            search_fn: search_fn,
-            format_results_fn: format_results_fn
-          )
-
-        memory_tool = MemoryTopic.tool(project_dir, workspace_dir: project_dir)
-        skill_tool = SkillManage.tool(project_dir, tool_opts)
-        learning_prompt = PromptBuilder.build_learning_section()
-
-        with :ok <- assert_learning_prompt(learning_prompt),
-             {:ok, search_result} <-
-               execute_tool_result(search_tool, "trace-search-prior-work", %{
-                 "query" => "last time deployment incident handoff",
-                 "scope" => "current"
-               }),
-             :ok <- assert_contains(flatten_text(search_result), "prior-deployment-incident"),
-             :ok <- assert_learning_search(search_result, search_calls),
-             {:ok, memory_result} <-
-               execute_tool_result(memory_tool, "trace-create-memory-topic", %{
-                 "topic" => "Deployment Incident Handoff"
-               }),
-             :ok <- assert_memory_topic_created(memory_result, project_dir),
-             {:ok, _skill_create_result} <-
-               execute_tool_result(skill_tool, "trace-create-skill", %{
-                 "action" => "create",
-                 "name" => "deployment-incident-handoff",
-                 "scope" => "project",
-                 "content" => deployment_incident_handoff_skill()
-               }),
-             :ok <- assert_active_agent_skill(project_dir, "deployment-incident-handoff"),
-             {:ok, report_result} <-
-               execute_tool_result(skill_tool, "trace-skill-report", %{
-                 "action" => "report",
-                 "scope" => "project"
-               }),
-             :ok <- assert_contains(flatten_text(report_result), "deployment-incident-handoff") do
-          %{
-            name: "learning_tool_trace_contract",
-            status: :pass,
-            details: %{
-              search_calls: length(Agent.get(search_calls, & &1)),
-              memory_topic: memory_result.details[:slug],
-              skill: "deployment-incident-handoff",
-              report_action: report_result.details[:action]
+          with :ok <- assert_learning_prompt(learning_prompt),
+               {:ok, search_result} <-
+                 execute_tool_result(search_tool, "trace-search-prior-work", %{
+                   "query" => "last time deployment incident handoff",
+                   "scope" => "current"
+                 }),
+               :ok <- assert_contains(flatten_text(search_result), "prior-deployment-incident"),
+               :ok <- assert_learning_search(search_result, search_calls),
+               {:ok, memory_result} <-
+                 execute_tool_result(memory_tool, "trace-create-memory-topic", %{
+                   "topic" => "Deployment Incident Handoff"
+                 }),
+               :ok <- assert_memory_topic_created(memory_result, project_dir),
+               {:ok, _skill_create_result} <-
+                 execute_tool_result(skill_tool, "trace-create-skill", %{
+                   "action" => "create",
+                   "name" => "deployment-incident-handoff",
+                   "scope" => "project",
+                   "content" => deployment_incident_handoff_skill()
+                 }),
+               :ok <- assert_active_agent_skill(project_dir, "deployment-incident-handoff"),
+               {:ok, report_result} <-
+                 execute_tool_result(skill_tool, "trace-skill-report", %{
+                   "action" => "report",
+                   "scope" => "project"
+                 }),
+               :ok <- assert_contains(flatten_text(report_result), "deployment-incident-handoff") do
+            %{
+              name: "learning_tool_trace_contract",
+              status: :pass,
+              details: %{
+                search_calls: length(Agent.get(search_calls, & &1)),
+                memory_topic: memory_result.details[:slug],
+                skill: "deployment-incident-handoff",
+                report_action: report_result.details[:action]
+              }
             }
-          }
-        else
-          {:error, reason} ->
-            contract_fail("learning_tool_trace_contract", format_reason(reason), %{})
+          else
+            {:error, reason} ->
+              contract_fail("learning_tool_trace_contract", format_reason(reason), %{})
+          end
+        after
+          File.rm_rf(tmp_dir)
         end
-      after
-        File.rm_rf(tmp_dir)
-      end
-    else
       {:error, reason} ->
         contract_fail("learning_tool_trace_contract", format_reason(reason), %{})
     end
@@ -740,95 +740,95 @@ defmodule LemonEvals.Harness do
 
   @spec agent_loop_learning_trace_contract_eval(String.t()) :: eval_result()
   def agent_loop_learning_trace_contract_eval(_cwd) do
-    with {:ok, tmp_dir} <- create_tmp_dir() do
-      try do
-        :ok = write_project_skill(tmp_dir, "release-checklist", release_checklist_skill())
+    case create_tmp_dir() do
+      {:ok, tmp_dir} ->
+        try do
+          :ok = write_project_skill(tmp_dir, "release-checklist", release_checklist_skill())
 
-        tool_opts = [
-          run_id: "eval-agent-loop-learning-trace",
-          session_key: "agent:agent-loop-learning-trace-eval:main",
-          session_id: "agent:agent-loop-learning-trace-eval:main",
-          agent_id: "agent-loop-learning-trace-eval"
-        ]
+          tool_opts = [
+            run_id: "eval-agent-loop-learning-trace",
+            session_key: "agent:agent-loop-learning-trace-eval:main",
+            session_id: "agent:agent-loop-learning-trace-eval:main",
+            agent_id: "agent-loop-learning-trace-eval"
+          ]
 
-        read_tool = ReadSkill.tool(tmp_dir, tool_opts)
-        skill_tool = SkillManage.tool(tmp_dir, tool_opts)
+          read_tool = ReadSkill.tool(tmp_dir, tool_opts)
+          skill_tool = SkillManage.tool(tmp_dir, tool_opts)
 
-        prompt =
-          PromptBuilder.build(tmp_dir, %{
-            base_prompt: "Base.",
-            context: "release checklist reusable hotfix workflow",
-            include_skills: true,
-            include_commands: false,
-            include_mentions: false
-          })
+          prompt =
+            PromptBuilder.build(tmp_dir, %{
+              base_prompt: "Base.",
+              context: "release checklist reusable hotfix workflow",
+              include_skills: true,
+              include_commands: false,
+              include_mentions: false
+            })
 
-        responses = [
-          trace_tool_response([
-            trace_tool_call("read_skill", %{"key" => "release-checklist", "view" => "summary"},
-              id: "call-read-skill"
-            )
-          ]),
-          trace_tool_response([
-            trace_tool_call(
-              "skill_manage",
-              %{
-                "action" => "create",
-                "name" => "release-hotfix-checklist",
-                "scope" => "project",
-                "content" => release_hotfix_checklist_skill()
-              },
-              id: "call-skill-manage"
-            )
-          ]),
-          trace_final_response("Done.")
-        ]
-
-        context =
-          AgentContext.new(
-            system_prompt: prompt,
-            tools: [read_tool, skill_tool]
-          )
-
-        config = %AgentLoopConfig{
-          model: trace_model(),
-          convert_to_llm: &trace_convert_to_llm/1,
-          stream_fn: scripted_stream_fn(responses)
-        }
-
-        stream =
-          Loop.agent_loop(
-            [
-              trace_user_message(
-                "Use the release checklist and save the reusable hotfix workflow."
+          responses = [
+            trace_tool_response([
+              trace_tool_call("read_skill", %{"key" => "release-checklist", "view" => "summary"},
+                id: "call-read-skill"
               )
-            ],
-            context,
-            config,
-            nil,
-            nil
-          )
+            ]),
+            trace_tool_response([
+              trace_tool_call(
+                "skill_manage",
+                %{
+                  "action" => "create",
+                  "name" => "release-hotfix-checklist",
+                  "scope" => "project",
+                  "content" => release_hotfix_checklist_skill()
+                },
+                id: "call-skill-manage"
+              )
+            ]),
+            trace_final_response("Done.")
+          ]
 
-        with {:ok, messages} <- EventStream.result(stream, 5_000),
-             :ok <- assert_loop_tool_result(messages, "read_skill", "release-checklist"),
-             :ok <- assert_loop_tool_result(messages, "skill_manage", "release-hotfix-checklist"),
-             :ok <- assert_active_agent_skill(tmp_dir, "release-hotfix-checklist") do
-          %{
-            name: "agent_loop_learning_trace_contract",
-            status: :pass,
-            details: %{
-              tool_results: trace_tool_result_names(messages),
-              created: "release-hotfix-checklist"
-            }
+          context =
+            AgentContext.new(
+              system_prompt: prompt,
+              tools: [read_tool, skill_tool]
+            )
+
+          config = %AgentLoopConfig{
+            model: trace_model(),
+            convert_to_llm: &trace_convert_to_llm/1,
+            stream_fn: scripted_stream_fn(responses)
           }
-        else
-          {:error, reason} ->
-            contract_fail("agent_loop_learning_trace_contract", format_reason(reason), %{})
+
+          stream =
+            Loop.agent_loop(
+              [
+                trace_user_message(
+                  "Use the release checklist and save the reusable hotfix workflow."
+                )
+              ],
+              context,
+              config,
+              nil,
+              nil
+            )
+
+          with {:ok, messages} <- EventStream.result(stream, 5_000),
+               :ok <- assert_loop_tool_result(messages, "read_skill", "release-checklist"),
+               :ok <- assert_loop_tool_result(messages, "skill_manage", "release-hotfix-checklist"),
+               :ok <- assert_active_agent_skill(tmp_dir, "release-hotfix-checklist") do
+            %{
+              name: "agent_loop_learning_trace_contract",
+              status: :pass,
+              details: %{
+                tool_results: trace_tool_result_names(messages),
+                created: "release-hotfix-checklist"
+              }
+            }
+          else
+            {:error, reason} ->
+              contract_fail("agent_loop_learning_trace_contract", format_reason(reason), %{})
+          end
+        after
+          File.rm_rf(tmp_dir)
         end
-      after
-        File.rm_rf(tmp_dir)
-      end
-    else
       {:error, reason} ->
         contract_fail("agent_loop_learning_trace_contract", format_reason(reason), %{})
     end
@@ -838,110 +838,110 @@ defmodule LemonEvals.Harness do
 
   @spec agent_loop_skill_refinement_trace_contract_eval(String.t()) :: eval_result()
   def agent_loop_skill_refinement_trace_contract_eval(_cwd) do
-    with {:ok, tmp_dir} <- create_tmp_dir() do
-      try do
-        :ok =
-          write_project_skill(
-            tmp_dir,
-            "release-hotfix-checklist",
-            release_hotfix_checklist_skill()
-          )
-
-        tool_opts = [
-          run_id: "eval-agent-loop-skill-refinement-trace",
-          session_key: "agent:agent-loop-skill-refinement-trace-eval:main",
-          session_id: "agent:agent-loop-skill-refinement-trace-eval:main",
-          agent_id: "agent-loop-skill-refinement-trace-eval"
-        ]
-
-        read_tool = ReadSkill.tool(tmp_dir, tool_opts)
-        skill_tool = SkillManage.tool(tmp_dir, tool_opts)
-
-        prompt =
-          PromptBuilder.build(tmp_dir, %{
-            base_prompt: "Base.",
-            context: "release hotfix checklist needs an added follow-up owner step",
-            include_skills: true,
-            include_commands: false,
-            include_mentions: false
-          })
-
-        responses = [
-          trace_tool_response([
-            trace_tool_call(
-              "read_skill",
-              %{"key" => "release-hotfix-checklist", "view" => "full"},
-              id: "call-read-existing-skill"
+    case create_tmp_dir() do
+      {:ok, tmp_dir} ->
+        try do
+          :ok =
+            write_project_skill(
+              tmp_dir,
+              "release-hotfix-checklist",
+              release_hotfix_checklist_skill()
             )
-          ]),
-          trace_tool_response([
-            trace_tool_call(
-              "skill_manage",
-              %{
-                "action" => "patch",
-                "name" => "release-hotfix-checklist",
-                "scope" => "project",
-                "old_string" => "3. Record the result and rollback note.",
-                "new_string" => "3. Record the result, rollback note, and exact follow-up owner."
-              },
-              id: "call-patch-existing-skill"
-            )
-          ]),
-          trace_final_response("Skill refined.")
-        ]
 
-        context =
-          AgentContext.new(
-            system_prompt: prompt,
-            tools: [read_tool, skill_tool]
-          )
+          tool_opts = [
+            run_id: "eval-agent-loop-skill-refinement-trace",
+            session_key: "agent:agent-loop-skill-refinement-trace-eval:main",
+            session_id: "agent:agent-loop-skill-refinement-trace-eval:main",
+            agent_id: "agent-loop-skill-refinement-trace-eval"
+          ]
 
-        config = %AgentLoopConfig{
-          model: trace_model(),
-          convert_to_llm: &trace_convert_to_llm/1,
-          stream_fn: scripted_stream_fn(responses)
-        }
+          read_tool = ReadSkill.tool(tmp_dir, tool_opts)
+          skill_tool = SkillManage.tool(tmp_dir, tool_opts)
 
-        stream =
-          Loop.agent_loop(
-            [
-              trace_user_message(
-                "We learned release hotfix handoffs must name the follow-up owner. Update the existing checklist."
+          prompt =
+            PromptBuilder.build(tmp_dir, %{
+              base_prompt: "Base.",
+              context: "release hotfix checklist needs an added follow-up owner step",
+              include_skills: true,
+              include_commands: false,
+              include_mentions: false
+            })
+
+          responses = [
+            trace_tool_response([
+              trace_tool_call(
+                "read_skill",
+                %{"key" => "release-hotfix-checklist", "view" => "full"},
+                id: "call-read-existing-skill"
               )
-            ],
-            context,
-            config,
-            nil,
-            nil
-          )
+            ]),
+            trace_tool_response([
+              trace_tool_call(
+                "skill_manage",
+                %{
+                  "action" => "patch",
+                  "name" => "release-hotfix-checklist",
+                  "scope" => "project",
+                  "old_string" => "3. Record the result and rollback note.",
+                  "new_string" => "3. Record the result, rollback note, and exact follow-up owner."
+                },
+                id: "call-patch-existing-skill"
+              )
+            ]),
+            trace_final_response("Skill refined.")
+          ]
 
-        skill_path =
-          Path.join([tmp_dir, ".lemon", "skill", "release-hotfix-checklist", "SKILL.md"])
-
-        with {:ok, messages} <- EventStream.result(stream, 5_000),
-             :ok <- assert_loop_tool_result(messages, "read_skill", "rollback note"),
-             :ok <- assert_loop_tool_result(messages, "skill_manage", "Patched"),
-             :ok <- assert_contains(File.read!(skill_path), "exact follow-up owner") do
-          %{
-            name: "agent_loop_skill_refinement_trace_contract",
-            status: :pass,
-            details: %{
-              tool_results: trace_tool_result_names(messages),
-              updated: "release-hotfix-checklist"
-            }
-          }
-        else
-          {:error, reason} ->
-            contract_fail(
-              "agent_loop_skill_refinement_trace_contract",
-              format_reason(reason),
-              %{}
+          context =
+            AgentContext.new(
+              system_prompt: prompt,
+              tools: [read_tool, skill_tool]
             )
+
+          config = %AgentLoopConfig{
+            model: trace_model(),
+            convert_to_llm: &trace_convert_to_llm/1,
+            stream_fn: scripted_stream_fn(responses)
+          }
+
+          stream =
+            Loop.agent_loop(
+              [
+                trace_user_message(
+                  "We learned release hotfix handoffs must name the follow-up owner. Update the existing checklist."
+                )
+              ],
+              context,
+              config,
+              nil,
+              nil
+            )
+
+          skill_path =
+            Path.join([tmp_dir, ".lemon", "skill", "release-hotfix-checklist", "SKILL.md"])
+
+          with {:ok, messages} <- EventStream.result(stream, 5_000),
+               :ok <- assert_loop_tool_result(messages, "read_skill", "rollback note"),
+               :ok <- assert_loop_tool_result(messages, "skill_manage", "Patched"),
+               :ok <- assert_contains(File.read!(skill_path), "exact follow-up owner") do
+            %{
+              name: "agent_loop_skill_refinement_trace_contract",
+              status: :pass,
+              details: %{
+                tool_results: trace_tool_result_names(messages),
+                updated: "release-hotfix-checklist"
+              }
+            }
+          else
+            {:error, reason} ->
+              contract_fail(
+                "agent_loop_skill_refinement_trace_contract",
+                format_reason(reason),
+                %{}
+              )
+          end
+        after
+          File.rm_rf(tmp_dir)
         end
-      after
-        File.rm_rf(tmp_dir)
-      end
-    else
       {:error, reason} ->
         contract_fail("agent_loop_skill_refinement_trace_contract", format_reason(reason), %{})
     end
@@ -951,109 +951,109 @@ defmodule LemonEvals.Harness do
 
   @spec agent_loop_memory_trace_contract_eval(String.t()) :: eval_result()
   def agent_loop_memory_trace_contract_eval(_cwd) do
-    with {:ok, tmp_dir} <- create_tmp_dir() do
-      try do
-        project_dir = Path.join(tmp_dir, "project")
-        home_dir = Path.join(tmp_dir, "home")
-        File.mkdir_p!(project_dir)
-        File.mkdir_p!(home_dir)
+    case create_tmp_dir() do
+      {:ok, tmp_dir} ->
+        try do
+          project_dir = Path.join(tmp_dir, "project")
+          home_dir = Path.join(tmp_dir, "home")
+          File.mkdir_p!(project_dir)
+          File.mkdir_p!(home_dir)
 
-        {:ok, search_calls} = Agent.start_link(fn -> [] end)
+          {:ok, search_calls} = Agent.start_link(fn -> [] end)
 
-        search_fn = fn query, opts ->
-          Agent.update(search_calls, &[{query, opts} | &1])
+          search_fn = fn query, opts ->
+            Agent.update(search_calls, &[{query, opts} | &1])
 
-          [
-            %{
-              doc_id: "prior-release-handoff",
-              title: "Prior release handoff",
-              scope_key: Keyword.fetch!(opts, :scope_key),
-              query: query
-            }
-          ]
-        end
-
-        format_results_fn = fn docs ->
-          docs
-          |> Enum.map(&Map.fetch!(&1, :doc_id))
-          |> Enum.join(",")
-        end
-
-        search_tool =
-          SearchMemory.tool(project_dir,
-            workspace_dir: home_dir,
-            search_fn: search_fn,
-            format_results_fn: format_results_fn
-          )
-
-        prompt =
-          PromptBuilder.build(project_dir, %{
-            base_prompt: "Base.",
-            context: "last time release handoff prior work",
-            include_skills: false,
-            include_commands: false,
-            include_mentions: false
-          })
-
-        responses = [
-          trace_tool_response([
-            trace_tool_call(
-              "search_memory",
+            [
               %{
-                "query" => "last time release handoff",
-                "scope" => "current",
-                "limit" => "3"
-              },
-              id: "call-search-memory"
+                doc_id: "prior-release-handoff",
+                title: "Prior release handoff",
+                scope_key: Keyword.fetch!(opts, :scope_key),
+                query: query
+              }
+            ]
+          end
+
+          format_results_fn = fn docs ->
+            docs
+            |> Enum.map(&Map.fetch!(&1, :doc_id))
+            |> Enum.join(",")
+          end
+
+          search_tool =
+            SearchMemory.tool(project_dir,
+              workspace_dir: home_dir,
+              search_fn: search_fn,
+              format_results_fn: format_results_fn
             )
-          ]),
-          trace_final_response("I found the prior release handoff.")
-        ]
 
-        context =
-          AgentContext.new(
-            system_prompt: prompt,
-            tools: [search_tool]
-          )
+          prompt =
+            PromptBuilder.build(project_dir, %{
+              base_prompt: "Base.",
+              context: "last time release handoff prior work",
+              include_skills: false,
+              include_commands: false,
+              include_mentions: false
+            })
 
-        config = %AgentLoopConfig{
-          model: trace_model(),
-          convert_to_llm: &trace_convert_to_llm/1,
-          stream_fn: scripted_stream_fn(responses)
-        }
+          responses = [
+            trace_tool_response([
+              trace_tool_call(
+                "search_memory",
+                %{
+                  "query" => "last time release handoff",
+                  "scope" => "current",
+                  "limit" => "3"
+                },
+                id: "call-search-memory"
+              )
+            ]),
+            trace_final_response("I found the prior release handoff.")
+          ]
 
-        stream =
-          Loop.agent_loop(
-            [trace_user_message("What did we do last time for the release handoff?")],
-            context,
-            config,
-            nil,
-            nil
-          )
+          context =
+            AgentContext.new(
+              system_prompt: prompt,
+              tools: [search_tool]
+            )
 
-        with {:ok, messages} <- EventStream.result(stream, 5_000),
-             :ok <- assert_loop_tool_result(messages, "search_memory", "prior-release-handoff"),
-             :ok <-
-               assert_loop_tool_result_details(messages, "search_memory", fn details ->
-                 details[:scope] == :current and details[:resolved_scopes] == [:project, :home]
-               end),
-             :ok <- assert_learning_search_calls(search_calls, 2) do
-          %{
-            name: "agent_loop_memory_trace_contract",
-            status: :pass,
-            details: %{
-              tool_results: trace_tool_result_names(messages),
-              search_calls: length(Agent.get(search_calls, & &1))
-            }
+          config = %AgentLoopConfig{
+            model: trace_model(),
+            convert_to_llm: &trace_convert_to_llm/1,
+            stream_fn: scripted_stream_fn(responses)
           }
-        else
-          {:error, reason} ->
-            contract_fail("agent_loop_memory_trace_contract", format_reason(reason), %{})
+
+          stream =
+            Loop.agent_loop(
+              [trace_user_message("What did we do last time for the release handoff?")],
+              context,
+              config,
+              nil,
+              nil
+            )
+
+          with {:ok, messages} <- EventStream.result(stream, 5_000),
+               :ok <- assert_loop_tool_result(messages, "search_memory", "prior-release-handoff"),
+               :ok <-
+                 assert_loop_tool_result_details(messages, "search_memory", fn details ->
+                   details[:scope] == :current and details[:resolved_scopes] == [:project, :home]
+                 end),
+               :ok <- assert_learning_search_calls(search_calls, 2) do
+            %{
+              name: "agent_loop_memory_trace_contract",
+              status: :pass,
+              details: %{
+                tool_results: trace_tool_result_names(messages),
+                search_calls: length(Agent.get(search_calls, & &1))
+              }
+            }
+          else
+            {:error, reason} ->
+              contract_fail("agent_loop_memory_trace_contract", format_reason(reason), %{})
+          end
+        after
+          File.rm_rf(tmp_dir)
         end
-      after
-        File.rm_rf(tmp_dir)
-      end
-    else
       {:error, reason} ->
         contract_fail("agent_loop_memory_trace_contract", format_reason(reason), %{})
     end
@@ -1063,102 +1063,102 @@ defmodule LemonEvals.Harness do
 
   @spec agent_loop_workspace_memory_file_contract_eval(String.t()) :: eval_result()
   def agent_loop_workspace_memory_file_contract_eval(_cwd) do
-    with {:ok, tmp_dir} <- create_tmp_dir() do
-      try do
-        project_dir = Path.join(tmp_dir, "project")
-        home_dir = Path.join(tmp_dir, "home")
-        memory_dir = Path.join([project_dir, "memory", "topics"])
-        File.mkdir_p!(memory_dir)
-        File.mkdir_p!(home_dir)
+    case create_tmp_dir() do
+      {:ok, tmp_dir} ->
+        try do
+          project_dir = Path.join(tmp_dir, "project")
+          home_dir = Path.join(tmp_dir, "home")
+          memory_dir = Path.join([project_dir, "memory", "topics"])
+          File.mkdir_p!(memory_dir)
+          File.mkdir_p!(home_dir)
 
-        memory_path = Path.join(memory_dir, "release-handoff.md")
+          memory_path = Path.join(memory_dir, "release-handoff.md")
 
-        File.write!(
-          memory_path,
-          """
-          # Release Handoff
+          File.write!(
+            memory_path,
+            """
+            # Release Handoff
 
-          The deployment baton lives in the workspace memory file.
-          Before answering release handoff questions, inspect this note and cite the deployment baton.
-          """
-        )
-
-        grep_tool = Grep.tool(project_dir)
-        read_tool = Read.tool(project_dir)
-
-        prompt =
-          CodingAgent.SystemPrompt.build(project_dir, %{
-            workspace_dir: home_dir,
-            session_scope: :main,
-            skill_context: "release handoff workspace memory"
-          })
-
-        responses = [
-          trace_tool_response([
-            trace_tool_call(
-              "grep",
-              %{
-                "pattern" => "deployment baton",
-                "path" => "memory",
-                "literal" => true,
-                "max_results" => 5
-              },
-              id: "call-grep-workspace-memory"
-            )
-          ]),
-          trace_tool_response([
-            trace_tool_call(
-              "read",
-              %{
-                "path" => "memory/topics/release-handoff.md",
-                "limit" => 20
-              },
-              id: "call-read-workspace-memory"
-            )
-          ]),
-          trace_final_response("Workspace memory says to cite the deployment baton.")
-        ]
-
-        context =
-          AgentContext.new(
-            system_prompt: prompt,
-            tools: [grep_tool, read_tool]
+            The deployment baton lives in the workspace memory file.
+            Before answering release handoff questions, inspect this note and cite the deployment baton.
+            """
           )
 
-        config = %AgentLoopConfig{
-          model: trace_model(),
-          convert_to_llm: &trace_convert_to_llm/1,
-          stream_fn: scripted_stream_fn(responses)
-        }
+          grep_tool = Grep.tool(project_dir)
+          read_tool = Read.tool(project_dir)
 
-        stream =
-          Loop.agent_loop(
-            [trace_user_message("What does project memory say about release handoff?")],
-            context,
-            config,
-            nil,
-            nil
-          )
+          prompt =
+            CodingAgent.SystemPrompt.build(project_dir, %{
+              workspace_dir: home_dir,
+              session_scope: :main,
+              skill_context: "release handoff workspace memory"
+            })
 
-        with {:ok, messages} <- EventStream.result(stream, 5_000),
-             :ok <- assert_loop_tool_result(messages, "grep", "deployment baton"),
-             :ok <- assert_loop_tool_result(messages, "read", "deployment baton") do
-          %{
-            name: "agent_loop_workspace_memory_file_contract",
-            status: :pass,
-            details: %{
-              tool_results: trace_tool_result_names(messages),
-              memory_path: Path.relative_to(memory_path, project_dir)
-            }
+          responses = [
+            trace_tool_response([
+              trace_tool_call(
+                "grep",
+                %{
+                  "pattern" => "deployment baton",
+                  "path" => "memory",
+                  "literal" => true,
+                  "max_results" => 5
+                },
+                id: "call-grep-workspace-memory"
+              )
+            ]),
+            trace_tool_response([
+              trace_tool_call(
+                "read",
+                %{
+                  "path" => "memory/topics/release-handoff.md",
+                  "limit" => 20
+                },
+                id: "call-read-workspace-memory"
+              )
+            ]),
+            trace_final_response("Workspace memory says to cite the deployment baton.")
+          ]
+
+          context =
+            AgentContext.new(
+              system_prompt: prompt,
+              tools: [grep_tool, read_tool]
+            )
+
+          config = %AgentLoopConfig{
+            model: trace_model(),
+            convert_to_llm: &trace_convert_to_llm/1,
+            stream_fn: scripted_stream_fn(responses)
           }
-        else
-          {:error, reason} ->
-            contract_fail("agent_loop_workspace_memory_file_contract", format_reason(reason), %{})
+
+          stream =
+            Loop.agent_loop(
+              [trace_user_message("What does project memory say about release handoff?")],
+              context,
+              config,
+              nil,
+              nil
+            )
+
+          with {:ok, messages} <- EventStream.result(stream, 5_000),
+               :ok <- assert_loop_tool_result(messages, "grep", "deployment baton"),
+               :ok <- assert_loop_tool_result(messages, "read", "deployment baton") do
+            %{
+              name: "agent_loop_workspace_memory_file_contract",
+              status: :pass,
+              details: %{
+                tool_results: trace_tool_result_names(messages),
+                memory_path: Path.relative_to(memory_path, project_dir)
+              }
+            }
+          else
+            {:error, reason} ->
+              contract_fail("agent_loop_workspace_memory_file_contract", format_reason(reason), %{})
+          end
+        after
+          File.rm_rf(tmp_dir)
         end
-      after
-        File.rm_rf(tmp_dir)
-      end
-    else
       {:error, reason} ->
         contract_fail("agent_loop_workspace_memory_file_contract", format_reason(reason), %{})
     end
@@ -1168,121 +1168,121 @@ defmodule LemonEvals.Harness do
 
   @spec agent_loop_workspace_memory_update_contract_eval(String.t()) :: eval_result()
   def agent_loop_workspace_memory_update_contract_eval(_cwd) do
-    with {:ok, tmp_dir} <- create_tmp_dir() do
-      try do
-        project_dir = Path.join(tmp_dir, "project")
-        home_dir = Path.join(tmp_dir, "home")
-        memory_dir = Path.join([project_dir, "memory", "topics"])
-        File.mkdir_p!(memory_dir)
-        File.mkdir_p!(home_dir)
+    case create_tmp_dir() do
+      {:ok, tmp_dir} ->
+        try do
+          project_dir = Path.join(tmp_dir, "project")
+          home_dir = Path.join(tmp_dir, "home")
+          memory_dir = Path.join([project_dir, "memory", "topics"])
+          File.mkdir_p!(memory_dir)
+          File.mkdir_p!(home_dir)
 
-        memory_path = Path.join(memory_dir, "release-handoff.md")
+          memory_path = Path.join(memory_dir, "release-handoff.md")
 
-        original_line =
-          "Before answering release handoff questions, inspect this note and cite the deployment baton."
+          original_line =
+            "Before answering release handoff questions, inspect this note and cite the deployment baton."
 
-        updated_line =
-          "Before answering release handoff questions, inspect this note, cite the deployment baton, and name the follow-up owner."
+          updated_line =
+            "Before answering release handoff questions, inspect this note, cite the deployment baton, and name the follow-up owner."
 
-        File.write!(
-          memory_path,
-          """
-          # Release Handoff
+          File.write!(
+            memory_path,
+            """
+            # Release Handoff
 
-          The deployment baton lives in the workspace memory file.
-          #{original_line}
-          """
-        )
-
-        read_tool = Read.tool(project_dir)
-        patch_tool = Patch.tool(project_dir)
-
-        prompt =
-          CodingAgent.SystemPrompt.build(project_dir, %{
-            workspace_dir: home_dir,
-            session_scope: :main,
-            skill_context: "release handoff workspace memory update"
-          })
-
-        responses = [
-          trace_tool_response([
-            trace_tool_call(
-              "read",
-              %{
-                "path" => "memory/topics/release-handoff.md",
-                "limit" => 20
-              },
-              id: "call-read-memory-before-update"
-            )
-          ]),
-          trace_tool_response([
-            trace_tool_call(
-              "patch",
-              %{
-                "patch_text" => """
-                *** Begin Patch
-                *** Update File: memory/topics/release-handoff.md
-                @@
-                -#{original_line}
-                +#{updated_line}
-                *** End Patch
-                """
-              },
-              id: "call-patch-memory-topic"
-            )
-          ]),
-          trace_final_response("Workspace memory was updated.")
-        ]
-
-        context =
-          AgentContext.new(
-            system_prompt: prompt,
-            tools: [read_tool, patch_tool]
+            The deployment baton lives in the workspace memory file.
+            #{original_line}
+            """
           )
 
-        config = %AgentLoopConfig{
-          model: trace_model(),
-          convert_to_llm: &trace_convert_to_llm/1,
-          stream_fn: scripted_stream_fn(responses)
-        }
+          read_tool = Read.tool(project_dir)
+          patch_tool = Patch.tool(project_dir)
 
-        stream =
-          Loop.agent_loop(
-            [
-              trace_user_message(
-                "We learned release handoffs must name the follow-up owner. Update project memory."
+          prompt =
+            CodingAgent.SystemPrompt.build(project_dir, %{
+              workspace_dir: home_dir,
+              session_scope: :main,
+              skill_context: "release handoff workspace memory update"
+            })
+
+          responses = [
+            trace_tool_response([
+              trace_tool_call(
+                "read",
+                %{
+                  "path" => "memory/topics/release-handoff.md",
+                  "limit" => 20
+                },
+                id: "call-read-memory-before-update"
               )
-            ],
-            context,
-            config,
-            nil,
-            nil
-          )
+            ]),
+            trace_tool_response([
+              trace_tool_call(
+                "patch",
+                %{
+                  "patch_text" => """
+                  *** Begin Patch
+                  *** Update File: memory/topics/release-handoff.md
+                  @@
+                  -#{original_line}
+                  +#{updated_line}
+                  *** End Patch
+                  """
+                },
+                id: "call-patch-memory-topic"
+              )
+            ]),
+            trace_final_response("Workspace memory was updated.")
+          ]
 
-        with {:ok, messages} <- EventStream.result(stream, 5_000),
-             :ok <- assert_loop_tool_result(messages, "read", "deployment baton"),
-             :ok <- assert_loop_tool_result(messages, "patch", "Patch applied successfully"),
-             :ok <- assert_contains(File.read!(memory_path), "name the follow-up owner") do
-          %{
-            name: "agent_loop_workspace_memory_update_contract",
-            status: :pass,
-            details: %{
-              tool_results: trace_tool_result_names(messages),
-              memory_path: Path.relative_to(memory_path, project_dir)
-            }
-          }
-        else
-          {:error, reason} ->
-            contract_fail(
-              "agent_loop_workspace_memory_update_contract",
-              format_reason(reason),
-              %{}
+          context =
+            AgentContext.new(
+              system_prompt: prompt,
+              tools: [read_tool, patch_tool]
             )
+
+          config = %AgentLoopConfig{
+            model: trace_model(),
+            convert_to_llm: &trace_convert_to_llm/1,
+            stream_fn: scripted_stream_fn(responses)
+          }
+
+          stream =
+            Loop.agent_loop(
+              [
+                trace_user_message(
+                  "We learned release handoffs must name the follow-up owner. Update project memory."
+                )
+              ],
+              context,
+              config,
+              nil,
+              nil
+            )
+
+          with {:ok, messages} <- EventStream.result(stream, 5_000),
+               :ok <- assert_loop_tool_result(messages, "read", "deployment baton"),
+               :ok <- assert_loop_tool_result(messages, "patch", "Patch applied successfully"),
+               :ok <- assert_contains(File.read!(memory_path), "name the follow-up owner") do
+            %{
+              name: "agent_loop_workspace_memory_update_contract",
+              status: :pass,
+              details: %{
+                tool_results: trace_tool_result_names(messages),
+                memory_path: Path.relative_to(memory_path, project_dir)
+              }
+            }
+          else
+            {:error, reason} ->
+              contract_fail(
+                "agent_loop_workspace_memory_update_contract",
+                format_reason(reason),
+                %{}
+              )
+          end
+        after
+          File.rm_rf(tmp_dir)
         end
-      after
-        File.rm_rf(tmp_dir)
-      end
-    else
       {:error, reason} ->
         contract_fail("agent_loop_workspace_memory_update_contract", format_reason(reason), %{})
     end
@@ -1292,64 +1292,64 @@ defmodule LemonEvals.Harness do
 
   @spec agent_loop_async_join_trace_contract_eval(String.t()) :: eval_result()
   def agent_loop_async_join_trace_contract_eval(_cwd) do
-    with {:ok, tmp_dir} <- create_tmp_dir() do
-      try do
-        clear_task_state()
+    case create_tmp_dir() do
+      {:ok, tmp_dir} ->
+        try do
+          clear_task_state()
 
-        task_tool =
-          TaskTool.tool(tmp_dir,
-            run_override: fn _on_update, _signal ->
-              %AgentToolResult{
-                content: [%TextContent{text: "child task output"}],
-                details: %{status: "completed"}
-              }
-            end,
-            session_key: "agent:async-join-trace-eval:main",
-            agent_id: "async-join-trace-eval",
-            parent_run_id: "parent-run-async-join-trace"
-          )
+          task_tool =
+            TaskTool.tool(tmp_dir,
+              run_override: fn _on_update, _signal ->
+                %AgentToolResult{
+                  content: [%TextContent{text: "child task output"}],
+                  details: %{status: "completed"}
+                }
+              end,
+              session_key: "agent:async-join-trace-eval:main",
+              agent_id: "async-join-trace-eval",
+              parent_run_id: "parent-run-async-join-trace"
+            )
 
-        context =
-          AgentContext.new(
-            system_prompt: "Use async task delegation, then join before finalizing.",
-            tools: [task_tool]
-          )
+          context =
+            AgentContext.new(
+              system_prompt: "Use async task delegation, then join before finalizing.",
+              tools: [task_tool]
+            )
 
-        config = %AgentLoopConfig{
-          model: trace_model(),
-          convert_to_llm: &trace_convert_to_llm/1,
-          stream_fn: async_join_stream_fn()
-        }
-
-        stream =
-          Loop.agent_loop(
-            [trace_user_message("Delegate the research, then include the child result.")],
-            context,
-            config,
-            nil,
-            nil
-          )
-
-        with {:ok, messages} <- EventStream.result(stream, 5_000),
-             :ok <- assert_async_task_joined(messages),
-             :ok <- assert_final_after_join(messages) do
-          %{
-            name: "agent_loop_async_join_trace_contract",
-            status: :pass,
-            details: %{
-              tool_results: trace_task_tool_result_actions(messages),
-              joined_before_final: true
-            }
+          config = %AgentLoopConfig{
+            model: trace_model(),
+            convert_to_llm: &trace_convert_to_llm/1,
+            stream_fn: async_join_stream_fn()
           }
-        else
-          {:error, reason} ->
-            contract_fail("agent_loop_async_join_trace_contract", format_reason(reason), %{})
+
+          stream =
+            Loop.agent_loop(
+              [trace_user_message("Delegate the research, then include the child result.")],
+              context,
+              config,
+              nil,
+              nil
+            )
+
+          with {:ok, messages} <- EventStream.result(stream, 5_000),
+               :ok <- assert_async_task_joined(messages),
+               :ok <- assert_final_after_join(messages) do
+            %{
+              name: "agent_loop_async_join_trace_contract",
+              status: :pass,
+              details: %{
+                tool_results: trace_task_tool_result_actions(messages),
+                joined_before_final: true
+              }
+            }
+          else
+            {:error, reason} ->
+              contract_fail("agent_loop_async_join_trace_contract", format_reason(reason), %{})
+          end
+        after
+          clear_task_state()
+          File.rm_rf(tmp_dir)
         end
-      after
-        clear_task_state()
-        File.rm_rf(tmp_dir)
-      end
-    else
       {:error, reason} ->
         contract_fail("agent_loop_async_join_trace_contract", format_reason(reason), %{})
     end
@@ -1359,67 +1359,67 @@ defmodule LemonEvals.Harness do
 
   @spec agent_loop_parallel_join_trace_contract_eval(String.t()) :: eval_result()
   def agent_loop_parallel_join_trace_contract_eval(_cwd) do
-    with {:ok, tmp_dir} <- create_tmp_dir() do
-      try do
-        clear_task_state()
-        {:ok, output_counter} = Agent.start_link(fn -> 0 end)
+    case create_tmp_dir() do
+      {:ok, tmp_dir} ->
+        try do
+          clear_task_state()
+          {:ok, output_counter} = Agent.start_link(fn -> 0 end)
 
-        task_tool =
-          TaskTool.tool(tmp_dir,
-            run_override: fn _on_update, _signal ->
-              output_number = Agent.get_and_update(output_counter, &{&1 + 1, &1 + 1})
+          task_tool =
+            TaskTool.tool(tmp_dir,
+              run_override: fn _on_update, _signal ->
+                output_number = Agent.get_and_update(output_counter, &{&1 + 1, &1 + 1})
 
-              %AgentToolResult{
-                content: [%TextContent{text: "child output #{output_number}"}],
-                details: %{status: "completed"}
-              }
-            end,
-            session_key: "agent:parallel-join-trace-eval:main",
-            agent_id: "parallel-join-trace-eval",
-            parent_run_id: "parent-run-parallel-join-trace"
-          )
+                %AgentToolResult{
+                  content: [%TextContent{text: "child output #{output_number}"}],
+                  details: %{status: "completed"}
+                }
+              end,
+              session_key: "agent:parallel-join-trace-eval:main",
+              agent_id: "parallel-join-trace-eval",
+              parent_run_id: "parent-run-parallel-join-trace"
+            )
 
-        context =
-          AgentContext.new(
-            system_prompt: "Run parallel child research, join all children, then aggregate.",
-            tools: [task_tool]
-          )
+          context =
+            AgentContext.new(
+              system_prompt: "Run parallel child research, join all children, then aggregate.",
+              tools: [task_tool]
+            )
 
-        config = %AgentLoopConfig{
-          model: trace_model(),
-          convert_to_llm: &trace_convert_to_llm/1,
-          stream_fn: parallel_join_stream_fn()
-        }
-
-        stream =
-          Loop.agent_loop(
-            [trace_user_message("Run two child research tasks, then aggregate both results.")],
-            context,
-            config,
-            nil,
-            nil
-          )
-
-        with {:ok, messages} <- EventStream.result(stream, 5_000),
-             :ok <- assert_parallel_tasks_joined(messages),
-             :ok <- assert_final_contains(messages, ["child output 1", "child output 2"]) do
-          %{
-            name: "agent_loop_parallel_join_trace_contract",
-            status: :pass,
-            details: %{
-              tool_results: trace_task_tool_result_actions(messages),
-              joined_task_count: 2
-            }
+          config = %AgentLoopConfig{
+            model: trace_model(),
+            convert_to_llm: &trace_convert_to_llm/1,
+            stream_fn: parallel_join_stream_fn()
           }
-        else
-          {:error, reason} ->
-            contract_fail("agent_loop_parallel_join_trace_contract", format_reason(reason), %{})
+
+          stream =
+            Loop.agent_loop(
+              [trace_user_message("Run two child research tasks, then aggregate both results.")],
+              context,
+              config,
+              nil,
+              nil
+            )
+
+          with {:ok, messages} <- EventStream.result(stream, 5_000),
+               :ok <- assert_parallel_tasks_joined(messages),
+               :ok <- assert_final_contains(messages, ["child output 1", "child output 2"]) do
+            %{
+              name: "agent_loop_parallel_join_trace_contract",
+              status: :pass,
+              details: %{
+                tool_results: trace_task_tool_result_actions(messages),
+                joined_task_count: 2
+              }
+            }
+          else
+            {:error, reason} ->
+              contract_fail("agent_loop_parallel_join_trace_contract", format_reason(reason), %{})
+          end
+        after
+          clear_task_state()
+          File.rm_rf(tmp_dir)
         end
-      after
-        clear_task_state()
-        File.rm_rf(tmp_dir)
-      end
-    else
       {:error, reason} ->
         contract_fail("agent_loop_parallel_join_trace_contract", format_reason(reason), %{})
     end
@@ -1429,93 +1429,93 @@ defmodule LemonEvals.Harness do
 
   @spec agent_loop_delegation_artifact_trace_contract_eval(String.t()) :: eval_result()
   def agent_loop_delegation_artifact_trace_contract_eval(_cwd) do
-    with {:ok, tmp_dir} <- create_tmp_dir() do
-      try do
-        clear_task_state()
-        artifact_path = Path.join(tmp_dir, "reports/child-release-lane.md")
+    case create_tmp_dir() do
+      {:ok, tmp_dir} ->
+        try do
+          clear_task_state()
+          artifact_path = Path.join(tmp_dir, "reports/child-release-lane.md")
 
-        task_tool =
-          TaskTool.tool(tmp_dir,
-            run_override: fn _on_update, _signal ->
-              File.mkdir_p!(Path.dirname(artifact_path))
-              File.write!(artifact_path, "# Child Release Lane\n\nchild side effect artifact\n")
+          task_tool =
+            TaskTool.tool(tmp_dir,
+              run_override: fn _on_update, _signal ->
+                File.mkdir_p!(Path.dirname(artifact_path))
+                File.write!(artifact_path, "# Child Release Lane\n\nchild side effect artifact\n")
 
-              %AgentToolResult{
-                content: [
-                  %TextContent{
-                    text: "wrote reports/child-release-lane.md with child side effect artifact"
-                  }
-                ],
-                details: %{status: "completed", artifact_path: "reports/child-release-lane.md"}
-              }
-            end,
-            session_key: "agent:delegation-artifact-trace-eval:main",
-            agent_id: "delegation-artifact-trace-eval",
-            parent_run_id: "parent-run-delegation-artifact-trace"
-          )
+                %AgentToolResult{
+                  content: [
+                    %TextContent{
+                      text: "wrote reports/child-release-lane.md with child side effect artifact"
+                    }
+                  ],
+                  details: %{status: "completed", artifact_path: "reports/child-release-lane.md"}
+                }
+              end,
+              session_key: "agent:delegation-artifact-trace-eval:main",
+              agent_id: "delegation-artifact-trace-eval",
+              parent_run_id: "parent-run-delegation-artifact-trace"
+            )
 
-        read_tool = Read.tool(tmp_dir)
+          read_tool = Read.tool(tmp_dir)
 
-        context =
-          AgentContext.new(
-            system_prompt:
-              "Delegate artifact creation, join the child, read the artifact, then answer.",
-            tools: [task_tool, read_tool]
-          )
+          context =
+            AgentContext.new(
+              system_prompt:
+                "Delegate artifact creation, join the child, read the artifact, then answer.",
+              tools: [task_tool, read_tool]
+            )
 
-        config = %AgentLoopConfig{
-          model: trace_model(),
-          convert_to_llm: &trace_convert_to_llm/1,
-          stream_fn: delegation_artifact_stream_fn()
-        }
-
-        stream =
-          Loop.agent_loop(
-            [
-              trace_user_message("Have a child create the release lane artifact, then verify it.")
-            ],
-            context,
-            config,
-            nil,
-            nil
-          )
-
-        with {:ok, messages} <- EventStream.result(stream, 5_000),
-             :ok <- assert_async_task_joined_with(messages, "child side effect artifact"),
-             :ok <- assert_loop_tool_result(messages, "read", "child side effect artifact"),
-             :ok <- assert_final_after_tool(messages, "read"),
-             :ok <-
-               assert_final_contains(messages, ["ARTIFACT_VERIFIED", "child side effect artifact"]),
-             true <- File.exists?(artifact_path) do
-          %{
-            name: "agent_loop_delegation_artifact_trace_contract",
-            status: :pass,
-            details: %{
-              tool_results: trace_tool_result_names(messages),
-              artifact: "reports/child-release-lane.md",
-              verified_before_final: true
-            }
+          config = %AgentLoopConfig{
+            model: trace_model(),
+            convert_to_llm: &trace_convert_to_llm/1,
+            stream_fn: delegation_artifact_stream_fn()
           }
-        else
-          false ->
-            contract_fail(
-              "agent_loop_delegation_artifact_trace_contract",
-              "artifact file missing",
-              %{}
+
+          stream =
+            Loop.agent_loop(
+              [
+                trace_user_message("Have a child create the release lane artifact, then verify it.")
+              ],
+              context,
+              config,
+              nil,
+              nil
             )
 
-          {:error, reason} ->
-            contract_fail(
-              "agent_loop_delegation_artifact_trace_contract",
-              format_reason(reason),
-              %{}
-            )
+          with {:ok, messages} <- EventStream.result(stream, 5_000),
+               :ok <- assert_async_task_joined_with(messages, "child side effect artifact"),
+               :ok <- assert_loop_tool_result(messages, "read", "child side effect artifact"),
+               :ok <- assert_final_after_tool(messages, "read"),
+               :ok <-
+                 assert_final_contains(messages, ["ARTIFACT_VERIFIED", "child side effect artifact"]),
+               true <- File.exists?(artifact_path) do
+            %{
+              name: "agent_loop_delegation_artifact_trace_contract",
+              status: :pass,
+              details: %{
+                tool_results: trace_tool_result_names(messages),
+                artifact: "reports/child-release-lane.md",
+                verified_before_final: true
+              }
+            }
+          else
+            false ->
+              contract_fail(
+                "agent_loop_delegation_artifact_trace_contract",
+                "artifact file missing",
+                %{}
+              )
+
+            {:error, reason} ->
+              contract_fail(
+                "agent_loop_delegation_artifact_trace_contract",
+                format_reason(reason),
+                %{}
+              )
+          end
+        after
+          clear_task_state()
+          File.rm_rf(tmp_dir)
         end
-      after
-        clear_task_state()
-        File.rm_rf(tmp_dir)
-      end
-    else
       {:error, reason} ->
         contract_fail(
           "agent_loop_delegation_artifact_trace_contract",

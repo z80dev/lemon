@@ -920,7 +920,7 @@ defmodule LemonSim.Examples.Werewolf.FrameRenderer do
     end
   end
 
-  defp recent_eliminations(log) when is_list(log) and length(log) > 0, do: log
+  defp recent_eliminations(log) when is_list(log) and log != [], do: log
   defp recent_eliminations(_), do: []
 
   # ---------------------------------------------------------------------------

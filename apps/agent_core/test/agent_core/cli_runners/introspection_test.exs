@@ -57,7 +57,7 @@ defmodule AgentCore.CliRunners.IntrospectionTest do
       {_events, _new_state, _opts} = CodexRunner.translate_event(event, state)
 
       evts = events_since(:engine_subprocess_started, "codex", ts_before)
-      assert length(evts) >= 1
+      assert evts != []
       evt = List.last(evts)
       assert evt.provenance == :inferred
       assert evt.payload.engine == "codex"
@@ -75,7 +75,7 @@ defmodule AgentCore.CliRunners.IntrospectionTest do
       {_events, _new_state, _opts} = CodexRunner.translate_event(event, state)
 
       evts = events_since(:engine_output_observed, "codex", ts_before)
-      assert length(evts) >= 1
+      assert evts != []
       evt = List.last(evts)
       assert evt.provenance == :inferred
       assert evt.payload.input_tokens == 100
@@ -88,7 +88,7 @@ defmodule AgentCore.CliRunners.IntrospectionTest do
       {_events, _new_state} = CodexRunner.handle_exit_error(11, state)
 
       evts = events_since(:engine_subprocess_exited, "codex", ts_before)
-      assert length(evts) >= 1
+      assert evts != []
       evt = Enum.find(evts, &(&1.payload.exit_code == 11))
       assert evt != nil
       assert evt.provenance == :inferred
@@ -115,7 +115,7 @@ defmodule AgentCore.CliRunners.IntrospectionTest do
       {_events, _new_state, _opts} = ClaudeRunner.translate_event(init_msg, state)
 
       evts = events_since(:engine_subprocess_started, "claude", ts_before)
-      assert length(evts) >= 1
+      assert evts != []
       evt = List.last(evts)
       assert evt.provenance == :inferred
     end
@@ -126,7 +126,7 @@ defmodule AgentCore.CliRunners.IntrospectionTest do
       {_events, _new_state} = ClaudeRunner.handle_exit_error(7, state)
 
       evts = events_since(:engine_subprocess_exited, "claude", ts_before)
-      assert length(evts) >= 1
+      assert evts != []
       evt = Enum.find(evts, &(&1.payload.exit_code == 7))
       assert evt != nil
       assert evt.payload.ok == false
@@ -144,7 +144,7 @@ defmodule AgentCore.CliRunners.IntrospectionTest do
       {_events, _new_state} = KimiRunner.handle_exit_error(42, state)
 
       evts = events_since(:engine_subprocess_exited, "kimi", ts_before)
-      assert length(evts) >= 1
+      assert evts != []
       evt = Enum.find(evts, &(&1.payload.exit_code == 42))
       assert evt != nil
       assert evt.provenance == :inferred
@@ -162,7 +162,7 @@ defmodule AgentCore.CliRunners.IntrospectionTest do
       {_events, _new_state} = KimiRunner.handle_stream_end(state)
 
       evts = events_since(:engine_output_observed, "kimi", ts_before)
-      assert length(evts) >= 1
+      assert evts != []
       evt = List.last(evts)
       assert evt.provenance == :inferred
       assert evt.payload.ok == true
@@ -203,7 +203,7 @@ defmodule AgentCore.CliRunners.IntrospectionTest do
         OpencodeRunner.translate_event(%StepStart{sessionID: "ses_oc_test"}, state)
 
       evts = events_since(:engine_subprocess_started, "opencode", ts_before)
-      assert length(evts) >= 1
+      assert evts != []
       evt = List.last(evts)
       assert evt.provenance == :inferred
     end
@@ -216,7 +216,7 @@ defmodule AgentCore.CliRunners.IntrospectionTest do
       {_events, _new_state, _opts} = OpencodeRunner.translate_event(finish, state)
 
       evts = events_since(:engine_output_observed, "opencode", ts_before)
-      assert length(evts) >= 1
+      assert evts != []
       evt = List.last(evts)
       assert evt.provenance == :inferred
       assert evt.payload.ok == true
@@ -228,7 +228,7 @@ defmodule AgentCore.CliRunners.IntrospectionTest do
       {_events, _new_state} = OpencodeRunner.handle_exit_error(22, state)
 
       evts = events_since(:engine_subprocess_exited, "opencode", ts_before)
-      assert length(evts) >= 1
+      assert evts != []
       evt = Enum.find(evts, &(&1.payload.exit_code == 22))
       assert evt != nil
       assert evt.provenance == :inferred
@@ -249,7 +249,7 @@ defmodule AgentCore.CliRunners.IntrospectionTest do
         PiRunner.translate_event(%SessionHeader{id: "pi_session_test"}, state)
 
       evts = events_since(:engine_subprocess_started, "pi", ts_before)
-      assert length(evts) >= 1
+      assert evts != []
       evt = List.last(evts)
       assert evt.provenance == :inferred
     end
@@ -272,7 +272,7 @@ defmodule AgentCore.CliRunners.IntrospectionTest do
       {_events, _new_state, _opts} = PiRunner.translate_event(agent_end, state)
 
       evts = events_since(:engine_output_observed, "pi", ts_before)
-      assert length(evts) >= 1
+      assert evts != []
       evt = List.last(evts)
       assert evt.provenance == :inferred
       assert evt.payload.ok == true
@@ -285,7 +285,7 @@ defmodule AgentCore.CliRunners.IntrospectionTest do
       {_events, _new_state} = PiRunner.handle_exit_error(33, state)
 
       evts = events_since(:engine_subprocess_exited, "pi", ts_before)
-      assert length(evts) >= 1
+      assert evts != []
       evt = Enum.find(evts, &(&1.payload.exit_code == 33))
       assert evt != nil
       assert evt.provenance == :inferred

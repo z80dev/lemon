@@ -20,7 +20,7 @@ defmodule Ai.CircuitBreaker do
       )
 
       # Check if circuit is open before making request
-      if Ai.CircuitBreaker.is_open?(:anthropic) do
+      if Ai.CircuitBreaker.open?(:anthropic) do
         {:error, :circuit_open}
       else
         # make request...
@@ -111,10 +111,10 @@ defmodule Ai.CircuitBreaker do
   Returns `true` if the circuit is open, `false` if closed or half-open.
   In half-open state, limited requests are allowed through.
   """
-  @spec is_open?(provider()) :: boolean()
-  def is_open?(provider) do
+  @spec open?(provider()) :: boolean()
+  def open?(provider) do
     _ = ensure_started(provider)
-    GenServer.call(via_tuple(provider), :is_open?)
+    GenServer.call(via_tuple(provider), :open?)
   catch
     :exit, {:noproc, _} -> false
   end
@@ -205,7 +205,7 @@ defmodule Ai.CircuitBreaker do
   end
 
   @impl true
-  def handle_call(:is_open?, _from, state) do
+  def handle_call(:open?, _from, state) do
     state = maybe_transition_to_half_open(state)
     is_open = state.circuit_state == :open
     {:reply, is_open, state}

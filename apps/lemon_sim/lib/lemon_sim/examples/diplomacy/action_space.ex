@@ -40,7 +40,7 @@ defmodule LemonSim.Examples.Diplomacy.ActionSpace do
     tools = []
 
     tools =
-      if messages_sent < 2 and length(other_players) > 0 do
+      if messages_sent < 2 and other_players != [] do
         tools ++ [send_message_tool(actor_id, other_players)]
       else
         tools
@@ -136,7 +136,7 @@ defmodule LemonSim.Examples.Diplomacy.ActionSpace do
     tools = []
 
     tools =
-      if length(unordered) > 0 do
+      if unordered != [] do
         tools ++ [issue_order_tool(actor_id, unordered, adjacency)]
       else
         tools

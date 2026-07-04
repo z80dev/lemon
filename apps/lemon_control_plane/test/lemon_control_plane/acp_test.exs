@@ -268,7 +268,7 @@ defmodule LemonControlPlane.ACPTest do
         }
       })
 
-    assert response["error"]["code"] == -32602
+    assert response["error"]["code"] == -32_602
     assert response["error"]["message"] =~ "image prompt blocks are not enabled"
   end
 
@@ -421,7 +421,7 @@ defmodule LemonControlPlane.ACPTest do
     assert NDJSON.responses_for_line("\n") == []
 
     [parse_error] = NDJSON.responses_for_line("{not-json}\n")
-    assert Jason.decode!(parse_error)["error"]["code"] == -32700
+    assert Jason.decode!(parse_error)["error"]["code"] == -32_700
   end
 
   test "emits ACP session/update notifications while stdio prompt waits" do

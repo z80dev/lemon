@@ -559,7 +559,7 @@ defmodule LemonSim.Examples.Werewolf.Updater do
       current_votes = get(state.world, :votes, %{})
 
       new_past_transcripts =
-        if length(current_transcript) > 0,
+        if current_transcript != [],
           do: Map.put(past_transcripts, day_number, current_transcript),
           else: past_transcripts
 
@@ -753,7 +753,7 @@ defmodule LemonSim.Examples.Werewolf.Updater do
     evidence_tokens = get(state.world, :evidence_tokens, [])
     day_evidence = Enum.map(new_tokens, &Map.put(&1, :day, day_number))
     all_evidence = evidence_tokens ++ day_evidence
-    evidence_events = if length(new_tokens) > 0, do: [Events.evidence_found(new_tokens)], else: []
+    evidence_events = if new_tokens != [], do: [Events.evidence_found(new_tokens)], else: []
 
     # Process wanderers
     wanderer_results = get(state.world, :wanderer_results, [])
@@ -833,7 +833,7 @@ defmodule LemonSim.Examples.Werewolf.Updater do
         current_votes = get(state.world, :votes, %{})
 
         new_past_transcripts =
-          if length(current_transcript) > 0,
+          if current_transcript != [],
             do: Map.put(past_transcripts, day_number, current_transcript),
             else: past_transcripts
 
@@ -1206,7 +1206,7 @@ defmodule LemonSim.Examples.Werewolf.Updater do
     living_wolves = Roles.living_with_role(players, "werewolf")
 
     {initial_phase, turn_order, first_actor, phase_label} =
-      if length(living_wolves) > 0 do
+      if living_wolves != [] do
         {"wolf_discussion", living_wolves, List.first(living_wolves), "wolf_discussion"}
       else
         night_order = Roles.night_turn_order(players)
@@ -1399,7 +1399,7 @@ defmodule LemonSim.Examples.Werewolf.Updater do
 
     pairs = build_meeting_pairs(requests, living_ids)
 
-    if length(pairs) == 0 do
+    if pairs == [] do
       transition_to_day_discussion_from_meetings(state)
     else
       [first_pair | _] = pairs

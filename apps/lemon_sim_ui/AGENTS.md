@@ -110,7 +110,7 @@ test/
 
 ### Adding Interactive Human Play to a Domain
 
-1. Detect whose turn it is in `SimManager.is_human_turn?/2` (pattern on a world key unique to the domain).
+1. Detect whose turn it is in `SimManager.human_turn?/2` (pattern on a world key unique to the domain).
 2. Add phx-event handlers in `SimDashboardLive` (e.g., `handle_event("human_action", ...)`) that call `SimManager.submit_human_move/2` with a `LemonSim.Kernel.Event`.
 3. Render interactive controls in the board component, gated on the `interactive` attribute (set by the LiveView when `human_player != nil && sim_id in running`).
 

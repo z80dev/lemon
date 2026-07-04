@@ -407,7 +407,7 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
 
       # Should not crash with nil token_agent
       events = session |> CodexSubagent.events() |> Enum.to_list()
-      assert length(events) >= 1
+      assert events != []
     end
 
     test "handles multiple event types in sequence" do
@@ -639,7 +639,7 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
           _ -> false
         end)
 
-      assert length(agent_end_events) == 0
+      assert agent_end_events == []
     end
 
     test "filters out unknown event types" do
@@ -1242,7 +1242,7 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
 
       session = %{pid: nil, stream: stream, resume_token: nil, token_agent: nil, cwd: "/tmp"}
 
-      long_answer = String.duplicate("This is a long response. ", 10000)
+      long_answer = String.duplicate("This is a long response. ", 10_000)
       EventStream.push_async(stream, {:cli_event, CompletedEvent.ok("codex", long_answer)})
       EventStream.complete(stream, [])
 

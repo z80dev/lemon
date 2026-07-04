@@ -174,10 +174,12 @@ defmodule CodingAgent.Tools.Agent do
     task_id = Map.get(params, "task_id") |> normalize_optional_string()
 
     if is_binary(task_id) do
-      with {:ok, record, events} <- ensure_latest_task_state(task_id) do
-        build_poll_result(task_id, record, events)
-      else
-        {:error, :not_found} -> {:error, "Unknown task_id: #{task_id}"}
+      case ensure_latest_task_state(task_id) do
+        {:ok, record, events} ->
+          build_poll_result(task_id, record, events)
+
+        {:error, :not_found} ->
+          {:error, "Unknown task_id: #{task_id}"}
       end
     else
       {:error, "task_id is required for action=poll"}

@@ -265,9 +265,9 @@ defmodule LemonSkills.Usage do
   defp idle_days(nil, _now), do: nil
 
   defp idle_days(timestamp, now) do
-    with {:ok, timestamp, _} <- DateTime.from_iso8601(timestamp) do
-      max(DateTime.diff(now, timestamp, :day), 0)
-    else
+    case DateTime.from_iso8601(timestamp) do
+      {:ok, timestamp, _} ->
+        max(DateTime.diff(now, timestamp, :day), 0)
       _ -> nil
     end
   end

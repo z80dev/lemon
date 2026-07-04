@@ -55,7 +55,7 @@ defmodule CodingAgent.CheckpointTest do
       assert state.context.step == 5
       assert state.resumed_from == checkpoint.id
 
-      # Todos should be restored
+      # Task entries should be restored
       restored_todos = TodoStore.get(session_id)
       assert length(restored_todos) == 2
     end

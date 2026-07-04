@@ -589,25 +589,24 @@ defmodule LemonRouter.ToolStatusCoalescer do
   end
 
   defp build_intent(state, kind, text) do
-    with {:ok, route} <-
-           DeliveryRouteResolver.resolve(state.session_key, state.channel_id, state.meta || %{}) do
-      body =
-        %{text: text, seq: state.seq}
-        |> maybe_put_tool_failures(state)
+    case DeliveryRouteResolver.resolve(state.session_key, state.channel_id, state.meta || %{}) do
+      {:ok, route} ->
+        body =
+          %{text: text, seq: state.seq}
+          |> maybe_put_tool_failures(state)
 
-      {:ok,
-       %DeliveryIntent{
-         intent_id:
-           "#{state.run_id}:status:#{surface_token(state.surface)}:#{state.seq}:#{Atom.to_string(kind)}",
-         run_id: state.run_id,
-         session_key: state.session_key,
-         route: route,
-         kind: kind,
-         body: body,
-         controls: %{allow_cancel?: state.finalized != true},
-         meta: Map.put(state.meta || %{}, :surface, state.surface)
-       }}
-    else
+        {:ok,
+         %DeliveryIntent{
+           intent_id:
+             "#{state.run_id}:status:#{surface_token(state.surface)}:#{state.seq}:#{Atom.to_string(kind)}",
+           run_id: state.run_id,
+           session_key: state.session_key,
+           route: route,
+           kind: kind,
+           body: body,
+           controls: %{allow_cancel?: state.finalized != true},
+           meta: Map.put(state.meta || %{}, :surface, state.surface)
+         }}
       _ -> :error
     end
   end

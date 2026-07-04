@@ -1,10 +1,13 @@
 defmodule LemonSimUi.Live.Components.DiplomacyBoard do
+  @moduledoc """
+  Renders the Diplomacy simulation board with countries, alliances, proposals, and negotiation state.
+  """
   use Phoenix.Component
 
   alias LemonCore.MapHelpers
 
-  attr :world, :map, required: true
-  attr :interactive, :boolean, default: false
+  attr(:world, :map, required: true)
+  attr(:interactive, :boolean, default: false)
 
   def render(assigns) do
     world = assigns.world
@@ -338,7 +341,7 @@ defmodule LemonSimUi.Live.Components.DiplomacyBoard do
                     <% owner_str = if owner, do: to_string(owner), else: nil %>
                     <% color = if owner_str, do: faction_color(owner_str), else: "#475569" %>
                     <% faction = if owner_str, do: get_faction_name(owner_str, @players), else: "Neutral" %>
-                    <% is_recent_capture = is_recently_captured(tname, @capture_history, @round) %>
+                    <% is_recent_capture = recently_captured?(tname, @capture_history, @round) %>
                     <div
                       class={[
                         "dip-grid-cell rounded-lg p-2.5 text-center transition-all duration-300",
@@ -829,7 +832,7 @@ defmodule LemonSimUi.Live.Components.DiplomacyBoard do
     "#{color}0a"
   end
 
-  defp is_recently_captured(tname, capture_history, current_round) do
+  defp recently_captured?(tname, capture_history, current_round) do
     capture_history
     |> Enum.any?(fn cap ->
       cap_terr = get_val(cap, :territory, nil)
@@ -844,12 +847,24 @@ defmodule LemonSimUi.Live.Components.DiplomacyBoard do
     pid = to_string(player_id)
 
     cond do
-      String.contains?(pid, "1") -> "#06b6d4"
-      String.contains?(pid, "2") -> "#ef4444"
-      String.contains?(pid, "3") -> "#10b981"
-      String.contains?(pid, "4") -> "#f59e0b"
-      String.contains?(pid, "5") -> "#a855f7"
-      String.contains?(pid, "6") -> "#ec4899"
+      String.contains?(pid, "1") ->
+        "#06b6d4"
+
+      String.contains?(pid, "2") ->
+        "#ef4444"
+
+      String.contains?(pid, "3") ->
+        "#10b981"
+
+      String.contains?(pid, "4") ->
+        "#f59e0b"
+
+      String.contains?(pid, "5") ->
+        "#a855f7"
+
+      String.contains?(pid, "6") ->
+        "#ec4899"
+
       true ->
         hue = :erlang.phash2(pid, 360)
         "hsl(#{hue}, 70%, 55%)"
@@ -912,9 +927,15 @@ defmodule LemonSimUi.Live.Components.DiplomacyBoard do
   defp phase_text_class("resolution"), do: "text-red-400 dip-neon-red"
   defp phase_text_class(_), do: "text-gray-400"
 
-  defp phase_description("diplomacy"), do: "Send messages to other players. Forge alliances, broker deals, or deceive your rivals."
-  defp phase_description("orders"), do: "Issue move, hold, or support orders to your armies across the continent."
-  defp phase_description("resolution"), do: "All orders resolving simultaneously. Conflicts determined by support strength."
+  defp phase_description("diplomacy"),
+    do: "Send messages to other players. Forge alliances, broker deals, or deceive your rivals."
+
+  defp phase_description("orders"),
+    do: "Issue move, hold, or support orders to your armies across the continent."
+
+  defp phase_description("resolution"),
+    do: "All orders resolving simultaneously. Conflicts determined by support strength."
+
   defp phase_description(_), do: "Awaiting next phase..."
 
   # ── Resolution Event Styling ───────────────────────────────────
@@ -923,7 +944,12 @@ defmodule LemonSimUi.Live.Components.DiplomacyBoard do
   defp resolution_event_class("capture"), do: "bg-amber-950/20 border-amber-800/20 text-amber-400"
   defp resolution_event_class("support"), do: "bg-cyan-950/20 border-cyan-800/20 text-cyan-400"
   defp resolution_event_class("hold"), do: "bg-gray-800/20 border-gray-700/20 text-gray-400"
-  defp resolution_event_class("bounce"), do: "bg-purple-950/20 border-purple-800/20 text-purple-400"
-  defp resolution_event_class("retreat"), do: "bg-orange-950/20 border-orange-800/20 text-orange-400"
+
+  defp resolution_event_class("bounce"),
+    do: "bg-purple-950/20 border-purple-800/20 text-purple-400"
+
+  defp resolution_event_class("retreat"),
+    do: "bg-orange-950/20 border-orange-800/20 text-orange-400"
+
   defp resolution_event_class(_), do: "bg-gray-800/20 border-gray-700/20 text-gray-400"
 end

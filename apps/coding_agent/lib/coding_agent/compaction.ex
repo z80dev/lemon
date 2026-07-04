@@ -30,8 +30,8 @@ defmodule CodingAgent.Compaction do
   # Constants
   # ============================================================================
 
-  @default_reserve_tokens 16384
-  @default_keep_recent_tokens 20000
+  @default_reserve_tokens 16_384
+  @default_keep_recent_tokens 20_000
   @default_message_limit_trigger_ratio 0.9
   @default_message_limit_keep_ratio 0.6
   @default_message_limit_min_keep_messages 20
@@ -262,7 +262,7 @@ defmodule CodingAgent.Compaction do
         entries_before_target
         |> Enum.reverse()
         |> Enum.find(fn entry ->
-          is_valid_cut_point?(entry, message_entries)
+          valid_cut_point?(entry, message_entries)
         end)
 
       case valid_cut do
@@ -272,7 +272,7 @@ defmodule CodingAgent.Compaction do
     end
   end
 
-  defp is_valid_cut_point?(entry, all_entries) do
+  defp valid_cut_point?(entry, all_entries) do
     # Handle custom_message entry type (different from :message with role "custom")
     if entry.type == :custom_message do
       # custom_message entries are always valid cut points
@@ -364,7 +364,7 @@ defmodule CodingAgent.Compaction do
         entries_to_check
         |> Enum.reverse()
         |> Enum.find(fn entry ->
-          is_valid_cut_point?(entry, message_entries)
+          valid_cut_point?(entry, message_entries)
         end)
 
       case valid_cut do
@@ -390,7 +390,7 @@ defmodule CodingAgent.Compaction do
         valid_cut =
           rest
           |> Enum.find(fn entry ->
-            is_valid_cut_point?(entry, message_entries)
+            valid_cut_point?(entry, message_entries)
           end)
 
         case valid_cut do

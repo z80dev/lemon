@@ -350,7 +350,7 @@ defmodule CodingAgent.SessionManagerTest do
       # Should have summary message + kept messages
       [summary_msg | rest] = context.messages
       assert summary_msg["content"] =~ "Conversation about code"
-      assert length(rest) >= 1
+      assert rest != []
     end
 
     test "preserves compacted async followup provenance in restored context" do
@@ -552,7 +552,7 @@ defmodule CodingAgent.SessionManagerTest do
       }
 
       root_children = SessionManager.get_children(session, nil)
-      assert length(root_children) >= 1
+      assert root_children != []
     end
 
     test "returns empty list when no children exist" do

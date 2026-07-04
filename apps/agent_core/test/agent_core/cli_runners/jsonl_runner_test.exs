@@ -553,7 +553,7 @@ defmodule AgentCore.CliRunners.JsonlRunnerTest do
           _ -> false
         end)
 
-      assert length(cli_events) >= 1
+      assert cli_events != []
     end
 
     test "translates multiple events in sequence" do
@@ -794,7 +794,7 @@ defmodule AgentCore.CliRunners.JsonlRunnerTest do
           _ -> false
         end)
 
-      assert length(line_events) >= 1
+      assert line_events != []
       {:cli_event, {:line, line}} = hd(line_events)
       assert line =~ "hello world"
     end
@@ -824,7 +824,7 @@ defmodule AgentCore.CliRunners.JsonlRunnerTest do
           _ -> false
         end)
 
-      assert length(line_events) >= 1
+      assert line_events != []
       {:cli_event, {:line, line}} = hd(line_events)
       assert line =~ "test_value"
     end
@@ -983,7 +983,7 @@ defmodule AgentCore.CliRunners.JsonlRunnerTest do
         end)
 
       # The {:after, true} event should not be emitted because done=true was set
-      assert length(after_events) == 0
+      assert after_events == []
     end
   end
 end

@@ -142,7 +142,7 @@ defmodule XApi.Client.MediaUploadTest do
                   Jason.encode!(%{
                     "media_id" => 710_511_363_345_354_753,
                     "media_id_string" => "710511363345354753",
-                    "expires_after_secs" => 86400
+                    "expires_after_secs" => 86_400
                   })
                 )
 
@@ -160,7 +160,7 @@ defmodule XApi.Client.MediaUploadTest do
                     "media_id" => 710_511_363_345_354_753,
                     "media_id_string" => "710511363345354753",
                     "size" => byte_size(image_data),
-                    "expires_after_secs" => 86400
+                    "expires_after_secs" => 86_400
                   })
                 )
 

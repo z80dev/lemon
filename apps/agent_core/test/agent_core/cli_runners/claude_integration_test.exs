@@ -167,7 +167,7 @@ defmodule AgentCore.CliRunners.ClaudeIntegrationTest do
       IO.puts("Action events: #{length(action_events)}")
 
       # We should see at least one command or tool action
-      assert length(action_events) > 0, "Expected at least one action event"
+      assert action_events != [], "Expected at least one action event"
       assert_started_and_output(events, "claude")
     end
   end

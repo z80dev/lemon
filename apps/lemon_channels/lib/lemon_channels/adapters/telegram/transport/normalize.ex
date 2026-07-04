@@ -69,29 +69,28 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Normalize do
   end
 
   def event(state, update, update_id) when is_map(update) do
-    with {:ok, inbound} <- Inbound.normalize(update) do
-      inbound = UpdateProcessor.prepare_inbound(inbound, state, update, update_id)
+    case Inbound.normalize(update) do
+      {:ok, inbound} ->
+        inbound = UpdateProcessor.prepare_inbound(inbound, state, update, update_id)
 
-      {:ok,
-       %InboundContext{
-         kind: :message,
-         account_id: inbound.account_id,
-         chat_id: meta_int(inbound.meta, :chat_id),
-         thread_id: meta_int(inbound.meta, :topic_id),
-         sender_id: sender_id(inbound),
-         message_id: parse_int(inbound.message[:id] || inbound.message["id"]),
-         user_msg_id: meta_int(inbound.meta, :user_msg_id),
-         text: inbound.message[:text] || inbound.message["text"],
-         reply_to_text: inbound.meta[:reply_to_text],
-         reply_to_id: parse_int(inbound.message[:reply_to_id] || inbound.message["reply_to_id"]),
-         media_group_id: inbound.meta[:media_group_id],
-         raw_update: update,
-         inbound: inbound,
-         meta: inbound.meta || %{}
-       }}
-    else
+        {:ok,
+         %InboundContext{
+           kind: :message,
+           account_id: inbound.account_id,
+           chat_id: meta_int(inbound.meta, :chat_id),
+           thread_id: meta_int(inbound.meta, :topic_id),
+           sender_id: sender_id(inbound),
+           message_id: parse_int(inbound.message[:id] || inbound.message["id"]),
+           user_msg_id: meta_int(inbound.meta, :user_msg_id),
+           text: inbound.message[:text] || inbound.message["text"],
+           reply_to_text: inbound.meta[:reply_to_text],
+           reply_to_id: parse_int(inbound.message[:reply_to_id] || inbound.message["reply_to_id"]),
+           media_group_id: inbound.meta[:media_group_id],
+           raw_update: update,
+           inbound: inbound,
+           meta: inbound.meta || %{}
+         }}
       {:error, reason} -> {:error, reason}
-      {:skip, new_state} -> {:skip, new_state}
     end
   end
 

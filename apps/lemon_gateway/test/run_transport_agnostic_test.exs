@@ -161,7 +161,7 @@ defmodule LemonGateway.RunTransportAgnosticTest do
       if Code.ensure_loaded?(LemonCore.Bus) do
         # Receive delta events (may be wrapped in LemonCore.Event)
         received_deltas = collect_delta_events([], 3, 2000)
-        assert length(received_deltas) >= 1
+        assert received_deltas != []
       end
 
       # Complete the run
@@ -206,8 +206,8 @@ defmodule LemonGateway.RunTransportAgnosticTest do
           meta: %{
             notify_pid: self(),
             controller_pid: self(),
-            chat_id: 12345,
-            progress_msg_id: 67890
+            chat_id: 12_345,
+            progress_msg_id: 67_890
           }
         )
 
@@ -250,7 +250,7 @@ defmodule LemonGateway.RunTransportAgnosticTest do
       if Code.ensure_loaded?(LemonCore.Bus) do
         receive do
           %LemonCore.Event{type: :run_started} -> :ok
-          event -> IO.inspect(event, label: "Unexpected event")
+          _event -> :ok
         after
           2000 -> :ok
         end

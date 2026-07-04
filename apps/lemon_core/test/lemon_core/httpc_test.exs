@@ -83,7 +83,7 @@ defmodule LemonCore.HttpcTest do
       url = "#{@httpbin_url}/get"
       request = {String.to_charlist(url), []}
 
-      result = Httpc.request(:get, request, [], timeout: 30000)
+      result = Httpc.request(:get, request, [], timeout: 30_000)
 
       assert {:ok, {{_, status_code, _}, headers, body}} = result
       assert status_code == 200
@@ -99,7 +99,7 @@ defmodule LemonCore.HttpcTest do
       url = "#{@httpbin_url}/get"
       request = {String.to_charlist(url), []}
 
-      {:ok, {{_, 200, _}, _headers, body}} = Httpc.request(:get, request, [], timeout: 30000)
+      {:ok, {{_, 200, _}, _headers, body}} = Httpc.request(:get, request, [], timeout: 30_000)
 
       # Body can be charlist or binary depending on httpc options
       body_str = if is_list(body), do: List.to_string(body), else: body
@@ -118,7 +118,7 @@ defmodule LemonCore.HttpcTest do
       body = ~c"{\"test\": \"data\"}"
       request = {String.to_charlist(url), [], content_type, body}
 
-      result = Httpc.request(:post, request, [], timeout: 30000)
+      result = Httpc.request(:post, request, [], timeout: 30_000)
 
       assert {:ok, {{_, status_code, _}, _headers, _body}} = result
       assert status_code == 200
@@ -135,7 +135,7 @@ defmodule LemonCore.HttpcTest do
       request = {String.to_charlist(url), [], content_type, json_body}
 
       {:ok, {{_, 200, _}, _headers, response_body}} =
-        Httpc.request(:post, request, [], timeout: 30000)
+        Httpc.request(:post, request, [], timeout: 30_000)
 
       response_str =
         if is_list(response_body), do: List.to_string(response_body), else: response_body
@@ -156,7 +156,7 @@ defmodule LemonCore.HttpcTest do
       body = ~c"{\"update\": \"value\"}"
       request = {String.to_charlist(url), [], content_type, body}
 
-      result = Httpc.request(:put, request, [], timeout: 30000)
+      result = Httpc.request(:put, request, [], timeout: 30_000)
 
       assert {:ok, {{_, 200, _}, _headers, _body}} = result
     end
@@ -171,7 +171,7 @@ defmodule LemonCore.HttpcTest do
       body = ~c"{\"patch\": \"data\"}"
       request = {String.to_charlist(url), [], content_type, body}
 
-      result = Httpc.request(:patch, request, [], timeout: 30000)
+      result = Httpc.request(:patch, request, [], timeout: 30_000)
 
       assert {:ok, {{_, 200, _}, _headers, _body}} = result
     end
@@ -184,7 +184,7 @@ defmodule LemonCore.HttpcTest do
       url = "#{@httpbin_url}/delete"
       request = {String.to_charlist(url), []}
 
-      result = Httpc.request(:delete, request, [], timeout: 30000)
+      result = Httpc.request(:delete, request, [], timeout: 30_000)
 
       assert {:ok, {{_, 200, _}, _headers, _body}} = result
     end
@@ -197,7 +197,7 @@ defmodule LemonCore.HttpcTest do
       url = "#{@httpbin_url}/get"
       request = {String.to_charlist(url), []}
 
-      result = Httpc.request(:head, request, [], timeout: 30000)
+      result = Httpc.request(:head, request, [], timeout: 30_000)
 
       assert {:ok, {{_, 200, _}, headers, _body}} = result
       assert is_list(headers)
@@ -247,7 +247,7 @@ defmodule LemonCore.HttpcTest do
       url = "#{@httpbin_url}/status/404"
       request = {String.to_charlist(url), []}
 
-      result = Httpc.request(:get, request, [], timeout: 30000)
+      result = Httpc.request(:get, request, [], timeout: 30_000)
 
       assert {:ok, {{_, 404, _}, _headers, _body}} = result
     end
@@ -260,7 +260,7 @@ defmodule LemonCore.HttpcTest do
       url = "#{@httpbin_url}/status/500"
       request = {String.to_charlist(url), []}
 
-      result = Httpc.request(:get, request, [], timeout: 30000)
+      result = Httpc.request(:get, request, [], timeout: 30_000)
 
       assert {:ok, {{_, 500, _}, _headers, _body}} = result
     end
@@ -294,7 +294,7 @@ defmodule LemonCore.HttpcTest do
       request = {String.to_charlist(url), headers}
 
       {:ok, {{_, 200, _}, _headers, body}} =
-        Httpc.request(:get, request, [], timeout: 30000)
+        Httpc.request(:get, request, [], timeout: 30_000)
 
       body_str = if is_list(body), do: List.to_string(body), else: body
       assert body_str =~ "X-Custom-Header"
@@ -310,7 +310,7 @@ defmodule LemonCore.HttpcTest do
       request = {String.to_charlist(url), []}
 
       {:ok, {{_, 200, _}, _headers, body}} =
-        Httpc.request(:get, request, [], timeout: 30000)
+        Httpc.request(:get, request, [], timeout: 30_000)
 
       body_str = if is_list(body), do: List.to_string(body), else: body
       # httpbin echoes back the user-agent
@@ -328,7 +328,7 @@ defmodule LemonCore.HttpcTest do
       request = {String.to_charlist(url), []}
 
       {:ok, {{_, 200, _}, _headers, body}} =
-        Httpc.request(:get, request, [], timeout: 30000)
+        Httpc.request(:get, request, [], timeout: 30_000)
 
       body_str = if is_list(body), do: List.to_string(body), else: body
       assert body_str =~ "foo"
@@ -346,9 +346,9 @@ defmodule LemonCore.HttpcTest do
 
       url = "#{@httpbin_url}/get"
       request = {String.to_charlist(url), []}
-      http_opts = [timeout: 30000, connect_timeout: 10000]
+      http_opts = [timeout: 30_000, connect_timeout: 10_000]
 
-      result = Httpc.request(:get, request, http_opts, timeout: 30000)
+      result = Httpc.request(:get, request, http_opts, timeout: 30_000)
 
       assert {:ok, {{_, 200, _}, _headers, _body}} = result
     end

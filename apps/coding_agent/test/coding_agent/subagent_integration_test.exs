@@ -32,7 +32,7 @@ defmodule CodingAgent.SubagentIntegrationTest do
     %SettingsManager{
       default_thinking_level: :off,
       compaction_enabled: false,
-      reserve_tokens: 16384
+      reserve_tokens: 16_384
     }
   end
 
@@ -514,7 +514,7 @@ defmodule CodingAgent.SubagentIntegrationTest do
 
           completed = Enum.filter(results, &(&1.status == :completed))
 
-          assert length(completed) >= 1,
+          assert completed != [],
                  "Expected at least one completed subagent, got: #{inspect(results)}"
 
           # Check that completed results have expected answers

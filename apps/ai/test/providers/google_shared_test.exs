@@ -434,7 +434,7 @@ defmodule Ai.Providers.GoogleSharedComprehensiveTest do
       assert budgets[:minimal] == 128
       assert budgets[:low] == 2048
       assert budgets[:medium] == 8192
-      assert budgets[:high] == 32768
+      assert budgets[:high] == 32_768
     end
   end
 
@@ -445,7 +445,7 @@ defmodule Ai.Providers.GoogleSharedComprehensiveTest do
       assert budgets[:minimal] == 128
       assert budgets[:low] == 2048
       assert budgets[:medium] == 8192
-      assert budgets[:high] == 24576
+      assert budgets[:high] == 24_576
     end
   end
 
@@ -467,12 +467,12 @@ defmodule Ai.Providers.GoogleSharedComprehensiveTest do
     end
 
     test "returns custom budget when provided", %{model: model} do
-      custom_budgets = %{low: 5000, medium: 10000}
+      custom_budgets = %{low: 5000, medium: 10_000}
       assert GoogleShared.get_thinking_budget(model, :low, custom_budgets) == 5000
     end
 
     test "returns default budget for 2.5-pro", %{model: model} do
-      assert GoogleShared.get_thinking_budget(model, :high, %{}) == 32768
+      assert GoogleShared.get_thinking_budget(model, :high, %{}) == 32_768
     end
 
     test "returns -1 for unknown model" do
@@ -590,8 +590,8 @@ defmodule Ai.Providers.GoogleSharedComprehensiveTest do
       text = "Your quota will reset after 39s"
       delay = GoogleShared.extract_retry_delay(text, %{})
 
-      assert delay >= 39000
-      assert delay <= 41000
+      assert delay >= 39_000
+      assert delay <= 41_000
     end
 
     test "extracts delay from complex duration" do
@@ -614,8 +614,8 @@ defmodule Ai.Providers.GoogleSharedComprehensiveTest do
       text = ~s({"error": {"retryDelay": "34.074824224s"}})
       delay = GoogleShared.extract_retry_delay(text, %{})
 
-      assert delay >= 34000
-      assert delay <= 36000
+      assert delay >= 34_000
+      assert delay <= 36_000
     end
 
     test "returns nil when no delay can be extracted" do
@@ -629,7 +629,7 @@ defmodule Ai.Providers.GoogleSharedComprehensiveTest do
       delay = GoogleShared.extract_retry_delay(text, headers)
 
       # Should use header value (10s + buffer)
-      assert delay >= 10000
+      assert delay >= 10_000
     end
   end
 

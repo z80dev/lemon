@@ -33,7 +33,7 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
       try do
         assert {:error, report} = ArchitectureCheck.run(root: tmp_dir)
         assert report.issue_count > 0
-        assert length(report.issues) > 0
+        assert report.issues != []
       after
         File.rm_rf!(tmp_dir)
       end
@@ -186,7 +186,7 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
         assert {:error, report} = ArchitectureCheck.run(root: tmp_dir)
 
         unknown_app_issues = Enum.filter(report.issues, &(&1.code == :unknown_app))
-        assert length(unknown_app_issues) > 0
+        assert unknown_app_issues != []
 
         issue = hd(unknown_app_issues)
         assert issue.app == :unknown_app
@@ -289,7 +289,7 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
         namespace_issues =
           Enum.filter(report.issues, &(&1.code == :forbidden_namespace_reference))
 
-        assert length(namespace_issues) > 0
+        assert namespace_issues != []
       after
         File.rm_rf!(tmp_dir)
       end
@@ -364,7 +364,7 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
 
         missing_app_issues = Enum.filter(report.issues, &(&1.code == :missing_app))
         # Should report all expected apps as missing
-        assert length(missing_app_issues) > 0
+        assert missing_app_issues != []
       after
         File.rm_rf!(tmp_dir)
       end
@@ -474,7 +474,7 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
 
         # Should have unknown_app issue but no dependency violations
         unknown_issues = Enum.filter(report.issues, &(&1.code == :unknown_app))
-        assert length(unknown_issues) > 0
+        assert unknown_issues != []
 
         forbidden_issues = Enum.filter(report.issues, &(&1.code == :forbidden_dependency))
         assert forbidden_issues == []

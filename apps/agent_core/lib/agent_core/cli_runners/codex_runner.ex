@@ -523,7 +523,7 @@ defmodule AgentCore.CliRunners.CodexRunner do
           {[event], state, []}
         end
 
-      # Todo lists
+      # Task lists
       %TodoListItem{id: action_id, items: items} ->
         {done, total} = summarize_todo_list(items)
         title = "#{done}/#{total} tasks"

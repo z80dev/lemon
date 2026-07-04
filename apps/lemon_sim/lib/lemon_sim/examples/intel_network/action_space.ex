@@ -81,7 +81,7 @@ defmodule LemonSim.Examples.IntelNetwork.ActionSpace do
     tools = []
 
     tools =
-      if messages_sent < 2 and length(neighbors) > 0 do
+      if messages_sent < 2 and neighbors != [] do
         tools ++ [send_message_tool(actor_id, neighbors)]
       else
         tools
@@ -211,7 +211,7 @@ defmodule LemonSim.Examples.IntelNetwork.ActionSpace do
     tools = []
 
     tools =
-      if length(neighbors) > 0 do
+      if neighbors != [] do
         tools ++ [propose_operation_tool(actor_id, neighbor_enum, neighbors)]
       else
         tools
@@ -305,7 +305,7 @@ defmodule LemonSim.Examples.IntelNetwork.ActionSpace do
   end
 
   defp mole_action_tool(actor_id, neighbor_enum, neighbors, fragments) do
-    can_leak = length(fragments) > 0
+    can_leak = fragments != []
 
     leak_desc =
       if can_leak,

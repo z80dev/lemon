@@ -288,8 +288,7 @@ defmodule LemonSim.Examples.Legislature do
         {:ok, final_state}
 
       {:error, reason} = error ->
-        IO.puts("Game failed:")
-        IO.inspect(reason)
+        IO.puts("Game failed: #{inspect(reason)}")
         error
     end
   end

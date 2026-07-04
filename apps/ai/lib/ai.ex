@@ -78,11 +78,12 @@ defmodule Ai do
   def stream(%Model{} = model, %Context{} = context, opts \\ %{}) do
     opts = normalize_options(opts)
 
-    with {:ok, provider_module} <- ProviderRegistry.get(model.api) do
-      Ai.CallDispatcher.dispatch(model.provider, fn ->
-        provider_module.stream(model, context, opts)
-      end)
-    else
+    case ProviderRegistry.get(model.api) do
+      {:ok, provider_module} ->
+        Ai.CallDispatcher.dispatch(model.provider, fn ->
+          provider_module.stream(model, context, opts)
+        end)
+
       {:error, :not_found} ->
         {:error, {:unknown_api, model.api}}
     end

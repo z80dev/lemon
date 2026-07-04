@@ -310,8 +310,7 @@ defmodule LemonSim.Examples.Poker do
         {:ok, final_state}
 
       {:error, reason} = error ->
-        IO.puts("Poker sim failed:")
-        IO.inspect(reason)
+        IO.puts("Poker sim failed: #{inspect(reason)}")
         error
     end
   end

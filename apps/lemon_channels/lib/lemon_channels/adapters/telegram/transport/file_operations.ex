@@ -105,7 +105,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
 
   defp format_timestamp do
     {{y, mo, d}, {h, mi, s}} = :calendar.universal_time()
-    uniq = rem(System.unique_integer([:positive, :monotonic]), 10000)
+    uniq = rem(System.unique_integer([:positive, :monotonic]), 10_000)
 
     :io_lib.format("~4..0B~2..0B~2..0B_~2..0B~2..0B~2..0B_~4..0B", [y, mo, d, h, mi, s, uniq])
     |> IO.iodata_to_binary()

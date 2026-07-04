@@ -83,7 +83,7 @@ defmodule LemonScripts.LiveMcpHttpSmoke.StreamableFixture do
     {%{
        "jsonrpc" => "2.0",
        "id" => id,
-       "error" => %{"code" => -32601, "message" => "Method not found"}
+       "error" => %{"code" => -32_601, "message" => "Method not found"}
      }, :json}
   end
 end
@@ -256,7 +256,7 @@ defmodule LemonScripts.LiveMcpHttpSmoke.OAuthTokenFixture do
     %{
       "jsonrpc" => "2.0",
       "id" => id,
-      "error" => %{"code" => -32601, "message" => "Method not found"}
+      "error" => %{"code" => -32_601, "message" => "Method not found"}
     }
   end
 
@@ -1218,34 +1218,34 @@ defmodule LemonScripts.LiveMcpHttpSmoke do
         timeout_ms: 5_000
       )
 
-    with {:ok, first_client} <- first_result do
-      assert_until(fn -> HTTP.state(first_client) == :ready end)
-      {:ok, [%{"name" => "secured_echo"}]} = HTTP.list_tools(first_client, 5_000)
-      _ = HTTP.close(first_client)
-      Agent.update(store, fn _ -> [] end)
+    case first_result do
+      {:ok, first_client} ->
+        assert_until(fn -> HTTP.state(first_client) == :ready end)
+        {:ok, [%{"name" => "secured_echo"}]} = HTTP.list_tools(first_client, 5_000)
+        _ = HTTP.close(first_client)
+        Agent.update(store, fn _ -> [] end)
 
-      resume_oauth =
-        Keyword.put(oauth, :authorization_code_provider, fn _request ->
-          raise "authorization_code_provider called despite cached OAuth token"
-        end)
+        resume_oauth =
+          Keyword.put(oauth, :authorization_code_provider, fn _request ->
+            raise "authorization_code_provider called despite cached OAuth token"
+          end)
 
-      result =
-        HTTP.start_link(
-          url: "http://127.0.0.1:#{port}/mcp",
-          oauth: resume_oauth,
-          oauth_token_cache: cache,
-          timeout_ms: 5_000
-        )
+        result =
+          HTTP.start_link(
+            url: "http://127.0.0.1:#{port}/mcp",
+            oauth: resume_oauth,
+            oauth_token_cache: cache,
+            timeout_ms: 5_000
+          )
 
-      case result do
-        {:ok, pid} ->
-          Process.put(:mcp_oauth_cached_pkce_client, {:ok, pid})
-          {result, pid, store, port, authorization_request, token_cache, transport}
+        case result do
+          {:ok, pid} ->
+            Process.put(:mcp_oauth_cached_pkce_client, {:ok, pid})
+            {result, pid, store, port, authorization_request, token_cache, transport}
 
-        _ ->
-          {result, nil, store, port, authorization_request, token_cache, transport}
-      end
-    else
+          _ ->
+            {result, nil, store, port, authorization_request, token_cache, transport}
+        end
       _ ->
         {first_result, nil, store, port, authorization_request, token_cache, transport}
     end

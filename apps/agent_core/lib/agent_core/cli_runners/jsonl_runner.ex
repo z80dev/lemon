@@ -1034,6 +1034,8 @@ defmodule AgentCore.CliRunners.JsonlRunner do
       {:unix, _} ->
         # Try to kill process group first
         try do
+          # os_pid is guard-checked as an integer; shell process-tree kill syntax is deliberate.
+          # credo:disable-for-next-line Credo.Check.Warning.UnsafeExec
           :os.cmd(~c"kill -9 -#{os_pid} 2>/dev/null")
         catch
           _, _ -> :ok
@@ -1041,6 +1043,8 @@ defmodule AgentCore.CliRunners.JsonlRunner do
 
         # Also try single process
         try do
+          # os_pid is guard-checked as an integer; shell process-tree kill syntax is deliberate.
+          # credo:disable-for-next-line Credo.Check.Warning.UnsafeExec
           :os.cmd(~c"kill -9 #{os_pid} 2>/dev/null")
         catch
           _, _ -> :ok
@@ -1048,6 +1052,8 @@ defmodule AgentCore.CliRunners.JsonlRunner do
 
       {:win32, _} ->
         try do
+          # os_pid is guard-checked as an integer; shell process-tree kill syntax is deliberate.
+          # credo:disable-for-next-line Credo.Check.Warning.UnsafeExec
           :os.cmd(~c"taskkill /F /T /PID #{os_pid}")
         catch
           _, _ -> :ok
@@ -1061,12 +1067,16 @@ defmodule AgentCore.CliRunners.JsonlRunner do
     case :os.type() do
       {:unix, _} ->
         try do
+          # os_pid is guard-checked as an integer; shell process-tree kill syntax is deliberate.
+          # credo:disable-for-next-line Credo.Check.Warning.UnsafeExec
           :os.cmd(~c"kill -TERM -#{os_pid} 2>/dev/null")
         catch
           _, _ -> :ok
         end
 
         try do
+          # os_pid is guard-checked as an integer; shell process-tree kill syntax is deliberate.
+          # credo:disable-for-next-line Credo.Check.Warning.UnsafeExec
           :os.cmd(~c"kill -TERM #{os_pid} 2>/dev/null")
         catch
           _, _ -> :ok
@@ -1074,6 +1084,8 @@ defmodule AgentCore.CliRunners.JsonlRunner do
 
       {:win32, _} ->
         try do
+          # os_pid is guard-checked as an integer; shell process-tree kill syntax is deliberate.
+          # credo:disable-for-next-line Credo.Check.Warning.UnsafeExec
           :os.cmd(~c"taskkill /T /PID #{os_pid}")
         catch
           _, _ -> :ok

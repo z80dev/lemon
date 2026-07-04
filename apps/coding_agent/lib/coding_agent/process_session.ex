@@ -457,6 +457,8 @@ defmodule CodingAgent.ProcessSession do
     case :os.type() do
       {:unix, _} ->
         try do
+          # os_pid is guard-checked as an integer; shell process-tree kill syntax is deliberate.
+          # credo:disable-for-next-line Credo.Check.Warning.UnsafeExec
           :os.cmd(~c"kill -15 #{os_pid} 2>/dev/null")
         catch
           _, _ -> :ok
@@ -464,6 +466,8 @@ defmodule CodingAgent.ProcessSession do
 
       {:win32, _} ->
         try do
+          # os_pid is guard-checked as an integer; shell process-tree kill syntax is deliberate.
+          # credo:disable-for-next-line Credo.Check.Warning.UnsafeExec
           :os.cmd(~c"taskkill /PID #{os_pid}")
         catch
           _, _ -> :ok
@@ -478,12 +482,16 @@ defmodule CodingAgent.ProcessSession do
       {:unix, _} ->
         # Try process group first, then single process
         try do
+          # os_pid is guard-checked as an integer; shell process-tree kill syntax is deliberate.
+          # credo:disable-for-next-line Credo.Check.Warning.UnsafeExec
           :os.cmd(~c"kill -9 -#{os_pid} 2>/dev/null")
         catch
           _, _ -> :ok
         end
 
         try do
+          # os_pid is guard-checked as an integer; shell process-tree kill syntax is deliberate.
+          # credo:disable-for-next-line Credo.Check.Warning.UnsafeExec
           :os.cmd(~c"kill -9 #{os_pid} 2>/dev/null")
         catch
           _, _ -> :ok
@@ -491,6 +499,8 @@ defmodule CodingAgent.ProcessSession do
 
       {:win32, _} ->
         try do
+          # os_pid is guard-checked as an integer; shell process-tree kill syntax is deliberate.
+          # credo:disable-for-next-line Credo.Check.Warning.UnsafeExec
           :os.cmd(~c"taskkill /F /T /PID #{os_pid}")
         catch
           _, _ -> :ok

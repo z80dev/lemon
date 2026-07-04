@@ -667,58 +667,8 @@ defmodule LemonMCP.Client.HTTP do
       "client_id" => Keyword.fetch!(oauth, :client_id)
     }
 
-    with {:ok, params, auth_headers} <- put_client_auth(params, oauth) do
-      body =
-        params
-        |> maybe_put_scope(oauth)
-        |> maybe_put_resource(metadata)
-        |> URI.encode_query()
-
-      headers =
-        http_headers(
-          [
-            {"accept", "application/json"},
-            {"content-type", "application/x-www-form-urlencoded"}
-          ] ++ auth_headers
-        )
-
-      case :httpc.request(
-             :post,
-             {to_charlist(token_endpoint), headers, ~c"application/x-www-form-urlencoded",
-              to_charlist(body)},
-             [timeout: timeout, connect_timeout: timeout],
-             body_format: :binary
-           ) do
-        {:ok, {{_version, status, _reason}, _headers, response_body}} when status in 200..299 ->
-          decode_oauth_token(response_body)
-
-        _ ->
-          :error
-      end
-    else
-      :error -> :error
-    end
-  end
-
-  defp fetch_authorization_code_token(token_endpoint, metadata, oauth, state) do
-    timeout = state.config.timeout_ms
-
-    with {:ok, authorization_request} <- build_authorization_request(metadata, oauth),
-         {:ok, code} <- request_authorization_code(oauth, authorization_request) do
-      params = %{
-        "grant_type" => "authorization_code",
-        "code" => code,
-        "client_id" => Keyword.fetch!(oauth, :client_id),
-        "code_verifier" => authorization_request.code_verifier
-      }
-
-      params =
-        case Keyword.get(oauth, :redirect_uri) do
-          uri when is_binary(uri) and uri != "" -> Map.put(params, "redirect_uri", uri)
-          _ -> params
-        end
-
-      with {:ok, params, auth_headers} <- put_client_auth(params, oauth) do
+    case put_client_auth(params, oauth) do
+      {:ok, params, auth_headers} ->
         body =
           params
           |> maybe_put_scope(oauth)
@@ -746,7 +696,57 @@ defmodule LemonMCP.Client.HTTP do
           _ ->
             :error
         end
-      else
+      :error -> :error
+    end
+  end
+
+  defp fetch_authorization_code_token(token_endpoint, metadata, oauth, state) do
+    timeout = state.config.timeout_ms
+
+    with {:ok, authorization_request} <- build_authorization_request(metadata, oauth),
+         {:ok, code} <- request_authorization_code(oauth, authorization_request) do
+      params = %{
+        "grant_type" => "authorization_code",
+        "code" => code,
+        "client_id" => Keyword.fetch!(oauth, :client_id),
+        "code_verifier" => authorization_request.code_verifier
+      }
+
+      params =
+        case Keyword.get(oauth, :redirect_uri) do
+          uri when is_binary(uri) and uri != "" -> Map.put(params, "redirect_uri", uri)
+          _ -> params
+        end
+
+      case put_client_auth(params, oauth) do
+        {:ok, params, auth_headers} ->
+          body =
+            params
+            |> maybe_put_scope(oauth)
+            |> maybe_put_resource(metadata)
+            |> URI.encode_query()
+
+          headers =
+            http_headers(
+              [
+                {"accept", "application/json"},
+                {"content-type", "application/x-www-form-urlencoded"}
+              ] ++ auth_headers
+            )
+
+          case :httpc.request(
+                 :post,
+                 {to_charlist(token_endpoint), headers, ~c"application/x-www-form-urlencoded",
+                  to_charlist(body)},
+                 [timeout: timeout, connect_timeout: timeout],
+                 body_format: :binary
+               ) do
+            {:ok, {{_version, status, _reason}, _headers, response_body}} when status in 200..299 ->
+              decode_oauth_token(response_body)
+
+            _ ->
+              :error
+          end
         :error -> :error
       end
     else
@@ -868,35 +868,35 @@ defmodule LemonMCP.Client.HTTP do
       "client_id" => Keyword.fetch!(oauth, :client_id)
     }
 
-    with {:ok, params, auth_headers} <- put_client_auth(params, oauth) do
-      body =
-        params
-        |> maybe_put_scope(oauth)
-        |> maybe_put_resource(metadata)
-        |> URI.encode_query()
+    case put_client_auth(params, oauth) do
+      {:ok, params, auth_headers} ->
+        body =
+          params
+          |> maybe_put_scope(oauth)
+          |> maybe_put_resource(metadata)
+          |> URI.encode_query()
 
-      headers =
-        http_headers(
-          [
-            {"accept", "application/json"},
-            {"content-type", "application/x-www-form-urlencoded"}
-          ] ++ auth_headers
-        )
+        headers =
+          http_headers(
+            [
+              {"accept", "application/json"},
+              {"content-type", "application/x-www-form-urlencoded"}
+            ] ++ auth_headers
+          )
 
-      case :httpc.request(
-             :post,
-             {to_charlist(token_endpoint), headers, ~c"application/x-www-form-urlencoded",
-              to_charlist(body)},
-             [timeout: timeout, connect_timeout: timeout],
-             body_format: :binary
-           ) do
-        {:ok, {{_version, status, _reason}, _headers, response_body}} when status in 200..299 ->
-          decode_oauth_token(response_body)
+        case :httpc.request(
+               :post,
+               {to_charlist(token_endpoint), headers, ~c"application/x-www-form-urlencoded",
+                to_charlist(body)},
+               [timeout: timeout, connect_timeout: timeout],
+               body_format: :binary
+             ) do
+          {:ok, {{_version, status, _reason}, _headers, response_body}} when status in 200..299 ->
+            decode_oauth_token(response_body)
 
-        _ ->
-          :error
-      end
-    else
+          _ ->
+            :error
+        end
       :error -> :error
     end
   end

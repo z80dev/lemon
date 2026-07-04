@@ -77,7 +77,7 @@ defmodule LemonSim.Examples.Werewolf do
     living_wolves = Roles.living_with_role(players, "werewolf")
 
     {initial_phase, turn_order, first_actor} =
-      if length(living_wolves) > 0 do
+      if living_wolves != [] do
         {"wolf_discussion", living_wolves, List.first(living_wolves)}
       else
         night_order = Roles.night_turn_order(players)

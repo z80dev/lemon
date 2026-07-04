@@ -1016,7 +1016,7 @@ defmodule AgentCore.SubagentSupervisorTest do
       :ok = AgentCore.Agent.wait_for_idle(pid, timeout: 5000)
 
       state = AgentCore.Agent.get_state(pid)
-      assert length(state.messages) > 0
+      assert state.messages != []
 
       SubagentSupervisor.stop_subagent(pid)
     end

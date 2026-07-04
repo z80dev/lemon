@@ -128,7 +128,7 @@ defmodule LemonSim.Examples.Auction.Updater do
 
     cond do
       # No bidders left and no high bidder - item unsold
-      length(remaining_bidders) == 0 and is_nil(high_bidder) ->
+      remaining_bidders == [] and is_nil(high_bidder) ->
         resolve_auction_unsold(state)
 
       # Only one bidder left - they win (even if they haven't bid, the item resolves)
@@ -136,7 +136,7 @@ defmodule LemonSim.Examples.Auction.Updater do
         resolve_auction(state)
 
       # No bidders left but there was a high bidder - they win
-      length(remaining_bidders) == 0 and not is_nil(high_bidder) ->
+      remaining_bidders == [] and not is_nil(high_bidder) ->
         resolve_auction(state)
 
       # Multiple bidders remain - continue to next bidder

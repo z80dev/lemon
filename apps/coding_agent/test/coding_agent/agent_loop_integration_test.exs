@@ -37,7 +37,7 @@ defmodule CodingAgent.AgentLoopIntegrationTest do
     %SettingsManager{
       default_thinking_level: :off,
       compaction_enabled: false,
-      reserve_tokens: 16384
+      reserve_tokens: 16_384
     }
   end
 
@@ -267,7 +267,7 @@ defmodule CodingAgent.AgentLoopIntegrationTest do
                 end)
 
               # Model should have called the read tool
-              assert length(tool_events) > 0,
+              assert tool_events != [],
                      "Expected tool call events, got: #{inspect(Enum.take(events, 20))}"
 
               # Final response should contain 42
@@ -310,7 +310,7 @@ defmodule CodingAgent.AgentLoopIntegrationTest do
                   _ -> false
                 end)
 
-              assert length(tool_events) > 0, "Expected tool call events"
+              assert tool_events != [], "Expected tool call events"
 
               # File should exist
               expected_file = Path.join(tmp_dir, "greeting.txt")
@@ -362,7 +362,7 @@ defmodule CodingAgent.AgentLoopIntegrationTest do
                   _ -> false
                 end)
 
-              assert has_file_names or length(tool_events) > 0,
+              assert has_file_names or tool_events != [],
                      "Expected file names in response or tool events, got text: #{text}"
 
             {:error, reason, _events} ->

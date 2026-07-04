@@ -164,7 +164,7 @@ defmodule CodingAgent.Tools.BashTest do
       Agent.stop(agent)
 
       # Should have received at least one update
-      assert length(updates) > 0
+      assert updates != []
 
       # Each update should be an AgentToolResult
       Enum.each(updates, fn update ->
@@ -202,7 +202,7 @@ defmodule CodingAgent.Tools.BashTest do
       Agent.stop(agent)
 
       # Should have multiple updates for incremental output
-      assert length(updates) >= 1
+      assert updates != []
 
       # Final update should contain all lines
       final_text = List.last(updates).content |> hd() |> Map.get(:text)
@@ -404,7 +404,7 @@ defmodule CodingAgent.Tools.BashTest do
       Agent.stop(agent)
 
       # Should have received some streaming updates before abort
-      assert length(updates) > 0
+      assert updates != []
 
       # Result should indicate cancellation
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
@@ -696,7 +696,7 @@ defmodule CodingAgent.Tools.BashTest do
       updates = Agent.get(agent, fn updates -> Enum.reverse(updates) end)
       Agent.stop(agent)
 
-      assert length(updates) > 0
+      assert updates != []
     end
 
     test "tool supports abort signal", %{tmp_dir: tmp_dir} do

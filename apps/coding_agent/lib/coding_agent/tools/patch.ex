@@ -279,10 +279,12 @@ defmodule CodingAgent.Tools.Patch do
     Enum.reduce_while(operations, :ok, fn
       %{type: :delete, path: path}, _acc ->
         if ACPFileBridge.delete_enabled?(opts) do
-          with :ok <- validate_acp_path(path, cwd, opts) do
-            {:cont, :ok}
-          else
-            {:error, reason} -> {:halt, {:error, reason}}
+          case validate_acp_path(path, cwd, opts) do
+            :ok ->
+              {:cont, :ok}
+
+            {:error, reason} ->
+              {:halt, {:error, reason}}
           end
         else
           {:halt, {:error, "ACP patch cannot delete files without an ACP delete method: #{path}"}}
@@ -316,10 +318,12 @@ defmodule CodingAgent.Tools.Patch do
         end
 
       %{path: path}, _acc ->
-        with :ok <- validate_acp_path(path, cwd, opts) do
-          {:cont, :ok}
-        else
-          {:error, reason} -> {:halt, {:error, reason}}
+        case validate_acp_path(path, cwd, opts) do
+          :ok ->
+            {:cont, :ok}
+
+          {:error, reason} ->
+            {:halt, {:error, reason}}
         end
     end)
   end

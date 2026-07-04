@@ -1,4 +1,7 @@
 defmodule LemonSimUi.Live.Components.EventLog do
+  @moduledoc """
+  Renders a compact chronological event stream for simulation runs.
+  """
   use Phoenix.Component
 
   attr :events, :list, required: true

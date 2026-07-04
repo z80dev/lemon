@@ -213,7 +213,7 @@ defmodule LemonCore.Config.AgentTest do
           "compaction" => %{
             "enabled" => false,
             "reserve_tokens" => 8192,
-            "keep_recent_tokens" => 10000
+            "keep_recent_tokens" => 10_000
           }
         }
       }
@@ -222,7 +222,7 @@ defmodule LemonCore.Config.AgentTest do
 
       assert config.compaction.enabled == false
       assert config.compaction.reserve_tokens == 8192
-      assert config.compaction.keep_recent_tokens == 10000
+      assert config.compaction.keep_recent_tokens == 10_000
     end
 
     test "environment variables override compaction settings" do
@@ -244,7 +244,7 @@ defmodule LemonCore.Config.AgentTest do
 
       assert config.compaction.enabled == false
       assert config.compaction.reserve_tokens == 8192
-      assert config.compaction.keep_recent_tokens == 10000
+      assert config.compaction.keep_recent_tokens == 10_000
     end
   end
 

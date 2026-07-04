@@ -33,20 +33,20 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
 
     # Use existing Telegram API if available
     if Code.ensure_loaded?(api_mod) do
-      with token when is_binary(token) and token != "" <- token do
-        case with_retry(fn -> api_mod.send_message(token, chat_id, text, opts, nil) end) do
-          {:ok, result} ->
-            Logger.debug("Telegram outbound text sent successfully: chat_id=#{chat_id}")
-            {:ok, result}
+      case token do
+        token when is_binary(token) and token != "" ->
+          case with_retry(fn -> api_mod.send_message(token, chat_id, text, opts, nil) end) do
+            {:ok, result} ->
+              Logger.debug("Telegram outbound text sent successfully: chat_id=#{chat_id}")
+              {:ok, result}
 
-          {:error, reason} ->
-            Logger.warning(
-              "Telegram outbound text failed: chat_id=#{chat_id} reason=#{inspect(reason)}"
-            )
+            {:error, reason} ->
+              Logger.warning(
+                "Telegram outbound text failed: chat_id=#{chat_id} reason=#{inspect(reason)}"
+              )
 
-            {:error, reason}
-        end
-      else
+              {:error, reason}
+          end
         _ ->
           Logger.error("Telegram outbound text failed: no bot token configured")
           {:error, :telegram_not_configured}
@@ -72,26 +72,26 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
     {token, api_mod} = telegram_config()
 
     if Code.ensure_loaded?(api_mod) do
-      with token when is_binary(token) and token != "" <- token do
-        case with_retry(fn ->
-               api_mod.edit_message_text(token, chat_id, msg_id, formatted_text, md_opts)
-             end) do
-          {:ok, result} ->
-            Logger.debug(
-              "Telegram outbound edit successful: chat_id=#{chat_id} message_id=#{msg_id}"
-            )
+      case token do
+        token when is_binary(token) and token != "" ->
+          case with_retry(fn ->
+                 api_mod.edit_message_text(token, chat_id, msg_id, formatted_text, md_opts)
+               end) do
+            {:ok, result} ->
+              Logger.debug(
+                "Telegram outbound edit successful: chat_id=#{chat_id} message_id=#{msg_id}"
+              )
 
-            {:ok, result}
+              {:ok, result}
 
-          {:error, reason} ->
-            Logger.warning(
-              "Telegram outbound edit failed: chat_id=#{chat_id} message_id=#{msg_id} " <>
-                "reason=#{inspect(reason)}"
-            )
+            {:error, reason} ->
+              Logger.warning(
+                "Telegram outbound edit failed: chat_id=#{chat_id} message_id=#{msg_id} " <>
+                  "reason=#{inspect(reason)}"
+              )
 
-            {:error, reason}
-        end
-      else
+              {:error, reason}
+          end
         _ ->
           Logger.error("Telegram outbound edit failed: no bot token configured")
           {:error, :telegram_not_configured}
@@ -112,44 +112,44 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
     {token, api_mod} = telegram_config()
 
     if Code.ensure_loaded?(api_mod) do
-      with token when is_binary(token) and token != "" <- token do
-        case api_mod.delete_message(token, chat_id, msg_id) do
-          {:ok, result} ->
-            Logger.debug(
-              "Telegram outbound delete successful: chat_id=#{chat_id} message_id=#{msg_id}"
-            )
-
-            {:ok, result}
-
-          # Telegram deleteMessage is effectively idempotent for our purposes. If the progress
-          # message was already deleted (or never existed due to a race), Telegram returns 400
-          # "message to delete not found". Treat as success so the Outbox won't retry.
-          {:error, {:http_error, 400, body}} when is_binary(body) ->
-            if telegram_delete_not_found?(body) do
+      case token do
+        token when is_binary(token) and token != "" ->
+          case api_mod.delete_message(token, chat_id, msg_id) do
+            {:ok, result} ->
               Logger.debug(
-                "Telegram outbound delete message already deleted: chat_id=#{chat_id} " <>
-                  "message_id=#{msg_id}"
+                "Telegram outbound delete successful: chat_id=#{chat_id} message_id=#{msg_id}"
               )
 
-              {:ok, :already_deleted}
-            else
+              {:ok, result}
+
+            # Telegram deleteMessage is effectively idempotent for our purposes. If the progress
+            # message was already deleted (or never existed due to a race), Telegram returns 400
+            # "message to delete not found". Treat as success so the Outbox won't retry.
+            {:error, {:http_error, 400, body}} when is_binary(body) ->
+              if telegram_delete_not_found?(body) do
+                Logger.debug(
+                  "Telegram outbound delete message already deleted: chat_id=#{chat_id} " <>
+                    "message_id=#{msg_id}"
+                )
+
+                {:ok, :already_deleted}
+              else
+                Logger.warning(
+                  "Telegram outbound delete failed: chat_id=#{chat_id} message_id=#{msg_id} " <>
+                    "reason=400_bad_request"
+                )
+
+                {:error, {:http_error, 400, body}}
+              end
+
+            {:error, reason} ->
               Logger.warning(
                 "Telegram outbound delete failed: chat_id=#{chat_id} message_id=#{msg_id} " <>
-                  "reason=400_bad_request"
+                  "reason=#{inspect(reason)}"
               )
 
-              {:error, {:http_error, 400, body}}
-            end
-
-          {:error, reason} ->
-            Logger.warning(
-              "Telegram outbound delete failed: chat_id=#{chat_id} message_id=#{msg_id} " <>
-                "reason=#{inspect(reason)}"
-            )
-
-            {:error, reason}
-        end
-      else
+              {:error, reason}
+          end
         _ ->
           Logger.error("Telegram outbound delete failed: no bot token configured")
           {:error, :telegram_not_configured}
@@ -166,37 +166,37 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
     chat_id = String.to_integer(payload.peer.id)
     {token, api_mod} = telegram_config()
 
-    with {:ok, normalized_content} <- normalize_file_content(content) do
-      if Code.ensure_loaded?(api_mod) do
-        with token when is_binary(token) and token != "" <- token do
-          opts = build_send_opts(payload, nil)
+    case normalize_file_content(content) do
+      {:ok, normalized_content} ->
+        if Code.ensure_loaded?(api_mod) do
+          case token do
+            token when is_binary(token) and token != "" ->
+              opts = build_send_opts(payload, nil)
 
-          file_count = length(normalized_content.files)
-          Logger.debug("Telegram outbound sending #{file_count} file(s): chat_id=#{chat_id}")
+              file_count = length(normalized_content.files)
+              Logger.debug("Telegram outbound sending #{file_count} file(s): chat_id=#{chat_id}")
 
-          result = send_normalized_file(api_mod, token, chat_id, normalized_content, opts)
+              result = send_normalized_file(api_mod, token, chat_id, normalized_content, opts)
 
-          case result do
-            {:ok, _} ->
-              Logger.debug("Telegram outbound file sent successfully: chat_id=#{chat_id}")
+              case result do
+                {:ok, _} ->
+                  Logger.debug("Telegram outbound file sent successfully: chat_id=#{chat_id}")
 
-            {:error, reason} ->
-              Logger.warning(
-                "Telegram outbound file failed: chat_id=#{chat_id} reason=#{inspect(reason)}"
-              )
+                {:error, reason} ->
+                  Logger.warning(
+                    "Telegram outbound file failed: chat_id=#{chat_id} reason=#{inspect(reason)}"
+                  )
+              end
+
+              result
+            _ ->
+              Logger.error("Telegram outbound file failed: no bot token configured")
+              {:error, :telegram_not_configured}
           end
-
-          result
         else
-          _ ->
-            Logger.error("Telegram outbound file failed: no bot token configured")
-            {:error, :telegram_not_configured}
+          Logger.error("Telegram outbound file failed: API module not available")
+          {:error, :telegram_api_not_available}
         end
-      else
-        Logger.error("Telegram outbound file failed: API module not available")
-        {:error, :telegram_api_not_available}
-      end
-    else
       {:error, reason} ->
         Logger.warning(
           "Telegram outbound file normalization failed: chat_id=#{chat_id} reason=#{inspect(reason)}"

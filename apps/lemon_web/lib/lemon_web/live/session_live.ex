@@ -260,45 +260,45 @@ defmodule LemonWeb.SessionLive do
   defp persist_uploaded_entries(socket) do
     upload_root = upload_root()
 
-    with :ok <- File.mkdir_p(upload_root) do
-      entries =
-        consume_uploaded_entries(socket, :files, fn %{path: path}, entry ->
-          filename = sanitize_filename(entry.client_name || "upload")
+    case File.mkdir_p(upload_root) do
+      :ok ->
+        entries =
+          consume_uploaded_entries(socket, :files, fn %{path: path}, entry ->
+            filename = sanitize_filename(entry.client_name || "upload")
 
-          destination =
-            Path.join(
-              upload_root,
-              "#{System.system_time(:millisecond)}-#{message_id("file")}-#{filename}"
-            )
+            destination =
+              Path.join(
+                upload_root,
+                "#{System.system_time(:millisecond)}-#{message_id("file")}-#{filename}"
+              )
 
-          case File.cp(path, destination) do
-            :ok ->
-              {:ok,
-               %{
-                 name: entry.client_name,
-                 path: destination,
-                 content_type: entry.client_type,
-                 size: entry.client_size
-               }}
+            case File.cp(path, destination) do
+              :ok ->
+                {:ok,
+                 %{
+                   name: entry.client_name,
+                   path: destination,
+                   content_type: entry.client_type,
+                   size: entry.client_size
+                 }}
 
-            {:error, reason} ->
-              {:ok,
-               %{
-                 name: entry.client_name,
-                 path: nil,
-                 error: format_error(reason)
-               }}
-          end
-        end)
+              {:error, reason} ->
+                {:ok,
+                 %{
+                   name: entry.client_name,
+                   path: nil,
+                   error: format_error(reason)
+                 }}
+            end
+          end)
 
-      failures = Enum.filter(entries, &(not is_binary(read(&1, :path))))
+        failures = Enum.filter(entries, &(not is_binary(read(&1, :path))))
 
-      if failures == [] do
-        {:ok, entries}
-      else
-        {:error, failures}
-      end
-    else
+        if failures == [] do
+          {:ok, entries}
+        else
+          {:error, failures}
+        end
       {:error, reason} ->
         {:error, [%{name: upload_root, error: format_error(reason)}]}
     end

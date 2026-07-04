@@ -162,7 +162,7 @@ defmodule Ai.ProviderIntegrationTest do
           events = EventStream.events(stream) |> Enum.to_list()
 
           # Should have start, text events, and done
-          assert length(events) > 0
+          assert events != []
 
           # Check for start event
           start_events = Enum.filter(events, &match?({:start, _}, &1))
@@ -170,7 +170,7 @@ defmodule Ai.ProviderIntegrationTest do
 
           # Check for text deltas
           text_deltas = Enum.filter(events, &match?({:text_delta, _, _, _}, &1))
-          assert length(text_deltas) > 0
+          assert text_deltas != []
 
           # Check for done event
           done_events = Enum.filter(events, &match?({:done, _, _}, &1))
@@ -237,7 +237,7 @@ defmodule Ai.ProviderIntegrationTest do
           assert message.stop_reason == :tool_use
 
           tool_calls = Ai.get_tool_calls(message)
-          assert length(tool_calls) > 0
+          assert tool_calls != []
 
           [tool_call | _] = tool_calls
           assert %ToolCall{} = tool_call
@@ -271,8 +271,8 @@ defmodule Ai.ProviderIntegrationTest do
           tool_call_starts = Enum.filter(events, &match?({:tool_call_start, _, _}, &1))
           tool_call_ends = Enum.filter(events, &match?({:tool_call_end, _, _, _}, &1))
 
-          assert length(tool_call_starts) > 0
-          assert length(tool_call_ends) > 0
+          assert tool_call_starts != []
+          assert tool_call_ends != []
       end
     end
   end

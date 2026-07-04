@@ -1,4 +1,7 @@
 defmodule LemonCore.Doctor.CLI do
+  @moduledoc """
+  CLI entrypoint for generating Lemon doctor support bundles and reporting failed diagnostics to stderr.
+  """
   alias LemonCore.Doctor
   alias LemonCore.Doctor.{Report, SupportBundle}
 

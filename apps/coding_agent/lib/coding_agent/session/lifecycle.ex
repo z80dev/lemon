@@ -308,43 +308,43 @@ defmodule CodingAgent.Session.Lifecycle do
     had_pending_prompt = not is_nil(state.pending_prompt_timer_ref)
     state = State.cancel_pending_prompt(state)
 
-    with :ok <-
-           wait_for_reset_abort(state, was_streaming, had_pending_prompt, reset_abort_wait_ms) do
-      state =
-        if was_streaming do
-          Notifier.broadcast_event(state, {:canceled, :reset})
-          Notifier.complete_event_streams(state, {:canceled, :reset})
+    case wait_for_reset_abort(state, was_streaming, had_pending_prompt, reset_abort_wait_ms) do
+      :ok ->
+        state =
+          if was_streaming do
+            Notifier.broadcast_event(state, {:canceled, :reset})
+            Notifier.complete_event_streams(state, {:canceled, :reset})
 
-          if not had_pending_prompt do
-            BackgroundTasks.flush_queued_agent_events()
+            if not had_pending_prompt do
+              BackgroundTasks.flush_queued_agent_events()
+            end
+
+            %{state | is_streaming: false, event_streams: %{}, steering_queue: :queue.new()}
+          else
+            state
           end
 
-          %{state | is_streaming: false, event_streams: %{}, steering_queue: :queue.new()}
-        else
-          state
-        end
+        :ok = AgentCore.Agent.reset(state.agent)
 
-      :ok = AgentCore.Agent.reset(state.agent)
+        previous_session_id = state.session_manager.header.id
+        new_session_manager = SessionManager.new(state.cwd)
 
-      previous_session_id = state.session_manager.header.id
-      new_session_manager = SessionManager.new(state.cwd)
+        Persistence.maybe_unregister_session(
+          previous_session_id,
+          state.register_session,
+          state.session_registry
+        )
 
-      Persistence.maybe_unregister_session(
-        previous_session_id,
-        state.register_session,
-        state.session_registry
-      )
+        Persistence.maybe_register_session(
+          new_session_manager,
+          state.cwd,
+          state.register_session,
+          state.session_registry
+        )
 
-      Persistence.maybe_register_session(
-        new_session_manager,
-        state.cwd,
-        state.register_session,
-        state.session_registry
-      )
+        Notifier.ui_set_working_message(state, nil)
+        {:ok, State.reset_runtime(state, new_session_manager, System.system_time(:millisecond))}
 
-      Notifier.ui_set_working_message(state, nil)
-      {:ok, State.reset_runtime(state, new_session_manager, System.system_time(:millisecond))}
-    else
       {:error, :timeout} ->
         Logger.warning("Timed out waiting for agent abort during reset")
         {:error, :busy, state}

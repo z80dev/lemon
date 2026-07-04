@@ -164,7 +164,7 @@ defmodule Lemon.LiveACPStdioSmoke do
   defp check_parse_error do
     [encoded] = NDJSON.responses_for_line("{not-json}\n")
     response = Jason.decode!(encoded)
-    require_value(response["error"]["code"], -32700)
+    require_value(response["error"]["code"], -32_700)
   end
 
   defp request!(id, method, params) do

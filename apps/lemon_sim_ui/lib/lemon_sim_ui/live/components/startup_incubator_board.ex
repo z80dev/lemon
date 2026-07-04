@@ -1,4 +1,7 @@
 defmodule LemonSimUi.Live.Components.StartupIncubatorBoard do
+  @moduledoc """
+  Renders the Startup Incubator simulation board with founder progress, funding, milestones, and market signals.
+  """
   use Phoenix.Component
 
   alias LemonCore.MapHelpers

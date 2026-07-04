@@ -112,7 +112,7 @@ defmodule LemonSim.Examples.Pandemic.Performance do
          total_hoarding: Enum.sum(Enum.map(metrics_list, &get(&1, :hoarding_incidents, 0))),
          messages_sent: Enum.sum(Enum.map(metrics_list, &get(&1, :messages_sent, 0))),
          avg_regional_death_rate:
-           if length(metrics_list) > 0 do
+           if metrics_list != [] do
              Float.round(
                Enum.sum(Enum.map(metrics_list, &get(&1, :regional_death_rate, 0.0))) /
                  length(metrics_list),

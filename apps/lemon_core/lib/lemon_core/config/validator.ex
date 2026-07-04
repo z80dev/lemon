@@ -303,7 +303,7 @@ defmodule LemonCore.Config.Validator do
   defp validate_web_dashboard_port(errors, nil), do: errors
 
   defp validate_web_dashboard_port(errors, port) when is_integer(port) do
-    if port > 0 and port <= 65535 do
+    if port > 0 and port <= 65_535 do
       errors
     else
       ["gateway.web_dashboard.port: must be between 1 and 65535" | errors]
@@ -671,7 +671,7 @@ defmodule LemonCore.Config.Validator do
   defp validate_port(errors, nil, _path), do: errors
 
   defp validate_port(errors, port, path) when is_integer(port) do
-    if port > 0 and port <= 65535 do
+    if port > 0 and port <= 65_535 do
       errors
     else
       ["#{path}: must be between 1 and 65535" | errors]

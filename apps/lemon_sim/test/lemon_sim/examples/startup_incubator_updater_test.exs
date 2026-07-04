@@ -146,7 +146,7 @@ defmodule LemonSim.Examples.StartupIncubatorUpdaterTest do
              )
 
     log = next_state.world.question_log
-    assert length(log) >= 1
+    assert log != []
     last = List.last(log)
     assert last["investor_id"] == "investor_1"
     assert last["founder_id"] == "founder_1"

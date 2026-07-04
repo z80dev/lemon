@@ -448,49 +448,51 @@ defmodule LemonSim.Examples.TcgShop.Updater do
       hourly_wage = staff_role_wage(role)
       labor_cost = Float.round(hours * hourly_wage, 2)
 
-      with :ok <- ensure_cash(state.world, labor_cost) do
-        operations = get(state.world, :operations, default_operations())
-        current_backlog = get(operations, :backlog_tasks, [])
-        backlog_cleared = min(length(current_backlog), trunc(hours / 3))
-        fatigue_relief = if(hours >= 4.0, do: 1, else: 0)
+      case ensure_cash(state.world, labor_cost) do
+        :ok ->
+          operations = get(state.world, :operations, default_operations())
+          current_backlog = get(operations, :backlog_tasks, [])
+          backlog_cleared = min(length(current_backlog), trunc(hours / 3))
+          fatigue_relief = if(hours >= 4.0, do: 1, else: 0)
 
-        entry = %{
-          day: day,
-          role: role,
-          hours: Float.round(hours, 2),
-          hourly_wage: hourly_wage,
-          labor_cost: labor_cost,
-          backlog_cleared: backlog_cleared,
-          fatigue_relief: fatigue_relief,
-          type: "scheduled_shift"
-        }
+          entry = %{
+            day: day,
+            role: role,
+            hours: Float.round(hours, 2),
+            hourly_wage: hourly_wage,
+            labor_cost: labor_cost,
+            backlog_cleared: backlog_cleared,
+            fatigue_relief: fatigue_relief,
+            type: "scheduled_shift"
+          }
 
-        next =
-          state
-          |> State.update_world(fn world ->
-            world
-            |> Map.update!(:bank_balance, &Float.round(&1 - labor_cost, 2))
-            |> Map.update(:staffing_history, [entry], &(&1 ++ [entry]))
-            |> update_in([:operations], fn operations ->
-              operations = operations || default_operations()
+          next =
+            state
+            |> State.update_world(fn world ->
+              world
+              |> Map.update!(:bank_balance, &Float.round(&1 - labor_cost, 2))
+              |> Map.update(:staffing_history, [entry], &(&1 ++ [entry]))
+              |> update_in([:operations], fn operations ->
+                operations = operations || default_operations()
 
-              operations
-              |> Map.update(:scheduled_staff_hours, hours, &Float.round(&1 + hours, 2))
-              |> Map.update(
-                :scheduled_staff_hours_remaining,
-                hours,
-                &Float.round(&1 + hours, 2)
-              )
-              |> Map.update(:scheduled_staff_cost, labor_cost, &Float.round(&1 + labor_cost, 2))
-              |> Map.update(:fatigue, 0, &max(0, &1 - fatigue_relief))
-              |> Map.update(:backlog_tasks, [], &Enum.drop(&1, backlog_cleared))
+                operations
+                |> Map.update(:scheduled_staff_hours, hours, &Float.round(&1 + hours, 2))
+                |> Map.update(
+                  :scheduled_staff_hours_remaining,
+                  hours,
+                  &Float.round(&1 + hours, 2)
+                )
+                |> Map.update(:scheduled_staff_cost, labor_cost, &Float.round(&1 + labor_cost, 2))
+                |> Map.update(:fatigue, 0, &max(0, &1 - fatigue_relief))
+                |> Map.update(:backlog_tasks, [], &Enum.drop(&1, backlog_cleared))
+              end)
             end)
-          end)
-          |> State.append_event(event)
+            |> State.append_event(event)
 
-        {:ok, next, {:decide, "scheduled #{hours} hours of #{role} coverage"}}
-      else
-        {:error, reason} -> reject(state, event, reason)
+          {:ok, next, {:decide, "scheduled #{hours} hours of #{role} coverage"}}
+
+        {:error, reason} ->
+          reject(state, event, reason)
       end
     else
       {:error, reason} -> reject(state, event, reason)
@@ -1242,66 +1244,73 @@ defmodule LemonSim.Examples.TcgShop.Updater do
   end
 
   defp apply_wait_next_day(%State{} = state, event) do
-    with :ok <- ensure_in_progress(state.world) do
-      world = state.world
-      current_day = get(world, :day_number, 1)
-      next_day = current_day + 1
-      max_days = get(world, :max_days, 14)
-      seed = get(world, :seed, 1)
-      calendar = get(world, :release_calendar, [])
-      pulse = LemonSim.Examples.TcgShop.market_pulse(next_day, seed, calendar)
+    case ensure_in_progress(state.world) do
+      :ok ->
+        world = state.world
+        current_day = get(world, :day_number, 1)
+        next_day = current_day + 1
+        max_days = get(world, :max_days, 14)
+        seed = get(world, :seed, 1)
+        calendar = get(world, :release_calendar, [])
+        pulse = LemonSim.Examples.TcgShop.market_pulse(next_day, seed, calendar)
 
-      {world, delivery_sales} =
-        world
-        |> apply_due_deliveries(next_day)
-        |> apply_due_grading(next_day)
-        |> apply_market_movement(next_day, pulse)
-        |> apply_due_preorders(next_day)
-        |> apply_due_special_orders(next_day)
-        |> apply_organic_sales(pulse)
-        |> apply_daily_shrinkage(next_day)
-        |> apply_daily_refunds(next_day)
-        |> apply_inventory_aging_and_markdowns(next_day)
-        |> apply_cash_reconciliation(next_day)
+        {world, delivery_sales} =
+          world
+          |> apply_due_deliveries(next_day)
+          |> apply_due_grading(next_day)
+          |> apply_market_movement(next_day, pulse)
+          |> apply_due_preorders(next_day)
+          |> apply_due_special_orders(next_day)
+          |> apply_organic_sales(pulse)
+          |> apply_daily_shrinkage(next_day)
+          |> apply_daily_refunds(next_day)
+          |> apply_inventory_aging_and_markdowns(next_day)
+          |> apply_cash_reconciliation(next_day)
 
-      status =
-        cond do
-          get(world, :bank_balance, 0.0) < -500.0 -> "bankrupt"
-          next_day > max_days -> "complete"
-          true -> "in_progress"
-        end
+        status =
+          cond do
+            get(world, :bank_balance, 0.0) < -500.0 -> "bankrupt"
+            next_day > max_days -> "complete"
+            true -> "in_progress"
+          end
 
-      next_world =
-        world
-        |> Map.put(:day_number, min(next_day, max_days))
-        |> Map.put(:market_pulses, get(world, :market_pulses, []) ++ [pulse])
-        |> Map.put(:customer_queue, customer_queue_for(world, pulse))
-        |> apply_competitor_reaction(next_day, pulse)
-        |> expire_promotions(next_day)
-        |> Map.put(
-          :competitor_snapshot,
-          LemonSim.Examples.TcgShop.competitor_snapshot(next_day, seed)
-        )
-        |> apply_daily_overhead(current_day)
-        |> apply_credit_line_interest(current_day)
-        |> apply_due_supplier_invoices(next_day)
-        |> maybe_remit_sales_tax(next_day, status)
-        |> apply_due_consignment_payouts(next_day, status)
-        |> apply_membership_recognition(next_day)
-        |> apply_daily_payroll(current_day)
-        |> Map.put(:status, status)
-        |> reset_staff_day()
+        next_world =
+          world
+          |> Map.put(:day_number, min(next_day, max_days))
+          |> Map.put(:market_pulses, get(world, :market_pulses, []) ++ [pulse])
+          |> Map.put(:customer_queue, customer_queue_for(world, pulse))
+          |> apply_competitor_reaction(next_day, pulse)
+          |> expire_promotions(next_day)
+          |> Map.put(
+            :competitor_snapshot,
+            LemonSim.Examples.TcgShop.competitor_snapshot(next_day, seed)
+          )
+          |> apply_daily_overhead(current_day)
+          |> apply_credit_line_interest(current_day)
+          |> apply_due_supplier_invoices(next_day)
+          |> maybe_remit_sales_tax(next_day, status)
+          |> apply_due_consignment_payouts(next_day, status)
+          |> apply_membership_recognition(next_day)
+          |> apply_daily_payroll(current_day)
+          |> Map.put(:status, status)
+          |> reset_staff_day()
 
-      next =
-        state
-        |> State.update_world(fn _ -> next_world end)
-        |> State.append_event(event)
-        |> State.append_event(Events.day_advanced(min(next_day, max_days), delivery_sales, pulse))
+        next =
+          state
+          |> State.update_world(fn _ -> next_world end)
+          |> State.append_event(event)
+          |> State.append_event(
+            Events.day_advanced(min(next_day, max_days), delivery_sales, pulse)
+          )
 
-      {:ok, next,
-       if(status == "in_progress", do: {:decide, "advanced to day #{next_day}"}, else: :terminal)}
-    else
-      {:error, reason} -> reject(state, event, reason)
+        {:ok, next,
+         if(status == "in_progress",
+           do: {:decide, "advanced to day #{next_day}"},
+           else: :terminal
+         )}
+
+      {:error, reason} ->
+        reject(state, event, reason)
     end
   end
 

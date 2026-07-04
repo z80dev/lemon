@@ -287,7 +287,7 @@ defmodule LemonCli.Setup.Wizard do
 
       str ->
         case Integer.parse(str) do
-          {port, ""} when port > 0 and port <= 65535 -> port
+          {port, ""} when port > 0 and port <= 65_535 -> port
           _ -> default
         end
     end

@@ -40,7 +40,7 @@ defmodule Ai.CircuitBreakerConcurrencyTest do
       Process.sleep(50)
 
       # Circuit should be open (we exceeded threshold)
-      assert CircuitBreaker.is_open?(provider)
+      assert CircuitBreaker.open?(provider)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :open
@@ -177,7 +177,7 @@ defmodule Ai.CircuitBreakerConcurrencyTest do
       CircuitBreaker.record_failure(provider)
       Process.sleep(20)
 
-      assert CircuitBreaker.is_open?(provider)
+      assert CircuitBreaker.open?(provider)
 
       # Wait for half-open
       Process.sleep(60)
@@ -273,7 +273,7 @@ defmodule Ai.CircuitBreakerConcurrencyTest do
       end
 
       Process.sleep(20)
-      assert CircuitBreaker.is_open?(provider)
+      assert CircuitBreaker.open?(provider)
 
       # Try another request - should be rejected
       result = CallDispatcher.dispatch(provider, fn -> {:ok, "should not run"} end)

@@ -58,33 +58,34 @@ defmodule LemonSim.Examples.VendingBench.PhysicalWorker do
                      :ok <- AgentCore.wait_for_idle(agent, timeout: timeout_ms) do
                   safe_unsubscribe(unsubscribe)
 
-                  with {:ok, worker_state} <- flush_collector(collector) do
-                    tool_results = worker_state.tool_results
-                    raw_events = extract_events(tool_results)
-                    summary = build_summary(tool_results)
+                  case flush_collector(collector) do
+                    {:ok, worker_state} ->
+                      tool_results = worker_state.tool_results
+                      raw_events = extract_events(tool_results)
+                      summary = build_summary(tool_results)
 
-                    if worker_state.errors != [] and
-                         not Enum.any?(
-                           raw_events,
-                           &(event_kind(&1) == "physical_worker_finished")
-                         ) do
-                      {:error, {:worker_failed, worker_state.errors}}
-                    else
-                      events =
-                        raw_events
-                        |> ensure_started(instructions)
-                        |> ensure_finished(summary)
-                        |> normalize_event_order()
+                      if worker_state.errors != [] and
+                           not Enum.any?(
+                             raw_events,
+                             &(event_kind(&1) == "physical_worker_finished")
+                           ) do
+                        {:error, {:worker_failed, worker_state.errors}}
+                      else
+                        events =
+                          raw_events
+                          |> ensure_started(instructions)
+                          |> ensure_finished(summary)
+                          |> normalize_event_order()
 
-                      {:ok,
-                       %{
-                         events: events,
-                         summary: summary,
-                         tool_calls: format_tool_calls(tool_results),
-                         turn_count: worker_state.turn_count
-                       }}
-                    end
-                  else
+                        {:ok,
+                         %{
+                           events: events,
+                           summary: summary,
+                           tool_calls: format_tool_calls(tool_results),
+                           turn_count: worker_state.turn_count
+                         }}
+                      end
+
                     {:error, reason} ->
                       {:error, {:worker_failed, reason}}
                   end

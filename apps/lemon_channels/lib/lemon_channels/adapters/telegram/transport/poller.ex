@@ -67,20 +67,19 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Poller do
   end
 
   defp process_single_update(state, update, id, callbacks) do
-    with {:ok, normalized} <- Normalize.event(state, update, id) do
-      case maybe_transcribe_event(state, normalized, callbacks) do
-        {:ok, normalized} ->
-          {state, actions} = Pipeline.run(normalized, state)
-          ActionRunner.run(state, actions, callbacks)
+    case Normalize.event(state, update, id) do
+      {:ok, normalized} ->
+        case maybe_transcribe_event(state, normalized, callbacks) do
+          {:ok, normalized} ->
+            {state, actions} = Pipeline.run(normalized, state)
+            ActionRunner.run(state, actions, callbacks)
 
-        {:skip, new_state} ->
-          new_state
+          {:skip, new_state} ->
+            new_state
 
-        {:error, _reason} ->
-          state
-      end
-    else
-      {:skip, new_state} -> new_state
+          {:error, _reason} ->
+            state
+        end
       {:error, _reason} -> state
     end
   end

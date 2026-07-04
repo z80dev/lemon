@@ -160,7 +160,7 @@ defmodule LemonCore.ConfigCacheTest do
       """)
 
       # First call
-      config1 = ConfigCache.get(nil, mtime_check_interval_ms: 10000)
+      config1 = ConfigCache.get(nil, mtime_check_interval_ms: 10_000)
       assert config1.agent.default_model == "original-model"
 
       # Modify the file
@@ -186,7 +186,7 @@ defmodule LemonCore.ConfigCacheTest do
       """)
 
       # Load config
-      config1 = ConfigCache.get(nil, mtime_check_interval_ms: 10000)
+      config1 = ConfigCache.get(nil, mtime_check_interval_ms: 10_000)
       assert config1.agent.default_model == "cached-model"
 
       # Modify file
@@ -199,7 +199,7 @@ defmodule LemonCore.ConfigCacheTest do
       :ok = ConfigCache.invalidate(nil)
 
       # Next get should reload from disk
-      config2 = ConfigCache.get(nil, mtime_check_interval_ms: 10000)
+      config2 = ConfigCache.get(nil, mtime_check_interval_ms: 10_000)
       assert config2.agent.default_model == "new-model"
     end
 
