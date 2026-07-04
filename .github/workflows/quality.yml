@@ -51,6 +51,9 @@ jobs:
       - name: Compile
         run: mix compile --warnings-as-errors
 
+      - name: Check formatting
+        run: mix format --check-formatted
+
       - name: Guard against skipped ExUnit tests
         run: |
           if rg -n "@tag\\s+:skip|@tag\\s+skip:" apps --glob "*test*.exs"; then

@@ -15,7 +15,10 @@ defmodule Mix.Tasks.Lemon.Sim.Verify do
 
         case LemonSim.Bench.Artifacts.Verifier.verify_run(artifact_dir) do
           {:ok, %{legacy: true} = result} ->
-            Mix.shell().info("Verified #{get_in(result.manifest, ["sim", "id"])} run (legacy bundle)")
+            Mix.shell().info(
+              "Verified #{get_in(result.manifest, ["sim", "id"])} run (legacy bundle)"
+            )
+
             Mix.shell().info("Status: #{result.scorecard["status"]}")
 
             Mix.shell().error(

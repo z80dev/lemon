@@ -1,8 +1,10 @@
 # Architecture Overview
 
-Lemon is an AI coding assistant built as a distributed system of concurrent processes
-running on the BEAM (Erlang VM). This document covers the system architecture, key
-design decisions, and component responsibilities.
+Lemon is a BEAM-native stack for LLM interactions: a layered set of Elixir/OTP
+libraries (`ai` → `agent_core` → product apps) with two products on top — a
+multi-channel personal assistant and **LemonSim**, a deterministic
+model-vs-model simulation arena. This document covers the system architecture,
+key design decisions, and component responsibilities.
 
 For system diagrams see `docs/diagrams/`. For per-app details see each `apps/*/README.md`.
 
@@ -64,8 +66,8 @@ For system diagrams see `docs/diagrams/`. For per-app details see each `apps/*/R
 │ LemonCore             │ LemonSkills       │
 │  · EventBus           │  · skill catalog  │
 │  · MemoryStore        │  · audit engine   │
-│  · RoutingFeedback    │  · synthesis      │
-│  · TaskFingerprint    │  · installer      │
+│  · TaskFingerprint    │  · synthesis      │
+│  · Config/Secrets     │  · installer      │
 └───────────────────────┴──────────────────┘
          │
 ┌────────▼──────────────────────────────────┐
@@ -81,25 +83,48 @@ See `docs/diagrams/architecture.svg` for the full visual diagram.
 
 ## Application Map
 
-The project is an Elixir umbrella with 18+ applications:
+The project is an Elixir umbrella with 21 applications:
+
+**Stack (bottom-up):**
 
 | App | Role |
 |---|---|
-| `ai` | Provider abstraction, streaming, cost tracking |
+| `ai` | Provider abstraction, streaming, cost tracking (standalone; no umbrella deps) |
+| `lemon_core` | EventBus, MemoryStore, TaskFingerprint, config, secrets (standalone; no umbrella deps) |
 | `agent_core` | Core agent loop, tool execution, model runtime credential glue, abort/subagent semantics |
+
+**Assistant product:**
+
+| App | Role |
+|---|---|
 | `coding_agent` | Session management, compaction, JSONL persistence, tools |
 | `coding_agent_ui` | Debug RPC interface, TUI/Web bridge |
-| `lemon_core` | EventBus, MemoryStore, TaskFingerprint, config |
 | `lemon_router` | RunOrchestrator, ModelSelection, RoutingFeedbackStore, lane queues, policy engine |
 | `lemon_gateway` | Engine dispatch (native + CLI backends), execution lifecycle |
-| `lemon_channels` | Transport adapters: Telegram, Discord, X/Twitter |
+| `lemon_channels` | Transport adapters (Telegram, Discord, X/Twitter, WhatsApp), model policy |
 | `lemon_automation` | CronManager, HeartbeatManager, scheduled jobs |
 | `lemon_control_plane` | HTTP/WebSocket server, 112+ RPC methods |
 | `lemon_skills` | Skill catalog, manifest v2 parser, installer, audit, synthesis |
 | `lemon_mcp` | MCP protocol server |
-| `lemon_sim` | Simulation harness for development/testing |
-| `lemon_sim_ui` | Phoenix LiveView UI for simulation spectator/admin |
+| `lemon_cli` | Onboarding/setup/migration mix tasks and CLI glue |
 | `lemon_web` | React web frontend bridge |
+| `x_api` | X/Twitter HTTP client (leaf) |
+| `lemon_evals` | Eval harness for assistant behavior |
+
+**Capability apps (extracted from lemon_core):**
+
+| App | Role |
+|---|---|
+| `lemon_browser` | Local browser automation server, artifacts, route policy |
+| `lemon_media` | Media jobs, worker, supervisor |
+| `lemon_lsp` | LSP server manager |
+
+**Arena product:**
+
+| App | Role |
+|---|---|
+| `lemon_sim` | Deterministic model-vs-model simulation arena: event-sourced kernel, scenarios, verified benchmark artifacts |
+| `lemon_sim_ui` | Phoenix LiveView spectator/admin UI for the arena |
 
 ---
 
@@ -216,4 +241,4 @@ Current flags: `product_runtime`, `skills_hub_v2`, `skill_manifest_v2`,
 | [`docs/assistant_bootstrap_contract.md`](../assistant_bootstrap_contract.md) | Session bootstrap sequence |
 | `apps/*/README.md` | Per-application documentation |
 
-*Last reviewed: 2026-05-16*
+*Last reviewed: 2026-07-04*

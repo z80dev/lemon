@@ -318,15 +318,21 @@
     max_age_days: 30
   },
   %{
+    path: "docs/plans/lemon-exemplary-2026-07-04.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-07-04],
+    max_age_days: 30
+  },
+  %{
     path: "docs/plans/lemon-stack-reshape-2026-07-02.md",
     owner: "@z80",
     last_reviewed: ~D[2026-07-02],
-    max_age_days: 30
+    max_age_days: 365
   },
   %{
     path: "docs/architecture/overview.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-16],
+    last_reviewed: ~D[2026-07-04],
     max_age_days: 60
   },
   %{
