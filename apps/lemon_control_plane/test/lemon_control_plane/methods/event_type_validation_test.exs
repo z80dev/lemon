@@ -40,7 +40,7 @@ defmodule LemonControlPlane.Methods.EventTypeValidationTest do
       types = SystemEvent.allowed_event_types()
 
       assert is_list(types)
-      assert length(types) > 0
+      assert types != []
       assert Enum.all?(types, &is_binary/1)
     end
 
@@ -112,7 +112,7 @@ defmodule LemonControlPlane.Methods.EventTypeValidationTest do
       keys = ConfigGet.allowed_config_keys()
 
       assert is_list(keys)
-      assert length(keys) > 0
+      assert keys != []
     end
 
     test "returns nil for arbitrary keys not in allowed list" do

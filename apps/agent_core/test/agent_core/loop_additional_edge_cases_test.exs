@@ -178,7 +178,7 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
 
       # Should finalize with the partial message
       {:ok, messages} = EventStream.result(stream)
-      assert length(messages) >= 1
+      assert messages != []
     end
 
     test "handles stream with error event mid-stream" do
@@ -815,7 +815,7 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
       {:ok, messages} = EventStream.result(stream)
 
       # Should add new assistant message
-      assert length(messages) >= 1
+      assert messages != []
       final_assistant = Enum.find(messages, &match?(%AssistantMessage{}, &1))
       assert final_assistant != nil
     end
@@ -857,7 +857,7 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
       stream = Loop.agent_loop([user_message("Hi")], context, config, nil, nil, owner)
 
       {:ok, messages} = EventStream.result(stream)
-      assert length(messages) >= 1
+      assert messages != []
     end
 
     test "agent_loop_continue with custom owner" do
@@ -871,7 +871,7 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
       stream = Loop.agent_loop_continue(context, config, nil, nil, owner)
 
       {:ok, messages} = EventStream.result(stream)
-      assert length(messages) >= 0
+      assert is_list(messages)
     end
   end
 

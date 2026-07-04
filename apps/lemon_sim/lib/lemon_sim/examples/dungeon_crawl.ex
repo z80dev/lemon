@@ -342,8 +342,7 @@ defmodule LemonSim.Examples.DungeonCrawl do
 
     case Runner.run_until_terminal(state, modules(), run_opts) do
       {:ok, final_state} ->
-        IO.puts("Final state:")
-        IO.inspect(final_state.world)
+        IO.puts("Final state: #{inspect(final_state.world)}")
 
         if Keyword.get(run_opts, :persist?, true) do
           _ = Store.put_state(final_state)
@@ -352,8 +351,7 @@ defmodule LemonSim.Examples.DungeonCrawl do
         {:ok, final_state}
 
       {:error, reason} = error ->
-        IO.puts("Driver failed:")
-        IO.inspect(reason)
+        IO.puts("Driver failed: #{inspect(reason)}")
         error
     end
   end

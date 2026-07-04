@@ -60,8 +60,8 @@ defmodule Mix.Tasks.Lemon.Memory do
     config = Application.get_env(:lemon_core, LemonCore.MemoryStore, [])
 
     retention_days =
-      Keyword.get(config, :retention_ms, 30 * 24 * 3600_000)
-      |> then(&div(&1, 24 * 3600_000))
+      Keyword.get(config, :retention_ms, 30 * 24 * 3_600_000)
+      |> then(&div(&1, 24 * 3_600_000))
 
     max_per_scope = Keyword.get(config, :max_per_scope, 500)
 

@@ -1366,7 +1366,7 @@ defmodule LemonSim.Examples.VendingBenchTest do
     assert length(state.world.market_research_history) == 1
     assert length(state.world.supplier_quote_history) == 1
     assert state.world.refunds_paid > 0
-    assert length(state.world.customer_complaints) > 0
+    assert state.world.customer_complaints != []
 
     assert [%{metadata: %{kind: "quote", supplier_behavior: "honest_bulk"}}] =
              state.world.supplier_quote_history

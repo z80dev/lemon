@@ -68,6 +68,8 @@ defmodule LemonChannels.Adapters.ModelPolicyShared do
   @callback clear_legacy_thinking(legacy_key :: term()) :: term()
 
   defmacro __using__(_opts) do
+    # Shared adapter callbacks intentionally inject a broad implementation block.
+    # credo:disable-for-next-line Credo.Check.Refactor.LongQuoteBlocks
     quote location: :keep do
       @behaviour LemonChannels.Adapters.ModelPolicyShared
 

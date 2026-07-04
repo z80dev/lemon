@@ -75,44 +75,44 @@ defmodule LemonChannels.Adapters.WhatsApp.Outbound do
 
     peer = payload.peer
 
-    with {:ok, normalized} <- normalize_file_content(content) do
-      result =
-        normalized.files
-        |> Enum.with_index()
-        |> Enum.reduce_while({:ok, nil}, fn {file, idx}, _acc ->
-          transport_payload = %{
-            kind: :send_media,
-            jid: peer.id,
-            path: file.path,
-            caption: file.caption,
-            mime_type: file.mime_type,
-            reply_to_id: if(idx == 0, do: payload.reply_to, else: nil)
-          }
+    case normalize_file_content(content) do
+      {:ok, normalized} ->
+        result =
+          normalized.files
+          |> Enum.with_index()
+          |> Enum.reduce_while({:ok, nil}, fn {file, idx}, _acc ->
+            transport_payload = %{
+              kind: :send_media,
+              jid: peer.id,
+              path: file.path,
+              caption: file.caption,
+              mime_type: file.mime_type,
+              reply_to_id: if(idx == 0, do: payload.reply_to, else: nil)
+            }
 
-          case Transport.deliver(transport_payload) do
-            {:ok, result} ->
-              {:cont, {:ok, result}}
+            case Transport.deliver(transport_payload) do
+              {:ok, result} ->
+                {:cont, {:ok, result}}
 
-            {:error, reason} ->
-              Logger.warning(
-                "WhatsApp outbound file failed: peer_id=#{peer.id} " <>
-                  "path=#{file.path} reason=#{inspect(reason)}"
-              )
+              {:error, reason} ->
+                Logger.warning(
+                  "WhatsApp outbound file failed: peer_id=#{peer.id} " <>
+                    "path=#{file.path} reason=#{inspect(reason)}"
+                )
 
-              {:halt, {:error, reason}}
-          end
-        end)
+                {:halt, {:error, reason}}
+            end
+          end)
 
-      case result do
-        {:ok, _} ->
-          Logger.debug("WhatsApp outbound file sent successfully: peer_id=#{peer.id}")
+        case result do
+          {:ok, _} ->
+            Logger.debug("WhatsApp outbound file sent successfully: peer_id=#{peer.id}")
 
-        {:error, _} ->
-          :ok
-      end
+          {:error, _} ->
+            :ok
+        end
 
-      result
-    else
+        result
       {:error, reason} ->
         Logger.warning(
           "WhatsApp outbound file normalization failed: peer_id=#{payload.peer.id} " <>

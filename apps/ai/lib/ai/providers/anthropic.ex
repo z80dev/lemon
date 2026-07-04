@@ -1030,7 +1030,7 @@ defmodule Ai.Providers.Anthropic do
 
     # Add tools
     body =
-      if context.tools && length(context.tools) > 0 do
+      if context.tools && context.tools != [] do
         Map.put(body, "tools", convert_tools(context.tools, oauth_request?: oauth_request?))
       else
         body
@@ -1155,7 +1155,7 @@ defmodule Ai.Providers.Anthropic do
       |> Enum.map(&convert_user_content_block(&1, model))
       |> Enum.reject(&is_nil/1)
 
-    if length(blocks) > 0 do
+    if blocks != [] do
       %{
         "role" => "user",
         "content" => blocks
@@ -1173,7 +1173,7 @@ defmodule Ai.Providers.Anthropic do
       |> Enum.map(&convert_assistant_content_block(&1, oauth_request?))
       |> Enum.reject(&is_nil/1)
 
-    if length(blocks) > 0 do
+    if blocks != [] do
       %{
         "role" => "assistant",
         "content" => blocks

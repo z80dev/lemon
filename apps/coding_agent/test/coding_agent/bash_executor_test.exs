@@ -86,7 +86,7 @@ defmodule CodingAgent.BashExecutorTest do
       Agent.stop(agent)
 
       # Should have received at least some output chunks
-      assert length(chunks) > 0
+      assert chunks != []
       combined = Enum.join(chunks, "")
       assert combined =~ "line1"
       assert combined =~ "line2"

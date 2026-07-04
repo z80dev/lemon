@@ -451,7 +451,7 @@ defmodule AgentCore.ContextPropertyTest do
             keep_first_user: true
           )
 
-        if length(truncated) > 0 do
+        if truncated != [] do
           # First user message should be preserved if truncation happened
           first_user_in_original = Enum.find(messages_with_user, &(&1.role == :user))
           first_user_in_truncated = Enum.find(truncated, &(&1.role == :user))
@@ -1191,7 +1191,7 @@ defmodule AgentCore.ContextPropertyTest do
             keep_first_user: false
           )
 
-        if length(truncated) > 0 do
+        if truncated != [] do
           # Truncated messages should include some of the most recent messages
           # (may not be the absolute last due to char limits)
           max_index = Enum.map(truncated, & &1._test_index) |> Enum.max()
@@ -1434,7 +1434,7 @@ defmodule AgentCore.ContextPropertyTest do
 
     property "message with non-string/list content handled" do
       # Integer content (unexpected)
-      msg1 = %{role: :user, content: 12345}
+      msg1 = %{role: :user, content: 12_345}
       assert Context.estimate_size([msg1], nil) == 0
 
       # Atom content (unexpected)

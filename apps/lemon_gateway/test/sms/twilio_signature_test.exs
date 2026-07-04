@@ -200,7 +200,7 @@ defmodule LemonGateway.Sms.TwilioSignatureTest do
 
     test "returns false when auth_token is a non-string type" do
       sig = TwilioSignature.signature(@token, @url, %{})
-      assert TwilioSignature.valid?(12345, @url, %{}, sig) == false
+      assert TwilioSignature.valid?(12_345, @url, %{}, sig) == false
     end
 
     test "returns false when url is nil" do
@@ -220,7 +220,7 @@ defmodule LemonGateway.Sms.TwilioSignatureTest do
 
     test "returns false when url is a non-string type" do
       sig = TwilioSignature.signature(@token, @url, %{})
-      assert TwilioSignature.valid?(@token, 12345, %{}, sig) == false
+      assert TwilioSignature.valid?(@token, 12_345, %{}, sig) == false
     end
 
     test "returns false when provided signature is nil" do
@@ -236,7 +236,7 @@ defmodule LemonGateway.Sms.TwilioSignatureTest do
     end
 
     test "returns false when provided signature is a non-string type" do
-      assert TwilioSignature.valid?(@token, @url, %{}, 12345) == false
+      assert TwilioSignature.valid?(@token, @url, %{}, 12_345) == false
     end
 
     test "nil params treated as empty map" do

@@ -336,7 +336,7 @@ defmodule CodingAgent.Tools.Ls do
         truncated ->
           "\n[Showing #{length(entries)} of #{total_count} entries. Limit: #{max_entries}]"
 
-        length(entries) == 0 ->
+        entries == [] ->
           "\n(empty directory)"
 
         true ->

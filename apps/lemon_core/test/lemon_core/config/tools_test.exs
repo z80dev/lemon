@@ -108,7 +108,7 @@ defmodule LemonCore.Config.ToolsTest do
               "provider" => "brave"
             },
             "fetch" => %{
-              "max_chars" => 50000
+              "max_chars" => 50_000
             }
           },
           "wasm" => %{

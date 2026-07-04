@@ -114,7 +114,7 @@ defmodule LemonGateway.IntrospectionTest do
             String.contains?(evt.payload.thread_key, session_key)
         end)
 
-      assert length(thread_started) >= 1
+      assert thread_started != []
       [ts_evt | _] = thread_started
       assert ts_evt.engine == "lemon"
 
@@ -123,7 +123,7 @@ defmodule LemonGateway.IntrospectionTest do
         Introspection.list(run_id: run_id, limit: 20)
         |> Enum.filter(&(&1.event_type == :thread_message_dispatched))
 
-      assert length(dispatched_events) >= 1
+      assert dispatched_events != []
       [disp_evt | _] = dispatched_events
       assert disp_evt.engine == "lemon"
       assert is_integer(disp_evt.payload.queue_len)
@@ -165,7 +165,7 @@ defmodule LemonGateway.IntrospectionTest do
             String.contains?(evt.payload.thread_key, session_key)
         end)
 
-      assert length(terminated) >= 1
+      assert terminated != []
       [term_evt | _] = terminated
       assert term_evt.engine == "lemon"
       assert is_integer(term_evt.payload.queue_len)
@@ -202,7 +202,7 @@ defmodule LemonGateway.IntrospectionTest do
       events = Introspection.list(run_id: run_id, limit: 20)
       triggered = Enum.filter(events, &(&1.event_type == :scheduled_job_triggered))
 
-      assert length(triggered) >= 1
+      assert triggered != []
       [evt | _] = triggered
       assert evt.engine == "lemon"
       assert evt.payload.engine_id == "echo"
@@ -247,7 +247,7 @@ defmodule LemonGateway.IntrospectionTest do
             is_integer(evt.payload.max)
         end)
 
-      assert length(completed) >= 1
+      assert completed != []
       [evt | _] = completed
       assert evt.engine == "lemon"
     end

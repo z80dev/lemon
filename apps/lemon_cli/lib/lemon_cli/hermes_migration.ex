@@ -268,10 +268,10 @@ defmodule LemonCli.HermesMigration do
     source = Path.join(ctx.source_root, "config.yaml")
 
     if File.exists?(source) do
-      with {:ok, config} <- YamlElixir.read_from_file(source) do
-        target = Path.join(ctx.target_root, "config.toml")
-        patch_config_item(ctx, source, target, config || %{})
-      else
+      case YamlElixir.read_from_file(source) do
+        {:ok, config} ->
+          target = Path.join(ctx.target_root, "config.toml")
+          patch_config_item(ctx, source, target, config || %{})
         {:error, reason} ->
           item(
             "config",
@@ -801,17 +801,17 @@ defmodule LemonCli.HermesMigration do
   end
 
   defp session_docs(db_path) do
-    with {:ok, conn} <- Sqlite3.open(db_path) do
-      try do
-        conn
-        |> fetch_rows!(
-          "SELECT id, source, user_id, model, started_at, title FROM sessions ORDER BY started_at DESC LIMIT 100000"
-        )
-        |> Enum.map(&session_doc(conn, &1))
-      after
-        Sqlite3.close(conn)
-      end
-    else
+    case Sqlite3.open(db_path) do
+      {:ok, conn} ->
+        try do
+          conn
+          |> fetch_rows!(
+            "SELECT id, source, user_id, model, started_at, title FROM sessions ORDER BY started_at DESC LIMIT 100000"
+          )
+          |> Enum.map(&session_doc(conn, &1))
+        after
+          Sqlite3.close(conn)
+        end
       {:error, reason} -> raise "could not open Hermes state.db: #{inspect(reason)}"
     end
   end

@@ -11,6 +11,16 @@ import Config
 
 config :phoenix, :json_library, Jason
 
+config :logger, :default_formatter,
+  metadata: [
+    :session_id,
+    :original_message_count,
+    :restored_message_count,
+    :violations,
+    :sim_id,
+    :turn
+  ]
+
 # Lane concurrency caps for CodingAgent.LaneQueue
 # Keep main cap at 4 to stay within Telegram's per-chat rate limits.
 # Subagent and background_exec can be higher since they don't all

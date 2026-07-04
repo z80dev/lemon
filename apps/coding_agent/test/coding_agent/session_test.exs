@@ -732,7 +732,7 @@ defmodule CodingAgent.SessionTest do
       # Immediately check streaming state
       state = Session.get_state(session)
       # Note: streaming might complete very quickly with mocks
-      assert state.is_streaming == true or length(Session.get_messages(session)) > 0
+      assert state.is_streaming == true or Session.get_messages(session) != []
     end
 
     test "returns error when already streaming" do
@@ -761,7 +761,7 @@ defmodule CodingAgent.SessionTest do
       wait_for_streaming_complete(session)
 
       messages = Session.get_messages(session)
-      assert length(messages) >= 1
+      assert messages != []
     end
 
     test "increments turn_index on prompt" do
@@ -1142,7 +1142,7 @@ defmodule CodingAgent.SessionTest do
       wait_for_streaming_complete(session)
 
       messages_before = Session.get_messages(session)
-      assert length(messages_before) > 0
+      assert messages_before != []
 
       # Reset
       :ok = Session.reset(session)
@@ -1434,7 +1434,7 @@ defmodule CodingAgent.SessionTest do
       messages = Session.get_messages(session)
       # Should have at least one message (user message is included in prompt call,
       # assistant response may or may not be added depending on stream completion)
-      assert length(messages) >= 1
+      assert messages != []
     end
   end
 
@@ -1555,7 +1555,7 @@ defmodule CodingAgent.SessionTest do
                 false
             end)
 
-          assert length(error_calls) > 0
+          assert error_calls != []
       end
 
       CodingAgent.Test.MockUI.stop_tracker(tracker)
@@ -1693,7 +1693,7 @@ defmodule CodingAgent.SessionTest do
       agents = AgentCore.AgentRegistry.list_by_session(session_id)
 
       # Should have at least the main agent
-      assert length(agents) >= 1
+      assert agents != []
       assert Enum.any?(agents, fn {role, _index, _pid} -> role == :main end)
     end
 

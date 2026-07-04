@@ -123,7 +123,7 @@ defmodule LemonSim.Examples.IntelNetwork.Performance do
     if total_reports == 0, do: 0.0, else: Float.round(mole_reports / total_reports, 3)
   end
 
-  defp compute_propagation_efficiency(_players, intel_pool) when length(intel_pool) == 0, do: 0.0
+  defp compute_propagation_efficiency(_players, intel_pool) when intel_pool == [], do: 0.0
 
   defp compute_propagation_efficiency(players, intel_pool) do
     loyal_players =

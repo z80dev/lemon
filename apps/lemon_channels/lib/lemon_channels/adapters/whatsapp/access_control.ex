@@ -13,8 +13,8 @@ defmodule LemonChannels.Adapters.WhatsApp.AccessControl do
   def allowed?(config, jid, event) do
     cond do
       self_chat?(config, jid) -> false
-      is_group_jid?(jid) -> group_allowed?(config, jid) and not mention_gated?(config, jid, event)
-      is_dm_jid?(jid) -> dm_allowed?(config, jid)
+      group_jid?(jid) -> group_allowed?(config, jid) and not mention_gated?(config, jid, event)
+      dm_jid?(jid) -> dm_allowed?(config, jid)
       true -> false
     end
   end
@@ -62,12 +62,12 @@ defmodule LemonChannels.Adapters.WhatsApp.AccessControl do
   end
 
   @doc "Returns true if jid ends with @g.us (group JID)."
-  def is_group_jid?(jid) when is_binary(jid), do: String.ends_with?(jid, "@g.us")
-  def is_group_jid?(_), do: false
+  def group_jid?(jid) when is_binary(jid), do: String.ends_with?(jid, "@g.us")
+  def group_jid?(_), do: false
 
   @doc "Returns true if jid ends with @s.whatsapp.net (DM JID)."
-  def is_dm_jid?(jid) when is_binary(jid), do: String.ends_with?(jid, "@s.whatsapp.net")
-  def is_dm_jid?(_), do: false
+  def dm_jid?(jid) when is_binary(jid), do: String.ends_with?(jid, "@s.whatsapp.net")
+  def dm_jid?(_), do: false
 
   @doc "Extracts the phone number (or group id) from a JID by taking everything before @."
   def phone_from_jid(jid) when is_binary(jid) do

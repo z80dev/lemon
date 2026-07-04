@@ -182,7 +182,7 @@ defmodule Ai.Providers.GoogleShared do
       end
 
     has_text = text_content != ""
-    has_images = length(image_content) > 0
+    has_images = image_content != []
     supports_multimodal_response = String.contains?(model.id, "gemini-3")
 
     response_value =
@@ -451,7 +451,7 @@ defmodule Ai.Providers.GoogleShared do
       minimal: 128,
       low: 2048,
       medium: 8192,
-      high: 32768
+      high: 32_768
     }
   end
 
@@ -464,7 +464,7 @@ defmodule Ai.Providers.GoogleShared do
       minimal: 128,
       low: 2048,
       medium: 8192,
-      high: 24576
+      high: 24_576
     }
   end
 

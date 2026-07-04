@@ -160,7 +160,7 @@ defmodule AgentCore.TelemetryTest do
       telemetry_events = get_events(collector)
       detach_telemetry(handler_id)
 
-      assert length(telemetry_events) >= 1
+      assert telemetry_events != []
 
       for {event_name, _measurements, _metadata} <- telemetry_events do
         assert [:agent_core, :tool_result | _rest] = event_name
@@ -199,7 +199,7 @@ defmodule AgentCore.TelemetryTest do
           metadata.tool_call_id == "call_start_test"
         end)
 
-      assert length(matching_events) >= 1
+      assert matching_events != []
 
       {event_name, measurements, metadata} = hd(matching_events)
       assert event_name == [:agent_core, :tool_task, :start]
@@ -234,7 +234,7 @@ defmodule AgentCore.TelemetryTest do
           metadata.tool_call_id == "call_end_test"
         end)
 
-      assert length(matching_events) >= 1
+      assert matching_events != []
 
       {event_name, measurements, metadata} = hd(matching_events)
       assert event_name == [:agent_core, :tool_task, :end]
@@ -272,7 +272,7 @@ defmodule AgentCore.TelemetryTest do
           metadata.tool_call_id == "call_error_test"
         end)
 
-      assert length(matching_events) >= 1
+      assert matching_events != []
 
       {event_name, _measurements, metadata} = hd(matching_events)
       assert event_name == [:agent_core, :tool_task, :end]
@@ -319,7 +319,7 @@ defmodule AgentCore.TelemetryTest do
         end)
 
       # Should have :end event with is_error=true
-      assert length(end_events) >= 1
+      assert end_events != []
 
       {event_name, measurements, metadata} = hd(end_events)
       assert event_name == [:agent_core, :tool_task, :end]
@@ -404,7 +404,7 @@ defmodule AgentCore.TelemetryTest do
             metadata.tool_call_id == "tool_result_trusted_test"
         end)
 
-      assert length(matching_events) >= 1
+      assert matching_events != []
 
       {event_name, measurements, metadata} = hd(matching_events)
       assert event_name == [:agent_core, :tool_result, :emit]
@@ -457,7 +457,7 @@ defmodule AgentCore.TelemetryTest do
             metadata.tool_call_id == "tool_result_untrusted_test"
         end)
 
-      assert length(matching_events) >= 1
+      assert matching_events != []
 
       {event_name, measurements, metadata} = hd(matching_events)
       assert event_name == [:agent_core, :tool_result, :emit]
@@ -496,7 +496,7 @@ defmodule AgentCore.TelemetryTest do
             metadata.tool_call_id == "tool_result_error_test"
         end)
 
-      assert length(matching_events) >= 1
+      assert matching_events != []
 
       {_event_name, _measurements, metadata} = hd(matching_events)
       assert metadata.tool_name == "error_tool"
@@ -523,7 +523,7 @@ defmodule AgentCore.TelemetryTest do
       telemetry_events = get_events(collector)
       detach_telemetry(handler_id)
 
-      assert length(telemetry_events) >= 1
+      assert telemetry_events != []
 
       {event_name, measurements, metadata} = hd(telemetry_events)
       assert event_name == [:agent_core, :loop, :start]
@@ -548,7 +548,7 @@ defmodule AgentCore.TelemetryTest do
       telemetry_events = get_events(collector)
       detach_telemetry(handler_id)
 
-      assert length(telemetry_events) >= 1
+      assert telemetry_events != []
 
       {event_name, measurements, metadata} = hd(telemetry_events)
       assert event_name == [:agent_core, :loop, :end]
@@ -576,7 +576,7 @@ defmodule AgentCore.TelemetryTest do
       telemetry_events = get_events(collector)
       detach_telemetry(handler_id)
 
-      assert length(telemetry_events) >= 1
+      assert telemetry_events != []
 
       {event_name, measurements, metadata} = hd(telemetry_events)
       assert event_name == [:agent_core, :loop, :start]
@@ -615,7 +615,7 @@ defmodule AgentCore.TelemetryTest do
       telemetry_events = get_events(collector)
       detach_telemetry(handler_id)
 
-      assert length(telemetry_events) >= 1
+      assert telemetry_events != []
 
       {event_name, measurements, metadata} = hd(telemetry_events)
       assert event_name == [:agent_core, :loop, :end]
@@ -686,7 +686,7 @@ defmodule AgentCore.TelemetryTest do
           meta.tool_call_id == "meta_test_start"
         end)
 
-      assert length(matching) >= 1
+      assert matching != []
 
       {event_name, measurements, metadata} = hd(matching)
       assert event_name == [:agent_core, :tool_task, :start]
@@ -725,7 +725,7 @@ defmodule AgentCore.TelemetryTest do
           meta.tool_call_id == "meta_test_end"
         end)
 
-      assert length(matching) >= 1
+      assert matching != []
 
       {event_name, measurements, metadata} = hd(matching)
       assert event_name == [:agent_core, :tool_task, :end]
@@ -778,7 +778,7 @@ defmodule AgentCore.TelemetryTest do
           name == [:agent_core, :tool_task, :end] and meta.tool_call_id == "crash_error_test"
         end)
 
-      assert length(end_events) >= 1
+      assert end_events != []
 
       {event_name, measurements, metadata} = hd(end_events)
       assert event_name == [:agent_core, :tool_task, :end]
@@ -824,8 +824,8 @@ defmodule AgentCore.TelemetryTest do
           name == [:agent_core, :loop, :end]
         end)
 
-      assert length(start_events) >= 1
-      assert length(end_events) >= 1
+      assert start_events != []
+      assert end_events != []
     end
 
     test "multiple sequential tool calls emit separate telemetry events", %{
@@ -918,8 +918,8 @@ defmodule AgentCore.TelemetryTest do
       Agent.stop(collector2)
 
       # Both handlers should have received the event
-      assert length(events1) >= 1
-      assert length(events2) >= 1
+      assert events1 != []
+      assert events2 != []
 
       # Events should be the same
       assert hd(events1) == hd(events2)
@@ -939,7 +939,7 @@ defmodule AgentCore.TelemetryTest do
       _events = Loop.stream([user_message("Test")], context, config) |> Enum.to_list()
 
       events_before = get_events(collector)
-      assert length(events_before) >= 1
+      assert events_before != []
 
       # Detach handler
       detach_telemetry(handler_id)

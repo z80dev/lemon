@@ -91,7 +91,7 @@ defmodule CodingAgentTest do
     test "has default compaction settings" do
       settings = CodingAgent.load_settings("/tmp")
       assert settings.compaction_enabled == true
-      assert settings.reserve_tokens == 16384
+      assert settings.reserve_tokens == 16_384
     end
   end
 end

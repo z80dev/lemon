@@ -367,7 +367,7 @@ defmodule CodingAgent.MentionsTest do
       assert time_us < 1_000_000
 
       # Should find agents starting with "agent0" (001-099)
-      assert length(result) > 0
+      assert result != []
       assert Enum.all?(result, &String.starts_with?(&1, "agent0"))
     end
 

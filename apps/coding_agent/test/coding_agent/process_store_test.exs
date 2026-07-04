@@ -52,16 +52,16 @@ defmodule CodingAgent.ProcessStoreTest do
   describe "mark_running/2" do
     test "marks a process as running with OS PID" do
       process_id = ProcessStore.new_process(%{command: "echo test"})
-      assert :ok = ProcessStore.mark_running(process_id, 12345)
+      assert :ok = ProcessStore.mark_running(process_id, 12_345)
 
       assert {:ok, record, _} = ProcessStore.get(process_id)
       assert record.status == :running
-      assert record.os_pid == 12345
+      assert record.os_pid == 12_345
       assert is_integer(record.started_at)
     end
 
     test "returns ok for unknown process" do
-      assert :ok = ProcessStore.mark_running("unknown_process_id", 12345)
+      assert :ok = ProcessStore.mark_running("unknown_process_id", 12_345)
     end
   end
 
@@ -101,7 +101,7 @@ defmodule CodingAgent.ProcessStoreTest do
   describe "mark_completed/2" do
     test "marks a process as completed with exit code" do
       process_id = ProcessStore.new_process(%{command: "echo test"})
-      ProcessStore.mark_running(process_id, 12345)
+      ProcessStore.mark_running(process_id, 12_345)
 
       assert :ok = ProcessStore.mark_completed(process_id, 0)
 
@@ -119,7 +119,7 @@ defmodule CodingAgent.ProcessStoreTest do
   describe "mark_killed/1" do
     test "marks a process as killed" do
       process_id = ProcessStore.new_process(%{command: "echo test"})
-      ProcessStore.mark_running(process_id, 12345)
+      ProcessStore.mark_running(process_id, 12_345)
 
       assert :ok = ProcessStore.mark_killed(process_id)
 
@@ -136,7 +136,7 @@ defmodule CodingAgent.ProcessStoreTest do
   describe "mark_error/2" do
     test "marks a process as error with reason" do
       process_id = ProcessStore.new_process(%{command: "echo test"})
-      ProcessStore.mark_running(process_id, 12345)
+      ProcessStore.mark_running(process_id, 12_345)
 
       error = %{exit_code: 1, message: "Command failed"}
       assert :ok = ProcessStore.mark_error(process_id, error)
@@ -230,7 +230,7 @@ defmodule CodingAgent.ProcessStoreTest do
     test "removes old completed processes" do
       # Create a process and mark it completed
       process_id = ProcessStore.new_process(%{command: "echo test"})
-      ProcessStore.mark_running(process_id, 12345)
+      ProcessStore.mark_running(process_id, 12_345)
       ProcessStore.mark_completed(process_id, 0)
 
       # Manually set completed_at to be old
@@ -245,7 +245,7 @@ defmodule CodingAgent.ProcessStoreTest do
 
     test "keeps recent completed processes" do
       process_id = ProcessStore.new_process(%{command: "echo test"})
-      ProcessStore.mark_running(process_id, 12345)
+      ProcessStore.mark_running(process_id, 12_345)
       ProcessStore.mark_completed(process_id, 0)
 
       # Cleanup with 1 hour TTL should keep it
@@ -263,7 +263,7 @@ defmodule CodingAgent.ProcessStoreTest do
   describe "persistence" do
     test "processes survive server restart when DETS is available" do
       process_id = ProcessStore.new_process(%{command: "echo test"})
-      ProcessStore.mark_running(process_id, 12345)
+      ProcessStore.mark_running(process_id, 12_345)
       ProcessStore.append_log(process_id, "log line")
 
       # Simulate restart by clearing ETS
@@ -276,7 +276,7 @@ defmodule CodingAgent.ProcessStoreTest do
       case ProcessStore.get(process_id) do
         {:ok, record, logs} ->
           assert record.command == "echo test"
-          assert record.os_pid == 12345
+          assert record.os_pid == 12_345
           assert logs == ["log line"]
 
         {:error, :not_found} ->
@@ -287,7 +287,7 @@ defmodule CodingAgent.ProcessStoreTest do
 
     test "running processes are marked as lost on restart" do
       process_id = ProcessStore.new_process(%{command: "echo test"})
-      ProcessStore.mark_running(process_id, 12345)
+      ProcessStore.mark_running(process_id, 12_345)
 
       # Simulate restart by clearing ETS and reloading
       :ets.delete_all_objects(:coding_agent_processes)

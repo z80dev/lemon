@@ -1,4 +1,7 @@
 defmodule LemonSimUi.Live.Components.DungeonCrawlBoard do
+  @moduledoc """
+  Renders the Dungeon Crawl simulation board with party status, rooms, encounters, and inventory.
+  """
   use Phoenix.Component
 
   alias LemonCore.MapHelpers

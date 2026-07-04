@@ -108,7 +108,7 @@ defmodule LemonSkills.DiscoveryTest do
 
       assert is_list(results)
       assert length(results) <= 5
-      assert length(results) >= 1
+      assert results != []
     end
 
     test "respects max_results option" do
@@ -143,7 +143,7 @@ defmodule LemonSkills.DiscoveryTest do
 
       results = Discovery.discover("test", timeout: 5_000, max_results: 1)
 
-      assert length(results) > 0
+      assert results != []
       [first | _] = results
 
       # Check structure
@@ -369,7 +369,7 @@ defmodule LemonSkills.DiscoveryTest do
     test "can discover GitHub-related skills" do
       results = Discovery.discover("github", timeout: 10_000, max_results: 5)
 
-      if length(results) > 0 do
+      if results != [] do
         first = hd(results)
         assert first.source == :github
         assert is_number(get_in(first.entry.manifest, ["_discovery_metadata", "github_stars"]))

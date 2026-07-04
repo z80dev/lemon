@@ -125,28 +125,28 @@ defmodule LemonSkills.Tools.SearchMemory do
   end
 
   defp search_scope(query, scope, params, context, limit) when scope in [:session, :agent] do
-    with {:ok, scope_key} <- resolve_scope_key(scope, params, context) do
-      docs = context.search_fn.(query, scope: scope, scope_key: scope_key, limit: limit)
-      {:ok, docs, %{resolved_scopes: [scope]}}
-    else
+    case resolve_scope_key(scope, params, context) do
+      {:ok, scope_key} ->
+        docs = context.search_fn.(query, scope: scope, scope_key: scope_key, limit: limit)
+        {:ok, docs, %{resolved_scopes: [scope]}}
       {:error, message} -> {:error, message, %{}}
     end
   end
 
   defp search_scope(query, :project, params, context, limit) do
-    with {:ok, scope_key} <- resolve_scope_key(:project, params, context) do
-      docs = search_directory_scope(context, query, scope_key, limit)
-      {:ok, docs, %{resolved_scopes: [:project]}}
-    else
+    case resolve_scope_key(:project, params, context) do
+      {:ok, scope_key} ->
+        docs = search_directory_scope(context, query, scope_key, limit)
+        {:ok, docs, %{resolved_scopes: [:project]}}
       {:error, message} -> {:error, message, %{}}
     end
   end
 
   defp search_scope(query, :home, params, context, limit) do
-    with {:ok, scope_key} <- resolve_scope_key(:home, params, context) do
-      docs = search_directory_scope(context, query, scope_key, limit)
-      {:ok, docs, %{resolved_scopes: [:home]}}
-    else
+    case resolve_scope_key(:home, params, context) do
+      {:ok, scope_key} ->
+        docs = search_directory_scope(context, query, scope_key, limit)
+        {:ok, docs, %{resolved_scopes: [:home]}}
       {:error, message} -> {:error, message, %{}}
     end
   end

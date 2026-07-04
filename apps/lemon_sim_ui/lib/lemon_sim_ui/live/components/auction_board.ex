@@ -1,4 +1,7 @@
 defmodule LemonSimUi.Live.Components.AuctionBoard do
+  @moduledoc """
+  Renders the Auction simulation board with bidder state, item schedule, bids, and scoring context.
+  """
   use Phoenix.Component
 
   alias LemonCore.MapHelpers
@@ -60,7 +63,7 @@ defmodule LemonSimUi.Live.Components.AuctionBoard do
 
     just_sold =
       last_result != nil and
-        length(auction_results) > 0 and
+        auction_results != [] and
         status == "in_progress" and
         phase == "bidding" and
         high_bid == 0

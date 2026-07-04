@@ -229,7 +229,7 @@ defmodule Ai.CallDispatcherEdgeTest do
       Process.sleep(50)
 
       # Circuit should now be open
-      assert CircuitBreaker.is_open?(provider)
+      assert CircuitBreaker.open?(provider)
     end
 
     test "failures during half-open state reopen circuit immediately", %{provider: provider} do
@@ -246,11 +246,11 @@ defmodule Ai.CallDispatcherEdgeTest do
       CircuitBreaker.record_failure(provider)
       Process.sleep(20)
 
-      assert CircuitBreaker.is_open?(provider)
+      assert CircuitBreaker.open?(provider)
 
       # Wait for half-open state
       Process.sleep(120)
-      refute CircuitBreaker.is_open?(provider)
+      refute CircuitBreaker.open?(provider)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :half_open
@@ -259,7 +259,7 @@ defmodule Ai.CallDispatcherEdgeTest do
       CircuitBreaker.record_failure(provider)
       Process.sleep(20)
 
-      assert CircuitBreaker.is_open?(provider)
+      assert CircuitBreaker.open?(provider)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :open
@@ -289,7 +289,7 @@ defmodule Ai.CallDispatcherEdgeTest do
 
       Process.sleep(20)
 
-      assert CircuitBreaker.is_open?(provider)
+      assert CircuitBreaker.open?(provider)
     end
 
     test "mixed success and failure patterns", %{provider: provider} do
@@ -320,12 +320,12 @@ defmodule Ai.CallDispatcherEdgeTest do
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.failure_count == 2
-      refute CircuitBreaker.is_open?(provider)
+      refute CircuitBreaker.open?(provider)
 
       CallDispatcher.dispatch(provider, fn -> {:error, :nxdomain} end)
       Process.sleep(10)
 
-      assert CircuitBreaker.is_open?(provider)
+      assert CircuitBreaker.open?(provider)
     end
   end
 
@@ -377,7 +377,7 @@ defmodule Ai.CallDispatcherEdgeTest do
       # Circuit breaker failure count should not have increased
       {:ok, cb_state_after} = CircuitBreaker.get_state(provider)
       assert cb_state_after.failure_count == initial_failure_count
-      refute CircuitBreaker.is_open?(provider)
+      refute CircuitBreaker.open?(provider)
     end
 
     test "circuit opens while rate limiter has available capacity", %{provider: provider} do
@@ -399,7 +399,7 @@ defmodule Ai.CallDispatcherEdgeTest do
       # Rate limiter should still have capacity, but circuit is open
       {:ok, rl_state} = RateLimiter.get_state(provider)
       assert rl_state.available_tokens > 0
-      assert CircuitBreaker.is_open?(provider)
+      assert CircuitBreaker.open?(provider)
 
       # Requests should fail with circuit_open, not rate_limited
       assert {:error, :circuit_open} = CallDispatcher.dispatch(provider, fn -> {:ok, "test"} end)
@@ -451,13 +451,13 @@ defmodule Ai.CallDispatcherEdgeTest do
       CircuitBreaker.record_failure(cb_provider)
       CircuitBreaker.record_failure(cb_provider)
 
-      wait_until(fn -> CircuitBreaker.is_open?(cb_provider) end, 200)
+      wait_until(fn -> CircuitBreaker.open?(cb_provider) end, 200)
 
       # Wait for recovery
-      wait_until(fn -> not CircuitBreaker.is_open?(cb_provider) end, 1_200)
+      wait_until(fn -> not CircuitBreaker.open?(cb_provider) end, 1_200)
 
       # Circuit should be half-open (not open)
-      refute CircuitBreaker.is_open?(cb_provider)
+      refute CircuitBreaker.open?(cb_provider)
     end
   end
 
@@ -911,7 +911,7 @@ defmodule Ai.CallDispatcherEdgeTest do
 
     test "high contention stress test", %{provider: provider} do
       start_supervised!(
-        {RateLimiter, provider: provider, tokens_per_second: 10000, max_tokens: 1000}
+        {RateLimiter, provider: provider, tokens_per_second: 10_000, max_tokens: 1000}
       )
 
       start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 1000})

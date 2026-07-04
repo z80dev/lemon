@@ -1,4 +1,7 @@
 defmodule LemonSimUi.Live.Components.CourtroomBoard do
+  @moduledoc """
+  Renders the Courtroom simulation board with case progress, participants, evidence, and trial state.
+  """
   use Phoenix.Component
 
   alias LemonCore.MapHelpers

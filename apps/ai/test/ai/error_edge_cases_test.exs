@@ -196,7 +196,7 @@ defmodule Ai.ErrorEdgeCasesTest do
     test "handles error with numeric values" do
       body = %{
         "error" => %{
-          "code" => 12345,
+          "code" => 12_345,
           "message" => "Error with numeric code"
         }
       }
@@ -723,7 +723,7 @@ defmodule Ai.ErrorEdgeCasesTest do
       ]
 
       info = Error.extract_rate_limit_info(headers)
-      assert info.limit == 50000
+      assert info.limit == 50_000
     end
 
     test "handles duplicate headers (first one wins)" do
@@ -896,7 +896,7 @@ defmodule Ai.ErrorEdgeCasesTest do
 
     test "handles error with very far future reset_at" do
       # 1 day
-      far_future = DateTime.utc_now() |> DateTime.add(86400, :second)
+      far_future = DateTime.utc_now() |> DateTime.add(86_400, :second)
 
       error = %{
         status: 429,

@@ -1,4 +1,7 @@
 defmodule LemonSimUi.Live.Components.SpaceStationBoard do
+  @moduledoc """
+  Renders the Space Station simulation board with crew state, systems, tasks, and station incidents.
+  """
   use Phoenix.Component
 
   alias LemonCore.MapHelpers

@@ -868,14 +868,14 @@ defmodule LemonGateway.Engines.CodexEngineTest do
 
   describe "ChatScope struct" do
     test "creates scope with transport and chat_id" do
-      scope = %ChatScope{transport: :telegram, chat_id: 12345}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
       assert scope.transport == :telegram
-      assert scope.chat_id == 12345
+      assert scope.chat_id == 12_345
       assert scope.topic_id == nil
     end
 
     test "creates scope with optional topic_id" do
-      scope = %ChatScope{transport: :telegram, chat_id: 12345, topic_id: 99}
+      scope = %ChatScope{transport: :telegram, chat_id: 12_345, topic_id: 99}
       assert scope.topic_id == 99
     end
   end

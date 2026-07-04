@@ -81,11 +81,11 @@ defmodule LemonControlPlane.ACP do
   end
 
   def handle_jsonrpc(%{"id" => id}, _opts) do
-    {:ok, error_response(id, -32600, "invalid JSON-RPC request")}
+    {:ok, error_response(id, -32_600, "invalid JSON-RPC request")}
   end
 
   def handle_jsonrpc(_request, _opts),
-    do: {:ok, error_response(nil, -32600, "invalid JSON-RPC request")}
+    do: {:ok, error_response(nil, -32_600, "invalid JSON-RPC request")}
 
   def initialize(params) when is_map(params) do
     version = string_param(params, "protocolVersion", @protocol_version)
@@ -113,7 +113,7 @@ defmodule LemonControlPlane.ACP do
      }}
   end
 
-  def initialize(_params), do: {:error, -32602, "params must be an object"}
+  def initialize(_params), do: {:error, -32_602, "params must be an object"}
 
   def new_session(params, opts \\ [])
 
@@ -152,7 +152,7 @@ defmodule LemonControlPlane.ACP do
     end
   end
 
-  def new_session(_params, _opts), do: {:error, -32602, "params must be an object"}
+  def new_session(_params, _opts), do: {:error, -32_602, "params must be an object"}
 
   def resume_session(params, opts \\ [])
 
@@ -193,7 +193,7 @@ defmodule LemonControlPlane.ACP do
     end
   end
 
-  def resume_session(_params, _opts), do: {:error, -32602, "params must be an object"}
+  def resume_session(_params, _opts), do: {:error, -32_602, "params must be an object"}
 
   def list_sessions(params) when is_map(params) do
     cwd = Map.get(params, "cwd")
@@ -206,7 +206,7 @@ defmodule LemonControlPlane.ACP do
     {:ok, %{"sessions" => sessions}}
   end
 
-  def list_sessions(_params), do: {:error, -32602, "params must be an object"}
+  def list_sessions(_params), do: {:error, -32_602, "params must be an object"}
 
   def close_session(params) when is_map(params) do
     with {:ok, session_id} <- required_string(params, "sessionId") do
@@ -217,7 +217,7 @@ defmodule LemonControlPlane.ACP do
     end
   end
 
-  def close_session(_params), do: {:error, -32602, "params must be an object"}
+  def close_session(_params), do: {:error, -32_602, "params must be an object"}
 
   def cancel_session(params) when is_map(params) do
     with {:ok, session_id} <- required_string(params, "sessionId"),
@@ -227,7 +227,7 @@ defmodule LemonControlPlane.ACP do
     end
   end
 
-  def cancel_session(_params), do: {:error, -32602, "params must be an object"}
+  def cancel_session(_params), do: {:error, -32_602, "params must be an object"}
 
   def prompt(params, opts \\ [])
 
@@ -242,7 +242,7 @@ defmodule LemonControlPlane.ACP do
     end
   end
 
-  def prompt(_params, _opts), do: {:error, -32602, "params must be an object"}
+  def prompt(_params, _opts), do: {:error, -32_602, "params must be an object"}
 
   def session_update(session_id, %LemonCore.Event{} = event) when is_binary(session_id) do
     case event.type do
@@ -267,7 +267,7 @@ defmodule LemonControlPlane.ACP do
   defp dispatch("session/close", params, _opts), do: close_session(params)
   defp dispatch("session/cancel", params, _opts), do: cancel_session(params)
   defp dispatch("session/prompt", params, opts), do: prompt(params, opts)
-  defp dispatch(_method, _params, _opts), do: {:error, -32601, "method not found"}
+  defp dispatch(_method, _params, _opts), do: {:error, -32_601, "method not found"}
 
   defp submit_prompt(session_id, session, params, prompt) do
     queue_only? = lemon_meta(params, "wait") == false
@@ -319,7 +319,7 @@ defmodule LemonControlPlane.ACP do
          }}
 
       {:error, reason} ->
-        {:error, -32000, "failed to submit Lemon run: #{inspect(reason)}"}
+        {:error, -32_000, "failed to submit Lemon run: #{inspect(reason)}"}
     end
   end
 
@@ -343,13 +343,13 @@ defmodule LemonControlPlane.ACP do
          |> Map.put(:wait_result, wait_result)}
 
       {:error, {:timeout, message, _run_id}} ->
-        {:error, -32001, message}
+        {:error, -32_001, message}
 
       {:error, :timeout} ->
-        {:error, -32001, "Run did not complete within timeout"}
+        {:error, -32_001, "Run did not complete within timeout"}
 
       {:error, reason} ->
-        {:error, -32000, "failed to wait for Lemon run: #{inspect(reason)}"}
+        {:error, -32_000, "failed to wait for Lemon run: #{inspect(reason)}"}
     end
   end
 
@@ -378,7 +378,7 @@ defmodule LemonControlPlane.ACP do
   defp update_wait_loop(result, session_update_callback, client_request_callback, deadline_ms) do
     case remaining_timeout_ms(deadline_ms) do
       0 ->
-        {:error, -32001, "Run did not complete within timeout"}
+        {:error, -32_001, "Run did not complete within timeout"}
 
       timeout_ms ->
         receive do
@@ -413,7 +413,7 @@ defmodule LemonControlPlane.ACP do
             update_wait_loop(result, session_update_callback, client_request_callback, deadline_ms)
         after
           timeout_ms ->
-            {:error, -32001, "Run did not complete within timeout"}
+            {:error, -32_001, "Run did not complete within timeout"}
         end
     end
   end
@@ -774,10 +774,10 @@ defmodule LemonControlPlane.ACP do
         {:cont, {:ok, [resource_link_prompt(name, uri, block) | acc]}}
 
       %{"type" => type}, _acc when type in ["image", "audio", "resource"] ->
-        {:halt, {:error, -32602, "#{type} prompt blocks are not enabled in this preview"}}
+        {:halt, {:error, -32_602, "#{type} prompt blocks are not enabled in this preview"}}
 
       _block, _acc ->
-        {:halt, {:error, -32602, "prompt blocks must be text or resource_link content"}}
+        {:halt, {:error, -32_602, "prompt blocks must be text or resource_link content"}}
     end)
     |> case do
       {:ok, parts} ->
@@ -785,7 +785,7 @@ defmodule LemonControlPlane.ACP do
         |> Enum.reverse()
         |> Enum.join("\n")
         |> case do
-          "" -> {:error, -32602, "prompt must include text or resource_link content"}
+          "" -> {:error, -32_602, "prompt must include text or resource_link content"}
           prompt -> {:ok, prompt}
         end
 
@@ -811,20 +811,20 @@ defmodule LemonControlPlane.ACP do
   defp required_string(params, key) do
     case Map.get(params, key) do
       value when is_binary(value) and value != "" -> {:ok, value}
-      _ -> {:error, -32602, "#{key} is required"}
+      _ -> {:error, -32_602, "#{key} is required"}
     end
   end
 
   defp required_list(params, key) do
     case Map.get(params, key) do
       value when is_list(value) -> {:ok, value}
-      _ -> {:error, -32602, "#{key} must be an array"}
+      _ -> {:error, -32_602, "#{key} must be an array"}
     end
   end
 
   defp existing_session(session_id) do
     case get_session(session_id) do
-      nil -> {:error, -32602, "session not found"}
+      nil -> {:error, -32_602, "session not found"}
       session -> {:ok, session}
     end
   end

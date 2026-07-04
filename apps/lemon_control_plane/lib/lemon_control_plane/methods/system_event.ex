@@ -83,9 +83,9 @@ defmodule LemonControlPlane.Methods.SystemEvent do
       true ->
         case validate_and_convert_event_type(event_type) do
           {:ok, atom_type, is_custom} ->
-            with {:ok, topic} <- validate_target(target) do
-              emit_event(event_type, atom_type, payload, topic, ctx, is_custom)
-            else
+            case validate_target(target) do
+              {:ok, topic} ->
+                emit_event(event_type, atom_type, payload, topic, ctx, is_custom)
               {:error, reason} -> {:error, {:invalid_request, reason, nil}}
             end
 

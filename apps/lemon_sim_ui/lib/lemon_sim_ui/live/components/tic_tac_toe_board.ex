@@ -1,4 +1,7 @@
 defmodule LemonSimUi.Live.Components.TicTacToeBoard do
+  @moduledoc """
+  Renders the Tic Tac Toe simulation board with grid state, players, and outcome status.
+  """
   use Phoenix.Component
 
   alias LemonCore.MapHelpers

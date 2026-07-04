@@ -1444,7 +1444,7 @@ defmodule LemonCore.Doctor.ChecksTest do
     test "returns a check per binary" do
       checks = NodeTools.run()
       assert is_list(checks)
-      assert length(checks) >= 1
+      assert checks != []
     end
 
     test "git check is present" do

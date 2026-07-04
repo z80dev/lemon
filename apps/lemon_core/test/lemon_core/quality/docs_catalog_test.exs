@@ -146,7 +146,7 @@ defmodule LemonCore.Quality.DocsCatalogTest do
       repo_root = Path.expand("../../../../..", __DIR__)
       assert {:ok, entries} = DocsCatalog.load(root: repo_root)
       assert is_list(entries)
-      assert length(entries) > 0
+      assert entries != []
     end
 
     test "handles catalog with extra optional fields", %{harness: harness} do

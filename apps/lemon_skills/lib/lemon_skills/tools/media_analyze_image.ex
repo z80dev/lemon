@@ -421,7 +421,7 @@ defmodule LemonSkills.Tools.MediaAnalyzeImage do
         {:ok, response_body}
 
       {:ok, %{status: status, body: response_body}} ->
-        if is_transient_status(status) and remaining_retries > 0 do
+        if transient_status?(status) and remaining_retries > 0 do
           do_post_openai_analysis(runtime, url, request_opts, remaining_retries - 1)
         else
           {:error, {:openai_vision_http_error, status, provider_error_kind(response_body)}}
@@ -435,9 +435,9 @@ defmodule LemonSkills.Tools.MediaAnalyzeImage do
     end
   end
 
-  defp is_transient_status(status) when status in [408, 409, 425, 429], do: true
-  defp is_transient_status(status) when is_integer(status) and status >= 500, do: true
-  defp is_transient_status(_status), do: false
+  defp transient_status?(status) when status in [408, 409, 425, 429], do: true
+  defp transient_status?(status) when is_integer(status) and status >= 500, do: true
+  defp transient_status?(_status), do: false
 
   defp normalize_analysis_response(response, "json") when is_map(response) do
     text = response_text(response)

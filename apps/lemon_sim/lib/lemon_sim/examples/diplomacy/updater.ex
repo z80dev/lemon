@@ -419,7 +419,7 @@ defmodule LemonSim.Examples.Diplomacy.Updater do
 
     cond do
       # No one actually moves
-      length(contenders) == 0 ->
+      contenders == [] ->
         {territories, events, capture_history}
 
       # Single winner, beats defense

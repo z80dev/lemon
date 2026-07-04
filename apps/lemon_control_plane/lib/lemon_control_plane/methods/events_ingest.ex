@@ -77,9 +77,9 @@ defmodule LemonControlPlane.Methods.EventsIngest do
       true ->
         case validate_and_convert_event_type(event_type) do
           {:ok, atom_type, is_custom} ->
-            with {:ok, target} <- validate_target(target) do
-              ingest_event(event_type, atom_type, payload, target, is_custom)
-            else
+            case validate_target(target) do
+              {:ok, target} ->
+                ingest_event(event_type, atom_type, payload, target, is_custom)
               {:error, reason} -> {:error, Errors.invalid_request(reason)}
             end
 

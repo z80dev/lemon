@@ -106,7 +106,7 @@ defmodule Mix.Tasks.Lemon.Secrets.ImportEnvTest do
     end
 
     test "known_secrets list is non-empty" do
-      assert length(ImportEnv.known_secrets()) > 0
+      assert match?([_ | _], ImportEnv.known_secrets())
     end
   end
 

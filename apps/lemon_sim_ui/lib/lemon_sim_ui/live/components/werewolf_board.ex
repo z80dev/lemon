@@ -1,4 +1,7 @@
 defmodule LemonSimUi.Live.Components.WerewolfBoard do
+  @moduledoc """
+  Renders the Werewolf simulation board with player roles, phases, votes, claims, and elimination state.
+  """
   use Phoenix.Component
 
   alias LemonCore.MapHelpers
@@ -43,7 +46,7 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
 
     show_discussion_transcript =
       phase in ["day_discussion", "runoff_discussion", "day_voting", "runoff_voting"] ||
-        length(transcript) > 0
+        transcript != []
 
     alive_players =
       sorted_players |> Enum.filter(fn {_id, p} -> get_val(p, :status, "alive") == "alive" end)
@@ -309,18 +312,18 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
       <%!-- Background layer with phase art --%>
       <div class="absolute inset-0 z-0">
         <img
-          :if={is_night?(@phase)}
+          :if={night?(@phase)}
           src="/assets/werewolf/night_bg.png"
           class="w-full h-full object-cover opacity-30"
         />
         <img
-          :if={!is_night?(@phase) && @game_status != "game_over"}
+          :if={!night?(@phase) && @game_status != "game_over"}
           src="/assets/werewolf/day_bg.png"
           class="w-full h-full object-cover opacity-25"
         />
         <div class={[
           "absolute inset-0",
-          if(is_night?(@phase), do: "ww-phase-night", else: "ww-phase-day"),
+          if(night?(@phase), do: "ww-phase-night", else: "ww-phase-day"),
           if(@phase in ["day_voting", "runoff_voting"], do: "ww-phase-voting")
         ]}></div>
       </div>
@@ -333,11 +336,11 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
           <div class="flex items-center gap-2">
             <div class="ww-moon-float">
               <img
-                :if={is_night?(@phase)}
+                :if={night?(@phase)}
                 src="/assets/werewolf/moon.png"
                 class="w-6 h-6 rounded-full drop-shadow-[0_0_8px_rgba(147,197,253,0.6)]"
               />
-              <div :if={!is_night?(@phase)} class="w-6 h-6 rounded-full bg-gradient-to-br from-amber-300 to-orange-400 shadow-[0_0_12px_rgba(251,191,36,0.6)]"></div>
+              <div :if={!night?(@phase)} class="w-6 h-6 rounded-full bg-gradient-to-br from-amber-300 to-orange-400 shadow-[0_0_12px_rgba(251,191,36,0.6)]"></div>
             </div>
             <div>
               <div class="text-[9px] font-mono uppercase tracking-[0.15em] text-slate-500 font-bold leading-tight">
@@ -530,7 +533,7 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
               </div>
 
               <%!-- Dawn reveal: previous night summary shown at day start --%>
-              <div :if={!is_night?(@phase) && @game_status != "game_over" && length(@prev_night_summary) > 0}>
+              <div :if={!night?(@phase) && @game_status != "game_over" && length(@prev_night_summary) > 0}>
                 <.dawn_reveal
                   night_summary={@prev_night_summary}
                   day_number={@day_number}
@@ -539,7 +542,7 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
               </div>
 
               <%!-- Evidence tokens from the night --%>
-              <div :if={!is_night?(@phase) && length(@evidence_tokens) > 0} class="ww-dawn-suspense" style="animation-delay: 4500ms">
+              <div :if={!night?(@phase) && length(@evidence_tokens) > 0} class="ww-dawn-suspense" style="animation-delay: 4500ms">
                 <div class="flex items-center gap-2 py-2">
                   <div class="flex-1 h-px bg-gradient-to-r from-transparent via-yellow-500/20 to-transparent"></div>
                   <span class="text-[10px] font-mono uppercase tracking-[0.3em] text-yellow-400/60 font-bold">Evidence Found</span>
@@ -556,7 +559,7 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
               </div>
 
               <%!-- Wanderer results --%>
-              <div :if={!is_night?(@phase) && length(@wanderer_results) > 0} class="ww-dawn-suspense" style="animation-delay: 5000ms">
+              <div :if={!night?(@phase) && length(@wanderer_results) > 0} class="ww-dawn-suspense" style="animation-delay: 5000ms">
                 <%= for result <- Enum.filter(@wanderer_results, fn r -> get_val(r, :day, 0) == @day_number - 1 end) do %>
                   <div class="flex items-center gap-2 px-3 py-2 rounded-lg border border-indigo-900/20 bg-indigo-950/10 text-xs">
                     <span class="text-indigo-400">&#x1F6B6;</span>
@@ -567,7 +570,7 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
               </div>
 
               <%!-- Village event banner --%>
-              <div :if={@current_village_event && !is_night?(@phase)} class="ww-fade-in">
+              <div :if={@current_village_event && !night?(@phase)} class="ww-fade-in">
                 <div class="flex items-center gap-2 py-2">
                   <div class="flex-1 h-px bg-gradient-to-r from-transparent via-orange-500/20 to-transparent"></div>
                   <span class="text-[10px] font-mono uppercase tracking-[0.3em] text-orange-400/60 font-bold">Village Event</span>
@@ -1697,12 +1700,12 @@ defmodule LemonSimUi.Live.Components.WerewolfBoard do
 
   defp get_val(_, _, default), do: default
 
-  defp is_night?("night"), do: true
-  defp is_night?("wolf_discussion"), do: true
-  defp is_night?("last_words_night"), do: true
-  defp is_night?("meeting_selection"), do: false
-  defp is_night?("private_meeting"), do: false
-  defp is_night?(_), do: false
+  defp night?("night"), do: true
+  defp night?("wolf_discussion"), do: true
+  defp night?("last_words_night"), do: true
+  defp night?("meeting_selection"), do: false
+  defp night?("private_meeting"), do: false
+  defp night?(_), do: false
 
   defp phase_label("night"), do: "Nightfall"
   defp phase_label("wolf_discussion"), do: "Wolf Den"

@@ -377,7 +377,7 @@ defmodule LemonRouter.RunProcess do
       SurfaceManager.prepare_status_action(state, action_ev)
 
     state =
-      if state.saw_delta and is_tool_start?(action_ev) and capture_current_turn? do
+      if state.saw_delta and tool_start?(action_ev) and capture_current_turn? do
         SurfaceManager.handoff_answer_to_status(state, tool_status_surface)
         %{state | saw_delta: false}
       else
@@ -916,12 +916,12 @@ defmodule LemonRouter.RunProcess do
 
   defp runtime_run_pid(_, _), do: nil
 
-  defp is_tool_start?(action_ev) when is_map(action_ev) do
+  defp tool_start?(action_ev) when is_map(action_ev) do
     phase = Map.get(action_ev, :phase) || Map.get(action_ev, "phase")
     phase in [:started, "started"]
   end
 
-  defp is_tool_start?(_), do: false
+  defp tool_start?(_), do: false
 
   @spec gateway_submit_retry_delay_ms(non_neg_integer()) :: non_neg_integer()
   defp gateway_submit_retry_delay_ms(attempt) when is_integer(attempt) and attempt >= 0 do

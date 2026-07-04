@@ -295,7 +295,7 @@ defmodule AgentCore.LoopEdgeCasesTest do
         Loop.agent_loop([user_message("Test")], context, config, nil, nil)
         |> EventStream.result()
 
-      assert length(messages) >= 1
+      assert messages != []
     end
 
     test "handles special characters in messages" do
@@ -342,7 +342,7 @@ defmodule AgentCore.LoopEdgeCasesTest do
       # All should succeed
       for result <- results do
         assert {:ok, messages} = result
-        assert length(messages) >= 1
+        assert messages != []
       end
     end
 

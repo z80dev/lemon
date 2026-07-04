@@ -587,7 +587,7 @@ defmodule LemonGateway.TransportSupervisorTest do
           id == __MODULE__.MockTelegramTransportSupervisor
         end)
 
-      assert length(transport_children) == 0
+      assert transport_children == []
     end
   end
 
@@ -722,7 +722,7 @@ defmodule LemonGateway.TransportSupervisorTest do
           end)
         end
 
-      results = Task.await_many(tasks, 10000)
+      results = Task.await_many(tasks, 10_000)
       assert Enum.all?(results, &(&1 in [:pong, :no_process]))
     end
   end

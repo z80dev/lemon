@@ -239,7 +239,7 @@ defmodule AgentCore.EventStreamEdgeCasesTest do
       for task <- event_consumers do
         events = Task.await(task, 1000)
         # Each consumer should have at least some events or the terminal
-        assert length(events) > 0
+        assert events != []
       end
     end
 
@@ -364,7 +364,7 @@ defmodule AgentCore.EventStreamEdgeCasesTest do
         |> List.flatten()
         |> Enum.filter(&match?({:canceled, :owner_down}, &1))
 
-      assert length(canceled_events) >= 1,
+      assert canceled_events != [],
              "Expected at least one consumer to receive canceled event"
     end
 

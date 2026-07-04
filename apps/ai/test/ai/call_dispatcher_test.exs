@@ -273,7 +273,7 @@ defmodule Ai.CallDispatcherTest do
       start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 5})
 
       # Circuit should be closed (not open)
-      refute CircuitBreaker.is_open?(provider)
+      refute CircuitBreaker.open?(provider)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :closed
@@ -283,7 +283,7 @@ defmodule Ai.CallDispatcherTest do
       start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 3})
 
       # Circuit should start closed
-      refute CircuitBreaker.is_open?(provider)
+      refute CircuitBreaker.open?(provider)
 
       # Record failures
       CircuitBreaker.record_failure(provider)
@@ -291,13 +291,13 @@ defmodule Ai.CallDispatcherTest do
       Process.sleep(10)
 
       # Still closed (only 2 failures)
-      refute CircuitBreaker.is_open?(provider)
+      refute CircuitBreaker.open?(provider)
 
       # Third failure should open the circuit
       CircuitBreaker.record_failure(provider)
       Process.sleep(10)
 
-      assert CircuitBreaker.is_open?(provider)
+      assert CircuitBreaker.open?(provider)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :open
@@ -314,13 +314,13 @@ defmodule Ai.CallDispatcherTest do
       CircuitBreaker.record_failure(provider)
       Process.sleep(20)
 
-      assert CircuitBreaker.is_open?(provider)
+      assert CircuitBreaker.open?(provider)
 
       # Wait for recovery timeout
       Process.sleep(220)
 
       # Should transition to half_open (not open)
-      refute CircuitBreaker.is_open?(provider)
+      refute CircuitBreaker.open?(provider)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :half_open
@@ -336,12 +336,12 @@ defmodule Ai.CallDispatcherTest do
       CircuitBreaker.record_failure(provider)
       Process.sleep(20)
 
-      assert CircuitBreaker.is_open?(provider)
+      assert CircuitBreaker.open?(provider)
 
       # Wait for half_open
       Process.sleep(220)
 
-      refute CircuitBreaker.is_open?(provider)
+      refute CircuitBreaker.open?(provider)
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :half_open
 

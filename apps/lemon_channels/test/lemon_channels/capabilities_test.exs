@@ -235,7 +235,7 @@ defmodule LemonChannels.CapabilitiesTest do
     test "returns messaging set" do
       caps = Capabilities.set(:messaging)
 
-      assert length(caps) > 0
+      assert caps != []
       assert Enum.any?(caps, &(&1.type == :threads))
       assert Enum.any?(caps, &(&1.type == :reactions))
     end

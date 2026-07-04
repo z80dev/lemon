@@ -34,7 +34,7 @@ defmodule LemonSim.Examples.TcgShopTest do
     assert Map.has_key?(world.catalog, "one_piece_booster_box")
     assert Map.has_key?(world.catalog, "dragon_ball_fusion_box")
     assert world.singles_case.cards_on_hand > 0
-    assert length(world.release_calendar) > 0
+    assert world.release_calendar != []
     assert world.operations.staff_hours_remaining == 10.0
     assert world.supplier_credit_limit == 2500.0
     assert world.supplier_accounts["gts_distribution"].standing == 55
@@ -165,7 +165,7 @@ defmodule LemonSim.Examples.TcgShopTest do
              }
            ] = advanced.world.overhead_history
 
-    assert length(advanced.world.sales_history) > 0
+    assert advanced.world.sales_history != []
 
     scorecard = Performance.scorecard(advanced.world)
     assert scorecard.fixed_overhead == 155.0
@@ -1166,7 +1166,7 @@ defmodule LemonSim.Examples.TcgShopTest do
     assert {:ok, advanced, _} =
              Updater.apply_event(state, Events.wait_next_day("close register"), [])
 
-    assert length(advanced.world.shrinkage_history) > 0
+    assert advanced.world.shrinkage_history != []
 
     assert Enum.all?(
              advanced.world.shrinkage_history,
@@ -2002,22 +2002,22 @@ defmodule LemonSim.Examples.TcgShopTest do
                artifact_dir: artifact_dir
              )
 
-    assert length(state.world.buylist_history) > 0
-    assert length(state.world.grading_history) > 0
-    assert length(state.world.tournament_history) > 0
-    assert length(state.world.research_history) > 0
-    assert length(state.world.sealed_opening_history) > 0
-    assert length(state.world.pack_preparation_history) > 0
-    assert length(state.world.pack_sale_history) > 0
-    assert length(state.world.special_order_history) > 0
-    assert length(state.world.special_order_fulfillment_history) > 0
-    assert length(state.world.staffing_history) > 0
-    assert length(state.world.loss_prevention_history) > 0
-    assert length(state.world.online_channel_history) > 0
-    assert length(state.world.delivery_receipt_history) > 0
-    assert length(state.world.supplier_claim_history) > 0
-    assert length(state.world.return_history) > 0
-    assert length(state.world.cash_handling_history) > 0
+    assert state.world.buylist_history != []
+    assert state.world.grading_history != []
+    assert state.world.tournament_history != []
+    assert state.world.research_history != []
+    assert state.world.sealed_opening_history != []
+    assert state.world.pack_preparation_history != []
+    assert state.world.pack_sale_history != []
+    assert state.world.special_order_history != []
+    assert state.world.special_order_fulfillment_history != []
+    assert state.world.staffing_history != []
+    assert state.world.loss_prevention_history != []
+    assert state.world.online_channel_history != []
+    assert state.world.delivery_receipt_history != []
+    assert state.world.supplier_claim_history != []
+    assert state.world.return_history != []
+    assert state.world.cash_handling_history != []
     assert Enum.any?(state.world.cash_handling_history, &(&1.type == "bank_deposit"))
     assert Enum.any?(state.world.cash_handling_history, &(&1.type == "cash_reconciliation"))
 

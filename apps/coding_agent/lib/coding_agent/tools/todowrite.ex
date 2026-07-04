@@ -1,6 +1,6 @@
 defmodule CodingAgent.Tools.TodoWrite do
   @moduledoc """
-  Todo write tool for the coding agent.
+  Task-list write tool for the coding agent.
 
   Stores a todo list for the current session.
   """

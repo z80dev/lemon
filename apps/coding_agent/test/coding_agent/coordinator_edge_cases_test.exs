@@ -101,7 +101,7 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
     test "coordinator process dies if started with invalid cwd type", %{tmp_dir: _tmp_dir} do
       result =
         Coordinator.start_link(
-          cwd: 12345,
+          cwd: 12_345,
           model: mock_model()
         )
 

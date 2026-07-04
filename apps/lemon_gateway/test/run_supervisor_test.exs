@@ -985,7 +985,7 @@ defmodule LemonGateway.RunSupervisorTest do
 
     test "handles job with long text" do
       scope = make_scope()
-      long_text = String.duplicate("a", 10000)
+      long_text = String.duplicate("a", 10_000)
       job = make_job(scope, text: long_text)
 
       {:ok, pid} = RunSupervisor.start_run(make_request(job))

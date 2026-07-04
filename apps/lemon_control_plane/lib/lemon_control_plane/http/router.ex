@@ -355,7 +355,7 @@ defmodule LemonControlPlane.HTTP.Router do
         json(conn, status, %{
           "jsonrpc" => "2.0",
           "id" => nil,
-          "error" => %{"code" => -32010, "message" => message}
+          "error" => %{"code" => -32_010, "message" => message}
         })
     end
   end

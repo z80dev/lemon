@@ -1,4 +1,7 @@
 defmodule LemonSimUi.Live.Components.LegislatureBoard do
+  @moduledoc """
+  Renders the Legislature simulation board with bills, caucuses, votes, and procedural state.
+  """
   use Phoenix.Component
 
   alias LemonCore.MapHelpers

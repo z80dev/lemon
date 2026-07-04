@@ -82,7 +82,7 @@ defmodule LemonSim.Examples.SupplyChainUpdaterTest do
         message_log: [],
         consumer_demand: 0,
         demand_history: [],
-        demand_seed: 12345,
+        demand_seed: 12_345,
         costs: %{
           holding_cost_per_unit: 0.5,
           stockout_penalty_per_unit: 2.0,

@@ -161,7 +161,7 @@ defmodule CodingAgent.SessionBackpressureTest do
       events = collect_events_until_end(stream)
 
       # Should have received session events
-      assert length(events) > 0
+      assert events != []
 
       # Session events should be in session_event format (last event is terminal {:agent_end, []})
       session_events =
@@ -171,7 +171,7 @@ defmodule CodingAgent.SessionBackpressureTest do
         end)
 
       # We should have at least some session events
-      assert length(session_events) > 0
+      assert session_events != []
     end
 
     @tag :tmp_dir
@@ -396,7 +396,7 @@ defmodule CodingAgent.SessionBackpressureTest do
       # Stream subscriber should also receive events
       wait_for_streaming_complete(session)
       events = collect_events_until_end(stream)
-      assert length(events) > 0
+      assert events != []
     end
 
     @tag :tmp_dir
@@ -416,8 +416,8 @@ defmodule CodingAgent.SessionBackpressureTest do
       events1 = collect_events_until_end(stream1)
       events2 = collect_events_until_end(stream2)
 
-      assert length(events1) > 0
-      assert length(events2) > 0
+      assert events1 != []
+      assert events2 != []
     end
   end
 end

@@ -807,7 +807,7 @@ defmodule AgentCore.AgentQueueTest do
 
       state = CoreAgent.get_state(agent)
       # Should have processed messages
-      assert length(state.messages) >= 1
+      assert state.messages != []
     end
 
     test "clearing steering queue doesn't affect follow-up queue" do

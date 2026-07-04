@@ -358,7 +358,7 @@ defmodule Ai.Models do
     minimal: 1024,
     low: 2048,
     medium: 8192,
-    high: 16384
+    high: 16_384
   }
 
   @doc """

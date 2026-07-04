@@ -66,6 +66,8 @@ defmodule CodingAgent.Session do
   # State
   # ============================================================================
 
+  # Session owns runtime state across transport, prompt, tool, and persistence subsystems.
+  # credo:disable-for-next-line Credo.Check.Warning.StructFieldAmount
   defstruct [
     :agent,
     :session_manager,

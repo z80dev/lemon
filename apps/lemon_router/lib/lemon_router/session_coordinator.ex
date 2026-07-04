@@ -93,9 +93,9 @@ defmodule LemonRouter.SessionCoordinator do
 
   @spec active_run(term()) :: {:ok, binary()} | :none
   def active_run(conversation_key) do
-    with {:ok, pid} <- whereis(conversation_key) do
-      GenServer.call(pid, :active_run)
-    else
+    case whereis(conversation_key) do
+      {:ok, pid} ->
+        GenServer.call(pid, :active_run)
       _ -> :none
     end
   end

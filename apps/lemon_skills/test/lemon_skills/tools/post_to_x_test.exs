@@ -78,6 +78,6 @@ defmodule LemonSkills.Tools.PostToXTest do
     assert %AgentToolResult{
              details: %{error: "Parameter 'reply_to' must be a string"}
            } =
-             PostToX.execute("call-4", %{"text" => "hello", "reply_to" => 12345}, nil, nil)
+             PostToX.execute("call-4", %{"text" => "hello", "reply_to" => 12_345}, nil, nil)
   end
 end

@@ -226,7 +226,7 @@ defmodule AgentCore.Loop do
 
     last_message = List.last(context.messages)
 
-    if is_assistant_message?(last_message) do
+    if assistant_message?(last_message) do
       raise ArgumentError, "Cannot continue from message role: assistant"
     end
 
@@ -782,9 +782,9 @@ defmodule AgentCore.Loop do
     get_fn.() || []
   end
 
-  defp is_assistant_message?(%AssistantMessage{}), do: true
-  defp is_assistant_message?(%{role: :assistant}), do: true
-  defp is_assistant_message?(_), do: false
+  defp assistant_message?(%AssistantMessage{}), do: true
+  defp assistant_message?(%{role: :assistant}), do: true
+  defp assistant_message?(_), do: false
 
   defp get_tool_calls(%AssistantMessage{content: content}) do
     Enum.filter(content, fn

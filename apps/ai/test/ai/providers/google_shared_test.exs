@@ -633,7 +633,7 @@ defmodule Ai.Providers.GoogleSharedTest do
       assert budgets[:minimal] == 128
       assert budgets[:low] == 2048
       assert budgets[:medium] == 8192
-      assert budgets[:high] == 32768
+      assert budgets[:high] == 32_768
     end
   end
 
@@ -643,7 +643,7 @@ defmodule Ai.Providers.GoogleSharedTest do
       assert budgets[:minimal] == 128
       assert budgets[:low] == 2048
       assert budgets[:medium] == 8192
-      assert budgets[:high] == 24576
+      assert budgets[:high] == 24_576
     end
 
     test "flash high budget differs from pro" do
@@ -655,7 +655,7 @@ defmodule Ai.Providers.GoogleSharedTest do
   describe "get_thinking_budget/3" do
     test "uses custom budget when present" do
       m = model(id: "gemini-2.5-pro")
-      assert GoogleShared.get_thinking_budget(m, :high, %{high: 99999}) == 99999
+      assert GoogleShared.get_thinking_budget(m, :high, %{high: 99_999}) == 99_999
     end
 
     test "uses 2.5 pro defaults for pro model" do
@@ -665,7 +665,7 @@ defmodule Ai.Providers.GoogleSharedTest do
 
     test "uses 2.5 flash defaults for flash model" do
       m = model(id: "gemini-2.5-flash")
-      assert GoogleShared.get_thinking_budget(m, :high, %{}) == 24576
+      assert GoogleShared.get_thinking_budget(m, :high, %{}) == 24_576
     end
 
     test "returns -1 for unknown model" do
@@ -786,12 +786,12 @@ defmodule Ai.Providers.GoogleSharedTest do
       delay =
         GoogleShared.extract_retry_delay("some error", %{"x-ratelimit-reset-after" => "10.0"})
 
-      assert delay == 11000
+      assert delay == 11_000
     end
 
     test "extracts seconds from 'quota will reset after Xs' pattern" do
       delay = GoogleShared.extract_retry_delay("Your quota will reset after 39s")
-      assert delay == 40000
+      assert delay == 40_000
     end
 
     test "extracts hours/minutes/seconds from 'quota will reset after XhYmZs'" do

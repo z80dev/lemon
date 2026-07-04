@@ -130,10 +130,8 @@ case Req.post("https://api.x.com/2/oauth2/token", body: body, headers: headers) 
     IO.puts("Then run: mix run scripts/x_api_test.exs")
 
   {:ok, %{status: status, body: body}} ->
-    IO.puts("❌ Error HTTP #{status}:")
-    IO.inspect(body)
+    IO.puts("❌ Error HTTP #{status}: #{inspect(body)}")
 
   {:error, reason} ->
-    IO.puts("❌ Request failed:")
-    IO.inspect(reason)
+    IO.puts("❌ Request failed: #{inspect(reason)}")
 end

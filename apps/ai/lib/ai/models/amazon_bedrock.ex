@@ -56,7 +56,7 @@ defmodule Ai.Models.AmazonBedrock do
       input: [:text, :image],
       cost: %ModelCost{input: 2.5, output: 12.5, cache_read: 0.0, cache_write: 0.0},
       context_window: 1_000_000,
-      max_tokens: 16384
+      max_tokens: 16_384
     },
     "amazon.nova-pro-v1:0" => %Model{
       id: "amazon.nova-pro-v1:0",

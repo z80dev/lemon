@@ -99,7 +99,7 @@ defmodule AgentCore.ContextTest do
       events = get_events(collector)
       detach_telemetry(handler_id)
 
-      assert length(events) >= 1
+      assert events != []
 
       {event_name, measurements, metadata} = hd(events)
       assert event_name == [:agent_core, :context, :size]
@@ -210,7 +210,7 @@ defmodule AgentCore.ContextTest do
       events = get_events(collector)
       detach_telemetry(handler_id)
 
-      assert length(events) >= 1
+      assert events != []
 
       {event_name, measurements, metadata} = hd(events)
       assert event_name == [:agent_core, :context, :warning]
@@ -233,7 +233,7 @@ defmodule AgentCore.ContextTest do
       events = get_events(collector)
       detach_telemetry(handler_id)
 
-      assert length(events) >= 1
+      assert events != []
 
       {_event_name, _measurements, metadata} = hd(events)
       assert metadata.level == :critical
@@ -343,7 +343,7 @@ defmodule AgentCore.ContextTest do
       detach_telemetry(handler_id)
 
       if dropped > 0 do
-        assert length(events) >= 1
+        assert events != []
 
         {event_name, measurements, metadata} = hd(events)
         assert event_name == [:agent_core, :context, :truncated]
@@ -546,7 +546,7 @@ defmodule AgentCore.ContextTest do
     end
 
     test "handles message with integer content (unexpected type)" do
-      msg = %{role: :user, content: 12345}
+      msg = %{role: :user, content: 12_345}
       assert Context.estimate_size([msg], nil) == 0
     end
 
@@ -874,7 +874,7 @@ defmodule AgentCore.ContextTest do
       {truncated, dropped} = Context.truncate(messages, max_chars: 1, max_messages: 100)
 
       # First user message is preserved regardless of max_chars
-      assert length(truncated) >= 1
+      assert truncated != []
       assert dropped >= 1
       first = hd(truncated)
       assert Map.get(first, :content) == "Hello"
@@ -890,7 +890,7 @@ defmodule AgentCore.ContextTest do
         Context.truncate(messages, max_chars: 0, max_messages: 100, keep_first_user: false)
 
       # With 0 max_chars and no first user preservation, should drop everything
-      assert length(truncated) == 0
+      assert truncated == []
       assert dropped == 2
     end
 
@@ -905,7 +905,7 @@ defmodule AgentCore.ContextTest do
       {truncated, dropped} = Context.truncate(messages, max_chars: 5, max_messages: 100)
 
       # First user message preserved, others dropped due to char limit
-      assert length(truncated) >= 1
+      assert truncated != []
       assert dropped >= 1
     end
 
@@ -1012,7 +1012,7 @@ defmodule AgentCore.ContextTest do
         Context.truncate(messages, max_messages: 1, strategy: :keep_bookends)
 
       # half = 0, so empty result from take operations
-      assert length(truncated) == 0
+      assert truncated == []
     end
 
     test "max_messages: 2 with bookends strategy" do
@@ -1129,7 +1129,7 @@ defmodule AgentCore.ContextTest do
       {truncated, _dropped} = Context.truncate(messages, max_messages: 2, keep_first_user: true)
 
       # First user message (at index 2) should be preserved
-      assert length(truncated) >= 1
+      assert truncated != []
       first_user = Enum.find(truncated, fn msg -> Map.get(msg, :role) == :user end)
       assert first_user != nil
       assert Map.get(first_user, :content) == "First actual user message"
@@ -1223,7 +1223,7 @@ defmodule AgentCore.ContextTest do
       {truncated, dropped} = Context.truncate(messages, max_messages: 0, keep_first_user: false)
 
       # No user message, nothing preserved
-      assert length(truncated) == 0
+      assert truncated == []
       assert dropped == 1
     end
 
@@ -1486,7 +1486,7 @@ defmodule AgentCore.ContextTest do
       warning_events =
         Enum.filter(events, fn {name, _, _} -> name == [:agent_core, :context, :warning] end)
 
-      assert length(warning_events) >= 1
+      assert warning_events != []
 
       {_event_name, measurements, metadata} = hd(warning_events)
       assert measurements.char_count == 5
@@ -1509,7 +1509,7 @@ defmodule AgentCore.ContextTest do
       warning_events =
         Enum.filter(events, fn {name, _, _} -> name == [:agent_core, :context, :warning] end)
 
-      assert length(warning_events) >= 1
+      assert warning_events != []
 
       {_event_name, measurements, metadata} = hd(warning_events)
       assert measurements.char_count == 11
@@ -1638,9 +1638,9 @@ defmodule AgentCore.ContextTest do
                m[:message_count] == 1 and m[:char_count] == 4 and md[:has_system_prompt] == false
              end) >= 2
 
-      assert Enum.count(size_events, fn {_name, m, md} ->
+      assert Enum.any?(size_events, fn {_name, m, md} ->
                m[:message_count] == 1 and m[:char_count] == 10 and md[:has_system_prompt] == true
-             end) >= 1
+             end)
     end
 
     test "stats function also triggers size telemetry", %{
@@ -1659,7 +1659,7 @@ defmodule AgentCore.ContextTest do
       size_events =
         Enum.filter(events, fn {name, _, _} -> name == [:agent_core, :context, :size] end)
 
-      assert length(size_events) >= 1
+      assert size_events != []
     end
 
     test "large_context? also triggers size telemetry", %{
@@ -1677,7 +1677,7 @@ defmodule AgentCore.ContextTest do
       size_events =
         Enum.filter(events, fn {name, _, _} -> name == [:agent_core, :context, :size] end)
 
-      assert length(size_events) >= 1
+      assert size_events != []
     end
   end
 

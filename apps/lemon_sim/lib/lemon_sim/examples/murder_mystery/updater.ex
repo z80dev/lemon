@@ -85,7 +85,7 @@ defmodule LemonSim.Examples.MurderMystery.Updater do
       next_state2 = State.update_world(next_state, fn _ -> next_world2 end)
 
       clue_summary =
-        if length(new_clues) > 0 do
+        if new_clues != [] do
           "found #{length(new_clues)} clue(s) in #{room_id}"
         else
           "no new clues in #{room_id}"

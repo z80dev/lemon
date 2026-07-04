@@ -663,7 +663,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
       _unsub = Session.subscribe(pid)
 
       state_before = Session.get_state(pid)
-      assert length(state_before.event_listeners) >= 1
+      assert state_before.event_listeners != []
 
       # Stop session gracefully
       :ok = SessionSupervisor.stop_session(pid)

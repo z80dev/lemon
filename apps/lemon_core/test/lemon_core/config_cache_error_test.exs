@@ -84,7 +84,7 @@ defmodule LemonCore.ConfigCacheErrorTest do
           rescue
             e in ConfigCacheError ->
               # Re-raise the same exception
-              raise e
+              reraise e, __STACKTRACE__
           end
         rescue
           e in ConfigCacheError ->

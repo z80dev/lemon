@@ -69,9 +69,9 @@ defmodule LemonAutomation.GoalLoopManager do
   def handle_call({:start_loop, session_key, opts}, _from, state) do
     auto? = Keyword.get(opts, :auto, false) == true
 
-    with {:ok, _goal} <- maybe_configure_auto(session_key, auto?, opts) do
-      start_loop_reply(session_key, opts, auto?, state)
-    else
+    case maybe_configure_auto(session_key, auto?, opts) do
+      {:ok, _goal} ->
+        start_loop_reply(session_key, opts, auto?, state)
       error -> {:reply, error, state}
     end
   rescue

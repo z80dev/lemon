@@ -873,7 +873,7 @@ defmodule LemonSimUi.SimManager do
       Store.put_state(state)
       broadcast_update(state)
     else
-      if is_human_turn?(state, human_team) do
+      if human_turn?(state, human_team) do
         # Wait for human move
         broadcast_update(state)
 
@@ -956,7 +956,7 @@ defmodule LemonSimUi.SimManager do
     end
   end
 
-  defp is_human_turn?(state, human_team) do
+  defp human_turn?(state, human_team) do
     world = state.world
 
     cond do

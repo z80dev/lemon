@@ -136,7 +136,7 @@ defmodule Ai.ModelsLegacyTest do
       models = Models.get_models(:anthropic)
 
       assert is_list(models)
-      assert length(models) > 0
+      assert models != []
       assert Enum.all?(models, &match?(%Model{provider: :anthropic}, &1))
     end
 
@@ -144,7 +144,7 @@ defmodule Ai.ModelsLegacyTest do
       models = Models.get_models(:openai)
 
       assert is_list(models)
-      assert length(models) > 0
+      assert models != []
       assert Enum.all?(models, &match?(%Model{provider: :openai}, &1))
     end
 
@@ -152,7 +152,7 @@ defmodule Ai.ModelsLegacyTest do
       models = Models.get_models(:"openai-codex")
 
       assert is_list(models)
-      assert length(models) > 0
+      assert models != []
       assert Enum.all?(models, &match?(%Model{provider: :"openai-codex"}, &1))
       assert Enum.any?(models, &(&1.id == "gpt-5.3-codex-spark"))
       assert Enum.any?(models, &(&1.id == "codex-mini-latest"))
@@ -162,7 +162,7 @@ defmodule Ai.ModelsLegacyTest do
       models = Models.get_models(:google)
 
       assert is_list(models)
-      assert length(models) > 0
+      assert models != []
 
       assert Enum.all?(models, fn %Model{provider: provider} ->
                provider in [:google, :google_antigravity]
@@ -177,7 +177,7 @@ defmodule Ai.ModelsLegacyTest do
       models = Models.get_models(:opencode)
 
       assert is_list(models)
-      assert length(models) > 0
+      assert models != []
       assert Enum.all?(models, &match?(%Model{provider: :opencode}, &1))
     end
 
@@ -209,7 +209,7 @@ defmodule Ai.ModelsLegacyTest do
       models = Models.list_models()
 
       assert is_list(models)
-      assert length(models) > 0
+      assert models != []
 
       # Should have models from multiple providers
       providers = models |> Enum.map(& &1.provider) |> Enum.uniq()
@@ -1061,7 +1061,7 @@ defmodule Ai.ModelsLegacyTest do
       assert model.cost.input == 2.5
       assert model.cost.output == 12.5
       assert model.context_window == 1_000_000
-      assert model.max_tokens == 16384
+      assert model.max_tokens == 16_384
     end
 
     test "amazon bedrock flagship models" do
@@ -1124,8 +1124,8 @@ defmodule Ai.ModelsLegacyTest do
   describe "adjust_max_tokens_for_thinking/4" do
     test "adds thinking budget to base max tokens" do
       {max, budget} = Models.adjust_max_tokens_for_thinking(8192, 200_000, :high)
-      assert budget == 16384
-      assert max == 8192 + 16384
+      assert budget == 16_384
+      assert max == 8192 + 16_384
     end
 
     test "respects model max token limit" do
@@ -1149,7 +1149,7 @@ defmodule Ai.ModelsLegacyTest do
       assert budget_min == 1024
       assert budget_low == 2048
       assert budget_med == 8192
-      assert budget_high == 16384
+      assert budget_high == 16_384
     end
 
     test "accepts custom budgets" do

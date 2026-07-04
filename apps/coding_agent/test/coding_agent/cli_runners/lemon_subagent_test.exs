@@ -268,7 +268,7 @@ defmodule CodingAgent.CliRunners.LemonSubagentTest do
 
       # Should not crash with nil token_agent
       events = session |> LemonSubagent.events() |> Enum.to_list()
-      assert length(events) >= 1
+      assert events != []
     end
 
     test "handles multiple event types in sequence" do
@@ -510,7 +510,7 @@ defmodule CodingAgent.CliRunners.LemonSubagentTest do
           _ -> false
         end)
 
-      assert length(agent_end_events) == 0
+      assert agent_end_events == []
     end
 
     test "filters out unknown event types" do
@@ -826,7 +826,7 @@ defmodule CodingAgent.CliRunners.LemonSubagentTest do
 
       # Should not crash with nil token_agent
       events = session |> LemonSubagent.events() |> Enum.to_list()
-      assert length(events) >= 1
+      assert events != []
     end
   end
 

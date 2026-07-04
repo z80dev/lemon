@@ -1144,7 +1144,7 @@ defmodule CodingAgent.ToolRegistryTest do
       report = ToolRegistry.tool_conflict_report(tmp_dir)
 
       # Should have load errors from broken extension
-      assert length(report.load_errors) >= 1
+      assert report.load_errors != []
 
       broken_error =
         Enum.find(report.load_errors, fn err ->

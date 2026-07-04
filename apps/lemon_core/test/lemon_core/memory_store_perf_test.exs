@@ -37,7 +37,7 @@ defmodule LemonCore.MemoryStorePerfTest do
          [
            name: name,
            path: dir,
-           retention_ms: 365 * 24 * 3600_000,
+           retention_ms: 365 * 24 * 3_600_000,
            max_per_scope: 10_000
          ]}
       )
@@ -90,7 +90,7 @@ defmodule LemonCore.MemoryStorePerfTest do
     assert elapsed <= @search_budget_ms,
            "FTS search took #{elapsed}ms, exceeds #{@search_budget_ms}ms budget"
 
-    assert length(results) > 0, "FTS search should return at least one result"
+    assert results != [], "FTS search should return at least one result"
   end
 
   test "FTS search correctness: finds documents by keyword", %{store_pid: pid} do
@@ -143,7 +143,7 @@ defmodule LemonCore.MemoryStorePerfTest do
       MemoryStore.start_link([
         name: name2,
         path: dir2,
-        retention_ms: 365 * 24 * 3600_000,
+        retention_ms: 365 * 24 * 3_600_000,
         max_per_scope: 5
       ])
 

@@ -162,7 +162,8 @@ defmodule Ai.Providers.GoogleVertex do
   rescue
     e in ErlangError ->
       if e.original == :enoent do
-        raise "Failed to get access token via gcloud: command not found. Provide service_account_json, GOOGLE_APPLICATION_CREDENTIALS_JSON, or GOOGLE_APPLICATION_CREDENTIALS."
+        reraise "Failed to get access token via gcloud: command not found. Provide service_account_json, GOOGLE_APPLICATION_CREDENTIALS_JSON, or GOOGLE_APPLICATION_CREDENTIALS.",
+                __STACKTRACE__
       end
 
       reraise e, __STACKTRACE__

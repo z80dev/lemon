@@ -1,4 +1,7 @@
 defmodule LemonSimUi.Live.Components.IntelNetworkBoard do
+  @moduledoc """
+  Renders the Intel Network simulation board with operative state, reports, suspicion, and mission progress.
+  """
   use Phoenix.Component
 
   alias LemonCore.MapHelpers

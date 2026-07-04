@@ -440,22 +440,22 @@ defmodule LemonRouter.RunProcess.ArtifactTracker do
 
     case File.lstat(next) do
       {:ok, %File.Stat{type: :symlink}} ->
-        with {:ok, target} <- File.read_link(next) do
-          target_path =
-            if Path.type(target) == :absolute do
-              Path.expand(target)
-            else
-              Path.expand(target, Path.dirname(next))
-            end
+        case File.read_link(next) do
+          {:ok, target} ->
+            target_path =
+              if Path.type(target) == :absolute do
+                Path.expand(target)
+              else
+                Path.expand(target, Path.dirname(next))
+              end
 
-          combined =
-            case rest do
-              [] -> target_path
-              _ -> Path.join([target_path | rest])
-            end
+            combined =
+              case rest do
+                [] -> target_path
+                _ -> Path.join([target_path | rest])
+              end
 
-          resolve_absolute_path(combined)
-        else
+            resolve_absolute_path(combined)
           _ -> :error
         end
 

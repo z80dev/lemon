@@ -153,7 +153,7 @@ defmodule LemonGateway.ThreadRegistryTest do
     end
 
     test "register/1 can use various key types - integer" do
-      key = 12345
+      key = 12_345
       pid = spawn_registering_process(key)
       result = wait_for_registration(pid)
 

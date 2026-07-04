@@ -596,15 +596,15 @@ defmodule Ai.Providers.BedrockStreamingTest do
         minimal: 1024,
         low: 2048,
         medium: 8192,
-        high: 16384,
-        xhigh: 16384
+        high: 16_384,
+        xhigh: 16_384
       }
 
       assert budgets[:minimal] == 1024
       assert budgets[:low] == 2048
       assert budgets[:medium] == 8192
-      assert budgets[:high] == 16384
-      assert budgets[:xhigh] == 16384
+      assert budgets[:high] == 16_384
+      assert budgets[:xhigh] == 16_384
     end
 
     defp supports_thinking_signature?(model) do
@@ -731,7 +731,7 @@ defmodule Ai.Providers.BedrockStreamingTest do
       do: %{"tool" => %{"name" => name}}
 
     defp build_thinking_config(level, interleaved) do
-      budgets = %{minimal: 1024, low: 2048, medium: 8192, high: 16384}
+      budgets = %{minimal: 1024, low: 2048, medium: 8192, high: 16_384}
 
       result = %{
         "thinking" => %{

@@ -1205,10 +1205,10 @@ defmodule CodingAgent.MessagesTest do
         %ImageContent{data: "img", mime_type: "image/png"}
       ]
 
-      msg = %UserMessage{content: content, timestamp: 12345}
+      msg = %UserMessage{content: content, timestamp: 12_345}
       assert msg.role == :user
       assert msg.content == content
-      assert msg.timestamp == 12345
+      assert msg.timestamp == 12_345
     end
 
     test "AssistantMessage with all fields populated" do
@@ -1228,7 +1228,7 @@ defmodule CodingAgent.MessagesTest do
         api: "messages",
         usage: usage,
         stop_reason: :stop,
-        timestamp: 99999
+        timestamp: 99_999
       }
 
       assert msg.role == :assistant
@@ -1237,7 +1237,7 @@ defmodule CodingAgent.MessagesTest do
       assert msg.api == "messages"
       assert msg.usage == usage
       assert msg.stop_reason == :stop
-      assert msg.timestamp == 99999
+      assert msg.timestamp == 99_999
     end
 
     test "ToolResultMessage with error" do
@@ -1245,13 +1245,13 @@ defmodule CodingAgent.MessagesTest do
         tool_use_id: "tool_abc",
         content: [%TextContent{text: "Error: file not found"}],
         is_error: true,
-        timestamp: 54321
+        timestamp: 54_321
       }
 
       assert msg.role == :tool_result
       assert msg.tool_use_id == "tool_abc"
       assert msg.is_error == true
-      assert msg.timestamp == 54321
+      assert msg.timestamp == 54_321
     end
 
     test "BashExecutionMessage with full_output_path" do

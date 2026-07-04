@@ -51,7 +51,7 @@ defmodule LemonSim.Examples.Legislature.ActionSpace do
     tools = []
 
     tools =
-      if messages_sent < 3 and length(other_players) > 0 do
+      if messages_sent < 3 and other_players != [] do
         tools ++
           [
             send_message_tool(actor_id, other_players),

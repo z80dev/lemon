@@ -61,7 +61,7 @@ defmodule LemonControlPlane.Methods.EventsSubscribe do
 
     invalid_topics = Enum.reject(all_topics, &valid_topic?/1)
 
-    if length(invalid_topics) > 0 do
+    if invalid_topics != [] do
       {:error, Errors.invalid_request("Invalid topics: #{Enum.join(invalid_topics, ", ")}")}
     else
       EventBridge.subscribe_topics(all_topics)

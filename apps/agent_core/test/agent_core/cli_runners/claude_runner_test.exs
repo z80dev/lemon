@@ -730,7 +730,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
       {events, _state, _opts} = ClaudeRunner.translate_event(event, state)
 
       # Should have both the warning and the fallback action
-      assert length(events) >= 1
+      assert events != []
 
       assert Enum.any?(events, fn
                %ActionEvent{action: %{kind: :warning}} -> true

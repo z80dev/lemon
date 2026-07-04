@@ -257,7 +257,7 @@ defmodule CodingAgent.Tools.Find do
 
     # Use glob mode if pattern contains glob characters
     args =
-      if is_glob_pattern?(pattern) do
+      if glob_pattern?(pattern) do
         args ++ ["--glob"]
       else
         args
@@ -295,7 +295,7 @@ defmodule CodingAgent.Tools.Find do
   end
 
   # Detect if a pattern contains glob characters
-  defp is_glob_pattern?(pattern) do
+  defp glob_pattern?(pattern) do
     String.contains?(pattern, ["*", "?", "[", "]", "{", "}"])
   end
 

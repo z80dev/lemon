@@ -48,7 +48,7 @@ defmodule LemonRouter.IntrospectionTest do
       events = Introspection.list(run_id: run_id, limit: 10)
       started_events = Enum.filter(events, &(&1.event_type == :run_started))
 
-      assert length(started_events) >= 1
+      assert started_events != []
       [evt | _] = started_events
       assert evt.engine == "lemon"
       assert evt.run_id == run_id
@@ -92,7 +92,7 @@ defmodule LemonRouter.IntrospectionTest do
       events = Introspection.list(run_id: run_id, limit: 20)
       completed_events = Enum.filter(events, &(&1.event_type == :run_completed))
 
-      assert length(completed_events) >= 1
+      assert completed_events != []
       [evt | _] = completed_events
       assert evt.engine == "lemon"
       assert evt.payload.ok == true
@@ -125,8 +125,8 @@ defmodule LemonRouter.IntrospectionTest do
           orch_resolved =
             Enum.filter(events, &(&1.event_type == :orchestration_resolved))
 
-          assert length(orch_started) >= 1
-          assert length(orch_resolved) >= 1
+          assert orch_started != []
+          assert orch_resolved != []
 
           [evt | _] = orch_started
           assert evt.engine == "lemon"

@@ -266,67 +266,70 @@ defmodule CodingAgent.Tools.Task.Runner do
         engine \\ "internal",
         opts \\ []
       ) do
-    with {:ok, session} <- CodingAgent.start_session(start_opts) do
-      session_id = Session.get_stats(session).session_id
-      unsubscribe = Session.subscribe(session)
-      session_ref = Process.monitor(session)
-      timeout_ms = task_session_timeout_ms(opts)
-      deadline_ms = if timeout_ms, do: System.monotonic_time(:millisecond) + timeout_ms, else: nil
+    case CodingAgent.start_session(start_opts) do
+      {:ok, session} ->
+        session_id = Session.get_stats(session).session_id
+        unsubscribe = Session.subscribe(session)
+        session_ref = Process.monitor(session)
+        timeout_ms = task_session_timeout_ms(opts)
 
-      try do
-        case Session.prompt(session, prompt) do
-          :ok ->
-            case await_result(
-                   session,
-                   session_ref,
-                   session_id,
-                   signal,
-                   on_update,
-                   description,
-                   "",
-                   "",
-                   nil,
-                   role_id,
-                   engine,
-                   timeout_ms,
-                   deadline_ms,
-                   task_session_poll_ms(opts)
-                 ) do
-              {:ok, %{text: text, thinking: thinking}} ->
-                details =
-                  %{
-                    session_id: session_id,
-                    description: description,
-                    status: "completed",
-                    role: role_id,
-                    engine: engine
+        deadline_ms =
+          if timeout_ms, do: System.monotonic_time(:millisecond) + timeout_ms, else: nil
+
+        try do
+          case Session.prompt(session, prompt) do
+            :ok ->
+              case await_result(
+                     session,
+                     session_ref,
+                     session_id,
+                     signal,
+                     on_update,
+                     description,
+                     "",
+                     "",
+                     nil,
+                     role_id,
+                     engine,
+                     timeout_ms,
+                     deadline_ms,
+                     task_session_poll_ms(opts)
+                   ) do
+                {:ok, %{text: text, thinking: thinking}} ->
+                  details =
+                    %{
+                      session_id: session_id,
+                      description: description,
+                      status: "completed",
+                      role: role_id,
+                      engine: engine
+                    }
+                    |> maybe_put_reasoning(
+                      Result.reasoning_details(thinking, "assistant_thinking", "completed")
+                    )
+
+                  %AgentToolResult{
+                    content: Result.build_update_content(text, thinking),
+                    details: details
                   }
-                  |> maybe_put_reasoning(
-                    Result.reasoning_details(thinking, "assistant_thinking", "completed")
-                  )
 
-                %AgentToolResult{
-                  content: Result.build_update_content(text, thinking),
-                  details: details
-                }
+                {:error, reason} ->
+                  {:error, reason}
+              end
 
-              {:error, reason} ->
-                {:error, reason}
-            end
+            {:error, :already_streaming} ->
+              {:error, "Task session is already running"}
+          end
+        after
+          Process.demonitor(session_ref, [:flush])
 
-          {:error, :already_streaming} ->
-            {:error, "Task session is already running"}
-        end
-      after
-        Process.demonitor(session_ref, [:flush])
+          if is_function(unsubscribe, 0) do
+            unsubscribe.()
+          end
 
-        if is_function(unsubscribe, 0) do
-          unsubscribe.()
+          stop_session(session)
         end
 
-        stop_session(session)
-      end
-    else
       {:error, reason} ->
         {:error, "Failed to start task session: #{inspect(reason)}"}
     end

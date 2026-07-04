@@ -22,7 +22,7 @@ defmodule LemonCore.MemoryStoreTest do
          [
            name: name,
            path: dir,
-           retention_ms: 30 * 24 * 3600_000,
+           retention_ms: 30 * 24 * 3_600_000,
            max_per_scope: 100
          ]}
       )
@@ -180,7 +180,7 @@ defmodule LemonCore.MemoryStoreTest do
 
     assert eventually(fn ->
              results = MemoryStore.get_by_session(pid, session, limit: 10)
-             length(results) >= 1
+             results != []
            end)
 
     results =

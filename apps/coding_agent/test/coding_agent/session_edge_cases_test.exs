@@ -161,7 +161,7 @@ defmodule CodingAgent.SessionEdgeCasesTest do
       wait_for_streaming_complete(session)
 
       messages = Session.get_messages(session)
-      assert length(messages) >= 1
+      assert messages != []
     end
 
     test "handles assistant message with thinking content" do
@@ -308,7 +308,7 @@ defmodule CodingAgent.SessionEdgeCasesTest do
       Process.sleep(50)
 
       state = Session.get_state(session)
-      assert length(state.event_listeners) == 0
+      assert state.event_listeners == []
     end
 
     test "stream subscribers are tracked separately from direct subscribers" do
@@ -366,7 +366,7 @@ defmodule CodingAgent.SessionEdgeCasesTest do
       wait_for_streaming_complete(session)
 
       messages = Session.get_messages(session)
-      assert length(messages) >= 1
+      assert messages != []
     end
 
     test "handles compact when not enough content" do
@@ -597,7 +597,7 @@ defmodule CodingAgent.SessionEdgeCasesTest do
       # After all tasks, should have no listeners
       Process.sleep(50)
       state = Session.get_state(session)
-      assert length(state.event_listeners) == 0
+      assert state.event_listeners == []
     end
 
     test "handles concurrent stats calls during streaming" do
@@ -692,7 +692,7 @@ defmodule CodingAgent.SessionEdgeCasesTest do
       wait_for_streaming_complete(session)
 
       messages = Session.get_messages(session)
-      assert length(messages) >= 1
+      assert messages != []
     end
 
     test "handles prompt with multiple images" do
@@ -708,7 +708,7 @@ defmodule CodingAgent.SessionEdgeCasesTest do
       wait_for_streaming_complete(session)
 
       messages = Session.get_messages(session)
-      assert length(messages) >= 1
+      assert messages != []
     end
   end
 

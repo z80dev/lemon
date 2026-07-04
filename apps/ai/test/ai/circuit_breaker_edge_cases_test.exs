@@ -323,7 +323,7 @@ defmodule Ai.CircuitBreakerEdgeCasesTest do
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :half_open
-      refute CircuitBreaker.is_open?(provider)
+      refute CircuitBreaker.open?(provider)
     end
 
     test "extra successes after threshold are harmless in closed state", %{provider: provider} do
@@ -744,18 +744,18 @@ defmodule Ai.CircuitBreakerEdgeCasesTest do
       end
     end
 
-    test "reset after is_open? check works correctly", %{provider: provider} do
+    test "reset after open? check works correctly", %{provider: provider} do
       start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 1})
 
       CircuitBreaker.record_failure(provider)
       Process.sleep(10)
 
-      assert CircuitBreaker.is_open?(provider)
+      assert CircuitBreaker.open?(provider)
 
       CircuitBreaker.reset(provider)
       Process.sleep(10)
 
-      refute CircuitBreaker.is_open?(provider)
+      refute CircuitBreaker.open?(provider)
     end
 
     test "operations after reset behave as if fresh start", %{provider: provider} do
@@ -769,7 +769,7 @@ defmodule Ai.CircuitBreakerEdgeCasesTest do
       end
 
       Process.sleep(10)
-      assert CircuitBreaker.is_open?(provider)
+      assert CircuitBreaker.open?(provider)
 
       # Reset
       CircuitBreaker.reset(provider)
@@ -948,7 +948,7 @@ defmodule Ai.CircuitBreakerEdgeCasesTest do
   # ============================================================================
 
   describe "boundary conditions" do
-    test "is_open? returns false for half-open state", %{provider: provider} do
+    test "open? returns false for half-open state", %{provider: provider} do
       start_supervised!(
         {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 20}
       )
@@ -959,8 +959,8 @@ defmodule Ai.CircuitBreakerEdgeCasesTest do
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :half_open
 
-      # is_open? should return false for half-open (allows probe requests)
-      refute CircuitBreaker.is_open?(provider)
+      # open? should return false for half-open (allows probe requests)
+      refute CircuitBreaker.open?(provider)
     end
 
     test "record_success in open state has no effect", %{provider: provider} do

@@ -53,29 +53,30 @@ defmodule CodingAgent.Tools.Browser do
   end
 
   defp execute_browser_request(request, signal, on_update, cwd, runtime, tool_name) do
-    with {:ok, request} <- prepare_browser_request(request, cwd, runtime) do
-      case runtime.browser_request.(request.method, request.args, request.timeout_ms) do
-        {:ok, result} ->
-          with :ok <- check_abort(signal) do
-            final_result =
-              result
-              |> maybe_redact_browser_result(request)
-              |> maybe_add_navigation_policy(request)
-              |> maybe_write_screenshot(request, cwd, runtime)
+    case prepare_browser_request(request, cwd, runtime) do
+      {:ok, request} ->
+        case runtime.browser_request.(request.method, request.args, request.timeout_ms) do
+          {:ok, result} ->
+            with :ok <- check_abort(signal) do
+              final_result =
+                result
+                |> maybe_redact_browser_result(request)
+                |> maybe_add_navigation_policy(request)
+                |> maybe_write_screenshot(request, cwd, runtime)
 
-            emit_browser_update(on_update, tool_name, request, "completed", final_result)
+              emit_browser_update(on_update, tool_name, request, "completed", final_result)
 
-            wrap_result(final_result, tool_name)
-          end
+              wrap_result(final_result, tool_name)
+            end
 
-        {:error, reason} = error ->
-          emit_browser_update(on_update, tool_name, request, "failed", %{
-            "errorKind" => safe_error_kind(reason)
-          })
+          {:error, reason} = error ->
+            emit_browser_update(on_update, tool_name, request, "failed", %{
+              "errorKind" => safe_error_kind(reason)
+            })
 
-          error
-      end
-    else
+            error
+        end
+
       {:error, reason} = error ->
         emit_browser_update(on_update, tool_name, request, "failed", %{
           "errorKind" => safe_error_kind(reason)

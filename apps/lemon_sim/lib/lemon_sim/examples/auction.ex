@@ -248,8 +248,7 @@ defmodule LemonSim.Examples.Auction do
           {:ok, final_state}
 
         {:error, reason} = error ->
-          IO.puts("Auction House failed:")
-          IO.inspect(reason)
+          IO.puts("Auction House failed: #{inspect(reason)}")
           error
       end
 
@@ -394,7 +393,7 @@ defmodule LemonSim.Examples.Auction do
     }
   end
 
-  defp format_trait_labels(traits) when is_list(traits) and length(traits) > 0 do
+  defp format_trait_labels(traits) when is_list(traits) and traits != [] do
     traits
     |> Enum.map(&String.capitalize/1)
     |> Enum.join(", ")

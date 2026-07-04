@@ -1262,7 +1262,7 @@ defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
 
       # Verify we got the expected events
       cli_events = Enum.filter(events, &match?({:cli_event, _}, &1))
-      assert length(cli_events) > 0
+      assert cli_events != []
     end
 
     test "handles missing prompt option" do
@@ -1428,7 +1428,7 @@ defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
       # Should have action events for command
       actions = Enum.filter(cli_events, &match?(%ActionEvent{}, &1))
       command_actions = Enum.filter(actions, fn a -> a.action.kind == :command end)
-      assert length(command_actions) >= 1
+      assert command_actions != []
 
       # Should have CompletedEvent
       completed = Enum.find(cli_events, &match?(%CompletedEvent{}, &1))
@@ -1470,7 +1470,7 @@ defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
           _ -> false
         end)
 
-      assert length(warnings) >= 1
+      assert warnings != []
     end
   end
 

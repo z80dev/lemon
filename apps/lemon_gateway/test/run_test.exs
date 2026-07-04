@@ -2753,13 +2753,13 @@ defmodule LemonGateway.RunTest do
 
       # Wait for run history to be stored
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> length(LemonCore.Store.get_run_history(scope)) >= 1 end,
+        fn -> LemonCore.Store.get_run_history(scope) != [] end,
         message: "run history was not stored"
       )
 
       # Run history should include this run
       history = LemonCore.Store.get_run_history(scope)
-      assert length(history) >= 1
+      assert history != []
     end
 
     test "finalize sets completed flag to prevent double finalization" do
@@ -3034,7 +3034,7 @@ defmodule LemonGateway.RunTest do
 
     test "handles job with very long text" do
       scope = make_scope()
-      long_text = String.duplicate("a", 10000)
+      long_text = String.duplicate("a", 10_000)
       job = make_job(scope, text: long_text, meta: %{notify_pid: self()})
 
       {:ok, pid} = start_run_direct(job)

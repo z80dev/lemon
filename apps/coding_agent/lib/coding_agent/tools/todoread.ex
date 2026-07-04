@@ -1,6 +1,6 @@
 defmodule CodingAgent.Tools.TodoRead do
   @moduledoc """
-  Todo read tool for the coding agent.
+  Task-list read tool for the coding agent.
 
   Reads the stored todo list for the current session.
   """

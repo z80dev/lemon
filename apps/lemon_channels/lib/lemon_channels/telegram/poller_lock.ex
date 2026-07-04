@@ -258,11 +258,11 @@ defmodule LemonChannels.Telegram.PollerLock do
   defp stale_file?(path) do
     stale_ms = stale_after_ms()
 
-    with {:ok, %File.Stat{mtime: mtime}} <- File.stat(path) do
-      now_s = :calendar.datetime_to_gregorian_seconds(:calendar.local_time())
-      mtime_s = :calendar.datetime_to_gregorian_seconds(mtime)
-      max(0, now_s - mtime_s) * 1_000 > stale_ms
-    else
+    case File.stat(path) do
+      {:ok, %File.Stat{mtime: mtime}} ->
+        now_s = :calendar.datetime_to_gregorian_seconds(:calendar.local_time())
+        mtime_s = :calendar.datetime_to_gregorian_seconds(mtime)
+        max(0, now_s - mtime_s) * 1_000 > stale_ms
       _ -> false
     end
   rescue

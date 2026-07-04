@@ -119,7 +119,7 @@ defmodule LemonControlPlane.ACP.NDJSON do
       "jsonrpc" => "2.0",
       "id" => nil,
       "error" => %{
-        "code" => -32700,
+        "code" => -32_700,
         "message" => "parse error"
       }
     }

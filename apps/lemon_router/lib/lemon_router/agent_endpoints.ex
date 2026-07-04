@@ -166,9 +166,9 @@ defmodule LemonRouter.AgentEndpoints do
   def resolve(agent_id, target, opts) when is_binary(target) and target != "" do
     target = String.trim(target)
 
-    with {:ok, endpoint} <- maybe_get_endpoint(agent_id, target) do
-      {:ok, %{route: endpoint.route, endpoint: endpoint, target: endpoint.name}}
-    else
+    case maybe_get_endpoint(agent_id, target) do
+      {:ok, endpoint} ->
+        {:ok, %{route: endpoint.route, endpoint: endpoint, target: endpoint.name}}
       {:error, :not_found} ->
         with {:ok, route} <- parse_target_string(target, opts),
              {:ok, normalized_route} <- normalize_route(route, opts) do

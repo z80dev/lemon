@@ -541,7 +541,7 @@ defmodule AgentCore.ModuleTest do
       :ok = AgentCore.wait_for_idle(agent, timeout: 1000)
 
       state_before = AgentCore.get_state(agent)
-      assert length(state_before.messages) > 0
+      assert state_before.messages != []
 
       :ok = AgentCore.reset(agent)
 

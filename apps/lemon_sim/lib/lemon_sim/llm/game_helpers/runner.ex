@@ -87,8 +87,7 @@ defmodule LemonSim.LLM.GameHelpers.Runner do
           maybe_return_usage({:ok, final_state}, usage_collector, opts)
 
         {:error, reason} = error ->
-          IO.puts("Game failed:")
-          IO.inspect(reason)
+          IO.puts("Game failed: #{inspect(reason)}")
           error
       end
     after
@@ -240,8 +239,7 @@ defmodule LemonSim.LLM.GameHelpers.Runner do
           maybe_return_usage({:ok, final_state}, usage_collector, opts)
 
         {:error, reason} = error ->
-          IO.puts("Game failed:")
-          IO.inspect(reason)
+          IO.puts("Game failed: #{inspect(reason)}")
           error
       end
     after

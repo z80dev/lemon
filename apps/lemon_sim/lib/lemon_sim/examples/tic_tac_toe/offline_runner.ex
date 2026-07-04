@@ -24,8 +24,7 @@ defmodule LemonSim.Examples.TicTacToe.OfflineRunner do
 
     case run_loop(state, max_turns, rng, 0, opts) do
       {:ok, final_state} = ok ->
-        IO.puts("Final state:")
-        IO.inspect(final_state.world)
+        IO.puts("Final state: #{inspect(final_state.world)}")
 
         if Keyword.get(opts, :persist?, true) do
           _ = Store.put_state(final_state)

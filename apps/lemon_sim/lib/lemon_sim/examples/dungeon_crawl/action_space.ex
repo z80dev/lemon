@@ -35,7 +35,7 @@ defmodule LemonSim.Examples.DungeonCrawl.ActionSpace do
           Enum.any?(enemies, fn {_id, e} -> get(e, :status, "alive") == "alive" end)
 
         inventory = get(world, :inventory, [])
-        has_items = length(inventory) > 0
+        has_items = inventory != []
         current_room_index = get(world, :current_room, 0)
         rooms = get(world, :rooms, [])
         current_room = Enum.at(rooms, current_room_index, %{})
@@ -296,7 +296,7 @@ defmodule LemonSim.Examples.DungeonCrawl.ActionSpace do
     item_desc = Enum.join(item_names, ", ")
 
     target_desc =
-      if length(enemy_ids) > 0, do: " Target enemies: #{Enum.join(enemy_ids, ", ")}.", else: ""
+      if enemy_ids != [], do: " Target enemies: #{Enum.join(enemy_ids, ", ")}.", else: ""
 
     %AgentTool{
       name: "use_item",

@@ -1274,7 +1274,7 @@ defmodule LemonGateway.SchedulerTest do
 
     test "slot allocation preserves thread_key in entry" do
       worker = self()
-      thread_key = {:scope, %ChatScope{transport: :telegram, chat_id: 12345, topic_id: 99}}
+      thread_key = {:scope, %ChatScope{transport: :telegram, chat_id: 12_345, topic_id: 99}}
 
       state = %{
         max: 5,

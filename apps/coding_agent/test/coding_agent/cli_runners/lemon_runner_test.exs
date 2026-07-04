@@ -1544,7 +1544,7 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
       end)
 
       received_events = Enum.to_list(events)
-      assert length(received_events) >= 1
+      assert received_events != []
 
       # Find the cli_event we pushed
       cli_events =

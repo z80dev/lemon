@@ -650,7 +650,7 @@ defmodule CodingAgent.Tools.TodoStoreTest do
     test "storing and retrieving large todos list", %{session_id: session_id} do
       # Create a large list
       large_todos =
-        for i <- 1..10000 do
+        for i <- 1..10_000 do
           %{
             "id" => "#{i}",
             "content" => "Task #{i} with some additional content to make it larger",
@@ -663,7 +663,7 @@ defmodule CodingAgent.Tools.TodoStoreTest do
       assert :ok = TodoStore.put(session_id, large_todos)
       retrieved = TodoStore.get(session_id)
 
-      assert length(retrieved) == 10000
+      assert length(retrieved) == 10_000
       assert hd(retrieved)["id"] == "1"
       assert List.last(retrieved)["id"] == "10000"
     end
@@ -861,7 +861,7 @@ defmodule CodingAgent.Tools.TodoStoreTest do
 
       {time, _result} =
         :timer.tc(fn ->
-          for _ <- 1..10000 do
+          for _ <- 1..10_000 do
             TodoStore.get(session_id)
           end
         end)

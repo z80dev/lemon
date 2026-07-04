@@ -179,7 +179,7 @@ defmodule LemonControlPlane.Auth.Authorize do
       has_scope ->
         :ok
 
-      is_node_only_method?(method) and ctx.role != :node ->
+      node_only_method?(method) and ctx.role != :node ->
         {:error, {:forbidden, "Method #{method} requires node role"}}
 
       true ->
@@ -190,8 +190,8 @@ defmodule LemonControlPlane.Auth.Authorize do
   @doc """
   Checks if a method requires specific role.
   """
-  @spec is_node_only_method?(String.t()) :: boolean()
-  def is_node_only_method?(method) do
+  @spec node_only_method?(String.t()) :: boolean()
+  def node_only_method?(method) do
     method in ["node.invoke.result", "node.event", "skills.bins"]
   end
 

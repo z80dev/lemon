@@ -87,7 +87,7 @@ defmodule Ai.CallDispatcher do
     _ = Ai.CircuitBreaker.ensure_started(provider)
 
     # Check circuit breaker first (fast fail)
-    if Ai.CircuitBreaker.is_open?(provider) do
+    if Ai.CircuitBreaker.open?(provider) do
       duration = System.monotonic_time() - start_time
       retry_after_ms = Ai.CircuitBreaker.time_until_recovery(provider)
 

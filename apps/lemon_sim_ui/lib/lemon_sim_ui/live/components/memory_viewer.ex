@@ -1,4 +1,7 @@
 defmodule LemonSimUi.Live.Components.MemoryViewer do
+  @moduledoc """
+  Renders the per-simulation memory files exposed by the LemonSim memory tool namespace.
+  """
   use Phoenix.Component
 
   attr :sim_id, :string, required: true

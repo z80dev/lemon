@@ -124,7 +124,7 @@ defmodule LemonSim.Examples.Pandemic.ActionSpace do
     comm_sent = Map.get(get(world, :comm_sent_this_round, %{}), actor_id, 0)
 
     tools =
-      if comm_sent < @comm_quota and length(other_governors) > 0 do
+      if comm_sent < @comm_quota and other_governors != [] do
         [
           share_data_tool(actor_id, other_governors),
           request_help_tool(actor_id, other_governors)

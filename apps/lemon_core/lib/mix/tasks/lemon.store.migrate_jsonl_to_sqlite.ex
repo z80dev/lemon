@@ -64,33 +64,33 @@ defmodule Mix.Tasks.Lemon.Store.MigrateJsonlToSqlite do
         [:runs]
       end
 
-    with {:ok, jsonl_state} <- JsonlBackend.init(path: jsonl_path, skip_tables: skipped_tables) do
-      tables =
-        jsonl_state
-        |> JsonlBackend.list_tables()
-        |> Enum.sort()
+    case JsonlBackend.init(path: jsonl_path, skip_tables: skipped_tables) do
+      {:ok, jsonl_state} ->
+        tables =
+          jsonl_state
+          |> JsonlBackend.list_tables()
+          |> Enum.sort()
 
-      tables_to_migrate = Enum.reject(tables, &(&1 in skipped_tables))
+        tables_to_migrate = Enum.reject(tables, &(&1 in skipped_tables))
 
-      if tables_to_migrate == [] do
-        Mix.shell().info("No tables to migrate.")
-        :ok
-      else
-        Mix.shell().info(
-          "Tables to migrate: #{Enum.map_join(tables_to_migrate, ", ", &to_string/1)}"
-        )
-
-        if skipped_tables != [] do
-          Mix.shell().info("Skipped tables: #{Enum.map_join(skipped_tables, ", ", &to_string/1)}")
-        end
-
-        if dry_run? do
-          run_dry(jsonl_state, tables_to_migrate)
+        if tables_to_migrate == [] do
+          Mix.shell().info("No tables to migrate.")
+          :ok
         else
-          run_migration(jsonl_state, tables_to_migrate, sqlite_path)
+          Mix.shell().info(
+            "Tables to migrate: #{Enum.map_join(tables_to_migrate, ", ", &to_string/1)}"
+          )
+
+          if skipped_tables != [] do
+            Mix.shell().info("Skipped tables: #{Enum.map_join(skipped_tables, ", ", &to_string/1)}")
+          end
+
+          if dry_run? do
+            run_dry(jsonl_state, tables_to_migrate)
+          else
+            run_migration(jsonl_state, tables_to_migrate, sqlite_path)
+          end
         end
-      end
-    else
       {:error, reason} ->
         Mix.raise("Failed to initialize JSONL backend: #{inspect(reason)}")
     end
