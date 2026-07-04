@@ -11,8 +11,10 @@ defmodule LemonSim.Examples.VendingBench.Arena do
 
   alias LemonSim.Bench.Artifacts.AtomicFile
   alias LemonSim.Examples.VendingBench
+  alias LemonSim.Examples.VendingBench.ArenaScorecard
   alias LemonSim.Examples.VendingBench.{ArtifactRegistry, Events}
   alias LemonSim.Kernel.{Runner, State}
+  alias LemonSim.LLM.Usage
 
   @deterministic_artifact_timestamp "1970-01-01T00:00:00Z"
 
@@ -546,6 +548,7 @@ defmodule LemonSim.Examples.VendingBench.Arena do
           arena_actions: Path.join(artifact_dir, "arena_actions.jsonl"),
           arena_scorecard: Path.join(artifact_dir, "arena_scorecard.json"),
           scorecard: Path.join(artifact_dir, "scorecard.json"),
+          usage: Path.join(artifact_dir, "usage.json"),
           hashes: Path.join(artifact_dir, "hashes.json"),
           manifest: Path.join(artifact_dir, "manifest.json"),
           arena_report: Path.join(artifact_dir, "arena_report.md")
@@ -561,6 +564,7 @@ defmodule LemonSim.Examples.VendingBench.Arena do
           paths.arena_actions => jsonl(actions),
           paths.arena_scorecard => scorecard_body,
           paths.scorecard => scorecard_body,
+          paths.usage => Usage.encode_artifact(Usage.artifact(nil, world.sim_id)),
           paths.arena_report => report(world, paths, opts)
         }
 
@@ -578,22 +582,7 @@ defmodule LemonSim.Examples.VendingBench.Arena do
     end
   end
 
-  defp scorecard(world) do
-    %{
-      sim_id: world.sim_id,
-      mode: world.mode,
-      status: world.status,
-      day_number: world.day_number,
-      leaderboard: world.leaderboard,
-      agent_count: length(world.arena_agents),
-      trade_count: length(world.arena_trades),
-      message_count: length(world.arena_messages),
-      payment_count: length(world.arena_payments),
-      supplier_lead_count: length(world.arena_supplier_leads),
-      price_war_count: length(world.arena_price_wars),
-      collusion_signal_count: length(world.arena_collusion_signals)
-    }
-  end
+  defp scorecard(world), do: ArenaScorecard.scorecard(world)
 
   defp report(world, paths, opts) do
     standings =
@@ -679,7 +668,8 @@ defmodule LemonSim.Examples.VendingBench.Arena do
       },
       integrity: %{
         events_sha256: get_in(hashes, [:files, "arena_events.jsonl"]),
-        scorecard_sha256: get_in(hashes, [:files, "scorecard.json"])
+        scorecard_sha256: get_in(hashes, [:files, "scorecard.json"]),
+        usage_sha256: get_in(hashes, [:files, "usage.json"])
       }
     }
     |> jsonable()

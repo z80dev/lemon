@@ -9,10 +9,10 @@ defmodule LemonSim.Bench.Suite.RunAdapter.Adapters.VendingBenchArena do
   def supported_modes, do: [:offline]
 
   @impl true
-  def supported_presets, do: []
+  def supported_presets, do: ["ci"]
 
   @impl true
-  def preset_opts(_preset), do: []
+  def preset_opts("ci"), do: [max_days: 7, driver_max_turns: 25, persist?: false]
 
   @impl true
   def run(:offline, strategy, _seed, opts) do

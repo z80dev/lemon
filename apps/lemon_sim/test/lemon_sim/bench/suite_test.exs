@@ -66,6 +66,21 @@ defmodule LemonSim.Bench.SuiteTest do
     assert failure["error"] =~ "unsupported_suite_mode"
   end
 
+  test "keyless vending bench arena ci suite ranks a numeric aggregate metric" do
+    spec = %{
+      scenario: "vending_bench_arena",
+      preset: "ci",
+      seeds: [1],
+      competitors: [%{id: "baseline", offline_strategy: "baseline"}]
+    }
+
+    assert {:ok, %{suite: suite}} = Suite.run(spec, suite_dir: tmp_dir("suite_arena_ci"))
+    assert Enum.all?(suite.runs, & &1["verified"])
+    assert [%{"competitor" => "baseline", "mean" => mean}] = suite.rankings
+    assert is_number(mean)
+    assert suite.primary_metric["name"] == "total_money_balance"
+  end
+
   test "metric paths, directions, null cost aggregation, and failure exclusion aggregate correctly" do
     assert Suite.metric_value(%{"net_worth" => 12.5}, "net_worth") == {:ok, 12.5}
 

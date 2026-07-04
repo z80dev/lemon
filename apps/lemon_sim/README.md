@@ -127,6 +127,17 @@ Suite run adapters are currently available for `vending_bench`, `tcg_shop`, and
 `vending_bench_arena`. Other registered scorecards can be recompute-verified from
 artifact bundles but do not yet have suite runners.
 
+The keyless CI smoke lane is:
+
+```bash
+scripts/ci_sim_bench.sh
+```
+
+It runs deterministic offline suites for VendingBench, VendingBench Arena, and
+TCG Shop under `$RUNNER_TEMP` or `tmp/`, verifies and scores every produced run
+bundle, writes cross-suite ratings, and checks VendingBench byte-reproducible
+artifact output with a double-run `diff -r` gate.
+
 That writes `/tmp/vending-suite/suite.json`, one verified bundle per
 competitor/seed under `/tmp/vending-suite/runs/`, and
 `/tmp/vending-suite/leaderboard.md`. The leaderboard shape is:
