@@ -2,7 +2,11 @@ defmodule Mix.Tasks.Lemon.Sim.Suite do
   @moduledoc """
   Run a LemonSim benchmark suite and write a leaderboard.
 
-      mix lemon.sim.suite --scenario vending_bench --preset ci --seeds 11,22,33 --offline baseline,pressure --external-cmd "python3 agent.py" --out /tmp/vb-suite
+      mix lemon.sim.suite --scenario vending_bench --preset ci --seeds 11,22,33 --offline baseline,pressure --external-cmd "my-agent=python3 agent.py" --out /tmp/vb-suite
+
+  `--external-cmd` accepts an optional `NAME=` prefix (letters, digits, `_`,
+  `-`, `.`) giving the competitor a short leaderboard id; without it the
+  command string itself is the id.
 
   Suite run adapters are currently available for `vending_bench`, `tcg_shop`,
   and `vending_bench_arena`. Other registered scorecards can be verified from
@@ -89,9 +93,17 @@ defmodule Mix.Tasks.Lemon.Sim.Suite do
       |> Keyword.get_values(:external_cmd)
       |> Enum.map(&String.trim/1)
       |> Enum.reject(&(&1 == ""))
-      |> Enum.map(&%{id: &1, external_cmd: &1})
+      |> Enum.map(&external_competitor/1)
 
     offline ++ models ++ external
+  end
+
+  # "my-agent=python3 agent.py" -> id "my-agent"; a bare command is its own id.
+  defp external_competitor(value) do
+    case Regex.run(~r/^([A-Za-z0-9_.-]+)=(.+)$/s, value) do
+      [_, id, cmd] -> %{id: id, external_cmd: String.trim(cmd)}
+      nil -> %{id: value, external_cmd: value}
+    end
   end
 
   defp split_csv(nil), do: []

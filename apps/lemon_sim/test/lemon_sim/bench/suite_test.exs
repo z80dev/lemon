@@ -161,6 +161,64 @@ defmodule LemonSim.Bench.SuiteTest do
     assert message =~ "exactly one of offline_strategy, model, or external_cmd"
   end
 
+  test "empty-string mode fields do not shadow the real competitor mode" do
+    spec = %{
+      scenario: "vending_bench",
+      preset: "ci",
+      seeds: [7],
+      competitors: [%{id: "weird", model: "", offline_strategy: "baseline"}]
+    }
+
+    assert {:ok, %{suite: suite}} = Suite.run(spec, suite_dir: tmp_dir("suite_empty_mode"))
+
+    assert [%{"competitor" => "weird"} = ranking] = suite.rankings
+    assert map_size(ranking["values_by_seed"]) == 1
+    assert [%{"competitor_spec" => %{"offline_strategy" => "baseline"}} | _] = suite.runs
+  end
+
+  test "duplicate competitor ids are rejected instead of overwriting artifacts" do
+    spec = %{
+      scenario: "vending_bench",
+      preset: "ci",
+      seeds: [7],
+      competitors: [
+        %{id: "twin", offline_strategy: "baseline"},
+        %{id: "twin", offline_strategy: "pressure"}
+      ]
+    }
+
+    assert {:error, {:invalid_suite_spec, %ArgumentError{message: message}}} =
+             Suite.run(spec, suite_dir: tmp_dir("suite_duplicate_ids"))
+
+    assert message =~ "duplicate competitor ids"
+    assert message =~ "twin"
+  end
+
+  test "leaderboard escapes pipes in competitor cells" do
+    suite = %{
+      "spec" => %{"scenario" => "vending_bench", "preset" => "ci", "seeds" => [1]},
+      "primary_metric" => %{"name" => "score", "direction" => "maximize"},
+      "rankings" => [
+        %{
+          "rank" => 1,
+          "competitor" => "python3 agent.py | tee log.txt",
+          "values_by_seed" => %{"1" => 5.0},
+          "usage_totals" => %{}
+        }
+      ],
+      "failures" => [
+        %{"competitor" => "sh -c 'a | b'", "seed" => 2, "error" => "boom | bang"}
+      ]
+    }
+
+    leaderboard = Suite.render_leaderboard(suite)
+
+    assert leaderboard =~ "python3 agent.py \\| tee log.txt"
+    assert leaderboard =~ "sh -c 'a \\| b'"
+    assert leaderboard =~ "boom \\| bang"
+    refute leaderboard =~ "agent.py | tee"
+  end
+
   test "keyless vending bench arena ci suite ranks a numeric aggregate metric" do
     spec = %{
       scenario: "vending_bench_arena",

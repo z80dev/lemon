@@ -120,7 +120,7 @@ defmodule LemonSim.Bench.Suite do
       Enum.map(rankings, fn ranking ->
         [
           ranking["rank"] || ranking[:rank],
-          ranking["competitor"] || ranking[:competitor],
+          escape_md_cell(ranking["competitor"] || ranking[:competitor]),
           format_metric_summary(ranking),
           format_values(ranking["values_by_seed"] || ranking[:values_by_seed] || %{}),
           format_integer(total_tokens(ranking["usage_totals"] || ranking[:usage_totals] || %{})),
@@ -144,7 +144,7 @@ defmodule LemonSim.Bench.Suite do
           "| Competitor | Seed | Error |",
           "|---|---:|---|"
           | Enum.map(failures, fn failure ->
-              "| #{failure["competitor"] || failure[:competitor]} | #{failure["seed"] || failure[:seed]} | `#{failure["error"] || failure[:error]}` |"
+              "| #{escape_md_cell(failure["competitor"] || failure[:competitor])} | #{failure["seed"] || failure[:seed]} | `#{escape_md_cell(failure["error"] || failure[:error])}` |"
             end)
         ]
       end
@@ -181,6 +181,17 @@ defmodule LemonSim.Bench.Suite do
       true ->
         competitors = Enum.map(competitors, &normalize_competitor!/1)
 
+        duplicate_ids =
+          competitors
+          |> Enum.frequencies_by(& &1["id"])
+          |> Enum.filter(fn {_id, count} -> count > 1 end)
+          |> Enum.map(fn {id, _count} -> id end)
+
+        if duplicate_ids != [] do
+          raise ArgumentError,
+                "duplicate competitor ids would overwrite each other's runs: #{inspect(duplicate_ids)}"
+        end
+
         {:ok,
          %{
            "scenario" => scenario,
@@ -196,32 +207,29 @@ defmodule LemonSim.Bench.Suite do
   defp normalize_competitor!(competitor) do
     competitor = stringify_keys(competitor)
     fields = ~w(offline_strategy model external_cmd)
-    modes = Enum.filter(fields, &valid_competitor_value?(competitor[&1]))
 
-    id =
-      competitor["id"] || competitor["offline_strategy"] || competitor["model"] ||
-        competitor["external_cmd"]
+    case Enum.filter(fields, &valid_competitor_value?(competitor[&1])) do
+      [mode] ->
+        id = competitor["id"] || competitor[mode]
 
-    cond do
-      not is_binary(id) or id == "" ->
-        raise ArgumentError, "competitor id is required"
+        if not is_binary(id) or id == "" do
+          raise ArgumentError, "competitor id is required"
+        end
 
-      length(modes) != 1 ->
+        %{"id" => id, mode => competitor[mode]}
+
+      _zero_or_many ->
         raise ArgumentError,
-              "competitor #{inspect(id)} must include exactly one of offline_strategy, model, or external_cmd"
-
-      competitor["offline_strategy"] ->
-        %{"id" => id, "offline_strategy" => competitor["offline_strategy"]}
-
-      competitor["model"] ->
-        %{"id" => id, "model" => competitor["model"]}
-
-      competitor["external_cmd"] ->
-        %{"id" => id, "external_cmd" => competitor["external_cmd"]}
+              "competitor #{inspect(competitor["id"])} must include exactly one of offline_strategy, model, or external_cmd"
     end
   end
 
   defp valid_competitor_value?(value), do: is_binary(value) and value != ""
+
+  # Competitor ids and error text may contain "|" (e.g. external shell
+  # commands); escape so leaderboard.md tables stay well-formed.
+  defp escape_md_cell(value) when is_binary(value), do: String.replace(value, "|", "\\|")
+  defp escape_md_cell(value), do: value
 
   defp run_matrix(spec, suite_dir, opts) do
     File.mkdir_p!(suite_dir)
