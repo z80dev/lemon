@@ -2,7 +2,7 @@ defmodule LemonSimUi.Router do
   @moduledoc """
   Phoenix router for the LemonSim UI.
 
-  Public routes: `/` (lobby), `/watch/:sim_id` (spectator), `/healthz`.
+  Public routes: `/` (lobby), `/leaderboards`, `/watch/:sim_id` (spectator), `/healthz`.
   Admin routes: `/admin` and `/admin/sims/:id` (dashboard, requires access token).
   API routes: `/api/admin/*` (JSON API, requires access token).
   """
@@ -38,6 +38,7 @@ defmodule LemonSimUi.Router do
     pipe_through(:public_browser)
 
     live("/", LobbyLive, :index)
+    live("/leaderboards", LeaderboardLive, :index)
     live("/watch/:sim_id", SpectatorLive, :show)
     get("/vending_bench/start/:preset_id", VendingBenchLaunchController, :create)
     post("/vending_bench/start", VendingBenchLaunchController, :create)

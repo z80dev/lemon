@@ -9,7 +9,7 @@ defmodule LemonSimUi.SpectatorLive do
 
   use LemonSimUi, :live_view
 
-  alias LemonSimUi.{SimHelpers, WerewolfPlayback}
+  alias LemonSimUi.{ArtifactReader, SimHelpers, WerewolfPlayback}
   alias LemonSim.Kernel.{Bus, Event, State, Store}
 
   alias LemonSimUi.Live.Components.{
@@ -43,6 +43,7 @@ defmodule LemonSimUi.SpectatorLive do
            playback: nil,
            playback_timer_ref: nil,
            artifact_dir: nil,
+           usage: nil,
            artifact_timer_ref: nil,
            running: false,
            page_title: "Not Found"
@@ -71,6 +72,7 @@ defmodule LemonSimUi.SpectatorLive do
             playback: if(domain_type == :werewolf, do: WerewolfPlayback.new(state), else: nil),
             playback_timer_ref: nil,
             artifact_dir: artifact_dir,
+            usage: ArtifactReader.read_usage(artifact_dir),
             artifact_timer_ref: nil,
             running: running,
             game_over_redirect: false,
@@ -161,6 +163,7 @@ defmodule LemonSimUi.SpectatorLive do
         socket
         |> assign(
           state: state,
+          usage: ArtifactReader.read_usage(socket.assigns.artifact_dir),
           running: artifact_running?(state),
           artifact_timer_ref: nil
         )
@@ -190,18 +193,21 @@ defmodule LemonSimUi.SpectatorLive do
                 state={@state}
                 sim_id={@sim_id}
                 running={@running}
+                usage={@usage}
               />
             <% :tcg_shop -> %>
               <.tcg_shop_spectator_view
                 state={@state}
                 sim_id={@sim_id}
                 running={@running}
+                usage={@usage}
               />
             <% _ -> %>
               <.spectator_view
                 state={@state}
                 sim_id={@sim_id}
                 running={@running}
+                usage={@usage}
               />
           <% end %>
           <div :if={@game_over_redirect} class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center">
@@ -268,6 +274,7 @@ defmodule LemonSimUi.SpectatorLive do
   attr(:state, :map, required: true)
   attr(:sim_id, :string, required: true)
   attr(:running, :boolean, required: true)
+  attr(:usage, :map, default: nil)
 
   defp vending_spectator_view(assigns) do
     world = vending_display_world(assigns.state.world)
@@ -315,6 +322,7 @@ defmodule LemonSimUi.SpectatorLive do
 
       <div class="flex-1 overflow-y-auto overflow-x-hidden" style="scrollbar-gutter: stable;">
         <VendingBenchBoard.render world={@state.world} interactive={false} />
+        <.usage_panel usage={@usage} />
         <RunLog.render state={@state} running={@running} />
       </div>
     </div>
@@ -324,6 +332,7 @@ defmodule LemonSimUi.SpectatorLive do
   attr(:state, :map, required: true)
   attr(:sim_id, :string, required: true)
   attr(:running, :boolean, required: true)
+  attr(:usage, :map, default: nil)
 
   defp tcg_shop_spectator_view(assigns) do
     day_number = LemonCore.MapHelpers.get_key(assigns.state.world, :day_number) || 1
@@ -370,6 +379,7 @@ defmodule LemonSimUi.SpectatorLive do
 
       <div class="flex-1 overflow-y-auto overflow-x-hidden p-4" style="scrollbar-gutter: stable;">
         <TcgShopBoard.render world={@state.world} interactive={false} />
+        <.usage_panel usage={@usage} />
         <RunLog.render state={@state} running={@running} />
       </div>
     </div>
@@ -381,6 +391,7 @@ defmodule LemonSimUi.SpectatorLive do
   attr(:state, :map, required: true)
   attr(:sim_id, :string, required: true)
   attr(:running, :boolean, required: true)
+  attr(:usage, :map, default: nil)
 
   defp spectator_view(assigns) do
     world = assigns.state.world
@@ -445,6 +456,8 @@ defmodule LemonSimUi.SpectatorLive do
           <WerewolfBoard.render world={@state.world} interactive={false} />
         </div>
 
+        <.usage_panel usage={@usage} />
+
         <%!-- Character bio strip --%>
         <div :if={map_size(@character_profiles) > 0} class="flex-shrink-0 border-t border-glass-border bg-slate-900/40 backdrop-blur-md">
           <div class="px-4 py-2">
@@ -508,6 +521,78 @@ defmodule LemonSimUi.SpectatorLive do
         </div>
       </div>
     </div>
+    """
+  end
+
+  attr(:usage, :map, default: nil)
+
+  defp usage_panel(%{usage: nil} = assigns), do: ~H""
+
+  defp usage_panel(assigns) do
+    totals = Map.get(assigns.usage, "totals", %{})
+    actors = Map.get(assigns.usage, "actors", %{})
+
+    assigns =
+      assigns
+      |> assign(:totals, totals)
+      |> assign(:actors, Enum.sort_by(actors, fn {actor_id, _usage} -> actor_id end))
+
+    ~H"""
+    <section class="mx-4 my-4 glass-panel rounded-xl border border-glass-border p-4">
+      <div class="flex flex-col md:flex-row md:items-start md:justify-between gap-4 mb-4">
+        <div>
+          <h2 class="text-sm font-bold uppercase tracking-widest text-cyan-300">Usage</h2>
+          <p class="text-xs font-mono text-slate-500 mt-1">
+            {ArtifactReader.format_integer(ArtifactReader.total_tokens(@totals))} tokens
+          </p>
+        </div>
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-right">
+          <div>
+            <div class="text-[10px] uppercase tracking-widest text-slate-500 font-bold">Input</div>
+            <div class="text-sm font-mono text-slate-200">{ArtifactReader.format_integer(@totals["input_tokens"] || 0)}</div>
+          </div>
+          <div>
+            <div class="text-[10px] uppercase tracking-widest text-slate-500 font-bold">Output</div>
+            <div class="text-sm font-mono text-slate-200">{ArtifactReader.format_integer(@totals["output_tokens"] || 0)}</div>
+          </div>
+          <div>
+            <div class="text-[10px] uppercase tracking-widest text-slate-500 font-bold">Decisions</div>
+            <div class="text-sm font-mono text-slate-200">{ArtifactReader.format_integer(@totals["decisions"] || 0)}</div>
+          </div>
+          <div>
+            <div class="text-[10px] uppercase tracking-widest text-slate-500 font-bold">Cost</div>
+            <div class="text-sm font-mono text-slate-200">{ArtifactReader.format_cost(@totals["cost_usd"])}</div>
+          </div>
+        </div>
+      </div>
+
+      <div :if={@actors != []} class="overflow-x-auto">
+        <table class="min-w-full text-xs">
+          <thead class="text-slate-500 uppercase tracking-widest font-mono">
+            <tr>
+              <th class="py-2 pr-4 text-left">Actor</th>
+              <th class="py-2 pr-4 text-left">Model</th>
+              <th class="py-2 pr-4 text-right">Input</th>
+              <th class="py-2 pr-4 text-right">Output</th>
+              <th class="py-2 pr-4 text-right">Tokens</th>
+              <th class="py-2 pr-4 text-right">Cost</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-glass-border">
+            <%= for {actor_id, actor_usage} <- @actors do %>
+              <tr>
+                <td class="py-2 pr-4 font-bold text-white">{actor_id}</td>
+                <td class="py-2 pr-4 font-mono text-slate-400">{actor_usage["model_id"] || "unknown"}</td>
+                <td class="py-2 pr-4 text-right font-mono text-slate-300">{ArtifactReader.format_integer(actor_usage["input_tokens"] || 0)}</td>
+                <td class="py-2 pr-4 text-right font-mono text-slate-300">{ArtifactReader.format_integer(actor_usage["output_tokens"] || 0)}</td>
+                <td class="py-2 pr-4 text-right font-mono text-slate-300">{ArtifactReader.format_integer(ArtifactReader.total_tokens(actor_usage))}</td>
+                <td class="py-2 pr-4 text-right font-mono text-slate-300">{ArtifactReader.format_cost(actor_usage["cost_usd"])}</td>
+              </tr>
+            <% end %>
+          </tbody>
+        </table>
+      </div>
+    </section>
     """
   end
 

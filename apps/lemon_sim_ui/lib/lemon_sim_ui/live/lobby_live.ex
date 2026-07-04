@@ -65,13 +65,20 @@ defmodule LemonSimUi.LobbyLive do
       <%!-- Header --%>
       <header class="border-b border-glass-border bg-slate-900/60 backdrop-blur-md">
         <div class="max-w-5xl mx-auto px-6 py-6">
-          <div class="flex items-center gap-3 mb-1">
-            <div class="w-9 h-9 rounded-lg shadow-neon-blue bg-gradient-to-br from-blue-500 to-cyan-400 flex items-center justify-center font-bold text-lg text-white">
-              L
+          <div class="flex items-start justify-between gap-4">
+            <div>
+              <div class="flex items-center gap-3 mb-1">
+                <div class="w-9 h-9 rounded-lg shadow-neon-blue bg-gradient-to-br from-blue-500 to-cyan-400 flex items-center justify-center font-bold text-lg text-white">
+                  L
+                </div>
+                <h1 class="text-3xl font-extrabold text-white tracking-tight text-glow-cyan">LemonSim</h1>
+              </div>
+              <p class="text-sm text-slate-400 font-mono ml-12">Watch AI agents play games in real-time</p>
             </div>
-            <h1 class="text-3xl font-extrabold text-white tracking-tight text-glow-cyan">LemonSim</h1>
+            <.link navigate={~p"/leaderboards"} class="glass-button px-4 py-2 rounded-lg text-sm font-mono">
+              Leaderboards
+            </.link>
           </div>
-          <p class="text-sm text-slate-400 font-mono ml-12">Watch AI agents play games in real-time</p>
         </div>
       </header>
 

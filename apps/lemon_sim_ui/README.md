@@ -12,8 +12,10 @@ lemon_sim (Runner, Store, Bus, all domain examples)
 lemon_sim_ui
   |-- LemonSimUi.SimManager         GenServer: start/stop/run simulation processes
   |-- LemonSimUi.LobbyLive          Public live-games landing page
+  |-- LemonSimUi.LeaderboardLive    Public benchmark suite leaderboard page
   |-- LemonSimUi.SimDashboardLive   Admin LiveView for sim launch and detail
   |-- LemonSimUi.SpectatorLive      Public read-only spectator LiveView
+  |-- LemonSimUi.ArtifactReader     Reads suite and usage JSON artifacts
   |-- LemonSimUi.SimHelpers         Pure helpers: domain inference, labels, colors
   |-- LemonSimUi.Live.Components.*  Stateless function components per domain board
   |-- LemonSimUi.Endpoint           Bandit-backed Phoenix endpoint
@@ -28,11 +30,11 @@ The LiveView transport is websocket-only. `LemonSimUi.Endpoint` disables the `/l
 - `SimManager.lobby_topic/0` — for sim list changes (start, stop, finish)
 - `LemonSim.Kernel.Bus` topic for the currently viewed sim — for per-step world updates
 
-Public routes are served separately from admin routes. `LobbyLive` handles `/`, `SpectatorLive` serves `/watch/:sim_id`, and `SimDashboardLive` handles the admin dashboard at `/admin` and `/admin/sims/:sim_id`. For CLI-driven VendingBench runs, the lobby and spectator route can fall back to checkpoint artifacts registered by the runner and refresh from `final_world.json` while the run is in progress. The VendingBench board shows the active operator and physical-worker model labels when the checkpoint world includes runtime model metadata, and Arena worlds render multi-agent standings, messages, payments, trades, supplier leads, price-war signals, and collusion flags above the vending-machine broadcast. TCG Shop sims are also watchable through the public spectator route using the same read-only board as the admin dashboard.
+Public routes are served separately from admin routes. `LobbyLive` handles `/`, `LeaderboardLive` serves `/leaderboards`, `SpectatorLive` serves `/watch/:sim_id`, and `SimDashboardLive` handles the admin dashboard at `/admin` and `/admin/sims/:sim_id`. The leaderboard page scans configured `:suite_roots` for LemonSim `suite.json` files, skips malformed files with a log line, and renders verified rankings, failures, token totals, and null-safe costs. For CLI-driven VendingBench runs, the lobby and spectator route can fall back to checkpoint artifacts registered by the runner and refresh from `final_world.json` while the run is in progress. When those checkpoint artifacts include `usage.json`, the spectator route renders total and per-actor usage/cost without treating unknown cost as zero. The VendingBench board shows the active operator and physical-worker model labels when the checkpoint world includes runtime model metadata, and Arena worlds render multi-agent standings, messages, payments, trades, supplier leads, price-war signals, and collusion flags above the vending-machine broadcast. TCG Shop sims are also watchable through the public spectator route using the same read-only board as the admin dashboard.
 
 On the Werewolf board, the current day's public discussion transcript remains visible until it is archived into day history, and the most recent archived day opens expanded by default so village discussion does not disappear behind later night/private panels. The dashboard and public watcher now share the same non-admin story surface: wolf chat history, private meeting transcripts, journals, and character lore all render directly on the board instead of being hidden behind a viewer-mode flag. Public accusation entries render as explicit chat bubbles that name the accuser, the accused, and the stated reason. The watcher and Werewolf detail view also buffer incoming state snapshots and hold dialogue/night beats on screen long enough to read, so fast model turns do not instantly jump past the interesting parts.
 
-Admin surfaces are intended to be private. When `LEMON_SIM_UI_ACCESS_TOKEN` is set, the dashboard (`/admin`, `/admin/sims/:sim_id`) and the JSON admin API require either `Authorization: Bearer <token>` or `?token=<token>`. The public lobby (`/`), spectator route (`/watch/:sim_id`), and `/healthz` remain public. If `LEMON_SIM_UI_PUBLIC_VENDING_LAUNCHER=true`, the public lobby also shows a fixed VendingBench launcher with only the GLM 5.1 Z.AI and GPT 5.5 Codex OAuth presets.
+Admin surfaces are intended to be private. When `LEMON_SIM_UI_ACCESS_TOKEN` is set, the dashboard (`/admin`, `/admin/sims/:sim_id`) and the JSON admin API require either `Authorization: Bearer <token>` or `?token=<token>`. The public lobby (`/`), leaderboard route (`/leaderboards`), spectator route (`/watch/:sim_id`), and `/healthz` remain public. If `LEMON_SIM_UI_PUBLIC_VENDING_LAUNCHER=true`, the public lobby also shows a fixed VendingBench launcher with only the GLM 5.1 Z.AI and GPT 5.5 Codex OAuth presets.
 
 ### Supported Simulation Domains
 
@@ -71,9 +73,11 @@ For Tic Tac Toe and Skirmish, the user can select a team at launch. On human tur
 |---|---|---|
 | `LemonSimUi.Application` | `lib/lemon_sim_ui/application.ex` | Starts `Telemetry`, `SimRunnerSupervisor`, `SimManager`, `Endpoint` |
 | `LemonSimUi.LobbyLive` | `lib/lemon_sim_ui/live/lobby_live.ex` | Public landing page listing currently running sims and, when enabled, a fixed VendingBench launcher |
+| `LemonSimUi.LeaderboardLive` | `lib/lemon_sim_ui/live/leaderboard_live.ex` | Public leaderboard page for benchmark suite artifacts under configured `:suite_roots` |
 | `LemonSimUi.SimManager` | `lib/lemon_sim_ui/sim_manager.ex` | GenServer: lifecycle and runner loop for all active sims |
 | `LemonSimUi.SimDashboardLive` | `lib/lemon_sim_ui/live/sim_dashboard_live.ex` | Admin dashboard LiveView for sim launch and detail flows |
-| `LemonSimUi.SpectatorLive` | `lib/lemon_sim_ui/live/spectator_live.ex` | Public shareable watcher for Werewolf, VendingBench, and TCG Shop with no admin controls |
+| `LemonSimUi.SpectatorLive` | `lib/lemon_sim_ui/live/spectator_live.ex` | Public shareable watcher for Werewolf, VendingBench, and TCG Shop with no admin controls; shows `usage.json` for artifact-backed runs |
+| `LemonSimUi.ArtifactReader` | `lib/lemon_sim_ui/artifact_reader.ex` | Reads `suite.json` and `usage.json`, formats null-safe cost and token totals |
 | `LemonSimUi.WerewolfPlayback` | `lib/lemon_sim_ui/werewolf_playback.ex` | Buffers exact Werewolf snapshots and applies dwell heuristics so live viewing stays legible |
 | `LemonSimUi.AdminSimController` | `lib/lemon_sim_ui/controllers/admin_sim_controller.ex` | Protected JSON API for starting and stopping sims remotely |
 | `LemonSimUi.HealthController` | `lib/lemon_sim_ui/controllers/health_controller.ex` | Public health check used by load balancers and smoke tests |
@@ -93,7 +97,7 @@ For Tic Tac Toe and Skirmish, the user can select a team at launch. On human tur
 | `LemonSimUi.Live.Components.DungeonCrawlBoard` | `lib/lemon_sim_ui/live/components/dungeon_crawl_board.ex` | Party health, room progress, and encounter display |
 | `LemonSimUi.Live.Components.VendingBenchBoard` | `lib/lemon_sim_ui/live/components/vending_bench_board.ex` | Retro vending-machine broadcast view with generated product sprites, Arena standings, supplier delivery, refund, machine fault, PvP payment/trade/lead/price-war/collusion, and scorecard display |
 | `LemonSimUi.Live.Components.TcgShopBoard` | `lib/lemon_sim_ui/live/components/tcg_shop_board.ex` | TCG Shop dashboard for sealed inventory/openings, loose-pack inventory and sales, special-order deposits/fulfillment, supplier credit/accounts payable, damaged-delivery claims, supplier standing, financing, register cash/card tenders, bank deposits, drawer reconciliation, local returns/store-credit refunds, store credit, consignment payables, memberships, preorders, promotions, organized-play capacity/prize support, inventory aging, singles, graded-card lots, grading risk, market pulse, online marketplace channel/listing fees, tax ledger, gross margin, fixed overhead, operating profit, refunds, channel costs, payroll, scheduled staffing, loss prevention, local competition, customer loyalty/satisfaction, staff hours, supplier fill rate, stockouts, shrinkage, backorders, and scorecard display |
-| `LemonSimUi.Router` | `lib/lemon_sim_ui/router.ex` | Routes `/` to `LobbyLive`, `/vending_bench/start/:preset_id` to the public launcher, `/admin` and `/admin/sims/:sim_id` to `SimDashboardLive`, and `/watch/:sim_id` to `SpectatorLive` |
+| `LemonSimUi.Router` | `lib/lemon_sim_ui/router.ex` | Routes `/` to `LobbyLive`, `/leaderboards` to `LeaderboardLive`, `/vending_bench/start/:preset_id` to the public launcher, `/admin` and `/admin/sims/:sim_id` to `SimDashboardLive`, and `/watch/:sim_id` to `SpectatorLive` |
 | `LemonSimUi.Endpoint` | `lib/lemon_sim_ui/endpoint.ex` | Bandit HTTP server, LiveView socket, static asset serving |
 | `LemonSimUi.CoreComponents` | `lib/lemon_sim_ui/components/core_components.ex` | Phoenix-generated shared form/flash/button components |
 
@@ -122,7 +126,9 @@ mix phx.server
 iex -S mix phx.server
 ```
 
-The public lobby is available at `http://localhost:4090/` and the admin dashboard at `http://localhost:4090/admin` (port configured in `config/dev.exs`). Set `LEMON_SIM_UI_BIND_IP=0.0.0.0` to bind the development server on all interfaces, for example when browsing over Tailscale. Set `LEMON_SIM_UI_PUBLIC_VENDING_LAUNCHER=true` to expose the lobby VendingBench launcher.
+The public lobby is available at `http://localhost:4090/`, public suite leaderboards are available at `http://localhost:4090/leaderboards`, and the admin dashboard is at `http://localhost:4090/admin` (port configured in `config/dev.exs`). Set `LEMON_SIM_UI_BIND_IP=0.0.0.0` to bind the development server on all interfaces, for example when browsing over Tailscale. Set `LEMON_SIM_UI_PUBLIC_VENDING_LAUNCHER=true` to expose the lobby VendingBench launcher.
+
+Configure benchmark suite discovery with `config :lemon_sim_ui, :suite_roots, ["/tmp/vending-suite"]`. Each root may be a suite directory containing `suite.json` directly or a parent directory containing one suite per child directory.
 
 ### Starting a Simulation from the Dashboard
 

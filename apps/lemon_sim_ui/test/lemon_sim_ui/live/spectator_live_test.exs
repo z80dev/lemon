@@ -5,6 +5,8 @@ defmodule LemonSimUi.SpectatorLiveTest do
 
   alias LemonSim.Kernel.State
 
+  @artifact_registry Path.join(System.tmp_dir!(), "lemon_vending_bench_artifact_registry.json")
+
   test "shows not found for nonexistent sim", %{conn: conn} do
     {:ok, _view, html} = live(conn, "/watch/nonexistent_sim_id")
     assert html =~ "Simulation Not Found"
@@ -126,6 +128,84 @@ defmodule LemonSimUi.SpectatorLiveTest do
     assert html =~ "VENDBENCH LIVE"
 
     File.rm_rf!(artifact_dir)
+  end
+
+  test "renders usage panel from checkpoint artifacts", %{conn: conn} do
+    sim_id = "test_spectator_usage_artifact"
+    original_registry = File.read(@artifact_registry)
+
+    artifact_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "test_spectator_usage_artifact_#{System.unique_integer([:positive])}"
+      )
+
+    on_exit(fn ->
+      restore_registry(original_registry)
+      File.rm_rf!(artifact_dir)
+      LemonSim.Kernel.Store.delete_state(sim_id)
+    end)
+
+    File.rm_rf!(artifact_dir)
+    File.mkdir_p!(artifact_dir)
+    LemonSim.Kernel.Store.delete_state(sim_id)
+
+    world =
+      LemonSim.Examples.VendingBench.initial_state(sim_id: sim_id, max_days: 2).world
+      |> Map.put(:status, "complete")
+
+    File.write!(Path.join(artifact_dir, "final_world.json"), Jason.encode!(world))
+
+    File.write!(
+      Path.join(artifact_dir, "usage.json"),
+      Jason.encode!(%{
+        "schema" => "lemon_sim.usage.v1",
+        "sim_id" => sim_id,
+        "totals" => %{
+          "input_tokens" => 1_200,
+          "output_tokens" => 345,
+          "cache_read_tokens" => 10,
+          "cache_write_tokens" => 5,
+          "decisions" => 7,
+          "cost_usd" => nil
+        },
+        "actors" => %{
+          "operator" => %{
+            "model_id" => "openai:gpt-test",
+            "input_tokens" => 1_000,
+            "output_tokens" => 300,
+            "cache_read_tokens" => 10,
+            "cache_write_tokens" => 5,
+            "decisions" => 5,
+            "cost_usd" => nil
+          },
+          "physical_worker" => %{
+            "model_id" => "anthropic:claude-test",
+            "input_tokens" => 200,
+            "output_tokens" => 45,
+            "cache_read_tokens" => 0,
+            "cache_write_tokens" => 0,
+            "decisions" => 2,
+            "cost_usd" => 0.03
+          }
+        }
+      })
+    )
+
+    File.write!(@artifact_registry, Jason.encode!(%{sim_id => artifact_dir}))
+
+    {:ok, view, _html} = live(conn, "/watch/#{sim_id}")
+    html = render(view)
+
+    assert html =~ "Usage"
+    assert html =~ "1,560 tokens"
+    assert html =~ "1,200"
+    assert html =~ "345"
+    assert html =~ "operator"
+    assert html =~ "openai:gpt-test"
+    assert html =~ "physical_worker"
+    assert html =~ "$0.03"
+    assert html =~ "—"
   end
 
   test "uses arena leader world for vending bench spectator header", %{conn: conn} do
@@ -340,4 +420,7 @@ defmodule LemonSimUi.SpectatorLiveTest do
   end
 
   defp assert_eventually(_fun, 0), do: flunk("condition not met in time")
+
+  defp restore_registry({:ok, body}), do: File.write!(@artifact_registry, body)
+  defp restore_registry({:error, _reason}), do: File.rm(@artifact_registry)
 end
