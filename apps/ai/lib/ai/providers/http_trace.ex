@@ -146,26 +146,9 @@ defmodule Ai.Providers.HttpTrace do
     _ -> nil
   end
 
-  defp truncate_to_bytes(text, max_bytes) when byte_size(text) <= max_bytes, do: text
-
   defp truncate_to_bytes(text, max_bytes) do
-    prefix =
-      text
-      |> binary_part(0, max_bytes)
-      |> trim_to_valid_utf8()
-
-    "#{prefix}...[truncated #{byte_size(text) - byte_size(prefix)} bytes]"
-  end
-
-  defp trim_to_valid_utf8(<<>>), do: ""
-
-  defp trim_to_valid_utf8(binary) do
-    if String.valid?(binary) do
-      binary
-    else
-      binary
-      |> binary_part(0, byte_size(binary) - 1)
-      |> trim_to_valid_utf8()
-    end
+    Ai.Text.truncate_bytes_utf8(text, max_bytes,
+      marker: fn removed -> "...[truncated #{removed} bytes]" end
+    )
   end
 end

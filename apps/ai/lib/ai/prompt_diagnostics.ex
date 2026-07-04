@@ -317,7 +317,7 @@ defmodule Ai.PromptDiagnostics do
   defp approx_tokens_from_bytes(bytes) when is_integer(bytes) and bytes >= 0 do
     # Very rough but directionally useful for regressions.
     # Most English text averages ~3-4 chars/token.
-    div(bytes + 3, 4)
+    Ai.Tokens.estimate_byte_count(bytes + 3)
   end
 
   defp sha256_hex(data) when is_binary(data) do

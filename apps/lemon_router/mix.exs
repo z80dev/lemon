@@ -26,6 +26,7 @@ defmodule LemonRouter.MixProject do
 
   defp deps do
     [
+      {:ai, in_umbrella: true},
       {:lemon_core, in_umbrella: true},
       {:lemon_media, in_umbrella: true},
       {:lemon_channels, in_umbrella: true},

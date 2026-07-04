@@ -687,7 +687,7 @@ defmodule Ai.Error do
   defp normalize_error_key(key), do: key
 
   defp truncate_message(msg, max_length) when byte_size(msg) > max_length do
-    String.slice(msg, 0, max_length) <> "..."
+    Ai.Text.truncate_chars(msg, max_length, force: true)
   end
 
   defp truncate_message(msg, _), do: msg

@@ -358,62 +358,12 @@ defmodule CodingAgent.BashExecutor do
   @spec truncate_tail(content :: String.t(), opts :: keyword()) ::
           {truncated_content :: String.t(), was_truncated :: boolean(), info :: map()}
   def truncate_tail(content, opts \\ []) do
-    max_bytes = Keyword.get(opts, :max_bytes, @default_max_bytes)
-    max_lines = Keyword.get(opts, :max_lines, @default_max_lines)
+    opts =
+      opts
+      |> Keyword.put_new(:max_bytes, @default_max_bytes)
+      |> Keyword.put_new(:max_lines, @default_max_lines)
 
-    total_bytes = byte_size(content)
-    lines = String.split(content, "\n")
-    total_lines = length(lines)
-
-    # Check if truncation is needed
-    needs_line_truncation = total_lines > max_lines
-    needs_byte_truncation = total_bytes > max_bytes
-
-    if not needs_line_truncation and not needs_byte_truncation do
-      info = %{
-        total_lines: total_lines,
-        total_bytes: total_bytes,
-        output_lines: total_lines,
-        output_bytes: total_bytes
-      }
-
-      {content, false, info}
-    else
-      # Take last max_lines
-      truncated_lines =
-        if needs_line_truncation do
-          Enum.take(lines, -max_lines)
-        else
-          lines
-        end
-
-      truncated_content = Enum.join(truncated_lines, "\n")
-
-      # Further truncate by bytes if needed
-      truncated_content =
-        if byte_size(truncated_content) > max_bytes do
-          # Take last max_bytes, which may result in partial first line
-          binary_part(truncated_content, byte_size(truncated_content) - max_bytes, max_bytes)
-        else
-          truncated_content
-        end
-
-      output_lines = length(String.split(truncated_content, "\n"))
-      output_bytes = byte_size(truncated_content)
-
-      info = %{
-        total_lines: total_lines,
-        total_bytes: total_bytes,
-        output_lines: output_lines,
-        output_bytes: output_bytes
-      }
-
-      # Add truncation notice
-      notice = "[Output truncated. Total: #{total_lines} lines, #{total_bytes} bytes]\n\n"
-      final_content = notice <> truncated_content
-
-      {final_content, true, info}
-    end
+    Ai.Text.truncate_tail(content, opts)
   end
 
   @doc """

@@ -524,8 +524,7 @@ defmodule CodingAgent.RateLimitHealer do
   """
   @spec calculate_backoff_delay(non_neg_integer()) :: pos_integer()
   def calculate_backoff_delay(attempt) when attempt >= 0 do
-    delay = @backoff_base_ms * :math.pow(2, attempt)
-    min(round(delay), @backoff_max_ms)
+    LemonCore.Retry.capped_backoff(@backoff_base_ms, attempt, @backoff_max_ms)
   end
 
   # ============================================================================

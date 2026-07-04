@@ -277,13 +277,13 @@ defmodule Ai.ContextCompactor do
   end
 
   defp message_token_estimate(%Ai.Types.UserMessage{content: content}) when is_binary(content) do
-    div(String.length(content), 4) + 4
+    Ai.Tokens.estimate_chars(content) + 4
   end
 
   defp message_token_estimate(%Ai.Types.UserMessage{content: content}) when is_list(content) do
     content
     |> Enum.map(fn
-      %{text: text} when is_binary(text) -> div(String.length(text), 4)
+      %{text: text} when is_binary(text) -> Ai.Tokens.estimate_chars(text)
       _ -> 10
     end)
     |> Enum.sum()
@@ -293,8 +293,8 @@ defmodule Ai.ContextCompactor do
   defp message_token_estimate(%Ai.Types.AssistantMessage{content: content}) do
     content
     |> Enum.map(fn
-      %{text: text} when is_binary(text) -> div(String.length(text), 4)
-      %{thinking: thinking} when is_binary(thinking) -> div(String.length(thinking), 4)
+      %{text: text} when is_binary(text) -> Ai.Tokens.estimate_chars(text)
+      %{thinking: thinking} when is_binary(thinking) -> Ai.Tokens.estimate_chars(thinking)
       _ -> 10
     end)
     |> Enum.sum()
@@ -304,7 +304,7 @@ defmodule Ai.ContextCompactor do
   defp message_token_estimate(%Ai.Types.ToolResultMessage{content: content}) do
     content
     |> Enum.map(fn
-      %{text: text} when is_binary(text) -> div(String.length(text), 4)
+      %{text: text} when is_binary(text) -> Ai.Tokens.estimate_chars(text)
       _ -> 10
     end)
     |> Enum.sum()
