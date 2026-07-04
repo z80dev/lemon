@@ -13,7 +13,18 @@ defmodule Ai.MixProject do
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       test_coverage: [summary: [threshold: 64]],
-      deps: deps()
+      deps: deps(),
+      name: "Ai",
+      docs: docs()
+    ]
+  end
+
+  defp docs do
+    [
+      main: "Ai",
+      source_url: "https://github.com/z80dev/lemon",
+      source_ref: "main",
+      formatters: ["html"]
     ]
   end
 
@@ -35,7 +46,9 @@ defmodule Ai.MixProject do
       # Options validation
       {:nimble_options, "~> 1.1"},
       # Required for Req.Test stubs
-      {:plug, "~> 1.16", only: :test}
+      {:plug, "~> 1.16", only: :test},
+      # API documentation
+      {:ex_doc, "~> 0.34", only: :dev, runtime: false}
     ]
   end
 end

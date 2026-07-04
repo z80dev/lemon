@@ -13,7 +13,18 @@ defmodule AgentCore.MixProject do
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       test_coverage: [summary: [threshold: 71]],
-      deps: deps()
+      deps: deps(),
+      name: "AgentCore",
+      docs: docs()
+    ]
+  end
+
+  defp docs do
+    [
+      main: "AgentCore",
+      source_url: "https://github.com/z80dev/lemon",
+      source_ref: "main",
+      formatters: ["html"]
     ]
   end
 
@@ -32,7 +43,9 @@ defmodule AgentCore.MixProject do
       {:lemon_core, in_umbrella: true},
       {:req, "~> 0.5"},
       {:jason, "~> 1.4"},
-      {:stream_data, "~> 1.1", only: :test}
+      {:stream_data, "~> 1.1", only: :test},
+      # API documentation
+      {:ex_doc, "~> 0.34", only: :dev, runtime: false}
     ]
   end
 end

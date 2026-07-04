@@ -13,7 +13,18 @@ defmodule LemonSim.MixProject do
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       test_coverage: [summary: [threshold: 33]],
-      deps: deps()
+      deps: deps(),
+      name: "LemonSim",
+      docs: docs()
+    ]
+  end
+
+  defp docs do
+    [
+      main: "LemonSim",
+      source_url: "https://github.com/z80dev/lemon",
+      source_ref: "main",
+      formatters: ["html"]
     ]
   end
 
@@ -28,7 +39,9 @@ defmodule LemonSim.MixProject do
     [
       {:lemon_core, in_umbrella: true},
       {:agent_core, in_umbrella: true},
-      {:ai, in_umbrella: true}
+      {:ai, in_umbrella: true},
+      # API documentation
+      {:ex_doc, "~> 0.34", only: :dev, runtime: false}
     ]
   end
 end
