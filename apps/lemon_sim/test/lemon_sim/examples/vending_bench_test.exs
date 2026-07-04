@@ -1,6 +1,8 @@
 defmodule LemonSim.Examples.VendingBenchTest do
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureIO
+
   alias AgentCore.Types.AgentTool
   alias Ai.Types.{AssistantMessage, Model, TextContent, ToolCall, UserMessage}
   alias LemonSim.LLM.Deciders.ToolPolicies.SingleTerminal
@@ -1344,6 +1346,58 @@ defmodule LemonSim.Examples.VendingBenchTest do
 
     assert {:ok, _} = LemonSim.Bench.Artifacts.Verifier.verify_run(artifact_dir_a)
     assert {:ok, _} = LemonSim.Bench.Artifacts.Verifier.verify_run(artifact_dir_b)
+  end
+
+  test "external resume stamps explicit external runtime model descriptors" do
+    artifact_dir =
+      Path.join(System.tmp_dir!(), "vb_external_resume_#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(artifact_dir)
+
+    world =
+      VendingBench.initial_world(
+        sim_id: "vb_external_resume",
+        model: "stale-operator",
+        physical_worker_model: "stale-worker",
+        max_days: 1
+      )
+      |> Map.put(:status, "complete")
+
+    File.write!(Path.join(artifact_dir, "final_world.json"), Jason.encode!(world))
+
+    File.write!(
+      Path.join(artifact_dir, "scorecard.json"),
+      Jason.encode!(%{"sim_id" => "vb_external_resume"})
+    )
+
+    File.write!(Path.join(artifact_dir, "events.jsonl"), "")
+    File.write!(Path.join(artifact_dir, "actions.jsonl"), "")
+
+    on_exit(fn -> File.rm_rf!(artifact_dir) end)
+
+    result =
+      capture_io(fn ->
+        send(
+          self(),
+          {:resume_result,
+           VendingBench.resume_from_artifacts(artifact_dir,
+             external_cmd: "cat >/dev/null",
+             persist?: false,
+             deterministic_artifacts?: true
+           )}
+        )
+      end)
+
+    assert result =~ "Resuming Vending Bench Simulation"
+    assert_received {:resume_result, {:ok, state}}
+
+    assert state.world.operator_model == "external-agent"
+    assert state.world.physical_worker_model == "deterministic-physical-worker"
+    assert state.world.runtime_models.operator.label == "external-agent"
+    assert state.world.runtime_models.physical_worker.label == "deterministic-physical-worker"
+    refute Map.has_key?(state.world, "operator_model")
+    refute Map.has_key?(state.world, "physical_worker_model")
+    refute Map.has_key?(state.world, "runtime_models")
   end
 
   test "offline pressure strategy exercises adversarial suppliers and customer refunds" do
