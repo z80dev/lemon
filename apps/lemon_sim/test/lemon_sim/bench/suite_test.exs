@@ -67,6 +67,100 @@ defmodule LemonSim.Bench.SuiteTest do
     assert failure["error"] =~ "unsupported_suite_mode"
   end
 
+  test "external competitor on an unsupported adapter reports a clean failure" do
+    spec = %{
+      scenario: "tcg_shop",
+      preset: "ci",
+      seeds: [7],
+      competitors: [%{id: "external-agent", external_cmd: "cat >/dev/null"}]
+    }
+
+    assert {:ok, %{suite: suite}} = Suite.run(spec, suite_dir: tmp_dir("suite_external_tcg"))
+    assert suite.rankings == []
+    assert [failure] = suite.failures
+    assert failure["competitor"] == "external-agent"
+    assert failure["error"] =~ "unsupported_suite_mode"
+    assert failure["error"] =~ "external"
+  end
+
+  test "vending bench suite ranks an external competitor with unknown cost" do
+    case System.find_executable("python3") do
+      nil ->
+        IO.puts("Skipping external suite integration: python3 not found")
+        assert true
+
+      python ->
+        suite_dir = tmp_dir("suite_external_vending")
+        agent_dir = tmp_dir("suite_external_agent")
+        agent_path = Path.join(agent_dir, "agent.py")
+        hello_log = Path.join(agent_dir, "hellos.jsonl")
+        write_suite_external_agent!(agent_path)
+
+        cmd = "#{shell_quote(python)} #{shell_quote(agent_path)} #{shell_quote(hello_log)}"
+
+        spec = %{
+          scenario: "vending_bench",
+          preset: "ci",
+          seeds: [7, 8],
+          competitors: [
+            %{id: "baseline", offline_strategy: "baseline"},
+            %{id: "external-agent", external_cmd: cmd}
+          ]
+        }
+
+        assert {:ok, %{suite: suite, leaderboard: leaderboard}} =
+                 capture_io(fn ->
+                   send(self(), {:suite_result, Suite.run(spec, suite_dir: suite_dir)})
+                 end)
+                 |> then(fn _output ->
+                   assert_received {:suite_result, result}
+                   result
+                 end)
+
+        assert length(suite.runs) == 4
+        assert Enum.all?(suite.runs, & &1["verified"])
+        assert Enum.map(suite.rankings, & &1["competitor"]) == ["baseline", "external-agent"]
+
+        external = Enum.find(suite.rankings, &(&1["competitor"] == "external-agent"))
+        assert external["usage_totals"]["input_tokens"] == 0
+        assert external["usage_totals"]["output_tokens"] == 0
+        assert external["usage_totals"]["cost_usd"] == nil
+        assert leaderboard =~ "| external-agent |"
+        assert leaderboard =~ "| 0 | unknown |"
+
+        hellos = read_jsonl!(hello_log)
+        assert Enum.map(hellos, & &1["seed"]) == [7, 8]
+        assert Enum.map(hellos, & &1["preset"]) == ["ci", "ci"]
+        assert hellos |> Enum.map(& &1["pid"]) |> Enum.uniq() |> length() == 2
+    end
+  end
+
+  test "competitors must specify exactly one execution mode" do
+    base = %{
+      scenario: "vending_bench",
+      preset: "ci",
+      seeds: [7]
+    }
+
+    no_mode = Map.put(base, :competitors, [%{id: "missing"}])
+
+    assert {:error, {:invalid_suite_spec, %ArgumentError{message: message}}} =
+             Suite.run(no_mode, suite_dir: tmp_dir("suite_no_competitor_mode"))
+
+    assert message =~ "exactly one of offline_strategy, model, or external_cmd"
+
+    multiple_modes =
+      Map.put(base, :competitors, [
+        %{id: "ambiguous", offline_strategy: "baseline", external_cmd: "cat"}
+      ])
+
+    assert {:error, {:invalid_suite_spec, %ArgumentError{message: message}}} =
+             Suite.run(multiple_modes, suite_dir: tmp_dir("suite_multi_competitor_mode"))
+
+    assert message =~ "competitor \"ambiguous\""
+    assert message =~ "exactly one of offline_strategy, model, or external_cmd"
+  end
+
   test "keyless vending bench arena ci suite ranks a numeric aggregate metric" do
     spec = %{
       scenario: "vending_bench_arena",
@@ -409,6 +503,53 @@ defmodule LemonSim.Bench.SuiteTest do
     dir = Path.join(System.tmp_dir!(), "#{prefix}_#{System.unique_integer([:positive])}")
     on_exit(fn -> File.rm_rf!(dir) end)
     dir
+  end
+
+  defp write_suite_external_agent!(path) do
+    File.mkdir_p!(Path.dirname(path))
+
+    File.write!(path, """
+    #!/usr/bin/env python3
+    import json
+    import os
+    import sys
+
+    log_path = sys.argv[1]
+
+    for line in sys.stdin:
+        message = json.loads(line)
+        message_type = message.get("type")
+
+        if message_type == "hello":
+            with open(log_path, "a", encoding="utf-8") as log:
+                log.write(json.dumps({
+                    "pid": os.getpid(),
+                    "sim_id": message.get("sim_id"),
+                    "preset": message.get("preset"),
+                    "seed": message.get("seed"),
+                }, sort_keys=True) + "\\n")
+        elif message_type == "decision_request":
+            print(json.dumps({
+                "type": "tool_call",
+                "turn": message.get("turn"),
+                "name": "wait_for_next_day",
+                "arguments": {}
+            }), flush=True)
+        elif message_type == "game_over":
+            break
+    """)
+
+    File.chmod!(path, 0o755)
+  end
+
+  defp read_jsonl!(path) do
+    path
+    |> File.stream!()
+    |> Enum.map(&(&1 |> String.trim() |> Jason.decode!()))
+  end
+
+  defp shell_quote(value) do
+    "'" <> String.replace(value, "'", "'\"'\"'") <> "'"
   end
 
   defp sha256(content), do: :crypto.hash(:sha256, content) |> Base.encode16(case: :lower)

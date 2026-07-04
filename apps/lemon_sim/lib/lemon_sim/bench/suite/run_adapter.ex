@@ -1,7 +1,7 @@
 defmodule LemonSim.Bench.Suite.RunAdapter do
   @moduledoc false
 
-  @type mode :: :offline | :live
+  @type mode :: :offline | :live | :external
 
   @callback supported_modes() :: [mode()]
   @callback supported_presets() :: [String.t()]

@@ -195,22 +195,33 @@ defmodule LemonSim.Bench.Suite do
 
   defp normalize_competitor!(competitor) do
     competitor = stringify_keys(competitor)
-    id = competitor["id"] || competitor["offline_strategy"] || competitor["model"]
+    fields = ~w(offline_strategy model external_cmd)
+    modes = Enum.filter(fields, &valid_competitor_value?(competitor[&1]))
+
+    id =
+      competitor["id"] || competitor["offline_strategy"] || competitor["model"] ||
+        competitor["external_cmd"]
 
     cond do
       not is_binary(id) or id == "" ->
         raise ArgumentError, "competitor id is required"
 
-      is_binary(competitor["offline_strategy"]) ->
+      length(modes) != 1 ->
+        raise ArgumentError,
+              "competitor #{inspect(id)} must include exactly one of offline_strategy, model, or external_cmd"
+
+      competitor["offline_strategy"] ->
         %{"id" => id, "offline_strategy" => competitor["offline_strategy"]}
 
-      is_binary(competitor["model"]) ->
+      competitor["model"] ->
         %{"id" => id, "model" => competitor["model"]}
 
-      true ->
-        raise ArgumentError, "competitor must have offline_strategy or model"
+      competitor["external_cmd"] ->
+        %{"id" => id, "external_cmd" => competitor["external_cmd"]}
     end
   end
+
+  defp valid_competitor_value?(value), do: is_binary(value) and value != ""
 
   defp run_matrix(spec, suite_dir, opts) do
     File.mkdir_p!(suite_dir)
@@ -350,7 +361,10 @@ defmodule LemonSim.Bench.Suite do
   defp run_scenario(spec, competitor, opts) do
     with {:ok, adapter} <- RunAdapterRegistry.fetch(spec["scenario"]),
          {:ok, preset_opts} <- RunAdapterRegistry.preset_opts(spec["scenario"], spec["preset"]) do
-      run_opts = Keyword.merge(preset_opts, opts)
+      run_opts =
+        preset_opts
+        |> Keyword.merge(opts)
+        |> maybe_put(:preset, spec["preset"])
 
       cond do
         offline = competitor["offline_strategy"] ->
@@ -358,9 +372,15 @@ defmodule LemonSim.Bench.Suite do
 
         model_id = competitor["model"] ->
           run_live_adapter(adapter, model_id, opts[:seed], run_opts)
+
+        external_cmd = competitor["external_cmd"] ->
+          run_adapter(adapter, :external, external_cmd, opts[:seed], run_opts)
       end
     end
   end
+
+  defp maybe_put(opts, _key, nil), do: opts
+  defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
 
   defp run_live_adapter(adapter, model_id, seed, opts) do
     # Check mode support before resolve_model: resolving raises when no
