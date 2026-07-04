@@ -1,6 +1,6 @@
 # Lemon Exemplary-Repo Plan — 2026-07-04
 
-Owner: @z80. Status: in execution.
+Owner: @z80. Status: executed 2026-07-04 (same day; see log below).
 
 Follow-up to `lemon-stack-reshape-2026-07-02.md` (executed). The reshape fixed
 layering; this plan closes the remaining gap between "well-shaped repo" and
@@ -80,3 +80,45 @@ landscape has recompute-verified scorecards. Lead with that.
   cannot see each other); classification stays in `Ai.Providers.RetryHelper`.
 - `docs/plans/` stays in-tree as the decision log (catalog-stamped), not
   deleted; completed plans get `max_age_days: 365`.
+- Dialyzer NOT adopted (evaluated in P3): PLT cost across a 21-app umbrella
+  outweighs the marginal signal on top of warnings-as-errors + Credo + the
+  bespoke architecture gates. Revisit only if `ai` is ever published as a
+  standalone hex package.
+- Credo refactor checks (Nesting, CyclomaticComplexity, MapJoin, …) disabled
+  as deliberate style decisions, documented in `.credo.exs`'s header — every
+  ENABLED check is enforced at zero violations in CI.
+
+## Execution log (2026-07-04)
+
+- P0 merged + pushed: flagship branch (F2-F5), format enforcement in CI,
+  dead `games-platform.yml` removed, architecture overview rewritten (21 apps,
+  two-product framing), hermetic fix for the legacy-bundle verify test that
+  was failing CI, context-size telemetry tests deflaked.
+- P1 executed via 4 parallel codex (gpt-5.5) workers in worktrees, reviewed by
+  4 code-review agents, all findings fixed before merge:
+  - W-A: all 16 scored scenarios registry-verified; Suite dispatch via
+    RunAdapter behaviour; keyless live-on-offline crash fixed pre-merge.
+  - W-B: shared Rendering.VideoGenerator + FrameChrome (−2,900 dup lines,
+    byte-identical SVG verified); reviewer caught a widened event match that
+    would have changed video pacing — narrowed back.
+  - W-C: public /leaderboards LiveView + spectator usage panel; hardened
+    against shape-broken artifacts, path disclosure, and double disk scans.
+  - W-E: Ai.Tokens + Ai.Text consolidation (5 token-estimate + 6 truncation
+    copies), RateLimitHealer → LemonCore.Retry; zero behavior change verified.
+- P2 wave: W-D cross-suite Bradley-Terry ratings (`mix lemon.sim.ratings`,
+  byte-deterministic ratings.json); W-F Credo adoption — 876 violations fixed
+  across 275 files, `mix credo` gates quality CI and `scripts/test quality`.
+- P3: ExDoc wired for ai/agent_core/lemon_sim.
+- Also fixed while here: Product Smoke scheduled runs (failing since June 9 —
+  releases gate HTTP servers behind PHX_SERVER, workflow never set it; first
+  green run since June 8), and an MCP client crash decoding null-result
+  JSON-RPC responses that flaked CI.
+- Watch item: if LemonSkills.McpSourceTest's SSE test fails again (now as a
+  clean assertion rather than a BadMapError), investigate LemonMCP.Server's
+  response path for the null-result race.
+
+## Remaining (not started)
+
+- P4 partial: coverage floor raises beyond lemon_sim; usage surfacing could
+  extend to live (non-replay) sims; publish a live-model suite + ratings to
+  games.zeebot.xyz leaderboards.

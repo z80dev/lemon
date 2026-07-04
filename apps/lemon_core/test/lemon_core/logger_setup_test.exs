@@ -13,7 +13,9 @@ defmodule LemonCore.LoggerSetupTest do
     :logger.remove_handler(@handler_id)
 
     # Create temp directory for log files
-    tmp_dir = Path.join(System.tmp_dir!(), "logger_setup_test_#{System.unique_integer([:positive])}")
+    tmp_dir =
+      Path.join(System.tmp_dir!(), "logger_setup_test_#{System.unique_integer([:positive])}")
+
     File.mkdir_p!(tmp_dir)
 
     on_exit(fn ->
@@ -274,8 +276,14 @@ defmodule LemonCore.LoggerSetupTest do
   end
 
   describe "path normalization" do
-    test "expands relative paths", %{tmp_dir: _tmp_dir} do
-      relative_path = "./relative/test.log"
+    test "expands relative paths", %{tmp_dir: tmp_dir} do
+      # Relative to cwd but resolving inside tmp_dir — a bare "./relative/..."
+      # path would create a log file in the source tree.
+      relative_path =
+        Path.join(tmp_dir, "relative/test.log")
+        |> Path.relative_to(File.cwd!(), force: true)
+
+      refute Path.type(relative_path) == :absolute
 
       config = %LemonCore.Config{
         logging: %{
@@ -285,9 +293,20 @@ defmodule LemonCore.LoggerSetupTest do
 
       # Should not crash - path will be expanded
       assert :ok = LoggerSetup.setup_from_config(config)
+      assert File.exists?(Path.join(tmp_dir, "relative/test.log"))
     end
 
     test "handles paths with tilde" do
+      # Exercise tilde expansion, cleaning up the file it creates in $HOME.
+      home_log = Path.expand("~/test.log")
+      existed_before? = File.exists?(home_log)
+
+      on_exit(fn ->
+        unless existed_before? do
+          File.rm(home_log)
+        end
+      end)
+
       config = %LemonCore.Config{
         logging: %{
           file_path: "~/test.log"
@@ -329,6 +348,7 @@ defmodule LemonCore.LoggerSetupTest do
         assert :ok = LoggerSetup.setup_from_config(config)
 
         {:ok, handler_config} = :logger.get_handler_config(@handler_id)
+
         assert handler_config.level == expected,
                "Expected level #{expected} for input '#{input}', got #{handler_config.level}"
       end
