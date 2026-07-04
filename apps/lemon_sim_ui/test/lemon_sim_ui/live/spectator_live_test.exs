@@ -3,7 +3,9 @@ defmodule LemonSimUi.SpectatorLiveTest do
 
   import Phoenix.LiveViewTest
 
+  alias Ai.Types.{Model, ModelCost, Usage}
   alias LemonSim.Kernel.State
+  alias LemonSim.LLM.Usage, as: SimUsage
 
   @artifact_registry Path.join(System.tmp_dir!(), "lemon_vending_bench_artifact_registry.json")
 
@@ -205,6 +207,59 @@ defmodule LemonSimUi.SpectatorLiveTest do
     assert html =~ "openai:gpt-test"
     assert html =~ "physical_worker"
     assert html =~ "$0.03"
+    assert html =~ "—"
+  end
+
+  test "renders usage panel from a live usage collector", %{conn: conn} do
+    sim_id = "test_spectator_live_usage"
+    original_manager_state = :sys.get_state(LemonSimUi.SimManager)
+
+    {:ok, collector} = SimUsage.start_link(sim_id)
+
+    model = %Model{
+      id: "unknown-live",
+      name: "Unknown Live",
+      provider: :test,
+      cost: %ModelCost{}
+    }
+
+    SimUsage.record_decision(collector, "operator", model)
+    SimUsage.record_response(collector, "operator", model, %Usage{input: 100, output: 50})
+    SimUsage.record_external_decision(collector, "physical_worker", "external-worker")
+
+    state =
+      LemonSim.Examples.VendingBench.initial_state(
+        sim_id: sim_id,
+        max_days: 2
+      )
+
+    LemonSim.Kernel.Store.put_state(state)
+
+    :sys.replace_state(LemonSimUi.SimManager, fn manager_state ->
+      put_in(manager_state.runners[sim_id], %{
+        ref: self(),
+        domain: :vending_bench,
+        usage_collector: collector
+      })
+    end)
+
+    on_exit(fn ->
+      :sys.replace_state(LemonSimUi.SimManager, fn _ -> original_manager_state end)
+      if Process.alive?(collector), do: Agent.stop(collector)
+      LemonSim.Kernel.Store.delete_state(sim_id)
+    end)
+
+    {:ok, view, _html} = live(conn, "/watch/#{sim_id}")
+    html = render(view)
+
+    assert html =~ "Usage"
+    assert html =~ "150 tokens"
+    assert html =~ "100"
+    assert html =~ "50"
+    assert html =~ "operator"
+    assert html =~ "test:unknown-live"
+    assert html =~ "physical_worker"
+    assert html =~ "external-worker"
     assert html =~ "—"
   end
 

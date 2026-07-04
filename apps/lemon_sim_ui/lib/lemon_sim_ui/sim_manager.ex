@@ -12,6 +12,7 @@ defmodule LemonSimUi.SimManager do
 
   alias LemonCore.MapHelpers
   alias LemonSim.Kernel.{Runner, State, Store}
+  alias LemonSim.LLM.Usage
 
   alias LemonSim.Examples.{
     TicTacToe,
@@ -58,6 +59,11 @@ defmodule LemonSimUi.SimManager do
   @spec list_running() :: [String.t()]
   def list_running do
     GenServer.call(__MODULE__, :list_running)
+  end
+
+  @spec usage(String.t()) :: map() | nil
+  def usage(sim_id) when is_binary(sim_id) do
+    GenServer.call(__MODULE__, {:usage, sim_id})
   end
 
   @spec register_human(String.t(), String.t()) :: :ok
@@ -138,6 +144,7 @@ defmodule LemonSimUi.SimManager do
 
       %{ref: ref} ->
         Process.exit(ref, :shutdown)
+        stop_usage_collector(Map.get(Map.get(state.runners, sim_id), :usage_collector))
         runners = Map.delete(state.runners, sim_id)
         human_players = Map.delete(state.human_players, sim_id)
         broadcast_lobby()
@@ -165,8 +172,16 @@ defmodule LemonSimUi.SimManager do
               {:ok, modules, run_opts} ->
                 broadcast_lobby()
 
+                {:ok, usage_collector} = Usage.start_link(sim_id)
+                run_opts = Keyword.put(run_opts, :usage_collector, usage_collector)
                 task_ref = start_runner(stored_state, modules, run_opts, nil)
-                runners = Map.put(state.runners, sim_id, %{ref: task_ref, domain: domain})
+
+                runners =
+                  Map.put(state.runners, sim_id, %{
+                    ref: task_ref,
+                    domain: domain,
+                    usage_collector: usage_collector
+                  })
 
                 {:reply, {:ok, sim_id}, %{state | runners: runners}}
 
@@ -180,6 +195,19 @@ defmodule LemonSimUi.SimManager do
 
   def handle_call(:list_running, _from, state) do
     {:reply, Map.keys(state.runners), state}
+  end
+
+  def handle_call({:usage, sim_id}, _from, state) do
+    usage =
+      case get_in(state, [:runners, sim_id, :usage_collector]) do
+        collector when is_pid(collector) ->
+          if Process.alive?(collector), do: Usage.artifact(collector, sim_id)
+
+        _ ->
+          nil
+      end
+
+    {:reply, usage, state}
   end
 
   def handle_call({:register_human, sim_id, team}, _from, state) do
@@ -272,6 +300,7 @@ defmodule LemonSimUi.SimManager do
 
     if sim_id do
       domain = runner_entry.domain
+      stop_usage_collector(Map.get(runner_entry, :usage_collector))
       runners = Map.delete(state.runners, sim_id)
       human_players = Map.delete(state.human_players, sim_id)
       broadcast_lobby()
@@ -399,13 +428,21 @@ defmodule LemonSimUi.SimManager do
 
     case build_initial_state(domain, sim_id, opts) do
       {:ok, initial_state, modules, run_opts} ->
+        {:ok, usage_collector} = Usage.start_link(sim_id)
+        run_opts = Keyword.put(run_opts, :usage_collector, usage_collector)
+
         put_state_with_retry(initial_state, 3)
         maybe_start_post_launch_tasks(domain, initial_state, run_opts)
         broadcast_lobby()
 
         task_ref = start_runner(initial_state, modules, run_opts, human_player)
 
-        runners = Map.put(state.runners, sim_id, %{ref: task_ref, domain: domain})
+        runners =
+          Map.put(state.runners, sim_id, %{
+            ref: task_ref,
+            domain: domain,
+            usage_collector: usage_collector
+          })
 
         human_players =
           if human_player do
@@ -718,6 +755,13 @@ defmodule LemonSimUi.SimManager do
     Process.monitor(pid)
     pid
   end
+
+  defp stop_usage_collector(collector) when is_pid(collector) do
+    if Process.alive?(collector), do: Agent.stop(collector)
+    :ok
+  end
+
+  defp stop_usage_collector(_collector), do: :ok
 
   defp run_ai_only(state, modules, opts) do
     terminal? = Keyword.get(opts, :terminal?, fn _s -> false end)
