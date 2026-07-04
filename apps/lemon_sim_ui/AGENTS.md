@@ -6,11 +6,11 @@
 
 - launching simulations via `SimManager`
 - driving the runner loop (calling `LemonSim.Kernel.Runner.step/3` in a supervised task)
-- rendering live state in the browser via the public `LobbyLive`, admin `SimDashboardLive`, and public read-only `SpectatorLive` watcher
+- rendering live state in the browser via the public `LobbyLive`, public `LeaderboardLive`, admin `SimDashboardLive`, and public read-only `SpectatorLive` watcher
 - exposing a token-protected admin API for remote sim start/stop
 - accepting human-player moves for interactive domains
 
-The primary entry points for changes are `SimManager`, `SimDashboardLive`, `SpectatorLive`, and the board component for the relevant domain.
+The primary entry points for changes are `SimManager`, `SimDashboardLive`, `SpectatorLive`, `LeaderboardLive`, and the board component for the relevant domain.
 
 ## File Structure
 
@@ -20,7 +20,8 @@ lib/
   lemon_sim_ui/
     application.ex                         OTP application: supervisor tree
     endpoint.ex                            Bandit HTTP endpoint + LiveView socket
-    router.ex                              Public `/`, `/watch/:sim_id`, `/healthz`; private `/admin/*`; `/api/admin/*`
+    router.ex                              Public `/`, `/leaderboards`, `/watch/:sim_id`, `/healthz`; private `/admin/*`; `/api/admin/*`
+    artifact_reader.ex                     Suite/usage JSON readers and formatting helpers
     sim_manager.ex                         GenServer: owns all running sim tasks
     sim_helpers.ex                         Pure helpers: domain inference, labels, colors
     werewolf_playback.ex                   Buffered live-playback helper for readable Werewolf spectator pacing
@@ -38,6 +39,7 @@ lib/
       health_controller.ex                 Public `/healthz` endpoint
     live/
       lobby_live.ex                        Public list of currently running sims
+      leaderboard_live.ex                  Public benchmark suite leaderboard page
       sim_dashboard_live.ex                Admin LiveView (launch + detail)
       spectator_live.ex                    Public read-only werewolf spectator view
     plugs/
@@ -73,9 +75,11 @@ test/
 |---|---|---|
 | `lib/lemon_sim_ui/sim_manager.ex` | `LemonSimUi.SimManager` | Central GenServer; `start_sim/2`, `stop_sim/1`, `resume_sim/1`, `list_running/0`, `submit_human_move/2`, auto-loop controls |
 | `lib/lemon_sim_ui/live/lobby_live.ex` | `LemonSimUi.LobbyLive` | Public lobby for `/`; lists running sims, links to spectator pages, and can expose the fixed VendingBench launcher |
+| `lib/lemon_sim_ui/live/leaderboard_live.ex` | `LemonSimUi.LeaderboardLive` | Public leaderboard for `/leaderboards`; scans configured suite roots and renders rankings, failures, token totals, and null-safe costs |
 | `lib/lemon_sim_ui/controllers/vending_bench_launch_controller.ex` | `LemonSimUi.VendingBenchLaunchController` | Public non-JS route for the fixed VendingBench launcher |
 | `lib/lemon_sim_ui/live/sim_dashboard_live.ex` | `LemonSimUi.SimDashboardLive` | Dashboard LiveView for `/admin` and `/admin/sims/:sim_id`; handles sim launch and admin/detail flows |
-| `lib/lemon_sim_ui/live/spectator_live.ex` | `LemonSimUi.SpectatorLive` | Public shareable watcher for `/watch/:sim_id`; supports Werewolf, VendingBench, and TCG Shop, subscribes to sim/lobby updates, and refreshes CLI VendingBench runs from checkpoint artifacts |
+| `lib/lemon_sim_ui/live/spectator_live.ex` | `LemonSimUi.SpectatorLive` | Public shareable watcher for `/watch/:sim_id`; supports Werewolf, VendingBench, and TCG Shop, subscribes to sim/lobby updates, refreshes CLI VendingBench runs from checkpoint artifacts, and shows `usage.json` for artifact-backed runs |
+| `lib/lemon_sim_ui/artifact_reader.ex` | `LemonSimUi.ArtifactReader` | Reads `suite.json` and `usage.json`; keeps token/cost formatting null-safe |
 | `lib/lemon_sim_ui/werewolf_playback.ex` | `LemonSimUi.WerewolfPlayback` | Buffers exact Werewolf state snapshots and enforces minimum dwell times so live dialogue/night beats stay readable |
 | `lib/lemon_sim_ui/controllers/admin_sim_controller.ex` | `LemonSimUi.AdminSimController` | Protected JSON API for remote sim start/stop |
 | `lib/lemon_sim_ui/controllers/health_controller.ex` | `LemonSimUi.HealthController` | Public load-balancer/smoke-test health check |
@@ -149,7 +153,8 @@ Edit `provider_options/0`, `model_options_for_provider/1`, and the default provi
 - Buffered Werewolf watch pacing belongs in `lemon_sim_ui`, not `lemon_sim`. Use exact broadcast snapshots plus UI-side dwell heuristics for readability, but keep simulation rules and state transitions in `lemon_sim`.
 - VendingBench live-log model traces are compact `plan_history` entries from `SimManager`. Keep them to visible tool calls/results and domain summaries; do not try to expose provider-hidden chain-of-thought.
 - `SimHelpers.infer_domain_type/1` uses world map key heuristics. If two domains share the same distinguishing key, ensure the more specific one is listed first in the `cond`.
-- Keep `/admin` and `/admin/sims/:sim_id` on `SimDashboardLive` behind `RequireAccessToken` when a token is configured. `/`, `/watch/:sim_id`, and `/healthz` are intentionally public. The optional public VendingBench launcher is controlled by `LEMON_SIM_UI_PUBLIC_VENDING_LAUNCHER` and should stay limited to fixed presets unless the route is moved behind auth.
+- Keep `/admin` and `/admin/sims/:sim_id` on `SimDashboardLive` behind `RequireAccessToken` when a token is configured. `/`, `/leaderboards`, `/watch/:sim_id`, and `/healthz` are intentionally public. The optional public VendingBench launcher is controlled by `LEMON_SIM_UI_PUBLIC_VENDING_LAUNCHER` and should stay limited to fixed presets unless the route is moved behind auth.
+- Configure public benchmark discovery with `config :lemon_sim_ui, :suite_roots, ["/tmp/vending-suite"]`. The default reader accepts either a suite directory containing `suite.json` or a parent directory with child suite directories, logs malformed JSON, and skips bad files.
 - Treat auto-loop and deployment wiring as an ops slice. Runtime env flags such as `LEMON_SIM_AUTO_LOOP` and deployment manifests such as `fly.toml` should stay coherent with `SimManager` auto-loop behavior, but separate from the general public/admin UI route changes.
 - `MemoryViewer` reads files synchronously at render time (no caching). Keep it bounded to small memory namespaces; it already limits to 20 files and 4096 bytes per file.
 

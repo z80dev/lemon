@@ -46,6 +46,12 @@ if System.get_env("LEMON_SIM_UI_PUBLIC_VENDING_LAUNCHER") in ["1", "true", "TRUE
   config :lemon_sim_ui, :public_vending_launcher, true
 end
 
+sim_ui_suite_roots = System.get_env("LEMON_SIM_UI_SUITE_ROOTS")
+
+if is_binary(sim_ui_suite_roots) and sim_ui_suite_roots != "" do
+  config :lemon_sim_ui, :suite_roots, String.split(sim_ui_suite_roots, ":", trim: true)
+end
+
 uploads_dir = System.get_env("LEMON_WEB_UPLOADS_DIR")
 
 if is_binary(uploads_dir) and uploads_dir != "" do
