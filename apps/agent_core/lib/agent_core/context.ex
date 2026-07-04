@@ -53,14 +53,12 @@ defmodule AgentCore.Context do
 
   require Logger
 
+  alias Ai.Tokens
   alias AgentCore.Types
 
   # ============================================================================
   # Constants
   # ============================================================================
-
-  # Approximate characters per token (conservative estimate)
-  @chars_per_token 4
 
   # Default warning thresholds (in characters, ~tokens * 4)
   # Warning at ~50k tokens
@@ -82,7 +80,7 @@ defmodule AgentCore.Context do
   Estimates the size of the context in characters.
 
   This is a fast heuristic that counts characters in all message content.
-  For rough token estimation, divide by #{@chars_per_token}.
+  For rough token estimation, divide by 4.
 
   ## Parameters
 
@@ -124,7 +122,7 @@ defmodule AgentCore.Context do
   @doc """
   Estimates the token count based on character count.
 
-  Uses a conservative estimate of #{@chars_per_token} characters per token.
+  Uses a conservative estimate of 4 characters per token.
   Actual token counts vary by model, language, and content type.
 
   ## Examples
@@ -134,7 +132,7 @@ defmodule AgentCore.Context do
   """
   @spec estimate_tokens(non_neg_integer()) :: non_neg_integer()
   def estimate_tokens(char_count) do
-    div(char_count, @chars_per_token)
+    Tokens.estimate_char_count(char_count)
   end
 
   @doc """

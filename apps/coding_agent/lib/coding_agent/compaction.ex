@@ -455,7 +455,7 @@ defmodule CodingAgent.Compaction do
   Estimate tokens for plain text using a rough 4-chars/token heuristic.
   """
   @spec estimate_text_tokens(String.t() | nil) :: non_neg_integer()
-  def estimate_text_tokens(text) when is_binary(text), do: div(String.length(text), 4)
+  def estimate_text_tokens(text) when is_binary(text), do: Ai.Tokens.estimate_chars(text)
   def estimate_text_tokens(_), do: 0
 
   @doc """

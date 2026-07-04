@@ -9,6 +9,7 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
 
   require Logger
 
+  alias Ai.Tokens
   alias LemonCore.ResumeToken
   alias LemonRouter.ChannelContext
 
@@ -32,9 +33,6 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
     "超出最大长度",
     "上下文窗口已满"
   ]
-
-  # Conservative chars-per-token ratio for fallback estimation (4 chars ~ 1 token).
-  @fallback_chars_per_token 4
 
   # ---- Event field extraction ----
 
@@ -135,7 +133,7 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
       end
 
     if is_binary(prompt) and byte_size(prompt) > 0 do
-      div(byte_size(prompt), @fallback_chars_per_token)
+      Tokens.estimate_bytes(prompt)
     else
       nil
     end

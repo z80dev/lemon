@@ -302,8 +302,7 @@ defmodule Ai.Providers.OpenAIResponsesShared do
   defp truncate_function_call_output_impl(text, call_id, tool_name, limit_bytes) do
     truncated =
       text
-      |> binary_part(0, limit_bytes)
-      |> trim_to_valid_utf8()
+      |> Ai.Text.truncate_bytes_utf8(limit_bytes, marker: "")
 
     Logger.warning(
       "OpenAI function_call_output truncated " <>
@@ -345,18 +344,6 @@ defmodule Ai.Providers.OpenAIResponsesShared do
   end
 
   defp function_call_output_limit_bytes(_), do: @default_soft_function_call_output_bytes
-
-  defp trim_to_valid_utf8(<<>>), do: ""
-
-  defp trim_to_valid_utf8(binary) when is_binary(binary) do
-    if String.valid?(binary) do
-      binary
-    else
-      binary
-      |> binary_part(0, byte_size(binary) - 1)
-      |> trim_to_valid_utf8()
-    end
-  end
 
   defp convert_assistant_block(%ThinkingContent{} = block, _msg_index, _is_different_model) do
     if block.thinking_signature do

@@ -286,7 +286,7 @@ Derived from mix.exs files and enforced by `mix lemon.quality` (architecture bou
 
 ```
 lemon_control_plane ──→ lemon_core, lemon_browser, lemon_media, lemon_lsp, lemon_router, lemon_channels, lemon_skills, lemon_automation, ai, agent_core, coding_agent*
-lemon_router ─────────→ lemon_core, lemon_media, lemon_channels, agent_core
+lemon_router ─────────→ lemon_core, lemon_media, lemon_channels, agent_core, ai
 lemon_gateway ────────→ lemon_core, agent_core, coding_agent
 lemon_automation ─────→ lemon_core, lemon_router, lemon_skills
 lemon_channels ───────→ lemon_core, lemon_media, agent_core, x_api

@@ -511,7 +511,7 @@ defmodule CodingAgent.Session.Presentation do
         result
 
       String.length(result) > 500 ->
-        String.slice(result, 0, 500) <> "..."
+        Ai.Text.truncate_chars(result, 500)
 
       true ->
         result

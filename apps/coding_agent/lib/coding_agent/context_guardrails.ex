@@ -291,7 +291,10 @@ defmodule CodingAgent.ContextGuardrails do
 
     _ = maybe_write_spill(path, text)
 
-    truncated = truncate_middle_utf8(text, max_bytes)
+    truncated =
+      Ai.Text.truncate_middle_utf8(text, max_bytes,
+        marker: fn removed -> "\n... [TRUNCATED #{removed} bytes] ...\n" end
+      )
 
     meta = %{
       original_bytes: byte_size(text),
@@ -347,45 +350,5 @@ defmodule CodingAgent.ContextGuardrails do
 
   defp sha256_hex(bin) when is_binary(bin) do
     :crypto.hash(:sha256, bin) |> Base.encode16(case: :lower)
-  end
-
-  # Keep head + tail; deterministic; preserve UTF-8 validity.
-  defp truncate_middle_utf8(text, max_bytes) when byte_size(text) <= max_bytes, do: text
-
-  defp truncate_middle_utf8(_text, max_bytes) when max_bytes <= 0, do: ""
-
-  defp truncate_middle_utf8(text, max_bytes) do
-    marker_reserve = 256
-    budget = max(max_bytes - marker_reserve, 0)
-
-    head_bytes = div(budget * 70, 100)
-    tail_bytes = budget - head_bytes
-
-    head = trim_to_valid_utf8(binary_part(text, 0, head_bytes))
-    tail = trim_to_valid_utf8(binary_part(text, byte_size(text) - tail_bytes, tail_bytes))
-
-    removed = byte_size(text) - byte_size(head) - byte_size(tail)
-
-    marker = "\n... [TRUNCATED #{removed} bytes] ...\n"
-
-    out = head <> marker <> tail
-
-    if byte_size(out) <= max_bytes do
-      out
-    else
-      trim_to_valid_utf8(binary_part(out, 0, max_bytes))
-    end
-  end
-
-  defp trim_to_valid_utf8(<<>>), do: ""
-
-  defp trim_to_valid_utf8(bin) when is_binary(bin) do
-    if String.valid?(bin) do
-      bin
-    else
-      bin
-      |> binary_part(0, byte_size(bin) - 1)
-      |> trim_to_valid_utf8()
-    end
   end
 end
