@@ -12,6 +12,7 @@ export default {
       { text: "Home", link: "/" },
       { text: "Install", link: "/install" },
       { text: "Compare", link: "/compare" },
+      { text: "Benchmarks", link: "/benchmarks/quickstart" },
       { text: "Demo", link: "/demo" },
       { text: "Launch Plan", link: "/plans/lemon-1.0-mainstream-readiness" },
       { text: "Support", link: "/support" },
@@ -51,6 +52,15 @@ export default {
           { text: "Memory", link: "/user-guide/memory" },
           { text: "Adaptive Features", link: "/user-guide/adaptive" },
           { text: "Feature Rollout", link: "/user-guide/rollout" },
+        ],
+      },
+      {
+        text: "Benchmarks",
+        items: [
+          { text: "Quickstart", link: "/benchmarks/quickstart" },
+          { text: "VendingBench", link: "/benchmarks/vending-bench" },
+          { text: "Platform Guarantees", link: "/benchmarks/platform" },
+          { text: "Run Your Own Model", link: "/benchmarks/run-your-model" },
         ],
       },
       {
