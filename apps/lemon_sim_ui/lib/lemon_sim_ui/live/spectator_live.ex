@@ -9,7 +9,7 @@ defmodule LemonSimUi.SpectatorLive do
 
   use LemonSimUi, :live_view
 
-  alias LemonSimUi.{ArtifactReader, SimHelpers, WerewolfPlayback}
+  alias LemonSimUi.{ArtifactReader, SimHelpers, SimManager, WerewolfPlayback}
   alias LemonSim.Kernel.{Bus, Event, State, Store}
 
   alias LemonSimUi.Live.Components.{
@@ -25,6 +25,7 @@ defmodule LemonSimUi.SpectatorLive do
                                      "lemon_vending_bench_artifact_registry.json"
                                    )
   @vending_bench_artifact_refresh_ms 5_000
+  @usage_refresh_ms 5_000
 
   @impl true
   def mount(%{"sim_id" => sim_id}, _session, socket) do
@@ -44,6 +45,7 @@ defmodule LemonSimUi.SpectatorLive do
            playback_timer_ref: nil,
            artifact_dir: nil,
            usage: nil,
+           usage_timer_ref: nil,
            artifact_timer_ref: nil,
            running: false,
            page_title: "Not Found"
@@ -54,7 +56,7 @@ defmodule LemonSimUi.SpectatorLive do
         supported = domain_type in [:werewolf, :vending_bench, :tcg_shop]
 
         if connected?(socket) && supported do
-          LemonCore.Bus.subscribe(LemonSimUi.SimManager.lobby_topic())
+          LemonCore.Bus.subscribe(SimManager.lobby_topic())
           Bus.subscribe(sim_id)
         end
 
@@ -72,13 +74,15 @@ defmodule LemonSimUi.SpectatorLive do
             playback: if(domain_type == :werewolf, do: WerewolfPlayback.new(state), else: nil),
             playback_timer_ref: nil,
             artifact_dir: artifact_dir,
-            usage: ArtifactReader.read_usage(artifact_dir),
+            usage: current_usage(sim_id, artifact_dir),
+            usage_timer_ref: nil,
             artifact_timer_ref: nil,
             running: running,
             game_over_redirect: false,
             page_title: "Watch: #{sim_id}"
           )
           |> maybe_schedule_artifact_refresh()
+          |> maybe_schedule_usage_refresh()
 
         {:ok, socket}
     end
@@ -100,6 +104,7 @@ defmodule LemonSimUi.SpectatorLive do
           socket =
             socket
             |> assign(running: running)
+            |> assign_usage()
             |> queue_werewolf_state(updated)
 
           {:noreply, socket}
@@ -111,7 +116,7 @@ defmodule LemonSimUi.SpectatorLive do
 
   def handle_info(%LemonCore.Event{type: :sim_lobby_changed}, socket) do
     running = socket.assigns.sim_id in LemonSimUi.SimManager.list_running()
-    socket = assign(socket, running: running)
+    socket = socket |> assign(running: running) |> assign_usage()
 
     # If current game is over and not running, look for a new active werewolf sim
     if !running && socket.assigns[:state] do
@@ -163,11 +168,27 @@ defmodule LemonSimUi.SpectatorLive do
         socket
         |> assign(
           state: state,
-          usage: ArtifactReader.read_usage(socket.assigns.artifact_dir),
-          running: artifact_running?(state),
+          usage: current_usage(socket.assigns.sim_id, socket.assigns.artifact_dir),
+          running:
+            socket.assigns.sim_id in LemonSimUi.SimManager.list_running() or
+              artifact_running?(state),
           artifact_timer_ref: nil
         )
         |> maybe_schedule_artifact_refresh()
+
+      {:noreply, socket}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_info({:usage_refresh, ref}, socket) do
+    if socket.assigns[:usage_timer_ref] == ref do
+      socket =
+        socket
+        |> assign(usage_timer_ref: nil)
+        |> assign_usage()
+        |> maybe_schedule_usage_refresh()
 
       {:noreply, socket}
     else
@@ -529,8 +550,8 @@ defmodule LemonSimUi.SpectatorLive do
   defp usage_panel(%{usage: nil} = assigns), do: ~H""
 
   defp usage_panel(assigns) do
-    totals = Map.get(assigns.usage, "totals", %{})
-    actors = Map.get(assigns.usage, "actors", %{})
+    totals = usage_value(assigns.usage, :totals) || %{}
+    actors = usage_value(assigns.usage, :actors) || %{}
 
     assigns =
       assigns
@@ -549,19 +570,19 @@ defmodule LemonSimUi.SpectatorLive do
         <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-right">
           <div>
             <div class="text-[10px] uppercase tracking-widest text-slate-500 font-bold">Input</div>
-            <div class="text-sm font-mono text-slate-200">{ArtifactReader.format_integer(@totals["input_tokens"] || 0)}</div>
+            <div class="text-sm font-mono text-slate-200">{ArtifactReader.format_integer(usage_value(@totals, :input_tokens) || 0)}</div>
           </div>
           <div>
             <div class="text-[10px] uppercase tracking-widest text-slate-500 font-bold">Output</div>
-            <div class="text-sm font-mono text-slate-200">{ArtifactReader.format_integer(@totals["output_tokens"] || 0)}</div>
+            <div class="text-sm font-mono text-slate-200">{ArtifactReader.format_integer(usage_value(@totals, :output_tokens) || 0)}</div>
           </div>
           <div>
             <div class="text-[10px] uppercase tracking-widest text-slate-500 font-bold">Decisions</div>
-            <div class="text-sm font-mono text-slate-200">{ArtifactReader.format_integer(@totals["decisions"] || 0)}</div>
+            <div class="text-sm font-mono text-slate-200">{ArtifactReader.format_integer(usage_value(@totals, :decisions) || 0)}</div>
           </div>
           <div>
             <div class="text-[10px] uppercase tracking-widest text-slate-500 font-bold">Cost</div>
-            <div class="text-sm font-mono text-slate-200">{ArtifactReader.format_cost(@totals["cost_usd"])}</div>
+            <div class="text-sm font-mono text-slate-200">{ArtifactReader.format_cost(usage_value(@totals, :cost_usd))}</div>
           </div>
         </div>
       </div>
@@ -582,11 +603,11 @@ defmodule LemonSimUi.SpectatorLive do
             <%= for {actor_id, actor_usage} <- @actors do %>
               <tr>
                 <td class="py-2 pr-4 font-bold text-white">{actor_id}</td>
-                <td class="py-2 pr-4 font-mono text-slate-400">{actor_usage["model_id"] || "unknown"}</td>
-                <td class="py-2 pr-4 text-right font-mono text-slate-300">{ArtifactReader.format_integer(actor_usage["input_tokens"] || 0)}</td>
-                <td class="py-2 pr-4 text-right font-mono text-slate-300">{ArtifactReader.format_integer(actor_usage["output_tokens"] || 0)}</td>
+                <td class="py-2 pr-4 font-mono text-slate-400">{usage_value(actor_usage, :model_id) || "unknown"}</td>
+                <td class="py-2 pr-4 text-right font-mono text-slate-300">{ArtifactReader.format_integer(usage_value(actor_usage, :input_tokens) || 0)}</td>
+                <td class="py-2 pr-4 text-right font-mono text-slate-300">{ArtifactReader.format_integer(usage_value(actor_usage, :output_tokens) || 0)}</td>
                 <td class="py-2 pr-4 text-right font-mono text-slate-300">{ArtifactReader.format_integer(ArtifactReader.total_tokens(actor_usage))}</td>
-                <td class="py-2 pr-4 text-right font-mono text-slate-300">{ArtifactReader.format_cost(actor_usage["cost_usd"])}</td>
+                <td class="py-2 pr-4 text-right font-mono text-slate-300">{ArtifactReader.format_cost(usage_value(actor_usage, :cost_usd))}</td>
               </tr>
             <% end %>
           </tbody>
@@ -607,6 +628,12 @@ defmodule LemonSimUi.SpectatorLive do
   end
 
   defp format_phase(phase), do: to_string(phase)
+
+  defp usage_value(map, key) when is_map(map) and is_atom(key) do
+    Map.get(map, key, Map.get(map, Atom.to_string(key)))
+  end
+
+  defp usage_value(_map, _key), do: nil
 
   defp status_badge("dead", _role), do: "bg-red-900/40 text-red-400 border-red-500/30"
   defp status_badge(_, _), do: "bg-emerald-900/40 text-emerald-400 border-emerald-500/30"
@@ -669,6 +696,32 @@ defmodule LemonSimUi.SpectatorLive do
             assign(socket, playback_timer_ref: ref)
         end
     end
+  end
+
+  defp maybe_schedule_usage_refresh(socket) do
+    cond do
+      not connected?(socket) ->
+        socket
+
+      not socket.assigns[:supported] ->
+        socket
+
+      socket.assigns[:usage_timer_ref] != nil ->
+        socket
+
+      true ->
+        ref = make_ref()
+        Process.send_after(self(), {:usage_refresh, ref}, @usage_refresh_ms)
+        assign(socket, usage_timer_ref: ref)
+    end
+  end
+
+  defp assign_usage(socket) do
+    assign(socket, usage: current_usage(socket.assigns.sim_id, socket.assigns[:artifact_dir]))
+  end
+
+  defp current_usage(sim_id, artifact_dir) do
+    SimManager.usage(sim_id) || ArtifactReader.read_usage(artifact_dir)
   end
 
   defp find_active_werewolf(exclude_sim_id) do

@@ -92,11 +92,11 @@ defmodule LemonSimUi.LobbyLive do
                   <span class="text-[10px] font-bold uppercase px-2 py-1 rounded border bg-amber-500/10 text-amber-300 border-amber-500/30">
                     Vending Bench
                   </span>
-                  <span class="text-xs text-slate-500 font-mono">30 day run</span>
+                  <span class="text-xs text-slate-500 font-mono">Public launcher</span>
                 </div>
                 <h2 class="text-xl font-bold text-white">Start a New Run</h2>
                 <p class="text-sm text-slate-400 font-mono mt-1">
-                  Launches an operator and physical worker with the selected model.
+                  Launches an operator and physical worker with the selected preset.
                 </p>
               </div>
 
@@ -109,9 +109,13 @@ defmodule LemonSimUi.LobbyLive do
                     <div class="flex items-center justify-between gap-3 mb-3">
                       <div>
                         <div class="text-sm font-bold text-white">{preset.label}</div>
-                        <div class="text-[11px] text-slate-500 font-mono">{preset.detail}</div>
+                        <div class="text-[11px] text-slate-500 font-mono">{preset.model}</div>
                       </div>
                       <span class="w-3 h-3 rounded-full border border-cyan-400 bg-cyan-400"></span>
+                    </div>
+                    <div class="mb-3 grid grid-cols-2 gap-2 text-[10px] font-mono text-slate-500">
+                      <div>{preset.max_days} days</div>
+                      <div class="text-right">{preset.max_turns} turns</div>
                     </div>
                     <div class="rounded bg-cyan-500 px-4 py-2 text-center text-sm font-bold text-slate-950 hover:bg-cyan-400">
                       Start Run
