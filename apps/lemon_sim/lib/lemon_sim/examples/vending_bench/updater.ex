@@ -909,7 +909,7 @@ defmodule LemonSim.Examples.VendingBench.Updater do
     weather = get(world, :weather, %{kind: "mild", demand_multiplier: 1.0})
 
     # 1. Resolve sales
-    sales = DemandModel.daily_sales(slots, catalog, weather, day, seed)
+    sales = DemandModel.daily_sales(demand_slots(slots, world), catalog, weather, day, seed)
 
     {updated_slots, total_revenue, sale_events, sale_records} =
       Enum.reduce(sales, {slots, 0.0, [], []}, fn {slot_id, units_sold, revenue},
@@ -1023,6 +1023,7 @@ defmodule LemonSim.Examples.VendingBench.Updater do
 
     # 7. Build new world
     new_machine = Map.put(machine, :slots, updated_slots)
+    stockout_days = stockout_days(world) + daily_stockout_slots(updated_slots)
 
     sales_history = get(world, :sales_history, [])
     complaint_history = get(world, :customer_complaints, [])
@@ -1042,6 +1043,7 @@ defmodule LemonSim.Examples.VendingBench.Updater do
       |> Map.put(:sales_history, sales_history ++ sale_records)
       |> Map.put(:customer_complaints, complaint_history ++ refund_records)
       |> Map.put(:refunds_paid, Float.round(refunds_paid + total_refunds, 2))
+      |> Map.put(:stockout_days, stockout_days)
       |> Map.put(:inbox, get(world, :inbox, []) ++ inbox_items)
       |> Map.put(:weather, new_weather)
       |> Map.put(:season, new_season)
@@ -1277,6 +1279,31 @@ defmodule LemonSim.Examples.VendingBench.Updater do
 
   defp storage_used_units(inventory) do
     Enum.reduce(inventory, 0, fn {_item_id, quantity}, acc -> acc + quantity end)
+  end
+
+  defp demand_slots(slots, world) do
+    case get(world, :arena_price_multiplier) do
+      multiplier when is_number(multiplier) ->
+        Map.new(slots, fn {slot_id, slot} ->
+          {slot_id, Map.put(slot, :arena_price_multiplier, multiplier)}
+        end)
+
+      _ ->
+        slots
+    end
+  end
+
+  defp daily_stockout_slots(slots) do
+    Enum.count(slots, fn {_slot_id, slot} ->
+      get(slot, :item_id) != nil and get(slot, :inventory, 0) == 0
+    end)
+  end
+
+  defp stockout_days(world) do
+    case get(world, :stockout_days, 0) do
+      value when is_number(value) -> value
+      _ -> 0
+    end
   end
 
   defp format_price(price) when is_float(price),

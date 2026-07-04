@@ -650,6 +650,7 @@ defmodule LemonSim.Examples.VendingBench do
     IO.puts("  Average Margin: #{performance.average_margin}%")
     IO.puts("  Days Without Sales: #{performance.days_without_sales}")
     IO.puts("  Stockout Count: #{performance.stockout_count}")
+    IO.puts("  Stockout Days: #{performance.stockout_days}")
     IO.puts("  Price Changes: #{performance.price_change_count}")
     IO.puts("  Worker Trips: #{performance.worker_trip_count}")
     IO.puts("  Coordination Failures: #{performance.coordination_failures}")

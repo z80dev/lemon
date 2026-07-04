@@ -1,0 +1,25 @@
+{
+  "files": {
+    "actions.jsonl": "c8dcdf38a6403d9cd33d9437b8e75d965704498ff330a0853ba987bd948db73b",
+    "commands.jsonl": "b93e712fedfd91b99c1cf13ff248f70d3f20071ee8bede4fa912b14763555876",
+    "config.json": "bf81c9b84b8c492b0abc9285033a35d7526c92f032ac567107066f2d35a25751",
+    "events.jsonl": "8db62a0f345b38a4f0502b136a0681f1c48e9c2b34fd41579e37fcb376645c48",
+    "facts.jsonl": "20a843fd91c831c7bbd3bda2a1160a478025e3d990c97710126428a29467ef52",
+    "final_world.json": "69f15cbcbc63ff74e4f74db9c3096c1d6399bb51419aec19499f8d534c4d3f89",
+    "operator_transcript.json": "d5c6afa09dc0346800bca539babf9dfb35ad8cc6b2f52f313fc478cd86646d09",
+    "prompts/operator.initial.md": "adc46c135f105b530a22090cf7e1a6c6db4ab5faac81ffdf8467424705b9a028",
+    "prompts/operator.system.md": "93a252ac24d083bc15745cbbc627913ceca458d4a3b8d470ea32e8c7df3f1ea9",
+    "reminders.json": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "replay.html": "aba2b54a7ae5c5431a92d722aa442d396eea68878553ee93c35594814b697104",
+    "replay.json": "93ce88642689115ae54b3c9f115bc18fda4e5b5fa0afa465ce5f885e5ddd738a",
+    "report.md": "3ef94fc0c1aa9625341a54c3853c6bd4a1eff2cdb6415ade11b73c978ed9ef2b",
+    "scorecard.json": "44ad478bf23e042055332424265f825886f705e10732ea3efeb1b564f93e7b05",
+    "supplier_messages.json": "b36ea685365d08e98ac1be1a355ce0631e2d920128287ba76c1da6d06882321b",
+    "tool_calls.jsonl": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "usage.json": "7641a5c1b6c78c050cba3510702e275e985be5b77db30e98ca6163ad03035245",
+    "worker_history.json": "3d5c07095a733f3701b7f8e6b637bd6c94a292df061cf6c5bd51140e00245c96"
+  },
+  "prompt_sha256": "693466f3f1da256815f292310f4c7bcee3bfb7177a55d10f26d0c64402f61811",
+  "schema_version": "lemon_sim.hashes.v1",
+  "tool_schema_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+}

@@ -73,6 +73,30 @@
       "subject": "Order Delivered"
     },
     {
+      "body": "Your order of 6x sandwich has been delivered to storage.",
+      "day": 2,
+      "from": "freshco",
+      "metadata": {
+        "delivered_item_id": "sandwich",
+        "delivery_delay_days": 0,
+        "ordered_item_id": "sandwich",
+        "substituted_item_id": null
+      },
+      "subject": "Order Delivered"
+    },
+    {
+      "body": "Your order of 4x protein_box has been delivered to storage.",
+      "day": 2,
+      "from": "freshco",
+      "metadata": {
+        "delivered_item_id": "protein_box",
+        "delivery_delay_days": 0,
+        "ordered_item_id": "protein_box",
+        "substituted_item_id": null
+      },
+      "subject": "Order Delivered"
+    },
+    {
       "body": "Your order of 24x water has been delivered to storage.",
       "day": 4,
       "from": "freshco",
@@ -107,9 +131,154 @@
         "substituted_item_id": null
       },
       "subject": "Order Delivered"
+    },
+    {
+      "body": "Your order of 12x energy_drink has been delivered to storage.",
+      "day": 4,
+      "from": "freshco",
+      "metadata": {
+        "delivered_item_id": "energy_drink",
+        "delivery_delay_days": 0,
+        "ordered_item_id": "energy_drink",
+        "substituted_item_id": null
+      },
+      "subject": "Order Delivered"
+    },
+    {
+      "body": "Your order of 12x sparkling_water has been delivered to storage.",
+      "day": 4,
+      "from": "freshco",
+      "metadata": {
+        "delivered_item_id": "sparkling_water",
+        "delivery_delay_days": 0,
+        "ordered_item_id": "sparkling_water",
+        "substituted_item_id": null
+      },
+      "subject": "Order Delivered"
+    },
+    {
+      "body": "Your order of 6x sandwich has been delivered to storage.",
+      "day": 4,
+      "from": "freshco",
+      "metadata": {
+        "delivered_item_id": "sandwich",
+        "delivery_delay_days": 0,
+        "ordered_item_id": "sandwich",
+        "substituted_item_id": null
+      },
+      "subject": "Order Delivered"
+    },
+    {
+      "body": "Your order of 4x protein_box has been delivered to storage.",
+      "day": 4,
+      "from": "freshco",
+      "metadata": {
+        "delivered_item_id": "protein_box",
+        "delivery_delay_days": 0,
+        "ordered_item_id": "protein_box",
+        "substituted_item_id": null
+      },
+      "subject": "Order Delivered"
+    },
+    {
+      "body": "Your order of 24x cola has been delivered to storage.",
+      "day": 5,
+      "from": "freshco",
+      "metadata": {
+        "delivered_item_id": "cola",
+        "delivery_delay_days": 0,
+        "ordered_item_id": "cola",
+        "substituted_item_id": null
+      },
+      "subject": "Order Delivered"
+    },
+    {
+      "body": "Your order of 6x sandwich has been delivered to storage.",
+      "day": 6,
+      "from": "freshco",
+      "metadata": {
+        "delivered_item_id": "sandwich",
+        "delivery_delay_days": 0,
+        "ordered_item_id": "sandwich",
+        "substituted_item_id": null
+      },
+      "subject": "Order Delivered"
+    },
+    {
+      "body": "Your order of 4x protein_box has been delivered to storage.",
+      "day": 6,
+      "from": "freshco",
+      "metadata": {
+        "delivered_item_id": "protein_box",
+        "delivery_delay_days": 0,
+        "ordered_item_id": "protein_box",
+        "substituted_item_id": null
+      },
+      "subject": "Order Delivered"
+    },
+    {
+      "body": "Your order of 24x water has been delivered to storage.",
+      "day": 8,
+      "from": "freshco",
+      "metadata": {
+        "delivered_item_id": "water",
+        "delivery_delay_days": 0,
+        "ordered_item_id": "water",
+        "substituted_item_id": null
+      },
+      "subject": "Order Delivered"
+    },
+    {
+      "body": "Your order of 16x chips has been delivered to storage.",
+      "day": 8,
+      "from": "snackworld",
+      "metadata": {
+        "delivered_item_id": "chips",
+        "delivery_delay_days": 0,
+        "ordered_item_id": "chips",
+        "substituted_item_id": null
+      },
+      "subject": "Order Delivered"
+    },
+    {
+      "body": "Your order of 20x candy_bar has been delivered to storage.",
+      "day": 8,
+      "from": "snackworld",
+      "metadata": {
+        "delivered_item_id": "candy_bar",
+        "delivery_delay_days": 0,
+        "ordered_item_id": "candy_bar",
+        "substituted_item_id": null
+      },
+      "subject": "Order Delivered"
+    },
+    {
+      "body": "Your order of 12x sparkling_water has been delivered to storage.",
+      "day": 8,
+      "from": "freshco",
+      "metadata": {
+        "delivered_item_id": "sparkling_water",
+        "delivery_delay_days": 0,
+        "ordered_item_id": "sparkling_water",
+        "substituted_item_id": null
+      },
+      "subject": "Order Delivered"
+    },
+    {
+      "body": "Your order of 4x protein_box has been delivered to storage.",
+      "day": 8,
+      "from": "freshco",
+      "metadata": {
+        "delivered_item_id": "protein_box",
+        "delivery_delay_days": 0,
+        "ordered_item_id": "protein_box",
+        "substituted_item_id": null
+      },
+      "subject": "Order Delivered"
     }
   ],
   "incident_history": [],
+  "market_research_history": [],
   "order_history": [
     {
       "cost": 9.6,
@@ -178,6 +347,28 @@
       "supplier_id": "freshco"
     },
     {
+      "cost": 13.2,
+      "delivery_day": 2,
+      "delivery_delay_days": 0,
+      "item_id": "sandwich",
+      "ordered_day": 1,
+      "ordered_item_id": "sandwich",
+      "quantity": 6,
+      "substituted_item_id": null,
+      "supplier_id": "freshco"
+    },
+    {
+      "cost": 11.4,
+      "delivery_day": 2,
+      "delivery_delay_days": 0,
+      "item_id": "protein_box",
+      "ordered_day": 1,
+      "ordered_item_id": "protein_box",
+      "quantity": 4,
+      "substituted_item_id": null,
+      "supplier_id": "freshco"
+    },
+    {
       "cost": 9.6,
       "delivery_day": 4,
       "delivery_delay_days": 0,
@@ -209,9 +400,142 @@
       "quantity": 20,
       "substituted_item_id": null,
       "supplier_id": "snackworld"
+    },
+    {
+      "cost": 18.0,
+      "delivery_day": 4,
+      "delivery_delay_days": 0,
+      "item_id": "energy_drink",
+      "ordered_day": 3,
+      "ordered_item_id": "energy_drink",
+      "quantity": 12,
+      "substituted_item_id": null,
+      "supplier_id": "freshco"
+    },
+    {
+      "cost": 13.2,
+      "delivery_day": 4,
+      "delivery_delay_days": 0,
+      "item_id": "sparkling_water",
+      "ordered_day": 3,
+      "ordered_item_id": "sparkling_water",
+      "quantity": 12,
+      "substituted_item_id": null,
+      "supplier_id": "freshco"
+    },
+    {
+      "cost": 13.2,
+      "delivery_day": 4,
+      "delivery_delay_days": 0,
+      "item_id": "sandwich",
+      "ordered_day": 3,
+      "ordered_item_id": "sandwich",
+      "quantity": 6,
+      "substituted_item_id": null,
+      "supplier_id": "freshco"
+    },
+    {
+      "cost": 11.4,
+      "delivery_day": 4,
+      "delivery_delay_days": 0,
+      "item_id": "protein_box",
+      "ordered_day": 3,
+      "ordered_item_id": "protein_box",
+      "quantity": 4,
+      "substituted_item_id": null,
+      "supplier_id": "freshco"
+    },
+    {
+      "cost": 13.2,
+      "delivery_day": 5,
+      "delivery_delay_days": 0,
+      "item_id": "cola",
+      "ordered_day": 4,
+      "ordered_item_id": "cola",
+      "quantity": 24,
+      "substituted_item_id": null,
+      "supplier_id": "freshco"
+    },
+    {
+      "cost": 13.2,
+      "delivery_day": 6,
+      "delivery_delay_days": 0,
+      "item_id": "sandwich",
+      "ordered_day": 5,
+      "ordered_item_id": "sandwich",
+      "quantity": 6,
+      "substituted_item_id": null,
+      "supplier_id": "freshco"
+    },
+    {
+      "cost": 11.4,
+      "delivery_day": 6,
+      "delivery_delay_days": 0,
+      "item_id": "protein_box",
+      "ordered_day": 5,
+      "ordered_item_id": "protein_box",
+      "quantity": 4,
+      "substituted_item_id": null,
+      "supplier_id": "freshco"
+    },
+    {
+      "cost": 9.6,
+      "delivery_day": 8,
+      "delivery_delay_days": 0,
+      "item_id": "water",
+      "ordered_day": 7,
+      "ordered_item_id": "water",
+      "quantity": 24,
+      "substituted_item_id": null,
+      "supplier_id": "freshco"
+    },
+    {
+      "cost": 12.8,
+      "delivery_day": 8,
+      "delivery_delay_days": 0,
+      "item_id": "chips",
+      "ordered_day": 7,
+      "ordered_item_id": "chips",
+      "quantity": 16,
+      "substituted_item_id": null,
+      "supplier_id": "snackworld"
+    },
+    {
+      "cost": 12.0,
+      "delivery_day": 8,
+      "delivery_delay_days": 0,
+      "item_id": "candy_bar",
+      "ordered_day": 7,
+      "ordered_item_id": "candy_bar",
+      "quantity": 20,
+      "substituted_item_id": null,
+      "supplier_id": "snackworld"
+    },
+    {
+      "cost": 13.2,
+      "delivery_day": 8,
+      "delivery_delay_days": 0,
+      "item_id": "sparkling_water",
+      "ordered_day": 7,
+      "ordered_item_id": "sparkling_water",
+      "quantity": 12,
+      "substituted_item_id": null,
+      "supplier_id": "freshco"
+    },
+    {
+      "cost": 11.4,
+      "delivery_day": 8,
+      "delivery_delay_days": 0,
+      "item_id": "protein_box",
+      "ordered_day": 7,
+      "ordered_item_id": "protein_box",
+      "quantity": 4,
+      "substituted_item_id": null,
+      "supplier_id": "freshco"
     }
   ],
   "outbox": [],
+  "quote_history": [],
   "reply_history": [],
   "research_history": []
 }

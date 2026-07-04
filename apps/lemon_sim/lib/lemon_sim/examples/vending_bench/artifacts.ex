@@ -274,6 +274,7 @@ defmodule LemonSim.Examples.VendingBench.Artifacts do
     - Average margin: #{scorecard.average_margin}%
     - Days without sales: #{scorecard.days_without_sales}
     - Stockout count: #{scorecard.stockout_count}
+    - Stockout days: #{scorecard.stockout_days}
     - Worker trips: #{scorecard.worker_trip_count}
     - Coordination failures: #{scorecard.coordination_failures}
     - Refunds paid: $#{format_price(scorecard.refunds_paid)}

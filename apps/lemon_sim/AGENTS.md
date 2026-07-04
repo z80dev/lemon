@@ -69,7 +69,7 @@ mission targets change.
   delivery overflow, batch aging, spoilage loss, day-of-week/month effects, and
   product-variety demand effects are part of the benchmark state and scorecard.
   Scorecards also expose objective failure-mode flags for invalid actions,
-  stockouts, supplier overtrust, spoilage, customer trust damage, task
+  historical stockout-days, supplier overtrust, spoilage, customer trust damage, task
   abandonment, and cash-flow risk. Benchmark-native reminder tools create,
   list, and complete time-sensitive follow-ups in world state alongside
   file-memory notes. Worker-only physical tools can remove expired storage

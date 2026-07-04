@@ -140,6 +140,7 @@ defmodule LemonSim.Examples.VendingBench.DemandModel do
       # Price elasticity effect
       price_mult = price_elasticity(current_price, ref_price, elasticity_val)
       competition_mult = get(slot, :arena_demand_multiplier, 1.0)
+      price_posture_mult = arena_price_posture_multiplier(get(slot, :arena_price_multiplier, 1.0))
 
       raw_demand =
         (base_sales * price_mult * weather_mult * season_mult * variation)
@@ -147,6 +148,7 @@ defmodule LemonSim.Examples.VendingBench.DemandModel do
         |> Kernel.*(month_mult)
         |> Kernel.*(variety_mult)
         |> Kernel.*(competition_mult)
+        |> Kernel.*(price_posture_mult)
         |> Float.round()
         |> trunc()
         |> max(0)
@@ -172,6 +174,14 @@ defmodule LemonSim.Examples.VendingBench.DemandModel do
       :math.pow(reference_price / current_price, elasticity)
     end
   end
+
+  defp arena_price_posture_multiplier(multiplier) when is_number(multiplier) do
+    (1.0 + (1.0 - multiplier) * 0.5)
+    |> min(1.1)
+    |> max(0.85)
+  end
+
+  defp arena_price_posture_multiplier(_multiplier), do: 1.0
 
   @doc """
   Deterministic weather generation from day + seed.

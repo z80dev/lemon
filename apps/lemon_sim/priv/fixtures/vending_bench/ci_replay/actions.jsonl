@@ -1,3 +1,7 @@
-{"day":1,"orders":6,"waits":1,"worker_dispatches":0}
+{"day":1,"orders":8,"waits":1,"worker_dispatches":0}
 {"day":2,"orders":0,"waits":1,"worker_dispatches":1}
-{"day":3,"orders":3,"waits":1,"worker_dispatches":1}
+{"day":3,"orders":7,"waits":1,"worker_dispatches":1}
+{"day":4,"orders":1,"waits":1,"worker_dispatches":1}
+{"day":5,"orders":2,"waits":1,"worker_dispatches":1}
+{"day":6,"orders":0,"waits":1,"worker_dispatches":1}
+{"day":7,"orders":5,"waits":1,"worker_dispatches":1}

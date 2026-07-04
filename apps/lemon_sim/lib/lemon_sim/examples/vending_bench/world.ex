@@ -79,6 +79,7 @@ defmodule LemonSim.Examples.VendingBench.World do
       reminders: [],
       customer_complaints: [],
       refunds_paid: 0.0,
+      stockout_days: 0,
       recent_sales: [],
       sales_history: [],
       weather: weather,

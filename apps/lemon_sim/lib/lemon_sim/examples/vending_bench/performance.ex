@@ -143,6 +143,7 @@ defmodule LemonSim.Examples.VendingBench.Performance do
     spoiled_units = get(storage, :spoiled_units, 0)
     storage_overflow_units = get(storage, :overflow_units, 0)
     spoilage_loss = get(storage, :spoilage_loss, 0.0)
+    stockout_days = stockout_days(world)
     daily_fee = get(world, :daily_fee, 2.0)
 
     failure_modes =
@@ -151,7 +152,8 @@ defmodule LemonSim.Examples.VendingBench.Performance do
         daily_fee: daily_fee,
         units_sold: units_sold,
         days_without_sales: days_without_sales,
-        stockout_count: stockout_count,
+        stockout_days: stockout_days,
+        elapsed_days: max(day_number - 1, 1),
         coordination_failures: coordination_failures,
         supplier_count_used: supplier_count_used,
         supplier_incident_count: supplier_incident_count,
@@ -166,7 +168,7 @@ defmodule LemonSim.Examples.VendingBench.Performance do
         units_sold,
         average_margin,
         days_without_sales,
-        stockout_count,
+        stockout_days,
         spoiled_units,
         storage_overflow_units,
         get(world, :coordination_failures, 0),
@@ -198,6 +200,7 @@ defmodule LemonSim.Examples.VendingBench.Performance do
       storage_overflow_units: storage_overflow_units,
       spoilage_loss: spoilage_loss,
       stockout_count: stockout_count,
+      stockout_days: stockout_days,
       price_change_count: price_change_count,
       supplier_count_used: supplier_count_used,
       supplier_quote_count: supplier_quote_count,
@@ -279,7 +282,7 @@ defmodule LemonSim.Examples.VendingBench.Performance do
   defp failure_modes(metrics) do
     %{
       repeated_invalid_actions: metrics.coordination_failures >= 3,
-      chronic_stockouts: metrics.stockout_count >= 3,
+      chronic_stockouts: metrics.stockout_days >= stockout_threshold(metrics.elapsed_days),
       supplier_overtrust:
         metrics.supplier_incident_count > 0 and metrics.supplier_count_used <= 1,
       unmanaged_spoilage: metrics.spoiled_units > 0 or metrics.storage_overflow_units > 0,
@@ -298,14 +301,14 @@ defmodule LemonSim.Examples.VendingBench.Performance do
          units_sold,
          average_margin,
          days_without_sales,
-         stockout_count,
+         stockout_days,
          spoiled_units,
          storage_overflow_units,
          coordination_failures,
          status
        ) do
     penalty =
-      coordination_failures * 10 + days_without_sales * 2 + stockout_count + spoiled_units +
+      coordination_failures * 10 + days_without_sales * 2 + stockout_days + spoiled_units +
         storage_overflow_units
 
     status_penalty = if status == "bankrupt", do: 200, else: 0
@@ -317,6 +320,17 @@ defmodule LemonSim.Examples.VendingBench.Performance do
   defp present?(nil), do: false
   defp present?(""), do: false
   defp present?(_value), do: true
+
+  defp stockout_days(world) do
+    case get(world, :stockout_days, 0) do
+      value when is_number(value) -> value
+      _ -> 0
+    end
+  end
+
+  defp stockout_threshold(elapsed_days) do
+    max(3, ceil(elapsed_days * 0.1))
+  end
 
   defp item_info(catalog, item_id) when is_map(catalog) do
     MapHelpers.get_key(catalog, item_id) || %{}

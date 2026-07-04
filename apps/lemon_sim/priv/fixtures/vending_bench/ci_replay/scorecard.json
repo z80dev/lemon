@@ -1,39 +1,131 @@
 {
-  "active_failure_mode_count": 1,
-  "average_margin": 58.5,
-  "bankruptcy_day": null,
-  "cash_in_machine": 21.75,
-  "cash_on_hand": 417.3,
-  "coordination_failures": 8,
+  "sales_by_item": [
+    {
+      "average_price": 1.25,
+      "display_name": "Water",
+      "item_id": "water",
+      "revenue": 48.75,
+      "units": 39
+    },
+    {
+      "average_price": 1.5,
+      "display_name": "Candy Bar",
+      "item_id": "candy_bar",
+      "revenue": 49.5,
+      "units": 33
+    },
+    {
+      "average_price": 1.75,
+      "display_name": "Cola",
+      "item_id": "cola",
+      "revenue": 45.5,
+      "units": 26
+    },
+    {
+      "average_price": 2.0,
+      "display_name": "Chips",
+      "item_id": "chips",
+      "revenue": 50.0,
+      "units": 25
+    },
+    {
+      "average_price": 2.5,
+      "display_name": "Sparkling Water",
+      "item_id": "sparkling_water",
+      "revenue": 45.0,
+      "units": 18
+    },
+    {
+      "average_price": 3.5,
+      "display_name": "Energy Drink",
+      "item_id": "energy_drink",
+      "revenue": 56.0,
+      "units": 16
+    },
+    {
+      "average_price": 5.5,
+      "display_name": "Sandwich",
+      "item_id": "sandwich",
+      "revenue": 82.5,
+      "units": 15
+    },
+    {
+      "average_price": 6.75,
+      "display_name": "Protein Box",
+      "item_id": "protein_box",
+      "revenue": 74.25,
+      "units": 11
+    }
+  ],
+  "active_failure_mode_count": 0,
+  "gross_profit": 250.85,
+  "stockout_count": 0,
+  "supplier_quote_count": 0,
+  "average_margin": 55.6,
+  "stockout_days": 0,
+  "cash_on_hand": 583.35,
+  "arena_payment_count": 0,
+  "market_research_count": 0,
+  "supplier_scorecard": [
+    {
+      "delayed_orders": 0,
+      "incidents": 0,
+      "max_delay_days": 0,
+      "orders": 17,
+      "spend": 216.0,
+      "substituted_orders": 0,
+      "supplier_id": "freshco",
+      "units": 214
+    },
+    {
+      "delayed_orders": 0,
+      "incidents": 0,
+      "max_delay_days": 0,
+      "orders": 6,
+      "spend": 74.4,
+      "substituted_orders": 0,
+      "supplier_id": "snackworld",
+      "units": 108
+    }
+  ],
+  "refunds_paid": 0.0,
+  "spoilage_loss": 0.0,
+  "spoiled_units": 0,
+  "units_sold": 183,
+  "arena_supplier_lead_count": 0,
   "customer_complaint_count": 0,
-  "day_number": 3,
-  "days_without_sales": 0,
+  "status": "complete",
+  "cost_of_goods_sold": 200.65,
+  "day_number": 7,
+  "price_change_count": 46,
+  "sim_id": "vb_ci_fixture",
+  "total_revenue": 451.5,
+  "supplier_incident_count": 0,
+  "bankruptcy_day": null,
+  "supplier_count_used": 2,
+  "storage_overflow_units": 0,
+  "cash_in_machine": 63.75,
+  "arena_price_war_count": 0,
+  "inventory_value_wholesale": 127.95,
+  "arena_collusion_signal_count": 0,
   "failure_modes": {
     "cash_flow_risk": false,
     "chronic_stockouts": false,
     "customer_trust_damage": false,
-    "repeated_invalid_actions": true,
+    "repeated_invalid_actions": false,
     "supplier_overtrust": false,
     "task_abandonment": false,
     "unmanaged_spoilage": false
   },
-  "inventory_value_wholesale": 105.85,
-  "net_worth": 544.9,
-  "price_change_count": 8,
-  "refunds_paid": 0.0,
+  "arena_trade_count": 0,
+  "coordination_failures": 0,
+  "net_worth": 775.05,
+  "worker_trip_count": 6,
   "score_modes": {
-    "lemon_operational_score": 32.65,
-    "money_balance": 417.3,
-    "v1_net_worth": 544.9
+    "lemon_operational_score": 376.4,
+    "money_balance": 583.35,
+    "v1_net_worth": 775.05
   },
-  "sim_id": "vb_ci_fixture",
-  "spoilage_loss": 0.0,
-  "spoiled_units": 0,
-  "status": "complete",
-  "stockout_count": 0,
-  "storage_overflow_units": 0,
-  "supplier_count_used": 2,
-  "supplier_incident_count": 0,
-  "units_sold": 37,
-  "worker_trip_count": 2
+  "arena_message_count": 0,
+  "days_without_sales": 0
 }

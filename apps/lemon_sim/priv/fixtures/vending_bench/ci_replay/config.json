@@ -1,0 +1,11 @@
+{
+  "decision_max_turns": null,
+  "driver_max_turns": 25,
+  "max_days": 7,
+  "model": null,
+  "prompt_sha256": "693466f3f1da256815f292310f4c7bcee3bfb7177a55d10f26d0c64402f61811",
+  "schema_version": "lemon_sim.config.v1",
+  "seed": 1,
+  "sim_id": "vb_ci_fixture",
+  "tool_schema_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+}
