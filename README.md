@@ -31,22 +31,39 @@ simulation kernel, seeded deterministic runs, tool-constrained LLM decisions,
 scored benchmark artifacts, replay verification with hash manifests, and a
 LiveView spectator UI in `apps/lemon_sim_ui`.
 
-The current app has 19 scenarios, including Werewolf, Vending Bench, TCG Shop,
-Diplomacy, Poker, Tic Tac Toe, Skirmish, Survivor, Pandemic, Auction,
-Courtroom, Space Station, Stock Market, Supply Chain, Dungeon Crawl, Murder
-Mystery, Legislature, Intel Network, and Startup Incubator. Most of the app is
-scenario code: action spaces, updaters, events, projections, and performance
-scorecards.
+What makes it different from an eval harness: results are **verifiable**.
+Every run writes a hash-manifested artifact bundle, every scenario's scorecard
+is a pure function of the final world state that the verifier recomputes and
+diffs, and per-actor token/cost usage is recorded alongside. All 19 scenarios
+are playable and all 16 scored scenarios are registry-verified: Werewolf,
+Vending Bench, TCG Shop, Diplomacy, Poker, Tic Tac Toe, Skirmish, Survivor,
+Pandemic, Auction, Courtroom, Space Station, Stock Market, Supply Chain,
+Dungeon Crawl, Murder Mystery, Legislature, Intel Network, and Startup
+Incubator.
 
-Example commands:
+On top of single runs sit benchmark **suites** (competitors × seeds matrices
+with deterministic `suite.json` + `leaderboard.md` artifacts), cross-suite
+**model ratings** (order-independent Bradley-Terry fit over pairwise
+seed-level comparisons), and a public `/leaderboards` page in the spectator
+UI.
+
+Keyless quick start (no API keys required):
 
 ```bash
 mix lemon.sim.tic_tac_toe --offline-strategy random --seed 42 --no-persist --max-turns 10
 mix lemon.sim.vending_bench --preset ci --offline-strategy baseline --sim-id vb_ci_baseline
 mix lemon.sim.verify apps/lemon_sim/priv/game_logs/vending_bench/vb_ci_baseline
 mix lemon.sim.score apps/lemon_sim/priv/game_logs/vending_bench/vb_ci_baseline
+mix lemon.sim.suite --scenario vending_bench --preset ci --seeds 7,8 --offline baseline,pressure --out /tmp/vb_suite
+mix lemon.sim.ratings --suites /tmp/vb_suite --out /tmp/vb_ratings
+```
+
+With provider credentials configured, the same commands run live models
+against each other:
+
+```bash
 mix lemon.sim.werewolf --player-count 6 --no-persist --max-turns 50
-mix run apps/lemon_sim/priv/scripts/werewolf_5model.exs
+mix lemon.sim.werewolf --models "anthropic:claude-sonnet-4,openai:gpt-5,..." --sim-id ww_showdown
 ```
 
 The TicTacToe offline and VendingBench offline commands are keyless
