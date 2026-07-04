@@ -601,7 +601,14 @@ defmodule LemonSim.Bench.Suite do
     |> Enum.join(", ")
   end
 
-  defp format_metric_summary(ranking) do
+  @doc """
+  Renders a ranking's metric summary as `mean ± std (n=N)`, falling back to
+  `mean (n=N)` when no std is available. Accepts both new rankings carrying a
+  `stats` map and legacy rankings without one. Shared with the leaderboard UI
+  so the two renderers cannot drift.
+  """
+  @spec format_metric_summary(map()) :: String.t()
+  def format_metric_summary(ranking) do
     stats = ranking_stats(ranking)
     mean = format_number(get_key(stats, "mean"))
     n = get_key(stats, "n") || 0

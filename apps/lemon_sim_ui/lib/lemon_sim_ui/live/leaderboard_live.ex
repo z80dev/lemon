@@ -251,27 +251,7 @@ defmodule LemonSimUi.LeaderboardLive do
     end
   end
 
-  defp format_metric_summary(ranking) do
-    stats = ranking_stats(ranking)
-    mean = ArtifactReader.format_number(get_key(stats, "mean"))
-    n = get_key(stats, "n") || 0
-
-    case get_key(stats, "std") do
-      nil -> "#{mean} (n=#{n})"
-      std -> "#{mean} ± #{ArtifactReader.format_number(std)} (n=#{n})"
-    end
-  end
-
-  defp ranking_stats(ranking) do
-    values_by_seed = ranking["values_by_seed"] || %{}
-
-    ranking["stats"] ||
-      %{
-        "n" => ranking["included_runs"] || map_size(values_by_seed),
-        "mean" => ranking["mean"],
-        "std" => nil
-      }
-  end
+  defp format_metric_summary(ranking), do: LemonSim.Bench.Suite.format_metric_summary(ranking)
 
   defp format_seed_values(values) do
     values
@@ -290,9 +270,4 @@ defmodule LemonSimUi.LeaderboardLive do
   end
 
   defp parse_seed(seed), do: seed
-
-  defp get_key(map, key) when is_map(map),
-    do: Map.get(map, key, Map.get(map, String.to_atom(key)))
-
-  defp get_key(_map, _key), do: nil
 end
