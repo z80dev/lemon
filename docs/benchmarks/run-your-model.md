@@ -28,12 +28,12 @@ subagent. If `--worker-model` is omitted, the worker uses the operator model.
 VendingBench loads Lemon config, resolves the model, applies any provider
 `base_url`, then resolves credentials for the model provider.
 
-Credential lookup checks:
+Credential lookup: `openai-codex` is special-cased first and resolves only
+through its OAuth-oriented path. Every other provider falls through this chain:
 
 - `providers.<provider>.api_key` in Lemon config
 - `providers.<provider>.api_key_secret`, resolved through Lemon secrets with env fallback
 - default secret name `llm_<provider>_api_key`, also with env fallback
-- provider-specific OAuth paths for providers such as `openai-codex`
 
 Common environment variables include:
 

@@ -6,6 +6,30 @@
     max_age_days: 60
   },
   %{
+    path: "docs/benchmarks/quickstart.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-07-04],
+    max_age_days: 90
+  },
+  %{
+    path: "docs/benchmarks/vending-bench.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-07-04],
+    max_age_days: 90
+  },
+  %{
+    path: "docs/benchmarks/platform.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-07-04],
+    max_age_days: 90
+  },
+  %{
+    path: "docs/benchmarks/run-your-model.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-07-04],
+    max_age_days: 90
+  },
+  %{
     path: "docs/index.md",
     owner: "@z80",
     last_reviewed: ~D[2026-05-12],
