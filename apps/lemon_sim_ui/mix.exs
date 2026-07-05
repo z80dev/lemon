@@ -13,7 +13,7 @@ defmodule LemonSimUi.MixProject do
       elixirc_paths: elixirc_paths(Mix.env()),
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
-      test_coverage: [summary: [threshold: 37]],
+      test_coverage: [summary: [threshold: 40]],
       deps: deps()
     ]
   end
