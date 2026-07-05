@@ -1,7 +1,49 @@
 # VendingBench as an exemplary agent benchmark — 2026-07-04
 
-Status: wave 1 complete (merged to main 2026-07-04); wave 2 pending
+Status: waves 1 and 2 complete (merged to main 2026-07-04); publish decision pending
 Owner: claude (orchestrator) + codex workers
+
+## Wave 2 execution log (2026-07-04)
+
+Four codex workstreams + a publish-path recon, same review/re-verify discipline:
+
+- **W2-ARENA (live multi-agent Arena)** — Arena.LiveRunner: day-barrier
+  orchestration, per-agent deciders (models or external agents), sequenced
+  cross-agent delivery, per-agent bundles + aggregated-usage arena bundle,
+  byte-reproducible deterministic artifacts (incl. cross-agent delivery in the
+  determinism test). Review found 1 CRIT (unaffordable trade deliveries drove
+  recipients negative — now rejected + reversed to the seller via
+  arena_trade_reversed, conservation tested), 2 HIGH (whole-day timeout
+  discarded completed turns — now a soft in-loop deadline preserves partial
+  progress with a 2x hard backstop; usage/history divergence resolved for the
+  soft path), plus abort-on-single-delivery (now degrade + arena_delivery_failed)
+  and live-loop dedup (VendingBench.Runtime + one step-loop core). All fixed in
+  a second codex round; 62 scenario tests green, additive-only test changes
+  verified by hunk headers.
+- **W2-SUITEEXT** — external agents as ranked suite competitors (external_cmd
+  spec + :external adapter mode + seed in hello + --external-cmd with NAME=CMD
+  ids). Review found 1 HIGH fixed at merge: empty-string mode fields could
+  silently pick the wrong competitor mode; also duplicate-id rejection and
+  markdown pipe-escaping added.
+- **W2-UI** — config-driven launcher presets (still disabled by default) + live
+  usage panel polling the running Usage collector. Review fixes: SimManager
+  TOCTOU exit-catch (a dying collector could kill the singleton), sim_id
+  collision rejection in do_start_sim, strict unknown-preset error, usage-panel-
+  scoped never-$0.00 assertion (the board legitimately shows $0.00 elsewhere).
+- **W2-COV** — floors 38/37 → 40/40 against measured ~43.5/44.0%; new test
+  files only; one async-vs-global-app-env race fixed at merge; umbrella
+  CI-style cover run green on merged main.
+- **Publish recon** — games.zeebot.xyz is aspirational: no DNS/deploy exists.
+  What exists: sim_broadcast_platform release + Dockerfile + fly.toml (app
+  "lemonsim", volume /app/data), and /leaderboards serves any suite dirs under
+  LEMON_SIM_UI_SUITE_ROOTS. Two options for the user: (A) Fly deploy + ship
+  suite dirs to the volume + DNS + SECRET_KEY_BASE; (B) static export of
+  leaderboard.md/ratings.md/replay.html via the existing Pages pipeline.
+  Live-model suite data additionally needs provider keys + budget.
+
+Post-merge on main: ci_replay fixture regenerated (updater ruleset shift +
+usage.json cost_known?), full scenario/suite/decider/demo tests green,
+ci_sim_bench.sh green, full fast suite + quality lane green (see final wrap-up).
 
 ## Wave 1 execution log (2026-07-04)
 
