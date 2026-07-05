@@ -5,19 +5,19 @@
     "prompt_sha256": "693466f3f1da256815f292310f4c7bcee3bfb7177a55d10f26d0c64402f61811",
     "scorecard_sha256": "44ad478bf23e042055332424265f825886f705e10732ea3efeb1b564f93e7b05",
     "tool_schema_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
-    "usage_sha256": "7641a5c1b6c78c050cba3510702e275e985be5b77db30e98ca6163ad03035245"
+    "usage_sha256": "4d85210cc68187f55af9d45b4282cc823c325b1b17691c40bc73cf718d7724ac"
   },
   "runtime": {
     "elixir": "1.19.5",
     "finished_at": "1970-01-01T00:00:00Z",
-    "lemon_commit": "406584c8ef0f610b54f0e7878c23c9f282f22108",
+    "lemon_commit": "d8cc33ba789fb6cc84665b22ecda7e4fdc827b8b",
     "otp": "28",
     "started_at": "1970-01-01T00:00:00Z"
   },
   "schema_version": "lemon_sim.run.v1",
   "sim": {
     "id": "vending_bench",
-    "ruleset_hash": "4d1640b0c1071f16dcae050141649dd6b4e1afbadfa19d1985e431dd7377a7d6",
+    "ruleset_hash": "846e230e8b4b4940ac58cb5bf20319c6ac95f697ed5f4f7f76064711883cff2f",
     "seed": 1,
     "version": "2.0.0"
   }

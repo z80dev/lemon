@@ -1,5 +1,6 @@
 {
   "actors": {},
+  "cost_known?": true,
   "schema": "lemon_sim.usage.v1",
   "sim_id": "vb_ci_fixture",
   "totals": {
