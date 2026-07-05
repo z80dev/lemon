@@ -40,7 +40,7 @@ defmodule LemonSimUi.VendingBenchLauncher do
 
       case preset do
         nil ->
-          {:error, :no_vending_launcher_presets}
+          {:error, :unknown_vending_launcher_preset}
 
         preset ->
           sim_id =
@@ -59,10 +59,11 @@ defmodule LemonSimUi.VendingBenchLauncher do
     end
   end
 
-  defp preset(id) do
-    resolved = presets()
-    Enum.find(resolved, &(&1.id == id)) || List.first(resolved)
-  end
+  # A nil id (no param) launches the first configured preset; an explicit id
+  # must match — silently substituting another preset would launch a model the
+  # caller did not pick.
+  defp preset(nil), do: List.first(presets())
+  defp preset(id), do: Enum.find(presets(), &(&1.id == id))
 
   defp validate_presets(presets) when is_list(presets) do
     Enum.flat_map(presets, fn entry ->

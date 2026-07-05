@@ -142,9 +142,9 @@ defmodule LemonSimUi.SimManager do
       nil ->
         {:reply, {:error, :not_found}, state}
 
-      %{ref: ref} ->
+      %{ref: ref} = entry ->
         Process.exit(ref, :shutdown)
-        stop_usage_collector(Map.get(Map.get(state.runners, sim_id), :usage_collector))
+        stop_usage_collector(Map.get(entry, :usage_collector))
         runners = Map.delete(state.runners, sim_id)
         human_players = Map.delete(state.human_players, sim_id)
         broadcast_lobby()
@@ -201,7 +201,13 @@ defmodule LemonSimUi.SimManager do
     usage =
       case get_in(state, [:runners, sim_id, :usage_collector]) do
         collector when is_pid(collector) ->
-          if Process.alive?(collector), do: Usage.artifact(collector, sim_id)
+          # The collector can die between any liveness check and the read;
+          # a dead collector must degrade to nil, not crash SimManager.
+          try do
+            Usage.artifact(collector, sim_id)
+          catch
+            :exit, _ -> nil
+          end
 
         _ ->
           nil
@@ -426,6 +432,16 @@ defmodule LemonSimUi.SimManager do
     sim_id = Keyword.get(opts, :sim_id, generate_id(domain))
     human_player = Keyword.get(opts, :human_player)
 
+    if Map.has_key?(state.runners, sim_id) do
+      # Overwriting the runner entry would strand the old task and leak its
+      # usage collector (stop_sim/:DOWN look entries up by the stored ref).
+      {:error, :already_running, state}
+    else
+      do_start_sim(domain, opts, state, sim_id, human_player)
+    end
+  end
+
+  defp do_start_sim(domain, opts, state, sim_id, human_player) do
     case build_initial_state(domain, sim_id, opts) do
       {:ok, initial_state, modules, run_opts} ->
         {:ok, usage_collector} = Usage.start_link(sim_id)

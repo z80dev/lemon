@@ -261,6 +261,10 @@ defmodule LemonSimUi.SpectatorLiveTest do
     assert html =~ "physical_worker"
     assert html =~ "external-worker"
     assert html =~ "—"
+
+    usage_html = view |> element("#usage-panel") |> render()
+    assert usage_html =~ "—"
+    refute usage_html =~ "$0.00"
   end
 
   test "uses arena leader world for vending bench spectator header", %{conn: conn} do

@@ -559,7 +559,7 @@ defmodule LemonSimUi.SpectatorLive do
       |> assign(:actors, Enum.sort_by(actors, fn {actor_id, _usage} -> actor_id end))
 
     ~H"""
-    <section class="mx-4 my-4 glass-panel rounded-xl border border-glass-border p-4">
+    <section id="usage-panel" class="mx-4 my-4 glass-panel rounded-xl border border-glass-border p-4">
       <div class="flex flex-col md:flex-row md:items-start md:justify-between gap-4 mb-4">
         <div>
           <h2 class="text-sm font-bold uppercase tracking-widest text-cyan-300">Usage</h2>
