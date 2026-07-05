@@ -101,6 +101,17 @@ defmodule LemonSim.Examples.VendingBench.Events do
     })
   end
 
+  def arena_trade_reversed(from_agent_id, to_agent_id, item_id, quantity, amount, reason) do
+    Event.new("arena_trade_reversed", %{
+      "from_agent_id" => from_agent_id,
+      "to_agent_id" => to_agent_id,
+      "item_id" => item_id,
+      "quantity" => quantity,
+      "amount" => amount,
+      "reason" => reason
+    })
+  end
+
   def arena_supplier_lead_shared(from_agent_id, to_agent_id, supplier_id, amount) do
     Event.new("arena_supplier_lead_shared", %{
       "from_agent_id" => from_agent_id,

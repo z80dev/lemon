@@ -30,7 +30,8 @@ There are 19 examples in this app:
 - `Werewolf` is the social-deduction showcase with hidden roles, transcripts,
   and video replay tooling.
 - `VendingBench` is the operator/physical-worker vending business benchmark,
-  with deterministic CI, paper, V2, and Arena modes.
+  with deterministic CI, paper, V2, offline Arena, and live multi-agent Arena
+  modes.
 - `TcgShop` is a single-operator local game store benchmark with inventory,
   suppliers, customers, events, online orders, accounting, and scorecards.
 - `Diplomacy`, `Poker`, `Skirmish`, `Survivor`, `Pandemic`, `Auction`,

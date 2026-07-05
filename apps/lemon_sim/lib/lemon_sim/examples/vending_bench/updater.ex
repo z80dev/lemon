@@ -45,6 +45,7 @@ defmodule LemonSim.Examples.VendingBench.Updater do
       "arena_message_sent" -> apply_arena_message_sent(state, event)
       "arena_money_sent" -> apply_arena_money_sent(state, event)
       "arena_trade_completed" -> apply_arena_trade_completed(state, event)
+      "arena_trade_reversed" -> apply_arena_trade_reversed(state, event)
       "arena_supplier_lead_shared" -> apply_arena_supplier_lead_shared(state, event)
       "arena_price_war_detected" -> apply_arena_price_war_detected(state, event)
       "arena_collusion_signal" -> apply_arena_collusion_signal(state, event)
@@ -408,28 +409,51 @@ defmodule LemonSim.Examples.VendingBench.Updater do
     to_agent_id = get(event.payload, :to_agent_id, "")
     subject = get(event.payload, :subject, "")
     body = get(event.payload, :body, "")
+    current_agent_id = get(state.world, :arena_agent_id)
 
-    state =
-      state
-      |> State.update_world(fn world ->
-        outbox = get(world, :arena_outbox, [])
+    if current_agent_id == to_agent_id and current_agent_id != from_agent_id do
+      state =
+        state
+        |> State.update_world(fn world ->
+          mailbox = get(world, :arena_mailbox, [])
 
-        message = %{
-          from_agent_id: from_agent_id,
-          to_agent_id: to_agent_id,
-          subject: subject,
-          body: body,
-          day: get(world, :day_number, 1),
-          time: get(world, :time_minutes, 540)
-        }
+          message = %{
+            from_agent_id: from_agent_id,
+            to_agent_id: to_agent_id,
+            subject: subject,
+            body: body,
+            day: get(world, :day_number, 1),
+            time: get(world, :time_minutes, 540)
+          }
 
-        world
-        |> Map.put(:arena_outbox, outbox ++ [message])
-        |> Map.put(:time_minutes, get(world, :time_minutes, 540) + 10)
-      end)
-      |> State.append_event(event)
+          Map.put(world, :arena_mailbox, mailbox ++ [message])
+        end)
+        |> State.append_event(event)
 
-    maybe_rollover(state)
+      {:ok, state, :skip}
+    else
+      state =
+        state
+        |> State.update_world(fn world ->
+          outbox = get(world, :arena_outbox, [])
+
+          message = %{
+            from_agent_id: from_agent_id,
+            to_agent_id: to_agent_id,
+            subject: subject,
+            body: body,
+            day: get(world, :day_number, 1),
+            time: get(world, :time_minutes, 540)
+          }
+
+          world
+          |> Map.put(:arena_outbox, outbox ++ [message])
+          |> Map.put(:time_minutes, get(world, :time_minutes, 540) + 10)
+        end)
+        |> State.append_event(event)
+
+      maybe_rollover(state)
+    end
   end
 
   defp apply_arena_money_sent(state, event) do
@@ -441,8 +465,32 @@ defmodule LemonSim.Examples.VendingBench.Updater do
     to_agent_id = get(event.payload, :to_agent_id, "")
     memo = get(event.payload, :memo, "")
     balance = get(state.world, :bank_balance, 0.0)
+    current_agent_id = get(state.world, :arena_agent_id)
 
     cond do
+      current_agent_id == to_agent_id and current_agent_id != from_agent_id ->
+        state =
+          state
+          |> State.update_world(fn world ->
+            payments = get(world, :arena_payments_received, [])
+
+            payment = %{
+              from_agent_id: from_agent_id,
+              to_agent_id: to_agent_id,
+              amount: Float.round(amount * 1.0, 2),
+              memo: memo,
+              day: get(world, :day_number, 1),
+              time: get(world, :time_minutes, 540)
+            }
+
+            world
+            |> Map.put(:bank_balance, Float.round(get(world, :bank_balance, 0.0) + amount, 2))
+            |> Map.put(:arena_payments_received, payments ++ [payment])
+          end)
+          |> State.append_event(event)
+
+        {:ok, state, :skip}
+
       amount <= 0 ->
         apply_action_rejected(
           state,
@@ -493,8 +541,47 @@ defmodule LemonSim.Examples.VendingBench.Updater do
     quantity = get(event.payload, :quantity, 0)
     amount = get(event.payload, :amount, 0.0)
     storage_qty = get_in(state.world, [:storage, :inventory, item_id]) || 0
+    current_agent_id = get(state.world, :arena_agent_id)
 
     cond do
+      current_agent_id == to_agent_id and current_agent_id != from_agent_id ->
+        balance = get(state.world, :bank_balance, 0.0)
+
+        if amount > balance do
+          apply_action_rejected(
+            state,
+            Events.action_rejected(
+              to_agent_id,
+              "Insufficient funds. Arena trade costs $#{format_price(amount)} but balance is $#{format_price(balance)}."
+            )
+          )
+        else
+          state =
+            state
+            |> State.update_world(fn world ->
+              storage = add_to_storage(get(world, :storage, %{}), item_id, quantity)
+              trades = get(world, :arena_trades, [])
+
+              trade = %{
+                from_agent_id: from_agent_id,
+                to_agent_id: to_agent_id,
+                item_id: item_id,
+                quantity: quantity,
+                amount: Float.round(amount * 1.0, 2),
+                day: get(world, :day_number, 1),
+                time: get(world, :time_minutes, 540)
+              }
+
+              world
+              |> Map.put(:storage, storage)
+              |> Map.put(:bank_balance, Float.round(get(world, :bank_balance, 0.0) - amount, 2))
+              |> Map.put(:arena_trades, trades ++ [trade])
+            end)
+            |> State.append_event(event)
+
+          {:ok, state, :skip}
+        end
+
       quantity <= 0 ->
         apply_action_rejected(
           state,
@@ -542,6 +629,48 @@ defmodule LemonSim.Examples.VendingBench.Updater do
           |> State.append_event(event)
 
         maybe_rollover(state)
+    end
+  end
+
+  defp apply_arena_trade_reversed(state, event) do
+    from_agent_id =
+      get(event.payload, :from_agent_id, get(state.world, :arena_agent_id, "operator"))
+
+    to_agent_id = get(event.payload, :to_agent_id, "")
+    item_id = get(event.payload, :item_id, "")
+    quantity = get(event.payload, :quantity, 0)
+    amount = get(event.payload, :amount, 0.0)
+    reason = get(event.payload, :reason, "")
+    current_agent_id = get(state.world, :arena_agent_id)
+
+    if current_agent_id == from_agent_id do
+      state =
+        state
+        |> State.update_world(fn world ->
+          storage = add_to_storage(get(world, :storage, %{}), item_id, quantity)
+          reversals = get(world, :arena_trade_reversals, [])
+
+          reversal = %{
+            from_agent_id: from_agent_id,
+            to_agent_id: to_agent_id,
+            item_id: item_id,
+            quantity: quantity,
+            amount: Float.round(amount * 1.0, 2),
+            reason: reason,
+            day: get(world, :day_number, 1),
+            time: get(world, :time_minutes, 540)
+          }
+
+          world
+          |> Map.put(:storage, storage)
+          |> Map.put(:bank_balance, Float.round(get(world, :bank_balance, 0.0) - amount, 2))
+          |> Map.put(:arena_trade_reversals, reversals ++ [reversal])
+        end)
+        |> State.append_event(event)
+
+      {:ok, state, :skip}
+    else
+      apply_skip(state, event)
     end
   end
 
@@ -1182,6 +1311,15 @@ defmodule LemonSim.Examples.VendingBench.Updater do
     storage
     |> Map.put(:inventory, Map.put(inventory, item_id, max(0, current_quantity - quantity)))
     |> Map.put(:batches, remove_from_batches(batches, item_id, quantity))
+  end
+
+  defp add_to_storage(storage, item_id, quantity) do
+    inventory = get(storage, :inventory, %{})
+    batches = get(storage, :batches, [])
+
+    storage
+    |> Map.put(:inventory, Map.put(inventory, item_id, Map.get(inventory, item_id, 0) + quantity))
+    |> Map.put(:batches, batches ++ [%{item_id: item_id, quantity: quantity, received_day: nil}])
   end
 
   defp remove_from_batches(batches, item_id, quantity) do

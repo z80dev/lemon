@@ -175,6 +175,7 @@ defmodule LemonSim.LLM.Usage do
     %{
       schema: @schema,
       sim_id: state.sim_id,
+      cost_known?: state.cost_known?,
       totals: finalize_totals(state.totals, state.cost_known?),
       actors:
         state.actors
@@ -189,6 +190,7 @@ defmodule LemonSim.LLM.Usage do
     %{
       schema: @schema,
       sim_id: artifact["sim_id"],
+      cost_known?: Map.get(artifact, "cost_known?", true),
       totals: normalize_totals(totals),
       actors: Map.new(actors, fn {actor_id, usage} -> {actor_id, normalize_actor(usage)} end)
     }
