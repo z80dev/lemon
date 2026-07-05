@@ -13,7 +13,8 @@ defmodule LemonTcg.Execution.Fill do
           price_usd: float(),
           fee_usd: float(),
           executed_at_ms: integer(),
-          txid: String.t() | nil
+          txid: String.t() | nil,
+          meta: map()
         }
 
   @enforce_keys [:side, :venue, :collection, :mint, :price_usd, :fee_usd, :executed_at_ms]
@@ -27,6 +28,7 @@ defmodule LemonTcg.Execution.Fill do
     :price_usd,
     :fee_usd,
     :executed_at_ms,
-    :txid
+    :txid,
+    meta: %{}
   ]
 end

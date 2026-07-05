@@ -2,32 +2,43 @@ defmodule LemonTcg.MarketData do
   @moduledoc """
   Facade over pluggable market data sources with a short-TTL cache.
 
-  The source is resolved per call from `opts[:source]`, falling back to the
-  `:lemon_tcg, :market_data_source` app env, and finally to the live
-  `Sources.MagicEden`. Pass `fresh?: true` to bypass the cache.
+  Collections may be venue-qualified (`"collector_crypt:Pokemon"`,
+  `"opensea:courtyard-nft"` — see `LemonTcg.Markets`); unqualified names
+  resolve to `opts[:source]`, then the `:lemon_tcg, :market_data_source`
+  app env, then the live `Sources.MagicEden`. Returned listings and
+  floors keep the caller's qualified collection string so positions and
+  sell paths round-trip through the same market. Pass `fresh?: true` to
+  bypass the cache.
   """
 
+  alias LemonTcg.Markets
   alias LemonTcg.MarketData.Cache
   alias LemonTcg.MarketData.Sources.MagicEden
 
   @spec floor(String.t(), keyword()) :: {:ok, LemonTcg.MarketData.Floor.t()} | {:error, term()}
   def floor(collection, opts \\ []) when is_binary(collection) do
-    source = source(opts)
+    {source, raw_collection} = Markets.resolve(collection, opts)
 
-    cached({:floor, source.venue(), collection}, opts, fn ->
-      source.floor(collection, opts)
-    end)
+    with {:ok, floor} <-
+           cached({:floor, source.venue(), raw_collection}, opts, fn ->
+             source.floor(raw_collection, opts)
+           end) do
+      {:ok, %{floor | collection: collection}}
+    end
   end
 
   @spec listings(String.t(), keyword()) ::
           {:ok, [LemonTcg.MarketData.Listing.t()]} | {:error, term()}
   def listings(collection, opts \\ []) when is_binary(collection) do
-    source = source(opts)
+    {source, raw_collection} = Markets.resolve(collection, opts)
     limit = Keyword.get(opts, :limit, 20)
 
-    cached({:listings, source.venue(), collection, limit}, opts, fn ->
-      source.listings(collection, opts)
-    end)
+    with {:ok, listings} <-
+           cached({:listings, source.venue(), raw_collection, limit}, opts, fn ->
+             source.listings(raw_collection, opts)
+           end) do
+      {:ok, Enum.map(listings, &%{&1 | collection: collection})}
+    end
   end
 
   @spec sol_price_usd(keyword()) :: {:ok, float()} | {:error, term()}

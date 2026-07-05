@@ -6,7 +6,8 @@ defmodule LemonTcg.Application do
   @impl true
   def start(_type, _args) do
     children = [
-      LemonTcg.MarketData.Cache
+      LemonTcg.MarketData.Cache,
+      LemonTcg.Fixtures.Tables
     ]
 
     opts = [strategy: :one_for_one, name: LemonTcg.Supervisor]

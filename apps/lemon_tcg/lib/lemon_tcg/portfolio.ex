@@ -22,7 +22,8 @@ defmodule LemonTcg.Portfolio do
           name: String.t() | nil,
           cost_basis_usd: float(),
           acquired_at_ms: integer(),
-          venue: String.t()
+          venue: String.t(),
+          meta: map()
         }
 
   @type t :: %__MODULE__{
@@ -57,7 +58,8 @@ defmodule LemonTcg.Portfolio do
           name: fill.name,
           cost_basis_usd: fill.price_usd,
           acquired_at_ms: fill.executed_at_ms,
-          venue: fill.venue
+          venue: fill.venue,
+          meta: fill.meta || %{}
         }
 
         ledger =

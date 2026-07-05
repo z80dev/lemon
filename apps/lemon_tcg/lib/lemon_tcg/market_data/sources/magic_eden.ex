@@ -30,6 +30,9 @@ defmodule LemonTcg.MarketData.Sources.MagicEden do
          %Floor{
            collection: collection,
            venue: venue(),
+           chain: :solana,
+           currency: "SOL",
+           floor: Listing.lamports_to_sol(floor_lamports),
            floor_lamports: floor_lamports,
            floor_sol: Listing.lamports_to_sol(floor_lamports),
            listed_count: Map.get(body, "listedCount"),
@@ -87,9 +90,12 @@ defmodule LemonTcg.MarketData.Sources.MagicEden do
        when is_binary(mint) and is_number(price) do
     %Listing{
       venue: venue(),
+      chain: :solana,
       collection: collection,
       mint: mint,
       name: get_in(entry, ["token", "name"]),
+      price: price * 1.0,
+      currency: "SOL",
       price_lamports: Listing.sol_to_lamports(price),
       price_sol: price * 1.0,
       seller: Map.get(entry, "seller"),

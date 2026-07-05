@@ -94,11 +94,13 @@ defmodule LemonTcg.Agent.Tools do
 
         case Desk.floor(desk, collection) do
           {:ok, floor} ->
+            native = LemonTcg.MarketData.Floor.native_floor(floor)
+
             text_result(
-              "#{collection} floor: #{floor.floor_sol} SOL " <>
+              "#{collection} floor: #{native} #{floor.currency} " <>
                 "(#{floor.listed_count || "?"} listed, venue #{floor.venue})",
               "tcg_live_checked_floor",
-              %{"collection" => collection, "floor_sol" => floor.floor_sol}
+              %{"collection" => collection, "floor" => native, "currency" => floor.currency}
             )
 
           {:error, reason} ->
@@ -130,7 +132,8 @@ defmodule LemonTcg.Agent.Tools do
           {:ok, listings} ->
             lines =
               Enum.map_join(listings, "\n", fn l ->
-                "#{l.mint} | #{l.name || "unnamed"} | #{l.price_sol} SOL"
+                price = LemonTcg.MarketData.Listing.native_price(l)
+                "#{l.mint} | #{l.name || "unnamed"} | #{price} #{l.currency}"
               end)
 
             text_result(

@@ -10,8 +10,14 @@ defmodule LemonTcg.Desk do
 
     * `:starting_cash_usd` — default 1_000.0
     * `:policy` — `LemonTcg.Risk.Policy` struct (default policy applies)
-    * `:venue` — module implementing `LemonTcg.Execution.Venue` (default Paper)
-    * `:watchlist` — collection symbols the desk trades
+    * `:venue` — module implementing `LemonTcg.Execution.Venue` (default
+      Paper), or a map routing by the listing's market, e.g.
+      `%{"collector_crypt" => Venues.CollectorCrypt, :default => Paper}`
+    * `:wallet` — `{module, config}` implementing `LemonTcg.Wallet`;
+      passed to live venues (default refuses to sign)
+    * `:watchlist` — collection symbols the desk trades; entries may be
+      venue-qualified per `LemonTcg.Markets` ("collector_crypt:Pokemon",
+      "opensea:courtyard-nft")
     * `:market_opts` — keyword passed to market data and venue calls
       (`:source`, `:req_options`, fee/haircut tuning)
   """
@@ -19,7 +25,7 @@ defmodule LemonTcg.Desk do
   use GenServer
 
   alias LemonTcg.Execution.Venues.Paper
-  alias LemonTcg.{Basis, Comps, MarketData, Portfolio, Risk}
+  alias LemonTcg.{Basis, Comps, Fx, MarketData, Portfolio, Risk}
   alias LemonTcg.Risk.Policy
 
   # -- Client API -------------------------------------------------------------
@@ -66,12 +72,17 @@ defmodule LemonTcg.Desk do
 
   @impl true
   def init(opts) do
+    market_opts =
+      opts
+      |> Keyword.get(:market_opts, [])
+      |> Keyword.put_new(:wallet, Keyword.get(opts, :wallet))
+
     state = %{
       portfolio: Portfolio.new(Keyword.get(opts, :starting_cash_usd, 1_000.0)),
       policy: Keyword.get(opts, :policy, %Policy{}),
       venue: Keyword.get(opts, :venue, Paper),
       watchlist: Keyword.get(opts, :watchlist, []),
-      market_opts: Keyword.get(opts, :market_opts, [])
+      market_opts: market_opts
     }
 
     {:ok, state}
@@ -128,7 +139,7 @@ defmodule LemonTcg.Desk do
     with {:ok, listing} <- find_listing(state, collection, mint),
          {:ok, total_usd} <- estimated_total_usd(state, listing),
          :ok <- Risk.check(state.policy, state.portfolio, {:buy, collection, total_usd}),
-         {:ok, fill} <- state.venue.buy(listing, state.market_opts),
+         {:ok, fill} <- venue_for(state.venue, listing.venue).buy(listing, state.market_opts),
          {:ok, portfolio} <- Portfolio.apply_buy(state.portfolio, fill) do
       {:ok, fill, portfolio}
     end
@@ -137,15 +148,21 @@ defmodule LemonTcg.Desk do
   defp execute_sell(state, mint) do
     with {:ok, position} <- fetch_position(state.portfolio, mint),
          :ok <- Risk.check(state.policy, state.portfolio, {:sell, mint}),
-         {:ok, fill} <- state.venue.sell(position, state.market_opts),
+         {:ok, fill} <- venue_for(state.venue, position.venue).sell(position, state.market_opts),
          {:ok, portfolio} <- Portfolio.apply_sell(state.portfolio, fill) do
       {:ok, fill, portfolio}
     end
   end
 
+  defp venue_for(venue, _market) when is_atom(venue), do: venue
+
+  defp venue_for(%{} = venues, market) do
+    Map.get(venues, market) || Map.get(venues, :default, Paper)
+  end
+
   defp evaluate_basis(state, collection, mint, query, grade) do
     with {:ok, listing} <- find_listing(state, collection, mint),
-         {:ok, ask_usd} <- MarketData.lamports_to_usd(listing.price_lamports, state.market_opts),
+         {:ok, ask_usd} <- Fx.listing_usd(listing, state.market_opts),
          {:ok, matched} <- Comps.comp_for_grade(query, grade, state.market_opts) do
       evaluation = Basis.evaluate(ask_usd, matched.price_usd, state.market_opts)
 
@@ -173,7 +190,7 @@ defmodule LemonTcg.Desk do
 
   defp estimated_total_usd(state, listing) do
     # Risk sees ask + fee headroom; the venue computes the exact fee.
-    with {:ok, price_usd} <- MarketData.lamports_to_usd(listing.price_lamports, state.market_opts) do
+    with {:ok, price_usd} <- Fx.listing_usd(listing, state.market_opts) do
       {:ok, Float.round(price_usd * 1.03, 2)}
     end
   end
@@ -190,7 +207,7 @@ defmodule LemonTcg.Desk do
       state.watchlist
       |> Enum.reduce(%{}, fn collection, acc ->
         with {:ok, floor} <- MarketData.floor(collection, state.market_opts),
-             {:ok, usd} <- MarketData.lamports_to_usd(floor.floor_lamports, state.market_opts) do
+             {:ok, usd} <- Fx.floor_usd(floor, state.market_opts) do
           Map.put(acc, collection, usd)
         else
           _ -> acc

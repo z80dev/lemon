@@ -4,21 +4,40 @@ Live market data and execution for an agent-operated on-chain TCG shop —
 the real-world counterpart of `LemonSim.Examples.TcgShop`.
 
 The target market is tokenized graded trading cards (vaulted physical
-Pokemon/TCG cards represented as NFTs) on venues like Magic Eden. The app
+Pokemon/TCG cards represented as NFTs) on Solana and EVM venues. The app
 is paper-trading-first: real quotes, simulated fills, no keys or wallets
-required. On-chain signing venues plug in later behind the same
-`LemonTcg.Execution.Venue` behaviour.
+required — and a live Collector Crypt venue that builds, signs, and
+broadcasts real transactions once a wallet is configured.
+
+## Supported markets
+
+Watchlist entries are venue-qualified (`LemonTcg.Markets`); unqualified
+names use the default source.
+
+| Prefix | Venue | Chain | Browse | Buy | Sell | Access |
+|---|---|---|---|---|---|---|
+| `collector_crypt:` | Collector Crypt (category or `all`) | Solana | ✅ | ✅ live (aggregates ME+Tensor+CC) | ✅ list | no key |
+| `opensea:` | OpenSea slug (Courtyard, any Base collection) | Polygon/Base | ✅ | ✅ Seaport fulfillment (EVM signing) | ✅ signed order | **trading** key + EVM wallet |
+| `magic_eden:` | Magic Eden symbol | Solana | ✅ | via Collector Crypt aggregation | — | keyless reads |
+| `fixture:` | deterministic offline | — | ✅ | ✅ paper | ✅ paper | none |
+
+Parked (not programmatically tradeable today): Phygitals (routes only via
+browser capture), rip.fun (bot-walled, no discoverable contract), Tensor
+(gated key; reachable through Collector Crypt's aggregating buy anyway).
 
 ## Layers
 
 | Layer | Module(s) | Notes |
 |---|---|---|
-| Market data | `LemonTcg.MarketData` + `Sources.MagicEden` / `Sources.Fixture` | Pluggable sources, 30s TTL cache. Fixture is deterministic and offline. |
+| Market data | `LemonTcg.MarketData` + `Sources.{CollectorCrypt,OpenSea,MagicEden,Fixture}` | Venue-qualified, pluggable, 30s TTL cache. Fixture is deterministic and offline. |
+| FX | `LemonTcg.Fx` | Multi-currency → USD (USDC 1:1, SOL/ETH/POL via cached spot). |
+| Wallet | `LemonTcg.Wallet` + `SolanaKeypair` / `EvmKeypair` / `Unconfigured` | Solana ed25519 (`Solana.Tx`) and EVM secp256k1 (`Evm.*`) signing, pure Elixir. Default refuses to sign — live venues fail closed. |
+| EVM signing | `LemonTcg.Evm.{Keccak,Secp256k1,Rlp,Transaction,Eip712,Rpc}` | Keccak-256, RFC-6979 ECDSA + recovery, RLP, EIP-1559/legacy tx, EIP-712 digest, JSON-RPC. Vector-verified against the Ethereum-book golden tx. |
 | Physical comps | `LemonTcg.Comps` + `Sources.PriceCharting` / `Sources.Fixture` | Grade-bucketed slab comps (`LemonTcg.Comps.Grade` parses "PSA 9" etc. from listing names), 10 min TTL. PriceCharting needs `PRICECHARTING_API_TOKEN`. |
 | Basis | `LemonTcg.Basis` | Token-vs-physical edge for the buy → redeem → sell-physical round trip, net of taker/redemption/shipping/marketplace fees. |
 | Accounting | `LemonTcg.Portfolio`, `LemonTcg.Ledger` | Positions, mark-to-market, append-only audit trail. |
 | Risk | `LemonTcg.Risk` | Trade cap, trailing-24h spend cap, collection allowlist, cash reserve, kill switch (blocks buys, never sells). |
-| Execution | `LemonTcg.Execution.Venue` + `Venues.Paper` | Paper venue fills at ask + taker fee; exits at floor − haircut. |
+| Execution | `LemonTcg.Execution.Venue` + `Venues.Paper` / `Venues.CollectorCrypt` | Paper fills at ask + taker fee; CollectorCrypt builds → signs → broadcasts real Solana txs. Desk `:venue` may be a per-market routing map. |
 | Session | `LemonTcg.Desk` | GenServer; serializes quote → risk → venue → ledger. |
 | Agent surface | `LemonTcg.Agent.Tools` | `tcg_live_*` AgentTools mirroring the sim's action space. |
 | Agent loop | `LemonTcg.Agent.Session` (+ `ActionSpace`, `Updater`) | Runs the LemonSim kernel (SectionedProjector → ToolLoopDecider → ExecutedCallEvents) against a live desk. |
@@ -41,6 +60,54 @@ alias LemonTcg.MarketData.Sources.Fixture
 {:ok, fill} = Desk.buy(desk, "my_collection", hd(listings).mint)
 Desk.snapshot(desk)
 ```
+
+### Live browsing (no keys)
+
+```elixir
+LemonTcg.MarketData.listings("collector_crypt:Pokemon", limit: 5)
+LemonTcg.MarketData.floor("opensea:courtyard-nft")   # self-provisions an OpenSea key
+```
+
+### Live Collector Crypt trading
+
+Route the desk's Collector Crypt market to the live venue and give it a
+hot wallet (keep its balance small):
+
+```elixir
+Desk.start_link(
+  watchlist: ["collector_crypt:Pokemon"],
+  venue: %{"collector_crypt" => LemonTcg.Execution.Venues.CollectorCrypt,
+           :default => LemonTcg.Execution.Venues.Paper},
+  wallet: {LemonTcg.Wallet.SolanaKeypair, keypair_path: "~/.config/solana/id.json"},
+  policy: %LemonTcg.Risk.Policy{max_trade_usd: 200.0, allowed_collections: ["collector_crypt:Pokemon"]}
+)
+```
+
+Buys go build → risk → sign → broadcast; `Desk.sell/2` lists a held card
+(pass `list_price_usd` via `market_opts`). Wallet keys resolve from
+`config[:secret_key]`, a `solana-keygen` file (`keypair_path` /
+`SOLANA_KEYPAIR_FILE`), or base58 `SOLANA_SECRET_KEY`.
+
+### Live OpenSea (EVM) trading
+
+Route the `opensea` market to `Venues.OpenSea` with an `EvmKeypair`
+wallet. Two constraints, both fail closed:
+
+- **Buys need a trading-enabled OpenSea key** in `OPENSEA_API_KEY` —
+  the self-provisioned read key returns "Account can not perform trading
+  operations". Set `evm_rpc_urls` (or `rpc_url`) for the chain.
+- Buy only signs a **directly broadcastable** fulfillment tx; if OpenSea
+  returns structured ABI args it refuses (`:opensea_fulfillment_shape_unsupported`).
+- **Sells** require a caller-built, pre-hashed Seaport order
+  (`seaport_order: %{hash: <<32 bytes>>, parameters: ...}`) — the venue
+  signs via EIP-712 but never constructs an order blind (a malformed one
+  could list a card at 0).
+
+EVM keys resolve from `config[:private_key]` (raw/hex) or
+`EVM_PRIVATE_KEY`. The EVM signing stack (`LemonTcg.Evm.*`) is pure
+Elixir and vector-verified against the Ethereum-book golden transaction,
+but the OpenSea buy path is not yet validated against a live funded
+trade — Collector Crypt is the exercised live venue.
 
 Against live Magic Eden data, drop `market_opts` (or set
 `market_opts: []`) and use real collection symbols in the watchlist.

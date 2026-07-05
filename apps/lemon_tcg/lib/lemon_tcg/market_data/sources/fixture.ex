@@ -29,6 +29,9 @@ defmodule LemonTcg.MarketData.Sources.Fixture do
          %Floor{
            collection: collection,
            venue: venue(),
+           chain: :solana,
+           currency: "SOL",
+           floor: Listing.lamports_to_sol(floor_lamports),
            floor_lamports: floor_lamports,
            floor_sol: Listing.lamports_to_sol(floor_lamports),
            listed_count: 25,
@@ -53,9 +56,12 @@ defmodule LemonTcg.MarketData.Sources.Fixture do
 
             %Listing{
               venue: venue(),
+              chain: :solana,
               collection: collection,
               mint: "#{collection}_mint_#{i}",
               name: "#{collection} card ##{i}",
+              price: Listing.lamports_to_sol(price_lamports),
+              currency: "SOL",
               price_lamports: price_lamports,
               price_sol: Listing.lamports_to_sol(price_lamports),
               seller: "fixture_seller_#{i}"

@@ -17,7 +17,7 @@ defmodule LemonTcg.Execution.Venues.Paper do
   @behaviour LemonTcg.Execution.Venue
 
   alias LemonTcg.Execution.Fill
-  alias LemonTcg.MarketData
+  alias LemonTcg.{Fx, MarketData}
   alias LemonTcg.MarketData.Listing
 
   @default_taker_fee_bps 200
@@ -28,7 +28,7 @@ defmodule LemonTcg.Execution.Venues.Paper do
 
   @impl true
   def buy(%Listing{} = listing, opts \\ []) do
-    with {:ok, price_usd} <- MarketData.lamports_to_usd(listing.price_lamports, opts) do
+    with {:ok, price_usd} <- Fx.listing_usd(listing, opts) do
       fee_usd = bps(price_usd, Keyword.get(opts, :taker_fee_bps, @default_taker_fee_bps))
 
       {:ok,
@@ -42,7 +42,8 @@ defmodule LemonTcg.Execution.Venues.Paper do
          price_usd: Float.round(price_usd, 2),
          fee_usd: fee_usd,
          executed_at_ms: System.system_time(:millisecond),
-         txid: "paper_buy_#{:erlang.unique_integer([:positive])}"
+         txid: "paper_buy_#{:erlang.unique_integer([:positive])}",
+         meta: %{currency: listing.currency, source_venue: listing.venue}
        }}
     end
   end
@@ -50,7 +51,7 @@ defmodule LemonTcg.Execution.Venues.Paper do
   @impl true
   def sell(position, opts \\ []) do
     with {:ok, floor} <- MarketData.floor(position.collection, opts),
-         {:ok, floor_usd} <- MarketData.lamports_to_usd(floor.floor_lamports, opts) do
+         {:ok, floor_usd} <- Fx.floor_usd(floor, opts) do
       haircut_bps = Keyword.get(opts, :exit_haircut_bps, @default_exit_haircut_bps)
       price_usd = Float.round(floor_usd * (1.0 - haircut_bps / 10_000), 2)
       fee_usd = bps(price_usd, Keyword.get(opts, :taker_fee_bps, @default_taker_fee_bps))
