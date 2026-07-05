@@ -156,44 +156,63 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
         :ok
 
       true ->
-        notify_ref = make_ref()
+        # Reserve the pending create atomically so only one concurrent caller
+        # wins the create for a surface; the reservation also makes the ref
+        # visible to the delivery notification (which may arrive quickly)
+        # before the payload is enqueued.
+        case PresentationState.reserve_pending_create(
+               route,
+               intent.run_id,
+               surface,
+               seq,
+               text_hash,
+               pending_resume(intent)
+             ) do
+          {:reserved, notify_ref} ->
+            payload =
+              OutboundPayload.text(
+                "telegram",
+                route.account_id,
+                peer(route),
+                text,
+                idempotency_key: intent.intent_id,
+                reply_to: optional_reply_to(intent),
+                meta: Map.put(meta, :notify_tag, PresentationState.notify_tag()),
+                notify_pid: notify_pid,
+                notify_ref: notify_ref
+              )
 
-        # Register the pending ref BEFORE enqueueing so that the delivery
-        # notification (which may arrive quickly) finds the ref in
-        # PresentationState instead of being silently dropped.
-        PresentationState.register_pending_create(
-          route,
-          intent.run_id,
-          surface,
-          notify_ref,
-          seq,
-          text_hash,
-          pending_resume(intent)
-        )
+            case Outbox.enqueue(payload) do
+              {:ok, _ref} ->
+                :ok
 
-        payload =
-          OutboundPayload.text(
-            "telegram",
-            route.account_id,
-            peer(route),
-            text,
-            idempotency_key: intent.intent_id,
-            reply_to: optional_reply_to(intent),
-            meta: Map.put(meta, :notify_tag, PresentationState.notify_tag()),
-            notify_pid: notify_pid,
-            notify_ref: notify_ref
-          )
+              {:error, :duplicate} ->
+                notify_duplicate_delivery(notify_ref)
+                :ok
 
-        case Outbox.enqueue(payload) do
-          {:ok, _ref} ->
+              {:error, reason} ->
+                {:error, reason}
+            end
+
+          {:duplicate, _entry} ->
             :ok
 
-          {:error, :duplicate} ->
-            notify_duplicate_delivery(notify_ref)
-            :ok
+          {:existing, entry} ->
+            if is_reference(entry.pending_create_ref) do
+              PresentationState.defer_text(
+                route,
+                intent.run_id,
+                surface,
+                text,
+                seq,
+                text_hash,
+                meta
+              )
 
-          {:error, reason} ->
-            {:error, reason}
+              :ok
+            else
+              send_text_single(intent, route, entry, surface, text_hash, text, meta)
+            end
         end
     end
   end

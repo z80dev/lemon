@@ -294,4 +294,35 @@ defmodule LemonChannels.PresentationStateTest do
       assert entry.pending_followup_chunks == ["tail"]
     end
   end
+
+  describe "reserve_pending_create/6" do
+    test "only one concurrent caller can reserve a new create for the same surface" do
+      run_id = "run_reserve_#{System.unique_integer()}"
+
+      results =
+        1..8
+        |> Task.async_stream(
+          fn _ ->
+            PresentationState.reserve_pending_create(@route, run_id, :answer, 1, 111)
+          end,
+          ordered: false,
+          max_concurrency: 8,
+          timeout: 1_000
+        )
+        |> Enum.map(fn {:ok, result} -> result end)
+
+      assert Enum.count(results, &match?({:reserved, _ref}, &1)) == 1
+      assert Enum.count(results, &match?({:duplicate, _entry}, &1)) == 7
+
+      entry = PresentationState.get(@route, run_id, :answer)
+      assert is_reference(entry.pending_create_ref)
+      assert entry.last_seq == 1
+      assert entry.last_text_hash == 111
+
+      assert {:existing, existing_entry} =
+               PresentationState.reserve_pending_create(@route, run_id, :answer, 2, 222)
+
+      assert existing_entry.pending_create_ref == entry.pending_create_ref
+    end
+  end
 end

@@ -85,6 +85,31 @@ defmodule LemonChannels.PresentationState do
     )
   end
 
+  @spec reserve_pending_create(
+          DeliveryRoute.t(),
+          binary(),
+          surface(),
+          non_neg_integer(),
+          integer() | nil,
+          term() | nil
+        ) ::
+          {:reserved, reference()} | {:duplicate, entry()} | {:existing, entry()}
+  def reserve_pending_create(
+        %DeliveryRoute{} = route,
+        run_id,
+        surface,
+        seq,
+        text_hash,
+        pending_resume \\ nil
+      )
+      when is_binary(run_id) and is_integer(seq) do
+    GenServer.call(
+      __MODULE__,
+      {:reserve_pending_create, key(route, run_id, surface), route, run_id, surface, seq,
+       text_hash, pending_resume}
+    )
+  end
+
   @spec register_pending_edit(
           DeliveryRoute.t(),
           binary(),
@@ -249,6 +274,41 @@ defmodule LemonChannels.PresentationState do
       |> put_ref(ref, {key, :create})
 
     {:reply, :ok, state}
+  end
+
+  def handle_call(
+        {:reserve_pending_create, key, route, run_id, surface, seq, text_hash, pending_resume},
+        _from,
+        state
+      ) do
+    {entry, state} = get_with_stale_gc(key, route, run_id, surface, state)
+
+    cond do
+      entry.last_seq == seq and entry.last_text_hash == text_hash ->
+        {:reply, {:duplicate, entry}, state}
+
+      present_message_id?(entry.platform_message_id) or is_reference(entry.pending_create_ref) ->
+        {:reply, {:existing, entry}, state}
+
+      true ->
+        ref = make_ref()
+
+        updated =
+          Map.merge(entry, %{
+            pending_create_ref: ref,
+            pending_create_at: System.monotonic_time(:millisecond),
+            last_seq: seq,
+            last_text_hash: text_hash,
+            pending_resume: pending_resume
+          })
+
+        state =
+          state
+          |> put_entry(key, updated)
+          |> put_ref(ref, {key, :create})
+
+        {:reply, {:reserved, ref}, state}
+    end
   end
 
   def handle_call(
@@ -785,4 +845,8 @@ defmodule LemonChannels.PresentationState do
   end
 
   defp followup_reply_to(_), do: nil
+
+  defp present_message_id?(id) when is_integer(id), do: true
+  defp present_message_id?(id) when is_binary(id), do: id != ""
+  defp present_message_id?(_), do: false
 end
