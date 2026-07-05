@@ -135,6 +135,15 @@ defmodule LemonSim.Examples.TcgShopTest do
              result.state.world.research_history
 
     assert Enum.any?(research.notes, &String.contains?(&1, "Allocation-sensitive"))
+
+    # Regression: the terminal order following a support event in the same
+    # decision batch must actually be applied, not dropped by an early
+    # decide halt in ingest_events.
+    assert [delivery] = result.state.world.pending_deliveries
+    assert delivery.line_id == "one_piece_booster_box"
+    assert delivery.requested_quantity == 2
+    assert delivery.quantity >= 1
+    assert [%{status: "open"}] = result.state.world.pending_supplier_invoices
   end
 
   test "next-day resolution delivers inventory, applies overhead, and records sales" do

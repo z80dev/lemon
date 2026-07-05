@@ -45,7 +45,10 @@ defmodule LemonSim.Examples.TcgShop.Updater do
   end
 
   defp append_only(%State{} = state, event) do
-    {:ok, State.append_event(state, event), {:decide, "support observation recorded"}}
+    # :skip, not :decide — support observations land in the same ingest
+    # batch as the terminal action's event, and Runner.ingest_events halts
+    # on the first decide signal, which would drop the terminal event.
+    {:ok, State.append_event(state, event), :skip}
   end
 
   defp apply_researched_market(%State{} = state, event) do
@@ -74,7 +77,7 @@ defmodule LemonSim.Examples.TcgShop.Updater do
       end)
       |> State.append_event(event)
 
-    {:ok, next, {:decide, "market research recorded"}}
+    {:ok, next, :skip}
   end
 
   defp apply_order_product_line(%State{} = state, event) do

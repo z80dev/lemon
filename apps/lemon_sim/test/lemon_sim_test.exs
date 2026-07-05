@@ -78,6 +78,50 @@ defmodule LemonSimTest do
     assert reason == "enemy spotted"
   end
 
+  test "runner default ingest halts mid-batch on a decide signal" do
+    state = State.new(sim_id: "sim-halt", world: %{})
+    events = [%{kind: "tick"}, %{kind: "enemy_visible"}, %{kind: "tick"}]
+
+    assert {:ok, next_state, {:decide, "enemy spotted"}} =
+             Runner.ingest_events(state, events, __MODULE__.UpdaterStub)
+
+    assert Enum.map(next_state.recent_events, & &1.kind) == ["tick", "enemy_visible"]
+  end
+
+  test "runner ingest with halt_on_decide?: false applies every event and keeps the first decide" do
+    state = State.new(sim_id: "sim-no-halt", world: %{})
+    events = [%{kind: "tick"}, %{kind: "enemy_visible"}, %{kind: "tick"}]
+
+    assert {:ok, next_state, {:decide, "enemy spotted"}} =
+             Runner.ingest_events(state, events, __MODULE__.UpdaterStub, halt_on_decide?: false)
+
+    assert Enum.map(next_state.recent_events, & &1.kind) == ["tick", "enemy_visible", "tick"]
+  end
+
+  test "runner step applies executed-call events after a mid-batch decide signal" do
+    state = State.new(sim_id: "sim-step-mid-decide", world: %{"hp" => 100})
+
+    assert {:ok, result} =
+             Runner.step(
+               state,
+               %{
+                 action_space: __MODULE__.ActionSpaceStub,
+                 projector: __MODULE__.ProjectorStub,
+                 decider: __MODULE__.MidDecideDeciderStub,
+                 updater: __MODULE__.UpdaterStub,
+                 decision_adapter: ExecutedCallEvents
+               },
+               []
+             )
+
+    assert Enum.map(result.state.recent_events, & &1.kind) == [
+             "enemy_visible",
+             "terminal_started"
+           ]
+
+    assert {:decide, "enemy spotted"} = result.signal
+  end
+
   test "runner returns an error for invalid coalescers" do
     state = State.new(sim_id: "sim-coalesce", world: %{})
 
@@ -420,6 +464,22 @@ defmodule LemonSimTest do
          "executed_calls" => [
            %{"result_details" => %{"event" => %{"kind" => "support_checked"}}},
            %{"result_details" => %{"event" => %{"kind" => "enemy_visible"}}}
+         ]
+       }}
+    end
+  end
+
+  defmodule MidDecideDeciderStub do
+    @behaviour LemonSim.Kernel.Decider
+
+    @impl true
+    def decide(_context, _tools, _opts) do
+      {:ok,
+       %{
+         "type" => "tool_call",
+         "executed_calls" => [
+           %{"result_details" => %{"event" => %{"kind" => "enemy_visible"}}},
+           %{"result_details" => %{"event" => %{"kind" => "terminal_started"}}}
          ]
        }}
     end

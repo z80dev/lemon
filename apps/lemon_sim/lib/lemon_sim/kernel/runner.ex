@@ -25,6 +25,12 @@ defmodule LemonSim.Kernel.Runner do
 
   @doc """
   Applies events in order and stops on the first `:decide` signal.
+
+  Pass `halt_on_decide?: false` to apply every event regardless of signals;
+  the returned signal is then the first `:decide` encountered (or the last
+  signal when none required a decision). `step/3` uses this mode because its
+  events come from already-executed tool calls — dropping any of them would
+  desynchronize the world from what the model was told succeeded.
   """
   @spec ingest_events(
           LemonSim.Kernel.State.t(),
@@ -35,15 +41,22 @@ defmodule LemonSim.Kernel.Runner do
           {:ok, LemonSim.Kernel.State.t(), LemonSim.Kernel.DecisionSignal.t()} | {:error, term()}
   def ingest_events(state, events, updater, opts \\ [])
       when is_list(events) and is_atom(updater) do
+    halt_on_decide? = Keyword.get(opts, :halt_on_decide?, true)
+
     with {:ok, coalesced_events} <- maybe_coalesce(events, opts) do
       Enum.reduce_while(coalesced_events, {:ok, state, :skip}, fn event,
-                                                                  {:ok, acc_state, _signal} ->
+                                                                  {:ok, acc_state, acc_signal} ->
         case updater.apply_event(acc_state, event, opts) do
           {:ok, next_state, signal} ->
-            if DecisionSignal.decide?(signal) do
-              {:halt, {:ok, next_state, signal}}
-            else
-              {:cont, {:ok, next_state, signal}}
+            cond do
+              not DecisionSignal.decide?(signal) ->
+                {:cont, {:ok, next_state, keep_first_decide(acc_signal, signal)}}
+
+              halt_on_decide? ->
+                {:halt, {:ok, next_state, signal}}
+
+              true ->
+                {:cont, {:ok, next_state, keep_first_decide(acc_signal, signal)}}
             end
 
           {:error, _reason} = error ->
@@ -51,6 +64,10 @@ defmodule LemonSim.Kernel.Runner do
         end
       end)
     end
+  end
+
+  defp keep_first_decide(acc_signal, signal) do
+    if DecisionSignal.decide?(acc_signal), do: acc_signal, else: signal
   end
 
   @doc """
@@ -74,6 +91,10 @@ defmodule LemonSim.Kernel.Runner do
 
   @doc """
   Runs one composed turn: decide once, adapt decision to events, then ingest.
+
+  All adapted events are applied even when one signals `:decide` mid-batch
+  (the tools behind them already executed); pass `halt_on_decide?: true` to
+  restore early-stop ingestion.
   """
   @spec step(LemonSim.Kernel.State.t(), step_modules(), keyword()) ::
           {:ok,
@@ -99,7 +120,8 @@ defmodule LemonSim.Kernel.Runner do
 
     with {:ok, decision, _state} <- decide_once(state, modules, opts),
          {:ok, events} <- adapt_events(decision_adapter, decision, state, opts),
-         {:ok, next_state, signal} <- ingest_events(state, events, updater, opts) do
+         {:ok, next_state, signal} <-
+           ingest_events(state, events, updater, Keyword.put_new(opts, :halt_on_decide?, false)) do
       {:ok, %{decision: decision, events: events, state: next_state, signal: signal}}
     end
   end
