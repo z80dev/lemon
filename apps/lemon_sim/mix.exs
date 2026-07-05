@@ -12,7 +12,7 @@ defmodule LemonSim.MixProject do
       test_pattern: "*_test.exs",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
-      test_coverage: [summary: [threshold: 38]],
+      test_coverage: [summary: [threshold: 40]],
       deps: deps(),
       name: "LemonSim",
       docs: docs()
