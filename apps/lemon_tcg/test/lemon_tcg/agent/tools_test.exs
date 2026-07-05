@@ -2,6 +2,7 @@ defmodule LemonTcg.Agent.ToolsTest do
   use ExUnit.Case, async: true
 
   alias LemonTcg.Agent.Tools
+  alias LemonTcg.Comps.Sources.Fixture, as: CompFixture
   alias LemonTcg.Desk
   alias LemonTcg.MarketData.Sources.Fixture
   alias LemonTcg.Risk.Policy
@@ -11,7 +12,7 @@ defmodule LemonTcg.Agent.ToolsTest do
       {Desk,
        starting_cash_usd: 10_000.0,
        watchlist: [collection],
-       market_opts: [source: Fixture, fresh?: true],
+       market_opts: [source: Fixture, comp_source: CompFixture, fresh?: true],
        policy: %Policy{
          max_trade_usd: 5_000.0,
          max_daily_spend_usd: 8_000.0,
@@ -70,6 +71,36 @@ defmodule LemonTcg.Agent.ToolsTest do
   test "support_tool? matches read-only tools" do
     assert Tools.support_tool?(%{name: "tcg_live_dashboard"})
     assert Tools.support_tool?(%{name: "tcg_live_listings"})
+    assert Tools.support_tool?(%{name: "tcg_live_check_comp"})
+    assert Tools.support_tool?(%{name: "tcg_live_price_basis"})
     refute Tools.support_tool?(%{name: "tcg_live_buy"})
+  end
+
+  test "comp and basis tools answer through the desk" do
+    collection = "tools_comps_#{System.unique_integer([:positive])}"
+    desk = start_desk(collection)
+    tools = Tools.build(desk)
+
+    comp_text =
+      run_tool(tools, "tcg_live_check_comp", %{
+        "query" => "tools comp card #{collection} PSA 10"
+      })
+
+    assert comp_text =~ "psa_10"
+
+    listings_text = run_tool(tools, "tcg_live_listings", %{"collection" => collection})
+    [first_line | _] = String.split(listings_text, "\n")
+    [mint | _] = String.split(first_line, " | ")
+
+    basis_text =
+      run_tool(tools, "tcg_live_price_basis", %{
+        "collection" => collection,
+        "mint" => mint,
+        "query" => "tools basis card #{collection}",
+        "grade" => "ungraded"
+      })
+
+    assert basis_text =~ "Round-trip edge"
+    assert basis_text =~ "Discount to comp"
   end
 end

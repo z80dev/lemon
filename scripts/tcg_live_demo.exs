@@ -7,6 +7,7 @@
 # still fills on the paper venue — no wallet, no on-chain writes.
 
 alias LemonTcg.Desk
+alias LemonTcg.Comps.Sources.Fixture, as: CompFixture
 alias LemonTcg.MarketData.Sources.Fixture
 alias LemonTcg.Risk.Policy
 
@@ -16,7 +17,16 @@ alias LemonTcg.Risk.Policy
     _ -> {false, "demo_vaulted_cards"}
   end
 
-market_opts = if live?, do: [], else: [source: Fixture]
+# Comps stay on the fixture source unless a PriceCharting token is set —
+# live Magic Eden quotes still work without one.
+comp_source =
+  if live? and (System.get_env("PRICECHARTING_API_TOKEN") || "") != "" do
+    LemonTcg.Comps.Sources.PriceCharting
+  else
+    CompFixture
+  end
+
+market_opts = if live?, do: [comp_source: comp_source], else: [source: Fixture, comp_source: comp_source]
 
 {:ok, desk} =
   Desk.start_link(
@@ -45,6 +55,19 @@ case Desk.listings(desk, collection, 5) do
     end)
 
     cheapest = hd(listings)
+    comp_query = cheapest.name || "#{collection} card"
+
+    case Desk.basis(desk, collection, cheapest.mint, comp_query) do
+      {:ok, basis} ->
+        IO.puts(
+          "\nBasis vs physical comp (#{basis.comp_source}, bucket #{basis.comp_bucket}): " <>
+            "ask $#{basis.token_ask_usd} vs comp $#{basis.comp_usd} → " <>
+            "edge $#{basis.edge_usd} (#{basis.edge_pct}%) — #{basis.verdict}"
+        )
+
+      {:error, reason} ->
+        IO.puts("\nBasis unavailable: #{inspect(reason)}")
+    end
 
     case Desk.buy(desk, collection, cheapest.mint) do
       {:ok, fill} ->

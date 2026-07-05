@@ -14,7 +14,7 @@ defmodule LemonTcg.Agent.Updater do
   alias LemonSim.Kernel.{Event, State}
   alias LemonTcg.Desk
 
-  @observation_kinds ~w(tcg_live_checked_dashboard tcg_live_checked_floor tcg_live_checked_listings)
+  @observation_kinds ~w(tcg_live_checked_dashboard tcg_live_checked_floor tcg_live_checked_listings tcg_live_checked_comp tcg_live_priced_basis)
   @action_kinds ~w(tcg_live_bought tcg_live_sold tcg_live_halted tcg_live_action_rejected)
   @max_action_history 50
 

@@ -23,6 +23,8 @@ defmodule LemonTcg.Agent.Tools do
       dashboard_tool(desk),
       floor_tool(desk),
       listings_tool(desk),
+      check_comp_tool(desk),
+      price_basis_tool(desk),
       buy_tool(desk),
       sell_tool(desk),
       halt_tool(desk)
@@ -31,7 +33,8 @@ defmodule LemonTcg.Agent.Tools do
 
   @doc "Names of tools that only read state (for `support_tool_matcher`)."
   def support_tool?(%{name: name}),
-    do: name in ~w(tcg_live_dashboard tcg_live_floor tcg_live_listings)
+    do:
+      name in ~w(tcg_live_dashboard tcg_live_floor tcg_live_listings tcg_live_check_comp tcg_live_price_basis)
 
   def support_tool?(_), do: false
 
@@ -138,6 +141,101 @@ defmodule LemonTcg.Agent.Tools do
 
           {:error, reason} ->
             error_result("Listings lookup failed: #{inspect(reason)}", "check_listings", collection)
+        end
+      end
+    }
+  end
+
+  defp check_comp_tool(desk) do
+    %AgentTool{
+      name: "tcg_live_check_comp",
+      description:
+        "Look up what a card sells for in the physical market, by grade. " <>
+          "Pass the card name (include the grade, e.g. 'Charizard Base Set PSA 9') " <>
+          "or set grade separately.",
+      parameters: %{
+        "type" => "object",
+        "properties" => %{
+          "query" => %{"type" => "string", "description" => "Card name to comp."},
+          "grade" => %{
+            "type" => "string",
+            "description" => "Grade label like 'PSA 10' or 'ungraded'. Optional."
+          }
+        },
+        "required" => ["query"],
+        "additionalProperties" => false
+      },
+      label: "Check Physical Comp",
+      execute: fn _id, params, _signal, _on_update ->
+        query = Map.get(params, "query", "")
+
+        case Desk.comp(desk, query, Map.get(params, "grade")) do
+          {:ok, matched} ->
+            text_result(
+              "#{matched.comp.name || query} (#{matched.comp.set || "unknown set"}): " <>
+                "$#{matched.price_usd} for bucket #{matched.bucket} " <>
+                "(source #{matched.comp.source}). All buckets: #{inspect(matched.comp.prices)}",
+              "tcg_live_checked_comp",
+              %{"query" => query, "bucket" => matched.bucket, "price_usd" => matched.price_usd}
+            )
+
+          {:error, reason} ->
+            error_result("Comp lookup failed: #{inspect(reason)}", "check_comp", query)
+        end
+      end
+    }
+  end
+
+  defp price_basis_tool(desk) do
+    %AgentTool{
+      name: "tcg_live_price_basis",
+      description:
+        "Evaluate a live listing against its physical comp: full " <>
+          "buy token → redeem → sell physical round trip, net of taker fee, " <>
+          "redemption fee, shipping, and physical marketplace fees. " <>
+          "Use before buying — a discount to comp can still be a negative-edge trade.",
+      parameters: %{
+        "type" => "object",
+        "properties" => %{
+          "collection" => %{"type" => "string"},
+          "mint" => %{"type" => "string", "description" => "Listed token mint to evaluate."},
+          "query" => %{"type" => "string", "description" => "Card name to comp against."},
+          "grade" => %{
+            "type" => "string",
+            "description" => "Grade label like 'PSA 10'. Optional; parsed from query otherwise."
+          }
+        },
+        "required" => ["collection", "mint", "query"],
+        "additionalProperties" => false
+      },
+      label: "Price Basis",
+      execute: fn _id, params, _signal, _on_update ->
+        collection = Map.get(params, "collection", "")
+        mint = Map.get(params, "mint", "")
+        query = Map.get(params, "query", "")
+
+        case Desk.basis(desk, collection, mint, query, Map.get(params, "grade")) do
+          {:ok, basis} ->
+            text_result(
+              """
+              Basis for #{basis.mint} (#{basis.listing_name || "unnamed"}) vs #{basis.comp_name || query} [#{basis.comp_bucket}]:
+              Token ask $#{basis.token_ask_usd} → all-in cost $#{basis.token_cost_usd}
+              Physical comp $#{basis.comp_usd} → net after sell fees $#{basis.physical_net_usd}, redemption cost $#{basis.redemption_cost_usd}
+              Discount to comp: #{basis.discount_to_comp_pct}%
+              Round-trip edge: $#{basis.edge_usd} (#{basis.edge_pct}% on cost) — #{basis.verdict}
+              """,
+              "tcg_live_priced_basis",
+              %{
+                "mint" => mint,
+                "query" => query,
+                "edge_usd" => basis.edge_usd,
+                "edge_pct" => basis.edge_pct,
+                "verdict" => basis.verdict
+              }
+            )
+
+          {:error, reason} ->
+            error_result("Basis evaluation failed: #{inspect(reason)}", "price_basis", mint)
         end
       end
     }

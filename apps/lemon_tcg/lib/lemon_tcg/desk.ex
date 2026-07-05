@@ -19,7 +19,7 @@ defmodule LemonTcg.Desk do
   use GenServer
 
   alias LemonTcg.Execution.Venues.Paper
-  alias LemonTcg.{MarketData, Portfolio, Risk}
+  alias LemonTcg.{Basis, Comps, MarketData, Portfolio, Risk}
   alias LemonTcg.Risk.Policy
 
   # -- Client API -------------------------------------------------------------
@@ -39,6 +39,17 @@ defmodule LemonTcg.Desk do
 
   def listings(desk, collection, limit \\ 10),
     do: GenServer.call(desk, {:listings, collection, limit}, 30_000)
+
+  @doc "Grade-matched physical comp for a card (see `LemonTcg.Comps.comp_for_grade/3`)."
+  def comp(desk, query, grade \\ nil), do: GenServer.call(desk, {:comp, query, grade}, 30_000)
+
+  @doc """
+  Token-vs-physical basis for a live listing: finds the ask for `mint`,
+  fetches the grade-matched comp for `query`, and evaluates the full
+  buy → redeem → sell-physical round trip (see `LemonTcg.Basis`).
+  """
+  def basis(desk, collection, mint, query, grade \\ nil),
+    do: GenServer.call(desk, {:basis, collection, mint, query, grade}, 60_000)
 
   @doc "Buy a specific listed token by mint at its current ask."
   def buy(desk, collection, mint), do: GenServer.call(desk, {:buy, collection, mint}, 60_000)
@@ -84,6 +95,14 @@ defmodule LemonTcg.Desk do
     {:reply, MarketData.listings(collection, opts), state}
   end
 
+  def handle_call({:comp, query, grade}, _from, state) do
+    {:reply, Comps.comp_for_grade(query, grade, state.market_opts), state}
+  end
+
+  def handle_call({:basis, collection, mint, query, grade}, _from, state) do
+    {:reply, evaluate_basis(state, collection, mint, query, grade), state}
+  end
+
   def handle_call({:buy, collection, mint}, _from, state) do
     case execute_buy(state, collection, mint) do
       {:ok, fill, portfolio} -> {:reply, {:ok, fill}, %{state | portfolio: portfolio}}
@@ -121,6 +140,23 @@ defmodule LemonTcg.Desk do
          {:ok, fill} <- state.venue.sell(position, state.market_opts),
          {:ok, portfolio} <- Portfolio.apply_sell(state.portfolio, fill) do
       {:ok, fill, portfolio}
+    end
+  end
+
+  defp evaluate_basis(state, collection, mint, query, grade) do
+    with {:ok, listing} <- find_listing(state, collection, mint),
+         {:ok, ask_usd} <- MarketData.lamports_to_usd(listing.price_lamports, state.market_opts),
+         {:ok, matched} <- Comps.comp_for_grade(query, grade, state.market_opts) do
+      evaluation = Basis.evaluate(ask_usd, matched.price_usd, state.market_opts)
+
+      {:ok,
+       Map.merge(evaluation, %{
+         mint: listing.mint,
+         listing_name: listing.name,
+         comp_name: matched.comp.name,
+         comp_bucket: matched.bucket,
+         comp_source: matched.comp.source
+       })}
     end
   end
 

@@ -85,7 +85,10 @@ defmodule LemonTcg.Agent.Session do
       venue with fees and an exit spread, and every order passes a risk
       policy (trade caps, daily spend, allowlist, kill switch).
       Round trips cost real spread: only buy when the discount to floor
-      clearly exceeds fees plus the exit haircut. Waiting is a position.
+      clearly exceeds fees plus the exit haircut. Before any buy, price
+      the token against its physical comp with tcg_live_price_basis —
+      a discount to comp can still be a negative-edge trade after fees,
+      redemption, and shipping. Waiting is a position.
       Use support tools to inspect, then take exactly one terminal action.
       """,
       section_builders: %{
