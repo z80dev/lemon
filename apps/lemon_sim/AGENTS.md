@@ -84,6 +84,11 @@ mission targets change.
   score the leaderboard by money balance. Arena worlds expose competitor,
   message, payment, and trade tools when run through the live VendingBench
   action space.
+- Live Arena uses `mix lemon.sim.vending_bench --arena --arena-live --models
+  "provider:model-a,provider:model-b"` or `--arena-external-cmds "cmd1;;cmd2"`.
+  `LemonSim.Examples.VendingBench.Arena.LiveRunner` runs each agent's own
+  VendingBench state to a day barrier, applies queued cross-agent events through
+  the updater, then recomputes shared price pressure before the next day.
 - `LemonSim.Examples.TcgShop` is the TCG-shop business benchmark: a
   single-operator local game store with Pokemon, Yu-Gi-Oh!, One Piece, Dragon
   Ball Super, and accessory lines. It models sealed allocations, local

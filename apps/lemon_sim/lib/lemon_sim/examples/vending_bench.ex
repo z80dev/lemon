@@ -23,6 +23,7 @@ defmodule LemonSim.Examples.VendingBench do
     OfflineRunner,
     Performance,
     Projector,
+    Runtime,
     Updater,
     World
   }
@@ -251,7 +252,7 @@ defmodule LemonSim.Examples.VendingBench do
     end
   end
 
-  defp with_external_decider(state, run_opts, fun) do
+  def with_external_decider(state, run_opts, fun) do
     case Keyword.get(run_opts, :external_cmd) do
       cmd when is_binary(cmd) and cmd != "" ->
         world = state.world
@@ -372,7 +373,7 @@ defmodule LemonSim.Examples.VendingBench do
     status in ["complete", "bankrupt"]
   end
 
-  defp stamp_runtime_models(%State{} = state, run_opts) do
+  def stamp_runtime_models(%State{} = state, run_opts) do
     external? = external_run?(run_opts)
 
     operator_model =
@@ -411,61 +412,127 @@ defmodule LemonSim.Examples.VendingBench do
     |> Map.put(key, value)
   end
 
-  defp run_live_collecting_artifacts(state, run_opts, events, actions, turn) do
+  def run_live_collecting_artifacts(state, run_opts, events, actions, turn) do
+    case run_live_step_loop(state, run_opts, events, actions, turn, fn _state, _appended ->
+           :continue
+         end) do
+      {:ok, state, events, actions, turn, _appended} ->
+        {:ok, state, events, actions, turn}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  def run_live_until_next_day(state, run_opts, events, actions, turn, opts \\ []) do
+    start_day = get(state.world, :day_number, 1)
+    deadline_ms = Keyword.get(opts, :deadline_ms)
+
+    run_live_step_loop(state, run_opts, events, actions, turn, fn next_state, appended ->
+      cond do
+        terminal?(next_state) or get(next_state.world, :day_number, 1) > start_day ->
+          {:ok, appended}
+
+        deadline_expired?(deadline_ms) ->
+          :day_timeout
+
+        true ->
+          :continue
+      end
+    end)
+  end
+
+  def recover_live_day_timeout(state, run_opts, events, actions, turn, timeout_ms) do
+    case recover_live_step_failure(state, {:live_step_timeout, timeout_ms}, actions, run_opts) do
+      {:ok, next_state, appended, action} ->
+        next_events = events ++ appended
+        next_actions = actions ++ [Map.put(action, :turn, turn + 1)]
+
+        maybe_persist_live_checkpoint(next_state, run_opts)
+        maybe_write_live_checkpoint(next_state, next_events, next_actions, run_opts)
+
+        {:ok, next_state, next_events, next_actions, turn + 1, appended}
+
+      :error ->
+        {:error, {:step_failed, {:live_step_timeout, timeout_ms}}}
+    end
+  end
+
+  defp run_live_step_loop(state, run_opts, events, actions, turn, after_turn) do
     max_turns = Keyword.get(run_opts, :driver_max_turns, Keyword.get(run_opts, :max_turns, 50))
 
     cond do
       terminal?(state) ->
-        {:ok, state, events, actions, turn}
+        {:ok, state, events, actions, turn, []}
 
       turn >= max_turns ->
         {:error, {:turn_limit_exceeded, max_turns}}
 
       true ->
-        maybe_notify(Keyword.get(run_opts, :on_before_step), turn + 1, state)
-        before_recent = state.recent_events
+        case run_live_turn(state, run_opts, events, actions, turn) do
+          {:ok, next_state, next_events, next_actions, next_turn, appended} ->
+            case after_turn.(next_state, appended) do
+              {:ok, final_appended} ->
+                {:ok, next_state, next_events, next_actions, next_turn, final_appended}
 
-        case run_live_step(state, run_opts) do
-          {:ok, result} ->
-            maybe_notify(Keyword.get(run_opts, :on_after_step), turn + 1, result)
-            appended = appended_recent_events(before_recent, result.state.recent_events)
-            action = live_action_summary(turn + 1, state.world, result, appended)
-            next_events = events ++ appended
-            next_actions = actions ++ [action]
+              :day_timeout ->
+                {:day_timeout, next_state, next_events, next_actions, next_turn}
 
-            maybe_persist_live_checkpoint(result.state, run_opts)
-            maybe_write_live_checkpoint(result.state, next_events, next_actions, run_opts)
-
-            run_live_collecting_artifacts(
-              result.state,
-              run_opts,
-              next_events,
-              next_actions,
-              turn + 1
-            )
-
-          {:error, reason} ->
-            case recover_live_step_failure(state, reason, actions, run_opts) do
-              {:ok, next_state, appended, action} ->
-                next_events = events ++ appended
-                next_actions = actions ++ [Map.put(action, :turn, turn + 1)]
-
-                maybe_persist_live_checkpoint(next_state, run_opts)
-                maybe_write_live_checkpoint(next_state, next_events, next_actions, run_opts)
-
-                run_live_collecting_artifacts(
+              :continue ->
+                run_live_step_loop(
                   next_state,
                   run_opts,
                   next_events,
                   next_actions,
-                  turn + 1
+                  next_turn,
+                  after_turn
                 )
-
-              :error ->
-                {:error, {:step_failed, reason}}
             end
+
+          {:error, reason} ->
+            {:error, reason}
         end
     end
+  end
+
+  defp run_live_turn(state, run_opts, events, actions, turn) do
+    maybe_notify(Keyword.get(run_opts, :on_before_step), turn + 1, state)
+    before_recent = state.recent_events
+
+    case run_live_step(state, run_opts) do
+      {:ok, result} ->
+        maybe_notify(Keyword.get(run_opts, :on_after_step), turn + 1, result)
+        appended = appended_recent_events(before_recent, result.state.recent_events)
+        action = live_action_summary(turn + 1, state.world, result, appended)
+        next_events = events ++ appended
+        next_actions = actions ++ [action]
+
+        maybe_persist_live_checkpoint(result.state, run_opts)
+        maybe_write_live_checkpoint(result.state, next_events, next_actions, run_opts)
+
+        {:ok, result.state, next_events, next_actions, turn + 1, appended}
+
+      {:error, reason} ->
+        case recover_live_step_failure(state, reason, actions, run_opts) do
+          {:ok, next_state, appended, action} ->
+            next_events = events ++ appended
+            next_actions = actions ++ [Map.put(action, :turn, turn + 1)]
+
+            maybe_persist_live_checkpoint(next_state, run_opts)
+            maybe_write_live_checkpoint(next_state, next_events, next_actions, run_opts)
+
+            {:ok, next_state, next_events, next_actions, turn + 1, appended}
+
+          :error ->
+            {:error, {:step_failed, reason}}
+        end
+    end
+  end
+
+  defp deadline_expired?(nil), do: false
+
+  defp deadline_expired?(deadline_ms) when is_integer(deadline_ms) do
+    System.monotonic_time(:millisecond) >= deadline_ms
   end
 
   defp maybe_persist_live_checkpoint(state, run_opts) do
@@ -661,15 +728,7 @@ defmodule LemonSim.Examples.VendingBench do
   defp recoverable_live_step_failure(_reason), do: :error
 
   defp appended_recent_events(before_recent, after_recent) do
-    max_overlap = min(length(before_recent), length(after_recent))
-
-    overlap =
-      max_overlap..0//-1
-      |> Enum.find(0, fn count ->
-        Enum.take(before_recent, -count) == Enum.take(after_recent, count)
-      end)
-
-    Enum.drop(after_recent, overlap)
+    Runtime.appended_recent_events(before_recent, after_recent)
   end
 
   defp maybe_notify(callback, turn, payload) when is_function(callback, 2) do
@@ -778,12 +837,12 @@ defmodule LemonSim.Examples.VendingBench do
   defp format_price(price), do: to_string(price)
 
   defp get(map, key) when is_map(map) and is_atom(key),
-    do: Map.get(map, key, Map.get(map, Atom.to_string(key)))
+    do: Runtime.get(map, key)
 
   defp get(_map, _key), do: nil
 
   defp get(map, key, default) when is_map(map) and is_atom(key),
-    do: Map.get(map, key, Map.get(map, Atom.to_string(key), default))
+    do: Runtime.get(map, key, default)
 
   defp get(_map, _key, default), do: default
 end

@@ -1593,6 +1593,351 @@ defmodule LemonSim.Examples.VendingBenchTest do
     File.rm_rf!(artifact_dir)
   end
 
+  test "live arena runs agents in day barriers and recomputes pressure" do
+    {:ok, barrier_log} = Agent.start_link(fn -> [] end)
+
+    on_before_step = fn _turn, state ->
+      agent_id = state.world.arena_agent_id
+      day = state.world.day_number
+
+      Agent.update(barrier_log, fn entries ->
+        if day == 2 do
+          assert Enum.count(entries, &(&1 == {:finished_day, 1})) == 2
+        end
+
+        entries ++ [{:before, agent_id, day}]
+      end)
+    end
+
+    on_after_step = fn _turn, result ->
+      if result.state.world.day_number == 2 do
+        Agent.update(barrier_log, &(&1 ++ [{:finished_day, 1}]))
+      end
+    end
+
+    assert {:ok, result} =
+             VendingBench.Arena.LiveRunner.run(
+               sim_id: "vb_live_arena_lockstep",
+               max_days: 3,
+               seed: 1,
+               arena_agents: 2,
+               persist?: false,
+               arena_day_budget_ms: 1_000,
+               arena_state_setup: &seed_arena_prices/3,
+               arena_agent_opts: [
+                 live_agent_opts([tool_call("wait_for_next_day", %{})]),
+                 live_agent_opts([tool_call("wait_for_next_day", %{})])
+               ],
+               on_before_step: on_before_step,
+               on_after_step: on_after_step
+             )
+
+    assert Enum.all?(result.world.arena_agents, &(&1.day_number == 3))
+
+    multipliers =
+      result.world.arena_agents
+      |> Enum.map(&{&1.id, get_in(&1.world, [:machine, :slots, "A1", :arena_demand_multiplier])})
+      |> Map.new()
+
+    assert multipliers["alex"] == 1.25
+    assert multipliers["blair"] == 0.6
+  end
+
+  test "live arena delivers cross-agent payments at the next day barrier" do
+    assert {:ok, result} =
+             VendingBench.Arena.LiveRunner.run(
+               sim_id: "vb_live_arena_payment",
+               max_days: 1,
+               seed: 1,
+               arena_agents: 2,
+               persist?: false,
+               arena_day_budget_ms: 1_000,
+               arena_agent_opts: [
+                 live_agent_opts([
+                   tool_call("send_arena_money", %{
+                     "to_agent_id" => "blair",
+                     "amount" => 12.0,
+                     "memo" => "test payment"
+                   }),
+                   tool_call("wait_for_next_day", %{})
+                 ]),
+                 live_agent_opts([tool_call("wait_for_next_day", %{})])
+               ]
+             )
+
+    [payment] = result.events
+    assert payment.arena_seq == 1
+    assert payment.kind == "arena_money_sent"
+    assert payment.from_agent_id == "alex"
+    assert payment.to_agent_id == "blair"
+
+    agents = Map.new(result.world.arena_agents, &{&1.id, &1.world})
+    assert [%{amount: 12.0}] = agents["alex"].arena_payments_sent
+    assert [%{amount: 12.0}] = agents["blair"].arena_payments_received
+    assert agents["alex"].bank_balance == 486.0
+    assert agents["blair"].bank_balance == 510.0
+    assert Float.round(agents["alex"].bank_balance + agents["blair"].bank_balance, 2) == 996.0
+  end
+
+  test "live arena delivers affordable trades and conserves money and goods" do
+    assert {:ok, result} =
+             VendingBench.Arena.LiveRunner.run(
+               sim_id: "vb_live_arena_trade_affordable",
+               max_days: 1,
+               seed: 1,
+               arena_agents: 2,
+               persist?: false,
+               arena_day_budget_ms: 1_000,
+               arena_state_setup: &seed_arena_inventory/3,
+               arena_agent_opts: [
+                 live_agent_opts([
+                   tool_call("trade_with_agent", %{
+                     "to_agent_id" => "blair",
+                     "item_id" => "water",
+                     "quantity" => 4,
+                     "amount" => 3.4
+                   }),
+                   tool_call("wait_for_next_day", %{})
+                 ]),
+                 live_agent_opts([tool_call("wait_for_next_day", %{})])
+               ]
+             )
+
+    assert Enum.any?(result.events, &(Map.get(&1, :kind) == "arena_trade_completed"))
+
+    agents = Map.new(result.world.arena_agents, &{&1.id, &1.world})
+    assert agents["alex"].bank_balance == 501.4
+    assert agents["blair"].bank_balance == 494.6
+    assert agents["alex"].storage.inventory["water"] == 6
+    assert agents["blair"].storage.inventory["water"] == 4
+    assert Float.round(agents["alex"].bank_balance + agents["blair"].bank_balance, 2) == 996.0
+
+    assert agents["alex"].storage.inventory["water"] + agents["blair"].storage.inventory["water"] ==
+             10
+  end
+
+  test "live arena rejects unaffordable trade delivery and reverses seller effects" do
+    assert {:ok, result} =
+             VendingBench.Arena.LiveRunner.run(
+               sim_id: "vb_live_arena_trade_unaffordable",
+               max_days: 1,
+               seed: 1,
+               arena_agents: 2,
+               persist?: false,
+               arena_day_budget_ms: 1_000,
+               arena_state_setup: fn state, agent, index ->
+                 state = seed_arena_inventory(state, agent, index)
+
+                 if agent.id == "blair" do
+                   put_in(state, [Access.key(:world), :bank_balance], 3.0)
+                 else
+                   state
+                 end
+               end,
+               arena_agent_opts: [
+                 live_agent_opts([
+                   tool_call("trade_with_agent", %{
+                     "to_agent_id" => "blair",
+                     "item_id" => "water",
+                     "quantity" => 4,
+                     "amount" => 3.4
+                   }),
+                   tool_call("wait_for_next_day", %{})
+                 ]),
+                 live_agent_opts([tool_call("wait_for_next_day", %{})])
+               ]
+             )
+
+    assert Enum.any?(result.events, &(Map.get(&1, :kind) == "arena_delivery_failed"))
+    assert Enum.any?(result.events, &(Map.get(&1, :kind) == "arena_trade_reversed"))
+
+    agents = Map.new(result.world.arena_agents, &{&1.id, &1.world})
+    assert agents["alex"].bank_balance == 498.0
+    assert agents["blair"].bank_balance == 1.0
+    assert agents["alex"].storage.inventory["water"] == 10
+    assert Map.get(agents["blair"].storage.inventory, "water", 0) == 0
+    assert [%{amount: 3.4, quantity: 4}] = agents["alex"].arena_trade_reversals
+
+    assert Enum.any?(result.slots, fn slot ->
+             slot.id == "blair" and Enum.any?(slot.events, &(&1.kind == "action_rejected"))
+           end)
+  end
+
+  test "live arena records delivery failures without aborting the run" do
+    assert {:ok, result} =
+             VendingBench.Arena.LiveRunner.run(
+               sim_id: "vb_live_arena_delivery_failure",
+               max_days: 1,
+               seed: 1,
+               arena_agents: 2,
+               persist?: false,
+               arena_day_budget_ms: 1_000,
+               arena_agent_opts: [
+                 live_agent_opts([
+                   tool_call("send_arena_message", %{
+                     "to_agent_id" => "ghost",
+                     "subject" => "bad route",
+                     "body" => "this recipient does not exist"
+                   }),
+                   tool_call("wait_for_next_day", %{})
+                 ]),
+                 live_agent_opts([tool_call("wait_for_next_day", %{})])
+               ]
+             )
+
+    assert Enum.all?(result.world.arena_agents, &(&1.status == "complete"))
+    assert Enum.any?(result.events, &(Map.get(&1, :kind) == "arena_delivery_failed"))
+    blair = Enum.find(result.world.arena_agents, &(&1.id == "blair"))
+    assert Map.get(blair.world, :arena_mailbox, []) == []
+  end
+
+  test "live arena auto-waits a stalled agent without blocking peers" do
+    assert {:ok, result} =
+             VendingBench.Arena.LiveRunner.run(
+               sim_id: "vb_live_arena_timeout",
+               max_days: 1,
+               seed: 1,
+               arena_agents: 2,
+               persist?: false,
+               arena_day_budget_ms: 10,
+               arena_agent_opts: [
+                 live_agent_opts(:stall),
+                 live_agent_opts([tool_call("wait_for_next_day", %{})])
+               ]
+             )
+
+    alex = Enum.find(result.slots, &(&1.id == "alex"))
+    assert alex.state.world.status == "complete"
+    assert Enum.any?(alex.actions, &(Map.get(&1, :fallback_action) == "wait_for_next_day"))
+  end
+
+  test "live arena soft day timeout preserves completed turns before auto-wait" do
+    on_after_step = fn _turn, result ->
+      if result.state.world.arena_agent_id == "alex" do
+        Process.sleep(5)
+      end
+    end
+
+    assert {:ok, result} =
+             VendingBench.Arena.LiveRunner.run(
+               sim_id: "vb_live_arena_soft_timeout",
+               max_days: 1,
+               seed: 1,
+               arena_agents: 2,
+               persist?: false,
+               arena_day_budget_ms: 1,
+               on_after_step: on_after_step,
+               arena_agent_opts: [
+                 live_agent_opts([
+                   tool_call("send_arena_message", %{
+                     "to_agent_id" => "blair",
+                     "subject" => "partial progress",
+                     "body" => "this should survive the soft timeout"
+                   }),
+                   tool_call("wait_for_next_day", %{})
+                 ]),
+                 live_agent_opts([tool_call("wait_for_next_day", %{})])
+               ]
+             )
+
+    alex = Enum.find(result.slots, &(&1.id == "alex"))
+    assert Enum.any?(alex.events, &(&1.kind == "arena_message_sent"))
+    assert Enum.any?(alex.events, &(&1.kind == "next_day_waited"))
+    assert Enum.any?(alex.actions, &(Map.get(&1, :fallback_action) == "wait_for_next_day"))
+    assert Enum.any?(result.events, &(Map.get(&1, :kind) == "arena_message_sent"))
+    assert alex.state.world.status == "complete"
+  end
+
+  test "live arena stops taking turns for bankrupt agents" do
+    {:ok, alex_calls} = Agent.start_link(fn -> 0 end)
+
+    alex_complete = fn _model, _context, _stream_opts ->
+      Agent.update(alex_calls, &(&1 + 1))
+      {:ok, assistant_tool_message([tool_call("wait_for_next_day", %{})])}
+    end
+
+    assert {:ok, result} =
+             VendingBench.Arena.LiveRunner.run(
+               sim_id: "vb_live_arena_bankrupt",
+               max_days: 3,
+               seed: 1,
+               arena_agents: 2,
+               persist?: false,
+               arena_day_budget_ms: 1_000,
+               arena_state_setup: fn state, _agent, index ->
+                 if index == 0 do
+                   state
+                   |> put_in([Access.key(:world), :bank_balance], 0.0)
+                   |> put_in([Access.key(:world), :unpaid_fee_streak], 9)
+                 else
+                   state
+                 end
+               end,
+               arena_agent_opts: [
+                 live_agent_opts(alex_complete),
+                 live_agent_opts([tool_call("wait_for_next_day", %{})])
+               ]
+             )
+
+    alex = Enum.find(result.world.arena_agents, &(&1.id == "alex"))
+    assert alex.status == "bankrupt"
+    assert Agent.get(alex_calls, & &1) == 1
+  end
+
+  test "live arena deterministic artifacts verify and are byte-reproducible" do
+    artifact_dir_a =
+      Path.join(System.tmp_dir!(), "vb_live_arena_repro_a_#{System.unique_integer([:positive])}")
+
+    artifact_dir_b =
+      Path.join(System.tmp_dir!(), "vb_live_arena_repro_b_#{System.unique_integer([:positive])}")
+
+    on_exit(fn ->
+      File.rm_rf!(artifact_dir_a)
+      File.rm_rf!(artifact_dir_b)
+    end)
+
+    opts = fn ->
+      [
+        sim_id: "vb_live_arena_repro",
+        max_days: 1,
+        seed: 1,
+        arena_agents: 2,
+        persist?: false,
+        deterministic_artifacts?: true,
+        arena_day_budget_ms: 1_000,
+        arena_agent_opts: [
+          live_agent_opts([
+            tool_call("send_arena_message", %{
+              "to_agent_id" => "blair",
+              "subject" => "deterministic delivery",
+              "body" => "exercise the delivery barrier"
+            }),
+            tool_call("wait_for_next_day", %{})
+          ]),
+          live_agent_opts([tool_call("wait_for_next_day", %{})])
+        ]
+      ]
+    end
+
+    assert {:ok, _} =
+             VendingBench.Arena.LiveRunner.run(
+               Keyword.put(opts.(), :artifact_dir, artifact_dir_a)
+             )
+
+    assert {:ok, _} =
+             VendingBench.Arena.LiveRunner.run(
+               Keyword.put(opts.(), :artifact_dir, artifact_dir_b)
+             )
+
+    assert {:ok, verified_a} = LemonSim.Bench.Artifacts.Verifier.verify_run(artifact_dir_a)
+    assert {:ok, verified_b} = LemonSim.Bench.Artifacts.Verifier.verify_run(artifact_dir_b)
+    assert verified_a.scorecard == verified_b.scorecard
+
+    assert arena_bundle(artifact_dir_a) == arena_bundle(artifact_dir_b)
+    assert artifact_text(artifact_dir_a, "arena_events.jsonl") =~ "arena_message_sent"
+    assert File.exists?(Path.join([artifact_dir_a, "agents", "alex", "final_world.json"]))
+  end
+
   test "replay browser can be rebuilt from an existing artifact directory" do
     artifact_dir =
       Path.join(System.tmp_dir!(), "vb_replay_source_#{System.unique_integer([:positive])}")
@@ -2161,6 +2506,71 @@ defmodule LemonSim.Examples.VendingBenchTest do
       max_tokens: 4_096,
       headers: %{},
       compat: nil
+    }
+  end
+
+  defp live_agent_opts(:stall) do
+    live_agent_opts(fn _model, _context, _stream_opts ->
+      Process.sleep(:infinity)
+    end)
+  end
+
+  defp live_agent_opts(complete_fn) when is_function(complete_fn, 3) do
+    [
+      model: fake_model("operator"),
+      complete_fn: complete_fn,
+      stream_options: %{},
+      persist?: false,
+      on_before_step: nil,
+      on_after_step: nil
+    ]
+  end
+
+  defp live_agent_opts(tool_calls) when is_list(tool_calls) do
+    {:ok, calls} = Agent.start_link(fn -> tool_calls end)
+
+    live_agent_opts(fn _model, _context, _stream_opts ->
+      call =
+        Agent.get_and_update(calls, fn
+          [next | rest] -> {next, rest}
+          [] -> {tool_call("wait_for_next_day", %{}), []}
+        end)
+
+      {:ok, assistant_tool_message([call])}
+    end)
+  end
+
+  defp seed_arena_prices(state, _agent, index) do
+    price = if index == 0, do: 1.0, else: 2.0
+
+    put_in(state, [Access.key(:world), :machine, :slots, "A1"], %{
+      slot_type: "small",
+      item_id: "water",
+      inventory: 5,
+      price: price
+    })
+  end
+
+  defp seed_arena_inventory(state, _agent, index) do
+    if index == 0 do
+      state
+      |> put_in([Access.key(:world), :storage, :inventory], %{"water" => 10})
+      |> put_in([Access.key(:world), :storage, :batches], [
+        %{item_id: "water", quantity: 10, received_day: 1}
+      ])
+    else
+      put_in(state, [Access.key(:world), :storage, :inventory], %{})
+    end
+  end
+
+  defp arena_bundle(artifact_dir) do
+    %{
+      hashes: artifact_json(artifact_dir, "hashes.json"),
+      manifest: artifact_json(artifact_dir, "manifest.json"),
+      arena_world: artifact_json(artifact_dir, "arena_world.json"),
+      arena_events: artifact_text(artifact_dir, "arena_events.jsonl"),
+      arena_scorecard: artifact_json(artifact_dir, "arena_scorecard.json"),
+      usage: artifact_json(artifact_dir, "usage.json")
     }
   end
 

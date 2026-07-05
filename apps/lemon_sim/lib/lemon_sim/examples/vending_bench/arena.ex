@@ -143,7 +143,7 @@ defmodule LemonSim.Examples.VendingBench.Arena do
     end
   end
 
-  defp apply_competition_pressure(states) do
+  def apply_competition_pressure(states) do
     price_floor =
       states
       |> Enum.flat_map(fn state ->
@@ -485,7 +485,7 @@ defmodule LemonSim.Examples.VendingBench.Arena do
     end)
   end
 
-  defp arena_world(sim_id, states, events, actions, turns, max_days) do
+  def arena_world(sim_id, states, events, actions, turns, max_days) do
     agents =
       states
       |> Enum.map(fn state ->
@@ -532,7 +532,7 @@ defmodule LemonSim.Examples.VendingBench.Arena do
     }
   end
 
-  defp maybe_write_artifacts(world, events, actions, opts) do
+  def maybe_write_artifacts(world, events, actions, opts) do
     case Keyword.get(opts, :artifact_dir) do
       nil ->
         nil
@@ -562,6 +562,11 @@ defmodule LemonSim.Examples.VendingBench.Arena do
 
         scorecard_body = Jason.encode!(jsonable(scorecard(world)), pretty: true)
 
+        usage_body =
+          Keyword.get_lazy(opts, :usage_body, fn ->
+            Usage.encode_artifact(Usage.artifact(nil, world.sim_id))
+          end)
+
         contents = %{
           paths.final_world => encoded_world,
           paths.arena_world => encoded_world,
@@ -569,7 +574,7 @@ defmodule LemonSim.Examples.VendingBench.Arena do
           paths.arena_actions => jsonl(actions),
           paths.arena_scorecard => scorecard_body,
           paths.scorecard => scorecard_body,
-          paths.usage => Usage.encode_artifact(Usage.artifact(nil, world.sim_id)),
+          paths.usage => usage_body,
           paths.arena_report => report(world, paths, opts)
         }
 
@@ -689,9 +694,9 @@ defmodule LemonSim.Examples.VendingBench.Arena do
     |> get(:seed)
   end
 
-  defp terminal?(%State{} = state), do: get(state.world, :status) in ["complete", "bankrupt"]
+  def terminal?(%State{} = state), do: get(state.world, :status) in ["complete", "bankrupt"]
 
-  defp tag_events(agent_id, events) do
+  def tag_events(agent_id, events) do
     Enum.map(events, fn event ->
       event
       |> Map.from_struct()
@@ -711,7 +716,7 @@ defmodule LemonSim.Examples.VendingBench.Arena do
     Enum.drop(after_recent, overlap)
   end
 
-  defp agents(opts) do
+  def agents(opts) do
     case Keyword.get(opts, :arena_agents) do
       count when is_integer(count) and count > 0 ->
         Enum.take(@default_agents, min(count, length(@default_agents)))
@@ -727,7 +732,7 @@ defmodule LemonSim.Examples.VendingBench.Arena do
     end
   end
 
-  defp arena_price_multiplier(index) do
+  def arena_price_multiplier(index) do
     [0.92, 1.0, 1.06, 1.12, 0.97]
     |> Enum.at(index, 1.0)
   end

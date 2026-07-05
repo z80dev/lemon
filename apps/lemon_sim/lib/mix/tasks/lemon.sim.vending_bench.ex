@@ -17,7 +17,11 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
     * `--worker-model` - Separate model for physical worker
     * `--preset` - Run preset: ci, paper, v2
     * `--arena` - Run deterministic Vending-Bench Arena mode
+    * `--arena-live` - Run live multi-agent Vending-Bench Arena mode
     * `--arena-agents` - Number of arena agents, up to 5 for the baseline
+    * `--models` - Comma-separated live arena model specs, one per agent
+    * `--arena-external-cmds` - `;;`-separated external commands, one per agent
+    * `--arena-day-budget-ms` - Per-agent per-day wall-clock budget for live arena
     * `--offline-strategy` - Deterministic strategy to run without model credentials (`baseline` or `pressure`)
     * `--artifact-dir` - Directory for offline run artifacts
     * `--deterministic-artifacts` - Pin artifact timestamps and path labels for byte-reproducible bundles
@@ -40,7 +44,11 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
     worker_model: :string,
     preset: :string,
     arena: :boolean,
+    arena_live: :boolean,
     arena_agents: :integer,
+    models: :string,
+    arena_external_cmds: :string,
+    arena_day_budget_ms: :integer,
     offline_strategy: :string,
     artifact_dir: :string,
     deterministic_artifacts: :boolean,
@@ -76,6 +84,7 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
       |> maybe_put(:artifact_dir, opts[:artifact_dir])
       |> maybe_put(:deterministic_artifacts?, opts[:deterministic_artifacts])
       |> maybe_put(:live_step_timeout_ms, opts[:live_step_timeout_ms])
+      |> maybe_put(:arena_day_budget_ms, opts[:arena_day_budget_ms])
       |> maybe_put(:external_cmd, opts[:external_cmd])
 
     result = run_mode(opts, run_opts)
@@ -99,10 +108,18 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
         :ok
 
       {:error, reason} ->
-        Mix.shell().error("Simulation failed: #{inspect(reason)}")
+        Mix.shell().error("Simulation failed: #{format_error(reason)}")
         exit({:shutdown, 1})
     end
   end
+
+  defp format_error(:mixed_arena_deciders_unsupported),
+    do: "live arena cannot mix --models with --arena-external-cmds"
+
+  defp format_error({:invalid_arena_model_spec, index, value}),
+    do: "invalid live arena model spec at index #{index}: #{inspect(value)}"
+
+  defp format_error(reason), do: inspect(reason)
 
   defp maybe_put(opts, _key, nil), do: opts
   defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
@@ -118,6 +135,12 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
 
   defp run_mode(opts, run_opts) do
     cond do
+      opts[:arena] && opts[:arena_live] ->
+        run_opts
+        |> maybe_put(:arena_agents, opts[:arena_agents])
+        |> put_live_arena_agents!(opts)
+        |> LemonSim.Examples.VendingBench.Arena.LiveRunner.run()
+
       opts[:arena] ->
         strategy = opts[:offline_strategy] || "baseline"
 
@@ -145,6 +168,16 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
   defp validate_external_opts!(opts) do
     if opts[:external_cmd] && (opts[:model] || opts[:worker_model]) do
       Mix.shell().error("--external-cmd cannot be combined with --model or --worker-model")
+      exit({:shutdown, 1})
+    end
+
+    if opts[:arena_live] && !opts[:arena] do
+      Mix.shell().error("--arena-live requires --arena")
+      exit({:shutdown, 1})
+    end
+
+    if opts[:arena_live] && opts[:models] && opts[:arena_external_cmds] do
+      Mix.shell().error("--models and --arena-external-cmds cannot be combined in live arena v1")
       exit({:shutdown, 1})
     end
 
@@ -214,6 +247,62 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
       run_opts
       |> maybe_put_model(opts[:model])
       |> maybe_put_worker_model(opts[:worker_model])
+    end
+  end
+
+  defp put_live_arena_agents!(run_opts, opts) do
+    cond do
+      opts[:models] ->
+        model_specs =
+          opts[:models]
+          |> split_model_specs()
+          |> Enum.map(&resolve_arena_model!/1)
+
+        Keyword.put(run_opts, :arena_models, model_specs)
+
+      opts[:arena_external_cmds] ->
+        cmds =
+          opts[:arena_external_cmds]
+          |> String.split(";;", trim: true)
+          |> Enum.map(&String.trim/1)
+          |> Enum.reject(&(&1 == ""))
+
+        if cmds == [] do
+          Mix.shell().error("--arena-external-cmds must include at least one command")
+          exit({:shutdown, 1})
+        end
+
+        Keyword.put(run_opts, :arena_external_cmds, cmds)
+
+      true ->
+        Mix.shell().error("--arena-live requires --models or --arena-external-cmds")
+        exit({:shutdown, 1})
+    end
+  end
+
+  defp split_model_specs(models) do
+    models
+    |> String.split(",", trim: true)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> case do
+      [] ->
+        Mix.shell().error("--models must include at least one model spec")
+        exit({:shutdown, 1})
+
+      specs ->
+        specs
+    end
+  end
+
+  defp resolve_arena_model!(model_str) do
+    case resolve_model(model_str) do
+      {:ok, model, api_key} ->
+        {model, api_key}
+
+      {:error, reason} ->
+        Mix.shell().error("Could not resolve arena model #{model_str}: #{inspect(reason)}")
+        exit({:shutdown, 1})
     end
   end
 

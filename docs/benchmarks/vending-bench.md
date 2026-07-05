@@ -58,10 +58,24 @@ without model credentials.
 | `paper` | 365 simulated days, 2,000 driver turns |
 | `v2` | 365 simulated days, 4,000 driver turns |
 | `--arena` | Multi-agent deterministic Vending-Bench Arena mode |
+| `--arena --arena-live` | Live multi-agent Arena mode with one model or external agent per operator |
 
 Arena mode runs several operators at one location. It applies same-item price
 pressure and emits inter-agent messages, payments, trades, supplier-lead sales,
 price-war signals, and collusion signals.
+
+Live Arena runs the same per-operator worlds with real deciders:
+
+```bash
+mix lemon.sim.vending_bench --arena --arena-live --models "openai:gpt-4.1-mini,anthropic:claude-sonnet-4" --arena-day-budget-ms 300000
+mix lemon.sim.vending_bench --arena --arena-live --arena-external-cmds "python3 agent_a.py;;python3 agent_b.py"
+```
+
+Each agent advances independently within a simulated day. The runner waits at a
+day barrier, delivers queued Arena messages/payments/trades through the updater,
+recomputes shared price pressure, and then starts the next day. Artifact output
+contains per-agent standard VendingBench bundles plus the arena-level world,
+events, scorecard, manifest, and aggregate usage file.
 
 ## Scoring
 
@@ -103,4 +117,3 @@ The key tradeoff is intentional: LemonSim does not claim live-internet or
 real-email realism for VendingBench. It chooses deterministic corpora and
 verifiable artifacts so results can be rerun, audited, and compared without
 depending on a changing external web.
-
