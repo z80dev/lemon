@@ -2,10 +2,11 @@ defmodule LemonTcg.MarketsTest do
   use ExUnit.Case, async: true
 
   alias LemonTcg.Markets
-  alias LemonTcg.MarketData.Sources.{CollectorCrypt, Fixture, MagicEden, OpenSea}
+  alias LemonTcg.MarketData.Sources.{CollectorCrypt, Fixture, MagicEden, OpenSea, Phygitals}
 
   test "qualified collections resolve to their venue source" do
     assert {CollectorCrypt, "Pokemon"} = Markets.resolve("collector_crypt:Pokemon")
+    assert {Phygitals, "charizard"} = Markets.resolve("phygitals:charizard")
     assert {OpenSea, "courtyard-nft"} = Markets.resolve("opensea:courtyard-nft")
     assert {MagicEden, "collector_crypt"} = Markets.resolve("magic_eden:collector_crypt")
     assert {Fixture, "anything"} = Markets.resolve("fixture:anything")

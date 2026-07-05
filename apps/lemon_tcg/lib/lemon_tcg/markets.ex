@@ -6,6 +6,7 @@ defmodule LemonTcg.Markets do
 
       "collector_crypt:Pokemon"     — Collector Crypt, Pokemon category
       "collector_crypt:all"         — Collector Crypt, whole marketplace
+      "phygitals:all"               — Phygitals feed (or a search term)
       "opensea:courtyard-nft"       — OpenSea slug (Courtyard, Polygon)
       "magic_eden:collector_crypt"  — Magic Eden symbol
       "fixture:anything"            — deterministic offline source
@@ -19,6 +20,7 @@ defmodule LemonTcg.Markets do
 
   @sources %{
     "collector_crypt" => LemonTcg.MarketData.Sources.CollectorCrypt,
+    "phygitals" => LemonTcg.MarketData.Sources.Phygitals,
     "opensea" => LemonTcg.MarketData.Sources.OpenSea,
     "magic_eden" => LemonTcg.MarketData.Sources.MagicEden,
     "fixture" => LemonTcg.MarketData.Sources.Fixture

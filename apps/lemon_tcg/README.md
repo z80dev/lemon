@@ -17,13 +17,16 @@ names use the default source.
 | Prefix | Venue | Chain | Browse | Buy | Sell | Access |
 |---|---|---|---|---|---|---|
 | `collector_crypt:` | Collector Crypt (category or `all`) | Solana | ✅ | ✅ live (aggregates ME+Tensor+CC) | ✅ list | no key |
+| `phygitals:` | Phygitals (search term or `all`) | Solana | ✅ | — (listings live on Tensor ~86% / ME ~14%; route by `raw["marketplace"]`) | — | no key |
 | `opensea:` | OpenSea slug (Courtyard, any Base collection) | Polygon/Base | ✅ | ✅ Seaport fulfillment (EVM signing) | ✅ signed order | **trading** key + EVM wallet |
 | `magic_eden:` | Magic Eden symbol | Solana | ✅ | via Collector Crypt aggregation | — | keyless reads |
 | `fixture:` | deterministic offline | — | ✅ | ✅ paper | ✅ paper | none |
 
-Parked (not programmatically tradeable today): Phygitals (routes only via
-browser capture), rip.fun (bot-walled, no discoverable contract), Tensor
-(gated key; reachable through Collector Crypt's aggregating buy anyway).
+Parked (not programmatically tradeable today): Phygitals *execution* (its
+Tensor-side listings need a gated Tensor API key; pack rip/buyback/redeem
+sit behind Privy auth), rip.fun (bot-walled, no discoverable contract),
+Tensor (gated key; reachable through Collector Crypt's aggregating buy
+anyway).
 
 ## Layers
 

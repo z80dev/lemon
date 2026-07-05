@@ -118,12 +118,16 @@ defmodule LemonTcg.MarketData.Sources.CollectorCrypt do
 
   defp card_name(card) do
     base = card["itemName"]
+    company = card["gradingCompany"]
     grade = grade_label(card)
 
+    # Live itemNames usually already carry "PSA 8" while `grade` is the
+    # descriptive "NM-MT 8"; appending both would double the grade.
     cond do
       is_nil(base) -> nil
       grade == nil -> base
       String.contains?(base, grade) -> base
+      is_binary(company) and String.contains?(base, company) -> base
       true -> "#{base} #{grade}"
     end
   end

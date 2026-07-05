@@ -25,6 +25,8 @@ defmodule LemonTcg.MarketData.Sources.CollectorCryptTest do
           "itemName" => "Pikachu Jungle PSA 8",
           "nftAddress" => "MintOne111",
           "nftStandard" => "pnft",
+          "gradingCompany" => "PSA",
+          "grade" => "NM-MT 8",
           "listing" => %{"price" => 0.55, "currency" => "SOL", "marketplace" => "ME"},
           "owner" => %{"wallet" => "SellerOne"}
         },
@@ -64,6 +66,9 @@ defmodule LemonTcg.MarketData.Sources.CollectorCryptTest do
     assert %Listing{mint: "MintTwo222", currency: "USDC", price_usd: 410.0} = usdc_listing
     # Grading metadata is folded into the display name for comps.
     assert usdc_listing.name == "Charizard Base Set PSA 9"
+    # Live itemNames already carrying the grader ("... PSA 8") stay untouched
+    # even though CC's grade field is the descriptive "NM-MT 8".
+    assert sol_listing.name == "Pikachu Jungle PSA 8"
     # The CC card id survives in raw for the sell/list flow.
     assert usdc_listing.raw["id"] == "cc-card-2"
   end
