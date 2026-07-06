@@ -14,6 +14,9 @@ defmodule Mix.Tasks.Lemon.Sim.Poker do
       mix lemon.sim.poker
       mix lemon.sim.poker --player-count 2 --max-hands 1 --seed 7
       mix lemon.sim.poker --model anthropic:claude-sonnet-4-20250514
+      mix lemon.sim.poker --player-count 3 --models zai:glm-5,anthropic:claude-sonnet-4-20250514,openai:gpt-4.1
+
+  Multi-model assignments are applied in seat order (player_1..player_N).
   """
 
   @switches [
@@ -27,6 +30,8 @@ defmodule Mix.Tasks.Lemon.Sim.Poker do
     sim_id: :string,
     artifact_dir: :string,
     model: :string,
+    models: :string,
+    transcript_path: :string,
     help: :boolean
   ]
 
@@ -41,6 +46,9 @@ defmodule Mix.Tasks.Lemon.Sim.Poker do
       invalid != [] ->
         Mix.raise("invalid options: #{inspect(invalid)}")
 
+      opts[:model] && opts[:models] ->
+        Mix.raise("pass either --model or --models, not both")
+
       true ->
         ensure_runtime_started!()
         config = Modular.load(project_dir: File.cwd!())
@@ -54,9 +62,20 @@ defmodule Mix.Tasks.Lemon.Sim.Poker do
           |> GameHelpers.maybe_put(:max_hands, opts[:max_hands])
           |> GameHelpers.maybe_put(:seed, opts[:seed])
           |> GameHelpers.maybe_put(:sim_id, opts[:sim_id])
-          |> GameHelpers.maybe_put(:model, resolve_model(opts[:model], config))
 
-        case LemonSim.Examples.Poker.run(run_opts) do
+        result =
+          if opts[:models] do
+            run_opts
+            |> Keyword.put(:model_assignments, build_model_assignments!(opts, config))
+            |> GameHelpers.maybe_put(:transcript_path, opts[:transcript_path])
+            |> LemonSim.Examples.Poker.run_multi_model()
+          else
+            run_opts
+            |> GameHelpers.maybe_put(:model, resolve_model(opts[:model], config))
+            |> LemonSim.Examples.Poker.run()
+          end
+
+        case result do
           {:ok, final_state} ->
             artifact_opts =
               run_opts
@@ -76,6 +95,31 @@ defmodule Mix.Tasks.Lemon.Sim.Poker do
             Mix.raise("poker sim failed: #{inspect(reason)}")
         end
     end
+  end
+
+  defp build_model_assignments!(opts, config) do
+    player_count = opts[:player_count] || 4
+
+    specs =
+      opts[:models]
+      |> String.split(",", trim: true)
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+
+    if length(specs) != player_count do
+      Mix.raise(
+        "--models expects #{player_count} model specs for #{player_count} seats, got #{length(specs)}"
+      )
+    end
+
+    1..player_count
+    |> Enum.map(&"player_#{&1}")
+    |> Enum.zip(specs)
+    |> Map.new(fn {player_id, spec} ->
+      model = resolve_model(spec, config)
+      api_key = GameConfig.resolve_provider_api_key!(model.provider, config, "poker")
+      {player_id, {model, api_key}}
+    end)
   end
 
   defp ensure_runtime_started! do
@@ -111,6 +155,8 @@ defmodule Mix.Tasks.Lemon.Sim.Poker do
       --sim-id ID                  Override generated simulation id
       --artifact-dir DIR           Override benchmark artifact output directory
       --model PROVIDER:MODEL       Override the configured default model
+      --models A,B,C               Per-seat models in seat order (player_1..N)
+      --transcript-path PATH       JSONL transcript path for multi-model runs
       --help                       Show this help
     """)
   end
