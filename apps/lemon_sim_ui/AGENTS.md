@@ -6,11 +6,12 @@
 
 - launching simulations via `SimManager`
 - driving the runner loop (calling `LemonSim.Kernel.Runner.step/3` in a supervised task)
-- rendering live state in the browser via the public `LobbyLive`, public `LeaderboardLive`, admin `SimDashboardLive`, and public read-only `SpectatorLive` watcher
+- keeping the always-on model arenas running via `Arena` (one per domain: werewolf, space_station, stock_market, survivor — randomized lineups, crash resume, league recording through `LemonSim.Bench.League`)
+- rendering live state in the browser via the public `LobbyLive`, public `LeaderboardLive`, public `ArenaLive`/`ArenaLeaderboardLive` (per-domain arena + league standings), admin `SimDashboardLive`, and public read-only `SpectatorLive` watcher
 - exposing a token-protected admin API for remote sim start/stop
 - accepting human-player moves for interactive domains
 
-The primary entry points for changes are `SimManager`, `SimDashboardLive`, `SpectatorLive`, `LeaderboardLive`, and the board component for the relevant domain.
+The primary entry points for changes are `SimManager`, `Arena`, `SimDashboardLive`, `SpectatorLive`, `LeaderboardLive`, and the board component for the relevant domain.
 
 ## File Structure
 
@@ -23,6 +24,8 @@ lib/
     router.ex                              Public `/`, `/leaderboards`, `/watch/:sim_id`, `/healthz`; private `/admin/*`; `/api/admin/*`
     artifact_reader.ex                     Suite/usage JSON readers and formatting helpers
     sim_manager.ex                         GenServer: owns all running sim tasks
+    arena.ex                               GenServer per domain: always-on league scheduler + recorder
+    arena_domains.ex                       Presentation config for arena domains
     sim_helpers.ex                         Pure helpers: domain inference, labels, colors
     werewolf_playback.ex                   Buffered live-playback helper for readable Werewolf spectator pacing
     telemetry.ex                           Phoenix telemetry setup

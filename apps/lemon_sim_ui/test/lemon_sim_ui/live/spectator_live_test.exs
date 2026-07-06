@@ -101,6 +101,72 @@ defmodule LemonSimUi.SpectatorLiveTest do
     LemonSim.Kernel.Store.delete_state("test_spectator_tcg")
   end
 
+  test "renders spectator view for space station sim", %{conn: conn} do
+    sim_id = "spc_test1"
+
+    state =
+      LemonSim.Examples.SpaceStation.initial_state(sim_id: sim_id, player_count: 5)
+      |> put_model_on_first_player("zai/glm-5")
+
+    LemonSim.Kernel.Store.put_state(state)
+
+    {:ok, _view, html} = live(conn, "/watch/#{sim_id}")
+    assert html =~ sim_id
+    assert html =~ "Space Station"
+    assert html =~ "/arena/space_station/leaderboard"
+    assert html =~ "glm-5"
+    refute html =~ "Abort Sim"
+    refute html =~ "RAW_STATE_DUMP"
+    refute html =~ "AGENT STRATEGY"
+    refute html =~ "DATA BANKS"
+
+    LemonSim.Kernel.Store.delete_state(sim_id)
+  end
+
+  test "renders spectator view for stock market sim", %{conn: conn} do
+    sim_id = "stk_test1"
+
+    state =
+      LemonSim.Examples.StockMarket.initial_state(sim_id: sim_id, player_count: 4)
+      |> put_model_on_first_player("zai/glm-5")
+
+    LemonSim.Kernel.Store.put_state(state)
+
+    {:ok, _view, html} = live(conn, "/watch/#{sim_id}")
+    assert html =~ sim_id
+    assert html =~ "Stock Market"
+    assert html =~ "/arena/stock_market/leaderboard"
+    assert html =~ "glm-5"
+    refute html =~ "Abort Sim"
+    refute html =~ "RAW_STATE_DUMP"
+    refute html =~ "AGENT STRATEGY"
+    refute html =~ "DATA BANKS"
+
+    LemonSim.Kernel.Store.delete_state(sim_id)
+  end
+
+  test "renders spectator view for survivor sim", %{conn: conn} do
+    sim_id = "srv_test1"
+
+    state =
+      LemonSim.Examples.Survivor.initial_state(sim_id: sim_id, player_count: 6)
+      |> put_model_on_first_player("zai/glm-5")
+
+    LemonSim.Kernel.Store.put_state(state)
+
+    {:ok, _view, html} = live(conn, "/watch/#{sim_id}")
+    assert html =~ sim_id
+    assert html =~ "Survivor"
+    assert html =~ "/arena/survivor/leaderboard"
+    assert html =~ "glm-5"
+    refute html =~ "Abort Sim"
+    refute html =~ "RAW_STATE_DUMP"
+    refute html =~ "AGENT STRATEGY"
+    refute html =~ "DATA BANKS"
+
+    LemonSim.Kernel.Store.delete_state(sim_id)
+  end
+
   test "renders vending bench spectator view from checkpoint artifacts", %{conn: conn} do
     sim_id = "test_spectator_vb_artifact"
 
@@ -482,4 +548,12 @@ defmodule LemonSimUi.SpectatorLiveTest do
 
   defp restore_registry({:ok, body}), do: File.write!(@artifact_registry, body)
   defp restore_registry({:error, _reason}), do: File.rm(@artifact_registry)
+
+  defp put_model_on_first_player(%State{world: world} = state, model) do
+    first_player_id = world.players |> Map.keys() |> Enum.sort() |> List.first()
+    updated_player = Map.put(Map.get(world.players, first_player_id), :model, model)
+    updated_players = Map.put(world.players, first_player_id, updated_player)
+
+    %{state | world: Map.put(world, :players, updated_players)}
+  end
 end

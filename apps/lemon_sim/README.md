@@ -28,10 +28,12 @@ There are 19 examples in this app:
 
 - `TicTacToe` is the smallest self-play scenario.
 - `Werewolf` is the social-deduction showcase with hidden roles, transcripts,
-  video replay tooling, and a persistent multi-game league
-  (`Werewolf.League`): randomized model-to-role match planning, per-game
-  records, and per-model/per-role standings with Bradley-Terry ratings. The
-  `lemon_sim_ui` arena runs it around the clock.
+  and video replay tooling. It is one of four scenarios in the persistent
+  multi-game league system (`LemonSim.Bench.League` + per-scenario adapters,
+  alongside `SpaceStation`, `StockMarket`, and `Survivor`): randomized
+  model-to-seat match planning, per-game records, and per-model/per-role
+  standings with Bradley-Terry ratings. The `lemon_sim_ui` arenas run them
+  around the clock.
 - `VendingBench` is the operator/physical-worker vending business benchmark,
   with deterministic CI, paper, V2, offline Arena, and live multi-agent Arena
   modes.

@@ -6,8 +6,8 @@ defmodule LemonSimUi.Live.Components.SurvivorBoard do
 
   alias LemonCore.MapHelpers
 
-  attr :world, :map, required: true
-  attr :interactive, :boolean, default: false
+  attr(:world, :map, required: true)
+  attr(:interactive, :boolean, default: false)
 
   def render(assigns) do
     world = assigns.world
@@ -1067,13 +1067,13 @@ defmodule LemonSimUi.Live.Components.SurvivorBoard do
 
   # ── Player Card Component ───────────────────────────────────────────
 
-  attr :player_id, :any, required: true
-  attr :player, :map, required: true
-  attr :active, :boolean, default: false
-  attr :immune, :boolean, default: false
-  attr :jury_member, :boolean, default: false
-  attr :tribe_color, :string, default: "#6b7280"
-  attr :all_players, :map, default: %{}
+  attr(:player_id, :any, required: true)
+  attr(:player, :map, required: true)
+  attr(:active, :boolean, default: false)
+  attr(:immune, :boolean, default: false)
+  attr(:jury_member, :boolean, default: false)
+  attr(:tribe_color, :string, default: "#6b7280")
+  attr(:all_players, :map, default: %{})
 
   defp player_card(assigns) do
     player = assigns.player
@@ -1196,7 +1196,18 @@ defmodule LemonSimUi.Live.Components.SurvivorBoard do
   end
 
   defp format_model(nil), do: ""
-  defp format_model(model) when is_binary(model), do: String.slice(model, 0, 20)
+
+  defp format_model(model) when is_binary(model) do
+    # "google_gemini_cli/gemini-3-flash-preview" -> "gemini-3-flash"
+    model
+    |> String.split("/")
+    |> List.last()
+    |> String.replace("-preview", "")
+    |> String.replace("claude-", "")
+    |> String.replace("gpt-", "gpt")
+    |> String.slice(0, 20)
+  end
+
   defp format_model(model), do: String.slice(to_string(model), 0, 20)
 
   defp format_winner(winner) when is_binary(winner), do: winner
@@ -1238,7 +1249,9 @@ defmodule LemonSimUi.Live.Components.SurvivorBoard do
     end
   end
 
-  defp tribe_color(tribe_name) when is_atom(tribe_name), do: tribe_color(Atom.to_string(tribe_name))
+  defp tribe_color(tribe_name) when is_atom(tribe_name),
+    do: tribe_color(Atom.to_string(tribe_name))
+
   defp tribe_color(_), do: "#6b7280"
 
   # ── Phase Helpers ───────────────────────────────────────────────────

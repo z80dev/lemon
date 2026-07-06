@@ -312,6 +312,7 @@ defmodule LemonSimUi.Live.Components.StockMarketBoard do
             <%= for {pid, pdata, pval} <- @player_list do %>
               <% is_active = to_string(@active_actor_id) == pid %>
               <% name = get_val(pdata, :name, pid) %>
+              <% model = get_val(pdata, :model, nil) %>
               <% cash = get_val(pdata, :cash, 0) %>
               <% reputation = get_val(pdata, :reputation, 3) %>
               <% portfolio = get_val(pdata, :portfolio, %{}) %>
@@ -335,6 +336,11 @@ defmodule LemonSimUi.Live.Components.StockMarketBoard do
                     <div class="w-1 h-1 rounded-full sm-typing-dot-2" style="background: #06b6d4;"></div>
                     <div class="w-1 h-1 rounded-full sm-typing-dot-3" style="background: #06b6d4;"></div>
                   </div>
+                </div>
+
+                <%!-- Model Badge --%>
+                <div :if={model} class="truncate mb-1" style="color: #475569; font-size: 8px; font-family: monospace;" title={model}>
+                  {short_model_name(model)}
                 </div>
 
                 <%!-- Trait Badges --%>
@@ -559,12 +565,16 @@ defmodule LemonSimUi.Live.Components.StockMarketBoard do
               <%= for {{pid, pdata, pval}, rank} <- Enum.with_index(@player_list, 1) do %>
                 <% bar_pct = if @max_portfolio_val > 0, do: pval / @max_portfolio_val * 100, else: 0 %>
                 <% lb_name = get_val(pdata, :name, pid) %>
+                <% lb_model = get_val(pdata, :model, nil) %>
                 <% lb_traits = get_val(@traits, to_string(lb_name), get_val(@traits, pid, [])) %>
                 <div class="relative">
                   <div class="flex items-center justify-between mb-0.5">
                     <div class="flex items-center gap-1.5">
                       <span class="text-xs font-bold font-mono" style={"color: #{rank_color(rank)};"}>{rank}</span>
                       <span class="text-xs truncate" style="color: #e2e8f0; max-width: 80px;">{lb_name}</span>
+                      <span :if={lb_model} class="truncate" style="color: #475569; font-size: 8px; font-family: monospace;" title={lb_model}>
+                        {short_model_name(lb_model)}
+                      </span>
                     </div>
                     <span class="text-xs font-mono font-bold" style="color: #10b981;">${format_price(pval)}</span>
                   </div>
@@ -791,10 +801,14 @@ defmodule LemonSimUi.Live.Components.StockMarketBoard do
             <div class="space-y-2">
               <%= for {{pid, pdata, pval}, rank} <- Enum.with_index(@player_list, 1) do %>
                 <% is_winner = to_string(@winner) == pid %>
+                <% final_model = get_val(pdata, :model, nil) %>
                 <div class="flex items-center gap-3 py-1" style={if is_winner, do: "background: rgba(245, 158, 11, 0.05); border-radius: 6px; padding: 6px 8px; border: 1px solid rgba(245, 158, 11, 0.15);", else: "padding: 6px 8px;"}>
                   <span class="text-sm font-bold font-mono w-5 text-right" style={"color: #{rank_color(rank)};"}>{rank}</span>
                   <span :if={is_winner} class="text-xs">{Phoenix.HTML.raw("&#x1F3C6;")}</span>
                   <span class="text-sm flex-1 truncate" style={"color: #{if is_winner, do: "#f59e0b", else: "#e2e8f0"};"}>{get_val(pdata, :name, pid)}</span>
+                  <span :if={final_model} class="truncate" style="color: #64748b; font-size: 9px; font-family: monospace;" title={final_model}>
+                    {short_model_name(final_model)}
+                  </span>
                   <span class="text-sm font-mono font-bold" style="color: #10b981;">${format_price(pval)}</span>
                 </div>
               <% end %>
@@ -830,6 +844,20 @@ defmodule LemonSimUi.Live.Components.StockMarketBoard do
   end
 
   defp get_val(_, _, default), do: default
+
+  # ── Model Display Helper ──────────────────────────────────────────
+
+  defp short_model_name(full_name) when is_binary(full_name) do
+    # "google_gemini_cli/gemini-3-flash-preview" -> "gemini-3-flash"
+    full_name
+    |> String.split("/")
+    |> List.last()
+    |> String.replace("-preview", "")
+    |> String.replace("claude-", "")
+    |> String.replace("gpt-", "gpt")
+  end
+
+  defp short_model_name(_), do: ""
 
   # ── Player Name ──────────────────────────────────────────────────
 

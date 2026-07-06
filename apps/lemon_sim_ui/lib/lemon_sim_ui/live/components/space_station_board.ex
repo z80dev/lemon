@@ -6,8 +6,8 @@ defmodule LemonSimUi.Live.Components.SpaceStationBoard do
 
   alias LemonCore.MapHelpers
 
-  attr :world, :map, required: true
-  attr :interactive, :boolean, default: false
+  attr(:world, :map, required: true)
+  attr(:interactive, :boolean, default: false)
 
   def render(assigns) do
     world = assigns.world
@@ -114,7 +114,9 @@ defmodule LemonSimUi.Live.Components.SpaceStationBoard do
       if latest_report do
         get_val(latest_report, :critical_systems, [])
       else
-        system_list |> Enum.filter(fn {_, _, h, _} -> h < 30 end) |> Enum.map(fn {id, _, _, _} -> id end)
+        system_list
+        |> Enum.filter(fn {_, _, h, _} -> h < 30 end)
+        |> Enum.map(fn {id, _, _, _} -> id end)
       end
 
     any_critical = critical_systems != []
@@ -530,6 +532,7 @@ defmodule LemonSimUi.Live.Components.SpaceStationBoard do
                 <% p_name = get_val(pdata, :name, pid) %>
                 <% p_role = get_val(pdata, :role, "crew") %>
                 <% p_status = get_val(pdata, :status, "alive") %>
+                <% p_model = get_val(pdata, :model, nil) %>
                 <% is_active = pid == @active_actor %>
                 <% is_ejected = p_status == "ejected" %>
                 <% is_saboteur = p_role == "saboteur" %>
@@ -560,6 +563,10 @@ defmodule LemonSimUi.Live.Components.SpaceStationBoard do
                         </span>
                         <span :if={is_active and not is_ejected} class="w-1 h-1 rounded-full bg-cyan-400 animate-pulse flex-shrink-0"></span>
                       </div>
+
+                      <span :if={p_model && not is_ejected} class="text-[8px] text-gray-600 font-mono truncate block" title={p_model}>
+                        {short_model_name(p_model)}
+                      </span>
 
                       <%!-- Role display (classified for spectator mode) --%>
                       <div :if={not is_ejected} class="mt-0.5">
@@ -972,6 +979,7 @@ defmodule LemonSimUi.Live.Components.SpaceStationBoard do
                     <div class="flex flex-wrap justify-center gap-2">
                       <%= for {pid, pdata} <- @sorted_players do %>
                         <% p_role = get_val(pdata, :role, "crew") %>
+                        <% p_model = get_val(pdata, :model, nil) %>
                         <div class={[
                           "px-3 py-1.5 rounded-lg border text-xs font-bold",
                           if(p_role == "saboteur",
@@ -981,6 +989,9 @@ defmodule LemonSimUi.Live.Components.SpaceStationBoard do
                         ]}>
                           <span>{get_val(pdata, :name, pid)}</span>
                           <span class={["ml-1.5", role_color_text(p_role)]}>{role_label(p_role)}</span>
+                          <span :if={p_model} class="ml-1.5 text-[8px] font-mono font-normal text-gray-500" title={p_model}>
+                            {short_model_name(p_model)}
+                          </span>
                         </div>
                       <% end %>
                     </div>
@@ -1238,6 +1249,20 @@ defmodule LemonSimUi.Live.Components.SpaceStationBoard do
 
   defp get_val(_, _, default), do: default
 
+  # ── Model Display Helper ──────────────────────────────────────────
+
+  defp short_model_name(full_name) when is_binary(full_name) do
+    # "google_gemini_cli/gemini-3-flash-preview" -> "gemini-3-flash"
+    full_name
+    |> String.split("/")
+    |> List.last()
+    |> String.replace("-preview", "")
+    |> String.replace("claude-", "")
+    |> String.replace("gpt-", "gpt")
+  end
+
+  defp short_model_name(_), do: ""
+
   # ── Player Helpers ───────────────────────────────────────────────
 
   defp player_name(id, players) when is_map(players) do
@@ -1306,8 +1331,13 @@ defmodule LemonSimUi.Live.Components.SpaceStationBoard do
   defp phase_label(other), do: String.upcase(to_string(other))
 
   defp phase_badge_classes("action", _), do: "bg-cyan-900/40 text-cyan-300 border-cyan-700/40"
-  defp phase_badge_classes("discussion", false), do: "bg-amber-900/40 text-amber-300 border-amber-700/40"
-  defp phase_badge_classes("discussion", true), do: "bg-red-900/50 text-red-300 border-red-600/50 ss-klaxon"
+
+  defp phase_badge_classes("discussion", false),
+    do: "bg-amber-900/40 text-amber-300 border-amber-700/40"
+
+  defp phase_badge_classes("discussion", true),
+    do: "bg-red-900/50 text-red-300 border-red-600/50 ss-klaxon"
+
   defp phase_badge_classes("voting", _), do: "bg-red-900/40 text-red-300 border-red-700/40"
   defp phase_badge_classes("game_over", _), do: "bg-gray-800/40 text-gray-300 border-gray-600/40"
   defp phase_badge_classes(_, _), do: "bg-gray-800/40 text-gray-400 border-gray-700/40"
@@ -1421,11 +1451,13 @@ defmodule LemonSimUi.Live.Components.SpaceStationBoard do
   # ── Action Formatting ────────────────────────────────────────────
 
   defp format_action(action) when is_binary(action), do: action
+
   defp format_action(action) when is_map(action) do
     type = get_val(action, :type, get_val(action, :action, "unknown"))
     target = get_val(action, :target, get_val(action, :system, nil))
     if target, do: "#{type} -> #{target}", else: to_string(type)
   end
+
   defp format_action(action), do: inspect(action)
 
   # ── Crew Token Classes ──────────────────────────────────────────
@@ -1468,9 +1500,7 @@ defmodule LemonSimUi.Live.Components.SpaceStationBoard do
       |> List.wrap()
       |> Enum.take(-3)
       |> Enum.map(fn entry ->
-        {to_string(player_name),
-         get_val(entry, :round, 0),
-         get_val(entry, :phase, ""),
+        {to_string(player_name), get_val(entry, :round, 0), get_val(entry, :phase, ""),
          get_val(entry, :thought, "")}
       end)
     end)

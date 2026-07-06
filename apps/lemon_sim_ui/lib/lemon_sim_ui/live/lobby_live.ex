@@ -33,7 +33,7 @@ defmodule LemonSimUi.LobbyLive do
     {:ok,
      assign(socket,
        sims: build_lobby_list(),
-       werewolf_live?: werewolf_live?(),
+       arenas: build_arena_list(),
        page_title: "LemonSim — Live Games",
        public_vending_launcher?: VendingBenchLauncher.enabled?(),
        vending_model_presets: VendingBenchLauncher.presets()
@@ -42,7 +42,7 @@ defmodule LemonSimUi.LobbyLive do
 
   @impl true
   def handle_info(%LemonCore.Event{type: :sim_lobby_changed}, socket) do
-    {:noreply, assign(socket, sims: build_lobby_list(), werewolf_live?: werewolf_live?())}
+    {:noreply, assign(socket, sims: build_lobby_list(), arenas: build_arena_list())}
   end
 
   def handle_info(:vending_bench_artifact_refresh, socket) do
@@ -76,63 +76,63 @@ defmodule LemonSimUi.LobbyLive do
               </div>
               <p class="text-sm text-slate-400 font-mono ml-12">Watch AI agents play games in real-time</p>
             </div>
-            <div class="flex items-center gap-3">
-              <.link navigate={~p"/werewolf/leaderboard"} class="glass-button px-4 py-2 rounded-lg text-sm font-mono">
-                Werewolf League
-              </.link>
-              <.link navigate={~p"/leaderboards"} class="glass-button px-4 py-2 rounded-lg text-sm font-mono">
-                Leaderboards
-              </.link>
-            </div>
+            <.link navigate={~p"/leaderboards"} class="glass-button px-4 py-2 rounded-lg text-sm font-mono">
+              Leaderboards
+            </.link>
           </div>
         </div>
       </header>
 
       <%!-- Content --%>
       <main class="max-w-5xl mx-auto px-6 py-10">
-        <%!-- Werewolf arena hero --%>
-        <section class="relative overflow-hidden glass-panel rounded-xl border border-glass-border p-6 mb-8">
-          <img
-            src="/assets/werewolf/night_bg.png"
-            alt=""
-            class="absolute inset-0 w-full h-full object-cover opacity-20 pointer-events-none"
-          />
-          <div class="relative flex flex-col md:flex-row md:items-center md:justify-between gap-5">
+        <%!-- Always-on arenas --%>
+        <section class="mb-8">
+          <div class="mb-4 flex items-center justify-between">
             <div>
-              <div class="flex items-center gap-2 mb-2">
-                <span class="text-[10px] font-bold uppercase px-2 py-1 rounded border bg-red-500/10 text-red-400 border-red-500/30">
-                  Werewolf Arena
-                </span>
+              <h2 class="text-2xl font-extrabold text-white">Model Arenas</h2>
+              <p class="text-sm text-slate-400 font-mono mt-1">
+                Frontier models compete around the clock. Seats are randomized
+                every game and every result feeds the league standings.
+              </p>
+            </div>
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div
+              :for={arena <- @arenas}
+              class="relative overflow-hidden glass-panel rounded-xl border border-glass-border p-4"
+            >
+              <div class="flex items-center justify-between mb-2">
+                <span class="text-2xl">{arena.icon}</span>
                 <span
-                  :if={@werewolf_live?}
-                  class="text-[11px] font-bold tracking-widest uppercase px-2.5 py-1 rounded-sm border border-red-500/30 bg-red-500/10 text-red-400 flex items-center gap-1.5"
+                  :if={arena.live?}
+                  class="text-[10px] font-bold tracking-widest uppercase px-2 py-0.5 rounded-sm border border-red-500/30 bg-red-500/10 text-red-400 flex items-center gap-1.5"
                 >
                   <span class="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse shadow-[0_0_6px_rgba(239,68,68,0.8)]"></span>
-                  LIVE NOW
+                  LIVE
                 </span>
                 <span
-                  :if={!@werewolf_live?}
-                  class="text-[11px] font-bold tracking-widest uppercase px-2.5 py-1 rounded-sm border border-amber-500/30 bg-amber-500/10 text-amber-300"
+                  :if={!arena.live?}
+                  class="text-[10px] font-bold tracking-widest uppercase px-2 py-0.5 rounded-sm border border-slate-700 text-slate-500"
                 >
                   Intermission
                 </span>
               </div>
-              <h2 class="text-2xl font-extrabold text-white">Models play Werewolf, around the clock</h2>
-              <p class="text-sm text-slate-400 font-mono mt-1 max-w-xl">
-                Frontier models bluff, deduce, and vote each other out. Roles are
-                randomized every game and every result feeds the league standings.
-              </p>
-            </div>
-            <div class="flex items-center gap-3 shrink-0">
-              <.link
-                navigate={~p"/werewolf"}
-                class="rounded-lg bg-red-500 hover:bg-red-400 px-5 py-2.5 text-sm font-bold text-white flex items-center gap-2"
-              >
-                <span class="w-1.5 h-1.5 rounded-full bg-white animate-pulse"></span> Watch
-              </.link>
-              <.link navigate={~p"/werewolf/leaderboard"} class="glass-button px-4 py-2.5 rounded-lg text-sm font-mono">
-                League
-              </.link>
+              <h3 class="text-base font-bold text-white mb-1">{arena.title}</h3>
+              <p class="text-[11px] text-slate-400 font-mono mb-3 min-h-8">{arena.tagline}</p>
+              <div class="flex items-center gap-2">
+                <.link
+                  navigate={~p"/arena/#{arena.domain}"}
+                  class="flex-1 rounded-lg bg-red-500 hover:bg-red-400 px-3 py-1.5 text-center text-xs font-bold text-white"
+                >
+                  Watch
+                </.link>
+                <.link
+                  navigate={~p"/arena/#{arena.domain}/leaderboard"}
+                  class="flex-1 glass-button px-3 py-1.5 rounded-lg text-xs font-mono text-center"
+                >
+                  League
+                </.link>
+              </div>
             </div>
           </div>
         </section>
@@ -244,8 +244,21 @@ defmodule LemonSimUi.LobbyLive do
 
   # -- Private --
 
-  defp werewolf_live? do
-    SimManager.list_running() |> Enum.any?(&String.starts_with?(&1, "ww_"))
+  defp build_arena_list do
+    running = SimManager.list_running()
+
+    Enum.map(LemonSimUi.Arena.domains(), fn domain ->
+      theme = LemonSimUi.ArenaDomains.get(domain)
+      prefix = LemonSimUi.Arena.sim_prefix(domain)
+
+      %{
+        domain: domain,
+        title: theme.title,
+        tagline: theme.tagline,
+        icon: theme.icon,
+        live?: Enum.any?(running, &String.starts_with?(&1, prefix))
+      }
+    end)
   end
 
   defp build_lobby_list do

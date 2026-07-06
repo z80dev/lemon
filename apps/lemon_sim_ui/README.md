@@ -11,11 +11,12 @@ lemon_sim (Runner, Store, Bus, all domain examples)
       |
 lemon_sim_ui
   |-- LemonSimUi.SimManager         GenServer: start/stop/run simulation processes
-  |-- LemonSimUi.WerewolfArena      GenServer: always-on Werewolf league scheduler
+  |-- LemonSimUi.Arena              GenServer per domain: always-on league scheduler
+  |-- LemonSimUi.ArenaDomains       Presentation config for arena domains
   |-- LemonSimUi.LobbyLive          Public live-games landing page
   |-- LemonSimUi.LeaderboardLive    Public benchmark suite leaderboard page
-  |-- LemonSimUi.WerewolfLive       Stable "watch the live game" entry point
-  |-- LemonSimUi.WerewolfLeaderboardLive  Public Werewolf league standings
+  |-- LemonSimUi.ArenaLive          Stable "watch the live game" entry per domain
+  |-- LemonSimUi.ArenaLeaderboardLive     Public league standings per domain
   |-- LemonSimUi.SimDashboardLive   Admin LiveView for sim launch and detail
   |-- LemonSimUi.SpectatorLive      Public read-only spectator LiveView
   |-- LemonSimUi.ArtifactReader     Reads suite and usage JSON artifacts
@@ -61,16 +62,16 @@ For social-deduction and multi-player domains (Werewolf, Stock Market, Survivor,
 
 Werewolf character lore for spectator mode is generated asynchronously after sim launch. The sim starts immediately, then `SimManager` merges the generated `character_profiles` into the stored state and broadcasts an update when they are ready.
 
-### Werewolf League Arena (always-on broadcast)
+### Always-on model arenas (league broadcasts)
 
-`LemonSimUi.WerewolfArena` keeps one Werewolf game running at all times and turns every finished game into league standings:
+`LemonSimUi.Arena` runs one supervised scheduler per domain — werewolf, space_station, stock_market, and survivor — each keeping a league game running at all times and turning every finished game into standings:
 
-- Each game samples a randomized model lineup from the configured pool via `LemonSim.Examples.Werewolf.League.plan_match/2`, and the recorded seed makes the role/model pairing reproducible.
-- Finished games are recorded into a file-backed league (`games/<sim_id>.json`, aggregated `league.json` + `league.md`) with per-model and per-role standings and Bradley-Terry ratings (shared math with `LemonSim.Bench.Ratings`).
-- Crashed games are resumed via `SimManager.resume_sim/1` with backoff, then abandoned and replaced; a watchdog tick guarantees the arena never stays dark.
-- `/werewolf` is the stable public URL: it redirects to the live game (and the spectator page auto-advances between games), so it is safe to embed or point a stream at. `/werewolf/leaderboard` renders the league standings and live-updates on the `werewolf:league` topic.
+- Each game samples a randomized model lineup from the domain's configured pool via `LemonSim.Bench.League.plan_match/2`; the recorded seed reproduces both the lineup and the scenario's own role/seat randomization.
+- Finished games are recorded through the domain's `LemonSim.Bench.League.Registry` adapter into a file-backed league (`games/<sim_id>.json`, aggregated `league.json` + `league.md`) with per-model — and for team games per-role — standings and Bradley-Terry ratings (team games pair winning-side models against losing-side models; ranked games like stock_market compare per-model mean values).
+- Crashed games are resumed via `SimManager.resume_sim/1` with backoff, then abandoned and replaced; a watchdog tick guarantees an arena never stays dark.
+- `/arena/:domain` is the stable public URL per domain: it redirects to the live game (and the spectator page auto-advances between games), so it is safe to embed or point a stream at. `/arena/:domain/leaderboard` renders the league standings and live-updates on the `arena:<domain>:league` topic. `/werewolf` remains as a legacy alias.
 
-Enable it by setting `WEREWOLF_ARENA_MODELS` to a comma-separated list of `provider:model` specs with configured credentials. Do not combine with `LEMON_SIM_AUTO_LOOP` for werewolf — the auto-loop's single-model games would pollute the league.
+Enable a domain by setting `LEMON_ARENA_<DOMAIN>_MODELS` (e.g. `LEMON_ARENA_SPACE_STATION_MODELS`) to a comma-separated list of `provider:model` specs with configured credentials; `WEREWOLF_ARENA_*` env vars remain as werewolf aliases. Do not combine with `LEMON_SIM_AUTO_LOOP` for the same domain — the auto-loop's single-model games would pollute that league.
 
 ### Interactive Mode
 
@@ -211,11 +212,13 @@ The create response includes the private admin URL and, for Werewolf, VendingBen
 | `LEMON_SECRETS_MASTER_KEY` | Required on servers/containers that cannot read your local keychain but still need encrypted Lemon secrets |
 | `LEMON_SIM_AUTO_LOOP` | When `true`, boot configured auto-loop simulations on startup |
 | `LEMON_SIM_WEREWOLF_PLAYERS` | Player count for boot-time Werewolf auto-loop (defaults to `6`) |
-| `WEREWOLF_ARENA_MODELS` | Comma-separated `provider:model` pool; setting this enables the always-on Werewolf league arena |
-| `WEREWOLF_ARENA_ENABLED` | Set `0`/`false` to keep the arena off even when models are configured (defaults to on) |
-| `WEREWOLF_ARENA_PLAYER_COUNT` | Seats per league game (defaults to `6`) |
-| `WEREWOLF_ARENA_GAME_DELAY_MS` | Intermission between games (defaults to `15000`) |
-| `WEREWOLF_LEAGUE_DIR` | Directory for league records/standings (`/app/data/werewolf_league` on Fly; defaults to `lemon_sim` priv otherwise) |
+| `LEMON_ARENA_<DOMAIN>_MODELS` | Comma-separated `provider:model` pool; setting this enables that domain's always-on arena (domains: `WEREWOLF`, `SPACE_STATION`, `STOCK_MARKET`, `SURVIVOR`) |
+| `LEMON_ARENA_<DOMAIN>_ENABLED` | Set `0`/`false` to keep a configured arena off (defaults to on) |
+| `LEMON_ARENA_<DOMAIN>_PLAYER_COUNT` | Seats per league game (defaults: werewolf/space_station 6, stock_market 4, survivor 8) |
+| `LEMON_ARENA_<DOMAIN>_GAME_DELAY_MS` | Intermission between games (defaults to `15000`) |
+| `LEMON_ARENA_<DOMAIN>_LEAGUE_DIR` | League records/standings dir for one domain |
+| `LEMON_ARENA_LEAGUE_ROOT` | Root dir for all leagues (`<root>/<domain>_league`; `/app/data` on Fly) |
+| `WEREWOLF_ARENA_*`, `WEREWOLF_LEAGUE_DIR` | Legacy aliases for the werewolf arena's `LEMON_ARENA_WEREWOLF_*` equivalents |
 
 You will also need the provider credentials used by your chosen sim models (for example `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or Google/Gemini credentials).
 

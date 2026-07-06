@@ -5,16 +5,24 @@ defmodule LemonSimUi.Application do
 
   @impl true
   def start(_type, _args) do
-    children = [
-      LemonSimUi.Telemetry,
-      {DynamicSupervisor, name: LemonSimUi.SimRunnerSupervisor, strategy: :one_for_one},
-      LemonSimUi.SimManager,
-      {LemonSimUi.WerewolfArena, []},
-      LemonSimUi.Endpoint
-    ]
+    children =
+      [
+        LemonSimUi.Telemetry,
+        {DynamicSupervisor, name: LemonSimUi.SimRunnerSupervisor, strategy: :one_for_one},
+        LemonSimUi.SimManager
+      ] ++
+        arena_children() ++
+        [LemonSimUi.Endpoint]
 
     opts = [strategy: :one_for_one, name: LemonSimUi.Supervisor]
     Supervisor.start_link(children, opts)
+  end
+
+  # One always-on arena per domain; each idles unless its config enables it.
+  defp arena_children do
+    Enum.map(LemonSimUi.Arena.domains(), fn domain ->
+      {LemonSimUi.Arena, [domain: domain]}
+    end)
   end
 
   @impl true

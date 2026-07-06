@@ -16,6 +16,9 @@ defmodule LemonSimUi.SpectatorLive do
     WerewolfBoard,
     VendingBenchBoard,
     TcgShopBoard,
+    SpaceStationBoard,
+    StockMarketBoard,
+    SurvivorBoard,
     RunLog,
     EventLog
   }
@@ -26,6 +29,25 @@ defmodule LemonSimUi.SpectatorLive do
                                    )
   @vending_bench_artifact_refresh_ms 5_000
   @usage_refresh_ms 5_000
+
+  @supported_domains [
+    :werewolf,
+    :vending_bench,
+    :tcg_shop,
+    :space_station,
+    :stock_market,
+    :survivor
+  ]
+
+  # Sim-id prefixes used by SimManager.generate_id/1 / domain_from_sim_id/1,
+  # kept here so the "find the next active game" auto-advance logic can match
+  # a running sim's domain without touching SimManager.
+  @domain_sim_id_prefix %{
+    werewolf: "ww_",
+    space_station: "spc_",
+    stock_market: "stk_",
+    survivor: "srv_"
+  }
 
   @impl true
   def mount(%{"sim_id" => sim_id}, _session, socket) do
@@ -53,7 +75,7 @@ defmodule LemonSimUi.SpectatorLive do
 
       state ->
         domain_type = SimHelpers.infer_domain_type(state)
-        supported = domain_type in [:werewolf, :vending_bench, :tcg_shop]
+        supported = domain_type in @supported_domains
 
         if connected?(socket) && supported do
           LemonCore.Bus.subscribe(SimManager.lobby_topic())
@@ -118,12 +140,13 @@ defmodule LemonSimUi.SpectatorLive do
     running = socket.assigns.sim_id in LemonSimUi.SimManager.list_running()
     socket = socket |> assign(running: running) |> assign_usage()
 
-    # If current game is over and not running, look for a new active werewolf sim
+    # If current game is over and not running, look for a new active sim in
+    # the same domain to auto-advance to.
     if !running && socket.assigns[:state] do
       status = LemonCore.MapHelpers.get_key(socket.assigns.state.world, :status)
 
       if status == "game_over" do
-        case find_active_werewolf(socket.assigns.sim_id) do
+        case find_active_sim(socket.assigns.sim_id, socket.assigns[:domain_type]) do
           nil ->
             {:noreply, assign(socket, game_over_redirect: true)}
 
@@ -223,6 +246,27 @@ defmodule LemonSimUi.SpectatorLive do
                 running={@running}
                 usage={@usage}
               />
+            <% :space_station -> %>
+              <.space_station_spectator_view
+                state={@state}
+                sim_id={@sim_id}
+                running={@running}
+                usage={@usage}
+              />
+            <% :stock_market -> %>
+              <.stock_market_spectator_view
+                state={@state}
+                sim_id={@sim_id}
+                running={@running}
+                usage={@usage}
+              />
+            <% :survivor -> %>
+              <.survivor_spectator_view
+                state={@state}
+                sim_id={@sim_id}
+                running={@running}
+                usage={@usage}
+              />
             <% _ -> %>
               <.spectator_view
                 state={@state}
@@ -282,7 +326,8 @@ defmodule LemonSimUi.SpectatorLive do
           <span class="text-fuchsia-400">{SimHelpers.domain_label(@domain_type)}</span> simulation.
         </p>
         <p class="text-slate-500 text-sm">
-          Spectator mode is currently available for Werewolf, VendingBench, and TCG Shop games.
+          Spectator mode is currently available for Werewolf, VendingBench, TCG Shop, Space
+          Station, Stock Market, and Survivor games.
         </p>
         <a href="/" class="inline-block mt-6 glass-button px-6 py-2 rounded-lg text-sm">
           Back to Dashboard
@@ -402,6 +447,271 @@ defmodule LemonSimUi.SpectatorLive do
         <TcgShopBoard.render world={@state.world} interactive={false} />
         <.usage_panel usage={@usage} />
         <RunLog.render state={@state} running={@running} />
+      </div>
+    </div>
+    """
+  end
+
+  attr(:state, :map, required: true)
+  attr(:sim_id, :string, required: true)
+  attr(:running, :boolean, required: true)
+  attr(:usage, :map, default: nil)
+
+  defp space_station_spectator_view(assigns) do
+    world = assigns.state.world
+    round = LemonCore.MapHelpers.get_key(world, :round) || 1
+    max_rounds = LemonCore.MapHelpers.get_key(world, :max_rounds) || 8
+    phase = LemonCore.MapHelpers.get_key(world, :phase) || "action"
+    status = LemonCore.MapHelpers.get_key(world, :status) || "in_progress"
+    winner = LemonCore.MapHelpers.get_key(world, :winner)
+
+    assigns =
+      assigns
+      |> assign(:round, round)
+      |> assign(:max_rounds, max_rounds)
+      |> assign(:phase, phase)
+      |> assign(:game_status, status)
+      |> assign(:winner, winner)
+
+    ~H"""
+    <div class="flex flex-col h-screen overflow-hidden bg-[#050b14] text-slate-200">
+      <header class="flex items-center justify-between px-6 py-3 border-b border-cyan-900/50 bg-slate-950/70 backdrop-blur-md flex-shrink-0">
+        <div class="flex items-center gap-4">
+          <a href="/" class="text-slate-500 hover:text-cyan-400 transition-colors" title="Back to dashboard">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+              <path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd" />
+            </svg>
+          </a>
+          <div>
+            <h1 class="text-xl font-bold text-white tracking-tight">{@sim_id}</h1>
+            <div class="flex items-center gap-2 text-xs font-mono text-slate-400">
+              <span class="text-cyan-400">Space Station</span>
+              <span class="text-slate-600">|</span>
+              <span>Round {@round}/{@max_rounds}</span>
+              <span class="text-slate-600">|</span>
+              <span class="capitalize">{format_phase(@phase)}</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-3">
+          <.link
+            navigate={"/arena/space_station/leaderboard"}
+            class="text-[11px] font-mono text-slate-400 hover:text-cyan-300 px-3 py-1.5 rounded border border-slate-700 hover:border-cyan-500/40 transition-colors"
+          >
+            League
+          </.link>
+          <%= if @winner do %>
+            <span class="text-sm font-bold px-3 py-1.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/30">
+              Winner: {@winner}
+            </span>
+          <% end %>
+          <span :if={@running} class="text-[11px] font-bold tracking-widest uppercase px-3 py-1.5 rounded-sm bg-red-500/10 text-red-400 border border-red-500/30 flex items-center gap-2 shadow-[0_0_10px_rgba(239,68,68,0.2)]">
+            <span class="w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.8)]"></span>
+            LIVE
+          </span>
+          <span :if={!@running && @game_status != "game_over"} class="text-[11px] font-mono text-slate-500 px-3 py-1.5 rounded border border-slate-700">
+            STOPPED
+          </span>
+        </div>
+      </header>
+
+      <div class="flex-1 flex flex-col overflow-hidden">
+        <div class="flex-1 overflow-hidden">
+          <SpaceStationBoard.render world={@state.world} interactive={false} />
+        </div>
+
+        <.usage_panel usage={@usage} />
+
+        <div class="flex-shrink-0 border-t border-glass-border bg-slate-950/60 h-48 overflow-hidden">
+          <div class="px-4 py-2 border-b border-glass-border bg-slate-900/40">
+            <h3 class="text-[9px] font-mono uppercase tracking-widest text-emerald-400 font-bold flex items-center gap-1.5">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M3 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clip-rule="evenodd" />
+              </svg>
+              LIVE FEED
+            </h3>
+          </div>
+          <div class="p-0 h-36 overflow-hidden">
+            <EventLog.render events={@state.recent_events} />
+          </div>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  attr(:state, :map, required: true)
+  attr(:sim_id, :string, required: true)
+  attr(:running, :boolean, required: true)
+  attr(:usage, :map, default: nil)
+
+  defp stock_market_spectator_view(assigns) do
+    world = assigns.state.world
+    round = LemonCore.MapHelpers.get_key(world, :round) || 1
+    max_rounds = LemonCore.MapHelpers.get_key(world, :max_rounds) || 10
+    phase = LemonCore.MapHelpers.get_key(world, :phase) || "discussion"
+    status = LemonCore.MapHelpers.get_key(world, :status) || "in_progress"
+    winner = LemonCore.MapHelpers.get_key(world, :winner)
+
+    assigns =
+      assigns
+      |> assign(:round, round)
+      |> assign(:max_rounds, max_rounds)
+      |> assign(:phase, phase)
+      |> assign(:game_status, status)
+      |> assign(:winner, winner)
+
+    ~H"""
+    <div class="flex flex-col h-screen overflow-hidden bg-[#0a0e1a] text-slate-200">
+      <header class="flex items-center justify-between px-6 py-3 border-b border-emerald-900/50 bg-slate-950/70 backdrop-blur-md flex-shrink-0">
+        <div class="flex items-center gap-4">
+          <a href="/" class="text-slate-500 hover:text-emerald-400 transition-colors" title="Back to dashboard">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+              <path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd" />
+            </svg>
+          </a>
+          <div>
+            <h1 class="text-xl font-bold text-white tracking-tight">{@sim_id}</h1>
+            <div class="flex items-center gap-2 text-xs font-mono text-slate-400">
+              <span class="text-emerald-400">Stock Market</span>
+              <span class="text-slate-600">|</span>
+              <span>Round {@round}/{@max_rounds}</span>
+              <span class="text-slate-600">|</span>
+              <span class="capitalize">{format_phase(@phase)}</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-3">
+          <.link
+            navigate={"/arena/stock_market/leaderboard"}
+            class="text-[11px] font-mono text-slate-400 hover:text-cyan-300 px-3 py-1.5 rounded border border-slate-700 hover:border-cyan-500/40 transition-colors"
+          >
+            League
+          </.link>
+          <%= if @winner do %>
+            <span class="text-sm font-bold px-3 py-1.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/30">
+              Winner: {@winner}
+            </span>
+          <% end %>
+          <span :if={@running} class="text-[11px] font-bold tracking-widest uppercase px-3 py-1.5 rounded-sm bg-red-500/10 text-red-400 border border-red-500/30 flex items-center gap-2 shadow-[0_0_10px_rgba(239,68,68,0.2)]">
+            <span class="w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.8)]"></span>
+            LIVE
+          </span>
+          <span :if={!@running && @game_status != "game_over"} class="text-[11px] font-mono text-slate-500 px-3 py-1.5 rounded border border-slate-700">
+            STOPPED
+          </span>
+        </div>
+      </header>
+
+      <div class="flex-1 flex flex-col overflow-hidden">
+        <div class="flex-1 overflow-hidden">
+          <StockMarketBoard.render world={@state.world} interactive={false} />
+        </div>
+
+        <.usage_panel usage={@usage} />
+
+        <div class="flex-shrink-0 border-t border-glass-border bg-slate-950/60 h-48 overflow-hidden">
+          <div class="px-4 py-2 border-b border-glass-border bg-slate-900/40">
+            <h3 class="text-[9px] font-mono uppercase tracking-widest text-emerald-400 font-bold flex items-center gap-1.5">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M3 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clip-rule="evenodd" />
+              </svg>
+              LIVE FEED
+            </h3>
+          </div>
+          <div class="p-0 h-36 overflow-hidden">
+            <EventLog.render events={@state.recent_events} />
+          </div>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  attr(:state, :map, required: true)
+  attr(:sim_id, :string, required: true)
+  attr(:running, :boolean, required: true)
+  attr(:usage, :map, default: nil)
+
+  defp survivor_spectator_view(assigns) do
+    world = assigns.state.world
+    episode = LemonCore.MapHelpers.get_key(world, :episode) || 1
+    phase = LemonCore.MapHelpers.get_key(world, :phase) || "challenge"
+    status = LemonCore.MapHelpers.get_key(world, :status) || "in_progress"
+    winner = LemonCore.MapHelpers.get_key(world, :winner)
+
+    assigns =
+      assigns
+      |> assign(:episode, episode)
+      |> assign(:phase, phase)
+      |> assign(:game_status, status)
+      |> assign(:winner, winner)
+
+    ~H"""
+    <div class="flex flex-col h-screen overflow-hidden bg-[#0a0805] text-slate-200">
+      <header class="flex items-center justify-between px-6 py-3 border-b border-amber-900/50 bg-slate-950/70 backdrop-blur-md flex-shrink-0">
+        <div class="flex items-center gap-4">
+          <a href="/" class="text-slate-500 hover:text-amber-300 transition-colors" title="Back to dashboard">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+              <path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd" />
+            </svg>
+          </a>
+          <div>
+            <h1 class="text-xl font-bold text-white tracking-tight">{@sim_id}</h1>
+            <div class="flex items-center gap-2 text-xs font-mono text-slate-400">
+              <span class="text-amber-400">Survivor</span>
+              <span class="text-slate-600">|</span>
+              <span>Episode {@episode}</span>
+              <span class="text-slate-600">|</span>
+              <span class="capitalize">{format_phase(@phase)}</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-3">
+          <.link
+            navigate={"/arena/survivor/leaderboard"}
+            class="text-[11px] font-mono text-slate-400 hover:text-cyan-300 px-3 py-1.5 rounded border border-slate-700 hover:border-cyan-500/40 transition-colors"
+          >
+            League
+          </.link>
+          <%= if @winner do %>
+            <span class="text-sm font-bold px-3 py-1.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/30">
+              Winner: {@winner}
+            </span>
+          <% end %>
+          <span :if={@running} class="text-[11px] font-bold tracking-widest uppercase px-3 py-1.5 rounded-sm bg-red-500/10 text-red-400 border border-red-500/30 flex items-center gap-2 shadow-[0_0_10px_rgba(239,68,68,0.2)]">
+            <span class="w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.8)]"></span>
+            LIVE
+          </span>
+          <span :if={!@running && @game_status != "game_over"} class="text-[11px] font-mono text-slate-500 px-3 py-1.5 rounded border border-slate-700">
+            STOPPED
+          </span>
+        </div>
+      </header>
+
+      <div class="flex-1 flex flex-col overflow-hidden">
+        <div class="flex-1 overflow-hidden">
+          <SurvivorBoard.render world={@state.world} interactive={false} />
+        </div>
+
+        <.usage_panel usage={@usage} />
+
+        <div class="flex-shrink-0 border-t border-glass-border bg-slate-950/60 h-48 overflow-hidden">
+          <div class="px-4 py-2 border-b border-glass-border bg-slate-900/40">
+            <h3 class="text-[9px] font-mono uppercase tracking-widest text-emerald-400 font-bold flex items-center gap-1.5">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M3 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clip-rule="evenodd" />
+              </svg>
+              LIVE FEED
+            </h3>
+          </div>
+          <div class="p-0 h-36 overflow-hidden">
+            <EventLog.render events={@state.recent_events} />
+          </div>
+        </div>
       </div>
     </div>
     """
@@ -730,23 +1040,22 @@ defmodule LemonSimUi.SpectatorLive do
     SimManager.usage(sim_id) || ArtifactReader.read_usage(artifact_dir)
   end
 
-  defp find_active_werewolf(exclude_sim_id) do
-    running_ids = LemonSimUi.SimManager.list_running()
+  # Finds another running sim in the same domain as `exclude_sim_id` to
+  # auto-navigate to once the current game is over. Matches by sim-id prefix
+  # (see SimManager.generate_id/1 / domain_from_sim_id/1) rather than
+  # re-inferring the domain from world shape, since the prior game's world may
+  # already be in a terminal/atypical shape.
+  defp find_active_sim(exclude_sim_id, domain_type) do
+    case Map.get(@domain_sim_id_prefix, domain_type) do
+      nil ->
+        nil
 
-    Enum.find_value(running_ids, fn sim_id ->
-      if sim_id != exclude_sim_id do
-        case Store.get_state(sim_id) do
-          %{world: world} ->
-            domain =
-              SimHelpers.infer_domain_type(%LemonSim.Kernel.State{world: world, sim_id: sim_id})
-
-            if domain == :werewolf, do: sim_id
-
-          _ ->
-            nil
-        end
-      end
-    end)
+      prefix ->
+        LemonSimUi.SimManager.list_running()
+        |> Enum.find(fn sim_id ->
+          sim_id != exclude_sim_id and String.starts_with?(sim_id, prefix)
+        end)
+    end
   end
 
   defp load_state(sim_id) do

@@ -442,6 +442,13 @@ defmodule LemonSimUi.SimManager do
   end
 
   defp do_start_sim(domain, opts, state, sim_id, human_player) do
+    # Seeding before world construction makes each domain's randomized
+    # role/seat assignment reproducible for a recorded arena seed.
+    case Keyword.get(opts, :seed) do
+      seed when is_integer(seed) -> :rand.seed(:exsss, {seed, seed + 1, seed + 2})
+      _ -> :ok
+    end
+
     case build_initial_state(domain, sim_id, opts) do
       {:ok, initial_state, modules, run_opts} ->
         {:ok, usage_collector} = Usage.start_link(sim_id)
@@ -518,13 +525,6 @@ defmodule LemonSimUi.SimManager do
 
   defp build_initial_state(:werewolf, sim_id, opts) do
     model_specs = Keyword.get(opts, :model_specs, [])
-
-    # Seeding before world construction makes the role/trait/backstory
-    # assignment reproducible for a recorded league seed.
-    case Keyword.get(opts, :seed) do
-      seed when is_integer(seed) -> :rand.seed(:exsss, {seed, seed + 1, seed + 2})
-      _ -> :ok
-    end
 
     werewolf_opts =
       opts
@@ -1223,8 +1223,19 @@ defmodule LemonSimUi.SimManager do
   defp domain_from_sim_id("tcg_" <> _), do: :tcg_shop
   defp domain_from_sim_id(_), do: :unknown
 
-  defp build_resume_opts(:werewolf, state) do
-    modules = LemonSim.Examples.Werewolf.modules()
+  # Domains whose games can resume mid-flight: the world stores per-player
+  # "provider/model_id" strings, so assignments can be rebuilt from the
+  # persisted state alone.
+  @resumable_examples %{
+    werewolf: LemonSim.Examples.Werewolf,
+    space_station: SpaceStation,
+    stock_market: StockMarket,
+    survivor: Survivor
+  }
+
+  defp build_resume_opts(domain, state) when is_map_key(@resumable_examples, domain) do
+    example = Map.fetch!(@resumable_examples, domain)
+    modules = example.modules()
     {model, stream_options} = resolve_default_model_for_ui()
 
     # Check if state has per-player model assignments and rebuild them
@@ -1244,13 +1255,13 @@ defmodule LemonSimUi.SimManager do
             spec = MapHelpers.get_key(p, :model)
             {provider, model_id} = parse_model_spec(spec)
             m = resolve_model!(provider, model_id, config)
-            api_key = SimConfig.resolve_provider_api_key!(provider, config, "werewolf")
+            api_key = SimConfig.resolve_provider_api_key!(provider, config, to_string(domain))
             {player_id, {m, api_key}}
           end)
 
         {default_model, default_key} = model_assignments |> Map.values() |> List.first()
 
-        LemonSim.Examples.Werewolf.default_opts(
+        example.default_opts(
           model: default_model,
           stream_options: %{api_key: default_key}
         )
@@ -1259,7 +1270,7 @@ defmodule LemonSimUi.SimManager do
         |> Keyword.put(:on_after_step, &on_after_step/2)
         |> Keyword.put(:model_assignments, model_assignments)
       else
-        LemonSim.Examples.Werewolf.default_opts(model: model, stream_options: stream_options)
+        example.default_opts(model: model, stream_options: stream_options)
         |> Keyword.put(:persist?, true)
         |> Keyword.put(:on_before_step, nil)
         |> Keyword.put(:on_after_step, &on_after_step/2)
@@ -1377,7 +1388,18 @@ defmodule LemonSimUi.SimManager do
   # Shared helper for games that support multi-model assignments (stock_market, survivor, space_station).
   defp build_multi_model_opts(initial_state, _modules, model_specs, player_count, opts) do
     default_opts_fn = Keyword.fetch!(opts, :default_opts_fn)
-    player_ids = Enum.map(1..player_count, &"player_#{&1}")
+
+    # Assignments must be keyed by the world's actual player ids — survivor
+    # seats real names, most other domains player_N. Specs zip positionally
+    # over the sorted ids (the shared seat-order convention).
+    player_ids =
+      case MapHelpers.get_key(initial_state.world, :players) do
+        players when is_map(players) and map_size(players) > 0 ->
+          players |> Map.keys() |> Enum.map(&to_string/1) |> Enum.sort()
+
+        _ ->
+          Enum.map(1..player_count, &"player_#{&1}")
+      end
 
     if model_specs != [] do
       config = load_project_config()
