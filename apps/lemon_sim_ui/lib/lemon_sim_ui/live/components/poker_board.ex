@@ -42,6 +42,8 @@ defmodule LemonSimUi.Live.Components.PokerBoard do
       end
 
     seats = build_seats(table)
+    table_talk = gv(world, :table_talk, [])
+    current_hand_id = gv(hand, :id)
 
     seat_rows =
       Enum.map(seats, fn seat_info ->
@@ -59,7 +61,20 @@ defmodule LemonSimUi.Live.Components.PokerBoard do
           all_in: !!(hand_player && gv(hand_player, :all_in)),
           hole_cards: (hand_player && gv(hand_player, :hole_cards)) || [],
           acting: !!(hand && acting_seat == seat),
-          position: seat_position(seat, hand)
+          position: seat_position(seat, hand),
+          quip: seat_quip(table_talk, seat_info.player_id, current_hand_id)
+        }
+      end)
+
+    talk_feed =
+      table_talk
+      |> Enum.take(-8)
+      |> Enum.reverse()
+      |> Enum.map(fn entry ->
+        %{
+          player_id: gv(entry, :player_id, "?"),
+          content: gv(entry, :content, ""),
+          street: gv(entry, :street)
         }
       end)
 
@@ -98,6 +113,7 @@ defmodule LemonSimUi.Live.Components.PokerBoard do
       |> assign(:hand_in_progress?, !is_nil(hand))
       |> assign(:current_actor_id, current_actor_id)
       |> assign(:seat_rows, seat_rows)
+      |> assign(:talk_feed, talk_feed)
       |> assign(:result_view, result_view)
       |> assign(:stats_rows, stats_rows)
       |> assign(:game_status, status)
@@ -172,6 +188,24 @@ defmodule LemonSimUi.Live.Components.PokerBoard do
       <%!-- ── Seats ── --%>
       <div class="grid gap-3 px-4 pb-4" style="grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));">
         <.seat_tile :for={seat <- @seat_rows} seat={seat} />
+      </div>
+
+      <%!-- ── Table talk feed ── --%>
+      <div
+        :if={@talk_feed != []}
+        class="mx-4 mb-4 rounded-xl border p-3"
+        style="background: rgba(6,20,14,0.5); border-color: rgba(16,185,129,0.12);"
+      >
+        <div class="text-xs font-bold uppercase tracking-widest text-emerald-400/80 mb-2">
+          {Phoenix.HTML.raw("&#x1F4AC;")} Table Talk
+        </div>
+        <div class="space-y-1">
+          <div :for={line <- @talk_feed} class="flex items-baseline gap-2 text-xs">
+            <span class="font-semibold text-slate-300 whitespace-nowrap">{line.player_id}</span>
+            <span :if={line.street} class="text-[9px] uppercase tracking-wide text-slate-600 whitespace-nowrap">{line.street}</span>
+            <span class="text-slate-400 italic">&ldquo;{line.content}&rdquo;</span>
+          </div>
+        </div>
       </div>
 
       <%!-- ── Last hand result ── --%>
@@ -304,6 +338,14 @@ defmodule LemonSimUi.Live.Components.PokerBoard do
         {short_model_name(@seat.model)}
       </div>
 
+      <div
+        :if={@seat.quip}
+        class="text-[11px] italic text-emerald-200/90 rounded-lg px-2 py-1 border"
+        style="background: rgba(16,185,129,0.08); border-color: rgba(16,185,129,0.2);"
+      >
+        &ldquo;{@seat.quip}&rdquo;
+      </div>
+
       <div :if={@seat.hole_cards != []} class="flex items-center gap-1.5">
         <.card_chip :for={card <- @seat.hole_cards} card={card} />
       </div>
@@ -423,6 +465,20 @@ defmodule LemonSimUi.Live.Components.PokerBoard do
   end
 
   defp player_model(_players, _player_id), do: nil
+
+  # Latest thing this player said during the current hand (speech bubble).
+  defp seat_quip(table_talk, player_id, current_hand_id)
+       when is_list(table_talk) and not is_nil(current_hand_id) do
+    table_talk
+    |> Enum.reverse()
+    |> Enum.find_value(fn entry ->
+      if gv(entry, :player_id) == player_id and gv(entry, :hand_id) == current_hand_id do
+        gv(entry, :content)
+      end
+    end)
+  end
+
+  defp seat_quip(_table_talk, _player_id, _current_hand_id), do: nil
 
   defp seat_position(_seat, nil), do: nil
 
