@@ -54,6 +54,7 @@ defmodule LemonCore.Quality.ArchitectureCheck do
     lemon_sim: ["LemonSim"],
     lemon_sim_ui: ["LemonSimUi"],
     lemon_skills: ["LemonSkills"],
+    lemon_tcg: ["LemonTcg"],
     lemon_web: ["LemonWeb"],
     x_api: ["XApi"]
   }
