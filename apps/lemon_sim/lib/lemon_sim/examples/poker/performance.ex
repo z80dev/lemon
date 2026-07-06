@@ -22,6 +22,8 @@ defmodule LemonSim.Examples.Poker.Performance do
     completed_hands = max(MapHelpers.get_key(world, :completed_hands) || 0, 0)
     big_blind = (table && MapHelpers.get_key(table, :big_blind)) || 1
     player_stats = MapHelpers.get_key(world, :player_stats) || %{}
+    player_infos = MapHelpers.get_key(world, :players) || %{}
+    winner_ids = MapHelpers.get_key(world, :winner_ids) || []
 
     players =
       Enum.into(player_stats, %{}, fn {player_id, stats} ->
@@ -29,9 +31,12 @@ defmodule LemonSim.Examples.Poker.Performance do
         starting_stack = MapHelpers.get_key(stats, :starting_stack) || 0
         hands_played = MapHelpers.get_key(stats, :hands_played) || 0
         profit_loss = final_stack - starting_stack
+        info = player_info(player_infos, player_id)
 
         {player_id,
          %{
+           model: MapHelpers.get_key(info, :model),
+           won: to_string(player_id) in Enum.map(winner_ids, &to_string/1),
            final_stack: final_stack,
            profit_loss: profit_loss,
            bb_per_hand: bb_per_hand(profit_loss, completed_hands, big_blind),
@@ -53,8 +58,35 @@ defmodule LemonSim.Examples.Poker.Performance do
       hands_completed: completed_hands,
       big_blind: big_blind,
       best_profit_loss: best_profit_loss(players),
-      players: players
+      players: players,
+      models: summarize_models(players)
     }
+  end
+
+  # World :players may be keyed by atoms or strings after a snapshot
+  # round-trip; match on either.
+  defp player_info(player_infos, player_id) do
+    Map.get(player_infos, player_id) ||
+      Map.get(player_infos, to_string(player_id)) || %{}
+  end
+
+  defp summarize_models(players) do
+    players
+    |> Enum.group_by(fn {_player_id, metrics} -> Map.get(metrics, :model) || "unknown" end)
+    |> Enum.into(%{}, fn {model, entries} ->
+      metrics = Enum.map(entries, fn {_player_id, m} -> m end)
+      count = max(length(metrics), 1)
+
+      {model,
+       %{
+         seats: length(metrics),
+         wins: Enum.count(metrics, & &1.won),
+         avg_profit_loss: Float.round(Enum.sum(Enum.map(metrics, & &1.profit_loss)) / count, 1),
+         avg_bb_per_hand: Float.round(Enum.sum(Enum.map(metrics, & &1.bb_per_hand)) / count, 3),
+         avg_vpip: Float.round(Enum.sum(Enum.map(metrics, & &1.vpip)) / count, 3),
+         avg_pfr: Float.round(Enum.sum(Enum.map(metrics, & &1.pfr)) / count, 3)
+       }}
+    end)
   end
 
   defp best_profit_loss(players) do

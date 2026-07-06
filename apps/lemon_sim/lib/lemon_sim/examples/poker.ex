@@ -74,6 +74,7 @@ defmodule LemonSim.Examples.Poker do
       big_blind: big_blind,
       small_blind: small_blind,
       blind_schedule: blind_schedule,
+      players: init_players(player_ids),
       player_stats: init_player_stats(player_ids, starting_stack),
       player_notes: Enum.into(player_ids, %{}, &{&1, []}),
       consecutive_rejections: %{},
@@ -747,6 +748,17 @@ defmodule LemonSim.Examples.Poker do
 
   defp board_strings(nil), do: []
   defp board_strings(hand), do: Enum.map(hand.board, &Card.to_short_string/1)
+
+  # Seat-order convention: player ids are seated 1..N in list order. The
+  # :model slot is filled by the UI's attach_model_assignments for
+  # multi-model games and read back on resume and by the league adapter.
+  defp init_players(player_ids) do
+    player_ids
+    |> Enum.with_index(1)
+    |> Enum.into(%{}, fn {player_id, seat} ->
+      {player_id, %{seat: seat, model: nil}}
+    end)
+  end
 
   defp init_player_stats(player_ids, starting_stack) do
     Enum.into(player_ids, %{}, fn player_id ->

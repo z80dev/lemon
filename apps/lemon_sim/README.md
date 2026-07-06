@@ -28,9 +28,9 @@ There are 19 examples in this app:
 
 - `TicTacToe` is the smallest self-play scenario.
 - `Werewolf` is the social-deduction showcase with hidden roles, transcripts,
-  and video replay tooling. It is one of four scenarios in the persistent
+  and video replay tooling. It is one of five scenarios in the persistent
   multi-game league system (`LemonSim.Bench.League` + per-scenario adapters,
-  alongside `SpaceStation`, `StockMarket`, and `Survivor`): randomized
+  alongside `SpaceStation`, `StockMarket`, `Survivor`, and `Poker`): randomized
   model-to-seat match planning, per-game records, and per-model/per-role
   standings with Bradley-Terry ratings. The `lemon_sim_ui` arenas run them
   around the clock.
@@ -39,7 +39,10 @@ There are 19 examples in this app:
   modes.
 - `TcgShop` is a single-operator local game store benchmark with inventory,
   suppliers, customers, events, online orders, accounting, and scorecards.
-- `Diplomacy`, `Poker`, `Skirmish`, `Survivor`, `Pandemic`, `Auction`,
+- `Poker` is a multi-hand no-limit hold'em session with per-seat model
+  assignment; it is the fifth league/arena scenario (ranked mode on final
+  chip stacks).
+- `Diplomacy`, `Skirmish`, `Survivor`, `Pandemic`, `Auction`,
   `Courtroom`, `SpaceStation`, `StockMarket`, `SupplyChain`, `DungeonCrawl`,
   `MurderMystery`, `Legislature`, `IntelNetwork`, and `StartupIncubator` cover
   other state machines and decision surfaces.

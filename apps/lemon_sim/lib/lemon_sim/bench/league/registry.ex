@@ -13,7 +13,8 @@ defmodule LemonSim.Bench.League.Registry do
     "werewolf" => Examples.Werewolf.League,
     "space_station" => Examples.SpaceStation.League,
     "stock_market" => Examples.StockMarket.League,
-    "survivor" => Examples.Survivor.League
+    "survivor" => Examples.Survivor.League,
+    "poker" => Examples.Poker.League
   }
 
   @spec fetch(String.t() | atom()) :: {:ok, module()} | :error

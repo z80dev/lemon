@@ -3,6 +3,7 @@ defmodule LemonSim.Bench.LeagueTest do
 
   alias LemonSim.Bench.League
   alias LemonSim.Bench.League.Registry
+  alias LemonSim.Examples.Poker
   alias LemonSim.Examples.SpaceStation
   alias LemonSim.Examples.StockMarket
   alias LemonSim.Examples.Survivor
@@ -45,8 +46,9 @@ defmodule LemonSim.Bench.LeagueTest do
   end
 
   describe "registry" do
-    test "registers the four arena scenarios" do
+    test "registers the five arena scenarios" do
       assert Registry.scenario_ids() == [
+               "poker",
                "space_station",
                "stock_market",
                "survivor",
@@ -129,6 +131,37 @@ defmodule LemonSim.Bench.LeagueTest do
       [top | _rest] = league["models"]
       assert top["model"] == "anthropic/claude-x"
       assert top["value_mean"] > 0
+
+      bottom = List.last(league["models"])
+      assert bottom["model"] == "openai/gpt-x"
+      assert bottom["rating"] < top["rating"]
+    end
+  end
+
+  describe "ranked mode (poker adapter)" do
+    test "pairwise ratings follow final chip stacks", %{tmp_dir: dir} do
+      record =
+        League.game_record(Poker.League, poker_world(),
+          game_id: "p1",
+          recorded_at: "2026-07-06T00:00:00Z"
+        )
+
+      {:ok, league} = League.record_game!(dir, record)
+
+      assert record["mode"] == "ranked"
+      assert record["direction"] == "maximize"
+      assert record["winner"] == "player_1"
+      assert record["rounds"] == 12
+
+      winner_seat = record["seats"]["player_1"]
+      assert winner_seat["won"]
+      assert winner_seat["model"] == "anthropic/claude-x"
+      assert winner_seat["value"] == 4200
+      assert winner_seat["metrics"]["profit_loss"] == 2200
+      assert winner_seat["metrics"]["hands_won"] == 6
+
+      [top | _rest] = league["models"]
+      assert top["model"] == "anthropic/claude-x"
 
       bottom = List.last(league["models"])
       assert bottom["model"] == "openai/gpt-x"
@@ -230,6 +263,47 @@ defmodule LemonSim.Bench.LeagueTest do
       round_summaries: [],
       whisper_history: []
     }
+  end
+
+  defp poker_world do
+    %{
+      status: "game_over",
+      winner: "player_1",
+      winner_ids: ["player_1"],
+      completed_hands: 12,
+      table: %{big_blind: 100, small_blind: 50},
+      players: %{
+        "player_1" => %{seat: 1, model: "anthropic/claude-x"},
+        "player_2" => %{seat: 2, model: "zai/glm-5"},
+        "player_3" => %{seat: 3, model: "openai/gpt-x"}
+      },
+      chip_counts: [
+        %{"seat" => 1, "player_id" => "player_1", "stack" => 4200, "status" => "active"},
+        %{"seat" => 2, "player_id" => "player_2", "stack" => 1500, "status" => "active"},
+        %{"seat" => 3, "player_id" => "player_3", "stack" => 300, "status" => "active"}
+      ],
+      player_stats: %{
+        "player_1" => poker_stats(hands_won: 6, vpip_hands: 8, pfr_hands: 5),
+        "player_2" => poker_stats(hands_won: 4, vpip_hands: 6, pfr_hands: 3),
+        "player_3" => poker_stats(hands_won: 2, vpip_hands: 10, pfr_hands: 1)
+      }
+    }
+  end
+
+  defp poker_stats(overrides) do
+    Enum.into(overrides, %{
+      starting_stack: 2000,
+      hands_played: 12,
+      hands_won: 0,
+      vpip_hands: 0,
+      pfr_hands: 0,
+      total_actions: 30,
+      fold_count: 5,
+      check_count: 5,
+      call_count: 8,
+      bet_count: 6,
+      raise_count: 6
+    })
   end
 
   defp space_station_world do
