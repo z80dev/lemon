@@ -4,7 +4,7 @@ defmodule LemonSimUi.Arena do
   all times and records every finished game into persistent standings.
 
   One `Arena` process runs per enabled domain (werewolf, space_station,
-  stock_market, survivor — see `@domains`). Each game samples a randomized
+  stock_market, survivor, poker — see `@domains`). Each game samples a randomized
   model lineup from the domain's configured pool
   (`LemonSim.Bench.League.plan_match/2`); the recorded seed reproduces both
   the lineup and the scenario's own role/seat randomization.
@@ -35,9 +35,21 @@ defmodule LemonSimUi.Arena do
   alias LemonSim.Bench.League
   alias LemonSimUi.SimManager
 
-  @domains [:werewolf, :space_station, :stock_market, :survivor]
-  @sim_prefixes %{werewolf: "ww_", space_station: "spc_", stock_market: "stk_", survivor: "srv_"}
-  @default_player_counts %{werewolf: 6, space_station: 6, stock_market: 4, survivor: 8}
+  @domains [:werewolf, :space_station, :stock_market, :survivor, :poker]
+  @sim_prefixes %{
+    werewolf: "ww_",
+    space_station: "spc_",
+    stock_market: "stk_",
+    survivor: "srv_",
+    poker: "pkr_"
+  }
+  @default_player_counts %{
+    werewolf: 6,
+    space_station: 6,
+    stock_market: 4,
+    survivor: 8,
+    poker: 6
+  }
 
   @start_delay_ms 3_000
   @tick_ms 60_000

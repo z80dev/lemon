@@ -3,7 +3,7 @@ defmodule LemonSimUi.Router do
   Phoenix router for the LemonSim UI.
 
   Public routes: `/` (lobby), `/leaderboards`, `/arena/:domain` (always-on
-  arenas: werewolf, space_station, stock_market, survivor),
+  arenas: werewolf, space_station, stock_market, survivor, poker),
   `/arena/:domain/leaderboard` (league standings), `/watch/:sim_id`
   (spectator), `/healthz`. `/werewolf` remains as a legacy alias.
   Admin routes: `/admin` and `/admin/sims/:id` (dashboard, requires access token).

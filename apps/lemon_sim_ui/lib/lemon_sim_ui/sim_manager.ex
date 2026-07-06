@@ -24,7 +24,8 @@ defmodule LemonSimUi.SimManager do
     Diplomacy,
     DungeonCrawl,
     TcgShop,
-    VendingBench
+    VendingBench,
+    Poker
   }
 
   alias LemonSim.LLM.GameHelpers.Config, as: SimConfig
@@ -596,6 +597,31 @@ defmodule LemonSimUi.SimManager do
     {initial_state, run_opts} =
       build_multi_model_opts(initial_state, modules, model_specs, player_count,
         default_opts_fn: &StockMarket.default_opts/1
+      )
+
+    {:ok, initial_state, modules, run_opts}
+  rescue
+    e -> {:error, Exception.message(e)}
+  end
+
+  defp build_initial_state(:poker, sim_id, opts) do
+    player_count = Keyword.get(opts, :player_count, 6)
+    model_specs = Keyword.get(opts, :model_specs, [])
+
+    # Poker draws its deck order from the :seed opt (not :rand), so the arena
+    # seed must be forwarded for reproducible shuffles.
+    poker_opts =
+      case Keyword.get(opts, :seed) do
+        seed when is_integer(seed) -> [player_count: player_count, seed: seed]
+        _ -> [player_count: player_count]
+      end
+
+    initial_state = %{Poker.initial_state(poker_opts) | sim_id: sim_id}
+    modules = Poker.modules()
+
+    {initial_state, run_opts} =
+      build_multi_model_opts(initial_state, modules, model_specs, player_count,
+        default_opts_fn: &Poker.default_opts/1
       )
 
     {:ok, initial_state, modules, run_opts}
@@ -1211,6 +1237,7 @@ defmodule LemonSimUi.SimManager do
   defp generate_id(:space_station), do: "spc_#{random_hex(4)}"
   defp generate_id(:vending_bench), do: "vb_#{random_hex(4)}"
   defp generate_id(:tcg_shop), do: "tcg_#{random_hex(4)}"
+  defp generate_id(:poker), do: "pkr_#{random_hex(4)}"
   defp generate_id(_), do: "sim_#{random_hex(4)}"
 
   defp domain_from_sim_id("ww_" <> _), do: :werewolf
@@ -1221,6 +1248,7 @@ defmodule LemonSimUi.SimManager do
   defp domain_from_sim_id("spc_" <> _), do: :space_station
   defp domain_from_sim_id("vb_" <> _), do: :vending_bench
   defp domain_from_sim_id("tcg_" <> _), do: :tcg_shop
+  defp domain_from_sim_id("pkr_" <> _), do: :poker
   defp domain_from_sim_id(_), do: :unknown
 
   # Domains whose games can resume mid-flight: the world stores per-player
@@ -1230,7 +1258,8 @@ defmodule LemonSimUi.SimManager do
     werewolf: LemonSim.Examples.Werewolf,
     space_station: SpaceStation,
     stock_market: StockMarket,
-    survivor: Survivor
+    survivor: Survivor,
+    poker: Poker
   }
 
   defp build_resume_opts(domain, state) when is_map_key(@resumable_examples, domain) do

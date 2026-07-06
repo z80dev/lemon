@@ -113,7 +113,8 @@ arenas =
         werewolf: "WEREWOLF",
         space_station: "SPACE_STATION",
         stock_market: "STOCK_MARKET",
-        survivor: "SURVIVOR"
+        survivor: "SURVIVOR",
+        poker: "POKER"
       ],
       models = arena_env.(domain_env, "MODELS", System.get_env("WEREWOLF_ARENA_MODELS")),
       models != nil do

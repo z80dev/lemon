@@ -67,6 +67,36 @@ defmodule LemonSimUi.ArenaPagesTest do
     {:ok, _} = League.record_game!(tmp_dir, record)
   end
 
+  defp record_poker_game(tmp_dir, game_id) do
+    world = %{
+      status: "game_over",
+      winner: "player_1",
+      winner_ids: ["player_1"],
+      completed_hands: 8,
+      table: %{big_blind: 100, small_blind: 50},
+      players: %{
+        "player_1" => %{seat: 1, model: "anthropic/claude-x"},
+        "player_2" => %{seat: 2, model: "zai/glm-5"}
+      },
+      chip_counts: [
+        %{"seat" => 1, "player_id" => "player_1", "stack" => 3200, "status" => "active"},
+        %{"seat" => 2, "player_id" => "player_2", "stack" => 800, "status" => "active"}
+      ],
+      player_stats: %{
+        "player_1" => %{starting_stack: 2000, hands_played: 8, hands_won: 5},
+        "player_2" => %{starting_stack: 2000, hands_played: 8, hands_won: 3}
+      }
+    }
+
+    record =
+      League.game_record(LemonSim.Examples.Poker.League, world,
+        game_id: game_id,
+        recorded_at: "2026-07-06T00:00:00Z"
+      )
+
+    {:ok, _} = League.record_game!(tmp_dir, record)
+  end
+
   describe "/arena/:domain" do
     test "shows the intermission page when no game is live", %{conn: conn} do
       {:ok, _view, html} = live(conn, "/arena/space_station")
@@ -74,6 +104,13 @@ defmodule LemonSimUi.ArenaPagesTest do
       assert html =~ "Space Station Crisis Arena"
       assert html =~ "Intermission"
       assert html =~ "/arena/space_station/leaderboard"
+    end
+
+    test "resolves the poker domain", %{conn: conn} do
+      {:ok, _view, html} = live(conn, "/arena/poker")
+
+      assert html =~ "Poker Arena"
+      assert html =~ "/arena/poker/leaderboard"
     end
 
     test "rejects unknown domains", %{conn: conn} do
@@ -129,6 +166,18 @@ defmodule LemonSimUi.ArenaPagesTest do
       assert html =~ "Stat Leaders"
     end
 
+    test "renders poker ranked standings", %{conn: conn, tmp_dir: tmp_dir} do
+      with_league_dir(:poker, tmp_dir)
+      record_poker_game(tmp_dir, "pkr_page1")
+
+      {:ok, _view, html} = live(conn, "/arena/poker/leaderboard")
+
+      assert html =~ "Poker Arena League"
+      assert html =~ "Mean value"
+      assert html =~ "anthropic/claude-x"
+      refute html =~ "Role Specialists"
+    end
+
     test "refreshes when the arena records a game", %{conn: conn, tmp_dir: tmp_dir} do
       with_league_dir(:space_station, tmp_dir)
 
@@ -149,7 +198,7 @@ defmodule LemonSimUi.ArenaPagesTest do
   end
 
   describe "lobby" do
-    test "features all four arenas with watch and league links", %{conn: conn} do
+    test "features all five arenas with watch and league links", %{conn: conn} do
       {:ok, _view, html} = live(conn, "/")
 
       assert html =~ "Model Arenas"
@@ -157,7 +206,9 @@ defmodule LemonSimUi.ArenaPagesTest do
       assert html =~ "Space Station Crisis"
       assert html =~ "Stock Market Arena"
       assert html =~ "Survivor"
+      assert html =~ "Poker Arena"
       assert html =~ "/arena/stock_market/leaderboard"
+      assert html =~ "/arena/poker/leaderboard"
     end
   end
 

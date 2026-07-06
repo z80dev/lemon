@@ -66,6 +66,22 @@ defmodule LemonSimUi.ArenaDomains do
         {"whispers_sent", "Whispers sent", "🤫"}
       ],
       winner_labels: %{}
+    },
+    poker: %{
+      title: "Poker Arena",
+      tagline: "Deep stacks, no mercy — which model can out-bluff the table?",
+      icon: "♠️",
+      accent: "teal",
+      roles: [],
+      # {metric_key, label, icon}
+      stats: [
+        {"profit_loss", "Profit / loss", "💰"},
+        {"bb_per_hand", "BB per hand", "📊"},
+        {"vpip", "VPIP", "🎲"},
+        {"pfr", "PFR", "⚔️"},
+        {"hands_won", "Hands won", "🏆"}
+      ],
+      winner_labels: %{}
     }
   }
 
