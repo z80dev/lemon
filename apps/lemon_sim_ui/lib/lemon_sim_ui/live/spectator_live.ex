@@ -19,6 +19,7 @@ defmodule LemonSimUi.SpectatorLive do
     SpaceStationBoard,
     StockMarketBoard,
     SurvivorBoard,
+    PokerBoard,
     RunLog,
     EventLog
   }
@@ -36,7 +37,8 @@ defmodule LemonSimUi.SpectatorLive do
     :tcg_shop,
     :space_station,
     :stock_market,
-    :survivor
+    :survivor,
+    :poker
   ]
 
   # Sim-id prefixes used by SimManager.generate_id/1 / domain_from_sim_id/1,
@@ -46,7 +48,8 @@ defmodule LemonSimUi.SpectatorLive do
     werewolf: "ww_",
     space_station: "spc_",
     stock_market: "stk_",
-    survivor: "srv_"
+    survivor: "srv_",
+    poker: "pkr_"
   }
 
   @impl true
@@ -267,6 +270,13 @@ defmodule LemonSimUi.SpectatorLive do
                 running={@running}
                 usage={@usage}
               />
+            <% :poker -> %>
+              <.poker_spectator_view
+                state={@state}
+                sim_id={@sim_id}
+                running={@running}
+                usage={@usage}
+              />
             <% _ -> %>
               <.spectator_view
                 state={@state}
@@ -327,7 +337,7 @@ defmodule LemonSimUi.SpectatorLive do
         </p>
         <p class="text-slate-500 text-sm">
           Spectator mode is currently available for Werewolf, VendingBench, TCG Shop, Space
-          Station, Stock Market, and Survivor games.
+          Station, Stock Market, Survivor, and Poker games.
         </p>
         <a href="/" class="inline-block mt-6 glass-button px-6 py-2 rounded-lg text-sm">
           Back to Dashboard
@@ -709,6 +719,100 @@ defmodule LemonSimUi.SpectatorLive do
             </h3>
           </div>
           <div class="p-0 h-36 overflow-hidden">
+            <EventLog.render events={@state.recent_events} />
+          </div>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  attr(:state, :map, required: true)
+  attr(:sim_id, :string, required: true)
+  attr(:running, :boolean, required: true)
+  attr(:usage, :map, default: nil)
+
+  defp poker_spectator_view(assigns) do
+    world = assigns.state.world
+    table = LemonCore.MapHelpers.get_key(world, :table)
+    hand = table && LemonCore.MapHelpers.get_key(table, :hand)
+    street = hand && LemonCore.MapHelpers.get_key(hand, :street)
+    completed_hands = LemonCore.MapHelpers.get_key(world, :completed_hands) || 0
+    max_hands = LemonCore.MapHelpers.get_key(world, :max_hands) || 1
+    status = LemonCore.MapHelpers.get_key(world, :status) || "in_progress"
+    winner = LemonCore.MapHelpers.get_key(world, :winner)
+
+    hand_label =
+      if status == "game_over" do
+        "Complete"
+      else
+        "Hand #{completed_hands + 1}/#{max_hands}"
+      end
+
+    assigns =
+      assigns
+      |> assign(:hand_label, hand_label)
+      |> assign(:street, street)
+      |> assign(:game_status, status)
+      |> assign(:winner, winner)
+
+    ~H"""
+    <div class="flex flex-col min-h-screen bg-[#05130d] text-slate-200">
+      <header class="flex items-center justify-between px-6 py-3 border-b border-emerald-900/50 bg-slate-950/70 backdrop-blur-md flex-shrink-0">
+        <div class="flex items-center gap-4">
+          <a href="/" class="text-slate-500 hover:text-emerald-400 transition-colors" title="Back to dashboard">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+              <path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd" />
+            </svg>
+          </a>
+          <div>
+            <h1 class="text-xl font-bold text-white tracking-tight">{@sim_id}</h1>
+            <div class="flex items-center gap-2 text-xs font-mono text-slate-400">
+              <span class="text-emerald-400">Poker</span>
+              <span class="text-slate-600">|</span>
+              <span>{@hand_label}</span>
+              <span :if={@street} class="text-slate-600">|</span>
+              <span :if={@street} class="capitalize">{format_phase(to_string(@street))}</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-3">
+          <.link
+            navigate={"/arena/poker/leaderboard"}
+            class="text-[11px] font-mono text-slate-400 hover:text-cyan-300 px-3 py-1.5 rounded border border-slate-700 hover:border-cyan-500/40 transition-colors"
+          >
+            League
+          </.link>
+          <%= if @winner do %>
+            <span class="text-sm font-bold px-3 py-1.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/30">
+              Winner: {@winner}
+            </span>
+          <% end %>
+          <span :if={@running} class="text-[11px] font-bold tracking-widest uppercase px-3 py-1.5 rounded-sm bg-red-500/10 text-red-400 border border-red-500/30 flex items-center gap-2 shadow-[0_0_10px_rgba(239,68,68,0.2)]">
+            <span class="w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.8)]"></span>
+            LIVE
+          </span>
+          <span :if={!@running && @game_status != "game_over"} class="text-[11px] font-mono text-slate-500 px-3 py-1.5 rounded border border-slate-700">
+            STOPPED
+          </span>
+        </div>
+      </header>
+
+      <div class="flex-1 overflow-y-auto overflow-x-hidden" style="scrollbar-gutter: stable;">
+        <PokerBoard.render world={@state.world} interactive={false} />
+        <.usage_panel usage={@usage} />
+
+        <div class="border-t border-glass-border bg-slate-950/60">
+          <div class="px-4 py-2 border-b border-glass-border bg-slate-900/40">
+            <h3 class="text-[9px] font-mono uppercase tracking-widest text-emerald-400 font-bold flex items-center gap-1.5">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M3 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clip-rule="evenodd" />
+              </svg>
+              LIVE FEED
+            </h3>
+          </div>
+          <div class="p-0 h-48 overflow-hidden">
             <EventLog.render events={@state.recent_events} />
           </div>
         </div>

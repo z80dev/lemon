@@ -25,11 +25,20 @@ defmodule LemonSimUi.SimHelpers do
           | :supply_chain
           | :vending_bench
           | :tcg_shop
+          | :poker
           | :unknown
   def infer_domain_type(%State{world: world}) do
     cond do
       MapHelpers.get_key(world, :mode) == "tcg_shop" ->
         :tcg_shop
+
+      # Poker's world has both :table (engine state) and :player_stats
+      # (session VPIP/PFR tracking), unlike any other domain. Must be
+      # checked before the generic :players fallthrough below, since poker
+      # worlds also carry a :players map (%{player_id => %{seat, model}}).
+      (Map.has_key?(world, :table) or Map.has_key?(world, "table")) and
+          (Map.has_key?(world, :player_stats) or Map.has_key?(world, "player_stats")) ->
+        :poker
 
       Map.has_key?(world, :board) or Map.has_key?(world, "board") ->
         :tic_tac_toe
@@ -319,6 +328,18 @@ defmodule LemonSimUi.SimHelpers do
           _ -> "Day #{day}/#{max_days} - $#{:erlang.float_to_binary(balance + 0.0, decimals: 2)}"
         end
 
+      :poker ->
+        completed_hands = MapHelpers.get_key(state.world, :completed_hands) || 0
+        max_hands = MapHelpers.get_key(state.world, :max_hands) || 1
+        winner = MapHelpers.get_key(state.world, :winner)
+        status = MapHelpers.get_key(state.world, :status)
+
+        if status == "game_over" do
+          "Winner: #{winner || "unknown"}"
+        else
+          "Hand #{completed_hands + 1}/#{max_hands}"
+        end
+
       :unknown ->
         "v#{state.version}"
     end
@@ -391,6 +412,7 @@ defmodule LemonSimUi.SimHelpers do
   def domain_label(:supply_chain), do: "Supply Chain"
   def domain_label(:vending_bench), do: "Vending Bench"
   def domain_label(:tcg_shop), do: "TCG Shop"
+  def domain_label(:poker), do: "Poker"
   def domain_label(_), do: "Unknown"
 
   @spec domain_badge_color(atom()) :: String.t()
@@ -428,5 +450,6 @@ defmodule LemonSimUi.SimHelpers do
 
   def domain_badge_color(:vending_bench), do: "bg-green-900/60 text-green-300 border-green-500/30"
   def domain_badge_color(:tcg_shop), do: "bg-amber-900/60 text-amber-300 border-amber-500/30"
+  def domain_badge_color(:poker), do: "bg-sky-900/60 text-sky-300 border-sky-500/30"
   def domain_badge_color(_), do: "bg-gray-800/60 text-gray-400 border-gray-600/30"
 end

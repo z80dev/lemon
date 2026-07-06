@@ -10,6 +10,13 @@ defmodule LemonSimUi.SimHelpersCoverageTest do
     assert SimHelpers.infer_domain_type(state(%{systems: %{}})) == :space_station
     assert SimHelpers.infer_domain_type(state(%{"rooms" => []})) == :dungeon_crawl
     assert SimHelpers.infer_domain_type(state(%{players: %{}})) == :werewolf
+
+    # Poker also carries a :players map, so its :table/:player_stats check
+    # must win over the werewolf fallthrough.
+    assert SimHelpers.infer_domain_type(
+             state(%{table: %{}, player_stats: %{}, players: %{}})
+           ) == :poker
+
     assert SimHelpers.infer_domain_type(state(%{})) == :unknown
   end
 
@@ -51,6 +58,7 @@ defmodule LemonSimUi.SimHelpersCoverageTest do
 
   test "labels, status colors, and timestamps have deterministic fallbacks" do
     assert SimHelpers.domain_label(:intel_network) == "Intel Network"
+    assert SimHelpers.domain_label(:poker) == "Poker"
     assert SimHelpers.domain_label(:missing) == "Unknown"
     assert SimHelpers.domain_badge_color(:pandemic) =~ "red"
     assert SimHelpers.domain_badge_color(:missing) =~ "gray"
