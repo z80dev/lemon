@@ -6,8 +6,13 @@ primary_region = "sjc"
 
 [env]
   PHX_SERVER = "true"
-  LEMON_SIM_AUTO_LOOP = "true"
-  LEMON_SIM_WEREWOLF_PLAYERS = "6"
+  # Werewolf league arena (replaces LEMON_SIM_AUTO_LOOP for werewolf — do not
+  # enable both, or the single-model auto-loop games will pollute the league).
+  # WEREWOLF_ARENA_MODELS must be set (fly secrets or env) to a comma-separated
+  # list of provider:model specs whose API keys are configured, e.g.
+  # "anthropic:claude-sonnet-4-6,openai:gpt-5.2,google_gemini_cli:gemini-3-pro-preview".
+  WEREWOLF_LEAGUE_DIR = "/app/data/werewolf_league"
+  WEREWOLF_ARENA_PLAYER_COUNT = "6"
   LEMON_SIM_UI_PORT = "4090"
   RELEASE_NAME = "sim_broadcast_platform"
 

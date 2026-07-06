@@ -11,8 +11,11 @@ lemon_sim (Runner, Store, Bus, all domain examples)
       |
 lemon_sim_ui
   |-- LemonSimUi.SimManager         GenServer: start/stop/run simulation processes
+  |-- LemonSimUi.WerewolfArena      GenServer: always-on Werewolf league scheduler
   |-- LemonSimUi.LobbyLive          Public live-games landing page
   |-- LemonSimUi.LeaderboardLive    Public benchmark suite leaderboard page
+  |-- LemonSimUi.WerewolfLive       Stable "watch the live game" entry point
+  |-- LemonSimUi.WerewolfLeaderboardLive  Public Werewolf league standings
   |-- LemonSimUi.SimDashboardLive   Admin LiveView for sim launch and detail
   |-- LemonSimUi.SpectatorLive      Public read-only spectator LiveView
   |-- LemonSimUi.ArtifactReader     Reads suite and usage JSON artifacts
@@ -57,6 +60,17 @@ Admin surfaces are intended to be private. When `LEMON_SIM_UI_ACCESS_TOKEN` is s
 For social-deduction and multi-player domains (Werewolf, Stock Market, Survivor, Space Station), each player seat can be assigned a distinct model from the launch form. `SimManager` builds a `model_assignments` map keyed by the domain's canonical actor ID and uses an `on_before_step` callback to switch the active model before each turn. For Werewolf, those IDs are villager names (`"Alice"`, `"Bram"`, etc.), not `player_n` seat labels. All provider credentials are resolved through `LemonSim.GameHelpers.Config`.
 
 Werewolf character lore for spectator mode is generated asynchronously after sim launch. The sim starts immediately, then `SimManager` merges the generated `character_profiles` into the stored state and broadcasts an update when they are ready.
+
+### Werewolf League Arena (always-on broadcast)
+
+`LemonSimUi.WerewolfArena` keeps one Werewolf game running at all times and turns every finished game into league standings:
+
+- Each game samples a randomized model lineup from the configured pool via `LemonSim.Examples.Werewolf.League.plan_match/2`, and the recorded seed makes the role/model pairing reproducible.
+- Finished games are recorded into a file-backed league (`games/<sim_id>.json`, aggregated `league.json` + `league.md`) with per-model and per-role standings and Bradley-Terry ratings (shared math with `LemonSim.Bench.Ratings`).
+- Crashed games are resumed via `SimManager.resume_sim/1` with backoff, then abandoned and replaced; a watchdog tick guarantees the arena never stays dark.
+- `/werewolf` is the stable public URL: it redirects to the live game (and the spectator page auto-advances between games), so it is safe to embed or point a stream at. `/werewolf/leaderboard` renders the league standings and live-updates on the `werewolf:league` topic.
+
+Enable it by setting `WEREWOLF_ARENA_MODELS` to a comma-separated list of `provider:model` specs with configured credentials. Do not combine with `LEMON_SIM_AUTO_LOOP` for werewolf — the auto-loop's single-model games would pollute the league.
 
 ### Interactive Mode
 
@@ -197,6 +211,11 @@ The create response includes the private admin URL and, for Werewolf, VendingBen
 | `LEMON_SECRETS_MASTER_KEY` | Required on servers/containers that cannot read your local keychain but still need encrypted Lemon secrets |
 | `LEMON_SIM_AUTO_LOOP` | When `true`, boot configured auto-loop simulations on startup |
 | `LEMON_SIM_WEREWOLF_PLAYERS` | Player count for boot-time Werewolf auto-loop (defaults to `6`) |
+| `WEREWOLF_ARENA_MODELS` | Comma-separated `provider:model` pool; setting this enables the always-on Werewolf league arena |
+| `WEREWOLF_ARENA_ENABLED` | Set `0`/`false` to keep the arena off even when models are configured (defaults to on) |
+| `WEREWOLF_ARENA_PLAYER_COUNT` | Seats per league game (defaults to `6`) |
+| `WEREWOLF_ARENA_GAME_DELAY_MS` | Intermission between games (defaults to `15000`) |
+| `WEREWOLF_LEAGUE_DIR` | Directory for league records/standings (`/app/data/werewolf_league` on Fly; defaults to `lemon_sim` priv otherwise) |
 
 You will also need the provider credentials used by your chosen sim models (for example `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or Google/Gemini credentials).
 

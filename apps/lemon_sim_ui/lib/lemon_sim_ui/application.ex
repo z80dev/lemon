@@ -9,6 +9,7 @@ defmodule LemonSimUi.Application do
       LemonSimUi.Telemetry,
       {DynamicSupervisor, name: LemonSimUi.SimRunnerSupervisor, strategy: :one_for_one},
       LemonSimUi.SimManager,
+      {LemonSimUi.WerewolfArena, []},
       LemonSimUi.Endpoint
     ]
 

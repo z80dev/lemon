@@ -91,6 +91,37 @@ if is_binary(goal_judge_model) and String.trim(goal_judge_model) != "" do
   config :lemon_automation, :goal_judge_model, String.trim(goal_judge_model)
 end
 
+# Always-on Werewolf arena: continuously runs league games with a randomized
+# model lineup per game and records standings under WEREWOLF_LEAGUE_DIR.
+werewolf_arena_models = System.get_env("WEREWOLF_ARENA_MODELS")
+
+if is_binary(werewolf_arena_models) and String.trim(werewolf_arena_models) != "" do
+  arena_player_count =
+    case System.get_env("WEREWOLF_ARENA_PLAYER_COUNT") do
+      count when is_binary(count) and count != "" -> String.to_integer(count)
+      _ -> 6
+    end
+
+  arena_game_delay_ms =
+    case System.get_env("WEREWOLF_ARENA_GAME_DELAY_MS") do
+      delay when is_binary(delay) and delay != "" -> String.to_integer(delay)
+      _ -> 15_000
+    end
+
+  arena_league_dir =
+    case System.get_env("WEREWOLF_LEAGUE_DIR") do
+      dir when is_binary(dir) and dir != "" -> dir
+      _ -> nil
+    end
+
+  config :lemon_sim_ui, :werewolf_arena,
+    enabled: System.get_env("WEREWOLF_ARENA_ENABLED", "1") in ["1", "true", "TRUE"],
+    models: String.split(werewolf_arena_models, ",", trim: true) |> Enum.map(&String.trim/1),
+    player_count: arena_player_count,
+    game_delay_ms: arena_game_delay_ms,
+    league_dir: arena_league_dir
+end
+
 # Auto-loop: automatically start and restart games
 if System.get_env("LEMON_SIM_AUTO_LOOP") in ["1", "true", "TRUE"] do
   werewolf_players =

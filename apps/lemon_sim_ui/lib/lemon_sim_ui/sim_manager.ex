@@ -519,6 +519,13 @@ defmodule LemonSimUi.SimManager do
   defp build_initial_state(:werewolf, sim_id, opts) do
     model_specs = Keyword.get(opts, :model_specs, [])
 
+    # Seeding before world construction makes the role/trait/backstory
+    # assignment reproducible for a recorded league seed.
+    case Keyword.get(opts, :seed) do
+      seed when is_integer(seed) -> :rand.seed(:exsss, {seed, seed + 1, seed + 2})
+      _ -> :ok
+    end
+
     werewolf_opts =
       opts
       |> Keyword.put(:sim_id, sim_id)
@@ -1314,17 +1321,40 @@ defmodule LemonSimUi.SimManager do
   def parse_model_spec(spec) when is_binary(spec) do
     case String.split(spec, ":", parts: 2) do
       [provider, model_id] -> {resolve_model_provider!(provider), model_id}
-      [model_id] -> {:anthropic, model_id}
+      [_] -> parse_slash_model_spec(spec)
+    end
+  end
+
+  # World snapshots store per-player models as "provider/model_id" (see
+  # Werewolf.attach_model_assignments/2); resume reads specs back from the
+  # world, so that shape must parse too. A leading segment that is not a known
+  # provider falls through to the bare-model default.
+  defp parse_slash_model_spec(spec) do
+    with [provider, model_id] <- String.split(spec, "/", parts: 2),
+         {:ok, resolved} <- lookup_model_provider(provider) do
+      {resolved, model_id}
+    else
+      _ -> {:anthropic, spec}
     end
   end
 
   defp resolve_model_provider!(provider_name) do
+    case lookup_model_provider(provider_name) do
+      {:ok, provider} -> provider
+      :error -> raise ArgumentError, "unknown model provider: #{provider_name}"
+    end
+  end
+
+  defp lookup_model_provider(provider_name) do
     canonical_name = SimConfig.provider_name(provider_name)
 
     Enum.find(Ai.Models.get_providers(), fn provider ->
       SimConfig.provider_name(provider) == canonical_name
-    end) ||
-      raise ArgumentError, "unknown model provider: #{provider_name}"
+    end)
+    |> case do
+      nil -> :error
+      provider -> {:ok, provider}
+    end
   end
 
   defp resolve_model!(provider, model_id, config) do

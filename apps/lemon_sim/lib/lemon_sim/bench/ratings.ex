@@ -68,6 +68,55 @@ defmodule LemonSim.Bench.Ratings do
     end
   end
 
+  @doc """
+  Fits Bradley-Terry ratings from a pairwise outcome matrix.
+
+  The matrix shape matches the `"pairwise"` artifact section:
+  `%{id => %{opponent_id => %{"wins" => w, "losses" => l, "draws" => d, "n" => n}}}`.
+  Returns `%{id => rating | nil}` where `nil` marks competitors with no
+  comparisons (unrated). Uses the same prior and convergence constants as the
+  suite-level fit, so ratings are comparable across callers.
+  """
+  @spec fit_ratings([String.t()], map()) :: %{optional(String.t()) => float() | nil}
+  def fit_ratings(competitor_ids, matrix) when is_list(competitor_ids) and is_map(matrix) do
+    active_ids =
+      Enum.filter(competitor_ids, fn competitor ->
+        matrix
+        |> Map.get(competitor, %{})
+        |> Map.values()
+        |> Enum.map(& &1["n"])
+        |> Enum.sum()
+        |> Kernel.>(0)
+      end)
+
+    strengths = if length(active_ids) < 2, do: %{}, else: do_fit_strengths(active_ids, matrix)
+    geometric_mean = geometric_mean(strengths)
+
+    Map.new(competitor_ids, fn competitor ->
+      {competitor, rating(strengths[competitor], geometric_mean)}
+    end)
+  end
+
+  @doc """
+  Builds an empty pairwise matrix for `fit_ratings/2` covering every pair of
+  the given competitor ids.
+  """
+  @spec new_pairwise_matrix([String.t()]) :: map()
+  def new_pairwise_matrix(competitor_ids) when is_list(competitor_ids) do
+    competitor_ids |> Enum.uniq() |> empty_matrix()
+  end
+
+  @doc """
+  Records a decisive outcome (`winner` beat `loser`) into a pairwise matrix
+  produced by `new_pairwise_matrix/1`. Self-pairs are ignored.
+  """
+  @spec add_pairwise_win(map(), String.t(), String.t()) :: map()
+  def add_pairwise_win(matrix, winner, loser) when winner == loser, do: matrix
+
+  def add_pairwise_win(matrix, winner, loser) do
+    increment_pair(matrix, winner, loser, :win)
+  end
+
   @spec write([String.t()], String.t(), keyword()) :: {:ok, result()} | {:error, term()}
   def write(suite_dirs, out_dir, opts \\ []) when is_list(suite_dirs) and is_binary(out_dir) do
     with {:ok, %{ratings: ratings, leaderboard: leaderboard} = result} <- rate(suite_dirs, opts) do

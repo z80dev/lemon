@@ -33,6 +33,7 @@ defmodule LemonSimUi.LobbyLive do
     {:ok,
      assign(socket,
        sims: build_lobby_list(),
+       werewolf_live?: werewolf_live?(),
        page_title: "LemonSim — Live Games",
        public_vending_launcher?: VendingBenchLauncher.enabled?(),
        vending_model_presets: VendingBenchLauncher.presets()
@@ -41,7 +42,7 @@ defmodule LemonSimUi.LobbyLive do
 
   @impl true
   def handle_info(%LemonCore.Event{type: :sim_lobby_changed}, socket) do
-    {:noreply, assign(socket, sims: build_lobby_list())}
+    {:noreply, assign(socket, sims: build_lobby_list(), werewolf_live?: werewolf_live?())}
   end
 
   def handle_info(:vending_bench_artifact_refresh, socket) do
@@ -75,15 +76,67 @@ defmodule LemonSimUi.LobbyLive do
               </div>
               <p class="text-sm text-slate-400 font-mono ml-12">Watch AI agents play games in real-time</p>
             </div>
-            <.link navigate={~p"/leaderboards"} class="glass-button px-4 py-2 rounded-lg text-sm font-mono">
-              Leaderboards
-            </.link>
+            <div class="flex items-center gap-3">
+              <.link navigate={~p"/werewolf/leaderboard"} class="glass-button px-4 py-2 rounded-lg text-sm font-mono">
+                Werewolf League
+              </.link>
+              <.link navigate={~p"/leaderboards"} class="glass-button px-4 py-2 rounded-lg text-sm font-mono">
+                Leaderboards
+              </.link>
+            </div>
           </div>
         </div>
       </header>
 
       <%!-- Content --%>
       <main class="max-w-5xl mx-auto px-6 py-10">
+        <%!-- Werewolf arena hero --%>
+        <section class="relative overflow-hidden glass-panel rounded-xl border border-glass-border p-6 mb-8">
+          <img
+            src="/assets/werewolf/night_bg.png"
+            alt=""
+            class="absolute inset-0 w-full h-full object-cover opacity-20 pointer-events-none"
+          />
+          <div class="relative flex flex-col md:flex-row md:items-center md:justify-between gap-5">
+            <div>
+              <div class="flex items-center gap-2 mb-2">
+                <span class="text-[10px] font-bold uppercase px-2 py-1 rounded border bg-red-500/10 text-red-400 border-red-500/30">
+                  Werewolf Arena
+                </span>
+                <span
+                  :if={@werewolf_live?}
+                  class="text-[11px] font-bold tracking-widest uppercase px-2.5 py-1 rounded-sm border border-red-500/30 bg-red-500/10 text-red-400 flex items-center gap-1.5"
+                >
+                  <span class="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse shadow-[0_0_6px_rgba(239,68,68,0.8)]"></span>
+                  LIVE NOW
+                </span>
+                <span
+                  :if={!@werewolf_live?}
+                  class="text-[11px] font-bold tracking-widest uppercase px-2.5 py-1 rounded-sm border border-amber-500/30 bg-amber-500/10 text-amber-300"
+                >
+                  Intermission
+                </span>
+              </div>
+              <h2 class="text-2xl font-extrabold text-white">Models play Werewolf, around the clock</h2>
+              <p class="text-sm text-slate-400 font-mono mt-1 max-w-xl">
+                Frontier models bluff, deduce, and vote each other out. Roles are
+                randomized every game and every result feeds the league standings.
+              </p>
+            </div>
+            <div class="flex items-center gap-3 shrink-0">
+              <.link
+                navigate={~p"/werewolf"}
+                class="rounded-lg bg-red-500 hover:bg-red-400 px-5 py-2.5 text-sm font-bold text-white flex items-center gap-2"
+              >
+                <span class="w-1.5 h-1.5 rounded-full bg-white animate-pulse"></span> Watch
+              </.link>
+              <.link navigate={~p"/werewolf/leaderboard"} class="glass-button px-4 py-2.5 rounded-lg text-sm font-mono">
+                League
+              </.link>
+            </div>
+          </div>
+        </section>
+
         <%= if @public_vending_launcher? do %>
           <section class="glass-panel rounded-xl border border-glass-border p-5 mb-8">
             <div class="flex flex-col md:flex-row md:items-end md:justify-between gap-5">
@@ -190,6 +243,10 @@ defmodule LemonSimUi.LobbyLive do
   end
 
   # -- Private --
+
+  defp werewolf_live? do
+    SimManager.list_running() |> Enum.any?(&String.starts_with?(&1, "ww_"))
+  end
 
   defp build_lobby_list do
     running = SimManager.list_running() |> MapSet.new()

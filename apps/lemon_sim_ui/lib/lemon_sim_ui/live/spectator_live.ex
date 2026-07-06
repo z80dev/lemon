@@ -455,6 +455,12 @@ defmodule LemonSimUi.SpectatorLive do
         </div>
 
         <div class="flex items-center gap-3">
+          <.link
+            navigate={~p"/werewolf/leaderboard"}
+            class="text-[11px] font-mono text-slate-400 hover:text-cyan-300 px-3 py-1.5 rounded border border-slate-700 hover:border-cyan-500/40 transition-colors"
+          >
+            League
+          </.link>
           <%= if @winner do %>
             <span class="text-sm font-bold px-3 py-1.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/30">
               Winner: {@winner}

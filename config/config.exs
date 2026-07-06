@@ -74,6 +74,10 @@ config :lemon_sim_ui, LemonSimUi.Endpoint,
 config :lemon_sim_ui, :access_token, nil
 config :lemon_sim_ui, :public_vending_launcher, false
 
+# Always-on Werewolf arena (league). Disabled unless WEREWOLF_ARENA_MODELS
+# is provided at runtime; see config/runtime.exs.
+config :lemon_sim_ui, :werewolf_arena, enabled: false, models: []
+
 # Sample configuration:
 #
 #     config :logger, :default_handler,
