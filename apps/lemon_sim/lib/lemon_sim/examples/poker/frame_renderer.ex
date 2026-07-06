@@ -801,6 +801,10 @@ defmodule LemonSim.Examples.Poker.FrameRenderer do
     "#{get(p, "player_id", "?")} jots a private note"
   end
 
+  defp describe_event(%{"kind" => "table_talk", "payload" => p}, _players) do
+    ~s(#{get(p, "player_id", "?")}: “#{get(p, "content", "")}”)
+  end
+
   defp describe_event(_event, _players), do: nil
 
   defp describe_action(p) do

@@ -187,6 +187,175 @@ defmodule LemonSim.Examples.PokerTest do
     assert next_state.world.current_actor_id == "player_2"
   end
 
+  test "say tool broadcasts table talk without ending the turn" do
+    state =
+      Poker.initial_state(
+        player_count: 2,
+        max_hands: 1,
+        deck: scripted_deck(~w(As Qh Ks Qd 2s Ac 7s 2c 3h 9h 4c 4d))
+      )
+
+    complete_fn = fn _model, _context, _stream_opts ->
+      {:ok,
+       %AssistantMessage{
+         role: :assistant,
+         content: [
+           %ToolCall{
+             type: :tool_call,
+             id: "say-1",
+             name: "say",
+             arguments: %{"message" => "Strap in, this one is mine."}
+           },
+           %ToolCall{
+             type: :tool_call,
+             id: "call-1",
+             name: "call",
+             arguments: %{}
+           }
+         ],
+         stop_reason: :tool_use,
+         timestamp: System.system_time(:millisecond)
+       }}
+    end
+
+    assert {:ok, %{state: next_state}} =
+             Runner.step(state, Poker.modules(),
+               model: fake_model(),
+               complete_fn: complete_fn,
+               stream_options: %{},
+               tool_policy: ToolPolicy,
+               support_tool_matcher: fn tool -> tool.name in ["note", "say"] end
+             )
+
+    assert [%{"player_id" => "player_1", "content" => "Strap in, this one is mine."}] =
+             next_state.world.table_talk
+
+    assert Enum.any?(next_state.recent_events, &(&1.kind == "table_talk"))
+    assert next_state.world.current_actor_id == "player_2"
+  end
+
+  test "say tool blocks hole-card leaks and emits no event" do
+    state =
+      Poker.initial_state(
+        player_count: 2,
+        max_hands: 1,
+        deck: scripted_deck(~w(As Qh Ks Qd 2s Ac 7s 2c 3h 9h 4c 4d))
+      )
+
+    complete_fn = fn _model, _context, _stream_opts ->
+      {:ok,
+       %AssistantMessage{
+         role: :assistant,
+         content: [
+           %ToolCall{
+             type: :tool_call,
+             id: "say-1",
+             name: "say",
+             arguments: %{"message" => "I have ace king, As Ks to be exact."}
+           },
+           %ToolCall{
+             type: :tool_call,
+             id: "call-1",
+             name: "call",
+             arguments: %{}
+           }
+         ],
+         stop_reason: :tool_use,
+         timestamp: System.system_time(:millisecond)
+       }}
+    end
+
+    assert {:ok, %{state: next_state}} =
+             Runner.step(state, Poker.modules(),
+               model: fake_model(),
+               complete_fn: complete_fn,
+               stream_options: %{},
+               tool_policy: ToolPolicy,
+               support_tool_matcher: fn tool -> tool.name in ["note", "say"] end
+             )
+
+    assert next_state.world[:table_talk] == []
+    refute Enum.any?(next_state.recent_events, &(&1.kind == "table_talk"))
+    assert next_state.world.current_actor_id == "player_2"
+  end
+
+  test "delayed visibility: opponents' current-hand talk is hidden, own and past-hand talk shown" do
+    state = initial_two_player_state()
+    live_hand_id = state.world.table.hand.id
+
+    talk = fn player_id, seat, content, hand_id ->
+      Events.table_talk(player_id, seat, content, %{
+        "hand_id" => hand_id,
+        "street" => "preflop"
+      })
+    end
+
+    {:ok, state, :skip} =
+      Updater.apply_event(state, talk.("player_2", 2, "Live needle.", live_hand_id), [])
+
+    {:ok, state, :skip} =
+      Updater.apply_event(state, talk.("player_2", 2, "Old needle.", live_hand_id - 1), [])
+
+    {:ok, state, :skip} =
+      Updater.apply_event(state, talk.("player_1", 1, "My own quip.", live_hand_id), [])
+
+    builders = Keyword.fetch!(Poker.projector_opts(), :section_builders)
+    frame = DecisionFrame.from_state(state)
+
+    # player_1 is the acting player
+    assert state.world.current_actor_id == "player_1"
+
+    projected = builders.table_talk.(frame, [], []).content
+    assert Enum.map(projected, & &1["content"]) == ["Old needle.", "My own quip."]
+
+    recent_contents =
+      builders.recent_events.(frame, [], []).content
+      |> Enum.filter(&(Map.get(&1, "kind") == "table_talk"))
+      |> Enum.map(&get_in(&1, ["payload", "content"]))
+
+    assert "Live needle." not in recent_contents
+    assert "Old needle." in recent_contents
+    assert "My own quip." in recent_contents
+
+    # spectators still see everything: world state keeps all entries
+    assert Enum.map(state.world.table_talk, & &1["content"]) ==
+             ["Live needle.", "Old needle.", "My own quip."]
+  end
+
+  test "delayed visibility: opponent talk becomes visible once the hand completes" do
+    state =
+      Poker.initial_state(
+        player_count: 2,
+        max_hands: 2,
+        deck: scripted_deck(~w(As Qh Ks Qd 2s Ac 7s 2c 3h 9h 4c 4d))
+      )
+
+    hand_1_id = state.world.table.hand.id
+
+    {:ok, state, :skip} =
+      Updater.apply_event(
+        state,
+        Events.table_talk("player_2", 2, "Hand-one trash talk.", %{
+          "hand_id" => hand_1_id,
+          "street" => "preflop"
+        }),
+        []
+      )
+
+    # player_1 folds, hand 1 ends and hand 2 starts
+    assert {:ok, state, {:decide, _}} =
+             Updater.apply_event(state, action_event(state.world.table, "fold"), [])
+
+    assert state.world.completed_hands == 1
+    assert state.world.table.hand.id != hand_1_id
+
+    builders = Keyword.fetch!(Poker.projector_opts(), :section_builders)
+    frame = DecisionFrame.from_state(state)
+
+    projected = builders.table_talk.(frame, [], []).content
+    assert Enum.map(projected, & &1["content"]) == ["Hand-one trash talk."]
+  end
+
   test "side pot: one all-in below the big blind splits main and side pots correctly" do
     deck = scripted_deck(~w(Qh Js As Qd Jd Ac 7s 2s 3h 4c 8d 9d Tc Kc))
 

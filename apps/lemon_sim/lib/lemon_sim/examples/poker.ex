@@ -77,6 +77,7 @@ defmodule LemonSim.Examples.Poker do
       players: init_players(player_ids),
       player_stats: init_player_stats(player_ids, starting_stack),
       player_notes: Enum.into(player_ids, %{}, &{&1, []}),
+      table_talk: [],
       consecutive_rejections: %{},
       chip_counts: chip_counts(table),
       last_hand_result: nil,
@@ -148,6 +149,14 @@ defmodule LemonSim.Examples.Poker do
             content: visible_notes(frame.world)
           }
         end,
+        table_talk: fn frame, _tools, _opts ->
+          %{
+            id: :table_talk,
+            title: "Table Talk",
+            format: :json,
+            content: recent_table_talk(frame.world)
+          }
+        end,
         hand_actions: fn frame, _tools, _opts ->
           %{
             id: :hand_actions,
@@ -170,6 +179,11 @@ defmodule LemonSim.Examples.Poker do
         POKER RULES:
         - End each turn with exactly one action tool call.
         - `note` is optional and does not end your turn.
+        - `say` is optional public table talk; it does not end your turn. Spectators see it live, but opponents only see it once the current hand ends.
+        - Use `say` to stay in character: needle opponents, react to bad beats, build your table image across hands — lying is allowed, just like real poker.
+        - Opponents' replies to your talk arrive next hand, so treat banter as running commentary, not conversation.
+        - NEVER reveal or hint at your actual hole cards in table talk. Messages naming specific non-board cards or describing your holding are blocked.
+        - Keep table talk to one short line; do not use it every single turn.
         - `bet_to` and `raise_to` expect the total chips you will have committed on this street after the action.
         - Stay inside the legal min/max shown in the tool description.
         - Fold weak hands facing large pressure; preserve chips for later hands.
@@ -182,6 +196,7 @@ defmodule LemonSim.Examples.Poker do
         :your_hand,
         :opponents,
         :notes,
+        :table_talk,
         :hand_actions,
         :recent_events,
         :current_intent,
@@ -443,6 +458,37 @@ defmodule LemonSim.Examples.Poker do
     end)
   end
 
+  # Delayed visibility: spectators see table talk live, but players only see
+  # opponents' talk from completed hands. Current-hand talk stays hidden from
+  # the table until the hand ends, so banter can't become a live info channel.
+  defp recent_table_talk(world) do
+    actor_id = MapHelpers.get_key(world, :current_actor_id)
+    live_hand_id = live_hand_id(world)
+
+    case MapHelpers.get_key(world, :table_talk) do
+      talk when is_list(talk) ->
+        talk
+        |> Enum.filter(&talk_visible_to_player?(&1, actor_id, live_hand_id))
+        |> Enum.take(-10)
+        |> Enum.map(&Map.take(&1, ["player_id", "content", "street"]))
+
+      _ ->
+        []
+    end
+  end
+
+  defp talk_visible_to_player?(entry, actor_id, live_hand_id) do
+    speaker = Map.get(entry, "player_id", Map.get(entry, :player_id))
+    hand_id = Map.get(entry, "hand_id", Map.get(entry, :hand_id))
+
+    speaker == actor_id or is_nil(live_hand_id) or hand_id != live_hand_id
+  end
+
+  defp live_hand_id(world) do
+    table = MapHelpers.get_key(world, :table)
+    table && table.hand && table.hand.id
+  end
+
   defp visible_notes(world) do
     player_id = MapHelpers.get_key(world, :current_actor_id)
 
@@ -454,28 +500,33 @@ defmodule LemonSim.Examples.Poker do
 
   defp visible_recent_events(events, world) do
     actor_id = MapHelpers.get_key(world, :current_actor_id)
+    live_hand_id = live_hand_id(world)
 
     events
     |> Enum.take(-12)
-    |> Enum.filter(&event_visible?(&1, actor_id))
+    |> Enum.filter(&event_visible?(&1, actor_id, live_hand_id))
     |> Enum.map(&sanitize_event/1)
     |> Toolkit.normalize_events()
   end
 
-  defp event_visible?(%Event{kind: "player_note", payload: payload}, actor_id) do
+  defp event_visible?(%Event{kind: "player_note", payload: payload}, actor_id, _live_hand_id) do
     Map.get(payload, "player_id", Map.get(payload, :player_id)) == actor_id
   end
 
-  defp event_visible?(%Event{kind: "action_rejected", payload: payload}, actor_id) do
+  defp event_visible?(%Event{kind: "action_rejected", payload: payload}, actor_id, _live_hand_id) do
     Map.get(payload, "player_id", Map.get(payload, :player_id)) == actor_id
   end
 
-  defp event_visible?(%Event{kind: "deal_hole_cards", payload: payload}, actor_id) do
+  defp event_visible?(%Event{kind: "deal_hole_cards", payload: payload}, actor_id, _live_hand_id) do
     Map.get(payload, "player_id", Map.get(payload, :player_id)) == actor_id
   end
 
-  defp event_visible?(%Event{}, _actor_id), do: true
-  defp event_visible?(_event, _actor_id), do: true
+  defp event_visible?(%Event{kind: "table_talk", payload: payload}, actor_id, live_hand_id) do
+    talk_visible_to_player?(payload, actor_id, live_hand_id)
+  end
+
+  defp event_visible?(%Event{}, _actor_id, _live_hand_id), do: true
+  defp event_visible?(_event, _actor_id, _live_hand_id), do: true
 
   defp sanitize_event(%Event{kind: "hand_completed", payload: payload} = event) do
     showdown =
@@ -780,6 +831,6 @@ defmodule LemonSim.Examples.Poker do
     end)
   end
 
-  defp support_tool?(%AgentTool{name: "note"}), do: true
+  defp support_tool?(%AgentTool{name: name}) when name in ["note", "say"], do: true
   defp support_tool?(%AgentTool{}), do: false
 end

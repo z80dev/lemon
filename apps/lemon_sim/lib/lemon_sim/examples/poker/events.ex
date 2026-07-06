@@ -34,6 +34,19 @@ defmodule LemonSim.Examples.Poker.Events do
     Event.new("player_note", payload)
   end
 
+  @spec table_talk(String.t(), pos_integer(), String.t(), map()) :: Event.t()
+  def table_talk(player_id, seat, content, extras \\ %{}) do
+    payload =
+      %{
+        "player_id" => player_id,
+        "seat" => seat,
+        "content" => to_string(content)
+      }
+      |> Map.merge(Map.new(extras))
+
+    Event.new("table_talk", payload)
+  end
+
   @spec action_rejected(term(), term(), term(), term(), String.t()) :: Event.t()
   def action_rejected(player_id, seat, action, reason, message) do
     Event.new("action_rejected", %{

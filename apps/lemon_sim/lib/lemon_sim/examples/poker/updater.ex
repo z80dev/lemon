@@ -20,6 +20,7 @@ defmodule LemonSim.Examples.Poker.Updater do
     case event.kind do
       "poker_action" -> apply_poker_action(state, event)
       "player_note" -> apply_player_note(state, event)
+      "table_talk" -> apply_table_talk(state, event)
       _ -> {:ok, State.append_event(state, event), :skip}
     end
   end
@@ -68,6 +69,28 @@ defmodule LemonSim.Examples.Poker.Updater do
     next_world =
       update_in(state.world, [:player_notes], fn notes ->
         Map.update(notes || %{}, player_id, [note], &(&1 ++ [note]))
+      end)
+
+    {:ok, state |> State.put_world(next_world) |> State.append_event(event), :skip}
+  end
+
+  @max_table_talk_entries 100
+
+  defp apply_table_talk(%State{} = state, event) do
+    payload = event.payload || %{}
+
+    entry = %{
+      "player_id" => Map.get(payload, "player_id", Map.get(payload, :player_id)),
+      "seat" => Map.get(payload, "seat", Map.get(payload, :seat)),
+      "content" => Map.get(payload, "content", Map.get(payload, :content, "")),
+      "hand_id" => Map.get(payload, "hand_id", Map.get(payload, :hand_id)),
+      "street" => Map.get(payload, "street", Map.get(payload, :street)),
+      "ts_ms" => event.ts_ms
+    }
+
+    next_world =
+      Map.update(state.world, :table_talk, [entry], fn talk ->
+        Enum.take((talk || []) ++ [entry], -@max_table_talk_entries)
       end)
 
     {:ok, state |> State.put_world(next_world) |> State.append_event(event), :skip}

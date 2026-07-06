@@ -5,12 +5,14 @@ defmodule LemonSim.Examples.Poker.ActionSpace do
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias LemonCore.MapHelpers
-  alias LemonSim.Examples.Poker.Engine.Table
+  alias LemonSim.Examples.Poker.Banter
+  alias LemonSim.Examples.Poker.Engine.{Card, Table}
   alias LemonSim.Examples.Poker.Events
 
   @impl true
   def tools(state, opts) do
     include_note_tool? = Keyword.get(opts, :include_note_tool?, true)
+    include_say_tool? = Keyword.get(opts, :include_say_tool?, true)
 
     if MapHelpers.get_key(state.world, :status) != "in_progress" do
       {:ok, []}
@@ -24,6 +26,7 @@ defmodule LemonSim.Examples.Poker.ActionSpace do
           tools =
             []
             |> maybe_add(include_note_tool?, fn -> note_tool(player, table.hand) end)
+            |> maybe_add(include_say_tool?, fn -> say_tool(player, table.hand) end)
             |> maybe_add(:fold in legal.options, fn -> fold_tool(player) end)
             |> maybe_add(:check in legal.options, fn -> check_tool(player) end)
             |> maybe_add(:call in legal.options, fn -> call_tool(player, legal.to_call) end)
@@ -114,6 +117,59 @@ defmodule LemonSim.Examples.Poker.ActionSpace do
            },
            trust: :trusted
          }}
+      end
+    }
+  end
+
+  defp say_tool(player, hand) do
+    board = if hand, do: Enum.map(hand.board, &Card.to_short_string/1), else: []
+
+    %AgentTool{
+      name: "say",
+      description:
+        "Say one short line out loud to the table. Spectators see it live; opponents see it " <>
+          "once the current hand ends. Needle, celebrate, or bluff-talk in character — but " <>
+          "never state or hint at your actual hole cards; messages naming specific non-board " <>
+          "cards are blocked. This does not end your turn.",
+      parameters: %{
+        "type" => "object",
+        "properties" => %{
+          "message" => %{
+            "type" => "string",
+            "description" => "Short table talk (a sentence or two) visible to everyone."
+          }
+        },
+        "required" => ["message"],
+        "additionalProperties" => false
+      },
+      label: "Say",
+      execute: fn _tool_call_id, params, _signal, _on_update ->
+        params = params || %{}
+        message = Map.get(params, "message", Map.get(params, :message, ""))
+
+        case Banter.sanitize(message, board) do
+          {:ok, content} ->
+            {:ok,
+             %AgentToolResult{
+               content: [AgentCore.text_content("#{player.player_id} says: #{content}")],
+               details: %{
+                 "event" =>
+                   Events.table_talk(player.player_id, player.seat, content, %{
+                     "hand_id" => hand && hand.id,
+                     "street" => hand && to_string(hand.street)
+                   })
+               },
+               trust: :trusted
+             }}
+
+          {:error, reason} ->
+            {:ok,
+             %AgentToolResult{
+               content: [AgentCore.text_content(reason)],
+               details: %{},
+               trust: :trusted
+             }}
+        end
       end
     }
   end
