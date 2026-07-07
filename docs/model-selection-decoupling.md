@@ -119,10 +119,31 @@ available"):
   `provider_fallback.ex` — per-session model resolution and the live
   fallback-chain walk (which provider to actually try next after a
   failure), as opposed to `ModelCatalog`'s "what's pickable" snapshot.
-- `apps/lemon_cli/lib/lemon_cli/onboarding/` and `setup/` provider files —
-  interactive onboarding prompts that currently know provider names/env
-  vars/setup steps directly; these should eventually read that from
-  `AgentCore.ModelRuntime.ProviderNames` instead of their own tables.
+- `apps/lemon_cli/lib/lemon_cli/onboarding/providers.ex` (and the
+  `LemonCli.Onboarding.Provider` struct it builds from in `onboarding/provider.ex`)
+  — **boundary-blocked, not just deferred.** `lemon_cli` is only permitted to
+  depend on `ai` and `lemon_core` (`docs/architecture_boundaries.md:18`), and
+  `AgentCore.ModelRuntime.ProviderNames` lives in `agent_core`, which isn't in
+  that list. Migrating this file requires a deliberate governance decision
+  first — either extend `lemon_cli`'s permitted deps to include `agent_core`,
+  or move `ProviderNames` (or an equivalent) down into `ai`, which `lemon_cli`
+  already depends on. Don't reach for a dynamic `Code.ensure_loaded?`/`apply`
+  workaround to dodge this; it defeats the point of the boundary check.
+  (`apps/lemon_cli/lib/lemon_cli/setup/provider.ex` has no local table at
+  all — it's a thin wrapper delegating to `Mix.Tasks.Lemon.Onboard` — so
+  nothing to migrate there regardless of the governance outcome.)
+  Only a thin slice of the onboarding table actually overlaps
+  `ProviderNames`: `id`, `aliases`, and `default_secret_name`/
+  `default_secret_name_by_mode`. The rest (OAuth module refs into
+  `Ai.Auth.*`, API-key prompts, choice labels, `oauth_opts_builder`, CLI
+  switches, curated `preferred_models`) is onboarding-flow presentation data
+  with no facade equivalent and stays local regardless of how the boundary
+  question is resolved — same pattern as `arena_domains` presentation data.
+  **Reconciliation prerequisite:** the two tables have already drifted, and
+  this needs fixing as part of any future migration to stay
+  behavior-preserving: `lemon_cli`'s table has aliases `ProviderNames` is
+  missing (`"zhipu"` → `zai`, `"kimi-k2"` → `kimi`), and `ProviderNames` has
+  an alias `lemon_cli`'s table is missing (`"gemini_cli"` → `google_gemini_cli`).
 - `apps/lemon_core/lib/lemon_core/provider_config_resolver.ex` and
   `provider_pool_rotator.ex` — provider-specific stream-option resolution
   (project/region/deployment-map/API-key assembly per provider) and
