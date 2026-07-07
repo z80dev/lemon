@@ -472,5 +472,11 @@
     owner: "@z80",
     last_reviewed: ~D[2026-07-07],
     max_age_days: 180
+  },
+  %{
+    path: "docs/config-registry.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-07-06],
+    max_age_days: 90
   }
 ]
