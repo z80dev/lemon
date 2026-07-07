@@ -138,6 +138,12 @@
     max_age_days: 60
   },
   %{
+    path: "docs/error-reporting.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-07-06],
+    max_age_days: 60
+  },
+  %{
     path: "docs/context.md",
     owner: "@z80",
     last_reviewed: ~D[2026-06-17],

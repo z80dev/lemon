@@ -24,6 +24,9 @@ defmodule LemonCore.Application do
 
   - `:lemon_core, LemonCore.ConfigCache` - Options passed to ConfigCache
   - `:lemon_core, :logging` - File logging configuration (optional)
+  - `:lemon_core, :logger` - `:logger` handlers to attach at boot (e.g. the
+    Sentry error-reporting handler; see `docs/error-reporting.md`). Empty
+    unless `SENTRY_DSN` is set at runtime, in which case this is a no-op.
 
   ## Examples
 
@@ -38,6 +41,10 @@ defmodule LemonCore.Application do
 
   @impl true
   def start(_type, _args) do
+    # Attach any :logger handlers configured under :lemon_core, :logger (see
+    # config/runtime.exs). A no-op when nothing is configured there.
+    Logger.add_handlers(:lemon_core)
+
     # If configured, install a log-to-file handler early so dropped/errored
     # messages can be diagnosed even when stdout/stderr isn't persisted.
     _ = LemonCore.Logging.maybe_add_file_handler()

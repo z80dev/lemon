@@ -30,6 +30,50 @@ if is_atom(level) and not is_nil(level) do
   config :logger, :default_handler, level: level
 end
 
+# Error reporting sink (Sentry). See docs/error-reporting.md. Dormant unless
+# SENTRY_DSN is set: Sentry's own documented "disabled" mode is `dsn: nil`
+# (the default), so absent the env var this block is skipped entirely and
+# the sentry app boots inert, sending nothing.
+sentry_dsn = System.get_env("SENTRY_DSN")
+
+if is_binary(sentry_dsn) and String.trim(sentry_dsn) != "" do
+  sentry_environment =
+    [System.get_env("LEMON_ENV"), System.get_env("SENTRY_ENVIRONMENT")]
+    |> Enum.find(&(is_binary(&1) and String.trim(&1) != ""))
+    |> case do
+      nil -> to_string(config_env())
+      env -> String.trim(env)
+    end
+
+  sentry_release =
+    case Application.spec(:lemon_core, :vsn) do
+      nil -> nil
+      vsn -> to_string(vsn)
+    end
+
+  config :sentry,
+    dsn: String.trim(sentry_dsn),
+    environment_name: sentry_environment,
+    release: sentry_release,
+    enable_source_code_context: true,
+    root_source_code_paths: [File.cwd!()]
+
+  # Sentry.LoggerHandler only reports Logger metadata that already looks like
+  # a crash/exit reason by default (capture_log_messages: false), so this
+  # captures unhandled exceptions and process crashes without also mirroring
+  # every Logger.error/warning call as a Sentry event.
+  config :lemon_core, :logger, [
+    {:handler, :sentry_handler, Sentry.LoggerHandler,
+     %{
+       config: %{
+         metadata: [:file, :line],
+         capture_log_messages: false,
+         level: :error
+       }
+     }}
+  ]
+end
+
 access_token = System.get_env("LEMON_WEB_ACCESS_TOKEN")
 
 if is_binary(access_token) and access_token != "" do

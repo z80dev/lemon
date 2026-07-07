@@ -1,0 +1,60 @@
+name: Dialyzer
+
+# Advisory static-analysis lane. This job is allowed to fail (see
+# `continue-on-error` below): Dialyzer warnings are surfaced for visibility
+# but never block merges. Warnings are tracked down over time via
+# .dialyzer_ignore.exs (see root mix.exs `dialyzer/0`).
+#
+# Note: `--format github` is intentionally NOT used here. As of dialyxir
+# 1.4.7 / OTP 28.5, Dialyzer emits an `:exact_compare` warning tag that
+# dialyxir's `github`/`dialyxir`/`short` formatters don't recognize yet,
+# which crashes the formatter (Dialyxir.Formatter.Utils.warning/1 throws
+# `{:error, :unknown_warning, :exact_compare}`). `--format dialyzer` uses
+# Erlang's own `:dialyzer.format_warning/2` and isn't affected.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  dialyzer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    continue-on-error: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28.5"
+          elixir-version: "1.19.5"
+
+      - name: Cache Mix deps and build (incl. PLTs)
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-dialyzer-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-dialyzer-
+
+      - name: Install deps
+        run: mix deps.get
+
+      - name: Compile
+        run: mix compile
+
+      - name: Build/refresh PLTs
+        run: mix dialyzer --plt
+
+      - name: Run Dialyzer
+        run: mix dialyzer --format dialyzer

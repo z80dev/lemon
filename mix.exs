@@ -8,7 +8,8 @@ defmodule Lemon.MixProject do
       start_permanent: Mix.env() == :prod,
       # Coverage thresholds are enforced per app; see each app's mix.exs.
       deps: deps(),
-      releases: releases()
+      releases: releases(),
+      dialyzer: dialyzer()
     ]
   end
 
@@ -17,7 +18,22 @@ defmodule Lemon.MixProject do
   # the apps folder.
   defp deps do
     [
-      {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
+    ]
+  end
+
+  # Advisory Dialyzer lane (see .github/workflows/dialyzer.yml). PLTs are
+  # written under _build/ so they're picked up by the existing gitignore
+  # rule and can be cached in CI keyed on mix.lock.
+  defp dialyzer do
+    [
+      plt_core_path: "_build/dialyzer",
+      plt_local_path: "_build/dialyzer",
+      plt_add_apps: [:mix, :ex_unit, :public_key],
+      flags: [:error_handling, :unmatched_returns],
+      ignore_warnings: ".dialyzer_ignore.exs",
+      list_unused_filters: true
     ]
   end
 

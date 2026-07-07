@@ -32,7 +32,12 @@ defmodule LemonCore.MixProject do
       {:phoenix_pubsub, "~> 2.1"},
       {:telemetry, "~> 1.0"},
       {:exqlite, "~> 0.34.0"},
-      {:file_system, "~> 1.0", optional: true}
+      {:file_system, "~> 1.0", optional: true},
+      # Error reporting sink (see docs/error-reporting.md). Dormant unless
+      # SENTRY_DSN is set at runtime. Finch is Sentry's default HTTP client
+      # as of v12+, so it's an explicit (non-optional) dep here.
+      {:sentry, "~> 13.0"},
+      {:finch, "~> 0.21"}
     ]
   end
 end
