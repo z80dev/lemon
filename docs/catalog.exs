@@ -466,5 +466,11 @@
     owner: "@z80",
     last_reviewed: ~D[2026-05-02],
     max_age_days: 90
+  },
+  %{
+    path: "docs/plans/gateway-channels-transport-migration.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-07-07],
+    max_age_days: 180
   }
 ]

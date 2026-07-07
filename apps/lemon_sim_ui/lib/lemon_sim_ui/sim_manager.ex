@@ -791,16 +791,24 @@ defmodule LemonSimUi.SimManager do
 
   defp maybe_start_post_launch_tasks(_domain, _initial_state, _run_opts), do: :ok
 
+  # Runners are supervised children of LemonSimUi.SimRunnerSupervisor (not
+  # linked to this GenServer), so a runner crash can never take SimManager
+  # down and cleanup of the dead child is OTP-managed. SimManager still
+  # `Process.monitor/1`s the child pid itself so the existing :DOWN-based
+  # bookkeeping (runners map cleanup, auto-loop restart, usage collector
+  # teardown) keeps working unchanged.
   defp start_runner(initial_state, modules, run_opts, human_player) do
-    pid =
-      spawn_link(fn ->
-        if human_player do
-          run_interactive(initial_state, modules, run_opts, human_player)
-        else
-          run_ai_only(initial_state, modules, run_opts)
-        end
-      end)
+    fun = fn ->
+      if human_player do
+        run_interactive(initial_state, modules, run_opts, human_player)
+      else
+        run_ai_only(initial_state, modules, run_opts)
+      end
+    end
 
+    child_spec = %{id: make_ref(), start: {Task, :start_link, [fun]}, restart: :temporary}
+
+    {:ok, pid} = DynamicSupervisor.start_child(LemonSimUi.SimRunnerSupervisor, child_spec)
     Process.monitor(pid)
     pid
   end
@@ -816,38 +824,70 @@ defmodule LemonSimUi.SimManager do
     terminal? = Keyword.get(opts, :terminal?, fn _s -> false end)
     max_turns = Keyword.get(opts, :driver_max_turns, 50)
     model_assignments = Keyword.get(opts, :model_assignments)
-
-    # If multi-model, set up the model-switching complete_fn
-    opts =
-      if model_assignments do
-        {default_model, default_key} = model_assignments |> Map.values() |> List.first()
-        {:ok, model_agent} = Agent.start_link(fn -> {default_model, default_key} end)
-
-        complete_fn = fn _model, context, stream_options ->
-          {actual_model, api_key} = Agent.get(model_agent, & &1)
-          actual_stream_options = stream_options |> Map.new() |> Map.put(:api_key, api_key)
-          Ai.complete(actual_model, context, actual_stream_options)
-        end
-
-        on_before_step = fn _turn, step_state ->
-          actor_id = LemonCore.MapHelpers.get_key(step_state.world, :active_actor_id)
-
-          case Map.get(model_assignments, actor_id) do
-            {model, key} -> Agent.update(model_agent, fn _ -> {model, key} end)
-            nil -> :ok
-          end
-        end
-
-        opts
-        |> Keyword.put(:complete_fn, complete_fn)
-        |> Keyword.put(:on_before_step, on_before_step)
-      else
-        opts
-      end
+    opts = build_model_switch_opts(opts, model_assignments)
 
     do_ai_loop(state, modules, opts, terminal?, max_turns, 0)
   end
 
+  # Mirrors the per-seat model-switching in
+  # `LemonSim.LLM.GameHelpers.Runner.run_multi_model/5` (Agent-holds-active-model,
+  # `complete_fn` reads it, `on_before_step` swaps it based on `active_actor_id`).
+  # Kept local rather than calling `run_multi_model/5` itself: that function owns
+  # its own `Runner.run_until_terminal/3` call with no way to resume from a
+  # mid-run failure (see the retry/crash handling in `do_ai_loop/7` below), so
+  # reusing it here would mean losing step-retry without gaining anything —
+  # `GameHelpers.Runner` would need a resumable-loop hook first.
+  defp build_model_switch_opts(opts, nil), do: opts
+
+  defp build_model_switch_opts(opts, model_assignments) do
+    {default_model, default_key} = model_assignments |> Map.values() |> List.first()
+    {:ok, model_agent} = Agent.start_link(fn -> {default_model, default_key} end)
+
+    complete_fn = fn _model, context, stream_options ->
+      {actual_model, api_key} = Agent.get(model_agent, & &1)
+      actual_stream_options = stream_options |> Map.new() |> Map.put(:api_key, api_key)
+      Ai.complete(actual_model, context, actual_stream_options)
+    end
+
+    on_before_step = fn _turn, step_state ->
+      actor_id = LemonCore.MapHelpers.get_key(step_state.world, :active_actor_id)
+
+      case Map.get(model_assignments, actor_id) do
+        {model, key} -> Agent.update(model_agent, fn _ -> {model, key} end)
+        nil -> :ok
+      end
+    end
+
+    opts
+    |> Keyword.put(:complete_fn, complete_fn)
+    |> Keyword.put(:on_before_step, on_before_step)
+  end
+
+  # `do_ai_loop/6,7` deliberately does not delegate to the shared
+  # `LemonSim.Kernel.Runner.run_until_terminal/3` loop used by the CLI path
+  # (`GameHelpers.Runner.run/5` and `run_multi_model/5`). Both still call the
+  # same per-turn primitive (`Runner.step/3`, unchanged below); what differs is
+  # the orchestration around it, for two reasons `run_until_terminal/3` can't
+  # currently support:
+  #
+  #   1. Per-step retry-with-backoff and crash recovery. A failed/crashed step
+  #      here resumes from the last good in-memory state; `run_until_terminal/3`
+  #      has no such hook and, on error, returns only `{:error, reason}` — the
+  #      state at the point of failure is discarded, so there's nothing to
+  #      resume from.
+  #   2. Decision-trace threading. `append_decision_trace/4` folds a summary of
+  #      each step into `state.plan_history`, which `SectionedProjector` shows
+  #      back to the model as the `:plan_history` prompt section on every
+  #      subsequent turn. `run_until_terminal/3`'s `on_after_step` hook is
+  #      notify-only (its return value is discarded, see `maybe_notify/3` in
+  #      lemon_sim's Kernel.Runner) and always recurses on the raw
+  #      `result.state` — there is no way to feed a transformed state back into
+  #      the loop, so plan_history would never accumulate if this drove the CLI
+  #      loop directly.
+  #
+  # Closing this gap in lemon_sim would need an `on_after_step` (or dedicated
+  # `transform_step`) hook whose `{:ok, new_state}` return replaces the state
+  # fed into the next iteration.
   defp do_ai_loop(state, _modules, _opts, _terminal?, max_turns, turn)
        when turn >= max_turns do
     Logger.warning("[SimManager] #{state.sim_id} hit max turns (#{max_turns})",
@@ -894,18 +934,12 @@ defmodule LemonSimUi.SimManager do
       Store.put_state(state)
       broadcast_update(state)
     else
-      # Call on_before_step if provided (used by multi-model to switch the active model)
-      case Keyword.get(opts, :on_before_step) do
-        f when is_function(f, 2) -> f.(turn, state)
-        _ -> :ok
-      end
+      maybe_call_on_before_step(opts, turn, state)
 
       try do
         case Runner.step(state, modules, opts) do
           {:ok, result} ->
-            next_state = append_decision_trace(result.state, state, turn + 1, result)
-            Store.put_state(next_state)
-            broadcast_update(next_state)
+            next_state = advance_after_successful_step(state, result, turn)
             Process.sleep(500)
             do_ai_loop(next_state, modules, opts, terminal?, max_turns, turn + 1, 0)
 
@@ -1008,17 +1042,11 @@ defmodule LemonSimUi.SimManager do
             broadcast_update(state)
         end
       else
-        # Call on_before_step for multi-model switching
-        case Keyword.get(opts, :on_before_step) do
-          f when is_function(f, 2) -> f.(turn, state)
-          _ -> :ok
-        end
+        maybe_call_on_before_step(opts, turn, state)
 
         case Runner.step(state, modules, opts) do
           {:ok, result} ->
-            next_state = append_decision_trace(result.state, state, turn + 1, result)
-            Store.put_state(next_state)
-            broadcast_update(next_state)
+            next_state = advance_after_successful_step(state, result, turn)
             Process.sleep(500)
 
             do_interactive_loop(
@@ -1067,6 +1095,28 @@ defmodule LemonSimUi.SimManager do
       true ->
         false
     end
+  end
+
+  # Shared between do_ai_loop/7 and do_interactive_loop/7's AI-turn branch:
+  # invokes the multi-model on_before_step hook (a no-op for single-model runs).
+  defp maybe_call_on_before_step(opts, turn, state) do
+    case Keyword.get(opts, :on_before_step) do
+      f when is_function(f, 2) -> f.(turn, state)
+      _ -> :ok
+    end
+  end
+
+  # Shared between do_ai_loop/7 and do_interactive_loop/7's AI-turn branch: folds
+  # the step's decision into plan_history (read back by SectionedProjector as
+  # the :plan_history prompt section, so it must be part of the returned state
+  # rather than a side effect — see the do_ai_loop/6,7 design note above),
+  # persists, and broadcasts. Returns the traced state for the caller to
+  # recurse on.
+  defp advance_after_successful_step(before_state, result, turn) do
+    next_state = append_decision_trace(result.state, before_state, turn + 1, result)
+    Store.put_state(next_state)
+    broadcast_update(next_state)
+    next_state
   end
 
   defp on_after_step(_turn, %{state: next_state}) do
@@ -1493,20 +1543,23 @@ defmodule LemonSimUi.SimManager do
     if players != %{} and existing_profiles == %{} and model do
       sim_id = initial_state.sim_id
 
-      Task.start(fn ->
-        case LemonSim.Examples.Werewolf.Lore.generate(
-               players,
-               backstory_connections,
-               model,
-               stream_options
-             ) do
-          {:ok, profiles} when map_size(profiles) > 0 ->
-            merge_werewolf_character_profiles(sim_id, profiles)
+      {:ok, _pid} =
+        Task.Supervisor.start_child(LemonSimUi.TaskSupervisor, fn ->
+          case LemonSim.Examples.Werewolf.Lore.generate(
+                 players,
+                 backstory_connections,
+                 model,
+                 stream_options
+               ) do
+            {:ok, profiles} when map_size(profiles) > 0 ->
+              merge_werewolf_character_profiles(sim_id, profiles)
 
-          _ ->
-            :ok
-        end
-      end)
+            _ ->
+              :ok
+          end
+        end)
+
+      :ok
     else
       :ok
     end
