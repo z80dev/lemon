@@ -5,10 +5,10 @@ defmodule LemonSim.LLM.GameHelpers.RunnerTest do
   alias LemonSim.LLM.GameHelpers.Runner, as: GameRunner
 
   @modules %{
-    action_space: __MODULE__.ActionSpaceStub,
-    projector: __MODULE__.ProjectorStub,
-    decider: __MODULE__.CounterDeciderStub,
-    updater: __MODULE__.FlakyUpdaterStub
+    action_space: __MODULE__.GhActionSpaceStub,
+    projector: __MODULE__.GhProjectorStub,
+    decider: __MODULE__.GhCounterDeciderStub,
+    updater: __MODULE__.GhFlakyUpdaterStub
   }
 
   defp default_opts_fn, do: fn _overrides -> [] end
@@ -128,7 +128,7 @@ defmodule LemonSim.LLM.GameHelpers.RunnerTest do
     end
   end
 
-  defmodule ActionSpaceStub do
+  defmodule GhActionSpaceStub do
     @behaviour LemonSim.Kernel.ActionSpace
 
     @impl true
@@ -148,7 +148,7 @@ defmodule LemonSim.LLM.GameHelpers.RunnerTest do
     end
   end
 
-  defmodule ProjectorStub do
+  defmodule GhProjectorStub do
     @behaviour LemonSim.Kernel.Projector
 
     @impl true
@@ -161,7 +161,7 @@ defmodule LemonSim.LLM.GameHelpers.RunnerTest do
     end
   end
 
-  defmodule CounterDeciderStub do
+  defmodule GhCounterDeciderStub do
     @behaviour LemonSim.Kernel.Decider
 
     @impl true
@@ -172,7 +172,7 @@ defmodule LemonSim.LLM.GameHelpers.RunnerTest do
 
   # Fails the update the turn `state.world["turns"]` is about to become
   # `opts[:fail_at_turn]`; succeeds (and increments "turns") otherwise.
-  defmodule FlakyUpdaterStub do
+  defmodule GhFlakyUpdaterStub do
     @behaviour LemonSim.Kernel.Updater
 
     @impl true

@@ -4,10 +4,10 @@ defmodule LemonSim.Kernel.RunnerTest do
   alias LemonSim.Kernel.{DecisionFrame, Event, Runner, State}
 
   @modules %{
-    action_space: __MODULE__.ActionSpaceStub,
-    projector: __MODULE__.ProjectorStub,
-    decider: __MODULE__.CounterDeciderStub,
-    updater: __MODULE__.FlakyUpdaterStub
+    action_space: __MODULE__.KernelActionSpaceStub,
+    projector: __MODULE__.KernelProjectorStub,
+    decider: __MODULE__.KernelCounterDeciderStub,
+    updater: __MODULE__.KernelFlakyUpdaterStub
   }
 
   describe "on_after_step transform" do
@@ -174,7 +174,7 @@ defmodule LemonSim.Kernel.RunnerTest do
     end
   end
 
-  defmodule ActionSpaceStub do
+  defmodule KernelActionSpaceStub do
     @behaviour LemonSim.Kernel.ActionSpace
 
     @impl true
@@ -194,7 +194,7 @@ defmodule LemonSim.Kernel.RunnerTest do
     end
   end
 
-  defmodule ProjectorStub do
+  defmodule KernelProjectorStub do
     @behaviour LemonSim.Kernel.Projector
 
     @impl true
@@ -207,7 +207,7 @@ defmodule LemonSim.Kernel.RunnerTest do
     end
   end
 
-  defmodule CounterDeciderStub do
+  defmodule KernelCounterDeciderStub do
     @behaviour LemonSim.Kernel.Decider
 
     @impl true
@@ -220,7 +220,7 @@ defmodule LemonSim.Kernel.RunnerTest do
   # is about to become `opts[:fail_at_turn]`; succeeds (and increments "turns")
   # on every other call, so the game log-progress before the fault is
   # deterministic and reproducible.
-  defmodule FlakyUpdaterStub do
+  defmodule KernelFlakyUpdaterStub do
     @behaviour LemonSim.Kernel.Updater
 
     @impl true

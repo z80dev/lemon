@@ -89,4 +89,4 @@ When adding or changing an agent capability:
 7. Add focused deterministic tests and, when model behavior matters, an opt-in
    live-model eval.
 
-*Last reviewed: 2026-05-06*
+*Last reviewed: 2026-07-06*

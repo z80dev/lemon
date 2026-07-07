@@ -260,7 +260,7 @@
   %{
     path: "docs/security/agent-safety-contract.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-06],
+    last_reviewed: ~D[2026-07-06],
     max_age_days: 60
   },
   %{
