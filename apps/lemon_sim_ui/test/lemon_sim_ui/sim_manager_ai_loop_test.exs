@@ -14,8 +14,19 @@ defmodule LemonSimUi.SimManagerAiLoopTest do
   alias LemonSim.Kernel.Store
   alias LemonSimUi.SimManager
 
+  # SimManager is a global singleton and Store persists sim state, so
+  # anything created here leaks into other tests' listings (e.g.
+  # SimDashboardLiveTest's "0 active" mount assertion) unless removed.
+  defp cleanup_sim(sim_id) do
+    on_exit(fn ->
+      SimManager.stop_sim(sim_id)
+      Store.delete_state(sim_id)
+    end)
+  end
+
   test "the delegated loop persists+broadcasts every turn, accumulates plan_history, and cleans up on natural completion" do
     sim_id = "auc_delegation_#{System.unique_integer([:positive])}"
+    cleanup_sim(sim_id)
 
     complete_fn = fn _model, _context, _stream_opts ->
       {:ok, tool_call("pass_auction", %{})}
@@ -61,6 +72,7 @@ defmodule LemonSimUi.SimManagerAiLoopTest do
 
   test "a single transient step crash is retried from the last good state and the game keeps going" do
     sim_id = "auc_retry_#{System.unique_integer([:positive])}"
+    cleanup_sim(sim_id)
 
     {:ok, call_count} = Agent.start_link(fn -> 0 end)
 
