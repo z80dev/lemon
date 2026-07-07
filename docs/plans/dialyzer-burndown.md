@@ -371,12 +371,14 @@ job level in `.github/workflows/dialyzer.yml`). Recommended path to make
 parts of it blocking, without a big-bang "fix everything or nothing":
 
 **Phase 1 — config + mechanical fixes (small, bounded, do first):**
-- Add `:nostrum` to `plt_add_apps` in root `mix.exs` `dialyzer/0`
-  (kills 7-8 `unknown_function` warnings; config-only).
-- Fix the 9 `unknown_type` stale-alias bugs (mechanical, one alias/type
-  target per site).
-- Fix the `x_api/client.ex:585` crash bug (small, `Map.get` instead of
-  `List.keyfind`).
+- DONE (68192db0): `:nostrum` in `plt_add_apps`, the 9 `unknown_type`
+  stale-alias fixes, and the `x_api/client.ex` 429-crash fix with a
+  regression test — `unknown_type`/`unknown_function` both at 0.
+- NEW LEAD unlocked by the nostrum PLT fix: `call_arg_mismatch` at
+  `lemon_channels/adapters/discord/transport.ex:3171` —
+  `Nostrum.Api.Webhook.execute/3` called with a 3rd-arg shape that
+  doesn't match its success typing (possible arg-order/shape bug on the
+  Discord webhook path). Uninvestigated; first item for the next pass.
 - Investigate and resolve the "line 1: pattern false can never match true"
   artifact class (macro/compiler-expansion attribution issue) enough to
   either fix it or add it to `.dialyzer_ignore.exs` with a confirmed root
