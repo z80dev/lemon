@@ -316,7 +316,7 @@ defmodule AgentCore.Agent do
 
   Valid levels: :off, :minimal, :low, :medium, :high, :xhigh
   """
-  @spec set_thinking_level(GenServer.server(), AgentState.thinking_level()) :: :ok
+  @spec set_thinking_level(GenServer.server(), Types.thinking_level()) :: :ok
   def set_thinking_level(agent, level) do
     GenServer.call(agent, {:set_thinking_level, level})
   end
@@ -1215,7 +1215,7 @@ defmodule AgentCore.Agent do
     }
   end
 
-  @spec broadcast_event(state(), AgentEvent.t()) :: :ok
+  @spec broadcast_event(state(), Types.agent_event()) :: :ok
   defp broadcast_event(state, event) do
     Enum.each(state.listeners, fn {pid, _ref} ->
       send(pid, {:agent_event, event})

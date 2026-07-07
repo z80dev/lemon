@@ -11,6 +11,11 @@ defmodule LemonRouter.SmartRouting do
 
   defmodule Config do
     @moduledoc false
+    @type t :: %__MODULE__{
+            cascade_enabled: boolean(),
+            simple_max_chars: non_neg_integer(),
+            complex_min_chars: non_neg_integer()
+          }
     defstruct cascade_enabled: true,
               simple_max_chars: 200,
               complex_min_chars: 1000
@@ -19,8 +24,19 @@ defmodule LemonRouter.SmartRouting do
   @complex_keywords ~w(implement refactor analyze debug create build design fix
     write explain compare optimize review rewrite migrate architect integrate)
 
-  @simple_keywords ["list", "show", "what is", "status", "help", "yes", "no",
-    "thanks", "hello", "hi", "version"]
+  @simple_keywords [
+    "list",
+    "show",
+    "what is",
+    "status",
+    "help",
+    "yes",
+    "no",
+    "thanks",
+    "hello",
+    "hi",
+    "version"
+  ]
 
   @uncertain_patterns [
     "i'm not sure",

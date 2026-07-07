@@ -30,7 +30,8 @@ defmodule LemonGateway.Engine do
   or `Event.completed/1`. Streaming text is sent as `{:engine_delta, run_ref, text}`.
   """
 
-  alias LemonGateway.Types.{Job, ResumeToken}
+  alias LemonCore.ResumeToken
+  alias LemonGateway.Types.Job
 
   @type run_opts :: %{
           optional(:cwd) => String.t(),

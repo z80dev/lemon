@@ -261,6 +261,41 @@ defmodule XApi.ClientTest do
     refute_received {:req, "/2/users/me/mentions"}
   end
 
+  test "post_text backs off and retries on a 429 with x-rate-limit-reset instead of raising" do
+    configure_oauth2()
+    start_token_manager!()
+    now_unix = System.system_time(:second)
+    Process.put(:tweet_attempts, 0)
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      case conn.request_path do
+        "/2/oauth2/token" ->
+          oauth_refresh_response(conn)
+
+        "/2/tweets" ->
+          attempt = Process.get(:tweet_attempts, 0) + 1
+          Process.put(:tweet_attempts, attempt)
+
+          if attempt == 1 do
+            conn
+            |> Plug.Conn.put_resp_header("x-rate-limit-reset", to_string(now_unix))
+            |> Plug.Conn.put_resp_content_type("application/json")
+            |> Plug.Conn.send_resp(429, Jason.encode!(%{"title" => "Too Many Requests"}))
+          else
+            conn
+            |> Plug.Conn.put_resp_content_type("application/json")
+            |> Plug.Conn.send_resp(201, Jason.encode!(%{"data" => %{"id" => "123"}}))
+          end
+
+        unexpected ->
+          flunk("unexpected request path: #{unexpected}")
+      end
+    end)
+
+    assert {:ok, %{"data" => %{"id" => "123"}}} = Client.post_text("hello")
+    assert Process.get(:tweet_attempts) == 2
+  end
+
   defp oauth_refresh_response(conn) do
     conn
     |> Plug.Conn.put_resp_content_type("application/json")

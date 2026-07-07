@@ -581,15 +581,30 @@ defmodule XApi.Client do
     String.slice(text, 0, 277) <> "..."
   end
 
-  defp get_retry_after(headers) do
-    case List.keyfind(headers, "x-rate-limit-reset", 0) do
-      {_, reset_time} ->
-        reset_unix = String.to_integer(reset_time)
-        now_unix = System.system_time(:second)
-        max((reset_unix - now_unix) * 1000, 1000)
+  # Req.Response.headers is a map of (lowercased) header name => list of
+  # values, not a list of {key, value} tuples — List.keyfind/3 never matches
+  # against it. Look the header up case-insensitively and take its first
+  # value, per Req's convention for repeated headers.
+  defp get_retry_after(headers) when is_map(headers) do
+    with {:ok, [value | _]} <- fetch_header(headers, "x-rate-limit-reset"),
+         {reset_unix, ""} <- Integer.parse(value) do
+      now_unix = System.system_time(:second)
+      max((reset_unix - now_unix) * 1000, 1000)
+    else
+      _ -> nil
+    end
+  end
 
-      nil ->
-        nil
+  defp get_retry_after(_headers), do: nil
+
+  defp fetch_header(headers, name) do
+    downcased_name = String.downcase(name)
+
+    headers
+    |> Enum.find(fn {key, _value} -> String.downcase(key) == downcased_name end)
+    |> case do
+      {_key, value} -> {:ok, value}
+      nil -> :error
     end
   end
 end

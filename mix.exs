@@ -30,7 +30,10 @@ defmodule Lemon.MixProject do
     [
       plt_core_path: "_build/dialyzer",
       plt_local_path: "_build/dialyzer",
-      plt_add_apps: [:mix, :ex_unit, :public_key],
+      # :nostrum is runtime: false in lemon_channels, so dialyxir's automatic
+      # per-app PLT discovery never pulls it in on its own; add it explicitly
+      # so Discord adapter calls into Nostrum.Api.* type-check.
+      plt_add_apps: [:mix, :ex_unit, :public_key, :nostrum],
       flags: [:error_handling, :unmatched_returns],
       ignore_warnings: ".dialyzer_ignore.exs",
       list_unused_filters: true

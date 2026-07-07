@@ -84,7 +84,7 @@ defmodule Ai.Types do
             api: atom() | String.t(),
             provider: atom() | String.t(),
             model: String.t(),
-            usage: Usage.t(),
+            usage: Ai.Types.Usage.t(),
             stop_reason: stop_reason(),
             error_message: String.t() | nil,
             timestamp: integer()

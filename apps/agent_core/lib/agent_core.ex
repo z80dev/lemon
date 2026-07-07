@@ -175,7 +175,7 @@ defmodule AgentCore do
   # ============================================================================
 
   @typedoc "Reference to an Agent GenServer process"
-  @type agent :: AgentCore.Agent.t()
+  @type agent :: GenServer.server()
 
   @typedoc "Events emitted during agent execution"
   @type event :: AgentCore.Types.agent_event()
@@ -253,7 +253,10 @@ defmodule AgentCore do
 
       :ok = AgentCore.prompt(agent, "What files are in the current directory?")
   """
-  @spec prompt(agent(), String.t() | Types.agent_message() | list(Types.agent_message())) ::
+  @spec prompt(
+          agent(),
+          String.t() | AgentCore.Types.agent_message() | list(AgentCore.Types.agent_message())
+        ) ::
           :ok | {:error, term()}
   defdelegate prompt(agent, message), to: AgentCore.Agent
 
