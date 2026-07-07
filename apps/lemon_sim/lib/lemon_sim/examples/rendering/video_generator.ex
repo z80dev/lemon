@@ -228,3 +228,82 @@ defmodule LemonSim.Examples.Rendering.VideoGenerator do
   defp format_file_size(bytes) when bytes < 1_048_576, do: "#{Float.round(bytes / 1024, 1)} KB"
   defp format_file_size(bytes), do: "#{Float.round(bytes / 1_048_576, 1)} MB"
 end
+
+defmodule LemonSim.Examples.Rendering.DomainVideoGenerator do
+  @moduledoc """
+  `use`-able macro that generates the boilerplate every scenario's
+  `VideoGenerator` module needs around `LemonSim.Examples.Rendering.VideoGenerator`:
+  the public `generate/2` and `check_dependencies/0` delegates plus the
+  `Config` struct built from the scenario's options.
+
+  A scenario module still owns the part that actually varies: the
+  event-to-hold-frames mapping (typically a private `hold_count_for/2`,
+  referenced by the default `:build_frames`).
+
+  ## Options
+
+    * `:frame_renderer` (required) - module with `render_frame/2`
+    * `:dir_name` (required) - temp-dir prefix
+    * `:read_entries` (required) - `(String.t() -> [map()])`, e.g. `&GameLog.read_log/1`
+    * `:read_message` - forwarded to `Config` (default: `"Read"`)
+    * `:read_subject` - forwarded to `Config` (default: `"log entries"`)
+    * `:build_frames` - overrides the default, which calls
+      `VideoGenerator.default_frames(entries, opts, &hold_count_for/2)` and
+      therefore requires the using module to define a private `hold_count_for/2`
+    * `:init_render_state` - forwarded to `Config`, for scenarios that thread
+      state (e.g. werewolf's elimination log) through the render loop
+    * `:render_opts` - forwarded to `Config`, paired with `:init_render_state`
+
+  `config/0` is generated as a private function and marked overridable, so a
+  scenario can redefine it outright if none of the above options fit.
+  """
+
+  defmacro __using__(opts) do
+    frame_renderer = Keyword.fetch!(opts, :frame_renderer)
+    dir_name = Keyword.fetch!(opts, :dir_name)
+    read_entries = Keyword.fetch!(opts, :read_entries)
+    read_message = Keyword.get(opts, :read_message, "Read")
+    read_subject = Keyword.get(opts, :read_subject, "log entries")
+    init_render_state = Keyword.get(opts, :init_render_state)
+    render_opts = Keyword.get(opts, :render_opts)
+
+    build_frames =
+      Keyword.get_lazy(opts, :build_frames, fn ->
+        quote do
+          fn entries, opts ->
+            VideoGenerator.default_frames(entries, opts, &hold_count_for/2)
+          end
+        end
+      end)
+
+    quote do
+      alias LemonSim.Examples.Rendering.VideoGenerator
+      alias LemonSim.Examples.Rendering.VideoGenerator.Config
+
+      @spec generate(String.t(), keyword()) :: {:ok, String.t()} | {:error, term()}
+      def generate(log_path, opts \\ []) do
+        VideoGenerator.generate(config(), log_path, opts)
+      end
+
+      @spec check_dependencies() :: :ok | {:error, {:missing_tools, [String.t()]}}
+      def check_dependencies do
+        VideoGenerator.check_dependencies()
+      end
+
+      defp config do
+        %Config{
+          frame_renderer: unquote(frame_renderer),
+          dir_name: unquote(dir_name),
+          read_entries: unquote(read_entries),
+          read_message: unquote(read_message),
+          read_subject: unquote(read_subject),
+          build_frames: unquote(build_frames),
+          init_render_state: unquote(init_render_state),
+          render_opts: unquote(render_opts)
+        }
+      end
+
+      defoverridable config: 0
+    end
+  end
+end

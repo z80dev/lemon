@@ -3,29 +3,11 @@ defmodule LemonSim.Examples.Diplomacy.VideoGenerator do
 
   alias LemonSim.Examples.Diplomacy.{FrameRenderer, GameLog}
   alias LemonSim.Examples.Rendering.FrameChrome
-  alias LemonSim.Examples.Rendering.VideoGenerator
-  alias LemonSim.Examples.Rendering.VideoGenerator.Config
 
-  @spec generate(String.t(), keyword()) :: {:ok, String.t()} | {:error, term()}
-  def generate(log_path, opts \\ []) do
-    VideoGenerator.generate(config(), log_path, opts)
-  end
-
-  @spec check_dependencies() :: :ok | {:error, {:missing_tools, [String.t()]}}
-  def check_dependencies do
-    VideoGenerator.check_dependencies()
-  end
-
-  defp config do
-    %Config{
-      frame_renderer: FrameRenderer,
-      dir_name: "lemon_diplomacy_replay",
-      read_entries: &GameLog.read_log/1,
-      build_frames: fn entries, opts ->
-        VideoGenerator.default_frames(entries, opts, &hold_count_for/2)
-      end
-    }
-  end
+  use LemonSim.Examples.Rendering.DomainVideoGenerator,
+    frame_renderer: FrameRenderer,
+    dir_name: "lemon_diplomacy_replay",
+    read_entries: &GameLog.read_log/1
 
   defp hold_count_for(entry, base_hold) do
     type = FrameChrome.get(entry, "type", "step")
