@@ -19,7 +19,10 @@ defmodule LemonSim.LLM.GameHelpers.Runner do
   ## Game options (keyword list)
     * `:game_name` (required) - name for error messages
     * `:max_turns` - maximum driver turns (default 200)
-    * `:provider_min_interval_ms` - optional per-provider request spacing, e.g. `%{google_gemini_cli: 5_000}`
+    * `:provider_min_interval_ms` - per-provider request spacing overrides, e.g.
+      `%{google_gemini_cli: 5_000}`. Providers not listed still get
+      `ProviderThrottle`'s default floor (see `:default_provider_min_interval_ms`);
+      pass `0` or `nil` here (instead of a map) to disable throttling entirely.
     * `:terminal?` (required) - fn(state) -> boolean
     * `:on_before_step` (required) - fn(turn, state) -> :ok
     * `:on_after_step` (required) - fn(turn, result) -> :ok

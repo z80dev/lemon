@@ -18,6 +18,14 @@ defmodule LemonSim.LLM.Deciders.ToolLoopDecider do
   @default_max_turns 8
   @default_max_tool_calls_per_turn 16
   @default_empty_response_retries 3
+  @default_transient_retries 3
+  @default_transient_backoff_base_ms 1_000
+  @default_transient_backoff_cap_ms 15_000
+
+  # Reasons synthesized by `Ai.EventStream.result/1` when the streaming
+  # process itself is gone or was canceled, rather than a provider HTTP
+  # error. Not covered by `Ai.Error`/`Ai.Providers.RetryHelper`.
+  @extra_retryable_atoms [:stream_not_found, :stream_closed]
 
   @type decision :: map()
   @type complete_fn ::
@@ -63,7 +71,7 @@ defmodule LemonSim.LLM.Deciders.ToolLoopDecider do
       stream_options = Keyword.get(opts, :stream_options, %{})
 
       with {:ok, %AssistantMessage{} = assistant} <-
-             complete_fn.(model, state.context, stream_options),
+             call_with_transient_retry(complete_fn, model, state.context, stream_options, opts),
            context_with_assistant <- append_message(state.context, assistant) do
         record_usage_response(opts, model, assistant)
 
@@ -321,6 +329,123 @@ defmodule LemonSim.LLM.Deciders.ToolLoopDecider do
   end
 
   defp default_empty_response_backoff(retry), do: Process.sleep(500 * retry)
+
+  # Retries transient LLM-call errors (rate limits, timeouts, connection
+  # errors, 5xx) with bounded exponential backoff. Non-retryable errors
+  # (auth, bad request) propagate on the first attempt.
+  defp call_with_transient_retry(complete_fn, model, context, stream_options, opts) do
+    max_retries = Keyword.get(opts, :transient_retries, @default_transient_retries)
+    call_with_transient_retry(complete_fn, model, context, stream_options, opts, max_retries, 0)
+  end
+
+  defp call_with_transient_retry(
+         complete_fn,
+         model,
+         context,
+         stream_options,
+         opts,
+         max_retries,
+         attempt
+       ) do
+    case complete_fn.(model, context, stream_options) do
+      {:error, reason} = error ->
+        if attempt < max_retries and transient_error?(reason) do
+          retry = attempt + 1
+
+          Logger.debug(
+            "ToolLoopDecider transient LLM error retry=#{retry} max_retries=#{max_retries} reason=#{inspect(reason)}"
+          )
+
+          case backoff_transient_error(opts, retry) do
+            :ok ->
+              call_with_transient_retry(
+                complete_fn,
+                model,
+                context,
+                stream_options,
+                opts,
+                max_retries,
+                retry
+              )
+
+            {:error, _reason} = backoff_error ->
+              backoff_error
+          end
+        else
+          error
+        end
+
+      other ->
+        other
+    end
+  end
+
+  defp backoff_transient_error(opts, retry) do
+    backoff =
+      Keyword.get(opts, :transient_backoff, fn r -> default_transient_backoff(r, opts) end)
+
+    if is_function(backoff, 1) do
+      backoff.(retry)
+      :ok
+    else
+      {:error, {:invalid_transient_backoff, backoff}}
+    end
+  end
+
+  defp default_transient_backoff(retry, opts) do
+    base_ms = Keyword.get(opts, :transient_backoff_base_ms, @default_transient_backoff_base_ms)
+    cap_ms = Keyword.get(opts, :transient_backoff_cap_ms, @default_transient_backoff_cap_ms)
+
+    delay =
+      base_ms
+      |> Ai.Providers.RetryHelper.exponential_backoff_with_jitter(retry - 1)
+      |> min(cap_ms)
+
+    Process.sleep(delay)
+  end
+
+  # `Ai.EventStream.result/1` may surface an `%AssistantMessage{}` carrying
+  # `error_message` (the common case, after the provider's own HTTP-level
+  # retries are exhausted), a bare transport atom/tuple, or `{:canceled, _}`.
+  defp transient_error?(%AssistantMessage{stop_reason: :error, error_message: message})
+       when is_binary(message) do
+    transient_error?(message)
+  end
+
+  defp transient_error?({:canceled, inner}), do: transient_error?(inner)
+  defp transient_error?(reason) when reason in @extra_retryable_atoms, do: true
+
+  defp transient_error?(reason) when is_binary(reason) do
+    not auth_error_text?(reason) and
+      (retryable_http_status_in_text?(reason) or
+         Ai.Error.retryable?(reason) or
+         Ai.Providers.RetryHelper.retryable_error_text?(reason))
+  end
+
+  defp transient_error?(reason) do
+    not Ai.Error.auth_error?(reason) and
+      (Ai.Error.retryable?(reason) or Ai.Providers.RetryHelper.retryable_transport_reason?(reason))
+  end
+
+  defp auth_error_text?(message) do
+    Regex.match?(~r/HTTP 40[13]\b/, message) or
+      message
+      |> String.downcase()
+      |> String.contains?([
+        "authentication failed",
+        "unauthorized",
+        "invalid api key",
+        "invalid_api_key",
+        "invalid x-api-key"
+      ])
+  end
+
+  defp retryable_http_status_in_text?(message) do
+    case Regex.run(~r/HTTP (\d{3})/, message) do
+      [_, status] -> Ai.Providers.RetryHelper.retryable_http_status?(String.to_integer(status))
+      _ -> false
+    end
+  end
 
   defp normalize_name(name) when is_binary(name), do: name |> String.trim() |> String.downcase()
   defp normalize_name(name), do: name |> to_string() |> normalize_name()
