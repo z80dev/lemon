@@ -252,12 +252,12 @@ Telegram/Discord rendering.
 Focused deterministic media tool lane:
 
 ```bash
-mix test apps/coding_agent/test/coding_agent/tools/media_status_test.exs \
-  apps/coding_agent/test/coding_agent/tools/media_generate_image_test.exs \
-  apps/coding_agent/test/coding_agent/tools/media_generate_speech_test.exs \
-  apps/coding_agent/test/coding_agent/tools/media_transcribe_audio_test.exs \
-  apps/coding_agent/test/coding_agent/tools/media_analyze_image_test.exs \
-  apps/coding_agent/test/coding_agent/tools/media_generate_video_test.exs \
+mix test apps/lemon_skills/test/lemon_skills/tools/media_status_test.exs \
+  apps/lemon_skills/test/lemon_skills/tools/media_generate_image_test.exs \
+  apps/lemon_skills/test/lemon_skills/tools/media_generate_speech_test.exs \
+  apps/lemon_skills/test/lemon_skills/tools/media_transcribe_audio_test.exs \
+  apps/lemon_skills/test/lemon_skills/tools/media_analyze_image_test.exs \
+  apps/lemon_skills/test/lemon_skills/tools/media_generate_video_test.exs \
   apps/coding_agent/test/coding_agent/tools_test.exs \
   apps/coding_agent/test/coding_agent/tool_registry_test.exs \
   apps/coding_agent/test/coding_agent/tool_policy_test.exs \

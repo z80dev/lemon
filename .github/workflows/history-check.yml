@@ -12,6 +12,7 @@ jobs:
   check-common-ancestor:
     name: Reject unrelated history
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout PR head with full history

@@ -156,7 +156,7 @@ bounded multi-worker leasing, crashed-worker failure marking, TUI command
 bridge, and support-bundle redaction:
 
 ```bash
-mix test apps/coding_agent/test/coding_agent/tools/kanban_test.exs \
+mix test apps/lemon_skills/test/lemon_skills/tools/kanban_test.exs \
   apps/lemon_core/test/lemon_core/kanban_store_test.exs \
   apps/lemon_automation/test/lemon_automation/kanban_dispatcher_test.exs \
   apps/lemon_automation/test/lemon_automation/kanban_dispatcher_live_test.exs \
@@ -476,7 +476,7 @@ the same safe attachment path:
 ```bash
 mix test apps/lemon_control_plane/test/lemon_control_plane/methods/optional_parity_methods_extended_test.exs \
   apps/lemon_control_plane/test/lemon_control_plane/protocol/schemas_test.exs \
-  apps/lemon_core/test/lemon_core/media_jobs_test.exs \
+  apps/lemon_media/test/lemon_media/media_jobs_test.exs \
   apps/lemon_core/test/lemon_core/doctor/support_bundle_test.exs \
   apps/lemon_web/test/lemon_web_test.exs \
   apps/lemon_router/test/lemon_router/artifact_tracker_test.exs \
@@ -505,8 +505,8 @@ completed/failed metadata transitions, PubSub lifecycle events, artifact
 recording, and error redaction:
 
 ```bash
-mix test apps/lemon_core/test/lemon_core/media_job_supervisor_test.exs \
-  apps/lemon_core/test/lemon_core/media_jobs_test.exs --seed 1
+mix test apps/lemon_media/test/lemon_media/media_job_supervisor_test.exs \
+  apps/lemon_media/test/lemon_media/media_jobs_test.exs --seed 1
 ```
 
 This lane passed locally on 2026-05-16 with `5 tests, 0 failures`.
@@ -529,12 +529,12 @@ preservation through the Lemon runner, channel
 generated-file gating, tool registry membership, and policy profile behavior:
 
 ```bash
-mix test apps/coding_agent/test/coding_agent/tools/media_status_test.exs \
-  apps/coding_agent/test/coding_agent/tools/media_generate_image_test.exs \
-  apps/coding_agent/test/coding_agent/tools/media_generate_speech_test.exs \
-  apps/coding_agent/test/coding_agent/tools/media_transcribe_audio_test.exs \
-  apps/coding_agent/test/coding_agent/tools/media_analyze_image_test.exs \
-  apps/coding_agent/test/coding_agent/tools/media_generate_video_test.exs \
+mix test apps/lemon_skills/test/lemon_skills/tools/media_status_test.exs \
+  apps/lemon_skills/test/lemon_skills/tools/media_generate_image_test.exs \
+  apps/lemon_skills/test/lemon_skills/tools/media_generate_speech_test.exs \
+  apps/lemon_skills/test/lemon_skills/tools/media_transcribe_audio_test.exs \
+  apps/lemon_skills/test/lemon_skills/tools/media_analyze_image_test.exs \
+  apps/lemon_skills/test/lemon_skills/tools/media_generate_video_test.exs \
   apps/coding_agent/test/coding_agent/tools_test.exs \
   apps/coding_agent/test/coding_agent/tool_registry_test.exs \
   apps/coding_agent/test/coding_agent/tool_policy_test.exs \
@@ -548,8 +548,8 @@ The focused untrusted-output slice for media transcript and image-analysis text
 also passed locally on 2026-05-16:
 
 ```bash
-mix test apps/coding_agent/test/coding_agent/tools/media_analyze_image_test.exs \
-  apps/coding_agent/test/coding_agent/tools/media_transcribe_audio_test.exs \
+mix test apps/lemon_skills/test/lemon_skills/tools/media_analyze_image_test.exs \
+  apps/lemon_skills/test/lemon_skills/tools/media_transcribe_audio_test.exs \
   apps/coding_agent/test/coding_agent/security/untrusted_tool_boundary_test.exs --seed 1
 ```
 
@@ -684,8 +684,8 @@ termination, and document open/change/close notification redaction:
 
 ```bash
 mix test apps/coding_agent/test/coding_agent/tools/lsp_diagnostics_test.exs \
-  apps/lemon_core/test/lemon_core/lsp_servers_test.exs \
-  apps/lemon_core/test/lemon_core/lsp_server_manager_test.exs \
+  apps/lemon_lsp/test/lemon_lsp/lsp_servers_test.exs \
+  apps/lemon_lsp/test/lemon_lsp/lsp_server_manager_test.exs \
   apps/lemon_core/test/lemon_core/doctor/lsp_diagnostics_test.exs \
   apps/lemon_core/test/lemon_core/doctor/support_bundle_test.exs \
   apps/lemon_core/test/lemon_core/application_test.exs \

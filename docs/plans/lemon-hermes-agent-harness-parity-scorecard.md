@@ -185,8 +185,8 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 
 - Current Lemon status: partial / strong foundation.
 - Current modules/docs:
-  - `apps/coding_agent/lib/coding_agent/tools/search_memory.ex`
-  - `apps/coding_agent/lib/coding_agent/tools/memory_topic.ex`
+  - `apps/lemon_skills/lib/lemon_skills/tools/search_memory.ex`
+  - `apps/lemon_skills/lib/lemon_skills/tools/memory_topic.ex`
   - `apps/lemon_core/lib/**memory**`
   - `docs/user-guide/memory.md`
 - Strengths:
@@ -3034,7 +3034,7 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
    `.lemon/proofs/media-video-smoke-latest.json`, so video remains blocked by
    provider/project permission rather than Lemon media-worker routing.
 4. Focused validation passed with
-   `MIX_ENV=test mix test apps/coding_agent/test/coding_agent/tools/media_generate_video_test.exs apps/lemon_core/test/lemon_core/doctor/checks_test.exs apps/lemon_web/test/lemon_web_test.exs --seed 1`:
+   `MIX_ENV=test mix test apps/lemon_skills/test/lemon_skills/tools/media_generate_video_test.exs apps/lemon_core/test/lemon_core/doctor/checks_test.exs apps/lemon_web/test/lemon_web_test.exs --seed 1`:
    `55 + 7 + 35 tests, 0 failures`.
 
 ### Slice 219: Discord free-response live proof promotion

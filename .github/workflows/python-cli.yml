@@ -22,6 +22,7 @@ jobs:
   package-check:
     name: Lint, test, and build
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout

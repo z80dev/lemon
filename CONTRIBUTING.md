@@ -13,6 +13,7 @@ Thank you for your interest in contributing. This document covers the basics.
 ```bash
 git clone https://github.com/z80dev/lemon.git
 cd lemon
+asdf install   # or `mise install` — toolchain is pinned in .tool-versions (Elixir 1.19.5 / OTP 28.5, same as CI)
 mix deps.get && mix compile
 mix lemon.doctor
 ```

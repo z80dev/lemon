@@ -106,8 +106,8 @@ Focused LSP coverage:
 
 ```bash
 mix test apps/coding_agent/test/coding_agent/tools/lsp_diagnostics_test.exs \
-  apps/lemon_core/test/lemon_core/lsp_servers_test.exs \
-  apps/lemon_core/test/lemon_core/lsp_server_manager_test.exs \
+  apps/lemon_lsp/test/lemon_lsp/lsp_servers_test.exs \
+  apps/lemon_lsp/test/lemon_lsp/lsp_server_manager_test.exs \
   apps/lemon_control_plane/test/lemon_control_plane/methods/optional_parity_methods_extended_test.exs \
   apps/lemon_control_plane/test/lemon_control_plane/protocol/schemas_test.exs --seed 1
 ```
@@ -116,8 +116,8 @@ Broader preview lane:
 
 ```bash
 mix test apps/coding_agent/test/coding_agent/tools/lsp_diagnostics_test.exs \
-  apps/lemon_core/test/lemon_core/lsp_servers_test.exs \
-  apps/lemon_core/test/lemon_core/lsp_server_manager_test.exs \
+  apps/lemon_lsp/test/lemon_lsp/lsp_servers_test.exs \
+  apps/lemon_lsp/test/lemon_lsp/lsp_server_manager_test.exs \
   apps/lemon_core/test/lemon_core/doctor/lsp_diagnostics_test.exs \
   apps/lemon_core/test/lemon_core/doctor/support_bundle_test.exs \
   apps/lemon_core/test/lemon_core/application_test.exs \
