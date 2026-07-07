@@ -33,9 +33,14 @@ env:
   LEMON_WEB_PORT: "14080"
   LEMON_SIM_UI_PORT: "14090"
   LEMON_GATEWAY_NODE_COOKIE: "product-smoke-cookie"
-  # Release endpoints only start their HTTP servers when PHX_SERVER is set
-  # (config/runtime.exs configure_endpoint); without it the web healthz
-  # check gets ECONNREFUSED. Broken by the endpoint refactor in 260bc965.
+  # Phoenix releases never bind an HTTP listener on their own — the `:server`
+  # endpoint option (set here via configure_endpoint/5 in config/runtime.exs,
+  # gated on PHX_SERVER) is opt-in by design, so release commands like `eval`
+  # and `rpc` don't need a bound socket. This predates the endpoint refactor
+  # in 260bc965 (that commit only changed *whether* an endpoint gets any
+  # config at all, via release-name/secret-key-base matching, not this
+  # PHX_SERVER gate). Without PHX_SERVER=1 here, the web healthz check below
+  # would get ECONNREFUSED.
   PHX_SERVER: "1"
 
 jobs:

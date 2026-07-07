@@ -1,5 +1,17 @@
 name: Quality
 
+# Split into parallel jobs so wall-clock drops on every PR/push:
+#   - detect-changes: cheap path filter, used to skip wasm-runtime when
+#     nothing WASM-related changed (never skips on push to main).
+#   - quality: fast lint/boundary/contract checks (compile, format, credo,
+#     docs/CI policy, skill lint, duplicate-test check, quality test suite).
+#   - wasm-runtime: Rust toolchain + native runtime cargo test + the WASM
+#     integration test, which is the only piece that needs Rust at all.
+#   - eval-regression: the deterministic regression loop and the eval
+#     harness, both of which are slow because they repeat runs, not because
+#     they need any extra toolchain.
+#   - elixir-test-suite / clients: unchanged.
+
 on:
   pull_request:
   push:
@@ -10,6 +22,27 @@ permissions:
   contents: read
 
 jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      wasm: ${{ steps.filter.outputs.wasm }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect WASM-related changes
+        uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            wasm:
+              - 'native/**'
+              - 'apps/coding_agent/lib/coding_agent/wasm/**'
+              - 'apps/coding_agent/test/coding_agent/wasm_integration_test.exs'
+              - '.github/workflows/quality.yml'
+
   quality:
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -24,9 +57,6 @@ jobs:
           otp-version: "28.5"
           elixir-version: "1.19.5"
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
       - name: Cache Mix deps and build
         uses: actions/cache@v4
         with:
@@ -36,12 +66,6 @@ jobs:
           key: ${{ runner.os }}-mix-quality-${{ hashFiles('mix.lock') }}
           restore-keys: |
             ${{ runner.os }}-mix-quality-
-
-      - name: Install WASM target
-        run: rustup target add wasm32-wasip2
-
-      - name: Run WASM runtime tests
-        run: cargo test --manifest-path native/lemon-wasm-runtime/Cargo.toml
 
       - name: Install system deps
         run: sudo apt-get update && sudo apt-get install -y inotify-tools
@@ -65,21 +89,6 @@ jobs:
             exit 1
           fi
 
-      - name: Deterministic regression loop
-        run: |
-          for i in 1 2; do
-            echo "Deterministic regression pass #$i"
-            mix test \
-              apps/coding_agent/test/coding_agent/session_overflow_recovery_test.exs \
-              apps/coding_agent/test/coding_agent/tools/fuzzy_test.exs \
-              apps/lemon_skills/test/lemon_skills/discovery_readme_test.exs \
-              apps/lemon_skills/test/mix/tasks/lemon.skill_test.exs \
-              apps/lemon_skills/test/lemon_skills/prompt_regression_test.exs
-          done
-
-      - name: Run WASM integration tests
-        run: RUSTUP_HOME="$HOME/.rustup" CARGO_HOME="$HOME/.cargo" mix test apps/coding_agent/test/coding_agent/wasm_integration_test.exs --include integration
-
       - name: Lint builtin skills
         run: mix lemon.skill.lint
 
@@ -95,11 +104,114 @@ jobs:
       - name: Check for duplicate test modules
         run: mix lemon.check_duplicate_tests
 
-      - name: Run eval harness
-        run: mix lemon.eval --iterations 20
-
       - name: Run quality test suite
         run: mix test apps/lemon_core/test/lemon_core/quality apps/lemon_evals/test/lemon_evals/harness_test.exs
+
+  wasm-runtime:
+    needs: detect-changes
+    if: github.ref == 'refs/heads/main' || needs.detect-changes.outputs.wasm == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28.5"
+          elixir-version: "1.19.5"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Mix deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-wasm-runtime-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-wasm-runtime-
+
+      - name: Cache Cargo registry and native runtime target dir
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            native/lemon-wasm-runtime/target
+          key: ${{ runner.os }}-cargo-wasm-runtime-${{ hashFiles('native/lemon-wasm-runtime/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-wasm-runtime-
+
+      - name: Install WASM target
+        run: rustup target add wasm32-wasip2
+
+      - name: Run WASM runtime tests
+        run: cargo test --manifest-path native/lemon-wasm-runtime/Cargo.toml
+
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y inotify-tools
+
+      - name: Install deps
+        run: mix deps.get
+
+      - name: Compile
+        run: mix compile --warnings-as-errors
+
+      - name: Run WASM integration tests
+        run: RUSTUP_HOME="$HOME/.rustup" CARGO_HOME="$HOME/.cargo" mix test apps/coding_agent/test/coding_agent/wasm_integration_test.exs --include integration
+
+  eval-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28.5"
+          elixir-version: "1.19.5"
+
+      - name: Cache Mix deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-eval-regression-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-eval-regression-
+
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y inotify-tools
+
+      - name: Install deps
+        run: mix deps.get
+
+      - name: Compile
+        run: mix compile --warnings-as-errors
+
+      - name: Deterministic regression loop
+        run: |
+          for i in 1 2; do
+            echo "Deterministic regression pass #$i"
+            mix test \
+              apps/coding_agent/test/coding_agent/session_overflow_recovery_test.exs \
+              apps/coding_agent/test/coding_agent/tools/fuzzy_test.exs \
+              apps/lemon_skills/test/lemon_skills/discovery_readme_test.exs \
+              apps/lemon_skills/test/mix/tasks/lemon.skill_test.exs \
+              apps/lemon_skills/test/lemon_skills/prompt_regression_test.exs
+          done
+
+      - name: Run eval harness
+        run: mix lemon.eval --iterations 20
 
   elixir-test-suite:
     runs-on: ubuntu-latest
