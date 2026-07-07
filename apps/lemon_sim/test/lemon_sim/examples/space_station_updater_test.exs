@@ -726,12 +726,8 @@ defmodule LemonSim.Examples.SpaceStationUpdaterTest do
     assert elimination_entry.player == target_id
     assert elimination_entry.role == "crew"
 
-    # NOTE: when the game continues past a wrong ejection, resolve_votes/1
-    # rebuilds the `players` map from the pre-adjustment snapshot when writing
-    # the ejected status, so voter reputation deltas from this vote do not
-    # survive alongside the ejection in the current implementation.
     for voter_id <- guilty_voters do
-      assert final_state.world.players[voter_id].reputation == 0
+      assert final_state.world.players[voter_id].reputation == -5
     end
   end
 

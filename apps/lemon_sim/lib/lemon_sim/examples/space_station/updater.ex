@@ -946,15 +946,6 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
         nil
       end
 
-    # Apply ejection
-    updated_players =
-      if not is_nil(ejected_id) do
-        victim = Map.get(players, ejected_id, %{})
-        Map.put(players, ejected_id, Map.put(victim, :status, "ejected"))
-      else
-        players
-      end
-
     # Build events
     vote_events = [Events.vote_result(ejected_id, vote_tally)]
 
@@ -1041,6 +1032,19 @@ defmodule LemonSim.Examples.SpaceStation.Updater do
         end
       else
         state
+      end
+
+    # Apply the ejection status on top of state_with_rep's players map so
+    # this round's reputation deltas survive when the game continues past
+    # the vote (previously this rebuilt from the pre-adjustment `players`
+    # snapshot, silently discarding voter reputation changes).
+    updated_players =
+      if not is_nil(ejected_id) do
+        players_with_rep = get(state_with_rep.world, :players, players)
+        victim = Map.get(players_with_rep, ejected_id, %{})
+        Map.put(players_with_rep, ejected_id, Map.put(victim, :status, "ejected"))
+      else
+        get(state_with_rep.world, :players, players)
       end
 
     if not is_nil(ejected_id) and get(Map.get(players, ejected_id, %{}), :role) == "saboteur" do
