@@ -1,6 +1,8 @@
 defmodule LemonSim.Examples.Werewolf.FrameRenderer do
   @moduledoc false
 
+  alias LemonSim.Examples.Rendering.FrameChrome
+
   # ---------------------------------------------------------------------------
   # Color palette (dark theme)
   # ---------------------------------------------------------------------------
@@ -186,10 +188,7 @@ defmodule LemonSim.Examples.Werewolf.FrameRenderer do
   # SVG skeleton
   # ---------------------------------------------------------------------------
 
-  defp svg_header(%{w: w, h: h}) do
-    ~s[<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 #{w} #{h}" ] <>
-      ~s[width="#{w}" height="#{h}">\n]
-  end
+  defp svg_header(ctx), do: FrameChrome.svg_header(ctx)
 
   defp svg_defs(ctx) do
     [
@@ -1100,40 +1099,11 @@ defmodule LemonSim.Examples.Werewolf.FrameRenderer do
   # Helpers: flexible key access
   # ---------------------------------------------------------------------------
 
-  defp get(map, key, default) when is_map(map) and is_atom(key) do
-    case Map.get(map, key) do
-      nil -> Map.get(map, Atom.to_string(key), default)
-      val -> val
-    end
-  end
-
-  defp get(map, key, default) when is_map(map) and is_binary(key) do
-    case Map.get(map, key) do
-      nil ->
-        try do
-          Map.get(map, String.to_existing_atom(key), default)
-        rescue
-          ArgumentError -> default
-        end
-
-      val ->
-        val
-    end
-  end
-
-  defp get(_, _, default), do: default
+  defp get(map, key, default), do: FrameChrome.get(map, key, default)
 
   # ---------------------------------------------------------------------------
   # Helpers: HTML escaping
   # ---------------------------------------------------------------------------
 
-  defp esc(str) when is_binary(str) do
-    str
-    |> String.replace("&", "&amp;")
-    |> String.replace("<", "&lt;")
-    |> String.replace(">", "&gt;")
-    |> String.replace("\"", "&quot;")
-  end
-
-  defp esc(other), do: esc(to_string(other))
+  defp esc(val), do: FrameChrome.esc(val)
 end

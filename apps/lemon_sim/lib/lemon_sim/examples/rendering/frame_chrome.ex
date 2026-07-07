@@ -52,6 +52,21 @@ defmodule LemonSim.Examples.Rendering.FrameChrome do
 
   def has_event?(_, _), do: false
 
+  @doc """
+  Returns the first event in the list matching the given `"kind"`, or `nil`.
+
+  Same `"kind"`/`:kind` matching rule as `has_event?/2`.
+  """
+  def find_event(events, kind) when is_list(events) do
+    Enum.find(events, fn
+      %{"kind" => k} -> k == kind
+      %{kind: k} -> to_string(k) == kind
+      _ -> false
+    end)
+  end
+
+  def find_event(_, _), do: nil
+
   def get(map, key, default) when is_map(map) and is_binary(key) do
     case Map.get(map, key) do
       nil ->

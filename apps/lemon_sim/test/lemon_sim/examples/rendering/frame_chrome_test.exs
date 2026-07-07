@@ -39,6 +39,19 @@ defmodule LemonSim.Examples.Rendering.FrameChromeTest do
     refute FrameChrome.has_event?(nil, "vote")
   end
 
+  test "find_event returns the first matching event, string or atom kind" do
+    vote = %{"kind" => "vote", "target" => "Alice"}
+    assert FrameChrome.find_event([%{"kind" => "other"}, vote], "vote") == vote
+
+    assert FrameChrome.find_event([%{kind: :vote, target: "Alice"}], "vote") == %{
+             kind: :vote,
+             target: "Alice"
+           }
+
+    refute FrameChrome.find_event([%{"kind" => "other"}], "vote")
+    refute FrameChrome.find_event(nil, "vote")
+  end
+
   test "get reads string keys with atom fallback and vice versa" do
     assert FrameChrome.get(%{"day" => 3}, "day", 0) == 3
     assert FrameChrome.get(%{day: 3}, "day", 0) == 3
