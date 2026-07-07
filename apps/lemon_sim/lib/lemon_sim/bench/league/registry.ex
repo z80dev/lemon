@@ -7,15 +7,9 @@ defmodule LemonSim.Bench.League.Registry do
   adapter can reduce to seats.
   """
 
-  alias LemonSim.Examples
+  alias LemonSim.Bench.Domains
 
-  @adapters %{
-    "werewolf" => Examples.Werewolf.League,
-    "space_station" => Examples.SpaceStation.League,
-    "stock_market" => Examples.StockMarket.League,
-    "survivor" => Examples.Survivor.League,
-    "poker" => Examples.Poker.League
-  }
+  @adapters Map.new(Domains.arena_domains(), &{&1.id, &1.league_adapter})
 
   @spec fetch(String.t() | atom()) :: {:ok, module()} | :error
   def fetch(scenario_id) do

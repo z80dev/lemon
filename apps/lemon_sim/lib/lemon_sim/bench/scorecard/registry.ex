@@ -1,42 +1,9 @@
 defmodule LemonSim.Bench.Scorecard.Registry do
   @moduledoc false
 
-  alias LemonSim.Examples.{
-    Courtroom,
-    Diplomacy,
-    IntelNetwork,
-    Legislature,
-    MurderMystery,
-    Pandemic,
-    Poker,
-    SpaceStation,
-    StartupIncubator,
-    StockMarket,
-    SupplyChain,
-    Survivor,
-    TcgShop,
-    VendingBench,
-    Werewolf
-  }
+  alias LemonSim.Bench.Domains
 
-  @scorecards %{
-    "courtroom" => Courtroom.Performance,
-    "diplomacy" => Diplomacy.Performance,
-    "intel_network" => IntelNetwork.Performance,
-    "legislature" => Legislature.Performance,
-    "murder_mystery" => MurderMystery.Performance,
-    "pandemic" => Pandemic.Performance,
-    "poker" => Poker.Performance,
-    "space_station" => SpaceStation.Performance,
-    "startup_incubator" => StartupIncubator.Performance,
-    "stock_market" => StockMarket.Performance,
-    "supply_chain" => SupplyChain.Performance,
-    "survivor" => Survivor.Performance,
-    "tcg_shop" => TcgShop.Performance,
-    "vending_bench" => VendingBench.Performance,
-    "vending_bench_arena" => VendingBench.ArenaScorecard,
-    "werewolf" => Werewolf.Performance
-  }
+  @scorecards Map.new(Domains.all(), &{&1.id, &1.scorecard_module})
 
   def all, do: @scorecards
 
