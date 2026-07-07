@@ -12,6 +12,7 @@ defmodule LemonSimUi.SimManager do
 
   alias LemonCore.MapHelpers
   alias LemonSim.Kernel.{Runner, State, Store}
+  alias LemonSim.LLM.GameHelpers.Runner, as: GameRunner
   alias LemonSim.LLM.Usage
 
   alias LemonSim.Examples.{
@@ -820,94 +821,56 @@ defmodule LemonSimUi.SimManager do
 
   defp stop_usage_collector(_collector), do: :ok
 
-  defp run_ai_only(state, modules, opts) do
-    terminal? = Keyword.get(opts, :terminal?, fn _s -> false end)
-    max_turns = Keyword.get(opts, :driver_max_turns, 50)
-    model_assignments = Keyword.get(opts, :model_assignments)
-    opts = build_model_switch_opts(opts, model_assignments)
-
-    do_ai_loop(state, modules, opts, terminal?, max_turns, 0)
-  end
-
-  # Mirrors the per-seat model-switching in
-  # `LemonSim.LLM.GameHelpers.Runner.run_multi_model/5` (Agent-holds-active-model,
-  # `complete_fn` reads it, `on_before_step` swaps it based on `active_actor_id`).
-  # Kept local rather than calling `run_multi_model/5` itself: that function owns
-  # its own `Runner.run_until_terminal/3` call with no way to resume from a
-  # mid-run failure (see the retry/crash handling in `do_ai_loop/7` below), so
-  # reusing it here would mean losing step-retry without gaining anything —
-  # `GameHelpers.Runner` would need a resumable-loop hook first.
-  defp build_model_switch_opts(opts, nil), do: opts
-
-  defp build_model_switch_opts(opts, model_assignments) do
-    {default_model, default_key} = model_assignments |> Map.values() |> List.first()
-    {:ok, model_agent} = Agent.start_link(fn -> {default_model, default_key} end)
-
-    complete_fn = fn _model, context, stream_options ->
-      {actual_model, api_key} = Agent.get(model_agent, & &1)
-      actual_stream_options = stream_options |> Map.new() |> Map.put(:api_key, api_key)
-      Ai.complete(actual_model, context, actual_stream_options)
-    end
-
-    on_before_step = fn _turn, step_state ->
-      actor_id = LemonCore.MapHelpers.get_key(step_state.world, :active_actor_id)
-
-      case Map.get(model_assignments, actor_id) do
-        {model, key} -> Agent.update(model_agent, fn _ -> {model, key} end)
-        nil -> :ok
-      end
-    end
-
-    opts
-    |> Keyword.put(:complete_fn, complete_fn)
-    |> Keyword.put(:on_before_step, on_before_step)
-  end
-
-  # `do_ai_loop/6,7` deliberately does not delegate to the shared
-  # `LemonSim.Kernel.Runner.run_until_terminal/3` loop used by the CLI path
-  # (`GameHelpers.Runner.run/5` and `run_multi_model/5`). Both still call the
-  # same per-turn primitive (`Runner.step/3`, unchanged below); what differs is
-  # the orchestration around it, for two reasons `run_until_terminal/3` can't
-  # currently support:
-  #
-  #   1. Per-step retry-with-backoff and crash recovery. A failed/crashed step
-  #      here resumes from the last good in-memory state; `run_until_terminal/3`
-  #      has no such hook and, on error, returns only `{:error, reason}` — the
-  #      state at the point of failure is discarded, so there's nothing to
-  #      resume from.
-  #   2. Decision-trace threading. `append_decision_trace/4` folds a summary of
-  #      each step into `state.plan_history`, which `SectionedProjector` shows
-  #      back to the model as the `:plan_history` prompt section on every
-  #      subsequent turn. `run_until_terminal/3`'s `on_after_step` hook is
-  #      notify-only (its return value is discarded, see `maybe_notify/3` in
-  #      lemon_sim's Kernel.Runner) and always recurses on the raw
-  #      `result.state` — there is no way to feed a transformed state back into
-  #      the loop, so plan_history would never accumulate if this drove the CLI
-  #      loop directly.
-  #
-  # Closing this gap in lemon_sim would need an `on_after_step` (or dedicated
-  # `transform_step`) hook whose `{:ok, new_state}` return replaces the state
-  # fed into the next iteration.
-  defp do_ai_loop(state, _modules, _opts, _terminal?, max_turns, turn)
-       when turn >= max_turns do
-    Logger.warning("[SimManager] #{state.sim_id} hit max turns (#{max_turns})",
-      sim_id: state.sim_id,
-      turn: turn
-    )
-
-    state = record_sim_error(state, turn, :turn_limit_exceeded, "Hit max turns (#{max_turns})")
-    Store.put_state(state)
-    broadcast_update(state)
-  end
-
-  defp do_ai_loop(state, modules, opts, terminal?, max_turns, turn) do
-    do_ai_loop(state, modules, opts, terminal?, max_turns, turn, 0)
-  end
-
   @max_step_retries 3
 
-  defp do_ai_loop(state, _modules, _opts, _terminal?, _max_turns, turn, retries)
+  # Drives the AI-only loop through the same shared primitive the CLI uses —
+  # `GameHelpers.Runner.run/5` / `run_multi_model/5`, both built on
+  # `LemonSim.Kernel.Runner.run_until_terminal/3` — instead of reimplementing
+  # decide/step orchestration (including, for multi-model games, the
+  # Agent-held-active-model `complete_fn`/`on_before_step` switching that
+  # `run_multi_model/5` now owns outright). What SimManager still contributes,
+  # as thin glue around that shared loop:
+  #
+  #   * a `checkpoint` Agent holding the state the last turn completed on
+  #     (plus how many turns have completed overall). The `on_after_step` /
+  #     `print_step` callback below updates it every turn and returns
+  #     `{:ok, traced_state}`, which `run_until_terminal/3`'s resumable state
+  #     hook feeds into the next turn; `resumable?: true` returns that same
+  #     state again on failure, so a retry always resumes from the right
+  #     place.
+  #   * per-step persistence + PubSub broadcast, via that same hook, folding
+  #     `append_decision_trace/4`'s plan_history bookkeeping into the state
+  #     the model itself sees on later turns (`SectionedProjector` renders
+  #     `plan_history` back into the prompt) — the reason this can't be a bare
+  #     `run_until_terminal/3` call with a notify-only hook.
+  #   * retry-with-backoff across transient step failures and crashes, capped
+  #     at `@max_step_retries` consecutive failures, and the absolute turn
+  #     budget across those retries: each retry narrows `driver_max_turns` by
+  #     however many turns have already completed, since `run_until_terminal/3`
+  #     resets its own internal turn counter on every call.
+  defp run_ai_only(state, modules, opts) do
+    max_turns = Keyword.get(opts, :driver_max_turns, 50)
+    model_assignments = Keyword.get(opts, :model_assignments)
+
+    {:ok, checkpoint} = Agent.start_link(fn -> {state, 0} end)
+
+    try do
+      run_ai_loop_with_retry(modules, opts, model_assignments, max_turns, checkpoint, 0)
+    after
+      if Process.alive?(checkpoint), do: Agent.stop(checkpoint)
+    end
+  end
+
+  defp run_ai_loop_with_retry(
+         _modules,
+         _opts,
+         _model_assignments,
+         _max_turns,
+         checkpoint,
+         retries
+       )
        when retries >= @max_step_retries do
+    {state, turn} = Agent.get(checkpoint, & &1)
     ctx = sim_context(state, turn)
 
     Logger.error(
@@ -929,56 +892,175 @@ defmodule LemonSimUi.SimManager do
     broadcast_update(state)
   end
 
-  defp do_ai_loop(state, modules, opts, terminal?, max_turns, turn, retries) do
-    if terminal?.(state) do
-      Store.put_state(state)
-      broadcast_update(state)
+  defp run_ai_loop_with_retry(modules, opts, model_assignments, max_turns, checkpoint, retries) do
+    {state, turns_completed} = Agent.get(checkpoint, & &1)
+    remaining = max_turns - turns_completed
+
+    if remaining <= 0 do
+      report_turn_limit_exceeded(state, max_turns)
     else
-      maybe_call_on_before_step(opts, turn, state)
+      after_step_fn = ai_loop_after_step(checkpoint, turns_completed)
 
-      try do
-        case Runner.step(state, modules, opts) do
-          {:ok, result} ->
-            next_state = advance_after_successful_step(state, result, turn)
-            Process.sleep(500)
-            do_ai_loop(next_state, modules, opts, terminal?, max_turns, turn + 1, 0)
+      call_opts =
+        opts
+        |> Keyword.put(:driver_max_turns, remaining)
+        |> Keyword.put(:resumable?, true)
+        |> Keyword.put(:persist?, true)
+        |> Keyword.put(:on_after_step, after_step_fn)
 
-          {:error, reason} ->
-            ctx = sim_context(state, turn)
+      default_opts_fn = fn _overrides -> call_opts end
 
-            Logger.warning(
-              "[SimManager] #{state.sim_id} step error (retry #{retries + 1}/#{@max_step_retries}, " <>
-                "phase=#{ctx.phase}, day=#{ctx.day}, actor=#{ctx.actor}, turn=#{turn}): " <>
-                inspect_error(reason),
-              sim_id: state.sim_id
-            )
+      callbacks = [
+        print_setup: fn _state -> :ok end,
+        print_result: fn _world -> :ok end,
+        announce_turn: fn _turn, _state -> :ok end,
+        print_step: after_step_fn
+      ]
 
-            state = record_sim_error(state, turn, :step_error, inspect_error(reason))
-            Store.put_state(state)
-            broadcast_update(state)
-            Process.sleep(2000 * (retries + 1))
-            do_ai_loop(state, modules, opts, terminal?, max_turns, turn, retries + 1)
+      result =
+        try do
+          if model_assignments do
+            GameRunner.run_multi_model(state, modules, default_opts_fn, call_opts, callbacks)
+          else
+            GameRunner.run(state, modules, default_opts_fn, call_opts, callbacks)
+          end
+        catch
+          kind, reason -> {:runner_crash, kind, reason, __STACKTRACE__}
         end
-      catch
-        kind, reason ->
-          ctx = sim_context(state, turn)
-          stacktrace = __STACKTRACE__
 
-          Logger.error(
-            "[SimManager] #{state.sim_id} step crashed (retry #{retries + 1}/#{@max_step_retries}, " <>
-              "phase=#{ctx.phase}, day=#{ctx.day}, actor=#{ctx.actor}, turn=#{turn}): " <>
-              "#{kind} #{inspect_error(reason)}\n" <>
-              Exception.format_stacktrace(stacktrace),
-            sim_id: state.sim_id
-          )
+      handle_ai_loop_result(
+        result,
+        modules,
+        opts,
+        model_assignments,
+        max_turns,
+        checkpoint,
+        retries
+      )
+    end
+  end
 
-          state =
-            record_sim_error(state, turn, :step_crash, "#{kind}: #{inspect_error(reason)}")
+  defp handle_ai_loop_result(
+         {:ok, final_state},
+         _modules,
+         _opts,
+         _model_assignments,
+         _max_turns,
+         _checkpoint,
+         _retries
+       ) do
+    # Idempotent with the last on_after_step call — covers the (rare) case
+    # where `state` was already terminal before a single step ran, which
+    # never invokes on_after_step at all.
+    Store.put_state(final_state)
+    broadcast_update(final_state)
+  end
 
-          Store.put_state(state)
-          broadcast_update(state)
-          Process.sleep(2000 * (retries + 1))
-          do_ai_loop(state, modules, opts, terminal?, max_turns, turn, retries + 1)
+  defp handle_ai_loop_result(
+         {:error, {:turn_limit_exceeded, _}, resume_state},
+         _modules,
+         _opts,
+         _model_assignments,
+         max_turns,
+         checkpoint,
+         _retries
+       ) do
+    Agent.update(checkpoint, fn {_state, turn} -> {resume_state, turn} end)
+    report_turn_limit_exceeded(resume_state, max_turns)
+  end
+
+  defp handle_ai_loop_result(
+         {:error, {:step_failed, reason}, resume_state},
+         modules,
+         opts,
+         model_assignments,
+         max_turns,
+         checkpoint,
+         retries
+       ) do
+    turn = Agent.get(checkpoint, fn {_state, t} -> t end)
+    ctx = sim_context(resume_state, turn)
+
+    Logger.warning(
+      "[SimManager] #{resume_state.sim_id} step error (retry #{retries + 1}/#{@max_step_retries}, " <>
+        "phase=#{ctx.phase}, day=#{ctx.day}, actor=#{ctx.actor}, turn=#{turn}): " <>
+        inspect_error(reason),
+      sim_id: resume_state.sim_id
+    )
+
+    logged_state = record_sim_error(resume_state, turn, :step_error, inspect_error(reason))
+    Store.put_state(logged_state)
+    broadcast_update(logged_state)
+    # The recorded error must ride along into the retry, exactly like the
+    # pre-delegation do_ai_loop rebinding `state` before recursing — otherwise
+    # it silently vanishes as soon as the retried turn succeeds and this
+    # errorless resume_state becomes stale.
+    Agent.update(checkpoint, fn {_state, t} -> {logged_state, t} end)
+    Process.sleep(2000 * (retries + 1))
+    run_ai_loop_with_retry(modules, opts, model_assignments, max_turns, checkpoint, retries + 1)
+  end
+
+  defp handle_ai_loop_result(
+         {:runner_crash, kind, reason, stacktrace},
+         modules,
+         opts,
+         model_assignments,
+         max_turns,
+         checkpoint,
+         retries
+       ) do
+    {state, turn} = Agent.get(checkpoint, & &1)
+    ctx = sim_context(state, turn)
+
+    Logger.error(
+      "[SimManager] #{state.sim_id} step crashed (retry #{retries + 1}/#{@max_step_retries}, " <>
+        "phase=#{ctx.phase}, day=#{ctx.day}, actor=#{ctx.actor}, turn=#{turn}): " <>
+        "#{kind} #{inspect_error(reason)}\n" <>
+        Exception.format_stacktrace(stacktrace),
+      sim_id: state.sim_id
+    )
+
+    logged_state = record_sim_error(state, turn, :step_crash, "#{kind}: #{inspect_error(reason)}")
+    Store.put_state(logged_state)
+    broadcast_update(logged_state)
+    # See the matching comment in the {:step_failed, ...} clause above: the
+    # recorded error must ride along into the retry, or it vanishes as soon
+    # as the retried turn succeeds.
+    Agent.update(checkpoint, fn {_state, t} -> {logged_state, t} end)
+    Process.sleep(2000 * (retries + 1))
+    run_ai_loop_with_retry(modules, opts, model_assignments, max_turns, checkpoint, retries + 1)
+  end
+
+  defp report_turn_limit_exceeded(state, max_turns) do
+    Logger.warning("[SimManager] #{state.sim_id} hit max turns (#{max_turns})",
+      sim_id: state.sim_id,
+      turn: max_turns
+    )
+
+    state =
+      record_sim_error(state, max_turns, :turn_limit_exceeded, "Hit max turns (#{max_turns})")
+
+    Store.put_state(state)
+    broadcast_update(state)
+  end
+
+  # `run_until_terminal/3` calls this with the *relative* turn number for this
+  # invocation (always restarts at 1); `turns_before` (turns already completed
+  # across earlier retries) puts it back on the sim's absolute turn count, so
+  # `Runner.step/3`'s per-step behavior above and this delegated loop log/
+  # record identical turn numbers.
+  defp ai_loop_after_step(checkpoint, turns_before) do
+    fn relative_turn, result ->
+      case result do
+        %{state: _next_state} ->
+          {before_state, _turn} = Agent.get(checkpoint, & &1)
+          overall_turn = turns_before + relative_turn
+          traced_state = advance_after_successful_step(before_state, result, overall_turn - 1)
+          Agent.update(checkpoint, fn _ -> {traced_state, overall_turn} end)
+          {:ok, traced_state}
+
+        _ ->
+          :ok
       end
     end
   end
@@ -1097,8 +1179,9 @@ defmodule LemonSimUi.SimManager do
     end
   end
 
-  # Shared between do_ai_loop/7 and do_interactive_loop/7's AI-turn branch:
-  # invokes the multi-model on_before_step hook (a no-op for single-model runs).
+  # Used by do_interactive_loop/7's AI-turn branch (the delegated AI-only path
+  # in run_ai_loop_with_retry/6 no longer needs this: run_multi_model/5 invokes
+  # on_before_step itself for its Agent-held model switching).
   defp maybe_call_on_before_step(opts, turn, state) do
     case Keyword.get(opts, :on_before_step) do
       f when is_function(f, 2) -> f.(turn, state)
@@ -1106,12 +1189,12 @@ defmodule LemonSimUi.SimManager do
     end
   end
 
-  # Shared between do_ai_loop/7 and do_interactive_loop/7's AI-turn branch: folds
-  # the step's decision into plan_history (read back by SectionedProjector as
-  # the :plan_history prompt section, so it must be part of the returned state
-  # rather than a side effect — see the do_ai_loop/6,7 design note above),
-  # persists, and broadcasts. Returns the traced state for the caller to
-  # recurse on.
+  # Shared between do_interactive_loop/7's AI-turn branch and
+  # ai_loop_after_step/2 (the run_ai_only/3 delegated path): folds the step's
+  # decision into plan_history (read back by SectionedProjector as the
+  # :plan_history prompt section, so it must be part of the returned state
+  # rather than a side effect), persists, and broadcasts. Returns the traced
+  # state for the caller to recurse on / feed back into the loop.
   defp advance_after_successful_step(before_state, result, turn) do
     next_state = append_decision_trace(result.state, before_state, turn + 1, result)
     Store.put_state(next_state)

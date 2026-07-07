@@ -63,6 +63,12 @@ defmodule LemonSim.LLM.GameHelpers.Runner do
   ## Callbacks (keyword list)
     * `:print_setup` (required) - fn(state) -> :ok
     * `:print_result` (required) - fn(world) -> :ok
+
+  `opts[:on_after_step]` and `opts[:resumable?]` are forwarded to
+  `Runner.run_until_terminal/3` as-is: an `:on_after_step` that returns
+  `{:ok, new_state}` feeds `new_state` into the next turn, and `resumable?:
+  true` makes a failure return `{:error, reason, state}` (state at the last
+  completed step) instead of `{:error, reason}`.
   """
   def run(state, modules, default_opts_fn, opts, callbacks) do
     {usage_collector, owns_usage_collector?} = usage_collector(state.sim_id, opts)
@@ -89,9 +95,11 @@ defmodule LemonSim.LLM.GameHelpers.Runner do
 
           maybe_return_usage({:ok, final_state}, usage_collector, opts)
 
-        {:error, reason} = error ->
-          IO.puts("Game failed: #{inspect(reason)}")
-          error
+        {:error, _reason} = error ->
+          log_game_failure(error)
+
+        {:error, _reason, _state} = error ->
+          log_game_failure(error)
       end
     after
       ProviderThrottle.stop(throttle_agent)
@@ -113,6 +121,11 @@ defmodule LemonSim.LLM.GameHelpers.Runner do
     * `:transcript_result_entry` - fn(turn, step_meta, result) -> map() | nil
     * `:transcript_detail` - fn(world) -> map() (default: empty map)
     * `:transcript_game_over_extra` - fn(world) -> map() (default: empty map)
+
+  `:print_step`'s return value is forwarded as the `run_until_terminal/3`
+  `on_after_step` result: return `{:ok, new_state}` to fold extra bookkeeping
+  (e.g. a decision-trace log) into the state seen on later turns, same as
+  `run/5`. `opts[:resumable?]` is also forwarded — see `run/5` for both.
   """
   def run_multi_model(state, modules, default_opts_fn, opts, callbacks) do
     model_assignments = Keyword.fetch!(opts, :model_assignments)
@@ -241,9 +254,11 @@ defmodule LemonSim.LLM.GameHelpers.Runner do
 
           maybe_return_usage({:ok, final_state}, usage_collector, opts)
 
-        {:error, reason} = error ->
-          IO.puts("Game failed: #{inspect(reason)}")
-          error
+        {:error, _reason} = error ->
+          log_game_failure(error)
+
+        {:error, _reason, _state} = error ->
+          log_game_failure(error)
       end
     after
       ProviderThrottle.stop(throttle_agent)
@@ -268,6 +283,12 @@ defmodule LemonSim.LLM.GameHelpers.Runner do
     end)
 
     IO.puts("")
+  end
+
+  defp log_game_failure(error) do
+    reason = elem(error, 1)
+    IO.puts("Game failed: #{inspect(reason)}")
+    error
   end
 
   defp stop_agent(nil), do: :ok

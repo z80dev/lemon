@@ -6,7 +6,7 @@ defmodule LemonSim.Kernel.Runner do
   required, which supports multiplayer/turn-based pacing.
   """
 
-  alias LemonSim.Kernel.{DecisionFrame, DecisionSignal}
+  alias LemonSim.Kernel.{DecisionFrame, DecisionSignal, State}
   alias LemonSim.Kernel.DecisionAdapters.ToolResultEvents
 
   @type decision_modules :: %{
@@ -128,9 +128,30 @@ defmodule LemonSim.Kernel.Runner do
 
   @doc """
   Repeatedly runs composed steps until a terminal state is reached.
+
+  ## Options
+
+    * `:terminal?` - `fn state -> boolean` (default: never terminal)
+    * `:driver_max_turns` / `:max_turns` - turn budget (default: 50)
+    * `:on_before_step` - `fn turn, state -> any` notification, called before
+      each step; its return value is ignored
+    * `:on_after_step` - `fn turn, result -> any`, called after each
+      successful step. Returning `{:ok, %LemonSim.Kernel.State{}} = new_state}`
+      replaces the state fed into the next iteration (and the state returned
+      on eventual `{:ok, final_state}` / carried in a resumable error) — this
+      is how a caller folds its own bookkeeping (e.g. a decision-trace log)
+      into the state the decider itself sees on later turns. Any other return
+      value (including the historical `:ok`) is notify-only, exactly as
+      before: the next iteration uses the raw `result.state`.
+    * `:resumable?` - when `true`, failures are returned as
+      `{:error, reason, state}` instead of `{:error, reason}`, where `state`
+      is the last state a step successfully completed on (after any
+      `:on_after_step` transform) — i.e. the point a caller can resume
+      `run_until_terminal/3` from. Defaults to `false`, preserving the
+      original 2-tuple error shape for existing callers.
   """
-  @spec run_until_terminal(LemonSim.Kernel.State.t(), step_modules(), keyword()) ::
-          {:ok, LemonSim.Kernel.State.t()} | {:error, term()}
+  @spec run_until_terminal(State.t(), step_modules(), keyword()) ::
+          {:ok, State.t()} | {:error, term()} | {:error, term(), State.t()}
   def run_until_terminal(state, modules, opts \\ [])
       when is_map(modules) and is_list(opts) do
     terminal? = Keyword.get(opts, :terminal?, fn _state -> false end)
@@ -150,21 +171,38 @@ defmodule LemonSim.Kernel.Runner do
         {:ok, state}
 
       turn >= max_turns ->
-        {:error, {:turn_limit_exceeded, max_turns}}
+        step_error(opts, {:turn_limit_exceeded, max_turns}, state)
 
       true ->
         maybe_notify(Keyword.get(opts, :on_before_step), turn + 1, state)
 
         case step(state, modules, opts) do
           {:ok, result} ->
-            maybe_notify(Keyword.get(opts, :on_after_step), turn + 1, result)
-            do_run_until_terminal(result.state, modules, opts, terminal?, turn + 1)
+            next_state = apply_after_step(Keyword.get(opts, :on_after_step), turn + 1, result)
+            do_run_until_terminal(next_state, modules, opts, terminal?, turn + 1)
 
           {:error, reason} ->
-            {:error, {:step_failed, reason}}
+            step_error(opts, {:step_failed, reason}, state)
         end
     end
   end
+
+  defp step_error(opts, reason, state) do
+    if Keyword.get(opts, :resumable?, false) do
+      {:error, reason, state}
+    else
+      {:error, reason}
+    end
+  end
+
+  defp apply_after_step(callback, turn, result) when is_function(callback, 2) do
+    case callback.(turn, result) do
+      {:ok, %State{} = new_state} -> new_state
+      _ -> result.state
+    end
+  end
+
+  defp apply_after_step(_callback, _turn, result), do: result.state
 
   defp maybe_coalesce(events, opts) do
     case Keyword.get(opts, :coalescer) do
