@@ -16,6 +16,7 @@ defmodule LemonGateway.Voice.RecordingManager do
 
   require Logger
 
+  alias LemonCore.Httpc
   alias LemonGateway.Voice.Config
 
   @doc """
@@ -70,7 +71,7 @@ defmodule LemonGateway.Voice.RecordingManager do
 
     Logger.info("Starting recording for call #{call_sid}")
 
-    case :httpc.request(
+    case Httpc.request(
            :post,
            {String.to_charlist(url), headers, ~c"application/x-www-form-urlencoded",
             String.to_charlist(body)},

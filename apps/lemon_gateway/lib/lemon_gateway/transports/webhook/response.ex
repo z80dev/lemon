@@ -5,6 +5,8 @@ defmodule LemonGateway.Transports.Webhook.Response do
 
   require Logger
 
+  alias LemonCore.Httpc
+
   @spec response_for_run(map(), keyword()) ::
           {:ok, integer(), map()} | {:error, :run_timeout | term()}
   def response_for_run(%{mode: :sync} = run_ctx, _opts) do
@@ -211,7 +213,7 @@ defmodule LemonGateway.Transports.Webhook.Response do
       {String.to_charlist(callback_url), [{~c"content-type", ~c"application/json"}],
        ~c"application/json", body}
 
-    case :httpc.request(
+    case Httpc.request(
            :post,
            request,
            [timeout: request_timeout, connect_timeout: min(request_timeout, 5_000)],

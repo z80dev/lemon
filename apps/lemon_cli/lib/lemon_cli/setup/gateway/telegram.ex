@@ -25,6 +25,7 @@ defmodule LemonCli.Setup.Gateway.Telegram do
 
   @behaviour LemonCli.Setup.Gateway.Adapter
 
+  alias LemonCore.Httpc
   alias LemonCore.Secrets
 
   # Telegram token format: <numeric_id>:<35-100 char alphanumeric/dash>
@@ -185,12 +186,9 @@ defmodule LemonCli.Setup.Gateway.Telegram do
   defp get_me(token) do
     url = ~c"#{@telegram_api}/bot#{token}/getMe"
 
-    :ok = Application.ensure_started(:inets)
-    :ok = Application.ensure_started(:ssl)
-
     ssl_opts = [verify: :verify_peer] |> maybe_put_cacerts()
 
-    case :httpc.request(:get, {url, []}, [{:ssl, ssl_opts}, {:timeout, 5_000}], []) do
+    case Httpc.request(:get, {url, []}, [{:ssl, ssl_opts}, {:timeout, 5_000}], []) do
       {:ok, {{_vsn, 200, _}, _headers, body}} ->
         parse_username(body)
 

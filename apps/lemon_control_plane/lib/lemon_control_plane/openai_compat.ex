@@ -4,6 +4,7 @@ defmodule LemonControlPlane.OpenAICompat do
   alias LemonControlPlane.Methods.AgentWait
   alias LemonControlPlane.Methods.ModelsList
   alias AgentCore.ModelRuntime.ProviderNames
+  alias LemonCore.Httpc
   alias LemonCore.RunRequest
 
   @default_agent_id "default"
@@ -510,14 +511,13 @@ defmodule LemonControlPlane.OpenAICompat do
   end
 
   defp default_image_url_fetcher(reference, opts) do
-    Application.ensure_all_started(:inets)
     max_bytes = Keyword.fetch!(opts, :max_bytes)
 
     request = {String.to_charlist(reference), []}
     http_options = [timeout: 5_000, connect_timeout: 5_000]
     options = [body_format: :binary]
 
-    case :httpc.request(:get, request, http_options, options) do
+    case Httpc.request(:get, request, http_options, options) do
       {:ok, {{_http_version, 200, _reason}, headers, body}} when is_binary(body) ->
         mime_type = response_mime_type(headers)
         byte_size = byte_size(body)

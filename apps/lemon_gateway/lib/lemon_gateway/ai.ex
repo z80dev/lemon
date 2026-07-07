@@ -7,6 +7,8 @@ defmodule LemonGateway.AI do
 
   require Logger
 
+  alias LemonCore.Httpc
+
   @doc """
   Generate a chat completion using the specified model.
 
@@ -65,7 +67,7 @@ defmodule LemonGateway.AI do
         temperature: Map.get(opts, :temperature, 0.7)
       }
 
-      case :httpc.request(
+      case Httpc.request(
              :post,
              {String.to_charlist(url), headers, ~c"application/json", Jason.encode!(body)},
              [timeout: 30_000],
@@ -119,7 +121,7 @@ defmodule LemonGateway.AI do
 
       body = if system_message, do: Map.put(body, :system, system_message), else: body
 
-      case :httpc.request(
+      case Httpc.request(
              :post,
              {String.to_charlist(url), headers, ~c"application/json", Jason.encode!(body)},
              [timeout: 30_000],

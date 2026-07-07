@@ -10,6 +10,7 @@ defmodule LemonGateway.Voice.RecordingDownloader do
 
   require Logger
 
+  alias LemonCore.Httpc
   alias LemonGateway.Voice.Config
 
   @doc """
@@ -105,7 +106,7 @@ defmodule LemonGateway.Voice.RecordingDownloader do
     ]
 
     # Twilio may redirect — :httpc follows redirects by default with autoredirect
-    case :httpc.request(
+    case Httpc.request(
            :get,
            {String.to_charlist(url), headers},
            [timeout: 30_000, autoredirect: true],

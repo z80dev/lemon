@@ -15,6 +15,7 @@ defmodule LemonGateway.Voice.CallSession do
 
   require Logger
 
+  alias LemonCore.Httpc
   alias LemonGateway.Voice.{AudioConversion, Config, DeepgramClient}
 
   # Call states
@@ -405,7 +406,7 @@ defmodule LemonGateway.Voice.CallSession do
         }
       })
 
-    case :httpc.request(
+    case Httpc.request(
            :post,
            {String.to_charlist(url), headers, ~c"application/json", body},
            [timeout: 10_000],
