@@ -9,6 +9,7 @@ defmodule LemonSimUi.SpectatorLive do
 
   use LemonSimUi, :live_view
 
+  alias LemonSim.Bench.Domains
   alias LemonSimUi.{ArtifactReader, SimHelpers, SimManager, WerewolfPlayback}
   alias LemonSim.Kernel.{Bus, Event, State, Store}
 
@@ -31,26 +32,27 @@ defmodule LemonSimUi.SpectatorLive do
   @vending_bench_artifact_refresh_ms 5_000
   @usage_refresh_ms 5_000
 
-  @supported_domains [
-    :werewolf,
-    :vending_bench,
-    :tcg_shop,
-    :space_station,
-    :stock_market,
-    :survivor,
-    :poker
-  ]
+  # `LemonSim.Bench.Domains.arena_domains/0` covers the five always-on league
+  # domains; vending_bench and tcg_shop have no league adapter (not part of
+  # the arena) but spectator_live still renders them via their own board
+  # components (see `render_board/1` below, the actual board registration
+  # point). `domain_registration_test.exs` checks this list stays a superset
+  # of the arena ids and stays in sync with `render_board/1`'s case clauses.
+  @supported_domains Enum.map(Domains.arena_domains(), &String.to_atom(&1.id)) ++
+                       [:vending_bench, :tcg_shop]
+
+  @doc false
+  @spec supported_domains() :: [atom()]
+  def supported_domains, do: @supported_domains
 
   # Sim-id prefixes used by SimManager.generate_id/1 / domain_from_sim_id/1,
   # kept here so the "find the next active game" auto-advance logic can match
-  # a running sim's domain without touching SimManager.
-  @domain_sim_id_prefix %{
-    werewolf: "ww_",
-    space_station: "spc_",
-    stock_market: "stk_",
-    survivor: "srv_",
-    poker: "pkr_"
-  }
+  # a running sim's domain without touching SimManager. Derived from the
+  # same arena registry `LemonSimUi.Arena` uses.
+  @domain_sim_id_prefix Map.new(
+                          Domains.arena_domains(),
+                          &{String.to_atom(&1.id), &1.sim_id_prefix}
+                        )
 
   @impl true
   def mount(%{"sim_id" => sim_id}, _session, socket) do
@@ -865,10 +867,26 @@ defmodule LemonSimUi.SpectatorLive do
 
   # Registration point: maps a supported domain to its board component.
   # Every board shares the `render(world:, interactive:)` signature, so this
-  # is the one place a new domain needs a case clause added; task #20
-  # (unify arena domain registration) will fold this into one shared
-  # per-domain descriptor alongside the bench/league registries,
-  # arena_domains.ex, and SimManager.
+  # is the one place a new domain needs a case clause added. Unlike
+  # `example_module`/`scorecard_module`/`league_adapter`, a domain's
+  # lemon_sim_ui board component isn't modeled in `LemonSim.Bench.Domains`
+  # (it's UI-only), so this stays a hardcoded case rather than a derived
+  # lookup; `domain_registration_test.exs` checks it stays in sync with
+  # `@supported_domains` via `rendered_board_domains/0` below.
+  @rendered_board_domains [
+    :vending_bench,
+    :tcg_shop,
+    :space_station,
+    :stock_market,
+    :survivor,
+    :poker,
+    :werewolf
+  ]
+
+  @doc false
+  @spec rendered_board_domains() :: [atom()]
+  def rendered_board_domains, do: @rendered_board_domains
+
   attr(:domain, :atom, required: true)
   attr(:world, :map, required: true)
 

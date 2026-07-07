@@ -88,6 +88,10 @@ defmodule LemonSimUi.ArenaDomains do
   @spec get(atom()) :: map() | nil
   def get(domain), do: Map.get(@domains, domain)
 
+  @doc false
+  @spec keys() :: [atom()]
+  def keys, do: Map.keys(@domains)
+
   @spec domain_atom(String.t()) :: {:ok, atom()} | :error
   def domain_atom(slug) when is_binary(slug) do
     Enum.find_value(Map.keys(@domains), :error, fn domain ->

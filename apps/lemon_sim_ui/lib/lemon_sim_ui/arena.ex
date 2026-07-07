@@ -32,24 +32,27 @@ defmodule LemonSimUi.Arena do
   require Logger
 
   alias LemonCore.MapHelpers
-  alias LemonSim.Bench.League
+  alias LemonSim.Bench.{Domains, League}
   alias LemonSimUi.SimManager
 
-  @domains [:werewolf, :space_station, :stock_market, :survivor, :poker]
-  @sim_prefixes %{
-    werewolf: "ww_",
-    space_station: "spc_",
-    stock_market: "stk_",
-    survivor: "srv_",
-    poker: "pkr_"
-  }
-  @default_player_counts %{
-    werewolf: 6,
-    space_station: 6,
-    stock_market: 4,
-    survivor: 8,
-    poker: 6
-  }
+  # Registration point: the always-on arena runs one process per domain
+  # registered in `LemonSim.Bench.Domains` with a `league_adapter` — that's
+  # the same source `Bench.Scorecard.Registry` and `Bench.League.Registry`
+  # derive from, so a new arena domain needs one entry there, not here too.
+  @arena_domain_descriptors Domains.arena_domains()
+
+  @domains Enum.map(@arena_domain_descriptors, &String.to_atom(&1.id))
+
+  @sim_prefixes Map.new(@arena_domain_descriptors, &{String.to_atom(&1.id), &1.sim_id_prefix})
+
+  # `LemonSim.Bench.Domains` documents `default_player_count` as each
+  # domain's own solo-mode default, which the always-on arena doesn't always
+  # match: poker's own default is 4 seats, but the arena always seats 6.
+  # Every other arena domain's operational default equals the registry
+  # value, so only poker needs an explicit override here.
+  @default_player_counts @arena_domain_descriptors
+                         |> Map.new(&{String.to_atom(&1.id), &1.default_player_count})
+                         |> Map.put(:poker, 6)
 
   @start_delay_ms 3_000
   @tick_ms 60_000
@@ -91,6 +94,10 @@ defmodule LemonSimUi.Arena do
   @doc "Sim-id prefix used by `SimManager.generate_id/1` for a domain."
   @spec sim_prefix(atom()) :: String.t()
   def sim_prefix(domain), do: Map.fetch!(@sim_prefixes, domain)
+
+  @doc "Default seat count the arena configures for a domain absent explicit config."
+  @spec default_player_count(atom()) :: pos_integer()
+  def default_player_count(domain), do: Map.fetch!(@default_player_counts, domain)
 
   @doc "PubSub topic receiving `:arena_league_updated` events for a domain."
   @spec league_topic(atom()) :: String.t()
@@ -154,7 +161,8 @@ defmodule LemonSimUi.Arena do
       domain: domain,
       enabled: Keyword.get(config, :enabled, false),
       models: Keyword.get(config, :models, []),
-      player_count: Keyword.get(config, :player_count, Map.fetch!(@default_player_counts, domain)),
+      player_count:
+        Keyword.get(config, :player_count, Map.fetch!(@default_player_counts, domain)),
       game_delay_ms: Keyword.get(config, :game_delay_ms, 15_000),
       league_dir: Keyword.get(config, :league_dir) || default_league_dir(domain),
       retry_start_ms: Keyword.get(config, :retry_start_ms, @retry_start_ms),
@@ -166,7 +174,13 @@ defmodule LemonSimUi.Arena do
 
     if state.enabled and state.models != [] do
       LemonCore.Bus.subscribe(SimManager.lobby_topic())
-      Process.send_after(self(), :ensure_game, Keyword.get(config, :start_delay_ms, @start_delay_ms))
+
+      Process.send_after(
+        self(),
+        :ensure_game,
+        Keyword.get(config, :start_delay_ms, @start_delay_ms)
+      )
+
       :timer.send_interval(Keyword.get(config, :tick_ms, @tick_ms), :tick)
 
       Logger.info(
@@ -229,7 +243,7 @@ defmodule LemonSimUi.Arena do
   def handle_info(%LemonCore.Event{type: :sim_world_updated, meta: meta} = event, state) do
     sim_id = meta[:sim_id] || meta["sim_id"]
 
-    if state.current && state.current.sim_id == sim_id and state.current.status == :running do
+    if (state.current && state.current.sim_id == sim_id) and state.current.status == :running do
       world = world_from_event(event, sim_id, state)
 
       if world && MapHelpers.get_key(world, :status) == "game_over" do
@@ -243,7 +257,7 @@ defmodule LemonSimUi.Arena do
   end
 
   def handle_info(%LemonCore.Event{type: :sim_lobby_changed}, state) do
-    if state.current && state.current.status == :running and
+    if (state.current && state.current.status == :running) and
          state.current.sim_id not in state.deps.list_running.() do
       {:noreply, handle_disappeared(state)}
     else

@@ -85,6 +85,21 @@ defmodule LemonSim.Bench.DomainsTest do
     test "every arena domain has a non-nil league_adapter" do
       assert Enum.all?(Domains.arena_domains(), &(&1.league_adapter != nil))
     end
+
+    test "returns domains in the curated display order, not declaration/alphabetical order" do
+      # LemonSimUi.Arena and the lobby page have shown arenas in this exact
+      # order (werewolf first) since before this registry existed; @domains
+      # interleaves the arena entries among the non-arena ones specifically
+      # to preserve it. Order matters here, unlike the set-equality check
+      # above.
+      assert Enum.map(Domains.arena_domains(), & &1.id) == [
+               "werewolf",
+               "space_station",
+               "stock_market",
+               "survivor",
+               "poker"
+             ]
+    end
   end
 
   defp behaviours(module) do

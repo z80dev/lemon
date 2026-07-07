@@ -30,6 +30,16 @@ defmodule LemonSim.Bench.Domains do
   variable player count. Note this can differ from what the always-on arena
   actually configures at runtime (e.g. poker defaults to 4 seats on its own,
   but `LemonSimUi.Arena` runs its always-on poker table with 6).
+
+  ## Declaration order is the arena display order
+
+  `@domains` isn't declared alphabetically: the five arena (`league_adapter`)
+  entries are interleaved among the non-arena ones so that their *relative*
+  order — werewolf, space_station, stock_market, survivor, poker — matches
+  what `LemonSimUi.Arena.domains/0` and the lobby page have shown since
+  before this registry existed. `arena_domains/0` filters `@domains` and so
+  preserves that relative order; don't alphabetize this list without
+  checking `arena_domains/0`'s output order first (see `domains_test.exs`).
   """
 
   alias LemonSim.Bench.Domains.Descriptor
@@ -69,12 +79,12 @@ defmodule LemonSim.Bench.Domains do
       default_player_count: 6
     },
     %Descriptor{
-      id: "poker",
-      example_module: Examples.Poker,
-      scorecard_module: Examples.Poker.Performance,
-      league_adapter: Examples.Poker.League,
-      sim_id_prefix: "pkr_",
-      default_player_count: 4
+      id: "werewolf",
+      example_module: Examples.Werewolf,
+      scorecard_module: Examples.Werewolf.Performance,
+      league_adapter: Examples.Werewolf.League,
+      sim_id_prefix: "ww_",
+      default_player_count: 6
     },
     %Descriptor{
       id: "space_station",
@@ -128,12 +138,12 @@ defmodule LemonSim.Bench.Domains do
       scorecard_module: Examples.VendingBench.ArenaScorecard
     },
     %Descriptor{
-      id: "werewolf",
-      example_module: Examples.Werewolf,
-      scorecard_module: Examples.Werewolf.Performance,
-      league_adapter: Examples.Werewolf.League,
-      sim_id_prefix: "ww_",
-      default_player_count: 6
+      id: "poker",
+      example_module: Examples.Poker,
+      scorecard_module: Examples.Poker.Performance,
+      league_adapter: Examples.Poker.League,
+      sim_id_prefix: "pkr_",
+      default_player_count: 4
     }
   ]
 
@@ -159,7 +169,10 @@ defmodule LemonSim.Bench.Domains do
   end
 
   @doc """
-  Domains wired into the always-on arena league (those with a `league_adapter`).
+  Domains wired into the always-on arena league (those with a `league_adapter`),
+  in the curated order `LemonSimUi.Arena` and the lobby page display them:
+  werewolf, space_station, stock_market, survivor, poker. See the moduledoc
+  section on declaration order.
   """
   @spec arena_domains() :: [Descriptor.t()]
   def arena_domains, do: Enum.filter(@domains, & &1.league_adapter)
