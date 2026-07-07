@@ -21,7 +21,7 @@ defmodule LemonSimUi.SpectatorLive do
     SurvivorBoard,
     PokerBoard,
     RunLog,
-    EventLog
+    SpectatorChrome
   }
 
   @vending_bench_artifact_registry Path.join(
@@ -366,38 +366,25 @@ defmodule LemonSimUi.SpectatorLive do
 
     ~H"""
     <div class="flex flex-col min-h-screen bg-[#0a0f0d] text-slate-200">
-      <header class="flex items-center justify-between px-6 py-3 border-b border-emerald-900/60 bg-slate-950/70 backdrop-blur-md flex-shrink-0">
-        <div class="flex items-center gap-4">
-          <a href="/" class="text-slate-500 hover:text-emerald-400 transition-colors" title="Back to dashboard">
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-              <path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd" />
-            </svg>
-          </a>
-          <div>
-            <h1 class="text-xl font-bold text-white tracking-tight">{@sim_id}</h1>
-            <div class="flex items-center gap-2 text-xs font-mono text-slate-400">
-              <span class="text-emerald-400">VendingBench</span>
-              <span class="text-slate-600">|</span>
-              <span>Day {@day_number}/{@max_days}</span>
-              <span class="text-slate-600">|</span>
-              <span class="capitalize">{format_phase(@phase)}</span>
-            </div>
-          </div>
-        </div>
-
-        <div class="flex items-center gap-3">
-          <span :if={@running} class="text-[11px] font-bold tracking-widest uppercase px-3 py-1.5 rounded-sm bg-red-500/10 text-red-400 border border-red-500/30 flex items-center gap-2 shadow-[0_0_10px_rgba(239,68,68,0.2)]">
-            <span class="w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.8)]"></span>
-            LIVE
-          </span>
-          <span :if={!@running} class="text-[11px] font-mono text-slate-500 px-3 py-1.5 rounded border border-slate-700">
-            STOPPED
-          </span>
-        </div>
-      </header>
+      <SpectatorChrome.page_header
+        sim_id={@sim_id}
+        border_class="border-emerald-900/60"
+        bg_class="bg-slate-950/70"
+        hover_class="hover:text-emerald-400"
+        running={@running}
+      >
+        <:meta>
+          <SpectatorChrome.meta_line
+            label="VendingBench"
+            label_class="text-emerald-400"
+            progress={"Day #{@day_number}/#{@max_days}"}
+            phase={format_phase(@phase)}
+          />
+        </:meta>
+      </SpectatorChrome.page_header>
 
       <div class="flex-1 overflow-y-auto overflow-x-hidden" style="scrollbar-gutter: stable;">
-        <VendingBenchBoard.render world={@state.world} interactive={false} />
+        <.render_board domain={:vending_bench} world={@state.world} />
         <.usage_panel usage={@usage} />
         <RunLog.render state={@state} running={@running} />
       </div>
@@ -423,38 +410,25 @@ defmodule LemonSimUi.SpectatorLive do
 
     ~H"""
     <div class="flex flex-col min-h-screen bg-[#100d08] text-slate-200">
-      <header class="flex items-center justify-between px-6 py-3 border-b border-amber-900/60 bg-slate-950/75 backdrop-blur-md flex-shrink-0">
-        <div class="flex items-center gap-4">
-          <a href="/" class="text-slate-500 hover:text-amber-300 transition-colors" title="Back to dashboard">
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-              <path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd" />
-            </svg>
-          </a>
-          <div>
-            <h1 class="text-xl font-bold text-white tracking-tight">{@sim_id}</h1>
-            <div class="flex items-center gap-2 text-xs font-mono text-slate-400">
-              <span class="text-amber-300">TCG Shop</span>
-              <span class="text-slate-600">|</span>
-              <span>Day {@day_number}/{@max_days}</span>
-              <span class="text-slate-600">|</span>
-              <span class="capitalize">{format_phase(@phase)}</span>
-            </div>
-          </div>
-        </div>
-
-        <div class="flex items-center gap-3">
-          <span :if={@running} class="text-[11px] font-bold tracking-widest uppercase px-3 py-1.5 rounded-sm bg-red-500/10 text-red-400 border border-red-500/30 flex items-center gap-2 shadow-[0_0_10px_rgba(239,68,68,0.2)]">
-            <span class="w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.8)]"></span>
-            LIVE
-          </span>
-          <span :if={!@running} class="text-[11px] font-mono text-slate-500 px-3 py-1.5 rounded border border-slate-700">
-            STOPPED
-          </span>
-        </div>
-      </header>
+      <SpectatorChrome.page_header
+        sim_id={@sim_id}
+        border_class="border-amber-900/60"
+        bg_class="bg-slate-950/75"
+        hover_class="hover:text-amber-300"
+        running={@running}
+      >
+        <:meta>
+          <SpectatorChrome.meta_line
+            label="TCG Shop"
+            label_class="text-amber-300"
+            progress={"Day #{@day_number}/#{@max_days}"}
+            phase={format_phase(@phase)}
+          />
+        </:meta>
+      </SpectatorChrome.page_header>
 
       <div class="flex-1 overflow-y-auto overflow-x-hidden p-4" style="scrollbar-gutter: stable;">
-        <TcgShopBoard.render world={@state.world} interactive={false} />
+        <.render_board domain={:tcg_shop} world={@state.world} />
         <.usage_panel usage={@usage} />
         <RunLog.render state={@state} running={@running} />
       </div>
@@ -485,67 +459,37 @@ defmodule LemonSimUi.SpectatorLive do
 
     ~H"""
     <div class="flex flex-col h-screen overflow-hidden bg-[#050b14] text-slate-200">
-      <header class="flex items-center justify-between px-6 py-3 border-b border-cyan-900/50 bg-slate-950/70 backdrop-blur-md flex-shrink-0">
-        <div class="flex items-center gap-4">
-          <a href="/" class="text-slate-500 hover:text-cyan-400 transition-colors" title="Back to dashboard">
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-              <path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd" />
-            </svg>
-          </a>
-          <div>
-            <h1 class="text-xl font-bold text-white tracking-tight">{@sim_id}</h1>
-            <div class="flex items-center gap-2 text-xs font-mono text-slate-400">
-              <span class="text-cyan-400">Space Station</span>
-              <span class="text-slate-600">|</span>
-              <span>Round {@round}/{@max_rounds}</span>
-              <span class="text-slate-600">|</span>
-              <span class="capitalize">{format_phase(@phase)}</span>
-            </div>
-          </div>
-        </div>
-
-        <div class="flex items-center gap-3">
-          <.link
-            navigate={"/arena/space_station/leaderboard"}
-            class="text-[11px] font-mono text-slate-400 hover:text-cyan-300 px-3 py-1.5 rounded border border-slate-700 hover:border-cyan-500/40 transition-colors"
-          >
-            League
-          </.link>
-          <%= if @winner do %>
-            <span class="text-sm font-bold px-3 py-1.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/30">
-              Winner: {@winner}
-            </span>
-          <% end %>
-          <span :if={@running} class="text-[11px] font-bold tracking-widest uppercase px-3 py-1.5 rounded-sm bg-red-500/10 text-red-400 border border-red-500/30 flex items-center gap-2 shadow-[0_0_10px_rgba(239,68,68,0.2)]">
-            <span class="w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.8)]"></span>
-            LIVE
-          </span>
-          <span :if={!@running && @game_status != "game_over"} class="text-[11px] font-mono text-slate-500 px-3 py-1.5 rounded border border-slate-700">
-            STOPPED
-          </span>
-        </div>
-      </header>
+      <SpectatorChrome.page_header
+        sim_id={@sim_id}
+        border_class="border-cyan-900/50"
+        bg_class="bg-slate-950/70"
+        hover_class="hover:text-cyan-400"
+        league_path="/arena/space_station/leaderboard"
+        winner={@winner}
+        running={@running}
+        show_stopped={@game_status != "game_over"}
+      >
+        <:meta>
+          <SpectatorChrome.meta_line
+            label="Space Station"
+            label_class="text-cyan-400"
+            progress={"Round #{@round}/#{@max_rounds}"}
+            phase={format_phase(@phase)}
+          />
+        </:meta>
+      </SpectatorChrome.page_header>
 
       <div class="flex-1 flex flex-col overflow-hidden">
         <div class="flex-1 overflow-hidden">
-          <SpaceStationBoard.render world={@state.world} interactive={false} />
+          <.render_board domain={:space_station} world={@state.world} />
         </div>
 
         <.usage_panel usage={@usage} />
 
-        <div class="flex-shrink-0 border-t border-glass-border bg-slate-950/60 h-48 overflow-hidden">
-          <div class="px-4 py-2 border-b border-glass-border bg-slate-900/40">
-            <h3 class="text-[9px] font-mono uppercase tracking-widest text-emerald-400 font-bold flex items-center gap-1.5">
-              <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
-                <path fill-rule="evenodd" d="M3 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clip-rule="evenodd" />
-              </svg>
-              LIVE FEED
-            </h3>
-          </div>
-          <div class="p-0 h-36 overflow-hidden">
-            <EventLog.render events={@state.recent_events} />
-          </div>
-        </div>
+        <SpectatorChrome.live_feed_panel
+          events={@state.recent_events}
+          wrapper_class="flex-shrink-0 border-t border-glass-border bg-slate-950/60 h-48 overflow-hidden"
+        />
       </div>
     </div>
     """
@@ -574,67 +518,37 @@ defmodule LemonSimUi.SpectatorLive do
 
     ~H"""
     <div class="flex flex-col h-screen overflow-hidden bg-[#0a0e1a] text-slate-200">
-      <header class="flex items-center justify-between px-6 py-3 border-b border-emerald-900/50 bg-slate-950/70 backdrop-blur-md flex-shrink-0">
-        <div class="flex items-center gap-4">
-          <a href="/" class="text-slate-500 hover:text-emerald-400 transition-colors" title="Back to dashboard">
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-              <path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd" />
-            </svg>
-          </a>
-          <div>
-            <h1 class="text-xl font-bold text-white tracking-tight">{@sim_id}</h1>
-            <div class="flex items-center gap-2 text-xs font-mono text-slate-400">
-              <span class="text-emerald-400">Stock Market</span>
-              <span class="text-slate-600">|</span>
-              <span>Round {@round}/{@max_rounds}</span>
-              <span class="text-slate-600">|</span>
-              <span class="capitalize">{format_phase(@phase)}</span>
-            </div>
-          </div>
-        </div>
-
-        <div class="flex items-center gap-3">
-          <.link
-            navigate={"/arena/stock_market/leaderboard"}
-            class="text-[11px] font-mono text-slate-400 hover:text-cyan-300 px-3 py-1.5 rounded border border-slate-700 hover:border-cyan-500/40 transition-colors"
-          >
-            League
-          </.link>
-          <%= if @winner do %>
-            <span class="text-sm font-bold px-3 py-1.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/30">
-              Winner: {@winner}
-            </span>
-          <% end %>
-          <span :if={@running} class="text-[11px] font-bold tracking-widest uppercase px-3 py-1.5 rounded-sm bg-red-500/10 text-red-400 border border-red-500/30 flex items-center gap-2 shadow-[0_0_10px_rgba(239,68,68,0.2)]">
-            <span class="w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.8)]"></span>
-            LIVE
-          </span>
-          <span :if={!@running && @game_status != "game_over"} class="text-[11px] font-mono text-slate-500 px-3 py-1.5 rounded border border-slate-700">
-            STOPPED
-          </span>
-        </div>
-      </header>
+      <SpectatorChrome.page_header
+        sim_id={@sim_id}
+        border_class="border-emerald-900/50"
+        bg_class="bg-slate-950/70"
+        hover_class="hover:text-emerald-400"
+        league_path="/arena/stock_market/leaderboard"
+        winner={@winner}
+        running={@running}
+        show_stopped={@game_status != "game_over"}
+      >
+        <:meta>
+          <SpectatorChrome.meta_line
+            label="Stock Market"
+            label_class="text-emerald-400"
+            progress={"Round #{@round}/#{@max_rounds}"}
+            phase={format_phase(@phase)}
+          />
+        </:meta>
+      </SpectatorChrome.page_header>
 
       <div class="flex-1 flex flex-col overflow-hidden">
         <div class="flex-1 overflow-hidden">
-          <StockMarketBoard.render world={@state.world} interactive={false} />
+          <.render_board domain={:stock_market} world={@state.world} />
         </div>
 
         <.usage_panel usage={@usage} />
 
-        <div class="flex-shrink-0 border-t border-glass-border bg-slate-950/60 h-48 overflow-hidden">
-          <div class="px-4 py-2 border-b border-glass-border bg-slate-900/40">
-            <h3 class="text-[9px] font-mono uppercase tracking-widest text-emerald-400 font-bold flex items-center gap-1.5">
-              <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
-                <path fill-rule="evenodd" d="M3 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clip-rule="evenodd" />
-              </svg>
-              LIVE FEED
-            </h3>
-          </div>
-          <div class="p-0 h-36 overflow-hidden">
-            <EventLog.render events={@state.recent_events} />
-          </div>
-        </div>
+        <SpectatorChrome.live_feed_panel
+          events={@state.recent_events}
+          wrapper_class="flex-shrink-0 border-t border-glass-border bg-slate-950/60 h-48 overflow-hidden"
+        />
       </div>
     </div>
     """
@@ -661,67 +575,37 @@ defmodule LemonSimUi.SpectatorLive do
 
     ~H"""
     <div class="flex flex-col h-screen overflow-hidden bg-[#0a0805] text-slate-200">
-      <header class="flex items-center justify-between px-6 py-3 border-b border-amber-900/50 bg-slate-950/70 backdrop-blur-md flex-shrink-0">
-        <div class="flex items-center gap-4">
-          <a href="/" class="text-slate-500 hover:text-amber-300 transition-colors" title="Back to dashboard">
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-              <path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd" />
-            </svg>
-          </a>
-          <div>
-            <h1 class="text-xl font-bold text-white tracking-tight">{@sim_id}</h1>
-            <div class="flex items-center gap-2 text-xs font-mono text-slate-400">
-              <span class="text-amber-400">Survivor</span>
-              <span class="text-slate-600">|</span>
-              <span>Episode {@episode}</span>
-              <span class="text-slate-600">|</span>
-              <span class="capitalize">{format_phase(@phase)}</span>
-            </div>
-          </div>
-        </div>
-
-        <div class="flex items-center gap-3">
-          <.link
-            navigate={"/arena/survivor/leaderboard"}
-            class="text-[11px] font-mono text-slate-400 hover:text-cyan-300 px-3 py-1.5 rounded border border-slate-700 hover:border-cyan-500/40 transition-colors"
-          >
-            League
-          </.link>
-          <%= if @winner do %>
-            <span class="text-sm font-bold px-3 py-1.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/30">
-              Winner: {@winner}
-            </span>
-          <% end %>
-          <span :if={@running} class="text-[11px] font-bold tracking-widest uppercase px-3 py-1.5 rounded-sm bg-red-500/10 text-red-400 border border-red-500/30 flex items-center gap-2 shadow-[0_0_10px_rgba(239,68,68,0.2)]">
-            <span class="w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.8)]"></span>
-            LIVE
-          </span>
-          <span :if={!@running && @game_status != "game_over"} class="text-[11px] font-mono text-slate-500 px-3 py-1.5 rounded border border-slate-700">
-            STOPPED
-          </span>
-        </div>
-      </header>
+      <SpectatorChrome.page_header
+        sim_id={@sim_id}
+        border_class="border-amber-900/50"
+        bg_class="bg-slate-950/70"
+        hover_class="hover:text-amber-300"
+        league_path="/arena/survivor/leaderboard"
+        winner={@winner}
+        running={@running}
+        show_stopped={@game_status != "game_over"}
+      >
+        <:meta>
+          <SpectatorChrome.meta_line
+            label="Survivor"
+            label_class="text-amber-400"
+            progress={"Episode #{@episode}"}
+            phase={format_phase(@phase)}
+          />
+        </:meta>
+      </SpectatorChrome.page_header>
 
       <div class="flex-1 flex flex-col overflow-hidden">
         <div class="flex-1 overflow-hidden">
-          <SurvivorBoard.render world={@state.world} interactive={false} />
+          <.render_board domain={:survivor} world={@state.world} />
         </div>
 
         <.usage_panel usage={@usage} />
 
-        <div class="flex-shrink-0 border-t border-glass-border bg-slate-950/60 h-48 overflow-hidden">
-          <div class="px-4 py-2 border-b border-glass-border bg-slate-900/40">
-            <h3 class="text-[9px] font-mono uppercase tracking-widest text-emerald-400 font-bold flex items-center gap-1.5">
-              <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
-                <path fill-rule="evenodd" d="M3 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clip-rule="evenodd" />
-              </svg>
-              LIVE FEED
-            </h3>
-          </div>
-          <div class="p-0 h-36 overflow-hidden">
-            <EventLog.render events={@state.recent_events} />
-          </div>
-        </div>
+        <SpectatorChrome.live_feed_panel
+          events={@state.recent_events}
+          wrapper_class="flex-shrink-0 border-t border-glass-border bg-slate-950/60 h-48 overflow-hidden"
+        />
       </div>
     </div>
     """
@@ -758,64 +642,35 @@ defmodule LemonSimUi.SpectatorLive do
 
     ~H"""
     <div class="flex flex-col min-h-screen bg-[#05130d] text-slate-200">
-      <header class="flex items-center justify-between px-6 py-3 border-b border-emerald-900/50 bg-slate-950/70 backdrop-blur-md flex-shrink-0">
-        <div class="flex items-center gap-4">
-          <a href="/" class="text-slate-500 hover:text-emerald-400 transition-colors" title="Back to dashboard">
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-              <path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd" />
-            </svg>
-          </a>
-          <div>
-            <h1 class="text-xl font-bold text-white tracking-tight">{@sim_id}</h1>
-            <div class="flex items-center gap-2 text-xs font-mono text-slate-400">
-              <span class="text-emerald-400">Poker</span>
+      <SpectatorChrome.page_header
+        sim_id={@sim_id}
+        border_class="border-emerald-900/50"
+        bg_class="bg-slate-950/70"
+        hover_class="hover:text-emerald-400"
+        league_path="/arena/poker/leaderboard"
+        winner={@winner}
+        running={@running}
+        show_stopped={@game_status != "game_over"}
+      >
+        <:meta>
+          <SpectatorChrome.meta_line label="Poker" label_class="text-emerald-400" progress={@hand_label}>
+            <:extra :if={@street}>
               <span class="text-slate-600">|</span>
-              <span>{@hand_label}</span>
-              <span :if={@street} class="text-slate-600">|</span>
-              <span :if={@street} class="capitalize">{format_phase(to_string(@street))}</span>
-            </div>
-          </div>
-        </div>
-
-        <div class="flex items-center gap-3">
-          <.link
-            navigate={"/arena/poker/leaderboard"}
-            class="text-[11px] font-mono text-slate-400 hover:text-cyan-300 px-3 py-1.5 rounded border border-slate-700 hover:border-cyan-500/40 transition-colors"
-          >
-            League
-          </.link>
-          <%= if @winner do %>
-            <span class="text-sm font-bold px-3 py-1.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/30">
-              Winner: {@winner}
-            </span>
-          <% end %>
-          <span :if={@running} class="text-[11px] font-bold tracking-widest uppercase px-3 py-1.5 rounded-sm bg-red-500/10 text-red-400 border border-red-500/30 flex items-center gap-2 shadow-[0_0_10px_rgba(239,68,68,0.2)]">
-            <span class="w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.8)]"></span>
-            LIVE
-          </span>
-          <span :if={!@running && @game_status != "game_over"} class="text-[11px] font-mono text-slate-500 px-3 py-1.5 rounded border border-slate-700">
-            STOPPED
-          </span>
-        </div>
-      </header>
+              <span class="capitalize">{format_phase(to_string(@street))}</span>
+            </:extra>
+          </SpectatorChrome.meta_line>
+        </:meta>
+      </SpectatorChrome.page_header>
 
       <div class="flex-1 overflow-y-auto overflow-x-hidden" style="scrollbar-gutter: stable;">
-        <PokerBoard.render world={@state.world} interactive={false} />
+        <.render_board domain={:poker} world={@state.world} />
         <.usage_panel usage={@usage} />
 
-        <div class="border-t border-glass-border bg-slate-950/60">
-          <div class="px-4 py-2 border-b border-glass-border bg-slate-900/40">
-            <h3 class="text-[9px] font-mono uppercase tracking-widest text-emerald-400 font-bold flex items-center gap-1.5">
-              <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
-                <path fill-rule="evenodd" d="M3 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clip-rule="evenodd" />
-              </svg>
-              LIVE FEED
-            </h3>
-          </div>
-          <div class="p-0 h-48 overflow-hidden">
-            <EventLog.render events={@state.recent_events} />
-          </div>
-        </div>
+        <SpectatorChrome.live_feed_panel
+          events={@state.recent_events}
+          wrapper_class="border-t border-glass-border bg-slate-950/60"
+          body_class="h-48"
+        />
       </div>
     </div>
     """
@@ -848,53 +703,31 @@ defmodule LemonSimUi.SpectatorLive do
 
     ~H"""
     <div class="flex flex-col h-screen overflow-hidden">
-      <%!-- Header bar --%>
-      <header class="flex items-center justify-between px-6 py-3 border-b border-glass-border bg-slate-900/60 backdrop-blur-md flex-shrink-0">
-        <div class="flex items-center gap-4">
-          <a href="/" class="text-slate-500 hover:text-cyan-400 transition-colors" title="Back to dashboard">
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-              <path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd" />
-            </svg>
-          </a>
-          <div>
-            <h1 class="text-xl font-bold text-white tracking-tight">{@sim_id}</h1>
-            <div class="flex items-center gap-2 text-xs font-mono text-slate-400">
-              <span class="text-fuchsia-400">Werewolf</span>
-              <span class="text-slate-600">|</span>
-              <span>Day {@day_number}</span>
-              <span class="text-slate-600">|</span>
-              <span class="capitalize">{format_phase(@phase)}</span>
-            </div>
-          </div>
-        </div>
-
-        <div class="flex items-center gap-3">
-          <.link
-            navigate={~p"/werewolf/leaderboard"}
-            class="text-[11px] font-mono text-slate-400 hover:text-cyan-300 px-3 py-1.5 rounded border border-slate-700 hover:border-cyan-500/40 transition-colors"
-          >
-            League
-          </.link>
-          <%= if @winner do %>
-            <span class="text-sm font-bold px-3 py-1.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/30">
-              Winner: {@winner}
-            </span>
-          <% end %>
-          <span :if={@running} class="text-[11px] font-bold tracking-widest uppercase px-3 py-1.5 rounded-sm bg-red-500/10 text-red-400 border border-red-500/30 flex items-center gap-2 shadow-[0_0_10px_rgba(239,68,68,0.2)]">
-            <span class="w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.8)]"></span>
-            LIVE
-          </span>
-          <span :if={!@running && !@winner} class="text-[11px] font-mono text-slate-500 px-3 py-1.5 rounded border border-slate-700">
-            STOPPED
-          </span>
-        </div>
-      </header>
+      <SpectatorChrome.page_header
+        sim_id={@sim_id}
+        border_class="border-glass-border"
+        bg_class="bg-slate-900/60"
+        hover_class="hover:text-cyan-400"
+        league_path={~p"/werewolf/leaderboard"}
+        winner={@winner}
+        running={@running}
+        show_stopped={!@winner}
+      >
+        <:meta>
+          <SpectatorChrome.meta_line
+            label="Werewolf"
+            label_class="text-fuchsia-400"
+            progress={"Day #{@day_number}"}
+            phase={format_phase(@phase)}
+          />
+        </:meta>
+      </SpectatorChrome.page_header>
 
       <%!-- Main content --%>
       <div class="flex-1 flex flex-col overflow-hidden">
         <%!-- Game board (full width) --%>
         <div class="flex-1 overflow-hidden">
-          <WerewolfBoard.render world={@state.world} interactive={false} />
+          <.render_board domain={:werewolf} world={@state.world} />
         </div>
 
         <.usage_panel usage={@usage} />
@@ -947,19 +780,10 @@ defmodule LemonSimUi.SpectatorLive do
         </div>
 
         <%!-- Narrative event log --%>
-        <div class="flex-shrink-0 border-t border-glass-border bg-slate-950/60 h-48 overflow-hidden">
-          <div class="px-4 py-2 border-b border-glass-border bg-slate-900/40">
-            <h3 class="text-[9px] font-mono uppercase tracking-widest text-emerald-400 font-bold flex items-center gap-1.5">
-              <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
-                <path fill-rule="evenodd" d="M3 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clip-rule="evenodd" />
-              </svg>
-              LIVE FEED
-            </h3>
-          </div>
-          <div class="p-0 h-36 overflow-hidden">
-            <EventLog.render events={@state.recent_events} />
-          </div>
-        </div>
+        <SpectatorChrome.live_feed_panel
+          events={@state.recent_events}
+          wrapper_class="flex-shrink-0 border-t border-glass-border bg-slate-950/60 h-48 overflow-hidden"
+        />
       </div>
     </div>
     """
@@ -1034,6 +858,38 @@ defmodule LemonSimUi.SpectatorLive do
         </table>
       </div>
     </section>
+    """
+  end
+
+  # -- Board dispatch --
+
+  # Registration point: maps a supported domain to its board component.
+  # Every board shares the `render(world:, interactive:)` signature, so this
+  # is the one place a new domain needs a case clause added; task #20
+  # (unify arena domain registration) will fold this into one shared
+  # per-domain descriptor alongside the bench/league registries,
+  # arena_domains.ex, and SimManager.
+  attr(:domain, :atom, required: true)
+  attr(:world, :map, required: true)
+
+  defp render_board(assigns) do
+    ~H"""
+    <%= case @domain do %>
+      <% :vending_bench -> %>
+        <VendingBenchBoard.render world={@world} interactive={false} />
+      <% :tcg_shop -> %>
+        <TcgShopBoard.render world={@world} interactive={false} />
+      <% :space_station -> %>
+        <SpaceStationBoard.render world={@world} interactive={false} />
+      <% :stock_market -> %>
+        <StockMarketBoard.render world={@world} interactive={false} />
+      <% :survivor -> %>
+        <SurvivorBoard.render world={@world} interactive={false} />
+      <% :poker -> %>
+        <PokerBoard.render world={@world} interactive={false} />
+      <% :werewolf -> %>
+        <WerewolfBoard.render world={@world} interactive={false} />
+    <% end %>
     """
   end
 

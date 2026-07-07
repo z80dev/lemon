@@ -167,6 +167,29 @@ defmodule LemonSimUi.SpectatorLiveTest do
     LemonSim.Kernel.Store.delete_state(sim_id)
   end
 
+  test "renders spectator view for poker sim", %{conn: conn} do
+    sim_id = "pkr_test1"
+
+    state =
+      LemonSim.Examples.Poker.initial_state(sim_id: sim_id, player_count: 4)
+      |> put_model_on_first_player("zai/glm-5")
+
+    LemonSim.Kernel.Store.put_state(state)
+
+    {:ok, _view, html} = live(conn, "/watch/#{sim_id}")
+    assert html =~ sim_id
+    assert html =~ "Poker"
+    assert html =~ "/arena/poker/leaderboard"
+    assert html =~ "Hand 1/12"
+    assert html =~ "glm-5"
+    refute html =~ "Abort Sim"
+    refute html =~ "RAW_STATE_DUMP"
+    refute html =~ "AGENT STRATEGY"
+    refute html =~ "DATA BANKS"
+
+    LemonSim.Kernel.Store.delete_state(sim_id)
+  end
+
   test "renders vending bench spectator view from checkpoint artifacts", %{conn: conn} do
     sim_id = "test_spectator_vb_artifact"
 
