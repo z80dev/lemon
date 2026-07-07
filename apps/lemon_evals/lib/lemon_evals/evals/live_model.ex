@@ -26,6 +26,7 @@ defmodule LemonEvals.Evals.LiveModel do
   }
 
   alias CodingAgent.Tools.Task, as: TaskTool
+  alias LemonCore.Env
   alias LemonEvals.Types
   alias LemonSkills.Curator
   alias LemonSkills.Tools.{MemoryTopic, SearchMemory}
@@ -1497,16 +1498,17 @@ defmodule LemonEvals.Evals.LiveModel do
 
     if is_binary(api_key) and api_key != "" do
       model = %Model{
-        id: Keyword.get(opts, :live_model_id) || live_env("MODEL") || "kimi-for-coding",
+        id: Keyword.get(opts, :live_model_id) || Env.get(:lemon_eval_model) || "kimi-for-coding",
         name: "Live Eval Model",
         api:
           live_atom(
-            Keyword.get(opts, :live_api_type) || live_env("API_TYPE"),
+            Keyword.get(opts, :live_api_type) || Env.get(:lemon_eval_api_type),
             :anthropic_messages
           ),
-        provider: live_atom(Keyword.get(opts, :live_provider) || live_env("PROVIDER"), :kimi),
+        provider:
+          live_atom(Keyword.get(opts, :live_provider) || Env.get(:lemon_eval_provider), :kimi),
         base_url:
-          Keyword.get(opts, :live_base_url) || live_env("BASE_URL") ||
+          Keyword.get(opts, :live_base_url) || Env.get(:lemon_eval_base_url) ||
             "https://api.kimi.com/coding",
         reasoning: false,
         input: [:text],
@@ -1531,22 +1533,8 @@ defmodule LemonEvals.Evals.LiveModel do
 
   def live_model_api_key(opts \\ []) do
     Keyword.get(opts, :live_api_key) ||
-      live_env("API_KEY") ||
-      live_secret("API_KEY_SECRET")
-  end
-
-  defp live_env(name) do
-    System.get_env("LEMON_EVAL_#{name}") ||
-      System.get_env("INTEGRATION_#{name}") ||
-      legacy_live_env(name)
-  end
-
-  defp live_secret(name) do
-    secret_name =
-      System.get_env("LEMON_EVAL_#{name}") ||
-        System.get_env("INTEGRATION_#{name}")
-
-    resolve_live_secret(secret_name)
+      Env.get(:lemon_eval_api_key) ||
+      resolve_live_secret(Env.get(:lemon_eval_api_key_secret))
   end
 
   defp resolve_live_secret(nil), do: nil
@@ -1560,16 +1548,13 @@ defmodule LemonEvals.Evals.LiveModel do
         _ -> nil
       end
     else
-      System.get_env(secret_name)
+      Env.string(secret_name)
     end
   rescue
-    _ -> System.get_env(secret_name)
+    _ -> Env.string(secret_name)
   catch
-    :exit, _ -> System.get_env(secret_name)
+    :exit, _ -> Env.string(secret_name)
   end
-
-  defp legacy_live_env("API_KEY"), do: System.get_env("ANTHROPIC_API_KEY")
-  defp legacy_live_env(_), do: nil
 
   defp live_atom(nil, default), do: default
   defp live_atom(value, _default) when is_atom(value), do: value

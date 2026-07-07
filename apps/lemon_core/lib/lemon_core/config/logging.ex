@@ -23,7 +23,7 @@ defmodule LemonCore.Config.Logging do
   - `LEMON_LOG_LEVEL`
   """
 
-  alias LemonCore.Config.Helpers
+  alias LemonCore.Env
 
   defstruct [
     :file,
@@ -67,11 +67,11 @@ defmodule LemonCore.Config.Logging do
   # Private functions for resolving each config section
 
   defp resolve_file(settings) do
-    Helpers.get_env("LEMON_LOG_FILE", settings["file"])
+    Env.get(:lemon_log_file, default: settings["file"])
   end
 
   defp resolve_level(settings) do
-    level = Helpers.get_env("LEMON_LOG_LEVEL", settings["level"])
+    level = Env.get(:lemon_log_level, default: settings["level"])
 
     if level do
       parse_log_level(level)
@@ -98,32 +98,27 @@ defmodule LemonCore.Config.Logging do
   defp parse_log_level(_), do: nil
 
   defp resolve_max_no_bytes(settings),
-    do: resolve_env_integer("LEMON_LOG_MAX_NO_BYTES", settings["max_no_bytes"])
+    do: Env.get(:lemon_log_max_no_bytes, default: settings["max_no_bytes"])
 
   defp resolve_max_no_files(settings),
-    do: resolve_env_integer("LEMON_LOG_MAX_NO_FILES", settings["max_no_files"])
+    do: Env.get(:lemon_log_max_no_files, default: settings["max_no_files"])
 
   defp resolve_compress_on_rotate(settings) do
-    if Helpers.get_env("LEMON_LOG_COMPRESS_ON_ROTATE") do
-      Helpers.get_env_bool("LEMON_LOG_COMPRESS_ON_ROTATE", false)
+    # Note: intentionally not `Env.get/2` -- this preserves the module's
+    # existing (slightly unusual) fallback: an unparseable env value falls
+    # back to `false`, not to `settings["compress_on_rotate"]`, because the
+    # env-set check and the boolean cast are two separate calls below rather
+    # than one `Env.get(name, default: settings_value)` resolution.
+    if Env.string("LEMON_LOG_COMPRESS_ON_ROTATE") do
+      Env.bool("LEMON_LOG_COMPRESS_ON_ROTATE", false)
     else
       settings["compress_on_rotate"]
     end
   end
 
   defp resolve_filesync_repeat_interval(settings),
-    do: resolve_env_integer("LEMON_LOG_FILESYNC_REPEAT_INTERVAL", settings["filesync_repeat_interval"])
-
-  defp resolve_env_integer(env_var, fallback) do
-    case Helpers.get_env(env_var) do
-      nil -> fallback
-      val ->
-        case Integer.parse(val) do
-          {int, ""} -> int
-          _ -> fallback
-        end
-    end
-  end
+    do:
+      Env.get(:lemon_log_filesync_repeat_interval, default: settings["filesync_repeat_interval"])
 
   @doc """
   Returns the default logging configuration as a map.

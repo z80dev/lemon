@@ -16,6 +16,7 @@ defmodule LemonBrowser.LocalServer do
 
   require Logger
 
+  alias LemonCore.Env
   alias LemonCore.Id
 
   @name __MODULE__
@@ -227,7 +228,7 @@ defmodule LemonBrowser.LocalServer do
   end
 
   defp find_driver do
-    override = System.get_env("LEMON_BROWSER_DRIVER_PATH") |> to_string_safe()
+    override = Env.get(:lemon_browser_driver_path) |> to_string_safe()
 
     if override != "" do
       expanded = Path.expand(override)
@@ -364,9 +365,13 @@ defmodule LemonBrowser.LocalServer do
   end
 
   defp driver_config_summary do
-    endpoint = System.get_env("LEMON_BROWSER_CDP_ENDPOINT") |> to_string_safe()
-    attach_only? = truthy_env?("LEMON_BROWSER_ATTACH_ONLY") or endpoint != ""
-    cdp_port = System.get_env("LEMON_BROWSER_CDP_PORT") |> parse_positive_int(18_800)
+    endpoint = Env.get(:lemon_browser_cdp_endpoint) |> to_string_safe()
+    attach_only? = Env.get(:lemon_browser_attach_only) or endpoint != ""
+    # Note: intentionally not `Env.get/2` -- LEMON_BROWSER_CDP_PORT only
+    # accepts *positive* integers (0/negative fall back to the default),
+    # which is stricter than the standard :integer cast's "any parseable
+    # integer" behavior.
+    cdp_port = Env.string("LEMON_BROWSER_CDP_PORT") |> parse_positive_int(18_800)
 
     %{
       mode: if(endpoint == "", do: "local_cdp", else: "remote_cdp"),
@@ -378,16 +383,6 @@ defmodule LemonBrowser.LocalServer do
     }
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
     |> Map.new()
-  end
-
-  defp truthy_env?(name) do
-    case System.get_env(name) do
-      value when is_binary(value) ->
-        String.downcase(String.trim(value)) in ["1", "true", "yes", "on"]
-
-      _ ->
-        false
-    end
   end
 
   defp parse_positive_int(value, fallback) when is_binary(value) do

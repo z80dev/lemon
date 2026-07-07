@@ -820,7 +820,11 @@ defmodule LemonCore.Env do
       aliases: [],
       type: :integer,
       default: 18800,
-      doc: "Local CDP port used when launching a managed browser instance.",
+      doc:
+        "Local CDP port used when launching a managed browser instance. Only positive " <>
+          "integers are accepted (0/negative/unparseable fall back to the default); " <>
+          "resolved with a bespoke parser in LemonBrowser.LocalServer, not the standard " <>
+          ":integer cast.",
       secret?: false,
       required?: false,
       area: :browser,
@@ -1781,9 +1785,11 @@ defmodule LemonCore.Env do
       name: :lemon_log_max_no_bytes,
       env_var: "LEMON_LOG_MAX_NO_BYTES",
       aliases: [],
-      type: :bytes,
+      type: :integer,
       default: nil,
-      doc: "Log file rotation size threshold.",
+      doc:
+        "Log file rotation size threshold, in bytes. Plain integer only -- unlike " <>
+          "LEMON_WASM_DEFAULT_MEMORY_LIMIT, this one does not accept \"10MB\"-style suffixes.",
       secret?: false,
       required?: false,
       area: :logging,
@@ -2877,7 +2883,12 @@ defmodule LemonCore.Env do
       aliases: [],
       type: :boolean,
       default: nil,
-      doc: "Whether Firecrawl is used as the webfetch backend.",
+      doc:
+        "Whether Firecrawl is used as the webfetch backend. Tri-state (nil = undecided, " <>
+          "falls through to TOML/default); recognizes \"true\"/\"1\"/\"yes\" and " <>
+          "\"false\"/\"0\"/\"no\" only -- not the \"on\"/\"off\" spellings most other " <>
+          "booleans in this registry accept. Resolved with bespoke logic in " <>
+          "LemonCore.Config.Tools.resolve_firecrawl/1, not the standard :boolean cast.",
       secret?: false,
       required?: false,
       area: :tools_web,

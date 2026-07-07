@@ -1,8 +1,14 @@
 defmodule LemonCore.EnvTest do
   @moduledoc """
   Tests for the LemonCore.Env typed environment-variable registry.
+
+  This exercises real declared vars (e.g. LEMON_WASM_ENABLED,
+  LEMON_WEB_PORT) that other config test files also read via
+  `LemonCore.Config.*`, so -- like every other test file in
+  test/lemon_core/config/ that touches those same vars -- this must run
+  `async: false` to avoid racing on shared process env state.
   """
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias LemonCore.Env
 

@@ -47,7 +47,7 @@ defmodule LemonCore.Config.Gateway do
   - `LEMON_GATEWAY_ENGINE_LOCK_TIMEOUT_MS`
   """
 
-  alias LemonCore.Config.Helpers
+  alias LemonCore.Env
 
   defstruct [
     :max_concurrent_runs,
@@ -169,19 +169,19 @@ defmodule LemonCore.Config.Gateway do
       auto_resume: resolve_auto_resume(gateway_settings),
       enable_telegram: resolve_enable_telegram(gateway_settings),
       enable_discord:
-        resolve_enable_flag(gateway_settings, "enable_discord", "LEMON_GATEWAY_ENABLE_DISCORD"),
+        resolve_enable_flag(gateway_settings, "enable_discord", :lemon_gateway_enable_discord),
       enable_farcaster:
         resolve_enable_flag(
           gateway_settings,
           "enable_farcaster",
-          "LEMON_GATEWAY_ENABLE_FARCASTER"
+          :lemon_gateway_enable_farcaster
         ),
       enable_email:
-        resolve_enable_flag(gateway_settings, "enable_email", "LEMON_GATEWAY_ENABLE_EMAIL"),
+        resolve_enable_flag(gateway_settings, "enable_email", :lemon_gateway_enable_email),
       enable_xmtp:
-        resolve_enable_flag(gateway_settings, "enable_xmtp", "LEMON_GATEWAY_ENABLE_XMTP"),
+        resolve_enable_flag(gateway_settings, "enable_xmtp", :lemon_gateway_enable_xmtp),
       enable_webhook:
-        resolve_enable_flag(gateway_settings, "enable_webhook", "LEMON_GATEWAY_ENABLE_WEBHOOK"),
+        resolve_enable_flag(gateway_settings, "enable_webhook", :lemon_gateway_enable_webhook),
       require_engine_lock: resolve_require_engine_lock(gateway_settings),
       engine_lock_timeout_ms: resolve_engine_lock_timeout(gateway_settings),
       projects: resolve_projects(gateway_settings),
@@ -202,18 +202,15 @@ defmodule LemonCore.Config.Gateway do
   # Private functions for resolving each config section
 
   defp resolve_max_concurrent_runs(settings) do
-    Helpers.get_env_int(
-      "LEMON_GATEWAY_MAX_CONCURRENT_RUNS",
-      settings["max_concurrent_runs"] || 2
-    )
+    Env.get(:lemon_gateway_max_concurrent_runs, default: settings["max_concurrent_runs"] || 2)
   end
 
   defp resolve_default_engine(settings) do
-    Helpers.get_env("LEMON_GATEWAY_DEFAULT_ENGINE", settings["default_engine"] || "lemon")
+    Env.get(:lemon_gateway_default_engine, default: settings["default_engine"] || "lemon")
   end
 
   defp resolve_default_cwd(settings) do
-    cwd = Helpers.get_env("LEMON_GATEWAY_DEFAULT_CWD", settings["default_cwd"])
+    cwd = Env.get(:lemon_gateway_default_cwd, default: settings["default_cwd"])
 
     if cwd do
       String.trim(cwd)
@@ -223,40 +220,35 @@ defmodule LemonCore.Config.Gateway do
   end
 
   defp resolve_auto_resume(settings) do
-    Helpers.get_env_bool(
-      "LEMON_GATEWAY_AUTO_RESUME",
-      if(is_nil(settings["auto_resume"]), do: false, else: settings["auto_resume"])
+    Env.get(:lemon_gateway_auto_resume,
+      default: if(is_nil(settings["auto_resume"]), do: false, else: settings["auto_resume"])
     )
   end
 
   defp resolve_enable_telegram(settings) do
-    Helpers.get_env_bool(
-      "LEMON_GATEWAY_ENABLE_TELEGRAM",
-      if(is_nil(settings["enable_telegram"]), do: false, else: settings["enable_telegram"])
+    Env.get(:lemon_gateway_enable_telegram,
+      default:
+        if(is_nil(settings["enable_telegram"]), do: false, else: settings["enable_telegram"])
     )
   end
 
-  defp resolve_enable_flag(settings, key, env_var) do
-    Helpers.get_env_bool(
-      env_var,
-      if(is_nil(settings[key]), do: false, else: settings[key])
-    )
+  defp resolve_enable_flag(settings, key, name) do
+    Env.get(name, default: if(is_nil(settings[key]), do: false, else: settings[key]))
   end
 
   defp resolve_require_engine_lock(settings) do
-    Helpers.get_env_bool(
-      "LEMON_GATEWAY_REQUIRE_ENGINE_LOCK",
-      if(is_nil(settings["require_engine_lock"]),
-        do: true,
-        else: settings["require_engine_lock"]
-      )
+    Env.get(:lemon_gateway_require_engine_lock,
+      default:
+        if(is_nil(settings["require_engine_lock"]),
+          do: true,
+          else: settings["require_engine_lock"]
+        )
     )
   end
 
   defp resolve_engine_lock_timeout(settings) do
-    Helpers.get_env_int(
-      "LEMON_GATEWAY_ENGINE_LOCK_TIMEOUT_MS",
-      settings["engine_lock_timeout_ms"] || 60_000
+    Env.get(:lemon_gateway_engine_lock_timeout_ms,
+      default: settings["engine_lock_timeout_ms"] || 60_000
     )
   end
 
@@ -333,7 +325,7 @@ defmodule LemonCore.Config.Gateway do
 
       is_binary(token) and String.starts_with?(token, "${") and String.ends_with?(token, "}") ->
         env_var = token |> String.slice(2..-2//1)
-        Helpers.get_env(env_var)
+        Env.string(env_var)
 
       true ->
         token
@@ -345,24 +337,20 @@ defmodule LemonCore.Config.Gateway do
 
     %{
       enabled:
-        Helpers.get_env_bool(
-          "LEMON_TELEGRAM_COMPACTION_ENABLED",
-          if(is_nil(compaction["enabled"]), do: true, else: compaction["enabled"])
+        Env.get(:lemon_telegram_compaction_enabled,
+          default: if(is_nil(compaction["enabled"]), do: true, else: compaction["enabled"])
         ),
       context_window_tokens:
-        Helpers.get_env_int(
-          "LEMON_TELEGRAM_COMPACTION_CONTEXT_WINDOW",
-          compaction["context_window_tokens"] || 400_000
+        Env.get(:lemon_telegram_compaction_context_window,
+          default: compaction["context_window_tokens"] || 400_000
         ),
       reserve_tokens:
-        Helpers.get_env_int(
-          "LEMON_TELEGRAM_COMPACTION_RESERVE_TOKENS",
-          compaction["reserve_tokens"] || 16_384
+        Env.get(:lemon_telegram_compaction_reserve_tokens,
+          default: compaction["reserve_tokens"] || 16_384
         ),
       trigger_ratio:
-        Helpers.get_env_float(
-          "LEMON_TELEGRAM_COMPACTION_TRIGGER_RATIO",
-          compaction["trigger_ratio"] || 0.9
+        Env.get(:lemon_telegram_compaction_trigger_ratio,
+          default: compaction["trigger_ratio"] || 0.9
         )
     }
   end

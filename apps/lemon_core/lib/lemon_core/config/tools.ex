@@ -35,7 +35,7 @@ defmodule LemonCore.Config.Tools do
   - `LEMON_WASM_ENABLED`, `LEMON_WASM_AUTO_BUILD`
   """
 
-  alias LemonCore.Config.Helpers
+  alias LemonCore.Env
 
   defstruct [
     :auto_resize_images,
@@ -129,9 +129,9 @@ defmodule LemonCore.Config.Tools do
   # Private functions for resolving each config section
 
   defp resolve_auto_resize(settings) do
-    Helpers.get_env_bool(
-      "LEMON_AUTO_RESIZE_IMAGES",
-      if(is_nil(settings["auto_resize_images"]), do: true, else: settings["auto_resize_images"])
+    Env.get(:lemon_auto_resize_images,
+      default:
+        if(is_nil(settings["auto_resize_images"]), do: true, else: settings["auto_resize_images"])
     )
   end
 
@@ -150,21 +150,16 @@ defmodule LemonCore.Config.Tools do
 
     %{
       enabled:
-        Helpers.get_env_bool(
-          "LEMON_WEB_SEARCH_ENABLED",
-          if(is_nil(search["enabled"]), do: true, else: search["enabled"])
+        Env.get(:lemon_web_search_enabled,
+          default: if(is_nil(search["enabled"]), do: true, else: search["enabled"])
         ),
-      provider: Helpers.get_env("LEMON_WEB_SEARCH_PROVIDER", search["provider"] || "brave"),
-      api_key: Helpers.get_env("LEMON_WEB_SEARCH_API_KEY", search["api_key"]),
-      max_results:
-        Helpers.get_env_int("LEMON_WEB_SEARCH_MAX_RESULTS", search["max_results"] || 5),
+      provider: Env.get(:lemon_web_search_provider, default: search["provider"] || "brave"),
+      api_key: Env.get(:lemon_web_search_api_key, default: search["api_key"]),
+      max_results: Env.get(:lemon_web_search_max_results, default: search["max_results"] || 5),
       timeout_seconds:
-        Helpers.get_env_int("LEMON_WEB_SEARCH_TIMEOUT", search["timeout_seconds"] || 30),
+        Env.get(:lemon_web_search_timeout, default: search["timeout_seconds"] || 30),
       cache_ttl_minutes:
-        Helpers.get_env_int(
-          "LEMON_WEB_SEARCH_CACHE_TTL",
-          search["cache_ttl_minutes"] || 15
-        ),
+        Env.get(:lemon_web_search_cache_ttl, default: search["cache_ttl_minutes"] || 15),
       api_key_secret: normalize_optional_string(search["api_key_secret"]),
       failover: resolve_search_failover(search),
       perplexity: resolve_perplexity(search)
@@ -181,11 +176,10 @@ defmodule LemonCore.Config.Tools do
 
     %{
       enabled:
-        Helpers.get_env_bool(
-          "LEMON_WEB_SEARCH_FAILOVER_ENABLED",
-          if(is_nil(failover["enabled"]), do: true, else: failover["enabled"])
+        Env.get(:lemon_web_search_failover_enabled,
+          default: if(is_nil(failover["enabled"]), do: true, else: failover["enabled"])
         ),
-      provider: Helpers.get_env("LEMON_WEB_SEARCH_FAILOVER_PROVIDER", failover["provider"])
+      provider: Env.get(:lemon_web_search_failover_provider, default: failover["provider"])
     }
   end
 
@@ -193,14 +187,11 @@ defmodule LemonCore.Config.Tools do
     perplexity = search["perplexity"] || %{}
 
     %{
-      api_key: Helpers.get_env("LEMON_PERPLEXITY_API_KEY", perplexity["api_key"]),
+      api_key: Env.get(:lemon_perplexity_api_key, default: perplexity["api_key"]),
       api_key_secret: normalize_optional_string(perplexity["api_key_secret"]),
-      base_url: Helpers.get_env("LEMON_PERPLEXITY_BASE_URL", perplexity["base_url"]),
+      base_url: Env.get(:lemon_perplexity_base_url, default: perplexity["base_url"]),
       model:
-        Helpers.get_env(
-          "LEMON_PERPLEXITY_MODEL",
-          perplexity["model"] || "perplexity/sonar-pro"
-        )
+        Env.get(:lemon_perplexity_model, default: perplexity["model"] || "perplexity/sonar-pro")
     }
   end
 
@@ -209,32 +200,32 @@ defmodule LemonCore.Config.Tools do
 
     %{
       enabled:
-        Helpers.get_env_bool(
-          "LEMON_WEB_FETCH_ENABLED",
-          if(is_nil(fetch["enabled"]), do: true, else: fetch["enabled"])
+        Env.get(:lemon_web_fetch_enabled,
+          default: if(is_nil(fetch["enabled"]), do: true, else: fetch["enabled"])
         ),
-      max_chars: Helpers.get_env_int("LEMON_WEB_FETCH_MAX_CHARS", fetch["max_chars"] || 50_000),
-      timeout_seconds:
-        Helpers.get_env_int("LEMON_WEB_FETCH_TIMEOUT", fetch["timeout_seconds"] || 30),
+      max_chars: Env.get(:lemon_web_fetch_max_chars, default: fetch["max_chars"] || 50_000),
+      timeout_seconds: Env.get(:lemon_web_fetch_timeout, default: fetch["timeout_seconds"] || 30),
       cache_ttl_minutes:
-        Helpers.get_env_int("LEMON_WEB_FETCH_CACHE_TTL", fetch["cache_ttl_minutes"] || 15),
+        Env.get(:lemon_web_fetch_cache_ttl, default: fetch["cache_ttl_minutes"] || 15),
       max_redirects:
-        Helpers.get_env_int("LEMON_WEB_FETCH_MAX_REDIRECTS", fetch["max_redirects"] || 3),
+        Env.get(:lemon_web_fetch_max_redirects, default: fetch["max_redirects"] || 3),
       user_agent:
-        Helpers.get_env(
-          "LEMON_WEB_FETCH_USER_AGENT",
-          fetch["user_agent"] ||
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        Env.get(:lemon_web_fetch_user_agent,
+          default:
+            fetch["user_agent"] ||
+              "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         ),
       readability:
-        Helpers.get_env_bool(
-          "LEMON_WEB_FETCH_READABILITY",
-          if(is_nil(fetch["readability"]), do: true, else: fetch["readability"])
+        Env.get(:lemon_web_fetch_readability,
+          default: if(is_nil(fetch["readability"]), do: true, else: fetch["readability"])
         ),
       allow_private_network:
-        Helpers.get_env_bool(
-          "LEMON_WEB_FETCH_ALLOW_PRIVATE_NETWORK",
-          if(is_nil(fetch["allow_private_network"]), do: false, else: fetch["allow_private_network"])
+        Env.get(:lemon_web_fetch_allow_private_network,
+          default:
+            if(is_nil(fetch["allow_private_network"]),
+              do: false,
+              else: fetch["allow_private_network"]
+            )
         ),
       allowed_hostnames: resolve_allowed_hostnames(fetch),
       firecrawl: resolve_firecrawl(fetch)
@@ -242,7 +233,11 @@ defmodule LemonCore.Config.Tools do
   end
 
   defp resolve_allowed_hostnames(fetch) do
-    env_hostnames = Helpers.get_env_list("LEMON_WEB_FETCH_ALLOWED_HOSTNAMES")
+    # Note: intentionally not `Env.get/2` -- see the comment on
+    # `LemonCore.Config.Agent.resolve_extension_paths/1` for why a list var
+    # whose "empty after parsing" fallback must key off the parsed list, not
+    # the raw string, stays on the explicit `Env.list/1` + if/else form.
+    env_hostnames = Env.list("LEMON_WEB_FETCH_ALLOWED_HOSTNAMES")
 
     if env_hostnames != [] do
       env_hostnames
@@ -257,10 +252,16 @@ defmodule LemonCore.Config.Tools do
     enabled_val = firecrawl["enabled"]
 
     %{
+      # Note: intentionally not `Env.get/2` -- unlike every other boolean
+      # here, this one preserves a genuine `nil` ("undecided") state distinct
+      # from `true`/`false`, and only recognizes "true"/"1"/"yes" and
+      # "false"/"0"/"no" (not the "on"/"off" spellings `Env.get/2`'s standard
+      # :boolean cast accepts). `Env.get/2` would always coerce to a concrete
+      # boolean and use the wider token set, which is a real behavior change.
       enabled:
         if(is_nil(enabled_val), do: nil, else: enabled_val)
         |> then(fn val ->
-          env_val = Helpers.get_env("LEMON_FIRECRAWL_ENABLED")
+          env_val = Env.string("LEMON_FIRECRAWL_ENABLED")
 
           cond do
             is_nil(env_val) -> val
@@ -269,12 +270,11 @@ defmodule LemonCore.Config.Tools do
             true -> val
           end
         end),
-      api_key: Helpers.get_env("LEMON_FIRECRAWL_API_KEY", firecrawl["api_key"]),
+      api_key: Env.get(:lemon_firecrawl_api_key, default: firecrawl["api_key"]),
       api_key_secret: normalize_optional_string(firecrawl["api_key_secret"]),
       base_url:
-        Helpers.get_env(
-          "LEMON_FIRECRAWL_BASE_URL",
-          firecrawl["base_url"] || "https://api.firecrawl.dev"
+        Env.get(:lemon_firecrawl_base_url,
+          default: firecrawl["base_url"] || "https://api.firecrawl.dev"
         ),
       only_main_content:
         if(is_nil(firecrawl["only_main_content"]),
@@ -291,12 +291,11 @@ defmodule LemonCore.Config.Tools do
 
     %{
       persistent:
-        Helpers.get_env_bool(
-          "LEMON_WEB_CACHE_PERSISTENT",
-          if(is_nil(cache["persistent"]), do: true, else: cache["persistent"])
+        Env.get(:lemon_web_cache_persistent,
+          default: if(is_nil(cache["persistent"]), do: true, else: cache["persistent"])
         ),
-      path: Helpers.get_env("LEMON_WEB_CACHE_PATH", cache["path"]),
-      max_entries: Helpers.get_env_int("LEMON_WEB_CACHE_MAX_ENTRIES", cache["max_entries"] || 100)
+      path: Env.get(:lemon_web_cache_path, default: cache["path"]),
+      max_entries: Env.get(:lemon_web_cache_max_entries, default: cache["max_entries"] || 100)
     }
   end
 
@@ -305,48 +304,41 @@ defmodule LemonCore.Config.Tools do
 
     %{
       enabled:
-        Helpers.get_env_bool(
-          "LEMON_WASM_ENABLED",
-          if(is_nil(wasm["enabled"]), do: false, else: wasm["enabled"])
+        Env.get(:lemon_wasm_enabled,
+          default: if(is_nil(wasm["enabled"]), do: false, else: wasm["enabled"])
         ),
       auto_build:
-        Helpers.get_env_bool(
-          "LEMON_WASM_AUTO_BUILD",
-          if(is_nil(wasm["auto_build"]), do: true, else: wasm["auto_build"])
+        Env.get(:lemon_wasm_auto_build,
+          default: if(is_nil(wasm["auto_build"]), do: true, else: wasm["auto_build"])
         ),
-      runtime_path: Helpers.get_env("LEMON_WASM_RUNTIME_PATH", wasm["runtime_path"] || ""),
+      runtime_path: Env.get(:lemon_wasm_runtime_path, default: wasm["runtime_path"] || ""),
       tool_paths: resolve_wasm_tool_paths(wasm),
       default_memory_limit:
-        Helpers.get_env_bytes(
-          "LEMON_WASM_DEFAULT_MEMORY_LIMIT",
-          wasm["default_memory_limit"] || 10_485_760
+        Env.get(:lemon_wasm_default_memory_limit,
+          default: wasm["default_memory_limit"] || 10_485_760
         ),
       default_timeout_ms:
-        Helpers.get_env_int(
-          "LEMON_WASM_DEFAULT_TIMEOUT_MS",
-          wasm["default_timeout_ms"] || 60_000
-        ),
+        Env.get(:lemon_wasm_default_timeout_ms, default: wasm["default_timeout_ms"] || 60_000),
       default_fuel_limit:
-        Helpers.get_env_int(
-          "LEMON_WASM_DEFAULT_FUEL_LIMIT",
-          wasm["default_fuel_limit"] || 10_000_000
+        Env.get(:lemon_wasm_default_fuel_limit,
+          default: wasm["default_fuel_limit"] || 10_000_000
         ),
       cache_compiled:
-        Helpers.get_env_bool(
-          "LEMON_WASM_CACHE_COMPILED",
-          if(is_nil(wasm["cache_compiled"]), do: true, else: wasm["cache_compiled"])
+        Env.get(:lemon_wasm_cache_compiled,
+          default: if(is_nil(wasm["cache_compiled"]), do: true, else: wasm["cache_compiled"])
         ),
-      cache_dir: Helpers.get_env("LEMON_WASM_CACHE_DIR", wasm["cache_dir"] || ""),
+      cache_dir: Env.get(:lemon_wasm_cache_dir, default: wasm["cache_dir"] || ""),
       max_tool_invoke_depth:
-        Helpers.get_env_int(
-          "LEMON_WASM_MAX_TOOL_INVOKE_DEPTH",
-          wasm["max_tool_invoke_depth"] || 4
+        Env.get(:lemon_wasm_max_tool_invoke_depth,
+          default: wasm["max_tool_invoke_depth"] || 4
         )
     }
   end
 
   defp resolve_wasm_tool_paths(wasm) do
-    env_paths = Helpers.get_env_list("LEMON_WASM_TOOL_PATHS")
+    # Note: intentionally not `Env.get/2` -- see the comment on
+    # `LemonCore.Config.Agent.resolve_extension_paths/1`.
+    env_paths = Env.list("LEMON_WASM_TOOL_PATHS")
 
     if env_paths != [] do
       env_paths

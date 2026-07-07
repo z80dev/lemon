@@ -22,7 +22,7 @@ defmodule LemonCore.Config.TUI do
   may affect agent behavior or output formatting.
   """
 
-  alias LemonCore.Config.Helpers
+  alias LemonCore.Env
 
   defstruct [
     :theme,
@@ -52,13 +52,12 @@ defmodule LemonCore.Config.TUI do
   # Private functions for resolving each config section
 
   defp resolve_theme(settings) do
-    Helpers.get_env("LEMON_TUI_THEME", settings["theme"] || "lemon")
+    Env.get(:lemon_tui_theme, default: settings["theme"] || "lemon")
   end
 
   defp resolve_debug(settings) do
-    Helpers.get_env_bool(
-      "LEMON_TUI_DEBUG",
-      if(is_nil(settings["debug"]), do: false, else: settings["debug"])
+    Env.get(:lemon_tui_debug,
+      default: if(is_nil(settings["debug"]), do: false, else: settings["debug"])
     )
   end
 

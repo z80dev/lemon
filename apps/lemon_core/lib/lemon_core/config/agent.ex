@@ -48,7 +48,7 @@ defmodule LemonCore.Config.Agent do
   - `LEMON_THEME`
   """
 
-  alias LemonCore.Config.Helpers
+  alias LemonCore.Env
 
   defstruct [
     :default_provider,
@@ -135,20 +135,18 @@ defmodule LemonCore.Config.Agent do
   defp normalize_agent_settings(_), do: %{}
 
   defp resolve_provider(settings) do
-    Helpers.get_env("LEMON_DEFAULT_PROVIDER", settings["default_provider"] || "anthropic")
+    Env.get(:lemon_default_provider, default: settings["default_provider"] || "anthropic")
   end
 
   defp resolve_model(settings) do
-    Helpers.get_env(
-      "LEMON_DEFAULT_MODEL",
-      settings["default_model"] || "claude-sonnet-4-20250514"
+    Env.get(:lemon_default_model,
+      default: settings["default_model"] || "claude-sonnet-4-20250514"
     )
   end
 
   defp resolve_thinking_level(settings) do
-    Helpers.get_env(
-      "LEMON_DEFAULT_THINKING_LEVEL",
-      settings["default_thinking_level"] || "medium"
+    Env.get(:lemon_default_thinking_level,
+      default: settings["default_thinking_level"] || "medium"
     )
   end
 
@@ -157,19 +155,16 @@ defmodule LemonCore.Config.Agent do
 
     %{
       enabled:
-        Helpers.get_env_bool(
-          "LEMON_COMPACTION_ENABLED",
-          if(is_nil(compaction["enabled"]), do: true, else: compaction["enabled"])
+        Env.get(:lemon_compaction_enabled,
+          default: if(is_nil(compaction["enabled"]), do: true, else: compaction["enabled"])
         ),
       reserve_tokens:
-        Helpers.get_env_int(
-          "LEMON_COMPACTION_RESERVE_TOKENS",
-          compaction["reserve_tokens"] || 16_384
+        Env.get(:lemon_compaction_reserve_tokens,
+          default: compaction["reserve_tokens"] || 16_384
         ),
       keep_recent_tokens:
-        Helpers.get_env_int(
-          "LEMON_COMPACTION_KEEP_RECENT_TOKENS",
-          compaction["keep_recent_tokens"] || 20_000
+        Env.get(:lemon_compaction_keep_recent_tokens,
+          default: compaction["keep_recent_tokens"] || 20_000
         )
     }
   end
@@ -179,12 +174,11 @@ defmodule LemonCore.Config.Agent do
 
     %{
       enabled:
-        Helpers.get_env_bool(
-          "LEMON_RETRY_ENABLED",
-          if(is_nil(retry["enabled"]), do: true, else: retry["enabled"])
+        Env.get(:lemon_retry_enabled,
+          default: if(is_nil(retry["enabled"]), do: true, else: retry["enabled"])
         ),
-      max_retries: Helpers.get_env_int("LEMON_MAX_RETRIES", retry["max_retries"] || 3),
-      base_delay_ms: Helpers.get_env_int("LEMON_BASE_DELAY_MS", retry["base_delay_ms"] || 1000)
+      max_retries: Env.get(:lemon_max_retries, default: retry["max_retries"] || 3),
+      base_delay_ms: Env.get(:lemon_base_delay_ms, default: retry["base_delay_ms"] || 1000)
     }
   end
 
@@ -193,33 +187,30 @@ defmodule LemonCore.Config.Agent do
 
     %{
       enabled:
-        Helpers.get_env_bool(
-          "LEMON_PROVIDER_ROUTING_ENABLED",
-          if(is_nil(routing["enabled"]), do: true, else: routing["enabled"])
+        Env.get(:lemon_provider_routing_enabled,
+          default: if(is_nil(routing["enabled"]), do: true, else: routing["enabled"])
         ),
       fallback_providers:
-        routing["fallback_providers"]
-        |> normalize_string_list()
-        |> env_string_list("LEMON_PROVIDER_FALLBACK_PROVIDERS"),
+        Env.get(:lemon_provider_fallback_providers,
+          default: normalize_string_list(routing["fallback_providers"])
+        ),
       default_pool:
-        Helpers.get_env(
-          "LEMON_PROVIDER_ROUTING_DEFAULT_POOL",
-          normalize_optional_string(routing["default_pool"])
+        Env.get(:lemon_provider_routing_default_pool,
+          default: normalize_optional_string(routing["default_pool"])
         ),
       default_profile:
-        Helpers.get_env(
-          "LEMON_PROVIDER_ROUTING_DEFAULT_PROFILE",
-          normalize_optional_string(routing["default_profile"])
+        Env.get(:lemon_provider_routing_default_profile,
+          default: normalize_optional_string(routing["default_profile"])
         ),
       credential_pools: normalize_credential_pools(routing["credential_pools"]),
       profiles: normalize_provider_routing_profiles(routing["profiles"]),
       require_credentials:
-        Helpers.get_env_bool(
-          "LEMON_PROVIDER_ROUTING_REQUIRE_CREDENTIALS",
-          if(is_nil(routing["require_credentials"]),
-            do: true,
-            else: routing["require_credentials"]
-          )
+        Env.get(:lemon_provider_routing_require_credentials,
+          default:
+            if(is_nil(routing["require_credentials"]),
+              do: true,
+              else: routing["require_credentials"]
+            )
         )
     }
   end
@@ -228,8 +219,8 @@ defmodule LemonCore.Config.Agent do
     shell = settings["shell"] || %{}
 
     %{
-      path: Helpers.get_env("LEMON_SHELL_PATH", shell["path"]),
-      command_prefix: Helpers.get_env("LEMON_SHELL_COMMAND_PREFIX", shell["command_prefix"])
+      path: Env.get(:lemon_shell_path, default: shell["path"]),
+      command_prefix: Env.get(:lemon_shell_command_prefix, default: shell["command_prefix"])
     }
   end
 
@@ -238,23 +229,27 @@ defmodule LemonCore.Config.Agent do
 
     %{
       enabled:
-        Helpers.get_env_bool(
-          "LEMON_EXTENSIONS_ENABLED",
-          if(is_nil(extensions["enabled"]), do: true, else: extensions["enabled"])
+        Env.get(:lemon_extensions_enabled,
+          default: if(is_nil(extensions["enabled"]), do: true, else: extensions["enabled"])
         ),
       auto_load_default_paths:
-        Helpers.get_env_bool(
-          "LEMON_EXTENSIONS_AUTO_LOAD_DEFAULT_PATHS",
-          if(is_nil(extensions["auto_load_default_paths"]),
-            do: false,
-            else: extensions["auto_load_default_paths"]
-          )
+        Env.get(:lemon_extensions_auto_load_default_paths,
+          default:
+            if(is_nil(extensions["auto_load_default_paths"]),
+              do: false,
+              else: extensions["auto_load_default_paths"]
+            )
         )
     }
   end
 
   defp resolve_extension_paths(settings) do
-    env_paths = Helpers.get_env_list("LEMON_EXTENSION_PATHS")
+    # Note: intentionally not `Env.get/2` -- LEMON_EXTENSION_PATHS falls back
+    # to settings only when the *parsed* list is empty (e.g. a whitespace- or
+    # comma-only value), not merely when the raw string is unset. `Env.get/2`
+    # only checks the raw string, so it would return `[]` for the former case
+    # instead of falling through to `settings["extension_paths"]`.
+    env_paths = Env.list("LEMON_EXTENSION_PATHS")
 
     if env_paths != [] do
       env_paths
@@ -264,18 +259,14 @@ defmodule LemonCore.Config.Agent do
   end
 
   defp resolve_theme(settings) do
-    Helpers.get_env("LEMON_THEME", settings["theme"] || "lemon")
+    Env.get(:lemon_theme, default: settings["theme"] || "lemon")
   end
 
   defp resolve_budget_defaults(settings) do
     budget = settings["budget_defaults"] || %{}
 
     %{
-      max_children:
-        Helpers.get_env_int(
-          "LEMON_BUDGET_MAX_CHILDREN",
-          budget["max_children"] || 5
-        )
+      max_children: Env.get(:lemon_budget_max_children, default: budget["max_children"] || 5)
     }
   end
 
@@ -372,14 +363,6 @@ defmodule LemonCore.Config.Agent do
     do: strategy
 
   defp normalize_routing_strategy(_), do: "priority"
-
-  defp env_string_list(default, env_name) do
-    case Helpers.get_env(env_name) do
-      nil -> default
-      "" -> default
-      value -> normalize_string_list(value)
-    end
-  end
 
   defp resolve_codex_cli(codex) do
     %{
