@@ -813,53 +813,8 @@ defmodule LemonSim.Examples.IntelNetwork.FrameRenderer do
   defp format_player_name(name) when is_binary(name), do: name
   defp format_player_name(_), do: "?"
 
-  defp has_event?(events, kind) when is_list(events) do
-    Enum.any?(events, fn
-      %{"kind" => k} -> k == kind
-      %{kind: k} -> to_string(k) == kind
-      _ -> false
-    end)
-  end
-
-  defp has_event?(_, _), do: false
-
-  defp find_event(events, kind) when is_list(events) do
-    Enum.find(events, fn
-      %{"kind" => k} -> k == kind
-      %{kind: k} -> to_string(k) == kind
-      _ -> false
-    end)
-  end
-
-  defp find_event(_, _), do: nil
-
-  defp get(map, key, default) when is_map(map) and is_binary(key) do
-    case Map.get(map, key) do
-      nil ->
-        try do
-          Map.get(map, String.to_existing_atom(key), default)
-        rescue
-          ArgumentError -> default
-        end
-
-      val ->
-        val
-    end
-  end
-
-  defp get(map, key, default) when is_map(map) and is_atom(key) do
-    Map.get(map, key, Map.get(map, Atom.to_string(key), default))
-  end
-
-  defp get(_, _, default), do: default
-
-  defp esc(str) when is_binary(str) do
-    str
-    |> String.replace("&", "&amp;")
-    |> String.replace("<", "&lt;")
-    |> String.replace(">", "&gt;")
-    |> String.replace("\"", "&quot;")
-  end
-
-  defp esc(other), do: esc(to_string(other))
+  defp has_event?(events, kind), do: FrameChrome.has_event?(events, kind)
+  defp find_event(events, kind), do: FrameChrome.find_event(events, kind)
+  defp get(map, key, default), do: FrameChrome.get(map, key, default)
+  defp esc(val), do: FrameChrome.esc(val)
 end

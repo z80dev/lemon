@@ -35,10 +35,17 @@ defmodule LemonSim.Bench.DomainsTest do
       end
     end
 
-    test "domains without a league adapter have no sim_id_prefix or arena default" do
-      for %Descriptor{league_adapter: nil} = descriptor <- Domains.all() do
-        assert descriptor.sim_id_prefix == nil
+    test "every league-adapter domain also has a sim_id_prefix and a default_player_count" do
+      for %Descriptor{league_adapter: adapter} = descriptor <- Domains.all(),
+          not is_nil(adapter) do
+        assert is_binary(descriptor.sim_id_prefix)
+        assert is_integer(descriptor.default_player_count)
       end
+    end
+
+    test "tcg_shop and vending_bench carry SimManager's sim_id_prefix without a league adapter" do
+      assert %Descriptor{sim_id_prefix: "tcg_", league_adapter: nil} = Domains.get("tcg_shop")
+      assert %Descriptor{sim_id_prefix: "vb_", league_adapter: nil} = Domains.get("vending_bench")
     end
   end
 

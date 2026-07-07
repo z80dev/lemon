@@ -1,6 +1,8 @@
 defmodule LemonSim.Examples.Skirmish.FrameRenderer do
   @moduledoc false
 
+  alias LemonSim.Examples.Rendering.FrameChrome
+
   # ---------------------------------------------------------------------------
   # Color palette (dark theme)
   # ---------------------------------------------------------------------------
@@ -132,10 +134,7 @@ defmodule LemonSim.Examples.Skirmish.FrameRenderer do
   # SVG skeleton
   # ---------------------------------------------------------------------------
 
-  defp svg_header(%{w: w, h: h}) do
-    ~s[<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 #{w} #{h}" ] <>
-      ~s[width="#{w}" height="#{h}">\n]
-  end
+  defp svg_header(ctx), do: FrameChrome.svg_header(ctx)
 
   defp svg_style do
     ~s"""
@@ -156,9 +155,7 @@ defmodule LemonSim.Examples.Skirmish.FrameRenderer do
   # Background
   # ---------------------------------------------------------------------------
 
-  defp render_background(%{w: w, h: h}) do
-    ~s[<rect width="#{w}" height="#{h}" fill="#{@bg}"/>\n]
-  end
+  defp render_background(ctx), do: FrameChrome.render_background(ctx, @bg)
 
   # ---------------------------------------------------------------------------
   # Header bar
@@ -761,24 +758,7 @@ defmodule LemonSim.Examples.Skirmish.FrameRenderer do
   # Helpers
   # ---------------------------------------------------------------------------
 
-  # Flexible key access: tries string key first, then atom.
-  defp get(map, key, default) when is_map(map) and is_binary(key) do
-    case Map.get(map, key) do
-      nil -> Map.get(map, String.to_existing_atom(key), default)
-      val -> val
-    end
-  rescue
-    ArgumentError -> Map.get(map, key, default)
-  end
-
-  defp get(map, key, default) when is_map(map) and is_atom(key) do
-    case Map.get(map, key) do
-      nil -> Map.get(map, Atom.to_string(key), default)
-      val -> val
-    end
-  end
-
-  defp get(_, _, default), do: default
+  defp get(map, key, default), do: FrameChrome.get(map, key, default)
 
   defp pos_set(positions) when is_list(positions) do
     MapSet.new(positions, fn p ->
@@ -852,13 +832,5 @@ defmodule LemonSim.Examples.Skirmish.FrameRenderer do
 
   defp unit_class_display(_, _), do: "Unknown"
 
-  defp esc(str) when is_binary(str) do
-    str
-    |> String.replace("&", "&amp;")
-    |> String.replace("<", "&lt;")
-    |> String.replace(">", "&gt;")
-    |> String.replace("\"", "&quot;")
-  end
-
-  defp esc(other), do: esc(to_string(other))
+  defp esc(val), do: FrameChrome.esc(val)
 end

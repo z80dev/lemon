@@ -11,12 +11,18 @@ defmodule LemonSim.Bench.Domains do
   ## Fields kept ahead of a `lemon_sim_ui` migration
 
   `sim_id_prefix` mirrors the values `LemonSimUi.Arena` and
-  `LemonSimUi.SimManager` hardcode today (`"ww_"`, `"pkr_"`, ...) for the five
-  arena domains. `lemon_sim_ui` does not consume this module yet — that app
-  currently keeps its own three parallel per-domain lists (`Arena.@domains`,
-  `arena_domains.ex`, the `SimManager` id-prefix clauses). A follow-up phase
-  is expected to make those derive from `arena_domains/0` here instead;
-  until then this field is purely descriptive.
+  `LemonSimUi.SimManager` hardcode today (`"ww_"`, `"pkr_"`, ...). It's set
+  for the five arena domains (also the `LemonSimUi.Arena` prefixes) and for
+  `tcg_shop`/`vending_bench`, which `SimManager.generate_id/1` also assigns a
+  dedicated prefix even though neither has a league adapter. `SimManager`
+  additionally prefixes `skirmish` (`"skm_"`) and `tic_tac_toe` (`"ttt_"`),
+  but those two aren't registered here — neither has a scorecard module, and
+  `id`/`example_module`/`scorecard_module` are required on every descriptor.
+  `lemon_sim_ui` does not consume this module yet — that app currently keeps
+  its own three parallel per-domain lists (`Arena.@domains`, `arena_domains.ex`,
+  the `SimManager` id-prefix clauses). A follow-up phase is expected to make
+  those derive from `all/0`/`arena_domains/0` here instead; until then this
+  field is purely descriptive.
 
   `default_player_count` mirrors the `@default_player_count` module attribute
   the domain's own `LemonSim.Examples.*` module falls back to when no
@@ -107,12 +113,14 @@ defmodule LemonSim.Bench.Domains do
     %Descriptor{
       id: "tcg_shop",
       example_module: Examples.TcgShop,
-      scorecard_module: Examples.TcgShop.Performance
+      scorecard_module: Examples.TcgShop.Performance,
+      sim_id_prefix: "tcg_"
     },
     %Descriptor{
       id: "vending_bench",
       example_module: Examples.VendingBench,
-      scorecard_module: Examples.VendingBench.Performance
+      scorecard_module: Examples.VendingBench.Performance,
+      sim_id_prefix: "vb_"
     },
     %Descriptor{
       id: "vending_bench_arena",
