@@ -15,11 +15,17 @@ defmodule LemonSim.Examples.Werewolf.Performance do
   @impl true
   def scorecard(world) do
     summary = summarize(world)
-    Map.put(summary, :team_won, team_won_value(summary.players))
+    scores = summary.players |> Map.values() |> Enum.map(&get(&1, :role_score, 0.0))
+
+    Map.put(
+      summary,
+      :role_execution_mean,
+      Float.round(Enum.sum(scores) / max(length(scores), 1), 4)
+    )
   end
 
   @impl true
-  def primary_metric, do: %{key: "team_won", direction: :maximize}
+  def primary_metric, do: %{key: "role_execution_mean", direction: :maximize}
 
   @spec summarize(map()) :: map()
   def summarize(world) do
@@ -51,18 +57,22 @@ defmodule LemonSim.Examples.Werewolf.Performance do
            successful_kills: 0,
            failed_kills: 0,
            wolf_checks_found: 0,
+           seer_checks: 0,
+           seer_clears: 0,
            doctor_saves: 0,
            protections_of_villagers: 0,
            protections_of_wolves: 0,
            statements: 0,
            correct_accusations: 0,
            false_accusations: 0,
+           missed_decisions: 0,
            role_score: 0.0
          }}
       end)
       |> apply_vote_history(get(world, :vote_history, []))
       |> apply_night_history(get(world, :night_history, []))
       |> apply_discussion_history(world, players)
+      |> apply_missed_decisions(get(world, :missed_decisions, []))
       |> apply_role_scores()
 
     %{
@@ -122,7 +132,10 @@ defmodule LemonSim.Examples.Werewolf.Performance do
             |> maybe_increment(:failed_kills, not successful)
 
           "investigate" ->
-            maybe_increment(item, :wolf_checks_found, result == "werewolf")
+            item
+            |> Map.update!(:seer_checks, &(&1 + 1))
+            |> maybe_increment(:wolf_checks_found, result == "werewolf")
+            |> maybe_increment(:seer_clears, result in ["seer", "doctor", "villager"])
 
           "protect" ->
             item
@@ -147,7 +160,12 @@ defmodule LemonSim.Examples.Werewolf.Performance do
       |> Map.values()
       |> List.flatten()
 
-    entries = past ++ get(world, :discussion_transcript, [])
+    current = get(world, :discussion_transcript, [])
+
+    entries =
+      if current != [] and current in Map.values(get(world, :past_transcripts, %{})),
+        do: past,
+        else: past ++ current
 
     Enum.reduce(entries, metrics, fn entry, acc ->
       player_id = get(entry, :player)
@@ -161,6 +179,16 @@ defmodule LemonSim.Examples.Werewolf.Performance do
         |> maybe_increment(:correct_accusations, accusation? and target_role == "werewolf")
         |> maybe_increment(:false_accusations, accusation? and target_role != "werewolf")
       end)
+    end)
+  end
+
+  defp apply_missed_decisions(metrics, missed_decisions) do
+    Enum.reduce(missed_decisions, metrics, fn missed, acc ->
+      update_player(
+        acc,
+        get(missed, :player),
+        &Map.update!(&1, :missed_decisions, fn n -> n + 1 end)
+      )
     end)
   end
 
@@ -189,13 +217,14 @@ defmodule LemonSim.Examples.Werewolf.Performance do
           kill_quality =
             ratio_or_neutral(get(item, :successful_kills, 0), get(item, :failed_kills, 0))
 
-          concealment =
-            ratio_or_neutral(get(item, :votes_for_villager, 0), get(item, :partner_votes, 0))
-
-          0.35 * team + 0.20 * survival + 0.25 * kill_quality + 0.20 * concealment
+          0.45 * team + 0.25 * survival + 0.30 * kill_quality
 
         "seer" ->
-          check_quality = min(get(item, :wolf_checks_found, 0), 1)
+          check_quality =
+            if get(item, :seer_checks, 0) > 0,
+              do: 0.6 + 0.4 * min(get(item, :wolf_checks_found, 0), 1),
+              else: 0.0
+
           0.35 * team + 0.15 * survival + 0.30 * check_quality + 0.20 * vote_quality
 
         "doctor" ->
@@ -235,20 +264,19 @@ defmodule LemonSim.Examples.Werewolf.Performance do
          votes_for_villager: Enum.sum(Enum.map(metrics, &get(&1, :votes_for_villager, 0))),
          successful_kills: Enum.sum(Enum.map(metrics, &get(&1, :successful_kills, 0))),
          wolf_checks_found: Enum.sum(Enum.map(metrics, &get(&1, :wolf_checks_found, 0))),
+         seer_checks: Enum.sum(Enum.map(metrics, &get(&1, :seer_checks, 0))),
+         seer_clears: Enum.sum(Enum.map(metrics, &get(&1, :seer_clears, 0))),
          doctor_saves: Enum.sum(Enum.map(metrics, &get(&1, :doctor_saves, 0))),
          protections_of_villagers:
            Enum.sum(Enum.map(metrics, &get(&1, :protections_of_villagers, 0))),
          protections_of_wolves: Enum.sum(Enum.map(metrics, &get(&1, :protections_of_wolves, 0))),
          correct_accusations: Enum.sum(Enum.map(metrics, &get(&1, :correct_accusations, 0))),
          false_accusations: Enum.sum(Enum.map(metrics, &get(&1, :false_accusations, 0))),
+         missed_decisions: Enum.sum(Enum.map(metrics, &get(&1, :missed_decisions, 0))),
          role_score_mean:
            metrics |> Enum.map(&get(&1, :role_score, 0.0)) |> then(&(Enum.sum(&1) / length(&1)))
        }}
     end)
-  end
-
-  defp team_won_value(players) do
-    if Enum.any?(Map.values(players), &get(&1, :team_won, false)), do: 1, else: 0
   end
 
   defp update_player(metrics, player_id, updater) do

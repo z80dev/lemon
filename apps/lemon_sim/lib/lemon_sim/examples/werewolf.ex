@@ -257,7 +257,7 @@ defmodule LemonSim.Examples.Werewolf do
         - During WOLF DISCUSSION: Werewolves privately discuss who to target before night actions.
         - PUBLIC ROLE DISTRIBUTION: The world state lists the exact starting role counts. Use those counts for parity and remaining-role reasoning.
         - During NIGHT: Use your role's night action (werewolves kill, seer investigates, doctor protects, villagers sleep or wander). The Seer investigates on Night 1.
-        - During MEETING SELECTION: Request a preferred player. Mutual requests resolve first, then as many directed requests as possible. The final assignment is current_meeting.pair.
+        - During every NIGHT action, also choose your preferred private meeting partner for the next dawn. Mutual requests resolve first, then as many directed requests as possible. The final assignment is current_meeting.pair.
         - During PRIVATE MEETING: Exchange private messages with your meeting partner.
         - During DAY DISCUSSION: Make a statement that advances the board. Give a concrete suspect or town lean, ask a targeted question, defend against a push, or say who you'd vote if forced right now.
         - PUBLIC DISCUSSION HAS A HARD TURN CAP: use your turn to move the board forward because the village will be forced into voting once the cap is reached.
@@ -308,9 +308,9 @@ defmodule LemonSim.Examples.Werewolf do
 
   defp stream_options_for_model(%{provider: provider})
        when provider in [:opencode_go, :zai],
-       do: %{max_tokens: 1_536}
+       do: %{max_tokens: 768, reasoning: false, tool_choice: :any}
 
-  defp stream_options_for_model(_model), do: %{max_tokens: 768}
+  defp stream_options_for_model(_model), do: %{max_tokens: 768, tool_choice: :any}
 
   @spec run(keyword()) :: {:ok, State.t()} | {:error, term()}
   def run(opts \\ []) when is_list(opts) do
@@ -926,21 +926,19 @@ defmodule LemonSim.Examples.Werewolf do
           victim_id = get(payload, :victim_id)
           saved? = get(payload, :saved, false)
 
-          %{
-            "victim" => victim_id,
-            "saved?" => saved?,
-            "summary" =>
-              cond do
-                is_nil(victim_id) ->
-                  "No one died overnight."
-
-                saved? ->
-                  "#{victim_id} was attacked but survived."
-
-                true ->
-                  "#{victim_id} died overnight."
-              end
-          }
+          if saved? do
+            %{"saved?" => true, "summary" => "An attack was prevented. No one died overnight."}
+          else
+            %{
+              "victim" => victim_id,
+              "saved?" => false,
+              "summary" =>
+                if(is_nil(victim_id),
+                  do: "No one died overnight.",
+                  else: "#{victim_id} died overnight."
+                )
+            }
+          end
 
         "investigation_result" ->
           %{

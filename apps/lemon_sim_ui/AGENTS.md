@@ -181,7 +181,7 @@ Edit `provider_options/0`, `model_options_for_provider/1`, and the default provi
 - Hosted feature disablement is a runtime kill switch: disabled boot must not recover room timers/AI, and API/LiveView operations must fail closed.
 - Local SQLite/Registry/PubSub make hosted rooms single-node. Do not advertise horizontal replicas without distributed ownership, shared storage, and distributed PubSub.
 - Buffered Werewolf watch pacing belongs in `lemon_sim_ui`, not `lemon_sim`. Use exact broadcast snapshots plus UI-side dwell heuristics for readability, but keep simulation rules and state transitions in `lemon_sim`.
-- Always-on Werewolf rotates configured model specs one seat per recorded game and starts with fixed roles by sorted seat. Preserve this full-cycle role balance when changing arena planning, resumption, or league pruning.
+- Always-on Werewolf rotates configured model specs one seat per attempted game and starts with fixed roles by sorted seat. Failed attempts must remain visible as reliability data without contributing game outcomes to ratings. Preserve this full-cycle role balance when changing arena planning, resumption, or league pruning.
 - Werewolf evidence rendering must show the engine-provided reliability and interpretation, not only the clue prose, so spectators can distinguish a noisy lead from proof.
 - VendingBench live-log model traces are compact `plan_history` entries from `SimManager`. Keep them to visible tool calls/results and domain summaries; do not try to expose provider-hidden chain-of-thought.
 - `SimHelpers.infer_domain_type/1` uses world map key heuristics. If two domains share the same distinguishing key, ensure the more specific one is listed first in the `cond`.

@@ -475,8 +475,7 @@ defmodule LemonSimUi.Arena do
     games = League.load_games(state.league_dir)
 
     rotation_index =
-      games
-      |> Enum.map(& &1["rotation_index"])
+      (Enum.map(games, & &1["rotation_index"]) ++ persisted_rotation_indexes(state))
       |> Enum.filter(&is_integer/1)
       |> Enum.max(fn -> length(games) - 1 end)
       |> Kernel.+(1)
@@ -619,6 +618,8 @@ defmodule LemonSimUi.Arena do
   defp abandon_game(state, reason) do
     Logger.error("[Arena:#{state.domain}] abandoning #{state.current.sim_id}: #{inspect(reason)}")
 
+    record_failed_attempt(state, reason)
+
     case state.deps.abandon_sim.(state.current.sim_id, reason) do
       result when result in [:ok, {:error, :not_found}] ->
         LemonSim.Kernel.Bus.unsubscribe(state.current.sim_id)
@@ -636,6 +637,38 @@ defmodule LemonSimUi.Arena do
         )
 
         put_in(state.current.status, :abandoning)
+    end
+  end
+
+  defp record_failed_attempt(state, reason) do
+    current = state.current
+
+    with %State{world: world} <- state.deps.get_state.(current.sim_id) do
+      failure_actor = MapHelpers.get_key(world, :active_actor_id)
+      players = MapHelpers.get_key(world, :players) || %{}
+      failure_model = players |> Map.get(failure_actor, %{}) |> MapHelpers.get_key(:model)
+
+      record =
+        League.game_record(league_adapter!(state.domain), world,
+          game_id: current.sim_id,
+          recorded_at: recorded_at(state, current.sim_id),
+          seed: current.plan && current.plan.seed,
+          rotation_index: current.plan && current.plan.rotation_index,
+          duration_ms: game_duration_ms(state, current),
+          usage: state.deps.usage.(current.sim_id) || current.usage,
+          status: "failed",
+          failure_reason: inspect(reason, limit: 20, printable_limit: 500),
+          failure_actor: failure_actor,
+          failure_model: failure_model
+        )
+
+      case state.deps.record_game.(state.league_dir, record, state.max_game_records) do
+        {:ok, _league} ->
+          :ok
+
+        {:error, error} ->
+          Logger.error("[Arena:#{state.domain}] failed to record attempt: #{inspect(error)}")
+      end
     end
   end
 
@@ -813,6 +846,18 @@ defmodule LemonSimUi.Arena do
   end
 
   defp persisted_run(_), do: %{}
+
+  defp persisted_rotation_indexes(state) do
+    state.deps.list_states.()
+    |> Enum.filter(&arena_owned?(&1, state.domain))
+    |> Enum.map(fn stored_state ->
+      stored_state
+      |> persisted_run()
+      |> MapHelpers.get_key(:start_opts)
+      |> Kernel.||(%{})
+      |> MapHelpers.get_key(:role_rotation_index)
+    end)
+  end
 
   defp league_adapter!(domain) do
     case LemonSim.Bench.League.Registry.fetch(domain) do

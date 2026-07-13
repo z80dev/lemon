@@ -74,13 +74,15 @@ defmodule LemonSim.Examples.WerewolfPerformanceTest do
     assert summary.benchmark_focus ==
              "hidden-information reasoning, persuasion, and role execution"
 
-    assert scorecard.team_won == 1
-    assert {:ok, 1} = Suite.metric_value(scorecard, List.wrap(metric.key))
+    assert scorecard.role_execution_mean > 0.0
+    assert {:ok, value} = Suite.metric_value(scorecard, List.wrap(metric.key))
+    assert value == scorecard.role_execution_mean
     assert Performance.scorecard(world) == scorecard
 
     assert summary.players["Alice"].team_won
     assert summary.players["Alice"].votes_for_werewolf == 1
     assert summary.players["Alice"].wolf_checks_found == 1
+    assert summary.players["Alice"].seer_checks == 1
 
     assert summary.players["Bram"].skip_votes == 1
     assert summary.players["Bram"].doctor_saves == 1
@@ -95,5 +97,22 @@ defmodule LemonSim.Examples.WerewolfPerformanceTest do
     assert summary.models["openai-codex/gpt-5.3-codex"].votes_for_werewolf == 1
     assert summary.models["kimi/k2p5"].doctor_saves == 1
     assert summary.models["kimi/k2p5"].role_score_mean > 0.0
+  end
+
+  test "does not count the final discussion transcript twice" do
+    transcript = [%{type: "statement", player: "Alice", statement: "My read is Bram."}]
+
+    summary =
+      Performance.summarize(%{
+        winner: "villagers",
+        players: %{
+          "Alice" => %{role: "villager", status: "alive", model: "model-a"},
+          "Bram" => %{role: "werewolf", status: "dead", model: "model-b"}
+        },
+        past_transcripts: %{1 => transcript},
+        discussion_transcript: transcript
+      })
+
+    assert summary.players["Alice"].statements == 1
   end
 end

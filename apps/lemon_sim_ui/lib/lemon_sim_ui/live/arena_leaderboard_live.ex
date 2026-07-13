@@ -98,6 +98,10 @@ defmodule LemonSimUi.ArenaLeaderboardLive do
         <% else %>
           <div class="mb-8 flex items-center gap-3 text-sm font-mono text-slate-400">
             <span class="text-white font-bold">{@league["game_count"]}</span> games played
+            <span :if={(@league["failed_attempt_count"] || 0) > 0} class="text-slate-600">|</span>
+            <span :if={(@league["failed_attempt_count"] || 0) > 0} class="text-amber-300">
+              {@league["failed_attempt_count"]} failed attempts
+            </span>
             <span :if={@league["as_of"]} class="text-slate-600">|</span>
             <span :if={@league["as_of"]}>last game {@league["as_of"]}</span>
             <span
@@ -118,6 +122,7 @@ defmodule LemonSimUi.ArenaLeaderboardLive do
                   <th class="py-2 pr-4">Model</th>
                   <th class="py-2 pr-4 text-right">Rating</th>
                   <th class="py-2 pr-4 text-right">Games</th>
+                  <th class="py-2 pr-4 text-right">Completion</th>
                   <th class="py-2 pr-4 text-right">Seats</th>
                   <th class="py-2 pr-4 text-right">Wins</th>
                   <th class="py-2 pr-4 text-right">Win rate</th>
@@ -135,6 +140,7 @@ defmodule LemonSimUi.ArenaLeaderboardLive do
                   <td class="py-2.5 pr-4 text-white font-bold">{row["model"]}</td>
                   <td class="py-2.5 pr-4 text-right text-cyan-300">{format_rating(row["rating"])}</td>
                   <td class="py-2.5 pr-4 text-right">{row["games"]}</td>
+                  <td class="py-2.5 pr-4 text-right">{format_percent(row["completion_rate"])}</td>
                   <td class="py-2.5 pr-4 text-right">{row["seats"]}</td>
                   <td class="py-2.5 pr-4 text-right">{row["wins"]}</td>
                   <td class="py-2.5 pr-4 text-right">{format_percent(row["win_rate"])}</td>

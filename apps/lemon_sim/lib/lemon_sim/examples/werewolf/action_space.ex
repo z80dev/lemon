@@ -50,12 +50,20 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
               Enum.reject(base_tools, &(&1.name == "night_wander"))
             end
 
+          base_tools =
+            restrict_consecutive_doctor_target(base_tools, phase, role, actor_id, world)
+
           # Add item tools based on player's inventory
           player_items = get(world, :player_items, %{})
           actor_items = Map.get(player_items, actor_id, [])
           item_tools = build_item_tools(actor_id, actor_items, phase)
 
-          {:ok, Enum.map(base_tools ++ item_tools, &add_thought_param/1)}
+          tools =
+            (base_tools ++ item_tools)
+            |> Enum.map(&add_night_meeting_preference(&1, phase, actor_id, players))
+            |> Enum.map(&add_thought_param/1)
+
+          {:ok, tools}
         end
       end
     end
@@ -107,6 +115,28 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
   def execute_action(%State{}, _actor_id, _action_name, _params),
     do: {:error, :invalid_parameters}
 
+  @spec fallback_events(State.t(), term()) :: {:ok, [Event.t()]} | {:error, term()}
+  def fallback_events(%State{} = state, reason) do
+    actor_id = get(state.world, :active_actor_id)
+
+    with true <- is_binary(actor_id),
+         {:ok, tools} <- tools(state, []),
+         %AgentTool{} = tool <- List.first(tools),
+         params <- fallback_params(tool.parameters),
+         {:ok, action_event} <- execute_action(state, actor_id, tool.name, params) do
+      missed =
+        Event.new("decision_missed", %{
+          "player_id" => actor_id,
+          "reason" => inspect(reason, limit: 20, printable_limit: 500),
+          "fallback_action" => tool.name
+        })
+
+      {:ok, [missed, action_event]}
+    else
+      _ -> {:error, :no_fallback_action}
+    end
+  end
+
   defp validate_parameters(schema, params) do
     properties = Map.get(schema, "properties", %{})
     required = Map.get(schema, "required", [])
@@ -157,6 +187,95 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
   end
 
   defp valid_parameter?(_schema, _value), do: false
+
+  defp fallback_params(schema) do
+    schema
+    |> Map.get("required", [])
+    |> Enum.into(%{}, fn key ->
+      property = schema |> Map.get("properties", %{}) |> Map.fetch!(key)
+      value = property |> Map.get("enum", []) |> List.first()
+      {key, value || fallback_text(key)}
+    end)
+  end
+
+  defp fallback_text("statement"), do: "I have no additional read this turn."
+  defp fallback_text("message"), do: "I have no additional information to share."
+  defp fallback_text("reason"), do: "This is my best available suspicion."
+  defp fallback_text(_key), do: "No response was available."
+
+  defp add_night_meeting_preference(tool, "night", actor_id, players) do
+    targets =
+      players
+      |> Roles.living_players()
+      |> Enum.map(fn {id, _player} -> id end)
+      |> Enum.reject(&(&1 == actor_id))
+      |> Enum.sort()
+
+    property = %{
+      "type" => "string",
+      "description" => "Preferred private meeting partner after dawn.",
+      "enum" => targets
+    }
+
+    parameters =
+      tool.parameters
+      |> put_in(["properties", "meeting_target_id"], property)
+      |> Map.update!("required", &(&1 ++ ["meeting_target_id"]))
+
+    original_execute = tool.execute
+
+    %{
+      tool
+      | parameters: parameters,
+        description: tool.description <> " Also choose your preferred private meeting partner.",
+        execute: fn call_id, params, signal, on_update ->
+          with {:ok, %AgentToolResult{} = result} <-
+                 original_execute.(call_id, params, signal, on_update),
+               %Event{} = event <-
+                 Map.get(result.details, "event") || Map.get(result.details, :event) do
+            event = %{
+              event
+              | payload: Map.put(event.payload, "meeting_target_id", params["meeting_target_id"])
+            }
+
+            {:ok, %{result | details: Map.put(result.details, "event", event)}}
+          end
+        end
+    }
+  end
+
+  defp add_night_meeting_preference(tool, _phase, _actor_id, _players), do: tool
+
+  defp restrict_consecutive_doctor_target(tools, "night", "doctor", actor_id, world) do
+    previous_target =
+      world
+      |> get(:night_history, [])
+      |> Enum.reverse()
+      |> Enum.find_value(fn record ->
+        if get(record, :player) == actor_id and get(record, :action) == "protect",
+          do: get(record, :target)
+      end)
+
+    Enum.map(tools, fn
+      %AgentTool{name: "protect_player"} = tool when is_binary(previous_target) ->
+        targets =
+          get_in(tool.parameters, ["properties", "target_id", "enum"]) -- [previous_target]
+
+        targets_desc = Enum.join(targets, ", ")
+
+        %{
+          tool
+          | description:
+              "Choose a player to protect tonight. You cannot protect #{previous_target} on consecutive nights. Valid targets: #{targets_desc}",
+            parameters: put_in(tool.parameters, ["properties", "target_id", "enum"], targets)
+        }
+
+      tool ->
+        tool
+    end)
+  end
+
+  defp restrict_consecutive_doctor_target(tools, _phase, _role, _actor_id, _world), do: tools
 
   # Wolf discussion phase
   defp tools_for_phase_and_role(

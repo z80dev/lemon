@@ -541,6 +541,37 @@ defmodule Ai.Providers.OpenAICompletionsTest do
     assert {:error, _} = EventStream.result(stream, 1000)
   end
 
+  test "ZAI requests can disable reasoning and require a tool call" do
+    test_pid = self()
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      send(test_pid, {:request_body, Jason.decode!(raw)})
+      Plug.Conn.send_resp(conn, 200, sse_body([:done]))
+    end)
+
+    model = %Model{
+      id: "glm-5.1",
+      name: "GLM 5.1",
+      api: :openai_completions,
+      provider: :zai,
+      base_url: "https://example.test",
+      reasoning: true,
+      compat: %{thinking_format: "zai"}
+    }
+
+    tool = %Ai.Types.Tool{name: "act", description: "Act", parameters: %{"type" => "object"}}
+    context = Context.new(messages: [%UserMessage{content: "Act"}], tools: [tool])
+    opts = %StreamOptions{api_key: "test-key", reasoning: false, tool_choice: :any}
+
+    {:ok, stream} = OpenAICompletions.stream(model, context, opts)
+
+    assert_receive {:request_body, body}, 1000
+    assert body["thinking"] == %{"type" => "disabled"}
+    assert body["tool_choice"] == "required"
+    assert {:ok, _} = EventStream.result(stream, 1000)
+  end
+
   test "includes tools: [] when tool history exists but no tools provided" do
     test_pid = self()
 

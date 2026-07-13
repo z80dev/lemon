@@ -1451,16 +1451,22 @@ defmodule LemonSimUi.SimManager do
     # it silently vanishes as soon as the retried turn succeeds and this
     # errorless resume_state becomes stale.
     Agent.update(checkpoint, fn {_state, t} -> {logged_state, t} end)
-    Process.sleep(2000 * consecutive_failures)
 
-    run_ai_loop_with_retry(
-      modules,
-      opts,
-      model_assignments,
-      max_turns,
-      checkpoint,
-      consecutive_failures
-    )
+    if consecutive_failures >= 2 and
+         apply_decision_fallback(logged_state, modules, reason, checkpoint) do
+      run_ai_loop_with_retry(modules, opts, model_assignments, max_turns, checkpoint, 0)
+    else
+      Process.sleep(2000 * consecutive_failures)
+
+      run_ai_loop_with_retry(
+        modules,
+        opts,
+        model_assignments,
+        max_turns,
+        checkpoint,
+        consecutive_failures
+      )
+    end
   end
 
   defp handle_ai_loop_result(
@@ -1502,6 +1508,32 @@ defmodule LemonSimUi.SimManager do
       checkpoint,
       consecutive_failures
     )
+  end
+
+  defp apply_decision_fallback(state, modules, reason, checkpoint) do
+    fallback =
+      case domain_from_state(state) do
+        :werewolf -> LemonSim.Examples.Werewolf.ActionSpace.fallback_events(state, reason)
+        _ -> {:error, :unsupported_domain}
+      end
+
+    with {:ok, events} <- fallback,
+         {:ok, next_state, _signal} <-
+           Runner.ingest_events(state, events, modules.updater, halt_on_decide?: false) do
+      {_state, turn} = Agent.get(checkpoint, & &1)
+      persist_state!(next_state)
+      broadcast_update(next_state)
+      Agent.update(checkpoint, fn _ -> {next_state, turn + 1} end)
+
+      Logger.warning(
+        "[SimManager] #{state.sim_id} used a deterministic fallback after one failed retry",
+        sim_id: state.sim_id
+      )
+
+      true
+    else
+      _ -> false
+    end
   end
 
   defp report_turn_limit_exceeded(state, max_turns) do

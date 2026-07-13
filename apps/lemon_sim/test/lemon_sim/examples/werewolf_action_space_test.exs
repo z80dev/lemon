@@ -74,6 +74,8 @@ defmodule LemonSim.Examples.WerewolfActionSpaceTest do
 
     assert tool.name == "investigate_player"
     assert tool.parameters["properties"]["target_id"]["enum"] == ["Bram", "Cora"]
+    assert tool.parameters["properties"]["meeting_target_id"]["enum"] == ["Bram", "Cora"]
+    assert "meeting_target_id" in tool.parameters["required"]
   end
 
   test "private thoughts are bounded" do
@@ -110,10 +112,82 @@ defmodule LemonSim.Examples.WerewolfActionSpaceTest do
 
     budget = Keyword.fetch!(opts, :stream_options_for_model)
 
-    assert budget.(%Model{id: "glm-5.1", name: "GLM", provider: :opencode_go}).max_tokens ==
-             1_536
+    glm = budget.(%Model{id: "glm-5.1", name: "GLM", provider: :opencode_go})
+    assert glm.max_tokens == 768
+    assert glm.reasoning == false
+    assert glm.tool_choice == :any
 
-    assert budget.(%Model{id: "gpt", name: "GPT", provider: :github_copilot}).max_tokens == 768
+    gpt = budget.(%Model{id: "gpt", name: "GPT", provider: :github_copilot})
+    assert gpt.max_tokens == 768
+    assert gpt.tool_choice == :any
+  end
+
+  test "doctor cannot protect the same player on consecutive nights" do
+    state =
+      State.new(
+        sim_id: "werewolf-doctor-rotation",
+        world: %{
+          status: "in_progress",
+          phase: "night",
+          active_actor_id: "Alice",
+          night_history: [%{player: "Alice", action: "protect", target: "Bram"}],
+          players: %{
+            "Alice" => %{role: "doctor", status: "alive"},
+            "Bram" => %{role: "villager", status: "alive"},
+            "Cora" => %{role: "werewolf", status: "alive"}
+          }
+        }
+      )
+
+    assert {:ok, [tool]} = ActionSpace.tools(state, [])
+    refute "Bram" in tool.parameters["properties"]["target_id"]["enum"]
+  end
+
+  test "night action records the meeting preference in the authoritative event" do
+    state =
+      State.new(
+        sim_id: "werewolf-night-meeting",
+        world: %{
+          status: "in_progress",
+          phase: "night",
+          active_actor_id: "Alice",
+          players: %{
+            "Alice" => %{role: "seer", status: "alive"},
+            "Bram" => %{role: "villager", status: "alive"},
+            "Cora" => %{role: "werewolf", status: "alive"}
+          }
+        }
+      )
+
+    assert {:ok, event} =
+             ActionSpace.execute_action(state, "Alice", "investigate_player", %{
+               "target_id" => "Cora",
+               "meeting_target_id" => "Bram"
+             })
+
+    assert event.payload["meeting_target_id"] == "Bram"
+  end
+
+  test "fallback records a missed decision and emits a legal action" do
+    state =
+      State.new(
+        sim_id: "werewolf-fallback",
+        world: %{
+          status: "in_progress",
+          phase: "day_voting",
+          active_actor_id: "Alice",
+          players: %{
+            "Alice" => %{role: "villager", status: "alive"},
+            "Bram" => %{role: "werewolf", status: "alive"}
+          }
+        }
+      )
+
+    assert {:ok, [missed, action]} = ActionSpace.fallback_events(state, :empty_response)
+    assert missed.kind == "decision_missed"
+    assert missed.payload["fallback_action"] == "cast_vote"
+    assert action.kind == "cast_vote"
+    assert action.payload["target_id"] == "Bram"
   end
 
   test "hosted actions embed the authoritative actor and reject unlisted input" do

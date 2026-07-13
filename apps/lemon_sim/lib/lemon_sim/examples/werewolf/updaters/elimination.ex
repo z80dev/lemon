@@ -167,7 +167,7 @@ defmodule LemonSim.Examples.Werewolf.Updaters.Elimination do
           )
           |> State.append_events(elimination_events ++ village_events_list ++ item_events)
 
-        Meetings.transition_to_meetings_or_discussion(next_state)
+        Meetings.resolve_requested_meetings_or_discussion(next_state)
       end
     end
   end

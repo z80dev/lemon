@@ -298,6 +298,7 @@ defmodule Ai.Providers.OpenAICompletions do
     |> maybe_add_max_tokens(opts, compat)
     |> maybe_add_temperature(opts)
     |> maybe_add_tools(context, compat)
+    |> maybe_add_tool_choice(context, opts)
     |> maybe_add_reasoning(model, opts, compat)
     |> maybe_add_openrouter_routing(model, compat)
   end
@@ -339,14 +340,21 @@ defmodule Ai.Providers.OpenAICompletions do
     end
   end
 
+  defp maybe_add_tool_choice(params, %{tools: tools}, %{tool_choice: choice})
+       when is_list(tools) and tools != [] and choice in [:auto, :any] do
+    Map.put(params, "tool_choice", if(choice == :any, do: "required", else: "auto"))
+  end
+
+  defp maybe_add_tool_choice(params, _context, _opts), do: params
+
   defp maybe_add_reasoning(params, %{reasoning: false}, _opts, _compat), do: params
   defp maybe_add_reasoning(params, _model, %{reasoning: nil}, _compat), do: params
 
-  defp maybe_add_reasoning(params, model, %{reasoning: _reasoning}, %{thinking_format: "zai"}) do
-    if model.reasoning do
-      Map.put(params, "thinking", %{"type" => "enabled"})
-    else
-      params
+  defp maybe_add_reasoning(params, model, %{reasoning: reasoning}, %{thinking_format: "zai"}) do
+    cond do
+      not model.reasoning -> params
+      reasoning == false -> Map.put(params, "thinking", %{"type" => "disabled"})
+      true -> Map.put(params, "thinking", %{"type" => "enabled"})
     end
   end
 
@@ -358,10 +366,6 @@ defmodule Ai.Providers.OpenAICompletions do
     else
       params
     end
-  end
-
-  defp maybe_add_reasoning(params, %{reasoning: true}, _opts, %{thinking_format: "zai"}) do
-    Map.put(params, "thinking", %{"type" => "disabled"})
   end
 
   defp maybe_add_reasoning(params, _model, _opts, _compat), do: params

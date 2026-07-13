@@ -42,6 +42,7 @@ defmodule LemonSim.Examples.Werewolf.Updater do
           "meeting_message" -> Meetings.apply_meeting_message(state, event)
           "use_item" -> NightActions.apply_use_item(state, event)
           "anonymous_message" -> Chat.apply_anonymous_message(state, event)
+          "decision_missed" -> apply_decision_missed(state, event)
           _ -> {:error, {:invalid_event_kind, event.kind}}
         end
       else
@@ -102,6 +103,25 @@ defmodule LemonSim.Examples.Werewolf.Updater do
       nil -> :ok
       thought -> ensure_text(thought)
     end
+  end
+
+  defp apply_decision_missed(state, event) do
+    missed = get(state.world, :missed_decisions, [])
+
+    entry = %{
+      player: get(event.payload, :player_id),
+      day: get(state.world, :day_number, 1),
+      phase: get(state.world, :phase),
+      reason: get(event.payload, :reason),
+      fallback_action: get(event.payload, :fallback_action)
+    }
+
+    next_state =
+      state
+      |> State.put_world(world_updates(state.world, %{missed_decisions: missed ++ [entry]}))
+      |> State.append_event(event)
+
+    {:ok, next_state, :skip}
   end
 
   defp maybe_store_thought(state, event, action_world) do

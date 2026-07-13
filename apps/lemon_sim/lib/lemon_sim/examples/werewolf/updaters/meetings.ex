@@ -244,6 +244,14 @@ defmodule LemonSim.Examples.Werewolf.Updaters.Meetings do
     end
   end
 
+  def resolve_requested_meetings_or_discussion(%State{} = state) do
+    if RulesConfig.enabled?(state.world, :private_meetings) do
+      resolve_meeting_pairs(state)
+    else
+      transition_to_day_discussion_from_meetings(state)
+    end
+  end
+
   defp transition_to_meeting_selection(%State{} = state) do
     players = get(state.world, :players, %{})
     day_number = get(state.world, :day_number, 1)

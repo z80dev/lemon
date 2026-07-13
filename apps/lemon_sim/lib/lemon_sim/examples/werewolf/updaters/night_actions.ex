@@ -89,7 +89,8 @@ defmodule LemonSim.Examples.Werewolf.Updaters.NightActions do
          :ok <- ensure_active_actor(state.world, player_id),
          :ok <- ensure_living(players, player_id),
          :ok <- ensure_role(players, player_id, "doctor"),
-         :ok <- ensure_living(players, target_id) do
+         :ok <- ensure_living(players, target_id),
+         :ok <- ensure_not_consecutive_protection(state.world, player_id, target_id) do
       night_actions =
         state.world
         |> get(:night_actions, %{})
@@ -160,6 +161,7 @@ defmodule LemonSim.Examples.Werewolf.Updaters.NightActions do
   end
 
   defp advance_night_turn(%State{} = state) do
+    state = record_meeting_preference(state)
     turn_order = get(state.world, :turn_order, [])
     active_actor_id = get(state.world, :active_actor_id, nil)
 
@@ -177,6 +179,35 @@ defmodule LemonSim.Examples.Werewolf.Updaters.NightActions do
 
         {:ok, next_state, {:decide, "#{next_actor} night action"}}
     end
+  end
+
+  defp record_meeting_preference(%State{} = state) do
+    event = List.last(state.recent_events)
+    player_id = event && fetch(event.payload, :player_id, "player_id")
+    target_id = event && fetch(event.payload, :meeting_target_id, "meeting_target_id")
+    players = get(state.world, :players, %{})
+
+    if is_binary(player_id) and is_binary(target_id) and player_id != target_id and
+         get(Map.get(players, player_id, %{}), :status) == "alive" and
+         get(Map.get(players, target_id, %{}), :status) == "alive" do
+      requests = state.world |> get(:meeting_requests, %{}) |> Map.put(player_id, target_id)
+      State.put_world(state, world_updates(state.world, %{meeting_requests: requests}))
+    else
+      state
+    end
+  end
+
+  defp ensure_not_consecutive_protection(world, player_id, target_id) do
+    previous_target =
+      world
+      |> get(:night_history, [])
+      |> Enum.reverse()
+      |> Enum.find_value(fn record ->
+        if get(record, :player) == player_id and get(record, :action) == "protect",
+          do: get(record, :target)
+      end)
+
+    if previous_target == target_id, do: {:error, :consecutive_protection}, else: :ok
   end
 
   defp ensure_sleep_role(players, player_id, day_number) do

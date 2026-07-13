@@ -82,6 +82,7 @@ and refresh persistence.
 - `:"openai-codex"` model registry - Derived from the direct OpenAI catalog plus Codex OAuth-only IDs; do not assume `/v1/models` is authoritative for ChatGPT/Codex-authenticated model availability
 - `Ai.Providers.OpenAIResponsesShared` - Shared logic for OpenAI Responses and Azure, including `function_call_output` size guards and immediate terminal handling once `response.completed` arrives
 - `Ai.Providers.OpenAIResponses` - Direct OpenAI Responses streaming path; when tools are present it now sends explicit `tool_choice: "auto"` and `parallel_tool_calls: true` so GPT-5 family models do not silently skip tool use on task-heavy prompts
+- `Ai.Providers.OpenAICompletions` - OpenAI-compatible chat requests map `tool_choice: :any` to `"required"`; ZAI thinking format must honor explicit `reasoning: false` with `thinking.type = "disabled"`
 - `Ai.Providers.HttpTrace` - HTTP request/response tracing (enabled via `LEMON_AI_HTTP_TRACE=1`)
 - `Ai.Providers.TextSanitizer` - UTF-8 sanitization for streamed text
 - `Ai.Auth.GoogleAntigravityOAuth` - Antigravity PKCE OAuth URL helpers, token exchange/refresh, and encoded OAuth payload resolution (`{"token","projectId"}` API key shape)

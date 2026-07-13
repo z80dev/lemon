@@ -133,7 +133,8 @@ defmodule LemonSim.Examples.Werewolf.Updaters.NightResolution do
       |> Enum.filter(fn {_id, action} -> get(action, :action) == "wander" end)
       |> Enum.map(fn {wanderer_id, _action} ->
         saw_something =
-          not is_nil(victim_id) and not saved? and :rand.uniform() < @wander_sighting_chance
+          new_tokens == [] and not is_nil(victim_id) and not saved? and
+            :rand.uniform() < @wander_sighting_chance
 
         if saw_something do
           lead_id = noisy_wolf_lead(players, wolf_id, victim_id)
@@ -348,7 +349,7 @@ defmodule LemonSim.Examples.Werewolf.Updaters.NightResolution do
             extra_events ++ village_events_list ++ item_events
         )
 
-      Meetings.transition_to_meetings_or_discussion(next_state)
+      Meetings.resolve_requested_meetings_or_discussion(next_state)
     end
   end
 
@@ -400,21 +401,36 @@ defmodule LemonSim.Examples.Werewolf.Updaters.NightResolution do
   defp generate_evidence_tokens(players, wolf_id, victim_id, saved?) do
     if not is_nil(wolf_id) and not is_nil(victim_id) and not saved? and
          :rand.uniform() < @evidence_chance do
-      lead_id = noisy_wolf_lead(players, wolf_id, victim_id)
+      candidates = evidence_candidates(players, wolf_id, victim_id)
 
       [
         %{
           type: "muddy_footprints",
           clue:
-            "A partial trail near #{victim_id}'s house appears to lead toward #{lead_id}'s side of the village.",
-          related_to: lead_id,
+            "A broken trail near #{victim_id}'s house could have come from either #{Enum.at(candidates, 0)}'s or #{Enum.at(candidates, 1)}'s side of the village.",
+          related_to: candidates,
           reliability: "medium",
           interpretation:
-            "Comparable trails identify the killer about 70% of the time; weather or deliberate misdirection can produce a false lead. This is not proof."
+            "Comparable trails include the killer among the two named players about 70% of the time. Weather or deliberate misdirection can exclude the killer entirely. This is not proof."
         }
       ]
     else
       []
+    end
+  end
+
+  defp evidence_candidates(players, wolf_id, victim_id) do
+    decoys =
+      players
+      |> Roles.living_players()
+      |> Enum.map(fn {player_id, _player} -> player_id end)
+      |> Enum.reject(&(&1 in [wolf_id, victim_id]))
+      |> Enum.sort()
+
+    if :rand.uniform() <= @clue_accuracy or length(decoys) < 2 do
+      [wolf_id, Enum.random(decoys)] |> Enum.sort()
+    else
+      decoys |> Enum.take_random(2) |> Enum.sort()
     end
   end
 

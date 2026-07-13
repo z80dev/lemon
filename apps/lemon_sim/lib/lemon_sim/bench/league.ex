@@ -124,6 +124,10 @@ defmodule LemonSim.Bench.League do
       "mode" => mode,
       "direction" => direction,
       "game_id" => game_id,
+      "status" => Keyword.get(meta, :status, "completed"),
+      "failure_reason" => Keyword.get(meta, :failure_reason),
+      "failure_actor" => Keyword.get(meta, :failure_actor),
+      "failure_model" => Keyword.get(meta, :failure_model),
       "recorded_at" => recorded_at,
       "seed" => Keyword.get(meta, :seed),
       "rotation_index" => Keyword.get(meta, :rotation_index),
@@ -235,15 +239,18 @@ defmodule LemonSim.Bench.League do
   """
   @spec standings([map()]) :: map()
   def standings(games) when is_list(games) do
+    completed_games = Enum.filter(games, &completed_game?/1)
     model_ids = collect_model_ids(games)
-    matrix = pairwise_matrix(games, model_ids)
+    matrix = pairwise_matrix(completed_games, model_ids)
     ratings = Ratings.fit_ratings(model_ids, matrix)
-    role_baselines = role_win_baselines(games)
-    role_coverage_complete? = role_coverage_complete?(games, model_ids)
+    role_baselines = role_win_baselines(completed_games)
+    role_coverage_complete? = role_coverage_complete?(completed_games, model_ids)
 
     models =
       model_ids
-      |> Enum.map(fn model -> model_row(model, games, ratings[model], role_baselines) end)
+      |> Enum.map(fn model ->
+        model_row(model, completed_games, games, ratings[model], role_baselines)
+      end)
       |> Enum.sort_by(fn row ->
         case row["rating"] do
           nil -> {1, 0.0, row["model"]}
@@ -258,7 +265,9 @@ defmodule LemonSim.Bench.League do
       "scenario" => first["scenario"],
       "mode" => first["mode"],
       "as_of" => games |> Enum.map(& &1["recorded_at"]) |> Enum.max(fn -> nil end),
-      "game_count" => length(games),
+      "game_count" => length(completed_games),
+      "attempt_count" => length(games),
+      "failed_attempt_count" => Enum.count(games, &(not completed_game?(&1))),
       "algorithm" => %{
         "name" => "bradley_terry_mle_fixed_point",
         "team_pairing" => "one win per (winning-side model, losing-side model) pair per game",
@@ -270,7 +279,8 @@ defmodule LemonSim.Bench.League do
         if(role_coverage_complete?, do: "role_coverage_complete", else: "provisional"),
       "role_win_baselines" => role_baselines,
       "models" => models,
-      "recent_games" => recent_games(games)
+      "recent_games" => recent_games(completed_games),
+      "recent_failed_attempts" => recent_failed_attempts(games)
     }
   end
 
@@ -333,7 +343,7 @@ defmodule LemonSim.Bench.League do
 
   defp add_game_outcomes(_game, matrix), do: matrix
 
-  defp model_row(model, games, rating, role_baselines) do
+  defp model_row(model, games, attempts, rating, role_baselines) do
     seats =
       Enum.flat_map(games, fn game ->
         game["seats"]
@@ -351,10 +361,27 @@ defmodule LemonSim.Bench.League do
       |> Enum.group_by(& &1["role"])
       |> Enum.into(%{}, fn {role, role_seats} -> {role, seat_stats(role_seats)} end)
 
+    attempted_game_ids =
+      attempts
+      |> Enum.filter(fn game ->
+        Enum.any?(Map.values(game["seats"] || %{}), &(seat_model(&1) == model))
+      end)
+      |> Enum.map(& &1["game_id"])
+      |> Enum.uniq()
+
+    failed_attempts =
+      attempts
+      |> Enum.reject(&completed_game?/1)
+      |> Enum.count(&(&1["failure_model"] == model))
+
     %{
       "model" => model,
       "rating" => rating,
       "games" => seats |> Enum.map(& &1["game_id"]) |> Enum.uniq() |> length(),
+      "attempts" => length(attempted_game_ids),
+      "failed_attempts" => failed_attempts,
+      "completion_rate" =>
+        ratio(length(attempted_game_ids) - failed_attempts, length(attempted_game_ids)),
       "seats" => length(seats),
       "wins" => wins,
       "win_rate" => ratio(wins, length(seats)),
@@ -455,6 +482,26 @@ defmodule LemonSim.Bench.League do
     end)
   end
 
+  defp recent_failed_attempts(games) do
+    games
+    |> Enum.reject(&completed_game?/1)
+    |> Enum.sort_by(fn game -> {game["recorded_at"] || "", game["game_id"] || ""} end, :desc)
+    |> Enum.take(@recent_games_limit)
+    |> Enum.map(
+      &Map.take(&1, [
+        "game_id",
+        "recorded_at",
+        "failure_reason",
+        "failure_actor",
+        "failure_model",
+        "duration_ms",
+        "rotation_index"
+      ])
+    )
+  end
+
+  defp completed_game?(game), do: game["status"] in [nil, "completed"]
+
   defp roles_to_models(game) do
     game["seats"]
     |> Map.values()
@@ -485,11 +532,11 @@ defmodule LemonSim.Bench.League do
     header = [
       "# #{league["scenario"] || "League"} Leaderboard",
       "",
-      "Games: #{league["game_count"]}",
+      "Games: #{league["game_count"]} completed / #{league["attempt_count"] || league["game_count"]} attempts",
       "Ratings: Bradley-Terry MLE (1500-centered, #{league["rating_status"] || "provisional"}).",
       "",
-      "| Rank | Model | Rating | Games | Seats | Wins | Win rate | Role-adjusted |#{value_header}",
-      "|---:|---|---:|---:|---:|---:|---:|---:|#{if ranked?, do: "---:|", else: ""}"
+      "| Rank | Model | Rating | Games | Completion | Seats | Wins | Win rate | Role-adjusted |#{value_header}",
+      "|---:|---|---:|---:|---:|---:|---:|---:|---:|#{if ranked?, do: "---:|", else: ""}"
     ]
 
     rows =
@@ -504,6 +551,7 @@ defmodule LemonSim.Bench.League do
           row["model"],
           format_rating(row["rating"]),
           row["games"],
+          format_percent(row["completion_rate"]),
           row["seats"],
           row["wins"],
           format_percent(row["win_rate"]),

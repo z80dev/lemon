@@ -521,10 +521,10 @@ defmodule LemonSim.Examples.WerewolfUpdaterTest do
         }
       )
 
-    assert {:ok, next_state, {:decide, "Cora meeting selection"}} =
+    assert {:ok, next_state, {:decide, "Cora meeting with Dane"}} =
              Updater.apply_event(state, Events.sleep("Lena"), [])
 
-    assert next_state.world.phase == "meeting_selection"
+    assert next_state.world.phase == "private_meeting"
     assert next_state.world.active_actor_id == "Cora"
     assert next_state.world.night_actions == %{}
   end
@@ -580,10 +580,10 @@ defmodule LemonSim.Examples.WerewolfUpdaterTest do
         }
       )
 
-    assert {:ok, next_state, {:decide, "Alice meeting selection"}} =
+    assert {:ok, next_state, {:decide, "Alice meeting with Cora"}} =
              Updater.apply_event(state, Events.sleep("Esme"), [])
 
-    assert next_state.world.phase == "meeting_selection"
+    assert next_state.world.phase == "private_meeting"
     assert next_state.world.pending_elimination == nil
     assert next_state.world.players["Bram"].status == "dead"
     assert next_state.world.last_words == []

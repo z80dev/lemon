@@ -223,7 +223,7 @@ defmodule LemonSim.Examples.WerewolfVisibilityTest do
            }
   end
 
-  test "night resolution tells players when an attack was survived" do
+  test "night resolution hides who survived an attack" do
     recent_events_builder = Werewolf.projector_opts()[:section_builders][:recent_events]
 
     frame = %{
@@ -240,7 +240,8 @@ defmodule LemonSim.Examples.WerewolfVisibilityTest do
     [event] = recent_events_builder.(frame, [], []).content
 
     assert event.payload["saved?"] == true
-    assert event.payload["summary"] == "Bram was attacked but survived."
+    assert event.payload["summary"] == "An attack was prevented. No one died overnight."
+    refute Map.has_key?(event.payload, "victim")
   end
 
   test "pack history is visible only in werewolf role context" do

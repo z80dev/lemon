@@ -109,6 +109,42 @@ defmodule LemonSim.Bench.LeagueTest do
       assert seer["roles"]["seer"]["metrics"]["wolf_checks_found"] == 4
       assert is_number(seer["role_adjusted_win_rate"])
     end
+
+    test "failed attempts affect reliability without changing game ratings", %{tmp_dir: dir} do
+      completed =
+        League.game_record(Werewolf.League, werewolf_world(),
+          game_id: "complete",
+          recorded_at: "2026-07-06T00:00:00Z"
+        )
+
+      failed =
+        League.game_record(Werewolf.League, werewolf_world(),
+          game_id: "failed",
+          recorded_at: "2026-07-06T00:01:00Z",
+          status: "failed",
+          failure_reason: "model returned no tool call",
+          failure_actor: "Cora",
+          failure_model: "openai/gpt-x"
+        )
+
+      {:ok, _} = League.record_game!(dir, completed)
+      {:ok, league} = League.record_game!(dir, failed)
+
+      assert league["game_count"] == 1
+      assert league["attempt_count"] == 2
+      assert league["failed_attempt_count"] == 1
+      assert hd(league["recent_failed_attempts"])["game_id"] == "failed"
+
+      row = Enum.find(league["models"], &(&1["model"] == "openai/gpt-x"))
+      assert row["games"] == 1
+      assert row["attempts"] == 2
+      assert row["failed_attempts"] == 1
+      assert row["completion_rate"] == 0.5
+
+      unaffected = Enum.find(league["models"], &(&1["model"] == "anthropic/claude-x"))
+      assert unaffected["failed_attempts"] == 0
+      assert unaffected["completion_rate"] == 1.0
+    end
   end
 
   describe "team mode winner-take-all (survivor adapter)" do

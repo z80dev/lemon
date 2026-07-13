@@ -147,6 +147,10 @@ available by sending `tool_choice: "auto"` and `parallel_tool_calls: true`.
 That keeps higher-end GPT-5 variants aligned with Lemon's task-heavy prompts
 instead of leaving tool invocation to provider defaults.
 
+OpenAI-compatible Chat Completions requests map `tool_choice: :any` to the
+standard `"required"` value. ZAI-compatible reasoning models honor
+`reasoning: false` by sending `thinking.type: "disabled"`.
+
 ## Supported Providers
 
 The `@providers` list in `Ai.Models` enumerates all supported provider atoms:

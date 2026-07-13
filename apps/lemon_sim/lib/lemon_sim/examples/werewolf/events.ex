@@ -131,7 +131,7 @@ defmodule LemonSim.Examples.Werewolf.Events do
       "message" =>
         cond do
           is_nil(victim_id) -> "The night passes quietly. No one was targeted."
-          saved? -> "The doctor saved #{victim_id}! No one died tonight."
+          saved? -> "An attack was prevented. No one died tonight."
           true -> "#{victim_id} was killed by the werewolves during the night!"
         end
     })
