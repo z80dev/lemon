@@ -94,6 +94,13 @@ defmodule LemonCore.Store.SqliteBackendTest do
       assert is_reference(state.statements.list_tables)
       :ok = SqliteBackend.close(state)
     end
+
+    test "ping checks the connection without writing a probe row", %{tmp_dir: tmp_dir} do
+      assert {:ok, state} = SqliteBackend.init(path: tmp_dir)
+      assert {:ok, ^state} = SqliteBackend.ping(state)
+      assert {:ok, [], ^state} = SqliteBackend.list(state, :health_probe)
+      :ok = SqliteBackend.close(state)
+    end
   end
 
   describe "put/4 and get/3 roundtrip - persistent tables" do

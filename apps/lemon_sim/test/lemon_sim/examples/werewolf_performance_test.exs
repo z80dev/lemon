@@ -51,6 +51,7 @@ defmodule LemonSim.Examples.WerewolfPerformanceTest do
           day: 1,
           player: "Bram",
           action: "protect",
+          target_role: "seer",
           result: nil,
           successful: true,
           saved: true
@@ -83,6 +84,8 @@ defmodule LemonSim.Examples.WerewolfPerformanceTest do
 
     assert summary.players["Bram"].skip_votes == 1
     assert summary.players["Bram"].doctor_saves == 1
+    assert summary.players["Bram"].protections_of_villagers == 1
+    assert summary.players["Bram"].role_score > 0.5
 
     refute summary.players["Cora"].team_won
     assert summary.players["Cora"].votes_for_villager == 1
@@ -91,5 +94,6 @@ defmodule LemonSim.Examples.WerewolfPerformanceTest do
     assert summary.models["openai-codex/gpt-5.3-codex"].seats == 2
     assert summary.models["openai-codex/gpt-5.3-codex"].votes_for_werewolf == 1
     assert summary.models["kimi/k2p5"].doctor_saves == 1
+    assert summary.models["kimi/k2p5"].role_score_mean > 0.0
   end
 end

@@ -576,6 +576,12 @@ defmodule Ai.ModelsLegacyTest do
       assert Models.get_model(:openai, "gpt-5.4-mini") != nil
       assert Models.get_model(:openai, "gpt-5.4-nano") != nil
       assert Models.get_model(:openai, "gpt-5.4-pro") != nil
+      assert Models.get_model(:openai, "gpt-5.6-luna") != nil
+      assert Models.get_model(:openai, "gpt-5.6-terra") != nil
+      assert Models.get_model(:openai, "gpt-5.6-sol") != nil
+      assert Models.get_model(:"openai-codex", "gpt-5.6-luna") != nil
+      assert Models.get_model(:"openai-codex", "gpt-5.6-terra") != nil
+      assert Models.get_model(:"openai-codex", "gpt-5.6-sol") != nil
       assert Models.get_model(:openai, "o1") != nil
       assert Models.get_model(:openai, "o3") != nil
       assert Models.get_model(:openai, "o3-mini") != nil
@@ -614,6 +620,14 @@ defmodule Ai.ModelsLegacyTest do
       assert Models.get_model(:opencode, "kimi-k2") != nil
       assert Models.get_model(:opencode, "kimi-k2-thinking") != nil
       assert Models.get_model(:opencode, "kimi-k2.5") != nil
+      assert Models.get_model(:opencode_go, "glm-5.1") != nil
+      assert Models.get_model(:opencode_go, "glm-5.2") != nil
+    end
+
+    test "github copilot gpt 5.6 models" do
+      assert Models.get_model(:github_copilot, "gpt-5.6-luna") != nil
+      assert Models.get_model(:github_copilot, "gpt-5.6-terra") != nil
+      assert Models.get_model(:github_copilot, "gpt-5.6-sol") != nil
     end
 
     test "google antigravity models" do

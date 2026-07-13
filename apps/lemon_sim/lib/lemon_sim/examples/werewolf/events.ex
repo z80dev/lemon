@@ -239,9 +239,10 @@ defmodule LemonSim.Examples.Werewolf.Events do
     })
   end
 
-  @spec anonymous_message(String.t()) :: Event.t()
-  def anonymous_message(message) do
+  @spec anonymous_message(String.t(), String.t()) :: Event.t()
+  def anonymous_message(player_id, message) do
     Event.new("anonymous_message", %{
+      "player_id" => player_id,
       "message" => message
     })
   end

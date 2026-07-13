@@ -7,9 +7,9 @@ usage: scripts/verify_release_runtime_boot <artifact-directory>
 
 Verifies Lemon Linux x86_64 release artifacts beyond checksums:
   - validates manifest and artifact checksums
-  - extracts lemon_runtime_min and lemon_runtime_full into clean temp dirs
+  - extracts all supported runtime profiles into clean temp dirs
   - starts each release daemon without Mix
-  - checks control-plane /healthz
+  - checks control-plane /healthz or sim broadcast /readyz
   - checks Web /healthz for lemon_runtime_full
   - stops the daemon
   - generates a release-runtime support bundle with release eval
@@ -67,12 +67,22 @@ with open(manifest_path, "r", encoding="utf-8") as handle:
 entries = []
 for artifact in manifest["artifacts"]:
     filename = artifact["file"]
-    match = re.search(r"-(lemon_runtime_min|lemon_runtime_full)\.tar\.gz$", filename)
+    match = re.search(r"-(lemon_runtime_min|lemon_runtime_full|sim_broadcast_platform)\.tar\.gz$", filename)
     if match:
         entries.append((match.group(1), filename))
 
 for profile, filename in sorted(entries):
     print(f"{profile}\t{filename}")
+PY
+}
+
+manifest_commit() {
+  ARTIFACT_DIR="$ARTIFACT_DIR" python3 - <<'PY'
+import json
+import os
+
+with open(os.path.join(os.environ["ARTIFACT_DIR"], "manifest.json"), "r", encoding="utf-8") as handle:
+    print(json.load(handle)["commit"])
 PY
 }
 
@@ -211,6 +221,7 @@ PY
 }
 
 verified_profiles=0
+expected_commit="$(manifest_commit)"
 
 while IFS=$'\t' read -r profile filename; do
   [ -n "$profile" ] || continue
@@ -247,29 +258,82 @@ while IFS=$'\t' read -r profile filename; do
     "PHX_SERVER=true"
   )
 
-  env "${env_vars[@]}" "$release_bin" daemon
-  wait_for_health "http://127.0.0.1:$control_port/healthz" "$profile control-plane"
-
-  if [ "$profile" = "lemon_runtime_full" ]; then
-    wait_for_health "http://127.0.0.1:$web_port/healthz" "$profile web"
+  if [ "$profile" = "sim_broadcast_platform" ]; then
+    env_vars+=(
+      "LEMON_SIM_UI_HOST=localhost"
+      "LEMON_SIM_UI_SECRET_KEY_BASE=runtime_boot_sim_secret_key_base_runtime_boot_sim_secret_key_base_runtime"
+      "LEMON_SIM_UI_ACCESS_TOKEN=runtime-boot-sim-access-token-32-bytes-minimum"
+      "LEMON_ARENA_LEAGUE_ROOT=$profile_dir/leagues"
+    )
   fi
 
-  env "${env_vars[@]}" "$release_bin" stop
-  env "${env_vars[@]}" "$release_bin" eval "LemonCore.Doctor.CLI.bundle!(bundle_path: \"$bundle_path\")"
+  run_release() {
+    (
+      cd "$extract_dir"
+      env \
+        -u LEMON_GIT_SHA \
+        -u LEMON_GIT_BRANCH \
+        -u GITHUB_SHA \
+        -u SOURCE_VERSION \
+        -u VERCEL_GIT_COMMIT_SHA \
+        -u GITHUB_REF_NAME \
+        -u VERCEL_GIT_COMMIT_REF \
+        "${env_vars[@]}" \
+        "$release_bin" "$@"
+    )
+  }
 
-  if [ ! -f "$bundle_path" ]; then
-    echo "$profile: support bundle was not created at $bundle_path" >&2
+  build_info_output="$(run_release eval 'IO.puts("BUILD_COMMIT=" <> (LemonCore.BuildInfo.current().git.commit || ""))')"
+  reported_commit="$(printf '%s\n' "$build_info_output" | sed -n 's/^BUILD_COMMIT=//p' | tail -1)"
+
+  if [ "$reported_commit" != "$expected_commit" ]; then
+    echo "$profile: embedded commit mismatch expected $expected_commit got ${reported_commit:-missing}" >&2
     exit 1
   fi
 
-  verify_support_bundle "$profile" "$bundle_path"
+  run_release daemon
 
-  echo "ok $profile booted, health checked, and generated support bundle"
+  if [ "$profile" = "sim_broadcast_platform" ]; then
+    wait_for_health "http://127.0.0.1:$sim_port/readyz" "$profile sim-ui"
+    curl -fsS "http://127.0.0.1:$sim_port/" | grep -q '/assets/app-'
+    [ "$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$sim_port/admin")" = "401" ]
+
+    run_release rpc \
+      'state = LemonSim.Examples.Werewolf.initial_state(sim_id: "artifact_werewolf", player_count: 5, seed: 7); state = LemonSim.Kernel.State.put_world(state, %{phase: "game_over", status: "game_over", winner: "villagers"}); LemonSim.Kernel.Store.put_state(state)'
+    curl -fsS "http://127.0.0.1:$sim_port/watch/artifact_werewolf" | grep -q 'VILLAGERS WIN'
+
+    run_release stop
+    run_release daemon
+    wait_for_health "http://127.0.0.1:$sim_port/readyz" "$profile restarted sim-ui"
+    curl -fsS "http://127.0.0.1:$sim_port/watch/artifact_werewolf" | grep -q 'VILLAGERS WIN'
+    run_release stop
+
+    echo "ok $profile booted, enforced auth, served assets, and preserved spectator state"
+  else
+    wait_for_health "http://127.0.0.1:$control_port/healthz" "$profile control-plane"
+
+    if [ "$profile" = "lemon_runtime_full" ]; then
+      wait_for_health "http://127.0.0.1:$web_port/healthz" "$profile web"
+    fi
+
+    run_release stop
+    run_release eval "LemonCore.Doctor.CLI.bundle!(bundle_path: \"$bundle_path\")"
+
+    if [ ! -f "$bundle_path" ]; then
+      echo "$profile: support bundle was not created at $bundle_path" >&2
+      exit 1
+    fi
+
+    verify_support_bundle "$profile" "$bundle_path"
+
+    echo "ok $profile booted, health checked, and generated support bundle"
+  fi
+
   verified_profiles=$((verified_profiles + 1))
 done < <(manifest_entries)
 
-if [ "$verified_profiles" -ne 2 ]; then
-  echo "expected to boot 2 release profiles, verified $verified_profiles" >&2
+if [ "$verified_profiles" -ne 3 ]; then
+  echo "expected to boot 3 release profiles, verified $verified_profiles" >&2
   exit 1
 fi
 

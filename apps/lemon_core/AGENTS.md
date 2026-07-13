@@ -168,7 +168,7 @@ config = LemonCore.Config.Modular.load!(project_dir: cwd)  # raises on invalid
 - `[defaults]` - Default provider, model, thinking level, engine
 - `[runtime]` - Runtime behavior (compaction, retry, shell, provider_routing, tools, cli, extensions, theme, budget_defaults)
 - `[profiles.<id>]` - Per-agent profiles with tool policies
-- `[providers.<name>]` - LLM API keys, base URLs, and secret refs (anthropic, openai, openai-codex, opencode, kimi, zai, minimax, google, google_vertex, azure_openai_responses, amazon_bedrock). Secret-ref fields: `api_key_secret`, `oauth_secret`, `project_secret`, `location_secret`, etc.
+- `[providers.<name>]` - LLM API keys, base URLs, and secret refs (anthropic, openai, openai-codex, opencode, opencode_go, github_copilot, kimi, zai, minimax, google, google_vertex, azure_openai_responses, amazon_bedrock). Secret-ref fields: `api_key_secret`, `oauth_secret`, `project_secret`, `location_secret`, etc.
 - `[gateway]` - Max concurrent runs, engine bindings, transport settings (Telegram, Discord, XMTP, SMS, Voice), projects. Secret-ref fields: `bot_token_secret`, `auth_token_secret`, `wallet_key_secret`.
 - `[tui]` - Theme, debug mode
 - `[logging]` - File logging, level, rotation

@@ -18,8 +18,9 @@ defmodule LemonSimUi.Arena do
       with backoff, then abandoned and replaced after repeated failures;
     * a watchdog tick re-checks the world every minute, so a missed PubSub
       message can never permanently stall the arena;
-    * on restart the arena adopts a still-running game of its domain instead
-      of double-starting.
+    * on restart the arena reconciles unrecorded terminal games before it
+      adopts or starts a runner, and marks each league write in persisted
+      simulation metadata.
 
   Configuration lives under `config :lemon_sim_ui, :arenas` — a keyword list
   of per-domain options (`enabled`, `models`, `player_count`, `game_delay_ms`,
@@ -33,6 +34,7 @@ defmodule LemonSimUi.Arena do
 
   alias LemonCore.MapHelpers
   alias LemonSim.Bench.{Domains, League}
+  alias LemonSim.Kernel.State
   alias LemonSimUi.SimManager
 
   # Registration point: the always-on arena runs one process per domain
@@ -164,6 +166,7 @@ defmodule LemonSimUi.Arena do
       player_count:
         Keyword.get(config, :player_count, Map.fetch!(@default_player_counts, domain)),
       game_delay_ms: Keyword.get(config, :game_delay_ms, 15_000),
+      max_game_records: Keyword.get(config, :max_game_records, 1_000),
       league_dir: Keyword.get(config, :league_dir) || default_league_dir(domain),
       retry_start_ms: Keyword.get(config, :retry_start_ms, @retry_start_ms),
       resume_backoff_ms: Keyword.get(config, :resume_backoff_ms, @resume_backoff_ms),
@@ -231,6 +234,10 @@ defmodule LemonSimUi.Arena do
           state.current.sim_id not in state.deps.list_running.() ->
         {:noreply, handle_disappeared(state)}
 
+      state.current != nil and state.current.status == :mark_pending and
+          state.current.sim_id not in state.deps.list_running.() ->
+        {:noreply, complete_pending_record_marker(state)}
+
       state.current != nil and state.current.status == :recorded and
           state.next_game_timer == nil ->
         {:noreply, ensure_game(state)}
@@ -243,7 +250,8 @@ defmodule LemonSimUi.Arena do
   def handle_info(%LemonCore.Event{type: :sim_world_updated, meta: meta} = event, state) do
     sim_id = meta[:sim_id] || meta["sim_id"]
 
-    if (state.current && state.current.sim_id == sim_id) and state.current.status == :running do
+    if state.current != nil and state.current.sim_id == sim_id and
+         state.current.status == :running do
       world = world_from_event(event, sim_id, state)
 
       if world && MapHelpers.get_key(world, :status) == "game_over" do
@@ -257,11 +265,17 @@ defmodule LemonSimUi.Arena do
   end
 
   def handle_info(%LemonCore.Event{type: :sim_lobby_changed}, state) do
-    if (state.current && state.current.status == :running) and
-         state.current.sim_id not in state.deps.list_running.() do
-      {:noreply, handle_disappeared(state)}
-    else
-      {:noreply, state}
+    cond do
+      state.current != nil and state.current.status == :running and
+          state.current.sim_id not in state.deps.list_running.() ->
+        {:noreply, handle_disappeared(state)}
+
+      state.current != nil and state.current.status == :mark_pending and
+          state.current.sim_id not in state.deps.list_running.() ->
+        {:noreply, complete_pending_record_marker(state)}
+
+      true ->
+        {:noreply, state}
     end
   end
 
@@ -281,15 +295,61 @@ defmodule LemonSimUi.Arena do
 
             {:noreply, put_in(state.current.status, :running)}
 
+          {:error, :already_running} ->
+            {:noreply, put_in(state.current.status, :running)}
+
           {:error, :game_over} ->
             case state.deps.get_state.(sim_id) do
               %{world: world} -> {:noreply, finalize_game(state, world)}
               _ -> {:noreply, abandon_game(state, :missing_final_state)}
             end
 
+          {:error, {:not_resumable, reason}} ->
+            {:noreply, abandon_game(state, {:not_resumable, reason})}
+
+          {:error, :turn_budget_exhausted} ->
+            {:noreply, abandon_game(state, :turn_budget_exhausted)}
+
           {:error, reason} ->
             retry_or_abandon(state, {:resume_failed, reason})
         end
+    end
+  end
+
+  def handle_info({:retry_abandon, sim_id, reason}, state) do
+    if state.current != nil and state.current.sim_id == sim_id and
+         state.current.status == :abandoning do
+      {:noreply, abandon_game(state, reason)}
+    else
+      {:noreply, state}
+    end
+  end
+
+  def handle_info({:retry_record, sim_id}, state) do
+    if state.current != nil and state.current.sim_id == sim_id and
+         state.current.status == :record_pending do
+      {:noreply, finalize_game(state, state.current.record_world)}
+    else
+      {:noreply, state}
+    end
+  end
+
+  def handle_info({:retry_existing_record, sim_id}, state) do
+    if state.current != nil and state.current.sim_id == sim_id and
+         state.current.status == :reconcile_pending do
+      {:noreply, reconcile_or_record(state, state.current.record_world)}
+    else
+      {:noreply, state}
+    end
+  end
+
+  def handle_info({:retry_record_marker, sim_id}, state) do
+    current = state.current
+
+    if current && current.sim_id == sim_id && current.status == :mark_pending do
+      {:noreply, complete_pending_record_marker(state)}
+    else
+      {:noreply, state}
     end
   end
 
@@ -303,29 +363,141 @@ defmodule LemonSimUi.Arena do
   defp ensure_game(state) do
     prefix = sim_prefix(state.domain)
 
-    running_sim =
-      state.deps.list_running.()
-      |> Enum.find(&String.starts_with?(&1, prefix))
-
     cond do
-      state.current != nil and state.current.status in [:running, :resuming] ->
+      state.current != nil and
+          state.current.status in [
+            :running,
+            :resuming,
+            :record_pending,
+            :reconcile_pending,
+            :mark_pending,
+            :abandoning
+          ] ->
         state
 
-      running_sim != nil ->
-        adopt_game(state, running_sim)
-
       true ->
-        start_new_game(state)
+        case next_unrecorded_terminal(state, prefix) do
+          nil ->
+            case Enum.find(state.deps.list_running.(), fn sim_id ->
+                   String.starts_with?(sim_id, prefix) and
+                     arena_owned?(state.deps.get_state.(sim_id), state.domain)
+                 end) do
+              nil -> start_new_game(state)
+              running_sim -> adopt_game(state, running_sim)
+            end
+
+          stored_state ->
+            reconcile_terminal_game(state, stored_state)
+        end
+    end
+  end
+
+  defp next_unrecorded_terminal(state, prefix) do
+    state.deps.list_states.()
+    |> Enum.filter(fn
+      %State{sim_id: sim_id, world: world} = stored_state ->
+        String.starts_with?(sim_id, prefix) and
+          arena_owned?(stored_state, state.domain) and
+          MapHelpers.get_key(world, :status) == "game_over" and
+          not league_recorded?(stored_state, state.domain)
+
+      _ ->
+        false
+    end)
+    |> Enum.sort_by(fn stored_state ->
+      run = persisted_run(stored_state)
+      MapHelpers.get_key(run, :finished_at_ms) || MapHelpers.get_key(run, :started_at_ms) || 0
+    end)
+    |> List.first()
+  end
+
+  defp reconcile_terminal_game(state, stored_state) do
+    run = persisted_run(stored_state)
+    seed = MapHelpers.get_key(run, :seed)
+    start_opts = MapHelpers.get_key(run, :start_opts) || %{}
+    rotation_index = MapHelpers.get_key(start_opts, :role_rotation_index)
+    started_at_ms = MapHelpers.get_key(run, :started_at_ms)
+
+    plan =
+      if is_integer(seed), do: %{seed: seed, rotation_index: rotation_index}, else: nil
+
+    Logger.warning(
+      "[Arena:#{state.domain}] reconciling unrecorded terminal game #{stored_state.sim_id}"
+    )
+
+    current =
+      stored_state.sim_id
+      |> new_current(plan, started_at_ms)
+      |> Map.put(:reconciling, true)
+
+    reconcile_or_record(%{state | current: current}, stored_state.world)
+  end
+
+  defp reconcile_or_record(state, world) do
+    current = state.current
+
+    case state.deps.reconcile_record.(state.league_dir, current.sim_id) do
+      {:ok, record, league} ->
+        Logger.warning(
+          "[Arena:#{state.domain}] recovered existing league record for #{current.sim_id}"
+        )
+
+        state
+        |> Map.put(
+          :current,
+          Map.merge(current, %{
+            status: :mark_pending,
+            record: record,
+            record_league: league
+          })
+        )
+        |> complete_pending_record_marker()
+
+      :missing ->
+        finalize_game(state, world)
+
+      {:error, reason} ->
+        Logger.error(
+          "[Arena:#{state.domain}] failed to reconcile existing record for #{current.sim_id}: #{inspect(reason)}"
+        )
+
+        Process.send_after(
+          self(),
+          {:retry_existing_record, current.sim_id},
+          state.retry_start_ms
+        )
+
+        %{state | current: Map.merge(current, %{status: :reconcile_pending, record_world: world})}
     end
   end
 
   defp start_new_game(state) do
-    plan = League.plan_match(state.models, player_count: state.player_count)
+    games = League.load_games(state.league_dir)
+
+    rotation_index =
+      games
+      |> Enum.map(& &1["rotation_index"])
+      |> Enum.filter(&is_integer/1)
+      |> Enum.max(fn -> length(games) - 1 end)
+      |> Kernel.+(1)
+
+    plan_opts =
+      [player_count: state.player_count]
+      |> then(fn opts ->
+        if state.domain == :werewolf,
+          do: Keyword.put(opts, :rotation_index, rotation_index),
+          else: opts
+      end)
+
+    plan = League.plan_match(state.models, plan_opts)
 
     start_opts = [
       model_specs: plan.model_specs,
       player_count: plan.player_count,
-      seed: plan.seed
+      seed: plan.seed,
+      arena_domain: to_string(state.domain),
+      balanced_roles?: state.domain == :werewolf,
+      role_rotation_index: rotation_index
     ]
 
     case state.deps.start_sim.(state.domain, start_opts) do
@@ -348,17 +520,37 @@ defmodule LemonSimUi.Arena do
   defp adopt_game(state, sim_id) do
     LemonSim.Kernel.Bus.subscribe(sim_id)
     Logger.info("[Arena:#{state.domain}] adopted already-running #{sim_id}")
-    %{state | current: new_current(sim_id, nil)}
+
+    run =
+      case state.deps.get_state.(sim_id) do
+        %{meta: meta} -> MapHelpers.get_key(meta, :run) || %{}
+        _ -> %{}
+      end
+
+    seed = MapHelpers.get_key(run, :seed)
+    start_opts = MapHelpers.get_key(run, :start_opts) || %{}
+    rotation_index = MapHelpers.get_key(start_opts, :role_rotation_index)
+    started_at_ms = MapHelpers.get_key(run, :started_at_ms)
+
+    plan =
+      if is_integer(seed), do: %{seed: seed, rotation_index: rotation_index}, else: nil
+
+    %{state | current: new_current(sim_id, plan, started_at_ms)}
   end
 
-  defp new_current(sim_id, plan) do
+  defp new_current(sim_id, plan, started_at_ms \\ nil) do
     %{
       sim_id: sim_id,
       plan: plan,
-      started_at_ms: System.monotonic_time(:millisecond),
+      started_at_ms:
+        if(is_integer(started_at_ms),
+          do: started_at_ms,
+          else: System.system_time(:millisecond)
+        ),
       usage: nil,
       updates_seen: 0,
       resume_attempts: 0,
+      reconciling: false,
       status: :running
     }
   end
@@ -367,11 +559,16 @@ defmodule LemonSimUi.Arena do
     sim_id = state.current.sim_id
 
     case state.deps.get_state.(sim_id) do
-      %{world: world} ->
-        if MapHelpers.get_key(world, :status) == "game_over" do
-          finalize_game(state, world)
-        else
-          begin_resume(state, :runner_exited)
+      %{world: world} = stored_state ->
+        cond do
+          MapHelpers.get_key(world, :status) == "game_over" ->
+            finalize_game(state, world)
+
+          persisted_run_resumable?(stored_state) ->
+            begin_resume(state, :runner_exited)
+
+          true ->
+            abandon_game(state, {:not_resumable, persisted_run_status(stored_state)})
         end
 
       _ ->
@@ -397,6 +594,20 @@ defmodule LemonSimUi.Arena do
     end
   end
 
+  defp persisted_run_resumable?(state) do
+    run = state |> Map.get(:meta, %{}) |> MapHelpers.get_key(:run) || %{}
+    Map.get(run, :resumable, Map.get(run, "resumable", true)) != false
+  end
+
+  defp persisted_run_status(state) do
+    state
+    |> Map.get(:meta, %{})
+    |> MapHelpers.get_key(:run)
+    |> Kernel.||(%{})
+    |> MapHelpers.get_key(:status)
+    |> Kernel.||("unknown")
+  end
+
   defp retry_or_abandon(state, reason) do
     if state.current.resume_attempts >= @max_resume_attempts do
       {:noreply, abandon_game(state, reason)}
@@ -407,8 +618,25 @@ defmodule LemonSimUi.Arena do
 
   defp abandon_game(state, reason) do
     Logger.error("[Arena:#{state.domain}] abandoning #{state.current.sim_id}: #{inspect(reason)}")
-    LemonSim.Kernel.Bus.unsubscribe(state.current.sim_id)
-    schedule_next_game(%{state | current: nil}, state.retry_start_ms)
+
+    case state.deps.abandon_sim.(state.current.sim_id, reason) do
+      result when result in [:ok, {:error, :not_found}] ->
+        LemonSim.Kernel.Bus.unsubscribe(state.current.sim_id)
+        schedule_next_game(%{state | current: nil}, state.retry_start_ms)
+
+      {:error, persist_reason} ->
+        Logger.error(
+          "[Arena:#{state.domain}] failed to persist abandonment: #{inspect(persist_reason)}"
+        )
+
+        Process.send_after(
+          self(),
+          {:retry_abandon, state.current.sim_id, reason},
+          state.retry_start_ms
+        )
+
+        put_in(state.current.status, :abandoning)
+    end
   end
 
   defp finalize_game(state, world) do
@@ -418,40 +646,173 @@ defmodule LemonSimUi.Arena do
     record =
       League.game_record(league_adapter!(state.domain), world,
         game_id: current.sim_id,
-        recorded_at: DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601(),
+        recorded_at: recorded_at(state, current.sim_id),
         seed: current.plan && current.plan.seed,
-        duration_ms: System.monotonic_time(:millisecond) - current.started_at_ms,
+        rotation_index: current.plan && current.plan.rotation_index,
+        duration_ms: game_duration_ms(state, current),
         usage: usage
       )
 
-    case safe_record_game(state.league_dir, record) do
+    case state.deps.record_game.(state.league_dir, record, state.max_game_records) do
       {:ok, league} ->
-        Logger.info(
-          "[Arena:#{state.domain}] recorded #{current.sim_id}: winner=#{record["winner"]} " <>
-            "rounds=#{record["rounds"]} games=#{league["game_count"]}"
+        state
+        |> Map.put(
+          :current,
+          Map.merge(current, %{
+            status: :mark_pending,
+            record: record,
+            record_league: league
+          })
         )
-
-        LemonCore.Bus.broadcast(
-          league_topic(state.domain),
-          LemonCore.Event.new(
-            :arena_league_updated,
-            %{game_id: current.sim_id},
-            %{domain: state.domain}
-          )
-        )
+        |> complete_pending_record_marker()
 
       {:error, reason} ->
         Logger.error(
           "[Arena:#{state.domain}] failed to record #{current.sim_id}: #{inspect(reason)}"
         )
+
+        Process.send_after(self(), {:retry_record, current.sim_id}, state.retry_start_ms)
+
+        %{state | current: Map.merge(current, %{status: :record_pending, record_world: world})}
     end
+  end
+
+  defp complete_pending_record_marker(state) do
+    current = state.current
+
+    case persist_record_marker(state, current.sim_id) do
+      :ok ->
+        complete_recording(state, current.record, current.record_league)
+
+      {:error, :runner_still_running} ->
+        Process.send_after(
+          self(),
+          {:retry_record_marker, current.sim_id},
+          state.retry_start_ms
+        )
+
+        state
+
+      {:error, reason} ->
+        Logger.error(
+          "[Arena:#{state.domain}] failed to persist league marker for #{current.sim_id}: #{inspect(reason)}"
+        )
+
+        Process.send_after(
+          self(),
+          {:retry_record_marker, current.sim_id},
+          state.retry_start_ms
+        )
+
+        state
+    end
+  end
+
+  defp complete_recording(state, record, league) do
+    current = state.current
+
+    Logger.info(
+      "[Arena:#{state.domain}] recorded #{current.sim_id}: winner=#{record["winner"]} " <>
+        "rounds=#{record["rounds"]} games=#{league["game_count"]}"
+    )
+
+    LemonCore.Bus.broadcast(
+      league_topic(state.domain),
+      LemonCore.Event.new(
+        :arena_league_updated,
+        %{game_id: current.sim_id},
+        %{domain: state.domain}
+      )
+    )
 
     LemonSim.Kernel.Bus.unsubscribe(current.sim_id)
 
+    delay = if current.reconciling, do: 0, else: state.game_delay_ms
+
+    recorded_current =
+      current
+      |> Map.drop([:record_world, :record, :record_league])
+      |> Map.put(:status, :recorded)
+
     state
-    |> Map.put(:current, %{current | status: :recorded})
-    |> schedule_next_game(state.game_delay_ms)
+    |> Map.put(:current, recorded_current)
+    |> schedule_next_game(delay)
   end
+
+  defp persist_record_marker(state, sim_id) do
+    if sim_id in state.deps.list_running.() do
+      {:error, :runner_still_running}
+    else
+      case state.deps.get_state.(sim_id) do
+        %State{} = stored_state ->
+          if league_recorded?(stored_state, state.domain) do
+            :ok
+          else
+            run =
+              stored_state
+              |> persisted_run()
+              |> Map.merge(%{
+                arena_league_recorded_domain: to_string(state.domain),
+                arena_league_recorded_at_ms: System.system_time(:millisecond)
+              })
+
+            marked_state = %{
+              stored_state
+              | meta: Map.put(stored_state.meta || %{}, :run, run),
+                version: stored_state.version + 1
+            }
+
+            state.deps.put_state.(marked_state)
+          end
+
+        nil ->
+          :ok
+
+        _ ->
+          {:error, :invalid_persisted_state}
+      end
+    end
+  end
+
+  defp league_recorded?(stored_state, domain) do
+    MapHelpers.get_key(persisted_run(stored_state), :arena_league_recorded_domain) ==
+      to_string(domain)
+  end
+
+  defp arena_owned?(stored_state, domain) do
+    MapHelpers.get_key(persisted_run(stored_state), :arena_domain) == to_string(domain)
+  end
+
+  defp recorded_at(state, sim_id) do
+    with %State{} = stored_state <- state.deps.get_state.(sim_id),
+         finished_at_ms when is_integer(finished_at_ms) <-
+           MapHelpers.get_key(persisted_run(stored_state), :finished_at_ms),
+         {:ok, timestamp} <- DateTime.from_unix(finished_at_ms, :millisecond) do
+      timestamp |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+    else
+      _ -> DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+    end
+  end
+
+  defp game_duration_ms(state, current) do
+    finished_at_ms =
+      with %State{} = stored_state <- state.deps.get_state.(current.sim_id) do
+        MapHelpers.get_key(persisted_run(stored_state), :finished_at_ms)
+      end
+
+    end_time =
+      if is_integer(finished_at_ms),
+        do: finished_at_ms,
+        else: System.system_time(:millisecond)
+
+    max(end_time - current.started_at_ms, 0)
+  end
+
+  defp persisted_run(%{meta: meta}) do
+    meta |> Kernel.||(%{}) |> MapHelpers.get_key(:run) |> Kernel.||(%{})
+  end
+
+  defp persisted_run(_), do: %{}
 
   defp league_adapter!(domain) do
     case LemonSim.Bench.League.Registry.fetch(domain) do
@@ -460,8 +821,21 @@ defmodule LemonSimUi.Arena do
     end
   end
 
-  defp safe_record_game(league_dir, record) do
-    {:ok, elem(League.record_game!(league_dir, record), 1)}
+  defp safe_record_game(league_dir, record, max_game_records) do
+    {:ok, elem(League.record_game!(league_dir, record, max_game_records: max_game_records), 1)}
+  rescue
+    error -> {:error, error}
+  end
+
+  defp safe_reconcile_record(league_dir, sim_id) do
+    case Enum.find(League.load_games(league_dir), &(&1["game_id"] == sim_id)) do
+      nil ->
+        :missing
+
+      record ->
+        {:ok, league} = League.recompute!(league_dir)
+        {:ok, record, league}
+    end
   rescue
     error -> {:error, error}
   end
@@ -515,9 +889,14 @@ defmodule LemonSimUi.Arena do
       %{
         start_sim: &SimManager.start_sim/2,
         resume_sim: &SimManager.resume_sim/1,
+        abandon_sim: &SimManager.abandon_sim/2,
         usage: &SimManager.usage/1,
         list_running: &SimManager.list_running/0,
-        get_state: &LemonSim.Kernel.Store.get_state/1
+        get_state: &LemonSim.Kernel.Store.get_state/1,
+        list_states: &LemonSim.Kernel.Store.list_states/0,
+        put_state: &LemonSim.Kernel.Store.put_state/1,
+        record_game: &safe_record_game/3,
+        reconcile_record: &safe_reconcile_record/2
       },
       overrides
     )

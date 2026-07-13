@@ -97,8 +97,9 @@ for attempt in $(seq 1 "$ATTEMPTS"); do
   if gh release download "$TAG" \
     --dir "$DOWNLOAD_DIR" \
     --pattern "manifest.json" \
-    --pattern "lemon-*-linux-x86_64-lemon_runtime_min.tar.gz" \
-    --pattern "lemon-*-linux-x86_64-lemon_runtime_full.tar.gz"; then
+    --pattern "lemon-*-ubuntu-24.04-x86_64-lemon_runtime_min.tar.gz" \
+    --pattern "lemon-*-ubuntu-24.04-x86_64-lemon_runtime_full.tar.gz" \
+    --pattern "lemon-*-ubuntu-24.04-x86_64-sim_broadcast_platform.tar.gz"; then
     downloaded=true
     break
   fi

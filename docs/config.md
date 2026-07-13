@@ -32,6 +32,10 @@ api_key_secret = "OPENAI_API_KEY"
 api_key_secret = "OPENCODE_API_KEY"
 base_url = "https://opencode.ai/zen/v1"
 
+# OpenCode Go uses the same OPENCODE_API_KEY credential.
+[providers.opencode_go]
+api_key_secret = "OPENCODE_API_KEY"
+
 [defaults]
 provider = "anthropic"
 model = "anthropic:claude-sonnet-4-20250514"

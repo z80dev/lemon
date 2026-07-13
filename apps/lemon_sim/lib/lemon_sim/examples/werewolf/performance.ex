@@ -51,11 +51,19 @@ defmodule LemonSim.Examples.Werewolf.Performance do
            successful_kills: 0,
            failed_kills: 0,
            wolf_checks_found: 0,
-           doctor_saves: 0
+           doctor_saves: 0,
+           protections_of_villagers: 0,
+           protections_of_wolves: 0,
+           statements: 0,
+           correct_accusations: 0,
+           false_accusations: 0,
+           role_score: 0.0
          }}
       end)
       |> apply_vote_history(get(world, :vote_history, []))
       |> apply_night_history(get(world, :night_history, []))
+      |> apply_discussion_history(world, players)
+      |> apply_role_scores()
 
     %{
       benchmark_focus: "hidden-information reasoning, persuasion, and role execution",
@@ -117,7 +125,13 @@ defmodule LemonSim.Examples.Werewolf.Performance do
             maybe_increment(item, :wolf_checks_found, result == "werewolf")
 
           "protect" ->
-            maybe_increment(item, :doctor_saves, saved)
+            item
+            |> maybe_increment(:doctor_saves, saved)
+            |> maybe_increment(
+              :protections_of_villagers,
+              get(record, :target_role) in ["seer", "doctor", "villager"]
+            )
+            |> maybe_increment(:protections_of_wolves, get(record, :target_role) == "werewolf")
 
           _ ->
             item
@@ -125,6 +139,86 @@ defmodule LemonSim.Examples.Werewolf.Performance do
       end)
     end)
   end
+
+  defp apply_discussion_history(metrics, world, players) do
+    past =
+      world
+      |> get(:past_transcripts, %{})
+      |> Map.values()
+      |> List.flatten()
+
+    entries = past ++ get(world, :discussion_transcript, [])
+
+    Enum.reduce(entries, metrics, fn entry, acc ->
+      player_id = get(entry, :player)
+      target_id = get(entry, :target)
+      accusation? = get(entry, :type) == "accusation" and is_binary(target_id)
+      target_role = players |> Map.get(target_id, %{}) |> get(:role)
+
+      update_player(acc, player_id, fn item ->
+        item
+        |> Map.update!(:statements, &(&1 + 1))
+        |> maybe_increment(:correct_accusations, accusation? and target_role == "werewolf")
+        |> maybe_increment(:false_accusations, accusation? and target_role != "werewolf")
+      end)
+    end)
+  end
+
+  defp apply_role_scores(metrics) do
+    Enum.into(metrics, %{}, fn {player_id, item} ->
+      {player_id, Map.put(item, :role_score, role_score(item))}
+    end)
+  end
+
+  defp role_score(item) do
+    team = if get(item, :team_won, false), do: 1.0, else: 0.0
+    survival = if get(item, :survived, false), do: 1.0, else: 0.0
+
+    vote_quality =
+      ratio_or_neutral(get(item, :votes_for_werewolf, 0), get(item, :votes_for_villager, 0))
+
+    accusation_quality =
+      ratio_or_neutral(
+        get(item, :correct_accusations, 0),
+        get(item, :false_accusations, 0)
+      )
+
+    score =
+      case get(item, :role) do
+        "werewolf" ->
+          kill_quality =
+            ratio_or_neutral(get(item, :successful_kills, 0), get(item, :failed_kills, 0))
+
+          concealment =
+            ratio_or_neutral(get(item, :votes_for_villager, 0), get(item, :partner_votes, 0))
+
+          0.35 * team + 0.20 * survival + 0.25 * kill_quality + 0.20 * concealment
+
+        "seer" ->
+          check_quality = min(get(item, :wolf_checks_found, 0), 1)
+          0.35 * team + 0.15 * survival + 0.30 * check_quality + 0.20 * vote_quality
+
+        "doctor" ->
+          protection_quality =
+            ratio_or_neutral(
+              get(item, :protections_of_villagers, 0),
+              get(item, :protections_of_wolves, 0)
+            )
+
+          save_quality = min(get(item, :doctor_saves, 0), 1)
+
+          0.35 * team + 0.10 * survival + 0.20 * vote_quality +
+            0.20 * protection_quality + 0.15 * save_quality
+
+        _ ->
+          0.40 * team + 0.15 * survival + 0.30 * vote_quality + 0.15 * accusation_quality
+      end
+
+    Float.round(score, 4)
+  end
+
+  defp ratio_or_neutral(positive, negative) when positive + negative == 0, do: 0.5
+  defp ratio_or_neutral(positive, negative), do: positive / (positive + negative)
 
   defp summarize_models(player_metrics) do
     player_metrics
@@ -141,7 +235,14 @@ defmodule LemonSim.Examples.Werewolf.Performance do
          votes_for_villager: Enum.sum(Enum.map(metrics, &get(&1, :votes_for_villager, 0))),
          successful_kills: Enum.sum(Enum.map(metrics, &get(&1, :successful_kills, 0))),
          wolf_checks_found: Enum.sum(Enum.map(metrics, &get(&1, :wolf_checks_found, 0))),
-         doctor_saves: Enum.sum(Enum.map(metrics, &get(&1, :doctor_saves, 0)))
+         doctor_saves: Enum.sum(Enum.map(metrics, &get(&1, :doctor_saves, 0))),
+         protections_of_villagers:
+           Enum.sum(Enum.map(metrics, &get(&1, :protections_of_villagers, 0))),
+         protections_of_wolves: Enum.sum(Enum.map(metrics, &get(&1, :protections_of_wolves, 0))),
+         correct_accusations: Enum.sum(Enum.map(metrics, &get(&1, :correct_accusations, 0))),
+         false_accusations: Enum.sum(Enum.map(metrics, &get(&1, :false_accusations, 0))),
+         role_score_mean:
+           metrics |> Enum.map(&get(&1, :role_score, 0.0)) |> then(&(Enum.sum(&1) / length(&1)))
        }}
     end)
   end

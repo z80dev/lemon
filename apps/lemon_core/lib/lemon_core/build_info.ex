@@ -58,15 +58,25 @@ defmodule LemonCore.BuildInfo do
   end
 
   defp git_info(cwd) do
-    commit = first_env(@env_commit_keys) || git_value(cwd, ["rev-parse", "--short=12", "HEAD"])
-    branch = first_env(@env_branch_keys) || git_value(cwd, ["rev-parse", "--abbrev-ref", "HEAD"])
-
-    %{
-      commit: commit,
-      branch: branch,
-      dirty?: git_dirty?(cwd),
-      describe: git_value(cwd, ["describe", "--tags", "--always", "--dirty"])
-    }
+    if blank_to_nil(System.get_env("RELEASE_NAME")) do
+      %{
+        commit:
+          first_env(@env_commit_keys) ||
+            blank_to_nil(Application.get_env(:lemon_core, :build_git_sha)),
+        branch:
+          first_env(@env_branch_keys) ||
+            blank_to_nil(Application.get_env(:lemon_core, :build_git_branch)),
+        dirty?: nil,
+        describe: nil
+      }
+    else
+      %{
+        commit: first_env(@env_commit_keys) || git_value(cwd, ["rev-parse", "--short=12", "HEAD"]),
+        branch: first_env(@env_branch_keys) || git_value(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]),
+        dirty?: git_dirty?(cwd),
+        describe: git_value(cwd, ["describe", "--tags", "--always", "--dirty"])
+      }
+    end
   end
 
   defp first_env(keys) do

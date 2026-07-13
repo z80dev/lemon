@@ -16,7 +16,8 @@ defmodule LemonSim.Examples.Werewolf.Updaters.Discussion do
     with :ok <- ensure_in_progress(state.world),
          :ok <- ensure_phase_in(state.world, ["day_discussion", "runoff_discussion"]),
          :ok <- ensure_active_actor(state.world, player_id),
-         :ok <- ensure_living(players, player_id) do
+         :ok <- ensure_living(players, player_id),
+         :ok <- ensure_text(statement) do
       transcript = get(state.world, :discussion_transcript, [])
       new_entry = %{player: player_id, statement: statement}
       new_transcript = transcript ++ [new_entry]
@@ -103,7 +104,8 @@ defmodule LemonSim.Examples.Werewolf.Updaters.Discussion do
          :ok <- ensure_active_actor(state.world, player_id),
          :ok <- ensure_living(players, player_id),
          :ok <- ensure_living(players, target_id),
-         :ok <- ensure_different(player_id, target_id) do
+         :ok <- ensure_different(player_id, target_id),
+         :ok <- ensure_text(reason) do
       transcript = get(state.world, :discussion_transcript, [])
 
       new_entry = %{

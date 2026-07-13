@@ -1307,6 +1307,7 @@ defmodule LemonSim.Examples.VendingBenchTest do
              "cache_read_tokens" => 0,
              "cache_write_tokens" => 0,
              "decisions" => 0,
+             "latency_ms" => 0,
              "cost_usd" => 0.0
            }
 

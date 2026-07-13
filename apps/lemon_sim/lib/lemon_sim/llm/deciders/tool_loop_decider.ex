@@ -69,11 +69,17 @@ defmodule LemonSim.LLM.Deciders.ToolLoopDecider do
     else
       complete_fn = Keyword.get(opts, :complete_fn, &Ai.complete/3)
       stream_options = Keyword.get(opts, :stream_options, %{})
+      started_at = System.monotonic_time(:millisecond)
 
       with {:ok, %AssistantMessage{} = assistant} <-
              call_with_transient_retry(complete_fn, model, state.context, stream_options, opts),
            context_with_assistant <- append_message(state.context, assistant) do
-        record_usage_response(opts, model, assistant)
+        record_usage_response(
+          opts,
+          model,
+          assistant,
+          System.monotonic_time(:millisecond) - started_at
+        )
 
         with {:ok, tool_calls} <- fetch_tool_calls(assistant, max_tool_calls_per_turn) do
           case tool_calls do
@@ -236,12 +242,13 @@ defmodule LemonSim.LLM.Deciders.ToolLoopDecider do
     %{context | messages: context.messages ++ [message]}
   end
 
-  defp record_usage_response(opts, model, %AssistantMessage{usage: usage}) do
+  defp record_usage_response(opts, model, %AssistantMessage{usage: usage}, latency_ms) do
     Usage.record_response(
       Keyword.get(opts, :usage_collector),
       usage_actor_id(opts),
       usage_model(opts, model),
-      usage
+      usage,
+      latency_ms
     )
   end
 

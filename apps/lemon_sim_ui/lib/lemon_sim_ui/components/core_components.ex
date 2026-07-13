@@ -39,6 +39,7 @@ defmodule LemonSimUi.CoreComponents do
   attr :value, :string, default: ""
   attr :type, :string, default: "text"
   attr :label, :string, default: nil
+  attr :placeholder, :string, default: nil
   attr :min, :any, default: nil
   attr :max, :any, default: nil
   attr :rest, :global
@@ -51,6 +52,7 @@ defmodule LemonSimUi.CoreComponents do
         type={@type}
         name={@name}
         value={@value}
+        placeholder={@placeholder}
         min={@min}
         max={@max}
         class="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100 outline-none transition focus:border-blue-500 focus:ring-1 focus:ring-blue-500"

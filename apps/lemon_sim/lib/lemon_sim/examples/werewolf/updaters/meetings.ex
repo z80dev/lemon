@@ -2,8 +2,8 @@ defmodule LemonSim.Examples.Werewolf.Updaters.Meetings do
   @moduledoc false
 
   alias LemonSim.Kernel.State
-  alias LemonSim.Examples.Werewolf.{Events, Roles}
-  alias LemonSim.Examples.Werewolf.Updaters.Discussion
+  alias LemonSim.Examples.Werewolf.{Events, Roles, RulesConfig}
+  alias LemonSim.Examples.Werewolf.Updaters.{Discussion, VillageEvents}
 
   import LemonSim.Examples.Helpers
   import LemonSim.Examples.Helpers.UpdaterHelpers
@@ -92,21 +92,37 @@ defmodule LemonSim.Examples.Werewolf.Updaters.Meetings do
       |> Enum.filter(fn {a, b} -> Map.get(requests, b) == a and a < b end)
       |> Enum.map(fn {a, b} -> [a, b] end)
 
-    paired = mutual |> List.flatten() |> MapSet.new()
+    mutually_paired = mutual |> List.flatten() |> MapSet.new()
+
+    {directed, paired} =
+      requests
+      |> Enum.sort_by(fn {requester, target} -> {requester, target} end)
+      |> Enum.reduce({[], mutually_paired}, fn {requester, target}, {pairs, paired} ->
+        if requester in living_ids and target in living_ids and
+             not MapSet.member?(paired, requester) and not MapSet.member?(paired, target) do
+          {pairs ++ [[requester, target]], paired |> MapSet.put(requester) |> MapSet.put(target)}
+        else
+          {pairs, paired}
+        end
+      end)
+
     unpaired = Enum.reject(living_ids, &MapSet.member?(paired, &1))
     remaining_pairs = unpaired |> Enum.chunk_every(2, 2, :discard)
 
-    (mutual ++ remaining_pairs)
+    (mutual ++ directed ++ remaining_pairs)
     |> Enum.take(div(length(living_ids), 2))
   end
 
   def apply_meeting_message(%State{} = state, event) do
     player_id = fetch(event.payload, :player_id, "player_id")
     message = fetch(event.payload, :message, "message")
+    players = get(state.world, :players, %{})
 
     with :ok <- ensure_in_progress(state.world),
          :ok <- ensure_phase(state.world, "private_meeting"),
-         :ok <- ensure_active_actor(state.world, player_id) do
+         :ok <- ensure_active_actor(state.world, player_id),
+         :ok <- ensure_living(players, player_id),
+         :ok <- ensure_text(message) do
       current_messages = get(state.world, :current_meeting_messages, [])
       new_messages = current_messages ++ [%{player: player_id, message: message}]
 
@@ -185,7 +201,12 @@ defmodule LemonSim.Examples.Werewolf.Updaters.Meetings do
   defp transition_to_day_discussion_from_meetings(%State{} = state) do
     players = get(state.world, :players, %{})
     day_number = get(state.world, :day_number, 1)
-    discussion_round_limit = Roles.discussion_round_limit(players, day_number)
+
+    discussion_round_limit =
+      players
+      |> Roles.discussion_round_limit(day_number)
+      |> VillageEvents.adjust_discussion_round_limit(get(state.world, :current_village_event))
+
     discussion_order = Roles.discussion_turn_order(players, day_number, 1)
 
     discussion_turn_limit =
@@ -216,6 +237,14 @@ defmodule LemonSim.Examples.Werewolf.Updaters.Meetings do
   end
 
   def transition_to_meetings_or_discussion(%State{} = state) do
+    if RulesConfig.enabled?(state.world, :private_meetings) do
+      transition_to_meeting_selection(state)
+    else
+      transition_to_day_discussion_from_meetings(state)
+    end
+  end
+
+  defp transition_to_meeting_selection(%State{} = state) do
     players = get(state.world, :players, %{})
     day_number = get(state.world, :day_number, 1)
 

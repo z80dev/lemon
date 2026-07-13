@@ -26,7 +26,8 @@ defmodule LemonCore.Config.Providers do
   - `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`
   - `OPENAI_API_KEY`, `OPENAI_BASE_URL`
   - `OPENAI_CODEX_API_KEY`
-  - `OPENCODE_API_KEY`, `OPENCODE_BASE_URL`
+  - `OPENCODE_API_KEY`, `OPENCODE_BASE_URL` (OpenCode and OpenCode Go)
+  - `GITHUB_COPILOT_API_KEY`
 
   The `api_key_secret` field allows referencing secrets from the secret store
   instead of hardcoding API keys in config files.
@@ -72,6 +73,8 @@ defmodule LemonCore.Config.Providers do
     "openai-codex" => %{api_key: "OPENAI_CODEX_API_KEY", base_url: "OPENAI_BASE_URL"},
     "google_gemini_cli" => %{api_key: "GOOGLE_GEMINI_CLI_API_KEY"},
     "opencode" => %{api_key: "OPENCODE_API_KEY", base_url: "OPENCODE_BASE_URL"},
+    "opencode_go" => %{api_key: "OPENCODE_API_KEY"},
+    "github_copilot" => %{api_key: "GITHUB_COPILOT_API_KEY"},
     "zai" => %{api_key: "ZAI_API_KEY", base_url: "ZAI_BASE_URL"},
     "minimax" => %{api_key: "MINIMAX_API_KEY", base_url: "MINIMAX_BASE_URL"}
   }

@@ -48,7 +48,6 @@ defmodule LemonSim.Examples.Werewolf.Updaters.NightActions do
          :ok <- ensure_active_actor(state.world, player_id),
          :ok <- ensure_living(players, player_id),
          :ok <- ensure_role(players, player_id, "seer"),
-         :ok <- ensure_seer_can_investigate(state.world),
          :ok <- ensure_living(players, target_id),
          :ok <- ensure_different(player_id, target_id) do
       target_role = get(Map.get(players, target_id, %{}), :role, "unknown")
@@ -115,7 +114,8 @@ defmodule LemonSim.Examples.Werewolf.Updaters.NightActions do
     with :ok <- ensure_in_progress(state.world),
          :ok <- ensure_phase(state.world, "night"),
          :ok <- ensure_active_actor(state.world, player_id),
-         :ok <- ensure_living(players, player_id) do
+         :ok <- ensure_living(players, player_id),
+         :ok <- ensure_sleep_role(players, player_id, get(state.world, :day_number, 1)) do
       night_actions =
         state.world
         |> get(:night_actions, %{})
@@ -140,7 +140,8 @@ defmodule LemonSim.Examples.Werewolf.Updaters.NightActions do
     with :ok <- ensure_in_progress(state.world),
          :ok <- ensure_phase(state.world, "night"),
          :ok <- ensure_active_actor(state.world, player_id),
-         :ok <- ensure_living(players, player_id) do
+         :ok <- ensure_living(players, player_id),
+         :ok <- ensure_role(players, player_id, "villager") do
       night_actions =
         state.world
         |> get(:night_actions, %{})
@@ -178,25 +179,30 @@ defmodule LemonSim.Examples.Werewolf.Updaters.NightActions do
     end
   end
 
-  defp ensure_seer_can_investigate(world) do
-    if get(world, :day_number, 1) > 1, do: :ok, else: {:error, :investigation_not_ready}
+  defp ensure_sleep_role(players, player_id, day_number) do
+    role = players |> Map.get(player_id, %{}) |> get(:role)
+
+    if role == "villager" and day_number >= 1, do: :ok, else: {:error, :wrong_role}
   end
 
   def apply_use_item(%State{} = state, event) do
     player_id = fetch(event.payload, :player_id, "player_id")
     item_type = fetch(event.payload, :item_type, "item_type")
     players = get(state.world, :players, %{})
+    player_items = get(state.world, :player_items, %{})
+    current_items = Map.get(player_items, player_id, [])
 
     with :ok <- ensure_in_progress(state.world),
+         :ok <- ensure_phase(state.world, "night"),
          :ok <- ensure_active_actor(state.world, player_id),
-         :ok <- ensure_living(players, player_id) do
+         :ok <- ensure_living(players, player_id),
+         true <- item_type in ["lock", "lantern"],
+         true <- Items.has_item?(current_items, item_type) do
       night_actions =
         state.world
         |> get(:night_actions, %{})
         |> Map.put(player_id, %{action: "use_item", item: item_type})
 
-      player_items = get(state.world, :player_items, %{})
-      current_items = Map.get(player_items, player_id, [])
       new_items = Items.remove_first_item(current_items, item_type)
       new_player_items = Map.put(player_items, player_id, new_items)
 
@@ -212,6 +218,12 @@ defmodule LemonSim.Examples.Werewolf.Updaters.NightActions do
 
       advance_night_turn(next_state)
     else
+      false when item_type in ["lock", "lantern"] ->
+        reject_action(state, event, player_id, :item_not_owned)
+
+      false ->
+        reject_action(state, event, player_id, :invalid_item)
+
       {:error, reason} ->
         reject_action(state, event, player_id, reason)
     end

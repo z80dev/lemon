@@ -43,6 +43,42 @@ defmodule LemonCore.BuildInfoTest do
     assert info.git.branch == "release/test"
   end
 
+  test "release runtime uses stamped identity instead of the current checkout" do
+    old_release_name = System.get_env("RELEASE_NAME")
+    old_sha = System.get_env("LEMON_GIT_SHA")
+    old_github_sha = System.get_env("GITHUB_SHA")
+    old_source_version = System.get_env("SOURCE_VERSION")
+    old_vercel_sha = System.get_env("VERCEL_GIT_COMMIT_SHA")
+    old_build_sha = Application.get_env(:lemon_core, :build_git_sha)
+
+    System.put_env("RELEASE_NAME", "sim_broadcast_platform")
+    System.delete_env("LEMON_GIT_SHA")
+    System.delete_env("GITHUB_SHA")
+    System.delete_env("SOURCE_VERSION")
+    System.delete_env("VERCEL_GIT_COMMIT_SHA")
+    Application.put_env(:lemon_core, :build_git_sha, "stamped123456")
+
+    on_exit(fn ->
+      restore_env("RELEASE_NAME", old_release_name)
+      restore_env("LEMON_GIT_SHA", old_sha)
+      restore_env("GITHUB_SHA", old_github_sha)
+      restore_env("SOURCE_VERSION", old_source_version)
+      restore_env("VERCEL_GIT_COMMIT_SHA", old_vercel_sha)
+
+      if is_nil(old_build_sha) do
+        Application.delete_env(:lemon_core, :build_git_sha)
+      else
+        Application.put_env(:lemon_core, :build_git_sha, old_build_sha)
+      end
+    end)
+
+    info = LemonCore.BuildInfo.current(cwd: File.cwd!())
+
+    assert info.git.commit == "stamped123456"
+    assert info.git.dirty? == nil
+    assert info.git.describe == nil
+  end
+
   defp restore_env(name, nil), do: System.delete_env(name)
   defp restore_env(name, value), do: System.put_env(name, value)
 end

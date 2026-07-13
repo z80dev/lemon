@@ -1,13 +1,17 @@
 defmodule LemonSimUi.Plugs.RequireAccessToken do
   @moduledoc """
-  Optional token gate for the LemonSim admin surfaces.
+  Token gate for the LemonSim admin surfaces.
 
   When `:lemon_sim_ui, :access_token` is configured, requests must provide the
   token via one of:
 
   - `Authorization: Bearer <token>`
-  - query string `?token=<token>`
-  - existing session auth marker (`:lemon_sim_ui_auth`)
+  - browser-only query string `?token=<token>`, exchanged immediately for a
+    session and redirected to a URL without the token
+  - browser-only existing session auth marker (`:lemon_sim_ui_auth`)
+
+  API routes configure this plug with `sources: [:authorization]` and never
+  accept query or cookie credentials.
   """
 
   @behaviour Plug
@@ -16,25 +20,37 @@ defmodule LemonSimUi.Plugs.RequireAccessToken do
 
   @session_key :lemon_sim_ui_auth
 
-  def init(opts), do: opts
+  def init(opts), do: Keyword.get(opts, :sources, [:authorization, :query, :session])
 
-  def call(conn, _opts) do
+  def call(conn, sources) do
     case configured_token() do
       token when token in [nil, ""] ->
         conn
 
       expected ->
-        fresh_token = token_from_authorization_header(conn) || token_from_query(conn)
+        authorization =
+          if :authorization in sources, do: token_from_authorization_header(conn)
+
+        query = if :query in sources, do: token_from_query(conn)
 
         cond do
-          is_binary(fresh_token) ->
-            if secure_equal?(fresh_token, expected) do
+          is_binary(authorization) ->
+            if secure_equal?(authorization, expected) do
               put_session(conn, @session_key, session_marker(expected))
             else
               conn |> delete_session(@session_key) |> unauthorized()
             end
 
-          valid_session_marker?(token_from_session(conn), expected) ->
+          is_binary(query) ->
+            if secure_equal?(query, expected) do
+              conn
+              |> put_session(@session_key, session_marker(expected))
+              |> redirect_without_query_token()
+            else
+              conn |> delete_session(@session_key) |> unauthorized()
+            end
+
+          :session in sources and valid_session_marker?(token_from_session(conn), expected) ->
             conn
 
           true ->
@@ -95,6 +111,20 @@ defmodule LemonSimUi.Plugs.RequireAccessToken do
   end
 
   defp secure_equal?(_left, _right), do: false
+
+  defp redirect_without_query_token(conn) do
+    query =
+      conn.query_params
+      |> Map.delete("token")
+      |> URI.encode_query()
+
+    location = conn.request_path <> if(query == "", do: "", else: "?#{query}")
+
+    conn
+    |> put_resp_header("location", location)
+    |> send_resp(:see_other, "")
+    |> halt()
+  end
 
   defp unauthorized(conn) do
     conn

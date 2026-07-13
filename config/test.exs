@@ -87,6 +87,8 @@ config :lemon_sim_ui, LemonSimUi.Endpoint,
     "test_sim_ui_secret_key_base_test_sim_ui_secret_key_base_test_sim_ui_secret_key_base",
   server: false
 
+config :lemon_sim_ui, :hosted_rooms_enabled, true
+
 config :lemon_web, LemonWeb.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4082],
   secret_key_base:

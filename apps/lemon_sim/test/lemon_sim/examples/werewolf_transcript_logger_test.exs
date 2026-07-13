@@ -176,6 +176,41 @@ defmodule LemonSim.Examples.WerewolfTranscriptLoggerTest do
     assert entry.detail.night_actions["Hugo"] == %{action: "protect", target: "Bram"}
   end
 
+  test "turn_result_entry records wolf chat even when the phase advances" do
+    result = %{
+      decision: %{
+        "tool_name" => "wolf_chat",
+        "arguments" => %{"message" => "Pressure Alice tomorrow."},
+        "result_details" => %{
+          "event" => %{"payload" => %{"player_id" => "Cora"}}
+        }
+      },
+      state: %{
+        world: %{
+          phase: "night",
+          day_number: 1,
+          active_actor_id: "Bram",
+          status: "in_progress",
+          wolf_chat_history: [
+            %{day: 1, player: "Cora", message: "Pressure Alice tomorrow."}
+          ],
+          elimination_log: []
+        }
+      }
+    }
+
+    entry =
+      TranscriptLogger.turn_result_entry(
+        3,
+        %{phase: "wolf_discussion", day: 1, active_player: "Cora"},
+        result
+      )
+
+    assert entry.phase == "wolf_discussion"
+    assert entry.phase_after == "night"
+    assert entry.detail == %{speaker: "Cora", message: "Pressure Alice tomorrow."}
+  end
+
   test "print_step_summary uses decision payload for final discussion speaker" do
     summary =
       TranscriptLogger.print_step_summary(%{

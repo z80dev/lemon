@@ -576,6 +576,7 @@ results = CodingAgent.Coordinator.run_subagents(coordinator, [
 | `jason` | ~> 1.4 | JSON encoding/decoding for JSONL persistence |
 | `req` | ~> 0.5 | HTTP client for web tools |
 | `readability` | ~> 0.12 | HTML content extraction for `webfetch` |
+| `httpoison` | ~> 3.0 | Security-patched HTTP transport override required by `readability` |
 | `uuid` | ~> 1.1 | UUID generation for session IDs |
 
 ## Testing

@@ -46,6 +46,8 @@ config :lemon_sim_ui, LemonSimUi.Endpoint,
     "dev_sim_ui_secret_key_base_dev_sim_ui_secret_key_base_dev_sim_ui_secret_key_base",
   watchers: []
 
+config :lemon_sim_ui, :hosted_rooms_enabled, true
+
 # Voice transport configuration - zeebot phone integration
 config :lemon_gateway,
   voice_enabled: true,

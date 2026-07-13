@@ -444,6 +444,12 @@
     max_age_days: 30
   },
   %{
+    path: "docs/plans/werewolf-production-readiness-2026-07-10.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-07-10],
+    max_age_days: 30
+  },
+  %{
     path: "docs/plans/lemon-sim-vendingbench-equivalent-goal-2026-05-16.md",
     owner: "@z80",
     last_reviewed: ~D[2026-06-17],

@@ -369,6 +369,42 @@ defmodule Ai.Models.OpenAI do
       context_window: 1_050_000,
       max_tokens: 128_000
     },
+    "gpt-5.6-luna" => %Model{
+      id: "gpt-5.6-luna",
+      name: "GPT-5.6 Luna",
+      api: :openai_responses,
+      provider: :openai,
+      base_url: "https://api.openai.com/v1",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 1.0, output: 6.0, cache_read: 0.1, cache_write: 1.25},
+      context_window: 1_050_000,
+      max_tokens: 128_000
+    },
+    "gpt-5.6-terra" => %Model{
+      id: "gpt-5.6-terra",
+      name: "GPT-5.6 Terra",
+      api: :openai_responses,
+      provider: :openai,
+      base_url: "https://api.openai.com/v1",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 2.5, output: 15.0, cache_read: 0.25, cache_write: 3.125},
+      context_window: 1_050_000,
+      max_tokens: 128_000
+    },
+    "gpt-5.6-sol" => %Model{
+      id: "gpt-5.6-sol",
+      name: "GPT-5.6 Sol",
+      api: :openai_responses,
+      provider: :openai,
+      base_url: "https://api.openai.com/v1",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 5.0, output: 30.0, cache_read: 0.5, cache_write: 6.25},
+      context_window: 1_050_000,
+      max_tokens: 128_000
+    },
     "o1" => %Model{
       id: "o1",
       name: "o1",

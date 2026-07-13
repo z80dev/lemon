@@ -154,6 +154,19 @@ defmodule LemonSim.Examples.Werewolf.TranscriptLogger do
     |> maybe_put(:latest_night_action, latest_action)
   end
 
+  defp detail_for_phase("wolf_discussion", step_meta, world, %{decision: decision}) do
+    arguments = Map.get(decision, "arguments", %{})
+    speaker = Map.get(step_meta, :active_player) || actor_from_result(%{decision: decision})
+    message = get(arguments, :message)
+
+    if is_binary(message) and message != "" do
+      %{speaker: speaker, message: message}
+    else
+      entry = world |> get(:wolf_chat_history, []) |> List.last()
+      if entry, do: %{speaker: get(entry, :player), message: get(entry, :message)}, else: %{}
+    end
+  end
+
   defp detail_for_phase(_phase, _step_meta, _world, _result), do: %{}
 
   defp legacy_detail("day_discussion", world) do
@@ -164,6 +177,12 @@ defmodule LemonSim.Examples.Werewolf.TranscriptLogger do
 
   defp legacy_detail("day_voting", world), do: %{votes: get(world, :votes, %{})}
   defp legacy_detail("night", world), do: %{night_actions: get(world, :night_actions, %{})}
+
+  defp legacy_detail("wolf_discussion", world) do
+    entry = world |> get(:wolf_chat_history, []) |> List.last()
+    if entry, do: %{speaker: get(entry, :player), message: get(entry, :message)}, else: %{}
+  end
+
   defp legacy_detail(_phase, _world), do: %{}
 
   defp action_phase(%{decision: decision}, step_meta, world) when is_map(decision) do
@@ -173,6 +192,9 @@ defmodule LemonSim.Examples.Werewolf.TranscriptLogger do
 
       "cast_vote" ->
         "day_voting"
+
+      "wolf_chat" ->
+        "wolf_discussion"
 
       name when name in ["choose_victim", "investigate_player", "protect_player", "sleep"] ->
         "night"

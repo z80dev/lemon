@@ -320,12 +320,16 @@ defmodule AgentCore.ModelRuntime.CredentialsTest do
              "copilot-access-token"
   end
 
+  test "opencode go shares the opencode environment credential" do
+    System.put_env("OPENCODE_API_KEY", "opencode-go-token")
+
+    assert AgentCore.ModelRuntime.ProviderNames.canonical_name("opencode-go") == "opencode_go"
+
+    assert AgentCore.ModelRuntime.Credentials.resolve_provider_api_key("opencode-go", %{}) ==
+             "opencode-go-token"
+  end
+
   test "unknown providers do not raise during credential checks" do
-    assert AgentCore.ModelRuntime.ProviderNames.canonical_name("opencode-go") == nil
-
-    assert AgentCore.ModelRuntime.Credentials.provider_has_credentials?("opencode-go", %{}) ==
-             false
-
     assert AgentCore.ModelRuntime.Credentials.provider_has_credentials?("vercel-ai-gateway", %{}) ==
              false
   end

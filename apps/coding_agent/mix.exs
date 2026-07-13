@@ -36,6 +36,7 @@ defmodule CodingAgent.MixProject do
       {:jason, "~> 1.4"},
       {:req, "~> 0.5"},
       {:readability, "~> 0.12"},
+      {:httpoison, "~> 3.0", override: true},
       {:uuid, "~> 1.1"}
     ]
   end

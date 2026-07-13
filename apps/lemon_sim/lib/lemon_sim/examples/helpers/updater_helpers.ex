@@ -64,6 +64,19 @@ defmodule LemonSim.Examples.Helpers.UpdaterHelpers do
     if id_a != id_b, do: :ok, else: {:error, :cannot_target_self}
   end
 
+  def ensure_text(value, max_bytes \\ 2_000)
+
+  def ensure_text(value, max_bytes) when is_binary(value) and is_integer(max_bytes) do
+    cond do
+      not String.valid?(value) -> {:error, :invalid_text}
+      byte_size(value) > max_bytes -> {:error, :text_too_long}
+      String.trim(value) == "" -> {:error, :empty_text}
+      true -> :ok
+    end
+  end
+
+  def ensure_text(_value, _max_bytes), do: {:error, :empty_text}
+
   def ensure_valid_vote_target(_players, _voter_id, "skip"), do: :ok
 
   def ensure_valid_vote_target(players, voter_id, target_id) do
@@ -125,8 +138,8 @@ defmodule LemonSim.Examples.Helpers.UpdaterHelpers do
 
     rejected =
       Event.new("action_rejected", %{
-        "kind" => to_string(event.kind),
-        "player_id" => to_string(player_id || "unknown"),
+        "kind" => safe_rejection_label(event.kind, "event"),
+        "player_id" => safe_rejection_label(player_id, "unknown"),
         "reason" => message
       })
 
@@ -138,6 +151,14 @@ defmodule LemonSim.Examples.Helpers.UpdaterHelpers do
     {:ok, next_state, {:decide, message}}
   end
 
+  defp safe_rejection_label(value, fallback)
+       when is_binary(value) and byte_size(value) <= 200 do
+    if String.valid?(value), do: value, else: fallback
+  end
+
+  defp safe_rejection_label(value, _fallback) when is_atom(value), do: Atom.to_string(value)
+  defp safe_rejection_label(_value, fallback), do: fallback
+
   def rejection_reason(:game_over), do: "game already over"
   def rejection_reason(:wrong_phase), do: "wrong phase"
   def rejection_reason(:not_active_actor), do: "not the active actor"
@@ -146,6 +167,11 @@ defmodule LemonSim.Examples.Helpers.UpdaterHelpers do
   def rejection_reason(:wrong_role), do: "wrong role for this action"
   def rejection_reason(:invalid_target), do: "invalid target"
   def rejection_reason(:cannot_target_self), do: "cannot target yourself"
+  def rejection_reason(:empty_text), do: "message cannot be empty"
+  def rejection_reason(:invalid_text), do: "message must be valid UTF-8"
+  def rejection_reason(:text_too_long), do: "message is too long"
+  def rejection_reason(:item_not_owned), do: "item is not in your inventory"
+  def rejection_reason(:invalid_item), do: "item cannot be used in this phase"
   def rejection_reason(:system_locked), do: "system is locked by the captain"
   def rejection_reason(:insufficient_funds), do: "insufficient funds"
   def rejection_reason(:insufficient_shares), do: "insufficient shares"

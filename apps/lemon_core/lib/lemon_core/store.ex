@@ -151,6 +151,12 @@ defmodule LemonCore.Store do
 
   # Generic Table API (for use by other lemon_* apps)
 
+  @doc "Performs a non-mutating store/backend liveness check."
+  @spec ping() :: :ok | {:error, term()}
+  def ping do
+    safe_store_call(:ping, {:error, :store_unavailable}, op: :ping, table: :store, key: :ping)
+  end
+
   @doc """
   Put a value into a named table.
 
@@ -561,6 +567,25 @@ defmodule LemonCore.Store do
       other ->
         log_backend_unexpected(:get, :chat, scope, other)
         {:reply, nil, state}
+    end
+  end
+
+  def handle_call(:ping, _from, state) do
+    if function_exported?(state.backend, :ping, 1) do
+      case state.backend.ping(state.backend_state) do
+        {:ok, backend_state} ->
+          {:reply, :ok, %{state | backend_state: backend_state}}
+
+        {:error, reason} ->
+          log_backend_error(:ping, :store, :ping, reason)
+          {:reply, {:error, reason}, state}
+
+        other ->
+          log_backend_unexpected(:ping, :store, :ping, other)
+          {:reply, {:error, {:unexpected_backend_response, other}}, state}
+      end
+    else
+      {:reply, :ok, state}
     end
   end
 

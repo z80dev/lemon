@@ -4,14 +4,15 @@
 
 `lemon_sim_ui` is a Phoenix LiveView dashboard for the `lemon_sim` simulation harness. It does not contain any simulation logic — all game rules, runners, and domain examples live in `lemon_sim`. This app is responsible for:
 
-- launching simulations via `SimManager`
+- launching, checkpointing, retrying/terminalizing recovery, and capacity-limiting simulations via `SimManager`
 - driving the runner loop (calling `LemonSim.Kernel.Runner.step/3` in a supervised task)
-- keeping the always-on model arenas running via `Arena` (one per domain: werewolf, space_station, stock_market, survivor — randomized lineups, crash resume, league recording through `LemonSim.Bench.League`)
+- keeping the always-on model arenas running via `Arena` (one per domain: werewolf, space_station, stock_market, survivor, poker — randomized lineups, crash resume, restart reconciliation, and durably marked league recording through `LemonSim.Bench.League`)
+- hosting durable human/AI Werewolf rooms via `HostedGame` and one serialized `RoomServer` per room
 - rendering live state in the browser via the public `LobbyLive`, public `LeaderboardLive`, public `ArenaLive`/`ArenaLeaderboardLive` (per-domain arena + league standings), admin `SimDashboardLive`, and public read-only `SpectatorLive` watcher
 - exposing a token-protected admin API for remote sim start/stop
-- accepting human-player moves for interactive domains
+- accepting human-player moves for interactive domains and server-authorized, match-epoch Werewolf commands
 
-The primary entry points for changes are `SimManager`, `Arena`, `SimDashboardLive`, `SpectatorLive`, `LeaderboardLive`, and the board component for the relevant domain.
+The primary entry points for model simulations are `SimManager`, `Arena`, `SimDashboardLive`, `SpectatorLive`, `LeaderboardLive`, and the board component for the relevant domain. Hosted Werewolf changes start in `HostedGame`, `HostedGame.RoomServer`, `HostedGame.Replay`, `HostedGameSessionController`, and `hosted_werewolf_live.ex`.
 
 ## File Structure
 
@@ -21,14 +22,19 @@ lib/
   lemon_sim_ui/
     application.ex                         OTP application: supervisor tree
     endpoint.ex                            Bandit HTTP endpoint + LiveView socket
-    router.ex                              Public `/`, `/leaderboards`, `/watch/:sim_id`, `/healthz`; private `/admin/*`; `/api/admin/*`
+    router.ex                              Public, no-store hosted, private admin, and protected API routes
     artifact_reader.ex                     Suite/usage JSON readers and formatting helpers
     sim_manager.ex                         GenServer: owns all running sim tasks
     arena.ex                               GenServer per domain: always-on league scheduler + recorder
     arena_domains.ex                       Presentation config for arena domains
+    hosted_game.ex                         Room creation, recovery, capacity, retention, kill switch
+    hosted_game/
+      supervisor.ex                        One-for-all hosted subsystem
+      room_server.ex                       Durable room lifecycle, auth, timers, commands, replay
+      replay.ex                            Canonical event replay/hash verifier
     sim_helpers.ex                         Pure helpers: domain inference, labels, colors
     werewolf_playback.ex                   Buffered live-playback helper for readable Werewolf spectator pacing
-    telemetry.ex                           Phoenix telemetry setup
+    telemetry.ex                           Bounded hosted lifecycle/latency metrics
     gettext.ex                             Gettext backend
     components/
       core_components.ex                   Shared form/button/flash components
@@ -39,12 +45,15 @@ lib/
       admin_sim_controller.ex              Token-protected JSON API for start/stop
       error_html.ex                        404/500 HTML error views
       error_json.ex                        JSON error views
-      health_controller.ex                 Public `/healthz` endpoint
+      health_controller.ex                 Public liveness `/healthz` and dependency readiness `/readyz`
+      hosted_game_session_controller.ex    Hosted form/session exchange and replay download
+      metrics_controller.ex                Protected runtime metrics
     live/
       lobby_live.ex                        Public list of currently running sims
       leaderboard_live.ex                  Public benchmark suite leaderboard page
       sim_dashboard_live.ex                Admin LiveView (launch + detail)
       spectator_live.ex                    Public read-only werewolf spectator view
+      hosted_werewolf_live.ex              Hosted lobby/join/host/player/public-safe views
     plugs/
       require_access_token.ex              Optional bearer/query/session token gate
       components/
@@ -72,11 +81,21 @@ test/
   test_helper.exs
 ```
 
+Browser sources and locked npm dependencies live under `assets/`. Run
+`mix sim_ui.assets.build` from the repository root after changing HEEx, CSS, or
+JS. Release/container builds use `MIX_ENV=prod mix sim_ui.assets.deploy` to also
+digest and precompress static files. Production pages must remain
+self-contained and must not add runtime CDN dependencies.
+
 ## Key Modules
 
 | File | Module | Purpose |
 |---|---|---|
-| `lib/lemon_sim_ui/sim_manager.ex` | `LemonSimUi.SimManager` | Central GenServer; `start_sim/2`, `stop_sim/1`, `resume_sim/1`, `list_running/0`, `submit_human_move/2`, auto-loop controls |
+| `lib/lemon_sim_ui/sim_manager.ex` | `LemonSimUi.SimManager` | Central GenServer; durable start/stop/abandon/resume, RNG and final-usage checkpoints, bounded recovery queue with transient backoff/terminalization, retention, and auto-loop controls |
+| `lib/lemon_sim_ui/hosted_game.ex` | `LemonSimUi.HostedGame` | Hosted room coordinator for codes, recovery readiness, active capacity, retention, and feature kill switch |
+| `lib/lemon_sim_ui/hosted_game/room_server.ex` | `LemonSimUi.HostedGame.RoomServer` | One durable serialized room: token auth, safe projections, timers, AI/human commands, pause/replacement, export, and rematch |
+| `lib/lemon_sim_ui/hosted_game/replay.ex` | `LemonSimUi.HostedGame.Replay` | Re-ingests redacted canonical events and checks command/final hashes |
+| `lib/lemon_sim_ui/live/hosted_werewolf_live.ex` | `LemonSimUi.Hosted*Live` | Hosted room creation, joining, role-blind host, private player, and public-safe story surfaces |
 | `lib/lemon_sim_ui/live/lobby_live.ex` | `LemonSimUi.LobbyLive` | Public lobby for `/`; lists running sims, links to spectator pages, and can expose configured VendingBench launcher presets |
 | `lib/lemon_sim_ui/live/leaderboard_live.ex` | `LemonSimUi.LeaderboardLive` | Public leaderboard for `/leaderboards`; scans configured suite roots and renders rankings, failures, token totals, and null-safe costs |
 | `lib/lemon_sim_ui/controllers/vending_bench_launch_controller.ex` | `LemonSimUi.VendingBenchLaunchController` | Public non-JS route for the fixed VendingBench launcher |
@@ -85,7 +104,7 @@ test/
 | `lib/lemon_sim_ui/artifact_reader.ex` | `LemonSimUi.ArtifactReader` | Reads `suite.json` and `usage.json`; keeps token/cost formatting null-safe |
 | `lib/lemon_sim_ui/werewolf_playback.ex` | `LemonSimUi.WerewolfPlayback` | Buffers exact Werewolf state snapshots and enforces minimum dwell times so live dialogue/night beats stay readable |
 | `lib/lemon_sim_ui/controllers/admin_sim_controller.ex` | `LemonSimUi.AdminSimController` | Protected JSON API for remote sim start/stop |
-| `lib/lemon_sim_ui/controllers/health_controller.ex` | `LemonSimUi.HealthController` | Public load-balancer/smoke-test health check |
+| `lib/lemon_sim_ui/controllers/health_controller.ex` | `LemonSimUi.HealthController` | Public liveness and dependency readiness checks |
 | `lib/lemon_sim_ui/plugs/require_access_token.ex` | `LemonSimUi.Plugs.RequireAccessToken` | Optional access-token gate for dashboard + admin API |
 | `lib/lemon_sim_ui/sim_helpers.ex` | `LemonSimUi.SimHelpers` | `infer_domain_type/1`, `sim_summary/1`, `domain_label/1`, `domain_badge_color/1` |
 | `lib/lemon_sim_ui/live/components/event_log.ex` | `LemonSimUi.Live.Components.EventLog` | Stateless component; renders `recent_events` with color-coded event kinds |
@@ -151,12 +170,24 @@ Edit `provider_options/0`, `model_options_for_provider/1`, and the default provi
 
 - Do not add simulation logic here. Game rules, event shapes, and world state mutations belong in `lemon_sim`.
 - Board components must remain stateless function components. Do not convert them to LiveComponents unless there is a strong rendering-isolation reason.
-- `SimManager` is the single owner of all runner task PIDs. Do not start runner tasks outside of it.
-- Werewolf board context is not viewer-gated anymore. The dashboard and the public watcher should show the same non-admin story panels, including wolf chat history, private meetings, journals, and character bios.
+- `SimManager` owns model-simulation runner PIDs. Hosted AI work is owned by `HostedGame.RoomServer` under the dedicated bounded `HostedGame.AiTaskSupervisor`; do not use the shared task supervisor for provider fanout.
+- The omniscient `WerewolfBoard` is only for model admin/broadcast surfaces. Never reuse it for hosted humans. Hosted player/public/host data must come from role-safe projections; hiding markup after sending raw state is not sufficient.
+- A hosted host is role-blind. Secret-phase actor IDs, roles, actions, votes, meetings, pack chat, investigations, items, journals, and model thoughts must not enter host/public projections or telemetry. Private rooms remain private after stop/completion.
+- Hosted credentials stay in signed cookies and LiveView `socket.private`, never assigns, lifecycle logs, crash formatting, storage, telemetry, or exported replays. Keep Phoenix parameter filtering and shared LiveView lifecycle logging disabled when adding routes.
+- Hosted commands must carry match and state epochs, accept only server-built legal actions, persist before acknowledgement, and namespace client idempotency IDs away from system timeout/AI IDs.
+- Persisted turn deadlines are authoritative: late human or AI decisions must enqueue the timeout path, never win a mailbox race. Provider/decider randomness must be reset before the authoritative updater so exported replay hashes depend only on the stored game RNG and canonical events.
+- Lobby and pre-start cancellation projections expose a sealed waiting state with no phase, day, actor, or role. Runtime terminal failures use a safe reason distinct from host stop/cancel and completed player views reveal the final role roster.
+- Hosted child specs pass only room IDs and reload the latest Store row. Never capture a room snapshot in a restart MFA.
+- Hosted feature disablement is a runtime kill switch: disabled boot must not recover room timers/AI, and API/LiveView operations must fail closed.
+- Local SQLite/Registry/PubSub make hosted rooms single-node. Do not advertise horizontal replicas without distributed ownership, shared storage, and distributed PubSub.
 - Buffered Werewolf watch pacing belongs in `lemon_sim_ui`, not `lemon_sim`. Use exact broadcast snapshots plus UI-side dwell heuristics for readability, but keep simulation rules and state transitions in `lemon_sim`.
+- Always-on Werewolf rotates configured model specs one seat per recorded game and starts with fixed roles by sorted seat. Preserve this full-cycle role balance when changing arena planning, resumption, or league pruning.
+- Werewolf evidence rendering must show the engine-provided reliability and interpretation, not only the clue prose, so spectators can distinguish a noisy lead from proof.
 - VendingBench live-log model traces are compact `plan_history` entries from `SimManager`. Keep them to visible tool calls/results and domain summaries; do not try to expose provider-hidden chain-of-thought.
 - `SimHelpers.infer_domain_type/1` uses world map key heuristics. If two domains share the same distinguishing key, ensure the more specific one is listed first in the `cond`.
-- Keep `/admin` and `/admin/sims/:sim_id` on `SimDashboardLive` behind `RequireAccessToken` when a token is configured. `/`, `/leaderboards`, `/watch/:sim_id`, and `/healthz` are intentionally public. The optional public VendingBench launcher is controlled by `LEMON_SIM_UI_PUBLIC_VENDING_LAUNCHER` and should stay limited to validated configured presets unless the route is moved behind auth.
+- Keep `/admin` and `/admin/sims/:sim_id` on `SimDashboardLive` behind `RequireAccessToken`. Dedicated production releases require at least a 32-byte access token and accept bearer credentials for the JSON API; browser query credentials are exchanged for a session and stripped by redirect. `/`, `/leaderboards`, `/watch/:sim_id`, `/healthz`, and `/readyz` are intentionally public. The optional public VendingBench launcher is controlled by `LEMON_SIM_UI_PUBLIC_VENDING_LAUNCHER` and should stay limited to validated configured presets unless the route is moved behind auth.
+- Keep `LEMON_SIM_UI_MAX_CONCURRENT_RUNNERS`, `LEMON_SIM_UI_MAX_STORED_SIMS`, and per-arena `MAX_GAME_RECORDS` wired through runtime config, readiness, deployment examples, and tests when lifecycle/storage behavior changes.
+- Keep every `LEMON_WEREWOLF_HOSTED_*` knob, HTTPS requirement, room TTL/retention, AI limit/model, readiness, `.env.example`, and deployment manifest coherent. Production room creation also requires a 32-byte `LEMON_WEREWOLF_HOST_CREATE_TOKEN`.
 - Configure public benchmark discovery with `config :lemon_sim_ui, :suite_roots, ["/tmp/vending-suite"]`. The default reader accepts either a suite directory containing `suite.json` or a parent directory with child suite directories, logs malformed JSON, and skips bad files.
 - Treat auto-loop and deployment wiring as an ops slice. Runtime env flags such as `LEMON_SIM_AUTO_LOOP` and deployment manifests such as `fly.toml` should stay coherent with `SimManager` auto-loop behavior, but separate from the general public/admin UI route changes.
 - `MemoryViewer` reads files synchronously at render time (no caching). Keep it bounded to small memory namespaces; it already limits to 20 files and 4096 bytes per file.
@@ -168,6 +199,8 @@ mix test apps/lemon_sim_ui
 ```
 
 Tests use `ConnCase` which starts the full endpoint. `LemonSim.Kernel.Store` is live (not mocked) — tests that create state must clean up with `Store.delete_state/1`.
+
+Run hosted browser QA with `HOSTED_WEREWOLF_SMOKE_URL=http://127.0.0.1:4090 npm --prefix apps/lemon_sim_ui/assets run smoke:hosted-werewolf`. It uses five isolated sessions and covers secret non-leakage, timeout, pause/resume, reconnect, completion, replay, rematch, reduced motion, keyboard focus, and phone/tablet/desktop layouts.
 
 When writing new board component tests, use `render_component/2` from `Phoenix.LiveViewTest` with a `%{world: ...}` assign. Pass a minimal world map that exercises the branch under test rather than a full sim state.
 

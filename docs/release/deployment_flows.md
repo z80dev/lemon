@@ -42,6 +42,7 @@ MIX_ENV=prod mix release lemon_runtime_min
 MIX_ENV=prod mix release lemon_runtime_full
 
 # Public sim broadcast site (dashboard + spectator UI)
+MIX_ENV=prod mix sim_ui.assets.deploy
 MIX_ENV=prod mix release sim_broadcast_platform
 ```
 
@@ -50,7 +51,7 @@ Releases are written to `_build/prod/rel/<profile>/`.
 Release automation packages the assembled release directory as a `.tar.gz`:
 
 ```bash
-tar -czf lemon-<version>-<channel>-linux-x86_64-<profile>.tar.gz \
+tar -czf lemon-<version>-<channel>-ubuntu-24.04-x86_64-<profile>.tar.gz \
   -C ./_build/prod/rel/<profile> .
 ```
 
@@ -76,7 +77,83 @@ scripts/verify_release_runtime_boot /path/to/downloaded-artifacts
 ./_build/prod/rel/lemon_runtime_min/bin/lemon_runtime_min stop
 ```
 
-`sim_broadcast_platform` is the dedicated production profile for `lemon_sim_ui`. It is the one to use when you want to expose public `/watch/:sim_id` spectator pages while keeping the admin dashboard and `/api/admin/*` behind `LEMON_SIM_UI_ACCESS_TOKEN`.
+`sim_broadcast_platform` is the dedicated production profile for `lemon_sim_ui`. It serves public `/watch/:sim_id` model broadcasts and optional hosted human Werewolf at `/play`, while keeping the admin dashboard, metrics, and `/api/admin/*` behind `LEMON_SIM_UI_ACCESS_TOKEN`.
+
+Its production endpoint fails closed unless host, persistent store path, a
+64-byte secret key base, and a 32-byte admin access token are explicit. Use
+`/healthz` for process liveness and `/readyz` for deploy/load-balancer readiness.
+The container and Fly manifest persist both `/app/data/store` and
+`/app/data/leagues` on the same mounted volume and must remain at one instance
+while SQLite and local PubSub are in use.
+
+Hosted rooms are off by default in production. Enabling them requires HTTPS,
+`LEMON_WEREWOLF_HOSTED_ENABLED=true`, and a random 32-byte-or-longer
+`LEMON_WEREWOLF_HOST_CREATE_TOKEN`. AI seats additionally require a valid
+`LEMON_WEREWOLF_HOSTED_AI_MODEL` and provider credential. Keep one instance:
+room ownership, Registry, timers, and PubSub are process-local.
+
+### Sim broadcast operations
+
+Keep exactly one `sim_broadcast_platform` instance attached to a persistent
+volume. Before every deploy or rollback, disable arena/auto-loop starts, wait
+for `/readyz` to report zero active runners and queued recoveries, then stop the
+instance. Run the backup commands from a maintenance shell with the same volume
+mounted and no application writer. This keeps SQLite and the rotating league
+tree in one consistent snapshot. For the container layout:
+
+For hosted rooms, stop new creation first by removing the public creation
+invite or placing the service in maintenance mode. Ask hosts to pause active
+matches, then inspect protected `/api/admin/metrics` until no room is `running`
+and hosted recovery reports `ok`. A graceful restart can resume running timers,
+but an offline backup must have no application writer. Hosted room records,
+reconnect-token hashes, RNG checkpoints, replay events, deadlines, and rematch
+archives are stored inside the same SQLite backup below; raw host/player tokens
+exist only in browser cookies and are never part of a backup.
+
+```bash
+mkdir -p /app/data/backups
+timestamp=$(date -u +%Y%m%dT%H%M%SZ)
+sqlite3 /app/data/store/store.sqlite3 \
+  ".backup '/app/data/backups/store.${timestamp}.sqlite3'"
+sqlite3 "/app/data/backups/store.${timestamp}.sqlite3" "PRAGMA integrity_check;"
+tar -C /app/data -czf "/app/data/backups/leagues.${timestamp}.tgz" leagues
+```
+
+Copy backups off the instance/volume. A valid SQLite check prints `ok`. The
+arena keeps only the newest configured game-record window, so archive league
+records before they rotate if long-term raw history is required.
+
+Restore offline: stop the release/container, integrity-check the chosen backup,
+replace `/app/data/store/store.sqlite3`, replace `/app/data/leagues` from the
+matching archive, set both trees to UID/GID `10001:10001`, then start the exact
+image paired with that backup.
+
+```bash
+sqlite3 /app/data/backups/store.TIMESTAMP.sqlite3 "PRAGMA integrity_check;"
+rm -f /app/data/store/store.sqlite3-wal /app/data/store/store.sqlite3-shm
+cp /app/data/backups/store.TIMESTAMP.sqlite3 /app/data/store/store.sqlite3
+rm -rf /app/data/leagues
+tar -C /app/data -xzf /app/data/backups/leagues.TIMESTAMP.tgz
+chown -R 10001:10001 /app/data/store /app/data/leagues
+```
+
+Deployments made before the unified volume layout may have league directories
+at `/app/data/*_league`; move those directories under
+`/app/data/leagues/` before booting the new image. Do not leave both layouts
+active.
+
+For rollback, stop traffic, stop the current instance with its 30-second grace
+period, restore the pre-deploy database and league archive, and start the
+previous immutable image/release. Verify `/healthz`, `/readyz`, `/`, a known
+`/watch/:sim_id`, and an unauthenticated `401` from `/admin` before restoring
+traffic. Keep the failed image, logs, `/readyz` build block, and backup
+timestamps for incident review.
+
+For a hosted deployment, also verify `/play`, create a room using the creation
+invite, join from an independent browser, reload the player session, and verify
+that a room persisted before restart is still accessible afterward. Private
+rooms must return to their host/player sessions but remain unavailable to an
+anonymous `/rooms/:id/watch` request.
 
 ### Environment variables
 
@@ -159,7 +236,8 @@ python apps/lemon_tui/lemon_tui/main.py
 
 ## CI smoke-test flow
 
-The `release-smoke.yml` workflow exercises the release-runtime flow end-to-end:
+The `release-smoke.yml` workflow exercises both release-runtime and Sim UI
+container flows end-to-end:
 
 1. Build `lemon_runtime_min` with `MIX_ENV=prod mix release`.
 2. Launch the release as a daemon.
@@ -167,6 +245,16 @@ The `release-smoke.yml` workflow exercises the release-runtime flow end-to-end:
 4. Run `apps/lemon_core/test/lemon_core/release/smoke_test.exs` with `--include smoke`.
 5. Stop the release.
 6. On failure, upload logs from `_build/prod/rel/<profile>/tmp/log/` as GitHub Actions artifacts.
+
+Its `sim-container-smoke` job builds the production Dockerfile with commit
+identity, verifies UID `10001`, `/healthz`, `/readyz`, admin denial, digested
+gzip assets and immutable caching, seeds persisted Werewolf state, and performs
+a graceful stop/restart against the same mounted volume. It also boots a second
+production container with hosted mode, HTTPS URL configuration, and a creation
+invite, then verifies secure/no-store cookies and paused-room recovery after a
+restart. The hosted browser lane (`npm run smoke:hosted-werewolf`) separately
+exercises five isolated sessions, secret non-leakage, timeout, pause/resume,
+reconnect, completion, export, rematch, and the supported responsive viewports.
 
 ---
 

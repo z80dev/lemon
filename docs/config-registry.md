@@ -237,16 +237,22 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `LEMON_OPENAI_COMPAT_IMAGE_URL_ALLOWED_HOSTS`<br>_(alias: `LEMON_OPENAI_COMPAT_IMAGE_HOST_ALLOWLIST`)_ | list (comma-separated) | `[]` |  | `lemon_control_plane` | Comma-separated hostname allowlist for OpenAI-compat image URL fetch. |
 | `LEMON_OPENAI_COMPAT_IMAGE_URL_FETCH` | boolean | `false` |  | `lemon_control_plane` | Whether the OpenAI-compat endpoint is allowed to fetch image URLs from messages. |
 | `LEMON_ROUTER_HEALTH_PORT` | integer | _(none)_ |  | `lemon_router` | Port the router health-check endpoint listens on. |
-| `LEMON_SIM_UI_ACCESS_TOKEN` | string | _(none)_ | yes | `lemon_sim_ui` | Bearer token required to access the LemonSimUi HTTP API. |
+| `LEMON_SIM_UI_ACCESS_TOKEN` | string | _(none)_ | yes | `lemon_sim_ui` | Admin bearer/session token; required with at least 32 bytes for a production Sim UI endpoint. |
 | `LEMON_SIM_UI_BIND_IP` | string | `127.0.0.1` |  | `lemon_sim_ui` | Bind IP address for the LemonSimUi dev endpoint. |
-| `LEMON_SIM_UI_HOST` | string | `localhost` |  | `lemon_sim_ui` | Public hostname for the LemonSimUi prod endpoint. |
+| `LEMON_SIM_UI_HOST` | string | `localhost` |  | `lemon_sim_ui` | Public hostname for the LemonSimUi prod endpoint; must be explicit in production. |
+| `LEMON_SIM_UI_MAX_CONCURRENT_RUNNERS` | integer | `8` |  | `lemon_sim_ui` | Maximum active simulation runners per instance; persisted recoveries queue until capacity is available. |
+| `LEMON_SIM_UI_MAX_STORED_SIMS` | integer | `500` |  | `lemon_sim_ui` | Maximum terminal simulation snapshots retained; active and recoverable runs are never pruned. |
 | `LEMON_SIM_UI_PORT` | integer | `4090` |  | `lemon_sim_ui` | Port LemonSimUi listens on. |
+| `LEMON_SIM_UI_URL_PORT` | integer | `443` |  | `lemon_sim_ui` | Public URL port for generated LemonSimUi links. |
+| `LEMON_SIM_UI_URL_SCHEME` | string | `https` |  | `lemon_sim_ui` | Public URL scheme for generated links. Hosted rooms require HTTPS in production. |
 | `LEMON_SIM_UI_PUBLIC_VENDING_LAUNCHER` | boolean | `false` |  | `lemon_sim_ui` | Whether the public VendingBench launcher page is exposed. |
-| `LEMON_SIM_UI_SECRET_KEY_BASE` | string | _(none)_ | yes | `lemon_sim_ui` | Phoenix secret_key_base for the LemonSimUi prod endpoint. |
+| `LEMON_SIM_UI_SECRET_KEY_BASE` | string | _(none)_ | yes | `lemon_sim_ui` | Phoenix secret_key_base; required with at least 64 bytes for a production Sim UI endpoint. |
 | `LEMON_SIM_UI_SUITE_ROOTS` | list (comma-separated) | `[]` |  | `lemon_sim_ui` | Colon-separated extra suite root directories for LemonSimUi. |
 | `LEMON_WEB_ACCESS_TOKEN` | string | _(none)_ | yes | `lemon_web` | Bearer token required to access the LemonWeb HTTP API. |
 | `LEMON_WEB_HOST` | string | `localhost` |  | `lemon_web` | Public hostname for the LemonWeb prod endpoint. |
 | `LEMON_WEB_PORT` | integer | `4080` |  | `lemon_web` | Port LemonWeb listens on. |
+| `LEMON_WEB_URL_PORT` | integer | `443` |  | `lemon_web` | Public URL port for generated LemonWeb links. |
+| `LEMON_WEB_URL_SCHEME` | string | `https` |  | `lemon_web` | Public URL scheme for generated LemonWeb links (http or https). |
 | `LEMON_WEB_SECRET_KEY_BASE` | string | _(none)_ | yes | `lemon_web` | Phoenix secret_key_base for the LemonWeb prod endpoint. |
 | `LEMON_WEB_UPLOADS_DIR` | string | _(none)_ |  | `lemon_web` | Directory used for LemonWeb file uploads. |
 | `PHX_SERVER` | boolean | `false` |  | `lemon_web`, `lemon_sim_ui` | Standard Phoenix flag to start the HTTP server in a release (ecosystem-standard name). |
@@ -371,7 +377,7 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 
 | Env Var | Type | Default | Secret | Apps | Description |
 |---|---|---|---|---|---|
-| `LEMON_ARENA_LEAGUE_ROOT` | string | _(none)_ |  | `lemon_sim_ui` | Root directory under which each arena domain's league dir defaults to `<domain>_league`. |
+| `LEMON_ARENA_LEAGUE_ROOT` | string | _(none)_ |  | `lemon_sim_ui` | Persistent root directory under which each arena domain's league dir defaults to `<domain>_league`; required when production arenas omit per-domain dirs. |
 | `LEMON_ARENA_POKER_ENABLED` | boolean | `true` |  | `lemon_sim_ui` | Whether the poker arena is enabled (only checked once MODELS is set). |
 | `LEMON_ARENA_POKER_GAME_DELAY_MS` | integer | _(none)_ |  | `lemon_sim_ui` | Delay between games (ms) for the poker arena. |
 | `LEMON_ARENA_POKER_LEAGUE_DIR` | string | _(none)_ |  | `lemon_sim_ui` | League standings directory for the poker arena. |
@@ -394,9 +400,18 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `LEMON_ARENA_SURVIVOR_PLAYER_COUNT` | integer | _(none)_ |  | `lemon_sim_ui` | Player count for the survivor arena. |
 | `LEMON_ARENA_WEREWOLF_ENABLED`<br>_(alias: `WEREWOLF_ARENA_ENABLED`)_ | boolean | `true` |  | `lemon_sim_ui` | Whether the werewolf arena is enabled (only checked once MODELS is set). |
 | `LEMON_ARENA_WEREWOLF_GAME_DELAY_MS`<br>_(alias: `WEREWOLF_ARENA_GAME_DELAY_MS`)_ | integer | _(none)_ |  | `lemon_sim_ui` | Delay between games (ms) for the werewolf arena. |
+| `LEMON_ARENA_WEREWOLF_MAX_GAME_RECORDS`<br>_(alias: `WEREWOLF_ARENA_MAX_GAME_RECORDS`)_ | integer | `1000` |  | `lemon_sim_ui` | Rolling number of Werewolf league game records retained on disk and included in standings. |
 | `LEMON_ARENA_WEREWOLF_LEAGUE_DIR`<br>_(alias: `WEREWOLF_LEAGUE_DIR`)_ | string | _(none)_ |  | `lemon_sim_ui` | League standings directory for the werewolf arena. |
 | `LEMON_ARENA_WEREWOLF_MODELS`<br>_(alias: `WEREWOLF_ARENA_MODELS`)_ | list (comma-separated) | `[]` |  | `lemon_sim_ui` | Comma-separated provider:model specs enabling the werewolf arena. |
 | `LEMON_ARENA_WEREWOLF_PLAYER_COUNT`<br>_(alias: `WEREWOLF_ARENA_PLAYER_COUNT`)_ | integer | _(none)_ |  | `lemon_sim_ui` | Player count for the werewolf arena. |
+| `LEMON_WEREWOLF_HOSTED_ENABLED` | boolean | `false` in prod; `true` in dev/test |  | `lemon_sim_ui` | Enables hosted human Werewolf. Disabled boot does not recover room timers or AI work. |
+| `LEMON_WEREWOLF_HOST_CREATE_TOKEN` | string | _(none)_ | yes | `lemon_sim_ui` | Room-creation invite; required at 32+ bytes when production hosted rooms are enabled. |
+| `LEMON_WEREWOLF_HOSTED_ROOM_LIMIT` | integer | `100` |  | `lemon_sim_ui` | Maximum active hosted rooms per single-node instance (1–500). |
+| `LEMON_WEREWOLF_HOSTED_ROOM_RETENTION` | integer | `500` |  | `lemon_sim_ui` | Maximum retained terminal room records (25–5000). |
+| `LEMON_WEREWOLF_HOSTED_LOBBY_TTL_SECONDS` | integer | `86400` |  | `lemon_sim_ui` | Abandoned-lobby retention before serialized pruning (300–2592000 seconds). |
+| `LEMON_WEREWOLF_HOSTED_INACTIVE_TTL_SECONDS` | integer | `604800` |  | `lemon_sim_ui` | Paused-room retention before serialized pruning (3600–31536000 seconds). |
+| `LEMON_WEREWOLF_HOSTED_AI_MODEL` | string | _(none)_ |  | `lemon_sim_ui` | `provider:model` frozen into new rooms with AI seats; provider credentials are validated before start/recovery. |
+| `LEMON_WEREWOLF_HOSTED_AI_CONCURRENCY` | integer | `4` |  | `lemon_sim_ui` | Global hosted AI provider-task limit per instance (1–64). |
 | `LEMON_GOAL_JUDGE_MODEL` | string | _(none)_ |  | `lemon_automation` | Model id used to judge automation goal completion. |
 | `LEMON_SIM_AUTO_LOOP` | boolean | `false` |  | `lemon_sim_ui` | Whether the werewolf auto-loop starts automatically on boot. |
 | `LEMON_SIM_WEREWOLF_PLAYERS` | integer | `6` |  | `lemon_sim_ui` | Player count for the werewolf auto-loop. |
@@ -412,4 +427,3 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `RELEASE_VSN` | string | _(none)_ |  | `lemon_core` | Standard Elixir release version. |
 | `SHELL` | string | `/bin/sh` |  | `lemon_sim` | Standard POSIX shell path, used as a fallback shell for the external decider. |
 | `TERM` | string | _(none)_ |  | `lemon_cli` | Standard terminal type variable; used to detect non-interactive/dumb terminals. |
-

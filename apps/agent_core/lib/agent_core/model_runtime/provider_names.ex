@@ -37,6 +37,13 @@ defmodule AgentCore.ModelRuntime.ProviderNames do
       default_secret_name: "llm_opencode_api_key",
       aliases: []
     },
+    "opencode_go" => %{
+      config_name: "opencode_go",
+      atom_name: :opencode_go,
+      env_vars: ["OPENCODE_API_KEY"],
+      default_secret_name: "llm_opencode_go_api_key",
+      aliases: ["opencode-go", "open-code-go"]
+    },
     "google" => %{
       config_name: "google",
       atom_name: :google,

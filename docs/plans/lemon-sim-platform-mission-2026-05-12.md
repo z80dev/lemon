@@ -81,6 +81,9 @@ simulation proves the abstraction.
 
 Werewolf should become the canonical watchable LemonSim game.
 
+The full production, hosted-player, packaging, and deployment bar is tracked in
+[`werewolf-production-readiness-2026-07-10.md`](./werewolf-production-readiness-2026-07-10.md).
+
 ### Experience Requirements
 
 - A viewer can open a public watch page and understand the current day/night

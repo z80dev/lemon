@@ -8,6 +8,7 @@ defmodule Lemon.MixProject do
       start_permanent: Mix.env() == :prod,
       # Coverage thresholds are enforced per app; see each app's mix.exs.
       deps: deps(),
+      aliases: aliases(),
       releases: releases(),
       dialyzer: dialyzer()
     ]
@@ -20,6 +21,24 @@ defmodule Lemon.MixProject do
     [
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
+    ]
+  end
+
+  defp aliases do
+    [
+      "sim_ui.assets.setup": [
+        "do --app lemon_sim_ui cmd --cd assets npm ci --cache /tmp/lemon-sim-ui-npm-cache"
+      ],
+      "sim_ui.assets.build": ["do --app lemon_sim_ui cmd --cd assets npm run build"],
+      "sim_ui.assets.audit": [
+        "do --app lemon_sim_ui cmd --cd assets npm audit --audit-level=high --cache /tmp/lemon-sim-ui-npm-cache"
+      ],
+      "sim_ui.assets.deploy": [
+        "sim_ui.assets.setup",
+        "sim_ui.assets.audit",
+        "sim_ui.assets.build",
+        "do --app lemon_sim_ui phx.digest"
+      ]
     ]
   end
 

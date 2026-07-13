@@ -184,6 +184,7 @@ Boundary namespaces:
 - Keep this app generic. Do not embed chess/poker/pokemon/vending-specific rules here.
 - Keep `ActionSpace` focused on which tools are exposed this turn.
 - Keep authoritative argument legality in updater logic, not prompt text or `ActionSpace`.
+- Werewolf updaters revalidate actor, phase, role, target, item ownership, and bounded text payloads. Rejected attempts must not write another player's private journal or consume inventory.
 - Keep updater logic deterministic and side-effect free aside from explicit persistence calls.
 - Keep memory policy out of the kernel harness; pass memory tools in explicitly as an optional bundle (see `LemonSim.LLM.Memory.Tools`).
 - Put reusable benchmark artifact, manifest, scorecard, and replay-check mechanics under `LemonSim.Bench`.
@@ -202,14 +203,22 @@ Boundary namespaces:
 - `State.version` tracks all state mutations, not just appended events.
 - When sim code reads world maps that may have string or atom keys, prefer `LemonCore.MapHelpers.get_key/2`.
 - After event payloads are normalized into internal world state, prefer atom-keyed access in reducers and benchmark loops instead of repeated mixed-key fallback.
-- Werewolf has two distinct information views by design: player/projector context hides live `cast_vote` events and private night actions, while replay/video rendering is audience-omniscient and may show all roles plus hidden night decisions.
-- Werewolf player/projector context is name-first: assigned display names should be used in public discussion/history, while tool calls still use stable internal ids such as `player_4`.
+- Werewolf has three information views by design: `player_projection/2` is authenticated and role-safe, `public_projection/1` is inference-safe for hosted spectators, and replay/video rendering is audience-omniscient. Dead players lose future pack, meeting, investigation, item, and journal information; completed games reveal every final role to players and spectators.
+- Hosted recent-event visibility is allowlist-based and fails closed. A new event kind must be explicitly classified before it can enter a player or public projection.
+- Secret-phase active actors are visible only to the active player or entitled pack/current-meeting cohort. Do not expose them to public, host, villager, or dead-player projections; actor order itself reveals roles.
+- Werewolf hosted commands use `ActionSpace.available_actions/2` and `execute_action/4`. The server supplies the authenticated actor; callers never submit a trusted actor or raw event.
+- `RulesConfig` owns versioned `story` and `classic` presets. Updaters must read those rules rather than making UI-specific branches.
+- Canonical Werewolf actor IDs are the generated villager names (`"Alice"`, `"Bram"`, etc.). Hosted display names are presentation metadata outside the engine and must not replace these stable IDs in commands or persisted state.
 - Werewolf run scripts should use the onboarded Gemini CLI provider (`:google_gemini_cli`, user-facing alias `gemini`) plus Codex (`:"openai-codex"`) and Kimi models. `:google` is the separate AI Studio provider and will not use `mix lemon.onboard gemini` credentials.
 - LemonSim game credential helpers should resolve OAuth-backed `api_key_secret` values through `Ai.Auth.OAuthSecretResolver` or `AgentCore.ModelRuntime.Credentials` before handing them to providers. This matters for Gemini CLI, Antigravity, Copilot, and other providers whose stored secret payload is not itself the final runtime token format.
 - `LemonSim.LLM.GameHelpers.Runner` supports `provider_min_interval_ms` for per-provider request spacing without changing core `LemonSim.Kernel.Runner`. Werewolf uses this to slow `:google_gemini_cli` seats to one request every 5 seconds by default.
 - Werewolf day play uses a hard cap on public discussion turns so accusations or back-and-forth cannot extend the phase indefinitely. Accusations may pull one future speaker forward for an immediate defense, but they must not rewind the floor to someone who already spoke or create 2-player bounce loops. Day 1 should still have enough room for real claim-and-response play when the board state sharpens quickly.
 - Werewolf benchmark output should emphasize objective signals by role, such as correct wolf votes, wolf kill conversion, seer wolf checks, and doctor saves, rather than a single opaque score.
 - The 5-player role table is intentionally `1 werewolf / 1 seer / 1 doctor / 2 villagers`; using 2 wolves at 5 seats creates trivial opening-night parity and is not a useful benchmark.
+- Werewolf Seers investigate on Night 1. Public projections expose exact starting and remaining role counts plus timestamped role reveals; backstory connections are role-independent flavor and must never be presented as alignment evidence.
+- Story evidence is explicitly reliability-labeled and may be noisy, but it must not leak Doctor or Seer targets as apparent murder evidence. Private meeting requests are preferences: mutual requests resolve first, then the resolver honors non-conflicting directed requests and exposes the final pair.
+- Arena Werewolf uses fixed roles by sorted seat plus rotating model specs so every model covers every role over a full seat cycle. Treat ratings as provisional until role coverage is complete; compare role-adjusted win rate and role-execution value alongside team results.
+- Werewolf model turns cap GLM output at 1,536 tokens, other model output at 768 tokens, and persisted private thoughts at 600 characters. Usage artifacts include cumulative model-call latency; unknown provider cost remains explicitly unknown.
 - Survivor challenge resolution should depend on strategy matchups, not per-seat randomness. If strategy choice does not matter, the sim stops measuring planning quality.
 - Survivor benchmark output should include more than the winner. Favor signals such as challenge wins, whisper volume, correct elimination votes, idol usage, and jury vote conversion.
 - Diplomacy benchmark output should include negotiation and execution signals such as messages sent, submitted/support orders, territories captured, and final territory count, not just the nominal winner.

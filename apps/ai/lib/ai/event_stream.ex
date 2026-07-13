@@ -417,14 +417,14 @@ defmodule Ai.EventStream do
   @impl true
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %{owner_ref: ref} = state) do
     # Owner died - cancel the stream
-    Logger.debug("EventStream owner died, canceling stream")
     state = do_cancel(state, :owner_down)
     {:stop, :normal, state}
   end
 
   def handle_info({:DOWN, ref, :process, pid, reason}, %{task_pid: pid, task_ref: ref} = state) do
-    # Currently-attached streaming task died
-    Logger.debug("EventStream task died: #{inspect(reason)}")
+    if reason not in [:normal, :shutdown] and not state.done and not state.canceled do
+      Logger.warning("EventStream task crashed: #{inspect(reason)}")
+    end
 
     unless state.done or state.canceled do
       # Task crashed before completing - this is an error

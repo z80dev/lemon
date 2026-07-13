@@ -56,5 +56,12 @@ defmodule LemonCore.Store.Backend do
   @callback list_recent(state(), table(), pos_integer()) ::
               {:ok, [{key(), value()}], state()} | {:error, term()}
 
-  @optional_callbacks [list_recent: 3]
+  @doc """
+  Performs a non-mutating backend liveness check.
+
+  Backends without a meaningful external resource may omit this callback.
+  """
+  @callback ping(state()) :: {:ok, state()} | {:error, term()}
+
+  @optional_callbacks list_recent: 3, ping: 1
 end

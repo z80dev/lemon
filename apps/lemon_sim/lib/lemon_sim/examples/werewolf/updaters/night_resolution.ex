@@ -2,7 +2,7 @@ defmodule LemonSim.Examples.Werewolf.Updaters.NightResolution do
   @moduledoc false
 
   alias LemonSim.Kernel.{Event, State}
-  alias LemonSim.Examples.Werewolf.Events
+  alias LemonSim.Examples.Werewolf.{Events, Roles, RulesConfig}
   alias LemonSim.Examples.Werewolf.Updaters.Elimination
   alias LemonSim.Examples.Werewolf.Updaters.Items
   alias LemonSim.Examples.Werewolf.Updaters.Meetings
@@ -11,9 +11,9 @@ defmodule LemonSim.Examples.Werewolf.Updaters.NightResolution do
   import LemonSim.Examples.Helpers
   import LemonSim.Examples.Helpers.UpdaterHelpers
 
-  @wander_sighting_chance 0.15
-  @evidence_chance_high 0.10
-  @evidence_chance_low 0.05
+  @wander_sighting_chance 0.25
+  @evidence_chance 0.55
+  @clue_accuracy 0.70
 
   def resolve_night(%State{} = state) do
     night_actions = get(state.world, :night_actions, %{})
@@ -29,6 +29,12 @@ defmodule LemonSim.Examples.Werewolf.Updaters.NightResolution do
 
     # Use the most common target, or the last one if tied
     victim_id = most_common(wolf_targets)
+
+    wolf_id =
+      night_actions
+      |> Enum.find_value(fn {player_id, action} ->
+        if get(action, :action) == "choose_victim", do: player_id
+      end)
 
     # Find doctor's protection target
     protected_id =
@@ -107,7 +113,13 @@ defmodule LemonSim.Examples.Werewolf.Updaters.NightResolution do
       end)
 
     # Generate evidence tokens
-    new_tokens = generate_evidence_tokens(night_actions, victim_id, protected_id, saved?)
+    new_tokens =
+      if RulesConfig.enabled?(state.world, :evidence) do
+        generate_evidence_tokens(players, wolf_id, victim_id, saved?)
+      else
+        []
+      end
+
     evidence_tokens = get(state.world, :evidence_tokens, [])
     day_evidence = Enum.map(new_tokens, &Map.put(&1, :day, day_number))
     all_evidence = evidence_tokens ++ day_evidence
@@ -124,11 +136,14 @@ defmodule LemonSim.Examples.Werewolf.Updaters.NightResolution do
           not is_nil(victim_id) and not saved? and :rand.uniform() < @wander_sighting_chance
 
         if saw_something do
+          lead_id = noisy_wolf_lead(players, wolf_id, victim_id)
+
           %{
             day: day_number,
             wanderer: wanderer_id,
             saw_shadows: true,
-            description: "You saw shadowy figures lurking near #{victim_id}'s house."
+            description:
+              "In poor visibility, you saw a silhouette moving from #{lead_id}'s side of the village toward #{victim_id}'s house. This is a low-confidence observation, not proof."
           }
         else
           %{
@@ -285,7 +300,7 @@ defmodule LemonSim.Examples.Werewolf.Updaters.NightResolution do
       # No kill or saved — generate village event and items, then meetings
       updated_players = players
 
-      village_event_data = VillageEvents.maybe_generate_village_event(day_number)
+      village_event_data = VillageEvents.maybe_generate_village_event(day_number, state.world)
       village_event_history = get(state.world, :village_event_history, [])
 
       {village_events_list, new_event_history, current_event} =
@@ -300,7 +315,7 @@ defmodule LemonSim.Examples.Werewolf.Updaters.NightResolution do
             {[], village_event_history, nil}
         end
 
-      item_data = Items.maybe_distribute_items(updated_players, day_number)
+      item_data = Items.maybe_distribute_items(updated_players, day_number, state.world)
 
       {item_events, final_player_items} =
         case item_data do
@@ -333,7 +348,6 @@ defmodule LemonSim.Examples.Werewolf.Updaters.NightResolution do
             extra_events ++ village_events_list ++ item_events
         )
 
-      next_state = VillageEvents.apply_village_event_effects(next_state, village_event_data)
       Meetings.transition_to_meetings_or_discussion(next_state)
     end
   end
@@ -343,7 +357,7 @@ defmodule LemonSim.Examples.Werewolf.Updaters.NightResolution do
   defp most_common(list) do
     list
     |> Enum.frequencies()
-    |> Enum.max_by(fn {_val, count} -> count end)
+    |> Enum.max_by(fn {value, count} -> {count, value} end)
     |> elem(0)
   end
 
@@ -370,7 +384,7 @@ defmodule LemonSim.Examples.Werewolf.Updaters.NightResolution do
   defp night_action_success?(action, victim_id, protected_id, saved?) do
     case get(action, :action) do
       "choose_victim" ->
-        get(action, :target) == victim_id and (not saved? or victim_id != protected_id)
+        get(action, :target) == victim_id and not saved?
 
       "protect" ->
         saved? and get(action, :target) == protected_id and protected_id == victim_id
@@ -383,83 +397,38 @@ defmodule LemonSim.Examples.Werewolf.Updaters.NightResolution do
     end
   end
 
-  defp generate_evidence_tokens(night_actions, victim_id, protected_id, saved?) do
-    tokens = []
+  defp generate_evidence_tokens(players, wolf_id, victim_id, saved?) do
+    if not is_nil(wolf_id) and not is_nil(victim_id) and not saved? and
+         :rand.uniform() < @evidence_chance do
+      lead_id = noisy_wolf_lead(players, wolf_id, victim_id)
 
-    tokens =
-      if not is_nil(victim_id) and not saved? and :rand.uniform() < @evidence_chance_high do
-        tokens ++
-          [
-            %{
-              type: "muddy_footprints",
-              clue: "Muddy footprints were found near #{victim_id}'s house.",
-              related_to: victim_id
-            }
-          ]
-      else
-        tokens
-      end
-
-    tokens =
-      if not is_nil(protected_id) and :rand.uniform() < @evidence_chance_low do
-        tokens ++
-          [
-            %{
-              type: "broken_vial",
-              clue: "A broken vial was found outside #{protected_id}'s door.",
-              related_to: protected_id
-            }
-          ]
-      else
-        tokens
-      end
-
-    seer_target =
-      night_actions
-      |> Enum.find_value(fn {_id, action} ->
-        if get(action, :action) == "investigate", do: get(action, :target)
-      end)
-
-    tokens =
-      if not is_nil(seer_target) and :rand.uniform() < @evidence_chance_low do
-        tokens ++
-          [
-            %{
-              type: "strange_symbol",
-              clue: "A strange symbol was scratched near #{seer_target}'s window.",
-              related_to: seer_target
-            }
-          ]
-      else
-        tokens
-      end
-
-    tokens =
-      if :rand.uniform() < @evidence_chance_low do
-        tokens ++
-          [
-            %{
-              type: "torn_cloth",
-              clue: "A torn piece of dark cloth was caught on a fence near the square.",
-              related_to: nil
-            }
-          ]
-      else
-        tokens
-      end
-
-    if (is_nil(victim_id) or saved?) and :rand.uniform() < @evidence_chance_high do
-      tokens ++
-        [
-          %{
-            type: "cold_trail",
-            clue:
-              "An eerie chill lingered near the village square, but nothing seemed disturbed.",
-            related_to: nil
-          }
-        ]
+      [
+        %{
+          type: "muddy_footprints",
+          clue:
+            "A partial trail near #{victim_id}'s house appears to lead toward #{lead_id}'s side of the village.",
+          related_to: lead_id,
+          reliability: "medium",
+          interpretation:
+            "Comparable trails identify the killer about 70% of the time; weather or deliberate misdirection can produce a false lead. This is not proof."
+        }
+      ]
     else
-      tokens
+      []
+    end
+  end
+
+  defp noisy_wolf_lead(players, wolf_id, victim_id) do
+    decoys =
+      players
+      |> Roles.living_players()
+      |> Enum.map(fn {player_id, _player} -> player_id end)
+      |> Enum.reject(&(&1 in [wolf_id, victim_id]))
+
+    if :rand.uniform() <= @clue_accuracy or decoys == [] do
+      wolf_id
+    else
+      Enum.random(decoys)
     end
   end
 end

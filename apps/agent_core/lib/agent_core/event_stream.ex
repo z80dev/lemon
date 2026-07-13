@@ -512,7 +512,6 @@ defmodule AgentCore.EventStream do
   @impl true
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %{owner_ref: ref} = state) do
     # Owner died - cancel the stream
-    Logger.debug("AgentCore.EventStream owner died, canceling stream")
     state = do_cancel(state, :owner_down)
     {:stop, :normal, state}
   end
@@ -540,8 +539,9 @@ defmodule AgentCore.EventStream do
   end
 
   def handle_info({:DOWN, ref, :process, pid, reason}, %{task_pid: pid, task_ref: ref} = state) do
-    # Attached task died
-    Logger.debug("AgentCore.EventStream task died: #{inspect(reason)}")
+    if reason not in [:normal, :shutdown] and not state.done and not state.canceled do
+      Logger.warning("AgentCore.EventStream task crashed: #{inspect(reason)}")
+    end
 
     state = %{state | task_pid: nil, task_ref: nil}
 

@@ -20,6 +20,7 @@ defmodule LemonCore.Config.ProvidersTest do
         "OPENAI_CODEX_API_KEY",
         "OPENCODE_API_KEY",
         "OPENCODE_BASE_URL",
+        "GITHUB_COPILOT_API_KEY",
         "MINIMAX_API_KEY",
         "MINIMAX_BASE_URL"
       ]
@@ -165,6 +166,16 @@ defmodule LemonCore.Config.ProvidersTest do
 
       assert config.providers["opencode"][:api_key] == "sk-opencode-env"
       assert config.providers["opencode"][:base_url] == "https://opencode.ai/zen/v1"
+    end
+
+    test "opencode go shares OPENCODE_API_KEY and github copilot uses its own env var" do
+      System.put_env("OPENCODE_API_KEY", "sk-opencode-go-env")
+      System.put_env("GITHUB_COPILOT_API_KEY", "sk-copilot-env")
+
+      config = Providers.resolve(%{})
+
+      assert config.providers["opencode_go"][:api_key] == "sk-opencode-go-env"
+      assert config.providers["github_copilot"][:api_key] == "sk-copilot-env"
     end
 
     test "minimax uses MINIMAX_API_KEY env var" do

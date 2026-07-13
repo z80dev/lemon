@@ -40,6 +40,11 @@ defmodule LemonSim.Examples.Werewolf.Roles do
     |> Enum.shuffle()
   end
 
+  @spec balanced_role_list(pos_integer()) :: [atom()]
+  def balanced_role_list(player_count) when player_count >= 5 and player_count <= 8 do
+    Map.fetch!(@roles_by_count, player_count)
+  end
+
   @doc """
   Assigns roles to players, using names as canonical keys.
   """
@@ -47,7 +52,30 @@ defmodule LemonSim.Examples.Werewolf.Roles do
   def assign_roles(player_count) do
     roles = role_list(player_count)
     names = player_names(player_count)
+    build_assignments(names, roles)
+  end
 
+  @spec assign_roles(pos_integer(), [String.t()]) :: %{String.t() => map()}
+  def assign_roles(player_count, names)
+      when is_list(names) and length(names) == player_count do
+    if Enum.uniq(names) != names or Enum.any?(names, &(not is_binary(&1))) do
+      raise ArgumentError, "Werewolf player names must be unique strings"
+    end
+
+    build_assignments(names, role_list(player_count))
+  end
+
+  @spec assign_balanced_roles(pos_integer(), [String.t()]) :: %{String.t() => map()}
+  def assign_balanced_roles(player_count, names)
+      when is_list(names) and length(names) == player_count do
+    if Enum.uniq(names) != names or Enum.any?(names, &(not is_binary(&1))) do
+      raise ArgumentError, "Werewolf player names must be unique strings"
+    end
+
+    build_assignments(Enum.sort(names), balanced_role_list(player_count))
+  end
+
+  defp build_assignments(names, roles) do
     names
     |> Enum.zip(roles)
     |> Enum.into(%{}, fn {name, role} ->
@@ -266,7 +294,8 @@ defmodule LemonSim.Examples.Werewolf.Roles do
     tail ++ head
   end
 
-  defp player_names(count) do
+  @spec player_names(pos_integer()) :: [String.t()]
+  def player_names(count) do
     @player_names
     |> Enum.shuffle()
     |> Enum.take(count)

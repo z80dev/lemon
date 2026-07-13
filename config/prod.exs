@@ -1,5 +1,9 @@
 import Config
 
+config :lemon_core,
+  build_git_sha: System.get_env("LEMON_GIT_SHA"),
+  build_git_branch: System.get_env("LEMON_GIT_BRANCH")
+
 # Persist Lemon state to disk in production.
 #
 # Set `LEMON_STORE_PATH` to control where state is written.
@@ -19,3 +23,6 @@ config :lemon_automation,
   goal_judge_runner: LemonAutomation.GoalJudge.RouterRunner
 
 config :lemon_web, LemonWeb.Endpoint, cache_static_manifest: "priv/static/cache_manifest.json"
+
+config :lemon_sim_ui, LemonSimUi.Endpoint,
+  cache_static_manifest: "priv/static/cache_manifest.json"

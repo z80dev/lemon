@@ -51,15 +51,35 @@ defmodule LemonSim.Bench.League do
     player_count = Keyword.get(opts, :player_count, 6)
     seed = Keyword.get(opts, :seed) || System.unique_integer([:positive])
 
-    rand_state = :rand.seed_s(:exsss, {seed, seed + 1, seed + 2})
-    {shuffled, _rand_state} = seeded_shuffle(model_pool, rand_state)
+    ordered =
+      case Keyword.get(opts, :rotation_index) do
+        index when is_integer(index) and index >= 0 ->
+          rotate(model_pool, index)
+
+        _ ->
+          rand_state = :rand.seed_s(:exsss, {seed, seed + 1, seed + 2})
+          {shuffled, _rand_state} = seeded_shuffle(model_pool, rand_state)
+          shuffled
+      end
 
     model_specs =
-      shuffled
+      ordered
       |> Stream.cycle()
       |> Enum.take(player_count)
 
-    %{seed: seed, player_count: player_count, model_specs: model_specs}
+    %{
+      seed: seed,
+      player_count: player_count,
+      model_specs: model_specs,
+      rotation_index: Keyword.get(opts, :rotation_index)
+    }
+  end
+
+  defp rotate([], _offset), do: []
+
+  defp rotate(list, offset) do
+    {left, right} = Enum.split(list, rem(offset, length(list)))
+    right ++ left
   end
 
   defp seeded_shuffle(list, rand_state) do
@@ -106,6 +126,7 @@ defmodule LemonSim.Bench.League do
       "game_id" => game_id,
       "recorded_at" => recorded_at,
       "seed" => Keyword.get(meta, :seed),
+      "rotation_index" => Keyword.get(meta, :rotation_index),
       "winner" => summary.winner,
       "rounds" => summary.rounds,
       "seat_count" => map_size(seats),
@@ -120,13 +141,41 @@ defmodule LemonSim.Bench.League do
   defp normalize_mode({:ranked, direction}), do: {"ranked", to_string(direction)}
 
   @doc """
-  Persists a game record and recomputes the league standings.
+  Persists a game record and recomputes the league standings. Pass
+  `max_game_records: n` to keep a rolling league bounded to the newest `n`
+  records.
   """
   @spec record_game!(String.t(), map()) :: {:ok, map()}
-  def record_game!(league_dir, %{"game_id" => game_id} = record) do
+  def record_game!(league_dir, %{"game_id" => _game_id} = record) do
+    record_game!(league_dir, record, [])
+  end
+
+  @spec record_game!(String.t(), map(), keyword()) :: {:ok, map()}
+  def record_game!(league_dir, %{"game_id" => game_id} = record, opts) do
     path = Path.join([league_dir, "games", "#{sanitize_id(game_id)}.json"])
     AtomicFile.write!(path, Toolkit.stable_json(record) <> "\n")
+    prune_game_records!(league_dir, Keyword.get(opts, :max_game_records))
     recompute!(league_dir)
+  end
+
+  defp prune_game_records!(_league_dir, nil), do: :ok
+
+  defp prune_game_records!(league_dir, max_records)
+       when is_integer(max_records) and max_records > 0 do
+    games = load_games(league_dir)
+    excess = max(length(games) - max_records, 0)
+
+    games
+    |> Enum.take(excess)
+    |> Enum.each(fn game ->
+      game_id = sanitize_id(game["game_id"])
+      File.rm!(Path.join([league_dir, "games", "#{game_id}.json"]))
+    end)
+  end
+
+  defp prune_game_records!(_league_dir, max_records) do
+    raise ArgumentError,
+          "max_game_records must be a positive integer, got: #{inspect(max_records)}"
   end
 
   @doc """
@@ -189,10 +238,12 @@ defmodule LemonSim.Bench.League do
     model_ids = collect_model_ids(games)
     matrix = pairwise_matrix(games, model_ids)
     ratings = Ratings.fit_ratings(model_ids, matrix)
+    role_baselines = role_win_baselines(games)
+    role_coverage_complete? = role_coverage_complete?(games, model_ids)
 
     models =
       model_ids
-      |> Enum.map(fn model -> model_row(model, games, ratings[model]) end)
+      |> Enum.map(fn model -> model_row(model, games, ratings[model], role_baselines) end)
       |> Enum.sort_by(fn row ->
         case row["rating"] do
           nil -> {1, 0.0, row["model"]}
@@ -215,6 +266,9 @@ defmodule LemonSim.Bench.League do
         "rating_base" => 1500,
         "rating_scale" => 400
       },
+      "rating_status" =>
+        if(role_coverage_complete?, do: "role_coverage_complete", else: "provisional"),
+      "role_win_baselines" => role_baselines,
       "models" => models,
       "recent_games" => recent_games(games)
     }
@@ -279,7 +333,7 @@ defmodule LemonSim.Bench.League do
 
   defp add_game_outcomes(_game, matrix), do: matrix
 
-  defp model_row(model, games, rating) do
+  defp model_row(model, games, rating, role_baselines) do
     seats =
       Enum.flat_map(games, fn game ->
         game["seats"]
@@ -304,10 +358,57 @@ defmodule LemonSim.Bench.League do
       "seats" => length(seats),
       "wins" => wins,
       "win_rate" => ratio(wins, length(seats)),
+      "role_adjusted_win_rate" => role_adjusted_win_rate(seats, role_baselines),
       "value_mean" => mean(values),
       "metrics" => sum_metrics(seats),
       "roles" => roles
     }
+  end
+
+  defp role_win_baselines(games) do
+    games
+    |> Enum.flat_map(fn game -> Map.values(game["seats"] || %{}) end)
+    |> Enum.filter(&is_binary(&1["role"]))
+    |> Enum.group_by(& &1["role"])
+    |> Enum.into(%{}, fn {role, seats} ->
+      {role, ratio(Enum.count(seats, & &1["won"]), length(seats))}
+    end)
+  end
+
+  defp role_adjusted_win_rate([], _baselines), do: nil
+
+  defp role_adjusted_win_rate(seats, baselines) do
+    adjusted =
+      Enum.map(seats, fn seat ->
+        outcome = if seat["won"], do: 1.0, else: 0.0
+        baseline = Map.get(baselines, seat["role"], 0.5)
+        min(1.0, max(0.0, 0.5 + outcome - baseline))
+      end)
+
+    mean(adjusted)
+  end
+
+  defp role_coverage_complete?([], _model_ids), do: false
+
+  defp role_coverage_complete?(games, model_ids) do
+    seats = Enum.flat_map(games, fn game -> Map.values(game["seats"] || %{}) end)
+
+    required_roles =
+      seats
+      |> Enum.map(& &1["role"])
+      |> Enum.filter(&is_binary/1)
+      |> MapSet.new()
+
+    MapSet.size(required_roles) == 0 or
+      Enum.all?(model_ids, fn model ->
+        covered =
+          seats
+          |> Enum.filter(&(seat_model(&1) == model))
+          |> Enum.map(& &1["role"])
+          |> MapSet.new()
+
+        MapSet.subset?(required_roles, covered)
+      end)
   end
 
   defp seat_stats(seats) do
@@ -385,10 +486,10 @@ defmodule LemonSim.Bench.League do
       "# #{league["scenario"] || "League"} Leaderboard",
       "",
       "Games: #{league["game_count"]}",
-      "Ratings: Bradley-Terry MLE (1500-centered).",
+      "Ratings: Bradley-Terry MLE (1500-centered, #{league["rating_status"] || "provisional"}).",
       "",
-      "| Rank | Model | Rating | Games | Seats | Wins | Win rate |#{value_header}",
-      "|---:|---|---:|---:|---:|---:|---:|#{if ranked?, do: "---:|", else: ""}"
+      "| Rank | Model | Rating | Games | Seats | Wins | Win rate | Role-adjusted |#{value_header}",
+      "|---:|---|---:|---:|---:|---:|---:|---:|#{if ranked?, do: "---:|", else: ""}"
     ]
 
     rows =
@@ -405,7 +506,8 @@ defmodule LemonSim.Bench.League do
           row["games"],
           row["seats"],
           row["wins"],
-          format_percent(row["win_rate"])
+          format_percent(row["win_rate"]),
+          format_percent(row["role_adjusted_win_rate"])
         ]
 
         cells = if ranked?, do: cells ++ [format_value(row["value_mean"])], else: cells

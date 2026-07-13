@@ -3,7 +3,7 @@ defmodule LemonSimUi do
   Entry point for LemonSim UI web interface.
   """
 
-  def static_paths, do: ~w(assets favicon.ico robots.txt)
+  def static_paths, do: ~w(assets favicon.svg robots.txt)
 
   def router do
     quote do
@@ -31,7 +31,8 @@ defmodule LemonSimUi do
   def live_view do
     quote do
       use Phoenix.LiveView,
-        layout: {LemonSimUi.Layouts, :app}
+        layout: {LemonSimUi.Layouts, :app},
+        log: false
 
       unquote(html_helpers())
     end

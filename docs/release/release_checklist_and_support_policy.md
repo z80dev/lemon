@@ -11,8 +11,8 @@ The initial stable 1.0 release artifact support target is:
 
 | Area | Supported for 1.0 | Notes |
 | --- | --- | --- |
-| Release artifacts | Linux `x86_64` tarballs | Built by `.github/workflows/release.yml` on `ubuntu-latest` |
-| Release profiles | `lemon_runtime_min`, `lemon_runtime_full` | Both must boot from extracted tarballs before stable 1.0 |
+| Release artifacts | Ubuntu 24.04 `x86_64` tarballs | Built by `.github/workflows/release.yml` on pinned `ubuntu-24.04` runners |
+| Release profiles | `lemon_runtime_min`, `lemon_runtime_full`, `sim_broadcast_platform` | All must boot from extracted tarballs before stable 1.0; the sim profile also verifies local assets, access control, and persistent spectator state |
 | Source install | Linux and macOS, best effort | Requires Elixir 1.19.5+ and Erlang/OTP 28.5+ |
 | Windows | Not supported for 1.0 | Use WSL or source-level experimentation |
 | Auto-update | Not supported for 1.0 | `mix lemon.update` remains a local maintenance task |
@@ -502,18 +502,29 @@ Before cutting a stable release:
 - [ ] Run `scripts/test clients`.
 - [ ] Build `lemon_runtime_min` with `MIX_ENV=prod mix release lemon_runtime_min --overwrite`.
 - [ ] Build `lemon_runtime_full` with `MIX_ENV=prod mix release lemon_runtime_full --overwrite`.
-- [ ] Package both release directories as Linux `x86_64` tarballs.
-- [ ] Verify SHA-256 for each tarball and include both in `manifest.json`.
+- [ ] Build local Sim UI assets and `sim_broadcast_platform` with
+      `MIX_ENV=prod mix sim_ui.assets.deploy` and
+      `MIX_ENV=prod mix release sim_broadcast_platform --overwrite`.
+- [ ] Package all three release directories as Linux `x86_64` tarballs.
+- [ ] Verify SHA-256 for each tarball and include all three in `manifest.json`.
 - [ ] Run `scripts/verify_release_artifacts {artifact-directory}` against the
-      assembled artifact directory. The verifier must see both
-      `lemon_runtime_min` and `lemon_runtime_full` Linux `x86_64` tarballs.
+      assembled artifact directory. The verifier must see
+      `lemon_runtime_min`, `lemon_runtime_full`, and `sim_broadcast_platform`
+      Linux `x86_64` tarballs.
 - [ ] Run `scripts/verify_release_runtime_boot {artifact-directory}` against
-      the assembled artifact directory. The verifier must extract both
-      tarballs, boot each runtime, check `/healthz`, and generate a support
-      bundle through release `eval`; it also inspects the bundle ZIP for core
-      support entries, including `channel_readiness.json` and
-      `readiness_summary.json`, plus the shared readiness proof-gate status
-      ids and `proof_gate_summary.gateCount`.
+      the assembled artifact directory. The verifier must extract all three
+      tarballs. Min/full check `/healthz` and generate support bundles through
+      release `eval`; the sim profile checks `/readyz`, digested assets, admin
+      denial, a persisted Werewolf spectator fixture, and restart recovery.
+      When hosted rooms are enabled, also run
+      `npm --prefix apps/lemon_sim_ui/assets run smoke:hosted-werewolf` against
+      the candidate with five isolated sessions, then restart against the same
+      volume and verify host/player reconnect. Production hosted proof requires
+      HTTPS, a 32-byte creation token, private/no-store responses, and protected
+      metrics with no credentials or raw provider errors.
+      Min/full bundle inspection still requires `channel_readiness.json`,
+      `readiness_summary.json`, shared readiness proof-gate ids, and
+      `proof_gate_summary.gateCount`.
 - [ ] Run product smoke against the release candidate.
 - [ ] Run `scripts/verify_docs_site`. It installs docs dependencies in a temp
       copy, runs `npm audit --audit-level=high`, builds the VitePress site, and
@@ -686,8 +697,9 @@ Publishing a tag and hosted release is distribution work. It is not part of the
 - [ ] Confirm the workflow used the version-specific `CHANGELOG.md` section for
       release notes.
 - [ ] Confirm the workflow uploads:
-  - `lemon-{version}-{channel}-linux-x86_64-lemon_runtime_min.tar.gz`
-  - `lemon-{version}-{channel}-linux-x86_64-lemon_runtime_full.tar.gz`
+  - `lemon-{version}-{channel}-ubuntu-24.04-x86_64-lemon_runtime_min.tar.gz`
+  - `lemon-{version}-{channel}-ubuntu-24.04-x86_64-lemon_runtime_full.tar.gz`
+  - `lemon-{version}-{channel}-ubuntu-24.04-x86_64-sim_broadcast_platform.tar.gz`
   - `manifest.json`
 
 ## Rollback Checklist

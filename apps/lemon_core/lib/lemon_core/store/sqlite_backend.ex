@@ -128,6 +128,16 @@ defmodule LemonCore.Store.SqliteBackend do
   end
 
   @impl true
+  def ping(state) do
+    case Sqlite3.execute(state.conn, "SELECT 1") do
+      :ok -> {:ok, state}
+      :busy -> {:error, :sqlite_busy}
+      {:error, reason} -> {:error, reason}
+      other -> {:error, {:sqlite_ping_failed, other}}
+    end
+  end
+
+  @impl true
   def put_new(state, table, key, value) do
     if ephemeral_table?(state, table) do
       {table_ets, state} = ensure_ephemeral_table(state, table)

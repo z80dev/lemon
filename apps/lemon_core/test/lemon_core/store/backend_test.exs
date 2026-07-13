@@ -34,9 +34,10 @@ defmodule LemonCore.Store.BackendTest do
       callbacks = Backend.behaviour_info(:callbacks)
       optional = Backend.behaviour_info(:optional_callbacks)
 
-      # init/1, put/4, put_new/4, get/3, delete/3, list/2 (required) + list_recent/3 (optional)
-      assert length(callbacks) == 7
+      # Six required callbacks plus list_recent/3 and ping/1 optional callbacks.
+      assert length(callbacks) == 8
       assert {:list_recent, 3} in optional
+      assert {:ping, 1} in optional
     end
   end
 

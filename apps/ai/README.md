@@ -152,7 +152,7 @@ instead of leaving tool invocation to provider defaults.
 The `@providers` list in `Ai.Models` enumerates all supported provider atoms:
 
 `:anthropic`, `:openai`, `:"openai-codex"`, `:amazon_bedrock`, `:google`,
-`:google_antigravity`, `:kimi`, `:kimi_coding`, `:opencode`, `:xai`,
+`:google_antigravity`, `:kimi`, `:kimi_coding`, `:opencode`, `:opencode_go`, `:xai`,
 `:mistral`, `:cerebras`, `:deepseek`, `:qwen`, `:minimax`, `:zai`,
 `:azure_openai_responses`, `:github_copilot`, `:google_gemini_cli`,
 `:google_vertex`, `:groq`, `:huggingface`, `:minimax_cn`, `:openrouter`,

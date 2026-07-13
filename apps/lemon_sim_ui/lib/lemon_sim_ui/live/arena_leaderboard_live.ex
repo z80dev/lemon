@@ -100,6 +100,12 @@ defmodule LemonSimUi.ArenaLeaderboardLive do
             <span class="text-white font-bold">{@league["game_count"]}</span> games played
             <span :if={@league["as_of"]} class="text-slate-600">|</span>
             <span :if={@league["as_of"]}>last game {@league["as_of"]}</span>
+            <span
+              :if={@league["rating_status"] == "provisional"}
+              class="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-amber-300"
+            >
+              Provisional — incomplete role rotation
+            </span>
           </div>
 
           <%!-- Overall ratings --%>
@@ -115,6 +121,8 @@ defmodule LemonSimUi.ArenaLeaderboardLive do
                   <th class="py-2 pr-4 text-right">Seats</th>
                   <th class="py-2 pr-4 text-right">Wins</th>
                   <th class="py-2 pr-4 text-right">Win rate</th>
+                  <th :if={role_adjusted?(@league)} class="py-2 pr-4 text-right">Role-adjusted</th>
+                  <th :if={values?(@league) && !ranked?(@league)} class="py-2 pr-4 text-right">Role score</th>
                   <th :if={ranked?(@league)} class="py-2 text-right">Mean value</th>
                 </tr>
               </thead>
@@ -130,6 +138,12 @@ defmodule LemonSimUi.ArenaLeaderboardLive do
                   <td class="py-2.5 pr-4 text-right">{row["seats"]}</td>
                   <td class="py-2.5 pr-4 text-right">{row["wins"]}</td>
                   <td class="py-2.5 pr-4 text-right">{format_percent(row["win_rate"])}</td>
+                  <td :if={role_adjusted?(@league)} class="py-2.5 pr-4 text-right text-violet-300">
+                    {format_percent(row["role_adjusted_win_rate"])}
+                  </td>
+                  <td :if={values?(@league) && !ranked?(@league)} class="py-2.5 pr-4 text-right">
+                    {format_value(row["value_mean"])}
+                  </td>
                   <td :if={ranked?(@league)} class="py-2.5 text-right">
                     {format_value(row["value_mean"])}
                   </td>
@@ -242,6 +256,11 @@ defmodule LemonSimUi.ArenaLeaderboardLive do
   end
 
   defp ranked?(league), do: league["mode"] == "ranked"
+  defp role_adjusted?(league), do: map_size(league["role_win_baselines"] || %{}) > 0
+
+  defp values?(league) do
+    Enum.any?(league["models"] || [], &is_number(&1["value_mean"]))
+  end
 
   # Ranks models within one role by win rate, then seat volume.
   defp role_rows(league, role_key) do

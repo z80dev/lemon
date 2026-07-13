@@ -99,11 +99,14 @@ jobs:
         profile:
           - lemon_runtime_min
           - lemon_runtime_full
+          - sim_broadcast_platform
         os:
-          - ubuntu-latest
+          - ubuntu-24.04
 
     env:
       MIX_ENV: prod
+      LEMON_GIT_SHA: ${{ github.sha }}
+      LEMON_GIT_BRANCH: ${{ github.ref_name }}
 
     steps:
       - name: Checkout
@@ -116,6 +119,14 @@ jobs:
         with:
           otp-version: "28.5"
           elixir-version: "1.19.5"
+
+      - name: Setup Node
+        if: matrix.profile == 'sim_broadcast_platform'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/lemon_sim_ui/assets/package-lock.json
 
       - name: Cache Mix deps and build
         uses: actions/cache@v4
@@ -131,6 +142,10 @@ jobs:
       - name: Install deps
         run: mix deps.get --only prod
 
+      - name: Build Sim UI assets
+        if: matrix.profile == 'sim_broadcast_platform'
+        run: mix sim_ui.assets.deploy
+
       - name: Compile (prod)
         run: mix compile
 
@@ -143,7 +158,7 @@ jobs:
           VERSION="${{ needs.validate.outputs.version }}"
           CHANNEL="${{ needs.validate.outputs.channel }}"
           PROFILE="${{ matrix.profile }}"
-          OS_TAG="linux-x86_64"
+          OS_TAG="ubuntu-24.04-x86_64"
           ARTIFACT_NAME="lemon-${VERSION}-${CHANNEL}-${OS_TAG}-${PROFILE}.tar.gz"
 
           # Create tarball of the release directory
@@ -197,6 +212,7 @@ jobs:
           version = os.environ['VERSION']
           channel = os.environ['CHANNEL']
           timestamp = os.environ['TIMESTAMP']
+          commit = os.environ['COMMIT']
 
           artifacts = []
           for path in glob.glob('*.tar.gz'):
@@ -208,6 +224,7 @@ jobs:
           manifest = {
             'version': version,
             'channel': channel,
+            'commit': commit,
             'built_at': timestamp,
             'artifacts': sorted(artifacts, key=lambda a: a['file'])
           }
@@ -218,9 +235,13 @@ jobs:
         env:
           VERSION: ${{ needs.validate.outputs.version }}
           CHANNEL: ${{ needs.validate.outputs.channel }}
+          COMMIT: ${{ github.sha }}
 
       - name: Verify assembled release artifacts
         run: scripts/verify_release_artifacts release-artifacts
+
+      - name: Boot and verify assembled release artifacts
+        run: scripts/verify_release_runtime_boot release-artifacts
 
       - name: Extract changelog section
         id: changelog

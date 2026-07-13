@@ -74,6 +74,7 @@ defmodule LemonSimUi.SpectatorLive do
            usage: nil,
            usage_timer_ref: nil,
            artifact_timer_ref: nil,
+           runner_running: false,
            running: false,
            page_title: "Not Found"
          )}
@@ -104,6 +105,7 @@ defmodule LemonSimUi.SpectatorLive do
             usage: current_usage(sim_id, artifact_dir),
             usage_timer_ref: nil,
             artifact_timer_ref: nil,
+            runner_running: running,
             running: running,
             game_over_redirect: false,
             page_title: "Watch: #{sim_id}"
@@ -130,7 +132,7 @@ defmodule LemonSimUi.SpectatorLive do
 
           socket =
             socket
-            |> assign(running: running)
+            |> assign(runner_running: running)
             |> assign_usage()
             |> queue_werewolf_state(updated)
 
@@ -142,28 +144,15 @@ defmodule LemonSimUi.SpectatorLive do
   end
 
   def handle_info(%LemonCore.Event{type: :sim_lobby_changed}, socket) do
-    running = socket.assigns.sim_id in LemonSimUi.SimManager.list_running()
-    socket = socket |> assign(running: running) |> assign_usage()
+    runner_running = socket.assigns.sim_id in LemonSimUi.SimManager.list_running()
 
-    # If current game is over and not running, look for a new active sim in
-    # the same domain to auto-advance to.
-    if !running && socket.assigns[:state] do
-      status = LemonCore.MapHelpers.get_key(socket.assigns.state.world, :status)
+    socket =
+      socket
+      |> assign(runner_running: runner_running)
+      |> sync_broadcast_running()
+      |> assign_usage()
 
-      if status == "game_over" do
-        case find_active_sim(socket.assigns.sim_id, socket.assigns[:domain_type]) do
-          nil ->
-            {:noreply, assign(socket, game_over_redirect: true)}
-
-          new_sim_id ->
-            {:noreply, push_navigate(socket, to: ~p"/watch/#{new_sim_id}")}
-        end
-      else
-        {:noreply, socket}
-      end
-    else
-      {:noreply, socket}
-    end
+    {:noreply, maybe_complete_broadcast(socket)}
   end
 
   def handle_info({:werewolf_playback_tick, ref}, socket) do
@@ -178,7 +167,9 @@ defmodule LemonSimUi.SpectatorLive do
           playback: playback,
           playback_timer_ref: nil
         )
+        |> sync_broadcast_running()
         |> maybe_schedule_playback()
+        |> maybe_complete_broadcast()
 
       {:noreply, socket}
     else
@@ -284,17 +275,23 @@ defmodule LemonSimUi.SpectatorLive do
                 state={@state}
                 sim_id={@sim_id}
                 running={@running}
+                runner_running={@runner_running}
                 usage={@usage}
               />
           <% end %>
-          <div :if={@game_over_redirect} class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center">
-            <div class="text-center glass-panel p-10 rounded-2xl max-w-md">
-              <h2 class="text-2xl font-bold text-white mb-3">Game Over</h2>
-              <p class="text-slate-400 font-mono text-sm mb-6">Next game starting soon...</p>
-              <a href="/" class="glass-button px-6 py-2 rounded-lg text-sm inline-block">
-                Back to Lobby
-              </a>
+          <div
+            :if={@game_over_redirect}
+            role="status"
+            aria-live="polite"
+            class="fixed inset-x-4 bottom-4 z-50 mx-auto flex max-w-xl flex-wrap items-center justify-between gap-3 rounded-2xl border border-stone-100/15 bg-[#11151a]/95 px-5 py-4 shadow-2xl shadow-black/60"
+          >
+            <div>
+              <p class="font-semibold text-white">Broadcast complete</p>
+              <p class="text-sm text-stone-400">Waiting for the next arena match.</p>
             </div>
+            <.link navigate={~p"/"} class="inline-flex min-h-11 items-center rounded-full border border-stone-500/40 px-4 text-sm font-semibold text-stone-200 hover:border-amber-300/50 hover:text-amber-200">
+              Back to lobby
+            </.link>
           </div>
       <% end %>
     </div>
@@ -683,6 +680,7 @@ defmodule LemonSimUi.SpectatorLive do
   attr(:state, :map, required: true)
   attr(:sim_id, :string, required: true)
   attr(:running, :boolean, required: true)
+  attr(:runner_running, :boolean, required: true)
   attr(:usage, :map, default: nil)
 
   defp spectator_view(assigns) do
@@ -691,8 +689,6 @@ defmodule LemonSimUi.SpectatorLive do
     day_number = LemonCore.MapHelpers.get_key(world, :day_number) || 1
     status = LemonCore.MapHelpers.get_key(world, :status) || "in_progress"
     winner = LemonCore.MapHelpers.get_key(world, :winner)
-    character_profiles = LemonCore.MapHelpers.get_key(world, :character_profiles) || %{}
-    players = LemonCore.MapHelpers.get_key(world, :players) || %{}
 
     assigns =
       assigns
@@ -700,93 +696,116 @@ defmodule LemonSimUi.SpectatorLive do
       |> assign(:day_number, day_number)
       |> assign(:game_status, status)
       |> assign(:winner, winner)
-      |> assign(:character_profiles, character_profiles)
-      |> assign(:players, players)
 
     ~H"""
-    <div class="flex flex-col h-screen overflow-hidden">
-      <SpectatorChrome.page_header
-        sim_id={@sim_id}
-        border_class="border-glass-border"
-        bg_class="bg-slate-900/60"
-        hover_class="hover:text-cyan-400"
-        league_path={~p"/werewolf/leaderboard"}
-        winner={@winner}
-        running={@running}
-        show_stopped={!@winner}
-      >
-        <:meta>
-          <SpectatorChrome.meta_line
-            label="Werewolf"
-            label_class="text-fuchsia-400"
-            progress={"Day #{@day_number}"}
-            phase={format_phase(@phase)}
-          />
-        </:meta>
-      </SpectatorChrome.page_header>
+    <a
+      href="#werewolf-story"
+      class="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-lg focus:bg-slate-950 focus:px-4 focus:py-3 focus:text-white"
+    >
+      Skip to live story
+    </a>
+    <div class="min-h-screen bg-[#080a0d] text-stone-100">
+      <header class="relative isolate overflow-hidden border-b border-amber-100/10 bg-[#0d1014]">
+        <img
+          src={if String.contains?(@phase, "night") || @phase == "wolf_discussion", do: "/assets/werewolf/night_bg.png", else: "/assets/werewolf/day_bg.png"}
+          alt=""
+          aria-hidden="true"
+          class="absolute inset-0 -z-20 h-full w-full object-cover opacity-20"
+        />
+        <div class="absolute inset-0 -z-10 bg-gradient-to-r from-[#090b0f] via-[#090b0f]/95 to-[#090b0f]/70"></div>
 
-      <%!-- Main content --%>
-      <div class="flex-1 flex flex-col overflow-hidden">
-        <%!-- Game board (full width) --%>
-        <div class="flex-1 overflow-hidden">
-          <.render_board domain={:werewolf} world={@state.world} />
-        </div>
-
-        <.usage_panel usage={@usage} />
-
-        <%!-- Character bio strip --%>
-        <div :if={map_size(@character_profiles) > 0} class="flex-shrink-0 border-t border-glass-border bg-slate-900/40 backdrop-blur-md">
-          <div class="px-4 py-2">
-            <div class="text-[9px] font-mono uppercase tracking-widest text-fuchsia-400 font-bold mb-2 flex items-center gap-1.5">
-              <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
-                <path d="M9 6a3 3 0 11-6 0 3 3 0 016 0zM17 6a3 3 0 11-6 0 3 3 0 016 0zM12.93 17c.046-.327.07-.66.07-1a6.97 6.97 0 00-1.5-4.33A5 5 0 0119 16v1h-6.07zM6 11a5 5 0 015 5v1H1v-1a5 5 0 015-5z" />
-              </svg>
-              VILLAGERS
-            </div>
-            <div class="flex gap-3 overflow-x-auto pb-2 custom-scrollbar">
-              <%= for {player_id, player} <- Enum.sort_by(@players, fn {id, _} -> id end) do %>
-                <% profile = Map.get(@character_profiles, player_id, %{}) %>
-                <% player_status = LemonCore.MapHelpers.get_key(player, :status) || "alive" %>
-                <% role = LemonCore.MapHelpers.get_key(player, :role) || "unknown" %>
-                <div class={[
-                  "flex-shrink-0 w-52 rounded-lg border p-3 transition-all",
-                  if(player_status == "dead",
-                    do: "bg-black/30 border-white/5 opacity-60",
-                    else: "bg-white/3 border-white/8 hover:bg-white/5"
-                  )
-                ]}>
-                  <div class="flex items-center justify-between mb-1.5">
-                    <span class="text-[11px] font-bold text-slate-200 truncate">
-                      {Map.get(profile, "full_name", player_id)}
-                    </span>
-                    <span class={[
-                      "text-[8px] font-bold uppercase px-1.5 py-0.5 rounded-full border",
-                      status_badge(player_status, role)
-                    ]}>
-                      {if player_status == "dead", do: "Dead", else: "Alive"}
-                    </span>
-                  </div>
-                  <div :if={Map.get(profile, "occupation")} class="text-[9px] text-fuchsia-400/80 font-mono mb-1">
-                    {Map.get(profile, "occupation")}
-                  </div>
-                  <div :if={Map.get(profile, "personality")} class="text-[9px] text-slate-400 leading-relaxed line-clamp-2">
-                    {Map.get(profile, "personality")}
-                  </div>
-                  <div :if={player_status == "dead"} class="text-[8px] text-red-400/70 font-mono mt-1">
-                    Was: {role}
-                  </div>
-                </div>
-              <% end %>
+        <div class="mx-auto flex max-w-[90rem] flex-col gap-5 px-4 py-5 sm:px-6 lg:flex-row lg:items-center lg:justify-between lg:px-8">
+          <div class="flex items-start gap-4">
+            <.link
+              navigate={~p"/"}
+              class="inline-flex min-h-11 items-center rounded-full border border-stone-500/30 bg-black/20 px-4 text-sm font-semibold text-stone-200 transition hover:border-amber-300/50 hover:text-amber-200"
+            >
+              Lobby
+            </.link>
+            <div>
+              <p class="mb-1 text-xs font-bold uppercase tracking-[0.22em] text-amber-300/80">
+                LemonSim live arena
+              </p>
+              <h1 class="font-display text-3xl font-semibold tracking-tight text-white sm:text-4xl">
+                Werewolf
+              </h1>
+              <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-stone-400">
+                <span>Match <code class="text-stone-300">{@sim_id}</code></span>
+                <span aria-hidden="true">·</span>
+                <span class="inline-flex items-center gap-1.5 text-violet-200">
+                  <span aria-hidden="true">◉</span> Omniscient broadcast
+                </span>
+              </div>
             </div>
           </div>
-        </div>
 
-        <%!-- Narrative event log --%>
-        <SpectatorChrome.live_feed_panel
-          events={@state.recent_events}
-          wrapper_class="flex-shrink-0 border-t border-glass-border bg-slate-950/60 h-48 overflow-hidden"
-        />
-      </div>
+          <nav aria-label="Broadcast navigation" class="flex flex-wrap items-center gap-3">
+            <.link
+              navigate={~p"/arena/werewolf/leaderboard"}
+              class="inline-flex min-h-11 items-center rounded-full border border-stone-500/30 bg-black/20 px-4 text-sm font-semibold text-stone-200 transition hover:border-amber-300/50 hover:text-amber-200"
+            >
+              League standings
+            </.link>
+            <div
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+              class={[
+                "inline-flex min-h-11 items-center gap-2 rounded-full border px-4 text-sm font-bold",
+                cond do
+                  @runner_running -> "border-red-400/35 bg-red-950/40 text-red-200"
+                  @running -> "border-amber-300/35 bg-amber-950/40 text-amber-100"
+                  true -> "border-stone-500/30 bg-stone-900/60 text-stone-300"
+                end
+              ]}
+            >
+              <span
+                aria-hidden="true"
+                class={[
+                  "h-2.5 w-2.5 rounded-full",
+                  cond do
+                    @runner_running -> "animate-pulse bg-red-400"
+                    @running -> "bg-amber-300"
+                    true -> "bg-stone-500"
+                  end
+                ]}
+              ></span>
+              <%= cond do %>
+                <% @runner_running -> %> LIVE
+                <% @running -> %> PLAYBACK
+                <% true -> %> STOPPED
+              <% end %>
+              <span class="font-normal text-current/70">
+                · Day {@day_number} · {format_phase(@phase)}
+              </span>
+            </div>
+          </nav>
+        </div>
+      </header>
+
+      <main id="werewolf-game" class="mx-auto max-w-[90rem] px-3 py-4 sm:px-6 sm:py-7 lg:px-8">
+        <section
+          aria-label="Werewolf game broadcast"
+          class="overflow-hidden rounded-[2rem] border border-stone-100/10 bg-[#0d1014] shadow-2xl shadow-black/40"
+        >
+          <.render_board domain={:werewolf} world={@state.world} running={@running} />
+        </section>
+
+        <details class="group mt-5 rounded-2xl border border-stone-100/10 bg-[#0d1014]">
+          <summary class="flex min-h-12 cursor-pointer items-center justify-between px-5 py-3 text-sm font-semibold text-stone-300 hover:text-white">
+            Run details
+            <span aria-hidden="true" class="transition group-open:rotate-180">⌄</span>
+          </summary>
+          <div class="border-t border-stone-100/10 pb-4">
+            <.usage_panel usage={@usage} />
+            <SpectatorChrome.live_feed_panel
+              events={@state.recent_events}
+              wrapper_class="border-t border-glass-border bg-slate-950/60"
+              body_class="h-64"
+            />
+          </div>
+        </details>
+      </main>
     </div>
     """
   end
@@ -889,6 +908,7 @@ defmodule LemonSimUi.SpectatorLive do
 
   attr(:domain, :atom, required: true)
   attr(:world, :map, required: true)
+  attr(:running, :boolean, default: true)
 
   defp render_board(assigns) do
     ~H"""
@@ -906,7 +926,7 @@ defmodule LemonSimUi.SpectatorLive do
       <% :poker -> %>
         <PokerBoard.render world={@world} interactive={false} />
       <% :werewolf -> %>
-        <WerewolfBoard.render world={@world} interactive={false} />
+        <WerewolfBoard.render world={@world} interactive={false} running={@running} />
     <% end %>
     """
   end
@@ -928,9 +948,6 @@ defmodule LemonSimUi.SpectatorLive do
   end
 
   defp usage_value(_map, _key), do: nil
-
-  defp status_badge("dead", _role), do: "bg-red-900/40 text-red-400 border-red-500/30"
-  defp status_badge(_, _), do: "bg-emerald-900/40 text-emerald-400 border-emerald-500/30"
 
   defp vending_display_world(world) do
     case {LemonCore.MapHelpers.get_key(world, :mode),
@@ -962,9 +979,40 @@ defmodule LemonSimUi.SpectatorLive do
 
       socket
       |> assign(playback: playback)
+      |> sync_broadcast_running()
       |> maybe_schedule_playback()
     else
-      assign(socket, state: updated_state)
+      assign(socket,
+        state: updated_state,
+        running: socket.assigns[:runner_running] || false
+      )
+    end
+  end
+
+  defp sync_broadcast_running(socket) do
+    playback_pending? =
+      socket.assigns[:domain_type] == :werewolf and socket.assigns[:playback] &&
+        WerewolfPlayback.queue_depth(socket.assigns.playback) > 0
+
+    assign(socket,
+      running: (socket.assigns[:runner_running] || false) or playback_pending?
+    )
+  end
+
+  defp maybe_complete_broadcast(socket) do
+    if !socket.assigns[:running] && socket.assigns[:state] do
+      status = LemonCore.MapHelpers.get_key(socket.assigns.state.world, :status)
+
+      if status == "game_over" do
+        case find_active_sim(socket.assigns.sim_id, socket.assigns[:domain_type]) do
+          nil -> assign(socket, game_over_redirect: true)
+          new_sim_id -> push_navigate(socket, to: ~p"/watch/#{new_sim_id}")
+        end
+      else
+        socket
+      end
+    else
+      socket
     end
   end
 

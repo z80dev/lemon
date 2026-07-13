@@ -188,6 +188,10 @@ mix deps.get
 # Compile all apps
 mix compile
 
+# Build the self-contained LemonSim UI browser bundle
+mix sim_ui.assets.build
+MIX_ENV=prod mix sim_ui.assets.deploy  # build + digest/precompress for release
+
 # Canonical repo-level test lanes
 scripts/test help
 scripts/test fast       # compile with warnings as errors + ExUnit excluding integration
@@ -328,6 +332,8 @@ Key env vars:
 - `LEMON_WEB_ACCESS_TOKEN` - Web UI auth token
 - `LEMON_WEB_HOST` / `LEMON_WEB_PORT` - Web server binding (prod)
 - `LEMON_WEB_SECRET_KEY_BASE` - Required in prod
+- `LEMON_SIM_UI_MAX_CONCURRENT_RUNNERS` / `LEMON_SIM_UI_MAX_STORED_SIMS` - Bound Sim UI model concurrency and terminal snapshot retention; per-arena `MAX_GAME_RECORDS` bounds league history
+- `LEMON_WEREWOLF_HOSTED_ENABLED` / `LEMON_WEREWOLF_HOST_CREATE_TOKEN` / `LEMON_WEREWOLF_HOSTED_*` - Opt-in HTTPS hosted Werewolf, creation access, room TTL/retention, and bounded AI configuration
 - `LEMON_GATEWAY_HEALTH_PORT` / `LEMON_ROUTER_HEALTH_PORT` - Health server port overrides for local parallel runtimes
 - `LEMON_TELEGRAM_DEFAULT_CHAT_ID` / `LEMON_DISCORD_DEFAULT_CHANNEL_ID` - Optional env overrides for `./bin/lemon send`; config fallbacks live in `[gateway.telegram] default_chat_id/default_thread_id/default_topic_id` and `[gateway.discord] default_channel_id/default_thread_id`
 - `DEEPGRAM_API_KEY` - Speech-to-text

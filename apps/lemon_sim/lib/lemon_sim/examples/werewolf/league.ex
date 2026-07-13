@@ -30,7 +30,7 @@ defmodule LemonSim.Examples.Werewolf.League do
            model: get(metrics, :model),
            role: get(metrics, :role),
            won: get(metrics, :team_won, false),
-           value: nil,
+           value: get(metrics, :role_score, 0.0),
            metrics: %{
              "survived" => boolean_metric(get(metrics, :survived, false)),
              "votes_for_werewolf" => get(metrics, :votes_for_werewolf, 0),
@@ -39,7 +39,13 @@ defmodule LemonSim.Examples.Werewolf.League do
              "successful_kills" => get(metrics, :successful_kills, 0),
              "failed_kills" => get(metrics, :failed_kills, 0),
              "wolf_checks_found" => get(metrics, :wolf_checks_found, 0),
-             "doctor_saves" => get(metrics, :doctor_saves, 0)
+             "doctor_saves" => get(metrics, :doctor_saves, 0),
+             "protections_of_villagers" => get(metrics, :protections_of_villagers, 0),
+             "protections_of_wolves" => get(metrics, :protections_of_wolves, 0),
+             "correct_accusations" => get(metrics, :correct_accusations, 0),
+             "false_accusations" => get(metrics, :false_accusations, 0),
+             "statements" => get(metrics, :statements, 0),
+             "role_score" => get(metrics, :role_score, 0.0)
            }
          }}
       end)

@@ -47,6 +47,9 @@ defmodule LemonSimUi.SpectatorLiveTest do
     assert html =~ "test_spectator_ww"
     assert html =~ "Werewolf"
     assert html =~ "Day"
+    assert html =~ "Omniscient broadcast"
+    assert html =~ "Run details"
+    assert html =~ ~s(href="#werewolf-story")
     # Should NOT have admin controls
     refute html =~ "Abort Sim"
     refute html =~ "RAW_STATE_DUMP"
@@ -398,7 +401,7 @@ defmodule LemonSimUi.SpectatorLiveTest do
     refute html =~ "Operating"
   end
 
-  test "renders character profiles in bio strip when present", %{conn: conn} do
+  test "renders character profiles in the game roster when present", %{conn: conn} do
     world = LemonSim.Examples.Werewolf.initial_world(player_count: 5)
 
     # Use actual player IDs from the generated world (names like "Alice", "Bram", etc.)
@@ -429,7 +432,8 @@ defmodule LemonSimUi.SpectatorLiveTest do
     html = render(view)
     assert html =~ "Elara Thornberry"
     assert html =~ "herbalist"
-    assert html =~ "VILLAGERS"
+    assert html =~ "Omniscient broadcast"
+    assert html =~ "/arena/werewolf/leaderboard"
 
     LemonSim.Kernel.Store.delete_state("test_spectator_ww_lore")
   end
@@ -545,6 +549,9 @@ defmodule LemonSimUi.SpectatorLiveTest do
       LemonSim.Kernel.Bus.sim_topic(sim_id),
       LemonCore.Event.new(:sim_world_updated, %{state: state2}, %{sim_id: sim_id})
     )
+
+    assert_eventually(fn -> render(view) =~ "PLAYBACK" end)
+    refute render(view) =~ "STOPPED"
 
     assert_eventually(fn ->
       html = render(view)

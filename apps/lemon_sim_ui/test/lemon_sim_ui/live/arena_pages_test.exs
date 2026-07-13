@@ -142,6 +142,8 @@ defmodule LemonSimUi.ArenaPagesTest do
       {:ok, _view, html} = live(conn, "/arena/space_station/leaderboard")
 
       assert html =~ "Overall Standings"
+      assert html =~ "Role-adjusted"
+      assert html =~ "Provisional"
       assert html =~ "zai/glm-5"
       assert html =~ "Role Specialists"
       assert html =~ "Saboteur"

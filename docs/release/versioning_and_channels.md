@@ -27,7 +27,7 @@ hotfixes and out-of-cycle releases within the same month.
 The channel is expressed in the binary name and the release manifest:
 
 ```
-lemon-2026.03.0-stable-linux-x86_64.tar.gz
+lemon-2026.03.0-stable-ubuntu-24.04-x86_64.tar.gz
 lemon-2026.03.1-preview-macos-aarch64.tar.gz
 ```
 
@@ -37,16 +37,18 @@ Current release automation produces:
 
 - Self-contained `.tar.gz` archives with the Erlang runtime baked in via
   `mix release`.
-- A `manifest.json` with version, channel, file names, sizes, and SHA-256
-  checksums.
+- A `manifest.json` with version, channel, source commit, file names, sizes,
+  and SHA-256 checksums.
 
 As of the current workflow, public release artifacts are built for Linux
 `x86_64` for these profiles:
 
 - `lemon_runtime_min`
 - `lemon_runtime_full`
+- `sim_broadcast_platform`
 
-The initial 1.0 stable support target is Linux `x86_64` release tarballs only.
+The initial 1.0 stable tarball support target is Ubuntu 24.04 `x86_64`; the
+container image is the portable Linux deployment contract.
 macOS source installs are best effort, and macOS or other platform release
 artifacts are future release-matrix work unless the release workflow is expanded.
 

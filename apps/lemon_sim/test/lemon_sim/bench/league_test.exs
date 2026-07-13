@@ -43,6 +43,23 @@ defmodule LemonSim.Bench.LeagueTest do
       assert plans |> Enum.uniq() |> length() > 1
       assert League.plan_match(pool, player_count: 5).seed > 0
     end
+
+    test "rotation index gives every model every seat across a full cycle" do
+      pool = Enum.map(1..5, &"provider:model-#{&1}")
+
+      plans =
+        Enum.map(0..4, fn rotation_index ->
+          League.plan_match(pool,
+            player_count: 5,
+            seed: 100 + rotation_index,
+            rotation_index: rotation_index
+          ).model_specs
+        end)
+
+      for seat_index <- 0..4 do
+        assert plans |> Enum.map(&Enum.at(&1, seat_index)) |> Enum.sort() == Enum.sort(pool)
+      end
+    end
   end
 
   describe "registry" do
@@ -78,6 +95,7 @@ defmodule LemonSim.Bench.LeagueTest do
       assert league["scenario"] == "werewolf"
       assert league["mode"] == "team"
       assert league["game_count"] == 4
+      assert league["rating_status"] == "provisional"
 
       [top | _] = league["models"]
       assert top["model"] in ["anthropic/claude-x", "google/gemini-x"]
@@ -89,6 +107,7 @@ defmodule LemonSim.Bench.LeagueTest do
 
       seer = Enum.find(league["models"], &(&1["model"] == "anthropic/claude-x"))
       assert seer["roles"]["seer"]["metrics"]["wolf_checks_found"] == 4
+      assert is_number(seer["role_adjusted_win_rate"])
     end
   end
 
@@ -204,6 +223,22 @@ defmodule LemonSim.Bench.LeagueTest do
       assert File.read!(Path.join(dir, "league.json")) == first
       assert {:ok, ^league} = League.load(dir)
       assert File.regular?(Path.join(dir, "league.md"))
+    end
+
+    test "rolling retention removes oldest records and recomputes standings", %{tmp_dir: dir} do
+      for index <- 1..4 do
+        record =
+          League.game_record(Werewolf.League, werewolf_world(),
+            game_id: "retained-#{index}",
+            recorded_at: "2026-07-06T00:00:0#{index}Z"
+          )
+
+        {:ok, _league} = League.record_game!(dir, record, max_game_records: 2)
+      end
+
+      assert Enum.map(League.load_games(dir), & &1["game_id"]) == ["retained-3", "retained-4"]
+      assert {:ok, %{"game_count" => 2}} = League.load(dir)
+      refute File.exists?(Path.join([dir, "games", "retained-1.json"]))
     end
   end
 

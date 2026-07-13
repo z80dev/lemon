@@ -16,14 +16,22 @@ defmodule LemonSim.Examples.Werewolf.Updaters.WolfChat do
          :ok <- ensure_phase(state.world, "wolf_discussion"),
          :ok <- ensure_active_actor(state.world, player_id),
          :ok <- ensure_living(players, player_id),
-         :ok <- ensure_role(players, player_id, "werewolf") do
+         :ok <- ensure_role(players, player_id, "werewolf"),
+         :ok <- ensure_text(message) do
       wolf_chat = get(state.world, :wolf_chat_transcript, [])
-      new_entry = %{player: player_id, message: message}
+      wolf_chat_history = get(state.world, :wolf_chat_history, [])
+      new_entry = %{day: get(state.world, :day_number, 1), player: player_id, message: message}
       new_chat = wolf_chat ++ [new_entry]
+      new_history = wolf_chat_history ++ [new_entry]
 
       next_state =
         state
-        |> State.put_world(world_updates(state.world, %{wolf_chat_transcript: new_chat}))
+        |> State.put_world(
+          world_updates(state.world, %{
+            wolf_chat_transcript: new_chat,
+            wolf_chat_history: new_history
+          })
+        )
         |> State.append_event(event)
 
       advance_wolf_discussion_turn(next_state)

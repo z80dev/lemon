@@ -2,9 +2,10 @@ defmodule LemonSim.Examples.Werewolf.Updaters.Items do
   @moduledoc false
 
   alias LemonSim.Examples.Werewolf.Roles
+  alias LemonSim.Examples.Werewolf.RulesConfig
 
-  def maybe_distribute_items(players, day_number) do
-    if day_number > 1 and :rand.uniform() < 0.4 do
+  def maybe_distribute_items(players, day_number, world \\ %{}) do
+    if RulesConfig.enabled?(world, :items) and day_number > 1 and :rand.uniform() < 0.4 do
       living = Roles.living_players(players) |> Enum.map(fn {id, _} -> id end)
       lucky_player = Enum.random(living)
 
@@ -30,5 +31,11 @@ defmodule LemonSim.Examples.Werewolf.Updaters.Items do
       end)
 
     if idx, do: List.delete_at(items, idx), else: items
+  end
+
+  def has_item?(items, item_type) do
+    Enum.any?(items, fn item ->
+      (Map.get(item, :type) || Map.get(item, "type")) == item_type
+    end)
   end
 end

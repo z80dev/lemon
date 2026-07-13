@@ -18,7 +18,8 @@ defmodule LemonSim.Examples.Werewolf.Updaters.Voting do
          :ok <- ensure_phase_in(state.world, ["day_voting", "runoff_voting"]),
          :ok <- ensure_active_actor(state.world, player_id),
          :ok <- ensure_living(players, player_id),
-         :ok <- ensure_valid_vote_target(players, player_id, target_id) do
+         :ok <- ensure_valid_vote_target(players, player_id, target_id),
+         :ok <- ensure_allowed_vote_target(state.world, target_id) do
       votes =
         state.world
         |> get(:votes, %{})
@@ -94,6 +95,11 @@ defmodule LemonSim.Examples.Werewolf.Updaters.Voting do
       not is_nil(eliminated_id) ->
         victim_role = get(Map.get(players, eliminated_id, %{}), :role, "unknown")
 
+        past_votes =
+          state.world
+          |> get(:past_votes, %{})
+          |> Map.put(day_number, votes)
+
         if Elimination.allows_last_words?(victim_role) do
           next_state =
             state
@@ -101,6 +107,7 @@ defmodule LemonSim.Examples.Werewolf.Updaters.Voting do
               world_updates(state.world, %{
                 votes: %{},
                 vote_history: new_vote_history,
+                past_votes: past_votes,
                 phase: "last_words_vote",
                 active_actor_id: eliminated_id,
                 turn_order: [eliminated_id],
@@ -123,6 +130,7 @@ defmodule LemonSim.Examples.Werewolf.Updaters.Voting do
             world_updates(state.world, %{
               votes: %{},
               vote_history: new_vote_history,
+              past_votes: past_votes,
               phase: "last_words_vote",
               active_actor_id: nil,
               turn_order: [],
@@ -169,9 +177,24 @@ defmodule LemonSim.Examples.Werewolf.Updaters.Voting do
   defp find_runoff_candidates(vote_tally) do
     vote_tally
     |> Enum.filter(fn {_target, count} -> count > 0 end)
-    |> Enum.sort_by(fn {_target, count} -> -count end)
+    |> Enum.sort_by(fn {target, count} -> {-count, target} end)
     |> Enum.take(2)
     |> Enum.map(fn {target, _count} -> target end)
+  end
+
+  defp ensure_allowed_vote_target(world, target_id) do
+    case get(world, :phase) do
+      "day_voting" ->
+        if target_id == "skip", do: {:error, :invalid_target}, else: :ok
+
+      "runoff_voting" ->
+        if target_id in (get(world, :runoff_candidates, []) || []),
+          do: :ok,
+          else: {:error, :invalid_target}
+
+      _ ->
+        {:error, :wrong_phase}
+    end
   end
 
   defp transition_to_runoff(%State{} = state, candidates, preceding_events, vote_history) do
@@ -272,7 +295,11 @@ defmodule LemonSim.Examples.Werewolf.Updaters.Voting do
     current_votes = get(state.world, :votes, %{})
 
     new_past_transcripts = Map.put(past_transcripts, current_day, current_transcript)
-    new_past_votes = Map.put(past_votes, current_day, current_votes)
+
+    new_past_votes =
+      if map_size(current_votes) > 0,
+        do: Map.put(past_votes, current_day, current_votes),
+        else: past_votes
 
     # Start with wolf discussion if there are living wolves
     living_wolves = Roles.living_with_role(players, "werewolf")

@@ -145,9 +145,16 @@ defmodule LemonSim.LLM.GameHelpers.Runner do
     complete_fn = fn _model, context, stream_options ->
       {actual_model, api_key} = Agent.get(model_agent, & &1)
 
+      model_stream_options =
+        case Keyword.get(opts, :stream_options_for_model) do
+          fun when is_function(fun, 1) -> fun.(actual_model)
+          _ -> %{}
+        end
+
       actual_stream_options =
         stream_options
         |> Map.new()
+        |> Map.merge(Map.new(model_stream_options))
         |> Map.put(:api_key, api_key)
 
       Ai.complete(actual_model, context, actual_stream_options)

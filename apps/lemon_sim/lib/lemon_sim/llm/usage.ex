@@ -11,6 +11,7 @@ defmodule LemonSim.LLM.Usage do
     cache_read_tokens: 0,
     cache_write_tokens: 0,
     decisions: 0,
+    latency_ms: 0,
     cost_usd: 0.0
   }
 
@@ -18,19 +19,28 @@ defmodule LemonSim.LLM.Usage do
     Agent.start_link(fn -> new(sim_id) end)
   end
 
+  def start_link(sim_id, nil) when is_binary(sim_id), do: start_link(sim_id)
+
+  def start_link(sim_id, initial_usage) when is_binary(sim_id) and is_map(initial_usage) do
+    Agent.start_link(fn -> initial_usage |> to_artifact() |> Map.put(:sim_id, sim_id) end)
+  end
+
   def new(sim_id) when is_binary(sim_id) do
     %{schema: @schema, sim_id: sim_id, totals: @zero_totals, actors: %{}, cost_known?: true}
   end
 
-  def record_response(nil, _actor_id, _model, _usage), do: :ok
-  def record_response(_collector, _actor_id, _model, nil), do: :ok
+  def record_response(collector, actor_id, model, usage),
+    do: record_response(collector, actor_id, model, usage, 0)
 
-  def record_response(collector, actor_id, %Model{} = model, %Usage{} = usage)
+  def record_response(nil, _actor_id, _model, _usage, _latency_ms), do: :ok
+  def record_response(_collector, _actor_id, _model, nil, _latency_ms), do: :ok
+
+  def record_response(collector, actor_id, %Model{} = model, %Usage{} = usage, latency_ms)
       when is_pid(collector) do
-    Agent.update(collector, &add_response(&1, actor_id, model, usage))
+    Agent.update(collector, &add_response(&1, actor_id, model, usage, latency_ms))
   end
 
-  def record_response(_collector, _actor_id, _model, _usage), do: :ok
+  def record_response(_collector, _actor_id, _model, _usage, _latency_ms), do: :ok
 
   def record_decision(nil, _actor_id, _model), do: :ok
 
@@ -76,19 +86,19 @@ defmodule LemonSim.LLM.Usage do
     "usage: #{format_tokens(totals.input_tokens)} in / #{format_tokens(totals.output_tokens)} out, #{cost} (#{actor_count} actors)"
   end
 
-  defp add_response(state, actor_id, model, usage) do
+  defp add_response(state, actor_id, model, usage, latency_ms) do
     actor_id = normalize_actor_id(actor_id)
     pricing_known? = pricing_known?(model)
     cost = if pricing_known?, do: Ai.calculate_cost(model, usage).total
 
     state
-    |> update_in([:totals], &add_usage(&1, usage, cost, pricing_known?))
+    |> update_in([:totals], &add_usage(&1, usage, cost, pricing_known?, latency_ms))
     |> update_in([:actors], fn actors ->
       Map.update(
         actors,
         actor_id,
-        add_usage(new_actor(model), usage, cost, pricing_known?),
-        &add_usage(&1, usage, cost, pricing_known?)
+        add_usage(new_actor(model), usage, cost, pricing_known?, latency_ms),
+        &add_usage(&1, usage, cost, pricing_known?, latency_ms)
       )
     end)
     |> update_cost_known(pricing_known?)
@@ -126,12 +136,13 @@ defmodule LemonSim.LLM.Usage do
     |> update_cost_known(false)
   end
 
-  defp add_usage(acc, %Usage{} = usage, cost, pricing_known?) do
+  defp add_usage(acc, %Usage{} = usage, cost, pricing_known?, latency_ms) do
     acc
     |> Map.update!(:input_tokens, &(&1 + usage.input))
     |> Map.update!(:output_tokens, &(&1 + usage.output))
     |> Map.update!(:cache_read_tokens, &(&1 + usage.cache_read))
     |> Map.update!(:cache_write_tokens, &(&1 + usage.cache_write))
+    |> Map.update!(:latency_ms, &(&1 + max(latency_ms, 0)))
     |> add_cost(cost, pricing_known?)
   end
 
@@ -155,6 +166,7 @@ defmodule LemonSim.LLM.Usage do
       output_tokens: 0,
       cache_read_tokens: 0,
       cache_write_tokens: 0,
+      latency_ms: 0,
       cost_usd: if(pricing_known?(model), do: 0.0, else: nil)
     }
   end
@@ -203,6 +215,7 @@ defmodule LemonSim.LLM.Usage do
       cache_read_tokens: totals["cache_read_tokens"] || 0,
       cache_write_tokens: totals["cache_write_tokens"] || 0,
       decisions: totals["decisions"] || 0,
+      latency_ms: totals["latency_ms"] || 0,
       cost_usd: totals["cost_usd"]
     }
   end
@@ -215,6 +228,7 @@ defmodule LemonSim.LLM.Usage do
       output_tokens: actor["output_tokens"] || 0,
       cache_read_tokens: actor["cache_read_tokens"] || 0,
       cache_write_tokens: actor["cache_write_tokens"] || 0,
+      latency_ms: actor["latency_ms"] || 0,
       cost_usd: actor["cost_usd"]
     }
   end

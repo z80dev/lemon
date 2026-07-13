@@ -10,6 +10,7 @@
 import Config
 
 config :phoenix, :json_library, Jason
+config :phoenix, :filter_parameters, ["password", "secret", "token", "hosted_werewolf_", "params"]
 
 config :logger, :default_formatter,
   metadata: [
@@ -73,6 +74,16 @@ config :lemon_sim_ui, LemonSimUi.Endpoint,
 
 config :lemon_sim_ui, :access_token, nil
 config :lemon_sim_ui, :public_vending_launcher, false
+config :lemon_sim_ui, :max_concurrent_runners, 8
+config :lemon_sim_ui, :max_stored_simulations, 500
+config :lemon_sim_ui, :hosted_rooms_enabled, false
+config :lemon_sim_ui, :hosted_room_create_token, nil
+config :lemon_sim_ui, :hosted_room_limit, 100
+config :lemon_sim_ui, :hosted_room_retention, 500
+config :lemon_sim_ui, :hosted_lobby_ttl_seconds, 86_400
+config :lemon_sim_ui, :hosted_inactive_ttl_seconds, 604_800
+config :lemon_sim_ui, :hosted_ai_model, nil
+config :lemon_sim_ui, :hosted_ai_concurrency, 4
 
 # Always-on model arenas (leagues). Each domain stays disabled unless its
 # LEMON_ARENA_<DOMAIN>_MODELS env is provided at runtime; see config/runtime.exs.

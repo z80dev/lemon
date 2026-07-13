@@ -2,7 +2,9 @@ defmodule LemonSim.Examples.WerewolfActionSpaceTest do
   use ExUnit.Case, async: true
 
   alias LemonSim.Examples.Werewolf.ActionSpace
+  alias LemonSim.Examples.Werewolf
   alias LemonSim.Kernel.State
+  alias Ai.Types.Model
 
   test "runoff voting forces a choice between the finalists" do
     state =
@@ -51,7 +53,7 @@ defmodule LemonSim.Examples.WerewolfActionSpaceTest do
     refute "skip" in tool.parameters["properties"]["target_id"]["enum"]
   end
 
-  test "seer cannot investigate on night 1" do
+  test "seer investigates on night 1" do
     state =
       State.new(
         sim_id: "werewolf-seer-night-1",
@@ -70,7 +72,110 @@ defmodule LemonSim.Examples.WerewolfActionSpaceTest do
 
     assert {:ok, [tool]} = ActionSpace.tools(state, [])
 
-    assert tool.name == "sleep"
-    refute Map.has_key?(tool.parameters["properties"], "target_id")
+    assert tool.name == "investigate_player"
+    assert tool.parameters["properties"]["target_id"]["enum"] == ["Bram", "Cora"]
+  end
+
+  test "private thoughts are bounded" do
+    state =
+      State.new(
+        sim_id: "werewolf-thought-limit",
+        world: %{
+          status: "in_progress",
+          phase: "day_voting",
+          active_actor_id: "Alice",
+          players: %{
+            "Alice" => %{role: "villager", status: "alive"},
+            "Bram" => %{role: "werewolf", status: "alive"}
+          }
+        }
+      )
+
+    assert {:ok, [action]} = ActionSpace.available_actions(state, "Alice")
+    assert action["parameters"]["properties"]["thought"]["maxLength"] == 600
+
+    assert {:error, :invalid_parameters} =
+             ActionSpace.execute_action(state, "Alice", "cast_vote", %{
+               "target_id" => "Bram",
+               "thought" => String.duplicate("x", 601)
+             })
+  end
+
+  test "model output budgets leave GLM enough room to complete tool calls" do
+    opts =
+      Werewolf.default_opts(
+        model: %Model{id: "test", name: "test", provider: :test, api: :openai_completions},
+        stream_options: %{}
+      )
+
+    budget = Keyword.fetch!(opts, :stream_options_for_model)
+
+    assert budget.(%Model{id: "glm-5.1", name: "GLM", provider: :opencode_go}).max_tokens ==
+             1_536
+
+    assert budget.(%Model{id: "gpt", name: "GPT", provider: :github_copilot}).max_tokens == 768
+  end
+
+  test "hosted actions embed the authoritative actor and reject unlisted input" do
+    state =
+      State.new(
+        sim_id: "werewolf-hosted-command",
+        world: %{
+          status: "in_progress",
+          phase: "day_voting",
+          active_actor_id: "Alice",
+          players: %{
+            "Alice" => %{role: "villager", status: "alive"},
+            "Bram" => %{role: "villager", status: "alive"},
+            "Cora" => %{role: "werewolf", status: "alive"}
+          }
+        }
+      )
+
+    assert {:ok, [action]} = ActionSpace.available_actions(state, "Alice")
+    assert action["name"] == "cast_vote"
+    assert {:ok, []} = ActionSpace.available_actions(state, "Bram")
+
+    assert {:ok, event} =
+             ActionSpace.execute_action(state, "Alice", "cast_vote", %{"target_id" => "Bram"})
+
+    assert event.payload["player_id"] == "Alice"
+    assert event.payload["target_id"] == "Bram"
+
+    assert {:error, :not_active_actor} =
+             ActionSpace.execute_action(state, "Bram", "cast_vote", %{"target_id" => "Alice"})
+
+    assert {:error, :invalid_parameters} =
+             ActionSpace.execute_action(state, "Alice", "cast_vote", %{
+               "target_id" => "Cora",
+               "player_id" => "Bram"
+             })
+
+    assert {:error, :invalid_parameters} =
+             ActionSpace.execute_action(state, "Alice", "cast_vote", %{
+               "target_id" => "not-a-player"
+             })
+  end
+
+  test "classic rules remove wandering from the villager night action" do
+    state =
+      State.new(
+        sim_id: "werewolf-classic-actions",
+        world: %{
+          status: "in_progress",
+          phase: "night",
+          day_number: 2,
+          active_actor_id: "Alice",
+          rules: LemonSim.Examples.Werewolf.RulesConfig.for_preset("classic"),
+          players: %{
+            "Alice" => %{role: "villager", status: "alive"},
+            "Bram" => %{role: "werewolf", status: "alive"}
+          },
+          player_items: %{}
+        }
+      )
+
+    assert {:ok, actions} = ActionSpace.available_actions(state, "Alice")
+    assert Enum.map(actions, & &1["name"]) == ["sleep"]
   end
 end

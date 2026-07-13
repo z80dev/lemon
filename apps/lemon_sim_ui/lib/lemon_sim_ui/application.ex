@@ -10,7 +10,8 @@ defmodule LemonSimUi.Application do
         LemonSimUi.Telemetry,
         {DynamicSupervisor, name: LemonSimUi.SimRunnerSupervisor, strategy: :one_for_one},
         {Task.Supervisor, name: LemonSimUi.TaskSupervisor},
-        LemonSimUi.SimManager
+        LemonSimUi.SimManager,
+        LemonSimUi.HostedGame.Supervisor
       ] ++
         arena_children() ++
         [LemonSimUi.Endpoint]

@@ -17,7 +17,8 @@ defmodule LemonSim.Examples.Werewolf.Updaters.Elimination do
 
     with :ok <- ensure_in_progress(state.world),
          :ok <- ensure_phase_in(state.world, ["last_words_vote", "last_words_night"]),
-         :ok <- ensure_active_actor(state.world, player_id) do
+         :ok <- ensure_active_actor(state.world, player_id),
+         :ok <- ensure_text(statement) do
       last_words = get(state.world, :last_words, [])
       new_entry = %{player: player_id, statement: statement}
       new_last_words = last_words ++ [new_entry]
@@ -122,7 +123,7 @@ defmodule LemonSim.Examples.Werewolf.Updaters.Elimination do
         )
       else
         # After night kill, generate village event + items, then meetings
-        village_event_data = VillageEvents.maybe_generate_village_event(day_number)
+        village_event_data = VillageEvents.maybe_generate_village_event(day_number, state.world)
         village_event_history = get(state.world, :village_event_history, [])
 
         {village_events_list, new_event_history, current_event} =
@@ -137,7 +138,7 @@ defmodule LemonSim.Examples.Werewolf.Updaters.Elimination do
               {[], village_event_history, nil}
           end
 
-        item_data = Items.maybe_distribute_items(updated_players, day_number)
+        item_data = Items.maybe_distribute_items(updated_players, day_number, state.world)
         existing_items = get(state.world, :player_items, %{})
 
         {item_events, final_player_items} =
@@ -166,7 +167,6 @@ defmodule LemonSim.Examples.Werewolf.Updaters.Elimination do
           )
           |> State.append_events(elimination_events ++ village_events_list ++ item_events)
 
-        next_state = VillageEvents.apply_village_event_effects(next_state, village_event_data)
         Meetings.transition_to_meetings_or_discussion(next_state)
       end
     end

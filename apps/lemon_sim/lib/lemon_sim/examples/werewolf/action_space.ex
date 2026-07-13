@@ -6,8 +6,8 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
   import LemonSim.Examples.Helpers
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias LemonSim.Kernel.Event
-  alias LemonSim.Examples.Werewolf.{Events, Roles}
+  alias LemonSim.Kernel.{Event, State}
+  alias LemonSim.Examples.Werewolf.{Events, Roles, RulesConfig}
 
   @impl true
   def tools(state, _opts) do
@@ -43,6 +43,13 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
               day_number
             )
 
+          base_tools =
+            if RulesConfig.enabled?(world, :wandering) do
+              base_tools
+            else
+              Enum.reject(base_tools, &(&1.name == "night_wander"))
+            end
+
           # Add item tools based on player's inventory
           player_items = get(world, :player_items, %{})
           actor_items = Map.get(player_items, actor_id, [])
@@ -53,6 +60,103 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
       end
     end
   end
+
+  @spec available_actions(State.t(), String.t()) :: {:ok, [map()]}
+  def available_actions(%State{} = state, actor_id) when is_binary(actor_id) do
+    if get(state.world, :active_actor_id) == actor_id do
+      case tools(state, []) do
+        {:ok, tools} ->
+          {:ok,
+           Enum.map(tools, fn tool ->
+             %{
+               "name" => tool.name,
+               "label" => tool.label,
+               "description" => tool.description,
+               "parameters" => tool.parameters
+             }
+           end)}
+
+        _ ->
+          {:ok, []}
+      end
+    else
+      {:ok, []}
+    end
+  end
+
+  @spec execute_action(State.t(), String.t(), String.t(), map()) ::
+          {:ok, Event.t()} | {:error, atom()}
+  def execute_action(%State{} = state, actor_id, action_name, params)
+      when is_binary(actor_id) and is_binary(action_name) and is_map(params) do
+    with true <- get(state.world, :active_actor_id) == actor_id,
+         {:ok, tools} <- tools(state, []),
+         %AgentTool{} = tool <- Enum.find(tools, &(&1.name == action_name)),
+         {:ok, params} <- validate_parameters(tool.parameters, params),
+         {:ok, %AgentToolResult{details: details}} <-
+           tool.execute.("hosted-command", params, nil, fn _update -> :ok end),
+         %Event{} = event <- Map.get(details, "event") || Map.get(details, :event) do
+      {:ok, event}
+    else
+      false -> {:error, :not_active_actor}
+      nil -> {:error, :invalid_action}
+      {:error, _reason} -> {:error, :invalid_parameters}
+      _ -> {:error, :invalid_action}
+    end
+  end
+
+  def execute_action(%State{}, _actor_id, _action_name, _params),
+    do: {:error, :invalid_parameters}
+
+  defp validate_parameters(schema, params) do
+    properties = Map.get(schema, "properties", %{})
+    required = Map.get(schema, "required", [])
+
+    with true <- map_size(params) <= 16 and :erlang.external_size(params) <= 8_192,
+         {:ok, params} <- stringify_keys(params),
+         true <- Enum.all?(Map.keys(params), &Map.has_key?(properties, &1)),
+         true <- Enum.all?(required, &required_parameter?(params, &1)),
+         true <-
+           Enum.all?(params, fn {key, value} ->
+             valid_parameter?(Map.fetch!(properties, key), value)
+           end) do
+      {:ok, params}
+    else
+      _ -> {:error, :invalid_parameters}
+    end
+  end
+
+  defp stringify_keys(params) do
+    Enum.reduce_while(params, {:ok, %{}}, fn
+      {key, value}, {:ok, acc} when is_binary(key) ->
+        {:cont, {:ok, Map.put(acc, key, value)}}
+
+      {key, value}, {:ok, acc} when is_atom(key) ->
+        {:cont, {:ok, Map.put(acc, Atom.to_string(key), value)}}
+
+      _, _acc ->
+        {:halt, {:error, :invalid_parameters}}
+    end)
+  end
+
+  defp required_parameter?(params, key) do
+    case Map.get(params, key) do
+      value when is_binary(value) -> String.trim(value) != ""
+      nil -> false
+      _ -> true
+    end
+  end
+
+  defp valid_parameter?(%{"type" => "string"} = schema, value) when is_binary(value) do
+    max_length = Map.get(schema, "maxLength", 2_000)
+
+    String.valid?(value) and String.length(value) <= max_length and byte_size(value) <= 2_000 and
+      case Map.get(schema, "enum") do
+        values when is_list(values) -> value in values
+        _ -> true
+      end
+  end
+
+  defp valid_parameter?(_schema, _value), do: false
 
   # Wolf discussion phase
   defp tools_for_phase_and_role(
@@ -94,18 +198,14 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
     [choose_victim_tool(actor_id, living_non_wolves, players)]
   end
 
-  defp tools_for_phase_and_role("night", "seer", actor_id, players, _runoff, day_number) do
+  defp tools_for_phase_and_role("night", "seer", actor_id, players, _runoff, _day_number) do
     living_others =
       players
       |> Roles.living_players()
       |> Enum.reject(fn {id, _p} -> id == actor_id end)
       |> Enum.map(fn {id, _p} -> id end)
 
-    if day_number <= 1 do
-      [sleep_tool(actor_id)]
-    else
-      [investigate_player_tool(actor_id, living_others, players)]
-    end
+    [investigate_player_tool(actor_id, living_others, players)]
   end
 
   defp tools_for_phase_and_role("night", "doctor", actor_id, players, _runoff, _day_number) do
@@ -541,8 +641,9 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
     %AgentTool{
       name: "request_meeting",
       description:
-        "Choose a player for a private 1-on-1 meeting before today's discussion. " <>
-          "You'll exchange brief messages that only the two of you can hear. " <>
+        "Request a preferred player for a private 1-on-1 meeting before today's discussion. " <>
+          "Mutual requests resolve first, then the game honors as many remaining directed " <>
+          "requests as possible. Check current_meeting.pair for the final assignment. " <>
           "Valid targets: #{targets_desc}",
       parameters: %{
         "type" => "object",
@@ -563,7 +664,11 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("You requested a private meeting with #{target_id}.")],
+           content: [
+             AgentCore.text_content(
+               "Your preference to meet #{target_id} was recorded. Check the resolved pair when meetings begin."
+             )
+           ],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -604,7 +709,7 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
     }
   end
 
-  defp anonymous_letter_tool(_actor_id) do
+  defp anonymous_letter_tool(actor_id) do
     %AgentTool{
       name: "send_anonymous_letter",
       description:
@@ -624,7 +729,7 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
       label: "Anonymous Letter",
       execute: fn _tool_call_id, params, _signal, _on_update ->
         message = Map.get(params, "message", Map.get(params, :message, ""))
-        event = Events.anonymous_message(message)
+        event = Events.anonymous_message(actor_id, message)
 
         {:ok,
          %AgentToolResult{
@@ -698,9 +803,10 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
     new_props =
       Map.put(props, "thought", %{
         "type" => "string",
+        "maxLength" => 600,
         "description" =>
           "Optional: record a private internal thought about what's happening. " <>
-            "Note suspicions, plans, observations. Only you (and spectators) can see this."
+            "Keep it under 600 characters. Only you (and spectators) can see this."
       })
 
     original_execute = tool.execute

@@ -400,7 +400,7 @@ Ai.Models.models_equal?(model_a, model_b)  # compares id + provider
 ids = Ai.Models.get_model_ids(:anthropic)
 ```
 
-**Supported providers in `@providers`**: `:anthropic`, `:openai`, `:"openai-codex"`, `:amazon_bedrock`, `:google`, `:google_antigravity`, `:kimi`, `:kimi_coding`, `:opencode`, `:xai`, `:mistral`, `:cerebras`, `:deepseek`, `:qwen`, `:minimax`, `:zai`, `:azure_openai_responses`, `:github_copilot`, `:google_gemini_cli`, `:google_vertex`, `:groq`, `:huggingface`, `:minimax_cn`, `:openrouter`, `:vercel_ai_gateway`
+**Supported providers in `@providers`**: `:anthropic`, `:openai`, `:"openai-codex"`, `:amazon_bedrock`, `:google`, `:google_antigravity`, `:kimi`, `:kimi_coding`, `:opencode`, `:opencode_go`, `:xai`, `:mistral`, `:cerebras`, `:deepseek`, `:qwen`, `:minimax`, `:zai`, `:azure_openai_responses`, `:github_copilot`, `:google_gemini_cli`, `:google_vertex`, `:groq`, `:huggingface`, `:minimax_cn`, `:openrouter`, `:vercel_ai_gateway`
 
 ## Common Tasks
 

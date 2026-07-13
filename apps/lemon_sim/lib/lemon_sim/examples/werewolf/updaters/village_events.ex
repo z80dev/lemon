@@ -1,13 +1,11 @@
 defmodule LemonSim.Examples.Werewolf.Updaters.VillageEvents do
   @moduledoc false
 
-  alias LemonSim.Kernel.State
+  alias LemonSim.Examples.Werewolf.RulesConfig
 
-  import LemonSim.Examples.Helpers
-  import LemonSim.Examples.Helpers.UpdaterHelpers
-
-  def maybe_generate_village_event(day_number) do
-    if day_number > 1 and :rand.uniform() < 0.5 do
+  def maybe_generate_village_event(day_number, world \\ %{}) do
+    if RulesConfig.enabled?(world, :village_events) and day_number > 1 and
+         :rand.uniform() < 0.5 do
       events = [
         {"stranger_arrives",
          "A mysterious stranger was seen passing through the village at dawn. No one recognizes them."},
@@ -27,25 +25,21 @@ defmodule LemonSim.Examples.Werewolf.Updaters.VillageEvents do
     end
   end
 
-  def apply_village_event_effects(state, nil), do: state
+  def adjust_discussion_round_limit(base_limit, nil), do: base_limit
 
-  def apply_village_event_effects(state, {event_type, _description}) do
+  def adjust_discussion_round_limit(base_limit, {event_type, _description}) do
+    adjust_discussion_round_limit(base_limit, event_type)
+  end
+
+  def adjust_discussion_round_limit(base_limit, event) when is_map(event) do
+    adjust_discussion_round_limit(base_limit, Map.get(event, :type) || Map.get(event, "type"))
+  end
+
+  def adjust_discussion_round_limit(base_limit, event_type) do
     case event_type do
-      "blizzard" ->
-        current_limit = get(state.world, :discussion_round_limit, 2)
-        new_limit = max(1, current_limit - 1)
-        State.put_world(state, world_updates(state.world, %{discussion_round_limit: new_limit}))
-
-      "festival" ->
-        current_limit = get(state.world, :discussion_round_limit, 2)
-
-        State.put_world(
-          state,
-          world_updates(state.world, %{discussion_round_limit: current_limit + 1})
-        )
-
-      _ ->
-        state
+      "blizzard" -> max(1, base_limit - 1)
+      "festival" -> base_limit + 1
+      _ -> base_limit
     end
   end
 end

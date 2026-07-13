@@ -28,7 +28,7 @@ defmodule XApi.MixProject do
     [
       {:lemon_core, in_umbrella: true},
       {:jason, "~> 1.4"},
-      {:req, "~> 0.5.0"}
+      {:req, "~> 0.5"}
     ]
   end
 end

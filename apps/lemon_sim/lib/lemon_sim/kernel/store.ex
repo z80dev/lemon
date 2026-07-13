@@ -5,6 +5,8 @@ defmodule LemonSim.Kernel.Store do
 
   alias LemonSim.Kernel.State
 
+  require Logger
+
   @state_table :lemon_sim_world_states
 
   @doc """
@@ -45,6 +47,14 @@ defmodule LemonSim.Kernel.Store do
   end
 
   defp normalize_state(%State{} = state), do: state
-  defp normalize_state(%{} = map), do: State.new(map)
+
+  defp normalize_state(%{} = map) do
+    State.new(map)
+  rescue
+    error ->
+      Logger.warning("Skipping malformed persisted simulation state: #{Exception.message(error)}")
+      nil
+  end
+
   defp normalize_state(_), do: nil
 end

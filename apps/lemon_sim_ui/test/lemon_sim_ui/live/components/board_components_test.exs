@@ -544,13 +544,92 @@ defmodule LemonSimUi.Live.Components.BoardComponentsTest do
         },
         phase: "game_over",
         day_number: 3,
-        status: "completed",
+        status: "game_over",
         winner: "villagers"
       }
 
       html = render_component(&WerewolfBoard.render/1, world: world)
 
-      assert is_binary(html)
+      assert html =~ ~s(id="werewolf-result-heading")
+      assert html =~ "VILLAGERS WIN"
+      assert html =~ "Role Reveal"
+    end
+
+    test "renders accessible story, game-state, and vote-pressure landmarks" do
+      world = %{
+        players: %{
+          "alice" => %{role: "villager", status: "alive"},
+          "bob" => %{role: "werewolf", status: "alive"},
+          "cora" => %{role: "villager", status: "alive"}
+        },
+        phase: "day_voting",
+        day_number: 2,
+        status: "in_progress",
+        votes: %{"alice" => "bob"}
+      }
+
+      html = render_component(&WerewolfBoard.render/1, world: world)
+
+      assert html =~ ~s(id="werewolf-story")
+      assert html =~ ~s(tabindex="-1")
+      assert html =~ ~s(role="log")
+      assert html =~ ~s(aria-live="off")
+      assert html =~ ~s(phx-hook="WerewolfStory")
+      assert html =~ ~s(data-new-updates)
+      assert html =~ ~s(role="status")
+      assert html =~ ~s(aria-live="polite")
+      assert html =~ ~s(id="werewolf-state-heading")
+      assert html =~ "Wolves win when they reach parity"
+      assert html =~ "A majority is 2 votes"
+      assert html =~ ~s(role="progressbar")
+      assert html =~ ~s(aria-label="bob vote count")
+      refute html =~ "/assets/werewolf/villager.png"
+      refute html =~ "/assets/werewolf/werewolf.png"
+    end
+
+    test "places current story before collapsed history" do
+      world = %{
+        players: %{
+          "alice" => %{role: "villager", status: "alive"},
+          "bob" => %{role: "werewolf", status: "alive"}
+        },
+        phase: "day_discussion",
+        day_number: 2,
+        status: "in_progress",
+        discussion_transcript: [
+          %{player: "alice", statement: "This is the current scene."}
+        ],
+        past_transcripts: %{
+          1 => [%{player: "bob", statement: "This belongs in history."}]
+        }
+      }
+
+      html = render_component(&WerewolfBoard.render/1, world: world)
+
+      assert html =~ "Story history"
+      refute html =~ ~s(<details open)
+
+      assert :binary.match(html, "This is the current scene.") <
+               :binary.match(html, "Story history")
+    end
+
+    test "does not present a stopped snapshot as an active turn" do
+      world = %{
+        players: %{
+          "alice" => %{name: "Alice", role: "villager", status: "alive"},
+          "bob" => %{name: "Bob", role: "werewolf", status: "alive"}
+        },
+        phase: "day_voting",
+        day_number: 2,
+        status: "in_progress",
+        active_actor_id: "alice"
+      }
+
+      html = render_component(&WerewolfBoard.render/1, world: world, running: false)
+
+      assert html =~ ~s(data-running="false")
+      refute html =~ "Acting now"
+      refute html =~ "is deciding their vote"
     end
 
     test "renders with lore without crashing" do
@@ -641,7 +720,8 @@ defmodule LemonSimUi.Live.Components.BoardComponentsTest do
 
       html = render_component(&WerewolfBoard.render/1, world: world)
 
-      assert html =~ "Agent Journals"
+      assert html =~ "Behind the veil"
+      assert html =~ "Agent journals"
       assert html =~ "Bob&#39;s timeline keeps changing."
       assert html =~ "Alice and Bob grew up together."
     end
@@ -680,8 +760,9 @@ defmodule LemonSimUi.Live.Components.BoardComponentsTest do
         discussion_transcript: [
           %{player: "alice", statement: "Bob keeps steering every vote."}
         ],
-        wolf_chat_transcript: [
-          %{player: "bob", message: "Keep the pressure on Alice."}
+        wolf_chat_transcript: [],
+        wolf_chat_history: [
+          %{day: 1, player: "bob", message: "Keep the pressure on Alice."}
         ]
       }
 
@@ -690,6 +771,7 @@ defmodule LemonSimUi.Live.Components.BoardComponentsTest do
       assert html =~ "Day 2 Discussion"
       assert html =~ "Bob keeps steering every vote."
       assert html =~ "Wolf Pack Chat"
+      assert html =~ "Night 1"
       assert html =~ "Keep the pressure on Alice."
     end
 
@@ -765,6 +847,62 @@ defmodule LemonSimUi.Live.Components.BoardComponentsTest do
 
       assert html =~ "Accuses Bob"
       assert html =~ "Alice accuses Bob. Reason: His alibi changed twice."
+    end
+
+    test "renders the current night recap, wander result, and evidence only" do
+      world = %{
+        players: %{
+          "alice" => %{name: "Alice", role: "werewolf", status: "alive"},
+          "current_target" => %{name: "Current Target", role: "villager", status: "dead"},
+          "stale_target" => %{name: "Stale Target", role: "villager", status: "dead"}
+        },
+        phase: "day_discussion",
+        day_number: 2,
+        status: "in_progress",
+        night_history: [
+          %{
+            day: 1,
+            player: "alice",
+            player_role: "werewolf",
+            action: "choose_victim",
+            target: "stale_target",
+            target_role: "villager",
+            successful: true,
+            saved: false
+          },
+          %{
+            day: 2,
+            player: "alice",
+            player_role: "werewolf",
+            action: "choose_victim",
+            target: "current_target",
+            target_role: "villager",
+            successful: true,
+            saved: false
+          }
+        ],
+        wanderer_results: [
+          %{day: 1, wanderer: "stale_target", description: "STALE WANDER RESULT"},
+          %{day: 2, wanderer: "Scout", description: "CURRENT WANDER RESULT"}
+        ],
+        evidence_tokens: [
+          %{day: 1, type: "muddy_footprints", clue: "STALE EVIDENCE CLUE"},
+          %{day: 2, type: "broken_vial", clue: "CURRENT EVIDENCE CLUE"}
+        ]
+      }
+
+      html = render_component(&WerewolfBoard.render/1, world: world)
+
+      assert html =~ "Night 2 — What happened in the dark"
+      assert html =~ "current_target was killed"
+      assert length(String.split(html, "current_target was killed")) == 2
+      assert html =~ "Scout"
+      assert html =~ "CURRENT WANDER RESULT"
+      assert html =~ "CURRENT EVIDENCE CLUE"
+      refute html =~ "stale_target was killed"
+      refute html =~ "STALE WANDER RESULT"
+      refute html =~ "STALE EVIDENCE CLUE"
+      refute html =~ "Strange evidence..."
     end
   end
 

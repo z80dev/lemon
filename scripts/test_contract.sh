@@ -78,8 +78,9 @@ grep -q "requires a live model credential" "$live_eval_out" ||
 rm -rf "$live_tmp_root"
 
 artifact_tmp="$(mktemp -d "${TMPDIR:-/tmp}/lemon-artifact-contract.XXXXXX")"
-printf 'min-runtime' > "$artifact_tmp/lemon-2026.05.0-stable-linux-x86_64-lemon_runtime_min.tar.gz"
-printf 'full-runtime' > "$artifact_tmp/lemon-2026.05.0-stable-linux-x86_64-lemon_runtime_full.tar.gz"
+printf 'min-runtime' > "$artifact_tmp/lemon-2026.05.0-stable-ubuntu-24.04-x86_64-lemon_runtime_min.tar.gz"
+printf 'full-runtime' > "$artifact_tmp/lemon-2026.05.0-stable-ubuntu-24.04-x86_64-lemon_runtime_full.tar.gz"
+printf 'sim-runtime' > "$artifact_tmp/lemon-2026.05.0-stable-ubuntu-24.04-x86_64-sim_broadcast_platform.tar.gz"
 python3 - "$artifact_tmp" <<'PY'
 import hashlib
 import json
@@ -99,16 +100,16 @@ for path in sorted(root.glob("*.tar.gz")):
     )
 
 (root / "manifest.json").write_text(
-    json.dumps({"version": "2026.05.0", "channel": "stable", "artifacts": artifacts}, indent=2),
+    json.dumps({"version": "2026.05.0", "channel": "stable", "commit": "abcdef123456", "artifacts": artifacts}, indent=2),
     encoding="utf-8",
 )
 PY
 artifact_valid_out="$artifact_tmp/valid.out"
 "$ROOT/scripts/verify_release_artifacts" "$artifact_tmp" >"$artifact_valid_out" 2>&1 ||
-  fail "release artifact verifier should accept complete min/full Linux manifest"
+  fail "release artifact verifier should accept complete min/full/sim Linux manifest"
 
 incomplete_artifact_tmp="$(mktemp -d "${TMPDIR:-/tmp}/lemon-artifact-contract-incomplete.XXXXXX")"
-cp "$artifact_tmp/lemon-2026.05.0-stable-linux-x86_64-lemon_runtime_min.tar.gz" "$incomplete_artifact_tmp/"
+cp "$artifact_tmp/lemon-2026.05.0-stable-ubuntu-24.04-x86_64-lemon_runtime_min.tar.gz" "$incomplete_artifact_tmp/"
 python3 - "$incomplete_artifact_tmp" <<'PY'
 import hashlib
 import json
@@ -116,12 +117,13 @@ import pathlib
 import sys
 
 root = pathlib.Path(sys.argv[1])
-path = root / "lemon-2026.05.0-stable-linux-x86_64-lemon_runtime_min.tar.gz"
+path = root / "lemon-2026.05.0-stable-ubuntu-24.04-x86_64-lemon_runtime_min.tar.gz"
 (root / "manifest.json").write_text(
     json.dumps(
         {
             "version": "2026.05.0",
             "channel": "stable",
+            "commit": "abcdef123456",
             "artifacts": [
                 {
                     "file": path.name,
@@ -137,7 +139,7 @@ path = root / "lemon-2026.05.0-stable-linux-x86_64-lemon_runtime_min.tar.gz"
 PY
 artifact_incomplete_out="$incomplete_artifact_tmp/incomplete.out"
 "$ROOT/scripts/verify_release_artifacts" "$incomplete_artifact_tmp" >"$artifact_incomplete_out" 2>&1 &&
-  fail "release artifact verifier should reject manifests missing lemon_runtime_full"
+  fail "release artifact verifier should reject manifests missing full and sim profiles"
 grep -q "missing required release artifact profile" "$artifact_incomplete_out" ||
   fail "release artifact verifier should explain missing required profiles"
 

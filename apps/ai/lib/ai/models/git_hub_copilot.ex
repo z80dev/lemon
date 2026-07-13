@@ -285,6 +285,60 @@ defmodule Ai.Models.GitHubCopilot do
       context_window: 400_000,
       max_tokens: 128_000
     },
+    "gpt-5.6-luna" => %Model{
+      id: "gpt-5.6-luna",
+      name: "GPT-5.6 Luna",
+      api: :openai_responses,
+      provider: :github_copilot,
+      base_url: "https://api.githubcopilot.com",
+      headers: %{
+        "User-Agent" => "GitHubCopilotChat/0.35.0",
+        "Editor-Version" => "vscode/1.107.0",
+        "Editor-Plugin-Version" => "copilot-chat/0.35.0",
+        "Copilot-Integration-Id" => "vscode-chat"
+      },
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
+      context_window: 1_050_000,
+      max_tokens: 128_000
+    },
+    "gpt-5.6-sol" => %Model{
+      id: "gpt-5.6-sol",
+      name: "GPT-5.6 Sol",
+      api: :openai_responses,
+      provider: :github_copilot,
+      base_url: "https://api.githubcopilot.com",
+      headers: %{
+        "User-Agent" => "GitHubCopilotChat/0.35.0",
+        "Editor-Version" => "vscode/1.107.0",
+        "Editor-Plugin-Version" => "copilot-chat/0.35.0",
+        "Copilot-Integration-Id" => "vscode-chat"
+      },
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
+      context_window: 1_050_000,
+      max_tokens: 128_000
+    },
+    "gpt-5.6-terra" => %Model{
+      id: "gpt-5.6-terra",
+      name: "GPT-5.6 Terra",
+      api: :openai_responses,
+      provider: :github_copilot,
+      base_url: "https://api.githubcopilot.com",
+      headers: %{
+        "User-Agent" => "GitHubCopilotChat/0.35.0",
+        "Editor-Version" => "vscode/1.107.0",
+        "Editor-Plugin-Version" => "copilot-chat/0.35.0",
+        "Copilot-Integration-Id" => "vscode-chat"
+      },
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
+      context_window: 1_050_000,
+      max_tokens: 128_000
+    },
     "grok-code-fast-1" => %Model{
       id: "grok-code-fast-1",
       name: "Grok Code Fast 1",

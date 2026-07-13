@@ -12,6 +12,16 @@ defmodule LemonSim.Examples.WerewolfRolesTest do
     assert Enum.count(roles, &(&1 == :villager)) == 2
   end
 
+  test "balanced assignments keep roles fixed by sorted seat for arena rotation" do
+    players = Roles.assign_balanced_roles(5, ["Esme", "Dane", "Cora", "Bram", "Alice"])
+
+    assert players["Alice"].role == "werewolf"
+    assert players["Bram"].role == "seer"
+    assert players["Cora"].role == "doctor"
+    assert players["Dane"].role == "villager"
+    assert players["Esme"].role == "villager"
+  end
+
   test "day 1 discussion uses the same multi-round limit as later days" do
     players = %{
       "Alice" => %{role: "villager", status: "alive"},
