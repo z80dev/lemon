@@ -42,6 +42,7 @@ lib/
       layouts/app.html.heex
       layouts/root.html.heex
     controllers/
+      admin_session_controller.ex          CSRF-protected admin login/logout + session renewal
       admin_sim_controller.ex              Token-protected JSON API for start/stop
       error_html.ex                        404/500 HTML error views
       error_json.ex                        JSON error views
@@ -55,7 +56,7 @@ lib/
       spectator_live.ex                    Public read-only werewolf spectator view
       hosted_werewolf_live.ex              Hosted lobby/join/host/player/public-safe views
     plugs/
-      require_access_token.ex              Optional bearer/query/session token gate
+      require_access_token.ex              Expiring browser-session and bearer-only API gate
       components/
         event_log.ex                       Renders recent_events list
         plan_history.ex                    Renders plan_history steps
@@ -104,8 +105,9 @@ self-contained and must not add runtime CDN dependencies.
 | `lib/lemon_sim_ui/artifact_reader.ex` | `LemonSimUi.ArtifactReader` | Reads `suite.json` and `usage.json`; keeps token/cost formatting null-safe |
 | `lib/lemon_sim_ui/werewolf_playback.ex` | `LemonSimUi.WerewolfPlayback` | Buffers exact Werewolf state snapshots and enforces minimum dwell times so live dialogue/night beats stay readable |
 | `lib/lemon_sim_ui/controllers/admin_sim_controller.ex` | `LemonSimUi.AdminSimController` | Protected JSON API for remote sim start/stop |
+| `lib/lemon_sim_ui/controllers/admin_session_controller.ex` | `LemonSimUi.AdminSessionController` | CSRF-protected browser login/logout flow for the private control room |
 | `lib/lemon_sim_ui/controllers/health_controller.ex` | `LemonSimUi.HealthController` | Public liveness and dependency readiness checks |
-| `lib/lemon_sim_ui/plugs/require_access_token.ex` | `LemonSimUi.Plugs.RequireAccessToken` | Optional access-token gate for dashboard + admin API |
+| `lib/lemon_sim_ui/plugs/require_access_token.ex` | `LemonSimUi.Plugs.RequireAccessToken` | Expiring signed-session gate for browsers and bearer-only gate for the admin API |
 | `lib/lemon_sim_ui/sim_helpers.ex` | `LemonSimUi.SimHelpers` | `infer_domain_type/1`, `sim_summary/1`, `domain_label/1`, `domain_badge_color/1` |
 | `lib/lemon_sim_ui/live/components/event_log.ex` | `LemonSimUi.Live.Components.EventLog` | Stateless component; renders `recent_events` with color-coded event kinds |
 | `lib/lemon_sim_ui/live/components/plan_history.ex` | `LemonSimUi.Live.Components.PlanHistory` | Stateless component; renders `plan_history` as collapsible steps |
@@ -185,7 +187,7 @@ Edit `provider_options/0`, `model_options_for_provider/1`, and the default provi
 - Werewolf evidence rendering must show the engine-provided reliability and interpretation, not only the clue prose, so spectators can distinguish a noisy lead from proof.
 - VendingBench live-log model traces are compact `plan_history` entries from `SimManager`. Keep them to visible tool calls/results and domain summaries; do not try to expose provider-hidden chain-of-thought.
 - `SimHelpers.infer_domain_type/1` uses world map key heuristics. If two domains share the same distinguishing key, ensure the more specific one is listed first in the `cond`.
-- Keep `/admin` and `/admin/sims/:sim_id` on `SimDashboardLive` behind `RequireAccessToken`. Dedicated production releases require at least a 32-byte access token and accept bearer credentials for the JSON API; browser query credentials are exchanged for a session and stripped by redirect. `/`, `/leaderboards`, `/watch/:sim_id`, `/healthz`, and `/readyz` are intentionally public. The optional public VendingBench launcher is controlled by `LEMON_SIM_UI_PUBLIC_VENDING_LAUNCHER` and should stay limited to validated configured presets unless the route is moved behind auth.
+- Keep `/admin` and `/admin/sims/:sim_id` on `SimDashboardLive` behind `RequireAccessToken`. Dedicated production releases require at least a 32-byte access token. Browsers authenticate through the CSRF-protected `/admin/login` form and receive an expiring signed-session marker; query-string credentials must remain rejected. `/api/admin/*` accepts bearer credentials only. `/`, `/leaderboards`, `/watch/:sim_id`, `/healthz`, and `/readyz` are intentionally public. The optional public VendingBench launcher is controlled by `LEMON_SIM_UI_PUBLIC_VENDING_LAUNCHER` and should stay limited to validated configured presets unless the route is moved behind auth.
 - Keep `LEMON_SIM_UI_MAX_CONCURRENT_RUNNERS`, `LEMON_SIM_UI_MAX_STORED_SIMS`, and per-arena `MAX_GAME_RECORDS` wired through runtime config, readiness, deployment examples, and tests when lifecycle/storage behavior changes.
 - Keep every `LEMON_WEREWOLF_HOSTED_*` knob, HTTPS requirement, room TTL/retention, AI limit/model, readiness, `.env.example`, and deployment manifest coherent. Production room creation also requires a 32-byte `LEMON_WEREWOLF_HOST_CREATE_TOKEN`.
 - Configure public benchmark discovery with `config :lemon_sim_ui, :suite_roots, ["/tmp/vending-suite"]`. The default reader accepts either a suite directory containing `suite.json` or a parent directory with child suite directories, logs malformed JSON, and skips bad files.

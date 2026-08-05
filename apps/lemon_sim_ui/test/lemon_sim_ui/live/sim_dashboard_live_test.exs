@@ -5,9 +5,10 @@ defmodule LemonSimUi.SimDashboardLiveTest do
 
   test "mounts with no sims", %{conn: conn} do
     {:ok, view, html} = live(conn, "/admin")
-    assert html =~ "LemonSim"
-    assert html =~ "SYSTEM STANDBY"
-    assert render(view) =~ "0 active"
+    assert html =~ "Werewolf Control Room"
+    assert html =~ "Private admin"
+    assert html =~ "View public lobby"
+    assert render(view) =~ "0 running · 0 stored"
   end
 
   test "shows sim list when sims exist", %{conn: conn} do
@@ -39,6 +40,24 @@ defmodule LemonSimUi.SimDashboardLiveTest do
     html = render_patch(view, "/admin/sims/test_ttt_2")
     assert html =~ "test_ttt_2"
     assert html =~ "telemetry packets"
+  end
+
+  test "werewolf detail links to the separate public broadcast", %{conn: conn} do
+    sim_id = "test_admin_werewolf_public_link"
+
+    state =
+      LemonSim.Kernel.State.new(
+        sim_id: sim_id,
+        world: LemonSim.Examples.Werewolf.initial_world(player_count: 5)
+      )
+
+    LemonSim.Kernel.Store.put_state(state)
+    on_exit(fn -> LemonSim.Kernel.Store.delete_state(sim_id) end)
+
+    {:ok, _view, html} = live(conn, "/admin/sims/#{sim_id}")
+
+    assert html =~ "Public view"
+    assert html =~ ~s(href="/watch/#{sim_id}")
   end
 
   test "werewolf launch form exposes Z.ai GLM-5 in model assignments", %{conn: conn} do

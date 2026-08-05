@@ -86,6 +86,51 @@
   .hosted-link {
     @apply rounded-lg px-3 py-2 text-sm font-semibold text-stone-400 transition hover:bg-white/5 hover:text-white;
   }
+
+  .public-nav-link {
+    @apply inline-flex min-h-11 items-center justify-center rounded-full px-3 text-sm font-semibold text-stone-400 transition hover:bg-white/5 hover:text-white sm:px-4;
+  }
+
+  .public-primary-cta {
+    @apply inline-flex min-h-12 items-center justify-center gap-3 rounded-xl border border-amber-100 bg-amber-100 px-5 text-sm font-bold text-stone-950 shadow-lg shadow-amber-950/30 transition hover:-translate-y-0.5 hover:bg-white;
+  }
+
+  .public-secondary-cta {
+    @apply inline-flex min-h-12 items-center justify-center rounded-xl border border-white/15 bg-black/20 px-5 text-center text-sm font-semibold text-stone-200 transition hover:-translate-y-0.5 hover:border-amber-200/35 hover:bg-white/[0.06] hover:text-white;
+  }
+
+  .public-mini-link {
+    @apply inline-flex min-h-10 items-center justify-center rounded-lg border border-white/10 bg-black/20 px-3 text-center text-xs font-semibold text-stone-300 transition hover:border-amber-200/25 hover:bg-white/[0.05] hover:text-white;
+  }
+
+  .broadcast-now-card {
+    @apply overflow-hidden rounded-[2rem] border border-white/10;
+    background:
+      linear-gradient(145deg, rgba(25, 28, 35, 0.96), rgba(9, 11, 15, 0.96)),
+      rgba(9, 11, 15, 0.96);
+    box-shadow:
+      0 34px 80px rgba(0, 0, 0, 0.45),
+      inset 0 1px 0 rgba(255, 255, 255, 0.035);
+  }
+
+  .live-broadcast-card {
+    @apply block rounded-2xl border border-white/10 p-5 transition sm:p-6;
+    background: linear-gradient(145deg, rgba(24, 27, 34, 0.88), rgba(10, 12, 16, 0.9));
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
+  }
+
+  .live-broadcast-card:hover {
+    border-color: rgba(253, 230, 138, 0.25);
+    background: linear-gradient(145deg, rgba(31, 33, 40, 0.94), rgba(13, 15, 19, 0.94));
+    transform: translateY(-2px);
+    box-shadow: 0 20px 46px rgba(0, 0, 0, 0.28);
+  }
+}
+
+.public-lobby {
+  background-image:
+    radial-gradient(circle at 15% 16%, rgba(120, 53, 15, 0.12), transparent 28rem),
+    radial-gradient(circle at 88% 72%, rgba(76, 29, 149, 0.08), transparent 32rem);
 }
 
 .custom-scrollbar {

@@ -77,7 +77,7 @@ scripts/verify_release_runtime_boot /path/to/downloaded-artifacts
 ./_build/prod/rel/lemon_runtime_min/bin/lemon_runtime_min stop
 ```
 
-`sim_broadcast_platform` is the dedicated production profile for `lemon_sim_ui`. It serves public `/watch/:sim_id` model broadcasts and optional hosted human Werewolf at `/play`, while keeping the admin dashboard, metrics, and `/api/admin/*` behind `LEMON_SIM_UI_ACCESS_TOKEN`.
+`sim_broadcast_platform` is the dedicated production profile for `lemon_sim_ui`. It serves the public Werewolf-first broadcast lobby at `/`, stable arenas at `/arena/:domain`, individual `/watch/:sim_id` model broadcasts, and optional hosted human Werewolf at `/play`, while keeping the `/admin` control room, metrics, and `/api/admin/*` behind `LEMON_SIM_UI_ACCESS_TOKEN`. Browser operators authenticate through the CSRF-protected `/admin/login` form and receive an expiring signed-session marker; query-string tokens are rejected and `/api/admin/*` remains bearer-only. `LEMON_SIM_UI_ADMIN_SESSION_TTL_SECONDS` controls the browser lifetime from 300 to 86400 seconds and defaults to eight hours. Rotate the access token to invalidate all browser sessions, and expose these routes only over HTTPS.
 
 Its production endpoint fails closed unless host, persistent store path, a
 64-byte secret key base, and a 32-byte admin access token are explicit. Use
@@ -145,8 +145,9 @@ active.
 For rollback, stop traffic, stop the current instance with its 30-second grace
 period, restore the pre-deploy database and league archive, and start the
 previous immutable image/release. Verify `/healthz`, `/readyz`, `/`, a known
-`/watch/:sim_id`, and an unauthenticated `401` from `/admin` before restoring
-traffic. Keep the failed image, logs, `/readyz` build block, and backup
+`/watch/:sim_id`, an unauthenticated redirect from `/admin` to `/admin/login`,
+and an unauthenticated `401` from `/api/admin/metrics` before restoring traffic.
+Keep the failed image, logs, `/readyz` build block, and backup
 timestamps for incident review.
 
 For a hosted deployment, also verify `/play`, create a room using the creation

@@ -203,7 +203,7 @@ defmodule LemonSimUi.ArenaPagesTest do
     test "features all five arenas with watch and league links", %{conn: conn} do
       {:ok, _view, html} = live(conn, "/")
 
-      assert html =~ "Model Arenas"
+      assert html =~ "Always-on leagues"
       assert html =~ "Werewolf"
       assert html =~ "Space Station Crisis"
       assert html =~ "Stock Market Arena"

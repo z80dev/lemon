@@ -88,6 +88,7 @@ config :lemon_sim_ui, LemonSimUi.Endpoint,
   server: false
 
 config :lemon_sim_ui, :hosted_rooms_enabled, true
+config :lemon_sim_ui, :allow_insecure_admin, true
 
 config :lemon_web, LemonWeb.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4082],

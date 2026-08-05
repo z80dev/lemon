@@ -19,6 +19,7 @@ kill_timeout = "30s"
   LEMON_STORE_PATH = "/app/data/store"
   LEMON_SIM_UI_HOST = "lemonsim.fly.dev"
   LEMON_SIM_UI_PORT = "4090"
+  LEMON_SIM_UI_ADMIN_SESSION_TTL_SECONDS = "28800"
   LEMON_SIM_UI_MAX_CONCURRENT_RUNNERS = "8"
   LEMON_SIM_UI_MAX_STORED_SIMS = "500"
   # Hosted rooms are opt-in. Enabling requires the HTTPS external URL plus a

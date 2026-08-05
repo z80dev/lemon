@@ -38,11 +38,11 @@ The LiveView transport is websocket-only. `LemonSimUi.Endpoint` disables the `/l
 - `SimManager.lobby_topic/0` — for sim list changes (start, stop, finish)
 - `LemonSim.Kernel.Bus` topic for the currently viewed sim — for per-step world updates
 
-Public routes are served separately from admin routes. `LobbyLive` handles `/`, `LeaderboardLive` serves `/leaderboards`, `SpectatorLive` serves `/watch/:sim_id`, hosted Werewolf begins at `/play`, and `SimDashboardLive` handles the admin dashboard at `/admin` and `/admin/sims/:sim_id`. The leaderboard page scans configured `:suite_roots` for LemonSim `suite.json` files, skips malformed files with a log line, and renders verified rankings, mean/std/n statistics when present, failures, token totals, and null-safe costs. For CLI-driven VendingBench runs, the lobby and spectator route can fall back to checkpoint artifacts registered by the runner and refresh from `final_world.json` while the run is in progress. The spectator route renders total and per-actor usage/cost from a live UI-managed usage collector when present, otherwise from checkpoint `usage.json`, without treating unknown cost as zero. The VendingBench board shows the active operator and physical-worker model labels when the checkpoint world includes runtime model metadata, and Arena worlds render multi-agent standings, messages, payments, trades, supplier leads, price-war signals, and collusion flags above the vending-machine broadcast. TCG Shop sims are also watchable through the public spectator route using the same read-only board as the admin dashboard.
+Public routes are served separately from admin routes. `LobbyLive` handles `/` as a Werewolf-first broadcast lobby: it promotes the current match with day, phase, alive count, and public model lineup; falls back to a stable arena intermission; and lists every live or artifact-backed public broadcast with a direct watch link. `LeaderboardLive` serves `/leaderboards`, `SpectatorLive` serves `/watch/:sim_id`, hosted Werewolf begins at `/play`, `AdminSessionController` handles `/admin/login` and `/admin/logout`, and `SimDashboardLive` handles the authenticated control room at `/admin` and `/admin/sims/:sim_id`. The leaderboard page scans configured `:suite_roots` for LemonSim `suite.json` files, skips malformed files with a log line, and renders verified rankings, mean/std/n statistics when present, failures, token totals, and null-safe costs. For CLI-driven VendingBench runs, the lobby and spectator route can fall back to checkpoint artifacts registered by the runner and refresh from `final_world.json` while the run is in progress. The spectator route renders total and per-actor usage/cost from a live UI-managed usage collector when present, otherwise from checkpoint `usage.json`, without treating unknown cost as zero. The VendingBench board shows the active operator and physical-worker model labels when the checkpoint world includes runtime model metadata, and Arena worlds render multi-agent standings, messages, payments, trades, supplier leads, price-war signals, and collusion flags above the vending-machine broadcast. TCG Shop sims are also watchable through the public spectator route using the same read-only board as the admin dashboard.
 
 On the model-arena Werewolf board, the current day's public discussion transcript remains visible until it is archived into day history, and the most recent archived day opens expanded by default. The admin detail and model-broadcast watcher share that full-story surface, including model wolf chat, meetings, journals, and generated lore. Hosted human rooms never reuse this omniscient board: they use dedicated player and public projections so roles, night actors, votes, pack chat, investigations, meetings, items, and journals are only delivered to an entitled session.
 
-Admin surfaces are intended to be private. Production startup fails unless `LEMON_SIM_UI_ACCESS_TOKEN` is at least 32 bytes. The dashboard (`/admin`, `/admin/sims/:sim_id`) and JSON admin API require the token; the public lobby (`/`), leaderboard route (`/leaderboards`), spectator route (`/watch/:sim_id`), liveness route (`/healthz`), and readiness route (`/readyz`) remain public. If `LEMON_SIM_UI_PUBLIC_VENDING_LAUNCHER=true`, the public lobby shows the configured VendingBench launcher presets. Presets come from `config :lemon_sim_ui, :vending_launcher_presets`; malformed entries are logged and skipped, and the default presets are GLM 5.1 on Z.AI and GPT 5.5 on Codex OAuth.
+Admin surfaces are private and fail closed. Production startup fails unless `LEMON_SIM_UI_ACCESS_TOKEN` is at least 32 bytes, and development also requires a configured token before the control room can be opened. Browsers enter the token through the CSRF-protected `/admin/login` form; the raw token is never accepted from a URL or stored in the cookie. A signed digest marker authenticates `/admin` and `/admin/sims/:sim_id` for eight hours by default, logout deletes it, and rotating the deployment token invalidates every existing admin session. JSON `/api/admin/*` routes remain stateless and accept only `Authorization: Bearer` credentials, never browser cookies or query parameters. All admin and login responses are `private, no-store`. The public lobby (`/`), leaderboard route (`/leaderboards`), spectator route (`/watch/:sim_id`), liveness route (`/healthz`), and readiness route (`/readyz`) remain public. The control-room overview shows the active Werewolf broadcast, automation owner, running/stored counts, and recent simulations; the detail view links to a separate public watch page without adding operator controls to it. If `LEMON_SIM_UI_PUBLIC_VENDING_LAUNCHER=true`, the public lobby shows the configured VendingBench launcher presets. Presets come from `config :lemon_sim_ui, :vending_launcher_presets`; malformed entries are logged and skipped, and the default presets are GLM 5.1 on Z.AI and GPT 5.5 on Codex OAuth. Public pages publish a Werewolf-specific Open Graph/X share card from `priv/static/assets/werewolf/og-live.png`.
 
 ### Hosted Werewolf rooms
 
@@ -113,10 +113,10 @@ For Tic Tac Toe and Skirmish, the user can select a team at launch. On human tur
 | Module | File | Purpose |
 |---|---|---|
 | `LemonSimUi.Application` | `lib/lemon_sim_ui/application.ex` | Starts telemetry, simulation runners, hosted-room supervision, arenas, and the endpoint |
-| `LemonSimUi.LobbyLive` | `lib/lemon_sim_ui/live/lobby_live.ex` | Public landing page listing currently running sims and, when enabled, a configured VendingBench launcher |
+| `LemonSimUi.LobbyLive` | `lib/lemon_sim_ui/live/lobby_live.ex` | Werewolf-first public broadcast lobby with featured match/intermission state, live watch links, arena navigation, and optional VendingBench launcher |
 | `LemonSimUi.LeaderboardLive` | `lib/lemon_sim_ui/live/leaderboard_live.ex` | Public leaderboard page for benchmark suite artifacts under configured `:suite_roots` |
 | `LemonSimUi.SimManager` | `lib/lemon_sim_ui/sim_manager.ex` | GenServer: lifecycle and runner loop for all active sims |
-| `LemonSimUi.SimDashboardLive` | `lib/lemon_sim_ui/live/sim_dashboard_live.ex` | Admin dashboard LiveView for sim launch and detail flows |
+| `LemonSimUi.SimDashboardLive` | `lib/lemon_sim_ui/live/sim_dashboard_live.ex` | Protected operator control room for Werewolf broadcast status, launch/automation actions, recent runs, and full sim detail flows |
 | `LemonSimUi.SpectatorLive` | `lib/lemon_sim_ui/live/spectator_live.ex` | Public shareable watcher for Werewolf, VendingBench, and TCG Shop with no admin controls; shows live usage collector snapshots or artifact `usage.json` |
 | `LemonSimUi.HostedGame` | `lib/lemon_sim_ui/hosted_game.ex` | Hosted-room creation, join-code reservation, recovery/readiness, capacity, retention, and kill-switch coordinator |
 | `LemonSimUi.HostedGame.Supervisor` | `lib/lemon_sim_ui/hosted_game/supervisor.ex` | One-for-all boundary for room registry, room supervisor, bounded AI tasks, and recovery coordinator |
@@ -124,6 +124,7 @@ For Tic Tac Toe and Skirmish, the user can select a team at launch. On human tur
 | `LemonSimUi.HostedGame.Replay` | `lib/lemon_sim_ui/hosted_game/replay.ex` | Replays canonical redacted events and verifies per-command/final state hashes |
 | `LemonSimUi.HostedLobbyLive`, `HostedJoinLive`, `HostedHostLive`, `HostedPlayerLive`, `HostedWatchLive` | `lib/lemon_sim_ui/live/hosted_werewolf_live.ex` | Responsive hosted room creation, joining, role-blind host control, private player action, and public-safe viewing |
 | `LemonSimUi.HostedGameSessionController` | `lib/lemon_sim_ui/controllers/hosted_game_session_controller.ex` | Validates hosted forms, exchanges tokens into bounded signed sessions, and downloads replay exports |
+| `LemonSimUi.AdminSessionController` | `lib/lemon_sim_ui/controllers/admin_session_controller.ex` | CSRF-protected admin login/logout, safe return-to handling, and signed-session renewal |
 | `LemonSimUi.MetricsController` | `lib/lemon_sim_ui/controllers/metrics_controller.ex` | Protected aggregate runtime/room/arena metrics without credentials or raw provider errors |
 | `LemonSimUi.ArtifactReader` | `lib/lemon_sim_ui/artifact_reader.ex` | Reads `suite.json` and `usage.json`, formats null-safe cost and token totals |
 | `LemonSimUi.WerewolfPlayback` | `lib/lemon_sim_ui/werewolf_playback.ex` | Buffers exact Werewolf snapshots and applies dwell heuristics so live viewing stays legible |
@@ -197,22 +198,22 @@ mix phx.server
 iex -S mix phx.server
 ```
 
-The public lobby is available at `http://localhost:4090/`, hosted Werewolf at `http://localhost:4090/play`, public suite leaderboards at `http://localhost:4090/leaderboards`, and the admin dashboard at `http://localhost:4090/admin` (port configured in `config/dev.exs`). Set `LEMON_SIM_UI_BIND_IP=0.0.0.0` to bind the development server on all interfaces, for example when browsing over Tailscale. Set `LEMON_SIM_UI_PUBLIC_VENDING_LAUNCHER=true` to expose the lobby VendingBench launcher.
+The public lobby is available at `http://localhost:4090/`, hosted Werewolf at `http://localhost:4090/play`, public suite leaderboards at `http://localhost:4090/leaderboards`, and the admin dashboard at `http://localhost:4090/admin` (port configured in `config/dev.exs`). Configure `LEMON_SIM_UI_ACCESS_TOKEN` before opening `/admin`; unauthenticated browsers are redirected to `/admin/login`, where the token is submitted as a CSRF-protected form body rather than a query parameter. Set `LEMON_SIM_UI_BIND_IP=0.0.0.0` to bind the development server on all interfaces, for example when browsing over Tailscale, but only expose admin over HTTPS. Set `LEMON_SIM_UI_PUBLIC_VENDING_LAUNCHER=true` to expose the lobby VendingBench launcher.
 
 Configure benchmark suite discovery with `config :lemon_sim_ui, :suite_roots, ["/tmp/vending-suite"]`. Each root may be a suite directory containing `suite.json` directly or a parent directory containing one suite per child directory.
 
 ### Starting a Simulation from the Dashboard
 
-1. Open `/admin` and click "New Sim" in the sidebar.
+1. Open `/admin` and click "Launch match" in the sidebar or "Launch Werewolf match" in the control-room header.
 2. Choose a domain from the "Domain Protocol" dropdown.
 3. Configure domain-specific options (player count, model assignments, map preset, etc.).
-4. Click "INITIALIZE". The sim starts immediately and its entry appears in the sidebar.
+4. Click "INITIALIZE". The sim starts immediately and its entry appears in the sidebar and control-room history.
 5. Click a sim entry to open the detail view, which shows the domain board, event log, agent strategy (plan history), and data banks (memory files).
-6. For Werewolf, VendingBench, and TCG Shop sims, share `/watch/<sim_id>` for the public spectator page.
+6. For Werewolf, VendingBench, and TCG Shop sims, use "Public view" in the detail header or share `/watch/<sim_id>` for the spectator page.
 
 ### Auto-Loop Operations
 
-The admin dashboard can enable or disable auto-looping for supported domains. Auto-loop is currently used for continuously restarting Werewolf broadcasts after a completed game.
+The admin control room can enable or disable auto-looping for supported domains. Auto-loop is currently used for continuously restarting Werewolf broadcasts after a completed game. When the supervised Werewolf arena is enabled, the control room reports it as the broadcast owner and disables the overlapping auto-loop toggle.
 
 For deployment-driven auto-loop startup, set:
 
@@ -225,7 +226,7 @@ Werewolf arena may not, because both would own the same broadcast domain.
 
 ### Starting or Stopping Sims Remotely
 
-With `LEMON_SIM_UI_ACCESS_TOKEN` configured, operators can manage sims over HTTP without exposing the admin dashboard publicly.
+With `LEMON_SIM_UI_ACCESS_TOKEN` configured, operators can manage sims over HTTP without using the browser session. API authentication is bearer-only:
 
 ```bash
 # Start a public werewolf broadcast
@@ -267,6 +268,7 @@ The create response includes the private admin URL and, for Werewolf, VendingBen
 | `LEMON_SIM_UI_URL_PORT` | Public URL port (defaults to `443` for HTTPS or `80` for HTTP) |
 | `LEMON_SIM_UI_BIND_IP` | Development bind address; use `0.0.0.0` for LAN/Tailscale access |
 | `LEMON_SIM_UI_ACCESS_TOKEN` | Required in production; at least 32 bytes; protects admin dashboard + admin API |
+| `LEMON_SIM_UI_ADMIN_SESSION_TTL_SECONDS` | Browser admin-session lifetime, from `300` to `86400` seconds (default `28800`, eight hours) |
 | `LEMON_SIM_UI_MAX_CONCURRENT_RUNNERS` | Maximum active model runners per instance (default `8`); queued recoveries wait for capacity |
 | `LEMON_SIM_UI_MAX_STORED_SIMS` | Maximum terminal snapshots retained (default `500`); active/recoverable games are never pruned |
 | `LEMON_SIM_UI_PUBLIC_VENDING_LAUNCHER` | Enables the public lobby's fixed VendingBench launch form |

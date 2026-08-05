@@ -19,6 +19,18 @@ defmodule LemonSimUi.LobbyLiveTest do
     :ok
   end
 
+  test "renders a werewolf-first public broadcast lobby without admin navigation", %{conn: conn} do
+    {:ok, _view, html} = live(conn, "/")
+
+    assert html =~ "AI agents lie."
+    assert html =~ "The village decides."
+    assert html =~ "Broadcast lobby"
+    assert html =~ ~s(href="/arena/werewolf")
+    assert html =~ ~s(href="/arena/werewolf/leaderboard")
+    assert html =~ "/assets/werewolf/og-live.png"
+    refute html =~ ~s(href="/admin")
+  end
+
   test "hides public VendingBench launcher by default", %{conn: conn} do
     Application.put_env(:lemon_sim_ui, :public_vending_launcher, false)
 

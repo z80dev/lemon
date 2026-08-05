@@ -7,7 +7,8 @@ defmodule LemonSimUi.Router do
   `/arena/:domain/leaderboard` (league standings), `/watch/:sim_id`
   (spectator), hosted Werewolf `/play`, `/join/:join_code`, and `/rooms/:id/*`
   surfaces, `/healthz`, `/readyz`. `/werewolf` remains as a legacy alias.
-  Admin routes: `/admin` and `/admin/sims/:id` (dashboard, requires access token).
+  Admin routes: `/admin/login`, `/admin`, and `/admin/sims/:id` (operator
+  control room, requires an expiring authenticated browser session).
   API routes: `/api/admin/*` (JSON API, requires access token).
   """
 
@@ -38,12 +39,12 @@ defmodule LemonSimUi.Router do
     plug(:put_root_layout, html: {LemonSimUi.Layouts, :root})
     plug(:protect_from_forgery)
     plug(:put_secure_browser_headers, @browser_security_headers)
-    plug(LemonSimUi.Plugs.RequireAccessToken)
+    plug(:put_no_store)
+    plug(LemonSimUi.Plugs.RequireAccessToken, sources: [:session], on_failure: :redirect)
   end
 
   pipeline :api do
     plug(:accepts, ["json"])
-    plug(:fetch_session)
     plug(LemonSimUi.Plugs.RequireAccessToken, sources: [:authorization])
   end
 
@@ -78,6 +79,14 @@ defmodule LemonSimUi.Router do
     live("/rooms/:room_id/play", HostedPlayerLive, :show)
     live("/rooms/:room_id/watch", HostedWatchLive, :show)
     get("/rooms/:room_id/export", HostedGameSessionController, :export)
+  end
+
+  scope "/admin", LemonSimUi do
+    pipe_through([:public_browser, :no_store])
+
+    get("/login", AdminSessionController, :new)
+    post("/login", AdminSessionController, :create)
+    post("/logout", AdminSessionController, :delete)
   end
 
   scope "/admin", LemonSimUi do

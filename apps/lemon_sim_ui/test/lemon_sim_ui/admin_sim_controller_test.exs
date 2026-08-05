@@ -21,7 +21,7 @@ defmodule LemonSimUi.AdminSimControllerTest do
 
   test "admin API accepts bearer credentials only", %{conn: conn} do
     login = get(conn, "/admin?token=test-sim-ui-token")
-    assert redirected_to(login, 303) == "/admin"
+    assert redirected_to(login, 303) == "/admin/login"
 
     session_conn = login |> recycle() |> post("/api/admin/sims", %{"domain" => "werewolf"})
     assert response(session_conn, 401) == "Unauthorized"

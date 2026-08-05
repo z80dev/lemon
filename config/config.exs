@@ -73,6 +73,8 @@ config :lemon_sim_ui, LemonSimUi.Endpoint,
   live_view: [signing_salt: "lemonsimuilv"]
 
 config :lemon_sim_ui, :access_token, nil
+config :lemon_sim_ui, :allow_insecure_admin, false
+config :lemon_sim_ui, :admin_session_ttl_seconds, 28_800
 config :lemon_sim_ui, :public_vending_launcher, false
 config :lemon_sim_ui, :max_concurrent_runners, 8
 config :lemon_sim_ui, :max_stored_simulations, 500

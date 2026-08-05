@@ -95,6 +95,20 @@ end
 
 sim_ui_access_token = normalized_env.("LEMON_SIM_UI_ACCESS_TOKEN")
 
+if is_binary(sim_ui_access_token) and byte_size(sim_ui_access_token) < 32 do
+  raise "LEMON_SIM_UI_ACCESS_TOKEN must be at least 32 bytes"
+end
+
+if admin_session_ttl = normalized_env.("LEMON_SIM_UI_ADMIN_SESSION_TTL_SECONDS") do
+  case Integer.parse(admin_session_ttl) do
+    {ttl, ""} when ttl in 300..86_400 ->
+      config :lemon_sim_ui, :admin_session_ttl_seconds, ttl
+
+    _ ->
+      raise "LEMON_SIM_UI_ADMIN_SESSION_TTL_SECONDS must be an integer from 300 to 86400"
+  end
+end
+
 sim_release_name = normalized_env.("RELEASE_NAME")
 sim_ui_secret_key_base = normalized_env.("LEMON_SIM_UI_SECRET_KEY_BASE")
 
@@ -116,10 +130,6 @@ if sim_ui_endpoint_enabled? do
 
   if missing != [] do
     raise "Missing required LemonSim UI production environment: #{Enum.join(missing, ", ")}"
-  end
-
-  if byte_size(sim_ui_access_token) < 32 do
-    raise "LEMON_SIM_UI_ACCESS_TOKEN must be at least 32 bytes"
   end
 
   if byte_size(sim_ui_secret_key_base) < 64 do

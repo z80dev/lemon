@@ -1,6 +1,6 @@
 defmodule LemonSimUi.SimDashboardLive do
   @moduledoc """
-  LiveView dashboard for monitoring and controlling LemonSim simulations.
+  Protected operator control room for monitoring and controlling LemonSim simulations.
 
   Shows a sidebar listing all known simulations with their domain type and
   live/stopped status. Selecting a sim renders the appropriate game board
@@ -9,14 +9,15 @@ defmodule LemonSimUi.SimDashboardLive do
   IntelNetwork, Legislature, Pandemic, MurderMystery, or SupplyChain) alongside an event log, agent
   strategy history, and a memory/data-bank viewer.
 
-  Also provides a "New Sim" form for launching simulations with configurable
+  The overview promotes Werewolf broadcast status, public-preview links,
+  automation ownership, and recent runs. A launch form supports configurable
   domains, player counts, model assignments, and optional human participation.
   Real-time updates are delivered via `LemonCore.Bus` pub/sub.
   """
 
   use LemonSimUi, :live_view
 
-  alias LemonSimUi.{SimHelpers, SimManager, WerewolfPlayback}
+  alias LemonSimUi.{Arena, SimHelpers, SimManager, WerewolfPlayback}
   alias LemonSim.Kernel.{Store, Bus}
   alias LemonSim.Examples.Skirmish
 
@@ -63,13 +64,14 @@ defmodule LemonSimUi.SimDashboardLive do
        playback_timer_ref: nil,
        domain_type: nil,
        show_new_sim_form: false,
-       new_sim_domain: "tic_tac_toe",
+       new_sim_domain: "werewolf",
        new_player_count: 6,
        seat_providers: %{},
        seat_models: %{},
        human_player: nil,
        auto_loop_status: SimManager.auto_loop_status(),
-       page_title: "LemonSim"
+       werewolf_arena_status: Arena.status(:werewolf),
+       page_title: "LemonSim Control Room"
      )}
   end
 
@@ -117,7 +119,7 @@ defmodule LemonSimUi.SimDashboardLive do
        playback: nil,
        playback_timer_ref: nil,
        domain_type: nil,
-       page_title: "LemonSim"
+       page_title: "LemonSim Control Room"
      )}
   end
 
@@ -320,21 +322,35 @@ defmodule LemonSimUi.SimDashboardLive do
   end
 
   def handle_event("refresh_sims", _params, socket) do
-    {:noreply, assign(socket, sims: build_sim_list(), running: SimManager.list_running())}
+    {:noreply,
+     assign(socket,
+       sims: build_sim_list(),
+       running: SimManager.list_running(),
+       werewolf_arena_status: Arena.status(:werewolf)
+     )}
   end
 
   def handle_event("toggle_auto_loop", %{"domain" => domain_str}, socket) do
     domain = String.to_existing_atom(domain_str)
     current = socket.assigns.auto_loop_status
 
-    if Map.has_key?(current, domain) do
-      SimManager.disable_auto_loop(domain)
+    if domain == :werewolf and Map.get(socket.assigns.werewolf_arena_status, :enabled, false) do
+      {:noreply,
+       put_flash(
+         socket,
+         :error,
+         "The configured Werewolf arena already owns continuous broadcasts"
+       )}
     else
-      default_opts = [player_count: default_player_count(domain)]
-      SimManager.enable_auto_loop(domain, default_opts)
-    end
+      if Map.has_key?(current, domain) do
+        SimManager.disable_auto_loop(domain)
+      else
+        default_opts = [player_count: default_player_count(domain)]
+        SimManager.enable_auto_loop(domain, default_opts)
+      end
 
-    {:noreply, assign(socket, auto_loop_status: SimManager.auto_loop_status())}
+      {:noreply, assign(socket, auto_loop_status: SimManager.auto_loop_status())}
+    end
   end
 
   # TicTacToe human move
@@ -457,7 +473,8 @@ defmodule LemonSimUi.SimDashboardLive do
      assign(socket,
        sims: build_sim_list(),
        running: SimManager.list_running(),
-       auto_loop_status: SimManager.auto_loop_status()
+       auto_loop_status: SimManager.auto_loop_status(),
+       werewolf_arena_status: Arena.status(:werewolf)
      )}
   end
 
@@ -486,35 +503,47 @@ defmodule LemonSimUi.SimDashboardLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="flex h-screen overflow-hidden text-slate-200">
+    <div class="flex h-screen overflow-hidden bg-[#080a0d] text-stone-200">
       <!-- Sidebar toggle button (visible when sidebar is closed) -->
       <button
         :if={!@sidebar_open}
         phx-click="toggle_sidebar"
-        class="fixed top-3 left-3 z-20 w-8 h-8 rounded-lg glass-panel border border-glass-border flex items-center justify-center text-slate-400 hover:text-cyan-400 hover:border-cyan-500/50 transition-all shadow-lg"
+        class="fixed left-3 top-3 z-50 flex h-11 w-11 items-center justify-center rounded-xl border border-white/10 bg-[#11141a]/95 text-stone-300 shadow-xl transition hover:border-amber-200/30 hover:text-white"
         title="Show sidebar"
+        aria-label="Show control room navigation"
       >
         <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
           <path fill-rule="evenodd" d="M3 5a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 10a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 15a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clip-rule="evenodd" />
         </svg>
       </button>
 
+      <button
+        :if={@sidebar_open}
+        phx-click="toggle_sidebar"
+        class="fixed inset-0 z-30 bg-black/70 backdrop-blur-sm lg:hidden"
+        aria-label="Close control room navigation"
+      ></button>
+
       <!-- Sidebar -->
-      <aside :if={@sidebar_open} class="w-56 glass-panel flex flex-col flex-shrink-0 z-10 border-r border-glass-border">
-        <div class="px-4 py-3 border-b border-glass-border flex items-center gap-2.5 bg-slate-900/30">
-          <div class="w-7 h-7 rounded-lg shadow-neon-blue bg-gradient-to-br from-blue-500 to-cyan-400 flex items-center justify-center font-bold text-sm text-white">
-            L
-          </div>
+      <aside
+        :if={@sidebar_open}
+        class="fixed inset-y-0 left-0 z-40 flex w-[min(18rem,88vw)] flex-shrink-0 flex-col border-r border-white/10 bg-[#0d1015]/98 shadow-2xl shadow-black/50 backdrop-blur-xl lg:relative lg:z-10 lg:w-64"
+      >
+        <div class="flex items-center gap-3 border-b border-white/10 px-4 py-4">
+          <img src="/assets/werewolf/moon.png" alt="" aria-hidden="true" class="h-9 w-9 rounded-full border border-amber-100/20 object-cover" />
           <div class="flex-1 min-w-0">
-            <button phx-click="go_home" class="text-base font-bold text-white hover:text-cyan-400 transition tracking-tight text-glow-cyan">
-              LemonSim
+            <button phx-click="go_home" class="text-left text-base font-bold tracking-tight text-white transition hover:text-amber-100">
+              Control Room
             </button>
-            <p class="text-[10px] text-slate-400 font-mono">{length(@sims)} active</p>
+            <p class="text-[10px] font-bold uppercase tracking-[0.18em] text-stone-500">
+              {length(@running)} running · {length(@sims)} stored
+            </p>
           </div>
           <button
             phx-click="toggle_sidebar"
-            class="w-6 h-6 rounded flex items-center justify-center text-slate-500 hover:text-cyan-400 hover:bg-slate-800/50 transition-all"
+            class="flex h-9 w-9 items-center justify-center rounded-lg text-stone-500 transition hover:bg-white/5 hover:text-white"
             title="Hide sidebar"
+            aria-label="Hide control room navigation"
           >
             <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
               <path fill-rule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clip-rule="evenodd" />
@@ -522,36 +551,53 @@ defmodule LemonSimUi.SimDashboardLive do
           </button>
         </div>
 
-        <div class="px-3 py-2.5 border-b border-glass-border bg-slate-900/20 space-y-2">
-          <button phx-click="toggle_new_sim_form" class="w-full glass-button font-medium py-2 px-3 rounded-lg transition-all flex items-center justify-center gap-1.5 text-sm">
+        <div class="space-y-2 border-b border-white/10 px-3 py-3">
+          <button phx-click="toggle_new_sim_form" class="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-amber-100 px-3 text-sm font-bold text-stone-950 transition hover:bg-white">
             <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
               <path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd" />
             </svg>
-            New Sim
+            Launch match
           </button>
+
+          <a
+            href={~p"/"}
+            target="_blank"
+            rel="noopener"
+            class="inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.035] px-3 text-xs font-semibold text-stone-300 transition hover:border-white/20 hover:text-white"
+          >
+            Open public lobby <span aria-hidden="true">↗</span>
+          </a>
 
           <%!-- Auto-loop controls --%>
           <div class="mt-2 pt-2 border-t border-glass-border/50">
-            <div class="text-[9px] font-mono uppercase tracking-widest text-fuchsia-400 font-bold mb-1.5">Auto-Loop</div>
+            <div class="mb-1.5 text-[9px] font-bold uppercase tracking-[0.18em] text-violet-300">Broadcast automation</div>
             <div class="space-y-1">
               <% werewolf_loop = Map.get(@auto_loop_status, :werewolf) %>
+              <% arena_enabled = Map.get(@werewolf_arena_status, :enabled, false) %>
               <button
                 phx-click="toggle_auto_loop"
                 phx-value-domain="werewolf"
+                disabled={arena_enabled}
                 class={[
                   "w-full text-left text-[11px] px-2.5 py-1.5 rounded border transition-all flex items-center justify-between",
-                  if(werewolf_loop,
-                    do: "bg-emerald-900/30 border-emerald-500/30 text-emerald-400",
-                    else: "bg-slate-800/30 border-glass-border text-slate-500 hover:text-slate-300"
-                  )
+                  cond do
+                    arena_enabled ->
+                      "cursor-not-allowed border-violet-500/30 bg-violet-900/20 text-violet-300"
+
+                    werewolf_loop ->
+                      "bg-emerald-900/30 border-emerald-500/30 text-emerald-400"
+
+                    true ->
+                      "bg-slate-800/30 border-glass-border text-slate-500 hover:text-slate-300"
+                  end
                 ]}
               >
                 <span class="font-mono">Werewolf</span>
                 <span class="text-[9px] font-bold uppercase">
-                  <%= if werewolf_loop do %>
-                    ON (#<%= werewolf_loop.game_count %>)
-                  <% else %>
-                    OFF
+                  <%= cond do %>
+                    <% arena_enabled -> %> ARENA
+                    <% werewolf_loop -> %> ON ({werewolf_loop.game_count})
+                    <% true -> %> OFF
                   <% end %>
                 </span>
               </button>
@@ -603,6 +649,17 @@ defmodule LemonSimUi.SimDashboardLive do
             </button>
           <% end %>
         </nav>
+
+        <div class="border-t border-white/10 p-3">
+          <.form for={%{}} action={~p"/admin/logout"} method="post">
+            <button
+              type="submit"
+              class="inline-flex min-h-10 w-full items-center justify-center rounded-xl border border-white/10 bg-white/[0.025] px-3 text-xs font-semibold text-stone-400 transition hover:border-red-300/20 hover:bg-red-500/5 hover:text-red-100"
+            >
+              Sign out of admin
+            </button>
+          </.form>
+        </div>
       </aside>
 
       <!-- Main content -->
@@ -611,23 +668,23 @@ defmodule LemonSimUi.SimDashboardLive do
           <.flash_group flash={@flash} />
         </div>
         <!-- New Sim Form Modal -->
-        <div :if={@show_new_sim_form} class="fixed inset-0 bg-slate-950/80 backdrop-blur-lg z-50 flex items-center justify-center p-4 transition-all">
-          <div class="glass-panel border-cyan-500/20 rounded-2xl w-full max-w-md shadow-neon-blue overflow-hidden animate-[fade-in-up_0.3s_ease-out]">
-            <div class="p-5 border-b border-glass-border flex items-center justify-between bg-slate-900/40">
-              <h2 class="text-xl font-bold text-white flex items-center gap-2 text-glow-cyan">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-cyan-400" viewBox="0 0 20 20" fill="currentColor">
-                  <path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd" />
-                </svg>
-                Launch Simulation
-              </h2>
-              <button phx-click="toggle_new_sim_form" class="text-slate-400 hover:text-white transition-colors w-8 h-8 flex items-center justify-center rounded-full hover:bg-slate-800/50">
+        <div :if={@show_new_sim_form} class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-3 backdrop-blur-lg transition-all sm:p-5">
+          <div class="max-h-[calc(100vh-1.5rem)] w-full max-w-3xl overflow-y-auto rounded-2xl border border-white/10 bg-[#11141a] shadow-2xl shadow-black/60 animate-[fade-in-up_0.3s_ease-out] sm:max-h-[calc(100vh-2.5rem)]">
+            <div class="sticky top-0 z-10 flex items-center justify-between border-b border-white/10 bg-[#11141a]/95 p-5 backdrop-blur-xl">
+              <div>
+                <p class="text-[10px] font-bold uppercase tracking-[0.2em] text-amber-300/75">Private operator action</p>
+                <h2 class="mt-1 text-xl font-bold text-white">
+                  Launch a simulation
+                </h2>
+              </div>
+              <button phx-click="toggle_new_sim_form" class="flex h-11 w-11 items-center justify-center rounded-full text-stone-400 transition hover:bg-white/5 hover:text-white" aria-label="Close launch form">
                 <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
                   <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
                 </svg>
               </button>
             </div>
 
-            <form id="new-sim-form" phx-change="change_domain" phx-submit="start_sim" class="p-6 space-y-5 bg-slate-900/20">
+            <form id="new-sim-form" phx-change="change_domain" phx-submit="start_sim" class="space-y-5 p-5 sm:p-6">
               <div class="space-y-4">
                 <.select
                   name="domain"
@@ -742,32 +799,233 @@ defmodule LemonSimUi.SimDashboardLive do
           </div>
         </div>
 
-        <!-- Empty state -->
-        <div :if={is_nil(@selected_sim) && @live_action == :index} class="flex items-center justify-center h-full p-6">
-          <div class="text-center glass-panel p-12 rounded-2xl max-w-lg w-full relative overflow-hidden group">
-            <div class="absolute inset-0 bg-blue-500/5 opacity-0 group-hover:opacity-100 transition-opacity duration-1000"></div>
-            <div class="w-28 h-28 bg-slate-900/80 rounded-full flex items-center justify-center mx-auto mb-8 shadow-[0_0_30px_rgba(6,182,212,0.15)] border border-cyan-500/30">
-              <span class="text-6xl text-cyan-400 drop-shadow-[0_0_15px_rgba(6,182,212,0.8)]">&#x26A1;</span>
+        <!-- Operator overview -->
+        <div :if={is_nil(@selected_sim) && @live_action == :index} class="min-h-full bg-[#080a0d]">
+          <% active_sims = Enum.filter(@sims, fn sim -> sim.sim_id in @running end) %>
+          <% active_werewolf = Enum.find(active_sims, &(&1.domain_type == :werewolf)) %>
+          <% werewolf_loop = Map.get(@auto_loop_status, :werewolf) %>
+          <% werewolf_arena_enabled = Map.get(@werewolf_arena_status, :enabled, false) %>
+
+          <header class="border-b border-white/10 bg-[#0d1015]">
+            <div class="mx-auto flex max-w-7xl flex-col justify-between gap-6 px-5 py-7 sm:px-8 lg:flex-row lg:items-end lg:px-10">
+              <div>
+                <div class="mb-3 flex flex-wrap items-center gap-2">
+                  <span class="rounded-full border border-amber-200/20 bg-amber-200/10 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-amber-100">
+                    Private admin
+                  </span>
+                  <span class="inline-flex items-center gap-2 rounded-full border border-emerald-300/15 bg-emerald-300/5 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-emerald-200">
+                    <span class="h-1.5 w-1.5 rounded-full bg-emerald-300"></span> System ready
+                  </span>
+                </div>
+                <h1 class="font-display text-4xl font-semibold tracking-tight text-white sm:text-5xl">
+                  Werewolf Control Room
+                </h1>
+                <p class="mt-3 max-w-2xl text-sm leading-6 text-stone-400">
+                  Launch matches, monitor the broadcast, and move between the private operator view and the public spectator experience.
+                </p>
+              </div>
+              <div class="flex flex-col gap-3 sm:flex-row">
+                <a href={~p"/"} target="_blank" rel="noopener" class="public-secondary-cta">
+                  View public lobby <span aria-hidden="true">↗</span>
+                </a>
+                <button phx-click="toggle_new_sim_form" class="public-primary-cta">
+                  Launch Werewolf match <span aria-hidden="true">+</span>
+                </button>
+              </div>
             </div>
-            <h2 class="text-3xl font-bold text-white tracking-tight mb-3 text-glow-cyan">SYSTEM STANDBY</h2>
-            <p class="text-slate-400 mb-10 leading-relaxed font-mono text-sm max-w-sm mx-auto">Awaiting operation parameters. Connect to active simulation link or initialize new protocol.</p>
-            <button phx-click="toggle_new_sim_form" class="glass-button font-semibold py-3 px-8 rounded-lg shadow-neon-blue inline-flex items-center gap-3 text-[15px] uppercase tracking-wider">
-              Initialize Protocol
-              <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                <path fill-rule="evenodd" d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clip-rule="evenodd" />
-              </svg>
-            </button>
-          </div>
+          </header>
+
+          <main class="mx-auto max-w-7xl space-y-6 px-5 py-7 sm:px-8 lg:px-10 lg:py-10">
+            <div class="grid gap-6 xl:grid-cols-[minmax(0,1.45fr)_minmax(19rem,0.55fr)]">
+              <section class="overflow-hidden rounded-3xl border border-white/10 bg-[#11141a]">
+                <div class="flex flex-col justify-between gap-5 border-b border-white/10 p-5 sm:flex-row sm:items-center sm:p-6">
+                  <div>
+                    <p class="text-[10px] font-bold uppercase tracking-[0.2em] text-red-300">Public broadcast</p>
+                    <h2 class="mt-2 text-2xl font-semibold text-white">
+                      {if active_werewolf, do: "A village is live", else: "No Werewolf match is running"}
+                    </h2>
+                  </div>
+                  <span class={[
+                    "inline-flex w-fit items-center gap-2 rounded-full border px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.18em]",
+                    if(active_werewolf,
+                      do: "border-red-300/20 bg-red-950/40 text-red-100",
+                      else: "border-stone-500/20 bg-stone-900 text-stone-400"
+                    )
+                  ]}>
+                    <span class={[
+                      "h-2 w-2 rounded-full",
+                      if(active_werewolf, do: "animate-pulse bg-red-400", else: "bg-stone-600")
+                    ]}></span>
+                    {if active_werewolf, do: "On air", else: "Off air"}
+                  </span>
+                </div>
+
+                <%= if active_werewolf do %>
+                  <div class="p-5 sm:p-6">
+                    <div class="grid gap-5 md:grid-cols-[1fr_auto] md:items-center">
+                      <div class="min-w-0">
+                        <p class="truncate font-mono text-xs text-stone-500">{active_werewolf.sim_id}</p>
+                        <p class="mt-3 text-lg font-semibold text-stone-100">{active_werewolf.world_summary}</p>
+                        <div class="mt-4 flex flex-wrap gap-2 text-xs text-stone-400">
+                          <span class="rounded-lg border border-white/10 bg-black/20 px-2.5 py-1.5">
+                            Version {active_werewolf.version}
+                          </span>
+                          <span class="rounded-lg border border-white/10 bg-black/20 px-2.5 py-1.5">
+                            {active_werewolf.event_count} recent events
+                          </span>
+                        </div>
+                      </div>
+                      <div class="flex flex-col gap-2 sm:flex-row md:flex-col">
+                        <button
+                          phx-click="select_sim"
+                          phx-value-sim_id={active_werewolf.sim_id}
+                          class="inline-flex min-h-11 items-center justify-center rounded-xl bg-amber-100 px-4 text-sm font-bold text-stone-950 transition hover:bg-white"
+                        >
+                          Manage match
+                        </button>
+                        <a
+                          href={~p"/watch/#{active_werewolf.sim_id}"}
+                          target="_blank"
+                          rel="noopener"
+                          class="inline-flex min-h-11 items-center justify-center rounded-xl border border-white/10 bg-white/[0.035] px-4 text-sm font-semibold text-stone-200 transition hover:border-white/20 hover:text-white"
+                        >
+                          Open broadcast ↗
+                        </a>
+                      </div>
+                    </div>
+                  </div>
+                <% else %>
+                  <div class="grid gap-6 p-5 sm:p-6 md:grid-cols-[1fr_auto] md:items-center">
+                    <p class="max-w-2xl text-sm leading-6 text-stone-400">
+                      Start a one-off show match with a custom lineup, or enable continuous rotation so the public arena automatically advances from game to game.
+                    </p>
+                    <button phx-click="toggle_new_sim_form" class="public-secondary-cta">
+                      Configure a match
+                    </button>
+                  </div>
+                <% end %>
+
+                <div class="flex flex-col justify-between gap-4 border-t border-white/10 bg-black/15 p-5 sm:flex-row sm:items-center sm:px-6">
+                  <div>
+                    <p class="text-sm font-semibold text-white">
+                      {if werewolf_arena_enabled, do: "Always-on arena", else: "Continuous Werewolf rotation"}
+                    </p>
+                    <p class="mt-1 text-xs text-stone-500">
+                      {if werewolf_arena_enabled,
+                        do: "Configured at startup with seeded lineups and persistent league scoring.",
+                        else: "Starts a new broadcast after each completed match."}
+                    </p>
+                  </div>
+                  <button
+                    phx-click="toggle_auto_loop"
+                    phx-value-domain="werewolf"
+                    disabled={werewolf_arena_enabled}
+                    class={[
+                      "inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border px-4 text-xs font-bold uppercase tracking-[0.15em] transition",
+                      cond do
+                        werewolf_arena_enabled ->
+                          "cursor-not-allowed border-violet-300/20 bg-violet-300/10 text-violet-100"
+
+                        werewolf_loop ->
+                          "border-emerald-300/25 bg-emerald-300/10 text-emerald-100 hover:bg-emerald-300/15"
+
+                        true ->
+                          "border-white/10 bg-white/[0.035] text-stone-300 hover:border-white/20 hover:text-white"
+                      end
+                    ]}
+                  >
+                    <span class={[
+                      "h-2 w-2 rounded-full",
+                      cond do
+                        werewolf_arena_enabled -> "bg-violet-300"
+                        werewolf_loop -> "bg-emerald-300"
+                        true -> "bg-stone-600"
+                      end
+                    ]}></span>
+                    <%= cond do %>
+                      <% werewolf_arena_enabled -> %> Configured
+                      <% werewolf_loop -> %> Running · game {werewolf_loop.game_count}
+                      <% true -> %> Turn on
+                    <% end %>
+                  </button>
+                </div>
+              </section>
+
+              <aside class="rounded-3xl border border-white/10 bg-[#11141a] p-5 sm:p-6">
+                <p class="text-[10px] font-bold uppercase tracking-[0.2em] text-violet-300">At a glance</p>
+                <dl class="mt-5 divide-y divide-white/10">
+                  <div class="flex items-center justify-between gap-4 py-4 first:pt-0">
+                    <dt class="text-sm text-stone-400">Running now</dt>
+                    <dd class="text-2xl font-semibold text-white">{length(active_sims)}</dd>
+                  </div>
+                  <div class="flex items-center justify-between gap-4 py-4">
+                    <dt class="text-sm text-stone-400">Werewolf on air</dt>
+                    <dd class={if(active_werewolf, do: "font-semibold text-emerald-200", else: "font-semibold text-stone-500")}>
+                      {if active_werewolf, do: "Yes", else: "No"}
+                    </dd>
+                  </div>
+                  <div class="flex items-center justify-between gap-4 py-4">
+                    <dt class="text-sm text-stone-400">Stored simulations</dt>
+                    <dd class="font-semibold text-stone-200">{length(@sims)}</dd>
+                  </div>
+                  <div class="flex items-center justify-between gap-4 py-4 last:pb-0">
+                    <dt class="text-sm text-stone-400">Admin access</dt>
+                    <dd class="font-semibold text-amber-100">Protected</dd>
+                  </div>
+                </dl>
+              </aside>
+            </div>
+
+            <section class="rounded-3xl border border-white/10 bg-[#11141a] p-5 sm:p-6">
+              <div class="flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
+                <div>
+                  <p class="text-[10px] font-bold uppercase tracking-[0.2em] text-stone-500">Operations history</p>
+                  <h2 class="mt-2 text-xl font-semibold text-white">Recent simulations</h2>
+                </div>
+                <span class="text-xs text-stone-500">Select a run for controls, telemetry, and the full board.</span>
+              </div>
+
+              <%= if @sims == [] do %>
+                <div class="mt-6 rounded-2xl border border-dashed border-white/10 px-5 py-10 text-center">
+                  <p class="text-sm text-stone-400">No simulations have been stored yet.</p>
+                </div>
+              <% else %>
+                <div class="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  <button
+                    :for={sim <- Enum.take(@sims, 9)}
+                    phx-click="select_sim"
+                    phx-value-sim_id={sim.sim_id}
+                    class="group rounded-2xl border border-white/10 bg-black/15 p-4 text-left transition hover:border-amber-200/20 hover:bg-white/[0.035]"
+                  >
+                    <div class="flex items-center justify-between gap-3">
+                      <span class={[
+                        "rounded-full border px-2 py-1 text-[9px] font-bold uppercase tracking-wider",
+                        SimHelpers.domain_badge_color(sim.domain_type)
+                      ]}>
+                        {SimHelpers.domain_label(sim.domain_type)}
+                      </span>
+                      <span class={[
+                        "h-2 w-2 rounded-full",
+                        if(sim.sim_id in @running, do: "animate-pulse bg-emerald-300", else: "bg-stone-600")
+                      ]}></span>
+                    </div>
+                    <p class="mt-4 truncate font-mono text-xs font-semibold text-stone-200 group-hover:text-white">{sim.sim_id}</p>
+                    <p class="mt-2 truncate text-xs text-stone-500">{sim.world_summary}</p>
+                  </button>
+                </div>
+              <% end %>
+            </section>
+          </main>
         </div>
 
         <!-- Sim detail view -->
         <div :if={@selected_sim} class="p-6 md:p-8">
           <!-- Header -->
-          <div class="flex items-center justify-between mb-8 pb-4 border-b border-glass-border relative">
+          <div class="relative mb-8 flex flex-col justify-between gap-5 border-b border-glass-border pb-4 lg:flex-row lg:items-center">
             <div class="absolute bottom-[-1px] left-0 right-0 h-px bg-gradient-to-r from-cyan-500 via-transparent to-transparent opacity-50"></div>
             <div>
-              <div class="flex items-center gap-4">
-                <h1 class="text-4xl font-extrabold text-white tracking-tight text-glow-blue">{@selected_sim.sim_id}</h1>
+              <div class="flex flex-wrap items-center gap-3 sm:gap-4">
+                <h1 class="break-all text-2xl font-extrabold tracking-tight text-white sm:text-4xl">{@selected_sim.sim_id}</h1>
                 <span class={[
                   "text-[10px] px-3 py-1.5 rounded bg-slate-800/80 font-mono tracking-widest uppercase border backdrop-blur-sm shadow-sm",
                   SimHelpers.domain_badge_color(@domain_type)
@@ -785,14 +1043,23 @@ defmodule LemonSimUi.SimDashboardLive do
                 <span>{length(@selected_sim.recent_events)} telemetry packets</span>
               </p>
             </div>
-            <div class="flex gap-3">
+            <div class="flex flex-wrap justify-end gap-3">
+              <a
+                :if={public_watch_supported?(@domain_type)}
+                href={~p"/watch/#{@selected_sim.sim_id}"}
+                target="_blank"
+                rel="noopener"
+                class="inline-flex min-h-11 items-center justify-center rounded-xl border border-white/10 bg-white/[0.035] px-4 text-sm font-semibold text-stone-200 transition hover:border-amber-200/25 hover:text-white"
+              >
+                Public view ↗
+              </a>
               <.button
                 :if={@selected_sim.sim_id in @running}
                 phx-click="stop_sim"
                 phx-value-sim_id={@selected_sim.sim_id}
                 class="bg-red-500/10 hover:bg-red-500/20 text-red-500 border border-red-500/30 transition-all font-bold tracking-widest uppercase px-5 py-2.5 rounded shadow-neon-red"
               >
-                Abort Sim
+                Stop run
               </.button>
               <.button
                 :if={resume_supported?(@domain_type) and @selected_sim.sim_id not in @running and Map.get((@selected_sim && @selected_sim.world) || %{}, :status, Map.get((@selected_sim && @selected_sim.world) || %{}, "status")) == "in_progress"}
@@ -1066,6 +1333,10 @@ defmodule LemonSimUi.SimDashboardLive do
 
   defp resume_supported?(:werewolf), do: true
   defp resume_supported?(_domain), do: false
+
+  defp public_watch_supported?(domain) do
+    domain in LemonSimUi.SpectatorLive.supported_domains()
+  end
 
   defp queue_werewolf_selected_sim(socket, updated_state) do
     playback =
