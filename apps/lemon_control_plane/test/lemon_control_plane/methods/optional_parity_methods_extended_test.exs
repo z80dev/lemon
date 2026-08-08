@@ -1487,11 +1487,12 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsExtendedTest do
     end
 
     test "reports unknown requested providers as not ready" do
-      assert {:ok, result} = ProvidersStatus.handle(%{"provider" => "opencode-go"}, @ctx)
+      assert {:ok, result} =
+               ProvidersStatus.handle(%{"provider" => "definitely_not_a_real_provider"}, @ctx)
 
       assert [
                %{
-                 "provider" => "opencode_go",
+                 "provider" => "definitely_not_a_real_provider",
                  "known" => false,
                  "configured" => false,
                  "credentialReady" => false
