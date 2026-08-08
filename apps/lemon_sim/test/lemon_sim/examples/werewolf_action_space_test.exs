@@ -120,6 +120,13 @@ defmodule LemonSim.Examples.WerewolfActionSpaceTest do
     gpt = budget.(%Model{id: "gpt", name: "GPT", provider: :github_copilot})
     assert gpt.max_tokens == 768
     assert gpt.tool_choice == :any
+
+    # DeepSeek via OpenCode Go rejects tool_choice "required" while thinking is
+    # enabled, so reasoning must be forced off (reasoning_effort "none").
+    ds = budget.(%Model{id: "deepseek-v4-flash", name: "DS", provider: :opencode_go})
+    assert ds.max_tokens == 768
+    assert ds.reasoning == :none
+    assert ds.tool_choice == :any
   end
 
   test "doctor cannot protect the same player on consecutive nights" do
@@ -251,5 +258,41 @@ defmodule LemonSim.Examples.WerewolfActionSpaceTest do
 
     assert {:ok, actions} = ActionSpace.available_actions(state, "Alice")
     assert Enum.map(actions, & &1["name"]) == ["sleep"]
+  end
+
+  test "eliminated players get the make_last_words tool in last-words phases" do
+    for phase <- ["last_words_night", "last_words_vote"] do
+      state =
+        State.new(
+          sim_id: "werewolf-last-words",
+          world: %{
+            status: "in_progress",
+            phase: phase,
+            active_actor_id: "Bram",
+            players: %{
+              "Bram" => %{role: "villager", status: "dead"},
+              "Alice" => %{role: "villager", status: "alive"},
+              "Cora" => %{role: "werewolf", status: "alive"}
+            }
+          }
+        )
+
+      assert {:ok, [tool]} = ActionSpace.tools(state, [])
+      assert tool.name == "make_last_words"
+    end
+  end
+
+  test "projector opts never instruct the model to consult memory files" do
+    opts = Werewolf.projector_opts()
+
+    system_prompt = Keyword.fetch!(opts, :system_prompt)
+    refute system_prompt =~ "Use memory tools"
+    # the prompt must explicitly forbid the hallucinated tools instead
+    assert system_prompt =~ "read_index"
+
+    memory = opts |> Keyword.fetch!(:section_overrides) |> Map.get(:memory)
+
+    assert memory[:content] =~ "no memory files"
+    refute memory[:content] =~ "Read index.md first"
   end
 end

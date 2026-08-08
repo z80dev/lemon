@@ -11,7 +11,7 @@ defmodule LemonSim.LLM.Deciders.ToolLoopDecider do
   require Logger
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.{AssistantMessage, Context, Tool, ToolCall, ToolResultMessage}
+  alias Ai.Types.{AssistantMessage, Context, Tool, ToolCall, ToolResultMessage, UserMessage}
   alias LemonSim.LLM.Deciders.ToolPolicies.SingleTerminal
   alias LemonSim.LLM.Usage
 
@@ -84,16 +84,37 @@ defmodule LemonSim.LLM.Deciders.ToolLoopDecider do
         with {:ok, tool_calls} <- fetch_tool_calls(assistant, max_tool_calls_per_turn) do
           case tool_calls do
             [] ->
-              if empty_response?(assistant) and empty_retries < max_empty_retries do
+              if empty_retries < max_empty_retries do
                 retry = empty_retries + 1
 
                 Logger.debug(
-                  "ToolLoopDecider empty API response retry=#{retry} max_retries=#{max_empty_retries}"
+                  "ToolLoopDecider response without tool call retry=#{retry} " <>
+                    "max_retries=#{max_empty_retries}"
                 )
 
                 case backoff_empty_response(opts, retry) do
-                  :ok -> run_loop(state, model, opts, turn, retry)
-                  {:error, _reason} = error -> error
+                  :ok ->
+                    # DeepSeek-class models occasionally answer in prose despite
+                    # a required tool_choice. Show the model its own reply and
+                    # insist on a tool call before retrying the same turn.
+                    nudge =
+                      "Your previous response did not call a tool. " <>
+                        "You MUST call exactly one of the available tools with valid " <>
+                        "arguments; text-only responses are rejected and the turn " <>
+                        "will be retried."
+
+                    retried_context =
+                      state.context
+                      |> append_message(assistant)
+                      |> append_message(%UserMessage{
+                        content: nudge,
+                        timestamp: System.system_time(:millisecond)
+                      })
+
+                    run_loop(%{state | context: retried_context}, model, opts, turn, retry)
+
+                  {:error, _reason} = error ->
+                    error
                 end
               else
                 {:error, tool_call_required_error(assistant, state.executed_calls)}
@@ -482,13 +503,6 @@ defmodule LemonSim.LLM.Deciders.ToolLoopDecider do
   end
 
   defp decision_from_tool_call(_policy, _call, _tool, _result, _is_error, _opts), do: nil
-
-  defp empty_response?(%AssistantMessage{content: []}), do: true
-
-  defp empty_response?(%AssistantMessage{} = msg) do
-    text = Ai.get_text(msg)
-    text == "" or is_nil(text)
-  end
 
   defp tool_call_required_error(%AssistantMessage{} = assistant, executed_calls) do
     {:tool_call_required,
