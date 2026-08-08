@@ -148,4 +148,9 @@ export default {
     // Allow mermaid diagrams if included in docs
     // theme: { light: "github-light", dark: "github-dark" },
   },
+
+  // Links to Elixir source files (e.g. ../apps/lemon_core/lib/lemon_core/env.ex)
+  // are intentional references to real files, but VitePress treats unknown
+  // extensions as HTML pages and flags them as dead links.
+  ignoreDeadLinks: [/lib\/lemon_core\/env\.ex$/],
 }

@@ -26,26 +26,27 @@ defmodule LemonSim.Examples.Werewolf.Updater do
 
   defp apply_normalized_event(state, event) do
     result =
-      with :ok <- validate_thought(event) do
-        case event.kind do
-          "choose_victim" -> NightActions.apply_choose_victim(state, event)
-          "investigate_player" -> NightActions.apply_investigate_player(state, event)
-          "protect_player" -> NightActions.apply_protect_player(state, event)
-          "sleep" -> NightActions.apply_sleep(state, event)
-          "night_wander" -> NightActions.apply_night_wander(state, event)
-          "make_statement" -> Discussion.apply_make_statement(state, event)
-          "cast_vote" -> Voting.apply_cast_vote(state, event)
-          "make_last_words" -> Elimination.apply_make_last_words(state, event)
-          "wolf_chat" -> WolfChat.apply_wolf_chat(state, event)
-          "make_accusation" -> Discussion.apply_make_accusation(state, event)
-          "request_meeting" -> Meetings.apply_request_meeting(state, event)
-          "meeting_message" -> Meetings.apply_meeting_message(state, event)
-          "use_item" -> NightActions.apply_use_item(state, event)
-          "anonymous_message" -> Chat.apply_anonymous_message(state, event)
-          "decision_missed" -> apply_decision_missed(state, event)
-          _ -> {:error, {:invalid_event_kind, event.kind}}
-        end
-      else
+      case validate_thought(event) do
+        :ok ->
+          case event.kind do
+            "choose_victim" -> NightActions.apply_choose_victim(state, event)
+            "investigate_player" -> NightActions.apply_investigate_player(state, event)
+            "protect_player" -> NightActions.apply_protect_player(state, event)
+            "sleep" -> NightActions.apply_sleep(state, event)
+            "night_wander" -> NightActions.apply_night_wander(state, event)
+            "make_statement" -> Discussion.apply_make_statement(state, event)
+            "cast_vote" -> Voting.apply_cast_vote(state, event)
+            "make_last_words" -> Elimination.apply_make_last_words(state, event)
+            "wolf_chat" -> WolfChat.apply_wolf_chat(state, event)
+            "make_accusation" -> Discussion.apply_make_accusation(state, event)
+            "request_meeting" -> Meetings.apply_request_meeting(state, event)
+            "meeting_message" -> Meetings.apply_meeting_message(state, event)
+            "use_item" -> NightActions.apply_use_item(state, event)
+            "anonymous_message" -> Chat.apply_anonymous_message(state, event)
+            "decision_missed" -> apply_decision_missed(state, event)
+            _ -> {:error, {:invalid_event_kind, event.kind}}
+          end
+
         {:error, reason} ->
           player_id = Map.get(event.payload, "player_id") || Map.get(event.payload, :player_id)
           reject_action(state, event, player_id, reason)

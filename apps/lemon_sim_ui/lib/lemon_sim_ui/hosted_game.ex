@@ -111,14 +111,15 @@ defmodule LemonSimUi.HostedGame do
       true ->
         config = LemonCore.Config.Modular.load(project_dir: File.cwd!())
 
-        with %{} = model <- GameConfig.resolve_model_spec(nil, model_spec) do
-          model = GameConfig.apply_provider_base_url(model, config)
+        case GameConfig.resolve_model_spec(nil, model_spec) do
+          %{} = model ->
+            model = GameConfig.apply_provider_base_url(model, config)
 
-          _api_key =
-            GameConfig.resolve_provider_api_key!(model.provider, config, "hosted werewolf")
+            _api_key =
+              GameConfig.resolve_provider_api_key!(model.provider, config, "hosted werewolf")
 
-          :ok
-        else
+            :ok
+
           _ -> {:error, :invalid_hosted_ai_model}
         end
     end
@@ -312,18 +313,19 @@ defmodule LemonSimUi.HostedGame do
 
         failures =
           Enum.flat_map(rooms, fn room ->
-            with :ok <- reconcile_join_code(room) do
-              if room.status in ["lobby", "running", "paused"] do
-                with :ok <- validate_room_ai(room),
-                     {:ok, _pid} <- start_room(room) do
-                  []
+            case reconcile_join_code(room) do
+              :ok ->
+                if room.status in ["lobby", "running", "paused"] do
+                  with :ok <- validate_room_ai(room),
+                       {:ok, _pid} <- start_room(room) do
+                    []
+                  else
+                    {:error, reason} -> [{room.id, reason}]
+                  end
                 else
-                  {:error, reason} -> [{room.id, reason}]
+                  []
                 end
-              else
-                []
-              end
-            else
+
               {:error, reason} -> [{room.id, reason}]
             end
           end)
