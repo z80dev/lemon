@@ -456,6 +456,13 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
     ]
   end
 
+  # Last words: the eliminated player gets one final message tool so the
+  # mandatory tool-call contract stays satisfiable after death.
+  defp tools_for_phase_and_role(phase, _role, actor_id, _players, _runoff, _day_number)
+       when phase in ["last_words_vote", "last_words_night"] do
+    [last_words_tool(actor_id)]
+  end
+
   defp tools_for_phase_and_role(_phase, _role, _actor_id, _players, _runoff, _day_number) do
     []
   end

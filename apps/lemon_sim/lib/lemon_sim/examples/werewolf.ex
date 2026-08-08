@@ -188,6 +188,11 @@ defmodule LemonSim.Examples.Werewolf do
   @spec projector_opts() :: keyword()
   def projector_opts do
     [
+      system_prompt:
+        "You are playing a live game of Werewolf in a simulated village. " <>
+          "Act by calling exactly one of the available tools each turn. " <>
+          "Only the tools listed under \u201CAvailable Actions\u201D exist \u2014 " <>
+          "never invent or assume file, memory, or read_index tools.",
       section_builders: %{
         world_state: fn frame, _tools, _opts ->
           world = frame.world
@@ -250,6 +255,14 @@ defmodule LemonSim.Examples.Werewolf do
       },
       section_overrides: %{
         plan_history: nil,
+        memory: %{
+          id: :memory,
+          title: "Memory",
+          format: :markdown,
+          content:
+            "None. You have no memory files, no file tools, and no index.md. " <>
+              "Act only from the game state, recent events, and the available actions listed below."
+        },
         decision_contract: """
         WEREWOLF GAME RULES:
         - You are one of several players in a Werewolf/Mafia game.
@@ -287,7 +300,8 @@ defmodule LemonSim.Examples.Werewolf do
         :recent_events,
         :current_intent,
         :available_actions,
-        :decision_contract
+        :decision_contract,
+        :memory
       ]
     ]
   end
@@ -305,6 +319,11 @@ defmodule LemonSim.Examples.Werewolf do
     )
     |> Keyword.put_new(:stream_options_for_model, &stream_options_for_model/1)
   end
+
+  # DeepSeek models via OpenCode Go reject tool_choice "required" while thinking
+  # is enabled, so force reasoning off via reasoning_effort "none".
+  defp stream_options_for_model(%{provider: :opencode_go, id: "deepseek" <> _}),
+    do: %{max_tokens: 768, reasoning: :none, tool_choice: :any}
 
   defp stream_options_for_model(%{provider: provider})
        when provider in [:opencode_go, :zai],
