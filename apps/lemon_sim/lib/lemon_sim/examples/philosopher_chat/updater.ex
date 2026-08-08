@@ -31,11 +31,13 @@ defmodule LemonSim.Examples.PhilosopherChat.Updater do
       seq = get(world, :next_seq, 1)
       messages = get(world, :messages, [])
 
+      at_ms = event.ts_ms || get(world, :now_ms, System.system_time(:millisecond))
+
       message = %{
         seq: seq,
         author: author,
         text: text,
-        at_ms: get(world, :now_ms, System.system_time(:millisecond))
+        at_ms: at_ms
       }
 
       world =
@@ -46,7 +48,7 @@ defmodule LemonSim.Examples.PhilosopherChat.Updater do
 
       world =
         if author != "you" do
-          Map.put(world, :last_agent_at_ms, get(world, :now_ms, System.system_time(:millisecond)))
+          Map.put(world, :last_agent_at_ms, at_ms)
         else
           world
         end

@@ -68,6 +68,30 @@ defmodule Ai.Models.OpenCodeGo do
       cost: %ModelCost{input: 0.3, output: 1.2, cache_read: 0.03, cache_write: 0.0},
       context_window: 204_800,
       max_tokens: 131_072
+    },
+    "deepseek-v4-flash" => %Model{
+      id: "deepseek-v4-flash",
+      name: "DeepSeek V4 Flash",
+      api: :openai_completions,
+      provider: :opencode_go,
+      base_url: "https://opencode.ai/zen/go/v1",
+      reasoning: true,
+      input: [:text],
+      cost: %ModelCost{input: 0.3, output: 1.2, cache_read: 0.03, cache_write: 0.0},
+      context_window: 131_072,
+      max_tokens: 65_536
+    },
+    "deepseek-v4-pro" => %Model{
+      id: "deepseek-v4-pro",
+      name: "DeepSeek V4 Pro",
+      api: :openai_completions,
+      provider: :opencode_go,
+      base_url: "https://opencode.ai/zen/go/v1",
+      reasoning: true,
+      input: [:text],
+      cost: %ModelCost{input: 0.6, output: 2.4, cache_read: 0.06, cache_write: 0.0},
+      context_window: 131_072,
+      max_tokens: 65_536
     }
   }
 

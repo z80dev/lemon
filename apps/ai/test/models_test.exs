@@ -622,6 +622,8 @@ defmodule Ai.ModelsLegacyTest do
       assert Models.get_model(:opencode, "kimi-k2.5") != nil
       assert Models.get_model(:opencode_go, "glm-5.1") != nil
       assert Models.get_model(:opencode_go, "glm-5.2") != nil
+      assert Models.get_model(:opencode_go, "deepseek-v4-flash") != nil
+      assert Models.get_model(:opencode_go, "deepseek-v4-pro") != nil
     end
 
     test "github copilot gpt 5.6 models" do
