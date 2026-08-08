@@ -250,13 +250,14 @@ defmodule LemonSimUi.HostedGame.RoomServer do
   end
 
   def handle_call({:control, token, action, params}, _from, state) do
-    with :ok <- authorize_host(state.room, token) do
-      if state.pending_terminal_room do
-        {:reply, {:error, :persistence_pending}, state}
-      else
-        handle_host_control(action, params, state)
-      end
-    else
+    case authorize_host(state.room, token) do
+      :ok ->
+        if state.pending_terminal_room do
+          {:reply, {:error, :persistence_pending}, state}
+        else
+          handle_host_control(action, params, state)
+        end
+
       {:error, reason} -> {:reply, {:error, reason}, state}
     end
   end
@@ -267,21 +268,22 @@ defmodule LemonSimUi.HostedGame.RoomServer do
         _from,
         state
       ) do
-    with {:ok, actor_id} <- authenticate_player(state.room, token) do
-      case apply_player_command(
-             state,
-             actor_id,
-             command_id,
-             expected_match_number,
-             expected_version,
-             action,
-             params,
-             "player"
-           ) do
-        {:ok, next_state, result} -> {:reply, {:ok, result}, next_state}
-        {:error, reason, next_state} -> {:reply, {:error, reason}, next_state}
-      end
-    else
+    case authenticate_player(state.room, token) do
+      {:ok, actor_id} ->
+        case apply_player_command(
+               state,
+               actor_id,
+               command_id,
+               expected_match_number,
+               expected_version,
+               action,
+               params,
+               "player"
+             ) do
+          {:ok, next_state, result} -> {:reply, {:ok, result}, next_state}
+          {:error, reason, next_state} -> {:reply, {:error, reason}, next_state}
+        end
+
       {:error, reason} ->
         HostedGame.emit(:command_rejected, %{count: 1}, %{
           room_id: state.room.id,
@@ -293,20 +295,21 @@ defmodule LemonSimUi.HostedGame.RoomServer do
   end
 
   def handle_call({:connect_player, token, pid}, _from, state) when is_pid(pid) do
-    with {:ok, actor_id} <- authenticate_player(state.room, token) do
-      ref = Process.monitor(pid)
+    case authenticate_player(state.room, token) do
+      {:ok, actor_id} ->
+        ref = Process.monitor(pid)
 
-      connections =
-        Map.update(state.connections, actor_id, MapSet.new([pid]), &MapSet.put(&1, pid))
+        connections =
+          Map.update(state.connections, actor_id, MapSet.new([pid]), &MapSet.put(&1, pid))
 
-      monitor_refs = Map.put(state.monitor_refs, ref, {actor_id, pid})
-      state = %{state | connections: connections, monitor_refs: monitor_refs}
-      broadcast(state.room)
+        monitor_refs = Map.put(state.monitor_refs, ref, {actor_id, pid})
+        state = %{state | connections: connections, monitor_refs: monitor_refs}
+        broadcast(state.room)
 
-      HostedGame.emit(:player_connected, %{count: 1}, %{room_id: state.room.id, seat_id: actor_id})
+        HostedGame.emit(:player_connected, %{count: 1}, %{room_id: state.room.id, seat_id: actor_id})
 
-      {:reply, {:ok, actor_id}, state}
-    else
+        {:reply, {:ok, actor_id}, state}
+
       {:error, reason} -> {:reply, {:error, reason}, state}
     end
   end
@@ -585,31 +588,32 @@ defmodule LemonSimUi.HostedGame.RoomServer do
   defp handle_host_control("pause", _params, state) do
     room = state.room
 
-    with :ok <- require_status(room, ["running"]) do
-      remaining = max((room.deadline_at_ms || now_ms()) - now_ms(), 0)
-      now = now_ms()
+    case require_status(room, ["running"]) do
+      :ok ->
+        remaining = max((room.deadline_at_ms || now_ms()) - now_ms(), 0)
+        now = now_ms()
 
-      room =
-        room
-        |> Map.merge(%{
-          status: "paused",
-          paused_remaining_ms: remaining,
-          paused_at_ms: now,
-          deadline_at_ms: nil
-        })
-        |> touch()
-        |> append_replay("game_paused", nil, %{remaining_ms: remaining})
+        room =
+          room
+          |> Map.merge(%{
+            status: "paused",
+            paused_remaining_ms: remaining,
+            paused_at_ms: now,
+            deadline_at_ms: nil
+          })
+          |> touch()
+          |> append_replay("game_paused", nil, %{remaining_ms: remaining})
 
-      case persist(room) do
-        :ok ->
-          state = state |> cancel_timer() |> clear_ai_pending() |> Map.put(:room, room)
-          broadcast(room)
-          {:reply, :ok, state}
+        case persist(room) do
+          :ok ->
+            state = state |> cancel_timer() |> clear_ai_pending() |> Map.put(:room, room)
+            broadcast(room)
+            {:reply, :ok, state}
 
-        {:error, reason} ->
-          {:reply, {:error, reason}, state}
-      end
-    else
+          {:error, reason} ->
+            {:reply, {:error, reason}, state}
+        end
+
       {:error, reason} -> {:reply, {:error, reason}, state}
     end
   end
@@ -656,34 +660,35 @@ defmodule LemonSimUi.HostedGame.RoomServer do
   defp handle_host_control("stop", _params, state) do
     room = state.room
 
-    with :ok <- require_status(room, ["lobby", "running", "paused"]) do
-      now = now_ms()
-      replay_kind = if room.status == "lobby", do: "room_cancelled", else: "game_stopped"
+    case require_status(room, ["lobby", "running", "paused"]) do
+      :ok ->
+        now = now_ms()
+        replay_kind = if room.status == "lobby", do: "room_cancelled", else: "game_stopped"
 
-      room =
-        room
-        |> Map.merge(%{
-          status: "stopped",
-          terminal_reason: if(room.status == "lobby", do: "host_cancelled", else: "host_stopped"),
-          deadline_at_ms: nil,
-          paused_remaining_ms: nil,
-          paused_at_ms: nil,
-          finished_at_ms: now
-        })
-        |> touch(now)
-        |> append_replay(replay_kind, nil, %{}, now)
+        room =
+          room
+          |> Map.merge(%{
+            status: "stopped",
+            terminal_reason: if(room.status == "lobby", do: "host_cancelled", else: "host_stopped"),
+            deadline_at_ms: nil,
+            paused_remaining_ms: nil,
+            paused_at_ms: nil,
+            finished_at_ms: now
+          })
+          |> touch(now)
+          |> append_replay(replay_kind, nil, %{}, now)
 
-      case persist(room) do
-        :ok ->
-          HostedGame.emit(:game_stopped, %{count: 1}, %{room_id: room.id})
-          state = state |> cancel_timer() |> clear_ai_pending() |> Map.put(:room, room)
-          broadcast(room)
-          {:reply, :ok, state}
+        case persist(room) do
+          :ok ->
+            HostedGame.emit(:game_stopped, %{count: 1}, %{room_id: room.id})
+            state = state |> cancel_timer() |> clear_ai_pending() |> Map.put(:room, room)
+            broadcast(room)
+            {:reply, :ok, state}
 
-        {:error, reason} ->
-          {:reply, {:error, reason}, state}
-      end
-    else
+          {:error, reason} ->
+            {:reply, {:error, reason}, state}
+        end
+
       {:error, reason} -> {:reply, {:error, reason}, state}
     end
   end
@@ -1075,28 +1080,29 @@ defmodule LemonSimUi.HostedGame.RoomServer do
   end
 
   defp default_action(game_state, actor_id) do
-    with {:ok, [action | _]} <- ActionSpace.available_actions(game_state, actor_id) do
-      params =
-        action["parameters"]
-        |> Map.get("properties", %{})
-        |> Enum.reduce(%{}, fn {key, schema}, acc ->
-          cond do
-            key == "thought" ->
-              acc
+    case ActionSpace.available_actions(game_state, actor_id) do
+      {:ok, [action | _]} ->
+        params =
+          action["parameters"]
+          |> Map.get("properties", %{})
+          |> Enum.reduce(%{}, fn {key, schema}, acc ->
+            cond do
+              key == "thought" ->
+                acc
 
-            values = Map.get(schema, "enum") ->
-              Map.put(acc, key, values |> Enum.sort() |> List.first())
+              values = Map.get(schema, "enum") ->
+                Map.put(acc, key, values |> Enum.sort() |> List.first())
 
-            key in ["statement", "message", "reason"] ->
-              Map.put(acc, key, "Time ran out before I could answer.")
+              key in ["statement", "message", "reason"] ->
+                Map.put(acc, key, "Time ran out before I could answer.")
 
-            true ->
-              acc
-          end
-        end)
+              true ->
+                acc
+            end
+          end)
 
-      {:ok, action["name"], params}
-    else
+        {:ok, action["name"], params}
+
       _ -> {:error, :no_legal_action}
     end
   end
