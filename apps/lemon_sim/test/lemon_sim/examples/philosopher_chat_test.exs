@@ -37,15 +37,90 @@ defmodule LemonSim.Examples.PhilosopherChatTest do
     test "unknown id returns nil" do
       assert Persona.get("diogenes_is_here") == nil
     end
+
+    test "ids are unique and the roster stays at 18" do
+      ids = Persona.ids()
+      assert length(ids) == 18
+      assert length(Enum.uniq(ids)) == 18
+    end
+
+    test "every persona carries the deep biographical fields" do
+      for persona <- Persona.roster() do
+        assert is_binary(persona.bio) and String.length(persona.bio) > 80,
+               "#{persona.id} needs a real bio"
+
+        assert is_binary(persona.speech_mannerisms) and
+                 String.length(persona.speech_mannerisms) > 80,
+               "#{persona.id} needs speech mannerisms"
+
+        assert is_binary(persona.anachronism_stance) and persona.anachronism_stance != ""
+        assert length(persona.works) >= 2, "#{persona.id} needs at least 2 works"
+        assert length(persona.quotes) >= 1, "#{persona.id} needs at least one quote"
+        assert length(persona.never_say) >= 2, "#{persona.id} needs never-say rules"
+        assert length(persona.pet_topics) >= 3, "#{persona.id} needs pet topics"
+
+        assert Enum.all?(persona.works ++ persona.quotes ++ persona.never_say, &is_binary/1)
+      end
+    end
+
+    test "rivalries only reference real roster ids" do
+      ids = MapSet.new(Persona.ids())
+
+      for persona <- Persona.roster() do
+        assert map_size(persona.intellectual_rivals) >= 4,
+               "#{persona.id} should have opinions about several others"
+
+        for {other_id, line} <- persona.intellectual_rivals do
+          assert MapSet.member?(ids, other_id),
+                 "#{persona.id} references unknown persona #{other_id}"
+
+          assert other_id != persona.id
+          assert is_binary(line) and line != ""
+        end
+      end
+    end
+  end
+
+  describe "persona system prompt" do
+    test "describe/2 includes bio, voice rules and never-say rules" do
+      text = Persona.describe(Persona.get("nietzsche"))
+
+      assert text =~ "YOU ARE FRIEDRICH NIETZSCHE"
+      assert text =~ "Naumburg / Turin"
+      assert text =~ "Thus Spoke Zarathustra"
+      assert text =~ "God is dead"
+      assert text =~ "HOW YOU TALK"
+      assert text =~ "You would NEVER say"
+      assert text =~ "Modern things"
+      assert text =~ "What you keep coming back to"
+    end
+
+    test "describe/2 narrows rivalries to the members present" do
+      text = Persona.describe(Persona.get("wittgenstein"), others: ["plato", "freud"])
+
+      assert text =~ "- Plato:"
+      assert text =~ "- Sigmund Freud:"
+      refute text =~ "- Karl Marx:"
+    end
+
+    test "describe/2 falls back to all rivalries when nobody else is named" do
+      text = Persona.describe(Persona.get("wittgenstein"), others: [])
+      assert text =~ "- Karl Marx:"
+    end
   end
 
   describe "updater" do
     test "appends user and agent messages in order with seq" do
       state = fresh_thread()
 
-      {:ok, state, _} = PhilosopherChat.post_message(state, "you", "Is the unexamined life worth living?")
-      {:ok, state, _} = PhilosopherChat.post_message(state, "socrates", "Ask yourself what you mean by 'worth.'")
-      {:ok, state, _} = PhilosopherChat.post_message(state, "nietzsche", "I have opinions about that.")
+      {:ok, state, _} =
+        PhilosopherChat.post_message(state, "you", "Is the unexamined life worth living?")
+
+      {:ok, state, _} =
+        PhilosopherChat.post_message(state, "socrates", "Ask yourself what you mean by 'worth.'")
+
+      {:ok, state, _} =
+        PhilosopherChat.post_message(state, "nietzsche", "I have opinions about that.")
 
       messages = get_in(state.world, [:messages])
       assert length(messages) == 3
@@ -64,7 +139,9 @@ defmodule LemonSim.Examples.PhilosopherChatTest do
     test "rejects empty and oversized messages" do
       state = fresh_thread()
       assert {:error, :empty_message} = PhilosopherChat.post_message(state, "you", "   ")
-      assert {:error, :message_too_long} = PhilosopherChat.post_message(state, "you", String.duplicate("a", 1401))
+
+      assert {:error, :message_too_long} =
+               PhilosopherChat.post_message(state, "you", String.duplicate("a", 1401))
     end
 
     test "rejects messages when thread is not active" do
@@ -77,7 +154,9 @@ defmodule LemonSim.Examples.PhilosopherChatTest do
       assert {:ok, state} = PhilosopherChat.set_status(state, "paused")
       assert state.world.status == "paused"
       assert {:ok, state} = PhilosopherChat.set_status(state, "active")
-      assert {:error, {:invalid_status, "suspended"}} = PhilosopherChat.set_status(state, "suspended")
+
+      assert {:error, {:invalid_status, "suspended"}} =
+               PhilosopherChat.set_status(state, "suspended")
     end
 
     test "unknown events are rejected" do
@@ -91,7 +170,9 @@ defmodule LemonSim.Examples.PhilosopherChatTest do
     test "exposes speak + memory tools for an active agent turn" do
       state = fresh_thread() |> PhilosopherChat.with_actor("socrates")
 
-      tmp = Path.join(System.tmp_dir!(), "philosopher_chat_mem_#{System.unique_integer([:positive])}")
+      tmp =
+        Path.join(System.tmp_dir!(), "philosopher_chat_mem_#{System.unique_integer([:positive])}")
+
       {:ok, tools} = ActionSpace.tools(state, memory_root: tmp, memory_namespace: "thread_x")
 
       names = Enum.map(tools, & &1.name)
@@ -101,7 +182,12 @@ defmodule LemonSim.Examples.PhilosopherChatTest do
       assert "memory_list_files" in names
 
       speak = Enum.find(tools, &(&1.name == "speak"))
-      assert {:ok, result} = speak.execute.("id", %{"message" => "Tell me, what is justice?"}, nil, fn _ -> :ok end)
+
+      assert {:ok, result} =
+               speak.execute.("id", %{"message" => "Tell me, what is justice?"}, nil, fn _ ->
+                 :ok
+               end)
+
       event = result.details["event"]
       assert event.kind == "message_posted"
       assert event.payload["author"] == "socrates"
@@ -116,7 +202,11 @@ defmodule LemonSim.Examples.PhilosopherChatTest do
     end
 
     test "no tools when paused" do
-      state = fresh_thread() |> then(&elem(PhilosopherChat.set_status(&1, "paused"), 1)) |> PhilosopherChat.with_actor("socrates")
+      state =
+        fresh_thread()
+        |> then(&elem(PhilosopherChat.set_status(&1, "paused"), 1))
+        |> PhilosopherChat.with_actor("socrates")
+
       assert {:ok, []} = ActionSpace.tools(state, [])
     end
 
@@ -144,7 +234,16 @@ defmodule LemonSim.Examples.PhilosopherChatTest do
     test "picks mentioned agents over the pool" do
       state =
         fresh_thread()
-        |> then(&elem(PhilosopherChat.post_message(&1, "you", "Wittgenstein, what is the use of this word?"), 1))
+        |> then(
+          &elem(
+            PhilosopherChat.post_message(
+              &1,
+              "you",
+              "Wittgenstein, what is the use of this word?"
+            ),
+            1
+          )
+        )
 
       rng = :rand.seed_s(:exsss, {101, 102, 103})
       {agent, _rng} = Pacing.pick_responder(state.world, rng)
@@ -232,18 +331,25 @@ defmodule LemonSim.Examples.PhilosopherChatTest do
     @empty_state %State{sim_id: "x", world: %{}}
 
     test "extracts an event from a speak decision" do
-      event = LemonSim.Kernel.Event.new("message_posted", %{"author" => "socrates", "text" => "Hi"})
+      event =
+        LemonSim.Kernel.Event.new("message_posted", %{"author" => "socrates", "text" => "Hi"})
+
       decision = %{"type" => "tool_call", "result_details" => %{"event" => event}}
       assert {:ok, [^event]} = DecisionAdapter.to_events(decision, @empty_state, [])
     end
 
     test "memory-only turns produce no world events" do
-      decision = %{"type" => "tool_call", "result_details" => %{"path" => "opinions.md", "bytes" => 4}}
+      decision = %{
+        "type" => "tool_call",
+        "result_details" => %{"path" => "opinions.md", "bytes" => 4}
+      }
+
       assert {:ok, []} = DecisionAdapter.to_events(decision, @empty_state, [])
     end
 
     test "unsupported decisions error" do
-      assert {:error, {:unsupported_decision, "huh"}} = DecisionAdapter.to_events("huh", @empty_state, [])
+      assert {:error, {:unsupported_decision, "huh"}} =
+               DecisionAdapter.to_events("huh", @empty_state, [])
     end
   end
 end
