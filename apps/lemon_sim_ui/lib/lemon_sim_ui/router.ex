@@ -53,6 +53,13 @@ defmodule LemonSimUi.Router do
     plug(LemonSimUi.Plugs.ChatCors)
   end
 
+  # SSE stream: EventSource always sends `Accept: text/event-stream`, which the
+  # `:accepts` plug would reject as not-json (406). Skip format negotiation
+  # here — the stream action sets its own content type.
+  pipeline :chat_stream do
+    plug(LemonSimUi.Plugs.ChatCors)
+  end
+
   # Open access since Aug 2026: the password gate (RequireChatSession) was
   # removed from the pipeline. Re-add `plug(LemonSimUi.Plugs.RequireChatSession)`
   # to restore it.
@@ -117,13 +124,18 @@ defmodule LemonSimUi.Router do
     post("/sims/:sim_id/stop", AdminSimController, :stop)
   end
 
-  # Public: session login, CORS preflight, and the SSE stream (EventSource
-  # cannot set headers, so the stream action verifies the token itself).
+  # Public: session login, CORS preflight (EventSource cannot set headers, so
+  # the stream route skips format negotiation via :chat_stream).
   scope "/api/chat", LemonSimUi do
     pipe_through(:public_json)
 
     match(:options, "/*path", PhilosopherChatApiController, :preflight)
     post("/session", PhilosopherChatApiController, :session)
+  end
+
+  scope "/api/chat", LemonSimUi do
+    pipe_through(:chat_stream)
+
     get("/threads/:id/stream", PhilosopherChatApiController, :stream)
   end
 
