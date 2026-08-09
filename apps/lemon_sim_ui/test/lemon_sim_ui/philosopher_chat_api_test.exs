@@ -108,9 +108,9 @@ defmodule LemonSimUi.PhilosopherChatApiTest do
   end
 
   describe "stream tickets" do
-    test "requires a bearer token", %{conn: conn} do
-      conn = post(conn, "/api/chat/stream-ticket")
-      assert json_response(conn, 401) == %{"error" => "unauthorized"}
+    test "issues a ticket without a token (open access)", %{conn: conn} do
+      body = post(conn, "/api/chat/stream-ticket") |> json_response(200)
+      assert is_binary(body["ticket"])
     end
 
     test "issues a ticket that verifies", %{conn: conn} do
@@ -118,19 +118,12 @@ defmodule LemonSimUi.PhilosopherChatApiTest do
       assert is_binary(body["ticket"])
       assert {:ok, "user"} = PhilosopherChat.Auth.verify_stream_ticket(body["ticket"])
     end
-
-    test "stream rejects a bogus ticket", %{conn: conn} do
-      %{"thread_id" => thread_id} = create_thread(conn, "Stream", ["plato"])
-
-      conn = get(conn, "/api/chat/threads/#{thread_id}/stream?ticket=bogus")
-      assert json_response(conn, 401) == %{"error" => "unauthorized"}
-    end
   end
 
   describe "roster" do
-    test "requires a token", %{conn: conn} do
-      conn = get(conn, "/api/chat/roster")
-      assert json_response(conn, 401) == %{"error" => "unauthorized"}
+    test "is public without a token", %{conn: conn} do
+      body = get(conn, "/api/chat/roster") |> json_response(200)
+      assert length(body["contacts"]) == 18
     end
 
     test "returns the persona contacts", %{conn: conn} do

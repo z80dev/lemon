@@ -3,9 +3,10 @@ defmodule LemonSimUi.PhilosopherChatApiController do
   JSON API for hosted PhilosopherChat threads.
 
   Thin surface over `LemonSimUi.PhilosopherChat` (coordinator), `Persona`
-  (roster), and `Auth` (session). The SSE stream route authenticates
-  manually (query param or header) because `EventSource` cannot set
-  request headers.
+  (roster), and `Auth` (session). Open access since Aug 2026: the JSON API
+  no longer requires a bearer token and the SSE stream accepts everyone;
+  `Auth` remains for the legacy `/session` endpoint and for re-enabling the
+  gate (see the `:chat_api` pipeline in the router).
   """
 
   use LemonSimUi, :controller
@@ -233,39 +234,10 @@ defmodule LemonSimUi.PhilosopherChatApiController do
     _kind, _reason -> :error
   end
 
-  defp authorize_stream(conn, params) do
-    cond do
-      Auth.dev_bypass?() ->
-        :ok
-
-      is_binary(Map.get(params, "ticket")) ->
-        verify_ticket(Map.get(params, "ticket"))
-
-      # Legacy round-1 clients pass the bearer token in the query string.
-      is_binary(Map.get(params, "token")) ->
-        verify_token(Map.get(params, "token"))
-
-      true ->
-        case get_req_header(conn, "authorization") do
-          ["Bearer " <> token] -> verify_token(token)
-          _ -> {:error, :unauthorized}
-        end
-    end
-  end
-
-  defp verify_ticket(ticket) do
-    case Auth.verify_stream_ticket(ticket) do
-      {:ok, _user} -> :ok
-      {:error, _reason} -> {:error, :unauthorized}
-    end
-  end
-
-  defp verify_token(token) do
-    case Auth.verify(token) do
-      {:ok, _user} -> :ok
-      {:error, _reason} -> {:error, :unauthorized}
-    end
-  end
+  # Open access since Aug 2026: the stream accepts everyone. The ticket/token
+  # plumbing in `Auth` is kept so the gate can be trivially re-enabled
+  # (RequireChatSession plug + this guard).
+  defp authorize_stream(_conn, _params), do: :ok
 
   # -- helpers --
 

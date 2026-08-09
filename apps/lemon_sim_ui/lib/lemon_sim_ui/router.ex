@@ -53,10 +53,12 @@ defmodule LemonSimUi.Router do
     plug(LemonSimUi.Plugs.ChatCors)
   end
 
+  # Open access since Aug 2026: the password gate (RequireChatSession) was
+  # removed from the pipeline. Re-add `plug(LemonSimUi.Plugs.RequireChatSession)`
+  # to restore it.
   pipeline :chat_api do
     plug(:accepts, ["json"])
     plug(LemonSimUi.Plugs.ChatCors)
-    plug(LemonSimUi.Plugs.RequireChatSession)
   end
 
   pipeline :no_store do
