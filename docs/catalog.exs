@@ -2,7 +2,7 @@
   %{
     path: "docs/README.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-12],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 60
   },
   %{
@@ -32,31 +32,31 @@
   %{
     path: "docs/index.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-12],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 60
   },
   %{
     path: "docs/install.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-11],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 60
   },
   %{
     path: "docs/compare.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-12],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 60
   },
   %{
     path: "docs/demo.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-11],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 60
   },
   %{
     path: "docs/support.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-15],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 60
   },
   %{
@@ -122,7 +122,7 @@
   %{
     path: "docs/architecture_boundaries.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-12],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 60
   },
   %{
@@ -152,7 +152,7 @@
   %{
     path: "docs/subagent-parent-questions.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-15],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 60
   },
   %{
@@ -182,25 +182,25 @@
   %{
     path: "docs/skills.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-11],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 90
   },
   %{
     path: "docs/testing.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-11],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 60
   },
   %{
     path: "docs/testing/deterministic-test-patterns.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-06-17],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 45
   },
   %{
     path: "docs/tools/acp.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-16],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 90
   },
   %{
@@ -212,25 +212,25 @@
   %{
     path: "docs/tools/lsp.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-16],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 90
   },
   %{
     path: "docs/tools/media.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-16],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 90
   },
   %{
     path: "docs/tools/openai-compatible-api.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-16],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 90
   },
   %{
     path: "docs/tools/web.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-15],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 90
   },
   %{
@@ -266,7 +266,7 @@
   %{
     path: "docs/security/safety.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-11],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 60
   },
   %{
@@ -284,79 +284,79 @@
   %{
     path: "docs/skills_v2.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-16],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 60
   },
   %{
     path: "docs/reference/skill-manifest-v2.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-17],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 60
   },
   %{
     path: "docs/release/versioning_and_channels.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-11],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 60
   },
   %{
     path: "docs/release/deployment_flows.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-11],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 60
   },
   %{
     path: "docs/release/release_checklist_and_support_policy.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-12],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 60
   },
   %{
     path: "docs/user-guide/setup.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-15],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 60
   },
   %{
     path: "docs/user-guide/migrate-from-hermes.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-24],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 60
   },
   %{
     path: "docs/user-guide/skills.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-16],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 60
   },
   %{
     path: "docs/user-guide/memory.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-16],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 60
   },
   %{
     path: "docs/user-guide/adaptive.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-16],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 60
   },
   %{
     path: "docs/plans/lemon-hermes-parity-expansion-goal-2026-05-24.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-07-02],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 30
   },
   %{
     path: "docs/plans/lemon-exemplary-2026-07-04.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-07-04],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 30
   },
   %{
     path: "docs/plans/lemon-sim-vendingbench-exemplary-2026-07-04.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-07-04],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 30
   },
   %{
@@ -380,7 +380,7 @@
   %{
     path: "docs/plans/2026-03-26-async-followup-delivery-and-provenance-plan.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-27],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 60
   },
   %{
@@ -392,67 +392,67 @@
   %{
     path: "docs/plans/lemon-1.0-mainstream-readiness.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-15],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 60
   },
   %{
     path: "docs/plans/lemon-1.0-fresh-install-proof-2026-05-11.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-11],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 60
   },
   %{
     path: "docs/plans/lemon-1.0-release-artifact-proof-2026-05-11.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-11],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 60
   },
   %{
     path: "docs/plans/lemon-1.0-interface-supportability-audit-2026-05-11.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-11],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 60
   },
   %{
     path: "docs/plans/lemon-1.0-interface-proof-pack-2026-05-11.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-12],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 60
   },
   %{
     path: "docs/plans/lemon-1.0-completion-audit-2026-05-12.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-06-17],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 30
   },
   %{
     path: "docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-06-17],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 30
   },
   %{
     path: "docs/plans/lemon-channel-command-parity-matrix-2026-05-12.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-06-17],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 30
   },
   %{
     path: "docs/plans/lemon-sim-platform-mission-2026-05-12.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-06-17],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 30
   },
   %{
     path: "docs/plans/werewolf-production-readiness-2026-07-10.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-07-10],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 30
   },
   %{
     path: "docs/plans/lemon-sim-vendingbench-equivalent-goal-2026-05-16.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-06-17],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 30
   },
   %{
@@ -464,13 +464,13 @@
   %{
     path: "docs/user-guide/rollout.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-16],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 60
   },
   %{
     path: "docs/plans/lemon-hermes-agent-harness-parity-scorecard.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-05-02],
+    last_reviewed: ~D[2026-08-09],
     max_age_days: 90
   },
   %{
