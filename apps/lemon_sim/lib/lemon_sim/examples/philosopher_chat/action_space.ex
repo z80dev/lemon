@@ -6,8 +6,8 @@ defmodule LemonSim.Examples.PhilosopherChat.ActionSpace do
   import LemonSim.Examples.Helpers
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias LemonSim.Kernel.State
   alias LemonSim.Examples.PhilosopherChat.{Events, Persona}
+  alias LemonSim.Kernel.State
   alias LemonSim.LLM.Memory.Tools, as: MemoryTools
 
   @max_message_chars 1400
@@ -68,10 +68,12 @@ defmodule LemonSim.Examples.PhilosopherChat.ActionSpace do
           not is_binary(message) or String.trim(message) == "" ->
             {:error, "Message must not be empty"}
 
-          byte_size(message) > @max_message_chars ->
-            {:error, "Message exceeds #{@max_message_chars} characters"}
-
           true ->
+            # Truncate instead of failing the whole turn. Byte-budget-aware so
+            # the updater's :message_too_long backstop never trips on the
+            # truncated text (the "…" must fit inside the limit).
+            message = truncate_message(message)
+
             {:ok,
              %AgentToolResult{
                content: [AgentCore.text_content("You said: #{message}")],
@@ -81,6 +83,28 @@ defmodule LemonSim.Examples.PhilosopherChat.ActionSpace do
         end
       end
     }
+  end
+
+  defp truncate_message(message) when byte_size(message) <= @max_message_chars, do: message
+
+  defp truncate_message(message) do
+    ellipsis = "…"
+    budget = @max_message_chars - byte_size(ellipsis)
+
+    {kept, _size} =
+      message
+      |> String.codepoints()
+      |> Enum.reduce_while({[], 0}, fn cp, {acc, size} ->
+        cp_size = byte_size(cp)
+
+        if size + cp_size <= budget do
+          {:cont, {[cp | acc], size + cp_size}}
+        else
+          {:halt, {acc, size}}
+        end
+      end)
+
+    kept |> Enum.reverse() |> IO.iodata_to_binary() |> Kernel.<>(ellipsis)
   end
 
   defp memory_tools(opts, world, actor_id) do

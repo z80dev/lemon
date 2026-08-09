@@ -358,6 +358,10 @@ if philosopher_chat_password = normalized_env.("LEMON_PHILOSOPHER_CHAT_PASSWORD"
   config :lemon_sim_ui, :philosopher_chat_password, philosopher_chat_password
 end
 
+if philosopher_chat_cors_origins = normalized_env.("LEMON_PHILOSOPHER_CHAT_CORS_ORIGINS") do
+  config :lemon_sim_ui, :philosopher_chat_cors_origins, philosopher_chat_cors_origins
+end
+
 if philosopher_chat_thread_limit =
      normalized_env.("LEMON_PHILOSOPHER_CHAT_THREAD_LIMIT") do
   config :lemon_sim_ui,

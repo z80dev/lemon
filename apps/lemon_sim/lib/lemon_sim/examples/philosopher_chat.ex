@@ -70,7 +70,6 @@ defmodule LemonSim.Examples.PhilosopherChat do
       next_seq: 1,
       pace: pace,
       created_at_ms: now,
-      now_ms: now,
       last_agent_at_ms: nil,
       last_author: nil
     }
@@ -156,7 +155,13 @@ defmodule LemonSim.Examples.PhilosopherChat do
         opinions: fn frame, _tools, opts ->
           actor_id = get(frame.world, :active_actor_id)
           content = read_opinions(opts, actor_id)
-          %{id: :opinions, title: "Your Written Opinions (from memory)", format: :markdown, content: content}
+
+          %{
+            id: :opinions,
+            title: "Your Written Opinions (from memory)",
+            format: :markdown,
+            content: content
+          }
         end
       },
       section_overrides: %{
@@ -207,8 +212,14 @@ defmodule LemonSim.Examples.PhilosopherChat do
       on_before_step: fn _turn, _state -> :ok end,
       on_after_step: fn _turn, _result -> :ok end
     )
+    |> Keyword.put(:support_tool_matcher, &support_tool?/1)
     |> Keyword.put_new(:stream_options_for_model, &stream_options_for_model/1)
   end
+
+  @doc "Memory tools are support tools; `speak` is the only decision tool."
+  @spec support_tool?(map()) :: boolean()
+  def support_tool?(%{name: name}) when is_binary(name), do: String.starts_with?(name, "memory_")
+  def support_tool?(_), do: false
 
   defp stream_options_for_model(%{provider: :opencode_go, id: "deepseek" <> _}),
     do: %{max_tokens: 900, reasoning: :none, tool_choice: :any}
@@ -295,10 +306,13 @@ defmodule LemonSim.Examples.PhilosopherChat do
           |> Enum.sort()
           |> Enum.map(fn file ->
             name = Path.basename(file, ".md")
-            content = File.read(Path.join(dir, file)) |> case do
-              {:ok, text} -> text
-              _ -> ""
-            end
+
+            content =
+              case File.read(Path.join(dir, file)) do
+                {:ok, text} -> text
+                _ -> ""
+              end
+
             "## #{name}\n\n#{String.trim(content)}"
           end)
           |> Enum.join("\n\n")
@@ -315,6 +329,8 @@ defmodule LemonSim.Examples.PhilosopherChat do
   defp truncate_chars(text, max) when byte_size(text) <= max, do: text
 
   defp truncate_chars(text, max) do
-    binary_part(text, 0, max) <> "\n…[truncated]"
+    # String.slice keeps the cut on a grapheme boundary (binary_part can
+    # split a multi-byte UTF-8 codepoint).
+    String.slice(text, 0, max) <> "\n…[truncated]"
   end
 end

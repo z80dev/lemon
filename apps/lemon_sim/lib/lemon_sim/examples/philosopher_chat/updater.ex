@@ -5,9 +5,11 @@ defmodule LemonSim.Examples.PhilosopherChat.Updater do
 
   import LemonSim.Examples.Helpers
 
+  alias LemonSim.Examples.PhilosopherChat, as: Domain
   alias LemonSim.Kernel.State
 
   @max_message_chars 1400
+  @max_world_messages 2_000
 
   @impl true
   def apply_event(%State{} = state, event, _opts) do
@@ -31,7 +33,7 @@ defmodule LemonSim.Examples.PhilosopherChat.Updater do
       seq = get(world, :next_seq, 1)
       messages = get(world, :messages, [])
 
-      at_ms = event.ts_ms || get(world, :now_ms, System.system_time(:millisecond))
+      at_ms = event.ts_ms
 
       message = %{
         seq: seq,
@@ -42,12 +44,12 @@ defmodule LemonSim.Examples.PhilosopherChat.Updater do
 
       world =
         world
-        |> Map.put(:messages, messages ++ [message])
+        |> Map.put(:messages, Enum.take(messages ++ [message], -@max_world_messages))
         |> Map.put(:next_seq, seq + 1)
         |> Map.put(:last_author, author)
 
       world =
-        if author != "you" do
+        if author != Domain.user_id() do
           Map.put(world, :last_agent_at_ms, at_ms)
         else
           world
@@ -74,7 +76,7 @@ defmodule LemonSim.Examples.PhilosopherChat.Updater do
   defp ensure_status(_), do: {:error, :thread_not_active}
 
   defp ensure_member(author, members) when is_list(members) do
-    if author in members or author == "you", do: :ok, else: {:error, :not_a_member}
+    if author in members or author == Domain.user_id(), do: :ok, else: {:error, :not_a_member}
   end
 
   defp ensure_member(_, _), do: {:error, :not_a_member}

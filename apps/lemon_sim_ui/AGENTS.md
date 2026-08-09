@@ -32,6 +32,11 @@ lib/
       supervisor.ex                        One-for-all hosted subsystem
       room_server.ex                       Durable room lifecycle, auth, timers, commands, replay
       replay.ex                            Canonical event replay/hash verifier
+    philosopher_chat.ex                    PhilosopherChat thread coordinator + Thread struct
+    philosopher_chat/
+      supervisor.ex                        rest_for_one subsystem (Registry, ThreadSupervisor, AiTaskSupervisor, coordinator)
+      thread_server.ex                     One durable serialized GenServer per thread: pacing loop, AI turns, broadcasts
+      auth.ex                              Password login + 30-day Phoenix.Token bearer sessions, 60s SSE stream tickets, per-IP login rate limiting (ETS)
     sim_helpers.ex                         Pure helpers: domain inference, labels, colors
     werewolf_playback.ex                   Buffered live-playback helper for readable Werewolf spectator pacing
     telemetry.ex                           Bounded hosted lifecycle/latency metrics
@@ -49,6 +54,7 @@ lib/
       health_controller.ex                 Public liveness `/healthz` and dependency readiness `/readyz`
       hosted_game_session_controller.ex    Hosted form/session exchange and replay download
       metrics_controller.ex                Protected runtime metrics
+      philosopher_chat_api_controller.ex   PhilosopherChat JSON API + SSE stream (`/api/chat/*`)
     live/
       lobby_live.ex                        Public list of currently running sims
       leaderboard_live.ex                  Public benchmark suite leaderboard page
@@ -57,6 +63,8 @@ lib/
       hosted_werewolf_live.ex              Hosted lobby/join/host/player/public-safe views
     plugs/
       require_access_token.ex              Expiring browser-session and bearer-only API gate
+      require_chat_session.ex              Bearer-only gate for the PhilosopherChat API
+      chat_cors.ex                         CORS for `/api/chat/*` (`LEMON_PHILOSOPHER_CHAT_CORS_ORIGINS`, default `*`) + OPTIONS preflight catch-all
       components/
         event_log.ex                       Renders recent_events list
         plan_history.ex                    Renders plan_history steps
@@ -96,6 +104,10 @@ self-contained and must not add runtime CDN dependencies.
 | `lib/lemon_sim_ui/hosted_game.ex` | `LemonSimUi.HostedGame` | Hosted room coordinator for codes, recovery readiness, active capacity, retention, and feature kill switch |
 | `lib/lemon_sim_ui/hosted_game/room_server.ex` | `LemonSimUi.HostedGame.RoomServer` | One durable serialized room: token auth, safe projections, timers, AI/human commands, pause/replacement, export, and rematch |
 | `lib/lemon_sim_ui/hosted_game/replay.ex` | `LemonSimUi.HostedGame.Replay` | Re-ingests redacted canonical events and checks command/final hashes |
+| `lib/lemon_sim_ui/philosopher_chat.ex` | `LemonSimUi.PhilosopherChat` | PhilosopherChat coordinator: thread CRUD/validation, lazy restore, paused+closed retention pruning, per-thread memory roots |
+| `lib/lemon_sim_ui/philosopher_chat/thread_server.ex` | `LemonSimUi.PhilosopherChat.ThreadServer` | One serialized GenServer per thread: paced agent turns (monitored AI tasks with hard timeout + bounded retries: exponential backoff, stall after 3 consecutive failures via `agent_stalled` broadcast), deferred reply for user messages posted mid-turn (`user_reply_pending`), live-state re-ingest so mid-turn user messages survive, single turn timer, persisted `pending_turn`/`rng_state`, idempotent `client_msg_id` posts, bounded broadcast log with `event_seq` cursor + restart-detecting `epoch` |
+| `lib/lemon_sim_ui/philosopher_chat/auth.ex` | `LemonSimUi.PhilosopherChat.Auth` | `philosopher_chat_password` login (SHA-256 digest compare) and 30-day bearer tokens; 60s `stream_ticket`s so EventSource never puts the bearer in a URL; per-IP login bucket (5 attempts / 15 min, table owned by the chat supervisor); passwordless bypass when unconfigured outside prod |
+| `lib/lemon_sim_ui/controllers/philosopher_chat_api_controller.ex` | `LemonSimUi.PhilosopherChatApiController` | Thin JSON API (`/api/chat/*`): rate-limited session, roster, `stream-ticket`, threads (validated bodies → 400), messages, nudge, pause/resume, memories, `events?since=` (`{events, epoch, latest_seq}`), and the SSE `stream` (verifies `?ticket=`/`?token=` itself because EventSource cannot set headers; replays missed events since the cursor before live streaming) |
 | `lib/lemon_sim_ui/live/hosted_werewolf_live.ex` | `LemonSimUi.Hosted*Live` | Hosted room creation, joining, role-blind host, private player, and public-safe story surfaces |
 | `lib/lemon_sim_ui/live/lobby_live.ex` | `LemonSimUi.LobbyLive` | Public lobby for `/`; lists running sims, links to spectator pages, and can expose configured VendingBench launcher presets |
 | `lib/lemon_sim_ui/live/leaderboard_live.ex` | `LemonSimUi.LeaderboardLive` | Public leaderboard for `/leaderboards`; scans configured suite roots and renders rankings, failures, token totals, and null-safe costs |

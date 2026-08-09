@@ -47,9 +47,11 @@ defmodule LemonSimUi.PhilosopherChat do
   require Logger
 
   alias LemonCore.Store
-  alias LemonSim.Examples.PhilosopherChat.Persona
   alias LemonSim.Examples.PhilosopherChat, as: Domain
+  alias LemonSim.Examples.PhilosopherChat.Persona
   alias LemonSimUi.PhilosopherChat.{Thread, ThreadServer}
+
+  @user_id Domain.user_id()
 
   @thread_table :philosopher_chat_threads
   @recovery_retry_ms 1_000
@@ -98,9 +100,14 @@ defmodule LemonSimUi.PhilosopherChat do
     with {:ok, _pid} <- ensure_thread(thread_id), do: ThreadServer.view(thread_id)
   end
 
-  def post_user_message(thread_id, text) do
+  def post_user_message(thread_id, text, client_msg_id \\ nil) do
     with {:ok, _pid} <- ensure_thread(thread_id),
-         do: ThreadServer.post_user_message(thread_id, text)
+         do: ThreadServer.post_user_message(thread_id, text, client_msg_id)
+  end
+
+  def events(thread_id, since \\ 0) do
+    with {:ok, _pid} <- ensure_thread(thread_id),
+         do: ThreadServer.events(thread_id, since)
   end
 
   def nudge(thread_id, agent_id) do
@@ -146,7 +153,7 @@ defmodule LemonSimUi.PhilosopherChat do
       member_ids: thread.member_ids,
       members:
         Enum.map(thread.member_ids, fn id ->
-          %{id: id, name: member_name(id), is_user: id == "you"}
+          %{id: id, name: member_name(id), is_user: id == @user_id}
         end),
       pace: thread.pace,
       status: thread.status,
@@ -157,7 +164,7 @@ defmodule LemonSimUi.PhilosopherChat do
     }
   end
 
-  def member_name("you"), do: "You"
+  def member_name(@user_id), do: "You"
   def member_name(id), do: (Persona.get(id) && Persona.get(id).name) || id
 
   def thread_child_spec(%Thread{} = thread), do: thread_child_spec(thread.id)
@@ -209,18 +216,12 @@ defmodule LemonSimUi.PhilosopherChat do
   end
 
   def handle_call({:delete_thread, thread_id}, _from, state) do
+    # Terminate the ThreadServer BEFORE deleting the stored record, in every
+    # case — otherwise a live server can persist itself back after the delete.
     result =
-      case Registry.lookup(LemonSimUi.PhilosopherChat.Registry, thread_id) do
-        [{pid, _}] ->
-          DynamicSupervisor.terminate_child(LemonSimUi.PhilosopherChat.ThreadSupervisor, pid)
-          _ = Store.delete(@thread_table, thread_id)
-          :ok
-
-        [] ->
-          case Store.delete(@thread_table, thread_id) do
-            :ok -> :ok
-            {:error, reason} -> {:error, reason}
-          end
+      with :ok <- terminate_thread_server(thread_id),
+           :ok <- Store.delete(@thread_table, thread_id) do
+        :ok
       end
 
     {:reply, result, state}
@@ -244,8 +245,11 @@ defmodule LemonSimUi.PhilosopherChat do
                    LemonSimUi.PhilosopherChat.ThreadSupervisor,
                    thread_child_spec(thread)
                  ) do
-              {:ok, _pid} -> :ok
-              {:error, reason} -> Logger.error("PhilosopherChat recovery failed: #{inspect(reason)}")
+              {:ok, _pid} ->
+                :ok
+
+              {:error, reason} ->
+                Logger.error("PhilosopherChat recovery failed: #{inspect(reason)}")
             end
           end
         end)
@@ -259,14 +263,21 @@ defmodule LemonSimUi.PhilosopherChat do
   end
 
   def handle_info(:prune_threads, state) do
-    retention_ms = Application.get_env(:lemon_sim_ui, :philosopher_chat_retention_ms, 30 * 24 * 3600 * 1000)
+    retention_ms =
+      Application.get_env(
+        :lemon_sim_ui,
+        :philosopher_chat_retention_ms,
+        30 * 24 * 3600 * 1000
+      )
+
     now = System.system_time(:millisecond)
 
     Store.list(@thread_table)
     |> Enum.each(fn {_id, thread} ->
       thread = Thread.normalize(thread)
 
-      if thread.status == "closed" and now - (thread.updated_at_ms || 0) > retention_ms do
+      if thread.status in ["closed", "paused"] and
+           now - (thread.updated_at_ms || 0) > retention_ms do
         _ = Store.delete(@thread_table, thread.id)
       end
     end)
@@ -275,16 +286,35 @@ defmodule LemonSimUi.PhilosopherChat do
     {:noreply, state}
   end
 
+  def handle_info(_message, state), do: {:noreply, state}
+
   # -- internals --
 
+  defp terminate_thread_server(thread_id) do
+    case Registry.lookup(LemonSimUi.PhilosopherChat.Registry, thread_id) do
+      [{pid, _}] ->
+        DynamicSupervisor.terminate_child(LemonSimUi.PhilosopherChat.ThreadSupervisor, pid)
+
+      [] ->
+        :ok
+    end
+  end
+
   defp create_and_start(name, member_ids, opts) do
-    member_ids = ["you" | Enum.reject(member_ids, &(&1 == "you"))]
+    member_ids = [@user_id | Enum.reject(member_ids, &(&1 == @user_id))]
     thread_id = new_thread_id()
     pace = Map.get(opts, "pace", Map.get(opts, :pace, "relaxed"))
     now = System.system_time(:millisecond)
 
     game_state = Domain.initial_state(thread_id, name, member_ids, pace: pace)
-    rng_state = :rand.seed_s(:exsss, {System.system_time(:microsecond), :erlang.unique_integer(), :erlang.phash2({thread_id, now})})
+
+    rng_state =
+      :rand.seed_s(
+        :exsss,
+        {System.system_time(:microsecond), :erlang.unique_integer(),
+         :erlang.phash2({thread_id, now})}
+      )
+      |> :rand.export_seed_s()
 
     thread = %Thread{
       id: thread_id,
@@ -325,7 +355,7 @@ defmodule LemonSimUi.PhilosopherChat do
   end
 
   defp validate_members(member_ids) do
-    agents = Enum.reject(member_ids, &(&1 == "you"))
+    agents = Enum.reject(member_ids, &(&1 == @user_id))
 
     cond do
       length(agents) < @min_agents_per_thread -> {:error, :too_few_members}

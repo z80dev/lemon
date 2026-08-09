@@ -48,6 +48,17 @@ defmodule LemonSimUi.Router do
     plug(LemonSimUi.Plugs.RequireAccessToken, sources: [:authorization])
   end
 
+  pipeline :public_json do
+    plug(:accepts, ["json"])
+    plug(LemonSimUi.Plugs.ChatCors)
+  end
+
+  pipeline :chat_api do
+    plug(:accepts, ["json"])
+    plug(LemonSimUi.Plugs.ChatCors)
+    plug(LemonSimUi.Plugs.RequireChatSession)
+  end
+
   pipeline :no_store do
     plug(:put_no_store)
   end
@@ -102,6 +113,32 @@ defmodule LemonSimUi.Router do
     get("/metrics", MetricsController, :index)
     post("/sims", AdminSimController, :create)
     post("/sims/:sim_id/stop", AdminSimController, :stop)
+  end
+
+  # Public: session login, CORS preflight, and the SSE stream (EventSource
+  # cannot set headers, so the stream action verifies the token itself).
+  scope "/api/chat", LemonSimUi do
+    pipe_through(:public_json)
+
+    match(:options, "/*path", PhilosopherChatApiController, :preflight)
+    post("/session", PhilosopherChatApiController, :session)
+    get("/threads/:id/stream", PhilosopherChatApiController, :stream)
+  end
+
+  scope "/api/chat", LemonSimUi do
+    pipe_through(:chat_api)
+
+    get("/roster", PhilosopherChatApiController, :roster)
+    post("/stream-ticket", PhilosopherChatApiController, :stream_ticket)
+    get("/threads", PhilosopherChatApiController, :index)
+    post("/threads", PhilosopherChatApiController, :create)
+    get("/threads/:id", PhilosopherChatApiController, :show)
+    post("/threads/:id/messages", PhilosopherChatApiController, :create_message)
+    post("/threads/:id/nudge", PhilosopherChatApiController, :nudge)
+    post("/threads/:id/pause", PhilosopherChatApiController, :pause)
+    post("/threads/:id/resume", PhilosopherChatApiController, :resume)
+    get("/threads/:id/memories/:agent_id", PhilosopherChatApiController, :memories)
+    get("/threads/:id/events", PhilosopherChatApiController, :events)
   end
 
   defp put_no_store(conn, _opts) do

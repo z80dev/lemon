@@ -119,6 +119,25 @@ defmodule LemonSim.Examples.PhilosopherChatTest do
       state = fresh_thread() |> then(&elem(PhilosopherChat.set_status(&1, "paused"), 1)) |> PhilosopherChat.with_actor("socrates")
       assert {:ok, []} = ActionSpace.tools(state, [])
     end
+
+    test "speak truncates oversized messages instead of failing" do
+      state = fresh_thread() |> PhilosopherChat.with_actor("socrates")
+      {:ok, tools} = ActionSpace.tools(state, [])
+      speak = Enum.find(tools, &(&1.name == "speak"))
+
+      long = String.duplicate("a", 1500)
+      assert {:ok, result} = speak.execute.("id", %{"message" => long}, nil, fn _ -> :ok end)
+      text = result.details["event"].payload["text"]
+
+      assert String.ends_with?(text, "…")
+      assert byte_size(text) <= 1400
+      assert String.length(text) >= 1390
+
+      # End-to-end: the truncated text must survive the updater's
+      # :message_too_long backstop and land in the world.
+      {:ok, next_state, _} = PhilosopherChat.post_message(state, "socrates", text)
+      assert List.last(next_state.world.messages).text == text
+    end
   end
 
   describe "pacing" do
@@ -170,6 +189,19 @@ defmodule LemonSim.Examples.PhilosopherChatTest do
       {b, _} = Pacing.rand_int(rng2, 100)
       assert is_integer(a) and a in 0..99
       assert is_integer(b) and b in 0..99
+    end
+
+    test "mentions match whole words only" do
+      state = fresh_thread()
+
+      {:ok, state, _} = PhilosopherChat.post_message(state, "you", "Of course you are human.")
+      refute Pacing.mentioned?(state.world, "hume")
+
+      {:ok, state, _} = PhilosopherChat.post_message(state, "you", "Hume, what say you?")
+      assert Pacing.mentioned?(state.world, "hume")
+
+      {:ok, state, _} = PhilosopherChat.post_message(state, "you", "Wittgenstein, your move.")
+      assert Pacing.mentioned?(state.world, "wittgenstein")
     end
   end
 
