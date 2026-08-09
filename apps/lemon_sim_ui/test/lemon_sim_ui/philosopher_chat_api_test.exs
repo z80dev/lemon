@@ -136,6 +136,20 @@ defmodule LemonSimUi.PhilosopherChatApiTest do
       assert socrates["doctrine"] != nil
       assert socrates["relationships"] != nil
     end
+
+    test "exposes the deep persona fields", %{conn: conn} do
+      body = conn |> authed() |> get("/api/chat/roster") |> json_response(200)
+
+      for contact <- body["contacts"] do
+        assert is_binary(contact["bio"]) and contact["bio"] != ""
+        assert is_list(contact["works"]) and contact["works"] != []
+        assert is_list(contact["quotes"]) and contact["quotes"] != []
+      end
+
+      nietzsche = Enum.find(body["contacts"], &(&1["id"] == "nietzsche"))
+      assert nietzsche["bio"] =~ "Basel"
+      assert "Thus Spoke Zarathustra" in nietzsche["works"]
+    end
   end
 
   describe "cors" do

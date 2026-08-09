@@ -64,7 +64,10 @@ defmodule LemonSimUi.PhilosopherChatApiController do
           :known_for,
           :doctrine,
           :style,
-          :relationships
+          :relationships,
+          :bio,
+          :works,
+          :quotes
         ])
       end)
 
