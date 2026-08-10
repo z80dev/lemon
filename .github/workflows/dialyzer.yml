@@ -25,6 +25,10 @@ on:
 permissions:
   contents: read
 
+# Version pins for the PLT/deps cache keys below. The setup-beam step keeps
+# LITERAL pins (not these vars): scripts/lint_ci_docs.sh J28 requires every
+# first-party workflow's otp-version/elixir-version fields to be the literal
+# 28.5 / 1.19.5 so pins stay greppable and bump uniformly. Keep both in sync.
 env:
   OTP_VERSION: "28.5"
   ELIXIR_VERSION: "1.19.5"
@@ -41,8 +45,8 @@ jobs:
       - name: Setup BEAM
         uses: erlef/setup-beam@v1
         with:
-          otp-version: ${{ env.OTP_VERSION }}
-          elixir-version: ${{ env.ELIXIR_VERSION }}
+          otp-version: "28.5"
+          elixir-version: "1.19.5"
 
       - name: Cache Mix deps and build
         uses: actions/cache@v4
