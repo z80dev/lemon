@@ -43,7 +43,7 @@ that fall out of it are written down in [`docs/beam_agents.md`](docs/beam_agents
 
 ## Architecture
 
-The target shape is eight published packages, a reference runtime that stays
+The target shape is nine published packages, a reference runtime that stays
 in this repo, and products that consume the packages exactly as a third party
 would.
 
@@ -53,13 +53,14 @@ would.
 | `lemon_core` | Bus, `Event` envelope, `Store` + backends, secrets, config, boundary contracts, primitives |
 | `lemon_agent` | Agent loop, tool registry, subagents, model runtime, CLI runners, workspace stores |
 | `lemon_memory` | Document schema, store, `Provider` behaviour + registry, ingest, search |
+| `lemon_media` | Redacted-by-construction media-job records: prompt/error hashing, label redaction |
 | `lemon_router` | Run lifecycle and session orchestration |
 | `lemon_gateway` | Engine execution runtime: `Engine` behaviour, registry, scheduler, locks |
 | `lemon_channels` | Channel core, `Plugin` behaviour, built-in adapters |
 | `lemon_platform_test` | Contract-test kit for `Plugin`/`Engine`/`Store.Backend`/`Memory.Provider` authors |
 
 **Reference runtime** (in-repo, unpublished): control plane, CLI, web UI,
-automation, skills, media, browser, LSP. **Products** (leaving for their own
+automation, skills, browser, LSP. **Products** (leaving for their own
 repos): the coding agent, the sim arenas, the showcase site, the TS clients.
 **Satellites** are the model for vendor integrations — `apps/x_api` carries the
 X client, its channel adapter and its three tools, and self-registers at boot,
@@ -78,10 +79,12 @@ router → channels: Dispatcher/Outbox facade only (the one allowed compile-time
 products/satellites → platform: hex deps; platform NEVER depends on a product
 ```
 
-**State of the split.** Phase 1 (carving a product-free `lemon_core`) and
-Phase 2 (inverting the wrong-direction dependencies) are complete except for
-the email channel port; Phase 3 (contracts, docs, test kit) is in flight.
-Nothing is on Hex yet. The plan of record is
+**State of the split.** Phases 1–3 are complete: `lemon_core` is
+product-free, the wrong-direction dependencies are inverted (the enforced
+allowlist is empty), the email channel port has landed, and the contracts,
+docs and test kit are in place. Phase 4 (packaging) is done — all nine
+packages build clean and are metadata-ready — with the first Hex release
+pending. The plan of record is
 [`docs/platform-split.md`](docs/platform-split.md) — a living document with the
 evidence behind each decision, a numbered decision log, and work items checked
 off in place. Per-package pages are in [`docs/platform/`](docs/platform).
@@ -229,7 +232,7 @@ Every app has its own README; these are the ones worth reading first.
 | Layer | Apps |
 | --- | --- |
 | Platform | [`ai`](apps/ai/README.md), [`lemon_core`](apps/lemon_core/README.md), [`agent_core`](apps/agent_core/README.md), `lemon_memory`, [`lemon_router`](apps/lemon_router/README.md), [`lemon_gateway`](apps/lemon_gateway/README.md), [`lemon_channels`](apps/lemon_channels/README.md), [`lemon_platform_test`](apps/lemon_platform_test/README.md) |
-| Reference runtime | [`lemon_control_plane`](apps/lemon_control_plane/README.md), [`lemon_cli`](apps/lemon_cli/README.md), [`lemon_web`](apps/lemon_web/README.md), [`lemon_automation`](apps/lemon_automation/README.md), [`lemon_skills`](apps/lemon_skills/README.md), [`lemon_media`](apps/lemon_media/README.md), [`lemon_browser`](apps/lemon_browser/README.md), [`lemon_lsp`](apps/lemon_lsp/README.md) |
+| Reference runtime | [`lemon_control_plane`](apps/lemon_control_plane/README.md), [`lemon_cli`](apps/lemon_cli/README.md), [`lemon_web`](apps/lemon_web/README.md), [`lemon_automation`](apps/lemon_automation/README.md), [`lemon_skills`](apps/lemon_skills/README.md), [`lemon_browser`](apps/lemon_browser/README.md), [`lemon_lsp`](apps/lemon_lsp/README.md) |
 | Products | [`coding_agent`](apps/coding_agent/README.md), [`coding_agent_ui`](apps/coding_agent_ui/README.md), [`lemon_mcp`](apps/lemon_mcp/README.md), [`lemon_evals`](apps/lemon_evals/README.md), [`lemon_sim`](apps/lemon_sim/README.md), [`lemon_sim_ui`](apps/lemon_sim_ui/README.md), [`lemon_tcg`](apps/lemon_tcg/README.md) |
 | Satellite | [`x_api`](apps/x_api/README.md) |
 
