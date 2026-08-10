@@ -11,8 +11,11 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   alias LemonChannels.Adapters.Discord.{
     FileOperations,
     Inbound,
+    ModelCatalog,
+    ModelPicker,
     ModelPolicyAdapter,
     Outbound,
+    SlashCommands,
     StatusRenderer,
     TriggerMode
   }
@@ -44,8 +47,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   @idle_keepalive_continue_prefix "lemon:idle:c:"
   @idle_keepalive_stop_prefix "lemon:idle:k:"
 
-  @providers_per_page 8
-  @models_per_page 8
   @model_default_engine "lemon"
   @thinking_levels ~w(off minimal low medium high xhigh)
   @debounce_ms 1_000
@@ -54,501 +55,13 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   @persistent_dedupe_scope "discord_inbound"
   @known_target_refresh_ms 30_000
 
-  # Discord slash commands
-  @lemon_command %{
-    name: "lemon",
-    description: "Run a Lemon prompt",
-    type: 1,
-    options: [
-      %{type: 3, name: "prompt", description: "Prompt text", required: true},
-      %{type: 3, name: "engine", description: "Optional engine override", required: false}
-    ]
-  }
-
-  @session_command %{
-    name: "session",
-    description: "Session controls",
-    type: 1,
-    options: [
-      %{
-        type: 1,
-        name: "new",
-        description: "Start a new session",
-        options: [
-          %{type: 3, name: "project", description: "Project path or ID", required: false}
-        ]
-      },
-      %{type: 1, name: "info", description: "Show session info"}
-    ]
-  }
-
-  @model_command %{
-    name: "model",
-    description: "Choose AI model for this chat",
-    type: 1
-  }
-
-  @thinking_command %{
-    name: "thinking",
-    description: "Set thinking level",
-    type: 1,
-    options: [
-      %{
-        type: 3,
-        name: "level",
-        description: "Thinking level",
-        required: false,
-        choices: [
-          %{name: "off", value: "off"},
-          %{name: "minimal", value: "minimal"},
-          %{name: "low", value: "low"},
-          %{name: "medium", value: "medium"},
-          %{name: "high", value: "high"},
-          %{name: "xhigh", value: "xhigh"},
-          %{name: "clear", value: "clear"},
-          %{name: "status", value: "status"}
-        ]
-      }
-    ]
-  }
-
-  @resume_command %{
-    name: "resume",
-    description: "Switch to a previous session",
-    type: 1,
-    options: [
-      %{type: 3, name: "selector", description: "Session number or resume token", required: false}
-    ]
-  }
-
-  @cancel_command %{
-    name: "cancel",
-    description: "Cancel the current run",
-    type: 1
-  }
-
-  @checkpoint_command %{
-    name: "checkpoint",
-    description: "Inspect or restore Lemon checkpoints",
-    type: 1,
-    options: [
-      %{
-        type: 1,
-        name: "status",
-        description: "Show redacted checkpoint status"
-      },
-      %{
-        type: 1,
-        name: "events",
-        description: "Show redacted checkpoint event history",
-        options: [
-          %{
-            type: 4,
-            name: "limit",
-            description: "Maximum events to show",
-            required: false,
-            min_value: 1,
-            max_value: 20
-          }
-        ]
-      },
-      %{
-        type: 1,
-        name: "diff",
-        description: "Show a redacted checkpoint diff preview",
-        options: [
-          %{type: 3, name: "checkpoint_id", description: "Checkpoint id", required: true}
-        ]
-      },
-      %{
-        type: 1,
-        name: "restore",
-        description: "Restore a checkpoint",
-        options: [
-          %{type: 3, name: "checkpoint_id", description: "Checkpoint id", required: true},
-          %{
-            type: 5,
-            name: "confirm",
-            description: "Must be true to restore files",
-            required: true
-          }
-        ]
-      }
-    ]
-  }
-
-  @rollback_command %{
-    @checkpoint_command
-    | name: "rollback",
-      description: "Rollback Lemon checkpoint changes"
-  }
-
-  @goal_command %{
-    name: "goal",
-    description: "Show or set the current session goal",
-    type: 1,
-    options: [
-      %{
-        type: 1,
-        name: "set",
-        description: "Set the current session goal",
-        options: [
-          %{
-            type: 3,
-            name: "objective",
-            description: "Goal objective",
-            required: true
-          },
-          %{
-            type: 4,
-            name: "max_continuations",
-            description: "Maximum automatic continuations before Lemon pauses",
-            required: false,
-            min_value: 0
-          }
-        ]
-      },
-      %{
-        type: 1,
-        name: "clear",
-        description: "Clear the current session goal"
-      },
-      %{
-        type: 1,
-        name: "pause",
-        description: "Pause the current session goal"
-      },
-      %{
-        type: 1,
-        name: "resume",
-        description: "Resume the current session goal"
-      },
-      %{
-        type: 1,
-        name: "continue",
-        description: "Submit one continuation for the current session goal",
-        options: [
-          %{
-            type: 4,
-            name: "max_continuations",
-            description: "Maximum automatic continuations before Lemon pauses",
-            required: false,
-            min_value: 0
-          },
-          %{
-            type: 3,
-            name: "model",
-            description: "Worker model override",
-            required: false
-          }
-        ]
-      },
-      %{
-        type: 1,
-        name: "loop_once",
-        description: "Run one goal judge tick",
-        options: [
-          %{
-            type: 3,
-            name: "judge_model",
-            description: "Judge model override",
-            required: false
-          },
-          %{
-            type: 3,
-            name: "judge_failure_policy",
-            description: "pause, continueOnce, or needsInput",
-            required: false
-          }
-        ]
-      },
-      %{
-        type: 1,
-        name: "loop_start",
-        description: "Start a bounded goal loop",
-        options: [
-          %{
-            type: 5,
-            name: "auto",
-            description: "Persist auto scheduling until stopped or the goal pauses/completes",
-            required: false
-          },
-          %{
-            type: 4,
-            name: "max_ticks",
-            description: "Maximum judge ticks",
-            required: false,
-            min_value: 1
-          },
-          %{
-            type: 4,
-            name: "max_continuations",
-            description: "Maximum automatic continuations before Lemon pauses",
-            required: false,
-            min_value: 0
-          },
-          %{
-            type: 3,
-            name: "judge_model",
-            description: "Judge model override",
-            required: false
-          },
-          %{
-            type: 3,
-            name: "judge_failure_policy",
-            description: "pause, continueOnce, or needsInput",
-            required: false
-          }
-        ]
-      },
-      %{
-        type: 1,
-        name: "loop_status",
-        description: "Show the current goal loop"
-      },
-      %{
-        type: 1,
-        name: "loop_stop",
-        description: "Stop the current goal loop"
-      },
-      %{
-        type: 1,
-        name: "status",
-        description: "Show the current session goal"
-      }
-    ]
-  }
-
-  @kanban_command %{
-    name: "kanban",
-    description: "Manage durable Lemon kanban boards",
-    type: 1,
-    options: [
-      %{
-        type: 1,
-        name: "boards",
-        description: "List kanban boards",
-        options: [
-          %{type: 3, name: "status", description: "Board status", required: false},
-          %{type: 3, name: "owner", description: "Board owner", required: false},
-          %{
-            type: 4,
-            name: "limit",
-            description: "Maximum boards to show",
-            required: false,
-            min_value: 1
-          }
-        ]
-      },
-      %{
-        type: 1,
-        name: "create",
-        description: "Create a kanban board",
-        options: [
-          %{type: 3, name: "name", description: "Board name", required: true},
-          %{type: 3, name: "workspace", description: "Workspace path", required: false}
-        ]
-      },
-      %{
-        type: 1,
-        name: "show",
-        description: "Show redacted board tasks",
-        options: [
-          %{type: 3, name: "board_id", description: "Board id", required: true},
-          %{
-            type: 4,
-            name: "limit",
-            description: "Maximum tasks to show",
-            required: false,
-            min_value: 1
-          }
-        ]
-      },
-      %{
-        type: 1,
-        name: "archive",
-        description: "Archive a kanban board",
-        options: [
-          %{type: 3, name: "board_id", description: "Board id", required: true}
-        ]
-      },
-      %{
-        type: 1,
-        name: "task_create",
-        description: "Create a board task",
-        options: [
-          %{type: 3, name: "board_id", description: "Board id", required: true},
-          %{type: 3, name: "title", description: "Task title", required: true},
-          %{type: 3, name: "priority", description: "Task priority", required: false},
-          %{type: 3, name: "assignee", description: "Task assignee", required: false},
-          %{type: 3, name: "worker_profile", description: "Worker profile", required: false}
-        ]
-      },
-      %{
-        type: 1,
-        name: "task_update",
-        description: "Update a board task",
-        options: [
-          %{type: 3, name: "task_id", description: "Task id", required: true},
-          %{type: 3, name: "status", description: "Task status", required: false},
-          %{type: 3, name: "priority", description: "Task priority", required: false},
-          %{type: 3, name: "assignee", description: "Task assignee", required: false},
-          %{type: 3, name: "worker_profile", description: "Worker profile", required: false}
-        ]
-      },
-      %{
-        type: 1,
-        name: "comment",
-        description: "Add a redacted task comment",
-        options: [
-          %{type: 3, name: "task_id", description: "Task id", required: true},
-          %{type: 3, name: "body", description: "Comment body", required: true}
-        ]
-      },
-      %{
-        type: 1,
-        name: "dispatch_start",
-        description: "Start a board dispatcher",
-        options: [
-          %{type: 3, name: "board_id", description: "Board id", required: true},
-          %{
-            type: 4,
-            name: "max_concurrency",
-            description: "Maximum concurrent tasks",
-            required: false,
-            min_value: 1
-          },
-          %{type: 3, name: "worker_profile", description: "Worker profile", required: false}
-        ]
-      },
-      %{
-        type: 1,
-        name: "dispatch_status",
-        description: "Show board dispatcher status",
-        options: [
-          %{type: 3, name: "board_id", description: "Board id", required: true}
-        ]
-      },
-      %{
-        type: 1,
-        name: "dispatch_stop",
-        description: "Stop a board dispatcher",
-        options: [
-          %{type: 3, name: "board_id", description: "Board id", required: true}
-        ]
-      }
-    ]
-  }
-
-  @media_command %{
-    name: "media",
-    description: "Inspect redacted Lemon media jobs",
-    type: 1,
-    options: [
-      %{
-        type: 1,
-        name: "status",
-        description: "Show redacted media job status"
-      }
-    ]
-  }
-
-  @trigger_command %{
-    name: "trigger",
-    description: "Control message trigger mode",
-    type: 1,
-    options: [
-      %{
-        type: 3,
-        name: "mode",
-        description: "Trigger mode",
-        required: false,
-        choices: [
-          %{name: "mentions", value: "mentions"},
-          %{name: "all", value: "all"},
-          %{name: "clear", value: "clear"},
-          %{name: "status", value: "status"}
-        ]
-      }
-    ]
-  }
-
-  @cwd_command %{
-    name: "cwd",
-    description: "Set working directory",
-    type: 1,
-    options: [
-      %{type: 3, name: "path", description: "Project path, ID, or 'clear'", required: false}
-    ]
-  }
-
-  @reload_command %{
-    name: "reload",
-    description: "Recompile code (dev only)",
-    type: 1
-  }
-
-  @topic_command %{
-    name: "topic",
-    description: "Create a new thread or forum post",
-    type: 1,
-    options: [
-      %{type: 3, name: "name", description: "Thread/post name", required: true},
-      %{type: 3, name: "message", description: "Initial message content", required: false}
-    ]
-  }
-
-  @file_command %{
-    name: "file",
-    description: "File operations",
-    type: 1,
-    options: [
-      %{
-        type: 1,
-        name: "put",
-        description: "Upload an attached file to the project",
-        options: [
-          %{type: 11, name: "attachment", description: "File to upload", required: true},
-          %{type: 3, name: "path", description: "Destination path (relative)", required: false},
-          %{type: 5, name: "force", description: "Overwrite existing file", required: false}
-        ]
-      },
-      %{
-        type: 1,
-        name: "get",
-        description: "Download a file from the project",
-        options: [
-          %{type: 3, name: "path", description: "File path (relative)", required: true}
-        ]
-      }
-    ]
-  }
-
-  def slash_commands do
-    [
-      @lemon_command,
-      @session_command,
-      @model_command,
-      @thinking_command,
-      @resume_command,
-      @cancel_command,
-      @checkpoint_command,
-      @rollback_command,
-      @goal_command,
-      @kanban_command,
-      @media_command,
-      @trigger_command,
-      @cwd_command,
-      @reload_command,
-      @topic_command,
-      @file_command
-    ]
-  end
-
-  def kanban_command_schema, do: @kanban_command
-  def checkpoint_command_schema, do: @checkpoint_command
-  def rollback_command_schema, do: @rollback_command
-  def media_command_schema, do: @media_command
+  # Slash-command schemas live in SlashCommands; re-export the public surface the
+  # adapter registration and tests depend on.
+  defdelegate slash_commands, to: SlashCommands
+  defdelegate kanban_command_schema, to: SlashCommands
+  defdelegate checkpoint_command_schema, to: SlashCommands
+  defdelegate rollback_command_schema, to: SlashCommands
+  defdelegate media_command_schema, to: SlashCommands
 
   def slash_command_args_for_interaction(interaction) do
     name = interaction |> map_get(:data) |> map_get(:name)
@@ -1366,13 +879,13 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     current_future_model =
       ModelPolicyAdapter.default_model_preference(state.account_id, channel_id, thread_id)
 
-    providers = available_model_providers()
+    providers = ModelCatalog.available_model_providers()
 
     if providers == [] do
       respond_ephemeral(interaction, "No models available.")
     else
       text = render_model_picker_text(current_session_model, current_future_model)
-      components = model_provider_components(providers, 0)
+      components = ModelPicker.model_provider_components(providers, 0)
 
       respond_with_components(interaction, text, components, ephemeral: true)
     end
@@ -1402,62 +915,67 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         guild_id
       )
 
-    case parse_model_callback(custom_id, values) do
+    case ModelPicker.parse_model_callback(custom_id, values) do
       {:select_provider, provider} ->
-        models = models_for_provider(provider)
+        models = ModelCatalog.models_for_provider(provider)
 
         if models == [] do
           update_interaction(
             interaction,
             "No models available for #{provider}.",
-            model_provider_components(available_model_providers(), 0)
+            ModelPicker.model_provider_components(ModelCatalog.available_model_providers(), 0)
           )
         else
           update_interaction(
             interaction,
             "Provider: **#{provider}**\nChoose a model:",
-            model_list_components(provider, models, 0)
+            ModelPicker.model_list_components(provider, models, 0)
           )
         end
 
       {:providers, page} ->
-        providers = available_model_providers()
+        providers = ModelCatalog.available_model_providers()
 
         current_future_model =
           ModelPolicyAdapter.default_model_preference(state.account_id, channel_id, thread_id)
 
         text = render_model_picker_text(nil, current_future_model)
-        update_interaction(interaction, text, model_provider_components(providers, page))
+
+        update_interaction(
+          interaction,
+          text,
+          ModelPicker.model_provider_components(providers, page)
+        )
 
       {:provider, provider, page} ->
-        models = models_for_provider(provider)
+        models = ModelCatalog.models_for_provider(provider)
 
         update_interaction(
           interaction,
           "Provider: **#{provider}**\nChoose a model:",
-          model_list_components(provider, models, page)
+          ModelPicker.model_list_components(provider, models, page)
         )
 
       {:choose, provider, index} ->
-        case model_at_index(provider, index) do
+        case ModelCatalog.model_at_index(provider, index) do
           nil ->
             acknowledge_interaction(interaction)
 
           model ->
             update_interaction(
               interaction,
-              "Selected: **#{model_label(model)}**\nApply to:",
-              model_scope_components(provider, index)
+              "Selected: **#{ModelCatalog.model_label(model)}**\nApply to:",
+              ModelPicker.model_scope_components(provider, index)
             )
         end
 
       {:set, scope_type, provider, index} ->
-        case model_at_index(provider, index) do
+        case ModelCatalog.model_at_index(provider, index) do
           nil ->
             acknowledge_interaction(interaction)
 
           model ->
-            model_value = model_spec(model)
+            model_value = ModelCatalog.model_spec(model)
             _ = ModelPolicyAdapter.put_session_model_override(session_key, model_value)
 
             if scope_type == :future do
@@ -1472,8 +990,9 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
             text =
               if scope_type == :future,
-                do: "Default model set to **#{model_label(model)}** for all future sessions.",
-                else: "Model set to **#{model_label(model)}** for this session."
+                do:
+                  "Default model set to **#{ModelCatalog.model_label(model)}** for all future sessions.",
+                else: "Model set to **#{ModelCatalog.model_label(model)}** for this session."
 
             update_interaction(interaction, text, [])
         end
@@ -2201,161 +1720,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     _ -> state
   end
 
-  # ============================================================================
-  # Model Picker - Components
-  # ============================================================================
-
-  defp model_provider_components(providers, page) when is_list(providers) do
-    {slice, has_prev, has_next} = paginate(providers, page, @providers_per_page)
-
-    options =
-      Enum.map(slice, fn provider ->
-        StatusRenderer.select_option(provider, provider)
-      end)
-
-    nav_buttons =
-      []
-      |> maybe_append(
-        has_prev,
-        StatusRenderer.button("Prev", "#{@model_callback_prefix}:providers:#{max(page - 1, 0)}")
-      )
-      |> maybe_append(
-        has_next,
-        StatusRenderer.button("Next", "#{@model_callback_prefix}:providers:#{page + 1}")
-      )
-      |> maybe_append(
-        true,
-        StatusRenderer.button("Close", "#{@model_callback_prefix}:close", style: :danger)
-      )
-
-    components = [
-      StatusRenderer.action_row([
-        StatusRenderer.select_menu("#{@model_callback_prefix}:select_provider", options,
-          placeholder: "Choose a provider"
-        )
-      ])
-    ]
-
-    if nav_buttons != [] do
-      components ++ [StatusRenderer.action_row(nav_buttons)]
-    else
-      components
-    end
-  end
-
-  defp model_list_components(provider, models, page) when is_list(models) do
-    indexed = Enum.with_index(models)
-    {slice, has_prev, has_next} = paginate(indexed, page, @models_per_page)
-
-    options =
-      Enum.map(slice, fn {model, idx} ->
-        StatusRenderer.select_option(model_label(model), "#{provider}:#{idx}")
-      end)
-
-    nav_buttons =
-      []
-      |> maybe_append(
-        has_prev,
-        StatusRenderer.button(
-          "Prev",
-          "#{@model_callback_prefix}:provider:#{provider}:#{max(page - 1, 0)}"
-        )
-      )
-      |> maybe_append(
-        has_next,
-        StatusRenderer.button(
-          "Next",
-          "#{@model_callback_prefix}:provider:#{provider}:#{page + 1}"
-        )
-      )
-      |> maybe_append(
-        true,
-        StatusRenderer.button("Back", "#{@model_callback_prefix}:providers:0")
-      )
-      |> maybe_append(
-        true,
-        StatusRenderer.button("Close", "#{@model_callback_prefix}:close", style: :danger)
-      )
-
-    [
-      StatusRenderer.action_row([
-        StatusRenderer.select_menu(
-          "#{@model_callback_prefix}:select_model:#{provider}:#{page}",
-          options,
-          placeholder: "Choose a model"
-        )
-      ]),
-      StatusRenderer.action_row(nav_buttons)
-    ]
-  end
-
-  defp model_scope_components(provider, index) do
-    [
-      StatusRenderer.action_row([
-        StatusRenderer.button(
-          "This session",
-          "#{@model_callback_prefix}:set:s:#{provider}:#{index}",
-          style: :primary
-        ),
-        StatusRenderer.button(
-          "All future sessions",
-          "#{@model_callback_prefix}:set:f:#{provider}:#{index}",
-          style: :success
-        ),
-        StatusRenderer.button("Back", "#{@model_callback_prefix}:provider:#{provider}:0"),
-        StatusRenderer.button("Close", "#{@model_callback_prefix}:close", style: :danger)
-      ])
-    ]
-  end
-
-  defp parse_model_callback(custom_id, values) when is_binary(custom_id) do
-    cond do
-      # Select menu: provider selection
-      String.starts_with?(custom_id, "#{@model_callback_prefix}:select_provider") and values != [] ->
-        {:select_provider, List.first(values)}
-
-      # Select menu: model selection
-      String.starts_with?(custom_id, "#{@model_callback_prefix}:select_model:") and values != [] ->
-        selected = List.first(values)
-
-        case String.split(selected, ":", parts: 2) do
-          [provider, idx_str] ->
-            case Integer.parse(idx_str) do
-              {idx, _} -> {:choose, provider, idx}
-              _ -> nil
-            end
-
-          _ ->
-            nil
-        end
-
-      # Button callbacks
-      true ->
-        prefix = @model_callback_prefix <> ":"
-
-        if String.starts_with?(custom_id, prefix) do
-          rest = String.replace_prefix(custom_id, prefix, "")
-          parse_model_button_callback(rest)
-        else
-          nil
-        end
-    end
-  end
-
-  defp parse_model_callback(_, _), do: nil
-
-  defp parse_model_button_callback(rest) do
-    case String.split(rest, ":") do
-      ["providers", page] -> {:providers, max(parse_int(page) || 0, 0)}
-      ["provider", provider, page] -> {:provider, provider, max(parse_int(page) || 0, 0)}
-      ["choose", provider, index, _page] -> {:choose, provider, parse_int(index)}
-      ["set", "s", provider, index] -> {:set, :session, provider, parse_int(index)}
-      ["set", "f", provider, index] -> {:set, :future, provider, parse_int(index)}
-      ["close"] -> :close
-      _ -> nil
-    end
-  end
-
   # Model picker input from regular messages (text matching for DMs)
   defp maybe_handle_model_picker_input(state, _inbound, _text) do
     # Discord uses component interactions for model picker, not text input
@@ -2798,185 +2162,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
   defp extract_project_info({:ok, %{id: id, root: root}}), do: %{id: id, root: root}
   defp extract_project_info(_), do: nil
-
-  # ============================================================================
-  # Model Catalog
-  # ============================================================================
-
-  defp available_model_providers do
-    available_model_catalog()
-    |> Enum.map(& &1.provider)
-  end
-
-  defp models_for_provider(provider) when is_binary(provider) do
-    available_model_catalog()
-    |> Enum.find_value([], fn
-      %{provider: ^provider, models: models} -> models
-      _ -> nil
-    end)
-  end
-
-  defp model_at_index(provider, index)
-       when is_binary(provider) and is_integer(index) and index >= 0 do
-    models_for_provider(provider) |> Enum.at(index)
-  end
-
-  defp model_at_index(_, _), do: nil
-
-  defp model_spec(%{provider: provider, id: id}) when is_binary(provider) and is_binary(id),
-    do: "#{provider}:#{id}"
-
-  defp model_spec(_), do: nil
-
-  defp model_label(%{name: name, id: id}) when is_binary(name) and name != "" and is_binary(id),
-    do: "#{name} (#{id})"
-
-  defp model_label(%{id: id}) when is_binary(id), do: id
-  defp model_label(other), do: inspect(other)
-
-  defp available_model_catalog do
-    models_module = :"Elixir.Ai.Models"
-
-    models =
-      if Code.ensure_loaded?(models_module) and function_exported?(models_module, :list_models, 0) do
-        apply(models_module, :list_models, [])
-      else
-        fallback_model_entries()
-      end
-
-    model_maps =
-      models
-      |> Enum.map(&to_model_map/1)
-      |> Enum.filter(&is_map/1)
-
-    filtered =
-      model_maps
-      |> filter_enabled_model_maps()
-      |> maybe_fallback_to_default_providers(model_maps)
-
-    filtered
-    |> Enum.group_by(& &1.provider)
-    |> Enum.map(fn {provider, provider_models} ->
-      %{
-        provider: provider,
-        models:
-          Enum.sort_by(provider_models, fn m ->
-            {String.downcase(m.name || m.id || ""), m.id || ""}
-          end)
-      }
-    end)
-    |> Enum.sort_by(& &1.provider)
-  rescue
-    _ -> fallback_catalog()
-  end
-
-  defp to_model_map(%{provider: provider, id: id} = model) when is_binary(id) do
-    provider_str = provider |> to_string() |> String.downcase()
-    name = Map.get(model, :name) || Map.get(model, "name") || id
-    %{provider: provider_str, id: id, name: name}
-  rescue
-    _ -> nil
-  end
-
-  defp to_model_map(_), do: nil
-
-  defp fallback_model_entries do
-    [
-      %{provider: "anthropic", id: "claude-sonnet-4-20250514", name: "Claude Sonnet 4"},
-      %{provider: "openai", id: "gpt-4o", name: "GPT-4o"},
-      %{provider: "google", id: "gemini-2.5-pro", name: "Gemini 2.5 Pro"}
-    ]
-  end
-
-  defp fallback_catalog do
-    fallback_model_entries()
-    |> Enum.group_by(& &1.provider)
-    |> Enum.map(fn {provider, models} -> %{provider: provider, models: models} end)
-    |> Enum.sort_by(& &1.provider)
-  end
-
-  defp filter_enabled_model_maps(model_maps) when is_list(model_maps) do
-    enabled = enabled_model_provider_names(model_maps)
-    Enum.filter(model_maps, fn model -> normalize_provider_name(model.provider) in enabled end)
-  end
-
-  defp maybe_fallback_to_default_providers([], model_maps) when is_list(model_maps) do
-    cfg = LemonCore.Config.cached()
-    defaults = default_provider_hints(cfg)
-    Enum.filter(model_maps, fn model -> normalize_provider_name(model.provider) in defaults end)
-  rescue
-    _ -> []
-  end
-
-  defp maybe_fallback_to_default_providers(filtered, _), do: filtered
-
-  defp enabled_model_provider_names(model_maps) when is_list(model_maps) do
-    cfg = LemonCore.Config.cached()
-    configured = configured_provider_index(cfg)
-    defaults = default_provider_hints(cfg)
-
-    model_maps
-    |> Enum.map(&normalize_provider_name(&1.provider))
-    |> Enum.reject(&(&1 == ""))
-    |> Enum.uniq()
-    |> Enum.filter(fn provider ->
-      provider_enabled?(provider, configured, defaults)
-    end)
-  rescue
-    _ -> []
-  end
-
-  defp configured_provider_index(cfg) do
-    providers = cfg.providers || %{}
-
-    Enum.reduce(providers, %{}, fn {name, provider_cfg}, acc ->
-      Map.put(acc, normalize_provider_name(name), provider_cfg || %{})
-    end)
-  rescue
-    _ -> %{}
-  end
-
-  defp default_provider_hints(cfg) do
-    agent = map_get(cfg, :agent) || %{}
-    provider = map_get(agent, :default_provider)
-    model = map_get(agent, :default_model)
-    {model_provider, _} = split_model_hint(model)
-
-    [provider, model_provider]
-    |> Enum.filter(&(is_binary(&1) and String.trim(&1) != ""))
-    |> Enum.map(&normalize_provider_name/1)
-    |> Enum.reject(&(&1 == ""))
-    |> Enum.uniq()
-  rescue
-    _ -> []
-  end
-
-  defp split_model_hint(hint) when is_binary(hint) and hint != "" do
-    case String.split(hint, ":", parts: 2) do
-      [p, m] when p != "" and m != "" -> {p, m}
-      _ -> {nil, hint}
-    end
-  end
-
-  defp split_model_hint(_), do: {nil, nil}
-
-  defp provider_enabled?(provider, configured, defaults) do
-    Map.has_key?(configured, provider) or provider in defaults or
-      provider_has_credentials?(provider, configured)
-  end
-
-  defp provider_has_credentials?(provider, configured) do
-    AgentCore.ModelRuntime.Credentials.provider_has_credentials?(provider, configured)
-  rescue
-    _ -> false
-  end
-
-  defp normalize_provider_name(name) when is_binary(name), do: String.downcase(String.trim(name))
-
-  defp normalize_provider_name(name) when is_atom(name),
-    do: name |> Atom.to_string() |> normalize_provider_name()
-
-  defp normalize_provider_name(_), do: ""
 
   # ============================================================================
   # Discord API Helpers
@@ -3652,15 +2837,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   # Utility Functions
   # ============================================================================
 
-  defp paginate(list, page, per_page)
-       when is_list(list) and is_integer(page) and is_integer(per_page) do
-    p = if page < 0, do: 0, else: page
-    start_index = p * per_page
-    total = length(list)
-    slice = list |> Enum.drop(start_index) |> Enum.take(per_page)
-    {slice, p > 0, start_index + per_page < total}
-  end
-
   defp parse_allowed_ids(value) when is_list(value) do
     ids = value |> Enum.map(&parse_id/1) |> Enum.filter(&is_integer/1)
     if ids == [], do: nil, else: MapSet.new(ids)
@@ -3678,17 +2854,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   defp parse_id(_), do: nil
-
-  defp parse_int(value) when is_integer(value), do: value
-
-  defp parse_int(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {id, _} -> id
-      :error -> nil
-    end
-  end
-
-  defp parse_int(_), do: nil
 
   defp merge_config(base, nil), do: base
   defp merge_config(base, cfg) when is_map(cfg), do: Map.merge(base || %{}, cfg)
@@ -3725,9 +2890,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
-
-  defp maybe_append(list, true, item), do: list ++ [item]
-  defp maybe_append(list, false, _item), do: list
 
   defp resolve_bot_token_secret(config) do
     secret_name = cfg_get(config, :bot_token_secret)

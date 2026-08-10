@@ -1,18 +1,15 @@
 defmodule AgentCore.CliRunners.OpencodeSchema do
-  @moduledoc """
-  OpenCode CLI JSONL event schema definitions.
-
-  OpenCode emits newline-delimited JSON with a `"type"` discriminator when run with:
-
-      opencode run --format json
-
-  Observed event types (mirrors Takopi):
-  - `step_start`
-  - `tool_use`
-  - `text`
-  - `step_finish`
-  - `error`
-  """
+  # Internal: OpenCode CLI JSONL event schema definitions.
+  #
+  # OpenCode emits newline-delimited JSON with a "type" discriminator when run
+  # with:
+  #
+  #     opencode run --format json
+  #
+  # Observed event types (mirrors Takopi): step_start, tool_use, text,
+  # step_finish, error. Kept out of the published docs: subprocess-output
+  # parser, not part of the lemon_agent consumer API.
+  @moduledoc false
 
   # Keep these structs small and permissive: OpenCode may add fields over time.
 

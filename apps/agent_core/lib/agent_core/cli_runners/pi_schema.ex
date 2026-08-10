@@ -1,14 +1,15 @@
 defmodule AgentCore.CliRunners.PiSchema do
-  @moduledoc """
-  Pi Coding Agent JSONL event schema.
-
-  Pi emits newline-delimited JSON when run with:
-
-      pi --print --mode json --session <token> <prompt>
-
-  Events use a `"type"` discriminator (mirrors Takopi).
-  This schema decodes known event types and treats unknown ones as `Unknown`.
-  """
+  # Internal: Pi Coding Agent JSONL event schema.
+  #
+  # Pi emits newline-delimited JSON when run with:
+  #
+  #     pi --print --mode json --session <token> <prompt>
+  #
+  # Events use a "type" discriminator (mirrors Takopi). This schema decodes
+  # known event types and treats unknown ones as `Unknown`. Kept out of the
+  # published docs: it is a subprocess-output parser, not part of the
+  # lemon_agent consumer API.
+  @moduledoc false
 
   defmodule SessionHeader do
     @moduledoc false

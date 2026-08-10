@@ -1,11 +1,12 @@
 defmodule AgentCore.CliRunners.DroidSchema do
-  @moduledoc """
-  Factory Droid CLI stream-json event schema definitions.
-
-  Droid emits newline-delimited JSON with a `"type"` discriminator when run with:
-
-      droid exec -o stream-json --skip-permissions-unsafe ...
-  """
+  # Internal: Factory Droid CLI stream-json event schema definitions.
+  #
+  # Droid emits newline-delimited JSON with a "type" discriminator when run with:
+  #
+  #     droid exec -o stream-json --skip-permissions-unsafe ...
+  #
+  # Kept out of the published docs: subprocess-output parser, not consumer API.
+  @moduledoc false
 
   defmodule DroidSystemEvent do
     @moduledoc false
