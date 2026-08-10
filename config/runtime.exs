@@ -325,6 +325,54 @@ if hosted_ai_concurrency = normalized_env.("LEMON_WEREWOLF_HOSTED_AI_CONCURRENCY
          )
 end
 
+# -- PhilosopherChat (multi-agent group chat) --
+
+philosopher_chat_enabled =
+  case normalized_env.("LEMON_PHILOSOPHER_CHAT_ENABLED") do
+    nil -> config_env() != :prod
+    value -> parse_runtime_boolean.("LEMON_PHILOSOPHER_CHAT_ENABLED", value)
+  end
+
+config :lemon_sim_ui, :philosopher_chat_enabled, philosopher_chat_enabled
+
+if philosopher_chat_data_root = normalized_env.("LEMON_PHILOSOPHER_CHAT_DATA_ROOT") do
+  config :lemon_sim_ui, :philosopher_chat_data_root, philosopher_chat_data_root
+end
+
+if philosopher_chat_ai_model = normalized_env.("LEMON_PHILOSOPHER_CHAT_AI_MODEL") do
+  config :lemon_sim_ui, :philosopher_chat_ai_model, philosopher_chat_ai_model
+end
+
+if philosopher_chat_ai_concurrency =
+     normalized_env.("LEMON_PHILOSOPHER_CHAT_AI_CONCURRENCY") do
+  config :lemon_sim_ui,
+         :philosopher_chat_ai_concurrency,
+         parse_runtime_integer.(
+           "LEMON_PHILOSOPHER_CHAT_AI_CONCURRENCY",
+           philosopher_chat_ai_concurrency,
+           1..64
+         )
+end
+
+if philosopher_chat_password = normalized_env.("LEMON_PHILOSOPHER_CHAT_PASSWORD") do
+  config :lemon_sim_ui, :philosopher_chat_password, philosopher_chat_password
+end
+
+if philosopher_chat_cors_origins = normalized_env.("LEMON_PHILOSOPHER_CHAT_CORS_ORIGINS") do
+  config :lemon_sim_ui, :philosopher_chat_cors_origins, philosopher_chat_cors_origins
+end
+
+if philosopher_chat_thread_limit =
+     normalized_env.("LEMON_PHILOSOPHER_CHAT_THREAD_LIMIT") do
+  config :lemon_sim_ui,
+         :philosopher_chat_thread_limit,
+         parse_runtime_integer.(
+           "LEMON_PHILOSOPHER_CHAT_THREAD_LIMIT",
+           philosopher_chat_thread_limit,
+           1..200
+         )
+end
+
 arena_league_root = normalized_env.("LEMON_ARENA_LEAGUE_ROOT")
 
 arenas =
