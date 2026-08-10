@@ -35,6 +35,10 @@ You will receive an acknowledgement within 72 hours.
 
 ## Security Design Notes
 
+For the full threat model — secrets encryption, the inbound-webhook attack
+surface, tool-execution approvals, untrusted-content handling, and the package
+boundary guarantee — see [`docs/security/threat-model.md`](docs/security/threat-model.md).
+
 ### Secrets
 
 API keys and secrets are stored in an encrypted keychain, not in `config.toml`

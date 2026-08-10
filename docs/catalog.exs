@@ -174,6 +174,12 @@
     max_age_days: 90
   },
   %{
+    path: "docs/mix-tasks.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-08-10],
+    max_age_days: 180
+  },
+  %{
     path: "docs/model-selection-decoupling.md",
     owner: "@z80",
     last_reviewed: ~D[2026-06-17],
@@ -261,6 +267,12 @@
     path: "docs/security/secrets-migration-guide.md",
     owner: "@z80",
     last_reviewed: ~D[2026-06-17],
+    max_age_days: 90
+  },
+  %{
+    path: "docs/security/threat-model.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-08-10],
     max_age_days: 90
   },
   %{
