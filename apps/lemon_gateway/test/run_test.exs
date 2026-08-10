@@ -2448,28 +2448,23 @@ defmodule LemonGateway.RunTest do
   # ============================================================================
 
   describe "resume token propagation" do
-    test "resume token from Started event is stored in ChatState" do
+    # Chat-state persistence belongs to the router (D11); the gateway's
+    # responsibility ends at carrying the resume token into the completion
+    # event the router consumes. These tests assert that event payload.
+    test "resume token from Started event is propagated into the completion event" do
       scope = make_scope()
       job = make_job(scope, meta: %{notify_pid: self()})
 
       {:ok, pid} = start_run_direct(job)
 
-      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true} = completed}, 2000
 
-      # Wait for store operations to complete
-      Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> LemonCore.Store.get_chat_state(scope) != nil end,
-        message: "ChatState was not persisted"
-      )
-
-      # ChatState should have the resume token
-      chat_state = LemonCore.Store.get_chat_state(scope)
-      assert chat_state != nil
-      assert chat_state.last_engine == "test"
-      assert is_binary(chat_state.last_resume_token)
+      assert %ResumeToken{} = completed.resume
+      assert completed.resume.engine == "test"
+      assert is_binary(completed.resume.value)
     end
 
-    test "resume token from Completed event is stored in ChatState" do
+    test "resume token from Completed event is propagated into the completion event" do
       scope = make_scope()
 
       job =
@@ -2498,32 +2493,16 @@ defmodule LemonGateway.RunTest do
 
       send(pid, {:engine_event, run_ref, completed})
 
-      assert_receive {:run_complete, ^pid, _}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed} = received}, 2000
 
-      # Wait for store operations to complete
-      Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn ->
-          state = LemonCore.Store.get_chat_state(scope)
-          state != nil and state.last_resume_token == resume.value
-        end,
-        message: "ChatState with resume token was not persisted"
-      )
-
-      # ChatState should have the completed resume token
-      chat_state = LemonCore.Store.get_chat_state(scope)
-      assert chat_state != nil
-      assert chat_state.last_engine == "controllable"
-      assert chat_state.last_resume_token == resume.value
+      assert %ResumeToken{engine: "controllable"} = received.resume
+      assert received.resume.value == resume.value
     end
 
-    test "context overflow clears ChatState and does not persist failing resume" do
+    # Overflow classification and the chat-state delete live in the router
+    # (D11): the gateway forwards the raw error and token untouched.
+    test "context overflow completion forwards the error and resume unmodified" do
       scope = make_scope()
-
-      LemonCore.Store.put_chat_state(scope, %LemonCore.ChatState{
-        last_engine: "controllable",
-        last_resume_token: "stale_token",
-        updated_at: System.system_time(:millisecond)
-      })
 
       job =
         make_job(scope,
@@ -2551,22 +2530,14 @@ defmodule LemonGateway.RunTest do
          })}
       )
 
-      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: false}}, 2000
-      # Wait to confirm no ChatState was written
-      Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> LemonCore.Store.get_chat_state(scope) == nil end,
-        message: "ChatState should remain nil after context overflow"
-      )
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: false} = completed}, 2000
+
+      assert completed.error =~ "context_length_exceeded"
+      assert completed.resume == resume
     end
 
-    test "Chinese context overflow marker clears ChatState and does not persist failing resume" do
+    test "Chinese context overflow marker is forwarded in the completion event" do
       scope = make_scope()
-
-      LemonCore.Store.put_chat_state(scope, %LemonCore.ChatState{
-        last_engine: "controllable",
-        last_resume_token: "stale_token",
-        updated_at: System.system_time(:millisecond)
-      })
 
       job =
         make_job(scope,
@@ -2593,12 +2564,10 @@ defmodule LemonGateway.RunTest do
          })}
       )
 
-      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: false}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: false} = completed}, 2000
 
-      Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> LemonCore.Store.get_chat_state(scope) == nil end,
-        message: "ChatState should remain nil after Chinese context overflow"
-      )
+      assert completed.error =~ "上下文长度超过限制"
+      assert completed.resume == resume
     end
 
     test "resume token does not override explicit engine selection" do
@@ -2667,7 +2636,7 @@ defmodule LemonGateway.RunTest do
                      5000
     end
 
-    test "ChatState is updated on both Started and Completed events" do
+    test "completion event carries a resume token when cancelled after start" do
       scope = make_scope()
 
       job =
@@ -2680,34 +2649,13 @@ defmodule LemonGateway.RunTest do
 
       assert_receive {:engine_started, _run_ref}, 2000
 
-      # ChatState should not be updated on Started (no async wait needed)
-      chat_state1 = LemonCore.Store.get_chat_state(scope)
-      assert chat_state1 == nil
-
-      # Now complete with a different resume token
-      _resume = %ResumeToken{
-        engine: "controllable",
-        value: "updated_token_#{System.unique_integer([:positive])}"
-      }
-
-      # We need the run_ref - let's complete the run properly
       GenServer.cast(pid, {:cancel, :done})
-      assert_receive {:run_complete, ^pid, _}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed} = completed}, 2000
 
-      # Wait for ChatState to be updated
-      Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> LemonCore.Store.get_chat_state(scope) != nil end,
-        message: "ChatState was not updated after completion"
-      )
-
-      chat_state2 = LemonCore.Store.get_chat_state(scope)
-      assert chat_state2 != nil
-
-      # Token should exist (may be same as first if cancellation doesn't provide new token)
-      assert chat_state2.last_resume_token != nil
+      assert completed.resume != nil
     end
 
-    test "ChatState is not updated when resume is nil" do
+    test "completion event carries no resume token when the engine sent none" do
       scope = make_scope()
 
       # Use failing engine which doesn't send resume tokens
@@ -2716,13 +2664,9 @@ defmodule LemonGateway.RunTest do
 
       {:ok, pid} = start_run_direct(job)
 
-      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: false}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: false} = completed}, 2000
 
-      # Confirm no ChatState was written by failing engine
-      Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> LemonCore.Store.get_chat_state(scope) == nil end,
-        message: "ChatState should remain nil when resume is absent"
-      )
+      assert Map.get(completed, :resume) == nil
     end
 
     test "resume token engine overrides scope binding default" do

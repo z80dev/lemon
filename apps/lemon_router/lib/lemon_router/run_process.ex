@@ -297,6 +297,8 @@ defmodule LemonRouter.RunProcess do
     # If the engine reports a context-window overflow, clear resume state so
     # the next message can start fresh instead of immediately failing again.
     CompactionTrigger.maybe_reset_resume_on_context_overflow(state, event)
+    # Router owns resume-token persistence; the gateway no longer writes it.
+    CompactionTrigger.maybe_store_chat_state(state, event)
     CompactionTrigger.maybe_mark_pending_compaction_near_limit(state, event)
     retried? = RetryHandler.maybe_retry_zero_answer_failure(state, event)
 

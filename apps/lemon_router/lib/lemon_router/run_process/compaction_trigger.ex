@@ -200,6 +200,39 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
 
   def maybe_reset_resume_on_context_overflow(_state, _event), do: :ok
 
+  @doc """
+  Persist the run's resume token as chat state when a run completes.
+
+  The router owns this write. The gateway used to do it from its own
+  finalization path, but the completion event carries `:resume` all the way
+  here (see `extract_completed_resume/1`), so the write belonged on the side
+  that already observes completions — and having both write it made the
+  ownership ambiguous.
+
+  Skipped on context overflow: `maybe_reset_resume_on_context_overflow/2`
+  clears chat state in that case, and storing a token we are about to delete
+  would race it.
+  """
+  @spec maybe_store_chat_state(map(), LemonCore.Event.t() | term()) :: :ok
+  def maybe_store_chat_state(state, %LemonCore.Event{} = event) do
+    with %ResumeToken{} = resume <- normalize_resume_token(extract_completed_resume(event)),
+         {_ok, error} <- extract_completed_ok_and_error(event),
+         false <- context_length_exceeded_error?(error),
+         key when is_binary(key) <- state.session_key do
+      LemonCore.ChatStateStore.put(key, %LemonCore.ChatState{
+        last_engine: resume.engine,
+        last_resume_token: resume.value,
+        updated_at: System.system_time(:millisecond)
+      })
+    end
+
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  def maybe_store_chat_state(_state, _event), do: :ok
+
   @spec maybe_mark_pending_compaction_near_limit(map(), LemonCore.Event.t() | term()) :: :ok
   def maybe_mark_pending_compaction_near_limit(state, %LemonCore.Event{} = event) do
     with true <- explicit_completed_ok_true?(event),
@@ -577,7 +610,9 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
         Logger.warning(
           "Reset Telegram resume state after context_length_exceeded for session_key=#{inspect(session_key)}"
         )
-      _ -> :ok
+
+      _ ->
+        :ok
     end
 
     :ok

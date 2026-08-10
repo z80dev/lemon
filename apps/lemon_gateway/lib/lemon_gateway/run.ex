@@ -30,8 +30,6 @@ defmodule LemonGateway.Run do
   import LemonGateway.Event, only: [is_started: 1, is_action_event: 1, is_completed: 1]
 
   alias LemonCore.{
-    ChatState,
-    ChatStateStore,
     ProgressStore,
     RunPhase,
     RunPhaseEvent,
@@ -44,17 +42,6 @@ defmodule LemonGateway.Run do
   alias LemonGateway.Types.Job
 
   @max_logged_error_bytes 4_096
-  @context_overflow_error_markers [
-    "context_length_exceeded",
-    "context length exceeded",
-    "input exceeds the context window",
-    "context window",
-    "上下文长度超过限制",
-    "令牌数量超出",
-    "输入过长",
-    "超出最大长度",
-    "上下文窗口已满"
-  ]
   @engine_start_error_banner_bytes 1_024
 
   def start_link(args) do
@@ -614,8 +601,6 @@ defmodule LemonGateway.Run do
       log_run_failure(state, completed)
     end
 
-    maybe_clear_chat_state_on_context_overflow(state.session_key, completed)
-
     # Emit completion event to bus (channel delivery handled by subscribers)
     duration_ms = System.system_time(:millisecond) - state.start_ts_ms
 
@@ -665,7 +650,6 @@ defmodule LemonGateway.Run do
       send(notify_pid, {:lemon_gateway_run_completed, notify_job, completed})
     end
 
-    maybe_store_chat_state(state.job, completed)
     unregister_progress_mapping(state.job)
 
     maybe_emit_phase_change(state, terminal_phase)
@@ -894,75 +878,6 @@ defmodule LemonGateway.Run do
       run_id: Map.get(ev, :run_id),
       session_key: Map.get(ev, :session_key)
     }
-  end
-
-  defp maybe_store_chat_state(%Job{} = job, %{__event__: :completed} = completed) do
-    case Map.get(completed, :resume) do
-      %ResumeToken{} = resume ->
-        if context_length_exceeded_error?(Map.get(completed, :error)) do
-          :ok
-        else
-          store_chat_state(job.session_key, resume)
-        end
-
-      _ ->
-        :ok
-    end
-  end
-
-  defp maybe_store_chat_state(_job, _completed), do: :ok
-
-  defp maybe_clear_chat_state_on_context_overflow(
-         session_key,
-         %{__event__: :completed} = completed
-       )
-       when is_binary(session_key) do
-    ok = Map.get(completed, :ok)
-    error = Map.get(completed, :error)
-    run_id = Map.get(completed, :run_id)
-
-    if ok != true and context_length_exceeded_error?(error) do
-      ChatStateStore.delete(session_key)
-
-      Logger.warning(
-        "Gateway run reset chat state after context overflow run_id=#{inspect(run_id)} " <>
-          "session_key=#{inspect(session_key)} error=#{inspect(error)}"
-      )
-    end
-
-    :ok
-  rescue
-    _ -> :ok
-  end
-
-  defp maybe_clear_chat_state_on_context_overflow(_session_key, _completed), do: :ok
-
-  defp context_length_exceeded_error?(nil), do: false
-
-  defp context_length_exceeded_error?(error) do
-    text =
-      cond do
-        is_binary(error) -> error
-        is_atom(error) -> Atom.to_string(error)
-        true -> inspect(error, limit: 200, printable_limit: 8_000)
-      end
-      |> String.downcase()
-
-    Enum.any?(@context_overflow_error_markers, &String.contains?(text, &1))
-  rescue
-    _ -> false
-  end
-
-  defp store_chat_state(nil, _resume), do: :ok
-
-  defp store_chat_state(key, %ResumeToken{} = resume) do
-    chat_state = %ChatState{
-      last_engine: resume.engine,
-      last_resume_token: resume.value,
-      updated_at: System.system_time(:millisecond)
-    }
-
-    ChatStateStore.put(key, chat_state)
   end
 
   defp register_progress_mapping(%Job{} = job, run_id) do
