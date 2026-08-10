@@ -15,7 +15,6 @@ defmodule LemonGateway.Config do
     auto_resume: false,
     enable_telegram: false,
     enable_discord: false,
-    enable_email: false,
     enable_xmtp: false,
     enable_webhook: false,
     require_engine_lock: true,

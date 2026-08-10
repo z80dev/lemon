@@ -142,7 +142,6 @@ defmodule LemonCore.Config.Validator do
     |> validate_boolean(Map.get(gateway, :enable_discord), "gateway.enable_discord")
     |> validate_boolean(Map.get(gateway, :enable_web_dashboard), "gateway.enable_web_dashboard")
     |> validate_boolean(Map.get(gateway, :enable_xmtp), "gateway.enable_xmtp")
-    |> validate_boolean(Map.get(gateway, :enable_email), "gateway.enable_email")
     |> validate_boolean(Map.get(gateway, :require_engine_lock), "gateway.require_engine_lock")
     |> validate_non_negative_integer(
       Map.get(gateway, :engine_lock_timeout_ms),

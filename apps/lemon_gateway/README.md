@@ -368,13 +368,12 @@ Configuration loads from `~/.lemon/config.toml` (the `[gateway]` section) via `L
 |-----|---------|-------------|
 | `enable_telegram` | `false` | Enable Telegram adapter (via `lemon_channels`) |
 | `enable_discord` | `false` | Enable Discord adapter (via `lemon_channels`) |
-| `enable_email` | `false` | **No longer read.** Email is `LemonChannels.Adapters.Email`; enable it there |
 | `enable_xmtp` | `false` | Enable XMTP transport |
 | `enable_webhook` | `false` | Enable webhook transport |
 
-The `[gateway] email` block itself is still meaningful — the channel adapter reads it, so
-existing relay credentials, sender address and webhook token keep working — but `enable_email`
-gates nothing. Receiving mail now depends on `LemonChannels.InboundHttp` being enabled and a
+There is no `enable_email` gate. The `[gateway] email` block itself is still meaningful — the
+channel adapter reads it, so existing relay credentials, sender address and webhook token keep
+working. Receiving mail now depends on `LemonChannels.InboundHttp` being enabled and a
 webhook token being set; see `LemonChannels.Adapters.Email`.
 
 Discord and email are not gateway transports. If a `discord` or `email` module is added to

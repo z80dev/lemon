@@ -263,7 +263,6 @@ defmodule LemonCore.Config.ExpandedSchemaTest do
         "gateway" => %{
           "enable_telegram" => true,
           "enable_discord" => true,
-          "enable_email" => true,
           "enable_xmtp" => true,
           "enable_webhook" => true
         }
@@ -273,7 +272,6 @@ defmodule LemonCore.Config.ExpandedSchemaTest do
 
       assert config.enable_telegram == true
       assert config.enable_discord == true
-      assert config.enable_email == true
       assert config.enable_xmtp == true
       assert config.enable_webhook == true
     end
@@ -283,7 +281,6 @@ defmodule LemonCore.Config.ExpandedSchemaTest do
 
       assert config.enable_telegram == false
       assert config.enable_discord == false
-      assert config.enable_email == false
       assert config.enable_xmtp == false
       assert config.enable_webhook == false
     end

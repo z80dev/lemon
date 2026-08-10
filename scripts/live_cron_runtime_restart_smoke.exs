@@ -385,7 +385,6 @@ defmodule LemonScripts.LiveCronRuntimeRestartSmoke do
       "LEMON_GATEWAY_ENABLE_TELEGRAM" => "false",
       "LEMON_GATEWAY_ENABLE_DISCORD" => "false",
       "LEMON_GATEWAY_ENABLE_XMTP" => "false",
-      "LEMON_GATEWAY_ENABLE_EMAIL" => "false",
       "LEMON_GATEWAY_ENABLE_WEBHOOK" => "false",
       "LEMON_LOG_LEVEL" => "warning",
       "PHX_SERVER" => "false"
@@ -398,7 +397,6 @@ defmodule LemonScripts.LiveCronRuntimeRestartSmoke do
     default_engine = "echo"
     enable_telegram = false
     enable_discord = false
-    enable_email = false
     enable_webhook = false
     enable_xmtp = false
     require_engine_lock = false

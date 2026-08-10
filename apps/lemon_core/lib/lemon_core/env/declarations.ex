@@ -1319,18 +1319,6 @@ defmodule LemonCore.Env.Declarations do
       apps: [:lemon_core, :lemon_gateway]
     },
     %{
-      name: :lemon_gateway_enable_email,
-      env_var: "LEMON_GATEWAY_ENABLE_EMAIL",
-      aliases: [],
-      type: :boolean,
-      default: false,
-      doc: "Whether the email transport is enabled.",
-      secret?: false,
-      required?: false,
-      area: :gateway,
-      apps: [:lemon_core, :lemon_gateway]
-    },
-    %{
       name: :lemon_gateway_enable_webhook,
       env_var: "LEMON_GATEWAY_ENABLE_WEBHOOK",
       aliases: [],

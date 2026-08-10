@@ -108,7 +108,6 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `LEMON_GATEWAY_DEFAULT_CWD` | string | _(none)_ |  | `lemon_core`, `lemon_gateway` | Default working directory for gateway-initiated runs. |
 | `LEMON_GATEWAY_DEFAULT_ENGINE` | string | `lemon` |  | `lemon_core`, `lemon_gateway` | Default coding-agent engine used for gateway-initiated runs. |
 | `LEMON_GATEWAY_ENABLE_DISCORD` | boolean | `false` |  | `lemon_core`, `lemon_channels` | Whether the Discord transport is enabled. |
-| `LEMON_GATEWAY_ENABLE_EMAIL` | boolean | `false` |  | `lemon_core`, `lemon_gateway` | Whether the email transport is enabled. |
 | `LEMON_GATEWAY_ENABLE_TELEGRAM` | boolean | `false` |  | `lemon_core`, `lemon_channels` | Whether the Telegram transport is enabled. |
 | `LEMON_GATEWAY_ENABLE_WEBHOOK` | boolean | `false` |  | `lemon_core`, `lemon_gateway` | Whether the generic webhook transport is enabled. |
 | `LEMON_GATEWAY_ENABLE_XMTP` | boolean | `false` |  | `lemon_core`, `lemon_channels` | Whether the XMTP transport is enabled. |

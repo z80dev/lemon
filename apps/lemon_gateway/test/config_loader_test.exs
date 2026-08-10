@@ -156,7 +156,6 @@ defmodule LemonGateway.ConfigLoaderTest do
       :lemon_gateway,
       LemonGateway.Config,
       %{
-        "enable_email" => true,
         "email" => %{
           "smtp_relay" => "flat-relay.example.test",
           "smtp_port" => "2525",
@@ -187,7 +186,6 @@ defmodule LemonGateway.ConfigLoaderTest do
     # in phase 2.4, and gateway must not reach across to it — the assertions
     # about what `smtp_options/1` makes of this shape moved with it, to
     # `apps/lemon_channels/test/lemon_channels/adapters/email/outbound_test.exs`.
-    assert config.enable_email == true
     assert config.email.outbound.relay == " nested-relay.example.test "
     assert config.email.smtp_relay == "flat-relay.example.test"
     assert config.email.outbound.tls_versions == ["tlsv1.2", "tlsv1.3"]

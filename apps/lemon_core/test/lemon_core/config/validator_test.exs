@@ -1057,13 +1057,5 @@ defmodule LemonCore.Config.ValidatorTest do
 
       assert errors == []
     end
-
-    test "validates enable_email boolean" do
-      errors = Validator.validate_gateway(%{enable_email: true}, [])
-      refute Enum.any?(errors, &String.contains?(&1, "enable_email"))
-
-      errors = Validator.validate_gateway(%{enable_email: "yes"}, [])
-      assert Enum.any?(errors, &String.contains?(&1, "enable_email"))
-    end
   end
 end

@@ -17,7 +17,6 @@ defmodule LemonCore.Config.Gateway do
       auto_resume = false
       enable_telegram = true
       enable_discord = false
-      enable_email = false
       enable_xmtp = false
       enable_webhook = false
       require_engine_lock = true
@@ -55,7 +54,6 @@ defmodule LemonCore.Config.Gateway do
     :auto_resume,
     :enable_telegram,
     :enable_discord,
-    :enable_email,
     :enable_xmtp,
     :enable_webhook,
     :require_engine_lock,
@@ -130,7 +128,6 @@ defmodule LemonCore.Config.Gateway do
           auto_resume: boolean(),
           enable_telegram: boolean(),
           enable_discord: boolean(),
-          enable_email: boolean(),
           enable_xmtp: boolean(),
           enable_webhook: boolean(),
           require_engine_lock: boolean(),
@@ -165,8 +162,6 @@ defmodule LemonCore.Config.Gateway do
       enable_telegram: resolve_enable_telegram(gateway_settings),
       enable_discord:
         resolve_enable_flag(gateway_settings, "enable_discord", :lemon_gateway_enable_discord),
-      enable_email:
-        resolve_enable_flag(gateway_settings, "enable_email", :lemon_gateway_enable_email),
       enable_xmtp:
         resolve_enable_flag(gateway_settings, "enable_xmtp", :lemon_gateway_enable_xmtp),
       enable_webhook:
@@ -468,7 +463,6 @@ defmodule LemonCore.Config.Gateway do
       "auto_resume" => false,
       "enable_telegram" => false,
       "enable_discord" => false,
-      "enable_email" => false,
       "enable_xmtp" => false,
       "enable_webhook" => false,
       "require_engine_lock" => true,
