@@ -33,6 +33,9 @@ defmodule XApi.MixProject do
       {:lemon_channels, in_umbrella: true},
       {:agent_core, in_umbrella: true},
       {:ai, in_umbrella: true},
+      # The satellite proves its adapter against the published contract kit the
+      # same way any third-party integration would.
+      {:lemon_platform_test, in_umbrella: true, only: :test, runtime: false},
       {:jason, "~> 1.4"},
       {:req, "~> 0.5"}
     ]

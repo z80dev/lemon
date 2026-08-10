@@ -20,6 +20,8 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
       :lemon_core,
       :lemon_gateway,
       :lemon_memory,
+      # test-only: runs CodingAgent.GatewayEngine through the Engine contract kit
+      :lemon_platform_test,
       :lemon_skills
     ],
     coding_agent_ui: [:coding_agent, :lemon_core],
@@ -52,13 +54,17 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
     lemon_lsp: [:lemon_core],
     lemon_media: [:lemon_core],
     lemon_mcp: [:agent_core, :coding_agent, :lemon_core, :lemon_skills],
+    # The contract-test kit is a leaf: one dep per behaviour it tests, and
+    # nothing in the platform depends on it outside test code.
+    lemon_platform_test: [:lemon_channels, :lemon_core, :lemon_gateway, :lemon_memory],
     lemon_router: [:agent_core, :ai, :lemon_channels, :lemon_core, :lemon_media, :lemon_memory],
     lemon_sim: [:agent_core, :ai, :lemon_core],
     lemon_sim_ui: [:ai, :lemon_core, :lemon_sim],
     lemon_skills: [:agent_core, :ai, :lemon_core, :lemon_media, :lemon_memory],
     lemon_tcg: [:agent_core, :ai, :lemon_core, :lemon_sim],
     lemon_web: [:lemon_core, :lemon_router],
-    x_api: [:agent_core, :ai, :lemon_channels, :lemon_core]
+    # test-only: runs XApi.ChannelAdapter through the Plugin contract kit
+    x_api: [:agent_core, :ai, :lemon_channels, :lemon_core, :lemon_platform_test]
   }
 
   @target_allowed_direct_deps @current_allowed_direct_deps
