@@ -4,6 +4,10 @@ defmodule LemonCore.Env.Declarations do
 
   Aggregated by `LemonCore.Env` through the `:env_registries` list; see
   `LemonCore.Env.Registry`.
+
+  The bulk of this module is a single `@declarations` data table — one map per
+  environment variable — so its length tracks the number of variables, not code
+  complexity. It renders `docs/config-registry.md`.
   """
 
   use LemonCore.Env.Registry

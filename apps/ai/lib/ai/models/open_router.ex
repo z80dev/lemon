@@ -1,9 +1,18 @@
 defmodule Ai.Models.OpenRouter do
   @moduledoc """
-  Model definitions for the OpenRouter provider.
+  Model catalog for the OpenRouter provider — a compile-time `@models` data map,
+  one entry per model, carrying capability and per-million-token pricing metadata
+  (`Ai.Types.Model` / `Ai.Types.ModelCost`). This is data, not logic: the module
+  is long because the catalog is long.
 
-  This module is auto-extracted from `Ai.Models` as part of the
-  per-provider decomposition (Debt Phase 5, M2).
+  Each entry mirrors a model OpenRouter publishes at
+  <https://openrouter.ai/models>. The catalog is hand-maintained — there is no
+  live sync task — so it is updated by editing entries here when providers add
+  models or change prices. `mix lemon.models` lists what is currently defined,
+  and `Ai.Models` merges this map into the unified cross-provider registry.
+
+  Originally split out of the monolithic `Ai.Models` in the per-provider
+  decomposition (Debt Phase 5, M2).
   """
 
   alias Ai.Types.{Model, ModelCost}
