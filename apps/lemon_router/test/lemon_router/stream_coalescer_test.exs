@@ -1,6 +1,7 @@
 defmodule LemonRouter.StreamCoalescerTest do
   alias Elixir.LemonRouter, as: LemonRouter
   use ExUnit.Case, async: false
+  use ExUnitProperties
 
   alias LemonCore.ResumeToken
   alias LemonCore.DeliveryIntent
@@ -195,6 +196,46 @@ defmodule LemonRouter.StreamCoalescerTest do
       :timer.tc(fn -> stream_answer(session_key, run_id, chunk, count, seq_offset) end)
 
     div(us, count)
+  end
+
+  describe "byte-cap invariant (property)" do
+    # A multibyte "unit" whose byte width varies, so the retained tail's leading
+    # boundary lands inside a codepoint for some (pad, width) combinations —
+    # exactly the case drop_partial_codepoint/1 exists to handle.
+    defp multibyte_unit(:two), do: "é"
+    defp multibyte_unit(:three), do: "中"
+    defp multibyte_unit(:four), do: "😀"
+
+    property "current_text is always valid UTF-8 and within the byte cap, for input past it" do
+      check all(
+              width <- member_of([:two, :three, :four]),
+              pad_len <- integer(0..7),
+              overflow <- integer(1..5_000),
+              max_runs: 40
+            ) do
+        unit = multibyte_unit(width)
+        # Build a binary comfortably past @answer_cap: an ASCII pad (to shift the
+        # cut boundary) followed by enough copies of the multibyte unit.
+        target_bytes = @answer_cap + pad_len + overflow
+        copies = div(target_bytes, byte_size(unit)) + 1
+        text = String.duplicate("a", pad_len) <> String.duplicate(unit, copies)
+
+        assert byte_size(text) > @answer_cap
+
+        suffix = System.unique_integer([:positive])
+        session_key = "agent:prop-#{suffix}:telegram:bot#{suffix}:dm:user#{suffix}"
+        run_id = "run_prop_#{suffix}"
+
+        assert :ok =
+                 StreamCoalescer.ingest_delta(session_key, "telegram", run_id, 1, text)
+
+        capped = StreamCoalescer.current_text(session_key, "telegram", run_id)
+
+        assert is_binary(capped)
+        assert String.valid?(capped), "capped text must be valid UTF-8"
+        assert byte_size(capped) <= @answer_cap
+      end
+    end
   end
 
   describe "session key handling" do

@@ -75,7 +75,9 @@ defmodule LemonRouter.MixProject do
       # :exqlite as an optional dep.
       {:exqlite, "~> 0.34.0"},
       # API documentation
-      {:ex_doc, "~> 0.34", only: :dev, runtime: false}
+      {:ex_doc, "~> 0.34", only: :dev, runtime: false},
+      # Property-based tests (StreamCoalescer byte-cap invariants).
+      {:stream_data, "~> 1.1", only: :test}
     ])
   end
 end

@@ -86,7 +86,9 @@ defmodule LemonCore.MixProject do
       {:sentry, "~> 13.0", optional: true},
       {:finch, "~> 0.21", optional: true},
       # API documentation
-      {:ex_doc, "~> 0.34", only: :dev, runtime: false}
+      {:ex_doc, "~> 0.34", only: :dev, runtime: false},
+      # Property-based tests (Store round-trip/isolation, Events round-trip, UUID structure).
+      {:stream_data, "~> 1.1", only: :test}
     ])
   end
 end
