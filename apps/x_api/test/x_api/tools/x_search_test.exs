@@ -1,10 +1,10 @@
-defmodule LemonSkills.Tools.XSearchTest do
+defmodule XApi.Tools.XSearchTest do
   use ExUnit.Case, async: false
 
   alias AgentCore.Types.AgentToolResult
   alias Ai.Types.TextContent
   alias XApi
-  alias LemonSkills.Tools.XSearch
+  alias XApi.Tools.XSearch
 
   @x_env_vars [
     "X_API_CLIENT_ID",

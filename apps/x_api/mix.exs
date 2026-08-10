@@ -27,6 +27,12 @@ defmodule XApi.MixProject do
   defp deps do
     [
       {:lemon_core, in_umbrella: true},
+      # The channel adapter implements LemonChannels.Plugin and the three agent
+      # tools implement the AgentCore tool contract. Satellite -> platform is
+      # the allowed direction; the platform never depends on this app.
+      {:lemon_channels, in_umbrella: true},
+      {:agent_core, in_umbrella: true},
+      {:ai, in_umbrella: true},
       {:jason, "~> 1.4"},
       {:req, "~> 0.5"}
     ]

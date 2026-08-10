@@ -83,9 +83,12 @@ config :lemon_channels,
     LemonChannels.Adapters.Telegram,
     LemonChannels.Adapters.Discord,
     LemonChannels.Adapters.Xmtp,
-    LemonChannels.Adapters.WhatsApp,
-    LemonChannels.Adapters.XAPI
+    LemonChannels.Adapters.WhatsApp
   ]
+
+# The X adapter is not listed above on purpose: it lives in the x_api satellite
+# and registers itself at boot (see XApi.Application), so the platform's config
+# does not name it either.
 
 # Filesystem layout for the reference runtime. These are LemonCore.Paths'
 # defaults, stated explicitly so the values live with the runtime rather than

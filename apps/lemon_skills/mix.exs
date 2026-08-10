@@ -31,7 +31,6 @@ defmodule LemonSkills.MixProject do
       {:lemon_media, in_umbrella: true},
       {:agent_core, in_umbrella: true},
       {:ai, in_umbrella: true},
-      {:x_api, in_umbrella: true},
       {:jason, "~> 1.4"},
       {:phoenix_pubsub, "~> 2.1"},
       {:req, "~> 0.5"}

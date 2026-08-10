@@ -1,4 +1,4 @@
-defmodule LemonSkills.Tools.GetXMentions do
+defmodule XApi.Tools.GetXMentions do
   @moduledoc """
   Tool for agents to get recent mentions on X (Twitter).
 

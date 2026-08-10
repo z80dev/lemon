@@ -3,7 +3,7 @@ defmodule CodingAgent.Tools do
   Tool registry and factory functions for coding agent tools.
 
   Provides pre-configured tool sets for different use cases:
-  - `coding_tools/2` - Full access tools (read, read_skill, skill_manage, memory_topic, memory, search_memory, session_search, checkpoint, write, edit, hashline_edit, patch, lsp_diagnostics, bash, grep, find, ls, webfetch, websearch, browser tools, media_status, media_generate_image, media_generate_speech, media_transcribe_audio, media_analyze_image, media_generate_video, todo, kanban, task, agent, parent_question, tool_auth, extensions_status, x_search, post_to_x, get_x_mentions)
+  - `coding_tools/2` - Full access tools (read, read_skill, skill_manage, memory_topic, memory, search_memory, session_search, checkpoint, write, edit, hashline_edit, patch, lsp_diagnostics, bash, grep, find, ls, webfetch, websearch, browser tools, media_status, media_generate_image, media_generate_speech, media_transcribe_audio, media_analyze_image, media_generate_video, todo, kanban, task, agent, parent_question, tool_auth, extensions_status) plus any runtime-registered tools
   - `read_only_tools/2` - Exploration tools (read, read_skill, search_memory, session_search, grep, find, ls)
   - `all_tools/2` - All available tools as a map
   """
@@ -64,14 +64,11 @@ defmodule CodingAgent.Tools do
     MediaTranscribeAudio,
     MediaAnalyzeImage,
     MediaGenerateVideo,
-    Kanban,
-    XSearch,
-    PostToX,
-    GetXMentions
+    Kanban
   }
 
   @doc """
-  Get the default coding tools (read, read_skill, skill_manage, memory_topic, memory, search_memory, session_search, checkpoint, write, edit, hashline_edit, patch, lsp_diagnostics, bash, grep, find, ls, webfetch, websearch, browser tools, media_status, media_generate_image, media_generate_speech, media_transcribe_audio, media_analyze_image, media_generate_video, todo, kanban, task, agent, parent_question, tool_auth, extensions_status, x_search, post_to_x, get_x_mentions).
+  Get the default coding tools (read, read_skill, skill_manage, memory_topic, memory, search_memory, session_search, checkpoint, write, edit, hashline_edit, patch, lsp_diagnostics, bash, grep, find, ls, webfetch, websearch, browser tools, media_status, media_generate_image, media_generate_speech, media_transcribe_audio, media_analyze_image, media_generate_video, todo, kanban, task, agent, parent_question, tool_auth, extensions_status) plus any runtime-registered tools.
 
   ## Options
   - Any options are passed through to individual tools
@@ -130,11 +127,13 @@ defmodule CodingAgent.Tools do
       Agent.tool(cwd, opts),
       ParentQuestion.tool(cwd, opts),
       ToolAuth.tool(cwd, opts),
-      ExtensionsStatus.tool(cwd, opts),
-      XSearch.tool(cwd, opts),
-      PostToX.tool(cwd, opts),
-      GetXMentions.tool(cwd, opts)
-    ]
+      ExtensionsStatus.tool(cwd, opts)
+    ] ++ registered_tools(cwd, opts)
+  end
+
+  # Tools contributed at runtime by apps the platform does not know about.
+  defp registered_tools(cwd, opts) do
+    Enum.map(AgentCore.ToolRegistry.all(), fn {_name, module} -> module.tool(cwd, opts) end)
   end
 
   @doc """
@@ -211,11 +210,15 @@ defmodule CodingAgent.Tools do
       "agent" => Agent.tool(cwd, opts),
       "parent_question" => ParentQuestion.tool(cwd, opts),
       "tool_auth" => ToolAuth.tool(cwd, opts),
-      "extensions_status" => ExtensionsStatus.tool(cwd, opts),
-      "x_search" => XSearch.tool(cwd, opts),
-      "post_to_x" => PostToX.tool(cwd, opts),
-      "get_x_mentions" => GetXMentions.tool(cwd, opts)
+      "extensions_status" => ExtensionsStatus.tool(cwd, opts)
     }
+    |> Map.merge(registered_tools_by_name(cwd, opts))
+  end
+
+  defp registered_tools_by_name(cwd, opts) do
+    Map.new(AgentCore.ToolRegistry.all(), fn {name, module} ->
+      {Atom.to_string(name), module.tool(cwd, opts)}
+    end)
   end
 
   @doc """

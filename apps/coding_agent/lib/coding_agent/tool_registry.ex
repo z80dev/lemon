@@ -85,9 +85,6 @@ defmodule CodingAgent.ToolRegistry do
     {:parent_question, Tools.ParentQuestion},
     {:tool_auth, Tools.ToolAuth},
     {:extensions_status, Tools.ExtensionsStatus},
-    {:x_search, LemonSkills.Tools.XSearch},
-    {:post_to_x, LemonSkills.Tools.PostToX},
-    {:get_x_mentions, LemonSkills.Tools.GetXMentions},
     {:hashline_edit, Tools.HashlineEdit}
   ]
 
@@ -198,7 +195,13 @@ defmodule CodingAgent.ToolRegistry do
   """
   @spec builtin_tool_names() :: [atom()]
   def builtin_tool_names do
-    Enum.map(@builtin_tools, fn {name, _} -> name end)
+    Enum.map(builtin_tools(), fn {name, _} -> name end)
+  end
+
+  # Built-ins plus whatever satellite apps registered at boot (see
+  # `AgentCore.ToolRegistry`). Built-ins win on name collisions.
+  defp builtin_tools do
+    @builtin_tools ++ AgentCore.ToolRegistry.available(Enum.map(@builtin_tools, &elem(&1, 0)))
   end
 
   @doc """
@@ -336,7 +339,7 @@ defmodule CodingAgent.ToolRegistry do
   # ============================================================================
 
   defp builtin_tool_tuples(cwd, opts) do
-    @builtin_tools
+    builtin_tools()
     |> Enum.map(fn {name, module} ->
       {Atom.to_string(name), module.tool(cwd, opts), :builtin}
     end)

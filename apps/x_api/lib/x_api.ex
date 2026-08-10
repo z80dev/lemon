@@ -3,7 +3,7 @@ defmodule XApi do
   X API client configuration and authentication helpers.
 
   Config can be set under `config :x_api, XApi`. Existing
-  `config :lemon_channels, LemonChannels.Adapters.XAPI` settings remain
+  `config :lemon_channels, XApi.ChannelAdapter` settings remain
   supported as a compatibility fallback.
   """
 
@@ -12,7 +12,7 @@ defmodule XApi do
   alias LemonCore.Secrets
 
   @legacy_app :lemon_channels
-  @legacy_module :"Elixir.LemonChannels.Adapters.XAPI"
+  @legacy_module :"Elixir.XApi.ChannelAdapter"
   @env_config_keys [
     client_id: "X_API_CLIENT_ID",
     client_secret: "X_API_CLIENT_SECRET",

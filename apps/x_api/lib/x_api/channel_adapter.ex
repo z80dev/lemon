@@ -1,4 +1,4 @@
-defmodule LemonChannels.Adapters.XAPI do
+defmodule XApi.ChannelAdapter do
   @moduledoc """
   X (Twitter) API v2 channel adapter for posting tweets.
 

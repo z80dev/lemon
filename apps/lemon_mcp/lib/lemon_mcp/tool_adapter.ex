@@ -48,9 +48,7 @@ defmodule LemonMCP.ToolAdapter do
     "task" => CodingAgent.Tools.Task,
     "agent" => CodingAgent.Tools.Agent,
     "tool_auth" => CodingAgent.Tools.ToolAuth,
-    "extensions_status" => CodingAgent.Tools.ExtensionsStatus,
-    "post_to_x" => LemonSkills.Tools.PostToX,
-    "get_x_mentions" => LemonSkills.Tools.GetXMentions
+    "extensions_status" => CodingAgent.Tools.ExtensionsStatus
   }
 
   @doc """
@@ -66,12 +64,13 @@ defmodule LemonMCP.ToolAdapter do
   @spec new(String.t(), keyword()) :: t()
   def new(cwd, opts \\ []) do
     tool_opts = Keyword.get(opts, :tool_opts, [])
-    include_tools = Keyword.get(opts, :include_tools, Map.keys(@builtin_tools))
+    available = available_tools()
+    include_tools = Keyword.get(opts, :include_tools, Map.keys(available))
     exclude_tools = Keyword.get(opts, :exclude_tools, [])
 
     # Build the tool modules map
     tool_modules =
-      @builtin_tools
+      available
       |> Enum.filter(fn {name, _module} ->
         name in include_tools and name not in exclude_tools
       end)
@@ -82,6 +81,18 @@ defmodule LemonMCP.ToolAdapter do
       tool_opts: tool_opts,
       tool_modules: tool_modules
     }
+  end
+
+  # Built-ins plus tools registered at runtime by apps outside the platform
+  # (see `AgentCore.ToolRegistry`). Built-ins win on name collisions.
+  defp available_tools do
+    # The registry keys tools by atom; this adapter keys them by string.
+    registered =
+      AgentCore.ToolRegistry.all()
+      |> Map.new(fn {name, module} -> {Atom.to_string(name), module} end)
+      |> Map.filter(fn {_name, module} -> Code.ensure_loaded?(module) end)
+
+    Map.merge(registered, @builtin_tools)
   end
 
   @doc """

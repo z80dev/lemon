@@ -1,4 +1,4 @@
-defmodule LemonSkills.Tools.XSearch do
+defmodule XApi.Tools.XSearch do
   @moduledoc """
   Tool for agents to search recent public X posts.
   """

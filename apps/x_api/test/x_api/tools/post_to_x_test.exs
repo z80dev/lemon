@@ -1,9 +1,9 @@
-defmodule LemonSkills.Tools.GetXMentionsTest do
+defmodule XApi.Tools.PostToXTest do
   use ExUnit.Case, async: false
 
   alias AgentCore.Types.AgentToolResult
   alias Ai.Types.TextContent
-  alias LemonSkills.Tools.GetXMentions
+  alias XApi.Tools.PostToX
 
   @x_env_vars [
     "X_API_CLIENT_ID",
@@ -57,20 +57,27 @@ defmodule LemonSkills.Tools.GetXMentionsTest do
     assert %AgentToolResult{
              content: [%TextContent{text: text}],
              details: %{error: :not_configured}
-           } = GetXMentions.execute("call-1", %{}, nil, nil)
+           } = PostToX.execute("call-1", %{"text" => "hello from test"}, nil, nil)
 
     assert text =~ "X API not configured"
   end
 
-  test "validates limit parameter type" do
+  test "validates missing text parameter" do
     assert %AgentToolResult{
-             details: %{error: "Parameter 'limit' must be a positive integer"}
-           } = GetXMentions.execute("call-2", %{"limit" => "abc"}, nil, nil)
+             details: %{error: "Missing required parameter: text"}
+           } = PostToX.execute("call-2", %{}, nil, nil)
   end
 
-  test "validates limit parameter value" do
+  test "validates text parameter type" do
     assert %AgentToolResult{
-             details: %{error: "Parameter 'limit' must be a positive integer"}
-           } = GetXMentions.execute("call-3", %{"limit" => 0}, nil, nil)
+             details: %{error: "Parameter 'text' must be a string"}
+           } = PostToX.execute("call-3", %{"text" => 123}, nil, nil)
+  end
+
+  test "validates reply_to parameter type" do
+    assert %AgentToolResult{
+             details: %{error: "Parameter 'reply_to' must be a string"}
+           } =
+             PostToX.execute("call-4", %{"text" => "hello", "reply_to" => 12_345}, nil, nil)
   end
 end

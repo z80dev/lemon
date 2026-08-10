@@ -30,7 +30,7 @@ defmodule XApiTest do
   alias XApi
   alias XApiTest.SecretResolverStub
 
-  @legacy_x_api_module :"Elixir.LemonChannels.Adapters.XAPI"
+  @legacy_x_api_module :"Elixir.XApi.ChannelAdapter"
 
   @x_env_vars [
     "X_API_CLIENT_ID",

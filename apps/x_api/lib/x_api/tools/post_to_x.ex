@@ -1,4 +1,4 @@
-defmodule LemonSkills.Tools.PostToX do
+defmodule XApi.Tools.PostToX do
   @moduledoc """
   Tool for agents to post tweets to X (Twitter).
 

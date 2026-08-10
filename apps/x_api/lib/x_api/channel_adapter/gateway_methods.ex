@@ -1,4 +1,4 @@
-defmodule LemonChannels.Adapters.XAPI.GatewayMethods do
+defmodule XApi.ChannelAdapter.GatewayMethods do
   @moduledoc """
   Control plane gateway methods for X API integration.
 
