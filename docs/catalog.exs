@@ -24,6 +24,12 @@
     max_age_days: 90
   },
   %{
+    path: "docs/benchmarks/platform-microbenchmarks.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-08-10],
+    max_age_days: 180
+  },
+  %{
     path: "docs/benchmarks/run-your-model.md",
     owner: "@z80",
     last_reviewed: ~D[2026-07-04],

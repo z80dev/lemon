@@ -60,6 +60,10 @@ export default {
           { text: "Quickstart", link: "/benchmarks/quickstart" },
           { text: "VendingBench", link: "/benchmarks/vending-bench" },
           { text: "Platform Guarantees", link: "/benchmarks/platform" },
+          {
+            text: "Platform Microbenchmarks",
+            link: "/benchmarks/platform-microbenchmarks",
+          },
           { text: "Run Your Own Model", link: "/benchmarks/run-your-model" },
         ],
       },

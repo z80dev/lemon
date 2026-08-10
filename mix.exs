@@ -19,6 +19,7 @@ defmodule Lemon.MixProject do
   # the apps folder.
   defp deps do
     [
+      {:benchee, "~> 1.3", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
     ]
