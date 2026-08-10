@@ -98,12 +98,23 @@ defmodule LemonCore.EnvTest do
     end
 
     test "skips registries whose module is not loaded" do
+      original = Application.get_env(:lemon_core, :env_registries)
+
       Application.put_env(:lemon_core, :env_registries, [
         LemonCore.Env.Declarations,
         :"Elixir.SomeApp.NotCompiled.Env"
       ])
 
-      on_exit(fn -> Application.delete_env(:lemon_core, :env_registries) end)
+      # Deleting instead of restoring would strip every app's registry for the
+      # rest of the umbrella run — the apps that follow share this BEAM, and
+      # their declared variables would start raising.
+      on_exit(fn ->
+        if original do
+          Application.put_env(:lemon_core, :env_registries, original)
+        else
+          Application.delete_env(:lemon_core, :env_registries)
+        end
+      end)
 
       # An app missing from this build must not break the aggregate.
       assert Enum.any?(Env.all_declared(), &(&1.name == :lemon_base_delay_ms))
