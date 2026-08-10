@@ -40,7 +40,7 @@ keeping it small and honest.
 
 ### Removed
 
-- **`LemonChannels.Capabilities.Registry.lookup/1` and the static capability
+- **LemonChannels.Capabilities.Registry.lookup/1 and the static capability
   table behind it.** It had zero production callers — capability queries
   already resolved through the plugin registry — and it hardcoded facts about
   channels this package does not own, including the X/Twitter adapter that now

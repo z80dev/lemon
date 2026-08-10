@@ -37,6 +37,7 @@ defmodule LemonChannels.Adapters.Email.Outbound do
   alias LemonChannels.OutboundPayload
 
   @max_attachments 8
+  @default_delivery_timeout_ms 60_000
   @safe_html_tags ~w(
     p br pre code em strong b i a ul ol li blockquote h1 h2 h3 h4 h5 h6 hr
   )
@@ -318,27 +319,49 @@ defmodule LemonChannels.Adapters.Email.Outbound do
 
   defp send_message(envelope, message) when is_binary(message) do
     with {:ok, smtp_opts} <- smtp_options(envelope.cfg) do
-      case :gen_smtp_client.send_blocking({envelope.from, [envelope.to], message}, smtp_opts) do
-        receipt when is_binary(receipt) ->
-          :ok
+      deadline = delivery_timeout(envelope.cfg)
+      # `smtp_opts`' own `:timeout` bounds the TCP *connect* (gen_smtp defaults
+      # it to 5s), but gen_smtp reads every server reply — the banner included —
+      # with a hardcoded 20-minute timeout that no option overrides. A relay
+      # that accepts the connection and then stalls would pin this call for that
+      # long, twice over with the default retry. The task caps the whole
+      # exchange instead, and is killed if it overruns.
+      task =
+        Task.async(fn ->
+          :gen_smtp_client.send_blocking({envelope.from, [envelope.to], message}, smtp_opts)
+        end)
 
-        receipt when is_list(receipt) ->
-          # LMTP can return a list of per-recipient statuses.
-          if Enum.all?(receipt, &match?({_, _}, &1)), do: :ok, else: {:error, {:smtp, receipt}}
-
-        {:error, _} = error ->
-          {:error, {:smtp, error}}
-
-        other when is_tuple(other) ->
-          {:error, {:smtp, other}}
-
-        _ ->
-          :ok
+      case Task.yield(task, deadline) || Task.shutdown(task, :brutal_kill) do
+        {:ok, result} -> interpret_receipt(result)
+        {:exit, reason} -> {:error, {:smtp, {:exit, reason}}}
+        nil -> {:error, {:smtp, :timeout}}
       end
     end
   end
 
   defp send_message(_envelope, _message), do: {:error, :invalid_message}
+
+  defp interpret_receipt(receipt) when is_binary(receipt), do: :ok
+
+  defp interpret_receipt(receipt) when is_list(receipt) do
+    # LMTP can return a list of per-recipient statuses.
+    if Enum.all?(receipt, &match?({_, _}, &1)), do: :ok, else: {:error, {:smtp, receipt}}
+  end
+
+  defp interpret_receipt({:error, _} = error), do: {:error, {:smtp, error}}
+  defp interpret_receipt(other) when is_tuple(other), do: {:error, {:smtp, other}}
+  defp interpret_receipt(_receipt), do: :ok
+
+  # Total time `deliver/1` will spend in the SMTP exchange before giving up and
+  # killing the attempt. 60s by default; override with `smtp_timeout` (or
+  # `[:outbound, :timeout]`) in milliseconds.
+  defp delivery_timeout(cfg) when is_map(cfg) do
+    cfg
+    |> Config.first_defined([[:outbound, :timeout], :smtp_timeout])
+    |> int_value(@default_delivery_timeout_ms)
+  end
+
+  defp delivery_timeout(_cfg), do: @default_delivery_timeout_ms
 
   # ---------------------------------------------------------------------------
   # HTML rendering

@@ -259,5 +259,141 @@ defmodule LemonChannels.InboundHttpTest do
         assert InboundHttp.max_body_bytes() == 2_000_000
       end
     end
+
+    test "a body at the cap is accepted; one byte over is rejected" do
+      # Prove the boundary is where the docs say it is, not just that some very
+      # large body fails. The cap is on the raw request body, so build one whose
+      # bytes land exactly on the limit.
+      cap = 512
+      Application.put_env(:lemon_channels, InboundHttp, max_body_bytes: cap)
+      :ok = InboundHttp.register("echo", EchoHandler)
+
+      at_cap = raw_body_of_size(cap)
+      assert byte_size(at_cap) == cap
+
+      conn =
+        :post
+        |> conn("/echo", at_cap)
+        |> put_req_header("content-type", "application/json")
+        |> Router.call(Router.init([]))
+
+      assert conn.status == 200
+
+      over_cap = raw_body_of_size(cap + 1)
+
+      assert_raise Plug.Parsers.RequestTooLargeError, fn ->
+        :post
+        |> conn("/echo", over_cap)
+        |> put_req_header("content-type", "application/json")
+        |> Router.call(Router.init([]))
+      end
+    end
+  end
+
+  describe "malformed input" do
+    test "a body that is not the JSON its content-type claims is a clean parse error" do
+      # Plug.Parsers raises a 400-class error that the web server turns into a
+      # response; what matters here is that the listener does not crash the
+      # connection process or hang waiting for more bytes.
+      :ok = InboundHttp.register("echo", EchoHandler)
+
+      assert_raise Plug.Parsers.ParseError, fn ->
+        :post
+        |> conn("/echo", "{not valid json")
+        |> put_req_header("content-type", "application/json")
+        |> Router.call(Router.init([]))
+      end
+    end
+
+    test "a multipart body with a broken boundary is rejected, not swallowed" do
+      :ok = InboundHttp.register("echo", EchoHandler)
+
+      assert_raise Plug.Parsers.ParseError, fn ->
+        :post
+        |> conn("/echo", "--nope\r\ngarbage without a closing boundary\r\n")
+        |> put_req_header("content-type", "multipart/form-data; boundary=realboundary")
+        |> Router.call(Router.init([]))
+      end
+    end
+  end
+
+  describe "authentication precedes parsing even for unparseable bodies" do
+    test "an unauthorized request with a body that would fail parsing is a clean 401" do
+      # The sharpest form of the auth-before-parse guarantee: if parsing ran
+      # first it would raise on this malformed JSON and the caller would learn
+      # the endpoint's shape from the 400. Instead an anonymous caller gets 401
+      # and the parser is never reached.
+      :ok = InboundHttp.register("token", TokenHandler)
+
+      conn =
+        :post
+        |> conn("/token", "{this will not parse")
+        |> put_req_header("content-type", "application/json")
+        |> Router.call(Router.init([]))
+
+      assert conn.status == 401
+      assert conn.resp_body == "unauthorized"
+      refute_received {:parsed, _}
+    end
+
+    test "an oversized body from an unauthorized caller is refused before it is read" do
+      # Auth is a header comparison; it must not depend on first reading a body
+      # that is over the limit. The 401 lands regardless of body size.
+      previous = Application.get_env(:lemon_channels, InboundHttp)
+      Application.put_env(:lemon_channels, InboundHttp, max_body_bytes: 64)
+
+      on_exit(fn ->
+        case previous do
+          nil -> Application.delete_env(:lemon_channels, InboundHttp)
+          value -> Application.put_env(:lemon_channels, InboundHttp, value)
+        end
+      end)
+
+      :ok = InboundHttp.register("token", TokenHandler)
+
+      conn =
+        :post
+        |> conn("/token", String.duplicate("x", 4_096))
+        |> put_req_header("content-type", "application/json")
+        |> Router.call(Router.init([]))
+
+      assert conn.status == 401
+      refute_received {:parsed, _}
+    end
+  end
+
+  describe "concurrent registration" do
+    test "many handlers racing distinct segments all land in the table" do
+      segments = for n <- 1..50, do: "seg-#{n}"
+
+      segments
+      |> Enum.map(fn segment ->
+        Task.async(fn -> InboundHttp.register(segment, EchoHandler) end)
+      end)
+      |> Enum.each(&Task.await(&1, 5_000))
+
+      for segment <- segments do
+        assert InboundHttp.handler_for(segment) == EchoHandler
+      end
+    end
+
+    test "two handlers racing the same segment leave it resolvable and consistent" do
+      # Agent.update serialises the writes, so the table can never be left in a
+      # half-written state; the winner is simply whichever update ran last.
+      task_a = Task.async(fn -> InboundHttp.register("race", EchoHandler) end)
+      task_b = Task.async(fn -> InboundHttp.register("race", CrashHandler) end)
+
+      assert :ok = Task.await(task_a, 5_000)
+      assert :ok = Task.await(task_b, 5_000)
+
+      assert InboundHttp.handler_for("race") in [EchoHandler, CrashHandler]
+    end
+  end
+
+  defp raw_body_of_size(size) do
+    # A JSON string literal whose total on-the-wire byte count is exactly `size`,
+    # so it exercises the raw-body limit rather than any decoded size.
+    inner = String.duplicate("x", max(size - 2, 0))
+    ~s(") <> inner <> ~s(")
   end
 end

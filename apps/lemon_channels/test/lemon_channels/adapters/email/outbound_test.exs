@@ -287,6 +287,85 @@ defmodule LemonChannels.Adapters.Email.OutboundTest do
     end
   end
 
+  describe "deliver/1 — SMTP transport failures" do
+    # These drive the whole `deliver/1` path through `:gen_smtp_client` to a
+    # relay that fails, proving each failure comes back as `{:error, reason}`
+    # rather than a crash or a hang. The relay is a throwaway TCP server bound
+    # to loopback on an ephemeral port, so nothing leaves the machine.
+
+    test "a refused connection is reported, not raised" do
+      # Point at a port nobody is listening on. The kernel answers with
+      # ECONNREFUSED immediately, so this is also the fast, deterministic case.
+      port = closed_port()
+      configure(from: "agent@lemon.test", smtp_relay: "127.0.0.1", smtp_port: port)
+
+      assert {:error, {:smtp, _reason}} = Outbound.deliver(payload())
+    end
+
+    test "a relay that refuses at the greeting comes back as an error" do
+      # A 5xx banner is a permanent failure: the relay is up but declining to
+      # serve us. gen_smtp gives up without retrying other hosts.
+      {port, server} = smtp_server(fn socket -> tcp_send(socket, "554 no service here") end)
+
+      configure(from: "agent@lemon.test", smtp_relay: "127.0.0.1", smtp_port: port)
+
+      assert {:error, {:smtp, _reason}} = Outbound.deliver(payload())
+      await(server)
+    end
+
+    test "a relay that rejects authentication comes back as an error" do
+      # Advertise AUTH PLAIN so gen_smtp attempts it in a single command, then
+      # answer 535. Credentials in config are what make it try at all.
+      {port, server} =
+        smtp_server(fn socket ->
+          tcp_send(socket, "220 fake ESMTP")
+          _ehlo = tcp_recv(socket)
+          tcp_send(socket, "250-fake\r\n250 AUTH PLAIN")
+          _auth = tcp_recv(socket)
+          tcp_send(socket, "535 5.7.8 authentication failed")
+        end)
+
+      configure(
+        from: "agent@lemon.test",
+        smtp_relay: "127.0.0.1",
+        smtp_port: port,
+        smtp_username: "u",
+        smtp_password: "p",
+        smtp_auth: "always"
+      )
+
+      assert {:error, {:smtp, _reason}} = Outbound.deliver(payload())
+      await(server)
+    end
+
+    test "a relay that accepts the connection then never speaks is bounded, not a hang" do
+      # The dangerous case: the TCP connect succeeds, so the 5s connect timeout
+      # never fires, and gen_smtp then reads the banner with a hardcoded 20-min
+      # timeout. Without our own deadline this call would block for that long.
+      # The server accepts and goes silent; `smtp_timeout` caps the exchange.
+      {port, server} =
+        smtp_server(fn socket ->
+          # Hold the connection open, saying nothing, until the test tears down.
+          :gen_tcp.recv(socket, 0, 2_000)
+        end)
+
+      configure(
+        from: "agent@lemon.test",
+        smtp_relay: "127.0.0.1",
+        smtp_port: port,
+        smtp_timeout: 300
+      )
+
+      {elapsed_us, result} = :timer.tc(fn -> Outbound.deliver(payload()) end)
+
+      assert {:error, {:smtp, :timeout}} = result
+      # Comfortably under gen_smtp's 20-minute read timeout: the deadline fired.
+      assert elapsed_us < 5_000_000, "deliver/1 took #{div(elapsed_us, 1000)}ms — deadline did not fire"
+
+      await(server)
+    end
+  end
+
   describe "build_envelope/2 — reply headers" do
     test "addresses the reply to the peer and from the configured sender" do
       configure(from: "Agent <AGENT@Lemon.test>")
@@ -402,5 +481,68 @@ defmodule LemonChannels.Adapters.Email.OutboundTest do
       assert envelope.in_reply_to == "later@example.com"
       assert "later@example.com" in envelope.references
     end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Throwaway SMTP relay
+  # ---------------------------------------------------------------------------
+
+  # A loopback TCP listener on an ephemeral port whose accepted connection is
+  # handled by `fun`, letting a test script exactly the failing dialogue a real
+  # relay would speak. Returns the port and the server task to await.
+  defp smtp_server(fun) when is_function(fun, 1) do
+    {:ok, listen} =
+      :gen_tcp.listen(0,
+        mode: :binary,
+        packet: :line,
+        active: false,
+        reuseaddr: true,
+        ip: {127, 0, 0, 1}
+      )
+
+    {:ok, port} = :inet.port(listen)
+
+    server =
+      Task.async(fn ->
+        try do
+          case :gen_tcp.accept(listen, 5_000) do
+            {:ok, socket} ->
+              try do
+                fun.(socket)
+              after
+                :gen_tcp.close(socket)
+              end
+
+            {:error, _} ->
+              :ok
+          end
+        after
+          :gen_tcp.close(listen)
+        end
+      end)
+
+    {port, server}
+  end
+
+  defp tcp_send(socket, line), do: :gen_tcp.send(socket, line <> "\r\n")
+
+  defp tcp_recv(socket) do
+    case :gen_tcp.recv(socket, 0, 5_000) do
+      {:ok, data} -> data
+      {:error, _} = error -> error
+    end
+  end
+
+  # Wait for the relay task so a failed dialogue surfaces here rather than as a
+  # stray log line after the test has moved on.
+  defp await(server), do: Task.await(server, 10_000)
+
+  # A loopback port with nothing listening: bind one, read its number, release
+  # it. A connect there gets ECONNREFUSED rather than hanging.
+  defp closed_port do
+    {:ok, socket} = :gen_tcp.listen(0, ip: {127, 0, 0, 1}, reuseaddr: true)
+    {:ok, port} = :inet.port(socket)
+    :gen_tcp.close(socket)
+    port
   end
 end

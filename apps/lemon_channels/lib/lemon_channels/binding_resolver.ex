@@ -1,5 +1,9 @@
 defmodule LemonChannels.Binding do
-  @moduledoc false
+  @moduledoc """
+  Resolved routing binding for a chat scope: the transport, chat/topic ids and
+  the project, agent, engine and queue-mode a message routes to. Produced by
+  `LemonChannels.BindingResolver.resolve_binding/1`.
+  """
   defstruct [:transport, :chat_id, :topic_id, :project, :agent_id, :default_engine, :queue_mode]
 
   @type t :: %__MODULE__{

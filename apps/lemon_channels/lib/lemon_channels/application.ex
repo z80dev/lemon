@@ -1,10 +1,18 @@
 defmodule LemonChannels.Application do
-  @moduledoc false
+  @moduledoc """
+  OTP application and adapter lifecycle for `LemonChannels`.
+
+  Starts the plugin registry, outbox and dispatcher, then any adapters declared
+  in config. Adapters can also be started, restarted and stopped at runtime with
+  `register_and_start_adapter/2`, `start_adapter/2` and `stop_adapter/1` — the
+  entrypoints a `LemonChannels.Plugin` author uses to bring an adapter online.
+  """
 
   use Application
 
   require Logger
 
+  @doc false
   @impl true
   def start(_type, _args) do
     children = [

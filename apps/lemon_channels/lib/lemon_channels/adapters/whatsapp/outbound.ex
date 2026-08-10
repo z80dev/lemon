@@ -2,9 +2,9 @@ defmodule LemonChannels.Adapters.WhatsApp.Outbound do
   @moduledoc """
   Outbound message delivery for WhatsApp.
 
-  Delivers OutboundPayload structs to WhatsApp by forwarding to
-  `LemonChannels.Adapters.WhatsApp.Transport`, which communicates
-  with the WhatsApp bridge process via port commands.
+  Delivers OutboundPayload structs to WhatsApp by forwarding to the internal
+  WhatsApp transport process, which communicates with the WhatsApp bridge via
+  port commands.
   """
 
   require Logger

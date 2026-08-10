@@ -36,7 +36,7 @@ This app depends only on `lemon_core` (in-umbrella), plus `jason`, `earmark_pars
               +--------------------------------------+
 ```
 
-**Inbound**: Each adapter's transport receives raw events from the external platform, normalizes them into `LemonCore.InboundMessage` structs locally, converts them with `LemonChannels.RunRequestBuilder`, and submits only `LemonCore.RunRequest` structs to the session engine through `LemonCore.RouterBridge.submit_run/1`.
+**Inbound**: Each adapter's transport receives raw events from the external platform, normalizes them into `LemonCore.InboundMessage` structs locally, converts them with the internal LemonChannels.RunRequestBuilder, and submits only `LemonCore.RunRequest` structs to the session engine through `LemonCore.RouterBridge.submit_run/1`.
 
 Channel adapters also use `LemonCore.RouterBridge` for busy-session and active-run queries. They must not read router-internal session registries or read models directly.
 
@@ -613,7 +613,7 @@ Default known engines: `lemon`, `echo`, `codex`, `claude`, `droid`, `opencode`, 
 
 ### Runtime Bridge
 
-`LemonChannels.Runtime` provides thin wrappers to interact with router-owned run lifecycle APIs without a hard compile-time dependency. Busy checks go through `LemonCore.RouterBridge.session_busy?/1` rather than reaching into router internals directly:
+The internal LemonChannels.Runtime module provides thin wrappers to interact with router-owned run lifecycle APIs without a hard compile-time dependency. Busy checks go through `LemonCore.RouterBridge.session_busy?/1` rather than reaching into router internals directly:
 
 ```elixir
 LemonChannels.Runtime.cancel_session(session_key)
@@ -665,8 +665,8 @@ Adapters run under `LemonChannels.AdapterSupervisor` (DynamicSupervisor).
 | `LemonChannels.BindingResolver` | Chat scope to binding resolution (delegates to LemonCore) |
 | `LemonChannels.EngineRegistry` | Compatibility resume-token parsing shim for custom gateway engines |
 | `LemonChannels.GatewayConfig` | Thin delegation to `LemonCore.GatewayConfig` |
-| `LemonChannels.Runtime` | Runtime bridge for session/run cancel, keepalive, and busy checks via `LemonCore.RouterBridge` |
-| `LemonChannels.Cwd` | Working directory resolution |
+| LemonChannels.Runtime (internal) | Runtime bridge for session/run cancel, keepalive, and busy checks via `LemonCore.RouterBridge` |
+| LemonChannels.Cwd (internal) | Working directory resolution |
 | `LemonChannels.Types` | ChatScope and other shared type definitions |
 
 ### Outbox

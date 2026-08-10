@@ -11,8 +11,8 @@ defmodule LemonChannels.Telegram.Formatter do
   @doc """
   Prepare markdown text for Telegram.
 
-  Returns `{text, opts}` where `opts` is a map suitable for passing to
-  `LemonChannels.Telegram.API.send_message/4` or `edit_message_text/5`.
+  Returns `{text, opts}` where `opts` is a map suitable for passing to the
+  Telegram API's `send_message`/`edit_message_text` calls.
   """
   @spec prepare_for_telegram(String.t() | nil) :: {String.t(), map() | nil}
   def prepare_for_telegram(text) when is_binary(text) do
