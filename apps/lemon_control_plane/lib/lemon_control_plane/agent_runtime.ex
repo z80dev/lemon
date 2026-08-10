@@ -19,10 +19,10 @@ defmodule LemonControlPlane.AgentRuntime do
   ## Degradation
 
   `call/3` is the only way methods reach the provider, and it never raises: a
-  missing provider, an unimplemented callback, an exception or an exit all
-  produce the caller's fallback value. That is what keeps every ops method
-  answering with an empty or "unavailable" payload — the shape ACP clients
-  already expect — in a runtime with no agent installed.
+  missing provider, an unimplemented callback, an exception, an exit and a
+  throw all produce the caller's fallback value. That is what keeps every ops
+  method answering with an empty or "unavailable" payload — the shape ACP
+  clients already expect — in a runtime with no agent installed.
   """
 
   alias LemonControlPlane.AgentRuntime.Provider
@@ -66,9 +66,11 @@ defmodule LemonControlPlane.AgentRuntime do
   @doc """
   Calls a provider callback, returning `fallback` if it cannot be served.
 
-  Covers all four ways a call can fail to produce a value: no provider
-  registered, the provider not implementing that optional callback, the call
-  raising, and the call exiting (a dead process behind it).
+  Covers every way a call can fail to produce a value: no provider registered,
+  the provider not implementing that optional callback, the call raising, the
+  call exiting (a dead process behind it), and the call throwing — which is
+  rare, but a provider is third-party code and a `throw` that escaped would
+  crash the ops method this exists to keep answering.
   """
   @spec call(atom(), [term()], term()) :: term()
   def call(function, args, fallback) when is_atom(function) and is_list(args) do
@@ -82,7 +84,7 @@ defmodule LemonControlPlane.AgentRuntime do
   rescue
     _ -> fallback
   catch
-    :exit, _ -> fallback
+    _kind, _reason -> fallback
   end
 
   @doc "The behaviour providers implement, for `@behaviour` and docs references."

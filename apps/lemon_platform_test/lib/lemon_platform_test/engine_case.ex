@@ -167,7 +167,16 @@ defmodule LemonPlatformTest.EngineCase do
       `"session-abc123"`. Must be something your `extract_resume/1` accepts;
       keep it to `[A-Za-z0-9_-]`.
     * `:registry` — round-trip the engine through `LemonGateway.EngineRegistry`.
-      Default `true`; requires `:lemon_gateway` to be started.
+      Default `true`, because "works standalone, invisible to the platform" is
+      the integration failure this suite exists to catch. It is also the only
+      option that is on by default and touches global state, so it is worth
+      knowing exactly what it does: it starts `:lemon_gateway` if nothing else
+      has (with the health listener disabled, so no port is bound), and
+      `LemonGateway.Application.start/2` in turn points
+      `LemonCore.EngineInfoBridge` at the gateway's registries for the rest of
+      the VM's life. The engine list it registers into is snapshotted and
+      restored per test. Pass `registry: false` in a suite where starting the
+      gateway is not acceptable.
     * `:run_probe` — `{Module, :function}` returning a `%LemonGateway.Types.Job{}`,
       called with the test context. Enables the lifecycle tests: `start_run/3`
       returns a ref, a `started` event arrives at the sink, and `cancel/1`
@@ -202,6 +211,41 @@ defmodule LemonPlatformTest.EngineCase do
   """
   @spec reserved_ids() :: [String.t()]
   def reserved_ids, do: @reserved_ids
+
+  @doc """
+  Text `extract_resume/1` is probed with, none of which it may raise on.
+
+  Chat text is arbitrary user input and the registry calls every engine's
+  `extract_resume/1` on it in turn, inside its own process. The list mixes the
+  shapes that break naive regex and slicing code — truncated resume lines, the
+  engine's own id with nothing after it, unbalanced backticks, newlines,
+  non-ASCII, and something long enough to matter.
+  """
+  @spec hostile_resume_text(String.t()) :: [String.t()]
+  def hostile_resume_text(engine_id) when is_binary(engine_id) do
+    [
+      "",
+      " ",
+      "\n",
+      "\n\n\n",
+      "`",
+      "```",
+      engine_id,
+      "#{engine_id} resume",
+      "#{engine_id} resume ",
+      "#{engine_id} resume\n",
+      "`#{engine_id} resume`",
+      "#{engine_id}  resume  #{engine_id}  resume  x",
+      "resume #{engine_id}",
+      "--resume",
+      "#{engine_id} resume ../../etc/passwd",
+      "#{engine_id} resume \0nul",
+      "🍋 #{engine_id} resume 🍋",
+      "上下文 #{engine_id} resume 值",
+      String.duplicate("a", 10_000),
+      String.duplicate("#{engine_id} resume x\n", 200)
+    ]
+  end
 
   using opts do
     engine = Keyword.fetch!(opts, :engine)
@@ -278,6 +322,34 @@ defmodule LemonPlatformTest.EngineCase do
           # belongs to some other tool, not to this engine.
           assert @engine.extract_resume("not#{@engine.id()}x resume #{@resume_value}") == nil,
                  "extract_resume/1 must not claim another engine's resume line"
+        end
+
+        test "extract_resume/1 does not raise on hostile text" do
+          for text <- LemonPlatformTest.EngineCase.hostile_resume_text(@engine.id()) do
+            result =
+              try do
+                @engine.extract_resume(text)
+              rescue
+                error ->
+                  flunk("""
+                  extract_resume/1 raised on #{inspect(text)}:
+
+                    #{Exception.format(:error, error, __STACKTRACE__)}
+
+                  Engines are called from inside LemonGateway.EngineRegistry's own
+                  process, on the path every inbound message takes. A raise here
+                  takes the registry down, and enough of them take the gateway
+                  down with it — so this callback has to answer, not crash, for
+                  any binary at all.
+                  """)
+              catch
+                kind, reason ->
+                  flunk("extract_resume/1 threw #{kind} #{inspect(reason)} on #{inspect(text)}")
+              end
+
+            assert match?(%LemonCore.ResumeToken{}, result) or is_nil(result),
+                   "extract_resume/1 must return a ResumeToken or nil, got: #{inspect(result)}"
+          end
         end
 
         test "is_resume_line/1 recognises a bare resume line and nothing else" do
@@ -364,6 +436,7 @@ defmodule LemonPlatformTest.EngineCase do
         describe unquote(label <> " registration round-trip") do
           setup do
             :ok = LemonPlatformTest.EngineCase.ensure_gateway_started!()
+            LemonPlatformTest.EngineCase.restore_engines_on_exit()
             :ok
           end
 
@@ -394,9 +467,18 @@ defmodule LemonPlatformTest.EngineCase do
 
   @doc """
   Starts `:lemon_gateway` if it is not already running.
+
+  When this function is the one that starts it, the gateway's health listener is
+  disabled first, so running a compliance suite never binds a port. A gateway
+  that was already running is left exactly as it was — the suite is a guest in
+  that case, not the owner.
   """
   @spec ensure_gateway_started!() :: :ok
   def ensure_gateway_started! do
+    unless gateway_running?() do
+      Application.put_env(:lemon_gateway, :health_enabled, false)
+    end
+
     case Application.ensure_all_started(:lemon_gateway) do
       {:ok, _apps} ->
         :ok
@@ -410,5 +492,33 @@ defmodule LemonPlatformTest.EngineCase do
         registration round-trip.
         """
     end
+  end
+
+  @doc """
+  Restores `:lemon_gateway, :engines` when the current test ends.
+
+  `LemonGateway.EngineRegistry.register/1` writes the engine list back to
+  application environment so it survives a registry restart. That is correct for
+  a running system and wrong for a test suite, which would otherwise leave the
+  engine under test registered for everything that runs after it in the same VM.
+  """
+  @spec restore_engines_on_exit() :: :ok
+  def restore_engines_on_exit do
+    original = Application.fetch_env(:lemon_gateway, :engines)
+
+    ExUnit.Callbacks.on_exit(fn ->
+      case original do
+        {:ok, engines} -> Application.put_env(:lemon_gateway, :engines, engines)
+        :error -> Application.delete_env(:lemon_gateway, :engines)
+      end
+    end)
+
+    :ok
+  end
+
+  defp gateway_running? do
+    Enum.any?(Application.started_applications(), fn {app, _desc, _vsn} ->
+      app == :lemon_gateway
+    end)
   end
 end

@@ -128,12 +128,19 @@ defmodule CodingAgent.Tools do
       ParentQuestion.tool(cwd, opts),
       ToolAuth.tool(cwd, opts),
       ExtensionsStatus.tool(cwd, opts)
-    ] ++ registered_tools(cwd, opts)
+    ]
+    |> then(fn builtins -> builtins ++ registered_tools(builtins, cwd, opts) end)
   end
 
   # Tools contributed at runtime by apps the platform does not know about.
-  defp registered_tools(cwd, opts) do
-    Enum.map(AgentCore.ToolRegistry.all(), fn {_name, module} -> module.tool(cwd, opts) end)
+  # Built-ins win on a name collision (`AgentCore.ToolRegistry`), so anything
+  # already in `builtins` is dropped rather than shadowing or duplicating it.
+  defp registered_tools(builtins, cwd, opts) do
+    taken = MapSet.new(builtins, & &1.name)
+
+    AgentCore.ToolRegistry.all()
+    |> Enum.reject(fn {name, _module} -> MapSet.member?(taken, Atom.to_string(name)) end)
+    |> Enum.map(fn {_name, module} -> module.tool(cwd, opts) end)
   end
 
   @doc """
@@ -212,7 +219,13 @@ defmodule CodingAgent.Tools do
       "tool_auth" => ToolAuth.tool(cwd, opts),
       "extensions_status" => ExtensionsStatus.tool(cwd, opts)
     }
-    |> Map.merge(registered_tools_by_name(cwd, opts))
+    |> then(fn builtins ->
+      # Built-ins last: a registration colliding with a platform tool name is
+      # ignored, never swapped in. `get_tool/3` resolves through this map, so
+      # merging the other way would let a satellite replace the tool the model
+      # was shown the schema for.
+      Map.merge(registered_tools_by_name(cwd, opts), builtins)
+    end)
   end
 
   defp registered_tools_by_name(cwd, opts) do

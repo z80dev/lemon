@@ -98,12 +98,17 @@ defmodule LemonRouter.RunOrchestrator do
           completed_today: non_neg_integer()
         }
   def counts do
+    # Both sources are processes that may not be running, and calling a process
+    # that is not there *exits* rather than raising — so `rescue` alone left
+    # this function propagating the very failure it was written to absorb.
     active =
       try do
         %{active: n} = DynamicSupervisor.count_children(LemonRouter.RunSupervisor)
         n
       rescue
         _ -> 0
+      catch
+        _kind, _reason -> 0
       end
 
     {queued, completed_today} =
@@ -111,6 +116,8 @@ defmodule LemonRouter.RunOrchestrator do
         {LemonRouter.RunCountTracker.queued(), LemonRouter.RunCountTracker.completed_today()}
       rescue
         _ -> {0, 0}
+      catch
+        _kind, _reason -> {0, 0}
       end
 
     %{active: active, queued: queued, completed_today: completed_today}

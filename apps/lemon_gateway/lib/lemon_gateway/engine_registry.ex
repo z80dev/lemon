@@ -11,8 +11,23 @@ defmodule LemonGateway.EngineRegistry do
   is how coding_agent contributes the `"lemon"` engine without the gateway
   depending on it. Registration also updates `:lemon_gateway, :engines`, so a
   registry restart keeps the engine.
+
+  What gets written back is the *union* of the configured list and the runtime
+  registrations, not the set this process is currently serving. Those differ: a
+  configured engine whose module is not loadable yet is skipped for lookups but
+  stays in the configuration, because "not loadable at boot" is a statement
+  about start order, not about intent. Persisting the serving set instead would
+  let one unrelated `register/1` delete an engine the operator configured.
+
+  An engine is third-party code called from inside this process, so every call
+  into one — `c:LemonGateway.Engine.id/0` and
+  `c:LemonGateway.Engine.extract_resume/1` — is isolated. An engine that raises
+  is logged and skipped rather than taking the registry (and, through the
+  supervisor's restart intensity, the gateway) down with it.
   """
   use GenServer
+
+  require Logger
 
   @type engine_id :: String.t()
   @type engine_mod :: module()
@@ -68,7 +83,7 @@ defmodule LemonGateway.EngineRegistry do
 
   @impl true
   def init(_opts) do
-    engines =
+    configured =
       Application.get_env(:lemon_gateway, :engines, [
         LemonGateway.Engines.Echo,
         LemonGateway.Engines.Codex,
@@ -80,18 +95,19 @@ defmodule LemonGateway.EngineRegistry do
       ])
 
     # A configured engine may live in an application that is not part of this
-    # runtime; skip it rather than taking the registry down.
-    engines = Enum.filter(engines, &loadable?/1)
+    # runtime, or in one that starts later; serve what is loadable now and keep
+    # the rest in :configured so persist_engines/1 never drops it.
+    engines = Enum.filter(configured, &loadable?/1)
 
-    map =
-      engines
-      |> Enum.reduce(%{}, fn mod, acc ->
-        id = mod.id()
-        validate_id!(id)
-        Map.put(acc, id, mod)
+    {map, order} =
+      Enum.reduce(engines, {%{}, []}, fn mod, {map, order} = acc ->
+        case valid_id(mod) do
+          nil -> acc
+          id -> {Map.put(map, id, mod), order ++ [mod]}
+        end
       end)
 
-    {:ok, %{map: map, order: engines}}
+    {:ok, %{map: map, order: order, configured: configured}}
   end
 
   @impl true
@@ -99,21 +115,19 @@ defmodule LemonGateway.EngineRegistry do
     id = module.id()
     validate_id!(id)
 
-    order =
-      case Enum.find_index(state.order, &(&1.id() == id)) do
-        nil -> state.order ++ [module]
-        index -> List.replace_at(state.order, index, module)
-      end
+    order = upsert(state.order, module, id)
+    configured = upsert(state.configured, module, id)
 
-    persist_engines(order)
+    persist_engines(configured)
 
-    {:reply, :ok, %{state | map: Map.put(state.map, id, module), order: order}}
+    {:reply, :ok,
+     %{state | map: Map.put(state.map, id, module), order: order, configured: configured}}
   rescue
     error -> {:reply, {:error, error}, state}
   end
 
   def handle_call(:list, _from, state) do
-    {:reply, Enum.map(state.order, & &1.id()), state}
+    {:reply, Enum.flat_map(state.order, fn mod -> List.wrap(safe_id(mod)) end), state}
   end
 
   def handle_call({:get, id}, _from, state) do
@@ -128,7 +142,7 @@ defmodule LemonGateway.EngineRegistry do
     result =
       state.order
       |> Enum.find_value(:none, fn mod ->
-        case mod.extract_resume(text) do
+        case safe_extract_resume(mod, text) do
           %LemonCore.ResumeToken{} = token -> {:ok, token}
           _ -> nil
         end
@@ -141,10 +155,84 @@ defmodule LemonGateway.EngineRegistry do
     Code.ensure_loaded?(module) and function_exported?(module, :id, 0)
   end
 
-  # Keep the configured list in step so a registry restart rebuilds the same
-  # set of engines.
-  defp persist_engines(order) do
-    Application.put_env(:lemon_gateway, :engines, order)
+  # Replace the entry holding `id`, or append. Entries that cannot report an id
+  # (an engine from an application that has not started yet) are left alone
+  # rather than being treated as collisions.
+  defp upsert(list, module, id) do
+    cond do
+      module in list ->
+        list
+
+      index = Enum.find_index(list, fn mod -> loadable?(mod) and safe_id(mod) == id end) ->
+        List.replace_at(list, index, module)
+
+      true ->
+        list ++ [module]
+    end
+  end
+
+  # An engine that *raises* is skipped; an engine that *answers* an unusable id
+  # is still fatal at boot. The two are different failures: the first is a
+  # broken plugin the gateway should survive, the second is a configuration
+  # error the operator needs to see immediately, before any traffic arrives.
+  defp valid_id(module) do
+    case safe_id(module) do
+      nil ->
+        nil
+
+      id ->
+        validate_id!(id)
+        id
+    end
+  end
+
+  # Engines are third-party code running in this process; a raise here is the
+  # engine's bug and must not become the registry's crash.
+  defp safe_id(module) do
+    module.id()
+  rescue
+    error ->
+      Logger.error(
+        "engine #{inspect(module)} raised in id/0, skipping it: #{Exception.message(error)}"
+      )
+
+      nil
+  catch
+    kind, reason ->
+      Logger.error("engine #{inspect(module)} #{kind} in id/0, skipping it: #{inspect(reason)}")
+
+      nil
+  end
+
+  defp safe_extract_resume(module, text) do
+    module.extract_resume(text)
+  rescue
+    error ->
+      Logger.error(
+        "engine #{inspect(module)} raised in extract_resume/1, skipping it: " <>
+          Exception.message(error)
+      )
+
+      nil
+  catch
+    kind, reason ->
+      Logger.error(
+        "engine #{inspect(module)} #{kind} in extract_resume/1, skipping it: #{inspect(reason)}"
+      )
+
+      nil
+  end
+
+  # Persist the union of configured and runtime-registered engines so a registry
+  # restart rebuilds the same set. Deliberately not `state.order`: that is only
+  # what is loadable right now, and writing it back would delete a configured
+  # engine whose application had not started yet.
+  defp persist_engines(configured) do
+    Application.put_env(:lemon_gateway, :engines, configured)
+  end
+
+  defp validate_id!(id) when not is_binary(id) do
+    raise ArgumentError, "engine id must be a string, got: #{inspect(id)}"
   end
 
   defp validate_id!(id) when id in @reserved_ids do

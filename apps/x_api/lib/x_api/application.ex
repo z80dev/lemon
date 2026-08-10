@@ -32,10 +32,16 @@ defmodule XApi.Application do
   end
 
   # The platform must not know X exists at compile time, so this integration
-  # contributes itself on the way up. A runtime without lemon_channels simply
-  # has no X channel.
+  # contributes itself on the way up.
+  #
+  # The guard is on the channel registry being *running*, not on the module
+  # being loadable: lemon_channels is a hard dependency, so the module is always
+  # loadable and the only meaningful "no channels here" is "not started" — which
+  # is what a standalone or partially-started runtime looks like. Registering
+  # into a registry that is not up exits `:noproc`, and an exit here would take
+  # the whole application down on the way up, so it is caught as well.
   defp register_channel_adapter do
-    if Code.ensure_loaded?(LemonChannels.Application) do
+    if is_pid(Process.whereis(LemonChannels.Registry)) do
       case LemonChannels.Application.register_and_start_adapter(XApi.ChannelAdapter) do
         :ok ->
           :ok
@@ -45,8 +51,13 @@ defmodule XApi.Application do
           :ok
       end
     else
+      Logger.debug("x_api channel adapter not started: lemon_channels registry not running")
       :ok
     end
+  catch
+    :exit, reason ->
+      Logger.debug("x_api channel adapter not started: #{inspect(reason)}")
+      :ok
   end
 
   # Same for the three agent tools: they register with the agent runtime rather

@@ -20,18 +20,19 @@ defmodule AgentCore.ToolRegistry do
 
   Built-ins win. A registration whose name collides with a built-in is kept in
   the registry but ignored by the consumer that already has that name, so a
-  satellite can never silently replace a platform tool. Consumers get this by
-  filtering with `available/1` (`CodingAgent.ToolRegistry`) or by merging their
-  built-ins last (`LemonMcp.ToolAdapter`).
+  satellite can never silently replace a platform tool. Consumers get this one
+  of two ways, and both are equivalent: filtering with `available/1`
+  (`CodingAgent.ToolRegistry`), or merging their own built-ins *last*
+  (`CodingAgent.Tools`, `LemonMcp.ToolAdapter`).
 
-  ### Known looseness
-
-  `CodingAgent.Tools.all_tools/2` merges the registered tools *over* its
-  built-in map, so a colliding registration does replace the built-in on that
-  one execution path even though the schema the model was shown came from the
-  built-in. Nothing in the tree currently collides, and the fix belongs in that
-  merge rather than here — but do not rely on the collision rule to protect a
-  built-in until it is made consistent.
+  The rule is worth stating in terms of what it protects rather than as a
+  merge order. `CodingAgent.Tools.all_tools/2` is what `get_tool/3` resolves
+  through, so it decides which module actually *runs* when the model emits a
+  call. The schema the model was shown for `bash` came from the built-in; if a
+  registration could take that name, the thing that runs would not be the thing
+  that was described. That is the failure the precedence rule exists to prevent,
+  which is why it has to hold on every path rather than on the one a consumer
+  happened to write carefully.
 
   ## The satellite pattern
 
@@ -74,20 +75,24 @@ defmodule AgentCore.ToolRegistry do
       Logger.warning("[AgentCore.ToolRegistry] #{inspect(module)} is not loadable")
     end
 
-    put(List.keystore(all(), name, 0, {name, module}))
+    put(List.keystore(stored(), name, 0, {name, module}))
   end
 
   @doc "Remove the registration for `name`."
   @spec unregister(tool_name()) :: :ok
-  def unregister(name) when is_atom(name), do: put(List.keydelete(all(), name, 0))
+  def unregister(name) when is_atom(name), do: put(List.keydelete(stored(), name, 0))
 
   @doc """
   Every registration, in registration order, filtered to modules that are
   actually loadable in this build.
+
+  Callers turn these into tools by calling `module.tool/2`, so an entry whose
+  module is not in the build would be an `UndefinedFunctionError` at the call
+  site rather than a missing tool. Registration order is preserved.
   """
   @spec all() :: [entry()]
   def all do
-    :persistent_term.get(@key, [])
+    Enum.filter(stored(), fn {_name, module} -> Code.ensure_loaded?(module) end)
   end
 
   @doc """
@@ -96,9 +101,14 @@ defmodule AgentCore.ToolRegistry do
   """
   @spec available(taken :: [tool_name()]) :: [entry()]
   def available(taken) when is_list(taken) do
-    Enum.reject(all(), fn {name, module} ->
-      name in taken or not Code.ensure_loaded?(module)
-    end)
+    Enum.reject(all(), fn {name, _module} -> name in taken end)
+  end
+
+  # The raw table. Registration reads and writes this rather than `all/0` so
+  # that registering one tool cannot delete another whose application has not
+  # started yet — the filter in `all/0` is a view, not a fact about the build.
+  defp stored do
+    :persistent_term.get(@key, [])
   end
 
   defp put(entries) do

@@ -194,6 +194,37 @@ defmodule LemonGateway.EngineRegistryTest do
     def cancel(_ctx), do: :ok
   end
 
+  # Mock engine whose extract_resume/1 blows up on any input. Engines are
+  # third-party code called from inside the registry process, so this is the
+  # shape that used to take the registry down with it.
+  defmodule ResumeRaisingEngine do
+    @behaviour LemonGateway.Engine
+
+    alias LemonCore.ResumeToken
+    alias LemonGateway.Types.Job
+
+    @impl true
+    def id, do: "raiser"
+
+    @impl true
+    def format_resume(%ResumeToken{value: sid}), do: "raiser resume #{sid}"
+
+    @impl true
+    def extract_resume(_text), do: raise("engine blew up")
+
+    @impl true
+    def is_resume_line(_line), do: false
+
+    @impl true
+    def supports_steer?, do: false
+
+    @impl true
+    def start_run(%Job{}, _opts, _sink_pid), do: {:ok, make_ref(), %{}}
+
+    @impl true
+    def cancel(_ctx), do: :ok
+  end
+
   # Mock engine with invalid ID (starts with number)
   defmodule NumberStartIdEngine do
     @behaviour LemonGateway.Engine
@@ -487,6 +518,40 @@ defmodule LemonGateway.EngineRegistryTest do
 
       assert {:ok, _} = Application.ensure_all_started(:lemon_gateway)
       assert EngineRegistry.list_engines() == ["alpha"]
+    end
+
+    test "a runtime registration does not delete a configured engine that is not loadable yet" do
+      # An engine configured from an application that starts after the gateway
+      # is skipped for lookups, but writing the serving set back to :engines
+      # would delete it from the operator's configuration for good.
+      Application.put_env(:lemon_gateway, :engines, [AlphaEngine, Definitely.Not.Loaded])
+      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+
+      assert EngineRegistry.register(BetaEngine) == :ok
+
+      persisted = Application.get_env(:lemon_gateway, :engines)
+      assert Definitely.Not.Loaded in persisted
+      assert BetaEngine in persisted
+      assert AlphaEngine in persisted
+    end
+
+    test "an engine that raises in extract_resume/1 is skipped, not fatal" do
+      Application.put_env(:lemon_gateway, :engines, [ResumeRaisingEngine, AlphaEngine])
+      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+
+      registry = Process.whereis(EngineRegistry)
+
+      # The raising engine is consulted first and must not stop the fold, nor
+      # prevent a later engine from claiming the line.
+      assert {:ok, %ResumeToken{engine: "alpha", value: "xyz"}} =
+               EngineRegistry.extract_resume("alpha resume xyz")
+
+      assert EngineRegistry.extract_resume("nothing here") == :none
+
+      assert Process.whereis(EngineRegistry) == registry,
+             "a raising engine restarted the registry instead of being skipped"
+
+      assert EngineRegistry.list_engines() == ["raiser", "alpha"]
     end
 
     defp wait_for_registry(attempts \\ 50) do
