@@ -155,7 +155,7 @@ with one example tool and one channel wired:
 (cd installer && MIX_ENV=prod mix archive.build && mix archive.install --force lemon_new-0.1.0.ez)
 
 cd ~/code                              # anywhere outside this repo
-mix lemon.new my_agent --channel --memory
+mix lemon.new my_agent --channel --memory --install
 cd my_agent && mix test
 ```
 
