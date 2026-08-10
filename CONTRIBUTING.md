@@ -1,6 +1,11 @@
 # Contributing to Lemon
 
-Thank you for your interest in contributing. This document covers the basics.
+Thank you for your interest in contributing. Lemon is a BEAM-native platform for
+building agents, and the parts that are easiest to extend — channels, engines,
+storage, memory — are the parts we most want contributions to. This guide gets
+you from a clone to a merged extension.
+
+If you only read one section, read [Your first contribution](#your-first-contribution).
 
 ## Before You Start
 
@@ -28,8 +33,100 @@ scripts/test path apps/lemon_core/test
 scripts/test quality              # lint + architecture boundaries + doc freshness
 ```
 
-See [`docs/testing.md`](docs/testing.md) for the canonical local test lanes and
-how they map to CI.
+`scripts/test quality` runs the same `mix lemon.quality` lane CI runs, and it is
+the gate most PRs need to pass. See [`docs/testing.md`](docs/testing.md) for the
+canonical local test lanes and how they map to CI.
+
+## Your first contribution
+
+The best first contribution to Lemon is **a new channel adapter** — a Slack
+adapter, an SMS provider, an internal chat bridge. It touches one well-defined
+behaviour, it ships with a ready-made compliance suite, and it can live in this
+repo or in your own. Here is the whole on-ramp:
+
+1. **Scaffold a project** with the generator, so you have a running agent to
+   attach a channel to:
+
+   ```bash
+   cd installer && MIX_ENV=prod mix archive.build
+   mix archive.install lemon_new-0.1.0.ez
+   mix lemon.new my_agent
+   ```
+
+2. **Follow the guide.** [Add a channel](docs/getting-started/add-a-channel.md)
+   walks from the console loop the generator gives you to a registered
+   `LemonChannels.Plugin`, callback by callback. Its companions —
+   [Build your first agent](docs/getting-started/build-your-first-agent.md),
+   [Add a tool](docs/getting-started/add-a-tool.md), and
+   [Persist memory](docs/getting-started/persist-memory.md) — cover the
+   neighbouring extension points.
+
+3. **Prove it with the contract kit** (below). A channel adapter that passes
+   `LemonPlatformTest.PluginCase` is a channel adapter we can review quickly and
+   merge with confidence.
+
+You do not have to contribute the adapter back — the X integration lives in its
+own package and registers itself at boot, and yours can too. But if it is
+general-purpose, open a PR; it is exactly the contribution this project is shaped
+to receive.
+
+## Extension points
+
+Every extension point is a behaviour with a published compliance suite in the
+`lemon_platform_test` kit. Implement the behaviour, then run the matching case
+against your module — the suite is the specification in executable form, so a
+green run is most of what a reviewer needs.
+
+| You want to add | Implement | Compliance suite | Guide |
+|-----------------|-----------|------------------|-------|
+| A channel (Slack, SMS, chat bridge) | [`LemonChannels.Plugin`](apps/lemon_channels/lib/lemon_channels/plugin.ex) | `LemonPlatformTest.PluginCase` | [Add a channel](docs/getting-started/add-a-channel.md) |
+| A coding/agent engine | [`LemonGateway.Engine`](apps/lemon_gateway/lib/lemon_gateway/engine.ex) | `LemonPlatformTest.EngineCase` | — |
+| A storage backend | [`LemonCore.Store.Backend`](apps/lemon_core/lib/lemon_core/store/backend.ex) | `LemonPlatformTest.BackendCase` | — |
+| A memory provider | [`LemonMemory.Provider`](apps/lemon_memory/lib/lemon_memory/provider.ex) | `LemonPlatformTest.ProviderCase` | [Persist memory](docs/getting-started/persist-memory.md) |
+
+Each behaviour's moduledoc is the contract in prose; each case's moduledoc
+explains what it exercises and why. The built-in implementations are the worked
+examples — Telegram/Discord/email for channels, `EtsBackend`/`SqliteBackend` for
+storage, `LemonMemory.Providers.Local` for memory.
+
+## Running the contract kit
+
+Add `lemon_platform_test` as a test-only dependency and write a one-file test
+that hands your module to the matching case. The suites are parameterized `use`
+macros; the options tell the suite what to run and which probes are safe.
+
+```elixir
+# test/my_agent/slack_channel_test.exs
+defmodule MyAgent.SlackChannelComplianceTest do
+  use LemonPlatformTest.PluginCase,
+    async: false,
+    adapter: MyAgent.SlackChannel,
+    deliver_probe: {__MODULE__, :unsupported_payload},
+    inbound_fixtures: {__MODULE__, :updates}
+
+  # `:deliver_probe` has no default on purpose: only you know which payload
+  # cannot reach a real user. A kind your adapter does not support is the right
+  # choice — a compliance suite that posts to a live workspace is worse than none.
+  def unsupported_payload(_context), do: # ... an OutboundPayload your adapter rejects
+  def updates(_context), do: # ... raw inbound fixtures your normalize_inbound/1 accepts
+end
+```
+
+```bash
+mix test test/my_agent/slack_channel_test.exs
+```
+
+The other suites follow the same shape:
+
+```elixir
+use LemonPlatformTest.EngineCase,   async: true,  engine: MyApp.MyEngine, registry: false
+use LemonPlatformTest.BackendCase,  async: true,  backend: MyApp.MyBackend
+use LemonPlatformTest.ProviderCase, async: false, provider: MyApp.MyProvider
+```
+
+Look at `apps/lemon_platform_test/test/compliance/` for a runnable example of
+each — those are the platform's own implementations held to the same suite you
+will run.
 
 ## Commit Style (Conventional Commits)
 
@@ -56,7 +153,15 @@ Use `LemonCore.Config.Features.enabled?/2` — not `System.get_env`.
 - Branch from `main`; branch name: `<type>/<short-description>`
 - PRs require approval from the CODEOWNERS of affected files
 - Cross-cutting changes (`mix.exs`, shared schemas) require `@z80` sign-off
-- Register any new docs files in `docs/catalog.exs`
+- `mix lemon.quality` must be green (lint + architecture boundaries + doc freshness)
+- Register any new docs files under `docs/` in `docs/catalog.exs`
+- **Changed a published package's `lib/`?** Add an entry to that package's
+  `CHANGELOG.md` in the same PR — the change is visible to third parties who
+  installed it from Hex. A CI job annotates PRs that miss this (advisory, per
+  `docs/platform-split.md` §4.4); it does not block the merge, but reviewers do.
+
+The [pull request template](.github/pull_request_template.md) has the full
+checklist.
 
 ## Reporting Security Issues
 
