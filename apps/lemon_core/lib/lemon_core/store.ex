@@ -618,6 +618,11 @@ defmodule LemonCore.Store do
   defp store_call_exit_reason({:shutdown, {GenServer, :call, _}}), do: :shutdown
   defp store_call_exit_reason(_), do: :exit
 
+  # GenServer Implementation
+
+  # Server-side only: called from `init/1` and the register-cached-table call,
+  # both of which run in the store process. It lives below this line because
+  # everything that touches the cache does.
   defp warm_cached_tables(backend, backend_state, read_cache, tables) do
     Enum.reduce(tables, backend_state, fn table, acc_state ->
       case backend.list(acc_state, table) do
@@ -644,8 +649,6 @@ defmodule LemonCore.Store do
       end
     end)
   end
-
-  # GenServer Implementation
 
   @impl true
   def init(opts) do

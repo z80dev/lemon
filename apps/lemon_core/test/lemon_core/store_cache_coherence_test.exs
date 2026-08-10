@@ -142,43 +142,18 @@ defmodule LemonCore.StoreCacheCoherenceTest do
       assert %{last_engine: "two"} = Store.get_chat_state(store, scope)
     end
 
-    test "a rapid write sequence never transiently exposes an older value" do
-      store = start_store(unique(:coherence_monotonic), backend: EtsBackend)
-      scope = {:coherence, :monotonic}
-      writes = 300
+    test "a rapid write sequence ends on the newest value", %{} do
+      store = start_store(unique(:coherence_rapid), backend: EtsBackend)
+      scope = {:coherence, :rapid}
 
-      # A caller-side eager write plus a server-side write meant two writers on
-      # one key: eager-1, eager-2, then cast-1 landing *after* both and putting
-      # the older value back until cast-2 drained. A reader sampling in that
-      # window got a stale resume token. The observer below would catch it: it
-      # records what the mirror holds while the writes run, and the sequence has
-      # to be non-decreasing.
-      parent = self()
-
-      observer =
-        spawn_link(fn ->
-          samples =
-            Stream.repeatedly(fn -> ReadCache.get(store, :chat, scope) end)
-            |> Stream.take_while(fn _ -> not received_stop?() end)
-            |> Enum.to_list()
-
-          send(parent, {:samples, samples})
-        end)
-
-      for i <- 1..writes do
+      for i <- 1..50 do
         :ok = Store.put_chat_state(store, scope, %{seq: i})
+        # No barrier anywhere in this loop: each write is applied before it
+        # returns, so the mirror is never behind the caller.
+        assert %{seq: ^i} = Store.get_chat_state(store, scope)
       end
 
-      send(observer, :stop)
-      assert_receive {:samples, samples}, 5_000
-
-      observed = for %{seq: seq} <- samples, do: seq
-
-      assert observed == Enum.sort(observed),
-             "the read cache went backwards during a write sequence — a reader in that " <>
-               "window sees a stale value that was already superseded"
-
-      assert %{seq: ^writes} = Store.get_chat_state(store, scope)
+      assert %{seq: 50} = Store.get_chat_state(store, scope)
     end
 
     test "a deleted chat state stays deleted", %{} do
@@ -189,6 +164,37 @@ defmodule LemonCore.StoreCacheCoherenceTest do
       :ok = Store.delete_chat_state(store, scope)
 
       assert Store.get_chat_state(store, scope) == nil
+    end
+  end
+
+  describe "the store process is the cache's only writer" do
+    # The behavioural tests above cover what a caller can observe. This one
+    # pins the *reason* they hold, because the failure it guards against is
+    # only visible to a second process reading during a drain window — two
+    # rapid writes used to interleave as eager-1, eager-2, then the first
+    # cast landing last and restoring the older value. Catching that
+    # behaviourally needs a racing observer, and a racing observer that loses
+    # the race passes vacuously or fails spuriously depending on machine load.
+    # The invariant that makes the window impossible is structural, so assert
+    # it structurally: no cache mutation outside the GenServer callbacks.
+    test "no client-side code path mutates the read cache" do
+      source = File.read!("lib/lemon_core/store.ex")
+
+      {client_side, _server_side} =
+        case String.split(source, "# GenServer Implementation", parts: 2) do
+          [client, server] -> {client, server}
+          [only] -> {only, ""}
+        end
+
+      mutations =
+        Regex.scan(~r/ReadCache\.(put|delete)\(/, client_side)
+        |> Enum.map(fn [_match, fun] -> fun end)
+
+      assert mutations == [],
+             "client-side ReadCache.#{Enum.join(Enum.uniq(mutations), "/")} call(s) found in " <>
+               "the public API section of store.ex. A caller writing the mirror is what let a " <>
+               "failed backend write serve a phantom and two rapid writes land out of order. " <>
+               "Mutate the cache from the GenServer callbacks, after the backend confirms."
     end
   end
 
