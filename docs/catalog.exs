@@ -570,6 +570,12 @@
     max_age_days: 90
   },
   %{
+    path: "docs/platform/phase-5-extraction.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-08-10],
+    max_age_days: 90
+  },
+  %{
     path: "docs/why-beam-for-agents.md",
     owner: "@z80",
     last_reviewed: ~D[2026-08-10],
