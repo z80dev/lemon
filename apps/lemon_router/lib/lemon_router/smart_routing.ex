@@ -10,7 +10,10 @@ defmodule LemonRouter.SmartRouting do
   @type complexity :: :simple | :moderate | :complex
 
   defmodule Config do
-    @moduledoc false
+    @moduledoc """
+    Thresholds for `LemonRouter.SmartRouting.route/4`: whether cascade routing is
+    enabled and the character bounds that classify a prompt as simple or complex.
+    """
     @type t :: %__MODULE__{
             cascade_enabled: boolean(),
             simple_max_chars: non_neg_integer(),

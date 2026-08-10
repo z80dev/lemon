@@ -1,5 +1,20 @@
 defmodule AgentCore.AbortSignal do
-  @moduledoc false
+  @moduledoc """
+  Cooperative, ETS-backed abort signalling for the agent loop and tools.
+
+  A signal is a plain `t:reference/0`. The loop checks it before each LLM call
+  and tool batch; long-running tools should check it too and stop early when it
+  is set, so cancellation is graceful rather than forced:
+
+      def execute(args, %{abort_signal: signal} = _ctx) do
+        if AgentCore.AbortSignal.aborted?(signal), do: throw(:aborted)
+        # ...
+      end
+
+  Reads and writes go through a `:public` ETS table with read/write
+  concurrency, so `aborted?/1` is cheap to call in a hot loop. A long-lived
+  owner process holds the table as its heir, so it survives a producer crash.
+  """
 
   @table :agent_core_abort_signals
 

@@ -559,7 +559,7 @@ defmodule LemonMemory.Store do
 
   @impl true
   def terminate(_reason, state) do
-    Sqlite3.close(state.conn)
+    _ = Sqlite3.close(state.conn)
     :ok
   rescue
     _ -> :ok
@@ -680,7 +680,7 @@ defmodule LemonMemory.Store do
       :ok
     else
       err ->
-        Sqlite3.execute(state.conn, "ROLLBACK")
+        _ = Sqlite3.execute(state.conn, "ROLLBACK")
 
         case err do
           :busy -> {:error, :sqlite_busy}
@@ -690,7 +690,7 @@ defmodule LemonMemory.Store do
     end
   rescue
     e ->
-      Sqlite3.execute(state.conn, "ROLLBACK")
+      _ = Sqlite3.execute(state.conn, "ROLLBACK")
       {:error, {:exception, Exception.message(e)}}
   end
 

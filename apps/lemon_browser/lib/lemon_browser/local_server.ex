@@ -366,7 +366,7 @@ defmodule LemonBrowser.LocalServer do
 
   defp driver_config_summary do
     endpoint = Env.get(:lemon_browser_cdp_endpoint) |> to_string_safe()
-    attach_only? = Env.get(:lemon_browser_attach_only) or endpoint != ""
+    attach_only? = Env.get(:lemon_browser_attach_only) == true or endpoint != ""
     # Note: intentionally not `Env.get/2` -- LEMON_BROWSER_CDP_PORT only
     # accepts *positive* integers (0/negative fall back to the default),
     # which is stricter than the standard :integer cast's "any parseable

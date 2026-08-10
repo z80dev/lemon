@@ -37,7 +37,7 @@ defmodule LemonMedia.MediaJobWorker do
       |> Map.put(:status, :running)
 
     {:ok, running_job} = MediaJobs.record(running_attrs, record_opts)
-    publish(:running, running_job)
+    _ = publish(:running, running_job)
 
     case run_media_job(state.runner, running_attrs) do
       {:ok, updates} ->
@@ -47,7 +47,7 @@ defmodule LemonMedia.MediaJobWorker do
           |> Map.put(:status, :completed)
 
         {:ok, completed_job} = MediaJobs.record(completed_attrs, record_opts)
-        publish(:completed, completed_job)
+        _ = publish(:completed, completed_job)
         {:stop, :normal, state}
 
       {:error, reason} ->
@@ -58,7 +58,7 @@ defmodule LemonMedia.MediaJobWorker do
           |> Map.put(:error_kind, error_kind(reason))
 
         {:ok, failed_job} = MediaJobs.record(failed_attrs, record_opts)
-        publish(:failed, failed_job)
+        _ = publish(:failed, failed_job)
         {:stop, :normal, state}
     end
   end

@@ -368,7 +368,7 @@ defmodule LemonLsp.ServerManager do
             {:noreply, state}
 
           {pending, remaining_pending} ->
-            Process.cancel_timer(pending.timer)
+            _ = Process.cancel_timer(pending.timer)
             GenServer.reply(pending.from, {:error, :request_timeout})
 
             session =
@@ -611,14 +611,15 @@ defmodule LemonLsp.ServerManager do
   defp terminate_os_target(target) do
     kill = System.find_executable("kill")
 
-    if kill do
-      _ = System.cmd(kill, ["-TERM", target], stderr_to_stdout: true)
-      Process.sleep(25)
+    _ =
+      if kill do
+        _ = System.cmd(kill, ["-TERM", target], stderr_to_stdout: true)
+        Process.sleep(25)
 
-      if os_process_alive?(kill, target) do
-        _ = System.cmd(kill, ["-KILL", target], stderr_to_stdout: true)
+        if os_process_alive?(kill, target) do
+          _ = System.cmd(kill, ["-KILL", target], stderr_to_stdout: true)
+        end
       end
-    end
 
     :ok
   end
@@ -903,7 +904,7 @@ defmodule LemonLsp.ServerManager do
         Map.put(session, :pending, pending)
 
       {request, pending} ->
-        Process.cancel_timer(request.timer)
+        _ = Process.cancel_timer(request.timer)
         GenServer.reply(request.from, {:ok, message})
 
         session
@@ -1022,7 +1023,7 @@ defmodule LemonLsp.ServerManager do
     session.pending
     |> Map.values()
     |> Enum.each(fn pending ->
-      Process.cancel_timer(pending.timer)
+      _ = Process.cancel_timer(pending.timer)
       GenServer.reply(pending.from, response)
     end)
   end

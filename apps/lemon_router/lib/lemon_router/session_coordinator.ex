@@ -6,7 +6,7 @@ defmodule LemonRouter.SessionCoordinator do
   Reducer state changes live in `LemonRouter.SessionTransitions`; this module
   interprets reducer effects, owns registry/process IO, and emits router phases.
 
-  `LemonRouter.RunOrchestrator` remains responsible for the initial
+  The internal LemonRouter.RunOrchestrator remains responsible for the initial
   `LemonCore.EventBridge.subscribe_run/1` call on accepted router submissions.
   This coordinator only cleans up event bridge subscriptions when queued or
   pending submissions are later dropped from reducer state.

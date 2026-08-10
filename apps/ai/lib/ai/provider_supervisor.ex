@@ -1,5 +1,11 @@
 defmodule Ai.ProviderSupervisor do
-  @moduledoc false
+  @moduledoc """
+  `DynamicSupervisor` for per-provider services.
+
+  Rate limiters (`Ai.RateLimiter`) and circuit breakers (`Ai.CircuitBreaker`) are
+  started as children here on demand, one set per provider, so a misbehaving
+  provider's limiter or breaker can restart without affecting the others.
+  """
 
   use DynamicSupervisor
 
