@@ -176,7 +176,7 @@ defmodule LemonGateway.Run do
   end
 
   defp generate_run_id do
-    "run_#{UUID.uuid4()}"
+    "run_#{LemonCore.Id.uuid()}"
   end
 
   defp session_key_from_job(%Job{session_key: key}) when is_binary(key), do: key

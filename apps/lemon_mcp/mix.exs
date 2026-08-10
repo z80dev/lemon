@@ -27,11 +27,11 @@ defmodule LemonMCP.MixProject do
   defp deps do
     [
       {:jason, "~> 1.4"},
-      {:uuid, "~> 1.1"},
       {:bandit, "~> 1.0"},
       {:plug, "~> 1.14"},
       # Umbrella dependencies
       {:coding_agent, in_umbrella: true},
+      {:lemon_core, in_umbrella: true},
       {:lemon_skills, in_umbrella: true},
       {:agent_core, in_umbrella: true}
     ]

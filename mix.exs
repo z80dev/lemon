@@ -60,10 +60,18 @@ defmodule Lemon.MixProject do
   end
 
   # Release configuration for games.zeebot.xyz
+  #
+  # lemon_core carries :exqlite, :sentry and :finch as optional deps (see
+  # apps/lemon_core/mix.exs), so the runtime releases name them explicitly:
+  # prod configures the SQLite store backend, and the error sink is part of
+  # what "reference runtime" means here.
   defp releases do
     [
       lemon_runtime_min: [
         applications: [
+          exqlite: :permanent,
+          sentry: :permanent,
+          finch: :permanent,
           lemon_core: :permanent,
           lemon_browser: :permanent,
           lemon_media: :permanent,
@@ -80,6 +88,9 @@ defmodule Lemon.MixProject do
       ],
       lemon_runtime_full: [
         applications: [
+          exqlite: :permanent,
+          sentry: :permanent,
+          finch: :permanent,
           lemon_core: :permanent,
           lemon_browser: :permanent,
           lemon_media: :permanent,
@@ -100,6 +111,7 @@ defmodule Lemon.MixProject do
       ],
       sim_broadcast_platform: [
         applications: [
+          exqlite: :permanent,
           lemon_core: :permanent,
           lemon_sim: :permanent,
           lemon_sim_ui: :permanent

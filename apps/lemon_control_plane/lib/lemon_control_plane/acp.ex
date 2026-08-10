@@ -122,7 +122,7 @@ defmodule LemonControlPlane.ACP do
          {:ok, _servers} <- required_list(params, "mcpServers") do
       agent_id = lemon_meta_string(params, "agentId", @default_agent_id)
       client_capabilities = client_capabilities(params, opts)
-      session_id = "acp_" <> UUID.uuid4()
+      session_id = "acp_" <> LemonCore.Id.uuid()
       session_key = "agent:#{agent_id}:acp-#{short_hash(session_id)}"
       now = DateTime.utc_now() |> DateTime.to_iso8601()
 
@@ -387,30 +387,66 @@ defmodule LemonControlPlane.ACP do
 
           %LemonCore.Event{type: :acp_client_request, payload: payload} ->
             result = perform_client_request(result, payload, client_request_callback)
-            update_wait_loop(result, session_update_callback, client_request_callback, deadline_ms)
+
+            update_wait_loop(
+              result,
+              session_update_callback,
+              client_request_callback,
+              deadline_ms
+            )
 
           %LemonCore.Event{type: :approval_requested, payload: payload} ->
             result = maybe_perform_approval_request(result, payload, client_request_callback)
-            update_wait_loop(result, session_update_callback, client_request_callback, deadline_ms)
+
+            update_wait_loop(
+              result,
+              session_update_callback,
+              client_request_callback,
+              deadline_ms
+            )
 
           %LemonCore.Event{} = event ->
             maybe_emit_update(result.session_id, event, session_update_callback)
-            update_wait_loop(result, session_update_callback, client_request_callback, deadline_ms)
+
+            update_wait_loop(
+              result,
+              session_update_callback,
+              client_request_callback,
+              deadline_ms
+            )
 
           %{type: :run_completed, payload: payload} ->
             {:ok, complete_streamed_result(result, payload)}
 
           %{type: :acp_client_request, payload: payload} ->
             result = perform_client_request(result, payload, client_request_callback)
-            update_wait_loop(result, session_update_callback, client_request_callback, deadline_ms)
+
+            update_wait_loop(
+              result,
+              session_update_callback,
+              client_request_callback,
+              deadline_ms
+            )
 
           %{type: :approval_requested, payload: payload} ->
             result = maybe_perform_approval_request(result, payload, client_request_callback)
-            update_wait_loop(result, session_update_callback, client_request_callback, deadline_ms)
+
+            update_wait_loop(
+              result,
+              session_update_callback,
+              client_request_callback,
+              deadline_ms
+            )
 
           %{type: _type} = event ->
             maybe_emit_update(result.session_id, event, session_update_callback)
-            update_wait_loop(result, session_update_callback, client_request_callback, deadline_ms)
+
+            update_wait_loop(
+              result,
+              session_update_callback,
+              client_request_callback,
+              deadline_ms
+            )
         after
           timeout_ms ->
             {:error, -32_001, "Run did not complete within timeout"}

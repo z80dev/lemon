@@ -50,7 +50,7 @@ defmodule LemonControlPlane.WS.Connection do
 
   @impl WebSock
   def init(_opts) do
-    conn_id = UUID.uuid4()
+    conn_id = LemonCore.Id.uuid()
 
     state = %__MODULE__{
       conn_id: conn_id,

@@ -803,7 +803,7 @@ defmodule CodingAgent.SessionManager do
   end
 
   defp generate_session_id do
-    UUID.uuid4()
+    LemonCore.Id.uuid()
   end
 
   # ============================================================================

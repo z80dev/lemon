@@ -11,8 +11,8 @@ Lemon enforces direct umbrella dependencies by app. This keeps the harness modul
 | `agent_core` | `ai`, `lemon_core` |
 | `ai` | *(none)* |
 | `coding_agent` | `agent_core`, `ai`, `lemon_browser`, `lemon_core`, `lemon_skills` |
-| `coding_agent_ui` | `coding_agent` |
-| `lemon_automation` | `lemon_core`, `lemon_router`, `lemon_skills` |
+| `coding_agent_ui` | `coding_agent`, `lemon_core` |
+| `lemon_automation` | `agent_core`, `lemon_core`, `lemon_router`, `lemon_skills` |
 | `lemon_browser` | `lemon_core` |
 | `lemon_channels` | `agent_core`, `lemon_core`, `lemon_media`, `x_api` |
 | `lemon_cli` | `ai`, `lemon_core` |
@@ -21,7 +21,7 @@ Lemon enforces direct umbrella dependencies by app. This keeps the harness modul
 | `lemon_evals` | `agent_core`, `ai`, `coding_agent`, `lemon_core`, `lemon_skills` |
 | `lemon_gateway` | `agent_core`, `ai`, `coding_agent`, `lemon_automation`, `lemon_core` |
 | `lemon_lsp` | `lemon_core` |
-| `lemon_mcp` | `agent_core`, `coding_agent`, `lemon_skills` |
+| `lemon_mcp` | `agent_core`, `coding_agent`, `lemon_core`, `lemon_skills` |
 | `lemon_media` | `lemon_core` |
 | `lemon_router` | `agent_core`, `ai`, `lemon_channels`, `lemon_core`, `lemon_media` |
 | `lemon_sim` | `agent_core`, `ai`, `lemon_core` |

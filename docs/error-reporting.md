@@ -19,10 +19,16 @@ Optional companions:
   neither is set.
 
 When `SENTRY_DSN` is absent or blank, nothing is configured: the `:sentry`
-application still boots (it's a normal dependency of `lemon_core`), but with
-`dsn: nil`, which is Sentry's own documented "disabled" mode — no events are
-sent and no logger handler is attached. This is the default, and is what CI,
-tests, and local development run with.
+application still boots (it's an optional dependency of `lemon_core`, and the
+release profiles include it), but with `dsn: nil`, which is Sentry's own
+documented "disabled" mode — no events are sent and no logger handler is
+attached. This is the default, and is what CI, tests, and local development
+run with.
+
+`:sentry` and its HTTP client `:finch` are optional deps, so a host application
+that depends on `lemon_core` without them still boots: `config/runtime.exs`
+skips this block when `Sentry.LoggerHandler` is not loadable, and
+`LemonCore.Application` drops any configured handler whose module is missing.
 
 ## What gets captured
 

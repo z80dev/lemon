@@ -34,9 +34,25 @@ defmodule LemonCore.Bus do
       event = LemonCore.Event.new(:delta, %{text: "Hello"})
       LemonCore.Bus.broadcast("run:abc-123", event)
 
+  ## Backends
+
+  `phoenix_pubsub` is an optional dependency. When it is available (the case
+  for the Lemon runtime, and for anything running Phoenix) the Bus is a thin
+  wrapper over `Phoenix.PubSub` and broadcasts reach the whole cluster.
+
+  When it is not, the Bus falls back to a `Registry` with duplicate keys,
+  started by `LemonCore.Application` under the same supervision tree. The four
+  operations behave identically **on the local node**; the fallback does not
+  cross node boundaries. Distributed deployments should depend on
+  `phoenix_pubsub` explicitly.
+
   """
 
   @pubsub LemonCore.PubSub
+  @registry LemonCore.Bus.Registry
+
+  @compile {:no_warn_undefined, Phoenix.PubSub}
+  @pubsub_compiled Code.ensure_loaded?(Phoenix.PubSub)
 
   @doc """
   Subscribe the calling process to a topic.
@@ -45,7 +61,14 @@ defmodule LemonCore.Bus do
   """
   @spec subscribe(topic :: binary()) :: :ok
   def subscribe(topic) when is_binary(topic) do
-    Phoenix.PubSub.subscribe(@pubsub, topic)
+    if pubsub?() do
+      Phoenix.PubSub.subscribe(@pubsub, topic)
+    else
+      case Registry.register(@registry, topic, nil) do
+        {:ok, _owner} -> :ok
+        {:error, {:already_registered, _pid}} -> :ok
+      end
+    end
   end
 
   @doc """
@@ -55,7 +78,11 @@ defmodule LemonCore.Bus do
   """
   @spec unsubscribe(topic :: binary()) :: :ok
   def unsubscribe(topic) when is_binary(topic) do
-    Phoenix.PubSub.unsubscribe(@pubsub, topic)
+    if pubsub?() do
+      Phoenix.PubSub.unsubscribe(@pubsub, topic)
+    else
+      Registry.unregister(@registry, topic)
+    end
   end
 
   @doc """
@@ -66,7 +93,11 @@ defmodule LemonCore.Bus do
   """
   @spec broadcast(topic :: binary(), event :: LemonCore.Event.t() | term()) :: :ok
   def broadcast(topic, event) when is_binary(topic) do
-    Phoenix.PubSub.broadcast(@pubsub, topic, event)
+    if pubsub?() do
+      Phoenix.PubSub.broadcast(@pubsub, topic, event)
+    else
+      dispatch(topic, event, nil)
+    end
   end
 
   @doc """
@@ -74,7 +105,43 @@ defmodule LemonCore.Bus do
   """
   @spec broadcast_from(topic :: binary(), event :: LemonCore.Event.t() | term()) :: :ok
   def broadcast_from(topic, event) when is_binary(topic) do
-    Phoenix.PubSub.broadcast_from(@pubsub, self(), topic, event)
+    if pubsub?() do
+      Phoenix.PubSub.broadcast_from(@pubsub, self(), topic, event)
+    else
+      dispatch(topic, event, self())
+    end
+  end
+
+  @doc """
+  Whether `phoenix_pubsub` backs the Bus, as opposed to the Registry fallback.
+
+  Detected when this module is compiled. `config :lemon_core, :bus_backend,
+  :registry` forces the fallback even when `Phoenix.PubSub` is available, which
+  is mainly useful for exercising it in tests.
+  """
+  @spec pubsub?() :: boolean()
+  def pubsub? do
+    case Application.get_env(:lemon_core, :bus_backend, :auto) do
+      :registry -> false
+      :pubsub -> true
+      _auto -> @pubsub_compiled
+    end
+  end
+
+  @doc false
+  @spec child_spec_for_backend() :: Supervisor.child_spec() | {module(), keyword()}
+  def child_spec_for_backend do
+    if pubsub?() do
+      {Phoenix.PubSub, name: @pubsub}
+    else
+      {Registry, keys: :duplicate, name: @registry}
+    end
+  end
+
+  defp dispatch(topic, event, except) do
+    Registry.dispatch(@registry, topic, fn subscribers ->
+      for {pid, _value} <- subscribers, pid != except, do: send(pid, event)
+    end)
   end
 
   @doc """

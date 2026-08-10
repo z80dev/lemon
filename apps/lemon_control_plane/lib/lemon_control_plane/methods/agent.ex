@@ -199,7 +199,7 @@ defmodule LemonControlPlane.Methods.Agent do
   end
 
   defp generate_run_id do
-    UUID.uuid4()
+    LemonCore.Id.uuid()
   end
 
   defp check_idempotency(nil), do: {:ok, :new}

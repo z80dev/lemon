@@ -29,8 +29,8 @@ defmodule CodingAgentUi.MixProject do
   defp deps do
     [
       {:coding_agent, in_umbrella: true},
-      {:jason, "~> 1.4"},
-      {:uuid, "~> 1.1"}
+      {:lemon_core, in_umbrella: true},
+      {:jason, "~> 1.4"}
     ]
   end
 end

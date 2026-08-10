@@ -29,7 +29,6 @@ defmodule LemonGateway.MixProject do
   defp deps do
     [
       {:jason, "~> 1.4"},
-      {:uuid, "~> 1.1"},
       {:toml, "~> 0.7"},
       # HTTP webhook listener (Twilio SMS inbox utility)
       {:plug, "~> 1.16"},

@@ -5,12 +5,24 @@ defmodule LemonCore.Id do
   Provides consistent ID generation for runs, sessions, and other entities.
   """
 
+  alias LemonCore.UUID
+
   @doc """
   Generate a random UUID v4.
   """
   @spec uuid() :: binary()
   def uuid do
     UUID.uuid4()
+  end
+
+  @doc """
+  Generate a time-ordered UUID v7.
+
+  Sorts lexicographically by creation time, unlike `uuid/0`.
+  """
+  @spec uuid7() :: binary()
+  def uuid7 do
+    UUID.uuid7()
   end
 
   @doc """

@@ -515,7 +515,7 @@ defmodule LemonMCP.Protocol do
   # ============================================================================
 
   defp generate_id do
-    UUID.uuid4()
+    LemonCore.Id.uuid()
   end
 
   defp struct_to_map(%InitializeRequest{} = req) do

@@ -19,6 +19,8 @@ defmodule LemonCore.Store.SqliteBackend do
   alias Exqlite.Sqlite3
   alias Exqlite.Error, as: ExqliteError
 
+  @compile {:no_warn_undefined, [Exqlite.Sqlite3, Exqlite.Error]}
+
   @default_ephemeral_tables [:runs]
   @default_filename "store.sqlite3"
 
@@ -76,6 +78,8 @@ defmodule LemonCore.Store.SqliteBackend do
 
   @impl true
   def init(opts) do
+    ensure_exqlite!()
+
     raw_path = Keyword.fetch!(opts, :path)
     path = normalize_path(raw_path)
     ephemeral_tables = Keyword.get(opts, :ephemeral_tables, @default_ephemeral_tables)
@@ -421,6 +425,24 @@ defmodule LemonCore.Store.SqliteBackend do
       e ->
         {:error, {:sqlite_bind_failed, Exception.message(e)}}
     end
+  end
+
+  defp ensure_exqlite! do
+    unless Code.ensure_loaded?(Sqlite3) do
+      raise """
+      #{inspect(__MODULE__)} requires the optional :exqlite dependency.
+
+      Add it to your deps:
+
+          {:exqlite, "~> 0.34"}
+
+      Or configure the ETS backend instead:
+
+          config :lemon_core, LemonCore.Store, backend: LemonCore.Store.EtsBackend
+      """
+    end
+
+    :ok
   end
 
   defp classify_bind_error(%ExqliteError{} = error) do

@@ -30,6 +30,10 @@ defmodule LemonCore.MemoryStore do
   alias Exqlite.Sqlite3
   alias LemonCore.MemoryDocument
 
+  # :exqlite is an optional dependency of lemon_core; LemonCore.Application only
+  # starts this store when it is present.
+  @compile {:no_warn_undefined, Exqlite.Sqlite3}
+
   @default_retention_ms 30 * 24 * 60 * 60 * 1000
   @default_max_per_scope 500
   @sweep_interval_ms 15 * 60 * 1000
@@ -415,6 +419,11 @@ defmodule LemonCore.MemoryStore do
 
   @impl true
   def init(opts) do
+    unless Code.ensure_loaded?(Sqlite3) do
+      raise "#{inspect(__MODULE__)} requires the optional :exqlite dependency. " <>
+              ~s(Add {:exqlite, "~> 0.34"} to your deps.)
+    end
+
     app_config = Application.get_env(:lemon_core, __MODULE__, [])
     # opts passed to start_link take precedence over application env
     config = Keyword.merge(app_config, Keyword.drop(opts, [:name]))
@@ -458,7 +467,13 @@ defmodule LemonCore.MemoryStore do
   end
 
   def handle_cast({:delete_by_session, session_key}, state) do
-    run_delete(state.conn, state.stmts.fts_delete_by_session, [session_key], "fts_delete_by_session")
+    run_delete(
+      state.conn,
+      state.stmts.fts_delete_by_session,
+      [session_key],
+      "fts_delete_by_session"
+    )
+
     run_delete(state.conn, state.stmts.delete_by_session, [session_key], "delete_by_session")
     {:noreply, state}
   end
@@ -470,8 +485,20 @@ defmodule LemonCore.MemoryStore do
   end
 
   def handle_cast({:delete_by_workspace, workspace_key}, state) do
-    run_delete(state.conn, state.stmts.fts_delete_by_workspace, [workspace_key], "fts_delete_by_workspace")
-    run_delete(state.conn, state.stmts.delete_by_workspace, [workspace_key], "delete_by_workspace")
+    run_delete(
+      state.conn,
+      state.stmts.fts_delete_by_workspace,
+      [workspace_key],
+      "fts_delete_by_workspace"
+    )
+
+    run_delete(
+      state.conn,
+      state.stmts.delete_by_workspace,
+      [workspace_key],
+      "delete_by_workspace"
+    )
+
     {:noreply, state}
   end
 
@@ -644,7 +671,8 @@ defmodule LemonCore.MemoryStore do
          :ok <- Sqlite3.bind(state.stmts.put, params),
          :done <- Sqlite3.step(state.conn, state.stmts.put),
          :ok <- Sqlite3.reset(state.stmts.fts_put),
-         :ok <- Sqlite3.bind(state.stmts.fts_put, [doc.doc_id, doc.prompt_summary, doc.answer_summary]),
+         :ok <-
+           Sqlite3.bind(state.stmts.fts_put, [doc.doc_id, doc.prompt_summary, doc.answer_summary]),
          :done <- Sqlite3.step(state.conn, state.stmts.fts_put) do
       :ok = Sqlite3.execute(state.conn, "COMMIT")
       :ok
@@ -682,10 +710,21 @@ defmodule LemonCore.MemoryStore do
   end
 
   defp decode_row([
-         doc_id, run_id, session_key, agent_id, workspace_key, scope,
-         started_at_ms, ingested_at_ms,
-         prompt_summary, answer_summary,
-         tools_used_blob, provider, model, outcome, meta_blob
+         doc_id,
+         run_id,
+         session_key,
+         agent_id,
+         workspace_key,
+         scope,
+         started_at_ms,
+         ingested_at_ms,
+         prompt_summary,
+         answer_summary,
+         tools_used_blob,
+         provider,
+         model,
+         outcome,
+         meta_blob
        ]) do
     with {:ok, tools_used} <- decode(tools_used_blob),
          {:ok, meta} <- decode(meta_blob) do
@@ -794,9 +833,7 @@ defmodule LemonCore.MemoryStore do
           :ok
         else
           err ->
-            Logger.warning(
-              "[MemoryStore] fts prune failed for '#{session_key}': #{inspect(err)}"
-            )
+            Logger.warning("[MemoryStore] fts prune failed for '#{session_key}': #{inspect(err)}")
         end
 
         count + n

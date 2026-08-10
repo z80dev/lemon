@@ -34,9 +34,14 @@ end
 # SENTRY_DSN is set: Sentry's own documented "disabled" mode is `dsn: nil`
 # (the default), so absent the env var this block is skipped entirely and
 # the sentry app boots inert, sending nothing.
+#
+# :sentry is an optional dependency of lemon_core, so a build that leaves it
+# out skips this block too rather than configuring a handler module that does
+# not exist. LemonCore.Application drops such handlers defensively as well.
 sentry_dsn = System.get_env("SENTRY_DSN")
 
-if is_binary(sentry_dsn) and String.trim(sentry_dsn) != "" do
+if is_binary(sentry_dsn) and String.trim(sentry_dsn) != "" and
+     Code.ensure_loaded?(Sentry.LoggerHandler) do
   sentry_environment =
     [System.get_env("LEMON_ENV"), System.get_env("SENTRY_ENVIRONMENT")]
     |> Enum.find(&(is_binary(&1) and String.trim(&1) != ""))

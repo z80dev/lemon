@@ -227,7 +227,7 @@ defmodule CodingAgent.UI.RPC do
 
   @impl GenServer
   def handle_call({:request, method, params}, from, state) do
-    request_id = UUID.uuid4()
+    request_id = LemonCore.Id.uuid()
 
     request = %{
       id: request_id,
