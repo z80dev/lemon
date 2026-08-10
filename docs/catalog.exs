@@ -242,7 +242,7 @@
   %{
     path: "docs/telemetry.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-06-17],
+    last_reviewed: ~D[2026-08-10],
     max_age_days: 90
   },
   %{
@@ -568,5 +568,29 @@
     owner: "@z80",
     last_reviewed: ~D[2026-08-10],
     max_age_days: 180
+  },
+  %{
+    path: "docs/getting-started/build-your-first-agent.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-08-10],
+    max_age_days: 90
+  },
+  %{
+    path: "docs/getting-started/add-a-tool.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-08-10],
+    max_age_days: 90
+  },
+  %{
+    path: "docs/getting-started/add-a-channel.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-08-10],
+    max_age_days: 90
+  },
+  %{
+    path: "docs/getting-started/persist-memory.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-08-10],
+    max_age_days: 90
   }
 ]

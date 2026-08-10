@@ -362,6 +362,71 @@ Running that under `mix run --no-start` produces:
 `AgentCore.Context` is a good probe target because it emits from a pure function with no
 supervision tree, no store, and no network.
 
+### Aggregating into metrics
+
+**`telemetry_metrics` is not a dependency of this repo**, and neither is
+`telemetry_metrics_prometheus` or `phoenix_live_dashboard`. Nothing here aggregates,
+samples, or exports — the runtime emits, and what happens next is the host application's
+choice. This section is what wiring it up looks like *if you add those deps to your own
+project*; it is not describing something that ships.
+
+```elixir
+# in your own app's mix.exs:
+#   {:telemetry_metrics, "~> 1.0"},
+#   {:telemetry_metrics_prometheus, "~> 1.1"}
+
+import Telemetry.Metrics
+
+def metrics do
+  [
+    # Saturation: the two signals that mean "shed load or add capacity".
+    last_value("lemon.gateway.scheduler.waitq", tags: []),
+    counter("lemon.channels.outbox.rejected.count", tags: [:channel_id, :reason]),
+
+    # Provider health.
+    counter("ai.dispatcher.rejected.duration", tags: [:provider, :reason]),
+    counter("ai.circuit_breaker.opened.system_time", tags: [:provider]),
+
+    # Tool reliability.
+    counter("agent_core.tool_task.error.system_time", tags: [:tool_name, :reason]),
+
+    # Latency. Note the three different units — see "Measurement units are not uniform".
+    distribution("lemon.channels.deliver.stop.duration",
+      unit: {:native, :millisecond},
+      tags: [:channel_id, :ok]
+    ),
+    distribution("lemon.memory.ingest.ok.duration_us",
+      unit: {:microsecond, :millisecond},
+      tags: []
+    ),
+    distribution("coding_agent.extension.tool.stop.duration_us",
+      unit: {:microsecond, :millisecond},
+      tags: [:status]
+    )
+  ]
+end
+```
+
+Three things bite when you do this, all of them consequences of items in
+[Known gaps](#known-gaps-and-inconsistencies):
+
+- **Pick the unit per event, not per dashboard.** `duration` is native, `duration_us` is
+  microseconds, `duration_ms` is milliseconds, and `[:lemon, :config, :reload, :stop]`
+  reports both `duration` and `duration_ms` where the former is synthesized from the latter.
+  A single `unit: {:native, :millisecond}` applied across the board silently produces
+  numbers that are wrong by six orders of magnitude on the `_us` events.
+- **`counter/2` still needs a measurement key that exists.**
+  `[:coding_agent, :tool_call, :name_normalized]` and `[:coding_agent, :session_fork, _]`
+  emit empty measurement maps, so they cannot be counted without first adding a measurement
+  at the emit site.
+- **Runtime-suffixed events cannot be declared with a wildcard.** `Telemetry.Metrics` needs
+  a concrete event name, so each value of the nine dynamic families has to be listed
+  individually; the known values are in the catalog above.
+
+For an interactive view instead of a scrape endpoint, `phoenix_live_dashboard` consumes the
+same `metrics/0` list through its `:metrics` option. Neither path requires changing any
+emit site.
+
 ## Known gaps and inconsistencies
 
 These are recorded, not fixed. Renaming events is a breaking change for any attached
