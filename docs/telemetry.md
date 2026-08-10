@@ -52,8 +52,13 @@ event you are attaching to:
 |---|---|
 | `duration` in **native** units | `[:lemon, :channels, :deliver, :stop]`, `[:agent_core, :loop, :end]`, `[:ai, :dispatcher, :rejected]` |
 | `duration_us` | `[:coding_agent, :extension, :tool, ...]`, `[:coding_agent, :wasm, :tool, ...]`, `[:lemon, :memory, :ingest, ...]` |
-| `duration_ms` | `[:lemon, :reload, ...]`, `[:lemon, :wasm, :*, :stop]` |
-| both `duration` and `duration_ms` | `[:lemon, :config, :reload, :stop]` (the `duration` value is `duration_ms * 1_000_000`, not a real native reading) |
+| `duration_ms` | `[:lemon, :reload, ...]`, `[:lemon, :run, :stop]`, `[:lemon, :wasm, :*, :stop]` |
+| both `duration` (native) and `duration_ms` | `[:lemon, :config, :reload, :stop]` and `:exception` — `duration` is a real monotonic native reading and `duration_ms` is derived from it via `System.convert_time_unit/3` |
+
+`LemonCore.Telemetry`'s moduledoc records the intended convention for **new** emitters:
+`duration` in native units, with `duration_ms` derived only for logs. Existing `duration_us`
+/ `duration_ms` events predate it and are not renamed, because renaming is a breaking change
+for any attached consumer.
 
 `system_time` measurements are `System.system_time()` in native units and are timestamps,
 not durations.
@@ -98,11 +103,15 @@ sequenceDiagram
     O->>Ch: delivered
 ```
 
-**There is no end-to-end run span in telemetry.** `[:lemon, :run, :submit]` fires, but no
-`[:lemon, :run, :stop]` is ever emitted (the helper exists and has no callers — see
-[Known gaps](#known-gaps-and-inconsistencies)). To measure whole-run duration today, use the
-introspection layer's `:run_started` / `:run_completed` records, which are persisted with
-`ts_ms` and a shared `run_id`.
+**The end-to-end run span is emitted from the gateway run process.**
+`[:lemon, :run, :start]`, `[:lemon, :run, :first_token]`, and `[:lemon, :run, :stop]` all
+fire from `LemonGateway.Run`, dispatched through `LemonGateway.DependencyManager.emit_telemetry/2`
+(an `apply/3` on `LemonCore.Telemetry`). Because that dispatch is dynamic, a literal-name grep
+for the helpers turns up no callers even though the span fires — this is why an earlier
+revision of this file wrongly listed them as dead. `[:lemon, :run, :stop]` carries
+`duration_ms` and an `ok` boolean, so whole-run latency and success/failure are both readable
+from telemetry alone. The introspection layer's `:run_started` / `:run_completed` records
+remain available as a persisted, queryable alternative.
 
 ## Event catalog
 
@@ -110,7 +119,16 @@ introspection layer's `:run_started` / `:run_completed` records, which are persi
 
 | Event | Measurements | Metadata | Emitter |
 |---|---|---|---|
-| `[:lemon, :run, :submit]` | `count: 1` | `session_key`, `origin`, `engine` | `LemonCore.Telemetry.run_submit/3`, called from [`run_orchestrator.ex:204`](../apps/lemon_router/lib/lemon_router/run_orchestrator.ex) when a submission is accepted |
+| `[:lemon, :run, :submit]` | `count: 1` | `session_key`, `origin`, `engine` | `LemonCore.Telemetry.run_submit/3`, called from [`run_orchestrator.ex:211`](../apps/lemon_router/lib/lemon_router/run_orchestrator.ex) when a submission is accepted |
+| `[:lemon, :run, :start]` | `ts_ms` | `run_id`, `session_key`, `engine`, `origin` | [`run.ex:259`](../apps/lemon_gateway/lib/lemon_gateway/run.ex) via `DependencyManager.emit_telemetry(:run_start, ...)`, when the gateway starts the engine run |
+| `[:lemon, :run, :first_token]` | `latency_ms` | `run_id` | [`run.ex:428`](../apps/lemon_gateway/lib/lemon_gateway/run.ex), on the first engine delta of the run |
+| `[:lemon, :run, :stop]` | `duration_ms`, `ok` (boolean) | `run_id` | [`run.ex:611`](../apps/lemon_gateway/lib/lemon_gateway/run.ex), at finalize; `ok` distinguishes success from `{:error, _}`. Not emitted if the run process crashes before finalize |
+
+### Cron — `[:lemon, :cron, ...]`
+
+| Event | Measurements | Metadata | Emitter |
+|---|---|---|---|
+| `[:lemon, :cron, :tick]` | `job_count` | `%{}` (empty) | `LemonCore.Telemetry.cron_tick/1`, called from [`cron_manager.ex:502`](../apps/lemon_automation/lib/lemon_automation/cron_manager.ex) once per scheduler tick as a liveness heartbeat with the count of registered jobs |
 
 ### Channels — `[:lemon, :channels, ...]`
 
@@ -213,7 +231,7 @@ for an engine slot. The empty metadata means they cannot be correlated to a run 
 | `[:coding_agent, :wasm, :tool, :start]` | `count: 1` | tool identity | [`wasm/tool_factory.ex:58`](../apps/coding_agent/lib/coding_agent/wasm/tool_factory.ex) |
 | `[:coding_agent, :wasm, :tool, :stop]` | `count: 1`, `duration_us` | tool identity plus `status` | [`wasm/tool_factory.ex:113`](../apps/coding_agent/lib/coding_agent/wasm/tool_factory.ex) |
 | `[:coding_agent, :wasm, :tool, :exception]` | `count: 1`, `duration_us` | tool identity plus `kind`, `error_type` | [`wasm/tool_factory.ex:121`](../apps/coding_agent/lib/coding_agent/wasm/tool_factory.ex) |
-| `[:coding_agent, :tool_call, :name_normalized]` | `%{}` (empty) | `original`, `normalized` | [`tool_registry.ex:148`](../apps/coding_agent/lib/coding_agent/tool_registry.ex) |
+| `[:coding_agent, :tool_call, :name_normalized]` | `system_time` | `original_name`, `matched_tool_name` | [`tool_registry.ex:148`](../apps/coding_agent/lib/coding_agent/tool_registry.ex). Shares its metadata keys with the `[:agent_core, ...]` event of the same leaf name |
 | `[:lemon, :wasm, :discover, :start]` | `count: 1` | `host: :wasm`, `session_hash`, `cwd_hash` | [`wasm/sidecar_session.ex:191`](../apps/coding_agent/lib/coding_agent/wasm/sidecar_session.ex) |
 | `[:lemon, :wasm, :discover, :stop]` | `duration_ms`, `ok` | `host: :wasm`, `session_hash`, `cwd_hash` | [`wasm/sidecar_session.ex:376`](../apps/coding_agent/lib/coding_agent/wasm/sidecar_session.ex) |
 | `[:lemon, :wasm, :invoke, :start]` | `count: 1` | `host: :wasm`, `session_hash`, `cwd_hash`, `tool_hash` | [`wasm/sidecar_session.ex:220`](../apps/coding_agent/lib/coding_agent/wasm/sidecar_session.ex) |
@@ -432,24 +450,13 @@ emit site.
 These are recorded, not fixed. Renaming events is a breaking change for any attached
 consumer and belongs in its own change.
 
-**Events that exist as code but never fire.** `LemonCore.Telemetry` exports
-`run_start/2`, `run_first_token/2`, `run_stop/3`, `run_exception/3`, and `cron_tick/1`
-([`telemetry.ex`](../apps/lemon_core/lib/lemon_core/telemetry.ex)). All five have **zero
-call sites** in the tree, so `[:lemon, :run, :start]`, `[:lemon, :run, :first_token]`,
-`[:lemon, :run, :stop]`, `[:lemon, :run, :exception]`, and `[:lemon, :cron, :tick]` are
-never emitted. `CodingAgent.RateLimitRecovery.emit_recovery_telemetry/3`
+**Events that exist as code but never fire.**
+`CodingAgent.RateLimitRecovery.emit_recovery_telemetry/3`
 ([`rate_limit_recovery.ex:217`](../apps/coding_agent/lib/coding_agent/rate_limit_recovery.ex))
-is likewise public with no callers, so `[:coding_agent, :rate_limit_recovery, _]` never
-fires. This is why there is no end-to-end run span.
-
-**Events named only in documentation.** The `LemonCore.Telemetry` moduledoc lists
-`[:lemon, :cron, :run, :start]` and `[:lemon, :cron, :run, :stop]`; neither has a helper or
-an emitter anywhere.
-
-**Two events share a leaf name with different metadata keys.**
-`[:agent_core, :tool_call, :name_normalized]` uses `original_name` / `matched_tool_name`,
-while `[:coding_agent, :tool_call, :name_normalized]` uses `original` / `normalized`. A
-handler written for one will raise a `KeyError` on the other.
+is public with no callers, so `[:coding_agent, :rate_limit_recovery, _]` never fires. This is
+the last remaining dead emitter. (The run-span helpers `run_start` / `run_first_token` /
+`run_stop` and `cron_tick` were previously listed here as dead; they are in fact live — see
+their catalog entries above — and the genuinely dead `run_exception/3` helper was removed.)
 
 **Eight families build their final segment at runtime**, so they cannot be discovered by
 searching for a literal event name, and `attach_many/4` requires knowing every value in
@@ -459,11 +466,11 @@ advance: `[:lemon, :gateway, :scheduler, _]`, `[:ai, :compacting_client, _]`,
 `[:coding_agent, :session_fork, _]`, `[:coding_agent, :session, :overflow_recovery, _]`, and
 `[:lemon_sim_ui, :hosted_werewolf, _]`. The known values are listed in the catalog above.
 
-**Measurement gaps.** `[:coding_agent, :tool_call, :name_normalized]` and
-`[:coding_agent, :session_fork, _]` emit an empty measurement map, so they cannot drive a
-counter without a synthetic measurement. `[:agent_core, :loop, :end]` reports
-`duration: nil` when the process-dictionary start time is missing. The scheduler family
-emits empty metadata, so slot pressure cannot be attributed to a run, session, or engine.
+**Measurement gaps.** `[:coding_agent, :session_fork, _]` emits an empty measurement map, so
+it cannot drive a counter without a synthetic measurement. `[:agent_core, :loop, :end]`
+reports `duration: nil` when the process-dictionary start time is missing. The scheduler
+family emits empty metadata, so slot pressure cannot be attributed to a run, session, or
+engine.
 
 **Coverage gaps.** `[:agent_core, :subagent, :end]` fires only on explicit stop, so a
 crashed subagent produces a `:spawn` with no matching `:end`. There is no telemetry on the

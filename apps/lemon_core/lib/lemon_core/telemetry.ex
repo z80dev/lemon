@@ -4,14 +4,30 @@ defmodule LemonCore.Telemetry do
 
   Provides consistent telemetry emission across the umbrella.
 
+  ## Duration convention
+
+  New span-style emitters (`:start` / `:stop` / `:exception`) should report `duration`
+  measured in **native** units — capture `System.monotonic_time()` at the start and subtract
+  at the stop, exactly as `:telemetry.span/3` does. Derive `duration_ms` only when a
+  human-facing log needs it, via `System.convert_time_unit(duration, :native, :millisecond)`;
+  never synthesize a native reading by multiplying a millisecond value. Several existing
+  events predate this convention and report `duration_us` or `duration_ms` instead — those
+  are catalogued (and not renamed, to avoid breaking attached consumers) in
+  `docs/telemetry.md`.
+
   ## Event Names
 
   ### Runs
-  - `[:lemon, :run, :submit]` - measurements: `%{count: 1}` meta: `%{session_key, origin, engine}`
-  - `[:lemon, :run, :start]` - measurements: `%{ts_ms: ...}`
-  - `[:lemon, :run, :first_token]` - measurements: `%{latency_ms: ...}`
-  - `[:lemon, :run, :stop]` - measurements: `%{duration_ms: ..., ok: boolean()}`
-  - `[:lemon, :run, :exception]` - meta includes exception+stack
+  - `[:lemon, :run, :submit]` - measurements: `%{count: 1}` meta: `%{session_key, origin, engine}`.
+    Emitted from `LemonRouter.RunOrchestrator` when a submission is accepted.
+  - `[:lemon, :run, :start]` - measurements: `%{ts_ms: ...}` meta: `%{run_id, ...}`
+  - `[:lemon, :run, :first_token]` - measurements: `%{latency_ms: ...}` meta: `%{run_id}`
+  - `[:lemon, :run, :stop]` - measurements: `%{duration_ms: ..., ok: boolean()}` meta: `%{run_id}`
+
+  `:start` / `:first_token` / `:stop` are emitted from the gateway run process
+  (`LemonGateway.Run`) via `LemonGateway.DependencyManager.emit_telemetry/2`, which dispatches
+  here with `apply/3`. Because the dispatch is dynamic, a literal-name grep for the helpers
+  finds no callers even though the run span fires end-to-end.
 
   ### Channels
   - `[:lemon, :channels, :deliver, :start]`
@@ -24,9 +40,8 @@ defmodule LemonCore.Telemetry do
   - `[:lemon, :approvals, :resolved]`
 
   ### Cron
-  - `[:lemon, :cron, :tick]`
-  - `[:lemon, :cron, :run, :start]`
-  - `[:lemon, :cron, :run, :stop]`
+  - `[:lemon, :cron, :tick]` - measurements: `%{job_count: n}`. Emitted once per scheduler
+    tick from `LemonAutomation.CronManager`, as a scheduler-liveness heartbeat.
 
   ### Memory Ingest (M5)
   - `[:lemon, :memory, :ingest, :ok]` - measurements: `%{duration_us: integer()}`,
@@ -107,18 +122,6 @@ defmodule LemonCore.Telemetry do
   @spec run_stop(run_id :: binary(), duration_ms :: non_neg_integer(), ok :: boolean()) :: :ok
   def run_stop(run_id, duration_ms, ok) do
     emit([:lemon, :run, :stop], %{duration_ms: duration_ms, ok: ok}, %{run_id: run_id})
-  end
-
-  @doc """
-  Emit run exception event.
-  """
-  @spec run_exception(run_id :: binary(), exception :: term(), stacktrace :: list()) :: :ok
-  def run_exception(run_id, exception, stacktrace) do
-    emit([:lemon, :run, :exception], %{}, %{
-      run_id: run_id,
-      exception: exception,
-      stacktrace: stacktrace
-    })
   end
 
   # Channel events

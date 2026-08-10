@@ -498,6 +498,7 @@ defmodule LemonAutomation.CronManager do
     Events.emit_tick(now)
 
     all_jobs = Map.values(state.jobs)
+    LemonCore.Telemetry.cron_tick(length(all_jobs))
     recover_stale_active_runs(all_jobs)
 
     # Find due jobs

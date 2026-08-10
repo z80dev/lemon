@@ -181,7 +181,7 @@ defmodule LemonCore.ConfigReloader do
       telemetry_meta
     )
 
-    start_mono = System.monotonic_time(:millisecond)
+    start_mono = System.monotonic_time()
 
     try do
       # 1. Compute current digests
@@ -207,11 +207,12 @@ defmodule LemonCore.ConfigReloader do
           actions: []
         }
 
-        duration_ms = System.monotonic_time(:millisecond) - start_mono
+        duration = System.monotonic_time() - start_mono
+        duration_ms = System.convert_time_unit(duration, :native, :millisecond)
 
         :telemetry.execute(
           [:lemon, :config, :reload, :stop],
-          %{duration: duration_ms * 1_000_000, duration_ms: duration_ms},
+          %{duration: duration, duration_ms: duration_ms},
           Map.put(telemetry_meta, :changed_count, 0)
         )
 
@@ -268,11 +269,12 @@ defmodule LemonCore.ConfigReloader do
             "changed_paths=#{length(changed_paths)})"
         )
 
-        duration_ms = System.monotonic_time(:millisecond) - start_mono
+        duration = System.monotonic_time() - start_mono
+        duration_ms = System.convert_time_unit(duration, :native, :millisecond)
 
         :telemetry.execute(
           [:lemon, :config, :reload, :stop],
-          %{duration: duration_ms * 1_000_000, duration_ms: duration_ms},
+          %{duration: duration, duration_ms: duration_ms},
           Map.merge(telemetry_meta, %{
             changed_count: length(changed_sources),
             actions_count: 0
@@ -292,7 +294,8 @@ defmodule LemonCore.ConfigReloader do
       end
     rescue
       e ->
-        duration_ms = System.monotonic_time(:millisecond) - start_mono
+        duration = System.monotonic_time() - start_mono
+        duration_ms = System.convert_time_unit(duration, :native, :millisecond)
 
         Logger.warning(
           "[ConfigReloader] Reload failed (reason=#{reason}): #{Exception.message(e)}"
@@ -300,7 +303,7 @@ defmodule LemonCore.ConfigReloader do
 
         :telemetry.execute(
           [:lemon, :config, :reload, :exception],
-          %{duration: duration_ms * 1_000_000, duration_ms: duration_ms},
+          %{duration: duration, duration_ms: duration_ms},
           Map.merge(telemetry_meta, %{
             kind: :error,
             reason: e,

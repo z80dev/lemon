@@ -254,8 +254,8 @@ defmodule CodingAgent.ToolRegistryTest do
       assert_received {
         [:coding_agent, :tool_call, :name_normalized],
         ^ref,
-        %{},
-        %{original: "  read  ", normalized: "read"}
+        %{system_time: _},
+        %{original_name: "  read  ", matched_tool_name: "read"}
       }
 
       :telemetry.detach(ref)

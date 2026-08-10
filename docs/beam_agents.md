@@ -139,10 +139,10 @@ The following telemetry events are emitted:
 - `[:agent_core, :tool_task, :error]` - Tool task failed or was aborted
 - `[:agent_core, :tool_result, :emit]` - Tool result message emitted (`tool_name`, `tool_call_id`, `is_error`, `trust`)
 - `[:agent_core, :subagent, :spawn]` - Subagent spawned
-- `[:agent_core, :subagent, :end]` - Subagent completed
-- `[:agent_core, :event_stream, :queue_depth]` - Queue depth measurement
-- `[:ai, :dispatcher, :queue_depth]` - Dispatcher queue measurement
+- `[:agent_core, :subagent, :end]` - Subagent completed (explicit stop only; a crashed subagent emits nothing)
 - `[:ai, :dispatcher, :rejected]` - Request rejected (rate limit/circuit open)
+
+See [telemetry.md](telemetry.md) for the emit-site-verified catalog, measurements, and metadata.
 
 ---
 

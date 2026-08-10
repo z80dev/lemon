@@ -147,8 +147,8 @@ defmodule CodingAgent.ToolRegistry do
     if normalized_name != name do
       LemonCore.Telemetry.emit(
         [:coding_agent, :tool_call, :name_normalized],
-        %{},
-        %{original: name, normalized: normalized_name}
+        %{system_time: System.system_time()},
+        %{original_name: name, matched_tool_name: normalized_name}
       )
     end
 
