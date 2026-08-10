@@ -587,6 +587,82 @@ defmodule LemonCore.Quality.ArchitectureRulesCheckTest do
     end
   end
 
+  test "flags telegram store tables named in lemon_core lib sources" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      write_file!(
+        tmp_dir,
+        "apps/lemon_core/lib/lemon_core/store/bad_cache.ex",
+        """
+        defmodule LemonCore.Store.BadCache do
+          @cached [:sessions_index, :telegram_known_targets]
+          def cached, do: @cached
+        end
+        """
+      )
+
+      write_file!(
+        tmp_dir,
+        "apps/lemon_core/lib/lemon_core/bad_compaction.ex",
+        """
+        defmodule LemonCore.BadCompaction do
+          def bad, do: LemonCore.Store.list(:telegram_pending_compaction)
+        end
+        """
+      )
+
+      write_file!(
+        tmp_dir,
+        "apps/lemon_core/lib/lemon_core/bad_wrapper.ex",
+        """
+        defmodule LemonCore.BadWrapper do
+          def bad, do: LemonChannels.Telegram.KnownTargetStore.list()
+        end
+        """
+      )
+
+      assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+
+      flagged =
+        report.issues
+        |> Enum.filter(&(&1.code == :core_telegram_store_leak))
+        |> Enum.map(& &1.path)
+        |> Enum.uniq()
+        |> Enum.sort()
+
+      assert flagged == [
+               "apps/lemon_core/lib/lemon_core/bad_compaction.ex",
+               "apps/lemon_core/lib/lemon_core/bad_wrapper.ex",
+               "apps/lemon_core/lib/lemon_core/store/bad_cache.ex"
+             ]
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
+  test "allows lemon_core to name its own store tables" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      write_file!(
+        tmp_dir,
+        "apps/lemon_core/lib/lemon_core/store/fine_cache.ex",
+        """
+        defmodule LemonCore.Store.FineCache do
+          @cached [:sessions_index, :chat, :runs, :progress]
+          def cached, do: @cached
+        end
+        """
+      )
+
+      assert {:ok, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+      refute Enum.any?(report.issues, &(&1.code == :core_telegram_store_leak))
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
   test "flags raw telegram known-target access outside the channels wrapper" do
     tmp_dir = tmp_repo!()
 

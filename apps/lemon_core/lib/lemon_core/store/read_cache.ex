@@ -22,11 +22,15 @@ defmodule LemonCore.Store.ReadCache do
 
   ## Cached Domains
 
+  Intrinsic domains, mirrored for the store's own typed APIs:
+
   - `:chat` — chat state by scope
   - `:runs` — run records by run_id
   - `:progress` — progress mappings by {scope, msg_id}
-  - `:sessions_index` — durable session metadata by session key
-  - `:telegram_known_targets` — known Telegram targets by {account_id, chat_id, topic_id}
+
+  Generic tables are added per store instance — `:sessions_index` by default,
+  plus whatever owners register with `LemonCore.Store.register_cached_table/2`.
+  The store does not know what those tables hold.
 
   ## Instances
 

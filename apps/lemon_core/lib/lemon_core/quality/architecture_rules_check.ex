@@ -30,6 +30,15 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
   @router_session_registry "LemonRouter." <> "SessionRegistry"
   @router_session_read_model "LemonRouter." <> "SessionReadModel"
   @router_registry_lookup "Registry.lookup(" <> @router_session_registry
+
+  # Telegram-owned store tables, shared by the router and core leak rules.
+  # This module is excluded from its own scanning, so naming them is safe.
+  @telegram_table_atoms [
+    ":telegram_known_targets",
+    ":telegram_msg_resume",
+    ":telegram_msg_session",
+    ":telegram_pending_compaction"
+  ]
   @ignored_source_dirs MapSet.new([
                          ".elixir_ls",
                          ".expert",
@@ -99,13 +108,14 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
       code: :router_telegram_store_leak,
       message: "Router must not own Telegram message-index or pending-compaction tables directly",
       files: ["apps/lemon_router/lib/**/*.ex"],
-      patterns: [
-        ":telegram_msg_resume",
-        ":telegram_msg_session",
-        ":telegram_pending_compaction",
-        ":telegram_known_targets",
-        "KnownTargetStore"
-      ]
+      patterns: @telegram_table_atoms ++ ["KnownTargetStore"]
+    },
+    %{
+      code: :core_telegram_store_leak,
+      message:
+        "lemon_core must not name Telegram-owned store tables; channels owns them (plan 1.3)",
+      files: ["apps/lemon_core/lib/**/*.ex"],
+      patterns: @telegram_table_atoms ++ ["KnownTargetStore"]
     },
     %{
       code: :gateway_execution_queue_mode,
