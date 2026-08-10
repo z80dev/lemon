@@ -35,8 +35,9 @@ defmodule LemonCore.MixProject do
       {:telemetry, "~> 1.0"},
       # LemonCore.Bus falls back to a local Registry when absent.
       {:phoenix_pubsub, "~> 2.1", optional: true},
-      # Required by LemonCore.Store.SqliteBackend, MemoryStore and
-      # RunHistoryStore; the ETS backend needs none of them.
+      # Required by LemonCore.Store.SqliteBackend and RunHistoryStore; the ETS
+      # backend needs none of them. (Durable memory moved to lemon_memory,
+      # which depends on exqlite directly.)
       {:exqlite, "~> 0.34.0", optional: true},
       # LemonCore.ConfigReloader.Watcher polls when absent.
       {:file_system, "~> 1.0", optional: true},
