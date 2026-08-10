@@ -87,7 +87,6 @@ auto_resume = false
 enable_telegram = false
 enable_discord = false
 enable_email = false
-enable_farcaster = false
 enable_webhook = false
 enable_xmtp = false
 require_engine_lock = true

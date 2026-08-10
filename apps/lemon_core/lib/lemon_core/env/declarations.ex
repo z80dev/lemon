@@ -1331,18 +1331,6 @@ defmodule LemonCore.Env.Declarations do
       apps: [:lemon_core, :lemon_gateway]
     },
     %{
-      name: :lemon_gateway_enable_farcaster,
-      env_var: "LEMON_GATEWAY_ENABLE_FARCASTER",
-      aliases: [],
-      type: :boolean,
-      default: false,
-      doc: "Whether the Farcaster transport is enabled.",
-      secret?: false,
-      required?: false,
-      area: :gateway,
-      apps: [:lemon_core, :lemon_gateway]
-    },
-    %{
       name: :lemon_gateway_enable_webhook,
       env_var: "LEMON_GATEWAY_ENABLE_WEBHOOK",
       aliases: [],

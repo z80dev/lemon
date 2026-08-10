@@ -1,6 +1,10 @@
 # Phase 2.4 — Transport Unification: Inventory and Port Design
 
-Status: **design (Phase A) — no code changed.** Written 2026-08-10 against `463db837..8f76026d`.
+Status: **design (Phase A).** Written 2026-08-10 against `463db837..8f76026d`.
+
+> **Update 2026-08-10:** the Farcaster transport has been **deleted** (D12; ~1.4k LOC incl.
+> tests). The inventory below has been updated to the post-deletion tree; the analysis of why
+> it did not fit `Plugin` is retained because it is the reasoning behind the decision.
 
 > **Read this first.** A prior investigation of exactly this migration already exists:
 > [`docs/plans/gateway-channels-transport-migration.md`](../plans/gateway-channels-transport-migration.md)
@@ -20,7 +24,7 @@ The evidence does not support that for four of the five. Recommended disposition
 | Subsystem | D2 says | Recommended | Why (one line) |
 |---|---|---|---|
 | Email | port | **Port** | Genuinely message-shaped and async; the only clean fit. |
-| Farcaster | port | **Retire, or keep gateway-owned** | Synchronous frame response; off by default; no evidence of use. |
+| Farcaster | port | **Deleted** (D12, executed) | Synchronous frame response; off by default; no evidence of use. |
 | Webhook | port | **Keep in gateway** | Not a channel — a generic sync HTTP automation trigger. |
 | SMS | port | **Keep in gateway tooling** | Not a channel at all: no reply path, exposed as 4 agent tools. |
 | Voice | port | **Defer** | Live bidirectional streaming session; nothing in `Plugin` models it. |
@@ -38,11 +42,11 @@ migration stalled since July.
 
 ### 2.1 What is actually a "transport"
 
-Only **three** subsystems implement `LemonGateway.Transport`:
-`transports/email.ex`, `transports/farcaster.ex`, `transports/webhook.ex`. **SMS and voice do
-not** — they are independent supervised subsystems that happen to start under the same
-supervisor. Any framing of "the five gateway transports" is inaccurate; it is three transports
-plus two unrelated Twilio subsystems.
+Only **two** subsystems implement `LemonGateway.Transport`:
+`transports/email.ex` and `transports/webhook.ex` (farcaster was the third until D12 deleted
+it). **SMS and voice do not** — they are independent supervised subsystems that happen to start
+under the same supervisor. Any framing of "the five gateway transports" is inaccurate; it is two
+transports plus two unrelated Twilio subsystems.
 
 ### 2.2 The behaviour itself is nearly empty
 
@@ -54,8 +58,8 @@ delivery, no normalization, no metadata. It is a supervised-worker registration 
 `normalize_inbound/1`, `deliver/1`, `gateway_methods/0`.
 
 This asymmetry is the crux: porting is not a rename. Every ported subsystem must *grow* four
-callbacks it has no implementation for today, and for three of the five the two central ones
-(`normalize_inbound/1` → `deliver/1`) are the wrong shape for what the subsystem does.
+callbacks it has no implementation for today, and for three of the four remaining the two central
+ones (`normalize_inbound/1` → `deliver/1`) are the wrong shape for what the subsystem does.
 
 ### 2.3 Size and coverage
 
@@ -64,12 +68,11 @@ callbacks it has no implementation for today, and for three of the five the two 
 | Email | 2,114 | 294 | yes | `RouterBridge` + `RunRequest` |
 | Webhook | 1,777 | 357 | yes | `RouterBridge` + `RunRequest` |
 | Voice | 1,658 | 430 | **no** | none — calls `LemonGateway.AI.chat_completion/3` directly |
-| Farcaster | 1,199 | 239 | yes | `RouterBridge` + `RunRequest` |
 | SMS | 937 | 583 | **no** | none — `Store`-backed inbox read by 4 agent tools |
 | `transport.ex` + `transport_registry.ex` + `transport_supervisor.ex` | 240 | — | — | — |
 
-Total ≈ **7.9k LOC**, not the 5.1k quoted in §3/E3 of the plan of record — that figure predates
-counting SMS and voice. Worth correcting in the plan.
+Total ≈ **6.7k LOC** after the farcaster delete (it was 7.9k with farcaster, and the 5.1k
+quoted in §3/E3 of the plan of record predated counting SMS and voice).
 
 Coverage is uneven in exactly the places a port would be riskiest: `email/outbound.ex` (715 LOC)
 has **zero** dedicated tests, and voice's `DeepgramClient`/`RecordingDownloader`/
@@ -87,7 +90,7 @@ Two independent gates are both off:
 2. `TransportRegistry.init/1` reads `:transports`, defaulting to `[]`. **No config sets it
    either** — `config/test.exs` explicitly sets `[]`.
 
-So in a stock run, zero of these ~7.9k LOC execute. This is the single most important input to
+So in a stock run, zero of these ~6.7k LOC execute. This is the single most important input to
 sequencing: there is **no user-facing urgency**, and therefore no reason to accept risk. It also
 means "deleting" a subsystem is far cheaper than porting it, and that any port can be validated
 without a migration window.
@@ -103,25 +106,26 @@ missing callback, and it is the prerequisite for any port at all.
 
 Per-callback fit:
 
-| | Email | Farcaster | Webhook | SMS | Voice |
-|---|---|---|---|---|---|
-| `id/0` | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `meta/0` | ✅ | ✅ | ⚠️ meaningless | ⚠️ meaningless | ⚠️ `capabilities` is free-form prose; `voice_support` already means "voice *notes*", not telephony |
-| `child_spec/1` | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `normalize_inbound/1` | ✅ | ⚠️ frame action, not message | ⚠️ arbitrary JSON trigger | ❌ nothing to normalize | ❌ audio frames, not a message |
-| `deliver/1` | ✅ | ❌ **must return into the originating HTTP request** | ❌ same, plus callback-URL delivery | ❌ no reply path exists | ❌ streaming audio over a live socket |
-| `gateway_methods/0` | ✅ (none needed) | ✅ | ✅ | ✅ | ✅ |
+| | Email | Webhook | SMS | Voice |
+|---|---|---|---|---|
+| `id/0` | ✅ | ✅ | ✅ | ✅ |
+| `meta/0` | ✅ | ⚠️ meaningless | ⚠️ meaningless | ⚠️ `capabilities` is free-form prose; `voice_support` already means "voice *notes*", not telephony |
+| `child_spec/1` | ✅ | ✅ | ✅ | ✅ |
+| `normalize_inbound/1` | ✅ | ⚠️ arbitrary JSON trigger | ❌ nothing to normalize | ❌ audio frames, not a message |
+| `deliver/1` | ✅ | ❌ **must return into the originating HTTP request**, plus callback-URL delivery | ❌ no reply path exists | ❌ streaming audio over a live socket |
+| `gateway_methods/0` | ✅ (none needed) | ✅ | ✅ | ✅ |
 
 The blocking gaps, restated precisely (this is the deliverable the plan-of-record asked for):
 
 1. **No synchronous round-trip.** `deliver/1` returns `{:ok, delivery_ref}` and is decoupled from
-   the inbound call. Webhook (sync mode) and Farcaster (every frame action) must produce their
-   HTTP response *in the request cycle that received the input*. There is no path from
-   `deliver/1` back to the originating connection.
+   the inbound call. Webhook (sync mode) must produce its HTTP response *in the request cycle
+   that received the input* — as did every farcaster frame action, which is what made farcaster
+   the hardest case before it was deleted. There is no path from `deliver/1` back to the
+   originating connection.
 2. **No idempotency hook.** Webhook reserves an idempotency key under a `:global.trans` lock and
    replays cached duplicate responses, before any normalization. The plugin lifecycle has no
    pre-normalize step.
-3. **No per-request queue/execution mode.** Webhook and Farcaster set `queue_mode` and sync-vs-async
+3. **No per-request queue/execution mode.** Webhook sets `queue_mode` and sync-vs-async
    per call. `InboundMessage` has no such field; `LemonRouter` derives queue behaviour from
    conversation state by design (and 2.6 just hardened that).
 4. **No outbound-callback delivery.** Webhook POSTs results to a caller-supplied URL with
@@ -157,12 +161,12 @@ subsystems that are not channels and are off by default. That is the wrong trade
   gate). Neither is set anywhere; both are documented in the gateway README's config table.
 - **Doctor checks**: none reference `TransportRegistry`. `LemonCore.Doctor.ChannelDiagnostics`
   hard-codes `@supported_transports [:telegram, :discord]` — see §6.
-- **Env vars** (post-1.9, now in `LemonGateway.Env`): 19 declarations, of which **10** are
-  `area: :gateway_sms`, **2** `area: :gateway_voice`, and 5 farcaster vars under `area: :gateway`.
-  Under the recommended disposition, SMS and voice stay in gateway, so **12 of 19 do not move at
-  all**. Only the farcaster block moves (or is deleted with the transport), and email/webhook
-  configuration is TOML/`LemonGateway.Config`-driven rather than env-var-driven. This is a much
-  smaller migration than "move the env vars to channels."
+- **Env vars** (post-1.9, now in `LemonGateway.Env`): 14 declarations, of which **10** are
+  `area: :gateway_sms` and **2** `area: :gateway_voice`. (The 5 farcaster vars under
+  `area: :gateway` went with the transport in D12.) SMS and voice stay in gateway, so **none of
+  the remaining 14 move**, and email/webhook configuration is TOML/`LemonGateway.Config`-driven
+  rather than env-var-driven. This is a much smaller migration than "move the env vars to
+  channels."
 
 ## 5. The chat_state unblock — the Deferred item's premise is wrong
 
@@ -176,12 +180,14 @@ Verified writes in `lemon_gateway`:
 |---|---|---|
 | `run.ex:668` → `maybe_store_chat_state/2` → `store_chat_state/2` (`:958`) | On `:completed` with a `ResumeToken`, persists `%ChatState{}` | **No** |
 | `run.ex:617` → `maybe_clear_chat_state_on_context_overflow/2` (`:925`) | `ChatStateStore.delete/1` on context-overflow | **No** |
-| `transports/farcaster/cast_handler.ex:248` | `ChatStateStore.delete/1` when re-keying a session | Yes |
+
+(A third site, `transports/farcaster/cast_handler.ex:248`, deleted `ChatStateStore` entries when
+re-keying a frame session; it was the only transport-owned writer and died with the transport in
+D12.)
 
 The two `run.ex` sites are in `LemonGateway.Run`'s **finalization path**, which executes for
 *every* run regardless of ingress. They have nothing to do with transports. **2.4 will not remove
-them, and therefore does not unblock the chat_state move.** Only the farcaster delete is
-transport-owned, and under the recommended disposition farcaster stays or is deleted outright.
+them, and therefore does not unblock the chat_state move.**
 
 Recommendation: **decouple the chat_state item from 2.4.** The real question is who owns
 resume-token persistence at run finalization — gateway (writer today) or router (owner of
@@ -213,8 +219,8 @@ overlaps **2.5** (bridge pattern). It is not blocked on transport unification. M
 
 > **Status 2026-08-10.** D2 amended in the plan of record; 2.4 rescoped to email-only.
 > **A1 resolved:** (b) accepted — webhook/SMS/voice are permanent gateway-owned ingress;
-> (a) Farcaster usage escalated to the user, so farcaster is **keep-but-frozen** (no port, no
-> delete) until answered. **A2, A3 and B1 are done** (see the table). B2/B3 await the go-ahead.
+> (a) answered — Farcaster is unused, so it was **deleted** (D12, C1 below).
+> **A2, A3 and B1 are done** (see the table). B2/B3 await the go-ahead.
 > C2/D1/D2' were re-assigned: chat_state became its own task, and transports.status,
 > capability delegation and the telegram surfaces went to 2.5.
 
@@ -231,7 +237,7 @@ Given §1–§6, I recommend re-scoping 2.4 from "port five, delete a behaviour"
 | **B1** ✅ | **Characterization tests before any move**: `email/outbound.ex` (715 LOC, 0 tests). Also worth doing regardless of this migration: webhook's `Idempotency`/`SignatureValidation`/`Submission`, voice's `DeepgramClient`/`RecordingDownloader`/`RecordingManager`. | M | No |
 | **B2** | **Inbound HTTP hosting in `lemon_channels`**: add `plug` + `bandit` deps and a small `LemonChannels.InboundHttp` supervisor/router shell. Own PR — this is the "can channels host HTTP at all" risk, validated in isolation. | M | **YES** — `lemon_channels/mix.exs` + application supervision tree; 2.3 is editing adapter registration/config/capabilities. Sequence after 2.3 lands. |
 | **B3** | **Port email** to `LemonChannels.Adapters.Email` on top of B2: inbound, then outbound, then cutover. Add `email` to `TransportRegistry`'s `@channels_owned_transport_ids` (the mechanism Telegram/Discord/WhatsApp already used). Delete `gateway/transports/email/`. | L | **YES** — new adapter under `lemon_channels/adapters/`, plus adapter registration. Strictly after 2.3. |
-| **C1** | Farcaster: execute A1(a) — delete, or formally document as permanent. | S | No |
+| **C1** ✅ | Farcaster: execute A1(a) — **deleted** 2026-08-10 (transport, tests, config keys, 5 env vars, docs). | S | No |
 | **E1** | **Capability delegation** (§7a): widen `Plugin.meta/0` to the typed vocabulary, resolve `Capabilities.Registry.lookup/1` through the registered adapter, delete the 5 hard-coded clauses, relocate the per-channel assertions. Unblocked now that 2.3 has landed. | M | No (2.3 complete) |
 | **C2** | Fold `transports.status`'s dynamic-atom registry peek into **2.5**'s bridge work rather than solving it here. | S | No (belongs to 2.5) |
 | **D1** | Move the chat_state item **out** of 2.4 into its own task (§5). | S | No |
@@ -240,7 +246,7 @@ Given §1–§6, I recommend re-scoping 2.4 from "port five, delete a behaviour"
 ### Sequencing
 
 A1 → A2/A3 (docs, parallel, no collisions, can start immediately) → B1 (tests, no collisions) →
-B2 → B3 → C1. **2.3 has since landed**, so the former block on B2/B3 is clear. E1 (§7a) is
+B2 → B3. C1 is done and was independent of the rest. **2.3 has since landed**, so the former block on B2/B3 is clear. E1 (§7a) is
 independent of the port and can run in parallel with B1. C2/D1/D2' are re-assignments, not work.
 
 Everything before B2 is collision-free with 2.3 and can proceed the moment the decision
@@ -249,8 +255,8 @@ checkpoint clears. B2 and B3 are the only items touching `lemon_channels` and mu
 
 ### What this does *not* deliver
 
-`LemonGateway.Transport` and `TransportRegistry` survive 2.4, holding webhook (+ farcaster if
-kept). After email ports, the registry has at most one or two entries — at which point deleting
+`LemonGateway.Transport` and `TransportRegistry` survive 2.4, holding email and webhook. After
+email ports, the registry has exactly one entry — at which point deleting
 the behaviour and inlining the remaining transport's supervision is a trivial follow-up worth
 doing for its own sake. That is the honest path to "one transport concept": shrink it to nothing
 by attrition, then remove it, rather than forcing four bad ports to justify a deletion.

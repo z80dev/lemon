@@ -233,7 +233,6 @@ other inbound transports:
 | **Voice (Twilio + Deepgram)** | WebSocket audio streaming, speech-to-text, text-to-speech |
 | **Email** | Inbound via SMTP/webhook |
 | **Webhook** | Generic HTTP endpoint for integrations (Zapier, n8n, Make.com) |
-| **Farcaster** | Social protocol integration |
 
 All transports follow the same pattern: normalize the inbound to a `RunRequest`,
 submit via `RouterBridge`, and let the normal pipeline handle the rest.

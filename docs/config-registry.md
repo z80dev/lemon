@@ -104,17 +104,11 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | Env Var | Type | Default | Secret | Apps | Description |
 |---|---|---|---|---|---|
 | `DISCORD_BOT_TOKEN` | string | _(none)_ | yes | `lemon_channels` | Discord bot token (ecosystem-standard name). |
-| `FARCASTER_ACCOUNT_ID` | string | _(none)_ |  | `lemon_gateway` | Farcaster account id used by the Farcaster transport. |
-| `FARCASTER_API_KEY` | string | _(none)_ | yes | `lemon_gateway` | Farcaster (Neynar) API key. |
-| `FARCASTER_HUB_VALIDATE_URL` | string | _(none)_ |  | `lemon_gateway` | Farcaster hub URL used to validate cast/frame messages. |
-| `FARCASTER_SIGNER_UUID` | string | _(none)_ | yes | `lemon_gateway` | Farcaster signer UUID used to post casts. |
-| `FARCASTER_STATE_SECRET` | string | _(none)_ | yes | `lemon_gateway` | Secret used to sign Farcaster frame state tokens. |
 | `LEMON_GATEWAY_AUTO_RESUME` | boolean | `false` |  | `lemon_core`, `lemon_gateway` | Whether the gateway auto-resumes interrupted runs on boot. |
 | `LEMON_GATEWAY_DEFAULT_CWD` | string | _(none)_ |  | `lemon_core`, `lemon_gateway` | Default working directory for gateway-initiated runs. |
 | `LEMON_GATEWAY_DEFAULT_ENGINE` | string | `lemon` |  | `lemon_core`, `lemon_gateway` | Default coding-agent engine used for gateway-initiated runs. |
 | `LEMON_GATEWAY_ENABLE_DISCORD` | boolean | `false` |  | `lemon_core`, `lemon_channels` | Whether the Discord transport is enabled. |
 | `LEMON_GATEWAY_ENABLE_EMAIL` | boolean | `false` |  | `lemon_core`, `lemon_gateway` | Whether the email transport is enabled. |
-| `LEMON_GATEWAY_ENABLE_FARCASTER` | boolean | `false` |  | `lemon_core`, `lemon_gateway` | Whether the Farcaster transport is enabled. |
 | `LEMON_GATEWAY_ENABLE_TELEGRAM` | boolean | `false` |  | `lemon_core`, `lemon_channels` | Whether the Telegram transport is enabled. |
 | `LEMON_GATEWAY_ENABLE_WEBHOOK` | boolean | `false` |  | `lemon_core`, `lemon_gateway` | Whether the generic webhook transport is enabled. |
 | `LEMON_GATEWAY_ENABLE_XMTP` | boolean | `false` |  | `lemon_core`, `lemon_channels` | Whether the XMTP transport is enabled. |

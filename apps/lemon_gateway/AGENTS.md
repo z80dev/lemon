@@ -6,7 +6,7 @@ Gateway execution layer for the Lemon AI system. Handles engine lifecycle, execu
 
 LemonGateway is the execution backend behind router-owned conversations. It does NOT render output to channels directly and it does NOT own queue semantics anymore. Router-owned `SessionCoordinator` processes decide collect/followup/steer/interrupt behavior and submit queue-semantic-free `LemonCore.ExecutionCommand` values through the configured runtime behavior.
 
-Gateway-native transports such as email, Farcaster, and webhook are ingress shims only. They normalize inbound requests to `LemonCore.RunRequest` and submit through `LemonCore.RouterBridge`; they must not call `LemonRouter.*` modules directly.
+Gateway-native transports such as email and webhook are ingress shims only. They normalize inbound requests to `LemonCore.RunRequest` and submit through `LemonCore.RouterBridge`; they must not call `LemonRouter.*` modules directly.
 
 **Entry point**: `LemonGateway.Runtime.submit_execution(%LemonCore.ExecutionCommand{})`.
 The old `LemonGateway.Runtime.submit/1` compatibility path is gone; do not reintroduce it.
@@ -21,7 +21,7 @@ The old `LemonGateway.Runtime.submit/1` compatibility path is gone; do not reint
 +-----------------------------------------------------------------------+
 |                  Channel Adapters / Gateway Ingress                    |
 |  Telegram (lemon_channels)  Discord (lemon_channels)  XMTP (lemon_ch) |
-|  Email / Farcaster / Webhook / SMS / Voice legacy ingress               |
+|  Email / Webhook / SMS / Voice legacy ingress                           |
 |  (explicit `:gateway_ingress_enabled` gateway startup only)             |
 +-------------------------------------+---------------------------------+
                                       |

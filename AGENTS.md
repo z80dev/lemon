@@ -154,7 +154,7 @@ apps/
 ├── lemon_browser/       # Browser capability driver and artifact store
 ├── lemon_core/          # Shared primitives: config, store (ETS/JSONL/SQLite), secrets, PubSub bus
 ├── lemon_evals/         # Deterministic eval harness and mix lemon.eval task
-├── lemon_gateway/       # Gateway engines (claude, codex, pi, opencode, lemon, echo), voice/email/webhook/farcaster transports
+├── lemon_gateway/       # Gateway engines (claude, codex, pi, opencode, lemon, echo), voice/email/webhook transports
 ├── lemon_lsp/           # LSP server registry and supervised JSON-RPC sessions
 ├── lemon_media/         # Media job supervisor, metadata store, and mix lemon.media
 ├── lemon_mcp/           # MCP (Model Context Protocol) server/client bridge for CodingAgent tools
@@ -361,7 +361,7 @@ Key env vars:
 ### Adding a Gateway Transport
 
 External channel adapters live in `apps/lemon_channels/`. Current adapters include Telegram and Discord.
-Gateway-native transports remain in `apps/lemon_gateway/` (SMS/Twilio, voice, email/webhook/farcaster glue).
+Gateway-native transports remain in `apps/lemon_gateway/` (SMS/Twilio, voice, email/webhook glue).
 
 1. Create transport module in `apps/lemon_gateway/lib/lemon_gateway/`
 2. Implement appropriate behaviour (see existing transports for patterns)

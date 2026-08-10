@@ -9,7 +9,7 @@ Part of the `lemon` Elixir umbrella project.
 ```
                         +-----------------------------------------+
                         |   Router / Explicit Legacy Ingress       |
-                        | Email  SMS  Voice  Farcaster  Webhook   |
+                        | Email  SMS  Voice  Webhook              |
                         +-------------------+---------------------+
                                             |
                                ExecutionCommand
@@ -118,7 +118,6 @@ Composite engine IDs like `"claude:claude-3-opus"` are resolved by prefix fallba
 | Discord | `lemon_channels` (external app) | Discord gateway via Nostrum |
 | XMTP | `lemon_channels` (external app) | XMTP messaging via Node.js bridge |
 | Email | `Transports.Email` | SMTP inbound webhook + outbound delivery via gen_smtp |
-| Farcaster | `Transports.Farcaster` | Farcaster Frame-based interactions with Hub validation |
 | Webhook | `Transports.Webhook` | Generic HTTP webhook (sync/async modes) |
 | Voice | `Voice.*` | Real-time phone calls via Twilio + Deepgram STT + ElevenLabs TTS |
 | SMS | `Sms.*` | Twilio SMS webhooks with verification code tools |
@@ -193,10 +192,6 @@ failures without parsing rendered command output.
 | `LemonGateway.Transports.Email` | `transports/email.ex` | Email transport |
 | `LemonGateway.Transports.Email.Inbound` | `transports/email/inbound.ex` | Inbound email webhook handler |
 | `LemonGateway.Transports.Email.Outbound` | `transports/email/outbound.ex` | SMTP outbound email delivery |
-| `LemonGateway.Transports.Farcaster` | `transports/farcaster.ex` | Farcaster transport |
-| `LemonGateway.Transports.Farcaster.FrameServer` | `transports/farcaster/frame_server.ex` | Farcaster Frame HTTP server |
-| `LemonGateway.Transports.Farcaster.HubClient` | `transports/farcaster/hub_client.ex` | Farcaster Hub validation client |
-| `LemonGateway.Transports.Farcaster.CastHandler` | `transports/farcaster/cast_handler.ex` | Cast processing handler |
 | `LemonGateway.Transports.Webhook` | `transports/webhook.ex` | HTTP webhook transport (sync/async) |
 
 ### Binding and Legacy Rendering Helpers
@@ -376,7 +371,6 @@ Configuration loads from `~/.lemon/config.toml` (the `[gateway]` section) via `L
 |-----|---------|-------------|
 | `enable_telegram` | `false` | Enable Telegram adapter (via `lemon_channels`) |
 | `enable_discord` | `false` | Enable Discord adapter (via `lemon_channels`) |
-| `enable_farcaster` | `false` | Enable Farcaster Frame transport |
 | `enable_email` | `false` | Enable email transport |
 | `enable_xmtp` | `false` | Enable XMTP transport |
 | `enable_webhook` | `false` | Enable webhook transport |

@@ -102,12 +102,6 @@ defmodule LemonGateway.TransportRegistry do
   end
 
   defp maybe_warn_dual_gate(state) when is_map(state) do
-    if transport_enabled?("farcaster") and not Map.has_key?(state, "farcaster") do
-      Logger.warning(
-        "enable_farcaster is true but Farcaster transport is not registered in :transports; add LemonGateway.Transports.Farcaster to :transports or disable enable_farcaster"
-      )
-    end
-
     if transport_enabled?("email") and not Map.has_key?(state, "email") do
       Logger.warning(
         "enable_email is true but Email transport is not registered in :transports; add LemonGateway.Transports.Email to :transports or disable enable_email"
@@ -140,7 +134,6 @@ defmodule LemonGateway.TransportRegistry do
   end
 
   defp transport_enabled?("telegram"), do: get_config_boolean(:enable_telegram)
-  defp transport_enabled?("farcaster"), do: get_config_boolean(:enable_farcaster)
   defp transport_enabled?("email"), do: get_config_boolean(:enable_email)
   defp transport_enabled?("xmtp"), do: get_config_boolean(:enable_xmtp)
   defp transport_enabled?("webhook"), do: get_config_boolean(:enable_webhook)

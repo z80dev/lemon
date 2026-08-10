@@ -3,7 +3,7 @@ defmodule LemonGateway do
   Public API for submitting execution commands to the Lemon Gateway.
 
   The gateway orchestrates AI agent runs across multiple transport channels
-  (Telegram, Discord, Email, Farcaster, XMTP, Webhooks) and engine backends
+  (Telegram, Discord, Email, XMTP, Webhooks) and engine backends
   (Lemon, Claude, Codex, Opencode, Pi).
 
   ## Usage

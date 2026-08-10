@@ -152,62 +152,6 @@ defmodule LemonGateway.ConfigLoaderTest do
     assert config.discord.files.max_download_bytes == 1234
   end
 
-  test "parses farcaster hardening options from override config" do
-    Application.put_env(
-      :lemon_gateway,
-      LemonGateway.Config,
-      %{
-        "farcaster" => %{
-          "frame_enabled" => true,
-          "port" => 4044,
-          "bind" => "127.0.0.1",
-          "action_path" => "/frames/farcaster/actions",
-          "frame_base_url" => "https://example.test",
-          "image_url" => "https://example.test/frame.png",
-          "input_label" => "Ask Lemon",
-          "button_1" => "Run",
-          "button_2" => "Reset",
-          "account_id" => "bot",
-          "state_secret" => "test-secret",
-          "verify_trusted_data" => true,
-          "hub_validate_url" => "https://hub.example.test/validate"
-        }
-      }
-    )
-
-    config = ConfigLoader.load()
-
-    assert config.farcaster.frame_enabled == true
-    assert config.farcaster.port == 4044
-    assert config.farcaster.bind == "127.0.0.1"
-    assert config.farcaster.action_path == "/frames/farcaster/actions"
-    assert config.farcaster.frame_base_url == "https://example.test"
-    assert config.farcaster.image_url == "https://example.test/frame.png"
-    assert config.farcaster.input_label == "Ask Lemon"
-    assert config.farcaster.button_1 == "Run"
-    assert config.farcaster.button_2 == "Reset"
-    assert config.farcaster.account_id == "bot"
-    assert config.farcaster.state_secret == "test-secret"
-    assert config.farcaster.verify_trusted_data == true
-    assert config.farcaster.hub_validate_url == "https://hub.example.test/validate"
-  end
-
-  test "defaults farcaster trusted-data verification to true when key is omitted" do
-    Application.put_env(
-      :lemon_gateway,
-      LemonGateway.Config,
-      %{
-        "farcaster" => %{
-          "frame_enabled" => true
-        }
-      }
-    )
-
-    config = ConfigLoader.load()
-
-    assert config.farcaster.verify_trusted_data == true
-  end
-
   test "parses email outbound config and normalizes smtp options from nested values" do
     Application.put_env(
       :lemon_gateway,

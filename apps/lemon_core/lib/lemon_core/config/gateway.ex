@@ -17,7 +17,6 @@ defmodule LemonCore.Config.Gateway do
       auto_resume = false
       enable_telegram = true
       enable_discord = false
-      enable_farcaster = false
       enable_email = false
       enable_xmtp = false
       enable_webhook = false
@@ -56,7 +55,6 @@ defmodule LemonCore.Config.Gateway do
     :auto_resume,
     :enable_telegram,
     :enable_discord,
-    :enable_farcaster,
     :enable_email,
     :enable_xmtp,
     :enable_webhook,
@@ -68,7 +66,6 @@ defmodule LemonCore.Config.Gateway do
     :queue,
     :telegram,
     :discord,
-    :farcaster,
     :email,
     :xmtp,
     :webhook,
@@ -133,7 +130,6 @@ defmodule LemonCore.Config.Gateway do
           auto_resume: boolean(),
           enable_telegram: boolean(),
           enable_discord: boolean(),
-          enable_farcaster: boolean(),
           enable_email: boolean(),
           enable_xmtp: boolean(),
           enable_webhook: boolean(),
@@ -145,7 +141,6 @@ defmodule LemonCore.Config.Gateway do
           queue: queue_config(),
           telegram: telegram_config(),
           discord: map(),
-          farcaster: map(),
           email: map(),
           xmtp: map(),
           webhook: map(),
@@ -170,12 +165,6 @@ defmodule LemonCore.Config.Gateway do
       enable_telegram: resolve_enable_telegram(gateway_settings),
       enable_discord:
         resolve_enable_flag(gateway_settings, "enable_discord", :lemon_gateway_enable_discord),
-      enable_farcaster:
-        resolve_enable_flag(
-          gateway_settings,
-          "enable_farcaster",
-          :lemon_gateway_enable_farcaster
-        ),
       enable_email:
         resolve_enable_flag(gateway_settings, "enable_email", :lemon_gateway_enable_email),
       enable_xmtp:
@@ -190,7 +179,6 @@ defmodule LemonCore.Config.Gateway do
       queue: resolve_queue(gateway_settings),
       telegram: resolve_telegram(gateway_settings),
       discord: resolve_discord(gateway_settings),
-      farcaster: resolve_passthrough(gateway_settings, "farcaster"),
       email: resolve_passthrough(gateway_settings, "email"),
       xmtp: resolve_xmtp(gateway_settings),
       webhook: resolve_passthrough(gateway_settings, "webhook"),
@@ -480,7 +468,6 @@ defmodule LemonCore.Config.Gateway do
       "auto_resume" => false,
       "enable_telegram" => false,
       "enable_discord" => false,
-      "enable_farcaster" => false,
       "enable_email" => false,
       "enable_xmtp" => false,
       "enable_webhook" => false,
@@ -496,7 +483,6 @@ defmodule LemonCore.Config.Gateway do
       },
       "telegram" => %{},
       "discord" => %{},
-      "farcaster" => %{},
       "email" => %{},
       "xmtp" => %{},
       "webhook" => %{},

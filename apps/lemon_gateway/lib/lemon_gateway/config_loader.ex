@@ -63,11 +63,6 @@ defmodule LemonGateway.ConfigLoader do
       |> fetch(:discord)
       |> parse_discord()
 
-    farcaster =
-      gateway
-      |> fetch(:farcaster)
-      |> parse_farcaster()
-
     email =
       gateway
       |> fetch(:email)
@@ -95,7 +90,6 @@ defmodule LemonGateway.ConfigLoader do
       auto_resume: fetch(gateway, :auto_resume),
       enable_telegram: fetch(gateway, :enable_telegram),
       enable_discord: fetch(gateway, :enable_discord),
-      enable_farcaster: fetch(gateway, :enable_farcaster),
       enable_email: fetch(gateway, :enable_email),
       enable_xmtp: fetch(gateway, :enable_xmtp),
       enable_webhook: fetch(gateway, :enable_webhook),
@@ -110,7 +104,6 @@ defmodule LemonGateway.ConfigLoader do
     |> Map.put(:sms, sms)
     |> Map.put(:telegram, telegram)
     |> Map.put(:discord, discord)
-    |> Map.put(:farcaster, farcaster)
     |> Map.put(:email, email)
     |> Map.put(:xmtp, xmtp)
     |> Map.put(:webhook, webhook)
@@ -222,30 +215,6 @@ defmodule LemonGateway.ConfigLoader do
   end
 
   defp parse_discord(_), do: %{}
-
-  defp parse_farcaster(farcaster) when is_map(farcaster) do
-    %{
-      frame_enabled: fetch(farcaster, :frame_enabled),
-      port: fetch(farcaster, :port),
-      bind: fetch(farcaster, :bind),
-      action_path: fetch(farcaster, :action_path),
-      frame_base_url: fetch(farcaster, :frame_base_url),
-      image_url: fetch(farcaster, :image_url),
-      input_label: fetch(farcaster, :input_label),
-      button_1: fetch(farcaster, :button_1),
-      button_2: fetch(farcaster, :button_2),
-      account_id: fetch(farcaster, :account_id),
-      state_secret: fetch(farcaster, :state_secret),
-      verify_trusted_data: default_true(fetch(farcaster, :verify_trusted_data)),
-      hub_validate_url: fetch(farcaster, :hub_validate_url),
-      api_key: fetch(farcaster, :api_key),
-      signer_uuid: fetch(farcaster, :signer_uuid)
-    }
-    |> Enum.reject(fn {_k, v} -> is_nil(v) end)
-    |> Map.new()
-  end
-
-  defp parse_farcaster(_), do: %{}
 
   defp parse_email(email) when is_map(email) do
     %{
@@ -510,7 +479,4 @@ defmodule LemonGateway.ConfigLoader do
   end
 
   defp resolve_env_ref(value), do: value
-
-  defp default_true(nil), do: true
-  defp default_true(value), do: value
 end

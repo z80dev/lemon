@@ -324,24 +324,6 @@ defmodule LemonGateway.TransportRegistryTest do
     assert log =~ "transport \"discord\" is owned by lemon_channels"
   end
 
-  test "logs warning when farcaster is enabled but transport is missing" do
-    Application.put_env(:lemon_gateway, :transports, [MockTransport])
-
-    Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
-      max_concurrent_runs: 1,
-      default_engine: "echo",
-      enable_farcaster: true
-    })
-
-    log =
-      capture_log(fn ->
-        {:ok, _} = restart_config_and_registry()
-      end)
-
-    assert log =~
-             "enable_farcaster is true but Farcaster transport is not registered in :transports"
-  end
-
   test "logs warning when email is enabled but transport is missing" do
     Application.put_env(:lemon_gateway, :transports, [MockTransport])
 

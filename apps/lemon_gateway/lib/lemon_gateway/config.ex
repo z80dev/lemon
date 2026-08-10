@@ -15,7 +15,6 @@ defmodule LemonGateway.Config do
     auto_resume: false,
     enable_telegram: false,
     enable_discord: false,
-    enable_farcaster: false,
     enable_email: false,
     enable_xmtp: false,
     enable_webhook: false,
@@ -23,7 +22,6 @@ defmodule LemonGateway.Config do
     engine_lock_timeout_ms: 60_000,
     projects: %{},
     bindings: [],
-    farcaster: %{},
     email: %{},
     xmtp: %{},
     webhook: %{}

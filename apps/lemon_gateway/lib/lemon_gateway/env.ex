@@ -34,66 +34,6 @@ defmodule LemonGateway.Env do
       apps: [:lemon_gateway]
     },
     %{
-      name: :farcaster_account_id,
-      env_var: "FARCASTER_ACCOUNT_ID",
-      aliases: [],
-      type: :string,
-      default: nil,
-      doc: "Farcaster account id used by the Farcaster transport.",
-      secret?: false,
-      required?: false,
-      area: :gateway,
-      apps: [:lemon_gateway]
-    },
-    %{
-      name: :farcaster_api_key,
-      env_var: "FARCASTER_API_KEY",
-      aliases: [],
-      type: :string,
-      default: nil,
-      doc: "Farcaster (Neynar) API key.",
-      secret?: true,
-      required?: false,
-      area: :gateway,
-      apps: [:lemon_gateway]
-    },
-    %{
-      name: :farcaster_hub_validate_url,
-      env_var: "FARCASTER_HUB_VALIDATE_URL",
-      aliases: [],
-      type: :string,
-      default: nil,
-      doc: "Farcaster hub URL used to validate cast/frame messages.",
-      secret?: false,
-      required?: false,
-      area: :gateway,
-      apps: [:lemon_gateway]
-    },
-    %{
-      name: :farcaster_signer_uuid,
-      env_var: "FARCASTER_SIGNER_UUID",
-      aliases: [],
-      type: :string,
-      default: nil,
-      doc: "Farcaster signer UUID used to post casts.",
-      secret?: true,
-      required?: false,
-      area: :gateway,
-      apps: [:lemon_gateway]
-    },
-    %{
-      name: :farcaster_state_secret,
-      env_var: "FARCASTER_STATE_SECRET",
-      aliases: [],
-      type: :string,
-      default: nil,
-      doc: "Secret used to sign Farcaster frame state tokens.",
-      secret?: true,
-      required?: false,
-      area: :gateway,
-      apps: [:lemon_gateway]
-    },
-    %{
       name: :lemon_sms_inbox_ttl_ms,
       env_var: "LEMON_SMS_INBOX_TTL_MS",
       aliases: [],

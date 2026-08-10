@@ -4,7 +4,7 @@
 
 `lemon_channels` is ingress and egress: the channel core (Registry, Outbox, Dispatcher,
 PresentationState), the `LemonChannels.Plugin` behaviour, and the built-in adapters
-(telegram, discord, whatsapp, xmtp, email, farcaster, webhook). `Plugin` is the best
+(telegram, discord, whatsapp, xmtp, email, webhook). `Plugin` is the best
 extension point in the tree and the intended first contribution for outside builders —
 a new adapter should require no changes to the platform. It talks to the router only
 through `LemonCore.RouterBridge`. This page will become the package README: the six
