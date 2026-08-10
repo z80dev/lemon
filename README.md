@@ -152,7 +152,7 @@ with one example tool and one channel wired:
 
 ```bash
 # from a checkout of this repo; the subshell keeps the cd from leaking
-(cd installer && MIX_ENV=prod mix archive.build && mix archive.install --force lemon_new-0.1.0.ez)
+(cd installer && MIX_ENV=prod mix do archive.build + archive.install --force)
 
 cd ~/code                              # anywhere outside this repo
 mix lemon.new my_agent --channel --memory --install
