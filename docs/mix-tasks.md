@@ -1,6 +1,6 @@
 # Mix task reference
 
-Lemon ships ~85 `mix lemon.*` tasks across the umbrella. `mix help | grep lemon`
+Lemon ships ~70 `mix lemon.*` tasks across the umbrella. `mix help | grep lemon`
 lists them alphabetically with no grouping, which makes the tooling hard to
 discover. This page groups every task by purpose. For a live, grouped listing
 from the CLI, run:
@@ -109,8 +109,7 @@ Durable state and outbound notifications.
 
 ## Sim & arena
 
-`lemon_sim` contributes **41** tasks — roughly half of all `lemon.*` tasks. They
-fall into four sub-groups.
+`lemon_sim` contributes **26** tasks. They fall into four sub-groups.
 
 ### Scenario runners (self-play)
 
@@ -130,16 +129,25 @@ mix lemon.sim.vending_bench --preset ci --offline-strategy baseline --sim-id vb_
 
 ### Replay renderers
 
-Render a scenario's JSONL game log into a video/replay. One `*_replay` task
-exists per scenario except `tic_tac_toe` and `tcg_shop`; `skirmish` uses the
-generic `mix lemon.sim.replay`.
+| Task | Purpose |
+| --- | --- |
+| `mix lemon.sim.replay <scenario> <log>` | Render any scenario's JSONL game log into a video. |
+| `mix lemon.sim.vending_bench_replay DIR` | Build a static HTML replay browser from a VendingBench artifact directory (not a video). |
 
-`auction_replay`, `courtroom_replay`, `diplomacy_replay`,
-`dungeon_crawl_replay`, `intel_network_replay`, `legislature_replay`,
-`murder_mystery_replay`, `pandemic_replay`, `poker_replay`,
-`space_station_replay`, `startup_incubator_replay`, `stock_market_replay`,
-`supply_chain_replay`, `survivor_replay`, `vending_bench_replay`,
-`werewolf_replay` (16), plus the generic `mix lemon.sim.replay` (1).
+`mix lemon.sim.replay` handles every video scenario through one task, backed by
+each scenario's shared `VideoGenerator`. Scenarios: `skirmish`, `auction`,
+`courtroom`, `diplomacy`, `dungeon_crawl`, `intel_network`, `legislature`,
+`murder_mystery`, `pandemic`, `poker`, `space_station`, `startup_incubator`,
+`stock_market`, `supply_chain`, `survivor`, `werewolf`. A single positional
+argument is treated as a `skirmish` log for backwards compatibility.
+
+```bash
+mix lemon.sim.replay poker apps/lemon_sim/priv/game_logs/poker/abc.jsonl
+mix lemon.sim.replay werewolf werewolf.jsonl --fps 3 --output werewolf.mp4
+```
+
+VendingBench keeps a separate task because its replay is a static HTML browser,
+not a video. `tic_tac_toe` and `tcg_shop` have no replay renderer.
 
 ### Scoring & verification
 
@@ -169,17 +177,21 @@ directly (`scripts/release_package <package>`). It is not listed by
 
 ---
 
-## Follow-up: sim task consolidation
+## Sim task consolidation notes
 
-The 19 scenario runners and 16 named replay renderers are near-identical
-thin wrappers that differ only by scenario name. They could collapse into two
-parameterized tasks:
+**Done — replay renderers.** The 15 per-scenario `*_replay` tasks were folded
+into the single parameterized `mix lemon.sim.replay <scenario> <log>`. They were
+near-identical thin wrappers over each scenario's shared `VideoGenerator`
+(`LemonSim.Examples.Rendering.DomainVideoGenerator`), so one registry-backed task
+covers them all. `vending_bench_replay` stayed separate (it builds a static HTML
+browser, not a video). Net: 15 tasks removed with no loss of capability.
 
-- `mix lemon.sim <scenario>` — replacing the 19 runners.
-- `mix lemon.sim.replay <scenario> <log>` — generalizing the already-existing
-  generic `lemon.sim.replay` to replace the 16 named `*_replay` tasks.
-
-That would remove **35 tasks** (of the 41 in `lemon_sim`), leaving
-`score`, `verify`, `suite`, `leaderboard`, `ratings`, and the one generic
-`replay`. This is a deliberately deferred refactor — larger and lower priority
-than this index — tracked here as a follow-up, not done.
+**Deliberately not done — scenario runners.** The 19 `mix lemon.sim.<scenario>`
+runners look consolidatable but are not: each has a distinct switch set and calls
+distinct example-module entrypoints (e.g. `werewolf` does multi-model per-seat
+assignment via `--models`/`--player-count`; `vending_bench` has `--preset` and
+offline strategies; `tic_tac_toe` has `--offline-strategy`). A single
+`mix lemon.sim <scenario>` would either be a leaky mega-task branching on
+scenario, or a dispatcher that still keeps all 19 modules — both worse than 19
+focused tasks. `vending_bench` is also called directly by CI
+(`scripts/ci_sim_bench.sh`, `scripts/generate_sim_demo_bundles.sh`). Left as-is.

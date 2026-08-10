@@ -80,20 +80,19 @@ mix lemon.sim.werewolf --player-count 5 --models anthropic:claude-sonnet-4-20250
 mix run apps/lemon_sim/priv/scripts/werewolf_5model.exs
 ```
 
-Werewolf replay tooling can render JSONL transcripts from `mix lemon.sim.werewolf
---models ... --transcript-path path.jsonl` or the compatibility scripts:
+A single `mix lemon.sim.replay <scenario> <log>` task renders JSONL transcripts
+for every scenario. For example, a Werewolf transcript produced by
+`mix lemon.sim.werewolf --models ... --transcript-path path.jsonl`:
 
 ```bash
-mix lemon.sim.werewolf_replay apps/lemon_sim/priv/game_logs/werewolf_4model.jsonl
+mix lemon.sim.replay werewolf apps/lemon_sim/priv/game_logs/werewolf_4model.jsonl
+mix lemon.sim.replay skirmish priv/game_logs/abc123.jsonl --output replay.mp4 --fps 4
 ```
 
-Generic skirmish replay video generation:
-
-```bash
-mix lemon.sim.replay priv/game_logs/abc123.jsonl --output replay.mp4 --fps 4
-```
-
-Replay video tasks require `rsvg-convert` and `ffmpeg` on `PATH`.
+A single positional argument is treated as a `skirmish` log for backwards
+compatibility. Run `mix lemon.sim.replay --help` for the full scenario list.
+The replay task requires `rsvg-convert` and `ffmpeg` on `PATH`. (VendingBench
+uses `mix lemon.sim.vending_bench_replay`, which builds a static HTML browser.)
 
 ## Artifacts
 

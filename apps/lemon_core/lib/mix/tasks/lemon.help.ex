@@ -6,7 +6,7 @@ defmodule Mix.Tasks.Lemon.Help do
   @moduledoc """
   Print every `mix lemon.*` task grouped by purpose.
 
-  `mix help | grep lemon` lists the ~85 Lemon tasks alphabetically with no
+  `mix help | grep lemon` lists the ~70 Lemon tasks alphabetically with no
   grouping. This task prints the same set organized into logical groups, reading
   each task's `@shortdoc` at runtime so the descriptions never drift from the
   code.
@@ -44,13 +44,7 @@ defmodule Mix.Tasks.Lemon.Help do
         lemon.sim.poker lemon.sim.skirmish lemon.sim.space_station lemon.sim.startup_incubator
         lemon.sim.stock_market lemon.sim.supply_chain lemon.sim.survivor lemon.sim.tcg_shop
         lemon.sim.tic_tac_toe lemon.sim.vending_bench lemon.sim.werewolf)},
-    {"Sim: replay renderers",
-     ~w(lemon.sim.replay lemon.sim.auction_replay lemon.sim.courtroom_replay
-        lemon.sim.diplomacy_replay lemon.sim.dungeon_crawl_replay lemon.sim.intel_network_replay
-        lemon.sim.legislature_replay lemon.sim.murder_mystery_replay lemon.sim.pandemic_replay
-        lemon.sim.poker_replay lemon.sim.space_station_replay lemon.sim.startup_incubator_replay
-        lemon.sim.stock_market_replay lemon.sim.supply_chain_replay lemon.sim.survivor_replay
-        lemon.sim.vending_bench_replay lemon.sim.werewolf_replay)},
+    {"Sim: replay renderers", ~w(lemon.sim.replay lemon.sim.vending_bench_replay)},
     {"Sim: scoring, suites & ratings",
      ~w(lemon.sim.score lemon.sim.verify lemon.sim.suite lemon.sim.leaderboard lemon.sim.ratings)}
   ]
