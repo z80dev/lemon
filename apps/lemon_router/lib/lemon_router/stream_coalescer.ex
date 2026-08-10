@@ -479,7 +479,7 @@ defmodule LemonRouter.StreamCoalescer do
 
   defp emit_output(state) do
     # Broadcast to session topic for any local subscribers
-    if is_pid(Process.whereis(LemonCore.PubSub)) do
+    if LemonCore.Bus.running?() do
       LemonCore.Bus.broadcast(
         LemonCore.Bus.session_topic(state.session_key),
         %{
