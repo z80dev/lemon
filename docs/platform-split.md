@@ -196,6 +196,11 @@ Updated for D1–D9. Buckets: **core** (stays in published `lemon_core`), **rout
 
 ## 9. Deferred (not open — parked with owners)
 
+- Telegram config/diagnostics surfaces still in lemon_core (doctor/channel_diagnostics `@supported_transports`, config.ex gateway-telegram block conversion, channel_readiness, inbound_message naming): decide during Phase 2.4 transport unification whether these become channel-registered capabilities. A blanket telegram-atom rule was deliberately not added (would need ~8 grandfathered files).
+- chat_state/chat_state_store → router move: blocked until gateway stops writing chat state (run.ex finalization + farcaster handler) — fold into Phase 2.4.
+- LemonMemory.Ingest `:name` parameterization (currently always registers as `__MODULE__`) — small API change, do before publishing lemon_memory.
+- LemonMemory.SessionSearch has 0% direct coverage (consumers test callers) — main thing holding lemon_memory at 60%.
+
 - Adapter satellite packages (`lemon_channels_telegram`, `lemon_channels_discord`): after Plugin behaviour is documented and x_api (D7) proves the pattern.
 - Renaming `lemon_gateway` → `lemon_engines`: revisit at 4.1; name describes the post-D2 shrunk scope better, but rename churn during the carve is not worth it.
 - Secrets key rotation / re-encrypt path: known-missing, documented in 1.5; schedule when a second key provider lands.
