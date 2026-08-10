@@ -117,14 +117,14 @@ Composite engine IDs like `"claude:claude-3-opus"` are resolved by prefix fallba
 | Telegram | `lemon_channels` (external app) | Telegram Bot API polling/webhooks |
 | Discord | `lemon_channels` (external app) | Discord gateway via Nostrum |
 | XMTP | `lemon_channels` (external app) | XMTP messaging via Node.js bridge |
-| Email | `Transports.Email` | SMTP inbound webhook + outbound delivery via gen_smtp |
+| Email | `lemon_channels` (external app) | SMTP outbound + inbound webhook, as a channel plugin |
 | Webhook | `Transports.Webhook` | Generic HTTP webhook (sync/async modes) |
 | Voice | `Voice.*` | Real-time phone calls via Twilio + Deepgram STT + ElevenLabs TTS |
 | SMS | `Sms.*` | Twilio SMS webhooks with verification code tools |
 
-Gateway transports implement the `LemonGateway.Transport` behaviour (`id/0`, `start_link/1`). They are registered in `TransportRegistry` and started under `TransportSupervisor` only when gateway ingress is explicitly enabled with `config :lemon_gateway, gateway_ingress_enabled: true`. Telegram, Discord, and XMTP are owned by the `lemon_channels` sibling app. Voice and SMS are not registry transports; they are dedicated Twilio support services included in the same explicit ingress startup.
+Gateway transports implement the `LemonGateway.Transport` behaviour (`id/0`, `start_link/1`). They are registered in `TransportRegistry` and started under `TransportSupervisor` only when gateway ingress is explicitly enabled with `config :lemon_gateway, gateway_ingress_enabled: true`. Telegram, Discord, XMTP and email are owned by the `lemon_channels` sibling app. Voice and SMS are not registry transports; they are dedicated Twilio support services included in the same explicit ingress startup.
 
-Webhook, SMS, and voice are gateway-owned by design, not pending migration: `LemonChannels.Plugin.deliver/1` is fire-and-forget, so it cannot serve webhook's synchronous response, SMS has no reply path at all, and voice needs a live bidirectional session. Email is the one surface slated to move to `lemon_channels`. See `docs/platform/transport-unification.md`.
+Webhook, SMS, and voice are gateway-owned by design, not pending migration: `LemonChannels.Plugin.deliver/1` is fire-and-forget, so it cannot serve webhook's synchronous response, SMS has no reply path at all, and voice needs a live bidirectional session. Email was the one surface that genuinely was a channel, and it moved to `lemon_channels` in phase 2.4 — `LemonChannels.Adapters.Email`. See `docs/platform/transport-unification.md`.
 
 ## Module Inventory
 
@@ -189,9 +189,6 @@ failures without parsing rendered command output.
 | `LemonGateway.Transport` | `transport.ex` | Behaviour for transport plugins |
 | `LemonGateway.TransportRegistry` | `transport_registry.ex` | Transport registration and enable/disable tracking |
 | `LemonGateway.TransportSupervisor` | `transport_supervisor.ex` | Supervisor for enabled transports |
-| `LemonGateway.Transports.Email` | `transports/email.ex` | Email transport |
-| `LemonGateway.Transports.Email.Inbound` | `transports/email/inbound.ex` | Inbound email webhook handler |
-| `LemonGateway.Transports.Email.Outbound` | `transports/email/outbound.ex` | SMTP outbound email delivery |
 | `LemonGateway.Transports.Webhook` | `transports/webhook.ex` | HTTP webhook transport (sync/async) |
 
 ### Binding and Legacy Rendering Helpers
@@ -371,12 +368,17 @@ Configuration loads from `~/.lemon/config.toml` (the `[gateway]` section) via `L
 |-----|---------|-------------|
 | `enable_telegram` | `false` | Enable Telegram adapter (via `lemon_channels`) |
 | `enable_discord` | `false` | Enable Discord adapter (via `lemon_channels`) |
-| `enable_email` | `false` | Enable email transport |
+| `enable_email` | `false` | **No longer read.** Email is `LemonChannels.Adapters.Email`; enable it there |
 | `enable_xmtp` | `false` | Enable XMTP transport |
 | `enable_webhook` | `false` | Enable webhook transport |
 
-Discord is not a gateway transport. If a `discord` module is added to `:transports`,
-`TransportRegistry` ignores it and logs a warning; Discord ownership lives in
+The `[gateway] email` block itself is still meaningful — the channel adapter reads it, so
+existing relay credentials, sender address and webhook token keep working — but `enable_email`
+gates nothing. Receiving mail now depends on `LemonChannels.InboundHttp` being enabled and a
+webhook token being set; see `LemonChannels.Adapters.Email`.
+
+Discord and email are not gateway transports. If a `discord` or `email` module is added to
+`:transports`, `TransportRegistry` ignores it and logs a warning; ownership lives in
 `lemon_channels`.
 
 ### Legacy Queue Options (`[gateway.queue]`)

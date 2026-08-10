@@ -3,7 +3,6 @@ defmodule LemonGateway.ConfigLoaderTest do
 
   alias LemonCore.Binding
   alias LemonGateway.{ConfigLoader, Project}
-  alias LemonGateway.Transports.Email.Outbound
 
   setup do
     original_home = System.get_env("HOME")
@@ -183,20 +182,16 @@ defmodule LemonGateway.ConfigLoaderTest do
 
     config = ConfigLoader.load()
 
+    # The loader's job is to preserve the block verbatim, untrimmed and
+    # unconverted. Its consumer moved to LemonChannels.Adapters.Email.Outbound
+    # in phase 2.4, and gateway must not reach across to it — the assertions
+    # about what `smtp_options/1` makes of this shape moved with it, to
+    # `apps/lemon_channels/test/lemon_channels/adapters/email/outbound_test.exs`.
     assert config.enable_email == true
     assert config.email.outbound.relay == " nested-relay.example.test "
     assert config.email.smtp_relay == "flat-relay.example.test"
-
-    assert {:ok, smtp_opts} = Outbound.smtp_options(config.email)
-    assert Keyword.fetch!(smtp_opts, :relay) == "nested-relay.example.test"
-    assert Keyword.fetch!(smtp_opts, :port) == 587
-    assert Keyword.fetch!(smtp_opts, :ssl) == false
-    assert Keyword.fetch!(smtp_opts, :tls) == :never
-    assert Keyword.fetch!(smtp_opts, :auth) == :if_available
-    assert Keyword.fetch!(smtp_opts, :username) == "nested-user"
-    assert Keyword.fetch!(smtp_opts, :password) == "nested-pass"
-    assert Keyword.fetch!(smtp_opts, :hostname) == "mail.example.test"
-    assert {:tls_options, [versions: [:"tlsv1.2", :"tlsv1.3"]]} in smtp_opts
+    assert config.email.outbound.tls_versions == ["tlsv1.2", "tlsv1.3"]
+    assert config.email.outbound.username == " nested-user "
   end
 
   test "parses webhook gateway settings and nested integrations from override config" do

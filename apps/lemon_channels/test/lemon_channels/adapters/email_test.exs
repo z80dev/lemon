@@ -2,8 +2,9 @@ defmodule LemonChannels.Adapters.EmailTest do
   @moduledoc """
   Inbound-half tests for the ported email adapter (Phase 2.4/B3).
 
-  Outbound is intentionally unimplemented here; the assertion below pins that
-  it fails loudly rather than pretending to send.
+  Outbound lives in `LemonChannels.Adapters.Email.OutboundTest`; the assertion
+  here only covers the adapter's own promise not to raise on a payload it
+  cannot make sense of.
   """
   use ExUnit.Case, async: true
 
@@ -41,8 +42,8 @@ defmodule LemonChannels.Adapters.EmailTest do
       assert Email.meta().capabilities.chunk_limit == nil
     end
 
-    test "deliver/1 fails explicitly while outbound is unported" do
-      assert {:error, :not_implemented} = Email.deliver(%{})
+    test "deliver/1 reports rather than raises on something that is not a payload" do
+      assert {:error, :invalid_payload} = Email.deliver(%{})
     end
   end
 

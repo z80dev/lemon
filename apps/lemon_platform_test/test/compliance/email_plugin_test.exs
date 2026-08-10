@@ -2,10 +2,15 @@ defmodule LemonPlatformTest.EmailPluginComplianceTest do
   @moduledoc """
   The kit's `PluginCase` run against the email adapter.
 
-  Email is inbound-only for now, which makes it the cheapest adapter to validate
-  end to end: `deliver/1` answers `{:error, :not_implemented}` for every payload
-  and `start_link/0` returns `:ignore`, so both the deliver probe and
-  `register_and_start_adapter/2` are free of side effects.
+  `deliver/1` sends real mail now, so the probe has to be a payload that cannot
+  reach anyone. `:reaction` is that payload: email has no such concept, the
+  adapter's `meta/0` says so, and it is refused before any configuration is
+  read — which keeps the probe side-effect-free no matter what relay the host
+  running the suite happens to have configured.
+
+  `start_link/0` still returns `:ignore` (the adapter registers an HTTP route
+  and owns no process), so `register_and_start_adapter/2` is free of side
+  effects too.
 
   The fixtures are provider webhook bodies rather than synthetic maps, so the
   suite checks the RFC 2822 threading path produces a routable message.
@@ -15,18 +20,18 @@ defmodule LemonPlatformTest.EmailPluginComplianceTest do
     async: false,
     adapter: LemonChannels.Adapters.Email,
     start_adapter: true,
-    deliver_probe: {__MODULE__, :text_payload},
+    deliver_probe: {__MODULE__, :unsendable_payload},
     inbound_fixtures: {__MODULE__, :webhook_bodies}
 
   alias LemonChannels.OutboundPayload
 
-  def text_payload(_context) do
+  def unsendable_payload(_context) do
     OutboundPayload.new(
       channel_id: "email",
       account_id: "compliance",
       peer: %{kind: :dm, id: "someone@example.com", thread_id: nil},
-      kind: :text,
-      content: "never sent — outbound is not implemented"
+      kind: :reaction,
+      content: "👍"
     )
   end
 

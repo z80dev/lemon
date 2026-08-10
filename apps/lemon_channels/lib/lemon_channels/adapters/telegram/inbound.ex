@@ -77,7 +77,11 @@ defmodule LemonChannels.Adapters.Telegram.Inbound do
           nil
         end
 
-      text = message["text"] || message["caption"] || ""
+      # Binary-guarded: `message.text` is contractually a binary, and an update
+      # whose "text" is a list or an object (a forged or truncated webhook body,
+      # not something Telegram itself sends) would otherwise travel as one all
+      # the way into the router.
+      text = first_binary([message["text"], message["caption"]]) || ""
       voice = message["voice"] || %{}
       document = message["document"] || %{}
       photo = select_photo(message["photo"])
@@ -188,7 +192,7 @@ defmodule LemonChannels.Adapters.Telegram.Inbound do
 
       Logger.debug(
         "Telegram inbound normalized successfully: message_id=#{message_id} " <>
-          "text_length=#{String.length(text || "")} has_voice=#{voice != %{}} " <>
+          "text_length=#{String.length(text)} has_voice=#{voice != %{}} " <>
           "has_document=#{is_map(document) and map_size(document) > 0} " <>
           "has_video=#{is_map(video) and map_size(video) > 0} " <>
           "has_animation=#{is_map(animation) and map_size(animation) > 0} " <>
@@ -226,6 +230,10 @@ defmodule LemonChannels.Adapters.Telegram.Inbound do
   end
 
   defp chat_display_name(_), do: nil
+
+  defp first_binary(candidates) do
+    Enum.find(candidates, &is_binary/1)
+  end
 
   defp select_photo(photos) when is_list(photos) do
     photos

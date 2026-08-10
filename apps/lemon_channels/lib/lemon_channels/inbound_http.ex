@@ -40,6 +40,7 @@ defmodule LemonChannels.InboundHttp do
   require Logger
 
   @registry_name __MODULE__.Routes
+  @default_max_body_bytes 2_000_000
 
   @spec start_link(keyword()) :: Supervisor.on_start()
   def start_link(opts \\ []) do
@@ -80,17 +81,65 @@ defmodule LemonChannels.InboundHttp do
   def ip, do: config() |> Keyword.get(:ip, {127, 0, 0, 1})
 
   @doc """
+  Largest request body the listener will read, in bytes.
+
+  2 MB by default — deliberately well under `Plug.Parsers`' 8 MB, since a
+  webhook endpoint is reachable by anyone who learns the URL and this is what
+  bounds the memory one request can cost. Over the limit the caller gets a 413.
+
+  Raise it for an adapter that must accept large payloads, remembering that
+  attachments are usually base64-encoded on the wire and so occupy about a
+  third more than their decoded size:
+
+      config :lemon_channels, LemonChannels.InboundHttp, max_body_bytes: 8_000_000
+
+  `LemonChannels.Adapters.Email` derives its own attachment cap from this, so
+  the two cannot contradict each other.
+  """
+  @spec max_body_bytes() :: pos_integer()
+  def max_body_bytes do
+    case config() |> Keyword.get(:max_body_bytes, @default_max_body_bytes) do
+      bytes when is_integer(bytes) and bytes > 0 -> bytes
+      _ -> @default_max_body_bytes
+    end
+  end
+
+  @doc """
   Registers `handler` for the first path segment `segment`.
 
   Returns `:ok`, or `{:error, :not_running}` when the listener supervisor is not
   started (which is the case in apps that never start `lemon_channels`).
+
+  Last registration wins. Two packages claiming the same segment is a
+  misconfiguration rather than a supported layout — the loser's webhooks would
+  silently arrive at the winner — so a replacement is logged at warning level.
+  Registration order between two applications is not something either of them
+  controls, which is exactly why this must not be quiet.
   """
   @spec register(binary(), module()) :: :ok | {:error, :not_running}
   def register(segment, handler) when is_binary(segment) and is_atom(handler) do
     if Process.whereis(@registry_name) do
+      warn_on_replacement(segment, handler)
       Agent.update(@registry_name, &Map.put(&1, segment, handler))
     else
       {:error, :not_running}
+    end
+  end
+
+  defp warn_on_replacement(segment, handler) do
+    case handler_for(segment) do
+      nil ->
+        :ok
+
+      ^handler ->
+        :ok
+
+      existing ->
+        Logger.warning(
+          "inbound http segment #{inspect(segment)} re-registered: " <>
+            "#{inspect(existing)} replaced by #{inspect(handler)}; " <>
+            "requests to /#{segment} will now go to the latter"
+        )
     end
   end
 

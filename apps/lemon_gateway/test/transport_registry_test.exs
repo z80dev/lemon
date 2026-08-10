@@ -156,6 +156,16 @@ defmodule LemonGateway.TransportRegistryTest do
     def start_link(_opts), do: :ignore
   end
 
+  defmodule MockEmailTransportRegistry do
+    use Elixir.LemonGateway.Transport
+
+    @impl true
+    def id, do: "email"
+
+    @impl true
+    def start_link(_opts), do: :ignore
+  end
+
   defp restart_registry do
     supervisor = Elixir.LemonGateway.IngressSupervisor
 
@@ -324,13 +334,20 @@ defmodule LemonGateway.TransportRegistryTest do
     assert log =~ "transport \"discord\" is owned by lemon_channels"
   end
 
-  test "logs warning when email is enabled but transport is missing" do
-    Application.put_env(:lemon_gateway, :transports, [MockTransport])
+  test "email transport ids are ignored because email is channels-owned" do
+    # Email moved to LemonChannels.Adapters.Email in phase 2.4. A leftover
+    # entry in `:transports` — from an old config, or a fork that kept its own
+    # email transport — must not quietly resurrect a second email ingress
+    # alongside the channel adapter.
+    Application.put_env(:lemon_gateway, :transports, [
+      MockEmailTransportRegistry,
+      MockTransport
+    ])
 
     Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
       max_concurrent_runs: 1,
       default_engine: "echo",
-      enable_email: true
+      enable_telegram: false
     })
 
     log =
@@ -338,7 +355,13 @@ defmodule LemonGateway.TransportRegistryTest do
         {:ok, _} = restart_config_and_registry()
       end)
 
-    assert log =~ "enable_email is true but Email transport is not registered in :transports"
+    enabled_ids =
+      TransportRegistry.enabled_transports()
+      |> Enum.map(fn {id, _mod} -> id end)
+
+    refute "email" in enabled_ids
+    assert "mock" in enabled_ids
+    assert log =~ "transport \"email\" is owned by lemon_channels"
   end
 
   test "logs warning when webhook is enabled but transport is missing" do

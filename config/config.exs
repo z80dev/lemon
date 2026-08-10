@@ -84,8 +84,14 @@ config :lemon_channels,
     LemonChannels.Adapters.Telegram,
     LemonChannels.Adapters.Discord,
     LemonChannels.Adapters.Xmtp,
-    LemonChannels.Adapters.WhatsApp
+    LemonChannels.Adapters.WhatsApp,
+    LemonChannels.Adapters.Email
   ]
+
+# Email is registered but inert: its `start_link/0` returns `:ignore`, so it
+# occupies no process, and inbound mail arrives only once a host enables
+# LemonChannels.InboundHttp and sets a webhook token. That mirrors the gateway
+# transport it replaced, which was also off by default.
 
 # The X adapter is not listed above on purpose: it lives in the x_api satellite
 # and registers itself at boot (see XApi.Application), so the platform's config

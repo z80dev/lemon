@@ -50,14 +50,21 @@ defmodule LemonGateway.IngressSupervisor do
     end
   end
 
+  # Binds loopback unless told otherwise, matching the health server and
+  # `LemonChannels.InboundHttp`. This listener used to bind every interface
+  # because it passed no `:ip` at all; a deployment that fronts it with a tunnel
+  # or reverse proxy on another host needs to say so explicitly now:
+  #
+  #     config :lemon_gateway, :voice_ip, {0, 0, 0, 0}
   defp voice_server_child_spec do
     port = LemonGateway.Voice.Config.websocket_port() |> maybe_test_voice_port()
+    ip = Application.get_env(:lemon_gateway, :voice_ip, :loopback)
 
     %{
       id: LemonGateway.Voice.Server,
       start:
         {Bandit, :start_link,
-         [[plug: LemonGateway.Voice.WebhookRouter, port: port, scheme: :http]]},
+         [[plug: LemonGateway.Voice.WebhookRouter, ip: ip, port: port, scheme: :http]]},
       type: :supervisor
     }
   end

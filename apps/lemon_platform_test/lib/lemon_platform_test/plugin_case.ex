@@ -193,7 +193,17 @@ defmodule LemonPlatformTest.PluginCase do
     %{"update_id" => 1},
     %{"message" => %{"text" => nil}},
     %{message: %{text: "atom keys where strings were expected"}},
-    %{"deeply" => %{"nested" => %{"but" => %{"meaningless" => true}}}}
+    %{"deeply" => %{"nested" => %{"but" => %{"meaningless" => true}}}},
+    # A list or a map where the adapter expects a string. This is not exotic:
+    # `?subject[]=a&subject[]=b` through `Plug.Parsers`' urlencoded parser
+    # produces the first, and any JSON body can produce the second. An adapter
+    # that reaches for `String.trim/1` on whatever it finds raises here, which
+    # is exactly the class of bug this list exists to catch — one of the
+    # built-ins did, on four separate fields.
+    %{"from" => "a@b.c", "text" => ["one", "two"]},
+    %{"from" => "a@b.c", "subject" => %{"nested" => "object"}},
+    %{"message" => %{"text" => ["chunked"], "caption" => %{"a" => 1}}},
+    %{"from" => 42, "text" => 42, "html" => [%{}]}
   ]
 
   @doc """

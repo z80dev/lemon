@@ -13,7 +13,7 @@ defmodule LemonGateway.TransportRegistry do
   @type transport_mod :: module()
 
   @reserved_ids ~w(default all)
-  @channels_owned_transport_ids ~w(discord)
+  @channels_owned_transport_ids ~w(discord email)
   @id_regex ~r/^[a-z][a-z0-9_-]*$/
 
   def start_link(_opts) do
@@ -102,12 +102,6 @@ defmodule LemonGateway.TransportRegistry do
   end
 
   defp maybe_warn_dual_gate(state) when is_map(state) do
-    if transport_enabled?("email") and not Map.has_key?(state, "email") do
-      Logger.warning(
-        "enable_email is true but Email transport is not registered in :transports; add LemonGateway.Transports.Email to :transports or disable enable_email"
-      )
-    end
-
     if transport_enabled?("webhook") and not Map.has_key?(state, "webhook") do
       Logger.warning(
         "enable_webhook is true but Webhook transport is not registered in :transports; add LemonGateway.Transports.Webhook to :transports or disable enable_webhook"
@@ -134,7 +128,6 @@ defmodule LemonGateway.TransportRegistry do
   end
 
   defp transport_enabled?("telegram"), do: get_config_boolean(:enable_telegram)
-  defp transport_enabled?("email"), do: get_config_boolean(:enable_email)
   defp transport_enabled?("xmtp"), do: get_config_boolean(:enable_xmtp)
   defp transport_enabled?("webhook"), do: get_config_boolean(:enable_webhook)
   defp transport_enabled?(_id), do: true

@@ -361,28 +361,109 @@ configured — an open inbound mail endpoint is a spam relay into someone's agen
 channels adapter is *not* in `config :lemon_channels, adapters:`, and `InboundHttp` is disabled
 by default. Three independent gates, so this is inert in every existing runtime.
 
-**What is left, in order:**
+**Status 2026-08-10: complete. All four items landed; email is a channel and the gateway
+transport is deleted.**
 
-1. **Outbound.** `Email.deliver/1` currently returns `{:error, :not_implemented}` — deliberately
-   loud, so nothing believes mail was sent. Port `LemonGateway.Transports.Email.Outbound`
-   (715 LOC: multipart build, threading headers, SMTP send, attachment handling) behind it. The
-   contract is already executable: `apps/lemon_gateway/test/transports/email/outbound_test.exs`
-   has 25 characterization tests pinning `smtp_options/1` and `deliver/2`'s no-op paths. Port
-   against those, and treat a failure as a behaviour change to justify — they are descriptive of
-   what shipped, not prescriptive.
-2. **Thread-state persistence.** Gateway's inbound persists `email_message_threads` /
-   `email_thread_state` in `LemonCore.Store` and merges `References` union-find style. The ported
-   adapter computes `thread_id/1` *statelessly* (oldest known ancestor, subject fallback), which
-   is correct for well-behaved clients but will not stitch a chain whose middle message is the
-   first one seen. Decide: port the tables, or accept stateless resolution. This is the one real
-   behaviour difference in the inbound port and it is called out here rather than buried.
-3. **Attachments.** Gateway persists them asynchronously with deterministic paths and a size cap.
-   The adapter currently passes the raw list through in `meta.attachments` untouched.
-4. **Cutover.** Add `email` to `TransportRegistry`'s `@channels_owned_transport_ids` (the
-   mechanism Telegram/Discord/WhatsApp used), add the adapter to the channels adapter list, enable
-   `InboundHttp`, then delete `apps/lemon_gateway/lib/lemon_gateway/transports/email/`. Run both
-   behind separate flags on one test mailbox first, comparing delivered shape and thread
-   continuity.
+1. **Outbound — done.** `LemonChannels.Adapters.Email.Outbound` sends over SMTP.
+   `smtp_options/1` moved across unchanged and its 22 characterization tests were carried over
+   verbatim into `apps/lemon_channels/test/lemon_channels/adapters/email/outbound_test.exs`; all
+   pass, so the configuration semantics are provably identical. Two behaviours did *not* survive,
+   both because they described the old entrypoint rather than email:
+   - the `job.meta` guard that made `deliver/2` a silent no-op for non-email runs — `deliver/1`
+     is only ever called for its own channel, so an unsendable payload is now an `{:error, _}`
+     rather than a swallowed `:ok`;
+   - the "Attachment references" block appended to the body from the run's output files — in this
+     pipeline a file is its own `:file` payload with the file attached, so there is nothing to
+     reference.
+
+   The gateway version read its reply headers from `job.meta.email_reply`, which
+   `OutboundPayload` has no equivalent of. That is what forced the decision below.
+
+2. **Thread-state persistence — decided: port the tables.** `LemonChannels.Adapters.Email.ThreadStore`
+   keeps `:email_message_threads` and `:email_thread_state` in `LemonCore.Store`, table names and
+   shapes unchanged so existing threads survive the cutover. Two reasons, either sufficient:
+
+   - **Outbound has nowhere else to get its headers.** `OutboundPayload` carries the recipient, a
+     thread id and a `reply_to`, but no `Subject` and no `References` chain — and should not,
+     since neither means anything to a channel that is not email. Without stored state a reply
+     invents a subject and sends an empty `References`, which is the difference between landing
+     inside the recipient's conversation and starting a new one. This alone settles it; the
+     stateless option was only ever viable for an inbound-only adapter.
+   - **The middle-message gap is real and cheap to close.** Recording `message id → thread id` as
+     messages arrive means any later message naming *any* known ancestor joins the existing
+     thread. `apps/lemon_channels/test/lemon_channels/adapters/email/thread_store_test.exs` has
+     the case as an executable test.
+
+   `thread_id/1` stays pure and stateless as the seed; `ThreadStore.resolve/2` layers the lookup
+   in front of it. So the store is an optimisation over a correct-by-default computation, not a
+   dependency: with no store running, reads answer `nil`, writes answer `{:error,
+   :store_unavailable}`, neither raises, and the adapter behaves exactly as it did before.
+
+3. **Attachments — done.** `LemonChannels.Adapters.Email.Attachments` prepares metadata on the
+   request path and defers the writes, same shape as the gateway's: deterministic paths, 10 MB
+   cap, sanitized filenames, 0600 on Unix, multipart `Plug.Upload` copied off Plug's temp file,
+   URL-only attachments passed through undownloaded. One addition the port needed: the channels
+   prompt is `message.text` and nothing else (`RunRequestBuilder`), so the attachment lines are
+   appended to the text — the gateway put them in a prompt it built itself.
+
+4. **Cutover — done.** `email` joined `discord` in `TransportRegistry`'s
+   `@channels_owned_transport_ids`, its `enable_email` gate and dual-gate warning are gone, the
+   adapter is in `config :lemon_channels, :adapters`, and
+   `apps/lemon_gateway/lib/lemon_gateway/transports/email{,.ex}` plus its tests are deleted.
+   `gen_smtp` and `mail` are no longer gateway dependencies — the email transport was their only
+   consumer there, verified by grep before removal.
+
+   **Inbound stays off by default**, deliberately. The gateway transport being replaced was
+   itself dead-by-default behind `:gateway_ingress_enabled`, so preserving that posture is what
+   makes this a move rather than a feature launch: the adapter registers (its `start_link/0`
+   returns `:ignore`, so it occupies no process), outbound is fully live once a relay is
+   configured, and *receiving* mail waits on a host explicitly enabling
+   `LemonChannels.InboundHttp` and setting a webhook token. Verified at boot: email is in the
+   registry, `InboundHttp.enabled?/0` is false, no Bandit child is running, and `deliver/1`
+   answers `{:error, :missing_smtp_relay}` rather than pretending. The enablement recipe is in
+   `LemonChannels.Adapters.Email`'s moduledoc.
+
+   One gateway test lost its subject: `LemonGateway.ConfigLoaderTest` asserted that the TOML
+   `email` block fed `smtp_options/1` correctly. Gateway must not reach across to
+   `lemon_channels` (see §8's risk about exactly that edge), so the loader test now asserts only
+   what the loader produces, and the consumer assertions moved to the channels outbound test with
+   the same fixture.
+
+**Config continuity.** `LemonChannels.Adapters.Email.Config` reads
+`config :lemon_channels, LemonChannels.Adapters.Email` *and* the canonical TOML `[gateway]`
+config's `email` block, application env winning. A deployment configured while email lived in the
+gateway therefore keeps its relay, sender and webhook token across the cutover without editing
+anything.
+
+**Hardening that came with the port.** Four things, three of which outlived the email adapter:
+
+- **`normalize_inbound/1` raised on hostile input**, violating the one `Plugin` rule the platform
+  cannot enforce. `subject[]=a&subject[]=b` through `Plug.Parsers`' urlencoded parser puts a
+  *list* in a string field; the adapter reached for `String.replace/4` and crashed, on four
+  fields. Non-binaries are now treated as absent — picking an element or stringifying would
+  invent a message the sender did not send. `LemonPlatformTest.PluginCase`'s hostile-input list
+  grew four entries of this class so every adapter is probed, which immediately caught the same
+  bug in Telegram (`message["text"]` as a list travelled all the way into `InboundMessage.text`).
+- **Authentication now runs before parsing.** `LemonChannels.InboundHttp.Handler` gained an
+  optional `authorized?/1` that the router calls between `:match` and `Plug.Parsers`, so an
+  unauthenticated caller can no longer make the listener decode a body before its 401. Handlers
+  that verify a signature over the body omit it and are unaffected.
+- **The body limit is configurable and coherent with attachments.**
+  `InboundHttp.max_body_bytes/0` (2 MB default, read per request rather than frozen into the plug
+  pipeline at compile time), and the email attachment cap now *derives* from it — three quarters,
+  since attachments arrive base64-encoded and inflate by about a third. A cap larger than the
+  body limit was unreachable, and the two can no longer be configured into contradiction.
+- **An unreachable router asks for redelivery instead of lying.** `RouterBridge.handle_inbound/1`
+  rescues exceptions but not exits, so a router that is *configured but not running* exits out of
+  `GenServer.call` — which the webhook was turning into a 202 or, worse, an opaque 500 from the
+  listener's catch-all. It now answers 503 and logs, so the provider redelivers. **The bridge's
+  own `@spec` promises `{:error, :unavailable}` it cannot deliver in that state; worth fixing in
+  `lemon_core` for every other caller.**
+
+**Contract kit.** `apps/lemon_platform_test/test/compliance/email_plugin_test.exs` relied on
+`deliver/1` being inert. Its probe is now a `:reaction` payload — a kind email has no concept of,
+refused before any configuration is read — so the probe stays side-effect-free regardless of what
+relay the host running the suite has configured.
 
 **Do not** take this as licence to port webhook/SMS/voice — §1 and the amended D2 still hold.
 
