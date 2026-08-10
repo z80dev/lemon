@@ -147,13 +147,20 @@ evidence in [§8 of the plan](docs/platform-split.md).
 
 ## Quickstart
 
-Building your own agent on the platform: `mix lemon.new` and the
-`docs/getting-started/` guides are [Phase 3.4/3.5](docs/platform-split.md) and
-are being written now — the generator scaffolds a project depending on
-`lemon_agent` + `lemon_ai` + `lemon_core` with one example tool and one channel
-wired, and the guides ("build your first agent", "add a channel", "add an
-engine", "persist memory") are written against its output. **These commands do
-not exist in the tree yet.**
+To build your own agent on the platform, `mix lemon.new` scaffolds a project
+with one example tool and one channel wired:
+
+```bash
+cd installer && MIX_ENV=prod mix archive.build && mix archive.install lemon_new-0.1.0.ez
+mix lemon.new my_agent --channel --memory
+cd my_agent && mix test
+```
+
+The generator lives in [`installer/`](installer/README.md) and is installed as
+a Mix archive rather than fetched from Hex, because the platform packages are
+not published yet — generated projects depend on them by path, overridable with
+`--lemon-path`. The guides it is written against are in `docs/getting-started/`
+and are still being filled in ([Phase 3.4/3.5](docs/platform-split.md)).
 
 Running the reference runtime from a source checkout works today. Requires
 Elixir 1.19.5+ / OTP 28.5+ (pinned in `.tool-versions`) and a model provider

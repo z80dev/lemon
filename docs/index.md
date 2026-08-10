@@ -49,6 +49,7 @@ interface polish for non-contributors to use Lemon without repo expertise.
 | Run a deterministic local demo | [Demo Lemon](demo.md) |
 | Compare Lemon to adjacent tools | [Compare Lemon](compare.md) |
 | Configure providers, secrets, and Telegram | [Setup Guide](user-guide/setup.md) |
+| Understand why Lemon runs on the BEAM | [Agents Are a Concurrency Problem](why-beam-for-agents.md) |
 | Understand the runtime architecture | [Architecture Overview](architecture/overview.md) |
 | Track the Hermes-on-BEAM product goal | [Hermes-on-BEAM Readiness Plan](plans/lemon-1.0-mainstream-readiness.md) |
 | Check Hermes feature parity | [Feature Parity Matrix](plans/lemon-hermes-feature-parity-matrix-2026-05-12.md) |
