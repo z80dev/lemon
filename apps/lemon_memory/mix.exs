@@ -14,7 +14,7 @@ defmodule LemonMemory.MixProject do
       deps_path: "../../deps",
       lockfile: "../../mix.lock",
       test_pattern: "*_test.exs",
-      elixir: "~> 1.19",
+      elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
       # Matches the coverage the moved suites already provide (60.17%). The
       # untested surface came along with the move: SessionSearch has no direct

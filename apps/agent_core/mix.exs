@@ -14,7 +14,7 @@ defmodule AgentCore.MixProject do
       deps_path: "../../deps",
       lockfile: "../../mix.lock",
       test_pattern: "*_test.exs",
-      elixir: "~> 1.19",
+      elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
       test_coverage: [summary: [threshold: 71]],
       deps: deps(),
