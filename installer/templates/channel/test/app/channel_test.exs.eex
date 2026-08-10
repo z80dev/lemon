@@ -1,0 +1,50 @@
+defmodule <%= @app_module %>.ChannelComplianceTest do
+  @moduledoc """
+  Runs the platform's own compliance suite against the channel adapter.
+
+  This is the test worth keeping when you replace the console with a real
+  channel: it checks the parts of `LemonChannels.Plugin` that the type
+  signatures cannot, including the registration round-trip, which is how "my
+  adapter works but the platform cannot see it" is usually discovered.
+
+  `async: false` is required because the suite registers the adapter in the
+  node-global channel registry.
+  """
+
+  use LemonPlatformTest.PluginCase,
+    async: false,
+    adapter: <%= @app_module %>.Channel,
+    deliver_probe: {__MODULE__, :unsupported_payload},
+    inbound_fixtures: {__MODULE__, :inbound_fixtures},
+    hostile_inbound: [
+      %{"user" => "", "text" => "empty peer"},
+      %{"user" => "alice"},
+      %{"text" => "no sender"}
+    ]
+
+  alias LemonChannels.OutboundPayload
+
+  @doc """
+  A payload the adapter must refuse rather than crash on.
+
+  There is no default for this on purpose: only you know which payload cannot
+  reach a real user. A kind the adapter does not implement is the safe choice.
+  """
+  def unsupported_payload(_context) do
+    %OutboundPayload{
+      channel_id: <%= @app_module %>.Channel.id(),
+      account_id: "local",
+      peer: %{kind: :dm, id: "alice", thread_id: nil},
+      kind: :reaction,
+      content: "thumbs_up"
+    }
+  end
+
+  @doc "Raw values the adapter must normalize successfully."
+  def inbound_fixtures(_context) do
+    [
+      %{"user" => "alice", "text" => "hello"},
+      %{"user" => "bob", "text" => ""}
+    ]
+  end
+end

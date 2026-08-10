@@ -45,6 +45,7 @@ interface polish for non-contributors to use Lemon without repo expertise.
 
 | Need | Page |
 | --- | --- |
+| Build an agent on the platform | [Build Your First Agent](getting-started/build-your-first-agent.md) |
 | Install from source today | [Install Lemon](install.md) |
 | Run a deterministic local demo | [Demo Lemon](demo.md) |
 | Compare Lemon to adjacent tools | [Compare Lemon](compare.md) |

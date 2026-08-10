@@ -1,0 +1,29 @@
+import Config
+
+# Which model the agent runs. `Ai.Models` knows several hundred across roughly
+# twenty providers; `Ai.Models.get_model_ids(:anthropic)` lists one provider's.
+config :<%= @app %>,
+  provider: :anthropic,
+  model: "claude-sonnet-4-5"
+
+# The agent loop logs a line per turn at :debug, which is useful while you are
+# learning the shape of a run and noise afterwards.
+config :logger, level: :info
+
+if config_env() == :test do
+  config :logger, level: :warning
+end
+<%= if @memory? do %>
+
+# Durable memory. The SQLite file is created on first write. Tests get their
+# own directory so a `mix test` run never touches the real one.
+config :lemon_memory, LemonMemory.Store,
+  path: Path.expand("~/.<%= @app %>/store"),
+  retention_ms: 30 * 24 * 60 * 60 * 1000,
+  max_per_scope: 500
+
+if config_env() == :test do
+  config :lemon_memory, LemonMemory.Store,
+    path: Path.expand("../tmp/test_store", __DIR__)
+end
+<% end %>

@@ -1,0 +1,24 @@
+defmodule <%= @app_module %>.Application do
+  @moduledoc false
+
+  use Application
+
+  @impl true
+  def start(_type, _args) do
+    children = [
+      <%= @app_module %>.Agent
+    ]
+
+    opts = [strategy: :one_for_one, name: <%= @app_module %>.Supervisor]
+    result = Supervisor.start_link(children, opts)
+<%= if @channel? do %>
+
+    # Channel adapters register themselves with `lemon_channels` at boot. This
+    # is the same call a package living in its own repository would make, which
+    # is why the platform needs no compile-time knowledge of the adapter.
+    :ok = <%= @app_module %>.Channel.register()
+<% end %>
+
+    result
+  end
+end

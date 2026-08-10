@@ -1,0 +1,42 @@
+# <%= @app_module %>
+
+An agent built on the [Lemon](https://github.com/z80dev/lemon) platform.
+
+## Run the tests
+
+    mix deps.get
+    mix test
+
+No API key required. The suite scripts the model at the `stream_fn` seam
+(`test/support/fake_llm.ex`), so the loop, the tools and the tool registry are
+all exercised for real while the network is not.
+
+## Talk to a real model
+
+    export ANTHROPIC_API_KEY=sk-ant-...
+    mix run --no-halt -e "<%= @app_module %>.Console.start()"
+
+The provider and model come from `config/config.exs`, or from
+`<%= String.upcase(@app) %>_PROVIDER` and `<%= String.upcase(@app) %>_MODEL` at
+runtime. Any provider `Ai.Models` knows about will do; each reads its own key
+from the environment.
+
+## Layout
+
+| File | What it is |
+|---|---|
+| `lib/<%= @app %>/agent.ex` | The model, system prompt and tool list. Start here. |
+| `lib/<%= @app %>/tools/word_count.ex` | One tool, and the contract the rest follow. |
+| `lib/<%= @app %>/console.ex` | A terminal channel; a worked example of the event stream. |
+<%= if @channel? do %>| `lib/<%= @app %>/channel.ex` | A `LemonChannels.Plugin`, the platform's channel extension point. |
+<% end %><%= if @memory? do %>| `lib/<%= @app %>/memory.ex` | Durable memory across runs, on `lemon_memory`. |
+<% end %>| `test/support/fake_llm.ex` | The scripted model that makes the suite runnable offline. |
+
+## Where to go next
+
+The guides in the lemon repository are written against exactly this project:
+
+- `docs/getting-started/build-your-first-agent.md`
+- `docs/getting-started/add-a-tool.md`
+- `docs/getting-started/add-a-channel.md`
+- `docs/getting-started/persist-memory.md`

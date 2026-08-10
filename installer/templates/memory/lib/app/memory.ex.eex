@@ -1,0 +1,107 @@
+defmodule <%= @app_module %>.Memory do
+  @moduledoc """
+  Durable memory: what the agent said, kept across restarts.
+
+  `AgentCore.Agent` holds the conversation in process state, which is exactly
+  the right place for it and exactly the wrong place to keep it. `lemon_memory`
+  is the other half: a SQLite-backed store of compact, searchable summaries,
+  scoped so that "what did we decide last Tuesday" survives a deploy.
+
+  A memory is a `LemonMemory.Document` — a summary of one exchange, not a
+  transcript. Keep the summaries small; they are indexed for full-text search,
+  and search quality falls off fast once documents are long.
+
+  ## Scopes
+
+  Every document has a scope, which decides what a later search can see:
+
+  | Scope | Lifetime | Keyed by |
+  |---|---|---|
+  | `:session` | one conversation | `session_key` |
+  | `:workspace` | one project directory | `workspace_key` |
+  | `:agent` | this agent, forever | `agent_id` |
+  | `:global` | the whole installation | nothing |
+
+  This module writes `:session` documents, which is the conservative default:
+  nothing leaks between conversations unless you widen the scope deliberately.
+  """
+
+  alias LemonMemory.{Document, Store}
+
+  @agent_id "<%= @app %>"
+
+  # Only `prompt_summary` and `answer_summary` are indexed for search, and
+  # `LemonMemory.Document` applies no cap to a struct you build yourself, so
+  # cap them here rather than indexing whole transcripts.
+  @max_summary_chars 1_000
+
+  @doc """
+  Records one exchange.
+
+  Writes are asynchronous. A subsequent read on the same store is still
+  consistent, because both go through the same process.
+  """
+  def remember(session_key, prompt, answer, opts \\ []) do
+    now = System.system_time(:millisecond)
+
+    Store.put(%Document{
+      doc_id: "mem_" <> LemonCore.Id.uuid(),
+      run_id: Keyword.get(opts, :run_id, LemonCore.Id.uuid()),
+      session_key: session_key,
+      agent_id: @agent_id,
+      scope: :session,
+      started_at_ms: Keyword.get(opts, :started_at_ms, now),
+      ingested_at_ms: now,
+      prompt_summary: summarize(prompt),
+      answer_summary: summarize(answer),
+      tools_used: Keyword.get(opts, :tools_used, []),
+      provider: Keyword.get(opts, :provider),
+      model: Keyword.get(opts, :model),
+      outcome: Keyword.get(opts, :outcome, :success),
+      meta: Keyword.get(opts, :meta, %{})
+    })
+  end
+
+  @doc """
+  The most recent exchanges in a session, newest first.
+  """
+  def recall(session_key, opts \\ []) do
+    Store.get_by_session(session_key, limit: Keyword.get(opts, :limit, 5))
+  end
+
+  @doc """
+  Full-text search within one session.
+
+  Pass `scope: :agent, scope_key: "<%= @app %>"` to search everything this
+  agent has ever recorded instead.
+  """
+  def search(query, session_key, opts \\ []) do
+    Store.search(
+      query,
+      opts
+      |> Keyword.put_new(:scope, :session)
+      |> Keyword.put_new(:scope_key, session_key)
+    )
+  end
+
+  @doc """
+  Asks the agent, then records the exchange.
+
+  The shape most callers want: memory that accumulates without anyone having to
+  remember to write it.
+  """
+  def ask_and_remember(session_key, prompt) do
+    case <%= @app_module %>.Agent.ask(prompt) do
+      {:ok, answer} ->
+        remember(session_key, prompt, answer)
+        {:ok, answer}
+
+      {:error, reason} ->
+        remember(session_key, prompt, "", outcome: :failure, meta: %{error: inspect(reason)})
+        {:error, reason}
+    end
+  end
+
+  defp summarize(text) when is_binary(text), do: String.slice(text, 0, @max_summary_chars)
+  defp summarize(_text), do: ""
+end

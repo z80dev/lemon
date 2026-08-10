@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# verify_generator — prove `mix lemon.new` still produces a working project.
+#
+# Usage:
+#   scripts/verify_generator [--keep] [--tmp <dir>]
+#
+# Options:
+#   --keep       Leave the generated projects in place for inspection.
+#   --tmp <dir>  Where to generate (default: a mktemp directory).
+#
+# The installer's own suite (installer/test) asserts on generated *content*; it
+# deliberately does not compile anything, because compiling a generated project
+# means fetching the platform's whole dependency tree. This script is the other
+# half: it generates both project shapes against this checkout, compiles them
+# with --warnings-as-errors and runs their tests.
+#
+# It is the check that catches the failure mode the unit tests cannot — a
+# template that parses but no longer matches the platform's API. Run it after
+# any change to a public surface the generated project touches: AgentCore's
+# agent/tool/registry API, Ai.Models, LemonChannels.Plugin, LemonMemory.Store.
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+KEEP=0
+TMP=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --keep) KEEP=1; shift ;;
+    --tmp) TMP="$2"; shift 2 ;;
+    -h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "unknown option: $1" >&2; exit 2 ;;
+  esac
+done
+
+if [[ -z "$TMP" ]]; then
+  TMP="$(mktemp -d "${TMPDIR:-/tmp}/lemon_new_verify.XXXXXX")"
+fi
+mkdir -p "$TMP"
+
+cleanup() {
+  if [[ $KEEP -eq 0 ]]; then
+    rm -rf "$TMP"
+  else
+    echo "generated projects left in $TMP"
+  fi
+}
+trap cleanup EXIT
+
+echo "==> installer unit tests"
+(cd "$REPO_ROOT/installer" && mix test)
+
+generate_and_check() {
+  local name="$1"; shift
+  local dir="$TMP/$name"
+
+  echo
+  echo "==> generating $name ${*:-(no flags)}"
+  (cd "$REPO_ROOT/installer" && mix run -e \
+    "Mix.Task.run(\"lemon.new\", [\"$dir\", \"--lemon-path\", \"$REPO_ROOT\", \"--no-install\"] ++ System.argv())" \
+    -- "$@")
+
+  echo "==> $name: deps.get"
+  (cd "$dir" && mix deps.get >/dev/null)
+
+  echo "==> $name: compile --warnings-as-errors"
+  # Dependencies are compiled first and separately: a warning from a hex package
+  # is not this generator's problem, and --warnings-as-errors does not
+  # distinguish. The forced recompile afterwards covers only the generated app.
+  (cd "$dir" && MIX_ENV=test mix compile >/dev/null 2>&1 || true)
+  (cd "$dir" && MIX_ENV=test mix compile --force --warnings-as-errors)
+
+  echo "==> $name: test"
+  (cd "$dir" && mix test)
+}
+
+generate_and_check base_agent
+generate_and_check full_agent --channel --memory
+
+echo
+echo "generator verified: both project shapes compile clean and pass their tests."

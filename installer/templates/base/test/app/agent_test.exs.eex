@@ -1,0 +1,80 @@
+defmodule <%= @app_module %>.AgentTest do
+  # Not async: the tool registry is node-global `:persistent_term` state, and
+  # two of these tests write to it.
+  use ExUnit.Case, async: false
+
+  alias <%= @app_module %>.{Agent, FakeLLM}
+
+  defp start_agent(script) do
+    start_supervised!({Agent, name: nil, stream_fn: FakeLLM.scripted(script)})
+  end
+
+  test "answers a question that needs no tool" do
+    agent = start_agent([FakeLLM.say("Hello back.")])
+
+    assert {:ok, "Hello back."} = Agent.ask(agent, "hello")
+  end
+
+  test "calls a tool and answers from its result" do
+    agent =
+      start_agent([
+        FakeLLM.tool_call("word_count", %{"text" => "one two three"}),
+        FakeLLM.say("Three words.")
+      ])
+
+    assert {:ok, "Three words."} = Agent.ask(agent, "how many words in 'one two three'?")
+
+    # The tool ran, so its result is in the conversation the model saw.
+    messages = AgentCore.get_state(agent).messages
+    assert Enum.any?(messages, &match?(%Ai.Types.ToolResultMessage{}, &1))
+  end
+
+  describe "tools/0" do
+    # Stands in for a tool contributed by a dependency. A registered module
+    # needs the same `tool/1` and `tool/2` as one of ours.
+    defmodule ContributedTool do
+      def tool(_opts \\ []) do
+        AgentCore.new_tool(
+          name: "echo",
+          description: "Repeats its argument.",
+          execute: fn _id, params, _signal, _on_update ->
+            AgentCore.new_tool_result(content: [AgentCore.text_content(params["text"] || "")])
+          end
+        )
+      end
+
+      def tool(_cwd, opts), do: tool(opts)
+    end
+
+    test "includes this project's own tools" do
+      assert "word_count" in tool_names()
+    end
+
+    test "includes tools contributed through AgentCore.ToolRegistry" do
+      refute "echo" in tool_names()
+
+      AgentCore.ToolRegistry.register(:echo, ContributedTool)
+      on_exit(fn -> AgentCore.ToolRegistry.unregister(:echo) end)
+
+      # Picked up without this project naming the module anywhere.
+      assert "echo" in tool_names()
+    end
+
+    test "a contributed tool cannot displace one of ours" do
+      AgentCore.ToolRegistry.register(:word_count, ContributedTool)
+      on_exit(fn -> AgentCore.ToolRegistry.unregister(:word_count) end)
+
+      # Registered under a name we already use, so it is dropped entirely
+      # rather than shadowing ours.
+      refute "echo" in tool_names()
+      assert "word_count" in tool_names()
+    end
+
+    defp tool_names, do: Enum.map(Agent.tools(), & &1.name)
+  end
+
+  test "model/0 resolves the configured model" do
+    assert %Ai.Types.Model{} = model = Agent.model()
+    assert model.id == Application.get_env(:<%= @app %>, :model)
+  end
+end

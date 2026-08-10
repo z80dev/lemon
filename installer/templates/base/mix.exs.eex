@@ -1,0 +1,59 @@
+defmodule <%= @app_module %>.MixProject do
+  use Mix.Project
+
+  def project do
+    [
+      app: :<%= @app %>,
+      version: "0.1.0",
+      elixir: "~> 1.19",
+      elixirc_paths: elixirc_paths(Mix.env()),
+      start_permanent: Mix.env() == :prod,
+      deps: deps()
+    ]
+  end
+
+  def application do
+    [
+      extra_applications: [:logger],
+      mod: {<%= @app_module %>.Application, []}
+    ]
+  end
+
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_), do: ["lib"]
+
+  defp deps do
+    [
+      # The Lemon platform. These are path dependencies on a local checkout
+      # because the packages are not published yet; when they are, delete the
+      # `path:` line and uncomment the Hex line under it.
+      #
+      # Two of them have a Hex name that differs from the application name:
+      # your code says `Ai` and `AgentCore`, Hex says lemon_ai and lemon_agent.
+      {:lemon_core, path: "<%= @lemon_path %>/apps/lemon_core"},
+      # {:lemon_core, "~> 0.1"},
+      {:ai, path: "<%= @lemon_path %>/apps/ai"},
+      # {:ai, "~> 0.1", hex: :lemon_ai},
+      {:agent_core, path: "<%= @lemon_path %>/apps/agent_core"},
+      # {:agent_core, "~> 0.1", hex: :lemon_agent},
+<%= if @channel? do %>
+      # The channel adapter in lib/<%= @app %>/channel.ex implements this
+      # package's `LemonChannels.Plugin` behaviour.
+      {:lemon_channels, path: "<%= @lemon_path %>/apps/lemon_channels"},
+      # {:lemon_channels, "~> 0.1"},
+<% end %>
+<%= if @memory? do %>
+      # Durable agent memory, backed by SQLite.
+      {:lemon_memory, path: "<%= @lemon_path %>/apps/lemon_memory"},
+      # {:lemon_memory, "~> 0.1"},
+<% end %>
+<%= if @channel? do %>
+      # The contract-test kit, which proves the channel adapter satisfies the
+      # behaviour the platform relies on. Test-only.
+      {:lemon_platform_test,
+       path: "<%= @lemon_path %>/apps/lemon_platform_test", only: :test, runtime: false},
+      # {:lemon_platform_test, "~> 0.1", only: :test, runtime: false},
+<% end %>
+    ]
+  end
+end

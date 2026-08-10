@@ -1,0 +1,80 @@
+defmodule <%= @app_module %>.Tools.WordCount do
+  @moduledoc """
+  An example tool: counts the words in a string.
+
+  A tool is an `AgentCore.Types.AgentTool` struct with four things the model
+  sees — `name`, `description`, `parameters` (a JSON Schema) and `label` (for
+  humans) — and one it does not: `execute`, the function the loop calls when
+  the model asks for it.
+
+  The `tool/0`, `tool/1` and `tool/2` shape is the convention the platform's
+  own tools follow, and what `AgentCore.ToolRegistry` expects from a module it
+  is handed. `tool/2` takes a working directory first, which file-touching
+  tools need and this one ignores.
+
+  ## Writing your own
+
+  Two rules matter more than the rest:
+
+    * **The description is a prompt.** It is the only thing telling the model
+      when to reach for this. Say what it does *and* when to use it.
+    * **`execute` should not raise.** Return an `AgentToolResult` whose content
+      explains the failure; the model can often recover from "the file does not
+      exist" but not from a dead run.
+  """
+
+  alias AgentCore.Types.{AgentTool, AgentToolResult}
+  alias Ai.Types.TextContent
+
+  @spec tool(keyword()) :: AgentTool.t()
+  def tool(_opts \\ []) do
+    %AgentTool{
+      name: "word_count",
+      label: "Count words",
+      description: """
+      Count the words in a piece of text. Use this whenever you are asked how \
+      many words something has, rather than counting them yourself.
+      """,
+      parameters: %{
+        "type" => "object",
+        "properties" => %{
+          "text" => %{
+            "type" => "string",
+            "description" => "The text whose words should be counted."
+          }
+        },
+        "required" => ["text"]
+      },
+      execute: &execute/4
+    }
+  end
+
+  @spec tool(String.t(), keyword()) :: AgentTool.t()
+  def tool(_cwd, opts), do: tool(opts)
+
+  @doc """
+  Runs the tool.
+
+  The four arguments are fixed by `AgentCore.Types.AgentTool.execute_fn/0`: the
+  id of this tool call, the parsed parameters, an abort signal (`nil` unless the
+  run can be cancelled), and a callback for streaming partial results back to
+  the UI before the tool has finished.
+  """
+  def execute(_tool_call_id, params, _signal, _on_update) do
+    case params do
+      %{"text" => text} when is_binary(text) ->
+        count = text |> String.split(~r/\s+/, trim: true) |> length()
+
+        %AgentToolResult{
+          content: [%TextContent{text: "#{count}"}],
+          details: %{words: count}
+        }
+
+      _other ->
+        %AgentToolResult{
+          content: [%TextContent{text: ~s(word_count needs a "text" string parameter)}],
+          details: %{error: :invalid_params}
+        }
+    end
+  end
+end

@@ -26,6 +26,12 @@ defmodule LemonCore.ConfigReloader.Watcher do
 
   require Logger
 
+  # :file_system is an optional dependency; every call below is behind a
+  # Code.ensure_loaded?/1 guard and the watcher falls back to polling. Without
+  # this, depending on lemon_core without it warns about a module you chose not
+  # to have.
+  @compile {:no_warn_undefined, FileSystem}
+
   @debounce_ms 250
   @poll_interval_ms 5_000
 

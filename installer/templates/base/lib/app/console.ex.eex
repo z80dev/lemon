@@ -1,0 +1,110 @@
+defmodule <%= @app_module %>.Console do
+  @moduledoc """
+  The smallest possible channel: standard input in, standard output out.
+
+  A channel is whatever carries messages between a human and the agent. This
+  one is a terminal, so it needs no credentials and no network, which makes it
+  the honest place to learn the event API before wiring up a real one.
+
+  Run it with:
+
+      mix run --no-halt -e "<%= @app_module %>.Console.start()"
+
+  Type `/quit` or send EOF (Ctrl-D) to stop.
+
+  ## What this demonstrates
+
+  `<%= @app_module %>.Agent.ask/2` blocks and hands back the final answer,
+  which is all a script needs. A channel wants more: it wants to show the
+  answer arriving, and to say "running word_count…" while a tool is working.
+  That is what `AgentCore.subscribe/2` is for — the subscriber receives
+  `{:agent_event, event}` for every event in the run, and `render/1` below is a
+  complete list of the ones worth reacting to.
+
+  See `docs/getting-started/add-a-channel.md` in the lemon repository for the
+  step up from here: a `LemonChannels.Plugin`, which is the same idea with a
+  registry, an outbox and delivery retries around it.
+  """
+
+  @doc """
+  Starts the read-eval-print loop against a running agent.
+  """
+  def start(agent \\ <%= @app_module %>.Agent) do
+    _unsubscribe = AgentCore.subscribe(agent, self())
+
+    IO.puts("""
+    <%= @app_module %> console. Ask something, or /quit to leave.
+    """)
+
+    loop(agent)
+  end
+
+  defp loop(agent) do
+    case IO.gets("you> ") do
+      :eof ->
+        IO.puts("")
+
+      {:error, reason} ->
+        IO.puts(:stderr, "could not read input: #{inspect(reason)}")
+
+      line ->
+        case String.trim(line) do
+          "" -> loop(agent)
+          "/quit" -> IO.puts("bye")
+          prompt -> ask(agent, prompt)
+        end
+    end
+  end
+
+  defp ask(agent, prompt) do
+    case AgentCore.prompt(agent, prompt) do
+      :ok ->
+        IO.write("bot> ")
+        drain()
+        loop(agent)
+
+      {:error, :already_streaming} ->
+        IO.puts(:stderr, "the agent is still working on the previous message")
+        loop(agent)
+    end
+  end
+
+  # One agent run produces many events. Consume them until the run ends.
+  defp drain do
+    receive do
+      {:agent_event, event} ->
+        case render(event) do
+          :halt -> :ok
+          :cont -> drain()
+        end
+    end
+  end
+
+  # Text arrives a fragment at a time as the model generates it.
+  defp render({:message_update, _message, {:text_delta, _index, delta, _partial}}) do
+    IO.write(delta)
+    :cont
+  end
+
+  defp render({:tool_execution_start, _id, name, _args}) do
+    IO.write("\n  [#{name}…]")
+    :cont
+  end
+
+  defp render({:tool_execution_end, _id, name, _result, true = _error?}) do
+    IO.write("\n  [#{name} failed]\n")
+    :cont
+  end
+
+  defp render({:error, reason, _partial_state}) do
+    IO.puts(:stderr, "\nrun failed: #{inspect(reason)}")
+    :halt
+  end
+
+  defp render({:agent_end, _messages}) do
+    IO.puts("")
+    :halt
+  end
+
+  defp render(_event), do: :cont
+end

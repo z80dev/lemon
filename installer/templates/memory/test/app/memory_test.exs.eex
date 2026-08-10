@@ -1,0 +1,51 @@
+defmodule <%= @app_module %>.MemoryTest do
+  # Not async: the memory store is a named, node-global process.
+  use ExUnit.Case, async: false
+
+  alias <%= @app_module %>.Memory
+
+  setup do
+    session = "session_" <> Integer.to_string(System.unique_integer([:positive]))
+    on_exit(fn -> LemonMemory.Store.delete_by_session(session) end)
+    {:ok, session: session}
+  end
+
+  test "an exchange survives being written and read back", %{session: session} do
+    Memory.remember(session, "how many words in 'one two three'?", "Three words.")
+
+    assert [document] = Memory.recall(session)
+    assert document.prompt_summary =~ "one two three"
+    assert document.answer_summary == "Three words."
+    assert document.scope == :session
+  end
+
+  test "recall is newest first and honours :limit", %{session: session} do
+    Memory.remember(session, "first question", "first answer")
+
+    # Documents are ordered by their millisecond ingest timestamp with no
+    # tie-break, so two writes inside the same millisecond come back in an
+    # arbitrary order. Real exchanges are seconds apart; tests are not.
+    Process.sleep(2)
+    Memory.remember(session, "second question", "second answer")
+
+    assert [newest] = Memory.recall(session, limit: 1)
+    assert newest.prompt_summary == "second question"
+  end
+
+  test "search finds an exchange by its words", %{session: session} do
+    Memory.remember(session, "what is the airspeed of a swallow?", "African or European?")
+
+    assert [found] = Memory.search("airspeed", session)
+    assert found.answer_summary =~ "European"
+  end
+
+  test "one session cannot see another's memories", %{session: session} do
+    other = session <> "_other"
+    on_exit(fn -> LemonMemory.Store.delete_by_session(other) end)
+
+    Memory.remember(other, "a secret", "kept")
+
+    assert Memory.recall(session) == []
+    assert Memory.search("secret", session) == []
+  end
+end

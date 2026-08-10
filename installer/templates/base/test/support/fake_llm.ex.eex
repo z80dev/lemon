@@ -1,0 +1,98 @@
+defmodule <%= @app_module %>.FakeLLM do
+  @moduledoc """
+  A scripted stand-in for the model, so the test suite needs no API key.
+
+  `AgentCore` talks to providers through one function — a `stream_fn` taking
+  `(model, context, options)` and returning `{:ok, Ai.EventStream.t()}`. Replace
+  it and nothing else about the agent changes: the loop still parses tool
+  calls, still executes tools, still feeds results back. That makes it the
+  right seam for tests, and the wrong one for asserting that your prompt is
+  any good.
+
+      stream_fn = <%= @app_module %>.FakeLLM.scripted([
+        <%= @app_module %>.FakeLLM.tool_call("word_count", %{"text" => "one two"}),
+        <%= @app_module %>.FakeLLM.say("Two words.")
+      ])
+
+      {:ok, agent} = <%= @app_module %>.Agent.start_link(name: nil, stream_fn: stream_fn)
+
+  Each entry in the script answers one model call, in order.
+
+  ## Why this lives in your project
+
+  There is no test double for the LLM in the platform packages today, so every
+  project writes this file. If you build something more capable here — recorded
+  fixtures, an assertion that the tool schema reached the provider — it is worth
+  saying so upstream.
+  """
+
+  alias Ai.Types.{AssistantMessage, TextContent, ToolCall, Usage}
+
+  @doc """
+  Builds a `stream_fn` that answers successive model calls from `responses`.
+
+  Raises if the agent asks for more turns than the script has, which is usually
+  a sign the loop did not stop where the test assumed.
+  """
+  def scripted(responses) when is_list(responses) do
+    {:ok, script} = Agent.start_link(fn -> responses end)
+
+    fn _model, _context, _options ->
+      response =
+        Agent.get_and_update(script, fn
+          [next | rest] -> {next, rest}
+          [] -> raise "FakeLLM script exhausted: the agent made more model calls than expected"
+        end)
+
+      {:ok, stream(response)}
+    end
+  end
+
+  @doc "A response where the assistant just talks."
+  def say(text) when is_binary(text), do: message([%TextContent{text: text}])
+
+  @doc "A response where the assistant calls one tool."
+  def tool_call(name, arguments, id \\ "call_1") do
+    message([%ToolCall{id: id, name: name, arguments: arguments}])
+  end
+
+  defp message(content) do
+    %AssistantMessage{
+      role: :assistant,
+      content: content,
+      api: :fake,
+      provider: :fake,
+      model: "fake-model",
+      usage: %Usage{},
+      stop_reason: :stop,
+      timestamp: System.system_time(:millisecond)
+    }
+  end
+
+  # Replays a finished message as the sequence of events a real provider would
+  # have emitted while producing it.
+  defp stream(%AssistantMessage{} = message) do
+    {:ok, stream} = Ai.EventStream.start_link()
+
+    Task.start(fn ->
+      Ai.EventStream.push(stream, {:start, message})
+
+      message.content
+      |> Enum.with_index()
+      |> Enum.each(fn
+        {%TextContent{text: text}, index} ->
+          Ai.EventStream.push(stream, {:text_start, index, message})
+          Ai.EventStream.push(stream, {:text_delta, index, text, message})
+          Ai.EventStream.push(stream, {:text_end, index, message})
+
+        {%ToolCall{} = call, index} ->
+          Ai.EventStream.push(stream, {:tool_call_start, index, call, message})
+          Ai.EventStream.push(stream, {:tool_call_end, index, call, message})
+      end)
+
+      Ai.EventStream.push(stream, {:done, :stop, message})
+    end)
+
+    stream
+  end
+end

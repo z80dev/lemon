@@ -1,0 +1,102 @@
+defmodule <%= @app_module %>.Channel do
+  @moduledoc """
+  A `LemonChannels.Plugin` for the terminal.
+
+  `<%= @app_module %>.Console` is a channel in the loose sense — it moves text
+  between a human and the agent. This module is a channel in the platform's
+  sense: a registered plugin that the channel runtime can find, describe,
+  deliver through and retry against, the same way it handles Telegram or
+  Discord. The surface it talks to is stdout, so nothing here needs a token,
+  which makes it a working reference rather than a sketch.
+
+  A plugin is a module, not a process. It *describes* a process tree through
+  `child_spec/1` and the runtime starts it. This one has nothing to run, so its
+  child spec starts a process that immediately answers `:ignore` — a legitimate
+  and common shape (the built-in email adapter does the same).
+
+  ## The four rules that are not in the type signatures
+
+    * `id/0` is an identity, not a label. It is the registry key and it ends up
+      in persisted routing state, so changing it later strands bindings.
+    * `id/0` and `meta/0` must be pure. `meta/0` is called on every status query.
+    * `normalize_inbound/1` must not raise. It sees whatever the network handed
+      you; returning `{:error, reason}` for anything unfamiliar is the whole
+      contract. Raising takes down the process reading from the network, which
+      usually means a reconnect loop.
+    * `deliver/1` reports failure rather than raising, *including* for payload
+      kinds you do not support — hence the catch-all clause at the bottom.
+
+  `test/<%= @app %>/channel_test.exs` runs `LemonPlatformTest.PluginCase`
+  against this module, which turns each of those into an assertion.
+  """
+
+  @behaviour LemonChannels.Plugin
+
+  alias LemonChannels.OutboundPayload
+  alias LemonCore.InboundMessage
+
+  @impl true
+  def id, do: "console"
+
+  @impl true
+  def meta do
+    %{
+      label: "Console",
+      # Claim only what is true. The renderer trusts these: promise
+      # `edit_support` and it will try to edit a message instead of resending.
+      # Omit a capability rather than inventing a value for it.
+      capabilities: %{
+        edit_support: false,
+        chunk_limit: 4_000
+      },
+      docs: nil
+    }
+  end
+
+  @impl true
+  def child_spec(_opts) do
+    %{id: __MODULE__, start: {__MODULE__, :start_nothing, []}}
+  end
+
+  @doc false
+  def start_nothing, do: :ignore
+
+  @doc """
+  Registers this adapter with the channel runtime.
+
+  Called from `<%= @app_module %>.Application`. This is the runtime
+  registration path, the one a package in its own repository uses: the platform
+  never names this module at compile time.
+  """
+  def register do
+    LemonChannels.Application.register_and_start_adapter(__MODULE__, [])
+  end
+
+  @impl true
+  def normalize_inbound(%{"user" => user, "text" => text})
+      when is_binary(user) and is_binary(text) and user != "" do
+    {:ok,
+     InboundMessage.new(
+       channel_id: id(),
+       account_id: "local",
+       peer: %{kind: :dm, id: user, thread_id: nil},
+       sender: %{id: user, username: user, display_name: user},
+       message: %{id: nil, text: text, timestamp: nil, reply_to_id: nil},
+       raw: %{"user" => user, "text" => text}
+     )}
+  end
+
+  def normalize_inbound(_raw), do: {:error, :unsupported_payload}
+
+  @impl true
+  def deliver(%OutboundPayload{kind: :text, peer: %{id: peer_id}, content: content})
+      when is_binary(content) do
+    IO.puts("[console -> #{peer_id}] #{content}")
+    {:ok, %{delivered_at: System.system_time(:millisecond)}}
+  end
+
+  def deliver(%OutboundPayload{kind: kind}), do: {:error, {:unsupported_kind, kind}}
+
+  @impl true
+  def gateway_methods, do: []
+end

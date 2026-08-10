@@ -1,0 +1,29 @@
+defmodule <%= @app_module %> do
+  @moduledoc """
+  A BEAM agent built on the Lemon platform.
+
+      iex> <%= @app_module %>.ask("How many words are in this sentence?")
+      {:ok, "..."}
+
+  The pieces, in the order they are worth reading:
+
+    * `<%= @app_module %>.Agent` — the model, the system prompt and the tool
+      list. Start here.
+    * `<%= @app_module %>.Tools.WordCount` — one tool, and the contract every
+      other tool follows.
+    * `<%= @app_module %>.Console` — a terminal channel, and a worked example
+      of consuming the agent's event stream.
+  """
+
+  @doc """
+  Asks the supervised agent a question and waits for its answer.
+
+  Returns `{:ok, answer}` or `{:error, reason}`.
+  """
+  defdelegate ask(prompt), to: <%= @app_module %>.Agent
+
+  @doc """
+  Asks a specific agent process, for when you run more than one.
+  """
+  defdelegate ask(agent, prompt), to: <%= @app_module %>.Agent
+end

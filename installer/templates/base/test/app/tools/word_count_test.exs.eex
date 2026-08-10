@@ -1,0 +1,29 @@
+defmodule <%= @app_module %>.Tools.WordCountTest do
+  use ExUnit.Case, async: true
+
+  alias AgentCore.Types.{AgentTool, AgentToolResult}
+  alias <%= @app_module %>.Tools.WordCount
+
+  test "the definition is well formed" do
+    assert %AgentTool{name: "word_count", parameters: parameters} = WordCount.tool()
+    assert parameters["required"] == ["text"]
+    assert parameters["properties"]["text"]["type"] == "string"
+  end
+
+  test "counts words" do
+    assert %AgentToolResult{details: %{words: 3}} = execute(%{"text" => "one two three"})
+  end
+
+  test "ignores surrounding and repeated whitespace" do
+    assert %AgentToolResult{details: %{words: 2}} = execute(%{"text" => "  one   two \n"})
+  end
+
+  test "reports bad parameters instead of raising" do
+    # The model produced these parameters, so this path is reachable in
+    # production. The result explains itself well enough for the model to retry.
+    assert %AgentToolResult{details: %{error: :invalid_params}} = execute(%{})
+    assert %AgentToolResult{details: %{error: :invalid_params}} = execute(%{"text" => 42})
+  end
+
+  defp execute(params), do: WordCount.execute("call_1", params, nil, nil)
+end
