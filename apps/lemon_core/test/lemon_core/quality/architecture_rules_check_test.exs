@@ -942,6 +942,242 @@ defmodule LemonCore.Quality.ArchitectureRulesCheckTest do
     end
   end
 
+  test "flags CodingAgent references outside the coding-agent product apps" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      write_file!(
+        tmp_dir,
+        "apps/lemon_web/lib/lemon_web/bad_coding_agent.ex",
+        """
+        defmodule LemonWeb.BadCodingAgent do
+          def bad(pid), do: CodingAgent.Session.compact(pid, [])
+        end
+        """
+      )
+
+      assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+
+      assert Enum.any?(report.issues, fn issue ->
+               issue.code == :coding_agent_boundary and
+                 issue.path == "apps/lemon_web/lib/lemon_web/bad_coding_agent.ex"
+             end)
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
+  test "allows CodingAgent references in the apps that ship with the coding agent" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      for app <- ~w(coding_agent coding_agent_ui lemon_mcp lemon_evals) do
+        write_file!(
+          tmp_dir,
+          "apps/#{app}/lib/#{app}/ok.ex",
+          """
+          defmodule #{Macro.camelize(app)}.Ok do
+            def ok(pid), do: CodingAgent.Session.compact(pid, [])
+          end
+          """
+        )
+      end
+
+      assert {:ok, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+      assert report.issue_count == 0
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
+  test "ignores cross-boundary module names mentioned only in docs, comments or strings" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      write_file!(
+        tmp_dir,
+        "apps/lemon_web/lib/lemon_web/docs_only.ex",
+        ~S'''
+        defmodule LemonWeb.DocsOnly do
+          @moduledoc """
+          Sessions are persisted by CodingAgent.SessionManager and posted via XApi.Client.
+          """
+
+          # CodingAgent.Session is the in-process engine.
+          def label, do: "CodingAgent.Session"
+        end
+        '''
+      )
+
+      assert {:ok, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+      assert report.issue_count == 0
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
+  test "flags XApi references outside the x_api satellite" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      write_file!(
+        tmp_dir,
+        "apps/lemon_skills/lib/lemon_skills/tools/bad_x_tool.ex",
+        """
+        defmodule LemonSkills.Tools.BadXTool do
+          alias XApi.Client
+
+          def bad(query), do: Client.search(query)
+        end
+        """
+      )
+
+      assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+
+      assert Enum.any?(report.issues, fn issue ->
+               issue.code == :x_api_boundary and
+                 issue.path == "apps/lemon_skills/lib/lemon_skills/tools/bad_x_tool.ex"
+             end)
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
+  test "flags router references to LemonGateway modules" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      write_file!(
+        tmp_dir,
+        "apps/lemon_router/lib/lemon_router/bad_gateway_call.ex",
+        """
+        defmodule LemonRouter.BadGatewayCall do
+          def bad(request), do: LemonGateway.Runtime.execute(request)
+        end
+        """
+      )
+
+      assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+
+      assert Enum.any?(report.issues, fn issue ->
+               issue.code == :router_gateway_boundary and
+                 issue.path == "apps/lemon_router/lib/lemon_router/bad_gateway_call.ex"
+             end)
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
+  test "flags dynamic-atom gateway back-references from channels and control plane" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      write_file!(
+        tmp_dir,
+        "apps/lemon_channels/lib/lemon_channels/bad_gateway_atom.ex",
+        """
+        defmodule LemonChannels.BadGatewayAtom do
+          @gateway_config_key :"Elixir.LemonGateway.Config"
+
+          def bad, do: Process.whereis(@gateway_config_key)
+        end
+        """
+      )
+
+      write_file!(
+        tmp_dir,
+        "apps/lemon_control_plane/lib/lemon_control_plane/methods/bad_gateway_peek.ex",
+        """
+        defmodule LemonControlPlane.Methods.BadGatewayPeek do
+          def bad, do: LemonGateway.TransportRegistry.list()
+        end
+        """
+      )
+
+      assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+
+      assert Enum.any?(report.issues, fn issue ->
+               issue.code == :gateway_backref_boundary and
+                 issue.path == "apps/lemon_channels/lib/lemon_channels/bad_gateway_atom.ex"
+             end)
+
+      assert Enum.any?(report.issues, fn issue ->
+               issue.code == :gateway_backref_boundary and
+                 issue.path ==
+                   "apps/lemon_control_plane/lib/lemon_control_plane/methods/bad_gateway_peek.ex"
+             end)
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
+  test "flags router run internals referenced from other apps" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      write_file!(
+        tmp_dir,
+        "apps/lemon_automation/lib/lemon_automation/bad_run_internals.ex",
+        """
+        defmodule LemonAutomation.BadRunInternals do
+          def bad, do: Process.whereis(LemonRouter.RunSupervisor)
+        end
+        """
+      )
+
+      assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+
+      assert Enum.any?(report.issues, fn issue ->
+               issue.code == :router_internals_boundary and
+                 issue.path == "apps/lemon_automation/lib/lemon_automation/bad_run_internals.ex"
+             end)
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
+  test "allows lemon_router to use its own run internals" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      write_file!(
+        tmp_dir,
+        "apps/lemon_router/lib/lemon_router/run_facade.ex",
+        """
+        defmodule LemonRouter.RunFacade do
+          def active_runs, do: Registry.select(LemonRouter.RunRegistry, [])
+        end
+        """
+      )
+
+      assert {:ok, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+      assert report.issue_count == 0
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
+  describe "grandfathered allowlist" do
+    test "every entry still points at a live reference" do
+      for entry <- ArchitectureRulesCheck.grandfathered() do
+        path = Path.join(@repo_root, entry.file)
+
+        assert File.exists?(path),
+               "stale grandfather entry: #{entry.file} no longer exists — remove it"
+
+        assert File.read!(path) =~ entry.pattern,
+               "stale grandfather entry: #{entry.file} no longer references #{entry.pattern} — remove it"
+      end
+    end
+
+    test "every entry names the app that owns its file" do
+      for entry <- ArchitectureRulesCheck.grandfathered() do
+        assert String.starts_with?(entry.file, "apps/#{entry.app}/"),
+               "grandfather entry for #{entry.file} is filed under app #{entry.app}"
+      end
+    end
+  end
+
   defp tmp_repo! do
     dir =
       Path.join(

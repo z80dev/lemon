@@ -490,5 +490,59 @@
     owner: "@z80",
     last_reviewed: ~D[2026-07-06],
     max_age_days: 90
+  },
+  %{
+    path: "docs/platform-split.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-08-09],
+    max_age_days: 90
+  },
+  %{
+    path: "docs/platform/lemon_ai.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-08-09],
+    max_age_days: 90
+  },
+  %{
+    path: "docs/platform/lemon_core.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-08-09],
+    max_age_days: 90
+  },
+  %{
+    path: "docs/platform/lemon_agent.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-08-09],
+    max_age_days: 90
+  },
+  %{
+    path: "docs/platform/lemon_memory.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-08-09],
+    max_age_days: 90
+  },
+  %{
+    path: "docs/platform/lemon_router.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-08-09],
+    max_age_days: 90
+  },
+  %{
+    path: "docs/platform/lemon_gateway.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-08-09],
+    max_age_days: 90
+  },
+  %{
+    path: "docs/platform/lemon_channels.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-08-09],
+    max_age_days: 90
+  },
+  %{
+    path: "docs/platform/lemon_platform_test.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-08-09],
+    max_age_days: 90
   }
 ]

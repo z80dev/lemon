@@ -2,6 +2,17 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
   @moduledoc """
   Enforces explicit architecture guardrails that are easier to express as
   stable source-pattern checks than dependency graph rules.
+
+  Two rule families run here:
+
+    * source-pattern rules (`@rules`) — substring matches against source files;
+    * module-reference rules (`@module_reference_rules`) — the package
+      dependency rules from `docs/platform-split.md` §2, resolved from each
+      file's AST so that aliases, calls and dynamic `:"Elixir.Foo"` atoms all
+      count while mentions in docs and comments do not.
+
+  Module-reference rules cover `lib/` only: test support is allowed to reach
+  across apps. Existing violations are listed in `@grandfathered`.
   """
 
   @type issue :: %{
@@ -279,14 +290,15 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
     },
     %{
       code: :heartbeat_store_wrapper_bypass,
-      message: "Heartbeat state must go through LemonCore.HeartbeatStore",
+      message: "Heartbeat state must go through AgentCore.Workspace.HeartbeatStore",
       files: [
+        "apps/agent_core/lib/**/*.ex",
         "apps/lemon_automation/lib/**/*.ex",
         "apps/lemon_control_plane/lib/**/*.ex",
         "apps/lemon_core/lib/**/*.ex"
       ],
       exclude: [
-        "apps/lemon_core/lib/lemon_core/heartbeat_store.ex",
+        "apps/agent_core/lib/agent_core/workspace/heartbeat_store.ex",
         "apps/lemon_core/lib/lemon_core/store.ex"
       ],
       patterns: [
@@ -496,13 +508,233 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
     }
   ]
 
+  # Package dependency rules from docs/platform-split.md §2. `prefixes` are
+  # matched against the modules each file actually references (aliases, remote
+  # calls, `:"Elixir.Foo"` atoms), so doc/comment mentions do not count.
+  @module_reference_rules [
+    %{
+      code: :coding_agent_boundary,
+      message:
+        "Only the coding-agent product apps may reference CodingAgent.*; other apps go through a registered provider",
+      prefixes: ["CodingAgent"],
+      files: ["apps/*/lib/**/*.ex"],
+      exclude: [
+        "apps/coding_agent/**",
+        "apps/coding_agent_ui/**",
+        "apps/lemon_mcp/**",
+        "apps/lemon_evals/**"
+      ]
+    },
+    %{
+      code: :x_api_boundary,
+      message:
+        "Only apps/x_api may reference XApi.*; the platform must not know about X at compile time",
+      prefixes: ["XApi"],
+      files: ["apps/*/lib/**/*.ex"],
+      exclude: ["apps/x_api/**"]
+    },
+    %{
+      code: :router_gateway_boundary,
+      message:
+        "Router must reach the gateway only through LemonCore.EngineRuntime, never LemonGateway.*",
+      prefixes: ["LemonGateway"],
+      files: ["apps/lemon_router/lib/**/*.ex"]
+    },
+    %{
+      code: :gateway_backref_boundary,
+      message:
+        "Channels and control plane must not reach back into LemonGateway.*; use a LemonCore bridge",
+      prefixes: ["LemonGateway"],
+      files: [
+        "apps/lemon_channels/lib/**/*.ex",
+        "apps/lemon_control_plane/lib/**/*.ex"
+      ]
+    },
+    %{
+      code: :router_internals_boundary,
+      message: "Router run internals are private; other apps must use the LemonRouter facade",
+      prefixes: [
+        "LemonRouter.RunRegistry",
+        "LemonRouter.RunSupervisor",
+        "LemonRouter.RunOrchestrator"
+      ],
+      files: ["apps/*/lib/**/*.ex"],
+      exclude: ["apps/lemon_router/**"]
+    }
+  ]
+
+  # Cross-boundary references that predate the rules above. Each entry
+  # authorizes exactly one (pattern, file) pair.
+  #
+  # THIS LIST MAY ONLY SHRINK. Entries disappear as the Phase 2 dependency
+  # inversions in docs/platform-split.md land. Never add an entry to make a new
+  # violation pass — invert the dependency instead.
+  @grandfathered [
+    # Phase 2.1 — gateway ⊘ coding_agent (engine shim moves into coding_agent).
+    %{
+      app: :lemon_gateway,
+      pattern: "CodingAgent",
+      file: "apps/lemon_gateway/lib/lemon_gateway/engines/lemon.ex"
+    },
+    %{
+      app: :lemon_gateway,
+      pattern: "CodingAgent",
+      file: "apps/lemon_gateway/lib/lemon_gateway/engines/lemon/session_runner.ex"
+    },
+    %{
+      app: :lemon_gateway,
+      pattern: "CodingAgent",
+      file: "apps/lemon_gateway/lib/lemon_gateway/engines/cli_adapter.ex"
+    },
+    %{
+      app: :lemon_gateway,
+      pattern: "CodingAgent",
+      file: "apps/lemon_gateway/lib/lemon_gateway/transports/email/inbound.ex"
+    },
+
+    # Phase 2.2 — control_plane ⊘ coding_agent (ops methods self-register).
+    %{
+      app: :lemon_control_plane,
+      pattern: "CodingAgent",
+      file: "apps/lemon_control_plane/lib/lemon_control_plane/methods/agent_progress.ex"
+    },
+    %{
+      app: :lemon_control_plane,
+      pattern: "CodingAgent",
+      file: "apps/lemon_control_plane/lib/lemon_control_plane/methods/extensions_status.ex"
+    },
+    %{
+      app: :lemon_control_plane,
+      pattern: "CodingAgent",
+      file: "apps/lemon_control_plane/lib/lemon_control_plane/methods/run_graph_get.ex"
+    },
+    %{
+      app: :lemon_control_plane,
+      pattern: "CodingAgent",
+      file: "apps/lemon_control_plane/lib/lemon_control_plane/methods/sessions_active_list.ex"
+    },
+    %{
+      app: :lemon_control_plane,
+      pattern: "CodingAgent",
+      file: "apps/lemon_control_plane/lib/lemon_control_plane/methods/sessions_compact.ex"
+    },
+    %{
+      app: :lemon_control_plane,
+      pattern: "CodingAgent",
+      file: "apps/lemon_control_plane/lib/lemon_control_plane/methods/skills_status.ex"
+    },
+    %{
+      app: :lemon_control_plane,
+      pattern: "CodingAgent",
+      file: "apps/lemon_control_plane/lib/lemon_control_plane/methods/tasks_active_list.ex"
+    },
+    %{
+      app: :lemon_control_plane,
+      pattern: "CodingAgent",
+      file: "apps/lemon_control_plane/lib/lemon_control_plane/methods/tasks_recent_list.ex"
+    },
+
+    # Phase 2.3 — channels/skills ⊘ x_api (moves to the x_api satellite).
+    %{
+      app: :lemon_channels,
+      pattern: "XApi",
+      file: "apps/lemon_channels/lib/lemon_channels/adapters/x_api.ex"
+    },
+    %{
+      app: :lemon_channels,
+      pattern: "XApi",
+      file: "apps/lemon_channels/lib/lemon_channels/adapters/x_api/gateway_methods.ex"
+    },
+    %{
+      app: :lemon_skills,
+      pattern: "XApi",
+      file: "apps/lemon_skills/lib/lemon_skills/tools/get_x_mentions.ex"
+    },
+    %{
+      app: :lemon_skills,
+      pattern: "XApi",
+      file: "apps/lemon_skills/lib/lemon_skills/tools/post_to_x.ex"
+    },
+    %{
+      app: :lemon_skills,
+      pattern: "XApi",
+      file: "apps/lemon_skills/lib/lemon_skills/tools/x_search.ex"
+    },
+
+    # Phase 2.5 — dynamic-atom gateway back-refs replaced by an EngineInfoBridge.
+    %{
+      app: :lemon_channels,
+      pattern: "LemonGateway",
+      file: "apps/lemon_channels/lib/lemon_channels/gateway_config.ex"
+    },
+    %{
+      app: :lemon_channels,
+      pattern: "LemonGateway",
+      file: "apps/lemon_channels/lib/lemon_channels/engine_registry.ex"
+    },
+    # Phase 2.4 deletes LemonGateway.TransportRegistry outright.
+    %{
+      app: :lemon_control_plane,
+      pattern: "LemonGateway",
+      file: "apps/lemon_control_plane/lib/lemon_control_plane/methods/transports_status.ex"
+    },
+
+    # Phase 2.6 — router facade hardening retires these direct internals.
+    %{
+      app: :lemon_automation,
+      pattern: "LemonRouter.RunRegistry",
+      file: "apps/lemon_automation/lib/lemon_automation/cron_manager.ex"
+    },
+    %{
+      app: :lemon_control_plane,
+      pattern: "LemonRouter.RunRegistry",
+      file: "apps/lemon_control_plane/lib/lemon_control_plane/methods/run_graph_get.ex"
+    },
+    %{
+      app: :lemon_control_plane,
+      pattern: "LemonRouter.RunRegistry",
+      file: "apps/lemon_control_plane/lib/lemon_control_plane/methods/runs_active_list.ex"
+    },
+    %{
+      app: :lemon_control_plane,
+      pattern: "LemonRouter.RunSupervisor",
+      file: "apps/lemon_control_plane/lib/lemon_control_plane/methods/system_presence.ex"
+    },
+    %{
+      app: :lemon_control_plane,
+      pattern: "LemonRouter.RunOrchestrator",
+      file: "apps/lemon_control_plane/lib/lemon_control_plane/methods/agent.ex"
+    },
+    %{
+      app: :lemon_control_plane,
+      pattern: "LemonRouter.RunOrchestrator",
+      file: "apps/lemon_control_plane/lib/lemon_control_plane/methods/introspection_snapshot.ex"
+    },
+    %{
+      app: :lemon_control_plane,
+      pattern: "LemonRouter.RunOrchestrator",
+      file: "apps/lemon_control_plane/lib/lemon_control_plane/methods/status.ex"
+    },
+    %{
+      app: :lemon_control_plane,
+      pattern: "LemonRouter.RunOrchestrator",
+      file: "apps/lemon_control_plane/lib/lemon_control_plane/methods/wake.ex"
+    }
+  ]
+
+  @doc """
+  The grandfathered cross-boundary references, for tooling and tests.
+  """
+  @spec grandfathered() :: [%{app: atom(), pattern: String.t(), file: String.t()}]
+  def grandfathered, do: @grandfathered
+
   @spec run(keyword()) :: {:ok, report()} | {:error, report()}
   def run(opts \\ []) do
     root = Keyword.get(opts, :root, File.cwd!())
 
     issues =
-      @rules
-      |> Enum.flat_map(&rule_issues(root, &1))
+      (Enum.flat_map(@rules, &rule_issues(root, &1)) ++
+         Enum.flat_map(@module_reference_rules, &module_reference_issues(root, &1)))
       |> Enum.sort_by(& &1.path)
 
     report = %{root: root, issue_count: length(issues), issues: issues}
@@ -529,6 +761,65 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
       end)
     end)
   end
+
+  defp module_reference_issues(root, rule) do
+    root
+    |> source_files(rule.files)
+    |> reject_excluded(root, Map.get(rule, :exclude, []))
+    |> Enum.reject(&(Path.basename(&1) == "architecture_rules_check.ex"))
+    |> Enum.flat_map(fn file ->
+      relative = Path.relative_to(file, root)
+      referenced = referenced_modules(file)
+
+      rule.prefixes
+      |> Enum.filter(&references_prefix?(referenced, &1))
+      |> Enum.reject(&grandfathered?(&1, relative))
+      |> Enum.map(fn prefix ->
+        %{
+          code: rule.code,
+          message: "#{rule.message} (references #{prefix})",
+          path: relative
+        }
+      end)
+    end)
+  end
+
+  defp grandfathered?(pattern, relative) do
+    Enum.any?(@grandfathered, &(&1.pattern == pattern and &1.file == relative))
+  end
+
+  defp references_prefix?(referenced, prefix) do
+    Enum.any?(referenced, &(&1 == prefix or String.starts_with?(&1, prefix <> ".")))
+  end
+
+  # Modules a file actually references: alias segments plus `:"Elixir.Foo"`
+  # atoms. Unparsable files are skipped — they cannot compile either.
+  defp referenced_modules(file) do
+    with {:ok, source} <- File.read(file),
+         {:ok, ast} <- Code.string_to_quoted(source, columns: false, emit_warnings: false) do
+      {_ast, modules} = Macro.prewalk(ast, MapSet.new(), &collect_module/2)
+      modules
+    else
+      _ -> MapSet.new()
+    end
+  end
+
+  defp collect_module({:__aliases__, _meta, segments} = node, acc) do
+    if Enum.all?(segments, &is_atom/1) do
+      {node, MapSet.put(acc, Enum.map_join(segments, ".", &Atom.to_string/1))}
+    else
+      {node, acc}
+    end
+  end
+
+  defp collect_module(node, acc) when is_atom(node) do
+    case Atom.to_string(node) do
+      "Elixir." <> module -> {node, MapSet.put(acc, module)}
+      _ -> {node, acc}
+    end
+  end
+
+  defp collect_module(node, acc), do: {node, acc}
 
   defp source_files(root, globs) do
     globs
