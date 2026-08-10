@@ -123,7 +123,9 @@ Composite engine IDs like `"claude:claude-3-opus"` are resolved by prefix fallba
 | Voice | `Voice.*` | Real-time phone calls via Twilio + Deepgram STT + ElevenLabs TTS |
 | SMS | `Sms.*` | Twilio SMS webhooks with verification code tools |
 
-Gateway transports implement the `LemonGateway.Transport` behaviour (`id/0`, `start_link/1`). They are registered in `TransportRegistry` and started under `TransportSupervisor` only when transitional legacy ingress startup is explicitly enabled with `config :lemon_gateway, legacy_ingress_enabled: true`. Telegram, Discord, and XMTP are owned by the `lemon_channels` sibling app. Voice and SMS are not registry transports; they are dedicated Twilio support services included in the same explicit legacy ingress startup.
+Gateway transports implement the `LemonGateway.Transport` behaviour (`id/0`, `start_link/1`). They are registered in `TransportRegistry` and started under `TransportSupervisor` only when gateway ingress is explicitly enabled with `config :lemon_gateway, gateway_ingress_enabled: true`. Telegram, Discord, and XMTP are owned by the `lemon_channels` sibling app. Voice and SMS are not registry transports; they are dedicated Twilio support services included in the same explicit ingress startup.
+
+Webhook, SMS, and voice are gateway-owned by design, not pending migration: `LemonChannels.Plugin.deliver/1` is fire-and-forget, so it cannot serve webhook's synchronous response, SMS has no reply path at all, and voice needs a live bidirectional session. Email is the one surface slated to move to `lemon_channels`. See `docs/platform/transport-unification.md`.
 
 ## Module Inventory
 
@@ -133,7 +135,7 @@ Gateway transports implement the `LemonGateway.Transport` behaviour (`id/0`, `st
 |--------|------|---------|
 | `LemonGateway` | `lemon_gateway.ex` | Public API entry point (`submit/1` delegates to `submit_execution/1`) |
 | `LemonGateway.Application` | `application.ex` | Execution runtime supervision tree with optional health and explicit legacy ingress children |
-| `LemonGateway.LegacyIngressSupervisor` | `legacy_ingress_supervisor.ex` | Transitional supervisor for gateway-native transport, command, SMS, and voice startup |
+| `LemonGateway.IngressSupervisor` | `ingress_supervisor.ex` | Supervisor for gateway-owned transport, command, SMS, and voice startup |
 | `LemonGateway.Runtime` | `runtime.ex` | Execution submission and cancellation API |
 | `LemonGateway.Config` | `config.ex` | TOML-backed runtime configuration GenServer |
 | `LemonGateway.ConfigLoader` | `config_loader.ex` | Loads and parses TOML config into typed structs |
@@ -366,7 +368,7 @@ Configuration loads from `~/.lemon/config.toml` (the `[gateway]` section) via `L
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `legacy_ingress_enabled` | `false` | Start transitional gateway-native transports, command registry, SMS inbox/webhook server, and voice supervisors. Default gateway startup is execution-only. |
+| `gateway_ingress_enabled` | `false` | Start gateway-owned transports, command registry, SMS inbox/webhook server, and voice supervisors. Default gateway startup is execution-only. |
 
 ### Transport Enable Flags
 

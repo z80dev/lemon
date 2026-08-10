@@ -5,8 +5,9 @@ defmodule LemonGateway.Application do
   Starts the execution supervision tree: configuration, engine registries,
   schedulers, run supervisors, and the health check server.
 
-  Legacy gateway ingress is transitional and only starts when
-  `:legacy_ingress_enabled` is set for `:lemon_gateway`.
+  Gateway-owned ingress (transport, command, SMS, voice) is off by default and
+  starts only when `:gateway_ingress_enabled` is set for `:lemon_gateway`. See
+  `LemonGateway.IngressSupervisor`.
   """
 
   use Application
@@ -27,7 +28,15 @@ defmodule LemonGateway.Application do
         # lemon_channels is started explicitly by the top-level runtime app (or by
         # starting :lemon_control_plane / lemon_channels directly). LemonGateway
         # does not attempt to orchestrate startup of sibling applications.
-      ] ++ maybe_health_server_child() ++ maybe_legacy_ingress_children()
+      ] ++ maybe_health_server_child() ++ maybe_gateway_ingress_children()
+
+    # Channels and the control plane ask core for engine/transport facts rather
+    # than reaching into this app; register ourselves as the implementation.
+    LemonCore.EngineInfoBridge.configure(
+      engine_registry: LemonGateway.EngineRegistry,
+      transport_registry: LemonGateway.TransportRegistry,
+      gateway_config: LemonGateway.Config
+    )
 
     # See https://hexdocs.pm/elixir/Supervisor.html
     # for other strategies and supported options
@@ -60,16 +69,16 @@ defmodule LemonGateway.Application do
     Application.get_env(:lemon_gateway, :health_enabled, true)
   end
 
-  defp maybe_legacy_ingress_children do
-    if legacy_ingress_enabled?() do
-      [LemonGateway.LegacyIngressSupervisor]
+  defp maybe_gateway_ingress_children do
+    if gateway_ingress_enabled?() do
+      [LemonGateway.IngressSupervisor]
     else
       []
     end
   end
 
-  defp legacy_ingress_enabled? do
-    Application.get_env(:lemon_gateway, :legacy_ingress_enabled, false)
+  defp gateway_ingress_enabled? do
+    Application.get_env(:lemon_gateway, :gateway_ingress_enabled, false)
   end
 
   defp default_health_port do

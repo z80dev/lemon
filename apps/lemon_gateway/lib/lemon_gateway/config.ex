@@ -33,6 +33,17 @@ defmodule LemonGateway.Config do
     GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
   end
 
+  @doc """
+  A full-replacement config map held in app env, if one is set.
+
+  Embedders and tests can put a complete config under
+  `config :lemon_gateway, LemonGateway.Config, %{...}` to bypass the canonical
+  loader. Exposed for `LemonCore.EngineInfoBridge`, so callers outside this app
+  read it through the bridge instead of reaching into our app env.
+  """
+  @spec replacement_config() :: map() | keyword() | nil
+  def replacement_config, do: Application.get_env(:lemon_gateway, __MODULE__)
+
   @doc "Returns the full configuration map."
   @spec get() :: map()
   def get, do: GenServer.call(__MODULE__, :get)

@@ -1,10 +1,20 @@
-defmodule LemonGateway.LegacyIngressSupervisor do
+defmodule LemonGateway.IngressSupervisor do
   @moduledoc """
-  Transitional supervisor for gateway-native ingress children.
+  Supervisor for gateway-owned ingress children.
 
-  Default `LemonGateway.Application` startup is execution-only. This supervisor
-  preserves legacy transport, command, SMS, and voice startup when explicitly
-  enabled through `:legacy_ingress_enabled`.
+  Default `LemonGateway.Application` startup is execution-only; this supervisor
+  starts transport, command, SMS, and voice children only when
+  `:gateway_ingress_enabled` is set.
+
+  These surfaces are gateway-owned **by design**, not pending migration. SMS is
+  an OTP-code inbox exposed as agent tools with no reply path; webhook is a
+  synchronous automation trigger that must answer in the request cycle that
+  called it; voice holds a live bidirectional media session. None of the three
+  fit `LemonChannels.Plugin`, whose `deliver/1` is fire-and-forget. Email is the
+  one surface slated to move to `lemon_channels`.
+
+  See `docs/platform/transport-unification.md` for the disposition of each
+  surface and the plugin-contract gaps behind it.
   """
 
   use Supervisor

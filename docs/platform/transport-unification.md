@@ -211,6 +211,13 @@ overlaps **2.5** (bridge pattern). It is not blocked on transport unification. M
 
 ## 7. What 2.4 should actually deliver
 
+> **Status 2026-08-10.** D2 amended in the plan of record; 2.4 rescoped to email-only.
+> **A1 resolved:** (b) accepted — webhook/SMS/voice are permanent gateway-owned ingress;
+> (a) Farcaster usage escalated to the user, so farcaster is **keep-but-frozen** (no port, no
+> delete) until answered. **A2, A3 and B1 are done** (see the table). B2/B3 await the go-ahead.
+> C2/D1/D2' were re-assigned: chat_state became its own task, and transports.status,
+> capability delegation and the telegram surfaces went to 2.5.
+
 Given §1–§6, I recommend re-scoping 2.4 from "port five, delete a behaviour" to
 **"establish the boundary, then port the one that fits."**
 
@@ -218,10 +225,10 @@ Given §1–§6, I recommend re-scoping 2.4 from "port five, delete a behaviour"
 
 | # | Item | Size | Collides with 2.3? |
 |---|---|---|---|
-| **A1** | **Decision checkpoint (no code).** Confirm: (a) is Farcaster used by anyone? (b) accept SMS + webhook + voice as permanent gateway-owned ingress. Everything below depends on (b). | S | No |
-| **A2** | Correct the "transitional legacy ingress" language in `docs/architecture_boundaries.md:58`, `apps/lemon_gateway/README.md:126,369`, `apps/lemon_gateway/AGENTS.md:3,25` to describe the real end state. Amend **D2** in `platform-split.md` §4 and the 5.1k LOC figure in §3/E3. | S | No |
-| **A3** | Rename/re-scope `:legacy_ingress_enabled` — it gates surfaces that are staying by design, so "legacy" is misleading. Suggest `:gateway_ingress_enabled`. | S | No |
-| **B1** | **Characterization tests before any move**: `email/outbound.ex` (715 LOC, 0 tests). Also worth doing regardless of this migration: webhook's `Idempotency`/`SignatureValidation`/`Submission`, voice's `DeepgramClient`/`RecordingDownloader`/`RecordingManager`. | M | No |
+| **A1** ✅ | **Decision checkpoint (no code).** Confirm: (a) is Farcaster used by anyone? (b) accept SMS + webhook + voice as permanent gateway-owned ingress. Everything below depends on (b). | S | No |
+| **A2** ✅ | Correct the "transitional legacy ingress" language in `docs/architecture_boundaries.md:58`, `apps/lemon_gateway/README.md:126,369`, `apps/lemon_gateway/AGENTS.md:3,25` to describe the real end state. Amend **D2** in `platform-split.md` §4 and the 5.1k LOC figure in §3/E3. | S | No |
+| **A3** ✅ | Rename/re-scope `:legacy_ingress_enabled` — it gates surfaces that are staying by design, so "legacy" is misleading. Suggest `:gateway_ingress_enabled`. | S | No |
+| **B1** ✅ | **Characterization tests before any move**: `email/outbound.ex` (715 LOC, 0 tests). Also worth doing regardless of this migration: webhook's `Idempotency`/`SignatureValidation`/`Submission`, voice's `DeepgramClient`/`RecordingDownloader`/`RecordingManager`. | M | No |
 | **B2** | **Inbound HTTP hosting in `lemon_channels`**: add `plug` + `bandit` deps and a small `LemonChannels.InboundHttp` supervisor/router shell. Own PR — this is the "can channels host HTTP at all" risk, validated in isolation. | M | **YES** — `lemon_channels/mix.exs` + application supervision tree; 2.3 is editing adapter registration/config/capabilities. Sequence after 2.3 lands. |
 | **B3** | **Port email** to `LemonChannels.Adapters.Email` on top of B2: inbound, then outbound, then cutover. Add `email` to `TransportRegistry`'s `@channels_owned_transport_ids` (the mechanism Telegram/Discord/WhatsApp already used). Delete `gateway/transports/email/`. | L | **YES** — new adapter under `lemon_channels/adapters/`, plus adapter registration. Strictly after 2.3. |
 | **C1** | Farcaster: execute A1(a) — delete, or formally document as permanent. | S | No |

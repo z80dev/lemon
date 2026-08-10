@@ -1,6 +1,6 @@
 # LemonGateway AGENTS.md
 
-Gateway execution layer for the Lemon AI system. Handles engine lifecycle, execution-slot scheduling, and real-time run events on the bus. Gateway-native transport, SMS, voice, and command startup is transitional legacy ingress and only starts when `:legacy_ingress_enabled` is set for `:lemon_gateway`.
+Gateway execution layer for the Lemon AI system. Handles engine lifecycle, execution-slot scheduling, and real-time run events on the bus. Gateway-owned transport, SMS, voice, and command startup is off by default and only starts when `:gateway_ingress_enabled` is set for `:lemon_gateway`. These surfaces are gateway-owned by design, not pending migration — see `docs/platform/transport-unification.md`.
 
 ## Quick Orientation
 
@@ -22,7 +22,7 @@ The old `LemonGateway.Runtime.submit/1` compatibility path is gone; do not reint
 |                  Channel Adapters / Gateway Ingress                    |
 |  Telegram (lemon_channels)  Discord (lemon_channels)  XMTP (lemon_ch) |
 |  Email / Farcaster / Webhook / SMS / Voice legacy ingress               |
-|  (explicit `:legacy_ingress_enabled` gateway startup only)              |
+|  (explicit `:gateway_ingress_enabled` gateway startup only)             |
 +-------------------------------------+---------------------------------+
                                       |
                 RunRequest via LemonCore.RouterBridge.submit_run/1
@@ -118,7 +118,7 @@ Gateway config comes from the canonical TOML `[gateway]` section only, via `Lemo
 | File | Module | Notes |
 |------|--------|-------|
 | `lib/lemon_gateway/application.ex` | `Application` | OTP supervision tree: execution runtime by default, optional health server, explicit legacy ingress children |
-| `lib/lemon_gateway/legacy_ingress_supervisor.ex` | `LegacyIngressSupervisor` | Transitional supervisor for gateway-native transport, command, SMS, and voice startup |
+| `lib/lemon_gateway/ingress_supervisor.ex` | `IngressSupervisor` | Supervisor for gateway-owned transport, command, SMS, and voice startup |
 | `lib/lemon_gateway/run_supervisor.ex` | `RunSupervisor` | DynamicSupervisor for Run processes (temporary restart strategy) |
 | `lib/lemon_gateway/thread_registry.ex` | `ThreadRegistry` | Unique-key Registry wrapper for ThreadWorker lookup by thread_key |
 | `lib/lemon_gateway/thread_worker_supervisor.ex` | `ThreadWorkerSupervisor` | DynamicSupervisor for ThreadWorker processes |

@@ -27,7 +27,7 @@ defmodule LemonGateway.ApplicationTest do
     Elixir.LemonGateway.Scheduler
   ]
 
-  @legacy_ingress_children [
+  @gateway_ingress_children [
     Elixir.LemonGateway.TransportRegistry,
     Elixir.LemonGateway.TransportSupervisor,
     Elixir.LemonGateway.CommandRegistry,
@@ -75,7 +75,7 @@ defmodule LemonGateway.ApplicationTest do
     Application.delete_env(:lemon_gateway, :transports)
     Application.delete_env(:lemon_gateway, :commands)
     Application.delete_env(:lemon_gateway, :config_path)
-    Application.delete_env(:lemon_gateway, :legacy_ingress_enabled)
+    Application.delete_env(:lemon_gateway, :gateway_ingress_enabled)
     Application.put_env(:lemon_core, LemonCore.Store, @store_config)
   end
 
@@ -90,8 +90,8 @@ defmodule LemonGateway.ApplicationTest do
       end
 
     children =
-      if Application.get_env(:lemon_gateway, :legacy_ingress_enabled, false) do
-        children ++ [Elixir.LemonGateway.LegacyIngressSupervisor]
+      if Application.get_env(:lemon_gateway, :gateway_ingress_enabled, false) do
+        children ++ [Elixir.LemonGateway.IngressSupervisor]
       else
         children
       end
@@ -253,25 +253,25 @@ defmodule LemonGateway.ApplicationTest do
       children = Supervisor.which_children(Elixir.LemonGateway.Supervisor)
       child_ids = Enum.map(children, fn {id, _pid, _type, _modules} -> id end)
 
-      for child <- @legacy_ingress_children do
+      for child <- @gateway_ingress_children do
         refute child in child_ids
       end
     end
 
     test "legacy ingress children start when explicitly enabled" do
-      Application.put_env(:lemon_gateway, :legacy_ingress_enabled, true)
+      Application.put_env(:lemon_gateway, :gateway_ingress_enabled, true)
 
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
       children = Supervisor.which_children(Elixir.LemonGateway.Supervisor)
       child_ids = Enum.map(children, fn {id, _pid, _type, _modules} -> id end)
 
-      assert Elixir.LemonGateway.LegacyIngressSupervisor in child_ids
+      assert Elixir.LemonGateway.IngressSupervisor in child_ids
 
-      children = Supervisor.which_children(Elixir.LemonGateway.LegacyIngressSupervisor)
+      children = Supervisor.which_children(Elixir.LemonGateway.IngressSupervisor)
       child_ids = Enum.map(children, fn {id, _pid, _type, _modules} -> id end)
 
-      for child <- @legacy_ingress_children do
+      for child <- @gateway_ingress_children do
         assert child in child_ids
       end
     end
@@ -322,7 +322,7 @@ defmodule LemonGateway.ApplicationTest do
     end
 
     test "TransportRegistry is available when legacy ingress is enabled" do
-      Application.put_env(:lemon_gateway, :legacy_ingress_enabled, true)
+      Application.put_env(:lemon_gateway, :gateway_ingress_enabled, true)
 
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
@@ -332,7 +332,7 @@ defmodule LemonGateway.ApplicationTest do
     end
 
     test "CommandRegistry is available when legacy ingress is enabled" do
-      Application.put_env(:lemon_gateway, :legacy_ingress_enabled, true)
+      Application.put_env(:lemon_gateway, :gateway_ingress_enabled, true)
 
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
@@ -524,7 +524,7 @@ defmodule LemonGateway.ApplicationTest do
     end
 
     test "enable_telegram: false disables telegram transport in TransportRegistry" do
-      Application.put_env(:lemon_gateway, :legacy_ingress_enabled, true)
+      Application.put_env(:lemon_gateway, :gateway_ingress_enabled, true)
 
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
         max_concurrent_runs: 1,
@@ -576,7 +576,7 @@ defmodule LemonGateway.ApplicationTest do
     end
 
     test "empty commands list is handled" do
-      Application.put_env(:lemon_gateway, :legacy_ingress_enabled, true)
+      Application.put_env(:lemon_gateway, :gateway_ingress_enabled, true)
 
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
         max_concurrent_runs: 1,
@@ -857,7 +857,7 @@ defmodule LemonGateway.ApplicationTest do
         def handle(_args, _job, _meta), do: {:ok, "help"}
       end
 
-      Application.put_env(:lemon_gateway, :legacy_ingress_enabled, true)
+      Application.put_env(:lemon_gateway, :gateway_ingress_enabled, true)
 
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
         max_concurrent_runs: 1,
@@ -959,7 +959,7 @@ defmodule LemonGateway.ApplicationTest do
     end
 
     test "TransportRegistry process is registered and responding when legacy ingress is enabled" do
-      Application.put_env(:lemon_gateway, :legacy_ingress_enabled, true)
+      Application.put_env(:lemon_gateway, :gateway_ingress_enabled, true)
 
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
@@ -972,7 +972,7 @@ defmodule LemonGateway.ApplicationTest do
     end
 
     test "CommandRegistry process is registered and responding when legacy ingress is enabled" do
-      Application.put_env(:lemon_gateway, :legacy_ingress_enabled, true)
+      Application.put_env(:lemon_gateway, :gateway_ingress_enabled, true)
 
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
@@ -1050,7 +1050,7 @@ defmodule LemonGateway.ApplicationTest do
     end
 
     test "TransportSupervisor is registered when legacy ingress is enabled" do
-      Application.put_env(:lemon_gateway, :legacy_ingress_enabled, true)
+      Application.put_env(:lemon_gateway, :gateway_ingress_enabled, true)
 
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
