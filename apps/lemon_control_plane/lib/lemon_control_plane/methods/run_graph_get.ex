@@ -13,6 +13,8 @@ defmodule LemonControlPlane.Methods.RunGraphGet do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.AgentRuntime
+
   @default_max_depth 10
   @max_max_depth 20
   @default_child_lookup_limit 200
@@ -349,14 +351,10 @@ defmodule LemonControlPlane.Methods.RunGraphGet do
   defp store_available?, do: is_pid(Process.whereis(LemonCore.Store))
 
   defp fetch_graph_record(run_id) do
-    case CodingAgent.RunGraph.get(run_id) do
+    case AgentRuntime.call(:run_graph, [run_id], :unavailable) do
       {:ok, record} when is_map(record) -> record
       _ -> %{}
     end
-  rescue
-    _ -> %{}
-  catch
-    :exit, _ -> %{}
   end
 
   defp fetch_store_record(run_id) do

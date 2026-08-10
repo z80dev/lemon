@@ -7,6 +7,8 @@ defmodule LemonControlPlane.Methods.TasksActiveList do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.AgentRuntime
+
   @default_limit 100
   @max_limit 200
   @default_event_limit 100
@@ -89,28 +91,20 @@ defmodule LemonControlPlane.Methods.TasksActiveList do
   end
 
   defp fetch_active_tasks(run_id, agent_id, limit, include_events, include_record, event_limit) do
-    if Code.ensure_loaded?(CodingAgent.TaskStore) do
-      CodingAgent.TaskStore.list(:all)
-      |> Enum.map(fn {task_id, _record} ->
-        task_from_store(task_id, include_events, include_record, event_limit)
-      end)
-      |> Enum.reject(&is_nil/1)
-      |> Enum.filter(&active_status?/1)
-      |> Enum.filter(&filter_by_run(&1, run_id))
-      |> Enum.filter(&filter_by_agent(&1, agent_id))
-      |> Enum.sort_by(&task_sort_key/1, :desc)
-      |> Enum.take(limit)
-    else
-      []
-    end
-  rescue
-    _ -> []
-  catch
-    :exit, _ -> []
+    AgentRuntime.call(:list_tasks, [], [])
+    |> Enum.map(fn {task_id, _record} ->
+      task_from_store(task_id, include_events, include_record, event_limit)
+    end)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.filter(&active_status?/1)
+    |> Enum.filter(&filter_by_run(&1, run_id))
+    |> Enum.filter(&filter_by_agent(&1, agent_id))
+    |> Enum.sort_by(&task_sort_key/1, :desc)
+    |> Enum.take(limit)
   end
 
   defp task_from_store(task_id, include_events, include_record, event_limit) do
-    case CodingAgent.TaskStore.get(task_id) do
+    case AgentRuntime.call(:get_task, [task_id], :unavailable) do
       {:ok, record, events} ->
         status = derive_task_status(record)
         engine = get_map(record, :engine) || infer_engine(record, events)

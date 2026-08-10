@@ -48,6 +48,7 @@ defmodule CodingAgent.Application do
     case Supervisor.start_link(children, opts) do
       {:ok, _supervisor} = ok ->
         register_gateway_engine()
+        register_control_plane_provider()
         maybe_start_primary_session()
         ok
 
@@ -67,6 +68,26 @@ defmodule CodingAgent.Application do
 
         {:error, reason} ->
           Logger.debug("lemon gateway engine not registered: #{inspect(reason)}")
+          :ok
+      end
+    else
+      :ok
+    end
+  end
+
+  # The control plane introspects this agent through a registered provider. The
+  # call is indirect (module in a variable) so this app keeps no compile-time
+  # reference to the reference runtime and stays extractable without it.
+  defp register_control_plane_provider do
+    runtime = Module.concat(["LemonControlPlane", "AgentRuntime"])
+
+    if Code.ensure_loaded?(runtime) and function_exported?(runtime, :register, 1) do
+      case apply(runtime, :register, [CodingAgent.ControlPlaneProvider]) do
+        :ok ->
+          :ok
+
+        other ->
+          Logger.debug("control plane provider not registered: #{inspect(other)}")
           :ok
       end
     else

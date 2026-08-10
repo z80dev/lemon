@@ -221,7 +221,7 @@ Supported types: `:string`, `:integer`, `:boolean`, `:map`, `:list`, `:any`.
 | `runs.recent.list` | read | Recent completed/errored/aborted runs plus status/duration summary and cleanup flags |
 | `run.graph.get` | read | Parent/child run graph with optional per-node run-store records/events and introspection plus return-state summary and sensitive-internal redaction |
 | `run.introspection.list` | read | Introspection timeline for one run plus raw-internal return-state summary and sensitive payload redaction |
-| `tasks.active.list` | read | Active task/subagent records from `CodingAgent.TaskStore` plus summary and include/cleanup flags |
+| `tasks.active.list` | read | Active task/subagent records from the registered agent runtime plus summary and include/cleanup flags |
 | `tasks.recent.list` | read | Recent terminal task records with status/error classification plus summary and include/cleanup flags |
 
 `tasks.active.list` / `tasks.recent.list` infer missing `engine` from task record metadata and task event payloads (for example `details.engine`) when the persisted task record has no explicit engine field.
@@ -760,7 +760,7 @@ LemonControlPlane.EventBridge.subscribe_run("some-run-id")
 | `lemon_channels` | `LemonChannels.Outbox` for `send` method; channel status queries |
 | `lemon_skills` | Skill status, installation, and binary path queries |
 | `lemon_automation` | `LemonAutomation.CronManager` for cron CRUD; heartbeat management |
-| `coding_agent` | Compile-time only (not started at runtime); `CodingAgent.TaskStore` for task queries |
+| _(none)_ | The agent is reached through `LemonControlPlane.AgentRuntime`; an agent registers a provider at boot. No compile-time dependency. |
 | `ai` | AI model listing and configuration |
 
 ## Key Dependencies

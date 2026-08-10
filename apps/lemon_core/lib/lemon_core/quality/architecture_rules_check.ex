@@ -581,73 +581,7 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
   # violation pass — invert the dependency instead.
   @grandfathered [
     # Phase 2.2 — control_plane ⊘ coding_agent (ops methods self-register).
-    %{
-      app: :lemon_control_plane,
-      pattern: "CodingAgent",
-      file: "apps/lemon_control_plane/lib/lemon_control_plane/methods/agent_progress.ex"
-    },
-    %{
-      app: :lemon_control_plane,
-      pattern: "CodingAgent",
-      file: "apps/lemon_control_plane/lib/lemon_control_plane/methods/extensions_status.ex"
-    },
-    %{
-      app: :lemon_control_plane,
-      pattern: "CodingAgent",
-      file: "apps/lemon_control_plane/lib/lemon_control_plane/methods/run_graph_get.ex"
-    },
-    %{
-      app: :lemon_control_plane,
-      pattern: "CodingAgent",
-      file: "apps/lemon_control_plane/lib/lemon_control_plane/methods/sessions_active_list.ex"
-    },
-    %{
-      app: :lemon_control_plane,
-      pattern: "CodingAgent",
-      file: "apps/lemon_control_plane/lib/lemon_control_plane/methods/sessions_compact.ex"
-    },
-    %{
-      app: :lemon_control_plane,
-      pattern: "CodingAgent",
-      file: "apps/lemon_control_plane/lib/lemon_control_plane/methods/skills_status.ex"
-    },
-    %{
-      app: :lemon_control_plane,
-      pattern: "CodingAgent",
-      file: "apps/lemon_control_plane/lib/lemon_control_plane/methods/tasks_active_list.ex"
-    },
-    %{
-      app: :lemon_control_plane,
-      pattern: "CodingAgent",
-      file: "apps/lemon_control_plane/lib/lemon_control_plane/methods/tasks_recent_list.ex"
-    },
 
-    # Phase 2.3 — channels/skills ⊘ x_api (moves to the x_api satellite).
-    %{
-      app: :lemon_channels,
-      pattern: "XApi",
-      file: "apps/lemon_channels/lib/lemon_channels/adapters/x_api.ex"
-    },
-    %{
-      app: :lemon_channels,
-      pattern: "XApi",
-      file: "apps/lemon_channels/lib/lemon_channels/adapters/x_api/gateway_methods.ex"
-    },
-    %{
-      app: :lemon_skills,
-      pattern: "XApi",
-      file: "apps/lemon_skills/lib/lemon_skills/tools/get_x_mentions.ex"
-    },
-    %{
-      app: :lemon_skills,
-      pattern: "XApi",
-      file: "apps/lemon_skills/lib/lemon_skills/tools/post_to_x.ex"
-    },
-    %{
-      app: :lemon_skills,
-      pattern: "XApi",
-      file: "apps/lemon_skills/lib/lemon_skills/tools/x_search.ex"
-    },
 
     # Phase 2.5 — dynamic-atom gateway back-refs replaced by an EngineInfoBridge.
     %{

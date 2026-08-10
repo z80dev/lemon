@@ -7,6 +7,8 @@ defmodule LemonControlPlane.Methods.SessionsCompact do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.AgentRuntime
+
   @impl true
   def name, do: "sessions.compact"
 
@@ -41,26 +43,18 @@ defmodule LemonControlPlane.Methods.SessionsCompact do
     force = params["force"] || false
     summary = params["summary"]
 
-    # Try to find the active session and compact it
-    if Code.ensure_loaded?(CodingAgent.SessionRegistry) do
-      case Registry.lookup(CodingAgent.SessionRegistry, session_key) do
-        [{pid, _}] ->
-          opts = [force: force]
-          opts = if summary, do: Keyword.put(opts, :summary, summary), else: opts
+    opts = [force: force]
+    opts = if summary, do: Keyword.put(opts, :summary, summary), else: opts
 
-          case CodingAgent.Session.compact(pid, opts) do
-            :ok -> {:ok, %{}}
-            {:error, reason} -> {:error, reason}
-          end
-
-        [] ->
-          {:error, :session_not_found}
-      end
-    else
-      {:error, :session_registry_not_available}
+    case AgentRuntime.call(
+           :compact_session,
+           [session_key, opts],
+           {:error, :session_registry_not_available}
+         ) do
+      :ok -> {:ok, %{}}
+      {:error, reason} -> {:error, reason}
+      other -> {:error, other}
     end
-  rescue
-    e -> {:error, Exception.message(e)}
   end
 
   defp summary(session_key, result, params) do

@@ -7,6 +7,8 @@ defmodule LemonControlPlane.Methods.SessionsActiveList do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.AgentRuntime
+
   alias LemonCore.Introspection
 
   @impl true
@@ -129,18 +131,18 @@ defmodule LemonControlPlane.Methods.SessionsActiveList do
   defp harness_snapshot(_), do: nil
 
   defp todo_progress(session_key) do
-    if Code.ensure_loaded?(CodingAgent.Tools.TodoStore) do
-      progress = CodingAgent.Tools.TodoStore.get_progress(session_key)
-      actionable_count = session_key |> CodingAgent.Tools.TodoStore.get_actionable() |> length()
+    case AgentRuntime.call(:todo_progress, [session_key], nil) do
+      progress when is_map(progress) ->
+        actionable_count = Map.get(progress, :actionable_count, 0)
 
-      progress
-      |> stringify_map_keys()
-      |> Map.put("actionableCount", actionable_count)
+        progress
+        |> Map.delete(:actionable_count)
+        |> stringify_map_keys()
+        |> Map.put("actionableCount", actionable_count)
+
+      _ ->
+        nil
     end
-  rescue
-    _ -> nil
-  catch
-    :exit, _ -> nil
   end
 
   defp checkpoint_progress(session_key) do
@@ -154,9 +156,8 @@ defmodule LemonControlPlane.Methods.SessionsActiveList do
   end
 
   defp requirements_progress(session_key) do
-    with true <- Code.ensure_loaded?(CodingAgent.Tools.FeatureRequirements),
-         {:ok, cwd} <- latest_session_cwd(session_key),
-         {:ok, progress} <- CodingAgent.Tools.FeatureRequirements.get_progress(cwd) do
+    with {:ok, cwd} <- latest_session_cwd(session_key),
+         {:ok, progress} <- AgentRuntime.call(:feature_progress, [cwd], :unavailable) do
       progress
       |> stringify_map_keys()
       |> Map.put("cwd", cwd)

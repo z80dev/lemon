@@ -8,7 +8,7 @@ defmodule LemonControlPlane.Methods.AgentProgress do
 
   @behaviour LemonControlPlane.Method
 
-  alias CodingAgent.Progress
+  alias LemonControlPlane.AgentRuntime
   alias LemonCore.Introspection
 
   @impl true
@@ -24,7 +24,7 @@ defmodule LemonControlPlane.Methods.AgentProgress do
     session_id = get_param(params, "sessionId")
     cwd = get_param(params, "cwd") |> normalize_cwd()
 
-    snapshot = Progress.snapshot(session_id, cwd)
+    snapshot = AgentRuntime.call(:progress_snapshot, [session_id, cwd], %{})
 
     Introspection.record(
       :agent_progress_snapshot,

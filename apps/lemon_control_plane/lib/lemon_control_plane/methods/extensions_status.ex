@@ -8,6 +8,8 @@ defmodule LemonControlPlane.Methods.ExtensionsStatus do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.AgentRuntime
+
   alias LemonCore.Doctor.ExtensionDiagnostics
 
   @impl true
@@ -23,15 +25,21 @@ defmodule LemonControlPlane.Methods.ExtensionsStatus do
     enabled? = extensions_enabled?(cwd)
     load_paths = if enabled?, do: paths, else: []
 
-    {:ok, extensions, load_errors, validation_errors} =
-      CodingAgent.Extensions.load_extensions_with_errors(load_paths)
+    {extensions, load_errors, validation_errors} =
+      case AgentRuntime.call(:load_extensions, [load_paths], :unavailable) do
+        {:ok, extensions, load_errors, validation_errors} ->
+          {extensions, load_errors, validation_errors}
 
-    provider_specs = CodingAgent.Extensions.get_providers(extensions)
+        _ ->
+          {[], [], []}
+      end
+
+    provider_specs = AgentRuntime.call(:extension_providers, [extensions], [])
 
     tool_conflicts =
-      CodingAgent.ToolRegistry.tool_conflict_report(cwd, extension_paths: load_paths)
+      AgentRuntime.call(:tool_conflicts, [cwd, [extension_paths: load_paths]], %{})
 
-    extension_info = CodingAgent.Extensions.get_info(extensions)
+    extension_info = AgentRuntime.call(:extension_info, [extensions], [])
     manifest_status = safe_manifest_status(cwd)
 
     payload = %{
@@ -189,10 +197,7 @@ defmodule LemonControlPlane.Methods.ExtensionsStatus do
   end
 
   defp default_extension_paths(cwd) do
-    [
-      CodingAgent.Config.extensions_dir(),
-      CodingAgent.Config.project_extensions_dir(cwd)
-    ]
+    AgentRuntime.call(:extension_dirs, [cwd], [])
   end
 
   defp expand_path(path, cwd) do
@@ -559,8 +564,7 @@ defmodule LemonControlPlane.Methods.ExtensionsStatus do
   defp wasm_host_status(_formatted, _manifest_count), do: "not_configured"
 
   defp wasm_supervisor_running? do
-    Code.ensure_loaded?(CodingAgent.Wasm.SidecarSupervisor) and
-      is_pid(Process.whereis(CodingAgent.Wasm.SidecarSupervisor))
+    AgentRuntime.call(:wasm_sidecar_running?, [], false) == true
   end
 
   defp manifest_only_host_runtime(manifest_count) do

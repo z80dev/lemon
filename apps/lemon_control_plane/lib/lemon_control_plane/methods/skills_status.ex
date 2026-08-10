@@ -7,6 +7,8 @@ defmodule LemonControlPlane.Methods.SkillsStatus do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.AgentRuntime
+
   @impl true
   def name, do: "skills.status"
 
@@ -37,30 +39,26 @@ defmodule LemonControlPlane.Methods.SkillsStatus do
   end
 
   defp get_skills_from_extensions(cwd) do
-    if Code.ensure_loaded?(CodingAgent.Extensions) do
-      paths = [
-        Path.join([cwd, ".lemon", "extensions"]),
-        Path.join([System.user_home(), ".lemon", "extensions"])
-      ]
+    paths = [
+      Path.join([cwd, ".lemon", "extensions"]),
+      Path.join([System.user_home(), ".lemon", "extensions"])
+    ]
 
-      {:ok, extensions, _errors, _validation} =
-        CodingAgent.Extensions.load_extensions_with_errors(paths)
+    case AgentRuntime.call(:load_extensions, [paths], :unavailable) do
+      {:ok, extensions, _errors, _validation} ->
+        Enum.map(extensions, fn ext_module ->
+          %{
+            "key" => to_string(ext_module),
+            "name" => extract_extension_name(ext_module),
+            "enabled" => true,
+            "source" => "extension",
+            "status" => %{"ready" => true}
+          }
+        end)
 
-      extensions
-      |> Enum.map(fn ext_module ->
-        %{
-          "key" => to_string(ext_module),
-          "name" => extract_extension_name(ext_module),
-          "enabled" => true,
-          "source" => "extension",
-          "status" => %{"ready" => true}
-        }
-      end)
-    else
-      []
+      _ ->
+        []
     end
-  rescue
-    _ -> []
   end
 
   defp format_skill(skill) when is_struct(skill) do
