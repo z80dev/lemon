@@ -1,7 +1,7 @@
-defmodule LemonCore.GoalStoreTest do
+defmodule AgentCore.Workspace.GoalStoreTest do
   use ExUnit.Case, async: false
 
-  alias LemonCore.GoalStore
+  alias AgentCore.Workspace.GoalStore
 
   setup do
     session_key = "goal-store-test-#{System.unique_integer([:positive])}"

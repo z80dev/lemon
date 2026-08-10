@@ -23,7 +23,7 @@ defmodule LemonControlPlane.Methods.KanbanBoardCreate do
         meta: KanbanFormat.param(params, "meta")
       ]
 
-      case LemonCore.KanbanStore.create_board(name, opts) do
+      case AgentCore.Workspace.KanbanStore.create_board(name, opts) do
         {:ok, board} -> {:ok, KanbanFormat.board_response(name(), board)}
         {:error, reason} -> {:error, {:invalid_request, inspect(reason), nil}}
       end

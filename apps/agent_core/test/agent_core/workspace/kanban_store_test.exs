@@ -1,7 +1,7 @@
-defmodule LemonCore.KanbanStoreTest do
+defmodule AgentCore.Workspace.KanbanStoreTest do
   use ExUnit.Case, async: false
 
-  alias LemonCore.KanbanStore
+  alias AgentCore.Workspace.KanbanStore
 
   setup do
     on_exit(fn ->

@@ -41,7 +41,7 @@ defmodule LemonChannels.GoalStatusMessage do
 
   @spec status_text(binary()) :: String.t()
   def status_text(session_key) when is_binary(session_key) do
-    case LemonCore.GoalStore.get(session_key) do
+    case AgentCore.Workspace.GoalStore.get(session_key) do
       %{} = goal when map_size(goal) == 0 ->
         Enum.join(
           [
@@ -60,7 +60,7 @@ defmodule LemonChannels.GoalStatusMessage do
   @spec set_text(binary(), binary(), keyword()) :: String.t()
   def set_text(session_key, objective, opts \\ [])
       when is_binary(session_key) and is_binary(objective) do
-    case LemonCore.GoalStore.set(session_key, objective, opts) do
+    case AgentCore.Workspace.GoalStore.set(session_key, objective, opts) do
       {:ok, goal} ->
         Enum.join(
           [
@@ -85,7 +85,7 @@ defmodule LemonChannels.GoalStatusMessage do
 
   @spec clear_text(binary(), keyword()) :: String.t()
   def clear_text(session_key, opts \\ []) when is_binary(session_key) do
-    case LemonCore.GoalStore.clear(session_key, opts) do
+    case AgentCore.Workspace.GoalStore.clear(session_key, opts) do
       :ok -> "Goal cleared."
       {:error, reason} -> "Goal clear failed: #{inspect(reason)}"
     end
@@ -93,7 +93,7 @@ defmodule LemonChannels.GoalStatusMessage do
 
   @spec pause_text(binary(), keyword()) :: String.t()
   def pause_text(session_key, opts \\ []) when is_binary(session_key) do
-    case LemonCore.GoalStore.pause(session_key, opts) do
+    case AgentCore.Workspace.GoalStore.pause(session_key, opts) do
       {:ok, goal} -> transition_text("Goal Paused", goal)
       {:error, :not_found} -> "No goal is set for this session."
       {:error, reason} -> "Goal pause failed: #{inspect(reason)}"
@@ -102,7 +102,7 @@ defmodule LemonChannels.GoalStatusMessage do
 
   @spec resume_text(binary(), keyword()) :: String.t()
   def resume_text(session_key, opts \\ []) when is_binary(session_key) do
-    case LemonCore.GoalStore.resume(session_key, opts) do
+    case AgentCore.Workspace.GoalStore.resume(session_key, opts) do
       {:ok, goal} -> transition_text("Goal Resumed", goal)
       {:error, :not_found} -> "No goal is set for this session."
       {:error, reason} -> "Goal resume failed: #{inspect(reason)}"

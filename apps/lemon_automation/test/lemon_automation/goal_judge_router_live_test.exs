@@ -4,7 +4,7 @@ defmodule LemonAutomation.GoalJudgeRouterLiveTest do
   @moduletag :integration
 
   alias LemonAutomation.GoalLoop
-  alias LemonCore.GoalStore
+  alias AgentCore.Workspace.GoalStore
 
   test "provider-backed router judge completes a persisted goal" do
     case live_config() do

@@ -1,4 +1,4 @@
-defmodule LemonCore.KanbanStore do
+defmodule AgentCore.Workspace.KanbanStore do
   @moduledoc """
   Durable BEAM-native kanban board state for multi-agent work.
   """

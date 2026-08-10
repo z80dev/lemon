@@ -1,4 +1,4 @@
-defmodule LemonCore.GoalStore do
+defmodule AgentCore.Workspace.GoalStore do
   @moduledoc """
   Durable user goal state keyed by session.
   """

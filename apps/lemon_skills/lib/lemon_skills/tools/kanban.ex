@@ -1,11 +1,11 @@
 defmodule LemonSkills.Tools.Kanban do
   @moduledoc """
-  Durable kanban board tool backed by LemonCore.KanbanStore.
+  Durable kanban board tool backed by AgentCore.Workspace.KanbanStore.
   """
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias Ai.Types.TextContent
-  alias LemonCore.KanbanStore
+  alias AgentCore.Workspace.KanbanStore
 
   @actions ~w(board_list board_create board_get task_list task_get task_create task_update task_comment)
 

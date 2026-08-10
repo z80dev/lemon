@@ -214,11 +214,29 @@ defmodule LemonCore.Doctor.SupportBundle do
   end
 
   defp goal_diagnostics(opts) do
-    LemonCore.GoalStore.diagnostics(limit: Keyword.get(opts, :goal_limit, 20))
+    workspace_diagnostics(:goal, limit: Keyword.get(opts, :goal_limit, 20))
+    |> Map.put_new(:cleanup, %{includes_objectives: false, includes_raw_session_ids: false})
   end
 
   defp kanban_diagnostics(opts) do
-    LemonCore.KanbanStore.diagnostics(limit: Keyword.get(opts, :kanban_limit, 20))
+    workspace_diagnostics(:kanban, limit: Keyword.get(opts, :kanban_limit, 20))
+    |> Map.put_new(:cleanup, %{
+      includes_titles: false,
+      includes_descriptions: false,
+      includes_comments: false,
+      includes_raw_session_ids: false
+    })
+  end
+
+  # The workspace stores live in the agent runtime, which core must not depend
+  # on; the reference runtime injects them via config.
+  defp workspace_diagnostics(kind, args) do
+    mod = Application.get_env(:lemon_core, :workspace_diagnostics, [])[kind]
+
+    probe(mod, :diagnostics, [args], %{
+      available: false,
+      error: "agent workspace runtime not available"
+    })
   end
 
   defp lsp_diagnostics do

@@ -4,7 +4,7 @@ defmodule LemonAutomation.KanbanDispatcherLiveTest do
   @moduletag :integration
 
   alias LemonAutomation.KanbanDispatcher
-  alias LemonCore.KanbanStore
+  alias AgentCore.Workspace.KanbanStore
 
   test "provider-backed dispatcher completes concurrent kanban work through real workers" do
     case live_config() do

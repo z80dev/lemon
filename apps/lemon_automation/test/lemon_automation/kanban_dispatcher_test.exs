@@ -2,7 +2,7 @@ defmodule LemonAutomation.KanbanDispatcherTest do
   use ExUnit.Case, async: false
 
   alias LemonAutomation.{KanbanDispatcher, KanbanRunWorker}
-  alias LemonCore.KanbanStore
+  alias AgentCore.Workspace.KanbanStore
 
   defmodule KanbanDispatcherPassingWorker do
     @moduledoc false

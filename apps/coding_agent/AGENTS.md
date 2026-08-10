@@ -150,7 +150,7 @@ orchestration, document open/change/close notifications, JSON-RPC request
 framing, and diagnostic notification counters.
 
 `kanban` is implemented in `LemonSkills.Tools` and is the model-facing durable board tool. It creates/lists boards,
-creates/lists/updates/comments tasks, and reads from `LemonCore.KanbanStore` so
+creates/lists/updates/comments tasks, and reads from `AgentCore.Workspace.KanbanStore` so
 multi-agent work can outlive one session. Kanban-dispatched worker runs block
 the `kanban` tool through tool policy to avoid recursive board management.
 

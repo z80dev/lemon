@@ -3,7 +3,7 @@ defmodule LemonAutomation.KanbanDispatcher do
 
   use GenServer
 
-  alias LemonCore.KanbanStore
+  alias AgentCore.Workspace.KanbanStore
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))

@@ -14,7 +14,7 @@ defmodule LemonControlPlane.Methods.GoalMethodsTest do
     GoalStatus
   }
 
-  alias LemonCore.GoalStore
+  alias AgentCore.Workspace.GoalStore
 
   @ctx %{conn_id: "goal-test", auth: %{role: :operator}}
 

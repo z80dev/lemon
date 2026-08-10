@@ -329,21 +329,21 @@ defmodule DebugAgentRPC do
         "set" ->
           objective = to_string(cmd["objective"] || "")
 
-          case LemonCore.GoalStore.set(session_id, objective, agent_id: "tui") do
+          case AgentCore.Workspace.GoalStore.set(session_id, objective, agent_id: "tui") do
             {:ok, goal} -> goal_transition_text("Goal Set", goal)
             {:error, :empty_objective} -> "Usage: /goal set <objective>"
             {:error, reason} -> "Goal update failed: #{inspect(reason)}"
           end
 
         "pause" ->
-          case LemonCore.GoalStore.pause(session_id) do
+          case AgentCore.Workspace.GoalStore.pause(session_id) do
             {:ok, goal} -> goal_transition_text("Goal Paused", goal)
             {:error, :not_found} -> "No goal is set for this session."
             {:error, reason} -> "Goal pause failed: #{inspect(reason)}"
           end
 
         "resume" ->
-          case LemonCore.GoalStore.resume(session_id) do
+          case AgentCore.Workspace.GoalStore.resume(session_id) do
             {:ok, goal} -> goal_transition_text("Goal Resumed", goal)
             {:error, :not_found} -> "No goal is set for this session."
             {:error, reason} -> "Goal resume failed: #{inspect(reason)}"
@@ -356,13 +356,13 @@ defmodule DebugAgentRPC do
           "Goal loop ticks require the Lemon control-plane WebSocket runtime."
 
         "clear" ->
-          case LemonCore.GoalStore.clear(session_id) do
+          case AgentCore.Workspace.GoalStore.clear(session_id) do
             :ok -> "Goal cleared."
             {:error, reason} -> "Goal clear failed: #{inspect(reason)}"
           end
 
         _ ->
-          case LemonCore.GoalStore.get(session_id) do
+          case AgentCore.Workspace.GoalStore.get(session_id) do
             %{} = goal when map_size(goal) == 0 -> "Goal Status\nState: none"
             goal -> goal_transition_text("Goal Status", goal)
           end

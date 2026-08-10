@@ -2,7 +2,7 @@ defmodule LemonAutomation.GoalContinuationTest do
   use ExUnit.Case, async: false
 
   alias LemonAutomation.GoalContinuation
-  alias LemonCore.GoalStore
+  alias AgentCore.Workspace.GoalStore
 
   defmodule GoalRouterOk do
     @moduledoc false

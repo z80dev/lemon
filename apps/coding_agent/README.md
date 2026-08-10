@@ -206,7 +206,7 @@ through `lsp.server.start`, `lsp.server.initialize`, `lsp.document.open`,
 `lsp.server.stop`.
 
 `kanban` is implemented in `LemonSkills.Tools` and exposes durable board and task operations backed by
-`LemonCore.KanbanStore`. It is the model-facing surface for multi-agent work
+`AgentCore.Workspace.KanbanStore`. It is the model-facing surface for multi-agent work
 that should outlive one session. Kanban-dispatched worker runs block the
 `kanban` tool so a leased task cannot recursively manage its own board.
 

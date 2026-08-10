@@ -7,7 +7,7 @@ defmodule LemonControlPlane.Methods.LastHeartbeat do
 
   @behaviour LemonControlPlane.Method
 
-  alias LemonCore.HeartbeatStore
+  alias AgentCore.Workspace.HeartbeatStore
 
   @impl true
   def name, do: "last-heartbeat"

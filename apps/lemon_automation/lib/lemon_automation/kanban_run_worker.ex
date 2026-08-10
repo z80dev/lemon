@@ -2,7 +2,8 @@ defmodule LemonAutomation.KanbanRunWorker do
   @moduledoc false
 
   alias LemonAutomation.{KanbanWorktree, RunCompletionWaiter}
-  alias LemonCore.{Bus, Id, KanbanStore, SessionKey}
+  alias AgentCore.Workspace.KanbanStore
+  alias LemonCore.{Bus, Id, SessionKey}
 
   @default_timeout_ms 300_000
 

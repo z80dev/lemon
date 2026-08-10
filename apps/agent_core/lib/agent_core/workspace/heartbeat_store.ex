@@ -1,4 +1,4 @@
-defmodule LemonCore.HeartbeatStore do
+defmodule AgentCore.Workspace.HeartbeatStore do
   @moduledoc """
   Typed wrapper for heartbeat configuration and last-result tables.
   """

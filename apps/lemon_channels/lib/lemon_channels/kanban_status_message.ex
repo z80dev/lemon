@@ -1,7 +1,7 @@
 defmodule LemonChannels.KanbanStatusMessage do
   @moduledoc false
 
-  alias LemonCore.KanbanStore
+  alias AgentCore.Workspace.KanbanStore
 
   @spec handle(binary() | nil, keyword()) :: String.t()
   def handle(args, opts \\ []) do

@@ -3,7 +3,7 @@ defmodule LemonSkills.Tools.KanbanTest do
 
   alias AgentCore.Types.AgentToolResult
   alias LemonSkills.Tools.Kanban
-  alias LemonCore.KanbanStore
+  alias AgentCore.Workspace.KanbanStore
 
   setup do
     on_exit(fn ->
