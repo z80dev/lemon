@@ -1,11 +1,11 @@
 defmodule LemonSkills.Synthesis.DraftGeneratorTest do
   use ExUnit.Case, async: true
 
-  alias LemonCore.MemoryDocument
+  alias LemonMemory.Document
   alias LemonSkills.Synthesis.DraftGenerator
 
   defp doc(overrides \\ []) do
-    %MemoryDocument{
+    %Document{
       doc_id: "doc-gen-1",
       run_id: "run-1",
       session_key: "s1",

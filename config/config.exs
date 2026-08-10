@@ -41,6 +41,17 @@ config :lemon_core, :workspace_diagnostics,
   goal: AgentCore.Workspace.GoalStore,
   kanban: AgentCore.Workspace.KanbanStore
 
+# Same idea for every diagnostic whose subject is owned by another app: the
+# doctor framework looks the module up instead of naming it.
+# See LemonCore.Doctor.RuntimeModules.
+config :lemon_core, :doctor_runtime,
+  memory_providers: LemonMemory.Providers,
+  media_jobs: LemonMedia.MediaJobs,
+  media_supervisor: LemonMedia.MediaJobSupervisor,
+  browser_artifacts: LemonBrowser.Artifacts,
+  browser_server: LemonBrowser.LocalServer,
+  lsp_server_manager: LemonLsp.ServerManager
+
 config :lemon_channels,
   adapters: [
     LemonChannels.Adapters.Telegram,
@@ -68,7 +79,7 @@ config :lemon_core, LemonCore.Store,
   backend_opts: [],
   finalize_run_hooks: [
     {LemonCore.RunHistoryStore, :handle_finalize_run},
-    {LemonCore.MemoryIngest, :handle_finalize_run}
+    {LemonMemory.Ingest, :handle_finalize_run}
   ],
   run_history_provider: LemonCore.RunHistoryStore
 

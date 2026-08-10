@@ -3,13 +3,13 @@ defmodule LemonRouter.RoutingFingerprintMismatchTest do
   Regression tests for C1: routing fingerprint mismatch between ingest (write)
   and orchestrator lookup (read) paths.
 
-  The bug: MemoryIngest wrote fingerprint keys that included the real toolset
+  The bug: Ingest wrote fingerprint keys that included the real toolset
   (e.g., "code|bash,read_file|/workspace|provider|model"), but RunOrchestrator
   looked up with an empty-toolset context_key ("code|-|/workspace").  The LIKE
   prefix never matched, so best_model_for_context always returned
   {:insufficient_data, 0}.
 
-  The fix: MemoryIngest strips toolset to [] before building the stored key,
+  The fix: Ingest strips toolset to [] before building the stored key,
   aligning write and read paths.
   """
 
@@ -17,7 +17,10 @@ defmodule LemonRouter.RoutingFingerprintMismatchTest do
 
   @moduletag :tmp_dir
 
-  alias LemonCore.{Bus, Event, MemoryIngest, MemoryStore, TaskFingerprint}
+  alias LemonCore.{Bus, Event}
+  alias LemonMemory.Ingest
+  alias LemonMemory.Store
+  alias LemonMemory.TaskFingerprint
   alias LemonRouter.RoutingFeedbackStore
 
   setup %{tmp_dir: tmp_dir} do
@@ -29,10 +32,10 @@ defmodule LemonRouter.RoutingFingerprintMismatchTest do
     {:ok, feedback_pid} =
       RoutingFeedbackStore.start_link(path: routing_dir, name: routing_name, min_sample_size: 1)
 
-    {:ok, memory_pid} = MemoryStore.start_link(path: memory_dir, name: memory_name)
+    {:ok, memory_pid} = Store.start_link(path: memory_dir, name: memory_name)
 
     {:ok, ingest_pid} =
-      GenServer.start_link(MemoryIngest,
+      GenServer.start_link(Ingest,
         config_loader: fn ->
           %{
             features: %LemonCore.Config.Features{
@@ -80,7 +83,7 @@ defmodule LemonRouter.RoutingFingerprintMismatchTest do
     {record, summary}
   end
 
-  test "MemoryIngest writes routing feedback that the router lookup can read", %{
+  test "Ingest writes routing feedback that the router lookup can read", %{
     feedback_pid: feedback_pid,
     ingest_pid: ingest_pid
   } do
@@ -88,7 +91,7 @@ defmodule LemonRouter.RoutingFingerprintMismatchTest do
     {record, summary} = sample_inputs()
 
     for idx <- 1..3 do
-      MemoryIngest.ingest(ingest_pid, "run_rfm_#{idx}", record, summary)
+      Ingest.ingest(ingest_pid, "run_rfm_#{idx}", record, summary)
       assert_receive %Event{type: :routing_feedback, payload: payload}
       assert payload.fingerprint_key =~ "code|-|/workspace|anthropic|claude-sonnet"
     end
@@ -113,8 +116,8 @@ defmodule LemonRouter.RoutingFingerprintMismatchTest do
   } do
     {record, summary} = sample_inputs()
 
-    # Pre-fix MemoryIngest wrote with full toolset in key
-    doc = LemonCore.MemoryDocument.from_run("run_rfm_pre_fix", record, summary)
+    # Pre-fix Ingest wrote with full toolset in key
+    doc = LemonMemory.Document.from_run("run_rfm_pre_fix", record, summary)
     ingest_fp = TaskFingerprint.from_document(doc)
     stored_key_with_toolset = TaskFingerprint.key(ingest_fp)
 

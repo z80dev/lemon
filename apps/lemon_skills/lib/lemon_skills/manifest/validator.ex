@@ -170,7 +170,8 @@ defmodule LemonSkills.Manifest.Validator do
     |> Map.put_new("platforms", ["any"])
     |> Map.put_new("requires_tools", [])
     |> Map.put_new("fallback_for_tools", [])
-    |> Map.put_new("required_environment_variables",
+    |> Map.put_new(
+      "required_environment_variables",
       legacy_env_vars(manifest)
     )
     |> Map.put_new("references", [])

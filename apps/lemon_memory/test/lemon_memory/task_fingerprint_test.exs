@@ -1,11 +1,11 @@
-defmodule LemonCore.TaskFingerprintTest do
+defmodule LemonMemory.TaskFingerprintTest do
   use ExUnit.Case, async: true
 
-  alias LemonCore.MemoryDocument
-  alias LemonCore.TaskFingerprint
+  alias LemonMemory.Document
+  alias LemonMemory.TaskFingerprint
 
   defp doc(overrides) do
-    base = %MemoryDocument{
+    base = %Document{
       doc_id: "mem_test",
       run_id: "run_001",
       session_key: "agent:bot:main",

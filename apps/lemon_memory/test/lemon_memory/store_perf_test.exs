@@ -1,4 +1,4 @@
-defmodule LemonCore.MemoryStorePerfTest do
+defmodule LemonMemory.StorePerfTest do
   @moduledoc """
   Performance and correctness guardrails for M5 memory store.
 
@@ -14,8 +14,8 @@ defmodule LemonCore.MemoryStorePerfTest do
 
   use ExUnit.Case, async: false
 
-  alias LemonCore.MemoryDocument
-  alias LemonCore.MemoryStore
+  alias LemonMemory.Document
+  alias LemonMemory.Store
 
   @moduletag :memory_perf
   @fixture_count 200
@@ -33,7 +33,7 @@ defmodule LemonCore.MemoryStorePerfTest do
 
     {:ok, pid} =
       start_supervised(
-        {MemoryStore,
+        {Store,
          [
            name: name,
            path: dir,
@@ -53,38 +53,49 @@ defmodule LemonCore.MemoryStorePerfTest do
     t0 = System.monotonic_time(:millisecond)
 
     Enum.each(docs, fn doc ->
-      MemoryStore.put(pid, doc)
+      Store.put(pid, doc)
     end)
 
     # Wait for all async casts to be processed
-    assert eventually(fn ->
-      MemoryStore.get_by_session(pid, session, limit: @fixture_count) |> length() >= @fixture_count
-    end, 100)
+    assert eventually(
+             fn ->
+               Store.get_by_session(pid, session, limit: @fixture_count) |> length() >=
+                 @fixture_count
+             end,
+             100
+           )
 
     elapsed = System.monotonic_time(:millisecond) - t0
     avg = div(elapsed, @fixture_count)
+
     assert avg <= @put_budget_ms,
            "Average put latency #{avg}ms exceeds #{@put_budget_ms}ms budget"
   end
 
-  test "FTS search over #{@fixture_count} docs completes under #{@search_budget_ms}ms", %{store_pid: pid} do
+  test "FTS search over #{@fixture_count} docs completes under #{@search_budget_ms}ms", %{
+    store_pid: pid
+  } do
     session = "agent:perf_search:main"
     docs = Enum.map(1..@fixture_count, fn i -> make_doc(session, i) end)
 
     Enum.each(docs, fn doc ->
-      MemoryStore.put(pid, doc)
+      Store.put(pid, doc)
     end)
 
-    assert eventually(fn ->
-      MemoryStore.get_by_session(pid, session, limit: @fixture_count) |> length() >= @fixture_count
-    end, 100)
+    assert eventually(
+             fn ->
+               Store.get_by_session(pid, session, limit: @fixture_count) |> length() >=
+                 @fixture_count
+             end,
+             100
+           )
 
     # Warm the search path
-    MemoryStore.search(pid, "deploy release", scope: :session, scope_key: session, limit: 10)
+    Store.search(pid, "deploy release", scope: :session, scope_key: session, limit: 10)
 
     # Measure actual search
     t0 = System.monotonic_time(:millisecond)
-    results = MemoryStore.search(pid, "deploy release", scope: :session, scope_key: session, limit: 10)
+    results = Store.search(pid, "deploy release", scope: :session, scope_key: session, limit: 10)
     elapsed = System.monotonic_time(:millisecond) - t0
 
     assert elapsed <= @search_budget_ms,
@@ -98,7 +109,7 @@ defmodule LemonCore.MemoryStorePerfTest do
 
     unique_word = "xk7q9zfj"
 
-    needle = %MemoryDocument{
+    needle = %Document{
       doc_id: "mem_needle",
       run_id: "run_needle",
       session_key: session,
@@ -117,14 +128,18 @@ defmodule LemonCore.MemoryStorePerfTest do
     }
 
     # Insert noise documents without the unique word
-    Enum.each(1..50, fn i -> MemoryStore.put(pid, make_doc(session, i)) end)
-    MemoryStore.put(pid, needle)
+    Enum.each(1..50, fn i -> Store.put(pid, make_doc(session, i)) end)
+    Store.put(pid, needle)
 
-    assert eventually(fn ->
-      MemoryStore.get_by_session(pid, session, limit: 100) |> length() >= 51
-    end, 100)
+    assert eventually(
+             fn ->
+               Store.get_by_session(pid, session, limit: 100) |> length() >= 51
+             end,
+             100
+           )
 
-    results = MemoryStore.search(pid, unique_word, scope: :session, scope_key: session, limit: 10)
+    results = Store.search(pid, unique_word, scope: :session, scope_key: session, limit: 10)
+
     assert Enum.any?(results, &(&1.doc_id == "mem_needle")),
            "Expected needle document to appear in FTS results for #{inspect(unique_word)}"
   end
@@ -140,27 +155,31 @@ defmodule LemonCore.MemoryStorePerfTest do
     name2 = :"memory_perf_prune_#{System.unique_integer([:positive])}"
 
     {:ok, pid2} =
-      MemoryStore.start_link([
+      Store.start_link(
         name: name2,
         path: dir2,
         retention_ms: 365 * 24 * 3_600_000,
         max_per_scope: 5
-      ])
+      )
 
     on_exit(fn ->
       if Process.alive?(pid2), do: GenServer.stop(pid2)
       File.rm_rf(dir2)
     end)
 
-    Enum.each(1..10, fn i -> MemoryStore.put(pid2, make_doc(session, i)) end)
+    Enum.each(1..10, fn i -> Store.put(pid2, make_doc(session, i)) end)
 
-    assert eventually(fn ->
-      MemoryStore.get_by_session(pid2, session, limit: 20) |> length() >= 10
-    end, 100)
+    assert eventually(
+             fn ->
+               Store.get_by_session(pid2, session, limit: 20) |> length() >= 10
+             end,
+             100
+           )
 
-    {:ok, %{pruned: _}} = MemoryStore.prune(pid2)
+    {:ok, %{pruned: _}} = Store.prune(pid2)
 
-    results = MemoryStore.get_by_session(pid2, session, limit: 20)
+    results = Store.get_by_session(pid2, session, limit: 20)
+
     assert length(results) <= 5,
            "Expected at most 5 documents after prune, got #{length(results)}"
   end
@@ -170,7 +189,7 @@ defmodule LemonCore.MemoryStorePerfTest do
   defp make_doc(session, i) do
     now = System.system_time(:millisecond)
 
-    %MemoryDocument{
+    %Document{
       doc_id: "mem_perf_#{i}_#{System.unique_integer([:positive])}",
       run_id: "run_perf_#{i}",
       session_key: session,

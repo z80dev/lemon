@@ -176,12 +176,17 @@ defmodule LemonSkills.Curator do
   @spec record_review_submission(String.t() | nil, map()) :: :ok | {:error, term()}
   def record_review_submission(nil, _submission), do: :ok
 
-  def record_review_submission(report_path, submission) when is_binary(report_path) and is_map(submission) do
+  def record_review_submission(report_path, submission)
+      when is_binary(report_path) and is_map(submission) do
     with {:ok, report} <- read_run_report(report_path),
          updated = Map.put(report, "review_submission", stringify_submission(submission)),
          {:ok, json} <- Jason.encode(updated, pretty: true),
          :ok <- atomic_write(report_path, json),
-         :ok <- atomic_write(Path.join(Path.dirname(report_path), "REPORT.md"), render_report_markdown(updated)) do
+         :ok <-
+           atomic_write(
+             Path.join(Path.dirname(report_path), "REPORT.md"),
+             render_report_markdown(updated)
+           ) do
       :ok
     end
   end

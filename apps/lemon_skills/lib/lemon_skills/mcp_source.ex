@@ -973,6 +973,7 @@ defmodule LemonSkills.McpSource do
     case client_call(client_mod, :call_tool, [client, original_name, params, timeout]) do
       {:ok, content} ->
         {:ok, %AgentToolResult{content: content_blocks(content), details: %{mcp: true}}}
+
       {:error, {:tool_error, content}} ->
         {:error, {:tool_error, content_blocks(content)}}
 

@@ -16,7 +16,7 @@ defmodule LemonControlPlane.Methods.MemoryStatus do
 
   @impl true
   def handle(_params, _ctx) do
-    status = LemonCore.MemoryProviders.status()
+    status = LemonMemory.Providers.status()
     providers = Enum.map(Map.get(status, :providers, []), &format_provider/1)
 
     {:ok,

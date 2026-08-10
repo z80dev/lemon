@@ -18,7 +18,15 @@ defmodule LemonSkills.InstallPlan do
   - `force` — whether to overwrite an existing install
   """
 
-  @enforce_keys [:source_module, :source_id, :source_kind, :trust_level, :skill_name, :dest_dir, :scope]
+  @enforce_keys [
+    :source_module,
+    :source_id,
+    :source_kind,
+    :trust_level,
+    :skill_name,
+    :dest_dir,
+    :scope
+  ]
   defstruct [
     :source_module,
     :source_id,

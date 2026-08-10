@@ -1,8 +1,8 @@
-defmodule LemonCore.MemorySafetyTest do
+defmodule LemonMemory.SafetyTest do
   use ExUnit.Case, async: true
 
-  alias LemonCore.MemoryDocument
-  alias LemonCore.MemorySafety
+  alias LemonMemory.Document
+  alias LemonMemory.Safety
 
   describe "contains_secret?/1" do
     test "detects documented secret patterns" do
@@ -15,33 +15,33 @@ defmodule LemonCore.MemorySafetyTest do
       ]
 
       for sample <- samples do
-        assert MemorySafety.contains_secret?(sample)
+        assert Safety.contains_secret?(sample)
       end
     end
 
     test "ignores clean operational text" do
-      refute MemorySafety.contains_secret?("implemented memory lookup and added tests")
-      refute MemorySafety.contains_secret?(nil)
+      refute Safety.contains_secret?("implemented memory lookup and added tests")
+      refute Safety.contains_secret?(nil)
     end
   end
 
   describe "safe_document?/1" do
     test "rejects documents with secret-looking summaries" do
-      doc = %MemoryDocument{
+      doc = %Document{
         prompt_summary: "Please remember this token=abc123",
         answer_summary: "I updated the project memory."
       }
 
-      refute MemorySafety.safe_document?(doc)
+      refute Safety.safe_document?(doc)
     end
 
     test "accepts clean documents" do
-      doc = %MemoryDocument{
+      doc = %Document{
         prompt_summary: "Add a focused regression for memory recall",
         answer_summary: "Added a test and updated the docs."
       }
 
-      assert MemorySafety.safe_document?(doc)
+      assert Safety.safe_document?(doc)
     end
   end
 end

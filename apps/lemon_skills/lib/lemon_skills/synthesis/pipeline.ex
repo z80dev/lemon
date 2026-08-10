@@ -26,7 +26,7 @@ defmodule LemonSkills.Synthesis.Pipeline do
 
   require Logger
 
-  alias LemonCore.MemoryStore
+  alias LemonMemory.Store
   alias LemonSkills.Audit.BundleAudit
   alias LemonSkills.Synthesis.{CandidateSelector, DraftGenerator, DraftStore}
 
@@ -143,21 +143,21 @@ defmodule LemonSkills.Synthesis.Pipeline do
   end
 
   defp fetch_documents(:agent, agent_id, limit) do
-    docs = MemoryStore.get_by_agent(agent_id, limit: limit)
+    docs = Store.get_by_agent(agent_id, limit: limit)
     {:ok, docs}
   catch
     :exit, _ -> {:ok, []}
   end
 
   defp fetch_documents(:session, session_key, limit) do
-    docs = MemoryStore.get_by_session(session_key, limit: limit)
+    docs = Store.get_by_session(session_key, limit: limit)
     {:ok, docs}
   catch
     :exit, _ -> {:ok, []}
   end
 
   defp fetch_documents(:workspace, workspace_key, limit) do
-    docs = MemoryStore.get_by_workspace(workspace_key, limit: limit)
+    docs = Store.get_by_workspace(workspace_key, limit: limit)
     {:ok, docs}
   catch
     :exit, _ -> {:ok, []}

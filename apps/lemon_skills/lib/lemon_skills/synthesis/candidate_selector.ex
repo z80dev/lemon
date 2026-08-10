@@ -14,9 +14,9 @@ defmodule LemonSkills.Synthesis.CandidateSelector do
   collapsed to one entry — the most recent one wins.
   """
 
-  alias LemonCore.MemoryDocument
-  alias LemonCore.MemorySafety
-  alias LemonCore.TaskFingerprint
+  alias LemonMemory.Document
+  alias LemonMemory.Safety
+  alias LemonMemory.TaskFingerprint
 
   @min_prompt_length 50
   @min_answer_length 100
@@ -24,9 +24,9 @@ defmodule LemonSkills.Synthesis.CandidateSelector do
   @doc """
   Select candidate documents from `documents`.
 
-  Returns a filtered, deduplicated list of `MemoryDocument` structs.
+  Returns a filtered, deduplicated list of `Document` structs.
   """
-  @spec select([MemoryDocument.t()]) :: [MemoryDocument.t()]
+  @spec select([Document.t()]) :: [Document.t()]
   def select(documents) when is_list(documents) do
     documents
     |> Enum.filter(&qualified?/1)
@@ -43,11 +43,11 @@ defmodule LemonSkills.Synthesis.CandidateSelector do
 
   # ── Private helpers ─────────────────────────────────────────────────────────
 
-  defp qualified?(%MemoryDocument{} = doc) do
+  defp qualified?(%Document{} = doc) do
     good_outcome?(doc.outcome) and
       long_enough?(doc.prompt_summary, @min_prompt_length) and
       long_enough?(doc.answer_summary, @min_answer_length) and
-      MemorySafety.safe_document?(doc) and
+      Safety.safe_document?(doc) and
       actionable_family?(doc)
   end
 
@@ -58,13 +58,13 @@ defmodule LemonSkills.Synthesis.CandidateSelector do
   defp long_enough?(nil, _min), do: false
   defp long_enough?(text, min) when is_binary(text), do: String.length(text) >= min
 
-  defp actionable_family?(%MemoryDocument{} = doc) do
+  defp actionable_family?(%Document{} = doc) do
     fp = TaskFingerprint.from_document(doc)
     fp.task_family not in [:chat, :unknown]
   end
 
   # Deduplicate by normalised prompt_summary — keep the most recent (first in
-  # the list, which is assumed to be sorted newest-first from MemoryStore).
+  # the list, which is assumed to be sorted newest-first from Store).
   defp deduplicate(docs) do
     docs
     |> Enum.uniq_by(fn doc ->

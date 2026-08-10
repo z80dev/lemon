@@ -11,7 +11,7 @@ defmodule LemonSkills.Tools.SearchMemory do
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias Ai.Types.TextContent
-  alias LemonCore.SessionSearch
+  alias LemonMemory.SessionSearch
 
   @doc """
   Returns the SearchMemory tool definition.
@@ -129,7 +129,9 @@ defmodule LemonSkills.Tools.SearchMemory do
       {:ok, scope_key} ->
         docs = context.search_fn.(query, scope: scope, scope_key: scope_key, limit: limit)
         {:ok, docs, %{resolved_scopes: [scope]}}
-      {:error, message} -> {:error, message, %{}}
+
+      {:error, message} ->
+        {:error, message, %{}}
     end
   end
 
@@ -138,7 +140,9 @@ defmodule LemonSkills.Tools.SearchMemory do
       {:ok, scope_key} ->
         docs = search_directory_scope(context, query, scope_key, limit)
         {:ok, docs, %{resolved_scopes: [:project]}}
-      {:error, message} -> {:error, message, %{}}
+
+      {:error, message} ->
+        {:error, message, %{}}
     end
   end
 
@@ -147,7 +151,9 @@ defmodule LemonSkills.Tools.SearchMemory do
       {:ok, scope_key} ->
         docs = search_directory_scope(context, query, scope_key, limit)
         {:ok, docs, %{resolved_scopes: [:home]}}
-      {:error, message} -> {:error, message, %{}}
+
+      {:error, message} ->
+        {:error, message, %{}}
     end
   end
 

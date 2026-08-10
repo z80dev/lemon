@@ -187,7 +187,7 @@ store_path = normalized_env.("LEMON_STORE_PATH")
 if is_binary(store_path) do
   config :lemon_core, :store_runtime_override, backend_opts: [path: store_path]
   config :lemon_core, LemonCore.RunHistoryStore, path: store_path
-  config :lemon_core, LemonCore.MemoryStore, path: store_path
+  config :lemon_memory, LemonMemory.Store, path: store_path
   config :lemon_router, LemonRouter.RoutingFeedbackStore, path: store_path
 end
 

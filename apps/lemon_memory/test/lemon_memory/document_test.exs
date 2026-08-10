@@ -1,7 +1,7 @@
-defmodule LemonCore.MemoryDocumentTest do
+defmodule LemonMemory.DocumentTest do
   use ExUnit.Case, async: true
 
-  alias LemonCore.MemoryDocument
+  alias LemonMemory.Document
 
   describe "from_run/4" do
     test "builds a document from a basic run record and summary" do
@@ -26,7 +26,7 @@ defmodule LemonCore.MemoryDocumentTest do
         model: "claude-sonnet-4-6"
       }
 
-      doc = MemoryDocument.from_run(run_id, record, summary)
+      doc = Document.from_run(run_id, record, summary)
 
       assert doc.run_id == run_id
       assert doc.session_key == "agent:test_agent:main"
@@ -45,7 +45,7 @@ defmodule LemonCore.MemoryDocumentTest do
       record = %{events: [], summary: nil, started_at: System.system_time(:millisecond)}
       summary = %{session_key: "agent:my_bot:main"}
 
-      doc = MemoryDocument.from_run("run_x", record, summary)
+      doc = Document.from_run("run_x", record, summary)
 
       assert doc.agent_id == "my_bot"
     end
@@ -54,7 +54,7 @@ defmodule LemonCore.MemoryDocumentTest do
       record = %{events: [], summary: nil, started_at: System.system_time(:millisecond)}
       summary = %{session_key: "bad_key"}
 
-      doc = MemoryDocument.from_run("run_x", record, summary)
+      doc = Document.from_run("run_x", record, summary)
 
       assert doc.agent_id == "default"
     end
@@ -67,7 +67,7 @@ defmodule LemonCore.MemoryDocumentTest do
         workspace_key: "/home/user/my_project"
       }
 
-      doc = MemoryDocument.from_run("run_x", record, summary)
+      doc = Document.from_run("run_x", record, summary)
 
       assert doc.scope == :workspace
       assert doc.workspace_key == "/home/user/my_project"
@@ -77,7 +77,7 @@ defmodule LemonCore.MemoryDocumentTest do
       record = %{events: [], summary: nil, started_at: System.system_time(:millisecond)}
       summary = %{session_key: "agent:bot:main"}
 
-      doc = MemoryDocument.from_run("run_x", record, summary)
+      doc = Document.from_run("run_x", record, summary)
 
       assert doc.scope == :session
       assert is_nil(doc.workspace_key)
@@ -93,7 +93,7 @@ defmodule LemonCore.MemoryDocumentTest do
         completed: %{answer: long_text}
       }
 
-      doc = MemoryDocument.from_run("run_x", record, summary)
+      doc = Document.from_run("run_x", record, summary)
 
       assert byte_size(doc.prompt_summary) < 3_000
       assert String.ends_with?(doc.prompt_summary, "...[truncated]")
@@ -112,7 +112,7 @@ defmodule LemonCore.MemoryDocumentTest do
         started_at: System.system_time(:millisecond)
       }
 
-      doc = MemoryDocument.from_run("run_x", record, %{session_key: "agent:bot:main"})
+      doc = Document.from_run("run_x", record, %{session_key: "agent:bot:main"})
 
       assert length(doc.tools_used) == 2
       assert "bash" in doc.tools_used
@@ -123,7 +123,7 @@ defmodule LemonCore.MemoryDocumentTest do
       record = %{summary: nil, started_at: System.system_time(:millisecond)}
       summary = %{session_key: "agent:bot:main"}
 
-      doc = MemoryDocument.from_run("run_x", record, summary)
+      doc = Document.from_run("run_x", record, summary)
 
       assert doc.tools_used == []
     end
@@ -132,7 +132,7 @@ defmodule LemonCore.MemoryDocumentTest do
       record = %{events: [], summary: nil, started_at: System.system_time(:millisecond)}
 
       success_doc =
-        MemoryDocument.from_run("run_s", record, %{
+        Document.from_run("run_s", record, %{
           session_key: "agent:bot:main",
           completed: %{ok: true, answer: "Done."}
         })
@@ -140,7 +140,7 @@ defmodule LemonCore.MemoryDocumentTest do
       assert success_doc.outcome == :success
 
       partial_doc =
-        MemoryDocument.from_run("run_p", record, %{
+        Document.from_run("run_p", record, %{
           session_key: "agent:bot:main",
           completed: %{ok: true, answer: ""}
         })
@@ -148,7 +148,7 @@ defmodule LemonCore.MemoryDocumentTest do
       assert partial_doc.outcome == :partial
 
       aborted_doc =
-        MemoryDocument.from_run("run_a", record, %{
+        Document.from_run("run_a", record, %{
           session_key: "agent:bot:main",
           completed: %{ok: false, error: "user_requested"}
         })
@@ -156,7 +156,7 @@ defmodule LemonCore.MemoryDocumentTest do
       assert aborted_doc.outcome == :aborted
 
       failure_doc =
-        MemoryDocument.from_run("run_f", record, %{
+        Document.from_run("run_f", record, %{
           session_key: "agent:bot:main",
           completed: %{ok: false, error: "internal_error"}
         })
@@ -168,7 +168,7 @@ defmodule LemonCore.MemoryDocumentTest do
       record = %{events: [], summary: nil, started_at: System.system_time(:millisecond)}
       summary = %{session_key: "agent:bot:main", prompt: nil, completed: nil}
 
-      doc = MemoryDocument.from_run("run_x", record, summary)
+      doc = Document.from_run("run_x", record, summary)
 
       assert doc.prompt_summary == ""
       assert doc.answer_summary == ""
@@ -181,7 +181,7 @@ defmodule LemonCore.MemoryDocumentTest do
       record = %{events: [], summary: nil, started_at: System.system_time(:millisecond)}
       summary = %{session_key: "agent:bot:main"}
 
-      doc = MemoryDocument.from_run(ref, record, summary)
+      doc = Document.from_run(ref, record, summary)
 
       assert is_binary(doc.run_id)
     end
@@ -192,20 +192,23 @@ defmodule LemonCore.MemoryDocumentTest do
       # Fill to 1998 bytes with ASCII then append a 4-byte emoji so the string is 2002 bytes.
       # binary_part(text, 0, 2000) would cut the emoji in the middle → invalid UTF-8.
       ascii_fill = String.duplicate("a", 1998)
-      emoji = "🎉"  # U+1F389, 4 bytes in UTF-8
-      long_text = ascii_fill <> emoji  # 2002 bytes total
+      # U+1F389, 4 bytes in UTF-8
+      emoji = "🎉"
+      # 2002 bytes total
+      long_text = ascii_fill <> emoji
 
       assert byte_size(long_text) == 2002
       assert String.valid?(long_text)
 
       record = %{events: [], summary: nil, started_at: System.system_time(:millisecond)}
+
       summary = %{
         session_key: "agent:bot:main",
         prompt: long_text,
         completed: %{answer: long_text}
       }
 
-      doc = MemoryDocument.from_run("run_utf8", record, summary)
+      doc = Document.from_run("run_utf8", record, summary)
 
       assert String.valid?(doc.prompt_summary),
              "truncated prompt_summary must be valid UTF-8"

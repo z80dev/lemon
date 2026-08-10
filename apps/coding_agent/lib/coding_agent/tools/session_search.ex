@@ -5,7 +5,8 @@ defmodule CodingAgent.Tools.SessionSearch do
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias Ai.Types.TextContent
-  alias LemonCore.{SessionSearch, Store}
+  alias LemonCore.Store
+  alias LemonMemory.SessionSearch
 
   @default_discover_limit 3
   @max_discover_limit 10

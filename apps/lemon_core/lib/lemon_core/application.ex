@@ -9,19 +9,16 @@ defmodule LemonCore.Application do
     `phoenix_pubsub` is not available
   - LemonCore.ConfigCache - Configuration caching service
   - LemonCore.Store - Key-value storage backend
-  - LemonCore.MemoryStore - Durable memory document store (separate SQLite DB)
-  - LemonCore.MemoryProviders - Memory-provider registry and fan-out boundary
-  - LemonCore.MemoryIngest - Async run ingest pipeline for memory documents
+  - LemonCore.RunHistoryStore - Per-session run history (separate SQLite DB)
   - LemonCore.ConfigReloader - Runtime config reload orchestrator
   - LemonCore.ConfigReloader.Watcher - File-system watcher for config changes
-  - LemonCore.ProviderPoolRotator - In-memory provider pool rotation state
 
   The supervisor uses a :one_for_one strategy, meaning if a child process
   crashes, only that process will be restarted.
 
-  `LemonCore.RunHistoryStore`, `LemonCore.MemoryStore` and
-  `LemonCore.MemoryIngest` are only started when the optional `:exqlite`
-  dependency is present.
+  `LemonCore.RunHistoryStore` is only started when the optional `:exqlite`
+  dependency is present. Durable memory lives in the `lemon_memory` app and
+  supervises itself.
 
   ## Configuration
 
@@ -67,27 +64,24 @@ defmodule LemonCore.Application do
       ] ++
         sqlite_children() ++
         [
-          LemonCore.MemoryProviders,
           LemonCore.ConfigReloader,
-          LemonCore.ConfigReloader.Watcher,
-          LemonCore.ProviderPoolRotator
+          LemonCore.ConfigReloader.Watcher
         ]
 
     opts = [strategy: :one_for_one, name: LemonCore.Supervisor]
     Supervisor.start_link(children, opts)
   end
 
-  # RunHistoryStore, MemoryStore and the ingest pipeline that feeds it all need
-  # the SQLite NIF. `:exqlite` is an optional dependency, so without it the rest
-  # of lemon_core still boots: run history reads exit with `:noproc` and ingest
-  # casts are dropped.
+  # RunHistoryStore needs the SQLite NIF. `:exqlite` is an optional dependency,
+  # so without it the rest of lemon_core still boots and run history reads exit
+  # with `:noproc`.
   defp sqlite_children do
     if Code.ensure_loaded?(Exqlite.Sqlite3) do
-      [LemonCore.RunHistoryStore, LemonCore.MemoryStore, LemonCore.MemoryIngest]
+      [LemonCore.RunHistoryStore]
     else
       Logger.info(
-        "exqlite is not available: run history and durable memory are disabled. " <>
-          "Add {:exqlite, \"~> 0.34\"} to your deps to enable them."
+        "exqlite is not available: run history is disabled. " <>
+          "Add {:exqlite, \"~> 0.34\"} to your deps to enable it."
       )
 
       []

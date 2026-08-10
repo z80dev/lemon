@@ -1,4 +1,4 @@
-defmodule LemonCore.MemoryStore do
+defmodule LemonMemory.Store do
   @moduledoc """
   Durable store for normalized memory documents, isolated from `RunHistoryStore`.
 
@@ -12,7 +12,7 @@ defmodule LemonCore.MemoryStore do
 
   ## Configuration
 
-      config :lemon_core, LemonCore.MemoryStore,
+      config :lemon_memory, LemonMemory.Store,
         path: "~/.lemon/store",          # directory — memory.sqlite3 created inside
         retention_ms: 30 * 24 * 3600_000, # 30 days (default)
         max_per_scope: 500               # max documents per scope key
@@ -28,7 +28,7 @@ defmodule LemonCore.MemoryStore do
   require Logger
 
   alias Exqlite.Sqlite3
-  alias LemonCore.MemoryDocument
+  alias LemonMemory.Document
 
   # :exqlite is an optional dependency of lemon_core; LemonCore.Application only
   # starts this store when it is present.
@@ -262,26 +262,26 @@ defmodule LemonCore.MemoryStore do
   end
 
   @doc """
-  Persist a `MemoryDocument`. This is a cast — write failures are logged but
+  Persist a `Document`. This is a cast — write failures are logged but
   do not propagate to the caller.
   """
-  @spec put(MemoryDocument.t()) :: :ok
-  def put(%MemoryDocument{} = doc), do: put(__MODULE__, doc)
+  @spec put(Document.t()) :: :ok
+  def put(%Document{} = doc), do: put(__MODULE__, doc)
 
-  @spec put(GenServer.server(), MemoryDocument.t()) :: :ok
-  def put(server, %MemoryDocument{} = doc) do
+  @spec put(GenServer.server(), Document.t()) :: :ok
+  def put(server, %Document{} = doc) do
     GenServer.cast(server, {:put, doc})
   end
 
   @doc """
   Fetch the `limit` most recent documents for a session.
   """
-  @spec get_by_session(binary(), keyword()) :: [MemoryDocument.t()]
+  @spec get_by_session(binary(), keyword()) :: [Document.t()]
   def get_by_session(session_key, opts \\ []) when is_binary(session_key) do
     get_by_session(__MODULE__, session_key, opts)
   end
 
-  @spec get_by_session(GenServer.server(), binary(), keyword()) :: [MemoryDocument.t()]
+  @spec get_by_session(GenServer.server(), binary(), keyword()) :: [Document.t()]
   def get_by_session(server, session_key, opts) when is_binary(session_key) do
     limit = Keyword.get(opts, :limit, 20)
     GenServer.call(server, {:get_by_session, session_key, limit}, 5_000)
@@ -292,12 +292,12 @@ defmodule LemonCore.MemoryStore do
   @doc """
   Fetch the `limit` most recent documents for an agent across all sessions.
   """
-  @spec get_by_agent(binary(), keyword()) :: [MemoryDocument.t()]
+  @spec get_by_agent(binary(), keyword()) :: [Document.t()]
   def get_by_agent(agent_id, opts \\ []) when is_binary(agent_id) do
     get_by_agent(__MODULE__, agent_id, opts)
   end
 
-  @spec get_by_agent(GenServer.server(), binary(), keyword()) :: [MemoryDocument.t()]
+  @spec get_by_agent(GenServer.server(), binary(), keyword()) :: [Document.t()]
   def get_by_agent(server, agent_id, opts) when is_binary(agent_id) do
     limit = Keyword.get(opts, :limit, 20)
     GenServer.call(server, {:get_by_agent, agent_id, limit}, 5_000)
@@ -308,12 +308,12 @@ defmodule LemonCore.MemoryStore do
   @doc """
   Fetch the `limit` most recent documents for a workspace.
   """
-  @spec get_by_workspace(binary(), keyword()) :: [MemoryDocument.t()]
+  @spec get_by_workspace(binary(), keyword()) :: [Document.t()]
   def get_by_workspace(workspace_key, opts \\ []) when is_binary(workspace_key) do
     get_by_workspace(__MODULE__, workspace_key, opts)
   end
 
-  @spec get_by_workspace(GenServer.server(), binary(), keyword()) :: [MemoryDocument.t()]
+  @spec get_by_workspace(GenServer.server(), binary(), keyword()) :: [Document.t()]
   def get_by_workspace(server, workspace_key, opts) when is_binary(workspace_key) do
     limit = Keyword.get(opts, :limit, 20)
     GenServer.call(server, {:get_by_workspace, workspace_key, limit}, 5_000)
@@ -382,12 +382,12 @@ defmodule LemonCore.MemoryStore do
   - `:scope_key` - session_key / agent_id / workspace_key (required if scope != `:all`)
   - `:limit` - max results (default 5)
   """
-  @spec search(binary(), keyword()) :: [MemoryDocument.t()]
+  @spec search(binary(), keyword()) :: [Document.t()]
   def search(query, opts \\ []) when is_binary(query) do
     search(__MODULE__, query, opts)
   end
 
-  @spec search(GenServer.server(), binary(), keyword()) :: [MemoryDocument.t()]
+  @spec search(GenServer.server(), binary(), keyword()) :: [Document.t()]
   def search(server, query, opts) when is_binary(query) do
     scope = Keyword.get(opts, :scope, :session)
     scope_key = Keyword.get(opts, :scope_key)
@@ -424,7 +424,7 @@ defmodule LemonCore.MemoryStore do
               ~s(Add {:exqlite, "~> 0.34"} to your deps.)
     end
 
-    app_config = Application.get_env(:lemon_core, __MODULE__, [])
+    app_config = Application.get_env(:lemon_memory, __MODULE__, [])
     # opts passed to start_link take precedence over application env
     config = Keyword.merge(app_config, Keyword.drop(opts, [:name]))
 
@@ -448,7 +448,7 @@ defmodule LemonCore.MemoryStore do
        }}
     else
       {:error, reason} ->
-        Logger.error("[MemoryStore] init failed: #{inspect(reason)}")
+        Logger.error("[Store] init failed: #{inspect(reason)}")
         {:stop, {:init_failed, reason}}
     end
   end
@@ -460,7 +460,7 @@ defmodule LemonCore.MemoryStore do
         :ok
 
       {:error, reason} ->
-        Logger.warning("[MemoryStore] put failed doc_id=#{doc.doc_id}: #{inspect(reason)}")
+        Logger.warning("[Store] put failed doc_id=#{doc.doc_id}: #{inspect(reason)}")
     end
 
     {:noreply, state}
@@ -541,7 +541,7 @@ defmodule LemonCore.MemoryStore do
         end
       else
         err ->
-          Logger.warning("[MemoryStore] stats failed: #{inspect(err)}")
+          Logger.warning("[Store] stats failed: #{inspect(err)}")
           %{total: 0, oldest_ms: nil, newest_ms: nil}
       end
 
@@ -567,6 +567,8 @@ defmodule LemonCore.MemoryStore do
 
   # ── Private helpers ────────────────────────────────────────────────────────────
 
+  # Unconfigured, memory lands next to the main store's data so a deployment
+  # that points the store at a directory gets its memory database there too.
   defp resolve_path(config) do
     raw =
       Keyword.get(config, :path) ||
@@ -643,7 +645,7 @@ defmodule LemonCore.MemoryStore do
     end
   end
 
-  defp do_put(state, %MemoryDocument{} = doc) do
+  defp do_put(state, %Document{} = doc) do
     tools_blob = encode(doc.tools_used)
     meta_blob = encode(doc.meta)
 
@@ -704,7 +706,7 @@ defmodule LemonCore.MemoryStore do
       end)
     else
       err ->
-        Logger.warning("[MemoryStore] query failed: #{inspect(err)}")
+        Logger.warning("[Store] query failed: #{inspect(err)}")
         []
     end
   end
@@ -728,7 +730,7 @@ defmodule LemonCore.MemoryStore do
        ]) do
     with {:ok, tools_used} <- decode(tools_used_blob),
          {:ok, meta} <- decode(meta_blob) do
-      doc = %MemoryDocument{
+      doc = %Document{
         doc_id: doc_id,
         run_id: run_id,
         session_key: session_key,
@@ -758,10 +760,10 @@ defmodule LemonCore.MemoryStore do
          :done <- Sqlite3.step(conn, stmt) do
       :ok
     else
-      err -> Logger.warning("[MemoryStore] #{op} failed: #{inspect(err)}")
+      err -> Logger.warning("[Store] #{op} failed: #{inspect(err)}")
     end
   rescue
-    e -> Logger.warning("[MemoryStore] #{op} exception: #{Exception.message(e)}")
+    e -> Logger.warning("[Store] #{op} exception: #{Exception.message(e)}")
   end
 
   defp do_prune(state) do
@@ -793,13 +795,13 @@ defmodule LemonCore.MemoryStore do
            :done <- Sqlite3.step(state.conn, state.stmts.fts_sweep) do
         :ok
       else
-        err -> Logger.warning("[MemoryStore] fts sweep failed: #{inspect(err)}")
+        err -> Logger.warning("[Store] fts sweep failed: #{inspect(err)}")
       end
 
       n
     else
       err ->
-        Logger.warning("[MemoryStore] retention sweep in prune failed: #{inspect(err)}")
+        Logger.warning("[Store] retention sweep in prune failed: #{inspect(err)}")
         0
     end
   end
@@ -833,7 +835,7 @@ defmodule LemonCore.MemoryStore do
           :ok
         else
           err ->
-            Logger.warning("[MemoryStore] fts prune failed for '#{session_key}': #{inspect(err)}")
+            Logger.warning("[Store] fts prune failed for '#{session_key}': #{inspect(err)}")
         end
 
         count + n
@@ -853,7 +855,7 @@ defmodule LemonCore.MemoryStore do
          :done <- Sqlite3.step(state.conn, state.stmts.fts_sweep) do
       :ok
     else
-      err -> Logger.warning("[MemoryStore] sweep failed: #{inspect(err)}")
+      err -> Logger.warning("[Store] sweep failed: #{inspect(err)}")
     end
   end
 

@@ -1,11 +1,11 @@
-defmodule LemonCore.MemoryProvidersTest do
+defmodule LemonMemory.ProvidersTest do
   use ExUnit.Case, async: true
 
-  alias LemonCore.MemoryDocument
-  alias LemonCore.MemoryProviders
+  alias LemonMemory.Document
+  alias LemonMemory.Providers
 
   defmodule FakeProvider do
-    @behaviour LemonCore.MemoryProvider
+    @behaviour LemonMemory.Provider
 
     @impl true
     def put(doc, opts) do
@@ -21,7 +21,7 @@ defmodule LemonCore.MemoryProvidersTest do
       )
 
       [
-        %MemoryDocument{
+        %Document{
           doc_id: "external-doc",
           run_id: "run-external",
           session_key: "session-1",
@@ -38,7 +38,7 @@ defmodule LemonCore.MemoryProvidersTest do
   end
 
   defmodule BrokenProvider do
-    @behaviour LemonCore.MemoryProvider
+    @behaviour LemonMemory.Provider
 
     @impl true
     def put(_doc, _opts), do: raise("private-provider-secret")
@@ -65,7 +65,7 @@ defmodule LemonCore.MemoryProvidersTest do
     on_exit(fn -> :persistent_term.erase({__MODULE__.StaticProvider, :docs}) end)
 
     results =
-      MemoryProviders.search("deploy",
+      Providers.search("deploy",
         provider_specs: specs,
         owner: self(),
         scope: :session,
@@ -80,7 +80,7 @@ defmodule LemonCore.MemoryProvidersTest do
 
   test "provider failures do not fail search" do
     results =
-      MemoryProviders.search("deploy",
+      Providers.search("deploy",
         provider_specs: [
           %{id: "broken", module: BrokenProvider, enabled: true, scopes: [:session]},
           %{id: "fake", module: FakeProvider, enabled: true, scopes: [:session]}
@@ -97,10 +97,10 @@ defmodule LemonCore.MemoryProvidersTest do
 
   test "put fans out through isolated registry" do
     name = :"memory_providers_test_#{System.unique_integer([:positive])}"
-    {:ok, pid} = start_supervised({MemoryProviders, name: name})
+    {:ok, pid} = start_supervised({Providers, name: name})
 
     assert :ok =
-             MemoryProviders.register_provider(pid,
+             Providers.register_provider(pid,
                id: "fake",
                module: FakeProvider,
                scopes: [:workspace],
@@ -108,7 +108,7 @@ defmodule LemonCore.MemoryProvidersTest do
              )
 
     doc = doc("put-doc", 10, scope: :workspace)
-    assert :ok = MemoryProviders.put(doc, server: pid, owner: self())
+    assert :ok = Providers.put(doc, server: pid, owner: self())
 
     :sys.get_state(pid)
     assert_receive {:fake_put, "fake", "put-doc"}
@@ -116,7 +116,7 @@ defmodule LemonCore.MemoryProvidersTest do
 
   test "status redacts provider implementation details" do
     status =
-      MemoryProviders.status(
+      Providers.status(
         provider_specs: [
           %{
             id: "team-memory",
@@ -141,7 +141,7 @@ defmodule LemonCore.MemoryProvidersTest do
   end
 
   defmodule StaticProvider do
-    @behaviour LemonCore.MemoryProvider
+    @behaviour LemonMemory.Provider
 
     @impl true
     def put(_doc, _opts), do: :ok
@@ -153,7 +153,7 @@ defmodule LemonCore.MemoryProvidersTest do
   end
 
   defp doc(id, ingested_at_ms, opts \\ []) do
-    %MemoryDocument{
+    %Document{
       doc_id: id,
       run_id: "run-#{id}",
       session_key: "session-1",

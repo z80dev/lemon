@@ -1,4 +1,4 @@
-defmodule LemonCore.MemoryDocument do
+defmodule LemonMemory.Document do
   @moduledoc """
   Normalized memory document extracted from a finalized run.
 
@@ -75,7 +75,7 @@ defmodule LemonCore.MemoryDocument do
             meta: %{}
 
   @doc """
-  Build a `MemoryDocument` from a finalized run record and its summary.
+  Build a `Document` from a finalized run record and its summary.
 
   Extracts normalized fields from the run summary. Unknown or missing fields
   are replaced with safe defaults so ingest never raises.
@@ -128,7 +128,9 @@ defmodule LemonCore.MemoryDocument do
     events
     |> Enum.flat_map(fn event ->
       case {Map.get(event, :type), Map.get(event, :tool)} do
-        {:tool_call, tool} when is_binary(tool) -> [tool]
+        {:tool_call, tool} when is_binary(tool) ->
+          [tool]
+
         _ ->
           case Map.get(event, "type") do
             "tool_call" -> [str(Map.get(event, "tool")) || "unknown"]

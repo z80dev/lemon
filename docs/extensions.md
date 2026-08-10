@@ -204,8 +204,8 @@ The schema follows JSON Schema conventions with optional extensions:
 
 Extensions can register custom providers that integrate with the core system.
 Model providers add AI model backends. Memory providers implement
-`LemonCore.MemoryProvider` and can participate in safety-screened memory ingest
-and scoped `search_memory` fan-out through `LemonCore.MemoryProviders`.
+`LemonMemory.Provider` and can participate in safety-screened memory ingest
+and scoped `search_memory` fan-out through `LemonMemory.Providers`.
 
 ```elixir
 @impl true
@@ -237,7 +237,7 @@ end
 
 ### Provider Registration Process
 
-1. **At session startup**: Model providers are collected and registered into `Ai.ProviderRegistry`; memory providers are collected and registered into `LemonCore.MemoryProviders`
+1. **At session startup**: Model providers are collected and registered into `Ai.ProviderRegistry`; memory providers are collected and registered into `LemonMemory.Providers`
 2. **On extension reload**: Old providers are unregistered, extensions are reloaded, and new providers are registered
 3. **Conflict detection**: When multiple extensions register the same provider name, the first (alphabetically by module name) wins
 
@@ -297,21 +297,21 @@ end
 
 See the `Ai.Provider` module documentation for full details on implementing providers.
 
-Memory providers must implement the `LemonCore.MemoryProvider` behaviour:
+Memory providers must implement the `LemonMemory.Provider` behaviour:
 
 ```elixir
 defmodule MyExtension.TeamMemoryProvider do
-  @behaviour LemonCore.MemoryProvider
+  @behaviour LemonMemory.Provider
 
   @impl true
-  def put(%LemonCore.MemoryDocument{} = doc, opts) do
+  def put(%LemonMemory.Document{} = doc, opts) do
     # Store a safety-screened memory document in your backend.
     :ok
   end
 
   @impl true
   def search(query, opts) do
-    # Return a list of LemonCore.MemoryDocument structs.
+    # Return a list of LemonMemory.Document structs.
     []
   end
 end
@@ -326,7 +326,7 @@ Memory provider `config` supports:
 | `timeout_ms` | Per-provider search/ingest timeout |
 | `label` | Human-readable provider label for local diagnostics only |
 
-`LemonCore.MemoryProviders` always keeps local SQLite as the built-in provider,
+`LemonMemory.Providers` always keeps local SQLite as the built-in provider,
 isolates provider failures, deduplicates search results by document id, and
 reports only redacted provider shape through `memory.status` and
 support bundles.

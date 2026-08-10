@@ -26,7 +26,7 @@ configured Lemon store directory. The default store directory is
 `~/.lemon/store`; set `LEMON_STORE_PATH` or `:lemon_core, LemonCore.Store`
 backend options to use another location.
 
-`LemonCore.MemoryProviders` is the supervised provider boundary. Lemon always
+`LemonMemory.Providers` is the supervised provider boundary. Lemon always
 registers the local SQLite provider, and BEAM extensions can register additional
 memory providers that receive the same safety-screened `MemoryDocument` ingest
 events and participate in scoped search. Provider failures are isolated; a slow
@@ -139,12 +139,12 @@ mix lemon.memory erase --scope <session|agent|workspace> --key <value>
 ### Retention and pruning
 
 Memory documents older than the retention window are pruned automatically.
-Default retention: **30 days** (configurable through the `LemonCore.MemoryStore`
+Default retention: **30 days** (configurable through the `LemonMemory.Store`
 application environment).
 
 ```toml
 # config/runtime.exs or application env
-config :lemon_core, LemonCore.MemoryStore,
+config :lemon_memory, LemonMemory.Store,
   path: "~/.lemon/store",
   retention_ms: 30 * 24 * 60 * 60 * 1000,
   max_per_scope: 500

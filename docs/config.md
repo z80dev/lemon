@@ -430,7 +430,7 @@ conservatively: if the default provider is not credential-ready and a configured
 fallback/profile/pool provider is credential-ready with the same model id in
 `Ai.Models`, Lemon selects that fallback before starting the supervised agent
 loop. Pools default to priority order; `strategy = "round_robin"` rotates the
-pool's starting provider through `LemonCore.ProviderPoolRotator`, a supervised
+pool's starting provider through `CodingAgent.ProviderPoolRotator`, a supervised
 BEAM process. Explicit user model specs are not rewritten.
 
 The supervised coding-agent loop also wraps default-model streams with the same

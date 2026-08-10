@@ -3,7 +3,7 @@ defmodule LemonCli.HermesMigrationTest do
 
   alias Exqlite.Sqlite3
   alias LemonCli.HermesMigration
-  alias LemonCore.MemoryStore
+  alias LemonMemory.Store
 
   setup do
     Application.ensure_all_started(:yaml_elixir)
@@ -77,7 +77,7 @@ defmodule LemonCli.HermesMigrationTest do
 
     {:ok, store} =
       start_supervised(
-        {MemoryStore,
+        {Store,
          [
            name: :"hermes_migration_assert_#{System.unique_integer([:positive])}",
            path: Path.join(target, "store")
@@ -85,7 +85,7 @@ defmodule LemonCli.HermesMigrationTest do
       )
 
     assert eventually(fn ->
-             MemoryStore.get_by_session(store, "hermes:s1", limit: 5)
+             Store.get_by_session(store, "hermes:s1", limit: 5)
              |> Enum.any?(&String.contains?(&1.prompt_summary, "Please fix auth"))
            end)
   end

@@ -3,7 +3,9 @@ defmodule LemonCli.HermesMigration do
 
   alias Exqlite.Sqlite3
   alias LemonCore.Config.TomlPatch
-  alias LemonCore.{MemoryDocument, MemoryStore, Secrets}
+  alias LemonCore.Secrets
+  alias LemonMemory.Document
+  alias LemonMemory.Store
 
   @entry_delimiter "\n§\n"
   @memory_limit 2_200
@@ -272,6 +274,7 @@ defmodule LemonCli.HermesMigration do
         {:ok, config} ->
           target = Path.join(ctx.target_root, "config.toml")
           patch_config_item(ctx, source, target, config || %{})
+
         {:error, reason} ->
           item(
             "config",
@@ -764,14 +767,14 @@ defmodule LemonCli.HermesMigration do
 
   defp import_session_documents(ctx, db_path) do
     {:ok, store} =
-      MemoryStore.start_link(
+      Store.start_link(
         name: :"hermes_migration_memory_#{System.unique_integer([:positive])}",
         path: ctx.store_dir
       )
 
     try do
       docs = session_docs(db_path)
-      Enum.each(docs, &MemoryStore.put(store, &1))
+      Enum.each(docs, &Store.put(store, &1))
       Process.sleep(100)
 
       [
@@ -812,7 +815,9 @@ defmodule LemonCli.HermesMigration do
         after
           Sqlite3.close(conn)
         end
-      {:error, reason} -> raise "could not open Hermes state.db: #{inspect(reason)}"
+
+      {:error, reason} ->
+        raise "could not open Hermes state.db: #{inspect(reason)}"
     end
   end
 
@@ -829,7 +834,7 @@ defmodule LemonCli.HermesMigration do
     tools = messages |> Enum.map(&Enum.at(&1, 3)) |> Enum.filter(&is_binary/1) |> Enum.uniq()
     started_ms = seconds_to_ms(started_at)
 
-    %MemoryDocument{
+    %Document{
       doc_id: "mem_hermes_#{stable_id(id)}",
       run_id: "hermes:#{id}",
       session_key: "hermes:#{id}",

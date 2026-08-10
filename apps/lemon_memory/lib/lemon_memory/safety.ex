@@ -1,9 +1,9 @@
-defmodule LemonCore.MemorySafety do
+defmodule LemonMemory.Safety do
   @moduledoc """
   Shared safety checks for durable memory documents.
   """
 
-  alias LemonCore.MemoryDocument
+  alias LemonMemory.Document
 
   @secret_patterns [
     ~r/\b(password|passwd|secret|token|api[-_]?key|access[-_]?key|auth[-_]?token)\s*[:=]\s*\S+/i,
@@ -26,8 +26,8 @@ defmodule LemonCore.MemorySafety do
   @doc """
   Returns true when the memory document summaries are safe to store or mine.
   """
-  @spec safe_document?(MemoryDocument.t()) :: boolean()
-  def safe_document?(%MemoryDocument{prompt_summary: prompt, answer_summary: answer}) do
+  @spec safe_document?(Document.t()) :: boolean()
+  def safe_document?(%Document{prompt_summary: prompt, answer_summary: answer}) do
     combined = (prompt || "") <> " " <> (answer || "")
     not contains_secret?(combined)
   end

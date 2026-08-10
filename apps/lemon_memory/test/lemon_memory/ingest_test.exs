@@ -1,6 +1,6 @@
-defmodule LemonCore.MemoryIngestTest do
+defmodule LemonMemory.IngestTest do
   @moduledoc """
-  Tests for LemonCore.MemoryIngest — focusing on J6: config must be loaded
+  Tests for LemonMemory.Ingest — focusing on J6: config must be loaded
   exactly once per ingest call, not once per feature-flag check.
   """
 
@@ -8,7 +8,7 @@ defmodule LemonCore.MemoryIngestTest do
 
   alias LemonCore.Bus
   alias LemonCore.Event
-  alias LemonCore.MemoryIngest
+  alias LemonMemory.Ingest
 
   @moduletag :tmp_dir
 
@@ -41,7 +41,7 @@ defmodule LemonCore.MemoryIngestTest do
 
       {run_id, record, summary} = make_ingest_args()
 
-      MemoryIngest.ingest(pid, run_id, record, summary)
+      Ingest.ingest(pid, run_id, record, summary)
       :sys.get_state(pid)
 
       loads = :counters.get(counter, 1)
@@ -63,7 +63,7 @@ defmodule LemonCore.MemoryIngestTest do
         start_isolated_ingest(tmp_dir, counter, %{session_search: true, routing_feedback: true})
 
       {run_id, record, summary} = make_ingest_args()
-      MemoryIngest.ingest(pid, run_id, record, summary)
+      Ingest.ingest(pid, run_id, record, summary)
       :sys.get_state(pid)
 
       assert :counters.get(counter, 1) == 1
@@ -82,7 +82,7 @@ defmodule LemonCore.MemoryIngestTest do
 
       for i <- 1..3 do
         {_run_id, record, summary} = make_ingest_args()
-        MemoryIngest.ingest(pid, "run_#{i}", record, summary)
+        Ingest.ingest(pid, "run_#{i}", record, summary)
       end
 
       :sys.get_state(pid)
@@ -105,11 +105,11 @@ defmodule LemonCore.MemoryIngestTest do
       {run_id, record, summary} = make_ingest_args()
       summary = %{summary | prompt: "implement deployment password=hunter2"}
 
-      MemoryIngest.ingest(pid, run_id, record, summary)
+      Ingest.ingest(pid, run_id, record, summary)
       :sys.get_state(pid)
 
       assert [] =
-               LemonCore.MemoryStore.get_by_session(memory_store, summary.session_key, limit: 10)
+               LemonMemory.Store.get_by_session(memory_store, summary.session_key, limit: 10)
 
       assert :counters.get(counter, 1) == 0
 
@@ -130,11 +130,11 @@ defmodule LemonCore.MemoryIngestTest do
         | completed: %{ok: true, answer: "done sk-proj-abcdefghijklmnopqrstuvwxyz1234567890"}
       }
 
-      MemoryIngest.ingest(pid, run_id, record, summary)
+      Ingest.ingest(pid, run_id, record, summary)
       :sys.get_state(pid)
 
       assert [] =
-               LemonCore.MemoryStore.get_by_session(memory_store, summary.session_key, limit: 10)
+               LemonMemory.Store.get_by_session(memory_store, summary.session_key, limit: 10)
 
       assert :counters.get(counter, 1) == 0
 
@@ -146,10 +146,10 @@ defmodule LemonCore.MemoryIngestTest do
     memory_path = Path.join(tmp_dir, "memory_#{System.unique_integer([:positive])}")
     memory_name = :"memory_store_#{System.unique_integer([:positive])}"
 
-    {:ok, memory_store} = LemonCore.MemoryStore.start_link(path: memory_path, name: memory_name)
+    {:ok, memory_store} = LemonMemory.Store.start_link(path: memory_path, name: memory_name)
 
     {:ok, pid} =
-      GenServer.start_link(MemoryIngest,
+      GenServer.start_link(Ingest,
         config_loader: fn ->
           :counters.add(counter, 1, 1)
           %{features: build_feature_flags(features)}

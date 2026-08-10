@@ -6,7 +6,7 @@ defmodule LemonSkills.Tools.Memory do
   alias AgentCore.AbortSignal
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias Ai.Types.TextContent
-  alias LemonCore.MemorySafety
+  alias LemonMemory.Safety
 
   @targets %{
     "user" => %{
@@ -188,7 +188,7 @@ defmodule LemonSkills.Tools.Memory do
 
   defp screen_text(text) do
     cond do
-      MemorySafety.contains_secret?(text) ->
+      Safety.contains_secret?(text) ->
         {:error, "Refusing to store secret-looking content in prompt-injected memory"}
 
       contains_invisible_char?(text) ->

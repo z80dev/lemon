@@ -25,7 +25,7 @@ defmodule Mix.Tasks.Lemon.Memory do
 
   - **memory.sqlite3** — compact, normalized summaries of finalized runs.
     Used for `search_memory` retrieval, cross-session context, and routing
-    feedback (M6). Managed by `LemonCore.MemoryStore`. This is what this
+    feedback (M6). Managed by `LemonMemory.Store`. This is what this
     task manages.
 
   - **run_history.sqlite3** — full run data (messages, events, tool calls).
@@ -56,8 +56,8 @@ defmodule Mix.Tasks.Lemon.Memory do
   defp run_stats do
     Mix.Task.run("app.start")
 
-    stats = LemonCore.MemoryStore.stats()
-    config = Application.get_env(:lemon_core, LemonCore.MemoryStore, [])
+    stats = LemonMemory.Store.stats()
+    config = Application.get_env(:lemon_memory, LemonMemory.Store, [])
 
     retention_days =
       Keyword.get(config, :retention_ms, 30 * 24 * 3_600_000)
@@ -81,7 +81,7 @@ defmodule Mix.Tasks.Lemon.Memory do
 
     Mix.shell().info("Pruning memory store...")
 
-    case LemonCore.MemoryStore.prune() do
+    case LemonMemory.Store.prune() do
       {:ok, %{swept: swept, pruned: pruned}} ->
         Mix.shell().info([:green, "Done.", :reset])
         Mix.shell().info("  Documents removed (retention) : #{swept}")
@@ -112,9 +112,9 @@ defmodule Mix.Tasks.Lemon.Memory do
         Mix.shell().info("Erasing memory documents for #{scope} #{inspect(key)}...")
 
         case scope do
-          "session" -> LemonCore.MemoryStore.delete_by_session(key)
-          "agent" -> LemonCore.MemoryStore.delete_by_agent(key)
-          "workspace" -> LemonCore.MemoryStore.delete_by_workspace(key)
+          "session" -> LemonMemory.Store.delete_by_session(key)
+          "agent" -> LemonMemory.Store.delete_by_agent(key)
+          "workspace" -> LemonMemory.Store.delete_by_workspace(key)
         end
 
         # Give the async cast a moment to complete before we exit

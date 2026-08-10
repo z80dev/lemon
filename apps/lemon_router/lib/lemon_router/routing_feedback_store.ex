@@ -14,7 +14,7 @@ defmodule LemonRouter.RoutingFeedbackStore do
     `{:insufficient_data, n}` rather than raising.
   - A `min_sample_size` threshold (default `#{__MODULE__}.min_sample_size/0`)
     guards aggregates so the router never acts on statistically weak data.
-  - The write path is gated before Bus publication by `LemonCore.MemoryIngest`;
+  - The write path is gated before Bus publication by `LemonMemory.Ingest`;
     router reads are gated by the caller before consulting historical data.
 
   ## Usage

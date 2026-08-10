@@ -268,7 +268,9 @@ defmodule LemonSkills.Usage do
     case DateTime.from_iso8601(timestamp) do
       {:ok, timestamp, _} ->
         max(DateTime.diff(now, timestamp, :day), 0)
-      _ -> nil
+
+      _ ->
+        nil
     end
   end
 

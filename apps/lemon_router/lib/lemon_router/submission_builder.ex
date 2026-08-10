@@ -14,9 +14,10 @@ defmodule LemonRouter.SubmissionBuilder do
     ExecutionCommand,
     MapHelpers,
     RunRequest,
-    SessionKey,
-    TaskFingerprint
+    SessionKey
   }
+
+  alias LemonMemory.TaskFingerprint
 
   alias LemonRouter.{
     AgentProfiles,

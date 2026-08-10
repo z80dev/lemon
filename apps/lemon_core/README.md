@@ -49,16 +49,16 @@ This app has **zero dependencies on other umbrella apps** and must remain that w
 
 | # | Child | Purpose |
 |---|-------|---------|
-| 1 | `Phoenix.PubSub` (name: `LemonCore.PubSub`) | PubSub backbone for the Bus |
+| 1 | `Phoenix.PubSub` (name: `LemonCore.PubSub`), or a `Registry` | Backbone for the Bus; see `LemonCore.Bus` for which one is used |
 | 2 | `LemonCore.ConfigCache` | ETS-backed config cache with TTL fingerprinting |
 | 3 | `LemonCore.Store` | Key-value storage GenServer with pluggable backends |
-| 4 | `LemonCore.RunHistoryStore` | Run history persistence |
-| 5 | `LemonCore.MemoryStore` | Durable memory document store |
-| 6 | `LemonCore.MemoryProviders` | Supervised memory-provider registry and fan-out boundary |
-| 7 | `LemonCore.MemoryIngest` | Async run ingest pipeline for memory documents |
-| 8 | `LemonCore.ConfigReloader` | Reload orchestrator with diff computation |
-| 9 | `LemonCore.ConfigReloader.Watcher` | FileSystem watcher for `config.toml` and `.env` |
-| 10 | `LemonCore.ProviderPoolRotator` | Provider credential-pool round-robin state |
+| 4 | `LemonCore.RunHistoryStore` | Run history persistence (only when `:exqlite` is available) |
+| 5 | `LemonCore.ConfigReloader` | Reload orchestrator with diff computation |
+| 6 | `LemonCore.ConfigReloader.Watcher` | FileSystem watcher for `config.toml` and `.env` |
+
+Durable memory moved to `lemon_memory`, the workspace stores to `agent_core`,
+and provider credential-pool rotation to `coding_agent`
+(`CodingAgent.ProviderPoolRotator`); each supervises its own processes.
 
 Browser, media-job, and LSP drivers live in `lemon_browser`, `lemon_media`,
 and `lemon_lsp`. Core doctor diagnostics may probe them at runtime, but
@@ -152,15 +152,8 @@ ids, message bodies, proof details, credentials, or secret names.
 
 ### Memory
 
-| Module | Purpose |
-|--------|---------|
-| `LemonCore.MemoryDocument` | Normalized compact summary of a finalized run |
-| `LemonCore.MemoryStore` | Built-in SQLite/FTS durable memory store |
-| `LemonCore.MemoryProvider` | Behaviour for external searchable/storable memory providers |
-| `LemonCore.MemoryProviders` | Supervised registry, ingest fan-out, search fan-out, and redacted provider diagnostics |
-| `LemonCore.MemoryProviders.Local` | Built-in provider backed by `LemonCore.MemoryStore` |
-| `LemonCore.MemoryIngest` | Async run-finalization ingest pipeline with safety screening |
-| `LemonCore.SessionSearch` | Feature-gated public search API used by `search_memory` |
+Durable memory moved to the `lemon_memory` app (`LemonMemory.*`). Core reaches
+it only through the `LemonCore.Store` finalize-run hook the runtime configures.
 
 ### Event System
 

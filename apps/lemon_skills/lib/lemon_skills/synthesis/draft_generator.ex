@@ -1,6 +1,6 @@
 defmodule LemonSkills.Synthesis.DraftGenerator do
   @moduledoc """
-  Generates a draft SKILL.md from a qualified `MemoryDocument`.
+  Generates a draft SKILL.md from a qualified `Document`.
 
   The generator produces a manifest v2 YAML frontmatter block plus a structured
   body that captures the task pattern and solution.  The output is suitable for
@@ -13,7 +13,7 @@ defmodule LemonSkills.Synthesis.DraftGenerator do
         key:     "deploy-to-k8s",           # URL-safe skill identifier
         name:    "Deploy to K8s",            # human-readable display name
         content: "---\n...\n---\n\n# ...",  # full SKILL.md content string
-        source_doc_id: "abc123"             # originating MemoryDocument ID
+        source_doc_id: "abc123"             # originating Document ID
       }
 
   ## Limitations
@@ -25,8 +25,8 @@ defmodule LemonSkills.Synthesis.DraftGenerator do
     the full conversation, only the distilled pattern.
   """
 
-  alias LemonCore.MemoryDocument
-  alias LemonCore.TaskFingerprint
+  alias LemonMemory.Document
+  alias LemonMemory.TaskFingerprint
 
   @type draft :: %{
           key: String.t(),
@@ -57,13 +57,13 @@ defmodule LemonSkills.Synthesis.DraftGenerator do
   def derive_key_hint(_), do: "unknown"
 
   @doc """
-  Generate a draft from a `MemoryDocument`.
+  Generate a draft from a `Document`.
 
   Returns `{:ok, draft}` on success, or `{:error, reason}` when the document
   is not suitable (e.g. contains secrets).
   """
-  @spec generate(MemoryDocument.t()) :: {:ok, draft()} | {:error, term()}
-  def generate(%MemoryDocument{} = doc) do
+  @spec generate(Document.t()) :: {:ok, draft()} | {:error, term()}
+  def generate(%Document{} = doc) do
     key = derive_key(doc.prompt_summary)
     name = derive_name(doc.prompt_summary)
 
@@ -134,7 +134,7 @@ defmodule LemonSkills.Synthesis.DraftGenerator do
     """
   end
 
-  defp build_body(%MemoryDocument{} = doc, %TaskFingerprint{} = fp) do
+  defp build_body(%Document{} = doc, %TaskFingerprint{} = fp) do
     tools_note =
       case fp.toolset do
         [] -> ""

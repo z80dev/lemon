@@ -1,14 +1,14 @@
 defmodule LemonSkills.Synthesis.CandidateSelectorTest do
   use ExUnit.Case, async: true
 
-  alias LemonCore.MemoryDocument
+  alias LemonMemory.Document
   alias LemonSkills.Synthesis.CandidateSelector
 
   @prompt String.duplicate("implement a k8s deployment script ", 3)  # > 50 chars
   @answer String.duplicate("use kubectl apply with the deployment manifest ", 4)  # > 100 chars
 
   defp doc(overrides \\ []) do
-    %MemoryDocument{
+    %Document{
       doc_id: "doc-#{System.unique_integer([:positive])}",
       run_id: "run-1",
       session_key: "s1",

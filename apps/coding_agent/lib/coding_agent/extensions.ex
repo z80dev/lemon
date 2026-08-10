@@ -432,7 +432,7 @@ defmodule CodingAgent.Extensions do
   Collects all providers from extensions and registers them, detecting and
   reporting conflicts when multiple extensions try to register the same
   provider name. Model providers register into `Ai.ProviderRegistry`; memory
-  providers register into `LemonCore.MemoryProviders`.
+  providers register into `LemonMemory.Providers`.
 
   ## Conflict Resolution
 
@@ -583,7 +583,7 @@ defmodule CodingAgent.Extensions do
         Ai.ProviderRegistry.unregister(name)
 
       %{type: :memory, name: name} ->
-        LemonCore.MemoryProviders.unregister_provider(provider_id(name))
+        LemonMemory.Providers.unregister_provider(provider_id(name))
 
       _ ->
         :ok
@@ -1063,7 +1063,7 @@ defmodule CodingAgent.Extensions do
   defp provider_registered?(:memory, name) do
     id = provider_id(name)
 
-    LemonCore.MemoryProviders.status()
+    LemonMemory.Providers.status()
     |> Map.get(:providers, [])
     |> Enum.any?(fn provider -> provider[:id] == id or provider["id"] == id end)
   end
@@ -1087,7 +1087,7 @@ defmodule CodingAgent.Extensions do
   defp register_provider(:memory, name, spec, ext) do
     config = provider_config(spec.config)
 
-    LemonCore.MemoryProviders.register_provider(%{
+    LemonMemory.Providers.register_provider(%{
       id: provider_id(name),
       module: spec.module,
       enabled: Map.get(config, :enabled, Map.get(config, "enabled", true)),

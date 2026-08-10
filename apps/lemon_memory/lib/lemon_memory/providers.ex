@@ -1,4 +1,4 @@
-defmodule LemonCore.MemoryProviders do
+defmodule LemonMemory.Providers do
   @moduledoc """
   Supervised registry and fan-out search boundary for memory providers.
 
@@ -11,8 +11,8 @@ defmodule LemonCore.MemoryProviders do
   use GenServer
   require Logger
 
-  alias LemonCore.MemoryDocument
-  alias LemonCore.MemoryProviders.Local
+  alias LemonMemory.Document
+  alias LemonMemory.Providers.Local
 
   @local_id "local"
   @default_timeout_ms 2_000
@@ -73,8 +73,8 @@ defmodule LemonCore.MemoryProviders do
   The call is fire-and-forget. Providers are invoked inside this GenServer and
   failures are logged but never returned to callers finalizing a run.
   """
-  @spec put(MemoryDocument.t(), keyword()) :: :ok
-  def put(%MemoryDocument{} = doc, opts \\ []) do
+  @spec put(Document.t(), keyword()) :: :ok
+  def put(%Document{} = doc, opts \\ []) do
     server = Keyword.get(opts, :server, __MODULE__)
     GenServer.cast(server, {:put, doc, opts})
     :ok
@@ -85,7 +85,7 @@ defmodule LemonCore.MemoryProviders do
   @doc """
   Search enabled providers and return merged memory documents.
   """
-  @spec search(binary(), keyword()) :: [MemoryDocument.t()]
+  @spec search(binary(), keyword()) :: [Document.t()]
   def search(query, opts \\ []) when is_binary(query) do
     scope = Keyword.get(opts, :scope, :session)
     limit = Keyword.get(opts, :limit, 5)
@@ -124,7 +124,7 @@ defmodule LemonCore.MemoryProviders do
   end
 
   @impl true
-  def handle_cast({:put, %MemoryDocument{} = doc, opts}, state) do
+  def handle_cast({:put, %Document{} = doc, opts}, state) do
     specs =
       (default_specs() ++ Map.values(state.providers))
       |> Enum.filter(&provider_enabled_for_scope?(&1, doc.scope))
@@ -137,7 +137,7 @@ defmodule LemonCore.MemoryProviders do
             :ok
 
           {:error, reason} ->
-            Logger.warning("[MemoryProviders] provider #{spec.id} put failed: #{inspect(reason)}")
+            Logger.warning("[Providers] provider #{spec.id} put failed: #{inspect(reason)}")
         end
       end,
       timeout: max_timeout(specs),
@@ -183,11 +183,11 @@ defmodule LemonCore.MemoryProviders do
         docs
 
       {:ok, {spec, {:error, reason}}} ->
-        Logger.warning("[MemoryProviders] provider #{spec.id} failed: #{inspect(reason)}")
+        Logger.warning("[Providers] provider #{spec.id} failed: #{inspect(reason)}")
         []
 
       {:exit, reason} ->
-        Logger.warning("[MemoryProviders] provider task failed: #{inspect(reason)}")
+        Logger.warning("[Providers] provider task failed: #{inspect(reason)}")
         []
     end)
   end
@@ -197,7 +197,7 @@ defmodule LemonCore.MemoryProviders do
     provider_opts = Keyword.put(opts, :provider_id, spec.id)
 
     case module.search(query, provider_opts) do
-      docs when is_list(docs) -> {:ok, Enum.filter(docs, &match?(%MemoryDocument{}, &1))}
+      docs when is_list(docs) -> {:ok, Enum.filter(docs, &match?(%Document{}, &1))}
       other -> {:error, {:invalid_result, other}}
     end
   rescue
@@ -206,7 +206,7 @@ defmodule LemonCore.MemoryProviders do
     kind, reason -> {:error, {kind, reason}}
   end
 
-  defp call_provider_put(spec, %MemoryDocument{} = doc, opts) do
+  defp call_provider_put(spec, %Document{} = doc, opts) do
     module = spec.module
     provider_opts = Keyword.put(opts, :provider_id, spec.id)
 

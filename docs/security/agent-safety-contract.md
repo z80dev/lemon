@@ -31,12 +31,12 @@ profile.
 
 ## Durable Memory
 
-Durable memory stores summaries, not raw transcripts. `LemonCore.MemoryIngest`
+Durable memory stores summaries, not raw transcripts. `LemonMemory.Ingest`
 builds `MemoryDocument` records after run finalization and writes them to
-`LemonCore.MemoryStore` only when the feature flag enables session search.
+`LemonMemory.Store` only when the feature flag enables session search.
 
 Before a document is stored or mined for skill synthesis,
-`LemonCore.MemorySafety` screens `prompt_summary` and `answer_summary` for
+`LemonMemory.Safety` screens `prompt_summary` and `answer_summary` for
 secret-looking content such as password assignments, API keys, private-key
 headers, and JWT-like tokens. Matching documents are skipped rather than
 redacted in place.
@@ -83,7 +83,7 @@ When adding or changing an agent capability:
 1. Classify the tool in `CodingAgent.ToolPolicy`.
 2. Add approval gates for side effects that remain available to trusted profiles.
 3. Validate user or model-provided structured arguments before side effects.
-4. Keep durable memory writes behind `LemonCore.MemorySafety`.
+4. Keep durable memory writes behind `LemonMemory.Safety`.
 5. Route reusable procedural knowledge through audited skills.
 6. Emit redacted telemetry with run/session provenance.
 7. Add focused deterministic tests and, when model behavior matters, an opt-in

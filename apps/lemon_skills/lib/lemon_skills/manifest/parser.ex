@@ -241,10 +241,17 @@ defmodule LemonSkills.Manifest.Parser do
           item |> String.trim() |> String.trim("\"") |> String.trim("'")
         end)
 
-      v == "true" -> true
-      v == "false" -> false
-      String.match?(v, ~r/^\d+$/) -> String.to_integer(v)
-      true -> v
+      v == "true" ->
+        true
+
+      v == "false" ->
+        false
+
+      String.match?(v, ~r/^\d+$/) ->
+        String.to_integer(v)
+
+      true ->
+        v
     end
   end
 end

@@ -1138,8 +1138,8 @@ defmodule CodingAgent.ExtensionsTest do
 
       on_exit(fn ->
         Ai.ProviderRegistry.clear()
-        LemonCore.MemoryProviders.unregister_provider("my_memory")
-        LemonCore.MemoryProviders.unregister_provider("string_memory")
+        LemonMemory.Providers.unregister_provider("my_memory")
+        LemonMemory.Providers.unregister_provider("string_memory")
       end)
 
       :ok
@@ -1754,7 +1754,7 @@ defmodule CodingAgent.ExtensionsTest do
       end
 
       defmodule MyMemoryModule do
-        @behaviour LemonCore.MemoryProvider
+        @behaviour LemonMemory.Provider
 
         @impl true
         def put(_doc, _opts), do: :ok
@@ -1784,14 +1784,14 @@ defmodule CodingAgent.ExtensionsTest do
       refute Ai.ProviderRegistry.registered?(:my_storage)
       refute Ai.ProviderRegistry.registered?(:my_executor)
 
-      status = LemonCore.MemoryProviders.status()
+      status = LemonMemory.Providers.status()
       memory_provider = Enum.find(status.providers, &(&1.id == "my_memory"))
       assert memory_provider.source == "extension:mixed-type-provider"
       assert memory_provider.scopes == ["session"]
       assert memory_provider.timeout_ms == 1234
 
       Extensions.unregister_extension_providers(report)
-      refute Enum.any?(LemonCore.MemoryProviders.status().providers, &(&1.id == "my_memory"))
+      refute Enum.any?(LemonMemory.Providers.status().providers, &(&1.id == "my_memory"))
 
       # Cleanup
       :code.purge(MixedTypeProviderExt)
@@ -1831,7 +1831,7 @@ defmodule CodingAgent.ExtensionsTest do
       end
 
       defmodule StringMemoryProviderModule do
-        @behaviour LemonCore.MemoryProvider
+        @behaviour LemonMemory.Provider
 
         @impl true
         def put(_doc, _opts), do: :ok
@@ -1852,13 +1852,13 @@ defmodule CodingAgent.ExtensionsTest do
       assert hd(report.registered).type == :memory
       assert hd(report.registered).name == "string_memory"
 
-      status = LemonCore.MemoryProviders.status()
+      status = LemonMemory.Providers.status()
       provider = Enum.find(status.providers, &(&1.id == "string_memory"))
       assert provider.scopes == ["workspace"]
       assert provider.source == "extension:string-memory-provider"
 
       Extensions.unregister_extension_providers(report)
-      refute Enum.any?(LemonCore.MemoryProviders.status().providers, &(&1.id == "string_memory"))
+      refute Enum.any?(LemonMemory.Providers.status().providers, &(&1.id == "string_memory"))
 
       :code.purge(StringMemoryProviderExt)
       :code.delete(StringMemoryProviderExt)

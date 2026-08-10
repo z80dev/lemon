@@ -56,8 +56,6 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.Telemetry` | Telemetry event helpers |
 | `LemonCore.Introspection` | Canonical introspection envelope builder and persistence API |
 | `LemonCore.Checkpoint` | Shared checkpoint store plus filesystem diff/restore and lifecycle events |
-| `LemonCore.MemorySafety` | Shared durable-memory secret screening used before ingest and skill synthesis |
-| `LemonCore.MemoryProvider` / `MemoryProviders` | Searchable/storable memory-provider contract, supervised registry, fan-out, and redacted diagnostics |
 | `Lemon.Reload` | Runtime BEAM/extension reload orchestration with global lock and telemetry |
 | `LemonCore.Httpc` | `:httpc` wrapper ensuring `:inets`/`:ssl` started |
 | `LemonCore.Clock` | Time utilities (monotonic timestamps) |
@@ -65,8 +63,6 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.Dotenv` | `.env` file loader; preserves existing env vars by default |
 | `LemonCore.Logging` | Runtime log-to-file handler setup from `[logging]` config |
 | `LemonCore.GatewayConfig` | Unified gateway config access from canonical TOML gateway section only (test-mode full-replacement via app env is allowed for test isolation) |
-| `LemonCore.ProviderConfigResolver` | Centralized provider config resolution: resolves provider settings once from modular config + env + secrets, including OpenAI-compatible providers that only need `api_key` / `base_url`, then passes concrete values to provider implementations |
-| `LemonCore.ProviderPoolRotator` | Supervised in-memory round-robin state for provider credential pools |
 | `LemonCore.Config.TomlPatch` | Textual TOML editing for targeted key upserts without a TOML encoder |
 | `LemonCore.Binding` | Struct mapping transport/chat/topic to project/agent/engine |
 | `LemonCore.BindingResolver` | Resolves bindings for inbound messages |
@@ -383,7 +379,7 @@ LemonCore.Bus.broadcast("session:" <> session_key, event)
 1. Update the relevant sub-module in `lib/lemon_core/config/` (Modular is the canonical config implementation)
 2. Add validation in `lib/lemon_core/config/validator.ex` if the key has constraints
 3. If the key needs an env override, add it to the modular config env overlay
-4. If the key is for a provider, use `LemonCore.ProviderConfigResolver` for resolution
+4. If the key is for a provider, use `AgentCore.ProviderConfigResolver` for resolution
 5. Update the env var table in AGENTS.md if adding an env override
 6. Add tests in `test/lemon_core/config_test.exs`
 
@@ -836,13 +832,11 @@ The `LemonCore.Application` supervisor starts (`:one_for_one`):
 1. `Phoenix.PubSub` (name: `LemonCore.PubSub`) - PubSub backbone
 2. `LemonCore.ConfigCache` - ETS-backed config cache
 3. `LemonCore.Store` - Storage GenServer
-4. `LemonCore.RunHistoryStore` - Run history persistence
-5. `LemonCore.MemoryStore` - Durable memory document store
-6. `LemonCore.MemoryProviders` - Memory-provider registry and fan-out boundary
-7. `LemonCore.MemoryIngest` - Async run ingest pipeline
-8. `LemonCore.ConfigReloader` - Reload orchestrator
-9. `LemonCore.ConfigReloader.Watcher` - File-system watcher (optional, requires `file_system` dep)
-10. `LemonCore.ProviderPoolRotator` - provider credential-pool round-robin state
+4. `LemonCore.RunHistoryStore` - Run history persistence (requires the optional `exqlite` dep)
+5. `LemonCore.ConfigReloader` - Reload orchestrator
+6. `LemonCore.ConfigReloader.Watcher` - File-system watcher (optional, requires `file_system` dep)
+
+Durable memory is supervised by the `lemon_memory` app, not here.
 
 ## Important Notes
 
@@ -858,4 +852,4 @@ The `LemonCore.Application` supervisor starts (`:one_for_one`):
 - `LemonCore.RouterBridge` returns `{:error, :unavailable}` when `:lemon_router` has not registered itself; callers must handle this gracefully
 - `LemonCore.Dedupe.Ets` uses monotonic time for TTL; `LemonCore.Idempotency` uses wall-clock time
 - `LemonCore.Config.Modular` is the canonical config implementation; `LemonCore.Config` is a facade that delegates to modular
-- Provider config resolution is centralized in `LemonCore.ProviderConfigResolver`; provider modules must not read env vars directly for normal request paths
+- Provider config resolution is centralized in `AgentCore.ProviderConfigResolver` (agent_core); provider modules must not read env vars directly for normal request paths

@@ -1,4 +1,4 @@
-defmodule LemonCore.SessionSearch do
+defmodule LemonMemory.SessionSearch do
   @moduledoc """
   Public search API over durable memory documents.
 
@@ -16,14 +16,14 @@ defmodule LemonCore.SessionSearch do
 
   ## Example
 
-      LemonCore.SessionSearch.search("fix the login bug",
+      LemonMemory.SessionSearch.search("fix the login bug",
         scope: :session,
         scope_key: "agent:my_agent:main",
         limit: 5
       )
   """
 
-  alias LemonCore.MemoryProviders
+  alias LemonMemory.Providers
 
   @default_limit 5
   @max_limit 20
@@ -31,7 +31,7 @@ defmodule LemonCore.SessionSearch do
   @doc """
   Search memory documents by free-text query.
 
-  Returns a list of `LemonCore.MemoryDocument` structs, ordered by relevance.
+  Returns a list of `LemonMemory.Document` structs, ordered by relevance.
   Returns `[]` when `session_search` is disabled or the query is blank.
 
   ## Options
@@ -40,7 +40,7 @@ defmodule LemonCore.SessionSearch do
   - `:scope_key` - required for scope `:session`/`:agent`/`:workspace`
   - `:limit` - max results, capped at #{@max_limit} (default: #{@default_limit})
   """
-  @spec search(binary(), keyword()) :: [LemonCore.MemoryDocument.t()]
+  @spec search(binary(), keyword()) :: [LemonMemory.Document.t()]
   def search(query, opts \\ []) when is_binary(query) do
     cond do
       String.trim(query) == "" ->
@@ -51,7 +51,7 @@ defmodule LemonCore.SessionSearch do
 
       true ->
         limit = min(Keyword.get(opts, :limit, @default_limit), @max_limit)
-        MemoryProviders.search(query, Keyword.put(opts, :limit, limit))
+        Providers.search(query, Keyword.put(opts, :limit, limit))
     end
   end
 
@@ -59,7 +59,7 @@ defmodule LemonCore.SessionSearch do
   Same as `search/2` but returns results formatted as a human-readable string
   suitable for injection into an agent's context.
   """
-  @spec format_results([LemonCore.MemoryDocument.t()]) :: String.t()
+  @spec format_results([LemonMemory.Document.t()]) :: String.t()
   def format_results([]), do: "No matching memory documents found."
 
   def format_results(docs) when is_list(docs) do

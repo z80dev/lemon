@@ -1,4 +1,4 @@
-defmodule LemonCore.TaskFingerprint do
+defmodule LemonMemory.TaskFingerprint do
   @moduledoc """
   Coarse task fingerprint derived from a finalized run.
 
@@ -34,7 +34,7 @@ defmodule LemonCore.TaskFingerprint do
   dimensions joined by `|` so it remains human-readable in debug output.
   """
 
-  alias LemonCore.MemoryDocument
+  alias LemonMemory.Document
 
   @type task_family :: :code | :query | :file_ops | :chat | :unknown
 
@@ -60,13 +60,13 @@ defmodule LemonCore.TaskFingerprint do
   @chat_keywords ~w(yes no thanks thank ok okay hello hi bye help status version)
 
   @doc """
-  Build a `TaskFingerprint` from a `MemoryDocument`.
+  Build a `TaskFingerprint` from a `Document`.
   """
-  @spec from_document(MemoryDocument.t()) :: t()
-  def from_document(%MemoryDocument{} = doc) do
+  @spec from_document(Document.t()) :: t()
+  def from_document(%Document{} = doc) do
     %__MODULE__{
       task_family: classify_prompt(doc.prompt_summary),
-      toolset: doc.tools_used |> Kernel.||([])|> Enum.uniq() |> Enum.sort(),
+      toolset: doc.tools_used |> Kernel.||([]) |> Enum.uniq() |> Enum.sort(),
       workspace_key: doc.workspace_key,
       model: doc.model,
       provider: doc.provider
