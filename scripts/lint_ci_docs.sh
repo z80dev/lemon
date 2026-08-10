@@ -1207,8 +1207,23 @@ import sys
 root = pathlib.Path(sys.argv[1])
 errors = []
 
+# floor-check.yml deliberately pins the *declared floor* (Elixir 1.15 / OTP
+# 26), not the current first-party toolchain — that is the whole point of the
+# lane. It is exempt from the 1.19.5/28.5 rule but still guarded: it must pin
+# the floor family (Elixir 1.15.x / OTP 26.x) so it cannot silently drift.
+floor_pins = {"otp-version": re.compile(r"^26\."), "elixir-version": re.compile(r"^1\.15(\.|$)")}
+
 for workflow in sorted((root / ".github" / "workflows").glob("*.yml")):
     content = workflow.read_text(encoding="utf-8")
+    if workflow.name == "floor-check.yml":
+        for field, pattern in floor_pins.items():
+            found = re.findall(rf"{field}:\s*['\"]?([^'\"\s]+)", content)
+            if not found:
+                errors.append(f"{workflow.relative_to(root)}: missing {field} pin (must target the floor)")
+            for value in found:
+                if not pattern.match(value):
+                    errors.append(f"{workflow.relative_to(root)}: {field}: {value} is not on the declared floor")
+        continue
     for field, expected in (("otp-version", "28.5"), ("elixir-version", "1.19.5")):
         for match in re.finditer(rf"{field}:\s*['\"]?([^'\"\s]+)", content):
             if match.group(1) != expected:

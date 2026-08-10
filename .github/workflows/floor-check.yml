@@ -1,0 +1,116 @@
+name: Elixir floor (1.15)
+
+# Verifies the `elixir: "~> 1.15"` floor that every published package declares.
+#
+# Why this lane exists
+# --------------------
+# The nine hex packages advertise `~> 1.15`, but every other CI lane builds on
+# 1.19 (see quality.yml / dialyzer.yml). A floor that is never exercised is an
+# unverified claim: a downstream user on Elixir 1.15 would be the first to
+# discover it doesn't actually compile. This lane compiles the published source
+# on 1.15 so the declared floor is a tested contract, not a hopeful string.
+#
+# Why per-package, from inside each app dir
+# -----------------------------------------
+# The umbrella also contains 14 dev-only apps that require `~> 1.19`. A
+# root-level `mix compile` / `mix deps.get` loads *every* child mix.exs, so the
+# dev apps' `~> 1.19` requirement aborts the whole run on 1.15 before any
+# published code is touched. Running mix from inside a published app's own
+# directory loads only that app plus its `in_umbrella` sibling deps — and those
+# siblings are, by construction, all published packages (the hex-publish
+# machinery in hex_package.exs refuses any dep on an unpublished app). The
+# dev-only apps are never in a published app's dependency tree, so their
+# `~> 1.19` mix.exs is never evaluated. Confirmed via `mix deps.tree` inside
+# each app: no dev-only app appears.
+#
+# Why MIX_ENV=prod
+# ----------------
+# prod drops `only: :dev` / `only: :test` deps (ex_doc, stream_data, the
+# test-only plug). That is exactly the surface a hex consumer compiles when they
+# add the package as a runtime dependency, so this checks the floor for the code
+# that actually ships — not for local tooling.
+#
+# Why plain `mix compile` (no --warnings-as-errors)
+# -------------------------------------------------
+# The floor contract is "the published source compiles on 1.15", which is what a
+# downstream `mix compile` does. Warnings differ across Elixir versions, and
+# this lane's compile step cannot be reproduced on 1.15 by developers who only
+# have 1.19 locally; gating on version-specific warnings would fail the floor
+# for reasons unrelated to the floor. The warnings-as-errors contract is already
+# enforced on 1.19 in quality.yml.
+#
+# Honest limitation
+# -----------------
+# This lane could only be validated locally on 1.19 (the 1.15/OTP-26 toolchain
+# isn't installed on dev machines). The compile mechanism and its isolation are
+# proven on 1.19; the 1.15-specific result is first observed when this workflow
+# runs. It is a real gate: if a package genuinely fails to compile on 1.15, the
+# fix is to correct the code or raise that package's floor to a version that
+# does compile — not to weaken this check.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  floor-check:
+    name: compile on 1.15 — ${{ matrix.app }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Advisory for its first cycles: the isolation mechanism is proven on 1.19
+    # but the 1.15-specific compile is first observed here. Once it's been green
+    # in CI, drop this line to make the floor a hard gate (and add a badge).
+    continue-on-error: true
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # The nine packages published to hex, each declaring `~> 1.15`.
+        app:
+          - ai
+          - lemon_core
+          - agent_core
+          - lemon_memory
+          - lemon_media
+          - lemon_router
+          - lemon_gateway
+          - lemon_channels
+          - lemon_platform_test
+
+    env:
+      MIX_ENV: prod
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup BEAM (Elixir 1.15 / OTP 26)
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "26.2"
+          elixir-version: "1.15.8"
+
+      - name: Cache Mix deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-floor115-${{ matrix.app }}-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-floor115-${{ matrix.app }}-
+
+      # Both steps run from the package dir so mix loads only this app and its
+      # published siblings — never a dev-only `~> 1.19` app (see header).
+      - name: Fetch prod deps
+        working-directory: apps/${{ matrix.app }}
+        run: mix deps.get --only prod
+
+      - name: Compile on the declared floor
+        working-directory: apps/${{ matrix.app }}
+        run: mix compile
