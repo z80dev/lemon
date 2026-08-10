@@ -1,16 +1,20 @@
 name: Dialyzer
 
-# Advisory static-analysis lane. This job is allowed to fail (see
-# `continue-on-error` below): Dialyzer warnings are surfaced for visibility
-# but never block merges. Warnings are tracked down over time via
-# .dialyzer_ignore.exs (see root mix.exs `dialyzer/0`).
+# Static-analysis lane with a real green GATE.
+#
+# The umbrella as a whole still carries a large Dialyzer backlog (categorized
+# in docs/plans/dialyzer-burndown.md), so the *full* run stays advisory for
+# visibility. On top of it we enforce a hard gate: an explicit allowlist of
+# apps (scripts/dialyzer_gate.sh) that have been driven to green and must STAY
+# green. The gate step has no `continue-on-error`, so a regression in any gated
+# app turns this job — and the README badge — red. Apps graduate onto the
+# allowlist as their findings are burned down; the list only ratchets forward.
 #
 # Note: `--format github` is intentionally NOT used here. As of dialyxir
 # 1.4.7 / OTP 28.5, Dialyzer emits an `:exact_compare` warning tag that
 # dialyxir's `github`/`dialyxir`/`short` formatters don't recognize yet,
-# which crashes the formatter (Dialyxir.Formatter.Utils.warning/1 throws
-# `{:error, :unknown_warning, :exact_compare}`). `--format dialyzer` uses
-# Erlang's own `:dialyzer.format_warning/2` and isn't affected.
+# which crashes the formatter. `--format dialyzer` uses Erlang's own
+# `:dialyzer.format_warning/2` and isn't affected.
 
 on:
   pull_request:
@@ -21,11 +25,14 @@ on:
 permissions:
   contents: read
 
+env:
+  OTP_VERSION: "28.5"
+  ELIXIR_VERSION: "1.19.5"
+
 jobs:
   dialyzer:
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    continue-on-error: true
 
     steps:
       - name: Checkout
@@ -34,18 +41,29 @@ jobs:
       - name: Setup BEAM
         uses: erlef/setup-beam@v1
         with:
-          otp-version: "28.5"
-          elixir-version: "1.19.5"
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
 
-      - name: Cache Mix deps and build (incl. PLTs)
+      - name: Cache Mix deps and build
         uses: actions/cache@v4
         with:
           path: |
             deps
             _build
-          key: ${{ runner.os }}-mix-dialyzer-${{ hashFiles('mix.lock') }}
+          key: ${{ runner.os }}-mix-dialyzer-otp${{ env.OTP_VERSION }}-elixir${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}
           restore-keys: |
-            ${{ runner.os }}-mix-dialyzer-
+            ${{ runner.os }}-mix-dialyzer-otp${{ env.OTP_VERSION }}-elixir${{ env.ELIXIR_VERSION }}-
+
+      # PLTs live under _build/dialyzer (see root mix.exs `dialyzer/0`) and are
+      # covered by the cache above, keyed on OTP+Elixir+mix.lock so they only
+      # rebuild when the dependency/toolchain surface actually changes.
+      - name: Cache Dialyzer PLTs
+        uses: actions/cache@v4
+        with:
+          path: _build/dialyzer
+          key: ${{ runner.os }}-plt-otp${{ env.OTP_VERSION }}-elixir${{ env.ELIXIR_VERSION }}-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-plt-otp${{ env.OTP_VERSION }}-elixir${{ env.ELIXIR_VERSION }}-
 
       - name: Install deps
         run: mix deps.get
@@ -56,5 +74,15 @@ jobs:
       - name: Build/refresh PLTs
         run: mix dialyzer --plt
 
-      - name: Run Dialyzer
-        run: mix dialyzer --format dialyzer
+      # Full-umbrella analysis, captured for both visibility and the gate. This
+      # step is advisory: the umbrella still has a documented backlog, so we do
+      # not fail the job on its exit status here — the gate below is what blocks.
+      - name: Run Dialyzer (full, advisory)
+        run: |
+          set -o pipefail
+          mix dialyzer --format dialyzer 2>&1 | tee dialyzer.out || true
+
+      # The real gate. Fails the job (no continue-on-error) if any allowlisted
+      # app has a single finding. Re-uses the analysis captured above.
+      - name: Green gate — allowlisted packages must stay Dialyzer-clean
+        run: scripts/dialyzer_gate.sh dialyzer.out

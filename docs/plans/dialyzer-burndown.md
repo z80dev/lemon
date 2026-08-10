@@ -1,8 +1,10 @@
 # Dialyzer Warning Burn-down Plan
 
-Status: initial triage complete (this document); no source fixes applied yet — see Phase 1+ below.
+Status: Phase 1 done (68192db0); Phase 4 green gate LIVE as of 2026-08-10 —
+see "Phase 4 update" at the bottom. The CI lane is no longer purely advisory:
+an allowlist of Dialyzer-clean apps is now a hard gate (`scripts/dialyzer_gate.sh`).
 
-Last reviewed: 2026-07-07
+Last reviewed: 2026-08-10
 
 ## Summary
 
@@ -427,3 +429,62 @@ recommend a small `mix lemon.dialyzer_gate` task (or shell script) that:
 
 This task (task #36) did not implement the `mix lemon.dialyzer_gate` task
 or the baseline file — that's the concrete next step once Phase 1 starts.
+
+## Phase 4 update — green gate LIVE (2026-08-10, task #60)
+
+Rather than the category-baseline regression gate sketched above, task #60
+shipped the simpler, stronger variant: an **allowlist green gate**. Instead of
+"no category may increase", the rule is "these apps must have *zero* findings,
+forever". The list only ratchets forward as apps are burned down.
+
+**What shipped:**
+- `scripts/dialyzer_gate.sh` — parses a `mix dialyzer --format dialyzer` run and
+  fails (exit 1) if any allowlisted app has a single `lib/<app>/…` finding. It
+  prints a per-app count table and, on failure, the offending lines. Runs
+  standalone (`scripts/dialyzer_gate.sh`) or against a captured output file.
+- `.github/workflows/dialyzer.yml` — the full-umbrella run stays advisory (for
+  visibility of the remaining backlog), and a new **blocking** gate step (no
+  `continue-on-error`) runs the script. PLT cache is now keyed on
+  OTP+Elixir+mix.lock (was just mix.lock), with a dedicated `_build/dialyzer`
+  cache. The README Dialyzer badge now reflects a real pass/fail signal.
+
+**Initial allowlist (6 apps, 3 of them published Hex packages):**
+`lemon_media`*, `lemon_memory`*, `lemon_platform_test`*, `lemon_web`,
+`lemon_lsp`, `lemon_browser` (`*` = published). All verified at 0 findings in a
+clean full run (`Total errors: 1610` umbrella-wide as of 2026-08-10).
+
+**Source fixes made to reach zero (all genuine, none suppressed via ignores):**
+- **Real bug — `lemon_platform_test/fake_llm.ex` (published, used as a test
+  double by every consumer):** `FakeLLM` pushed the wrong `EventStream` event
+  shapes vs the `Ai.EventStream.event()` contract AND vs *every* real provider
+  adapter (anthropic/google/openai/bedrock/…): it pushed `{:text_end, idx,
+  message}` (missing the `text` element the 4-tuple contract requires) and
+  `{:tool_call_start, idx, call, message}` (an extra element vs the 3-tuple
+  contract). Dialyzer flagged both as `call_breaks_contract`. Fixed to match the
+  contract. This mattered: `FakeLLM`'s own docstring promises it "reproduces the
+  exact event sequence a real provider adapter pushes," but a stream reducer
+  keyed on these shapes would have behaved differently under the fake than in
+  prod. (The same two shape bugs also live in `agent_core/test/support/mocks.ex`
+  — test-only, so not Dialyzer-analyzed, but worth fixing there too.)
+- **Dead code — `lemon_memory/document.ex`:** removed a provably-unreachable
+  `parse_agent_id(_)` catch-all (prior clauses cover the full `nil | binary()`
+  input type).
+- **False-positive root cause fixed, not ignored — `lemon_browser/local_server.ex`:**
+  `driver_config_summary/0` was flagged `no_local_return` (cascading into two
+  bogus `will never be called` on `parse_positive_int/2` + `hash_value/1`)
+  because `Env.get(:lemon_browser_attach_only) or …` fed `Env.get/2`'s broad
+  `term()` success typing into a strict-boolean `or`. Made the boolean explicit
+  (`… == true or …`); all three warnings cleared.
+- **`unmatched_return` noise in gated apps** (`:unmatched_returns` is an
+  intentionally-strict non-default flag we keep for signal): bound the discarded
+  fire-and-forget returns with `_ =` in `lemon_media/media_job_worker.ex` (3
+  PubSub `publish/2`), `lemon_lsp/server_manager.ex` (3 `Process.cancel_timer` +
+  1 `if`), `lemon_memory/store.ex` (1 `Sqlite3.close` + 2 `ROLLBACK`), and
+  `lemon_platform_test/fake_llm.ex` (`Task.start` + non-terminal pushes).
+
+**Remainder (follow-up):** ~1610 findings across the other 17 apps, dominated by
+`unmatched_return` (~466), `function_will_never_be_called` (~280,
+dynamic-dispatch false positives), and the spec/guard/pattern cluster. Graduate
+apps onto the allowlist as each is burned down — start with the near-zero
+non-gated apps and the remaining published packages (`ai` ~40, `lemon_gateway`
+~42, then `agent_core`/`lemon_core`/`lemon_router`/`lemon_channels`).
