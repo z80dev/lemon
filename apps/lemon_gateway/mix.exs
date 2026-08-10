@@ -41,7 +41,6 @@ defmodule LemonGateway.MixProject do
       {:websockex, "~> 0.4"},
       {:websock_adapter, "~> 0.5"},
       {:agent_core, in_umbrella: true},
-      {:coding_agent, in_umbrella: true},
       {:lemon_core, in_umbrella: true}
     ]
   end

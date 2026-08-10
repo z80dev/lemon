@@ -47,11 +47,30 @@ defmodule CodingAgent.Application do
 
     case Supervisor.start_link(children, opts) do
       {:ok, _supervisor} = ok ->
+        register_gateway_engine()
         maybe_start_primary_session()
         ok
 
       other ->
         other
+    end
+  end
+
+  # The gateway owns the engine registry but must not depend on this app, so we
+  # contribute the "lemon" engine from here. A runtime without lemon_gateway
+  # (or with the registry not yet started) simply has no such engine.
+  defp register_gateway_engine do
+    if Code.ensure_loaded?(LemonGateway.EngineRegistry) do
+      case LemonGateway.EngineRegistry.register(CodingAgent.GatewayEngine) do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          Logger.debug("lemon gateway engine not registered: #{inspect(reason)}")
+          :ok
+      end
+    else
+      :ok
     end
   end
 

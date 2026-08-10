@@ -13,7 +13,7 @@ defmodule LemonGateway.Transports.Email.Inbound do
   alias LemonGateway.Transports.Email
   alias LemonCore.ChatScope
   alias LemonCore.{RouterBridge, RunRequest, Store}
-  alias CodingAgent.Security.ExternalContent
+  alias AgentCore.Security.ExternalContent
 
   @default_port 4045
   @default_path "/webhooks/email/inbound"

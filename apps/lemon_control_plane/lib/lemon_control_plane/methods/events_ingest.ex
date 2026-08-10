@@ -80,7 +80,9 @@ defmodule LemonControlPlane.Methods.EventsIngest do
             case validate_target(target) do
               {:ok, target} ->
                 ingest_event(event_type, atom_type, payload, target, is_custom)
-              {:error, reason} -> {:error, Errors.invalid_request(reason)}
+
+              {:error, reason} ->
+                {:error, Errors.invalid_request(reason)}
             end
 
           {:error, reason} ->

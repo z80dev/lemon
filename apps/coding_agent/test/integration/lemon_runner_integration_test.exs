@@ -1,4 +1,4 @@
-defmodule LemonGateway.LemonIntegrationTest do
+defmodule CodingAgent.LemonRunnerIntegrationTest do
   use ExUnit.Case
 
   alias CodingAgent.CliRunners.LemonRunner

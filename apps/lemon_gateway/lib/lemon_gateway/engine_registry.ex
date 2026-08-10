@@ -5,6 +5,12 @@ defmodule LemonGateway.EngineRegistry do
   Maintains a mapping of engine ID strings to their implementing modules.
   Validates engine IDs on registration and provides lookup and resume
   token extraction across all registered engines.
+
+  The built-in engines are the CLI wrappers this app ships. Engines that live
+  in another application register themselves at boot with `register/1` — that
+  is how coding_agent contributes the `"lemon"` engine without the gateway
+  depending on it. Registration also updates `:lemon_gateway, :engines`, so a
+  registry restart keeps the engine.
   """
   use GenServer
 
@@ -36,6 +42,22 @@ defmodule LemonGateway.EngineRegistry do
   def get_engine(id), do: GenServer.call(__MODULE__, {:get_or_nil, id})
 
   @doc """
+  Registers an engine module at runtime.
+
+  Idempotent: registering the same module again is a no-op, and re-registering
+  an id with a different module replaces it. Returns `{:error, :unavailable}`
+  when the registry is not running, so a caller booting outside the gateway
+  runtime does not crash.
+  """
+  @spec register(engine_mod()) :: :ok | {:error, term()}
+  def register(module) when is_atom(module) do
+    GenServer.call(__MODULE__, {:register, module})
+  catch
+    :exit, {:noproc, _} -> {:error, :unavailable}
+    :exit, {:normal, _} -> {:error, :unavailable}
+  end
+
+  @doc """
   Iterates all registered engines and calls extract_resume/1 on each until one returns
   a non-nil ResumeToken. Returns `{:ok, token}` if found, `:none` otherwise.
   """
@@ -48,7 +70,6 @@ defmodule LemonGateway.EngineRegistry do
   def init(_opts) do
     engines =
       Application.get_env(:lemon_gateway, :engines, [
-        LemonGateway.Engines.Lemon,
         LemonGateway.Engines.Echo,
         LemonGateway.Engines.Codex,
         LemonGateway.Engines.Claude,
@@ -57,6 +78,10 @@ defmodule LemonGateway.EngineRegistry do
         LemonGateway.Engines.Pi,
         LemonGateway.Engines.Kimi
       ])
+
+    # A configured engine may live in an application that is not part of this
+    # runtime; skip it rather than taking the registry down.
+    engines = Enum.filter(engines, &loadable?/1)
 
     map =
       engines
@@ -70,6 +95,23 @@ defmodule LemonGateway.EngineRegistry do
   end
 
   @impl true
+  def handle_call({:register, module}, _from, state) do
+    id = module.id()
+    validate_id!(id)
+
+    order =
+      case Enum.find_index(state.order, &(&1.id() == id)) do
+        nil -> state.order ++ [module]
+        index -> List.replace_at(state.order, index, module)
+      end
+
+    persist_engines(order)
+
+    {:reply, :ok, %{state | map: Map.put(state.map, id, module), order: order}}
+  rescue
+    error -> {:reply, {:error, error}, state}
+  end
+
   def handle_call(:list, _from, state) do
     {:reply, Enum.map(state.order, & &1.id()), state}
   end
@@ -93,6 +135,16 @@ defmodule LemonGateway.EngineRegistry do
       end)
 
     {:reply, result, state}
+  end
+
+  defp loadable?(module) do
+    Code.ensure_loaded?(module) and function_exported?(module, :id, 0)
+  end
+
+  # Keep the configured list in step so a registry restart rebuilds the same
+  # set of engines.
+  defp persist_engines(order) do
+    Application.put_env(:lemon_gateway, :engines, order)
   end
 
   defp validate_id!(id) when id in @reserved_ids do

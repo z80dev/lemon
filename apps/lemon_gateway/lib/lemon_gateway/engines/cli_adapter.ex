@@ -172,7 +172,7 @@ defmodule LemonGateway.Engines.CliAdapter do
       LemonGateway.Tools.SmsClaimMessage.tool(cwd, session_key: job.session_key)
     ]
 
-    workspace_dir = CodingAgent.Config.workspace_dir()
+    workspace_dir = LemonGateway.Workspace.dir()
 
     cond do
       telegram_session?(job) ->

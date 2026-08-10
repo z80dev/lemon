@@ -80,7 +80,6 @@ config :lemon_gateway, LemonGateway.Config,
   projects: %{}
 
 config :lemon_gateway, :engines, [
-  LemonGateway.Engines.Lemon,
   LemonGateway.Engines.Echo,
   LemonGateway.Engines.Codex,
   LemonGateway.Engines.Claude,

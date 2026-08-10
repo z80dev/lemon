@@ -441,6 +441,69 @@ defmodule LemonGateway.EngineRegistryTest do
     end
   end
 
+  describe "runtime registration" do
+    test "an engine from another application registers at runtime" do
+      Application.put_env(:lemon_gateway, :engines, [AlphaEngine])
+      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+
+      refute "beta" in EngineRegistry.list_engines()
+      assert EngineRegistry.register(BetaEngine) == :ok
+
+      assert EngineRegistry.get_engine("beta") == BetaEngine
+      assert EngineRegistry.list_engines() == ["alpha", "beta"]
+    end
+
+    test "registering the same engine twice is idempotent" do
+      Application.put_env(:lemon_gateway, :engines, [AlphaEngine])
+      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+
+      assert EngineRegistry.register(BetaEngine) == :ok
+      assert EngineRegistry.register(BetaEngine) == :ok
+
+      assert EngineRegistry.list_engines() == ["alpha", "beta"]
+    end
+
+    test "registration survives a registry restart" do
+      Application.put_env(:lemon_gateway, :engines, [AlphaEngine])
+      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+      assert EngineRegistry.register(BetaEngine) == :ok
+
+      GenServer.stop(EngineRegistry, :normal)
+      wait_for_registry()
+
+      assert EngineRegistry.get_engine("beta") == BetaEngine
+    end
+
+    test "an invalid id is rejected without taking the registry down" do
+      Application.put_env(:lemon_gateway, :engines, [AlphaEngine])
+      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+
+      assert {:error, %ArgumentError{}} = EngineRegistry.register(UppercaseIdEngine)
+      assert EngineRegistry.list_engines() == ["alpha"]
+    end
+
+    test "a configured engine whose module is absent is skipped, not fatal" do
+      Application.put_env(:lemon_gateway, :engines, [AlphaEngine, Definitely.Not.Loaded])
+
+      assert {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+      assert EngineRegistry.list_engines() == ["alpha"]
+    end
+
+    defp wait_for_registry(attempts \\ 50) do
+      cond do
+        is_pid(Process.whereis(EngineRegistry)) ->
+          :ok
+
+        attempts == 0 ->
+          flunk("engine registry did not restart")
+
+        true ->
+          Process.sleep(10)
+          wait_for_registry(attempts - 1)
+      end
+    end
+  end
+
   describe "engine order preservation (state.order)" do
     test "list_engines returns IDs in registration order" do
       Application.put_env(:lemon_gateway, :engines, [AlphaEngine, BetaEngine, NoMatchEngine])

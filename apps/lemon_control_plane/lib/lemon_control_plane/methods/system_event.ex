@@ -86,7 +86,9 @@ defmodule LemonControlPlane.Methods.SystemEvent do
             case validate_target(target) do
               {:ok, topic} ->
                 emit_event(event_type, atom_type, payload, topic, ctx, is_custom)
-              {:error, reason} -> {:error, {:invalid_request, reason, nil}}
+
+              {:error, reason} ->
+                {:error, {:invalid_request, reason, nil}}
             end
 
           {:error, reason} ->

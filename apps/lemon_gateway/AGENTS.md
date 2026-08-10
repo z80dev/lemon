@@ -92,8 +92,7 @@ Bus event types: `:run_started`, `:run_completed`, `:delta`, `:engine_started`, 
 | File | Module | Notes |
 |------|--------|-------|
 | `lib/lemon_gateway/engines/cli_adapter.ex` | `Engines.CliAdapter` | **Read this first for CLI engines.** Shared logic for subprocess start, event stream consumption, resume formatting, and cancellation. |
-| `lib/lemon_gateway/engines/lemon.ex` | `Engines.Lemon` | Native engine: starts `Engines.Lemon.SessionRunner`, which drives `CodingAgent.Session` directly. Only engine that supports steering. Ensures `:coding_agent` app is started. |
-| `lib/lemon_gateway/engines/lemon/session_runner.ex` | `Engines.Lemon.SessionRunner` | Private GenServer that translates CodingAgent session events into gateway events and injects gateway-only Lemon tools. |
+| _(moved)_ | `CodingAgent.GatewayEngine` | The `lemon` engine now lives in coding_agent and registers itself via `EngineRegistry.register/1`; this app no longer depends on the agent. |
 | `lib/lemon_gateway/engines/claude.ex` | `Engines.Claude` | Claude Code CLI: delegates to CliAdapter with `AgentCore.CliRunners.ClaudeRunner` |
 | `lib/lemon_gateway/engines/codex.ex` | `Engines.Codex` | Codex CLI: delegates to CliAdapter with `AgentCore.CliRunners.CodexRunner` |
 | `lib/lemon_gateway/engines/droid.ex` | `Engines.Droid` | Factory Droid CLI: delegates to CliAdapter with `AgentCore.CliRunners.DroidRunner` |
@@ -150,7 +149,7 @@ Gateway config comes from the canonical TOML `[gateway]` section only, via `Lemo
 
 ### Gateway-Injected Tools
 
-These tools are added to Lemon engine runs only (not CLI engines) via `Engines.Lemon.SessionRunner`:
+These tools are added to `lemon` engine runs only (not CLI engines) via `CodingAgent.GatewayEngine.SessionRunner`, which lives in coding_agent:
 
 | File | Module | Notes |
 |------|--------|-------|
@@ -233,7 +232,6 @@ Add to `config/config.exs` or the application env:
 
 ```elixir
 config :lemon_gateway, :engines, [
-  LemonGateway.Engines.Lemon,
   LemonGateway.Engines.Echo,
   LemonGateway.Engines.Codex,
   LemonGateway.Engines.Claude,
@@ -366,7 +364,7 @@ end
 
 ### Step 2: Register for Lemon Runs
 
-Add to `gateway_extra_tools/2` in `lib/lemon_gateway/engines/lemon/session_runner.ex`:
+Add to `gateway_extra_tools/2` in `apps/coding_agent/lib/coding_agent/gateway_engine/session_runner.ex`:
 
 ```elixir
 defp gateway_extra_tools(job, opts) do

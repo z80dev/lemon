@@ -580,28 +580,6 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
   # inversions in docs/platform-split.md land. Never add an entry to make a new
   # violation pass — invert the dependency instead.
   @grandfathered [
-    # Phase 2.1 — gateway ⊘ coding_agent (engine shim moves into coding_agent).
-    %{
-      app: :lemon_gateway,
-      pattern: "CodingAgent",
-      file: "apps/lemon_gateway/lib/lemon_gateway/engines/lemon.ex"
-    },
-    %{
-      app: :lemon_gateway,
-      pattern: "CodingAgent",
-      file: "apps/lemon_gateway/lib/lemon_gateway/engines/lemon/session_runner.ex"
-    },
-    %{
-      app: :lemon_gateway,
-      pattern: "CodingAgent",
-      file: "apps/lemon_gateway/lib/lemon_gateway/engines/cli_adapter.ex"
-    },
-    %{
-      app: :lemon_gateway,
-      pattern: "CodingAgent",
-      file: "apps/lemon_gateway/lib/lemon_gateway/transports/email/inbound.ex"
-    },
-
     # Phase 2.2 — control_plane ⊘ coding_agent (ops methods self-register).
     %{
       app: :lemon_control_plane,
@@ -687,48 +665,6 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
       app: :lemon_control_plane,
       pattern: "LemonGateway",
       file: "apps/lemon_control_plane/lib/lemon_control_plane/methods/transports_status.ex"
-    },
-
-    # Phase 2.6 — router facade hardening retires these direct internals.
-    %{
-      app: :lemon_automation,
-      pattern: "LemonRouter.RunRegistry",
-      file: "apps/lemon_automation/lib/lemon_automation/cron_manager.ex"
-    },
-    %{
-      app: :lemon_control_plane,
-      pattern: "LemonRouter.RunRegistry",
-      file: "apps/lemon_control_plane/lib/lemon_control_plane/methods/run_graph_get.ex"
-    },
-    %{
-      app: :lemon_control_plane,
-      pattern: "LemonRouter.RunRegistry",
-      file: "apps/lemon_control_plane/lib/lemon_control_plane/methods/runs_active_list.ex"
-    },
-    %{
-      app: :lemon_control_plane,
-      pattern: "LemonRouter.RunSupervisor",
-      file: "apps/lemon_control_plane/lib/lemon_control_plane/methods/system_presence.ex"
-    },
-    %{
-      app: :lemon_control_plane,
-      pattern: "LemonRouter.RunOrchestrator",
-      file: "apps/lemon_control_plane/lib/lemon_control_plane/methods/agent.ex"
-    },
-    %{
-      app: :lemon_control_plane,
-      pattern: "LemonRouter.RunOrchestrator",
-      file: "apps/lemon_control_plane/lib/lemon_control_plane/methods/introspection_snapshot.ex"
-    },
-    %{
-      app: :lemon_control_plane,
-      pattern: "LemonRouter.RunOrchestrator",
-      file: "apps/lemon_control_plane/lib/lemon_control_plane/methods/status.ex"
-    },
-    %{
-      app: :lemon_control_plane,
-      pattern: "LemonRouter.RunOrchestrator",
-      file: "apps/lemon_control_plane/lib/lemon_control_plane/methods/wake.ex"
     }
   ]
 

@@ -1,4 +1,4 @@
-defmodule LemonGateway.Engines.Lemon.SessionRunner do
+defmodule CodingAgent.GatewayEngine.SessionRunner do
   @moduledoc false
 
   use GenServer
@@ -107,12 +107,9 @@ defmodule LemonGateway.Engines.Lemon.SessionRunner do
 
   @impl true
   def init(opts) do
-    case LemonGateway.DependencyManager.ensure_app(:coding_agent) do
-      :ok ->
-        init_session(opts)
-
-      {:error, reason} ->
-        {:stop, reason}
+    case Application.ensure_all_started(:coding_agent) do
+      {:ok, _started} -> init_session(opts)
+      {:error, reason} -> {:stop, reason}
     end
   end
 

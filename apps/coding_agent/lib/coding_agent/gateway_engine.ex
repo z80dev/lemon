@@ -1,9 +1,12 @@
-defmodule LemonGateway.Engines.Lemon do
+defmodule CodingAgent.GatewayEngine do
   @moduledoc """
-  Lemon engine that wraps CodingAgent for native LLM interactions.
+  The `"lemon"` gateway engine: drives `CodingAgent.Session` in-process.
 
-  Unlike Codex and Claude engines which wrap external CLI tools via subprocess,
-  the Lemon engine drives CodingAgent.Session directly for native AI interactions.
+  Unlike the Codex and Claude engines, which wrap external CLI tools via
+  subprocess, this one runs the agent natively. It lives in coding_agent rather
+  than lemon_gateway so the gateway does not depend on the agent product; it
+  registers itself with `LemonGateway.EngineRegistry` when coding_agent starts,
+  and a runtime without coding_agent simply has no `"lemon"` engine.
 
   ## Features
 
@@ -20,7 +23,7 @@ defmodule LemonGateway.Engines.Lemon do
         text: "Create a hello world function"
       }
 
-      {:ok, run_ref, ctx} = Lemon.start_run(job, %{cwd: "/path/to/project"}, self())
+      {:ok, run_ref, ctx} = CodingAgent.GatewayEngine.start_run(job, %{cwd: "/path/to/project"}, self())
 
       receive do
         {:engine_event, ^run_ref, %{__event__: :started, engine: "lemon"}} ->
@@ -34,7 +37,7 @@ defmodule LemonGateway.Engines.Lemon do
   @behaviour LemonGateway.Engine
 
   alias LemonGateway.Engines.CliAdapter
-  alias LemonGateway.Engines.Lemon.SessionRunner
+  alias CodingAgent.GatewayEngine.SessionRunner
   alias LemonGateway.Event
   alias LemonCore.ResumeToken
 
@@ -57,18 +60,17 @@ defmodule LemonGateway.Engines.Lemon do
 
   @impl true
   def start_run(job, opts, sink_pid) do
-    # Lemon engine depends on CodingAgent (+ Ai). In some entrypoints we may end up
-    # calling engine modules before the dependent OTP apps are started (e.g. when
-    # only a subset of applications is booted). Ensure they're running so provider
-    # registries and supervisors are available.
-    case LemonGateway.DependencyManager.ensure_app(:coding_agent) do
-      :ok ->
+    # An entrypoint may boot only a subset of applications, so make sure the
+    # agent's own supervision tree (provider registries, session supervisor) is
+    # running before starting a session.
+    case Application.ensure_all_started(:coding_agent) do
+      {:ok, _started} ->
         with :ok <- ensure_session_available() do
           start_session_runner(job, opts, sink_pid)
         end
 
-      {:error, _reason} = error ->
-        error
+      {:error, reason} ->
+        {:error, {:coding_agent_unavailable, reason}}
     end
   end
 

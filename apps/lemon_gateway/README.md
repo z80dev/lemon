@@ -79,7 +79,7 @@ Part of the `lemon` Elixir umbrella project.
 
 | Engine ID | Module | Runner | Steering | Description |
 |-----------|--------|--------|----------|-------------|
-| `lemon` | `Engines.Lemon` | `CodingAgent.Session` via `Engines.Lemon.SessionRunner` | Yes | Native Elixir engine with full CodingAgent tool support, session persistence, and mid-run steering |
+| `lemon` | `CodingAgent.GatewayEngine` (registered by coding_agent) | `CodingAgent.Session` via `CodingAgent.GatewayEngine.SessionRunner` | Yes | Native Elixir engine with full CodingAgent tool support, session persistence, and mid-run steering. Absent in a runtime without coding_agent |
 | `claude` | `Engines.Claude` | `AgentCore.CliRunners.ClaudeRunner` | No | Claude Code CLI wrapper via CliAdapter |
 | `codex` | `Engines.Codex` | `AgentCore.CliRunners.CodexRunner` | No | OpenAI Codex CLI wrapper via CliAdapter |
 | `droid` | `Engines.Droid` | `AgentCore.CliRunners.DroidRunner` | No | Factory Droid CLI wrapper via CliAdapter |
@@ -98,7 +98,7 @@ All engines implement the `LemonGateway.Engine` behaviour:
 - `steer/2` -- inject text into an active run (optional callback)
 - `format_resume/1`, `extract_resume/1`, `is_resume_line/1` -- resume token serialization
 
-CLI-based engines (Claude, Codex, Droid, Opencode, Pi) delegate to `Engines.CliAdapter`, which provides shared logic for subprocess management, event stream consumption, resume token formatting, and cancellation. Lemon drives `CodingAgent.Session` directly through `Engines.Lemon.SessionRunner`.
+CLI-based engines (Claude, Codex, Droid, Opencode, Pi) delegate to `Engines.CliAdapter`, which provides shared logic for subprocess management, event stream consumption, resume token formatting, and cancellation. The `lemon` engine is not part of this app: it lives in coding_agent as `CodingAgent.GatewayEngine` and registers itself through `EngineRegistry.register/1` at boot.
 
 ### Engine Selection Priority
 
@@ -173,8 +173,7 @@ failures without parsing rendered command output.
 | `LemonGateway.EngineRegistry` | `engine_registry.ex` | Engine registration, lookup, and resume token extraction |
 | `LemonGateway.EngineDirective` | `engine_directive.ex` | Parses `/engine` prefix directives from user input |
 | `LemonGateway.Engines.CliAdapter` | `engines/cli_adapter.ex` | Shared CLI subprocess runner for all CLI engines |
-| `LemonGateway.Engines.Lemon` | `engines/lemon.ex` | Native CodingAgent engine with steering |
-| `LemonGateway.Engines.Lemon.SessionRunner` | `engines/lemon/session_runner.ex` | Private native Lemon session runner and event translator |
+| `LemonGateway.Workspace` | `workspace.ex` | Workspace directory for channel-bound files, configured rather than read from the agent |
 | `LemonGateway.Engines.Claude` | `engines/claude.ex` | Claude Code CLI adapter |
 | `LemonGateway.Engines.Codex` | `engines/codex.ex` | OpenAI Codex CLI adapter |
 | `LemonGateway.Engines.Droid` | `engines/droid.ex` | Factory Droid CLI adapter |

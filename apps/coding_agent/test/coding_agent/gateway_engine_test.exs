@@ -1,4 +1,4 @@
-defmodule LemonGateway.LemonEngineTest do
+defmodule CodingAgent.GatewayEngineTest do
   use ExUnit.Case
 
   alias Ai.Types.{
@@ -12,7 +12,7 @@ defmodule LemonGateway.LemonEngineTest do
     Usage
   }
 
-  alias LemonGateway.Engines.Lemon
+  alias CodingAgent.GatewayEngine, as: Lemon
   alias LemonGateway.Types.Job
   alias LemonCore.ResumeToken
 

@@ -74,6 +74,7 @@ defmodule LemonControlPlane.Methods.BrowserRequest do
               end
             end
         end
+
       {:error, {:invalid_request, _message} = error} ->
         {:error, error}
 
