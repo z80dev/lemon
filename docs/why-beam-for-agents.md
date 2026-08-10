@@ -163,7 +163,10 @@ that silently stops crossing node boundaries is worse than no fallback.
 
 **Not everything wants to be a process.** LemonSim's simulation kernel is a pure reducer
 ([`kernel/runner.ex`](../apps/lemon_sim/lib/lemon_sim/kernel/runner.ex)) specifically so
-that a run is reproducible from a seed and a scorecard is a function of final state.
+that a run is reproducible from a seed and a scorecard is a function of final state. That
+is not just asserted: a test runs the same seed twice and checks the final world state and
+every artifact hash are byte-identical
+([`determinism_test.exs`](../apps/lemon_sim/test/lemon_sim/determinism_test.exs)).
 Processes wrap it — `Task.async_stream` for suite concurrency
 ([`bench/suite.ex:237`](../apps/lemon_sim/lib/lemon_sim/bench/suite.ex), one always-on
 GenServer per arena domain in [`arena.ex`](../apps/lemon_sim_ui/lib/lemon_sim_ui/arena.ex))

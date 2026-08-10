@@ -111,6 +111,19 @@ mix lemon.sim.verify path/to/run
 mix lemon.sim.score path/to/run
 ```
 
+### Determinism
+
+The kernel ([`kernel/runner.ex`](lib/lemon_sim/kernel/runner.ex)) is a pure
+reducer: a run is a fold of an event sequence through `apply_event`, so the same
+seed produces a byte-identical run. This is verified, not just asserted —
+[`test/lemon_sim/determinism_test.exs`](test/lemon_sim/determinism_test.exs) runs
+the offline VendingBench strategy (a scripted decider, no LLM) twice with one
+seed and asserts both the in-memory final world state and every artifact's
+sha256 in `hashes.json` are identical. It is fast (~0.2s) and fully offline, so
+it belongs in the CI lane. The `deterministic_artifacts?: true` option pins the
+two knobs that are nondeterministic by design (a unique run id and the wall-clock
+timestamp); everything else falls out of the reducer.
+
 `verify` checks the manifest, hash schema, required benchmark files, manifest
 integrity hashes, and hashed file contents. For scenarios registered in
 `LemonSim.Bench.Scorecard.Registry`, it also recomputes `scorecard.json` from
