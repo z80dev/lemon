@@ -1,5 +1,9 @@
+Code.require_file("../../hex_package.exs", __DIR__)
+
 defmodule LemonCore.MixProject do
   use Mix.Project
+
+  @source_url "https://github.com/z80dev/lemon"
 
   def project do
     [
@@ -13,7 +17,39 @@ defmodule LemonCore.MixProject do
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       test_coverage: [summary: [threshold: 69]],
-      deps: deps()
+      deps: deps(),
+      name: "lemon_core",
+      description: description(),
+      package: package(),
+      docs: docs()
+    ]
+  end
+
+  defp description do
+    "The shared language of the Lemon agent platform: event bus, pluggable " <>
+      "store, encrypted secrets, config loading, filesystem layout, and the " <>
+      "boundary contracts every other Lemon package speaks."
+  end
+
+  defp package do
+    [
+      name: Lemon.HexPackage.name(:lemon_core),
+      licenses: ["MIT"],
+      files: ~w(lib mix.exs README.md CHANGELOG.md LICENSE),
+      links: %{
+        "GitHub" => @source_url,
+        "Changelog" => "#{@source_url}/blob/main/apps/lemon_core/CHANGELOG.md"
+      }
+    ]
+  end
+
+  defp docs do
+    [
+      main: "readme",
+      extras: ["README.md", "CHANGELOG.md"],
+      source_url: @source_url,
+      source_ref: "main",
+      formatters: ["html"]
     ]
   end
 
@@ -32,7 +68,7 @@ defmodule LemonCore.MixProject do
   # inheriting a SQLite NIF, an HTTP client and a pubsub server it may not use.
   # Each optional dep degrades explicitly — see the module docs named below.
   defp deps do
-    [
+    Lemon.HexPackage.deps([
       {:jason, "~> 1.4"},
       {:toml, "~> 0.7"},
       {:telemetry, "~> 1.0"},
@@ -48,7 +84,9 @@ defmodule LemonCore.MixProject do
       # SENTRY_DSN is set at runtime; the handler is skipped when the modules
       # are missing. Finch is Sentry's HTTP client as of v12+.
       {:sentry, "~> 13.0", optional: true},
-      {:finch, "~> 0.21", optional: true}
-    ]
+      {:finch, "~> 0.21", optional: true},
+      # API documentation
+      {:ex_doc, "~> 0.34", only: :dev, runtime: false}
+    ])
   end
 end

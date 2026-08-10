@@ -1,5 +1,9 @@
+Code.require_file("../../hex_package.exs", __DIR__)
+
 defmodule LemonMemory.MixProject do
   use Mix.Project
+
+  @source_url "https://github.com/z80dev/lemon"
 
   def project do
     [
@@ -17,15 +21,36 @@ defmodule LemonMemory.MixProject do
       # test, and `mix lemon.memory` has none either.
       test_coverage: [summary: [threshold: 60]],
       deps: deps(),
-      name: "LemonMemory",
+      name: "lemon_memory",
+      description: description(),
+      package: package(),
       docs: docs()
+    ]
+  end
+
+  defp description do
+    "Durable memory for agents: document schema, SQLite-backed full-text " <>
+      "store, a provider behaviour with isolated fan-out search, run ingest, " <>
+      "redaction and task fingerprints."
+  end
+
+  defp package do
+    [
+      name: Lemon.HexPackage.name(:lemon_memory),
+      licenses: ["MIT"],
+      files: ~w(lib mix.exs README.md CHANGELOG.md LICENSE),
+      links: %{
+        "GitHub" => @source_url,
+        "Changelog" => "#{@source_url}/blob/main/apps/lemon_memory/CHANGELOG.md"
+      }
     ]
   end
 
   defp docs do
     [
-      main: "LemonMemory.Store",
-      source_url: "https://github.com/z80dev/lemon",
+      main: "readme",
+      extras: ["README.md", "CHANGELOG.md"],
+      source_url: @source_url,
       source_ref: "main",
       formatters: ["html"]
     ]
@@ -39,7 +64,7 @@ defmodule LemonMemory.MixProject do
   end
 
   defp deps do
-    [
+    Lemon.HexPackage.deps([
       {:lemon_core, in_umbrella: true},
       # Durable memory is SQLite-backed; unlike lemon_core, which only needs it
       # for optional subsystems, this app's whole reason to exist is the store.
@@ -47,6 +72,6 @@ defmodule LemonMemory.MixProject do
       {:jason, "~> 1.4"},
       # API documentation
       {:ex_doc, "~> 0.34", only: :dev, runtime: false}
-    ]
+    ])
   end
 end

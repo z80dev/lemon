@@ -11,6 +11,7 @@ cover/
 
 # Where third-party dependencies like ExDoc output generated docs.
 /doc/
+apps/*/doc/
 
 # Temporary files, for example, from tests.
 /tmp/
@@ -35,6 +36,9 @@ docs/agent-loop/runs/
 # Also ignore archive artifacts (built via "mix archive.build").
 *.ez
 /lemon-main-*.zip
+
+# Hex package tarballs (built via "mix hex.build" in an app directory).
+apps/*/*.tar
 
 # Local Rust sidecar build artifacts
 native/lemon-wasm-runtime/target/
@@ -102,3 +106,7 @@ priv/game_logs/
 /REVIEWPLAN.md
 /REVIEWWORKLOG.md
 /memory/
+
+# VitePress build output
+docs/.vitepress/dist/
+docs/.vitepress/cache/
