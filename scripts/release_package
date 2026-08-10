@@ -1,0 +1,547 @@
+#!/usr/bin/env bash
+# release_package — verify, version, tag, and publish ONE umbrella app to Hex.
+#
+# Usage:
+#   scripts/release_package <package> <version> [options]
+#   scripts/release_package --list
+#
+# Options:
+#   --dry-run       Run every check, change nothing: no version bump, no
+#                   changelog rewrite, no commit, no tag, no publish.
+#   --verify        Verify an ALREADY-TAGGED release (what CI runs on a tag
+#                   push): mix.exs must already be at <version> and the
+#                   changelog must already have a [<version>] section. Implies
+#                   --dry-run --strict, and does not require the tag to be free.
+#   --strict        With --dry-run, exit non-zero if any check would fail a
+#                   real release. Without it, --dry-run reports and exits 0.
+#   --skip-quality  Skip `mix lemon.quality` (CI runs it as its own job).
+#   --force         Bypass the publish-order gate (see "Publish order").
+#   --yes           Skip the interactive confirmation before mutating.
+#   -h, --help      Show this help.
+#
+# The umbrella itself stays on CalVer (scripts/bump_version.sh). This script is
+# only for the per-package semver line described in docs/platform-split.md D10:
+# each published package starts at 0.1.0 and moves independently.
+#
+# Publish order
+#   Hex has no concept of "these were released together": a package's deps must
+#   already exist on hex.pm when it is published. The dependency-correct order
+#   is listed in PUBLISH_ORDER below. Before publishing, every in-umbrella
+#   runtime dep of the target is checked against hex.pm; if one is unpublished,
+#   or is not a publishable package at all, the release is refused. --force
+#   overrides, which is only correct when you are publishing the dep in the
+#   same session and know it will land first.
+#
+# Auth
+#   Publishing requires HEX_API_KEY. Without it the script runs every check and
+#   stops before `mix hex.publish`, reporting what it would have run — so the
+#   whole pipeline is testable with no credentials.
+#
+# See also: docs/release/hex-packages.md
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# hex_package.exs is the single source of truth for which apps publish and
+# under what hex name (they differ: ai -> lemon_ai, agent_core -> lemon_agent).
+# It also rewrites in_umbrella deps into hex requirements, but only when
+# LEMON_HEX_PUBLISH is set. That form does not resolve inside the umbrella, so
+# it is set per-command on the hex commands ONLY — never exported, or every
+# other mix call here (quality, compile) would try to build against it.
+HEX_PACKAGE_FILE="$REPO_ROOT/hex_package.exs"
+
+# Dependency-correct publish order (docs/platform-split.md 4.3). Ordering only:
+# membership comes from hex_package.exs.
+PUBLISH_ORDER=(
+  ai
+  lemon_core
+  lemon_media
+  agent_core
+  lemon_memory
+  lemon_channels
+  lemon_router
+  lemon_gateway
+  lemon_platform_test
+)
+
+# app name -> hex package name, loaded from hex_package.exs.
+declare -A HEX_NAMES=()
+
+DRY_RUN=0
+VERIFY=0
+STRICT=0
+SKIP_QUALITY=0
+FORCE=0
+ASSUME_YES=0
+PACKAGE=""
+VERSION=""
+
+WOULD_FAIL=0
+WARNINGS=0
+
+# ── Output helpers ───────────────────────────────────────────────────────────
+
+ok() { echo "ok:   $*"; }
+warn() {
+  echo "warn: $*" >&2
+  WARNINGS=$((WARNINGS + 1))
+}
+
+# A check that must hold for a real release. In --dry-run it is recorded and
+# reported at the end; in a real run it aborts immediately.
+require_check() {
+  local message="$1"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "WOULD FAIL: $message" >&2
+    WOULD_FAIL=$((WOULD_FAIL + 1))
+  else
+    echo "FAIL: $message" >&2
+    exit 1
+  fi
+}
+
+# An unconditional error: bad invocation, or a condition no mode can proceed
+# past.
+die() {
+  echo "ERROR: $*" >&2
+  exit 1
+}
+
+usage() {
+  sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'
+  exit "${1:-64}"
+}
+
+# Populates HEX_NAMES from hex_package.exs's @packages map.
+load_hex_names() {
+  [ -f "$HEX_PACKAGE_FILE" ] ||
+    die "$HEX_PACKAGE_FILE is missing — it defines which apps are publishable"
+
+  local line app hex
+  while IFS='=' read -r app hex; do
+    [ -n "$app" ] || continue
+    HEX_NAMES["$app"]="$hex"
+  done < <(python3 -c '
+import re, sys
+
+text = open(sys.argv[1], encoding="utf-8").read()
+block = re.search(r"@packages\s*%\{(.*?)\}", text, re.S)
+if not block:
+    sys.exit("could not parse @packages from hex_package.exs")
+for app, hex_name in re.findall(r"([a-z_0-9]+):\s*:([a-z_0-9]+)", block.group(1)):
+    print(f"{app}={hex_name}")
+' "$HEX_PACKAGE_FILE")
+
+  [ "${#HEX_NAMES[@]}" -gt 0 ] ||
+    die "hex_package.exs declares no packages"
+
+  # PUBLISH_ORDER is a hand-maintained ordering of the same set. Drift between
+  # the two is a bug in one of them, so say so rather than guessing.
+  local pkg
+  for pkg in "${!HEX_NAMES[@]}"; do
+    is_publishable "$pkg" ||
+      warn "hex_package.exs publishes '$pkg' but it is missing from PUBLISH_ORDER in $(basename "${BASH_SOURCE[0]}")"
+  done
+  for pkg in "${PUBLISH_ORDER[@]}"; do
+    [ -n "${HEX_NAMES[$pkg]:-}" ] ||
+      warn "PUBLISH_ORDER lists '$pkg' but hex_package.exs does not publish it"
+  done
+}
+
+list_packages() {
+  echo "Publishable packages, in dependency order:"
+  printf '  %-22s %-22s %s\n' "APP" "HEX NAME" "VERSION"
+  local pkg
+  for pkg in "${PUBLISH_ORDER[@]}"; do
+    printf '  %-22s %-22s %s\n' \
+      "$pkg" \
+      "${HEX_NAMES[$pkg]:-(unpublished)}" \
+      "$(current_version "$pkg" 2>/dev/null || echo '(no mix.exs)')"
+  done
+}
+
+is_publishable() {
+  local candidate="$1" pkg
+  for pkg in "${PUBLISH_ORDER[@]}"; do
+    [ "$pkg" = "$candidate" ] && return 0
+  done
+  return 1
+}
+
+# True when the app is published to hex under some name.
+is_hex_published_app() {
+  [ -n "${HEX_NAMES[$1]:-}" ]
+}
+
+# ── Package introspection ────────────────────────────────────────────────────
+
+current_version() {
+  local pkg="$1"
+  sed -n 's/^[[:space:]]*version:[[:space:]]*"\([^"]*\)".*/\1/p' \
+    "$REPO_ROOT/apps/$pkg/mix.exs" | head -1
+}
+
+# Runtime in-umbrella deps, one per line. Deps scoped to only: :dev/:test are
+# skipped: hex does not require them to be published.
+runtime_umbrella_deps() {
+  local pkg="$1"
+  grep -oE '\{:[a-z_0-9]+, in_umbrella: true[^}]*' "$REPO_ROOT/apps/$pkg/mix.exs" 2>/dev/null |
+    grep -vE 'only: :(dev|test)' |
+    sed -E 's/^\{:([a-z_0-9]+),.*/\1/' || true
+}
+
+semver_valid() {
+  echo "$1" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
+}
+
+# True when $1 is strictly greater than $2 under `sort -V`.
+version_gt() {
+  [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1)" = "$1" ]
+}
+
+# Prints one of: a version string, "unpublished", or "unknown" (offline).
+hex_latest_version() {
+  local pkg="$1" tmp code
+  command -v curl >/dev/null 2>&1 || {
+    echo "unknown"
+    return 0
+  }
+  tmp="$(mktemp)"
+  code="$(curl -sS -o "$tmp" -w '%{http_code}' --max-time 10 \
+    "https://hex.pm/api/packages/${pkg}" 2>/dev/null)" || {
+    rm -f "$tmp"
+    echo "unknown"
+    return 0
+  }
+  case "$code" in
+    200)
+      python3 -c '
+import json, sys
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+print(data.get("latest_stable_version") or data.get("latest_version") or "unknown")
+' "$tmp" 2>/dev/null || echo "unknown"
+      ;;
+    404) echo "unpublished" ;;
+    *) echo "unknown" ;;
+  esac
+  rm -f "$tmp"
+}
+
+# ── Argument parsing ─────────────────────────────────────────────────────────
+
+[ "$#" -eq 0 ] && usage
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h | --help) usage 0 ;;
+    --list)
+      load_hex_names
+      list_packages
+      exit 0
+      ;;
+    --dry-run) DRY_RUN=1 ;;
+    --verify)
+      VERIFY=1
+      DRY_RUN=1
+      STRICT=1
+      ;;
+    --strict) STRICT=1 ;;
+    --skip-quality) SKIP_QUALITY=1 ;;
+    --force) FORCE=1 ;;
+    --yes) ASSUME_YES=1 ;;
+    -*) die "unknown option: $1 (try --help)" ;;
+    *)
+      if [ -z "$PACKAGE" ]; then
+        PACKAGE="$1"
+      elif [ -z "$VERSION" ]; then
+        VERSION="$1"
+      else
+        die "unexpected argument: $1"
+      fi
+      ;;
+  esac
+  shift
+done
+
+[ -n "$PACKAGE" ] || die "missing <package> (try --list)"
+[ -n "$VERSION" ] || die "missing <version>"
+
+cd "$REPO_ROOT"
+
+MODE="RELEASE"
+[ "$DRY_RUN" -eq 1 ] && MODE="DRY RUN"
+[ "$VERIFY" -eq 1 ] && MODE="VERIFY TAG"
+
+echo "── release_package: $PACKAGE $VERSION [$MODE] ──"
+
+load_hex_names
+
+# ── 1. Package identity ──────────────────────────────────────────────────────
+
+is_hex_published_app "$PACKAGE" ||
+  die "'$PACKAGE' is not published to hex (not in hex_package.exs @packages). See --list."
+[ -d "apps/$PACKAGE" ] ||
+  die "apps/$PACKAGE does not exist"
+[ -f "apps/$PACKAGE/mix.exs" ] ||
+  die "apps/$PACKAGE/mix.exs does not exist"
+
+HEX_NAME="${HEX_NAMES[$PACKAGE]}"
+if [ "$HEX_NAME" = "$PACKAGE" ]; then
+  ok "$PACKAGE is a publishable package"
+else
+  ok "$PACKAGE is a publishable package (hex name: $HEX_NAME)"
+fi
+
+# ── 2. Version ───────────────────────────────────────────────────────────────
+
+semver_valid "$VERSION" ||
+  die "'$VERSION' is not valid semver (X.Y.Z[-pre][+build])"
+
+CURRENT_VERSION="$(current_version "$PACKAGE")"
+[ -n "$CURRENT_VERSION" ] ||
+  die "could not read the current version from apps/$PACKAGE/mix.exs"
+
+if [ "$VERIFY" -eq 1 ]; then
+  FIRST_PUBLISH=1
+  [ "$VERSION" = "$CURRENT_VERSION" ] ||
+    die "tag says $VERSION but apps/$PACKAGE/mix.exs says $CURRENT_VERSION"
+  ok "apps/$PACKAGE/mix.exs matches the tagged version $VERSION"
+elif [ "$VERSION" = "$CURRENT_VERSION" ]; then
+  # The very first publish is the one case where mix.exs already carries the
+  # target version: nothing has ever been released, so there is nothing to bump.
+  FIRST_PUBLISH=1
+  ok "version $VERSION matches mix.exs (first publish — no bump needed)"
+elif version_gt "$VERSION" "$CURRENT_VERSION"; then
+  FIRST_PUBLISH=0
+  ok "version $VERSION is greater than current $CURRENT_VERSION"
+else
+  FIRST_PUBLISH=0
+  die "version $VERSION is not greater than the current version $CURRENT_VERSION"
+fi
+
+TAG="${PACKAGE}-v${VERSION}"
+
+# ── 3. Git state ─────────────────────────────────────────────────────────────
+
+if [ "$VERIFY" -eq 1 ]; then
+  ok "verifying release $TAG"
+elif git rev-parse -q --verify "refs/tags/$TAG" >/dev/null 2>&1; then
+  die "tag $TAG already exists"
+else
+  ok "tag $TAG is available"
+fi
+
+if [ -n "$(git status --porcelain)" ]; then
+  if [ "$DRY_RUN" -eq 1 ]; then
+    warn "working tree is dirty (harmless in a dry run; a real release refuses)"
+  else
+    require_check "working tree is dirty — commit or stash before releasing"
+  fi
+else
+  ok "working tree is clean"
+fi
+
+BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+if [ "$BRANCH" != "main" ]; then
+  warn "on branch '$BRANCH', not main"
+else
+  ok "on branch main"
+fi
+
+# ── 4. Changelog ─────────────────────────────────────────────────────────────
+
+CHANGELOG="apps/$PACKAGE/CHANGELOG.md"
+
+# Before a release the entries sit under [Unreleased]; after tagging they sit
+# under the version the tag names.
+if [ "$VERIFY" -eq 1 ]; then
+  CHANGELOG_SECTION="$VERSION"
+else
+  CHANGELOG_SECTION="Unreleased"
+fi
+
+if [ ! -f "$CHANGELOG" ]; then
+  require_check "$CHANGELOG does not exist (every published package needs one)"
+elif python3 -c '
+import re, sys
+
+text = open(sys.argv[1], encoding="utf-8").read()
+section = re.escape(sys.argv[2])
+match = re.search(
+    r"^##\s*\[" + section + r"\][^\n]*$(.*?)(?=^##\s|\Z)", text, re.M | re.S
+)
+if not match:
+    sys.exit(1)
+sys.exit(0 if re.search(r"^\s*[-*]\s+\S", match.group(1), re.M) else 2)
+' "$CHANGELOG" "$CHANGELOG_SECTION"; then
+  ok "$CHANGELOG has a [$CHANGELOG_SECTION] section with entries"
+else
+  require_check "$CHANGELOG needs a '## [$CHANGELOG_SECTION]' section with at least one entry"
+fi
+
+# ── 5. Hex metadata ──────────────────────────────────────────────────────────
+
+if grep -qE '^\s*(defp?\s+package|package:)' "apps/$PACKAGE/mix.exs"; then
+  ok "apps/$PACKAGE/mix.exs declares hex package metadata"
+
+  BUILD_OUT="$(mktemp -d)/${HEX_NAME}.tar"
+  if (cd "apps/$PACKAGE" && LEMON_HEX_PUBLISH=1 mix hex.build -o "$BUILD_OUT" >/dev/null 2>&1); then
+    ok "mix hex.build succeeds for $PACKAGE (LEMON_HEX_PUBLISH=1)"
+  else
+    require_check "mix hex.build fails in apps/$PACKAGE — run it there with LEMON_HEX_PUBLISH=1 to see why"
+  fi
+  rm -rf "$(dirname "$BUILD_OUT")"
+else
+  require_check "apps/$PACKAGE/mix.exs has no package/0 metadata (phase 4.1 work)"
+fi
+
+# ── 6. Publish order ─────────────────────────────────────────────────────────
+
+DEPS="$(runtime_umbrella_deps "$PACKAGE")"
+
+if [ -z "$DEPS" ]; then
+  ok "no in-umbrella runtime deps — publishable standalone"
+else
+  while IFS= read -r dep; do
+    [ -n "$dep" ] || continue
+
+    if ! is_hex_published_app "$dep"; then
+      if [ "$FORCE" -eq 1 ]; then
+        warn "dep '$dep' is not a publishable package (allowed by --force)"
+      else
+        require_check "dep '$dep' is not in hex_package.exs @packages: $PACKAGE cannot be published until '$dep' is published too, made optional, or the dependency is inverted (mix hex.build would otherwise drop it)"
+      fi
+      continue
+    fi
+
+    case "$(hex_latest_version "${HEX_NAMES[$dep]}")" in
+      unpublished)
+        if [ "$FORCE" -eq 1 ]; then
+          warn "dep '$dep' (hex: ${HEX_NAMES[$dep]}) is not on hex.pm yet (allowed by --force)"
+        else
+          require_check "dep '$dep' is not published on hex.pm as '${HEX_NAMES[$dep]}' — publish it first (or --force)"
+        fi
+        ;;
+      unknown)
+        warn "could not reach hex.pm to check '${HEX_NAMES[$dep]}' — publish order unverified"
+        ;;
+      *)
+        ok "dep '$dep' is published on hex.pm as '${HEX_NAMES[$dep]}'"
+        ;;
+    esac
+  done <<<"$DEPS"
+fi
+
+# ── 7. Quality lane ──────────────────────────────────────────────────────────
+
+if [ "$SKIP_QUALITY" -eq 1 ]; then
+  warn "skipping mix lemon.quality (--skip-quality)"
+elif mix lemon.quality >/dev/null 2>&1; then
+  ok "mix lemon.quality passed"
+else
+  require_check "mix lemon.quality failed — run it directly to see the issues"
+fi
+
+# ── 8. Dry-run summary ───────────────────────────────────────────────────────
+
+if [ "$VERIFY" -eq 1 ]; then
+  echo
+  echo "── verify complete: $PACKAGE $VERSION (hex: $HEX_NAME) ──"
+  echo "failed checks: $WOULD_FAIL   warnings: $WARNINGS"
+  [ "$WOULD_FAIL" -eq 0 ] || exit 1
+  echo "$TAG is publishable."
+  exit 0
+fi
+
+if [ "$DRY_RUN" -eq 1 ]; then
+  echo
+  echo "── dry run complete: $PACKAGE $VERSION ──"
+  echo "would-fail checks: $WOULD_FAIL   warnings: $WARNINGS"
+  echo
+  echo "A real run would then:"
+  [ "$FIRST_PUBLISH" -eq 1 ] ||
+    echo "  - set version to $VERSION in apps/$PACKAGE/mix.exs"
+  echo "  - move the Unreleased changelog section under [$VERSION]"
+  echo "  - commit those files and create tag $TAG"
+  if [ -n "${HEX_API_KEY:-}" ]; then
+    echo "  - run: (cd apps/$PACKAGE && LEMON_HEX_PUBLISH=1 mix hex.publish --yes)"
+  else
+    echo "  - skip publishing: HEX_API_KEY is not set"
+  fi
+
+  if [ "$WOULD_FAIL" -gt 0 ] && [ "$STRICT" -eq 1 ]; then
+    exit 1
+  fi
+  exit 0
+fi
+
+# ── 9. Confirm ───────────────────────────────────────────────────────────────
+
+if [ "$ASSUME_YES" -eq 0 ]; then
+  printf 'Release %s %s and tag it %s? [y/N] ' "$PACKAGE" "$VERSION" "$TAG"
+  read -r reply
+  case "$reply" in
+    y | Y | yes | YES) ;;
+    *) die "aborted" ;;
+  esac
+fi
+
+# ── 10. Bump version ─────────────────────────────────────────────────────────
+
+if [ "$FIRST_PUBLISH" -eq 0 ]; then
+  sed -i "s/version: \"${CURRENT_VERSION}\"/version: \"${VERSION}\"/" "apps/$PACKAGE/mix.exs"
+  [ "$(current_version "$PACKAGE")" = "$VERSION" ] ||
+    die "version bump did not take effect in apps/$PACKAGE/mix.exs"
+  ok "bumped apps/$PACKAGE/mix.exs to $VERSION"
+fi
+
+# ── 11. Roll the changelog ───────────────────────────────────────────────────
+
+python3 -c '
+import re, sys
+from datetime import date
+
+path, version = sys.argv[1], sys.argv[2]
+text = open(path, encoding="utf-8").read()
+
+heading = "## [Unreleased]"
+index = text.find(heading)
+if index == -1:
+    sys.exit("no Unreleased section in " + path)
+
+replacement = (
+    heading
+    + "\n\n_No unreleased changes._\n\n## ["
+    + version
+    + "] - "
+    + date.today().isoformat()
+)
+text = text[:index] + replacement + text[index + len(heading):]
+open(path, "w", encoding="utf-8").write(text)
+' "$CHANGELOG" "$VERSION"
+ok "rolled $CHANGELOG into [$VERSION]"
+
+# ── 12. Commit and tag ───────────────────────────────────────────────────────
+
+git add "apps/$PACKAGE/mix.exs" "$CHANGELOG"
+git commit -m "release($PACKAGE): v$VERSION"
+git tag -a "$TAG" -m "$PACKAGE v$VERSION"
+ok "committed and tagged $TAG"
+
+# ── 13. Publish ──────────────────────────────────────────────────────────────
+
+if [ -z "${HEX_API_KEY:-}" ]; then
+  echo
+  warn "HEX_API_KEY is not set — not publishing"
+  echo "To publish this release later:"
+  echo "  (cd apps/$PACKAGE && LEMON_HEX_PUBLISH=1 HEX_API_KEY=... mix hex.publish --yes)"
+else
+  (cd "apps/$PACKAGE" && LEMON_HEX_PUBLISH=1 mix hex.publish --yes)
+  ok "published $HEX_NAME $VERSION to hex.pm (package + docs)"
+fi
+
+echo
+echo "Done. Push the release with:"
+echo "  git push origin $BRANCH && git push origin $TAG"

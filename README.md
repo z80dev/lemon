@@ -173,6 +173,20 @@ Configuration lives in `~/.lemon/config.toml`; the full reference is
 [`docs/config.md`](docs/config.md) and first-run setup, including the Telegram
 bot walkthrough, is [`docs/user-guide/setup.md`](docs/user-guide/setup.md).
 
+Any shell or CI job can push a message into a channel with
+`./bin/lemon send --to telegram:<chat_id> "deploy finished"`. Targets also
+accept unique known names such as `discord:#ops` or `telegram:@lemon_ops`;
+`--thread <id-or-name>` and the Telegram-friendly `--topic <id-or-name>`
+select a thread, `--reply-to <message-id>` replies under an existing message,
+`--account <id>` picks the channel account, and
+repeated `--attach` uploads up to 10 files. `--dry-run` validates targets,
+body resolution and attachment metadata without credentials or delivery,
+while `--list` reports env/config defaults plus recent
+Telegram/Discord known-target windows with exact reusable aliases. Account
+defaults resolve from `LEMON_TELEGRAM_DEFAULT_ACCOUNT_ID` and
+`LEMON_DISCORD_DEFAULT_ACCOUNT_ID` before the config file's
+`default_account_id` keys.
+
 ## Arenas
 
 The most visible thing the platform does is run models against each other. An

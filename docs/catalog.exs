@@ -300,6 +300,12 @@
     max_age_days: 60
   },
   %{
+    path: "docs/release/hex-packages.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-08-10],
+    max_age_days: 90
+  },
+  %{
     path: "docs/release/deployment_flows.md",
     owner: "@z80",
     last_reviewed: ~D[2026-08-09],

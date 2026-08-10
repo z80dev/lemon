@@ -1,0 +1,167 @@
+name: Publish package
+
+# Publishes ONE umbrella app to hex.pm from a per-package tag.
+#
+# Triggers:
+#   - push a tag matching `<package>-v<version>` (e.g. ai-v0.1.0)
+#   - manually dispatch with a package + version, optionally verify-only
+#
+# Steps:
+#   1. Parse the tag into package + version.
+#   2. `scripts/release_package --verify`: mix.exs matches the tag, the
+#      changelog has that version's section, hex metadata builds, and every
+#      in-umbrella dep is already on hex.pm in the right order.
+#   3. Publish package + docs to hex.pm — skipped when HEX_API_KEY is absent,
+#      so the whole workflow is exercisable before the key exists.
+#
+# The umbrella's own CalVer binary release is release.yml; its `v*.*.*` tag
+# pattern and this one cannot collide.
+#
+# See docs/release/hex-packages.md for the release procedure.
+
+on:
+  push:
+    tags:
+      - "*-v*"
+  workflow_dispatch:
+    inputs:
+      package:
+        description: "Umbrella app to publish (e.g. ai, lemon_core)"
+        required: true
+      version:
+        description: "Version to publish (e.g. 0.1.0). Must match mix.exs."
+        required: true
+      verify_only:
+        description: "Run the checks but do not publish"
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      package: ${{ steps.parse.outputs.package }}
+      version: ${{ steps.parse.outputs.version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28.5"
+          elixir-version: "1.19.5"
+
+      - name: Cache Mix deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-publish-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-publish-
+
+      - name: Parse package and version
+        id: parse
+        env:
+          INPUT_PACKAGE: ${{ github.event.inputs.package }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ -n "$INPUT_PACKAGE" ]; then
+            PACKAGE="$INPUT_PACKAGE"
+            VERSION="$INPUT_VERSION"
+          else
+            # Tags are `<package>-v<version>`. App names are snake_case with
+            # no hyphens, so the first `-v` is the separator; taking the
+            # version from the last one keeps hyphenated prereleases intact
+            # (lemon_platform_test-v1.2.3-rc.1).
+            PACKAGE="${REF_NAME%-v*}"
+            VERSION="${REF_NAME##*-v}"
+          fi
+
+          if [ -z "$PACKAGE" ] || [ -z "$VERSION" ]; then
+            echo "::error::could not determine package/version from '$REF_NAME'"
+            exit 1
+          fi
+
+          echo "package=$PACKAGE" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Package: $PACKAGE  Version: $VERSION"
+
+      - name: Install deps
+        run: mix deps.get
+
+      - name: Compile
+        run: mix compile --warnings-as-errors
+
+      - name: Verify the tagged release
+        run: |
+          scripts/release_package \
+            "${{ steps.parse.outputs.package }}" \
+            "${{ steps.parse.outputs.version }}" \
+            --verify --skip-quality
+
+      - name: Run quality lane
+        run: mix lemon.quality
+
+  publish:
+    name: Publish to hex.pm
+    runs-on: ubuntu-latest
+    needs: verify
+    timeout-minutes: 30
+    if: github.event_name == 'push' || github.event.inputs.verify_only != 'true'
+
+    env:
+      PACKAGE: ${{ needs.verify.outputs.package }}
+      VERSION: ${{ needs.verify.outputs.version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28.5"
+          elixir-version: "1.19.5"
+
+      - name: Cache Mix deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-publish-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-publish-
+
+      - name: Install deps
+        run: mix deps.get
+
+      - name: Publish package and docs
+        working-directory: apps/${{ needs.verify.outputs.package }}
+        env:
+          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
+          # hex_package.exs only rewrites in_umbrella deps into published
+          # requirements when this is set; without it hex silently drops them.
+          LEMON_HEX_PUBLISH: "1"
+        run: |
+          if [ -z "${HEX_API_KEY:-}" ]; then
+            echo "::notice::HEX_API_KEY is not configured — skipping publish of $PACKAGE $VERSION."
+            echo "Everything up to this point passed, so the release is publishable"
+            echo "once the secret exists. Re-run this workflow to publish."
+            exit 0
+          fi
+
+          mix hex.publish --yes

@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# check_changelog_entries — changelog discipline for published packages.
+#
+# Usage:
+#   scripts/check_changelog_entries [--base <ref>] [--strict]
+#
+# Options:
+#   --base <ref>  Compare against <ref> (default: origin/main, then main).
+#   --strict      Exit non-zero when a package is missing an entry. Without it
+#                 the check reports and exits 0.
+#
+# A change to a published package's lib/ is a change to something a third party
+# has installed. docs/platform-split.md 4.4 requires those to be written down
+# while the change is still fresh, not reconstructed from git log at release
+# time. This flags any publishable app whose lib/ moved in the diff without a
+# matching CHANGELOG.md edit.
+#
+# Advisory by default: the discipline is new, and a check that reddens unrelated
+# PRs on day one gets disabled rather than followed. CI runs it without
+# --strict and surfaces GitHub warning annotations.
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+HEX_PACKAGE_FILE="$REPO_ROOT/hex_package.exs"
+
+BASE=""
+STRICT=0
+MISSING=0
+
+usage() {
+  sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'
+  exit "${1:-64}"
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h | --help) usage 0 ;;
+    --strict) STRICT=1 ;;
+    --base)
+      shift
+      [ "$#" -gt 0 ] || usage
+      BASE="$1"
+      ;;
+    *)
+      echo "ERROR: unknown argument: $1" >&2
+      usage
+      ;;
+  esac
+  shift
+done
+
+cd "$REPO_ROOT"
+
+# In GitHub Actions this is a "warning" annotation; locally it is just a line.
+annotate() {
+  if [ -n "${GITHUB_ACTIONS:-}" ]; then
+    echo "::warning::$*"
+  else
+    echo "warn: $*" >&2
+  fi
+}
+
+# ── Resolve the base ref ─────────────────────────────────────────────────────
+
+if [ -z "$BASE" ]; then
+  if git rev-parse -q --verify origin/main >/dev/null 2>&1; then
+    BASE="origin/main"
+  elif git rev-parse -q --verify main >/dev/null 2>&1; then
+    BASE="main"
+  else
+    echo "warn: no origin/main or main to compare against; nothing to check" >&2
+    exit 0
+  fi
+fi
+
+git rev-parse -q --verify "$BASE" >/dev/null 2>&1 ||
+  { echo "ERROR: base ref '$BASE' does not exist" >&2; exit 1; }
+
+MERGE_BASE="$(git merge-base HEAD "$BASE" 2>/dev/null || echo "$BASE")"
+CHANGED="$(git diff --name-only "$MERGE_BASE"...HEAD)"
+
+if [ -z "$CHANGED" ]; then
+  echo "ok:   no changes against $BASE"
+  exit 0
+fi
+
+# ── Publishable apps come from hex_package.exs ───────────────────────────────
+
+if [ ! -f "$HEX_PACKAGE_FILE" ]; then
+  echo "warn: $HEX_PACKAGE_FILE is missing; skipping changelog check" >&2
+  exit 0
+fi
+
+PACKAGES="$(python3 -c '
+import re, sys
+
+text = open(sys.argv[1], encoding="utf-8").read()
+block = re.search(r"@packages\s*%\{(.*?)\}", text, re.S)
+if not block:
+    sys.exit(0)
+for app, _hex in re.findall(r"([a-z_0-9]+):\s*:([a-z_0-9]+)", block.group(1)):
+    print(app)
+' "$HEX_PACKAGE_FILE")"
+
+# ── Compare ──────────────────────────────────────────────────────────────────
+
+for pkg in $PACKAGES; do
+  if ! grep -qE "^apps/${pkg}/lib/" <<<"$CHANGED"; then
+    continue
+  fi
+
+  if grep -qE "^apps/${pkg}/CHANGELOG\.md$" <<<"$CHANGED"; then
+    echo "ok:   $pkg has a CHANGELOG entry"
+  else
+    annotate "$pkg: apps/$pkg/lib/ changed but apps/$pkg/CHANGELOG.md did not. Add an entry under '## [Unreleased]' — this package is published, so the change is visible to third parties."
+    MISSING=$((MISSING + 1))
+  fi
+done
+
+if [ "$MISSING" -eq 0 ]; then
+  echo "ok:   changelog discipline satisfied (base: $BASE)"
+  exit 0
+fi
+
+echo "$MISSING published package(s) changed without a changelog entry (base: $BASE)" >&2
+
+if [ "$STRICT" -eq 1 ]; then
+  exit 1
+fi
+
+echo "advisory only — not failing the build" >&2
+exit 0

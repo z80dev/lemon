@@ -1,0 +1,34 @@
+name: Changelog check
+
+# Advisory changelog discipline for published packages (docs/platform-split.md
+# 4.4). When a PR changes a published package's lib/, that package's
+# CHANGELOG.md should gain an entry in the same PR — the change is visible to
+# third parties who installed it from hex.
+#
+# This job never fails the build: it annotates. The discipline is new, and a
+# check that reddens unrelated PRs on day one gets disabled rather than
+# followed. Drop the advisory behaviour by adding --strict to the script call
+# once every published package has a changelog and the habit has stuck.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  changelog:
+    name: Published packages have changelog entries
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # The script diffs against the merge base, so it needs real history.
+          fetch-depth: 0
+
+      - name: Check changelog entries
+        run: |
+          scripts/check_changelog_entries --base "origin/${{ github.base_ref }}"
