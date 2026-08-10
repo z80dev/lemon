@@ -230,26 +230,13 @@ defmodule LemonControlPlane.Methods.RunGraphGet do
 
   defp fetch_run_status(_run_id, _graph_record, _store_record), do: "unknown"
 
-  defp run_active?(run_id) when is_binary(run_id) do
-    case Process.whereis(LemonRouter.RunRegistry) do
-      pid when is_pid(pid) ->
-        match?([{_pid, _} | _], Registry.lookup(LemonRouter.RunRegistry, run_id))
-
-      _ ->
-        false
-    end
-  rescue
-    _ -> false
-  catch
-    :exit, _ -> false
-  end
-
-  defp run_active?(_), do: false
+  defp run_active?(run_id), do: LemonRouter.run_active?(run_id)
 
   defp fetch_completed_status(run_id, store_record) do
     case derive_status_from_store_record(store_record) do
       status when is_binary(status) ->
         status
+
       _ ->
         if has_store_record?(store_record) do
           fetch_completed_status_from_introspection(run_id)

@@ -476,9 +476,10 @@ defmodule LemonAutomation.CronManager do
 
   defp abort_router_run(%CronRun{run_id: router_run_id})
        when is_binary(router_run_id) and router_run_id != "" do
-    case Process.whereis(LemonRouter.RunRegistry) do
-      nil -> :ok
-      _pid -> LemonRouter.abort_run(router_run_id, :cron_aborted)
+    if LemonRouter.available?() do
+      LemonRouter.abort_run(router_run_id, :cron_aborted)
+    else
+      :ok
     end
   rescue
     error ->

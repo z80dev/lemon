@@ -46,7 +46,7 @@ defmodule LemonControlPlane.Methods.Wake do
         end
       else
         # Fallback: submit directly via router
-        if Code.ensure_loaded?(LemonRouter.RunOrchestrator) do
+        if Code.ensure_loaded?(LemonRouter) do
           session_key = session_key || LemonCore.SessionKey.main(agent_id)
 
           request =
@@ -59,7 +59,7 @@ defmodule LemonControlPlane.Methods.Wake do
               meta: %{triggered_by: :wake}
             })
 
-          case LemonRouter.RunOrchestrator.submit(request) do
+          case LemonRouter.submit(request) do
             {:ok, run_id} ->
               {:ok,
                %{

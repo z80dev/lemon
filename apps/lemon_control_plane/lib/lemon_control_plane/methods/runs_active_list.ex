@@ -2,7 +2,7 @@ defmodule LemonControlPlane.Methods.RunsActiveList do
   @moduledoc """
   Handler for the `runs.active.list` method.
 
-  Lists all currently active runs from `LemonRouter.RunRegistry`.
+  Lists all currently active runs through the `LemonRouter` facade.
   """
 
   @behaviour LemonControlPlane.Method
@@ -74,59 +74,23 @@ defmodule LemonControlPlane.Methods.RunsActiveList do
   end
 
   defp fetch_active_runs(agent_id, session_key, limit) do
-    if Code.ensure_loaded?(Registry) and Code.ensure_loaded?(LemonRouter.RunRegistry) do
-      entries =
-        Registry.select(LemonRouter.RunRegistry, [
-          {{:"$1", :"$2", :"$3"}, [], [{{:"$1", :"$2", :"$3"}}]}
-        ])
-
-      entries
-      |> Enum.map(&build_run_entry/1)
-      |> Enum.filter(&filter_by_agent(&1, agent_id))
-      |> Enum.filter(&filter_by_session(&1, session_key))
-      |> Enum.take(limit)
-    else
-      []
-    end
-  rescue
-    _ -> []
-  catch
-    :exit, _ -> []
+    LemonRouter.active_runs()
+    |> Enum.map(&build_run_entry/1)
+    |> Enum.filter(&filter_by_agent(&1, agent_id))
+    |> Enum.filter(&filter_by_session(&1, session_key))
+    |> Enum.take(limit)
   end
 
-  defp build_run_entry({run_id, pid, _value}) when is_pid(pid) do
-    metadata = fetch_run_metadata(pid)
-
+  defp build_run_entry(run) do
     %{
-      "runId" => run_id,
-      "sessionKey" => metadata[:session_key],
-      "agentId" => metadata[:agent_id],
-      "engine" => metadata[:engine],
-      "startedAtMs" => metadata[:started_at_ms],
+      "runId" => run.run_id,
+      "sessionKey" => run.session_key,
+      "agentId" => run.agent_id,
+      "engine" => run.engine,
+      "startedAtMs" => run.started_at_ms,
       "status" => "active"
     }
   end
-
-  defp build_run_entry({run_id, _pid, _value}) do
-    %{
-      "runId" => run_id,
-      "sessionKey" => nil,
-      "agentId" => nil,
-      "engine" => nil,
-      "startedAtMs" => nil,
-      "status" => "active"
-    }
-  end
-
-  defp fetch_run_metadata(pid) when is_pid(pid) do
-    GenServer.call(pid, :get_metadata, 1000)
-  rescue
-    _ -> %{}
-  catch
-    :exit, _ -> %{}
-  end
-
-  defp fetch_run_metadata(_), do: %{}
 
   defp filter_by_agent(_run, nil), do: true
   defp filter_by_agent(%{"agentId" => agent_id}, filter), do: agent_id == filter

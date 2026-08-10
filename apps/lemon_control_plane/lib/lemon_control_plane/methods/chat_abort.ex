@@ -47,7 +47,7 @@ defmodule LemonControlPlane.Methods.ChatAbort do
   end
 
   defp safe_abort_run(run_id) do
-    LemonRouter.Router.abort_run(run_id, :user_requested)
+    LemonRouter.abort_run(run_id, :user_requested)
     "sent"
   rescue
     ArgumentError -> "router_unavailable"
@@ -57,7 +57,7 @@ defmodule LemonControlPlane.Methods.ChatAbort do
   end
 
   defp safe_abort_session(session_key) do
-    LemonRouter.Router.abort(session_key, :user_requested)
+    LemonRouter.abort(session_key, :user_requested)
     "sent"
   rescue
     ArgumentError -> "router_unavailable"

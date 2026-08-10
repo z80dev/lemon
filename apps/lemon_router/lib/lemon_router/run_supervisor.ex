@@ -1,10 +1,12 @@
 defmodule LemonRouter.RunSupervisor do
-  @moduledoc """
-  DynamicSupervisor that manages `LemonRouter.RunProcess` processes.
+  @moduledoc false
 
-  Each run is started as a temporary child so it is not restarted on failure.
-  This supervisor provides logging for run process lifecycle events.
-  """
+  # Router internal: reached through the `LemonRouter` facade, not directly.
+  #
+  # DynamicSupervisor that manages `LemonRouter.RunProcess` processes.
+  #
+  # Each run is started as a temporary child so it is not restarted on failure.
+  # This supervisor provides logging for run process lifecycle events.
 
   use DynamicSupervisor
 
@@ -84,16 +86,12 @@ defmodule LemonRouter.RunSupervisor do
         {:error, :max_children}
 
       {:error, {:noproc, _}} = error ->
-        Logger.error(
-          "RunSupervisor failed to start run_id=#{inspect(run_id)} - router not ready"
-        )
+        Logger.error("RunSupervisor failed to start run_id=#{inspect(run_id)} - router not ready")
 
         error
 
       {:error, :noproc} = error ->
-        Logger.error(
-          "RunSupervisor failed to start run_id=#{inspect(run_id)} - router not ready"
-        )
+        Logger.error("RunSupervisor failed to start run_id=#{inspect(run_id)} - router not ready")
 
         error
 

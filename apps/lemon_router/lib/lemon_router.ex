@@ -60,6 +60,141 @@ defmodule LemonRouter do
   """
   defdelegate keep_run_alive(run_id, decision \\ :continue), to: LemonRouter.Router
 
+  # -- Run introspection ------------------------------------------------------
+  #
+  # Callers outside this app used to reach into `RunRegistry`, `RunSupervisor`
+  # and `RunOrchestrator` directly (Registry selects, DynamicSupervisor counts,
+  # `Process.whereis` liveness probes). These functions are that surface, and
+  # they own the defensiveness those call sites each reimplemented: a router
+  # that is not running reports "nothing active" rather than raising.
+
+  @typedoc "A run currently being orchestrated."
+  @type active_run :: %{
+          run_id: binary(),
+          session_key: binary() | nil,
+          agent_id: binary() | nil,
+          engine: binary() | nil,
+          started_at_ms: integer() | nil
+        }
+
+  @metadata_timeout_ms 1_000
+  @zero_counts %{active: 0, queued: 0, completed_today: 0}
+
+  @doc """
+  Whether the router runtime is up and able to accept work.
+
+  Use this instead of probing for a router process by name.
+  """
+  @spec available?() :: boolean()
+  def available? do
+    is_pid(Process.whereis(LemonRouter.RunOrchestrator)) and
+      is_pid(Process.whereis(LemonRouter.RunRegistry))
+  end
+
+  @doc """
+  Every run currently active, newest first is not guaranteed — callers that
+  care about ordering should sort on `:started_at_ms`.
+
+  Returns `[]` when the router is not running.
+  """
+  @spec active_runs() :: [active_run()]
+  def active_runs do
+    if is_pid(Process.whereis(LemonRouter.RunRegistry)) do
+      LemonRouter.RunRegistry
+      |> Registry.select([{{:"$1", :"$2", :"$3"}, [], [{{:"$1", :"$2"}}]}])
+      |> Enum.map(&describe_active_run/1)
+    else
+      []
+    end
+  rescue
+    _ -> []
+  catch
+    :exit, _ -> []
+  end
+
+  @doc """
+  Whether `run_id` is currently active.
+  """
+  @spec run_active?(binary()) :: boolean()
+  def run_active?(run_id) when is_binary(run_id) do
+    is_pid(Process.whereis(LemonRouter.RunRegistry)) and
+      match?([{_pid, _} | _], Registry.lookup(LemonRouter.RunRegistry, run_id))
+  rescue
+    _ -> false
+  catch
+    :exit, _ -> false
+  end
+
+  def run_active?(_run_id), do: false
+
+  @doc """
+  How many run processes are currently supervised.
+
+  Cheaper than `active_runs/0` when only the count is needed; `0` when the
+  router is not running.
+  """
+  @spec active_run_count() :: non_neg_integer()
+  def active_run_count do
+    case Process.whereis(LemonRouter.RunSupervisor) do
+      pid when is_pid(pid) -> DynamicSupervisor.count_children(pid)[:active] || 0
+      _ -> 0
+    end
+  rescue
+    _ -> 0
+  catch
+    :exit, _ -> 0
+  end
+
+  @typedoc "Run counts as reported by the orchestrator."
+  @type run_counts :: %{
+          active: non_neg_integer(),
+          queued: non_neg_integer(),
+          completed_today: non_neg_integer()
+        }
+
+  @doc """
+  Orchestrator run counts.
+
+  Always returns the full shape: when the router is not running, every counter
+  is zero rather than the key being absent, so callers can read the fields
+  without guarding.
+  """
+  @spec counts() :: run_counts()
+  def counts do
+    if is_pid(Process.whereis(LemonRouter.RunOrchestrator)) do
+      LemonRouter.RunOrchestrator.counts()
+    else
+      @zero_counts
+    end
+  rescue
+    _ -> @zero_counts
+  catch
+    :exit, _ -> @zero_counts
+  end
+
+  defp describe_active_run({run_id, pid}) when is_pid(pid) do
+    metadata =
+      try do
+        GenServer.call(pid, :get_metadata, @metadata_timeout_ms)
+      rescue
+        _ -> %{}
+      catch
+        :exit, _ -> %{}
+      end
+
+    %{
+      run_id: run_id,
+      session_key: metadata[:session_key],
+      agent_id: metadata[:agent_id],
+      engine: metadata[:engine],
+      started_at_ms: metadata[:started_at_ms]
+    }
+  end
+
+  defp describe_active_run({run_id, _pid}) do
+    %{run_id: run_id, session_key: nil, agent_id: nil, engine: nil, started_at_ms: nil}
+  end
+
   @doc """
   Send a message to an agent inbox.
 

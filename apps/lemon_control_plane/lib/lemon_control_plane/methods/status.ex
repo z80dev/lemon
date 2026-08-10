@@ -184,22 +184,9 @@ defmodule LemonControlPlane.Methods.Status do
   end
 
   # Helper to get run counts - returns defaults if router not available
-  defp get_run_counts do
-    try do
-      # Try to get from LemonRouter if available
-      case Code.ensure_loaded(LemonRouter.RunOrchestrator) do
-        {:module, _} ->
-          LemonRouter.RunOrchestrator.counts()
-
-        _ ->
-          %{active: 0, queued: 0, completed_today: 0}
-      end
-    rescue
-      _ -> %{active: 0, queued: 0, completed_today: 0}
-    catch
-      :exit, _ -> %{active: 0, queued: 0, completed_today: 0}
-    end
-  end
+  # LemonRouter.counts/0 always returns the full shape, zeroed when the router
+  # is not running.
+  defp get_run_counts, do: LemonRouter.counts()
 
   # Helper to get channel status - returns defaults if not available
   defp get_channel_status do

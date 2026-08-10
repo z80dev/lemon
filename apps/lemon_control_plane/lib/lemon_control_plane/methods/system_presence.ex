@@ -66,13 +66,7 @@ defmodule LemonControlPlane.Methods.SystemPresence do
     end
   end
 
-  defp count_active_runs do
-    if Code.ensure_loaded?(LemonRouter.RunSupervisor) do
-      safe_active_count(LemonRouter.RunSupervisor)
-    else
-      0
-    end
-  end
+  defp count_active_runs, do: LemonRouter.active_run_count()
 
   defp safe_active_count(supervisor) do
     case Process.whereis(supervisor) do

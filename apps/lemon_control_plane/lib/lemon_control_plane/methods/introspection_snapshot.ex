@@ -198,8 +198,8 @@ defmodule LemonControlPlane.Methods.IntrospectionSnapshot do
   end
 
   defp run_counts do
-    if Code.ensure_loaded?(LemonRouter.RunOrchestrator) do
-      LemonRouter.RunOrchestrator.counts()
+    if Code.ensure_loaded?(LemonRouter) do
+      LemonRouter.counts()
       |> Map.new(fn {k, v} -> {to_string(k), v} end)
     else
       %{"active" => 0, "queued" => 0, "completed_today" => 0}

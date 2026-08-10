@@ -138,7 +138,7 @@ defmodule LemonControlPlane.Methods.Agent do
 
   defp do_submit_run(params, session_key, ctx) do
     # Try to submit through LemonRouter if available
-    case Code.ensure_loaded(LemonRouter.RunOrchestrator) do
+    case Code.ensure_loaded(LemonRouter) do
       {:module, _} ->
         submit_via_router(params, session_key, ctx)
 
@@ -177,7 +177,7 @@ defmodule LemonControlPlane.Methods.Agent do
         }
       })
 
-    case LemonRouter.RunOrchestrator.submit(submit_params) do
+    case LemonRouter.submit(submit_params) do
       {:ok, run_id} ->
         result = %{
           "run_id" => run_id,
