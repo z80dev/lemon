@@ -48,6 +48,19 @@ config :lemon_router, LemonRouter.RoutingFeedbackStore,
       "lemon_routing_feedback_test_#{System.system_time(:millisecond)}_#{:erlang.unique_integer([:positive])}"
     )
 
+# Same for the two sqlite stores that fall back to LemonCore.Store's directory
+# (`~/.lemon/store`) when unset. Without these, every `mix test` run appends to
+# the developer's real run-history/memory databases; contention on a large one
+# surfaces as :sqlite_busy and run-history assertion timeouts.
+lemon_store_test_dir =
+  Path.join(
+    System.tmp_dir!(),
+    "lemon_store_test_#{System.system_time(:millisecond)}_#{:erlang.unique_integer([:positive])}"
+  )
+
+config :lemon_core, LemonCore.RunHistoryStore, path: lemon_store_test_dir
+config :lemon_memory, LemonMemory.Store, path: lemon_store_test_dir
+
 # Avoid copying repo-bundled skills into user config during unrelated test suites.
 config :lemon_skills, seed_builtin_skills: false
 config :lemon_skills, :http_client, LemonSkills.HttpClient.Mock
