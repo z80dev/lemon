@@ -145,26 +145,28 @@ defmodule LemonSimUi.PhilosopherChat.ThreadServer do
 
   def handle_call({:set_status, status}, _from, state)
       when status in ["active", "paused", "closed"] do
-    with {:ok, next_state} <- Domain.set_status(state.thread.game_state, status) do
-      thread = %{state.thread | game_state: next_state, status: status, updated_at_ms: now_ms()}
-      state = %{state | thread: thread}
-      :ok = persist(state)
-      state = broadcast(state, "status", %{status: status})
+    case Domain.set_status(state.thread.game_state, status) do
+      {:ok, next_state} ->
+        thread = %{state.thread | game_state: next_state, status: status, updated_at_ms: now_ms()}
+        state = %{state | thread: thread}
+        :ok = persist(state)
+        state = broadcast(state, "status", %{status: status})
 
-      state =
-        if status == "active" do
-          schedule_idle_check(state)
-        else
-          # Pausing/closing drops any armed turn; the timer is cancelled and
-          # the persisted pending_turn cleared so nothing fires stale.
-          state
-          |> clear_pending_turn()
-          |> cancel_quiet_timer()
-        end
+        state =
+          if status == "active" do
+            schedule_idle_check(state)
+          else
+            # Pausing/closing drops any armed turn; the timer is cancelled and
+            # the persisted pending_turn cleared so nothing fires stale.
+            state
+            |> clear_pending_turn()
+            |> cancel_quiet_timer()
+          end
 
-      {:reply, {:ok, %{status: status}}, state}
-    else
-      {:error, reason} -> {:reply, {:error, reason}, state}
+        {:reply, {:ok, %{status: status}}, state}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
   end
 

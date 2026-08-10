@@ -25,9 +25,9 @@ defmodule LemonControlPlane.AgentRuntime.Provider do
   @callback get_task(task_id()) :: {:ok, map(), [map()]} | term()
 
   @doc """
-  Todo progress for a session, including an `:actionable_count` key.
+  Task-list progress for a session, including an `:actionable_count` key.
 
-  Returns `nil` when the session has no todo state.
+  Returns `nil` when the session has no task-list state.
   """
   @callback todo_progress(session_key()) :: map() | nil
 

@@ -55,7 +55,7 @@ defmodule LemonSim.Examples.PhilosopherChatTest do
 
         assert is_binary(persona.anachronism_stance) and persona.anachronism_stance != ""
         assert length(persona.works) >= 2, "#{persona.id} needs at least 2 works"
-        assert length(persona.quotes) >= 1, "#{persona.id} needs at least one quote"
+        assert persona.quotes != [], "#{persona.id} needs at least one quote"
         assert length(persona.never_say) >= 2, "#{persona.id} needs never-say rules"
         assert length(persona.pet_topics) >= 3, "#{persona.id} needs pet topics"
 

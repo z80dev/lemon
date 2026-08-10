@@ -16,7 +16,7 @@ agent out of its own job.
 For the layered agent-safety story (tool profiles, memory screening, skill
 audits), see [`agent-safety-contract.md`](agent-safety-contract.md) and
 [`safety.md`](safety.md). For how to report a vulnerability and what is in
-scope, see [`SECURITY.md`](../../SECURITY.md). This document focuses on the
+scope, see [`SECURITY.md`](https://github.com/z80dev/lemon/blob/main/SECURITY.md). This document focuses on the
 cryptographic, network, and boundary machinery those docs assume.
 
 ## Trust boundaries at a glance

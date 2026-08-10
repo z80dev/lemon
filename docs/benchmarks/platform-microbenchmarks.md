@@ -9,7 +9,7 @@ guarantees those arenas provide, see [platform.md](platform.md). Nothing here
 calls a model or touches a network.
 
 Everything below is reproducible with `mix lemon.bench`. The suites live in
-[`bench/`](../../bench) and are about 700 lines total, so if a number looks
+[`bench/`](https://github.com/z80dev/lemon/tree/main/bench) and are about 700 lines total, so if a number looks
 wrong the code that produced it is short enough to check.
 
 ## Read this first
@@ -378,11 +378,11 @@ workflow file.
 mix lemon.bench
 ```
 
-Suites: [`bench/store.exs`](../../bench/store.exs),
-[`bench/bus.exs`](../../bench/bus.exs),
-[`bench/coalescer.exs`](../../bench/coalescer.exs),
-[`bench/process.exs`](../../bench/process.exs), with shared helpers in
-[`bench/support.exs`](../../bench/support.exs).
+Suites: [`bench/store.exs`](https://github.com/z80dev/lemon/blob/main/bench/store.exs),
+[`bench/bus.exs`](https://github.com/z80dev/lemon/blob/main/bench/bus.exs),
+[`bench/coalescer.exs`](https://github.com/z80dev/lemon/blob/main/bench/coalescer.exs),
+[`bench/process.exs`](https://github.com/z80dev/lemon/blob/main/bench/process.exs), with shared helpers in
+[`bench/support.exs`](https://github.com/z80dev/lemon/blob/main/bench/support.exs).
 
 Numbers on this page are from a single full run on 2026-08-10, except the
 coalescer section, which was re-measured on the same machine later that day
