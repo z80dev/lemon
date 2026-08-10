@@ -1,0 +1,7 @@
+{
+  "name": "lemon-diagrams",
+  "version": "1.0.0",
+  "dependencies": {
+    "@mermaid-js/mermaid-cli": "^11.12.0"
+  }
+}

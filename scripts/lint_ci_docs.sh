@@ -1435,6 +1435,19 @@ else
 fi
 
 # ── J34: Script-send CLI must stay scoped to Telegram/Discord and documented ─
+#
+# Two things to know before editing the token lists below.
+#
+# 1. Tokens are matched as CONTIGUOUS SUBSTRINGS of the whole file (`token not
+#    in content`). A token spanning more than a few words is therefore also a
+#    line-wrapping assertion: reflowing a paragraph so the phrase breaks across
+#    a newline fails the check even though the prose is unchanged. Prefer short
+#    tokens (a flag, a module name, a config key) over sentence fragments; if a
+#    phrase must be pinned, keep it short enough to survive a rewrap.
+# 2. The canonical home of the script-send reference is
+#    apps/lemon_channels/README.md, next to the code. The root README only has
+#    to point at it — the reference used to be pinned in both, which made the
+#    root README un-editable without tripping this check.
 if python3 - "$ROOT" <<'PYEOF'
 from pathlib import Path
 import sys
@@ -1541,22 +1554,10 @@ contracts = [
         ],
     ),
     (
-        "root README script-send docs",
+        "root README points at the script-send reference",
         [
             ("root_readme", "./bin/lemon send --to telegram:<chat_id>"),
-            ("root_readme", "--attach"),
-            ("root_readme", "--dry-run"),
-            ("root_readme", "repeated `--attach` uploads up to 10 files"),
-            ("root_readme", "Telegram/Discord known-target windows"),
-            ("root_readme", "exact reusable aliases"),
-            ("root_readme", "env/config defaults"),
-            ("root_readme", "--account <id>"),
-            ("root_readme", "LEMON_TELEGRAM_DEFAULT_ACCOUNT_ID"),
-            ("root_readme", "--thread <id-or-name>"),
-            ("root_readme", "--topic <id-or-name>"),
-            ("root_readme", "--reply-to <message-id>"),
-            ("root_readme", "discord:#ops"),
-            ("root_readme", "telegram:@lemon_ops"),
+            ("root_readme", "apps/lemon_channels/README.md"),
         ],
     ),
     (
@@ -1581,6 +1582,8 @@ contracts = [
             ("channels_readme", "LemonChannels.Discord.KnownTargetStore"),
             ("channels_readme", "discord:#channel:thread-name"),
             ("channels_readme", "telegram:@username"),
+            ("channels_readme", "repeated `--attach` uploads up to 10 files"),
+            ("channels_readme", "Telegram/Discord known-target windows"),
         ],
     ),
     (
