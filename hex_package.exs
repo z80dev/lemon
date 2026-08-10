@@ -54,8 +54,28 @@ defmodule Lemon.HexPackage do
   command.
   """
   def deps(deps) when is_list(deps) do
-    if publishing?(), do: Enum.map(deps, &to_hex_dep/1), else: deps
+    if publishing?() do
+      Enum.map(deps, &to_hex_dep/1)
+    else
+      Enum.map(deps, &strip_umbrella_optional/1)
+    end
   end
+
+  # `optional: true` is how a package tells hex "this dep is only needed if you
+  # use the feature that depends on it" — the whole point of the flag. But Mix
+  # rejects it on `in_umbrella` deps (it has no meaning inside the umbrella,
+  # where every sibling is present) and warns on every compile. So a package
+  # declares `{:dep, in_umbrella: true, optional: true}`, we keep the flag when
+  # rewriting to the hex form for publish, and drop it for the umbrella build.
+  defp strip_umbrella_optional({app, opts} = dep) when is_atom(app) and is_list(opts) do
+    if Keyword.get(opts, :in_umbrella) do
+      {app, Keyword.delete(opts, :optional)}
+    else
+      dep
+    end
+  end
+
+  defp strip_umbrella_optional(dep), do: dep
 
   defp to_hex_dep({app, opts} = dep) when is_atom(app) and is_list(opts) do
     if Keyword.get(opts, :in_umbrella) do

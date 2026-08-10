@@ -28,6 +28,11 @@ where durable memory had been eight modules with no boundary of their own.
   writes; `LemonMemory.Safety` for redaction and size limits before persistence;
   `LemonMemory.SessionSearch` for scoped search; `LemonMemory.TaskFingerprint`
   for recognising repeated work.
+- `LemonMemory.Document.new/1` builds a document from fields directly (for
+  callers driving `AgentCore` themselves), applying the same 2,000-byte summary
+  truncation and required-field validation as `from_run/4`. Building the struct
+  literally skips both, silently indexing whole transcripts;
+  `LemonMemory.Document.max_summary_bytes/0` exposes the cap.
 - `LemonMemory.Ingest` writes finished runs into memory by registering itself
   as a `LemonCore.Store` finalize-run hook, rather than being called by name
   from the store's hot path.
@@ -46,6 +51,10 @@ where durable memory had been eight modules with no boundary of their own.
 - `:exqlite` is a hard dependency here, not an optional one as in `lemon_core`.
   Supervision reflects that: `Providers` always starts, `Store` and `Ingest`
   start when SQLite is available.
+- `Store.get_by_session/2`, `get_by_agent/2` and `get_by_workspace/2` now break
+  `ingested_at_ms` ties by `doc_id`, so two documents written in the same
+  millisecond come back in a stable order instead of an arbitrary one (a source
+  of flaky ordering assertions).
 
 ### Known gaps
 

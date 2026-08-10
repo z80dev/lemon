@@ -113,7 +113,7 @@ defmodule LemonMemory.Store do
          tools_used_blob, provider, model, outcome, meta_blob
   FROM memory_documents
   WHERE session_key = ?1
-  ORDER BY ingested_at_ms DESC
+  ORDER BY ingested_at_ms DESC, doc_id DESC
   LIMIT ?2
   """
 
@@ -124,7 +124,7 @@ defmodule LemonMemory.Store do
          tools_used_blob, provider, model, outcome, meta_blob
   FROM memory_documents
   WHERE agent_id = ?1
-  ORDER BY ingested_at_ms DESC
+  ORDER BY ingested_at_ms DESC, doc_id DESC
   LIMIT ?2
   """
 
@@ -135,7 +135,7 @@ defmodule LemonMemory.Store do
          tools_used_blob, provider, model, outcome, meta_blob
   FROM memory_documents
   WHERE workspace_key = ?1
-  ORDER BY ingested_at_ms DESC
+  ORDER BY ingested_at_ms DESC, doc_id DESC
   LIMIT ?2
   """
 

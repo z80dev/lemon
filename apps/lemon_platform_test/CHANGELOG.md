@@ -29,6 +29,21 @@ compliance suite runs against your module.
 - Each template's moduledoc is the behaviour's guide: the contract in prose, a
   worked minimal implementation, the option reference, and the known gaps. If
   you read one document before implementing a Lemon behaviour, read that one.
+- `LemonPlatformTest.FakeLLM` — a scripted, deterministic stand-in for an LLM
+  provider that drives a real `AgentCore` agent loop with no network or API key.
+  `FakeLLM.script/2` turns a list of turns (`{:text, ...}`, `{:tool_call, ...}`,
+  `{:tool_calls, ...}`, `{:refusal, ...}`, `{:error, ...}`) into the stream
+  function `AgentLoopConfig` expects, emitting the provider event protocol the
+  loop consumes. Previously the only implementation of that protocol was an
+  unshipped test-support module, so testing an agent against Lemon meant
+  reverse-engineering it.
+- The platform dependencies are now `optional: true`. A consumer compiles only
+  the app their case needs — a `PluginCase` no longer pulls in `lemon_gateway`,
+  `exqlite` and `nostrum` as transitive test deps. Each case template guards on
+  the presence of its target behaviour and raises a pointed "add this dep" error
+  when it is missing (`BackendCase`/`EventsCase` → `lemon_core`, `PluginCase` →
+  `lemon_channels`, `EngineCase` → `lemon_gateway`, `ProviderCase` →
+  `lemon_memory`, `FakeLLM` → `lemon_ai` + `lemon_agent`).
 - Registration round-trips are part of every suite. "Works standalone but is
   invisible to the platform" is the common way a third-party implementation
   fails, so the suites check that your adapter, engine or provider actually

@@ -113,7 +113,97 @@ defmodule LemonMemory.Document do
     }
   end
 
+  @doc """
+  Build a `Document` directly from its fields, applying the same invariants the
+  ingest path relies on.
+
+  Use this when you drive `AgentCore` yourself and want to record a memory
+  without the router's run-record shape that `from_run/4` expects. It differs
+  from building the struct by hand in two ways that matter:
+
+    * **Summaries are truncated.** `prompt_summary` and `answer_summary` are
+      capped at #{@max_summary_bytes} bytes (on a UTF-8 boundary), exactly as
+      `from_run/4` does. Building the struct by hand skips this, silently
+      indexing whole transcripts into the FTS table.
+    * **Identity is validated.** `session_key` and `agent_id` are required and
+      must be non-empty binaries — they are `NOT NULL` in the store and are what
+      scope a search, so a missing one is a programming error, not a row the
+      store should quietly reject.
+
+  Everything else is defaulted: `doc_id` (a fresh `"mem_"`-prefixed id) and
+  `run_id` are generated when absent, `ingested_at_ms` defaults to now,
+  `started_at_ms` to `ingested_at_ms`, and `scope` to `:session`.
+
+  Accepts a map or keyword list. Raises `ArgumentError` on a missing or invalid
+  required field, or an unknown `scope`.
+
+  ## Examples
+
+      iex> doc = LemonMemory.Document.new(session_key: "agent:demo:main", agent_id: "demo",
+      ...>   prompt_summary: "hi", answer_summary: "hello")
+      iex> {doc.scope, doc.answer_summary, String.starts_with?(doc.doc_id, "mem_")}
+      {:session, "hello", true}
+  """
+  @spec new(map() | keyword()) :: t()
+  def new(fields) when is_list(fields), do: new(Map.new(fields))
+
+  def new(fields) when is_map(fields) do
+    now = System.system_time(:millisecond)
+
+    session_key = require_binary(fields, :session_key)
+    agent_id = require_binary(fields, :agent_id)
+    scope = validate_scope(Map.get(fields, :scope, :session))
+
+    ingested_at_ms = Map.get(fields, :ingested_at_ms) || now
+
+    %__MODULE__{
+      doc_id: Map.get(fields, :doc_id) || "mem_#{LemonCore.Id.uuid()}",
+      run_id: Map.get(fields, :run_id) || LemonCore.Id.uuid(),
+      session_key: session_key,
+      agent_id: agent_id,
+      workspace_key: str(Map.get(fields, :workspace_key)),
+      scope: scope,
+      started_at_ms: Map.get(fields, :started_at_ms) || ingested_at_ms,
+      ingested_at_ms: ingested_at_ms,
+      prompt_summary: truncate(Map.get(fields, :prompt_summary, "")),
+      answer_summary: truncate(Map.get(fields, :answer_summary, "")),
+      tools_used: Map.get(fields, :tools_used, []),
+      provider: str(Map.get(fields, :provider)),
+      model: str(Map.get(fields, :model)),
+      outcome: Map.get(fields, :outcome, :unknown),
+      meta: Map.get(fields, :meta, %{})
+    }
+  end
+
+  @doc """
+  The byte cap `new/1` and `from_run/4` apply to each summary field.
+  """
+  @spec max_summary_bytes() :: pos_integer()
+  def max_summary_bytes, do: @max_summary_bytes
+
   # ── Private helpers ──────────────────────────────────────────────────────────
+
+  defp require_binary(fields, key) do
+    case Map.get(fields, key) do
+      value when is_binary(value) and value != "" ->
+        value
+
+      other ->
+        raise ArgumentError,
+              "LemonMemory.Document.new/1 requires #{inspect(key)} to be a non-empty " <>
+                "string, got: #{inspect(other)}"
+    end
+  end
+
+  @valid_scopes [:session, :workspace, :agent, :global]
+
+  defp validate_scope(scope) when scope in @valid_scopes, do: scope
+
+  defp validate_scope(other) do
+    raise ArgumentError,
+          "LemonMemory.Document.new/1 got an unknown scope #{inspect(other)}; " <>
+            "expected one of #{inspect(@valid_scopes)}"
+  end
 
   defp extract_prompt(summary) do
     str(Map.get(summary, :prompt)) || ""
@@ -161,8 +251,6 @@ defmodule LemonMemory.Document do
       _ -> "default"
     end
   end
-
-  defp parse_agent_id(_), do: "default"
 
   defp truncate(text) when is_binary(text) and byte_size(text) > @max_summary_bytes do
     cut = utf8_safe_boundary(text, @max_summary_bytes)

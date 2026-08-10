@@ -88,33 +88,31 @@ defmodule MyAgent.Memory do
 
   @agent_id "my_agent"
 
-  # Only the two summary fields are indexed for search, and building a Document
-  # by hand applies no cap, so cap them here rather than indexing transcripts.
-  @max_summary_chars 1_000
-
   @doc """
   Records one exchange. Writes are asynchronous; a subsequent read on the same
   store is still consistent, because both go through the same process.
   """
   def remember(session_key, prompt, answer, opts \\ []) do
-    now = System.system_time(:millisecond)
-
-    Store.put(%Document{
-      doc_id: "mem_" <> LemonCore.Id.uuid(),
-      run_id: Keyword.get(opts, :run_id, LemonCore.Id.uuid()),
-      session_key: session_key,
-      agent_id: @agent_id,
-      scope: :session,
-      started_at_ms: Keyword.get(opts, :started_at_ms, now),
-      ingested_at_ms: now,
-      prompt_summary: summarize(prompt),
-      answer_summary: summarize(answer),
-      tools_used: Keyword.get(opts, :tools_used, []),
-      provider: Keyword.get(opts, :provider),
-      model: Keyword.get(opts, :model),
-      outcome: Keyword.get(opts, :outcome, :success),
-      meta: Keyword.get(opts, :meta, %{})
-    })
+    # Document.new/1 fills the generated fields (doc_id, run_id, timestamps),
+    # validates that session_key and agent_id are present, and — the reason to
+    # use it rather than building the struct by hand — truncates the two indexed
+    # summary fields so you never index a whole transcript.
+    Store.put(
+      Document.new(
+        session_key: session_key,
+        agent_id: @agent_id,
+        scope: :session,
+        run_id: Keyword.get(opts, :run_id),
+        started_at_ms: Keyword.get(opts, :started_at_ms),
+        prompt_summary: prompt,
+        answer_summary: answer,
+        tools_used: Keyword.get(opts, :tools_used, []),
+        provider: Keyword.get(opts, :provider),
+        model: Keyword.get(opts, :model),
+        outcome: Keyword.get(opts, :outcome, :success),
+        meta: Keyword.get(opts, :meta, %{})
+      )
+    )
   end
 
   @doc "The most recent exchanges in a session, newest first."
@@ -144,16 +142,15 @@ defmodule MyAgent.Memory do
         {:error, reason}
     end
   end
-
-  defp summarize(text) when is_binary(text), do: String.slice(text, 0, @max_summary_chars)
-  defp summarize(_text), do: ""
 end
 ```
 
-Note that `remember/4` builds the `Document` by hand. `LemonMemory.Document`
-also offers `from_run/4`, but it expects the run record and summary shapes that
-the router produces when it finalizes a run — useful if you are running the full
-Lemon runtime, not if you are calling `AgentCore` directly.
+`remember/4` uses `Document.new/1`, which applies the invariants the ingest path
+relies on — summary truncation and required-field validation — so a direct
+`AgentCore` user gets the same document a finalized run would. The other
+constructor, `Document.from_run/4`, expects the run record and summary shapes
+the router produces when it finalizes a run: reach for it if you are running the
+full Lemon runtime, and for `new/1` if you are calling `AgentCore` directly.
 
 ## 4. Feed memory back into a prompt
 
@@ -234,10 +231,12 @@ mix test
 
 ## Things that will surprise you
 
-- **Ordering ties are arbitrary.** Documents come back ordered by
-  `ingested_at_ms` with no tie-break, so two writes inside the same millisecond
-  return in an unspecified order. Real exchanges are seconds apart; tests are
-  not, which is why the generated suite sleeps 2ms between writes.
+- **Same-millisecond ordering is by `doc_id`, not insertion order.** Documents
+  come back newest-first by `ingested_at_ms`, with `doc_id` breaking ties, so two
+  writes inside the same millisecond return in a *stable* order — but one keyed
+  off a random id, not the order you wrote them. Real exchanges are seconds
+  apart; if a test needs strict insertion order it should still space its writes
+  out (the generated suite sleeps 2ms between them).
 - **Every read degrades to empty rather than raising.** `search/2` catches exits
   and returns `[]`. Good for a chat UI, quietly wrong for a data-integrity
   check — do not build one on top of it without checking `LemonMemory.Store.stats/0`.
@@ -246,9 +245,9 @@ mix test
   fact", model it as a narrow scope up front.
 - **Summaries are what gets searched.** `prompt_summary` and `answer_summary`
   are the only indexed fields; anything you want to find later has to be in one
-  of them. `Document.from_run/4` truncates both at 2,000 bytes, but building the
-  struct by hand as `remember/4` does skips that — cap your own summaries, or
-  every full transcript you pass in gets indexed in full.
+  of them. Both `Document.new/1` and `Document.from_run/4` truncate them at
+  2,000 bytes — but if you skip both and build the struct literally, nothing
+  caps them and every full transcript you pass in gets indexed in full.
 
 ## Next
 

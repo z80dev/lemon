@@ -86,6 +86,31 @@ defmodule LemonMemory.StoreTest do
     assert first.ingested_at_ms >= hd(tl(results)).ingested_at_ms
   end
 
+  test "same-millisecond writes order deterministically by doc_id", %{store_pid: pid} do
+    session = "agent:tie_break:main"
+    ts = System.system_time(:millisecond)
+
+    # Identical ingested_at_ms — without a secondary sort key the order is
+    # whatever SQLite returns, which flakes. doc_id breaks the tie.
+    docs =
+      for i <- 1..5 do
+        %{make_doc(session_key: session) | doc_id: "mem_tie_#{i}", ingested_at_ms: ts}
+      end
+
+    Enum.each(docs, &Store.put(pid, &1))
+
+    assert eventually(fn ->
+             length(Store.get_by_session(pid, session, limit: 10)) == 5
+           end)
+
+    order = fn -> Enum.map(Store.get_by_session(pid, session, limit: 10), & &1.doc_id) end
+    first_order = order.()
+
+    # Deterministic across repeated reads, and specifically descending by doc_id.
+    assert first_order == order.()
+    assert first_order == Enum.sort(first_order, :desc)
+  end
+
   test "get_by_agent returns documents across sessions", %{store_pid: pid} do
     agent_id = "agent_cross_#{:rand.uniform(9999)}"
     doc1 = make_doc(agent_id: agent_id, session_key: "agent:#{agent_id}:main")

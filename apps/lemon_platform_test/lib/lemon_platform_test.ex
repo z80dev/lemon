@@ -142,4 +142,34 @@ defmodule LemonPlatformTest do
   end
 
   def resolve(value, _context), do: value
+
+  @doc """
+  Compile-time assertion that the platform dependency a case template needs is
+  present, with a pointed error when it is not.
+
+  The platform apps are `optional: true` dependencies of `:lemon_platform_test`
+  so that a consumer compiles only the one their case exercises. Each case
+  template calls this from its `using` macro, so the failure surfaces when the
+  *consumer's* test module compiles — naming the missing package — rather than
+  as an obscure `UndefinedFunctionError` at test time.
+
+      LemonPlatformTest.require_dep!("PluginCase", LemonChannels.Plugin, :lemon_channels)
+  """
+  @spec require_dep!(String.t(), module(), atom()) :: :ok
+  def require_dep!(case_name, module, dep) do
+    if Code.ensure_loaded?(module) do
+      :ok
+    else
+      raise """
+      LemonPlatformTest.#{case_name} needs #{inspect(module)}, which is not loaded.
+
+      The platform apps are optional dependencies of :lemon_platform_test, so you
+      compile only the one your case uses. Add it to your test deps:
+
+          {#{inspect(dep)}, "~> 0.1", only: :test}
+
+      then `mix deps.get` and recompile.
+      """
+    end
+  end
 end

@@ -3,6 +3,8 @@ defmodule LemonMemory.DocumentTest do
 
   alias LemonMemory.Document
 
+  doctest LemonMemory.Document
+
   describe "from_run/4" do
     test "builds a document from a basic run record and summary" do
       run_id = "run_test_001"
@@ -217,6 +219,100 @@ defmodule LemonMemory.DocumentTest do
              "truncated answer_summary must be valid UTF-8"
 
       assert String.ends_with?(doc.prompt_summary, "...[truncated]")
+    end
+  end
+
+  describe "new/1" do
+    test "builds a document from fields, defaulting the generated ones" do
+      doc =
+        Document.new(
+          session_key: "agent:demo:main",
+          agent_id: "demo",
+          prompt_summary: "hi",
+          answer_summary: "hello"
+        )
+
+      assert doc.session_key == "agent:demo:main"
+      assert doc.agent_id == "demo"
+      assert doc.prompt_summary == "hi"
+      assert doc.answer_summary == "hello"
+      assert doc.scope == :session
+      assert String.starts_with?(doc.doc_id, "mem_")
+      assert is_binary(doc.run_id)
+      assert doc.ingested_at_ms > 0
+      assert doc.started_at_ms == doc.ingested_at_ms
+    end
+
+    test "accepts a map as well as a keyword list" do
+      doc = Document.new(%{session_key: "agent:demo:main", agent_id: "demo"})
+      assert doc.agent_id == "demo"
+    end
+
+    test "applies the same summary truncation as from_run/4 (the whole point)" do
+      long = String.duplicate("a", 3_000)
+
+      doc =
+        Document.new(
+          session_key: "agent:demo:main",
+          agent_id: "demo",
+          prompt_summary: long,
+          answer_summary: long
+        )
+
+      assert byte_size(doc.prompt_summary) <= Document.max_summary_bytes() + 20
+      assert String.ends_with?(doc.prompt_summary, "...[truncated]")
+      assert String.ends_with?(doc.answer_summary, "...[truncated]")
+    end
+
+    test "honours supplied doc_id, run_id and timestamps" do
+      doc =
+        Document.new(
+          doc_id: "mem_fixed",
+          run_id: "run_fixed",
+          session_key: "agent:demo:main",
+          agent_id: "demo",
+          started_at_ms: 111,
+          ingested_at_ms: 222,
+          scope: :workspace,
+          workspace_key: "/proj",
+          tools_used: ["bash"],
+          provider: "anthropic",
+          model: "claude",
+          outcome: :success,
+          meta: %{k: 1}
+        )
+
+      assert doc.doc_id == "mem_fixed"
+      assert doc.run_id == "run_fixed"
+      assert doc.started_at_ms == 111
+      assert doc.ingested_at_ms == 222
+      assert doc.scope == :workspace
+      assert doc.workspace_key == "/proj"
+      assert doc.tools_used == ["bash"]
+      assert doc.outcome == :success
+      assert doc.meta == %{k: 1}
+    end
+
+    test "requires a non-empty session_key" do
+      assert_raise ArgumentError, ~r/session_key/, fn ->
+        Document.new(agent_id: "demo")
+      end
+
+      assert_raise ArgumentError, ~r/session_key/, fn ->
+        Document.new(session_key: "", agent_id: "demo")
+      end
+    end
+
+    test "requires a non-empty agent_id" do
+      assert_raise ArgumentError, ~r/agent_id/, fn ->
+        Document.new(session_key: "agent:demo:main")
+      end
+    end
+
+    test "rejects an unknown scope" do
+      assert_raise ArgumentError, ~r/scope/, fn ->
+        Document.new(session_key: "agent:demo:main", agent_id: "demo", scope: :bogus)
+      end
     end
   end
 end

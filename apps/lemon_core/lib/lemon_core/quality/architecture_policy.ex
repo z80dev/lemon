@@ -54,9 +54,17 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
     lemon_lsp: [:lemon_core],
     lemon_media: [:lemon_core],
     lemon_mcp: [:agent_core, :coding_agent, :lemon_core, :lemon_skills],
-    # The contract-test kit is a leaf: one dep per behaviour it tests, and
-    # nothing in the platform depends on it outside test code.
-    lemon_platform_test: [:lemon_channels, :lemon_core, :lemon_gateway, :lemon_memory],
+    # The contract-test kit is a leaf: one (optional) dep per behaviour it
+    # tests, and nothing in the platform depends on it outside test code. ai +
+    # agent_core back the FakeLLM double, which drives a real agent loop.
+    lemon_platform_test: [
+      :agent_core,
+      :ai,
+      :lemon_channels,
+      :lemon_core,
+      :lemon_gateway,
+      :lemon_memory
+    ],
     lemon_router: [:agent_core, :ai, :lemon_channels, :lemon_core, :lemon_media, :lemon_memory],
     lemon_sim: [:agent_core, :ai, :lemon_core],
     lemon_sim_ui: [:ai, :lemon_core, :lemon_sim],
