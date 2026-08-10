@@ -19,7 +19,10 @@ defmodule LemonCore.MixProject do
 
   def application do
     [
-      extra_applications: [:logger, :public_key],
+      # :inets and :ssl back LemonCore.Httpc. They must be declared, not just
+      # started at runtime: Mix prunes undeclared OTP applications from the code
+      # path, which leaves httpc half-loaded (`:http_util` undefined).
+      extra_applications: [:logger, :public_key, :inets, :ssl],
       mod: {LemonCore.Application, []}
     ]
   end
