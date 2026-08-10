@@ -1,16 +1,18 @@
 defmodule Ai do
   @moduledoc """
-  Unified LLM API abstraction layer.
+  Provider-agnostic LLM client: one API for 27 providers.
 
-  This module provides a single interface for interacting with multiple LLM providers
-  (OpenAI, Anthropic, Google, etc.) with automatic model configuration, token/cost
-  tracking, and seamless context handoffs between providers.
+  This module is the whole public surface. `stream/3` and `complete/3` send a
+  `Ai.Types.Context` to any provider's model and return either a lazy
+  `Ai.EventStream` of events or the final `Ai.Types.AssistantMessage`. Model
+  configuration, cost accounting, per-provider circuit breaking and rate limiting,
+  and context handoffs between providers are all handled behind this interface.
 
   ## Usage
 
       # Create a context
-      context = Ai.Context.new(system_prompt: "You are a helpful assistant")
-      context = Ai.Context.add_user_message(context, "Hello!")
+      context = Ai.new_context(system_prompt: "You are a helpful assistant")
+      context = Ai.Types.Context.add_user_message(context, "Hello!")
 
       # Stream a response
       {:ok, stream} = Ai.stream(model, context)

@@ -26,9 +26,9 @@ defmodule Ai.MixProject do
   end
 
   defp description do
-    "Provider-agnostic LLM client for the BEAM: twenty-plus providers behind one " <>
-      "streaming API, with a model registry, rate limiting, circuit breaking, " <>
-      "context compaction and token accounting."
+    "A provider-agnostic LLM client for Elixir: 27 providers (Anthropic, OpenAI, " <>
+      "Google, Bedrock, Azure, Groq, Mistral, and more) behind one streaming API, " <>
+      "with a model registry, circuit breaking, rate limiting and cost tracking."
   end
 
   # The OTP application stays :ai; the hex package is lemon_ai.

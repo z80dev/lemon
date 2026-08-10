@@ -1,202 +1,97 @@
-# Ai
+# lemon_ai
 
-Unified LLM provider abstraction and streaming runtime for the Lemon platform. This
-OTP application delivers a single API surface for interacting with more than twenty
-LLM providers -- Anthropic, OpenAI, Google, AWS Bedrock, Azure, GitHub Copilot, and
-many others -- while managing streaming lifecycles, rate limiting, circuit breaking,
-and cost tracking behind the scenes.
+A provider-agnostic LLM client for Elixir. Call **27 model providers** — Anthropic,
+OpenAI, Google, AWS Bedrock, Azure, Groq, Mistral, xAI, DeepSeek, OpenRouter, and more —
+through **one streaming API**, with a built-in model registry, per-provider circuit
+breaking and rate limiting, and cost accounting. No web framework, no umbrella, no
+runtime dependencies beyond [`req`](https://hex.pm/packages/req),
+[`jason`](https://hex.pm/packages/jason), and
+[`nimble_options`](https://hex.pm/packages/nimble_options).
 
-## Architecture Overview
+The whole surface is `Ai.stream/3` and `Ai.complete/3` plus a handful of helpers. Point
+a `%Ai.Types.Model{}` at any provider and the rest of your code stays identical.
 
-```
-Ai.stream/3  or  Ai.complete/3
-  |
-  v
-Ai.ProviderRegistry          -- O(1) :persistent_term lookup by api_id
-  |
-  v
-Ai.CallDispatcher.dispatch/2 -- GenServer coordination layer
-  |  |  |
-  |  |  +-- Ai.CircuitBreaker (per-provider, lazy-started via DynamicSupervisor)
-  |  +-- Ai.RateLimiter       (per-provider, lazy-started via DynamicSupervisor)
-  |
-  v
-Ai.Provider.stream/3          -- provider behaviour callback
-  |
-  v
-Ai.EventStream                -- async GenServer: bounded queue, backpressure,
-                                  owner monitoring, task linking, timeout
-```
+## Install
 
-Every call flows through the dispatcher, which checks the circuit breaker, acquires
-a rate-limit permit, enforces per-provider concurrency caps, then invokes the
-provider. Streaming responses are delivered through an `Ai.EventStream` GenServer
-that the caller consumes as a lazy `Stream`.
-
-### Supervision Tree
-
-```
-Ai.Supervisor (one_for_one)
-  +-- Task.Supervisor  (name: Ai.StreamTaskSupervisor)
-  +-- Registry         (name: Ai.RateLimiterRegistry)
-  +-- Registry         (name: Ai.CircuitBreakerRegistry)
-  +-- Ai.ProviderSupervisor   (DynamicSupervisor -- spawns per-provider GenServers)
-  +-- Ai.CallDispatcher        (GenServer)
-  +-- Ai.ModelCache            (GenServer, ETS-backed)
-```
-
-`Ai.ProviderRegistry` lives outside the supervision tree -- it uses
-`:persistent_term` directly so provider mappings survive process restarts.
-
-## Module Inventory
-
-### Core Modules
-
-| Module | Purpose |
-|--------|---------|
-| `Ai` | Public API: `stream/3`, `complete/3`, `get_text/1`, `get_thinking/1`, `get_tool_calls/1`, `calculate_cost/2`, `new_context/1` |
-| `Ai.Provider` | Behaviour (`stream/3`, `provider_id/0`, `api_id/0`, optional `get_env_api_key/0`) |
-| `Ai.ProviderRegistry` | `:persistent_term` registry for O(1) provider lookups by `api_id` |
-| `Ai.ProviderSupervisor` | `DynamicSupervisor` for per-provider circuit breakers and rate limiters |
-| `Ai.CallDispatcher` | Routes calls through circuit breaker + rate limiter + concurrency cap; tracks streaming task results |
-| `Ai.CircuitBreaker` | Per-provider GenServer (closed / open / half-open), lazy-started under `ProviderSupervisor` |
-| `Ai.RateLimiter` | Token-bucket GenServer per provider, lazy-started under `ProviderSupervisor` |
-| `Ai.ModelCache` | ETS-backed model availability cache with configurable TTL (default 5 minutes) |
-| `Ai.EventStream` | Async GenServer for streaming events: bounded queue, backpressure, owner monitoring, task linking, cancellation, timeout |
-| `Ai.Models` | Compile-time registry of all model definitions and metadata across all providers |
-| `Ai.Types` | All struct/type definitions: `Model`, `Context`, `StreamOptions`, `AssistantMessage`, `UserMessage`, `ToolResultMessage`, `ToolCall`, `TextContent`, `ThinkingContent`, `ImageContent`, `Tool`, `Usage`, `Cost`, `ModelCost` |
-| `Ai.Error` | HTTP error parsing, classification (`:rate_limit`, `:auth`, `:client`, `:server`, `:transient`), retry advice, formatting; provider overloads such as Anthropic HTTP 529 are transient retryable errors |
-| `Ai.HttpInspector` | Captures and saves sanitized request dumps for 4xx errors to `~/.lemon/logs/http-errors/` |
-| `Ai.PromptDiagnostics` | Opt-in prompt size and token usage diagnostics (enabled via `LEMON_AI_PROMPT_DIAGNOSTICS=1`) |
-
-### Provider Modules
-
-| Module | `api_id` | Covers |
-|--------|----------|--------|
-| `Ai.Providers.Anthropic` | `:anthropic_messages` | Anthropic Claude (also Kimi, OpenCode, MiniMax Anthropic-compat via same wire format) |
-| `Ai.Providers.OpenAICompletions` | `:openai_completions` | OpenAI Chat Completions and compatible APIs (Groq, Mistral, xAI, Cerebras, OpenRouter, HuggingFace, etc.); retries transient startup HTTP/transport failures before surfacing an error |
-| `Ai.Providers.OpenAIResponses` | `:openai_responses` | OpenAI Responses API |
-| `Ai.Providers.OpenAICodexResponses` | `:openai_codex_responses` | OpenAI Codex (ChatGPT JWT auth) |
-| `Ai.Providers.AzureOpenAIResponses` | `:azure_openai_responses` | Azure OpenAI |
-| `Ai.Providers.Google` | `:google_generative_ai` | Google AI Studio (Gemini) |
-| `Ai.Providers.GoogleVertex` | `:google_vertex` | Google Vertex AI |
-| `Ai.Providers.GoogleGeminiCli` | `:google_gemini_cli` | Google Cloud Code Assist / Gemini CLI |
-| `Ai.Providers.Bedrock` | `:bedrock_converse_stream` | AWS Bedrock Converse Stream |
-
-### Provider Helpers
-
-| Module | Purpose |
-|--------|---------|
-| `Ai.Providers.GoogleShared` | Shared content/tool conversion, stop-reason mapping, thought-signature handling for all Google providers |
-| `Ai.Providers.OpenAIResponsesShared` | Shared message/tool conversion, stream processing, `function_call_output` size guards for OpenAI Responses family; treat `response.completed` as terminal immediately instead of waiting for socket close |
-| `Ai.Providers.HttpTrace` | HTTP request/response trace logging (enabled via `LEMON_AI_HTTP_TRACE=1`) |
-| `Ai.Providers.TextSanitizer` | UTF-8 sanitization for streamed text (replaces invalid sequences with U+FFFD) |
-
-### Auth Modules
-
-The `Ai.Auth.*` modules remain in `apps/ai` as provider protocol helpers only.
-They do not read or write Lemon secrets/config. External Lemon apps should call
-`AgentCore.ModelRuntime.Credentials` for stored credentials and refresh
-persistence.
-
-| Module | Purpose |
-|--------|---------|
-| `Ai.Auth.OAuthSecretResolver` | Central dispatcher for encoded OAuth payloads |
-| `Ai.Auth.GitHubCopilotOAuth` | GitHub Copilot device-code login, Copilot token refresh, secret encoding/decoding |
-| `Ai.Auth.GoogleAntigravityOAuth` | Google Antigravity PKCE OAuth: authorize URL, token exchange/refresh, secret resolver |
-| `Ai.Auth.GoogleGeminiCliOAuth` | Google Gemini CLI PKCE OAuth: authorize URL, token exchange/refresh, Code Assist project setup, secret resolver |
-| `Ai.Auth.OpenAICodexOAuth` | OpenAI Codex PKCE OAuth: authorize URL, code exchange, token refresh, JWT extraction |
-| `Ai.Auth.OAuthPKCE` | PKCE verifier/challenge generation utility |
-
-### Model Definition Modules
-
-Each provider has a dedicated module under `Ai.Models.*` that returns a
-`%{String.t() => Model.t()}` map at compile time:
-
-`Ai.Models.Anthropic`, `Ai.Models.OpenAI`, `Ai.Models.AmazonBedrock`,
-`Ai.Models.Google`, `Ai.Models.GoogleVertex`, `Ai.Models.GoogleGeminiCLI`,
-`Ai.Models.AzureOpenAI`, `Ai.Models.GitHubCopilot`, `Ai.Models.Groq`,
-`Ai.Models.Mistral`, `Ai.Models.XAI`, `Ai.Models.Cerebras`,
-`Ai.Models.DeepSeek`, `Ai.Models.Qwen`, `Ai.Models.MiniMax`,
-`Ai.Models.MiniMaxCN`, `Ai.Models.ZAI`, `Ai.Models.Kimi`,
-`Ai.Models.KimiCoding`, `Ai.Models.OpenCode`, `Ai.Models.HuggingFace`,
-`Ai.Models.OpenRouter`, `Ai.Models.VercelAIGateway`
-
-The direct OpenAI catalog in `Ai.Models.OpenAI` is user-facing in channel model
-pickers. Keep the latest alias IDs there aligned with live `GET /v1/models`
-results for the configured OpenAI key, and remove dead aliases instead of
-leaving them selectable.
-
-Apply the same rule to provider-specific static catalogs when live calls prove
-an entry is dead on that surface. For example, direct Google Generative AI
-should not advertise `gemini-3.1-pro` if the live `v1beta` API returns 404 for
-`generateContent`, even if related preview variants still work.
-
-`:"openai-codex"` is a separate ChatGPT/Codex OAuth catalog layered on top of the
-direct OpenAI list. It may include OAuth-only model IDs that do not appear in the
-API-key `/v1/models` response, including Codex subscription IDs such as
-`gpt-5.5`.
-
-Anthropic-compatible providers also normalize restored map-shaped content blocks
-during request building. That keeps replayed session history usable when message
-content has been serialized and reloaded as plain maps instead of `Ai.Types`
-structs.
-
-The direct OpenAI Responses path also opts into explicit tool use when tools are
-available by sending `tool_choice: "auto"` and `parallel_tool_calls: true`.
-That keeps higher-end GPT-5 variants aligned with Lemon's task-heavy prompts
-instead of leaving tool invocation to provider defaults.
-
-OpenAI-compatible Chat Completions requests map `tool_choice: :any` to the
-standard `"required"` value. ZAI-compatible reasoning models honor
-`reasoning: false` by sending `thinking.type: "disabled"`.
-
-## Supported Providers
-
-The `@providers` list in `Ai.Models` enumerates all supported provider atoms:
-
-`:anthropic`, `:openai`, `:"openai-codex"`, `:amazon_bedrock`, `:google`,
-`:google_antigravity`, `:kimi`, `:kimi_coding`, `:opencode`, `:opencode_go`, `:xai`,
-`:mistral`, `:cerebras`, `:deepseek`, `:qwen`, `:minimax`, `:zai`,
-`:azure_openai_responses`, `:github_copilot`, `:google_gemini_cli`,
-`:google_vertex`, `:groq`, `:huggingface`, `:minimax_cn`, `:openrouter`,
-`:vercel_ai_gateway`
-
-## Usage Examples
-
-### Creating a Context and Streaming
+`lemon_ai` is not yet on Hex. Add it as a git dependency for now:
 
 ```elixir
-model = Ai.Models.get_model(:anthropic, "claude-sonnet-4-20250514")
+def deps do
+  [
+    {:lemon_ai, github: "z80dev/lemon", sparse: "apps/ai"}
+  ]
+end
+```
+
+Once published, this becomes:
+
+```elixir
+{:lemon_ai, "~> 0.1"}
+```
+
+The OTP application is named `:ai`, so you call it as `Ai.*`. It starts its own
+supervision tree (circuit breakers, rate limiters, the model cache) automatically.
+
+## Quickstart
+
+Set the API key for whichever provider you want (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
+`GOOGLE_GENERATIVE_AI_API_KEY`, …) and make a blocking call:
+
+```elixir
+model = Ai.Models.get_model(:anthropic, "claude-haiku-4-5")
 
 context =
-  Ai.new_context(system_prompt: "You are a helpful assistant")
-  |> Ai.Types.Context.add_user_message("Explain OTP in three sentences.")
+  Ai.new_context(system_prompt: "You are a helpful assistant.")
+  |> Ai.Types.Context.add_user_message("Explain OTP supervision in two sentences.")
 
+{:ok, message} = Ai.complete(model, context)
+
+IO.puts(Ai.get_text(message))
+```
+
+Switch providers by changing one line — the context, options, and result handling are
+identical:
+
+```elixir
+model = Ai.Models.get_model(:openai, "gpt-4o")
+model = Ai.Models.get_model(:google, "gemini-2.5-pro")
+model = Ai.Models.get_model(:groq, "llama-3.3-70b-versatile")
+```
+
+The API key resolves in this order: `opts.api_key` you pass in →
+provider-specific env var (e.g. `ANTHROPIC_API_KEY`) → generic fallback. So you can pass
+keys explicitly or rely on the environment.
+
+## Streaming
+
+`Ai.stream/3` returns an `Ai.EventStream` you consume as a lazy stream of events:
+
+```elixir
 {:ok, stream} = Ai.stream(model, context, %{temperature: 0.7, reasoning: :medium})
 
 stream
 |> Ai.EventStream.events()
 |> Enum.each(fn
   {:text_delta, _idx, delta, _partial} -> IO.write(delta)
-  {:thinking_delta, _idx, delta, _partial} -> IO.write(["[think] ", delta])
+  {:thinking_delta, _idx, delta, _partial} -> IO.write([IO.ANSI.faint(), delta, IO.ANSI.reset()])
   {:done, _reason, _message} -> IO.puts("\n-- done --")
   {:error, _reason, message} -> IO.puts("Error: #{message.error_message}")
   _ -> :ok
 end)
 ```
 
-### Blocking Completion
+Convenience helpers on the stream:
 
 ```elixir
-{:ok, message} = Ai.complete(model, context)
-
-text     = Ai.get_text(message)
-thinking = Ai.get_thinking(message)
-calls    = Ai.get_tool_calls(message)
+text            = Ai.EventStream.collect_text(stream)   # blocking, returns full text
+{:ok, message}  = Ai.EventStream.result(stream)         # blocking, returns final message
+%{queue_size: _, dropped: _} = Ai.EventStream.stats(stream)
+Ai.EventStream.cancel(stream, :user_requested)
 ```
 
-### Tool Use
+`Ai.complete/3` is just `stream/3` + `EventStream.result/1` collected for you.
+
+## Tool use
 
 ```elixir
 tools = [
@@ -211,8 +106,9 @@ tools = [
   }
 ]
 
-context = Ai.new_context(system_prompt: "You can check weather.", tools: tools)
-context = Ai.Types.Context.add_user_message(context, "Weather in Paris?")
+context =
+  Ai.new_context(system_prompt: "You can check weather.", tools: tools)
+  |> Ai.Types.Context.add_user_message("Weather in Paris?")
 
 {:ok, message} = Ai.complete(model, context)
 
@@ -224,166 +120,193 @@ for tc <- Ai.get_tool_calls(message) do
     is_error: false
   }
 
-  context = Ai.Types.Context.add_assistant_message(context, message)
-  context = Ai.Types.Context.add_tool_result(context, result)
+  context =
+    context
+    |> Ai.Types.Context.add_assistant_message(message)
+    |> Ai.Types.Context.add_tool_result(result)
+
   {:ok, final} = Ai.complete(model, context)
   IO.puts(Ai.get_text(final))
 end
 ```
 
-### Cost Calculation
+## Provider capability matrix
+
+Every provider is reached through one of **10 wire-protocol modules**. The 27 provider
+catalogs in `Ai.Models` route through these — for example Groq, xAI, DeepSeek, Qwen,
+Cerebras, OpenRouter, Vercel AI Gateway, HuggingFace, Fireworks, and Mistral's catalog
+all speak the OpenAI Chat Completions format, so they inherit its capabilities.
+
+| Wire module (`api_id`) | Streaming | Tool calls | Vision (image input) | Reasoning / thinking | Cost data |
+|------------------------|:---------:|:----------:|:--------------------:|:--------------------:|:---------:|
+| Anthropic `:anthropic_messages` | ✅ | ✅ | ✅ | ✅ | ✅ |
+| OpenAI Chat Completions `:openai_completions` | ✅ | ✅ | ✅ | ✅ | ✅ |
+| OpenAI Responses `:openai_responses` | ✅ | ✅ | ✅ | ✅ | ✅ |
+| OpenAI Codex `:openai_codex_responses` | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Azure OpenAI `:azure_openai_responses` | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Google Generative AI `:google_generative_ai` | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Google Vertex `:google_vertex` | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Google Gemini CLI `:google_gemini_cli` | ✅ | ✅ | ✅ | ✅ | ✅ |
+| AWS Bedrock `:bedrock_converse_stream` | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Mistral Conversations `:mistral_conversations` | ✅ | — | — | — | ✅ |
+
+Vision and reasoning are additionally gated **per model** by the model's `input` and
+`reasoning` fields — a wire module supporting vision doesn't make a text-only model
+accept images. Query the specific model:
 
 ```elixir
-{:ok, message} = Ai.complete(model, context)
-cost = Ai.calculate_cost(model, message.usage)
-# cost.total, cost.input, cost.output, cost.cache_read, cost.cache_write  (dollars)
-```
-
-### EventStream Utilities
-
-```elixir
-# Collect all text into a single string
-text = Ai.EventStream.collect_text(stream)
-
-# Wait for the final AssistantMessage (blocking)
-{:ok, message} = Ai.EventStream.result(stream)
-
-# Inspect queue stats
-%{queue_size: _, max_queue: _, dropped: _} = Ai.EventStream.stats(stream)
-
-# Cancel a running stream
-Ai.EventStream.cancel(stream, :user_requested)
-```
-
-### Model Lookup
-
-```elixir
-# Lookup by provider + model id
-model = Ai.Models.get_model(:anthropic, "claude-sonnet-4-20250514")
-
-# Search across all providers by model id string
-model = Ai.Models.find_by_id("gpt-4o")
-
-# List all models for a provider
-models = Ai.Models.get_models(:openai)
-
-# All known providers
-providers = Ai.Models.get_providers()
-
-# Capability queries
 Ai.Models.supports_vision?(model)
 Ai.Models.supports_reasoning?(model)
 Ai.Models.supports_xhigh(model)
 ```
 
-### Error Handling
+The 27 provider catalogs: `:anthropic`, `:openai`, `:"openai-codex"`,
+`:amazon_bedrock`, `:google`, `:google_antigravity`, `:kimi`, `:kimi_coding`,
+`:opencode`, `:opencode_go`, `:xai`, `:mistral`, `:cerebras`, `:deepseek`, `:qwen`,
+`:minimax`, `:zai`, `:azure_openai_responses`, `:github_copilot`, `:google_gemini_cli`,
+`:google_vertex`, `:groq`, `:huggingface`, `:minimax_cn`, `:fireworks`, `:openrouter`,
+`:vercel_ai_gateway`.
 
-```elixir
-Ai.Error.format_error(:rate_limited)
-# => "Request rate limited. Please wait before retrying."
+## What you get beyond raw HTTP
 
-Ai.Error.retryable?(:timeout)
-# => true
+### Circuit breaking
 
-Ai.Error.auth_error?({:http_error, 401, "Unauthorized"})
-# => true
-
-Ai.Error.suggested_retry_delay({:http_error, 429, _body})
-# => 60_000
-
-parsed = Ai.Error.parse_http_error(429, response_body, headers)
-# parsed.category, parsed.message, parsed.retryable, parsed.rate_limit_info
-```
-
-`Ai.Error.parse_http_error/3` also normalizes common provider body variants:
-OpenAI/Anthropic maps, atom-key Elixir maps and enum values, Google `errors` arrays, FastAPI/Pydantic `detail`
-arrays, OAuth-style `error_description`, and nested detail-array
-`error_description` / `error_message` / `description` entries. String error
-codes with sibling `message`, `detail`, or `description` text are combined
-before fallback inspection. Symbolic provider `type` or string `code` fields
-also remain prefixed when paired with direct or nested effective messages.
-JSON:API-style `errors`
-arrays with `detail` or `title` fields are normalized as provider messages too,
-and nested validation-array `error` objects plus symbolic top-level error maps
-whose actionable text lives under nested `details` are unwrapped before fallback
-inspection. Placeholder-empty top-level error messages defer to actionable
-nested details when present.
-
-For rate-limit responses, parsed errors merge provider body retry hints such as
-`retry_after`, `retryAfter`, `retry_after_ms`, `retryAfterMs`, and Google
-`RetryInfo.retryDelay` into `rate_limit_info.retry_after` when retry headers are
-absent. HTTP headers still take precedence.
-
-## Configuration
-
-### Application Config (`config/config.exs`)
+Each provider gets its own circuit breaker (closed → open → half-open), lazily started
+the first time you call it. After a run of failures the breaker opens and fails fast
+instead of hammering a down provider.
 
 ```elixir
 config :ai, :circuit_breaker,
   failure_threshold: 5,       # failures before opening (default: 5)
   recovery_timeout: 30_000    # ms before half-open recovery (default: 30_000)
 
-config :ai, :rate_limiter,
-  tokens_per_second: 10,      # token refill rate (default: 10)
-  max_tokens: 20              # bucket capacity (default: 20)
-
-config :ai, Ai.CallDispatcher,
-  stream_result_timeout_ms: 300_000   # how long dispatcher tracks streams
-```
-
-### Runtime Configuration via `Ai.CallDispatcher`
-
-```elixir
-Ai.CallDispatcher.set_concurrency_cap(:anthropic, 20)
-Ai.CallDispatcher.get_active_requests(:anthropic)
-Ai.CallDispatcher.get_state()
-```
-
-### Circuit Breaker Control
-
-```elixir
 Ai.CircuitBreaker.open?(:anthropic)
 Ai.CircuitBreaker.reset(:anthropic)
-Ai.CircuitBreaker.get_state(:anthropic)
+Ai.CircuitBreaker.get_state(:anthropic)   # state, failure count, last failure reason
 ```
 
-`get_state/1` includes the current breaker state, failure counts, recovery timeout,
-and the last recorded failure reason that opened or last refreshed the breaker.
+### Rate limiting and concurrency caps
 
-## Key Types
+A per-provider token bucket plus an in-flight concurrency cap, both enforced by the
+dispatcher before the provider is ever called.
 
-All types are defined in `Ai.Types`:
+```elixir
+config :ai, :rate_limiter,
+  tokens_per_second: 10,   # refill rate (default: 10)
+  max_tokens: 20           # bucket capacity (default: 20)
+
+Ai.CallDispatcher.set_concurrency_cap(:anthropic, 20)
+Ai.CallDispatcher.get_active_requests(:anthropic)
+```
+
+### Cost tracking
+
+Every model carries pricing, so you can price any response:
+
+```elixir
+{:ok, message} = Ai.complete(model, context)
+cost = Ai.calculate_cost(model, message.usage)
+# cost.total, cost.input, cost.output, cost.cache_read, cost.cache_write  (US dollars)
+```
+
+### Automatic retries
+
+Providers retry transient failures (429, 5xx, connection resets, TLS hiccups) on the
+call's own async task with exponential backoff + jitter, honoring `retry-after` headers
+when present. Retries are bounded — 2 for Anthropic, 3 for the OpenAI family — and each
+request retries in isolation, so one slow retry never blocks another caller.
+
+### Context compaction
+
+`Ai.CompactingClient` wraps a call and, on a `ContextLengthExceeded` error,
+automatically compacts the conversation and retries instead of failing outright.
+
+### Token estimation
+
+`Ai.Tokens` gives fast token *estimates* for budgeting and thresholds:
+
+```elixir
+Ai.Tokens.estimate_chars("some prompt text")   # ~ String.length / 4
+Ai.Tokens.estimate_bytes(payload)               # ~ byte_size / 4
+```
+
+> **Caveat:** this is a rough **4-characters-per-token heuristic, not a real
+> tokenizer.** It will diverge from any model's actual token count and must not be
+> trusted for billing or hard context-window limits. Use it for quick thresholds and
+> diagnostics only; use `message.usage` (the provider's reported counts) for anything
+> that needs to be accurate.
+
+### Actionable, classified errors
+
+`Ai.Error` parses provider error bodies into a normalized category and tells you whether
+to retry:
+
+```elixir
+parsed = Ai.Error.parse_http_error(429, response_body, headers)
+# parsed.category  => :rate_limit | :auth | :client | :server | :transient
+# parsed.retryable => true
+# parsed.rate_limit_info.retry_after => merged from headers or body hints
+
+Ai.Error.retryable?(:timeout)                          # => true
+Ai.Error.auth_error?({:http_error, 401, "Unauthorized"})  # => true
+Ai.Error.suggested_retry_delay({:http_error, 429, _})  # => 60_000
+```
+
+It handles the OpenAI/Anthropic map shapes, Google `errors` arrays, FastAPI/Pydantic
+`detail` arrays, OAuth `error_description`, and JSON:API `errors` — so you get a useful
+message instead of a raw blob, whatever provider you hit.
+
+## Model lookup
+
+```elixir
+Ai.Models.get_model(:anthropic, "claude-haiku-4-5")  # provider + id
+Ai.Models.find_by_id("gpt-4o")                         # search all providers by id
+Ai.Models.get_models(:openai)                          # all models for a provider
+Ai.Models.get_providers()                              # all known provider atoms
+```
+
+You can also skip the registry entirely and hand-build a `%Ai.Types.Model{}` — the
+registry is a convenience, not a requirement.
+
+## Configuration reference
+
+```elixir
+config :ai, Ai.CallDispatcher,
+  stream_result_timeout_ms: 300_000   # how long the dispatcher tracks a stream's result
+```
+
+`Ai.ModelCache` caches provider `GET /models` availability with a configurable TTL
+(default 5 minutes).
+
+## Key types
+
+All defined in `Ai.Types`:
 
 ```elixir
 %Ai.Types.Model{
   id: String.t(),
   name: String.t(),
-  api: atom(),               # must match registered api_id in ProviderRegistry
-  provider: atom(),           # keyed for circuit breaker / rate limiter
+  api: atom(),               # must match a registered api_id
+  provider: atom(),          # keyed for circuit breaker / rate limiter
   base_url: String.t(),
   reasoning: boolean(),
   input: [:text | :image],
-  cost: %Ai.Types.ModelCost{input: float(), output: float(), ...},
+  cost: %Ai.Types.ModelCost{input: float(), output: float()},
   context_window: non_neg_integer(),
   max_tokens: non_neg_integer(),
-  headers: map(),             # extra HTTP headers for this model
-  compat: map() | nil         # provider-specific overrides
+  headers: map(),
+  compat: map() | nil
 }
 
 %Ai.Types.StreamOptions{
   temperature: float() | nil,
   max_tokens: non_neg_integer() | nil,
   api_key: String.t() | nil,
-  session_id: String.t() | nil,
   headers: map(),
   reasoning: :minimal | :low | :medium | :high | :xhigh | nil,
-  thinking_budgets: map(),
   stream_timeout: timeout(),        # default 300_000ms
-  tool_choice: atom() | String.t() | nil,
-  project: String.t() | nil,        # GCP project for Vertex
-  location: String.t() | nil,       # GCP location for Vertex
-  access_token: String.t() | nil,   # OAuth token for Vertex/GeminiCli
-  service_account_json: String.t() | nil
+  tool_choice: atom() | String.t() | nil
+  # ...plus Vertex/OAuth fields: project, location, access_token, service_account_json
 }
 
 %Ai.Types.Context{
@@ -393,153 +316,120 @@ All types are defined in `Ai.Types`:
 }
 ```
 
-**Important:** `Context.messages` is stored in reverse order (newest first). Use
-`Context.get_messages_chronological/1` when passing messages to an LLM API.
+> `Context.messages` is stored reversed (newest first). Use
+> `Ai.Types.Context.get_messages_chronological/1` when passing to an API directly.
 
-## Event Types
+## Streaming event types
 
 Events emitted by `Ai.EventStream`:
 
 ```elixir
-{:start, AssistantMessage.t()}
-{:text_start, idx, AssistantMessage.t()}
-{:text_delta, idx, String.t(), AssistantMessage.t()}
-{:text_end, idx, String.t(), AssistantMessage.t()}
-{:thinking_start, idx, AssistantMessage.t()}
-{:thinking_delta, idx, String.t(), AssistantMessage.t()}
-{:thinking_end, idx, String.t(), AssistantMessage.t()}
-{:tool_call_start, idx, AssistantMessage.t()}
-{:tool_call_delta, idx, String.t(), AssistantMessage.t()}
-{:tool_call_end, idx, ToolCall.t(), AssistantMessage.t()}
-{:done, stop_reason, AssistantMessage.t()}
-{:error, stop_reason, AssistantMessage.t()}
+{:start, message}
+{:text_start, idx, message}
+{:text_delta, idx, delta, message}
+{:text_end, idx, text, message}
+{:thinking_start | :thinking_delta | :thinking_end, idx, ..., message}
+{:tool_call_start, idx, message}
+{:tool_call_delta, idx, json_fragment, message}
+{:tool_call_end, idx, tool_call, message}
+{:done, stop_reason, message}
+{:error, stop_reason, message}
 {:canceled, reason}
 ```
 
 `stop_reason` is one of `:stop | :length | :tool_use | :error | :aborted`.
 
-## Environment Variables
+## Architecture
 
-Lemon callers resolve config, secrets, and OAuth state through
-`AgentCore.ModelRuntime` before invoking `Ai`. Providers consume concrete values from
-`Ai.Types.StreamOptions` (`api_key`, `headers`, `project`, `location`,
-`service_account_json`, and `provider_options`) and only use process env vars as
-standalone authentication fallback behavior.
+Every call flows through a dispatcher that checks the circuit breaker, acquires a
+rate-limit permit, and enforces the concurrency cap before invoking the provider.
+Streaming responses come back through an `Ai.EventStream` GenServer with a bounded
+queue, backpressure, owner monitoring, and timeouts.
 
-| Variable | Provider/Module | Purpose |
-|----------|-----------------|---------|
-| `ANTHROPIC_API_KEY` | Anthropic | API authentication |
-| `OPENAI_API_KEY` | OpenAI family | API authentication |
-| `OPENAI_CODEX_API_KEY` / `CHATGPT_TOKEN` | OpenAI Codex | JWT token |
-| `OPENAI_CODEX_OAUTH_CLIENT_ID` | `Ai.Auth.OpenAICodexOAuth` | Override OAuth client ID |
-| `AZURE_OPENAI_API_KEY` | Azure OpenAI | API authentication |
-| `AZURE_OPENAI_BASE_URL` | Azure OpenAI | Full base URL (optional) |
-| `AZURE_OPENAI_RESOURCE_NAME` | Azure OpenAI | Resource name (if no base URL) |
-| `AZURE_OPENAI_API_VERSION` | Azure OpenAI | API version (default: "v1") |
-| `AZURE_OPENAI_DEPLOYMENT_NAME_MAP` | Azure OpenAI | Comma-separated `model=deployment` mappings |
-| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | Bedrock | AWS credentials |
-| `AWS_REGION` | Bedrock | AWS region (default: `us-east-1`) |
-| `GOOGLE_GENERATIVE_AI_API_KEY` | Google AI Studio | API key (also checks `GOOGLE_API_KEY`, `GEMINI_API_KEY`) |
-| `GOOGLE_GEMINI_CLI_API_KEY` | Google Gemini CLI | JSON credential payload (`{"token","projectId"}`) |
-| `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT` | `AgentCore.ModelRuntime.StreamOptions` Vertex option resolver | GCP project ID |
-| `GOOGLE_CLOUD_LOCATION` | `AgentCore.ModelRuntime.StreamOptions` Vertex option resolver | GCP region |
-| `GOOGLE_APPLICATION_CREDENTIALS_JSON` | `AgentCore.ModelRuntime.StreamOptions` Vertex option resolver | Inline service account JSON |
-| `GOOGLE_APPLICATION_CREDENTIALS` | Google Vertex | ADC service account JSON file path |
-| `GOOGLE_GEMINI_CLI_OAUTH_CLIENT_ID` | `Ai.Auth.GoogleGeminiCliOAuth` | OAuth client ID fallback |
-| `GOOGLE_GEMINI_CLI_OAUTH_CLIENT_SECRET` | `Ai.Auth.GoogleGeminiCliOAuth` | OAuth client secret fallback |
-| `GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_ID` | `Ai.Auth.GoogleAntigravityOAuth` | OAuth client ID fallback |
-| `GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_SECRET` | `Ai.Auth.GoogleAntigravityOAuth` | OAuth client secret fallback |
-| `LEMON_AI_HTTP_TRACE` | `Ai.Providers.HttpTrace` | Set to `"1"` to enable HTTP trace logging |
-| `LEMON_AI_DEBUG` | Anthropic | Set to `"1"` to log raw SSE events |
-| `LEMON_AI_DEBUG_FILE` | Anthropic | SSE log file path (default: `/tmp/lemon_anthropic_sse.log`) |
-| `LEMON_AI_PROMPT_DIAGNOSTICS` | `Ai.PromptDiagnostics` | Set to `"1"` to enable prompt size/usage logging |
-| `LEMON_AI_PROMPT_DIAGNOSTICS_LOG_LEVEL` | `Ai.PromptDiagnostics` | Log level for diagnostics (default: `info`) |
-| `LEMON_AI_PROMPT_DIAGNOSTICS_TOP_N` | `Ai.PromptDiagnostics` | Number of largest messages to report (default: 5) |
-| `LEMON_KIMI_MAX_REQUEST_MESSAGES` | Anthropic (Kimi) | Max history messages for Kimi models (default: 200) |
-| `PI_CACHE_RETENTION` | OpenAI Responses | Set to `"long"` for 24h prompt cache retention |
-
-## How to Add a New Provider
-
-### 1. Create the Provider Module
-
-Create `lib/ai/providers/my_provider.ex`:
-
-```elixir
-defmodule Ai.Providers.MyProvider do
-  @behaviour Ai.Provider
-
-  alias Ai.{EventStream, Types}
-
-  @impl true
-  def api_id, do: :my_provider_api
-
-  @impl true
-  def provider_id, do: :my_provider
-
-  @impl true
-  def get_env_api_key, do: System.get_env("MY_PROVIDER_API_KEY")
-
-  @impl true
-  def stream(%Types.Model{} = model, %Types.Context{} = context, %Types.StreamOptions{} = opts) do
-    {:ok, stream} = EventStream.start_link(
-      owner: self(),
-      max_queue: 10_000,
-      timeout: opts.stream_timeout || 300_000
-    )
-
-    {:ok, task_pid} = Task.Supervisor.start_child(Ai.StreamTaskSupervisor, fn ->
-      do_stream(stream, model, context, opts)
-    end)
-
-    EventStream.attach_task(stream, task_pid)
-    {:ok, stream}
-  end
-
-  defp do_stream(stream, model, context, opts) do
-    # 1. Build request body from context
-    # 2. Make HTTP request with Req (into: :self for streaming)
-    # 3. Push events:  EventStream.push_async(stream, {:text_delta, 0, text, partial})
-    # 4. On success:   EventStream.complete(stream, final_assistant_message)
-    # 5. On error:     EventStream.error(stream, error_assistant_message)
-  end
-end
+```
+Ai.stream/3  or  Ai.complete/3
+  → Ai.ProviderRegistry          -- O(1) :persistent_term lookup by api_id
+  → Ai.CallDispatcher.dispatch/2 -- circuit breaker + rate limiter + concurrency cap
+  → Ai.Provider.stream/3         -- provider behaviour callback
+  → Ai.EventStream               -- async delivery, backpressure, cancellation
 ```
 
-### 2. Add Model Definitions
+Supervision tree:
 
-Create `lib/ai/models/my_provider.ex` with a `models/0` function returning a
-`%{String.t() => Model.t()}` map. Then add the provider to the `@models` and
-`@providers` lists in `Ai.Models`.
+```
+Ai.Supervisor (one_for_one)
+  ├── Task.Supervisor (Ai.StreamTaskSupervisor)
+  ├── Registry (Ai.RateLimiterRegistry)
+  ├── Registry (Ai.CircuitBreakerRegistry)
+  ├── Ai.ProviderSupervisor  -- DynamicSupervisor for per-provider breakers/limiters
+  ├── Ai.CallDispatcher
+  └── Ai.ModelCache
+```
 
-### 3. Register the Provider
+`Ai.ProviderRegistry` lives outside the tree in `:persistent_term`, so provider
+mappings survive process restarts.
 
-Add the registration call to `Ai.Application.register_providers/0`:
+## Adding a provider
+
+Implement the `Ai.Provider` behaviour (`stream/3`, `provider_id/0`, `api_id/0`, and
+optionally `get_env_api_key/0`), add a model catalog under `Ai.Models.*`, and register
+the module in `Ai.Application`:
 
 ```elixir
 Ai.ProviderRegistry.register(:my_provider_api, Ai.Providers.MyProvider)
 ```
 
-## Dependencies
+Inside `stream/3` you start an `Ai.EventStream`, run the HTTP request in a supervised
+task, and push events (`Ai.EventStream.push_async/2`) until you complete or error the
+stream. See any module under `lib/ai/providers/` for the pattern.
 
-| Dependency | Purpose |
-|------------|---------|
-| `req ~> 0.5` | HTTP client with streaming support; `Req.Test` for test mocking |
-| `jason ~> 1.4` | JSON encoding/decoding |
-| `nimble_options ~> 1.1` | Options validation |
-| `plug ~> 1.16` (test only) | Required for `Req.Test` stub via `Plug.Conn` |
+## Authentication and OAuth
+
+Most providers authenticate with a bearer key from options or the environment. Providers
+that require OAuth (GitHub Copilot, Google Gemini CLI, OpenAI Codex, Google Antigravity)
+have helpers under `Ai.Auth.*` for the device-code / PKCE flows and token refresh. These
+are protocol helpers only — they do not read or write any external app's secret store.
+
+Common environment variables (used as a standalone fallback when a key isn't passed in
+options):
+
+| Variable | Provider |
+|----------|----------|
+| `ANTHROPIC_API_KEY` | Anthropic (and Kimi/OpenCode/MiniMax compat) |
+| `OPENAI_API_KEY` | OpenAI family |
+| `GOOGLE_GENERATIVE_AI_API_KEY` | Google AI Studio (also `GOOGLE_API_KEY`, `GEMINI_API_KEY`) |
+| `AZURE_OPENAI_API_KEY` | Azure OpenAI |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_REGION` | Bedrock |
+
+Debug/diagnostic toggles: `LEMON_AI_HTTP_TRACE=1` (HTTP trace logging),
+`LEMON_AI_PROMPT_DIAGNOSTICS=1` (prompt size/token diagnostics), `LEMON_AI_DEBUG=1`
+(raw Anthropic SSE logging).
 
 ## Testing
 
 ```bash
-# Run all ai tests from the umbrella root
-mix test apps/ai
-
-# Run a specific test file
-mix test apps/ai/test/ai/circuit_breaker_test.exs
-
-# Run integration tests (requires API keys, excluded by default)
-mix test apps/ai/test/integration --include integration
+mix test apps/ai                                    # from umbrella root
+mix test apps/ai/test/ai/circuit_breaker_test.exs   # one file
+mix test apps/ai/test/integration --include integration  # needs API keys
 ```
 
-HTTP requests are mocked with `Req.Test` stubs. See existing provider tests
-under `test/providers/` for patterns.
+HTTP is mocked with `Req.Test` stubs; see `test/providers/` for patterns.
+
+## Dependencies
+
+| Dependency | Purpose |
+|------------|---------|
+| `req ~> 0.5` | HTTP client with streaming support |
+| `jason ~> 1.4` | JSON encoding/decoding |
+| `nimble_options ~> 1.1` | Options validation |
+| `plug ~> 1.16` (test only) | `Req.Test` stubs |
+
+## Used by
+
+`lemon_ai` is the LLM layer of the [Lemon](https://github.com/z80dev/lemon) agent
+platform, where it drives long-running agents across every provider above. It has zero
+dependency on the rest of that platform and is designed to be used entirely on its own.
+
+## License
+
+MIT.
