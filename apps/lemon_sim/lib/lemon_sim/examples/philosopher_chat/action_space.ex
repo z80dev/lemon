@@ -117,7 +117,10 @@ defmodule LemonSim.Examples.PhilosopherChat.ActionSpace do
         []
 
       base_namespace != "" ->
-        MemoryTools.build(memory_root: memory_root, memory_namespace: "#{base_namespace}/#{actor_id}")
+        MemoryTools.build(
+          memory_root: memory_root,
+          memory_namespace: "#{base_namespace}/#{actor_id}"
+        )
 
       true ->
         MemoryTools.build(memory_root: memory_root, memory_namespace: "#{thread_id}/#{actor_id}")
