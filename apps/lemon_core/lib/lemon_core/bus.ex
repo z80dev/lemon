@@ -52,7 +52,7 @@ defmodule LemonCore.Bus do
   @registry LemonCore.Bus.Registry
 
   @compile {:no_warn_undefined, Phoenix.PubSub}
-  @pubsub_compiled Code.ensure_loaded?(Phoenix.PubSub)
+  @backend_key {__MODULE__, :backend}
 
   @doc """
   Subscribe the calling process to a topic.
@@ -113,29 +113,41 @@ defmodule LemonCore.Bus do
   end
 
   @doc """
-  Whether `phoenix_pubsub` backs the Bus, as opposed to the Registry fallback.
+  Which backend is in use: `:pubsub` or `:registry`.
 
-  Detected when this module is compiled. `config :lemon_core, :bus_backend,
-  :registry` forces the fallback even when `Phoenix.PubSub` is available, which
-  is mainly useful for exercising it in tests.
+  Detected at runtime on first use and memoized, because `phoenix_pubsub` being
+  compiled alongside lemon_core does not mean it is on the code path of every
+  app that depends on lemon_core — optional dependencies are not inherited
+  transitively. `config :lemon_core, :bus_backend, :registry` forces the
+  fallback even where `Phoenix.PubSub` is available, which is how tests
+  exercise it.
   """
-  @spec pubsub?() :: boolean()
-  def pubsub? do
+  @spec backend() :: :pubsub | :registry
+  def backend do
     case Application.get_env(:lemon_core, :bus_backend, :auto) do
-      :registry -> false
-      :pubsub -> true
-      _auto -> @pubsub_compiled
+      :registry -> :registry
+      :pubsub -> :pubsub
+      _auto -> :persistent_term.get(@backend_key, nil) || detect_backend()
     end
   end
+
+  @doc "Whether `phoenix_pubsub` backs the Bus, as opposed to the Registry fallback."
+  @spec pubsub?() :: boolean()
+  def pubsub?, do: backend() == :pubsub
 
   @doc false
   @spec child_spec_for_backend() :: Supervisor.child_spec() | {module(), keyword()}
   def child_spec_for_backend do
-    if pubsub?() do
-      {Phoenix.PubSub, name: @pubsub}
-    else
-      {Registry, keys: :duplicate, name: @registry}
+    case backend() do
+      :pubsub -> {Phoenix.PubSub, name: @pubsub}
+      :registry -> {Registry, keys: :duplicate, name: @registry}
     end
+  end
+
+  defp detect_backend do
+    backend = if Code.ensure_loaded?(Phoenix.PubSub), do: :pubsub, else: :registry
+    :persistent_term.put(@backend_key, backend)
+    backend
   end
 
   defp dispatch(topic, event, except) do
