@@ -343,6 +343,43 @@ started. If any caller relies on that — asking about a channel that isn't conf
 changes behaviour from "static answer" to "empty". `capability_query.ex:102` is the one
 non-test caller to check before implementing.
 
+## 7b. B3 handoff — outbound + cutover (for the next worker)
+
+**What landed (B3 inbound-only, 2026-08-10).** `LemonChannels.Adapters.Email` implements
+`Plugin`'s six callbacks and normalizes provider webhook payloads into
+`LemonCore.InboundMessage`, with `LemonChannels.Adapters.Email.Webhook` receiving on
+`LemonChannels.InboundHttp` at `POST /email` (token-authenticated, 401 when no token is
+configured — an open inbound mail endpoint is a spam relay into someone's agent). 17 tests.
+
+**Nothing has cut over.** `LemonGateway.Transports.Email` is still registered and untouched, the
+channels adapter is *not* in `config :lemon_channels, adapters:`, and `InboundHttp` is disabled
+by default. Three independent gates, so this is inert in every existing runtime.
+
+**What is left, in order:**
+
+1. **Outbound.** `Email.deliver/1` currently returns `{:error, :not_implemented}` — deliberately
+   loud, so nothing believes mail was sent. Port `LemonGateway.Transports.Email.Outbound`
+   (715 LOC: multipart build, threading headers, SMTP send, attachment handling) behind it. The
+   contract is already executable: `apps/lemon_gateway/test/transports/email/outbound_test.exs`
+   has 25 characterization tests pinning `smtp_options/1` and `deliver/2`'s no-op paths. Port
+   against those, and treat a failure as a behaviour change to justify — they are descriptive of
+   what shipped, not prescriptive.
+2. **Thread-state persistence.** Gateway's inbound persists `email_message_threads` /
+   `email_thread_state` in `LemonCore.Store` and merges `References` union-find style. The ported
+   adapter computes `thread_id/1` *statelessly* (oldest known ancestor, subject fallback), which
+   is correct for well-behaved clients but will not stitch a chain whose middle message is the
+   first one seen. Decide: port the tables, or accept stateless resolution. This is the one real
+   behaviour difference in the inbound port and it is called out here rather than buried.
+3. **Attachments.** Gateway persists them asynchronously with deterministic paths and a size cap.
+   The adapter currently passes the raw list through in `meta.attachments` untouched.
+4. **Cutover.** Add `email` to `TransportRegistry`'s `@channels_owned_transport_ids` (the
+   mechanism Telegram/Discord/WhatsApp used), add the adapter to the channels adapter list, enable
+   `InboundHttp`, then delete `apps/lemon_gateway/lib/lemon_gateway/transports/email/`. Run both
+   behind separate flags on one test mailbox first, comparing delivered shape and thread
+   continuity.
+
+**Do not** take this as licence to port webhook/SMS/voice — §1 and the amended D2 still hold.
+
 ## 8. Risks
 
 | Risk | Mitigation |
