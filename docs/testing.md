@@ -1140,8 +1140,8 @@ mix test apps/lemon_core/test/lemon_core/extensions/manifest_test.exs \
 
 This lane passed locally on 2026-05-16 with `5 tests, 0 failures`.
 
-Web terminal backend, provider-readiness, extension-directory, and proof-artifact
-visibility are covered by the operations dashboard lane:
+The Web application surface (endpoint, router, and the session LiveView) is
+covered by the web lane:
 
 ```bash
 mix test apps/lemon_web/test/lemon_web_test.exs --seed 1

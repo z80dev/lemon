@@ -83,15 +83,17 @@ See `docs/diagrams/architecture.svg` for the full visual diagram.
 
 ## Application Map
 
-The project is an Elixir umbrella with 21 applications:
+The project is an Elixir umbrella with 24 applications:
 
 **Stack (bottom-up):**
 
 | App | Role |
 |---|---|
 | `ai` | Provider abstraction, streaming, cost tracking (standalone; no umbrella deps) |
-| `lemon_core` | EventBus, MemoryStore, TaskFingerprint, config, secrets (standalone; no umbrella deps) |
+| `lemon_core` | EventBus, TaskFingerprint, config, secrets (standalone; no umbrella deps) |
+| `lemon_memory` | Durable memory for agents: document schema, SQLite-backed full-text store, provider behaviour with isolated fan-out search, run ingest (published; extracted from `lemon_core`) |
 | `agent_core` | Core agent loop, tool execution, model runtime credential glue, abort/subagent semantics |
+| `lemon_platform_test` | Contract-test kit for the platform's extension behaviours: ExUnit case templates that validate Plugin, Engine, Store backend, and memory-provider implementations (published) |
 
 **Assistant product:**
 
@@ -125,6 +127,12 @@ The project is an Elixir umbrella with 21 applications:
 |---|---|
 | `lemon_sim` | Deterministic model-vs-model simulation arena: event-sourced kernel, scenarios, verified benchmark artifacts |
 | `lemon_sim_ui` | Phoenix LiveView spectator/admin UI for the arena |
+
+**Other products:**
+
+| App | Role |
+|---|---|
+| `lemon_tcg` | Live market data and paper execution for an agent-operated on-chain TCG shop — the real-world counterpart of `LemonSim.Examples.TcgShop` |
 
 ### Package dependency graph
 
@@ -331,4 +339,4 @@ Current flags: `product_runtime`, `skills_hub_v2`, `skill_manifest_v2`,
 | [`docs/assistant_bootstrap_contract.md`](../assistant_bootstrap_contract.md) | Session bootstrap sequence |
 | `apps/*/README.md` | Per-application documentation |
 
-*Last reviewed: 2026-07-04*
+*Last reviewed: 2026-08-10*

@@ -13,6 +13,21 @@ If you only read one section, read [Your first contribution](#your-first-contrib
 2. **Read `docs/contributor/public_repo_basics.md`** — branching, commit style, feature flags.
 3. **Read `docs/contributor/ownership.md`** — code ownership lanes and CODEOWNERS rules.
 
+## Prerequisites
+
+- **Elixir 1.19 / OTP 28.** The umbrella dev build requires Elixir `~> 1.19` (pinned to
+  1.19.5 / OTP 28.5 in `.tool-versions`, same as CI). The published packages declare a lower
+  `~> 1.15` floor for *consumers*, but building this repo needs 1.19 — 15 of the umbrella apps
+  require it, so an older Elixir will fail at compile.
+- **A version manager** (`asdf` or `mise`) is the easy way to get that toolchain; the Quick Start
+  assumes one is installed. Or install Elixir 1.19.5 / OTP 28 directly.
+- **A C toolchain** (`cc`/`gcc` + `make`). The SQLite-backed store compiles `exqlite`'s native
+  NIF from C source, so `mix compile` needs a working compiler — `build-essential` on Debian/Ubuntu,
+  `base-devel` on Arch, Xcode command-line tools on macOS.
+
+A clean checkout to a green `mix lemon.doctor` is about 2-3 minutes on a warm Hex cache (a
+first-ever `mix deps.get` downloads ~73 packages, so budget a little more cold).
+
 ## Quick Start
 
 ```bash

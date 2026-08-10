@@ -68,8 +68,8 @@ The supervisor uses a `:one_for_one` strategy. Each child is independent:
 | Module | File | Purpose |
 |--------|------|---------|
 | `AgentCore.Loop` | `lib/agent_core/loop.ex` | Stateless agent loop: `agent_loop/5`, `agent_loop_continue/4`, `stream/4`, `stream_continue/3`. Orchestrates prompt injection, LLM streaming, tool call execution, steering, and follow-up in a recursive inner/outer loop. |
-| `AgentCore.Loop.Streaming` | `lib/agent_core/loop/streaming.ex` | LLM response streaming. Calls `Ai.stream/3` (or a custom `stream_fn`), processes SSE events, builds partial `AssistantMessage`, emits `message_start`/`message_update`/`message_end` events. |
-| `AgentCore.Loop.ToolCalls` | `lib/agent_core/loop/tool_calls.ex` | Concurrent tool execution. Starts tool tasks under `AgentCore.ToolTaskSupervisor`, collects results, handles abort, emits `tool_execution_start`/`tool_execution_end` events. Supports configurable `max_tool_concurrency`. |
+| AgentCore.Loop.Streaming (internal) | `lib/agent_core/loop/streaming.ex` | LLM response streaming. Calls `Ai.stream/3` (or a custom `stream_fn`), processes SSE events, builds partial `AssistantMessage`, emits `message_start`/`message_update`/`message_end` events. |
+| AgentCore.Loop.ToolCalls (internal) | `lib/agent_core/loop/tool_calls.ex` | Concurrent tool execution. Starts tool tasks under `AgentCore.ToolTaskSupervisor`, collects results, handles abort, emits `tool_execution_start`/`tool_execution_end` events. Supports configurable `max_tool_concurrency`. |
 
 ### Events and Context
 
@@ -78,7 +78,7 @@ The supervisor uses a `:one_for_one` strategy. Each child is independent:
 | `AgentCore.EventStream` | `lib/agent_core/event_stream.ex` | GenServer-based async event producer/consumer. Bounded queue with backpressure (`push/2` returns `:ok` or `{:error, :overflow}`). Owner monitoring, task linking, configurable timeout. Drop strategies: `:error`, `:drop_oldest`, `:drop_newest`. |
 | `AgentCore.Context` | `lib/agent_core/context.ex` | Context window management. `estimate_size/2`, `estimate_tokens/1`, `truncate/2` (sliding window and bookends strategies), `make_transform/1` for `AgentLoopConfig.transform_context`, `stats/2`, `check_size/3`. |
 | `AgentCore.AbortSignal` | `lib/agent_core/abort_signal.ex` | ETS-based cooperative abort signaling. `new/0`, `abort/1`, `aborted?/1`, `clear/1`. Used by the loop and tool execution to check for cancellation. |
-| `AgentCore.AbortSignal.TableOwner` | `lib/agent_core/abort_signal/table_owner.ex` | GenServer that owns the abort signal ETS table and acts as heir for table survival. |
+| AgentCore.AbortSignal.TableOwner (internal) | `lib/agent_core/abort_signal/table_owner.ex` | GenServer that owns the abort signal ETS table and acts as heir for table survival. |
 | `AgentCore.Proxy` | `lib/agent_core/proxy.ex` | SSE proxy stream function for routing LLM calls through a server. Reconstructs partial `AssistantMessage` from bandwidth-optimized SSE events. Includes `ProxyStreamOptions` struct. |
 | `AgentCore.TextGeneration` | `lib/agent_core/text_generation.ex` | Lightweight text completion bridge. `complete_text/4` wraps `Ai.complete/3` so callers stay within architecture boundaries without importing `Ai` directly. |
 

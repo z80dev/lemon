@@ -392,7 +392,7 @@
   %{
     path: "docs/architecture/overview.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-07-04],
+    last_reviewed: ~D[2026-08-10],
     max_age_days: 60
   },
   %{

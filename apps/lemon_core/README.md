@@ -101,7 +101,7 @@ and `lemon_lsp`. Core doctor diagnostics may probe them at runtime, but
 | `LemonCore.Doctor.Checks.Channels` | Telegram/Discord readiness checks using redacted channel diagnostics, shared launch-gate readiness, and proof reason kinds, including Discord Message Content Intent drift and slash client-click missing/non-promotable/stale proof reasons with wait-mode remediation |
 | `LemonCore.Doctor.Checks.Media` | Media readiness checks for generated Telegram/Discord delivery and provider-backed image/TTS/STT/vision/video proof, including OpenAI or Vertex image evidence, OpenAI/ElevenLabs/Google TTS evidence, and OpenAI or Vertex Veo video evidence, with copy-ready live proof commands, target-provider `--provider` reruns for failed/skipped multi-provider lanes, default `.lemon/proofs/media-*-smoke-latest.json` paths, and bounded permission/quota/payment remediation hints |
 | `LemonCore.Doctor.Checks.Usage` | Usage aggregate and quota-pressure check backed by redacted shared usage diagnostics |
-| `LemonCore.LoggerSetup` | Logger configuration helpers |
+| LemonCore.LoggerSetup (internal) | Logger configuration helpers |
 
 `media_diagnostics.json` in support bundles mirrors the provider-backed media
 launch lanes with redacted image/TTS/STT/vision/video status, safe reason
@@ -417,7 +417,7 @@ Shared-domain callers should prefer typed wrappers:
 - **Run history**: `LemonCore.RunStore.append_event/2`, `finalize/2`, `history/2`, `get/1`
 - **Policies**: `LemonCore.PolicyStore.put_agent/2`, `put_channel/2`, `put_session/2`, `put_runtime/1`
 - **Idempotency**: `LemonCore.IdempotencyStore.put/3`, `get/2`, `delete/2`
-- **Progress mapping**: `LemonCore.ProgressStore.put_run/3`, `get_run/2`
+- **Progress mapping**: `LemonCore.ProgressStore.put/3`, `get_run/2`
 - **Introspection**: `LemonCore.IntrospectionStore.append/1`, `list/1`
 - **Project bindings**: `LemonCore.ProjectBindingStore.get_override/1`, `put_override/2`, `get_dynamic/1`
 - **Exec approvals**: `LemonCore.ExecApprovalStore.get_pending/1`, `put_pending/2`, policy getters/setters by scope
@@ -678,7 +678,7 @@ Available helpers: `unique_token/0`, `unique_scope/0`, `unique_session_key/0`, `
 
 - Never add umbrella app dependencies to `lemon_core` -- it is the base layer
 - Keep module interfaces stable -- other apps depend on them
-- `Config.load/2` uses the cache by default; `Config.reload/2` forces a disk read
+- `LemonCore.Config.load/2` uses the cache by default; `LemonCore.Config.reload/2` forces a disk read
 - Secret values are never logged or returned by list/status APIs
 - SQLite store values serialize with `:erlang.term_to_binary/1`; JSONL uses a
   JSON codec with Elixir-term markers for portable persistence

@@ -30,9 +30,10 @@ internals other applications reached into.
   gateway's writes were redundant — the overflow delete was already duplicated
   by the router on the same event, and the completion event carries the resume
   token into the router anyway — so gateway's chat-state coupling is now zero.
-- `LemonRouter.RunSupervisor` and `RunOrchestrator` are `@moduledoc false`.
-  They are internals; use the facade. (There has never been a `RunRegistry`
-  module — it is a plain `Registry` started in the router's supervision tree.)
+- LemonRouter.RunSupervisor and LemonRouter.RunOrchestrator are now
+  `@moduledoc false`. They are internals; use the facade. (There has never been
+  a `RunRegistry` module — it is a plain `Registry` started in the router's
+  supervision tree.)
 - Durable memory now comes from the `lemon_memory` package, following the
   extraction out of `lemon_core`.
 - `:exqlite` is a direct dependency because `RoutingFeedbackStore` talks to

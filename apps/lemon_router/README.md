@@ -40,14 +40,14 @@ Channel transport or gateway-native ingress
 | Module | Responsibility |
 | --- | --- |
 | `LemonRouter.Router` | Main inbound entrypoint, session-key resolution, pending-compaction application, control-plane abort/keepalive hooks |
-| `LemonRouter.RunOrchestrator` | Builds router-owned submissions from `LemonCore.RunRequest` and hands them to `SessionCoordinator` |
+| LemonRouter.RunOrchestrator (internal) | Builds router-owned submissions from `LemonCore.RunRequest` and hands them to `SessionCoordinator` |
 | `LemonRouter.SessionCoordinator` | Single owner of per-conversation queue semantics and active-run handoff |
 | Router internal session read model | Internal read model over coordinator-owned active session state |
 | `LemonRouter.ConversationKey` | Canonical conversation-key selection from structured resume or session key |
 | `LemonRouter.ResumeResolver` | Structured resume resolution before runtime submission |
 | `LemonRouter.RunProcess` | Active-run lifecycle wrapper around one execution |
 | `LemonRouter.MediaJobRecorder` | Records generated final-answer files into redacted media job metadata before channel delivery |
-| `LemonRouter.ChannelsDelivery` | Narrow bridge from router-adjacent automation delivery requests into `LemonChannels`; must not construct `OutboundPayload` or own channel rendering |
+| LemonRouter.ChannelsDelivery (internal) | Narrow bridge from router-adjacent automation delivery requests into `LemonChannels`; must not construct `OutboundPayload` or own channel rendering |
 | `LemonRouter.StreamCoalescer` | Semantic answer coalescing that emits `DeliveryIntent` snapshots/finalization |
 | `LemonRouter.ToolStatusCoalescer` | Semantic tool-status coalescing that emits `DeliveryIntent` snapshots/finalization |
 | `LemonRouter.PendingCompactionStore` | Router-owned typed wrapper for pending-compaction markers |
@@ -77,7 +77,7 @@ attachment policy.
   `action.detail.result_meta`, including `error_type`, tool name, timeout,
   command exit code, exception class/name, status, reason, message, and
   validation errors.
-- Cron/channel-origin summary delivery may cross router through `LemonRouter.ChannelsDelivery`, but the bridge must stay narrow. Router must not construct `LemonChannels.OutboundPayload`; `LemonChannels` remains responsible for enqueue semantics, retries, chunking, and adapter delivery.
+- Cron/channel-origin summary delivery may cross router through the internal LemonRouter.ChannelsDelivery bridge, but the bridge must stay narrow. Router must not construct `LemonChannels.OutboundPayload`; `LemonChannels` remains responsible for enqueue semantics, retries, chunking, and adapter delivery.
 - Runtime input is `LemonCore.ExecutionCommand`; gateway-private adapters may translate it to `LemonGateway.ExecutionRequest`.
 - Telegram-specific state is owned by `lemon_channels` wrappers:
   - `LemonChannels.Telegram.StateStore`

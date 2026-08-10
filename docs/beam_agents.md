@@ -347,20 +347,28 @@ end
 
 ### Session Event Fan-Out
 
-Event broadcasting is handled in `apps/coding_agent/lib/coding_agent/session.ex`.
+The session GenServer (`apps/coding_agent/lib/coding_agent/session.ex`) delegates all
+subscription and broadcast bookkeeping to `CodingAgent.Session.Notifier`
+(`apps/coding_agent/lib/coding_agent/session/notifier.ex`). Every `handle_call`/`handle_info`
+in `session.ex` is a thin wrapper that calls `Notifier.broadcast_event/2`,
+`Notifier.subscribe_stream/3`, `Notifier.subscribe_direct/3`, or
+`Notifier.prune_subscribers/3`.
 
-#### Broadcast Implementation
-
-The `broadcast_event/2` function (lines 1031-1040):
+There are **two** subscriber paths, and `broadcast_event/2` fans out to both:
 
 ```elixir
-# Lines 1031-1040
-@spec broadcast_event(t(), AgentCore.Types.agent_event()) :: :ok
-defp broadcast_event(state, event) do
+@spec broadcast_event(map(), AgentCore.Types.agent_event()) :: :ok
+def broadcast_event(state, event) do
   session_event = {:session_event, state.session_manager.header.id, event}
 
+  # Path 1: direct listeners — raw fire-and-forget send/2.
   Enum.each(state.event_listeners, fn {pid, _ref} ->
-    send(pid, session_event)  # <-- Fire and forget
+    send(pid, session_event)
+  end)
+
+  # Path 2: bounded, cancelable EventStreams.
+  Enum.each(state.event_streams, fn {_mon_ref, %{stream: stream}} ->
+    AgentCore.EventStream.push_async(stream, session_event)
   end)
 
   :ok
@@ -369,44 +377,33 @@ end
 
 #### Subscriber Management
 
-Subscribers are tracked as `{pid, monitor_ref}` tuples:
+State carries both collections:
 
-```elixir
-# Line 83 (state definition)
-event_listeners: [{pid(), reference()}],
+- `event_listeners: [{pid(), reference()}]` — direct subscribers registered via
+  `Notifier.subscribe_direct/3`.
+- `event_streams: %{reference() => %{pid: pid(), stream: pid()}}` — bounded
+  subscribers registered via `Notifier.subscribe_stream/3`, each backed by an
+  `AgentCore.EventStream` (`max_queue`, `drop_strategy`, `timeout`).
 
-# Lines 504-514 (subscription)
-def handle_call({:subscribe, pid}, _from, state) do
-  monitor_ref = Process.monitor(pid)
-  new_listeners = [{pid, monitor_ref} | state.event_listeners]
-  # ...
-end
-```
+#### Backpressure
 
-#### Potential Issues
+The two paths differ deliberately:
 
-| Issue | Description | Risk |
-|-------|-------------|------|
-| No backpressure | `send/2` is fire-and-forget | Mailbox can grow unboundedly |
-| Slow consumers | Fast event emission with slow processing | Memory pressure |
-| No batching | Each event sent individually | Overhead with many subscribers |
+| Path | Mechanism | Backpressure |
+|------|-----------|--------------|
+| Direct listeners | `send/2` fire-and-forget | None — intended for trusted in-VM consumers (e.g. the TUI) that keep up with the stream |
+| EventStreams | `AgentCore.EventStream.push_async/2` | Bounded queue with a configurable drop strategy, so a slow consumer cannot grow the producer's mailbox |
+
+Prefer `subscribe_stream/3` for any consumer that may fall behind; the bounded
+queue is exactly the mechanism that prevents the unbounded-mailbox risk the raw
+`send/2` path carries.
 
 #### Dead Subscriber Cleanup
 
-Subscribers are removed when they die (lines 791-799):
-
-```elixir
-# Lines 791-799
-def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
-  # Subscriber died, remove from listeners
-  new_listeners =
-    Enum.reject(state.event_listeners, fn {listener_pid, monitor_ref} ->
-      listener_pid == pid and monitor_ref == ref
-    end)
-
-  {:noreply, %{state | event_listeners: new_listeners}}
-end
-```
+When a subscriber dies, the session's `{:DOWN, ...}` handler calls
+`Notifier.prune_subscribers/3`, which drops the pid from `event_listeners` and
+cancels + demonitors any `EventStream` owned by that pid (`EventStream.cancel(stream,
+:subscriber_down)`).
 
 ---
 

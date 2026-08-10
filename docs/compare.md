@@ -44,7 +44,9 @@ What is ready enough to evaluate:
 - doctor diagnostics and redacted support bundles
 - Hermes-class parity tracking through the launch scorecard
 - first-party text web search/fetch behavior in supported agent runs
-- Web operations pages for runtime health, recent runs, run detail, and approvals
+- control-plane and doctor introspection for runtime health, recent runs, run
+  detail, and approvals (the standalone Web operations dashboard was removed; the
+  Web surface is the session UI)
 - preview operator-controlled cron and scheduled automation through first-party
   runtime/Web paths
 - release artifact profiles verified locally

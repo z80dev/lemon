@@ -1,6 +1,6 @@
 # Demo Lemon
 
-Last reviewed: 2026-05-11
+Last reviewed: 2026-08-10
 
 This page gives deterministic demo paths for evaluating Lemon without relying on
 marketing claims or unreleased hosted infrastructure. The goal is to prove the
@@ -42,41 +42,29 @@ Expected result:
 - response indicates the Web runtime is healthy
 - the runtime process remains supervised
 
-## Demo 2: Operations UI
+## Demo 2: Web Session UI
 
 With `./bin/lemon` running, open:
 
-- `http://127.0.0.1:4080/`
-- `http://127.0.0.1:4080/ops`
+- `http://127.0.0.1:4080/` — the session index (`LemonWeb.SessionLive`)
+- `http://127.0.0.1:4080/sessions/<session_key>` — a specific session
 
-Current launch proof screenshots:
+Current launch proof screenshot:
 
 ![Web session proof](assets/launch/web-session-proof-2026-05-11.png)
 
-![Web operations proof](assets/launch/web-ops-proof-2026-05-11.png)
+The web surface is intentionally minimal: it lists sessions and streams a single
+session's activity. The standalone `/ops` dashboard was removed
+(`refactor(lemon_web): remove ops dashboard`); operations introspection now lives
+in the control plane and the doctor, not in the web UI.
 
-The operations page should show:
+To inspect runtime health, provider/secrets status, active sessions, recent runs,
+pending approvals, cron/skills/channel/memory activity, and support bundles, use:
 
-- runtime and router health
-- provider and secrets status
-- active sessions
-- recent runs
-- pending approvals when any exist
-- observed cron, skills, channel, memory, and log activity from introspection
-- cron schedules and recent cron failures
-- skill store health
-- channel transport enablement and configured bindings
-- support bundle download and equivalent source/release commands
-
-For a specific run, use:
-
-```text
-Use the TUI, control-plane run APIs, or logs to inspect run details.
-```
-
-The run page should show timeline events, tool events, failures, the nested run
-graph, event counts, pending approvals for that run, and support-bundle download
-or commands.
+- `mix lemon.doctor` (and `mix lemon.doctor --bundle`, see Demo 4)
+- the control-plane run APIs (JSON-RPC over `bin/lemon-control-plane`)
+- the TUI (`./bin/lemon-dev`, see Demo 3)
+- runtime logs
 
 ## Demo 3: TUI From a Project
 

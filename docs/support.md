@@ -462,8 +462,8 @@ under `.lemon/browser-artifacts/`.
 ## Automation and Cron
 
 Cron and scheduled automation are preview surfaces for stable 1.0. The supported
-boundary is operator-controlled scheduling from the Web operations UI or
-first-party control-plane/runtime paths, with reproducible failures covered as
+boundary is operator-controlled scheduling through first-party
+control-plane/runtime paths, with reproducible failures covered as
 setup or runtime bugs.
 
 Support bundles include redacted cron diagnostics for those reproducible bugs:
