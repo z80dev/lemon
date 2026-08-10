@@ -49,9 +49,46 @@ defmodule LemonGateway.Engine do
   @callback start_run(job :: Job.t(), opts :: run_opts(), sink_pid :: pid()) ::
               {:ok, run_ref :: reference(), cancel_ctx :: term()} | {:error, term()}
 
+  @doc """
+  Stop a run, given the `cancel_ctx` that `c:start_run/3` returned.
+
+  Must return `:ok` for **any** term, including a context this engine never
+  produced, and must be idempotent — cancelling twice, or cancelling a run that
+  already completed, is still `:ok`.
+
+  That is stricter than it looks like it needs to be, and it is deliberate: the
+  gateway calls `cancel/1` from supervisors and timeout paths, after crashes and
+  across restarts, where the context it holds may be stale or partial. An engine
+  that pattern-matches only its own happy-path context turns a routine
+  cancellation into a `FunctionClauseError` in the caller. End your clauses with
+  a catch-all:
+
+      def cancel(%{task_pid: pid}) when is_pid(pid) do
+        Process.exit(pid, :kill)
+        :ok
+      end
+
+      def cancel(_ctx), do: :ok
+  """
   @callback cancel(cancel_ctx :: term()) :: :ok
 
+  @doc """
+  Whether this engine accepts mid-run steering.
+
+  Must be pure and stable. Answering `true` obliges the engine to export
+  `c:steer/2`; there is no way to declare that in the behaviour itself, since
+  `steer/2` has to stay optional for the engines that do not support it, so it
+  is checked by `LemonPlatformTest.EngineCase` instead.
+  """
   @callback supports_steer?() :: boolean()
+
+  @doc """
+  Inject text into a run that is already in flight.
+
+  Optional, and only called when `c:supports_steer?/0` answers `true`. Receives
+  the same `cancel_ctx` as `c:cancel/1` and, like it, should report a context it
+  cannot use as `{:error, reason}` rather than raising.
+  """
   @callback steer(cancel_ctx :: term(), text :: String.t()) :: :ok | {:error, term()}
 
   @optional_callbacks steer: 2

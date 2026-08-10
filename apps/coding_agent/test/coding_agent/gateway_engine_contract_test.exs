@@ -14,14 +14,10 @@ defmodule CodingAgent.GatewayEngineContractTest do
       registration of an out-of-app engine, including surviving a restart.
     * no `:run_probe` — starting a real run means starting a real agent session
       against a real model.
-
-  `cancel_tolerates_unknown_ctx: true` is on: this engine has the catch-all
-  `cancel/1` clause that the CLI-backed engines lack.
   """
 
   use LemonPlatformTest.EngineCase,
     async: true,
     engine: CodingAgent.GatewayEngine,
-    registry: false,
-    cancel_tolerates_unknown_ctx: true
+    registry: false
 end

@@ -102,7 +102,10 @@ defmodule LemonChannels.Registry do
   @doc """
   Get plugin capabilities in the new format.
 
-  Returns a `LemonChannels.Capabilities` struct or nil if plugin not found.
+  Returns the parsed capability map — `%{capability_type => %Capability{}}`, as
+  produced by `LemonChannels.Capabilities.from_legacy/1` — or `nil` if the
+  plugin is not registered. Despite the module name, `t:LemonChannels.Capabilities.t/0`
+  is a map, not a struct.
   """
   @spec get_capabilities_new(binary()) :: LemonChannels.Capabilities.t() | nil
   def get_capabilities_new(plugin_id) do

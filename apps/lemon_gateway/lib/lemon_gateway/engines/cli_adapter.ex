@@ -53,6 +53,12 @@ defmodule LemonGateway.Engines.CliAdapter do
     :ok
   end
 
+  # `LemonGateway.Engine.cancel/1` is total: the gateway cancels from timeout and
+  # supervisor paths where its context may be stale, and `start_run/3` itself
+  # hands back a nil-pid context when the runner failed to start. Nothing left to
+  # kill is a successful cancel, not a FunctionClauseError in the caller.
+  def cancel(_ctx), do: :ok
+
   def format_resume(engine_id, %GatewayToken{value: value}) do
     case engine_id do
       "codex" -> "codex resume #{value}"

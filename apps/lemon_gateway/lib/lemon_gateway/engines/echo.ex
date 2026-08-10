@@ -59,6 +59,8 @@ defmodule LemonGateway.Engines.Echo do
     :ok
   end
 
+  def cancel(_ctx), do: :ok
+
   defp unique_id do
     Integer.to_string(System.unique_integer([:positive]))
   end

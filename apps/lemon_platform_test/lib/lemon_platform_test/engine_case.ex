@@ -56,11 +56,14 @@ defmodule LemonPlatformTest.EngineCase do
   arriving even for failures (`ok: false`), so an engine that dies silently
   leaves a run wedged until the watchdog fires.
 
-  ### `cancel/1` takes your own context back
+  ### `cancel/1` is total
 
-  The gateway calls `cancel(cancel_ctx)` with the exact term your `start_run/3`
-  returned, and expects `:ok`. Cancelling twice, or cancelling a run that has
-  already completed, must still return `:ok`.
+  The gateway calls `cancel(cancel_ctx)` and expects `:ok` — for the exact term
+  your `start_run/3` returned, for a stale or partial one it is holding after a
+  crash or restart, and for a run that already finished. Cancelling twice is
+  `:ok` too. Pattern-matching only your happy-path context turns a routine
+  cancellation into a `FunctionClauseError` in the caller, so end your clauses
+  with `def cancel(_ctx), do: :ok`.
 
   ### Steering is optional but must be declared honestly
 
@@ -172,22 +175,18 @@ defmodule LemonPlatformTest.EngineCase do
     * `:run_timeout` — milliseconds to wait for the `started` event. Default
       `2_000`.
     * `:cancel_tolerates_unknown_ctx` — assert that `cancel/1` returns `:ok`
-      for a context it did not produce. Default `false`; see the gap below.
+      for a context it did not produce. Default `true`, because
+      `c:LemonGateway.Engine.cancel/1` requires it. Set it to `false` only to
+      quarantine a known-strict engine you have not fixed yet; that is a
+      departure from the contract, not a supported configuration.
 
   ## Known gaps in the behaviour
 
-    * **`cancel/1` has no agreed domain.** The behaviour types the argument as
-      `term()` and says nothing about what happens when it does not match. The
-      built-in CLI adapter and `LemonGateway.Engines.Echo` pattern-match on
-      their own context shape and raise `FunctionClauseError` on anything else;
-      `CodingAgent.GatewayEngine` has a catch-all returning `:ok`. Since the
-      gateway can call `cancel/1` after a crash or a restart, the tolerant
-      reading is the safer one — hence the opt-in
-      `:cancel_tolerates_unknown_ctx` test, which the tolerant engines pass and
-      the strict ones do not.
     * **`steer/2` is optional but `supports_steer?/0` is not.** An engine that
       answers `false` still has to define `supports_steer?/0`; nothing stops an
-      engine from answering `true` and omitting `steer/2` except this suite.
+      engine from answering `true` and omitting `steer/2` except this suite,
+      because making `steer/2` mandatory would break every engine that does not
+      steer.
     * **`start_run/3`'s `opts` are a loose map.** `run_opts()` documents `:cwd`,
       `:env`, `:timeout_ms` and `:capabilities` as optional keys, and engines
       differ on which they honour. The suite passes `%{}` and does not assert
@@ -210,7 +209,7 @@ defmodule LemonPlatformTest.EngineCase do
     registry? = Keyword.get(opts, :registry, true)
     run_probe = Keyword.get(opts, :run_probe)
     run_timeout = Keyword.get(opts, :run_timeout, 2_000)
-    unknown_ctx? = Keyword.get(opts, :cancel_tolerates_unknown_ctx, false)
+    unknown_ctx? = Keyword.get(opts, :cancel_tolerates_unknown_ctx, true)
     label = Macro.to_string(engine)
 
     quote do
