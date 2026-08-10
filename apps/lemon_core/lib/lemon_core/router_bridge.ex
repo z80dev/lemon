@@ -7,6 +7,38 @@ defmodule LemonCore.RouterBridge do
   bridge at runtime.
 
   `submit_run/1` accepts a canonical `%LemonCore.RunRequest{}`.
+
+  ## Failure contract
+
+  Every function here answers rather than raises, because callers are channel
+  adapters and webhook handlers for whom a router problem is not their problem
+  to crash over. Three failure modes, deliberately distinguished:
+
+    * **Not configured** — no module registered for the role. The documented
+      fallback: `{:error, :unavailable}`, or the soft value (`false`, `:none`,
+      `[]`) for the query functions.
+    * **Reached and raised** — the router ran in the caller's process and threw
+      an exception. Answered `{:error, exception}`, which is more useful than
+      `:unavailable` because the router *was* available; something else failed.
+    * **Configured but not running** — the router module exists, but the process
+      behind it does not answer, so `GenServer.call` **exits**. An exit is not
+      an exception and `rescue` does not catch it: before this was handled, that
+      exit travelled into whatever called the bridge, which for an HTTP handler
+      meant an opaque 500 and, for a mail webhook, a silently dropped message.
+      Now answered `{:error, :unavailable}` — the same as never having been
+      configured, because from the caller's side it is the same situation: the
+      router did not take this.
+
+  Exits are collapsed to `:unavailable` rather than reported in detail on
+  purpose. A timeout, a dead process and a mid-call crash differ in cause but
+  not in consequence — the work was not accepted and the caller's only real
+  decision is whether to retry. Reporting them separately invites callers to
+  match on `:unavailable` alone and silently mishandle the rest, which is
+  exactly the bug this contract exists to prevent. Callers that want the detail
+  should log at their own layer, where they know what the failure means.
+
+  Throws are *not* caught: no router throws, and one that did would be a bug
+  worth surfacing rather than flattening into "unavailable".
   """
 
   @bridge_key :router_bridge
@@ -73,6 +105,8 @@ defmodule LemonCore.RouterBridge do
     end
   rescue
     e -> {:error, e}
+  catch
+    :exit, _reason -> {:error, :unavailable}
   end
 
   @spec handle_inbound(term()) :: :ok | {:error, :unavailable} | {:error, term()}
@@ -91,6 +125,8 @@ defmodule LemonCore.RouterBridge do
     end
   rescue
     e -> {:error, e}
+  catch
+    :exit, _reason -> {:error, :unavailable}
   end
 
   @spec abort_session(binary(), term()) :: :ok | {:error, :unavailable} | {:error, term()}
@@ -109,6 +145,8 @@ defmodule LemonCore.RouterBridge do
     end
   rescue
     e -> {:error, e}
+  catch
+    :exit, _reason -> {:error, :unavailable}
   end
 
   @spec abort_run(binary(), term()) :: :ok | {:error, :unavailable} | {:error, term()}
@@ -127,6 +165,8 @@ defmodule LemonCore.RouterBridge do
     end
   rescue
     e -> {:error, e}
+  catch
+    :exit, _reason -> {:error, :unavailable}
   end
 
   @spec keep_run_alive(binary(), :continue | :cancel) ::
@@ -147,6 +187,8 @@ defmodule LemonCore.RouterBridge do
     end
   rescue
     e -> {:error, e}
+  catch
+    :exit, _reason -> {:error, :unavailable}
   end
 
   @spec session_busy?(binary()) :: boolean()
@@ -161,6 +203,13 @@ defmodule LemonCore.RouterBridge do
     end
   rescue
     _ -> false
+  catch
+    # "Not busy" is the wrong answer if the router is merely unreachable — a
+    # caller may start work it would otherwise have queued. It is still the
+    # answer this function has always given for a router it cannot consult, and
+    # the boolean return has nowhere to put "don't know". Callers that must not
+    # act on a false negative should ask the router directly.
+    :exit, _reason -> false
   end
 
   def session_busy?(_), do: false
@@ -180,6 +229,8 @@ defmodule LemonCore.RouterBridge do
     end
   rescue
     _ -> :none
+  catch
+    :exit, _reason -> :none
   end
 
   def active_run(_), do: :none
@@ -199,6 +250,8 @@ defmodule LemonCore.RouterBridge do
     end
   rescue
     _ -> []
+  catch
+    :exit, _reason -> []
   end
 
   defp impl(key) do

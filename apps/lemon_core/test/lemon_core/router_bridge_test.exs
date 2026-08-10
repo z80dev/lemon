@@ -43,6 +43,40 @@ defmodule LemonCore.RouterBridgeTest do
     def submit(_params), do: {:ok, "run_alt"}
   end
 
+  defmodule BridgeDeadRouter do
+    @moduledoc false
+    # A router whose *module* is configured but whose *process* is not running.
+    # `GenServer.call/3` to a dead named process exits with exactly this shape;
+    # an exit is not an exception, so `rescue` alone never saw it.
+
+    defp dead, do: exit({:noproc, {GenServer, :call, [__MODULE__, :anything, 5000]}})
+
+    def handle_inbound(_msg), do: dead()
+    def abort(_session_key, _reason), do: dead()
+    def abort_run(_run_id, _reason), do: dead()
+    def keep_run_alive(_run_id, _decision), do: dead()
+    def session_busy?(_session_key), do: dead()
+    def active_run(_session_key), do: dead()
+    def list_active_sessions, do: dead()
+  end
+
+  defmodule DeadOrchestrator do
+    @moduledoc false
+    def submit(_params), do: exit({:noproc, {GenServer, :call, [__MODULE__, :submit, 5000]}})
+  end
+
+  defmodule TimingOutRouter do
+    @moduledoc false
+    # The other exit shape worth pinning: the process is alive but did not
+    # answer in time. Same consequence for the caller — the work was not taken.
+    def handle_inbound(_msg), do: exit({:timeout, {GenServer, :call, [__MODULE__, :x, 5000]}})
+  end
+
+  defmodule RaisingRouter do
+    @moduledoc false
+    def handle_inbound(_msg), do: raise("router blew up")
+  end
+
   setup do
     original = Application.get_env(:lemon_core, :router_bridge)
 
@@ -168,6 +202,86 @@ defmodule LemonCore.RouterBridgeTest do
     end
   end
 
+  describe "a configured router whose process is not running" do
+    # The gap this suite exists to close: every function below rescued
+    # exceptions but not exits, so an exit from `GenServer.call` travelled out
+    # of the bridge into callers that had been promised an error tuple. For an
+    # HTTP handler that meant an opaque 500; for the email webhook it meant a
+    # silently dropped message answered with "accepted".
+
+    test "submit_run/1 reports unavailable instead of exiting" do
+      :ok = RouterBridge.configure(run_orchestrator: DeadOrchestrator)
+
+      request = %RunRequest{
+        origin: :channel,
+        session_key: "agent:dead:main",
+        agent_id: "dead",
+        prompt: "ping"
+      }
+
+      assert {:error, :unavailable} = RouterBridge.submit_run(request)
+    end
+
+    test "handle_inbound/1 reports unavailable instead of exiting" do
+      :ok = RouterBridge.configure(router: BridgeDeadRouter)
+
+      assert {:error, :unavailable} = RouterBridge.handle_inbound(%{any: :message})
+    end
+
+    test "abort_session/2 reports unavailable instead of exiting" do
+      :ok = RouterBridge.configure(router: BridgeDeadRouter)
+
+      assert {:error, :unavailable} = RouterBridge.abort_session("agent:dead:main")
+    end
+
+    test "abort_run/2 reports unavailable instead of exiting" do
+      :ok = RouterBridge.configure(router: BridgeDeadRouter)
+
+      assert {:error, :unavailable} = RouterBridge.abort_run("run-dead")
+    end
+
+    test "keep_run_alive/2 reports unavailable instead of exiting" do
+      :ok = RouterBridge.configure(router: BridgeDeadRouter)
+
+      assert {:error, :unavailable} = RouterBridge.keep_run_alive("run-dead", :continue)
+    end
+
+    test "the query functions fall back to their soft values" do
+      :ok = RouterBridge.configure(router: BridgeDeadRouter)
+
+      assert RouterBridge.session_busy?("agent:dead:main") == false
+      assert RouterBridge.active_run("agent:dead:main") == :none
+      assert RouterBridge.list_active_sessions() == []
+    end
+
+    test "a timeout is unavailable too, since the work was not taken either way" do
+      :ok = RouterBridge.configure(router: TimingOutRouter)
+
+      assert {:error, :unavailable} = RouterBridge.handle_inbound(%{any: :message})
+    end
+
+    test "matches what an unconfigured bridge answers, because it is the same situation" do
+      :ok = RouterBridge.configure(router: BridgeDeadRouter)
+      dead = RouterBridge.handle_inbound(%{any: :message})
+
+      :ok = RouterBridge.configure(run_orchestrator: RouterBridgeTestRunOrchestrator)
+      unconfigured = RouterBridge.handle_inbound(%{any: :message})
+
+      assert dead == unconfigured
+    end
+  end
+
+  describe "a router that is reached and raises" do
+    test "is reported as itself, not flattened into :unavailable" do
+      # The router *was* available; saying otherwise would send a caller into a
+      # retry loop over a bug that will fail identically every time.
+      :ok = RouterBridge.configure(router: RaisingRouter)
+
+      assert {:error, %RuntimeError{message: "router blew up"}} =
+               RouterBridge.handle_inbound(%{any: :message})
+    end
+  end
+
   describe "configure guardrails" do
     test "configure_guarded/1 rejects conflicting non-nil overrides" do
       :ok =
@@ -176,7 +290,9 @@ defmodule LemonCore.RouterBridgeTest do
           router: RouterBridgeTestRouter
         )
 
-      assert {:error, {:already_configured, :run_orchestrator, RouterBridgeTestRunOrchestrator, AlternativeRunOrchestrator}} =
+      assert {:error,
+              {:already_configured, :run_orchestrator, RouterBridgeTestRunOrchestrator,
+               AlternativeRunOrchestrator}} =
                RouterBridge.configure_guarded(run_orchestrator: AlternativeRunOrchestrator)
     end
 

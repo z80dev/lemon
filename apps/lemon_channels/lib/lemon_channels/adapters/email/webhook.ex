@@ -93,18 +93,13 @@ defmodule LemonChannels.Adapters.Email.Webhook do
   # Routed through LemonCore.RouterBridge so channels keeps no compile-time
   # dependency on lemon_router (see the §2 dependency rules).
   #
-  # The exit clause is not belt-and-braces: the bridge rescues exceptions but
-  # not exits, and a router that is *configured but not running* — during a
-  # restart, or in a host that starts channels without it — fails with an exit
-  # from `GenServer.call`, not an exception. Without this, that becomes an
-  # opaque 500 from the listener's catch-all.
-  defp deliver_to_router(message) do
-    LemonCore.RouterBridge.handle_inbound(message)
-  catch
-    :exit, reason ->
-      Logger.error("email webhook router handoff exited: #{inspect(reason)}")
-      {:error, :unavailable}
-  end
+  # The bridge answers `{:error, :unavailable}` for every way a router can fail
+  # to take the message — unconfigured, process dead, call timed out — so there
+  # is nothing to catch here. It did not always: it rescued exceptions but not
+  # exits, and this webhook carried its own `catch :exit` until that was fixed
+  # centrally. Deciding what an unavailable router *means to a mail provider*
+  # is still this module's job, and that decision is `handoff/2`.
+  defp deliver_to_router(message), do: LemonCore.RouterBridge.handle_inbound(message)
 
   defp secure_equal?(nil, _token), do: false
 
