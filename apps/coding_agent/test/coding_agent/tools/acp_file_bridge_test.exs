@@ -10,7 +10,7 @@ defmodule CodingAgent.Tools.ACPFileBridgeTest do
   test "write routes file content through the ACP client filesystem", %{tmp_dir: tmp_dir} do
     run_id = unique_run_id("write")
     path = Path.join(tmp_dir, "client-write.txt")
-    :ok = LemonCore.Bus.subscribe(LemonCore.Bus.run_topic(run_id))
+    :ok = LemonCore.ACPClientBridge.register(run_id)
 
     task =
       Task.async(fn ->
@@ -36,7 +36,7 @@ defmodule CodingAgent.Tools.ACPFileBridgeTest do
   test "edit reads and writes through the ACP client filesystem", %{tmp_dir: tmp_dir} do
     run_id = unique_run_id("edit")
     path = Path.join(tmp_dir, "client-edit.txt")
-    :ok = LemonCore.Bus.subscribe(LemonCore.Bus.run_topic(run_id))
+    :ok = LemonCore.ACPClientBridge.register(run_id)
 
     task =
       Task.async(fn ->
@@ -74,7 +74,7 @@ defmodule CodingAgent.Tools.ACPFileBridgeTest do
 
   test "patch applies updates through the ACP client filesystem", %{tmp_dir: tmp_dir} do
     run_id = unique_run_id("patch")
-    :ok = LemonCore.Bus.subscribe(LemonCore.Bus.run_topic(run_id))
+    :ok = LemonCore.ACPClientBridge.register(run_id)
 
     patch_text = """
     *** Update File: client-patch.txt
@@ -117,7 +117,7 @@ defmodule CodingAgent.Tools.ACPFileBridgeTest do
 
   test "patch deletes through the ACP client filesystem", %{tmp_dir: tmp_dir} do
     run_id = unique_run_id("patch_delete")
-    :ok = LemonCore.Bus.subscribe(LemonCore.Bus.run_topic(run_id))
+    :ok = LemonCore.ACPClientBridge.register(run_id)
 
     patch_text = """
     *** Delete File: client-delete.txt
@@ -156,7 +156,7 @@ defmodule CodingAgent.Tools.ACPFileBridgeTest do
 
   test "patch moves through the ACP client filesystem", %{tmp_dir: tmp_dir} do
     run_id = unique_run_id("patch_move")
-    :ok = LemonCore.Bus.subscribe(LemonCore.Bus.run_topic(run_id))
+    :ok = LemonCore.ACPClientBridge.register(run_id)
 
     patch_text = """
     *** Update File: old-name.txt
@@ -207,10 +207,7 @@ defmodule CodingAgent.Tools.ACPFileBridgeTest do
 
   defp reply_acp_request(method, response) do
     receive do
-      %LemonCore.Event{
-        type: :acp_client_request,
-        payload: %{method: ^method, params: params, reply_to: reply_to, ref: ref}
-      } ->
+      {:acp_client_request, %{method: ^method, params: params, reply_to: reply_to, ref: ref}} ->
         send(reply_to, {:acp_client_response, ref, response})
         params
     after

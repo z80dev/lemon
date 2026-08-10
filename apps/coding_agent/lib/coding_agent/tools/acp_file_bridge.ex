@@ -53,22 +53,13 @@ defmodule CodingAgent.Tools.ACPFileBridge do
     run_id = Keyword.get(opts, :run_id)
 
     if is_binary(run_id) and run_id != "" do
-      ref = make_ref()
+      timeout_ms = Keyword.get(opts, :acp_client_timeout_ms, @timeout_ms)
 
-      LemonCore.Bus.broadcast(
-        LemonCore.Bus.run_topic(run_id),
-        LemonCore.Event.new(
-          :acp_client_request,
-          %{method: method, params: params, reply_to: self(), ref: ref},
-          %{run_id: run_id, session_key: Keyword.get(opts, :session_key)}
-        )
-      )
-
-      receive do
-        {:acp_client_response, ^ref, response} -> {:ok, response}
-      after
-        Keyword.get(opts, :acp_client_timeout_ms, @timeout_ms) ->
-          {:error, "ACP client request timed out"}
+      case LemonCore.ACPClientBridge.request(run_id, method, params, timeout_ms) do
+        {:ok, response} -> {:ok, response}
+        {:error, :no_client} -> {:error, "ACP client is not connected for this run"}
+        {:error, :client_down} -> {:error, "ACP client disconnected before responding"}
+        {:error, :timeout} -> {:error, "ACP client request timed out"}
       end
     else
       {:error, "ACP client request requires run_id"}

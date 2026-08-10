@@ -565,57 +565,65 @@ defmodule LemonControlPlane.ACPTest do
 
     assert_receive {:submitted_client_request, request}
     assert request.prompt == "use editor client"
-    Process.sleep(20)
 
-    LemonCore.Bus.broadcast(
-      LemonCore.Bus.run_topic("run_acp_client_requests"),
-      LemonCore.Event.new(:acp_client_request, %{
-        method: "session/request_permission",
-        params: %{
-          "toolCall" => %{"toolCallId" => "call_1", "title" => "Edit file", "kind" => "edit"},
-          "options" => [%{"optionId" => "allow-once", "name" => "Allow once"}]
-        }
-      })
-    )
+    # The prompt turn registers itself as the ACP client bridge for the run once
+    # it starts waiting; wait for that rather than sleeping a fixed interval.
+    wait_for_acp_registration("run_acp_client_requests")
 
-    read_reply_ref = make_ref()
+    # Drive the exchange the way a coding-agent filesystem tool now does: a direct
+    # synchronous call against the registered handler, not a bus broadcast. Each
+    # call blocks until the handler runs the client callback and replies, so
+    # issuing them in sequence reproduces sequential tool execution and pins the
+    # order the summaries must appear in.
+    assert {:ok, %{"result" => %{"outcome" => %{"optionId" => "allow-once"}}}} =
+             LemonCore.ACPClientBridge.request(
+               "run_acp_client_requests",
+               "session/request_permission",
+               %{
+                 "toolCall" => %{
+                   "toolCallId" => "call_1",
+                   "title" => "Edit file",
+                   "kind" => "edit"
+                 },
+                 "options" => [%{"optionId" => "allow-once", "name" => "Allow once"}]
+               },
+               1_000
+             )
 
-    LemonCore.Bus.broadcast(
-      LemonCore.Bus.run_topic("run_acp_client_requests"),
-      LemonCore.Event.new(:acp_client_request, %{
-        method: "fs/read_text_file",
-        params: %{"path" => "/tmp/editor-buffer.txt", "line" => 1, "limit" => 3},
-        reply_to: self(),
-        ref: read_reply_ref
-      })
-    )
+    assert {:ok, %{"result" => %{"content" => "unsaved editor buffer\n"}}} =
+             LemonCore.ACPClientBridge.request(
+               "run_acp_client_requests",
+               "fs/read_text_file",
+               %{"path" => "/tmp/editor-buffer.txt", "line" => 1, "limit" => 3},
+               1_000
+             )
 
-    LemonCore.Bus.broadcast(
-      LemonCore.Bus.run_topic("run_acp_client_requests"),
-      LemonCore.Event.new(:acp_client_request, %{
-        method: "fs/write_text_file",
-        params: %{"path" => "/tmp/editor-buffer.txt", "content" => "updated"}
-      })
-    )
+    assert {:ok, %{"result" => nil}} =
+             LemonCore.ACPClientBridge.request(
+               "run_acp_client_requests",
+               "fs/write_text_file",
+               %{"path" => "/tmp/editor-buffer.txt", "content" => "updated"},
+               1_000
+             )
 
-    LemonCore.Bus.broadcast(
-      LemonCore.Bus.run_topic("run_acp_client_requests"),
-      LemonCore.Event.new(:acp_client_request, %{
-        method: "fs/delete_file",
-        params: %{"path" => "/tmp/old-editor-buffer.txt"}
-      })
-    )
+    assert {:ok, %{"result" => nil}} =
+             LemonCore.ACPClientBridge.request(
+               "run_acp_client_requests",
+               "fs/delete_file",
+               %{"path" => "/tmp/old-editor-buffer.txt"},
+               1_000
+             )
 
-    LemonCore.Bus.broadcast(
-      LemonCore.Bus.run_topic("run_acp_client_requests"),
-      LemonCore.Event.new(:acp_client_request, %{
-        method: "fs/rename_file",
-        params: %{
-          "path" => "/tmp/editor-buffer.txt",
-          "targetPath" => "/tmp/renamed-editor-buffer.txt"
-        }
-      })
-    )
+    assert {:ok, %{"result" => nil}} =
+             LemonCore.ACPClientBridge.request(
+               "run_acp_client_requests",
+               "fs/rename_file",
+               %{
+                 "path" => "/tmp/editor-buffer.txt",
+                 "targetPath" => "/tmp/renamed-editor-buffer.txt"
+               },
+               1_000
+             )
 
     LemonCore.Bus.broadcast(
       LemonCore.Bus.run_topic("run_acp_client_requests"),
@@ -626,10 +634,6 @@ defmodule LemonControlPlane.ACPTest do
 
     assert_receive {:acp_client_request, %{"method" => "session/request_permission"}}
     assert_receive {:acp_client_request, %{"method" => "fs/read_text_file"}}
-
-    assert_receive {:acp_client_response, ^read_reply_ref,
-                    %{"result" => %{"content" => "unsaved editor buffer\n"}}}
-
     assert_receive {:acp_client_request, %{"method" => "fs/write_text_file"}}
     assert_receive {:acp_client_request, %{"method" => "fs/delete_file"}}
     assert_receive {:acp_client_request, %{"method" => "fs/rename_file"}}
@@ -760,6 +764,22 @@ defmodule LemonControlPlane.ACPTest do
 
   defp maybe_put_client_capabilities(params, capabilities),
     do: Map.put(params, "clientCapabilities", capabilities)
+
+  defp wait_for_acp_registration(run_id, attempts \\ 200)
+
+  defp wait_for_acp_registration(_run_id, 0),
+    do: flunk("ACP client bridge never registered for run")
+
+  defp wait_for_acp_registration(run_id, attempts) do
+    case LemonCore.ACPClientBridge.whereis(run_id) do
+      pid when is_pid(pid) ->
+        pid
+
+      nil ->
+        Process.sleep(5)
+        wait_for_acp_registration(run_id, attempts - 1)
+    end
+  end
 
   defp queue_prompt(session_id) do
     ACP.handle_jsonrpc(%{

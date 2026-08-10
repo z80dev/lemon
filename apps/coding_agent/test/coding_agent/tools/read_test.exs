@@ -46,7 +46,7 @@ defmodule CodingAgent.Tools.ReadTest do
     test "reads text through ACP client filesystem bridge", %{tmp_dir: tmp_dir} do
       run_id = unique_run_id("read")
       path = Path.join(tmp_dir, "client-buffer.txt")
-      :ok = LemonCore.Bus.subscribe(LemonCore.Bus.run_topic(run_id))
+      :ok = LemonCore.ACPClientBridge.register(run_id)
 
       task =
         Task.async(fn ->
@@ -691,10 +691,7 @@ defmodule CodingAgent.Tools.ReadTest do
 
   defp reply_acp_request(method, response) do
     receive do
-      %LemonCore.Event{
-        type: :acp_client_request,
-        payload: %{method: ^method, params: params, reply_to: reply_to, ref: ref}
-      } ->
+      {:acp_client_request, %{method: ^method, params: params, reply_to: reply_to, ref: ref}} ->
         send(reply_to, {:acp_client_response, ref, response})
         params
     after

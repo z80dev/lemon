@@ -74,7 +74,7 @@ The busiest topic and the only one whose subscriber set spans the whole umbrella
 | `:engine_action` | `lemon_gateway/run.ex:815`; `LemonCore.Event.engine_reasoning/1` | `%{engine, phase, ok, message, level, action: %{id, kind, title, detail}}` | E |
 | `:engine_event` | `lemon_gateway/run.ex:815` (fallback) | arbitrary engine map | E |
 | `:checkpoint_created` / `_restored` / `_deleted` | `lemon_core/checkpoint.ex:321` | varies by kind; meta = checkpoint context | E |
-| `:acp_client_request` | `coding_agent/tools/acp_file_bridge.ex:58` | `%{method, params, reply_to: pid(), ref: reference()}` | E |
+| `:acp_client_request` *(removed)* | was `coding_agent/tools/acp_file_bridge.ex` | `%{method, params, reply_to: pid(), ref: reference()}` — converted to a direct call via `LemonCore.ACPClientBridge`; no longer on the bus (§6.7, §8) | E |
 | `:run_graph_changed` | `coding_agent/run_graph_server.ex:421,426` | `%{run_id, parent_run_id, session_key, status, event, timestamp_ms}` | E |
 | `:task_started` / `_completed` / `_error` / `_timeout` / `_aborted` | `coding_agent/tools/task/async.ex:305,309` | `%{task_id, run_id, parent_run_id, session_key, agent_id, …}` | E |
 | `:task_projected_child_action` | `coding_agent/tools/task/live_bridge.ex:71` | projected `engine_action` payload | E |
@@ -90,7 +90,7 @@ Subscribers:
 | 3 | `CodingAgent.Tools.Task.LiveBridge` | `live_bridge.ex:53` | `:engine_action` + terminal types |
 | 4 | `CodingAgent.Tools.Agent` | `tools/agent.ex:697` | `:delta`, `:run_completed` |
 | 5 | `LemonControlPlane.EventBridge` | `event_bridge.ex:347` (ref-counted, dynamic) | everything, via `map_event/1` |
-| 6 | `LemonControlPlane.ACP` | `acp.ex:360` | `:run_completed`, `:acp_client_request`, `:approval_requested`, catch-all |
+| 6 | `LemonControlPlane.ACP` | `acp.ex:360` | `:run_completed`, `:approval_requested`, catch-all (client fs requests now arrive as direct `{:acp_client_request, payload}` messages, not bus events — §6.7) |
 | 7 | control-plane SSE (`/v1/chat/completions`) | `http/router.ex:137` | `:delta`, `:engine_action`, `:run_completed` |
 | 8 | `Methods.AgentWait` | `agent_wait.ex:39` | `:run_completed` |
 | 9 | `LemonAutomation.RunSubmitter` | `run_submitter.ex:22` (via `RunCompletionWaiter`) | `:run_completed`, `:run_failed` |
@@ -348,10 +348,10 @@ LemonCore.Events.GoalChanged         # action, goal_id, agent_id, session_key, s
 LemonCore.Events.RoutingFeedback     # fingerprint_key, outcome, duration_ms
 ```
 
-**Deliberately not typed:** `:acp_client_request` (§6.7 — it carries a live pid and a ref; it is
-an RPC, and a value type would legitimise that), `:engine_event` (an explicit "unrecognised engine
-output" escape hatch), `:custom_event` (user-defined by construction), and everything on the
-app-internal topics in §3.
+**Deliberately not typed:** `:acp_client_request` (§6.7 — it was an RPC carrying a live pid and a
+ref, and a value type would have legitimised that; it has since been removed from the bus entirely
+and is now a direct call), `:engine_event` (an explicit "unrecognised engine output" escape hatch),
+`:custom_event` (user-defined by construction), and everything on the app-internal topics in §3.
 
 ### 4.3 Versioning and the compatibility cycle
 
@@ -522,12 +522,13 @@ topic, no consumers, and `EventBridge` has no mapping clause so it would not sur
 client asked. Either the router or the gateway publisher is redundant. Typing it (S7) is free; the
 real question the lead should settle is whether it should be published at all.
 
-**6.5 `EventBridge`'s catch-all silently drops eight published types.** `map_event_type(_, _, _),
+**6.5 `EventBridge`'s catch-all silently drops published types.** `map_event_type(_, _, _),
 do: nil` at `event_bridge.ex:880` swallows `:config_reloaded`, `:config_reload_failed`,
-`:secret_changed`, `:engine_started`, `:engine_completed`, `:engine_event`, `:run_phase_changed`
-and `:acp_client_request` — all published onto topics `EventBridge` subscribes to. Nothing logs.
-Any future event type is dropped the same way, which means "add an event" currently has no failure
-mode that anyone notices.
+`:secret_changed`, `:engine_started`, `:engine_completed`, `:engine_event` and
+`:run_phase_changed` — all published onto topics `EventBridge` subscribes to. Nothing logs.
+(`:acp_client_request` was in this list too; it is no longer a bus event — §6.7.) Any future event
+type is dropped the same way, which means "add an event" currently has no failure mode that anyone
+notices.
 
 **6.6 Four publishers gate on `Process.whereis(LemonCore.PubSub)` — live bug.**
 `checkpoint.ex:318`, `goal_store.ex:520`, `kanban_store.ex:651` and `stream_coalescer.ex:481`
@@ -537,13 +538,20 @@ which `bus.ex:118-123` documents as a supported configuration, and which tests s
 events, kanban events and coalesced output are silently never published. `Bus.broadcast/2` already
 handles both backends; the gates are wrong, not merely redundant.
 
-**6.7 `:acp_client_request` carries a pid and a ref over a cluster-wide broadcast.**
-`acp_file_bridge.ex:58` publishes `%{method, params, reply_to: self(), ref: ref}` on `run:<id>`
-and then blocks in `receive` for `{:acp_client_response, ^ref, response}`. This is
-request/response RPC wearing an event's clothes: it is order-dependent, single-consumer, and its
-payload cannot be serialised, persisted or replayed like every other event on that topic. Under
-`Phoenix.PubSub` it is also delivered to every node. Recommend excluding it from the typed
-registry and, separately from 3.1, converting it to a direct call against the ACP session process.
+**6.7 `:acp_client_request` carried a pid and a ref over a cluster-wide broadcast — resolved.**
+`acp_file_bridge.ex` used to publish `%{method, params, reply_to: self(), ref: ref}` on `run:<id>`
+and then block in `receive` for `{:acp_client_response, ^ref, response}`. That was
+request/response RPC wearing an event's clothes: order-dependent, single-consumer, and its
+payload could not be serialised, persisted or replayed like every other event on that topic; under
+`Phoenix.PubSub` it was also delivered to every node. It is now a direct call. `LemonCore.ACPClientBridge`
+is a node-local `Registry` in `lemon_core`: the ACP prompt-turn handler (`LemonControlPlane.ACP`)
+`register/1`s under its `run_id` while it waits, and the filesystem tool calls
+`ACPClientBridge.request(run_id, method, params, timeout)`, which looks up the handler and does a
+monitored `send`/`receive`. The reply path (`{:acp_client_response, ref, response}` back to the
+requester) is unchanged; only the delivery of the request moved off the bus. Failure modes mirror
+`LemonCore.RouterBridge`: `{:error, :no_client}` (no handler registered — now fails fast instead of
+hanging for the full timeout), `{:error, :client_down}` (handler died mid-request, caught via
+monitor), `{:error, :timeout}`.
 
 **6.8 The control plane can inject arbitrary payloads under real event types.**
 `events.ingest` (scope `:write`) accepts any JSON object and broadcasts it to `system`, `channels`,
@@ -669,7 +677,7 @@ platform's own registry at
 | P6 (§6.11) | The `kanban` and `kanban:<board_id>` broadcasts are deleted — zero subscribers repo-wide, and the durable record was always the `Introspection.record/3` call beside them, which stays. The `LemonCore.Bus` moduledoc's topic contract is rewritten: it now separates the seven typed contract topics from the app-internal ones, and says plainly that `channels` and `logs` never had a publisher. |
 | §6.4 | The gateway no longer publishes `:run_phase_changed`; `LemonRouter.PhasePublisher` is the single publisher, since the router owns the phase graph. The gateway keeps tracking and validating its own transitions (`maybe_track_phase/2`) because that is what surfaces an out-of-order phase in its logs — it just no longer broadcasts a duplicate. |
 | §6.2 | `LemonGateway.DependencyManager.build_event/3`'s unreachable `{event_type, payload}` tuple fallback is gone, and with it the tuple receive clauses in `RunCompletionWaiter` and `webhook/response.ex` that existed only to catch it. `RunCompletionWaiter` also loses its two envelope-less `%{completed: ...}` clauses and its two pre-P1 `:run_failed` shapes, going from seven receive clauses to four. The remaining bare-map clauses (`%{type: ..., payload: ...}`) are kept deliberately: an envelope-less map is the documented legacy shape and stays accepted for one cycle, whereas a tuple never was. |
-| §6.7 | `:acp_client_request` stays out of the registry. Converting it from a broadcast to a direct call is filed as its own task. |
+| §6.7 | `:acp_client_request` stays out of the registry, and is **no longer a bus event at all.** It was converted to a direct call: `LemonCore.ACPClientBridge` (a node-local `Registry` in `lemon_core`) lets the coding-agent filesystem tool find the ACP prompt-turn handler for its run and make a synchronous request/reply against it, with a `RouterBridge`-style failure contract (`:no_client` / `:client_down` / `:timeout`). The pid+ref no longer travel over a cluster-wide broadcast, and a run with no connected client fails fast instead of hanging for the full timeout. |
 
 **Two bugs the validate-or-reject work surfaced in the Phase A code, both now fixed:**
 

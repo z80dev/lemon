@@ -87,6 +87,7 @@ defmodule LemonCore.ApplicationTest do
 
       # Phoenix.PubSub is started as Phoenix.PubSub.Supervisor
       assert Phoenix.PubSub.Supervisor in child_ids
+      assert LemonCore.ACPClientBridge in child_ids
       assert LemonCore.ConfigCache in child_ids
       assert LemonCore.Store in child_ids
       assert LemonCore.RunHistoryStore in child_ids
@@ -94,11 +95,11 @@ defmodule LemonCore.ApplicationTest do
       assert LemonCore.ConfigReloader.Watcher in child_ids
     end
 
-    test "supervisor has exactly 6 children" do
+    test "supervisor has exactly 7 children" do
       supervisor_pid = Process.whereis(LemonCore.Supervisor)
       children = Supervisor.which_children(supervisor_pid)
 
-      assert length(children) == 6
+      assert length(children) == 7
     end
 
     test "children include both workers and supervisors" do

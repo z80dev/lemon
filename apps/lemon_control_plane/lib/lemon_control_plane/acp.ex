@@ -359,6 +359,7 @@ defmodule LemonControlPlane.ACP do
     topic = LemonCore.Bus.run_topic(run_id)
     :ok = LemonCore.Bus.subscribe(topic)
     :ok = LemonCore.Bus.subscribe("exec_approvals")
+    _ = LemonCore.ACPClientBridge.register(run_id)
     session_update_callback = Keyword.get(opts, :session_update_callback)
     client_request_callback = Keyword.get(opts, :client_request_callback)
 
@@ -370,6 +371,7 @@ defmodule LemonControlPlane.ACP do
         deadline_ms(wait_timeout_ms(params))
       )
     after
+      LemonCore.ACPClientBridge.unregister(run_id)
       LemonCore.Bus.unsubscribe(topic)
       LemonCore.Bus.unsubscribe("exec_approvals")
     end
@@ -385,7 +387,7 @@ defmodule LemonControlPlane.ACP do
           %LemonCore.Event{type: :run_completed, payload: payload} ->
             {:ok, complete_streamed_result(result, payload)}
 
-          %LemonCore.Event{type: :acp_client_request, payload: payload} ->
+          {:acp_client_request, payload} ->
             result = perform_client_request(result, payload, client_request_callback)
 
             update_wait_loop(
@@ -417,16 +419,6 @@ defmodule LemonControlPlane.ACP do
 
           %{type: :run_completed, payload: payload} ->
             {:ok, complete_streamed_result(result, payload)}
-
-          %{type: :acp_client_request, payload: payload} ->
-            result = perform_client_request(result, payload, client_request_callback)
-
-            update_wait_loop(
-              result,
-              session_update_callback,
-              client_request_callback,
-              deadline_ms
-            )
 
           %{type: :approval_requested, payload: payload} ->
             result = maybe_perform_approval_request(result, payload, client_request_callback)
