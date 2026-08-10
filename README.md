@@ -67,7 +67,93 @@ X client, its channel adapter and its three tools, and self-registers at boot,
 so the platform holds zero compile-time knowledge of X.
 
 Dependencies flow one way, and the direction is enforced rather than
-documented:
+documented. Solid arrows are compile-time `in_umbrella` dependencies drawn from
+`apps/*/mix.exs` (the same graph behind
+[`docs/architecture_boundaries.md`](docs/architecture_boundaries.md)); dashed
+arrows are runtime-only seams where two packages talk through a behaviour or
+bridge with **no** compile-time edge between them.
+
+```mermaid
+%% Source of truth: apps/*/mix.exs in_umbrella deps (see docs/architecture_boundaries.md).
+%% Solid = compile-time dependency. Dashed = runtime-only seam (no compile edge).
+graph TD
+    subgraph published["Published packages · Hex (the nine)"]
+        core["lemon_core"]
+        ai["lemon_ai"]
+        agent["lemon_agent"]
+        mem["lemon_memory"]
+        media["lemon_media"]
+        chan["lemon_channels"]
+        router["lemon_router"]
+        gw["lemon_gateway"]
+        kit["lemon_platform_test"]
+    end
+
+    subgraph reference["Reference runtime · in-repo, unpublished"]
+        cp["lemon_control_plane"]
+        cli["lemon_cli"]
+        web["lemon_web"]
+        auto["lemon_automation"]
+        skills["lemon_skills"]
+        browser["lemon_browser"]
+        lsp["lemon_lsp"]
+    end
+
+    subgraph products["Products · consume the packages as a third party would"]
+        ca["coding_agent"]
+        caui["coding_agent_ui"]
+        mcp["lemon_mcp"]
+        evals["lemon_evals"]
+        sim["lemon_sim"]
+        simui["lemon_sim_ui"]
+        tcg["lemon_tcg"]
+    end
+
+    subgraph satellite["Satellite · self-registering vendor integration"]
+        xapi["x_api"]
+    end
+
+    %% Published-tier compile edges (full fidelity from mix.exs)
+    agent --> ai
+    agent --> core
+    mem --> core
+    media --> core
+    chan --> core
+    chan --> agent
+    chan --> media
+    router --> core
+    router --> ai
+    router --> agent
+    router --> mem
+    router --> media
+    gw --> core
+    gw --> agent
+    kit --> core
+    kit --> agent
+    kit --> ai
+    kit --> chan
+    kit --> gw
+    kit --> mem
+
+    %% The one allowed router->channels compile edge
+    router -->|"facade · the one allowed compile edge"| chan
+
+    %% Runtime-only seams: no compile edge exists in either direction
+    chan -.->|"LemonCore.RouterBridge"| router
+    router -.->|"LemonCore.EngineRuntime behaviour · config-injected"| gw
+
+    %% One-way consumption into the platform (representative real edges)
+    cp --> router
+    ca --> gw
+    xapi -.->|"self-registers at boot · zero compile-time coupling"| chan
+```
+
+Reference-runtime, product, and satellite apps each depend on the platform
+packages; the platform depends on **none** of them. Only one representative
+consume-edge per tier is drawn above — the invariant is that no arrow ever runs
+back from `published` into the other three tiers.
+
+The same rules, stated precisely:
 
 ```
 lemon_ai ← lemon_agent ← {router, gateway, channels, skills, products}
