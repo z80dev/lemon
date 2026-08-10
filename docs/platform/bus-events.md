@@ -665,11 +665,29 @@ platform's own registry at
 
 | Item | What changed |
 |---|---|
-| P4 (§6.8) | `system-event` no longer accepts `delta`, `run_started`, `run_completed`, `talk_mode_changed`, `heartbeat_alert`, the two approval events or the three cron lifecycle events — ten types removed. What stays injectable is the set with no typed payload and no lifecycle meaning: `shutdown`, `health_changed`, `tick`, `presence_changed`, `heartbeat`, node/device pairing, and `custom_*`. Both injectors now carry a **compile-time** guard that fails the build if any allowlisted type appears in `Events.registry/0`, so the hole cannot reopen silently as either list grows. Verified by temporarily re-adding `delta` and watching the build fail. |
+| P4 (§6.8) | **Validate, don't ban.** Both injectors keep their full allowlist, but a type registered in `LemonCore.Events` must now supply a payload that coerces into its struct or the call is refused with `{:invalid_request, ...}` naming the coercion failure. A well-formed injection still works and is indistinguishable from a real event — which is the point — while a malformed `run_completed` never reaches a subscriber. Unregistered types (`shutdown`, `tick`, node/device pairing, `custom_*`) have no declared shape and keep their pass-through behaviour. Implemented with a new `LemonCore.Events.cast/2`, the strict counterpart to `coerce/2`. |
 | P6 (§6.11) | The `kanban` and `kanban:<board_id>` broadcasts are deleted — zero subscribers repo-wide, and the durable record was always the `Introspection.record/3` call beside them, which stays. The `LemonCore.Bus` moduledoc's topic contract is rewritten: it now separates the seven typed contract topics from the app-internal ones, and says plainly that `channels` and `logs` never had a publisher. |
 | §6.4 | The gateway no longer publishes `:run_phase_changed`; `LemonRouter.PhasePublisher` is the single publisher, since the router owns the phase graph. The gateway keeps tracking and validating its own transitions (`maybe_track_phase/2`) because that is what surfaces an out-of-order phase in its logs — it just no longer broadcasts a duplicate. |
 | §6.2 | `LemonGateway.DependencyManager.build_event/3`'s unreachable `{event_type, payload}` tuple fallback is gone, and with it the tuple receive clauses in `RunCompletionWaiter` and `webhook/response.ex` that existed only to catch it. `RunCompletionWaiter` also loses its two envelope-less `%{completed: ...}` clauses and its two pre-P1 `:run_failed` shapes, going from seven receive clauses to four. The remaining bare-map clauses (`%{type: ..., payload: ...}`) are kept deliberately: an envelope-less map is the documented legacy shape and stays accepted for one cycle, whereas a tuple never was. |
 | §6.7 | `:acp_client_request` stays out of the registry. Converting it from a broadcast to a direct call is filed as its own task. |
+
+**Two bugs the validate-or-reject work surfaced in the Phase A code, both now fixed:**
+
+1. **Overridden `from_map/1` never ran.** `LemonCore.Events.Payload` defines a generic
+   `from_map/1` that matches any map, so the custom clauses in `RunCompleted`,
+   `EngineAction`, `Action` and the two approval payloads — the ones that coerce a *nested*
+   payload — were shadowed and dead. A `run_completed` arriving as JSON kept its `completed`
+   field as a raw map, and `EngineAction` never normalised `phase`/`kind` to atoms. The kit's
+   round-trip assertion missed it because `Map.from_struct/1` on a well-formed struct already
+   contains the nested struct, so the generic clause happened to produce an equal result. Fixed
+   with `defoverridable from_map: 1, new: 1`; the kit gained a nested-coercion assertion that
+   feeds each payload a fully flattened map, which does catch it.
+2. **`false` collapsed to `nil`.** The `get_field/2` helper in `Action` and `EngineAction` used
+   `Map.get(attrs, :key) || Map.get(attrs, "key")`, which reads atom-or-string keys correctly
+   for everything except `false` — so an engine action's `ok: false`, the flag that says the
+   action *failed*, silently became `nil`. Caught by `LemonGateway.RunTest`. Fixed with
+   `Map.fetch/2`, plus a kit assertion that round-trips every payload with its booleans
+   falsified.
 
 Bug 3's fix gained the regression test the design asked for:
 `bus_registry_fallback_test.exs` now asserts `running?/0` follows the *active* backend rather
