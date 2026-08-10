@@ -544,5 +544,11 @@
     owner: "@z80",
     last_reviewed: ~D[2026-08-09],
     max_age_days: 90
+  },
+  %{
+    path: "docs/platform/transport-unification.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-08-10],
+    max_age_days: 90
   }
 ]
