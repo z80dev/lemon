@@ -86,8 +86,8 @@ Phases are ordered by dependency; items within a phase are parallelizable unless
 ### Phase 0 — Groundwork (S)
 
 - [ ] **0.1** Reserve hex package names: publish `0.0.1` placeholder releases of `lemon_ai`, `lemon_core`, `lemon_agent`, `lemon_memory`, `lemon_router`, `lemon_gateway`, `lemon_channels`, `lemon_platform_test` (names verified free 2026-08-09).
-- [ ] **0.2** Add `boundary` (or extend `architecture_rules_check.ex`) to CI to *fail* on new violations of the §2 dependency rules, grandfathering current ones into an allowlist that only shrinks.
-- [ ] **0.3** Create `docs/platform/` skeleton: this doc, plus stubs for each published package's README.
+- [x] **0.2** ~~Add `boundary` or~~ Extended `architecture_rules_check.ex` (AST-based `@module_reference_rules`, catches dynamic atoms) with 5 rules + 29-entry shrink-only `@grandfathered` allowlist grouped by the Phase 2 item that retires each group. Found+grandfathered one unknown violation: `lemon_automation/cron_manager.ex:479` uses `LemonRouter.RunRegistry` (retire in 2.6). Runs in existing `mix lemon.quality` lane. *(2026-08-10)*
+- [x] **0.3** `docs/platform/` skeleton created (8 package stubs), cataloged in `docs/catalog.exs`. *(2026-08-10)*
 
 **Done when:** names reserved; CI red on any new cross-boundary reference.
 
@@ -95,16 +95,16 @@ Phases are ordered by dependency; items within a phase are parallelizable unless
 
 Store library-ification (from E1, all in `apps/lemon_core`):
 
-- [ ] **1.1** Parameterize `Store`: honor `:name` in `start_link` (`store.ex:40-42`), take backend config from opts with app-env fallback (`store.ex:472-478`). Same for `RunHistoryStore`, `ConfigCache`.
-- [ ] **1.2** ReadCache: derive ETS table names from the store instance name; make collision loud, not fail-open (`store/read_cache.ex:38-49`).
-- [ ] **1.3** De-domain Store: extract `finalize_run`'s RunHistoryStore/MemoryIngest calls (`store.ex:906,914`) into a `Store.Hooks` callback the router/memory packages register; move Telegram msg-id indexing (`store.ex:1048`) and `@generic_cached_tables [:sessions_index, :telegram_known_targets]` (`store.ex:38`) to channels; move policy-table wrappers next to their owners.
+- [x] **1.1** Done: server-first optional arg (`def get(server \\ __MODULE__, ...)`; explicit higher-arity clauses where trailing opts made defaults ambiguous). Opts-first config with app-env fallback; `:store_runtime_override` deliberately applies only to the default instance; per-instance RunHistoryStore sqlite filenames. *(2026-08-10)*
+- [x] **1.2** Done: ReadCache rewritten — per-store table sets, table refs (no hot-path atom derivation), ownership-based collision rule (claim only if owner is self() or the store's registered process; else raise `CollisionError`). 14-test `store_instance_test.exs` proves two stores + caches isolated in one node. *(2026-08-10)*
+- [x] **1.3** Done: `Store.Hooks` (`store/hooks.ex`) — finalize_run invokes registered `{m,f,args}` hooks with failure isolation; runtime registrations live in `:persistent_term` keyed by store name so they survive store restarts. RunHistoryStore + MemoryIngest register themselves via config (each owns its `handle_finalize_run` adapter, so it moves with the module in 1.6). Read path inverted too: `get_run_history` forwards to a configured `:run_history_provider`. Telegram msg-id indexing at store.ex:1048 turned out to be a stale comment (real code removed in 77d68e58, guarded by `:core_telegram_resume_index_leak`); `:telegram_known_targets` removed from core defaults — cached tables are per-instance opts + `register_cached_table/1`, channels registers its own at boot. sessions_index staleness bug fixed (write-through, regression test). A source-scan test now asserts store.ex contains no RunHistoryStore/MemoryIngest/telegram references. Policy wrappers deliberately untouched (§6). *(2026-08-10)*
 - [ ] **1.4** Deps hygiene (`apps/lemon_core/mix.exs`): `sentry`, `finch`, `exqlite`, `phoenix_pubsub` → `optional: true` with graceful degradation (Bus falls back to a Registry-based pubsub or requires phoenix_pubsub explicitly — decide at implementation); replace `uuid` (unmaintained) with vendored UUIDv7.
-- [ ] **1.5** Secrets portability: brand-neutral configurable key path, a non-macOS `MasterKey.init` provisioning path (`secrets/master_key.ex:47-61`), keychain as optional provider; reject raw <32-byte keys without KDF stretching (`master_key.ex:203-207`); document rotation as known-missing.
+- [x] **1.5** Done: `KeyProvider` behaviour (keychain/env/file built-ins, chain configurable via `config :lemon_core, LemonCore.Secrets, key_providers:`), portable non-macOS provisioning (0600 key file; `mix lemon.secrets.init --target --force`), weak raw keys rejected loudly (`:weak_master_key`) rather than HKDF-stretched — stretching would silently break existing ciphertexts; `allow_legacy_raw_keys: true` escape hatch with deprecation warning. Rotation gap documented in moduledoc. *(2026-08-10)*
 
 Module moves (destinations per the disposition table in §6):
 
 - [ ] **1.6** Create `apps/lemon_memory`, move the 8 memory modules (D4); router's ingest call goes through a registered hook (see 1.3).
-- [ ] **1.7** Move goal/kanban/heartbeat stores → `apps/agent_core` as `AgentCore.Workspace.*` (D5); update automation/channels/skills/control_plane call sites.
+- [x] **1.7** Move goal/kanban/heartbeat stores → `apps/agent_core` as `AgentCore.Workspace.*` (D5); update automation/channels/skills/control_plane call sites. Clean break, no shims. `lemon_automation` gained an `agent_core` dep; core's support bundle now resolves the goal/kanban diagnostics modules from `config :lemon_core, :workspace_diagnostics` so core keeps zero references to agent_core.
 - [ ] **1.8** Move single-consumer modules out: `build_info`→lemon_sim_ui, `provider_pool_rotator`→coding_agent, `provider_config_resolver`→agent_core, doctor *checks* to the apps they check (framework stays in core), `chat_state`/`chat_state_store`→router.
 - [ ] **1.9** Decentralize `Env`: keep the typed-registry framework in core; move the ~262 registrations (`env.ex`, 3.4k LOC) to per-app `<App>.Env` modules that register at boot.
 - [ ] **1.10** Sweep remaining lemon-specific defaults: `~/.lemon` paths in Config/MemoryStore/ConfigReloader become configurable with the current values as the *reference runtime's* config, not the library's.

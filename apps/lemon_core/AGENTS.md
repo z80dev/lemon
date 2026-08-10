@@ -226,6 +226,10 @@ Secrets are encrypted at rest with AES-256-GCM. The encryption key is derived vi
 
 For local Linux/dev runs, `~/.lemon/secrets_master_key` should be treated as the canonical master key file. `./bin/lemon` normalizes `LEMON_SECRETS_MASTER_KEY` from that file before boot so stale desktop/session env does not win accidentally.
 
+The chain is configurable (`LemonCore.Secrets.KeyProvider`): `config :lemon_core, LemonCore.Secrets, key_providers: [...], key_file: ..., env_var: ...`. The keychain provider is macOS-only; on other platforms `mix lemon.secrets.init` provisions the key file with `0600` permissions instead.
+
+Key material must be base64-encoded 32 bytes. Raw passphrase-like strings are rejected with `:weak_master_key` unless `allow_legacy_raw_keys: true` is set. Rotation (re-encrypting under a new key) is not implemented — see the `LemonCore.Secrets` moduledoc.
+
 For a path-by-path audit matrix (including error and fallback semantics), see `docs/security/secrets-keychain-audit-matrix.md`.
 
 ### API Usage
@@ -286,7 +290,7 @@ Store client calls are fail-soft: if `LemonCore.Store` is overloaded/unavailable
 
 `LemonCore.Store.SqliteBackend` logs decode failures and returns explicit corruption errors for bad payloads instead of collapsing corrupted rows to `nil`/missing. SQLite release/close failures are also logged so cleanup issues stay observable.
 
-Use the generic table API only for backend internals, wrapper modules, or explicitly app-local legacy tables. Shared-domain callers should go through typed wrappers such as `LemonCore.RunStore`, `LemonCore.ChatStateStore`, `LemonCore.ProgressStore`, `LemonCore.PolicyStore`, `LemonCore.IdempotencyStore`, `LemonCore.IntrospectionStore`, `LemonCore.HeartbeatStore`, `LemonCore.ExecApprovalStore`, `LemonCore.GoalStore`, `LemonCore.KanbanStore`, `LemonCore.UsageStore`, and `LemonCore.Checkpoint`. Channel model-policy callers should use `LemonChannels.ModelPolicyStore`.
+Use the generic table API only for backend internals, wrapper modules, or explicitly app-local legacy tables. Shared-domain callers should go through typed wrappers such as `LemonCore.RunStore`, `LemonCore.ChatStateStore`, `LemonCore.ProgressStore`, `LemonCore.PolicyStore`, `LemonCore.IdempotencyStore`, `LemonCore.IntrospectionStore`, `LemonCore.ExecApprovalStore`, `LemonCore.UsageStore`, and `LemonCore.Checkpoint`. Agent workspace callers should use `AgentCore.Workspace.HeartbeatStore`, `AgentCore.Workspace.GoalStore`, and `AgentCore.Workspace.KanbanStore`. Channel model-policy callers should use `LemonChannels.ModelPolicyStore`.
 
 ### Specialized APIs
 
@@ -399,7 +403,7 @@ LemonCore.Bus.broadcast("session:" <> session_key, event)
 ### Adding a New Secret Provider
 
 1. Secrets are provider-agnostic -- the `provider` field is metadata only
-2. To add a new master key source, extend `LemonCore.Secrets.MasterKey.resolve/1`
+2. To add a new master key source, implement `LemonCore.Secrets.KeyProvider` and add it to `key_providers`
 3. To add a new keychain backend, implement the same interface as `LemonCore.Secrets.Keychain`
 
 ### Adding a New Onboarding Provider
@@ -814,13 +818,16 @@ This is the foundational app. All other umbrella apps depend on it:
 
 ## External Dependencies
 
-- `jason` - JSON encoding/decoding
-- `toml` - TOML parsing
-- `uuid` - UUID generation
-- `phoenix_pubsub` - PubSub infrastructure
-- `telemetry` - Metrics and instrumentation
-- `exqlite` - SQLite driver
-- `file_system` - File watching (optional, for config reload)
+Required: `jason` (JSON), `toml` (config parsing), `telemetry` (instrumentation).
+
+Optional, each with a documented fallback:
+
+- `phoenix_pubsub` - Bus transport; without it `LemonCore.Bus` uses a local-node Registry
+- `exqlite` - SQLite driver; without it `SqliteBackend`/`MemoryStore`/`RunHistoryStore` are unavailable and `LemonCore.Application` does not start the latter two
+- `sentry` + `finch` - error reporting sink; the logger handler is skipped when absent
+- `file_system` - file watching for config reload; the reloader polls when absent
+
+UUIDs come from the vendored `LemonCore.UUID` (v4 + v7), not the unmaintained `:uuid` package.
 
 ## Supervised Process Tree
 
