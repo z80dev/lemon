@@ -160,15 +160,34 @@ defmodule LemonCore.Store.Hooks do
 
   # A hook whose module isn't loaded is not installed in this build — the
   # umbrella shares one config across apps, so an app-scoped run sees hooks for
-  # collaborators it doesn't depend on. That is a skip, not a failure; only
-  # hooks that exist and then misbehave are worth an error.
+  # collaborators it doesn't depend on. That is a skip, not a failure.
+  #
+  # It is warned about once per module, though, because the other way to get
+  # here is a typo in configured hooks, and that is a collaborator silently
+  # never running. Once per module keeps the legitimate partial-build case from
+  # becoming noise on every finalized run.
   defp apply_loaded(module, function, args) do
     if Code.ensure_loaded?(module) do
       apply(module, function, args)
     else
-      Logger.debug(
-        "[LemonCore.Store.Hooks] skipping #{inspect(module)}.#{function}/#{length(args)}: " <>
-          "module not available"
+      warn_missing_once(module, function, length(args))
+      :ok
+    end
+  end
+
+  defp warn_missing_once(module, function, arity) do
+    key = {__MODULE__, :missing_hook_module, module}
+
+    if :persistent_term.get(key, false) do
+      :ok
+    else
+      :persistent_term.put(key, true)
+
+      Logger.warning(
+        "[LemonCore.Store.Hooks] skipping #{inspect(module)}.#{function}/#{arity}: module not " <>
+          "available. Expected when this build does not include that collaborator; if it " <>
+          "should be here, check the module name in :finalize_run_hooks — a typo silently " <>
+          "disables the hook. Logged once per module."
       )
 
       :ok

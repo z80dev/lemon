@@ -34,6 +34,13 @@ defmodule LemonCore.RunHistoryStore do
 
   alias Exqlite.Sqlite3
 
+  # :exqlite is an optional dependency; LemonCore.Application only starts this
+  # store when it is present. Without this, every project that depends on
+  # lemon_core without exqlite gets seven undefined-function warnings from a
+  # module it never uses — the first thing a new user sees. (LemonMemory.Store
+  # carries the same attribute for the same reason.)
+  @compile {:no_warn_undefined, Exqlite.Sqlite3}
+
   @default_retention_ms 7 * 24 * 60 * 60 * 1000
   @default_max_per_session 50
   @sweep_interval_ms 10 * 60 * 1000

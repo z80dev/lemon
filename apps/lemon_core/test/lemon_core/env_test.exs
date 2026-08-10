@@ -138,6 +138,34 @@ defmodule LemonCore.EnvTest do
       assert length(env_vars) == length(Enum.uniq(env_vars))
     end
 
+    # A name that is one declaration's canonical variable and another's alias is
+    # a silent coupling: renaming the canonical one changes what the other falls
+    # back to, and nothing above catches it because neither list has duplicates
+    # on its own. The known-deliberate overlaps are listed so a *new* one fails.
+    test "no declaration aliases another declaration's canonical env_var" do
+      declared = Env.all_declared()
+      canonical = MapSet.new(declared, & &1.env_var)
+
+      intentional =
+        MapSet.new([
+          # lemon_evals deliberately falls back to the shared Anthropic key
+          # rather than requiring a separate one for integration runs.
+          "ANTHROPIC_API_KEY"
+        ])
+
+      overlaps =
+        for decl <- declared,
+            alias_var <- decl.aliases,
+            MapSet.member?(canonical, alias_var),
+            not MapSet.member?(intentional, alias_var),
+            do: {decl.name, alias_var}
+
+      assert overlaps == [],
+             "these declarations alias another declaration's canonical env_var: " <>
+               "#{inspect(overlaps)}. Either drop the alias or add it to `intentional` " <>
+               "with a note explaining why the two variables are meant to be the same knob."
+    end
+
     test "every declaration has the expected shape" do
       for decl <- Env.all_declared() do
         assert is_atom(decl.name)

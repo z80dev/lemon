@@ -19,22 +19,6 @@ defmodule LemonRouter.RunProcess.ChatStateOwnershipTest do
     %{session_key: session_key, state: %{session_key: session_key, run_id: "run_1"}}
   end
 
-  # `LemonCore.Store.put_chat_state/3` writes the ETS read cache eagerly and
-  # then *again* from the async cast it queues, so two writes to one key in
-  # quick succession race: if the store is still draining its mailbox, the
-  # first cast's cache write can land after the second write's eager one, and a
-  # read taken in that window sees the older value. Under full-tree load the
-  # window is wide enough to be hit. A synchronous call to the store is queued
-  # behind both casts, so returning from it means both have been applied.
-  defp await_store_writes do
-    case Process.whereis(LemonCore.Store) do
-      nil -> :ok
-      pid -> :sys.get_state(pid, 30_000)
-    end
-
-    :ok
-  end
-
   defp completed_event(fields) do
     %Event{
       type: :run_completed,
@@ -71,8 +55,6 @@ defmodule LemonRouter.RunProcess.ChatStateOwnershipTest do
           state,
           completed_event(%{resume: %ResumeToken{engine: "claude", value: "thread-2"}})
         )
-
-      :ok = await_store_writes()
 
       assert %ChatState{last_engine: "claude", last_resume_token: "thread-2"} =
                ChatStateStore.get(key)

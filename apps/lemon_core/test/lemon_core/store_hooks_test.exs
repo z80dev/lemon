@@ -243,4 +243,25 @@ defmodule LemonCore.StoreHooksTest do
       assert Store.get(store, :chat, scope) == nil
     end
   end
+
+  describe "hook sources are deduplicated" do
+    test "a hook wired through config AND registered at runtime fires once" do
+      parent = self()
+      hook = {__MODULE__, :send_to, [parent]}
+
+      store = start_store(:hook_dedup_store, finalize_run_hooks: [hook])
+      # A collaborator that also self-registers at boot — the two mechanisms are
+      # documented as interchangeable, so wiring both must not double-ingest.
+      :ok = Store.register_finalize_run_hook(store, hook)
+      on_exit(fn -> Store.unregister_finalize_run_hook(store, hook) end)
+
+      finalize(store, "run_dedup", %{session_key: "agent:dedup:main"})
+
+      assert_receive {:hook_fired, %{run_id: "run_dedup"}}
+      refute_receive {:hook_fired, %{run_id: "run_dedup"}}, 100
+    end
+  end
+
+  @doc false
+  def send_to(pid, event), do: send(pid, {:hook_fired, event})
 end

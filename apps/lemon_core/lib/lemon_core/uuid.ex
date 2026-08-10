@@ -12,7 +12,10 @@ defmodule LemonCore.UUID do
       leak creation time.
     * `uuid7/0` — 48-bit millisecond timestamp followed by 74 random bits.
       Lexicographically sortable by creation time, which makes it the better
-      choice for database keys.
+      choice for database keys. Sortable *to the millisecond*: the bits after
+      the timestamp are entirely random, so UUIDs minted within the same
+      millisecond have no defined order relative to each other. Do not read
+      sort order as insertion order.
 
   ## Examples
 

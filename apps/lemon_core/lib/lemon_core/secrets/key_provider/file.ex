@@ -7,10 +7,19 @@ defmodule LemonCore.Secrets.KeyProvider.File do
   or the `:key_file` option.
 
   This is the provisioning target on platforms without a system keychain: the
-  key file is created with `0600` permissions inside a `0700` directory.
+  key file is created with `0600` permissions inside a `0700` directory, and the
+  mode is applied before any key material is written.
+
+  A key file that is *already* readable beyond its owner — provisioned by hand,
+  or restored from a backup that lost its mode — is warned about once per path
+  and then used. Refusing it would lock you out of your own secrets over
+  something `chmod 600` fixes, and `put/2` will not overwrite an existing key.
+  Pass `check_permissions: false` to silence the check.
   """
 
   use LemonCore.Secrets.KeyProvider
+
+  require Logger
 
   alias LemonCore.Secrets.KeyProvider
 
@@ -32,6 +41,7 @@ defmodule LemonCore.Secrets.KeyProvider.File do
       path ->
         case reader(opts).(path) do
           {:ok, value} when is_binary(value) ->
+            warn_loose_permissions_once(path, opts)
             if String.trim(value) == "", do: {:error, :invalid_master_key}, else: {:ok, value}
 
           {:error, :enoent} ->
@@ -79,16 +89,48 @@ defmodule LemonCore.Secrets.KeyProvider.File do
     end
   end
 
+  # Create-then-restrict-then-fill: `File.write/2` alone would put key material
+  # on disk at whatever the umask allows and only narrow it afterwards, leaving
+  # a window where the key is world-readable.
   defp write(path, value) do
     dir = Path.dirname(path)
 
     with :ok <- Elixir.File.mkdir_p(dir),
          _ <- Elixir.File.chmod(dir, @dir_mode),
-         :ok <- Elixir.File.write(path, String.trim(value) <> "\n"),
-         :ok <- Elixir.File.chmod(path, @file_mode) do
+         :ok <- Elixir.File.touch(path),
+         :ok <- Elixir.File.chmod(path, @file_mode),
+         :ok <- Elixir.File.write(path, String.trim(value) <> "\n") do
       :ok
     else
       {:error, reason} -> {:error, {:key_file_write_failed, reason}}
     end
+  end
+
+  # Reported, not enforced: refusing to start because of a file mode would lock
+  # people out of their own secrets over something they can fix in one command,
+  # and the mode may be an artifact of how the file was provisioned. Once per
+  # path, so it does not repeat on every resolve.
+  defp warn_loose_permissions_once(path, opts) do
+    with true <- Keyword.get(opts, :check_permissions, true),
+         {:ok, %Elixir.File.Stat{mode: mode}} <- Elixir.File.stat(path),
+         group_or_world when group_or_world != 0 <- Bitwise.band(mode, 0o077) do
+      key = {__MODULE__, :warned_permissions, path}
+
+      if :persistent_term.get(key, false) do
+        :ok
+      else
+        :persistent_term.put(key, true)
+
+        Logger.warning(
+          "Secrets master key file #{path} is readable beyond its owner " <>
+            "(mode #{Integer.to_string(Bitwise.band(mode, 0o777), 8)}). It is being used " <>
+            "anyway. Restrict it with `chmod 600 #{path}`."
+        )
+      end
+    end
+
+    :ok
+  rescue
+    _ -> :ok
   end
 end

@@ -1,3 +1,12 @@
+defmodule LemonCore.ConfigCache.CollisionError do
+  @moduledoc """
+  Raised when a `LemonCore.ConfigCache` ETS table name is already taken by
+  another process — mirrors `LemonCore.Store.ReadCache.CollisionError`.
+  """
+
+  defexception [:message]
+end
+
 defmodule LemonCore.ConfigCache do
   @moduledoc """
   ETS-backed cache for merged Lemon configuration.
@@ -17,6 +26,8 @@ defmodule LemonCore.ConfigCache do
   """
 
   use GenServer
+
+  alias LemonCore.ConfigCache.CollisionError
 
   @table :lemon_core_config_cache
 
@@ -174,14 +185,7 @@ defmodule LemonCore.ConfigCache do
       |> Application.get_env(name, [])
       |> Keyword.merge(Keyword.take(opts, [:mtime_check_interval_ms, :call_timeout_ms]))
 
-    _ =
-      :ets.new(table_for(name), [
-        :named_table,
-        :set,
-        :public,
-        read_concurrency: true,
-        write_concurrency: true
-      ])
+    _ = new_table!(name)
 
     defaults = %{
       mtime_check_interval_ms:
@@ -192,6 +196,31 @@ defmodule LemonCore.ConfigCache do
     :persistent_term.put(defaults_key(name), defaults)
 
     {:ok, %{name: name, table: table_for(name), defaults: defaults}}
+  end
+
+  # A live table under our name belongs to someone else — two caches sharing one
+  # table would serve each other's parsed config. Raising `CollisionError` says
+  # so; a bare `:ets.new/2` badarg here would not.
+  defp new_table!(name) do
+    table = table_for(name)
+
+    case :ets.whereis(table) do
+      :undefined ->
+        :ets.new(table, [
+          :named_table,
+          :set,
+          :public,
+          read_concurrency: true,
+          write_concurrency: true
+        ])
+
+      tid ->
+        raise CollisionError,
+          message:
+            "ConfigCache ETS table #{inspect(table)} for #{inspect(name)} already exists and is " <>
+              "owned by #{inspect(:ets.info(tid, :owner))}. Give the cache a distinct :name so " <>
+              "it gets its own table."
+    end
   end
 
   @impl true

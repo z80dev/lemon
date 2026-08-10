@@ -281,4 +281,46 @@ defmodule LemonCore.StoreInstanceTest do
       send(owner, :stop)
     end
   end
+
+  describe "addressing an instance is unambiguous" do
+    setup do
+      %{store: start_store(:"arity_probe_#{System.unique_integer([:positive])}", [])}
+    end
+
+    test "a store name where opts belong raises at the caller", %{store: store} do
+      # Reads as "list events from `store`" but the 1-arity clause takes opts.
+      # It used to reach Keyword.get/3 inside the DEFAULT store's handle_call
+      # and terminate it, while safe_store_call handed the caller a plausible [].
+      assert_raise FunctionClauseError, fn ->
+        Store.list_introspection_events(store)
+      end
+
+      assert Process.alive?(Process.whereis(LemonCore.Store)),
+             "the default store must not be collateral damage from a caller's mistake"
+    end
+
+    test "a store name where a session key belongs raises at the caller", %{store: store} do
+      assert_raise FunctionClauseError, fn ->
+        Store.get_run_history(store, "not-opts")
+      end
+
+      assert_raise FunctionClauseError, fn ->
+        Store.get_run_history(store, limit: 5)
+      end
+    end
+
+    test "the unambiguous arities still work", %{store: store} do
+      # The default store is shared with the rest of the node, so these assert
+      # the call is dispatched and answered, not that the node is quiet.
+      unknown = "agent:no_such_session_#{System.unique_integer([:positive])}:main"
+
+      assert Store.get_run_history(unknown) == []
+      assert Store.get_run_history(unknown, limit: 5) == []
+      assert Store.get_run_history(store, unknown, limit: 5) == []
+
+      assert is_list(Store.list_introspection_events())
+      assert is_list(Store.list_introspection_events(limit: 5))
+      assert Store.list_introspection_events(store, limit: 5) == []
+    end
+  end
 end

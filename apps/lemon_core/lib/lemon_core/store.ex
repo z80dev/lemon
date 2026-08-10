@@ -43,6 +43,21 @@ defmodule LemonCore.Store do
       `get_run_history/3` forwards to; without one, history reads return `[]`.
 
   See `LemonCore.Store.Hooks` for hook shapes and failure isolation.
+
+  ## Read cache coherence
+
+  `LemonCore.Store.ReadCache` mirrors hot domains into public ETS so reads skip
+  this GenServer. The store process is the cache's **only** writer, and it
+  writes only after the backend confirms, so the cache can never advertise a
+  value the backend rejected. Two consequences worth knowing:
+
+    * `put_chat_state/3` and `put_progress_mapping/4` are synchronous. They were
+      casts with a caller-side cache write, which made a failed backend write
+      look like a success and let two writers on one key land out of order.
+    * `append_run_event/3` and `finalize_run/3` stay asynchronous, because runs
+      stream events far more often than anything reads them back. Their cache
+      entry lands with the backend write, so a read taken before the cast drains
+      can lag by a message. `ping/1` is the barrier when that matters.
   """
 
   use GenServer
@@ -92,11 +107,15 @@ defmodule LemonCore.Store do
 
   # Chat State API
 
-  @spec put_chat_state(server(), term(), ChatState.t() | map()) :: :ok
+  @spec put_chat_state(server(), term(), ChatState.t() | map()) :: :ok | {:error, term()}
   def put_chat_state(server \\ __MODULE__, scope, state) do
-    # Eagerly update read cache before async GenServer cast for consistency
-    ReadCache.put(server, :chat, scope, state)
-    GenServer.cast(server, {:put_chat_state, scope, state})
+    # Synchronous: the store writes the backend and only then the cache, so a
+    # read taken after this returns cannot observe the previous value.
+    safe_store_call(server, {:put_chat_state, scope, state}, {:error, :store_unavailable},
+      op: :put_chat_state,
+      table: :chat,
+      key: scope
+    )
   end
 
   @spec get_chat_state(server(), term()) :: ChatState.t() | map() | nil
@@ -128,11 +147,9 @@ defmodule LemonCore.Store do
     end
   end
 
-  @spec delete_chat_state(server(), term()) :: :ok
+  @spec delete_chat_state(server(), term()) :: :ok | {:error, term()}
   def delete_chat_state(server \\ __MODULE__, scope) do
-    ReadCache.delete(server, :chat, scope)
-
-    safe_store_call(server, {:delete_chat_state, scope}, :ok,
+    safe_store_call(server, {:delete_chat_state, scope}, {:error, :store_unavailable},
       op: :delete_chat_state,
       table: :chat,
       key: scope
@@ -141,14 +158,16 @@ defmodule LemonCore.Store do
 
   # Run Events API
 
+  @doc """
+  Append an event to a run's record.
+
+  Asynchronous, because runs stream events far more often than anything reads
+  them back. The store updates the cache after the backend write, so a read
+  taken before the cast drains can lag by a message; `ping/1` is the barrier
+  when a caller needs the write to have landed.
+  """
   @spec append_run_event(server(), term(), term()) :: :ok
   def append_run_event(server \\ __MODULE__, run_id, event) do
-    # Eagerly update read cache: prepend event to cached record
-    case ReadCache.get(server, :runs, run_id) do
-      nil -> :ok
-      record -> ReadCache.put(server, :runs, run_id, %{record | events: [event | record.events]})
-    end
-
     GenServer.cast(server, {:append_run_event, run_id, event})
   end
 
@@ -172,21 +191,21 @@ defmodule LemonCore.Store do
   """
   @spec finalize_run(server(), term(), map()) :: :ok
   def finalize_run(server \\ __MODULE__, run_id, summary) do
-    # Eagerly update read cache with summary
-    case ReadCache.get(server, :runs, run_id) do
-      nil -> :ok
-      record -> ReadCache.put(server, :runs, run_id, %{record | summary: summary})
-    end
-
     GenServer.cast(server, {:finalize_run, run_id, summary})
   end
 
   # Progress Mapping API
 
-  @spec put_progress_mapping(server(), term(), integer(), term()) :: :ok
+  @spec put_progress_mapping(server(), term(), integer(), term()) :: :ok | {:error, term()}
   def put_progress_mapping(server \\ __MODULE__, scope, progress_msg_id, run_id) do
-    ReadCache.put(server, :progress, {scope, progress_msg_id}, run_id)
-    GenServer.cast(server, {:put_progress_mapping, scope, progress_msg_id, run_id})
+    safe_store_call(
+      server,
+      {:put_progress_mapping, scope, progress_msg_id, run_id},
+      {:error, :store_unavailable},
+      op: :put_progress_mapping,
+      table: :progress,
+      key: {scope, progress_msg_id}
+    )
   end
 
   @spec get_run_by_progress(server(), term(), integer()) :: term() | nil
@@ -205,11 +224,12 @@ defmodule LemonCore.Store do
     end
   end
 
-  @spec delete_progress_mapping(server(), term(), integer()) :: :ok
+  @spec delete_progress_mapping(server(), term(), integer()) :: :ok | {:error, term()}
   def delete_progress_mapping(server \\ __MODULE__, scope, progress_msg_id) do
-    ReadCache.delete(server, :progress, {scope, progress_msg_id})
-
-    safe_store_call(server, {:delete_progress_mapping, scope, progress_msg_id}, :ok,
+    safe_store_call(
+      server,
+      {:delete_progress_mapping, scope, progress_msg_id},
+      {:error, :store_unavailable},
       op: :delete_progress_mapping,
       table: :progress,
       key: {scope, progress_msg_id}
@@ -267,22 +287,12 @@ defmodule LemonCore.Store do
          {:ok, value} <- ReadCache.fetch(server, table, key) do
       value
     else
-      false ->
+      # Either the table is not mirrored or we missed. The store answers, and
+      # populates its own cache on the way out when the table is mirrored — the
+      # cache has a single writer, so a caller never publishes a value the
+      # backend has not confirmed.
+      _uncached_or_miss ->
         safe_store_call(server, {:generic_get, table, key}, nil, op: :get, table: table, key: key)
-
-      _cache_miss ->
-        value =
-          safe_store_call(server, {:generic_get, table, key}, nil,
-            op: :get,
-            table: table,
-            key: key
-          )
-
-        if not is_nil(value) do
-          ReadCache.put(server, table, key, value)
-        end
-
-        value
     end
   end
 
@@ -486,16 +496,21 @@ defmodule LemonCore.Store do
     * `:limit` - Maximum number of runs to return (default: 10)
 
   Returns a list of `{run_id, %{events: [...], summary: %{...}, session_key: key, started_at: ts}}`.
+
+  Session keys are binaries, and the guard says so: it is what stops
+  `get_run_history(:my_store, opts)` — which reads as "from this instance" but
+  means "for this session on the default store" — from silently returning the
+  wrong answer. Address an instance with `get_run_history/3`.
   """
-  @spec get_run_history(term(), keyword()) :: [{term(), map()}]
-  def get_run_history(session_key, opts \\ []),
+  @spec get_run_history(binary(), keyword()) :: [{term(), map()}]
+  def get_run_history(session_key, opts \\ []) when is_binary(session_key) and is_list(opts),
     do: get_run_history(__MODULE__, session_key, opts)
 
   @doc """
   Get run history for a session key from a specific store instance.
   """
   @spec get_run_history(server(), term(), keyword()) :: [{term(), map()}]
-  def get_run_history(server, session_key, opts) do
+  def get_run_history(server, session_key, opts) when is_list(opts) do
     safe_store_call(server, {:get_run_history, session_key, opts}, [],
       op: :get_run_history,
       table: :run_history,
@@ -570,14 +585,14 @@ defmodule LemonCore.Store do
     * `:limit` - Maximum number of events to return (default: #{@default_introspection_query_limit})
   """
   @spec list_introspection_events(keyword()) :: [map()]
-  def list_introspection_events(opts \\ []),
+  def list_introspection_events(opts \\ []) when is_list(opts),
     do: list_introspection_events(__MODULE__, opts)
 
   @doc """
   List introspection events from a specific store instance.
   """
   @spec list_introspection_events(server(), keyword()) :: [map()]
-  def list_introspection_events(server, opts) do
+  def list_introspection_events(server, opts) when is_list(opts) do
     safe_store_call(server, {:list_introspection_events, opts}, [],
       op: :list_introspection_events,
       table: :introspection_log,
@@ -653,10 +668,15 @@ defmodule LemonCore.Store do
       {:ok, backend_state} ->
         # Initialize this instance's read-through cache for high-traffic domains
         read_cache = ReadCache.init(name, cached_tables)
-        Hooks.publish(name, :cached_tables, cached_tables)
 
         backend_state =
           warm_cached_tables(backend, backend_state, read_cache, cached_tables)
+
+        # Published only once the tables hold the backend's contents: callers
+        # read this to decide whether to trust the cache, and between the
+        # publish and the warm a mirrored table would look authoritative while
+        # still being empty.
+        Hooks.publish(name, :cached_tables, cached_tables)
 
         # Schedule periodic sweep for expired chat states
         schedule_sweep()
@@ -708,8 +728,11 @@ defmodule LemonCore.Store do
     |> then(&Keyword.merge(env_config, &1))
   end
 
+  # Deduplicated across both sources: a collaborator that is listed in config
+  # *and* registers itself at boot is one hook, not two. Without this, wiring it
+  # both ways silently ingests every finalized run twice.
   defp finalize_run_hooks(state) do
-    state.finalize_run_hooks ++ Hooks.registered(state.name, :finalize_run_hooks)
+    Enum.uniq(state.finalize_run_hooks ++ Hooks.registered(state.name, :finalize_run_hooks))
   end
 
   # The read side of run history belongs to whoever owns run history; the store
@@ -823,10 +846,12 @@ defmodule LemonCore.Store do
     else
       read_cache = ReadCache.add_table(state.name, state.read_cache, table)
       cached_tables = state.cached_tables ++ [table]
-      Hooks.publish(state.name, :cached_tables, cached_tables)
 
       backend_state =
         warm_cached_tables(state.backend, state.backend_state, read_cache, [table])
+
+      # Publish after warming, for the reason given in `init/1`.
+      Hooks.publish(state.name, :cached_tables, cached_tables)
 
       {:reply, :ok,
        %{
@@ -838,9 +863,53 @@ defmodule LemonCore.Store do
     end
   end
 
+  def handle_call({:put_chat_state, scope, value}, _from, state) do
+    # Calculate expires_at based on TTL
+    now = System.system_time(:millisecond)
+    expires_at = now + state.chat_state_ttl_ms
+
+    # Add expires_at to the value (works with both maps and ChatState structs)
+    value_with_expiry =
+      case value do
+        %{__struct__: _} = struct -> %{struct | expires_at: expires_at}
+        map when is_map(map) -> Map.put(map, :expires_at, expires_at)
+      end
+
+    case state.backend.put(state.backend_state, :chat, scope, value_with_expiry) do
+      {:ok, backend_state} ->
+        ReadCache.put(state.read_cache, :chat, scope, value_with_expiry)
+        {:reply, :ok, %{state | backend_state: backend_state}}
+
+      {:error, reason} ->
+        log_backend_error(:put, :chat, scope, reason)
+        {:reply, {:error, reason}, state}
+
+      other ->
+        log_backend_unexpected(:put, :chat, scope, other)
+        {:reply, {:error, {:unexpected_backend_response, other}}, state}
+    end
+  end
+
   def handle_call({:delete_chat_state, scope}, _from, state) do
-    {:noreply, state} = delete_chat_state_from_backend(scope, state)
-    {:reply, :ok, state}
+    delete_chat_state_from_backend(scope, state)
+  end
+
+  def handle_call({:put_progress_mapping, scope, progress_msg_id, run_id}, _from, state) do
+    key = {scope, progress_msg_id}
+
+    case state.backend.put(state.backend_state, :progress, key, run_id) do
+      {:ok, backend_state} ->
+        ReadCache.put(state.read_cache, :progress, key, run_id)
+        {:reply, :ok, %{state | backend_state: backend_state}}
+
+      {:error, reason} ->
+        log_backend_error(:put, :progress, key, reason)
+        {:reply, {:error, reason}, state}
+
+      other ->
+        log_backend_unexpected(:put, :progress, key, other)
+        {:reply, {:error, {:unexpected_backend_response, other}}, state}
+    end
   end
 
   def handle_call({:get_run_by_progress, scope, progress_msg_id}, _from, state) do
@@ -992,6 +1061,11 @@ defmodule LemonCore.Store do
   def handle_call({:generic_get, table, key}, _from, state) do
     case state.backend.get(state.backend_state, table, key) do
       {:ok, value, backend_state} ->
+        # Populate the mirror on the way out, from the process that owns it.
+        if not is_nil(value) and table in state.cached_tables do
+          ReadCache.put(state.read_cache, table, key, value)
+        end
+
         {:reply, value, %{state | backend_state: backend_state}}
 
       {:error, reason} ->
@@ -1038,6 +1112,7 @@ defmodule LemonCore.Store do
     end
   end
 
+  @impl true
   def handle_cast({:append_introspection_event, event}, state) do
     case normalize_introspection_event(event) do
       {:ok, event} ->
@@ -1061,36 +1136,9 @@ defmodule LemonCore.Store do
     end
   end
 
-  @impl true
-  def handle_cast({:put_chat_state, scope, value}, state) do
-    # Calculate expires_at based on TTL
-    now = System.system_time(:millisecond)
-    expires_at = now + state.chat_state_ttl_ms
-
-    # Add expires_at to the value (works with both maps and ChatState structs)
-    value_with_expiry =
-      case value do
-        %{__struct__: _} = struct -> %{struct | expires_at: expires_at}
-        map when is_map(map) -> Map.put(map, :expires_at, expires_at)
-      end
-
-    case state.backend.put(state.backend_state, :chat, scope, value_with_expiry) do
-      {:ok, backend_state} ->
-        ReadCache.put(state.read_cache, :chat, scope, value_with_expiry)
-        {:noreply, %{state | backend_state: backend_state}}
-
-      {:error, reason} ->
-        log_backend_error(:put, :chat, scope, reason)
-        {:noreply, state}
-
-      other ->
-        log_backend_unexpected(:put, :chat, scope, other)
-        {:noreply, state}
-    end
-  end
-
   def handle_cast({:delete_chat_state, scope}, state) do
-    delete_chat_state_from_backend(scope, state)
+    {:reply, _result, state} = delete_chat_state_from_backend(scope, state)
+    {:noreply, state}
   end
 
   def handle_cast({:append_run_event, run_id, event}, state) do
@@ -1184,24 +1232,6 @@ defmodule LemonCore.Store do
     end
   end
 
-  def handle_cast({:put_progress_mapping, scope, progress_msg_id, run_id}, state) do
-    key = {scope, progress_msg_id}
-
-    case state.backend.put(state.backend_state, :progress, key, run_id) do
-      {:ok, backend_state} ->
-        ReadCache.put(state.read_cache, :progress, key, run_id)
-        {:noreply, %{state | backend_state: backend_state}}
-
-      {:error, reason} ->
-        log_backend_error(:put, :progress, key, reason)
-        {:noreply, state}
-
-      other ->
-        log_backend_unexpected(:put, :progress, key, other)
-        {:noreply, state}
-    end
-  end
-
   def handle_cast({:delete_progress_mapping, scope, progress_msg_id}, state) do
     key = {scope, progress_msg_id}
 
@@ -1220,19 +1250,22 @@ defmodule LemonCore.Store do
     end
   end
 
+  # The cache entry goes only after the backend confirms the delete, so a failed
+  # delete leaves the two agreeing that the value is still there rather than
+  # leaving a caller-side eviction the backend never made.
   defp delete_chat_state_from_backend(scope, state) do
     case state.backend.delete(state.backend_state, :chat, scope) do
       {:ok, backend_state} ->
         ReadCache.delete(state.read_cache, :chat, scope)
-        {:noreply, %{state | backend_state: backend_state}}
+        {:reply, :ok, %{state | backend_state: backend_state}}
 
       {:error, reason} ->
         log_backend_error(:delete, :chat, scope, reason)
-        {:noreply, state}
+        {:reply, {:error, reason}, state}
 
       other ->
         log_backend_unexpected(:delete, :chat, scope, other)
-        {:noreply, state}
+        {:reply, {:error, {:unexpected_backend_response, other}}, state}
     end
   end
 
@@ -1438,23 +1471,29 @@ defmodule LemonCore.Store do
 
   @impl true
   def handle_info(:sweep_expired_chat_states, state) do
-    backend_state = sweep_expired_chat_states(state.backend, state.backend_state)
+    cache = state.read_cache
+    backend_state = sweep_expired_chat_states(state.backend, state.backend_state, cache)
 
     backend_state =
       sweep_expired_introspection_events(
         state.backend,
         backend_state,
-        state.introspection_retention_ms
+        state.introspection_retention_ms,
+        cache
       )
 
-    backend_state = sweep_expired_idempotency(state.backend, backend_state)
-    backend_state = sweep_expired_cron_runs(state.backend, backend_state)
+    backend_state = sweep_expired_idempotency(state.backend, backend_state, cache)
+    backend_state = sweep_expired_cron_runs(state.backend, backend_state, cache)
 
     schedule_sweep()
     {:noreply, %{state | backend_state: backend_state}}
   end
 
-  defp sweep_expired_chat_states(backend, backend_state) do
+  # Every sweeper evicts what it deletes. `ReadCache.delete/3` is a no-op for a
+  # domain this store does not mirror, so the call is unconditional: a table
+  # that later becomes cached (`register_cached_table/2`) is covered without
+  # anyone remembering to add it here.
+  defp sweep_expired_chat_states(backend, backend_state, cache) do
     case backend.list(backend_state, :chat) do
       {:ok, all_chat_states, backend_state} ->
         now = System.system_time(:millisecond)
@@ -1465,6 +1504,7 @@ defmodule LemonCore.Store do
             %{expires_at: expires_at} when is_integer(expires_at) and now > expires_at ->
               case backend.delete(acc_state, :chat, scope) do
                 {:ok, new_state} ->
+                  ReadCache.delete(cache, :chat, scope)
                   new_state
 
                 {:error, reason} ->
@@ -1491,12 +1531,12 @@ defmodule LemonCore.Store do
     end
   end
 
-  defp sweep_expired_introspection_events(_backend, backend_state, retention_ms)
+  defp sweep_expired_introspection_events(_backend, backend_state, retention_ms, _cache)
        when not is_integer(retention_ms) or retention_ms <= 0 do
     backend_state
   end
 
-  defp sweep_expired_introspection_events(backend, backend_state, retention_ms) do
+  defp sweep_expired_introspection_events(backend, backend_state, retention_ms, cache) do
     case backend.list(backend_state, :introspection_log) do
       {:ok, all_events, backend_state} ->
         cutoff_ms = System.system_time(:millisecond) - retention_ms
@@ -1507,6 +1547,7 @@ defmodule LemonCore.Store do
           if is_integer(event_ts_ms) and event_ts_ms < cutoff_ms do
             case backend.delete(acc_state, :introspection_log, key) do
               {:ok, next_state} ->
+                ReadCache.delete(cache, :introspection_log, key)
                 next_state
 
               {:error, reason} ->
@@ -1543,7 +1584,7 @@ defmodule LemonCore.Store do
 
   defp introspection_event_timestamp(_key, _event), do: nil
 
-  defp sweep_expired_idempotency(backend, backend_state) do
+  defp sweep_expired_idempotency(backend, backend_state, cache) do
     case backend.list(backend_state, :idempotency) do
       {:ok, entries, backend_state} ->
         cutoff_ms = System.system_time(:millisecond) - @idempotency_retention_ms
@@ -1557,8 +1598,12 @@ defmodule LemonCore.Store do
 
           if is_integer(inserted_at) and inserted_at < cutoff_ms do
             case backend.delete(acc_state, :idempotency, key) do
-              {:ok, next_state} -> next_state
-              _ -> acc_state
+              {:ok, next_state} ->
+                ReadCache.delete(cache, :idempotency, key)
+                next_state
+
+              _ ->
+                acc_state
             end
           else
             acc_state
@@ -1570,7 +1615,7 @@ defmodule LemonCore.Store do
     end
   end
 
-  defp sweep_expired_cron_runs(backend, backend_state) do
+  defp sweep_expired_cron_runs(backend, backend_state, cache) do
     case backend.list(backend_state, :cron_runs) do
       {:ok, entries, backend_state} ->
         cutoff_ms = System.system_time(:millisecond) - @cron_runs_retention_ms
@@ -1586,8 +1631,12 @@ defmodule LemonCore.Store do
 
           if is_integer(started_at) and started_at < cutoff_ms do
             case backend.delete(acc_state, :cron_runs, key) do
-              {:ok, next_state} -> next_state
-              _ -> acc_state
+              {:ok, next_state} ->
+                ReadCache.delete(cache, :cron_runs, key)
+                next_state
+
+              _ ->
+                acc_state
             end
           else
             acc_state
