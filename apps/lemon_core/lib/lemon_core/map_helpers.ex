@@ -102,4 +102,43 @@ defmodule LemonCore.MapHelpers do
   end
 
   def merge_config(base, _opts), do: base
+
+  @doc """
+  Recursively merges `override` into `base`, with the override side winning.
+
+  At any key present in both maps, two map values are merged recursively; every
+  other pair — including a map facing a non-map, on either side — is replaced by
+  the `override` value. When either top-level argument is not a map, `override`
+  is returned as-is. Merging an empty map on either side is therefore the
+  identity on the other.
+
+  This is the shared implementation behind config layering (global ← project ←
+  overrides); it is intentionally *not* associative in general, because nesting
+  vs. replacement depends on the shape at each level.
+
+  ## Examples
+
+      iex> LemonCore.MapHelpers.deep_merge(%{a: %{x: 1, y: 2}}, %{a: %{y: 3, z: 4}})
+      %{a: %{x: 1, y: 3, z: 4}}
+
+      iex> LemonCore.MapHelpers.deep_merge(%{a: 1}, %{})
+      %{a: 1}
+
+      iex> LemonCore.MapHelpers.deep_merge(%{}, %{a: 1})
+      %{a: 1}
+
+      iex> LemonCore.MapHelpers.deep_merge(%{a: %{x: 1}}, %{a: 2})
+      %{a: 2}
+
+      iex> LemonCore.MapHelpers.deep_merge(%{a: 1}, "scalar")
+      "scalar"
+  """
+  @spec deep_merge(term(), term()) :: term()
+  def deep_merge(base, override) when is_map(base) and is_map(override) do
+    Map.merge(base, override, fn _key, base_val, override_val ->
+      deep_merge(base_val, override_val)
+    end)
+  end
+
+  def deep_merge(_base, override), do: override
 end

@@ -298,7 +298,7 @@ defmodule LemonCore.Config.Modular do
     project_settings = load_toml_file(project_path(project_dir))
 
     # Merge: project overrides global
-    deep_merge(global_settings, project_settings)
+    LemonCore.MapHelpers.deep_merge(global_settings, project_settings)
   end
 
   defp load_toml_file(path) do
@@ -326,12 +326,4 @@ defmodule LemonCore.Config.Modular do
         %{}
     end
   end
-
-  defp deep_merge(base, override) when is_map(base) and is_map(override) do
-    Map.merge(base, override, fn _key, base_val, override_val ->
-      deep_merge(base_val, override_val)
-    end)
-  end
-
-  defp deep_merge(_base, override), do: override
 end

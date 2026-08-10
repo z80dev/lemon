@@ -407,7 +407,7 @@ defmodule LemonCore.Config do
         %{}
       end
 
-    deep_merge(global, project)
+    LemonCore.MapHelpers.deep_merge(global, project)
   end
 
   # ============================================================================
@@ -433,7 +433,7 @@ defmodule LemonCore.Config do
   defp deep_merge_values(base, nil), do: base
 
   defp deep_merge_values(base, override) when is_map(base) and is_map(override) do
-    deep_merge(base, atomize_keys(override))
+    LemonCore.MapHelpers.deep_merge(base, atomize_keys(override))
   end
 
   defp deep_merge_values(_base, override), do: override
@@ -477,18 +477,6 @@ defmodule LemonCore.Config do
   end
 
   defp normalize_optional_string(_), do: nil
-
-  defp deep_merge(base, override) when is_map(base) and is_map(override) do
-    Map.merge(base, override, fn _key, base_val, override_val ->
-      if is_map(base_val) and is_map(override_val) do
-        deep_merge(base_val, override_val)
-      else
-        override_val
-      end
-    end)
-  end
-
-  defp deep_merge(_base, override), do: override
 
   defp stringify_keys(value), do: LemonCore.MapHelpers.stringify_keys(value)
 
