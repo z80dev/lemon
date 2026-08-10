@@ -149,8 +149,12 @@ export default {
     // theme: { light: "github-light", dark: "github-dark" },
   },
 
-  // Links to Elixir source files (e.g. ../apps/lemon_core/lib/lemon_core/env.ex)
+  // Links into the umbrella source tree (e.g. ../apps/lemon_core/lib/lemon_core/env.ex)
   // are intentional references to real files, but VitePress treats unknown
   // extensions as HTML pages and flags them as dead links.
-  ignoreDeadLinks: [/lib\/lemon_core\/env\.ex$/],
+  //
+  // These links are not unchecked: LemonCore.Quality.DocsCheck (run by
+  // `mix lemon.quality`) resolves every local markdown link against the
+  // filesystem, which is the correct check for a path outside the site root.
+  ignoreDeadLinks: [/(^|\/)\.\.\/apps\//],
 }

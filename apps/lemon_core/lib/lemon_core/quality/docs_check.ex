@@ -113,6 +113,7 @@ defmodule LemonCore.Quality.DocsCheck do
     |> Path.wildcard()
     |> Enum.map(&Path.relative_to(&1, root))
     |> Enum.reject(&String.contains?(&1, "/runs/"))
+    |> Enum.reject(&String.contains?(&1, "node_modules/"))
     |> Enum.sort()
   end
 

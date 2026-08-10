@@ -1,812 +1,513 @@
-# Telemetry Events Reference
+# Telemetry
 
-This document provides a comprehensive reference of all telemetry events emitted by the Lemon agent runtime.
+Every event in this document was verified against its emit site on **2026-08-10**. Where
+an event name exists in code but nothing calls it, it is listed under
+[Known gaps](#known-gaps-and-inconsistencies) rather than in the catalog — a catalog entry
+here means the event actually fires.
 
-## Overview
+`:telemetry ~> 1.0` (declared in `apps/lemon_core/mix.exs`) is the only observability
+dependency in the tree. There is no `telemetry_metrics`, `telemetry_poller`, or
+`phoenix_live_dashboard` anywhere, so the consumer example below uses plain
+`:telemetry.attach_many/4`.
 
-Lemon uses Erlang's `:telemetry` library for observability. Events are emitted at key points in the system to enable monitoring, debugging, and performance analysis.
+Two layers coexist and are easy to confuse:
 
-## Introspection Storage Contract (M1)
+- **Telemetry** (this document) is fire-and-forget. Handlers run synchronously in the
+  emitting process; nothing is stored.
+- **Introspection** ([below](#introspection-the-persisted-layer)) is a separate, persisted,
+  queryable envelope written through `LemonCore.Store`. It has its own event taxonomy and is
+  *not* derived from the telemetry events here.
 
-Telemetry events can be normalized into a canonical introspection envelope via `LemonCore.Introspection` and persisted through `LemonCore.Store`.
+## Conventions
 
-Canonical fields:
+### Naming
 
-- `event_id` - unique event identifier
-- `event_type` - taxonomy event name
-- `ts_ms` - timestamp in milliseconds
-- `run_id`, `session_key`, `agent_id`, `parent_run_id`, `engine`
-- `provenance` - `:direct | :inferred | :unavailable`
-- `payload` - redacted event payload
+Three prefix families coexist. This is descriptive, not a recommendation — see
+[Known gaps](#known-gaps-and-inconsistencies).
 
-APIs:
-
-- `LemonCore.Introspection.record/3` - build + persist canonical events
-- `LemonCore.Introspection.list/1` - list events with filters (`run_id`, `session_key`, `agent_id`, `event_type`, `since_ms`, `until_ms`, `limit`)
-- `LemonCore.Store.append_introspection_event/1` - low-level append
-- `LemonCore.Store.list_introspection_events/1` - low-level filtered query
-
-Retention:
-
-- `LemonCore.Store` applies periodic retention sweep for `:introspection_log` (default: 7 days).
-
-## Introspection Event Taxonomy
-
-All event atoms passed as the first argument to `LemonCore.Introspection.record/3`. Grouped by the component that emits them.
-
-### Lemon-Native Events (M2) — `engine: "lemon"`, `provenance: :direct`
-
-#### RunProcess (`LemonRouter.RunProcess`)
-
-| Event Type | When |
-|---|---|
-| `:run_started` | Run process initialised |
-| `:run_completed` | Run finished (ok or error) |
-| `:run_failed` | Run process terminated abnormally |
-
-#### RunOrchestrator (`LemonRouter.RunOrchestrator`)
-
-| Event Type | When |
-|---|---|
-| `:orchestration_started` | Submit received, run_id generated |
-| `:orchestration_resolved` | Engine and model resolved, run process started |
-| `:orchestration_failed` | Engine/model resolution failed |
-
-#### ThreadWorker (`LemonGateway.ThreadWorker`)
-
-| Event Type | When |
-|---|---|
-| `:thread_started` | Thread worker initialised |
-| `:thread_message_dispatched` | Job enqueued to thread |
-| `:thread_terminated` | Thread worker stopped |
-
-#### Scheduler (`LemonGateway.Scheduler`)
-
-| Event Type | When |
-|---|---|
-| `:scheduled_job_triggered` | Job submitted to in-flight pool |
-| `:scheduled_job_completed` | Slot released after job completion |
-
-#### Session (`CodingAgent.Session`)
-
-| Event Type | When |
-|---|---|
-| `:session_started` | Session GenServer initialised |
-| `:session_ended` | Session terminated |
-| `:compaction_triggered` | Context compaction applied |
-
-#### EventHandler (`CodingAgent.Session.EventHandler`)
-
-| Event Type | When |
-|---|---|
-| `:tool_call_dispatched` | Tool call start event observed |
-
-### Agent Loop Events (M3) — `AgentCore.Agent`
-
-| Event Type | Provenance | When |
+| Prefix | Meaning | Emitted via |
 |---|---|---|
-| `:agent_loop_started` | `:direct` | Agent loop begins |
-| `:agent_turn_observed` | `:inferred` | Each agent turn completes (streaming end) |
-| `:agent_loop_ended` | `:direct` | Agent loop finishes (idle transition) |
+| `[:lemon, ...]` | Cross-cutting platform concerns: runs, channels, approvals, memory, scheduler, reload, WASM | `LemonCore.Telemetry.emit/3` and its named helpers |
+| `[:agent_core, ...]`, `[:coding_agent, ...]`, `[:ai, ...]` | App-local concerns, prefixed by OTP app | `LemonCore.Telemetry.emit/3` or `:telemetry.execute/3` directly |
+| `[:lemon_skills, ...]`, `[:lemon_sim_ui, ...]` | App-local, full app name as prefix | app-local helper module |
 
-### JSONL Runner Events (M3) — `AgentCore.CliRunners.JsonlRunner`
+`LemonCore.Telemetry.emit/3` is a direct pass-through to `:telemetry.execute/3`
+([`telemetry.ex`](../apps/lemon_core/lib/lemon_core/telemetry.ex)); attaching does not
+depend on which one an emitter used.
 
-| Event Type | Provenance | When |
-|---|---|---|
-| `:jsonl_stream_started` | `:direct` | CLI subprocess stream begins |
-| `:tool_use_observed` | `:inferred` | Tool call detected in engine output |
-| `:assistant_turn_observed` | `:inferred` | Assistant text turn detected |
-| `:jsonl_stream_ended` | `:direct` | CLI subprocess stream ends |
+### Span shape
 
-### CLI Runner Engine Events (M3) — `provenance: :inferred`
+Events ending in `:start` / `:stop` / `:exception` follow the `:telemetry.span/3` convention
+by hand — none of them actually call `:telemetry.span/3`. The practical consequence is that
+`:stop` is **not** guaranteed to follow every `:start`: if the emitting process is killed
+between them, no `:stop` or `:exception` arrives. Consumers that pair them need their own
+timeout.
 
-Emitted by each engine-specific runner (Codex, Claude, Droid, Kimi, OpenCode, Pi).
+### Measurement units are not uniform
 
-| Event Type | Engines | When |
-|---|---|---|
-| `:engine_subprocess_started` | codex, claude, kimi, opencode, pi | Engine session/subprocess initialised |
-| `:engine_output_observed` | codex, kimi, opencode, pi | Engine produces a final answer or output |
-| `:engine_subprocess_exited` | codex, claude, kimi, opencode, pi | Engine subprocess exits with error |
+There is no single duration convention. When writing a consumer, check the table for the
+event you are attaching to:
 
-## Attaching Handlers
+| Unit | Used by |
+|---|---|
+| `duration` in **native** units | `[:lemon, :channels, :deliver, :stop]`, `[:agent_core, :loop, :end]`, `[:ai, :dispatcher, :rejected]` |
+| `duration_us` | `[:coding_agent, :extension, :tool, ...]`, `[:coding_agent, :wasm, :tool, ...]`, `[:lemon, :memory, :ingest, ...]` |
+| `duration_ms` | `[:lemon, :reload, ...]`, `[:lemon, :wasm, :*, :stop]` |
+| both `duration` and `duration_ms` | `[:lemon, :config, :reload, :stop]` (the `duration` value is `duration_ms * 1_000_000`, not a real native reading) |
 
-```elixir
-# Attach a handler for all agent_core events
-:telemetry.attach_many(
-  "my-handler",
-  [
-    [:agent_core, :loop, :start],
-    [:agent_core, :loop, :end],
-    [:agent_core, :tool_task, :start],
-    [:agent_core, :tool_task, :end],
-    [:agent_core, :tool_result, :emit]
-  ],
-  &MyModule.handle_event/4,
-  %{my_config: true}
-)
+`system_time` measurements are `System.system_time()` in native units and are timestamps,
+not durations.
 
-# Handler function
-def handle_event(event, measurements, metadata, config) do
-  IO.inspect({event, measurements, metadata}, label: "Telemetry")
-end
+## Run lifecycle
+
+The sequence below is the common path for a message arriving on a channel and producing a
+reply. Not every step fires for every run: engine execution varies, and the tool block
+repeats once per tool-calling turn.
+
+```mermaid
+sequenceDiagram
+    participant Ch as Channel adapter
+    participant R as LemonRouter
+    participant S as Gateway Scheduler
+    participant L as AgentCore.Loop
+    participant P as Ai.CallDispatcher
+    participant M as LemonMemory.Ingest
+    participant O as Channels Outbox
+
+    Ch->>R: inbound message
+    Note over Ch: [:lemon, :channels, :inbound]
+    Note over R: [:lemon, :run, :submit]
+    R->>S: request execution slot
+    Note over S: [:lemon, :gateway, :scheduler, :slot_queued]<br/>then :slot_granted
+    S->>L: run accepted
+    Note over L: [:agent_core, :loop, :start]<br/>[:agent_core, :tool_schema_snapshot, :created]
+
+    loop each turn
+        L->>P: provider call
+        Note over P: [:ai, :dispatcher, :dispatch]<br/>or [:ai, :dispatcher, :rejected]
+        Note over L: [:agent_core, :tool_task, :start]<br/>[:agent_core, :tool_task, :end] or :error<br/>[:agent_core, :tool_result, :emit]
+    end
+
+    Note over L: [:agent_core, :loop, :end]
+    L->>S: release slot
+    Note over S: [:lemon, :gateway, :scheduler, :slot_released]
+    L->>M: finalize run
+    Note over M: [:lemon, :memory, :ingest, :ok] or :failure
+    R->>O: enqueue reply
+    Note over O: [:lemon, :channels, :outbox, :queue]<br/>[:lemon, :channels, :deliver, :start]<br/>[:lemon, :channels, :deliver, :stop]
+    O->>Ch: delivered
 ```
 
-## AgentCore Events
+**There is no end-to-end run span in telemetry.** `[:lemon, :run, :submit]` fires, but no
+`[:lemon, :run, :stop]` is ever emitted (the helper exists and has no callers — see
+[Known gaps](#known-gaps-and-inconsistencies)). To measure whole-run duration today, use the
+introspection layer's `:run_started` / `:run_completed` records, which are persisted with
+`ts_ms` and a shared `run_id`.
 
-### Agent Loop Events
+## Event catalog
 
-#### [:agent_core, :loop, :start]
+### Run lifecycle — `[:lemon, :run, ...]`
 
-Emitted when an agent loop begins execution.
+| Event | Measurements | Metadata | Emitter |
+|---|---|---|---|
+| `[:lemon, :run, :submit]` | `count: 1` | `session_key`, `origin`, `engine` | `LemonCore.Telemetry.run_submit/3`, called from [`run_orchestrator.ex:204`](../apps/lemon_router/lib/lemon_router/run_orchestrator.ex) when a submission is accepted |
 
-| Field | Type | Description |
-|-------|------|-------------|
-| **Measurements** | | |
-| `system_time` | integer | System time in native units |
-| **Metadata** | | |
-| `loop_type` | `:main` \| `:continue` | Type of loop being started |
+### Channels — `[:lemon, :channels, ...]`
 
-#### [:agent_core, :loop, :end]
+| Event | Measurements | Metadata | Emitter |
+|---|---|---|---|
+| `[:lemon, :channels, :inbound]` | `count: 1` | `channel_id`, `account_id`, `peer_kind`, `agent_id` | [`channels/runtime.ex:113`](../apps/lemon_channels/lib/lemon_channels/runtime.ex) and [`router.ex:92`](../apps/lemon_router/lib/lemon_router/router.ex), on each normalized inbound message |
+| `[:lemon, :channels, :outbox, :queue]` | `depth`, `max_queue_size`, `count: 1` | caller map plus `event` (`:enqueued`, and other queue transitions) | [`outbox.ex:742`](../apps/lemon_channels/lib/lemon_channels/outbox.ex) |
+| `[:lemon, :channels, :outbox, :rejected]` | `count: 1`, `queue_depth`, `max_queue_size` | `reason: :queue_full`, `channel_id`, `account_id`, `chunk_count` | [`outbox.ex:97`](../apps/lemon_channels/lib/lemon_channels/outbox.ex), when the bounded queue refuses work |
+| `[:lemon, :channels, :deliver, :start]` | `system_time` | `channel_id`, `account_id`, `chunk_index` | [`outbox.ex:574`](../apps/lemon_channels/lib/lemon_channels/outbox.ex) |
+| `[:lemon, :channels, :deliver, :stop]` | `duration` (native) | delivery meta plus `ok` (boolean) | [`outbox.ex:608`](../apps/lemon_channels/lib/lemon_channels/outbox.ex); fires for both success and `{:error, _}` — check `ok` |
+| `[:lemon, :channels, :deliver, :exception]` | `duration` (native) | delivery meta plus `kind: :exception`, `reason`, `stacktrace` | [`outbox.ex:591`](../apps/lemon_channels/lib/lemon_channels/outbox.ex), only when the plugin raises |
 
-Emitted when an agent loop completes.
+### Engine scheduling — `[:lemon, :gateway, :scheduler, ...]`
 
-| Field | Type | Description |
-|-------|------|-------------|
-| **Measurements** | | |
-| `duration` | integer | Duration in native time units |
-| **Metadata** | | |
-| `loop_type` | `:main` \| `:continue` | Type of loop that completed |
-| `reason` | atom | Completion reason |
+Last segment is built at runtime from an atom argument
+([`scheduler.ex:477`](../apps/lemon_gateway/lib/lemon_gateway/scheduler.ex)). Values:
+`:slot_granted`, `:slot_queued`, `:slot_released`.
 
-#### [:agent_core, :loop, :exception]
-
-Emitted when an agent loop encounters an exception.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| **Measurements** | | |
-| `system_time` | integer | When the exception occurred |
-| **Metadata** | | |
-| `kind` | atom | Exception kind (`:error`, `:throw`, `:exit`) |
-| `reason` | term | Exception reason/value |
-
-#### [:agent_core, :loop, :task_start_failed]
-
-Emitted when the loop task fails to start.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| **Measurements** | | |
-| `system_time` | integer | When the failure occurred |
-| **Metadata** | | |
-| `reason` | term | Failure reason |
-
-### Tool Task Events
-
-#### [:agent_core, :tool_task, :start]
-
-Emitted when a tool task begins execution.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| **Measurements** | | |
-| `system_time` | integer | Start time |
-| **Metadata** | | |
-| `tool_name` | string | Name of the tool |
-| `tool_call_id` | string | Unique tool call identifier |
-
-#### [:agent_core, :tool_task, :end]
-
-Emitted when a tool task completes successfully.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| **Measurements** | | |
-| `duration` | integer | Execution duration |
-| **Metadata** | | |
-| `tool_name` | string | Name of the tool |
-| `tool_call_id` | string | Unique tool call identifier |
-| `is_error` | boolean | Whether result was an error |
-
-#### [:agent_core, :tool_task, :error]
-
-Emitted when a tool task fails or is aborted.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| **Measurements** | | |
-| `system_time` | integer | Error time |
-| `duration` | integer | Time until error |
-| **Metadata** | | |
-| `tool_name` | string | Name of the tool |
-| `tool_call_id` | string | Unique tool call identifier |
-| `reason` | term | Error reason |
-
-### Tool Result Events
-
-#### [:agent_core, :tool_result, :emit]
-
-Emitted when a tool result message is appended to context.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| **Measurements** | | |
-| `system_time` | integer | Emit time (native units) |
-| **Metadata** | | |
-| `tool_name` | string | Name of the tool |
-| `tool_call_id` | string | Unique tool call identifier |
-| `is_error` | boolean | Whether the result is an error |
-| `trust` | `:trusted` \| `:untrusted` | Normalized trust level for the emitted tool result |
-
-`trust` comes from tool result trust normalization in the tool-call loop. Only `:untrusted` is emitted as untrusted; all other values are emitted as `:trusted`.
-
-## LemonSkills Events
-
-These events record skill lifecycle decisions with redacted metadata. Tool events include `tool_call_id` so operators can correlate them with `[:agent_core, :tool_task, ...]` and `[:agent_core, :tool_result, :emit]` events for the same tool invocation. Prompt-render events record only surfaced skill keys/counts and never include skill bodies. When the event is emitted through CodingAgent prompt/tool paths, metadata includes `session_key`, `session_id`, and `agent_id`.
-
-LemonSkills also attaches an introspection bridge on application start. The bridge persists `[:lemon_skills, :skill, :load]` as `:skill_load_observed`, `[:lemon_skills, :skill, :write]` as `:skill_write_observed`, and `[:lemon_skills, :skill, :prompt_render]` as `:skill_prompt_render_observed`, lifting `run_id`, `session_key`, and `agent_id` into the canonical introspection envelope when those fields are present. The same bridge updates `LemonSkills.Usage` sidecars for load/write counters and curation metadata.
-
-### Skill Load Events
-
-#### [:lemon_skills, :skill, :load]
-
-Emitted when `read_skill` returns a skill or a not-found result.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| **Measurements** | | |
-| `count` | integer | Always 1 |
-| `system_time` | integer | Emit time in native units |
-| **Metadata** | | |
-| `result` | string | `ok` or `not_found` |
-| `key` | string | Requested skill key |
-| `name` | string | Skill display name when found |
-| `source` | string | Skill source when found |
-| `path` | string | Skill directory when found |
-| `view` | string | Requested `read_skill` view |
-| `section` | string | Requested section, when present |
-| `file_path` | string | Requested file path, when present |
-| `include_status` | boolean | Whether status output was requested |
-| `include_manifest` | boolean | Whether manifest output was requested |
-| `tool_call_id` | string | Tool invocation identifier |
-| `run_id` | string | Run identifier, when provided |
-| `session_key` | string | CodingAgent session key, when provided |
-| `session_id` | string | CodingAgent session id, when provided |
-| `agent_id` | string | Agent id, when provided |
-| `cwd` | string | Project working directory, when present |
-
-### Skill Prompt Render Events
-
-#### [:lemon_skills, :skill, :prompt_render]
-
-Emitted when prompt composition renders an available-skills or relevant-skills block. The event intentionally excludes skill bodies and file contents.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| **Measurements** | | |
-| `count` | integer | Always 1 |
-| `system_time` | integer | Emit time in native units |
-| **Metadata** | | |
-| `surface` | string | `available` or `relevant` |
-| `skill_count` | integer | Number of skills rendered |
-| `skill_keys` | list | Rendered skill keys |
-| `active_count` | integer | Rendered active skills |
-| `not_ready_count` | integer | Rendered not-ready skills |
-| `missing_count` | integer | Rendered skills with missing requirements |
-| `run_id` | string | Run identifier, when provided |
-| `session_key` | string | CodingAgent session key, when provided |
-| `session_id` | string | CodingAgent session id, when provided |
-| `agent_id` | string | Agent id, when provided |
-| `cwd` | string | Project working directory, when present |
-
-### Skill Write Events
-
-#### [:lemon_skills, :skill, :write]
-
-Emitted when `skill_manage` accepts or rejects a skill write operation. The event intentionally excludes skill body content, replacement strings, and supporting-file content.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| **Measurements** | | |
-| `count` | integer | Always 1 |
-| `system_time` | integer | Emit time in native units |
-| **Metadata** | | |
-| `result` | string | `ok` or `error` |
-| `action` | string | `create`, `edit`, `patch`, `delete`, `write_file`, or `remove_file` |
-| `name` | string | Skill key requested by the agent |
-| `scope` | string | `project` or `global` |
-| `path` | string | Skill directory after a successful write |
-| `file_path` | string | Relative supporting file path, when applicable |
-| `audit_status` | string | Audit verdict for successful audited writes |
-| `replacements` | integer | Number of patch replacements, when applicable |
-| `reason` | string | Truncated rejection reason for failed writes |
-| `tool_call_id` | string | Tool invocation identifier |
-| `run_id` | string | Run identifier, when provided |
-| `session_key` | string | CodingAgent session key, when provided |
-| `session_id` | string | CodingAgent session id, when provided |
-| `agent_id` | string | Agent id, when provided |
-| `cwd` | string | Project working directory, when present |
-
-### Introspection Projection
-
-| Event Type | Source Telemetry | Payload |
+| Event | Measurements | Metadata |
 |---|---|---|
-| `:skill_load_observed` | `[:lemon_skills, :skill, :load]` | Same redacted metadata except envelope fields (`run_id`, `session_key`, `session_id`, `agent_id`) |
-| `:skill_write_observed` | `[:lemon_skills, :skill, :write]` | Same redacted metadata except envelope fields (`run_id`, `session_key`, `session_id`, `agent_id`) |
-| `:skill_prompt_render_observed` | `[:lemon_skills, :skill, :prompt_render]` | Same redacted metadata except envelope fields (`run_id`, `session_key`, `session_id`, `agent_id`) |
-| `:missed_skill_observed` | Session end audit | `missed_skill_keys` and `loaded_skill_keys` when the prompt surfaced `<relevant-skills>` but the agent did not load them |
+| `[:lemon, :gateway, :scheduler, :slot_granted]` | `in_flight`, `max`, `waitq`, `wait_ms`, `count: 1` | `%{}` (empty) |
+| `[:lemon, :gateway, :scheduler, :slot_queued]` | `in_flight`, `max`, `waitq`, `count: 1` | `%{}` (empty) |
+| `[:lemon, :gateway, :scheduler, :slot_released]` | `in_flight`, `max`, `waitq`, `count: 1` | `%{}` (empty) |
 
-### Context Events
+These are the clearest saturation signal in the system: `waitq > 0` means runs are waiting
+for an engine slot. The empty metadata means they cannot be correlated to a run or session.
 
-#### [:agent_core, :context, :size]
+### Agent loop — `[:agent_core, ...]`
 
-Emitted when context size is measured.
+| Event | Measurements | Metadata | Emitter |
+|---|---|---|---|
+| `[:agent_core, :loop, :start]` | `system_time` | `prompt_count`, `message_count`, `tool_count`, `model` | [`loop.ex:305`](../apps/agent_core/lib/agent_core/loop.ex) (fresh loop) and `:352` (continue loop; `prompt_count` is always 0 there) |
+| `[:agent_core, :loop, :end]` | `duration` (native, **may be `nil`**), `system_time` | `message_count`, `model`, `status` (`:completed` \| `:early_exit`) | [`loop.ex:807`](../apps/agent_core/lib/agent_core/loop.ex) |
+| `[:agent_core, :loop, :state_transition]` | `system_time` | caller map plus `from`, `to` | [`loop.ex:754`](../apps/agent_core/lib/agent_core/loop.ex) |
+| `[:agent_core, :tool_schema_snapshot, :created]` | `system_time` | `snapshot_id`, `fingerprint`, `tool_count`, `tool_names` | [`loop.ex:399`](../apps/agent_core/lib/agent_core/loop.ex) |
+| `[:agent_core, :tool_task, :start]` | `system_time` | `tool_name`, `tool_call_id` | [`tool_calls.ex:551`](../apps/agent_core/lib/agent_core/loop/tool_calls.ex) |
+| `[:agent_core, :tool_task, :end]` | `system_time` | `tool_name`, `tool_call_id`, `is_error` | [`tool_calls.ex:211`](../apps/agent_core/lib/agent_core/loop/tool_calls.ex) |
+| `[:agent_core, :tool_task, :error]` | `system_time` | `tool_name`, `tool_call_id`, `reason` | six sites in [`tool_calls.ex`](../apps/agent_core/lib/agent_core/loop/tool_calls.ex) — `:137`/`:152` (`reason: :aborted`), `:309` (task crash), `:389` (`:timeout`), `:586` (`{:start_failed, reason}`), `:601` (prepare failure) |
+| `[:agent_core, :tool_result, :emit]` | `system_time` | `tool_name`, `tool_call_id`, `is_error`, `trust` | [`tool_calls.ex:692`](../apps/agent_core/lib/agent_core/loop/tool_calls.ex). `trust` is normalized: only `:untrusted` stays untrusted, everything else becomes `:trusted` |
+| `[:agent_core, :tool_call, :name_normalized]` | `system_time` | `original_name`, `matched_tool_name` | [`tool_calls.ex:747`](../apps/agent_core/lib/agent_core/loop/tool_calls.ex), when a model-supplied tool name needed fuzzy matching |
+| `[:agent_core, :context, :size]` | `char_count`, `message_count` | `has_system_prompt` | [`context.ex:113`](../apps/agent_core/lib/agent_core/context.ex), on every `estimate_size/2` call |
+| `[:agent_core, :context, :warning]` | `char_count`, `threshold` | `level` (`:warning` \| `:critical`) | [`context.ex:206`](../apps/agent_core/lib/agent_core/context.ex) (critical) and `:222` (warning) |
+| `[:agent_core, :context, :truncated]` | `dropped_count`, `remaining_count` | `strategy` | [`context.ex:287`](../apps/agent_core/lib/agent_core/context.ex) |
+| `[:agent_core, :subagent, :spawn]` | `system_time` | `pid`, `registry_key`, `has_registry_key` | [`subagent_supervisor.ex:99`](../apps/agent_core/lib/agent_core/subagent_supervisor.ex) |
+| `[:agent_core, :subagent, :end]` | `system_time` | `pid`, `reason: :stopped` | [`subagent_supervisor.ex:150`](../apps/agent_core/lib/agent_core/subagent_supervisor.ex). Only fires on explicit stop — a crashed subagent emits nothing |
 
-| Field | Type | Description |
-|-------|------|-------------|
-| **Measurements** | | |
-| `char_count` | integer | Total characters in context |
-| `message_count` | integer | Number of messages |
-| **Metadata** | | |
-| `has_system_prompt` | boolean | Whether system prompt was included |
+### Providers — `[:ai, ...]`
 
-#### [:agent_core, :context, :warning]
+| Event | Measurements | Metadata | Emitter |
+|---|---|---|---|
+| `[:ai, :dispatcher, :dispatch]` | `system_time` | `provider` | [`call_dispatcher.ex:79`](../apps/ai/lib/ai/call_dispatcher.ex), before breaker and rate-limit checks |
+| `[:ai, :dispatcher, :rejected]` | `duration`, `system_time` | `provider`, `reason`, `retry_after_ms` (circuit-open only) | [`call_dispatcher.ex:94`](../apps/ai/lib/ai/call_dispatcher.ex) (`:circuit_open`), `:127` (`:rate_limited`), `:140` (`:max_concurrency`) |
+| `[:ai, :circuit_breaker, :opened]` | `system_time` | `provider`, `failure_count`, `failure_threshold`, `reason` | [`circuit_breaker.ex:291`](../apps/ai/lib/ai/circuit_breaker.ex) |
+| `[:ai, :circuit_breaker, :closed]` | `system_time` | `provider` | [`circuit_breaker.ex:258`](../apps/ai/lib/ai/circuit_breaker.ex), recovery confirmed |
+| `[:ai, :circuit_breaker, :half_opened]` | `system_time` | `provider`, `recovery_timeout` | [`circuit_breaker.ex:370`](../apps/ai/lib/ai/circuit_breaker.ex) |
+| `[:ai, :circuit_breaker, :reopened]` | `system_time` | `provider`, `reason` | [`circuit_breaker.ex:317`](../apps/ai/lib/ai/circuit_breaker.ex), probe failed during half-open |
+| `[:ai, :compacting_client, <event>]` | varies by call site | varies | [`compacting_client.ex:233`](../apps/ai/lib/ai/compacting_client.ex). Runtime suffix: `:request_started`, `:request_succeeded`, `:request_failed`, `:compaction_retry` |
+| `[:ai, :context_compactor, <event>]` | `system_time` | varies | [`context_compactor.ex:370`](../apps/ai/lib/ai/context_compactor.ex). Runtime suffix: `:compaction_started`, `:compaction_succeeded`, `:compaction_failed` |
+| `[:ai, :prompt_diagnostics, :llm_call]` | `system_time` | `data`, `engine: "ai"`, `session_key`, `agent_id`, `run_id` | [`prompt_diagnostics.ex:158`](../apps/ai/lib/ai/prompt_diagnostics.ex). Correlation fields come from `x-lemon-*` request headers and are `nil` when absent |
 
-Emitted when context exceeds warning threshold.
+### Memory — `[:lemon, :memory, ...]`
 
-| Field | Type | Description |
-|-------|------|-------------|
-| **Measurements** | | |
-| `char_count` | integer | Current character count |
-| `threshold` | integer | Threshold that was exceeded |
-| **Metadata** | | |
-| `level` | `:warning` \| `:critical` | Severity level |
+| Event | Measurements | Metadata | Emitter |
+|---|---|---|---|
+| `[:lemon, :memory, :ingest, :ok]` | `duration_us` | `run_id`, `session_key`, `agent_id` | [`ingest.ex:114`](../apps/lemon_memory/lib/lemon_memory/ingest.ex) |
+| `[:lemon, :memory, :ingest, :failure]` | `count: 1`, `duration_us` | `run_id`, `error` (message string) | [`ingest.ex:129`](../apps/lemon_memory/lib/lemon_memory/ingest.ex) |
 
-#### [:agent_core, :context, :truncated]
+### Approvals — `[:lemon, :approvals, ...]`
 
-Emitted when context is truncated.
+| Event | Measurements | Metadata | Emitter |
+|---|---|---|---|
+| `[:lemon, :approvals, :requested]` | `count: 1` | `approval_id`, `tool`, `run_id`, `session_id`, `session_key`, `agent_id` | [`exec_approvals.ex:101`](../apps/lemon_core/lib/lemon_core/exec_approvals.ex) |
+| `[:lemon, :approvals, :resolved]` | `count: 1` | `approval_id`, `decision`, `tool`, `run_id` | [`exec_approvals.ex:161`](../apps/lemon_core/lib/lemon_core/exec_approvals.ex) (user decision) and `:373` (`decision: :timeout`) |
 
-| Field | Type | Description |
-|-------|------|-------------|
-| **Measurements** | | |
-| `dropped_count` | integer | Messages dropped |
-| `remaining_count` | integer | Messages remaining |
-| **Metadata** | | |
-| `strategy` | atom | Truncation strategy used |
+### Control plane fan-out — `[:lemon, :control_plane, ...]`
 
-### EventStream Events
+| Event | Measurements | Metadata | Emitter |
+|---|---|---|---|
+| `[:lemon, :control_plane, :event_bridge, :broadcast]` | `count: 1`, `recipients` | `event`, `recipients` | [`event_bridge.ex:290`](../apps/lemon_control_plane/lib/lemon_control_plane/event_bridge.ex) |
+| `[:lemon, :control_plane, :event_bridge, :dropped]` | `count: 1`, `recipients` | `event`, `reason` (inspected, truncated to 80 chars) | [`event_bridge.ex:328`](../apps/lemon_control_plane/lib/lemon_control_plane/event_bridge.ex) |
 
-#### [:agent_core, :event_stream, :queue_depth]
+### Configuration and hot reload — `[:lemon, :config | :reload, ...]`
 
-Emitted on each push to track queue depth.
+| Event | Measurements | Metadata | Emitter |
+|---|---|---|---|
+| `[:lemon, :config, :reload, :start]` | `system_time` | reload context | [`config_reloader.ex:178`](../apps/lemon_core/lib/lemon_core/config_reloader.ex) |
+| `[:lemon, :config, :reload, :stop]` | `duration`, `duration_ms` | context plus `changed_count`, `actions_count` | [`config_reloader.ex:212`](../apps/lemon_core/lib/lemon_core/config_reloader.ex) (no-change path, `changed_count: 0`) and `:273` |
+| `[:lemon, :config, :reload, :exception]` | `duration`, `duration_ms` | context plus `kind`, `reason`, `stacktrace` | [`config_reloader.ex:301`](../apps/lemon_core/lib/lemon_core/config_reloader.ex) |
+| `[:lemon, :reload, :start]` | `system_time` | reload context | [`reload.ex:463`](../apps/lemon_core/lib/lemon_core/reload.ex) |
+| `[:lemon, :reload, :stop]` | `duration_ms` | context plus `status` | [`reload.ex:471`](../apps/lemon_core/lib/lemon_core/reload.ex) |
+| `[:lemon, :reload, :exception]` | `duration_ms` | context plus `error`, `stacktrace` | [`reload.ex:482`](../apps/lemon_core/lib/lemon_core/reload.ex) (rescue) and `:493` (catch) |
 
-| Field | Type | Description |
-|-------|------|-------------|
-| **Measurements** | | |
-| `depth` | integer | Current queue depth |
-| **Metadata** | | |
-| `stream_id` | reference | Stream identifier |
+### Extension and WASM tools — `[:coding_agent, ...]` and `[:lemon, :wasm, ...]`
 
-#### [:agent_core, :event_stream, :dropped]
+| Event | Measurements | Metadata | Emitter |
+|---|---|---|---|
+| `[:coding_agent, :extension, :tool, :start]` | `count: 1` | tool identity | [`tool_registry.ex:392`](../apps/coding_agent/lib/coding_agent/tool_registry.ex) |
+| `[:coding_agent, :extension, :tool, :stop]` | `count: 1`, `duration_us` | tool identity plus `status` | [`tool_registry.ex:399`](../apps/coding_agent/lib/coding_agent/tool_registry.ex) |
+| `[:coding_agent, :extension, :tool, :exception]` | `count: 1`, `duration_us` | tool identity plus `kind`, `error_type` | [`tool_registry.ex:410`](../apps/coding_agent/lib/coding_agent/tool_registry.ex) (rescue) and `:423` (catch); both re-raise |
+| `[:coding_agent, :wasm, :tool, :start]` | `count: 1` | tool identity | [`wasm/tool_factory.ex:58`](../apps/coding_agent/lib/coding_agent/wasm/tool_factory.ex) |
+| `[:coding_agent, :wasm, :tool, :stop]` | `count: 1`, `duration_us` | tool identity plus `status` | [`wasm/tool_factory.ex:113`](../apps/coding_agent/lib/coding_agent/wasm/tool_factory.ex) |
+| `[:coding_agent, :wasm, :tool, :exception]` | `count: 1`, `duration_us` | tool identity plus `kind`, `error_type` | [`wasm/tool_factory.ex:121`](../apps/coding_agent/lib/coding_agent/wasm/tool_factory.ex) |
+| `[:coding_agent, :tool_call, :name_normalized]` | `%{}` (empty) | `original`, `normalized` | [`tool_registry.ex:148`](../apps/coding_agent/lib/coding_agent/tool_registry.ex) |
+| `[:lemon, :wasm, :discover, :start]` | `count: 1` | `host: :wasm`, `session_hash`, `cwd_hash` | [`wasm/sidecar_session.ex:191`](../apps/coding_agent/lib/coding_agent/wasm/sidecar_session.ex) |
+| `[:lemon, :wasm, :discover, :stop]` | `duration_ms`, `ok` | `host: :wasm`, `session_hash`, `cwd_hash` | [`wasm/sidecar_session.ex:376`](../apps/coding_agent/lib/coding_agent/wasm/sidecar_session.ex) |
+| `[:lemon, :wasm, :invoke, :start]` | `count: 1` | `host: :wasm`, `session_hash`, `cwd_hash`, `tool_hash` | [`wasm/sidecar_session.ex:220`](../apps/coding_agent/lib/coding_agent/wasm/sidecar_session.ex) |
+| `[:lemon, :wasm, :invoke, :stop]` | `duration_ms`, `ok` | `host: :wasm`, `session_hash`, `cwd_hash`, `tool_hash` | [`wasm/sidecar_session.ex:408`](../apps/coding_agent/lib/coding_agent/wasm/sidecar_session.ex) |
 
-Emitted when events are dropped due to backpressure.
+Session and cwd identifiers in the WASM events are hashed, not raw.
 
-| Field | Type | Description |
-|-------|------|-------------|
-| **Measurements** | | |
-| `count` | integer | Number of events dropped |
-| **Metadata** | | |
-| `stream_id` | reference | Stream identifier |
-| `strategy` | atom | Drop strategy (`:drop_oldest`, `:drop_newest`) |
+### Session recovery and rate limiting — `[:coding_agent, ...]`
 
-### Subagent Events
+All four families build the last segment at runtime.
 
-#### [:agent_core, :subagent, :spawn]
+| Event | Suffix values | Measurements | Metadata |
+|---|---|---|---|
+| `[:coding_agent, :rate_limit_pause, <event>]` | `:paused`, `:resumed` | `retry_after_ms`, `time_to_resume` | `session_id` and pause context ([`rate_limit_pause.ex:265`](../apps/coding_agent/lib/coding_agent/rate_limit_pause.ex)) |
+| `[:coding_agent, :rate_limit_healer, <event>]` | `:probe_attempt`, `:probe_success`, `:probe_rate_limited`, `:probe_error`, `:healed`, `:failed`, `:stopped` | caller-supplied | `session_id`, `provider`, `model`, `healing_state`, `probe_count` ([`rate_limit_healer.ex:566`](../apps/coding_agent/lib/coding_agent/rate_limit_healer.ex)) |
+| `[:coding_agent, :session_fork, <event>]` | `:fork_completed`, `:fork_failed`, `:original_terminated` | `%{}` (empty) | caller map plus `original_session_id`, `timestamp` ([`session_fork.ex:175`](../apps/coding_agent/lib/coding_agent/session_fork.ex)) |
+| `[:coding_agent, :session, :overflow_recovery, <stage>]` | `:attempt`, `:success`, `:failure` | `count: 1` | recovery context including `duration_ms` ([`session/compaction_manager.ex:209`](../apps/coding_agent/lib/coding_agent/session/compaction_manager.ex)) |
 
-Emitted when a subagent is spawned.
+### Skills — `[:lemon_skills, :skill, ...]`
 
-| Field | Type | Description |
-|-------|------|-------------|
-| **Measurements** | | |
-| `system_time` | integer | Spawn time |
-| **Metadata** | | |
-| `subagent_id` | term | Subagent identifier |
-| `parent_session` | string | Parent session ID |
+All three carry `count: 1` and `system_time` measurements and are emitted through
+[`lemon_skills/telemetry.ex:61`](../apps/lemon_skills/lib/lemon_skills/telemetry.ex), which
+drops `nil` metadata values before emitting. Bodies of skills and file contents are never
+included.
 
-#### [:agent_core, :subagent, :end]
+| Event | Fires when | Key metadata |
+|---|---|---|
+| `[:lemon_skills, :skill, :load]` | `read_skill` returns a skill or a not-found result | `result` (`ok` \| `not_found`), `key`, `name`, `source`, `path`, `view`, `section`, `file_path`, `tool_call_id`, `run_id`, `session_key`, `session_id`, `agent_id`, `cwd` |
+| `[:lemon_skills, :skill, :write]` | `skill_manage` accepts or rejects a write | `result`, `action` (`create` \| `edit` \| `patch` \| `delete` \| `write_file` \| `remove_file`), `name`, `scope`, `path`, `audit_status`, `replacements`, `reason`, plus correlation fields |
+| `[:lemon_skills, :skill, :prompt_render]` | prompt composition renders a skills block | `surface` (`available` \| `relevant`), `skill_count`, `skill_keys`, `active_count`, `not_ready_count`, `missing_count`, plus correlation fields |
 
-Emitted when a subagent completes.
+`LemonSkills.Application` attaches an introspection bridge at boot that projects these three
+into persisted `:skill_load_observed`, `:skill_write_observed`, and
+`:skill_prompt_render_observed` records, and updates `LemonSkills.Usage` counters.
 
-| Field | Type | Description |
-|-------|------|-------------|
-| **Measurements** | | |
-| `duration` | integer | Total execution time |
-| **Metadata** | | |
-| `subagent_id` | term | Subagent identifier |
-| `reason` | atom | Completion reason |
+### Hosted sim rooms — `[:lemon_sim_ui, :hosted_werewolf, ...]`
 
-### Agent Events
+Emitted through `LemonSimUi.HostedGame.emit/3`
+([`hosted_game.ex:771`](../apps/lemon_sim_ui/lib/lemon_sim_ui/hosted_game.ex)), all with
+`count: 1` and a `room_id`. Runtime suffix values: `:seat_claimed`, `:player_connected`,
+`:player_disconnected`, `:command_accepted`, `:command_rejected`, `:turn_timeout`,
+`:game_started`, `:game_stopped`, `:game_completed`, `:ai_error`, `:room_failed`,
+`:persistence_error`. The `hosted_werewolf` segment is historical; the module now backs all
+hosted room types.
 
-#### [:agent_core, :agent, :loop_error]
+## Attaching a consumer
 
-Emitted when the agent loop encounters an error.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| **Measurements** | | |
-| `system_time` | integer | Error time |
-| **Metadata** | | |
-| `error` | term | Error details |
-
-## CodingAgent Events
-
-### Session Events
-
-#### [:coding_agent, :session, :event_stream, :broadcast]
-
-Emitted when events are broadcast to subscribers.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| **Measurements** | | |
-| `subscriber_count` | integer | Total subscribers |
-| `direct_count` | integer | Direct (legacy) subscribers |
-| `stream_count` | integer | Stream subscribers |
-| **Metadata** | | |
-| `session_id` | string | Session identifier |
-
-#### [:coding_agent, :session, :error]
-
-Emitted when a session encounters an error.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| **Measurements** | | |
-| `system_time` | integer | Error time |
-| **Metadata** | | |
-| `session_id` | string | Session identifier |
-| `error` | term | Error details |
-
-## AI Provider Events
-
-### Dispatcher Events
-
-#### [:ai, :dispatcher, :queue_depth]
-
-Emitted to track dispatcher queue depth.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| **Measurements** | | |
-| `depth` | integer | Current queue depth |
-| **Metadata** | | |
-| `provider` | atom | Provider name |
-
-#### [:ai, :dispatcher, :rejected]
-
-Emitted when a request is rejected (rate limit or circuit open).
-
-| Field | Type | Description |
-|-------|------|-------------|
-| **Measurements** | | |
-| `system_time` | integer | Rejection time |
-| **Metadata** | | |
-| `provider` | atom | Provider name |
-| `reason` | atom | `:rate_limited` \| `:circuit_open` |
-
-#### [:ai, :dispatcher, :retry]
-
-Emitted when a request is being retried.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| **Measurements** | | |
-| `attempt` | integer | Current attempt number |
-| `delay` | integer | Delay before retry (ms) |
-| **Metadata** | | |
-| `provider` | atom | Provider name |
-| `error_type` | atom | Type of error that caused retry |
-
-### Stream Events
-
-#### [:ai, :stream, :error]
-
-Emitted when a streaming error occurs.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| **Measurements** | | |
-| `system_time` | integer | Error time |
-| **Metadata** | | |
-| `provider` | atom | Provider that failed |
-| `error` | term | Error details |
-
-## Example: Monitoring Dashboard
+This is the whole integration surface. Handlers run **synchronously in the emitting
+process**, so they must be fast and must not raise — a raising handler is detached by
+`:telemetry` and stops receiving events.
 
 ```elixir
-defmodule MyApp.TelemetryHandler do
+defmodule MyApp.TelemetryLogger do
+  @moduledoc "Logs the saturation and failure signals worth paging on."
+
   require Logger
 
-  def setup do
-    events = [
-      [:agent_core, :loop, :start],
-      [:agent_core, :loop, :end],
-      [:agent_core, :tool_task, :start],
-      [:agent_core, :tool_task, :end],
-      [:agent_core, :tool_result, :emit],
-      [:agent_core, :tool_task, :error],
-      [:agent_core, :context, :warning],
-      [:coding_agent, :session, :event_stream, :broadcast],
-      [:ai, :dispatcher, :rejected]
-    ]
+  @events [
+    [:lemon, :channels, :outbox, :rejected],
+    [:lemon, :gateway, :scheduler, :slot_queued],
+    [:ai, :dispatcher, :rejected],
+    [:ai, :circuit_breaker, :opened],
+    [:agent_core, :tool_task, :error],
+    [:agent_core, :context, :warning],
+    [:lemon, :memory, :ingest, :failure]
+  ]
 
-    :telemetry.attach_many("my-app-handler", events, &handle_event/4, nil)
-  end
-
-  def handle_event([:agent_core, :loop, :start], _measurements, metadata, _config) do
-    Logger.info("Loop started: #{inspect(metadata.loop_type)}")
-  end
-
-  def handle_event([:agent_core, :loop, :end], measurements, metadata, _config) do
-    duration_ms = System.convert_time_unit(measurements.duration, :native, :millisecond)
-    Logger.info("Loop completed in #{duration_ms}ms: #{inspect(metadata.reason)}")
-  end
-
-  def handle_event([:agent_core, :tool_task, :end], measurements, metadata, _config) do
-    duration_ms = System.convert_time_unit(measurements.duration, :native, :millisecond)
-    Logger.info("Tool #{metadata.tool_name} completed in #{duration_ms}ms")
-  end
-
-  def handle_event([:agent_core, :tool_task, :error], _measurements, metadata, _config) do
-    Logger.error("Tool #{metadata.tool_name} failed: #{inspect(metadata.reason)}")
-  end
-
-  def handle_event([:agent_core, :tool_result, :emit], _measurements, metadata, _config) do
-    Logger.info(
-      "Tool result #{metadata.tool_name} emitted " <>
-        "(trust=#{metadata.trust}, error=#{metadata.is_error})"
+  def attach do
+    :telemetry.attach_many(
+      "my-app-telemetry-logger",
+      @events,
+      &__MODULE__.handle_event/4,
+      %{}
     )
   end
 
-  def handle_event([:agent_core, :context, :warning], measurements, metadata, _config) do
+  def handle_event([:lemon, :channels, :outbox, :rejected], m, meta, _config) do
     Logger.warning(
-      "Context #{metadata.level}: #{measurements.char_count} chars " <>
-      "(threshold: #{measurements.threshold})"
+      "outbox rejected channel=#{meta.channel_id} reason=#{meta.reason} " <>
+        "depth=#{m.queue_depth}/#{m.max_queue_size}"
     )
   end
 
-  def handle_event([:ai, :dispatcher, :rejected], _measurements, metadata, _config) do
-    Logger.warning("Request rejected: #{metadata.provider} - #{metadata.reason}")
+  def handle_event([:lemon, :gateway, :scheduler, :slot_queued], m, _meta, _config) do
+    Logger.warning("engine slots saturated in_flight=#{m.in_flight}/#{m.max} waitq=#{m.waitq}")
   end
 
-  def handle_event(event, measurements, metadata, _config) do
-    Logger.debug("Telemetry: #{inspect(event)} #{inspect(measurements)} #{inspect(metadata)}")
+  def handle_event([:ai, :dispatcher, :rejected], _m, meta, _config) do
+    Logger.warning("provider rejected provider=#{meta.provider} reason=#{meta.reason}")
+  end
+
+  def handle_event([:ai, :circuit_breaker, :opened], _m, meta, _config) do
+    Logger.error(
+      "circuit opened provider=#{meta.provider} " <>
+        "failures=#{meta.failure_count}/#{meta.failure_threshold}"
+    )
+  end
+
+  def handle_event([:agent_core, :tool_task, :error], _m, meta, _config) do
+    Logger.error("tool failed tool=#{meta.tool_name} reason=#{inspect(meta.reason)}")
+  end
+
+  def handle_event([:agent_core, :context, :warning], m, meta, _config) do
+    Logger.warning("context #{meta.level}: #{m.char_count} chars (threshold #{m.threshold})")
+  end
+
+  def handle_event([:lemon, :memory, :ingest, :failure], m, meta, _config) do
+    Logger.error("memory ingest failed run=#{meta.run_id} after #{m.duration_us}us: #{meta.error}")
   end
 end
 ```
 
-## Using with :telemetry_poller
+Call `MyApp.TelemetryLogger.attach()` once at application start, after `:telemetry` is
+running.
 
-The `AgentCore.TelemetryPoller` emits periodic VM stats:
+### Verifying an attachment without a full runtime
 
-```elixir
-# These are emitted every 10 seconds by default:
-# - [:vm, :memory]
-# - [:vm, :total_run_queue_lengths]
-# - [:vm, :system_counts]
-```
-
-To customize:
+`mix run --no-start` does not start the `:telemetry` application, so `attach_many/4` will
+exit with `no process`. Start it explicitly and drive a real emit path:
 
 ```elixir
-# In your application config
-config :telemetry_poller, :default,
-  period: :timer.seconds(30),
-  measurements: [
-    {MyApp.Metrics, :dispatch_metrics, []}
-  ]
+{:ok, _} = Application.ensure_all_started(:telemetry)
+
+:telemetry.attach_many(
+  "probe",
+  [[:agent_core, :context, :size], [:agent_core, :context, :warning]],
+  fn event, measurements, metadata, _ ->
+    IO.inspect({event, measurements, metadata})
+  end,
+  %{}
+)
+
+messages = [%{role: :user, content: "hello world"}, %{role: :assistant, content: "hi"}]
+AgentCore.Context.estimate_size(messages, "you are a test")
+AgentCore.Context.check_size(messages, nil, warning_threshold: 1, critical_threshold: 2, log: false)
 ```
 
-## Performance Considerations
+Running that under `mix run --no-start` produces:
 
-- Telemetry handlers run synchronously - keep them fast
-- Use `:telemetry.span/3` for automatic start/end events
-- Consider sampling high-frequency events in production
-- Use `:telemetry_metrics` for aggregation
+```
+{[:agent_core, :context, :size], %{char_count: 27, message_count: 2}, %{has_system_prompt: true}}
+{[:agent_core, :context, :size], %{char_count: 13, message_count: 2}, %{has_system_prompt: false}}
+{[:agent_core, :context, :warning], %{threshold: 2, char_count: 13}, %{level: :critical}}
+```
 
----
+`AgentCore.Context` is a good probe target because it emits from a pure function with no
+supervision tree, no store, and no network.
 
-## Agent Introspection
+## Known gaps and inconsistencies
 
-Agent introspection is a higher-level persistence layer built on top of `:telemetry`. It captures a canonical event envelope for every meaningful agent lifecycle transition and persists it to `LemonCore.Store` for later query by operators.
+These are recorded, not fixed. Renaming events is a breaking change for any attached
+consumer and belongs in its own change.
 
-### What Introspection Events Are
+**Events that exist as code but never fire.** `LemonCore.Telemetry` exports
+`run_start/2`, `run_first_token/2`, `run_stop/3`, `run_exception/3`, and `cron_tick/1`
+([`telemetry.ex`](../apps/lemon_core/lib/lemon_core/telemetry.ex)). All five have **zero
+call sites** in the tree, so `[:lemon, :run, :start]`, `[:lemon, :run, :first_token]`,
+`[:lemon, :run, :stop]`, `[:lemon, :run, :exception]`, and `[:lemon, :cron, :tick]` are
+never emitted. `CodingAgent.RateLimitRecovery.emit_recovery_telemetry/3`
+([`rate_limit_recovery.ex:217`](../apps/coding_agent/lib/coding_agent/rate_limit_recovery.ex))
+is likewise public with no callers, so `[:coding_agent, :rate_limit_recovery, _]` never
+fires. This is why there is no end-to-end run span.
 
-Introspection events are structured records that capture agent execution context at key moments: when a run starts or ends, when a session is created, when a tool executes, when a subprocess (subagent) is spawned, and similar lifecycle transitions. Unlike raw telemetry (which is fire-and-forget), introspection events are **persisted** and **queryable**.
+**Events named only in documentation.** The `LemonCore.Telemetry` moduledoc lists
+`[:lemon, :cron, :run, :start]` and `[:lemon, :cron, :run, :stop]`; neither has a helper or
+an emitter anywhere.
 
-Events are retained for 7 days by default and can be queried with filters for run ID, session key, agent ID, event type, and time range.
+**Two events share a leaf name with different metadata keys.**
+`[:agent_core, :tool_call, :name_normalized]` uses `original_name` / `matched_tool_name`,
+while `[:coding_agent, :tool_call, :name_normalized]` uses `original` / `normalized`. A
+handler written for one will raise a `KeyError` on the other.
 
-### Event Schema
+**Eight families build their final segment at runtime**, so they cannot be discovered by
+searching for a literal event name, and `attach_many/4` requires knowing every value in
+advance: `[:lemon, :gateway, :scheduler, _]`, `[:ai, :compacting_client, _]`,
+`[:ai, :context_compactor, _]`, `[:coding_agent, :rate_limit_pause, _]`,
+`[:coding_agent, :rate_limit_healer, _]`, `[:coding_agent, :rate_limit_recovery, _]`,
+`[:coding_agent, :session_fork, _]`, `[:coding_agent, :session, :overflow_recovery, _]`, and
+`[:lemon_sim_ui, :hosted_werewolf, _]`. The known values are listed in the catalog above.
 
-Every introspection event has the following fields:
+**Measurement gaps.** `[:coding_agent, :tool_call, :name_normalized]` and
+`[:coding_agent, :session_fork, _]` emit an empty measurement map, so they cannot drive a
+counter without a synthetic measurement. `[:agent_core, :loop, :end]` reports
+`duration: nil` when the process-dictionary start time is missing. The scheduler family
+emits empty metadata, so slot pressure cannot be attributed to a run, session, or engine.
+
+**Coverage gaps.** `[:agent_core, :subagent, :end]` fires only on explicit stop, so a
+crashed subagent produces a `:spawn` with no matching `:end`. There is no telemetry on the
+store, the Bus, or the router's session-coordinator queue transitions.
+
+**Previously documented events that do not exist.** An earlier revision of this file
+described ten events that were never in the code: `[:agent_core, :loop, :exception]`,
+`[:agent_core, :loop, :task_start_failed]`, `[:agent_core, :event_stream, :queue_depth]`,
+`[:agent_core, :event_stream, :dropped]`, `[:agent_core, :agent, :loop_error]`,
+`[:coding_agent, :session, :event_stream, :broadcast]`, `[:coding_agent, :session, :error]`,
+`[:ai, :dispatcher, :queue_depth]`, `[:ai, :dispatcher, :retry]`, and
+`[:ai, :stream, :error]`. It also described an `AgentCore.TelemetryPoller` emitting periodic
+`[:vm, _]` stats; no such module exists and `telemetry_poller` is not a dependency. They are
+listed here so they are not reintroduced from memory. The same revision documented
+`loop_type` / `reason` metadata on the agent loop events and `duration` measurements on the
+tool-task events; the real shapes are in the catalog above.
+
+## Introspection: the persisted layer
+
+Introspection is a higher-level layer built beside `:telemetry`, not on top of it. It
+captures a canonical envelope for agent lifecycle transitions and persists it through
+`LemonCore.Store` for later query. Unlike telemetry, these records are **stored** and
+**queryable**.
+
+### Envelope
 
 | Field | Type | Description |
-|-------|------|-------------|
-| `event_id` | `string` | Stable unique identifier (prefixed `evt_`) |
-| `event_type` | `atom` or `string` | Event taxonomy name (see taxonomy below) |
-| `ts_ms` | `integer` | Wall-clock timestamp in milliseconds since Unix epoch |
-| `run_id` | `string` or `nil` | Run identifier |
-| `session_key` | `string` or `nil` | Session identifier |
-| `agent_id` | `string` or `nil` | Agent identifier |
-| `parent_run_id` | `string` or `nil` | Lineage link to parent run when available |
-| `engine` | `string` or `nil` | Engine name (e.g. `"claude"`, `"codex"`, `"lemon"`) |
-| `provenance` | `:direct` or `:inferred` or `:unavailable` | How the context fields were resolved |
-| `payload` | `map` | Event-specific metadata, redacted of secrets |
+|---|---|---|
+| `event_id` | string | Stable unique identifier (prefixed `evt_`) |
+| `event_type` | atom or string | Taxonomy name (below) |
+| `ts_ms` | integer | Wall-clock milliseconds since the Unix epoch |
+| `run_id` | string or nil | Run identifier |
+| `session_key` | string or nil | Session identifier |
+| `agent_id` | string or nil | Agent identifier |
+| `parent_run_id` | string or nil | Lineage link when available |
+| `engine` | string or nil | Engine name, e.g. `"claude"`, `"codex"`, `"lemon"` |
+| `provenance` | `:direct` \| `:inferred` \| `:unavailable` | How context fields were resolved |
+| `payload` | map | Event-specific metadata, redacted |
 
-#### Provenance Values
+`:direct` means the emitter supplied the context fields; `:inferred` means they were derived
+from surrounding state; `:unavailable` means they could not be determined.
 
-- `:direct` — context fields (run_id, session_key, etc.) were provided directly by the emitting code.
-- `:inferred` — context fields were derived from surrounding state (e.g. process dictionary or ETS).
-- `:unavailable` — context could not be determined at emit time.
+### Redaction
 
-#### Redaction Defaults
+`api_key`, `apikey`, `authorization`, `password`, `private_key`, `prompt`, `response`,
+`secret`, `secrets`, `stderr`, `stdout`, and `token` are always removed. Tool argument
+fields (`arguments`, `input`, `tool_arguments`) are redacted unless
+`capture_tool_args: true` is passed. Result previews are kept and truncated to 256 bytes
+unless `capture_result_preview: false` is passed. All other string values are truncated to
+4096 bytes. See [`introspection.ex`](../apps/lemon_core/lib/lemon_core/introspection.ex).
 
-The following payload fields are always removed before persistence:
+### Taxonomy
 
-- `api_key`, `apikey`, `authorization`, `password`, `private_key`
-- `prompt`, `response`, `secret`, `secrets`, `stderr`, `stdout`, `token`
+Every atom below appears in a live `LemonCore.Introspection.record/3` call.
 
-Tool argument fields (`arguments`, `input`, `tool_arguments`) are redacted by default. Pass `capture_tool_args: true` to `LemonCore.Introspection.record/3` to retain them.
+| Emitter | Event types |
+|---|---|
+| `LemonRouter.RunProcess` | `:run_started`, `:run_completed`, `:run_failed` |
+| `LemonRouter.RunOrchestrator` | `:orchestration_started`, `:orchestration_resolved`, `:orchestration_failed` |
+| Router answer finalization | `:answer_finalize_started`, `:answer_finalize_dispatch`, `:answer_finalize_completed`, `:answer_artifact_finalize_failed`, `:answer_media_jobs_record_failed` |
+| `LemonGateway.ThreadWorker` | `:thread_started`, `:thread_message_dispatched`, `:thread_terminated` |
+| `LemonGateway.Scheduler` | `:scheduled_job_triggered`, `:scheduled_job_completed` |
+| `CodingAgent.Session` | `:session_started`, `:session_ended`, `:compaction_triggered` |
+| `CodingAgent.Session.EventHandler` | `:tool_call_dispatched`, `:engine_event_ignored` |
+| `AgentCore.Agent` | `:agent_loop_started`, `:agent_turn_observed` (inferred), `:agent_loop_ended`, `:agent_progress_snapshot` |
+| `AgentCore.CliRunners.JsonlRunner` | `:jsonl_stream_started`, `:tool_use_observed` (inferred), `:assistant_turn_observed` (inferred), `:jsonl_stream_ended` |
+| CLI runner engines (codex, claude, kimi, opencode, pi) | `:engine_subprocess_started`, `:engine_output_observed`, `:engine_subprocess_exited` — all inferred |
+| Skills bridge / session-end audit | `:skill_load_observed`, `:skill_write_observed`, `:skill_prompt_render_observed`, `:missed_skill_observed`, `:missed_learning_observed` |
 
-Result preview fields (`preview`, `result_preview`) are kept by default and truncated to 256 bytes. Pass `capture_result_preview: false` to suppress them.
-
-All other string values are truncated to 4096 bytes.
-
-### Event Taxonomy
-
-Events are organized into three categories:
-
-#### Run Lifecycle
-
-| Event Type | When Emitted |
-|-----------|--------------|
-| `run_started` | A run is accepted and begins processing |
-| `run_completed` | A run finishes successfully |
-| `run_aborted` | A run is aborted (user request or error) |
-| `run_queued` | A run enters the queue awaiting a slot |
-| `run_followup` | A follow-up run is submitted to an active session |
-
-#### Session Lifecycle
-
-| Event Type | When Emitted |
-|-----------|--------------|
-| `session_created` | A new session is established |
-| `session_expired` | A session is cleaned up after TTL expiry |
-| `session_policy_applied` | A policy is applied to a session |
-
-#### Engine / Subprocess Events
-
-| Event Type | When Emitted |
-|-----------|--------------|
-| `tool_started` | A tool begins execution within an agent loop |
-| `tool_completed` | A tool finishes (success or error result) |
-| `subagent_spawned` | A subprocess agent is spawned |
-| `subagent_completed` | A subprocess agent finishes |
-| `engine_loop_started` | An engine's main agent loop iteration begins |
-| `engine_loop_completed` | An engine's main agent loop iteration ends |
-
-### Querying via IEx
-
-Start an IEx session against a running node (or directly with `iex -S mix`) and use `LemonCore.Introspection.list/1`:
+### Querying
 
 ```elixir
-# All recent events (default limit: 100)
 LemonCore.Introspection.list([])
-
-# Filter by run ID
 LemonCore.Introspection.list(run_id: "run_abc123", limit: 50)
-
-# Filter by session key
 LemonCore.Introspection.list(session_key: "agent:default:main", limit: 20)
+LemonCore.Introspection.list(event_type: :run_completed, limit: 30)
 
-# Filter by event type
-LemonCore.Introspection.list(event_type: :tool_completed, limit: 30)
-
-# Filter by agent
-LemonCore.Introspection.list(agent_id: "my_agent", limit: 50)
-
-# Time range (ms since Unix epoch)
 now_ms = System.system_time(:millisecond)
-one_hour_ago = now_ms - 60 * 60 * 1000
-LemonCore.Introspection.list(since_ms: one_hour_ago, limit: 200)
-
-# Combine filters
-LemonCore.Introspection.list(
-  run_id: "run_abc123",
-  event_type: :tool_completed,
-  limit: 10
-)
+LemonCore.Introspection.list(since_ms: now_ms - 60 * 60 * 1000, limit: 200)
 ```
 
-Results are returned newest-first as a list of maps. Each map has the fields described in the schema table above.
-
-### Querying via the Mix Task
-
-The `mix lemon.introspection` task provides a human-readable table view for operators:
+Results are newest-first. The same filters are available from the shell through
+[`mix lemon.introspection`](../apps/lemon_core/lib/mix/tasks/lemon.introspection.ex), which
+prints a table of timestamp, event type, run ID, session key, agent ID, engine, and
+provenance:
 
 ```bash
-# Show the 20 most recent events (default)
-mix lemon.introspection
-
-# Increase limit
 mix lemon.introspection --limit 100
-
-# Filter by run ID
-mix lemon.introspection --run-id run_abc123
-
-# Filter by session key
-mix lemon.introspection --session-key "agent:default:main"
-
-# Filter by event type
-mix lemon.introspection --event-type tool_completed
-
-# Filter by agent
-mix lemon.introspection --agent-id my_agent
-
-# Relative time window (events in the last hour)
+mix lemon.introspection --run-id run_abc123 --event-type run_completed
 mix lemon.introspection --since 1h
-
-# Relative time window (last 30 minutes)
-mix lemon.introspection --since 30m
-
-# Absolute time window (ISO 8601)
-mix lemon.introspection --since 2026-02-23T00:00:00Z
-
-# Combine filters
-mix lemon.introspection --run-id run_abc123 --event-type tool_completed --limit 50
+mix lemon.introspection --since 2026-08-01T00:00:00Z
 ```
 
-The task outputs a table with columns: `Timestamp`, `Event Type`, `Run ID`, `Session Key`, `Agent ID`, `Engine`, `Provenance`. Long identifiers are truncated with a `~` suffix.
-
-### Emitting Introspection Events
-
-Use `LemonCore.Introspection.record/3` to persist an event from any application in the umbrella:
+### Recording, disabling, retention
 
 ```elixir
-# Basic usage
-LemonCore.Introspection.record(:run_started, %{origin: "telegram"}, run_id: run_id, session_key: session_key)
-
-# With engine and agent context
-LemonCore.Introspection.record(
-  :tool_completed,
-  %{tool_name: "exec", result_preview: "ok"},
+LemonCore.Introspection.record(:run_started, %{origin: "telegram"},
   run_id: run_id,
-  session_key: session_key,
-  agent_id: "default",
-  engine: "codex"
-)
-
-# With custom provenance
-LemonCore.Introspection.record(
-  :run_aborted,
-  %{reason: "user_requested"},
-  run_id: run_id,
-  session_key: session_key,
-  provenance: :inferred
+  session_key: session_key
 )
 ```
 
-### Disabling Introspection
+Set `config :lemon_core, :introspection, enabled: false` to drop events silently;
+`LemonCore.Introspection.enabled?/0` reflects the setting. The store sweeps
+`:introspection_log` periodically, pruning records older than 7 days by default.
 
-To disable persistence of introspection events (events are silently dropped), add to your config:
+## Related
 
-```elixir
-# config/config.exs or config/prod.exs
-config :lemon_core, :introspection, enabled: false
-```
-
-When disabled, `LemonCore.Introspection.record/3` returns `:ok` immediately without touching the store. The `LemonCore.Introspection.enabled?/0` function reflects the current setting.
-
-### Retention
-
-The store applies a periodic retention sweep to the `:introspection_log` table. By default, events older than **7 days** are pruned. This sweep runs at the same interval as the chat-state sweep (every 5 minutes).
+- [beam_agents.md](beam_agents.md) — supervision trees and the process-level invariants these
+  events observe
+- [why-beam-for-agents.md](why-beam-for-agents.md) — why the runtime makes this kind of
+  per-process observability cheap
