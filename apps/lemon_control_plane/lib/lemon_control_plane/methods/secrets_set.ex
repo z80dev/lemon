@@ -80,6 +80,10 @@ defmodule LemonControlPlane.Methods.SecretsSet do
 
   defp format_error(:missing_master_key), do: "master key is not configured"
   defp format_error(:invalid_master_key), do: "configured master key is invalid"
+
+  defp format_error(:weak_master_key),
+    do: "configured master key is not base64-encoded 32-byte key material"
+
   defp format_error(:invalid_secret_name), do: "secret name is invalid"
   defp format_error(:invalid_secret_value), do: "secret value is invalid"
   defp format_error(_), do: "failed to store secret"

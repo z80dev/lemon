@@ -23,8 +23,18 @@ defmodule LemonCore.Doctor.Checks.Secrets do
         Check.fail(
           "secrets.master_key",
           "Encrypted secrets master key is not configured.",
-          "Run `mix lemon.secrets.init` to initialise the key in the system keychain,\n" <>
+          "Run `mix lemon.secrets.init` to provision the key (system keychain on macOS,\n" <>
+            "#{MasterKey.key_file() || "the configured key file"} elsewhere),\n" <>
             "or set #{MasterKey.env_var()} in your environment."
+        )
+
+      {:error, :weak_master_key} ->
+        Check.fail(
+          "secrets.master_key",
+          "Master key is not base64-encoded 32-byte key material.",
+          "Generate one with `mix lemon.secrets.init` or `openssl rand -base64 32`.\n" <>
+            "To keep an existing raw-string key, set\n" <>
+            "`config :lemon_core, LemonCore.Secrets, allow_legacy_raw_keys: true`."
         )
 
       {:error, reason} ->

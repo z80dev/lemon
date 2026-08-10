@@ -3,6 +3,35 @@ defmodule LemonCore.Secrets do
   Encrypted secrets storage backed by `LemonCore.Store`.
 
   Secret values are encrypted at rest and never returned by list/status APIs.
+
+  ## Master key
+
+  Values are encrypted with AES-256-GCM under a per-secret key derived from the
+  master key (`LemonCore.Secrets.Crypto`). Where that master key comes from —
+  system keychain, environment variable, key file, or a provider you supply —
+  is configurable; see `LemonCore.Secrets.KeyProvider`.
+
+      config :lemon_core, LemonCore.Secrets,
+        key_providers: [:keychain, :env, :file],
+        key_file: "~/.lemon/secrets_master_key",
+        env_var: "LEMON_SECRETS_MASTER_KEY"
+
+  ## Key rotation
+
+  Rotation is **not supported yet**: there is no re-encryption path, so
+  replacing the master key makes every stored secret undecryptable. Tracked as
+  item 1.5 in `docs/platform-split.md`.
+
+  The workaround is export/import — with the *old* key still in place, read the
+  plaintext values out, swap the key, then write them back:
+
+      {:ok, entries} = LemonCore.Secrets.list()
+      exported = Map.new(entries, &{&1.name, elem(LemonCore.Secrets.get(&1.name), 1)})
+      # rotate the key (e.g. mix lemon.secrets.init --force), then:
+      Enum.each(exported, fn {name, value} -> LemonCore.Secrets.set(name, value) end)
+
+  Keep the exported values in memory (or a `0600` file you delete afterwards),
+  never in shell history or logs.
   """
 
   alias LemonCore.Clock
@@ -243,7 +272,10 @@ defmodule LemonCore.Secrets do
       source: key_status.source,
       keychain_available: key_status.keychain_available,
       env_fallback: key_status.env_fallback,
+      file_fallback: key_status.file_fallback,
       keychain_error: key_status.keychain_error,
+      providers: key_status.providers,
+      key_file: key_status.key_file,
       owner: owner_from_opts(opts),
       count: length(entries)
     }

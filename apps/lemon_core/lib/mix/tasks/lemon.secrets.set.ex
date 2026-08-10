@@ -39,6 +39,12 @@ defmodule Mix.Tasks.Lemon.Secrets.Set do
           "Missing secrets master key. Run mix lemon.secrets.init or set LEMON_SECRETS_MASTER_KEY."
         )
 
+      {:error, :weak_master_key} ->
+        Mix.raise(
+          "Secrets master key is not base64-encoded 32-byte key material. " <>
+            "Generate one with mix lemon.secrets.init or openssl rand -base64 32."
+        )
+
       {:error, {:keychain_failed, reason}} ->
         Mix.raise(
           "Failed to read secrets master key from keychain: #{inspect(reason)}. " <>

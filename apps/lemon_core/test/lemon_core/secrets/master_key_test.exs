@@ -159,6 +159,210 @@ defmodule LemonCore.Secrets.MasterKeyTest do
     assert stored != ""
   end
 
+  describe "provider order" do
+    setup do
+      home =
+        Path.join(
+          System.tmp_dir!(),
+          "lemon-master-key-order-#{System.unique_integer([:positive])}"
+        )
+
+      key_path = Path.join([home, ".lemon", "secrets_master_key"])
+      File.mkdir_p!(Path.dirname(key_path))
+      File.write!(key_path, Base.encode64(:binary.copy(<<9>>, 32)))
+      on_exit(fn -> File.rm_rf!(home) end)
+
+      env_getter = fn
+        "LEMON_SECRETS_MASTER_KEY" -> Base.encode64(:binary.copy(<<10>>, 32))
+        "HOME" -> home
+      end
+
+      {:ok, home: home, env_getter: env_getter}
+    end
+
+    test "defaults to env before file", %{env_getter: env_getter} do
+      assert {:ok, key, :env} =
+               MasterKey.resolve(keychain_module: KeychainUnavailable, env_getter: env_getter)
+
+      assert key == :binary.copy(<<10>>, 32)
+    end
+
+    test "honours a caller-supplied order", %{env_getter: env_getter} do
+      assert {:ok, key, :file} =
+               MasterKey.resolve(
+                 key_providers: [:file, :env],
+                 keychain_module: KeychainUnavailable,
+                 env_getter: env_getter
+               )
+
+      assert key == :binary.copy(<<9>>, 32)
+    end
+
+    test "an order without the keychain never consults it", %{env_getter: env_getter} do
+      status =
+        MasterKey.status(
+          key_providers: [:env],
+          keychain_module: KeychainDenied,
+          env_getter: env_getter
+        )
+
+      assert status.providers == [:env]
+      assert status.source == :env
+      assert status.keychain_available == false
+      assert status.keychain_error == nil
+    end
+
+    test "accepts provider modules directly", %{env_getter: env_getter} do
+      assert {:ok, key, :env} =
+               MasterKey.resolve(
+                 key_providers: [LemonCore.Secrets.KeyProvider.Env],
+                 env_getter: env_getter
+               )
+
+      assert key == :binary.copy(<<10>>, 32)
+    end
+  end
+
+  describe "key file location" do
+    test "reads the configured key file instead of the default path" do
+      dir = Path.join(System.tmp_dir!(), "lemon-key-file-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(dir)
+      path = Path.join(dir, "master.key")
+      File.write!(path, Base.encode64(:binary.copy(<<11>>, 32)))
+      on_exit(fn -> File.rm_rf!(dir) end)
+
+      env_getter = fn _ -> nil end
+
+      assert {:ok, key, :file} =
+               MasterKey.resolve(
+                 key_file: path,
+                 keychain_module: KeychainUnavailable,
+                 env_getter: env_getter
+               )
+
+      assert key == :binary.copy(<<11>>, 32)
+    end
+  end
+
+  describe "weak keys" do
+    test "rejects raw string keys" do
+      env_getter = fn
+        "LEMON_SECRETS_MASTER_KEY" -> "test-key-32-chars-exactly-here!!"
+        _ -> nil
+      end
+
+      assert {:error, :weak_master_key} =
+               MasterKey.resolve(keychain_module: KeychainUnavailable, env_getter: env_getter)
+    end
+
+    test "rejection stops the chain so a stale file key cannot mask it" do
+      home =
+        Path.join(System.tmp_dir!(), "lemon-weak-key-#{System.unique_integer([:positive])}")
+
+      key_path = Path.join([home, ".lemon", "secrets_master_key"])
+      File.mkdir_p!(Path.dirname(key_path))
+      File.write!(key_path, Base.encode64(:binary.copy(<<12>>, 32)))
+      on_exit(fn -> File.rm_rf!(home) end)
+
+      env_getter = fn
+        "LEMON_SECRETS_MASTER_KEY" -> "another-raw-passphrase-that-is-long-enough"
+        "HOME" -> home
+      end
+
+      assert {:error, :weak_master_key} =
+               MasterKey.resolve(keychain_module: KeychainUnavailable, env_getter: env_getter)
+    end
+
+    test "accepts raw string keys when legacy support is opted into" do
+      raw = "test-key-32-chars-exactly-here!!"
+
+      env_getter = fn
+        "LEMON_SECRETS_MASTER_KEY" -> raw
+        _ -> nil
+      end
+
+      assert {:ok, ^raw, :env} =
+               MasterKey.resolve(
+                 allow_legacy_raw_keys: true,
+                 keychain_module: KeychainUnavailable,
+                 env_getter: env_getter
+               )
+    end
+
+    test "still reports short keys as invalid" do
+      env_getter = fn
+        "LEMON_SECRETS_MASTER_KEY" -> "too-short"
+        _ -> nil
+      end
+
+      assert {:error, :invalid_master_key} =
+               MasterKey.resolve(keychain_module: KeychainUnavailable, env_getter: env_getter)
+    end
+  end
+
+  describe "init without a keychain" do
+    setup do
+      home = Path.join(System.tmp_dir!(), "lemon-init-file-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(home)
+      on_exit(fn -> File.rm_rf!(home) end)
+
+      {:ok, home: home, key_path: Path.join([home, ".lemon", "secrets_master_key"])}
+    end
+
+    test "writes the key file with 0600 permissions", %{home: home, key_path: key_path} do
+      assert {:ok, %{source: :file, configured: true, key_file: ^key_path}} =
+               MasterKey.init(keychain_module: KeychainUnavailable, home_dir: home)
+
+      assert {:ok, stat} = File.stat(key_path)
+      assert rem(stat.mode, 0o1000) == 0o600
+      assert {:ok, dir_stat} = File.stat(Path.dirname(key_path))
+      assert rem(dir_stat.mode, 0o1000) == 0o700
+
+      assert {:ok, decoded} = key_path |> File.read!() |> String.trim() |> Base.decode64()
+      assert byte_size(decoded) == 32
+
+      env_getter = fn
+        "LEMON_SECRETS_MASTER_KEY" -> nil
+        "HOME" -> home
+      end
+
+      assert {:ok, ^decoded, :file} =
+               MasterKey.resolve(keychain_module: KeychainUnavailable, env_getter: env_getter)
+    end
+
+    test "refuses to overwrite an existing key file", %{home: home, key_path: key_path} do
+      assert {:ok, _} = MasterKey.init(keychain_module: KeychainUnavailable, home_dir: home)
+      original = File.read!(key_path)
+
+      assert {:error, {:key_file_exists, ^key_path}} =
+               MasterKey.init(keychain_module: KeychainUnavailable, home_dir: home)
+
+      assert File.read!(key_path) == original
+
+      assert {:ok, %{source: :file}} =
+               MasterKey.init(keychain_module: KeychainUnavailable, home_dir: home, force: true)
+
+      refute File.read!(key_path) == original
+    end
+
+    test "target: :file skips an available keychain", %{home: home, key_path: key_path} do
+      assert {:ok, %{source: :file}} =
+               MasterKey.init(keychain_module: KeychainRecorder, home_dir: home, target: :file)
+
+      refute_receive {:stored_master_key, _}
+      assert File.exists?(key_path)
+    end
+
+    test "reports keychain_unavailable when no provider can store a key" do
+      assert {:error, :keychain_unavailable} =
+               MasterKey.init(
+                 keychain_module: KeychainUnavailable,
+                 env_getter: fn _ -> nil end,
+                 home_dir: nil
+               )
+    end
+  end
+
   test "status exposes keychain errors" do
     env_getter = fn _ -> nil end
     status = MasterKey.status(keychain_module: KeychainDenied, env_getter: env_getter)

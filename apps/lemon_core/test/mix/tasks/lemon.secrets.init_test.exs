@@ -79,37 +79,55 @@ defmodule Mix.Tasks.Lemon.Secrets.InitTest do
     end
   end
 
-  describe "run/1 error handling" do
-    test "raises Mix.Error when keychain is unavailable", %{mock_home: _mock_home} do
-      # When LEMON_SECRETS_MASTER_KEY is not set and keychain is unavailable,
-      # the task should raise with keychain_unavailable error
+  describe "run/1 provisioning" do
+    test "writes a 0600 key file when no keychain is available", %{mock_home: mock_home} do
       System.delete_env("LEMON_SECRETS_MASTER_KEY")
+      key_path = Path.join([mock_home, ".lemon", "secrets_master_key"])
 
-      # Capture any output and catch the error
-      error =
-        assert_raise Mix.Error, fn ->
-          capture_io(fn ->
-            Init.run([])
-          end)
-        end
+      output = capture_io(fn -> Init.run([]) end)
 
-      assert error.message =~ "Keychain is unavailable" or
-               error.message =~ "Failed to start" or
-               error.message =~ "Failed to initialize"
-    end
-
-    test "task handles empty args list" do
-      # Test that the task runs with empty args (will likely fail due to keychain)
-      System.delete_env("LEMON_SECRETS_MASTER_KEY")
-
-      # Should raise an error, but not crash with function clause
-      assert_raise Mix.Error, fn ->
-        capture_io(fn ->
-          Init.run([])
-        end)
+      if macos?() do
+        # The keychain is the provisioning target on macOS; nothing on disk.
+        assert output =~ "initialized in keychain"
+      else
+        assert output =~ key_path
+        assert {:ok, stat} = File.stat(key_path)
+        assert rem(stat.mode, 0o1000) == 0o600
+        assert {:ok, decoded} = key_path |> File.read!() |> String.trim() |> Base.decode64()
+        assert byte_size(decoded) == 32
       end
     end
+
+    test "--target file provisions the key file on any platform", %{mock_home: mock_home} do
+      System.delete_env("LEMON_SECRETS_MASTER_KEY")
+      key_path = Path.join([mock_home, ".lemon", "secrets_master_key"])
+
+      capture_io(fn -> Init.run(["--target", "file"]) end)
+
+      assert File.exists?(key_path)
+    end
+
+    test "refuses to clobber an existing key file", %{mock_home: mock_home} do
+      System.delete_env("LEMON_SECRETS_MASTER_KEY")
+      key_path = Path.join([mock_home, ".lemon", "secrets_master_key"])
+
+      capture_io(fn -> Init.run(["--target", "file"]) end)
+      original = File.read!(key_path)
+
+      error =
+        assert_raise Mix.Error, fn ->
+          capture_io(fn -> Init.run(["--target", "file"]) end)
+        end
+
+      assert error.message =~ "already exists"
+      assert File.read!(key_path) == original
+
+      capture_io(fn -> Init.run(["--target", "file", "--force"]) end)
+      refute File.read!(key_path) == original
+    end
   end
+
+  defp macos?, do: match?({:unix, :darwin}, :os.type())
 
   describe "Mix.Task integration" do
     test "task can be retrieved via Mix.Task.get" do

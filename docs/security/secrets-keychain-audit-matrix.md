@@ -33,15 +33,27 @@ This document captures the current, tested contract for Lemon secret resolution 
 3. `~/.lemon/secrets_master_key` (`:file` source)
 4. Error (`:missing_master_key`, `:invalid_master_key`, or `{:keychain_failed, reason}`)
 
+The chain itself is configurable — providers implement `LemonCore.Secrets.KeyProvider`:
+
+```elixir
+config :lemon_core, LemonCore.Secrets,
+  key_providers: [:keychain, :env, :file],
+  key_file: "~/.lemon/secrets_master_key",
+  env_var: "LEMON_SECRETS_MASTER_KEY"
+```
+
 Additional nuance:
 
+- The keychain provider is macOS-only and skips itself on other platforms, so a Linux host with no key configured reports `:missing_master_key` rather than a keychain failure.
 - If keychain returns malformed key material, env fallback is attempted first; only then returns `:invalid_master_key`.
+- Key material must be base64-encoded 32-byte data. Raw passphrase-like strings are rejected with `:weak_master_key` (there is no password stretching); `allow_legacy_raw_keys: true` restores the old behaviour for setups that already encrypted secrets under such a value.
+- Key rotation (re-encryption under a new master key) is not implemented — see the "Key rotation" section of the `LemonCore.Secrets` moduledoc and item 1.5 in `docs/platform-split.md`.
 - `status/1` suppresses expected keychain absence (`:missing`, `:keychain_unavailable`) from `keychain_error` while still surfacing hard failures.
 - The local source launcher `bin/lemon` also normalizes `LEMON_SECRETS_MASTER_KEY` from `~/.lemon/secrets_master_key` on non-macOS systems so stale desktop/session env does not override the working local key by accident.
 
 ## Operator Notes
 
-- `mix lemon.secrets.init` is the preferred bootstrap path on macOS (stores generated key in keychain).
+- `mix lemon.secrets.init` is the preferred bootstrap path everywhere: it stores the generated key in the keychain on macOS and writes the key file (`0600`) on other platforms. It refuses to overwrite an existing key file unless `--force` is passed.
 - For local non-macOS development, keep `~/.lemon/secrets_master_key` as the canonical master key file. `bin/lemon` will export that value into `LEMON_SECRETS_MASTER_KEY` before boot when the file exists.
 - `secrets.list` and `secrets.status` return metadata only (never plaintext secret values).
 - If keychain prompts are denied (`User interaction is not allowed`), Lemon can still operate via env fallback when configured.

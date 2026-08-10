@@ -73,7 +73,7 @@ HOME="$(mktemp -d)/home" \
 MIX_HOME="$(mktemp -d)/mix_home" \
 HEX_HOME="$(mktemp -d)/hex_home" \
 LEMON_STORE_PATH="$(mktemp -d)/store" \
-LEMON_SECRETS_MASTER_KEY="test-key-32-chars-exactly-here!!" \
+LEMON_SECRETS_MASTER_KEY="$(openssl rand -base64 32)" \
 mix lemon.setup --non-interactive --config-path /tmp/lemon-setup-proof/config.toml
 ```
 

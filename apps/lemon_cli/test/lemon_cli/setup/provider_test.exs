@@ -27,7 +27,7 @@ defmodule LemonCli.Setup.ProviderTest do
 
       # Ensure lemon_core secrets look configured so we reach the scaffold step.
       # We stub the status by temporarily setting the master key env var.
-      System.put_env("LEMON_SECRETS_MASTER_KEY", "test-key-32-chars-exactly-here!!")
+      System.put_env("LEMON_SECRETS_MASTER_KEY", Base.encode64(:binary.copy(<<1>>, 32)))
 
       try do
         result = Provider.run([], io)
