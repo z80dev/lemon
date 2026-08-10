@@ -601,7 +601,9 @@ defmodule LemonRouter.StreamCoalescer do
            },
            meta: Map.put(state.meta || %{}, :surface, :answer)
          }}
-      _ -> :error
+
+      _ ->
+        :error
     end
   end
 
@@ -635,10 +637,28 @@ defmodule LemonRouter.StreamCoalescer do
   end
 
   @max_full_text 100_000
+
+  # Trim on bytes rather than graphemes. `String.length/1` and `String.slice/3`
+  # both walk the binary one grapheme at a time, which cost milliseconds per
+  # delta once an answer crossed the cap. Worse, for multi-byte text
+  # `String.length(text) - keep` went negative, and `String.slice/3` reads a
+  # negative start as an offset from the end — so it returned the whole string
+  # and the cap never applied at all. The guard is byte-based, so bytes are the
+  # consistent unit. See docs/benchmarks/platform-microbenchmarks.md.
   defp cap_full_text(text) when is_binary(text) and byte_size(text) > @max_full_text do
-    keep = @max_full_text
-    String.slice(text, String.length(text) - keep, keep)
+    text
+    |> binary_part(byte_size(text) - @max_full_text, @max_full_text)
+    |> drop_partial_codepoint()
   end
 
   defp cap_full_text(text), do: text
+
+  # Cutting on a byte boundary can land inside a multi-byte codepoint, leaving
+  # an invalid binary that would fail JSON encoding on the way to a channel.
+  # UTF-8 continuation bytes are 0b10xxxxxx and a codepoint is at most four
+  # bytes, so at most three need dropping to reach a real boundary.
+  defp drop_partial_codepoint(<<byte, rest::binary>>) when byte in 0x80..0xBF,
+    do: drop_partial_codepoint(rest)
+
+  defp drop_partial_codepoint(text), do: text
 end

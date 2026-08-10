@@ -122,25 +122,28 @@ A dispatch carries the full text so far, not the increment, so "chars out"
 is deliberately not reported as a byte saving — the win is in the number of
 API calls, which is the column that matters.
 
-The 10,000-delta row is not a typo. See the next section.
+The 10,000-delta row used to read 5,004 ms at 1 dispatch per 13 deltas: past
+100k characters the answer trim walked the whole buffer per delta, and the
+resulting stalls pushed flushes onto the max_latency timer. See below.
 """)
 
 # ---------------------------------------------------------------------------
-# The 100k cap cliff
+# Why the answer trim is byte-based
 # ---------------------------------------------------------------------------
 #
 # `StreamCoalescer.cap_full_text/1` trims the accumulated answer to
-# `@max_full_text` (100,000) characters with
-# `String.slice(text, String.length(text) - keep, keep)`. Both `String.length/1`
+# `@max_full_text` (100,000). It used to do that with
+# `String.slice(text, String.length(text) - keep, keep)`; both `String.length/1`
 # and `String.slice/3` walk the binary grapheme by grapheme, so once an answer
-# crosses the cap, every subsequent delta re-walks 100k characters — twice.
+# crossed the cap every delta re-walked 100k characters twice. It now trims with
+# `binary_part/3` plus a UTF-8 continuation-byte re-sync.
 #
-# This is measured directly rather than inferred, because it is the one number
-# in this file that is genuinely bad and it should be hard to miss.
+# Both algorithms are measured side by side. The grapheme version is kept here
+# as a guard: if the numbers ever converge, the walk is back.
 
-IO.puts("--- accumulated-answer cap: cost per delta -----------------------------\n")
+IO.puts("--- answer trim: grapheme (removed) vs byte (current) ------------------\n")
 
-cap_probe = fn chars ->
+grapheme_trim = fn chars ->
   base = String.duplicate("x", chars)
   keep = 100_000
 
@@ -155,24 +158,41 @@ cap_probe = fn chars ->
   end
 end
 
+# Fixtures are built outside the measured function: `String.duplicate/2` at
+# 200k characters costs far more than the operation under test, and including
+# it would understate the gap.
+byte_trim = fn chars ->
+  base = String.duplicate("x", chars)
+  keep = 100_000
+
+  drop_partial = fn
+    <<byte, rest::binary>> = bin, drop_partial ->
+      if byte in 0x80..0xBF, do: drop_partial.(rest, drop_partial), else: bin
+
+    bin, _drop_partial ->
+      bin
+  end
+
+  fn ->
+    text = base <> delta_text
+
+    if byte_size(text) > keep do
+      text
+      |> binary_part(byte_size(text) - keep, keep)
+      |> drop_partial.(drop_partial)
+    else
+      text
+    end
+  end
+end
+
 Benchee.run(
   %{
-    "answer  50k chars (below cap)" => cap_probe.(50_000),
-    "answer  99k chars (below cap)" => cap_probe.(99_000),
-    "answer 100k chars (AT cap)" => cap_probe.(100_000),
-    "answer 200k chars (above cap)" => cap_probe.(200_000),
-    "binary_part equivalent (200k)" =>
-      (
-        # Built outside the measured function: `String.duplicate/2` for 200k
-        # characters costs far more than the operation under test, and
-        # including it would understate how large the gap really is.
-        base_200k = String.duplicate("x", 200_000)
-
-        fn ->
-          text = base_200k <> delta_text
-          binary_part(text, byte_size(text) - 100_000, 100_000)
-        end
-      )
+    "grapheme trim  answer 100k chars (at cap)" => grapheme_trim.(100_000),
+    "grapheme trim  answer 200k chars (above cap)" => grapheme_trim.(200_000),
+    "byte trim      answer 100k chars (at cap)" => byte_trim.(100_000),
+    "byte trim      answer 200k chars (above cap)" => byte_trim.(200_000),
+    "either         answer 50k chars (below cap, no trim)" => byte_trim.(50_000)
   },
   time: 2,
   warmup: 1,
@@ -181,9 +201,12 @@ Benchee.run(
 
 IO.puts("""
 
-An agent run whose answer exceeds 100,000 characters pays that cost on every
-delta after the cap, for the rest of the run. Streaming 200k characters in
-20-character deltas spends multiple seconds of CPU inside the coalescer.
+The grapheme trim also failed to bound multi-byte text at all: its
+`String.length(text) - keep` went negative, which `String.slice/3` reads as an
+offset from the end, so it returned the whole string and the answer grew
+without limit. The byte trim caps bytes, which is what the guard already
+measured. Regression tests live in
+apps/lemon_router/test/lemon_router/stream_coalescer_test.exs.
 """)
 
 # ---------------------------------------------------------------------------

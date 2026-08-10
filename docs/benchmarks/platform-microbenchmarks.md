@@ -198,57 +198,72 @@ Deltas are 20 characters each; downstream dispatch is stubbed.
 
 | Deltas | Total | Per delta | Dispatches | Ratio |
 | ---: | ---: | ---: | ---: | --- |
-| 10 | 1.97 ms | 196.9 µs | 1 | 1 per 10 |
-| 100 | 0.26 ms | 2.60 µs | 10 | 1 per 10 |
-| 1,000 | 1.78 ms | 1.78 µs | 100 | 1 per 10 |
-| 10,000 | **5,004 ms** | **500.5 µs** | 735 | 1 per 13 |
+| 10 | 2.29 ms | 229.5 µs | 1 | 1 per 10 |
+| 100 | 0.24 ms | 2.45 µs | 10 | 1 per 10 |
+| 1,000 | 1.23 ms | 1.23 µs | 100 | 1 per 10 |
+| 10,000 | 38.6 ms | 3.86 µs | 1,000 | 1 per 10 |
 
 The first row is cold start: spawning the coalescer under its DynamicSupervisor
-dominates ten deltas. The steady state is ~1.8 µs per delta and a **10:1
-reduction in outbound API calls**, which is the number that keeps a bot off a
-rate limit.
+dominates ten deltas. The steady state is a few microseconds per delta and a
+**10:1 reduction in outbound API calls**, which is the number that keeps a bot
+off a rate limit.
 
-The last row is not a typo.
+### The 100,000-character cliff, and the fix
 
-### The 100,000-character cliff
+The 10,000-delta row above used to read **5,004 ms** — 500 µs per delta — and
+its coalescing ratio degraded to 1 dispatch per 13 deltas. This benchmark is
+what found it.
 
-`StreamCoalescer` caps its accumulated answer at 100,000 characters via
-`cap_full_text/1`
-([`stream_coalescer.ex:637`](../../apps/lemon_router/lib/lemon_router/stream_coalescer.ex)):
+`StreamCoalescer` caps its accumulated answer at 100,000 via `cap_full_text/1`
+([`stream_coalescer.ex:637`](../../apps/lemon_router/lib/lemon_router/stream_coalescer.ex)).
+It used to trim like this:
 
 ```elixir
 String.slice(text, String.length(text) - keep, keep)
 ```
 
-Both `String.length/1` and `String.slice/3` walk the binary grapheme by
-grapheme. Once an answer crosses the cap, **every subsequent delta re-walks
-100,000 characters, twice**.
+`String.length/1` and `String.slice/3` both walk the binary grapheme by
+grapheme, so once an answer crossed the cap, **every subsequent delta re-walked
+100,000 characters, twice**. The stalls also pushed flushes off the size
+threshold and onto the `max_latency_ms` timer, which is why the dispatch ratio
+degraded at the same time.
 
-| Accumulated answer | Cost per delta |
-| --- | ---: |
-| 50k characters (below cap) | 0.44 µs |
-| 99k characters (below cap) | 0.75 µs |
-| 100k characters (at cap) | **1.00 ms** |
-| 200k characters (above cap) | **3.79 ms** |
-| the same trim via `binary_part/3` | 2.21 µs |
+There was a second, quieter bug in the same line. The guard is
+`byte_size(text) > 100_000`, but the arithmetic was in graphemes — so for
+multi-byte text `String.length(text) - keep` went **negative**, and
+`String.slice/3` reads a negative start as an offset from the end. It returned
+the whole string. **The cap did not apply at all to any answer in a non-Latin
+script or with heavy emoji**, which made it an unbounded memory path per run,
+not merely a slow one. Feeding it 120,000 bytes of `€` returned all 120,000
+bytes unchanged.
 
-That is a **2,200x step change** at the cap, and a byte-based `binary_part/3`
-does the same job about 450x faster than the grapheme-based version at 200k.
-In practice a run whose answer exceeds 100k characters spends multiple seconds
-of CPU inside the coalescer — the 10,000-delta row above is five seconds of
-wall clock, essentially all of it here.
+The trim is now byte-based — `binary_part/3` plus a UTF-8 continuation-byte
+re-sync, since a byte-aligned cut can land inside a codepoint and produce a
+binary that fails JSON encoding on the way to a channel.
 
-This is a real defect, not a benchmark artifact, and it is filed as such. It
-only bites runs with very long single answers, which is why it has gone
-unnoticed.
+| Accumulated answer | Grapheme trim (was) | Byte trim (now) |
+| --- | ---: | ---: |
+| 50k characters (below cap, no trim) | 0.40 µs | 0.40 µs |
+| 100k characters (at cap) | **1.00 ms** | **0.79 µs** |
+| 200k characters (above cap) | **3.45 ms** | **2.17 µs** |
+
+About **1,600x** at 200k characters, and the end-to-end burst went from 5,004 ms
+to 38.6 ms — a 130x improvement on the whole path, with the dispatch ratio back
+to a clean 1 per 10.
+
+Both algorithms stay in `bench/coalescer.exs` side by side, so if the numbers
+ever converge the walk is back. Regression tests are in
+[`stream_coalescer_test.exs`](../../apps/lemon_router/test/lemon_router/stream_coalescer_test.exs);
+the multi-byte bound test is the load-bearing one, and it fails against the old
+implementation.
 
 ### Per-operation cost
 
 | Operation | Median |
 | --- | ---: |
-| `ingest_delta` (caller: registry lookup + cast) | 0.64 µs |
-| `current_text` (call round-trip only) | 1.12 µs |
-| `ingest_delta` + drain (caller + coalescer work) | 2.71 µs |
+| `ingest_delta` (caller: registry lookup + cast) | 0.91 µs |
+| `current_text` (call round-trip only) | 1.14 µs |
+| `ingest_delta` + drain (caller + coalescer work) | 3.65 µs |
 
 `ingest_delta` is a cast, so a producer can enqueue about twice as fast as the
 coalescer drains. The buffer between them is an unbounded mailbox — worth
@@ -258,12 +273,12 @@ knowing before pointing a very fast local engine at one.
 
 | Load | Wall clock | Throughput |
 | --- | ---: | ---: |
-| 100 sessions x 50 deltas | 4.6 ms | 1.09 M deltas/s |
-| 1,000 sessions x 50 deltas | 19.0 ms | 2.63 M deltas/s |
+| 100 sessions x 50 deltas | 2.8 ms | 1.76 M deltas/s |
+| 1,000 sessions x 50 deltas | 25.1 ms | 1.99 M deltas/s |
 
 A thousand simultaneous conversations, each with its own coalescer process,
-buffer and timer, absorb fifty thousand deltas in 19 ms. Throughput *improves*
-with more sessions because the work spreads across schedulers instead of
+buffer and timer, absorb fifty thousand deltas in about 25 ms. Throughput holds
+up as sessions multiply because the work spreads across schedulers instead of
 queueing behind one mailbox — the same effect that makes eight stores beat one.
 
 ### Tool status coalescer
@@ -275,9 +290,9 @@ emitting one are measured separately.
 
 | Tools | Lifecycle events | Absorb | Per event |
 | ---: | ---: | ---: | ---: |
-| 10 | 20 | 0.05 ms | 2.70 µs |
-| 100 | 200 | 0.28 ms | 1.39 µs |
-| 1,000 | 2,000 | 1.75 ms | 0.88 µs |
+| 10 | 20 | 0.07 ms | 3.65 µs |
+| 100 | 200 | 0.40 ms | 1.99 µs |
+| 1,000 | 2,000 | 2.27 ms | 1.14 µs |
 
 Dispatch counts for this suite vary substantially between runs (a burst that
 completes in under 2 ms may produce one flush or several, depending on where
@@ -369,6 +384,8 @@ Suites: [`bench/store.exs`](../../bench/store.exs),
 [`bench/process.exs`](../../bench/process.exs), with shared helpers in
 [`bench/support.exs`](../../bench/support.exs).
 
-Numbers on this page are from a single full run on 2026-08-10. If you re-run
-them and the ratios hold but the absolutes differ, that is the expected
-outcome, and the ratios were the point.
+Numbers on this page are from a single full run on 2026-08-10, except the
+coalescer section, which was re-measured on the same machine later that day
+after the answer-trim fix described above. If you re-run them and the ratios
+hold but the absolutes differ, that is the expected outcome, and the ratios
+were the point.

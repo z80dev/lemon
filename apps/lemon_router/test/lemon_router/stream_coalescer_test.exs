@@ -171,6 +171,32 @@ defmodule LemonRouter.StreamCoalescerTest do
     end
   end
 
+  @answer_cap 100_000
+
+  # `ingest_delta` casts; `current_text` is a call on the same mailbox, so it
+  # lands behind every queued delta. No sleeping needed to synchronise.
+  defp stream_answer(session_key, run_id, chunk, count, seq_offset \\ 0) do
+    for seq <- 1..count do
+      assert :ok =
+               StreamCoalescer.ingest_delta(
+                 session_key,
+                 "telegram",
+                 run_id,
+                 seq + seq_offset,
+                 chunk
+               )
+    end
+
+    StreamCoalescer.current_text(session_key, "telegram", run_id)
+  end
+
+  defp microseconds_per_delta(session_key, run_id, chunk, count, seq_offset) do
+    {us, _} =
+      :timer.tc(fn -> stream_answer(session_key, run_id, chunk, count, seq_offset) end)
+
+    div(us, count)
+  end
+
   describe "session key handling" do
     test "handles canonical channel peer format" do
       # Test through public API - verify coalescer starts correctly with canonical format
@@ -1314,6 +1340,100 @@ defmodule LemonRouter.StreamCoalescerTest do
         collect_finalize_chunks(run_id, acc ++ [chunk], remaining - 1)
     after
       1_000 -> acc
+    end
+  end
+
+  describe "accumulated answer cap" do
+    # Regression guards for the trim cliff. `cap_full_text/1` used to trim with
+    # `String.length/1` + `String.slice/3`, which walk the binary grapheme by
+    # grapheme: past the cap that cost milliseconds per delta, and for
+    # multi-byte text the grapheme arithmetic went negative, so `String.slice/3`
+    # counted from the end and returned the whole string — the cap never
+    # applied at all. Numbers: docs/benchmarks/platform-microbenchmarks.md.
+
+    test "bounds an ASCII answer that exceeds the cap" do
+      chunk = String.duplicate("a", 1_000)
+
+      text =
+        stream_answer(
+          "agent:test:telegram:bot:dm:cap_ascii",
+          "run_#{System.unique_integer([:positive])}",
+          chunk,
+          150
+        )
+
+      assert byte_size(text) <= @answer_cap
+      assert String.valid?(text)
+      # It is the tail of the answer that survives, not the head.
+      assert String.ends_with?(text, chunk)
+    end
+
+    test "bounds a multi-byte answer that exceeds the cap" do
+      # 150 x 1,000 three-byte characters = 450 KB. The grapheme-based trim
+      # returned this untouched, so this assertion is the regression guard.
+      chunk = String.duplicate("€", 1_000)
+
+      text =
+        stream_answer(
+          "agent:test:telegram:bot:dm:cap_multibyte",
+          "run_#{System.unique_integer([:positive])}",
+          chunk,
+          150
+        )
+
+      assert byte_size(text) <= @answer_cap
+      assert String.valid?(text)
+    end
+
+    test "never leaves a partial codepoint at the head of the kept tail" do
+      # Padding shifts where the byte-aligned cut lands inside a four-byte
+      # character, so across these runs the boundary falls at every possible
+      # offset within a codepoint. A bare binary_part/3 would leave the head
+      # invalid for three of the four.
+      for pad <- 0..3 do
+        chunk = String.duplicate("a", pad) <> String.duplicate("😀", 1_000)
+
+        text =
+          stream_answer(
+            "agent:test:telegram:bot:dm:cap_boundary_#{pad}",
+            "run_#{System.unique_integer([:positive])}",
+            chunk,
+            40
+          )
+
+        assert String.valid?(text), "invalid UTF-8 at pad offset #{pad}"
+        assert byte_size(text) <= @answer_cap
+      end
+    end
+
+    test "cost per delta does not blow up once the answer passes the cap" do
+      # A relative bound, so it does not depend on how fast the machine is. The
+      # grapheme trim was ~1000x slower per delta above the cap than below it;
+      # under 25x means the walk is gone. This is the weaker of the guards here
+      # — dispatch overhead is included in both measurements and dilutes the
+      # ratio — so the multi-byte test above is the one that fails loudly.
+      chunk = String.duplicate("a", 20)
+
+      below =
+        microseconds_per_delta(
+          "agent:test:telegram:bot:dm:cap_speed_below",
+          "run_#{System.unique_integer([:positive])}",
+          chunk,
+          500,
+          0
+        )
+
+      # Push well past the cap, then measure deltas in that regime.
+      session_key = "agent:test:telegram:bot:dm:cap_speed_above"
+      run_id = "run_#{System.unique_integer([:positive])}"
+      _ = stream_answer(session_key, run_id, String.duplicate("a", 10_000), 15)
+
+      above = microseconds_per_delta(session_key, run_id, chunk, 500, 100)
+
+      assert above <= max(below, 1) * 25,
+             "per-delta cost above the cap (#{above} us) should stay close to the " <>
+               "cost below it (#{below} us); a large ratio means the grapheme " <>
+               "walk is back"
     end
   end
 end
