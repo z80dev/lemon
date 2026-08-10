@@ -34,25 +34,33 @@ defmodule LemonControlPlane.Methods.ExecApprovalRequest do
         approval_id = LemonCore.Id.uuid()
         expires_at_ms = System.system_time(:millisecond) + expires_in_ms
 
-        pending = %{
-          id: approval_id,
-          run_id: run_id,
-          session_key: session_key,
-          tool: tool,
-          action: action,
-          rationale: rationale,
-          expires_at_ms: expires_at_ms,
-          created_at_ms: System.system_time(:millisecond)
-        }
+        pending =
+          LemonCore.Events.ApprovalPending.new(%{
+            id: approval_id,
+            run_id: run_id,
+            session_key: session_key,
+            tool: tool,
+            action: action,
+            rationale: rationale,
+            expires_at_ms: expires_at_ms,
+            requested_at_ms: System.system_time(:millisecond)
+          })
 
         ExecApprovalStore.put_pending(approval_id, pending)
 
         event =
-          LemonCore.Event.new(:approval_requested, %{pending: pending}, %{
-            approval_id: approval_id,
-            run_id: run_id,
-            session_key: session_key
-          })
+          LemonCore.Event.new(
+            :approval_requested,
+            LemonCore.Events.ApprovalRequested.new(%{
+              approval_id: approval_id,
+              pending: pending
+            }),
+            %{
+              approval_id: approval_id,
+              run_id: run_id,
+              session_key: session_key
+            }
+          )
 
         LemonCore.Bus.broadcast("exec_approvals", event)
 

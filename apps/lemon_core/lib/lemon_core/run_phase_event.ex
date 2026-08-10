@@ -1,37 +1,20 @@
 defmodule LemonCore.RunPhaseEvent do
   @moduledoc """
   Helper for canonical run phase change payloads emitted by router and gateway.
+
+  Superseded by `LemonCore.Events.RunPhaseChanged`, which is the same shape as a struct.
+  This module now builds that struct and returns it as a map for callers that still expect
+  one; new code should use `LemonCore.Events.RunPhaseChanged.build/1` directly.
   """
 
-  alias LemonCore.RunPhase
+  alias LemonCore.Events.RunPhaseChanged
 
+  @deprecated "Use LemonCore.Events.RunPhaseChanged.build/1"
   @spec build(keyword()) :: map()
   def build(opts) do
-    phase = Keyword.fetch!(opts, :phase)
-    previous_phase = Keyword.get(opts, :previous_phase)
-
-    validate_phase!(phase, :phase)
-    validate_phase!(previous_phase, :previous_phase)
-
-    %{
-      type: :run_phase_changed,
-      run_id: Keyword.fetch!(opts, :run_id),
-      session_key: Keyword.get(opts, :session_key),
-      conversation_key: Keyword.get(opts, :conversation_key),
-      phase: phase,
-      previous_phase: previous_phase,
-      source: Keyword.fetch!(opts, :source),
-      at: Keyword.get(opts, :at, DateTime.utc_now())
-    }
-  end
-
-  defp validate_phase!(nil, :previous_phase), do: :ok
-
-  defp validate_phase!(phase, field) do
-    if RunPhase.valid?(phase) do
-      :ok
-    else
-      raise ArgumentError, "invalid #{field}: #{inspect(phase)}"
-    end
+    opts
+    |> RunPhaseChanged.build()
+    |> Map.from_struct()
+    |> Map.put(:type, :run_phase_changed)
   end
 end

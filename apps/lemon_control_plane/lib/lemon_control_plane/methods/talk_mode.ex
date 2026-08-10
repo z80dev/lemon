@@ -58,10 +58,10 @@ defmodule LemonControlPlane.Methods.TalkMode do
 
       # Broadcast talk.mode event
       event =
-        LemonCore.Event.new(:talk_mode_changed, %{
-          session_key: session_key,
-          mode: mode
-        })
+        LemonCore.Event.new(
+          :talk_mode_changed,
+          LemonCore.Events.TalkModeChanged.new(%{session_key: session_key, mode: mode})
+        )
 
       LemonCore.Bus.broadcast("system", event)
 

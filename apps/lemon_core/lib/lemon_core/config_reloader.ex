@@ -249,13 +249,16 @@ defmodule LemonCore.ConfigReloader do
 
         # 7. Broadcast event
         event =
-          LemonCore.Event.new(:config_reloaded, %{
-            reload_id: reload_id,
-            reason: reason,
-            changed_sources: changed_sources,
-            changed_paths: changed_paths,
-            diff: diff
-          })
+          LemonCore.Event.new(
+            :config_reloaded,
+            LemonCore.Events.ConfigReloaded.new(%{
+              reload_id: reload_id,
+              reason: reason,
+              changed_sources: changed_sources,
+              changed_paths: changed_paths,
+              diff: diff
+            })
+          )
 
         LemonCore.Bus.broadcast("system", event)
 
@@ -307,11 +310,14 @@ defmodule LemonCore.ConfigReloader do
 
         # Broadcast failure event
         fail_event =
-          LemonCore.Event.new(:config_reload_failed, %{
-            reload_id: reload_id,
-            reason: reason,
-            error: Exception.message(e)
-          })
+          LemonCore.Event.new(
+            :config_reload_failed,
+            LemonCore.Events.ConfigReloadFailed.new(%{
+              reload_id: reload_id,
+              reason: reason,
+              error: Exception.message(e)
+            })
+          )
 
         LemonCore.Bus.broadcast("system", fail_event)
 

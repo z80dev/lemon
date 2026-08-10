@@ -35,6 +35,17 @@ defmodule LemonAutomation.Events do
   """
 
   alias LemonCore.{Bus, Event}
+
+  alias LemonCore.Events.{
+    CronJobChanged,
+    CronLifecycleAction,
+    CronRunCompleted,
+    CronRunStarted,
+    CronTick,
+    HeartbeatAlert,
+    HeartbeatSuppressed
+  }
+
   alias LemonAutomation.{CronJob, CronRun}
 
   @topic "cron"
@@ -48,7 +59,7 @@ defmodule LemonAutomation.Events do
   """
   @spec emit_tick(non_neg_integer()) :: :ok
   def emit_tick(timestamp_ms) do
-    event = Event.new(:cron_tick, %{timestamp_ms: timestamp_ms})
+    event = Event.new(:cron_tick, CronTick.new(%{timestamp_ms: timestamp_ms}))
     Bus.broadcast(@topic, event)
   end
 
@@ -64,7 +75,13 @@ defmodule LemonAutomation.Events do
     event =
       Event.new(
         :cron_job_created,
-        %{job: CronJob.to_map(job)},
+        CronJobChanged.new(%{
+          action: :created,
+          job_id: job.id,
+          name: job.name,
+          agent_id: job.agent_id,
+          job: CronJob.to_map(job)
+        }),
         %{job_id: job.id, agent_id: job.agent_id}
       )
 
@@ -79,7 +96,13 @@ defmodule LemonAutomation.Events do
     event =
       Event.new(
         :cron_job_updated,
-        %{job: CronJob.to_map(job)},
+        CronJobChanged.new(%{
+          action: :updated,
+          job_id: job.id,
+          name: job.name,
+          agent_id: job.agent_id,
+          job: CronJob.to_map(job)
+        }),
         %{job_id: job.id, agent_id: job.agent_id}
       )
 
@@ -94,7 +117,12 @@ defmodule LemonAutomation.Events do
     event =
       Event.new(
         :cron_job_deleted,
-        %{job_id: job.id, name: job.name},
+        CronJobChanged.new(%{
+          action: :deleted,
+          job_id: job.id,
+          name: job.name,
+          agent_id: job.agent_id
+        }),
         %{job_id: job.id, agent_id: job.agent_id}
       )
 
@@ -115,16 +143,17 @@ defmodule LemonAutomation.Events do
     event =
       Event.new(
         :cron_run_started,
-        %{
-          run: CronRun.to_map(run),
+        CronRunStarted.new(%{
           cron_run_id: run.id,
           router_run_id: router_run_id,
           job_id: job.id,
           job_name: job.name,
           agent_id: job.agent_id,
           session_key: job.session_key,
-          triggered_by: run.triggered_by
-        },
+          triggered_by: run.triggered_by || :schedule,
+          started_at_ms: run.started_at_ms,
+          run: CronRun.to_map(run)
+        }),
         %{
           job_id: job.id,
           run_id: router_run_id,
@@ -147,16 +176,19 @@ defmodule LemonAutomation.Events do
     event =
       Event.new(
         :cron_run_completed,
-        %{
-          run: CronRun.to_map(run),
+        CronRunCompleted.new(%{
           cron_run_id: run.id,
           router_run_id: router_run_id,
+          job_id: run.job_id,
+          agent_id: meta_value(run.meta, :agent_id),
+          session_key: meta_value(run.meta, :session_key),
           status: run.status,
           duration_ms: run.duration_ms,
           output: run.output,
           error: run.error,
-          suppressed: run.suppressed
-        },
+          suppressed: run.suppressed || false,
+          run: CronRun.to_map(run)
+        }),
         %{
           job_id: run.job_id,
           run_id: router_run_id,
@@ -177,7 +209,7 @@ defmodule LemonAutomation.Events do
     bus_event =
       Event.new(
         :cron_lifecycle_action,
-        %{audit: event},
+        CronLifecycleAction.new(%{audit: event}),
         %{
           job_id: meta_value(event, :job_id),
           run_id: meta_value(event, :router_run_id) || meta_value(event, :run_id),
@@ -200,12 +232,12 @@ defmodule LemonAutomation.Events do
     event =
       Event.new(
         :heartbeat_suppressed,
-        %{
+        HeartbeatSuppressed.new(%{
           run_id: run.id,
           job_id: job.id,
           job_name: job.name,
           agent_id: job.agent_id
-        },
+        }),
         %{
           job_id: job.id,
           run_id: run.id,
@@ -226,14 +258,14 @@ defmodule LemonAutomation.Events do
     event =
       Event.new(
         :heartbeat_alert,
-        %{
+        HeartbeatAlert.new(%{
           run_id: run_id,
           job_id: job.id,
           job_name: job.name,
           agent_id: job.agent_id,
           response: response,
           severity: :warning
-        },
+        }),
         %{
           job_id: job.id,
           run_id: run_id,

@@ -23,6 +23,7 @@ defmodule LemonCore.ExecApprovals do
   - Session: `{session_key, tool, action_hash}`
   """
 
+  alias LemonCore.Events.{ApprovalPending, ApprovalRequested, ApprovalResolved}
   alias LemonCore.ExecApprovalStore
 
   @type approval_id :: binary()
@@ -83,18 +84,19 @@ defmodule LemonCore.ExecApprovals do
             _ -> nil
           end
 
-        pending = %{
-          id: approval_id,
-          run_id: run_id,
-          session_id: session_id,
-          session_key: session_key,
-          agent_id: agent_id,
-          tool: tool,
-          action: action,
-          rationale: rationale,
-          requested_at_ms: LemonCore.Clock.now_ms(),
-          expires_at_ms: expires_at_ms
-        }
+        pending =
+          ApprovalPending.new(%{
+            id: approval_id,
+            run_id: run_id,
+            session_id: session_id,
+            session_key: session_key,
+            agent_id: agent_id,
+            tool: tool,
+            action: action,
+            rationale: rationale,
+            requested_at_ms: LemonCore.Clock.now_ms(),
+            expires_at_ms: expires_at_ms
+          })
 
         ExecApprovalStore.put_pending(approval_id, pending)
 
@@ -118,7 +120,7 @@ defmodule LemonCore.ExecApprovals do
           "exec_approvals",
           LemonCore.Event.new(
             :approval_requested,
-            %{approval_id: approval_id, pending: pending},
+            ApprovalRequested.new(%{approval_id: approval_id, pending: pending}),
             %{
               run_id: run_id,
               session_id: session_id,
@@ -175,7 +177,11 @@ defmodule LemonCore.ExecApprovals do
           "exec_approvals",
           LemonCore.Event.new(
             :approval_resolved,
-            %{approval_id: approval_id, decision: decision, pending: pending},
+            ApprovalResolved.new(%{
+              approval_id: approval_id,
+              decision: decision,
+              pending: pending
+            }),
             %{
               run_id: pending.run_id,
               session_id: Map.get(pending, :session_id),
@@ -379,7 +385,11 @@ defmodule LemonCore.ExecApprovals do
       "exec_approvals",
       LemonCore.Event.new(
         :approval_resolved,
-        %{approval_id: approval_id, decision: :timeout, pending: pending},
+        ApprovalResolved.new(%{
+          approval_id: approval_id,
+          decision: :timeout,
+          pending: pending
+        }),
         %{
           run_id: pending.run_id,
           session_id: Map.get(pending, :session_id),

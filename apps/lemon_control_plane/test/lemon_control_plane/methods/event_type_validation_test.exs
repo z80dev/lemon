@@ -16,15 +16,50 @@ defmodule LemonControlPlane.Methods.EventTypeValidationTest do
       assert String.contains?(message, "Invalid event type")
     end
 
-    test "accepts allowed event types" do
+    # Types with a typed payload in LemonCore.Events must be given a payload that coerces
+    # into their struct; the rest still accept anything. Keyed by event type so this stays
+    # driven by the allowlist rather than by a hand-maintained parallel list.
+    @valid_payloads %{
+      "talk_mode_changed" => %{session_key: "sess-1", mode: "voice"},
+      "heartbeat_alert" => %{agent_id: "agent-1"},
+      "run_started" => %{run_id: "run-1"},
+      "run_completed" => %{completed: %{ok: true, answer: "done"}},
+      "delta" => %{run_id: "run-1", seq: 1, text: "hello"},
+      "approval_requested" => %{
+        approval_id: "appr-1",
+        pending: %{id: "appr-1", tool: "bash"}
+      },
+      "approval_resolved" => %{approval_id: "appr-1", decision: "deny"},
+      "cron_run_started" => %{cron_run_id: "cr-1", job_id: "job-1"},
+      "cron_run_completed" => %{cron_run_id: "cr-1", job_id: "job-1"},
+      "cron_tick" => %{timestamp_ms: 1_754_800_000_000}
+    }
+
+    test "accepts allowed event types given a valid payload" do
       for event_type <- SystemEvent.allowed_event_types() do
-        params = %{"eventType" => event_type, "payload" => %{}}
+        payload = Map.get(@valid_payloads, event_type, %{})
+        params = %{"eventType" => event_type, "payload" => payload}
         result = SystemEvent.handle(params, @admin_ctx)
 
-        assert {:ok, response} = result
+        assert {:ok, response} = result, "#{event_type} was rejected: #{inspect(result)}"
         assert response["success"] == true
         assert response["eventType"] == event_type
       end
+    end
+
+    test "every registered event type has a valid-payload example here" do
+      # Guards the test above from quietly degrading: if a typed event is added to the
+      # allowlist without an example, it would be exercised with `%{}` and silently start
+      # asserting the rejection path instead of the acceptance path.
+      missing =
+        SystemEvent.allowed_event_types()
+        |> Enum.filter(fn type ->
+          atom = Map.fetch!(SystemEvent.event_type_atoms(), type)
+          LemonCore.Events.registered?(atom) and not Map.has_key?(@valid_payloads, type)
+        end)
+
+      assert missing == [],
+             "these typed event types need a valid payload example: #{inspect(missing)}"
     end
 
     test "accepts custom_ prefixed events" do
@@ -34,6 +69,61 @@ defmodule LemonControlPlane.Methods.EventTypeValidationTest do
 
       assert response["success"] == true
       assert response["eventType"] == "custom_my_special_event"
+    end
+
+    test "rejects a malformed run_completed rather than broadcasting it" do
+      # The forgery this guards: system-event can target any run:<id> topic, so a
+      # malformed completion would reach the chat plugins, the web UI, the ACP server and
+      # cron's completion waiters, all of which would treat it as the engine's own output.
+      params = %{
+        "eventType" => "run_completed",
+        "target" => "run:some-live-run",
+        "payload" => %{"answer" => "I decide this run succeeded"}
+      }
+
+      assert {:error, {:invalid_request, message, nil}} =
+               SystemEvent.handle(params, @admin_ctx)
+
+      assert message =~ "not a valid 'run_completed' event"
+      assert message =~ "RunCompleted"
+    end
+
+    test "accepts a well-formed run_completed and broadcasts it typed" do
+      topic = "run:typed-injection-#{System.unique_integer([:positive])}"
+      :ok = LemonCore.Bus.subscribe(topic)
+
+      params = %{
+        "eventType" => "run_completed",
+        "target" => topic,
+        "payload" => %{"completed" => %{"ok" => true, "answer" => "real answer"}}
+      }
+
+      assert {:ok, response} = SystemEvent.handle(params, @admin_ctx)
+      assert response["success"] == true
+
+      assert_receive %LemonCore.Event{
+                       type: :run_completed,
+                       payload: %LemonCore.Events.RunCompleted{
+                         completed: %LemonCore.Events.Completion{ok: true, answer: "real answer"}
+                       }
+                     },
+                     1_000
+
+      LemonCore.Bus.unsubscribe(topic)
+    end
+
+    test "rejects a non-map payload for a typed event" do
+      params = %{"eventType" => "delta", "payload" => "just a string"}
+
+      assert {:error, {:invalid_request, message, nil}} = SystemEvent.handle(params, @admin_ctx)
+      assert message =~ "payload"
+    end
+
+    test "leaves unregistered types free-form" do
+      params = %{"eventType" => "shutdown", "payload" => %{"anything" => "at all"}}
+
+      assert {:ok, response} = SystemEvent.handle(params, @admin_ctx)
+      assert response["success"] == true
     end
 
     test "allowed_event_types returns a list of strings" do

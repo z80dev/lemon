@@ -26,7 +26,7 @@ defmodule LemonRouter.RunProcess do
 
   require Logger
 
-  alias LemonCore.{Bus, ExecutionCommand, Introspection}
+  alias LemonCore.{Bus, Events, ExecutionCommand, Introspection}
   alias LemonRouter.MediaJobRecorder
   alias LemonRouter.SurfaceManager
   alias LemonRouter.RunProcess.{ArtifactTracker, CompactionTrigger, RetryHandler, Watchdog}
@@ -480,14 +480,15 @@ defmodule LemonRouter.RunProcess do
       event =
         LemonCore.Event.new(
           :run_completed,
-          %{
-            completed: %{
-              ok: false,
-              error: {:gateway_run_down, reason},
-              answer: ""
-            },
+          Events.RunCompleted.new(%{
+            completed:
+              Events.Completion.new(%{
+                ok: false,
+                error: {:gateway_run_down, reason},
+                answer: ""
+              }),
             duration_ms: nil
-          },
+          }),
           %{
             run_id: state.run_id,
             session_key: state.session_key,
@@ -520,14 +521,15 @@ defmodule LemonRouter.RunProcess do
         event =
           LemonCore.Event.new(
             :run_completed,
-            %{
-              completed: %{
-                ok: false,
-                error: reason,
-                answer: ""
-              },
+            Events.RunCompleted.new(%{
+              completed:
+                Events.Completion.new(%{
+                  ok: false,
+                  error: reason,
+                  answer: ""
+                }),
               duration_ms: nil
-            },
+            }),
             %{
               run_id: state.run_id,
               session_key: state.session_key,
@@ -688,12 +690,22 @@ defmodule LemonRouter.RunProcess do
         provenance: :direct
       )
 
-      Bus.broadcast(Bus.run_topic(state.run_id), %{
-        type: :run_failed,
-        run_id: state.run_id,
-        session_key: state.session_key,
-        reason: reason
-      })
+      Bus.broadcast(
+        Bus.run_topic(state.run_id),
+        LemonCore.Event.new(
+          :run_failed,
+          Events.RunFailed.new(%{
+            run_id: state.run_id,
+            session_key: state.session_key,
+            reason: reason
+          }),
+          %{
+            run_id: state.run_id,
+            session_key: state.session_key,
+            synthetic: true
+          }
+        )
+      )
 
       # Best-effort abort of the gateway run on abnormal termination
       try do

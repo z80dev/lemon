@@ -78,15 +78,16 @@ defmodule LemonGateway.DependencyManager do
   end
 
   @doc """
-  Build a LemonCore.Event if the module is available, otherwise return a plain tuple.
+  Build a `LemonCore.Event`.
+
+  This used to fall back to a bare `{event_type, payload}` tuple when `LemonCore.Event` was
+  not loadable, from when the gateway was meant to run without core. `lemon_core` is a hard
+  dependency, so that branch was unreachable — but it was a second wire shape on the bus, and
+  consumers grew receive clauses for a tuple no one could publish. One shape now.
   """
-  @spec build_event(atom(), map(), map()) :: term()
+  @spec build_event(atom(), map(), map()) :: LemonCore.Event.t()
   def build_event(event_type, payload, meta) do
-    if available?(LemonCore.Event) do
-      LemonCore.Event.new(event_type, payload, meta)
-    else
-      {event_type, payload}
-    end
+    LemonCore.Event.new(event_type, payload, meta)
   end
 
   @doc """

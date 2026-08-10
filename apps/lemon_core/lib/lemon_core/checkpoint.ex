@@ -314,7 +314,7 @@ defmodule LemonCore.Checkpoint do
         provenance: :direct
       )
 
-    if Process.whereis(LemonCore.PubSub) do
+    if LemonCore.Bus.running?() do
       event = LemonCore.Event.new(event_type, payload, context)
 
       if is_binary(context.run_id) do

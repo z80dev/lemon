@@ -32,11 +32,11 @@ defmodule LemonGateway.Run do
   alias LemonCore.{
     ProgressStore,
     RunPhase,
-    RunPhaseEvent,
     RunPhaseGraph,
     RunStore
   }
 
+  alias LemonCore.Events
   alias LemonGateway.{Cwd, Event, ExecutionRequest}
   alias LemonCore.ResumeToken
   alias LemonGateway.Types.Job
@@ -136,7 +136,10 @@ defmodule LemonGateway.Run do
         emit_to_bus(
           run_id,
           :run_completed,
-          %{completed: completed_to_bus_map(completed), duration_ms: nil},
+          Events.RunCompleted.new(%{
+            completed: completed_to_bus_map(completed),
+            duration_ms: nil
+          }),
           meta
         )
 
@@ -196,7 +199,7 @@ defmodule LemonGateway.Run do
 
   @impl true
   def handle_continue({:start_run, %{job: job}}, state) do
-    state = maybe_emit_phase_change(state, :dispatched_to_gateway)
+    state = maybe_track_phase(state, :dispatched_to_gateway)
     engine_id = engine_id_for(job)
     engine = resolve_engine(engine_id)
 
@@ -225,7 +228,7 @@ defmodule LemonGateway.Run do
       finalize(state, completed)
       {:stop, :normal, state}
     else
-      state = maybe_emit_phase_change(state, :starting_engine)
+      state = maybe_track_phase(state, :starting_engine)
       renderer_state = state.renderer.init(%{engine: engine})
 
       # Resolve cwd from explicit job value; otherwise use gateway default/home.
@@ -244,11 +247,11 @@ defmodule LemonGateway.Run do
       emit_to_bus(
         state.run_id,
         :run_started,
-        %{
+        Events.RunStarted.new(%{
           run_id: state.run_id,
           session_key: state.session_key,
           engine: engine_id
-        },
+        }),
         build_event_meta(state)
       )
 
@@ -358,7 +361,7 @@ defmodule LemonGateway.Run do
 
     state =
       cond do
-        is_action_event(event) -> maybe_emit_phase_change(state, :streaming)
+        is_action_event(event) -> maybe_track_phase(state, :streaming)
         true -> state
       end
 
@@ -414,7 +417,7 @@ defmodule LemonGateway.Run do
   # Handle delta events from engine (for streaming)
   def handle_info({:engine_delta, run_ref, text}, %{run_ref: run_ref} = state)
       when is_binary(text) do
-    state = maybe_emit_phase_change(state, :streaming)
+    state = maybe_track_phase(state, :streaming)
     new_seq = state.delta_seq + 1
 
     # Emit first_token telemetry on first delta
@@ -443,13 +446,13 @@ defmodule LemonGateway.Run do
     emit_to_bus(
       state.run_id,
       :delta,
-      %{
+      Events.Delta.new(%{
         run_id: delta.run_id,
         ts_ms: delta.ts_ms,
         seq: delta.seq,
         text: delta.text,
-        meta: delta.meta
-      },
+        meta: delta.meta || %{}
+      }),
       build_event_meta(state)
     )
 
@@ -573,7 +576,7 @@ defmodule LemonGateway.Run do
 
     state =
       case terminal_phase do
-        :completed -> maybe_emit_phase_change(state, :finalizing)
+        :completed -> maybe_track_phase(state, :finalizing)
         _ -> state
       end
 
@@ -618,10 +621,10 @@ defmodule LemonGateway.Run do
     emit_to_bus(
       state.run_id,
       :run_completed,
-      %{
+      Events.RunCompleted.new(%{
         completed: completed_to_bus_map(completed),
         duration_ms: duration_ms
-      },
+      }),
       build_event_meta(state)
     )
 
@@ -652,7 +655,7 @@ defmodule LemonGateway.Run do
 
     unregister_progress_mapping(state.job)
 
-    maybe_emit_phase_change(state, terminal_phase)
+    maybe_track_phase(state, terminal_phase)
     :ok
   end
 
@@ -724,7 +727,12 @@ defmodule LemonGateway.Run do
     DependencyManager.broadcast(topic, event)
   end
 
-  defp maybe_emit_phase_change(%{run_id: run_id} = state, phase) when is_binary(run_id) do
+  # Tracks the run's phase and validates each transition, but does not publish it.
+  # `:run_phase_changed` has a single publisher — `LemonRouter.PhasePublisher` — because the
+  # router owns the phase graph. The gateway published the same transitions until Phase 3.1,
+  # which meant two events per transition with different `source` values. The local tracking
+  # stays: it is what makes an out-of-order phase visible in the gateway's own logs.
+  defp maybe_track_phase(%{run_id: run_id} = state, phase) when is_binary(run_id) do
     previous_phase = Map.get(state, :current_phase)
 
     cond do
@@ -733,24 +741,22 @@ defmodule LemonGateway.Run do
 
       not RunPhase.valid?(phase) ->
         Logger.warning(
-          "Gateway run phase emission skipped run_id=#{inspect(run_id)} invalid_phase=#{inspect(phase)}"
+          "Gateway run phase skipped run_id=#{inspect(run_id)} invalid_phase=#{inspect(phase)}"
         )
 
         state
 
       is_nil(previous_phase) ->
-        emit_phase_change(state, phase, previous_phase)
         %{state | current_phase: phase}
 
       true ->
         case RunPhaseGraph.transition(previous_phase, phase) do
           :ok ->
-            emit_phase_change(state, phase, previous_phase)
             %{state | current_phase: phase}
 
           {:error, {:invalid_transition, _, _}} ->
             Logger.warning(
-              "Gateway run phase emission skipped run_id=#{inspect(run_id)} previous_phase=#{inspect(previous_phase)} phase=#{inspect(phase)}"
+              "Gateway run phase skipped run_id=#{inspect(run_id)} previous_phase=#{inspect(previous_phase)} phase=#{inspect(phase)}"
             )
 
             state
@@ -758,20 +764,7 @@ defmodule LemonGateway.Run do
     end
   end
 
-  defp maybe_emit_phase_change(state, _phase), do: state
-
-  defp emit_phase_change(state, phase, previous_phase) do
-    payload =
-      RunPhaseEvent.build(
-        run_id: state.run_id,
-        session_key: state.session_key,
-        phase: phase,
-        previous_phase: previous_phase,
-        source: :lemon_gateway_run
-      )
-
-    emit_to_bus(state.run_id, :run_phase_changed, payload, build_event_meta(state))
-  end
+  defp maybe_track_phase(state, _phase), do: state
 
   defp terminal_phase_for_completion(%{cancelled: true}, _completed), do: :aborted
 
@@ -856,18 +849,18 @@ defmodule LemonGateway.Run do
   end
 
   defp action_event_to_bus_map(ev) when is_map(ev) do
-    %{
+    Events.EngineAction.from_map(%{
       engine: Map.get(ev, :engine),
       action: action_to_bus_map(Map.get(ev, :action)),
       phase: Map.get(ev, :phase),
       ok: Map.get(ev, :ok),
       message: Map.get(ev, :message),
       level: Map.get(ev, :level)
-    }
+    })
   end
 
   defp completed_to_bus_map(ev) when is_map(ev) do
-    %{
+    Events.Completion.from_map(%{
       engine: Map.get(ev, :engine),
       resume: resume_to_map(Map.get(ev, :resume)),
       ok: Map.get(ev, :ok),
@@ -877,7 +870,7 @@ defmodule LemonGateway.Run do
       meta: Map.get(ev, :meta),
       run_id: Map.get(ev, :run_id),
       session_key: Map.get(ev, :session_key)
-    }
+    })
   end
 
   defp register_progress_mapping(%Job{} = job, run_id) do

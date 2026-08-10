@@ -8,7 +8,19 @@ defmodule LemonControlPlane.Methods.SystemEvent do
   - External system integration
   - Event forwarding from nodes
 
-  Note: Only allowed event types can be emitted to prevent atom table exhaustion.
+  Only allowed event types can be emitted, which bounds the atom table.
+
+  Types that have a typed payload in `LemonCore.Events` carry a second requirement: the
+  supplied payload must coerce cleanly into that struct, or the call is rejected. This method
+  can broadcast onto any `run:<id>` or `session:<key>` topic, so without that check an
+  admin-scoped client could fabricate a malformed `run_completed` and every subscriber — chat
+  plugins, the web UI, the ACP server, cron's completion waiters — would act on it as though
+  the engine had produced it. Validating rather than banning keeps legitimate operator
+  injection working: a well-formed event is indistinguishable from a real one, which is the
+  point, while a malformed one never reaches a subscriber.
+
+  Types outside the registry (`shutdown`, `tick`, node and device pairing, the `custom_*`
+  family) have no declared shape and keep their previous pass-through behaviour.
   """
 
   @behaviour LemonControlPlane.Method
@@ -65,6 +77,15 @@ defmodule LemonControlPlane.Methods.SystemEvent do
   """
   @spec allowed_event_types() :: [String.t()]
   def allowed_event_types, do: Map.keys(@allowed_event_types)
+
+  @doc """
+  The full mapping of allowed event type strings to their atoms.
+
+  Exposed so callers can ask whether a given type is one of the typed platform events in
+  `LemonCore.Events` — those require a payload that coerces into the declared struct.
+  """
+  @spec event_type_atoms() :: %{String.t() => atom()}
+  def event_type_atoms, do: @allowed_event_types
 
   @impl true
   def handle(params, ctx) do
@@ -139,13 +160,34 @@ defmodule LemonControlPlane.Methods.SystemEvent do
   defp validate_target(_), do: {:error, "target must be a string"}
 
   defp emit_event(original_type, atom_type, payload, topic, ctx, is_custom) do
-    final_payload =
-      if is_custom do
-        Map.put(payload, :custom_event_type, original_type)
-      else
-        payload
-      end
+    with {:ok, final_payload} <- build_payload(atom_type, payload, original_type, is_custom) do
+      broadcast_event(original_type, atom_type, final_payload, topic, ctx)
+    end
+  end
 
+  # A registered type must produce its declared struct or the injection is refused; an
+  # unregistered one keeps its free-form map.
+  defp build_payload(atom_type, payload, original_type, is_custom) do
+    cond do
+      is_custom ->
+        {:ok, Map.put(payload, :custom_event_type, original_type)}
+
+      LemonCore.Events.registered?(atom_type) ->
+        case LemonCore.Events.cast(atom_type, payload) do
+          {:ok, typed} ->
+            {:ok, typed}
+
+          {:error, reason} ->
+            {:error,
+             {:invalid_request, "payload is not a valid '#{original_type}' event: #{reason}", nil}}
+        end
+
+      true ->
+        {:ok, payload}
+    end
+  end
+
+  defp broadcast_event(original_type, atom_type, final_payload, topic, ctx) do
     event = %LemonCore.Event{
       type: atom_type,
       ts_ms: System.system_time(:millisecond),
@@ -170,13 +212,19 @@ defmodule LemonControlPlane.Methods.SystemEvent do
      }}
   end
 
+  # Struct payloads carry a `__struct__` key that is not a field; counting it would report
+  # one more key than the event actually has.
+  defp payload_key_count(%_{} = payload), do: payload |> Map.from_struct() |> map_size()
+  defp payload_key_count(payload) when is_map(payload), do: map_size(payload)
+  defp payload_key_count(_payload), do: 0
+
   defp summary(original_type, topic, event) do
     %{
       "eventType" => original_type,
       "topic" => topic,
       "targetKind" => target_kind(topic),
       "timestampMs" => event.ts_ms,
-      "payloadKeyCount" => map_size(event.payload),
+      "payloadKeyCount" => payload_key_count(event.payload),
       "custom" => String.starts_with?(original_type, "custom_"),
       "cleanup" => %{
         "includesPayload" => false,

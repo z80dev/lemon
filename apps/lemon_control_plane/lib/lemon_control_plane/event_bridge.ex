@@ -224,7 +224,11 @@ defmodule LemonControlPlane.EventBridge do
     end)
   end
 
-  defp subscribed_to_event?(%{subscription_mode: :custom, subscriptions: subscriptions}, event_name, payload) do
+  defp subscribed_to_event?(
+         %{subscription_mode: :custom, subscriptions: subscriptions},
+         event_name,
+         payload
+       ) do
     subscriptions = subscriptions || MapSet.new()
 
     MapSet.member?(subscriptions, "all") ||
@@ -876,8 +880,31 @@ defmodule LemonControlPlane.EventBridge do
      }}
   end
 
-  # Catch-all for unmapped events
-  defp map_event_type(_, _, _), do: nil
+  # Catch-all for unmapped events.
+  #
+  # Dropping silently is intentional for app-internal and custom event types, but a type in
+  # `LemonCore.Events.registry/0` is part of the platform contract: it is published onto a
+  # topic this bridge subscribes to, and reaching here means WS clients never see it. Warn
+  # once per type so "added an event, forgot the mapping" has a failure mode someone notices.
+  defp map_event_type(type, _payload, _meta) do
+    if LemonCore.Events.registered?(type), do: warn_unmapped_once(type)
+    nil
+  end
+
+  defp warn_unmapped_once(type) do
+    key = {__MODULE__, :unmapped_event, type}
+
+    if :persistent_term.get(key, nil) == nil do
+      :persistent_term.put(key, true)
+
+      Logger.warning(
+        "[EventBridge] #{inspect(type)} is a registered platform event with no client " <>
+          "mapping; it is being dropped rather than forwarded to WS clients"
+      )
+    end
+
+    :ok
+  end
 
   # Helper to extract timestamp from various payload formats
   defp extract_timestamp(%{timestamp_ms: ts}), do: ts

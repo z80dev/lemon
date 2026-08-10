@@ -492,26 +492,9 @@ defmodule LemonAutomation.HeartbeatManager do
 
     Logger.debug("[HeartbeatManager] Executing timer-based heartbeat for agent #{agent_id}")
 
-    # Emit run start event
-    Bus.broadcast("cron", %LemonCore.Event{
-      type: :cron_run_started,
-      ts_ms: System.system_time(:millisecond),
-      payload: %{
-        run: %{
-          id: synthetic_run_id,
-          job_id: "timer-heartbeat-#{agent_id}",
-          agent_id: agent_id,
-          session_key: session_key,
-          prompt: prompt,
-          status: :running
-        },
-        job: %{
-          id: "timer-heartbeat-#{agent_id}",
-          name: "heartbeat-#{agent_id}",
-          agent_id: agent_id
-        }
-      }
-    })
+    job = timer_heartbeat_job(agent_id, session_key, prompt)
+
+    Events.emit_run_started(timer_heartbeat_run(job, synthetic_run_id, :running), job)
 
     # Submit via LemonRouter (the same path CronManager uses)
     # Important: do NOT let background heartbeats crash the HeartbeatManager.
@@ -544,38 +527,25 @@ defmodule LemonAutomation.HeartbeatManager do
 
             case result do
               {:ok, output} ->
-                Bus.broadcast("cron", %LemonCore.Event{
-                  type: :cron_run_completed,
-                  ts_ms: System.system_time(:millisecond),
-                  payload: %{
-                    run: %{
-                      id: synthetic_run_id,
-                      job_id: "timer-heartbeat-#{agent_id}",
-                      agent_id: agent_id,
-                      status: :completed
-                    },
+                Events.emit_run_completed(
+                  timer_heartbeat_run(job, synthetic_run_id, :completed,
+                    run_id: run_id,
                     output: output
-                  }
-                })
+                  )
+                )
 
               {:error, reason} ->
                 Logger.error(
                   "[HeartbeatManager] Timer heartbeat failed for #{agent_id}: #{inspect(reason)}"
                 )
 
-                Bus.broadcast("cron", %LemonCore.Event{
-                  type: :cron_run_completed,
-                  ts_ms: System.system_time(:millisecond),
-                  payload: %{
-                    run: %{
-                      id: synthetic_run_id,
-                      job_id: "timer-heartbeat-#{agent_id}",
-                      agent_id: agent_id,
-                      status: :failed
-                    },
-                    output: "HEARTBEAT_ERROR: #{inspect(reason)}"
-                  }
-                })
+                Events.emit_run_completed(
+                  timer_heartbeat_run(job, synthetic_run_id, :failed,
+                    run_id: run_id,
+                    output: "HEARTBEAT_ERROR: #{inspect(reason)}",
+                    error: reason
+                  )
+                )
             end
 
           {:error, reason} ->
@@ -583,19 +553,12 @@ defmodule LemonAutomation.HeartbeatManager do
               "[HeartbeatManager] Failed to submit timer heartbeat for #{agent_id}: #{inspect(reason)}"
             )
 
-            Bus.broadcast("cron", %LemonCore.Event{
-              type: :cron_run_completed,
-              ts_ms: System.system_time(:millisecond),
-              payload: %{
-                run: %{
-                  id: synthetic_run_id,
-                  job_id: "timer-heartbeat-#{agent_id}",
-                  agent_id: agent_id,
-                  status: :failed
-                },
-                output: "HEARTBEAT_ERROR: Failed to submit: #{inspect(reason)}"
-              }
-            })
+            Events.emit_run_completed(
+              timer_heartbeat_run(job, synthetic_run_id, :failed,
+                output: "HEARTBEAT_ERROR: Failed to submit: #{inspect(reason)}",
+                error: reason
+              )
+            )
         end
       end)
 
@@ -635,7 +598,10 @@ defmodule LemonAutomation.HeartbeatManager do
           extract_heartbeat_output(payload)
 
         %LemonCore.Event{type: :run_failed, payload: payload} ->
-          error = payload[:error] || payload["error"] || "unknown"
+          error =
+            payload[:reason] || payload["reason"] || payload[:error] || payload["error"] ||
+              "unknown"
+
           {:error, error}
       after
         timeout_ms ->
@@ -646,16 +612,59 @@ defmodule LemonAutomation.HeartbeatManager do
     end
   end
 
-  # Extract output from run completion payload
+  # Timer heartbeats have no CronStore-backed job or run, but they publish on the same
+  # "cron" topic as scheduled jobs. Building the same structs the scheduled path uses keeps
+  # both emitters on one payload shape instead of two that consumers must guess between.
+  defp timer_heartbeat_job(agent_id, session_key, prompt) do
+    %CronJob{
+      id: "timer-heartbeat-#{agent_id}",
+      name: "heartbeat-#{agent_id}",
+      schedule: "@timer",
+      agent_id: agent_id,
+      session_key: session_key,
+      prompt: prompt,
+      meta: %{heartbeat: true, timer_based: true}
+    }
+  end
+
+  defp timer_heartbeat_run(%CronJob{} = job, synthetic_run_id, status, attrs \\ []) do
+    %CronRun{
+      id: synthetic_run_id,
+      job_id: job.id,
+      run_id: Keyword.get(attrs, :run_id),
+      status: status,
+      started_at_ms: System.system_time(:millisecond),
+      triggered_by: :schedule,
+      output: Keyword.get(attrs, :output),
+      error: Keyword.get(attrs, :error),
+      meta: %{
+        session_key: job.session_key,
+        agent_id: job.agent_id,
+        heartbeat: true,
+        timer_based: true
+      }
+    }
+  end
+
+  # Extract output from run completion payload. The router nests the engine result under
+  # `:completed`; older/synthetic emitters put the text at the top level.
   defp extract_heartbeat_output(payload) do
+    completed = heartbeat_value(payload, :completed) || payload
+
     output =
-      payload[:output] ||
-        payload["output"] ||
-        payload[:answer] ||
-        payload["answer"] ||
-        payload[:result] ||
-        payload["result"]
+      heartbeat_value(completed, :output) ||
+        heartbeat_value(completed, :answer) ||
+        heartbeat_value(completed, :result) ||
+        heartbeat_value(payload, :output) ||
+        heartbeat_value(payload, :answer) ||
+        heartbeat_value(payload, :result)
 
     {:ok, output}
   end
+
+  defp heartbeat_value(map, key) when is_map(map) do
+    Map.get(map, key) || Map.get(map, Atom.to_string(key))
+  end
+
+  defp heartbeat_value(_map, _key), do: nil
 end

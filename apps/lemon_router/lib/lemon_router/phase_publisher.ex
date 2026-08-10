@@ -10,7 +10,8 @@ defmodule LemonRouter.PhasePublisher do
 
   require Logger
 
-  alias LemonCore.{Bus, Event, RunPhase, RunPhaseEvent, RunPhaseGraph}
+  alias LemonCore.{Bus, Event, RunPhase, RunPhaseGraph}
+  alias LemonCore.Events.RunPhaseChanged
   alias LemonRouter.Submission
 
   @spec emit(Submission.t(), RunPhase.t(), RunPhase.t() | nil, atom()) :: Submission.t()
@@ -67,7 +68,7 @@ defmodule LemonRouter.PhasePublisher do
 
   defp emit_phase_change(run_id, session_key, conversation_key, phase, previous_phase, source) do
     payload =
-      RunPhaseEvent.build(
+      RunPhaseChanged.build(
         run_id: run_id,
         session_key: session_key,
         conversation_key: conversation_key,

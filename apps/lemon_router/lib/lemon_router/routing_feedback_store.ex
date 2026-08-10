@@ -40,6 +40,7 @@ defmodule LemonRouter.RoutingFeedbackStore do
   require Logger
 
   alias LemonCore.{Bus, Event}
+  alias LemonCore.Events.RoutingFeedback
   alias Exqlite.Sqlite3
 
   @default_min_sample_size 5
@@ -280,7 +281,7 @@ defmodule LemonRouter.RoutingFeedbackStore do
   def handle_info(
         %Event{
           type: :routing_feedback,
-          payload: %{
+          payload: %RoutingFeedback{
             fingerprint_key: fingerprint_key,
             outcome: outcome,
             duration_ms: duration_ms
@@ -290,6 +291,20 @@ defmodule LemonRouter.RoutingFeedbackStore do
       )
       when is_binary(fingerprint_key) and is_atom(outcome) do
     {:noreply, record_sample(state, fingerprint_key, Atom.to_string(outcome), duration_ms)}
+  end
+
+  # Legacy free-form payload, accepted for one deprecation cycle. See
+  # docs/platform/bus-events.md §4.3.
+  def handle_info(%Event{type: :routing_feedback, payload: payload}, state)
+      when is_map(payload) and not is_struct(payload) do
+    handle_info(
+      %Event{
+        type: :routing_feedback,
+        ts_ms: Event.now_ms(),
+        payload: RoutingFeedback.from_map(payload)
+      },
+      state
+    )
   end
 
   @impl true

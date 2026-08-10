@@ -7,17 +7,31 @@ defmodule LemonCore.Bus do
 
   ## Topic Contract
 
-  Standard topics (must be stable):
+  Platform-contract topics. Their payloads are typed by `LemonCore.Events`, and changing one
+  after publication is a semver-major change:
 
   - `"run:<run_id>"` - Events for a specific run
-  - `"session:<session_key>"` - Events for a specific session
-  - `"channels"` - Channel-related events
+  - `"session:<session_key>"` - Events for a specific session, including everything the
+    router forwards from that session's run topics
   - `"cron"` - Cron/automation events
-  - `"exec_approvals"` - Execution approval events
-  - `"nodes"` - Node pairing/invoke events
+  - `"exec_approvals"` - Execution approval request/resolution events
+  - `"system"` - System-wide events (config reload, secret changes, talk mode)
+  - `"goals"` - Durable goal lifecycle events
   - `"routing_feedback"` - Finalized run feedback samples for router-owned model selection
-  - `"system"` - System-wide events
-  - `"logs"` - Log events
+
+  Topics whose publisher and every subscriber live in one app are *not* platform contract.
+  They are listed here only so this is a complete map of what is on the bus: `"nodes"` and
+  `"presence"` (lemon_control_plane), `"run_graph:<run_id>"` and
+  `"parent_question:<request_id>"` (coding_agent), and `"sim:<id>"`, `"sim:<id>:decisions"`,
+  `"sim:lobby"`, `"arena:<domain>:league"` plus the hosted-game and philosopher-chat topics
+  (lemon_sim / lemon_sim_ui).
+
+  `"channels"` and `"logs"` were listed here as stable topics until Phase 3.1, but no module
+  has ever published to either. `"channels"` is reachable only through the control-plane
+  event-injection methods; `"logs"` is reachable by nothing.
+
+  The full catalog, including every publisher and subscriber, is in
+  `docs/platform/bus-events.md` in the Lemon repository.
 
   ## Examples
 
@@ -53,6 +67,7 @@ defmodule LemonCore.Bus do
 
   @compile {:no_warn_undefined, Phoenix.PubSub}
   @backend_key {__MODULE__, :backend}
+  @default_enforcement Mix.env() in [:dev, :test]
 
   @doc """
   Subscribe the calling process to a topic.
@@ -101,6 +116,48 @@ defmodule LemonCore.Bus do
   end
 
   @doc """
+  Broadcast a typed event, checking the payload against `LemonCore.Events`.
+
+  This is the publishing path for contract topics. When the event type is registered and
+  the payload is not its struct, the mismatch raises in `:dev` and `:test` and is passed
+  through untouched in `:prod` — a malformed payload should fail a developer's test run,
+  not a user's agent run.
+
+      Bus.broadcast_event(Bus.run_topic(run_id), :run_started, %Events.RunStarted{...})
+
+  Unregistered types are broadcast as-is, so app-internal topics can use this function too.
+  """
+  @spec broadcast_event(topic :: binary(), type :: atom(), payload :: term(), meta :: map() | nil) ::
+          :ok
+  def broadcast_event(topic, type, payload, meta \\ nil)
+      when is_binary(topic) and is_atom(type) do
+    :ok = check_payload!(type, payload)
+    broadcast(topic, LemonCore.Event.new(type, payload, meta))
+  end
+
+  defp check_payload!(type, payload) do
+    module = LemonCore.Events.payload_module(type)
+
+    cond do
+      is_nil(module) -> :ok
+      is_struct(payload, module) -> :ok
+      not enforce_payloads?() -> :ok
+      true -> raise ArgumentError, payload_mismatch_message(type, module, payload)
+    end
+  end
+
+  defp payload_mismatch_message(type, module, payload) do
+    "#{inspect(type)} is a registered platform event; its payload must be a " <>
+      "#{inspect(module)} struct, got: #{inspect(payload, limit: 5)}. " <>
+      "Build it with #{inspect(module)}.new/1, or #{inspect(module)}.from_map/1 if you are " <>
+      "relaying a legacy payload."
+  end
+
+  defp enforce_payloads? do
+    Application.get_env(:lemon_core, :enforce_event_payloads, @default_enforcement)
+  end
+
+  @doc """
   Broadcast an event from the calling process (excluding self).
   """
   @spec broadcast_from(topic :: binary(), event :: LemonCore.Event.t() | term()) :: :ok
@@ -134,6 +191,20 @@ defmodule LemonCore.Bus do
   @doc "Whether `phoenix_pubsub` backs the Bus, as opposed to the Registry fallback."
   @spec pubsub?() :: boolean()
   def pubsub?, do: backend() == :pubsub
+
+  @doc """
+  Whether the active backend's process is running, so a broadcast would be delivered.
+
+  Publishers that are optional about eventing (they emit only as a side effect of some
+  other durable write) should gate on this rather than on `Process.whereis/1` of a
+  particular backend — checking for `LemonCore.PubSub` specifically makes the publisher
+  silently inert under the Registry fallback.
+  """
+  @spec running?() :: boolean()
+  def running? do
+    name = if pubsub?(), do: @pubsub, else: @registry
+    is_pid(Process.whereis(name))
+  end
 
   @doc false
   @spec child_spec_for_backend() :: Supervisor.child_spec() | {module(), keyword()}

@@ -1,6 +1,9 @@
 # Phase 3.1 — Typed Bus Events: Catalog and Design
 
-Status: **design (Phase A) — no code changed.** Written 2026-08-10 against `2805c5b5`.
+Status: **partially implemented.** Catalog and design written 2026-08-10 against `2805c5b5`;
+pre-work and stages S1–S11 landed the same day. See §8 for exactly what is done and what
+remains. The catalog in §2 describes the tree *before* typing — it is the record of what was
+found, and the migration table in §8 says which rows have since changed.
 
 Scope: every `LemonCore.Bus.broadcast/2` call site in the umbrella (78 in `lib/`, 144 more in
 `test/`), the topics they publish to, and every process that subscribes. The plan of record is
@@ -608,6 +611,80 @@ supported backend, eight event types are published to a listener that discards t
 sit in the run-completion path, and an admin-scoped RPC method can forge any of it. Typing the
 payloads is worth doing, but P1–P6 are worth doing first and are independently valuable if 3.1 is
 ever deprioritised.
+
+## 8. Implementation status
+
+Landed 2026-08-10, after the design above was reviewed.
+
+**Pre-work (§5), all landed:**
+
+| Item | What changed |
+|---|---|
+| P1 | `:run_failed` now publishes a `LemonCore.Event` envelope (`run_process.ex`), making `HeartbeatManager`'s previously unmatchable clause live. Its error extraction now reads `:reason` first, which is the key the publisher actually sends. |
+| P2 | `extract_heartbeat_output/1` reads `payload.completed.answer`, so timer heartbeats record their real output instead of `nil`. |
+| P3 | New `LemonCore.Bus.running?/0` asks the *active* backend whether it is up. The four publishers that checked `Process.whereis(LemonCore.PubSub)` (`checkpoint.ex`, `goal_store.ex`, `kanban_store.ex`, `stream_coalescer.ex`) now use it, so they are no longer silently inert under the Registry fallback. |
+| P5 | `HeartbeatManager`'s four hand-built cron events are gone; it builds synthetic `CronJob`/`CronRun` structs and calls `LemonAutomation.Events`, so both emitters produce one payload shape. Timer heartbeats consequently gain `job_name`, `router_run_id`, `agent_id` and `session_key`, which they never carried before. |
+
+**Typing (§5 stages):**
+
+| Stage | Topic / type | Status |
+|---|---|---|
+| S1 | `LemonCore.Events` registry, `Events.Payload` macro, `Access` shim, `Bus.broadcast_event/4` | done |
+| S2 | `routing_feedback` | done — publisher and consumer both typed, consumer keeps a legacy-map clause |
+| S3 | `goals` | done |
+| S4 | `system` (`:config_reloaded`, `:config_reload_failed`, `:secret_changed`, `:talk_mode_changed`) | done |
+| S5 | `cron` (7 types) | done |
+| S6 | `exec_approvals` (3 types incl. `ApprovalPending`) | done — also aligned the control-plane publisher, which used `created_at_ms` where core uses `requested_at_ms` and omitted the top-level `approval_id` |
+| S7 | `:run_phase_changed` | done — `LemonCore.RunPhaseEvent` now delegates to `Events.RunPhaseChanged` and is deprecated |
+| S8–S11 | `run:*` — `:run_started`, `:delta`, `:engine_action`, `:run_completed`, `:run_failed` | done |
+| S12 | `session:*` | follows from S8–S11 (the router forwards the same events). `:coalesced_output` is still an unenveloped raw map |
+| S13 | Remove the `Access` shim | next major |
+
+**Contract kit:** `LemonPlatformTest.EventsCase` asserts registry completeness, `from_map/1`
+round-trip and string-key acceptance, strict `new/1`, Introspection parity between struct and
+map payloads, JSON encodability, `broadcast_event/4` envelope discipline **under both bus
+backends**, and that the `Access` shim carries a deprecation note. It runs against the
+platform's own registry at
+`apps/lemon_platform_test/test/compliance/core_events_test.exs`.
+
+**Two design decisions that changed during implementation:**
+
+1. **Payloads derive `Jason.Encoder`.** Not in the original design. The JSONL store backend
+   encodes with Jason and the approval `pending` record is persisted, so a bare struct would
+   have raised `Protocol.UndefinedError` there. `jason` is a hard dependency of `lemon_core`,
+   so deriving is free.
+2. **`EventBridge`'s 26 `Access`-reading clauses were left alone.** The shim carries them
+   unchanged — verified by 770 control-plane, 1072 gateway, 547 router, 3958 coding_agent and
+   201 automation tests passing with no consumer edits. What *was* added is the diagnostic the
+   design asked for: the catch-all now warns once per event type when a type in
+   `Events.registry/0` reaches it unmapped, so a missing mapping stops being silent. Converting
+   those clauses to struct patterns — the change that makes a field rename a compile error — is
+   the remaining work in this area and is worth its own pass.
+
+**Phase B — the remaining pre-work, landed after the design was accepted:**
+
+| Item | What changed |
+|---|---|
+| P4 (§6.8) | `system-event` no longer accepts `delta`, `run_started`, `run_completed`, `talk_mode_changed`, `heartbeat_alert`, the two approval events or the three cron lifecycle events — ten types removed. What stays injectable is the set with no typed payload and no lifecycle meaning: `shutdown`, `health_changed`, `tick`, `presence_changed`, `heartbeat`, node/device pairing, and `custom_*`. Both injectors now carry a **compile-time** guard that fails the build if any allowlisted type appears in `Events.registry/0`, so the hole cannot reopen silently as either list grows. Verified by temporarily re-adding `delta` and watching the build fail. |
+| P6 (§6.11) | The `kanban` and `kanban:<board_id>` broadcasts are deleted — zero subscribers repo-wide, and the durable record was always the `Introspection.record/3` call beside them, which stays. The `LemonCore.Bus` moduledoc's topic contract is rewritten: it now separates the seven typed contract topics from the app-internal ones, and says plainly that `channels` and `logs` never had a publisher. |
+| §6.4 | The gateway no longer publishes `:run_phase_changed`; `LemonRouter.PhasePublisher` is the single publisher, since the router owns the phase graph. The gateway keeps tracking and validating its own transitions (`maybe_track_phase/2`) because that is what surfaces an out-of-order phase in its logs — it just no longer broadcasts a duplicate. |
+| §6.2 | `LemonGateway.DependencyManager.build_event/3`'s unreachable `{event_type, payload}` tuple fallback is gone, and with it the tuple receive clauses in `RunCompletionWaiter` and `webhook/response.ex` that existed only to catch it. `RunCompletionWaiter` also loses its two envelope-less `%{completed: ...}` clauses and its two pre-P1 `:run_failed` shapes, going from seven receive clauses to four. The remaining bare-map clauses (`%{type: ..., payload: ...}`) are kept deliberately: an envelope-less map is the documented legacy shape and stays accepted for one cycle, whereas a tuple never was. |
+| §6.7 | `:acp_client_request` stays out of the registry. Converting it from a broadcast to a direct call is filed as its own task. |
+
+Bug 3's fix gained the regression test the design asked for:
+`bus_registry_fallback_test.exs` now asserts `running?/0` follows the *active* backend rather
+than `LemonCore.PubSub`, and that a typed struct payload survives `broadcast_event/4` intact
+under the Registry fallback.
+
+**Still open:**
+
+- **Test-side fixtures.** The 144 `Bus.broadcast` sites in `test/` still build raw maps. They
+  all pass, because consumers accept both, but `LemonPlatformTest.EventsFixtures` was not
+  written and tests were not converted.
+- **`EventBridge`'s 26 `Access`-reading clauses.** Still map-based; the shim carries them. The
+  conversion to struct patterns — which is what turns a field rename into a compile error — is
+  the last substantive piece before the shim can be removed in S13.
+- **`:coalesced_output`** is still published as an unenveloped raw map on `session:<key>`.
 
 **Known in-flight at time of writing:** the Farcaster transport deletion (task #29) has landed —
 `apps/lemon_gateway/lib/lemon_gateway/transports/` now holds only `email` and `webhook`, and

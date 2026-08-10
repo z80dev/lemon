@@ -6,6 +6,7 @@ defmodule AgentCore.Workspace.GoalStore do
   require Logger
 
   alias LemonCore.{Bus, Event, Introspection, Store}
+  alias LemonCore.Events.GoalChanged
 
   @table :goals
   @statuses ~w(active paused completed)
@@ -495,18 +496,19 @@ defmodule AgentCore.Workspace.GoalStore do
   defp maybe_put_auto_options(auto, options), do: Map.put(auto, "options", options)
 
   defp emit(event_type, goal, opts) do
-    payload = %{
-      goal_id: goal.id,
-      session_key: goal.session_key,
-      agent_id: goal.agent_id,
-      status: goal.status,
-      objective_bytes: byte_size(goal.objective || ""),
-      continuation_count: goal.continuation_count || 0,
-      last_run_id: goal.last_run_id,
-      loop_verdict: last_loop_verdict(goal.meta),
-      loop_status: loop_status(goal.meta),
-      loop_auto_enabled: loop_auto_enabled(goal.meta)
-    }
+    payload =
+      GoalChanged.new(%{
+        goal_id: goal.id,
+        session_key: goal.session_key,
+        agent_id: goal.agent_id,
+        status: goal.status,
+        objective_bytes: byte_size(goal.objective || ""),
+        continuation_count: goal.continuation_count || 0,
+        last_run_id: goal.last_run_id,
+        loop_verdict: last_loop_verdict(goal.meta),
+        loop_status: loop_status(goal.meta),
+        loop_auto_enabled: loop_auto_enabled(goal.meta)
+      })
 
     _ =
       Introspection.record(event_type, payload,
@@ -517,7 +519,7 @@ defmodule AgentCore.Workspace.GoalStore do
         provenance: :direct
       )
 
-    if Process.whereis(LemonCore.PubSub) do
+    if Bus.running?() do
       event = Event.new(event_type, payload, %{session_key: goal.session_key, goal_id: goal.id})
       Bus.broadcast("goals", event)
       Bus.broadcast(Bus.session_topic(goal.session_key), event)

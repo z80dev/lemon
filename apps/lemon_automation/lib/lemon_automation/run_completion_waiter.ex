@@ -26,7 +26,8 @@ defmodule LemonAutomation.RunCompletionWaiter do
   before subscription.
   """
   @spec wait_already_subscribed(binary(), non_neg_integer(), keyword()) :: wait_result()
-  def wait_already_subscribed(run_id, timeout_ms \\ @default_timeout_ms, opts \\ []) when is_binary(run_id) do
+  def wait_already_subscribed(run_id, timeout_ms \\ @default_timeout_ms, opts \\ [])
+      when is_binary(run_id) do
     bus_mod = Keyword.get(opts, :bus_mod, LemonCore.Bus)
     topic = "run:#{run_id}"
 
@@ -38,33 +39,25 @@ defmodule LemonAutomation.RunCompletionWaiter do
     end
   end
 
-  # Shared wait logic
+  # Shared wait logic.
+  #
+  # Both terminal events arrive as `LemonCore.Event` envelopes. The bare-map clauses accept a
+  # payload published without an envelope, which Phase 3.1 kept for one deprecation cycle;
+  # the tuple and envelope-less `%{completed: ...}` clauses that used to live here matched
+  # shapes no publisher in the umbrella could produce and are gone.
   defp do_wait(timeout_ms) do
     receive do
       %LemonCore.Event{type: :run_completed, payload: payload} ->
         extract_output_from_completion(payload)
 
-      {:run_completed, payload} ->
-        extract_output_from_completion(payload)
+      %LemonCore.Event{type: :run_failed, payload: payload} ->
+        {:error, inspect(payload[:reason] || payload)}
 
       %{type: :run_completed, payload: payload} ->
         extract_output_from_completion(payload)
 
-      %{completed: %{answer: answer, ok: true}} ->
-        {:ok, truncate_output(answer)}
-
-      %{completed: %{ok: false, error: error}} ->
-        {:error, inspect(error)}
-
-      # Handle run_failed events from abnormal RunProcess termination
-      %LemonCore.Event{type: :run_failed, payload: payload} ->
+      %{type: :run_failed, payload: payload} ->
         {:error, inspect(payload[:reason] || payload)}
-
-      %{type: :run_failed, reason: reason} ->
-        {:error, inspect(reason)}
-
-      %{type: :run_failed} = event ->
-        {:error, inspect(event[:reason] || event)}
     after
       timeout_ms ->
         :timeout

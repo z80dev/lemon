@@ -303,7 +303,6 @@ defmodule LemonGateway.Transports.Webhook.Response do
     do: {:ok, payload}
 
   defp extract_run_completed(%{type: :run_completed, payload: payload}), do: {:ok, payload}
-  defp extract_run_completed({:run_completed, payload}), do: {:ok, payload}
   defp extract_run_completed(_), do: :skip
 
   defp int_value(nil, default), do: default

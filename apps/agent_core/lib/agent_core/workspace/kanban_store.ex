@@ -5,7 +5,7 @@ defmodule AgentCore.Workspace.KanbanStore do
 
   require Logger
 
-  alias LemonCore.{Bus, Event, Introspection, Store}
+  alias LemonCore.{Introspection, Store}
 
   @boards_table :kanban_boards
   @tasks_table :kanban_tasks
@@ -648,12 +648,10 @@ defmodule AgentCore.Workspace.KanbanStore do
         provenance: :direct
       )
 
-    if Process.whereis(LemonCore.PubSub) do
-      event = Event.new(event_type, payload, %{board_id: board.id, task_id: task && task.id})
-      Bus.broadcast("kanban", event)
-      Bus.broadcast("kanban:#{board.id}", event)
-    end
-
+    # Kanban changes are recorded through Introspection above. They used to also broadcast on
+    # "kanban" and "kanban:<board_id>", which no process anywhere subscribed to — removed in
+    # Phase 3.1 rather than given a typed payload nobody would receive. If a consumer appears,
+    # add the topics back with a `LemonCore.Events` struct.
     :ok
   rescue
     error ->

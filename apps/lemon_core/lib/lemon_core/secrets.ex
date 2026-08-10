@@ -423,11 +423,10 @@ defmodule LemonCore.Secrets do
   defp emit_secret_event(owner, name, action) do
     if Code.ensure_loaded?(LemonCore.Bus) do
       event =
-        LemonCore.Event.new(:secret_changed, %{
-          owner: owner,
-          name: name,
-          action: action
-        })
+        LemonCore.Event.new(
+          :secret_changed,
+          LemonCore.Events.SecretChanged.new(%{owner: owner, name: name, action: action})
+        )
 
       LemonCore.Bus.broadcast("system", event)
     end
