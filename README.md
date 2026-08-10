@@ -1,290 +1,260 @@
-# lemon 🍋
+# Lemon
 
-Lemon is a BEAM-native stack for LLM interactions: a layered set of Elixir/OTP
-libraries with two products on top, a multi-channel personal assistant and
-**LemonSim**, a deterministic model-vs-model simulation arena.
+[![Quality](https://github.com/z80dev/lemon/actions/workflows/quality.yml/badge.svg?branch=main)](https://github.com/z80dev/lemon/actions/workflows/quality.yml)
+[![Dialyzer](https://github.com/z80dev/lemon/actions/workflows/dialyzer.yml/badge.svg?branch=main)](https://github.com/z80dev/lemon/actions/workflows/dialyzer.yml)
+[![Simulation Bench](https://github.com/z80dev/lemon/actions/workflows/sim-bench.yml/badge.svg?branch=main)](https://github.com/z80dev/lemon/actions/workflows/sim-bench.yml)
+[![OSV Scanner](https://github.com/z80dev/lemon/actions/workflows/osv-scanner.yml/badge.svg?branch=main)](https://github.com/z80dev/lemon/actions/workflows/osv-scanner.yml)
 
-Named after a very good cat.
+Lemon is a platform for building agents on the BEAM: supervised per-run agent
+processes, multi-channel ingress, pluggable execution engines, durable memory,
+and a benchmark arena for scoring model behaviour. It is an Elixir umbrella
+today and is mid-way through a split into a small set of semver'd Hex packages
+plus a batteries-included reference runtime that wires them together.
+
+Concretely, the tree contains:
+
+- **Agent runtime** — agent loop, tool registry, subagents, model runtime,
+  and workspace stores (`apps/agent_core`).
+- **Channels** — Telegram, Discord, WhatsApp and XMTP adapters behind one
+  `LemonChannels.Plugin` behaviour, plus outbox/dispatcher/presentation
+  ([`plugin.ex`](apps/lemon_channels/lib/lemon_channels/plugin.ex)). Email is
+  mid-port from the legacy gateway transport; see
+  [`docs/platform/transport-unification.md`](docs/platform/transport-unification.md).
+- **Engines** — one `LemonGateway.Engine` behaviour with an in-process
+  implementation plus six CLI coding agents (Claude Code, Codex, Droid, Kimi,
+  OpenCode, Pi) in [`apps/lemon_gateway/lib/lemon_gateway/engines`](apps/lemon_gateway/lib/lemon_gateway/engines).
+- **Run lifecycle** — single-flight, queue/steer/coalesce, policy, watchdog,
+  delivery routing (`apps/lemon_router`).
+- **Providers** — a provider-agnostic LLM client with rate limiting, circuit
+  breaking, compaction and token accounting, with zero umbrella dependencies
+  (`apps/ai`).
+- **Memory** — document schema, SQLite-backed store, a `Provider` behaviour
+  with a fan-out registry, ingest pipeline and session search
+  (`apps/lemon_memory`).
+- **Arenas** — an event-sourced simulation kernel, 16 scored scenarios, and
+  always-on model leagues (`apps/lemon_sim`, `apps/lemon_sim_ui`).
+
+The premise: an LLM product is already a distributed system — conversations run
+concurrently, tool calls block, providers fail, users interrupt, sessions
+outlive requests — so it belongs on a runtime that supervises processes rather
+than on queue glue wrapped around one. The full argument, costs included, is
+[Agents Are a Concurrency Problem](docs/why-beam-for-agents.md); the invariants
+that fall out of it are written down in [`docs/beam_agents.md`](docs/beam_agents.md).
+
+## Architecture
+
+The target shape is eight published packages, a reference runtime that stays
+in this repo, and products that consume the packages exactly as a third party
+would.
+
+| Package | Contents |
+| --- | --- |
+| `lemon_ai` | Providers, registry, rate limiting, circuit breaker, compaction, tokens/text |
+| `lemon_core` | Bus, `Event` envelope, `Store` + backends, secrets, config, boundary contracts, primitives |
+| `lemon_agent` | Agent loop, tool registry, subagents, model runtime, CLI runners, workspace stores |
+| `lemon_memory` | Document schema, store, `Provider` behaviour + registry, ingest, search |
+| `lemon_router` | Run lifecycle and session orchestration |
+| `lemon_gateway` | Engine execution runtime: `Engine` behaviour, registry, scheduler, locks |
+| `lemon_channels` | Channel core, `Plugin` behaviour, built-in adapters |
+| `lemon_platform_test` | Contract-test kit for `Plugin`/`Engine`/`Store.Backend`/`Memory.Provider` authors |
+
+**Reference runtime** (in-repo, unpublished): control plane, CLI, web UI,
+automation, skills, media, browser, LSP. **Products** (leaving for their own
+repos): the coding agent, the sim arenas, the showcase site, the TS clients.
+**Satellites** are the model for vendor integrations — `apps/x_api` carries the
+X client, its channel adapter and its three tools, and self-registers at boot,
+so the platform holds zero compile-time knowledge of X.
+
+Dependencies flow one way, and the direction is enforced rather than
+documented:
 
 ```
-ai            — provider-agnostic LLM client (standalone; no umbrella deps)
-agent_core    — agent loop, tools, CLI-runner protocol (depends on ai, lemon_core)
-lemon_core    — true foundation only: config, store, secrets, bus/event, telemetry
-──────────────────────────────────────────────────────────────────────────────
-products:
-  assistant   — channels, gateway, router, control plane, skills, coding agent
-  LemonSim    — deterministic model-vs-model simulation arena
+lemon_ai ← lemon_agent ← {router, gateway, channels, skills, products}
+lemon_core ← everything
+lemon_memory ← {router (ingest hook), skills, products}
+router ⇄ gateway: ONLY via LemonCore.EngineRuntime behaviour (config-injected)
+channels → router: ONLY via LemonCore.RouterBridge
+router → channels: Dispatcher/Outbox facade only (the one allowed compile-time edge)
+products/satellites → platform: hex deps; platform NEVER depends on a product
 ```
 
-## Why BEAM
+**State of the split.** Phase 1 (carving a product-free `lemon_core`) and
+Phase 2 (inverting the wrong-direction dependencies) are complete except for
+the email channel port; Phase 3 (contracts, docs, test kit) is in flight.
+Nothing is on Hex yet. The plan of record is
+[`docs/platform-split.md`](docs/platform-split.md) — a living document with the
+evidence behind each decision, a numbered decision log, and work items checked
+off in place. Per-package pages are in [`docs/platform/`](docs/platform).
 
-LLM products are already distributed systems: conversations run independently,
-tool calls block, providers fail, users interrupt, and long-running sessions
-need supervision. Lemon leans into that shape. It uses real OTP supervision
-trees, per-conversation processes, message passing, and distributed-by-default
-runtime primitives instead of wrapping a single process in queue glue.
+## Engineering
 
-## LemonSim
+Claims here are links, not adjectives.
 
-LemonSim is the arena side of the stack. It provides an event-sourced
-simulation kernel, seeded deterministic runs, tool-constrained LLM decisions,
-scored benchmark artifacts, replay verification with hash manifests, and a
-LiveView spectator UI in `apps/lemon_sim_ui`.
+**Boundaries are compiler-checked, and the allowlist is empty.**
+[`architecture_rules_check.ex`](apps/lemon_core/lib/lemon_core/quality/architecture_rules_check.ex)
+resolves the dependency rules above from each file's AST, so aliases, calls and
+dynamic `:"Elixir.Foo"` atoms all count while mentions in comments do not. It
+started with a 29-entry shrink-only `@grandfathered` list grouped by the work
+item that would retire each group; that list is now `[]`. A separate
+[direct-dependency policy](docs/architecture_boundaries.md) is generated from
+the actual `mix.exs` graph. Both run in `mix lemon.quality` on every push.
 
-What makes it different from an eval harness: results are **verifiable**.
-Every run writes a hash-manifested artifact bundle, every scenario's scorecard
-is a pure function of the final world state that the verifier recomputes and
-diffs, and per-actor token/cost usage is recorded alongside. All 19 scenarios
-are playable and all 16 scored scenarios are registry-verified: Werewolf,
-Vending Bench, TCG Shop, Diplomacy, Poker, Tic Tac Toe, Skirmish, Survivor,
-Pandemic, Auction, Courtroom, Space Station, Stock Market, Supply Chain,
-Dungeon Crawl, Murder Mystery, Legislature, Intel Network, and Startup
-Incubator.
+**Third parties can test their own implementations.**
+[`apps/lemon_platform_test`](apps/lemon_platform_test/README.md) ships four
+`ExUnit.CaseTemplate`s — `BackendCase`, `PluginCase`, `EngineCase`,
+`ProviderCase` — used as `use LemonPlatformTest.PluginCase, adapter:
+MyAdapter`. They are safe by default: nothing delivers a message, starts a run
+or opens a socket without an explicit probe, because a compliance suite that
+posts to a live bot is worse than none. Registration round-trips are included,
+since "works standalone, invisible to the platform" is the common integration
+failure. The kit was validated by running a deliberately-broken backend through
+`BackendCase` to confirm it fails rather than passing vacuously, and by running
+`XApi.ChannelAdapter` and `CodingAgent.GatewayEngine` through it *from their own
+apps* — the dependency direction a third party has.
 
-On top of single runs sit benchmark **suites** (competitors × seeds matrices
-with deterministic `suite.json` + `leaderboard.md` artifacts), cross-suite
-**model ratings** (order-independent Bradley-Terry fit over pairwise
-seed-level comparisons), and a public `/leaderboards` page in the spectator
-UI.
+**Configuration is typed and owned by its reader.** 260 environment-variable
+declarations live in 16 per-app registry modules aggregated through
+`config :lemon_core, :env_registries`
+([`config/config.exs`](config/config.exs)); registries missing from a given
+build are skipped, so the aggregate always describes what the build can
+actually read. Ownership is by reader, not by name prefix.
 
-Keyless quick start (no API keys required):
+**Tests are deterministic and numerous.** 887 test files, ~318k lines under
+`apps/*/test`. The runner (`scripts/test`) scrubs ambient provider credentials
+and provisions per-invocation temp dirs so a lane cannot silently reach the
+network or a developer's real store; CI re-runs the historically flaky suites
+twice per build. Library-ification is proved by tests, not asserted:
+[`store_instance_test.exs`](apps/lemon_core/test/lemon_core/store_instance_test.exs)
+runs two independently-named stores with isolated caches in one node.
+
+**Dependencies are scanned; work is not parked in comments.** OSV-Scanner runs
+over the Elixir, Node and Python manifests on every lockfile change and again
+weekly ([`osv-scanner.yml`](.github/workflows/osv-scanner.yml)). Grep `apps/`
+for `TODO` and you get two hits, both string literals inside a truncation
+heuristic rather than deferred work, and there are no `FIXME` markers at all
+across ~425k lines of Elixir.
+
+**The plan gets corrected by the code.** Two entries in the decision log are
+reversals of my own earlier decisions after reading the source: **D2** —
+"move all five gateway transports to the channel `Plugin` behaviour" was
+abandoned because `Plugin.deliver/1` is fire-and-forget and cannot return a
+synchronous HTTP response into the originating request; only email actually
+fits, and the rest stay as non-channel ingress. **D11** — `chat_state` was
+slated to move to the router as its sole owner, but `lemon_channels` turned out
+to read *and* write it, and channels may not depend on the router, so moving it
+would have encoded an accident as architecture. Both are written up with
+evidence in [§8 of the plan](docs/platform-split.md).
+
+## Quickstart
+
+Building your own agent on the platform: `mix lemon.new` and the
+`docs/getting-started/` guides are [Phase 3.4/3.5](docs/platform-split.md) and
+are being written now — the generator scaffolds a project depending on
+`lemon_agent` + `lemon_ai` + `lemon_core` with one example tool and one channel
+wired, and the guides ("build your first agent", "add a channel", "add an
+engine", "persist memory") are written against its output. **These commands do
+not exist in the tree yet.**
+
+Running the reference runtime from a source checkout works today. Requires
+Elixir 1.19.5+ / OTP 28.5+ (pinned in `.tool-versions`) and a model provider
+key:
+
+```bash
+git clone https://github.com/z80dev/lemon.git && cd lemon
+mix deps.get && mix compile
+mix lemon.secrets.set llm_anthropic_api_key_raw "sk-ant-..."
+./bin/lemon doctor            # environment + config diagnostics
+./bin/lemon                   # web console on :4080, ops dashboard at /ops
+./bin/lemon-dev /path/to/repo # terminal UI
+./bin/lemon-gateway           # Telegram/Discord gateway
+```
+
+Configuration lives in `~/.lemon/config.toml`; the full reference is
+[`docs/config.md`](docs/config.md) and first-run setup, including the Telegram
+bot walkthrough, is [`docs/user-guide/setup.md`](docs/user-guide/setup.md).
+
+## Arenas
+
+The most visible thing the platform does is run models against each other. An
+arena keeps a league game running continuously for one simulation domain,
+samples a randomized model lineup per game, and records every finished game
+into persistent standings, resuming games that die mid-flight and reconciling
+unrecorded results on restart. Five domains are wired: werewolf, space station,
+stock market, survivor, poker — served at `/arena/:domain`,
+`/arena/:domain/leaderboard`, and a cross-domain `/leaderboards`, all in
+`apps/lemon_sim_ui`. Enable one with `LEMON_ARENA_<DOMAIN>_ENABLED` and
+`LEMON_ARENA_<DOMAIN>_MODELS`.
+
+Results are meant to be checkable: every run writes a hash-manifested artifact
+bundle, each scenario's scorecard is a pure function of final world state that
+the verifier recomputes and diffs, and per-actor token and cost usage is
+recorded alongside. On top of single runs sit benchmark suites (competitors ×
+seeds matrices) and order-independent Bradley-Terry model ratings fit over
+pairwise seed-level comparisons.
+
+No API keys needed for a deterministic run:
 
 ```bash
 mix lemon.sim.tic_tac_toe --offline-strategy random --seed 42 --no-persist --max-turns 10
-mix lemon.sim.vending_bench --preset ci --offline-strategy baseline --sim-id vb_ci_baseline
-mix lemon.sim.verify apps/lemon_sim/priv/game_logs/vending_bench/vb_ci_baseline
-mix lemon.sim.score apps/lemon_sim/priv/game_logs/vending_bench/vb_ci_baseline
-mix lemon.sim.suite --scenario vending_bench --preset ci --seeds 7,8 --offline baseline,pressure --out /tmp/vb_suite
-mix lemon.sim.ratings --suites /tmp/vb_suite --out /tmp/vb_ratings
+mix lemon.sim.vending_bench --preset ci --offline-strategy baseline --sim-id vb_ci
+mix lemon.sim.verify apps/lemon_sim/priv/game_logs/vending_bench/vb_ci
+mix lemon.sim.score  apps/lemon_sim/priv/game_logs/vending_bench/vb_ci
 ```
 
-With provider credentials configured, the same commands run live models
-against each other:
+The arena guide is [`apps/lemon_sim/README.md`](apps/lemon_sim/README.md).
 
-```bash
-mix lemon.sim.werewolf --player-count 6 --no-persist --max-turns 50
-mix lemon.sim.werewolf --models "anthropic:claude-sonnet-4,openai:gpt-5,..." --sim-id ww_showdown
-```
+## Repository map
 
-The TicTacToe offline and VendingBench offline commands are keyless
-deterministic runs. Live `tic_tac_toe`, `werewolf`, and the Werewolf
-compatibility scripts require configured model provider credentials. Werewolf
-replay generation is available through:
+Every app has its own README; these are the ones worth reading first.
 
-```bash
-mix lemon.sim.werewolf_replay apps/lemon_sim/priv/game_logs/werewolf_4model.jsonl
-```
+| Layer | Apps |
+| --- | --- |
+| Platform | [`ai`](apps/ai/README.md), [`lemon_core`](apps/lemon_core/README.md), [`agent_core`](apps/agent_core/README.md), `lemon_memory`, [`lemon_router`](apps/lemon_router/README.md), [`lemon_gateway`](apps/lemon_gateway/README.md), [`lemon_channels`](apps/lemon_channels/README.md), [`lemon_platform_test`](apps/lemon_platform_test/README.md) |
+| Reference runtime | [`lemon_control_plane`](apps/lemon_control_plane/README.md), [`lemon_cli`](apps/lemon_cli/README.md), [`lemon_web`](apps/lemon_web/README.md), [`lemon_automation`](apps/lemon_automation/README.md), [`lemon_skills`](apps/lemon_skills/README.md), [`lemon_media`](apps/lemon_media/README.md), [`lemon_browser`](apps/lemon_browser/README.md), [`lemon_lsp`](apps/lemon_lsp/README.md) |
+| Products | [`coding_agent`](apps/coding_agent/README.md), [`coding_agent_ui`](apps/coding_agent_ui/README.md), [`lemon_mcp`](apps/lemon_mcp/README.md), [`lemon_evals`](apps/lemon_evals/README.md), [`lemon_sim`](apps/lemon_sim/README.md), [`lemon_sim_ui`](apps/lemon_sim_ui/README.md), [`lemon_tcg`](apps/lemon_tcg/README.md) |
+| Satellite | [`x_api`](apps/x_api/README.md) |
 
-See [`apps/lemon_sim/README.md`](apps/lemon_sim/README.md) for the arena guide.
-
-## Assistant
-
-The assistant product is the same stack in a personal-agent shape: Telegram,
-Discord, X/XMTP previews, local TUI, web UI, routing, gateway execution slots,
-skills, coding tools, encrypted secrets, and persistent run history.
-
-### 5-Minute Setup
-
-#### Prerequisites
-
-- Elixir 1.19.5+ and Erlang/OTP 28.5+
-- A model provider API key (Anthropic, OpenAI, etc.)
-- Node.js 24 LTS+ for TUI/Web clients
-
-#### 1. Clone and build
-
-```bash
-git clone https://github.com/z80dev/lemon.git
-cd lemon
-mix deps.get
-mix compile
-```
-
-#### 2. Configure
-
-Create `~/.lemon/config.toml`:
-
-```toml
-[providers.anthropic]
-api_key_secret = "llm_anthropic_api_key_raw"
-
-[defaults]
-provider = "anthropic"
-model    = "anthropic:claude-sonnet-4-20250514"
-engine   = "lemon"
-```
-
-Store your API key:
-
-```bash
-mix lemon.secrets.set llm_anthropic_api_key_raw "sk-ant-..."
-```
-
-On Linux and other non-keychain environments, keep
-`~/.lemon/secrets_master_key` as the canonical local master key file. The
-`./bin/lemon` wrapper normalizes `LEMON_SECRETS_MASTER_KEY` from that file at
-startup.
-
-#### 3. Run the setup checks
-
-```bash
-./bin/lemon setup
-./bin/lemon channels
-./bin/lemon config validate
-./bin/lemon doctor
-./bin/lemon secrets status
-./bin/lemon skill list
-```
-
-The source wrapper commands delegate to Mix tasks, for example
-`./bin/lemon setup` -> `mix lemon.setup`, `./bin/lemon config` ->
-`mix lemon.config`, `./bin/lemon doctor` -> `mix lemon.doctor`, and
-`./bin/lemon skill` -> `mix lemon.skill`. Use `./bin/lemon --help` and
-subcommand `--help` output for the full command list.
-
-For source-checkout maintenance, `./bin/lemon update --check` delegates to the
-stage-1 local `mix lemon.update` task. It reports the current version, checks
-config migration state, and can sync bundled skills when run without
-`--no-skill-sync`; it does not download or swap remote release binaries.
-
-#### 4. Start Lemon
-
-TUI:
-
-```bash
-./bin/lemon-dev /path/to/your/project
-```
-
-Telegram gateway:
-
-```bash
-./bin/lemon-gateway
-```
-
-Web UI / operations dashboard:
-
-```bash
-./bin/lemon
-# session console: http://localhost:4080/
-# ops dashboard:   http://localhost:4080/ops
-```
-
-Script notifications:
-
-```bash
-./bin/lemon send --to telegram:<chat_id> "deploy finished"
-echo "RAM 92%" | ./bin/lemon send --to discord:<channel_id>
-./bin/lemon send --to discord:#ops --attach report.txt --attach trace.log "deploy report"
-```
-
-`./bin/lemon send` supports Telegram and Discord targets, optional `:thread_id`,
-`--thread`, `--topic`, `--account`, `--reply-to`, `--subject`, `--file`,
-`--file -`, repeated `--attach` uploads up to 10 files, `--dry-run`, `--json`,
-`--quiet`, `--help`, and filtered `--list`. Platform-only targets use env
-defaults first, then `[gateway.telegram] default_chat_id` /
-`default_thread_id` / `default_topic_id` or `[gateway.discord]
-default_channel_id` / `default_thread_id`. Default account ids use
-`LEMON_TELEGRAM_DEFAULT_ACCOUNT_ID` / `LEMON_DISCORD_DEFAULT_ACCOUNT_ID`, then
-`[gateway.telegram] default_account_id` / `[gateway.discord]
-default_account_id`. Dry-run validates targets, body/caption resolution, and
-attachment metadata without platform credentials or delivery. List mode reports
-env/config defaults plus bounded recent Telegram/Discord known-target windows
-with exact reusable aliases when the BEAM store has seen chats, channels, or
-threads. `--account <id>` selects the channel account for delivery and scopes
-known-target listing/name resolution. `--thread <id-or-name>` and
-Telegram-friendly `--topic <id-or-name>` set the thread/topic separately from
-`--to` and fail if the target already embeds a thread.
-`--reply-to <message-id>` replies under an existing platform message when the
-channel adapter supports it. Unique known names work for Telegram and Discord,
-such as `telegram:#lemon-ops`, `telegram:@lemon_ops`,
-`telegram:#lemon-ops:deploys`, `discord:#ops`, or `discord:#ops:deploys`.
-
-#### 5. Telegram quickstart
-
-1. Create a bot via `@BotFather` with `/newbot`, then copy the token.
-2. Add `gateway.telegram.bot_token = "..."` and
-   `allowed_chat_ids = [your_id]` to config.
-3. Restart the gateway, then message your bot.
-
-Full Telegram setup details: [`docs/user-guide/setup.md`](docs/user-guide/setup.md)
-
-## Assistant Capabilities
-
-| Feature | How |
-|---|---|
-| Chat with an AI coding assistant | Telegram, TUI, or Web UI |
-| Run tasks in a specific repo | `/new /path/to/repo` or bind a project in config |
-| Switch engines | `/lemon`, `/claude`, `/codex`, `/opencode`, or `/pi` |
-| Use skills | `./bin/lemon skill list`, `install`, `inspect` |
-| Search past runs | `search_memory` tool with the `session_search` flag |
-| Generate skill drafts | `mix lemon.skill draft generate` |
-| Schedule recurring tasks | Cron configuration in `~/.lemon/config.toml` |
-| Send shell/CI notifications | `./bin/lemon send --to telegram:<chat_id> "done"` |
-| Check channel readiness | `./bin/lemon channels` |
-| Check provider readiness | `./bin/lemon providers --provider openai` |
-| Inspect redacted proof artifacts | `./bin/lemon proofs --limit 5` |
-| Check usage/cost totals | `./bin/lemon usage` |
-
-Telegram commands include `/new`, `/cwd`, `/resume`, `/cancel`, `/lemon`,
-`/claude`, `/codex`, `/steer`, `/followup`, and `/interrupt`.
-
-## Documentation
-
-| Audience | Start here |
-|---|---|
-| LemonSim | [`apps/lemon_sim/README.md`](apps/lemon_sim/README.md) |
-| Public docs site | [`docs/index.md`](docs/index.md) |
-| Install landing page | [`docs/install.md`](docs/install.md) |
-| New users | [`docs/user-guide/setup.md`](docs/user-guide/setup.md) |
-| Skills | [`docs/user-guide/skills.md`](docs/user-guide/skills.md) |
-| Memory & search | [`docs/user-guide/memory.md`](docs/user-guide/memory.md) |
-| Adaptive features | [`docs/user-guide/adaptive.md`](docs/user-guide/adaptive.md) |
-| Architecture | [`docs/architecture/overview.md`](docs/architecture/overview.md) |
-| Config reference | [`docs/config.md`](docs/config.md) |
-| Non-Elixir users | [`docs/for-dummies/README.md`](docs/for-dummies/README.md) |
-| Contributors | [`AGENTS.md`](AGENTS.md) |
-| Full docs index | [`docs/README.md`](docs/README.md) |
+Docs index: [`docs/README.md`](docs/README.md) · architecture overview:
+[`docs/architecture/overview.md`](docs/architecture/overview.md) · config
+reference: [`docs/config.md`](docs/config.md).
 
 ## Development
 
 ```bash
-scripts/test fast                 # compile with warnings as errors + ExUnit excluding integration
-scripts/test path apps/lemon_skills/test
-scripts/test quality              # lint + doc freshness + architecture boundaries
-scripts/test clients              # Python CLI package check + Node client CI parity
+scripts/test fast      # compile --warnings-as-errors + ExUnit, excluding integration
+scripts/test quality   # credo, doc freshness, architecture boundaries, duplicate tests
+scripts/test path apps/lemon_core/test
 ```
 
-See [`docs/testing.md`](docs/testing.md) for the canonical local test lanes and
-how they map to CI.
-
-GitHub Copilot coding-agent runs use
-[`/.github/workflows/copilot-setup-steps.yml`](.github/workflows/copilot-setup-steps.yml)
-to preinstall BEAM/Rust toolchains plus Hex dependencies before the agent
-firewall is enabled. Keep it aligned with the versions and dependency bootstrap
-steps in [`/.github/workflows/quality.yml`](.github/workflows/quality.yml).
-
-Release profiles:
-
-| Profile | Use case |
-|---|---|
-| `lemon_runtime_min` | Headless/API runtime with gateway, router, channels, and control plane |
-| `lemon_runtime_full` | Full local runtime with automation, skills, web UI, and sim UI |
-| `sim_broadcast_platform` | Public sim broadcast and replay deployment (`lemon_sim_ui`) |
+[`docs/testing.md`](docs/testing.md) maps every local lane to its CI job.
+Release profiles `lemon_runtime_min`, `lemon_runtime_full` and
+`sim_broadcast_platform` are defined in [`mix.exs`](mix.exs):
 
 ```bash
 MIX_ENV=prod mix release lemon_runtime_full
 ```
 
+## Contributing
+
+Start with [`CONTRIBUTING.md`](CONTRIBUTING.md); [`AGENTS.md`](AGENTS.md) is the
+working agreement for both human and agent contributors. A new channel adapter
+is the ideal first contribution — implement
+[`LemonChannels.Plugin`](apps/lemon_channels/lib/lemon_channels/plugin.ex) and
+run it against `LemonPlatformTest.PluginCase`. Vulnerability reports:
+[`SECURITY.md`](SECURITY.md).
+
 ## License
 
-MIT — see LICENSE file.
+MIT — see [`LICENSE`](LICENSE).
 
 ## Acknowledgments
 
-Lemon is heavily inspired by [pi](https://github.com/badlogic/pi-mono) (Mario Zechner),
-draws architectural ideas from [Oh-My-Pi](https://github.com/can1357/oh-my-pi) (can1357),
-[takopi](https://github.com/banteg/takopi) (banteg), OpenClaw, and Ironclaw.
-Skill library bootstrapped from [Hermes Agent](https://github.com/NousResearch/hermes-agent) (Nous Research).
+Heavily inspired by [pi](https://github.com/badlogic/pi-mono) (Mario Zechner),
+with architectural ideas from [Oh-My-Pi](https://github.com/can1357/oh-my-pi),
+[takopi](https://github.com/banteg/takopi), OpenClaw and Ironclaw. The skill
+library was bootstrapped from
+[Hermes Agent](https://github.com/NousResearch/hermes-agent). Built with
+[Elixir](https://elixir-lang.org/); the TUI is powered by
+[@mariozechner/pi-tui](https://www.npmjs.com/package/@mariozechner/pi-tui).
 
-Built with [Elixir](https://elixir-lang.org/) and the BEAM.
-TUI powered by [@mariozechner/pi-tui](https://www.npmjs.com/package/@mariozechner/pi-tui).
+Named after a very good cat.
