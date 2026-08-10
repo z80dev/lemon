@@ -79,9 +79,13 @@ defmodule LemonCore.Application do
     if Code.ensure_loaded?(Exqlite.Sqlite3) do
       [LemonCore.RunHistoryStore]
     else
-      Logger.info(
-        "exqlite is not available: run history is disabled. " <>
-          "Add {:exqlite, \"~> 0.34\"} to your deps to enable it."
+      Logger.warning(
+        "exqlite is not available, so LemonCore.RunHistoryStore was not started: " <>
+          "run history is silently disabled (reads return empty and finalize-run " <>
+          "hooks that persist history do nothing). Durable memory has the same " <>
+          "requirement in lemon_memory. :exqlite is an optional dependency of " <>
+          "lemon_core, so declare it yourself to enable these: " <>
+          "{:exqlite, \"~> 0.34\"}."
       )
 
       []

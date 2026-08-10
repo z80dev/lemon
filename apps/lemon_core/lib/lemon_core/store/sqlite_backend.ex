@@ -445,7 +445,10 @@ defmodule LemonCore.Store.SqliteBackend do
     :ok
   end
 
-  defp classify_bind_error(%ExqliteError{} = error) do
+  # Guarded rather than matched on `%ExqliteError{}`: expanding that struct
+  # needs the module at compile time, which breaks any consumer that doesn't
+  # pull in the optional :exqlite. The sole caller already rescued on it.
+  defp classify_bind_error(error) when is_exception(error) do
     message = Exception.message(error)
 
     if String.contains?(String.downcase(message), "too big") do
