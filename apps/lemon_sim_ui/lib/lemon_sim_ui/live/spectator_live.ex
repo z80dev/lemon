@@ -25,10 +25,6 @@ defmodule LemonSimUi.SpectatorLive do
     SpectatorChrome
   }
 
-  @vending_bench_artifact_registry Path.join(
-                                     System.tmp_dir!(),
-                                     "lemon_vending_bench_artifact_registry.json"
-                                   )
   @vending_bench_artifact_refresh_ms 5_000
   @usage_refresh_ms 5_000
 
@@ -991,7 +987,7 @@ defmodule LemonSimUi.SpectatorLive do
 
   defp sync_broadcast_running(socket) do
     playback_pending? =
-      socket.assigns[:domain_type] == :werewolf and socket.assigns[:playback] &&
+      (socket.assigns[:domain_type] == :werewolf and socket.assigns[:playback]) &&
         WerewolfPlayback.queue_depth(socket.assigns.playback) > 0
 
     assign(socket,
@@ -1106,8 +1102,12 @@ defmodule LemonSimUi.SpectatorLive do
     end
   end
 
+  # One source of truth with the writer, resolved at call time — see
+  # LemonSim.Examples.VendingBench.ArtifactRegistry.path/0.
+  defp vending_bench_artifact_registry, do: LemonSim.Examples.VendingBench.ArtifactRegistry.path()
+
   defp artifact_dir_for_sim(sim_id) do
-    with {:ok, body} <- File.read(@vending_bench_artifact_registry),
+    with {:ok, body} <- File.read(vending_bench_artifact_registry()),
          {:ok, registry} when is_map(registry) <- Jason.decode(body),
          artifact_dir when is_binary(artifact_dir) <- Map.get(registry, sim_id),
          true <- File.exists?(Path.join(artifact_dir, "final_world.json")) do

@@ -12,10 +12,6 @@ defmodule LemonSimUi.LobbyLive do
   alias LemonSimUi.{Arena, HostedGame, SimHelpers, SimManager, VendingBenchLauncher}
   alias LemonSim.Kernel.{Event, State, Store}
 
-  @vending_bench_artifact_registry Path.join(
-                                     System.tmp_dir!(),
-                                     "lemon_vending_bench_artifact_registry.json"
-                                   )
   @vending_bench_artifact_refresh_ms 5_000
 
   @impl true
@@ -495,8 +491,12 @@ defmodule LemonSimUi.LobbyLive do
     })
   end
 
+  # One source of truth with the writer, resolved at call time — see
+  # LemonSim.Examples.VendingBench.ArtifactRegistry.path/0.
+  defp vending_bench_artifact_registry, do: LemonSim.Examples.VendingBench.ArtifactRegistry.path()
+
   defp vending_bench_artifact_states do
-    @vending_bench_artifact_registry
+    vending_bench_artifact_registry()
     |> read_registry()
     |> Enum.flat_map(fn {sim_id, artifact_dir} ->
       case load_artifact_state(sim_id, artifact_dir) do

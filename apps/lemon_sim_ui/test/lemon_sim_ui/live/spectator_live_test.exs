@@ -7,8 +7,6 @@ defmodule LemonSimUi.SpectatorLiveTest do
   alias LemonSim.Kernel.State
   alias LemonSim.LLM.Usage, as: SimUsage
 
-  @artifact_registry Path.join(System.tmp_dir!(), "lemon_vending_bench_artifact_registry.json")
-
   test "shows not found for nonexistent sim", %{conn: conn} do
     {:ok, _view, html} = live(conn, "/watch/nonexistent_sim_id")
     assert html =~ "Simulation Not Found"
@@ -226,7 +224,7 @@ defmodule LemonSimUi.SpectatorLiveTest do
 
   test "renders usage panel from checkpoint artifacts", %{conn: conn} do
     sim_id = "test_spectator_usage_artifact"
-    original_registry = File.read(@artifact_registry)
+    original_registry = File.read(artifact_registry())
 
     artifact_dir =
       Path.join(
@@ -286,7 +284,7 @@ defmodule LemonSimUi.SpectatorLiveTest do
       })
     )
 
-    File.write!(@artifact_registry, Jason.encode!(%{sim_id => artifact_dir}))
+    File.write!(artifact_registry(), Jason.encode!(%{sim_id => artifact_dir}))
 
     {:ok, view, _html} = live(conn, "/watch/#{sim_id}")
     html = render(view)
@@ -576,8 +574,8 @@ defmodule LemonSimUi.SpectatorLiveTest do
 
   defp assert_eventually(_fun, 0), do: flunk("condition not met in time")
 
-  defp restore_registry({:ok, body}), do: File.write!(@artifact_registry, body)
-  defp restore_registry({:error, _reason}), do: File.rm(@artifact_registry)
+  defp restore_registry({:ok, body}), do: File.write!(artifact_registry(), body)
+  defp restore_registry({:error, _reason}), do: File.rm(artifact_registry())
 
   defp put_model_on_first_player(%State{world: world} = state, model) do
     first_player_id = world.players |> Map.keys() |> Enum.sort() |> List.first()
@@ -586,4 +584,7 @@ defmodule LemonSimUi.SpectatorLiveTest do
 
     %{state | world: Map.put(world, :players, updated_players)}
   end
+
+  # Same accessor the app uses, so a changed TMPDIR moves both together.
+  defp artifact_registry, do: LemonSim.Examples.VendingBench.ArtifactRegistry.path()
 end

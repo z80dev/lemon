@@ -3,8 +3,6 @@ defmodule LemonSimUi.LobbyLiveTest do
 
   import Phoenix.LiveViewTest
 
-  @artifact_registry Path.join(System.tmp_dir!(), "lemon_vending_bench_artifact_registry.json")
-
   setup do
     original = Application.get_env(:lemon_sim_ui, :public_vending_launcher)
     original_presets = Application.get_env(:lemon_sim_ui, :vending_launcher_presets, :__unset__)
@@ -82,7 +80,7 @@ defmodule LemonSimUi.LobbyLiveTest do
   test "lists running VendingBench sims from checkpoint artifacts", %{conn: conn} do
     sim_id = "test_lobby_vb_artifact_#{System.unique_integer([:positive])}"
     artifact_dir = Path.join(System.tmp_dir!(), sim_id)
-    original_registry = File.read(@artifact_registry)
+    original_registry = File.read(artifact_registry())
 
     on_exit(fn ->
       File.rm_rf!(artifact_dir)
@@ -110,7 +108,7 @@ defmodule LemonSimUi.LobbyLiveTest do
   test "lists completed VendingBench arena artifacts as replays", %{conn: conn} do
     sim_id = "test_lobby_vb_arena_artifact_#{System.unique_integer([:positive])}"
     artifact_dir = Path.join(System.tmp_dir!(), sim_id)
-    original_registry = File.read(@artifact_registry)
+    original_registry = File.read(artifact_registry())
 
     on_exit(fn ->
       File.rm_rf!(artifact_dir)
@@ -143,7 +141,7 @@ defmodule LemonSimUi.LobbyLiveTest do
 
   defp write_registry_entry(sim_id, artifact_dir) do
     registry =
-      case File.read(@artifact_registry) do
+      case File.read(artifact_registry()) do
         {:ok, body} ->
           case Jason.decode(body) do
             {:ok, decoded} when is_map(decoded) -> decoded
@@ -154,15 +152,18 @@ defmodule LemonSimUi.LobbyLiveTest do
           %{}
       end
 
-    File.write!(@artifact_registry, Jason.encode!(Map.put(registry, sim_id, artifact_dir)))
+    File.write!(artifact_registry(), Jason.encode!(Map.put(registry, sim_id, artifact_dir)))
   end
 
-  defp restore_registry({:ok, body}), do: File.write!(@artifact_registry, body)
-  defp restore_registry({:error, _reason}), do: File.rm(@artifact_registry)
+  defp restore_registry({:ok, body}), do: File.write!(artifact_registry(), body)
+  defp restore_registry({:error, _reason}), do: File.rm(artifact_registry())
 
   defp restore_presets(:__unset__),
     do: Application.delete_env(:lemon_sim_ui, :vending_launcher_presets)
 
   defp restore_presets(value),
     do: Application.put_env(:lemon_sim_ui, :vending_launcher_presets, value)
+
+  # Same accessor the app uses, so a changed TMPDIR moves both together.
+  defp artifact_registry, do: LemonSim.Examples.VendingBench.ArtifactRegistry.path()
 end
