@@ -151,16 +151,22 @@ To build your own agent on the platform, `mix lemon.new` scaffolds a project
 with one example tool and one channel wired:
 
 ```bash
-cd installer && MIX_ENV=prod mix archive.build && mix archive.install lemon_new-0.1.0.ez
+# from a checkout of this repo; the subshell keeps the cd from leaking
+(cd installer && MIX_ENV=prod mix archive.build && mix archive.install --force lemon_new-0.1.0.ez)
+
+cd ~/code                              # anywhere outside this repo
 mix lemon.new my_agent --channel --memory
 cd my_agent && mix test
 ```
 
 The generator lives in [`installer/`](installer/README.md) and is installed as
 a Mix archive rather than fetched from Hex, because the platform packages are
-not published yet — generated projects depend on them by path, overridable with
-`--lemon-path`. The guides it is written against are in `docs/getting-started/`
-and are still being filled in ([Phase 3.4/3.5](docs/platform-split.md)).
+not published yet — generated projects depend on them by path, baked in from
+the checkout the archive was built from and overridable with `--lemon-path` or
+`$LEMON_PATH`. Both flags are optional: a bare `mix lemon.new my_agent` gives a
+working project too. The guides it is written against are in
+[`docs/getting-started/`](docs/getting-started/build-your-first-agent.md):
+build your first agent, add a tool, add a channel, persist memory.
 
 Running the reference runtime from a source checkout works today. Requires
 Elixir 1.19.5+ / OTP 28.5+ (pinned in `.tool-versions`) and a model provider
