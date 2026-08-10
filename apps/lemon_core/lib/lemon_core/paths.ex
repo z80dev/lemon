@@ -31,6 +31,7 @@ defmodule LemonCore.Paths do
 
   @default_state_dir ".lemon"
   @default_config_file "config.toml"
+  @default_checkpoint_dir_name "lemon_checkpoints"
 
   @type opts :: keyword()
 
@@ -88,6 +89,28 @@ defmodule LemonCore.Paths do
   @spec project_path(Path.t(), [String.t()] | String.t(), opts()) :: String.t()
   def project_path(cwd, segments, opts \\ []) do
     Path.join([project_state_dir(cwd, opts) | List.wrap(segments)])
+  end
+
+  @doc """
+  Directory holding filesystem-rollback checkpoints.
+
+  Deliberately under the system temp directory rather than the state directory:
+  checkpoints are short-lived rollback material for an in-flight session, and
+  losing them on reboot is the intended behaviour. Hosts that want them to
+  survive can point `:checkpoint_dir` at a durable location.
+
+  Resolved per call — a module attribute here would freeze the build machine's
+  temp directory into a release.
+
+      iex> LemonCore.Paths.checkpoint_dir(checkpoint_dir: "/srv/checkpoints")
+      "/srv/checkpoints"
+  """
+  @spec checkpoint_dir(opts()) :: String.t()
+  def checkpoint_dir(opts \\ []) do
+    case setting(opts, :checkpoint_dir, nil) do
+      path when is_binary(path) and path != "" -> Path.expand(path)
+      _ -> Path.join(System.tmp_dir!(), @default_checkpoint_dir_name)
+    end
   end
 
   @doc "Global config file, `~/.lemon/config.toml` by default."

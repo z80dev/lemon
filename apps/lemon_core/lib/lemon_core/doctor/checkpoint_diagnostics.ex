@@ -3,11 +3,9 @@ defmodule LemonCore.Doctor.CheckpointDiagnostics do
   Redacted diagnostics for the preview checkpoint store.
   """
 
-  @default_dir Path.join([System.tmp_dir!(), "lemon_checkpoints"])
-
   @spec summary(keyword()) :: map()
   def summary(opts \\ []) do
-    dir = Keyword.get(opts, :checkpoint_dir) || @default_dir
+    dir = Keyword.get(opts, :checkpoint_dir) || LemonCore.Paths.checkpoint_dir()
     limit = Keyword.get(opts, :limit, 20)
 
     entries =

@@ -5,7 +5,6 @@ defmodule LemonCore.Checkpoint do
 
   require Logger
 
-  @checkpoint_dir Path.join([System.tmp_dir!(), "lemon_checkpoints"])
   @checkpoint_version "1.0"
 
   @type checkpoint :: %{
@@ -177,11 +176,11 @@ defmodule LemonCore.Checkpoint do
   def list(session_id) when is_binary(session_id) do
     ensure_checkpoint_dir()
 
-    @checkpoint_dir
+    checkpoint_dir()
     |> File.ls!()
     |> Enum.filter(&String.ends_with?(&1, ".json"))
     |> Enum.map(fn filename ->
-      path = Path.join(@checkpoint_dir, filename)
+      path = Path.join(checkpoint_dir(), filename)
 
       case File.read(path) do
         {:ok, content} ->
@@ -281,11 +280,17 @@ defmodule LemonCore.Checkpoint do
   end
 
   defp checkpoint_path(checkpoint_id) do
-    Path.join(@checkpoint_dir, "#{checkpoint_id}.json")
+    Path.join(checkpoint_dir(), "#{checkpoint_id}.json")
   end
 
+  @doc """
+  Directory checkpoints are written to; see `LemonCore.Paths.checkpoint_dir/1`.
+  """
+  @spec checkpoint_dir() :: String.t()
+  def checkpoint_dir, do: LemonCore.Paths.checkpoint_dir()
+
   defp ensure_checkpoint_dir do
-    File.mkdir_p!(@checkpoint_dir)
+    File.mkdir_p!(checkpoint_dir())
   end
 
   defp save_checkpoint(checkpoint) do

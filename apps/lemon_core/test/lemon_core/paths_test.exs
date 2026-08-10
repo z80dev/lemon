@@ -87,6 +87,49 @@ defmodule LemonCore.PathsTest do
     end
   end
 
+  describe "checkpoint directory" do
+    test "defaults under the system temp dir, resolved per call" do
+      assert Paths.checkpoint_dir() == Path.join(System.tmp_dir!(), "lemon_checkpoints")
+    end
+
+    test "tracks TMPDIR at call time rather than compile time" do
+      original = System.get_env("TMPDIR")
+      # System.tmp_dir!/0 only accepts a directory that exists and is writable.
+      probe = "/tmp/lemon-paths-checkpoint-probe"
+      File.mkdir_p!(probe)
+      on_exit(fn -> File.rm_rf!(probe) end)
+      System.put_env("TMPDIR", probe)
+
+      on_exit(fn ->
+        if original, do: System.put_env("TMPDIR", original), else: System.delete_env("TMPDIR")
+      end)
+
+      assert Paths.checkpoint_dir() == "/tmp/lemon-paths-checkpoint-probe/lemon_checkpoints"
+    end
+
+    test "can be pinned somewhere durable" do
+      put_paths(checkpoint_dir: "/var/lib/lemon/checkpoints")
+
+      assert Paths.checkpoint_dir() == "/var/lib/lemon/checkpoints"
+    end
+
+    test "Checkpoint and its diagnostics resolve to the same directory" do
+      put_paths(checkpoint_dir: "/var/lib/lemon/checkpoints")
+
+      assert LemonCore.Checkpoint.checkpoint_dir() == "/var/lib/lemon/checkpoints"
+
+      assert LemonCore.Doctor.CheckpointDiagnostics.summary(limit: 1).store_dir ==
+               "/var/lib/lemon/checkpoints"
+    end
+
+    test "an explicit :checkpoint_dir option still wins in diagnostics" do
+      put_paths(checkpoint_dir: "/var/lib/lemon/checkpoints")
+
+      assert LemonCore.Doctor.CheckpointDiagnostics.summary(checkpoint_dir: "/tmp/elsewhere").store_dir ==
+               "/tmp/elsewhere"
+    end
+  end
+
   describe "consumers follow the configuration" do
     test "Config and Config.Modular resolve through Paths" do
       put_paths(state_dir: ".myapp", config_file: "lemon.toml")
