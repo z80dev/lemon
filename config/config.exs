@@ -33,6 +33,10 @@ config :coding_agent, :lane_caps,
 
 config :coding_agent, :async_followups, default_queue_mode: :steer_backlog
 
+# The gateway writes channel-bound files into the agent's workspace, but must
+# not depend on the agent product; the reference runtime forwards the value.
+config :lemon_gateway, :workspace_dir, {CodingAgent.Config, :workspace_dir, []}
+
 config :lemon_router, :engine_runtime, LemonGateway.Runtime
 
 # Support bundles include workspace (goal/kanban) diagnostics when the agent
@@ -52,6 +56,28 @@ config :lemon_core, :doctor_runtime,
   browser_server: LemonBrowser.LocalServer,
   lsp_server_manager: LemonLsp.ServerManager
 
+# Environment-variable declarations live with the app that reads them; the
+# framework in LemonCore.Env aggregates whatever is loaded. Apps missing from a
+# given build are skipped, so this list is a superset, not a requirement.
+config :lemon_core, :env_registries, [
+  LemonCore.Env.Declarations,
+  Ai.Env,
+  AgentCore.Env,
+  CodingAgent.Env,
+  LemonAutomation.Env,
+  LemonBrowser.Env,
+  LemonChannels.Env,
+  LemonControlPlane.Env,
+  LemonEvals.Env,
+  LemonGateway.Env,
+  LemonRouter.Env,
+  LemonSimUi.Env,
+  LemonSkills.Env,
+  LemonTcg.Env,
+  LemonWeb.Env,
+  XApi.Env
+]
+
 config :lemon_channels,
   adapters: [
     LemonChannels.Adapters.Telegram,
@@ -60,6 +86,13 @@ config :lemon_channels,
     LemonChannels.Adapters.WhatsApp,
     LemonChannels.Adapters.XAPI
   ]
+
+# Filesystem layout for the reference runtime. These are LemonCore.Paths'
+# defaults, stated explicitly so the values live with the runtime rather than
+# inside the library.
+config :lemon_core, :paths,
+  state_dir: ".lemon",
+  config_file: "config.toml"
 
 # Master key providers for encrypted secrets, tried in order. `:keychain` is
 # macOS-only and skips itself elsewhere; see LemonCore.Secrets.KeyProvider.

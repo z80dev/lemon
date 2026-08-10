@@ -29,19 +29,100 @@ defmodule LemonCore.EnvTest do
     :ok
   end
 
+  defmodule TestRegistry do
+    @moduledoc false
+    use LemonCore.Env.Registry
+
+    @declarations [
+      %{
+        name: :env_test_ratio,
+        env_var: "ENV_TEST_RATIO",
+        aliases: [],
+        type: :float,
+        default: 0.5,
+        doc: "Float casting fixture.",
+        secret?: false,
+        required?: false,
+        area: :env_test,
+        apps: [:lemon_core]
+      },
+      %{
+        name: :env_test_models,
+        env_var: "ENV_TEST_MODELS",
+        aliases: ["ENV_TEST_MODELS_LEGACY"],
+        type: :list,
+        default: [],
+        doc: "Alias resolution fixture.",
+        secret?: false,
+        required?: false,
+        area: :env_test,
+        apps: [:lemon_core]
+      }
+    ]
+  end
+
+  defp with_test_registry(fun) do
+    original = Application.get_env(:lemon_core, :env_registries)
+    Application.put_env(:lemon_core, :env_registries, [TestRegistry])
+
+    try do
+      fun.()
+    after
+      if original do
+        Application.put_env(:lemon_core, :env_registries, original)
+      else
+        Application.delete_env(:lemon_core, :env_registries)
+      end
+    end
+  end
+
+  describe "registries/0 aggregation" do
+    test "defaults to lemon_core's own declarations" do
+      original = Application.get_env(:lemon_core, :env_registries)
+      Application.delete_env(:lemon_core, :env_registries)
+
+      try do
+        assert Env.registries() == [LemonCore.Env.Declarations]
+        assert Enum.any?(Env.all_declared(), &(&1.name == :lemon_base_delay_ms))
+      after
+        if original, do: Application.put_env(:lemon_core, :env_registries, original)
+      end
+    end
+
+    test "aggregates every listed registry" do
+      with_test_registry(fn ->
+        names = Enum.map(Env.all_declared(), & &1.name)
+        assert :env_test_ratio in names
+        assert :env_test_models in names
+      end)
+    end
+
+    test "skips registries whose module is not loaded" do
+      Application.put_env(:lemon_core, :env_registries, [
+        LemonCore.Env.Declarations,
+        :"Elixir.SomeApp.NotCompiled.Env"
+      ])
+
+      on_exit(fn -> Application.delete_env(:lemon_core, :env_registries) end)
+
+      # An app missing from this build must not break the aggregate.
+      assert Enum.any?(Env.all_declared(), &(&1.name == :lemon_base_delay_ms))
+    end
+  end
+
   describe "all_declared/0" do
     test "returns a non-empty list of declarations" do
       declared = Env.all_declared()
       assert is_list(declared)
-      assert length(declared) > 100
+      assert length(declared) > 50
     end
 
-    test "every declaration has a unique name" do
+    test "every declaration has a unique name across the loaded registries" do
       names = Enum.map(Env.all_declared(), & &1.name)
       assert length(names) == length(Enum.uniq(names))
     end
 
-    test "every declaration has a unique canonical env_var" do
+    test "every declaration has a unique canonical env_var across the loaded registries" do
       env_vars = Enum.map(Env.all_declared(), & &1.env_var)
       assert length(env_vars) == length(Enum.uniq(env_vars))
     end
@@ -63,10 +144,10 @@ defmodule LemonCore.EnvTest do
 
   describe "describe/1 and by_area/1" do
     test "describe/1 finds a declared variable by name" do
-      decl = Env.describe(:lemon_web_port)
-      assert decl.env_var == "LEMON_WEB_PORT"
+      decl = Env.describe(:lemon_base_delay_ms)
+      assert decl.env_var == "LEMON_BASE_DELAY_MS"
       assert decl.type == :integer
-      assert decl.default == 4080
+      assert decl.default == 1000
     end
 
     test "describe/1 returns nil for an undeclared name" do
@@ -74,40 +155,44 @@ defmodule LemonCore.EnvTest do
     end
 
     test "by_area/1 returns only declarations in that area" do
-      arena_decls = Env.by_area(:arena)
-      assert arena_decls != []
-      assert Enum.all?(arena_decls, &(&1.area == :arena))
+      agent_decls = Env.by_area(:agent)
+      assert agent_decls != []
+      assert Enum.all?(agent_decls, &(&1.area == :agent))
     end
   end
 
   describe "get/2 resolution" do
     test "falls back to the declared default when unset" do
-      System.delete_env("LEMON_WEB_PORT")
-      assert Env.get(:lemon_web_port) == 4080
+      System.delete_env("LEMON_BASE_DELAY_MS")
+      assert Env.get(:lemon_base_delay_ms) == 1000
     end
 
     test "reads and casts the primary env_var when set" do
-      System.put_env("LEMON_WEB_PORT", "9999")
-      assert Env.get(:lemon_web_port) == 9999
+      System.put_env("LEMON_BASE_DELAY_MS", "9999")
+      assert Env.get(:lemon_base_delay_ms) == 9999
     end
 
     test "falls back to a declared alias when the primary var is unset" do
-      System.delete_env("LEMON_ARENA_WEREWOLF_MODELS")
-      System.put_env("WEREWOLF_ARENA_MODELS", "anthropic:claude-sonnet-4-20250514")
+      with_test_registry(fn ->
+        System.delete_env("ENV_TEST_MODELS")
+        System.put_env("ENV_TEST_MODELS_LEGACY", "anthropic:claude-sonnet-4-20250514")
 
-      assert Env.get(:lemon_arena_werewolf_models) == ["anthropic:claude-sonnet-4-20250514"]
+        assert Env.get(:env_test_models) == ["anthropic:claude-sonnet-4-20250514"]
+      end)
     end
 
     test "prefers the primary env_var over an alias when both are set" do
-      System.put_env("LEMON_ARENA_WEREWOLF_MODELS", "primary:model")
-      System.put_env("WEREWOLF_ARENA_MODELS", "legacy:model")
+      with_test_registry(fn ->
+        System.put_env("ENV_TEST_MODELS", "primary:model")
+        System.put_env("ENV_TEST_MODELS_LEGACY", "legacy:model")
 
-      assert Env.get(:lemon_arena_werewolf_models) == ["primary:model"]
+        assert Env.get(:env_test_models) == ["primary:model"]
+      end)
     end
 
     test "opts[:default] overrides the declared default" do
-      System.delete_env("LEMON_WEB_PORT")
-      assert Env.get(:lemon_web_port, default: 1234) == 1234
+      System.delete_env("LEMON_BASE_DELAY_MS")
+      assert Env.get(:lemon_base_delay_ms, default: 1234) == 1234
     end
 
     test "casts booleans" do
@@ -119,8 +204,10 @@ defmodule LemonCore.EnvTest do
     end
 
     test "casts floats" do
-      System.put_env("LEMON_TELEGRAM_COMPACTION_TRIGGER_RATIO", "0.75")
-      assert Env.get(:lemon_telegram_compaction_trigger_ratio) == 0.75
+      with_test_registry(fn ->
+        System.put_env("ENV_TEST_RATIO", "0.75")
+        assert Env.get(:env_test_ratio) == 0.75
+      end)
     end
 
     test "casts byte sizes" do
@@ -195,19 +282,21 @@ defmodule LemonCore.EnvTest do
     end
 
     test "tags resolution source as :default, :env, or :alias" do
-      System.delete_env("LEMON_WEB_PORT")
-      System.delete_env("LEMON_ARENA_WEREWOLF_MODELS")
-      System.put_env("WEREWOLF_ARENA_MODELS", "legacy:model")
+      with_test_registry(fn ->
+        System.delete_env("ENV_TEST_RATIO")
+        System.delete_env("ENV_TEST_MODELS")
+        System.put_env("ENV_TEST_MODELS_LEGACY", "legacy:model")
 
-      snapshot = Env.snapshot()
+        snapshot = Env.snapshot()
 
-      port_entry = Enum.find(snapshot, &(&1.name == :lemon_web_port))
-      assert port_entry.source == :default
-      assert port_entry.value == 4080
+        ratio_entry = Enum.find(snapshot, &(&1.name == :env_test_ratio))
+        assert ratio_entry.source == :default
+        assert ratio_entry.value == 0.5
 
-      werewolf_entry = Enum.find(snapshot, &(&1.name == :lemon_arena_werewolf_models))
-      assert werewolf_entry.source == :alias
-      assert werewolf_entry.value == ["legacy:model"]
+        models_entry = Enum.find(snapshot, &(&1.name == :env_test_models))
+        assert models_entry.source == :alias
+        assert models_entry.value == ["legacy:model"]
+      end)
     end
 
     test "redacts secret values when inspected, but leaves the raw value readable" do
@@ -223,12 +312,12 @@ defmodule LemonCore.EnvTest do
     end
 
     test "does not redact non-secret values when inspected" do
-      System.put_env("LEMON_WEB_PORT", "4080")
+      System.put_env("LEMON_BASE_DELAY_MS", "4080")
 
       snapshot = Env.snapshot()
-      port_entry = Enum.find(snapshot, &(&1.name == :lemon_web_port))
+      delay_entry = Enum.find(snapshot, &(&1.name == :lemon_base_delay_ms))
 
-      assert inspect(port_entry) =~ "4080"
+      assert inspect(delay_entry) =~ "4080"
     end
 
     test "renders nil secret values as nil, not redacted" do
