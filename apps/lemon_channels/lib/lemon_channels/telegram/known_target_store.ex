@@ -7,6 +7,15 @@ defmodule LemonChannels.Telegram.KnownTargetStore do
 
   @table :telegram_known_targets
 
+  @doc """
+  The generic store table backing known targets.
+
+  Channels registers this with `LemonCore.Store.register_cached_table/2` at
+  boot so reads are served from the store's read cache.
+  """
+  @spec table() :: atom()
+  def table, do: @table
+
   @spec get(term()) :: term()
   def get(key), do: Store.get(@table, key)
 

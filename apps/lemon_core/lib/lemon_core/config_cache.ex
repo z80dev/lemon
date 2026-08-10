@@ -6,30 +6,64 @@ defmodule LemonCore.ConfigCache do
   - Avoid hot-path TOML disk reads/parsing.
   - Provide consistent semantics: cached reads by default + explicit reload.
   - Detect on-disk changes via periodic (TTL) file fingerprint checks (mtime/size).
+
+  ## Instances
+
+  The cache is named (default `LemonCore.ConfigCache`) and every public function
+  takes an optional leading server argument. A second instance gets its own ETS
+  table, derived from its name, so several caches can coexist in one node.
+  Options come from `start_link/1` first, falling back to
+  `Application.get_env(:lemon_core, name)`.
   """
 
   use GenServer
 
   @table :lemon_core_config_cache
-  @defaults_key {__MODULE__, :defaults}
 
   @default_mtime_check_interval_ms 1_000
   @default_call_timeout_ms 5_000
+
+  @typedoc "A running config cache, addressed by its registered name."
+  @type server :: atom()
 
   # Row format: {key, base_config, fingerprint, loaded_at_ms, checked_at_ms}
   # Fingerprint is a list of {path, {mtime, size} | :missing}.
 
   def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    {name, opts} = Keyword.pop(opts, :name, __MODULE__)
+
+    unless is_atom(name) and not is_nil(name) do
+      raise ArgumentError, "LemonCore.ConfigCache :name must be an atom, got: #{inspect(name)}"
+    end
+
+    GenServer.start_link(__MODULE__, Keyword.put(opts, :name, name), name: name)
   end
 
   @doc """
   Returns true if the cache is running and its ETS table exists.
   """
-  @spec available?() :: boolean()
-  def available? do
-    is_pid(Process.whereis(__MODULE__)) and :ets.whereis(@table) != :undefined
+  @spec available?(server()) :: boolean()
+  def available?(server \\ __MODULE__) do
+    is_pid(whereis(server)) and :ets.whereis(table_for(server)) != :undefined
   end
+
+  @doc """
+  Return the ETS table name backing a cache instance.
+  """
+  @spec table_for(server()) :: atom()
+  def table_for(__MODULE__), do: @table
+
+  def table_for(server) when is_atom(server) and not is_nil(server) do
+    suffix =
+      case Atom.to_string(server) do
+        "Elixir." <> rest -> rest |> String.replace(".", "_") |> Macro.underscore()
+        other -> other
+      end
+
+    :"lemon_core_config_cache_#{suffix}"
+  end
+
+  defp whereis(server) when is_atom(server), do: Process.whereis(server)
 
   @doc """
   Get the cached *base* config for `cwd` (merged global + project TOML, no env/overrides).
@@ -41,18 +75,27 @@ defmodule LemonCore.ConfigCache do
   important for tests, where `HOME` may change between cases.
   """
   @spec get(String.t() | nil, keyword()) :: LemonCore.Config.t()
-  def get(cwd \\ nil, opts \\ []) do
-    ensure_available!()
+  def get(cwd \\ nil, opts \\ []), do: get(__MODULE__, cwd, opts)
 
+  @doc """
+  Get the cached base config for `cwd` from a specific cache instance.
+  """
+  @spec get(server(), String.t() | nil, keyword()) :: LemonCore.Config.t()
+  def get(server, cwd, opts) do
+    ensure_available!(server)
+
+    table = table_for(server)
     paths = config_paths(cwd)
     key = cache_key(paths)
     now = now_ms()
-    interval = Keyword.get(opts, :mtime_check_interval_ms) || defaults().mtime_check_interval_ms
 
-    case :ets.lookup(@table, key) do
+    interval =
+      Keyword.get(opts, :mtime_check_interval_ms) || defaults(server).mtime_check_interval_ms
+
+    case :ets.lookup(table, key) do
       [] ->
-        __MODULE__
-        |> GenServer.call({:load, cwd}, call_timeout(opts))
+        server
+        |> GenServer.call({:load, cwd}, call_timeout(server, opts))
         |> reply_or_raise()
 
       [{^key, base, fingerprint, _loaded_at, checked_at}] ->
@@ -62,11 +105,11 @@ defmodule LemonCore.ConfigCache do
           new_fp = fingerprint(paths)
 
           if new_fp == fingerprint do
-            _ = :ets.update_element(@table, key, {5, now})
+            _ = :ets.update_element(table, key, {5, now})
             base
           else
-            __MODULE__
-            |> GenServer.call({:reload, cwd}, call_timeout(opts))
+            server
+            |> GenServer.call({:reload, cwd}, call_timeout(server, opts))
             |> reply_or_raise()
           end
         end
@@ -90,11 +133,17 @@ defmodule LemonCore.ConfigCache do
       LemonCore.ConfigCache.reload(validate: true)
   """
   @spec reload(String.t() | nil, keyword()) :: LemonCore.Config.t()
-  def reload(cwd \\ nil, opts \\ []) do
-    ensure_available!()
+  def reload(cwd \\ nil, opts \\ []), do: reload(__MODULE__, cwd, opts)
 
-    __MODULE__
-    |> GenServer.call({:reload, cwd, opts}, call_timeout(opts))
+  @doc """
+  Force reload the cached base config for `cwd` in a specific cache instance.
+  """
+  @spec reload(server(), String.t() | nil, keyword()) :: LemonCore.Config.t()
+  def reload(server, cwd, opts) do
+    ensure_available!(server)
+
+    server
+    |> GenServer.call({:reload, cwd, opts}, call_timeout(server, opts))
     |> reply_or_raise()
   end
 
@@ -102,9 +151,15 @@ defmodule LemonCore.ConfigCache do
   Drop the cached entry for `cwd`.
   """
   @spec invalidate(String.t() | nil) :: :ok
-  def invalidate(cwd \\ nil) do
-    if available?() do
-      _ = :ets.delete(@table, cache_key(config_paths(cwd)))
+  def invalidate(cwd \\ nil), do: invalidate(__MODULE__, cwd)
+
+  @doc """
+  Drop the cached entry for `cwd` in a specific cache instance.
+  """
+  @spec invalidate(server(), String.t() | nil) :: :ok
+  def invalidate(server, cwd) do
+    if available?(server) do
+      _ = :ets.delete(table_for(server), cache_key(config_paths(cwd)))
     end
 
     :ok
@@ -112,8 +167,15 @@ defmodule LemonCore.ConfigCache do
 
   @impl true
   def init(opts) do
+    name = Keyword.get(opts, :name, __MODULE__)
+
+    opts =
+      :lemon_core
+      |> Application.get_env(name, [])
+      |> Keyword.merge(Keyword.take(opts, [:mtime_check_interval_ms, :call_timeout_ms]))
+
     _ =
-      :ets.new(@table, [
+      :ets.new(table_for(name), [
         :named_table,
         :set,
         :public,
@@ -127,9 +189,9 @@ defmodule LemonCore.ConfigCache do
       call_timeout_ms: Keyword.get(opts, :call_timeout_ms, @default_call_timeout_ms)
     }
 
-    :persistent_term.put(@defaults_key, defaults)
+    :persistent_term.put(defaults_key(name), defaults)
 
-    {:ok, %{defaults: defaults}}
+    {:ok, %{name: name, table: table_for(name), defaults: defaults}}
   end
 
   @impl true
@@ -138,14 +200,14 @@ defmodule LemonCore.ConfigCache do
     key = cache_key(paths)
     now = now_ms()
 
-    case :ets.lookup(@table, key) do
+    case :ets.lookup(state.table, key) do
       [{^key, base, _fp, _loaded_at, _checked_at}] ->
         {:reply, base, state}
 
       [] ->
         case safe_load_base(cwd, paths) do
           {:ok, base, fp} ->
-            _ = :ets.insert(@table, {key, base, fp, now, now})
+            _ = :ets.insert(state.table, {key, base, fp, now, now})
             {:reply, base, state}
 
           {:error, exception, stacktrace} ->
@@ -166,7 +228,7 @@ defmodule LemonCore.ConfigCache do
 
     case safe_load_base(cwd, paths) do
       {:ok, base, fp} ->
-        _ = :ets.insert(@table, {key, base, fp, now, now})
+        _ = :ets.insert(state.table, {key, base, fp, now, now})
 
         # Optionally validate and log warnings
         if Keyword.get(opts, :validate, false) do
@@ -244,17 +306,19 @@ defmodule LemonCore.ConfigCache do
 
   defp now_ms, do: System.monotonic_time(:millisecond)
 
-  defp ensure_available! do
-    if available?() do
+  defp ensure_available!(server) do
+    if available?(server) do
       :ok
     else
       raise LemonCore.ConfigCacheError,
-        message: "LemonCore.ConfigCache is not available (application not started)"
+        message: "#{inspect(server)} is not available (application not started)"
     end
   end
 
-  defp defaults do
-    case :persistent_term.get(@defaults_key, nil) do
+  defp defaults_key(server), do: {__MODULE__, server, :defaults}
+
+  defp defaults(server) do
+    case :persistent_term.get(defaults_key(server), nil) do
       nil ->
         %{
           mtime_check_interval_ms: @default_mtime_check_interval_ms,
@@ -266,7 +330,7 @@ defmodule LemonCore.ConfigCache do
     end
   end
 
-  defp call_timeout(opts) do
-    Keyword.get(opts, :call_timeout_ms) || defaults().call_timeout_ms
+  defp call_timeout(server, opts) do
+    Keyword.get(opts, :call_timeout_ms) || defaults(server).call_timeout_ms
   end
 end

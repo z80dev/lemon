@@ -15,6 +15,18 @@ defmodule LemonCore.RunHistoryStore do
         path: "~/.lemon/store",            # directory — run_history.sqlite3 created inside
         retention_ms: 7 * 24 * 3600_000,   # 7 days (default)
         max_per_session: 50                 # keep at most N entries per session_key
+
+  ## Instances
+
+  The store is named (default `LemonCore.RunHistoryStore`) and every public
+  function takes an optional leading server argument, so additional instances
+  can run alongside the default one:
+
+      {LemonCore.RunHistoryStore, name: :scratch_history, path: "/tmp/scratch"}
+
+  `start_link/1` opts win over the application env, which is read under the
+  instance's name (`config :lemon_core, LemonCore.RunHistoryStore` for the
+  default).
   """
 
   use GenServer
@@ -88,16 +100,57 @@ defmodule LemonCore.RunHistoryStore do
 
   # -- Public API ----------------------------------------------------------
 
+  @typedoc "A running run-history store: its registered name or its pid."
+  @type server :: atom() | pid()
+
   def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    {name, opts} = Keyword.pop(opts, :name, __MODULE__)
+
+    unless is_atom(name) and not is_nil(name) do
+      raise ArgumentError,
+            "LemonCore.RunHistoryStore :name must be an atom, got: #{inspect(name)}"
+    end
+
+    GenServer.start_link(__MODULE__, Keyword.put(opts, :name, name), name: name)
   end
 
   @doc """
   Store a run history entry.
   """
-  @spec put(String.t(), integer(), String.t() | reference(), map()) :: :ok
-  def put(session_key, started_at_ms, run_id, data) do
-    GenServer.cast(__MODULE__, {:put, session_key, started_at_ms, run_id, data})
+  @spec put(server(), String.t(), integer(), String.t() | reference(), map()) :: :ok
+  def put(server \\ __MODULE__, session_key, started_at_ms, run_id, data) do
+    GenServer.cast(server, {:put, session_key, started_at_ms, run_id, data})
+  end
+
+  @doc """
+  `LemonCore.Store` finalize-run hook: persist the finalized run's history.
+
+  Wired by the runtime, not by the store:
+
+      config :lemon_core, LemonCore.Store,
+        finalize_run_hooks: [{LemonCore.RunHistoryStore, :handle_finalize_run}]
+
+  Pass a store instance name as a leading argument to target a non-default
+  history store: `{LemonCore.RunHistoryStore, :handle_finalize_run, [:my_history]}`.
+  """
+  @spec handle_finalize_run(map()) :: :ok
+  def handle_finalize_run(event), do: handle_finalize_run(__MODULE__, event)
+
+  @spec handle_finalize_run(server(), map()) :: :ok
+  def handle_finalize_run(server, %{
+        run_id: run_id,
+        session_key: session_key,
+        started_at: started_at,
+        record: record,
+        summary: summary
+      }) do
+    put(server, session_key, started_at, run_id, %{
+      events: Map.get(record, :events, []),
+      summary: summary,
+      session_key: session_key,
+      run_id: run_id,
+      started_at: started_at
+    })
   end
 
   @doc """
@@ -106,10 +159,16 @@ defmodule LemonCore.RunHistoryStore do
   Returns `[{run_id, data}, ...]` sorted by recency (newest first).
   """
   @spec get(String.t(), keyword()) :: [{term(), map()}]
-  def get(session_key, opts \\ []) do
+  def get(session_key, opts \\ []), do: get(__MODULE__, session_key, opts)
+
+  @doc """
+  Fetch history for a session from a specific store instance.
+  """
+  @spec get(server(), String.t(), keyword()) :: [{term(), map()}]
+  def get(server, session_key, opts) do
     limit = Keyword.get(opts, :limit, 10)
 
-    GenServer.call(__MODULE__, {:get, session_key, limit}, 5_000)
+    GenServer.call(server, {:get, session_key, limit}, 5_000)
   catch
     :exit, _ -> []
   end
@@ -117,17 +176,17 @@ defmodule LemonCore.RunHistoryStore do
   @doc """
   Delete all history for a session.
   """
-  @spec delete_session(String.t()) :: :ok
-  def delete_session(session_key) do
-    GenServer.cast(__MODULE__, {:delete_session, session_key})
+  @spec delete_session(server(), String.t()) :: :ok
+  def delete_session(server \\ __MODULE__, session_key) do
+    GenServer.cast(server, {:delete_session, session_key})
   end
 
   @doc """
   List all entries (for migration/debug). Expensive — avoid in production hot paths.
   """
-  @spec list_all() :: [{term(), map()}]
-  def list_all do
-    GenServer.call(__MODULE__, :list_all, 30_000)
+  @spec list_all(server()) :: [{term(), map()}]
+  def list_all(server \\ __MODULE__) do
+    GenServer.call(server, :list_all, 30_000)
   catch
     :exit, _ -> []
   end
@@ -135,10 +194,15 @@ defmodule LemonCore.RunHistoryStore do
   # -- GenServer callbacks -------------------------------------------------
 
   @impl true
-  def init(_opts) do
-    config = Application.get_env(:lemon_core, __MODULE__, [])
+  def init(opts) do
+    name = Keyword.get(opts, :name, __MODULE__)
 
-    path = resolve_path(config)
+    config =
+      :lemon_core
+      |> Application.get_env(name, [])
+      |> Keyword.merge(Keyword.take(opts, [:path, :retention_ms, :max_per_session]))
+
+    path = resolve_path(config, name)
     retention_ms = Keyword.get(config, :retention_ms, @default_retention_ms)
     max_per_session = Keyword.get(config, :max_per_session, @default_max_per_session)
 
@@ -225,8 +289,13 @@ defmodule LemonCore.RunHistoryStore do
 
   def handle_call(:list_all, _from, state) do
     result =
-      case Sqlite3.execute(state.conn, "SELECT session_key, started_at_ms, run_id, value_blob FROM run_history") do
-        :ok -> []
+      case Sqlite3.execute(
+             state.conn,
+             "SELECT session_key, started_at_ms, run_id, value_blob FROM run_history"
+           ) do
+        :ok ->
+          []
+
         other ->
           Logger.warning("[RunHistoryStore] list_all unexpected: #{inspect(other)}")
           []
@@ -246,14 +315,28 @@ defmodule LemonCore.RunHistoryStore do
 
   # -- Private helpers -----------------------------------------------------
 
-  defp resolve_path(config) do
-    raw = Keyword.get(config, :path) ||
-      Application.get_env(:lemon_core, LemonCore.Store, [])
-      |> Keyword.get(:backend_opts, [])
-      |> Keyword.get(:path, "~/.lemon/store")
+  defp resolve_path(config, name) do
+    raw =
+      Keyword.get(config, :path) ||
+        Application.get_env(:lemon_core, LemonCore.Store, [])
+        |> Keyword.get(:backend_opts, [])
+        |> Keyword.get(:path, "~/.lemon/store")
 
     dir = Path.expand(raw)
-    Path.join(dir, @filename)
+    Path.join(dir, filename(name))
+  end
+
+  # Instances keep their own database file so two of them can share a directory.
+  defp filename(__MODULE__), do: @filename
+
+  defp filename(name) do
+    suffix =
+      case Atom.to_string(name) do
+        "Elixir." <> rest -> rest |> String.replace(".", "_") |> Macro.underscore()
+        other -> other
+      end
+
+    "run_history_#{suffix}.sqlite3"
   end
 
   defp init_db(conn) do
@@ -362,8 +445,10 @@ defmodule LemonCore.RunHistoryStore do
   defp normalize_run_id(id), do: inspect(id)
 
   defp blob_too_big?({:sqlite_bind_failed, :blob_too_big}), do: true
+
   defp blob_too_big?(reason) when is_binary(reason),
     do: String.contains?(String.downcase(reason), "too big")
+
   defp blob_too_big?(_), do: false
 
   defp compact_history_payload(%{} = data) do

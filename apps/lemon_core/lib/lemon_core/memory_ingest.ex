@@ -58,6 +58,22 @@ defmodule LemonCore.MemoryIngest do
     :exit, _ -> :ok
   end
 
+  @doc """
+  `LemonCore.Store` finalize-run hook: enqueue the finalized run for ingest.
+
+  Wired by the runtime, not by the store:
+
+      config :lemon_core, LemonCore.Store,
+        finalize_run_hooks: [{LemonCore.MemoryIngest, :handle_finalize_run}]
+  """
+  @spec handle_finalize_run(map()) :: :ok
+  def handle_finalize_run(event), do: handle_finalize_run(__MODULE__, event)
+
+  @spec handle_finalize_run(GenServer.server(), map()) :: :ok
+  def handle_finalize_run(server, %{run_id: run_id, record: record, summary: summary}) do
+    ingest(server, run_id, record, summary)
+  end
+
   # ── GenServer callbacks ────────────────────────────────────────────────────────
 
   @impl true

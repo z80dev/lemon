@@ -28,6 +28,10 @@ defmodule LemonChannels.Application do
 
     case Supervisor.start_link(children, opts) do
       {:ok, pid} ->
+        # Channels own their store tables: the store does not know Telegram
+        # exists, so we ask it to mirror our hot index into its read cache.
+        LemonCore.Store.register_cached_table(LemonChannels.Telegram.KnownTargetStore.table())
+
         # Register and start built-in adapters after startup
         register_and_start_adapters()
         {:ok, pid}

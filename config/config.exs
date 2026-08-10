@@ -35,6 +35,12 @@ config :coding_agent, :async_followups, default_queue_mode: :steer_backlog
 
 config :lemon_router, :engine_runtime, LemonGateway.Runtime
 
+# Support bundles include workspace (goal/kanban) diagnostics when the agent
+# runtime is present. lemon_core must not reference agent_core directly.
+config :lemon_core, :workspace_diagnostics,
+  goal: AgentCore.Workspace.GoalStore,
+  kanban: AgentCore.Workspace.KanbanStore
+
 config :lemon_channels,
   adapters: [
     LemonChannels.Adapters.Telegram,
@@ -44,10 +50,27 @@ config :lemon_channels,
     LemonChannels.Adapters.XAPI
   ]
 
+# Master key providers for encrypted secrets, tried in order. `:keychain` is
+# macOS-only and skips itself elsewhere; see LemonCore.Secrets.KeyProvider.
+config :lemon_core, LemonCore.Secrets,
+  key_providers: [:keychain, :env, :file],
+  key_file: "~/.lemon/secrets_master_key",
+  env_var: "LEMON_SECRETS_MASTER_KEY"
+
 # Default to an in-memory store. Dev/prod override to disk-backed persistence.
+#
+# The store is a storage primitive and must not name its collaborators, so the
+# runtime wires them here: run history and memory ingest attach as finalize-run
+# hooks, and run-history reads forward to the same provider. Channels register
+# their own cached tables at boot (see LemonChannels.Application).
 config :lemon_core, LemonCore.Store,
   backend: LemonCore.Store.EtsBackend,
-  backend_opts: []
+  backend_opts: [],
+  finalize_run_hooks: [
+    {LemonCore.RunHistoryStore, :handle_finalize_run},
+    {LemonCore.MemoryIngest, :handle_finalize_run}
+  ],
+  run_history_provider: LemonCore.RunHistoryStore
 
 config :lemon_web, LemonWeb.Endpoint,
   adapter: Bandit.PhoenixAdapter,

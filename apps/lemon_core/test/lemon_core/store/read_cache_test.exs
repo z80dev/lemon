@@ -3,9 +3,9 @@ defmodule LemonCore.Store.ReadCacheTest do
 
   alias LemonCore.Store.ReadCache
 
-  describe "init/0" do
+  describe "init/2" do
     test "creates ETS tables for cached domains" do
-      ReadCache.init()
+      ReadCache.init(LemonCore.Store, [:sessions_index, :telegram_known_targets])
 
       for domain <- ReadCache.cached_domains() do
         table = ReadCache.table_for(domain)
@@ -18,10 +18,23 @@ defmodule LemonCore.Store.ReadCacheTest do
       ReadCache.init()
       # Should not crash on repeated calls
     end
+
+    test "is additive: re-initializing with fewer tables keeps live ones" do
+      ReadCache.init(LemonCore.Store, [:sessions_index, :telegram_known_targets])
+      tables = ReadCache.init(LemonCore.Store, [])
+
+      assert Map.has_key?(tables, :sessions_index)
+      assert Map.has_key?(tables, :telegram_known_targets)
+    end
   end
 
-  describe "cached?/1" do
-    test "returns true for cached domains" do
+  describe "cached?/2" do
+    setup do
+      ReadCache.init(LemonCore.Store, [:sessions_index, :telegram_known_targets])
+      :ok
+    end
+
+    test "returns true for domains the store mirrors" do
       assert ReadCache.cached?(:chat)
       assert ReadCache.cached?(:runs)
       assert ReadCache.cached?(:progress)
@@ -29,7 +42,7 @@ defmodule LemonCore.Store.ReadCacheTest do
       assert ReadCache.cached?(:telegram_known_targets)
     end
 
-    test "returns false for uncached domains" do
+    test "returns false for domains it does not" do
       refute ReadCache.cached?(:run_history)
       refute ReadCache.cached?(:policies)
     end
@@ -37,7 +50,7 @@ defmodule LemonCore.Store.ReadCacheTest do
 
   describe "put/get/delete" do
     setup do
-      ReadCache.init()
+      ReadCache.init(LemonCore.Store, [:sessions_index, :telegram_known_targets])
       :ok
     end
 
@@ -97,7 +110,7 @@ defmodule LemonCore.Store.ReadCacheTest do
 
   describe "concurrent access" do
     setup do
-      ReadCache.init()
+      ReadCache.init(LemonCore.Store, [:sessions_index, :telegram_known_targets])
       :ok
     end
 
