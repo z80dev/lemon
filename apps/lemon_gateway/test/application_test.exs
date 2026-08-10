@@ -9,6 +9,12 @@ defmodule LemonGateway.ApplicationTest do
   and configuration loading.
   """
 
+  # The `LemonCore.Store` key also carries the run-history/memory collaborator
+  # wiring (`:finalize_run_hooks`, `:run_history_provider`). Deleting or
+  # wholesale-replacing it leaks into every later test in the suite, which then
+  # silently stops recording run history. Snapshot the real config and restore.
+  @store_config Application.compile_env(:lemon_core, LemonCore.Store, [])
+
   @base_expected_children [
     Elixir.LemonGateway.Config,
     Elixir.LemonGateway.EngineRegistry,
@@ -70,7 +76,7 @@ defmodule LemonGateway.ApplicationTest do
     Application.delete_env(:lemon_gateway, :commands)
     Application.delete_env(:lemon_gateway, :config_path)
     Application.delete_env(:lemon_gateway, :legacy_ingress_enabled)
-    Application.delete_env(:lemon_core, LemonCore.Store)
+    Application.put_env(:lemon_core, LemonCore.Store, @store_config)
   end
 
   defp expected_children do
@@ -599,8 +605,12 @@ defmodule LemonGateway.ApplicationTest do
       Application.put_env(:lemon_gateway, :transports, [])
       Application.put_env(:lemon_gateway, :commands, [])
 
-      # Configure ETS backend (default)
-      Application.put_env(:lemon_core, LemonCore.Store, backend: LemonCore.Store.EtsBackend)
+      # Configure ETS backend (default), keeping the rest of the store wiring.
+      Application.put_env(
+        :lemon_core,
+        LemonCore.Store,
+        Keyword.put(@store_config, :backend, LemonCore.Store.EtsBackend)
+      )
 
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
