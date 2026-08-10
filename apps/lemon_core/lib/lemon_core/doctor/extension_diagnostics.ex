@@ -73,7 +73,8 @@ defmodule LemonCore.Doctor.ExtensionDiagnostics do
   end
 
   defp execution_telemetry(project_dir) do
-    proof_path = Path.join([project_dir, ".lemon", "proofs", "extension-host-smoke-latest.json"])
+    proof_path =
+      LemonCore.Paths.project_path(project_dir, ["proofs", "extension-host-smoke-latest.json"])
 
     with {:ok, body} <- File.read(proof_path),
          {:ok, proof} <- Jason.decode(body) do
@@ -117,7 +118,8 @@ defmodule LemonCore.Doctor.ExtensionDiagnostics do
   end
 
   defp wasm_telemetry(project_dir) do
-    proof_path = Path.join([project_dir, ".lemon", "proofs", "wasm-tool-telemetry-latest.json"])
+    proof_path =
+      LemonCore.Paths.project_path(project_dir, ["proofs", "wasm-tool-telemetry-latest.json"])
 
     with {:ok, body} <- File.read(proof_path),
          {:ok, proof} <- Jason.decode(body) do
@@ -194,7 +196,7 @@ defmodule LemonCore.Doctor.ExtensionDiagnostics do
   end
 
   defp wasm_policy(project_dir) do
-    proof_path = Path.join([project_dir, ".lemon", "proofs", "wasm-policy-latest.json"])
+    proof_path = LemonCore.Paths.project_path(project_dir, ["proofs", "wasm-policy-latest.json"])
 
     with {:ok, body} <- File.read(proof_path),
          {:ok, proof} <- Jason.decode(body) do
@@ -277,7 +279,7 @@ defmodule LemonCore.Doctor.ExtensionDiagnostics do
 
   defp registry_audit(project_dir) do
     proof_path =
-      Path.join([project_dir, ".lemon", "proofs", "extension-registry-audit-latest.json"])
+      LemonCore.Paths.project_path(project_dir, ["proofs", "extension-registry-audit-latest.json"])
 
     with {:ok, body} <- File.read(proof_path),
          {:ok, proof} <- Jason.decode(body) do
@@ -368,7 +370,8 @@ defmodule LemonCore.Doctor.ExtensionDiagnostics do
   end
 
   defp wasm_lifecycle(project_dir) do
-    proof_path = Path.join([project_dir, ".lemon", "proofs", "wasm-lifecycle-latest.json"])
+    proof_path =
+      LemonCore.Paths.project_path(project_dir, ["proofs", "wasm-lifecycle-latest.json"])
 
     with {:ok, body} <- File.read(proof_path),
          {:ok, proof} <- Jason.decode(body) do
@@ -548,8 +551,8 @@ defmodule LemonCore.Doctor.ExtensionDiagnostics do
 
   defp extension_paths(config, project_dir) do
     [
-      Path.join([home_dir(), ".lemon", "agent", "extensions"]),
-      Path.join([project_dir, ".lemon", "extensions"])
+      LemonCore.Paths.home_path(["agent", "extensions"]),
+      LemonCore.Paths.project_path(project_dir, "extensions")
       | configured_extension_paths(config, project_dir)
     ]
     |> Enum.filter(&is_binary/1)
@@ -672,10 +675,6 @@ defmodule LemonCore.Doctor.ExtensionDiagnostics do
       Path.type(path) == :absolute -> Path.expand(path)
       true -> Path.expand(path, project_dir)
     end
-  end
-
-  defp home_dir do
-    System.user_home() || "~"
   end
 
   defp map_value(map, key) when is_map(map) do

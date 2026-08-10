@@ -6,6 +6,8 @@ defmodule LemonCore.Config do
   - Global: `~/.lemon/config.toml`
   - Project: `<project>/.lemon/config.toml`
 
+  Both locations are configurable; see `LemonCore.Paths`.
+
   Project values override global values. Environment variables override both.
 
   Configuration is delegated to `LemonCore.Config.Modular` which enforces
@@ -14,8 +16,6 @@ defmodule LemonCore.Config do
   """
 
   require Logger
-
-  @global_config_path "~/.lemon/config.toml"
 
   defstruct providers: %{}, agent: %{}, tui: %{}, logging: %{}, gateway: %{}, agents: %{}
 
@@ -42,20 +42,13 @@ defmodule LemonCore.Config do
   Path to global config file.
   """
   @spec global_path() :: String.t()
-  def global_path do
-    case System.get_env("HOME") do
-      nil -> Path.expand(@global_config_path)
-      home -> Path.join([home, ".lemon", "config.toml"])
-    end
-  end
+  def global_path, do: LemonCore.Paths.global_config()
 
   @doc """
   Path to project config file for a given cwd.
   """
   @spec project_path(String.t()) :: String.t()
-  def project_path(cwd) do
-    Path.join([Path.expand(cwd), ".lemon", "config.toml"])
-  end
+  def project_path(cwd), do: LemonCore.Paths.project_config(cwd)
 
   @doc """
   Load merged config (global + project) with environment overrides.

@@ -9,6 +9,9 @@ defmodule LemonCore.ConfigReloader.Watcher do
   Watched paths:
   - `~/.lemon/config.toml`
   - `<cwd>/.lemon/config.toml`
+
+  Both come from `LemonCore.Paths`, so pointing the config elsewhere moves the
+  watched paths with it.
   - `.env` (from `LEMON_DOTENV_DIR` or cwd)
 
   Native watcher targets are optimized:
@@ -156,13 +159,13 @@ defmodule LemonCore.ConfigReloader.Watcher do
   end
 
   defp watched_paths(cwd) do
-    global_config = Path.expand("~/.lemon/config.toml")
+    global_config = LemonCore.Paths.global_config()
     dotenv_dir = System.get_env("LEMON_DOTENV_DIR") || cwd || File.cwd!()
     dotenv_path = LemonCore.Dotenv.path_for(dotenv_dir) |> Path.expand()
 
     project_config =
       if is_binary(cwd) and cwd != "" do
-        [Path.join(Path.expand(cwd), ".lemon/config.toml")]
+        [LemonCore.Paths.project_config(cwd)]
       else
         []
       end

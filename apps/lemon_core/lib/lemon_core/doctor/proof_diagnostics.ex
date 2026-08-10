@@ -61,7 +61,7 @@ defmodule LemonCore.Doctor.ProofDiagnostics do
 
   defp proof_directories(project_dir) do
     [
-      %{label: ".lemon/proofs", path: Path.join([project_dir, ".lemon", "proofs"])},
+      %{label: ".lemon/proofs", path: LemonCore.Paths.project_path(project_dir, "proofs")},
       %{label: "tmp", path: Path.join(project_dir, "tmp")}
     ]
   end

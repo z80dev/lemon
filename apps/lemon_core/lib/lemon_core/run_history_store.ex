@@ -320,7 +320,7 @@ defmodule LemonCore.RunHistoryStore do
       Keyword.get(config, :path) ||
         Application.get_env(:lemon_core, LemonCore.Store, [])
         |> Keyword.get(:backend_opts, [])
-        |> Keyword.get(:path, "~/.lemon/store")
+        |> Keyword.get(:path, LemonCore.Paths.home_path("store"))
 
     dir = Path.expand(raw)
     Path.join(dir, filename(name))

@@ -3,8 +3,6 @@ defmodule LemonCore.Doctor.Checks.Skills do
 
   alias LemonCore.Doctor.Check
 
-  @lemon_skills_dir "~/.lemon/skills"
-
   @doc """
   Returns a list of Check results covering the local skills store.
   """
@@ -16,7 +14,7 @@ defmodule LemonCore.Doctor.Checks.Skills do
   end
 
   defp check_skills_dir do
-    path = Path.expand(@lemon_skills_dir)
+    path = LemonCore.Paths.home_path("skills")
 
     cond do
       not File.exists?(path) ->
@@ -36,7 +34,11 @@ defmodule LemonCore.Doctor.Checks.Skills do
         case File.ls(path) do
           {:ok, entries} ->
             skill_dirs = Enum.count(entries, fn e -> File.dir?(Path.join(path, e)) end)
-            Check.pass("skills.directory", "Skills directory OK: #{skill_dirs} skill(s) installed.")
+
+            Check.pass(
+              "skills.directory",
+              "Skills directory OK: #{skill_dirs} skill(s) installed."
+            )
 
           {:error, reason} ->
             Check.warn(

@@ -37,7 +37,7 @@ defmodule Mix.Tasks.Lemon.Store.MigrateJsonlToSqlite do
     jsonl_path =
       opts[:jsonl_path] ||
         System.get_env("LEMON_STORE_PATH") ||
-        Path.expand("~/.lemon/store")
+        LemonCore.Paths.home_path("store")
 
     sqlite_path = opts[:sqlite_path] || default_sqlite_path(jsonl_path)
     dry_run? = opts[:dry_run] || false
@@ -82,7 +82,9 @@ defmodule Mix.Tasks.Lemon.Store.MigrateJsonlToSqlite do
           )
 
           if skipped_tables != [] do
-            Mix.shell().info("Skipped tables: #{Enum.map_join(skipped_tables, ", ", &to_string/1)}")
+            Mix.shell().info(
+              "Skipped tables: #{Enum.map_join(skipped_tables, ", ", &to_string/1)}"
+            )
           end
 
           if dry_run? do
@@ -91,6 +93,7 @@ defmodule Mix.Tasks.Lemon.Store.MigrateJsonlToSqlite do
             run_migration(jsonl_state, tables_to_migrate, sqlite_path)
           end
         end
+
       {:error, reason} ->
         Mix.raise("Failed to initialize JSONL backend: #{inspect(reason)}")
     end

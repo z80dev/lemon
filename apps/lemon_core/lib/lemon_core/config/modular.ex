@@ -13,6 +13,8 @@ defmodule LemonCore.Config.Modular do
   1. Environment variables (highest priority)
   2. Project config (`.lemon/config.toml`)
   3. Global config (`~/.lemon/config.toml`)
+
+  Both config locations are configurable; see `LemonCore.Paths`.
   4. Default values (lowest priority)
 
   ## Example Usage
@@ -48,8 +50,6 @@ defmodule LemonCore.Config.Modular do
     ValidationError,
     Validator
   }
-
-  @global_config_path "~/.lemon/config.toml"
 
   defstruct [
     :agent,
@@ -192,20 +192,13 @@ defmodule LemonCore.Config.Modular do
   Returns the path to the global config file.
   """
   @spec global_path() :: String.t()
-  def global_path do
-    case System.get_env("HOME") do
-      nil -> Path.expand(@global_config_path)
-      home -> Path.join([home, ".lemon", "config.toml"])
-    end
-  end
+  def global_path, do: LemonCore.Paths.global_config()
 
   @doc """
   Returns the path to the project config file for the given directory.
   """
   @spec project_path(String.t()) :: String.t()
-  def project_path(dir) do
-    Path.join([dir, ".lemon", "config.toml"])
-  end
+  def project_path(dir), do: LemonCore.Paths.project_config(dir)
 
   @doc """
   Checks for deprecated TOML sections and raises ValidationError if found.
@@ -221,8 +214,11 @@ defmodule LemonCore.Config.Modular do
     errors = collect_deprecated_errors(settings)
 
     case errors do
-      [] -> :ok
-      _ -> raise ValidationError, message: "Configuration uses deprecated sections", errors: errors
+      [] ->
+        :ok
+
+      _ ->
+        raise ValidationError, message: "Configuration uses deprecated sections", errors: errors
     end
   end
 
@@ -231,7 +227,10 @@ defmodule LemonCore.Config.Modular do
 
     errors =
       if is_map(settings["agent"]) do
-        ["[agent] is deprecated. Move fields to [defaults] (provider, model, thinking_level) and [runtime] (other settings)." | errors]
+        [
+          "[agent] is deprecated. Move fields to [defaults] (provider, model, thinking_level) and [runtime] (other settings)."
+          | errors
+        ]
       else
         errors
       end
@@ -308,7 +307,9 @@ defmodule LemonCore.Config.Modular do
     case File.read(path) do
       {:ok, content} ->
         case Toml.decode(content) do
-          {:ok, settings} -> settings
+          {:ok, settings} ->
+            settings
+
           {:error, reason} ->
             require Logger
             Logger.warning("Failed to parse config file #{path}: #{inspect(reason)}")
