@@ -60,19 +60,19 @@ defmodule LemonCore.RouterBridgeTest do
     def list_active_sessions, do: dead()
   end
 
-  defmodule DeadOrchestrator do
+  defmodule BridgeDeadOrchestrator do
     @moduledoc false
     def submit(_params), do: exit({:noproc, {GenServer, :call, [__MODULE__, :submit, 5000]}})
   end
 
-  defmodule TimingOutRouter do
+  defmodule BridgeTimingOutRouter do
     @moduledoc false
     # The other exit shape worth pinning: the process is alive but did not
     # answer in time. Same consequence for the caller — the work was not taken.
     def handle_inbound(_msg), do: exit({:timeout, {GenServer, :call, [__MODULE__, :x, 5000]}})
   end
 
-  defmodule RaisingRouter do
+  defmodule BridgeRaisingRouter do
     @moduledoc false
     def handle_inbound(_msg), do: raise("router blew up")
   end
@@ -210,7 +210,7 @@ defmodule LemonCore.RouterBridgeTest do
     # silently dropped message answered with "accepted".
 
     test "submit_run/1 reports unavailable instead of exiting" do
-      :ok = RouterBridge.configure(run_orchestrator: DeadOrchestrator)
+      :ok = RouterBridge.configure(run_orchestrator: BridgeDeadOrchestrator)
 
       request = %RunRequest{
         origin: :channel,
@@ -255,7 +255,7 @@ defmodule LemonCore.RouterBridgeTest do
     end
 
     test "a timeout is unavailable too, since the work was not taken either way" do
-      :ok = RouterBridge.configure(router: TimingOutRouter)
+      :ok = RouterBridge.configure(router: BridgeTimingOutRouter)
 
       assert {:error, :unavailable} = RouterBridge.handle_inbound(%{any: :message})
     end
@@ -275,7 +275,7 @@ defmodule LemonCore.RouterBridgeTest do
     test "is reported as itself, not flattened into :unavailable" do
       # The router *was* available; saying otherwise would send a caller into a
       # retry loop over a bug that will fail identically every time.
-      :ok = RouterBridge.configure(router: RaisingRouter)
+      :ok = RouterBridge.configure(router: BridgeRaisingRouter)
 
       assert {:error, %RuntimeError{message: "router blew up"}} =
                RouterBridge.handle_inbound(%{any: :message})
