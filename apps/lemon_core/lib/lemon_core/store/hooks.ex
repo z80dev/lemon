@@ -149,13 +149,30 @@ defmodule LemonCore.Store.Hooks do
   end
 
   defp apply_hook(fun, payload) when is_function(fun, 1), do: fun.(payload)
-  defp apply_hook({module, function}, payload), do: apply(module, function, [payload])
+  defp apply_hook({module, function}, payload), do: apply_loaded(module, function, [payload])
 
   defp apply_hook({module, function, args}, payload) when is_list(args),
-    do: apply(module, function, args ++ [payload])
+    do: apply_loaded(module, function, args ++ [payload])
 
   defp apply_hook(other, _payload) do
     raise ArgumentError, "invalid store hook: #{inspect(other)}"
+  end
+
+  # A hook whose module isn't loaded is not installed in this build — the
+  # umbrella shares one config across apps, so an app-scoped run sees hooks for
+  # collaborators it doesn't depend on. That is a skip, not a failure; only
+  # hooks that exist and then misbehave are worth an error.
+  defp apply_loaded(module, function, args) do
+    if Code.ensure_loaded?(module) do
+      apply(module, function, args)
+    else
+      Logger.debug(
+        "[LemonCore.Store.Hooks] skipping #{inspect(module)}.#{function}/#{length(args)}: " <>
+          "module not available"
+      )
+
+      :ok
+    end
   end
 
   defp hook_context(context, hook), do: Keyword.put(context, :hook, hook)
