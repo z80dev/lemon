@@ -11,13 +11,51 @@ defmodule AgentCore.ToolRegistry do
       AgentCore.ToolRegistry.register(:my_tool, MyIntegration.Tools.MyTool)
 
   A registered module implements the same contract as a built-in: `tool/1` and
-  `tool/2` returning an `AgentCore.Types.AgentTool`. Registrations live in
+  `tool/2` returning an `AgentCore.Types.AgentTool` — see that module for the
+  tool shape and the execute contract. Registrations live in
   `:persistent_term`, so they survive a supervisor restart and can be made
   before the consuming app starts.
 
-  Precedence: built-ins win. A registration whose name collides with a built-in
-  is kept in the registry but ignored by the consumer that already has that
-  name, so a satellite can never silently replace a platform tool.
+  ## Precedence
+
+  Built-ins win. A registration whose name collides with a built-in is kept in
+  the registry but ignored by the consumer that already has that name, so a
+  satellite can never silently replace a platform tool. Consumers get this by
+  filtering with `available/1` (`CodingAgent.ToolRegistry`) or by merging their
+  built-ins last (`LemonMcp.ToolAdapter`).
+
+  ### Known looseness
+
+  `CodingAgent.Tools.all_tools/2` merges the registered tools *over* its
+  built-in map, so a colliding registration does replace the built-in on that
+  one execution path even though the schema the model was shown came from the
+  built-in. Nothing in the tree currently collides, and the fix belongs in that
+  merge rather than here — but do not rely on the collision rule to protect a
+  built-in until it is made consistent.
+
+  ## The satellite pattern
+
+  `apps/x_api` is the worked example. It is an ordinary umbrella app that the
+  platform has no compile-time knowledge of: nothing in `coding_agent` or
+  `lemon_mcp` names it. Its application callback registers its three tools at
+  boot, guarded so the app still starts in a build where the agent runtime is
+  absent:
+
+      defp register_tools do
+        if Code.ensure_loaded?(AgentCore.ToolRegistry) do
+          Enum.each(@tools, fn {name, module} ->
+            AgentCore.ToolRegistry.register(name, module)
+          end)
+        end
+
+        :ok
+      end
+
+  `XApi.Tools.PostToX` is then a plain tool module — `tool/1`, `tool/2`,
+  `execute/4` — that returns a "not configured" result rather than raising when
+  its credentials are missing, so the tool is safe to register unconditionally.
+  A package outside this repo plugs in exactly the same way; registering from
+  the application callback is what makes ordering irrelevant.
   """
 
   require Logger

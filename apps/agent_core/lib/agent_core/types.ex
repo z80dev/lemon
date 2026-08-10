@@ -56,6 +56,19 @@ defmodule AgentCore.Types do
 
     Contains content blocks (text/images) to be displayed, optional
     details for UI rendering or logging, and trust metadata.
+
+    `:content` is what the model sees — it becomes the tool-result message in
+    the transcript, so it should read as an answer rather than as a status
+    line. `:details` is not sent to the model: it is for the UI and the logs,
+    and is the right place for structured data (ids, counts, the raw response)
+    that would only cost tokens in `:content`.
+
+    `:trust` marks content the tool did not author. Anything fetched from the
+    network, read from a user-supplied file, or returned by a third-party API
+    is `:untrusted`, which tells downstream rendering that instructions inside
+    it must not be obeyed. `AgentCore.Security.ExternalContent` wraps such
+    content with the right framing and metadata — use it rather than setting
+    the field by hand.
     """
     @type content_block :: Ai.Types.TextContent.t() | Ai.Types.ImageContent.t()
     @type t :: %__MODULE__{
@@ -72,21 +85,98 @@ defmodule AgentCore.Types do
 
   defmodule AgentTool do
     @moduledoc """
-    Tool definition with execution function for agent use.
+    A tool the agent loop can call: a schema the model sees plus the function
+    that runs when it calls it.
 
-    Extends the base Ai.Types.Tool concept with:
-    - A human-readable label for UI display
-    - An execute function that performs the tool's action
+    This is the unit every tool in the platform reduces to, whether it is a
+    built-in, an MCP tool adapted by `LemonMcp.ToolAdapter`, or one contributed
+    at runtime by an app the platform does not know about (see
+    `AgentCore.ToolRegistry`).
 
-    ## Execute Function
+    ## The shape
 
-    The execute function receives:
-    - `tool_call_id` - Unique identifier for this tool invocation
-    - `params` - Parameters parsed from the tool call
-    - `signal` - Abort signal for cancellation (can be nil)
-    - `on_update` - Callback for streaming partial results
+      * `:name` — what the model calls. Stable, lowercase, `snake_case`; it is
+        matched against the model's tool call after whitespace normalisation,
+        and it is the key everything else in the platform uses. Renaming one
+        invalidates prompts and cached tool schemas, so treat it as an
+        identity.
+      * `:description` — what the model reads to decide whether to call it.
+        This is prompt text, and it is the main lever on whether the tool gets
+        used correctly; say what the tool does, when to use it and what its
+        limits are.
+      * `:parameters` — a JSON Schema object (`"type" => "object"` with
+        `"properties"` and `"required"`), passed to the provider as-is. String
+        keys, not atoms.
+      * `:label` — a short human-readable name for UI display. Never shown to
+        the model.
+      * `:execute` — the function below.
 
-    Returns an `AgentToolResult` with content and details.
+    ## The execute function
+
+    It is called as `execute.(tool_call_id, params, signal, on_update)`:
+
+      * `tool_call_id` — this invocation's id, for correlating events.
+      * `params` — the arguments the model produced, decoded from JSON, so
+        **string keys and model-supplied values**. Validate them; a model will
+        eventually send a missing field or the wrong type, and a clear
+        `{:error, message}` teaches it to retry correctly.
+      * `signal` — an abort signal (see `AgentCore.AbortSignal`), or `nil`.
+        Long-running tools should check it and return early; ignoring it means
+        a cancelled run keeps working.
+      * `on_update` — a one-argument callback taking a partial
+        `AgentToolResult`, or `nil`. Calling it pushes a streaming update to
+        the UI. It is fire-and-forget and always returns `:ok`.
+
+    Return an `AgentToolResult`, `{:ok, result}` (equivalent), or
+    `{:error, reason}`, which the loop turns into an error result the model can
+    read and react to. Anything else is treated as an error.
+
+    The loop wraps execution in `try`, so a raise or throw becomes an error
+    result rather than killing the run — but the model then gets an exception
+    message instead of an explanation. Handle your own failures: a tool that is
+    not configured should say so in its result (as
+    `XApi.Tools.PostToX` does when its credentials are missing), not raise.
+
+    ## The module convention
+
+    A tool lives in a module exposing `tool/1` (options) and `tool/2` (cwd plus
+    options) that build the struct. Both are expected — consumers that have a
+    working directory call `tool/2`, those that do not call `tool/1` — and the
+    usual definition is `def tool(_cwd, opts), do: tool(opts)`. Building the
+    struct on each call rather than at compile time is what lets the
+    description and parameters reflect current configuration.
+
+        defmodule MyApp.Tools.Greet do
+          alias AgentCore.Types.{AgentTool, AgentToolResult}
+          alias Ai.Types.TextContent
+
+          @spec tool(keyword()) :: AgentTool.t()
+          def tool(_opts \\\\ []) do
+            %AgentTool{
+              name: "greet",
+              label: "Greet",
+              description: "Greet someone by name.",
+              parameters: %{
+                "type" => "object",
+                "properties" => %{
+                  "name" => %{"type" => "string", "description" => "Who to greet"}
+                },
+                "required" => ["name"]
+              },
+              execute: &execute(&1, &2, &3, &4)
+            }
+          end
+
+          def tool(_cwd, opts), do: tool(opts)
+
+          def execute(_id, %{"name" => name}, _signal, _on_update) when is_binary(name) do
+            %AgentToolResult{content: [%TextContent{text: "Hello, " <> name <> "!"}]}
+          end
+
+          def execute(_id, _params, _signal, _on_update) do
+            {:error, "Missing required parameter: name"}
+          end
+        end
     """
     @type on_update :: (AgentCore.Types.AgentToolResult.t() -> :ok)
     @type execute_fn ::
