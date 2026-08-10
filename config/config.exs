@@ -54,7 +54,8 @@ config :lemon_core, :doctor_runtime,
   media_supervisor: LemonMedia.MediaJobSupervisor,
   browser_artifacts: LemonBrowser.Artifacts,
   browser_server: LemonBrowser.LocalServer,
-  lsp_server_manager: LemonLsp.ServerManager
+  lsp_server_manager: LemonLsp.ServerManager,
+  channel_registry: LemonChannels.Registry
 
 # Environment-variable declarations live with the app that reads them; the
 # framework in LemonCore.Env aggregates whatever is loaded. Apps missing from a

@@ -40,7 +40,7 @@ defmodule LemonControlPlane.Methods.TransportsStatus do
      %{
        "registryRunning" => registry_running?,
        "registryModule" => module_name(transport_registry_module()),
-       "registryLoaded" => Code.ensure_loaded?(transport_registry_module()),
+       "registryLoaded" => registry_loaded?(),
        "transports" => transports,
        "total" => length(transports),
        "enabled" => enabled_count,
@@ -69,9 +69,17 @@ defmodule LemonControlPlane.Methods.TransportsStatus do
   end
 
   defp transport_registry_running? do
-    registry = transport_registry_module()
+    case transport_registry_module() do
+      nil -> false
+      registry -> Code.ensure_loaded?(registry) and is_pid(Process.whereis(registry))
+    end
+  end
 
-    Code.ensure_loaded?(registry) and is_pid(Process.whereis(registry))
+  defp registry_loaded? do
+    case transport_registry_module() do
+      nil -> false
+      registry -> Code.ensure_loaded?(registry)
+    end
   end
 
   defp configured_transports(false), do: []
@@ -116,6 +124,9 @@ defmodule LemonControlPlane.Methods.TransportsStatus do
     arity = length(args)
 
     cond do
+      is_nil(registry) ->
+        {:error, :module_not_loaded}
+
       not Code.ensure_loaded?(registry) ->
         {:error, :module_not_loaded}
 
@@ -132,11 +143,14 @@ defmodule LemonControlPlane.Methods.TransportsStatus do
     kind, reason -> {:error, {kind, reason}}
   end
 
+  # The engine runtime registers its transport registry with
+  # LemonCore.EngineInfoBridge at boot, so this app names no engine-runtime
+  # module. The app-env override still wins, which is how tests substitute a
+  # stub registry.
   defp transport_registry_module do
-    Application.get_env(
-      :lemon_control_plane,
-      :transport_registry_module,
-      :"Elixir.LemonGateway.TransportRegistry"
-    )
+    case Application.get_env(:lemon_control_plane, :transport_registry_module) do
+      module when is_atom(module) and not is_nil(module) -> module
+      _ -> LemonCore.EngineInfoBridge.impl(:transport_registry)
+    end
   end
 end

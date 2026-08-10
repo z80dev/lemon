@@ -4,8 +4,14 @@ defmodule LemonCore.Doctor.ChannelDiagnostics do
   """
 
   alias LemonCore.Config
+  alias LemonCore.Doctor.RuntimeModules
 
-  @supported_transports [:telegram, :discord]
+  # The transports this diagnostic knows how to report on. "Supported" below
+  # means "reported here", not "registered in the channel runtime" — the two
+  # differ, and the binding counts have always meant the former. Adding a
+  # transport means adding a status builder, so this list stays the single
+  # source of truth for both the report and the counts.
+  @reported_transports [:telegram, :discord]
 
   @spec status(keyword()) :: map()
   def status(opts \\ []) do
@@ -14,13 +20,11 @@ defmodule LemonCore.Doctor.ChannelDiagnostics do
     bindings = Map.get(gateway, :bindings, [])
 
     %{
-      transports: [
-        telegram_status(gateway, bindings),
-        discord_status(gateway, bindings)
-      ],
-      binding_count: Enum.count(bindings, &(transport(&1) in @supported_transports)),
+      transports: Enum.map(@reported_transports, &transport_status(&1, gateway, bindings)),
+      registered_transports: registered_transports(),
+      binding_count: Enum.count(bindings, &(transport(&1) in @reported_transports)),
       unsupported_binding_count:
-        Enum.count(bindings, &(transport(&1) not in @supported_transports)),
+        Enum.count(bindings, &(transport(&1) not in @reported_transports)),
       cleanup: %{
         includes_raw_bot_tokens: false,
         includes_secret_names: false,
@@ -30,6 +34,30 @@ defmodule LemonCore.Doctor.ChannelDiagnostics do
         includes_message_bodies: false
       }
     }
+  end
+
+  defp transport_status(:telegram, gateway, bindings), do: telegram_status(gateway, bindings)
+  defp transport_status(:discord, gateway, bindings), do: discord_status(gateway, bindings)
+
+  # What the channel runtime actually has registered. Core must not depend on
+  # channels, so the registry arrives through :doctor_runtime like every other
+  # foreign diagnostic; an unconfigured runtime reports an empty list.
+  defp registered_transports do
+    case RuntimeModules.fetch(:channel_registry) do
+      nil ->
+        []
+
+      module ->
+        if Code.ensure_loaded?(module) and function_exported?(module, :list, 0) do
+          module.list() |> Enum.map(fn {id, _info} -> to_string(id) end) |> Enum.sort()
+        else
+          []
+        end
+    end
+  rescue
+    _ -> []
+  catch
+    :exit, _ -> []
   end
 
   defp telegram_status(gateway, bindings) do
@@ -195,7 +223,9 @@ defmodule LemonCore.Doctor.ChannelDiagnostics do
 
   defp compaction_status(_), do: compaction_status(%{})
 
-  defp transport(%{transport: transport}) when transport in @supported_transports, do: transport
+  defp transport(%{transport: transport}) when transport in @reported_transports,
+    do: transport
+
   defp transport(%{transport: transport}) when is_binary(transport), do: safe_transport(transport)
   defp transport(_), do: nil
 

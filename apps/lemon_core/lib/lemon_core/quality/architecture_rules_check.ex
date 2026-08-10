@@ -579,28 +579,9 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
   # THIS LIST MAY ONLY SHRINK. Entries disappear as the Phase 2 dependency
   # inversions in docs/platform-split.md land. Never add an entry to make a new
   # violation pass — invert the dependency instead.
-  @grandfathered [
-    # Phase 2.2 — control_plane ⊘ coding_agent (ops methods self-register).
-
-
-    # Phase 2.5 — dynamic-atom gateway back-refs replaced by an EngineInfoBridge.
-    %{
-      app: :lemon_channels,
-      pattern: "LemonGateway",
-      file: "apps/lemon_channels/lib/lemon_channels/gateway_config.ex"
-    },
-    %{
-      app: :lemon_channels,
-      pattern: "LemonGateway",
-      file: "apps/lemon_channels/lib/lemon_channels/engine_registry.ex"
-    },
-    # Phase 2.4 deletes LemonGateway.TransportRegistry outright.
-    %{
-      app: :lemon_control_plane,
-      pattern: "LemonGateway",
-      file: "apps/lemon_control_plane/lib/lemon_control_plane/methods/transports_status.ex"
-    }
-  ]
+  # Empty since Phase 2.5: every inversion has landed and no cross-boundary
+  # reference is authorized any more.
+  @grandfathered []
 
   @doc """
   The grandfathered cross-boundary references, for tooling and tests.

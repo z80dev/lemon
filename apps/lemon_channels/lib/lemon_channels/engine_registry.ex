@@ -3,14 +3,12 @@ defmodule LemonChannels.EngineRegistry do
   Temporary compatibility parser for resume lines.
 
   Validation and formatting belong in `LemonCore.EngineCatalog` and
-  `LemonCore.ResumeToken`. This module remains only because gateway-provided
-  custom engines may expose additional resume syntax through the gateway
-  registry at runtime.
+  `LemonCore.ResumeToken`. This module remains only because engine-runtime
+  engines may expose additional resume syntax, which we ask for through
+  `LemonCore.EngineInfoBridge` rather than by reaching into the gateway.
   """
 
-  alias LemonCore.{EngineCatalog, ResumeToken}
-
-  @gateway_engine_registry :"Elixir.LemonGateway.EngineRegistry"
+  alias LemonCore.{EngineCatalog, EngineInfoBridge, ResumeToken}
 
   @spec extract_resume(String.t()) :: {:ok, ResumeToken.t()} | :none
   def extract_resume(text) when is_binary(text) do
@@ -24,17 +22,7 @@ defmodule LemonChannels.EngineRegistry do
 
   def extract_resume(_), do: :none
 
-  defp safe_gateway_extract_resume(text) do
-    if (Code.ensure_loaded?(@gateway_engine_registry) and
-          Process.whereis(@gateway_engine_registry)) &&
-         function_exported?(@gateway_engine_registry, :extract_resume, 1) do
-      apply(@gateway_engine_registry, :extract_resume, [text])
-    else
-      :none
-    end
-  rescue
-    _ -> :none
-  end
+  defp safe_gateway_extract_resume(text), do: EngineInfoBridge.extract_resume(text)
 
   defp parse_resume_line(text) when is_binary(text) do
     stripped = text |> String.trim() |> String.trim("`")
