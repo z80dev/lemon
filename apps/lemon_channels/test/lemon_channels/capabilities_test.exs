@@ -365,55 +365,6 @@ defmodule LemonChannels.CapabilitiesTest do
   describe "Registry module" do
     alias Capabilities.Registry
 
-    test "lookup/1 returns telegram capabilities" do
-      caps = Registry.lookup("telegram")
-
-      assert Capabilities.supports?(caps, :threads)
-      assert Capabilities.supports?(caps, :reactions)
-      assert Capabilities.supports?(caps, :edit)
-      assert Capabilities.supports?(caps, :voice)
-      assert Capabilities.supports?(caps, :attachments)
-    end
-
-    test "lookup/1 returns discord capabilities" do
-      caps = Registry.lookup("discord")
-
-      assert Capabilities.supports?(caps, :threads)
-      assert Capabilities.supports?(caps, :reactions)
-      assert Capabilities.supports?(caps, :attachments)
-    end
-
-    test "lookup/1 returns x_api capabilities" do
-      caps = Registry.lookup("x_api")
-
-      assert Capabilities.supports?(caps, :threads)
-      refute Capabilities.supports?(caps, :reactions)
-      assert Capabilities.supports?(caps, :attachments)
-
-      chunk_cap = Capabilities.get(caps, :chunk_limit)
-      assert chunk_cap.config.value == 280
-    end
-
-    test "lookup/1 returns xmtp capabilities" do
-      caps = Registry.lookup("xmtp")
-
-      assert Capabilities.supports?(caps, :threads)
-      refute Capabilities.supports?(caps, :attachments)
-      refute Capabilities.supports?(caps, :rich_blocks)
-    end
-
-    test "lookup/1 handles atom input" do
-      caps = Registry.lookup(:telegram)
-
-      assert Capabilities.supports?(caps, :threads)
-    end
-
-    test "lookup/1 returns empty for unknown adapter" do
-      caps = Registry.lookup(:unknown)
-
-      assert caps == Capabilities.empty()
-    end
-
     test "register_set/1 stores custom set" do
       custom_caps = [Capability.new(:custom, enabled: true)]
       :ok = Registry.register_set(:custom, custom_caps)

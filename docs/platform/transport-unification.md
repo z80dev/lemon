@@ -289,7 +289,25 @@ can express neither `max_size` for attachments (it only ever sets `features: [:i
 must therefore *widen the meta contract*, not just redirect lookups — otherwise telegram/discord
 silently lose `max_size`, `rich_blocks` features, and `rate_limit`.
 
-### Recommended end state
+### Outcome (2026-08-10): deleted, not delegated
+
+Verifying the caller list before implementing changed the answer. `CapabilityQuery` aliases
+`LemonChannels.Registry` — the *plugin* registry — not `Capabilities.Registry`, so it already
+resolved through registered-adapter meta and already returned nil/false for unknown channels.
+`Capabilities.Registry.lookup/1` had **zero production callers**; only its own test file
+referenced it. The unconfigured-channel contract question was therefore moot: no caller could
+observe either answer.
+
+So `lookup/1` was deleted outright rather than repointed, `get_set/1` kept, the x_api assertions
+moved to `apps/x_api/test/x_api/channel_adapter_test.exs` against the satellite's own `meta/0`,
+and the `Plugin.meta/0` widening was **deferred** — see the Deferred section of
+`platform-split.md`, which records the richer vocabulary the table carried so it isn't lost with
+the code. Growing the platform's most third-party-facing extension point for data nobody reads
+was the wrong trade.
+
+The original delegation design is kept below for the day a real consumer appears.
+
+### Recommended end state (superseded — retained for when a consumer needs the richer vocabulary)
 
 Capability lookup delegates to the registered adapter; the static table is deleted.
 

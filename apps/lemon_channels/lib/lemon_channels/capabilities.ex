@@ -201,7 +201,6 @@ defmodule LemonChannels.Capabilities.Registry do
   Registry for capability sets and lookups.
   """
 
-  alias LemonChannels.Capabilities
   alias LemonChannels.Capabilities.Capability
 
   @doc """
@@ -273,77 +272,6 @@ defmodule LemonChannels.Capabilities.Registry do
   def register_set(name, capabilities) when is_atom(name) and is_list(capabilities) do
     Process.put({:capability_set, name}, capabilities)
     :ok
-  end
-
-  @doc """
-  Looks up capabilities by adapter ID.
-  """
-  @spec lookup(atom() | String.t()) :: Capabilities.t()
-  def lookup(adapter_id) when is_atom(adapter_id) do
-    lookup(Atom.to_string(adapter_id))
-  end
-
-  def lookup("telegram") do
-    Capabilities.new([
-      :threads,
-      :reactions,
-      :edit,
-      :delete,
-      :voice,
-      {:attachments, max_size: 20_000_000, features: [:images, :videos, :documents, :audio]},
-      {:rich_blocks, features: [:markdown, :buttons]},
-      {:chunk_limit, value: 4096},
-      {:rate_limit, value: 30}
-    ])
-  end
-
-  def lookup("discord") do
-    Capabilities.new([
-      :threads,
-      :reactions,
-      :edit,
-      :delete,
-      {:attachments, max_size: 25_000_000, features: [:images, :videos, :documents]},
-      {:rich_blocks, features: [:markdown, :sections, :divider, :header, :image, :buttons]},
-      {:chunk_limit, value: 2000},
-      {:rate_limit, value: 5}
-    ])
-  end
-
-  def lookup("x_api") do
-    Capabilities.new([
-      :threads,
-      :edit,
-      :delete,
-      {:attachments, max_size: 5_000_000, features: [:images, :videos]},
-      {:rich_blocks, features: []},
-      {:chunk_limit, value: 280},
-      {:rate_limit, value: 2400}
-    ])
-  end
-
-  def lookup("xmtp") do
-    Capabilities.new([
-      :threads,
-      {:attachments, enabled: false},
-      {:rich_blocks, enabled: false},
-      {:chunk_limit, value: 2000}
-    ])
-  end
-
-  def lookup("whatsapp") do
-    Capabilities.new([
-      :threads,
-      :reactions,
-      :voice,
-      {:attachments, max_size: 50_000_000, features: [:images, :videos, :documents, :audio]},
-      {:rich_blocks, features: [:markdown]},
-      {:chunk_limit, value: 4096}
-    ])
-  end
-
-  def lookup(_) do
-    Capabilities.empty()
   end
 end
 

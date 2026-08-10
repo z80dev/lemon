@@ -31,6 +31,10 @@ defmodule LemonChannels.MixProject do
       {:agent_core, in_umbrella: true},
       {:jason, "~> 1.4"},
       {:earmark_parser, "~> 1.4"},
+      # LemonChannels.InboundHttp — the optional listener for adapters that
+      # receive webhooks rather than polling. Off unless configured.
+      {:plug, "~> 1.16"},
+      {:bandit, "~> 1.5"},
       {:req, "~> 0.5"},
       {:nostrum, "~> 0.9", runtime: false}
     ]
