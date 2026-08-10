@@ -334,7 +334,9 @@ scripts/test quality   # credo, doc freshness, architecture boundaries, duplicat
 scripts/test path apps/lemon_core/test
 ```
 
-[`docs/testing.md`](docs/testing.md) maps every local lane to its CI job.
+[`docs/testing.md`](docs/testing.md) maps every local lane to its CI job, and
+[`docs/mix-tasks.md`](docs/mix-tasks.md) groups the ~85 `mix lemon.*` tasks by
+what they do — `mix lemon.help` prints the same index from the CLI.
 Release profiles `lemon_runtime_min`, `lemon_runtime_full` and
 `sim_broadcast_platform` are defined in [`mix.exs`](mix.exs):
 

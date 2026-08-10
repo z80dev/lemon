@@ -56,7 +56,7 @@
   %{
     path: "docs/demo.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-08-09],
+    last_reviewed: ~D[2026-08-10],
     max_age_days: 60
   },
   %{
@@ -134,19 +134,19 @@
   %{
     path: "docs/beam_agents.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-06-17],
+    last_reviewed: ~D[2026-08-10],
     max_age_days: 90
   },
   %{
     path: "docs/config.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-07-02],
+    last_reviewed: ~D[2026-08-10],
     max_age_days: 60
   },
   %{
     path: "docs/error-reporting.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-07-06],
+    last_reviewed: ~D[2026-08-10],
     max_age_days: 60
   },
   %{
@@ -170,7 +170,7 @@
   %{
     path: "docs/long-running-agent-harnesses.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-06-17],
+    last_reviewed: ~D[2026-08-10],
     max_age_days: 90
   },
   %{
@@ -188,7 +188,7 @@
   %{
     path: "docs/runtime-hot-reload.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-06-17],
+    last_reviewed: ~D[2026-08-10],
     max_age_days: 90
   },
   %{
