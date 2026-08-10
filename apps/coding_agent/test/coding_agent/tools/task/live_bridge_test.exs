@@ -8,6 +8,7 @@ defmodule CodingAgent.Tools.Task.LiveBridgeTest do
   alias CodingAgent.Tools.Task
   alias CodingAgent.Tools.Task.LiveBridge
   alias LemonCore.{Bus, Event}
+  alias LemonPlatformTest.EventsFixtures
 
   setup do
     try do
@@ -115,7 +116,7 @@ defmodule CodingAgent.Tools.Task.LiveBridgeTest do
     :ok =
       Bus.broadcast(
         Bus.run_topic(binding.child_run_id),
-        Event.new(:run_completed, %{completed: %{ok: true}})
+        Event.new(:run_completed, EventsFixtures.run_completed())
       )
 
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 1_000

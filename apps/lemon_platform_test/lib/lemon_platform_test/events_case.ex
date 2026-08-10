@@ -1,3 +1,7 @@
+# credo:disable-for-this-file Credo.Check.Refactor.LongQuoteBlocks
+# This is an ExUnit CaseTemplate: the `using/1` quote block is intentionally
+# large because it injects the entire compliance suite into the including test
+# module. Splitting it would obscure the contract it exists to express.
 defmodule LemonPlatformTest.EventsCase do
   @moduledoc """
   Contract suite for typed bus payloads (`LemonCore.Events.*`).
@@ -41,11 +45,19 @@ defmodule LemonPlatformTest.EventsCase do
       use LemonPlatformTest.EventsCase,
         modules: [MyApp.Events.ThingHappened],
         examples: %{MyApp.Events.ThingHappened => %{thing_id: "t_1"}}
+
+  ## See also
+
+  `LemonPlatformTest.EventsFixtures` builds valid typed payloads (with defaults and
+  overrides) for use in *other* tests that publish onto the bus — the fixture companion
+  to this contract suite.
   """
 
   use ExUnit.CaseTemplate
 
   using opts do
+    LemonPlatformTest.require_dep!("EventsCase", LemonCore.Events, :lemon_core)
+
     quote bind_quoted: [opts: opts] do
       use ExUnit.Case, async: true
 

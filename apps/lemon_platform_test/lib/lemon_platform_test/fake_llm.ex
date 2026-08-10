@@ -10,8 +10,8 @@ defmodule LemonPlatformTest.FakeLLM do
       {:start, message}
       {:text_start, index, message}
       {:text_delta, index, chunk, message}
-      {:text_end, index, message}
-      {:tool_call_start, index, tool_call, message}
+      {:text_end, index, chunk, message}
+      {:tool_call_start, index, message}
       {:tool_call_end, index, tool_call, message}
       {:done, stop_reason, message}
 
@@ -282,28 +282,29 @@ defmodule LemonPlatformTest.FakeLLM do
   defp event_stream(%AssistantMessage{} = message) do
     {:ok, stream} = Ai.EventStream.start_link()
 
-    Task.start(fn ->
-      Ai.EventStream.push(stream, {:start, message})
+    _ =
+      Task.start(fn ->
+        _ = Ai.EventStream.push(stream, {:start, message})
 
-      message.content
-      |> Enum.with_index()
-      |> Enum.each(fn {block, index} -> push_block(stream, block, index, message) end)
+        message.content
+        |> Enum.with_index()
+        |> Enum.each(fn {block, index} -> push_block(stream, block, index, message) end)
 
-      Ai.EventStream.push(stream, {:done, message.stop_reason, message})
-      Ai.EventStream.complete(stream, message)
-    end)
+        _ = Ai.EventStream.push(stream, {:done, message.stop_reason, message})
+        Ai.EventStream.complete(stream, message)
+      end)
 
     stream
   end
 
   defp push_block(stream, %TextContent{text: text}, index, message) do
-    Ai.EventStream.push(stream, {:text_start, index, message})
-    Ai.EventStream.push(stream, {:text_delta, index, text, message})
+    _ = Ai.EventStream.push(stream, {:text_start, index, message})
+    _ = Ai.EventStream.push(stream, {:text_delta, index, text, message})
     Ai.EventStream.push(stream, {:text_end, index, text, message})
   end
 
   defp push_block(stream, %ToolCall{} = call, index, message) do
-    Ai.EventStream.push(stream, {:tool_call_start, index, message})
+    _ = Ai.EventStream.push(stream, {:tool_call_start, index, message})
     Ai.EventStream.push(stream, {:tool_call_end, index, call, message})
   end
 

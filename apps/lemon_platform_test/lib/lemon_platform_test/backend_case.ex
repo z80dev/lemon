@@ -1,3 +1,7 @@
+# credo:disable-for-this-file Credo.Check.Refactor.LongQuoteBlocks
+# This is an ExUnit CaseTemplate: the `using/1` quote block is intentionally
+# large because it injects the entire compliance suite into the including test
+# module. Splitting it would obscure the contract it exists to express.
 defmodule LemonPlatformTest.BackendCase do
   @moduledoc """
   Compliance suite for `LemonCore.Store.Backend` implementations.
@@ -157,6 +161,8 @@ defmodule LemonPlatformTest.BackendCase do
   @default_tables [:lemon_platform_test_alpha, :lemon_platform_test_beta]
 
   using opts do
+    LemonPlatformTest.require_dep!("BackendCase", LemonCore.Store.Backend, :lemon_core)
+
     backend = Keyword.fetch!(opts, :backend)
     backend_opts = Keyword.get(opts, :backend_opts, [])
     persistent? = Keyword.get(opts, :persistent, false)

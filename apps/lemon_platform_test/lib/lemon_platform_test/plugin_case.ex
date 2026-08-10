@@ -1,3 +1,7 @@
+# credo:disable-for-this-file Credo.Check.Refactor.LongQuoteBlocks
+# This is an ExUnit CaseTemplate: the `using/1` quote block is intentionally
+# large because it injects the entire compliance suite into the including test
+# module. Splitting it would obscure the contract it exists to express.
 defmodule LemonPlatformTest.PluginCase do
   @moduledoc """
   Compliance suite for `LemonChannels.Plugin` implementations.
@@ -244,6 +248,8 @@ defmodule LemonPlatformTest.PluginCase do
   end
 
   using opts do
+    LemonPlatformTest.require_dep!("PluginCase", LemonChannels.Plugin, :lemon_channels)
+
     adapter = Keyword.fetch!(opts, :adapter)
     registry? = Keyword.get(opts, :registry, true)
     start_adapter? = Keyword.get(opts, :start_adapter, false)

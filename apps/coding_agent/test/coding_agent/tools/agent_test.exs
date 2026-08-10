@@ -7,6 +7,7 @@ defmodule CodingAgent.Tools.AgentTest do
   alias CodingAgent.Messages
   alias CodingAgent.Messages.CustomMessage
   alias LemonCore.{Bus, Event, RunRequest, Store}
+  alias LemonPlatformTest.EventsFixtures
 
   defmodule AgentTestStubRunOrchestrator do
     use Agent
@@ -147,10 +148,10 @@ defmodule CodingAgent.Tools.AgentTest do
     assert req.session_key == result.details.session_key
 
     completed =
-      Event.new(:run_completed, %{
-        completed: %{ok: true, answer: "hello from oracle"},
-        duration_ms: 12
-      })
+      Event.new(
+        :run_completed,
+        EventsFixtures.run_completed(answer: "hello from oracle", duration_ms: 12)
+      )
 
     :ok = Bus.broadcast(Bus.run_topic(result.details.run_id), completed)
 
@@ -254,7 +255,7 @@ defmodule CodingAgent.Tools.AgentTest do
     :ok =
       Bus.broadcast(
         Bus.run_topic(result.details.run_id),
-        Event.new(:run_completed, %{completed: %{ok: true, answer: "oracle update"}})
+        Event.new(:run_completed, EventsFixtures.run_completed(answer: "oracle update"))
       )
 
     assert_receive {:session_async_followup, %CustomMessage{} = message}, 500
@@ -306,7 +307,7 @@ defmodule CodingAgent.Tools.AgentTest do
     :ok =
       Bus.broadcast(
         Bus.run_topic(result.details.run_id),
-        Event.new(:run_completed, %{completed: %{ok: true, answer: "oracle update"}})
+        Event.new(:run_completed, EventsFixtures.run_completed(answer: "oracle update"))
       )
 
     assert_receive {:session_async_followup, %CustomMessage{} = message}, 500
@@ -342,7 +343,7 @@ defmodule CodingAgent.Tools.AgentTest do
     :ok =
       Bus.broadcast(
         Bus.run_topic(result.details.run_id),
-        Event.new(:run_completed, %{completed: %{ok: true, answer: "oracle update"}})
+        Event.new(:run_completed, EventsFixtures.run_completed(answer: "oracle update"))
       )
 
     assert_receive {:session_async_followup, %CustomMessage{} = message}, 500
@@ -379,7 +380,7 @@ defmodule CodingAgent.Tools.AgentTest do
     :ok =
       Bus.broadcast(
         Bus.run_topic(result.details.run_id),
-        Event.new(:run_completed, %{completed: %{ok: true, answer: "oracle update"}})
+        Event.new(:run_completed, EventsFixtures.run_completed(answer: "oracle update"))
       )
 
     refute_receive {:session_async_followup, _message}, 150
@@ -429,7 +430,7 @@ defmodule CodingAgent.Tools.AgentTest do
     :ok =
       Bus.broadcast(
         Bus.run_topic(result.details.run_id),
-        Event.new(:run_completed, %{completed: %{ok: true, answer: "oracle update"}})
+        Event.new(:run_completed, EventsFixtures.run_completed(answer: "oracle update"))
       )
 
     assert_receive {:router_submit, %RunRequest{queue_mode: :followup} = followup, 2}, 500
@@ -476,7 +477,7 @@ defmodule CodingAgent.Tools.AgentTest do
     :ok =
       Bus.broadcast(
         Bus.run_topic(result.details.run_id),
-        Event.new(:run_completed, %{completed: %{ok: true, answer: "oracle update"}})
+        Event.new(:run_completed, EventsFixtures.run_completed(answer: "oracle update"))
       )
 
     assert_receive {:session_async_followup, %CustomMessage{} = message}, 500
@@ -512,7 +513,7 @@ defmodule CodingAgent.Tools.AgentTest do
     :ok =
       Bus.broadcast(
         Bus.run_topic(result.details.run_id),
-        Event.new(:run_completed, %{completed: %{ok: true, answer: "oracle update"}})
+        Event.new(:run_completed, EventsFixtures.run_completed(answer: "oracle update"))
       )
 
     refute_receive {:session_async_followup, _message}, 150
@@ -547,7 +548,7 @@ defmodule CodingAgent.Tools.AgentTest do
     :ok =
       Bus.broadcast(
         Bus.run_topic(result.details.run_id),
-        Event.new(:run_completed, %{completed: %{ok: true, answer: "oracle update"}})
+        Event.new(:run_completed, EventsFixtures.run_completed(answer: "oracle update"))
       )
 
     refute_receive {:session_async_followup, _message}, 150
@@ -583,7 +584,7 @@ defmodule CodingAgent.Tools.AgentTest do
     :ok =
       Bus.broadcast(
         Bus.run_topic(result.details.run_id),
-        Event.new(:run_completed, %{completed: %{ok: true, answer: "oracle update"}})
+        Event.new(:run_completed, EventsFixtures.run_completed(answer: "oracle update"))
       )
 
     assert_receive {:session_async_followup, %CustomMessage{} = message}, 500
@@ -619,7 +620,7 @@ defmodule CodingAgent.Tools.AgentTest do
     :ok =
       Bus.broadcast(
         Bus.run_topic(result.details.run_id),
-        Event.new(:run_completed, %{completed: %{ok: true, answer: "oracle update"}})
+        Event.new(:run_completed, EventsFixtures.run_completed(answer: "oracle update"))
       )
 
     assert_receive {:session_async_followup, %CustomMessage{} = message}, 500

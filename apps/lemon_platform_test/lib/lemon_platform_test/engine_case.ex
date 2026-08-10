@@ -1,3 +1,7 @@
+# credo:disable-for-this-file Credo.Check.Refactor.LongQuoteBlocks
+# This is an ExUnit CaseTemplate: the `using/1` quote block is intentionally
+# large because it injects the entire compliance suite into the including test
+# module. Splitting it would obscure the contract it exists to express.
 defmodule LemonPlatformTest.EngineCase do
   @moduledoc """
   Compliance suite for `LemonGateway.Engine` implementations.
@@ -171,8 +175,8 @@ defmodule LemonPlatformTest.EngineCase do
       the integration failure this suite exists to catch. It is also the only
       option that is on by default and touches global state, so it is worth
       knowing exactly what it does: it starts `:lemon_gateway` if nothing else
-      has (with the health listener disabled, so no port is bound), and
-      `LemonGateway.Application.start/2` in turn points
+      has (with the health listener disabled, so no port is bound), and the
+      gateway application's own startup in turn points
       `LemonCore.EngineInfoBridge` at the gateway's registries for the rest of
       the VM's life. The engine list it registers into is snapshotted and
       restored per test. Pass `registry: false` in a suite where starting the
@@ -248,6 +252,8 @@ defmodule LemonPlatformTest.EngineCase do
   end
 
   using opts do
+    LemonPlatformTest.require_dep!("EngineCase", LemonGateway.Engine, :lemon_gateway)
+
     engine = Keyword.fetch!(opts, :engine)
     resume_value = Keyword.get(opts, :resume_value, "session-abc123")
     registry? = Keyword.get(opts, :registry, true)

@@ -192,6 +192,8 @@ defmodule LemonPlatformTest.ProviderCase do
   end
 
   using opts do
+    LemonPlatformTest.require_dep!("ProviderCase", LemonMemory.Provider, :lemon_memory)
+
     provider = Keyword.fetch!(opts, :provider)
     registry? = Keyword.get(opts, :registry, true)
     document = Keyword.get(opts, :document)
