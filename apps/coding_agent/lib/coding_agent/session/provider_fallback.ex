@@ -192,7 +192,6 @@ defmodule CodingAgent.Session.ProviderFallback do
     do: String.trim(text) != ""
 
   defp useful_event?({:tool_call_start, _idx, _message}), do: true
-  defp useful_event?({:tool_call_start, _idx, _tool_call, _message}), do: true
   defp useful_event?({:tool_call_end, _idx, _tool_call, _message}), do: true
   defp useful_event?(_), do: false
 

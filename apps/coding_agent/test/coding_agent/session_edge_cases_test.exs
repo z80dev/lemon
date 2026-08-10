@@ -85,10 +85,10 @@ defmodule CodingAgent.SessionEdgeCasesTest do
           %TextContent{text: text} ->
             Ai.EventStream.push(stream, {:text_start, idx, response})
             Ai.EventStream.push(stream, {:text_delta, idx, text, response})
-            Ai.EventStream.push(stream, {:text_end, idx, response})
+            Ai.EventStream.push(stream, {:text_end, idx, text, response})
 
           %ToolCall{} = tool_call ->
-            Ai.EventStream.push(stream, {:tool_call_start, idx, tool_call, response})
+            Ai.EventStream.push(stream, {:tool_call_start, idx, response})
             Ai.EventStream.push(stream, {:tool_call_end, idx, tool_call, response})
 
           _ ->
