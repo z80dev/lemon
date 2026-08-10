@@ -26,7 +26,7 @@ defmodule LemonMemory.Ingest do
   require Logger
 
   alias LemonCore.Bus
-  alias LemonCore.Event
+  alias LemonCore.Events.RoutingFeedback
   alias LemonMemory.Document
   alias LemonMemory.Providers
   alias LemonMemory.Safety
@@ -172,9 +172,10 @@ defmodule LemonMemory.Ingest do
     fingerprint_key = TaskFingerprint.key(%{fingerprint | toolset: []})
     duration_ms = compute_duration_ms(record, doc)
 
-    Bus.broadcast(
+    Bus.broadcast_event(
       "routing_feedback",
-      Event.new(:routing_feedback, %{
+      :routing_feedback,
+      RoutingFeedback.new(%{
         fingerprint_key: fingerprint_key,
         outcome: doc.outcome,
         duration_ms: duration_ms
