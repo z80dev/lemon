@@ -75,7 +75,7 @@ defmodule LemonCore.Doctor.LspDiagnostics do
       supported_languages: languages,
       executable_summary: executable_status,
       server_manager:
-        probe(LemonLsp.ServerManager, :status, [], %{
+        probe(LemonCore.Doctor.RuntimeModules.fetch(:lsp_server_manager), :status, [], %{
           supervised: false,
           running: false,
           mode: :unavailable,

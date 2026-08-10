@@ -10,7 +10,7 @@ defmodule LemonSkills.Tools.MediaGenerateImage do
   alias LemonCore.Config
   alias LemonMedia.MediaJobSupervisor
   alias LemonMedia.MediaJobs
-  alias LemonCore.ProviderConfigResolver
+  alias AgentCore.ProviderConfigResolver
 
   @topic "media_jobs"
   @default_timeout_ms 5_000

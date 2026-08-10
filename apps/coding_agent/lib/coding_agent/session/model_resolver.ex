@@ -370,7 +370,7 @@ defmodule CodingAgent.Session.ModelResolver do
     [
       routing_value(profile || %{}, :fallback_providers, []),
       distribution_providers(profile),
-      LemonCore.ProviderPoolRotator.ordered_providers(
+      CodingAgent.ProviderPoolRotator.ordered_providers(
         {:provider_pool, profile_name, pool_name, model_id},
         pool_providers,
         routing_value(pool || %{}, :strategy, "priority")

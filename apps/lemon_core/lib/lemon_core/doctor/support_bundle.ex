@@ -159,20 +159,25 @@ defmodule LemonCore.Doctor.SupportBundle do
 
     %{
       local_server:
-        probe(LemonBrowser.LocalServer, :status, [], %{
+        probe(runtime_module(:browser_server), :status, [], %{
           available: false,
           running: false,
           error: "browser runtime not available",
           pending_requests: 0
         }),
-      artifacts_dir: probe(LemonBrowser.Artifacts, :default_dir, [project_dir], nil),
+      artifacts_dir: probe(runtime_module(:browser_artifacts), :default_dir, [project_dir], nil),
       artifact_summary:
-        probe(LemonBrowser.Artifacts, :summary, [[project_dir: project_dir]], %{
+        probe(runtime_module(:browser_artifacts), :summary, [[project_dir: project_dir]], %{
           available: false,
           error: "browser runtime not available"
         }),
       recent_artifacts:
-        probe(LemonBrowser.Artifacts, :recent, [[project_dir: project_dir, limit: 20]], [])
+        probe(
+          runtime_module(:browser_artifacts),
+          :recent,
+          [[project_dir: project_dir, limit: 20]],
+          []
+        )
     }
   end
 
@@ -247,10 +252,11 @@ defmodule LemonCore.Doctor.SupportBundle do
     project_dir = Keyword.get(opts, :project_dir, File.cwd!())
 
     %{
-      jobs_dir: probe(LemonMedia.MediaJobs, :default_dir, [project_dir], nil),
-      artifacts_dir: probe(LemonMedia.MediaJobs, :default_artifacts_dir, [project_dir], nil),
+      jobs_dir: probe(runtime_module(:media_jobs), :default_dir, [project_dir], nil),
+      artifacts_dir:
+        probe(runtime_module(:media_jobs), :default_artifacts_dir, [project_dir], nil),
       worker_status:
-        probe(LemonMedia.MediaJobSupervisor, :status, [], %{
+        probe(runtime_module(:media_supervisor), :status, [], %{
           supervised: false,
           running: false,
           active_jobs: 0,
@@ -259,13 +265,13 @@ defmodule LemonCore.Doctor.SupportBundle do
           error: "media runtime not available"
         }),
       summary:
-        probe(LemonMedia.MediaJobs, :summary, [[project_dir: project_dir]], %{
+        probe(runtime_module(:media_jobs), :summary, [[project_dir: project_dir]], %{
           available: false,
           error: "media runtime not available"
         }),
       provider_live: media_provider_live(project_dir),
       recent_jobs:
-        probe(LemonMedia.MediaJobs, :recent, [[project_dir: project_dir, limit: 20]], [])
+        probe(runtime_module(:media_jobs), :recent, [[project_dir: project_dir, limit: 20]], [])
     }
   end
 
@@ -336,7 +342,10 @@ defmodule LemonCore.Doctor.SupportBundle do
   end
 
   defp memory_diagnostics do
-    LemonCore.MemoryProviders.status()
+    probe(runtime_module(:memory_providers), :status, [], %{
+      available: false,
+      error: "memory runtime not available"
+    })
   end
 
   defp proof_diagnostics(opts) do
@@ -420,6 +429,12 @@ defmodule LemonCore.Doctor.SupportBundle do
   defp sensitive_pattern do
     Enum.map_join(@sensitive_terms, "|", &Regex.escape/1)
   end
+
+  # Media, browser and LSP diagnostics are owned by other apps; core looks their
+  # modules up through config rather than naming them.
+  defp runtime_module(key), do: LemonCore.Doctor.RuntimeModules.fetch(key)
+
+  defp probe(nil, _fun, _args, fallback), do: fallback
 
   defp probe(mod, fun, args, fallback) do
     if Code.ensure_loaded?(mod) and function_exported?(mod, fun, length(args)) do

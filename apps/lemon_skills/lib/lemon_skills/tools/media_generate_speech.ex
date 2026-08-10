@@ -10,7 +10,7 @@ defmodule LemonSkills.Tools.MediaGenerateSpeech do
   alias LemonCore.Config
   alias LemonMedia.MediaJobSupervisor
   alias LemonMedia.MediaJobs
-  alias LemonCore.ProviderConfigResolver
+  alias AgentCore.ProviderConfigResolver
 
   @topic "media_jobs"
   @default_timeout_ms 10_000

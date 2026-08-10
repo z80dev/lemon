@@ -1,4 +1,4 @@
-defmodule LemonCore.ProviderConfigResolver do
+defmodule AgentCore.ProviderConfigResolver do
   @moduledoc """
   Resolves provider configuration from canonical config + env + secrets.
 

@@ -9,7 +9,7 @@ defmodule AgentCore.ModelRuntime.StreamOptions do
   alias Ai.Types.StreamOptions
   alias AgentCore.ModelRuntime.Credentials
   alias AgentCore.ModelRuntime.ProviderNames
-  alias LemonCore.ProviderConfigResolver
+  alias AgentCore.ProviderConfigResolver
 
   @spec build_stream_options(
           Ai.Types.Model.t(),

@@ -1,6 +1,19 @@
 defmodule LemonCore.Doctor do
   @moduledoc """
   Runs the Lemon doctor check suite and builds the aggregate diagnostic report used by CLI and support tooling.
+
+  ## Registering checks
+
+  The built-in checks cover what lemon_core itself owns (config, secrets,
+  runtime, providers, and the proof artifacts other apps write). Apps that own
+  their own domain register additional check modules, which run after the
+  built-ins:
+
+      config :lemon_core, :doctor_checks, [MyApp.Doctor.Checks.Widgets]
+
+  A check module only has to export `run/1` returning a list of
+  `LemonCore.Doctor.Check` structs. Modules that cannot be loaded are skipped,
+  so a registration left behind by a removed dependency is not fatal.
   """
   alias LemonCore.Doctor.Checks.{
     ACP,
@@ -24,26 +37,44 @@ defmodule LemonCore.Doctor do
 
   alias LemonCore.Doctor.Report
 
+  @builtin_checks [
+    Config,
+    Secrets,
+    Runtime,
+    Providers,
+    Usage,
+    Channels,
+    Media,
+    Browser,
+    Cron,
+    TerminalBackends,
+    OpenAICompat,
+    ACP,
+    MCP,
+    LSP,
+    Extensions,
+    NodeTools,
+    Skills
+  ]
+
+  @spec builtin_checks() :: [module()]
+  def builtin_checks, do: @builtin_checks
+
+  @doc """
+  Check modules registered by other apps under `:lemon_core, :doctor_checks`.
+  """
+  @spec registered_checks() :: [module()]
+  def registered_checks do
+    :lemon_core
+    |> Application.get_env(:doctor_checks, [])
+    |> List.wrap()
+    |> Enum.filter(&(Code.ensure_loaded?(&1) and function_exported?(&1, :run, 1)))
+  end
+
   @spec checks(keyword()) :: [LemonCore.Doctor.Check.t()]
   def checks(opts \\ []) do
-    []
-    |> append_checks(Config.run(opts))
-    |> append_checks(Secrets.run(opts))
-    |> append_checks(Runtime.run(opts))
-    |> append_checks(Providers.run(opts))
-    |> append_checks(Usage.run(opts))
-    |> append_checks(Channels.run(opts))
-    |> append_checks(Media.run(opts))
-    |> append_checks(Browser.run(opts))
-    |> append_checks(Cron.run(opts))
-    |> append_checks(TerminalBackends.run(opts))
-    |> append_checks(OpenAICompat.run(opts))
-    |> append_checks(ACP.run(opts))
-    |> append_checks(MCP.run(opts))
-    |> append_checks(LSP.run(opts))
-    |> append_checks(Extensions.run(opts))
-    |> append_checks(NodeTools.run(opts))
-    |> append_checks(Skills.run(opts))
+    (@builtin_checks ++ registered_checks())
+    |> Enum.reduce([], fn module, acc -> append_checks(acc, module.run(opts)) end)
   end
 
   @spec report(keyword()) :: Report.t()

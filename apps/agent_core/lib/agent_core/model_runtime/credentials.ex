@@ -11,7 +11,7 @@ defmodule AgentCore.ModelRuntime.Credentials do
 
   alias Ai.Auth.OAuthSecretResolver
   alias AgentCore.ModelRuntime.ProviderNames
-  alias LemonCore.ProviderConfigResolver
+  alias AgentCore.ProviderConfigResolver
   alias LemonCore.Secrets
 
   @raw_anthropic_secret "llm_anthropic_api_key_raw"

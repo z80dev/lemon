@@ -3,7 +3,147 @@ defmodule LemonCore.Doctor.SupportBundleTest do
 
   alias LemonCore.Doctor.{Check, Report, SupportBundle}
 
+  # Media, browser and LSP diagnostics belong to other apps and reach the bundle
+  # through :doctor_runtime. The bundle's own behaviour — assembling the
+  # sections and redacting them — is what lemon_core owns, so the test registers
+  # stand-ins rather than requiring those apps to be running.
+  defmodule StubMediaJobs do
+    def default_dir(project_dir), do: Path.join([project_dir, ".lemon", "media"])
+
+    def default_artifacts_dir(project_dir),
+      do: Path.join([project_dir, ".lemon", "media", "artifacts"])
+
+    def summary(_opts) do
+      %{
+        count: 1,
+        status_counts: %{"completed" => 1},
+        type_counts: %{"image" => 1},
+        cleanup: %{
+          embeds_artifact_bytes_in_support_bundle: false,
+          includes_raw_paths: false,
+          includes_prompts: false,
+          includes_provider_responses: false,
+          includes_channel_message_bodies: false
+        }
+      }
+    end
+
+    # Shape LemonMedia.MediaJobs.recent/1 returns: already hashed, never the
+    # raw prompt. lemon_media owns the test that it hashes.
+    def recent(_opts) do
+      [%{job_id: "support-media", type: :image, status: :completed, prompt_hash: "sha256:abc123"}]
+    end
+  end
+
+  defmodule StubMediaSupervisor do
+    def status do
+      %{supervised: true, running: true, active_jobs: 0, workers: 1, supervisors: 1}
+    end
+  end
+
+  defmodule StubBrowserServer do
+    # Mirrors LemonBrowser.LocalServer.status/0, which is where the endpoint is
+    # hashed; that redaction is covered by lemon_browser's own suite.
+    def status do
+      %{
+        available: true,
+        running: false,
+        pending_requests: 0,
+        driver_config: %{
+          mode: "remote_cdp",
+          attach_only: true,
+          launches_browser: false,
+          cdp_endpoint_configured: true,
+          cdp_endpoint_hash: "sha256:0000000000000000"
+        }
+      }
+    end
+  end
+
+  defmodule StubBrowserArtifacts do
+    def default_dir(project_dir), do: Path.join([project_dir, ".lemon", "browser"])
+
+    def summary(_opts) do
+      %{
+        cleanup: %{
+          managed: true,
+          policy: "managed: 14d or 100 files",
+          embeds_artifact_bytes_in_support_bundle: false
+        }
+      }
+    end
+
+    def recent(_opts), do: []
+  end
+
+  defmodule StubLspServerManager do
+    def status do
+      %{
+        supervised: true,
+        running: true,
+        mode: :registry_and_sessions,
+        active_servers: [],
+        active_count: 0,
+        pending_request_count: 0,
+        recent_sessions: [],
+        registry: %{
+          count: 6,
+          available_count: 0,
+          missing_count: 6,
+          cleanup: %{includes_executable_paths: false}
+        }
+      }
+    end
+  end
+
+  defmodule StubMemoryProviders do
+    # Mirrors LemonMemory.Providers.status/0. lemon_memory is not loaded in an
+    # app-scoped lemon_core run, and the redaction this shape encodes is covered
+    # by that app's own suite.
+    def status do
+      %{
+        provider_count: 1,
+        enabled_provider_count: 1,
+        providers: [
+          %{
+            id: "local",
+            enabled: true,
+            source: "builtin",
+            scopes: ["agent", "all", "session", "workspace"],
+            timeout_ms: 2_000,
+            module_loaded: true
+          }
+        ],
+        cleanup: %{
+          includes_memory_contents: false,
+          includes_raw_provider_config: false,
+          includes_secret_values: false
+        }
+      }
+    end
+  end
+
+  defp register_runtime_stubs do
+    original = Application.get_env(:lemon_core, :doctor_runtime, [])
+
+    Application.put_env(
+      :lemon_core,
+      :doctor_runtime,
+      Keyword.merge(original,
+        media_jobs: StubMediaJobs,
+        media_supervisor: StubMediaSupervisor,
+        browser_server: StubBrowserServer,
+        browser_artifacts: StubBrowserArtifacts,
+        lsp_server_manager: StubLspServerManager,
+        memory_providers: StubMemoryProviders
+      )
+    )
+
+    on_exit(fn -> Application.put_env(:lemon_core, :doctor_runtime, original) end)
+  end
+
   test "writes a zip containing diagnostics and metadata" do
+    register_runtime_stubs()
     tmp_dir = tmp_dir()
     on_exit(fn -> File.rm_rf!(tmp_dir) end)
     File.mkdir_p!(Path.join(tmp_dir, ".lemon"))
@@ -518,21 +658,6 @@ defmodule LemonCore.Doctor.SupportBundleTest do
       suppressed: false,
       meta: %{agent_id: "support-cron-agent-#{cron_token}", session_key: cron_session_key}
     })
-
-    assert {:ok, _job} =
-             LemonMedia.MediaJobs.record(
-               %{
-                 job_id: "support-media",
-                 type: :image,
-                 status: :completed,
-                 channel: "telegram",
-                 prompt: "private prompt",
-                 artifact_name: "image.png",
-                 bytes: 12,
-                 created_at: "2026-05-16T12:00:00Z"
-               },
-               project_dir: tmp_dir
-             )
 
     LemonCore.UsageStore.put_summary(:current, %{
       total_cost: 0.42,

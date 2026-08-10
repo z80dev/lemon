@@ -1,4 +1,4 @@
-defmodule LemonCore.ProviderPoolRotator do
+defmodule CodingAgent.ProviderPoolRotator do
   @moduledoc false
 
   use GenServer

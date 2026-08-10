@@ -1,7 +1,7 @@
-defmodule LemonCore.ProviderConfigResolverTest do
+defmodule AgentCore.ProviderConfigResolverTest do
   use ExUnit.Case, async: false
 
-  alias LemonCore.ProviderConfigResolver
+  alias AgentCore.ProviderConfigResolver
 
   # We need to manipulate env vars, so async: false is required.
 

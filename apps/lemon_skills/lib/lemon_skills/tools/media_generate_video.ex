@@ -10,7 +10,7 @@ defmodule LemonSkills.Tools.MediaGenerateVideo do
   alias LemonCore.Config
   alias LemonMedia.MediaJobSupervisor
   alias LemonMedia.MediaJobs
-  alias LemonCore.ProviderConfigResolver
+  alias AgentCore.ProviderConfigResolver
 
   @topic "media_jobs"
   @default_timeout_ms 20_000
@@ -537,7 +537,9 @@ defmodule LemonSkills.Tools.MediaGenerateVideo do
         ]
 
         do_get(runtime, url, request_opts, generation.max_retries, :openai_video_download)
-      _ -> {:error, :missing_openai_video_id}
+
+      _ ->
+        {:error, :missing_openai_video_id}
     end
   end
 
