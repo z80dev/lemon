@@ -6,7 +6,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
   interactions so the transport shell stays focused on orchestration and state.
   """
 
-  alias AgentCore.ModelRuntime.ModelCatalog
+  alias LemonAgent.ModelRuntime.ModelCatalog
   alias LemonChannels.BindingResolver
   alias LemonChannels.Adapters.Telegram.ModelPolicyAdapter
   alias LemonChannels.Adapters.Telegram.Transport.PerChatState

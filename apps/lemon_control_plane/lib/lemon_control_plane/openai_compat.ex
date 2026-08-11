@@ -3,7 +3,7 @@ defmodule LemonControlPlane.OpenAICompat do
 
   alias LemonControlPlane.Methods.AgentWait
   alias LemonControlPlane.Methods.ModelsList
-  alias AgentCore.ModelRuntime.ProviderNames
+  alias LemonAgent.ModelRuntime.ProviderNames
   alias LemonCore.Httpc
   alias LemonCore.RunRequest
 
@@ -610,8 +610,8 @@ defmodule LemonControlPlane.OpenAICompat do
   defp model_image_support(model) when is_binary(model) do
     with {:ok, provider, model_id} <- model_provider_and_id(model),
          provider_atom when is_atom(provider_atom) <- ProviderNames.provider_atom(provider),
-         true <- Code.ensure_loaded?(Ai.Models),
-         %{input: input} <- Ai.Models.get_model(provider_atom, model_id) do
+         true <- Code.ensure_loaded?(LemonAi.Models),
+         %{input: input} <- LemonAi.Models.get_model(provider_atom, model_id) do
       :image in input
     else
       _ -> :unknown

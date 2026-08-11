@@ -7,7 +7,7 @@ are not visible in the type signatures.
 
 ## What a tool is
 
-`AgentCore.Types.AgentTool` is a struct with four fields the model sees and one
+`LemonAgent.Types.AgentTool` is a struct with four fields the model sees and one
 it does not:
 
 | Field | Who reads it | Notes |
@@ -44,8 +44,8 @@ defmodule MyAgent.Tools.ReadFile do
   stranger wrote. `Path.safe_relative/1` rejects anything that climbs out.
   """
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.TextContent
 
   @max_chars 20_000
 
@@ -128,7 +128,7 @@ def tools do
   taken = Enum.map(builtin, &String.to_atom(&1.name))
 
   contributed =
-    for {_name, module} <- AgentCore.ToolRegistry.available(taken), do: module.tool()
+    for {_name, module} <- LemonAgent.ToolRegistry.available(taken), do: module.tool()
 
   builtin ++ contributed
 end
@@ -142,7 +142,7 @@ end
 defmodule MyAgent.Tools.ReadFileTest do
   use ExUnit.Case, async: true
 
-  alias AgentCore.Types.AgentToolResult
+  alias LemonAgent.Types.AgentToolResult
   alias MyAgent.Tools.ReadFile
 
   setup do
@@ -212,7 +212,7 @@ execute: fn tool_call_id, params, signal, on_update -> ... end
   produced them. The model is not bound by your JSON Schema — it is a strong
   hint, not a validator — so match defensively and keep the catch-all clause.
 - **`signal`** is an abort reference, or `nil`. Long-running tools should check
-  it (`AgentCore.AbortSignal.aborted?/1`) between chunks of work so that
+  it (`LemonAgent.AbortSignal.aborted?/1`) between chunks of work so that
   cancelling a run actually stops them.
 - **`on_update`** streams a partial result to the UI before the tool finishes.
   It is `nil` when nobody is listening, so always guard it:
@@ -225,15 +225,15 @@ execute: fn tool_call_id, params, signal, on_update -> ... end
 
 ## The result
 
-`AgentCore.Types.AgentToolResult` has three fields:
+`LemonAgent.Types.AgentToolResult` has three fields:
 
-- **`content`** — a list of `Ai.Types.TextContent` or `Ai.Types.ImageContent`.
+- **`content`** — a list of `LemonAi.Types.TextContent` or `LemonAi.Types.ImageContent`.
   This is what the model sees.
 - **`details`** — anything at all, for your UI and logs. The model never sees it,
   which makes it the right place for structured data you do not want retokenized.
 - **`trust`** — `:trusted` (default) or `:untrusted`. Mark anything that came
   from outside your system. For content from a genuinely hostile source — an
-  email, a web page — `AgentCore.Security.ExternalContent.wrap_external_content/2`
+  email, a web page — `LemonAgent.Security.ExternalContent.wrap_external_content/2`
   additionally fences the text with a warning the model is trained to respect.
 
 ## Tools from a dependency
@@ -243,7 +243,7 @@ boot:
 
 ```elixir
 # in the dependency's Application.start/2
-AgentCore.ToolRegistry.register(:weather, MyLib.Tools.Weather)
+LemonAgent.ToolRegistry.register(:weather, MyLib.Tools.Weather)
 ```
 
 `MyLib.Tools.Weather` needs the same `tool/0`, `tool/1` and `tool/2` functions

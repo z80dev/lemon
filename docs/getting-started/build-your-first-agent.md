@@ -53,23 +53,23 @@ my_agent/
 
 ```elixir
 {:lemon_core, path: "/path/to/lemon/apps/lemon_core"},
-{:ai, path: "/path/to/lemon/apps/ai"},
-{:agent_core, path: "/path/to/lemon/apps/agent_core"},
+{:lemon_ai, path: "/path/to/lemon/apps/lemon_ai"},
+{:lemon_agent, path: "/path/to/lemon/apps/lemon_agent"},
 ```
 
 The generator bakes in the checkout it was built from. Override it with
 `mix lemon.new my_agent --lemon-path /elsewhere/lemon` or by exporting
 `LEMON_PATH`. When the packages publish, each path line is replaced by the Hex
 line commented beneath it — note that two of the packages have a Hex name that
-differs from the application name your code uses (`Ai` ships as `lemon_ai`,
-`AgentCore` as `lemon_agent`).
+differs from the application name your code uses (`LemonAi` ships as `lemon_ai`,
+`LemonAgent` as `lemon_agent`).
 
 ## 3. Read the agent
 
 `lib/my_agent/agent.ex` is the only file where your decisions live. It does
 three things.
 
-**It picks a model.** `Ai.Models` is a registry of several hundred models across
+**It picks a model.** `LemonAi.Models` is a registry of several hundred models across
 about twenty providers, carrying the context window, pricing and capability
 flags the loop needs:
 
@@ -77,30 +77,30 @@ flags the loop needs:
 def model do
   provider = Application.get_env(:my_agent, :provider)
   id = Application.get_env(:my_agent, :model)
-  Ai.Models.get_model(provider, id) || raise "..."
+  LemonAi.Models.get_model(provider, id) || raise "..."
 end
 ```
 
 **It assembles the tool list.** Your own tools, plus any a dependency
-contributed at runtime through `AgentCore.ToolRegistry`:
+contributed at runtime through `LemonAgent.ToolRegistry`:
 
 ```elixir
 def tools do
   builtin = [MyAgent.Tools.WordCount.tool()]
   taken = Enum.map(builtin, &String.to_atom(&1.name))
-  contributed = for {_name, module} <- AgentCore.ToolRegistry.available(taken), do: module.tool()
+  contributed = for {_name, module} <- LemonAgent.ToolRegistry.available(taken), do: module.tool()
   builtin ++ contributed
 end
 ```
 
-**It starts the loop.** `AgentCore.new_agent/1` starts a GenServer holding the
+**It starts the loop.** `LemonAgent.new_agent/1` starts a GenServer holding the
 conversation. `ask/2` prompts it and waits:
 
 ```elixir
 def ask(agent, prompt) when is_binary(prompt) do
-  with :ok <- AgentCore.prompt(agent, prompt),
-       :ok <- AgentCore.wait_for_idle(agent) do
-    case AgentCore.get_state(agent) do
+  with :ok <- LemonAgent.prompt(agent, prompt),
+       :ok <- LemonAgent.wait_for_idle(agent) do
+    case LemonAgent.get_state(agent) do
       %AgentState{error: nil} = state -> {:ok, last_answer(state)}
       %AgentState{error: error} -> {:error, error}
     end
@@ -110,7 +110,7 @@ end
 
 ### What one run actually does
 
-`AgentCore.prompt/2` starts a run, and a run is a loop:
+`LemonAgent.prompt/2` starts a run, and a run is a loop:
 
 1. Send the conversation and the tool schemas to the model.
 2. Stream the response back, emitting an event per fragment.
@@ -144,12 +144,12 @@ MY_AGENT_PROVIDER=openai MY_AGENT_MODEL=gpt-5 OPENAI_API_KEY=sk-... \
   mix run --no-halt -e "MyAgent.Console.start()"
 ```
 
-`Ai.Models.get_model_ids(:openai)` lists what a provider offers.
+`LemonAi.Models.get_model_ids(:openai)` lists what a provider offers.
 
 ## 5. How the tests run without a key
 
-`AgentCore` reaches providers through exactly one function: a `stream_fn` taking
-`(model, context, options)` and returning `{:ok, Ai.EventStream.t()}`. Replace it
+`LemonAgent` reaches providers through exactly one function: a `stream_fn` taking
+`(model, context, options)` and returning `{:ok, LemonAi.EventStream.t()}`. Replace it
 and nothing else changes — the loop still parses tool calls, still executes
 tools, still feeds results back.
 

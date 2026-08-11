@@ -6,9 +6,9 @@ defmodule CodingAgent.Tools.Write do
   Creates the file if it doesn't exist, overwrites if it does.
   """
 
-  alias AgentCore.AbortSignal
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.TextContent
+  alias LemonAgent.AbortSignal
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.TextContent
   alias CodingAgent.Tools.ACPFileBridge
   alias CodingAgent.Tools.CheckpointGuard
   alias CodingAgent.Tools.LspDiagnostics

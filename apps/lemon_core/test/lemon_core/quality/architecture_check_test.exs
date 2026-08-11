@@ -69,8 +69,8 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
       known_apps = Map.keys(deps)
 
       assert :lemon_core in known_apps
-      assert :ai in known_apps
-      assert :agent_core in known_apps
+      assert :lemon_ai in known_apps
+      assert :lemon_agent in known_apps
     end
 
     test "dependency lists are sorted deterministically" do
@@ -90,13 +90,13 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
       refute :lemon_gateway in current.lemon_control_plane
 
       assert :lemon_automation in current.lemon_gateway
-      assert :ai in current.lemon_gateway
+      assert :lemon_ai in current.lemon_gateway
 
       refute :lemon_channels in target.lemon_gateway
       refute :lemon_automation in target.lemon_gateway
-      refute :ai in target.lemon_gateway
+      refute :lemon_ai in target.lemon_gateway
 
-      assert target.ai == []
+      assert target.lemon_ai == []
     end
   end
 
@@ -237,10 +237,10 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
 
       create_app_with_code(
         tmp_dir,
-        :agent_core,
-        "AgentCore",
+        :lemon_agent,
+        "LemonAgent",
         """
-        defmodule AgentCore.NamespaceReference do
+        defmodule LemonAgent.NamespaceReference do
           def test do
             LemonCore.Bus.topic(:system)
           end
@@ -253,7 +253,7 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
         assert {:error, report} = ArchitectureCheck.run(root: tmp_dir)
 
         refute Enum.any?(report.issues, fn issue ->
-                 issue.code == :forbidden_namespace_reference and issue.app == :agent_core
+                 issue.code == :forbidden_namespace_reference and issue.app == :lemon_agent
                end)
       after
         File.rm_rf!(tmp_dir)
@@ -265,9 +265,9 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
 
       # Create an app that references a forbidden namespace
       create_app_with_namespace(tmp_dir, :lemon_core, "LemonCore", [])
-      create_app_with_namespace(tmp_dir, :ai, "Ai", [:lemon_core])
+      create_app_with_namespace(tmp_dir, :lemon_ai, "LemonAi", [:lemon_core])
 
-      # Now create an app that references Ai but doesn't depend on it
+      # Now create an app that references LemonAi but doesn't depend on it
       create_app_with_code(
         tmp_dir,
         :test_app,
@@ -275,7 +275,7 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
         "
         defmodule TestApp.Module do
           def test do
-            Ai.SomeModule.call()
+            LemonAi.SomeModule.call()
           end
         end
       ",
@@ -327,11 +327,11 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
 
       # Create apps with proper dependency
       create_app_with_namespace(tmp_dir, :lemon_core, "LemonCore", [])
-      create_app_with_namespace(tmp_dir, :agent_core, "AgentCore", [:lemon_core])
+      create_app_with_namespace(tmp_dir, :lemon_agent, "LemonAgent", [:lemon_core])
 
-      # AgentCore depends on lemon_core, so it should be allowed to reference LemonCore
-      create_app_with_code(tmp_dir, :agent_core, "AgentCore", "
-        defmodule AgentCore.Module do
+      # LemonAgent depends on lemon_core, so it should be allowed to reference LemonCore
+      create_app_with_code(tmp_dir, :lemon_agent, "LemonAgent", "
+        defmodule LemonAgent.Module do
           def test do
             LemonCore.OtherModule.call()
           end
@@ -339,7 +339,7 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
       ", [:lemon_core])
 
       try do
-        # Ai is allowed to depend on lemon_core, so no namespace violation
+        # LemonAi is allowed to depend on lemon_core, so no namespace violation
         # But we will have unknown_app issues for our test setup
         assert {:error, report} = ArchitectureCheck.run(root: tmp_dir)
 

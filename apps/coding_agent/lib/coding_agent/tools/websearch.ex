@@ -5,7 +5,7 @@ defmodule CodingAgent.Tools.WebSearch do
   Supports Brave Search API (default) and Perplexity Sonar (direct/OpenRouter).
   """
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias CodingAgent.Security.ExternalContent
   alias CodingAgent.Tools.WebCache
   alias LemonCore.Secrets

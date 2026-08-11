@@ -40,8 +40,8 @@ when adding new files.
 /apps/lemon_core/lib/lemon_core/routing_feedback*  memory
 /apps/lemon_skills/**                       skills
 /apps/coding_agent/**                       agent
-/apps/agent_core/**                         agent
-/apps/ai/**                                 agent
+/apps/lemon_agent/**                         agent
+/apps/lemon_ai/**                                 agent
 /clients/**                                 client
 /scripts/**                                 release
 /.github/workflows/**                       release

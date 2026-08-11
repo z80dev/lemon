@@ -14,7 +14,7 @@ defmodule LemonControlPlane.Methods.KanbanMethodsTest do
     KanbanTaskUpdate
   }
 
-  alias AgentCore.Workspace.KanbanStore
+  alias LemonAgent.Workspace.KanbanStore
 
   @ctx %{conn_id: "kanban-test", auth: %{role: :operator}}
 

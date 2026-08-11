@@ -3,8 +3,8 @@ defmodule LemonSim.Examples.VendingBenchTest do
 
   import ExUnit.CaptureIO
 
-  alias AgentCore.Types.AgentTool
-  alias Ai.Types.{AssistantMessage, Model, TextContent, ToolCall, UserMessage}
+  alias LemonAgent.Types.AgentTool
+  alias LemonAi.Types.{AssistantMessage, Model, TextContent, ToolCall, UserMessage}
   alias LemonSim.LLM.Deciders.ToolPolicies.SingleTerminal
   alias LemonSim.Kernel.{DecisionFrame, Runner}
   alias LemonSim.Examples.VendingBench
@@ -628,7 +628,7 @@ defmodule LemonSim.Examples.VendingBenchTest do
 
     refute Agent.get(called?, & &1)
     assert Enum.map(result.details["events"], & &1.kind) == ["action_rejected"]
-    assert AgentCore.get_text(result) =~ "Worker dispatch rejected"
+    assert LemonAgent.get_text(result) =~ "Worker dispatch rejected"
   end
 
   test "physical worker run captures real subagent tool events" do
@@ -2502,7 +2502,7 @@ defmodule LemonSim.Examples.VendingBenchTest do
       base_url: "https://example.invalid",
       reasoning: false,
       input: [:text],
-      cost: %Ai.Types.ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
+      cost: %LemonAi.Types.ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
       context_window: 128_000,
       max_tokens: 4_096,
       headers: %{},
@@ -2670,27 +2670,27 @@ defmodule LemonSim.Examples.VendingBenchTest do
   end
 
   defp response_to_event_stream(response) do
-    {:ok, stream} = Ai.EventStream.start_link()
+    {:ok, stream} = LemonAi.EventStream.start_link()
 
     Task.start(fn ->
-      Ai.EventStream.push(stream, {:start, response})
+      LemonAi.EventStream.push(stream, {:start, response})
 
       Enum.with_index(response.content)
       |> Enum.each(fn {content, idx} ->
         case content do
           %TextContent{text: text} ->
-            Ai.EventStream.push(stream, {:text_start, idx, response})
-            Ai.EventStream.push(stream, {:text_delta, idx, text, response})
-            Ai.EventStream.push(stream, {:text_end, idx, response})
+            LemonAi.EventStream.push(stream, {:text_start, idx, response})
+            LemonAi.EventStream.push(stream, {:text_delta, idx, text, response})
+            LemonAi.EventStream.push(stream, {:text_end, idx, response})
 
           %ToolCall{} = tool_call ->
-            Ai.EventStream.push(stream, {:tool_call_start, idx, tool_call, response})
-            Ai.EventStream.push(stream, {:tool_call_end, idx, tool_call, response})
+            LemonAi.EventStream.push(stream, {:tool_call_start, idx, tool_call, response})
+            LemonAi.EventStream.push(stream, {:tool_call_end, idx, tool_call, response})
         end
       end)
 
-      Ai.EventStream.push(stream, {:done, response.stop_reason, response})
-      Ai.EventStream.complete(stream, response)
+      LemonAi.EventStream.push(stream, {:done, response.stop_reason, response})
+      LemonAi.EventStream.complete(stream, response)
     end)
 
     stream

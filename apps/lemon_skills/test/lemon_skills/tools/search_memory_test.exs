@@ -1,8 +1,8 @@
 defmodule LemonSkills.Tools.SearchMemoryTest do
   use ExUnit.Case, async: true
 
-  alias AgentCore.Types.AgentToolResult
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.AgentToolResult
+  alias LemonAi.Types.TextContent
   alias LemonSkills.Tools.SearchMemory
 
   test "uses agent context for agent scope without requiring scope_key" do

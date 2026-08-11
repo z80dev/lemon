@@ -3,7 +3,7 @@ defmodule LemonSim.Examples.IntelNetwork.ActionSpace do
 
   @behaviour LemonSim.Kernel.ActionSpace
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonCore.MapHelpers
   alias LemonSim.Examples.IntelNetwork.{Events, NetworkGraph}
   alias LemonSim.Examples.Helpers.Tools, as: GameTools
@@ -63,7 +63,7 @@ defmodule LemonSim.Examples.IntelNetwork.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("acknowledged briefing for #{actor_id}")],
+           content: [LemonAgent.text_content("acknowledged briefing for #{actor_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -126,7 +126,7 @@ defmodule LemonSim.Examples.IntelNetwork.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("sent message to #{recipient_id}")],
+           content: [LemonAgent.text_content("sent message to #{recipient_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -151,7 +151,7 @@ defmodule LemonSim.Examples.IntelNetwork.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("ending communication phase for #{actor_id}")],
+           content: [LemonAgent.text_content("ending communication phase for #{actor_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -193,7 +193,7 @@ defmodule LemonSim.Examples.IntelNetwork.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("analysis submitted for #{actor_id}")],
+           content: [LemonAgent.text_content("analysis submitted for #{actor_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -256,7 +256,7 @@ defmodule LemonSim.Examples.IntelNetwork.ActionSpace do
         {:ok,
          %AgentToolResult{
            content: [
-             AgentCore.text_content("proposed #{operation_type} on #{target_id}")
+             LemonAgent.text_content("proposed #{operation_type} on #{target_id}")
            ],
            details: %{"event" => event},
            trust: :trusted
@@ -282,7 +282,7 @@ defmodule LemonSim.Examples.IntelNetwork.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("ending operations for #{actor_id}")],
+           content: [LemonAgent.text_content("ending operations for #{actor_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -347,7 +347,7 @@ defmodule LemonSim.Examples.IntelNetwork.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("mole action: #{action_type}")],
+           content: [LemonAgent.text_content("mole action: #{action_type}")],
            details: %{"event" => event},
            trust: :trusted
          }}

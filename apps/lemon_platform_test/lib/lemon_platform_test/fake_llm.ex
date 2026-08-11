@@ -1,11 +1,11 @@
 defmodule LemonPlatformTest.FakeLLM do
   @moduledoc """
   A scripted, deterministic stand-in for a real LLM provider, for driving an
-  `AgentCore` agent loop in tests without a network call or an API key.
+  `LemonAgent` agent loop in tests without a network call or an API key.
 
-  `AgentCore` talks to a model through a *stream function* — a
+  `LemonAgent` talks to a model through a *stream function* — a
   `fn model, context, options -> {:ok, event_stream} | {:error, reason}` that
-  returns an `Ai.EventStream` process emitting a documented sequence of events:
+  returns an `LemonAi.EventStream` process emitting a documented sequence of events:
 
       {:start, message}
       {:text_start, index, message}
@@ -24,11 +24,11 @@ defmodule LemonPlatformTest.FakeLLM do
   ## A worked example
 
   `script/2` turns a list of turns — one per LLM round-trip — into a stream
-  function you drop into `AgentCore.Types.AgentLoopConfig`:
+  function you drop into `LemonAgent.Types.AgentLoopConfig`:
 
-      alias AgentCore.Loop
-      alias AgentCore.Types.{AgentContext, AgentLoopConfig, AgentTool, AgentToolResult}
-      alias Ai.Types.{StreamOptions, TextContent, UserMessage}
+      alias LemonAgent.Loop
+      alias LemonAgent.Types.{AgentContext, AgentLoopConfig, AgentTool, AgentToolResult}
+      alias LemonAi.Types.{StreamOptions, TextContent, UserMessage}
       alias LemonPlatformTest.FakeLLM
 
       weather_tool = %AgentTool{
@@ -68,7 +68,7 @@ defmodule LemonPlatformTest.FakeLLM do
 
       prompt = %UserMessage{role: :user, content: "Weather in Paris?", timestamp: 0}
       stream = Loop.agent_loop([prompt], context, config, nil, nil)
-      {:ok, messages} = AgentCore.EventStream.result(stream)
+      {:ok, messages} = LemonAgent.EventStream.result(stream)
 
   `messages` now holds the whole exchange the loop produced: the assistant's
   tool call, the `get_weather` tool result, and the final text answer — exactly
@@ -84,7 +84,7 @@ defmodule LemonPlatformTest.FakeLLM do
       (`stop_reason: :tool_use`); the loop runs the tool and calls again for the
       next step. `arguments` is the map the tool's `execute` receives.
     * `{:tool_calls, [{name, arguments}, ...]}` — several tool calls in one
-      assistant turn, run as a batch. List elements may also be `Ai.Types.ToolCall`
+      assistant turn, run as a batch. List elements may also be `LemonAi.Types.ToolCall`
       structs when you need to pin the call id.
     * `{:refusal, text}` — the model declines: an assistant message carrying
       `text` with `stop_reason: :error` and `error_message` set. Use this to test
@@ -92,7 +92,7 @@ defmodule LemonPlatformTest.FakeLLM do
     * `{:error, reason}` — the provider call itself fails. The stream function
       returns `{:error, reason}` and no stream is produced, exercising the loop's
       transport-error path.
-    * `%Ai.Types.AssistantMessage{}` — used verbatim, for cases the shorthands do
+    * `%LemonAi.Types.AssistantMessage{}` — used verbatim, for cases the shorthands do
       not cover.
     * `fn model, context, options -> ... end` — an escape hatch invoked as the
       stream function for that one turn; return whatever a stream function may.
@@ -101,7 +101,7 @@ defmodule LemonPlatformTest.FakeLLM do
 
     * `:model` / `:provider` — stamped onto every generated message
       (defaults `"fake-llm"` / `:fake`). See also `model/1`.
-    * `:usage` — an `Ai.Types.Usage` put on every generated message.
+    * `:usage` — an `LemonAi.Types.Usage` put on every generated message.
     * `:on_exhaust` — what to do when the loop asks for a step past the end of
       the script (most often because a tool-call turn was scripted without the
       answer turn that follows it): `:stop` (default) emits a terminal
@@ -113,7 +113,7 @@ defmodule LemonPlatformTest.FakeLLM do
   `script([{:text, "hi"}])`.
   """
 
-  alias Ai.Types.{AssistantMessage, Cost, TextContent, ToolCall, Usage}
+  alias LemonAi.Types.{AssistantMessage, Cost, TextContent, ToolCall, Usage}
 
   @default_model "fake-llm"
   @default_provider :fake
@@ -133,7 +133,7 @@ defmodule LemonPlatformTest.FakeLLM do
   @doc """
   Builds a stream function that plays `steps` in order, one step per call.
 
-  Suitable for `AgentCore.Types.AgentLoopConfig`'s `:stream_fn`. See the
+  Suitable for `LemonAgent.Types.AgentLoopConfig`'s `:stream_fn`. See the
   moduledoc for the step grammar and options.
   """
   @spec script(step() | [step()], keyword()) :: stream_fn()
@@ -160,14 +160,14 @@ defmodule LemonPlatformTest.FakeLLM do
   def script(step, opts), do: script([step], opts)
 
   @doc """
-  A synthetic `Ai.Types.Model` accepted by the agent loop.
+  A synthetic `LemonAi.Types.Model` accepted by the agent loop.
 
   Pass `id:` / `provider:` to override; other fields carry test-friendly
   defaults. Handy as `AgentLoopConfig.model` when you only need the loop to run.
   """
-  @spec model(keyword()) :: Ai.Types.Model.t()
+  @spec model(keyword()) :: LemonAi.Types.Model.t()
   def model(opts \\ []) do
-    %Ai.Types.Model{
+    %LemonAi.Types.Model{
       id: Keyword.get(opts, :id, @default_model),
       name: Keyword.get(opts, :name, "Fake LLM"),
       api: Keyword.get(opts, :api, :fake),
@@ -175,7 +175,7 @@ defmodule LemonPlatformTest.FakeLLM do
       base_url: Keyword.get(opts, :base_url, "https://fake.invalid"),
       reasoning: false,
       input: [:text],
-      cost: %Ai.Types.ModelCost{input: 0.0, output: 0.0},
+      cost: %LemonAi.Types.ModelCost{input: 0.0, output: 0.0},
       context_window: Keyword.get(opts, :context_window, 128_000),
       max_tokens: Keyword.get(opts, :max_tokens, 4096),
       headers: %{},
@@ -280,32 +280,32 @@ defmodule LemonPlatformTest.FakeLLM do
   # Reproduces the exact event sequence a real provider adapter pushes, so the
   # agent loop's stream reducer sees nothing unusual. One EventStream per turn.
   defp event_stream(%AssistantMessage{} = message) do
-    {:ok, stream} = Ai.EventStream.start_link()
+    {:ok, stream} = LemonAi.EventStream.start_link()
 
     _ =
       Task.start(fn ->
-        _ = Ai.EventStream.push(stream, {:start, message})
+        _ = LemonAi.EventStream.push(stream, {:start, message})
 
         message.content
         |> Enum.with_index()
         |> Enum.each(fn {block, index} -> push_block(stream, block, index, message) end)
 
-        _ = Ai.EventStream.push(stream, {:done, message.stop_reason, message})
-        Ai.EventStream.complete(stream, message)
+        _ = LemonAi.EventStream.push(stream, {:done, message.stop_reason, message})
+        LemonAi.EventStream.complete(stream, message)
       end)
 
     stream
   end
 
   defp push_block(stream, %TextContent{text: text}, index, message) do
-    _ = Ai.EventStream.push(stream, {:text_start, index, message})
-    _ = Ai.EventStream.push(stream, {:text_delta, index, text, message})
-    Ai.EventStream.push(stream, {:text_end, index, text, message})
+    _ = LemonAi.EventStream.push(stream, {:text_start, index, message})
+    _ = LemonAi.EventStream.push(stream, {:text_delta, index, text, message})
+    LemonAi.EventStream.push(stream, {:text_end, index, text, message})
   end
 
   defp push_block(stream, %ToolCall{} = call, index, message) do
-    _ = Ai.EventStream.push(stream, {:tool_call_start, index, message})
-    Ai.EventStream.push(stream, {:tool_call_end, index, call, message})
+    _ = LemonAi.EventStream.push(stream, {:tool_call_start, index, message})
+    LemonAi.EventStream.push(stream, {:tool_call_end, index, call, message})
   end
 
   defp push_block(_stream, _other, _index, _message), do: :ok

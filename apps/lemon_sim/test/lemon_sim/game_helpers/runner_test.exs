@@ -23,7 +23,7 @@ defmodule LemonSim.LLM.GameHelpers.RunnerTest do
   end
 
   defp model_assignments do
-    model = Ai.Models.get_model(:anthropic, "claude-haiku-4-5")
+    model = LemonAi.Models.get_model(:anthropic, "claude-haiku-4-5")
     %{"seat" => {model, "test-key"}}
   end
 
@@ -135,13 +135,13 @@ defmodule LemonSim.LLM.GameHelpers.RunnerTest do
     def tools(_state, _opts) do
       {:ok,
        [
-         %AgentCore.Types.AgentTool{
+         %LemonAgent.Types.AgentTool{
            name: "tick",
            description: "Advance one turn",
            parameters: %{"type" => "object", "properties" => %{}},
            label: "Tick",
            execute: fn _id, _params, _signal, _on_update ->
-             %AgentCore.Types.AgentToolResult{}
+             %LemonAgent.Types.AgentToolResult{}
            end
          }
        ]}
@@ -154,8 +154,8 @@ defmodule LemonSim.LLM.GameHelpers.RunnerTest do
     @impl true
     def project(%DecisionFrame{} = frame, _tools, _opts) do
       context =
-        Ai.Types.Context.new(system_prompt: "test")
-        |> Ai.Types.Context.add_user_message("world=#{inspect(frame.world)}")
+        LemonAi.Types.Context.new(system_prompt: "test")
+        |> LemonAi.Types.Context.add_user_message("world=#{inspect(frame.world)}")
 
       {:ok, context}
     end

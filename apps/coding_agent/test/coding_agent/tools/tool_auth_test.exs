@@ -1,7 +1,7 @@
 defmodule CodingAgent.Tools.ToolAuthTest do
   use ExUnit.Case, async: false
 
-  alias AgentCore.Types.AgentToolResult
+  alias LemonAgent.Types.AgentToolResult
   alias CodingAgent.SettingsManager
   alias CodingAgent.Tools.ToolAuth
   alias LemonCore.{Secrets, Store}

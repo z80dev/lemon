@@ -3,7 +3,7 @@ defmodule LemonSim.Examples.SkirmishTest do
 
   import ExUnit.CaptureIO
 
-  alias Ai.Types.{AssistantMessage, Model, ToolCall}
+  alias LemonAi.Types.{AssistantMessage, Model, ToolCall}
   alias LemonSim.Examples.Skirmish
 
   test "example runs to completion with scripted attacks" do
@@ -145,7 +145,7 @@ defmodule LemonSim.Examples.SkirmishTest do
       base_url: "https://example.invalid",
       reasoning: false,
       input: [:text],
-      cost: %Ai.Types.ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
+      cost: %LemonAi.Types.ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
       context_window: 128_000,
       max_tokens: 4_096,
       headers: %{},

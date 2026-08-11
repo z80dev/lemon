@@ -3,9 +3,9 @@ defmodule CodingAgent.Tools.Task.Runner do
 
   require Logger
 
-  alias AgentCore.AbortSignal
+  alias LemonAgent.AbortSignal
 
-  alias AgentCore.CliRunners.{
+  alias LemonAgent.CliRunners.{
     ClaudeSubagent,
     CodexSubagent,
     DroidSubagent,
@@ -14,8 +14,8 @@ defmodule CodingAgent.Tools.Task.Runner do
     PiSubagent
   }
 
-  alias AgentCore.Types.AgentToolResult
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.AgentToolResult
+  alias LemonAi.Types.TextContent
   alias CodingAgent.Coordinator
   alias CodingAgent.Session
   alias CodingAgent.SessionManager
@@ -605,9 +605,10 @@ defmodule CodingAgent.Tools.Task.Runner do
           poll_ms
         )
 
-      {:session_event, ^session_id, {:message_update, %Ai.Types.AssistantMessage{} = msg, _event}} ->
-        text = Ai.get_text(msg)
-        thinking = Ai.get_thinking(msg)
+      {:session_event, ^session_id,
+       {:message_update, %LemonAi.Types.AssistantMessage{} = msg, _event}} ->
+        text = LemonAi.get_text(msg)
+        thinking = LemonAi.get_thinking(msg)
 
         {last_text, last_thinking} =
           maybe_emit_update(
@@ -638,9 +639,9 @@ defmodule CodingAgent.Tools.Task.Runner do
           poll_ms
         )
 
-      {:session_event, ^session_id, {:message_end, %Ai.Types.AssistantMessage{} = msg}} ->
-        text = Ai.get_text(msg)
-        thinking = Ai.get_thinking(msg)
+      {:session_event, ^session_id, {:message_end, %LemonAi.Types.AssistantMessage{} = msg}} ->
+        text = LemonAi.get_text(msg)
+        thinking = LemonAi.get_thinking(msg)
 
         {last_text, last_thinking} =
           maybe_emit_update(

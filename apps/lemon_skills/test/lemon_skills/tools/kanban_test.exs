@@ -1,9 +1,9 @@
 defmodule LemonSkills.Tools.KanbanTest do
   use ExUnit.Case, async: false
 
-  alias AgentCore.Types.AgentToolResult
+  alias LemonAgent.Types.AgentToolResult
   alias LemonSkills.Tools.Kanban
-  alias AgentCore.Workspace.KanbanStore
+  alias LemonAgent.Workspace.KanbanStore
 
   setup do
     on_exit(fn ->

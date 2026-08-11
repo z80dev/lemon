@@ -11,7 +11,7 @@ defmodule CodingAgent.SessionResourcesTest do
 
   alias CodingAgent.Session
 
-  alias Ai.Types.{
+  alias LemonAi.Types.{
     Model,
     ModelCost
   }

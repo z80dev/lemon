@@ -17,7 +17,7 @@ defmodule CodingAgent.SessionSupervisorTest do
   end
 
   defp mock_model(opts \\ []) do
-    %Ai.Types.Model{
+    %LemonAi.Types.Model{
       id: Keyword.get(opts, :id, "mock-model"),
       name: Keyword.get(opts, :name, "Mock Model"),
       api: :mock_api,
@@ -25,7 +25,7 @@ defmodule CodingAgent.SessionSupervisorTest do
       base_url: "",
       reasoning: false,
       input: [:text],
-      cost: %Ai.Types.ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
+      cost: %LemonAi.Types.ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
       context_window: 10_000,
       max_tokens: 1_000,
       headers: %{},

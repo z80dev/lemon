@@ -11,8 +11,8 @@ defmodule CodingAgent.Tools.Ls do
 
   import Bitwise
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.TextContent
   alias CodingAgent.Tools.FileValidation
   alias CodingAgent.Tools.PathHelpers
 

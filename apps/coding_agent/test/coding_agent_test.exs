@@ -5,7 +5,7 @@ defmodule CodingAgentTest do
     test "returns list of 55 tools" do
       tools = CodingAgent.coding_tools("/tmp")
       assert length(tools) == 55
-      assert Enum.all?(tools, &match?(%AgentCore.Types.AgentTool{}, &1))
+      assert Enum.all?(tools, &match?(%LemonAgent.Types.AgentTool{}, &1))
     end
 
     test "tools have correct names" do

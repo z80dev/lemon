@@ -2,9 +2,9 @@ defmodule CodingAgent.Tools.ReadTest do
   use ExUnit.Case, async: true
 
   alias CodingAgent.Tools.Read
-  alias AgentCore.Types.AgentToolResult
-  alias AgentCore.AbortSignal
-  alias Ai.Types.{TextContent, ImageContent}
+  alias LemonAgent.Types.AgentToolResult
+  alias LemonAgent.AbortSignal
+  alias LemonAi.Types.{TextContent, ImageContent}
 
   @moduletag :tmp_dir
 

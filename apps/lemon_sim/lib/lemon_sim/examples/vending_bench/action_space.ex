@@ -3,7 +3,7 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
 
   @behaviour LemonSim.Kernel.ActionSpace
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonCore.MapHelpers
   alias LemonSim.Examples.VendingBench.{Events, PhysicalWorker, Suppliers}
   alias LemonSim.Examples.Helpers.Tools, as: GameTools
@@ -79,7 +79,7 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content(text)],
+           content: [LemonAgent.text_content(text)],
            details: %{"event" => Events.operator_read_inbox(length(inbox))},
            trust: :trusted
          }}
@@ -116,7 +116,7 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content(text)],
+           content: [LemonAgent.text_content(text)],
            details: %{"event" => Events.operator_checked_balance(balance)},
            trust: :trusted
          }}
@@ -162,7 +162,7 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content(text)],
+           content: [LemonAgent.text_content(text)],
            details: %{"event" => Events.operator_checked_storage(storage_inv)},
            trust: :trusted
          }}
@@ -188,7 +188,7 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content(text)],
+           content: [LemonAgent.text_content(text)],
            details: %{"event" => Events.operator_inspected_suppliers(map_size(directory))},
            trust: :trusted
          }}
@@ -232,7 +232,7 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content(text)],
+           content: [LemonAgent.text_content(text)],
            details: %{"event" => Events.operator_reviewed_sales(length(recent_sales))},
            trust: :trusted
          }}
@@ -275,7 +275,7 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content(text)],
+           content: [LemonAgent.text_content(text)],
            details: %{"event" => Events.operator_researched_suppliers(query, length(results))},
            trust: :trusted
          }}
@@ -318,7 +318,7 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content(text)],
+           content: [LemonAgent.text_content(text)],
            details: %{"event" => Events.operator_researched_market(query, length(results))},
            trust: :trusted
          }}
@@ -364,7 +364,7 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content(Enum.join(lines ++ interactions, "\n"))],
+           content: [LemonAgent.text_content(Enum.join(lines ++ interactions, "\n"))],
            details: %{"event" => Events.operator_checked_competitors(length(peers))},
            trust: :trusted
          }}
@@ -403,7 +403,7 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
         {:ok,
          %AgentToolResult{
            content: [
-             AgentCore.text_content("Created reminder #{reminder_id} for day #{day}: #{text}")
+             LemonAgent.text_content("Created reminder #{reminder_id} for day #{day}: #{text}")
            ],
            details: %{"event" => Events.operator_created_reminder(reminder_id, day, text)},
            trust: :trusted
@@ -442,7 +442,7 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content(text)],
+           content: [LemonAgent.text_content(text)],
            details: %{"event" => Events.operator_listed_reminders(length(open_reminders))},
            trust: :trusted
          }}
@@ -483,7 +483,7 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content(text)],
+           content: [LemonAgent.text_content(text)],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -539,7 +539,7 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("Arena message sent to #{to_agent_id}.")],
+           content: [LemonAgent.text_content("Arena message sent to #{to_agent_id}.")],
            details: %{
              "event" => Events.arena_message_sent(from_agent_id, to_agent_id, subject, body)
            },
@@ -573,7 +573,7 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("Arena payment queued to #{to_agent_id}.")],
+           content: [LemonAgent.text_content("Arena payment queued to #{to_agent_id}.")],
            details: %{
              "event" => Events.arena_money_sent(from_agent_id, to_agent_id, amount, memo)
            },
@@ -609,7 +609,7 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("Arena trade queued with #{to_agent_id}.")],
+           content: [LemonAgent.text_content("Arena trade queued with #{to_agent_id}.")],
            details: %{
              "event" =>
                Events.arena_trade_completed(from_agent_id, to_agent_id, item_id, quantity, amount)
@@ -690,7 +690,7 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
 
             {:ok,
              %AgentToolResult{
-               content: [AgentCore.text_content(reply.message)],
+               content: [LemonAgent.text_content(reply.message)],
                details: %{
                  "events" => [sent_event, reply_event] ++ insufficient_events ++ order_event
                },
@@ -707,7 +707,7 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
 
             {:ok,
              %AgentToolResult{
-               content: [AgentCore.text_content(reply.message)],
+               content: [LemonAgent.text_content(reply.message)],
                details: %{"events" => [sent_event, reply_event]},
                trust: :trusted
              }}
@@ -759,7 +759,7 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
 
               {:ok,
                %AgentToolResult{
-                 content: [AgentCore.text_content("Error: " <> reason)],
+                 content: [LemonAgent.text_content("Error: " <> reason)],
                  details: %{"events" => [Events.action_rejected("operator", reason)]},
                  trust: :trusted
                }}
@@ -776,7 +776,7 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
               {:ok,
                %AgentToolResult{
                  content: [
-                   AgentCore.text_content(
+                   LemonAgent.text_content(
                      "Order placed with #{supplier_id}: #{quantity}x #{item_id} for $#{format_price(cost)}. Delivery on day #{delivery_day}."
                    )
                  ],
@@ -788,7 +788,7 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
           {:error, reason} ->
             {:ok,
              %AgentToolResult{
-               content: [AgentCore.text_content("Order failed: #{reason}")],
+               content: [LemonAgent.text_content("Order failed: #{reason}")],
                details: %{"events" => [Events.action_rejected("operator", reason)]},
                trust: :trusted
              }}
@@ -832,7 +832,7 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
 
           {:ok,
            %AgentToolResult{
-             content: [AgentCore.text_content("Worker dispatch rejected: " <> reason)],
+             content: [LemonAgent.text_content("Worker dispatch rejected: " <> reason)],
              details: %{"events" => [Events.action_rejected("operator", reason)]},
              trust: :trusted
            }}
@@ -869,7 +869,7 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
 
               {:ok,
                %AgentToolResult{
-                 content: [AgentCore.text_content("Worker visit complete: #{result.summary}")],
+                 content: [LemonAgent.text_content("Worker visit complete: #{result.summary}")],
                  details: %{
                    "events" => all_events,
                    "worker_report" => worker_report
@@ -886,7 +886,7 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
 
               {:ok,
                %AgentToolResult{
-                 content: [AgentCore.text_content("Worker visit failed: #{reason_text}")],
+                 content: [LemonAgent.text_content("Worker visit failed: #{reason_text}")],
                  details: %{
                    "events" => [Events.action_rejected("physical_worker", reason_text)]
                  },
@@ -916,7 +916,7 @@ defmodule LemonSim.Examples.VendingBench.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("Waiting for next day...")],
+           content: [LemonAgent.text_content("Waiting for next day...")],
            details: %{"event" => event},
            trust: :trusted
          }}

@@ -95,7 +95,7 @@ is discarded without being matched. This is idiomatic, common Elixir style
 dialyxir's own docs call this flag noisy for exactly this reason.
 
 **Bug risk vs. noise:** mostly noise, but not always safe to ignore blanket.
-Spot-checked `agent_core/lib/agent_core/proxy.ex:303`
+Spot-checked `agent_core/lib/lemon_agent/proxy.ex:303`
 (`EventStream.push(stream, event)` return discarded) — this silently drops
 the `{:error, :canceled | :overflow}` case, meaning an event can be dropped
 during stream overflow with no log/backpressure signal. That's arguably
@@ -211,7 +211,7 @@ exercised by real callers in this app) vs. a genuine spec/body mismatch.
 **Root cause (confirmed via spot-check):** `coding_agent/session.ex:957`
 calls `Notifier.broadcast_event(state, {:extension_status_report, report})`,
 and `broadcast_event/2`'s declared parameter type
-(`AgentCore.Types.agent_event()`) doesn't include
+(`LemonAgent.Types.agent_event()`) doesn't include
 `{:extension_status_report, _}` in its union. Same shape as the
 `rate_limit_healer` finding above — the event-type union is a maintained
 list that didn't get updated when this event variant was added. Not a
@@ -231,15 +231,15 @@ bare, unqualified type reference in a `@type`/`@spec`/`@callback` that
 resolves to a **nonexistent top-level module** because the file never
 established the alias the shorthand assumes:
 
-- `agent_core.ex:178`: `@type agent :: AgentCore.Agent.t()` — but
-  `AgentCore.Agent` doesn't define `@type t` at all.
+- `agent_core.ex:178`: `@type agent :: LemonAgent.Agent.t()` — but
+  `LemonAgent.Agent` doesn't define `@type t` at all.
 - `agent_core.ex:256`: `Types.agent_message()` — only
-  `alias AgentCore.Types.{AgentContext, AgentTool, AgentToolResult}` is in
-  scope (destructuring an alias list does **not** alias `AgentCore.Types`
+  `alias LemonAgent.Types.{AgentContext, AgentTool, AgentToolResult}` is in
+  scope (destructuring an alias list does **not** alias `LemonAgent.Types`
   itself to bare `Types`), so this resolves to nonexistent `Elixir.Types`.
 - `agent_core/agent.ex:1218`: `AgentEvent.t()` — no alias for `AgentEvent`
-  is in scope in this file at all (only `alias AgentCore.Types`,
-  `alias AgentCore.Types.{AgentLoopConfig, AgentState}`); resolves to
+  is in scope in this file at all (only `alias LemonAgent.Types`,
+  `alias LemonAgent.Types.{AgentLoopConfig, AgentState}`); resolves to
   nonexistent `Elixir.AgentEvent`.
 - `lemon_gateway/engine.ex:44-45`: `@callback format_resume(ResumeToken.t())
   :: String.t()` / `extract_resume(...) :: ResumeToken.t() | nil` — the file
@@ -249,7 +249,7 @@ established the alias the shorthand assumes:
   (`apps/lemon_core/lib/lemon_core/resume_token.ex` exists) without this
   alias/callback being updated.
 - `ai/types.ex` (`AssistantMessage`'s nested `@type t`): `usage: Usage.t()`
-  — `Usage` is a sibling nested module (`Ai.Types.Usage`, defined at
+  — `Usage` is a sibling nested module (`LemonAi.Types.Usage`, defined at
   `ai/types.ex:145`), but Elixir's automatic nested-module aliasing only
   applies to code written directly in the *outer* module's own body, not
   to a different nested submodule's body; resolves to nonexistent
@@ -456,7 +456,7 @@ clean full run (`Total errors: 1610` umbrella-wide as of 2026-08-10).
 **Source fixes made to reach zero (all genuine, none suppressed via ignores):**
 - **Real bug — `lemon_platform_test/fake_llm.ex` (published, used as a test
   double by every consumer):** `FakeLLM` pushed the wrong `EventStream` event
-  shapes vs the `Ai.EventStream.event()` contract AND vs *every* real provider
+  shapes vs the `LemonAi.EventStream.event()` contract AND vs *every* real provider
   adapter (anthropic/google/openai/bedrock/…): it pushed `{:text_end, idx,
   message}` (missing the `text` element the 4-tuple contract requires) and
   `{:tool_call_start, idx, call, message}` (an extra element vs the 3-tuple

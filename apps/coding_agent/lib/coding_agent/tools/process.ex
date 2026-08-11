@@ -14,9 +14,9 @@ defmodule CodingAgent.Tools.Process do
   This tool provides the control interface for processes started via exec.
   """
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias AgentCore.AbortSignal
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.AbortSignal
+  alias LemonAi.Types.TextContent
   alias CodingAgent.ProcessManager
 
   @valid_actions ["list", "poll", "log", "write", "kill", "restart", "clear"]

@@ -3,8 +3,8 @@ defmodule CodingAgent.Wasm.ToolFactory do
   Builds `AgentTool` wrappers for discovered WASM tools.
   """
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.TextContent
   alias CodingAgent.Wasm.SidecarSession
 
   @type tool_source :: {:wasm, map()}

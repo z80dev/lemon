@@ -31,27 +31,27 @@ defmodule LemonRouter.ToolPreviewTest do
     end
 
     test "extracts text from inspected TextContent struct" do
-      inspected = ~s(%Ai.Types.TextContent{text: "hello from tool", type: :text})
+      inspected = ~s(%LemonAi.Types.TextContent{text: "hello from tool", type: :text})
       result = ToolPreview.to_text(inspected)
       assert result == "hello from tool"
     end
 
     test "extracts text from inspected AgentToolResult struct" do
       inspected =
-        ~s(%AgentCore.Types.AgentToolResult{content: [%Ai.Types.TextContent{text: "result text"}]})
+        ~s(%LemonAgent.Types.AgentToolResult{content: [%LemonAi.Types.TextContent{text: "result text"}]})
 
       result = ToolPreview.to_text(inspected)
       assert result == "result text"
     end
 
     test "handles inspected struct with escaped quotes in text" do
-      inspected = ~s(%Ai.Types.TextContent{text: "say \\"hello\\""})
+      inspected = ~s(%LemonAi.Types.TextContent{text: "say \\"hello\\""})
       result = ToolPreview.to_text(inspected)
       assert result == ~s(say "hello")
     end
 
     test "handles inspected struct with newlines" do
-      inspected = ~s(%Ai.Types.TextContent{text: "line1\\nline2"})
+      inspected = ~s(%LemonAi.Types.TextContent{text: "line1\\nline2"})
       result = ToolPreview.to_text(inspected)
       assert result == "line1\nline2"
     end
@@ -68,12 +68,12 @@ defmodule LemonRouter.ToolPreviewTest do
 
   describe "to_text/1 with TextContent struct" do
     test "extracts text from TextContent" do
-      content = %Ai.Types.TextContent{text: "extracted text"}
+      content = %LemonAi.Types.TextContent{text: "extracted text"}
       assert ToolPreview.to_text(content) == "extracted text"
     end
 
     test "handles empty text in TextContent" do
-      content = %Ai.Types.TextContent{text: ""}
+      content = %LemonAi.Types.TextContent{text: ""}
       assert ToolPreview.to_text(content) == ""
     end
   end
@@ -85,8 +85,8 @@ defmodule LemonRouter.ToolPreviewTest do
   describe "to_text/1 with list" do
     test "joins text from list of TextContent" do
       content = [
-        %Ai.Types.TextContent{text: "first"},
-        %Ai.Types.TextContent{text: "second"}
+        %LemonAi.Types.TextContent{text: "first"},
+        %LemonAi.Types.TextContent{text: "second"}
       ]
 
       result = ToolPreview.to_text(content)

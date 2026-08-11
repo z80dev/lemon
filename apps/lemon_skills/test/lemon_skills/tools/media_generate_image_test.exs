@@ -1,7 +1,7 @@
 defmodule LemonSkills.Tools.MediaGenerateImageTest do
   use ExUnit.Case, async: false
 
-  alias AgentCore.Types.AgentToolResult
+  alias LemonAgent.Types.AgentToolResult
   alias LemonSkills.Tools.MediaGenerateImage
   alias LemonMedia.MediaJobs
 

@@ -1,6 +1,6 @@
 # Lemon ↔ Hermes-Class Agent Harness Parity Scorecard
 
-Status: working scorecard; first through forty-first parity slices merged core learning, memory, skill, delegation, tool-lifecycle, transcript, scheduling, and live-model eval contracts; forty-second slice sanitizes OpenAI-compatible tool-call arguments before request encoding; forty-third slice preserves recoverable truncated streamed tool-call arguments; forty-fourth slice honors provider retry delays; forty-fifth slice normalizes context-length provider errors; forty-sixth slice normalizes Req-style rate-limit headers; forty-seventh slice normalizes OpenAI Responses HTTP errors; forty-eighth slice adds a live-model delegation side-effect verification eval; forty-ninth slice adds leaf/orchestrator toolset contracts; fiftieth slice sanitizes OpenAI-compatible tool-call arguments before request encoding; fifty-first slice sanitizes OpenAI Responses function-call identity fields before request encoding; fifty-second slice sanitizes OpenAI Responses tool schema fields before request encoding; fifty-third slice makes internal task children leaf workers by default; fifty-fourth slice rejects secret-looking memory documents before ingest; fifty-fifth slice adds live-model durable-topic memory coverage; fifty-sixth slice documents the composed agent safety contract; fifty-seventh slice adds a deterministic untrusted prompt-injection contract; fifty-eighth slice preserves structured tool failure metadata in LemonRunner action events; fifty-ninth slice exposes tool failure metadata in router status intents; sixtieth slice preserves nested engine action metadata at the control-plane event boundary; sixty-first slice treats Anthropic overloaded HTTP 529 responses as transient retryable provider errors; sixty-second slice records skill prompt-render decisions in telemetry and introspection; sixty-third slice adds a deterministic workspace memory-file inspection contract; sixty-fourth slice normalizes millisecond retry-after provider headers; sixty-fifth slice parses provider rate-limit reset duration headers; sixty-sixth slice adds live-model workspace memory-file inspection coverage; sixty-seventh slice adds live-model relevant-skill audit coverage; sixty-eighth slice classifies provider rate-limit and overloaded text independently of exact HTTP status; sixty-ninth slice parses HTTP-date Retry-After headers; seventieth slice backs dedicated memory/skill tool preference with prompt contracts; seventy-first slice adds live-model untrusted prompt-injection coverage; seventy-second slice adds an explicit AgentCore loop state-machine contract; seventy-third slice writes durable curator run reports; seventy-fourth slice sharpens curator prompts toward active skill updates; seventy-fifth slice restricts background curator reviews to learning tools; seventy-sixth slice links curator reports to submitted review runs; seventy-seventh slice handles nullable and union schema tool arguments; seventy-eighth slice converts empty and thinking-only terminal responses into structured assistant errors; seventy-ninth slice normalizes provider rate-limit body hints; eightieth slice normalizes malformed OpenAI Responses streamed function-call identities; eighty-first slice normalizes malformed OpenAI-compatible streamed tool-call identities; eighty-second slice locks in tool-batch abort closure for pending and queued calls; eighty-third slice uniquifies duplicate OpenAI-compatible streamed tool-call ids; eighty-fourth slice uniquifies duplicate OpenAI Responses streamed function-call ids; eighty-fifth slice normalizes provider error arrays; eighty-sixth slice preserves standalone LemonRunner tool error metadata; eighty-seventh slice normalizes provider detail arrays; eighty-eighth slice normalizes nested provider messages; eighty-ninth slice preserves gateway action result metadata; ninetieth slice preserves tool result details in model-turn and stored agent transcripts; ninety-first slice normalizes provider detail maps and top-level error arrays; ninety-second slice normalizes provider error description fields; ninety-third slice locks router session and status metadata propagation; ninety-fourth slice preserves streamed partial tool arguments through empty terminal provider messages; ninety-fifth slice locks request-boundary invalid UTF-8 sanitization for OpenAI-compatible and OpenAI Responses providers; ninety-sixth slice ignores late router stream deltas after finalized delivery; ninety-seventh slice adds a deterministic agent-loop skill refinement contract; ninety-eighth slice preserves recoverable truncated OpenAI Responses function-call arguments; ninety-ninth slice preserves recoverable final-only OpenAI Responses function-call arguments; one hundredth slice adds deterministic workspace memory refinement coverage; one hundred twenty-seventh slice adds deterministic local media smoke proof for all five no-credential media providers; one hundred twenty-eighth slice adds Streamable HTTP MCP refresh-token grant retry and rotation proof; one hundred twenty-ninth slice routes configured stdio MCP sampling review through Lemon's BEAM approval surfaces; one hundred thirtieth slice adds Streamable HTTP MCP authorization-code PKCE callback proof; one hundred thirty-first slice adds Streamable HTTP MCP OAuth token cache persistence/resume proof; one hundred thirty-second slice adds configured-source Streamable HTTP MCP loopback OAuth callback capture proof; one hundred thirty-third slice routes configured Streamable HTTP MCP OAuth authorization through Web `/ops` operator approvals; one hundred thirty-fourth slice exposes pending approval action metadata through the control plane; one hundred thirty-fifth slice exposes approval action metadata on live control-plane approval events; one hundred thirty-sixth slice renders MCP OAuth approval events as TUI notifications; one hundred thirty-seventh slice resolves approvals from the TUI; one hundred thirty-eighth slice lists pending approvals from the TUI; one hundred thirty-ninth slice preserves approval resolved event context; one hundred fortieth slice backs approval WebSocket event payloads with explicit control-plane schemas; one hundred forty-first slice renders structured MCP sampling approval metadata in Web `/ops`; one hundred forty-second slice renders structured approval metadata in the TUI; one hundred forty-third slice renders structured approval metadata on Web run detail pages; one hundred forty-fourth slice resolves run-scoped approvals from Web run detail pages; one hundred forty-fifth slice records redacted approval lifecycle events and renders run approval history; one hundred forty-sixth slice broadcasts approval timeouts to operator clients; one hundred forty-seventh slice renders skill and memory learning events on Web run detail pages; one hundred forty-eighth slice renders Telegram and Discord channel events on Web run detail pages; one hundred forty-ninth slice renders cron lifecycle events on Web run detail pages; one hundred fiftieth slice renders subagent and delegation events on Web run detail pages; one hundred fifty-first slice distinguishes Discord Message Content Intent proof drift in doctor channel checks; one hundred fifty-second slice carries that drift into Web /ops channel drilldown; one hundred fifty-third slice adds Web /ops Discord Message Content Intent config controls; one hundred fifty-fourth slice adds stable Discord slash client-click proof failure reason kinds; one hundred fifty-fifth slice adds copy-ready Web /ops provider-backed media proof commands; one hundred fifty-sixth slice captures the redacted missing slash client-click proof artifact; one hundred fifty-seventh slice carries missing slash client-click proof state into Web /ops channel drilldown; one hundred fifty-eighth slice adds copy-ready provider-media proof commands to doctor remediation; one hundred fifty-ninth slice enforces redacted proof-path commands in CI docs lint; one hundred sixtieth slice normalizes provider detail-array error descriptions; one hundred sixty-first slice splits long Discord finalized edits into ordered follow-ups and suppresses duplicate finals; one hundred sixty-second slice makes Telegram/Discord final idempotency file-sensitive; one hundred sixty-third slice normalizes JSON:API title fallbacks and nested validation error objects; one hundred sixty-fourth slice preserves string error codes with sibling provider message text; one hundred sixty-fifth slice reads common provider body retry hints; one hundred sixty-sixth slice preserves tool exception metadata in router status intents; one hundred sixty-seventh slice preserves nonzero command exit metadata in LemonRunner and router status intents; one hundred sixty-eighth slice preserves tool-reported exit codes in existing structured LemonRunner failure metadata; one hundred sixty-ninth slice locks exit-code result metadata through gateway and control-plane event boundaries; one hundred seventieth slice preserves nested details messages from symbolic provider error maps; one hundred seventy-first slice uses nested provider details when top-level provider messages are placeholders; one hundred seventy-second slice preserves symbolic provider error prefixes with direct or nested effective messages; one hundred seventy-third slice normalizes atom-key provider error bodies at the parse boundary; one hundred seventy-fourth slice aligns public context-length helper detection with normalized atom-key provider maps; one hundred seventy-fifth slice normalizes atom enum provider values for parsed classification and direct helper checks; one hundred seventy-sixth slice aligns public rate-limit helper detection with provider-body classifications; one hundred eighty-third slice makes provider-media smoke proof handoffs match the documented `--proof-path` operator contract; one hundred eighty-fourth slice lets provider-media smoke proofs resolve one-off encrypted Lemon secret names without exporting raw API keys; one hundred eighty-fifth slice surfaces the provider-media secret-backed proof command directly in Web `/ops`; one hundred eighty-sixth slice makes the final readiness handoff mention secret-backed provider-media proof commands and lint that contract; two hundred ninth slice adds final-readiness provider-media reason diagnostics.
+Status: working scorecard; first through forty-first parity slices merged core learning, memory, skill, delegation, tool-lifecycle, transcript, scheduling, and live-model eval contracts; forty-second slice sanitizes OpenAI-compatible tool-call arguments before request encoding; forty-third slice preserves recoverable truncated streamed tool-call arguments; forty-fourth slice honors provider retry delays; forty-fifth slice normalizes context-length provider errors; forty-sixth slice normalizes Req-style rate-limit headers; forty-seventh slice normalizes OpenAI Responses HTTP errors; forty-eighth slice adds a live-model delegation side-effect verification eval; forty-ninth slice adds leaf/orchestrator toolset contracts; fiftieth slice sanitizes OpenAI-compatible tool-call arguments before request encoding; fifty-first slice sanitizes OpenAI Responses function-call identity fields before request encoding; fifty-second slice sanitizes OpenAI Responses tool schema fields before request encoding; fifty-third slice makes internal task children leaf workers by default; fifty-fourth slice rejects secret-looking memory documents before ingest; fifty-fifth slice adds live-model durable-topic memory coverage; fifty-sixth slice documents the composed agent safety contract; fifty-seventh slice adds a deterministic untrusted prompt-injection contract; fifty-eighth slice preserves structured tool failure metadata in LemonRunner action events; fifty-ninth slice exposes tool failure metadata in router status intents; sixtieth slice preserves nested engine action metadata at the control-plane event boundary; sixty-first slice treats Anthropic overloaded HTTP 529 responses as transient retryable provider errors; sixty-second slice records skill prompt-render decisions in telemetry and introspection; sixty-third slice adds a deterministic workspace memory-file inspection contract; sixty-fourth slice normalizes millisecond retry-after provider headers; sixty-fifth slice parses provider rate-limit reset duration headers; sixty-sixth slice adds live-model workspace memory-file inspection coverage; sixty-seventh slice adds live-model relevant-skill audit coverage; sixty-eighth slice classifies provider rate-limit and overloaded text independently of exact HTTP status; sixty-ninth slice parses HTTP-date Retry-After headers; seventieth slice backs dedicated memory/skill tool preference with prompt contracts; seventy-first slice adds live-model untrusted prompt-injection coverage; seventy-second slice adds an explicit LemonAgent loop state-machine contract; seventy-third slice writes durable curator run reports; seventy-fourth slice sharpens curator prompts toward active skill updates; seventy-fifth slice restricts background curator reviews to learning tools; seventy-sixth slice links curator reports to submitted review runs; seventy-seventh slice handles nullable and union schema tool arguments; seventy-eighth slice converts empty and thinking-only terminal responses into structured assistant errors; seventy-ninth slice normalizes provider rate-limit body hints; eightieth slice normalizes malformed OpenAI Responses streamed function-call identities; eighty-first slice normalizes malformed OpenAI-compatible streamed tool-call identities; eighty-second slice locks in tool-batch abort closure for pending and queued calls; eighty-third slice uniquifies duplicate OpenAI-compatible streamed tool-call ids; eighty-fourth slice uniquifies duplicate OpenAI Responses streamed function-call ids; eighty-fifth slice normalizes provider error arrays; eighty-sixth slice preserves standalone LemonRunner tool error metadata; eighty-seventh slice normalizes provider detail arrays; eighty-eighth slice normalizes nested provider messages; eighty-ninth slice preserves gateway action result metadata; ninetieth slice preserves tool result details in model-turn and stored agent transcripts; ninety-first slice normalizes provider detail maps and top-level error arrays; ninety-second slice normalizes provider error description fields; ninety-third slice locks router session and status metadata propagation; ninety-fourth slice preserves streamed partial tool arguments through empty terminal provider messages; ninety-fifth slice locks request-boundary invalid UTF-8 sanitization for OpenAI-compatible and OpenAI Responses providers; ninety-sixth slice ignores late router stream deltas after finalized delivery; ninety-seventh slice adds a deterministic agent-loop skill refinement contract; ninety-eighth slice preserves recoverable truncated OpenAI Responses function-call arguments; ninety-ninth slice preserves recoverable final-only OpenAI Responses function-call arguments; one hundredth slice adds deterministic workspace memory refinement coverage; one hundred twenty-seventh slice adds deterministic local media smoke proof for all five no-credential media providers; one hundred twenty-eighth slice adds Streamable HTTP MCP refresh-token grant retry and rotation proof; one hundred twenty-ninth slice routes configured stdio MCP sampling review through Lemon's BEAM approval surfaces; one hundred thirtieth slice adds Streamable HTTP MCP authorization-code PKCE callback proof; one hundred thirty-first slice adds Streamable HTTP MCP OAuth token cache persistence/resume proof; one hundred thirty-second slice adds configured-source Streamable HTTP MCP loopback OAuth callback capture proof; one hundred thirty-third slice routes configured Streamable HTTP MCP OAuth authorization through Web `/ops` operator approvals; one hundred thirty-fourth slice exposes pending approval action metadata through the control plane; one hundred thirty-fifth slice exposes approval action metadata on live control-plane approval events; one hundred thirty-sixth slice renders MCP OAuth approval events as TUI notifications; one hundred thirty-seventh slice resolves approvals from the TUI; one hundred thirty-eighth slice lists pending approvals from the TUI; one hundred thirty-ninth slice preserves approval resolved event context; one hundred fortieth slice backs approval WebSocket event payloads with explicit control-plane schemas; one hundred forty-first slice renders structured MCP sampling approval metadata in Web `/ops`; one hundred forty-second slice renders structured approval metadata in the TUI; one hundred forty-third slice renders structured approval metadata on Web run detail pages; one hundred forty-fourth slice resolves run-scoped approvals from Web run detail pages; one hundred forty-fifth slice records redacted approval lifecycle events and renders run approval history; one hundred forty-sixth slice broadcasts approval timeouts to operator clients; one hundred forty-seventh slice renders skill and memory learning events on Web run detail pages; one hundred forty-eighth slice renders Telegram and Discord channel events on Web run detail pages; one hundred forty-ninth slice renders cron lifecycle events on Web run detail pages; one hundred fiftieth slice renders subagent and delegation events on Web run detail pages; one hundred fifty-first slice distinguishes Discord Message Content Intent proof drift in doctor channel checks; one hundred fifty-second slice carries that drift into Web /ops channel drilldown; one hundred fifty-third slice adds Web /ops Discord Message Content Intent config controls; one hundred fifty-fourth slice adds stable Discord slash client-click proof failure reason kinds; one hundred fifty-fifth slice adds copy-ready Web /ops provider-backed media proof commands; one hundred fifty-sixth slice captures the redacted missing slash client-click proof artifact; one hundred fifty-seventh slice carries missing slash client-click proof state into Web /ops channel drilldown; one hundred fifty-eighth slice adds copy-ready provider-media proof commands to doctor remediation; one hundred fifty-ninth slice enforces redacted proof-path commands in CI docs lint; one hundred sixtieth slice normalizes provider detail-array error descriptions; one hundred sixty-first slice splits long Discord finalized edits into ordered follow-ups and suppresses duplicate finals; one hundred sixty-second slice makes Telegram/Discord final idempotency file-sensitive; one hundred sixty-third slice normalizes JSON:API title fallbacks and nested validation error objects; one hundred sixty-fourth slice preserves string error codes with sibling provider message text; one hundred sixty-fifth slice reads common provider body retry hints; one hundred sixty-sixth slice preserves tool exception metadata in router status intents; one hundred sixty-seventh slice preserves nonzero command exit metadata in LemonRunner and router status intents; one hundred sixty-eighth slice preserves tool-reported exit codes in existing structured LemonRunner failure metadata; one hundred sixty-ninth slice locks exit-code result metadata through gateway and control-plane event boundaries; one hundred seventieth slice preserves nested details messages from symbolic provider error maps; one hundred seventy-first slice uses nested provider details when top-level provider messages are placeholders; one hundred seventy-second slice preserves symbolic provider error prefixes with direct or nested effective messages; one hundred seventy-third slice normalizes atom-key provider error bodies at the parse boundary; one hundred seventy-fourth slice aligns public context-length helper detection with normalized atom-key provider maps; one hundred seventy-fifth slice normalizes atom enum provider values for parsed classification and direct helper checks; one hundred seventy-sixth slice aligns public rate-limit helper detection with provider-body classifications; one hundred eighty-third slice makes provider-media smoke proof handoffs match the documented `--proof-path` operator contract; one hundred eighty-fourth slice lets provider-media smoke proofs resolve one-off encrypted Lemon secret names without exporting raw API keys; one hundred eighty-fifth slice surfaces the provider-media secret-backed proof command directly in Web `/ops`; one hundred eighty-sixth slice makes the final readiness handoff mention secret-backed provider-media proof commands and lint that contract; two hundred ninth slice adds final-readiness provider-media reason diagnostics.
 
 Latest media slice: two hundred forty-second slice carries redacted provider-backed media proof lane state into control-plane `media.status`, including safe reason kinds, proof hashes, rerun commands, and bounded next actions for image, TTS, STT, vision, and video.
 Latest cron slice: two hundred thirty-seventh slice carries the same BEAM scheduler health into control-plane `cron.status`, adding active-lock, failed-run, retry-run, suppressed-slot, stale-recovery, scheduled-retry, status-count, trigger-count, and audit-action counters for non-Web operator clients.
@@ -87,7 +87,7 @@ Track where Lemon already has Hermes-class agent harness behavior, where it is p
 
 Lemon already has the hard architectural primitives: supervised BEAM sessions, channel routing, CLI engine adapters, task/subagent execution, skill registry, memory search, tool policies, approvals, and a control plane. The biggest near-term gaps are mostly harness-contract gaps: making the native Lemon agent reliably use those primitives every run, then adding tests/evals that prevent regressions.
 
-The first code slice from this scorecard made `read_skill` available in the default native Lemon tool set and aligned `search_memory` with restricted tool policies. The second slice adds deterministic eval checks that verify memory search scope behavior, memory-topic scaffolding, and relevant-skill prompt progressive disclosure. The third slice feeds the current user prompt into native session prompt composition so Lemon can preselect concise relevant-skill hints before the model turn while keeping full skill bodies behind `read_skill`. The fourth slice adds `skill_manage` so agents can turn reusable workflows into audited project/global skills. The fifth slice emits and persists redacted `read_skill` and `skill_manage` telemetry with tool-call and session correlation fields. The sixth slice keeps Hermes-style usage/curation sidecars with counters, agent-authored creation provenance, and pin/archive workflows. The seventh slice records `:missed_skill_observed` when relevant skills were shown but not loaded. The eighth slice lets agents query usage/curation reports with stale/archive candidate flags before maintaining learned skills. The ninth slice adds `LemonSkills.Curator` and `mix lemon.skill curator` commands for stale/archive/reactivation transitions plus an agent review prompt for umbrella-style consolidation. The tenth slice adds an idle automation manager that submits that prompt through `LemonRouter` when review is due. The eleventh slice adds an eval that seeds narrow agent-authored skills, renders the curator prompt, uses real `read_skill` and `skill_manage` tool calls to create an umbrella skill, and archives absorbed siblings. The twelfth slice closes the remaining tool-call lifecycle hardening gaps by turning task-supervisor startup failures into normal error `tool_result` messages and testing that full turns feed exactly one result per tool call into the next model call. The thirteenth slice adds explicit prompt triggers for when agents should write skills, memory topics, or search prior run memory. The fourteenth slice validates and safely coerces tool arguments against tool JSON schemas before starting side-effecting tool tasks. The fifteenth slice adds a deterministic learning trace eval that exercises prior-run search, durable topic creation, reusable skill creation, and usage reporting with the real tools. The sixteenth slice emits `:missed_learning_observed` when a learning-triggered session ends without the corresponding learning tools. The seventeenth slice adds an immutable `ToolSchemaSnapshot` so the provider schema and executable tools share a run-local snapshot id. The eighteenth slice adds a scripted contract eval that catches completed file/code action claims when the transcript has no tool call or tool result. The nineteenth slice stores run/session/agent provenance on native sessions so built-in learning tools and session events can be queried by run id. The twentieth slice sharpens agent-facing guidance so run recall, durable memory topics, procedural skills, and transient todos no longer compete as ambiguous memory surfaces. The twenty-first slice adds an AgentCore loop eval that consumes scripted model tool calls and asserts the returned messages include real `read_skill` and `skill_manage` tool results. The twenty-second slice adds the matching AgentCore loop eval for prior-work prompts that call `search_memory` and search current project plus home scopes before finalizing. The twenty-third slice adds an AgentCore loop eval that queues a real async task, dynamically joins the returned task id, and verifies the final answer includes the joined child output. The twenty-fourth slice extends that contract to two async children joined together before aggregation. The twenty-fifth slice adds `max_tool_turns`, a typed `:loop_budget_exhausted` event, and a terminal assistant fallback when a model keeps requesting tools. The twenty-sixth slice reconciles empty terminal provider messages with accumulated streamed content. The twenty-seventh slice turns scheduled cron runs into self-contained prompts that name forked-session isolation, prior-run memory semantics, origin delivery, and recursive scheduling guardrails. The twenty-eighth slice ports another Hermes streaming edge case by merging chunked OpenAI-compatible tool-call function-name deltas while ignoring repeated suffixes. The twenty-ninth slice adds an AgentCore streaming regression for tool-only streams whose final provider message arrives with empty content. The thirtieth slice adds typed `:tool_task_crashed` details when a tool task process exits before producing a result. The thirty-first slice adds typed details for tool-returned errors, raised exceptions, caught exits/throws, and unexpected return values. The thirty-second slice adds opt-in per-tool task timeouts that terminate supervised tool tasks and emit typed `:tool_task_timeout` results. The thirty-third slice makes router-style `blocked_tools` effective in native sessions and blocks cron tooling for scheduled runs. The thirty-fourth slice adds `mix lemon.eval --live-model`, an explicit provider-backed lane that proves an independent model calls `search_memory` for prior-work recall before answering. The thirty-fifth slice makes parallel tool execution return results and transcript messages in the original assistant tool-call order even when supervised tasks finish out of order. The thirty-sixth slice extends the live-model lane to prove a provider-backed model uses `read_skill` and `skill_manage` to capture a reusable workflow as an agent-authored skill. The thirty-seventh slice adds a reusable AgentCore transcript validator and rejects invalid assistant tool-call histories before provider conversion. The thirty-eighth slice extends the live-model lane to verify curator-style umbrella consolidation over real skill candidates. The thirty-ninth slice extends the live-model lane to verify scheduled-run memory recall while the `cron` tool is filtered by `blocked_tools`. The fortieth slice extends the live-model lane to verify a provider-backed model starts two async child tasks, joins both ids, and answers from the joined outputs. The forty-first slice adds a deterministic delegation artifact eval that requires the parent loop to join the child, read the produced artifact, and only then finalize. The forty-second slice hardens OpenAI-compatible transcript conversion so persisted assistant tool-call arguments with invalid UTF-8 are sanitized before JSON request encoding. The forty-third slice keeps recoverable partial OpenAI-compatible tool-call arguments at stream finalization instead of replacing them with an empty map. The forty-fourth slice honors retry delay hints from OpenAI-compatible providers before falling back to jittered retry backoff. The forty-fifth slice classifies context-window HTTP failures as explicit context-length errors and routes OpenAI-compatible terminal HTTP errors through the shared provider error normalizer. The forty-sixth slice preserves rate-limit metadata when providers hand `Ai.Error` Req-style header maps whose values are lists. The forty-seventh slice routes OpenAI Responses API terminal HTTP errors through the shared normalizer too. The forty-eighth slice extends the live-model lane to require delegation side-effect verification by reading a child-created artifact before finalizing. The forty-ninth slice adds explicit `:orchestrator` and `:leaf_worker` tool policies plus deterministic and live-model contracts for blocking recursive delegation from leaf workers. The fiftieth slice applies the same invalid-UTF-8 argument sanitation to OpenAI Responses function calls before request encoding. The fifty-first slice sanitizes OpenAI Responses function-call `call_id`, `id`, and `name` before request encoding too. The fifty-second slice sanitizes OpenAI Responses tool names, descriptions, and parameter schemas before request encoding. The fifty-third slice makes internal task-spawned child sessions leaf workers by default unless an explicit policy overrides it. The fifty-fourth slice adds shared durable-memory secret screening and rejects unsafe documents before store writes or skill synthesis. The fifty-fifth slice extends the live-model lane to prove an independent model chooses `memory_topic` for durable project context while avoiding prior-run search and procedural skill writes. The fifty-sixth slice adds `docs/security/agent-safety-contract.md` as the composed safety reference for tool policies, approvals, memory screening, skill audits, and redacted telemetry. The fifty-seventh slice adds a deterministic eval that wraps adversarial untrusted tool output, preserves the warning boundary, and sanitizes nested external-content end markers. The fifty-eighth slice starts on the Hermes lifecycle follow-up by carrying AgentCore structured tool failure metadata through LemonRunner action completion events. The fifty-ninth slice carries that failure metadata into router status intent bodies for downstream UI and observability consumers.
+The first code slice from this scorecard made `read_skill` available in the default native Lemon tool set and aligned `search_memory` with restricted tool policies. The second slice adds deterministic eval checks that verify memory search scope behavior, memory-topic scaffolding, and relevant-skill prompt progressive disclosure. The third slice feeds the current user prompt into native session prompt composition so Lemon can preselect concise relevant-skill hints before the model turn while keeping full skill bodies behind `read_skill`. The fourth slice adds `skill_manage` so agents can turn reusable workflows into audited project/global skills. The fifth slice emits and persists redacted `read_skill` and `skill_manage` telemetry with tool-call and session correlation fields. The sixth slice keeps Hermes-style usage/curation sidecars with counters, agent-authored creation provenance, and pin/archive workflows. The seventh slice records `:missed_skill_observed` when relevant skills were shown but not loaded. The eighth slice lets agents query usage/curation reports with stale/archive candidate flags before maintaining learned skills. The ninth slice adds `LemonSkills.Curator` and `mix lemon.skill curator` commands for stale/archive/reactivation transitions plus an agent review prompt for umbrella-style consolidation. The tenth slice adds an idle automation manager that submits that prompt through `LemonRouter` when review is due. The eleventh slice adds an eval that seeds narrow agent-authored skills, renders the curator prompt, uses real `read_skill` and `skill_manage` tool calls to create an umbrella skill, and archives absorbed siblings. The twelfth slice closes the remaining tool-call lifecycle hardening gaps by turning task-supervisor startup failures into normal error `tool_result` messages and testing that full turns feed exactly one result per tool call into the next model call. The thirteenth slice adds explicit prompt triggers for when agents should write skills, memory topics, or search prior run memory. The fourteenth slice validates and safely coerces tool arguments against tool JSON schemas before starting side-effecting tool tasks. The fifteenth slice adds a deterministic learning trace eval that exercises prior-run search, durable topic creation, reusable skill creation, and usage reporting with the real tools. The sixteenth slice emits `:missed_learning_observed` when a learning-triggered session ends without the corresponding learning tools. The seventeenth slice adds an immutable `ToolSchemaSnapshot` so the provider schema and executable tools share a run-local snapshot id. The eighteenth slice adds a scripted contract eval that catches completed file/code action claims when the transcript has no tool call or tool result. The nineteenth slice stores run/session/agent provenance on native sessions so built-in learning tools and session events can be queried by run id. The twentieth slice sharpens agent-facing guidance so run recall, durable memory topics, procedural skills, and transient todos no longer compete as ambiguous memory surfaces. The twenty-first slice adds an LemonAgent loop eval that consumes scripted model tool calls and asserts the returned messages include real `read_skill` and `skill_manage` tool results. The twenty-second slice adds the matching LemonAgent loop eval for prior-work prompts that call `search_memory` and search current project plus home scopes before finalizing. The twenty-third slice adds an LemonAgent loop eval that queues a real async task, dynamically joins the returned task id, and verifies the final answer includes the joined child output. The twenty-fourth slice extends that contract to two async children joined together before aggregation. The twenty-fifth slice adds `max_tool_turns`, a typed `:loop_budget_exhausted` event, and a terminal assistant fallback when a model keeps requesting tools. The twenty-sixth slice reconciles empty terminal provider messages with accumulated streamed content. The twenty-seventh slice turns scheduled cron runs into self-contained prompts that name forked-session isolation, prior-run memory semantics, origin delivery, and recursive scheduling guardrails. The twenty-eighth slice ports another Hermes streaming edge case by merging chunked OpenAI-compatible tool-call function-name deltas while ignoring repeated suffixes. The twenty-ninth slice adds an LemonAgent streaming regression for tool-only streams whose final provider message arrives with empty content. The thirtieth slice adds typed `:tool_task_crashed` details when a tool task process exits before producing a result. The thirty-first slice adds typed details for tool-returned errors, raised exceptions, caught exits/throws, and unexpected return values. The thirty-second slice adds opt-in per-tool task timeouts that terminate supervised tool tasks and emit typed `:tool_task_timeout` results. The thirty-third slice makes router-style `blocked_tools` effective in native sessions and blocks cron tooling for scheduled runs. The thirty-fourth slice adds `mix lemon.eval --live-model`, an explicit provider-backed lane that proves an independent model calls `search_memory` for prior-work recall before answering. The thirty-fifth slice makes parallel tool execution return results and transcript messages in the original assistant tool-call order even when supervised tasks finish out of order. The thirty-sixth slice extends the live-model lane to prove a provider-backed model uses `read_skill` and `skill_manage` to capture a reusable workflow as an agent-authored skill. The thirty-seventh slice adds a reusable LemonAgent transcript validator and rejects invalid assistant tool-call histories before provider conversion. The thirty-eighth slice extends the live-model lane to verify curator-style umbrella consolidation over real skill candidates. The thirty-ninth slice extends the live-model lane to verify scheduled-run memory recall while the `cron` tool is filtered by `blocked_tools`. The fortieth slice extends the live-model lane to verify a provider-backed model starts two async child tasks, joins both ids, and answers from the joined outputs. The forty-first slice adds a deterministic delegation artifact eval that requires the parent loop to join the child, read the produced artifact, and only then finalize. The forty-second slice hardens OpenAI-compatible transcript conversion so persisted assistant tool-call arguments with invalid UTF-8 are sanitized before JSON request encoding. The forty-third slice keeps recoverable partial OpenAI-compatible tool-call arguments at stream finalization instead of replacing them with an empty map. The forty-fourth slice honors retry delay hints from OpenAI-compatible providers before falling back to jittered retry backoff. The forty-fifth slice classifies context-window HTTP failures as explicit context-length errors and routes OpenAI-compatible terminal HTTP errors through the shared provider error normalizer. The forty-sixth slice preserves rate-limit metadata when providers hand `LemonAi.Error` Req-style header maps whose values are lists. The forty-seventh slice routes OpenAI Responses API terminal HTTP errors through the shared normalizer too. The forty-eighth slice extends the live-model lane to require delegation side-effect verification by reading a child-created artifact before finalizing. The forty-ninth slice adds explicit `:orchestrator` and `:leaf_worker` tool policies plus deterministic and live-model contracts for blocking recursive delegation from leaf workers. The fiftieth slice applies the same invalid-UTF-8 argument sanitation to OpenAI Responses function calls before request encoding. The fifty-first slice sanitizes OpenAI Responses function-call `call_id`, `id`, and `name` before request encoding too. The fifty-second slice sanitizes OpenAI Responses tool names, descriptions, and parameter schemas before request encoding. The fifty-third slice makes internal task-spawned child sessions leaf workers by default unless an explicit policy overrides it. The fifty-fourth slice adds shared durable-memory secret screening and rejects unsafe documents before store writes or skill synthesis. The fifty-fifth slice extends the live-model lane to prove an independent model chooses `memory_topic` for durable project context while avoiding prior-run search and procedural skill writes. The fifty-sixth slice adds `docs/security/agent-safety-contract.md` as the composed safety reference for tool policies, approvals, memory screening, skill audits, and redacted telemetry. The fifty-seventh slice adds a deterministic eval that wraps adversarial untrusted tool output, preserves the warning boundary, and sanitizes nested external-content end markers. The fifty-eighth slice starts on the Hermes lifecycle follow-up by carrying LemonAgent structured tool failure metadata through LemonRunner action completion events. The fifty-ninth slice carries that failure metadata into router status intent bodies for downstream UI and observability consumers.
 
 ## Capability scorecard
 
@@ -137,7 +137,7 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
   - Shared provider error parsing classifies provider-body rate-limit text and overloaded/transient text independently of exact HTTP status.
   - Shared rate-limit parsing honors HTTP-date `Retry-After` headers and ignores malformed values.
   - System and learning prompts tell agents to prefer dedicated memory and skill tools over shell commands, with a deterministic harness contract.
-  - AgentCore emits explicit loop state transitions and rejects invalid transition paths.
+  - LemonAgent emits explicit loop state transitions and rejects invalid transition paths.
 
 ### Skills lifecycle and procedural memory
 
@@ -176,7 +176,7 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
   - Prompt tests require learning-trigger text for reusable workflows, recurring command sequences, project conventions, memory topics, and end-of-run capture.
   - Eval harness runs a scripted learning trace over `search_memory`, `memory_topic`, `skill_manage create`, and `skill_manage report`.
   - Eval harness verifies a skill-relevant fixture prompt surfaces a `<relevant-skills>` block, includes a `read_skill` reminder, and does not inline full skill bodies.
-  - Eval harness drives `AgentCore.Loop` through real `read_skill` and `skill_manage` tool results before finalizing.
+  - Eval harness drives `LemonAgent.Loop` through real `read_skill` and `skill_manage` tool results before finalizing.
   - Opt-in `mix lemon.eval --live-model` drives a provider-backed model through `read_skill` and `skill_manage create` before answering a reusable-workflow prompt.
   - Opt-in `mix lemon.eval --live-model` drives a provider-backed model through relevant-skill `read_skill` usage and verifies no missed-skill audit event is recorded.
   - Opt-in `mix lemon.eval --live-model` drives a provider-backed model through curator-style skill reads, umbrella creation, and sibling archives.
@@ -200,8 +200,8 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 - Acceptance tests:
   - `search_memory` defaults to current scope and searches both project and assistant-home memory without broadening missing contexts.
   - `memory_topic` scaffolds `memory/topics/<slug>.md` from the workspace template and replaces the slug placeholder.
-  - Eval harness drives `AgentCore.Loop` through a `search_memory` tool result for a “last time” prompt before finalizing.
-  - Eval harness drives `AgentCore.Loop` through real `grep` and `read` results for a workspace `memory/topics/*.md` note before finalizing.
+  - Eval harness drives `LemonAgent.Loop` through a `search_memory` tool result for a “last time” prompt before finalizing.
+  - Eval harness drives `LemonAgent.Loop` through real `grep` and `read` results for a workspace `memory/topics/*.md` note before finalizing.
   - Opt-in `mix lemon.eval --live-model` drives a provider-backed model to call `search_memory` before answering a prior-work prompt.
   - Opt-in `mix lemon.eval --live-model` drives a provider-backed model to call `memory_topic` for durable project context while avoiding `search_memory` and `skill_manage`.
   - Opt-in `mix lemon.eval --live-model` drives a provider-backed model to inspect workspace memory files with `grep` and `read` while avoiding `search_memory` and `memory_topic`.
@@ -396,7 +396,7 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 
 ### Slice 12: Tool call lifecycle hardening
 
-1. Made `AgentCore.Loop.ToolCalls` handle `Task.Supervisor.start_child/2` failures and exits as synthetic error `tool_result` messages.
+1. Made `LemonAgent.Loop.ToolCalls` handle `Task.Supervisor.start_child/2` failures and exits as synthetic error `tool_result` messages.
 2. Preserved `tool_execution_start`, `tool_execution_end`, and `tool_result:emit` events for failed-start tool calls so UI and telemetry consumers still see a complete lifecycle.
 3. Added a regression test that uses a missing task supervisor and verifies the tool body is not run, the loop does not crash, and exactly one error `tool_result` is appended.
 4. Added a full-turn regression test that verifies a model response with N tool calls appends exactly N `tool_result` messages, passes those results into the next model turn, and only then emits the final answer.
@@ -428,8 +428,8 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 
 ### Slice 17: Per-run tool schema snapshot
 
-1. Added `AgentCore.Types.ToolSchemaSnapshot` with snapshot id, fingerprint, frozen tool structs, and tool names.
-2. AgentCore now snapshots tools at loop start, emits `{:tool_schema_snapshot, snapshot}`, and records telemetry with snapshot id/fingerprint/tool names.
+1. Added `LemonAgent.Types.ToolSchemaSnapshot` with snapshot id, fingerprint, frozen tool structs, and tool names.
+2. LemonAgent now snapshots tools at loop start, emits `{:tool_schema_snapshot, snapshot}`, and records telemetry with snapshot id/fingerprint/tool names.
 3. The LLM provider context and tool execution path both use the frozen snapshot tools, including when a configured snapshot is supplied explicitly.
 4. Added regression tests for snapshot event ordering and provider/executor parity.
 
@@ -456,13 +456,13 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 ### Slice 21: Agent-loop learning trace eval
 
 1. Added `agent_loop_learning_trace_contract` to the eval harness.
-2. The eval seeds a project skill, runs the real `AgentCore.Loop` with scripted model tool calls, and asserts `read_skill` returns the seeded skill.
+2. The eval seeds a project skill, runs the real `LemonAgent.Loop` with scripted model tool calls, and asserts `read_skill` returns the seeded skill.
 3. The same loop creates a reusable project skill through `skill_manage` and verifies the agent-authored skill is active before the final response.
 
 ### Slice 22: Agent-loop memory trace eval
 
 1. Added `agent_loop_memory_trace_contract` to the eval harness.
-2. The eval runs the real `AgentCore.Loop` with a scripted `search_memory` tool call for a “last time” prompt.
+2. The eval runs the real `LemonAgent.Loop` with a scripted `search_memory` tool call for a “last time” prompt.
 3. It verifies the loop returns a real `search_memory` tool result, coerces the string limit argument, and searches both project and assistant-home scopes before the final answer.
 
 ### Slice 23: Agent-loop async join trace eval
@@ -479,14 +479,14 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 
 ### Slice 25: Bounded tool-loop terminal fallback
 
-1. Added `max_tool_turns` to `AgentCore.Agent` and `AgentCore.Loop` config, defaulting to 25 with `:infinity` for explicit unbounded runs.
-2. AgentCore now emits `{:loop_budget_exhausted, details}` after the configured number of tool-use turns and completes with a terminal assistant fallback instead of calling the model again.
+1. Added `max_tool_turns` to `LemonAgent.Agent` and `LemonAgent.Loop` config, defaulting to 25 with `:infinity` for explicit unbounded runs.
+2. LemonAgent now emits `{:loop_budget_exhausted, details}` after the configured number of tool-use turns and completes with a terminal assistant fallback instead of calling the model again.
 3. Added a loop regression test proving the model is called once at `max_tool_turns: 1`, the tool call receives its result, and the final event is `:agent_end`.
 
 ### Slice 26: Empty final streaming response reconciliation
 
-1. Added an AgentCore streaming regression test for a provider stream where deltas carry visible content but the terminal SDK message has `content: []`.
-2. AgentCore now preserves the accumulated streamed assistant content while retaining terminal metadata from the final provider message.
+1. Added an LemonAgent streaming regression test for a provider stream where deltas carry visible content but the terminal SDK message has `content: []`.
+2. LemonAgent now preserves the accumulated streamed assistant content while retaining terminal metadata from the final provider message.
 
 ### Slice 27: Scheduled cron prompt contract
 
@@ -502,7 +502,7 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 
 ### Slice 29: Tool-only empty final streaming response
 
-1. Added an AgentCore streaming regression for provider streams that emit a tool call and then finish with an empty terminal message.
+1. Added an LemonAgent streaming regression for provider streams that emit a tool call and then finish with an empty terminal message.
 2. Verified final message reconciliation preserves the accumulated `ToolCall` block in both the returned message and updated conversation context.
 
 ### Slice 30: Structured tool-task crash envelope
@@ -518,7 +518,7 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 
 ### Slice 32: Optional per-tool task timeouts
 
-1. Added `tool_timeout_ms` to `AgentLoopConfig` and `AgentCore.Agent` opts, defaulting to unbounded for compatibility.
+1. Added `tool_timeout_ms` to `AgentLoopConfig` and `LemonAgent.Agent` opts, defaulting to unbounded for compatibility.
 2. Tool execution now schedules per-task timeouts when configured, terminates overdue supervised tasks, and emits typed `:tool_task_timeout` results.
 3. Added a focused regression proving a long-running tool is terminated and contributes exactly one error result and end event.
 
@@ -536,7 +536,7 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 
 ### Slice 35: Parallel tool result ordering
 
-1. AgentCore now tracks the assistant tool-call order for each parallel tool batch.
+1. LemonAgent now tracks the assistant tool-call order for each parallel tool batch.
 2. Returned `tool_results`, updated loop context, and current-turn `new_messages` are sorted back to assistant order before the next model turn.
 3. Added a regression where a later tool call finishes first but the transcript still preserves the original call order.
 
@@ -548,7 +548,7 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 
 ### Slice 37: Tool transcript validator
 
-1. Added `AgentCore.Loop.TranscriptValidator` as a reusable pre-provider contract for assistant tool calls and tool results.
+1. Added `LemonAgent.Loop.TranscriptValidator` as a reusable pre-provider contract for assistant tool calls and tool results.
 2. `Loop.Streaming` now validates transformed context messages before converting them to provider-specific messages.
 3. Added regressions for missing, duplicate, unexpected, and orphaned tool results, plus a loop-level check that invalid transcripts never call the model.
 
@@ -590,26 +590,26 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 
 ### Slice 44: Provider retry delay normalization
 
-1. Moved retry-delay extraction for `retry-after`, `x-ratelimit-reset-after`, `Please retry in`, reset-after, and `retryDelay` hints into `Ai.Providers.RetryHelper`.
+1. Moved retry-delay extraction for `retry-after`, `x-ratelimit-reset-after`, `Please retry in`, reset-after, and `retryDelay` hints into `LemonAi.Providers.RetryHelper`.
 2. Wired OpenAI-compatible streaming retries to honor provider-supplied retry delays before falling back to jittered exponential backoff.
 3. Added focused retry-helper coverage plus an OpenAI-compatible 429 regression that verifies the retry waits for the supplied header.
 
 ### Slice 45: Context-length provider error normalization
 
-1. Classified context-window HTTP failures as explicit `:context_length` provider errors in `Ai.Error`.
+1. Classified context-window HTTP failures as explicit `:context_length` provider errors in `LemonAi.Error`.
 2. Routed OpenAI-compatible terminal HTTP responses through the shared error normalizer instead of local string formatting.
 3. Added regressions for OpenAI context-length classification and streamed OpenAI-compatible HTTP error output.
 
 ### Slice 46: Req-style rate-limit header normalization
 
-1. Made `Ai.Error.extract_rate_limit_info/1` accept maps as well as header tuple lists.
+1. Made `LemonAi.Error.extract_rate_limit_info/1` accept maps as well as header tuple lists.
 2. Normalized header keys with `to_string/1` and unwrapped first list values, matching Req response header shape.
 3. Added coverage for rate-limit and retry-after extraction from Req-style header maps.
 
 ### Slice 47: OpenAI Responses HTTP error normalization
 
 1. Materialized async non-2xx OpenAI Responses bodies before logging and parsing provider errors.
-2. Routed terminal OpenAI Responses HTTP errors through `Ai.Error.parse_http_error/3`.
+2. Routed terminal OpenAI Responses HTTP errors through `LemonAi.Error.parse_http_error/3`.
 3. Added a regression that verifies a streamed Responses context-length failure surfaces the normalized context-length message.
 
 ### Slice 48: Live-model delegation artifact verification
@@ -704,7 +704,7 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 ### Slice 63: Workspace memory-file inspection contract
 
 1. Added `agent_loop_workspace_memory_file_contract` to the eval harness.
-2. Seeded a workspace `memory/topics/*.md` note and drove `AgentCore.Loop` through real `grep` and `read` tool results before finalizing.
+2. Seeded a workspace `memory/topics/*.md` note and drove `LemonAgent.Loop` through real `grep` and `read` tool results before finalizing.
 3. Added harness regressions so the workspace memory-file lane stays distinct from prior-run `search_memory` and durable `memory_topic` coverage.
 
 ### Slice 64: Millisecond retry-after header normalization
@@ -783,17 +783,17 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 
 1. Extended pre-dispatch schema coercion to accept nullable object and array fields when models emit literal `"null"` or `nil`.
 2. Added support for JSON Schema union type lists such as `["integer", "string"]` and `["null", "object"]`, preserving declared-order coercion.
-3. Added focused AgentCore tool-call regressions so nullable and union-shaped arguments are normalized before side-effecting tool tasks start.
+3. Added focused LemonAgent tool-call regressions so nullable and union-shaped arguments are normalized before side-effecting tool tasks start.
 
 ### Slice 78: Empty terminal response normalization
 
 1. Normalized terminal `:stop` responses with no visible text and no tool calls into `:error` assistant messages.
 2. Treated thinking-only terminal responses the same way so private reasoning does not become a successful blank answer.
-3. Added AgentCore loop regressions for empty and thinking-only provider stop responses.
+3. Added LemonAgent loop regressions for empty and thinking-only provider stop responses.
 
 ### Slice 79: Provider RetryInfo normalization
 
-1. Taught `Ai.Error.parse_http_error/3` to classify provider rate-limit body shapes such as Google `RESOURCE_EXHAUSTED` and AWS throttling markers even when the HTTP status is not 429.
+1. Taught `LemonAi.Error.parse_http_error/3` to classify provider rate-limit body shapes such as Google `RESOURCE_EXHAUSTED` and AWS throttling markers even when the HTTP status is not 429.
 2. Merged Google/Vertex `google.rpc.RetryInfo.retryDelay` body hints into parsed `rate_limit_info.retry_after` when retry headers are absent, while preserving header precedence.
 3. Aligned decimal `Retry-After` parsing with the existing provider test contract and added focused parser regressions for body retry hints.
 
@@ -811,19 +811,19 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 
 ### Slice 82: Tool-batch abort closure contract
 
-1. Added a direct AgentCore `ToolCalls` regression for aborting while one tool task is pending and another tool call is still queued.
+1. Added a direct LemonAgent `ToolCalls` regression for aborting while one tool task is pending and another tool call is still queued.
 2. Proved both tool calls receive exactly one terminal `is_error: true` tool result with `%{error_type: :aborted}`.
 3. Proved queued side-effecting tool execution does not start after the abort while still emitting a terminal tool-end event for observability.
 
 ### Slice 83: OpenAI-compatible duplicate tool-call id normalization
 
-1. Normalized duplicate streamed OpenAI-compatible tool-call ids within the same assistant turn into unique ids before AgentCore execution.
+1. Normalized duplicate streamed OpenAI-compatible tool-call ids within the same assistant turn into unique ids before LemonAgent execution.
 2. Preserved the provider's original id for the first matching call while assigning deterministic suffixed ids to later duplicates.
 3. Added a focused streaming regression that keeps chunked duplicate-id arguments attached to the uniquified tool call and preserves `:tool_use`.
 
 ### Slice 84: OpenAI Responses duplicate function-call id normalization
 
-1. Normalized duplicate streamed OpenAI Responses function-call ids within the same assistant turn into unique ids before AgentCore execution.
+1. Normalized duplicate streamed OpenAI Responses function-call ids within the same assistant turn into unique ids before LemonAgent execution.
 2. Kept the finalized tool-call block aligned with the normalized id emitted during stream accumulation.
 3. Added a focused Responses streaming regression that preserves chunked arguments, final tool names, and `:tool_use` while uniquifying duplicate ids.
 
@@ -853,13 +853,13 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 
 ### Slice 89: Gateway action metadata preservation
 
-1. Added a CLI adapter regression showing `AgentCore` action `detail.result_meta` remains nested on LemonGateway action events.
+1. Added a CLI adapter regression showing `LemonAgent` action `detail.result_meta` remains nested on LemonGateway action events.
 2. Added a gateway run bus regression showing `:engine_action` payloads preserve failed tool action metadata.
 3. Locked the LemonRunner-to-gateway hop before continuing lifecycle metadata checks downstream.
 
-### Slice 90: AgentCore transcript detail preservation
+### Slice 90: LemonAgent transcript detail preservation
 
-1. Strengthened the AgentCore loop regression so the next model turn receives `ToolResultMessage.details` with the tool results.
+1. Strengthened the LemonAgent loop regression so the next model turn receives `ToolResultMessage.details` with the tool results.
 2. Strengthened the final message assertions so returned loop transcripts keep those details in assistant-visible order.
 3. Added a GenServer-level conversation regression showing stored agent messages preserve tool result details after a full prompt completes.
 
@@ -881,9 +881,9 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 2. Verified the raw `:engine_action` delivered to session subscribers keeps the nested failure metadata.
 3. Verified the router tool-status intent exposes the same failure metadata in `body.tool_failures`.
 
-### Slice 94: AgentCore streaming partial tool arguments
+### Slice 94: LemonAgent streaming partial tool arguments
 
-1. Added an AgentCore streaming regression for chunked `:tool_call_delta` argument updates.
+1. Added an LemonAgent streaming regression for chunked `:tool_call_delta` argument updates.
 2. Verified the final assistant message preserves the accumulated tool call when the terminal provider message has empty content.
 3. Verified stream lifecycle events expose the intermediate partial arguments and final reconciled tool call.
 
@@ -1973,18 +1973,18 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 
 ### Slice 160: Provider detail-array description normalization
 
-1. `Ai.Error.parse_http_error/3` now extracts provider messages from
+1. `LemonAi.Error.parse_http_error/3` now extracts provider messages from
    FastAPI/Pydantic-style `detail` arrays whose entries expose
    `error_description` or `error_message` rather than `message`, `msg`, or
    `reason`, and from JSON:API-style `errors[].detail` arrays.
 2. This keeps OpenAI-compatible proxies and OAuth-adjacent provider gateways
    from collapsing actionable upstream errors into generic invalid-request
    messages.
-3. Added focused `Ai.ErrorEdgeCasesTest` coverage for detail-array
-   `error_description` and JSON:API-style `errors[].detail` plus documentation in `apps/ai/README.md` and
-   `apps/ai/AGENTS.md`.
+3. Added focused `LemonAi.ErrorEdgeCasesTest` coverage for detail-array
+   `error_description` and JSON:API-style `errors[].detail` plus documentation in `apps/lemon_ai/README.md` and
+   `apps/lemon_ai/AGENTS.md`.
 4. Focused AI validation passed with
-   `MIX_ENV=test mix test apps/ai/test/ai/error_edge_cases_test.exs --seed 1`,
+   `MIX_ENV=test mix test apps/lemon_ai/test/lemon_ai/error_edge_cases_test.exs --seed 1`,
    covering ninety-six tests with zero failures.
 
 ### Slice 161: Discord finalized long-text chunking
@@ -2019,7 +2019,7 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 
 ### Slice 163: JSON:API title and nested validation error normalization
 
-1. `Ai.Error.parse_http_error/3` now extracts provider messages from
+1. `LemonAi.Error.parse_http_error/3` now extracts provider messages from
    JSON:API-style `errors` arrays whose entries expose `title` without
    `detail`.
 2. Validation-style `detail` arrays that wrap a nested `error` object now unwrap
@@ -2028,15 +2028,15 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 3. This keeps OpenAI-compatible proxies, OAuth-adjacent gateways, and typed
    validation layers from collapsing actionable provider text into generic
    invalid-request messages when they use `title` or nested `error` fields.
-4. Added focused `Ai.ErrorEdgeCasesTest` coverage plus documentation in
-   `apps/ai/README.md` and `apps/ai/AGENTS.md`.
+4. Added focused `LemonAi.ErrorEdgeCasesTest` coverage plus documentation in
+   `apps/lemon_ai/README.md` and `apps/lemon_ai/AGENTS.md`.
 5. Focused AI validation passed with
-   `MIX_ENV=test mix test apps/ai/test/ai/error_edge_cases_test.exs --seed 1`,
+   `MIX_ENV=test mix test apps/lemon_ai/test/lemon_ai/error_edge_cases_test.exs --seed 1`,
    covering ninety-eight tests with zero failures.
 
 ### Slice 164: String error code provider message preservation
 
-1. `Ai.Error.parse_http_error/3` now preserves actionable provider text when a
+1. `LemonAi.Error.parse_http_error/3` now preserves actionable provider text when a
    response body carries a string `error` code beside a sibling `message`,
    `detail`, or `description`.
 2. Nested provider `description` fields are now treated like `message`, `msg`,
@@ -2044,27 +2044,27 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
    fall through to inspected map fallback text.
 3. This covers OpenAI-compatible proxies and gateway layers that return a short
    symbolic error code plus a separate human-readable explanation.
-4. Added focused `Ai.ErrorEdgeCasesTest` coverage plus documentation in
-   `apps/ai/README.md` and `apps/ai/AGENTS.md`.
+4. Added focused `LemonAi.ErrorEdgeCasesTest` coverage plus documentation in
+   `apps/lemon_ai/README.md` and `apps/lemon_ai/AGENTS.md`.
 5. Focused AI validation passed with
-   `MIX_ENV=test mix test apps/ai/test/ai/error_edge_cases_test.exs --seed 1`,
+   `MIX_ENV=test mix test apps/lemon_ai/test/lemon_ai/error_edge_cases_test.exs --seed 1`,
    covering one hundred one tests with zero failures.
 
 ### Slice 165: Provider body retry hint normalization
 
-1. `Ai.Error.parse_http_error/3` now reads common JSON body retry hints:
+1. `LemonAi.Error.parse_http_error/3` now reads common JSON body retry hints:
    `retry_after`, `retryAfter`, `retry_after_ms`, and `retryAfterMs`.
 2. Body hints are merged into `rate_limit_info.retry_after` for parsed
    rate-limit errors when retry headers are absent.
 3. Existing header precedence is preserved: `retry-after`, `retry-after-ms`, and
    `x-ms-retry-after-ms` still win over body hints.
-4. Added focused `Ai.ErrorEdgeCasesTest` coverage for second-based body hints,
+4. Added focused `LemonAi.ErrorEdgeCasesTest` coverage for second-based body hints,
    millisecond body hints, and header precedence.
 5. Focused AI validation passed with
-   `MIX_ENV=test mix test apps/ai/test/ai/error_edge_cases_test.exs --seed 1`,
+   `MIX_ENV=test mix test apps/lemon_ai/test/lemon_ai/error_edge_cases_test.exs --seed 1`,
    covering one hundred four tests with zero failures.
 6. Wider AI error validation passed with
-   `MIX_ENV=test mix test apps/ai/test/ai/error_test.exs apps/ai/test/ai/error_extended_test.exs apps/ai/test/ai/error_provider_test.exs apps/ai/test/ai/error_edge_cases_test.exs --seed 1`,
+   `MIX_ENV=test mix test apps/lemon_ai/test/lemon_ai/error_test.exs apps/lemon_ai/test/lemon_ai/error_extended_test.exs apps/lemon_ai/test/lemon_ai/error_provider_test.exs apps/lemon_ai/test/lemon_ai/error_edge_cases_test.exs --seed 1`,
    covering two hundred ninety-one tests with zero failures.
 
 ### Slice 166: Router tool failure exception metadata
@@ -2072,7 +2072,7 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 1. `LemonRouter.ToolStatusCoalescer` now preserves safe `exception` metadata
    from completed tool action `detail.result_meta` entries when building
    `body.tool_failures`.
-2. This closes another cross-layer lifecycle gap: AgentCore tool results can
+2. This closes another cross-layer lifecycle gap: LemonAgent tool results can
    carry exception class/name metadata through LemonRunner action completions,
    gateway action maps, RunProcess session broadcasts, and now final
    channel-facing status intents.
@@ -2130,7 +2130,7 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 ### Slice 169: Exit-code metadata boundary contracts
 
 1. `LemonGateway.Engines.CliAdapter` and `LemonGateway.Run` regressions now
-   explicitly carry `result_meta.exit_code` through AgentCore action events and
+   explicitly carry `result_meta.exit_code` through LemonAgent action events and
    gateway bus `:engine_action` payloads.
 2. `LemonControlPlane.EventBridge` regressions now explicitly preserve
    `result_meta.exit_code` inside WebSocket `agent` `tool_use` events.
@@ -2148,21 +2148,21 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 
 ### Slice 170: Symbolic provider error nested detail messages
 
-1. `Ai.Error.extract_provider_message/1` now preserves nested actionable text
+1. `LemonAi.Error.extract_provider_message/1` now preserves nested actionable text
    when a provider returns an error map with a top-level symbolic `type` or
    `code` and places the human-readable message under nested `details`.
 2. This covers another OpenAI-compatible proxy shape where previous behavior
    could return only `invalid_request_error` while dropping the message that
    tells the operator what request format or model capability failed.
-3. Added focused `Ai.ErrorEdgeCasesTest` coverage for symbolic error maps with
+3. Added focused `LemonAi.ErrorEdgeCasesTest` coverage for symbolic error maps with
    nested `details.message`.
-4. Updated `apps/ai/README.md` and `apps/ai/AGENTS.md` so the documented
+4. Updated `apps/lemon_ai/README.md` and `apps/lemon_ai/AGENTS.md` so the documented
    provider-message contract includes this shape.
 5. Focused AI validation passed with
-   `MIX_ENV=test mix test apps/ai/test/ai/error_edge_cases_test.exs --seed 1`,
+   `MIX_ENV=test mix test apps/lemon_ai/test/lemon_ai/error_edge_cases_test.exs --seed 1`,
    covering one hundred five tests with zero failures. Wider AI error
    validation passed with
-   `MIX_ENV=test mix test apps/ai/test/ai/error_test.exs apps/ai/test/ai/error_extended_test.exs apps/ai/test/ai/error_provider_test.exs apps/ai/test/ai/error_edge_cases_test.exs --seed 1`,
+   `MIX_ENV=test mix test apps/lemon_ai/test/lemon_ai/error_test.exs apps/lemon_ai/test/lemon_ai/error_extended_test.exs apps/lemon_ai/test/lemon_ai/error_provider_test.exs apps/lemon_ai/test/lemon_ai/error_edge_cases_test.exs --seed 1`,
    covering two hundred ninety-two tests with zero failures. Compile with
    warnings as errors, HTML parse, docs lint, diff whitespace, and doctor
    readiness checks also passed; doctor remains at twenty-three passed, four
@@ -2170,7 +2170,7 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 
 ### Slice 171: Placeholder provider message nested details
 
-1. `Ai.Error.extract_provider_message/1` now treats blank top-level provider
+1. `LemonAi.Error.extract_provider_message/1` now treats blank top-level provider
    `error.message` values as placeholders when nested actionable details are
    present.
 2. Truly empty provider messages still preserve the empty message, but
@@ -2178,13 +2178,13 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
    "details" => %{"message" => "..."}}}` now surface the nested explanation.
 3. Added focused edge-case coverage for empty top-level messages with nested
    `details.message`.
-4. Updated `apps/ai/README.md` and `apps/ai/AGENTS.md` to document the
+4. Updated `apps/lemon_ai/README.md` and `apps/lemon_ai/AGENTS.md` to document the
    placeholder-empty provider-message behavior.
 5. Focused AI validation passed with
-   `MIX_ENV=test mix test apps/ai/test/ai/error_edge_cases_test.exs --seed 1`,
+   `MIX_ENV=test mix test apps/lemon_ai/test/lemon_ai/error_edge_cases_test.exs --seed 1`,
    covering one hundred six tests with zero failures. Wider AI error validation
    passed with
-   `MIX_ENV=test mix test apps/ai/test/ai/error_test.exs apps/ai/test/ai/error_extended_test.exs apps/ai/test/ai/error_provider_test.exs apps/ai/test/ai/error_edge_cases_test.exs --seed 1`,
+   `MIX_ENV=test mix test apps/lemon_ai/test/lemon_ai/error_test.exs apps/lemon_ai/test/lemon_ai/error_extended_test.exs apps/lemon_ai/test/lemon_ai/error_provider_test.exs apps/lemon_ai/test/lemon_ai/error_edge_cases_test.exs --seed 1`,
    covering two hundred ninety-three tests with zero failures. Compile with
    warnings as errors, HTML parse, docs lint, diff whitespace, and doctor
    readiness checks also passed; doctor remains at twenty-three passed, four
@@ -2192,23 +2192,23 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 
 ### Slice 172: Symbolic provider error prefixes
 
-1. `Ai.Error.extract_provider_message/1` now preserves symbolic provider
+1. `LemonAi.Error.extract_provider_message/1` now preserves symbolic provider
    `type` and string `code` prefixes before direct `error.message` values
    instead of letting the generic message extractor shadow those clauses.
 2. Placeholder-empty top-level messages still defer to nested `details.message`,
    but symbolic error maps now surface both the provider category and the
    nested explanation.
-3. Added focused `Ai.ErrorEdgeCasesTest` coverage for direct symbolic `type`
+3. Added focused `LemonAi.ErrorEdgeCasesTest` coverage for direct symbolic `type`
    and string `code` messages, and updated the placeholder nested-detail
    regression to expect the preserved provider category prefix.
-4. Updated `apps/ai/README.md` and `apps/ai/AGENTS.md` so the provider-message
+4. Updated `apps/lemon_ai/README.md` and `apps/lemon_ai/AGENTS.md` so the provider-message
    contract documents symbolic prefixes with direct or nested effective
    messages.
 5. Focused AI validation passed with
-   `MIX_ENV=test mix test apps/ai/test/ai/error_edge_cases_test.exs --seed 1`,
+   `MIX_ENV=test mix test apps/lemon_ai/test/lemon_ai/error_edge_cases_test.exs --seed 1`,
    covering one hundred eight tests with zero failures. Wider AI error
    validation passed with
-   `MIX_ENV=test mix test apps/ai/test/ai/error_test.exs apps/ai/test/ai/error_extended_test.exs apps/ai/test/ai/error_provider_test.exs apps/ai/test/ai/error_edge_cases_test.exs --seed 1`,
+   `MIX_ENV=test mix test apps/lemon_ai/test/lemon_ai/error_test.exs apps/lemon_ai/test/lemon_ai/error_extended_test.exs apps/lemon_ai/test/lemon_ai/error_provider_test.exs apps/lemon_ai/test/lemon_ai/error_edge_cases_test.exs --seed 1`,
    covering two hundred ninety-five tests with zero failures. Compile with
    warnings as errors, HTML parse, docs lint, diff whitespace, and doctor
    readiness checks also passed; doctor remains at twenty-three passed, four
@@ -2216,21 +2216,21 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 
 ### Slice 173: Atom-key provider error body normalization
 
-1. `Ai.Error.parse_http_error/3` now normalizes atom-key Elixir maps at the
+1. `LemonAi.Error.parse_http_error/3` now normalizes atom-key Elixir maps at the
    parse boundary before provider-message extraction, classification, or body
    retry-hint parsing.
 2. Recursive normalization preserves nested string values as strings, so retry
    hints such as `"2.5"` stay parseable instead of being JSON-decoded as nested
    numeric values.
-3. Added focused `Ai.ErrorEdgeCasesTest` coverage for atom-key symbolic error
+3. Added focused `LemonAi.ErrorEdgeCasesTest` coverage for atom-key symbolic error
    maps, placeholder nested details, detail arrays, and retry body hints.
-4. Updated `apps/ai/README.md` and `apps/ai/AGENTS.md` so atom-key Elixir maps
+4. Updated `apps/lemon_ai/README.md` and `apps/lemon_ai/AGENTS.md` so atom-key Elixir maps
    are part of the documented provider-message normalization contract.
 5. Focused AI validation passed with
-   `MIX_ENV=test mix test apps/ai/test/ai/error_edge_cases_test.exs --seed 1`,
+   `MIX_ENV=test mix test apps/lemon_ai/test/lemon_ai/error_edge_cases_test.exs --seed 1`,
    covering one hundred twelve tests with zero failures. Wider AI error
    validation passed with
-   `MIX_ENV=test mix test apps/ai/test/ai/error_test.exs apps/ai/test/ai/error_extended_test.exs apps/ai/test/ai/error_provider_test.exs apps/ai/test/ai/error_edge_cases_test.exs --seed 1`,
+   `MIX_ENV=test mix test apps/lemon_ai/test/lemon_ai/error_test.exs apps/lemon_ai/test/lemon_ai/error_extended_test.exs apps/lemon_ai/test/lemon_ai/error_provider_test.exs apps/lemon_ai/test/lemon_ai/error_edge_cases_test.exs --seed 1`,
    covering two hundred ninety-nine tests with zero failures. Compile with
    warnings as errors, HTML parse, docs lint, diff whitespace, and doctor
    readiness checks also passed; doctor remains at twenty-three passed, four
@@ -2238,17 +2238,17 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 
 ### Slice 174: Atom-key context-length helper detection
 
-1. `Ai.Error.context_length_error?/1` now normalizes map bodies before checking
+1. `LemonAi.Error.context_length_error?/1` now normalizes map bodies before checking
    provider context-length `code`, `type`, or message text.
 2. This keeps direct helper checks consistent with the `parse_http_error/3`
    path after Slice 173 moved atom-key normalization to the parse boundary.
-3. Added focused `Ai.ErrorEdgeCasesTest` coverage for atom-key
+3. Added focused `LemonAi.ErrorEdgeCasesTest` coverage for atom-key
    `context_length_exceeded` codes and atom-key maximum-context message text.
 4. Focused AI validation passed with
-   `MIX_ENV=test mix test apps/ai/test/ai/error_edge_cases_test.exs --seed 1`,
+   `MIX_ENV=test mix test apps/lemon_ai/test/lemon_ai/error_edge_cases_test.exs --seed 1`,
    covering one hundred thirteen tests with zero failures. Wider AI error
    validation passed with
-   `MIX_ENV=test mix test apps/ai/test/ai/error_test.exs apps/ai/test/ai/error_extended_test.exs apps/ai/test/ai/error_provider_test.exs apps/ai/test/ai/error_edge_cases_test.exs --seed 1`,
+   `MIX_ENV=test mix test apps/lemon_ai/test/lemon_ai/error_test.exs apps/lemon_ai/test/lemon_ai/error_extended_test.exs apps/lemon_ai/test/lemon_ai/error_provider_test.exs apps/lemon_ai/test/lemon_ai/error_edge_cases_test.exs --seed 1`,
    covering three hundred tests with zero failures. Compile with warnings as
    errors, HTML parse, docs lint, diff whitespace, and doctor readiness checks
    also passed; doctor remains at twenty-three passed, four warnings, zero
@@ -2256,23 +2256,23 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 
 ### Slice 175: Atom enum provider value normalization
 
-1. `Ai.Error.parse_http_error/3` now converts non-boolean, non-nil atom values
+1. `LemonAi.Error.parse_http_error/3` now converts non-boolean, non-nil atom values
    inside provider error maps into strings during recursive body
    normalization.
 2. This lets symbolic provider enum values such as
    `:context_length_exceeded` and `:rate_limit_error` classify the same way as
    decoded JSON string values, while preserving `nil`, `true`, and `false`.
-3. `Ai.Error.context_length_error?/1` gets the same benefit for direct
+3. `LemonAi.Error.context_length_error?/1` gets the same benefit for direct
    `{:http_error, status, map}` helper checks.
-4. Added focused `Ai.ErrorEdgeCasesTest` coverage for atom enum
+4. Added focused `LemonAi.ErrorEdgeCasesTest` coverage for atom enum
    context-length and rate-limit values.
-5. Updated `apps/ai/README.md` and `apps/ai/AGENTS.md` so atom enum provider
+5. Updated `apps/lemon_ai/README.md` and `apps/lemon_ai/AGENTS.md` so atom enum provider
    values are part of the documented normalization contract.
 6. Focused AI validation passed with
-   `MIX_ENV=test mix test apps/ai/test/ai/error_edge_cases_test.exs --seed 1`,
+   `MIX_ENV=test mix test apps/lemon_ai/test/lemon_ai/error_edge_cases_test.exs --seed 1`,
    covering one hundred fifteen tests with zero failures. Wider AI error
    validation passed with
-   `MIX_ENV=test mix test apps/ai/test/ai/error_test.exs apps/ai/test/ai/error_extended_test.exs apps/ai/test/ai/error_provider_test.exs apps/ai/test/ai/error_edge_cases_test.exs --seed 1`,
+   `MIX_ENV=test mix test apps/lemon_ai/test/lemon_ai/error_test.exs apps/lemon_ai/test/lemon_ai/error_extended_test.exs apps/lemon_ai/test/lemon_ai/error_provider_test.exs apps/lemon_ai/test/lemon_ai/error_edge_cases_test.exs --seed 1`,
    covering three hundred two tests with zero failures. Compile with warnings
    as errors, HTML parse, docs lint, diff whitespace, and doctor readiness
    checks also passed; doctor remains at twenty-three passed, four warnings,
@@ -2280,19 +2280,19 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 
 ### Slice 176: Provider-body rate-limit helper detection
 
-1. `Ai.Error.rate_limit_error?/1` now routes non-429
+1. `LemonAi.Error.rate_limit_error?/1` now routes non-429
    `{:http_error, status, body}` tuples through `parse_http_error/3` before
    answering.
 2. This keeps direct helper checks consistent with parsed provider-body
    classifications for non-429 rate-limit signals such as `rate_limit_error`
    types and "Too many requests" messages.
-3. Added focused `Ai.ErrorEdgeCasesTest` coverage for non-429 provider-body
+3. Added focused `LemonAi.ErrorEdgeCasesTest` coverage for non-429 provider-body
    rate-limit tuples, including atom-key maps.
 4. Focused AI validation passed with
-   `MIX_ENV=test mix test apps/ai/test/ai/error_edge_cases_test.exs --seed 1`,
+   `MIX_ENV=test mix test apps/lemon_ai/test/lemon_ai/error_edge_cases_test.exs --seed 1`,
    covering one hundred sixteen tests with zero failures. Wider AI error
    validation passed with
-   `MIX_ENV=test mix test apps/ai/test/ai/error_test.exs apps/ai/test/ai/error_extended_test.exs apps/ai/test/ai/error_provider_test.exs apps/ai/test/ai/error_edge_cases_test.exs --seed 1`,
+   `MIX_ENV=test mix test apps/lemon_ai/test/lemon_ai/error_test.exs apps/lemon_ai/test/lemon_ai/error_extended_test.exs apps/lemon_ai/test/lemon_ai/error_provider_test.exs apps/lemon_ai/test/lemon_ai/error_edge_cases_test.exs --seed 1`,
    covering three hundred three tests with zero failures. Compile with
    warnings as errors, HTML parse, docs lint, diff whitespace, and doctor
    readiness checks also passed; doctor remains at twenty-three passed, four
@@ -2462,7 +2462,7 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 
 1. The five provider media smoke scripts now accept
    `--api-key-secret SECRET_NAME` in addition to `--api-key-env ENV_NAME`.
-2. The override resolves through `AgentCore.ModelRuntime.Credentials.resolve_secret_api_key/1`, so
+2. The override resolves through `LemonAgent.ModelRuntime.Credentials.resolve_secret_api_key/1`, so
    release-candidate operators can run one-off provider-media proofs against
    the encrypted Lemon secret store without editing config files or exporting
    raw API keys into the shell environment.
@@ -7113,4 +7113,4 @@ introspection, schema, and atom-safety lanes: `591 tests, 0 failures`.
 ## Follow-up backlog
 
 1. Continue provider-weirdness regressions for provider-normalized response error shapes beyond context length and request sanitation.
-2. Continue cross-layer lifecycle checks from AgentCore tool events through LemonRunner, Gateway bus events, Router coalescing, and final session state.
+2. Continue cross-layer lifecycle checks from LemonAgent tool events through LemonRunner, Gateway bus events, Router coalescing, and final session state.

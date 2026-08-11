@@ -97,7 +97,7 @@ defmodule CodingAgent.Tools.HashlineEditTest do
       }
 
       result = HashlineEdit.execute("call-1", params, nil, nil, cwd, [])
-      assert %AgentCore.Types.AgentToolResult{} = result
+      assert %LemonAgent.Types.AgentToolResult{} = result
       assert File.read!(Path.join(cwd, "test.txt")) == "aaa\nBBB\nccc"
     end
 
@@ -111,7 +111,7 @@ defmodule CodingAgent.Tools.HashlineEditTest do
       }
 
       result = HashlineEdit.execute("call-1", params, nil, nil, cwd, [])
-      assert %AgentCore.Types.AgentToolResult{} = result
+      assert %LemonAgent.Types.AgentToolResult{} = result
       assert result.details.noop_edits != nil
     end
 
@@ -138,7 +138,7 @@ defmodule CodingAgent.Tools.HashlineEditTest do
       }
 
       result = HashlineEdit.execute("call-1", params, nil, nil, cwd, [])
-      assert %AgentCore.Types.AgentToolResult{} = result
+      assert %LemonAgent.Types.AgentToolResult{} = result
       assert File.read!(Path.join(cwd, "test.txt")) == "aaa\nx\ny\nz\nccc"
     end
   end
@@ -159,7 +159,7 @@ defmodule CodingAgent.Tools.HashlineEditTest do
       }
 
       result = HashlineEdit.execute("call-1", params, nil, nil, cwd, [])
-      assert %AgentCore.Types.AgentToolResult{} = result
+      assert %LemonAgent.Types.AgentToolResult{} = result
       assert File.read!(Path.join(cwd, "test.txt")) == "aaa\nXXX\nddd"
     end
 
@@ -174,7 +174,7 @@ defmodule CodingAgent.Tools.HashlineEditTest do
       }
 
       result = HashlineEdit.execute("call-1", params, nil, nil, cwd, [])
-      assert %AgentCore.Types.AgentToolResult{} = result
+      assert %LemonAgent.Types.AgentToolResult{} = result
       assert File.read!(Path.join(cwd, "test.txt")) == "aaa\nddd"
     end
   end
@@ -194,7 +194,7 @@ defmodule CodingAgent.Tools.HashlineEditTest do
       }
 
       result = HashlineEdit.execute("call-1", params, nil, nil, cwd, [])
-      assert %AgentCore.Types.AgentToolResult{} = result
+      assert %LemonAgent.Types.AgentToolResult{} = result
       assert File.read!(Path.join(cwd, "test.txt")) == "aaa\nNEW\nbbb\nccc"
     end
 
@@ -207,7 +207,7 @@ defmodule CodingAgent.Tools.HashlineEditTest do
       }
 
       result = HashlineEdit.execute("call-1", params, nil, nil, cwd, [])
-      assert %AgentCore.Types.AgentToolResult{} = result
+      assert %LemonAgent.Types.AgentToolResult{} = result
       assert File.read!(Path.join(cwd, "test.txt")) == "aaa\nbbb\nNEW"
     end
   end
@@ -227,7 +227,7 @@ defmodule CodingAgent.Tools.HashlineEditTest do
       }
 
       result = HashlineEdit.execute("call-1", params, nil, nil, cwd, [])
-      assert %AgentCore.Types.AgentToolResult{} = result
+      assert %LemonAgent.Types.AgentToolResult{} = result
       assert File.read!(Path.join(cwd, "test.txt")) == "aaa\nNEW\nbbb\nccc"
     end
 
@@ -240,7 +240,7 @@ defmodule CodingAgent.Tools.HashlineEditTest do
       }
 
       result = HashlineEdit.execute("call-1", params, nil, nil, cwd, [])
-      assert %AgentCore.Types.AgentToolResult{} = result
+      assert %LemonAgent.Types.AgentToolResult{} = result
       assert File.read!(Path.join(cwd, "test.txt")) == "NEW\naaa\nbbb"
     end
   end
@@ -264,7 +264,7 @@ defmodule CodingAgent.Tools.HashlineEditTest do
       }
 
       result = HashlineEdit.execute("call-1", params, nil, nil, cwd, [])
-      assert %AgentCore.Types.AgentToolResult{} = result
+      assert %LemonAgent.Types.AgentToolResult{} = result
       assert File.read!(Path.join(cwd, "test.txt")) == "aaa\nBBB\nccc\nDDD\neee"
     end
   end
@@ -394,7 +394,7 @@ defmodule CodingAgent.Tools.HashlineEditTest do
       }
 
       result = HashlineEdit.execute("call-1", params, nil, nil, cwd, [])
-      assert %AgentCore.Types.AgentToolResult{} = result
+      assert %LemonAgent.Types.AgentToolResult{} = result
 
       written = File.read!(Path.join(cwd, "test.txt"))
       assert written =~ "\r\n"
@@ -413,7 +413,7 @@ defmodule CodingAgent.Tools.HashlineEditTest do
       }
 
       result = HashlineEdit.execute("call-1", params, nil, nil, cwd, [])
-      assert %AgentCore.Types.AgentToolResult{} = result
+      assert %LemonAgent.Types.AgentToolResult{} = result
 
       written = File.read!(Path.join(cwd, "test.txt"))
       assert <<0xEF, 0xBB, 0xBF, _rest::binary>> = written

@@ -8,14 +8,14 @@ defmodule LemonEvals.Evals.MemoryAndSkills do
 
   import LemonEvals.Support
 
-  alias AgentCore.Types.AgentToolResult
+  alias LemonAgent.Types.AgentToolResult
   alias CodingAgent.PromptBuilder
   alias CodingAgent.Security.UntrustedToolBoundary
   alias CodingAgent.Tools.{ReadSkill, SkillManage}
   alias LemonEvals.Types
   alias LemonSkills.Curator
   alias LemonSkills.Tools.{MemoryTopic, SearchMemory}
-  alias Ai.Types.{TextContent, ToolResultMessage}
+  alias LemonAi.Types.{TextContent, ToolResultMessage}
 
   @spec memory_scope_contract_eval(String.t()) :: Types.eval_result()
   def memory_scope_contract_eval(_cwd) do

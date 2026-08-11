@@ -1,7 +1,7 @@
 defmodule CodingAgent.SessionOverflowRecoveryTest do
   use ExUnit.Case, async: false
 
-  alias AgentCore.Test.Mocks
+  alias LemonAgent.Test.Mocks
   alias CodingAgent.Session
   alias CodingAgent.SessionManager
 

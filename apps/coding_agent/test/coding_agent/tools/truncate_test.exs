@@ -2,8 +2,8 @@ defmodule CodingAgent.Tools.TruncateTest do
   use ExUnit.Case, async: true
 
   alias CodingAgent.Tools.Truncate
-  alias AgentCore.Types.AgentToolResult
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.AgentToolResult
+  alias LemonAi.Types.TextContent
 
   describe "tool/1" do
     test "returns an AgentTool struct with correct properties" do

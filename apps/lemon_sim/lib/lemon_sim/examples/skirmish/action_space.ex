@@ -3,7 +3,7 @@ defmodule LemonSim.Examples.Skirmish.ActionSpace do
 
   @behaviour LemonSim.Kernel.ActionSpace
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonCore.MapHelpers
   alias LemonSim.Examples.Skirmish.{Events, UnitClasses}
 
@@ -67,7 +67,7 @@ defmodule LemonSim.Examples.Skirmish.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("proposed move for #{unit_id} to (#{x}, #{y})")],
+           content: [LemonAgent.text_content("proposed move for #{unit_id} to (#{x}, #{y})")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -98,7 +98,7 @@ defmodule LemonSim.Examples.Skirmish.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("sprinting #{unit_id} to (#{x}, #{y})")],
+           content: [LemonAgent.text_content("sprinting #{unit_id} to (#{x}, #{y})")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -128,7 +128,7 @@ defmodule LemonSim.Examples.Skirmish.ActionSpace do
         {:ok,
          %AgentToolResult{
            content: [
-             AgentCore.text_content("proposed attack from #{attacker_id} to #{target_id}")
+             LemonAgent.text_content("proposed attack from #{attacker_id} to #{target_id}")
            ],
            details: %{"event" => event},
            trust: :trusted
@@ -158,7 +158,7 @@ defmodule LemonSim.Examples.Skirmish.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("healing #{target_id} with #{healer_id}")],
+           content: [LemonAgent.text_content("healing #{target_id} with #{healer_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -186,7 +186,7 @@ defmodule LemonSim.Examples.Skirmish.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("proposed cover action for #{unit_id}")],
+           content: [LemonAgent.text_content("proposed cover action for #{unit_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -213,7 +213,7 @@ defmodule LemonSim.Examples.Skirmish.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("ending turn for #{unit_id}")],
+           content: [LemonAgent.text_content("ending turn for #{unit_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}

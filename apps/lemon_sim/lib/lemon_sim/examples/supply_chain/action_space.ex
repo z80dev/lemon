@@ -3,7 +3,7 @@ defmodule LemonSim.Examples.SupplyChain.ActionSpace do
 
   @behaviour LemonSim.Kernel.ActionSpace
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonCore.MapHelpers
   alias LemonSim.Examples.SupplyChain.Events
   alias LemonSim.Examples.Helpers.Tools, as: GameTools
@@ -59,7 +59,7 @@ defmodule LemonSim.Examples.SupplyChain.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("observing inventory for #{actor_id}")],
+           content: [LemonAgent.text_content("observing inventory for #{actor_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -136,7 +136,7 @@ defmodule LemonSim.Examples.SupplyChain.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("sent forecast to #{recipient}")],
+           content: [LemonAgent.text_content("sent forecast to #{recipient}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -172,7 +172,7 @@ defmodule LemonSim.Examples.SupplyChain.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("requested info from #{target}")],
+           content: [LemonAgent.text_content("requested info from #{target}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -197,7 +197,7 @@ defmodule LemonSim.Examples.SupplyChain.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("ending communication phase for #{actor_id}")],
+           content: [LemonAgent.text_content("ending communication phase for #{actor_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -258,7 +258,7 @@ defmodule LemonSim.Examples.SupplyChain.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("placed order for #{quantity} units")],
+           content: [LemonAgent.text_content("placed order for #{quantity} units")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -291,7 +291,7 @@ defmodule LemonSim.Examples.SupplyChain.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("adjusted safety stock to #{target} units")],
+           content: [LemonAgent.text_content("adjusted safety stock to #{target} units")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -330,7 +330,7 @@ defmodule LemonSim.Examples.SupplyChain.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("expediting #{quantity} units from #{upstream}")],
+           content: [LemonAgent.text_content("expediting #{quantity} units from #{upstream}")],
            details: %{"event" => event},
            trust: :trusted
          }}

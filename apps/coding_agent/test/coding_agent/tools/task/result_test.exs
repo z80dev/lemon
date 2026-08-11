@@ -1,8 +1,8 @@
 defmodule CodingAgent.Tools.Task.ResultTest do
   use ExUnit.Case, async: false
 
-  alias AgentCore.Types.AgentToolResult
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.AgentToolResult
+  alias LemonAi.Types.TextContent
   alias CodingAgent.TaskStore
   alias CodingAgent.Tools.Task.Result
 

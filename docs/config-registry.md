@@ -22,7 +22,7 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 1. `LemonCore.Config.*` modules (`Agent`, `Tools`, `Gateway`, `Logging`, `TUI`) -- already funnel through `LemonCore.Config.Helpers`, so swapping the call site is mechanical and low-risk.
 2. Single-app leaf config (`lemon_browser`, `lemon_skills`, `lemon_evals`, terminal backends) -- self-contained modules with few callers.
 3. `config/runtime.exs` -- the always-on arena block and prod endpoint block are dynamic (`LEMON_ARENA_<DOMAIN>_<SUFFIX>`, `<PREFIX>_{HOST,PORT,SECRET_KEY_BASE}`); migrate once `LemonCore.Env` gets a documented pattern for iterating a family of declared names.
-4. Provider credential resolution (`AgentCore.ProviderConfigResolver`, `AgentCore.ModelRuntime.Credentials`) -- highest blast radius (every provider call), migrate last and behind the existing `architecture_rules_check.ex` boundary tests.
+4. Provider credential resolution (`LemonAgent.ProviderConfigResolver`, `LemonAgent.ModelRuntime.Credentials`) -- highest blast radius (every provider call), migrate last and behind the existing `architecture_rules_check.ex` boundary tests.
 
 ## Variables by area
 
@@ -361,7 +361,7 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 |---|---|---|---|---|---|
 | `LEMON_EVAL_API_KEY`<br>_(alias: `INTEGRATION_API_KEY`, `ANTHROPIC_API_KEY`)_ | string | _(none)_ | yes | `lemon_evals` | Live-eval provider API key. |
 | `LEMON_EVAL_API_KEY_SECRET`<br>_(alias: `INTEGRATION_API_KEY_SECRET`)_ | string | _(none)_ | yes | `lemon_evals` | Secrets-store key name resolving to the live-eval API key. |
-| `LEMON_EVAL_API_TYPE`<br>_(alias: `INTEGRATION_API_TYPE`)_ | string | _(none)_ |  | `lemon_evals` | Live-eval `Ai.Types.Model.api` atom override (default: anthropic_messages). |
+| `LEMON_EVAL_API_TYPE`<br>_(alias: `INTEGRATION_API_TYPE`)_ | string | _(none)_ |  | `lemon_evals` | Live-eval `LemonAi.Types.Model.api` atom override (default: anthropic_messages). |
 | `LEMON_EVAL_BASE_URL`<br>_(alias: `INTEGRATION_BASE_URL`)_ | string | _(none)_ |  | `lemon_evals` | Live-eval API base URL override. |
 | `LEMON_EVAL_MODEL`<br>_(alias: `INTEGRATION_MODEL`)_ | string | _(none)_ |  | `lemon_evals` | Live-eval model id (default: kimi-for-coding). |
 | `LEMON_EVAL_PROVIDER`<br>_(alias: `INTEGRATION_PROVIDER`)_ | string | _(none)_ |  | `lemon_evals` | Live-eval provider atom override (default: kimi). |

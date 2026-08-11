@@ -3,7 +3,7 @@ defmodule LemonGateway.Engines.Pi do
   Engine adapter for the Pi runner CLI tool.
 
   Delegates to `LemonGateway.Engines.CliAdapter` to manage a
-  `AgentCore.CliRunners.PiRunner` subprocess for each run.
+  `LemonAgent.CliRunners.PiRunner` subprocess for each run.
   """
   @behaviour LemonGateway.Engine
 
@@ -27,7 +27,7 @@ defmodule LemonGateway.Engines.Pi do
 
   @impl true
   def start_run(job, opts, sink_pid) do
-    CliAdapter.start_run(AgentCore.CliRunners.PiRunner, id(), job, opts, sink_pid)
+    CliAdapter.start_run(LemonAgent.CliRunners.PiRunner, id(), job, opts, sink_pid)
   end
 
   @impl true

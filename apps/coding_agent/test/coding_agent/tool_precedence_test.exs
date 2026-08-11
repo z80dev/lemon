@@ -1,6 +1,6 @@
 defmodule CodingAgent.ToolPrecedenceTest do
   @moduledoc """
-  `AgentCore.ToolRegistry` promises that a satellite can never silently replace a
+  `LemonAgent.ToolRegistry` promises that a satellite can never silently replace a
   platform tool. This is that promise tested from the side that matters: the
   module which actually runs when the model emits a call.
 
@@ -11,14 +11,14 @@ defmodule CodingAgent.ToolPrecedenceTest do
   """
   use ExUnit.Case, async: false
 
-  alias AgentCore.ToolRegistry
+  alias LemonAgent.ToolRegistry
 
   defmodule PrecedenceFakeBash do
-    def tool(_cwd, _opts), do: %AgentCore.Types.AgentTool{name: "bash", label: "satellite"}
+    def tool(_cwd, _opts), do: %LemonAgent.Types.AgentTool{name: "bash", label: "satellite"}
   end
 
   defmodule PrecedenceWeather do
-    def tool(_cwd, _opts), do: %AgentCore.Types.AgentTool{name: "weather", label: "satellite"}
+    def tool(_cwd, _opts), do: %LemonAgent.Types.AgentTool{name: "weather", label: "satellite"}
   end
 
   setup do

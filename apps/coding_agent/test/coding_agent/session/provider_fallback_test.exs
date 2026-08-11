@@ -1,13 +1,13 @@
 defmodule CodingAgent.Session.ProviderFallbackTest do
   use ExUnit.Case, async: false
 
-  alias Ai.Types.{AssistantMessage, Context, StreamOptions, TextContent, Usage}
+  alias LemonAi.Types.{AssistantMessage, Context, StreamOptions, TextContent, Usage}
   alias CodingAgent.Session.ProviderFallback
   alias CodingAgent.Session
   alias CodingAgent.SettingsManager
 
   test "falls back after a provider stream error before content is emitted" do
-    primary = Ai.Models.get_model(:openai, "gpt-4")
+    primary = LemonAi.Models.get_model(:openai, "gpt-4")
 
     settings = %SettingsManager{
       providers: %{
@@ -35,7 +35,7 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
     wrapped = ProviderFallback.maybe_wrap(stream_fn, primary, settings, File.cwd!())
     {:ok, stream} = wrapped.(primary, %Context{}, %StreamOptions{})
 
-    assert {:ok, message} = Ai.EventStream.result(stream, 1_000)
+    assert {:ok, message} = LemonAi.EventStream.result(stream, 1_000)
     assert message.provider == :azure_openai_responses
     assert message.model == "gpt-4"
     assert [%TextContent{text: "fallback response"}] = message.content
@@ -45,7 +45,7 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
   end
 
   test "does not fall back after useful content has been emitted" do
-    primary = Ai.Models.get_model(:openai, "gpt-4")
+    primary = LemonAi.Models.get_model(:openai, "gpt-4")
 
     settings = %SettingsManager{
       providers: %{
@@ -69,7 +69,7 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
     wrapped = ProviderFallback.maybe_wrap(stream_fn, primary, settings, File.cwd!())
     {:ok, stream} = wrapped.(primary, %Context{}, %StreamOptions{})
 
-    assert {:error, message} = Ai.EventStream.result(stream, 1_000)
+    assert {:error, message} = LemonAi.EventStream.result(stream, 1_000)
     assert message.provider == :openai
     assert message.error_message == "provider_error_after_content"
 
@@ -78,7 +78,7 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
   end
 
   test "relays useful content before the upstream stream completes" do
-    primary = Ai.Models.get_model(:openai, "gpt-4")
+    primary = LemonAi.Models.get_model(:openai, "gpt-4")
     settings = routing_settings()
     parent = self()
 
@@ -92,13 +92,13 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
     assert_receive {:delta_pushed, producer}, 1_000
     assert {:event, {:start, _message}} = GenServer.call(stream, :take, 500)
     send(producer, :finish_stream)
-    assert {:ok, message} = Ai.EventStream.result(stream, 1_000)
+    assert {:ok, message} = LemonAi.EventStream.result(stream, 1_000)
     assert message.provider == :openai
     assert [%TextContent{text: "streamed"}] = message.content
   end
 
   test "session lifecycle does not wrap explicitly selected models" do
-    primary = Ai.Models.get_model(:openai, "gpt-4")
+    primary = LemonAi.Models.get_model(:openai, "gpt-4")
     settings = routing_settings()
     parent = self()
 
@@ -155,14 +155,14 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
 
   defp success_stream(model, text) do
     message = message(model, :stop, text, nil)
-    {:ok, stream} = Ai.EventStream.start_link()
+    {:ok, stream} = LemonAi.EventStream.start_link()
 
     Task.start(fn ->
-      Ai.EventStream.push(stream, {:start, message})
-      Ai.EventStream.push(stream, {:text_start, 0, message})
-      Ai.EventStream.push(stream, {:text_delta, 0, text, message})
-      Ai.EventStream.push(stream, {:text_end, 0, text, message})
-      Ai.EventStream.complete(stream, message)
+      LemonAi.EventStream.push(stream, {:start, message})
+      LemonAi.EventStream.push(stream, {:text_start, 0, message})
+      LemonAi.EventStream.push(stream, {:text_delta, 0, text, message})
+      LemonAi.EventStream.push(stream, {:text_end, 0, text, message})
+      LemonAi.EventStream.complete(stream, message)
     end)
 
     stream
@@ -170,12 +170,12 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
 
   defp delayed_success_stream(model, text, parent) do
     message = message(model, :stop, text, nil)
-    {:ok, stream} = Ai.EventStream.start_link()
+    {:ok, stream} = LemonAi.EventStream.start_link()
 
     Task.start(fn ->
-      Ai.EventStream.push(stream, {:start, message})
-      Ai.EventStream.push(stream, {:text_start, 0, message})
-      Ai.EventStream.push(stream, {:text_delta, 0, text, message})
+      LemonAi.EventStream.push(stream, {:start, message})
+      LemonAi.EventStream.push(stream, {:text_start, 0, message})
+      LemonAi.EventStream.push(stream, {:text_delta, 0, text, message})
       send(parent, {:delta_pushed, self()})
 
       receive do
@@ -184,8 +184,8 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
         1_000 -> :ok
       end
 
-      Ai.EventStream.push(stream, {:text_end, 0, text, message})
-      Ai.EventStream.complete(stream, message)
+      LemonAi.EventStream.push(stream, {:text_end, 0, text, message})
+      LemonAi.EventStream.complete(stream, message)
     end)
 
     stream
@@ -193,11 +193,11 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
 
   defp error_stream(model) do
     message = message(model, :error, "", "provider_unavailable")
-    {:ok, stream} = Ai.EventStream.start_link()
+    {:ok, stream} = LemonAi.EventStream.start_link()
 
     Task.start(fn ->
-      Ai.EventStream.push(stream, {:start, message})
-      Ai.EventStream.error(stream, message)
+      LemonAi.EventStream.push(stream, {:start, message})
+      LemonAi.EventStream.error(stream, message)
     end)
 
     stream
@@ -205,12 +205,12 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
 
   defp content_then_error_stream(model) do
     message = message(model, :error, "partial", "provider_error_after_content")
-    {:ok, stream} = Ai.EventStream.start_link()
+    {:ok, stream} = LemonAi.EventStream.start_link()
 
     Task.start(fn ->
-      Ai.EventStream.push(stream, {:start, message})
-      Ai.EventStream.push(stream, {:text_delta, 0, "partial", message})
-      Ai.EventStream.error(stream, message)
+      LemonAi.EventStream.push(stream, {:start, message})
+      LemonAi.EventStream.push(stream, {:text_delta, 0, "partial", message})
+      LemonAi.EventStream.error(stream, message)
     end)
 
     stream

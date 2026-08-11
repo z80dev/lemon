@@ -9,8 +9,8 @@ defmodule LemonSim.LLM.Deciders.ToolPolicies.SingleTerminal do
 
   @behaviour LemonSim.LLM.Deciders.ToolLoopPolicy
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.ToolCall
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.ToolCall
 
   @impl true
   def validate_tool_calls(resolved_tool_calls, opts)
@@ -52,7 +52,7 @@ defmodule LemonSim.LLM.Deciders.ToolPolicies.SingleTerminal do
         "tool_name" => tool_call.name,
         "tool_call_id" => tool_call.id,
         "arguments" => tool_call.arguments || %{},
-        "result_text" => AgentCore.get_text(result),
+        "result_text" => LemonAgent.get_text(result),
         "result_details" => result.details
       }
 

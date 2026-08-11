@@ -1,6 +1,6 @@
 defmodule CodingAgent do
   @moduledoc """
-  CodingAgent - An AI coding assistant built on top of AgentCore.
+  CodingAgent - An AI coding assistant built on top of LemonAgent.
 
   This library provides a complete coding agent implementation with:
   - Session management with JSONL persistence
@@ -14,7 +14,7 @@ defmodule CodingAgent do
       # Start a new session
       {:ok, session} = CodingAgent.Session.start_link(
         cwd: File.cwd!(),
-        model: Ai.Models.get_model(:anthropic, "claude-sonnet-4-20250514")
+        model: LemonAi.Models.get_model(:anthropic, "claude-sonnet-4-20250514")
       )
 
       # Subscribe to events
@@ -50,7 +50,7 @@ defmodule CodingAgent do
   ## Options
 
   - `:cwd` - Working directory (required)
-  - `:model` - Ai.Types.Model struct (required)
+  - `:model` - LemonAi.Types.Model struct (required)
   - `:system_prompt` - Custom system prompt (optional)
   - `:tools` - Custom tool list (optional, defaults to coding tools)
   - `:session_file` - Path to existing session file to resume (optional)
@@ -59,7 +59,7 @@ defmodule CodingAgent do
 
       {:ok, session} = CodingAgent.start_session(
         cwd: "/path/to/project",
-        model: Ai.Models.get_model(:anthropic, "claude-sonnet-4-20250514")
+        model: LemonAi.Models.get_model(:anthropic, "claude-sonnet-4-20250514")
       )
   """
   @spec start_session(keyword()) :: {:ok, pid()} | {:error, term()}
@@ -98,13 +98,13 @@ defmodule CodingAgent do
 
       tools = CodingAgent.coding_tools("/path/to/project")
   """
-  @spec coding_tools(String.t(), keyword()) :: [AgentCore.Types.AgentTool.t()]
+  @spec coding_tools(String.t(), keyword()) :: [LemonAgent.Types.AgentTool.t()]
   defdelegate coding_tools(cwd, opts \\ []), to: CodingAgent.Tools
 
   @doc """
   Get read-only tools for exploration.
   """
-  @spec read_only_tools(String.t(), keyword()) :: [AgentCore.Types.AgentTool.t()]
+  @spec read_only_tools(String.t(), keyword()) :: [LemonAgent.Types.AgentTool.t()]
   defdelegate read_only_tools(cwd, opts \\ []), to: CodingAgent.Tools
 
   @doc """

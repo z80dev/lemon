@@ -66,7 +66,7 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
   `lemon_memory` package as `LemonMemory.*`. The app env key moved with them,
   from `:lemon_core, LemonCore.MemoryStore` to `:lemon_memory, LemonMemory.Store`.
 - `LemonCore.GoalStore`, `KanbanStore` and `HeartbeatStore` — moved to
-  `lemon_agent` as `AgentCore.Workspace.*`.
+  `lemon_agent` as `LemonAgent.Workspace.*`.
 - `LemonCore.ProviderPoolRotator` and `ProviderConfigResolver` — moved to their
   single consumers (`coding_agent` and `lemon_agent` respectively).
 - Weak raw master keys are rejected with `:weak_master_key` rather than being

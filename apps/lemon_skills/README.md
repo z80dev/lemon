@@ -345,8 +345,8 @@ If a skill needs programmatic execution (not just content injection), create a t
 
 ```elixir
 defmodule LemonSkills.Tools.MyNewTool do
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.TextContent
 
   def tool(opts \\ []) do
     %AgentTool{

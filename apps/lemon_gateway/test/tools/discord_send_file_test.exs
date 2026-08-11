@@ -19,7 +19,7 @@ defmodule LemonGateway.Tools.DiscordSendFileTest do
         nil
       )
 
-    assert AgentCore.get_text(result) =~ "Queued file for Discord delivery"
+    assert LemonAgent.get_text(result) =~ "Queued file for Discord delivery"
 
     assert %{auto_send_files: [file]} = result.details
     assert file.path == file_path
@@ -41,7 +41,7 @@ defmodule LemonGateway.Tools.DiscordSendFileTest do
         nil
       )
 
-    assert AgentCore.get_text(result) =~ "only available for Discord channel sessions"
+    assert LemonAgent.get_text(result) =~ "only available for Discord channel sessions"
     assert %{error: true} = result.details
   end
 

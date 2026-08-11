@@ -28,8 +28,8 @@ defmodule CodingAgent.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:agent_core, in_umbrella: true},
-      {:ai, in_umbrella: true},
+      {:lemon_agent, in_umbrella: true},
+      {:lemon_ai, in_umbrella: true},
       {:lemon_skills, in_umbrella: true},
       {:lemon_core, in_umbrella: true},
       {:lemon_gateway, in_umbrella: true},

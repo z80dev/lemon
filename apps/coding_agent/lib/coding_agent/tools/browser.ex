@@ -3,8 +3,8 @@ defmodule CodingAgent.Tools.Browser do
   Shared browser tool execution over the supervised LemonCore local browser server.
   """
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.{ImageContent, TextContent}
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.{ImageContent, TextContent}
   alias CodingAgent.Security.ExternalContent
   alias CodingAgent.Tools.PathHelpers
   alias LemonBrowser.Artifacts

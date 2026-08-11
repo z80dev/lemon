@@ -78,7 +78,7 @@ defmodule LemonGateway.MixProject do
       # WebSocket support
       {:websockex, "~> 0.4"},
       {:websock_adapter, "~> 0.5"},
-      {:agent_core, in_umbrella: true},
+      {:lemon_agent, in_umbrella: true},
       {:lemon_core, in_umbrella: true},
       # API documentation
       {:ex_doc, "~> 0.34", only: :dev, runtime: false}

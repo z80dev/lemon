@@ -25,8 +25,8 @@ defmodule LemonEvals.MixProject do
 
   defp deps do
     [
-      {:agent_core, in_umbrella: true},
-      {:ai, in_umbrella: true},
+      {:lemon_agent, in_umbrella: true},
+      {:lemon_ai, in_umbrella: true},
       {:coding_agent, in_umbrella: true},
       {:lemon_core, in_umbrella: true},
       {:lemon_skills, in_umbrella: true},

@@ -3,7 +3,7 @@ defmodule CodingAgent.Messages do
   Message structs and conversion functions for the coding agent.
 
   This module defines the internal message types used by the coding agent
-  and provides functions to convert them to the format expected by the Ai library.
+  and provides functions to convert them to the format expected by the LemonAi library.
 
   ## Message Types
 
@@ -230,10 +230,10 @@ defmodule CodingAgent.Messages do
   # ============================================================================
 
   @doc """
-  Convert a list of agent messages to LLM-compatible format for the Ai library.
+  Convert a list of agent messages to LLM-compatible format for the LemonAi library.
 
   This function transforms CodingAgent message types into the standard
-  Ai.Types message format that can be sent to LLM providers.
+  LemonAi.Types message format that can be sent to LLM providers.
 
   ## Conversion Rules
 
@@ -243,9 +243,9 @@ defmodule CodingAgent.Messages do
   - `CustomMessage{custom_type: "async_followup"}` becomes a user message with a provenance wrapper
   - `BranchSummaryMessage` becomes a user message with summary in `<branch_summary>` tags
   - `CompactionSummaryMessage` becomes a user message with summary in `<compaction_summary>` tags
-  - Standard user/assistant/tool_result messages are converted to their Ai.Types equivalents
+  - Standard user/assistant/tool_result messages are converted to their LemonAi.Types equivalents
   """
-  @spec to_llm([message()]) :: [Ai.Types.message()]
+  @spec to_llm([message()]) :: [LemonAi.Types.message()]
   def to_llm(messages) when is_list(messages) do
     messages
     |> Enum.reject(&exclude_from_context?/1)
@@ -297,35 +297,38 @@ defmodule CodingAgent.Messages do
   def get_text(%BranchSummaryMessage{summary: summary}), do: summary
   def get_text(%CompactionSummaryMessage{summary: summary}), do: summary
 
-  # Handle Ai.Types.UserMessage
-  def get_text(%Ai.Types.UserMessage{content: content}) when is_binary(content), do: content
-  def get_text(%Ai.Types.UserMessage{content: nil}), do: nil
+  # Handle LemonAi.Types.UserMessage
+  def get_text(%LemonAi.Types.UserMessage{content: content}) when is_binary(content), do: content
+  def get_text(%LemonAi.Types.UserMessage{content: nil}), do: nil
 
-  def get_text(%Ai.Types.UserMessage{content: content}) when is_list(content) do
+  def get_text(%LemonAi.Types.UserMessage{content: content}) when is_list(content) do
     content
     |> Enum.map(&extract_text_from_ai_content/1)
     |> Enum.join("\n")
   end
 
-  # Handle Ai.Types.AssistantMessage
-  def get_text(%Ai.Types.AssistantMessage{content: content}) when is_list(content) do
+  # Handle LemonAi.Types.AssistantMessage
+  def get_text(%LemonAi.Types.AssistantMessage{content: content}) when is_list(content) do
     content
     |> Enum.map(&extract_text_from_ai_content/1)
     |> Enum.join("\n")
   end
 
-  # Handle Ai.Types.ToolResultMessage
-  def get_text(%Ai.Types.ToolResultMessage{content: content}) when is_list(content) do
+  # Handle LemonAi.Types.ToolResultMessage
+  def get_text(%LemonAi.Types.ToolResultMessage{content: content}) when is_list(content) do
     content
     |> Enum.map(&extract_text_from_ai_content/1)
     |> Enum.join("\n")
   end
 
-  # Helper for Ai.Types content blocks
-  defp extract_text_from_ai_content(%Ai.Types.TextContent{text: text}), do: text
-  defp extract_text_from_ai_content(%Ai.Types.ThinkingContent{thinking: text}), do: text
-  defp extract_text_from_ai_content(%Ai.Types.ImageContent{}), do: "[image]"
-  defp extract_text_from_ai_content(%Ai.Types.ToolCall{name: name}), do: "[tool_call: #{name}]"
+  # Helper for LemonAi.Types content blocks
+  defp extract_text_from_ai_content(%LemonAi.Types.TextContent{text: text}), do: text
+  defp extract_text_from_ai_content(%LemonAi.Types.ThinkingContent{thinking: text}), do: text
+  defp extract_text_from_ai_content(%LemonAi.Types.ImageContent{}), do: "[image]"
+
+  defp extract_text_from_ai_content(%LemonAi.Types.ToolCall{name: name}),
+    do: "[tool_call: #{name}]"
+
   defp extract_text_from_ai_content(_), do: ""
 
   @doc """
@@ -356,14 +359,14 @@ defmodule CodingAgent.Messages do
   defp exclude_from_context?(%BashExecutionMessage{exclude_from_context: true}), do: true
   defp exclude_from_context?(_), do: false
 
-  # Pass through Ai.Types messages unchanged - they're already in LLM format
-  defp convert_to_llm(%Ai.Types.UserMessage{} = msg), do: msg
-  defp convert_to_llm(%Ai.Types.AssistantMessage{} = msg), do: msg
-  defp convert_to_llm(%Ai.Types.ToolResultMessage{} = msg), do: msg
+  # Pass through LemonAi.Types messages unchanged - they're already in LLM format
+  defp convert_to_llm(%LemonAi.Types.UserMessage{} = msg), do: msg
+  defp convert_to_llm(%LemonAi.Types.AssistantMessage{} = msg), do: msg
+  defp convert_to_llm(%LemonAi.Types.ToolResultMessage{} = msg), do: msg
 
-  # Convert CodingAgent.Messages types to Ai.Types
+  # Convert CodingAgent.Messages types to LemonAi.Types
   defp convert_to_llm(%UserMessage{} = msg) do
-    %Ai.Types.UserMessage{
+    %LemonAi.Types.UserMessage{
       role: :user,
       content: convert_content(msg.content),
       timestamp: msg.timestamp
@@ -371,7 +374,7 @@ defmodule CodingAgent.Messages do
   end
 
   defp convert_to_llm(%AssistantMessage{} = msg) do
-    %Ai.Types.AssistantMessage{
+    %LemonAi.Types.AssistantMessage{
       role: :assistant,
       content: Enum.map(msg.content, &convert_content_block/1),
       api: msg.api,
@@ -384,7 +387,7 @@ defmodule CodingAgent.Messages do
   end
 
   defp convert_to_llm(%ToolResultMessage{} = msg) do
-    %Ai.Types.ToolResultMessage{
+    %LemonAi.Types.ToolResultMessage{
       role: :tool_result,
       tool_call_id: msg.tool_use_id,
       tool_name: "",
@@ -398,7 +401,7 @@ defmodule CodingAgent.Messages do
   defp convert_to_llm(%BashExecutionMessage{} = msg) do
     formatted_output = format_bash_output(msg)
 
-    %Ai.Types.UserMessage{
+    %LemonAi.Types.UserMessage{
       role: :user,
       content: formatted_output,
       timestamp: msg.timestamp
@@ -406,7 +409,7 @@ defmodule CodingAgent.Messages do
   end
 
   defp convert_to_llm(%CustomMessage{custom_type: "async_followup"} = msg) do
-    %Ai.Types.UserMessage{
+    %LemonAi.Types.UserMessage{
       role: :user,
       content: format_async_followup_for_llm(msg),
       timestamp: msg.timestamp
@@ -420,7 +423,7 @@ defmodule CodingAgent.Messages do
         c when is_list(c) -> convert_content(c)
       end
 
-    %Ai.Types.UserMessage{
+    %LemonAi.Types.UserMessage{
       role: :user,
       content: content,
       timestamp: msg.timestamp
@@ -430,7 +433,7 @@ defmodule CodingAgent.Messages do
   defp convert_to_llm(%BranchSummaryMessage{} = msg) do
     content = "<branch_summary>\n#{msg.summary}\n</branch_summary>"
 
-    %Ai.Types.UserMessage{
+    %LemonAi.Types.UserMessage{
       role: :user,
       content: content,
       timestamp: msg.timestamp
@@ -440,7 +443,7 @@ defmodule CodingAgent.Messages do
   defp convert_to_llm(%CompactionSummaryMessage{} = msg) do
     content = "<compaction_summary>\n#{msg.summary}\n</compaction_summary>"
 
-    %Ai.Types.UserMessage{
+    %LemonAi.Types.UserMessage{
       role: :user,
       content: content,
       timestamp: msg.timestamp
@@ -449,7 +452,7 @@ defmodule CodingAgent.Messages do
 
   # Handle plain maps with "role" key for backward compatibility
   defp convert_to_llm(%{role: :user, content: content} = msg) do
-    %Ai.Types.UserMessage{
+    %LemonAi.Types.UserMessage{
       role: :user,
       content: content,
       timestamp: Map.get(msg, :timestamp, 0)
@@ -457,7 +460,7 @@ defmodule CodingAgent.Messages do
   end
 
   defp convert_to_llm(%{role: :assistant, content: content} = msg) do
-    %Ai.Types.AssistantMessage{
+    %LemonAi.Types.AssistantMessage{
       role: :assistant,
       content: content,
       api: Map.get(msg, :api),
@@ -470,7 +473,7 @@ defmodule CodingAgent.Messages do
   end
 
   defp convert_to_llm(%{role: :tool_result, content: content} = msg) do
-    %Ai.Types.ToolResultMessage{
+    %LemonAi.Types.ToolResultMessage{
       role: :tool_result,
       tool_call_id: Map.get(msg, :tool_call_id) || Map.get(msg, :tool_use_id, ""),
       tool_name: Map.get(msg, :tool_name, ""),
@@ -482,7 +485,7 @@ defmodule CodingAgent.Messages do
   end
 
   defp convert_to_llm(%{"role" => "user", "content" => content} = msg) do
-    %Ai.Types.UserMessage{
+    %LemonAi.Types.UserMessage{
       role: :user,
       content: content,
       timestamp: Map.get(msg, "timestamp", 0)
@@ -490,7 +493,7 @@ defmodule CodingAgent.Messages do
   end
 
   defp convert_to_llm(%{"role" => "assistant", "content" => content} = msg) do
-    %Ai.Types.AssistantMessage{
+    %LemonAi.Types.AssistantMessage{
       role: :assistant,
       content: content,
       api: Map.get(msg, "api"),
@@ -503,7 +506,7 @@ defmodule CodingAgent.Messages do
   end
 
   defp convert_to_llm(%{"role" => "tool_result", "content" => content} = msg) do
-    %Ai.Types.ToolResultMessage{
+    %LemonAi.Types.ToolResultMessage{
       role: :tool_result,
       tool_call_id: Map.get(msg, "tool_call_id") || Map.get(msg, "tool_use_id", ""),
       tool_name: Map.get(msg, "tool_name", ""),
@@ -608,25 +611,25 @@ defmodule CodingAgent.Messages do
   end
 
   defp convert_content_block(%TextContent{text: text}) do
-    %Ai.Types.TextContent{type: :text, text: text}
+    %LemonAi.Types.TextContent{type: :text, text: text}
   end
 
   defp convert_content_block(%ImageContent{data: data, mime_type: mime_type}) do
-    %Ai.Types.ImageContent{type: :image, data: data, mime_type: mime_type}
+    %LemonAi.Types.ImageContent{type: :image, data: data, mime_type: mime_type}
   end
 
   defp convert_content_block(%ThinkingContent{thinking: thinking}) do
-    %Ai.Types.ThinkingContent{type: :thinking, thinking: thinking}
+    %LemonAi.Types.ThinkingContent{type: :thinking, thinking: thinking}
   end
 
   defp convert_content_block(%ToolCall{id: id, name: name, arguments: arguments}) do
-    %Ai.Types.ToolCall{type: :tool_call, id: id, name: name, arguments: arguments}
+    %LemonAi.Types.ToolCall{type: :tool_call, id: id, name: name, arguments: arguments}
   end
 
   defp convert_usage(nil), do: nil
 
   defp convert_usage(%Usage{} = usage) do
-    %Ai.Types.Usage{
+    %LemonAi.Types.Usage{
       input: usage.input,
       output: usage.output,
       cache_read: usage.cache_read,
@@ -636,8 +639,8 @@ defmodule CodingAgent.Messages do
     }
   end
 
-  defp convert_cost(nil), do: %Ai.Types.Cost{}
-  defp convert_cost(cost) when is_float(cost), do: %Ai.Types.Cost{total: cost}
+  defp convert_cost(nil), do: %LemonAi.Types.Cost{}
+  defp convert_cost(cost) when is_float(cost), do: %LemonAi.Types.Cost{total: cost}
 
   defp normalize_trust(:untrusted), do: :untrusted
   defp normalize_trust("untrusted"), do: :untrusted

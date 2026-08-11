@@ -5,9 +5,9 @@ defmodule CodingAgent.Tools.Glob do
   Finds files matching a glob pattern within a directory.
   """
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias AgentCore.AbortSignal
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.AbortSignal
+  alias LemonAi.Types.TextContent
   alias CodingAgent.Tools.PathHelpers
 
   @default_max_results 100

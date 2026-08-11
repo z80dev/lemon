@@ -5,9 +5,9 @@ defmodule CodingAgent.Tools.Todo do
   This replaces separate read/write todo tools with a single action-based API.
   """
 
-  alias AgentCore.Types.AgentTool
-  alias AgentCore.Types.AgentToolResult
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.AgentTool
+  alias LemonAgent.Types.AgentToolResult
+  alias LemonAi.Types.TextContent
   alias CodingAgent.Tools.{TodoRead, TodoWrite}
   alias CodingAgent.Tools.TodoStore
 
@@ -67,9 +67,9 @@ defmodule CodingAgent.Tools.Todo do
           tool_call_id :: String.t(),
           params :: map(),
           signal :: reference() | nil,
-          on_update :: (AgentCore.Types.AgentToolResult.t() -> :ok) | nil,
+          on_update :: (LemonAgent.Types.AgentToolResult.t() -> :ok) | nil,
           session_id :: String.t()
-        ) :: AgentCore.Types.AgentToolResult.t() | {:error, term()}
+        ) :: LemonAgent.Types.AgentToolResult.t() | {:error, term()}
   def execute(tool_call_id, params, signal, on_update, session_id) do
     case Map.get(params, "action") do
       "read" ->
@@ -93,7 +93,7 @@ defmodule CodingAgent.Tools.Todo do
   end
 
   defp execute_progress(signal, session_id) do
-    if AgentCore.AbortSignal.aborted?(signal) do
+    if LemonAgent.AbortSignal.aborted?(signal) do
       {:error, "Operation aborted"}
     else
       if session_id == "" do
@@ -111,7 +111,7 @@ defmodule CodingAgent.Tools.Todo do
   end
 
   defp execute_actionable(signal, session_id) do
-    if AgentCore.AbortSignal.aborted?(signal) do
+    if LemonAgent.AbortSignal.aborted?(signal) do
       {:error, "Operation aborted"}
     else
       if session_id == "" do

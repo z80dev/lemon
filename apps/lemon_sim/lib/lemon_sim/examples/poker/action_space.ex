@@ -3,7 +3,7 @@ defmodule LemonSim.Examples.Poker.ActionSpace do
 
   @behaviour LemonSim.Kernel.ActionSpace
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonCore.MapHelpers
   alias LemonSim.Examples.Poker.Banter
   alias LemonSim.Examples.Poker.Engine.{Card, Table}
@@ -107,7 +107,7 @@ defmodule LemonSim.Examples.Poker.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("Noted: #{content}")],
+           content: [LemonAgent.text_content("Noted: #{content}")],
            details: %{
              "event" =>
                Events.player_note(player.player_id, player.seat, content, %{
@@ -151,7 +151,7 @@ defmodule LemonSim.Examples.Poker.ActionSpace do
           {:ok, content} ->
             {:ok,
              %AgentToolResult{
-               content: [AgentCore.text_content("#{player.player_id} says: #{content}")],
+               content: [LemonAgent.text_content("#{player.player_id} says: #{content}")],
                details: %{
                  "event" =>
                    Events.table_talk(player.player_id, player.seat, content, %{
@@ -165,7 +165,7 @@ defmodule LemonSim.Examples.Poker.ActionSpace do
           {:error, reason} ->
             {:ok,
              %AgentToolResult{
-               content: [AgentCore.text_content(reason)],
+               content: [LemonAgent.text_content(reason)],
                details: %{},
                trust: :trusted
              }}
@@ -208,7 +208,7 @@ defmodule LemonSim.Examples.Poker.ActionSpace do
       execute: fn _tool_call_id, _params, _signal, _on_update ->
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("#{player.player_id} #{summary}")],
+           content: [LemonAgent.text_content("#{player.player_id} #{summary}")],
            details: %{"event" => Events.player_action(player.player_id, player.seat, action)},
            trust: :trusted
          }}
@@ -237,7 +237,7 @@ defmodule LemonSim.Examples.Poker.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("#{player.player_id} #{summary} #{inspect(total)}")],
+           content: [LemonAgent.text_content("#{player.player_id} #{summary} #{inspect(total)}")],
            details: %{
              "event" => Events.player_action(player.player_id, player.seat, action, total)
            },

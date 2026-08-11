@@ -1,6 +1,6 @@
 # Persist memory
 
-`AgentCore.Agent` keeps the conversation in process state, which is the right
+`LemonAgent.Agent` keeps the conversation in process state, which is the right
 place for it and the wrong place to keep it: restart the node and the agent has
 forgotten everything. `lemon_memory` is the other half — a SQLite-backed store
 of compact, searchable summaries, scoped so that "what did we decide last
@@ -17,7 +17,7 @@ different answers:
 | Problem | Answer |
 |---|---|
 | The model should remember what was said five minutes ago | The conversation, already in `AgentState.messages` |
-| The conversation is longer than the context window | Compaction — `Ai.ContextCompactor`, or a `transform_context` function |
+| The conversation is longer than the context window | Compaction — `LemonAi.ContextCompactor`, or a `transform_context` function |
 | The agent should remember something from last week | This guide |
 
 A memory document is a *summary* of one exchange, not a transcript. Keep them
@@ -147,10 +147,10 @@ end
 
 `remember/4` uses `Document.new/1`, which applies the invariants the ingest path
 relies on — summary truncation and required-field validation — so a direct
-`AgentCore` user gets the same document a finalized run would. The other
+`LemonAgent` user gets the same document a finalized run would. The other
 constructor, `Document.from_run/4`, expects the run record and summary shapes
 the router produces when it finalizes a run: reach for it if you are running the
-full Lemon runtime, and for `new/1` if you are calling `AgentCore` directly.
+full Lemon runtime, and for `new/1` if you are calling `LemonAgent` directly.
 
 ## 4. Feed memory back into a prompt
 

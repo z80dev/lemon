@@ -3,7 +3,7 @@ defmodule CodingAgent.Tools.TaskTest do
 
   alias CodingAgent.Tools.Task.Params
   alias CodingAgent.Tools.Task
-  alias AgentCore.AbortSignal
+  alias LemonAgent.AbortSignal
   alias LemonCore.ResumeToken
 
   describe "tool/2" do
@@ -48,7 +48,7 @@ defmodule CodingAgent.Tools.TaskTest do
       result =
         Task.execute("call_1", %{"prompt" => "do something"}, nil, nil, "/tmp", [])
 
-      assert %AgentCore.Types.AgentToolResult{details: %{description: "do something"}} = result
+      assert %LemonAgent.Types.AgentToolResult{details: %{description: "do something"}} = result
     end
 
     test "derives description from prompt when description is empty" do
@@ -62,7 +62,7 @@ defmodule CodingAgent.Tools.TaskTest do
           []
         )
 
-      assert %AgentCore.Types.AgentToolResult{details: %{description: "do something"}} = result
+      assert %LemonAgent.Types.AgentToolResult{details: %{description: "do something"}} = result
     end
 
     test "derives description from prompt when description is not a string" do
@@ -76,7 +76,7 @@ defmodule CodingAgent.Tools.TaskTest do
           []
         )
 
-      assert %AgentCore.Types.AgentToolResult{details: %{description: "do something"}} = result
+      assert %LemonAgent.Types.AgentToolResult{details: %{description: "do something"}} = result
     end
 
     test "returns error when prompt is empty" do

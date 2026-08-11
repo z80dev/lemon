@@ -72,9 +72,9 @@ jobs:
       matrix:
         # The nine packages published to hex, each declaring `~> 1.15`.
         app:
-          - ai
+          - lemon_ai
           - lemon_core
-          - agent_core
+          - lemon_agent
           - lemon_memory
           - lemon_media
           - lemon_router

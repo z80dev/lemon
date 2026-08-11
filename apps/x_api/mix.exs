@@ -28,11 +28,11 @@ defmodule XApi.MixProject do
     [
       {:lemon_core, in_umbrella: true},
       # The channel adapter implements LemonChannels.Plugin and the three agent
-      # tools implement the AgentCore tool contract. Satellite -> platform is
+      # tools implement the LemonAgent tool contract. Satellite -> platform is
       # the allowed direction; the platform never depends on this app.
       {:lemon_channels, in_umbrella: true},
-      {:agent_core, in_umbrella: true},
-      {:ai, in_umbrella: true},
+      {:lemon_agent, in_umbrella: true},
+      {:lemon_ai, in_umbrella: true},
       # The satellite proves its adapter against the published contract kit the
       # same way any third-party integration would.
       {:lemon_platform_test, in_umbrella: true, only: :test, runtime: false},

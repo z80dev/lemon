@@ -135,7 +135,7 @@ defmodule Mix.Tasks.Lemon.Sim.Poker do
   defp resolve_model(model_spec, config) when is_binary(model_spec) do
     GameConfig.resolve_model_spec(nil, model_spec)
     |> case do
-      %Ai.Types.Model{} = model -> GameConfig.apply_provider_base_url(model, config)
+      %LemonAi.Types.Model{} = model -> GameConfig.apply_provider_base_url(model, config)
       nil -> Mix.raise("unknown model #{inspect(model_spec)}")
     end
   end

@@ -18,8 +18,8 @@ defmodule XApi.Tools.PostToX do
   and X_API_REFRESH_TOKEN to be set in the environment.
   """
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.TextContent
 
   @doc """
   Returns the PostToX tool definition.

@@ -327,13 +327,13 @@ defmodule CodingAgent.Extensions do
 
   ## Returns
 
-  A list of `AgentCore.Types.AgentTool` structs.
+  A list of `LemonAgent.Types.AgentTool` structs.
 
   ## Examples
 
       tools = CodingAgent.Extensions.get_tools(extensions, "/path/to/project")
   """
-  @spec get_tools(loaded_extensions(), String.t()) :: [AgentCore.Types.AgentTool.t()]
+  @spec get_tools(loaded_extensions(), String.t()) :: [LemonAgent.Types.AgentTool.t()]
   def get_tools(extensions, cwd) when is_list(extensions) do
     get_tools_with_source(extensions, cwd)
     |> Enum.map(fn {tool, _module} -> tool end)
@@ -352,7 +352,7 @@ defmodule CodingAgent.Extensions do
 
   ## Returns
 
-  A list of `{AgentCore.Types.AgentTool.t(), module()}` tuples.
+  A list of `{LemonAgent.Types.AgentTool.t(), module()}` tuples.
 
   ## Examples
 
@@ -360,7 +360,7 @@ defmodule CodingAgent.Extensions do
       # => [{%AgentTool{name: "my_tool", ...}, MyExtension}, ...]
   """
   @spec get_tools_with_source(loaded_extensions(), String.t()) ::
-          [{AgentCore.Types.AgentTool.t(), module()}]
+          [{LemonAgent.Types.AgentTool.t(), module()}]
   def get_tools_with_source(extensions, cwd) when is_list(extensions) do
     extensions
     |> Enum.filter(&has_callback?(&1, :tools, 1))
@@ -431,7 +431,7 @@ defmodule CodingAgent.Extensions do
 
   Collects all providers from extensions and registers them, detecting and
   reporting conflicts when multiple extensions try to register the same
-  provider name. Model providers register into `Ai.ProviderRegistry`; memory
+  provider name. Model providers register into `LemonAi.ProviderRegistry`; memory
   providers register into `LemonMemory.Providers`.
 
   ## Conflict Resolution
@@ -554,7 +554,7 @@ defmodule CodingAgent.Extensions do
   end
 
   @doc """
-  Unregister all extension-provided providers from the Ai.ProviderRegistry.
+  Unregister all extension-provided providers from the LemonAi.ProviderRegistry.
 
   This function removes providers that were previously registered by extensions,
   based on the provider registration report. It's typically called before
@@ -580,7 +580,7 @@ defmodule CodingAgent.Extensions do
   def unregister_extension_providers(%{registered: registered}) when is_list(registered) do
     Enum.each(registered, fn
       %{type: :model, name: name} ->
-        Ai.ProviderRegistry.unregister(name)
+        LemonAi.ProviderRegistry.unregister(name)
 
       %{type: :memory, name: name} ->
         LemonMemory.Providers.unregister_provider(provider_id(name))
@@ -1058,7 +1058,7 @@ defmodule CodingAgent.Extensions do
     :ok
   end
 
-  defp provider_registered?(:model, name), do: Ai.ProviderRegistry.registered?(name)
+  defp provider_registered?(:model, name), do: LemonAi.ProviderRegistry.registered?(name)
 
   defp provider_registered?(:memory, name) do
     id = provider_id(name)
@@ -1081,7 +1081,7 @@ defmodule CodingAgent.Extensions do
   defp normalize_provider_type(type), do: type
 
   defp register_provider(:model, name, spec, _ext) do
-    Ai.ProviderRegistry.register(name, spec.module)
+    LemonAi.ProviderRegistry.register(name, spec.module)
   end
 
   defp register_provider(:memory, name, spec, ext) do
@@ -1413,7 +1413,7 @@ defmodule CodingAgent.Extensions do
   end
 
   defp ensure_tool_types_loaded do
-    Code.ensure_loaded?(AgentCore.Types.AgentTool)
-    Code.ensure_loaded?(AgentCore.Types.AgentToolResult)
+    Code.ensure_loaded?(LemonAgent.Types.AgentTool)
+    Code.ensure_loaded?(LemonAgent.Types.AgentToolResult)
   end
 end

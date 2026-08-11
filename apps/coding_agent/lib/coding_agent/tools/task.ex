@@ -6,8 +6,8 @@ defmodule CodingAgent.Tools.Task do
   final assistant response.
   """
 
-  alias AgentCore.AbortSignal
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.AbortSignal
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias CodingAgent.Tools.Task.{Execution, Params, Result, Runner}
 
   @doc """

@@ -6,7 +6,7 @@ defmodule CodingAgent.Tools.SkillManage do
   @doc """
   Return the `skill_manage` tool scoped to the current working directory.
   """
-  @spec tool(String.t(), keyword()) :: AgentCore.Types.AgentTool.t()
+  @spec tool(String.t(), keyword()) :: LemonAgent.Types.AgentTool.t()
   def tool(cwd, opts \\ []) do
     opts
     |> Keyword.put(:cwd, cwd)

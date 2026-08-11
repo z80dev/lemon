@@ -1,7 +1,7 @@
 defmodule CodingAgent.Tools.WebSearchTest do
   use ExUnit.Case, async: false
 
-  alias AgentCore.AbortSignal
+  alias LemonAgent.AbortSignal
   alias CodingAgent.Tools.WebSearch
 
   setup do

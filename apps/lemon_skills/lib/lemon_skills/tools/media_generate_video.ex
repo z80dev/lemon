@@ -3,14 +3,14 @@ defmodule LemonSkills.Tools.MediaGenerateVideo do
   Supervised video-generation preview tool backed by LemonMedia.MediaJobSupervisor.
   """
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.TextContent
-  alias AgentCore.Tools.AbortHelpers
-  alias AgentCore.ModelRuntime.ProviderNames
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.TextContent
+  alias LemonAgent.Tools.AbortHelpers
+  alias LemonAgent.ModelRuntime.ProviderNames
   alias LemonCore.Config
   alias LemonMedia.MediaJobSupervisor
   alias LemonMedia.MediaJobs
-  alias AgentCore.ProviderConfigResolver
+  alias LemonAgent.ProviderConfigResolver
 
   @topic "media_jobs"
   @default_timeout_ms 20_000
@@ -345,7 +345,7 @@ defmodule LemonSkills.Tools.MediaGenerateVideo do
   defp openai_api_key(%{api_key: key}) when is_binary(key) and key != "", do: {:ok, key}
 
   defp openai_api_key(%{provider_cfg: provider_cfg}) do
-    case AgentCore.ModelRuntime.Credentials.resolve_provider_api_key(:openai, provider_cfg,
+    case LemonAgent.ModelRuntime.Credentials.resolve_provider_api_key(:openai, provider_cfg,
            provider_cfg: true
          ) do
       key when is_binary(key) and key != "" -> {:ok, key}

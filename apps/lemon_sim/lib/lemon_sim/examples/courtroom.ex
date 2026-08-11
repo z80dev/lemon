@@ -447,7 +447,7 @@ defmodule LemonSim.Examples.Courtroom do
     model_spec = config.agent.default_model
 
     case resolve_model_spec(provider, model_spec) do
-      %Ai.Types.Model{} = model ->
+      %LemonAi.Types.Model{} = model ->
         apply_provider_base_url(model, config)
 
       nil ->
@@ -485,17 +485,17 @@ defmodule LemonSim.Examples.Courtroom do
 
   defp resolve_model_spec(_provider, _model_spec), do: nil
 
-  defp lookup_model(nil, model_id), do: Ai.Models.find_by_id(model_id)
-  defp lookup_model("", model_id), do: Ai.Models.find_by_id(model_id)
+  defp lookup_model(nil, model_id), do: LemonAi.Models.find_by_id(model_id)
+  defp lookup_model("", model_id), do: LemonAi.Models.find_by_id(model_id)
 
   defp lookup_model(provider, model_id) when is_binary(provider) and is_binary(model_id) do
     normalized = normalize_provider(provider)
 
-    Ai.Models.get_model(normalized, model_id) ||
-      Ai.Models.get_model(String.to_atom(String.trim(provider)), model_id)
+    LemonAi.Models.get_model(normalized, model_id) ||
+      LemonAi.Models.get_model(String.to_atom(String.trim(provider)), model_id)
   end
 
-  defp apply_provider_base_url(%Ai.Types.Model{} = model, config) do
+  defp apply_provider_base_url(%LemonAi.Types.Model{} = model, config) do
     provider_name = provider_name(model.provider)
     provider_cfg = Providers.get_provider(config.providers, provider_name)
     base_url = provider_cfg[:base_url]
@@ -513,7 +513,7 @@ defmodule LemonSim.Examples.Courtroom do
 
     cond do
       provider_name == "openai-codex" ->
-        case AgentCore.ModelRuntime.Credentials.resolve_provider_api_key("openai-codex", %{
+        case LemonAgent.ModelRuntime.Credentials.resolve_provider_api_key("openai-codex", %{
                "openai-codex" => %{"auth_source" => "oauth"}
              }) do
           token when is_binary(token) and token != "" ->
@@ -575,7 +575,7 @@ defmodule LemonSim.Examples.Courtroom do
 
   defp resolve_secret_api_key(secret_name, secret_value)
        when is_binary(secret_name) and is_binary(secret_value) do
-    case Ai.Auth.OAuthSecretResolver.resolve_api_key_from_secret(
+    case LemonAi.Auth.OAuthSecretResolver.resolve_api_key_from_secret(
            secret_name,
            secret_value
          ) do

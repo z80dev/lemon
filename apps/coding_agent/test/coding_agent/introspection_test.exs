@@ -9,7 +9,7 @@ defmodule CodingAgent.IntrospectionTest do
   alias CodingAgent.Session
   alias LemonCore.Introspection
 
-  alias Ai.Types.{
+  alias LemonAi.Types.{
     AssistantMessage,
     TextContent,
     ToolCall,
@@ -19,7 +19,7 @@ defmodule CodingAgent.IntrospectionTest do
     ModelCost
   }
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
 
   # ============================================================================
   # Test Helpers (mirrors patterns from session_test.exs)
@@ -95,31 +95,31 @@ defmodule CodingAgent.IntrospectionTest do
   end
 
   defp response_to_event_stream(response) do
-    {:ok, stream} = Ai.EventStream.start_link()
+    {:ok, stream} = LemonAi.EventStream.start_link()
 
     Task.start(fn ->
-      Ai.EventStream.push(stream, {:start, response})
+      LemonAi.EventStream.push(stream, {:start, response})
 
       response.content
       |> Enum.with_index()
       |> Enum.each(fn {content, idx} ->
         case content do
           %TextContent{text: text} ->
-            Ai.EventStream.push(stream, {:text_start, idx, response})
-            Ai.EventStream.push(stream, {:text_delta, idx, text, response})
-            Ai.EventStream.push(stream, {:text_end, idx, text, response})
+            LemonAi.EventStream.push(stream, {:text_start, idx, response})
+            LemonAi.EventStream.push(stream, {:text_delta, idx, text, response})
+            LemonAi.EventStream.push(stream, {:text_end, idx, text, response})
 
           %ToolCall{} = tool_call ->
-            Ai.EventStream.push(stream, {:tool_call_start, idx, response})
-            Ai.EventStream.push(stream, {:tool_call_end, idx, tool_call, response})
+            LemonAi.EventStream.push(stream, {:tool_call_start, idx, response})
+            LemonAi.EventStream.push(stream, {:tool_call_end, idx, tool_call, response})
 
           _ ->
             :ok
         end
       end)
 
-      Ai.EventStream.push(stream, {:done, response.stop_reason, response})
-      Ai.EventStream.complete(stream, response)
+      LemonAi.EventStream.push(stream, {:done, response.stop_reason, response})
+      LemonAi.EventStream.complete(stream, response)
     end)
 
     stream

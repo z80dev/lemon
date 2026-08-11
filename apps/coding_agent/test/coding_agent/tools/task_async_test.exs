@@ -104,18 +104,18 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           nil,
           "/tmp",
           run_override: fn _on_update, _signal ->
-            %AgentCore.Types.AgentToolResult{
-              content: [%Ai.Types.TextContent{text: "task output"}],
+            %LemonAgent.Types.AgentToolResult{
+              content: [%LemonAi.Types.TextContent{text: "task output"}],
               details: %{status: "completed"}
             }
           end
         )
 
-      assert %AgentCore.Types.AgentToolResult{} = result
+      assert %LemonAgent.Types.AgentToolResult{} = result
       assert result.details.status == "queued"
       assert is_binary(result.details.task_id)
       assert is_binary(result.details.run_id)
-      assert [%Ai.Types.TextContent{text: text}] = result.content
+      assert [%LemonAi.Types.TextContent{text: text}] = result.content
       assert text == "Task queued: #{result.details.task_id}"
 
       assert {:ok, record, _events} = TaskStore.get(result.details.task_id)
@@ -137,8 +137,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           nil,
           "/tmp/task_async_idle_steer_parent",
           run_override: fn _on_update, _signal ->
-            %AgentCore.Types.AgentToolResult{
-              content: [%Ai.Types.TextContent{text: "idle steer output"}],
+            %LemonAgent.Types.AgentToolResult{
+              content: [%LemonAi.Types.TextContent{text: "idle steer output"}],
               details: %{status: "completed"}
             }
           end,
@@ -149,7 +149,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
         )
 
-      assert %AgentCore.Types.AgentToolResult{} = result
+      assert %LemonAgent.Types.AgentToolResult{} = result
 
       refute_receive {:session_async_followup, _message}, 150
       assert_receive {:router_submit, %RunRequest{queue_mode: :followup} = followup, 1}, 1_000
@@ -181,8 +181,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           nil,
           "/tmp",
           run_override: fn _on_update, _signal ->
-            %AgentCore.Types.AgentToolResult{
-              content: [%Ai.Types.TextContent{text: "task output"}],
+            %LemonAgent.Types.AgentToolResult{
+              content: [%LemonAi.Types.TextContent{text: "task output"}],
               details: %{status: "completed"}
             }
           end,
@@ -193,7 +193,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
         )
 
-      assert %AgentCore.Types.AgentToolResult{} = result
+      assert %LemonAgent.Types.AgentToolResult{} = result
       assert result.details.status == "queued"
 
       assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
@@ -205,7 +205,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert message.details.delivery == :followup
 
       [llm_message] = Messages.to_llm([message])
-      assert %Ai.Types.UserMessage{} = llm_message
+      assert %LemonAi.Types.UserMessage{} = llm_message
       assert llm_message.content =~ "[SYSTEM-DELIVERED ASYNC COMPLETION - NOT A USER MESSAGE]"
       assert llm_message.content =~ message.content
       assert llm_message.content =~ "task_id: #{result.details.task_id}"
@@ -230,8 +230,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           nil,
           "/tmp",
           run_override: fn _on_update, _signal ->
-            %AgentCore.Types.AgentToolResult{
-              content: [%Ai.Types.TextContent{text: "steer output"}],
+            %LemonAgent.Types.AgentToolResult{
+              content: [%LemonAi.Types.TextContent{text: "steer output"}],
               details: %{status: "completed"}
             }
           end,
@@ -242,7 +242,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
         )
 
-      assert %AgentCore.Types.AgentToolResult{} = result
+      assert %LemonAgent.Types.AgentToolResult{} = result
 
       assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
       assert message.details.delivery == :steer
@@ -271,8 +271,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           nil,
           parent_cwd,
           run_override: fn _on_update, _signal ->
-            %AgentCore.Types.AgentToolResult{
-              content: [%Ai.Types.TextContent{text: "router output"}],
+            %LemonAgent.Types.AgentToolResult{
+              content: [%LemonAi.Types.TextContent{text: "router output"}],
               details: %{status: "completed"}
             }
           end,
@@ -283,7 +283,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
         )
 
-      assert %AgentCore.Types.AgentToolResult{} = result
+      assert %LemonAgent.Types.AgentToolResult{} = result
       assert result.details.status == "queued"
 
       assert_receive {:router_submit, %RunRequest{queue_mode: :followup} = followup, 1}, 1_000
@@ -328,8 +328,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           nil,
           "/tmp/task_async_long_router",
           run_override: fn _on_update, _signal ->
-            %AgentCore.Types.AgentToolResult{
-              content: [%Ai.Types.TextContent{text: long_output}],
+            %LemonAgent.Types.AgentToolResult{
+              content: [%LemonAi.Types.TextContent{text: long_output}],
               details: %{status: "completed"}
             }
           end,
@@ -340,7 +340,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
         )
 
-      assert %AgentCore.Types.AgentToolResult{} = result
+      assert %LemonAgent.Types.AgentToolResult{} = result
 
       assert_receive {:router_submit, %RunRequest{queue_mode: :followup} = followup, 1}, 1_000
       assert followup.engine_id == "echo"
@@ -363,8 +363,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           nil,
           "/tmp/task_async_idle_parent",
           run_override: fn _on_update, _signal ->
-            %AgentCore.Types.AgentToolResult{
-              content: [%Ai.Types.TextContent{text: "idle output"}],
+            %LemonAgent.Types.AgentToolResult{
+              content: [%LemonAi.Types.TextContent{text: "idle output"}],
               details: %{status: "completed"}
             }
           end,
@@ -375,7 +375,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
         )
 
-      assert %AgentCore.Types.AgentToolResult{} = result
+      assert %LemonAgent.Types.AgentToolResult{} = result
       assert result.details.status == "queued"
 
       assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
@@ -399,8 +399,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           nil,
           "/tmp",
           run_override: fn _on_update, _signal ->
-            %AgentCore.Types.AgentToolResult{
-              content: [%Ai.Types.TextContent{text: "override output"}],
+            %LemonAgent.Types.AgentToolResult{
+              content: [%LemonAi.Types.TextContent{text: "override output"}],
               details: %{status: "completed"}
             }
           end,
@@ -411,7 +411,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
         )
 
-      assert %AgentCore.Types.AgentToolResult{} = result
+      assert %LemonAgent.Types.AgentToolResult{} = result
       assert result.details.status == "queued"
 
       assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
@@ -435,8 +435,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           nil,
           "/tmp",
           run_override: fn _on_update, _signal ->
-            %AgentCore.Types.AgentToolResult{
-              content: [%Ai.Types.TextContent{text: "idle backlog output"}],
+            %LemonAgent.Types.AgentToolResult{
+              content: [%LemonAi.Types.TextContent{text: "idle backlog output"}],
               details: %{status: "completed"}
             }
           end,
@@ -447,7 +447,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
         )
 
-      assert %AgentCore.Types.AgentToolResult{} = result
+      assert %LemonAgent.Types.AgentToolResult{} = result
       assert result.details.status == "queued"
 
       assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
@@ -474,8 +474,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           nil,
           "/tmp",
           run_override: fn _on_update, _signal ->
-            %AgentCore.Types.AgentToolResult{
-              content: [%Ai.Types.TextContent{text: "interrupt output"}],
+            %LemonAgent.Types.AgentToolResult{
+              content: [%LemonAi.Types.TextContent{text: "interrupt output"}],
               details: %{status: "completed"}
             }
           end,
@@ -486,7 +486,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
         )
 
-      assert %AgentCore.Types.AgentToolResult{} = result
+      assert %LemonAgent.Types.AgentToolResult{} = result
       refute_receive {:session_async_followup, _message}, 150
       assert_receive {:router_submit, %RunRequest{queue_mode: :interrupt} = followup, 1}, 1_000
       assert followup.session_key == "agent:review:main"
@@ -518,8 +518,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           nil,
           "/tmp",
           run_override: fn _on_update, _signal ->
-            %AgentCore.Types.AgentToolResult{
-              content: [%Ai.Types.TextContent{text: "collect output"}],
+            %LemonAgent.Types.AgentToolResult{
+              content: [%LemonAi.Types.TextContent{text: "collect output"}],
               details: %{status: "completed"}
             }
           end,
@@ -530,7 +530,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
         )
 
-      assert %AgentCore.Types.AgentToolResult{} = result
+      assert %LemonAgent.Types.AgentToolResult{} = result
       refute_receive {:session_async_followup, _message}, 150
       assert_receive {:router_submit, %RunRequest{queue_mode: :collect} = followup, 1}, 1_000
       assert followup.prompt =~ "collect output"
@@ -562,8 +562,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           nil,
           "/tmp",
           run_override: fn _on_update, _signal ->
-            %AgentCore.Types.AgentToolResult{
-              content: [%Ai.Types.TextContent{text: "config output"}],
+            %LemonAgent.Types.AgentToolResult{
+              content: [%LemonAi.Types.TextContent{text: "config output"}],
               details: %{status: "completed"}
             }
           end,
@@ -596,8 +596,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           nil,
           "/tmp",
           run_override: fn _on_update, _signal ->
-            %AgentCore.Types.AgentToolResult{
-              content: [%Ai.Types.TextContent{text: "override output"}],
+            %LemonAgent.Types.AgentToolResult{
+              content: [%LemonAi.Types.TextContent{text: "override output"}],
               details: %{status: "completed"}
             }
           end,
@@ -628,8 +628,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           nil,
           "/tmp",
           run_override: fn _on_update, _signal ->
-            %AgentCore.Types.AgentToolResult{
-              content: [%Ai.Types.TextContent{text: "silent output"}],
+            %LemonAgent.Types.AgentToolResult{
+              content: [%LemonAi.Types.TextContent{text: "silent output"}],
               details: %{status: "completed"}
             }
           end,
@@ -681,7 +681,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           []
         )
 
-      assert %AgentCore.Types.AgentToolResult{} = result
+      assert %LemonAgent.Types.AgentToolResult{} = result
       assert result.details.status == "queued"
       assert is_binary(result.details.task_id)
       assert is_binary(result.details.run_id)
@@ -794,7 +794,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           []
         )
 
-      assert %AgentCore.Types.AgentToolResult{} = poll_result
+      assert %LemonAgent.Types.AgentToolResult{} = poll_result
       assert poll_result.details.status in ["queued", "running", "completed"]
       assert poll_result.details.task_id == task_id
       refute Map.has_key?(poll_result.details, :events)
@@ -807,10 +807,10 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       task_id = TaskStore.new_task(%{description: "Poll preview task", engine: "internal"})
       TaskStore.mark_running(task_id)
 
-      TaskStore.append_event(task_id, %AgentCore.Types.AgentToolResult{
+      TaskStore.append_event(task_id, %LemonAgent.Types.AgentToolResult{
         content: [
-          %Ai.Types.TextContent{text: "visible preview"},
-          %Ai.Types.TextContent{text: "\n[thinking] hidden preview"}
+          %LemonAi.Types.TextContent{text: "visible preview"},
+          %LemonAi.Types.TextContent{text: "\n[thinking] hidden preview"}
         ],
         details: %{
           status: "running",
@@ -828,8 +828,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           []
         )
 
-      assert %AgentCore.Types.AgentToolResult{} = result
-      assert [%Ai.Types.TextContent{text: text}] = result.content
+      assert %LemonAgent.Types.AgentToolResult{} = result
+      assert [%LemonAi.Types.TextContent{text: text}] = result.content
       assert text == "Task status: running\nCurrent action: tool"
       refute text =~ "visible preview"
       refute text =~ "[thinking]"
@@ -845,10 +845,10 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
 
       TaskStore.finish(
         task_id,
-        %AgentCore.Types.AgentToolResult{
+        %LemonAgent.Types.AgentToolResult{
           content: [
-            %Ai.Types.TextContent{text: "final answer"},
-            %Ai.Types.TextContent{text: "\n[thinking] hidden chain"}
+            %LemonAi.Types.TextContent{text: "final answer"},
+            %LemonAi.Types.TextContent{text: "\n[thinking] hidden chain"}
           ],
           details: %{status: "completed"}
         }
@@ -864,8 +864,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           []
         )
 
-      assert %AgentCore.Types.AgentToolResult{} = result
-      assert [%Ai.Types.TextContent{text: "final answer"}] = result.content
+      assert %LemonAgent.Types.AgentToolResult{} = result
+      assert [%LemonAi.Types.TextContent{text: "final answer"}] = result.content
       assert result.details.task_id == task_id
       assert result.details.run_id == "run_get"
       assert result.details.engine == "internal"
@@ -959,7 +959,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
         )
 
       # Should timeout since task is still queued
-      assert %AgentCore.Types.AgentToolResult{} = result
+      assert %LemonAgent.Types.AgentToolResult{} = result
       assert result.details.status in ["timeout", "completed"]
     end
 
@@ -1010,7 +1010,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
         )
 
       # Should timeout since tasks are still queued
-      assert %AgentCore.Types.AgentToolResult{} = result
+      assert %LemonAgent.Types.AgentToolResult{} = result
       assert result.details.status in ["timeout", "completed"]
     end
   end
@@ -1063,7 +1063,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           []
         )
 
-      assert %AgentCore.Types.AgentToolResult{} = join_result
+      assert %LemonAgent.Types.AgentToolResult{} = join_result
       assert join_result.details.status in ["timeout", "completed"]
 
       case join_result.details.status do
@@ -1119,7 +1119,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           []
         )
 
-      assert %AgentCore.Types.AgentToolResult{} = join_result
+      assert %LemonAgent.Types.AgentToolResult{} = join_result
       assert join_result.details.status in ["timeout", "completed"]
 
       case join_result.details.status do
@@ -1160,7 +1160,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
         )
 
       # Should default to wait_all
-      assert %AgentCore.Types.AgentToolResult{} = join_result
+      assert %LemonAgent.Types.AgentToolResult{} = join_result
       assert join_result.details.status in ["timeout", "completed"]
 
       case join_result.details.status do
@@ -1193,14 +1193,16 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
 
             receive do
               {:release_task, ^release_ref} ->
-                %AgentCore.Types.AgentToolResult{
-                  content: [%Ai.Types.TextContent{text: "joined output"}],
+                %LemonAgent.Types.AgentToolResult{
+                  content: [%LemonAi.Types.TextContent{text: "joined output"}],
                   details: %{status: "completed"}
                 }
             after
               5_000 ->
-                %AgentCore.Types.AgentToolResult{
-                  content: [%Ai.Types.TextContent{text: "timed out waiting for test release"}],
+                %LemonAgent.Types.AgentToolResult{
+                  content: [
+                    %LemonAi.Types.TextContent{text: "timed out waiting for test release"}
+                  ],
                   details: %{status: "error"}
                 }
             end
@@ -1232,7 +1234,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
 
       join_result = Elixir.Task.await(join_task, 5_000)
 
-      assert %AgentCore.Types.AgentToolResult{} = join_result
+      assert %LemonAgent.Types.AgentToolResult{} = join_result
       assert join_result.details.status == "completed"
       [content] = join_result.content
       assert content.text =~ "status: completed"
@@ -1250,14 +1252,14 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       task_b = TaskStore.new_task(%{description: "check outbox", run_id: run_b})
 
       assert :ok =
-               RunGraph.finish(run_a, %AgentCore.Types.AgentToolResult{
-                 content: [%Ai.Types.TextContent{text: "dirs=18"}],
+               RunGraph.finish(run_a, %LemonAgent.Types.AgentToolResult{
+                 content: [%LemonAi.Types.TextContent{text: "dirs=18"}],
                  details: %{status: "completed"}
                })
 
       assert :ok =
-               RunGraph.finish(run_b, %AgentCore.Types.AgentToolResult{
-                 content: [%Ai.Types.TextContent{text: "outbox=yes"}],
+               RunGraph.finish(run_b, %LemonAgent.Types.AgentToolResult{
+                 content: [%LemonAi.Types.TextContent{text: "outbox=yes"}],
                  details: %{status: "completed"}
                })
 
@@ -1271,7 +1273,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           []
         )
 
-      assert %AgentCore.Types.AgentToolResult{} = result
+      assert %LemonAgent.Types.AgentToolResult{} = result
       [content] = result.content
       assert content.text =~ "description: count apps"
       assert content.text =~ "status: completed"
@@ -1299,7 +1301,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           []
         )
 
-      assert %AgentCore.Types.AgentToolResult{} = result
+      assert %LemonAgent.Types.AgentToolResult{} = result
       [content] = result.content
       assert content.text =~ "description: check outbox"
       assert content.text =~ "status: error"
@@ -1435,8 +1437,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
 
       outcome =
         {:ok,
-         %AgentCore.Types.AgentToolResult{
-           content: [%Ai.Types.TextContent{text: "Recovered final answer"}],
+         %LemonAgent.Types.AgentToolResult{
+           content: [%LemonAi.Types.TextContent{text: "Recovered final answer"}],
            details: %{status: "completed"}
          }}
 
@@ -1459,10 +1461,10 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert message.content == "Recovered final answer"
 
       assert {:ok, %{status: :completed, result: task_result}, _events} = TaskStore.get(task_id)
-      assert [%Ai.Types.TextContent{text: "Recovered final answer"}] = task_result.content
+      assert [%LemonAi.Types.TextContent{text: "Recovered final answer"}] = task_result.content
 
       assert {:ok, %{status: :completed, result: run_result}} = RunGraph.get(run_id)
-      assert [%Ai.Types.TextContent{text: "Recovered final answer"}] = run_result.content
+      assert [%LemonAi.Types.TextContent{text: "Recovered final answer"}] = run_result.content
     end
 
     test "formats successful completion with answer" do
@@ -1480,8 +1482,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           nil,
           "/tmp",
           run_override: fn _on_update, _signal ->
-            %AgentCore.Types.AgentToolResult{
-              content: [%Ai.Types.TextContent{text: "Widget built successfully"}],
+            %LemonAgent.Types.AgentToolResult{
+              content: [%LemonAi.Types.TextContent{text: "Widget built successfully"}],
               details: %{status: "completed"}
             }
           end,
@@ -1519,8 +1521,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           nil,
           "/tmp",
           run_override: fn _on_update, _signal ->
-            %AgentCore.Types.AgentToolResult{
-              content: [%Ai.Types.TextContent{text: long_output}],
+            %LemonAgent.Types.AgentToolResult{
+              content: [%LemonAi.Types.TextContent{text: long_output}],
               details: %{status: "completed"}
             }
           end,
@@ -1531,7 +1533,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
         )
 
-      assert %AgentCore.Types.AgentToolResult{} = result
+      assert %LemonAgent.Types.AgentToolResult{} = result
 
       assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
       assert message.content == long_output
@@ -1583,8 +1585,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           nil,
           "/tmp",
           run_override: fn _on_update, _signal ->
-            %AgentCore.Types.AgentToolResult{
-              content: [%Ai.Types.TextContent{text: ""}],
+            %LemonAgent.Types.AgentToolResult{
+              content: [%LemonAi.Types.TextContent{text: ""}],
               details: %{status: "completed"}
             }
           end,
@@ -1616,8 +1618,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           nil,
           "/tmp",
           run_override: fn _on_update, _signal ->
-            %AgentCore.Types.AgentToolResult{
-              content: [%Ai.Types.TextContent{text: "Got halfway done"}],
+            %LemonAgent.Types.AgentToolResult{
+              content: [%LemonAi.Types.TextContent{text: "Got halfway done"}],
               details: %{status: "error", error: "timeout"}
             }
           end,
@@ -1665,8 +1667,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           nil,
           "/tmp",
           run_override: fn _on_update, _signal ->
-            %AgentCore.Types.AgentToolResult{
-              content: [%Ai.Types.TextContent{text: "done"}],
+            %LemonAgent.Types.AgentToolResult{
+              content: [%LemonAi.Types.TextContent{text: "done"}],
               details: %{status: "completed"}
             }
           end,
@@ -1677,7 +1679,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
         )
 
-      assert %AgentCore.Types.AgentToolResult{} = result
+      assert %LemonAgent.Types.AgentToolResult{} = result
       assert result.details.status == "queued"
 
       # Session crashes, so it should fall back to router
@@ -1699,8 +1701,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           nil,
           "/tmp",
           run_override: fn _on_update, _signal ->
-            %AgentCore.Types.AgentToolResult{
-              content: [%Ai.Types.TextContent{text: "output"}],
+            %LemonAgent.Types.AgentToolResult{
+              content: [%LemonAi.Types.TextContent{text: "output"}],
               details: %{status: "completed"}
             }
           end,
@@ -1711,7 +1713,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
         )
 
-      assert %AgentCore.Types.AgentToolResult{} = result
+      assert %LemonAgent.Types.AgentToolResult{} = result
       assert result.details.status == "queued"
 
       # Session module doesn't have handle_async_followup/2, so it should route via router
@@ -1733,8 +1735,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           nil,
           "/tmp",
           run_override: fn _on_update, _signal ->
-            %AgentCore.Types.AgentToolResult{
-              content: [%Ai.Types.TextContent{text: "output"}],
+            %LemonAgent.Types.AgentToolResult{
+              content: [%LemonAi.Types.TextContent{text: "output"}],
               details: %{status: "completed"}
             }
           end,
@@ -1745,7 +1747,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
         )
 
-      assert %AgentCore.Types.AgentToolResult{} = result
+      assert %LemonAgent.Types.AgentToolResult{} = result
 
       # nil session_pid should fall back to router
       assert_receive {:router_submit, %RunRequest{queue_mode: :followup}, _}, 1_000
@@ -1826,8 +1828,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           nil,
           "/tmp",
           run_override: fn _on_update, _signal ->
-            %AgentCore.Types.AgentToolResult{
-              content: [%Ai.Types.TextContent{text: "done"}],
+            %LemonAgent.Types.AgentToolResult{
+              content: [%LemonAi.Types.TextContent{text: "done"}],
               details: %{status: "completed"}
             }
           end,
@@ -1838,7 +1840,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           run_orchestrator: UnknownAgentOrchestrator
         )
 
-      assert %AgentCore.Types.AgentToolResult{} = result
+      assert %LemonAgent.Types.AgentToolResult{} = result
 
       # First attempt with "unknown_agent" should be rejected
       assert_receive {:router_rejected, %RunRequest{agent_id: "unknown_agent"}}, 1_000

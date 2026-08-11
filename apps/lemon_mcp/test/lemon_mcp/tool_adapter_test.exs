@@ -1,7 +1,7 @@
 defmodule LemonMCP.ToolAdapterTest do
   use ExUnit.Case, async: true
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonMCP.Protocol
   alias LemonMCP.ToolAdapter
 

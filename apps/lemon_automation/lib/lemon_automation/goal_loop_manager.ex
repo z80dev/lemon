@@ -4,7 +4,7 @@ defmodule LemonAutomation.GoalLoopManager do
   use GenServer
 
   alias LemonAutomation.GoalLoop
-  alias AgentCore.Workspace.GoalStore
+  alias LemonAgent.Workspace.GoalStore
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))

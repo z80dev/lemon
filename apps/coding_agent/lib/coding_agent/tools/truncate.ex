@@ -11,8 +11,8 @@ defmodule CodingAgent.Tools.Truncate do
   - `smart` - Analyze content and keep most relevant parts
   """
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.TextContent
 
   import CodingAgent.Tools.AbortHelpers, only: [aborted?: 1]
 

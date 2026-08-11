@@ -21,13 +21,13 @@ defmodule LemonRouter.ToolPreview do
     end
   end
 
-  def to_text(%AgentCore.Types.AgentToolResult{} = result) do
-    AgentCore.get_text(result)
+  def to_text(%LemonAgent.Types.AgentToolResult{} = result) do
+    LemonAgent.get_text(result)
   rescue
     _ -> inspect(result)
   end
 
-  def to_text(%Ai.Types.TextContent{text: text}) when is_binary(text), do: text
+  def to_text(%LemonAi.Types.TextContent{text: text}) when is_binary(text), do: text
 
   def to_text(content) when is_list(content) do
     content
@@ -64,8 +64,8 @@ defmodule LemonRouter.ToolPreview do
   # If `text` is an `inspect/1` output of AgentToolResult/TextContent, extract the
   # nested `text: "..."` fields without evaluating Elixir code.
   defp extract_text_from_inspected_struct(text) when is_binary(text) do
-    if String.contains?(text, "%AgentCore.Types.AgentToolResult{") or
-         String.contains?(text, "%Ai.Types.TextContent{") do
+    if String.contains?(text, "%LemonAgent.Types.AgentToolResult{") or
+         String.contains?(text, "%LemonAi.Types.TextContent{") do
       texts =
         Regex.scan(~r/\btext:\s*"((?:\\.|[^"\\])*)"/s, text, capture: :all_but_first)
         |> List.flatten()

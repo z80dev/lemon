@@ -10,8 +10,8 @@ defmodule LemonSkills.McpSource do
 
   require Logger
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.TextContent
   alias LemonCore.OAuth.LocalCallbackListener
   alias LemonCore.Secrets
 

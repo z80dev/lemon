@@ -35,14 +35,14 @@ Diagnosis (2026-07-02, whole-repo review):
   `router_bridge` shim exists only to call upward without a compile dep —
   direct evidence of inverted layering.
 - `lemon_ai_runtime` is a stalled extraction: 2.2k lines of `defdelegate`
-  shadowing `Ai.*`, six duplicated OAuth module names, and a provider-routing
+  shadowing `LemonAi.*`, six duplicated OAuth module names, and a provider-routing
   "preview" that was never wired to dispatch.
 - Two dependency edges exist for a single call site each:
   `lemon_router → coding_agent` (async task surface projection) and
   `lemon_skills → lemon_channels` (borrowing the X API HTTP client).
 - A native run passes through five nested loop layers
-  (Gateway.Engine → CliRunner → CodingAgent.Session → AgentCore.Agent →
-  AgentCore.Loop); the native engine should not cosplay as a subprocess.
+  (Gateway.Engine → CliRunner → CodingAgent.Session → LemonAgent.Agent →
+  LemonAgent.Loop); the native engine should not cosplay as a subprocess.
 - `coding_agent` (62k lines) is one-third coding agent, two-thirds accreted
   assistant platform (media generation, social tools, PKM/memory).
 
@@ -52,7 +52,7 @@ Each workstream lands as one verified commit: `mix compile
 --warnings-as-errors`, targeted tests, `mix lemon.quality`, and the full
 `mix test --exclude integration --cover` suite at milestones.
 
-1. **W1 — remove `lemon_ai_runtime`.** Repoint consumers at `Ai.*`; rehome the
+1. **W1 — remove `lemon_ai_runtime`.** Repoint consumers at `LemonAi.*`; rehome the
    handful of genuinely new modules (credentials, provider status, stream
    options) where their consumers live. Update architecture policy, AGENTS.md,
    docs.

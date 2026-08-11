@@ -1,14 +1,14 @@
 defmodule LemonPlatformTest.FakeLLMTest do
   @moduledoc """
   Self-validation for `LemonPlatformTest.FakeLLM`: every scripted step is driven
-  through a *real* `AgentCore.Loop`, the same code path a provider adapter feeds.
+  through a *real* `LemonAgent.Loop`, the same code path a provider adapter feeds.
   If the push protocol drifts, these break.
   """
   use ExUnit.Case, async: true
 
-  alias AgentCore.{EventStream, Loop}
-  alias AgentCore.Types.{AgentContext, AgentLoopConfig, AgentTool, AgentToolResult}
-  alias Ai.Types.{StreamOptions, TextContent, ToolCall, UserMessage}
+  alias LemonAgent.{EventStream, Loop}
+  alias LemonAgent.Types.{AgentContext, AgentLoopConfig, AgentTool, AgentToolResult}
+  alias LemonAi.Types.{StreamOptions, TextContent, ToolCall, UserMessage}
   alias LemonPlatformTest.FakeLLM
 
   # convert_to_llm keeps the standard conversational roles; the loop hands the
@@ -173,7 +173,7 @@ defmodule LemonPlatformTest.FakeLLMTest do
   end
 
   test "a verbatim AssistantMessage step is emitted unchanged" do
-    msg = %Ai.Types.AssistantMessage{
+    msg = %LemonAi.Types.AssistantMessage{
       role: :assistant,
       content: [%TextContent{type: :text, text: "verbatim"}],
       stop_reason: :stop,

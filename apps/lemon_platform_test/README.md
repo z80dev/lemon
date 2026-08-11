@@ -49,7 +49,7 @@ Forget one and the case raises at compile time naming the package to add.
 ## FakeLLM: drive an agent loop without a provider
 
 `LemonPlatformTest.FakeLLM` is a scripted stand-in for an LLM. It turns a list of
-turns into the stream function `AgentCore` expects, emitting the same event
+turns into the stream function `LemonAgent` expects, emitting the same event
 protocol a real provider adapter does — so you can test what your agent *does*
 with a tool call or a refusal, with no network and no API key:
 
@@ -60,7 +60,7 @@ stream_fn =
     {:text, "It is sunny in Paris."}
   ])
 
-config = %AgentCore.Types.AgentLoopConfig{stream_fn: stream_fn, ...}
+config = %LemonAgent.Types.AgentLoopConfig{stream_fn: stream_fn, ...}
 ```
 
 Steps cover a plain answer, one or many tool calls, a model refusal and a

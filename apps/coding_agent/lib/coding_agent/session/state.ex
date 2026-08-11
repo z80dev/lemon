@@ -1,8 +1,8 @@
 defmodule CodingAgent.Session.State do
   @moduledoc false
 
-  alias AgentCore.Types.AgentTool
-  alias Ai.Types.{ImageContent, TextContent, UserMessage}
+  alias LemonAgent.Types.AgentTool
+  alias LemonAi.Types.{ImageContent, TextContent, UserMessage}
   alias CodingAgent.Config
   alias CodingAgent.ContextGuardrails
   alias CodingAgent.Messages.CustomMessage
@@ -195,7 +195,7 @@ defmodule CodingAgent.Session.State do
   def build_diagnostics(state) do
     {messages, message_count} =
       if state.agent && Process.alive?(state.agent) do
-        agent_state = AgentCore.Agent.get_state(state.agent)
+        agent_state = LemonAgent.Agent.get_state(state.agent)
         messages = agent_state.messages || []
         {messages, length(messages)}
       else
@@ -251,7 +251,7 @@ defmodule CodingAgent.Session.State do
   defp normalize_transform_result(_), do: {:error, :invalid_transform_result}
 
   defp count_tool_results(messages) do
-    results = Enum.filter(messages, &match?(%Ai.Types.ToolResultMessage{}, &1))
+    results = Enum.filter(messages, &match?(%LemonAi.Types.ToolResultMessage{}, &1))
     tool_call_count = length(results)
     error_count = Enum.count(results, fn msg -> Map.get(msg, :is_error, false) end)
     {tool_call_count, error_count}

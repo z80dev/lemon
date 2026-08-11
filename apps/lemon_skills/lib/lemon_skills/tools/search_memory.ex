@@ -9,8 +9,8 @@ defmodule LemonSkills.Tools.SearchMemory do
   "not available" message when the flag is off.
   """
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.TextContent
   alias LemonMemory.SessionSearch
 
   @doc """

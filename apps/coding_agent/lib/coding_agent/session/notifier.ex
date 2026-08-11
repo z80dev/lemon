@@ -38,7 +38,7 @@ defmodule CodingAgent.Session.Notifier do
     timeout = Keyword.get(opts, :timeout, :infinity)
 
     {:ok, stream} =
-      AgentCore.EventStream.start_link(
+      LemonAgent.EventStream.start_link(
         max_queue: max_queue,
         drop_strategy: drop_strategy,
         owner: pid,
@@ -78,7 +78,7 @@ defmodule CodingAgent.Session.Notifier do
     %{state | event_listeners: new_listeners}
   end
 
-  @spec broadcast_event(map(), AgentCore.Types.agent_event()) :: :ok
+  @spec broadcast_event(map(), LemonAgent.Types.agent_event()) :: :ok
   def broadcast_event(state, event) do
     session_event = {:session_event, state.session_manager.header.id, event}
 
@@ -87,7 +87,7 @@ defmodule CodingAgent.Session.Notifier do
     end)
 
     Enum.each(state.event_streams, fn {_mon_ref, %{stream: stream}} ->
-      AgentCore.EventStream.push_async(stream, session_event)
+      LemonAgent.EventStream.push_async(stream, session_event)
     end)
 
     :ok
@@ -98,21 +98,21 @@ defmodule CodingAgent.Session.Notifier do
     Enum.each(state.event_streams, fn {mon_ref, %{stream: stream}} ->
       case final_event do
         {:agent_end, messages} when is_list(messages) ->
-          AgentCore.EventStream.complete(stream, messages)
+          LemonAgent.EventStream.complete(stream, messages)
 
         {:error, reason, partial_state} ->
-          AgentCore.EventStream.error(stream, reason, partial_state)
+          LemonAgent.EventStream.error(stream, reason, partial_state)
 
         {:canceled, reason} ->
-          AgentCore.EventStream.push_async(stream, {:canceled, reason})
-          AgentCore.EventStream.complete(stream, [])
+          LemonAgent.EventStream.push_async(stream, {:canceled, reason})
+          LemonAgent.EventStream.complete(stream, [])
 
-        {:turn_end, %Ai.Types.AssistantMessage{stop_reason: :aborted}, _tool_results} ->
-          AgentCore.EventStream.push_async(stream, {:canceled, :assistant_aborted})
-          AgentCore.EventStream.complete(stream, [])
+        {:turn_end, %LemonAi.Types.AssistantMessage{stop_reason: :aborted}, _tool_results} ->
+          LemonAgent.EventStream.push_async(stream, {:canceled, :assistant_aborted})
+          LemonAgent.EventStream.complete(stream, [])
 
         _ ->
-          AgentCore.EventStream.complete(stream, [])
+          LemonAgent.EventStream.complete(stream, [])
       end
 
       Process.demonitor(mon_ref, [:flush])
@@ -134,7 +134,7 @@ defmodule CodingAgent.Session.Notifier do
       end)
 
     Enum.each(streams_for_pid, fn {mon_ref, %{stream: stream}} ->
-      AgentCore.EventStream.cancel(stream, :subscriber_down)
+      LemonAgent.EventStream.cancel(stream, :subscriber_down)
       Process.demonitor(mon_ref, [:flush])
     end)
 

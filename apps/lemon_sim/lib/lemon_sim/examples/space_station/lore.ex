@@ -7,7 +7,7 @@ defmodule LemonSim.Examples.SpaceStation.Lore do
   generation fails — the game always starts regardless.
   """
 
-  alias Ai.Types.{Context, AssistantMessage, UserMessage}
+  alias LemonAi.Types.{Context, AssistantMessage, UserMessage}
 
   @timeout_ms 15_000
 
@@ -17,7 +17,7 @@ defmodule LemonSim.Examples.SpaceStation.Lore do
   Returns `{:ok, profiles_map}` where profiles_map is `%{player_id => profile_map}`
   or `{:error, reason}`.
   """
-  @spec generate(map(), list(), Ai.Types.Model.t(), map()) ::
+  @spec generate(map(), list(), LemonAi.Types.Model.t(), map()) ::
           {:ok, map()} | {:error, term()}
   def generate(players, connections, model, stream_options) do
     prompt = build_prompt(players, connections)
@@ -29,7 +29,7 @@ defmodule LemonSim.Examples.SpaceStation.Lore do
     task =
       Task.async(fn ->
         try do
-          Ai.complete(model, context, stream_options)
+          LemonAi.complete(model, context, stream_options)
         rescue
           e -> {:error, {:exception, Exception.message(e)}}
         end
@@ -37,7 +37,7 @@ defmodule LemonSim.Examples.SpaceStation.Lore do
 
     case Task.yield(task, @timeout_ms) || Task.shutdown(task) do
       {:ok, {:ok, %AssistantMessage{} = msg}} ->
-        text = Ai.get_text(msg)
+        text = LemonAi.get_text(msg)
         parse_profiles(text, players)
 
       {:ok, {:error, reason}} ->

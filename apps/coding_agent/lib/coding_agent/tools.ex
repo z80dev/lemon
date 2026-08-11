@@ -73,7 +73,7 @@ defmodule CodingAgent.Tools do
   ## Options
   - Any options are passed through to individual tools
   """
-  @spec coding_tools(String.t(), keyword()) :: [AgentCore.Types.AgentTool.t()]
+  @spec coding_tools(String.t(), keyword()) :: [LemonAgent.Types.AgentTool.t()]
   def coding_tools(cwd, opts \\ []) do
     [
       Read.tool(cwd, opts),
@@ -133,12 +133,12 @@ defmodule CodingAgent.Tools do
   end
 
   # Tools contributed at runtime by apps the platform does not know about.
-  # Built-ins win on a name collision (`AgentCore.ToolRegistry`), so anything
+  # Built-ins win on a name collision (`LemonAgent.ToolRegistry`), so anything
   # already in `builtins` is dropped rather than shadowing or duplicating it.
   defp registered_tools(builtins, cwd, opts) do
     taken = MapSet.new(builtins, & &1.name)
 
-    AgentCore.ToolRegistry.all()
+    LemonAgent.ToolRegistry.all()
     |> Enum.reject(fn {name, _module} -> MapSet.member?(taken, Atom.to_string(name)) end)
     |> Enum.map(fn {_name, module} -> module.tool(cwd, opts) end)
   end
@@ -146,7 +146,7 @@ defmodule CodingAgent.Tools do
   @doc """
   Get read-only tools for exploration (read, read_skill, search_memory, session_search, grep, find, ls).
   """
-  @spec read_only_tools(String.t(), keyword()) :: [AgentCore.Types.AgentTool.t()]
+  @spec read_only_tools(String.t(), keyword()) :: [LemonAgent.Types.AgentTool.t()]
   def read_only_tools(cwd, opts \\ []) do
     [
       Read.tool(cwd, opts),
@@ -162,7 +162,7 @@ defmodule CodingAgent.Tools do
   @doc """
   Get all available tools as a map keyed by name.
   """
-  @spec all_tools(String.t(), keyword()) :: %{String.t() => AgentCore.Types.AgentTool.t()}
+  @spec all_tools(String.t(), keyword()) :: %{String.t() => LemonAgent.Types.AgentTool.t()}
   def all_tools(cwd, opts \\ []) do
     %{
       "read" => Read.tool(cwd, opts),
@@ -229,7 +229,7 @@ defmodule CodingAgent.Tools do
   end
 
   defp registered_tools_by_name(cwd, opts) do
-    Map.new(AgentCore.ToolRegistry.all(), fn {name, module} ->
+    Map.new(LemonAgent.ToolRegistry.all(), fn {name, module} ->
       {Atom.to_string(name), module.tool(cwd, opts)}
     end)
   end
@@ -237,7 +237,7 @@ defmodule CodingAgent.Tools do
   @doc """
   Get a specific tool by name.
   """
-  @spec get_tool(String.t(), String.t(), keyword()) :: AgentCore.Types.AgentTool.t() | nil
+  @spec get_tool(String.t(), String.t(), keyword()) :: LemonAgent.Types.AgentTool.t() | nil
   def get_tool(name, cwd, opts \\ []) do
     Map.get(all_tools(cwd, opts), name)
   end
@@ -245,7 +245,7 @@ defmodule CodingAgent.Tools do
   @doc """
   Get tools by a list of names.
   """
-  @spec get_tools([String.t()], String.t(), keyword()) :: [AgentCore.Types.AgentTool.t()]
+  @spec get_tools([String.t()], String.t(), keyword()) :: [LemonAgent.Types.AgentTool.t()]
   def get_tools(names, cwd, opts \\ []) do
     all = all_tools(cwd, opts)
     Enum.map(names, &Map.get(all, &1)) |> Enum.reject(&is_nil/1)

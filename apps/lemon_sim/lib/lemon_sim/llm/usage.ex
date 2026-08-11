@@ -1,7 +1,7 @@
 defmodule LemonSim.LLM.Usage do
   @moduledoc false
 
-  alias Ai.Types.{Model, ModelCost, Usage}
+  alias LemonAi.Types.{Model, ModelCost, Usage}
   alias LemonSim.LLM.Projectors.Toolkit
 
   @schema "lemon_sim.usage.v1"
@@ -89,7 +89,7 @@ defmodule LemonSim.LLM.Usage do
   defp add_response(state, actor_id, model, usage, latency_ms) do
     actor_id = normalize_actor_id(actor_id)
     pricing_known? = pricing_known?(model)
-    cost = if pricing_known?, do: Ai.calculate_cost(model, usage).total
+    cost = if pricing_known?, do: LemonAi.calculate_cost(model, usage).total
 
     state
     |> update_in([:totals], &add_usage(&1, usage, cost, pricing_known?, latency_ms))

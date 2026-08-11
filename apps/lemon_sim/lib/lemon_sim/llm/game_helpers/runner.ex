@@ -157,7 +157,7 @@ defmodule LemonSim.LLM.GameHelpers.Runner do
         |> Map.merge(Map.new(model_stream_options))
         |> Map.put(:api_key, api_key)
 
-      Ai.complete(actual_model, context, actual_stream_options)
+      LemonAi.complete(actual_model, context, actual_stream_options)
     end
 
     {:ok, step_meta_agent} = Agent.start_link(fn -> %{} end)

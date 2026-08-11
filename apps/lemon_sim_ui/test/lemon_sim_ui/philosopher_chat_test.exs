@@ -368,9 +368,9 @@ defmodule LemonSimUi.PhilosopherChatTest do
       opts = Domain.default_opts(model: nil, stream_options: %{})
       matcher = Keyword.fetch!(opts, :support_tool_matcher)
 
-      assert matcher.(%AgentCore.Types.AgentTool{name: "memory_write_file"})
-      assert matcher.(%AgentCore.Types.AgentTool{name: "memory_read_file"})
-      refute matcher.(%AgentCore.Types.AgentTool{name: "speak"})
+      assert matcher.(%LemonAgent.Types.AgentTool{name: "memory_write_file"})
+      assert matcher.(%LemonAgent.Types.AgentTool{name: "memory_read_file"})
+      refute matcher.(%LemonAgent.Types.AgentTool{name: "speak"})
     end
 
     test "a dead AI task unwedges the thread (P0-4)" do

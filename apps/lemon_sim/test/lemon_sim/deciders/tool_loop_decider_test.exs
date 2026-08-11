@@ -1,8 +1,8 @@
 defmodule LemonSim.LLM.Deciders.ToolLoopDeciderTest do
   use ExUnit.Case, async: true
 
-  alias AgentCore.Types.AgentToolResult
-  alias Ai.Types.{AssistantMessage, Context, Model, TextContent, ToolCall}
+  alias LemonAgent.Types.AgentToolResult
+  alias LemonAi.Types.{AssistantMessage, Context, Model, TextContent, ToolCall}
   alias LemonSim.LLM.Deciders.ToolLoopDecider
   alias LemonSim.LLM.Memory.Tools, as: MemoryTools
 
@@ -31,7 +31,7 @@ defmodule LemonSim.LLM.Deciders.ToolLoopDeciderTest do
     end
 
     tools = [
-      %AgentCore.Types.AgentTool{
+      %LemonAgent.Types.AgentTool{
         name: "attack",
         description: "Attack a visible enemy",
         parameters: %{
@@ -43,7 +43,7 @@ defmodule LemonSim.LLM.Deciders.ToolLoopDeciderTest do
         execute: fn _id, _params, _signal, _on_update ->
           {:ok,
            %AgentToolResult{
-             content: [AgentCore.text_content("attack committed")],
+             content: [LemonAgent.text_content("attack committed")],
              details: %{ok: true, event: %{"kind" => "attack_committed", "target" => "goblin"}},
              trust: :trusted
            }}
@@ -223,7 +223,7 @@ defmodule LemonSim.LLM.Deciders.ToolLoopDeciderTest do
       base_url: "https://example.invalid",
       reasoning: false,
       input: [:text],
-      cost: %Ai.Types.ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
+      cost: %LemonAi.Types.ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
       context_window: 128_000,
       max_tokens: 4_096,
       headers: %{},
@@ -232,7 +232,7 @@ defmodule LemonSim.LLM.Deciders.ToolLoopDeciderTest do
   end
 
   defp action_tool(name) do
-    %AgentCore.Types.AgentTool{
+    %LemonAgent.Types.AgentTool{
       name: name,
       description: "#{name} action",
       parameters: %{"type" => "object", "properties" => %{}},
@@ -240,7 +240,7 @@ defmodule LemonSim.LLM.Deciders.ToolLoopDeciderTest do
       execute: fn _id, _params, _signal, _on_update ->
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("#{name} committed")],
+           content: [LemonAgent.text_content("#{name} committed")],
            details: %{ok: true, event: %{"kind" => "#{name}_committed"}},
            trust: :trusted
          }}
@@ -249,7 +249,7 @@ defmodule LemonSim.LLM.Deciders.ToolLoopDeciderTest do
   end
 
   defp memory_tool(name) do
-    %AgentCore.Types.AgentTool{
+    %LemonAgent.Types.AgentTool{
       name: name,
       description: "#{name} support tool",
       parameters: %{"type" => "object", "properties" => %{}},
@@ -257,7 +257,7 @@ defmodule LemonSim.LLM.Deciders.ToolLoopDeciderTest do
       execute: fn _id, _params, _signal, _on_update ->
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("ok")],
+           content: [LemonAgent.text_content("ok")],
            details: %{ok: true},
            trust: :trusted
          }}

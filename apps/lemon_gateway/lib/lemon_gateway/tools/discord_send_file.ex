@@ -1,14 +1,14 @@
 defmodule LemonGateway.Tools.DiscordSendFile do
   @moduledoc """
-  AgentCore tool definition for sending files to Discord.
+  LemonAgent tool definition for sending files to Discord.
 
   Resolves the file path relative to the project or workspace root, validates
   the file size, and queues it for delivery to the active Discord channel or
   thread as an attachment with an optional caption.
   """
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.TextContent
 
   @default_max_bytes 25 * 1024 * 1024
 

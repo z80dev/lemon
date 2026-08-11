@@ -10,9 +10,9 @@ defmodule CodingAgent.Tools.TodoReadTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.Tools.{TodoRead, TodoStore}
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias AgentCore.AbortSignal
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.AbortSignal
+  alias LemonAi.Types.TextContent
 
   setup do
     # Clear the store before each test to ensure isolation

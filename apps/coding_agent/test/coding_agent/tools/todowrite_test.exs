@@ -4,9 +4,9 @@ defmodule CodingAgent.Tools.TodoWriteToolTest do
   alias CodingAgent.Tools.TodoWrite
   alias CodingAgent.Tools.TodoRead
   alias CodingAgent.Tools.TodoStore
-  alias AgentCore.Types.AgentToolResult
-  alias AgentCore.AbortSignal
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.AgentToolResult
+  alias LemonAgent.AbortSignal
+  alias LemonAi.Types.TextContent
 
   setup do
     session_id = "todowrite_test_#{System.unique_integer([:positive])}"

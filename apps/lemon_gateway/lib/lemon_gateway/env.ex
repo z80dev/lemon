@@ -19,7 +19,7 @@ defmodule LemonGateway.Env do
       secret?: true,
       required?: false,
       area: :provider_secrets,
-      apps: [:ai]
+      apps: [:lemon_ai]
     },
     %{
       name: :lemon_gateway_health_port,

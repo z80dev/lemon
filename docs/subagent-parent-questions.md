@@ -401,7 +401,7 @@ end
 
 ```elixir
 defmodule CodingAgent.Tools.AskParent do
-  @spec tool(String.t(), keyword()) :: AgentCore.Types.AgentTool.t()
+  @spec tool(String.t(), keyword()) :: LemonAgent.Types.AgentTool.t()
 end
 ```
 
@@ -409,7 +409,7 @@ end
 
 ```elixir
 defmodule CodingAgent.ParentQuestionCoordinator do
-  @spec request(map(), keyword()) :: AgentCore.Types.AgentToolResult.t() | {:error, term()}
+  @spec request(map(), keyword()) :: LemonAgent.Types.AgentToolResult.t() | {:error, term()}
   @spec answer(String.t(), String.t(), keyword()) :: :ok | {:error, term()}
 end
 ```

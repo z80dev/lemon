@@ -3,12 +3,12 @@ defmodule CodingAgent.AgentLoopIntegrationTest do
   Integration tests for the full CodingAgent loop with real API calls.
 
   These tests verify the complete flow:
-  1. User prompt → Session → AgentCore → AI Provider → Real API
+  1. User prompt → Session → LemonAgent → AI Provider → Real API
   2. Model response with tool calls → Tool execution → Tool results
   3. Multi-turn conversations with context preservation
   4. Session persistence with real messages
 
-  Configuration is done via environment variables - see Ai.Test.IntegrationConfig.
+  Configuration is done via environment variables - see LemonAi.Test.IntegrationConfig.
 
   To run these tests:
 
@@ -26,8 +26,8 @@ defmodule CodingAgent.AgentLoopIntegrationTest do
 
   alias CodingAgent.Session
   alias CodingAgent.SettingsManager
-  alias Ai.Types.{AssistantMessage, TextContent}
-  alias Ai.Test.IntegrationConfig
+  alias LemonAi.Types.{AssistantMessage, TextContent}
+  alias LemonAi.Test.IntegrationConfig
 
   # ============================================================================
   # Test Configuration
@@ -125,8 +125,8 @@ defmodule CodingAgent.AgentLoopIntegrationTest do
 
   setup_all do
     # Ensure provider registry is initialized
-    Ai.ProviderRegistry.init()
-    Ai.ProviderRegistry.register(:anthropic_messages, Ai.Providers.Anthropic)
+    LemonAi.ProviderRegistry.init()
+    LemonAi.ProviderRegistry.register(:anthropic_messages, LemonAi.Providers.Anthropic)
     IO.puts("\n[Agent Loop Tests] Configuration: #{IntegrationConfig.describe()}")
     :ok
   end
@@ -177,7 +177,7 @@ defmodule CodingAgent.AgentLoopIntegrationTest do
 
               # Should have message_start for user
               assert Enum.any?(events, fn
-                       {:message_start, %Ai.Types.UserMessage{}} -> true
+                       {:message_start, %LemonAi.Types.UserMessage{}} -> true
                        _ -> false
                      end)
 

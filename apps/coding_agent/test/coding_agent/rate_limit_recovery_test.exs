@@ -2,7 +2,7 @@ defmodule CodingAgent.RateLimitRecoveryTest do
   use ExUnit.Case, async: true
 
   alias CodingAgent.RateLimitRecovery
-  alias Ai.Types.Model
+  alias LemonAi.Types.Model
 
   @test_model %Model{
     id: "test-model-large",

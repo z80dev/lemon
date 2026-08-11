@@ -23,7 +23,7 @@ defmodule LemonSim.LLM.GameHelpers.Config do
     model_spec = config.agent.default_model
 
     case resolve_model_spec(provider, model_spec) do
-      %Ai.Types.Model{} = model ->
+      %LemonAi.Types.Model{} = model ->
         apply_provider_base_url(model, config)
 
       nil ->
@@ -101,17 +101,17 @@ defmodule LemonSim.LLM.GameHelpers.Config do
 
   def resolve_model_spec(_provider, _model_spec), do: nil
 
-  def lookup_model(nil, model_id), do: Ai.Models.find_by_id(model_id)
-  def lookup_model("", model_id), do: Ai.Models.find_by_id(model_id)
+  def lookup_model(nil, model_id), do: LemonAi.Models.find_by_id(model_id)
+  def lookup_model("", model_id), do: LemonAi.Models.find_by_id(model_id)
 
   def lookup_model(provider, model_id) when is_binary(provider) and is_binary(model_id) do
     normalized = normalize_provider(provider)
 
-    Ai.Models.get_model(normalized, model_id) ||
-      Ai.Models.get_model(String.to_atom(String.trim(provider)), model_id)
+    LemonAi.Models.get_model(normalized, model_id) ||
+      LemonAi.Models.get_model(String.to_atom(String.trim(provider)), model_id)
   end
 
-  def apply_provider_base_url(%Ai.Types.Model{} = model, config) do
+  def apply_provider_base_url(%LemonAi.Types.Model{} = model, config) do
     provider_name = provider_name(model.provider)
     provider_cfg = Providers.get_provider(config.providers, provider_name)
     base_url = provider_cfg[:base_url]
@@ -151,7 +151,7 @@ defmodule LemonSim.LLM.GameHelpers.Config do
 
   defp resolve_secret_api_key(secret_name, secret_value)
        when is_binary(secret_name) and is_binary(secret_value) do
-    case Ai.Auth.OAuthSecretResolver.resolve_api_key_from_secret(
+    case LemonAi.Auth.OAuthSecretResolver.resolve_api_key_from_secret(
            secret_name,
            secret_value
          ) do
@@ -206,7 +206,7 @@ defmodule LemonSim.LLM.GameHelpers.Config do
           end
         end)
         |> Kernel.||(
-          AgentCore.ModelRuntime.Credentials.resolve_provider_api_key("openai-codex", %{
+          LemonAgent.ModelRuntime.Credentials.resolve_provider_api_key("openai-codex", %{
             "openai-codex" => %{"auth_source" => "oauth"}
           })
         )

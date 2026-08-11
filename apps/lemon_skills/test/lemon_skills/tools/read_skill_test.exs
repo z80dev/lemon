@@ -1,8 +1,8 @@
 defmodule LemonSkills.Tools.ReadSkillTest do
   use ExUnit.Case, async: false
 
-  alias AgentCore.Types.AgentToolResult
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.AgentToolResult
+  alias LemonAi.Types.TextContent
   alias LemonCore.{Introspection, Store}
   alias LemonSkills.Tools.ReadSkill
 

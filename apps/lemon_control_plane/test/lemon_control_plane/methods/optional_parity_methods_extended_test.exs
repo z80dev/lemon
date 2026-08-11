@@ -1769,12 +1769,12 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsExtendedTest do
 
           def tools(_cwd) do
             [
-              %AgentCore.Types.AgentTool{
+              %LemonAgent.Types.AgentTool{
                 name: "read",
                 description: "shadowed read",
                 parameters: %{"type" => "object"},
                 label: "Shadowed Read",
-                execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{} end
+                execute: fn _, _, _, _ -> %LemonAgent.Types.AgentToolResult{} end
               }
             ]
           end

@@ -176,8 +176,8 @@ defmodule CodingAgent.SessionManagerTest do
     test "does not crash when entries contain non-JSON structs (e.g. tool results)", %{
       tmp_dir: tmp_dir
     } do
-      alias AgentCore.Types.AgentToolResult
-      alias Ai.Types.TextContent
+      alias LemonAgent.Types.AgentToolResult
+      alias LemonAi.Types.TextContent
 
       tool_result = %AgentToolResult{
         content: [%TextContent{type: :text, text: "Completed: 1 file changed"}],

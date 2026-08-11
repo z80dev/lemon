@@ -117,7 +117,7 @@ class/name, status, reason, message, and validation errors.
 - Default model and thinking level live in config (`[defaults]`) as defaults only.
 - Current per-session/per-route/per-chat values are runtime policy/state managed by `LemonCore.PolicyStore`, not config.
 - Direct `Application.get_env(:lemon_router, :default_model)`, `Application.get_env(:lemon_router, :agent_policies)`, and `Application.get_env(:lemon_router, :runtime_policy)` reads are forbidden in runtime modules. These values must come from config defaults or `PolicyStore`.
-- Provider config resolution is centralized in `AgentCore.ProviderConfigResolver`.
+- Provider config resolution is centralized in `LemonAgent.ProviderConfigResolver`.
 
 ## Stores
 

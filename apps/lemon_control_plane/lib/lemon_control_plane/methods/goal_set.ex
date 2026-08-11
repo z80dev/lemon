@@ -24,7 +24,7 @@ defmodule LemonControlPlane.Methods.GoalSet do
         {:error, {:invalid_request, "objective is required", nil}}
 
       true ->
-        case AgentCore.Workspace.GoalStore.set(session_key, objective,
+        case LemonAgent.Workspace.GoalStore.set(session_key, objective,
                agent_id: param(params, "agentId"),
                run_id: param(params, "runId"),
                budget: budget(params)

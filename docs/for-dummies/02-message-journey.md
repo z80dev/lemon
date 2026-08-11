@@ -202,7 +202,7 @@ lemon_gateway (Run)  ---->  coding_agent + agent_core
 
 ## Step 12: The Agent Loop
 
-Now we're in the heart of Lemon. The `AgentCore.Loop` starts:
+Now we're in the heart of Lemon. The `LemonAgent.Loop` starts:
 
 1. **Build the context** — your message + conversation history + system prompt
 2. **Call the LLM** — sends everything to Claude (or whatever model is

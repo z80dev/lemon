@@ -389,7 +389,7 @@ defmodule LemonCore.Env.Declarations do
       secret?: false,
       required?: false,
       area: :platform,
-      apps: [:lemon_core, :ai, :coding_agent]
+      apps: [:lemon_core, :lemon_ai, :coding_agent]
     },
     %{
       name: :mix_env,

@@ -1,12 +1,12 @@
 defmodule LemonSkills.Tools.MemoryTest do
   use ExUnit.Case, async: true
 
-  alias AgentCore.Types.AgentToolResult
+  alias LemonAgent.Types.AgentToolResult
   alias LemonSkills.Tools.Memory
 
   defp text(%AgentToolResult{content: content}) do
-    case Enum.find(content, &match?(%Ai.Types.TextContent{}, &1)) do
-      %Ai.Types.TextContent{text: text} -> text
+    case Enum.find(content, &match?(%LemonAi.Types.TextContent{}, &1)) do
+      %LemonAi.Types.TextContent{text: text} -> text
       _ -> ""
     end
   end

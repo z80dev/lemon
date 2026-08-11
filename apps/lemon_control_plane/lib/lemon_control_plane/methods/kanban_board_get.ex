@@ -16,10 +16,10 @@ defmodule LemonControlPlane.Methods.KanbanBoardGet do
   @impl true
   def handle(params, _ctx) do
     with {:ok, board_id} <- KanbanFormat.required(params, "boardId") do
-      board = AgentCore.Workspace.KanbanStore.get_board(board_id)
+      board = LemonAgent.Workspace.KanbanStore.get_board(board_id)
 
       tasks =
-        AgentCore.Workspace.KanbanStore.list_tasks(board_id,
+        LemonAgent.Workspace.KanbanStore.list_tasks(board_id,
           limit: KanbanFormat.param(params, "limit") || 100
         )
 

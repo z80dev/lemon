@@ -150,7 +150,7 @@ orchestration, document open/change/close notifications, JSON-RPC request
 framing, and diagnostic notification counters.
 
 `kanban` is implemented in `LemonSkills.Tools` and is the model-facing durable board tool. It creates/lists boards,
-creates/lists/updates/comments tasks, and reads from `AgentCore.Workspace.KanbanStore` so
+creates/lists/updates/comments tasks, and reads from `LemonAgent.Workspace.KanbanStore` so
 multi-agent work can outlive one session. Kanban-dispatched worker runs block
 the `kanban` tool through tool policy to avoid recursive board management.
 
@@ -321,9 +321,9 @@ Lemon includes built-in harness primitives to support multi-step, long-lived imp
 defmodule CodingAgent.Tools.MyTool do
   @moduledoc "Description of what my tool does"
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias AgentCore.AbortSignal
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.AbortSignal
+  alias LemonAi.Types.TextContent
 
   @spec tool(String.t(), keyword()) :: AgentTool.t()
   def tool(cwd, opts \\ []) do
@@ -406,7 +406,7 @@ LLM requests tool
 # Under supervision (preferred -- falls back to start_link if supervisor not running)
 {:ok, session} = CodingAgent.start_session(
   cwd: "/path/to/project",
-  model: Ai.Models.get_model(:anthropic, "claude-sonnet-4-20250514"),
+  model: LemonAi.Models.get_model(:anthropic, "claude-sonnet-4-20250514"),
   system_prompt: "Custom system prompt (optional)",
   prompt_template: "review",  # loads .lemon/prompts/review.md (optional)
   extra_tools: [],            # extra AgentTool structs appended to default toolset
@@ -462,7 +462,7 @@ unsubscribe.()
 # Stream mode: backpressure-aware EventStream
 {:ok, stream_pid} = CodingAgent.Session.subscribe(session, mode: :stream)
 stream_pid
-|> AgentCore.EventStream.events()
+|> LemonAgent.EventStream.events()
 |> Enum.each(fn {:session_event, _id, event} -> IO.inspect(event) end)
 ```
 
@@ -566,7 +566,7 @@ defmodule MyExtension do
 
   @impl true
   def tools(cwd) do
-    [%AgentCore.Types.AgentTool{name: "my_tool", ...}]
+    [%LemonAgent.Types.AgentTool{name: "my_tool", ...}]
   end
 
   @impl true
@@ -850,8 +850,8 @@ apps/coding_agent/
 ## Key Types
 
 ```elixir
-# AgentTool from AgentCore -- the core tool contract
-%AgentCore.Types.AgentTool{
+# AgentTool from LemonAgent -- the core tool contract
+%LemonAgent.Types.AgentTool{
   name: "tool_name",          # used in LLM tool call
   description: "What it does",
   label: "Display Label",     # human-readable (UI)
@@ -860,8 +860,8 @@ apps/coding_agent/
 }
 
 # AgentToolResult -- returned by execute/4
-%AgentCore.Types.AgentToolResult{
-  content: [%Ai.Types.TextContent{text: "result"}],
+%LemonAgent.Types.AgentToolResult{
+  content: [%LemonAi.Types.TextContent{text: "result"}],
   details: %{}   # structured metadata shown in UI (optional)
 }
 
@@ -911,8 +911,8 @@ settings = CodingAgent.SettingsManager.load(cwd)
 Default model resolution consumes `runtime.provider_routing` conservatively:
 when the configured default provider has no ready credentials, routing is
 enabled, and a configured fallback/profile/pool provider has credentials plus
-the same model id in `Ai.Models`, `CodingAgent.Session.ModelResolver` selects
-the fallback before starting the supervised `AgentCore.Agent`. Explicit user
+the same model id in `LemonAi.Models`, `CodingAgent.Session.ModelResolver` selects
+the fallback before starting the supervised `LemonAgent.Agent`. Explicit user
 model specs are not rewritten. Default-model streams are also wrapped by
 `CodingAgent.Session.ProviderFallback`: if the selected provider fails before
 visible assistant content or tool calls are emitted, the same turn is retried
@@ -934,7 +934,7 @@ Provider API key resolution is handled by `CodingAgent.Session.ModelResolver` wi
 3. `providers.<name>.api_key_secret` from `LemonCore.Secrets`
 4. Default secret name `llm_<provider>_api_key` (Anthropic raw API keys use `llm_anthropic_api_key_raw`; Claude OAuth uses `llm_anthropic_api_key`)
 
-When a secret value is an OAuth payload, `AgentCore.ModelRuntime.Credentials` dispatches to provider-specific OAuth decoders (Anthropic, Copilot, Google Antigravity, Google Gemini CLI, OpenAI Codex), refreshes near expiry, and best-effort persists refreshed tokens back to `LemonCore.Secrets`.
+When a secret value is an OAuth payload, `LemonAgent.ModelRuntime.Credentials` dispatches to provider-specific OAuth decoders (Anthropic, Copilot, Google Antigravity, Google Gemini CLI, OpenAI Codex), refreshes near expiry, and best-effort persists refreshed tokens back to `LemonCore.Secrets`.
 
 ## Testing Guidelines
 

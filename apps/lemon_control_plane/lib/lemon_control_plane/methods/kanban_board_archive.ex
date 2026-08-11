@@ -16,7 +16,7 @@ defmodule LemonControlPlane.Methods.KanbanBoardArchive do
   @impl true
   def handle(params, _ctx) do
     with {:ok, board_id} <- KanbanFormat.required(params, "boardId") do
-      case AgentCore.Workspace.KanbanStore.archive_board(board_id) do
+      case LemonAgent.Workspace.KanbanStore.archive_board(board_id) do
         {:ok, board} -> {:ok, KanbanFormat.board_response(name(), board)}
         {:error, reason} -> {:error, {:invalid_request, inspect(reason), nil}}
       end

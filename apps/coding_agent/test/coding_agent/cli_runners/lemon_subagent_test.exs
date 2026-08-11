@@ -3,7 +3,7 @@ defmodule CodingAgent.CliRunners.LemonSubagentTest do
 
   alias CodingAgent.CliRunners.LemonSubagent
 
-  alias AgentCore.CliRunners.Types.{
+  alias LemonAgent.CliRunners.Types.{
     Action,
     ActionEvent,
     CompletedEvent,
@@ -11,7 +11,7 @@ defmodule CodingAgent.CliRunners.LemonSubagentTest do
     StartedEvent
   }
 
-  alias AgentCore.EventStream
+  alias LemonAgent.EventStream
 
   # ============================================================================
   # API Structure Tests

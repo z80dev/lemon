@@ -129,7 +129,7 @@ defmodule CodingAgent.Session.EventHandlerTest do
       state: state,
       callbacks: callbacks
     } do
-      aborted_msg = %Ai.Types.AssistantMessage{stop_reason: :aborted, content: []}
+      aborted_msg = %LemonAi.Types.AssistantMessage{stop_reason: :aborted, content: []}
 
       result = EventHandler.handle({:turn_end, aborted_msg, []}, state, callbacks)
 
@@ -144,7 +144,7 @@ defmodule CodingAgent.Session.EventHandlerTest do
       state: state,
       callbacks: callbacks
     } do
-      normal_msg = %Ai.Types.AssistantMessage{stop_reason: :stop, content: []}
+      normal_msg = %LemonAi.Types.AssistantMessage{stop_reason: :stop, content: []}
 
       result = EventHandler.handle({:turn_end, normal_msg, []}, state, callbacks)
 
@@ -183,7 +183,7 @@ defmodule CodingAgent.Session.EventHandlerTest do
         event_streams: %{"s1" => :r1}
       }
 
-      aborted_msg = %Ai.Types.AssistantMessage{stop_reason: :aborted, content: []}
+      aborted_msg = %LemonAi.Types.AssistantMessage{stop_reason: :aborted, content: []}
 
       result = EventHandler.handle({:message_end, aborted_msg}, state, persist_callbacks)
 
@@ -215,7 +215,7 @@ defmodule CodingAgent.Session.EventHandlerTest do
         event_streams: %{"s1" => :r1}
       }
 
-      normal_msg = %Ai.Types.AssistantMessage{stop_reason: :stop, content: []}
+      normal_msg = %LemonAi.Types.AssistantMessage{stop_reason: :stop, content: []}
 
       result = EventHandler.handle({:message_end, normal_msg}, state, persist_callbacks)
 
@@ -317,7 +317,7 @@ defmodule CodingAgent.Session.EventHandlerTest do
       }
 
       messages = [
-        %Ai.Types.ToolResultMessage{
+        %LemonAi.Types.ToolResultMessage{
           tool_name: "read_skill",
           details: %{key: "github-pr-workflow"}
         }
@@ -353,7 +353,7 @@ defmodule CodingAgent.Session.EventHandlerTest do
       }
 
       messages = [
-        %Ai.Types.UserMessage{
+        %LemonAi.Types.UserMessage{
           content:
             "Last time we learned a reusable workflow for deployment incidents. Remember this decision and create a skill next time.",
           timestamp: System.system_time(:millisecond)
@@ -403,14 +403,14 @@ defmodule CodingAgent.Session.EventHandlerTest do
       }
 
       messages = [
-        %Ai.Types.UserMessage{
+        %LemonAi.Types.UserMessage{
           content:
             "Last time we learned a reusable workflow for deployment incidents. Remember this decision.",
           timestamp: System.system_time(:millisecond)
         },
-        %Ai.Types.ToolResultMessage{tool_name: "search_memory", content: []},
-        %Ai.Types.ToolResultMessage{tool_name: "skill_manage", content: []},
-        %Ai.Types.ToolResultMessage{tool_name: "memory_topic", content: []}
+        %LemonAi.Types.ToolResultMessage{tool_name: "search_memory", content: []},
+        %LemonAi.Types.ToolResultMessage{tool_name: "skill_manage", content: []},
+        %LemonAi.Types.ToolResultMessage{tool_name: "memory_topic", content: []}
       ]
 
       EventHandler.handle({:agent_end, messages}, state, callbacks)

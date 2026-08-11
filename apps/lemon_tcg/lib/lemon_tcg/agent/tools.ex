@@ -1,6 +1,6 @@
 defmodule LemonTcg.Agent.Tools do
   @moduledoc """
-  `AgentCore.Types.AgentTool` surface for operating a `LemonTcg.Desk`.
+  `LemonAgent.Types.AgentTool` surface for operating a `LemonTcg.Desk`.
 
   Mirrors the sim's `LemonSim.Examples.TcgShop.ActionSpace` naming
   (`tcg_live_*`) so an agent trained against the sim maps straight onto
@@ -13,7 +13,7 @@ defmodule LemonTcg.Agent.Tools do
   from the same tool executions.
   """
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonTcg.Desk
 
   @doc "Build the tool list bound to a running desk process."
@@ -333,7 +333,7 @@ defmodule LemonTcg.Agent.Tools do
   defp text_result(text, event_kind, payload) do
     {:ok,
      %AgentToolResult{
-       content: [AgentCore.text_content(text)],
+       content: [LemonAgent.text_content(text)],
        details: %{"event" => %{"kind" => event_kind, "payload" => payload}},
        trust: :trusted
      }}
@@ -342,7 +342,7 @@ defmodule LemonTcg.Agent.Tools do
   defp error_result(text, action, subject) do
     {:ok,
      %AgentToolResult{
-       content: [AgentCore.text_content(text)],
+       content: [LemonAgent.text_content(text)],
        details: %{
          "error" => true,
          "event" => %{

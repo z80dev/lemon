@@ -1,12 +1,12 @@
-# AgentCore.Context - Conversation Context Management
+# LemonAgent.Context - Conversation Context Management
 
-This document describes the `AgentCore.Context` module for managing conversation context size in agent sessions.
+This document describes the `LemonAgent.Context` module for managing conversation context size in agent sessions.
 
-> **Memory scopes:** For the frozen definitions of `session`, `workspace`, `agent`, and `global` memory scopes, see [`docs/assistant_bootstrap_contract.md`](assistant_bootstrap_contract.md#memory-scopes). `AgentCore.Context` operates within the `session` scope — it manages the in-flight conversation window for a single run, not cross-run or cross-workspace memory.
+> **Memory scopes:** For the frozen definitions of `session`, `workspace`, `agent`, and `global` memory scopes, see [`docs/assistant_bootstrap_contract.md`](assistant_bootstrap_contract.md#memory-scopes). `LemonAgent.Context` operates within the `session` scope — it manages the in-flight conversation window for a single run, not cross-run or cross-workspace memory.
 
 ## Overview
 
-The `AgentCore.Context` module provides utilities for:
+The `LemonAgent.Context` module provides utilities for:
 
 - **Estimating** context size (characters and tokens)
 - **Checking** if context exceeds warning thresholds
@@ -22,7 +22,7 @@ Context management is critical for:
 
 ## Location
 
-File: `apps/agent_core/lib/agent_core/context.ex`
+File: `apps/lemon_agent/lib/lemon_agent/context.ex`
 
 ## Size Estimation
 
@@ -32,11 +32,11 @@ Estimates the total size of a conversation context in characters.
 
 ```elixir
 # Estimate size of messages + system prompt
-size = AgentCore.Context.estimate_size(messages, system_prompt)
+size = LemonAgent.Context.estimate_size(messages, system_prompt)
 # => 15000
 
 # Without system prompt
-size = AgentCore.Context.estimate_size(messages)
+size = LemonAgent.Context.estimate_size(messages)
 # => 12500
 ```
 
@@ -50,7 +50,7 @@ The function handles:
 Converts character count to approximate token count using a ratio of 4 characters per token.
 
 ```elixir
-tokens = AgentCore.Context.estimate_tokens(4000)
+tokens = LemonAgent.Context.estimate_tokens(4000)
 # => 1000
 ```
 
@@ -63,12 +63,12 @@ tokens = AgentCore.Context.estimate_tokens(4000)
 Quick check if context exceeds a threshold (default: 200,000 characters / ~50k tokens).
 
 ```elixir
-if AgentCore.Context.large_context?(messages, system_prompt) do
+if LemonAgent.Context.large_context?(messages, system_prompt) do
   Logger.warning("Context is getting large")
 end
 
 # With custom threshold
-if AgentCore.Context.large_context?(messages, system_prompt, threshold: 100_000) do
+if LemonAgent.Context.large_context?(messages, system_prompt, threshold: 100_000) do
   truncate_context()
 end
 ```
@@ -78,7 +78,7 @@ end
 Comprehensive check that emits warnings and telemetry when thresholds are exceeded.
 
 ```elixir
-case AgentCore.Context.check_size(messages, system_prompt) do
+case LemonAgent.Context.check_size(messages, system_prompt) do
   :ok -> :continue
   :warning -> Logger.info("Consider truncating context")
   :critical -> truncate_context()
@@ -101,7 +101,7 @@ end
 Truncates message history to fit within limits while preserving context quality.
 
 ```elixir
-{truncated, dropped_count} = AgentCore.Context.truncate(messages, max_messages: 50)
+{truncated, dropped_count} = LemonAgent.Context.truncate(messages, max_messages: 50)
 IO.puts("Dropped #{dropped_count} messages")
 ```
 
@@ -126,7 +126,7 @@ Creates a transform function for use with `AgentLoopConfig.transform_context`.
 config = %AgentLoopConfig{
   model: model,
   convert_to_llm: &convert/1,
-  transform_context: AgentCore.Context.make_transform(
+  transform_context: LemonAgent.Context.make_transform(
     max_messages: 100,
     max_chars: 500_000,
     strategy: :sliding_window,
@@ -147,7 +147,7 @@ The transform function will automatically truncate messages at each loop iterati
 Returns comprehensive statistics about the current context.
 
 ```elixir
-stats = AgentCore.Context.stats(messages, system_prompt)
+stats = LemonAgent.Context.stats(messages, system_prompt)
 # => %{
 #   message_count: 50,
 #   char_count: 25000,
@@ -161,7 +161,7 @@ stats = AgentCore.Context.stats(messages, system_prompt)
 
 The module emits the following telemetry events:
 
-### [:agent_core, :context, :size]
+### [:lemon_agent, :context, :size]
 
 Emitted when `estimate_size/2` is called.
 
@@ -172,7 +172,7 @@ Emitted when `estimate_size/2` is called.
 **Metadata:**
 - `has_system_prompt` - Boolean indicating if system prompt was included
 
-### [:agent_core, :context, :warning]
+### [:lemon_agent, :context, :warning]
 
 Emitted when `check_size/3` detects context exceeding a threshold.
 
@@ -183,7 +183,7 @@ Emitted when `check_size/3` detects context exceeding a threshold.
 **Metadata:**
 - `level` - `:warning` or `:critical`
 
-### [:agent_core, :context, :truncated]
+### [:lemon_agent, :context, :truncated]
 
 Emitted when `truncate/2` drops messages.
 
@@ -202,7 +202,7 @@ The agent loop automatically calls `check_size/2` at each iteration. To enable a
 # In your session or agent configuration
 config = %AgentLoopConfig{
   # ... other config ...
-  transform_context: AgentCore.Context.make_transform(
+  transform_context: LemonAgent.Context.make_transform(
     max_messages: 100,
     max_chars: 500_000
   )
@@ -214,7 +214,7 @@ config = %AgentLoopConfig{
 ### Basic Usage
 
 ```elixir
-alias AgentCore.Context
+alias LemonAgent.Context
 
 # Check context size before making LLM call
 messages = session.messages

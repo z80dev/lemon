@@ -9,7 +9,7 @@ end
 Application.ensure_all_started(:coding_agent)
 
 defmodule LemonScripts.LiveProviderFallbackSmoke do
-  alias Ai.Types.{Context, StreamOptions, UserMessage}
+  alias LemonAi.Types.{Context, StreamOptions, UserMessage}
   alias CodingAgent.Session.{ModelResolver, ProviderFallback}
   alias CodingAgent.SettingsManager
 
@@ -75,7 +75,7 @@ defmodule LemonScripts.LiveProviderFallbackSmoke do
            stream_timeout: 120_000
          }) do
       {:ok, stream} ->
-        case Ai.EventStream.result(stream, 130_000) do
+        case LemonAi.EventStream.result(stream, 130_000) do
           {:ok, message} ->
             proof(:completed, %{
               primary_provider: config.primary_provider,
@@ -118,7 +118,7 @@ defmodule LemonScripts.LiveProviderFallbackSmoke do
         model = opts[:model] || "glm-5-turbo"
         config = LemonCore.Config.load(File.cwd!(), cache: false)
 
-        if AgentCore.ModelRuntime.Credentials.provider_has_credentials?(fallback_provider, config.providers,
+        if LemonAgent.ModelRuntime.Credentials.provider_has_credentials?(fallback_provider, config.providers,
              cwd: File.cwd!()
            ) do
           {:ok,

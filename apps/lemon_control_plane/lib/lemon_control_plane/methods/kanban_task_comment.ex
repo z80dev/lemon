@@ -17,7 +17,7 @@ defmodule LemonControlPlane.Methods.KanbanTaskComment do
   def handle(params, _ctx) do
     with {:ok, task_id} <- KanbanFormat.required(params, "taskId"),
          {:ok, body} <- KanbanFormat.required(params, "body") do
-      case AgentCore.Workspace.KanbanStore.add_comment(task_id, body,
+      case LemonAgent.Workspace.KanbanStore.add_comment(task_id, body,
              author: KanbanFormat.param(params, "author")
            ) do
         {:ok, task} -> {:ok, KanbanFormat.task_response(name(), task)}

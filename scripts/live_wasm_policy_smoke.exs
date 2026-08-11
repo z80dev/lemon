@@ -1,9 +1,9 @@
 {:ok, _} = Application.ensure_all_started(:coding_agent)
 
-alias AgentCore.Types.AgentToolResult
-alias Ai.Types.TextContent
+alias LemonAgent.Types.AgentToolResult
+alias LemonAi.Types.TextContent
 alias CodingAgent.ToolRegistry
-alias AgentCore.Types.AgentTool
+alias LemonAgent.Types.AgentTool
 
 now = DateTime.utc_now()
 

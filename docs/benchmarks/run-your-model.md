@@ -5,8 +5,8 @@ VendingBench with `--model` and, optionally, a separate `--worker-model`.
 
 ## Model Resolution
 
-Model ids resolve through the `ai` app's `Ai.Models` registry. The current
-source has 27 providers in `Ai.Models.get_providers/0`.
+Model ids resolve through the `ai` app's `LemonAi.Models` registry. The current
+source has 27 providers in `LemonAi.Models.get_providers/0`.
 
 Use either:
 
@@ -14,7 +14,7 @@ Use either:
 provider:model-id
 ```
 
-or a bare model id when it is unique enough for `Ai.Models.find_by_id/1`.
+or a bare model id when it is unique enough for `LemonAi.Models.find_by_id/1`.
 
 For a live run, replace the quickstart's `--offline-strategy baseline` with
 `--model provider:model-id`. Add `--worker-model provider:model-id` when the

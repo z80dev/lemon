@@ -1,8 +1,8 @@
 defmodule LemonSim.LLM.Deciders.ToolLoopDeciderTransientRetryTest do
   use ExUnit.Case, async: true
 
-  alias AgentCore.Types.AgentToolResult
-  alias Ai.Types.{AssistantMessage, Context, Model, ToolCall}
+  alias LemonAgent.Types.AgentToolResult
+  alias LemonAi.Types.{AssistantMessage, Context, Model, ToolCall}
   alias LemonSim.LLM.Deciders.ToolLoopDecider
 
   test "retries a transient rate-limit error and eventually succeeds" do
@@ -154,7 +154,7 @@ defmodule LemonSim.LLM.Deciders.ToolLoopDeciderTransientRetryTest do
       base_url: "https://example.invalid",
       reasoning: false,
       input: [:text],
-      cost: %Ai.Types.ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
+      cost: %LemonAi.Types.ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
       context_window: 128_000,
       max_tokens: 4_096,
       headers: %{},
@@ -163,7 +163,7 @@ defmodule LemonSim.LLM.Deciders.ToolLoopDeciderTransientRetryTest do
   end
 
   defp action_tool(name) do
-    %AgentCore.Types.AgentTool{
+    %LemonAgent.Types.AgentTool{
       name: name,
       description: "#{name} action",
       parameters: %{"type" => "object", "properties" => %{}},
@@ -171,7 +171,7 @@ defmodule LemonSim.LLM.Deciders.ToolLoopDeciderTransientRetryTest do
       execute: fn _id, _params, _signal, _on_update ->
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("#{name} committed")],
+           content: [LemonAgent.text_content("#{name} committed")],
            details: %{ok: true, event: %{"kind" => "#{name}_committed"}},
            trust: :trusted
          }}

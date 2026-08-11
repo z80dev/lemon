@@ -2,7 +2,7 @@ defmodule LemonChannels.Adapters.Discord.ModelCatalog do
   @moduledoc """
   Model/provider catalog for the Discord adapter's `/model` picker.
 
-  Builds the grouped, enabled-provider catalog from `Ai.Models` (falling back to a
+  Builds the grouped, enabled-provider catalog from `LemonAi.Models` (falling back to a
   small static list when that module is unavailable), and resolves which providers
   are enabled from `LemonCore.Config`. Pure with respect to transport state;
   extracted from `LemonChannels.Adapters.Discord.Transport` so the picker's data
@@ -42,7 +42,7 @@ defmodule LemonChannels.Adapters.Discord.ModelCatalog do
   def model_label(other), do: inspect(other)
 
   defp available_model_catalog do
-    models_module = :"Elixir.Ai.Models"
+    models_module = :"Elixir.LemonAi.Models"
 
     models =
       if Code.ensure_loaded?(models_module) and function_exported?(models_module, :list_models, 0) do
@@ -173,7 +173,7 @@ defmodule LemonChannels.Adapters.Discord.ModelCatalog do
   end
 
   defp provider_has_credentials?(provider, configured) do
-    AgentCore.ModelRuntime.Credentials.provider_has_credentials?(provider, configured)
+    LemonAgent.ModelRuntime.Credentials.provider_has_credentials?(provider, configured)
   rescue
     _ -> false
   end

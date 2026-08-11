@@ -1,7 +1,7 @@
 defmodule LemonSim.Examples.WerewolfVisibilityTest do
   use ExUnit.Case, async: true
 
-  alias Ai.Types.UserMessage
+  alias LemonAi.Types.UserMessage
   alias LemonSim.Examples.Werewolf
   alias LemonSim.Examples.Werewolf.Events
   alias LemonSim.Kernel.{DecisionFrame, State}

@@ -305,7 +305,7 @@ mix lemon.onboard.codex
 ```
 
 What it does:
-- Resolves Codex OAuth credentials via `Ai.Auth.OpenAICodexOAuth`
+- Resolves Codex OAuth credentials via `LemonAi.Auth.OpenAICodexOAuth`
 - Stores credentials in encrypted secrets
 - Writes `providers.openai-codex.auth_source = "oauth"` plus `providers.openai-codex.oauth_secret`
 - Optionally updates `[defaults]` provider/model
@@ -377,7 +377,7 @@ All onboarding flows:
 
 Provider readiness is visible through the read-only control-plane
 `providers.status` method. It uses the same
-`AgentCore.ModelRuntime.Credentials` credential resolver as model execution, so env keys, encrypted
+`LemonAgent.ModelRuntime.Credentials` credential resolver as model execution, so env keys, encrypted
 secret references, OAuth/default-secret paths, and provider-specific credential
 shapes are checked the same way runtime calls check them. The response reports
 booleans such as `credentialReady`, `apiKeyConfigured`,
@@ -428,7 +428,7 @@ raw API keys, secret names, base URLs, and env var names are not.
 Coding-agent default model resolution consumes the same routing policy
 conservatively: if the default provider is not credential-ready and a configured
 fallback/profile/pool provider is credential-ready with the same model id in
-`Ai.Models`, Lemon selects that fallback before starting the supervised agent
+`LemonAi.Models`, Lemon selects that fallback before starting the supervised agent
 loop. Pools default to priority order; `strategy = "round_robin"` rotates the
 pool's starting provider through `CodingAgent.ProviderPoolRotator`, a supervised
 BEAM process. Explicit user model specs are not rewritten.
@@ -440,7 +440,7 @@ the next credential-ready fallback provider with the same model id. Once visible
 content or a tool call has started, the error is surfaced instead of replayed so
 the transcript cannot duplicate partial output.
 
-Google Gemini CLI onboarding (`mix lemon.onboard gemini`) resolves OAuth credentials via `Ai.Auth.GoogleGeminiCliOAuth`, stores the encrypted payload in `providers.google_gemini_cli.api_key_secret`, writes `providers.google_gemini_cli.auth_source = "oauth"`, and can take `--project-id <gcp-project-id>` to force a specific Code Assist project. At runtime, Lemon re-resolves the active Gemini project from `providers.google_gemini_cli.project_id`, `providers.google_gemini_cli.project_secret`, `LEMON_GEMINI_PROJECT_ID`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_PROJECT_ID`, or `GCLOUD_PROJECT`, with those values overriding the `projectId` stored inside the OAuth payload.
+Google Gemini CLI onboarding (`mix lemon.onboard gemini`) resolves OAuth credentials via `LemonAi.Auth.GoogleGeminiCliOAuth`, stores the encrypted payload in `providers.google_gemini_cli.api_key_secret`, writes `providers.google_gemini_cli.auth_source = "oauth"`, and can take `--project-id <gcp-project-id>` to force a specific Code Assist project. At runtime, Lemon re-resolves the active Gemini project from `providers.google_gemini_cli.project_id`, `providers.google_gemini_cli.project_secret`, `LEMON_GEMINI_PROJECT_ID`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_PROJECT_ID`, or `GCLOUD_PROJECT`, with those values overriding the `projectId` stored inside the OAuth payload.
 
 The onboarding alias `gemini` maps to the runtime provider `google_gemini_cli`. This is distinct from the AI Studio provider `google`, which expects a separate API key such as `GOOGLE_GENERATIVE_AI_API_KEY`.
 

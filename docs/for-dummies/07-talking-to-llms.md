@@ -18,9 +18,9 @@ the same.
 
 The entire public API boils down to:
 
-- **`Ai.stream(model, context, opts)`** — start a streaming AI call, get back
+- **`LemonAi.stream(model, context, opts)`** — start a streaming AI call, get back
   an event stream
-- **`Ai.complete(model, context, opts)`** — blocking wrapper: calls `stream`,
+- **`LemonAi.complete(model, context, opts)`** — blocking wrapper: calls `stream`,
   then waits for the complete response
 
 Everything else in the `ai` package exists to support these two functions.
@@ -74,7 +74,7 @@ When you configure Lemon with a model like `"anthropic:claude-sonnet-4-20250514"
 "anthropic:claude-sonnet-4-20250514"
     → Model{api: :anthropic_messages}
         → ProviderRegistry.get(:anthropic_messages)
-            → Ai.Providers.Anthropic
+            → LemonAi.Providers.Anthropic
                 → Anthropic.stream(model, context, opts)
 ```
 
@@ -82,14 +82,14 @@ When you configure Lemon with a model like `"anthropic:claude-sonnet-4-20250514"
 
 ## How a Call Works
 
-Here's what happens inside `Ai.stream/3`:
+Here's what happens inside `LemonAi.stream/3`:
 
 ### 1. Dispatch
 
 The `CallDispatcher` wraps every AI call with reliability features:
 
 ```
-Ai.stream(model, context, opts)
+LemonAi.stream(model, context, opts)
     │
     ▼
 CallDispatcher.dispatch(provider_id, fn ->
@@ -173,7 +173,7 @@ A typical streaming AI call produces these events:
 The `Context` is the complete package sent to the LLM:
 
 ```
-%Ai.Types.Context{
+%LemonAi.Types.Context{
   system_prompt: "You are a personal assistant...",
   messages: [
     %UserMessage{content: "What files are in my home directory?"},
@@ -226,7 +226,7 @@ prevents resource exhaustion and respects provider rate limits.
 
 ### Error Classification
 
-When an HTTP error occurs, `Ai.Error` classifies it:
+When an HTTP error occurs, `LemonAi.Error` classifies it:
 
 | Category | Examples | Retry? |
 |----------|---------|--------|

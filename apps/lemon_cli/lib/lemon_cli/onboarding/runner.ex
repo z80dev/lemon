@@ -93,7 +93,7 @@ defmodule LemonCli.Onboarding.Runner do
   end
 
   defp ensure_required_apps_started! do
-    [:lemon_core, :ai]
+    [:lemon_core, :lemon_ai]
     |> Enum.each(fn app ->
       case Application.ensure_all_started(app) do
         {:ok, _started} ->
@@ -284,7 +284,7 @@ defmodule LemonCli.Onboarding.Runner do
     unless oauth_module && Code.ensure_loaded?(oauth_module) do
       Mix.raise(
         spec.oauth_missing_hint ||
-          "#{spec.display_name} OAuth module is unavailable. Make sure the :ai app is compiled."
+          "#{spec.display_name} OAuth module is unavailable. Make sure the :lemon_ai app is compiled."
       )
     end
 
@@ -430,7 +430,7 @@ defmodule LemonCli.Onboarding.Runner do
     available = available_model_ids(spec)
 
     if available == [] do
-      Mix.raise("No models found for #{spec.id} in Ai.Models registry.")
+      Mix.raise("No models found for #{spec.id} in LemonAi.Models registry.")
     end
 
     default_model =
@@ -499,7 +499,7 @@ defmodule LemonCli.Onboarding.Runner do
   end
 
   defp available_model_ids(%Provider{} = spec) do
-    models_module = Module.concat([:"Elixir.Ai", :Models])
+    models_module = Module.concat([:"Elixir.LemonAi", :Models])
 
     with true <- Code.ensure_loaded?(models_module),
          true <- function_exported?(models_module, :get_models, 1),

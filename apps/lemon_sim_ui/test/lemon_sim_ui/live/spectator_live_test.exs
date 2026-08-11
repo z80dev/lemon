@@ -3,7 +3,7 @@ defmodule LemonSimUi.SpectatorLiveTest do
 
   import Phoenix.LiveViewTest
 
-  alias Ai.Types.{Model, ModelCost, Usage}
+  alias LemonAi.Types.{Model, ModelCost, Usage}
   alias LemonSim.Kernel.State
   alias LemonSim.LLM.Usage, as: SimUsage
 

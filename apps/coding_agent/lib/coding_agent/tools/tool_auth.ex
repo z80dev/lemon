@@ -9,9 +9,9 @@ defmodule CodingAgent.Tools.ToolAuth do
   3. returns manual setup instructions when a token is still needed.
   """
 
-  alias AgentCore.AbortSignal
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.TextContent
+  alias LemonAgent.AbortSignal
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.TextContent
   alias CodingAgent.Session
   alias CodingAgent.Wasm.Config, as: WasmConfig
 

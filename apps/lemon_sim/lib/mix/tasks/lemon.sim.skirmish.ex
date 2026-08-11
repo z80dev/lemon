@@ -68,13 +68,13 @@ defmodule Mix.Tasks.Lemon.Sim.Skirmish do
         provider_atom = normalize_provider(provider)
 
         model =
-          Ai.Models.get_model(provider_atom, model_id) ||
-            Ai.Models.get_model(String.to_atom(String.trim(provider)), model_id)
+          LemonAi.Models.get_model(provider_atom, model_id) ||
+            LemonAi.Models.get_model(String.to_atom(String.trim(provider)), model_id)
 
         model || Mix.raise("unknown model #{inspect(model_id)} for provider #{inspect(provider)}")
 
       [_model_id] ->
-        Ai.Models.find_by_id(trimmed) || Mix.raise("unknown model #{inspect(trimmed)}")
+        LemonAi.Models.find_by_id(trimmed) || Mix.raise("unknown model #{inspect(trimmed)}")
     end
   end
 

@@ -8,7 +8,7 @@ defmodule CodingAgent.Tools.WebDownload do
   not appropriate.
   """
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias CodingAgent.Security.ExternalContent
   alias CodingAgent.Tools.PathHelpers
   alias CodingAgent.Tools.WebGuard

@@ -5,8 +5,8 @@ defmodule CodingAgent.Tools.AwaitTest do
 
   use ExUnit.Case, async: false
 
-  alias AgentCore.Types.AgentToolResult
-  alias AgentCore.AbortSignal
+  alias LemonAgent.Types.AgentToolResult
+  alias LemonAgent.AbortSignal
   alias CodingAgent.Tools.Await
   alias CodingAgent.ProcessStore
 

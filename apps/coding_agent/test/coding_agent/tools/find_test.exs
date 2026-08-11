@@ -2,8 +2,8 @@ defmodule CodingAgent.Tools.FindTest do
   use ExUnit.Case, async: true
 
   alias CodingAgent.Tools.Find
-  alias AgentCore.Types.AgentToolResult
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.AgentToolResult
+  alias LemonAi.Types.TextContent
 
   @moduletag :tmp_dir
 
@@ -351,8 +351,8 @@ defmodule CodingAgent.Tools.FindTest do
 
   describe "execute/6 - abort signal" do
     test "respects abort signal at start" do
-      signal = AgentCore.AbortSignal.new()
-      AgentCore.AbortSignal.abort(signal)
+      signal = LemonAgent.AbortSignal.new()
+      LemonAgent.AbortSignal.abort(signal)
 
       result =
         Find.execute(
@@ -1384,13 +1384,13 @@ defmodule CodingAgent.Tools.FindTest do
 
   describe "abort signal edge cases" do
     test "respects abort signal during directory check", %{tmp_dir: tmp_dir} do
-      signal = AgentCore.AbortSignal.new()
+      signal = LemonAgent.AbortSignal.new()
 
       # Create a valid directory structure
       File.write!(Path.join(tmp_dir, "file.txt"), "")
 
       # Abort before execution
-      AgentCore.AbortSignal.abort(signal)
+      LemonAgent.AbortSignal.abort(signal)
 
       result =
         Find.execute(
@@ -1445,11 +1445,11 @@ defmodule CodingAgent.Tools.FindTest do
     end
 
     test "respects abort while wildcard fallback is running", %{tmp_dir: tmp_dir} do
-      signal = AgentCore.AbortSignal.new()
+      signal = LemonAgent.AbortSignal.new()
 
       Task.start(fn ->
         Process.sleep(20)
-        AgentCore.AbortSignal.abort(signal)
+        LemonAgent.AbortSignal.abort(signal)
       end)
 
       result =

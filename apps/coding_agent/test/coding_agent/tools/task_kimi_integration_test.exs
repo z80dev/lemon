@@ -11,8 +11,8 @@ defmodule CodingAgent.Tools.TaskKimiIntegrationTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.Tools.Task, as: TaskTool
-  alias Ai.Test.IntegrationConfig
-  alias Ai.Types.TextContent
+  alias LemonAi.Test.IntegrationConfig
+  alias LemonAi.Types.TextContent
 
   @moduletag :integration
   @moduletag timeout: 120_000
@@ -56,7 +56,7 @@ defmodule CodingAgent.Tools.TaskKimiIntegrationTest do
         )
 
       case result do
-        %AgentCore.Types.AgentToolResult{content: content, details: details} ->
+        %LemonAgent.Types.AgentToolResult{content: content, details: details} ->
           text =
             content
             |> Enum.filter(&match?(%TextContent{}, &1))

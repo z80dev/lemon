@@ -2,8 +2,8 @@ defmodule CodingAgent.Tools.GrepTest do
   use ExUnit.Case, async: true
 
   alias CodingAgent.Tools.Grep
-  alias AgentCore.Types.AgentToolResult
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.AgentToolResult
+  alias LemonAi.Types.TextContent
 
   @moduletag :tmp_dir
 
@@ -576,8 +576,8 @@ defmodule CodingAgent.Tools.GrepTest do
   describe "execute/6 - abort signal" do
     test "respects abort signal at start", %{tmp_dir: tmp_dir} do
       # Create an aborted signal
-      signal = AgentCore.AbortSignal.new()
-      AgentCore.AbortSignal.abort(signal)
+      signal = LemonAgent.AbortSignal.new()
+      LemonAgent.AbortSignal.abort(signal)
 
       result =
         Grep.execute(
@@ -617,11 +617,11 @@ defmodule CodingAgent.Tools.GrepTest do
     end
 
     test "respects abort while ripgrep command is running", %{tmp_dir: tmp_dir} do
-      signal = AgentCore.AbortSignal.new()
+      signal = LemonAgent.AbortSignal.new()
 
       Task.start(fn ->
         Process.sleep(20)
-        AgentCore.AbortSignal.abort(signal)
+        LemonAgent.AbortSignal.abort(signal)
       end)
 
       result =

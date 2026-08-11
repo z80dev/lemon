@@ -69,20 +69,20 @@ consolidation of that logic onto one facade, phase by phase.
 
 ### Phase 1 (done, commit `74b0f20f`): model-catalog facade
 
-`AgentCore.ModelRuntime.ModelCatalog` (`apps/agent_core/lib/agent_core/model_runtime/model_catalog.ex`)
+`LemonAgent.ModelRuntime.ModelCatalog` (`apps/lemon_agent/lib/lemon_agent/model_runtime/model_catalog.ex`)
 is now the single owner of "what can be picked from right now":
 
-- Builds the provider/model catalog from `Ai.Models.list_models/0`.
+- Builds the provider/model catalog from `LemonAi.Models.list_models/0`.
 - Filters to providers with usable credentials, including the provider-alias
   credential-fallback rules (e.g. `google-gemini-cli` also credential-checks
   under `google`; `amazon-bedrock` also checks `bedrock`/`aws`), backed by
-  the existing `AgentCore.ModelRuntime.Credentials`.
+  the existing `LemonAgent.ModelRuntime.Credentials`.
 - Applies the picker health blocklist and sort order (newest/most-relevant
   first).
 - Exposes `available_catalog/0`, `providers/1`, `models_for_provider/2`,
   `model_at_index/3`, `model_spec/1`, `model_label/1` as the read-only query
   surface, with its own unit tests
-  (`apps/agent_core/test/agent_core/model_runtime/model_catalog_test.exs`).
+  (`apps/lemon_agent/test/lemon_agent/model_runtime/model_catalog_test.exs`).
 
 It lives in `agent_core` rather than `ai` because `agent_core` is the
 narrowest app that both depends on `ai` directly and is itself a permitted
@@ -123,7 +123,7 @@ available"):
   `LemonCli.Onboarding.Provider` struct it builds from in `onboarding/provider.ex`)
   — **boundary-blocked, not just deferred.** `lemon_cli` is only permitted to
   depend on `ai` and `lemon_core` (`docs/architecture_boundaries.md:18`), and
-  `AgentCore.ModelRuntime.ProviderNames` lives in `agent_core`, which isn't in
+  `LemonAgent.ModelRuntime.ProviderNames` lives in `agent_core`, which isn't in
   that list. Migrating this file requires a deliberate governance decision
   first — either extend `lemon_cli`'s permitted deps to include `agent_core`,
   or move `ProviderNames` (or an equivalent) down into `ai`, which `lemon_cli`
@@ -135,7 +135,7 @@ available"):
   Only a thin slice of the onboarding table actually overlaps
   `ProviderNames`: `id`, `aliases`, and `default_secret_name`/
   `default_secret_name_by_mode`. The rest (OAuth module refs into
-  `Ai.Auth.*`, API-key prompts, choice labels, `oauth_opts_builder`, CLI
+  `LemonAi.Auth.*`, API-key prompts, choice labels, `oauth_opts_builder`, CLI
   switches, curated `preferred_models`) is onboarding-flow presentation data
   with no facade equivalent and stays local regardless of how the boundary
   question is resolved — same pattern as `arena_domains` presentation data.

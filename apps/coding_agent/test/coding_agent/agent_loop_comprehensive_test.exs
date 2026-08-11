@@ -17,9 +17,9 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
 
   use ExUnit.Case, async: true
 
-  alias AgentCore.Test.Mocks
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.{AssistantMessage, TextContent, ToolCall}
+  alias LemonAgent.Test.Mocks
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.{AssistantMessage, TextContent, ToolCall}
   alias CodingAgent.Session
   alias CodingAgent.SettingsManager
   alias CodingAgent.SessionManager
@@ -117,13 +117,13 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
 
   defp delayed_stream_fn(response, delay_ms) do
     fn _model, _context, _options ->
-      {:ok, stream} = Ai.EventStream.start_link()
+      {:ok, stream} = LemonAi.EventStream.start_link()
 
       Task.start(fn ->
         Process.sleep(delay_ms)
-        Ai.EventStream.push(stream, {:start, response})
-        Ai.EventStream.push(stream, {:done, response.stop_reason, response})
-        Ai.EventStream.complete(stream, response)
+        LemonAi.EventStream.push(stream, {:start, response})
+        LemonAi.EventStream.push(stream, {:done, response.stop_reason, response})
+        LemonAi.EventStream.complete(stream, response)
       end)
 
       {:ok, stream}
@@ -139,40 +139,40 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
              [head | tail] -> {head, tail}
            end) do
         nil ->
-          {:ok, stream} = Ai.EventStream.start_link()
+          {:ok, stream} = LemonAi.EventStream.start_link()
           empty_msg = Mocks.assistant_message("", stop_reason: :stop)
 
           Task.start(fn ->
-            Ai.EventStream.complete(stream, empty_msg)
+            LemonAi.EventStream.complete(stream, empty_msg)
           end)
 
           {:ok, stream}
 
         response ->
-          {:ok, stream} = Ai.EventStream.start_link()
+          {:ok, stream} = LemonAi.EventStream.start_link()
 
           Task.start(fn ->
-            Ai.EventStream.push(stream, {:start, response})
+            LemonAi.EventStream.push(stream, {:start, response})
 
             Enum.with_index(response.content)
             |> Enum.each(fn {content, idx} ->
               case content do
                 %TextContent{text: text} ->
-                  Ai.EventStream.push(stream, {:text_start, idx, response})
-                  Ai.EventStream.push(stream, {:text_delta, idx, text, response})
-                  Ai.EventStream.push(stream, {:text_end, idx, response})
+                  LemonAi.EventStream.push(stream, {:text_start, idx, response})
+                  LemonAi.EventStream.push(stream, {:text_delta, idx, text, response})
+                  LemonAi.EventStream.push(stream, {:text_end, idx, response})
 
                 %ToolCall{} = tool_call ->
-                  Ai.EventStream.push(stream, {:tool_call_start, idx, tool_call, response})
-                  Ai.EventStream.push(stream, {:tool_call_end, idx, tool_call, response})
+                  LemonAi.EventStream.push(stream, {:tool_call_start, idx, tool_call, response})
+                  LemonAi.EventStream.push(stream, {:tool_call_end, idx, tool_call, response})
 
                 _ ->
                   :ok
               end
             end)
 
-            Ai.EventStream.push(stream, {:done, response.stop_reason, response})
-            Ai.EventStream.complete(stream, response)
+            LemonAi.EventStream.push(stream, {:done, response.stop_reason, response})
+            LemonAi.EventStream.complete(stream, response)
           end)
 
           {:ok, stream}
@@ -593,7 +593,7 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       # Collect events from stream
       events =
         stream
-        |> AgentCore.EventStream.events()
+        |> LemonAgent.EventStream.events()
         |> Enum.take_while(fn
           {:session_event, _, {:agent_end, _}} -> false
           _ -> true
@@ -905,7 +905,7 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
         execute: fn _id, _args, signal, _on_update ->
           # Check abort periodically
           for _ <- 1..50 do
-            if AgentCore.AbortSignal.aborted?(signal) do
+            if LemonAgent.AbortSignal.aborted?(signal) do
               throw(:aborted)
             end
 
@@ -1052,7 +1052,7 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       messages = Session.get_messages(session)
 
       # Should have 3 user + 3 assistant messages
-      user_messages = Enum.filter(messages, &match?(%Ai.Types.UserMessage{}, &1))
+      user_messages = Enum.filter(messages, &match?(%LemonAi.Types.UserMessage{}, &1))
       assistant_messages = Enum.filter(messages, &match?(%AssistantMessage{}, &1))
 
       assert length(user_messages) == 3
@@ -1075,7 +1075,7 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
 
       messages = Session.get_messages(session)
 
-      tool_results = Enum.filter(messages, &match?(%Ai.Types.ToolResultMessage{}, &1))
+      tool_results = Enum.filter(messages, &match?(%LemonAi.Types.ToolResultMessage{}, &1))
       assert length(tool_results) == 1
     end
 
@@ -1275,7 +1275,7 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       assert Enum.any?(events, &match?({:agent_end, _}, &1))
 
       messages = Session.get_messages(session)
-      user_msg = Enum.find(messages, &match?(%Ai.Types.UserMessage{}, &1))
+      user_msg = Enum.find(messages, &match?(%LemonAi.Types.UserMessage{}, &1))
       assert String.contains?(user_msg.content, "Line 1")
     end
 

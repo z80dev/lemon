@@ -10,12 +10,12 @@ defmodule LemonEvals.Support do
   they all lived in a single `LemonEvals.Harness` module.
   """
 
-  alias AgentCore.Types.AgentToolResult
+  alias LemonAgent.Types.AgentToolResult
   alias CodingAgent.ToolRegistry
   alias CodingAgent.Session.EventHandler
   alias LemonCore.Introspection
 
-  alias Ai.Types.{
+  alias LemonAi.Types.{
     AssistantMessage,
     Cost,
     Model,
@@ -1001,31 +1001,31 @@ defmodule LemonEvals.Support do
   end
 
   def response_stream(%AssistantMessage{} = response) do
-    {:ok, stream} = Ai.EventStream.start_link()
+    {:ok, stream} = LemonAi.EventStream.start_link()
 
     Task.start(fn ->
-      Ai.EventStream.push(stream, {:start, response})
+      LemonAi.EventStream.push(stream, {:start, response})
 
       response.content
       |> Enum.with_index()
       |> Enum.each(fn {content, index} ->
         case content do
           %TextContent{text: text} ->
-            Ai.EventStream.push(stream, {:text_start, index, response})
-            Ai.EventStream.push(stream, {:text_delta, index, text, response})
-            Ai.EventStream.push(stream, {:text_end, index, response})
+            LemonAi.EventStream.push(stream, {:text_start, index, response})
+            LemonAi.EventStream.push(stream, {:text_delta, index, text, response})
+            LemonAi.EventStream.push(stream, {:text_end, index, response})
 
           %ToolCall{} = tool_call ->
-            Ai.EventStream.push(stream, {:tool_call_start, index, tool_call, response})
-            Ai.EventStream.push(stream, {:tool_call_end, index, tool_call, response})
+            LemonAi.EventStream.push(stream, {:tool_call_start, index, tool_call, response})
+            LemonAi.EventStream.push(stream, {:tool_call_end, index, tool_call, response})
 
           _ ->
             :ok
         end
       end)
 
-      Ai.EventStream.push(stream, {:done, response.stop_reason, response})
-      Ai.EventStream.complete(stream, response)
+      LemonAi.EventStream.push(stream, {:done, response.stop_reason, response})
+      LemonAi.EventStream.complete(stream, response)
     end)
 
     stream

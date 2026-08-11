@@ -8,8 +8,8 @@ defmodule CodingAgent.Tools.Await do
   Returns the status and results of all watched jobs once at least one finishes.
   """
 
-  alias AgentCore.Types.AgentToolResult
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.AgentToolResult
+  alias LemonAi.Types.TextContent
   alias CodingAgent.ProcessStore
 
   @default_timeout_ms 60_000
@@ -111,7 +111,7 @@ defmodule CodingAgent.Tools.Await do
 
   defp poll_loop(initial_jobs, start_time, timeout_ms, signal, initial_count) do
     # Check for abort signal
-    if signal && AgentCore.AbortSignal.aborted?(signal) do
+    if signal && LemonAgent.AbortSignal.aborted?(signal) do
       return_aborted_result(initial_jobs)
     else
       # Check if timeout exceeded

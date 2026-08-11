@@ -20,7 +20,7 @@ defmodule LemonRouter.ToolStatusRendererTest do
 
   test "does not render result preview on successful actions" do
     inspected =
-      "%AgentCore.Types.AgentToolResult{content: [%Ai.Types.TextContent{type: :text, text: \"hello\\nworld\"}]}"
+      "%LemonAgent.Types.AgentToolResult{content: [%LemonAi.Types.TextContent{type: :text, text: \"hello\\nworld\"}]}"
 
     actions = %{
       "a1" => %{
@@ -35,7 +35,7 @@ defmodule LemonRouter.ToolStatusRendererTest do
 
     assert String.contains?(text, "\u2713 Test tool")
     refute String.contains?(text, "->")
-    refute String.contains?(text, "%AgentCore.Types.AgentToolResult")
+    refute String.contains?(text, "%LemonAgent.Types.AgentToolResult")
   end
 
   test "telegram truncates nested children but keeps parent task lines" do

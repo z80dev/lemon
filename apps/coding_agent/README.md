@@ -1,10 +1,10 @@
 # CodingAgent
 
-A full-featured AI coding agent runtime built on top of `AgentCore`. This OTP application provides session management, 40+ tools, JSONL persistence with branching, budget tracking, context compaction, WASM tool support, extensions, and subagent orchestration for building interactive coding workflows.
+A full-featured AI coding agent runtime built on top of `LemonAgent`. This OTP application provides session management, 40+ tools, JSONL persistence with branching, budget tracking, context compaction, WASM tool support, extensions, and subagent orchestration for building interactive coding workflows.
 
 ## Overview
 
-CodingAgent is an umbrella app within the Lemon AI assistant platform. It turns the lower-level `AgentCore` event loop into a complete coding assistant by adding:
+CodingAgent is an umbrella app within the Lemon AI assistant platform. It turns the lower-level `LemonAgent` event loop into a complete coding assistant by adding:
 
 - **Session lifecycle management** -- GenServer sessions with persistence, branching, steering, and follow-up queues
 - **Tool execution pipeline** -- Registry with precedence resolution (builtin > WASM > extension), approval gating, and policy profiles
@@ -87,7 +87,7 @@ CodingAgent.Supervisor (one_for_one)
 | Module | Description |
 |--------|-------------|
 | `CodingAgent.Session` | Main GenServer orchestrating the agent loop, event dispatch, steering, follow-ups, compaction, and persistence |
-| `CodingAgent.Session.EventHandler` | Translates `AgentCore` events into session state updates, triggers compaction, and fires extension hooks |
+| `CodingAgent.Session.EventHandler` | Translates `LemonAgent` events into session state updates, triggers compaction, and fires extension hooks |
 | `CodingAgent.Session.CompactionManager` | Auto-compaction scheduling, overflow recovery state machine, and compaction result application |
 | `CodingAgent.Session.MessageSerialization` | Serializes/deserializes messages between session and agent core formats |
 | `CodingAgent.Session.ModelResolver` | Resolves model structs from string specs, maps, or settings; handles API key lookup via env vars and secrets with OAuth refresh |
@@ -206,7 +206,7 @@ through `lsp.server.start`, `lsp.server.initialize`, `lsp.document.open`,
 `lsp.server.stop`.
 
 `kanban` is implemented in `LemonSkills.Tools` and exposes durable board and task operations backed by
-`AgentCore.Workspace.KanbanStore`. It is the model-facing surface for multi-agent work
+`LemonAgent.Workspace.KanbanStore`. It is the model-facing surface for multi-agent work
 that should outlive one session. Kanban-dispatched worker runs block the
 `kanban` tool so a leased task cannot recursively manage its own board.
 
@@ -349,7 +349,7 @@ The eval harness is intentionally lightweight and deterministic. It should catch
 
 | Module | Description |
 |--------|-------------|
-| `AgentCore.Security.ExternalContent` | External content sanitization; `CodingAgent.Security.ExternalContent` remains a compatibility wrapper |
+| `LemonAgent.Security.ExternalContent` | External content sanitization; `CodingAgent.Security.ExternalContent` remains a compatibility wrapper |
 | `CodingAgent.Security.UntrustedToolBoundary` | Pre-LLM boundary for untrusted tool output; composed with `ContextGuardrails` |
 
 ### Utilities
@@ -384,7 +384,7 @@ The eval harness is intentionally lightweight and deterministic. It should catch
 
 ### Sessions
 
-A session is a `GenServer` process that wraps an `AgentCore.Agent` loop. Each session has:
+A session is a `GenServer` process that wraps an `LemonAgent.Agent` loop. Each session has:
 
 - A working directory (`cwd`)
 - A model configuration
@@ -400,17 +400,17 @@ Sessions are started under `SessionSupervisor` (dynamic) and registered in `Sess
 
 Tools follow a pipeline: the LLM requests a tool call, `ToolRegistry` resolves it by name (checking builtin, then WASM, then extensions), `ToolPolicy` checks allow/deny, `ToolExecutor` gates on approval if required, and the tool module's `execute/4` closure runs with abort signal support.
 
-Each tool module exposes `tool(cwd, opts)` returning an `%AgentCore.Types.AgentTool{}` struct whose `execute` field is a 4-arity closure capturing `cwd` and `opts`.
+Each tool module exposes `tool(cwd, opts)` returning an `%LemonAgent.Types.AgentTool{}` struct whose `execute` field is a 4-arity closure capturing `cwd` and `opts`.
 
 ### Model Resolution
 
-`Session.ModelResolver` resolves models from string specs (`"provider:model_id"`), maps, or `%Ai.Types.Model{}` structs. API keys are resolved in order:
+`Session.ModelResolver` resolves models from string specs (`"provider:model_id"`), maps, or `%LemonAi.Types.Model{}` structs. API keys are resolved in order:
 1. Provider environment variables (`ANTHROPIC_API_KEY`, etc.)
 2. Plain `providers.<name>.api_key` in settings
 3. `providers.<name>.api_key_secret` via `LemonCore.Secrets`
 4. Default secret name `llm_<provider>_api_key`
 
-OAuth payloads are handled by `AgentCore.ModelRuntime.Credentials` with automatic refresh persistence.
+OAuth payloads are handled by `LemonAgent.ModelRuntime.Credentials` with automatic refresh persistence.
 
 ### Compaction
 
@@ -483,7 +483,7 @@ Loaded from `~/.lemon/agent/workspace/` (initialized from `priv/templates/worksp
 # Under supervision (preferred)
 {:ok, session} = CodingAgent.start_session(
   cwd: "/path/to/project",
-  model: Ai.Models.get_model(:anthropic, "claude-sonnet-4-20250514"),
+  model: LemonAi.Models.get_model(:anthropic, "claude-sonnet-4-20250514"),
   thinking_level: :medium
 )
 

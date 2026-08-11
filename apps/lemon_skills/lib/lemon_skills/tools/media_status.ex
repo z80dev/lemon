@@ -3,8 +3,8 @@ defmodule LemonSkills.Tools.MediaStatus do
   Read-only media job status for model-facing agent loops.
   """
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.TextContent
   alias LemonMedia.MediaJobSupervisor
   alias LemonMedia.MediaJobs
 

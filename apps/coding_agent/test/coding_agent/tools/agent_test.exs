@@ -136,7 +136,7 @@ defmodule CodingAgent.Tools.AgentTest do
         agent_id: "main"
       )
 
-    assert %AgentCore.Types.AgentToolResult{} = result
+    assert %LemonAgent.Types.AgentToolResult{} = result
     assert result.details.status == "queued"
     assert is_binary(result.details.task_id)
     assert is_binary(result.details.run_id)
@@ -157,7 +157,7 @@ defmodule CodingAgent.Tools.AgentTest do
 
     poll = wait_for_completed(result.details.task_id)
     assert poll.details.status == "completed"
-    assert AgentCore.get_text(poll) == "hello from oracle"
+    assert LemonAgent.get_text(poll) == "hello from oracle"
   end
 
   test "run with role prepends subagent prompt to delegated request prompt" do
@@ -269,7 +269,7 @@ defmodule CodingAgent.Tools.AgentTest do
     assert message.details.delivery == :followup
 
     [llm_message] = Messages.to_llm([message])
-    assert %Ai.Types.UserMessage{} = llm_message
+    assert %LemonAi.Types.UserMessage{} = llm_message
     assert llm_message.content =~ "[SYSTEM-DELIVERED ASYNC COMPLETION - NOT A USER MESSAGE]"
     assert llm_message.content =~ message.content
     assert llm_message.content =~ "task_id: #{result.details.task_id}"
@@ -657,7 +657,7 @@ defmodule CodingAgent.Tools.AgentTest do
 
     poll = wait_for_completed(result.details.task_id)
     assert poll.details.status == "completed"
-    assert AgentCore.get_text(poll) == "hello from store"
+    assert LemonAgent.get_text(poll) == "hello from store"
   end
 
   test "poll returns error for unknown task id" do
@@ -707,7 +707,7 @@ defmodule CodingAgent.Tools.AgentTest do
         []
       )
 
-    assert %AgentCore.Types.AgentToolResult{} = result
+    assert %LemonAgent.Types.AgentToolResult{} = result
     assert result.details.status == "completed"
     assert result.details.mode == "wait_all"
     assert Enum.sort(result.details.task_ids) == Enum.sort([task_a, task_b])
@@ -743,7 +743,7 @@ defmodule CodingAgent.Tools.AgentTest do
       )
 
     case result do
-      %AgentCore.Types.AgentToolResult{details: %{status: "completed"}} ->
+      %LemonAgent.Types.AgentToolResult{details: %{status: "completed"}} ->
         result
 
       _ ->

@@ -29,7 +29,7 @@ where durable memory had been eight modules with no boundary of their own.
   `LemonMemory.SessionSearch` for scoped search; `LemonMemory.TaskFingerprint`
   for recognising repeated work.
 - `LemonMemory.Document.new/1` builds a document from fields directly (for
-  callers driving `AgentCore` themselves), applying the same 2,000-byte summary
+  callers driving `LemonAgent` themselves), applying the same 2,000-byte summary
   truncation and required-field validation as `from_run/4`. Building the struct
   literally skips both, silently indexing whole transcripts;
   `LemonMemory.Document.max_summary_bytes/0` exposes the cap.

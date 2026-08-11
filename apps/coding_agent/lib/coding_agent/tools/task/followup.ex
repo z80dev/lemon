@@ -3,7 +3,7 @@ defmodule CodingAgent.Tools.Task.Followup do
 
   require Logger
 
-  alias AgentCore.Types.AgentToolResult
+  alias LemonAgent.Types.AgentToolResult
   alias CodingAgent.AsyncFollowups
   alias CodingAgent.RunGraph
   alias CodingAgent.TaskStore

@@ -1,7 +1,7 @@
 defmodule LemonGateway.CliAdapterClaudeTest do
   use ExUnit.Case
 
-  alias AgentCore.CliRunners.Types.{
+  alias LemonAgent.CliRunners.Types.{
     Action,
     ActionEvent,
     CompletedEvent,

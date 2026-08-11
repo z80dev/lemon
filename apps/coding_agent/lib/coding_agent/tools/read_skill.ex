@@ -12,7 +12,7 @@ defmodule CodingAgent.Tools.ReadSkill do
   @doc """
   Return the `read_skill` tool scoped to the current working directory.
   """
-  @spec tool(String.t(), keyword()) :: AgentCore.Types.AgentTool.t()
+  @spec tool(String.t(), keyword()) :: LemonAgent.Types.AgentTool.t()
   def tool(cwd, opts \\ []) do
     opts
     |> Keyword.put(:cwd, cwd)

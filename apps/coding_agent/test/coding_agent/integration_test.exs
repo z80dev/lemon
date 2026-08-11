@@ -23,7 +23,7 @@ defmodule CodingAgent.IntegrationTest do
   alias CodingAgent.SettingsManager
   alias CodingAgent.Compaction
 
-  alias Ai.Types.{
+  alias LemonAi.Types.{
     AssistantMessage,
     TextContent,
     UserMessage,
@@ -32,7 +32,7 @@ defmodule CodingAgent.IntegrationTest do
     ToolResultMessage
   }
 
-  alias AgentCore.Types.AgentToolResult
+  alias LemonAgent.Types.AgentToolResult
 
   # ============================================================================
   # Test Mocks and Helpers

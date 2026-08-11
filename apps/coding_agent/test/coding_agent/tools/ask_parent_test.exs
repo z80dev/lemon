@@ -1,7 +1,7 @@
 defmodule CodingAgent.Tools.AskParentTest do
   use ExUnit.Case, async: false
 
-  alias AgentCore.Types.AgentToolResult
+  alias LemonAgent.Types.AgentToolResult
   alias Elixir.CodingAgent.ParentQuestions
   alias Elixir.CodingAgent.Tools.{AskParent, ParentQuestion}
   alias Elixir.CodingAgent.Tools.Task.Params
@@ -85,7 +85,7 @@ defmodule CodingAgent.Tools.AskParentTest do
     child_result = Task.await(task, 1_000)
     assert %AgentToolResult{} = child_result
     assert child_result.details.status == "answered"
-    assert AgentCore.get_text(child_result) =~ "Keep the existing auth boundary"
+    assert LemonAgent.get_text(child_result) =~ "Keep the existing auth boundary"
   end
 
   test "ask_parent times out with fallback when continuation is allowed" do
@@ -115,8 +115,8 @@ defmodule CodingAgent.Tools.AskParentTest do
 
     assert %AgentToolResult{} = result
     assert result.details.status == "timed_out"
-    assert AgentCore.get_text(result) =~ "fallback"
-    assert AgentCore.get_text(result) =~ "deferred rename"
+    assert LemonAgent.get_text(result) =~ "fallback"
+    assert LemonAgent.get_text(result) =~ "deferred rename"
   end
 
   test "ask_parent errors when parent context is unavailable" do
@@ -168,8 +168,8 @@ defmodule CodingAgent.Tools.AskParentTest do
       )
 
     assert %AgentToolResult{} = result
-    assert AgentCore.get_text(result) =~ request.id
-    assert AgentCore.get_text(result) =~ "Should I remove the deprecated config?"
+    assert LemonAgent.get_text(result) =~ request.id
+    assert LemonAgent.get_text(result) =~ "Should I remove the deprecated config?"
   end
 
   test "build_session_opts injects ask_parent for eligible child sessions" do

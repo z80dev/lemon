@@ -3,7 +3,7 @@ import Config
 # Runtime configuration is read when the release boots, not when it is built,
 # so this is where environment variables belong.
 #
-# API keys are *not* read here: `Ai` resolves them per request from the
+# API keys are *not* read here: `LemonAi` resolves them per request from the
 # provider's own variable (ANTHROPIC_API_KEY, OPENAI_API_KEY, …), so exporting
 # one is enough. Override the model without recompiling instead:
 

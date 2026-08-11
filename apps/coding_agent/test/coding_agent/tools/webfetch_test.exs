@@ -1,7 +1,7 @@
 defmodule CodingAgent.Tools.WebFetchTest do
   use ExUnit.Case, async: false
 
-  alias AgentCore.AbortSignal
+  alias LemonAgent.AbortSignal
   alias CodingAgent.Tools.WebFetch
 
   setup do

@@ -3,7 +3,7 @@ defmodule CodingAgent.Tools.Task.Projection do
   CodingAgent task progress projection helpers.
   """
 
-  alias AgentCore.Types.AgentToolResult
+  alias LemonAgent.Types.AgentToolResult
   alias LemonCore.Event
   alias LemonCore.TaskSurface.Projection, as: CoreProjection
 

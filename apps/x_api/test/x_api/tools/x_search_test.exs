@@ -1,8 +1,8 @@
 defmodule XApi.Tools.XSearchTest do
   use ExUnit.Case, async: false
 
-  alias AgentCore.Types.AgentToolResult
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.AgentToolResult
+  alias LemonAi.Types.TextContent
   alias XApi
   alias XApi.Tools.XSearch
 

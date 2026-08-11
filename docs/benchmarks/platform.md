@@ -86,7 +86,7 @@ are excluded from rankings. The public LiveView leaderboard renders these under
 Every run writes `usage.json` with schema `lemon_sim.usage.v1`, total input,
 output, cache-read, cache-write tokens, decision count, and per-actor rows.
 
-Cost is computed from the `Ai.Models` pricing metadata. If pricing is unknown,
+Cost is computed from the `LemonAi.Models` pricing metadata. If pricing is unknown,
 `cost_usd` is `null` rather than `0`; CLI output prints unknown cost and the
 LiveView UI renders it as an unknown value. Suite aggregation preserves unknown
 cost instead of silently treating it as free.

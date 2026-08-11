@@ -300,15 +300,15 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
     },
     %{
       code: :heartbeat_store_wrapper_bypass,
-      message: "Heartbeat state must go through AgentCore.Workspace.HeartbeatStore",
+      message: "Heartbeat state must go through LemonAgent.Workspace.HeartbeatStore",
       files: [
-        "apps/agent_core/lib/**/*.ex",
+        "apps/lemon_agent/lib/**/*.ex",
         "apps/lemon_automation/lib/**/*.ex",
         "apps/lemon_control_plane/lib/**/*.ex",
         "apps/lemon_core/lib/**/*.ex"
       ],
       exclude: [
-        "apps/agent_core/lib/agent_core/workspace/heartbeat_store.ex",
+        "apps/lemon_agent/lib/lemon_agent/workspace/heartbeat_store.ex",
         "apps/lemon_core/lib/lemon_core/store.ex"
       ],
       patterns: [
@@ -496,11 +496,11 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
     %{
       code: :forbidden_provider_direct_env,
       message:
-        "Provider modules must receive config-backed provider values through AgentCore.ModelRuntime.StreamOptions",
+        "Provider modules must receive config-backed provider values through LemonAgent.ModelRuntime.StreamOptions",
       files: [
-        "apps/ai/lib/ai/providers/google_vertex.ex",
-        "apps/ai/lib/ai/providers/azure_openai_responses.ex",
-        "apps/ai/lib/ai/providers/bedrock.ex"
+        "apps/lemon_ai/lib/lemon_ai/providers/google_vertex.ex",
+        "apps/lemon_ai/lib/lemon_ai/providers/azure_openai_responses.ex",
+        "apps/lemon_ai/lib/lemon_ai/providers/bedrock.ex"
       ],
       exclude: [],
       patterns: [

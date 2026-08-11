@@ -1,8 +1,8 @@
 defmodule CodingAgent.Tools.Task.RunnerTest do
   use ExUnit.Case, async: false
 
-  alias AgentCore.AbortSignal
-  alias AgentCore.Test.Mocks
+  alias LemonAgent.AbortSignal
+  alias LemonAgent.Test.Mocks
   alias CodingAgent.Tools.Task.Runner
 
   test "times out hung child sessions instead of waiting forever" do
@@ -14,7 +14,7 @@ defmodule CodingAgent.Tools.Task.RunnerTest do
     on_exit(fn -> File.rm_rf(tmp_dir) end)
 
     stream_fn = fn _model, _context, _options ->
-      {:ok, ai_stream} = Ai.EventStream.start_link(timeout: :infinity)
+      {:ok, ai_stream} = LemonAi.EventStream.start_link(timeout: :infinity)
       {:ok, ai_stream}
     end
 
@@ -53,7 +53,7 @@ defmodule CodingAgent.Tools.Task.RunnerTest do
     end)
 
     stream_fn = fn _model, _context, _options ->
-      {:ok, ai_stream} = Ai.EventStream.start_link(timeout: :infinity)
+      {:ok, ai_stream} = LemonAi.EventStream.start_link(timeout: :infinity)
       {:ok, ai_stream}
     end
 

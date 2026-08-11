@@ -18,7 +18,7 @@ defmodule LemonControlPlane.Methods.GoalStatus do
 
     cond do
       present?(session_key) ->
-        goal = format_goal(AgentCore.Workspace.GoalStore.get(session_key))
+        goal = format_goal(LemonAgent.Workspace.GoalStore.get(session_key))
 
         {:ok,
          %{
@@ -28,7 +28,7 @@ defmodule LemonControlPlane.Methods.GoalStatus do
 
       true ->
         goals =
-          AgentCore.Workspace.GoalStore.list(
+          LemonAgent.Workspace.GoalStore.list(
             agent_id: param(params, "agentId"),
             status: param(params, "status"),
             limit: param(params, "limit") || 50

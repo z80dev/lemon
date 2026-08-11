@@ -286,7 +286,7 @@ Store client calls are fail-soft: if `LemonCore.Store` is overloaded/unavailable
 
 `LemonCore.Store.SqliteBackend` logs decode failures and returns explicit corruption errors for bad payloads instead of collapsing corrupted rows to `nil`/missing. SQLite release/close failures are also logged so cleanup issues stay observable.
 
-Use the generic table API only for backend internals, wrapper modules, or explicitly app-local legacy tables. Shared-domain callers should go through typed wrappers such as `LemonCore.RunStore`, `LemonCore.ChatStateStore`, `LemonCore.ProgressStore`, `LemonCore.PolicyStore`, `LemonCore.IdempotencyStore`, `LemonCore.IntrospectionStore`, `LemonCore.ExecApprovalStore`, `LemonCore.UsageStore`, and `LemonCore.Checkpoint`. Agent workspace callers should use `AgentCore.Workspace.HeartbeatStore`, `AgentCore.Workspace.GoalStore`, and `AgentCore.Workspace.KanbanStore`. Channel model-policy callers should use `LemonChannels.ModelPolicyStore`.
+Use the generic table API only for backend internals, wrapper modules, or explicitly app-local legacy tables. Shared-domain callers should go through typed wrappers such as `LemonCore.RunStore`, `LemonCore.ChatStateStore`, `LemonCore.ProgressStore`, `LemonCore.PolicyStore`, `LemonCore.IdempotencyStore`, `LemonCore.IntrospectionStore`, `LemonCore.ExecApprovalStore`, `LemonCore.UsageStore`, and `LemonCore.Checkpoint`. Agent workspace callers should use `LemonAgent.Workspace.HeartbeatStore`, `LemonAgent.Workspace.GoalStore`, and `LemonAgent.Workspace.KanbanStore`. Channel model-policy callers should use `LemonChannels.ModelPolicyStore`.
 
 ### Specialized APIs
 
@@ -379,7 +379,7 @@ LemonCore.Bus.broadcast("session:" <> session_key, event)
 1. Update the relevant sub-module in `lib/lemon_core/config/` (Modular is the canonical config implementation)
 2. Add validation in `lib/lemon_core/config/validator.ex` if the key has constraints
 3. If the key needs an env override, add it to the modular config env overlay
-4. If the key is for a provider, use `AgentCore.ProviderConfigResolver` for resolution
+4. If the key is for a provider, use `LemonAgent.ProviderConfigResolver` for resolution
 5. Update the env var table in AGENTS.md if adding an env override
 6. Add tests in `test/lemon_core/config_test.exs`
 
@@ -852,4 +852,4 @@ Durable memory is supervised by the `lemon_memory` app, not here.
 - `LemonCore.RouterBridge` returns `{:error, :unavailable}` when `:lemon_router` has not registered itself; callers must handle this gracefully
 - `LemonCore.Dedupe.Ets` uses monotonic time for TTL; `LemonCore.Idempotency` uses wall-clock time
 - `LemonCore.Config.Modular` is the canonical config implementation; `LemonCore.Config` is a facade that delegates to modular
-- Provider config resolution is centralized in `AgentCore.ProviderConfigResolver` (agent_core); provider modules must not read env vars directly for normal request paths
+- Provider config resolution is centralized in `LemonAgent.ProviderConfigResolver` (agent_core); provider modules must not read env vars directly for normal request paths

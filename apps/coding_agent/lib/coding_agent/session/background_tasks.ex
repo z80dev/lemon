@@ -6,7 +6,7 @@ defmodule CodingAgent.Session.BackgroundTasks do
   alias CodingAgent.SessionManager.SessionEntry
 
   @type callbacks(state) :: %{
-          required(:broadcast_event) => (state, AgentCore.Types.agent_event() -> :ok),
+          required(:broadcast_event) => (state, LemonAgent.Types.agent_event() -> :ok),
           required(:ui_set_working_message) => (state, String.t() | nil -> :ok),
           required(:ui_notify) => (state, String.t(), CodingAgent.UI.notify_type() -> :ok)
         }

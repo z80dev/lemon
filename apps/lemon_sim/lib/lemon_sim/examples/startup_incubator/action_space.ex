@@ -3,7 +3,7 @@ defmodule LemonSim.Examples.StartupIncubator.ActionSpace do
 
   @behaviour LemonSim.Kernel.ActionSpace
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonCore.MapHelpers
   alias LemonSim.Examples.StartupIncubator.Events
   alias LemonSim.Examples.Helpers.Tools, as: GameTools
@@ -77,7 +77,7 @@ defmodule LemonSim.Examples.StartupIncubator.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("pitch delivered by #{actor_id}")],
+           content: [LemonAgent.text_content("pitch delivered by #{actor_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -136,7 +136,7 @@ defmodule LemonSim.Examples.StartupIncubator.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("question sent to #{founder_id}")],
+           content: [LemonAgent.text_content("question sent to #{founder_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -177,7 +177,7 @@ defmodule LemonSim.Examples.StartupIncubator.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("answered #{investor_id}'s question")],
+           content: [LemonAgent.text_content("answered #{investor_id}'s question")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -266,7 +266,7 @@ defmodule LemonSim.Examples.StartupIncubator.ActionSpace do
         {:ok,
          %AgentToolResult{
            content: [
-             AgentCore.text_content("offer sent to #{founder_id}: $#{amount} for #{equity_pct}%")
+             LemonAgent.text_content("offer sent to #{founder_id}: $#{amount} for #{equity_pct}%")
            ],
            details: %{"event" => event},
            trust: :trusted
@@ -312,7 +312,7 @@ defmodule LemonSim.Examples.StartupIncubator.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("counter offer sent to #{investor_id}")],
+           content: [LemonAgent.text_content("counter offer sent to #{investor_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -347,7 +347,7 @@ defmodule LemonSim.Examples.StartupIncubator.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("accepted deal from #{investor_id}")],
+           content: [LemonAgent.text_content("accepted deal from #{investor_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -382,7 +382,7 @@ defmodule LemonSim.Examples.StartupIncubator.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("rejected deal from #{investor_id}")],
+           content: [LemonAgent.text_content("rejected deal from #{investor_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -418,7 +418,7 @@ defmodule LemonSim.Examples.StartupIncubator.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("merge proposed with #{founder_b_id}")],
+           content: [LemonAgent.text_content("merge proposed with #{founder_b_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -482,7 +482,7 @@ defmodule LemonSim.Examples.StartupIncubator.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("allocated $#{amount} to #{allocation_type}")],
+           content: [LemonAgent.text_content("allocated $#{amount} to #{allocation_type}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -510,7 +510,7 @@ defmodule LemonSim.Examples.StartupIncubator.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("#{actor_id} ending #{phase} phase")],
+           content: [LemonAgent.text_content("#{actor_id} ending #{phase} phase")],
            details: %{"event" => event},
            trust: :trusted
          }}

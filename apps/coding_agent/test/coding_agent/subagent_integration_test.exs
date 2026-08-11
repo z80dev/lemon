@@ -21,8 +21,8 @@ defmodule CodingAgent.SubagentIntegrationTest do
   alias CodingAgent.Session
   alias CodingAgent.SettingsManager
   alias CodingAgent.Tools.Task, as: TaskTool
-  alias Ai.Types.{AssistantMessage, TextContent}
-  alias Ai.Test.IntegrationConfig
+  alias LemonAi.Types.{AssistantMessage, TextContent}
+  alias LemonAi.Test.IntegrationConfig
 
   # ============================================================================
   # Test Configuration
@@ -169,8 +169,8 @@ defmodule CodingAgent.SubagentIntegrationTest do
   # ============================================================================
 
   setup_all do
-    Ai.ProviderRegistry.init()
-    Ai.ProviderRegistry.register(:anthropic_messages, Ai.Providers.Anthropic)
+    LemonAi.ProviderRegistry.init()
+    LemonAi.ProviderRegistry.register(:anthropic_messages, LemonAi.Providers.Anthropic)
     IO.puts("\n[Subagent Integration Tests] Configuration: #{IntegrationConfig.describe()}")
     :ok
   end
@@ -204,7 +204,7 @@ defmodule CodingAgent.SubagentIntegrationTest do
             )
 
           case result do
-            %AgentCore.Types.AgentToolResult{content: content, details: details} ->
+            %LemonAgent.Types.AgentToolResult{content: content, details: details} ->
               text =
                 content
                 |> Enum.filter(&match?(%TextContent{}, &1))
@@ -250,7 +250,7 @@ defmodule CodingAgent.SubagentIntegrationTest do
             )
 
           case result do
-            %AgentCore.Types.AgentToolResult{content: content, details: details} ->
+            %LemonAgent.Types.AgentToolResult{content: content, details: details} ->
               text =
                 content
                 |> Enum.filter(&match?(%TextContent{}, &1))
@@ -293,7 +293,7 @@ defmodule CodingAgent.SubagentIntegrationTest do
             )
 
           case result do
-            %AgentCore.Types.AgentToolResult{content: content, details: details} ->
+            %LemonAgent.Types.AgentToolResult{content: content, details: details} ->
               text =
                 content
                 |> Enum.filter(&match?(%TextContent{}, &1))
@@ -337,7 +337,7 @@ defmodule CodingAgent.SubagentIntegrationTest do
             )
 
           case result do
-            %AgentCore.Types.AgentToolResult{content: content, details: details} ->
+            %LemonAgent.Types.AgentToolResult{content: content, details: details} ->
               text =
                 content
                 |> Enum.filter(&match?(%TextContent{}, &1))
@@ -381,7 +381,7 @@ defmodule CodingAgent.SubagentIntegrationTest do
             )
 
           case result do
-            %AgentCore.Types.AgentToolResult{content: content, details: details} ->
+            %LemonAgent.Types.AgentToolResult{content: content, details: details} ->
               text =
                 content
                 |> Enum.filter(&match?(%TextContent{}, &1))

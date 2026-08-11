@@ -1,13 +1,13 @@
 defmodule LemonGateway.Tools.SmsGetInboxNumber do
   @moduledoc """
-  AgentCore tool that returns the configured SMS inbox phone number.
+  LemonAgent tool that returns the configured SMS inbox phone number.
 
   Reads the E.164-formatted number from `TWILIO_INBOX_NUMBER` or the
   application config and returns it for use in verification flows.
   """
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.TextContent
 
   @spec tool(String.t(), keyword()) :: AgentTool.t()
   def tool(_cwd, _opts \\ []) do

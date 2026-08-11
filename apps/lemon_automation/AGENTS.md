@@ -66,13 +66,13 @@ and `prompt`; command jobs require only `name`, `schedule`, and `command`.
 **GoalContinuationManager** runs one active persistent-goal continuation at a
 time through `TaskSupervisor`. `GoalContinuation` submits normal
 `LemonRouter` requests with `origin: :goal`, `queue_mode: :followup`, and goal
-metadata, then records the returned run id in `AgentCore.Workspace.GoalStore`.
+metadata, then records the returned run id in `LemonAgent.Workspace.GoalStore`.
 
 **GoalLoopManager** runs goal-loop work through `TaskSupervisor`. `run_once/2`
 performs one preview judge tick. `start_loop/2` starts one bounded autonomous
 loop per session, waits for each submitted continuation to emit `:run_completed`,
 and stops at `max_ticks`, failure, timeout, or a terminal judge verdict. Passing
-`auto: true` persists opt-in auto scheduling in `AgentCore.Workspace.GoalStore`; the
+`auto: true` persists opt-in auto scheduling in `LemonAgent.Workspace.GoalStore`; the
 manager scheduler scans active goals and re-starts only persisted auto loops
 when no loop for that session is already running. Focused tests cover that
 persisted-auto path through the real goal loop and router judge runner.
@@ -89,7 +89,7 @@ failures pause goals by default;
 continuation.
 
 **KanbanDispatcher** is the first BEAM-native fleet-work supervisor. It scans
-durable `AgentCore.Workspace.KanbanStore` boards, reclaims expired leases, leases
+durable `LemonAgent.Workspace.KanbanStore` boards, reclaims expired leases, leases
 dependency-unblocked tasks to a worker profile, runs a worker module through
 `TaskSupervisor`, then records completion or failure back into the durable task.
 Focused dispatcher tests cover bounded multi-worker leasing, completion,

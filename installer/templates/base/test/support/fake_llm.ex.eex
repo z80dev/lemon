@@ -2,8 +2,8 @@ defmodule <%= @app_module %>.FakeLLM do
   @moduledoc """
   A scripted stand-in for the model, so the test suite needs no API key.
 
-  `AgentCore` talks to providers through one function — a `stream_fn` taking
-  `(model, context, options)` and returning `{:ok, Ai.EventStream.t()}`. Replace
+  `LemonAgent` talks to providers through one function — a `stream_fn` taking
+  `(model, context, options)` and returning `{:ok, LemonAi.EventStream.t()}`. Replace
   it and nothing else about the agent changes: the loop still parses tool
   calls, still executes tools, still feeds results back. That makes it the
   right seam for tests, and the wrong one for asserting that your prompt is
@@ -26,7 +26,7 @@ defmodule <%= @app_module %>.FakeLLM do
   saying so upstream.
   """
 
-  alias Ai.Types.{AssistantMessage, TextContent, ToolCall, Usage}
+  alias LemonAi.Types.{AssistantMessage, TextContent, ToolCall, Usage}
 
   @doc """
   Builds a `stream_fn` that answers successive model calls from `responses`.
@@ -72,25 +72,25 @@ defmodule <%= @app_module %>.FakeLLM do
   # Replays a finished message as the sequence of events a real provider would
   # have emitted while producing it.
   defp stream(%AssistantMessage{} = message) do
-    {:ok, stream} = Ai.EventStream.start_link()
+    {:ok, stream} = LemonAi.EventStream.start_link()
 
     Task.start(fn ->
-      Ai.EventStream.push(stream, {:start, message})
+      LemonAi.EventStream.push(stream, {:start, message})
 
       message.content
       |> Enum.with_index()
       |> Enum.each(fn
         {%TextContent{text: text}, index} ->
-          Ai.EventStream.push(stream, {:text_start, index, message})
-          Ai.EventStream.push(stream, {:text_delta, index, text, message})
-          Ai.EventStream.push(stream, {:text_end, index, message})
+          LemonAi.EventStream.push(stream, {:text_start, index, message})
+          LemonAi.EventStream.push(stream, {:text_delta, index, text, message})
+          LemonAi.EventStream.push(stream, {:text_end, index, message})
 
         {%ToolCall{} = call, index} ->
-          Ai.EventStream.push(stream, {:tool_call_start, index, call, message})
-          Ai.EventStream.push(stream, {:tool_call_end, index, call, message})
+          LemonAi.EventStream.push(stream, {:tool_call_start, index, call, message})
+          LemonAi.EventStream.push(stream, {:tool_call_end, index, call, message})
       end)
 
-      Ai.EventStream.push(stream, {:done, :stop, message})
+      LemonAi.EventStream.push(stream, {:done, :stop, message})
     end)
 
     stream

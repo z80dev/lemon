@@ -68,12 +68,12 @@ defmodule CodingAgent.ExtensionsTest do
         @impl true
         def tools(_cwd) do
           [
-            %AgentCore.Types.AgentTool{
+            %LemonAgent.Types.AgentTool{
               name: "test_tool",
               description: "A test tool",
               parameters: %{},
               label: "Test Tool",
-              execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{content: []} end
+              execute: fn _, _, _, _ -> %LemonAgent.Types.AgentToolResult{content: []} end
             }
           ]
         end
@@ -412,12 +412,12 @@ defmodule CodingAgent.ExtensionsTest do
         @impl true
         def tools(_cwd) do
           [
-            %AgentCore.Types.AgentTool{
+            %LemonAgent.Types.AgentTool{
               name: "unique_tool_a",
               description: "Unique A",
               parameters: %{},
               label: "Unique A",
-              execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{content: []} end
+              execute: fn _, _, _, _ -> %LemonAgent.Types.AgentToolResult{content: []} end
             }
           ]
         end
@@ -449,12 +449,12 @@ defmodule CodingAgent.ExtensionsTest do
         @impl true
         def tools(_cwd) do
           [
-            %AgentCore.Types.AgentTool{
+            %LemonAgent.Types.AgentTool{
               name: "dup_tool",
               description: "From A",
               parameters: %{},
               label: "Dup A",
-              execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{content: []} end
+              execute: fn _, _, _, _ -> %LemonAgent.Types.AgentToolResult{content: []} end
             }
           ]
         end
@@ -474,12 +474,12 @@ defmodule CodingAgent.ExtensionsTest do
         @impl true
         def tools(_cwd) do
           [
-            %AgentCore.Types.AgentTool{
+            %LemonAgent.Types.AgentTool{
               name: "dup_tool",
               description: "From B",
               parameters: %{},
               label: "Dup B",
-              execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{content: []} end
+              execute: fn _, _, _, _ -> %LemonAgent.Types.AgentToolResult{content: []} end
             }
           ]
         end
@@ -944,8 +944,8 @@ defmodule CodingAgent.ExtensionsTest do
   describe "register_extension_providers/1" do
     setup do
       # Clear any previous state in the provider registry
-      Ai.ProviderRegistry.init()
-      on_exit(fn -> Ai.ProviderRegistry.clear() end)
+      LemonAi.ProviderRegistry.init()
+      on_exit(fn -> LemonAi.ProviderRegistry.clear() end)
       :ok
     end
 
@@ -1005,8 +1005,8 @@ defmodule CodingAgent.ExtensionsTest do
       assert registered.extension == RegisterProviderExt
 
       # Verify provider was actually registered
-      assert Ai.ProviderRegistry.registered?(:ext_model_provider)
-      assert {:ok, ExtModelProvider} == Ai.ProviderRegistry.get(:ext_model_provider)
+      assert LemonAi.ProviderRegistry.registered?(:ext_model_provider)
+      assert {:ok, ExtModelProvider} == LemonAi.ProviderRegistry.get(:ext_model_provider)
 
       # Cleanup
       :code.purge(RegisterProviderExt)
@@ -1089,7 +1089,7 @@ defmodule CodingAgent.ExtensionsTest do
 
     test "skips registration when provider already exists (built-in)", %{tmp_dir: tmp_dir} do
       # Pre-register a built-in provider
-      Ai.ProviderRegistry.register(:existing_builtin, ExistingBuiltinProvider)
+      LemonAi.ProviderRegistry.register(:existing_builtin, ExistingBuiltinProvider)
 
       extension_code = """
       defmodule OverrideBuiltinExt do
@@ -1122,7 +1122,7 @@ defmodule CodingAgent.ExtensionsTest do
       assert report.total_registered == 0
 
       # Verify built-in is still there
-      assert {:ok, ExistingBuiltinProvider} == Ai.ProviderRegistry.get(:existing_builtin)
+      assert {:ok, ExistingBuiltinProvider} == LemonAi.ProviderRegistry.get(:existing_builtin)
 
       # Cleanup
       :code.purge(OverrideBuiltinExt)
@@ -1134,10 +1134,10 @@ defmodule CodingAgent.ExtensionsTest do
 
   describe "unregister_extension_providers/1" do
     setup do
-      Ai.ProviderRegistry.init()
+      LemonAi.ProviderRegistry.init()
 
       on_exit(fn ->
-        Ai.ProviderRegistry.clear()
+        LemonAi.ProviderRegistry.clear()
         LemonMemory.Providers.unregister_provider("my_memory")
         LemonMemory.Providers.unregister_provider("string_memory")
       end)
@@ -1147,8 +1147,8 @@ defmodule CodingAgent.ExtensionsTest do
 
     test "unregisters previously registered providers" do
       # Manually register a provider
-      Ai.ProviderRegistry.register(:temp_provider, TempProviderModule)
-      assert Ai.ProviderRegistry.registered?(:temp_provider)
+      LemonAi.ProviderRegistry.register(:temp_provider, TempProviderModule)
+      assert LemonAi.ProviderRegistry.registered?(:temp_provider)
 
       # Create a fake registration report
       report = %{
@@ -1164,7 +1164,7 @@ defmodule CodingAgent.ExtensionsTest do
       :ok = Extensions.unregister_extension_providers(report)
 
       # Verify it's gone
-      refute Ai.ProviderRegistry.registered?(:temp_provider)
+      refute LemonAi.ProviderRegistry.registered?(:temp_provider)
     end
 
     test "handles nil gracefully" do
@@ -1204,8 +1204,8 @@ defmodule CodingAgent.ExtensionsTest do
 
   describe "provider conflict detection" do
     setup do
-      Ai.ProviderRegistry.init()
-      on_exit(fn -> Ai.ProviderRegistry.clear() end)
+      LemonAi.ProviderRegistry.init()
+      on_exit(fn -> LemonAi.ProviderRegistry.clear() end)
       :ok
     end
 
@@ -1352,14 +1352,14 @@ defmodule CodingAgent.ExtensionsTest do
 
   describe "built-in provider shadowing scenarios" do
     setup do
-      Ai.ProviderRegistry.init()
-      on_exit(fn -> Ai.ProviderRegistry.clear() end)
+      LemonAi.ProviderRegistry.init()
+      on_exit(fn -> LemonAi.ProviderRegistry.clear() end)
       :ok
     end
 
     test "built-in provider shadows single extension provider", %{tmp_dir: tmp_dir} do
       # Pre-register a built-in provider
-      Ai.ProviderRegistry.register(:builtin_model, BuiltinModelModule)
+      LemonAi.ProviderRegistry.register(:builtin_model, BuiltinModelModule)
 
       ext_code = """
       defmodule ShadowedByBuiltinExt do
@@ -1392,7 +1392,7 @@ defmodule CodingAgent.ExtensionsTest do
       assert report.total_registered == 0
 
       # Built-in should still be there
-      assert {:ok, BuiltinModelModule} == Ai.ProviderRegistry.get(:builtin_model)
+      assert {:ok, BuiltinModelModule} == LemonAi.ProviderRegistry.get(:builtin_model)
 
       # Cleanup
       :code.purge(ShadowedByBuiltinExt)
@@ -1405,7 +1405,7 @@ defmodule CodingAgent.ExtensionsTest do
       tmp_dir: tmp_dir
     } do
       # Pre-register a built-in provider
-      Ai.ProviderRegistry.register(:shared_builtin, SharedBuiltinModule)
+      LemonAi.ProviderRegistry.register(:shared_builtin, SharedBuiltinModule)
 
       ext_a_code = """
       defmodule BuiltinShadowExtA do
@@ -1480,8 +1480,8 @@ defmodule CodingAgent.ExtensionsTest do
 
   describe "deterministic ordering for conflicts" do
     setup do
-      Ai.ProviderRegistry.init()
-      on_exit(fn -> Ai.ProviderRegistry.clear() end)
+      LemonAi.ProviderRegistry.init()
+      on_exit(fn -> LemonAi.ProviderRegistry.clear() end)
       :ok
     end
 
@@ -1546,7 +1546,7 @@ defmodule CodingAgent.ExtensionsTest do
       assert conflict.shadowed == [ZZZConflictExt]
 
       # Verify AAA's module was registered
-      assert {:ok, AAAModule} == Ai.ProviderRegistry.get(:ordered_provider)
+      assert {:ok, AAAModule} == LemonAi.ProviderRegistry.get(:ordered_provider)
 
       # Cleanup
       :code.purge(AAAConflictExt)
@@ -1606,7 +1606,7 @@ defmodule CodingAgent.ExtensionsTest do
       # Run multiple times to ensure consistency
       results =
         for _ <- 1..5 do
-          Ai.ProviderRegistry.clear()
+          LemonAi.ProviderRegistry.clear()
 
           {:ok, extensions, _errors, _validation_errors} =
             Extensions.load_extensions_with_errors([tmp_dir])
@@ -1618,7 +1618,7 @@ defmodule CodingAgent.ExtensionsTest do
               winner
 
             [] ->
-              case Ai.ProviderRegistry.get(:consistent_provider) do
+              case LemonAi.ProviderRegistry.get(:consistent_provider) do
                 {:ok, BBeforeModule} -> BBeforeConflictExt
                 {:ok, MMiddleModule} -> MMiddleConflictExt
                 _ -> nil
@@ -1643,8 +1643,8 @@ defmodule CodingAgent.ExtensionsTest do
 
   describe "non-:model provider type handling" do
     setup do
-      Ai.ProviderRegistry.init()
-      on_exit(fn -> Ai.ProviderRegistry.clear() end)
+      LemonAi.ProviderRegistry.init()
+      on_exit(fn -> LemonAi.ProviderRegistry.clear() end)
       :ok
     end
 
@@ -1681,7 +1681,7 @@ defmodule CodingAgent.ExtensionsTest do
       assert report.total_conflicts == 0
 
       # Provider should NOT be in the registry
-      refute Ai.ProviderRegistry.registered?(:custom_storage)
+      refute LemonAi.ProviderRegistry.registered?(:custom_storage)
 
       # Cleanup
       :code.purge(StorageProviderExt)
@@ -1719,7 +1719,7 @@ defmodule CodingAgent.ExtensionsTest do
       report = Extensions.register_extension_providers(extensions)
 
       assert report.total_registered == 0
-      refute Ai.ProviderRegistry.registered?(:custom_executor)
+      refute LemonAi.ProviderRegistry.registered?(:custom_executor)
 
       # Cleanup
       :code.purge(ToolExecutorProviderExt)
@@ -1780,9 +1780,9 @@ defmodule CodingAgent.ExtensionsTest do
       assert report.total_registered == 2
       assert Enum.any?(report.registered, &(&1.type == :model and &1.name == :my_model))
       assert Enum.any?(report.registered, &(&1.type == :memory and &1.name == :my_memory))
-      assert Ai.ProviderRegistry.registered?(:my_model)
-      refute Ai.ProviderRegistry.registered?(:my_storage)
-      refute Ai.ProviderRegistry.registered?(:my_executor)
+      assert LemonAi.ProviderRegistry.registered?(:my_model)
+      refute LemonAi.ProviderRegistry.registered?(:my_storage)
+      refute LemonAi.ProviderRegistry.registered?(:my_executor)
 
       status = LemonMemory.Providers.status()
       memory_provider = Enum.find(status.providers, &(&1.id == "my_memory"))

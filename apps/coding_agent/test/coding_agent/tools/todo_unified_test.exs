@@ -2,9 +2,9 @@ defmodule CodingAgent.Tools.TodoUnifiedTest do
   # Uses a global ETS table via TodoStore.
   use ExUnit.Case, async: false
 
-  alias AgentCore.AbortSignal
-  alias AgentCore.Types.AgentToolResult
-  alias Ai.Types.TextContent
+  alias LemonAgent.AbortSignal
+  alias LemonAgent.Types.AgentToolResult
+  alias LemonAi.Types.TextContent
   alias CodingAgent.Tools.{Todo, TodoStore}
 
   setup do

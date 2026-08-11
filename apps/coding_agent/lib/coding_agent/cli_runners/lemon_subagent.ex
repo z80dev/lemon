@@ -70,7 +70,7 @@ defmodule CodingAgent.CliRunners.LemonSubagent do
   """
 
   alias CodingAgent.CliRunners.LemonRunner
-  alias AgentCore.CliRunners.Types.{ActionEvent, CompletedEvent, StartedEvent}
+  alias LemonAgent.CliRunners.Types.{ActionEvent, CompletedEvent, StartedEvent}
   alias LemonCore.ResumeToken
 
   require Logger
@@ -82,7 +82,7 @@ defmodule CodingAgent.CliRunners.LemonSubagent do
   @typedoc "A Lemon subagent session"
   @type session :: %{
           pid: pid(),
-          stream: AgentCore.EventStream.t(),
+          stream: LemonAgent.EventStream.t(),
           resume_token: ResumeToken.t() | nil,
           token_agent: pid() | nil,
           cwd: String.t()
@@ -233,7 +233,7 @@ defmodule CodingAgent.CliRunners.LemonSubagent do
     token_agent = session.token_agent
 
     session.stream
-    |> AgentCore.EventStream.events()
+    |> LemonAgent.EventStream.events()
     |> Stream.flat_map(&normalize_event/1)
     |> Stream.each(fn event ->
       case event do

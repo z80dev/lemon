@@ -30,7 +30,7 @@ defmodule HelloWorldExtension do
   @impl true
   def tools(_cwd) do
     [
-      %AgentCore.Types.AgentTool{
+      %LemonAgent.Types.AgentTool{
         name: "hello",
         description: "Says hello to someone. Use this to greet users.",
         parameters: %{
@@ -70,7 +70,7 @@ defmodule HelloWorldExtension do
   defp execute_hello(_tool_use_id, %{"name" => name}, _abort_signal, _on_update) do
     greeting = "Hello, #{name}! 👋"
 
-    %AgentCore.Types.AgentToolResult{
+    %LemonAgent.Types.AgentToolResult{
       content: [%{type: "text", text: greeting}]
     }
   end

@@ -1,7 +1,7 @@
 {:ok, _} = Application.ensure_all_started(:lemon_core)
 
-alias AgentCore.Types.AgentToolResult
-alias Ai.Types.TextContent
+alias LemonAgent.Types.AgentToolResult
+alias LemonAi.Types.TextContent
 alias CodingAgent.ToolRegistry
 
 defmodule LemonScripts.ExtensionHostSmoke.TelemetryHandler do
@@ -78,7 +78,7 @@ extension_code = fn module_name, extension_name, tool_name, body ->
     @impl true
     def tools(_cwd) do
       [
-        %AgentCore.Types.AgentTool{
+        %LemonAgent.Types.AgentTool{
           name: "#{tool_name}",
           description: "extension host proof tool",
           parameters: %{
@@ -91,8 +91,8 @@ extension_code = fn module_name, extension_name, tool_name, body ->
             _ = params
 
             if is_function(on_update, 1) do
-              on_update.(%AgentCore.Types.AgentToolResult{
-                content: [%Ai.Types.TextContent{text: "extension update"}],
+              on_update.(%LemonAgent.Types.AgentToolResult{
+                content: [%LemonAi.Types.TextContent{text: "extension update"}],
                 details: %{tool_call_id_seen: is_binary(tool_call_id)}
               })
             end
@@ -113,7 +113,7 @@ File.write!(
     "default-extension-proof",
     "untrusted_default_extension_tool",
     """
-    %AgentCore.Types.AgentToolResult{content: [%Ai.Types.TextContent{text: "default"}], details: %{}}
+    %LemonAgent.Types.AgentToolResult{content: [%LemonAi.Types.TextContent{text: "default"}], details: %{}}
     """
   )
 )
@@ -125,8 +125,8 @@ File.write!(
     "trusted-extension-proof",
     "lemon_extension_echo",
     """
-    %AgentCore.Types.AgentToolResult{
-      content: [%Ai.Types.TextContent{text: "extension_echo:" <> Map.get(params, "input", "")}],
+    %LemonAgent.Types.AgentToolResult{
+      content: [%LemonAi.Types.TextContent{text: "extension_echo:" <> Map.get(params, "input", "")}],
       details: %{host: :beam, trusted_path: true}
     }
     """
@@ -140,7 +140,7 @@ File.write!(
     "conflict-extension-proof",
     "read",
     """
-    %AgentCore.Types.AgentToolResult{content: [%Ai.Types.TextContent{text: "shadowed"}], details: %{}}
+    %LemonAgent.Types.AgentToolResult{content: [%LemonAi.Types.TextContent{text: "shadowed"}], details: %{}}
     """
   )
 )
@@ -174,7 +174,7 @@ File.write!(
     "disabled_extension_tool",
     """
     File.write!(#{inspect(disabled_marker_path)}, "loaded")
-    %AgentCore.Types.AgentToolResult{content: [%Ai.Types.TextContent{text: "disabled"}], details: %{}}
+    %LemonAgent.Types.AgentToolResult{content: [%LemonAi.Types.TextContent{text: "disabled"}], details: %{}}
     """
   )
 )
@@ -196,7 +196,7 @@ File.write!(
     "env_disabled_extension_tool",
     """
     File.write!(#{inspect(env_disabled_marker_path)}, "loaded")
-    %AgentCore.Types.AgentToolResult{content: [%Ai.Types.TextContent{text: "disabled"}], details: %{}}
+    %LemonAgent.Types.AgentToolResult{content: [%LemonAi.Types.TextContent{text: "disabled"}], details: %{}}
     """
   )
 )

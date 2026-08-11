@@ -8,9 +8,9 @@ defmodule LemonSkills.Tools.SkillManage do
   before they are exposed through the registry.
   """
 
-  alias AgentCore.AbortSignal
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.TextContent
+  alias LemonAgent.AbortSignal
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.TextContent
   alias LemonSkills.{Config, Manifest, Registry}
   alias LemonSkills.Audit.BundleAudit
 

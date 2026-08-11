@@ -1,15 +1,15 @@
 defmodule CodingAgent.Session.ProviderFallback do
   @moduledoc false
 
-  alias Ai.Types.StreamOptions
+  alias LemonAi.Types.StreamOptions
   alias CodingAgent.Session.ModelResolver
   alias CodingAgent.SettingsManager
 
   @type stream_fn ::
-          (Ai.Types.Model.t(), Ai.Types.Context.t(), StreamOptions.t() ->
-             {:ok, Ai.EventStream.t()} | Ai.EventStream.t() | {:error, term()})
+          (LemonAi.Types.Model.t(), LemonAi.Types.Context.t(), StreamOptions.t() ->
+             {:ok, LemonAi.EventStream.t()} | LemonAi.EventStream.t() | {:error, term()})
 
-  @spec maybe_wrap(stream_fn() | nil, Ai.Types.Model.t(), SettingsManager.t(), String.t()) ::
+  @spec maybe_wrap(stream_fn() | nil, LemonAi.Types.Model.t(), SettingsManager.t(), String.t()) ::
           stream_fn() | nil
   def maybe_wrap(stream_fn, model, %SettingsManager{} = settings, cwd) do
     candidates = ModelResolver.runtime_fallback_models(model, settings)
@@ -17,7 +17,7 @@ defmodule CodingAgent.Session.ProviderFallback do
     if candidates == [] do
       stream_fn
     else
-      base_stream_fn = stream_fn || (&Ai.stream/3)
+      base_stream_fn = stream_fn || (&LemonAi.stream/3)
 
       fn primary_model, context, options ->
         stream_with_fallback(
@@ -44,15 +44,15 @@ defmodule CodingAgent.Session.ProviderFallback do
          cwd,
          stream_fn
        ) do
-    {:ok, output_stream} = Ai.EventStream.start_link()
+    {:ok, output_stream} = LemonAi.EventStream.start_link()
 
     {:ok, task_pid} =
-      Task.Supervisor.start_child(Ai.StreamTaskSupervisor, fn ->
+      Task.Supervisor.start_child(LemonAi.StreamTaskSupervisor, fn ->
         candidates = [primary_model | fallback_models] |> Enum.reject(&is_nil/1)
         run_candidates(candidates, context, options, settings, cwd, stream_fn, output_stream, nil)
       end)
 
-    Ai.EventStream.attach_task(output_stream, task_pid)
+    LemonAi.EventStream.attach_task(output_stream, task_pid)
     {:ok, output_stream}
   end
 
@@ -131,7 +131,7 @@ defmodule CodingAgent.Session.ProviderFallback do
 
   defp relay_attempt(response_stream, output_stream) do
     response_stream
-    |> Ai.EventStream.events()
+    |> LemonAi.EventStream.events()
     |> Enum.reduce_while(%{committed: false, buffer: []}, fn event, state ->
       cond do
         not state.committed and retryable_error?(event) ->
@@ -161,12 +161,12 @@ defmodule CodingAgent.Session.ProviderFallback do
     end)
     |> case do
       %{committed: false, buffer: []} ->
-        Ai.EventStream.error(output_stream, error_message(nil, "empty_provider_stream"))
+        LemonAi.EventStream.error(output_stream, error_message(nil, "empty_provider_stream"))
         :emitted
 
       %{committed: false, buffer: buffer} ->
         Enum.each(buffer, &emit_event(output_stream, &1))
-        Ai.EventStream.error(output_stream, error_message(nil, "provider_stream_closed"))
+        LemonAi.EventStream.error(output_stream, error_message(nil, "provider_stream_closed"))
         :emitted
 
       %{committed: true} ->
@@ -196,40 +196,43 @@ defmodule CodingAgent.Session.ProviderFallback do
   defp useful_event?(_), do: false
 
   defp emit_event(output_stream, {:done, _reason, message}),
-    do: Ai.EventStream.complete(output_stream, message)
+    do: LemonAi.EventStream.complete(output_stream, message)
 
   defp emit_event(output_stream, {:error, _reason, message}),
-    do: Ai.EventStream.error(output_stream, message)
+    do: LemonAi.EventStream.error(output_stream, message)
 
   defp emit_event(output_stream, {:canceled, reason}),
-    do: Ai.EventStream.cancel(output_stream, reason)
+    do: LemonAi.EventStream.cancel(output_stream, reason)
 
-  defp emit_event(output_stream, event), do: Ai.EventStream.push(output_stream, event)
+  defp emit_event(output_stream, event), do: LemonAi.EventStream.push(output_stream, event)
 
   defp push_last_error(output_stream, {:provider_error, {:error, reason, message}}) do
-    Ai.EventStream.error(output_stream, %{message | stop_reason: reason || :error})
+    LemonAi.EventStream.error(output_stream, %{message | stop_reason: reason || :error})
   end
 
   defp push_last_error(output_stream, {:error, reason, model}) do
-    Ai.EventStream.error(output_stream, error_message(model, inspect(reason)))
+    LemonAi.EventStream.error(output_stream, error_message(model, inspect(reason)))
   end
 
   defp push_last_error(output_stream, {:invalid_stream, other, model}) do
-    Ai.EventStream.error(output_stream, error_message(model, "invalid_stream: #{inspect(other)}"))
+    LemonAi.EventStream.error(
+      output_stream,
+      error_message(model, "invalid_stream: #{inspect(other)}")
+    )
   end
 
   defp push_last_error(output_stream, reason) do
-    Ai.EventStream.error(output_stream, error_message(nil, inspect(reason)))
+    LemonAi.EventStream.error(output_stream, error_message(nil, inspect(reason)))
   end
 
   defp error_message(model, message) do
-    %Ai.Types.AssistantMessage{
+    %LemonAi.Types.AssistantMessage{
       role: :assistant,
-      content: [%Ai.Types.TextContent{type: :text, text: ""}],
+      content: [%LemonAi.Types.TextContent{type: :text, text: ""}],
       api: model && model.api,
       provider: model && model.provider,
       model: (model && model.id) || "",
-      usage: %Ai.Types.Usage{},
+      usage: %LemonAi.Types.Usage{},
       stop_reason: :error,
       error_message: message,
       timestamp: System.system_time(:millisecond)

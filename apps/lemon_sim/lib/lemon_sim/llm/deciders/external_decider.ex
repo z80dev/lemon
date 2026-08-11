@@ -9,8 +9,8 @@ defmodule LemonSim.LLM.Deciders.ExternalDecider do
 
   require Logger
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.{Context, ToolCall, UserMessage}
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.{Context, ToolCall, UserMessage}
   alias LemonSim.LLM.Deciders.ToolPolicies.SingleTerminal
   alias LemonSim.LLM.Usage
 
@@ -335,7 +335,7 @@ defmodule LemonSim.LLM.Deciders.ExternalDecider do
       tool_call_id: tool_call.id,
       arguments: tool_call.arguments,
       is_error: is_error,
-      result_text: AgentCore.get_text(result),
+      result_text: LemonAgent.get_text(result),
       result_details: result.details
     }
 
@@ -542,7 +542,7 @@ defmodule LemonSim.LLM.Deciders.ExternalDecider do
   defp tool_result_payload(%AgentToolResult{} = result, is_error) do
     %{
       "is_error" => is_error,
-      "text" => AgentCore.get_text(result),
+      "text" => LemonAgent.get_text(result),
       "details" => result.details
     }
   end
@@ -632,12 +632,12 @@ defmodule LemonSim.LLM.Deciders.ExternalDecider do
 
   defp normalize_tool_result(%AgentToolResult{} = result), do: result
 
-  defp normalize_tool_result(%Ai.Types.TextContent{} = content) do
+  defp normalize_tool_result(%LemonAi.Types.TextContent{} = content) do
     %AgentToolResult{content: [content], details: nil, trust: :trusted}
   end
 
   defp normalize_tool_result(content) when is_binary(content) do
-    %AgentToolResult{content: [AgentCore.text_content(content)], details: nil, trust: :trusted}
+    %AgentToolResult{content: [LemonAgent.text_content(content)], details: nil, trust: :trusted}
   end
 
   defp normalize_tool_result(content) when is_list(content) do
@@ -650,7 +650,7 @@ defmodule LemonSim.LLM.Deciders.ExternalDecider do
   defp normalize_tool_result(content), do: normalize_tool_result(inspect(content))
 
   defp error_result(reason) when is_binary(reason) do
-    %AgentToolResult{content: [AgentCore.text_content(reason)], details: nil, trust: :trusted}
+    %AgentToolResult{content: [LemonAgent.text_content(reason)], details: nil, trust: :trusted}
   end
 
   defp error_result(reason), do: error_result(inspect(reason))

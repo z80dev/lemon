@@ -2,7 +2,7 @@ defmodule CodingAgent.ToolsTest do
   use ExUnit.Case, async: true
 
   alias CodingAgent.Tools
-  alias AgentCore.Types.AgentTool
+  alias LemonAgent.Types.AgentTool
 
   @test_cwd "/tmp/test_cwd"
 

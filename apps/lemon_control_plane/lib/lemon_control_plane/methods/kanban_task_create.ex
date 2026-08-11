@@ -29,7 +29,7 @@ defmodule LemonControlPlane.Methods.KanbanTaskCreate do
         meta: KanbanFormat.param(params, "meta")
       ]
 
-      case AgentCore.Workspace.KanbanStore.create_task(board_id, title, opts) do
+      case LemonAgent.Workspace.KanbanStore.create_task(board_id, title, opts) do
         {:ok, task} -> {:ok, KanbanFormat.task_response(name(), task)}
         {:error, reason} -> {:error, {:invalid_request, inspect(reason), nil}}
       end

@@ -8,7 +8,7 @@ defmodule CodingAgent.ExtensionsEdgeCasesTest do
   use ExUnit.Case, async: true
 
   alias CodingAgent.Extensions
-  alias AgentCore.Types.AgentToolResult
+  alias LemonAgent.Types.AgentToolResult
 
   @moduletag :tmp_dir
 
@@ -352,12 +352,12 @@ defmodule CodingAgent.ExtensionsEdgeCasesTest do
         @impl true
         def tools(_cwd) do
           [
-            %AgentCore.Types.AgentTool{
+            %LemonAgent.Types.AgentTool{
               name: "valid_tool",
               description: "A valid tool",
               parameters: %{},
               label: "Valid Tool",
-              execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{content: []} end
+              execute: fn _, _, _, _ -> %LemonAgent.Types.AgentToolResult{content: []} end
             }
           ]
         end
@@ -742,13 +742,13 @@ defmodule CodingAgent.ExtensionsEdgeCasesTest do
         @impl true
         def tools(_cwd) do
           [
-            %AgentCore.Types.AgentTool{
+            %LemonAgent.Types.AgentTool{
               name: "unload_tool",
               description: "A tool",
               parameters: %{},
               label: "Unload Tool",
               execute: fn _, _, _, _ ->
-                %AgentCore.Types.AgentToolResult{content: [%{type: "text", text: "result"}]}
+                %LemonAgent.Types.AgentToolResult{content: [%{type: "text", text: "result"}]}
               end
             }
           ]
@@ -796,12 +796,12 @@ defmodule CodingAgent.ExtensionsEdgeCasesTest do
           # Small delay to increase chance of race conditions
           Process.sleep(10)
           [
-            %AgentCore.Types.AgentTool{
+            %LemonAgent.Types.AgentTool{
               name: "concurrent_tool",
               description: "A tool",
               parameters: %{},
               label: "Concurrent Tool",
-              execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{content: []} end
+              execute: fn _, _, _, _ -> %LemonAgent.Types.AgentToolResult{content: []} end
             }
           ]
         end
@@ -866,12 +866,12 @@ defmodule CodingAgent.ExtensionsEdgeCasesTest do
       tool_definitions =
         for i <- 1..100 do
           """
-          %AgentCore.Types.AgentTool{
+          %LemonAgent.Types.AgentTool{
             name: "tool_#{i}",
             description: "Tool number #{i}",
             parameters: %{},
             label: "Tool #{i}",
-            execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{content: []} end
+            execute: fn _, _, _, _ -> %LemonAgent.Types.AgentToolResult{content: []} end
           }
           """
         end

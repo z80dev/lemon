@@ -1,7 +1,7 @@
 {:ok, _} = Application.ensure_all_started(:coding_agent)
 
-alias AgentCore.Types.AgentToolResult
-alias Ai.Types.TextContent
+alias LemonAgent.Types.AgentToolResult
+alias LemonAi.Types.TextContent
 alias CodingAgent.Wasm.ToolFactory
 
 defmodule LemonScripts.WasmToolTelemetrySmoke.FakeSidecar do

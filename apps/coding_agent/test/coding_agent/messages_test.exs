@@ -19,20 +19,26 @@ defmodule CodingAgent.MessagesTest do
   }
 
   describe "to_llm/1" do
-    test "passes through Ai.Types.UserMessage unchanged" do
-      msg = %Ai.Types.UserMessage{role: :user, content: "hello", timestamp: 0}
+    test "passes through LemonAi.Types.UserMessage unchanged" do
+      msg = %LemonAi.Types.UserMessage{role: :user, content: "hello", timestamp: 0}
       [result] = Messages.to_llm([msg])
       assert result == msg
     end
 
-    test "passes through Ai.Types.AssistantMessage unchanged" do
-      msg = %Ai.Types.AssistantMessage{role: :assistant, content: [], model: "test", timestamp: 0}
+    test "passes through LemonAi.Types.AssistantMessage unchanged" do
+      msg = %LemonAi.Types.AssistantMessage{
+        role: :assistant,
+        content: [],
+        model: "test",
+        timestamp: 0
+      }
+
       [result] = Messages.to_llm([msg])
       assert result == msg
     end
 
-    test "passes through Ai.Types.ToolResultMessage unchanged" do
-      msg = %Ai.Types.ToolResultMessage{
+    test "passes through LemonAi.Types.ToolResultMessage unchanged" do
+      msg = %LemonAi.Types.ToolResultMessage{
         role: :tool_result,
         tool_call_id: "123",
         tool_name: "test_tool",
@@ -46,10 +52,10 @@ defmodule CodingAgent.MessagesTest do
       assert result == msg
     end
 
-    test "converts UserMessage to Ai.Types.UserMessage" do
+    test "converts UserMessage to LemonAi.Types.UserMessage" do
       msg = %UserMessage{content: "hello world", timestamp: 123}
       [result] = Messages.to_llm([msg])
-      assert %Ai.Types.UserMessage{} = result
+      assert %LemonAi.Types.UserMessage{} = result
       assert result.role == :user
       assert result.content == "hello world"
       assert result.timestamp == 123
@@ -65,16 +71,16 @@ defmodule CodingAgent.MessagesTest do
       }
 
       [result] = Messages.to_llm([msg])
-      assert %Ai.Types.UserMessage{} = result
+      assert %LemonAi.Types.UserMessage{} = result
       assert is_list(result.content)
       assert length(result.content) == 2
 
       [text_block, image_block] = result.content
-      assert %Ai.Types.TextContent{text: "hello"} = text_block
-      assert %Ai.Types.ImageContent{data: "abc123", mime_type: "image/png"} = image_block
+      assert %LemonAi.Types.TextContent{text: "hello"} = text_block
+      assert %LemonAi.Types.ImageContent{data: "abc123", mime_type: "image/png"} = image_block
     end
 
-    test "converts AssistantMessage to Ai.Types.AssistantMessage" do
+    test "converts AssistantMessage to LemonAi.Types.AssistantMessage" do
       msg = %AssistantMessage{
         content: [%TextContent{text: "response"}],
         provider: "anthropic",
@@ -86,7 +92,7 @@ defmodule CodingAgent.MessagesTest do
       }
 
       [result] = Messages.to_llm([msg])
-      assert %Ai.Types.AssistantMessage{} = result
+      assert %LemonAi.Types.AssistantMessage{} = result
       assert result.role == :assistant
       assert length(result.content) == 1
       assert hd(result.content).text == "response"
@@ -110,12 +116,12 @@ defmodule CodingAgent.MessagesTest do
       }
 
       [result] = Messages.to_llm([msg])
-      assert %Ai.Types.AssistantMessage{} = result
+      assert %LemonAi.Types.AssistantMessage{} = result
       assert length(result.content) == 2
 
       [text_block, tool_block] = result.content
-      assert %Ai.Types.TextContent{text: "I'll read that file"} = text_block
-      assert %Ai.Types.ToolCall{id: "tool_1", name: "read"} = tool_block
+      assert %LemonAi.Types.TextContent{text: "I'll read that file"} = text_block
+      assert %LemonAi.Types.ToolCall{id: "tool_1", name: "read"} = tool_block
       assert tool_block.arguments == %{"path" => "/test.txt"}
     end
 
@@ -130,12 +136,15 @@ defmodule CodingAgent.MessagesTest do
       }
 
       [result] = Messages.to_llm([msg])
-      assert %Ai.Types.AssistantMessage{} = result
+      assert %LemonAi.Types.AssistantMessage{} = result
       assert length(result.content) == 2
 
       [thinking_block, text_block] = result.content
-      assert %Ai.Types.ThinkingContent{thinking: "Let me think about this..."} = thinking_block
-      assert %Ai.Types.TextContent{text: "Here's my answer"} = text_block
+
+      assert %LemonAi.Types.ThinkingContent{thinking: "Let me think about this..."} =
+               thinking_block
+
+      assert %LemonAi.Types.TextContent{text: "Here's my answer"} = text_block
     end
 
     test "converts AssistantMessage with nil usage" do
@@ -144,7 +153,7 @@ defmodule CodingAgent.MessagesTest do
       assert result.usage == nil
     end
 
-    test "converts ToolResultMessage to Ai.Types.ToolResultMessage" do
+    test "converts ToolResultMessage to LemonAi.Types.ToolResultMessage" do
       msg = %ToolResultMessage{
         tool_use_id: "tool_123",
         content: [%TextContent{text: "file contents here"}],
@@ -153,7 +162,7 @@ defmodule CodingAgent.MessagesTest do
       }
 
       [result] = Messages.to_llm([msg])
-      assert %Ai.Types.ToolResultMessage{} = result
+      assert %LemonAi.Types.ToolResultMessage{} = result
       assert result.role == :tool_result
       assert result.tool_call_id == "tool_123"
       assert result.trust == :trusted
@@ -174,7 +183,7 @@ defmodule CodingAgent.MessagesTest do
       assert result.is_error == true
     end
 
-    test "converts ToolResultMessage trust to Ai.Types.ToolResultMessage" do
+    test "converts ToolResultMessage trust to LemonAi.Types.ToolResultMessage" do
       msg = %ToolResultMessage{
         tool_use_id: "tool_123",
         content: [%TextContent{text: "untrusted output"}],
@@ -197,7 +206,7 @@ defmodule CodingAgent.MessagesTest do
       }
 
       [result] = Messages.to_llm([msg])
-      assert %Ai.Types.UserMessage{} = result
+      assert %LemonAi.Types.UserMessage{} = result
       assert result.content =~ "ls"
       assert result.content =~ "file.txt"
       assert result.timestamp == 123
@@ -283,7 +292,7 @@ defmodule CodingAgent.MessagesTest do
       }
 
       [result] = Messages.to_llm([msg])
-      assert %Ai.Types.UserMessage{} = result
+      assert %LemonAi.Types.UserMessage{} = result
       assert result.content == "custom content"
       assert result.timestamp == 123
     end
@@ -297,7 +306,7 @@ defmodule CodingAgent.MessagesTest do
       }
 
       [result] = Messages.to_llm([msg])
-      assert %Ai.Types.UserMessage{} = result
+      assert %LemonAi.Types.UserMessage{} = result
       assert is_list(result.content)
     end
 
@@ -324,7 +333,7 @@ defmodule CodingAgent.MessagesTest do
       }
 
       [result] = Messages.to_llm([msg])
-      assert %Ai.Types.UserMessage{} = result
+      assert %LemonAi.Types.UserMessage{} = result
       assert result.timestamp == 123
       assert result.content =~ "[SYSTEM-DELIVERED ASYNC COMPLETION - NOT A USER MESSAGE]"
       assert_async_followup_envelope(result.content, original_content)
@@ -352,7 +361,7 @@ defmodule CodingAgent.MessagesTest do
       }
 
       [result] = Messages.to_llm([msg])
-      assert %Ai.Types.UserMessage{} = result
+      assert %LemonAi.Types.UserMessage{} = result
       assert_async_followup_envelope(result.content, "")
     end
 
@@ -374,7 +383,7 @@ defmodule CodingAgent.MessagesTest do
       }
 
       [result] = Messages.to_llm([msg])
-      assert %Ai.Types.UserMessage{} = result
+      assert %LemonAi.Types.UserMessage{} = result
       assert result.content =~ "\n````\n"
       assert_async_followup_envelope(result.content, original_content)
     end
@@ -382,7 +391,7 @@ defmodule CodingAgent.MessagesTest do
     test "converts BranchSummaryMessage with tags" do
       msg = %BranchSummaryMessage{summary: "branch info", timestamp: 123}
       [result] = Messages.to_llm([msg])
-      assert %Ai.Types.UserMessage{} = result
+      assert %LemonAi.Types.UserMessage{} = result
       assert result.content =~ "<branch_summary>"
       assert result.content =~ "branch info"
       assert result.content =~ "</branch_summary>"
@@ -392,7 +401,7 @@ defmodule CodingAgent.MessagesTest do
     test "converts CompactionSummaryMessage with tags" do
       msg = %CompactionSummaryMessage{summary: "compaction info", timestamp: 123}
       [result] = Messages.to_llm([msg])
-      assert %Ai.Types.UserMessage{} = result
+      assert %LemonAi.Types.UserMessage{} = result
       assert result.content =~ "<compaction_summary>"
       assert result.content =~ "compaction info"
       assert result.content =~ "</compaction_summary>"
@@ -402,7 +411,7 @@ defmodule CodingAgent.MessagesTest do
     test "converts plain map with role: :user" do
       msg = %{role: :user, content: "plain map content", timestamp: 100}
       [result] = Messages.to_llm([msg])
-      assert %Ai.Types.UserMessage{} = result
+      assert %LemonAi.Types.UserMessage{} = result
       assert result.content == "plain map content"
       assert result.timestamp == 100
     end
@@ -410,7 +419,7 @@ defmodule CodingAgent.MessagesTest do
     test "converts plain map with role: :assistant" do
       msg = %{role: :assistant, content: [], model: "test-model", timestamp: 100}
       [result] = Messages.to_llm([msg])
-      assert %Ai.Types.AssistantMessage{} = result
+      assert %LemonAi.Types.AssistantMessage{} = result
       assert result.model == "test-model"
       assert result.timestamp == 100
     end
@@ -425,7 +434,7 @@ defmodule CodingAgent.MessagesTest do
       }
 
       [result] = Messages.to_llm([msg])
-      assert %Ai.Types.ToolResultMessage{} = result
+      assert %LemonAi.Types.ToolResultMessage{} = result
       assert result.tool_call_id == "abc"
       assert result.trust == :trusted
       assert result.timestamp == 100
@@ -433,7 +442,7 @@ defmodule CodingAgent.MessagesTest do
 
     test "handles list of mixed message types" do
       messages = [
-        %Ai.Types.UserMessage{content: "hi", timestamp: 1},
+        %LemonAi.Types.UserMessage{content: "hi", timestamp: 1},
         %AssistantMessage{content: [%TextContent{text: "hello"}], model: "test", timestamp: 2},
         %BashExecutionMessage{
           command: "ls",
@@ -448,10 +457,10 @@ defmodule CodingAgent.MessagesTest do
 
       result = Messages.to_llm(messages)
       assert length(result) == 4
-      assert %Ai.Types.UserMessage{content: "hi"} = Enum.at(result, 0)
-      assert %Ai.Types.AssistantMessage{} = Enum.at(result, 1)
-      assert %Ai.Types.UserMessage{} = Enum.at(result, 2)
-      assert %Ai.Types.UserMessage{} = Enum.at(result, 3)
+      assert %LemonAi.Types.UserMessage{content: "hi"} = Enum.at(result, 0)
+      assert %LemonAi.Types.AssistantMessage{} = Enum.at(result, 1)
+      assert %LemonAi.Types.UserMessage{} = Enum.at(result, 2)
+      assert %LemonAi.Types.UserMessage{} = Enum.at(result, 3)
     end
 
     test "filters out excluded messages from list" do
@@ -515,17 +524,17 @@ defmodule CodingAgent.MessagesTest do
       assert Messages.get_text(msg) == "hello world"
     end
 
-    test "extracts text from Ai.Types.UserMessage with string content" do
-      msg = %Ai.Types.UserMessage{role: :user, content: "hello", timestamp: 0}
+    test "extracts text from LemonAi.Types.UserMessage with string content" do
+      msg = %LemonAi.Types.UserMessage{role: :user, content: "hello", timestamp: 0}
       assert Messages.get_text(msg) == "hello"
     end
 
-    test "extracts text from Ai.Types.UserMessage with content blocks" do
-      msg = %Ai.Types.UserMessage{
+    test "extracts text from LemonAi.Types.UserMessage with content blocks" do
+      msg = %LemonAi.Types.UserMessage{
         role: :user,
         content: [
-          %Ai.Types.TextContent{text: "first"},
-          %Ai.Types.TextContent{text: "second"}
+          %LemonAi.Types.TextContent{text: "first"},
+          %LemonAi.Types.TextContent{text: "second"}
         ],
         timestamp: 0
       }
@@ -546,10 +555,10 @@ defmodule CodingAgent.MessagesTest do
       assert Messages.get_text(msg) == "part1part2"
     end
 
-    test "extracts text from Ai.Types.AssistantMessage with content blocks" do
-      msg = %Ai.Types.AssistantMessage{
+    test "extracts text from LemonAi.Types.AssistantMessage with content blocks" do
+      msg = %LemonAi.Types.AssistantMessage{
         role: :assistant,
-        content: [%Ai.Types.TextContent{text: "hello"}],
+        content: [%LemonAi.Types.TextContent{text: "hello"}],
         model: "test",
         timestamp: 0
       }
@@ -557,12 +566,12 @@ defmodule CodingAgent.MessagesTest do
       assert Messages.get_text(msg) == "hello"
     end
 
-    test "extracts text from Ai.Types.AssistantMessage with thinking content" do
-      msg = %Ai.Types.AssistantMessage{
+    test "extracts text from LemonAi.Types.AssistantMessage with thinking content" do
+      msg = %LemonAi.Types.AssistantMessage{
         role: :assistant,
         content: [
-          %Ai.Types.ThinkingContent{thinking: "thinking..."},
-          %Ai.Types.TextContent{text: "response"}
+          %LemonAi.Types.ThinkingContent{thinking: "thinking..."},
+          %LemonAi.Types.TextContent{text: "response"}
         ],
         model: "test",
         timestamp: 0
@@ -571,12 +580,12 @@ defmodule CodingAgent.MessagesTest do
       assert Messages.get_text(msg) == "thinking...\nresponse"
     end
 
-    test "extracts text from Ai.Types.AssistantMessage with image content" do
-      msg = %Ai.Types.AssistantMessage{
+    test "extracts text from LemonAi.Types.AssistantMessage with image content" do
+      msg = %LemonAi.Types.AssistantMessage{
         role: :assistant,
         content: [
-          %Ai.Types.TextContent{text: "here's an image:"},
-          %Ai.Types.ImageContent{data: "abc", mime_type: "image/png"}
+          %LemonAi.Types.TextContent{text: "here's an image:"},
+          %LemonAi.Types.ImageContent{data: "abc", mime_type: "image/png"}
         ],
         model: "test",
         timestamp: 0
@@ -585,12 +594,12 @@ defmodule CodingAgent.MessagesTest do
       assert Messages.get_text(msg) == "here's an image:\n[image]"
     end
 
-    test "extracts text from Ai.Types.AssistantMessage with tool call" do
-      msg = %Ai.Types.AssistantMessage{
+    test "extracts text from LemonAi.Types.AssistantMessage with tool call" do
+      msg = %LemonAi.Types.AssistantMessage{
         role: :assistant,
         content: [
-          %Ai.Types.TextContent{text: "calling tool:"},
-          %Ai.Types.ToolCall{id: "1", name: "read", arguments: %{}}
+          %LemonAi.Types.TextContent{text: "calling tool:"},
+          %LemonAi.Types.ToolCall{id: "1", name: "read", arguments: %{}}
         ],
         model: "test",
         timestamp: 0
@@ -609,12 +618,12 @@ defmodule CodingAgent.MessagesTest do
       assert Messages.get_text(msg) == "result text"
     end
 
-    test "extracts text from Ai.Types.ToolResultMessage" do
-      msg = %Ai.Types.ToolResultMessage{
+    test "extracts text from LemonAi.Types.ToolResultMessage" do
+      msg = %LemonAi.Types.ToolResultMessage{
         role: :tool_result,
         tool_call_id: "123",
         tool_name: "test",
-        content: [%Ai.Types.TextContent{text: "tool result"}],
+        content: [%LemonAi.Types.TextContent{text: "tool result"}],
         timestamp: 0
       }
 
@@ -721,10 +730,11 @@ defmodule CodingAgent.MessagesTest do
       assert Messages.get_tool_calls(%CompactionSummaryMessage{summary: "", timestamp: 0}) == []
     end
 
-    test "returns empty list for Ai.Types messages" do
-      assert Messages.get_tool_calls(%Ai.Types.UserMessage{content: "test", timestamp: 0}) == []
+    test "returns empty list for LemonAi.Types messages" do
+      assert Messages.get_tool_calls(%LemonAi.Types.UserMessage{content: "test", timestamp: 0}) ==
+               []
 
-      assert Messages.get_tool_calls(%Ai.Types.AssistantMessage{
+      assert Messages.get_tool_calls(%LemonAi.Types.AssistantMessage{
                content: [],
                model: "test",
                timestamp: 0
@@ -863,13 +873,13 @@ defmodule CodingAgent.MessagesTest do
       assert Messages.get_text(msg) == ""
     end
 
-    test "extracts text from Ai.Types.UserMessage with mixed content types" do
-      msg = %Ai.Types.UserMessage{
+    test "extracts text from LemonAi.Types.UserMessage with mixed content types" do
+      msg = %LemonAi.Types.UserMessage{
         role: :user,
         content: [
-          %Ai.Types.TextContent{text: "text1"},
-          %Ai.Types.ImageContent{data: "img", mime_type: "image/png"},
-          %Ai.Types.TextContent{text: "text2"}
+          %LemonAi.Types.TextContent{text: "text1"},
+          %LemonAi.Types.ImageContent{data: "img", mime_type: "image/png"},
+          %LemonAi.Types.TextContent{text: "text2"}
         ],
         timestamp: 0
       }
@@ -877,11 +887,11 @@ defmodule CodingAgent.MessagesTest do
       assert Messages.get_text(msg) == "text1\n[image]\ntext2"
     end
 
-    test "handles unknown content block types in Ai.Types" do
+    test "handles unknown content block types in LemonAi.Types" do
       # The extract_text_from_ai_content/1 returns "" for unknown types
-      msg = %Ai.Types.UserMessage{
+      msg = %LemonAi.Types.UserMessage{
         role: :user,
-        content: [%Ai.Types.TextContent{text: "known"}],
+        content: [%LemonAi.Types.TextContent{text: "known"}],
         timestamp: 0
       }
 
@@ -979,7 +989,7 @@ defmodule CodingAgent.MessagesTest do
       }
 
       [result] = Messages.to_llm([msg])
-      assert %Ai.Types.Cost{} = result.usage.cost
+      assert %LemonAi.Types.Cost{} = result.usage.cost
     end
 
     test "plain map with role: :user and missing timestamp" do
@@ -1030,7 +1040,9 @@ defmodule CodingAgent.MessagesTest do
       [result] = Messages.to_llm([msg])
       assert is_list(result.content)
       assert length(result.content) == 2
-      assert %Ai.Types.ImageContent{data: "img1", mime_type: "image/png"} = hd(result.content)
+
+      assert %LemonAi.Types.ImageContent{data: "img1", mime_type: "image/png"} =
+               hd(result.content)
     end
 
     test "preserves all stop_reason values" do
@@ -1057,7 +1069,7 @@ defmodule CodingAgent.MessagesTest do
       }
 
       [result] = Messages.to_llm([msg])
-      # Details are not preserved in the Ai.Types.UserMessage
+      # Details are not preserved in the LemonAi.Types.UserMessage
       assert result.content == "content"
     end
 

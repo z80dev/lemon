@@ -8,10 +8,10 @@ defmodule CodingAgent.Session.OverflowRecovery do
 
   @type callbacks(state) :: %{
           required(:restore_messages_from_session) => (map() -> [map()]),
-          required(:broadcast_event) => (state, AgentCore.Types.agent_event() -> :ok),
+          required(:broadcast_event) => (state, LemonAgent.Types.agent_event() -> :ok),
           required(:ui_set_working_message) => (state, String.t() | nil -> :ok),
           required(:ui_notify) => (state, String.t(), atom() -> :ok),
-          required(:handle_agent_event) => (AgentCore.Types.agent_event(), state -> state)
+          required(:handle_agent_event) => (LemonAgent.Types.agent_event(), state -> state)
         }
 
   @spec handle_task_down(map(), callbacks(map())) :: map()
@@ -197,11 +197,11 @@ defmodule CodingAgent.Session.OverflowRecovery do
   end
 
   defp continue_after_compaction(state, callbacks) do
-    case AgentCore.Agent.wait_for_idle(state.agent, timeout: 5_000) do
+    case LemonAgent.Agent.wait_for_idle(state.agent, timeout: 5_000) do
       :ok ->
         callbacks.ui_set_working_message.(state, "Retrying after compaction...")
 
-        case AgentCore.Agent.continue(state.agent) do
+        case LemonAgent.Agent.continue(state.agent) do
           :ok ->
             {:ok,
              %{

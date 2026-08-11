@@ -313,8 +313,8 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
       [provider_name, model_id] ->
         provider = normalize_provider(provider_name)
 
-        case Ai.Models.get_model(provider, model_id) do
-          %Ai.Types.Model{} = model ->
+        case LemonAi.Models.get_model(provider, model_id) do
+          %LemonAi.Types.Model{} = model ->
             model = LemonSim.LLM.GameHelpers.Config.apply_provider_base_url(model, config)
 
             api_key =
@@ -331,8 +331,8 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
         end
 
       [model_id] ->
-        case Ai.Models.find_by_id(model_id) do
-          %Ai.Types.Model{} = model ->
+        case LemonAi.Models.find_by_id(model_id) do
+          %LemonAi.Types.Model{} = model ->
             model = LemonSim.LLM.GameHelpers.Config.apply_provider_base_url(model, config)
 
             api_key =

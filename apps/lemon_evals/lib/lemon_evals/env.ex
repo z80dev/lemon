@@ -39,7 +39,7 @@ defmodule LemonEvals.Env do
       aliases: ["INTEGRATION_API_TYPE"],
       type: :string,
       default: nil,
-      doc: "Live-eval `Ai.Types.Model.api` atom override (default: anthropic_messages).",
+      doc: "Live-eval `LemonAi.Types.Model.api` atom override (default: anthropic_messages).",
       secret?: false,
       required?: false,
       area: :evals_live,

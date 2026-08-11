@@ -3,7 +3,7 @@ defmodule CodingAgent.Tools.Task.Params do
 
   require Logger
 
-  alias AgentCore.Types.AgentTool
+  alias LemonAgent.Types.AgentTool
   alias CodingAgent.AsyncFollowups
   alias CodingAgent.BudgetEnforcer
   alias CodingAgent.Session

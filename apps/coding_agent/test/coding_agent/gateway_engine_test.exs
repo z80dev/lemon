@@ -1,7 +1,7 @@
 defmodule CodingAgent.GatewayEngineTest do
   use ExUnit.Case
 
-  alias Ai.Types.{
+  alias LemonAi.Types.{
     AssistantMessage,
     Cost,
     Model,
@@ -546,13 +546,13 @@ defmodule CodingAgent.GatewayEngineTest do
 
   defp slow_stream_fn do
     fn _model, _context, _options ->
-      {:ok, stream} = Ai.EventStream.start_link()
+      {:ok, stream} = LemonAi.EventStream.start_link()
 
       Task.start(fn ->
         Process.sleep(10_000)
         response = assistant_message("too late")
-        Ai.EventStream.push(stream, {:done, response.stop_reason, response})
-        Ai.EventStream.complete(stream, response)
+        LemonAi.EventStream.push(stream, {:done, response.stop_reason, response})
+        LemonAi.EventStream.complete(stream, response)
       end)
 
       {:ok, stream}
@@ -560,42 +560,42 @@ defmodule CodingAgent.GatewayEngineTest do
   end
 
   defp response_to_event_stream(response) do
-    {:ok, stream} = Ai.EventStream.start_link()
+    {:ok, stream} = LemonAi.EventStream.start_link()
 
     Task.start(fn ->
       case response do
         :slow ->
           Process.sleep(10_000)
           response = assistant_message("too late")
-          Ai.EventStream.push(stream, {:done, response.stop_reason, response})
-          Ai.EventStream.complete(stream, response)
+          LemonAi.EventStream.push(stream, {:done, response.stop_reason, response})
+          LemonAi.EventStream.complete(stream, response)
 
         %AssistantMessage{} ->
-          Ai.EventStream.push(stream, {:start, response})
+          LemonAi.EventStream.push(stream, {:start, response})
 
           response.content
           |> Enum.with_index()
           |> Enum.each(fn
             {%TextContent{text: text}, idx} ->
-              Ai.EventStream.push(stream, {:text_start, idx, response})
-              Ai.EventStream.push(stream, {:text_delta, idx, text, response})
-              Ai.EventStream.push(stream, {:text_end, idx, text, response})
+              LemonAi.EventStream.push(stream, {:text_start, idx, response})
+              LemonAi.EventStream.push(stream, {:text_delta, idx, text, response})
+              LemonAi.EventStream.push(stream, {:text_end, idx, text, response})
 
             {%ThinkingContent{thinking: thinking}, idx} ->
-              Ai.EventStream.push(stream, {:thinking_start, idx, response})
-              Ai.EventStream.push(stream, {:thinking_delta, idx, thinking, response})
-              Ai.EventStream.push(stream, {:thinking_end, idx, thinking, response})
+              LemonAi.EventStream.push(stream, {:thinking_start, idx, response})
+              LemonAi.EventStream.push(stream, {:thinking_delta, idx, thinking, response})
+              LemonAi.EventStream.push(stream, {:thinking_end, idx, thinking, response})
 
             {%ToolCall{} = tool_call, idx} ->
-              Ai.EventStream.push(stream, {:tool_call_start, idx, response})
-              Ai.EventStream.push(stream, {:tool_call_end, idx, tool_call, response})
+              LemonAi.EventStream.push(stream, {:tool_call_start, idx, response})
+              LemonAi.EventStream.push(stream, {:tool_call_end, idx, tool_call, response})
 
             {_content, _idx} ->
               :ok
           end)
 
-          Ai.EventStream.push(stream, {:done, response.stop_reason, response})
-          Ai.EventStream.complete(stream, response)
+          LemonAi.EventStream.push(stream, {:done, response.stop_reason, response})
+          LemonAi.EventStream.complete(stream, response)
       end
     end)
 

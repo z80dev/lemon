@@ -1,8 +1,8 @@
 defmodule LemonTcg.Agent.SessionTest do
   use ExUnit.Case, async: true
 
-  alias AgentCore.Types.AgentTool
-  alias Ai.Types.{AssistantMessage, Model, ToolCall}
+  alias LemonAgent.Types.AgentTool
+  alias LemonAi.Types.{AssistantMessage, Model, ToolCall}
   alias LemonTcg.Agent.{ActionSpace, Session, Updater}
   alias LemonTcg.Desk
   alias LemonTcg.MarketData.Sources.Fixture
@@ -18,7 +18,7 @@ defmodule LemonTcg.Agent.SessionTest do
       base_url: "https://example.invalid",
       reasoning: false,
       input: [:text],
-      cost: %Ai.Types.ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
+      cost: %LemonAi.Types.ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
       context_window: 128_000,
       max_tokens: 4_096,
       headers: %{}

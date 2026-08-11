@@ -60,7 +60,7 @@ defmodule CodingAgent.RateLimitHealer do
   @type t :: %__MODULE__{
           session_id: String.t(),
           provider: atom(),
-          model: Ai.Types.Model.t(),
+          model: LemonAi.Types.Model.t(),
           state: healing_state(),
           probe_count: non_neg_integer(),
           max_probe_attempts: pos_integer(),
@@ -71,7 +71,7 @@ defmodule CodingAgent.RateLimitHealer do
           on_healed: (-> :ok) | nil,
           on_failed: (-> :ok) | nil,
           fallback_strategy: :reset_backoff | :fallback_model | :fallback_provider | :fork,
-          fallback_model: Ai.Types.Model.t() | nil,
+          fallback_model: LemonAi.Types.Model.t() | nil,
           last_error: term() | nil,
           started_at: DateTime.t(),
           healed_at: DateTime.t() | nil,
@@ -387,7 +387,7 @@ defmodule CodingAgent.RateLimitHealer do
   @spec do_probe_request(t()) :: :ok | {:error, term()}
   def do_probe_request(state) do
     # Try to acquire a permit from the rate limiter
-    case Ai.RateLimiter.acquire(state.provider) do
+    case LemonAi.RateLimiter.acquire(state.provider) do
       :ok ->
         # Also verify with a lightweight provider check if available
         verify_provider_connectivity(state)

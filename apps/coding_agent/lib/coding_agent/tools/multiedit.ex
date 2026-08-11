@@ -5,9 +5,9 @@ defmodule CodingAgent.Tools.MultiEdit do
   Applies multiple edit operations to the same file sequentially.
   """
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias AgentCore.AbortSignal
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.AbortSignal
+  alias LemonAi.Types.TextContent
   alias CodingAgent.Tools.Edit
 
   @doc """

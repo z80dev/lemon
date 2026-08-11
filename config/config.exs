@@ -42,8 +42,8 @@ config :lemon_router, :engine_runtime, LemonGateway.Runtime
 # Support bundles include workspace (goal/kanban) diagnostics when the agent
 # runtime is present. lemon_core must not reference agent_core directly.
 config :lemon_core, :workspace_diagnostics,
-  goal: AgentCore.Workspace.GoalStore,
-  kanban: AgentCore.Workspace.KanbanStore
+  goal: LemonAgent.Workspace.GoalStore,
+  kanban: LemonAgent.Workspace.KanbanStore
 
 # Same idea for every diagnostic whose subject is owned by another app: the
 # doctor framework looks the module up instead of naming it.
@@ -62,8 +62,8 @@ config :lemon_core, :doctor_runtime,
 # given build are skipped, so this list is a superset, not a requirement.
 config :lemon_core, :env_registries, [
   LemonCore.Env.Declarations,
-  Ai.Env,
-  AgentCore.Env,
+  LemonAi.Env,
+  LemonAgent.Env,
   CodingAgent.Env,
   LemonAutomation.Env,
   LemonBrowser.Env,

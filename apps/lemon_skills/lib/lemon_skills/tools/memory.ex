@@ -3,9 +3,9 @@ defmodule LemonSkills.Tools.Memory do
   Manage compact assistant-home USER.md and MEMORY.md notes.
   """
 
-  alias AgentCore.AbortSignal
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.TextContent
+  alias LemonAgent.AbortSignal
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.TextContent
   alias LemonMemory.Safety
 
   @targets %{

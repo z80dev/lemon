@@ -2000,7 +2000,7 @@ defmodule LemonSimUi.SimManager do
     model = Keyword.get(run_opts, :model)
 
     model_spec =
-      if match?(%Ai.Types.Model{}, model), do: "#{model.provider}/#{model.id}", else: nil
+      if match?(%LemonAi.Types.Model{}, model), do: "#{model.provider}/#{model.id}", else: nil
 
     rng_state =
       case :rand.export_seed() do
@@ -2246,7 +2246,7 @@ defmodule LemonSimUi.SimManager do
       try do
         SimConfig.resolve_configured_model!(config, "sim")
       rescue
-        _ -> Ai.Models.get_model(:google_gemini_cli, "gemini-2.5-flash")
+        _ -> LemonAi.Models.get_model(:google_gemini_cli, "gemini-2.5-flash")
       end
 
     api_key =
@@ -2289,7 +2289,7 @@ defmodule LemonSimUi.SimManager do
   defp lookup_model_provider(provider_name) do
     canonical_name = SimConfig.provider_name(provider_name)
 
-    Enum.find(Ai.Models.get_providers(), fn provider ->
+    Enum.find(LemonAi.Models.get_providers(), fn provider ->
       SimConfig.provider_name(provider) == canonical_name
     end)
     |> case do
@@ -2299,8 +2299,8 @@ defmodule LemonSimUi.SimManager do
   end
 
   defp resolve_model!(provider, model_id, config) do
-    case Ai.Models.get_model(provider, model_id) do
-      %Ai.Types.Model{} = model ->
+    case LemonAi.Models.get_model(provider, model_id) do
+      %LemonAi.Types.Model{} = model ->
         SimConfig.apply_provider_base_url(model, config)
 
       nil ->

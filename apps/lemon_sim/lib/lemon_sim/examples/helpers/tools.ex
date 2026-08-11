@@ -6,7 +6,7 @@ defmodule LemonSim.Examples.Helpers.Tools do
   games: public statements, voting, and private whispers.
   """
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonSim.Kernel.Event
 
   @doc """
@@ -45,7 +45,7 @@ defmodule LemonSim.Examples.Helpers.Tools do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("You said: \"#{statement}\"")],
+           content: [LemonAgent.text_content("You said: \"#{statement}\"")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -96,7 +96,7 @@ defmodule LemonSim.Examples.Helpers.Tools do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content(message)],
+           content: [LemonAgent.text_content(message)],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -154,7 +154,7 @@ defmodule LemonSim.Examples.Helpers.Tools do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("You whispered to #{to_id}: \"#{message}\"")],
+           content: [LemonAgent.text_content("You whispered to #{to_id}: \"#{message}\"")],
            details: %{"event" => event},
            trust: :trusted
          }}

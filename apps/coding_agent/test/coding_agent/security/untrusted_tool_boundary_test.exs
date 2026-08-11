@@ -1,7 +1,7 @@
 defmodule CodingAgent.Security.UntrustedToolBoundaryTest do
   use ExUnit.Case, async: true
 
-  alias Ai.Types.{TextContent, ToolResultMessage, UserMessage}
+  alias LemonAi.Types.{TextContent, ToolResultMessage, UserMessage}
   alias CodingAgent.Security.UntrustedToolBoundary
 
   test "wraps untrusted tool result text blocks once" do

@@ -7,7 +7,7 @@ defmodule CodingAgent.Session.CompactionLifecycle do
 
   @type callbacks(state) :: %{
           required(:restore_messages_from_session) => (map() -> [map()]),
-          required(:broadcast_event) => (state, AgentCore.Types.agent_event() -> :ok),
+          required(:broadcast_event) => (state, LemonAgent.Types.agent_event() -> :ok),
           required(:ui_set_working_message) => (state, String.t() | nil -> :ok),
           required(:ui_notify) => (state, String.t(), atom() -> :ok)
         }
@@ -31,7 +31,7 @@ defmodule CodingAgent.Session.CompactionLifecycle do
     do: state
 
   def maybe_trigger(state, session_pid, callbacks) do
-    agent_state = AgentCore.Agent.get_state(state.agent)
+    agent_state = LemonAgent.Agent.get_state(state.agent)
     context_messages = agent_state.messages || []
 
     context_tokens =

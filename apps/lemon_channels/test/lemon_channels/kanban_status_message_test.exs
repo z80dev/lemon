@@ -3,7 +3,7 @@ defmodule LemonChannels.KanbanStatusMessageTest do
 
   alias LemonChannels.Adapters.Telegram.Transport.Commands
   alias LemonChannels.KanbanStatusMessage
-  alias AgentCore.Workspace.KanbanStore
+  alias LemonAgent.Workspace.KanbanStore
 
   defmodule KanbanDispatcherStub do
     def start_board(board_id, opts) do

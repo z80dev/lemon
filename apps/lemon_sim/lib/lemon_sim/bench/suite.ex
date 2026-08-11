@@ -558,7 +558,7 @@ defmodule LemonSim.Bench.Suite do
     config = Modular.load(project_dir: File.cwd!())
 
     case Config.resolve_model_spec(nil, model_id) do
-      %Ai.Types.Model{} = model ->
+      %LemonAi.Types.Model{} = model ->
         model = Config.apply_provider_base_url(model, config)
         api_key = Config.resolve_provider_api_key!(model.provider, config, "suite")
         {:ok, model, api_key}

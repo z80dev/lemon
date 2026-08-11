@@ -6,9 +6,9 @@ defmodule CodingAgent.Tools.ExtensionsStatus do
   allowing the agent to self-diagnose plugin loading issues and conflicts.
   """
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias AgentCore.AbortSignal
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.AbortSignal
+  alias LemonAi.Types.TextContent
 
   @doc """
   Returns the ExtensionsStatus tool definition.

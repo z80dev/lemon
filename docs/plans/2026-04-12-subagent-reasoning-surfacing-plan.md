@@ -51,7 +51,7 @@ This plan adds a bounded, explicit reasoning path for subagents and tasks.
 2. Internal task updates:
    - internal `task` sessions emit `AgentToolResult` updates
    - updates can include `details.current_action`
-   - internal assistant thinking is available through `Ai.get_thinking/1`
+   - internal assistant thinking is available through `LemonAi.get_thinking/1`
 
 3. Task persistence:
    - async task records live in `CodingAgent.TaskStore`

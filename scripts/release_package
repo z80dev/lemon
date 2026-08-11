@@ -54,10 +54,10 @@ HEX_PACKAGE_FILE="$REPO_ROOT/hex_package.exs"
 # Dependency-correct publish order (docs/platform-split.md 4.3). Ordering only:
 # membership comes from hex_package.exs.
 PUBLISH_ORDER=(
-  ai
+  lemon_ai
   lemon_core
   lemon_media
-  agent_core
+  lemon_agent
   lemon_memory
   lemon_channels
   lemon_router

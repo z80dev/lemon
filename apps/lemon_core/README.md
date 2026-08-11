@@ -422,7 +422,7 @@ Shared-domain callers should prefer typed wrappers:
 - **Project bindings**: `LemonCore.ProjectBindingStore.get_override/1`, `put_override/2`, `get_dynamic/1`
 - **Exec approvals**: `LemonCore.ExecApprovalStore.get_pending/1`, `put_pending/2`, policy getters/setters by scope
 
-Agent workspace coordination — goals, kanban boards, and heartbeats — is built on this Store but lives in `agent_core` as `AgentCore.Workspace.{GoalStore, KanbanStore, HeartbeatStore}`.
+Agent workspace coordination — goals, kanban boards, and heartbeats — is built on this Store but lives in `agent_core` as `LemonAgent.Workspace.{GoalStore, KanbanStore, HeartbeatStore}`.
 
 ### ReadCache
 

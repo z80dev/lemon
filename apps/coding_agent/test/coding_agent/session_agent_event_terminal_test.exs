@@ -1,9 +1,9 @@
 defmodule CodingAgent.SessionAgentEventTerminalTest do
   use ExUnit.Case, async: true
 
-  alias AgentCore.EventStream
-  alias AgentCore.Test.Mocks
-  alias Ai.Types.AssistantMessage
+  alias LemonAgent.EventStream
+  alias LemonAgent.Test.Mocks
+  alias LemonAi.Types.AssistantMessage
   alias CodingAgent.Session
   alias CodingAgent.SessionManager
 

@@ -38,8 +38,8 @@ defmodule LemonSim.MixProject do
   defp deps do
     [
       {:lemon_core, in_umbrella: true},
-      {:agent_core, in_umbrella: true},
-      {:ai, in_umbrella: true},
+      {:lemon_agent, in_umbrella: true},
+      {:lemon_ai, in_umbrella: true},
       # API documentation
       {:ex_doc, "~> 0.34", only: :dev, runtime: false}
     ]

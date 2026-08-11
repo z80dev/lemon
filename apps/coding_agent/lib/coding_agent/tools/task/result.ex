@@ -1,8 +1,8 @@
 defmodule CodingAgent.Tools.Task.Result do
   @moduledoc false
 
-  alias AgentCore.Types.AgentToolResult
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.AgentToolResult
+  alias LemonAi.Types.TextContent
   alias CodingAgent.RunGraph
   alias CodingAgent.TaskStore
 
@@ -97,14 +97,14 @@ defmodule CodingAgent.Tools.Task.Result do
   @spec extract_final_payload([term()], String.t() | nil, String.t() | nil) :: map()
   def extract_final_payload(messages, fallback_text, fallback_thinking) do
     messages
-    |> Enum.filter(&match?(%Ai.Types.AssistantMessage{}, &1))
+    |> Enum.filter(&match?(%LemonAi.Types.AssistantMessage{}, &1))
     |> List.last()
     |> case do
       nil ->
         %{text: fallback_text || "", thinking: fallback_thinking || ""}
 
       msg ->
-        %{text: Ai.get_text(msg), thinking: Ai.get_thinking(msg)}
+        %{text: LemonAi.get_text(msg), thinking: LemonAi.get_thinking(msg)}
     end
   end
 

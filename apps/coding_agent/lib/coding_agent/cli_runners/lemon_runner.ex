@@ -47,7 +47,7 @@ defmodule CodingAgent.CliRunners.LemonRunner do
 
       stream = LemonRunner.stream(pid)
 
-      for event <- AgentCore.EventStream.events(stream) do
+      for event <- LemonAgent.EventStream.events(stream) do
         case event do
           {:cli_event, %StartedEvent{resume: token}} ->
             IO.puts("Session: \#{token.value}")
@@ -64,11 +64,11 @@ defmodule CodingAgent.CliRunners.LemonRunner do
 
   use GenServer
 
-  alias AgentCore.CliRunners.Types.EventFactory
+  alias LemonAgent.CliRunners.Types.EventFactory
 
   alias LemonCore.ResumeToken
 
-  alias AgentCore.EventStream
+  alias LemonAgent.EventStream
   alias CodingAgent.Session.Presentation
   alias CodingAgent.Session.RunTranslator
 
@@ -110,8 +110,8 @@ defmodule CodingAgent.CliRunners.LemonRunner do
 
     @behaviour CodingAgent.Session.RunTranslator.Emitter
 
-    alias AgentCore.CliRunners.Types.EventFactory
-    alias AgentCore.EventStream
+    alias LemonAgent.CliRunners.Types.EventFactory
+    alias LemonAgent.EventStream
     alias CodingAgent.Session.Presentation
 
     defstruct [:stream, :factory, :session]

@@ -3,7 +3,7 @@ defmodule <%= @app_module %>.Agent do
   The agent: a model, a system prompt, a tool list, and a supervised process
   that runs the loop.
 
-  `AgentCore.Agent` is a GenServer. It holds the conversation, streams the
+  `LemonAgent.Agent` is a GenServer. It holds the conversation, streams the
   model's response, executes tool calls, and feeds the results back until the
   model stops asking for tools. This module is the thin layer that decides
   *which* model, prompt and tools — the parts that are yours.
@@ -13,8 +13,8 @@ defmodule <%= @app_module %>.Agent do
   `start_link(name: SomeOtherName)` when you want a conversation per user.
   """
 
-  alias AgentCore.Types.AgentState
-  alias Ai.Types.AssistantMessage
+  alias LemonAgent.Types.AgentState
+  alias LemonAi.Types.AssistantMessage
 
   @system_prompt """
   You are a concise assistant.
@@ -27,10 +27,10 @@ defmodule <%= @app_module %>.Agent do
   @doc """
   Starts the agent.
 
-  Options are passed through to `AgentCore.new_agent/1`. The ones worth knowing:
+  Options are passed through to `LemonAgent.new_agent/1`. The ones worth knowing:
 
     * `:name` — the registered name. Defaults to this module.
-    * `:model` — an `Ai.Types.Model`. Defaults to `model/0`.
+    * `:model` — an `LemonAi.Types.Model`. Defaults to `model/0`.
     * `:tools` — the tool list. Defaults to `tools/0`.
     * `:stream_fn` — replaces the function that talks to the provider. This is
       the seam the test suite uses to run without an API key; see
@@ -42,7 +42,7 @@ defmodule <%= @app_module %>.Agent do
     |> Keyword.put_new_lazy(:model, &model/0)
     |> Keyword.put_new(:system_prompt, @system_prompt)
     |> Keyword.put_new_lazy(:tools, &tools/0)
-    |> AgentCore.new_agent()
+    |> LemonAgent.new_agent()
   end
 
   def child_spec(opts) do
@@ -55,15 +55,15 @@ defmodule <%= @app_module %>.Agent do
   Returns `{:ok, answer}` with the final assistant text, or `{:error, reason}`
   if the run failed. A run may involve several model calls and any number of
   tool executions; this returns only the last thing the assistant said. Use
-  `AgentCore.subscribe/2` when you want to see the run as it happens —
+  `LemonAgent.subscribe/2` when you want to see the run as it happens —
   `<%= @app_module %>.Console` does exactly that.
   """
   def ask(prompt) when is_binary(prompt), do: ask(__MODULE__, prompt)
 
   def ask(agent, prompt) when is_binary(prompt) do
-    with :ok <- AgentCore.prompt(agent, prompt),
-         :ok <- AgentCore.wait_for_idle(agent) do
-      case AgentCore.get_state(agent) do
+    with :ok <- LemonAgent.prompt(agent, prompt),
+         :ok <- LemonAgent.wait_for_idle(agent) do
+      case LemonAgent.get_state(agent) do
         %AgentState{error: nil} = state -> {:ok, last_answer(state)}
         %AgentState{error: error} -> {:error, error}
       end
@@ -74,9 +74,9 @@ defmodule <%= @app_module %>.Agent do
   The tools this agent may call.
 
   The list is our own tools plus any contributed at runtime through
-  `AgentCore.ToolRegistry`. That registry is how a dependency adds a tool to
+  `LemonAgent.ToolRegistry`. That registry is how a dependency adds a tool to
   your agent without you naming it here: it calls
-  `AgentCore.ToolRegistry.register(:name, Module)` when its application starts.
+  `LemonAgent.ToolRegistry.register(:name, Module)` when its application starts.
   `available/1` drops any registration whose name collides with one of ours, so
   a dependency can never quietly replace a tool you wrote.
   """
@@ -85,7 +85,7 @@ defmodule <%= @app_module %>.Agent do
     taken = Enum.map(builtin, &String.to_atom(&1.name))
 
     contributed =
-      for {_name, module} <- AgentCore.ToolRegistry.available(taken), do: module.tool()
+      for {_name, module} <- LemonAgent.ToolRegistry.available(taken), do: module.tool()
 
     builtin ++ contributed
   end
@@ -93,7 +93,7 @@ defmodule <%= @app_module %>.Agent do
   @doc """
   The model to run, from application config.
 
-  `Ai.Models` is a registry of known models across twenty-odd providers; it
+  `LemonAi.Models` is a registry of known models across twenty-odd providers; it
   carries the context window, pricing and capability flags the loop needs. The
   API key is read from the provider's environment variable at request time
   (`ANTHROPIC_API_KEY` for the default below).
@@ -102,11 +102,11 @@ defmodule <%= @app_module %>.Agent do
     provider = Application.get_env(:<%= @app %>, :provider)
     id = Application.get_env(:<%= @app %>, :model)
 
-    Ai.Models.get_model(provider, id) ||
+    LemonAi.Models.get_model(provider, id) ||
       raise """
       Unknown model #{inspect(provider)} / #{inspect(id)}.
 
-      Check config/config.exs. `Ai.Models.get_model_ids(#{inspect(provider)})`
+      Check config/config.exs. `LemonAi.Models.get_model_ids(#{inspect(provider)})`
       lists what this provider offers.
       """
   end
@@ -115,7 +115,7 @@ defmodule <%= @app_module %>.Agent do
     messages
     |> Enum.reverse()
     |> Enum.find_value("", fn
-      %AssistantMessage{} = message -> Ai.get_text(message)
+      %AssistantMessage{} = message -> LemonAi.get_text(message)
       _other -> nil
     end)
   end

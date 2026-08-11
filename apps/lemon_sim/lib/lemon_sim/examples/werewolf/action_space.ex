@@ -5,7 +5,7 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
 
   import LemonSim.Examples.Helpers
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonSim.Kernel.{Event, State}
   alias LemonSim.Examples.Werewolf.{Events, Roles, RulesConfig}
 
@@ -520,7 +520,7 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("You chose to target #{victim_id} tonight.")],
+           content: [LemonAgent.text_content("You chose to target #{victim_id} tonight.")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -554,7 +554,7 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("You are investigating #{target_id}.")],
+           content: [LemonAgent.text_content("You are investigating #{target_id}.")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -588,7 +588,7 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("You chose to protect #{target_id} tonight.")],
+           content: [LemonAgent.text_content("You chose to protect #{target_id} tonight.")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -613,7 +613,7 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("You sleep through the night.")],
+           content: [LemonAgent.text_content("You sleep through the night.")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -640,7 +640,7 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("You slip out into the dark village streets...")],
+           content: [LemonAgent.text_content("You slip out into the dark village streets...")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -674,7 +674,7 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("Your last words: \"#{statement}\"")],
+           content: [LemonAgent.text_content("Your last words: \"#{statement}\"")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -711,7 +711,7 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("You told the pack: \"#{message}\"")],
+           content: [LemonAgent.text_content("You told the pack: \"#{message}\"")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -753,7 +753,7 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("You formally accused #{target_id}: \"#{reason}\"")],
+           content: [LemonAgent.text_content("You formally accused #{target_id}: \"#{reason}\"")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -791,7 +791,7 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
         {:ok,
          %AgentToolResult{
            content: [
-             AgentCore.text_content(
+             LemonAgent.text_content(
                "Your preference to meet #{target_id} was recorded. Check the resolved pair when meetings begin."
              )
            ],
@@ -827,7 +827,7 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("You said in the meeting: \"#{message}\"")],
+           content: [LemonAgent.text_content("You said in the meeting: \"#{message}\"")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -859,7 +859,7 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("Your anonymous letter has been posted.")],
+           content: [LemonAgent.text_content("Your anonymous letter has been posted.")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -885,7 +885,7 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("You secured your door with the lock.")],
+           content: [LemonAgent.text_content("You secured your door with the lock.")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -912,7 +912,7 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
         {:ok,
          %AgentToolResult{
            content: [
-             AgentCore.text_content("You light the lantern and peer into the darkness...")
+             LemonAgent.text_content("You light the lantern and peer into the darkness...")
            ],
            details: %{"event" => event},
            trust: :trusted

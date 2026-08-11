@@ -2,7 +2,7 @@ defmodule CodingAgent.LemonRunnerIntegrationTest do
   use ExUnit.Case
 
   alias CodingAgent.CliRunners.LemonRunner
-  alias AgentCore.CliRunners.Types.{CompletedEvent, StartedEvent}
+  alias LemonAgent.CliRunners.Types.{CompletedEvent, StartedEvent}
 
   @moduletag :integration
 
@@ -29,7 +29,7 @@ defmodule CodingAgent.LemonRunnerIntegrationTest do
 
       task =
         Task.async(fn ->
-          AgentCore.EventStream.events(stream) |> Enum.to_list()
+          LemonAgent.EventStream.events(stream) |> Enum.to_list()
         end)
 
       events = Task.await(task, 200_000)
@@ -63,7 +63,7 @@ defmodule CodingAgent.LemonRunnerIntegrationTest do
 
       task =
         Task.async(fn ->
-          AgentCore.EventStream.events(stream) |> Enum.to_list()
+          LemonAgent.EventStream.events(stream) |> Enum.to_list()
         end)
 
       events = Task.await(task, 200_000)

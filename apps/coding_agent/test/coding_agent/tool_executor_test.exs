@@ -1,8 +1,8 @@
 defmodule CodingAgent.ToolExecutorTest do
   use ExUnit.Case, async: true
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.TextContent
   alias CodingAgent.{ToolExecutor, ToolPolicy}
 
   describe "wrap_with_approval/3" do

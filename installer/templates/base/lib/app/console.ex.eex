@@ -17,7 +17,7 @@ defmodule <%= @app_module %>.Console do
   `<%= @app_module %>.Agent.ask/2` blocks and hands back the final answer,
   which is all a script needs. A channel wants more: it wants to show the
   answer arriving, and to say "running word_count…" while a tool is working.
-  That is what `AgentCore.subscribe/2` is for — the subscriber receives
+  That is what `LemonAgent.subscribe/2` is for — the subscriber receives
   `{:agent_event, event}` for every event in the run, and `render/1` below is a
   complete list of the ones worth reacting to.
 
@@ -30,7 +30,7 @@ defmodule <%= @app_module %>.Console do
   Starts the read-eval-print loop against a running agent.
   """
   def start(agent \\ <%= @app_module %>.Agent) do
-    _unsubscribe = AgentCore.subscribe(agent, self())
+    _unsubscribe = LemonAgent.subscribe(agent, self())
 
     IO.puts("""
     <%= @app_module %> console. Ask something, or /quit to leave.
@@ -57,7 +57,7 @@ defmodule <%= @app_module %>.Console do
   end
 
   defp ask(agent, prompt) do
-    case AgentCore.prompt(agent, prompt) do
+    case LemonAgent.prompt(agent, prompt) do
       :ok ->
         IO.write("bot> ")
         drain()

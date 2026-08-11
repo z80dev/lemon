@@ -1,7 +1,7 @@
 defmodule CodingAgent.Session.MessageSerializationCustomMessageTest do
   use ExUnit.Case, async: false
 
-  alias Ai.Types.{ImageContent, TextContent}
+  alias LemonAi.Types.{ImageContent, TextContent}
   alias CodingAgent.Messages.CustomMessage
   alias CodingAgent.Session.MessageSerialization
   alias CodingAgent.SessionManager

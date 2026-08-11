@@ -22,8 +22,8 @@ defmodule LemonSkills.Tools.ReadSkill do
   skills into their context when needed.
   """
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.TextContent
   alias LemonSkills.{Registry, Entry, Manifest, PathBoundary, SkillView}
 
   @doc """

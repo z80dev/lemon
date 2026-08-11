@@ -400,7 +400,7 @@ export type KnownSessionEvent =
 // ============================================================================
 
 export interface UserMessage {
-  __struct__: 'Elixir.Ai.Types.UserMessage';
+  __struct__: 'Elixir.LemonAi.Types.UserMessage';
   role: 'user';
   content: string | ContentBlock[];
   timestamp: number;
@@ -416,7 +416,7 @@ export interface UsageCost {
 }
 
 export interface AssistantMessage {
-  __struct__: 'Elixir.Ai.Types.AssistantMessage';
+  __struct__: 'Elixir.LemonAi.Types.AssistantMessage';
   role: 'assistant';
   content: ContentBlock[];
   provider: string;
@@ -449,7 +449,7 @@ export interface ToolResultTrustMetadata {
 export type ToolResultTrustLevel = 'trusted' | 'untrusted';
 
 export interface ToolResultMessage {
-  __struct__: 'Elixir.Ai.Types.ToolResultMessage';
+  __struct__: 'Elixir.LemonAi.Types.ToolResultMessage';
   role: 'tool_result';
   tool_call_id: string;
   tool_name: string;
@@ -468,21 +468,21 @@ export type Message = UserMessage | AssistantMessage | ToolResultMessage;
 // ============================================================================
 
 export interface TextContent {
-  __struct__: 'Elixir.Ai.Types.TextContent';
+  __struct__: 'Elixir.LemonAi.Types.TextContent';
   type: 'text';
   text: string;
   text_signature?: string | null;
 }
 
 export interface ThinkingContent {
-  __struct__: 'Elixir.Ai.Types.ThinkingContent';
+  __struct__: 'Elixir.LemonAi.Types.ThinkingContent';
   type: 'thinking';
   thinking: string;
   thinking_signature?: string | null;
 }
 
 export interface ToolCall {
-  __struct__: 'Elixir.Ai.Types.ToolCall';
+  __struct__: 'Elixir.LemonAi.Types.ToolCall';
   type: 'tool_call';
   id: string;
   name: string;
@@ -490,7 +490,7 @@ export interface ToolCall {
 }
 
 export interface ImageContent {
-  __struct__: 'Elixir.Ai.Types.ImageContent';
+  __struct__: 'Elixir.LemonAi.Types.ImageContent';
   type: 'image';
   data: string;
   mime_type: string;
@@ -517,7 +517,7 @@ export type AssistantEvent = unknown[];
 // ============================================================================
 
 export interface ToolResult {
-  __struct__: 'Elixir.AgentCore.Types.AgentToolResult';
+  __struct__: 'Elixir.LemonAgent.Types.AgentToolResult';
   content: ContentBlock[];
   details?: Record<string, unknown>;
   trust?: ToolResultTrustLevel;

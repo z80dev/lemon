@@ -156,7 +156,7 @@ defmodule CodingAgent.Session.Lifecycle do
     agent_registry_key = {session_manager.header.id, :main, 0}
 
     {:ok, agent} =
-      AgentCore.Agent.start_link(
+      LemonAgent.Agent.start_link(
         initial_state: %{
           system_prompt: system_prompt,
           model: model,
@@ -170,15 +170,15 @@ defmodule CodingAgent.Session.Lifecycle do
         transform_context: transform_context,
         get_api_key: get_api_key,
         session_id: session_manager.header.id,
-        name: AgentCore.AgentRegistry.via(agent_registry_key)
+        name: LemonAgent.AgentRegistry.via(agent_registry_key)
       )
 
-    AgentCore.Agent.subscribe(agent, session_pid)
+    LemonAgent.Agent.subscribe(agent, session_pid)
 
     messages = Persistence.restore_messages_from_session(session_manager)
 
     if messages != [] do
-      AgentCore.Agent.replace_messages(agent, messages)
+      LemonAgent.Agent.replace_messages(agent, messages)
     end
 
     state = %Session{
@@ -278,7 +278,7 @@ defmodule CodingAgent.Session.Lifecycle do
         previous_status_report: state.extension_status_report
       )
 
-    :ok = AgentCore.Agent.set_tools(state.agent, lifecycle.tools)
+    :ok = LemonAgent.Agent.set_tools(state.agent, lifecycle.tools)
     Notifier.ui_set_working_message(state, nil)
     Notifier.broadcast_event(state, {:extension_status_report, lifecycle.extension_status_report})
 
@@ -324,7 +324,7 @@ defmodule CodingAgent.Session.Lifecycle do
             state
           end
 
-        :ok = AgentCore.Agent.reset(state.agent)
+        :ok = LemonAgent.Agent.reset(state.agent)
 
         previous_session_id = state.session_manager.header.id
         new_session_manager = SessionManager.new(state.cwd)
@@ -355,8 +355,8 @@ defmodule CodingAgent.Session.Lifecycle do
   defp wait_for_reset_abort(_state, true, true, _reset_abort_wait_ms), do: :ok
 
   defp wait_for_reset_abort(state, true, false, reset_abort_wait_ms) do
-    AgentCore.Agent.abort(state.agent)
-    AgentCore.Agent.wait_for_idle(state.agent, timeout: reset_abort_wait_ms)
+    LemonAgent.Agent.abort(state.agent)
+    LemonAgent.Agent.wait_for_idle(state.agent, timeout: reset_abort_wait_ms)
   end
 
   defp load_or_create_session(cwd, nil, session_id, parent_session) do

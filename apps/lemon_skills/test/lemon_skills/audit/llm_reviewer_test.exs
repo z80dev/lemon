@@ -1,7 +1,7 @@
 defmodule LemonSkills.Audit.LlmReviewerTest do
   use ExUnit.Case, async: true
 
-  alias Ai.Types.{AssistantMessage, Context, Model, TextContent}
+  alias LemonAi.Types.{AssistantMessage, Context, Model, TextContent}
   alias LemonSkills.Audit.LlmReviewer
 
   defmodule Runner do

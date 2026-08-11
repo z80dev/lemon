@@ -42,7 +42,7 @@ defmodule CodingAgent.CompactionTest do
 
   describe "message window compaction" do
     test "returns false when there is no provider message budget" do
-      model = %Ai.Types.Model{provider: :openai}
+      model = %LemonAi.Types.Model{provider: :openai}
       assert Compaction.message_budget(model, %{}) == nil
     end
 
@@ -114,9 +114,9 @@ defmodule CodingAgent.CompactionTest do
       assert tokens == 200
     end
 
-    test "handles Ai.Types messages" do
+    test "handles LemonAi.Types messages" do
       messages = [
-        %Ai.Types.UserMessage{role: :user, content: String.duplicate("a", 400), timestamp: 0}
+        %LemonAi.Types.UserMessage{role: :user, content: String.duplicate("a", 400), timestamp: 0}
       ]
 
       tokens = Compaction.estimate_context_tokens(messages)
@@ -2034,14 +2034,14 @@ defmodule CodingAgent.CompactionTest do
 
   describe "summary generation abort signal checking" do
     test "returns :aborted when signal is aborted before generate_summary" do
-      signal = AgentCore.AbortSignal.new()
-      AgentCore.AbortSignal.abort(signal)
+      signal = LemonAgent.AbortSignal.new()
+      LemonAgent.AbortSignal.abort(signal)
 
       messages = [
         %Messages.UserMessage{content: "Hello", timestamp: 0}
       ]
 
-      model = %Ai.Types.Model{
+      model = %LemonAi.Types.Model{
         provider: :anthropic,
         id: "claude-3-sonnet"
       }
@@ -2049,12 +2049,12 @@ defmodule CodingAgent.CompactionTest do
       result = Compaction.generate_summary(messages, model, signal: signal)
       assert {:error, :aborted} = result
 
-      AgentCore.AbortSignal.clear(signal)
+      LemonAgent.AbortSignal.clear(signal)
     end
 
     test "returns :aborted when signal is aborted before generate_branch_summary" do
-      signal = AgentCore.AbortSignal.new()
-      AgentCore.AbortSignal.abort(signal)
+      signal = LemonAgent.AbortSignal.new()
+      LemonAgent.AbortSignal.abort(signal)
 
       branch_entries = [
         %SessionEntry{
@@ -2066,7 +2066,7 @@ defmodule CodingAgent.CompactionTest do
         }
       ]
 
-      model = %Ai.Types.Model{
+      model = %LemonAi.Types.Model{
         provider: :anthropic,
         id: "claude-3-sonnet"
       }
@@ -2074,7 +2074,7 @@ defmodule CodingAgent.CompactionTest do
       result = Compaction.generate_branch_summary(branch_entries, model, signal: signal)
       assert {:error, :aborted} = result
 
-      AgentCore.AbortSignal.clear(signal)
+      LemonAgent.AbortSignal.clear(signal)
     end
 
     test "generates summary with nil signal (default behavior)" do
@@ -2083,7 +2083,7 @@ defmodule CodingAgent.CompactionTest do
         %Messages.UserMessage{content: "Hello", timestamp: 0}
       ]
 
-      model = %Ai.Types.Model{
+      model = %LemonAi.Types.Model{
         provider: :anthropic,
         id: "claude-3-sonnet"
       }
@@ -2101,14 +2101,14 @@ defmodule CodingAgent.CompactionTest do
     end
 
     test "accepts pre-generated summary via opts and skips abort check" do
-      signal = AgentCore.AbortSignal.new()
-      AgentCore.AbortSignal.abort(signal)
+      signal = LemonAgent.AbortSignal.new()
+      LemonAgent.AbortSignal.abort(signal)
 
       messages = [
         %Messages.UserMessage{content: "Hello", timestamp: 0}
       ]
 
-      model = %Ai.Types.Model{
+      model = %LemonAi.Types.Model{
         provider: :anthropic,
         id: "claude-3-sonnet"
       }
@@ -2122,12 +2122,12 @@ defmodule CodingAgent.CompactionTest do
 
       assert {:ok, "Pre-generated summary"} = result
 
-      AgentCore.AbortSignal.clear(signal)
+      LemonAgent.AbortSignal.clear(signal)
     end
 
     test "accepts pre-generated branch summary via opts and skips abort check" do
-      signal = AgentCore.AbortSignal.new()
-      AgentCore.AbortSignal.abort(signal)
+      signal = LemonAgent.AbortSignal.new()
+      LemonAgent.AbortSignal.abort(signal)
 
       branch_entries = [
         %SessionEntry{
@@ -2139,7 +2139,7 @@ defmodule CodingAgent.CompactionTest do
         }
       ]
 
-      model = %Ai.Types.Model{
+      model = %LemonAi.Types.Model{
         provider: :anthropic,
         id: "claude-3-sonnet"
       }
@@ -2152,18 +2152,18 @@ defmodule CodingAgent.CompactionTest do
 
       assert {:ok, "Branch summary"} = result
 
-      AgentCore.AbortSignal.clear(signal)
+      LemonAgent.AbortSignal.clear(signal)
     end
 
     test "ignores empty string summary in opts" do
-      signal = AgentCore.AbortSignal.new()
-      AgentCore.AbortSignal.abort(signal)
+      signal = LemonAgent.AbortSignal.new()
+      LemonAgent.AbortSignal.abort(signal)
 
       messages = [
         %Messages.UserMessage{content: "Hello", timestamp: 0}
       ]
 
-      model = %Ai.Types.Model{
+      model = %LemonAi.Types.Model{
         provider: :anthropic,
         id: "claude-3-sonnet"
       }
@@ -2172,13 +2172,13 @@ defmodule CodingAgent.CompactionTest do
       result = Compaction.generate_summary(messages, model, signal: signal, summary: "")
       assert {:error, :aborted} = result
 
-      AgentCore.AbortSignal.clear(signal)
+      LemonAgent.AbortSignal.clear(signal)
     end
   end
 
   describe "failed API calls with various error types" do
     # Note: These tests verify error handling patterns.
-    # In real usage, generate_summary calls Ai.complete which may return various errors.
+    # In real usage, generate_summary calls LemonAi.complete which may return various errors.
 
     test "extract_file_operations handles empty tool call list gracefully" do
       messages = [
@@ -2239,7 +2239,7 @@ defmodule CodingAgent.CompactionTest do
   describe "truncation of very long tool results" do
     test "format_message_for_summary truncates tool results to 500 chars" do
       # This is an internal function, but we can test it indirectly
-      # by checking the behavior through generate_summary (if we could mock Ai.complete)
+      # by checking the behavior through generate_summary (if we could mock LemonAi.complete)
       # For now, we verify that estimate_message_tokens handles long tool results
 
       long_output = String.duplicate("x", 10_000)
@@ -2464,13 +2464,13 @@ defmodule CodingAgent.CompactionTest do
   end
 
   describe "extract_file_operations with various message types" do
-    test "handles Ai.Types messages" do
+    test "handles LemonAi.Types messages" do
       # The function should work with different message formats
       messages = [
-        %Ai.Types.AssistantMessage{
+        %LemonAi.Types.AssistantMessage{
           role: :assistant,
           content: [
-            %Ai.Types.ToolCall{
+            %LemonAi.Types.ToolCall{
               type: :tool_call,
               id: "tc1",
               name: "read",
@@ -2481,13 +2481,13 @@ defmodule CodingAgent.CompactionTest do
         }
       ]
 
-      # Ai.Types.ToolCall has 'arguments' field like Messages.ToolCall
+      # LemonAi.Types.ToolCall has 'arguments' field like Messages.ToolCall
       result = Compaction.extract_file_operations(messages)
       assert is_list(result.read_files)
       assert is_list(result.modified_files)
     end
 
-    test "handles mixed CodingAgent.Messages and Ai.Types messages" do
+    test "handles mixed CodingAgent.Messages and LemonAi.Types messages" do
       messages = [
         %Messages.AssistantMessage{
           content: [

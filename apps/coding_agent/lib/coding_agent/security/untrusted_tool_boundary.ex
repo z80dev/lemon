@@ -2,11 +2,11 @@ defmodule CodingAgent.Security.UntrustedToolBoundary do
   @moduledoc """
   Wraps untrusted tool output blocks before they are sent to the LLM.
 
-  This transform is intended for AgentCore `transform_context`, so wrapping is
+  This transform is intended for LemonAgent `transform_context`, so wrapping is
   applied only on the pre-LLM boundary and does not mutate persisted history.
   """
 
-  alias Ai.Types.{TextContent, ToolResultMessage}
+  alias LemonAi.Types.{TextContent, ToolResultMessage}
   alias CodingAgent.Security.ExternalContent
 
   @external_start "<<<EXTERNAL_UNTRUSTED_CONTENT>>>"

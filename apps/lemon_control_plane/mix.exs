@@ -36,8 +36,8 @@ defmodule LemonControlPlane.MixProject do
       {:lemon_channels, in_umbrella: true},
       {:lemon_skills, in_umbrella: true},
       {:lemon_automation, in_umbrella: true},
-      {:agent_core, in_umbrella: true},
-      {:ai, in_umbrella: true},
+      {:lemon_agent, in_umbrella: true},
+      {:lemon_ai, in_umbrella: true},
       # HTTP server
       {:bandit, "~> 1.5"},
       {:plug, "~> 1.16"},

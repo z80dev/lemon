@@ -1,8 +1,8 @@
 defmodule CodingAgent.Session.PersistenceTest do
   use ExUnit.Case, async: true
 
-  alias AgentCore.Test.Mocks
-  alias AgentCore.Loop.TranscriptValidator
+  alias LemonAgent.Test.Mocks
+  alias LemonAgent.Loop.TranscriptValidator
   alias CodingAgent.Messages
   alias CodingAgent.Messages.CustomMessage
   alias CodingAgent.Session
@@ -13,7 +13,7 @@ defmodule CodingAgent.Session.PersistenceTest do
   alias LemonGateway.Types.Job
 
   defmodule RouterPersistenceRunnerProxy do
-    alias AgentCore.Test.Mocks
+    alias LemonAgent.Test.Mocks
     alias CodingAgent.CliRunners.LemonRunner
 
     def start_link(opts) do
@@ -41,7 +41,7 @@ defmodule CodingAgent.Session.PersistenceTest do
     state = %{session_manager: session_manager}
 
     next_state =
-      Persistence.persist_message(state, %Ai.Types.UserMessage{
+      Persistence.persist_message(state, %LemonAi.Types.UserMessage{
         role: :user,
         content: "hello",
         timestamp: 1
@@ -60,7 +60,7 @@ defmodule CodingAgent.Session.PersistenceTest do
       })
 
     [message] = Persistence.restore_messages_from_session(session_manager)
-    assert %Ai.Types.UserMessage{content: "hello", timestamp: 1} = message
+    assert %LemonAi.Types.UserMessage{content: "hello", timestamp: 1} = message
   end
 
   test "restore_messages_from_session repairs dangling tool calls from interrupted sessions" do
@@ -85,13 +85,13 @@ defmodule CodingAgent.Session.PersistenceTest do
       })
 
     assert [
-             %Ai.Types.UserMessage{content: "run the command"},
-             %Ai.Types.AssistantMessage{},
-             %Ai.Types.ToolResultMessage{
+             %LemonAi.Types.UserMessage{content: "run the command"},
+             %LemonAi.Types.AssistantMessage{},
+             %LemonAi.Types.ToolResultMessage{
                tool_call_id: "call_interrupted",
                tool_name: "bash",
                is_error: true,
-               content: [%Ai.Types.TextContent{text: repair_text}]
+               content: [%LemonAi.Types.TextContent{text: repair_text}]
              }
            ] = restored = Persistence.restore_messages_from_session(session_manager)
 
@@ -115,7 +115,7 @@ defmodule CodingAgent.Session.PersistenceTest do
         "timestamp" => 2
       })
 
-    assert [%Ai.Types.UserMessage{content: "run the command"}] =
+    assert [%LemonAi.Types.UserMessage{content: "run the command"}] =
              restored = Persistence.restore_messages_from_session(session_manager)
 
     assert TranscriptValidator.validate(restored) == :ok
@@ -170,7 +170,7 @@ defmodule CodingAgent.Session.PersistenceTest do
     [restored] = Persistence.restore_messages_from_session(next_state.session_manager)
     [llm_message] = Messages.to_llm([restored])
 
-    assert %Ai.Types.UserMessage{} = llm_message
+    assert %LemonAi.Types.UserMessage{} = llm_message
     assert llm_message.content =~ "[SYSTEM-DELIVERED ASYNC COMPLETION - NOT A USER MESSAGE]"
     assert llm_message.content =~ "task completed"
   end
@@ -254,7 +254,7 @@ defmodule CodingAgent.Session.PersistenceTest do
 
     [llm_followup] =
       Enum.filter(Messages.to_llm(restored_messages), fn
-        %Ai.Types.UserMessage{content: content} when is_binary(content) ->
+        %LemonAi.Types.UserMessage{content: content} when is_binary(content) ->
           String.contains?(content, "[SYSTEM-DELIVERED ASYNC COMPLETION - NOT A USER MESSAGE]")
 
         _ ->

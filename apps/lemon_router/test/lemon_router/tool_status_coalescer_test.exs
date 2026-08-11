@@ -465,8 +465,8 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
         title: "task: Read AGENTS.md in lemon repo",
         detail: %{
           name: "task",
-          partial_result: %AgentCore.Types.AgentToolResult{
-            content: [%Ai.Types.TextContent{type: :text, text: "pwd"}],
+          partial_result: %LemonAgent.Types.AgentToolResult{
+            content: [%LemonAi.Types.TextContent{type: :text, text: "pwd"}],
             details: %{
               status: "running",
               description: "Read AGENTS.md in lemon repo",
@@ -517,8 +517,8 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
         title: "task(codex): inspect repo",
         detail: %{
           name: "task",
-          partial_result: %AgentCore.Types.AgentToolResult{
-            content: [%Ai.Types.TextContent{type: :text, text: "Read: AGENTS.md"}],
+          partial_result: %LemonAgent.Types.AgentToolResult{
+            content: [%LemonAi.Types.TextContent{type: :text, text: "Read: AGENTS.md"}],
             details: %{
               status: "running",
               description: "inspect repo",
@@ -570,8 +570,8 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
         title: "Browser Navigate",
         detail: %{
           name: "browser_navigate",
-          partial_result: %AgentCore.Types.AgentToolResult{
-            content: [%Ai.Types.TextContent{type: :text, text: "browser started"}],
+          partial_result: %LemonAgent.Types.AgentToolResult{
+            content: [%LemonAi.Types.TextContent{type: :text, text: "browser started"}],
             details: %{
               "tool" => "browser_navigate",
               "method" => "browser.navigate",

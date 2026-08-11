@@ -137,7 +137,7 @@ defmodule CodingAgent.Session.CompactionManager do
     end
   end
 
-  @spec clear_overflow_recovery_state_on_terminal(AgentCore.Types.agent_event(), map()) :: map()
+  @spec clear_overflow_recovery_state_on_terminal(LemonAgent.Types.agent_event(), map()) :: map()
   def clear_overflow_recovery_state_on_terminal(event, state) do
     case event do
       {:agent_end, _messages} -> clear_overflow_recovery_state(state)
@@ -245,7 +245,7 @@ defmodule CodingAgent.Session.CompactionManager do
           {:ok, map()} | {:error, term()},
           String.t() | nil,
           (map() -> [map()]),
-          (map(), AgentCore.Types.agent_event() -> :ok),
+          (map(), LemonAgent.Types.agent_event() -> :ok),
           (map(), String.t() | nil -> :ok),
           (map(), String.t(), atom() -> :ok)
         ) ::
@@ -276,7 +276,7 @@ defmodule CodingAgent.Session.CompactionManager do
 
         # Rebuild messages from the new position and update agent
         messages = restore_messages_fn.(session_manager)
-        :ok = AgentCore.Agent.replace_messages(state.agent, messages)
+        :ok = LemonAgent.Agent.replace_messages(state.agent, messages)
 
         # Emit introspection event for compaction
         Introspection.record(
@@ -321,7 +321,7 @@ defmodule CodingAgent.Session.CompactionManager do
   # Compaction Task Helpers
   # ============================================================================
 
-  @spec auto_compaction_task_result(Session.t(), Ai.Types.Model.t(), keyword()) ::
+  @spec auto_compaction_task_result(Session.t(), LemonAi.Types.Model.t(), keyword()) ::
           {:ok, map()} | {:error, term()}
   def auto_compaction_task_result(session_manager, model, opts) do
     try do
@@ -340,7 +340,7 @@ defmodule CodingAgent.Session.CompactionManager do
     normalize_compaction_opts(state, force: true)
   end
 
-  @spec overflow_recovery_compaction_task_result(Session.t(), Ai.Types.Model.t(), keyword()) ::
+  @spec overflow_recovery_compaction_task_result(Session.t(), LemonAi.Types.Model.t(), keyword()) ::
           {:ok, map()} | {:error, term()}
   def overflow_recovery_compaction_task_result(session_manager, model, opts) do
     try do

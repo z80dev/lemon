@@ -2,7 +2,7 @@ defmodule <%= @app_module %>.Memory do
   @moduledoc """
   Durable memory: what the agent said, kept across restarts.
 
-  `AgentCore.Agent` holds the conversation in process state, which is exactly
+  `LemonAgent.Agent` holds the conversation in process state, which is exactly
   the right place for it and exactly the wrong place to keep it. `lemon_memory`
   is the other half: a SQLite-backed store of compact, searchable summaries,
   scoped so that "what did we decide last Tuesday" survives a deploy.

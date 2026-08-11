@@ -1,7 +1,7 @@
 defmodule LemonGateway.CliAdapterTest do
   use ExUnit.Case
 
-  alias AgentCore.CliRunners.Types.{
+  alias LemonAgent.CliRunners.Types.{
     Action,
     ActionEvent,
     CompletedEvent,
@@ -80,8 +80,8 @@ defmodule LemonGateway.CliAdapterTest do
 
       def init(opts) do
         send(opts[:owner], {:cli_adapter_start_opts, opts})
-        {:ok, stream} = AgentCore.EventStream.start(owner: self())
-        AgentCore.EventStream.complete(stream, [])
+        {:ok, stream} = LemonAgent.EventStream.start(owner: self())
+        LemonAgent.EventStream.complete(stream, [])
         {:ok, %{stream: stream}}
       end
 

@@ -3,9 +3,9 @@ defmodule LemonSkills.Tools.MemoryTopic do
   Scaffold topic memory files from `memory/topics/TEMPLATE.md`.
   """
 
-  alias AgentCore.AbortSignal
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.TextContent
+  alias LemonAgent.AbortSignal
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.TextContent
 
   @template_relative_path Path.join(["memory", "topics", "TEMPLATE.md"])
 

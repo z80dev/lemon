@@ -18,7 +18,7 @@ defmodule LemonControlPlane.Methods.GoalResume do
     if is_nil(session_key) or String.trim(to_string(session_key)) == "" do
       {:error, {:invalid_request, "sessionKey is required", nil}}
     else
-      case AgentCore.Workspace.GoalStore.resume(session_key, run_id: param(params, "runId")) do
+      case LemonAgent.Workspace.GoalStore.resume(session_key, run_id: param(params, "runId")) do
         {:ok, goal} -> {:ok, format_goal(goal)}
         {:error, reason} -> {:error, {:invalid_request, inspect(reason), nil}}
       end

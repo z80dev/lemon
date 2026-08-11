@@ -2,7 +2,7 @@ defmodule CodingAgent.RateLimitHealerTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.RateLimitHealer
-  alias Ai.Types.Model
+  alias LemonAi.Types.Model
 
   # Test model fixture
   @test_model %Model{

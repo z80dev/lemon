@@ -3,7 +3,7 @@ defmodule LemonSim.Examples.Courtroom.ActionSpace do
 
   @behaviour LemonSim.Kernel.ActionSpace
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonCore.MapHelpers
   alias LemonSim.Examples.Courtroom.Events
   alias LemonSim.Examples.Helpers.Tools, as: GameTools
@@ -82,7 +82,7 @@ defmodule LemonSim.Examples.Courtroom.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("statement delivered to the court")],
+           content: [LemonAgent.text_content("statement delivered to the court")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -171,7 +171,7 @@ defmodule LemonSim.Examples.Courtroom.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("called #{witness_id} to the stand")],
+           content: [LemonAgent.text_content("called #{witness_id} to the stand")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -213,7 +213,7 @@ defmodule LemonSim.Examples.Courtroom.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("questioned #{target_id}")],
+           content: [LemonAgent.text_content("questioned #{target_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -251,7 +251,7 @@ defmodule LemonSim.Examples.Courtroom.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("presented evidence: #{evidence_id}")],
+           content: [LemonAgent.text_content("presented evidence: #{evidence_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -286,7 +286,7 @@ defmodule LemonSim.Examples.Courtroom.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("objection raised: #{reason}")],
+           content: [LemonAgent.text_content("objection raised: #{reason}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -328,7 +328,7 @@ defmodule LemonSim.Examples.Courtroom.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("challenged #{witness_id}'s testimony")],
+           content: [LemonAgent.text_content("challenged #{witness_id}'s testimony")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -370,7 +370,7 @@ defmodule LemonSim.Examples.Courtroom.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("contributed to deliberations")],
+           content: [LemonAgent.text_content("contributed to deliberations")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -402,7 +402,7 @@ defmodule LemonSim.Examples.Courtroom.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("note recorded")],
+           content: [LemonAgent.text_content("note recorded")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -441,7 +441,7 @@ defmodule LemonSim.Examples.Courtroom.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("verdict cast: #{vote}")],
+           content: [LemonAgent.text_content("verdict cast: #{vote}")],
            details: %{"event" => event},
            trust: :trusted
          }}

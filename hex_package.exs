@@ -30,8 +30,8 @@ defmodule Lemon.HexPackage do
   # a third party types into their own deps. They differ for the two apps that
   # predate the `lemon_` prefix.
   @packages %{
-    ai: :lemon_ai,
-    agent_core: :lemon_agent,
+    lemon_ai: :lemon_ai,
+    lemon_agent: :lemon_agent,
     lemon_core: :lemon_core,
     lemon_media: :lemon_media,
     lemon_memory: :lemon_memory,

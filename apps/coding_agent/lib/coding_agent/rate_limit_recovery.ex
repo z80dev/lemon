@@ -9,17 +9,17 @@ defmodule CodingAgent.RateLimitRecovery do
 
   require Logger
 
-  alias Ai.Models
+  alias LemonAi.Models
 
   @type strategy ::
           :reset_backoff
-          | {:fallback_model, Ai.Types.Model.t()}
+          | {:fallback_model, LemonAi.Types.Model.t()}
           | {:fallback_provider, atom()}
           | {:session_fork, keyword()}
           | :give_up
 
   @type strategy_selection_criteria :: %{
-          required(:current_model) => Ai.Types.Model.t(),
+          required(:current_model) => LemonAi.Types.Model.t(),
           required(:failure_count) => non_neg_integer(),
           optional(:available_providers) => [atom()],
           optional(:max_context_tokens) => non_neg_integer(),
@@ -109,7 +109,7 @@ defmodule CodingAgent.RateLimitRecovery do
   @doc """
   Find a suitable fallback model when the primary is rate-limited.
   """
-  @spec find_fallback_model(Ai.Types.Model.t(), keyword()) :: Ai.Types.Model.t() | nil
+  @spec find_fallback_model(LemonAi.Types.Model.t(), keyword()) :: LemonAi.Types.Model.t() | nil
   def find_fallback_model(current_model, _opts \\ []) do
     current_provider = current_model.provider
 
@@ -122,7 +122,7 @@ defmodule CodingAgent.RateLimitRecovery do
   @doc """
   Try to find a fallback provider from the available list.
   """
-  @spec try_fallback_provider(Ai.Types.Model.t(), [atom()]) :: strategy() | nil
+  @spec try_fallback_provider(LemonAi.Types.Model.t(), [atom()]) :: strategy() | nil
   def try_fallback_provider(current_model, available_providers) do
     current_provider = current_model.provider
 
@@ -135,7 +135,7 @@ defmodule CodingAgent.RateLimitRecovery do
   @doc """
   Find a suitable model on a specific provider.
   """
-  @spec find_model_on_provider(atom(), map()) :: Ai.Types.Model.t() | nil
+  @spec find_model_on_provider(atom(), map()) :: LemonAi.Types.Model.t() | nil
   def find_model_on_provider(provider, _state) do
     Models.get_models(provider) |> List.first()
   end
@@ -233,7 +233,7 @@ defmodule CodingAgent.RateLimitRecovery do
         state.messages |> Enum.take(-count)
 
       is_map_key(state, :agent) and not is_nil(state.agent) ->
-        agent_state = AgentCore.Agent.get_state(state.agent)
+        agent_state = LemonAgent.Agent.get_state(state.agent)
         Map.get(agent_state, :messages, []) |> Enum.take(-count)
 
       true ->

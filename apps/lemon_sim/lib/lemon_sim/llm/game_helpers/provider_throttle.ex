@@ -35,7 +35,7 @@ defmodule LemonSim.LLM.GameHelpers.ProviderThrottle do
 
       {default_interval_ms, provider_min_interval_ms} ->
         {:ok, throttle_agent} = Agent.start_link(fn -> %{} end)
-        base_complete_fn = Keyword.get(opts, :complete_fn, &Ai.complete/3)
+        base_complete_fn = Keyword.get(opts, :complete_fn, &LemonAi.complete/3)
 
         throttled_complete_fn = fn model, context, stream_options ->
           wait(throttle_agent, model.provider, default_interval_ms, provider_min_interval_ms)

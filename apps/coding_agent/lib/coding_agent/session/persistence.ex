@@ -3,7 +3,7 @@ defmodule CodingAgent.Session.Persistence do
 
   require Logger
 
-  alias AgentCore.Loop.TranscriptValidator
+  alias LemonAgent.Loop.TranscriptValidator
   alias CodingAgent.Session.MessageSerialization
   alias CodingAgent.SessionManager
   alias CodingAgent.SessionManager.Session
@@ -12,19 +12,19 @@ defmodule CodingAgent.Session.Persistence do
   def persist_message(state, message) do
     new_session_manager =
       case message do
-        %Ai.Types.UserMessage{} ->
+        %LemonAi.Types.UserMessage{} ->
           SessionManager.append_message(
             state.session_manager,
             MessageSerialization.serialize_message(message)
           )
 
-        %Ai.Types.AssistantMessage{} ->
+        %LemonAi.Types.AssistantMessage{} ->
           SessionManager.append_message(
             state.session_manager,
             MessageSerialization.serialize_message(message)
           )
 
-        %Ai.Types.ToolResultMessage{} ->
+        %LemonAi.Types.ToolResultMessage{} ->
           SessionManager.append_message(
             state.session_manager,
             MessageSerialization.serialize_message(message)
@@ -214,12 +214,12 @@ defmodule CodingAgent.Session.Persistence do
 
   defp synthetic_results_for(message, tool_call_ids) do
     Enum.map(tool_call_ids, fn tool_call_id ->
-      %Ai.Types.ToolResultMessage{
+      %LemonAi.Types.ToolResultMessage{
         role: :tool_result,
         tool_call_id: tool_call_id,
         tool_name: tool_name_for_call(message, tool_call_id),
         content: [
-          %Ai.Types.TextContent{
+          %LemonAi.Types.TextContent{
             type: :text,
             text: "Tool call was interrupted before Lemon recorded a result."
           }
@@ -232,10 +232,10 @@ defmodule CodingAgent.Session.Persistence do
     end)
   end
 
-  defp tool_name_for_call(%Ai.Types.AssistantMessage{content: content}, tool_call_id) do
+  defp tool_name_for_call(%LemonAi.Types.AssistantMessage{content: content}, tool_call_id) do
     content
     |> Enum.find_value("", fn
-      %Ai.Types.ToolCall{id: ^tool_call_id, name: name} -> name
+      %LemonAi.Types.ToolCall{id: ^tool_call_id, name: name} -> name
       %{id: ^tool_call_id, name: name} -> name
       %{"id" => ^tool_call_id, "name" => name} -> name
       _ -> false

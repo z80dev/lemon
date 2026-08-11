@@ -1,7 +1,7 @@
 defmodule CodingAgent.SessionApiKeyResolutionTest do
   use ExUnit.Case, async: false
 
-  alias Ai.Types.{AssistantMessage, Cost, Model, ModelCost, TextContent, Usage}
+  alias LemonAi.Types.{AssistantMessage, Cost, Model, ModelCost, TextContent, Usage}
   alias CodingAgent.{Session, SettingsManager}
   alias LemonCore.{Secrets, Store}
 
@@ -686,12 +686,12 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
 
   defp response_stream do
     response = assistant_message("ok")
-    {:ok, stream} = Ai.EventStream.start_link()
+    {:ok, stream} = LemonAi.EventStream.start_link()
 
     Task.start(fn ->
-      Ai.EventStream.push(stream, {:start, response})
-      Ai.EventStream.push(stream, {:done, response.stop_reason, response})
-      Ai.EventStream.complete(stream, response)
+      LemonAi.EventStream.push(stream, {:start, response})
+      LemonAi.EventStream.push(stream, {:done, response.stop_reason, response})
+      LemonAi.EventStream.complete(stream, response)
     end)
 
     stream

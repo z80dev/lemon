@@ -65,8 +65,8 @@ defmodule CodingAgent.Coordinator do
 
   @type t :: %__MODULE__{
           cwd: String.t(),
-          model: Ai.Types.Model.t(),
-          thinking_level: AgentCore.Types.thinking_level(),
+          model: LemonAi.Types.Model.t(),
+          thinking_level: LemonAgent.Types.thinking_level(),
           settings_manager: CodingAgent.SettingsManager.t() | nil,
           parent_session: String.t() | nil,
           active_subagents: %{String.t() => subagent_state()},
@@ -751,11 +751,11 @@ defmodule CodingAgent.Coordinator do
   @spec extract_final_text([map()]) :: String.t()
   defp extract_final_text(messages) do
     messages
-    |> Enum.filter(&match?(%Ai.Types.AssistantMessage{}, &1))
+    |> Enum.filter(&match?(%LemonAi.Types.AssistantMessage{}, &1))
     |> List.last()
     |> case do
       nil -> ""
-      msg -> Ai.get_text(msg) || ""
+      msg -> LemonAi.get_text(msg) || ""
     end
   end
 

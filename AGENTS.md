@@ -9,8 +9,8 @@
 
 | If you want to... | Look in... |
 |-------------------|------------|
-| Add/modify AI provider support | `apps/ai/` |
-| Work on model runtime credential glue | `apps/agent_core/` |
+| Add/modify AI provider support | `apps/lemon_ai/` |
+| Work on model runtime credential glue | `apps/lemon_agent/` |
 | Work on coding tools or session management | `apps/coding_agent/` |
 | Modify Telegram/Discord channel adapters | `apps/lemon_channels/` |
 | Modify SMS/voice transports | `apps/lemon_gateway/` |
@@ -23,7 +23,7 @@
 | Work on media job capability driver | `apps/lemon_media/` |
 | Work on LSP capability driver | `apps/lemon_lsp/` |
 | Build reusable simulation harnesses | `apps/lemon_sim/` |
-| Work with CLI runners/subagent spawning | `apps/agent_core/` |
+| Work with CLI runners/subagent spawning | `apps/lemon_agent/` |
 | Create or modify skills and assistant-platform tools | `apps/lemon_skills/` |
 | Work on deterministic eval harnesses | `apps/lemon_evals/` |
 | Build cron jobs or automation | `apps/lemon_automation/` |
@@ -200,7 +200,7 @@ scripts/test clients    # Python CLI + Node client CI parity checks
 scripts/test eval-fast  # small eval harness run
 scripts/test smoke      # CI-only product-smoke pointer
 scripts/test all        # useful local aggregate
-scripts/test path apps/ai/test --seed 1
+scripts/test path apps/lemon_ai/test --seed 1
 
 # Format code
 mix format
@@ -354,9 +354,9 @@ Key env vars:
 
 ### Adding an AI Provider
 
-1. Create provider module in `apps/ai/lib/ai/providers/`
-2. Implement `Ai.Provider` behaviour
-3. Register in `Ai.ProviderRegistry`
+1. Create provider module in `apps/lemon_ai/lib/lemon_ai/providers/`
+2. Implement `LemonAi.Provider` behaviour
+3. Register in `LemonAi.ProviderRegistry`
 
 ### Adding a Gateway Transport
 
@@ -449,7 +449,7 @@ This repository includes an optional pre-push hook that uses **kimi** to review 
 - `docs/assistant_bootstrap_contract.md` - Bootstrap contract
 - `docs/context.md` - Context management
 - `docs/remote-cli-task-execution-plan.md` - Planning note for remote `codex`/`claude` task execution over generic runner backends
-- `docs/plans/2026-03-19-ai-boundary-extraction-plan.md` - Plan for moving auth/config/storage ownership out of `apps/ai` before extracting `ai` into its own repo
+- `docs/plans/2026-03-19-ai-boundary-extraction-plan.md` - Plan for moving auth/config/storage ownership out of `apps/lemon_ai` before extracting `ai` into its own repo
 - `docs/subagent-parent-questions.md` - Design for subagent-to-parent clarification requests via a narrow `ask_parent` path
 - `docs/missions.md` - Reverse-engineered Factory Missions behavior and Lemon implementation spec
 - `docs/missions_phase1_plan.md` - Concrete Phase 1 implementation plan for Lemon Missions
@@ -481,8 +481,8 @@ Each app has its own `AGENTS.md` with detailed context:
 
 | App | Location |
 |-----|----------|
-| agent_core | `apps/agent_core/AGENTS.md` |
-| ai | `apps/ai/AGENTS.md` |
+| agent_core | `apps/lemon_agent/AGENTS.md` |
+| ai | `apps/lemon_ai/AGENTS.md` |
 | coding_agent | `apps/coding_agent/AGENTS.md` |
 | lemon_browser | `apps/lemon_browser/README.md` *(no AGENTS.md yet)* |
 | lemon_core | `apps/lemon_core/AGENTS.md` |

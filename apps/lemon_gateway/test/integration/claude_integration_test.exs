@@ -1,8 +1,8 @@
 defmodule LemonGateway.ClaudeIntegrationTest do
   use ExUnit.Case
 
-  alias AgentCore.CliRunners.ClaudeRunner
-  alias AgentCore.CliRunners.Types.CompletedEvent
+  alias LemonAgent.CliRunners.ClaudeRunner
+  alias LemonAgent.CliRunners.Types.CompletedEvent
 
   @tag :integration
   test "claude runner completes" do
@@ -25,7 +25,7 @@ defmodule LemonGateway.ClaudeIntegrationTest do
 
         task =
           Task.async(fn ->
-            AgentCore.EventStream.events(stream) |> Enum.to_list()
+            LemonAgent.EventStream.events(stream) |> Enum.to_list()
           end)
 
         events = Task.await(task, 200_000)

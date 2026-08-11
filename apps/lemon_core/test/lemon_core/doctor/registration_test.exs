@@ -84,7 +84,7 @@ defmodule LemonCore.Doctor.RegistrationTest do
     test "lemon_core names no foreign app module in its doctor code" do
       foreign =
         ~w(LemonLsp LemonMedia LemonBrowser LemonChannels LemonGateway LemonRouter
-           CodingAgent AgentCore LemonSkills LemonMemory)
+           CodingAgent LemonAgent LemonSkills LemonMemory)
 
       offenders =
         "lib/lemon_core/doctor/**/*.ex"

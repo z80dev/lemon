@@ -1,6 +1,6 @@
 defmodule LemonEvals.Evals.AgentLoop do
   @moduledoc """
-  Scripted `AgentCore.Loop`-driven contract evals: learning/skill-refinement
+  Scripted `LemonAgent.Loop`-driven contract evals: learning/skill-refinement
   traces, memory and workspace-memory traces, async/parallel task join
   traces, delegation-artifact traces, and the orchestrator/leaf-worker
   delegation toolset contract. Each eval drives a real agent loop against a
@@ -10,14 +10,14 @@ defmodule LemonEvals.Evals.AgentLoop do
 
   import LemonEvals.Support
 
-  alias AgentCore.{EventStream, Loop}
-  alias AgentCore.Types.{AgentContext, AgentLoopConfig, AgentToolResult}
+  alias LemonAgent.{EventStream, Loop}
+  alias LemonAgent.Types.{AgentContext, AgentLoopConfig, AgentToolResult}
   alias CodingAgent.{PromptBuilder, ToolPolicy, ToolRegistry}
   alias CodingAgent.Tools.{Grep, Patch, Read, ReadSkill, SkillManage}
   alias CodingAgent.Tools.Task, as: TaskTool
   alias LemonEvals.Types
   alias LemonSkills.Tools.SearchMemory
-  alias Ai.Types.TextContent
+  alias LemonAi.Types.TextContent
 
   @spec agent_loop_learning_trace_contract_eval(String.t()) :: Types.eval_result()
   def agent_loop_learning_trace_contract_eval(_cwd) do

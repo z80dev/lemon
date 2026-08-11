@@ -58,8 +58,8 @@ defmodule LemonNew.GeneratorTest do
     mix_exs = read(project, "mix.exs")
 
     assert mix_exs =~ ~s({:lemon_core, path: "#{@lemon_path}/apps/lemon_core"})
-    assert mix_exs =~ ~s({:ai, path: "#{@lemon_path}/apps/ai"})
-    assert mix_exs =~ ~s({:agent_core, path: "#{@lemon_path}/apps/agent_core"})
+    assert mix_exs =~ ~s({:lemon_ai, path: "#{@lemon_path}/apps/lemon_ai"})
+    assert mix_exs =~ ~s({:lemon_agent, path: "#{@lemon_path}/apps/lemon_agent"})
   end
 
   test "keeps the eventual hex names alongside the path deps", %{tmp: tmp} do
@@ -68,8 +68,8 @@ defmodule LemonNew.GeneratorTest do
 
     # The two packages whose hex name differs from the application name are the
     # ones most likely to be mistyped, so the generated file spells them out.
-    assert mix_exs =~ ~s(# {:ai, "~> 0.1", hex: :lemon_ai})
-    assert mix_exs =~ ~s(# {:agent_core, "~> 0.1", hex: :lemon_agent})
+    assert mix_exs =~ ~s(# {:lemon_ai, "~> 0.1", hex: :lemon_ai})
+    assert mix_exs =~ ~s(# {:lemon_agent, "~> 0.1", hex: :lemon_agent})
   end
 
   describe "without --channel" do

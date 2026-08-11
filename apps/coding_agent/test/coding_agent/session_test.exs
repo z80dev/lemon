@@ -6,7 +6,7 @@ defmodule CodingAgent.SessionTest do
   alias CodingAgent.SessionManager
   alias CodingAgent.SettingsManager
 
-  alias Ai.Types.{
+  alias LemonAi.Types.{
     AssistantMessage,
     TextContent,
     ToolCall,
@@ -17,8 +17,8 @@ defmodule CodingAgent.SessionTest do
     ModelCost
   }
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias AgentCore.EventStream
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.EventStream
 
   # ============================================================================
   # Test Mocks and Helpers
@@ -67,11 +67,11 @@ defmodule CodingAgent.SessionTest do
   end
 
   defp response_to_event_stream(response) do
-    {:ok, stream} = Ai.EventStream.start_link()
+    {:ok, stream} = LemonAi.EventStream.start_link()
 
     Task.start(fn ->
       # Emit start event
-      Ai.EventStream.push(stream, {:start, response})
+      LemonAi.EventStream.push(stream, {:start, response})
 
       # Emit text deltas for each text content
       response.content
@@ -79,13 +79,13 @@ defmodule CodingAgent.SessionTest do
       |> Enum.each(fn {content, idx} ->
         case content do
           %TextContent{text: text} ->
-            Ai.EventStream.push(stream, {:text_start, idx, response})
-            Ai.EventStream.push(stream, {:text_delta, idx, text, response})
-            Ai.EventStream.push(stream, {:text_end, idx, response})
+            LemonAi.EventStream.push(stream, {:text_start, idx, response})
+            LemonAi.EventStream.push(stream, {:text_delta, idx, text, response})
+            LemonAi.EventStream.push(stream, {:text_end, idx, response})
 
           %ToolCall{} = tool_call ->
-            Ai.EventStream.push(stream, {:tool_call_start, idx, tool_call, response})
-            Ai.EventStream.push(stream, {:tool_call_end, idx, tool_call, response})
+            LemonAi.EventStream.push(stream, {:tool_call_start, idx, tool_call, response})
+            LemonAi.EventStream.push(stream, {:tool_call_end, idx, tool_call, response})
 
           _ ->
             :ok
@@ -93,8 +93,8 @@ defmodule CodingAgent.SessionTest do
       end)
 
       # Emit done event
-      Ai.EventStream.push(stream, {:done, response.stop_reason, response})
-      Ai.EventStream.complete(stream, response)
+      LemonAi.EventStream.push(stream, {:done, response.stop_reason, response})
+      LemonAi.EventStream.complete(stream, response)
     end)
 
     stream
@@ -1656,7 +1656,7 @@ defmodule CodingAgent.SessionTest do
       session_id = state.session_manager.header.id
 
       # Verify main agent is registered with key {session_id, :main, 0}
-      assert {:ok, pid} = AgentCore.AgentRegistry.lookup({session_id, :main, 0})
+      assert {:ok, pid} = LemonAgent.AgentRegistry.lookup({session_id, :main, 0})
       assert is_pid(pid)
       assert Process.alive?(pid)
     end
@@ -1667,7 +1667,7 @@ defmodule CodingAgent.SessionTest do
       session_id = state.session_manager.header.id
 
       # Verify registered and get the agent pid
-      assert {:ok, agent_pid} = AgentCore.AgentRegistry.lookup({session_id, :main, 0})
+      assert {:ok, agent_pid} = LemonAgent.AgentRegistry.lookup({session_id, :main, 0})
 
       # Monitor the agent so we can wait for it to exit
       ref = Process.monitor(agent_pid)
@@ -1682,7 +1682,7 @@ defmodule CodingAgent.SessionTest do
       Process.sleep(10)
 
       # Verify unregistered
-      assert :error = AgentCore.AgentRegistry.lookup({session_id, :main, 0})
+      assert :error = LemonAgent.AgentRegistry.lookup({session_id, :main, 0})
     end
 
     test "list_by_session includes main agent" do
@@ -1690,7 +1690,7 @@ defmodule CodingAgent.SessionTest do
       state = Session.get_state(session)
       session_id = state.session_manager.header.id
 
-      agents = AgentCore.AgentRegistry.list_by_session(session_id)
+      agents = LemonAgent.AgentRegistry.list_by_session(session_id)
 
       # Should have at least the main agent
       assert agents != []
@@ -1708,8 +1708,8 @@ defmodule CodingAgent.SessionTest do
       session_id2 = state2.session_manager.header.id
 
       # Verify both sessions have their own main agent
-      assert {:ok, pid1} = AgentCore.AgentRegistry.lookup({session_id1, :main, 0})
-      assert {:ok, pid2} = AgentCore.AgentRegistry.lookup({session_id2, :main, 0})
+      assert {:ok, pid1} = LemonAgent.AgentRegistry.lookup({session_id1, :main, 0})
+      assert {:ok, pid2} = LemonAgent.AgentRegistry.lookup({session_id2, :main, 0})
 
       # PIDs should be different
       assert pid1 != pid2
@@ -1721,7 +1721,7 @@ defmodule CodingAgent.SessionTest do
       session_id = state.session_manager.header.id
 
       # Find the main agent through the registry
-      {:ok, agent_pid} = AgentCore.AgentRegistry.lookup({session_id, :main, 0})
+      {:ok, agent_pid} = LemonAgent.AgentRegistry.lookup({session_id, :main, 0})
 
       # Verify it's the same agent as in the session state
       assert agent_pid == state.agent

@@ -3,7 +3,7 @@ defmodule LemonSim.Examples.Diplomacy.ActionSpace do
 
   @behaviour LemonSim.Kernel.ActionSpace
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonCore.MapHelpers
   alias LemonSim.Examples.Diplomacy.Events
   alias LemonSim.Examples.Helpers.Tools, as: GameTools
@@ -83,7 +83,7 @@ defmodule LemonSim.Examples.Diplomacy.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("sent message to #{recipient}")],
+           content: [LemonAgent.text_content("sent message to #{recipient}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -108,7 +108,7 @@ defmodule LemonSim.Examples.Diplomacy.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("ending diplomacy phase for #{actor_id}")],
+           content: [LemonAgent.text_content("ending diplomacy phase for #{actor_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -209,7 +209,7 @@ defmodule LemonSim.Examples.Diplomacy.ActionSpace do
         {:ok,
          %AgentToolResult{
            content: [
-             AgentCore.text_content(
+             LemonAgent.text_content(
                "ordered army at #{army_territory} to #{order_type} -> #{target_territory}"
              )
            ],
@@ -238,7 +238,7 @@ defmodule LemonSim.Examples.Diplomacy.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("submitting orders for #{actor_id}")],
+           content: [LemonAgent.text_content("submitting orders for #{actor_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}

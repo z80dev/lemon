@@ -53,8 +53,8 @@ defmodule CodingAgent.Tools.Task.LiveBridgeTest do
         run_override: fn _on_update, _signal ->
           Process.sleep(300)
 
-          %AgentCore.Types.AgentToolResult{
-            content: [%Ai.Types.TextContent{text: "done"}],
+          %LemonAgent.Types.AgentToolResult{
+            content: [%LemonAi.Types.TextContent{text: "done"}],
             details: %{status: "completed"}
           }
         end

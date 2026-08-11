@@ -11,7 +11,7 @@ defmodule CodingAgent.Tools.FeatureRequirements do
       # Generate requirements from a project description
       {:ok, requirements} = FeatureRequirements.generate_requirements(
         "Build a todo app with user authentication",
-        model: Ai.Models.get_model(:anthropic, "claude-sonnet-4")
+        model: LemonAi.Models.get_model(:anthropic, "claude-sonnet-4")
       )
 
       # Save to project directory
@@ -369,10 +369,10 @@ defmodule CodingAgent.Tools.FeatureRequirements do
 
   defp default_model do
     # Try to get a capable model, fall back to any available
-    case Ai.Models.get_model(:anthropic, "claude-sonnet-4-20250514") do
+    case LemonAi.Models.get_model(:anthropic, "claude-sonnet-4-20250514") do
       nil ->
         # Fall back to first available model
-        Ai.Models.list_models()
+        LemonAi.Models.list_models()
         |> List.first()
 
       model ->
@@ -385,8 +385,8 @@ defmodule CodingAgent.Tools.FeatureRequirements do
   end
 
   defp call_llm(model, messages) do
-    # Use the Ai module for chat completion
-    context = %Ai.Types.Context{
+    # Use the LemonAi module for chat completion
+    context = %LemonAi.Types.Context{
       system_prompt: nil,
       messages: messages,
       tools: []
@@ -397,8 +397,8 @@ defmodule CodingAgent.Tools.FeatureRequirements do
       max_tokens: 4000
     ]
 
-    case Ai.complete(model, context, opts) do
-      {:ok, message} -> {:ok, Ai.get_text(message)}
+    case LemonAi.complete(model, context, opts) do
+      {:ok, message} -> {:ok, LemonAi.get_text(message)}
       {:error, reason} -> {:error, reason}
     end
   end

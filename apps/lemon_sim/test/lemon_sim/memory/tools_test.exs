@@ -27,7 +27,7 @@ defmodule LemonSim.LLM.Memory.ToolsTest do
     assert File.read!(Path.join(root, "index.md")) =~ "# Memory Index"
 
     assert {:ok, read_result} = read.execute.("r1", %{"path" => "notes/plan.md"}, nil, nil)
-    assert AgentCore.get_text(read_result) == "flank left"
+    assert LemonAgent.get_text(read_result) == "flank left"
 
     assert {:ok, patch_result} =
              patch.execute.(
@@ -45,12 +45,12 @@ defmodule LemonSim.LLM.Memory.ToolsTest do
     assert patch_result.details[:replacements] == 1
 
     assert {:ok, read_result_2} = read.execute.("r2", %{"path" => "notes/plan.md"}, nil, nil)
-    assert AgentCore.get_text(read_result_2) == "flank right"
+    assert LemonAgent.get_text(read_result_2) == "flank right"
 
     assert {:ok, list_result} =
              list.execute.("l1", %{"path" => ".", "recursive" => true}, nil, nil)
 
-    files = AgentCore.get_text(list_result)
+    files = LemonAgent.get_text(list_result)
     assert String.contains?(files, "index.md")
     assert String.contains?(files, "notes/plan.md")
 

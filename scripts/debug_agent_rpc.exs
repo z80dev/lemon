@@ -1,6 +1,6 @@
 # Ensure apps are started
-Application.ensure_all_started(:ai)
-Application.ensure_all_started(:agent_core)
+Application.ensure_all_started(:lemon_ai)
+Application.ensure_all_started(:lemon_agent)
 Application.ensure_all_started(:coding_agent)
 Application.ensure_all_started(:coding_agent_ui)
 
@@ -329,21 +329,21 @@ defmodule DebugAgentRPC do
         "set" ->
           objective = to_string(cmd["objective"] || "")
 
-          case AgentCore.Workspace.GoalStore.set(session_id, objective, agent_id: "tui") do
+          case LemonAgent.Workspace.GoalStore.set(session_id, objective, agent_id: "tui") do
             {:ok, goal} -> goal_transition_text("Goal Set", goal)
             {:error, :empty_objective} -> "Usage: /goal set <objective>"
             {:error, reason} -> "Goal update failed: #{inspect(reason)}"
           end
 
         "pause" ->
-          case AgentCore.Workspace.GoalStore.pause(session_id) do
+          case LemonAgent.Workspace.GoalStore.pause(session_id) do
             {:ok, goal} -> goal_transition_text("Goal Paused", goal)
             {:error, :not_found} -> "No goal is set for this session."
             {:error, reason} -> "Goal pause failed: #{inspect(reason)}"
           end
 
         "resume" ->
-          case AgentCore.Workspace.GoalStore.resume(session_id) do
+          case LemonAgent.Workspace.GoalStore.resume(session_id) do
             {:ok, goal} -> goal_transition_text("Goal Resumed", goal)
             {:error, :not_found} -> "No goal is set for this session."
             {:error, reason} -> "Goal resume failed: #{inspect(reason)}"
@@ -356,13 +356,13 @@ defmodule DebugAgentRPC do
           "Goal loop ticks require the Lemon control-plane WebSocket runtime."
 
         "clear" ->
-          case AgentCore.Workspace.GoalStore.clear(session_id) do
+          case LemonAgent.Workspace.GoalStore.clear(session_id) do
             :ok -> "Goal cleared."
             {:error, reason} -> "Goal clear failed: #{inspect(reason)}"
           end
 
         _ ->
-          case AgentCore.Workspace.GoalStore.get(session_id) do
+          case LemonAgent.Workspace.GoalStore.get(session_id) do
             %{} = goal when map_size(goal) == 0 -> "Goal Status\nState: none"
             goal -> goal_transition_text("Goal Status", goal)
           end
@@ -446,7 +446,7 @@ defmodule DebugAgentRPC do
   end
 
   defp handle_command(state, %{"type" => "list_models"}) do
-    discovered_models = Ai.Models.list_models(discover_openai: true)
+    discovered_models = LemonAi.Models.list_models(discover_openai: true)
 
     providers =
       discovered_models
@@ -646,16 +646,16 @@ defmodule DebugAgentRPC do
   defp handle_command(state, %{"type" => "set_config", "key" => key, "value" => value}) do
     case key do
       "claude_skip_permissions" ->
-        current_config = Application.get_env(:agent_core, :claude, [])
+        current_config = Application.get_env(:lemon_agent, :claude, [])
         new_config = Keyword.put(current_config, :dangerously_skip_permissions, value == true)
-        Application.put_env(:agent_core, :claude, new_config)
+        Application.put_env(:lemon_agent, :claude, new_config)
         debug_log("config_updated", %{key: key, value: value})
         send_config_state()
 
       "codex_auto_approve" ->
-        current_config = Application.get_env(:agent_core, :codex, [])
+        current_config = Application.get_env(:lemon_agent, :codex, [])
         new_config = Keyword.put(current_config, :auto_approve, value == true)
-        Application.put_env(:agent_core, :codex, new_config)
+        Application.put_env(:lemon_agent, :codex, new_config)
         debug_log("config_updated", %{key: key, value: value})
         send_config_state()
 
@@ -683,8 +683,8 @@ defmodule DebugAgentRPC do
   end
 
   defp send_config_state do
-    claude_config = Application.get_env(:agent_core, :claude, [])
-    codex_config = Application.get_env(:agent_core, :codex, [])
+    claude_config = Application.get_env(:lemon_agent, :claude, [])
+    codex_config = Application.get_env(:lemon_agent, :codex, [])
 
     claude_skip =
       Keyword.get(claude_config, :dangerously_skip_permissions, false) ||
@@ -880,7 +880,7 @@ defmodule DebugAgentRPC do
         if provider do
           get_model(provider, model_id)
         else
-          case Ai.Models.find_by_id(model_id) do
+          case LemonAi.Models.find_by_id(model_id) do
             nil -> raise "Unknown model #{inspect(model_id)}"
             model -> model
           end
@@ -909,7 +909,7 @@ defmodule DebugAgentRPC do
 
     model_id = if is_atom(model_id), do: Atom.to_string(model_id), else: model_id
 
-    case Ai.Models.get_model(provider_atom, model_id) do
+    case LemonAi.Models.get_model(provider_atom, model_id) do
       nil -> raise "Unknown model #{inspect(model_id)} for provider #{inspect(provider)}"
       model -> model
     end

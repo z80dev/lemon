@@ -1,8 +1,8 @@
 defmodule LemonSim.LLM.Projectors.SectionedProjectorTest do
   use ExUnit.Case, async: true
 
-  alias AgentCore.Types.AgentTool
-  alias Ai.Types.UserMessage
+  alias LemonAgent.Types.AgentTool
+  alias LemonAi.Types.UserMessage
   alias LemonSim.Kernel.{DecisionFrame, Event, PlanStep}
   alias LemonSim.LLM.Projectors.SectionedProjector
 
@@ -25,7 +25,7 @@ defmodule LemonSim.LLM.Projectors.SectionedProjectorTest do
         description: "Attack target",
         parameters: %{"type" => "object", "properties" => %{"target" => %{"type" => "string"}}},
         label: "Attack",
-        execute: fn _id, _params, _signal, _on_update -> AgentCore.new_tool_result() end
+        execute: fn _id, _params, _signal, _on_update -> LemonAgent.new_tool_result() end
       }
     ]
 

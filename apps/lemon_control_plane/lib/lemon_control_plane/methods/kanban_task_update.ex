@@ -30,7 +30,7 @@ defmodule LemonControlPlane.Methods.KanbanTaskUpdate do
           "meta"
         ])
 
-      case AgentCore.Workspace.KanbanStore.update_task(task_id, attrs) do
+      case LemonAgent.Workspace.KanbanStore.update_task(task_id, attrs) do
         {:ok, task} -> {:ok, KanbanFormat.task_response(name(), task)}
         {:error, reason} -> {:error, {:invalid_request, inspect(reason), nil}}
       end

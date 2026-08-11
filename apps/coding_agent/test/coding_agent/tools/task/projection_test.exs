@@ -1,7 +1,7 @@
 defmodule CodingAgent.Tools.Task.ProjectionTest do
   use ExUnit.Case, async: true
 
-  alias AgentCore.Types.AgentToolResult
+  alias LemonAgent.Types.AgentToolResult
   alias CodingAgent.Tools.Task.Projection
   alias LemonCore.Event
 

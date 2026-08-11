@@ -1813,7 +1813,7 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
         type: 'message_start',
         data: [
           {
-            __struct__: 'Elixir.Ai.Types.UserMessage',
+            __struct__: 'Elixir.LemonAi.Types.UserMessage',
             role: 'user',
             content: text,
             timestamp,
@@ -1828,7 +1828,7 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
         type: 'message_end',
         data: [
           {
-            __struct__: 'Elixir.Ai.Types.UserMessage',
+            __struct__: 'Elixir.LemonAi.Types.UserMessage',
             role: 'user',
             content: text,
             timestamp,
@@ -2480,7 +2480,7 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
   }
 
   private buildAssistantMessage(text: string): {
-    __struct__: 'Elixir.Ai.Types.AssistantMessage';
+    __struct__: 'Elixir.LemonAi.Types.AssistantMessage';
     role: 'assistant';
     content: Array<Record<string, unknown>>;
     provider: string;
@@ -2492,11 +2492,11 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
   } {
     const model = this.parseModelInfo();
     return {
-      __struct__: 'Elixir.Ai.Types.AssistantMessage',
+      __struct__: 'Elixir.LemonAi.Types.AssistantMessage',
       role: 'assistant',
       content: [
         {
-          __struct__: 'Elixir.Ai.Types.TextContent',
+          __struct__: 'Elixir.LemonAi.Types.TextContent',
           type: 'text',
           text,
         },

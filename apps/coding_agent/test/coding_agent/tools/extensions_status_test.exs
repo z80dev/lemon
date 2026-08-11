@@ -5,7 +5,7 @@ defmodule CodingAgent.Tools.ExtensionsStatusTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.Tools.ExtensionsStatus
-  alias AgentCore.Types.AgentToolResult
+  alias LemonAgent.Types.AgentToolResult
 
   @moduletag :tmp_dir
 
@@ -81,7 +81,7 @@ defmodule CodingAgent.Tools.ExtensionsStatusTest do
 
       # Create a signal and abort it
       signal = make_ref()
-      AgentCore.AbortSignal.abort(signal)
+      LemonAgent.AbortSignal.abort(signal)
 
       result = tool.execute.("call-1", %{}, signal, nil)
 

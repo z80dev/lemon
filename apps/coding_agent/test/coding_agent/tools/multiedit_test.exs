@@ -8,9 +8,9 @@ defmodule CodingAgent.Tools.MultiEditTest do
   use ExUnit.Case, async: true
 
   alias CodingAgent.Tools.MultiEdit
-  alias AgentCore.Types.AgentToolResult
-  alias AgentCore.AbortSignal
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.AgentToolResult
+  alias LemonAgent.AbortSignal
+  alias LemonAi.Types.TextContent
 
   @moduletag :tmp_dir
 

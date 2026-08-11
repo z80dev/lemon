@@ -2,7 +2,7 @@ defmodule LemonAutomation.GoalLoop do
   @moduledoc false
 
   alias LemonAutomation.{GoalContinuation, GoalJudge, RunCompletionWaiter}
-  alias AgentCore.Workspace.GoalStore
+  alias LemonAgent.Workspace.GoalStore
 
   @spec run_once(binary(), keyword()) ::
           {:ok, map()} | {:error, :not_found | :paused | :completed | term()}

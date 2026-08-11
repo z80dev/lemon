@@ -4,7 +4,7 @@ defmodule LemonSim.Examples.WerewolfActionSpaceTest do
   alias LemonSim.Examples.Werewolf.ActionSpace
   alias LemonSim.Examples.Werewolf
   alias LemonSim.Kernel.State
-  alias Ai.Types.Model
+  alias LemonAi.Types.Model
 
   test "runoff voting forces a choice between the finalists" do
     state =

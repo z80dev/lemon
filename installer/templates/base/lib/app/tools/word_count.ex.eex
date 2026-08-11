@@ -2,13 +2,13 @@ defmodule <%= @app_module %>.Tools.WordCount do
   @moduledoc """
   An example tool: counts the words in a string.
 
-  A tool is an `AgentCore.Types.AgentTool` struct with four things the model
+  A tool is an `LemonAgent.Types.AgentTool` struct with four things the model
   sees — `name`, `description`, `parameters` (a JSON Schema) and `label` (for
   humans) — and one it does not: `execute`, the function the loop calls when
   the model asks for it.
 
   The `tool/0`, `tool/1` and `tool/2` shape is the convention the platform's
-  own tools follow, and what `AgentCore.ToolRegistry` expects from a module it
+  own tools follow, and what `LemonAgent.ToolRegistry` expects from a module it
   is handed. `tool/2` takes a working directory first, which file-touching
   tools need and this one ignores.
 
@@ -23,8 +23,8 @@ defmodule <%= @app_module %>.Tools.WordCount do
       exist" but not from a dead run.
   """
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.TextContent
 
   @spec tool(keyword()) :: AgentTool.t()
   def tool(_opts \\ []) do
@@ -55,7 +55,7 @@ defmodule <%= @app_module %>.Tools.WordCount do
   @doc """
   Runs the tool.
 
-  The four arguments are fixed by `AgentCore.Types.AgentTool.execute_fn/0`: the
+  The four arguments are fixed by `LemonAgent.Types.AgentTool.execute_fn/0`: the
   id of this tool call, the parsed parameters, an abort signal (`nil` unless the
   run can be cancelled), and a callback for streaming partial results back to
   the UI before the tool has finished.

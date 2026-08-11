@@ -23,10 +23,10 @@ defmodule CodingAgent.SubagentComprehensiveTest do
   @moduletag :subagent
   @moduletag :tmp_dir
 
-  alias AgentCore.Types.AgentToolResult
-  alias AgentCore.AbortSignal
-  alias Ai.Types.{AssistantMessage, TextContent, Model, ModelCost}
-  alias Ai.Test.IntegrationConfig
+  alias LemonAgent.Types.AgentToolResult
+  alias LemonAgent.AbortSignal
+  alias LemonAi.Types.{AssistantMessage, TextContent, Model, ModelCost}
+  alias LemonAi.Test.IntegrationConfig
   alias CodingAgent.Coordinator
   alias CodingAgent.Session
   alias CodingAgent.SettingsManager
@@ -149,8 +149,8 @@ defmodule CodingAgent.SubagentComprehensiveTest do
   # ============================================================================
 
   setup_all do
-    Ai.ProviderRegistry.init()
-    Ai.ProviderRegistry.register(:anthropic_messages, Ai.Providers.Anthropic)
+    LemonAi.ProviderRegistry.init()
+    LemonAi.ProviderRegistry.register(:anthropic_messages, LemonAi.Providers.Anthropic)
     IO.puts("\n[Subagent Comprehensive Tests] Configuration: #{IntegrationConfig.describe()}")
     :ok
   end

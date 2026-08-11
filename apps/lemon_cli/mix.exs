@@ -32,7 +32,7 @@ defmodule LemonCli.MixProject do
       {:yaml_elixir, "~> 2.9"},
       {:lemon_core, in_umbrella: true},
       {:lemon_memory, in_umbrella: true},
-      {:ai, in_umbrella: true}
+      {:lemon_ai, in_umbrella: true}
     ]
   end
 end

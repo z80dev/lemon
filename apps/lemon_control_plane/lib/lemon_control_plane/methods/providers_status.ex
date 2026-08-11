@@ -16,7 +16,7 @@ defmodule LemonControlPlane.Methods.ProvidersStatus do
 
   @impl true
   def handle(params, _ctx) do
-    status = AgentCore.ModelRuntime.ProviderStatus.snapshot(params || %{})
+    status = LemonAgent.ModelRuntime.ProviderStatus.snapshot(params || %{})
     {:ok, Map.put(status, "summary", summary(status))}
   rescue
     error ->

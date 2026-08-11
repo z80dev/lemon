@@ -6,8 +6,8 @@ defmodule LemonSim.LLM.Deciders.ToolLoopPolicy do
   executed tool call should terminate the current loop with a decision.
   """
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.ToolCall
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.ToolCall
 
   @type resolved_tool_call :: %{
           required(:tool_call) => ToolCall.t(),

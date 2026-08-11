@@ -29,10 +29,10 @@ defmodule LemonControlPlane.Methods.ModelsList do
   defp get_available_models(params) when is_map(params) do
     discover_openai = Map.get(params, "discoverOpenAI", true)
 
-    # Try to get models from Ai.Models if available
-    if Code.ensure_loaded?(Ai.Models) do
+    # Try to get models from LemonAi.Models if available
+    if Code.ensure_loaded?(LemonAi.Models) do
       models =
-        Ai.Models.list_models(discover_openai: discover_openai)
+        LemonAi.Models.list_models(discover_openai: discover_openai)
         |> Enum.map(&format_model/1)
 
       {models, "ai_models"}

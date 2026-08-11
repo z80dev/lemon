@@ -12,9 +12,9 @@ defmodule CodingAgent.Tools.Agent do
 
   require Logger
 
-  alias AgentCore.AbortSignal
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.TextContent
+  alias LemonAgent.AbortSignal
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.TextContent
   alias CodingAgent.AsyncFollowups
   alias CodingAgent.{RunGraph, Subagents, TaskStore}
   alias LemonCore.{Bus, RouterBridge, RunRequest, SessionKey, Store}

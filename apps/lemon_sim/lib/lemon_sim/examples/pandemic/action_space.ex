@@ -3,7 +3,7 @@ defmodule LemonSim.Examples.Pandemic.ActionSpace do
 
   @behaviour LemonSim.Kernel.ActionSpace
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonCore.MapHelpers
   alias LemonSim.Examples.Pandemic.Events
   alias LemonSim.Examples.Helpers.Tools, as: GameTools
@@ -83,7 +83,7 @@ defmodule LemonSim.Examples.Pandemic.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("checking region #{region_id}")],
+           content: [LemonAgent.text_content("checking region #{region_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -108,7 +108,7 @@ defmodule LemonSim.Examples.Pandemic.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("ending intelligence phase for #{actor_id}")],
+           content: [LemonAgent.text_content("ending intelligence phase for #{actor_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -171,7 +171,7 @@ defmodule LemonSim.Examples.Pandemic.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("shared data with #{to_id}")],
+           content: [LemonAgent.text_content("shared data with #{to_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -210,7 +210,7 @@ defmodule LemonSim.Examples.Pandemic.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("sent help request to #{to_id}")],
+           content: [LemonAgent.text_content("sent help request to #{to_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -235,7 +235,7 @@ defmodule LemonSim.Examples.Pandemic.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("ending communication for #{actor_id}")],
+           content: [LemonAgent.text_content("ending communication for #{actor_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -307,7 +307,7 @@ defmodule LemonSim.Examples.Pandemic.ActionSpace do
         {:ok,
          %AgentToolResult{
            content: [
-             AgentCore.text_content(
+             LemonAgent.text_content(
                "requested #{vaccines} vaccines, #{funding} funding, #{medical_teams} teams"
              )
            ],
@@ -365,7 +365,7 @@ defmodule LemonSim.Examples.Pandemic.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("donated resources to #{to_id}")],
+           content: [LemonAgent.text_content("donated resources to #{to_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -390,7 +390,7 @@ defmodule LemonSim.Examples.Pandemic.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("ending resource allocation for #{actor_id}")],
+           content: [LemonAgent.text_content("ending resource allocation for #{actor_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -480,7 +480,7 @@ defmodule LemonSim.Examples.Pandemic.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("deploying #{count} vaccines")],
+           content: [LemonAgent.text_content("deploying #{count} vaccines")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -513,7 +513,7 @@ defmodule LemonSim.Examples.Pandemic.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("quarantining #{rid}")],
+           content: [LemonAgent.text_content("quarantining #{rid}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -539,7 +539,7 @@ defmodule LemonSim.Examples.Pandemic.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("building hospital")],
+           content: [LemonAgent.text_content("building hospital")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -574,7 +574,7 @@ defmodule LemonSim.Examples.Pandemic.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("investing #{funding} in research")],
+           content: [LemonAgent.text_content("investing #{funding} in research")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -617,7 +617,7 @@ defmodule LemonSim.Examples.Pandemic.ActionSpace do
         {:ok,
          %AgentToolResult{
            content: [
-             AgentCore.text_content(
+             LemonAgent.text_content(
                "hoarding #{vaccines} vaccines, #{medical_teams} teams from pool (incident logged)"
              )
            ],
@@ -645,7 +645,7 @@ defmodule LemonSim.Examples.Pandemic.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("ending local action turn for #{actor_id}")],
+           content: [LemonAgent.text_content("ending local action turn for #{actor_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}

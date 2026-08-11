@@ -11,18 +11,21 @@ defmodule CodingAgent.Session.ModelResolver do
   # Model Resolution
   # ============================================================================
 
-  @spec resolve_session_model(term(), CodingAgent.SettingsManager.t()) :: Ai.Types.Model.t()
+  @spec resolve_session_model(term(), CodingAgent.SettingsManager.t()) :: LemonAi.Types.Model.t()
   def resolve_session_model(nil, %CodingAgent.SettingsManager{} = settings) do
     resolve_default_model(settings)
   end
 
-  def resolve_session_model(%Ai.Types.Model{} = model, %CodingAgent.SettingsManager{} = settings) do
+  def resolve_session_model(
+        %LemonAi.Types.Model{} = model,
+        %CodingAgent.SettingsManager{} = settings
+      ) do
     apply_provider_base_url(model, settings)
   end
 
   def resolve_session_model(model_spec, %CodingAgent.SettingsManager{} = settings) do
     case resolve_explicit_model(model_spec, settings) do
-      %Ai.Types.Model{} = model ->
+      %LemonAi.Types.Model{} = model ->
         apply_provider_base_url(model, settings)
 
       _ ->
@@ -30,7 +33,7 @@ defmodule CodingAgent.Session.ModelResolver do
     end
   end
 
-  @spec resolve_explicit_model(term()) :: Ai.Types.Model.t() | nil
+  @spec resolve_explicit_model(term()) :: LemonAi.Types.Model.t() | nil
   def resolve_explicit_model(spec) when is_binary(spec) do
     resolve_explicit_model(spec, nil)
   end
@@ -50,7 +53,7 @@ defmodule CodingAgent.Session.ModelResolver do
   # Settings-aware overload: for bare model names (no provider prefix),
   # prefer providers that are configured with API keys in the user's settings.
   @spec resolve_explicit_model(term(), CodingAgent.SettingsManager.t() | nil) ::
-          Ai.Types.Model.t() | nil
+          LemonAi.Types.Model.t() | nil
   defp resolve_explicit_model(spec, settings) when is_binary(spec) do
     trimmed = String.trim(spec)
     if trimmed == "", do: nil, else: resolve_model_spec(trimmed, settings)
@@ -86,15 +89,15 @@ defmodule CodingAgent.Session.ModelResolver do
     configured = configured_provider_atoms(settings)
 
     Enum.find_value(configured, fn provider ->
-      Ai.Models.get_model(provider, model_id)
-    end) || Ai.Models.find_by_id(model_id)
+      LemonAi.Models.get_model(provider, model_id)
+    end) || LemonAi.Models.find_by_id(model_id)
   end
 
   defp find_model_prefer_configured(model_id, _settings) do
-    Ai.Models.find_by_id(model_id)
+    LemonAi.Models.find_by_id(model_id)
   end
 
-  @spec resolve_default_model(CodingAgent.SettingsManager.t()) :: Ai.Types.Model.t()
+  @spec resolve_default_model(CodingAgent.SettingsManager.t()) :: LemonAi.Types.Model.t()
   def resolve_default_model(%CodingAgent.SettingsManager{default_model: nil}) do
     # No default model configured, raise an error
     raise ArgumentError,
@@ -111,20 +114,20 @@ defmodule CodingAgent.Session.ModelResolver do
     model =
       case provider do
         nil ->
-          Ai.Models.find_by_id(model_id)
+          LemonAi.Models.find_by_id(model_id)
 
         provider_atom when is_atom(provider_atom) ->
           # model_id may be prefixed (e.g. "zai:glm-5-turbo"); try as-is first,
           # then strip the provider prefix for a direct registry lookup.
-          Ai.Models.get_model(provider_atom, model_id) ||
+          LemonAi.Models.get_model(provider_atom, model_id) ||
             case model_id && String.split(model_id, ":", parts: 2) do
               [_prefix, bare_id] when bare_id != "" ->
-                Ai.Models.get_model(provider_atom, bare_id)
+                LemonAi.Models.get_model(provider_atom, bare_id)
 
               _ ->
                 nil
             end || provider_model(provider_atom, model_id) ||
-            Ai.Models.find_by_id(model_id)
+            LemonAi.Models.find_by_id(model_id)
 
         provider_str when is_binary(provider_str) ->
           lookup_model(provider_str, model_id)
@@ -148,11 +151,11 @@ defmodule CodingAgent.Session.ModelResolver do
     end
   end
 
-  @spec runtime_fallback_models(Ai.Types.Model.t(), CodingAgent.SettingsManager.t()) :: [
-          Ai.Types.Model.t()
+  @spec runtime_fallback_models(LemonAi.Types.Model.t(), CodingAgent.SettingsManager.t()) :: [
+          LemonAi.Types.Model.t()
         ]
   def runtime_fallback_models(
-        %Ai.Types.Model{} = model,
+        %LemonAi.Types.Model{} = model,
         %CodingAgent.SettingsManager{} = settings
       ) do
     routing = settings.provider_routing || %{}
@@ -182,8 +185,8 @@ defmodule CodingAgent.Session.ModelResolver do
   # Provider Configuration
   # ============================================================================
 
-  @spec apply_provider_base_url(Ai.Types.Model.t(), CodingAgent.SettingsManager.t()) ::
-          Ai.Types.Model.t()
+  @spec apply_provider_base_url(LemonAi.Types.Model.t(), CodingAgent.SettingsManager.t()) ::
+          LemonAi.Types.Model.t()
   def apply_provider_base_url(model, %CodingAgent.SettingsManager{providers: providers}) do
     provider_key =
       case model.provider do
@@ -204,22 +207,22 @@ defmodule CodingAgent.Session.ModelResolver do
 
   @spec build_get_api_key(CodingAgent.SettingsManager.t()) :: (atom() -> String.t() | nil)
   def build_get_api_key(%CodingAgent.SettingsManager{providers: providers}) do
-    AgentCore.ModelRuntime.Credentials.build_get_api_key(providers)
+    LemonAgent.ModelRuntime.Credentials.build_get_api_key(providers)
   end
 
   @spec build_stream_options(
-          Ai.Types.Model.t(),
+          LemonAi.Types.Model.t(),
           CodingAgent.SettingsManager.t(),
           map() | nil,
           String.t() | nil
-        ) :: Ai.Types.StreamOptions.t()
+        ) :: LemonAi.Types.StreamOptions.t()
   def build_stream_options(
         model,
         %CodingAgent.SettingsManager{providers: providers},
         existing_opts,
         cwd
       ) do
-    AgentCore.ModelRuntime.StreamOptions.build_stream_options(
+    LemonAgent.ModelRuntime.StreamOptions.build_stream_options(
       model,
       providers,
       existing_opts,
@@ -238,7 +241,7 @@ defmodule CodingAgent.Session.ModelResolver do
 
   # ---- Private helpers ----
 
-  @spec resolve_slash_model_spec(String.t()) :: Ai.Types.Model.t() | nil
+  @spec resolve_slash_model_spec(String.t()) :: LemonAi.Types.Model.t() | nil
   defp resolve_slash_model_spec(model_spec) when is_binary(model_spec) do
     case String.split(model_spec, "/", parts: 2) do
       [provider, model_id] ->
@@ -256,11 +259,11 @@ defmodule CodingAgent.Session.ModelResolver do
     end
   end
 
-  @spec lookup_model(String.t() | nil, String.t() | nil) :: Ai.Types.Model.t() | nil
+  @spec lookup_model(String.t() | nil, String.t() | nil) :: LemonAi.Types.Model.t() | nil
   defp lookup_model(_provider, nil), do: nil
 
   defp lookup_model(nil, model_id) when is_binary(model_id) do
-    Ai.Models.find_by_id(model_id)
+    LemonAi.Models.find_by_id(model_id)
   end
 
   defp lookup_model(provider, model_id) when is_binary(provider) and is_binary(model_id) do
@@ -269,15 +272,16 @@ defmodule CodingAgent.Session.ModelResolver do
         nil
 
       provider_atom ->
-        Ai.Models.get_model(provider_atom, model_id) || provider_model(provider_atom, model_id)
+        LemonAi.Models.get_model(provider_atom, model_id) ||
+          provider_model(provider_atom, model_id)
     end
   end
 
   defp lookup_model(_provider, _model_id), do: nil
 
   defp provider_model(provider_atom, model_id) do
-    template = Ai.Models.get_models(provider_atom) |> List.first()
-    base = Ai.Models.find_by_id(model_id) || template
+    template = LemonAi.Models.get_models(provider_atom) |> List.first()
+    base = LemonAi.Models.find_by_id(model_id) || template
 
     if base do
       %{
@@ -332,12 +336,12 @@ defmodule CodingAgent.Session.ModelResolver do
   defp provider_credentials_ready?(_provider, _settings, %{require_credentials: false}), do: true
 
   defp provider_credentials_ready?(provider, %CodingAgent.SettingsManager{} = settings, _routing) do
-    AgentCore.ModelRuntime.Credentials.provider_has_credentials?(provider, settings.providers)
+    LemonAgent.ModelRuntime.Credentials.provider_has_credentials?(provider, settings.providers)
   end
 
   defp fallback_model_available?(provider, model_id) do
     model = lookup_model(to_string(provider), model_id)
-    match?(%Ai.Types.Model{}, model)
+    match?(%LemonAi.Types.Model{}, model)
   end
 
   defp fallback_model(provider, model_id, %CodingAgent.SettingsManager{} = settings, routing) do
@@ -346,7 +350,7 @@ defmodule CodingAgent.Session.ModelResolver do
       |> to_string()
       |> lookup_model(model_id)
       |> case do
-        %Ai.Types.Model{} = model -> apply_provider_base_url(model, settings)
+        %LemonAi.Types.Model{} = model -> apply_provider_base_url(model, settings)
         _ -> nil
       end
     end
@@ -438,7 +442,7 @@ defmodule CodingAgent.Session.ModelResolver do
   defp provider_to_atom(provider) when is_binary(provider) do
     normalized = String.downcase(String.trim(provider))
 
-    Enum.find(Ai.Models.get_providers(), fn known ->
+    Enum.find(LemonAi.Models.get_providers(), fn known ->
       known_str = Atom.to_string(known)
       known_str == normalized or String.replace(known_str, "_", "-") == normalized
     end)

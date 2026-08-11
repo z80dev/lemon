@@ -5,7 +5,7 @@ defmodule LemonSim.Examples.Survivor.ActionSpace do
 
   import LemonSim.Examples.Helpers
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonSim.Examples.Helpers.Tools, as: GameTools
   alias LemonSim.Examples.Survivor.{Events, Tribes}
 
@@ -177,7 +177,7 @@ defmodule LemonSim.Examples.Survivor.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("You chose the #{strategy} strategy.")],
+           content: [LemonAgent.text_content("You chose the #{strategy} strategy.")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -203,7 +203,7 @@ defmodule LemonSim.Examples.Survivor.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("You played your Hidden Immunity Idol!")],
+           content: [LemonAgent.text_content("You played your Hidden Immunity Idol!")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -227,7 +227,7 @@ defmodule LemonSim.Examples.Survivor.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("You chose not to play an idol.")],
+           content: [LemonAgent.text_content("You chose not to play an idol.")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -260,7 +260,7 @@ defmodule LemonSim.Examples.Survivor.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("You said to the finalists: \"#{statement}\"")],
+           content: [LemonAgent.text_content("You said to the finalists: \"#{statement}\"")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -293,7 +293,7 @@ defmodule LemonSim.Examples.Survivor.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("You pleaded: \"#{plea}\"")],
+           content: [LemonAgent.text_content("You pleaded: \"#{plea}\"")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -329,7 +329,7 @@ defmodule LemonSim.Examples.Survivor.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("You voted for #{target_id} to win.")],
+           content: [LemonAgent.text_content("You voted for #{target_id} to win.")],
            details: %{"event" => event},
            trust: :trusted
          }}

@@ -30,7 +30,7 @@ compliance suite runs against your module.
   worked minimal implementation, the option reference, and the known gaps. If
   you read one document before implementing a Lemon behaviour, read that one.
 - `LemonPlatformTest.FakeLLM` — a scripted, deterministic stand-in for an LLM
-  provider that drives a real `AgentCore` agent loop with no network or API key.
+  provider that drives a real `LemonAgent` agent loop with no network or API key.
   `FakeLLM.script/2` turns a list of turns (`{:text, ...}`, `{:tool_call, ...}`,
   `{:tool_calls, ...}`, `{:refusal, ...}`, `{:error, ...}`) into the stream
   function `AgentLoopConfig` expects, emitting the provider event protocol the

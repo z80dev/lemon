@@ -121,7 +121,7 @@ never returned raw. Base64 data URLs are validated at the API boundary,
 size/count-limited, redacted from prompts and metadata, and threaded as
 runtime-only image blocks through `RunRequest`, the router, gateway,
 `LemonRunner`, and `CodingAgent.Session.prompt/3` so native Lemon providers can
-receive `Ai.Types.ImageContent`. HTTPS image URL fetch is available only when
+receive `LemonAi.Types.ImageContent`. HTTPS image URL fetch is available only when
 explicitly enabled and host-allowlisted. In that mode, fetched image bytes are
 MIME-checked, size-limited, base64 encoded, redacted from prompt/metadata, and
 sent through the same runtime-only image path as data URLs. Only redacted image
@@ -216,7 +216,7 @@ image through `/v1/responses` with `wait: true`, then runs
 same local HTTP boundary. It writes redacted proof JSON to
 `.lemon/proofs/openai-compat-vision-smoke-latest.json` and skips without a
 model, live-credential opt-in, or resolvable provider credential. Credential
-preflight uses `AgentCore.ModelRuntime.Credentials.provider_has_credentials?/3`, the same
+preflight uses `LemonAgent.ModelRuntime.Credentials.provider_has_credentials?/3`, the same
 Lemon-owned resolver used by runtime calls, so env keys, encrypted secrets,
 OAuth/default-secret paths, and provider-specific credentials are checked
 consistently. If no model is configured, the script tries credential-ready

@@ -1,7 +1,7 @@
 defmodule <%= @app_module %>.Tools.WordCountTest do
   use ExUnit.Case, async: true
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias <%= @app_module %>.Tools.WordCount
 
   test "the definition is well formed" do

@@ -5,7 +5,7 @@ defmodule LemonSimUi.HostedGameTest do
   alias LemonSimUi.HostedGame
   alias LemonSimUi.HostedGame.Replay
 
-  alias Ai.Types.{AssistantMessage, Model, ToolCall}
+  alias LemonAi.Types.{AssistantMessage, Model, ToolCall}
 
   @werewolf_actions ~w(
     anonymous_message
@@ -754,7 +754,7 @@ defmodule LemonSimUi.HostedGameTest do
       base_url: "https://example.invalid",
       reasoning: false,
       input: [:text],
-      cost: %Ai.Types.ModelCost{},
+      cost: %LemonAi.Types.ModelCost{},
       context_window: 128_000,
       max_tokens: 4_096,
       headers: %{},

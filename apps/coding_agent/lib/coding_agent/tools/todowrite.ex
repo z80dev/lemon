@@ -5,9 +5,9 @@ defmodule CodingAgent.Tools.TodoWrite do
   Stores a todo list for the current session.
   """
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias AgentCore.AbortSignal
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.AbortSignal
+  alias LemonAi.Types.TextContent
   alias CodingAgent.Tools.TodoStore
 
   @doc """

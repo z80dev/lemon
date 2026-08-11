@@ -36,7 +36,7 @@ defmodule LemonAutomation.HeartbeatManager do
   use GenServer
 
   alias LemonAutomation.{CronJob, CronRun, CronStore, CronManager, Events}
-  alias AgentCore.Workspace.HeartbeatStore
+  alias LemonAgent.Workspace.HeartbeatStore
   alias LemonCore.Bus
 
   require Logger

@@ -3,7 +3,7 @@ defmodule LemonSim.Examples.DungeonCrawl.ActionSpace do
 
   @behaviour LemonSim.Kernel.ActionSpace
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonCore.MapHelpers
   alias LemonSim.Examples.DungeonCrawl.Events
   alias LemonSim.Examples.Helpers.Tools, as: GameTools
@@ -113,7 +113,7 @@ defmodule LemonSim.Examples.DungeonCrawl.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("#{actor_id} attacks #{target_id}")],
+           content: [LemonAgent.text_content("#{actor_id} attacks #{target_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -138,7 +138,7 @@ defmodule LemonSim.Examples.DungeonCrawl.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("#{actor_id} taunts the enemies")],
+           content: [LemonAgent.text_content("#{actor_id} taunts the enemies")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -162,7 +162,7 @@ defmodule LemonSim.Examples.DungeonCrawl.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("#{actor_id} casts fireball")],
+           content: [LemonAgent.text_content("#{actor_id} casts fireball")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -193,7 +193,7 @@ defmodule LemonSim.Examples.DungeonCrawl.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("#{actor_id} backstabs #{target_id}")],
+           content: [LemonAgent.text_content("#{actor_id} backstabs #{target_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -217,7 +217,7 @@ defmodule LemonSim.Examples.DungeonCrawl.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("#{actor_id} disarms a trap")],
+           content: [LemonAgent.text_content("#{actor_id} disarms a trap")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -247,7 +247,7 @@ defmodule LemonSim.Examples.DungeonCrawl.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("#{actor_id} heals #{target_id}")],
+           content: [LemonAgent.text_content("#{actor_id} heals #{target_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -277,7 +277,7 @@ defmodule LemonSim.Examples.DungeonCrawl.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("#{actor_id} blesses #{target_id}")],
+           content: [LemonAgent.text_content("#{actor_id} blesses #{target_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -326,7 +326,7 @@ defmodule LemonSim.Examples.DungeonCrawl.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("#{actor_id} uses #{item_name} on #{target_id}")],
+           content: [LemonAgent.text_content("#{actor_id} uses #{item_name} on #{target_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -350,7 +350,7 @@ defmodule LemonSim.Examples.DungeonCrawl.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("ending turn for #{actor_id}")],
+           content: [LemonAgent.text_content("ending turn for #{actor_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}

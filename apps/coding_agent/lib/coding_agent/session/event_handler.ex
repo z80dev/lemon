@@ -12,7 +12,7 @@ defmodule CodingAgent.Session.EventHandler do
           required(:persist_message) => (state, term() -> state)
         }
 
-  @spec handle(AgentCore.Types.agent_event(), state, callbacks(state)) :: state when state: map()
+  @spec handle(LemonAgent.Types.agent_event(), state, callbacks(state)) :: state when state: map()
   def handle({:agent_start}, state, _callbacks) do
     # Execute on_agent_start hooks
     Extensions.execute_hooks(state.hooks, :on_agent_start, [])
@@ -32,7 +32,7 @@ defmodule CodingAgent.Session.EventHandler do
     # Abort can terminate the underlying stream before {:canceled, reason} is observed.
     # Treat an aborted assistant turn as terminal to keep Session lifecycle consistent.
     case message do
-      %Ai.Types.AssistantMessage{stop_reason: :aborted} ->
+      %LemonAi.Types.AssistantMessage{stop_reason: :aborted} ->
         callbacks.set_working_message.(state, nil)
         callbacks.complete_event_streams.(state, {:turn_end, message, tool_results})
         %{state | is_streaming: false, steering_queue: :queue.new(), event_streams: %{}}
@@ -58,7 +58,7 @@ defmodule CodingAgent.Session.EventHandler do
     # :turn_end/:agent_end/:canceled. Treat aborted assistant messages as terminal
     # to avoid leaving the session in a permanently streaming state.
     case message do
-      %Ai.Types.AssistantMessage{stop_reason: :aborted} ->
+      %LemonAi.Types.AssistantMessage{stop_reason: :aborted} ->
         callbacks.set_working_message.(new_state, nil)
         callbacks.complete_event_streams.(new_state, {:canceled, :assistant_aborted})
         %{new_state | is_streaming: false, steering_queue: :queue.new(), event_streams: %{}}
@@ -185,12 +185,12 @@ defmodule CodingAgent.Session.EventHandler do
 
   defp extract_loaded_skill_keys(_messages), do: []
 
-  defp read_skill_result?(%Ai.Types.ToolResultMessage{tool_name: "read_skill"}), do: true
+  defp read_skill_result?(%LemonAi.Types.ToolResultMessage{tool_name: "read_skill"}), do: true
   defp read_skill_result?(%{tool_name: "read_skill"}), do: true
   defp read_skill_result?(%{"tool_name" => "read_skill"}), do: true
   defp read_skill_result?(_message), do: false
 
-  defp skill_key_from_result(%Ai.Types.ToolResultMessage{details: details}),
+  defp skill_key_from_result(%LemonAi.Types.ToolResultMessage{details: details}),
     do: skill_key_from_details(details)
 
   defp skill_key_from_result(%{details: details}), do: skill_key_from_details(details)
@@ -282,7 +282,7 @@ defmodule CodingAgent.Session.EventHandler do
 
   defp extract_tool_result_names(_messages), do: []
 
-  defp tool_result_name(%Ai.Types.ToolResultMessage{tool_name: name}) when is_binary(name),
+  defp tool_result_name(%LemonAi.Types.ToolResultMessage{tool_name: name}) when is_binary(name),
     do: name
 
   defp tool_result_name(%{tool_name: name}) when is_binary(name), do: name
@@ -291,9 +291,9 @@ defmodule CodingAgent.Session.EventHandler do
 
   defp learning_tool_names, do: ["search_memory", "skill_manage", "memory_topic", "memory"]
 
-  defp message_text(%Ai.Types.UserMessage{content: content}), do: content_text(content)
-  defp message_text(%Ai.Types.AssistantMessage{content: content}), do: content_text(content)
-  defp message_text(%Ai.Types.ToolResultMessage{content: content}), do: content_text(content)
+  defp message_text(%LemonAi.Types.UserMessage{content: content}), do: content_text(content)
+  defp message_text(%LemonAi.Types.AssistantMessage{content: content}), do: content_text(content)
+  defp message_text(%LemonAi.Types.ToolResultMessage{content: content}), do: content_text(content)
   defp message_text(%{content: content}), do: content_text(content)
   defp message_text(%{"content" => content}), do: content_text(content)
   defp message_text(message) when is_binary(message), do: message
@@ -309,7 +309,7 @@ defmodule CodingAgent.Session.EventHandler do
 
   defp content_text(_content), do: ""
 
-  defp content_block_text(%Ai.Types.TextContent{text: text}) when is_binary(text), do: text
+  defp content_block_text(%LemonAi.Types.TextContent{text: text}) when is_binary(text), do: text
   defp content_block_text(%{text: text}) when is_binary(text), do: text
   defp content_block_text(%{"text" => text}) when is_binary(text), do: text
   defp content_block_text(text) when is_binary(text), do: text

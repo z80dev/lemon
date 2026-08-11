@@ -1,7 +1,7 @@
 defmodule CodingAgent.Session.StateTest do
   use ExUnit.Case, async: true
 
-  alias AgentCore.Types.AgentTool
+  alias LemonAgent.Types.AgentTool
   alias CodingAgent.Session.State
 
   test "normalize_extra_tools keeps only AgentTool structs" do
@@ -27,7 +27,7 @@ defmodule CodingAgent.Session.StateTest do
   test "build_prompt_message preserves plain text without images" do
     message = State.build_prompt_message("hello")
 
-    assert %Ai.Types.UserMessage{content: "hello", role: :user} = message
+    assert %LemonAi.Types.UserMessage{content: "hello", role: :user} = message
     assert is_integer(message.timestamp)
   end
 
@@ -35,10 +35,10 @@ defmodule CodingAgent.Session.StateTest do
     image = %{data: "b64", mime_type: "image/png"}
     message = State.build_prompt_message("look", images: [image])
 
-    assert %Ai.Types.UserMessage{
+    assert %LemonAi.Types.UserMessage{
              content: [
-               %Ai.Types.TextContent{text: "look"},
-               %Ai.Types.ImageContent{data: "b64", mime_type: "image/png"}
+               %LemonAi.Types.TextContent{text: "look"},
+               %LemonAi.Types.ImageContent{data: "b64", mime_type: "image/png"}
              ]
            } = message
   end

@@ -2,7 +2,7 @@ defmodule CodingAgent.Wasm.ToolFactoryTest do
   use ExUnit.Case, async: true
 
   alias CodingAgent.Wasm.ToolFactory
-  alias AgentCore.Types.AgentTool
+  alias LemonAgent.Types.AgentTool
 
   defmodule FakeSidecar do
     use GenServer

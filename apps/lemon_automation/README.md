@@ -82,16 +82,16 @@ IDs, and reasons.
 **GoalContinuationManager** is the preview persistent-goal runner. It accepts one
 active session goal at a time, starts the work through `TaskSupervisor`, submits
 a `LemonRouter` request with `origin: :goal` and `queue_mode: :followup`, then
-records the router run id back into `AgentCore.Workspace.GoalStore`.
+records the router run id back into `LemonAgent.Workspace.GoalStore`.
 
 **GoalLoopManager** runs conservative goal loops. `run_once/2` performs one
 preview judge tick. `start_loop/2` starts one bounded supervised loop per
 session, waits for each submitted continuation to emit `:run_completed`, and
 stops at `max_ticks`, failure, timeout, or a terminal judge verdict. Passing
-`auto: true` persists opt-in auto-loop intent in `AgentCore.Workspace.GoalStore`; the
+`auto: true` persists opt-in auto-loop intent in `LemonAgent.Workspace.GoalStore`; the
 manager scheduler scans active goals and re-starts only those persisted loops
 when no loop for that session is already running. Loop status and auto state are
-stored in `AgentCore.Workspace.GoalStore` and emitted as redacted goal events.
+stored in `LemonAgent.Workspace.GoalStore` and emitted as redacted goal events.
 
 `GoalJudge` supports explicit verdicts for tests/manual control, a pluggable
 `judge_runner` route with `judge_model` metadata, and deterministic fallback
@@ -106,7 +106,7 @@ Judge failures pause the goal by default, with an explicit `:continue_once`
 policy for fail-open one-shot continuation.
 
 **KanbanDispatcher** is the first supervised fleet-work layer for durable boards.
-It scans `AgentCore.Workspace.KanbanStore` boards, reclaims expired leases, leases
+It scans `LemonAgent.Workspace.KanbanStore` boards, reclaims expired leases, leases
 dependency-unblocked tasks, runs a worker module under `TaskSupervisor`, and
 records task completion or failure back into durable state. Focused dispatcher
 coverage proves bounded multi-worker leasing, completion, explicit worker

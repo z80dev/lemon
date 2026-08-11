@@ -1,8 +1,8 @@
 defmodule LemonSkills.Tools.MemoryTopicTest do
   use ExUnit.Case, async: true
 
-  alias AgentCore.Types.AgentToolResult
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.AgentToolResult
+  alias LemonAi.Types.TextContent
   alias LemonSkills.Tools.MemoryTopic
 
   @moduletag :tmp_dir

@@ -5,7 +5,7 @@ defmodule CodingAgent.SessionRootSupervisorTest do
   alias CodingAgent.SessionRegistry
   alias CodingAgent.SessionSupervisor
 
-  alias Ai.Types.{
+  alias LemonAi.Types.{
     Model,
     ModelCost
   }

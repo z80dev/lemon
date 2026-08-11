@@ -1,8 +1,8 @@
 defmodule XApi.Tools.GetXMentionsTest do
   use ExUnit.Case, async: false
 
-  alias AgentCore.Types.AgentToolResult
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.AgentToolResult
+  alias LemonAi.Types.TextContent
   alias XApi.Tools.GetXMentions
 
   @x_env_vars [

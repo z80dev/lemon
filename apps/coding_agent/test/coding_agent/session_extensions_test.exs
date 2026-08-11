@@ -4,7 +4,7 @@ defmodule CodingAgent.SessionExtensionsTest do
   alias CodingAgent.Session
   alias CodingAgent.SettingsManager
 
-  alias Ai.Types.{
+  alias LemonAi.Types.{
     AssistantMessage,
     TextContent,
     ToolCall,
@@ -14,7 +14,7 @@ defmodule CodingAgent.SessionExtensionsTest do
     ModelCost
   }
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
 
   @moduletag :tmp_dir
 
@@ -65,11 +65,11 @@ defmodule CodingAgent.SessionExtensionsTest do
   end
 
   defp response_to_event_stream(response) do
-    {:ok, stream} = Ai.EventStream.start_link()
+    {:ok, stream} = LemonAi.EventStream.start_link()
 
     Task.start(fn ->
       # Emit start event
-      Ai.EventStream.push(stream, {:start, response})
+      LemonAi.EventStream.push(stream, {:start, response})
 
       # Emit text deltas for each text content
       response.content
@@ -77,13 +77,13 @@ defmodule CodingAgent.SessionExtensionsTest do
       |> Enum.each(fn {content, idx} ->
         case content do
           %TextContent{text: text} ->
-            Ai.EventStream.push(stream, {:text_start, idx, response})
-            Ai.EventStream.push(stream, {:text_delta, idx, text, response})
-            Ai.EventStream.push(stream, {:text_end, idx, text, response})
+            LemonAi.EventStream.push(stream, {:text_start, idx, response})
+            LemonAi.EventStream.push(stream, {:text_delta, idx, text, response})
+            LemonAi.EventStream.push(stream, {:text_end, idx, text, response})
 
           %ToolCall{} = tool_call ->
-            Ai.EventStream.push(stream, {:tool_call_start, idx, response})
-            Ai.EventStream.push(stream, {:tool_call_end, idx, tool_call, response})
+            LemonAi.EventStream.push(stream, {:tool_call_start, idx, response})
+            LemonAi.EventStream.push(stream, {:tool_call_end, idx, tool_call, response})
 
           _ ->
             :ok
@@ -91,8 +91,8 @@ defmodule CodingAgent.SessionExtensionsTest do
       end)
 
       # Emit done event
-      Ai.EventStream.push(stream, {:done, response.stop_reason, response})
-      Ai.EventStream.complete(stream, response)
+      LemonAi.EventStream.push(stream, {:done, response.stop_reason, response})
+      LemonAi.EventStream.complete(stream, response)
     end)
 
     stream
@@ -248,12 +248,12 @@ defmodule CodingAgent.SessionExtensionsTest do
     test "extension tools are merged into session tools list", %{tmp_dir: tmp_dir} do
       tools_code = """
       [
-        %AgentCore.Types.AgentTool{
+        %LemonAgent.Types.AgentTool{
           name: "ext_tool",
           description: "An extension tool",
           parameters: %{},
           label: "Extension Tool",
-          execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{content: []} end
+          execute: fn _, _, _, _ -> %LemonAgent.Types.AgentToolResult{content: []} end
         }
       ]
       """
@@ -281,12 +281,12 @@ defmodule CodingAgent.SessionExtensionsTest do
       # Extension adds a tool
       tools_code = """
       [
-        %AgentCore.Types.AgentTool{
+        %LemonAgent.Types.AgentTool{
           name: "ext_tool",
           description: "An extension tool",
           parameters: %{},
           label: "Extension Tool",
-          execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{content: []} end
+          execute: fn _, _, _, _ -> %LemonAgent.Types.AgentToolResult{content: []} end
         }
       ]
       """
@@ -536,7 +536,7 @@ defmodule CodingAgent.SessionExtensionsTest do
 
       calls = Agent.get(tracker, & &1)
       assert [{:turn_ended, msg, tool_results}] = calls
-      assert %Ai.Types.AssistantMessage{} = msg
+      assert %LemonAi.Types.AssistantMessage{} = msg
       assert is_list(tool_results)
 
       Agent.stop(tracker)
@@ -590,12 +590,12 @@ defmodule CodingAgent.SessionExtensionsTest do
     test "rebuilds extension tools after extension file changes", %{tmp_dir: tmp_dir} do
       v1_tools = """
       [
-        %AgentCore.Types.AgentTool{
+        %LemonAgent.Types.AgentTool{
           name: "reload_tool_v1",
           description: "Reload tool version 1",
           parameters: %{},
           label: "Reload Tool V1",
-          execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{content: []} end
+          execute: fn _, _, _, _ -> %LemonAgent.Types.AgentToolResult{content: []} end
         }
       ]
       """
@@ -612,12 +612,12 @@ defmodule CodingAgent.SessionExtensionsTest do
 
       v2_tools = """
       [
-        %AgentCore.Types.AgentTool{
+        %LemonAgent.Types.AgentTool{
           name: "reload_tool_v2",
           description: "Reload tool version 2",
           parameters: %{},
           label: "Reload Tool V2",
-          execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{content: []} end
+          execute: fn _, _, _, _ -> %LemonAgent.Types.AgentToolResult{content: []} end
         }
       ]
       """
@@ -712,12 +712,12 @@ defmodule CodingAgent.SessionExtensionsTest do
       # Create an extension that provides a tool with the same name as a built-in
       tools_code = """
       [
-        %AgentCore.Types.AgentTool{
+        %LemonAgent.Types.AgentTool{
           name: "read",
           description: "Conflicting read tool",
           parameters: %{},
           label: "Conflicting Read",
-          execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{content: []} end
+          execute: fn _, _, _, _ -> %LemonAgent.Types.AgentToolResult{content: []} end
         }
       ]
       """

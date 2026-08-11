@@ -19,7 +19,7 @@ defmodule LemonTcg do
       signing venues plug in behind the same behaviour.
     * `LemonTcg.Desk` — a GenServer trading desk that owns one session and
       routes every order through risk → venue → ledger.
-    * `LemonTcg.Agent.Tools` — `AgentCore.Types.AgentTool` surface so an
+    * `LemonTcg.Agent.Tools` — `LemonAgent.Types.AgentTool` surface so an
       agent loop can operate the desk the same way it plays the sim.
 
   Paper trading works with zero credentials. `MAGIC_EDEN_API_KEY` raises

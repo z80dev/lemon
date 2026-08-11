@@ -9,5 +9,5 @@ defmodule LemonSim.Kernel.ActionSpace do
   """
 
   @callback tools(state :: LemonSim.Kernel.State.t(), opts :: keyword()) ::
-              {:ok, [AgentCore.Types.AgentTool.t()]} | {:error, term()}
+              {:ok, [LemonAgent.Types.AgentTool.t()]} | {:error, term()}
 end

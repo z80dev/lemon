@@ -5,7 +5,7 @@ defmodule LemonSim.Examples.StockMarket.ActionSpace do
 
   import LemonSim.Examples.Helpers
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonSim.Examples.Helpers.Tools, as: GameTools
   alias LemonSim.Examples.StockMarket.{Events, Market}
 
@@ -132,7 +132,7 @@ defmodule LemonSim.Examples.StockMarket.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("You broadcast a #{stance} call on #{stock}.")],
+           content: [LemonAgent.text_content("You broadcast a #{stance} call on #{stock}.")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -156,7 +156,7 @@ defmodule LemonSim.Examples.StockMarket.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("You skipped whispering this round.")],
+           content: [LemonAgent.text_content("You skipped whispering this round.")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -243,7 +243,7 @@ defmodule LemonSim.Examples.StockMarket.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content(message)],
+           content: [LemonAgent.text_content(message)],
            details: %{"event" => event},
            trust: :trusted
          }}

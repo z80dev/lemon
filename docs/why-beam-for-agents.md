@@ -77,10 +77,10 @@ a dropped Telegram connection *should* come back, because reconnecting is idempo
 idempotency argument lives in the supervision strategy, where a reviewer can find it.
 
 One level down, each tool call runs as a supervised task with a monitor
-([`loop/tool_calls.ex:63,569`](../apps/agent_core/lib/agent_core/loop/tool_calls.ex)). If
+([`loop/tool_calls.ex:63,569`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex)). If
 it crashes, the `:DOWN` message is converted into a tool result the model can read —
 `"Tool task crashed: ..."` at
-[`tool_calls.ex:1027`](../apps/agent_core/lib/agent_core/loop/tool_calls.ex) — and the
+[`tool_calls.ex:1027`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex) — and the
 other tools in the same parallel batch keep running. That is a `receive` block, not a
 framework.
 
@@ -113,8 +113,8 @@ in [`session_transitions.ex`](../apps/lemon_router/lib/lemon_router/session_tran
 as a pure reducer; the process only performs the I/O the reducer asks for.
 
 Provider failure is isolated the same way: a circuit breaker and a concurrency cap per
-provider, each a process ([`ai/circuit_breaker.ex`](../apps/ai/lib/ai/circuit_breaker.ex),
-[`ai/call_dispatcher.ex`](../apps/ai/lib/ai/call_dispatcher.ex)), so an Anthropic outage
+provider, each a process ([`ai/circuit_breaker.ex`](../apps/lemon_ai/lib/lemon_ai/circuit_breaker.ex),
+[`ai/call_dispatcher.ex`](../apps/lemon_ai/lib/lemon_ai/call_dispatcher.ex)), so an Anthropic outage
 returns `{:error, :circuit_open}` in microseconds instead of consuming every worker that
 would otherwise have served OpenAI traffic.
 
@@ -125,14 +125,14 @@ can attach to: `:observer`, `Process.info/2`, a remote shell into production, me
 depth per conversation. The idle watchdog
 ([`run_process/watchdog.ex:15`](../apps/lemon_router/lib/lemon_router/run_process/watchdog.ex))
 and the bounded, drop-strategy-configurable event stream
-([`event_stream.ex:64,95`](../apps/agent_core/lib/agent_core/event_stream.ex)) are cheap to
+([`event_stream.ex:64,95`](../apps/lemon_agent/lib/lemon_agent/event_stream.ex)) are cheap to
 build on top of that, but the inspectability is the primitive.
 
 ## What it costs
 
 If I only wrote the section above, you should not believe me.
 
-**There is no ML ecosystem.** [`Ai.Tokens`](../apps/ai/lib/ai/tokens.ex) is a
+**There is no ML ecosystem.** [`LemonAi.Tokens`](../apps/lemon_ai/lib/lemon_ai/tokens.ex) is a
 four-characters-per-token heuristic, and its moduledoc says outright that it is not a
 tokenizer. That is not laziness; there is no maintained BPE tokenizer for Elixir I would
 take a NIF dependency on. Nx and Bumblebee are real and good, and they are not PyTorch. If

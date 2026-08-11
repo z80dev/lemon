@@ -10,7 +10,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportRuntimeBoundaryTest do
                            __DIR__
                          )
   @model_catalog_file Path.expand(
-                        "../../../../../agent_core/lib/agent_core/model_runtime/model_catalog.ex",
+                        "../../../../../agent_core/lib/lemon_agent/model_runtime/model_catalog.ex",
                         __DIR__
                       )
 
@@ -20,10 +20,10 @@ defmodule LemonChannels.Adapters.Telegram.TransportRuntimeBoundaryTest do
     model_catalog_source = File.read!(@model_catalog_file)
 
     # Both transport modules delegate provider/model catalog resolution to the
-    # shared AgentCore.ModelRuntime.ModelCatalog facade instead of duplicating
+    # shared LemonAgent.ModelRuntime.ModelCatalog facade instead of duplicating
     # credential-lookup logic locally.
-    assert model_picker_source =~ "AgentCore.ModelRuntime.ModelCatalog"
-    assert callback_handler_source =~ "AgentCore.ModelRuntime.ModelCatalog"
+    assert model_picker_source =~ "LemonAgent.ModelRuntime.ModelCatalog"
+    assert callback_handler_source =~ "LemonAgent.ModelRuntime.ModelCatalog"
 
     # The facade itself is the one place that must go through model runtime
     # credentials.

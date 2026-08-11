@@ -3,9 +3,9 @@ defmodule CodingAgent.Tools.WriteTest do
 
   alias CodingAgent.Tools.Write
   alias CodingAgent.Checkpoint
-  alias AgentCore.Types.AgentToolResult
-  alias AgentCore.AbortSignal
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.AgentToolResult
+  alias LemonAgent.AbortSignal
+  alias LemonAi.Types.TextContent
 
   @moduletag :tmp_dir
 

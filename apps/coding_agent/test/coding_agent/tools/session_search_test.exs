@@ -1,8 +1,8 @@
 defmodule CodingAgent.Tools.SessionSearchTest do
   use ExUnit.Case, async: true
 
-  alias AgentCore.Types.AgentToolResult
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.AgentToolResult
+  alias LemonAi.Types.TextContent
   alias CodingAgent.Tools.SessionSearch
 
   defp doc(attrs) do

@@ -93,8 +93,8 @@ defmodule LemonPlatformTest.MixProject do
       {:lemon_channels, in_umbrella: true, optional: true},
       {:lemon_gateway, in_umbrella: true, optional: true},
       {:lemon_memory, in_umbrella: true, optional: true},
-      {:ai, in_umbrella: true, optional: true},
-      {:agent_core, in_umbrella: true, optional: true},
+      {:lemon_ai, in_umbrella: true, optional: true},
+      {:lemon_agent, in_umbrella: true, optional: true},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false}
     ])
   end

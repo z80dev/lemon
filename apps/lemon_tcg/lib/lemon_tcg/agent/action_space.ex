@@ -10,7 +10,7 @@ defmodule LemonTcg.Agent.ActionSpace do
 
   @behaviour LemonSim.Kernel.ActionSpace
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonCore.MapHelpers
   alias LemonTcg.Agent.Tools
 
@@ -86,7 +86,7 @@ defmodule LemonTcg.Agent.ActionSpace do
   defp event_result(text, kind, payload) do
     {:ok,
      %AgentToolResult{
-       content: [AgentCore.text_content(text)],
+       content: [LemonAgent.text_content(text)],
        details: %{"event" => %{"kind" => kind, "payload" => payload}},
        trust: :trusted
      }}

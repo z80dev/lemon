@@ -41,7 +41,7 @@ defmodule LemonMCP.MixProject do
       {:coding_agent, in_umbrella: true},
       {:lemon_core, in_umbrella: true},
       {:lemon_skills, in_umbrella: true},
-      {:agent_core, in_umbrella: true}
+      {:lemon_agent, in_umbrella: true}
     ]
   end
 end

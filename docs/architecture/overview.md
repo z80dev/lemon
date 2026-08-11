@@ -71,7 +71,7 @@ For system diagrams see `docs/diagrams/`. For per-app details see each `apps/*/R
 └───────────────────────┴──────────────────┘
          │
 ┌────────▼──────────────────────────────────┐
-│ Ai  (provider abstraction layer)           │
+│ LemonAi  (provider abstraction layer)           │
 │  26 providers: Anthropic, OpenAI, Google,  │
 │  Azure, AWS Bedrock, xAI, Mistral, …       │
 └───────────────────────────────────────────┘
@@ -230,7 +230,7 @@ that no arrow ever runs from `published` into the outer three tiers.
 
 Four main paths through the system:
 
-1. **Direct (TUI/Web)**: JSON-RPC → `debug_agent_rpc` → `coding_agent_ui` → Session → AgentCore → Tools/Ai
+1. **Direct (TUI/Web)**: JSON-RPC → `debug_agent_rpc` → `coding_agent_ui` → Session → LemonAgent → Tools/LemonAi
 
 2. **Control Plane**: WebSocket → ControlPlane → Router → Orchestrator → Gateway → Engine
 

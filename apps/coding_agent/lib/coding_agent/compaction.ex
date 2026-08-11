@@ -79,7 +79,7 @@ defmodule CodingAgent.Compaction do
   known, this returns thresholds that can trigger compaction before provider
   trimming starts dropping early context.
   """
-  @spec message_budget(Ai.Types.Model.t() | map(), map()) :: message_budget() | nil
+  @spec message_budget(LemonAi.Types.Model.t() | map(), map()) :: message_budget() | nil
   def message_budget(model, settings \\ %{}) do
     case provider_request_message_limit(model) do
       limit when is_integer(limit) and limit > 1 ->
@@ -455,7 +455,7 @@ defmodule CodingAgent.Compaction do
   Estimate tokens for plain text using a rough 4-chars/token heuristic.
   """
   @spec estimate_text_tokens(String.t() | nil) :: non_neg_integer()
-  def estimate_text_tokens(text) when is_binary(text), do: Ai.Tokens.estimate_chars(text)
+  def estimate_text_tokens(text) when is_binary(text), do: LemonAi.Tokens.estimate_chars(text)
   def estimate_text_tokens(_), do: 0
 
   @doc """
@@ -528,7 +528,7 @@ defmodule CodingAgent.Compaction do
   ## Parameters
 
   - `messages_to_compact` - List of messages to summarize
-  - `model` - The Ai.Types.Model to use for summarization
+  - `model` - The LemonAi.Types.Model to use for summarization
   - `opts` - Options:
     - `:custom_instructions` - Additional instructions for the summary
     - `:signal` - Abort signal for cancellation
@@ -538,7 +538,7 @@ defmodule CodingAgent.Compaction do
   - `{:ok, summary}` - The generated summary text
   - `{:error, reason}` - If summarization fails
   """
-  @spec generate_summary([Messages.message()], Ai.Types.Model.t(), keyword()) ::
+  @spec generate_summary([Messages.message()], LemonAi.Types.Model.t(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
   def generate_summary(messages_to_compact, model, opts \\ []) do
     case Keyword.get(opts, :summary) do
@@ -578,16 +578,16 @@ defmodule CodingAgent.Compaction do
 
     # Create context for summarization
     context =
-      Ai.Types.Context.new(system_prompt: system_prompt)
-      |> Ai.Types.Context.add_user_message(user_prompt)
+      LemonAi.Types.Context.new(system_prompt: system_prompt)
+      |> LemonAi.Types.Context.add_user_message(user_prompt)
 
     # Check abort again before API call
     if aborted?(signal) do
       {:error, :aborted}
     else
-      case Ai.complete(model, context, %{max_tokens: 2000}) do
+      case LemonAi.complete(model, context, %{max_tokens: 2000}) do
         {:ok, response} ->
-          summary = Ai.get_text(response)
+          summary = LemonAi.get_text(response)
           {:ok, summary}
 
         {:error, reason} ->
@@ -613,7 +613,7 @@ defmodule CodingAgent.Compaction do
     end
   end
 
-  defp format_message_for_summary(%Ai.Types.UserMessage{content: content}) do
+  defp format_message_for_summary(%LemonAi.Types.UserMessage{content: content}) do
     text =
       case content do
         c when is_binary(c) -> c
@@ -623,12 +623,15 @@ defmodule CodingAgent.Compaction do
     "[User]: #{text}"
   end
 
-  defp format_message_for_summary(%Ai.Types.AssistantMessage{content: content}) do
+  defp format_message_for_summary(%LemonAi.Types.AssistantMessage{content: content}) do
     text = extract_text_from_ai_content(content)
     "[Assistant]: #{text}"
   end
 
-  defp format_message_for_summary(%Ai.Types.ToolResultMessage{tool_name: name, content: content}) do
+  defp format_message_for_summary(%LemonAi.Types.ToolResultMessage{
+         tool_name: name,
+         content: content
+       }) do
     text = extract_text_from_ai_content(content)
     "[Tool Result (#{name})]: #{String.slice(text, 0, 500)}..."
   end
@@ -638,7 +641,7 @@ defmodule CodingAgent.Compaction do
   defp extract_text_from_ai_content(content) when is_list(content) do
     content
     |> Enum.map(fn
-      %Ai.Types.TextContent{text: text} -> text
+      %LemonAi.Types.TextContent{text: text} -> text
       %{type: :text, text: text} -> text
       _ -> ""
     end)
@@ -726,7 +729,7 @@ defmodule CodingAgent.Compaction do
   ## Parameters
 
   - `branch_entries` - List of session entries from the branch
-  - `model` - The Ai.Types.Model to use for summarization
+  - `model` - The LemonAi.Types.Model to use for summarization
   - `opts` - Options:
     - `:custom_instructions` - Additional instructions for the summary
     - `:signal` - Abort signal for cancellation
@@ -736,7 +739,7 @@ defmodule CodingAgent.Compaction do
   - `{:ok, summary}` - The generated branch summary
   - `{:error, reason}` - If summarization fails
   """
-  @spec generate_branch_summary([SessionEntry.t()], Ai.Types.Model.t(), keyword()) ::
+  @spec generate_branch_summary([SessionEntry.t()], LemonAi.Types.Model.t(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
   def generate_branch_summary(branch_entries, model, opts \\ []) do
     case Keyword.get(opts, :summary) do
@@ -777,15 +780,15 @@ defmodule CodingAgent.Compaction do
     """
 
     context =
-      Ai.Types.Context.new(system_prompt: system_prompt)
-      |> Ai.Types.Context.add_user_message(user_prompt)
+      LemonAi.Types.Context.new(system_prompt: system_prompt)
+      |> LemonAi.Types.Context.add_user_message(user_prompt)
 
     if aborted?(signal) do
       {:error, :aborted}
     else
-      case Ai.complete(model, context, %{max_tokens: 1000}) do
+      case LemonAi.complete(model, context, %{max_tokens: 1000}) do
         {:ok, response} ->
-          summary = Ai.get_text(response)
+          summary = LemonAi.get_text(response)
           {:ok, summary}
 
         {:error, reason} ->
@@ -845,7 +848,7 @@ defmodule CodingAgent.Compaction do
   ## Parameters
 
   - `session` - The SessionManager.Session to compact
-  - `model` - The Ai.Types.Model to use for summarization
+  - `model` - The LemonAi.Types.Model to use for summarization
   - `opts` - Options:
     - `:keep_recent_tokens` - Number of tokens to keep (default: 20000)
     - `:keep_recent_messages` - Number of messages to keep (optional)
@@ -867,7 +870,7 @@ defmodule CodingAgent.Compaction do
   - `{:error, :cannot_compact}` - When no valid cut point can be found (only when force: false)
   - `{:error, reason}` - If compaction fails for other reasons
   """
-  @spec compact(SessionManager.Session.t(), Ai.Types.Model.t(), keyword()) ::
+  @spec compact(SessionManager.Session.t(), LemonAi.Types.Model.t(), keyword()) ::
           {:ok, map()} | {:error, term()}
   def compact(%SessionManager.Session{} = session, model, opts \\ []) do
     keep_recent_tokens = Keyword.get(opts, :keep_recent_tokens, @default_keep_recent_tokens)
@@ -1062,8 +1065,8 @@ defmodule CodingAgent.Compaction do
   defp estimate_tool_definitions_tokens(_), do: 0
 
   defp provider_request_message_limit(model) do
-    if function_exported?(Ai.Providers.Anthropic, :request_history_limit, 1) do
-      Ai.Providers.Anthropic.request_history_limit(model)
+    if function_exported?(LemonAi.Providers.Anthropic, :request_history_limit, 1) do
+      LemonAi.Providers.Anthropic.request_history_limit(model)
     else
       nil
     end
@@ -1102,8 +1105,8 @@ defmodule CodingAgent.Compaction do
   defp aborted?(nil), do: false
 
   defp aborted?(signal) do
-    if function_exported?(AgentCore.AbortSignal, :aborted?, 1) do
-      AgentCore.AbortSignal.aborted?(signal)
+    if function_exported?(LemonAgent.AbortSignal, :aborted?, 1) do
+      LemonAgent.AbortSignal.aborted?(signal)
     else
       false
     end

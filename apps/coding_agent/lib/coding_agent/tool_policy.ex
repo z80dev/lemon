@@ -402,8 +402,8 @@ defmodule CodingAgent.ToolPolicy do
   @doc """
   Apply a policy to a list of tools.
   """
-  @spec apply_policy(policy() | map(), [AgentCore.Types.AgentTool.t()]) :: [
-          AgentCore.Types.AgentTool.t()
+  @spec apply_policy(policy() | map(), [LemonAgent.Types.AgentTool.t()]) :: [
+          LemonAgent.Types.AgentTool.t()
         ]
   def apply_policy(policy, tools) do
     Enum.filter(tools, fn tool ->
@@ -416,9 +416,9 @@ defmodule CodingAgent.ToolPolicy do
 
   Returns `{allowed_tools, denied_tools}` tuple.
   """
-  @spec partition_tools(policy() | map(), [AgentCore.Types.AgentTool.t()]) :: {
-          [AgentCore.Types.AgentTool.t()],
-          [AgentCore.Types.AgentTool.t()]
+  @spec partition_tools(policy() | map(), [LemonAgent.Types.AgentTool.t()]) :: {
+          [LemonAgent.Types.AgentTool.t()],
+          [LemonAgent.Types.AgentTool.t()]
         }
   def partition_tools(policy, tools) do
     Enum.split_with(tools, fn tool ->
@@ -431,9 +431,9 @@ defmodule CodingAgent.ToolPolicy do
 
   Returns a filtered map with only allowed tools.
   """
-  @spec apply_policy_to_map(policy() | map(), %{String.t() => AgentCore.Types.AgentTool.t()}) ::
+  @spec apply_policy_to_map(policy() | map(), %{String.t() => LemonAgent.Types.AgentTool.t()}) ::
           %{
-            String.t() => AgentCore.Types.AgentTool.t()
+            String.t() => LemonAgent.Types.AgentTool.t()
           }
   def apply_policy_to_map(policy, tools_map) do
     Map.filter(tools_map, fn {name, _tool} ->

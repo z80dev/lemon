@@ -8,7 +8,7 @@ defmodule LemonSkills.Audit.LlmReviewer do
   have missed.
   """
 
-  alias Ai.Types.Context
+  alias LemonAi.Types.Context
   alias LemonSkills.Audit.Finding
 
   @type verdict :: :pass | :warn | :block
@@ -74,7 +74,7 @@ defmodule LemonSkills.Audit.LlmReviewer do
 
     case runner.complete(model, context, call_opts) do
       {:ok, message} ->
-        {:ok, Ai.get_text(message)}
+        {:ok, LemonAi.get_text(message)}
 
       {:error, reason} ->
         {:error, reason}
@@ -167,7 +167,7 @@ defmodule LemonSkills.Audit.LlmReviewer do
 
     case String.split(trimmed, ":", parts: 2) do
       [model_id] ->
-        case Ai.Models.find_by_id(model_id) do
+        case LemonAi.Models.find_by_id(model_id) do
           nil -> {:error, {:unknown_model, trimmed}}
           model -> {:ok, model}
         end
@@ -178,7 +178,7 @@ defmodule LemonSkills.Audit.LlmReviewer do
             {:error, {:unknown_provider, provider}}
 
           provider_atom ->
-            case Ai.Models.get_model(provider_atom, String.trim(model_id)) do
+            case LemonAi.Models.get_model(provider_atom, String.trim(model_id)) do
               nil -> {:error, {:unknown_model, trimmed}}
               model -> {:ok, model}
             end
@@ -191,7 +191,7 @@ defmodule LemonSkills.Audit.LlmReviewer do
   defp provider_to_atom(provider) when is_binary(provider) do
     normalized = provider |> String.trim() |> String.downcase()
 
-    Enum.find(Ai.Models.get_providers(), fn known ->
+    Enum.find(LemonAi.Models.get_providers(), fn known ->
       known_str = Atom.to_string(known)
       known_str == normalized or String.replace(known_str, "_", "-") == normalized
     end)
@@ -234,7 +234,7 @@ defmodule LemonSkills.Audit.LlmReviewer do
     @moduledoc false
 
     def complete(model, context, opts) do
-      Ai.complete(model, context, opts)
+      LemonAi.complete(model, context, opts)
     end
   end
 end

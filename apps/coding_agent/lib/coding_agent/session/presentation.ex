@@ -1,7 +1,7 @@
 defmodule CodingAgent.Session.Presentation do
   @moduledoc false
 
-  alias Ai.Types.StreamOptions
+  alias LemonAi.Types.StreamOptions
   alias LemonCore.ResumeToken
 
   require Logger
@@ -289,7 +289,7 @@ defmodule CodingAgent.Session.Presentation do
   end
 
   def safe_get_visible_text(msg) do
-    case Ai.get_text(msg) do
+    case LemonAi.get_text(msg) do
       text when is_binary(text) and text != "" ->
         text
 
@@ -511,26 +511,26 @@ defmodule CodingAgent.Session.Presentation do
         result
 
       String.length(result) > 500 ->
-        Ai.Text.truncate_chars(result, 500)
+        LemonAi.Text.truncate_chars(result, 500)
 
       true ->
         result
     end
   end
 
-  def truncate_result(%AgentCore.Types.AgentToolResult{} = result) do
+  def truncate_result(%LemonAgent.Types.AgentToolResult{} = result) do
     result
-    |> AgentCore.get_text()
+    |> LemonAgent.get_text()
     |> truncate_result()
   end
 
-  def truncate_result(%Ai.Types.TextContent{text: text}) when is_binary(text),
+  def truncate_result(%LemonAi.Types.TextContent{text: text}) when is_binary(text),
     do: truncate_result(text)
 
   def truncate_result(content) when is_list(content) do
     content
     |> Enum.map(fn
-      %Ai.Types.TextContent{text: text} when is_binary(text) -> text
+      %LemonAi.Types.TextContent{text: text} when is_binary(text) -> text
       %{type: :text, text: text} when is_binary(text) -> text
       %{"type" => "text", "text" => text} when is_binary(text) -> text
       item when is_binary(item) -> item
@@ -543,7 +543,7 @@ defmodule CodingAgent.Session.Presentation do
 
   def truncate_result(result), do: inspect(result, limit: 500)
 
-  def maybe_put_result_meta(detail, %AgentCore.Types.AgentToolResult{} = result, name)
+  def maybe_put_result_meta(detail, %LemonAgent.Types.AgentToolResult{} = result, name)
       when is_map(detail) do
     case extract_tool_result_meta(result.details, name) do
       nil -> detail
@@ -555,7 +555,7 @@ defmodule CodingAgent.Session.Presentation do
 
   def action_ok?(_name, _result, true), do: false
 
-  def action_ok?(name, %AgentCore.Types.AgentToolResult{details: details}, false) do
+  def action_ok?(name, %LemonAgent.Types.AgentToolResult{details: details}, false) do
     not command_exit_failed?(name, details)
   end
 
@@ -829,11 +829,11 @@ defmodule CodingAgent.Session.Presentation do
              :econnreset,
              :nxdomain
            ] do
-    Ai.Error.format_error(reason)
+    LemonAi.Error.format_error(reason)
   end
 
   def format_error({:http_error, _status, _body} = reason, _state),
-    do: Ai.Error.format_error(reason)
+    do: LemonAi.Error.format_error(reason)
 
   def format_error({:error, reason}, state), do: format_error(reason, state)
   def format_error(reason, _state) when is_atom(reason), do: Atom.to_string(reason)
@@ -937,16 +937,16 @@ defmodule CodingAgent.Session.Presentation do
   defp maybe_put_auto_send_source(file, _source), do: file
 
   defp format_circuit_open_error(state) do
-    base = Ai.Error.format_error(:circuit_open)
+    base = LemonAi.Error.format_error(:circuit_open)
 
     with provider when is_atom(provider) <- current_provider(state),
-         {:ok, breaker_state} <- Ai.CircuitBreaker.get_state(provider) do
+         {:ok, breaker_state} <- LemonAi.CircuitBreaker.get_state(provider) do
       detail =
         breaker_state
         |> Map.get(:last_failure_reason)
         |> format_circuit_failure_reason()
 
-      retry_after_ms = Ai.CircuitBreaker.time_until_recovery(provider)
+      retry_after_ms = LemonAi.CircuitBreaker.time_until_recovery(provider)
       parts = ["Provider: #{provider}"]
 
       parts =
@@ -991,11 +991,11 @@ defmodule CodingAgent.Session.Presentation do
 
   defp format_circuit_failure_reason(reason)
        when reason in [:timeout, :closed, :econnrefused, :econnreset, :nxdomain] do
-    Ai.Error.format_error(reason)
+    LemonAi.Error.format_error(reason)
   end
 
   defp format_circuit_failure_reason({:http_error, _status, _body} = reason),
-    do: Ai.Error.format_error(reason)
+    do: LemonAi.Error.format_error(reason)
 
   defp format_circuit_failure_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp format_circuit_failure_reason(reason), do: inspect(reason)

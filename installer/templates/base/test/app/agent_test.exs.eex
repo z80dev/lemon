@@ -25,8 +25,8 @@ defmodule <%= @app_module %>.AgentTest do
     assert {:ok, "Three words."} = Agent.ask(agent, "how many words in 'one two three'?")
 
     # The tool ran, so its result is in the conversation the model saw.
-    messages = AgentCore.get_state(agent).messages
-    assert Enum.any?(messages, &match?(%Ai.Types.ToolResultMessage{}, &1))
+    messages = LemonAgent.get_state(agent).messages
+    assert Enum.any?(messages, &match?(%LemonAi.Types.ToolResultMessage{}, &1))
   end
 
   describe "tools/0" do
@@ -34,11 +34,11 @@ defmodule <%= @app_module %>.AgentTest do
     # needs the same `tool/1` and `tool/2` as one of ours.
     defmodule ContributedTool do
       def tool(_opts \\ []) do
-        AgentCore.new_tool(
+        LemonAgent.new_tool(
           name: "echo",
           description: "Repeats its argument.",
           execute: fn _id, params, _signal, _on_update ->
-            AgentCore.new_tool_result(content: [AgentCore.text_content(params["text"] || "")])
+            LemonAgent.new_tool_result(content: [LemonAgent.text_content(params["text"] || "")])
           end
         )
       end
@@ -50,19 +50,19 @@ defmodule <%= @app_module %>.AgentTest do
       assert "word_count" in tool_names()
     end
 
-    test "includes tools contributed through AgentCore.ToolRegistry" do
+    test "includes tools contributed through LemonAgent.ToolRegistry" do
       refute "echo" in tool_names()
 
-      AgentCore.ToolRegistry.register(:echo, ContributedTool)
-      on_exit(fn -> AgentCore.ToolRegistry.unregister(:echo) end)
+      LemonAgent.ToolRegistry.register(:echo, ContributedTool)
+      on_exit(fn -> LemonAgent.ToolRegistry.unregister(:echo) end)
 
       # Picked up without this project naming the module anywhere.
       assert "echo" in tool_names()
     end
 
     test "a contributed tool cannot displace one of ours" do
-      AgentCore.ToolRegistry.register(:word_count, ContributedTool)
-      on_exit(fn -> AgentCore.ToolRegistry.unregister(:word_count) end)
+      LemonAgent.ToolRegistry.register(:word_count, ContributedTool)
+      on_exit(fn -> LemonAgent.ToolRegistry.unregister(:word_count) end)
 
       # Registered under a name we already use, so it is dropped entirely
       # rather than shadowing ours.
@@ -74,7 +74,7 @@ defmodule <%= @app_module %>.AgentTest do
   end
 
   test "model/0 resolves the configured model" do
-    assert %Ai.Types.Model{} = model = Agent.model()
+    assert %LemonAi.Types.Model{} = model = Agent.model()
     assert model.id == Application.get_env(:<%= @app %>, :model)
   end
 end

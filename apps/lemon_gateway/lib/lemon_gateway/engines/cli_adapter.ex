@@ -3,13 +3,13 @@ defmodule LemonGateway.Engines.CliAdapter do
   Shared CLI subprocess runner used by the Claude, Codex, Droid, Opencode, and Pi engines.
 
   Provides common logic for starting a CLI runner process, consuming its event
-  stream, translating `AgentCore` events into plain tagged maps via
+  stream, translating `LemonAgent` events into plain tagged maps via
   `LemonGateway.Event` constructors, and handling cancellation and resume token
   formatting.
   """
 
-  alias AgentCore.CliRunners.Types.{ActionEvent, CompletedEvent, StartedEvent}
-  alias AgentCore.CliRunners.Types.ResumeToken, as: AgentResumeToken
+  alias LemonAgent.CliRunners.Types.{ActionEvent, CompletedEvent, StartedEvent}
+  alias LemonAgent.CliRunners.Types.ResumeToken, as: AgentResumeToken
   alias LemonGateway.Event
   alias LemonCore.ResumeToken, as: GatewayToken
 
@@ -253,7 +253,7 @@ defmodule LemonGateway.Engines.CliAdapter do
     stream = runner_module.stream(runner_pid)
 
     _ =
-      AgentCore.EventStream.events(stream)
+      LemonAgent.EventStream.events(stream)
       |> Enum.reduce(%{completed: false}, fn event, acc ->
         acc = handle_stream_event(event, engine_id, sink_pid, run_ref, acc)
         acc
@@ -323,7 +323,7 @@ defmodule LemonGateway.Engines.CliAdapter do
   defp handle_stream_event(_event, _engine_id, _sink_pid, _run_ref, acc), do: acc
 
   @doc """
-  Translate an AgentCore CLI runner event into a plain tagged event map.
+  Translate an LemonAgent CLI runner event into a plain tagged event map.
   """
   def to_event_map(%StartedEvent{} = ev), do: to_event_started(ev)
   def to_event_map(%ActionEvent{} = ev), do: to_event_action(ev)

@@ -9,7 +9,7 @@ defmodule LemonSim.LLM.Projectors.Toolkit do
   - helper functions for summarizing available action tools
   """
 
-  alias AgentCore.Types.AgentTool
+  alias LemonAgent.Types.AgentTool
 
   @prompt_version "SIM_PROMPT_V1"
 

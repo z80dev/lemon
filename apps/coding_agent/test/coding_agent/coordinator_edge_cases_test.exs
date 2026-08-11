@@ -13,7 +13,7 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
 
   alias CodingAgent.Coordinator
 
-  alias Ai.Types.{
+  alias LemonAi.Types.{
     Model,
     ModelCost
   }

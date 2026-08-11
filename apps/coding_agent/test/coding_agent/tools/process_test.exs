@@ -4,8 +4,8 @@ defmodule CodingAgent.Tools.ProcessTest do
   alias CodingAgent.Tools.Process, as: ProcessTool
   alias CodingAgent.ProcessManager
   alias CodingAgent.ProcessStore
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias AgentCore.AbortSignal
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.AbortSignal
 
   setup do
     clear_process_store()

@@ -20,7 +20,7 @@ defmodule LemonMCP.ToolAdapter do
 
   require Logger
 
-  alias AgentCore.Types.AgentToolResult
+  alias LemonAgent.Types.AgentToolResult
   alias LemonMCP.Protocol
 
   defstruct [:cwd, :tool_opts, :tool_modules]
@@ -84,11 +84,11 @@ defmodule LemonMCP.ToolAdapter do
   end
 
   # Built-ins plus tools registered at runtime by apps outside the platform
-  # (see `AgentCore.ToolRegistry`). Built-ins win on name collisions.
+  # (see `LemonAgent.ToolRegistry`). Built-ins win on name collisions.
   defp available_tools do
     # The registry keys tools by atom; this adapter keys them by string.
     registered =
-      AgentCore.ToolRegistry.all()
+      LemonAgent.ToolRegistry.all()
       |> Map.new(fn {name, module} -> {Atom.to_string(name), module} end)
       |> Map.filter(fn {_name, module} -> Code.ensure_loaded?(module) end)
 

@@ -123,9 +123,9 @@ defmodule Mix.Tasks.Lemon.New do
     path = opts[:lemon_path] || System.get_env("LEMON_PATH") || @built_from
     path = Path.expand(path)
 
-    unless File.exists?(Path.join(path, "apps/agent_core/mix.exs")) do
+    unless File.exists?(Path.join(path, "apps/lemon_agent/mix.exs")) do
       Mix.shell().error("""
-      Warning: #{path} does not look like a lemon checkout (no apps/agent_core/mix.exs).
+      Warning: #{path} does not look like a lemon checkout (no apps/lemon_agent/mix.exs).
 
       The generated mix.exs will point its path dependencies there anyway, so
       `mix deps.get` will fail until you fix it. Pass --lemon-path or set

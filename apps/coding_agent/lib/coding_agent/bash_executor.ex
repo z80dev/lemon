@@ -4,7 +4,7 @@ defmodule CodingAgent.BashExecutor do
   truncation, and abort signal support.
   """
 
-  alias AgentCore.AbortSignal
+  alias LemonAgent.AbortSignal
 
   defmodule Result do
     @moduledoc """
@@ -363,7 +363,7 @@ defmodule CodingAgent.BashExecutor do
       |> Keyword.put_new(:max_bytes, @default_max_bytes)
       |> Keyword.put_new(:max_lines, @default_max_lines)
 
-    Ai.Text.truncate_tail(content, opts)
+    LemonAi.Text.truncate_tail(content, opts)
   end
 
   @doc """

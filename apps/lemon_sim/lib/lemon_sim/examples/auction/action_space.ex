@@ -3,7 +3,7 @@ defmodule LemonSim.Examples.Auction.ActionSpace do
 
   @behaviour LemonSim.Kernel.ActionSpace
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonCore.MapHelpers
   alias LemonSim.Examples.Helpers.Tools, as: GameTools
   alias LemonSim.Examples.Auction.Events
@@ -72,7 +72,7 @@ defmodule LemonSim.Examples.Auction.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("#{actor_id} bids #{amount} gold on #{item_name}")],
+           content: [LemonAgent.text_content("#{actor_id} bids #{amount} gold on #{item_name}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -97,7 +97,7 @@ defmodule LemonSim.Examples.Auction.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("#{actor_id} passes on this item")],
+           content: [LemonAgent.text_content("#{actor_id} passes on this item")],
            details: %{"event" => event},
            trust: :trusted
          }}

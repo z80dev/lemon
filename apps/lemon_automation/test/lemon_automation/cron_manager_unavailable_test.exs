@@ -70,7 +70,7 @@ defmodule LemonAutomation.CronManagerUnavailableTest do
         # via cron_call/2, so it should return an error result, not crash.
         result = tool.execute.("call_1", %{"action" => "list"}, nil, nil)
 
-        text = AgentCore.get_text(result)
+        text = LemonAgent.get_text(result)
 
         # ensure_scheduler_started checks Process.whereis first, and since
         # the name is unregistered, it returns an error about unavailability.

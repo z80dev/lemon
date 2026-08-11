@@ -8,5 +8,5 @@ and the token/text helpers. It sits at the bottom of the platform dependency gra
 depends on nothing else in the platform and everything above it (`lemon_agent`, and
 through it router/gateway/channels/products) depends on it. This page will become the
 package README: supported providers, how to register a new one, streaming and tool-call
-semantics, and the retry/rate-limit knobs. Source today is `apps/ai`; it is published
+semantics, and the retry/rate-limit knobs. Source today is `apps/lemon_ai`; it is published
 first because every other package needs it.

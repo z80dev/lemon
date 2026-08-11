@@ -3,7 +3,7 @@ defmodule LemonChannels.GoalStatusMessageTest do
 
   alias LemonChannels.Adapters.Telegram.Transport.Commands
   alias LemonChannels.GoalStatusMessage
-  alias AgentCore.Workspace.GoalStore
+  alias LemonAgent.Workspace.GoalStore
 
   defmodule FakeContinuation do
     @moduledoc false

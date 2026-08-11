@@ -3,7 +3,7 @@ defmodule LemonSim.Examples.MurderMystery.ActionSpace do
 
   @behaviour LemonSim.Kernel.ActionSpace
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonCore.MapHelpers
   alias LemonSim.Examples.MurderMystery.Events
   alias LemonSim.Examples.Helpers.Tools, as: GameTools
@@ -83,7 +83,7 @@ defmodule LemonSim.Examples.MurderMystery.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("searching room: #{room_id}")],
+           content: [LemonAgent.text_content("searching room: #{room_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -159,7 +159,7 @@ defmodule LemonSim.Examples.MurderMystery.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("asked #{target_id}: #{question}")],
+           content: [LemonAgent.text_content("asked #{target_id}: #{question}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -192,7 +192,7 @@ defmodule LemonSim.Examples.MurderMystery.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("answered: #{String.slice(answer, 0, 60)}")],
+           content: [LemonAgent.text_content("answered: #{String.slice(answer, 0, 60)}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -236,7 +236,7 @@ defmodule LemonSim.Examples.MurderMystery.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("shared finding: #{String.slice(finding, 0, 60)}")],
+           content: [LemonAgent.text_content("shared finding: #{String.slice(finding, 0, 60)}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -268,7 +268,7 @@ defmodule LemonSim.Examples.MurderMystery.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("proposed theory: #{String.slice(theory, 0, 60)}")],
+           content: [LemonAgent.text_content("proposed theory: #{String.slice(theory, 0, 60)}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -292,7 +292,7 @@ defmodule LemonSim.Examples.MurderMystery.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("ending discussion for #{actor_id}")],
+           content: [LemonAgent.text_content("ending discussion for #{actor_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -379,7 +379,7 @@ defmodule LemonSim.Examples.MurderMystery.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("planted #{clue_type} evidence in #{room_id}")],
+           content: [LemonAgent.text_content("planted #{clue_type} evidence in #{room_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -425,7 +425,7 @@ defmodule LemonSim.Examples.MurderMystery.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("destroyed clue #{clue_id} in #{room_id}")],
+           content: [LemonAgent.text_content("destroyed clue #{clue_id} in #{room_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -450,7 +450,7 @@ defmodule LemonSim.Examples.MurderMystery.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("#{actor_id} does nothing")],
+           content: [LemonAgent.text_content("#{actor_id} does nothing")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -519,7 +519,7 @@ defmodule LemonSim.Examples.MurderMystery.ActionSpace do
         {:ok,
          %AgentToolResult{
            content: [
-             AgentCore.text_content("accused #{accused_id} with #{weapon} in #{room_id}")
+             LemonAgent.text_content("accused #{accused_id} with #{weapon} in #{room_id}")
            ],
            details: %{"event" => event},
            trust: :trusted
@@ -545,7 +545,7 @@ defmodule LemonSim.Examples.MurderMystery.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("#{actor_id} passes on accusation")],
+           content: [LemonAgent.text_content("#{actor_id} passes on accusation")],
            details: %{"event" => event},
            trust: :trusted
          }}

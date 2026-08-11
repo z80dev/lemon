@@ -138,7 +138,7 @@ defmodule LemonGateway.Tools.CronTest do
       })
 
     assert %{error: true} = result.details
-    assert AgentCore.get_text(result) =~ "prompt is required"
+    assert LemonAgent.get_text(result) =~ "prompt is required"
   end
 
   test "returns an error for unknown actions" do
@@ -146,7 +146,7 @@ defmodule LemonGateway.Tools.CronTest do
     result = call_tool(tool, %{"action" => "wat"})
 
     assert %{error: true} = result.details
-    assert AgentCore.get_text(result) =~ "Unknown action"
+    assert LemonAgent.get_text(result) =~ "Unknown action"
   end
 
   defp call_tool(tool, params) do

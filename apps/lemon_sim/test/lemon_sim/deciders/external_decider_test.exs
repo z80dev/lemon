@@ -3,8 +3,8 @@ defmodule LemonSim.LLM.Deciders.ExternalDeciderTest do
 
   import ExUnit.CaptureIO
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.Context
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.Context
   alias LemonSim.Bench.Artifacts.Verifier
   alias LemonSim.LLM.Deciders.ExternalDecider
 
@@ -265,7 +265,7 @@ defmodule LemonSim.LLM.Deciders.ExternalDeciderTest do
       execute: fn _id, _params, _signal, _on_update ->
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("Balance: $500.00")],
+           content: [LemonAgent.text_content("Balance: $500.00")],
            details: %{"ok" => true},
            trust: :trusted
          }}
@@ -282,7 +282,7 @@ defmodule LemonSim.LLM.Deciders.ExternalDeciderTest do
       execute: fn _id, _params, _signal, _on_update ->
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("Waiting")],
+           content: [LemonAgent.text_content("Waiting")],
            details: %{"event" => %{"kind" => "next_day_waited", "payload" => %{}}},
            trust: :trusted
          }}

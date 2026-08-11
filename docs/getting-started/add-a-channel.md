@@ -16,11 +16,11 @@ agent's event stream.
 
 `MyAgent.Agent.ask/2` blocks and returns the final answer, which is all a script
 needs. A channel wants to show the answer arriving, and to say "running
-word_count…" while a tool works. `AgentCore.subscribe/2` is how:
+word_count…" while a tool works. `LemonAgent.subscribe/2` is how:
 
 ```elixir
-_unsubscribe = AgentCore.subscribe(agent, self())
-:ok = AgentCore.prompt(agent, "hello")
+_unsubscribe = LemonAgent.subscribe(agent, self())
+:ok = LemonAgent.prompt(agent, "hello")
 
 receive do
   {:agent_event, {:message_update, _message, {:text_delta, _index, delta, _partial}}} ->
@@ -34,7 +34,7 @@ receive do
 end
 ```
 
-The full event list is in `AgentCore.Types.agent_event/0`. The ones a channel
+The full event list is in `LemonAgent.Types.agent_event/0`. The ones a channel
 usually cares about are `:message_update` (text arriving), the three
 `:tool_execution_*` events, `:agent_end` and `:error`.
 

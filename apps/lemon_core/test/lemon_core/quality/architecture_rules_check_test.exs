@@ -974,9 +974,9 @@ defmodule LemonCore.Quality.ArchitectureRulesCheckTest do
     try do
       write_file!(
         tmp_dir,
-        "apps/ai/lib/ai/providers/google_vertex.ex",
+        "apps/lemon_ai/lib/lemon_ai/providers/google_vertex.ex",
         """
-        defmodule Ai.Providers.GoogleVertex do
+        defmodule LemonAi.Providers.GoogleVertex do
           def bad do
             System.get_env("GOOGLE_CLOUD_PROJECT")
           end
@@ -988,7 +988,7 @@ defmodule LemonCore.Quality.ArchitectureRulesCheckTest do
 
       assert Enum.any?(report.issues, fn issue ->
                issue.code == :forbidden_provider_direct_env and
-                 issue.path == "apps/ai/lib/ai/providers/google_vertex.ex"
+                 issue.path == "apps/lemon_ai/lib/lemon_ai/providers/google_vertex.ex"
              end)
     after
       File.rm_rf!(tmp_dir)
@@ -1001,9 +1001,9 @@ defmodule LemonCore.Quality.ArchitectureRulesCheckTest do
     try do
       write_file!(
         tmp_dir,
-        "apps/ai/lib/ai/providers/google_vertex.ex",
+        "apps/lemon_ai/lib/lemon_ai/providers/google_vertex.ex",
         """
-        defmodule Ai.Providers.GoogleVertex do
+        defmodule LemonAi.Providers.GoogleVertex do
           def ok do
             System.get_env("GOOGLE_APPLICATION_CREDENTIALS")
           end

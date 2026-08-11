@@ -3,7 +3,7 @@ defmodule CodingAgent.Tools.Task.Async do
 
   require Logger
 
-  alias AgentCore.Types.AgentToolResult
+  alias LemonAgent.Types.AgentToolResult
   alias CodingAgent.BudgetEnforcer
   alias CodingAgent.LaneQueue
   alias CodingAgent.Parallel

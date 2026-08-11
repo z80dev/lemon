@@ -416,8 +416,8 @@ defmodule CodingAgent.Tools.ExecTest do
   describe "execute/4 with abort signal" do
     test "returns cancelled when aborted" do
       tool = Exec.tool("/tmp")
-      signal = AgentCore.AbortSignal.new()
-      AgentCore.AbortSignal.abort(signal)
+      signal = LemonAgent.AbortSignal.new()
+      LemonAgent.AbortSignal.abort(signal)
 
       result = tool.execute.("call_1", %{"command" => "echo hello"}, signal, nil)
 

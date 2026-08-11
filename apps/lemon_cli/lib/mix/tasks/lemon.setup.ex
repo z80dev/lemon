@@ -93,7 +93,7 @@ defmodule Mix.Tasks.Lemon.Setup do
   defp ensure_apps_started! do
     Mix.Task.run("loadpaths")
 
-    [:lemon_core, :ai]
+    [:lemon_core, :lemon_ai]
     |> Enum.each(fn app ->
       case Application.ensure_all_started(app) do
         {:ok, _} -> :ok

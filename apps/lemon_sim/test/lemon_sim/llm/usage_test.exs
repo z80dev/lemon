@@ -1,7 +1,7 @@
 defmodule LemonSim.LLM.UsageTest do
   use ExUnit.Case, async: true
 
-  alias Ai.Types.{Model, ModelCost, Usage}
+  alias LemonAi.Types.{Model, ModelCost, Usage}
   alias LemonSim.LLM.Usage, as: SimUsage
 
   test "aggregates tokens, decisions, actors, and priced cost" do

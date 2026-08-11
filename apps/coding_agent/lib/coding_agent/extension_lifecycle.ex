@@ -12,7 +12,7 @@ defmodule CodingAgent.ExtensionLifecycle do
   - extension status report construction
   """
 
-  alias AgentCore.Types.AgentTool
+  alias LemonAgent.Types.AgentTool
   alias CodingAgent.Config
   alias CodingAgent.Extensions
   alias CodingAgent.ToolExecutor

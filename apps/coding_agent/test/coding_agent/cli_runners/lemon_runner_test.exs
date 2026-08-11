@@ -7,10 +7,10 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
   alias CodingAgent.Session.Presentation
   alias CodingAgent.Session.RunTranslator
 
-  alias AgentCore.Test.Mocks
-  alias AgentCore.Types.AgentToolResult
+  alias LemonAgent.Test.Mocks
+  alias LemonAgent.Types.AgentToolResult
 
-  alias AgentCore.CliRunners.Types.{
+  alias LemonAgent.CliRunners.Types.{
     Action,
     ActionEvent,
     CompletedEvent,
@@ -19,8 +19,17 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
     StartedEvent
   }
 
-  alias AgentCore.EventStream
-  alias Ai.Types.{AssistantMessage, Cost, Model, ModelCost, TextContent, ThinkingContent, Usage}
+  alias LemonAgent.EventStream
+
+  alias LemonAi.Types.{
+    AssistantMessage,
+    Cost,
+    Model,
+    ModelCost,
+    TextContent,
+    ThinkingContent,
+    Usage
+  }
 
   defmodule TranslatorFakeEmitter do
     @behaviour CodingAgent.Session.RunTranslator.Emitter
@@ -81,21 +90,21 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
 
   defp mock_stream_fn_single_delayed(response, delay_ms) do
     fn _model, _context, _options ->
-      {:ok, stream} = Ai.EventStream.start_link()
+      {:ok, stream} = LemonAi.EventStream.start_link()
 
       Task.start(fn ->
-        Ai.EventStream.push(stream, {:start, response})
-        Ai.EventStream.push(stream, {:text_start, 0, response})
+        LemonAi.EventStream.push(stream, {:start, response})
+        LemonAi.EventStream.push(stream, {:text_start, 0, response})
 
-        Ai.EventStream.push(
+        LemonAi.EventStream.push(
           stream,
           {:text_delta, 0, CodingAgent.Messages.get_text(response), response}
         )
 
-        Ai.EventStream.push(stream, {:text_end, 0, response})
+        LemonAi.EventStream.push(stream, {:text_end, 0, response})
         Process.sleep(delay_ms)
-        Ai.EventStream.push(stream, {:done, response.stop_reason, response})
-        Ai.EventStream.complete(stream, response)
+        LemonAi.EventStream.push(stream, {:done, response.stop_reason, response})
+        LemonAi.EventStream.complete(stream, response)
       end)
 
       {:ok, stream}
@@ -948,7 +957,7 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
   end
 
   describe "text delta extraction from message updates" do
-    alias Ai.Types.{AssistantMessage, TextContent, ThinkingContent, ToolCall}
+    alias LemonAi.Types.{AssistantMessage, TextContent, ThinkingContent, ToolCall}
 
     test "uses explicit text_delta tuple when present" do
       msg = %AssistantMessage{content: [%TextContent{text: "hello"}]}
@@ -1186,8 +1195,8 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
     end
 
     test "AgentToolResult results are rendered as plain text" do
-      result = %AgentCore.Types.AgentToolResult{
-        content: [%Ai.Types.TextContent{type: :text, text: "ok"}],
+      result = %LemonAgent.Types.AgentToolResult{
+        content: [%LemonAi.Types.TextContent{type: :text, text: "ok"}],
         details: nil
       }
 

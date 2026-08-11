@@ -409,7 +409,7 @@ mix test apps/lemon_mcp/test/lemon_mcp/server/handler_test.exs
 ```elixir
 defmodule MyFakeTool do
   def tool(_cwd, _opts) do
-    %AgentCore.Types.AgentTool{
+    %LemonAgent.Types.AgentTool{
       name: "my_tool",
       description: "...",
       parameters: [],
@@ -482,5 +482,5 @@ end
 ## How This App Connects to Other Umbrella Apps
 
 - **`coding_agent`** (dependency): `ToolAdapter` maps `CodingAgent.Tools.*` module names to MCP tool definitions. All `@builtin_tools` entries reference `CodingAgent.Tools` modules.
-- **`agent_core`** (dependency): `AgentCore.Types.AgentToolResult` and `AgentCore.Types.AgentTool` are used by `ToolAdapter` for result conversion.
+- **`agent_core`** (dependency): `LemonAgent.Types.AgentToolResult` and `LemonAgent.Types.AgentTool` are used by `ToolAdapter` for result conversion.
 - **Consumers**: Any app wanting to expose Lemon tools over MCP or consume external MCP servers depends on `{:lemon_mcp, in_umbrella: true}` and calls `LemonMCP.Client.start_link/1`, `LemonMCP.Client.HTTP.start_link/1`, or `LemonMCP.Transport.HTTP.start_link/1`.

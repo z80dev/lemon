@@ -5,7 +5,7 @@ defmodule LemonSim.Examples.PhilosopherChat.ActionSpace do
 
   import LemonSim.Examples.Helpers
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonSim.Examples.PhilosopherChat.{Events, Persona}
   alias LemonSim.Kernel.State
   alias LemonSim.LLM.Memory.Tools, as: MemoryTools
@@ -76,7 +76,7 @@ defmodule LemonSim.Examples.PhilosopherChat.ActionSpace do
 
             {:ok,
              %AgentToolResult{
-               content: [AgentCore.text_content("You said: #{message}")],
+               content: [LemonAgent.text_content("You said: #{message}")],
                details: %{"event" => Events.message_posted(actor_id, message)},
                trust: :trusted
              }}

@@ -3,7 +3,7 @@ defmodule LemonSim.Examples.Poker do
   Multi-hand no-limit hold'em example built on LemonSim.
   """
 
-  alias AgentCore.Types.AgentTool
+  alias LemonAgent.Types.AgentTool
   alias LemonCore.Config.Modular
   alias LemonCore.MapHelpers
   alias LemonSim.LLM.Deciders.ToolLoopDecider

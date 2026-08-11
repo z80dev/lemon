@@ -1,7 +1,7 @@
 defmodule LemonCore.Events.GoalChanged do
   @moduledoc """
   A durable goal's lifecycle changed. Published on `goals` and `session:<session_key>` by
-  `AgentCore.Workspace.GoalStore`; the specific transition is the `LemonCore.Event` type
+  `LemonAgent.Workspace.GoalStore`; the specific transition is the `LemonCore.Event` type
   (`:goal_set`, `:goal_paused`, `:goal_resumed`, `:goal_completed`, `:goal_cleared`,
   `:goal_continuation_submitted`, `:goal_loop_verdict`, `:goal_loop_status`).
   """

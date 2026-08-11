@@ -4,9 +4,9 @@ defmodule CodingAgent.Tools.ParentQuestion do
   subagents.
   """
 
-  alias AgentCore.AbortSignal
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.TextContent
+  alias LemonAgent.AbortSignal
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.TextContent
   alias CodingAgent.ParentQuestions
 
   @spec tool(String.t(), keyword()) :: AgentTool.t()

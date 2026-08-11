@@ -1,7 +1,7 @@
 import Config
 
-# Which model the agent runs. `Ai.Models` knows several hundred across roughly
-# twenty providers; `Ai.Models.get_model_ids(:anthropic)` lists one provider's.
+# Which model the agent runs. `LemonAi.Models` knows several hundred across roughly
+# twenty providers; `LemonAi.Models.get_model_ids(:anthropic)` lists one provider's.
 config :<%= @app %>,
   provider: :anthropic,
   model: "claude-sonnet-4-5"

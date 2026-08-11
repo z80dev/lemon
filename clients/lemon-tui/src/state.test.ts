@@ -194,9 +194,9 @@ describe('StateStore', () => {
   describe('usage normalization', () => {
     it('should normalize usage with Lemon wire format fields', () => {
       const message: AssistantMessage = {
-        __struct__: 'Elixir.Ai.Types.AssistantMessage',
+        __struct__: 'Elixir.LemonAi.Types.AssistantMessage',
         role: 'assistant',
-        content: [{ __struct__: 'Elixir.Ai.Types.TextContent', type: 'text', text: 'Hello' }],
+        content: [{ __struct__: 'Elixir.LemonAi.Types.TextContent', type: 'text', text: 'Hello' }],
         provider: 'anthropic',
         model: 'claude-3',
         api: 'messages',
@@ -244,7 +244,7 @@ describe('StateStore', () => {
 
     it('should handle missing usage gracefully', () => {
       const message: AssistantMessage = {
-        __struct__: 'Elixir.Ai.Types.AssistantMessage',
+        __struct__: 'Elixir.LemonAi.Types.AssistantMessage',
         role: 'assistant',
         content: [],
         provider: 'anthropic',
@@ -273,11 +273,11 @@ describe('StateStore', () => {
   describe('tool result trust handling', () => {
     it('uses top-level trust when present', () => {
       const message: ToolResultMessage = {
-        __struct__: 'Elixir.Ai.Types.ToolResultMessage',
+        __struct__: 'Elixir.LemonAi.Types.ToolResultMessage',
         role: 'tool_result',
         tool_call_id: 'tool-123',
         tool_name: 'web_fetch',
-        content: [{ __struct__: 'Elixir.Ai.Types.TextContent', type: 'text', text: 'ok' }],
+        content: [{ __struct__: 'Elixir.LemonAi.Types.TextContent', type: 'text', text: 'ok' }],
         trust: 'untrusted',
         trust_metadata: {
           trusted: true,
@@ -306,11 +306,11 @@ describe('StateStore', () => {
 
     it('falls back to trust metadata when trust is missing', () => {
       const message: ToolResultMessage = {
-        __struct__: 'Elixir.Ai.Types.ToolResultMessage',
+        __struct__: 'Elixir.LemonAi.Types.ToolResultMessage',
         role: 'tool_result',
         tool_call_id: 'tool-234',
         tool_name: 'web_fetch',
-        content: [{ __struct__: 'Elixir.Ai.Types.TextContent', type: 'text', text: 'ok' }],
+        content: [{ __struct__: 'Elixir.LemonAi.Types.TextContent', type: 'text', text: 'ok' }],
         trust_metadata: {
           untrusted: true,
         },
@@ -333,11 +333,11 @@ describe('StateStore', () => {
 
     it('defaults to trusted when trust and metadata are missing', () => {
       const message: ToolResultMessage = {
-        __struct__: 'Elixir.Ai.Types.ToolResultMessage',
+        __struct__: 'Elixir.LemonAi.Types.ToolResultMessage',
         role: 'tool_result',
         tool_call_id: 'tool-456',
         tool_name: 'read',
-        content: [{ __struct__: 'Elixir.Ai.Types.TextContent', type: 'text', text: 'ok' }],
+        content: [{ __struct__: 'Elixir.LemonAi.Types.TextContent', type: 'text', text: 'ok' }],
         is_error: false,
         timestamp: Date.now(),
       };
@@ -735,7 +735,7 @@ describe('StateStore', () => {
       store.handleEvent({
         type: 'message_end',
         data: [{
-          __struct__: 'Elixir.Ai.Types.AssistantMessage',
+          __struct__: 'Elixir.LemonAi.Types.AssistantMessage',
           role: 'assistant',
           content: [],
           provider: 'anthropic',
@@ -787,7 +787,7 @@ describe('StateStore', () => {
   describe('cumulative usage', () => {
     it('should accumulate usage across multiple messages', () => {
       const createMessage = (usage: { input: number; output: number; cost?: { total: number } }): AssistantMessage => ({
-        __struct__: 'Elixir.Ai.Types.AssistantMessage',
+        __struct__: 'Elixir.LemonAi.Types.AssistantMessage',
         role: 'assistant',
         content: [],
         provider: 'anthropic',
@@ -826,7 +826,7 @@ describe('StateStore', () => {
       store.handleEvent({
         type: 'message_end',
         data: [{
-          __struct__: 'Elixir.Ai.Types.AssistantMessage',
+          __struct__: 'Elixir.LemonAi.Types.AssistantMessage',
           role: 'assistant',
           content: [],
           provider: 'anthropic',

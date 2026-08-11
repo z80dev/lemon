@@ -3,7 +3,7 @@ defmodule CodingAgent.BashExecutorTest do
 
   alias CodingAgent.BashExecutor
   alias CodingAgent.BashExecutor.Result
-  alias AgentCore.AbortSignal
+  alias LemonAgent.AbortSignal
 
   describe "execute/3" do
     test "executes simple command and returns Result struct" do

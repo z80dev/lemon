@@ -23,8 +23,8 @@ defmodule CodingAgent.ToolExecutor do
   - `:timeout_ms` - Approval timeout in milliseconds (optional; default: no timeout)
   """
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.TextContent
   alias CodingAgent.ToolPolicy
 
   require Logger

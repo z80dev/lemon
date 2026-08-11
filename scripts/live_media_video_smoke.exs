@@ -151,7 +151,7 @@ defmodule LemonScripts.LiveMediaVideoSmoke do
     }
 
     case tool.execute.("live-media-video-local-smoke", params, nil, nil) do
-      %AgentCore.Types.AgentToolResult{details: details} ->
+      %LemonAgent.Types.AgentToolResult{details: details} ->
         artifact = details["artifact"] || %{}
         artifact_path = artifact["path"]
 
@@ -229,7 +229,7 @@ defmodule LemonScripts.LiveMediaVideoSmoke do
     }
 
     case tool.execute.("live-media-video-smoke", params, nil, nil) do
-      %AgentCore.Types.AgentToolResult{details: details} ->
+      %LemonAgent.Types.AgentToolResult{details: details} ->
         artifact = details["artifact"] || %{}
         artifact_path = artifact["path"]
 
@@ -391,7 +391,7 @@ defmodule LemonScripts.LiveMediaVideoSmoke do
       opts[:api_key_secret]
       |> case do
         value when is_binary(value) and value != "" ->
-          AgentCore.ModelRuntime.Credentials.resolve_secret_api_key(value)
+          LemonAgent.ModelRuntime.Credentials.resolve_secret_api_key(value)
 
         _ ->
           nil
@@ -405,11 +405,11 @@ defmodule LemonScripts.LiveMediaVideoSmoke do
        do: true
 
   defp credential_available?(_api_key, providers, project_dir, @provider) do
-    AgentCore.ModelRuntime.Credentials.provider_has_credentials?(:openai, providers, cwd: project_dir)
+    LemonAgent.ModelRuntime.Credentials.provider_has_credentials?(:openai, providers, cwd: project_dir)
   end
 
   defp credential_available?(_api_key, providers, project_dir, @vertex_provider) do
-    AgentCore.ModelRuntime.Credentials.provider_has_credentials?(:google_vertex, providers, cwd: project_dir)
+    LemonAgent.ModelRuntime.Credentials.provider_has_credentials?(:google_vertex, providers, cwd: project_dir)
   end
 
   defp credential_available?(_api_key, _providers, _project_dir, _provider), do: false

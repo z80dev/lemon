@@ -1,7 +1,7 @@
 defmodule CodingAgent.Tools.LspDiagnosticsTest do
   use ExUnit.Case, async: true
 
-  alias AgentCore.Types.AgentToolResult
+  alias LemonAgent.Types.AgentToolResult
   alias CodingAgent.Tools.LspDiagnostics
 
   @moduletag :tmp_dir

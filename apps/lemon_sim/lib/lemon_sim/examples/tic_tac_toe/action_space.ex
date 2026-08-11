@@ -3,7 +3,7 @@ defmodule LemonSim.Examples.TicTacToe.ActionSpace do
 
   @behaviour LemonSim.Kernel.ActionSpace
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonCore.MapHelpers
   alias LemonSim.Examples.TicTacToe.Events
 
@@ -39,7 +39,7 @@ defmodule LemonSim.Examples.TicTacToe.ActionSpace do
         {:ok,
          %AgentToolResult{
            content: [
-             AgentCore.text_content("proposed #{player} at (#{inspect(row)}, #{inspect(col)})")
+             LemonAgent.text_content("proposed #{player} at (#{inspect(row)}, #{inspect(col)})")
            ],
            details: %{"event" => event},
            trust: :trusted

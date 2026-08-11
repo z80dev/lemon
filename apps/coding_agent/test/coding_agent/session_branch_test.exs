@@ -16,7 +16,7 @@ defmodule CodingAgent.SessionBranchTest do
   alias CodingAgent.SessionManager
   alias CodingAgent.SessionManager.{SessionEntry}
 
-  alias Ai.Types.{
+  alias LemonAi.Types.{
     AssistantMessage,
     TextContent,
     ToolCall,
@@ -73,31 +73,31 @@ defmodule CodingAgent.SessionBranchTest do
   end
 
   defp response_to_event_stream(response) do
-    {:ok, stream} = Ai.EventStream.start_link()
+    {:ok, stream} = LemonAi.EventStream.start_link()
 
     Task.start(fn ->
-      Ai.EventStream.push(stream, {:start, response})
+      LemonAi.EventStream.push(stream, {:start, response})
 
       response.content
       |> Enum.with_index()
       |> Enum.each(fn {content, idx} ->
         case content do
           %TextContent{text: text} ->
-            Ai.EventStream.push(stream, {:text_start, idx, response})
-            Ai.EventStream.push(stream, {:text_delta, idx, text, response})
-            Ai.EventStream.push(stream, {:text_end, idx, response})
+            LemonAi.EventStream.push(stream, {:text_start, idx, response})
+            LemonAi.EventStream.push(stream, {:text_delta, idx, text, response})
+            LemonAi.EventStream.push(stream, {:text_end, idx, response})
 
           %ToolCall{} = tool_call ->
-            Ai.EventStream.push(stream, {:tool_call_start, idx, tool_call, response})
-            Ai.EventStream.push(stream, {:tool_call_end, idx, tool_call, response})
+            LemonAi.EventStream.push(stream, {:tool_call_start, idx, tool_call, response})
+            LemonAi.EventStream.push(stream, {:tool_call_end, idx, tool_call, response})
 
           _ ->
             :ok
         end
       end)
 
-      Ai.EventStream.push(stream, {:done, response.stop_reason, response})
-      Ai.EventStream.complete(stream, response)
+      LemonAi.EventStream.push(stream, {:done, response.stop_reason, response})
+      LemonAi.EventStream.complete(stream, response)
     end)
 
     stream
@@ -785,11 +785,11 @@ defmodule CodingAgent.SessionBranchTest do
         :counters.add(error_after_count, 1, 1)
 
         if count < 2 do
-          {:ok, stream} = Ai.EventStream.start_link()
+          {:ok, stream} = LemonAi.EventStream.start_link()
 
           Task.start(fn ->
-            Ai.EventStream.push(stream, {:error, "Simulated error", %{}})
-            Ai.EventStream.complete(stream, %{})
+            LemonAi.EventStream.push(stream, {:error, "Simulated error", %{}})
+            LemonAi.EventStream.complete(stream, %{})
           end)
 
           {:ok, stream}

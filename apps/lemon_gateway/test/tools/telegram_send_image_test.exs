@@ -19,7 +19,7 @@ defmodule LemonGateway.Tools.TelegramSendImageTest do
         nil
       )
 
-    assert AgentCore.get_text(result) =~ "Queued image for Telegram delivery"
+    assert LemonAgent.get_text(result) =~ "Queued image for Telegram delivery"
 
     assert %{auto_send_files: [file]} = result.details
     assert file.path == image_path
@@ -41,7 +41,7 @@ defmodule LemonGateway.Tools.TelegramSendImageTest do
         nil
       )
 
-    assert AgentCore.get_text(result) =~ "only available for Telegram channel sessions"
+    assert LemonAgent.get_text(result) =~ "only available for Telegram channel sessions"
     assert %{error: true} = result.details
   end
 

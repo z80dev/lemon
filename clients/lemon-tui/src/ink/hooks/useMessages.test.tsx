@@ -34,7 +34,7 @@ describe('useMessages', () => {
         type: 'message_start',
         data: [
           {
-            __struct__: 'Elixir.Ai.Types.UserMessage',
+            __struct__: 'Elixir.LemonAi.Types.UserMessage',
             role: 'user',
             content: 'hello',
             timestamp: Date.now(),

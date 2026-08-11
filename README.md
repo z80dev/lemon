@@ -14,7 +14,7 @@ plus a batteries-included reference runtime that wires them together.
 Concretely, the tree contains:
 
 - **Agent runtime** — agent loop, tool registry, subagents, model runtime,
-  and workspace stores (`apps/agent_core`).
+  and workspace stores (`apps/lemon_agent`).
 - **Channels** — Telegram, Discord, WhatsApp and XMTP adapters behind one
   `LemonChannels.Plugin` behaviour, plus outbox/dispatcher/presentation
   ([`plugin.ex`](apps/lemon_channels/lib/lemon_channels/plugin.ex)). Email is
@@ -27,7 +27,7 @@ Concretely, the tree contains:
   delivery routing (`apps/lemon_router`).
 - **Providers** — a provider-agnostic LLM client with rate limiting, circuit
   breaking, compaction and token accounting, with zero umbrella dependencies
-  (`apps/ai`).
+  (`apps/lemon_ai`).
 - **Memory** — document schema, SQLite-backed store, a `Provider` behaviour
   with a fan-out registry, ingest pipeline and session search
   (`apps/lemon_memory`).
@@ -317,7 +317,7 @@ Every app has its own README; these are the ones worth reading first.
 
 | Layer | Apps |
 | --- | --- |
-| Platform | [`ai`](apps/ai/README.md), [`lemon_core`](apps/lemon_core/README.md), [`agent_core`](apps/agent_core/README.md), `lemon_memory`, [`lemon_router`](apps/lemon_router/README.md), [`lemon_gateway`](apps/lemon_gateway/README.md), [`lemon_channels`](apps/lemon_channels/README.md), [`lemon_platform_test`](apps/lemon_platform_test/README.md) |
+| Platform | [`ai`](apps/lemon_ai/README.md), [`lemon_core`](apps/lemon_core/README.md), [`agent_core`](apps/lemon_agent/README.md), `lemon_memory`, [`lemon_router`](apps/lemon_router/README.md), [`lemon_gateway`](apps/lemon_gateway/README.md), [`lemon_channels`](apps/lemon_channels/README.md), [`lemon_platform_test`](apps/lemon_platform_test/README.md) |
 | Reference runtime | [`lemon_control_plane`](apps/lemon_control_plane/README.md), [`lemon_cli`](apps/lemon_cli/README.md), [`lemon_web`](apps/lemon_web/README.md), [`lemon_automation`](apps/lemon_automation/README.md), [`lemon_skills`](apps/lemon_skills/README.md), [`lemon_browser`](apps/lemon_browser/README.md), [`lemon_lsp`](apps/lemon_lsp/README.md) |
 | Products | [`coding_agent`](apps/coding_agent/README.md), [`coding_agent_ui`](apps/coding_agent_ui/README.md), [`lemon_mcp`](apps/lemon_mcp/README.md), [`lemon_evals`](apps/lemon_evals/README.md), [`lemon_sim`](apps/lemon_sim/README.md), [`lemon_sim_ui`](apps/lemon_sim_ui/README.md), [`lemon_tcg`](apps/lemon_tcg/README.md) |
 | Satellite | [`x_api`](apps/x_api/README.md) |

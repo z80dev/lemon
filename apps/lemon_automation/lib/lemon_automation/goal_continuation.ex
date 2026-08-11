@@ -1,7 +1,7 @@
 defmodule LemonAutomation.GoalContinuation do
   @moduledoc false
 
-  alias AgentCore.Workspace.GoalStore
+  alias LemonAgent.Workspace.GoalStore
 
   @spec continue_once(binary(), keyword()) ::
           {:ok, map()} | {:error, :not_found | :paused | :completed | :budget_exhausted | term()}

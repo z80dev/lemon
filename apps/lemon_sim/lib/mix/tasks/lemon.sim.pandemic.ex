@@ -90,12 +90,12 @@ defmodule Mix.Tasks.Lemon.Sim.Pandemic do
         provider
         |> normalize_provider()
         |> then(fn provider_atom ->
-          Ai.Models.get_model(provider_atom, model_id) ||
+          LemonAi.Models.get_model(provider_atom, model_id) ||
             Mix.raise("unknown model #{inspect(model_id)} for provider #{inspect(provider)}")
         end)
 
       [_model_id] ->
-        Ai.Models.find_by_id(trimmed) || Mix.raise("unknown model #{inspect(trimmed)}")
+        LemonAi.Models.find_by_id(trimmed) || Mix.raise("unknown model #{inspect(trimmed)}")
     end
   end
 

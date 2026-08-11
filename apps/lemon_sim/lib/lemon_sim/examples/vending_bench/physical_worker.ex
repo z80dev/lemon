@@ -2,15 +2,15 @@ defmodule LemonSim.Examples.VendingBench.PhysicalWorker do
   @moduledoc """
   Supervised nested-agent runtime for the physical worker.
 
-  The worker runs as a real `AgentCore` child under `AgentCore.SubagentSupervisor`
+  The worker runs as a real `LemonAgent` child under `LemonAgent.SubagentSupervisor`
   with its own tool loop, memory namespace, and model options. The worker only
   mutates a local visit snapshot; authoritative sim state is still updated later
   by the Vending Bench updater from emitted events.
   """
 
-  alias AgentCore.SubagentSupervisor
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.StreamOptions
+  alias LemonAgent.SubagentSupervisor
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.StreamOptions
   alias LemonSim.Examples.VendingBench.Events
   alias LemonSim.LLM.Memory.Tools, as: MemoryTools
 
@@ -47,15 +47,15 @@ defmodule LemonSim.Examples.VendingBench.PhysicalWorker do
         {:ok, agent} ->
           try do
             with {:ok, collector} <- start_collector(agent) do
-              unsubscribe = AgentCore.subscribe(agent, collector)
+              unsubscribe = LemonAgent.subscribe(agent, collector)
 
               try do
                 with :ok <-
-                       AgentCore.prompt(
+                       LemonAgent.prompt(
                          agent,
                          "Begin the visit. Use tools as needed and call finish_visit when all assigned work is complete."
                        ),
-                     :ok <- AgentCore.wait_for_idle(agent, timeout: timeout_ms) do
+                     :ok <- LemonAgent.wait_for_idle(agent, timeout: timeout_ms) do
                   safe_unsubscribe(unsubscribe)
 
                   case flush_collector(collector) do
@@ -266,7 +266,7 @@ defmodule LemonSim.Examples.VendingBench.PhysicalWorker do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content(text)],
+           content: [LemonAgent.text_content(text)],
            details: %{
              "event" =>
                Events.machine_inventory_checked(%{
@@ -336,7 +336,7 @@ defmodule LemonSim.Examples.VendingBench.PhysicalWorker do
             {:ok,
              %AgentToolResult{
                content: [
-                 AgentCore.text_content(
+                 LemonAgent.text_content(
                    "Discarded #{quantity} expired units of #{item_id} from storage"
                  )
                ],
@@ -378,7 +378,7 @@ defmodule LemonSim.Examples.VendingBench.PhysicalWorker do
         else
           {:ok,
            %AgentToolResult{
-             content: [AgentCore.text_content("Reported #{severity} fault: #{description}")],
+             content: [LemonAgent.text_content("Reported #{severity} fault: #{description}")],
              details: %{
                "event" =>
                  Events.machine_fault_reported(description, severity, snapshot.day_number)
@@ -463,7 +463,9 @@ defmodule LemonSim.Examples.VendingBench.PhysicalWorker do
             {:ok,
              %AgentToolResult{
                content: [
-                 AgentCore.text_content("Stocked #{quantity} units of #{item_id} into #{slot_id}")
+                 LemonAgent.text_content(
+                   "Stocked #{quantity} units of #{item_id} into #{slot_id}"
+                 )
                ],
                details: %{
                  "event" => Events.machine_stocked(slot_id, item_id, quantity, quantity)
@@ -498,7 +500,7 @@ defmodule LemonSim.Examples.VendingBench.PhysicalWorker do
           {:ok,
            %AgentToolResult{
              content: [
-               AgentCore.text_content("Collected $#{format_price(cash)} from the machine")
+               LemonAgent.text_content("Collected $#{format_price(cash)} from the machine")
              ],
              details: %{"event" => Events.cash_collected(cash)},
              trust: :trusted
@@ -549,7 +551,9 @@ defmodule LemonSim.Examples.VendingBench.PhysicalWorker do
             {:ok,
              %AgentToolResult{
                content: [
-                 AgentCore.text_content("Set price for #{slot_id} to $#{format_price(new_price)}")
+                 LemonAgent.text_content(
+                   "Set price for #{slot_id} to $#{format_price(new_price)}"
+                 )
                ],
                details: %{"event" => Events.price_set(slot_id, new_price, old_price)},
                trust: :trusted
@@ -577,7 +581,7 @@ defmodule LemonSim.Examples.VendingBench.PhysicalWorker do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("Visit complete: #{summary}")],
+           content: [LemonAgent.text_content("Visit complete: #{summary}")],
            details: %{"event" => Events.physical_worker_finished(summary, [])},
            trust: :trusted
          }}
@@ -588,7 +592,7 @@ defmodule LemonSim.Examples.VendingBench.PhysicalWorker do
   defp rejected_result(actor_id, reason) do
     {:ok,
      %AgentToolResult{
-       content: [AgentCore.text_content("Error: #{reason}")],
+       content: [LemonAgent.text_content("Error: #{reason}")],
        details: %{"event" => Events.action_rejected(actor_id, reason)},
        trust: :trusted
      }}
@@ -632,7 +636,7 @@ defmodule LemonSim.Examples.VendingBench.PhysicalWorker do
         turn_count = state.turn_count + 1
 
         if turn_count >= @worker_max_turns do
-          AgentCore.abort(agent)
+          LemonAgent.abort(agent)
         end
 
         collector_loop(agent, %{state | turn_count: turn_count})
@@ -788,7 +792,7 @@ defmodule LemonSim.Examples.VendingBench.PhysicalWorker do
       actions =
         tool_results
         |> Enum.map(fn %{tool_name: name, result: result} ->
-          text = AgentCore.get_text(result) |> String.trim()
+          text = LemonAgent.get_text(result) |> String.trim()
 
           if text == "" do
             nil
@@ -811,7 +815,7 @@ defmodule LemonSim.Examples.VendingBench.PhysicalWorker do
     Enum.map(tool_results, fn %{tool_name: name, result: result, is_error: is_error} ->
       %{
         tool_name: name,
-        result_text: AgentCore.get_text(result),
+        result_text: LemonAgent.get_text(result),
         result_details: Map.get(result, :details),
         is_error: is_error
       }

@@ -18,7 +18,7 @@ all exercised for real while the network is not.
 
 The provider and model come from `config/config.exs`, or from
 `<%= String.upcase(@app) %>_PROVIDER` and `<%= String.upcase(@app) %>_MODEL` at
-runtime. Any provider `Ai.Models` knows about will do; each reads its own key
+runtime. Any provider `LemonAi.Models` knows about will do; each reads its own key
 from the environment.
 
 ## Layout

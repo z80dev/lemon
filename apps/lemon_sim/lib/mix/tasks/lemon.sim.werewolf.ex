@@ -144,7 +144,7 @@ defmodule Mix.Tasks.Lemon.Sim.Werewolf do
 
   defp resolve_model!(model_spec, config) do
     case SimConfig.resolve_model_spec(nil, model_spec) do
-      %Ai.Types.Model{} = model -> SimConfig.apply_provider_base_url(model, config)
+      %LemonAi.Types.Model{} = model -> SimConfig.apply_provider_base_url(model, config)
       nil -> Mix.raise("unknown model #{inspect(model_spec)}")
     end
   end

@@ -1,8 +1,8 @@
 defmodule CodingAgent.Tools.BrowserTest do
   use ExUnit.Case, async: false
 
-  alias AgentCore.Types.AgentToolResult
-  alias Ai.Types.ImageContent
+  alias LemonAgent.Types.AgentToolResult
+  alias LemonAi.Types.ImageContent
   alias CodingAgent.Tools
   alias LemonBrowser.LocalServer
 

@@ -1,13 +1,13 @@
 defmodule CodingAgent.WasmToolTest do
   use ExUnit.Case, async: false
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias CodingAgent.ToolRegistry
   alias CodingAgent.Wasm.Config, as: WasmConfig
   alias CodingAgent.Wasm.SidecarSession
   alias CodingAgent.Wasm.ToolFactory
 
-  alias Ai.Types.TextContent
+  alias LemonAi.Types.TextContent
 
   @moduletag :tmp_dir
 

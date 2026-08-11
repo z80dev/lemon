@@ -21,7 +21,7 @@ afterEach(() => {
 
 function createUserMessage(content: string | ContentBlock[]): Message {
   return {
-    __struct__: 'Elixir.Ai.Types.UserMessage',
+    __struct__: 'Elixir.LemonAi.Types.UserMessage',
     role: 'user',
     content,
     timestamp: Date.now(),
@@ -30,7 +30,7 @@ function createUserMessage(content: string | ContentBlock[]): Message {
 
 function createAssistantMessage(content: ContentBlock[]): Message {
   return {
-    __struct__: 'Elixir.Ai.Types.AssistantMessage',
+    __struct__: 'Elixir.LemonAi.Types.AssistantMessage',
     role: 'assistant',
     content,
     provider: 'test',
@@ -45,7 +45,7 @@ function createAssistantMessage(content: ContentBlock[]): Message {
 
 function createTextContent(text: string): TextContent {
   return {
-    __struct__: 'Elixir.Ai.Types.TextContent',
+    __struct__: 'Elixir.LemonAi.Types.TextContent',
     type: 'text',
     text,
   };
@@ -53,7 +53,7 @@ function createTextContent(text: string): TextContent {
 
 function createThinkingContent(thinking: string): ThinkingContent {
   return {
-    __struct__: 'Elixir.Ai.Types.ThinkingContent',
+    __struct__: 'Elixir.LemonAi.Types.ThinkingContent',
     type: 'thinking',
     thinking,
   };
@@ -65,7 +65,7 @@ function createToolCall(
   id = 'tool-call-1'
 ): ToolCall {
   return {
-    __struct__: 'Elixir.Ai.Types.ToolCall',
+    __struct__: 'Elixir.LemonAi.Types.ToolCall',
     type: 'tool_call',
     id,
     name,
@@ -78,7 +78,7 @@ function createImageContent(
   mimeType = 'image/png'
 ): ImageContent {
   return {
-    __struct__: 'Elixir.Ai.Types.ImageContent',
+    __struct__: 'Elixir.LemonAi.Types.ImageContent',
     type: 'image',
     data,
     mime_type: mimeType,
@@ -111,7 +111,7 @@ describe('ContentBlockRenderer', () => {
   describe('unsupported content', () => {
     it('renders unsupported message for non-string non-array content', () => {
       const message = {
-        __struct__: 'Elixir.Ai.Types.UserMessage',
+        __struct__: 'Elixir.LemonAi.Types.UserMessage',
         role: 'user' as const,
         content: 12345 as unknown as string,
         timestamp: Date.now(),

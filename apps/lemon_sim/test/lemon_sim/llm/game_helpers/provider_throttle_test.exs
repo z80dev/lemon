@@ -1,7 +1,7 @@
 defmodule LemonSim.LLM.GameHelpers.ProviderThrottleTest do
   use ExUnit.Case, async: true
 
-  alias Ai.Types.{AssistantMessage, Context, Model}
+  alias LemonAi.Types.{AssistantMessage, Context, Model}
   alias LemonSim.LLM.GameHelpers.ProviderThrottle
 
   test "applies a default per-provider interval when none is configured" do
@@ -135,7 +135,7 @@ defmodule LemonSim.LLM.GameHelpers.ProviderThrottleTest do
       base_url: "https://example.invalid",
       reasoning: false,
       input: [:text],
-      cost: %Ai.Types.ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
+      cost: %LemonAi.Types.ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
       context_window: 128_000,
       max_tokens: 4_096,
       headers: %{},

@@ -1,7 +1,7 @@
 defmodule CodingAgent.SessionAutoCompactionAsyncTest do
   use ExUnit.Case, async: true
 
-  alias AgentCore.Test.Mocks
+  alias LemonAgent.Test.Mocks
   alias CodingAgent.Session
   alias CodingAgent.SessionManager
 

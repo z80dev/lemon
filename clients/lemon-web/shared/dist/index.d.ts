@@ -274,7 +274,7 @@ interface SessionErrorEvent {
 }
 type KnownSessionEvent = AgentStartEvent | AgentEndEvent | TurnStartEvent | TurnEndEvent | MessageStartEvent | MessageUpdateEvent | MessageEndEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolExecutionEndEvent | SessionErrorEvent;
 interface UserMessage {
-    __struct__: 'Elixir.Ai.Types.UserMessage';
+    __struct__: 'Elixir.LemonAi.Types.UserMessage';
     role: 'user';
     content: string | ContentBlock[];
     timestamp: number;
@@ -288,7 +288,7 @@ interface UsageCost {
     total?: number;
 }
 interface AssistantMessage {
-    __struct__: 'Elixir.Ai.Types.AssistantMessage';
+    __struct__: 'Elixir.LemonAi.Types.AssistantMessage';
     role: 'assistant';
     content: ContentBlock[];
     provider: string;
@@ -318,7 +318,7 @@ interface ToolResultTrustMetadata {
 }
 type ToolResultTrustLevel = 'trusted' | 'untrusted';
 interface ToolResultMessage {
-    __struct__: 'Elixir.Ai.Types.ToolResultMessage';
+    __struct__: 'Elixir.LemonAi.Types.ToolResultMessage';
     role: 'tool_result';
     tool_call_id: string;
     tool_name: string;
@@ -331,26 +331,26 @@ interface ToolResultMessage {
 }
 type Message = UserMessage | AssistantMessage | ToolResultMessage;
 interface TextContent {
-    __struct__: 'Elixir.Ai.Types.TextContent';
+    __struct__: 'Elixir.LemonAi.Types.TextContent';
     type: 'text';
     text: string;
     text_signature?: string | null;
 }
 interface ThinkingContent {
-    __struct__: 'Elixir.Ai.Types.ThinkingContent';
+    __struct__: 'Elixir.LemonAi.Types.ThinkingContent';
     type: 'thinking';
     thinking: string;
     thinking_signature?: string | null;
 }
 interface ToolCall {
-    __struct__: 'Elixir.Ai.Types.ToolCall';
+    __struct__: 'Elixir.LemonAi.Types.ToolCall';
     type: 'tool_call';
     id: string;
     name: string;
     arguments: Record<string, unknown>;
 }
 interface ImageContent {
-    __struct__: 'Elixir.Ai.Types.ImageContent';
+    __struct__: 'Elixir.LemonAi.Types.ImageContent';
     type: 'image';
     data: string;
     mime_type: string;
@@ -366,7 +366,7 @@ type ContentBlock = TextContent | ThinkingContent | ToolCall | ImageContent;
  */
 type AssistantEvent = unknown[];
 interface ToolResult {
-    __struct__: 'Elixir.AgentCore.Types.AgentToolResult';
+    __struct__: 'Elixir.LemonAgent.Types.AgentToolResult';
     content: ContentBlock[];
     details?: Record<string, unknown>;
     trust?: ToolResultTrustLevel;

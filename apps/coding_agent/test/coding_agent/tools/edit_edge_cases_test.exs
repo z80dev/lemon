@@ -8,8 +8,8 @@ defmodule CodingAgent.Tools.EditEdgeCasesTest do
   use ExUnit.Case, async: true
 
   alias CodingAgent.Tools.Edit
-  alias AgentCore.Types.AgentToolResult
-  alias AgentCore.AbortSignal
+  alias LemonAgent.Types.AgentToolResult
+  alias LemonAgent.AbortSignal
 
   @moduletag :tmp_dir
 

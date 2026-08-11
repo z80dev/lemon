@@ -6,9 +6,9 @@ defmodule CodingAgent.Tools.Bash do
   cancellation via abort signals.
   """
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias AgentCore.AbortSignal
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.AbortSignal
+  alias LemonAi.Types.TextContent
   alias CodingAgent.BashExecutor
 
   @default_timeout_ms 60_000

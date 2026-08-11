@@ -178,7 +178,7 @@ For Werewolf specifically, the internal actor IDs are villager names (`"Alice"`,
 
 ### Adding a New Model to the Launch Form
 
-Edit `provider_options/0`, `model_options_for_provider/1`, and the default provider/model constants in `SimDashboardLive`. The spec format is `"provider:model_id"` — parsed by `SimManager.parse_model_spec/1` against the registered `Ai.Models` provider list, so canonical names like `openai-codex` and supported aliases like `openai_codex` both resolve.
+Edit `provider_options/0`, `model_options_for_provider/1`, and the default provider/model constants in `SimDashboardLive`. The spec format is `"provider:model_id"` — parsed by `SimManager.parse_model_spec/1` against the registered `LemonAi.Models` provider list, so canonical names like `openai-codex` and supported aliases like `openai_codex` both resolve.
 
 ## Design Boundaries
 

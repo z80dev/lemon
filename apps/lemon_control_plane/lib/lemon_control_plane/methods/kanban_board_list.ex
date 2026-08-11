@@ -18,7 +18,7 @@ defmodule LemonControlPlane.Methods.KanbanBoardList do
     params = params || %{}
 
     boards =
-      AgentCore.Workspace.KanbanStore.list_boards(
+      LemonAgent.Workspace.KanbanStore.list_boards(
         status: KanbanFormat.param(params, "status"),
         owner: KanbanFormat.param(params, "owner"),
         workspace: KanbanFormat.param(params, "workspace"),

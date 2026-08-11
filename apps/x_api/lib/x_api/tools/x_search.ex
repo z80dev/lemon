@@ -3,8 +3,8 @@ defmodule XApi.Tools.XSearch do
   Tool for agents to search recent public X posts.
   """
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.TextContent
 
   @doc """
   Returns the X search tool definition.

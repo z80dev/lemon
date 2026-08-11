@@ -242,7 +242,7 @@ defmodule CodingAgent.Session.WasmBridge do
 
   def maybe_handle_reserved_host_target(_tool_name, _params_json), do: :not_reserved
 
-  @spec find_host_tool(map(), String.t()) :: AgentCore.Types.AgentTool.t() | nil
+  @spec find_host_tool(map(), String.t()) :: LemonAgent.Types.AgentTool.t() | nil
   def find_host_tool(state, tool_name) when is_binary(tool_name) do
     Enum.find(state.tools, fn tool ->
       tool.name == tool_name and tool.name not in state.wasm_tool_names
@@ -261,8 +261,8 @@ defmodule CodingAgent.Session.WasmBridge do
 
   def decode_wasm_params(_), do: %{}
 
-  @spec encode_wasm_host_output(AgentCore.Types.AgentToolResult.t()) :: String.t()
-  def encode_wasm_host_output(%AgentCore.Types.AgentToolResult{} = tool_result) do
+  @spec encode_wasm_host_output(LemonAgent.Types.AgentToolResult.t()) :: String.t()
+  def encode_wasm_host_output(%LemonAgent.Types.AgentToolResult{} = tool_result) do
     payload =
       cond do
         is_map(tool_result.details) and map_size(tool_result.details) > 0 ->

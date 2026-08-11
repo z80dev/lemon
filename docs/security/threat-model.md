@@ -26,7 +26,7 @@ cryptographic, network, and boundary machinery those docs assume.
 | Secret storage | Master key holder | Anyone reading the store at rest | AES-256-GCM + per-secret HKDF (`LemonCore.Secrets.Crypto`) |
 | Inbound webhooks | Caller with the shared token | The open internet | `authorized?/1` before body parse, timing-safe token compare, body limit (`LemonChannels.InboundHttp`) |
 | Tool side effects | Human/admin approver | The model's chosen actions | Approval gates (`LemonCore.ExecApprovals`) + tool policy |
-| Model context | System + operator instructions | Email bodies, web content, external agents | Untrusted-content wrapping (`AgentCore.Security.ExternalContent`) |
+| Model context | System + operator instructions | Email bodies, web content, external agents | Untrusted-content wrapping (`LemonAgent.Security.ExternalContent`) |
 | Package graph | Declared dependencies | Undeclared cross-package reach | Empty grandfather allowlist (`LemonCore.Quality.ArchitectureRulesCheck`) |
 | Published tarball | Files you intend to ship | Gitignored local secrets in the tree | `exclude_patterns` in each package's `mix.exs` |
 
@@ -177,7 +177,7 @@ restricted profile.
 
 Content from outside the trust boundary — email bodies, web-search/fetch
 results, other agents' output — is wrapped before it reaches a model, by
-`AgentCore.Security.ExternalContent` (with a `CodingAgent.Security.ExternalContent`
+`LemonAgent.Security.ExternalContent` (with a `CodingAgent.Security.ExternalContent`
 counterpart for tool results).
 
 `wrap_external_content/2` fences the content between explicit

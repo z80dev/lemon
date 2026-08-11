@@ -1,7 +1,7 @@
 defmodule LemonSkills.Tools.MediaTranscribeAudioTest do
   use ExUnit.Case, async: false
 
-  alias AgentCore.Types.AgentToolResult
+  alias LemonAgent.Types.AgentToolResult
   alias LemonSkills.Tools.MediaTranscribeAudio
   alias LemonMedia.MediaJobs
 

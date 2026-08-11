@@ -62,10 +62,10 @@ landscape has recompute-verified scorecards. Lead with that.
     per-run usage/cost in spectator.
   - W-D (after W-A): cross-suite Elo-style model ratings
     (`mix lemon.sim.ratings`), new aggregate artifact.
-- **P2 — Stack dedup** (codex worker): `Ai.Tokens.estimate/1`, `Ai.Text`
+- **P2 — Stack dedup** (codex worker): `LemonAi.Tokens.estimate/1`, `LemonAi.Text`
   truncation primitives; delegate the 5 token-estimate and generic truncation
   copies; point `RateLimitHealer` at `LemonCore.Retry`. Keep
-  `LemonCore.Retry` and `Ai.Providers.RetryHelper` as the two sanctioned
+  `LemonCore.Retry` and `LemonAi.Providers.RetryHelper` as the two sanctioned
   backoff homes (two independent roots), documented.
 - **P3 — Standard-tooling credibility**: Credo (curated config, zero
   violations at adoption), ExDoc for `ai`/`agent_core`/`lemon_sim`,
@@ -77,7 +77,7 @@ landscape has recompute-verified scorecards. Lead with that.
 ## Closed decisions
 
 - Backoff math stays duplicated between `ai` and `lemon_core` (two roots that
-  cannot see each other); classification stays in `Ai.Providers.RetryHelper`.
+  cannot see each other); classification stays in `LemonAi.Providers.RetryHelper`.
 - `docs/plans/` stays in-tree as the decision log (catalog-stamped), not
   deleted; completed plans get `max_age_days: 365`.
 - Dialyzer NOT adopted (evaluated in P3): PLT cost across a 21-app umbrella
@@ -103,7 +103,7 @@ landscape has recompute-verified scorecards. Lead with that.
     would have changed video pacing — narrowed back.
   - W-C: public /leaderboards LiveView + spectator usage panel; hardened
     against shape-broken artifacts, path disclosure, and double disk scans.
-  - W-E: Ai.Tokens + Ai.Text consolidation (5 token-estimate + 6 truncation
+  - W-E: LemonAi.Tokens + LemonAi.Text consolidation (5 token-estimate + 6 truncation
     copies), RateLimitHealer → LemonCore.Retry; zero behavior change verified.
 - P2 wave: W-D cross-suite Bradley-Terry ratings (`mix lemon.sim.ratings`,
   byte-deterministic ratings.json); W-F Credo adoption — 876 violations fixed

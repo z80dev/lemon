@@ -57,13 +57,13 @@ happen behind the scenes (though tool status updates may appear briefly).
 
 The loop is implemented across several modules:
 
-- **`AgentCore.Agent`** — a GenServer that holds conversation state, spawns the
+- **`LemonAgent.Agent`** — a GenServer that holds conversation state, spawns the
   loop task, and fans out events to subscribers
-- **`AgentCore.Loop`** — the stateless recursive loop with an outer loop
+- **`LemonAgent.Loop`** — the stateless recursive loop with an outer loop
   (handles follow-up messages) and an inner loop (handles tool calls)
-- **`AgentCore.Loop.Streaming`** — handles one LLM call: builds the context,
-  calls `Ai.stream/3`, processes the token stream
-- **`AgentCore.Loop.ToolCalls`** — executes all tool calls from one turn in
+- **`LemonAgent.Loop.Streaming`** — handles one LLM call: builds the context,
+  calls `LemonAi.stream/3`, processes the token stream
+- **`LemonAgent.Loop.ToolCalls`** — executes all tool calls from one turn in
   parallel, collects results
 
 ### Parallel Tool Execution
@@ -217,7 +217,7 @@ branching conversations. Entry types include:
 1. **Creation:** When the gateway starts a native Lemon engine run,
    `CodingAgent.Session` initializes: loads/creates the JSONL file, loads
    config, composes the system prompt, starts the WASM sidecar (if any),
-   loads extensions, builds the tool list, starts `AgentCore.Agent`, and
+   loads extensions, builds the tool list, starts `LemonAgent.Agent`, and
    restores message history.
 
 2. **During a run:** As events flow through the agent loop, the Session's

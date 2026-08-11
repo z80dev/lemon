@@ -20,7 +20,7 @@ defmodule CodingAgent.Extensions.Extension do
         @impl true
         def tools(cwd) do
           [
-            %AgentCore.Types.AgentTool{
+            %LemonAgent.Types.AgentTool{
               name: "my_tool",
               description: "Does something useful",
               parameters: %{
@@ -32,7 +32,7 @@ defmodule CodingAgent.Extensions.Extension do
               },
               label: "My Tool",
               execute: fn _id, %{"input" => input}, _signal, _on_update ->
-                %AgentCore.Types.AgentToolResult{
+                %LemonAgent.Types.AgentToolResult{
                   content: [%{type: "text", text: "Result: \#{input}"}]
                 }
               end
@@ -91,9 +91,9 @@ defmodule CodingAgent.Extensions.Extension do
 
   ## Returns
 
-  A list of `AgentCore.Types.AgentTool` structs.
+  A list of `LemonAgent.Types.AgentTool` structs.
   """
-  @callback tools(cwd :: String.t()) :: [AgentCore.Types.AgentTool.t()]
+  @callback tools(cwd :: String.t()) :: [LemonAgent.Types.AgentTool.t()]
 
   @doc """
   Returns a keyword list of hooks for agent events.

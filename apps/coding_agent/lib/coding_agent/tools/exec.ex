@@ -11,9 +11,9 @@ defmodule CodingAgent.Tools.Exec do
   - Integration with ProcessManager for durability
   """
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias AgentCore.AbortSignal
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.AbortSignal
+  alias LemonAi.Types.TextContent
   alias CodingAgent.ProcessManager
   alias CodingAgent.ToolExecutor
   alias CodingAgent.Tools.CheckpointGuard

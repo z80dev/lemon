@@ -2,7 +2,7 @@ defmodule CodingAgent.Session.MessageSerialization do
   @moduledoc """
   Pure-function module for serializing and deserializing session messages.
 
-  Handles conversion between Ai.Types structs (UserMessage, AssistantMessage,
+  Handles conversion between LemonAi.Types structs (UserMessage, AssistantMessage,
   ToolResultMessage, etc.) and their JSON-serializable map representations for
   persistence in the SessionManager.
   """
@@ -12,7 +12,7 @@ defmodule CodingAgent.Session.MessageSerialization do
   # ============================================================================
 
   @spec serialize_message(map()) :: map()
-  def serialize_message(%Ai.Types.UserMessage{} = msg) do
+  def serialize_message(%LemonAi.Types.UserMessage{} = msg) do
     %{
       "role" => "user",
       "content" => serialize_content(msg.content),
@@ -20,7 +20,7 @@ defmodule CodingAgent.Session.MessageSerialization do
     }
   end
 
-  def serialize_message(%Ai.Types.AssistantMessage{} = msg) do
+  def serialize_message(%LemonAi.Types.AssistantMessage{} = msg) do
     %{
       "role" => "assistant",
       "content" => Enum.map(msg.content, &serialize_content_block/1),
@@ -33,7 +33,7 @@ defmodule CodingAgent.Session.MessageSerialization do
     }
   end
 
-  def serialize_message(%Ai.Types.ToolResultMessage{} = msg) do
+  def serialize_message(%LemonAi.Types.ToolResultMessage{} = msg) do
     %{
       "role" => "tool_result",
       "tool_call_id" => msg.tool_call_id,
@@ -70,19 +70,19 @@ defmodule CodingAgent.Session.MessageSerialization do
   end
 
   @spec serialize_content_block(map()) :: map()
-  def serialize_content_block(%Ai.Types.TextContent{text: text}) do
+  def serialize_content_block(%LemonAi.Types.TextContent{text: text}) do
     %{"type" => "text", "text" => text}
   end
 
-  def serialize_content_block(%Ai.Types.ImageContent{data: data, mime_type: mime_type}) do
+  def serialize_content_block(%LemonAi.Types.ImageContent{data: data, mime_type: mime_type}) do
     %{"type" => "image", "data" => data, "mime_type" => mime_type}
   end
 
-  def serialize_content_block(%Ai.Types.ThinkingContent{thinking: thinking}) do
+  def serialize_content_block(%LemonAi.Types.ThinkingContent{thinking: thinking}) do
     %{"type" => "thinking", "thinking" => thinking}
   end
 
-  def serialize_content_block(%Ai.Types.ToolCall{id: id, name: name, arguments: arguments}) do
+  def serialize_content_block(%LemonAi.Types.ToolCall{id: id, name: name, arguments: arguments}) do
     %{"type" => "tool_call", "id" => id, "name" => name, "arguments" => arguments}
   end
 
@@ -120,7 +120,7 @@ defmodule CodingAgent.Session.MessageSerialization do
   @spec serialize_usage(map() | nil) :: map() | nil
   def serialize_usage(nil), do: nil
 
-  def serialize_usage(%Ai.Types.Usage{} = usage) do
+  def serialize_usage(%LemonAi.Types.Usage{} = usage) do
     %{
       "input" => usage.input,
       "output" => usage.output,
@@ -149,7 +149,7 @@ defmodule CodingAgent.Session.MessageSerialization do
 
   @spec deserialize_message(map()) :: map() | nil
   def deserialize_message(%{"role" => "user"} = msg) do
-    %Ai.Types.UserMessage{
+    %LemonAi.Types.UserMessage{
       role: :user,
       content: deserialize_content(msg["content"]),
       timestamp: msg["timestamp"] || 0
@@ -157,7 +157,7 @@ defmodule CodingAgent.Session.MessageSerialization do
   end
 
   def deserialize_message(%{"role" => "assistant"} = msg) do
-    %Ai.Types.AssistantMessage{
+    %LemonAi.Types.AssistantMessage{
       role: :assistant,
       content: deserialize_content_blocks(msg["content"]),
       provider: msg["provider"] || "",
@@ -170,7 +170,7 @@ defmodule CodingAgent.Session.MessageSerialization do
   end
 
   def deserialize_message(%{"role" => "tool_result"} = msg) do
-    %Ai.Types.ToolResultMessage{
+    %LemonAi.Types.ToolResultMessage{
       role: :tool_result,
       tool_call_id: msg["tool_call_id"] || msg["tool_use_id"] || "",
       tool_name: msg["tool_name"] || "",
@@ -216,15 +216,15 @@ defmodule CodingAgent.Session.MessageSerialization do
 
   @spec deserialize_content_block(map()) :: map()
   def deserialize_content_block(%{"type" => "text", "text" => text}) do
-    %Ai.Types.TextContent{type: :text, text: text}
+    %LemonAi.Types.TextContent{type: :text, text: text}
   end
 
   def deserialize_content_block(%{"type" => "image", "data" => data, "mime_type" => mime_type}) do
-    %Ai.Types.ImageContent{type: :image, data: data, mime_type: mime_type}
+    %LemonAi.Types.ImageContent{type: :image, data: data, mime_type: mime_type}
   end
 
   def deserialize_content_block(%{"type" => "thinking", "thinking" => thinking}) do
-    %Ai.Types.ThinkingContent{type: :thinking, thinking: thinking}
+    %LemonAi.Types.ThinkingContent{type: :thinking, thinking: thinking}
   end
 
   def deserialize_content_block(%{
@@ -233,22 +233,22 @@ defmodule CodingAgent.Session.MessageSerialization do
         "name" => name,
         "arguments" => arguments
       }) do
-    %Ai.Types.ToolCall{type: :tool_call, id: id, name: name, arguments: arguments}
+    %LemonAi.Types.ToolCall{type: :tool_call, id: id, name: name, arguments: arguments}
   end
 
   def deserialize_content_block(block), do: block
 
-  @spec deserialize_usage(map() | nil) :: Ai.Types.Usage.t() | nil
+  @spec deserialize_usage(map() | nil) :: LemonAi.Types.Usage.t() | nil
   def deserialize_usage(nil), do: nil
 
   def deserialize_usage(usage) when is_map(usage) do
-    %Ai.Types.Usage{
+    %LemonAi.Types.Usage{
       input: usage["input"] || 0,
       output: usage["output"] || 0,
       cache_read: usage["cache_read"] || 0,
       cache_write: usage["cache_write"] || 0,
       total_tokens: usage["total_tokens"] || 0,
-      cost: %Ai.Types.Cost{}
+      cost: %LemonAi.Types.Cost{}
     }
   end
 

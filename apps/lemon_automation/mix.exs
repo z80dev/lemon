@@ -26,7 +26,7 @@ defmodule LemonAutomation.MixProject do
 
   defp deps do
     [
-      {:agent_core, in_umbrella: true},
+      {:lemon_agent, in_umbrella: true},
       {:lemon_core, in_umbrella: true},
       {:lemon_router, in_umbrella: true},
       {:lemon_skills, in_umbrella: true},

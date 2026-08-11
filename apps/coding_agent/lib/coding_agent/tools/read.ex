@@ -9,8 +9,8 @@ defmodule CodingAgent.Tools.Read do
   - Automatic truncation for large files
   """
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.{TextContent, ImageContent}
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.{TextContent, ImageContent}
   alias CodingAgent.Tools.ACPFileBridge
   alias CodingAgent.Tools.FileValidation
   alias CodingAgent.Tools.PathHelpers

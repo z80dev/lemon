@@ -14,8 +14,8 @@ defmodule LemonControlPlane.Methods.SystemReload do
   @allowed_scopes ~w(module app extension all)
 
   @default_reload_apps [
-    :agent_core,
-    :ai,
+    :lemon_agent,
+    :lemon_ai,
     :coding_agent,
     :coding_agent_ui,
     :lemon_core,

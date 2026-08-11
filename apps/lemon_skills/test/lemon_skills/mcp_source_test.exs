@@ -452,20 +452,20 @@ defmodule LemonSkills.McpSourceTest do
       assert "mcp_elixir_prompt_get" in names
 
       assert {:ok, result} = McpSource.call_tool("mcp_elixir_echo", %{"message" => "ok"})
-      assert [%Ai.Types.TextContent{text: "echo:ok"}] = result.content
+      assert [%LemonAi.Types.TextContent{text: "echo:ok"}] = result.content
 
       assert {:ok, result} = McpSource.call_tool("mcp_elixir_resources_list", %{})
-      assert [%Ai.Types.TextContent{text: resources_json}] = result.content
+      assert [%LemonAi.Types.TextContent{text: resources_json}] = result.content
       assert [%{"uri" => "fixture://status"}] = Jason.decode!(resources_json)
 
       assert {:ok, result} =
                McpSource.call_tool("mcp_elixir_resource_read", %{"uri" => "fixture://status"})
 
-      assert [%Ai.Types.TextContent{text: resource_json}] = result.content
+      assert [%LemonAi.Types.TextContent{text: resource_json}] = result.content
       assert [%{"text" => "status:ok"}] = Jason.decode!(resource_json)
 
       assert {:ok, result} = McpSource.call_tool("mcp_elixir_prompts_list", %{})
-      assert [%Ai.Types.TextContent{text: prompts_json}] = result.content
+      assert [%LemonAi.Types.TextContent{text: prompts_json}] = result.content
       assert [%{"name" => "brief"}] = Jason.decode!(prompts_json)
 
       assert {:ok, result} =
@@ -474,10 +474,10 @@ defmodule LemonSkills.McpSourceTest do
                  "arguments" => %{"topic" => "beam"}
                })
 
-      assert [%Ai.Types.TextContent{text: prompt_json}] = result.content
+      assert [%LemonAi.Types.TextContent{text: prompt_json}] = result.content
       assert %{"messages" => [%{"role" => "user"}]} = Jason.decode!(prompt_json)
 
-      assert {:error, {:tool_error, [%Ai.Types.TextContent{text: "planned failure"}]}} =
+      assert {:error, {:tool_error, [%LemonAi.Types.TextContent{text: "planned failure"}]}} =
                McpSource.call_tool("mcp_elixir_fail", %{})
 
       status = McpSource.status()
@@ -511,13 +511,13 @@ defmodule LemonSkills.McpSourceTest do
       assert "mcp_elixir_prompts_list" in names
 
       assert {:ok, result} = McpSource.call_tool("mcp_elixir_resources_list", %{})
-      assert [%Ai.Types.TextContent{text: "[]"}] = result.content
+      assert [%LemonAi.Types.TextContent{text: "[]"}] = result.content
 
       assert {:error, {:blocked_resource, "fixture://status"}} =
                McpSource.call_tool("mcp_elixir_resource_read", %{"uri" => "fixture://status"})
 
       assert {:ok, result} = McpSource.call_tool("mcp_elixir_prompts_list", %{})
-      assert [%Ai.Types.TextContent{text: "[]"}] = result.content
+      assert [%LemonAi.Types.TextContent{text: "[]"}] = result.content
 
       assert {:error, {:blocked_prompt, "brief"}} =
                McpSource.call_tool("mcp_elixir_prompt_get", %{"name" => "brief"})
@@ -607,20 +607,20 @@ defmodule LemonSkills.McpSourceTest do
       refute "mcp_mcp_fail" in names
 
       assert {:ok, result} = McpSource.call_tool("mcp_mcp_echo", %{"message" => "ok"})
-      assert [%Ai.Types.TextContent{text: "echo:ok"}] = result.content
+      assert [%LemonAi.Types.TextContent{text: "echo:ok"}] = result.content
 
       assert {:ok, result} = McpSource.call_tool("mcp_mcp_resources_list", %{})
-      assert [%Ai.Types.TextContent{text: resources_json}] = result.content
+      assert [%LemonAi.Types.TextContent{text: resources_json}] = result.content
       assert [%{"uri" => "fixture://status"}] = Jason.decode!(resources_json)
 
       assert {:ok, result} =
                McpSource.call_tool("mcp_mcp_resource_read", %{"uri" => "fixture://status"})
 
-      assert [%Ai.Types.TextContent{text: resource_json}] = result.content
+      assert [%LemonAi.Types.TextContent{text: resource_json}] = result.content
       assert [%{"text" => "status:ok"}] = Jason.decode!(resource_json)
 
       assert {:ok, result} = McpSource.call_tool("mcp_mcp_prompts_list", %{})
-      assert [%Ai.Types.TextContent{text: prompts_json}] = result.content
+      assert [%LemonAi.Types.TextContent{text: prompts_json}] = result.content
       assert [%{"name" => "brief"}] = Jason.decode!(prompts_json)
 
       assert {:ok, result} =
@@ -629,7 +629,7 @@ defmodule LemonSkills.McpSourceTest do
                  "arguments" => %{"topic" => "beam"}
                })
 
-      assert [%Ai.Types.TextContent{text: prompt_json}] = result.content
+      assert [%LemonAi.Types.TextContent{text: prompt_json}] = result.content
       assert %{"messages" => [%{"role" => "user"}]} = Jason.decode!(prompt_json)
 
       status = McpSource.status()
@@ -813,20 +813,20 @@ defmodule LemonSkills.McpSourceTest do
       refute "mcp_sse_fail" in names
 
       assert {:ok, result} = McpSource.call_tool("mcp_sse_echo", %{"message" => "ok"})
-      assert [%Ai.Types.TextContent{text: "echo:ok"}] = result.content
+      assert [%LemonAi.Types.TextContent{text: "echo:ok"}] = result.content
 
       assert {:ok, result} = McpSource.call_tool("mcp_sse_resources_list", %{})
-      assert [%Ai.Types.TextContent{text: resources_json}] = result.content
+      assert [%LemonAi.Types.TextContent{text: resources_json}] = result.content
       assert [%{"uri" => "fixture://status"}] = Jason.decode!(resources_json)
 
       assert {:ok, result} =
                McpSource.call_tool("mcp_sse_resource_read", %{"uri" => "fixture://status"})
 
-      assert [%Ai.Types.TextContent{text: resource_json}] = result.content
+      assert [%LemonAi.Types.TextContent{text: resource_json}] = result.content
       assert [%{"text" => "status:ok"}] = Jason.decode!(resource_json)
 
       assert {:ok, result} = McpSource.call_tool("mcp_sse_prompts_list", %{})
-      assert [%Ai.Types.TextContent{text: prompts_json}] = result.content
+      assert [%LemonAi.Types.TextContent{text: prompts_json}] = result.content
       assert [%{"name" => "brief"}] = Jason.decode!(prompts_json)
 
       assert {:ok, result} =
@@ -835,7 +835,7 @@ defmodule LemonSkills.McpSourceTest do
                  "arguments" => %{"topic" => "beam"}
                })
 
-      assert [%Ai.Types.TextContent{text: prompt_json}] = result.content
+      assert [%LemonAi.Types.TextContent{text: prompt_json}] = result.content
       assert %{"messages" => [%{"role" => "user"}]} = Jason.decode!(prompt_json)
 
       status = McpSource.status()

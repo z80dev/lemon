@@ -51,12 +51,12 @@ defmodule CodingAgent.ToolRegistryTest do
       @impl true
       def tools(_cwd) do
         [
-          %AgentCore.Types.AgentTool{
+          %LemonAgent.Types.AgentTool{
             name: "#{tool_name}",
             description: "Counter tool",
             parameters: %{},
             label: "Counter Tool",
-            execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{content: []} end
+            execute: fn _, _, _, _ -> %LemonAgent.Types.AgentToolResult{content: []} end
           }
         ]
       end
@@ -83,12 +83,12 @@ defmodule CodingAgent.ToolRegistryTest do
     capabilities = Keyword.get(opts, :capabilities, %{})
     path = Keyword.get(opts, :path, "/tmp/#{name}.wasm")
 
-    tool = %AgentCore.Types.AgentTool{
+    tool = %LemonAgent.Types.AgentTool{
       name: name,
       description: description,
       parameters: %{"type" => "object", "properties" => %{}, "required" => []},
       label: label,
-      execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{content: []} end
+      execute: fn _, _, _, _ -> %LemonAgent.Types.AgentToolResult{content: []} end
     }
 
     {name, tool, {:wasm, %{name: name, path: path, capabilities: capabilities}}}
@@ -98,12 +98,12 @@ defmodule CodingAgent.ToolRegistryTest do
     label = Keyword.get(opts, :label, "MCP #{name}")
     server = Keyword.get(opts, :server, :fixture)
 
-    tool = %AgentCore.Types.AgentTool{
+    tool = %LemonAgent.Types.AgentTool{
       name: name,
       description: "MCP #{name}",
       parameters: %{"type" => "object", "properties" => %{}, "required" => []},
       label: label,
-      execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{content: []} end
+      execute: fn _, _, _, _ -> %LemonAgent.Types.AgentToolResult{content: []} end
     }
 
     {name, tool, {:mcp, server}}
@@ -359,12 +359,12 @@ defmodule CodingAgent.ToolRegistryTest do
         @impl true
         def tools(_cwd) do
           [
-            %AgentCore.Types.AgentTool{
+            %LemonAgent.Types.AgentTool{
               name: "custom_path_tool",
               description: "A tool from custom path",
               parameters: %{},
               label: "Custom Path Tool",
-              execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{content: []} end
+              execute: fn _, _, _, _ -> %LemonAgent.Types.AgentToolResult{content: []} end
             }
           ]
         end
@@ -401,12 +401,12 @@ defmodule CodingAgent.ToolRegistryTest do
         @impl true
         def tools(_cwd) do
           [
-            %AgentCore.Types.AgentTool{
+            %LemonAgent.Types.AgentTool{
               name: "telemetry_path_tool",
               description: "A telemetry test tool",
               parameters: %{},
               label: "Telemetry Path Tool",
-              execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{content: []} end
+              execute: fn _, _, _, _ -> %LemonAgent.Types.AgentToolResult{content: []} end
             }
           ]
         end
@@ -512,12 +512,12 @@ defmodule CodingAgent.ToolRegistryTest do
         @impl true
         def tools(_cwd) do
           [
-            %AgentCore.Types.AgentTool{
+            %LemonAgent.Types.AgentTool{
               name: "default_path_tool",
               description: "A tool from default path",
               parameters: %{},
               label: "Default Path Tool",
-              execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{content: []} end
+              execute: fn _, _, _, _ -> %LemonAgent.Types.AgentToolResult{content: []} end
             }
           ]
         end
@@ -630,12 +630,12 @@ defmodule CodingAgent.ToolRegistryTest do
         @impl true
         def tools(_cwd) do
           [
-            %AgentCore.Types.AgentTool{
+            %LemonAgent.Types.AgentTool{
               name: "wasm_shadow_test",
               description: "From extension",
               parameters: %{},
               label: "Extension Tool",
-              execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{content: []} end
+              execute: fn _, _, _, _ -> %LemonAgent.Types.AgentToolResult{content: []} end
             }
           ]
         end
@@ -673,12 +673,12 @@ defmodule CodingAgent.ToolRegistryTest do
         @impl true
         def tools(_cwd) do
           [
-            %AgentCore.Types.AgentTool{
+            %LemonAgent.Types.AgentTool{
               name: "shared_wasm_name",
               description: "From extension",
               parameters: %{},
               label: "Extension Shared",
-              execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{content: []} end
+              execute: fn _, _, _, _ -> %LemonAgent.Types.AgentToolResult{content: []} end
             }
           ]
         end
@@ -765,12 +765,12 @@ defmodule CodingAgent.ToolRegistryTest do
         @impl true
         def tools(_cwd) do
           [
-            %AgentCore.Types.AgentTool{
+            %LemonAgent.Types.AgentTool{
               name: "read",
               description: "A conflicting read tool",
               parameters: %{},
               label: "Conflict Read",
-              execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{content: []} end
+              execute: fn _, _, _, _ -> %LemonAgent.Types.AgentToolResult{content: []} end
             }
           ]
         end
@@ -819,12 +819,12 @@ defmodule CodingAgent.ToolRegistryTest do
         @impl true
         def tools(_cwd) do
           [
-            %AgentCore.Types.AgentTool{
+            %LemonAgent.Types.AgentTool{
               name: "custom_tool",
               description: "Tool from A extension",
               parameters: %{},
               label: "Custom A",
-              execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{content: []} end
+              execute: fn _, _, _, _ -> %LemonAgent.Types.AgentToolResult{content: []} end
             }
           ]
         end
@@ -844,12 +844,12 @@ defmodule CodingAgent.ToolRegistryTest do
         @impl true
         def tools(_cwd) do
           [
-            %AgentCore.Types.AgentTool{
+            %LemonAgent.Types.AgentTool{
               name: "custom_tool",
               description: "Tool from B extension",
               parameters: %{},
               label: "Custom B",
-              execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{content: []} end
+              execute: fn _, _, _, _ -> %LemonAgent.Types.AgentToolResult{content: []} end
             }
           ]
         end
@@ -900,12 +900,12 @@ defmodule CodingAgent.ToolRegistryTest do
         @impl true
         def tools(_cwd) do
           [
-            %AgentCore.Types.AgentTool{
+            %LemonAgent.Types.AgentTool{
               name: "my_unique_tool",
               description: "A unique tool",
               parameters: %{},
               label: "Unique Tool",
-              execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{content: []} end
+              execute: fn _, _, _, _ -> %LemonAgent.Types.AgentToolResult{content: []} end
             }
           ]
         end
@@ -958,12 +958,12 @@ defmodule CodingAgent.ToolRegistryTest do
         @impl true
         def tools(_cwd) do
           [
-            %AgentCore.Types.AgentTool{
+            %LemonAgent.Types.AgentTool{
               name: "read",
               description: "Conflicting read",
               parameters: %{},
               label: "Read",
-              execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{content: []} end
+              execute: fn _, _, _, _ -> %LemonAgent.Types.AgentToolResult{content: []} end
             }
           ]
         end
@@ -1004,12 +1004,12 @@ defmodule CodingAgent.ToolRegistryTest do
         @impl true
         def tools(_cwd) do
           [
-            %AgentCore.Types.AgentTool{
+            %LemonAgent.Types.AgentTool{
               name: "shared_tool",
               description: "From A",
               parameters: %{},
               label: "Shared A",
-              execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{content: []} end
+              execute: fn _, _, _, _ -> %LemonAgent.Types.AgentToolResult{content: []} end
             }
           ]
         end
@@ -1029,12 +1029,12 @@ defmodule CodingAgent.ToolRegistryTest do
         @impl true
         def tools(_cwd) do
           [
-            %AgentCore.Types.AgentTool{
+            %LemonAgent.Types.AgentTool{
               name: "shared_tool",
               description: "From B",
               parameters: %{},
               label: "Shared B",
-              execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{content: []} end
+              execute: fn _, _, _, _ -> %LemonAgent.Types.AgentToolResult{content: []} end
             }
           ]
         end
@@ -1078,12 +1078,12 @@ defmodule CodingAgent.ToolRegistryTest do
         @impl true
         def tools(_cwd) do
           [
-            %AgentCore.Types.AgentTool{
+            %LemonAgent.Types.AgentTool{
               name: "unique_count_tool",
               description: "Unique tool",
               parameters: %{},
               label: "Unique",
-              execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{content: []} end
+              execute: fn _, _, _, _ -> %LemonAgent.Types.AgentToolResult{content: []} end
             }
           ]
         end

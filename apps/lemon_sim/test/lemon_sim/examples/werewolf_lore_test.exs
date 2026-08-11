@@ -6,7 +6,7 @@ defmodule LemonSim.Examples.Werewolf.LoreTest do
   # ---------------------------------------------------------------------------
   # generate/4 error handling
   #
-  # Ai.complete/3 is called directly (not injected), so we can't mock it.
+  # LemonAi.complete/3 is called directly (not injected), so we can't mock it.
   # We use a bogus model struct to force the Task to return an error.
   # The important invariant: generate/4 always returns {:ok, _} | {:error, _},
   # never raises.
@@ -14,7 +14,7 @@ defmodule LemonSim.Examples.Werewolf.LoreTest do
 
   describe "generate/4 error handling" do
     test "returns {:error, _} when LLM call fails with a nonexistent provider" do
-      model = %Ai.Types.Model{provider: :test_nonexistent, id: "fake"}
+      model = %LemonAi.Types.Model{provider: :test_nonexistent, id: "fake"}
 
       players = %{
         "player_1" => %{role: "villager", traits: ["brave"]},
@@ -26,20 +26,20 @@ defmodule LemonSim.Examples.Werewolf.LoreTest do
     end
 
     test "does not crash with empty players map" do
-      model = %Ai.Types.Model{provider: :test_nonexistent, id: "fake"}
+      model = %LemonAi.Types.Model{provider: :test_nonexistent, id: "fake"}
       result = Lore.generate(%{}, [], model, %{})
       assert {:error, _reason} = result
     end
 
     test "does not crash with empty connections list" do
-      model = %Ai.Types.Model{provider: :test_nonexistent, id: "fake"}
+      model = %LemonAi.Types.Model{provider: :test_nonexistent, id: "fake"}
       players = %{"player_1" => %{role: "villager", traits: []}}
       result = Lore.generate(players, [], model, %{})
       assert {:error, _reason} = result
     end
 
     test "does not crash with players missing optional keys" do
-      model = %Ai.Types.Model{provider: :test_nonexistent, id: "fake"}
+      model = %LemonAi.Types.Model{provider: :test_nonexistent, id: "fake"}
       # No :traits or :role keys — should use Map.get defaults
       players = %{"player_1" => %{}}
       result = Lore.generate(players, [], model, %{})
@@ -47,7 +47,7 @@ defmodule LemonSim.Examples.Werewolf.LoreTest do
     end
 
     test "does not crash with connections that reference players" do
-      model = %Ai.Types.Model{provider: :test_nonexistent, id: "fake"}
+      model = %LemonAi.Types.Model{provider: :test_nonexistent, id: "fake"}
 
       players = %{
         "alice" => %{role: "villager", traits: ["quiet"]},

@@ -1,8 +1,8 @@
 defmodule LemonGateway.CodexIntegrationTest do
   use ExUnit.Case
 
-  alias AgentCore.CliRunners.CodexRunner
-  alias AgentCore.CliRunners.Types.CompletedEvent
+  alias LemonAgent.CliRunners.CodexRunner
+  alias LemonAgent.CliRunners.Types.CompletedEvent
 
   @tag :integration
   test "codex runner completes" do
@@ -25,7 +25,7 @@ defmodule LemonGateway.CodexIntegrationTest do
 
         task =
           Task.async(fn ->
-            AgentCore.EventStream.events(stream) |> Enum.to_list()
+            LemonAgent.EventStream.events(stream) |> Enum.to_list()
           end)
 
         events = Task.await(task, 200_000)

@@ -3,8 +3,8 @@ defmodule CodingAgent.Tools.SessionSearch do
   Hermes-compatible session search over Lemon's durable memory and run history.
   """
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.TextContent
   alias LemonCore.Store
   alias LemonMemory.SessionSearch
 

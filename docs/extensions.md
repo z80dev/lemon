@@ -46,7 +46,7 @@ end
 |----------|----------|-------------|
 | `name/0` | Yes | Returns the extension's unique name (lowercase with hyphens) |
 | `version/0` | Yes | Returns the semantic version string |
-| `tools/1` | No | Returns a list of `AgentCore.Types.AgentTool` structs |
+| `tools/1` | No | Returns a list of `LemonAgent.Types.AgentTool` structs |
 | `hooks/0` | No | Returns a keyword list of event hooks |
 | `capabilities/0` | No | Returns a list of capability atoms (e.g., `[:tools, :hooks]`) |
 | `config_schema/0` | No | Returns a JSON Schema-like map for configuration options |
@@ -60,7 +60,7 @@ Extensions can provide custom tools that the agent can use:
 @impl true
 def tools(_cwd) do
   [
-    %AgentCore.Types.AgentTool{
+    %LemonAgent.Types.AgentTool{
       name: "my_tool",
       description: "What the tool does",
       parameters: %{
@@ -75,7 +75,7 @@ def tools(_cwd) do
       },
       label: "My Tool",
       execute: fn _id, %{"input" => input}, _signal, _on_update ->
-        %AgentCore.Types.AgentToolResult{
+        %LemonAgent.Types.AgentToolResult{
           content: [%{type: "text", text: "Result: #{input}"}]
         }
       end
@@ -100,10 +100,10 @@ The execute function receives:
 - `abort_signal` - An `AbortSignal` for checking if execution should stop
 - `on_update` - Callback for streaming partial updates
 
-Return an `AgentCore.Types.AgentToolResult`:
+Return an `LemonAgent.Types.AgentToolResult`:
 
 ```elixir
-%AgentCore.Types.AgentToolResult{
+%LemonAgent.Types.AgentToolResult{
   content: [%{type: "text", text: "output"}],
   is_error: false  # optional, defaults to false
 }
@@ -237,7 +237,7 @@ end
 
 ### Provider Registration Process
 
-1. **At session startup**: Model providers are collected and registered into `Ai.ProviderRegistry`; memory providers are collected and registered into `LemonMemory.Providers`
+1. **At session startup**: Model providers are collected and registered into `LemonAi.ProviderRegistry`; memory providers are collected and registered into `LemonMemory.Providers`
 2. **On extension reload**: Old providers are unregistered, extensions are reloaded, and new providers are registered
 3. **Conflict detection**: When multiple extensions register the same provider name, the first (alphabetically by module name) wins
 
@@ -275,11 +275,11 @@ Provider registration conflicts are included in the extension status report:
 
 ### Implementing a Model Provider
 
-Model providers must implement the `Ai.Provider` behaviour:
+Model providers must implement the `LemonAi.Provider` behaviour:
 
 ```elixir
 defmodule MyExtension.CustomModelProvider do
-  @behaviour Ai.Provider
+  @behaviour LemonAi.Provider
 
   @impl true
   def stream(model, context, opts) do
@@ -295,7 +295,7 @@ defmodule MyExtension.CustomModelProvider do
 end
 ```
 
-See the `Ai.Provider` module documentation for full details on implementing providers.
+See the `LemonAi.Provider` module documentation for full details on implementing providers.
 
 Memory providers must implement the `LemonMemory.Provider` behaviour:
 
@@ -523,7 +523,7 @@ defmodule HelloWorldExtension do
   @impl true
   def tools(_cwd) do
     [
-      %AgentCore.Types.AgentTool{
+      %LemonAgent.Types.AgentTool{
         name: "hello",
         description: "Says hello to someone",
         parameters: %{
@@ -535,7 +535,7 @@ defmodule HelloWorldExtension do
         },
         label: "Hello",
         execute: fn _id, %{"name" => name}, _signal, _on_update ->
-          %AgentCore.Types.AgentToolResult{
+          %LemonAgent.Types.AgentToolResult{
             content: [%{type: "text", text: "Hello, #{name}!"}]
           }
         end

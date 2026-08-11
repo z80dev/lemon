@@ -8,7 +8,7 @@ defmodule LemonSim.LLM.Projectors.SectionedProjector do
 
   @behaviour LemonSim.Kernel.Projector
 
-  alias Ai.Types.Context
+  alias LemonAi.Types.Context
   alias LemonSim.Kernel.DecisionFrame
   alias LemonSim.LLM.Projectors.Toolkit
 

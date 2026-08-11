@@ -1,6 +1,6 @@
 defmodule CodingAgent.Session do
   @moduledoc """
-  Main orchestrator GenServer that wraps AgentCore.Agent and integrates all CodingAgent components.
+  Main orchestrator GenServer that wraps LemonAgent.Agent and integrates all CodingAgent components.
 
   The Session GenServer provides:
   - Session management via SessionManager for persistence
@@ -41,7 +41,7 @@ defmodule CodingAgent.Session do
   @prompt_defer_ms 10
   @reset_abort_wait_ms 5_000
 
-  alias AgentCore.Types.AgentTool
+  alias LemonAgent.Types.AgentTool
   alias LemonCore.Introspection
   alias CodingAgent.AsyncFollowups
   alias CodingAgent.Extensions
@@ -137,8 +137,8 @@ defmodule CodingAgent.Session do
           ui_context: UIContext.t() | nil,
           cwd: String.t(),
           tools: [AgentTool.t()],
-          model: Ai.Types.Model.t(),
-          thinking_level: AgentCore.Types.thinking_level(),
+          model: LemonAi.Types.Model.t(),
+          thinking_level: LemonAgent.Types.thinking_level(),
           system_prompt: String.t(),
           explicit_system_prompt: String.t() | nil,
           prompt_template: String.t() | nil,
@@ -204,7 +204,7 @@ defmodule CodingAgent.Session do
 
   ## Options (optional)
 
-    * `:model` - The AI model to use (`Ai.Types.Model.t()`). If not provided,
+    * `:model` - The AI model to use (`LemonAi.Types.Model.t()`). If not provided,
       uses `default_model` from SettingsManager.
     * `:system_prompt` - Explicit system prompt text. Takes highest precedence
       in the composed prompt.
@@ -346,7 +346,7 @@ defmodule CodingAgent.Session do
   ## Returns
 
     * For `:direct` mode: an unsubscribe function `(() -> :ok)`
-    * For `:stream` mode: `{:ok, stream_pid}` where `stream_pid` is an `AgentCore.EventStream`
+    * For `:stream` mode: `{:ok, stream_pid}` where `stream_pid` is an `LemonAgent.EventStream`
 
   ## Examples
 
@@ -360,7 +360,7 @@ defmodule CodingAgent.Session do
       # Stream mode with backpressure
       {:ok, stream} = Session.subscribe(session, mode: :stream)
       stream
-      |> AgentCore.EventStream.events()
+      |> LemonAgent.EventStream.events()
       |> Enum.each(fn {:session_event, _id, event} -> IO.inspect(event) end)
   """
   @spec subscribe(GenServer.server(), keyword()) :: (-> :ok) | {:ok, pid()}
@@ -457,7 +457,7 @@ defmodule CodingAgent.Session do
   @doc """
   Switch to a different model.
   """
-  @spec switch_model(GenServer.server(), Ai.Types.Model.t()) :: :ok
+  @spec switch_model(GenServer.server(), LemonAi.Types.Model.t()) :: :ok
   def switch_model(session, model) do
     GenServer.call(session, {:switch_model, model})
   end
@@ -467,7 +467,7 @@ defmodule CodingAgent.Session do
 
   Valid levels: :off, :minimal, :low, :medium, :high
   """
-  @spec set_thinking_level(GenServer.server(), AgentCore.Types.thinking_level()) :: :ok
+  @spec set_thinking_level(GenServer.server(), LemonAgent.Types.thinking_level()) :: :ok
   def set_thinking_level(session, level) do
     GenServer.call(session, {:set_thinking_level, level})
   end
@@ -611,12 +611,12 @@ defmodule CodingAgent.Session do
     if state.is_streaming do
       case AsyncFollowups.live_delivery_mode(message) do
         :steer ->
-          AgentCore.Agent.steer(state.agent, message, system_prompt: state.system_prompt)
+          LemonAgent.Agent.steer(state.agent, message, system_prompt: state.system_prompt)
           queue = :queue.in(message, state.steering_queue)
           {:reply, :ok, %{state | steering_queue: queue}}
 
         :followup ->
-          AgentCore.Agent.follow_up(state.agent, message, system_prompt: state.system_prompt)
+          LemonAgent.Agent.follow_up(state.agent, message, system_prompt: state.system_prompt)
           queue = :queue.in(message, state.follow_up_queue)
           {:reply, :ok, %{state | follow_up_queue: queue}}
       end
@@ -649,7 +649,7 @@ defmodule CodingAgent.Session do
   end
 
   def handle_call(:get_stats, _from, state) do
-    agent_state = AgentCore.Agent.get_state(state.agent)
+    agent_state = LemonAgent.Agent.get_state(state.agent)
     messages = agent_state.messages
 
     stats = %{
@@ -709,10 +709,10 @@ defmodule CodingAgent.Session do
               call_id = "wasm_host_#{System.unique_integer([:positive, :monotonic])}"
 
               case tool.execute.(call_id, params, nil, nil) do
-                %AgentCore.Types.AgentToolResult{} = tool_result ->
+                %LemonAgent.Types.AgentToolResult{} = tool_result ->
                   {:ok, WasmBridge.encode_wasm_host_output(tool_result)}
 
-                {:ok, %AgentCore.Types.AgentToolResult{} = tool_result} ->
+                {:ok, %LemonAgent.Types.AgentToolResult{} = tool_result} ->
                   {:ok, WasmBridge.encode_wasm_host_output(tool_result)}
 
                 {:error, reason} ->
@@ -744,7 +744,7 @@ defmodule CodingAgent.Session do
   end
 
   def handle_call({:switch_model, model}, _from, state) do
-    :ok = AgentCore.Agent.set_model(state.agent, model)
+    :ok = LemonAgent.Agent.set_model(state.agent, model)
 
     # Record model change in session
     entry =
@@ -759,7 +759,7 @@ defmodule CodingAgent.Session do
   end
 
   def handle_call({:set_thinking_level, level}, _from, state) do
-    :ok = AgentCore.Agent.set_thinking_level(state.agent, level)
+    :ok = LemonAgent.Agent.set_thinking_level(state.agent, level)
 
     # Record thinking level change in session
     entry = SessionEntry.thinking_level_change(level)
@@ -818,14 +818,14 @@ defmodule CodingAgent.Session do
 
         # Rebuild messages from the new position
         messages = restore_messages_from_session(session_manager)
-        :ok = AgentCore.Agent.replace_messages(state.agent, messages)
+        :ok = LemonAgent.Agent.replace_messages(state.agent, messages)
 
         {:reply, :ok, %{state | session_manager: session_manager}}
     end
   end
 
   def handle_call(:get_messages, _from, state) do
-    agent_state = AgentCore.Agent.get_state(state.agent)
+    agent_state = LemonAgent.Agent.get_state(state.agent)
     {:reply, agent_state.messages, state}
   end
 
@@ -848,13 +848,13 @@ defmodule CodingAgent.Session do
   def handle_cast({:steer, text}, state) do
     state = refresh_system_prompt(state, text)
 
-    message = %Ai.Types.UserMessage{
+    message = %LemonAi.Types.UserMessage{
       role: :user,
       content: text,
       timestamp: System.system_time(:millisecond)
     }
 
-    AgentCore.Agent.steer(state.agent, message, system_prompt: state.system_prompt)
+    LemonAgent.Agent.steer(state.agent, message, system_prompt: state.system_prompt)
     queue = :queue.in(message, state.steering_queue)
 
     {:noreply, %{state | steering_queue: queue}}
@@ -863,13 +863,13 @@ defmodule CodingAgent.Session do
   def handle_cast({:follow_up, text}, state) do
     state = refresh_system_prompt(state, text)
 
-    message = %Ai.Types.UserMessage{
+    message = %LemonAi.Types.UserMessage{
       role: :user,
       content: text,
       timestamp: System.system_time(:millisecond)
     }
 
-    AgentCore.Agent.follow_up(state.agent, message, system_prompt: state.system_prompt)
+    LemonAgent.Agent.follow_up(state.agent, message, system_prompt: state.system_prompt)
     queue = :queue.in(message, state.follow_up_queue)
 
     {:noreply, %{state | follow_up_queue: queue}}
@@ -878,7 +878,7 @@ defmodule CodingAgent.Session do
   def handle_cast(:abort, state) do
     had_pending_prompt = not is_nil(state.pending_prompt_timer_ref)
     state = state |> cancel_pending_prompt() |> CompactionManager.clear_overflow_recovery_state()
-    AgentCore.Agent.abort(state.agent)
+    LemonAgent.Agent.abort(state.agent)
 
     if had_pending_prompt do
       # If abort lands before deferred prompt dispatch, emit a terminal canceled
@@ -1011,11 +1011,11 @@ defmodule CodingAgent.Session do
     {:noreply, state}
   end
 
-  def handle_info({:do_prompt, %Ai.Types.UserMessage{} = user_message, system_prompt}, state) do
+  def handle_info({:do_prompt, %LemonAi.Types.UserMessage{} = user_message, system_prompt}, state) do
     if state.pending_prompt_timer_ref do
-      :ok = AgentCore.Agent.set_system_prompt(state.agent, system_prompt)
+      :ok = LemonAgent.Agent.set_system_prompt(state.agent, system_prompt)
       # Send to agent (user message will be persisted on :message_end event)
-      _ = AgentCore.Agent.prompt(state.agent, user_message)
+      _ = LemonAgent.Agent.prompt(state.agent, user_message)
       {:noreply, %{state | pending_prompt_timer_ref: nil, system_prompt: system_prompt}}
     else
       # Prompt was canceled (e.g. via abort/reset) before deferred dispatch.
@@ -1025,15 +1025,15 @@ defmodule CodingAgent.Session do
 
   def handle_info({:do_prompt, %CustomMessage{} = message, system_prompt}, state) do
     if state.pending_prompt_timer_ref do
-      :ok = AgentCore.Agent.set_system_prompt(state.agent, system_prompt)
-      _ = AgentCore.Agent.prompt(state.agent, message)
+      :ok = LemonAgent.Agent.set_system_prompt(state.agent, system_prompt)
+      _ = LemonAgent.Agent.prompt(state.agent, message)
       {:noreply, %{state | pending_prompt_timer_ref: nil, system_prompt: system_prompt}}
     else
       {:noreply, state}
     end
   end
 
-  def handle_info({:do_prompt, %Ai.Types.UserMessage{} = user_message}, state) do
+  def handle_info({:do_prompt, %LemonAi.Types.UserMessage{} = user_message}, state) do
     handle_info({:do_prompt, user_message, state.system_prompt}, state)
   end
 
@@ -1078,7 +1078,7 @@ defmodule CodingAgent.Session do
   # Private Functions
   # ============================================================================
 
-  defp message_skill_context(%Ai.Types.UserMessage{content: content}),
+  defp message_skill_context(%LemonAi.Types.UserMessage{content: content}),
     do: content_skill_context(content)
 
   defp message_skill_context(%CustomMessage{content: content, display: display}) do
@@ -1094,7 +1094,7 @@ defmodule CodingAgent.Session do
   defp content_skill_context(content) when is_list(content) do
     content
     |> Enum.map(fn
-      %Ai.Types.TextContent{text: text} when is_binary(text) -> text
+      %LemonAi.Types.TextContent{text: text} when is_binary(text) -> text
       %{text: text} when is_binary(text) -> text
       text when is_binary(text) -> text
       _ -> ""
@@ -1126,7 +1126,7 @@ defmodule CodingAgent.Session do
         state
 
       {:changed, next_prompt} ->
-        :ok = AgentCore.Agent.set_system_prompt(state.agent, next_prompt)
+        :ok = LemonAgent.Agent.set_system_prompt(state.agent, next_prompt)
         %{state | system_prompt: next_prompt}
     end
   end
@@ -1175,7 +1175,7 @@ defmodule CodingAgent.Session do
   @spec ui_notify(t(), String.t(), CodingAgent.UI.notify_type()) :: :ok
   defp ui_notify(state, message, type), do: Notifier.ui_notify(state, message, type)
 
-  @spec handle_agent_event(AgentCore.Types.agent_event(), t()) :: t()
+  @spec handle_agent_event(LemonAgent.Types.agent_event(), t()) :: t()
   defp handle_agent_event(event, state) do
     EventHandler.handle(event, state, event_handler_callbacks())
   end
@@ -1191,7 +1191,7 @@ defmodule CodingAgent.Session do
     }
   end
 
-  @spec broadcast_event(t(), AgentCore.Types.agent_event()) :: :ok
+  @spec broadcast_event(t(), LemonAgent.Types.agent_event()) :: :ok
   defp broadcast_event(state, event), do: Notifier.broadcast_event(state, event)
 
   @spec complete_event_streams(t(), term()) :: :ok

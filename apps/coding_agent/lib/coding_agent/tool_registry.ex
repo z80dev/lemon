@@ -12,7 +12,7 @@ defmodule CodingAgent.ToolRegistry do
 
   require Logger
 
-  alias AgentCore.Types.AgentTool
+  alias LemonAgent.Types.AgentTool
   alias CodingAgent.Extensions
   alias CodingAgent.ToolExecutor
   alias CodingAgent.ToolPolicy
@@ -199,9 +199,9 @@ defmodule CodingAgent.ToolRegistry do
   end
 
   # Built-ins plus whatever satellite apps registered at boot (see
-  # `AgentCore.ToolRegistry`). Built-ins win on name collisions.
+  # `LemonAgent.ToolRegistry`). Built-ins win on name collisions.
   defp builtin_tools do
-    @builtin_tools ++ AgentCore.ToolRegistry.available(Enum.map(@builtin_tools, &elem(&1, 0)))
+    @builtin_tools ++ LemonAgent.ToolRegistry.available(Enum.map(@builtin_tools, &elem(&1, 0)))
   end
 
   @doc """

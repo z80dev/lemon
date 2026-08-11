@@ -18,7 +18,7 @@ defmodule LemonControlPlane.Methods.GoalClear do
     if is_nil(session_key) or String.trim(to_string(session_key)) == "" do
       {:error, {:invalid_request, "sessionKey is required", nil}}
     else
-      case AgentCore.Workspace.GoalStore.clear(session_key) do
+      case LemonAgent.Workspace.GoalStore.clear(session_key) do
         :ok ->
           {:ok,
            %{"sessionKey" => session_key, "cleared" => true, "summary" => summary(session_key)}}

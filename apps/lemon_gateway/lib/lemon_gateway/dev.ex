@@ -9,8 +9,8 @@ defmodule LemonGateway.Dev do
   alias Lemon.Reload
 
   @apps_to_reload [
-    :agent_core,
-    :ai,
+    :lemon_agent,
+    :lemon_ai,
     :coding_agent,
     :coding_agent_ui,
     :lemon_core,

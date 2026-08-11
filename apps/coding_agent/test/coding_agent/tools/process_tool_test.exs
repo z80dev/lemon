@@ -576,8 +576,8 @@ defmodule CodingAgent.Tools.ProcessToolTest do
   describe "execute/4 with abort signal" do
     test "returns cancelled when aborted for list action" do
       tool = CodingAgent.Tools.Process.tool([])
-      signal = AgentCore.AbortSignal.new()
-      AgentCore.AbortSignal.abort(signal)
+      signal = LemonAgent.AbortSignal.new()
+      LemonAgent.AbortSignal.abort(signal)
 
       result = tool.execute.("call_1", %{"action" => "list"}, signal, nil)
 
@@ -588,8 +588,8 @@ defmodule CodingAgent.Tools.ProcessToolTest do
 
     test "returns cancelled when aborted for poll action" do
       tool = CodingAgent.Tools.Process.tool([])
-      signal = AgentCore.AbortSignal.new()
-      AgentCore.AbortSignal.abort(signal)
+      signal = LemonAgent.AbortSignal.new()
+      LemonAgent.AbortSignal.abort(signal)
 
       result = tool.execute.("call_1", %{"action" => "poll", "process_id" => "test"}, signal, nil)
 
@@ -600,8 +600,8 @@ defmodule CodingAgent.Tools.ProcessToolTest do
 
     test "returns cancelled when aborted for log action" do
       tool = CodingAgent.Tools.Process.tool([])
-      signal = AgentCore.AbortSignal.new()
-      AgentCore.AbortSignal.abort(signal)
+      signal = LemonAgent.AbortSignal.new()
+      LemonAgent.AbortSignal.abort(signal)
 
       result = tool.execute.("call_1", %{"action" => "log", "process_id" => "test"}, signal, nil)
 
@@ -612,8 +612,8 @@ defmodule CodingAgent.Tools.ProcessToolTest do
 
     test "returns cancelled when aborted for write action" do
       tool = CodingAgent.Tools.Process.tool([])
-      signal = AgentCore.AbortSignal.new()
-      AgentCore.AbortSignal.abort(signal)
+      signal = LemonAgent.AbortSignal.new()
+      LemonAgent.AbortSignal.abort(signal)
 
       result =
         tool.execute.(
@@ -630,8 +630,8 @@ defmodule CodingAgent.Tools.ProcessToolTest do
 
     test "returns cancelled when aborted for kill action" do
       tool = CodingAgent.Tools.Process.tool([])
-      signal = AgentCore.AbortSignal.new()
-      AgentCore.AbortSignal.abort(signal)
+      signal = LemonAgent.AbortSignal.new()
+      LemonAgent.AbortSignal.abort(signal)
 
       result =
         tool.execute.("call_1", %{"action" => "kill", "process_id" => "test"}, signal, nil)
@@ -643,8 +643,8 @@ defmodule CodingAgent.Tools.ProcessToolTest do
 
     test "returns cancelled when aborted for clear action" do
       tool = CodingAgent.Tools.Process.tool([])
-      signal = AgentCore.AbortSignal.new()
-      AgentCore.AbortSignal.abort(signal)
+      signal = LemonAgent.AbortSignal.new()
+      LemonAgent.AbortSignal.abort(signal)
 
       result =
         tool.execute.("call_1", %{"action" => "clear", "process_id" => "test"}, signal, nil)
@@ -774,7 +774,7 @@ defmodule CodingAgent.Tools.ProcessToolTest do
       tool = CodingAgent.Tools.Process.tool([])
       result = tool.execute.("call_1", %{"action" => "list"}, nil, nil)
 
-      assert %AgentCore.Types.AgentToolResult{} = result
+      assert %LemonAgent.Types.AgentToolResult{} = result
       assert is_list(result.content)
       assert result.content != []
       assert is_map(result.details)
@@ -790,7 +790,7 @@ defmodule CodingAgent.Tools.ProcessToolTest do
       result =
         tool.execute.("call_1", %{"action" => "poll", "process_id" => process_id}, nil, nil)
 
-      assert %AgentCore.Types.AgentToolResult{} = result
+      assert %LemonAgent.Types.AgentToolResult{} = result
       assert is_list(result.content)
       assert result.content != []
       assert is_map(result.details)

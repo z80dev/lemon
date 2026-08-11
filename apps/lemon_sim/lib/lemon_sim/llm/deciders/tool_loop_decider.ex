@@ -10,8 +10,8 @@ defmodule LemonSim.LLM.Deciders.ToolLoopDecider do
 
   require Logger
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.{AssistantMessage, Context, Tool, ToolCall, ToolResultMessage, UserMessage}
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.{AssistantMessage, Context, Tool, ToolCall, ToolResultMessage, UserMessage}
   alias LemonSim.LLM.Deciders.ToolPolicies.SingleTerminal
   alias LemonSim.LLM.Usage
 
@@ -22,14 +22,14 @@ defmodule LemonSim.LLM.Deciders.ToolLoopDecider do
   @default_transient_backoff_base_ms 1_000
   @default_transient_backoff_cap_ms 15_000
 
-  # Reasons synthesized by `Ai.EventStream.result/1` when the streaming
+  # Reasons synthesized by `LemonAi.EventStream.result/1` when the streaming
   # process itself is gone or was canceled, rather than a provider HTTP
-  # error. Not covered by `Ai.Error`/`Ai.Providers.RetryHelper`.
+  # error. Not covered by `LemonAi.Error`/`LemonAi.Providers.RetryHelper`.
   @extra_retryable_atoms [:stream_not_found, :stream_closed]
 
   @type decision :: map()
   @type complete_fn ::
-          (Ai.Types.Model.t(), Context.t(), map() ->
+          (LemonAi.Types.Model.t(), Context.t(), map() ->
              {:ok, AssistantMessage.t()} | {:error, term()})
 
   @impl true
@@ -67,7 +67,7 @@ defmodule LemonSim.LLM.Deciders.ToolLoopDecider do
       {:error,
        {:max_turns_exceeded, %{max_turns: max_turns, executed_calls: state.executed_calls}}}
     else
-      complete_fn = Keyword.get(opts, :complete_fn, &Ai.complete/3)
+      complete_fn = Keyword.get(opts, :complete_fn, &LemonAi.complete/3)
       stream_options = Keyword.get(opts, :stream_options, %{})
       started_at = System.monotonic_time(:millisecond)
 
@@ -193,7 +193,7 @@ defmodule LemonSim.LLM.Deciders.ToolLoopDecider do
       tool_call_id: tool_call.id,
       arguments: tool_call.arguments,
       is_error: is_error,
-      result_text: AgentCore.get_text(result),
+      result_text: LemonAgent.get_text(result),
       result_details: result.details
     }
 
@@ -311,13 +311,13 @@ defmodule LemonSim.LLM.Deciders.ToolLoopDecider do
 
   defp fetch_model(opts) do
     case Keyword.get(opts, :model) do
-      %Ai.Types.Model{} = model -> {:ok, model}
+      %LemonAi.Types.Model{} = model -> {:ok, model}
       _ -> {:error, :missing_model}
     end
   end
 
   defp fetch_tool_calls(%AssistantMessage{} = assistant, max_tool_calls_per_turn) do
-    tool_calls = Ai.get_tool_calls(assistant)
+    tool_calls = LemonAi.get_tool_calls(assistant)
 
     if length(tool_calls) > max_tool_calls_per_turn do
       {:error,
@@ -426,13 +426,13 @@ defmodule LemonSim.LLM.Deciders.ToolLoopDecider do
 
     delay =
       base_ms
-      |> Ai.Providers.RetryHelper.exponential_backoff_with_jitter(retry - 1)
+      |> LemonAi.Providers.RetryHelper.exponential_backoff_with_jitter(retry - 1)
       |> min(cap_ms)
 
     Process.sleep(delay)
   end
 
-  # `Ai.EventStream.result/1` may surface an `%AssistantMessage{}` carrying
+  # `LemonAi.EventStream.result/1` may surface an `%AssistantMessage{}` carrying
   # `error_message` (the common case, after the provider's own HTTP-level
   # retries are exhausted), a bare transport atom/tuple, or `{:canceled, _}`.
   defp transient_error?(%AssistantMessage{stop_reason: :error, error_message: message})
@@ -446,13 +446,14 @@ defmodule LemonSim.LLM.Deciders.ToolLoopDecider do
   defp transient_error?(reason) when is_binary(reason) do
     not auth_error_text?(reason) and
       (retryable_http_status_in_text?(reason) or
-         Ai.Error.retryable?(reason) or
-         Ai.Providers.RetryHelper.retryable_error_text?(reason))
+         LemonAi.Error.retryable?(reason) or
+         LemonAi.Providers.RetryHelper.retryable_error_text?(reason))
   end
 
   defp transient_error?(reason) do
-    not Ai.Error.auth_error?(reason) and
-      (Ai.Error.retryable?(reason) or Ai.Providers.RetryHelper.retryable_transport_reason?(reason))
+    not LemonAi.Error.auth_error?(reason) and
+      (LemonAi.Error.retryable?(reason) or
+         LemonAi.Providers.RetryHelper.retryable_transport_reason?(reason))
   end
 
   defp auth_error_text?(message) do
@@ -470,8 +471,11 @@ defmodule LemonSim.LLM.Deciders.ToolLoopDecider do
 
   defp retryable_http_status_in_text?(message) do
     case Regex.run(~r/HTTP (\d{3})/, message) do
-      [_, status] -> Ai.Providers.RetryHelper.retryable_http_status?(String.to_integer(status))
-      _ -> false
+      [_, status] ->
+        LemonAi.Providers.RetryHelper.retryable_http_status?(String.to_integer(status))
+
+      _ ->
+        false
     end
   end
 
@@ -507,7 +511,7 @@ defmodule LemonSim.LLM.Deciders.ToolLoopDecider do
   defp tool_call_required_error(%AssistantMessage{} = assistant, executed_calls) do
     {:tool_call_required,
      %{
-       assistant_text: Ai.get_text(assistant),
+       assistant_text: LemonAi.get_text(assistant),
        executed_calls: executed_calls
      }}
   end
@@ -521,12 +525,12 @@ defmodule LemonSim.LLM.Deciders.ToolLoopDecider do
 
   defp normalize_tool_result(%AgentToolResult{} = result), do: result
 
-  defp normalize_tool_result(%Ai.Types.TextContent{} = content) do
+  defp normalize_tool_result(%LemonAi.Types.TextContent{} = content) do
     %AgentToolResult{content: [content], details: nil, trust: :trusted}
   end
 
   defp normalize_tool_result(content) when is_binary(content) do
-    %AgentToolResult{content: [AgentCore.text_content(content)], details: nil, trust: :trusted}
+    %AgentToolResult{content: [LemonAgent.text_content(content)], details: nil, trust: :trusted}
   end
 
   defp normalize_tool_result(content) when is_list(content) do
@@ -543,7 +547,7 @@ defmodule LemonSim.LLM.Deciders.ToolLoopDecider do
   end
 
   defp error_result(reason) when is_binary(reason) do
-    %AgentToolResult{content: [AgentCore.text_content(reason)], details: nil, trust: :trusted}
+    %AgentToolResult{content: [LemonAgent.text_content(reason)], details: nil, trust: :trusted}
   end
 
   defp error_result(reason), do: error_result(inspect(reason))

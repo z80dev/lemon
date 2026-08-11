@@ -1463,7 +1463,7 @@ defmodule LemonSimUi.SimDashboardLive do
   defp default_provider, do: @default_provider
 
   defp provider_options do
-    Ai.Models.get_providers()
+    LemonAi.Models.get_providers()
     |> Enum.map(fn provider ->
       {provider_display_name(provider), to_string(provider)}
     end)
@@ -1471,7 +1471,7 @@ defmodule LemonSimUi.SimDashboardLive do
   end
 
   defp model_options_for_provider(provider) do
-    Ai.Models.get_models(provider)
+    LemonAi.Models.get_models(provider)
     |> Enum.map(fn model -> {model.name, model.id} end)
     |> Enum.sort_by(fn {label, _} -> label end)
   end
@@ -1480,7 +1480,7 @@ defmodule LemonSimUi.SimDashboardLive do
     if provider == @default_provider do
       @default_model_id
     else
-      case Ai.Models.get_models(provider) do
+      case LemonAi.Models.get_models(provider) do
         [first | _] -> first.id
         [] -> ""
       end

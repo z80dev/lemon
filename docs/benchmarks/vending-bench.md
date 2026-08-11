@@ -40,7 +40,7 @@ the next day.
 
 ## Physical Worker
 
-Live runs use a real nested worker through `AgentCore.SubagentSupervisor`. The
+Live runs use a real nested worker through `LemonAgent.SubagentSupervisor`. The
 worker has its own tool loop, model options, and memory namespace. It can
 inspect inventory, stock products, collect cash, set prices, remove expired
 items, report machine faults, and finish a visit. The worker mutates only a

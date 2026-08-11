@@ -62,12 +62,12 @@ defmodule LemonRouter.MixProject do
 
   defp deps do
     Lemon.HexPackage.deps([
-      {:ai, in_umbrella: true},
+      {:lemon_ai, in_umbrella: true},
       {:lemon_core, in_umbrella: true},
       {:lemon_memory, in_umbrella: true},
       {:lemon_media, in_umbrella: true},
       {:lemon_channels, in_umbrella: true},
-      {:agent_core, in_umbrella: true},
+      {:lemon_agent, in_umbrella: true},
       {:bandit, "~> 1.5"},
       {:plug, "~> 1.16"},
       {:jason, "~> 1.4"},

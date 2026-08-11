@@ -168,7 +168,7 @@ config :lemon_skills, :audit_llm,
   model: "openai:gpt-4o-mini"
 ```
 
-The model string may be either `provider:model-id` or a bare `model-id` that exists in `Ai.Models`.
+The model string may be either `provider:model-id` or a bare `model-id` that exists in `LemonAi.Models`.
 
 Detailed audit state is stored outside the lockfile:
 
@@ -296,8 +296,8 @@ HttpMock.stub("https://skills.lemon.agent/", {:error, :nxdomain})
 | App | What LemonSkills uses from it |
 |-----|-------------------------------|
 | `lemon_core` | `LemonCore.ExecApprovals` for approval gating in Installer, configured stdio MCP sampling review, and configured HTTP MCP OAuth authorization requests; `LemonCore.Secrets` for GitHub token resolution in Discovery and HTTP MCP OAuth client/token secret storage; `LemonCore.OAuth.LocalCallbackListener` for configured HTTP MCP PKCE callback capture; `LemonCore.Telemetry` for skill load/write events |
-| `agent_core` | `AgentCore.Types.AgentTool` and `AgentCore.Types.AgentToolResult` structs for tool definitions |
-| `ai` | `Ai.Types.TextContent` struct for tool result content |
+| `agent_core` | `LemonAgent.Types.AgentTool` and `LemonAgent.Types.AgentToolResult` structs for tool definitions |
+| `ai` | `LemonAi.Types.TextContent` struct for tool result content |
 | `x_api` | `XApi` for X API integration (x_search, post_to_x, get_x_mentions tools) |
 
 ### Consumers (other apps use this)

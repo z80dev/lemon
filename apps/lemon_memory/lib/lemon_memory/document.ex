@@ -117,7 +117,7 @@ defmodule LemonMemory.Document do
   Build a `Document` directly from its fields, applying the same invariants the
   ingest path relies on.
 
-  Use this when you drive `AgentCore` yourself and want to record a memory
+  Use this when you drive `LemonAgent` yourself and want to record a memory
   without the router's run-record shape that `from_run/4` expects. It differs
   from building the struct by hand in two ways that matter:
 

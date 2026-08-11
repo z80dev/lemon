@@ -7,7 +7,7 @@ import type { UserMessage, AssistantMessage, ToolResultMessage, EventMessage } f
  */
 function createUserMessage(overrides: Partial<UserMessage> = {}): UserMessage {
   return {
-    __struct__: 'Elixir.Ai.Types.UserMessage',
+    __struct__: 'Elixir.LemonAi.Types.UserMessage',
     role: 'user',
     content: 'test message',
     timestamp: Date.now(),
@@ -17,7 +17,7 @@ function createUserMessage(overrides: Partial<UserMessage> = {}): UserMessage {
 
 function createAssistantMessage(overrides: Partial<AssistantMessage> = {}): AssistantMessage {
   return {
-    __struct__: 'Elixir.Ai.Types.AssistantMessage',
+    __struct__: 'Elixir.LemonAi.Types.AssistantMessage',
     role: 'assistant',
     content: [],
     provider: 'test',
@@ -32,7 +32,7 @@ function createAssistantMessage(overrides: Partial<AssistantMessage> = {}): Assi
 
 function createToolResultMessage(overrides: Partial<ToolResultMessage> = {}): ToolResultMessage {
   return {
-    __struct__: 'Elixir.Ai.Types.ToolResultMessage',
+    __struct__: 'Elixir.LemonAi.Types.ToolResultMessage',
     role: 'tool_result',
     tool_call_id: 'tool-123',
     tool_name: 'test_tool',
@@ -177,7 +177,7 @@ describe('useLemonStore message keying and ordering', () => {
         event_seq: 1,
         event: {
           type: 'message_start',
-          data: [createAssistantMessage({ content: [{ __struct__: 'Elixir.Ai.Types.TextContent', type: 'text', text: 'first' }] })],
+          data: [createAssistantMessage({ content: [{ __struct__: 'Elixir.LemonAi.Types.TextContent', type: 'text', text: 'first' }] })],
         },
       } as EventMessage);
 
@@ -212,7 +212,7 @@ describe('useLemonStore message keying and ordering', () => {
         session_id: sessionId,
         event: {
           type: 'message_start',
-          data: [createAssistantMessage({ content: [{ __struct__: 'Elixir.Ai.Types.TextContent', type: 'text', text: 'no seq' }], timestamp: timestamp + 1 })],
+          data: [createAssistantMessage({ content: [{ __struct__: 'Elixir.LemonAi.Types.TextContent', type: 'text', text: 'no seq' }], timestamp: timestamp + 1 })],
         },
       } as unknown as EventMessage);
 

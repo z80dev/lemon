@@ -35,8 +35,8 @@ defmodule LemonCore.Quality.ArchitectureCheck do
         }
 
   @app_namespaces %{
-    agent_core: ["AgentCore"],
-    ai: ["Ai"],
+    lemon_agent: ["LemonAgent"],
+    lemon_ai: ["LemonAi"],
     coding_agent: ["CodingAgent"],
     coding_agent_ui: ["CodingAgent.UI", "CodingAgentUi"],
     lemon_automation: ["LemonAutomation"],

@@ -93,11 +93,11 @@ Bus event types: `:run_started`, `:run_completed`, `:delta`, `:engine_started`, 
 |------|--------|-------|
 | `lib/lemon_gateway/engines/cli_adapter.ex` | `Engines.CliAdapter` | **Read this first for CLI engines.** Shared logic for subprocess start, event stream consumption, resume formatting, and cancellation. |
 | _(moved)_ | `CodingAgent.GatewayEngine` | The `lemon` engine now lives in coding_agent and registers itself via `EngineRegistry.register/1`; this app no longer depends on the agent. |
-| `lib/lemon_gateway/engines/claude.ex` | `Engines.Claude` | Claude Code CLI: delegates to CliAdapter with `AgentCore.CliRunners.ClaudeRunner` |
-| `lib/lemon_gateway/engines/codex.ex` | `Engines.Codex` | Codex CLI: delegates to CliAdapter with `AgentCore.CliRunners.CodexRunner` |
-| `lib/lemon_gateway/engines/droid.ex` | `Engines.Droid` | Factory Droid CLI: delegates to CliAdapter with `AgentCore.CliRunners.DroidRunner` |
-| `lib/lemon_gateway/engines/opencode.ex` | `Engines.Opencode` | Opencode CLI: delegates to CliAdapter with `AgentCore.CliRunners.OpencodeRunner` |
-| `lib/lemon_gateway/engines/pi.ex` | `Engines.Pi` | Pi CLI: delegates to CliAdapter with `AgentCore.CliRunners.PiRunner` |
+| `lib/lemon_gateway/engines/claude.ex` | `Engines.Claude` | Claude Code CLI: delegates to CliAdapter with `LemonAgent.CliRunners.ClaudeRunner` |
+| `lib/lemon_gateway/engines/codex.ex` | `Engines.Codex` | Codex CLI: delegates to CliAdapter with `LemonAgent.CliRunners.CodexRunner` |
+| `lib/lemon_gateway/engines/droid.ex` | `Engines.Droid` | Factory Droid CLI: delegates to CliAdapter with `LemonAgent.CliRunners.DroidRunner` |
+| `lib/lemon_gateway/engines/opencode.ex` | `Engines.Opencode` | Opencode CLI: delegates to CliAdapter with `LemonAgent.CliRunners.OpencodeRunner` |
+| `lib/lemon_gateway/engines/pi.ex` | `Engines.Pi` | Pi CLI: delegates to CliAdapter with `LemonAgent.CliRunners.PiRunner` |
 | `lib/lemon_gateway/engines/echo.ex` | `Engines.Echo` | Test engine: echoes prompt back, no subprocess, useful for integration tests |
 
 ### Configuration and Resolution
@@ -266,7 +266,7 @@ Action detail metadata must stay nested and lossless; in particular,
 
 ### If Using CliAdapter
 
-For CLI-based engines wrapping an `AgentCore.CliRunners.*` module, the implementation is minimal. See `Engines.Claude` as a template -- it is ~35 lines, delegating everything to `CliAdapter`.
+For CLI-based engines wrapping an `LemonAgent.CliRunners.*` module, the implementation is minimal. See `Engines.Claude` as a template -- it is ~35 lines, delegating everything to `CliAdapter`.
 
 ## How to Add a New Transport
 
@@ -336,8 +336,8 @@ Gateway tools are injected into Lemon engine runs only (not CLI engines).
 
 ```elixir
 defmodule LemonGateway.Tools.MyTool do
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.TextContent
 
   def tool(_cwd, opts \\ []) do
     %AgentTool{
@@ -463,7 +463,7 @@ assert completed.ok == true
 
 | App | What LemonGateway Uses |
 |-----|----------------------|
-| `agent_core` | `AgentCore.CliRunners.*` (ClaudeRunner, CodexRunner, etc.), `AgentCore.EventStream`, `AgentCore.Types.*` |
+| `agent_core` | `LemonAgent.CliRunners.*` (ClaudeRunner, CodexRunner, etc.), `LemonAgent.EventStream`, `LemonAgent.Types.*` |
 | `coding_agent` | `CodingAgent.Session` and `CodingAgent.Session.Presentation` for the native Lemon engine; `CodingAgent.CliRunners.LemonRunner` remains for CodingAgent subagent orchestration |
 | `lemon_core` | `LemonCore.Store` (chat state, runs, progress), `LemonCore.Bus` (event broadcast), `LemonCore.Telemetry`, `LemonCore.ResumeToken`, `LemonCore.ChatScope`, `LemonCore.Binding`, `LemonCore.BindingResolver`, `LemonCore.Secrets`, `LemonCore.GatewayConfig`, `LemonCore.Introspection`, `LemonCore.Event` |
 

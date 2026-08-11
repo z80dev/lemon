@@ -3,7 +3,7 @@ defmodule LemonGateway.Engines.Codex do
   Engine adapter for the OpenAI Codex CLI tool.
 
   Delegates to `LemonGateway.Engines.CliAdapter` to manage a
-  `AgentCore.CliRunners.CodexRunner` subprocess for each run.
+  `LemonAgent.CliRunners.CodexRunner` subprocess for each run.
   """
   @behaviour LemonGateway.Engine
 
@@ -27,7 +27,7 @@ defmodule LemonGateway.Engines.Codex do
 
   @impl true
   def start_run(job, opts, sink_pid) do
-    CliAdapter.start_run(AgentCore.CliRunners.CodexRunner, id(), job, opts, sink_pid)
+    CliAdapter.start_run(LemonAgent.CliRunners.CodexRunner, id(), job, opts, sink_pid)
   end
 
   @impl true

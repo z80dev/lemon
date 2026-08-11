@@ -3,13 +3,13 @@ import { describe, it, expect } from 'vitest';
 import { MessageCard } from './MessageCard';
 
 const baseToolMessage = {
-  __struct__: 'Elixir.Ai.Types.ToolResultMessage',
+  __struct__: 'Elixir.LemonAi.Types.ToolResultMessage',
   role: 'tool_result' as const,
   tool_call_id: 'call-1',
   tool_name: 'read',
   content: [
     {
-      __struct__: 'Elixir.Ai.Types.TextContent',
+      __struct__: 'Elixir.LemonAi.Types.TextContent',
       type: 'text' as const,
       text: 'OK',
     },
@@ -20,11 +20,11 @@ const baseToolMessage = {
 };
 
 const baseAssistantMessage = {
-  __struct__: 'Elixir.Ai.Types.AssistantMessage',
+  __struct__: 'Elixir.LemonAi.Types.AssistantMessage',
   role: 'assistant' as const,
   content: [
     {
-      __struct__: 'Elixir.Ai.Types.TextContent',
+      __struct__: 'Elixir.LemonAi.Types.TextContent',
       type: 'text' as const,
       text: 'Hello',
     },

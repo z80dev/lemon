@@ -11,8 +11,8 @@ defmodule LemonEvals.Evals.LiveModel do
 
   import LemonEvals.Support
 
-  alias AgentCore.{EventStream, Loop}
-  alias AgentCore.Types.{AgentContext, AgentLoopConfig, AgentTool, AgentToolResult}
+  alias LemonAgent.{EventStream, Loop}
+  alias LemonAgent.Types.{AgentContext, AgentLoopConfig, AgentTool, AgentToolResult}
   alias CodingAgent.ToolPolicy
   alias CodingAgent.Security.UntrustedToolBoundary
 
@@ -30,7 +30,7 @@ defmodule LemonEvals.Evals.LiveModel do
   alias LemonEvals.Types
   alias LemonSkills.Curator
   alias LemonSkills.Tools.{MemoryTopic, SearchMemory}
-  alias Ai.Types.{Model, ModelCost, TextContent}
+  alias LemonAi.Types.{Model, ModelCost, TextContent}
 
   @spec results(String.t(), keyword()) :: [Types.eval_result()]
   def results(cwd, opts) do
@@ -1518,7 +1518,7 @@ defmodule LemonEvals.Evals.LiveModel do
         headers: %{}
       }
 
-      stream_options = %Ai.Types.StreamOptions{
+      stream_options = %LemonAi.Types.StreamOptions{
         api_key: api_key,
         temperature: 0.0,
         max_tokens: Keyword.get(opts, :live_max_tokens, 512)

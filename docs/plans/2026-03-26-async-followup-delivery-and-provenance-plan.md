@@ -96,7 +96,7 @@ The first problem is mostly fixed by explicit queue-mode resolution. The second 
 ## Non-Goals
 
 - Do not add run-scoped routing restrictions
-- Do not introduce a new top-level `Ai.Types` role
+- Do not introduce a new top-level `LemonAi.Types` role
 - Do not redesign provider tool-result protocol around deferred results
 - Do not remove the dedicated `handle_async_followup/2` ingress path
 

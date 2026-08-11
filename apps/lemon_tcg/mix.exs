@@ -38,8 +38,8 @@ defmodule LemonTcg.MixProject do
   defp deps do
     [
       {:lemon_core, in_umbrella: true},
-      {:agent_core, in_umbrella: true},
-      {:ai, in_umbrella: true},
+      {:lemon_agent, in_umbrella: true},
+      {:lemon_ai, in_umbrella: true},
       # Kernel runner + deciders for the live agent loop
       {:lemon_sim, in_umbrella: true},
       # HTTP client for marketplace and price APIs

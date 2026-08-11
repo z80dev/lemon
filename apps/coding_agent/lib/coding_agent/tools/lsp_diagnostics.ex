@@ -7,8 +7,8 @@ defmodule CodingAgent.Tools.LspDiagnostics do
   deltas without failing the edit when a checker is missing.
   """
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.TextContent
   alias CodingAgent.Tools.PathHelpers
 
   @default_timeout_ms 20_000

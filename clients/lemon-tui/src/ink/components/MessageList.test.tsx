@@ -11,7 +11,7 @@ function addUserMessage(store: ReturnType<typeof createTestStore>, content: stri
   store.handleEvent({
     type: 'message_start',
     data: [{
-      __struct__: 'Elixir.Ai.Types.UserMessage',
+      __struct__: 'Elixir.LemonAi.Types.UserMessage',
       role: 'user',
       content,
       timestamp: Date.now(),
@@ -20,7 +20,7 @@ function addUserMessage(store: ReturnType<typeof createTestStore>, content: stri
   store.handleEvent({
     type: 'message_end',
     data: [{
-      __struct__: 'Elixir.Ai.Types.UserMessage',
+      __struct__: 'Elixir.LemonAi.Types.UserMessage',
       role: 'user',
       content,
       timestamp: Date.now(),
@@ -30,9 +30,9 @@ function addUserMessage(store: ReturnType<typeof createTestStore>, content: stri
 
 function addAssistantMessage(store: ReturnType<typeof createTestStore>, text: string, opts?: { streaming?: boolean; stopReason?: string }) {
   const msg = {
-    __struct__: 'Elixir.Ai.Types.AssistantMessage' as const,
+    __struct__: 'Elixir.LemonAi.Types.AssistantMessage' as const,
     role: 'assistant' as const,
-    content: [{ __struct__: 'Elixir.Ai.Types.TextContent' as const, type: 'text' as const, text }],
+    content: [{ __struct__: 'Elixir.LemonAi.Types.TextContent' as const, type: 'text' as const, text }],
     provider: 'anthropic',
     model: 'claude-3',
     api: 'messages',
@@ -52,11 +52,11 @@ function addToolResultMessage(store: ReturnType<typeof createTestStore>, toolNam
   store.handleEvent({
     type: 'message_start',
     data: [{
-      __struct__: 'Elixir.Ai.Types.ToolResultMessage',
+      __struct__: 'Elixir.LemonAi.Types.ToolResultMessage',
       role: 'tool_result',
       tool_call_id: `tc-${Date.now()}`,
       tool_name: toolName,
-      content: [{ __struct__: 'Elixir.Ai.Types.TextContent', type: 'text', text: content }],
+      content: [{ __struct__: 'Elixir.LemonAi.Types.TextContent', type: 'text', text: content }],
       is_error: opts?.isError || false,
       timestamp: Date.now(),
     }],
@@ -64,11 +64,11 @@ function addToolResultMessage(store: ReturnType<typeof createTestStore>, toolNam
   store.handleEvent({
     type: 'message_end',
     data: [{
-      __struct__: 'Elixir.Ai.Types.ToolResultMessage',
+      __struct__: 'Elixir.LemonAi.Types.ToolResultMessage',
       role: 'tool_result',
       tool_call_id: `tc-${Date.now()}`,
       tool_name: toolName,
-      content: [{ __struct__: 'Elixir.Ai.Types.TextContent', type: 'text', text: content }],
+      content: [{ __struct__: 'Elixir.LemonAi.Types.TextContent', type: 'text', text: content }],
       is_error: opts?.isError || false,
       timestamp: Date.now(),
     }],

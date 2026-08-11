@@ -9,7 +9,7 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
 
   require Logger
 
-  alias Ai.Tokens
+  alias LemonAi.Tokens
   alias LemonCore.ResumeToken
   alias LemonRouter.ChannelContext
 
@@ -487,8 +487,8 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
     model
     |> model_lookup_candidates()
     |> Enum.find_value(fn candidate ->
-      if Code.ensure_loaded?(Ai.Models) and function_exported?(Ai.Models, :find_by_id, 1) do
-        case Ai.Models.find_by_id(candidate) do
+      if Code.ensure_loaded?(LemonAi.Models) and function_exported?(LemonAi.Models, :find_by_id, 1) do
+        case LemonAi.Models.find_by_id(candidate) do
           %{context_window: cw} when is_integer(cw) and cw > 0 -> cw
           _ -> nil
         end

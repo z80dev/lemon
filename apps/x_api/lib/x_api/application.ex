@@ -63,9 +63,9 @@ defmodule XApi.Application do
   # Same for the three agent tools: they register with the agent runtime rather
   # than appearing in any platform-owned tool list.
   defp register_tools do
-    if Code.ensure_loaded?(AgentCore.ToolRegistry) do
+    if Code.ensure_loaded?(LemonAgent.ToolRegistry) do
       Enum.each(@tools, fn {name, module} ->
-        AgentCore.ToolRegistry.register(name, module)
+        LemonAgent.ToolRegistry.register(name, module)
       end)
     end
 

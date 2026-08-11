@@ -1,5 +1,5 @@
 defmodule LemonScripts.LiveBrowserSmoke do
-  alias Ai.Types.ImageContent
+  alias LemonAi.Types.ImageContent
   alias CodingAgent.Tools
   alias LemonBrowser.LocalServer
 

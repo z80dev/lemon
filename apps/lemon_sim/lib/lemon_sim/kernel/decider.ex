@@ -4,8 +4,8 @@ defmodule LemonSim.Kernel.Decider do
   """
 
   @callback decide(
-              context :: Ai.Types.Context.t(),
-              tools :: [AgentCore.Types.AgentTool.t()],
+              context :: LemonAi.Types.Context.t(),
+              tools :: [LemonAgent.Types.AgentTool.t()],
               opts :: keyword()
             ) ::
               {:ok, map()} | {:error, term()}

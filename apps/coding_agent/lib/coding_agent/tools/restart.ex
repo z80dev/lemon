@@ -8,8 +8,8 @@ defmodule CodingAgent.Tools.Restart do
   fresh `mix run ...` process and pick up the latest code on disk.
   """
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.TextContent
   alias CodingAgent.UI.Context, as: UIContext
 
   @restart_exit_code 75

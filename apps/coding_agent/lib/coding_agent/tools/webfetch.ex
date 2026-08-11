@@ -6,7 +6,7 @@ defmodule CodingAgent.Tools.WebFetch do
   optional Firecrawl fallback, and structured JSON output.
   """
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias CodingAgent.Security.ExternalContent
   alias CodingAgent.Tools.WebCache
   alias CodingAgent.Tools.WebGuard

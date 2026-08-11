@@ -26,8 +26,8 @@ defmodule LemonSkills.PromptRegressionTest do
 
   use ExUnit.Case, async: false
 
-  alias AgentCore.Types.AgentToolResult
-  alias Ai.Types.TextContent
+  alias LemonAgent.Types.AgentToolResult
+  alias LemonAi.Types.TextContent
   alias LemonSkills.{PromptView, SkillView}
   alias LemonSkills.Tools.ReadSkill
 

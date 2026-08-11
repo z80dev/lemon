@@ -1,7 +1,7 @@
 defmodule CodingAgent.ExtensionLifecycleTest do
   use ExUnit.Case, async: false
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias CodingAgent.Config
   alias CodingAgent.ExtensionLifecycle
 
@@ -169,12 +169,12 @@ defmodule CodingAgent.ExtensionLifecycleTest do
   defp extension_tools_code(tool_name) do
     """
     [
-      %AgentCore.Types.AgentTool{
+      %LemonAgent.Types.AgentTool{
         name: "#{tool_name}",
         description: "tool #{tool_name}",
         parameters: %{},
         label: "#{tool_name}",
-        execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{content: [], details: nil} end
+        execute: fn _, _, _, _ -> %LemonAgent.Types.AgentToolResult{content: [], details: nil} end
       }
     ]
     """

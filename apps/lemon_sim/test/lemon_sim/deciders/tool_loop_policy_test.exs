@@ -1,8 +1,8 @@
 defmodule LemonSim.LLM.Deciders.ToolLoopPolicyTest do
   use ExUnit.Case, async: true
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.ToolCall
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.ToolCall
   alias LemonSim.LLM.Deciders.ToolPolicies.SingleTerminal
 
   test "accepts support tools followed by one terminal decision tool" do
@@ -44,7 +44,7 @@ defmodule LemonSim.LLM.Deciders.ToolLoopPolicyTest do
   test "returns nil for support tools and a decision map for terminal tools" do
     result =
       %AgentToolResult{
-        content: [AgentCore.text_content("attack committed")],
+        content: [LemonAgent.text_content("attack committed")],
         details: %{events: [%{kind: "attack_committed"}], ok: true},
         trust: :trusted
       }

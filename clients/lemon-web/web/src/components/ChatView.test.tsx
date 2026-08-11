@@ -12,7 +12,7 @@ const initialState = useLemonStore.getState();
  */
 function createUserMessage(overrides: Partial<UserMessage> = {}): UserMessage {
   return {
-    __struct__: 'Elixir.Ai.Types.UserMessage',
+    __struct__: 'Elixir.LemonAi.Types.UserMessage',
     role: 'user',
     content: 'test message',
     timestamp: Date.now(),
@@ -22,11 +22,11 @@ function createUserMessage(overrides: Partial<UserMessage> = {}): UserMessage {
 
 function createAssistantMessage(overrides: Partial<AssistantMessage> = {}): AssistantMessage {
   return {
-    __struct__: 'Elixir.Ai.Types.AssistantMessage',
+    __struct__: 'Elixir.LemonAi.Types.AssistantMessage',
     role: 'assistant',
     content: [
       {
-        __struct__: 'Elixir.Ai.Types.TextContent',
+        __struct__: 'Elixir.LemonAi.Types.TextContent',
         type: 'text',
         text: 'Hello from assistant',
       },
@@ -43,13 +43,13 @@ function createAssistantMessage(overrides: Partial<AssistantMessage> = {}): Assi
 
 function createToolResultMessage(overrides: Partial<ToolResultMessage> = {}): ToolResultMessage {
   return {
-    __struct__: 'Elixir.Ai.Types.ToolResultMessage',
+    __struct__: 'Elixir.LemonAi.Types.ToolResultMessage',
     role: 'tool_result',
     tool_call_id: 'tool-123',
     tool_name: 'test_tool',
     content: [
       {
-        __struct__: 'Elixir.Ai.Types.TextContent',
+        __struct__: 'Elixir.LemonAi.Types.TextContent',
         type: 'text',
         text: 'Tool result text',
       },
@@ -127,7 +127,7 @@ describe('ChatView', () => {
           createAssistantMessage({
             content: [
               {
-                __struct__: 'Elixir.Ai.Types.TextContent',
+                __struct__: 'Elixir.LemonAi.Types.TextContent',
                 type: 'text',
                 text: 'Assistant response',
               },
@@ -224,7 +224,7 @@ describe('ChatView', () => {
             tool_name: 'bash',
             content: [
               {
-                __struct__: 'Elixir.Ai.Types.TextContent',
+                __struct__: 'Elixir.LemonAi.Types.TextContent',
                 type: 'text',
                 text: 'Command failed',
               },

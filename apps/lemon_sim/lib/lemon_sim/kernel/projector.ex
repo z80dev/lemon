@@ -5,8 +5,8 @@ defmodule LemonSim.Kernel.Projector do
 
   @callback project(
               frame :: LemonSim.Kernel.DecisionFrame.t(),
-              tools :: [AgentCore.Types.AgentTool.t()],
+              tools :: [LemonAgent.Types.AgentTool.t()],
               opts :: keyword()
             ) ::
-              {:ok, Ai.Types.Context.t()} | {:error, term()}
+              {:ok, LemonAi.Types.Context.t()} | {:error, term()}
 end

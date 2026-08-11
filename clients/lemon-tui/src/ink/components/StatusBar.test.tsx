@@ -69,9 +69,9 @@ describe('StatusBar', () => {
     const event = {
       type: 'message_start',
       data: [{
-        __struct__: 'Elixir.Ai.Types.AssistantMessage',
+        __struct__: 'Elixir.LemonAi.Types.AssistantMessage',
         role: 'assistant',
-        content: [{ __struct__: 'Elixir.Ai.Types.TextContent', type: 'text', text: 'Hello' }],
+        content: [{ __struct__: 'Elixir.LemonAi.Types.TextContent', type: 'text', text: 'Hello' }],
         provider: 'anthropic',
         model: 'claude-3',
         api: 'messages',
@@ -85,9 +85,9 @@ describe('StatusBar', () => {
     const endEvent = {
       type: 'message_end',
       data: [{
-        __struct__: 'Elixir.Ai.Types.AssistantMessage',
+        __struct__: 'Elixir.LemonAi.Types.AssistantMessage',
         role: 'assistant',
-        content: [{ __struct__: 'Elixir.Ai.Types.TextContent', type: 'text', text: 'Hello' }],
+        content: [{ __struct__: 'Elixir.LemonAi.Types.TextContent', type: 'text', text: 'Hello' }],
         provider: 'anthropic',
         model: 'claude-3',
         api: 'messages',
@@ -126,9 +126,9 @@ describe('StatusBar', () => {
     const event = {
       type: 'message_end',
       data: [{
-        __struct__: 'Elixir.Ai.Types.AssistantMessage',
+        __struct__: 'Elixir.LemonAi.Types.AssistantMessage',
         role: 'assistant',
-        content: [{ __struct__: 'Elixir.Ai.Types.TextContent', type: 'text', text: 'Hi' }],
+        content: [{ __struct__: 'Elixir.LemonAi.Types.TextContent', type: 'text', text: 'Hi' }],
         provider: 'anthropic',
         model: 'claude-3',
         api: 'messages',

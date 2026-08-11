@@ -7,7 +7,7 @@ defmodule LemonSim.LLM.Memory.Tools do
   plus linked files) without exposing arbitrary filesystem access.
   """
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
 
   @default_list_limit 200
   @default_max_read_bytes 256 * 1024
@@ -94,7 +94,7 @@ defmodule LemonSim.LLM.Memory.Tools do
 
           {:ok,
            %AgentToolResult{
-             content: [AgentCore.text_content(text)],
+             content: [LemonAgent.text_content(text)],
              details: %{
                path: path,
                bytes: byte_size(content),
@@ -149,7 +149,7 @@ defmodule LemonSim.LLM.Memory.Tools do
              :ok <- write_file(abs_path, content, Map.get(params, "mode", "overwrite")) do
           {:ok,
            %AgentToolResult{
-             content: [AgentCore.text_content("ok")],
+             content: [LemonAgent.text_content("ok")],
              details: %{path: path, bytes: byte_size(content), root: root},
              trust: :trusted
            }}
@@ -198,7 +198,7 @@ defmodule LemonSim.LLM.Memory.Tools do
              :ok <- File.write(abs_path, updated) do
           {:ok,
            %AgentToolResult{
-             content: [AgentCore.text_content("ok")],
+             content: [LemonAgent.text_content("ok")],
              details: %{path: path, replacements: replacements, root: root},
              trust: :trusted
            }}
@@ -256,7 +256,7 @@ defmodule LemonSim.LLM.Memory.Tools do
              visible <- files |> Enum.map(&Path.relative_to(&1, root)) |> Enum.take(limit) do
           {:ok,
            %AgentToolResult{
-             content: [AgentCore.text_content(Enum.join(visible, "\n"))],
+             content: [LemonAgent.text_content(Enum.join(visible, "\n"))],
              details: %{count: length(visible), root: root},
              trust: :trusted
            }}
@@ -294,7 +294,7 @@ defmodule LemonSim.LLM.Memory.Tools do
              :ok <- File.rm(abs_path) do
           {:ok,
            %AgentToolResult{
-             content: [AgentCore.text_content("ok")],
+             content: [LemonAgent.text_content("ok")],
              details: %{path: path, root: root},
              trust: :trusted
            }}

@@ -30,8 +30,8 @@ All agent loop executions must run under a `Task.Supervisor`. This ensures:
 - Observable lifecycle through OTP tooling
 
 **Implementation:**
-- `AgentCore.LoopTaskSupervisor` - Task.Supervisor for agent loop tasks
-- `AgentCore.ToolTaskSupervisor` - Task.Supervisor for tool execution tasks
+- `LemonAgent.LoopTaskSupervisor` - Task.Supervisor for agent loop tasks
+- `LemonAgent.ToolTaskSupervisor` - Task.Supervisor for tool execution tasks
 - Agent loops started via `Task.Supervisor.async_nolink/2` or `start_child/2`
 
 ### 2. Agent Event Streams Must Be Bounded and Cancelable
@@ -45,20 +45,20 @@ Event streams must have:
 - **Timeout support** - Configurable stream timeout with automatic cancellation
 
 **Implementation:**
-- `AgentCore.EventStream` - Provides bounded, cancelable event streaming
+- `LemonAgent.EventStream` - Provides bounded, cancelable event streaming
 - Options: `:owner`, `:max_queue`, `:drop_strategy`, `:timeout`
 
 ### 3. Subagents Must Be Registered, Discoverable, and Supervised
 
 All subagents (child agent processes) must:
 
-- Register in `AgentCore.AgentRegistry` for discoverability
-- Run under `AgentCore.SubagentSupervisor` for supervision
+- Register in `LemonAgent.AgentRegistry` for discoverability
+- Run under `LemonAgent.SubagentSupervisor` for supervision
 - Use structured keys like `{session_id, role, index}` for identification
 
 **Implementation:**
-- `AgentCore.AgentRegistry` - Registry for agent process lookup
-- `AgentCore.SubagentSupervisor` - DynamicSupervisor for subagent lifecycle
+- `LemonAgent.AgentRegistry` - Registry for agent process lookup
+- `LemonAgent.SubagentSupervisor` - DynamicSupervisor for subagent lifecycle
 
 ### 4. Coordinators Must Cancel Subagents on Timeout or Parent Termination
 
@@ -78,12 +78,12 @@ Coordinator processes that spawn subagents must:
 ## Supervision Tree
 
 ```
-AgentCore.Supervisor (:one_for_one)
-+-- AgentCore.AbortSignal.TableOwner (GenServer)
-+-- AgentCore.AgentRegistry (Registry)
-+-- AgentCore.SubagentSupervisor (DynamicSupervisor)
-+-- AgentCore.LoopTaskSupervisor (Task.Supervisor)
-+-- AgentCore.ToolTaskSupervisor (Task.Supervisor)
+LemonAgent.Supervisor (:one_for_one)
++-- LemonAgent.AbortSignal.TableOwner (GenServer)
++-- LemonAgent.AgentRegistry (Registry)
++-- LemonAgent.SubagentSupervisor (DynamicSupervisor)
++-- LemonAgent.LoopTaskSupervisor (Task.Supervisor)
++-- LemonAgent.ToolTaskSupervisor (Task.Supervisor)
 ```
 
 ---
@@ -97,7 +97,7 @@ AgentCore.Supervisor (:one_for_one)
                               |
                               v
         +------------------------------------------------------+
-        | AgentCore.Agent (GenServer)                          |
+        | LemonAgent.Agent (GenServer)                          |
         | - Manages state                                      |
         | - Subscribers + monitoring                           |
         | - Queue management (steering/follow-up)              |
@@ -108,7 +108,7 @@ AgentCore.Supervisor (:one_for_one)
                                   |
                                   v
         +------------------------------------------------------+
-        | AgentCore.Loop (Supervised Task)                     |
+        | LemonAgent.Loop (Supervised Task)                     |
         | - agent_loop / agent_loop_continue                   |
         | - Creates EventStream (bounded, cancelable)          |
         | - Runs stateless loop logic                          |
@@ -132,15 +132,15 @@ AgentCore.Supervisor (:one_for_one)
 
 The following telemetry events are emitted:
 
-- `[:agent_core, :loop, :start]` - Agent loop started
-- `[:agent_core, :loop, :end]` - Agent loop completed
-- `[:agent_core, :tool_task, :start]` - Tool task started
-- `[:agent_core, :tool_task, :end]` - Tool task completed
-- `[:agent_core, :tool_task, :error]` - Tool task failed or was aborted
-- `[:agent_core, :tool_result, :emit]` - Tool result message emitted (`tool_name`, `tool_call_id`, `is_error`, `trust`)
-- `[:agent_core, :subagent, :spawn]` - Subagent spawned
-- `[:agent_core, :subagent, :end]` - Subagent completed (explicit stop only; a crashed subagent emits nothing)
-- `[:ai, :dispatcher, :rejected]` - Request rejected (rate limit/circuit open)
+- `[:lemon_agent, :loop, :start]` - Agent loop started
+- `[:lemon_agent, :loop, :end]` - Agent loop completed
+- `[:lemon_agent, :tool_task, :start]` - Tool task started
+- `[:lemon_agent, :tool_task, :end]` - Tool task completed
+- `[:lemon_agent, :tool_task, :error]` - Tool task failed or was aborted
+- `[:lemon_agent, :tool_result, :emit]` - Tool result message emitted (`tool_name`, `tool_call_id`, `is_error`, `trust`)
+- `[:lemon_agent, :subagent, :spawn]` - Subagent spawned
+- `[:lemon_agent, :subagent, :end]` - Subagent completed (explicit stop only; a crashed subagent emits nothing)
+- `[:lemon_ai, :dispatcher, :rejected]` - Request rejected (rate limit/circuit open)
 
 See [telemetry.md](telemetry.md) for the emit-site-verified catalog, measurements, and metadata.
 
@@ -155,7 +155,7 @@ changes.
 
 ### Current Tool Execution Path
 
-Tool execution is handled in `apps/agent_core/lib/agent_core/loop/tool_calls.ex`.
+Tool execution is handled in `apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex`.
 
 #### Entry Point
 
@@ -176,7 +176,7 @@ end
 The `execute_tool_calls_parallel/5` function spawns tool tasks:
 
 ```elixir
-# apps/agent_core/lib/agent_core/loop.ex
+# apps/lemon_agent/lib/lemon_agent/loop.ex
 defp execute_tool_calls_parallel(context, new_messages, tool_calls, signal, stream) do
   parent = self()
 
@@ -189,7 +189,7 @@ defp execute_tool_calls_parallel(context, new_messages, tool_calls, signal, stre
       ref = make_ref()
 
       {:ok, pid} =
-        Task.Supervisor.start_child(AgentCore.ToolTaskSupervisor, fn ->
+        Task.Supervisor.start_child(LemonAgent.ToolTaskSupervisor, fn ->
           {result, is_error} = execute_tool_call(tool, tool_call, signal, stream)
           send(parent, {:tool_task_result, ref, tool_call, result, is_error})
         end)
@@ -210,7 +210,7 @@ end
 
 | Aspect | Implementation | Location |
 |--------|---------------|----------|
-| Process creation | `Task.Supervisor.start_child/2` (supervised) | `AgentCore.ToolTaskSupervisor` |
+| Process creation | `Task.Supervisor.start_child/2` (supervised) | `LemonAgent.ToolTaskSupervisor` |
 | Crash detection | `Process.monitor(pid)` | Line 707 |
 | Result tracking | `pending_by_ref` and `pending_by_mon` maps | Lines 693, 709-711 |
 | Result message | `{:tool_task_result, ref, tool_call, result, is_error}` | Line 704 |
@@ -233,12 +233,12 @@ end
 
 #### Tool Result Trust and Metadata Pipeline
 
-- Tools return `%AgentCore.Types.AgentToolResult{trust: ...}`.
+- Tools return `%LemonAgent.Types.AgentToolResult{trust: ...}`.
 - `emit_tool_result/7` normalizes trust before emitting messages and telemetry:
   `:untrusted` stays `:untrusted`; every other value becomes `:trusted`.
-- Emitted tool result telemetry (`[:agent_core, :tool_result, :emit]`) includes `tool_name`, `tool_call_id`, `is_error`, and normalized `trust`.
-- External-content tools use `AgentCore.Security.ExternalContent.untrusted_json_result/1`, which sets `trust: :untrusted` and places the JSON payload into `details`.
-- `AgentCore.Security.ExternalContent.trust_metadata/2` emits structured trust metadata fields:
+- Emitted tool result telemetry (`[:lemon_agent, :tool_result, :emit]`) includes `tool_name`, `tool_call_id`, `is_error`, and normalized `trust`.
+- External-content tools use `LemonAgent.Security.ExternalContent.untrusted_json_result/1`, which sets `trust: :untrusted` and places the JSON payload into `details`.
+- `LemonAgent.Security.ExternalContent.trust_metadata/2` emits structured trust metadata fields:
   `untrusted`, `source`, `source_label`/`sourceLabel`, `wrapping_applied`/`wrappingApplied`,
   `wrapped_fields`/`wrappedFields`, and optional `warning_included`/`warningIncluded`.
 - Current tool payload conventions:
@@ -357,7 +357,7 @@ in `session.ex` is a thin wrapper that calls `Notifier.broadcast_event/2`,
 There are **two** subscriber paths, and `broadcast_event/2` fans out to both:
 
 ```elixir
-@spec broadcast_event(map(), AgentCore.Types.agent_event()) :: :ok
+@spec broadcast_event(map(), LemonAgent.Types.agent_event()) :: :ok
 def broadcast_event(state, event) do
   session_event = {:session_event, state.session_manager.header.id, event}
 
@@ -368,7 +368,7 @@ def broadcast_event(state, event) do
 
   # Path 2: bounded, cancelable EventStreams.
   Enum.each(state.event_streams, fn {_mon_ref, %{stream: stream}} ->
-    AgentCore.EventStream.push_async(stream, session_event)
+    LemonAgent.EventStream.push_async(stream, session_event)
   end)
 
   :ok
@@ -383,7 +383,7 @@ State carries both collections:
   `Notifier.subscribe_direct/3`.
 - `event_streams: %{reference() => %{pid: pid(), stream: pid()}}` — bounded
   subscribers registered via `Notifier.subscribe_stream/3`, each backed by an
-  `AgentCore.EventStream` (`max_queue`, `drop_strategy`, `timeout`).
+  `LemonAgent.EventStream` (`max_queue`, `drop_strategy`, `timeout`).
 
 #### Backpressure
 
@@ -392,7 +392,7 @@ The two paths differ deliberately:
 | Path | Mechanism | Backpressure |
 |------|-----------|--------------|
 | Direct listeners | `send/2` fire-and-forget | None — intended for trusted in-VM consumers (e.g. the TUI) that keep up with the stream |
-| EventStreams | `AgentCore.EventStream.push_async/2` | Bounded queue with a configurable drop strategy, so a slow consumer cannot grow the producer's mailbox |
+| EventStreams | `LemonAgent.EventStream.push_async/2` | Bounded queue with a configurable drop strategy, so a slow consumer cannot grow the producer's mailbox |
 
 Prefer `subscribe_stream/3` for any consumer that may fall behind; the bounded
 queue is exactly the mechanism that prevents the unbounded-mailbox risk the raw
@@ -409,35 +409,35 @@ cancels + demonitors any `EventStream` owned by that pid (`EventStream.cancel(st
 
 ### Current Supervision Structure
 
-#### AgentCore.Application
+#### LemonAgent.Application
 
-File: `apps/agent_core/lib/agent_core/application.ex`
+File: `apps/lemon_agent/lib/lemon_agent/application.ex`
 
 ```
-AgentCore.Supervisor (:one_for_one)
-+-- AgentCore.AbortSignal.TableOwner (GenServer)
-+-- AgentCore.AgentRegistry (Registry, keys: :unique)
-+-- AgentCore.SubagentSupervisor (DynamicSupervisor)
-+-- AgentCore.LoopTaskSupervisor (Task.Supervisor)
-+-- AgentCore.ToolTaskSupervisor (Task.Supervisor)
+LemonAgent.Supervisor (:one_for_one)
++-- LemonAgent.AbortSignal.TableOwner (GenServer)
++-- LemonAgent.AgentRegistry (Registry, keys: :unique)
++-- LemonAgent.SubagentSupervisor (DynamicSupervisor)
++-- LemonAgent.LoopTaskSupervisor (Task.Supervisor)
++-- LemonAgent.ToolTaskSupervisor (Task.Supervisor)
 ```
 
 ```elixir
 def start(_type, _args) do
   children = [
     # Owns the abort-signal ETS table so it doesn't get created by short-lived processes.
-    AgentCore.AbortSignal.TableOwner,
+    LemonAgent.AbortSignal.TableOwner,
     # Registry for agent process lookup and discovery
-    {Registry, keys: :unique, name: AgentCore.AgentRegistry},
+    {Registry, keys: :unique, name: LemonAgent.AgentRegistry},
     # DynamicSupervisor for subagent processes
-    {AgentCore.SubagentSupervisor, name: AgentCore.SubagentSupervisor},
+    {LemonAgent.SubagentSupervisor, name: LemonAgent.SubagentSupervisor},
     # Task.Supervisor for agent loop tasks
-    {Task.Supervisor, name: AgentCore.LoopTaskSupervisor},
+    {Task.Supervisor, name: LemonAgent.LoopTaskSupervisor},
     # Task.Supervisor for tool execution tasks
-    {Task.Supervisor, name: AgentCore.ToolTaskSupervisor}
+    {Task.Supervisor, name: LemonAgent.ToolTaskSupervisor}
   ]
 
-  opts = [strategy: :one_for_one, name: AgentCore.Supervisor]
+  opts = [strategy: :one_for_one, name: LemonAgent.Supervisor]
   Supervisor.start_link(children, opts)
 end
 ```
@@ -470,8 +470,8 @@ end
 Agent loop tasks ARE supervised via `Task.Supervisor`:
 
 ```elixir
-# apps/agent_core/lib/agent_core/loop.ex, Lines 115-134
-case Task.Supervisor.start_child(AgentCore.LoopTaskSupervisor, fn ->
+# apps/lemon_agent/lib/lemon_agent/loop.ex, Lines 115-134
+case Task.Supervisor.start_child(LemonAgent.LoopTaskSupervisor, fn ->
     try do
       run_agent_loop(prompts, context, config, signal, stream_fn, stream)
     rescue
@@ -490,12 +490,12 @@ end
 
 #### Tool Tasks - Supervised
 
-Individual tool execution tasks are supervised under `AgentCore.ToolTaskSupervisor`:
+Individual tool execution tasks are supervised under `LemonAgent.ToolTaskSupervisor`:
 
 ```elixir
-# apps/agent_core/lib/agent_core/loop.ex
+# apps/lemon_agent/lib/lemon_agent/loop.ex
 {:ok, pid} =
-  Task.Supervisor.start_child(AgentCore.ToolTaskSupervisor, fn ->
+  Task.Supervisor.start_child(LemonAgent.ToolTaskSupervisor, fn ->
     {result, is_error} = execute_tool_call(tool, tool_call, signal, stream)
     send(parent, {:tool_task_result, ref, tool_call, result, is_error})
   end)
@@ -503,7 +503,7 @@ Individual tool execution tasks are supervised under `AgentCore.ToolTaskSupervis
 
 This means:
 - Tool task crashes are detected via monitors and surfaced as tool errors
-- Supervisor visibility into running tool tasks (`AgentCore.ToolTaskSupervisor`)
+- Supervisor visibility into running tool tasks (`LemonAgent.ToolTaskSupervisor`)
 - Tool tasks can be terminated on abort via `Task.Supervisor.terminate_child/2`
 
 ---
@@ -538,8 +538,8 @@ Use this checklist to verify BEAM agent behavior after making changes:
 
 ### Registry Operations
 
-- [ ] Main agent appears in AgentCore.AgentRegistry
-- [ ] Subagents appear in AgentCore.AgentRegistry
+- [ ] Main agent appears in LemonAgent.AgentRegistry
+- [ ] Subagents appear in LemonAgent.AgentRegistry
 - [ ] Sessions appear in CodingAgent.SessionRegistry
 - [ ] Registry cleanup occurs on process termination
 
@@ -552,7 +552,7 @@ Use this checklist to verify BEAM agent behavior after making changes:
 
 ### Supervision Tree
 
-- [ ] AgentCore.Supervisor starts successfully
+- [ ] LemonAgent.Supervisor starts successfully
 - [ ] CodingAgent.Supervisor starts successfully
 - [ ] Child process failures are handled per supervision strategy
 - [ ] Application restart brings up all required processes
@@ -570,10 +570,10 @@ Use this checklist to verify BEAM agent behavior after making changes:
 
 | Component | File Path |
 |-----------|-----------|
-| Tool execution loop | `apps/agent_core/lib/agent_core/loop.ex` |
-| Agent GenServer | `apps/agent_core/lib/agent_core/agent.ex` |
-| AgentCore supervisor | `apps/agent_core/lib/agent_core/application.ex` |
-| Event stream | `apps/agent_core/lib/agent_core/event_stream.ex` |
+| Tool execution loop | `apps/lemon_agent/lib/lemon_agent/loop.ex` |
+| Agent GenServer | `apps/lemon_agent/lib/lemon_agent/agent.ex` |
+| LemonAgent supervisor | `apps/lemon_agent/lib/lemon_agent/application.ex` |
+| Event stream | `apps/lemon_agent/lib/lemon_agent/event_stream.ex` |
 | Session GenServer | `apps/coding_agent/lib/coding_agent/session.ex` |
 | CodingAgent supervisor | `apps/coding_agent/lib/coding_agent/application.ex` |
 | Session supervisor | `apps/coding_agent/lib/coding_agent/session_supervisor.ex` |
@@ -584,7 +584,7 @@ Use this checklist to verify BEAM agent behavior after making changes:
 ## Known Limitations
 
 1. **No automatic tool retries**: Tool execution tasks run under
-   `AgentCore.ToolTaskSupervisor`, but are not automatically retried/restarted on crash.
+   `LemonAgent.ToolTaskSupervisor`, but are not automatically retried/restarted on crash.
 
 2. **No event backpressure**: Event broadcasting uses fire-and-forget `send/2`,
    which can cause mailbox growth with slow consumers.

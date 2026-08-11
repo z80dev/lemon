@@ -1,7 +1,7 @@
 defmodule LemonSkills.Tools.MediaGenerateSpeechTest do
   use ExUnit.Case, async: false
 
-  alias AgentCore.Types.AgentToolResult
+  alias LemonAgent.Types.AgentToolResult
   alias LemonSkills.Tools.MediaGenerateSpeech
   alias LemonMedia.MediaJobs
 

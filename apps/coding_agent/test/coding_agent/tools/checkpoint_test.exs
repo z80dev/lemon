@@ -1,7 +1,7 @@
 defmodule CodingAgent.Tools.CheckpointTest do
   use ExUnit.Case, async: false
 
-  alias AgentCore.Types.AgentToolResult
+  alias LemonAgent.Types.AgentToolResult
   alias CodingAgent.Checkpoint
   alias CodingAgent.Tools.Checkpoint, as: CheckpointTool
   alias CodingAgent.Tools.Edit

@@ -363,13 +363,13 @@ defmodule LemonSimTest do
     def tools(_state, _opts) do
       {:ok,
        [
-         %AgentCore.Types.AgentTool{
+         %LemonAgent.Types.AgentTool{
            name: "attack",
            description: "Attack target",
            parameters: %{"type" => "object", "properties" => %{}},
            label: "Attack",
            execute: fn _id, _params, _signal, _on_update ->
-             %AgentCore.Types.AgentToolResult{}
+             %LemonAgent.Types.AgentToolResult{}
            end
          }
        ]}
@@ -382,8 +382,8 @@ defmodule LemonSimTest do
     @impl true
     def project(%DecisionFrame{} = frame, _tools, _opts) do
       context =
-        Ai.Types.Context.new(system_prompt: "test")
-        |> Ai.Types.Context.add_user_message("world=#{inspect(frame.world)}")
+        LemonAi.Types.Context.new(system_prompt: "test")
+        |> LemonAi.Types.Context.add_user_message("world=#{inspect(frame.world)}")
 
       {:ok, context}
     end

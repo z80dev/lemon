@@ -7,7 +7,7 @@ defmodule LemonControlPlane.Methods.SetHeartbeats do
 
   @behaviour LemonControlPlane.Method
 
-  alias AgentCore.Workspace.HeartbeatStore
+  alias LemonAgent.Workspace.HeartbeatStore
   alias LemonControlPlane.Protocol.Errors
 
   @impl true

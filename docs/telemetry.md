@@ -28,7 +28,7 @@ Three prefix families coexist. This is descriptive, not a recommendation — see
 | Prefix | Meaning | Emitted via |
 |---|---|---|
 | `[:lemon, ...]` | Cross-cutting platform concerns: runs, channels, approvals, memory, scheduler, reload, WASM | `LemonCore.Telemetry.emit/3` and its named helpers |
-| `[:agent_core, ...]`, `[:coding_agent, ...]`, `[:ai, ...]` | App-local concerns, prefixed by OTP app | `LemonCore.Telemetry.emit/3` or `:telemetry.execute/3` directly |
+| `[:lemon_agent, ...]`, `[:coding_agent, ...]`, `[:lemon_ai, ...]` | App-local concerns, prefixed by OTP app | `LemonCore.Telemetry.emit/3` or `:telemetry.execute/3` directly |
 | `[:lemon_skills, ...]`, `[:lemon_sim_ui, ...]` | App-local, full app name as prefix | app-local helper module |
 
 `LemonCore.Telemetry.emit/3` is a direct pass-through to `:telemetry.execute/3`
@@ -50,7 +50,7 @@ event you are attaching to:
 
 | Unit | Used by |
 |---|---|
-| `duration` in **native** units | `[:lemon, :channels, :deliver, :stop]`, `[:agent_core, :loop, :end]`, `[:ai, :dispatcher, :rejected]` |
+| `duration` in **native** units | `[:lemon, :channels, :deliver, :stop]`, `[:lemon_agent, :loop, :end]`, `[:lemon_ai, :dispatcher, :rejected]` |
 | `duration_us` | `[:coding_agent, :extension, :tool, ...]`, `[:coding_agent, :wasm, :tool, ...]`, `[:lemon, :memory, :ingest, ...]` |
 | `duration_ms` | `[:lemon, :reload, ...]`, `[:lemon, :run, :stop]`, `[:lemon, :wasm, :*, :stop]` |
 | both `duration` (native) and `duration_ms` | `[:lemon, :config, :reload, :stop]` and `:exception` — `duration` is a real monotonic native reading and `duration_ms` is derived from it via `System.convert_time_unit/3` |
@@ -74,8 +74,8 @@ sequenceDiagram
     participant Ch as Channel adapter
     participant R as LemonRouter
     participant S as Gateway Scheduler
-    participant L as AgentCore.Loop
-    participant P as Ai.CallDispatcher
+    participant L as LemonAgent.Loop
+    participant P as LemonAi.CallDispatcher
     participant M as LemonMemory.Ingest
     participant O as Channels Outbox
 
@@ -85,15 +85,15 @@ sequenceDiagram
     R->>S: request execution slot
     Note over S: [:lemon, :gateway, :scheduler, :slot_queued]<br/>then :slot_granted
     S->>L: run accepted
-    Note over L: [:agent_core, :loop, :start]<br/>[:agent_core, :tool_schema_snapshot, :created]
+    Note over L: [:lemon_agent, :loop, :start]<br/>[:lemon_agent, :tool_schema_snapshot, :created]
 
     loop each turn
         L->>P: provider call
-        Note over P: [:ai, :dispatcher, :dispatch]<br/>or [:ai, :dispatcher, :rejected]
-        Note over L: [:agent_core, :tool_task, :start]<br/>[:agent_core, :tool_task, :end] or :error<br/>[:agent_core, :tool_result, :emit]
+        Note over P: [:lemon_ai, :dispatcher, :dispatch]<br/>or [:lemon_ai, :dispatcher, :rejected]
+        Note over L: [:lemon_agent, :tool_task, :start]<br/>[:lemon_agent, :tool_task, :end] or :error<br/>[:lemon_agent, :tool_result, :emit]
     end
 
-    Note over L: [:agent_core, :loop, :end]
+    Note over L: [:lemon_agent, :loop, :end]
     L->>S: release slot
     Note over S: [:lemon, :gateway, :scheduler, :slot_released]
     L->>M: finalize run
@@ -156,38 +156,38 @@ Last segment is built at runtime from an atom argument
 These are the clearest saturation signal in the system: `waitq > 0` means runs are waiting
 for an engine slot. The empty metadata means they cannot be correlated to a run or session.
 
-### Agent loop — `[:agent_core, ...]`
+### Agent loop — `[:lemon_agent, ...]`
 
 | Event | Measurements | Metadata | Emitter |
 |---|---|---|---|
-| `[:agent_core, :loop, :start]` | `system_time` | `prompt_count`, `message_count`, `tool_count`, `model` | [`loop.ex:305`](../apps/agent_core/lib/agent_core/loop.ex) (fresh loop) and `:352` (continue loop; `prompt_count` is always 0 there) |
-| `[:agent_core, :loop, :end]` | `duration` (native, **may be `nil`**), `system_time` | `message_count`, `model`, `status` (`:completed` \| `:early_exit`) | [`loop.ex:807`](../apps/agent_core/lib/agent_core/loop.ex) |
-| `[:agent_core, :loop, :state_transition]` | `system_time` | caller map plus `from`, `to` | [`loop.ex:754`](../apps/agent_core/lib/agent_core/loop.ex) |
-| `[:agent_core, :tool_schema_snapshot, :created]` | `system_time` | `snapshot_id`, `fingerprint`, `tool_count`, `tool_names` | [`loop.ex:399`](../apps/agent_core/lib/agent_core/loop.ex) |
-| `[:agent_core, :tool_task, :start]` | `system_time` | `tool_name`, `tool_call_id` | [`tool_calls.ex:551`](../apps/agent_core/lib/agent_core/loop/tool_calls.ex) |
-| `[:agent_core, :tool_task, :end]` | `system_time` | `tool_name`, `tool_call_id`, `is_error` | [`tool_calls.ex:211`](../apps/agent_core/lib/agent_core/loop/tool_calls.ex) |
-| `[:agent_core, :tool_task, :error]` | `system_time` | `tool_name`, `tool_call_id`, `reason` | six sites in [`tool_calls.ex`](../apps/agent_core/lib/agent_core/loop/tool_calls.ex) — `:137`/`:152` (`reason: :aborted`), `:309` (task crash), `:389` (`:timeout`), `:586` (`{:start_failed, reason}`), `:601` (prepare failure) |
-| `[:agent_core, :tool_result, :emit]` | `system_time` | `tool_name`, `tool_call_id`, `is_error`, `trust` | [`tool_calls.ex:692`](../apps/agent_core/lib/agent_core/loop/tool_calls.ex). `trust` is normalized: only `:untrusted` stays untrusted, everything else becomes `:trusted` |
-| `[:agent_core, :tool_call, :name_normalized]` | `system_time` | `original_name`, `matched_tool_name` | [`tool_calls.ex:747`](../apps/agent_core/lib/agent_core/loop/tool_calls.ex), when a model-supplied tool name needed fuzzy matching |
-| `[:agent_core, :context, :size]` | `char_count`, `message_count` | `has_system_prompt` | [`context.ex:113`](../apps/agent_core/lib/agent_core/context.ex), on every `estimate_size/2` call |
-| `[:agent_core, :context, :warning]` | `char_count`, `threshold` | `level` (`:warning` \| `:critical`) | [`context.ex:206`](../apps/agent_core/lib/agent_core/context.ex) (critical) and `:222` (warning) |
-| `[:agent_core, :context, :truncated]` | `dropped_count`, `remaining_count` | `strategy` | [`context.ex:287`](../apps/agent_core/lib/agent_core/context.ex) |
-| `[:agent_core, :subagent, :spawn]` | `system_time` | `pid`, `registry_key`, `has_registry_key` | [`subagent_supervisor.ex:99`](../apps/agent_core/lib/agent_core/subagent_supervisor.ex) |
-| `[:agent_core, :subagent, :end]` | `system_time` | `pid`, `reason: :stopped` | [`subagent_supervisor.ex:150`](../apps/agent_core/lib/agent_core/subagent_supervisor.ex). Only fires on explicit stop — a crashed subagent emits nothing |
+| `[:lemon_agent, :loop, :start]` | `system_time` | `prompt_count`, `message_count`, `tool_count`, `model` | [`loop.ex:305`](../apps/lemon_agent/lib/lemon_agent/loop.ex) (fresh loop) and `:352` (continue loop; `prompt_count` is always 0 there) |
+| `[:lemon_agent, :loop, :end]` | `duration` (native, **may be `nil`**), `system_time` | `message_count`, `model`, `status` (`:completed` \| `:early_exit`) | [`loop.ex:807`](../apps/lemon_agent/lib/lemon_agent/loop.ex) |
+| `[:lemon_agent, :loop, :state_transition]` | `system_time` | caller map plus `from`, `to` | [`loop.ex:754`](../apps/lemon_agent/lib/lemon_agent/loop.ex) |
+| `[:lemon_agent, :tool_schema_snapshot, :created]` | `system_time` | `snapshot_id`, `fingerprint`, `tool_count`, `tool_names` | [`loop.ex:399`](../apps/lemon_agent/lib/lemon_agent/loop.ex) |
+| `[:lemon_agent, :tool_task, :start]` | `system_time` | `tool_name`, `tool_call_id` | [`tool_calls.ex:551`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex) |
+| `[:lemon_agent, :tool_task, :end]` | `system_time` | `tool_name`, `tool_call_id`, `is_error` | [`tool_calls.ex:211`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex) |
+| `[:lemon_agent, :tool_task, :error]` | `system_time` | `tool_name`, `tool_call_id`, `reason` | six sites in [`tool_calls.ex`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex) — `:137`/`:152` (`reason: :aborted`), `:309` (task crash), `:389` (`:timeout`), `:586` (`{:start_failed, reason}`), `:601` (prepare failure) |
+| `[:lemon_agent, :tool_result, :emit]` | `system_time` | `tool_name`, `tool_call_id`, `is_error`, `trust` | [`tool_calls.ex:692`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex). `trust` is normalized: only `:untrusted` stays untrusted, everything else becomes `:trusted` |
+| `[:lemon_agent, :tool_call, :name_normalized]` | `system_time` | `original_name`, `matched_tool_name` | [`tool_calls.ex:747`](../apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex), when a model-supplied tool name needed fuzzy matching |
+| `[:lemon_agent, :context, :size]` | `char_count`, `message_count` | `has_system_prompt` | [`context.ex:113`](../apps/lemon_agent/lib/lemon_agent/context.ex), on every `estimate_size/2` call |
+| `[:lemon_agent, :context, :warning]` | `char_count`, `threshold` | `level` (`:warning` \| `:critical`) | [`context.ex:206`](../apps/lemon_agent/lib/lemon_agent/context.ex) (critical) and `:222` (warning) |
+| `[:lemon_agent, :context, :truncated]` | `dropped_count`, `remaining_count` | `strategy` | [`context.ex:287`](../apps/lemon_agent/lib/lemon_agent/context.ex) |
+| `[:lemon_agent, :subagent, :spawn]` | `system_time` | `pid`, `registry_key`, `has_registry_key` | [`subagent_supervisor.ex:99`](../apps/lemon_agent/lib/lemon_agent/subagent_supervisor.ex) |
+| `[:lemon_agent, :subagent, :end]` | `system_time` | `pid`, `reason: :stopped` | [`subagent_supervisor.ex:150`](../apps/lemon_agent/lib/lemon_agent/subagent_supervisor.ex). Only fires on explicit stop — a crashed subagent emits nothing |
 
-### Providers — `[:ai, ...]`
+### Providers — `[:lemon_ai, ...]`
 
 | Event | Measurements | Metadata | Emitter |
 |---|---|---|---|
-| `[:ai, :dispatcher, :dispatch]` | `system_time` | `provider` | [`call_dispatcher.ex:79`](../apps/ai/lib/ai/call_dispatcher.ex), before breaker and rate-limit checks |
-| `[:ai, :dispatcher, :rejected]` | `duration`, `system_time` | `provider`, `reason`, `retry_after_ms` (circuit-open only) | [`call_dispatcher.ex:94`](../apps/ai/lib/ai/call_dispatcher.ex) (`:circuit_open`), `:127` (`:rate_limited`), `:140` (`:max_concurrency`) |
-| `[:ai, :circuit_breaker, :opened]` | `system_time` | `provider`, `failure_count`, `failure_threshold`, `reason` | [`circuit_breaker.ex:291`](../apps/ai/lib/ai/circuit_breaker.ex) |
-| `[:ai, :circuit_breaker, :closed]` | `system_time` | `provider` | [`circuit_breaker.ex:258`](../apps/ai/lib/ai/circuit_breaker.ex), recovery confirmed |
-| `[:ai, :circuit_breaker, :half_opened]` | `system_time` | `provider`, `recovery_timeout` | [`circuit_breaker.ex:370`](../apps/ai/lib/ai/circuit_breaker.ex) |
-| `[:ai, :circuit_breaker, :reopened]` | `system_time` | `provider`, `reason` | [`circuit_breaker.ex:317`](../apps/ai/lib/ai/circuit_breaker.ex), probe failed during half-open |
-| `[:ai, :compacting_client, <event>]` | varies by call site | varies | [`compacting_client.ex:233`](../apps/ai/lib/ai/compacting_client.ex). Runtime suffix: `:request_started`, `:request_succeeded`, `:request_failed`, `:compaction_retry` |
-| `[:ai, :context_compactor, <event>]` | `system_time` | varies | [`context_compactor.ex:370`](../apps/ai/lib/ai/context_compactor.ex). Runtime suffix: `:compaction_started`, `:compaction_succeeded`, `:compaction_failed` |
-| `[:ai, :prompt_diagnostics, :llm_call]` | `system_time` | `data`, `engine: "ai"`, `session_key`, `agent_id`, `run_id` | [`prompt_diagnostics.ex:158`](../apps/ai/lib/ai/prompt_diagnostics.ex). Correlation fields come from `x-lemon-*` request headers and are `nil` when absent |
+| `[:lemon_ai, :dispatcher, :dispatch]` | `system_time` | `provider` | [`call_dispatcher.ex:79`](../apps/lemon_ai/lib/lemon_ai/call_dispatcher.ex), before breaker and rate-limit checks |
+| `[:lemon_ai, :dispatcher, :rejected]` | `duration`, `system_time` | `provider`, `reason`, `retry_after_ms` (circuit-open only) | [`call_dispatcher.ex:94`](../apps/lemon_ai/lib/lemon_ai/call_dispatcher.ex) (`:circuit_open`), `:127` (`:rate_limited`), `:140` (`:max_concurrency`) |
+| `[:lemon_ai, :circuit_breaker, :opened]` | `system_time` | `provider`, `failure_count`, `failure_threshold`, `reason` | [`circuit_breaker.ex:291`](../apps/lemon_ai/lib/lemon_ai/circuit_breaker.ex) |
+| `[:lemon_ai, :circuit_breaker, :closed]` | `system_time` | `provider` | [`circuit_breaker.ex:258`](../apps/lemon_ai/lib/lemon_ai/circuit_breaker.ex), recovery confirmed |
+| `[:lemon_ai, :circuit_breaker, :half_opened]` | `system_time` | `provider`, `recovery_timeout` | [`circuit_breaker.ex:370`](../apps/lemon_ai/lib/lemon_ai/circuit_breaker.ex) |
+| `[:lemon_ai, :circuit_breaker, :reopened]` | `system_time` | `provider`, `reason` | [`circuit_breaker.ex:317`](../apps/lemon_ai/lib/lemon_ai/circuit_breaker.ex), probe failed during half-open |
+| `[:lemon_ai, :compacting_client, <event>]` | varies by call site | varies | [`compacting_client.ex:233`](../apps/lemon_ai/lib/lemon_ai/compacting_client.ex). Runtime suffix: `:request_started`, `:request_succeeded`, `:request_failed`, `:compaction_retry` |
+| `[:lemon_ai, :context_compactor, <event>]` | `system_time` | varies | [`context_compactor.ex:370`](../apps/lemon_ai/lib/lemon_ai/context_compactor.ex). Runtime suffix: `:compaction_started`, `:compaction_succeeded`, `:compaction_failed` |
+| `[:lemon_ai, :prompt_diagnostics, :llm_call]` | `system_time` | `data`, `engine: "ai"`, `session_key`, `agent_id`, `run_id` | [`prompt_diagnostics.ex:158`](../apps/lemon_ai/lib/lemon_ai/prompt_diagnostics.ex). Correlation fields come from `x-lemon-*` request headers and are `nil` when absent |
 
 ### Memory — `[:lemon, :memory, ...]`
 
@@ -231,7 +231,7 @@ for an engine slot. The empty metadata means they cannot be correlated to a run 
 | `[:coding_agent, :wasm, :tool, :start]` | `count: 1` | tool identity | [`wasm/tool_factory.ex:58`](../apps/coding_agent/lib/coding_agent/wasm/tool_factory.ex) |
 | `[:coding_agent, :wasm, :tool, :stop]` | `count: 1`, `duration_us` | tool identity plus `status` | [`wasm/tool_factory.ex:113`](../apps/coding_agent/lib/coding_agent/wasm/tool_factory.ex) |
 | `[:coding_agent, :wasm, :tool, :exception]` | `count: 1`, `duration_us` | tool identity plus `kind`, `error_type` | [`wasm/tool_factory.ex:121`](../apps/coding_agent/lib/coding_agent/wasm/tool_factory.ex) |
-| `[:coding_agent, :tool_call, :name_normalized]` | `system_time` | `original_name`, `matched_tool_name` | [`tool_registry.ex:148`](../apps/coding_agent/lib/coding_agent/tool_registry.ex). Shares its metadata keys with the `[:agent_core, ...]` event of the same leaf name |
+| `[:coding_agent, :tool_call, :name_normalized]` | `system_time` | `original_name`, `matched_tool_name` | [`tool_registry.ex:148`](../apps/coding_agent/lib/coding_agent/tool_registry.ex). Shares its metadata keys with the `[:lemon_agent, ...]` event of the same leaf name |
 | `[:lemon, :wasm, :discover, :start]` | `count: 1` | `host: :wasm`, `session_hash`, `cwd_hash` | [`wasm/sidecar_session.ex:191`](../apps/coding_agent/lib/coding_agent/wasm/sidecar_session.ex) |
 | `[:lemon, :wasm, :discover, :stop]` | `duration_ms`, `ok` | `host: :wasm`, `session_hash`, `cwd_hash` | [`wasm/sidecar_session.ex:376`](../apps/coding_agent/lib/coding_agent/wasm/sidecar_session.ex) |
 | `[:lemon, :wasm, :invoke, :start]` | `count: 1` | `host: :wasm`, `session_hash`, `cwd_hash`, `tool_hash` | [`wasm/sidecar_session.ex:220`](../apps/coding_agent/lib/coding_agent/wasm/sidecar_session.ex) |
@@ -292,10 +292,10 @@ defmodule MyApp.TelemetryLogger do
   @events [
     [:lemon, :channels, :outbox, :rejected],
     [:lemon, :gateway, :scheduler, :slot_queued],
-    [:ai, :dispatcher, :rejected],
-    [:ai, :circuit_breaker, :opened],
-    [:agent_core, :tool_task, :error],
-    [:agent_core, :context, :warning],
+    [:lemon_ai, :dispatcher, :rejected],
+    [:lemon_ai, :circuit_breaker, :opened],
+    [:lemon_agent, :tool_task, :error],
+    [:lemon_agent, :context, :warning],
     [:lemon, :memory, :ingest, :failure]
   ]
 
@@ -319,22 +319,22 @@ defmodule MyApp.TelemetryLogger do
     Logger.warning("engine slots saturated in_flight=#{m.in_flight}/#{m.max} waitq=#{m.waitq}")
   end
 
-  def handle_event([:ai, :dispatcher, :rejected], _m, meta, _config) do
+  def handle_event([:lemon_ai, :dispatcher, :rejected], _m, meta, _config) do
     Logger.warning("provider rejected provider=#{meta.provider} reason=#{meta.reason}")
   end
 
-  def handle_event([:ai, :circuit_breaker, :opened], _m, meta, _config) do
+  def handle_event([:lemon_ai, :circuit_breaker, :opened], _m, meta, _config) do
     Logger.error(
       "circuit opened provider=#{meta.provider} " <>
         "failures=#{meta.failure_count}/#{meta.failure_threshold}"
     )
   end
 
-  def handle_event([:agent_core, :tool_task, :error], _m, meta, _config) do
+  def handle_event([:lemon_agent, :tool_task, :error], _m, meta, _config) do
     Logger.error("tool failed tool=#{meta.tool_name} reason=#{inspect(meta.reason)}")
   end
 
-  def handle_event([:agent_core, :context, :warning], m, meta, _config) do
+  def handle_event([:lemon_agent, :context, :warning], m, meta, _config) do
     Logger.warning("context #{meta.level}: #{m.char_count} chars (threshold #{m.threshold})")
   end
 
@@ -357,7 +357,7 @@ exit with `no process`. Start it explicitly and drive a real emit path:
 
 :telemetry.attach_many(
   "probe",
-  [[:agent_core, :context, :size], [:agent_core, :context, :warning]],
+  [[:lemon_agent, :context, :size], [:lemon_agent, :context, :warning]],
   fn event, measurements, metadata, _ ->
     IO.inspect({event, measurements, metadata})
   end,
@@ -365,19 +365,19 @@ exit with `no process`. Start it explicitly and drive a real emit path:
 )
 
 messages = [%{role: :user, content: "hello world"}, %{role: :assistant, content: "hi"}]
-AgentCore.Context.estimate_size(messages, "you are a test")
-AgentCore.Context.check_size(messages, nil, warning_threshold: 1, critical_threshold: 2, log: false)
+LemonAgent.Context.estimate_size(messages, "you are a test")
+LemonAgent.Context.check_size(messages, nil, warning_threshold: 1, critical_threshold: 2, log: false)
 ```
 
 Running that under `mix run --no-start` produces:
 
 ```
-{[:agent_core, :context, :size], %{char_count: 27, message_count: 2}, %{has_system_prompt: true}}
-{[:agent_core, :context, :size], %{char_count: 13, message_count: 2}, %{has_system_prompt: false}}
-{[:agent_core, :context, :warning], %{threshold: 2, char_count: 13}, %{level: :critical}}
+{[:lemon_agent, :context, :size], %{char_count: 27, message_count: 2}, %{has_system_prompt: true}}
+{[:lemon_agent, :context, :size], %{char_count: 13, message_count: 2}, %{has_system_prompt: false}}
+{[:lemon_agent, :context, :warning], %{threshold: 2, char_count: 13}, %{level: :critical}}
 ```
 
-`AgentCore.Context` is a good probe target because it emits from a pure function with no
+`LemonAgent.Context` is a good probe target because it emits from a pure function with no
 supervision tree, no store, and no network.
 
 ### Aggregating into metrics
@@ -460,29 +460,29 @@ their catalog entries above — and the genuinely dead `run_exception/3` helper 
 
 **Eight families build their final segment at runtime**, so they cannot be discovered by
 searching for a literal event name, and `attach_many/4` requires knowing every value in
-advance: `[:lemon, :gateway, :scheduler, _]`, `[:ai, :compacting_client, _]`,
-`[:ai, :context_compactor, _]`, `[:coding_agent, :rate_limit_pause, _]`,
+advance: `[:lemon, :gateway, :scheduler, _]`, `[:lemon_ai, :compacting_client, _]`,
+`[:lemon_ai, :context_compactor, _]`, `[:coding_agent, :rate_limit_pause, _]`,
 `[:coding_agent, :rate_limit_healer, _]`, `[:coding_agent, :rate_limit_recovery, _]`,
 `[:coding_agent, :session_fork, _]`, `[:coding_agent, :session, :overflow_recovery, _]`, and
 `[:lemon_sim_ui, :hosted_werewolf, _]`. The known values are listed in the catalog above.
 
 **Measurement gaps.** `[:coding_agent, :session_fork, _]` emits an empty measurement map, so
-it cannot drive a counter without a synthetic measurement. `[:agent_core, :loop, :end]`
+it cannot drive a counter without a synthetic measurement. `[:lemon_agent, :loop, :end]`
 reports `duration: nil` when the process-dictionary start time is missing. The scheduler
 family emits empty metadata, so slot pressure cannot be attributed to a run, session, or
 engine.
 
-**Coverage gaps.** `[:agent_core, :subagent, :end]` fires only on explicit stop, so a
+**Coverage gaps.** `[:lemon_agent, :subagent, :end]` fires only on explicit stop, so a
 crashed subagent produces a `:spawn` with no matching `:end`. There is no telemetry on the
 store, the Bus, or the router's session-coordinator queue transitions.
 
 **Previously documented events that do not exist.** An earlier revision of this file
-described ten events that were never in the code: `[:agent_core, :loop, :exception]`,
-`[:agent_core, :loop, :task_start_failed]`, `[:agent_core, :event_stream, :queue_depth]`,
-`[:agent_core, :event_stream, :dropped]`, `[:agent_core, :agent, :loop_error]`,
+described ten events that were never in the code: `[:lemon_agent, :loop, :exception]`,
+`[:lemon_agent, :loop, :task_start_failed]`, `[:lemon_agent, :event_stream, :queue_depth]`,
+`[:lemon_agent, :event_stream, :dropped]`, `[:lemon_agent, :agent, :loop_error]`,
 `[:coding_agent, :session, :event_stream, :broadcast]`, `[:coding_agent, :session, :error]`,
-`[:ai, :dispatcher, :queue_depth]`, `[:ai, :dispatcher, :retry]`, and
-`[:ai, :stream, :error]`. It also described an `AgentCore.TelemetryPoller` emitting periodic
+`[:lemon_ai, :dispatcher, :queue_depth]`, `[:lemon_ai, :dispatcher, :retry]`, and
+`[:lemon_ai, :stream, :error]`. It also described an `LemonAgent.TelemetryPoller` emitting periodic
 `[:vm, _]` stats; no such module exists and `telemetry_poller` is not a dependency. They are
 listed here so they are not reintroduced from memory. The same revision documented
 `loop_type` / `reason` metadata on the agent loop events and `duration` measurements on the
@@ -535,8 +535,8 @@ Every atom below appears in a live `LemonCore.Introspection.record/3` call.
 | `LemonGateway.Scheduler` | `:scheduled_job_triggered`, `:scheduled_job_completed` |
 | `CodingAgent.Session` | `:session_started`, `:session_ended`, `:compaction_triggered` |
 | `CodingAgent.Session.EventHandler` | `:tool_call_dispatched`, `:engine_event_ignored` |
-| `AgentCore.Agent` | `:agent_loop_started`, `:agent_turn_observed` (inferred), `:agent_loop_ended`, `:agent_progress_snapshot` |
-| `AgentCore.CliRunners.JsonlRunner` | `:jsonl_stream_started`, `:tool_use_observed` (inferred), `:assistant_turn_observed` (inferred), `:jsonl_stream_ended` |
+| `LemonAgent.Agent` | `:agent_loop_started`, `:agent_turn_observed` (inferred), `:agent_loop_ended`, `:agent_progress_snapshot` |
+| `LemonAgent.CliRunners.JsonlRunner` | `:jsonl_stream_started`, `:tool_use_observed` (inferred), `:assistant_turn_observed` (inferred), `:jsonl_stream_ended` |
 | CLI runner engines (codex, claude, kimi, opencode, pi) | `:engine_subprocess_started`, `:engine_output_observed`, `:engine_subprocess_exited` — all inferred |
 | Skills bridge / session-end audit | `:skill_load_observed`, `:skill_write_observed`, `:skill_prompt_render_observed`, `:missed_skill_observed`, `:missed_learning_observed` |
 

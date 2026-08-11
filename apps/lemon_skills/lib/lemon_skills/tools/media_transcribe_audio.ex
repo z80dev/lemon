@@ -3,11 +3,11 @@ defmodule LemonSkills.Tools.MediaTranscribeAudio do
   Supervised audio-transcription preview tool backed by LemonMedia.MediaJobSupervisor.
   """
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.TextContent
-  alias AgentCore.Security.ExternalContent
-  alias AgentCore.Tools.AbortHelpers
-  alias AgentCore.ModelRuntime.ProviderNames
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.TextContent
+  alias LemonAgent.Security.ExternalContent
+  alias LemonAgent.Tools.AbortHelpers
+  alias LemonAgent.ModelRuntime.ProviderNames
   alias LemonCore.Config
   alias LemonMedia.MediaJobSupervisor
   alias LemonMedia.MediaJobs
@@ -393,7 +393,7 @@ defmodule LemonSkills.Tools.MediaTranscribeAudio do
   defp openai_api_key(%{api_key: key}) when is_binary(key) and key != "", do: {:ok, key}
 
   defp openai_api_key(%{provider_cfg: provider_cfg}) do
-    case AgentCore.ModelRuntime.Credentials.resolve_provider_api_key(:openai, provider_cfg,
+    case LemonAgent.ModelRuntime.Credentials.resolve_provider_api_key(:openai, provider_cfg,
            provider_cfg: true
          ) do
       key when is_binary(key) and key != "" -> {:ok, key}
@@ -796,7 +796,7 @@ defmodule LemonSkills.Tools.MediaTranscribeAudio do
   end
 
   defp secret_api_key(secret_name) when is_binary(secret_name) and secret_name != "" do
-    AgentCore.ModelRuntime.Credentials.resolve_secret_api_key(secret_name)
+    LemonAgent.ModelRuntime.Credentials.resolve_secret_api_key(secret_name)
   end
 
   defp secret_api_key(_), do: nil

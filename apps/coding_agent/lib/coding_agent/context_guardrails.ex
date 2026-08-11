@@ -10,8 +10,8 @@ defmodule CodingAgent.ContextGuardrails do
 
   require Logger
 
-  alias Ai.Types.{AssistantMessage, ToolResultMessage, UserMessage}
-  alias Ai.Types.{TextContent, ImageContent, ThinkingContent, ToolCall}
+  alias LemonAi.Types.{AssistantMessage, ToolResultMessage, UserMessage}
+  alias LemonAi.Types.{TextContent, ImageContent, ThinkingContent, ToolCall}
 
   @type opts :: %{
           enabled: boolean(),
@@ -34,7 +34,7 @@ defmodule CodingAgent.ContextGuardrails do
   }
 
   @doc """
-  Transform messages for LLM input (AgentCore transform_context-compatible).
+  Transform messages for LLM input (LemonAgent transform_context-compatible).
 
   Return value can be:
     - list(messages)
@@ -292,7 +292,7 @@ defmodule CodingAgent.ContextGuardrails do
     _ = maybe_write_spill(path, text)
 
     truncated =
-      Ai.Text.truncate_middle_utf8(text, max_bytes,
+      LemonAi.Text.truncate_middle_utf8(text, max_bytes,
         marker: fn removed -> "\n... [TRUNCATED #{removed} bytes] ...\n" end
       )
 

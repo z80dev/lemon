@@ -1,12 +1,12 @@
 defmodule CodingAgent.Tools.MemoryPathsTest do
   use ExUnit.Case, async: true
 
-  alias AgentCore.Types.AgentToolResult
+  alias LemonAgent.Types.AgentToolResult
   alias CodingAgent.Tools.{Edit, Grep, Read, Write}
 
   defp tool_text(%{content: content}) when is_list(content) do
-    case Enum.find(content, &match?(%Ai.Types.TextContent{}, &1)) do
-      %Ai.Types.TextContent{text: text} -> text
+    case Enum.find(content, &match?(%LemonAi.Types.TextContent{}, &1)) do
+      %LemonAi.Types.TextContent{text: text} -> text
       _ -> ""
     end
   end

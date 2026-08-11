@@ -3,7 +3,7 @@ defmodule LemonSim.Examples.Legislature.ActionSpace do
 
   @behaviour LemonSim.Kernel.ActionSpace
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonCore.MapHelpers
   alias LemonSim.Examples.Legislature.{Bills, Events}
   alias LemonSim.Examples.Helpers.Tools, as: GameTools
@@ -98,7 +98,7 @@ defmodule LemonSim.Examples.Legislature.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("sent message to #{recipient}")],
+           content: [LemonAgent.text_content("sent message to #{recipient}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -149,7 +149,7 @@ defmodule LemonSim.Examples.Legislature.ActionSpace do
         {:ok,
          %AgentToolResult{
            content: [
-             AgentCore.text_content(
+             LemonAgent.text_content(
                "proposed trade to #{recipient}: YES on #{bill_a} for YES on #{bill_b}"
              )
            ],
@@ -177,7 +177,7 @@ defmodule LemonSim.Examples.Legislature.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("ending caucus phase for #{actor_id}")],
+           content: [LemonAgent.text_content("ending caucus phase for #{actor_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -244,7 +244,7 @@ defmodule LemonSim.Examples.Legislature.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("made speech about #{bill_id}")],
+           content: [LemonAgent.text_content("made speech about #{bill_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -269,7 +269,7 @@ defmodule LemonSim.Examples.Legislature.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("ending floor debate for #{actor_id}")],
+           content: [LemonAgent.text_content("ending floor debate for #{actor_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -337,7 +337,7 @@ defmodule LemonSim.Examples.Legislature.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("proposed amendment to #{bill_id}")],
+           content: [LemonAgent.text_content("proposed amendment to #{bill_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -384,7 +384,7 @@ defmodule LemonSim.Examples.Legislature.ActionSpace do
         {:ok,
          %AgentToolResult{
            content: [
-             AgentCore.text_content("lobbied for #{bill_id} with #{capital_spent} capital")
+             LemonAgent.text_content("lobbied for #{bill_id} with #{capital_spent} capital")
            ],
            details: %{"event" => event},
            trust: :trusted
@@ -410,7 +410,7 @@ defmodule LemonSim.Examples.Legislature.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("ending amendment phase for #{actor_id}")],
+           content: [LemonAgent.text_content("ending amendment phase for #{actor_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -468,7 +468,7 @@ defmodule LemonSim.Examples.Legislature.ActionSpace do
         {:ok,
          %AgentToolResult{
            content: [
-             AgentCore.text_content("voted #{vote} on amendment #{amendment_id}")
+             LemonAgent.text_content("voted #{vote} on amendment #{amendment_id}")
            ],
            details: %{"event" => event},
            trust: :trusted
@@ -494,7 +494,7 @@ defmodule LemonSim.Examples.Legislature.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("ending amendment vote for #{actor_id}")],
+           content: [LemonAgent.text_content("ending amendment vote for #{actor_id}")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -561,7 +561,7 @@ defmodule LemonSim.Examples.Legislature.ActionSpace do
         {:ok,
          %AgentToolResult{
            content: [
-             AgentCore.text_content(
+             LemonAgent.text_content(
                "cast votes: #{Enum.map_join(votes, ", ", fn {bill, v} -> "#{bill}=#{v}" end)}"
              )
            ],

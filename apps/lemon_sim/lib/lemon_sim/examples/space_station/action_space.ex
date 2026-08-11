@@ -5,7 +5,7 @@ defmodule LemonSim.Examples.SpaceStation.ActionSpace do
 
   import LemonSim.Examples.Helpers
 
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonSim.Examples.SpaceStation.{Events, Roles}
   alias LemonSim.Examples.Helpers.Tools, as: GameTools
 
@@ -184,7 +184,7 @@ defmodule LemonSim.Examples.SpaceStation.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("You repaired the #{system_id} system.")],
+           content: [LemonAgent.text_content("You repaired the #{system_id} system.")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -221,7 +221,7 @@ defmodule LemonSim.Examples.SpaceStation.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("You sabotaged the #{system_id} system.")],
+           content: [LemonAgent.text_content("You sabotaged the #{system_id} system.")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -258,7 +258,7 @@ defmodule LemonSim.Examples.SpaceStation.ActionSpace do
         {:ok,
          %AgentToolResult{
            content: [
-             AgentCore.text_content(
+             LemonAgent.text_content(
                "You inspected the #{system_id} system. To others, this looked like a normal repair."
              )
            ],
@@ -299,7 +299,7 @@ defmodule LemonSim.Examples.SpaceStation.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("You are scanning #{target_id}.")],
+           content: [LemonAgent.text_content("You are scanning #{target_id}.")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -335,7 +335,7 @@ defmodule LemonSim.Examples.SpaceStation.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("You locked the #{system_id} room.")],
+           content: [LemonAgent.text_content("You locked the #{system_id} room.")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -362,7 +362,7 @@ defmodule LemonSim.Examples.SpaceStation.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("EMERGENCY MEETING CALLED!")],
+           content: [LemonAgent.text_content("EMERGENCY MEETING CALLED!")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -389,7 +389,7 @@ defmodule LemonSim.Examples.SpaceStation.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("You slipped into the vents unseen.")],
+           content: [LemonAgent.text_content("You slipped into the vents unseen.")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -432,7 +432,7 @@ defmodule LemonSim.Examples.SpaceStation.ActionSpace do
 
         {:ok,
          %AgentToolResult{
-           content: [AgentCore.text_content("You asked #{target_id}: \"#{question}\"")],
+           content: [LemonAgent.text_content("You asked #{target_id}: \"#{question}\"")],
            details: %{"event" => event},
            trust: :trusted
          }}
@@ -477,7 +477,7 @@ defmodule LemonSim.Examples.SpaceStation.ActionSpace do
         {:ok,
          %AgentToolResult{
            content: [
-             AgentCore.text_content("You formally accused #{target_id}: \"#{evidence}\"")
+             LemonAgent.text_content("You formally accused #{target_id}: \"#{evidence}\"")
            ],
            details: %{"event" => event},
            trust: :trusted
