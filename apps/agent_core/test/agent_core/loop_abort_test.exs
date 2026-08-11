@@ -429,7 +429,9 @@ defmodule AgentCore.LoopAbortTest do
       assert_receive {:tool_signal, ^signal}, 1000
       EventStream.cancel(stream, :user_abort)
 
-      assert_receive :tool_observed_abort, 1000
+      # Generous window: this asserts an async abort signal reaches in-flight tool
+      # work, which can lag under full-suite scheduler load (flaked at 1000ms).
+      assert_receive :tool_observed_abort, 5000
 
       result = EventStream.result(stream)
       assert result in [{:error, {:canceled, :user_abort}}, {:error, :stream_not_found}]
