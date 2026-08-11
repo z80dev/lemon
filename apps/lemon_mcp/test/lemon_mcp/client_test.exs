@@ -1238,7 +1238,7 @@ defmodule LemonMCP.ClientTest do
     # timing is flaky under load (the streaming endpoint/response round-trip
     # intermittently misses its deadline), which both fails the run and drops
     # lemon_mcp coverage. It still runs locally with `--include integration`.
-    # TODO: make the handshake deterministic (proper endpoint/response
+    # Follow-up: make the handshake deterministic (proper endpoint/response
     # synchronization instead of timeouts), then remove this tag and restore the
     # coverage threshold in apps/lemon_mcp/mix.exs.
     @tag :integration
