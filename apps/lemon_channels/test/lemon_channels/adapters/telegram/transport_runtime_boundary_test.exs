@@ -10,7 +10,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportRuntimeBoundaryTest do
                            __DIR__
                          )
   @model_catalog_file Path.expand(
-                        "../../../../../agent_core/lib/lemon_agent/model_runtime/model_catalog.ex",
+                        "../../../../../lemon_agent/lib/lemon_agent/model_runtime/model_catalog.ex",
                         __DIR__
                       )
 
