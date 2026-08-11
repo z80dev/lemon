@@ -5,7 +5,7 @@ defmodule CodingAgent.Tools.Task.Runner do
 
   alias LemonAgent.AbortSignal
 
-  alias LemonAgent.CliRunners.{
+  alias LemonCliRunners.{
     ClaudeSubagent,
     CodexSubagent,
     DroidSubagent,

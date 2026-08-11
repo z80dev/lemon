@@ -1,4 +1,4 @@
-defmodule LemonAgent.CliRunners.OpencodeRunner do
+defmodule LemonCliRunners.OpencodeRunner do
   @moduledoc """
   OpenCode CLI subprocess runner.
 
@@ -7,11 +7,11 @@ defmodule LemonAgent.CliRunners.OpencodeRunner do
       opencode run --format json [--session <ses_...>] [--model <model>] -- <prompt>
   """
 
-  use LemonAgent.CliRunners.JsonlRunner
+  use LemonCliRunners.JsonlRunner
 
-  alias LemonAgent.CliRunners.OpencodeSchema
+  alias LemonCliRunners.OpencodeSchema
 
-  alias LemonAgent.CliRunners.OpencodeSchema.{
+  alias LemonCliRunners.OpencodeSchema.{
     Error,
     StepFinish,
     StepStart,
@@ -20,8 +20,8 @@ defmodule LemonAgent.CliRunners.OpencodeRunner do
     Unknown
   }
 
-  alias LemonAgent.CliRunners.ToolActionHelpers
-  alias LemonAgent.CliRunners.Types.EventFactory
+  alias LemonCliRunners.ToolActionHelpers
+  alias LemonCliRunners.Types.EventFactory
   alias LemonCore.ResumeToken
   alias LemonCore.Config, as: LemonConfig
   alias LemonCore.Introspection

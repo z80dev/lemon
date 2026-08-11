@@ -1,4 +1,4 @@
-defmodule LemonAgent.CliRunners.KimiSchema do
+defmodule LemonCliRunners.KimiSchema do
   @moduledoc """
   Kimi CLI JSONL event schema definitions.
 

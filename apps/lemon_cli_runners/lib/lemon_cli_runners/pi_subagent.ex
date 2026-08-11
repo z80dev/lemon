@@ -1,10 +1,10 @@
-defmodule LemonAgent.CliRunners.PiSubagent do
+defmodule LemonCliRunners.PiSubagent do
   @moduledoc """
   High-level API for using Pi (pi-coding-agent CLI) as a collaborating subagent.
   """
 
-  alias LemonAgent.CliRunners.PiRunner
-  alias LemonAgent.CliRunners.Types.{ActionEvent, CompletedEvent, StartedEvent}
+  alias LemonCliRunners.PiRunner
+  alias LemonCliRunners.Types.{ActionEvent, CompletedEvent, StartedEvent}
   alias LemonCore.ResumeToken
 
   @typedoc "A Pi subagent session"

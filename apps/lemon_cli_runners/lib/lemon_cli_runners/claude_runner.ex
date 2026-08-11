@@ -1,4 +1,4 @@
-defmodule LemonAgent.CliRunners.ClaudeRunner do
+defmodule LemonCliRunners.ClaudeRunner do
   @moduledoc """
   Claude CLI subprocess runner.
 
@@ -53,11 +53,11 @@ defmodule LemonAgent.CliRunners.ClaudeRunner do
 
   """
 
-  use LemonAgent.CliRunners.JsonlRunner
+  use LemonCliRunners.JsonlRunner
 
-  alias LemonAgent.CliRunners.ClaudeSchema
+  alias LemonCliRunners.ClaudeSchema
 
-  alias LemonAgent.CliRunners.ClaudeSchema.{
+  alias LemonCliRunners.ClaudeSchema.{
     StreamAssistantMessage,
     StreamResultMessage,
     StreamSystemMessage,
@@ -68,9 +68,9 @@ defmodule LemonAgent.CliRunners.ClaudeRunner do
     ToolUseBlock
   }
 
-  alias LemonAgent.CliRunners.Types.EventFactory
+  alias LemonCliRunners.Types.EventFactory
   alias LemonCore.ResumeToken
-  alias LemonAgent.CliRunners.ToolActionHelpers
+  alias LemonCliRunners.ToolActionHelpers
   alias LemonCore.Config, as: LemonConfig
   alias LemonCore.Introspection
 
@@ -96,7 +96,7 @@ defmodule LemonAgent.CliRunners.ClaudeRunner do
 
     def new(claude_config \\ %{}, model_override \\ nil) do
       %__MODULE__{
-        factory: LemonAgent.CliRunners.Types.EventFactory.new("claude"),
+        factory: LemonCliRunners.Types.EventFactory.new("claude"),
         found_session: nil,
         last_assistant_text: nil,
         pending_actions: %{},

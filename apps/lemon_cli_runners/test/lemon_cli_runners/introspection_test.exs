@@ -1,4 +1,4 @@
-defmodule LemonAgent.CliRunners.IntrospectionTest do
+defmodule LemonCliRunners.IntrospectionTest do
   @moduledoc """
   Tests that M3 introspection events are emitted by CLI runner adapters.
 
@@ -10,17 +10,17 @@ defmodule LemonAgent.CliRunners.IntrospectionTest do
   alias LemonCore.Introspection
 
   # Runner aliases
-  alias LemonAgent.CliRunners.CodexRunner
-  alias LemonAgent.CliRunners.ClaudeRunner
-  alias LemonAgent.CliRunners.KimiRunner
-  alias LemonAgent.CliRunners.OpencodeRunner
-  alias LemonAgent.CliRunners.PiRunner
+  alias LemonCliRunners.CodexRunner
+  alias LemonCliRunners.ClaudeRunner
+  alias LemonCliRunners.KimiRunner
+  alias LemonCliRunners.OpencodeRunner
+  alias LemonCliRunners.PiRunner
 
   # Schema aliases for building test events
-  alias LemonAgent.CliRunners.CodexSchema.{ThreadStarted, TurnCompleted, Usage}
-  alias LemonAgent.CliRunners.ClaudeSchema.StreamSystemMessage
-  alias LemonAgent.CliRunners.OpencodeSchema.{StepStart, StepFinish}
-  alias LemonAgent.CliRunners.PiSchema.{AgentEnd, SessionHeader}
+  alias LemonCliRunners.CodexSchema.{ThreadStarted, TurnCompleted, Usage}
+  alias LemonCliRunners.ClaudeSchema.StreamSystemMessage
+  alias LemonCliRunners.OpencodeSchema.{StepStart, StepFinish}
+  alias LemonCliRunners.PiSchema.{AgentEnd, SessionHeader}
 
   alias LemonCore.ResumeToken
 

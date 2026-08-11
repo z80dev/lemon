@@ -1,4 +1,4 @@
-defmodule LemonAgent.CliRunners.CodexRunner do
+defmodule LemonCliRunners.CodexRunner do
   @moduledoc """
   Codex CLI subprocess runner.
 
@@ -59,11 +59,11 @@ defmodule LemonAgent.CliRunners.CodexRunner do
 
   """
 
-  use LemonAgent.CliRunners.JsonlRunner
+  use LemonCliRunners.JsonlRunner
 
-  alias LemonAgent.CliRunners.CodexSchema
+  alias LemonCliRunners.CodexSchema
 
-  alias LemonAgent.CliRunners.CodexSchema.{
+  alias LemonCliRunners.CodexSchema.{
     AgentMessageItem,
     CommandExecutionItem,
     ErrorItem,
@@ -82,7 +82,7 @@ defmodule LemonAgent.CliRunners.CodexRunner do
     WebSearchItem
   }
 
-  alias LemonAgent.CliRunners.Types.EventFactory
+  alias LemonCliRunners.Types.EventFactory
   alias LemonCore.ResumeToken
   alias LemonCore.Config, as: LemonConfig
   alias LemonCore.Introspection

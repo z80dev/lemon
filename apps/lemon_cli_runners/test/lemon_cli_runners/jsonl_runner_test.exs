@@ -1,9 +1,9 @@
-defmodule LemonAgent.CliRunners.JsonlRunnerTest do
+defmodule LemonCliRunners.JsonlRunnerTest do
   use ExUnit.Case, async: true
 
-  alias LemonAgent.CliRunners.JsonlRunner
+  alias LemonCliRunners.JsonlRunner
 
-  alias LemonAgent.CliRunners.Types.{
+  alias LemonCliRunners.Types.{
     Action,
     ActionEvent,
     CompletedEvent,

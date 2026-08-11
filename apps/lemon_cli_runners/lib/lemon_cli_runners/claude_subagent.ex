@@ -1,4 +1,4 @@
-defmodule LemonAgent.CliRunners.ClaudeSubagent do
+defmodule LemonCliRunners.ClaudeSubagent do
   @moduledoc """
   High-level API for using Claude (Claude Code CLI) as a collaborating subagent.
 
@@ -58,8 +58,8 @@ defmodule LemonAgent.CliRunners.ClaudeSubagent do
 
   """
 
-  alias LemonAgent.CliRunners.ClaudeRunner
-  alias LemonAgent.CliRunners.Types.{ActionEvent, CompletedEvent, StartedEvent}
+  alias LemonCliRunners.ClaudeRunner
+  alias LemonCliRunners.Types.{ActionEvent, CompletedEvent, StartedEvent}
   alias LemonCore.ResumeToken
 
   require Logger

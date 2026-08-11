@@ -1,4 +1,4 @@
-defmodule LemonAgent.CliRunners.PiRunner do
+defmodule LemonCliRunners.PiRunner do
   @moduledoc """
   Pi Coding Agent CLI subprocess runner.
 
@@ -7,11 +7,11 @@ defmodule LemonAgent.CliRunners.PiRunner do
       pi [extra_args...] --print --mode json [--provider <provider>] [--model <model>] --session <token> <prompt>
   """
 
-  use LemonAgent.CliRunners.JsonlRunner
+  use LemonCliRunners.JsonlRunner
 
-  alias LemonAgent.CliRunners.PiSchema
+  alias LemonCliRunners.PiSchema
 
-  alias LemonAgent.CliRunners.PiSchema.{
+  alias LemonCliRunners.PiSchema.{
     AgentEnd,
     MessageEnd,
     SessionHeader,
@@ -20,8 +20,8 @@ defmodule LemonAgent.CliRunners.PiRunner do
     Unknown
   }
 
-  alias LemonAgent.CliRunners.ToolActionHelpers
-  alias LemonAgent.CliRunners.Types.EventFactory
+  alias LemonCliRunners.ToolActionHelpers
+  alias LemonCliRunners.Types.EventFactory
   alias LemonCore.ResumeToken
   alias LemonCore.Config, as: LemonConfig
   alias LemonCore.Introspection

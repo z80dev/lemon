@@ -1,9 +1,9 @@
-defmodule LemonAgent.CliRunners.ClaudeSchemaTest do
+defmodule LemonCliRunners.ClaudeSchemaTest do
   use ExUnit.Case, async: true
 
-  alias LemonAgent.CliRunners.ClaudeSchema
+  alias LemonCliRunners.ClaudeSchema
 
-  alias LemonAgent.CliRunners.ClaudeSchema.{
+  alias LemonCliRunners.ClaudeSchema.{
     StreamAssistantMessage,
     StreamResultMessage,
     StreamSystemMessage,

@@ -64,6 +64,7 @@ config :lemon_core, :env_registries, [
   LemonCore.Env.Declarations,
   LemonAi.Env,
   LemonAgent.Env,
+  LemonCliRunners.Env,
   CodingAgent.Env,
   LemonAutomation.Env,
   LemonBrowser.Env,

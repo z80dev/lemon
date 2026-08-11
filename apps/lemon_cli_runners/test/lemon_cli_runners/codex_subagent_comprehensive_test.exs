@@ -1,4 +1,4 @@
-defmodule LemonAgent.CliRunners.CodexSubagentComprehensiveTest do
+defmodule LemonCliRunners.CodexSubagentComprehensiveTest do
   @moduledoc """
   Comprehensive tests for CodexSubagent module.
 
@@ -20,9 +20,9 @@ defmodule LemonAgent.CliRunners.CodexSubagentComprehensiveTest do
   """
   use ExUnit.Case, async: true
 
-  alias LemonAgent.CliRunners.CodexSubagent
+  alias LemonCliRunners.CodexSubagent
 
-  alias LemonAgent.CliRunners.Types.{
+  alias LemonCliRunners.Types.{
     Action,
     ActionEvent,
     CompletedEvent,

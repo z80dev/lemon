@@ -1,8 +1,8 @@
 defmodule LemonGateway.CodexIntegrationTest do
   use ExUnit.Case
 
-  alias LemonAgent.CliRunners.CodexRunner
-  alias LemonAgent.CliRunners.Types.CompletedEvent
+  alias LemonCliRunners.CodexRunner
+  alias LemonCliRunners.Types.CompletedEvent
 
   @tag :integration
   test "codex runner completes" do

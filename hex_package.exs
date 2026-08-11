@@ -32,6 +32,7 @@ defmodule Lemon.HexPackage do
   @packages %{
     lemon_ai: :lemon_ai,
     lemon_agent: :lemon_agent,
+    lemon_cli_runners: :lemon_cli_runners,
     lemon_core: :lemon_core,
     lemon_media: :lemon_media,
     lemon_memory: :lemon_memory,

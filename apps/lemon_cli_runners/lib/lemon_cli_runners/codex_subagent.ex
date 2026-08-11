@@ -1,4 +1,4 @@
-defmodule LemonAgent.CliRunners.CodexSubagent do
+defmodule LemonCliRunners.CodexSubagent do
   @moduledoc """
   High-level API for using Codex as a collaborating subagent.
 
@@ -93,8 +93,8 @@ defmodule LemonAgent.CliRunners.CodexSubagent do
 
   """
 
-  alias LemonAgent.CliRunners.CodexRunner
-  alias LemonAgent.CliRunners.Types.{ActionEvent, CompletedEvent, StartedEvent}
+  alias LemonCliRunners.CodexRunner
+  alias LemonCliRunners.Types.{ActionEvent, CompletedEvent, StartedEvent}
   alias LemonCore.ResumeToken
 
   require Logger

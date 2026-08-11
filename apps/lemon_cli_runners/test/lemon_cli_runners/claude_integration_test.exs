@@ -1,16 +1,16 @@
-defmodule LemonAgent.CliRunners.ClaudeIntegrationTest do
+defmodule LemonCliRunners.ClaudeIntegrationTest do
   @moduledoc """
   Integration tests for Claude CLI runner.
 
   These tests actually spawn the `claude` CLI and verify end-to-end functionality.
   They require `claude` (Claude Code) to be installed and configured.
 
-  Run with: mix test apps/lemon_agent/test/lemon_agent/cli_runners/claude_integration_test.exs --include integration
+  Run with: mix test apps/lemon_cli_runners/test/lemon_cli_runners/claude_integration_test.exs --include integration
   """
 
   use ExUnit.Case, async: false
 
-  alias LemonAgent.CliRunners.ClaudeSubagent
+  alias LemonCliRunners.ClaudeSubagent
   alias LemonCore.ResumeToken
 
   @moduletag :integration

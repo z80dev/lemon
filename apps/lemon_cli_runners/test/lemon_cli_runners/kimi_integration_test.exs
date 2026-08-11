@@ -1,16 +1,16 @@
-defmodule LemonAgent.CliRunners.KimiIntegrationTest do
+defmodule LemonCliRunners.KimiIntegrationTest do
   @moduledoc """
   Integration tests for Kimi CLI runner.
 
   These tests actually spawn the `kimi` CLI and verify end-to-end functionality.
   They require `kimi` to be installed and configured.
 
-  Run with: mix test apps/lemon_agent/test/lemon_agent/cli_runners/kimi_integration_test.exs --include integration
+  Run with: mix test apps/lemon_cli_runners/test/lemon_cli_runners/kimi_integration_test.exs --include integration
   """
 
   use ExUnit.Case, async: false
 
-  alias LemonAgent.CliRunners.KimiSubagent
+  alias LemonCliRunners.KimiSubagent
   alias LemonCore.ResumeToken
 
   @moduletag :integration

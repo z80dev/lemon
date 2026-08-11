@@ -3,7 +3,7 @@ defmodule LemonGateway.Engines.Droid do
   Engine adapter for the Factory Droid CLI tool.
 
   Delegates to `LemonGateway.Engines.CliAdapter` to manage a
-  `LemonAgent.CliRunners.DroidRunner` subprocess for each run.
+  `LemonCliRunners.DroidRunner` subprocess for each run.
   """
   @behaviour LemonGateway.Engine
 
@@ -27,7 +27,7 @@ defmodule LemonGateway.Engines.Droid do
 
   @impl true
   def start_run(job, opts, sink_pid) do
-    CliAdapter.start_run(LemonAgent.CliRunners.DroidRunner, id(), job, opts, sink_pid)
+    CliAdapter.start_run(LemonCliRunners.DroidRunner, id(), job, opts, sink_pid)
   end
 
   @impl true

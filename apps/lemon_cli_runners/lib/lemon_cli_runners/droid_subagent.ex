@@ -1,10 +1,10 @@
-defmodule LemonAgent.CliRunners.DroidSubagent do
+defmodule LemonCliRunners.DroidSubagent do
   @moduledoc """
   High-level API for using Factory Droid as a collaborating subagent.
   """
 
-  alias LemonAgent.CliRunners.DroidRunner
-  alias LemonAgent.CliRunners.Types.{ActionEvent, CompletedEvent, StartedEvent}
+  alias LemonCliRunners.DroidRunner
+  alias LemonCliRunners.Types.{ActionEvent, CompletedEvent, StartedEvent}
   alias LemonCore.ResumeToken
 
   @type session :: %{

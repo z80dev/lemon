@@ -1,11 +1,11 @@
-defmodule LemonAgent.CliRunners.CodexRunnerTest do
+defmodule LemonCliRunners.CodexRunnerTest do
   alias Elixir.LemonAgent, as: LemonAgent
   use ExUnit.Case, async: false
 
-  alias Elixir.LemonAgent.CliRunners.CodexRunner
-  alias Elixir.LemonAgent.CliRunners.CodexRunner.RunnerState
+  alias Elixir.LemonCliRunners.CodexRunner
+  alias Elixir.LemonCliRunners.CodexRunner.RunnerState
 
-  alias Elixir.LemonAgent.CliRunners.CodexSchema.{
+  alias Elixir.LemonCliRunners.CodexSchema.{
     AgentMessageItem,
     CommandExecutionItem,
     ErrorItem,
@@ -29,9 +29,9 @@ defmodule LemonAgent.CliRunners.CodexRunnerTest do
     WebSearchItem
   }
 
-  alias Elixir.LemonAgent.CliRunners.CodexSchema.ThreadError
+  alias Elixir.LemonCliRunners.CodexSchema.ThreadError
 
-  alias Elixir.LemonAgent.CliRunners.Types.{
+  alias Elixir.LemonCliRunners.Types.{
     ActionEvent,
     CompletedEvent,
     ResumeToken,
@@ -1146,7 +1146,7 @@ defmodule LemonAgent.CliRunners.CodexRunnerTest do
   end
 end
 
-defmodule LemonAgent.CliRunners.CodexRunnerIntegrationTest do
+defmodule LemonCliRunners.CodexRunnerIntegrationTest do
   @moduledoc """
   Integration tests for CodexRunner GenServer lifecycle and process management.
 
@@ -1155,9 +1155,9 @@ defmodule LemonAgent.CliRunners.CodexRunnerIntegrationTest do
   """
   use ExUnit.Case, async: false
 
-  alias Elixir.LemonAgent.CliRunners.JsonlRunner
+  alias Elixir.LemonCliRunners.JsonlRunner
 
-  alias Elixir.LemonAgent.CliRunners.Types.{
+  alias Elixir.LemonCliRunners.Types.{
     ActionEvent,
     CompletedEvent,
     ResumeToken,
@@ -1172,10 +1172,10 @@ defmodule LemonAgent.CliRunners.CodexRunnerIntegrationTest do
 
   defmodule MockCodexRunner do
     @moduledoc "Mock runner that uses bash scripts directly"
-    use Elixir.LemonAgent.CliRunners.JsonlRunner
+    use Elixir.LemonCliRunners.JsonlRunner
 
-    alias Elixir.LemonAgent.CliRunners.CodexRunner
-    alias Elixir.LemonAgent.CliRunners.CodexRunner.RunnerState
+    alias Elixir.LemonCliRunners.CodexRunner
+    alias Elixir.LemonCliRunners.CodexRunner.RunnerState
 
     @impl true
     def engine, do: "codex"
@@ -1492,7 +1492,7 @@ defmodule LemonAgent.CliRunners.CodexRunnerIntegrationTest do
 
   describe "abort signal handling" do
     test "cancel stops running subprocess" do
-      Application.put_env(:lemon_agent, :cli_cancel_grace_ms, 500)
+      Application.put_env(:lemon_cli_runners, :cli_cancel_grace_ms, 500)
 
       script =
         ~s|trap 'exit 0' TERM; echo '{"type":"thread.started","thread_id":"cancel_test"}'; while true; do sleep 0.1; done|

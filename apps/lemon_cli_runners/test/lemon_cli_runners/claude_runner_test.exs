@@ -1,10 +1,10 @@
-defmodule LemonAgent.CliRunners.ClaudeRunnerTest do
+defmodule LemonCliRunners.ClaudeRunnerTest do
   use ExUnit.Case, async: false
 
-  alias LemonAgent.CliRunners.ClaudeRunner
-  alias LemonAgent.CliRunners.ClaudeRunner.RunnerState
+  alias LemonCliRunners.ClaudeRunner
+  alias LemonCliRunners.ClaudeRunner.RunnerState
 
-  alias LemonAgent.CliRunners.ClaudeSchema.{
+  alias LemonCliRunners.ClaudeSchema.{
     StreamAssistantMessage,
     StreamResultMessage,
     StreamSystemMessage,
@@ -18,7 +18,7 @@ defmodule LemonAgent.CliRunners.ClaudeRunnerTest do
     Usage
   }
 
-  alias LemonAgent.CliRunners.Types.{ActionEvent, CompletedEvent, ResumeToken, StartedEvent}
+  alias LemonCliRunners.Types.{ActionEvent, CompletedEvent, ResumeToken, StartedEvent}
 
   # ============================================================================
   # Setup Helpers

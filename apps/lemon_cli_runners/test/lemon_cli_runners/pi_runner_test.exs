@@ -1,10 +1,10 @@
-defmodule LemonAgent.CliRunners.PiRunnerTest do
+defmodule LemonCliRunners.PiRunnerTest do
   use ExUnit.Case, async: true
 
-  alias LemonAgent.CliRunners.PiRunner
-  alias LemonAgent.CliRunners.PiRunner.RunnerState
+  alias LemonCliRunners.PiRunner
+  alias LemonCliRunners.PiRunner.RunnerState
 
-  alias LemonAgent.CliRunners.PiSchema.{
+  alias LemonCliRunners.PiSchema.{
     AgentEnd,
     MessageEnd,
     SessionHeader,
@@ -12,7 +12,7 @@ defmodule LemonAgent.CliRunners.PiRunnerTest do
     ToolExecutionStart
   }
 
-  alias LemonAgent.CliRunners.Types.{ActionEvent, CompletedEvent, ResumeToken, StartedEvent}
+  alias LemonCliRunners.Types.{ActionEvent, CompletedEvent, ResumeToken, StartedEvent}
 
   describe "engine/0" do
     test "returns pi" do

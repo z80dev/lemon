@@ -34,7 +34,7 @@ CLI Runners enable you to:
 ### Basic Usage
 
 ```elixir
-alias LemonAgent.CliRunners.CodexSubagent
+alias LemonCliRunners.CodexSubagent
 
 # Start a new Codex session
 {:ok, session} = CodexSubagent.start(
@@ -120,7 +120,7 @@ Events are normalized into a simple format:
 
 ```elixir
 defmodule MyAgent.Tools do
-  alias LemonAgent.CliRunners.CodexSubagent
+  alias LemonCliRunners.CodexSubagent
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
 
@@ -177,8 +177,8 @@ end
 For more control, use the runner directly:
 
 ```elixir
-alias LemonAgent.CliRunners.CodexRunner
-alias LemonAgent.CliRunners.Types.ResumeToken
+alias LemonCliRunners.CodexRunner
+alias LemonCliRunners.Types.ResumeToken
 
 # Start runner
 {:ok, pid} = CodexRunner.start_link(
@@ -205,10 +205,10 @@ end
 To add support for a new CLI tool (e.g., Claude):
 
 ```elixir
-defmodule LemonAgent.CliRunners.ClaudeRunner do
-  use LemonAgent.CliRunners.JsonlRunner
+defmodule LemonCliRunners.ClaudeRunner do
+  use LemonCliRunners.JsonlRunner
 
-  alias LemonAgent.CliRunners.Types.{EventFactory, ResumeToken}
+  alias LemonCliRunners.Types.{EventFactory, ResumeToken}
 
   @impl true
   def engine, do: "claude"
@@ -278,7 +278,7 @@ end
 
 ```bash
 # Run CLI runner tests
-mix test apps/lemon_agent/test/lemon_agent/cli_runners/
+mix test apps/lemon_cli_runners/test/lemon_cli_runners/
 ```
 
 ## Design Notes
@@ -302,3 +302,62 @@ Each runner translates tool-specific events to a unified format:
 - `CompletedEvent` - Session ended with answer and optional resume
 
 This allows the same UI/progress tracking code to work with any CLI tool.
+
+## Adding a New CLI Runner
+
+Implement the `LemonCliRunners.JsonlRunner` behaviour:
+
+```elixir
+defmodule LemonCliRunners.MyEngineRunner do
+  use LemonCliRunners.JsonlRunner
+
+  alias LemonCliRunners.Types.EventFactory
+  alias LemonCore.ResumeToken
+
+  @engine "myengine"
+
+  @impl true
+  def engine, do: @engine
+
+  @impl true
+  def init_state(_prompt, _resume, cwd, _opts) do
+    %{factory: EventFactory.new(@engine), last_text: nil}
+  end
+
+  @impl true
+  def build_command(prompt, resume, _state) do
+    args = ["--json", "--output-format", "jsonl"]
+    args = if resume, do: args ++ ["--resume", resume.value], else: args
+    {"myengine", args ++ ["--", prompt]}
+  end
+
+  @impl true
+  def translate_event(data, state) do
+    case data do
+      %{"type" => "init", "session_id" => sid} ->
+        token = ResumeToken.new(@engine, sid)
+        {started, factory} = EventFactory.started(state.factory, token)
+        {[started], %{state | factory: factory}, [found_session: token]}
+
+      %{"type" => "done", "result" => result} ->
+        {completed, factory} = EventFactory.completed_ok(state.factory, result || "")
+        {[completed], %{state | factory: factory}, [done: true]}
+
+      _ ->
+        {[], state, []}
+    end
+  end
+
+  @impl true
+  def handle_exit_error(exit_code, state) do
+    {event, factory} = EventFactory.completed_error(state.factory, "failed (rc=#{exit_code})")
+    {[event], %{state | factory: factory}}
+  end
+
+  @impl true
+  def handle_stream_end(state) do
+    {event, factory} = EventFactory.completed_error(state.factory, "ended without result")
+    {[event], %{state | factory: factory}}
+  end
+end
+```

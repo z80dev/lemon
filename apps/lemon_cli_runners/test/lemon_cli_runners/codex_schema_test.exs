@@ -1,9 +1,9 @@
-defmodule LemonAgent.CliRunners.CodexSchemaTest do
+defmodule LemonCliRunners.CodexSchemaTest do
   use ExUnit.Case, async: true
 
-  alias LemonAgent.CliRunners.CodexSchema
+  alias LemonCliRunners.CodexSchema
 
-  alias LemonAgent.CliRunners.CodexSchema.{
+  alias LemonCliRunners.CodexSchema.{
     AgentMessageItem,
     CommandExecutionItem,
     ErrorItem,

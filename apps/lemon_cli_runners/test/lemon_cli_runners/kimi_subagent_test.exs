@@ -1,13 +1,13 @@
-defmodule LemonAgent.CliRunners.KimiSubagentTest do
+defmodule LemonCliRunners.KimiSubagentTest do
   @moduledoc """
   Unit tests for KimiSubagent.
   """
 
   use ExUnit.Case, async: true
 
-  alias LemonAgent.CliRunners.KimiSubagent
+  alias LemonCliRunners.KimiSubagent
 
-  alias LemonAgent.CliRunners.Types.{
+  alias LemonCliRunners.Types.{
     ActionEvent,
     CompletedEvent,
     ResumeToken,

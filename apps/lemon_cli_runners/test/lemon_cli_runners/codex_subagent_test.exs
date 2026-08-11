@@ -1,7 +1,7 @@
-defmodule LemonAgent.CliRunners.CodexSubagentTest do
+defmodule LemonCliRunners.CodexSubagentTest do
   use ExUnit.Case, async: true
 
-  alias LemonAgent.CliRunners.CodexSubagent
+  alias LemonCliRunners.CodexSubagent
   alias LemonCore.ResumeToken
 
   describe "start/1" do

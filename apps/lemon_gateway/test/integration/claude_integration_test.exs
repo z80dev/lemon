@@ -1,8 +1,8 @@
 defmodule LemonGateway.ClaudeIntegrationTest do
   use ExUnit.Case
 
-  alias LemonAgent.CliRunners.ClaudeRunner
-  alias LemonAgent.CliRunners.Types.CompletedEvent
+  alias LemonCliRunners.ClaudeRunner
+  alias LemonCliRunners.Types.CompletedEvent
 
   @tag :integration
   test "claude runner completes" do

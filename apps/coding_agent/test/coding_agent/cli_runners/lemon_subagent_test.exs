@@ -3,7 +3,7 @@ defmodule CodingAgent.CliRunners.LemonSubagentTest do
 
   alias CodingAgent.CliRunners.LemonSubagent
 
-  alias LemonAgent.CliRunners.Types.{
+  alias LemonCliRunners.Types.{
     Action,
     ActionEvent,
     CompletedEvent,

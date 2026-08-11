@@ -3,7 +3,7 @@ defmodule LemonGateway.Engines.Kimi do
   Engine adapter for the Kimi CLI tool.
 
   Delegates to `LemonGateway.Engines.CliAdapter` to manage a
-  `LemonAgent.CliRunners.KimiRunner` subprocess for each run.
+  `LemonCliRunners.KimiRunner` subprocess for each run.
   """
   @behaviour LemonGateway.Engine
 
@@ -27,7 +27,7 @@ defmodule LemonGateway.Engines.Kimi do
 
   @impl true
   def start_run(job, opts, sink_pid) do
-    CliAdapter.start_run(LemonAgent.CliRunners.KimiRunner, id(), job, opts, sink_pid)
+    CliAdapter.start_run(LemonCliRunners.KimiRunner, id(), job, opts, sink_pid)
   end
 
   @impl true

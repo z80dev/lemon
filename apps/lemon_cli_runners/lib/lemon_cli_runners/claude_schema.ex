@@ -1,4 +1,4 @@
-defmodule LemonAgent.CliRunners.ClaudeSchema do
+defmodule LemonCliRunners.ClaudeSchema do
   @moduledoc """
   Claude CLI JSONL event schema definitions.
 
@@ -97,7 +97,7 @@ defmodule LemonAgent.CliRunners.ClaudeSchema do
             role: :assistant,
             model: String.t() | nil,
             error: String.t() | nil,
-            content: [LemonAgent.CliRunners.ClaudeSchema.content_block()]
+            content: [LemonCliRunners.ClaudeSchema.content_block()]
           }
     defstruct role: :assistant, model: nil, error: nil, content: []
   end
@@ -106,7 +106,7 @@ defmodule LemonAgent.CliRunners.ClaudeSchema do
     @moduledoc "Content of a user message (tool results)"
     @type t :: %__MODULE__{
             role: :user,
-            content: [LemonAgent.CliRunners.ClaudeSchema.content_block()] | String.t()
+            content: [LemonCliRunners.ClaudeSchema.content_block()] | String.t()
           }
     defstruct role: :user, content: []
   end

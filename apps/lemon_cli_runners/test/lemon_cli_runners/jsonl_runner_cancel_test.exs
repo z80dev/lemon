@@ -1,8 +1,8 @@
-defmodule LemonAgent.CliRunners.JsonlRunnerCancelTest do
+defmodule LemonCliRunners.JsonlRunnerCancelTest do
   use ExUnit.Case
 
   defmodule DummyRunner do
-    use LemonAgent.CliRunners.JsonlRunner
+    use LemonCliRunners.JsonlRunner
 
     @impl true
     def engine, do: "dummy"
@@ -26,7 +26,7 @@ defmodule LemonAgent.CliRunners.JsonlRunnerCancelTest do
   end
 
   test "cancel stops runner" do
-    Application.put_env(:lemon_agent, :cli_cancel_grace_ms, 500)
+    Application.put_env(:lemon_cli_runners, :cli_cancel_grace_ms, 500)
 
     {:ok, pid} =
       DummyRunner.start_link(prompt: "", cwd: File.cwd!(), timeout: 60_000, owner: self())

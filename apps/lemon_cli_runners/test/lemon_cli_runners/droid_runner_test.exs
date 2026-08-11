@@ -1,10 +1,10 @@
-defmodule LemonAgent.CliRunners.DroidRunnerTest do
+defmodule LemonCliRunners.DroidRunnerTest do
   use ExUnit.Case, async: false
 
-  alias LemonAgent.CliRunners.DroidRunner
-  alias LemonAgent.CliRunners.DroidRunner.RunnerState
+  alias LemonCliRunners.DroidRunner
+  alias LemonCliRunners.DroidRunner.RunnerState
 
-  alias LemonAgent.CliRunners.DroidSchema.{
+  alias LemonCliRunners.DroidSchema.{
     DroidCompletionEvent,
     DroidMessageEvent,
     DroidReasoningEvent,
@@ -13,7 +13,7 @@ defmodule LemonAgent.CliRunners.DroidRunnerTest do
     DroidToolResultEvent
   }
 
-  alias LemonAgent.CliRunners.Types.{ActionEvent, CompletedEvent, ResumeToken, StartedEvent}
+  alias LemonCliRunners.Types.{ActionEvent, CompletedEvent, ResumeToken, StartedEvent}
 
   describe "engine/0" do
     test "returns droid" do

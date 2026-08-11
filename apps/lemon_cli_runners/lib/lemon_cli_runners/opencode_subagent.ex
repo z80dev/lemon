@@ -1,10 +1,10 @@
-defmodule LemonAgent.CliRunners.OpencodeSubagent do
+defmodule LemonCliRunners.OpencodeSubagent do
   @moduledoc """
   High-level API for using OpenCode (opencode CLI) as a collaborating subagent.
   """
 
-  alias LemonAgent.CliRunners.OpencodeRunner
-  alias LemonAgent.CliRunners.Types.{ActionEvent, CompletedEvent, StartedEvent}
+  alias LemonCliRunners.OpencodeRunner
+  alias LemonCliRunners.Types.{ActionEvent, CompletedEvent, StartedEvent}
   alias LemonCore.ResumeToken
 
   @typedoc "An OpenCode subagent session"

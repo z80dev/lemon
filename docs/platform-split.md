@@ -18,7 +18,8 @@ Reshape Lemon from a 22-app umbrella (~415k LOC) into a **platform for building 
 |---|---|---|---|
 | `lemon_ai` | Provider-agnostic LLM client: providers, registry, rate limiting, circuit breaker, compaction, tokens/text | `apps/lemon_ai` (31k, zero umbrella deps) | 1 |
 | `lemon_core` | The platform's shared language: Bus, Event envelope, Store (+backends), Secrets, Config loader, boundary contracts (`RunRequest`, `ExecutionCommand`, `InboundMessage`, `DeliveryIntent`, `EngineRuntime`, `RouterBridge`, `SessionKey`, `ResumeToken`, run phases), primitives (clock/id/retry/telemetry/idempotency), Extensions manifest | slimmed `apps/lemon_core` | 2 |
-| `lemon_agent` | Agent loop, tool registry, subagents, model runtime, CLI runners, workspace stores (goals/kanban/heartbeats) | `apps/lemon_agent` + 3 stores from lemon_core | 3 |
+| `lemon_agent` | Agent loop, tool registry, subagents, model runtime, workspace stores (goals/kanban/heartbeats) | `apps/lemon_agent` + 3 stores from lemon_core | 3 |
+| `lemon_cli_runners` | Vendor AI CLI wrappers (Claude Code, Codex, Droid, Kimi, OpenCode, Pi) as streaming subagents: `JsonlRunner` behaviour + per-vendor runner/schema/subagent triples | carved from `apps/lemon_agent` (D15, 2026-08-11) | 4 |
 | `lemon_memory` | Durable agent memory: document schema, store, provider behaviour + fan-out registry, ingest pipeline, search, task fingerprints | 8 modules from lemon_core (~1.9k LOC) | 4 |
 | `lemon_media` | Media job tracking: redacted job/artifact metadata store, supervised job workers, lifecycle broadcasts, retention cleanup | `apps/lemon_media` (~1.1k LOC, lemon_core only) | 5 (before router/channels, which depend on it — D13) |
 | `lemon_router` | Run lifecycle + session orchestration: single-flight, queue/steer, coalescing, policy, watchdog, delivery routing | `apps/lemon_router`, facade hardened | 5 |
@@ -45,6 +46,7 @@ Satellite (separate small repos/packages, the model for all vendor integrations)
 
 ```
 lemon_ai ← lemon_agent ← {router, gateway, channels, skills, products}
+lemon_agent ← lemon_cli_runners ← {gateway, products}
 lemon_core ← everything
 lemon_memory ← {router (ingest hook), skills, products}
 router ⇄ gateway: ONLY via LemonCore.EngineRuntime behaviour (config-injected)
@@ -207,6 +209,7 @@ Updated for D1–D9. Buckets: **core** (stays in published `lemon_core`), **rout
 
 | Date | Decision | Why |
 |---|---|---|
+| 2026-08-11 | **D15** (user decision): **CLI runners leave `lemon_agent`** — the `LemonAgent.CliRunners.*` namespace (~8.5k LOC: `JsonlRunner` + six vendor runner/schema/subagent triples) becomes the `lemon_cli_runners` package as `LemonCliRunners.*`, depping lemon_agent + lemon_ai + lemon_core. §2's table originally assigned CLI runners to `lemon_agent`. App-env keys `:cli_timeout_ms`/`:cli_cancel_grace_ms`/`:cli_session_lock_max_age_ms` and the `:cli_runners`-area env declarations moved with it (`LemonCliRunners.Env`). | Release cadence: the wrappers churn with six proprietary vendor CLIs, and vendor breakage shouldn't force releases of the stable agent framework. The code was already a leaf — zero inbound references from the rest of lemon_agent (the loop doesn't know it exists); consumers are gateway's CLI engines and coding_agent. Extraction does **not** free gateway of its lemon_agent dep (cli_runners itself needs `EventStream`, and gateway's tools use `AgentTool`/`ExternalContent`) — the win is package scope, not the dep graph. |
 | 2026-08-09 | Sequencing: carve core → invert deps → contracts → hex from monorepo → extract products | Extraction is cheap after boundaries are real; painful before. |
 | 2026-08-10 | **D11**: `chat_state`/`chat_state_store` stay in `lemon_core` as boundary contracts, and the router becomes their single writer (gateway's writes deleted). | Third plan-corrected-by-evidence outcome after `build_info` and `ExternalContent`. §6 assigned them to router on the assumption router was the only reader; lemon_channels is a legitimate reader+writer, so router ownership would force channels→router. Chat state is a resume-token cache keyed by session — the same family as `ResumeToken`/`SessionKey`, already core boundary contracts. Moving it to channels (the one legal alternative, since router→channels is allowed) would encode an accident as architecture. |
 | 2026-08-10 | **D12** (user decision): **delete the Farcaster transport** (~1.2k LOC, `lemon_gateway/transports/farcaster/`), which was frozen pending this call. **Executed 2026-08-10**: transport + tests, the `enable_farcaster`/`farcaster` config keys in `LemonGateway.Config`/`LemonCore.Config.Gateway`, the farcaster validators, 6 env declarations (5 `FARCASTER_*` + `LEMON_GATEWAY_ENABLE_FARCASTER`), and the doc/README/example-config mentions all removed; ~1.44k LOC of transport+tests plus ~300 LOC of config/validator/doc surface. | Unused by its owner; off-by-default; it was the main source of the synchronous-frame-response complexity in the transport design. Deleting removes a whole interaction-model problem rather than porting it. |

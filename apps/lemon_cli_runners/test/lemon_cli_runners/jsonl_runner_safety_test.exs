@@ -1,15 +1,15 @@
-defmodule LemonAgent.CliRunners.JsonlRunnerSafetyTest do
+defmodule LemonCliRunners.JsonlRunnerSafetyTest do
   use ExUnit.Case, async: false
 
-  alias LemonAgent.CliRunners.JsonlRunner
+  alias LemonCliRunners.JsonlRunner
 
-  alias LemonAgent.CliRunners.Types.{
+  alias LemonCliRunners.Types.{
     ResumeToken,
     StartedEvent
   }
 
   defmodule SlowRunner do
-    @behaviour LemonAgent.CliRunners.JsonlRunner
+    @behaviour LemonCliRunners.JsonlRunner
 
     @impl true
     def engine, do: "slow"
@@ -40,7 +40,7 @@ defmodule LemonAgent.CliRunners.JsonlRunnerSafetyTest do
   end
 
   defmodule ResumeRunner do
-    @behaviour LemonAgent.CliRunners.JsonlRunner
+    @behaviour LemonCliRunners.JsonlRunner
 
     @impl true
     def engine, do: "session"
@@ -85,10 +85,10 @@ defmodule LemonAgent.CliRunners.JsonlRunnerSafetyTest do
   end
 
   test "uses configured default timeout when timeout option is omitted" do
-    previous = Application.get_env(:lemon_agent, :cli_timeout_ms, :__unset__)
-    Application.put_env(:lemon_agent, :cli_timeout_ms, 50)
+    previous = Application.get_env(:lemon_cli_runners, :cli_timeout_ms, :__unset__)
+    Application.put_env(:lemon_cli_runners, :cli_timeout_ms, 50)
 
-    on_exit(fn -> restore_env(:lemon_agent, :cli_timeout_ms, previous) end)
+    on_exit(fn -> restore_env(:lemon_cli_runners, :cli_timeout_ms, previous) end)
 
     {:ok, events} = JsonlRunner.run(SlowRunner, prompt: "ignored")
 
@@ -99,7 +99,7 @@ defmodule LemonAgent.CliRunners.JsonlRunnerSafetyTest do
   end
 
   test "reclaims stale session locks owned by dead processes" do
-    lock_table = LemonAgent.CliRunners.JsonlRunner.SessionLocks
+    lock_table = LemonCliRunners.JsonlRunner.SessionLocks
     ensure_lock_table(lock_table)
 
     stale_value = "stale-#{System.unique_integer([:positive])}"
@@ -146,7 +146,7 @@ defmodule LemonAgent.CliRunners.JsonlRunnerSafetyTest do
   # ============================================================================
 
   defmodule CrashableRunner do
-    @behaviour LemonAgent.CliRunners.JsonlRunner
+    @behaviour LemonCliRunners.JsonlRunner
 
     @impl true
     def engine, do: "crashable"
@@ -185,12 +185,12 @@ defmodule LemonAgent.CliRunners.JsonlRunnerSafetyTest do
     # Start the runner with test process as owner (simulates CliAdapter behavior)
     {:ok, runner_pid} =
       GenServer.start(
-        LemonAgent.CliRunners.JsonlRunner,
+        LemonCliRunners.JsonlRunner,
         {CrashableRunner, [prompt: "test", timeout: :infinity, owner: test_pid]}
       )
 
     # Get the stream
-    stream = LemonAgent.CliRunners.JsonlRunner.stream(runner_pid)
+    stream = LemonCliRunners.JsonlRunner.stream(runner_pid)
 
     # Start a consumer task (simulating CliAdapter.consume_runner)
     consumer =
@@ -219,11 +219,11 @@ defmodule LemonAgent.CliRunners.JsonlRunnerSafetyTest do
 
     {:ok, runner_pid} =
       GenServer.start(
-        LemonAgent.CliRunners.JsonlRunner,
+        LemonCliRunners.JsonlRunner,
         {CrashableRunner, [prompt: "test", timeout: :infinity, owner: test_pid]}
       )
 
-    stream = LemonAgent.CliRunners.JsonlRunner.stream(runner_pid)
+    stream = LemonCliRunners.JsonlRunner.stream(runner_pid)
 
     # Start multiple consumers
     consumers =
@@ -259,11 +259,11 @@ defmodule LemonAgent.CliRunners.JsonlRunnerSafetyTest do
 
     {:ok, runner_pid} =
       GenServer.start(
-        LemonAgent.CliRunners.JsonlRunner,
+        LemonCliRunners.JsonlRunner,
         {CrashableRunner, [prompt: "test", timeout: :infinity, owner: test_pid]}
       )
 
-    stream = LemonAgent.CliRunners.JsonlRunner.stream(runner_pid)
+    stream = LemonCliRunners.JsonlRunner.stream(runner_pid)
 
     # Block on events (simulating the stuck runs we killed)
     consumer =

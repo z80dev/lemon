@@ -58,6 +58,7 @@ PUBLISH_ORDER=(
   lemon_core
   lemon_media
   lemon_agent
+  lemon_cli_runners
   lemon_memory
   lemon_channels
   lemon_router

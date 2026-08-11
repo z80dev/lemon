@@ -1,4 +1,4 @@
-defmodule LemonAgent.CliRunners.DroidIntegrationTest do
+defmodule LemonCliRunners.DroidIntegrationTest do
   @moduledoc """
   Integration tests for Droid CLI runner.
 
@@ -6,12 +6,12 @@ defmodule LemonAgent.CliRunners.DroidIntegrationTest do
   They require `droid` to be installed and authenticated (via CLI login or
   environment-based auth).
 
-  Run with: mix test apps/lemon_agent/test/lemon_agent/cli_runners/droid_integration_test.exs --include integration
+  Run with: mix test apps/lemon_cli_runners/test/lemon_cli_runners/droid_integration_test.exs --include integration
   """
 
   use ExUnit.Case, async: false
 
-  alias LemonAgent.CliRunners.DroidSubagent
+  alias LemonCliRunners.DroidSubagent
   alias LemonCore.ResumeToken
 
   @moduletag :integration

@@ -8,8 +8,8 @@ defmodule LemonGateway.Engines.CliAdapter do
   formatting.
   """
 
-  alias LemonAgent.CliRunners.Types.{ActionEvent, CompletedEvent, StartedEvent}
-  alias LemonAgent.CliRunners.Types.ResumeToken, as: AgentResumeToken
+  alias LemonCliRunners.Types.{ActionEvent, CompletedEvent, StartedEvent}
+  alias LemonCliRunners.Types.ResumeToken, as: AgentResumeToken
   alias LemonGateway.Event
   alias LemonCore.ResumeToken, as: GatewayToken
 

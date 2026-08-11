@@ -1,7 +1,7 @@
-defmodule LemonAgent.CliRunners.TypesTest do
+defmodule LemonCliRunners.TypesTest do
   use ExUnit.Case, async: true
 
-  alias LemonAgent.CliRunners.Types.{
+  alias LemonCliRunners.Types.{
     Action,
     ActionEvent,
     CompletedEvent,

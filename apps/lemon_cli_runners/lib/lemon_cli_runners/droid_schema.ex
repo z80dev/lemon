@@ -1,4 +1,4 @@
-defmodule LemonAgent.CliRunners.DroidSchema do
+defmodule LemonCliRunners.DroidSchema do
   # Internal: Factory Droid CLI stream-json event schema definitions.
   #
   # Droid emits newline-delimited JSON with a "type" discriminator when run with:

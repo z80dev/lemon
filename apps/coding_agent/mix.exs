@@ -29,6 +29,7 @@ defmodule CodingAgent.MixProject do
   defp deps do
     [
       {:lemon_agent, in_umbrella: true},
+      {:lemon_cli_runners, in_umbrella: true},
       {:lemon_ai, in_umbrella: true},
       {:lemon_skills, in_umbrella: true},
       {:lemon_core, in_umbrella: true},

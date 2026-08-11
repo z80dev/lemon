@@ -64,7 +64,7 @@ defmodule CodingAgent.CliRunners.LemonRunner do
 
   use GenServer
 
-  alias LemonAgent.CliRunners.Types.EventFactory
+  alias LemonCliRunners.Types.EventFactory
 
   alias LemonCore.ResumeToken
 
@@ -110,7 +110,7 @@ defmodule CodingAgent.CliRunners.LemonRunner do
 
     @behaviour CodingAgent.Session.RunTranslator.Emitter
 
-    alias LemonAgent.CliRunners.Types.EventFactory
+    alias LemonCliRunners.Types.EventFactory
     alias LemonAgent.EventStream
     alias CodingAgent.Session.Presentation
 

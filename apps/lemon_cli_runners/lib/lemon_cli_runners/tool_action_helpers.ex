@@ -1,4 +1,4 @@
-defmodule LemonAgent.CliRunners.ToolActionHelpers do
+defmodule LemonCliRunners.ToolActionHelpers do
   @moduledoc """
   Shared helpers for translating tool calls and tool results into action events.
 
@@ -6,10 +6,10 @@ defmodule LemonAgent.CliRunners.ToolActionHelpers do
   and normalizing tool output across CLI runners (e.g., Claude, Kimi).
   """
 
-  alias LemonAgent.CliRunners.Types.EventFactory
+  alias LemonCliRunners.Types.EventFactory
 
   @spec start_action(EventFactory.t(), map(), String.t(), atom(), String.t(), map()) ::
-          {LemonAgent.CliRunners.Types.ActionEvent.t(), EventFactory.t(), map()}
+          {LemonCliRunners.Types.ActionEvent.t(), EventFactory.t(), map()}
   def start_action(factory, pending_actions, id, kind, title, detail) do
     {event, factory} = EventFactory.action_started(factory, id, kind, title, detail: detail)
 
@@ -26,7 +26,7 @@ defmodule LemonAgent.CliRunners.ToolActionHelpers do
   end
 
   @spec complete_action(EventFactory.t(), map(), String.t(), boolean(), map(), atom(), String.t()) ::
-          {LemonAgent.CliRunners.Types.ActionEvent.t(), EventFactory.t(), map()}
+          {LemonCliRunners.Types.ActionEvent.t(), EventFactory.t(), map()}
   def complete_action(
         factory,
         pending_actions,

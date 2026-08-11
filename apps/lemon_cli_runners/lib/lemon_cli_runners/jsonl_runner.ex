@@ -1,4 +1,4 @@
-defmodule LemonAgent.CliRunners.JsonlRunner do
+defmodule LemonCliRunners.JsonlRunner do
   @moduledoc """
   Base GenServer for running CLI tools that emit JSONL events.
 
@@ -22,7 +22,7 @@ defmodule LemonAgent.CliRunners.JsonlRunner do
   Implement the callbacks:
 
       defmodule MyRunner do
-        use LemonAgent.CliRunners.JsonlRunner
+        use LemonCliRunners.JsonlRunner
 
         @impl true
         def engine, do: "my_engine"
@@ -59,7 +59,7 @@ defmodule LemonAgent.CliRunners.JsonlRunner do
 
   require Logger
 
-  alias LemonAgent.CliRunners.Types.{Action, ActionEvent, CompletedEvent, StartedEvent}
+  alias LemonCliRunners.Types.{Action, ActionEvent, CompletedEvent, StartedEvent}
   alias LemonCore.ResumeToken
   alias LemonCore.Introspection
 
@@ -138,16 +138,16 @@ defmodule LemonAgent.CliRunners.JsonlRunner do
   - `:done` - true if this is the final event
   """
   @callback translate_event(data :: term(), state :: runner_state()) ::
-              {events :: [LemonAgent.CliRunners.Types.cli_event()], state :: runner_state(),
+              {events :: [LemonCliRunners.Types.cli_event()], state :: runner_state(),
                opts :: keyword()}
 
   @doc "Handle non-zero exit code"
   @callback handle_exit_error(exit_code :: integer(), state :: runner_state()) ::
-              {events :: [LemonAgent.CliRunners.Types.cli_event()], state :: runner_state()}
+              {events :: [LemonCliRunners.Types.cli_event()], state :: runner_state()}
 
   @doc "Handle stream end without completion event"
   @callback handle_stream_end(state :: runner_state()) ::
-              {events :: [LemonAgent.CliRunners.Types.cli_event()], state :: runner_state()}
+              {events :: [LemonCliRunners.Types.cli_event()], state :: runner_state()}
 
   @doc "Optional environment variables"
   @callback env(state :: runner_state()) :: [{String.t(), String.t()}] | nil
@@ -160,11 +160,11 @@ defmodule LemonAgent.CliRunners.JsonlRunner do
 
   defmacro __using__(_opts) do
     quote do
-      @behaviour LemonAgent.CliRunners.JsonlRunner
+      @behaviour LemonCliRunners.JsonlRunner
 
       require Logger
 
-      alias LemonAgent.CliRunners.JsonlRunner
+      alias LemonCliRunners.JsonlRunner
       alias LemonCore.ResumeToken
 
       # Default implementations
@@ -233,7 +233,7 @@ defmodule LemonAgent.CliRunners.JsonlRunner do
   - `:resume` - ResumeToken for session continuation (optional)
   - `:cwd` - Working directory (default: current directory)
   - `:env` - Additional environment variables
-  - `:timeout` - Subprocess timeout in ms (default from `:lemon_agent, :cli_timeout_ms`)
+  - `:timeout` - Subprocess timeout in ms (default from `:lemon_cli_runners, :cli_timeout_ms`)
   - `:owner` - Owner process to monitor (default: caller)
 
   Returns `{:ok, pid}` where pid is the runner GenServer.
@@ -1151,7 +1151,7 @@ defmodule LemonAgent.CliRunners.JsonlRunner do
   end
 
   defp cancel_grace_ms do
-    case Application.get_env(:lemon_agent, :cli_cancel_grace_ms) do
+    case Application.get_env(:lemon_cli_runners, :cli_cancel_grace_ms) do
       nil -> 1_000
       value when is_integer(value) and value > 0 -> value
       _ -> 1_000
@@ -1251,7 +1251,7 @@ defmodule LemonAgent.CliRunners.JsonlRunner do
   end
 
   defp default_cli_timeout_ms do
-    case Application.get_env(:lemon_agent, :cli_timeout_ms, @default_cli_timeout_ms) do
+    case Application.get_env(:lemon_cli_runners, :cli_timeout_ms, @default_cli_timeout_ms) do
       :infinity ->
         :infinity
 

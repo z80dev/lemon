@@ -1,4 +1,4 @@
-defmodule LemonAgent.CliRunners.KimiSubagent do
+defmodule LemonCliRunners.KimiSubagent do
   @moduledoc """
   High-level API for using Kimi (Kimi CLI) as a collaborating subagent.
 
@@ -7,8 +7,8 @@ defmodule LemonAgent.CliRunners.KimiSubagent do
   maintain state across multiple prompts when a resume token is provided.
   """
 
-  alias LemonAgent.CliRunners.KimiRunner
-  alias LemonAgent.CliRunners.Types.{ActionEvent, CompletedEvent, StartedEvent}
+  alias LemonCliRunners.KimiRunner
+  alias LemonCliRunners.Types.{ActionEvent, CompletedEvent, StartedEvent}
   alias LemonCore.ResumeToken
 
   @typedoc "A Kimi subagent session"

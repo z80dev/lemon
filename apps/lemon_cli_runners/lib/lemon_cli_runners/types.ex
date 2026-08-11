@@ -1,4 +1,4 @@
-defmodule LemonAgent.CliRunners.Types do
+defmodule LemonCliRunners.Types do
   @moduledoc """
   Core type definitions for CLI-based subprocess runners.
 
@@ -25,10 +25,10 @@ defmodule LemonAgent.CliRunners.Types do
   # Resume Token - canonical definition now lives in LemonCore.ResumeToken
   # ============================================================================
 
-  # Compatibility alias: LemonAgent.CliRunners.Types.ResumeToken is now
+  # Compatibility alias: LemonCliRunners.Types.ResumeToken is now
   # LemonCore.ResumeToken.  The nested module below delegates all public
   # functions and mirrors the struct so that pattern matches on
-  # %LemonAgent.CliRunners.Types.ResumeToken{} continue to compile.
+  # %LemonCliRunners.Types.ResumeToken{} continue to compile.
   #
   # New code should reference LemonCore.ResumeToken directly.
   defmodule ResumeToken do
@@ -102,7 +102,7 @@ defmodule LemonAgent.CliRunners.Types do
     """
     @type t :: %__MODULE__{
             id: String.t(),
-            kind: LemonAgent.CliRunners.Types.action_kind(),
+            kind: LemonCliRunners.Types.action_kind(),
             title: String.t(),
             detail: map()
           }
@@ -164,11 +164,11 @@ defmodule LemonAgent.CliRunners.Types do
     @type t :: %__MODULE__{
             type: :action,
             engine: String.t(),
-            action: LemonAgent.CliRunners.Types.Action.t(),
-            phase: LemonAgent.CliRunners.Types.action_phase(),
+            action: LemonCliRunners.Types.Action.t(),
+            phase: LemonCliRunners.Types.action_phase(),
             ok: boolean() | nil,
             message: String.t() | nil,
-            level: LemonAgent.CliRunners.Types.action_level() | nil
+            level: LemonCliRunners.Types.action_level() | nil
           }
 
     @enforce_keys [:engine, :action, :phase]
@@ -282,7 +282,7 @@ defmodule LemonAgent.CliRunners.Types do
         completed = EventFactory.completed_ok(factory, "Done!")
 
     """
-    alias LemonAgent.CliRunners.Types.{
+    alias LemonCliRunners.Types.{
       Action,
       ActionEvent,
       CompletedEvent,

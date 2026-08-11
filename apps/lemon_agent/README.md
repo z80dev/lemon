@@ -1,6 +1,6 @@
 # LemonAgent
 
-Core agent runtime for the Lemon umbrella project. LemonAgent provides OTP-native building blocks for AI agents: a supervised GenServer for stateful agent lifecycle management, a stateless agentic loop with streaming events, bounded event streams with backpressure, cooperative abort signaling, context window management, CLI subprocess runners for external AI engines, and a subagent supervision/registry infrastructure.
+Core agent runtime for the Lemon umbrella project. LemonAgent provides OTP-native building blocks for AI agents: a supervised GenServer for stateful agent lifecycle management, a stateless agentic loop with streaming events, bounded event streams with backpressure, cooperative abort signaling, context window management, and a subagent supervision/registry infrastructure. (CLI subprocess runners for external AI engines live in the sibling `lemon_cli_runners` package.)
 
 ## Architecture Overview
 
@@ -19,8 +19,8 @@ Core agent runtime for the Lemon umbrella project. LemonAgent provides OTP-nativ
 |  +------+------+  +------+------+  +--------------------------+ |
 |         |                |                                      |
 |  +------+------+  +------+------+  +--------------------------+ |
-|  | AgentRegistry| | SubagentSup |  |  CLI Runners             | |
-|  | (lookup)    |  | (dynamic)   |  |  (external CLIs)         | |
+|  | AgentRegistry| | SubagentSup |  |  ToolRegistry            | |
+|  | (lookup)    |  | (dynamic)   |  |  (runtime tools)         | |
 |  +-------------+  +-------------+  +--------------------------+ |
 +-----------------------------------------------------------------+
                                    |
@@ -95,28 +95,10 @@ The supervisor uses a `:one_for_one` strategy. Each child is independent:
 
 ### CLI Runners
 
-| Module | File | Purpose |
-|--------|------|---------|
-| `LemonAgent.CliRunners.JsonlRunner` | `lib/agent_core/cli_runners/jsonl_runner.ex` | Base `use` macro and GenServer for JSONL-streaming CLI subprocesses. Handles subprocess spawning, stdout JSONL parsing, stderr draining, session locking, graceful shutdown. Defines the behaviour callbacks. |
-| `LemonAgent.CliRunners.Types` | `lib/agent_core/cli_runners/types.ex` | CLI event types: `ResumeToken` (compatibility wrapper for `LemonCore.ResumeToken`), `Action`, `StartedEvent`, `ActionEvent`, `CompletedEvent`, `EventFactory`. |
-| `LemonAgent.CliRunners.ToolActionHelpers` | `lib/agent_core/cli_runners/tool_action_helpers.ex` | Helpers for translating tool/action events between formats. |
-
-### Engine-Specific Runners
-
-Each supported external AI engine has three modules:
-
-| Engine | Runner | Schema | Subagent |
-|--------|--------|--------|----------|
-| Claude | `claude_runner.ex` | `claude_schema.ex` | `claude_subagent.ex` |
-| Codex | `codex_runner.ex` | `codex_schema.ex` | `codex_subagent.ex` |
-| Droid | `droid_runner.ex` | `droid_schema.ex` | `droid_subagent.ex` |
-| Kimi | `kimi_runner.ex` | `kimi_schema.ex` | `kimi_subagent.ex` |
-| OpenCode | `opencode_runner.ex` | `opencode_schema.ex` | `opencode_subagent.ex` |
-| Pi | `pi_runner.ex` | `pi_schema.ex` | `pi_subagent.ex` |
-
-All runners implement the `LemonAgent.CliRunners.JsonlRunner` behaviour via `use LemonAgent.CliRunners.JsonlRunner`. Each schema module handles JSON event parsing for the specific engine format. Subagent modules wrap the runner with `LemonAgent.SubagentSupervisor` integration.
-
-For Claude specifically, nested Task activity is tracked through `parent_tool_use_id` on assistant/user stream messages. The runner preserves that parent link in action `detail` so downstream UIs can render child tool calls under the parent Task action, and ignored Claude event types are surfaced through runner logging/introspection instead of disappearing silently.
+The vendor CLI wrappers (Claude Code, Codex, Droid, Kimi, OpenCode, Pi) live in
+the `lemon_cli_runners` package (`apps/lemon_cli_runners`) as
+`LemonCliRunners.*`. They build on this app's `EventStream` and `Types`; see
+that package's README for architecture and usage.
 
 ## Key Concepts and Design Patterns
 
@@ -160,10 +142,6 @@ The Agent GenServer provides two message queues:
 
 Both queues support two consumption modes: `:one_at_a_time` (default) or `:all`.
 
-### Session Locking (CLI Runners)
-
-CLI runners use an ETS-based session lock to prevent concurrent resumption of the same session. Locks are acquired on resume, released on completion, and reclaimed if the owner process dies or the lock expires (default: 15 minutes).
-
 ### Registry Pattern
 
 Agents register in `LemonAgent.AgentRegistry` under `{session_id, role, index}` tuples. This enables structured lookup across sessions and roles:
@@ -180,7 +158,7 @@ LemonAgent.AgentRegistry.list_by_role(:research)
 
 ### Introspection
 
-LemonAgent emits introspection events via `LemonCore.Introspection.record/3` for observability. Events include `:agent_loop_started`, `:agent_turn_observed`, `:agent_loop_ended`, `:jsonl_stream_started`, `:jsonl_stream_ended`, `:tool_use_observed`, `:assistant_turn_observed`, and engine-specific events. Payloads never include prompt or response content.
+LemonAgent emits introspection events via `LemonCore.Introspection.record/3` for observability. Events include `:agent_loop_started`, `:agent_turn_observed`, `:agent_loop_ended`, `:tool_use_observed`, and `:assistant_turn_observed`. Payloads never include prompt or response content.
 
 ### Telemetry
 
@@ -199,10 +177,9 @@ Application environment keys under `:lemon_agent`:
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `:queue_call_timeout_ms` | `pos_integer() \| :infinity` | `1_800_000` (30 min) | GenServer call timeout for loop queue polling |
-| `:cli_timeout_ms` | `pos_integer() \| :infinity` | `300_000` (5 min) | CLI subprocess timeout |
-| `:cli_session_lock_max_age_ms` | `pos_integer() \| :infinity` | `900_000` (15 min) | Maximum age for CLI session locks before reclamation |
-| `:cli_cancel_grace_ms` | `pos_integer()` | `1_000` (1 sec) | Grace period before force-killing a canceled CLI |
 | `:event_stream_cancel_grace_ms` | `pos_integer()` | `100` | Grace period before force-killing an EventStream's attached task |
+
+The `:cli_timeout_ms`, `:cli_session_lock_max_age_ms`, and `:cli_cancel_grace_ms` keys moved to `:lemon_cli_runners` with the CLI runners.
 
 ## Usage Examples
 
@@ -363,65 +340,6 @@ LemonAgent.EventStream.complete(stream, final_messages)
 %{queue_size: n, max_queue: m, dropped: d} = LemonAgent.EventStream.stats(stream)
 ```
 
-### Adding a New CLI Runner
-
-Implement the `LemonAgent.CliRunners.JsonlRunner` behaviour:
-
-```elixir
-defmodule LemonAgent.CliRunners.MyEngineRunner do
-  use LemonAgent.CliRunners.JsonlRunner
-
-  alias LemonAgent.CliRunners.Types.EventFactory
-  alias LemonCore.ResumeToken
-
-  @engine "myengine"
-
-  @impl true
-  def engine, do: @engine
-
-  @impl true
-  def init_state(_prompt, _resume, cwd, _opts) do
-    %{factory: EventFactory.new(@engine), last_text: nil}
-  end
-
-  @impl true
-  def build_command(prompt, resume, _state) do
-    args = ["--json", "--output-format", "jsonl"]
-    args = if resume, do: args ++ ["--resume", resume.value], else: args
-    {"myengine", args ++ ["--", prompt]}
-  end
-
-  @impl true
-  def translate_event(data, state) do
-    case data do
-      %{"type" => "init", "session_id" => sid} ->
-        token = ResumeToken.new(@engine, sid)
-        {started, factory} = EventFactory.started(state.factory, token)
-        {[started], %{state | factory: factory}, [found_session: token]}
-
-      %{"type" => "done", "result" => result} ->
-        {completed, factory} = EventFactory.completed_ok(state.factory, result || "")
-        {[completed], %{state | factory: factory}, [done: true]}
-
-      _ ->
-        {[], state, []}
-    end
-  end
-
-  @impl true
-  def handle_exit_error(exit_code, state) do
-    {event, factory} = EventFactory.completed_error(state.factory, "failed (rc=#{exit_code})")
-    {[event], %{state | factory: factory}}
-  end
-
-  @impl true
-  def handle_stream_end(state) do
-    {event, factory} = EventFactory.completed_error(state.factory, "ended without result")
-    {[event], %{state | factory: factory}}
-  end
-end
-```
-
 ## Dependencies
 
 | Dependency | Type | Purpose |
@@ -443,12 +361,8 @@ mix test apps/lemon_agent
 # Specific test file
 mix test apps/lemon_agent/test/lemon_agent/agent_test.exs
 
-# Run with integration tests (requires external CLIs installed)
+# Run with integration tests
 mix test apps/lemon_agent --include integration
-
-# Specific CLI runner integration test
-mix test apps/lemon_agent/test/lemon_agent/cli_runners/claude_integration_test.exs --include integration
-mix test apps/lemon_agent/test/lemon_agent/cli_runners/droid_integration_test.exs --include integration
 ```
 
 ### Test Organization
@@ -490,27 +404,7 @@ apps/lemon_agent/test/
 |   |-- loop_test.exs
 |   |-- loop_abort_test.exs
 |   |-- loop_edge_cases_test.exs
-|   |-- loop_additional_edge_cases_test.exs
-|   +-- cli_runners/
-|       |-- jsonl_runner_test.exs
-|       |-- jsonl_runner_safety_test.exs
-|       |-- types_test.exs
-|       |-- tool_action_helpers_test.exs
-|       |-- claude_runner_test.exs
-|       |-- claude_schema_test.exs
-|       |-- claude_subagent_test.exs
-|       |-- codex_runner_test.exs
-|       |-- codex_schema_test.exs
-|       |-- codex_subagent_test.exs
-|       |-- codex_subagent_comprehensive_test.exs
-|       |-- kimi_runner_test.exs
-|       |-- kimi_subagent_test.exs
-|       |-- opencode_runner_test.exs
-|       |-- pi_runner_test.exs
-|       |-- introspection_test.exs
-|       |-- claude_integration_test.exs    (@tag :integration)
-|       |-- codex_integration_test.exs     (@tag :integration)
-|       +-- kimi_integration_test.exs      (@tag :integration)
+|   +-- loop_additional_edge_cases_test.exs
 ```
 
-Integration tests that require external CLI tools are tagged with `@tag :integration` and excluded from the default test run.
+Integration tests that require external services are tagged with `@tag :integration` and excluded from the default test run. CLI runner tests live in `apps/lemon_cli_runners`.

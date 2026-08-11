@@ -1,13 +1,13 @@
-defmodule LemonAgent.CliRunners.DroidRunner do
+defmodule LemonCliRunners.DroidRunner do
   @moduledoc """
   Factory Droid CLI subprocess runner.
   """
 
-  use LemonAgent.CliRunners.JsonlRunner
+  use LemonCliRunners.JsonlRunner
 
-  alias LemonAgent.CliRunners.DroidSchema
+  alias LemonCliRunners.DroidSchema
 
-  alias LemonAgent.CliRunners.DroidSchema.{
+  alias LemonCliRunners.DroidSchema.{
     DroidCompletionEvent,
     DroidMessageEvent,
     DroidReasoningEvent,
@@ -16,8 +16,8 @@ defmodule LemonAgent.CliRunners.DroidRunner do
     DroidToolResultEvent
   }
 
-  alias LemonAgent.CliRunners.ToolActionHelpers
-  alias LemonAgent.CliRunners.Types.EventFactory
+  alias LemonCliRunners.ToolActionHelpers
+  alias LemonCliRunners.Types.EventFactory
   alias LemonCore.Config, as: LemonConfig
   alias LemonCore.Introspection
   alias LemonCore.ResumeToken

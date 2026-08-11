@@ -1,16 +1,16 @@
-defmodule LemonAgent.CliRunners.CodexIntegrationTest do
+defmodule LemonCliRunners.CodexIntegrationTest do
   @moduledoc """
   Integration tests for Codex CLI runner.
 
   These tests actually spawn the `codex` CLI and verify end-to-end functionality.
   They require `codex` to be installed and configured.
 
-  Run with: mix test apps/lemon_agent/test/lemon_agent/cli_runners/codex_integration_test.exs
+  Run with: mix test apps/lemon_cli_runners/test/lemon_cli_runners/codex_integration_test.exs
   """
 
   use ExUnit.Case, async: false
 
-  alias LemonAgent.CliRunners.CodexSubagent
+  alias LemonCliRunners.CodexSubagent
   alias LemonCore.ResumeToken
 
   @moduletag :integration

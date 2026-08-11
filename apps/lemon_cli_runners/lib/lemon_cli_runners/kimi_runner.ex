@@ -1,4 +1,4 @@
-defmodule LemonAgent.CliRunners.KimiRunner do
+defmodule LemonCliRunners.KimiRunner do
   @moduledoc """
   Kimi CLI subprocess runner.
 
@@ -25,12 +25,12 @@ defmodule LemonAgent.CliRunners.KimiRunner do
       kimi --print --output-format stream-json [-p PROMPT] [--session SESSION_ID]
   """
 
-  use LemonAgent.CliRunners.JsonlRunner
+  use LemonCliRunners.JsonlRunner
 
-  alias LemonAgent.CliRunners.KimiSchema
-  alias LemonAgent.CliRunners.KimiSchema.{ErrorMessage, Message, StreamMessage, ToolCall}
-  alias LemonAgent.CliRunners.ToolActionHelpers
-  alias LemonAgent.CliRunners.Types.EventFactory
+  alias LemonCliRunners.KimiSchema
+  alias LemonCliRunners.KimiSchema.{ErrorMessage, Message, StreamMessage, ToolCall}
+  alias LemonCliRunners.ToolActionHelpers
+  alias LemonCliRunners.Types.EventFactory
   alias LemonCore.ResumeToken
   alias LemonCore.Introspection
 

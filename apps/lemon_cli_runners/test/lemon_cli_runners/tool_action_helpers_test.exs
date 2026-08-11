@@ -1,7 +1,7 @@
-defmodule LemonAgent.CliRunners.ToolActionHelpersTest do
+defmodule LemonCliRunners.ToolActionHelpersTest do
   use ExUnit.Case, async: true
 
-  alias LemonAgent.CliRunners.ToolActionHelpers
+  alias LemonCliRunners.ToolActionHelpers
 
   test "normalize_tool_result extracts text from AgentToolResult" do
     result = %LemonAgent.Types.AgentToolResult{

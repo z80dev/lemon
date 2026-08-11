@@ -13,10 +13,12 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
   @current_allowed_direct_deps %{
     lemon_agent: [:lemon_ai, :lemon_core],
     lemon_ai: [],
+    lemon_cli_runners: [:lemon_agent, :lemon_ai, :lemon_core],
     coding_agent: [
       :lemon_agent,
       :lemon_ai,
       :lemon_browser,
+      :lemon_cli_runners,
       :lemon_core,
       :lemon_gateway,
       :lemon_memory,
@@ -49,6 +51,7 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
       :lemon_agent,
       :lemon_ai,
       :lemon_automation,
+      :lemon_cli_runners,
       :lemon_core
     ],
     lemon_lsp: [:lemon_core],

@@ -1,4 +1,4 @@
-defmodule LemonAgent.CliRunners.ClaudeSubagentTest do
+defmodule LemonCliRunners.ClaudeSubagentTest do
   @moduledoc """
   Comprehensive unit tests for ClaudeSubagent.
 
@@ -8,9 +8,9 @@ defmodule LemonAgent.CliRunners.ClaudeSubagentTest do
 
   use ExUnit.Case, async: true
 
-  alias LemonAgent.CliRunners.ClaudeSubagent
+  alias LemonCliRunners.ClaudeSubagent
 
-  alias LemonAgent.CliRunners.Types.{
+  alias LemonCliRunners.Types.{
     ActionEvent,
     CompletedEvent,
     ResumeToken,

@@ -23,14 +23,14 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
   alias LemonGateway.Types.Job
   alias LemonGateway.Event
 
-  alias LemonAgent.CliRunners.Types.{
+  alias LemonCliRunners.Types.{
     Action,
     ActionEvent,
     CompletedEvent,
     StartedEvent
   }
 
-  alias LemonAgent.CliRunners.Types.ResumeToken, as: CoreResumeToken
+  alias LemonCliRunners.Types.ResumeToken, as: CoreResumeToken
 
   # ============================================================================
   # Engine Identity Tests
@@ -659,9 +659,9 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
   # ============================================================================
 
   describe "configuration handling" do
-    test "uses LemonAgent.CliRunners.ClaudeRunner module" do
+    test "uses LemonCliRunners.ClaudeRunner module" do
       # Verify the module reference is correct
-      assert Code.ensure_loaded?(LemonAgent.CliRunners.ClaudeRunner)
+      assert Code.ensure_loaded?(LemonCliRunners.ClaudeRunner)
     end
   end
 

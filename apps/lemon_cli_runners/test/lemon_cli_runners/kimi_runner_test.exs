@@ -1,11 +1,11 @@
-defmodule LemonAgent.CliRunners.KimiRunnerTest do
+defmodule LemonCliRunners.KimiRunnerTest do
   use ExUnit.Case, async: false
 
-  alias LemonAgent.CliRunners.KimiRunner
-  alias LemonAgent.CliRunners.KimiRunner.RunnerState
-  alias LemonAgent.CliRunners.KimiSchema
+  alias LemonCliRunners.KimiRunner
+  alias LemonCliRunners.KimiRunner.RunnerState
+  alias LemonCliRunners.KimiSchema
 
-  alias LemonAgent.CliRunners.KimiSchema.{
+  alias LemonCliRunners.KimiSchema.{
     ErrorMessage,
     Message,
     StreamMessage,
@@ -13,7 +13,7 @@ defmodule LemonAgent.CliRunners.KimiRunnerTest do
     ToolFunction
   }
 
-  alias LemonAgent.CliRunners.Types.{ActionEvent, CompletedEvent, ResumeToken, StartedEvent}
+  alias LemonCliRunners.Types.{ActionEvent, CompletedEvent, ResumeToken, StartedEvent}
 
   setup do
     Application.delete_env(:lemon_agent, :kimi)

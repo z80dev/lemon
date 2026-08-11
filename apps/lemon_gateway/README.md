@@ -80,11 +80,11 @@ Part of the `lemon` Elixir umbrella project.
 | Engine ID | Module | Runner | Steering | Description |
 |-----------|--------|--------|----------|-------------|
 | `lemon` | `CodingAgent.GatewayEngine` (registered by coding_agent) | `CodingAgent.Session` via `CodingAgent.GatewayEngine.SessionRunner` | Yes | Native Elixir engine with full CodingAgent tool support, session persistence, and mid-run steering. Absent in a runtime without coding_agent |
-| `claude` | `Engines.Claude` | `LemonAgent.CliRunners.ClaudeRunner` | No | Claude Code CLI wrapper via CliAdapter |
-| `codex` | `Engines.Codex` | `LemonAgent.CliRunners.CodexRunner` | No | OpenAI Codex CLI wrapper via CliAdapter |
-| `droid` | `Engines.Droid` | `LemonAgent.CliRunners.DroidRunner` | No | Factory Droid CLI wrapper via CliAdapter |
-| `opencode` | `Engines.Opencode` | `LemonAgent.CliRunners.OpencodeRunner` | No | Opencode CLI wrapper via CliAdapter |
-| `pi` | `Engines.Pi` | `LemonAgent.CliRunners.PiRunner` | No | Pi CLI wrapper via CliAdapter |
+| `claude` | `Engines.Claude` | `LemonCliRunners.ClaudeRunner` | No | Claude Code CLI wrapper via CliAdapter |
+| `codex` | `Engines.Codex` | `LemonCliRunners.CodexRunner` | No | OpenAI Codex CLI wrapper via CliAdapter |
+| `droid` | `Engines.Droid` | `LemonCliRunners.DroidRunner` | No | Factory Droid CLI wrapper via CliAdapter |
+| `opencode` | `Engines.Opencode` | `LemonCliRunners.OpencodeRunner` | No | Opencode CLI wrapper via CliAdapter |
+| `pi` | `Engines.Pi` | `LemonCliRunners.PiRunner` | No | Pi CLI wrapper via CliAdapter |
 | `echo` | `Engines.Echo` | (in-process Task) | No | Test/debug engine that echoes the prompt back |
 
 ### Engine Abstraction

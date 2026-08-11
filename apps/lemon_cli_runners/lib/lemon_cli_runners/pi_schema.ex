@@ -1,4 +1,4 @@
-defmodule LemonAgent.CliRunners.PiSchema do
+defmodule LemonCliRunners.PiSchema do
   # Internal: Pi Coding Agent JSONL event schema.
   #
   # Pi emits newline-delimited JSON when run with:

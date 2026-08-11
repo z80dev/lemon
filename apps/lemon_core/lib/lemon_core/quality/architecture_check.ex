@@ -44,6 +44,7 @@ defmodule LemonCore.Quality.ArchitectureCheck do
     lemon_channels: ["LemonChannels"],
     lemon_control_plane: ["LemonControlPlane"],
     lemon_cli: ["LemonCli"],
+    lemon_cli_runners: ["LemonCliRunners"],
     lemon_core: ["LemonCore"],
     lemon_evals: ["LemonEvals"],
     lemon_gateway: ["LemonGateway"],

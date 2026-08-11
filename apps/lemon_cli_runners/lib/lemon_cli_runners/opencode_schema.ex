@@ -1,4 +1,4 @@
-defmodule LemonAgent.CliRunners.OpencodeSchema do
+defmodule LemonCliRunners.OpencodeSchema do
   # Internal: OpenCode CLI JSONL event schema definitions.
   #
   # OpenCode emits newline-delimited JSON with a "type" discriminator when run

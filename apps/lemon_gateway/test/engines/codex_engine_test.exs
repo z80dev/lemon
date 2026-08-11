@@ -26,14 +26,14 @@ defmodule LemonGateway.Engines.CodexEngineTest do
   alias LemonCore.ChatScope
   alias Elixir.LemonGateway.Event
 
-  alias LemonAgent.CliRunners.Types.{
+  alias LemonCliRunners.Types.{
     Action,
     ActionEvent,
     CompletedEvent,
     StartedEvent
   }
 
-  alias LemonAgent.CliRunners.Types.ResumeToken, as: CoreResumeToken
+  alias LemonCliRunners.Types.ResumeToken, as: CoreResumeToken
 
   # ============================================================================
   # Engine Identity Tests
@@ -722,9 +722,9 @@ defmodule LemonGateway.Engines.CodexEngineTest do
   # ============================================================================
 
   describe "configuration handling" do
-    test "uses LemonAgent.CliRunners.CodexRunner module" do
+    test "uses LemonCliRunners.CodexRunner module" do
       # Verify the module reference is correct
-      assert Code.ensure_loaded?(LemonAgent.CliRunners.CodexRunner)
+      assert Code.ensure_loaded?(LemonCliRunners.CodexRunner)
     end
   end
 
@@ -922,19 +922,19 @@ defmodule LemonGateway.Engines.CodexEngineTest do
       ctx = %{
         runner_pid: self(),
         task_pid: self(),
-        runner_module: LemonAgent.CliRunners.CodexRunner
+        runner_module: LemonCliRunners.CodexRunner
       }
 
       assert is_pid(ctx.runner_pid)
       assert is_pid(ctx.task_pid)
-      assert ctx.runner_module == LemonAgent.CliRunners.CodexRunner
+      assert ctx.runner_module == LemonCliRunners.CodexRunner
     end
 
     test "cancel context with nil runner_pid" do
       ctx = %{
         runner_pid: nil,
         task_pid: self(),
-        runner_module: LemonAgent.CliRunners.CodexRunner
+        runner_module: LemonCliRunners.CodexRunner
       }
 
       assert ctx.runner_pid == nil

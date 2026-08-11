@@ -1,12 +1,12 @@
-defmodule LemonAgent.CliRunners.OpencodeRunnerTest do
+defmodule LemonCliRunners.OpencodeRunnerTest do
   use ExUnit.Case, async: true
 
-  alias LemonAgent.CliRunners.OpencodeRunner
-  alias LemonAgent.CliRunners.OpencodeRunner.RunnerState
+  alias LemonCliRunners.OpencodeRunner
+  alias LemonCliRunners.OpencodeRunner.RunnerState
 
-  alias LemonAgent.CliRunners.OpencodeSchema.{StepFinish, StepStart, Text, ToolUse}
+  alias LemonCliRunners.OpencodeSchema.{StepFinish, StepStart, Text, ToolUse}
 
-  alias LemonAgent.CliRunners.Types.{ActionEvent, CompletedEvent, ResumeToken, StartedEvent}
+  alias LemonCliRunners.Types.{ActionEvent, CompletedEvent, ResumeToken, StartedEvent}
 
   describe "engine/0" do
     test "returns opencode" do

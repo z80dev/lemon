@@ -7,7 +7,6 @@ Elixir library for building AI agents with multi-turn conversations, tool execut
 LemonAgent provides the runtime foundation for AI agents in the Lemon project:
 
 - **Agent Runtime**: Stateful GenServer-based agents with lifecycle management
-- **CLI Runners**: Subprocess wrappers for external AI engines (Claude, Codex, Kimi, OpenCode, Pi)
 - **Subagent Spawning**: Supervised dynamic spawning of child agents
 - **Event Streaming**: Async producer/consumer event streams for real-time UI updates
 - **Context Management**: Message history sizing, truncation, and token estimation
@@ -61,24 +60,9 @@ LemonAgent.Supervisor (:one_for_one)
 
 ### CLI Runners
 
-| File | What It Does |
-|------|-------------|
-| `lib/agent_core/cli_runners/jsonl_runner.ex` | Base behaviour + GenServer for JSONL-streaming CLI subprocesses. ~1230 lines. Handles port spawning, JSONL line buffering, session locking, stderr capture, graceful shutdown. |
-| `lib/agent_core/cli_runners/types.ex` | CLI event types: `ResumeToken`, `Action`, `StartedEvent`, `ActionEvent`, `CompletedEvent`, `EventFactory`. |
-| `lib/agent_core/cli_runners/tool_action_helpers.ex` | Helpers for mapping between tool events and action events. |
-| `lib/agent_core/cli_runners/{claude,codex,droid,kimi,opencode,pi}_runner.ex` | Engine-specific runners implementing `JsonlRunner` behaviour. |
-| `lib/agent_core/cli_runners/{claude,codex,droid,kimi,opencode,pi}_schema.ex` | JSON event parsing for each engine's output format. |
-| `lib/agent_core/cli_runners/{claude,codex,droid,kimi,opencode,pi}_subagent.ex` | Subagent wrappers integrating runners with `SubagentSupervisor`. |
-
-Codex, Claude, and Droid runner reasoning/thinking deltas surface as action events with
-`detail.reasoning` metadata. Downstream router/UI layers should use that structured detail instead
-of parsing `[thinking]` text or dropping all note-like events. `DroidRunner` now treats Droid
-`reasoning` JSON blocks as note-style action events, matching the way other runners surface
-non-final thinking output instead of logging them as unknown event types. When callers do not pass
-a model override and no runtime config override is set, the runner itself defaults Droid to
-`glm-5.1` so Lemon does not silently inherit whatever the local CLI default happens to be.
-
-## Common Modification Patterns
+The vendor CLI wrappers (Claude Code, Codex, Droid, Kimi, OpenCode, Pi) moved to
+`apps/lemon_cli_runners` as `LemonCliRunners.*`; see that app's AGENTS/README.
+They still consume this app's `EventStream` and `Types`.
 
 ### Adding a new tool
 
@@ -105,15 +89,6 @@ The execute function signature is `(String.t(), map(), reference() | nil, (Agent
 2. Emit via `EventStream.push(stream, {:my_event, ...})` in the loop or tool calls module.
 3. Handle in `LemonAgent.Agent.handle_agent_event/2` if state updates are needed.
 4. Update subscriber code to handle the new event pattern.
-
-### Adding a new CLI runner engine
-
-1. Create `lib/agent_core/cli_runners/myengine_runner.ex` with `use LemonAgent.CliRunners.JsonlRunner`.
-2. Implement callbacks: `engine/0`, `build_command/3`, `init_state/4`, `translate_event/2`, `handle_exit_error/2`, `handle_stream_end/1`.
-3. Create `lib/agent_core/cli_runners/myengine_schema.ex` for JSON event parsing if the engine format is complex.
-4. Create `lib/agent_core/cli_runners/myengine_subagent.ex` to integrate with `SubagentSupervisor`.
-5. Add resume token support in `LemonCore.ResumeToken` (extract/format/is_resume_line patterns).
-6. Add tests: `test/agent_core/cli_runners/myengine_runner_test.exs`.
 
 ### Modifying the agent loop behavior
 
@@ -201,13 +176,6 @@ The `start_loop/2` function builds the `AgentLoopConfig`, creates an abort signa
 {:canceled, reason}                            # terminal
 ```
 
-CLI runner events are wrapped:
-```elixir
-{:cli_event, %StartedEvent{...}}
-{:cli_event, %ActionEvent{...}}
-{:cli_event, %CompletedEvent{...}}
-```
-
 ## Testing Guidance
 
 ### Running Tests
@@ -215,7 +183,7 @@ CLI runner events are wrapped:
 ```bash
 mix test apps/lemon_agent                    # All tests
 mix test apps/lemon_agent/test/lemon_agent/agent_test.exs  # Specific file
-mix test apps/lemon_agent --include integration            # Include CLI integration tests
+mix test apps/lemon_agent --include integration            # Include integration tests
 ```
 
 ### Writing Tests
@@ -248,7 +216,7 @@ defmodule LemonAgent.MyFeatureTest do
 end
 ```
 
-Integration tests requiring external CLIs use `@tag :integration`:
+Integration tests requiring external services use `@tag :integration`:
 ```elixir
 @tag :integration
 test "runs real Claude session" do
@@ -265,8 +233,6 @@ end
 - `test/agent_core/loop/tool_calls_test.exs` -- Tool execution, concurrency, abort.
 - `test/agent_core/abort_signal_test.exs` -- Abort signal ETS operations.
 - `test/agent_core/context_test.exs` -- Context estimation and truncation.
-- `test/agent_core/cli_runners/jsonl_runner_test.exs` -- Base runner behavior.
-- `test/agent_core/cli_runners/{claude,codex,droid,kimi}_integration_test.exs` -- Live CLI integration coverage for the JSON runner/subagent path.
 
 ## Gotchas and Important Invariants
 
@@ -282,17 +248,12 @@ end
 
 6. **Follow-up long-poll.** The Agent long-polls for 50ms (`@follow_up_poll_timeout_ms`) when checking for follow-up messages. This closes a race where a follow-up is enqueued just as the loop finishes. Do not remove this without understanding the timing implications.
 
-7. **EventStream owner death.** If the EventStream's owner process dies, the stream cancels and shuts down its attached task. The CLI runner addresses this by setting the owner to the caller (not the runner itself) so the stream outlives the runner.
+7. **EventStream owner death.** If the EventStream's owner process dies, the stream cancels and shuts down its attached task. Consumers that outlive a producer (as the CLI runners in `lemon_cli_runners` do) should set the owner to the caller, not the producer.
 
-8. **Session locks are ETS-based.** CLI runner session locks use a simple ETS table (`LemonAgent.CliRunners.JsonlRunner.SessionLocks`). Locks are reclaimed if the owner process dies or the lock exceeds `cli_session_lock_max_age_ms`.
+8. **Tool execution runs under `ToolTaskSupervisor`.** If a tool task crashes, it is caught and reported as an error result. It does not crash the loop.
 
-9. **Tool execution runs under `ToolTaskSupervisor`.** If a tool task crashes, it is caught and reported as an error result. It does not crash the loop.
+9. **The AbortSignal ETS table** is created by `AbortSignal.TableOwner` at app startup. The `AbortSignal` module has a fallback `ensure_table` that creates it if needed (for test environments where the app may not be started). The table uses `{:heir, TableOwner, :ok}` so it survives process restarts.
 
-10. **The AbortSignal ETS table** is created by `AbortSignal.TableOwner` at app startup. The `AbortSignal` module has a fallback `ensure_table` that creates it if needed (for test environments where the app may not be started). The table uses `{:heir, TableOwner, :ok}` so it survives process restarts.
-
-11. **CLI runners use shell wrappers.** Even when there is no stdin, the runner wraps the command in `bash -c` to properly redirect stderr and handle stdin EOF. This means `build_command/3` returns the bare executable and args, not a shell command.
-
-12. **Exit finalization debounce.** CLI runners debounce exit finalization by 100ms (`@exit_finalize_debounce_ms`) because `:exit_status` messages can arrive before trailing stdout `:data` chunks. The timer resets on each new data chunk.
 
 ## How This App Connects to Other Umbrella Apps
 
@@ -314,22 +275,12 @@ LemonAgent emits introspection events via `LemonCore.Introspection.record/3`. Pa
 | `:agent_turn_observed` | `:inferred` | `LemonAgent.Agent` | Each turn completes (`{:turn_end, ...}`) |
 | `:agent_loop_ended` | `:direct` | `LemonAgent.Agent` | Agent loop finishes (`handle_task_completion`) |
 
-### JSONL Runner Events
+### CLI Runner Events
 
-| Event Type | Provenance | Emitted By | When |
-|---|---|---|---|
-| `:jsonl_stream_started` | `:direct` | `JsonlRunner` | CLI subprocess stream begins |
-| `:tool_use_observed` | `:inferred` | `JsonlRunner` | Tool call detected in engine output |
-| `:assistant_turn_observed` | `:inferred` | `JsonlRunner` | Assistant text turn detected |
-| `:jsonl_stream_ended` | `:direct` | `JsonlRunner` | CLI subprocess stream ends |
-
-### CLI Runner Engine Events (provenance: `:inferred`)
-
-| Event Type | Engines | When |
-|---|---|---|
-| `:engine_subprocess_started` | codex, claude, droid, kimi, opencode, pi | Engine session/subprocess initialized |
-| `:engine_output_observed` | codex, droid, kimi, opencode, pi | Engine produces a final answer or output |
-| `:engine_subprocess_exited` | codex, claude, droid, kimi, opencode, pi | Engine subprocess exits with error |
+Recorded by the runners in `apps/lemon_cli_runners` (see that app's docs):
+`:jsonl_stream_started` / `:jsonl_stream_ended`, `:tool_use_observed`,
+`:assistant_turn_observed`, and the `:engine_subprocess_*` /
+`:engine_output_observed` events.
 
 ## Subagent Spawning Patterns
 

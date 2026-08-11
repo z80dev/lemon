@@ -1,4 +1,4 @@
-defmodule LemonAgent.CliRunners.CodexSchema do
+defmodule LemonCliRunners.CodexSchema do
   @moduledoc """
   Codex CLI JSONL event schema definitions.
 
@@ -262,7 +262,7 @@ defmodule LemonAgent.CliRunners.CodexSchema do
     @moduledoc "Work item has begun"
     @type t :: %__MODULE__{
             type: :"item.started",
-            item: LemonAgent.CliRunners.CodexSchema.thread_item()
+            item: LemonCliRunners.CodexSchema.thread_item()
           }
     defstruct type: :"item.started", item: nil
   end
@@ -271,7 +271,7 @@ defmodule LemonAgent.CliRunners.CodexSchema do
     @moduledoc "Work item has progress"
     @type t :: %__MODULE__{
             type: :"item.updated",
-            item: LemonAgent.CliRunners.CodexSchema.thread_item()
+            item: LemonCliRunners.CodexSchema.thread_item()
           }
     defstruct type: :"item.updated", item: nil
   end
@@ -280,7 +280,7 @@ defmodule LemonAgent.CliRunners.CodexSchema do
     @moduledoc "Work item has finished"
     @type t :: %__MODULE__{
             type: :"item.completed",
-            item: LemonAgent.CliRunners.CodexSchema.thread_item()
+            item: LemonCliRunners.CodexSchema.thread_item()
           }
     defstruct type: :"item.completed", item: nil
   end

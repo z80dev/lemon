@@ -3,7 +3,7 @@ defmodule LemonGateway.Engines.Claude do
   Engine adapter for the Claude Code CLI tool.
 
   Delegates to `LemonGateway.Engines.CliAdapter` to manage a
-  `LemonAgent.CliRunners.ClaudeRunner` subprocess for each run.
+  `LemonCliRunners.ClaudeRunner` subprocess for each run.
   """
   @behaviour LemonGateway.Engine
 
@@ -27,7 +27,7 @@ defmodule LemonGateway.Engines.Claude do
 
   @impl true
   def start_run(job, opts, sink_pid) do
-    CliAdapter.start_run(LemonAgent.CliRunners.ClaudeRunner, id(), job, opts, sink_pid)
+    CliAdapter.start_run(LemonCliRunners.ClaudeRunner, id(), job, opts, sink_pid)
   end
 
   @impl true
