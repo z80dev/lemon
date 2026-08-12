@@ -473,6 +473,11 @@ defmodule LemonGateway.Run do
     {:noreply, handle_steer(:steer_backlog, request, reply_request, worker_pid, state)}
   end
 
+  def handle_cast({:redirect, request_or_job, worker_pid}, state) do
+    {request, reply_request} = normalize_steer_request(request_or_job)
+    {:noreply, handle_redirect(request, reply_request, worker_pid, state)}
+  end
+
   @impl true
   def handle_cast({:cancel, reason}, state) do
     if state.completed do
@@ -534,6 +539,46 @@ defmodule LemonGateway.Run do
     end
   end
 
+  # Redirect cancels only the engine's in-flight model request and retries
+  # with the correction appended. Engines that lack the capability degrade to
+  # a plain steer (the correction is still injected mid-run).
+  defp handle_redirect(%ExecutionRequest{} = request, reply_request, worker_pid, state) do
+    redirect_text = request.prompt || ""
+
+    cond do
+      state.completed ->
+        notify_steer_result(:redirect, :rejected, worker_pid, reply_request)
+        state
+
+      is_nil(state.engine) or is_nil(state.cancel_ctx) ->
+        notify_steer_result(:redirect, :rejected, worker_pid, reply_request)
+        state
+
+      engine_supports_redirect?(state.engine) ->
+        case state.engine.redirect(state.cancel_ctx, redirect_text) do
+          :ok ->
+            notify_steer_result(:redirect, :accepted, worker_pid, reply_request)
+            state
+
+          {:error, _reason} ->
+            notify_steer_result(:redirect, :rejected, worker_pid, reply_request)
+            state
+        end
+
+      true ->
+        handle_steer(:redirect, request, reply_request, worker_pid, state)
+    end
+  end
+
+  # supports_redirect?/0 is an optional engine callback; treat an engine that
+  # does not export it as answering false.
+  defp engine_supports_redirect?(engine) do
+    Code.ensure_loaded?(engine) and
+      function_exported?(engine, :supports_redirect?, 0) and
+      engine.supports_redirect?() and
+      function_exported?(engine, :redirect, 2)
+  end
+
   defp normalize_steer_request(%ExecutionRequest{} = request) do
     {request, request}
   end
@@ -553,6 +598,12 @@ defmodule LemonGateway.Run do
 
   defp notify_steer_result(:steer_backlog, :rejected, worker_pid, request),
     do: send(worker_pid, {:steer_backlog_rejected, request})
+
+  defp notify_steer_result(:redirect, :accepted, worker_pid, request),
+    do: send(worker_pid, {:redirect_accepted, request})
+
+  defp notify_steer_result(:redirect, :rejected, worker_pid, request),
+    do: send(worker_pid, {:redirect_rejected, request})
 
   defp engine_id_for(%Job{} = job) do
     cond do

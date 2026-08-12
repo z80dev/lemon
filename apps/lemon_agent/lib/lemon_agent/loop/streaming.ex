@@ -29,6 +29,11 @@ defmodule LemonAgent.Loop.Streaming do
       {abort_message, context} = finalize_message(abort_message, context, false, stream)
       {:ok, abort_message, context}
     else
+      # A redirect requested before this call starts has already had its
+      # correction drained into pending messages; clear the flag so the fresh
+      # call is not spuriously cancelled.
+      if redirect_requested?(signal), do: AbortSignal.clear_redirect(signal)
+
       # Surface very large contexts early (telemetry warning only; no truncation here).
       _ = LemonAgent.Context.check_size(context.messages, context.system_prompt)
 
@@ -113,21 +118,34 @@ defmodule LemonAgent.Loop.Streaming do
         ai_events(response_stream),
         {nil, context, false},
         fn event, {partial, ctx, added} ->
-          if aborted?(signal) do
-            LemonAi.EventStream.cancel(response_stream, :aborted)
+          cond do
+            aborted?(signal) ->
+              LemonAi.EventStream.cancel(response_stream, :aborted)
 
-            {final_message, final_ctx} =
-              finalize_canceled_message(partial, ctx, added, stream, config, :aborted)
+              {final_message, final_ctx} =
+                finalize_canceled_message(partial, ctx, added, stream, config, :aborted)
 
-            {:halt, {:done, final_message, final_ctx}}
-          else
-            case process_stream_event(event, partial, ctx, added, stream, config) do
-              {:continue, new_partial, new_ctx, new_added} ->
-                {:cont, {new_partial, new_ctx, new_added}}
+              {:halt, {:done, final_message, final_ctx}}
 
-              {:done, final_message, final_ctx} ->
-                {:halt, {:done, final_message, final_ctx}}
-            end
+            redirect_requested?(signal) ->
+              # Redirect cancels only this model request; the loop keeps prior
+              # completed messages/tool results and retries with the queued
+              # correction appended.
+              LemonAi.EventStream.cancel(response_stream, :redirected)
+
+              {final_message, final_ctx} =
+                finalize_canceled_message(partial, ctx, added, stream, config, :redirected)
+
+              {:halt, {:done, final_message, final_ctx}}
+
+            true ->
+              case process_stream_event(event, partial, ctx, added, stream, config) do
+                {:continue, new_partial, new_ctx, new_added} ->
+                  {:cont, {new_partial, new_ctx, new_added}}
+
+                {:done, final_message, final_ctx} ->
+                  {:halt, {:done, final_message, final_ctx}}
+              end
           end
         end
       )
@@ -352,6 +370,8 @@ defmodule LemonAgent.Loop.Streaming do
 
   defp aborted?(signal), do: AbortSignal.aborted?(signal)
 
+  defp redirect_requested?(signal), do: AbortSignal.redirect_requested?(signal)
+
   defp transform_messages(context, %AgentLoopConfig{transform_context: nil}, _signal) do
     {:ok, context.messages}
   end
@@ -394,14 +414,19 @@ defmodule LemonAgent.Loop.Streaming do
         :aborted -> :aborted
         :canceled -> :aborted
         :user_abort -> :aborted
+        :redirected -> :redirected
         _ -> :error
       end
 
-    error_message = "Stream canceled: #{inspect(reason)}"
+    # A redirect is not an error: the loop continues with a correction, so
+    # leave error_message nil to avoid misreporting the run as failed.
+    error_message =
+      if stop_reason == :redirected, do: nil, else: "Stream canceled: #{inspect(reason)}"
 
     final_message =
       case partial do
         %AssistantMessage{} = msg ->
+          msg = if stop_reason == :redirected, do: strip_tool_calls(msg), else: msg
           %{msg | stop_reason: stop_reason, error_message: error_message}
 
         _ ->
@@ -410,6 +435,29 @@ defmodule LemonAgent.Loop.Streaming do
 
     finalize_message(final_message, context, added, stream)
   end
+
+  # A redirected partial may contain ToolCall blocks that will never receive
+  # results; strip them so the message stays transcript-valid wherever it is
+  # retained (agent history, session persistence).
+  defp strip_tool_calls(%AssistantMessage{content: content} = msg) when is_list(content) do
+    stripped =
+      Enum.reject(content, fn
+        %ToolCall{} -> true
+        %{type: :tool_call} -> true
+        _ -> false
+      end)
+
+    stripped =
+      if stripped == [] do
+        [%TextContent{type: :text, text: ""}]
+      else
+        stripped
+      end
+
+    %{msg | content: stripped}
+  end
+
+  defp strip_tool_calls(msg), do: msg
 
   defp build_error_message(%AgentLoopConfig{} = config, stop_reason, error_text) do
     model = config.model || %{}

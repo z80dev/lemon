@@ -89,7 +89,7 @@ defmodule LemonAi.Types do
             error_message: String.t() | nil,
             timestamp: integer()
           }
-    @type stop_reason :: :stop | :length | :tool_use | :error | :aborted
+    @type stop_reason :: :stop | :length | :tool_use | :error | :aborted | :redirected
 
     defstruct role: :assistant,
               content: [],

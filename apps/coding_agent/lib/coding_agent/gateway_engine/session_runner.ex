@@ -105,6 +105,10 @@ defmodule CodingAgent.GatewayEngine.SessionRunner do
     GenServer.call(pid, {:steer, text})
   end
 
+  def redirect(pid, text) do
+    GenServer.call(pid, {:redirect, text})
+  end
+
   @impl true
   def init(opts) do
     case Application.ensure_all_started(:coding_agent) do
@@ -221,6 +225,17 @@ defmodule CodingAgent.GatewayEngine.SessionRunner do
 
       session ->
         CodingAgent.Session.steer(session, text)
+        {:reply, :ok, state}
+    end
+  end
+
+  def handle_call({:redirect, text}, _from, state) do
+    case state.session do
+      nil ->
+        {:reply, {:error, :no_session}, state}
+
+      session ->
+        CodingAgent.Session.redirect(session, text)
         {:reply, :ok, state}
     end
   end

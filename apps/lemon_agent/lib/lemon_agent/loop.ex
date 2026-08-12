@@ -531,6 +531,38 @@ defmodule LemonAgent.Loop do
             EventStream.cancel(stream, :assistant_aborted)
             {context, new_messages, [], false}
 
+          :redirected ->
+            # The in-flight model request was canceled by a redirect. Drop the
+            # partial assistant message from the loop context (prior completed
+            # messages/tool results are preserved), clear the redirect flag,
+            # drain the queued correction, and retry the model call.
+            Logger.info("LemonAgent.Loop turn redirected")
+            context = drop_trailing_message(context, message)
+            EventStream.push(stream, {:turn_end, message, []})
+            AbortSignal.clear_redirect(signal)
+
+            pending_messages = get_steering_messages(config, signal) || []
+
+            if aborted?(signal) do
+              transition_loop_state(stream, :aborted, %{reason: :assistant_aborted})
+              EventStream.cancel(stream, :assistant_aborted)
+              {context, new_messages, [], false}
+            else
+              do_inner_loop(
+                context,
+                new_messages,
+                config,
+                signal,
+                stream_fn,
+                stream,
+                pending_messages,
+                false,
+                false,
+                nil,
+                tool_turn_count
+              )
+            end
+
           :error ->
             transition_loop_state(stream, :recovering_provider_error, %{reason: :assistant_error})
             EventStream.push(stream, {:turn_end, message, []})
@@ -785,6 +817,16 @@ defmodule LemonAgent.Loop do
   defp assistant_message?(%AssistantMessage{}), do: true
   defp assistant_message?(%{role: :assistant}), do: true
   defp assistant_message?(_), do: false
+
+  # Remove `message` from the end of the context, where the streaming pass
+  # finalized it. Used by the redirect path to discard the canceled partial.
+  defp drop_trailing_message(context, message) do
+    if List.last(context.messages) == message do
+      %{context | messages: List.delete_at(context.messages, -1)}
+    else
+      context
+    end
+  end
 
   defp get_tool_calls(%AssistantMessage{content: content}) do
     Enum.filter(content, fn

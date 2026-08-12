@@ -305,6 +305,19 @@ defmodule CodingAgent.Session do
   end
 
   @doc """
+  Redirect the agent mid-run: cancel only the in-flight model request (keeping
+  completed tool results), append this correction, and retry.
+
+  While tools are executing this degrades to steering semantics — the tools
+  finish and the correction lands before the next model call. When the session
+  is idle it degrades to follow-up semantics.
+  """
+  @spec redirect(GenServer.server(), String.t()) :: :ok
+  def redirect(session, text) do
+    GenServer.cast(session, {:redirect, text})
+  end
+
+  @doc """
   Add a follow-up message to be processed after the agent finishes.
 
   Follow-up messages are delivered only when the agent has no more tool calls
@@ -874,6 +887,23 @@ defmodule CodingAgent.Session do
     outgoing = attach_recalled_context(message, recalled)
 
     LemonAgent.Agent.steer(state.agent, outgoing, system_prompt: state.system_prompt)
+    queue = :queue.in(message, state.steering_queue)
+
+    {:noreply, %{state | steering_queue: queue}}
+  end
+
+  def handle_cast({:redirect, text}, state) do
+    {state, recalled} = refresh_turn_context(state, text)
+
+    message = %LemonAi.Types.UserMessage{
+      role: :user,
+      content: text,
+      timestamp: System.system_time(:millisecond)
+    }
+
+    outgoing = attach_recalled_context(message, recalled)
+
+    LemonAgent.Agent.redirect(state.agent, outgoing, system_prompt: state.system_prompt)
     queue = :queue.in(message, state.steering_queue)
 
     {:noreply, %{state | steering_queue: queue}}

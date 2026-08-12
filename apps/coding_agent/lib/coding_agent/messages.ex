@@ -106,7 +106,7 @@ defmodule CodingAgent.Messages do
     alias CodingAgent.Messages.{TextContent, ThinkingContent, ToolCall, Usage}
 
     @type content_block :: TextContent.t() | ThinkingContent.t() | ToolCall.t()
-    @type stop_reason :: :stop | :length | :tool_use | :error | :aborted
+    @type stop_reason :: :stop | :length | :tool_use | :error | :aborted | :redirected
     @type t :: %__MODULE__{
             role: :assistant,
             content: [content_block()],

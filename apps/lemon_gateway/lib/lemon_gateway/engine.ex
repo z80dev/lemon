@@ -91,5 +91,26 @@ defmodule LemonGateway.Engine do
   """
   @callback steer(cancel_ctx :: term(), text :: String.t()) :: :ok | {:error, term()}
 
-  @optional_callbacks steer: 2
+  @doc """
+  Whether this engine accepts mid-run redirects.
+
+  A redirect cancels only the in-flight model request — completed tool results
+  are kept — then retries with the injected correction appended. Unlike
+  `c:supports_steer?/0` this callback is optional: an engine that does not
+  export it is treated as answering `false`, and the gateway degrades a
+  redirect to a steer when the engine supports that instead.
+  """
+  @callback supports_redirect?() :: boolean()
+
+  @doc """
+  Redirect a run that is already in flight.
+
+  Optional, and only called when `c:supports_redirect?/0` is exported and
+  answers `true`. Receives the same `cancel_ctx` as `c:cancel/1` and, like
+  `c:steer/2`, should report a context it cannot use as `{:error, reason}`
+  rather than raising.
+  """
+  @callback redirect(cancel_ctx :: term(), text :: String.t()) :: :ok | {:error, term()}
+
+  @optional_callbacks steer: 2, supports_redirect?: 0, redirect: 2
 end

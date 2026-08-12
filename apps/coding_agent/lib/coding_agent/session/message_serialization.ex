@@ -259,6 +259,7 @@ defmodule CodingAgent.Session.MessageSerialization do
   def deserialize_stop_reason("tool_use"), do: :tool_use
   def deserialize_stop_reason("error"), do: :error
   def deserialize_stop_reason("aborted"), do: :aborted
+  def deserialize_stop_reason("redirected"), do: :redirected
   def deserialize_stop_reason(_), do: nil
 
   @spec deserialize_trust(atom() | String.t()) :: atom()

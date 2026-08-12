@@ -59,6 +59,9 @@ defmodule CodingAgent.GatewayEngine do
   def supports_steer?, do: true
 
   @impl true
+  def supports_redirect?, do: true
+
+  @impl true
   def start_run(job, opts, sink_pid) do
     # An entrypoint may boot only a subset of applications, so make sure the
     # agent's own supervision tree (provider registries, session supervisor) is
@@ -88,6 +91,13 @@ defmodule CodingAgent.GatewayEngine do
   end
 
   def steer(_ctx, _text), do: {:error, :no_runner}
+
+  @impl true
+  def redirect(%{runner_pid: pid}, text) when is_pid(pid) do
+    SessionRunner.redirect(pid, text)
+  end
+
+  def redirect(_ctx, _text), do: {:error, :no_runner}
 
   defp start_session_runner(job, opts, sink_pid) do
     run_ref = make_ref()

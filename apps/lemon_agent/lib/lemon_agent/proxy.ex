@@ -718,6 +718,9 @@ defmodule LemonAgent.Proxy do
   defp encode_stop_reason(:length), do: "length"
   defp encode_stop_reason(:tool_use), do: "toolUse"
   defp encode_stop_reason(:aborted), do: "aborted"
+  # A redirected partial retained in history reads as a completed turn on the
+  # wire; peers have no "redirected" vocabulary.
+  defp encode_stop_reason(:redirected), do: "stop"
   defp encode_stop_reason(:error), do: "error"
   defp encode_stop_reason(nil), do: nil
 
