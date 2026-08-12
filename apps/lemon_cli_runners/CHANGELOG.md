@@ -16,16 +16,44 @@ agent framework.
 - `LemonCliRunners.JsonlRunner` — base behaviour + GenServer for
   JSONL-streaming CLI subprocesses: port spawning, line buffering, session
   locking, stderr capture, graceful shutdown.
-- Per-vendor runner/schema/subagent triples for Claude Code, Codex, Droid,
-  Kimi, OpenCode, and Pi.
-- `LemonCliRunners.Types` — `ResumeToken`, `Action`, `StartedEvent`,
-  `ActionEvent`, `CompletedEvent`, `EventFactory`.
+- Per-vendor runner/schema/subagent triples for Claude Code, Codex, Kimi,
+  OpenCode, and Pi.
 - `LemonCliRunners.Env` — the `:cli_runners`-area environment variable
   declarations, moved out of `LemonAgent.Env`.
+- `LemonCliRunners.Application` — registers each vendor subagent with
+  `LemonCore.SubagentRegistry`, and each vendor's resume syntax with
+  `LemonCore.ResumeFormats`, at boot. The package is now an OTP application
+  (with an empty supervision tree) purely so it can announce itself.
+- `resume_format/0` on every `*Subagent`: the vendor owns how its CLI spells
+  "resume" (`codex resume X`, `claude --resume X`, `opencode --session ses_X`,
+  pi's quoted transcript paths), including the wider invocations users paste
+  back. `LemonCore.ResumeToken` prints and parses these without naming a vendor.
+- Every `*Subagent` module implements `LemonCore.SubagentRunner`: `id/0`,
+  `describe/0` (the tool-description prose, including per-vendor caveats such as
+  "ignores `model`"), and a total `cancel/1`.
+- `resolve_cli_settings/1` on every `*Subagent`: the vendor owns what its
+  `[runtime.cli.<engine>]` config section means — its keys and its defaults
+  (e.g. claude's `dangerously_skip_permissions` defaulting `true`) — moved out
+  of `LemonCore.Config.Agent`. `LemonCliRunners.Application` registers each
+  with `LemonCore.Config.CliResolvers` at boot, so config resolution needs no
+  vendor table in core; the resolved shape runners read is unchanged.
+- `LemonCliRunners.Engines.{Claude,Codex,Kimi,Opencode,Pi}` — the gateway
+  engine shells, moved from `LemonGateway.Engines.*`. Each implements
+  `LemonGateway.Engine` over `LemonGateway.Engines.CliAdapter` and is
+  registered with `LemonGateway.EngineRegistry.register_default/1` at boot —
+  a no-op when the operator explicitly configured `:lemon_gateway, :engines`,
+  so a narrowed engine list stays narrowed. This package now depends on
+  `lemon_gateway` (which also orders boot: the registry is up before the
+  engines announce themselves); the gateway no longer depends on this package,
+  and `coding_agent`'s dependency closure is vendor-free.
 
 ### Changed
 
 - Module namespace: `LemonAgent.CliRunners.*` → `LemonCliRunners.*`.
+- The run event vocabulary (`Action`, `StartedEvent`, `ActionEvent`,
+  `CompletedEvent`, `EventFactory`) is no longer defined here: it belongs to
+  `LemonCore.RunEvents`, alongside `LemonCore.ResumeToken`. Every runner in this
+  package translates its vendor's JSONL dialect into those structs.
 - App-env keys `:cli_timeout_ms`, `:cli_cancel_grace_ms`, and
   `:cli_session_lock_max_age_ms` are read from `:lemon_cli_runners`
   (previously `:lemon_agent`).

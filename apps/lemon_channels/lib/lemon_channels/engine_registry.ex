@@ -1,14 +1,27 @@
 defmodule LemonChannels.EngineRegistry do
   @moduledoc """
-  Temporary compatibility parser for resume lines.
+  Resume-line parsing for inbound channel messages.
 
-  Validation and formatting belong in `LemonCore.EngineCatalog` and
-  `LemonCore.ResumeToken`. This module remains only because engine-runtime
-  engines may expose additional resume syntax, which we ask for through
-  `LemonCore.EngineInfoBridge` rather than by reaching into the gateway.
+  Three sources answer, in order of authority:
+
+    1. the engine runtime, asked through `LemonCore.EngineInfoBridge` — its
+       engines may accept syntax nothing else knows about;
+    2. `LemonCore.ResumeToken`, which reads whatever resume formats the vendor
+       packages registered at boot;
+    3. the generic resume line — `<engine> resume|--resume|--session <token>`,
+       the shapes CLIs actually use — accepted for any engine
+       `LemonCore.EngineCatalog` knows. This is the floor for a runtime whose
+       engine packages are absent: it names no vendor, but it still reads what
+       a user pastes.
+
+  Unlike `LemonCore.ResumeToken.extract_resume/1`, this is line-strict: a user
+  message is prose, and a resume token is only honoured when the user wrote a
+  line that is nothing but the resume command.
   """
 
   alias LemonCore.{EngineCatalog, EngineInfoBridge, ResumeToken}
+
+  @generic_resume ~r/^([a-z0-9_-]+)\s+(?:resume|--resume|--session)\s+([^\s`]+)$/i
 
   @spec extract_resume(String.t()) :: {:ok, ResumeToken.t()} | :none
   def extract_resume(text) when is_binary(text) do
@@ -33,7 +46,7 @@ defmodule LemonChannels.EngineRegistry do
       lines = String.split(stripped, "\n", trim: true)
 
       Enum.find_value(lines, :none, fn line ->
-        case parse_resume_regex(String.trim(line)) do
+        case parse_line(String.trim(line)) do
           {:ok, _} = ok -> ok
           _ -> nil
         end
@@ -41,13 +54,15 @@ defmodule LemonChannels.EngineRegistry do
     end
   end
 
-  defp parse_resume_regex(text) do
+  defp parse_line(line) do
     cond do
-      match = Regex.run(~r/^(?:claude)\s+--resume\s+([^\s`]+)$/i, text) ->
-        [_, value] = match
-        {:ok, %ResumeToken{engine: "claude", value: value}}
+      ResumeToken.is_resume_line(line) ->
+        case ResumeToken.extract_resume(line) do
+          %ResumeToken{} = token -> {:ok, token}
+          _ -> :none
+        end
 
-      match = Regex.run(~r/^([a-z0-9_-]+)\s+resume\s+([^\s`]+)$/i, text) ->
+      match = Regex.run(@generic_resume, line) ->
         [_, engine, value] = match
         engine = String.downcase(engine)
 

@@ -13,7 +13,10 @@ defmodule CodingAgent.Tools.Task.Params do
   alias LemonCore.SessionKey
 
   @valid_queue_modes ["collect", "followup", "steer", "steer_backlog", "interrupt"]
-  @valid_engines ["internal", "codex", "claude", "droid", "kimi", "opencode", "pi"]
+
+  # The engine this tool runs when none is named. Its runner registers under
+  # the same id, so it needs no special case beyond sorting first.
+  @default_engine "internal"
   @tool_only_guardrail_known_tools [
     "bash",
     "read",
@@ -54,6 +57,41 @@ defmodule CodingAgent.Tools.Task.Params do
 
   @spec valid_queue_modes() :: [String.t()]
   def valid_queue_modes, do: @valid_queue_modes
+
+  @doc "The engine this tool runs when the caller names none."
+  @spec default_engine() :: String.t()
+  def default_engine, do: @default_engine
+
+  @doc """
+  Engine ids the `engine` parameter accepts, default engine first.
+
+  Read from `LemonCore.SubagentRegistry` on every call rather than cached: the
+  tool schema is rebuilt per turn, and an engine exists exactly as long as the
+  application that registered it is running.
+
+  The default engine is always in the list, whether or not its runner
+  registered. It is what the tool's own description tells the model to use, and
+  an empty list is a JSON-Schema `enum` no value satisfies — a degraded registry
+  must cost us the vendor engines, not the tool.
+  """
+  @spec valid_engines() :: [String.t()]
+  def valid_engines do
+    Enum.uniq([@default_engine | Enum.map(engine_entries(), & &1.id)])
+  end
+
+  @doc "Prose for the `engine` parameter, naming what each registered engine is."
+  @spec engine_param_description() :: String.t()
+  def engine_param_description do
+    "Execution engine: " <>
+      (valid_engines()
+       |> Enum.map(fn id -> if id == @default_engine, do: "#{id} (default)", else: id end)
+       |> Enum.join(", "))
+  end
+
+  defp engine_entries do
+    LemonCore.SubagentRegistry.entries()
+    |> Enum.sort_by(&if(&1.id == @default_engine, do: 0, else: 1))
+  end
 
   @spec normalize_optional_string(term()) :: term()
   def normalize_optional_string(nil), do: nil
@@ -111,8 +149,8 @@ defmodule CodingAgent.Tools.Task.Params do
       not is_nil(engine) and not is_binary(engine) ->
         {:error, "Engine must be a string"}
 
-      not is_nil(engine) and engine not in @valid_engines ->
-        {:error, "Engine must be one of: #{Enum.join(@valid_engines, ", ")}"}
+      not is_nil(engine) and engine not in valid_engines() ->
+        {:error, "Engine must be one of: #{Enum.join(valid_engines(), ", ")}"}
 
       not is_nil(model) and not is_binary(model) ->
         {:error, "Model must be a string"}
@@ -151,7 +189,7 @@ defmodule CodingAgent.Tools.Task.Params do
         {:error, "auto_followup must be a boolean"}
 
       true ->
-        normalized_engine = if engine == "internal", do: nil, else: engine
+        normalized_engine = if engine == @default_engine, do: nil, else: engine
 
         {effective_prompt, guarded_tool_policy} =
           apply_prompt_tool_guardrails(prompt, normalized_engine, tool_policy)
@@ -205,7 +243,7 @@ defmodule CodingAgent.Tools.Task.Params do
         {:error, message}
 
       _ ->
-        policy = ToolPolicy.subagent_policy(String.to_atom(engine), effective_opts)
+        policy = ToolPolicy.subagent_policy(engine, effective_opts)
 
         if ToolPolicy.no_reply?(policy) do
           Logger.debug("Subagent #{engine} running in NO_REPLY mode")
@@ -238,15 +276,9 @@ defmodule CodingAgent.Tools.Task.Params do
         "- task_ids: required when action=join\n" <>
         "- mode: join mode for action=join (wait_all or wait_any)\n" <>
         "- engine: Which executor runs the task\n" <>
-        "  - \"internal\" (default): Lemon's built-in agent\n" <>
-        "  - \"codex\": OpenAI Codex CLI\n" <>
-        "  - \"claude\": Claude Code CLI\n" <>
-        "  - \"droid\": Factory Droid CLI\n" <>
-        "  - \"kimi\": Kimi CLI\n" <>
-        "  - \"opencode\": Opencode CLI\n" <>
-        "  - \"pi\": Pi (pi-coding-agent) CLI\n" <>
+        engine_description_lines() <>
         "- model: Optional model override (e.g., \"gemini-2.5-pro\" for complex tasks)\n" <>
-        "- thinking_level: Optional thinking level override for internal engine or Droid reasoning effort\n" <>
+        "- thinking_level: Optional thinking level override for the internal engine\n" <>
         "- role: Optional specialization that applies to ANY engine\n" <>
         "- cwd: Optional working directory override\n" <>
         "- tool_policy: Optional task-specific tool policy override\n" <>
@@ -267,6 +299,19 @@ defmodule CodingAgent.Tools.Task.Params do
     else
       base <> "\n\nAvailable roles:\n" <> roles
     end
+  end
+
+  # Each registered runner describes itself; this only lays the answers out.
+  # A caveat is a note about that engine's option handling ("ignores `model`"),
+  # which is exactly the vendor knowledge that must not live in this app.
+  defp engine_description_lines do
+    engine_entries()
+    |> Enum.map_join(fn entry ->
+      default = if entry.id == @default_engine, do: " (default)", else: ""
+      caveats = Enum.map_join(entry.caveats, fn caveat -> "    - #{caveat}\n" end)
+
+      "  - \"#{entry.id}\"#{default}: #{entry.summary}\n" <> caveats
+    end)
   end
 
   @spec build_role_enum(String.t()) :: [String.t()] | nil

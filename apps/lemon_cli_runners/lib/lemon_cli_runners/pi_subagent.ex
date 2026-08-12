@@ -4,7 +4,8 @@ defmodule LemonCliRunners.PiSubagent do
   """
 
   alias LemonCliRunners.PiRunner
-  alias LemonCliRunners.Types.{ActionEvent, CompletedEvent, StartedEvent}
+  alias LemonCore.RunEvents.{ActionEvent, CompletedEvent, StartedEvent}
+  alias LemonCore.ResumeFormat
   alias LemonCore.ResumeToken
 
   @typedoc "A Pi subagent session"
@@ -23,6 +24,93 @@ defmodule LemonCliRunners.PiSubagent do
           | {:completed, answer :: String.t(), opts :: keyword()}
           | {:error, reason :: term()}
 
+  @behaviour LemonCore.SubagentRunner
+
+  @impl true
+  def id, do: "pi"
+
+  @impl true
+  def describe do
+    %{
+      summary: "Pi (pi-coding-agent) CLI",
+      caveats: ["ignores `model`: the pi CLI's own configuration selects it"]
+    }
+  end
+
+  @doc """
+  The pi CLI's resume syntax, registered into `LemonCore.ResumeFormats` at boot
+  so the platform can print and parse it without knowing this vendor.
+
+  Pi identifies a session by transcript path, which may contain spaces — hence
+  the quoting on the way out and the unquoting on the way back in.
+  """
+  @impl true
+  @spec resume_format() :: ResumeFormat.t()
+  def resume_format do
+    ResumeFormat.new(id(),
+      pattern: ~r/`?pi\s+--session\s+("(?:[^"\\]|\\.)+"|'(?:[^'\\]|\\.)+'|\S+)`?/i,
+      render: &__MODULE__.render_resume/1,
+      normalize: &__MODULE__.strip_quotes/1
+    )
+  end
+
+  @doc false
+  @spec render_resume(String.t()) :: String.t()
+  def render_resume(value), do: "pi --session #{quote_token(value)}"
+
+  @doc """
+  Resolves the raw `[runtime.cli.pi]` config section.
+
+  Registered with `LemonCore.Config.CliResolvers` at boot; called with `%{}`
+  when the section is unconfigured so the defaults still materialize.
+  """
+  @impl true
+  @spec resolve_cli_settings(map()) :: map()
+  def resolve_cli_settings(pi) when is_map(pi) do
+    %{
+      extra_args: parse_string_list(pi["extra_args"]),
+      model: normalize_optional_string(pi["model"]),
+      provider: normalize_optional_string(pi["provider"])
+    }
+  end
+
+  defp parse_string_list(list) when is_list(list), do: list
+  defp parse_string_list(_), do: []
+
+  defp normalize_optional_string(""), do: nil
+  defp normalize_optional_string(str) when is_binary(str), do: str
+  defp normalize_optional_string(_), do: nil
+
+  @doc false
+  @spec strip_quotes(String.t()) :: String.t()
+  def strip_quotes(value) when is_binary(value) do
+    trimmed = String.trim(value)
+
+    if String.length(trimmed) >= 2 do
+      first = String.first(trimmed)
+      last = String.last(trimmed)
+
+      if first == last and first in ["\"", "'"] do
+        String.slice(trimmed, 1, String.length(trimmed) - 2)
+      else
+        trimmed
+      end
+    else
+      trimmed
+    end
+  end
+
+  defp quote_token(value) when is_binary(value) do
+    if Regex.match?(~r/\s/, value) or String.contains?(value, "\"") do
+      "\"" <> String.replace(value, "\"", "\\\"") <> "\""
+    else
+      value
+    end
+  end
+
+  defp quote_token(value), do: to_string(value)
+
+  @impl true
   @spec start(keyword()) :: {:ok, session()} | {:error, term()}
   def start(opts) do
     prompt = Keyword.fetch!(opts, :prompt)
@@ -73,6 +161,7 @@ defmodule LemonCliRunners.PiSubagent do
     end
   end
 
+  @impl true
   @spec events(session()) :: Enumerable.t()
   def events(session) do
     token_agent = session.token_agent
@@ -112,6 +201,7 @@ defmodule LemonCliRunners.PiSubagent do
     collect_answer(session)
   end
 
+  @impl true
   @spec resume_token(session()) :: ResumeToken.t() | nil
   def resume_token(session) do
     token_agent = session.token_agent
@@ -122,6 +212,14 @@ defmodule LemonCliRunners.PiSubagent do
       true -> nil
     end
   end
+
+  @doc """
+  Stop a running session. Idempotent, and `:ok` for a session already finished.
+  """
+  @impl true
+  @spec cancel(session()) :: :ok
+  def cancel(%{pid: pid}) when is_pid(pid), do: PiRunner.cancel(pid)
+  def cancel(_session), do: :ok
 
   defp normalize_event({:cli_event, %StartedEvent{resume: token}}), do: [{:started, token}]
 

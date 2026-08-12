@@ -95,7 +95,7 @@ The supervisor uses a `:one_for_one` strategy. Each child is independent:
 
 ### CLI Runners
 
-The vendor CLI wrappers (Claude Code, Codex, Droid, Kimi, OpenCode, Pi) live in
+The vendor CLI wrappers (Claude Code, Codex, Kimi, OpenCode, Pi) live in
 the `lemon_cli_runners` package (`apps/lemon_cli_runners`) as
 `LemonCliRunners.*`. They build on this app's `EventStream` and `Types`; see
 that package's README for architecture and usage.

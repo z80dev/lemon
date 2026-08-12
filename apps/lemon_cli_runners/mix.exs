@@ -28,7 +28,7 @@ defmodule LemonCliRunners.MixProject do
   end
 
   defp description do
-    "Vendor AI CLIs (Claude Code, Codex, Droid, Kimi, OpenCode, Pi) wrapped " <>
+    "Vendor AI CLIs (Claude Code, Codex, Kimi, OpenCode, Pi) wrapped " <>
       "as streaming subagents: JSONL subprocess management, per-vendor event " <>
       "schemas, session resume, and lifecycle control."
   end
@@ -57,7 +57,8 @@ defmodule LemonCliRunners.MixProject do
 
   def application do
     [
-      extra_applications: [:logger]
+      extra_applications: [:logger],
+      mod: {LemonCliRunners.Application, []}
     ]
   end
 
@@ -66,6 +67,11 @@ defmodule LemonCliRunners.MixProject do
       {:lemon_agent, in_umbrella: true},
       {:lemon_ai, in_umbrella: true},
       {:lemon_core, in_umbrella: true},
+      # The vendor engine shells (LemonCliRunners.Engines.*) implement the
+      # LemonGateway.Engine behaviour and register with the gateway's
+      # EngineRegistry at boot. This dep also orders boot: the registry is up
+      # before this application announces its engines.
+      {:lemon_gateway, in_umbrella: true},
       {:jason, "~> 1.4"},
       # API documentation
       {:ex_doc, "~> 0.34", only: :dev, runtime: false}

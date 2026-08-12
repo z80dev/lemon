@@ -1,4 +1,4 @@
-defmodule LemonGateway.Engines.ClaudeEngineTest do
+defmodule LemonCliRunners.Engines.ClaudeEngineTest do
   @moduledoc """
   Comprehensive tests for the Claude engine implementation.
 
@@ -18,19 +18,19 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
   """
   use ExUnit.Case, async: true
 
-  alias LemonGateway.Engines.Claude
+  alias LemonCliRunners.Engines.Claude
   alias LemonGateway.Engines.CliAdapter
   alias LemonGateway.Types.Job
   alias LemonGateway.Event
 
-  alias LemonCliRunners.Types.{
+  alias LemonCore.RunEvents.{
     Action,
     ActionEvent,
     CompletedEvent,
     StartedEvent
   }
 
-  alias LemonCliRunners.Types.ResumeToken, as: CoreResumeToken
+  alias LemonCore.ResumeToken, as: CoreResumeToken
 
   # ============================================================================
   # Engine Identity Tests

@@ -30,7 +30,7 @@ defmodule LemonCliRunners.KimiRunner do
   alias LemonCliRunners.KimiSchema
   alias LemonCliRunners.KimiSchema.{ErrorMessage, Message, StreamMessage, ToolCall}
   alias LemonCliRunners.ToolActionHelpers
-  alias LemonCliRunners.Types.EventFactory
+  alias LemonCore.RunEvents.EventFactory
   alias LemonCore.ResumeToken
   alias LemonCore.Introspection
 

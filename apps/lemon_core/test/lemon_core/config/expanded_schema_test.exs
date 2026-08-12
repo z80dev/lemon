@@ -35,77 +35,22 @@ defmodule LemonCore.Config.ExpandedSchemaTest do
     end
   end
 
+  # Vendor CLI sections (`[runtime.cli.<engine>]`) are resolved by whatever
+  # `LemonCore.Config.CliResolvers` holds at the time; vendor packages register
+  # theirs at boot. The generic mechanism is tested with a stub resolver in
+  # `LemonCore.Config.CliResolversTest`; the per-vendor defaults now live with
+  # their vendors in lemon_cli_runners' CliResolversTest.
   describe "Agent cli configuration" do
-    test "defaults to sane cli settings" do
-      config = Agent.resolve(%{})
-
-      assert config.cli.codex.extra_args == []
-      assert config.cli.codex.auto_approve == false
-      assert config.cli.kimi.extra_args == []
-      assert config.cli.opencode.model == nil
-      assert config.cli.pi.extra_args == []
-      assert config.cli.pi.model == nil
-      assert config.cli.pi.provider == nil
-      assert config.cli.droid.extra_args == []
-      assert config.cli.droid.model == nil
-      assert config.cli.droid.reasoning_effort == nil
-      assert config.cli.droid.enabled_tools == []
-      assert config.cli.droid.disabled_tools == []
-      assert config.cli.droid.use_spec == false
-      assert config.cli.droid.spec_model == nil
-      assert config.cli.claude.dangerously_skip_permissions == true
-      assert config.cli.claude.scrub_env == :auto
-      assert config.cli.claude.env_overrides == %{}
-    end
-
-    test "reads cli settings from runtime" do
+    test "carries unclaimed cli sections through unresolved" do
       settings = %{
         "runtime" => %{
-          "cli" => %{
-            "codex" => %{"extra_args" => ["--flag"], "auto_approve" => true},
-            "opencode" => %{"model" => "gpt-4o"},
-            "pi" => %{"model" => "test", "provider" => "openai"},
-            "droid" => %{
-              "extra_args" => ["--plain-output"],
-              "model" => "builder",
-              "reasoning_effort" => "medium",
-              "enabled_tools" => ["grep"],
-              "disabled_tools" => ["write"],
-              "use_spec" => true,
-              "spec_model" => "planner"
-            },
-            "claude" => %{
-              "dangerously_skip_permissions" => false,
-              "allowed_tools" => ["bash"],
-              "scrub_env" => "true",
-              "env_allowlist" => ["PATH"],
-              "env_allow_prefixes" => ["LEMON_"],
-              "env_overrides" => %{"FOO" => "bar"}
-            }
-          }
+          "cli" => %{"unclaimed_vendor" => %{"anything" => 1}}
         }
       }
 
       config = Agent.resolve(settings)
 
-      assert config.cli.codex.extra_args == ["--flag"]
-      assert config.cli.codex.auto_approve == true
-      assert config.cli.opencode.model == "gpt-4o"
-      assert config.cli.pi.model == "test"
-      assert config.cli.pi.provider == "openai"
-      assert config.cli.droid.extra_args == ["--plain-output"]
-      assert config.cli.droid.model == "builder"
-      assert config.cli.droid.reasoning_effort == "medium"
-      assert config.cli.droid.enabled_tools == ["grep"]
-      assert config.cli.droid.disabled_tools == ["write"]
-      assert config.cli.droid.use_spec == true
-      assert config.cli.droid.spec_model == "planner"
-      assert config.cli.claude.dangerously_skip_permissions == false
-      assert config.cli.claude.allowed_tools == ["bash"]
-      assert config.cli.claude.scrub_env == true
-      assert config.cli.claude.env_allowlist == ["PATH"]
-      assert config.cli.claude.env_allow_prefixes == ["LEMON_"]
-      assert config.cli.claude.env_overrides == %{"FOO" => "bar"}
+      assert config.cli["unclaimed_vendor"] == %{"anything" => 1}
     end
   end
 

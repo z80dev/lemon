@@ -19,7 +19,7 @@ Reshape Lemon from a 22-app umbrella (~415k LOC) into a **platform for building 
 | `lemon_ai` | Provider-agnostic LLM client: providers, registry, rate limiting, circuit breaker, compaction, tokens/text | `apps/lemon_ai` (31k, zero umbrella deps) | 1 |
 | `lemon_core` | The platform's shared language: Bus, Event envelope, Store (+backends), Secrets, Config loader, boundary contracts (`RunRequest`, `ExecutionCommand`, `InboundMessage`, `DeliveryIntent`, `EngineRuntime`, `RouterBridge`, `SessionKey`, `ResumeToken`, run phases), primitives (clock/id/retry/telemetry/idempotency), Extensions manifest | slimmed `apps/lemon_core` | 2 |
 | `lemon_agent` | Agent loop, tool registry, subagents, model runtime, workspace stores (goals/kanban/heartbeats) | `apps/lemon_agent` + 3 stores from lemon_core | 3 |
-| `lemon_cli_runners` | Vendor AI CLI wrappers (Claude Code, Codex, Droid, Kimi, OpenCode, Pi) as streaming subagents: `JsonlRunner` behaviour + per-vendor runner/schema/subagent triples | carved from `apps/lemon_agent` (D15, 2026-08-11) | 4 |
+| `lemon_cli_runners` | Vendor AI CLI wrappers (Claude Code, Codex, Kimi, OpenCode, Pi) as streaming subagents: `JsonlRunner` behaviour + per-vendor runner/schema/subagent triples | carved from `apps/lemon_agent` (D15, 2026-08-11) | 4 |
 | `lemon_memory` | Durable agent memory: document schema, store, provider behaviour + fan-out registry, ingest pipeline, search, task fingerprints | 8 modules from lemon_core (~1.9k LOC) | 4 |
 | `lemon_media` | Media job tracking: redacted job/artifact metadata store, supervised job workers, lifecycle broadcasts, retention cleanup | `apps/lemon_media` (~1.1k LOC, lemon_core only) | 5 (before router/channels, which depend on it — D13) |
 | `lemon_router` | Run lifecycle + session orchestration: single-flight, queue/steer, coalescing, policy, watchdog, delivery routing | `apps/lemon_router`, facade hardened | 5 |
@@ -166,6 +166,38 @@ Per repo (`coding-agent`, `lemon-sim`, `showcase`, `lemon-clients`), in that ord
 - [ ] **5.1** `git filter-repo` preserving history for the moved paths; swap `{:x, in_umbrella: true}` → `{:lemon_x, "~> 0.1"}`.
 - [ ] **5.2** Port the umbrella's CI (test/credo/dialyzer/smoke) from templates; per-repo README/CONTRIBUTING/SECURITY.
 - [ ] **5.3** lemon-sim specifics: D3 Bench boundary hardening (BenchDomains wiring namespace, inline stable_json); take the `LEMON_ARENA_*` env registrations with it (from 1.9).
+
+  > **Boundary pre-work landed 2026-08-12** (branch `sim-boundary`). `lemon_core` no longer
+  > references a sim *module* anywhere: `LemonCore.Runtime.Env.apply_ports/1` used to hardcode
+  > `:lemon_sim_ui` + `LemonSimUi.Endpoint` in `apply_sim_port/1`, and now reads
+  > `config :lemon_core, :runtime_endpoints` — a list of `{port_field, otp_app, endpoint_module}`
+  > triples declared in `config/config.exs`. Both endpoints (web + sim) went through the merge
+  > semantics `apply_web_port/1` already had, so extra `:http` options survive a port apply for
+  > the sim endpoint too (they previously did not — `apply_sim_port/1` replaced `:http` wholesale).
+  > `LemonCore.Env.Registry`'s moduledoc example no longer names `LemonSimUi.Env`.
+  >
+  > Every remaining sim touchpoint outside `apps/lemon_sim*` and `apps/lemon_tcg` is now delimited
+  > by a greppable marker — `grep -rn "lemon-sim product block"` — so 5.1/5.6 is a delete, not a
+  > hunt. Full inventory:
+  >
+  > | Location | Kind | On extraction |
+  > |---|---|---|
+  > | `config/runtime.exs` (3 marked blocks) | runtime env wiring; `sim_ui_endpoint_enabled?` crosses blocks 1→3, and every `parse_runtime_boolean` call site is sim | move blocks 1–3 and the helper |
+  > | `config/config.exs` (2 marked blocks) | `:runtime_endpoints` sim triple, env registries, sim_ui defaults | delete marked lines |
+  > | `config/{dev,test,prod}.exs` (1 block each) | endpoint + hosted-room settings | delete marked lines |
+  > | `.github/workflows/release-smoke.yml` (15 refs) | werewolf smoke, sim Dockerfile, npm assets | whole lane moves |
+  > | `.github/workflows/release.yml`, root `mix.exs` `sim_ui.assets.*` aliases | asset deploy | move |
+  > | `lemon_core/quality/architecture_{check,policy}.ex` | lint inventory of *this repo's* apps — namespace/dep tables, no code dependency | delete 3 + 3 rows |
+  > | `lemon_core/lib/mix/tasks/lemon.help.ex` | task-name catalog (3 groups + 9 `@fallback` entries), reads `@shortdoc` at runtime | delete marked block |
+  > | `lemon_core/runtime/profile.ex` | `:lemon_sim_ui` in the `runtime_full` release profile | delete marked line |
+  > | `lemon_core/env/declarations.ex` (2), `env.ex`, `bus.ex` | `apps:` metadata on standard vars (`PHX_SERVER`, `SHELL`) + doc prose | edit in place |
+  > | `scripts/lint_ci_docs.sh`, `bin/lemon` `--sim-port` | tooling | edit in place |
+  >
+  > Deliberately **not** done, as churn without boundary gain: the `sim_port` field on the
+  > `Runtime.Env` struct stays (it is an integer, not a dependency, and renaming it touches
+  > `lemon_cli`'s setup wizard, `bin/lemon`, `scripts/live_cron_runtime_restart_smoke.exs` and
+  > four tests), and the two lint tables stay hardcoded rather than becoming config — they are
+  > supposed to enumerate the apps in the repo they police.
 - [ ] **5.4** coding-agent specifics: takes lemon_mcp + lemon_evals + coding_agent_ui; its gateway engine registers via 2.1's mechanism.
 - [ ] **5.5** x_api leaves to its satellite repo (D7 completion).
 - [ ] **5.6** Delete moved apps from the umbrella; platform repo keeps the reference runtime + published packages only.
@@ -214,7 +246,7 @@ Updated for D1–D9. Buckets: **core** (stays in published `lemon_core`), **rout
 | 2026-08-10 | **D11**: `chat_state`/`chat_state_store` stay in `lemon_core` as boundary contracts, and the router becomes their single writer (gateway's writes deleted). | Third plan-corrected-by-evidence outcome after `build_info` and `ExternalContent`. §6 assigned them to router on the assumption router was the only reader; lemon_channels is a legitimate reader+writer, so router ownership would force channels→router. Chat state is a resume-token cache keyed by session — the same family as `ResumeToken`/`SessionKey`, already core boundary contracts. Moving it to channels (the one legal alternative, since router→channels is allowed) would encode an accident as architecture. |
 | 2026-08-10 | **D12** (user decision): **delete the Farcaster transport** (~1.2k LOC, `lemon_gateway/transports/farcaster/`), which was frozen pending this call. **Executed 2026-08-10**: transport + tests, the `enable_farcaster`/`farcaster` config keys in `LemonGateway.Config`/`LemonCore.Config.Gateway`, the farcaster validators, 6 env declarations (5 `FARCASTER_*` + `LEMON_GATEWAY_ENABLE_FARCASTER`), and the doc/README/example-config mentions all removed; ~1.44k LOC of transport+tests plus ~300 LOC of config/validator/doc surface. | Unused by its owner; off-by-default; it was the main source of the synchronous-frame-response complexity in the transport design. Deleting removes a whole interaction-model problem rather than porting it. |
 | 2026-08-09 | D1–D10 resolved (see §4) after code-level investigation (E1–E4) | Store singleton audit; Bench coupling measurement; router/gateway/channels topology mapping; license + hex-name checks. |
-| 2026-08-10 | **D14** (proposed — needs user sign-off): resolve the **coding_agent Phase 5 blocker** by (1) extracting `lemon-sim` **before** `coding-agent` (flip §5's order — sim is unblocked, D8 flagship), and (2) unblocking coding-agent by **publishing `lemon_browser` and `lemon_skills` as packages 10 & 11** — `lemon_browser` outright (818-LOC clean leaf, same rationale as D13), `lemon_skills` gated on an API-stabilization pass, with coding-agent extraction **deferred** until that lands. Reject invert-behind-behaviour for skills (coding_agent uses ~20 modules incl. a dozen concrete agent tools — a fronting behaviour would be a re-export, not a seam) and reject leave-together (control_plane+automation also depend on skills/browser, so the reference runtime would break). Full analysis + per-group readiness table: [`docs/platform/phase-5-extraction.md`](platform/phase-5-extraction.md). | Both blocker apps have **published-only deps** and are shared platform infrastructure the reference runtime also consumes, not product code — so the consistent move is publish (as with `lemon_media` in D13), not invert. Named here so the Phase 5 order isn't an undocumented cliff where sim is ready and coding-agent silently isn't. Marked proposed because extracting a repo and enlarging the published surface from 9 to 11 packages is a larger commitment than the Phase 1–4 boundary work. |
+| 2026-08-10 | **D14** (proposed — needs user sign-off): resolve the **coding_agent Phase 5 blocker** by (1) extracting `lemon-sim` **before** `coding-agent` (flip §5's order — sim is unblocked, D8 flagship), and (2) unblocking coding-agent by **publishing `lemon_browser` and `lemon_skills` as packages 10 & 11** — `lemon_browser` outright (818-LOC clean leaf, same rationale as D13), `lemon_skills` gated on an API-stabilization pass, with coding-agent extraction **deferred** until that lands. Reject invert-behind-behaviour for skills (coding_agent uses ~20 modules incl. a dozen concrete agent tools — a fronting behaviour would be a re-export, not a seam) and reject leave-together (control_plane+automation also depend on skills/browser, so the reference runtime would break). Full analysis + per-group readiness table: [`docs/platform/phase-5-extraction.md`](platform/phase-5-extraction.md). **Note (2026-08-12):** `CodingAgent.SettingsManager`'s public shape already changed pre-extraction — the five per-vendor fields collapsed into one `cli` map (60a99c8a), which is the vendor-free shape we'd want to publish. | Both blocker apps have **published-only deps** and are shared platform infrastructure the reference runtime also consumes, not product code — so the consistent move is publish (as with `lemon_media` in D13), not invert. Named here so the Phase 5 order isn't an undocumented cliff where sim is ready and coding-agent silently isn't. Marked proposed because extracting a repo and enlarging the published surface from 9 to 11 packages is a larger commitment than the Phase 1–4 boundary work. |
 | 2026-08-10 | **D13** (user decision): **`lemon_media` becomes the 9th published package**, moving out of §2's unpublished reference-runtime list and into the published table ahead of router/channels. Hex name verified free 2026-08-10 (`hex.pm/api/packages/lemon_media` → 404). | 4.1 found the blocker: `lemon_router` and `lemon_channels` both depend on `lemon_media`, and a hex release cannot depend on an unpublished umbrella app — `mix hex.build` drops such deps silently, so neither could publish. §2's unpublished list was a default that never accounted for published packages depending on media, not a principle. media is a ~1.1k-LOC library on `lemon_core` alone with zero product coupling; publishing it costs one map entry and its metadata, whereas the alternative (inverting `media_job_recorder.ex:56` and `media_status_message.ex` through a configured runtime module) adds indirection to two apps to avoid publishing a small clean library. |
 
 ## 9. Deferred (not open — parked with owners)

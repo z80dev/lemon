@@ -1,6 +1,4 @@
-defmodule LemonGateway.Engines.CodexEngineTest do
-  alias Elixir.LemonGateway, as: LemonGateway
-
+defmodule LemonCliRunners.Engines.CodexEngineTest do
   @moduledoc """
   Comprehensive tests for the Codex engine implementation.
 
@@ -20,20 +18,20 @@ defmodule LemonGateway.Engines.CodexEngineTest do
   """
   use ExUnit.Case, async: true
 
-  alias Elixir.LemonGateway.Engines.Codex
-  alias Elixir.LemonGateway.Engines.CliAdapter
-  alias Elixir.LemonGateway.Types.Job
+  alias LemonCliRunners.Engines.Codex
+  alias LemonGateway.Engines.CliAdapter
+  alias LemonGateway.Types.Job
   alias LemonCore.ChatScope
-  alias Elixir.LemonGateway.Event
+  alias LemonGateway.Event
 
-  alias LemonCliRunners.Types.{
+  alias LemonCore.RunEvents.{
     Action,
     ActionEvent,
     CompletedEvent,
     StartedEvent
   }
 
-  alias LemonCliRunners.Types.ResumeToken, as: CoreResumeToken
+  alias LemonCore.ResumeToken, as: CoreResumeToken
 
   # ============================================================================
   # Engine Identity Tests
@@ -221,7 +219,7 @@ defmodule LemonGateway.Engines.CodexEngineTest do
       pid = spawn(fn -> receive do: (:stop -> :ok) end)
 
       # Create a mock runner module for testing
-      defmodule LemonGateway.Engines.CodexEngineTest.MockCodexRunner do
+      defmodule LemonCliRunners.Engines.CodexEngineTest.MockCodexRunner do
         def cancel(pid, _reason) do
           send(pid, :stop)
           :ok
@@ -231,7 +229,7 @@ defmodule LemonGateway.Engines.CodexEngineTest do
       ctx = %{
         runner_pid: pid,
         task_pid: nil,
-        runner_module: Elixir.LemonGateway.Engines.CodexEngineTest.MockCodexRunner
+        runner_module: Elixir.LemonCliRunners.Engines.CodexEngineTest.MockCodexRunner
       }
 
       assert :ok = CliAdapter.cancel(ctx)
@@ -886,9 +884,9 @@ defmodule LemonGateway.Engines.CodexEngineTest do
 
   describe "engine comparison with claude" do
     test "codex and claude have different ids" do
-      assert Codex.id() != Elixir.LemonGateway.Engines.Claude.id()
+      assert Codex.id() != LemonCliRunners.Engines.Claude.id()
       assert Codex.id() == "codex"
-      assert Elixir.LemonGateway.Engines.Claude.id() == "claude"
+      assert LemonCliRunners.Engines.Claude.id() == "claude"
     end
 
     test "codex and claude have different resume formats" do
@@ -896,7 +894,7 @@ defmodule LemonGateway.Engines.CodexEngineTest do
       claude_token = %LemonCore.ResumeToken{engine: "claude", value: "id_123"}
 
       codex_format = Codex.format_resume(codex_token)
-      claude_format = Elixir.LemonGateway.Engines.Claude.format_resume(claude_token)
+      claude_format = LemonCliRunners.Engines.Claude.format_resume(claude_token)
 
       assert codex_format == "codex resume id_123"
       assert claude_format == "claude --resume id_123"
@@ -909,7 +907,7 @@ defmodule LemonGateway.Engines.CodexEngineTest do
 
     test "both engines don't support steer" do
       assert Codex.supports_steer?() == false
-      assert Elixir.LemonGateway.Engines.Claude.supports_steer?() == false
+      assert LemonCliRunners.Engines.Claude.supports_steer?() == false
     end
   end
 

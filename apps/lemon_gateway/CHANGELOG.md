@@ -14,10 +14,16 @@ agent to an engine runtime anything can register with.
 
 - `LemonGateway.EngineRegistry.register/1` — engines register themselves at
   boot instead of being named in the gateway's compiled-in engine list.
-  Registration also updates `:lemon_gateway, :engines`, so a registry restart
-  keeps the engine, and a configured engine whose module is absent from the
-  build is skipped rather than crashing the registry. This is how the platform
-  stopped depending on any particular agent implementation.
+  Registration persists to `:lemon_gateway, :registered_engines`, so a
+  registry restart keeps the engine, and a configured engine whose module is
+  absent from the build is skipped rather than crashing the registry. This is
+  how the platform stopped depending on any particular agent implementation.
+- `LemonGateway.EngineRegistry.register_default/1` — the boot auto-registration
+  call for packages announcing the engines they ship. It is a no-op when the
+  operator explicitly configured `:lemon_gateway, :engines`: that list is a
+  ceiling, and a vendor engine an operator disabled by narrowing it must not
+  come back because the package happens to be in the release. The registry
+  never writes the operator's `:engines` key.
 - `LemonGateway.Workspace` reads `config :lemon_gateway, :workspace_dir`
   (accepting an `{module, function, args}` tuple), replacing a direct call into
   a specific agent's configuration.
@@ -36,6 +42,10 @@ agent to an engine runtime anything can register with.
   contract is written down in `LemonGateway.Engine`'s moduledoc, along with the
   steer invariant, and `LemonPlatformTest.EngineCase` turns it into tests.
 - The gateway no longer writes chat state; the router is its single writer.
+- CLI engines render resume tokens through `LemonCore.ResumeToken`, which reads
+  the format each vendor package registered at boot. `CliAdapter` had a second
+  copy of the per-vendor table; there is now one source for the syntax an engine
+  prints and the syntax it parses back.
 - Ingress (the HTTP webhook listener and the Twilio SMS utility) is documented
   as gateway-owned by design rather than as "legacy" awaiting migration. It is
   off by default and stays here because it needs synchronous HTTP responses,
@@ -43,6 +53,12 @@ agent to an engine runtime anything can register with.
 
 ### Removed
 
+- **The `droid` engine is gone**, along with its runner, subagent, schema and
+  the `FACTORY_API_KEY` variable. There is no migration shim: persisted state
+  that names it — a binding or webhook `default_engine`, a sticky engine
+  selection, a scheduled job row, a stored resume token — no longer resolves to
+  an engine, and the run fails rather than falling back. Re-point anything set
+  to `droid` at another engine before upgrading.
 - **The Farcaster transport is gone** (about 1.4k LOC of transport and tests,
   plus its configuration keys, validators and 6 environment variables:
   `FARCASTER_*` and `LEMON_GATEWAY_ENABLE_FARCASTER`). It was off by default
@@ -60,6 +76,15 @@ agent to an engine runtime anything can register with.
 - The dependency on any specific coding agent. The in-process engine shim moved
   to the agent that owns it and registers itself; the edge now points from the
   agent to this package.
+- **The dependency on `lemon_cli_runners`, and with it the five vendor engine
+  shells** (`LemonGateway.Engines.{Claude,Codex,Kimi,Opencode,Pi}`). They now
+  live in `lemon_cli_runners` as `LemonCliRunners.Engines.*` and register with
+  `EngineRegistry` at that package's boot, the same way coding_agent
+  contributes the `lemon` engine. The gateway no longer names any vendor; the
+  only engine it ships is `Echo`, and `Engines.CliAdapter` stays here as the
+  vendor-free harness. A runtime that wants the vendor engines must include
+  the `lemon_cli_runners` application; ids, behaviour and configuration are
+  otherwise unchanged.
 
 ### Known gaps
 

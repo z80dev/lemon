@@ -61,12 +61,8 @@ defmodule CodingAgent.SettingsManager do
           # Display settings
           theme: String.t(),
 
-          # CLI settings
-          codex: map(),
-          kimi: map(),
-          claude: map(),
-          opencode: map(),
-          pi: map()
+          # CLI settings, keyed by subagent-runner id
+          cli: %{optional(String.t()) => map()}
         }
 
   defstruct [
@@ -104,11 +100,7 @@ defmodule CodingAgent.SettingsManager do
     theme: "default",
 
     # CLI settings
-    codex: %{},
-    kimi: %{},
-    claude: %{},
-    opencode: %{},
-    pi: %{}
+    cli: %{}
   ]
 
   @doc """
@@ -162,13 +154,39 @@ defmodule CodingAgent.SettingsManager do
       extension_paths: Map.get(agent, :extension_paths, []),
       extension_auto_load_default_paths: Map.get(extensions, :auto_load_default_paths, false),
       theme: Map.get(agent, :theme, "default"),
-      codex: Map.get(cli, :codex, %{}),
-      kimi: Map.get(cli, :kimi, %{}),
-      claude: Map.get(cli, :claude, %{}),
-      opencode: Map.get(cli, :opencode, %{}),
-      pi: Map.get(cli, :pi, %{})
+      cli: normalize_cli(cli)
     }
   end
+
+  @doc """
+  Per-engine CLI settings, or `%{}` when the engine has none configured.
+
+      SettingsManager.cli_settings(settings, "codex")
+
+  """
+  @spec cli_settings(t(), String.t() | atom()) :: map()
+  def cli_settings(%__MODULE__{cli: cli}, engine) when is_binary(engine),
+    do: Map.get(cli, engine, %{})
+
+  def cli_settings(%__MODULE__{} = settings, engine) when is_atom(engine),
+    do: cli_settings(settings, Atom.to_string(engine))
+
+  # Every registered runner gets an entry so callers can read one without
+  # knowing whether it was configured; anything else in [agent.cli] is kept as
+  # written, since a runner may register after settings were loaded.
+  defp normalize_cli(cli) when is_map(cli) do
+    registered = Map.new(LemonCore.SubagentRegistry.list_ids(), &{&1, %{}})
+
+    configured =
+      Map.new(cli, fn
+        {key, value} when is_atom(key) -> {Atom.to_string(key), value}
+        {key, value} -> {to_string(key), value}
+      end)
+
+    Map.merge(registered, configured)
+  end
+
+  defp normalize_cli(_cli), do: %{}
 
   @doc """
   Get compaction settings as a map.

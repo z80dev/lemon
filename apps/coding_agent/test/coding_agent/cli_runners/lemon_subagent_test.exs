@@ -3,13 +3,14 @@ defmodule CodingAgent.CliRunners.LemonSubagentTest do
 
   alias CodingAgent.CliRunners.LemonSubagent
 
-  alias LemonCliRunners.Types.{
+  alias LemonCore.RunEvents.{
     Action,
     ActionEvent,
     CompletedEvent,
-    ResumeToken,
     StartedEvent
   }
+
+  alias LemonCore.ResumeToken
 
   alias LemonAgent.EventStream
 

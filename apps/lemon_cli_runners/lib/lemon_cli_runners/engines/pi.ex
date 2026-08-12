@@ -1,17 +1,19 @@
-defmodule LemonGateway.Engines.Claude do
+defmodule LemonCliRunners.Engines.Pi do
   @moduledoc """
-  Engine adapter for the Claude Code CLI tool.
+  Gateway engine adapter for the Pi runner CLI tool.
 
   Delegates to `LemonGateway.Engines.CliAdapter` to manage a
-  `LemonCliRunners.ClaudeRunner` subprocess for each run.
+  `LemonCliRunners.PiRunner` subprocess for each run. Registered with
+  `LemonGateway.EngineRegistry` at boot by `LemonCliRunners.Application`,
+  so the gateway itself never names this vendor.
   """
   @behaviour LemonGateway.Engine
 
-  alias LemonGateway.Engines.CliAdapter
   alias LemonCore.ResumeToken
+  alias LemonGateway.Engines.CliAdapter
 
   @impl true
-  def id, do: "claude"
+  def id, do: "pi"
 
   @impl true
   def format_resume(%ResumeToken{} = token), do: CliAdapter.format_resume(id(), token)
@@ -27,7 +29,7 @@ defmodule LemonGateway.Engines.Claude do
 
   @impl true
   def start_run(job, opts, sink_pid) do
-    CliAdapter.start_run(LemonCliRunners.ClaudeRunner, id(), job, opts, sink_pid)
+    CliAdapter.start_run(LemonCliRunners.PiRunner, id(), job, opts, sink_pid)
   end
 
   @impl true

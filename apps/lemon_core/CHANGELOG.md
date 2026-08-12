@@ -13,6 +13,35 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
 
 ### Added
 
+- `LemonCore.SubagentRunner` and `LemonCore.SubagentRegistry` — the extension
+  point behind the agent's `task` tool. An executor (a vendor CLI wrapper, the
+  in-process agent, anything else) implements the behaviour and registers when
+  its own application starts; the agent reads the registry for its engine list,
+  its per-engine tool-description prose, and each engine's default tool policy,
+  so no vendor is named in the agent. Runners that declare themselves routable
+  publish their id to `:lemon_core, :registered_engines`, which
+  `LemonCore.EngineCatalog` unions with its built-in defaults. Registration
+  never writes `:known_engines`: that key is the operator's own list, and when
+  it is set it is the whole answer, so narrowing it still disables an engine the
+  build happens to ship.
+- `LemonCore.ResumeFormat` and `LemonCore.ResumeFormats` — the extension point
+  behind `LemonCore.ResumeToken`. An engine registers how it spells "resume"
+  (a pattern to find its token in text, a renderer to print one) when its own
+  application starts, so core no longer carries a table of per-vendor regexes.
+  `lemon` is built in; engines with no registered format read and print the
+  generic `<engine> resume <value>`.
+- `LemonCore.Config.CliResolvers` — the extension point behind the config
+  loader's `[runtime.cli.<engine>]` sections. A vendor package registers a
+  resolver for its own section when its application starts (the shape runners
+  read stays exactly as before: atom-keyed vendor maps with the vendor's
+  defaults, materialized even when the section is unconfigured); sections no
+  resolver claims pass through as raw maps rather than being dropped. Core no
+  longer names `codex`/`kimi`/`opencode`/`pi`/`claude` in
+  `LemonCore.Config.Agent`. Registering clears the default
+  `LemonCore.ConfigCache` instance (new `clear/0`/`clear/1`) so config cached
+  before a vendor package boots is not served without its defaults, and
+  `LemonCore.SubagentRunner` gains the optional `resolve_cli_settings/1`
+  callback vendors implement.
 - `LemonCore.Store` can run as many named instances as you like. Configuration
   comes from `start_link/1` options first and application environment second,
   so an embedding application no longer has to write into `:lemon_core`'s app
@@ -44,6 +73,12 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
 
 ### Changed
 
+- `LemonCore.ResumeToken` is now a struct plus generic parse/format over the
+  registered resume formats. The per-vendor regex families it used to hold
+  (codex, claude, kimi, opencode, pi) moved to the packages that wrap those
+  CLIs. The API — `format/1`, `format_plain/1`, `extract_resume/1,2`,
+  `is_resume_line/1,2` — is unchanged, and remains the entrypoint for callers
+  that depend on `lemon_core` alone.
 - **`:exqlite`, `:sentry`, `:finch`, `:phoenix_pubsub` and `:file_system` are
   now optional dependencies.** Embedding `lemon_core` no longer drags in a
   SQLite NIF, an HTTP client, an error reporter and a pubsub server. Each one

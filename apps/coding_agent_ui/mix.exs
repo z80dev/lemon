@@ -29,6 +29,9 @@ defmodule CodingAgentUi.MixProject do
   defp deps do
     [
       {:coding_agent, in_umbrella: true},
+      # The vendor CLI subagents/engines the UI product ships. coding_agent
+      # itself is vendor-free; the product pulls the vendor package explicitly.
+      {:lemon_cli_runners, in_umbrella: true},
       {:lemon_core, in_umbrella: true},
       {:jason, "~> 1.4"}
     ]

@@ -9,7 +9,7 @@ defmodule LemonCore.Env.Registry do
       config :lemon_core, :env_registries, [
         LemonCore.Env.Declarations,
         LemonGateway.Env,
-        LemonSimUi.Env
+        MyApp.Env
       ]
 
   `LemonCore.Env.all_declared/0` aggregates the listed modules, skipping any

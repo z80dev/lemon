@@ -18,7 +18,8 @@ defmodule LemonCliRunners.ClaudeRunnerTest do
     Usage
   }
 
-  alias LemonCliRunners.Types.{ActionEvent, CompletedEvent, ResumeToken, StartedEvent}
+  alias LemonCore.RunEvents.{ActionEvent, CompletedEvent, StartedEvent}
+  alias LemonCore.ResumeToken
 
   # ============================================================================
   # Setup Helpers

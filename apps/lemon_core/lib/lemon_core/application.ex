@@ -10,6 +10,8 @@ defmodule LemonCore.Application do
   - `LemonCore.ACPClientBridge` - Registry for direct ACP client request/reply
   - LemonCore.ConfigCache - Configuration caching service
   - LemonCore.Store - Key-value storage backend
+  - `LemonCore.SubagentRegistry` - Registry of subagent runners contributed by
+    other applications at boot
   - LemonCore.RunHistoryStore - Per-session run history (separate SQLite DB)
   - LemonCore.ConfigReloader - Runtime config reload orchestrator
   - LemonCore.ConfigReloader.Watcher - File-system watcher for config changes
@@ -62,7 +64,8 @@ defmodule LemonCore.Application do
         LemonCore.Bus.child_spec_for_backend(),
         LemonCore.ACPClientBridge,
         {LemonCore.ConfigCache, config_cache_opts},
-        LemonCore.Store
+        LemonCore.Store,
+        LemonCore.SubagentRegistry
       ] ++
         sqlite_children() ++
         [

@@ -6,10 +6,10 @@ defmodule LemonCliRunners.ToolActionHelpers do
   and normalizing tool output across CLI runners (e.g., Claude, Kimi).
   """
 
-  alias LemonCliRunners.Types.EventFactory
+  alias LemonCore.RunEvents.EventFactory
 
   @spec start_action(EventFactory.t(), map(), String.t(), atom(), String.t(), map()) ::
-          {LemonCliRunners.Types.ActionEvent.t(), EventFactory.t(), map()}
+          {LemonCore.RunEvents.ActionEvent.t(), EventFactory.t(), map()}
   def start_action(factory, pending_actions, id, kind, title, detail) do
     {event, factory} = EventFactory.action_started(factory, id, kind, title, detail: detail)
 
@@ -26,7 +26,7 @@ defmodule LemonCliRunners.ToolActionHelpers do
   end
 
   @spec complete_action(EventFactory.t(), map(), String.t(), boolean(), map(), atom(), String.t()) ::
-          {LemonCliRunners.Types.ActionEvent.t(), EventFactory.t(), map()}
+          {LemonCore.RunEvents.ActionEvent.t(), EventFactory.t(), map()}
   def complete_action(
         factory,
         pending_actions,

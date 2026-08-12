@@ -6,7 +6,8 @@ defmodule LemonCliRunners.OpencodeRunnerTest do
 
   alias LemonCliRunners.OpencodeSchema.{StepFinish, StepStart, Text, ToolUse}
 
-  alias LemonCliRunners.Types.{ActionEvent, CompletedEvent, ResumeToken, StartedEvent}
+  alias LemonCore.RunEvents.{ActionEvent, CompletedEvent, StartedEvent}
+  alias LemonCore.ResumeToken
 
   describe "engine/0" do
     test "returns opencode" do

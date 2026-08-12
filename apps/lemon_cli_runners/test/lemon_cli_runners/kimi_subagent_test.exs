@@ -7,13 +7,14 @@ defmodule LemonCliRunners.KimiSubagentTest do
 
   alias LemonCliRunners.KimiSubagent
 
-  alias LemonCliRunners.Types.{
+  alias LemonCore.RunEvents.{
     ActionEvent,
     CompletedEvent,
-    ResumeToken,
     StartedEvent,
     Action
   }
+
+  alias LemonCore.ResumeToken
 
   alias LemonAgent.EventStream
 

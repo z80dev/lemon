@@ -106,13 +106,18 @@ config :lemon_gateway, LemonGateway.Config,
   bindings: [],
   projects: %{}
 
+# Pin the engine set for tests. Setting the key also marks it as
+# operator-configured, so LemonCliRunners.Application's boot auto-registration
+# is a no-op and suites see the same list whether or not lemon_cli_runners is
+# started. The vendor modules resolve from the umbrella code path even in test
+# runs that never start their application.
 config :lemon_gateway, :engines, [
   LemonGateway.Engines.Echo,
-  LemonGateway.Engines.Codex,
-  LemonGateway.Engines.Claude,
-  LemonGateway.Engines.Opencode,
-  LemonGateway.Engines.Pi,
-  LemonGateway.Engines.Kimi
+  LemonCliRunners.Engines.Codex,
+  LemonCliRunners.Engines.Claude,
+  LemonCliRunners.Engines.Opencode,
+  LemonCliRunners.Engines.Pi,
+  LemonCliRunners.Engines.Kimi
 ]
 
 config :lemon_gateway, :telegram, nil
@@ -120,6 +125,7 @@ config :lemon_gateway, :telegram, nil
 # Keep browser.request parity tests node-only; don't try to auto-fallback to the local driver in tests.
 config :lemon_control_plane, :browser_local_fallback, false
 
+# ── lemon-sim product block — moves to the lemon-sim repo (docs/platform-split.md Phase 5) ──
 config :lemon_sim_ui, LemonSimUi.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4092],
   secret_key_base:
@@ -128,6 +134,7 @@ config :lemon_sim_ui, LemonSimUi.Endpoint,
 
 config :lemon_sim_ui, :hosted_rooms_enabled, true
 config :lemon_sim_ui, :allow_insecure_admin, true
+# ── end lemon-sim product block ──
 
 config :lemon_web, LemonWeb.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4082],

@@ -59,7 +59,8 @@ defmodule LemonCliRunners.ClaudeSubagent do
   """
 
   alias LemonCliRunners.ClaudeRunner
-  alias LemonCliRunners.Types.{ActionEvent, CompletedEvent, StartedEvent}
+  alias LemonCore.RunEvents.{ActionEvent, CompletedEvent, StartedEvent}
+  alias LemonCore.ResumeFormat
   alias LemonCore.ResumeToken
 
   require Logger
@@ -88,6 +89,70 @@ defmodule LemonCliRunners.ClaudeSubagent do
   # Public API
   # ============================================================================
 
+  @behaviour LemonCore.SubagentRunner
+
+  @impl true
+  def id, do: "claude"
+
+  @impl true
+  def describe do
+    %{summary: "Claude Code CLI", caveats: ["accepts a `model` override"]}
+  end
+
+  @doc """
+  The Claude Code CLI's resume syntax, registered into `LemonCore.ResumeFormats`
+  at boot so the platform can print and parse it without knowing this vendor.
+  """
+  @impl true
+  @spec resume_format() :: ResumeFormat.t()
+  def resume_format do
+    ResumeFormat.new(id(),
+      pattern: ~r/`?claude\s+--resume\s+([a-zA-Z0-9_-]+)`?/i,
+      render: &__MODULE__.render_resume/1
+    )
+  end
+
+  @doc false
+  @spec render_resume(String.t()) :: String.t()
+  def render_resume(value), do: "claude --resume #{value}"
+
+  @doc """
+  Resolves the raw `[runtime.cli.claude]` config section.
+
+  Registered with `LemonCore.Config.CliResolvers` at boot; called with `%{}`
+  when the section is unconfigured so the defaults still materialize —
+  including `dangerously_skip_permissions: true`, which is this vendor's
+  default for unattended runs.
+  """
+  @impl true
+  @spec resolve_cli_settings(map()) :: map()
+  def resolve_cli_settings(claude) when is_map(claude) do
+    %{
+      dangerously_skip_permissions:
+        if(is_nil(claude["dangerously_skip_permissions"]),
+          do: true,
+          else: claude["dangerously_skip_permissions"]
+        ),
+      allowed_tools: parse_string_list(claude["allowed_tools"]),
+      scrub_env: normalize_scrub_env(claude["scrub_env"]),
+      env_allowlist: parse_string_list(claude["env_allowlist"]),
+      env_allow_prefixes: parse_string_list(claude["env_allow_prefixes"]),
+      env_overrides: normalize_env_overrides(claude["env_overrides"])
+    }
+  end
+
+  defp parse_string_list(list) when is_list(list), do: list
+  defp parse_string_list(_), do: []
+
+  defp normalize_scrub_env("auto"), do: :auto
+  defp normalize_scrub_env("true"), do: true
+  defp normalize_scrub_env("false"), do: false
+  defp normalize_scrub_env(value) when is_boolean(value), do: value
+  defp normalize_scrub_env(_), do: :auto
+
+  defp normalize_env_overrides(map) when is_map(map), do: map
+  defp normalize_env_overrides(_), do: %{}
+
   @doc """
   Start a new Claude subagent session.
 
@@ -110,6 +175,7 @@ defmodule LemonCliRunners.ClaudeSubagent do
       )
 
   """
+  @impl true
   @spec start(keyword()) :: {:ok, session()} | {:error, term()}
   def start(opts) do
     prompt = Keyword.fetch!(opts, :prompt)
@@ -218,6 +284,7 @@ defmodule LemonCliRunners.ClaudeSubagent do
   - `{:error, reason}` - Error occurred
 
   """
+  @impl true
   @spec events(session()) :: Enumerable.t()
   def events(session) do
     token_agent = session.token_agent
@@ -271,6 +338,7 @@ defmodule LemonCliRunners.ClaudeSubagent do
   to resume the session later. The token is updated as events are
   processed, so call this after processing events.
   """
+  @impl true
   @spec resume_token(session()) :: ResumeToken.t() | nil
   def resume_token(session) do
     case session.token_agent do
@@ -285,6 +353,14 @@ defmodule LemonCliRunners.ClaudeSubagent do
         end
     end
   end
+
+  @doc """
+  Stop a running session. Idempotent, and `:ok` for a session already finished.
+  """
+  @impl true
+  @spec cancel(session()) :: :ok
+  def cancel(%{pid: pid}) when is_pid(pid), do: ClaudeRunner.cancel(pid)
+  def cancel(_session), do: :ok
 
   @doc """
   Run a Claude task synchronously and return the answer.

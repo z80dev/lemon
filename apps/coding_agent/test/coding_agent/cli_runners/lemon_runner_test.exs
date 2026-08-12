@@ -10,14 +10,15 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
   alias LemonAgent.Test.Mocks
   alias LemonAgent.Types.AgentToolResult
 
-  alias LemonCliRunners.Types.{
+  alias LemonCore.RunEvents.{
     Action,
     ActionEvent,
     CompletedEvent,
     EventFactory,
-    ResumeToken,
     StartedEvent
   }
+
+  alias LemonCore.ResumeToken
 
   alias LemonAgent.EventStream
 

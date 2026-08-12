@@ -176,6 +176,29 @@ defmodule LemonCore.ConfigCache do
     :ok
   end
 
+  @doc """
+  Drop every cached entry in the default cache instance.
+
+  A no-op when the cache is not running. Used when the meaning of resolved
+  config changes at runtime — e.g. `LemonCore.Config.CliResolvers.register/2`
+  at a vendor package's boot — so entries resolved under the old rules are not
+  served.
+  """
+  @spec clear() :: :ok
+  def clear, do: clear(__MODULE__)
+
+  @doc """
+  Drop every cached entry in a specific cache instance.
+  """
+  @spec clear(server()) :: :ok
+  def clear(server) do
+    if available?(server) do
+      _ = :ets.delete_all_objects(table_for(server))
+    end
+
+    :ok
+  end
+
   @impl true
   def init(opts) do
     name = Keyword.get(opts, :name, __MODULE__)

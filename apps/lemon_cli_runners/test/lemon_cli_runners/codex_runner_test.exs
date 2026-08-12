@@ -31,10 +31,11 @@ defmodule LemonCliRunners.CodexRunnerTest do
 
   alias Elixir.LemonCliRunners.CodexSchema.ThreadError
 
-  alias Elixir.LemonCliRunners.Types.{
+  alias Elixir.LemonCore.ResumeToken
+
+  alias Elixir.LemonCore.RunEvents.{
     ActionEvent,
     CompletedEvent,
-    ResumeToken,
     StartedEvent
   }
 
@@ -1157,10 +1158,11 @@ defmodule LemonCliRunners.CodexRunnerIntegrationTest do
 
   alias Elixir.LemonCliRunners.JsonlRunner
 
-  alias Elixir.LemonCliRunners.Types.{
+  alias Elixir.LemonCore.ResumeToken
+
+  alias Elixir.LemonCore.RunEvents.{
     ActionEvent,
     CompletedEvent,
-    ResumeToken,
     StartedEvent
   }
 

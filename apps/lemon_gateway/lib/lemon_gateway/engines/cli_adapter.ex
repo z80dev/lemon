@@ -1,6 +1,6 @@
 defmodule LemonGateway.Engines.CliAdapter do
   @moduledoc """
-  Shared CLI subprocess runner used by the Claude, Codex, Droid, Opencode, and Pi engines.
+  Shared CLI subprocess runner used by the Claude, Codex, Kimi, Opencode, and Pi engines.
 
   Provides common logic for starting a CLI runner process, consuming its event
   stream, translating `LemonAgent` events into plain tagged maps via
@@ -8,10 +8,9 @@ defmodule LemonGateway.Engines.CliAdapter do
   formatting.
   """
 
-  alias LemonCliRunners.Types.{ActionEvent, CompletedEvent, StartedEvent}
-  alias LemonCliRunners.Types.ResumeToken, as: AgentResumeToken
+  alias LemonCore.ResumeToken
+  alias LemonCore.RunEvents.{ActionEvent, CompletedEvent, StartedEvent}
   alias LemonGateway.Event
-  alias LemonCore.ResumeToken, as: GatewayToken
 
   def start_run(runner_module, engine_id, job, opts, sink_pid) do
     run_ref = make_ref()
@@ -59,40 +58,17 @@ defmodule LemonGateway.Engines.CliAdapter do
   # kill is a successful cancel, not a FunctionClauseError in the caller.
   def cancel(_ctx), do: :ok
 
-  def format_resume(engine_id, %GatewayToken{value: value}) do
-    case engine_id do
-      "codex" -> "codex resume #{value}"
-      "claude" -> "claude --resume #{value}"
-      "droid" -> "droid exec -s #{value}"
-      "kimi" -> "kimi --session #{value}"
-      "opencode" -> "opencode --session #{value}"
-      "pi" -> "pi --session #{quote_token(value)}"
-      _ -> "#{engine_id} resume #{value}"
-    end
+  # The engine id wins over the token's own: the gateway asks an engine to
+  # render a token it is about to run, and a token that arrived tagged with a
+  # different engine is being re-homed, not re-spelled.
+  def format_resume(engine_id, %ResumeToken{value: value}) do
+    ResumeToken.format_plain(ResumeToken.new(engine_id, value))
   end
-
-  defp quote_token(value) when is_binary(value) do
-    needs_quotes = Regex.match?(~r/\s/, value)
-
-    cond do
-      not needs_quotes and not String.contains?(value, "\"") ->
-        value
-
-      true ->
-        escaped = String.replace(value, "\"", "\\\"")
-        "\"#{escaped}\""
-    end
-  end
-
-  defp quote_token(value), do: to_string(value)
 
   def extract_resume(engine_id, text) do
-    case AgentResumeToken.extract_resume(text, engine_id) do
-      %GatewayToken{engine: ^engine_id, value: value} ->
-        %GatewayToken{engine: engine_id, value: value}
-
-      %AgentResumeToken{engine: ^engine_id, value: value} ->
-        %GatewayToken{engine: engine_id, value: value}
+    case ResumeToken.extract_resume(text, engine_id) do
+      %ResumeToken{engine: ^engine_id, value: value} ->
+        %ResumeToken{engine: engine_id, value: value}
 
       _ ->
         nil
@@ -102,17 +78,14 @@ defmodule LemonGateway.Engines.CliAdapter do
   # Resume-line detection keeps the LemonGateway.Engine callback name.
   # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
   def is_resume_line(engine_id, line) do
-    AgentResumeToken.is_resume_line(line, engine_id)
+    ResumeToken.is_resume_line(line, engine_id)
   end
 
   defp start_runner(runner_module, engine_id, job, opts) do
     resume =
       case job.resume do
-        %GatewayToken{engine: ^engine_id, value: value} ->
-          AgentResumeToken.new(engine_id, value)
-
-        %AgentResumeToken{engine: ^engine_id, value: value} ->
-          AgentResumeToken.new(engine_id, value)
+        %ResumeToken{engine: ^engine_id, value: value} ->
+          ResumeToken.new(engine_id, value)
 
         _ ->
           nil
@@ -155,93 +128,8 @@ defmodule LemonGateway.Engines.CliAdapter do
       )
       |> maybe_put(:async_followups, async_followups(job))
       |> maybe_put(:run_id, job.run_id || Map.get(opts, :run_id))
-      |> maybe_put(:extra_tools, gateway_extra_tools(engine_id, job, opts))
 
     runner_module.start_link(start_opts)
-  end
-
-  defp gateway_extra_tools("lemon", job, opts) do
-    cwd = job.cwd || Map.get(opts, :cwd) || File.cwd!()
-
-    cron_tool =
-      LemonGateway.Tools.Cron.tool(
-        cwd,
-        session_key: job.session_key,
-        agent_id: job_agent_id(job)
-      )
-
-    sms_tools = [
-      cron_tool,
-      LemonGateway.Tools.SmsGetInboxNumber.tool(cwd),
-      LemonGateway.Tools.SmsWaitForCode.tool(cwd, session_key: job.session_key),
-      LemonGateway.Tools.SmsListMessages.tool(cwd, session_key: job.session_key),
-      LemonGateway.Tools.SmsClaimMessage.tool(cwd, session_key: job.session_key)
-    ]
-
-    workspace_dir = LemonGateway.Workspace.dir()
-
-    cond do
-      telegram_session?(job) ->
-        [
-          LemonGateway.Tools.TelegramSendImage.tool(
-            cwd,
-            session_key: job.session_key,
-            workspace_dir: workspace_dir
-          )
-          | sms_tools
-        ]
-
-      discord_session?(job) ->
-        [
-          LemonGateway.Tools.DiscordSendFile.tool(
-            cwd,
-            session_key: job.session_key,
-            workspace_dir: workspace_dir
-          )
-          | sms_tools
-        ]
-
-      true ->
-        sms_tools
-    end
-  end
-
-  defp gateway_extra_tools(_engine_id, _job, _opts), do: nil
-
-  defp telegram_session?(job) do
-    case LemonCore.SessionKey.parse(job.session_key || "") do
-      %{kind: :channel_peer, channel_id: "telegram"} -> true
-      _ -> false
-    end
-  rescue
-    _ -> false
-  end
-
-  defp discord_session?(job) do
-    case LemonCore.SessionKey.parse(job.session_key || "") do
-      %{kind: :channel_peer, channel_id: "discord"} -> true
-      _ -> false
-    end
-  rescue
-    _ -> false
-  end
-
-  defp job_agent_id(job) do
-    meta = job.meta || %{}
-
-    agent_id =
-      meta[:agent_id] ||
-        meta["agent_id"] ||
-        LemonCore.SessionKey.agent_id(job.session_key || "")
-
-    case agent_id do
-      id when is_binary(id) ->
-        id = String.trim(id)
-        if id == "", do: nil, else: id
-
-      _ ->
-        nil
-    end
   end
 
   defp async_followups(job) do
@@ -338,14 +226,11 @@ defmodule LemonGateway.Engines.CliAdapter do
        }) do
     resume =
       case resume do
-        %GatewayToken{} = token ->
+        %ResumeToken{} = token ->
           token
 
-        %AgentResumeToken{engine: token_engine, value: value} ->
-          %GatewayToken{engine: token_engine, value: value}
-
         %{engine: token_engine, value: value} when is_binary(token_engine) and is_binary(value) ->
-          %GatewayToken{engine: token_engine, value: value}
+          %ResumeToken{engine: token_engine, value: value}
 
         _ ->
           nil
@@ -388,11 +273,8 @@ defmodule LemonGateway.Engines.CliAdapter do
   defp to_event_completed(%CompletedEvent{} = ev) do
     resume =
       case ev.resume do
-        %GatewayToken{} = token ->
+        %ResumeToken{} = token ->
           token
-
-        %AgentResumeToken{engine: engine, value: value} ->
-          %GatewayToken{engine: engine, value: value}
 
         _ ->
           nil

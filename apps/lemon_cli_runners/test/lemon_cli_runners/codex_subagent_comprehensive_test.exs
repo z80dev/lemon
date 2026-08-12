@@ -22,13 +22,14 @@ defmodule LemonCliRunners.CodexSubagentComprehensiveTest do
 
   alias LemonCliRunners.CodexSubagent
 
-  alias LemonCliRunners.Types.{
+  alias LemonCore.RunEvents.{
     Action,
     ActionEvent,
     CompletedEvent,
-    ResumeToken,
     StartedEvent
   }
+
+  alias LemonCore.ResumeToken
 
   alias LemonAgent.EventStream
 

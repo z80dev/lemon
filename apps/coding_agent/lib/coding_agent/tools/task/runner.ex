@@ -5,15 +5,6 @@ defmodule CodingAgent.Tools.Task.Runner do
 
   alias LemonAgent.AbortSignal
 
-  alias LemonCliRunners.{
-    ClaudeSubagent,
-    CodexSubagent,
-    DroidSubagent,
-    KimiSubagent,
-    OpencodeSubagent,
-    PiSubagent
-  }
-
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
   alias CodingAgent.Coordinator
@@ -21,9 +12,26 @@ defmodule CodingAgent.Tools.Task.Runner do
   alias CodingAgent.SessionManager
   alias CodingAgent.Subagents
   alias CodingAgent.Tools.Task.Result
+  alias LemonCore.SubagentRegistry
 
   @await_poll_ms 200
   @default_task_session_timeout_ms nil
+
+  @doc """
+  Resolve the subagent module that runs `engine` as a Task-tool child.
+
+  Engines are contributed by whichever package implements them — the vendor CLIs
+  from `lemon_cli_runners`, the in-process agent from this app — so the module
+  comes from `LemonCore.SubagentRegistry` rather than a table compiled in here.
+  """
+  @spec subagent_module(String.t()) :: module() | nil
+  def subagent_module(engine) when is_binary(engine), do: SubagentRegistry.module(engine)
+
+  def subagent_module(_engine), do: nil
+
+  @doc "Whether `engine` is served by a registered subagent runner."
+  @spec subagent_engine?(term()) :: boolean()
+  def subagent_engine?(engine), do: subagent_module(engine) != nil
 
   @spec execute_via_coordinator(term(), String.t(), String.t(), String.t() | nil) ::
           AgentToolResult.t() | {:error, String.t()}
@@ -77,23 +85,14 @@ defmodule CodingAgent.Tools.Task.Runner do
         on_update,
         signal
       ) do
-    {module, engine_label} =
-      case engine do
-        "codex" -> {CodexSubagent, "codex"}
-        "claude" -> {ClaudeSubagent, "claude"}
-        "droid" -> {DroidSubagent, "droid"}
-        "kimi" -> {KimiSubagent, "kimi"}
-        "opencode" -> {OpencodeSubagent, "opencode"}
-        "pi" -> {PiSubagent, "pi"}
-      end
-
     role_prompt = if role_id, do: get_role_prompt(cwd, role_id), else: nil
 
     Logger.info(
-      "Task tool cli engine start engine=#{engine_label} description=#{inspect(description)} role=#{inspect(role_id)} model=#{inspect(model)} thinking_level=#{inspect(thinking_level)} cwd=#{inspect(cwd)}"
+      "Task tool cli engine start engine=#{engine} description=#{inspect(description)} role=#{inspect(role_id)} model=#{inspect(model)} thinking_level=#{inspect(thinking_level)} cwd=#{inspect(cwd)}"
     )
 
-    with {:ok, session} <-
+    with {:ok, module} <- fetch_subagent_module(engine),
+         {:ok, session} <-
            module.start(
              prompt: prompt,
              cwd: cwd,
@@ -104,14 +103,14 @@ defmodule CodingAgent.Tools.Task.Runner do
       abort_monitor = maybe_start_abort_monitor(signal, session.pid)
 
       result =
-        reduce_cli_events(module.events(session), description, engine_label, on_update, signal)
+        reduce_cli_events(module.events(session), description, engine, on_update, signal)
 
       maybe_stop_abort_monitor(abort_monitor)
 
       details = %{
         description: description,
         status: if(result.error, do: "error", else: "completed"),
-        engine: engine_label,
+        engine: engine,
         role: role_id,
         model: model,
         thinking_level: thinking_level,
@@ -127,7 +126,7 @@ defmodule CodingAgent.Tools.Task.Runner do
 
       if result.error do
         Logger.warning(
-          "Task tool cli engine error engine=#{engine_label} description=#{inspect(description)} error=#{inspect(result.error)}"
+          "Task tool cli engine error engine=#{engine} description=#{inspect(description)} error=#{inspect(result.error)}"
         )
 
         error_msg =
@@ -140,11 +139,29 @@ defmodule CodingAgent.Tools.Task.Runner do
         {:error, %{message: error_msg, details: details, answer: result.answer || ""}}
       else
         Logger.info(
-          "Task tool cli engine completed engine=#{engine_label} description=#{inspect(description)} answer_bytes=#{byte_size(result.answer || "")}"
+          "Task tool cli engine completed engine=#{engine} description=#{inspect(description)} answer_bytes=#{byte_size(result.answer || "")}"
         )
 
         tool_result
       end
+    end
+  end
+
+  # An engine can pass validation and still be gone by the time the task runs:
+  # validation and execution are separated by the async queue, and a runner is
+  # only present while the application that registered it is up.
+  defp fetch_subagent_module(engine) do
+    case subagent_module(engine) do
+      nil ->
+        registered = SubagentRegistry.list_ids()
+
+        available =
+          if registered == [], do: "none are registered", else: Enum.join(registered, ", ")
+
+        {:error, "Unknown task engine #{inspect(engine)} (registered: #{available})"}
+
+      module ->
+        {:ok, module}
     end
   end
 

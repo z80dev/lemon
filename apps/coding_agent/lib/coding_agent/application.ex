@@ -48,6 +48,7 @@ defmodule CodingAgent.Application do
     case Supervisor.start_link(children, opts) do
       {:ok, _supervisor} = ok ->
         register_gateway_engine()
+        register_subagent_runner()
         register_control_plane_provider()
         maybe_start_primary_session()
         ok
@@ -72,6 +73,21 @@ defmodule CodingAgent.Application do
       end
     else
       :ok
+    end
+  end
+
+  # Same shape one layer down: lemon_core owns the subagent registry the task
+  # tool reads, and this app contributes the in-process ("internal") runner.
+  # Vendor CLIs contribute theirs from lemon_cli_runners, which is why nothing
+  # here names one.
+  defp register_subagent_runner do
+    case LemonCore.SubagentRegistry.register(CodingAgent.CliRunners.LemonSubagent) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.debug("internal subagent runner not registered: #{inspect(reason)}")
+        :ok
     end
   end
 

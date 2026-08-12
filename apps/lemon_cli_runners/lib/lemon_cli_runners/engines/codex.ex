@@ -1,17 +1,19 @@
-defmodule LemonGateway.Engines.Opencode do
+defmodule LemonCliRunners.Engines.Codex do
   @moduledoc """
-  Engine adapter for the Opencode CLI tool.
+  Gateway engine adapter for the OpenAI Codex CLI tool.
 
-  Delegates to `LemonGateway.Engines.CliAdapter` to manage an
-  `LemonCliRunners.OpencodeRunner` subprocess for each run.
+  Delegates to `LemonGateway.Engines.CliAdapter` to manage a
+  `LemonCliRunners.CodexRunner` subprocess for each run. Registered with
+  `LemonGateway.EngineRegistry` at boot by `LemonCliRunners.Application`,
+  so the gateway itself never names this vendor.
   """
   @behaviour LemonGateway.Engine
 
-  alias LemonGateway.Engines.CliAdapter
   alias LemonCore.ResumeToken
+  alias LemonGateway.Engines.CliAdapter
 
   @impl true
-  def id, do: "opencode"
+  def id, do: "codex"
 
   @impl true
   def format_resume(%ResumeToken{} = token), do: CliAdapter.format_resume(id(), token)
@@ -27,7 +29,7 @@ defmodule LemonGateway.Engines.Opencode do
 
   @impl true
   def start_run(job, opts, sink_pid) do
-    CliAdapter.start_run(LemonCliRunners.OpencodeRunner, id(), job, opts, sink_pid)
+    CliAdapter.start_run(LemonCliRunners.CodexRunner, id(), job, opts, sink_pid)
   end
 
   @impl true

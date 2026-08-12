@@ -2,7 +2,7 @@ defmodule CodingAgent.LemonRunnerIntegrationTest do
   use ExUnit.Case
 
   alias CodingAgent.CliRunners.LemonRunner
-  alias LemonCliRunners.Types.{CompletedEvent, StartedEvent}
+  alias LemonCore.RunEvents.{CompletedEvent, StartedEvent}
 
   @moduletag :integration
 

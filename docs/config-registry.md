@@ -272,7 +272,6 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 
 | Env Var | Type | Default | Secret | Apps | Description |
 |---|---|---|---|---|---|
-| `FACTORY_API_KEY` | string | _(none)_ | yes | `agent_core` | Factory (Droid CLI) API key. |
 | `LEMON_CLAUDE_YOLO` | boolean | `false` |  | `agent_core` | Whether the Claude CLI runner skips permission prompts (`--dangerously-skip-permissions`-style). |
 | `LEMON_CODEX_AUTO_APPROVE` | boolean | `false` |  | `agent_core` | Whether the Codex CLI runner auto-approves tool calls. |
 | `LEMON_CODEX_EXTRA_ARGS` | list (comma-separated) | `[]` |  | `agent_core` | Extra whitespace-separated CLI args appended to Codex invocations. |

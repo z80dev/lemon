@@ -8,7 +8,8 @@ defmodule LemonCliRunners.KimiSubagent do
   """
 
   alias LemonCliRunners.KimiRunner
-  alias LemonCliRunners.Types.{ActionEvent, CompletedEvent, StartedEvent}
+  alias LemonCore.RunEvents.{ActionEvent, CompletedEvent, StartedEvent}
+  alias LemonCore.ResumeFormat
   alias LemonCore.ResumeToken
 
   @typedoc "A Kimi subagent session"
@@ -27,9 +28,57 @@ defmodule LemonCliRunners.KimiSubagent do
           | {:completed, answer :: String.t(), opts :: keyword()}
           | {:error, reason :: term()}
 
+  @behaviour LemonCore.SubagentRunner
+
+  @impl true
+  def id, do: "kimi"
+
+  @impl true
+  def describe do
+    %{
+      summary: "Kimi CLI",
+      caveats: ["ignores `model`: the Kimi CLI's own configuration selects it"]
+    }
+  end
+
+  @doc """
+  The Kimi CLI's resume syntax, registered into `LemonCore.ResumeFormats` at
+  boot so the platform can print and parse it without knowing this vendor.
+  """
+  @impl true
+  @spec resume_format() :: ResumeFormat.t()
+  def resume_format do
+    ResumeFormat.new(id(),
+      pattern: ~r/`?kimi\s+--session\s+([a-zA-Z0-9_-]+)`?/i,
+      render: &__MODULE__.render_resume/1
+    )
+  end
+
+  @doc false
+  @spec render_resume(String.t()) :: String.t()
+  def render_resume(value), do: "kimi --session #{value}"
+
+  @doc """
+  Resolves the raw `[runtime.cli.kimi]` config section.
+
+  Registered with `LemonCore.Config.CliResolvers` at boot; called with `%{}`
+  when the section is unconfigured so the defaults still materialize.
+  """
+  @impl true
+  @spec resolve_cli_settings(map()) :: map()
+  def resolve_cli_settings(kimi) when is_map(kimi) do
+    %{
+      extra_args: parse_string_list(kimi["extra_args"])
+    }
+  end
+
+  defp parse_string_list(list) when is_list(list), do: list
+  defp parse_string_list(_), do: []
+
   @doc """
   Start a new Kimi subagent session.
   """
+  @impl true
   @spec start(keyword()) :: {:ok, session()} | {:error, term()}
   def start(opts) do
     prompt = Keyword.fetch!(opts, :prompt)
@@ -90,6 +139,7 @@ defmodule LemonCliRunners.KimiSubagent do
   @doc """
   Get the event stream as an enumerable of normalized events.
   """
+  @impl true
   @spec events(session()) :: Enumerable.t()
   def events(session) do
     token_agent = session.token_agent
@@ -138,6 +188,7 @@ defmodule LemonCliRunners.KimiSubagent do
   @doc """
   Return the resume token for a session if available.
   """
+  @impl true
   @spec resume_token(session()) :: ResumeToken.t() | nil
   def resume_token(session) do
     token_agent = session.token_agent
@@ -153,6 +204,14 @@ defmodule LemonCliRunners.KimiSubagent do
         nil
     end
   end
+
+  @doc """
+  Stop a running session. Idempotent, and `:ok` for a session already finished.
+  """
+  @impl true
+  @spec cancel(session()) :: :ok
+  def cancel(%{pid: pid}) when is_pid(pid), do: KimiRunner.cancel(pid)
+  def cancel(_session), do: :ok
 
   # ============================================================================
   # Internal event normalization

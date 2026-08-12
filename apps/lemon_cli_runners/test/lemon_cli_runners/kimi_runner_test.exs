@@ -13,7 +13,8 @@ defmodule LemonCliRunners.KimiRunnerTest do
     ToolFunction
   }
 
-  alias LemonCliRunners.Types.{ActionEvent, CompletedEvent, ResumeToken, StartedEvent}
+  alias LemonCore.RunEvents.{ActionEvent, CompletedEvent, StartedEvent}
+  alias LemonCore.ResumeToken
 
   setup do
     Application.delete_env(:lemon_agent, :kimi)

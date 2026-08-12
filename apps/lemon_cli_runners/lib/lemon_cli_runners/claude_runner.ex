@@ -68,7 +68,7 @@ defmodule LemonCliRunners.ClaudeRunner do
     ToolUseBlock
   }
 
-  alias LemonCliRunners.Types.EventFactory
+  alias LemonCore.RunEvents.EventFactory
   alias LemonCore.ResumeToken
   alias LemonCliRunners.ToolActionHelpers
   alias LemonCore.Config, as: LemonConfig
@@ -96,7 +96,7 @@ defmodule LemonCliRunners.ClaudeRunner do
 
     def new(claude_config \\ %{}, model_override \\ nil) do
       %__MODULE__{
-        factory: LemonCliRunners.Types.EventFactory.new("claude"),
+        factory: LemonCore.RunEvents.EventFactory.new("claude"),
         found_session: nil,
         last_assistant_text: nil,
         pending_actions: %{},

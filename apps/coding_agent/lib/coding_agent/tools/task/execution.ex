@@ -148,7 +148,12 @@ defmodule CodingAgent.Tools.Task.Execution do
         is_function(run_override, 2) ->
           run_override.(on_update_safe, signal)
 
-        execution.engine in ["codex", "claude", "droid", "kimi", "opencode", "pi"] ->
+        # The in-process engine has a registered runner too, but it runs
+        # through the session branch below, which is the only one that inherits
+        # tool policy, session key and parent session. `validate_run_params/2`
+        # normalises its id to nil; this guard keeps that an invariant rather
+        # than an accident.
+        external_engine?(execution.engine) ->
           Runner.execute_via_cli_engine(
             execution.engine,
             execution.prompt,
@@ -196,6 +201,11 @@ defmodule CodingAgent.Tools.Task.Execution do
           end
       end
     end
+  end
+
+  defp external_engine?(engine) do
+    is_binary(engine) and engine != CodingAgent.Tools.Task.Params.default_engine() and
+      Runner.subagent_engine?(engine)
   end
 
   defp coordinator_alive?(coordinator) when is_pid(coordinator), do: Process.alive?(coordinator)

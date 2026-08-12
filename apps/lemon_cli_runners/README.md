@@ -1,6 +1,6 @@
 # CLI Runners
 
-This module provides infrastructure for wrapping CLI-based AI tools (Codex, Claude, Droid, Kimi, etc.) as subagents. Inspired by the [Takopi](https://github.com/your-org/takopi) project's reliable subprocess management patterns.
+This module provides infrastructure for wrapping CLI-based AI tools (Codex, Claude, Kimi, etc.) as subagents. Inspired by the [Takopi](https://github.com/your-org/takopi) project's reliable subprocess management patterns.
 
 ## Overview
 
@@ -24,10 +24,30 @@ CLI Runners enable you to:
 │                       JsonlRunner                                │
 │           (Generic JSONL subprocess GenServer)                   │
 ├─────────────────────────────────────────────────────────────────┤
-│                         Types                                    │
+│                  LemonCore.RunEvents (lemon_core)                │
 │    (ResumeToken, Action, StartedEvent, ActionEvent, etc.)       │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+The event vocabulary is owned by `lemon_core`, not by this package: every
+engine — these CLI wrappers and Lemon's own native session alike — emits
+`LemonCore.RunEvents` structs, so consumers never branch on the vendor.
+
+## Registration
+
+Each `*Subagent` module implements `LemonCore.SubagentRunner` and is registered
+into `LemonCore.SubagentRegistry` by `LemonCliRunners.Application` at boot. That
+is the whole integration with the agent: the `task` tool reads the registry for
+its engine list, its tool-description prose (from each runner's `describe/0`)
+and the module to run, so nothing in the agent names a vendor. Drop this
+package from a build and those engines simply stop being offered.
+
+Each `*Subagent` also declares `resume_format/0` — how its CLI spells "resume"
+(`codex resume X`, `claude --resume X`, pi's quoted transcript paths) — which
+`LemonCliRunners.Application` registers into `LemonCore.ResumeFormats`.
+`LemonCore.ResumeToken` prints and parses those lines for the whole platform
+without knowing any vendor; without this package it falls back to the generic
+`<engine> resume <token>`.
 
 ## Quick Start
 
@@ -178,7 +198,7 @@ For more control, use the runner directly:
 
 ```elixir
 alias LemonCliRunners.CodexRunner
-alias LemonCliRunners.Types.ResumeToken
+alias LemonCore.ResumeToken
 
 # Start runner
 {:ok, pid} = CodexRunner.start_link(
@@ -208,7 +228,8 @@ To add support for a new CLI tool (e.g., Claude):
 defmodule LemonCliRunners.ClaudeRunner do
   use LemonCliRunners.JsonlRunner
 
-  alias LemonCliRunners.Types.{EventFactory, ResumeToken}
+  alias LemonCore.RunEvents.EventFactory
+  alias LemonCore.ResumeToken
 
   @impl true
   def engine, do: "claude"
@@ -232,7 +253,7 @@ defmodule LemonCliRunners.ClaudeRunner do
 
   @impl true
   def translate_event(data, state) do
-    # Convert Claude's JSONL events to CLI runner events
+    # Convert Claude's JSONL events to LemonCore.RunEvents structs
     # ... implementation ...
   end
 
@@ -252,7 +273,7 @@ end
 
 | File | Description |
 |------|-------------|
-| `types.ex` | Core types: ResumeToken, Action, events, EventFactory |
+| `application.ex` | Registers the vendor subagents and their resume formats with `lemon_core` at boot |
 | `jsonl_runner.ex` | Base GenServer for JSONL subprocess runners |
 | `tool_action_helpers.ex` | Shared helpers for translating tool calls to action events |
 | `codex_schema.ex` | Codex JSONL event parsing |
@@ -261,9 +282,6 @@ end
 | `claude_schema.ex` | Claude JSONL event parsing |
 | `claude_runner.ex` | Claude CLI implementation |
 | `claude_subagent.ex` | High-level API for using Claude as subagent |
-| `droid_schema.ex` | Droid JSONL event parsing |
-| `droid_runner.ex` | Droid CLI implementation |
-| `droid_subagent.ex` | High-level API for using Droid as subagent |
 | `kimi_schema.ex` | Kimi JSONL event parsing |
 | `kimi_runner.ex` | Kimi CLI implementation |
 | `kimi_subagent.ex` | High-level API for using Kimi as subagent |
@@ -311,7 +329,7 @@ Implement the `LemonCliRunners.JsonlRunner` behaviour:
 defmodule LemonCliRunners.MyEngineRunner do
   use LemonCliRunners.JsonlRunner
 
-  alias LemonCliRunners.Types.EventFactory
+  alias LemonCore.RunEvents.EventFactory
   alias LemonCore.ResumeToken
 
   @engine "myengine"

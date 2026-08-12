@@ -3,8 +3,8 @@ defmodule CodingAgent.CliRunners.LemonSubagent do
   High-level API for using Lemon native as a collaborating subagent.
 
   This module provides a convenient interface for spawning Lemon sessions
-  and interacting with them over time. Unlike ClaudeSubagent and CodexSubagent
-  which wrap CLI tools, LemonSubagent wraps the native CodingAgent.Session.
+  and interacting with them over time. Unlike the external subagents, which wrap
+  a vendor CLI, LemonSubagent wraps the native CodingAgent.Session.
 
   ## Features
 
@@ -70,7 +70,7 @@ defmodule CodingAgent.CliRunners.LemonSubagent do
   """
 
   alias CodingAgent.CliRunners.LemonRunner
-  alias LemonCliRunners.Types.{ActionEvent, CompletedEvent, StartedEvent}
+  alias LemonCore.RunEvents.{ActionEvent, CompletedEvent, StartedEvent}
   alias LemonCore.ResumeToken
 
   require Logger
@@ -99,6 +99,43 @@ defmodule CodingAgent.CliRunners.LemonSubagent do
   # Public API
   # ============================================================================
 
+  @behaviour LemonCore.SubagentRunner
+
+  @doc """
+  The `task` tool's name for this engine.
+
+  Deliberately not `"lemon"`: `"internal"` is the tool-level alias for "run it
+  in this VM", while `"lemon"` is the id the *gateway* engine and its resume
+  tokens use. `routable?/0` answers `false` for the same reason — the router
+  must not start treating `"internal"` as an engine a conversation can switch
+  to.
+  """
+  @impl true
+  def id, do: "internal"
+
+  @impl true
+  def describe do
+    %{
+      summary: "Lemon's built-in agent",
+      caveats: [
+        "accepts `model` and `thinking_level` overrides",
+        "the only engine whose child tools this session's tool policy shapes"
+      ]
+    }
+  end
+
+  @impl true
+  def routable?, do: false
+
+  @doc """
+  Children of the in-process engine keep full tool access.
+
+  Everything else runs outside this VM and gets `:subagent_restricted`; this
+  one is the agent itself, already inside the parent's policy.
+  """
+  @impl true
+  def default_policy, do: :full_access
+
   @doc """
   Start a new Lemon subagent session.
 
@@ -123,6 +160,7 @@ defmodule CodingAgent.CliRunners.LemonSubagent do
       )
 
   """
+  @impl true
   @spec start(keyword()) :: {:ok, session()} | {:error, term()}
   def start(opts) do
     prompt = Keyword.fetch!(opts, :prompt)
@@ -228,6 +266,7 @@ defmodule CodingAgent.CliRunners.LemonSubagent do
   - `{:error, reason}` - Error occurred
 
   """
+  @impl true
   @spec events(session()) :: Enumerable.t()
   def events(session) do
     token_agent = session.token_agent
@@ -281,6 +320,7 @@ defmodule CodingAgent.CliRunners.LemonSubagent do
   to resume the session later. The token is updated as events are
   processed, so call this after processing events.
   """
+  @impl true
   @spec resume_token(session()) :: ResumeToken.t() | nil
   def resume_token(session) do
     case session.token_agent do
@@ -299,12 +339,13 @@ defmodule CodingAgent.CliRunners.LemonSubagent do
   @doc """
   Cancel the running session.
 
-  Sends an abort signal to the underlying agent.
+  Sends an abort signal to the underlying agent. Idempotent, and `:ok` for a
+  session that has already finished.
   """
+  @impl true
   @spec cancel(session()) :: :ok
-  def cancel(session) do
-    LemonRunner.cancel(session.pid)
-  end
+  def cancel(%{pid: pid}) when is_pid(pid), do: LemonRunner.cancel(pid)
+  def cancel(_session), do: :ok
 
   @doc """
   Inject a steering message mid-run.
