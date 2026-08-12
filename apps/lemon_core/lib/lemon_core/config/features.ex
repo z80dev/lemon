@@ -8,7 +8,7 @@ defmodule LemonCore.Config.Features do
   ## Configuration
 
       [features]
-      session_search             = "off"
+      session_search             = "default-on" # disable with "off"
       routing_feedback           = "opt-in"     # enable with "default-on" once gate passes
       skill_synthesis_drafts     = "opt-in"     # enable with "default-on" once gate passes
 
@@ -57,6 +57,10 @@ defmodule LemonCore.Config.Features do
   ## Kill-switch behaviour
 
   Set any flag to `"off"` to disable the feature regardless of code state.
+  `session_search` defaults to `"default-on"`; the fastest rollback is:
+
+      export LEMON_FEATURE_SESSION_SEARCH=off
+
   Code gated behind a flag must call `LemonCore.Config.Features.enabled?/2`
   (or the equivalent convenience helpers in `LemonCore.Config.Modular`) before
   activating that behaviour.
@@ -72,7 +76,7 @@ defmodule LemonCore.Config.Features do
     skill_synthesis_drafts
   ]
 
-  defstruct session_search: :off,
+  defstruct session_search: :"default-on",
             routing_feedback: :"opt-in",
             skill_synthesis_drafts: :"opt-in"
 
@@ -87,7 +91,8 @@ defmodule LemonCore.Config.Features do
   @doc """
   Resolves feature flags from the merged TOML settings map.
 
-  Priority: environment variables > `[features]` TOML section > defaults (all `:off`).
+  Priority: environment variables > `[features]` TOML section > per-flag defaults
+  (`session_search` is `:"default-on"`; the adaptive flags are `:"opt-in"`).
   """
   @spec resolve(map()) :: t()
   def resolve(settings) do
@@ -172,7 +177,9 @@ defmodule LemonCore.Config.Features do
     if raw == nil, do: default_state(name), else: parse_state(raw)
   end
 
-  # Adaptive features are opt-in by default; all others default to off.
+  # session_search is enabled by default (LEMON_FEATURE_SESSION_SEARCH=off is
+  # the kill switch); adaptive features are opt-in; all others default to off.
+  defp default_state("session_search"), do: :"default-on"
   defp default_state("routing_feedback"), do: :"opt-in"
   defp default_state("skill_synthesis_drafts"), do: :"opt-in"
   defp default_state(_), do: :off

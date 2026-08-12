@@ -308,9 +308,9 @@ provider, model, outcome, meta
 All non-trivial features are gated behind flags in `[features]` TOML section.
 Code reads flags via `LemonCore.Config.Features.enabled?(features, :flag_name)`.
 
-Current flags: `product_runtime`, `skills_hub_v2`, `skill_manifest_v2`,
-`progressive_skill_loading_v2`, `session_search`, `routing_feedback`,
-`skill_synthesis_drafts`.
+Current flags: `session_search` (default `"default-on"`; disable with
+`LEMON_FEATURE_SESSION_SEARCH=off`), `routing_feedback`, and
+`skill_synthesis_drafts` (both default `"opt-in"`).
 
 ---
 

@@ -38,7 +38,7 @@ defmodule LemonCore.Doctor.RegistrationTest do
   describe "check registration" do
     test "built-ins run without any registration" do
       assert Doctor.registered_checks() == []
-      assert Doctor.builtin_checks() |> length() == 17
+      assert Doctor.builtin_checks() |> length() == 18
       assert LemonCore.Doctor.Checks.Secrets in Doctor.builtin_checks()
     end
 

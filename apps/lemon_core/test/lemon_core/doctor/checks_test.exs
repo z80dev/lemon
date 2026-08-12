@@ -13,6 +13,7 @@ defmodule LemonCore.Doctor.ChecksTest do
     LSP,
     MCP,
     Media,
+    Memory,
     NodeTools,
     OpenAICompat,
     Providers,
@@ -1472,6 +1473,109 @@ defmodule LemonCore.Doctor.ChecksTest do
     test "skills directory check has expected name" do
       checks = Skills.run()
       assert Enum.any?(checks, &(&1.name == "skills.directory"))
+    end
+  end
+
+  defmodule StubMemoryStore do
+    def stats do
+      %{total: 3, oldest_ms: 1, newest_ms: System.system_time(:millisecond) - 120_000}
+    end
+  end
+
+  describe "Memory.run/1" do
+    alias LemonCore.Config.Features
+
+    test "returns a list of Check structs" do
+      checks = Memory.run(features: %Features{session_search: :off})
+      assert is_list(checks)
+      assert Enum.all?(checks, &match?(%Check{}, &1))
+    end
+
+    test "reports inactive memory when session_search is off" do
+      checks = Memory.run(features: %Features{session_search: :off})
+      check = Enum.find(checks, &(&1.name == "memory.session_search"))
+
+      assert check.status == :pass
+      assert check.message =~ "session_search is off"
+      assert check.message =~ "inactive"
+    end
+
+    test "reports inactive memory when session_search is opt-in" do
+      checks = Memory.run(features: %Features{session_search: :"opt-in"})
+      check = Enum.find(checks, &(&1.name == "memory.session_search"))
+
+      assert check.status == :pass
+      assert check.message =~ "session_search is opt-in"
+    end
+
+    test "warns with the kill switch when default-on but exqlite is unavailable" do
+      checks =
+        Memory.run(
+          features: %Features{session_search: :"default-on"},
+          exqlite_loaded: false
+        )
+
+      check = Enum.find(checks, &(&1.name == "memory.session_search"))
+
+      assert check.status == :warn
+      assert check.message =~ "exqlite SQLite NIF is not loaded"
+      assert check.remediation =~ "LEMON_FEATURE_SESSION_SEARCH=off"
+    end
+
+    test "warns when default-on but the store module is missing" do
+      checks =
+        Memory.run(
+          features: %Features{session_search: :"default-on"},
+          exqlite_loaded: true,
+          store_module: LemonCore.Doctor.ChecksTest.NoSuchStore
+        )
+
+      check = Enum.find(checks, &(&1.name == "memory.session_search"))
+
+      assert check.status == :warn
+      assert check.message =~ "store module is not loaded"
+      assert check.remediation =~ "LEMON_FEATURE_SESSION_SEARCH=off"
+    end
+
+    test "warns when default-on but the store process is not running" do
+      checks =
+        Memory.run(
+          features: %Features{session_search: :"default-on"},
+          exqlite_loaded: true,
+          store_module: StubMemoryStore
+        )
+
+      check = Enum.find(checks, &(&1.name == "memory.session_search"))
+
+      assert check.status == :warn
+      assert check.message =~ "store process is not running"
+      assert check.remediation =~ "LEMON_FEATURE_SESSION_SEARCH=off"
+    end
+
+    test "passes with document count, db size, and ingest recency when the store is up" do
+      {:ok, agent} = Agent.start_link(fn -> :ok end, name: StubMemoryStore)
+      on_exit(fn -> if Process.alive?(agent), do: Agent.stop(agent) end)
+
+      db_path = Path.join(tmp_dir("memory_check_db"), "memory.sqlite3")
+      File.mkdir_p!(Path.dirname(db_path))
+      File.write!(db_path, String.duplicate("x", 2048))
+      on_exit(fn -> File.rm_rf!(Path.dirname(db_path)) end)
+
+      checks =
+        Memory.run(
+          features: %Features{session_search: :"default-on"},
+          exqlite_loaded: true,
+          store_module: StubMemoryStore,
+          store_path: db_path
+        )
+
+      check = Enum.find(checks, &(&1.name == "memory.session_search"))
+
+      assert check.status == :pass
+      assert check.message =~ "session_search is default-on"
+      assert check.message =~ "3 document(s)"
+      assert check.message =~ "db 2.0 KB"
+      assert check.message =~ "last ingest 2m ago"
     end
   end
 

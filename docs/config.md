@@ -216,18 +216,20 @@ Per-call tool inputs still override it: `task.queue_mode` and `agent.followup_qu
 ## Feature Flags
 
 Feature flags gate in-progress behaviour changes so they can be shipped incrementally
-without ad-hoc environment variables.  All flags default to `"off"`.
+without ad-hoc environment variables.
 
 ```toml
 [features]
-product_runtime              = "off"   # M1 runtime boot/profile/health/setup/update
-skills_hub_v2                = "off"   # M2/M3 manifest v2 + progressive skill loading
-skill_manifest_v2            = "off"   # M2-01 manifest v2 parser/validator
-progressive_skill_loading_v2 = "off"   # M3-02/M3-03 partial skill body loading
-session_search               = "off"   # M5-02 SessionSearch API + search_memory tool
-routing_feedback             = "off"   # M6-02 task fingerprinting + routing feedback
-skill_synthesis_drafts       = "off"   # M7-02 skill synthesis draft pipeline
+session_search               = "default-on" # SessionSearch API + search_memory tool (default)
+routing_feedback             = "opt-in"     # task fingerprinting + routing feedback (default)
+skill_synthesis_drafts       = "opt-in"     # skill synthesis draft pipeline (default)
 ```
+
+`session_search` defaults to `"default-on"`: durable memory ingest and search
+are active on a stock install (retention 30 days, max 500 documents per scope;
+runs whose summaries look like they contain a secret are dropped entirely, not
+redacted). Set it to `"off"` to disable. The adaptive flags default to
+`"opt-in"`.
 
 Valid rollout states:
 
@@ -241,8 +243,8 @@ Each flag can be overridden via an environment variable using the pattern
 `LEMON_FEATURE_<FLAG_NAME>` (SCREAMING_SNAKE_CASE):
 
 ```bash
-LEMON_FEATURE_SESSION_SEARCH=opt-in
-LEMON_FEATURE_PRODUCT_RUNTIME=default-on
+LEMON_FEATURE_SESSION_SEARCH=off       # kill switch for durable memory
+LEMON_FEATURE_ROUTING_FEEDBACK=default-on
 ```
 
 Config validation fails cleanly if a flag is set to an unrecognised state.

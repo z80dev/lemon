@@ -66,16 +66,17 @@ set `LEMON_HONCHO_ENABLED=false`, which wins over the key. Lemon's own test suit
 pinned off — and pinned off a second time at the transport, so that even a shell which
 forces the integration on cannot make `mix test` reach a real workspace.
 
-Uploads have one more prerequisite: a finished run reaches Honcho over Lemon's built-in
-memory ingest, and that pipeline sits behind the `session_search` feature flag, which
-defaults to **off**. Until you turn it on, no conversation is ever uploaded — the
-injected context, the tools, and search all work, but Honcho has nothing new to build a
-picture of you from, so a fresh workspace stays empty. (Facts the assistant writes
-deliberately with `honcho_conclude` or `honcho_profile` are stored either way; it is the
-automatic per-run upload that is gated.)
+Uploads travel over Lemon's built-in memory ingest, and that pipeline sits behind the
+`session_search` feature flag, which now defaults to **default-on** — so once the key
+is exported, per-run uploads happen without any further switch. If you want Honcho's
+injected context, tools, and search without the automatic per-run upload, use the
+kill switch — with it set, Honcho has nothing new to build a picture of you from, so a
+fresh workspace stays empty. (Facts the assistant writes deliberately with
+`honcho_conclude` or `honcho_profile` are stored either way; it is the automatic
+per-run upload that is gated.)
 
 ```bash
-export LEMON_FEATURE_SESSION_SEARCH=on      # or [features] session_search = "on"
+export LEMON_FEATURE_SESSION_SEARCH=off     # or [features] session_search = "off"
 ```
 
 Check it:
@@ -463,8 +464,8 @@ scrubbed of it before being shown.
 
 One more flag lives outside this table: `LEMON_FEATURE_SESSION_SEARCH` (or `[features]
 session_search` in `~/.lemon/config.toml`) gates Lemon's memory ingest, which is the
-path uploads travel. It defaults to `off`, so nothing is written to Honcho until it is
-`on`.
+path uploads travel. It defaults to `default-on`, so run summaries are written to
+Honcho unless you set it to `off`.
 
 ---
 
@@ -478,9 +479,11 @@ Honcho receives the run's condensed prompt and answer — the same `prompt_summa
 `answer_summary` the built-in memory stores, each already capped at 2,000 bytes — one
 attributed to your peer and one to the assistant's. Three things all have to be true
 for that to happen: `LEMON_HONCHO_SAVE_MESSAGES` is true (the default), the
-`session_search` feature is enabled (it defaults to **off**, so on a stock install
-nothing is uploaded at all), and the summaries pass Lemon's secret screen — a run whose
-summaries look like they carry a credential is never handed to any memory provider.
+`session_search` feature is enabled (it defaults to **default-on**, so on a stock
+install this is true; `LEMON_FEATURE_SESSION_SEARCH=off` is the kill switch), and the
+summaries pass Lemon's secret screen — a run whose summaries look like they carry a
+credential is dropped entirely, never redacted, and never handed to any memory
+provider.
 
 **2. Your current message, as a retrieval query.** This one is verbatim text you typed,
 not a summary. It is sent with each background refresh so that what Honcho returns is

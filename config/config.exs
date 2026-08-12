@@ -50,6 +50,7 @@ config :lemon_core, :workspace_diagnostics,
 # See LemonCore.Doctor.RuntimeModules.
 config :lemon_core, :doctor_runtime,
   memory_providers: LemonMemory.Providers,
+  memory_store: LemonMemory.Store,
   media_jobs: LemonMedia.MediaJobs,
   media_supervisor: LemonMedia.MediaJobSupervisor,
   browser_artifacts: LemonBrowser.Artifacts,

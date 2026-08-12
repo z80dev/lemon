@@ -8,8 +8,9 @@ defmodule LemonMemory.Ingest do
   - Ingest runs in a dedicated `GenServer` so it never blocks run finalization.
   - Ingest failures are logged and silently dropped — they must never crash or
     slow down the caller.
-  - The `session_search` feature flag gates whether ingest is active.  When the
-    flag is `:off` (the default), calls to `ingest/3` are no-ops.
+  - The `session_search` feature flag gates whether ingest is active. The flag
+    defaults to `:"default-on"`; set `LEMON_FEATURE_SESSION_SEARCH=off` (or
+    `[features] session_search = "off"`) to make `ingest/3` a no-op.
   - Feature flags are resolved from config loaded via the injected
     `:config_loader` and cached in the server state with a short TTL
     (`:config_ttl_ms`, default 30s), so a full TOML config load does
@@ -200,8 +201,9 @@ defmodule LemonMemory.Ingest do
     end
   end
 
-  # All flags default to :off when the loaded config carries no usable
-  # [features] section (e.g. the loader raised and was rescued above).
+  # Struct defaults apply when the loaded config carries no usable [features]
+  # section (e.g. the loader raised and was rescued above). Note session_search
+  # defaults to :"default-on", so the rescue path resolves to ingest ACTIVE.
   defp extract_features(config) do
     case config do
       %{features: %Features{} = features} -> features
