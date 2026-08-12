@@ -145,13 +145,9 @@ defmodule CodingAgent.Session.Lifecycle do
       )
 
     stream_fn =
-      if Keyword.get(opts, :model) == nil do
-        opts
-        |> Keyword.get(:stream_fn)
-        |> ProviderFallback.maybe_wrap(model, settings_manager, cwd)
-      else
-        Keyword.get(opts, :stream_fn)
-      end
+      opts
+      |> Keyword.get(:stream_fn)
+      |> ProviderFallback.maybe_wrap(model, settings_manager, cwd)
 
     agent_registry_key = {session_manager.header.id, :main, 0}
 

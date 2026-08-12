@@ -913,10 +913,14 @@ when the configured default provider has no ready credentials, routing is
 enabled, and a configured fallback/profile/pool provider has credentials plus
 the same model id in `LemonAi.Models`, `CodingAgent.Session.ModelResolver` selects
 the fallback before starting the supervised `LemonAgent.Agent`. Explicit user
-model specs are not rewritten. Default-model streams are also wrapped by
+model specs are never rewritten at resolution time. All session streams —
+default and explicit `--model` alike, including sessions started through
+`CodingAgent.GatewayEngine.SessionRunner` — are wrapped by
 `CodingAgent.Session.ProviderFallback`: if the selected provider fails before
 visible assistant content or tool calls are emitted, the same turn is retried
 against the next credential-ready fallback provider with the same model id.
+The wrapper is a no-op (the stream fn is returned untouched) when
+`ModelResolver.runtime_fallback_models/2` yields no candidates.
 
 Key config paths (via `CodingAgent.Config`):
 

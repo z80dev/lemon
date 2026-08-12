@@ -127,6 +127,10 @@ defmodule CodingAgent.GatewayEngine.SessionRunner do
     agent_id = job_agent_id(job)
     async_followups = async_followups(job)
     extra_tools = gateway_extra_tools(job, run_opts)
+
+    # Passed through to CodingAgent.Session, whose Lifecycle.initialize applies
+    # CodingAgent.Session.ProviderFallback.maybe_wrap (a no-op when no runtime
+    # fallback candidates exist). Do not wrap here: that would double-wrap.
     stream_fn = get_opt(run_opts, :stream_fn)
 
     emitter_state = %Emitter{sink_pid: sink_pid, run_ref: run_ref}
