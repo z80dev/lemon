@@ -34,6 +34,10 @@ defmodule LemonPlatformTest.SubagentRunnerCase do
       *terminates*, because a tool call is blocked on it.
     * `cancel/1` (optional) — total and idempotent, including for a session it
       never produced.
+    * `resume_format/0` (optional) — the engine's resume-command syntax, as a
+      `LemonCore.ResumeFormat`, registered under `id/0` and able to read back
+      the command it printed. Omitting it means the platform reads and prints
+      the generic `<engine> resume <value>` for this engine.
     * `default_policy/0` (optional) — the tool policy profile children get.
     * `routable?/0` (optional) — whether `id/0` is also a router-visible engine.
 
@@ -70,6 +74,8 @@ defmodule LemonPlatformTest.SubagentRunnerCase do
     * `:run_probe` — `{Module, :function}` returning the keyword list passed to
       `start/1`, called with the test context. Off by default.
     * `:run_timeout` — milliseconds the probe may take. Default `10_000`.
+    * `:resume_sample` — a token value your `resume_format/0` pattern accepts,
+      used to check the print/parse round-trip. Default `"ses_abc123"`.
   """
 
   use ExUnit.CaseTemplate
@@ -107,6 +113,48 @@ defmodule LemonPlatformTest.SubagentRunnerCase do
   end
 
   @doc """
+  Checks a runner's `resume_format/0` against `sample`, a token value its
+  pattern is expected to accept.
+
+  `:ok`, or `{:error, message}` naming the half of the round-trip that broke:
+  printing a command the format cannot recognise, or recognising one it then
+  reads a different value out of, leaves the platform pinning resume lines it
+  cannot resolve.
+  """
+  @spec check_resume_format(module(), String.t()) :: :ok | {:error, String.t()}
+  def check_resume_format(runner, sample) when is_binary(sample) do
+    format = runner.resume_format()
+
+    cond do
+      not is_struct(format, LemonCore.ResumeFormat) ->
+        {:error, "resume_format/0 must return a LemonCore.ResumeFormat, got: #{inspect(format)}"}
+
+      format.engine != runner.id() ->
+        {:error,
+         "resume_format/0 is registered under its :engine, which must be id/0 " <>
+           "(#{inspect(runner.id())}), got: #{inspect(format.engine)}"}
+
+      true ->
+        check_resume_round_trip(format, sample)
+    end
+  end
+
+  defp check_resume_round_trip(format, sample) do
+    line = LemonCore.ResumeFormat.render(format, sample)
+
+    cond do
+      not LemonCore.ResumeFormat.resume_line?(format, line) ->
+        {:error, "a line resume_format/0 printed is not recognised as one: #{inspect(line)}"}
+
+      LemonCore.ResumeFormat.capture(format, line) != sample ->
+        {:error, "resume_format/0 does not read #{inspect(sample)} back out of #{inspect(line)}"}
+
+      true ->
+        :ok
+    end
+  end
+
+  @doc """
   Drains `events/1` until a terminal event, returning the events seen.
 
   Raises when the stream does not end within `timeout_ms`, which is the failure
@@ -132,12 +180,14 @@ defmodule LemonPlatformTest.SubagentRunnerCase do
     registry? = Keyword.get(opts, :registry, true)
     run_probe = Keyword.get(opts, :run_probe)
     run_timeout = Keyword.get(opts, :run_timeout, 10_000)
+    resume_sample = Keyword.get(opts, :resume_sample, "ses_abc123")
     label = Macro.to_string(runner)
 
     quote do
       @runner unquote(runner)
       @run_probe unquote(run_probe)
       @run_timeout unquote(run_timeout)
+      @resume_sample unquote(resume_sample)
 
       describe unquote(label <> " behaviour declaration") do
         test "declares LemonCore.SubagentRunner" do
@@ -196,6 +246,15 @@ defmodule LemonPlatformTest.SubagentRunnerCase do
           if function_exported?(@runner, :routable?, 0) do
             assert is_boolean(apply(@runner, :routable?, []))
             assert apply(@runner, :routable?, []) == apply(@runner, :routable?, [])
+          end
+        end
+
+        test "resume_format/0, when exported, reads back what it printed" do
+          if function_exported?(@runner, :resume_format, 0) do
+            assert LemonPlatformTest.SubagentRunnerCase.check_resume_format(
+                     @runner,
+                     @resume_sample
+                   ) == :ok
           end
         end
 

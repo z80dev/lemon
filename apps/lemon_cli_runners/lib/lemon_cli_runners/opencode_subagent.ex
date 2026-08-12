@@ -44,6 +44,7 @@ defmodule LemonCliRunners.OpencodeSubagent do
   The pattern is wider than what `render_resume/1` prints: opencode accepts
   `run --session` and `-s` too, and users paste what their shell history holds.
   """
+  @impl true
   @spec resume_format() :: ResumeFormat.t()
   def resume_format do
     ResumeFormat.new(id(),

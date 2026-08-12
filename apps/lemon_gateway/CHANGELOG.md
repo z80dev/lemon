@@ -47,6 +47,12 @@ agent to an engine runtime anything can register with.
 
 ### Removed
 
+- **The `droid` engine is gone**, along with its runner, subagent, schema and
+  the `FACTORY_API_KEY` variable. There is no migration shim: persisted state
+  that names it — a binding or webhook `default_engine`, a sticky engine
+  selection, a scheduled job row, a stored resume token — no longer resolves to
+  an engine, and the run fails rather than falling back. Re-point anything set
+  to `droid` at another engine before upgrading.
 - **The Farcaster transport is gone** (about 1.4k LOC of transport and tests,
   plus its configuration keys, validators and 6 environment variables:
   `FARCASTER_*` and `LEMON_GATEWAY_ENABLE_FARCASTER`). It was off by default

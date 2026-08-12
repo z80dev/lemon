@@ -19,7 +19,11 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
   its own application starts; the agent reads the registry for its engine list,
   its per-engine tool-description prose, and each engine's default tool policy,
   so no vendor is named in the agent. Runners that declare themselves routable
-  also extend `LemonCore.EngineCatalog`'s known-engine set.
+  publish their id to `:lemon_core, :registered_engines`, which
+  `LemonCore.EngineCatalog` unions with its built-in defaults. Registration
+  never writes `:known_engines`: that key is the operator's own list, and when
+  it is set it is the whole answer, so narrowing it still disables an engine the
+  build happens to ship.
 - `LemonCore.ResumeFormat` and `LemonCore.ResumeFormats` — the extension point
   behind `LemonCore.ResumeToken`. An engine registers how it spells "resume"
   (a pattern to find its token in text, a renderer to print one) when its own

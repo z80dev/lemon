@@ -138,6 +138,7 @@ defmodule LemonCliRunners.CodexSubagent do
   The Codex CLI's resume syntax, registered into `LemonCore.ResumeFormats` at
   boot so the platform can print and parse it without knowing this vendor.
   """
+  @impl true
   @spec resume_format() :: ResumeFormat.t()
   def resume_format do
     ResumeFormat.new(id(),

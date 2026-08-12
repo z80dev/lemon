@@ -44,6 +44,7 @@ defmodule LemonCliRunners.PiSubagent do
   Pi identifies a session by transcript path, which may contain spaces — hence
   the quoting on the way out and the unquoting on the way back in.
   """
+  @impl true
   @spec resume_format() :: ResumeFormat.t()
   def resume_format do
     ResumeFormat.new(id(),

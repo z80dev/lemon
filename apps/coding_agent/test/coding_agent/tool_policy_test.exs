@@ -275,29 +275,20 @@ defmodule CodingAgent.ToolPolicyTest do
       assert policy.deny == []
     end
 
-    test "codex is restricted" do
-      policy = ToolPolicy.engine_policy(:codex)
+    # Which vendor engines exist is `lemon_cli_runners`' business, and each
+    # runner's own compliance suite covers the profile it registers. What this
+    # app owns is the answer for an id the registry cannot resolve.
+    test "an engine no runner registered is restricted, not granted" do
+      policy = ToolPolicy.engine_policy(:no_such_engine)
 
       refute ToolPolicy.allowed?(policy, "bash")
       refute ToolPolicy.allowed?(policy, "write")
-    end
-
-    test "claude is restricted" do
-      policy = ToolPolicy.engine_policy(:claude)
-
-      refute ToolPolicy.allowed?(policy, "bash")
-    end
-
-    test "kimi is restricted" do
-      policy = ToolPolicy.engine_policy(:kimi)
-
-      refute ToolPolicy.allowed?(policy, "bash")
     end
   end
 
   describe "subagent_policy/2" do
     test "inherits engine restrictions" do
-      policy = ToolPolicy.subagent_policy(:codex, [])
+      policy = ToolPolicy.subagent_policy(:no_such_engine, [])
 
       refute ToolPolicy.allowed?(policy, "bash")
       refute ToolPolicy.allowed?(policy, "agent")

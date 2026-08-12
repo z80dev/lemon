@@ -20,7 +20,9 @@ defmodule CodingAgent.Tools.TaskTest.ProbeSubagent do
 end
 
 defmodule CodingAgent.Tools.TaskTest do
-  use ExUnit.Case, async: true
+  # The registry this suite registers a probe runner into is process-global and
+  # persisted to application env, so it cannot share the VM with the async pass.
+  use ExUnit.Case, async: false
 
   alias CodingAgent.Tools.TaskTest.ProbeSubagent
 
@@ -266,8 +268,8 @@ defmodule CodingAgent.Tools.TaskTest do
           []
         )
 
-      assert {:error, "Engine must be one of: internal, codex, claude, kimi, opencode, pi"} =
-               result
+      assert {:error, message} = result
+      assert message == "Engine must be one of: " <> Enum.join(Params.valid_engines(), ", ")
     end
 
     test "returns error when engine is not a string" do
@@ -303,8 +305,8 @@ defmodule CodingAgent.Tools.TaskTest do
           []
         )
 
-      assert {:error, "Engine must be one of: internal, codex, claude, kimi, opencode, pi"} =
-               result
+      assert {:error, message} = result
+      assert message == "Engine must be one of: " <> Enum.join(Params.valid_engines(), ", ")
     end
 
     test "returns error when model is not a string" do

@@ -72,9 +72,16 @@ defmodule LemonCore.SubagentRunner do
       `:ok` for a session that already finished, and for one whose process is
       gone. Runners that cannot be cancelled simply omit it.
     * `c:resume_token/1` — the token a later `resume` would take, or `nil`.
-    * `c:default_policy/0` — the `CodingAgent.ToolPolicy` profile children of
-      this runner get by default. Omitting it means `#{inspect(:subagent_restricted)}`,
-      which is the right answer for anything running outside this VM.
+    * `c:resume_format/0` — how this runner's engine spells "resume" on a
+      command line, as a `LemonCore.ResumeFormat`. Register it alongside the
+      runner (`LemonCore.ResumeFormats.register(MyApp.Subagent.resume_format())`)
+      so the platform can read and print resume commands in your syntax.
+      Omitting it means the generic `<engine> resume <value>` shape.
+    * `c:default_policy/0` — the tool-policy profile children of this runner get
+      by default. The value is an opaque profile name the host interprets
+      (`CodingAgent.ToolPolicy` is the reference host). Omitting it means
+      `#{inspect(:subagent_restricted)}`, which is the right answer for anything
+      running outside this VM.
     * `c:routable?/0` — whether `c:id/0` is *also* a gateway engine id the
       router may switch a conversation to. Default `true`. The in-process
       runner answers `false`: its runner id (`"internal"`) is a tool-level
@@ -136,10 +143,15 @@ defmodule LemonCore.SubagentRunner do
   @callback events(session()) :: Enumerable.t()
   @callback cancel(session()) :: :ok
   @callback resume_token(session()) :: LemonCore.ResumeToken.t() | nil
+  @callback resume_format() :: LemonCore.ResumeFormat.t()
   @callback default_policy() :: atom()
   @callback routable?() :: boolean()
 
-  @optional_callbacks cancel: 1, resume_token: 1, default_policy: 0, routable?: 0
+  @optional_callbacks cancel: 1,
+                      resume_token: 1,
+                      resume_format: 0,
+                      default_policy: 0,
+                      routable?: 0
 
   @default_policy :subagent_restricted
 

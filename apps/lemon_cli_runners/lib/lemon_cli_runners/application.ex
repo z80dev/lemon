@@ -63,9 +63,22 @@ defmodule LemonCliRunners.Application do
     end)
   end
 
+  # `resume_format/0` is an optional callback, and a format the parser refuses
+  # is this package's bug — but neither may take a release down at boot, so the
+  # shape here matches `register_subagents/0`: log and carry on with a runner
+  # whose resume lines are simply not recognised.
   defp register_resume_formats do
-    Enum.each(@subagents, fn module ->
+    Enum.each(@subagents, &register_resume_format/1)
+  end
+
+  defp register_resume_format(module) do
+    if Code.ensure_loaded?(module) and function_exported?(module, :resume_format, 0) do
       LemonCore.ResumeFormats.register(module.resume_format())
-    end)
+    end
+  rescue
+    error ->
+      Logger.error(
+        "resume format for #{inspect(module)} not registered: " <> Exception.message(error)
+      )
   end
 end

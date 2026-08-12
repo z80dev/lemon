@@ -8,8 +8,11 @@ defmodule LemonChannels.EngineRegistry do
        engines may accept syntax nothing else knows about;
     2. `LemonCore.ResumeToken`, which reads whatever resume formats the vendor
        packages registered at boot;
-    3. the generic `<engine> resume <token>` line, accepted for any engine
-       `LemonCore.EngineCatalog` knows.
+    3. the generic resume line — `<engine> resume|--resume|--session <token>`,
+       the shapes CLIs actually use — accepted for any engine
+       `LemonCore.EngineCatalog` knows. This is the floor for a runtime whose
+       engine packages are absent: it names no vendor, but it still reads what
+       a user pastes.
 
   Unlike `LemonCore.ResumeToken.extract_resume/1`, this is line-strict: a user
   message is prose, and a resume token is only honoured when the user wrote a
@@ -18,7 +21,7 @@ defmodule LemonChannels.EngineRegistry do
 
   alias LemonCore.{EngineCatalog, EngineInfoBridge, ResumeToken}
 
-  @generic_resume ~r/^([a-z0-9_-]+)\s+resume\s+([^\s`]+)$/i
+  @generic_resume ~r/^([a-z0-9_-]+)\s+(?:resume|--resume|--session)\s+([^\s`]+)$/i
 
   @spec extract_resume(String.t()) :: {:ok, ResumeToken.t()} | :none
   def extract_resume(text) when is_binary(text) do

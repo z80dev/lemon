@@ -453,8 +453,12 @@ defmodule CodingAgent.ToolPolicy do
   `:subagent_restricted` — the right answer for anything running outside this
   VM. The in-process runner overrides it to `:full_access`.
 
-  An engine nothing registered gets `:full_access`: it is not a subagent this
-  tool spawned, so there is no child to restrict.
+  A *named* engine the registry does not know gets `:subagent_restricted`, not
+  `:full_access`: being asked about an engine id at all means a child is about
+  to run under it, and the registry missing it means the package that owns it is
+  not loaded — a reason to withhold permission, not to grant it. Only the
+  no-engine case (`nil`, a non-id) means "this VM's own agent" and keeps full
+  access.
   """
   @spec engine_policy(atom() | String.t()) :: policy()
   def engine_policy(engine) when is_atom(engine) and not is_nil(engine) do
@@ -463,7 +467,7 @@ defmodule CodingAgent.ToolPolicy do
 
   def engine_policy(engine) when is_binary(engine) do
     case LemonCore.SubagentRegistry.policy(engine) do
-      nil -> from_profile(:full_access)
+      nil -> from_profile(:subagent_restricted)
       profile -> from_profile(profile)
     end
   end

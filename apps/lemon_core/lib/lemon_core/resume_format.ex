@@ -17,8 +17,8 @@ defmodule LemonCore.ResumeFormat do
   ## Fields
 
     * `:engine` — the engine id the format belongs to.
-    * `:pattern` — a regex with exactly one capture group, matched *anywhere*
-      in a blob of text. The capture is the token value.
+    * `:pattern` — a regex matched *anywhere* in a blob of text. Its first
+      capture group is the token value; there is rarely a reason for a second.
     * `:strict_pattern` — the anchored form, used to decide whether a whole line
       is nothing but a resume command. Derived from `:pattern` unless given.
     * `:render` — `(value -> command line)`. Prefer an external function capture
@@ -74,12 +74,18 @@ defmodule LemonCore.ResumeFormat do
   @spec render(t(), String.t()) :: String.t()
   def render(%__MODULE__{render: render}, value) when is_binary(value), do: render.(value)
 
-  @doc "The token value this format finds in `text`, or `nil`."
+  @doc """
+  The token value this format finds in `text`, or `nil`.
+
+  Extra capture groups are ignored rather than rejected: a pattern
+  `resume_line?/2` accepts must never be one `capture/2` silently answers `nil`
+  for, or the platform would pin a line it cannot then read.
+  """
   @spec capture(t(), String.t()) :: String.t() | nil
   def capture(%__MODULE__{pattern: pattern, normalize: normalize}, text) when is_binary(text) do
     case Regex.run(pattern, text) do
-      [_, value] when is_function(normalize, 1) -> normalize.(value)
-      [_, value] -> value
+      [_, value | _] when is_function(normalize, 1) -> normalize.(value)
+      [_, value | _] -> value
       _ -> nil
     end
   end

@@ -153,6 +153,7 @@ defmodule LemonCore.SubagentRegistryTest do
   setup do
     original = Application.fetch_env(:lemon_core, :subagent_runners)
     original_engines = Application.fetch_env(:lemon_core, :known_engines)
+    original_registered = Application.fetch_env(:lemon_core, :registered_engines)
     registered_before = MapSet.new(SubagentRegistry.list_ids())
 
     on_exit(fn ->
@@ -162,6 +163,7 @@ defmodule LemonCore.SubagentRegistryTest do
 
       restore(:subagent_runners, original)
       restore(:known_engines, original_engines)
+      restore(:registered_engines, original_registered)
     end)
 
     :ok
@@ -272,6 +274,16 @@ defmodule LemonCore.SubagentRegistryTest do
 
       assert EngineCatalog.known?("lemon")
       assert EngineCatalog.known?("codex")
+    end
+
+    test "an operator's configured engine list is a ceiling registration cannot widen" do
+      Application.put_env(:lemon_core, :known_engines, ["lemon"])
+
+      assert SubagentRegistry.register(Routable) == :ok
+
+      assert EngineCatalog.list_ids() == ["lemon"]
+      refute EngineCatalog.known?("test-routable")
+      refute EngineCatalog.known?("codex")
     end
   end
 

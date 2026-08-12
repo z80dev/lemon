@@ -58,31 +58,34 @@ defmodule CodingAgent.Tools.Task.Params do
   @spec valid_queue_modes() :: [String.t()]
   def valid_queue_modes, do: @valid_queue_modes
 
+  @doc "The engine this tool runs when the caller names none."
+  @spec default_engine() :: String.t()
+  def default_engine, do: @default_engine
+
   @doc """
   Engine ids the `engine` parameter accepts, default engine first.
 
   Read from `LemonCore.SubagentRegistry` on every call rather than cached: the
   tool schema is rebuilt per turn, and an engine exists exactly as long as the
   application that registered it is running.
+
+  The default engine is always in the list, whether or not its runner
+  registered. It is what the tool's own description tells the model to use, and
+  an empty list is a JSON-Schema `enum` no value satisfies — a degraded registry
+  must cost us the vendor engines, not the tool.
   """
   @spec valid_engines() :: [String.t()]
-  def valid_engines, do: Enum.map(engine_entries(), & &1.id)
+  def valid_engines do
+    Enum.uniq([@default_engine | Enum.map(engine_entries(), & &1.id)])
+  end
 
   @doc "Prose for the `engine` parameter, naming what each registered engine is."
   @spec engine_param_description() :: String.t()
   def engine_param_description do
-    case engine_entries() do
-      [] ->
-        "Execution engine (none registered)"
-
-      entries ->
-        "Execution engine: " <>
-          (entries
-           |> Enum.map(fn entry ->
-             if entry.id == @default_engine, do: "#{entry.id} (default)", else: entry.id
-           end)
-           |> Enum.join(", "))
-    end
+    "Execution engine: " <>
+      (valid_engines()
+       |> Enum.map(fn id -> if id == @default_engine, do: "#{id} (default)", else: id end)
+       |> Enum.join(", "))
   end
 
   defp engine_entries do

@@ -24,15 +24,17 @@ defmodule LemonCore.SubagentRegistry do
   ## Relationship to `LemonCore.EngineCatalog`
 
   Registering a runner whose `c:LemonCore.SubagentRunner.routable?/0` is true
-  adds its id to `:lemon_core, :known_engines`, so router-level engine
-  validation reflects what is actually installed. The sync only ever *adds*:
-  the catalog's static list stays the floor, and unregistering does not shrink
-  it, because an operator's configured engine list is a statement of intent
-  rather than a cache of this process's state.
+  publishes its id to `:lemon_core, :registered_engines`, which the catalog
+  unions with its built-in defaults, so router-level engine validation reflects
+  what is actually installed.
+
+  It deliberately does *not* touch `:lemon_core, :known_engines`: that key is
+  the operator's own list, and an operator who narrows it to disable an engine
+  must not have it widened again by whichever package happens to be in the
+  release. When it is set, the catalog ignores registrations entirely.
   """
   use GenServer
 
-  alias LemonCore.EngineCatalog
   alias LemonCore.SubagentRunner
 
   require Logger
@@ -60,27 +62,30 @@ defmodule LemonCore.SubagentRegistry do
   Registers a runner module.
 
   Idempotent; re-registering an id with a different module replaces it.
-  Returns `{:error, :unavailable}` when the registry is not running, so an
-  application booting outside a lemon_core runtime does not crash, and
-  `{:error, reason}` when the module does not satisfy the contract.
+  Returns `{:error, :unavailable}` for any registry exit — not running, mid
+  restart, call timed out — so an application booting outside a lemon_core
+  runtime does not crash, and `{:error, reason}` when the module does not
+  satisfy the contract.
   """
   @spec register(module()) :: :ok | {:error, term()}
   def register(module) when is_atom(module) do
     GenServer.call(__MODULE__, {:register, module})
   catch
-    :exit, {:noproc, _} -> {:error, :unavailable}
-    :exit, {:normal, _} -> {:error, :unavailable}
+    :exit, _ -> {:error, :unavailable}
   end
 
   @doc """
   Removes the runner registered under `id`. Always `:ok`, even if there is none.
+
+  With the registry down this still drops the module from the persisted list,
+  because `entries/0` falls back to that list: answering `:ok` while every
+  reader still sees the runner would be a lie.
   """
   @spec unregister(id()) :: :ok
   def unregister(id) when is_binary(id) do
     GenServer.call(__MODULE__, {:unregister, id})
   catch
-    :exit, {:noproc, _} -> :ok
-    :exit, {:normal, _} -> :ok
+    :exit, _ -> forget(id)
   end
 
   @doc "All registered runners, in registration order."
@@ -181,6 +186,19 @@ defmodule LemonCore.SubagentRegistry do
 
   defp persist(modules), do: Application.put_env(:lemon_core, :subagent_runners, modules)
 
+  # The write-side twin of `safe_call/2`: with no process to hold state, the
+  # persisted list *is* the registry, so unregistering has to edit it directly.
+  defp forget(id) do
+    kept =
+      Enum.reject(configured_modules(), fn module ->
+        match?({:ok, ^id}, runner_id(module))
+      end)
+
+    persist(kept)
+
+    :ok
+  end
+
   defp build_entries(modules) do
     Enum.reduce(modules, [], fn module, acc ->
       case build_entry(module) do
@@ -272,11 +290,11 @@ defmodule LemonCore.SubagentRegistry do
 
   defp sync_engine_catalog(entries) do
     routable = entries |> Enum.filter(& &1.routable?) |> Enum.map(& &1.id)
-    known = EngineCatalog.list_ids()
-    merged = Enum.uniq(known ++ routable)
+    published = Application.get_env(:lemon_core, :registered_engines, [])
+    merged = Enum.uniq(List.wrap(published) ++ routable)
 
-    if merged != known do
-      Application.put_env(:lemon_core, :known_engines, merged)
+    if merged != published do
+      Application.put_env(:lemon_core, :registered_engines, merged)
     end
 
     :ok
