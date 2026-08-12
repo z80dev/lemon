@@ -73,11 +73,12 @@ config :lemon_core, :env_registries, [
   LemonEvals.Env,
   LemonGateway.Env,
   LemonRouter.Env,
-  LemonSimUi.Env,
   LemonSkills.Env,
-  LemonTcg.Env,
   LemonWeb.Env,
-  XApi.Env
+  XApi.Env,
+  # lemon-sim product block — moves to the lemon-sim repo (docs/platform-split.md Phase 5)
+  LemonSimUi.Env,
+  LemonTcg.Env
 ]
 
 config :lemon_channels,
@@ -140,6 +141,16 @@ config :lemon_web, LemonWeb.Endpoint,
 config :lemon_web, :access_token, nil
 config :lemon_web, :uploads_dir, Path.join(System.tmp_dir!(), "lemon_web_uploads")
 
+# Phoenix endpoints whose HTTP port LemonCore.Runtime.Env.apply_ports/1 rewrites
+# at boot, as {port_field_on_the_Env_struct, otp_app, endpoint_module}. Declared
+# here rather than in lemon_core so the platform never names a product's module.
+config :lemon_core, :runtime_endpoints, [
+  {:web_port, :lemon_web, LemonWeb.Endpoint},
+  # lemon-sim product block — moves to the lemon-sim repo (see docs/platform-split.md Phase 5)
+  {:sim_port, :lemon_sim_ui, LemonSimUi.Endpoint}
+]
+
+# ── lemon-sim product block — moves to the lemon-sim repo (docs/platform-split.md Phase 5) ──
 config :lemon_sim_ui, LemonSimUi.Endpoint,
   adapter: Bandit.PhoenixAdapter,
   url: [host: "localhost"],
@@ -168,6 +179,8 @@ config :lemon_sim_ui, :hosted_ai_concurrency, 4
 # Always-on model arenas (leagues). Each domain stays disabled unless its
 # LEMON_ARENA_<DOMAIN>_MODELS env is provided at runtime; see config/runtime.exs.
 config :lemon_sim_ui, :arenas, []
+
+# ── end lemon-sim product block ──
 
 # Sample configuration:
 #

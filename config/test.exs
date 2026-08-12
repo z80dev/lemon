@@ -93,6 +93,7 @@ config :lemon_gateway, :telegram, nil
 # Keep browser.request parity tests node-only; don't try to auto-fallback to the local driver in tests.
 config :lemon_control_plane, :browser_local_fallback, false
 
+# ── lemon-sim product block — moves to the lemon-sim repo (docs/platform-split.md Phase 5) ──
 config :lemon_sim_ui, LemonSimUi.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4092],
   secret_key_base:
@@ -101,6 +102,7 @@ config :lemon_sim_ui, LemonSimUi.Endpoint,
 
 config :lemon_sim_ui, :hosted_rooms_enabled, true
 config :lemon_sim_ui, :allow_insecure_admin, true
+# ── end lemon-sim product block ──
 
 config :lemon_web, LemonWeb.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4082],

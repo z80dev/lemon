@@ -152,6 +152,53 @@ defmodule LemonCore.Runtime.EnvTest do
         end
       end
     end
+
+    test "applies the port of any endpoint declared in :runtime_endpoints" do
+      original = Application.get_env(:lemon_core, :runtime_endpoints, [])
+
+      try do
+        Application.put_env(:lemon_core, :runtime_endpoints, [
+          {:web_port, :some_product_app, SomeProduct.Endpoint}
+        ])
+
+        Env.apply_ports(%Env{control_port: 4040, web_port: 9191, sim_port: 4090})
+
+        result = Application.get_env(:some_product_app, SomeProduct.Endpoint, [])
+
+        assert result[:server] == true
+        assert result[:http][:port] == 9191
+        assert result[:http][:ip] == {127, 0, 0, 1}
+      after
+        Application.delete_env(:some_product_app, SomeProduct.Endpoint)
+        Application.put_env(:lemon_core, :runtime_endpoints, original)
+      end
+    end
+
+    test "ignores an endpoint declared against an unknown port field" do
+      original = Application.get_env(:lemon_core, :runtime_endpoints, [])
+
+      try do
+        Application.put_env(:lemon_core, :runtime_endpoints, [
+          {:no_such_port, :some_product_app, SomeProduct.Endpoint}
+        ])
+
+        assert :ok = Env.apply_ports(%Env{control_port: 4040, web_port: 4080, sim_port: 4090})
+        assert Application.get_env(:some_product_app, SomeProduct.Endpoint) == nil
+      after
+        Application.put_env(:lemon_core, :runtime_endpoints, original)
+      end
+    end
+
+    test "the platform declares no product endpoint modules of its own" do
+      # lemon_core must never name a product's endpoint: the bindings come from
+      # config so the sim (and any other product) can leave without touching it.
+      for {_field, otp_app, endpoint} <- Env.runtime_endpoints() do
+        assert is_atom(otp_app)
+        assert is_atom(endpoint)
+      end
+
+      refute Env.runtime_endpoints() == []
+    end
   end
 
   defp clear_env(keys) do

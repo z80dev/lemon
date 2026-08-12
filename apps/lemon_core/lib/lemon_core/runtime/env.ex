@@ -24,8 +24,6 @@ defmodule LemonCore.Runtime.Env do
   @default_control_port 4040
   @default_web_port 4080
   @default_sim_port 4090
-  @lemon_web_endpoint :"Elixir.LemonWeb.Endpoint"
-  @lemon_sim_ui_endpoint :"Elixir.LemonSimUi.Endpoint"
 
   defstruct control_port: @default_control_port,
             web_port: @default_web_port,
@@ -161,14 +159,41 @@ defmodule LemonCore.Runtime.Env do
   Applies resolved port values to the OTP application environment so running
   apps pick up the right port without restarts.
 
+  Phoenix endpoints are not named here. Each one is declared in config as a
+  `{port_field, otp_app, endpoint_module}` triple:
+
+      config :lemon_core, :runtime_endpoints, [
+        {:web_port, :lemon_web, LemonWeb.Endpoint}
+      ]
+
+  so a build that does not ship a given Phoenix app simply has no entry for it,
+  and this module keeps its place at the bottom of the dependency graph.
+  Unknown port fields are ignored.
+
   Safe to call multiple times (idempotent).
   """
   @spec apply_ports(t()) :: :ok
   def apply_ports(%__MODULE__{} = env) do
     apply_control_port(env.control_port)
-    apply_web_port(env.web_port)
-    apply_sim_port(env.sim_port)
+
+    ports = Map.from_struct(env)
+
+    Enum.each(runtime_endpoints(), fn {port_field, otp_app, endpoint} ->
+      case Map.get(ports, port_field) do
+        port when is_integer(port) -> apply_endpoint_port(otp_app, endpoint, port)
+        _ -> :ok
+      end
+    end)
+
     :ok
+  end
+
+  @doc """
+  The configured `{port_field, otp_app, endpoint_module}` endpoint bindings.
+  """
+  @spec runtime_endpoints() :: [{atom(), atom(), module()}]
+  def runtime_endpoints do
+    Application.get_env(:lemon_core, :runtime_endpoints, [])
   end
 
   # ──────────────────────────────────────────────────────────────────────────
@@ -195,27 +220,17 @@ defmodule LemonCore.Runtime.Env do
     Application.put_env(:lemon_control_plane, :port, port)
   end
 
-  defp apply_web_port(port) do
-    existing = Application.get_env(:lemon_web, @lemon_web_endpoint, [])
+  defp apply_endpoint_port(otp_app, endpoint, port) do
+    existing = Application.get_env(otp_app, endpoint, [])
     existing_http = Keyword.get(existing, :http, [])
     merged_http = Keyword.merge(existing_http, ip: {127, 0, 0, 1}, port: port)
 
     Application.put_env(
-      :lemon_web,
-      @lemon_web_endpoint,
+      otp_app,
+      endpoint,
       existing
       |> Keyword.put(:server, true)
       |> Keyword.put(:http, merged_http)
-    )
-  end
-
-  defp apply_sim_port(port) do
-    existing = Application.get_env(:lemon_sim_ui, @lemon_sim_ui_endpoint, [])
-
-    Application.put_env(
-      :lemon_sim_ui,
-      @lemon_sim_ui_endpoint,
-      Keyword.merge(existing, server: true, http: [ip: {127, 0, 0, 1}, port: port])
     )
   end
 end

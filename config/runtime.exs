@@ -98,6 +98,9 @@ if is_binary(access_token) and access_token != "" do
   config :lemon_web, :access_token, access_token
 end
 
+# ── lemon-sim product block (1 of 3) — moves to the lemon-sim repo (docs/platform-split.md
+# Phase 5). `sim_ui_endpoint_enabled?` defined here is read again by block 3, so the two
+# must move together and keep this order. ──
 sim_ui_access_token = normalized_env.("LEMON_SIM_UI_ACCESS_TOKEN")
 
 if is_binary(sim_ui_access_token) and byte_size(sim_ui_access_token) < 32 do
@@ -156,6 +159,7 @@ if is_binary(sim_ui_access_token) and sim_ui_access_token != "" do
   config :lemon_sim_ui, :access_token, sim_ui_access_token
 end
 
+# Every call site of this helper is in a lemon-sim block, so it leaves with them.
 parse_runtime_boolean = fn name, value ->
   case value && String.downcase(value) do
     value when value in ["1", "true"] -> true
@@ -175,6 +179,8 @@ sim_ui_suite_roots = normalized_env.("LEMON_SIM_UI_SUITE_ROOTS")
 if is_binary(sim_ui_suite_roots) do
   config :lemon_sim_ui, :suite_roots, String.split(sim_ui_suite_roots, ":", trim: true)
 end
+
+# ── end lemon-sim product block (1 of 3) ──
 
 uploads_dir = normalized_env.("LEMON_WEB_UPLOADS_DIR")
 
@@ -215,6 +221,9 @@ if is_binary(goal_judge_model) do
   config :lemon_automation, :goal_judge_model, goal_judge_model
 end
 
+# ── lemon-sim product block (2 of 3) — arenas, hosted rooms, philosopher chat and
+# the sim auto-loop; moves to the lemon-sim repo (docs/platform-split.md Phase 5) ──
+#
 # Always-on model arenas: each configured domain continuously runs league
 # games with a randomized model lineup per game and records standings under
 # its league dir. Enable a domain by setting LEMON_ARENA_<DOMAIN>_MODELS
@@ -512,6 +521,8 @@ if auto_loop_enabled? do
   ]
 end
 
+# ── end lemon-sim product block (2 of 3) ──
+
 if config_env() == :prod do
   release_name = System.get_env("RELEASE_NAME")
 
@@ -562,6 +573,7 @@ if config_env() == :prod do
 
   configure_endpoint.(:lemon_web, LemonWeb.Endpoint, "LEMON_WEB", 4080, "lemon_runtime_full")
 
+  # ── lemon-sim product block (3 of 3) — one call of the generic helper above ──
   configure_endpoint.(
     :lemon_sim_ui,
     LemonSimUi.Endpoint,
@@ -569,4 +581,6 @@ if config_env() == :prod do
     4090,
     "sim_broadcast_platform"
   )
+
+  # ── end lemon-sim product block (3 of 3) ──
 end

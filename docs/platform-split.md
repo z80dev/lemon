@@ -166,6 +166,38 @@ Per repo (`coding-agent`, `lemon-sim`, `showcase`, `lemon-clients`), in that ord
 - [ ] **5.1** `git filter-repo` preserving history for the moved paths; swap `{:x, in_umbrella: true}` → `{:lemon_x, "~> 0.1"}`.
 - [ ] **5.2** Port the umbrella's CI (test/credo/dialyzer/smoke) from templates; per-repo README/CONTRIBUTING/SECURITY.
 - [ ] **5.3** lemon-sim specifics: D3 Bench boundary hardening (BenchDomains wiring namespace, inline stable_json); take the `LEMON_ARENA_*` env registrations with it (from 1.9).
+
+  > **Boundary pre-work landed 2026-08-12** (branch `sim-boundary`). `lemon_core` no longer
+  > references a sim *module* anywhere: `LemonCore.Runtime.Env.apply_ports/1` used to hardcode
+  > `:lemon_sim_ui` + `LemonSimUi.Endpoint` in `apply_sim_port/1`, and now reads
+  > `config :lemon_core, :runtime_endpoints` — a list of `{port_field, otp_app, endpoint_module}`
+  > triples declared in `config/config.exs`. Both endpoints (web + sim) went through the merge
+  > semantics `apply_web_port/1` already had, so extra `:http` options survive a port apply for
+  > the sim endpoint too (they previously did not — `apply_sim_port/1` replaced `:http` wholesale).
+  > `LemonCore.Env.Registry`'s moduledoc example no longer names `LemonSimUi.Env`.
+  >
+  > Every remaining sim touchpoint outside `apps/lemon_sim*` and `apps/lemon_tcg` is now delimited
+  > by a greppable marker — `grep -rn "lemon-sim product block"` — so 5.1/5.6 is a delete, not a
+  > hunt. Full inventory:
+  >
+  > | Location | Kind | On extraction |
+  > |---|---|---|
+  > | `config/runtime.exs` (3 marked blocks) | runtime env wiring; `sim_ui_endpoint_enabled?` crosses blocks 1→3, and every `parse_runtime_boolean` call site is sim | move blocks 1–3 and the helper |
+  > | `config/config.exs` (2 marked blocks) | `:runtime_endpoints` sim triple, env registries, sim_ui defaults | delete marked lines |
+  > | `config/{dev,test,prod}.exs` (1 block each) | endpoint + hosted-room settings | delete marked lines |
+  > | `.github/workflows/release-smoke.yml` (15 refs) | werewolf smoke, sim Dockerfile, npm assets | whole lane moves |
+  > | `.github/workflows/release.yml`, root `mix.exs` `sim_ui.assets.*` aliases | asset deploy | move |
+  > | `lemon_core/quality/architecture_{check,policy}.ex` | lint inventory of *this repo's* apps — namespace/dep tables, no code dependency | delete 3 + 3 rows |
+  > | `lemon_core/lib/mix/tasks/lemon.help.ex` | task-name catalog (3 groups + 9 `@fallback` entries), reads `@shortdoc` at runtime | delete marked block |
+  > | `lemon_core/runtime/profile.ex` | `:lemon_sim_ui` in the `runtime_full` release profile | delete marked line |
+  > | `lemon_core/env/declarations.ex` (2), `env.ex`, `bus.ex` | `apps:` metadata on standard vars (`PHX_SERVER`, `SHELL`) + doc prose | edit in place |
+  > | `scripts/lint_ci_docs.sh`, `bin/lemon` `--sim-port` | tooling | edit in place |
+  >
+  > Deliberately **not** done, as churn without boundary gain: the `sim_port` field on the
+  > `Runtime.Env` struct stays (it is an integer, not a dependency, and renaming it touches
+  > `lemon_cli`'s setup wizard, `bin/lemon`, `scripts/live_cron_runtime_restart_smoke.exs` and
+  > four tests), and the two lint tables stay hardcoded rather than becoming config — they are
+  > supposed to enumerate the apps in the repo they police.
 - [ ] **5.4** coding-agent specifics: takes lemon_mcp + lemon_evals + coding_agent_ui; its gateway engine registers via 2.1's mechanism.
 - [ ] **5.5** x_api leaves to its satellite repo (D7 completion).
 - [ ] **5.6** Delete moved apps from the umbrella; platform repo keeps the reference runtime + published packages only.
