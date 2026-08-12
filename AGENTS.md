@@ -23,7 +23,7 @@
 | Work on media job capability driver | `apps/lemon_media/` |
 | Work on LSP capability driver | `apps/lemon_lsp/` |
 | Build reusable simulation harnesses | `apps/lemon_sim/` |
-| Work with CLI runners/subagent spawning | `apps/lemon_agent/` |
+| Work with CLI runners/subagent spawning | `apps/lemon_cli_runners/` *(extracted from `lemon_agent`, D15)* |
 | Create or modify skills and assistant-platform tools | `apps/lemon_skills/` |
 | Work on deterministic eval harnesses | `apps/lemon_evals/` |
 | Build cron jobs or automation | `apps/lemon_automation/` |
@@ -377,6 +377,15 @@ Engines are in `apps/lemon_gateway/lib/lemon_gateway/engines/`. Current: `claude
 ---
 
 ## Testing & Debugging
+
+### Testing & Static Analysis
+
+- **Always run tests from the umbrella root**: `mix test apps/<app>/test`.
+  Never `cd apps/<app> && mix test` — running from inside an app directory produces phantom failures.
+- **Dialyzer**: as of dialyxir 1.4.7 / OTP 28.5, Dialyzer emits an `:exact_compare` warning tag that
+  crashes the `github`/`dialyxir`/`short` formatters. Run `mix dialyzer --format dialyzer` locally —
+  CI already does (see `.github/workflows/dialyzer.yml:13-17`).
+- **Dialyzer lanes**: the full-umbrella run stays advisory (large backlog), while `scripts/dialyzer_gate.sh` enforces a hard green gate on an allowlist of apps that only ratchets forward.
 
 ### Gateway Debugging (Telegram)
 
