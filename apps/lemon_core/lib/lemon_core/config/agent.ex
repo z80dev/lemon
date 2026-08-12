@@ -295,24 +295,88 @@ defmodule LemonCore.Config.Agent do
 
   defp normalize_string_list(_), do: []
 
+  # Credential pools carry a provider list plus optional per-provider
+  # credential refs:
+  #
+  #     [runtime.provider_routing.credential_pools.burst]
+  #     providers = ["openai", "zai"]
+  #     strategy = "round_robin"
+  #
+  #     [runtime.provider_routing.credential_pools.burst.credentials]
+  #     openai = ["secret:llm_openai_api_key_alt", "env:OPENAI_API_KEY_2"]
+  #     zai = ["llm_zai_api_key"]
+  #
+  # A ref is "secret:NAME" (resolved via LemonCore.Secrets), "env:VAR", or an
+  # unprefixed secret name (matching the llm_<provider>_api_key convention).
+  # Refs normalize to `%{source: :secret | :env, name: binary}`. A pool with
+  # credentials but no providers derives its provider list from the credential
+  # keys; a pool with neither is dropped.
   defp normalize_credential_pools(pools) when is_map(pools) do
     pools
     |> Enum.reduce(%{}, fn {name, cfg}, acc ->
       cfg = ensure_map(cfg)
       providers = normalize_string_list(cfg["providers"])
+      credentials = normalize_pool_credentials(cfg["credentials"])
+
+      providers =
+        if providers == [] do
+          credentials |> Map.keys() |> Enum.sort()
+        else
+          providers
+        end
 
       if providers == [] do
         acc
       else
         Map.put(acc, to_string(name), %{
           providers: providers,
-          strategy: normalize_routing_strategy(cfg["strategy"])
+          strategy: normalize_routing_strategy(cfg["strategy"]),
+          credentials: credentials
         })
       end
     end)
   end
 
   defp normalize_credential_pools(_), do: %{}
+
+  defp normalize_pool_credentials(credentials) when is_map(credentials) do
+    credentials
+    |> Enum.reduce(%{}, fn {provider, refs}, acc ->
+      refs =
+        refs
+        |> List.wrap()
+        |> Enum.map(&normalize_credential_ref/1)
+        |> Enum.reject(&is_nil/1)
+
+      provider = provider |> to_string() |> String.trim()
+
+      if refs == [] or provider == "" do
+        acc
+      else
+        Map.put(acc, provider, refs)
+      end
+    end)
+  end
+
+  defp normalize_pool_credentials(_), do: %{}
+
+  defp normalize_credential_ref(ref) when is_binary(ref) do
+    case String.trim(ref) do
+      "" -> nil
+      "secret:" <> name -> credential_ref(:secret, name)
+      "env:" <> name -> credential_ref(:env, name)
+      name -> credential_ref(:secret, name)
+    end
+  end
+
+  defp normalize_credential_ref(_), do: nil
+
+  defp credential_ref(source, name) do
+    case String.trim(name) do
+      "" -> nil
+      name -> %{source: source, name: name}
+    end
+  end
 
   defp normalize_provider_routing_profiles(profiles) when is_map(profiles) do
     profiles

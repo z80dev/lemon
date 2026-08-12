@@ -265,6 +265,260 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
     assert_receive {:attempt, :azure_openai_responses, "fallback-key"}
   end
 
+  describe "credential pools" do
+    setup do
+      LemonAgent.ModelRuntime.CredentialHealth.reset()
+      LemonAgent.ModelRuntime.SessionPins.reset()
+
+      System.put_env("PF_KEY_A", "key-a")
+      System.put_env("PF_KEY_B", "key-b")
+      System.put_env("PF_KEY_C", "key-c")
+
+      on_exit(fn ->
+        LemonAgent.ModelRuntime.CredentialHealth.reset()
+        LemonAgent.ModelRuntime.SessionPins.reset()
+        Enum.each(~w(PF_KEY_A PF_KEY_B PF_KEY_C), &System.delete_env/1)
+      end)
+
+      :ok
+    end
+
+    test "auth errors advance credentials on the SAME provider before any provider fallback" do
+      primary = LemonAi.Models.get_model(:openai, "gpt-4")
+      settings = pool_settings()
+      parent = self()
+
+      stream_fn = fn model, _context, options ->
+        send(parent, {:attempt, model.provider, options.api_key})
+
+        case {model.provider, options.api_key} do
+          {:openai, key} when key in ["key-a", "key-b"] ->
+            {:ok, error_stream(model, "Authentication failed (HTTP 401): invalid api key")}
+
+          {:openai, "key-c"} ->
+            {:ok, success_stream(model, "third key response")}
+
+          {:azure_openai_responses, _} ->
+            {:ok, success_stream(model, "unexpected fallback")}
+        end
+      end
+
+      wrapped = ProviderFallback.maybe_wrap(stream_fn, primary, settings, File.cwd!())
+      {:ok, stream} = wrapped.(primary, %Context{}, %StreamOptions{})
+
+      assert {:ok, message} = LemonAi.EventStream.result(stream, 1_000)
+      assert message.provider == :openai
+      assert [%TextContent{text: "third key response"}] = message.content
+
+      assert_receive {:attempt, :openai, "key-a"}
+      assert_receive {:attempt, :openai, "key-b"}
+      assert_receive {:attempt, :openai, "key-c"}
+      refute_receive {:attempt, :azure_openai_responses, _}, 100
+
+      # Failed credentials went into cooldown; the good one was cleared.
+      assert LemonAgent.ModelRuntime.CredentialHealth.in_cooldown?(:openai, "env:PF_KEY_A")
+      assert LemonAgent.ModelRuntime.CredentialHealth.in_cooldown?(:openai, "env:PF_KEY_B")
+      refute LemonAgent.ModelRuntime.CredentialHealth.in_cooldown?(:openai, "env:PF_KEY_C")
+    end
+
+    test "exhausted credentials move to the next provider" do
+      primary = LemonAi.Models.get_model(:openai, "gpt-4")
+      settings = pool_settings()
+      parent = self()
+
+      stream_fn = fn model, _context, options ->
+        send(parent, {:attempt, model.provider, options.api_key})
+
+        case model.provider do
+          :openai ->
+            {:ok, error_stream(model, "Authentication failed (HTTP 401): invalid api key")}
+
+          :azure_openai_responses ->
+            {:ok, success_stream(model, "fallback response")}
+        end
+      end
+
+      wrapped = ProviderFallback.maybe_wrap(stream_fn, primary, settings, File.cwd!())
+      {:ok, stream} = wrapped.(primary, %Context{}, %StreamOptions{})
+
+      assert {:ok, message} = LemonAi.EventStream.result(stream, 1_000)
+      assert message.provider == :azure_openai_responses
+
+      assert_receive {:attempt, :openai, "key-a"}
+      assert_receive {:attempt, :openai, "key-b"}
+      assert_receive {:attempt, :openai, "key-c"}
+      # "default" entry resolved from the plain provider config
+      assert_receive {:attempt, :openai, "primary-key"}
+      assert_receive {:attempt, :azure_openai_responses, "fallback-key"}
+    end
+
+    test "client errors relay terminally with no credential advance" do
+      primary = LemonAi.Models.get_model(:openai, "gpt-4")
+      settings = pool_settings()
+      parent = self()
+
+      stream_fn = fn model, _context, options ->
+        send(parent, {:attempt, model.provider, options.api_key})
+        {:ok, error_stream(model, "Invalid request (HTTP 400): messages must be non-empty")}
+      end
+
+      wrapped = ProviderFallback.maybe_wrap(stream_fn, primary, settings, File.cwd!())
+      {:ok, stream} = wrapped.(primary, %Context{}, %StreamOptions{})
+
+      assert {:error, message} = LemonAi.EventStream.result(stream, 1_000)
+      assert message.error_message =~ "HTTP 400"
+
+      assert_receive {:attempt, :openai, "key-a"}
+      refute_receive {:attempt, _, _}, 100
+
+      # Client errors are request problems, not credential problems.
+      refute LemonAgent.ModelRuntime.CredentialHealth.in_cooldown?(:openai, "env:PF_KEY_A")
+    end
+
+    test "provider fallback that commits pins the provider and later turns lead with it" do
+      primary = LemonAi.Models.get_model(:openai, "gpt-4")
+      settings = pool_settings()
+      session_id = "pf-pin-session-#{System.unique_integer([:positive])}"
+      parent = self()
+
+      stream_fn = fn model, _context, options ->
+        send(parent, {:attempt, model.provider, options.api_key})
+
+        case model.provider do
+          :openai ->
+            {:ok, error_stream(model, "Service temporarily unavailable (HTTP 503)")}
+
+          :azure_openai_responses ->
+            {:ok, success_stream(model, "fallback response")}
+        end
+      end
+
+      wrapped =
+        ProviderFallback.maybe_wrap(stream_fn, primary, settings, File.cwd!(),
+          session_id: session_id
+        )
+
+      {:ok, stream} = wrapped.(primary, %Context{}, %StreamOptions{})
+      assert {:ok, _message} = LemonAi.EventStream.result(stream, 1_000)
+
+      assert_receive {:attempt, :openai, "key-a"}
+      assert_receive {:attempt, :azure_openai_responses, "fallback-key"}
+
+      assert LemonAgent.ModelRuntime.SessionPins.get(session_id) == %{
+               provider: "azure_openai_responses",
+               credential_ref: "default"
+             }
+
+      # Second turn: the pinned provider leads; the failing primary is skipped.
+      {:ok, stream} = wrapped.(primary, %Context{}, %StreamOptions{})
+      assert {:ok, message} = LemonAi.EventStream.result(stream, 1_000)
+      assert message.provider == :azure_openai_responses
+
+      assert_receive {:attempt, :azure_openai_responses, "fallback-key"}
+      refute_receive {:attempt, :openai, _}, 100
+    end
+
+    test "credential fallback that commits pins the credential ref and later turns lead with it" do
+      primary = LemonAi.Models.get_model(:openai, "gpt-4")
+      settings = pool_settings()
+      session_id = "pf-cred-pin-session-#{System.unique_integer([:positive])}"
+      parent = self()
+
+      stream_fn = fn model, _context, options ->
+        send(parent, {:attempt, model.provider, options.api_key})
+
+        case options.api_key do
+          "key-a" ->
+            {:ok, error_stream(model, "Authentication failed (HTTP 401): invalid api key")}
+
+          _ ->
+            {:ok, success_stream(model, "second key response")}
+        end
+      end
+
+      wrapped =
+        ProviderFallback.maybe_wrap(stream_fn, primary, settings, File.cwd!(),
+          session_id: session_id
+        )
+
+      {:ok, stream} = wrapped.(primary, %Context{}, %StreamOptions{})
+      assert {:ok, _message} = LemonAi.EventStream.result(stream, 1_000)
+
+      assert_receive {:attempt, :openai, "key-a"}
+      assert_receive {:attempt, :openai, "key-b"}
+
+      assert LemonAgent.ModelRuntime.SessionPins.get(session_id) == %{
+               provider: "openai",
+               credential_ref: "env:PF_KEY_B"
+             }
+
+      # Second turn leads with the pinned credential.
+      {:ok, stream} = wrapped.(primary, %Context{}, %StreamOptions{})
+      assert {:ok, _message} = LemonAi.EventStream.result(stream, 1_000)
+
+      assert_receive {:attempt, :openai, "key-b"}
+      refute_receive {:attempt, :openai, "key-a"}, 100
+    end
+
+    test "session lifecycle threads the session id into fallback pinning" do
+      settings = routing_settings()
+      parent = self()
+
+      stream_fn = fn model, _context, options ->
+        send(parent, {:attempt, model.provider, options.api_key})
+
+        case model.provider do
+          :openai -> {:ok, error_stream(model)}
+          :azure_openai_responses -> {:ok, success_stream(model, "fallback response")}
+        end
+      end
+
+      {:ok, session} =
+        Session.start_link(
+          cwd: System.tmp_dir!(),
+          settings_manager: settings,
+          stream_fn: stream_fn
+        )
+
+      :ok = Session.prompt(session, "hello")
+      wait_for_idle(session)
+
+      assert_receive {:attempt, :azure_openai_responses, "fallback-key"}
+
+      session_id = Session.get_state(session).session_manager.header.id
+
+      assert LemonAgent.ModelRuntime.SessionPins.get(session_id) == %{
+               provider: "azure_openai_responses",
+               credential_ref: "default"
+             }
+    end
+
+    defp pool_settings do
+      %SettingsManager{
+        default_model: %{provider: :openai, model_id: "gpt-4", base_url: nil},
+        providers: %{
+          "openai" => %{api_key: "primary-key"},
+          "azure_openai_responses" => %{api_key: "fallback-key"}
+        },
+        provider_routing: %{
+          enabled: true,
+          fallback_providers: ["azure_openai_responses"],
+          require_credentials: true,
+          default_pool: "burst",
+          credential_pools: %{
+            "burst" => %{
+              providers: ["openai"],
+              strategy: "priority",
+              credentials: %{
+                "openai" => ["env:PF_KEY_A", "env:PF_KEY_B", "env:PF_KEY_C"]
+              }
+            }
+          }
+        }
+      }
+    end
+  end
+
   defp success_stream(model, text) do
     message = message(model, :stop, text, nil)
     {:ok, stream} = LemonAi.EventStream.start_link()

@@ -338,6 +338,45 @@ defmodule LemonAgent.ModelRuntime.ProviderRoutingTest do
              }
     end
 
+    test "credential pool preview surfaces credential counts only" do
+      config =
+        config(
+          %{
+            enabled: true,
+            default_pool: "burst",
+            fallback_providers: [],
+            credential_pools: %{
+              "burst" => %{
+                providers: ["openai", "zai"],
+                strategy: "priority",
+                credentials: %{
+                  "openai" => [
+                    %{source: :secret, name: "llm_openai_api_key_alt"},
+                    %{source: :env, name: "OPENAI_API_KEY_2"}
+                  ],
+                  "zai" => [%{source: :secret, name: "llm_zai_api_key"}]
+                }
+              }
+            },
+            require_credentials: true
+          },
+          %{default_provider: "openai"}
+        )
+
+      preview = ProviderRouting.preview(%{}, config, [])
+
+      assert preview["credentialPool"]["selectedPool"] == "burst"
+
+      assert preview["credentialPool"]["credentialCounts"] == %{
+               "openai" => 2,
+               "zai" => 1
+             }
+
+      # Counts only - ref names/values never enter the preview.
+      refute inspect(preview) =~ "llm_openai_api_key_alt"
+      refute inspect(preview) =~ "OPENAI_API_KEY_2"
+    end
+
     test "routing_disabled decision is preserved" do
       config =
         config(

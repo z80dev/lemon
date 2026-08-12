@@ -346,6 +346,8 @@ defmodule LemonAgent.ModelRuntime.ProviderRouting do
       "selectedPool" => selected_pool_name,
       "strategy" => map_value(selected_pool, :strategy) || "priority",
       "configuredProviders" => normalize_list(map_value(selected_pool, :providers)),
+      # Counts only - credential ref names/values never enter the preview.
+      "credentialCounts" => pool_credential_counts(selected_pool),
       "providers" =>
         Enum.map(provider_statuses, fn status ->
           config = Map.get(status, "config", %{})
@@ -366,6 +368,20 @@ defmodule LemonAgent.ModelRuntime.ProviderRouting do
           }
         end)
     }
+  end
+
+  defp pool_credential_counts(pool) do
+    pool
+    |> map_value(:credentials)
+    |> case do
+      credentials when is_map(credentials) ->
+        Map.new(credentials, fn {provider, refs} ->
+          {normalize_provider(provider), refs |> List.wrap() |> length()}
+        end)
+
+      _ ->
+        %{}
+    end
   end
 
   defp profile_distribution(profile) do

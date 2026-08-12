@@ -144,10 +144,18 @@ defmodule CodingAgent.Session.Lifecycle do
         cwd
       )
 
+    # The persisted session id (SessionManager.header.id) is the session
+    # identity for provider failover: it is stable across turns and process
+    # restarts of the same session file, unlike run_id (per run) or
+    # session_key (caller-overridable). It scopes credential-pool rotation and
+    # committed-fallback pins so a session sticks to one provider+credential
+    # (provider prompt caches are keyed per provider+credential).
     stream_fn =
       opts
       |> Keyword.get(:stream_fn)
-      |> ProviderFallback.maybe_wrap(model, settings_manager, cwd)
+      |> ProviderFallback.maybe_wrap(model, settings_manager, cwd,
+        session_id: session_manager.header.id
+      )
 
     agent_registry_key = {session_manager.header.id, :main, 0}
 

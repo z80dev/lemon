@@ -167,7 +167,11 @@ defmodule LemonCore.Config.AgentTest do
       assert config.provider_routing.default_profile == "ops"
 
       assert config.provider_routing.credential_pools == %{
-               "burst" => %{providers: ["openai", "zai"], strategy: "round_robin"}
+               "burst" => %{
+                 providers: ["openai", "zai"],
+                 strategy: "round_robin",
+                 credentials: %{}
+               }
              }
 
       assert config.provider_routing.profiles == %{
@@ -179,6 +183,117 @@ defmodule LemonCore.Config.AgentTest do
              }
 
       assert config.provider_routing.require_credentials == false
+    end
+
+    test "normalizes credential pool credential refs" do
+      settings = %{
+        "runtime" => %{
+          "provider_routing" => %{
+            "credential_pools" => %{
+              "burst" => %{
+                "providers" => ["openai"],
+                "strategy" => "round_robin",
+                "credentials" => %{
+                  "openai" => [
+                    "secret:llm_openai_api_key_alt",
+                    "env:OPENAI_API_KEY_2",
+                    "llm_openai_api_key"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+
+      config = Agent.resolve(settings)
+
+      assert config.provider_routing.credential_pools == %{
+               "burst" => %{
+                 providers: ["openai"],
+                 strategy: "round_robin",
+                 credentials: %{
+                   "openai" => [
+                     %{source: :secret, name: "llm_openai_api_key_alt"},
+                     %{source: :env, name: "OPENAI_API_KEY_2"},
+                     %{source: :secret, name: "llm_openai_api_key"}
+                   ]
+                 }
+               }
+             }
+    end
+
+    test "derives pool providers from credential keys when providers is empty" do
+      settings = %{
+        "runtime" => %{
+          "provider_routing" => %{
+            "credential_pools" => %{
+              "keys_only" => %{
+                "credentials" => %{
+                  "zai" => ["env:ZAI_KEY_1"],
+                  "openai" => ["env:OPENAI_KEY_1"]
+                }
+              },
+              "empty" => %{}
+            }
+          }
+        }
+      }
+
+      config = Agent.resolve(settings)
+
+      assert config.provider_routing.credential_pools == %{
+               "keys_only" => %{
+                 providers: ["openai", "zai"],
+                 strategy: "priority",
+                 credentials: %{
+                   "zai" => [%{source: :env, name: "ZAI_KEY_1"}],
+                   "openai" => [%{source: :env, name: "OPENAI_KEY_1"}]
+                 }
+               }
+             }
+    end
+
+    test "ignores malformed credential entries" do
+      settings = %{
+        "runtime" => %{
+          "provider_routing" => %{
+            "credential_pools" => %{
+              "burst" => %{
+                "providers" => ["openai"],
+                "credentials" => %{
+                  "openai" => ["", "   ", "secret:", "env:  ", 42, nil, "env:GOOD_KEY"],
+                  "zai" => [],
+                  "" => ["env:IGNORED"],
+                  "google" => "not-a-list-still-wrapped"
+                }
+              },
+              "bad_credentials" => %{
+                "providers" => ["openai"],
+                "credentials" => "not-a-map"
+              }
+            }
+          }
+        }
+      }
+
+      config = Agent.resolve(settings)
+
+      assert config.provider_routing.credential_pools == %{
+               "burst" => %{
+                 providers: ["openai"],
+                 strategy: "priority",
+                 credentials: %{
+                   "openai" => [%{source: :env, name: "GOOD_KEY"}],
+                   "google" => [%{source: :secret, name: "not-a-list-still-wrapped"}]
+                 }
+               },
+               "bad_credentials" => %{
+                 providers: ["openai"],
+                 strategy: "priority",
+                 credentials: %{}
+               }
+             }
     end
 
     test "provider routing env vars override settings" do
