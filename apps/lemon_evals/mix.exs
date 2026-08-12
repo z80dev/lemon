@@ -28,6 +28,11 @@ defmodule LemonEvals.MixProject do
       {:lemon_agent, in_umbrella: true},
       {:lemon_ai, in_umbrella: true},
       {:coding_agent, in_umbrella: true},
+      # The vendor CLI subagents the task tool delegates to during evals.
+      # coding_agent itself is vendor-free; consumers pull the vendor package
+      # explicitly so LemonCliRunners.Application boots when this app is the
+      # entry point.
+      {:lemon_cli_runners, in_umbrella: true},
       {:lemon_core, in_umbrella: true},
       {:lemon_skills, in_umbrella: true},
       {:jason, "~> 1.4"}

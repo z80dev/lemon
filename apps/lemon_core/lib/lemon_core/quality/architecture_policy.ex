@@ -13,7 +13,10 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
   @current_allowed_direct_deps %{
     lemon_agent: [:lemon_ai, :lemon_core],
     lemon_ai: [],
-    lemon_cli_runners: [:lemon_agent, :lemon_ai, :lemon_core],
+    # lemon_gateway: the vendor engine shells implement LemonGateway.Engine and
+    # register with the gateway's EngineRegistry at boot (the edge points from
+    # the vendor package to the platform, never back).
+    lemon_cli_runners: [:lemon_agent, :lemon_ai, :lemon_core, :lemon_gateway],
     coding_agent: [
       :lemon_agent,
       :lemon_ai,
@@ -25,7 +28,9 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
       :lemon_platform_test,
       :lemon_skills
     ],
-    coding_agent_ui: [:coding_agent, :lemon_core],
+    # lemon_cli_runners: products that ship the vendor CLIs pull the vendor
+    # package explicitly; coding_agent itself stays vendor-free.
+    coding_agent_ui: [:coding_agent, :lemon_cli_runners, :lemon_core],
     lemon_automation: [:lemon_agent, :lemon_core, :lemon_router, :lemon_skills],
     lemon_channels: [:lemon_agent, :lemon_core, :lemon_media],
     lemon_control_plane: [
@@ -45,12 +50,18 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
     lemon_browser: [:lemon_core],
     lemon_core: [],
     lemon_memory: [:lemon_core],
-    lemon_evals: [:lemon_agent, :lemon_ai, :coding_agent, :lemon_core, :lemon_skills],
+    lemon_evals: [
+      :lemon_agent,
+      :lemon_ai,
+      :coding_agent,
+      :lemon_cli_runners,
+      :lemon_core,
+      :lemon_skills
+    ],
     lemon_gateway: [
       :lemon_agent,
       :lemon_ai,
       :lemon_automation,
-      :lemon_cli_runners,
       :lemon_core
     ],
     # A satellite: it implements platform contracts (a memory provider, a
@@ -60,7 +71,7 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
     lemon_honcho: [:lemon_agent, :lemon_ai, :lemon_core, :lemon_memory, :lemon_platform_test],
     lemon_lsp: [:lemon_core],
     lemon_media: [:lemon_core],
-    lemon_mcp: [:lemon_agent, :coding_agent, :lemon_core, :lemon_skills],
+    lemon_mcp: [:lemon_agent, :coding_agent, :lemon_cli_runners, :lemon_core, :lemon_skills],
     # The contract-test kit is a leaf: one (optional) dep per behaviour it
     # tests, and nothing in the platform depends on it outside test code. ai +
     # agent_core back the FakeLLM double, which drives a real agent loop.

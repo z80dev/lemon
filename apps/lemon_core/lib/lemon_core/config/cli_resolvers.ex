@@ -47,10 +47,18 @@ defmodule LemonCore.Config.CliResolvers do
     invalidate_config_cache()
   end
 
-  @doc "Drops the resolver registered for `engine_id`. Always `:ok`."
+  @doc """
+  Drops the resolver registered for `engine_id`. Always `:ok`.
+
+  Clears the default `LemonCore.ConfigCache` instance for the same reason
+  `register/2` does: cached config was resolved *with* the dropped resolver,
+  and serving it alongside fresh loads (which now pass the raw section
+  through) would give two views of the same TOML within one node.
+  """
   @spec unregister(String.t()) :: :ok
   def unregister(engine_id) when is_binary(engine_id) do
     put(Enum.reject(registered(), fn {id, _resolver} -> id == engine_id end))
+    invalidate_config_cache()
   end
 
   @doc "Engine ids with a registered resolver, in registration order."

@@ -61,9 +61,15 @@ defmodule CodingAgent.Application do
   # The gateway owns the engine registry but must not depend on this app, so we
   # contribute the "lemon" engine from here. A runtime without lemon_gateway
   # (or with the registry not yet started) simply has no such engine.
+  #
+  # register_default/1, not register/1: this is boot auto-registration by an
+  # installed package, and an operator-configured :lemon_gateway, :engines list
+  # is a ceiling that must hold for every boot registrant — the lemon engine
+  # gets no special pass the vendor engines don't get. An operator who wants it
+  # alongside a narrowed list adds CodingAgent.GatewayEngine to the list.
   defp register_gateway_engine do
     if Code.ensure_loaded?(LemonGateway.EngineRegistry) do
-      case LemonGateway.EngineRegistry.register(CodingAgent.GatewayEngine) do
+      case LemonGateway.EngineRegistry.register_default(CodingAgent.GatewayEngine) do
         :ok ->
           :ok
 

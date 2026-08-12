@@ -39,6 +39,11 @@ defmodule LemonMCP.MixProject do
       {:plug, "~> 1.14"},
       # Umbrella dependencies
       {:coding_agent, in_umbrella: true},
+      # The vendor CLI subagents the task tool delegates to. coding_agent
+      # itself is vendor-free; the product pulls the vendor package explicitly
+      # so LemonCliRunners.Application boots (and registers) when this app is
+      # the release root.
+      {:lemon_cli_runners, in_umbrella: true},
       {:lemon_core, in_umbrella: true},
       {:lemon_skills, in_umbrella: true},
       {:lemon_agent, in_umbrella: true}

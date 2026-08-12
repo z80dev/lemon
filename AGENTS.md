@@ -371,10 +371,10 @@ Gateway-native transports remain in `apps/lemon_gateway/` (SMS/Twilio, voice, em
 
 ### Adding a Gateway Engine
 
-Engines are in `apps/lemon_gateway/lib/lemon_gateway/engines/`. Current: `claude.ex`, `codex.ex`, `pi.ex`, `lemon.ex`, `opencode.ex`, `echo.ex`, `cli_adapter.ex`.
+The gateway itself ships only `echo.ex` (plus the shared `cli_adapter.ex`) in `apps/lemon_gateway/lib/lemon_gateway/engines/`. Vendor CLI engines (`claude.ex`, `codex.ex`, `kimi.ex`, `opencode.ex`, `pi.ex`) live in `apps/lemon_cli_runners/lib/lemon_cli_runners/engines/`, and the `lemon` engine is `CodingAgent.GatewayEngine` in `apps/coding_agent/`.
 
-1. Create engine module implementing `LemonGateway.Engine` behaviour
-2. Register in engine registry
+1. Create engine module implementing `LemonGateway.Engine` behaviour (for a vendor CLI, in `lemon_cli_runners`)
+2. Register at boot from the owning package's application callback via `LemonGateway.EngineRegistry.register_default/1` (respects an operator-configured `:lemon_gateway, :engines` ceiling)
 
 ---
 
