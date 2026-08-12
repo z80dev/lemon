@@ -42,6 +42,13 @@ its engine list, its tool-description prose (from each runner's `describe/0`)
 and the module to run, so nothing in the agent names a vendor. Drop this
 package from a build and those engines simply stop being offered.
 
+Each `*Subagent` also declares `resume_format/0` — how its CLI spells "resume"
+(`codex resume X`, `claude --resume X`, pi's quoted transcript paths) — which
+`LemonCliRunners.Application` registers into `LemonCore.ResumeFormats`.
+`LemonCore.ResumeToken` prints and parses those lines for the whole platform
+without knowing any vendor; without this package it falls back to the generic
+`<engine> resume <token>`.
+
 ## Quick Start
 
 ### Basic Usage
@@ -266,7 +273,7 @@ end
 
 | File | Description |
 |------|-------------|
-| `application.ex` | Registers the vendor subagents with `LemonCore.SubagentRegistry` at boot |
+| `application.ex` | Registers the vendor subagents and their resume formats with `lemon_core` at boot |
 | `jsonl_runner.ex` | Base GenServer for JSONL subprocess runners |
 | `tool_action_helpers.ex` | Shared helpers for translating tool calls to action events |
 | `codex_schema.ex` | Codex JSONL event parsing |

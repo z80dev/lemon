@@ -5,6 +5,7 @@ defmodule LemonCliRunners.OpencodeSubagent do
 
   alias LemonCliRunners.OpencodeRunner
   alias LemonCore.RunEvents.{ActionEvent, CompletedEvent, StartedEvent}
+  alias LemonCore.ResumeFormat
   alias LemonCore.ResumeToken
 
   @typedoc "An OpenCode subagent session"
@@ -35,6 +36,25 @@ defmodule LemonCliRunners.OpencodeSubagent do
       caveats: ["ignores `model`: the opencode CLI's own configuration selects it"]
     }
   end
+
+  @doc """
+  The OpenCode CLI's resume syntax, registered into `LemonCore.ResumeFormats` at
+  boot so the platform can print and parse it without knowing this vendor.
+
+  The pattern is wider than what `render_resume/1` prints: opencode accepts
+  `run --session` and `-s` too, and users paste what their shell history holds.
+  """
+  @spec resume_format() :: ResumeFormat.t()
+  def resume_format do
+    ResumeFormat.new(id(),
+      pattern: ~r/`?opencode(?:\s+run)?\s+(?:--session|-s)\s+(ses_[A-Za-z0-9]+)`?/i,
+      render: &__MODULE__.render_resume/1
+    )
+  end
+
+  @doc false
+  @spec render_resume(String.t()) :: String.t()
+  def render_resume(value), do: "opencode --session #{value}"
 
   @impl true
   @spec start(keyword()) :: {:ok, session()} | {:error, term()}

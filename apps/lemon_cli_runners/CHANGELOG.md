@@ -21,8 +21,13 @@ agent framework.
 - `LemonCliRunners.Env` — the `:cli_runners`-area environment variable
   declarations, moved out of `LemonAgent.Env`.
 - `LemonCliRunners.Application` — registers each vendor subagent with
-  `LemonCore.SubagentRegistry` at boot. The package is now an OTP application
+  `LemonCore.SubagentRegistry`, and each vendor's resume syntax with
+  `LemonCore.ResumeFormats`, at boot. The package is now an OTP application
   (with an empty supervision tree) purely so it can announce itself.
+- `resume_format/0` on every `*Subagent`: the vendor owns how its CLI spells
+  "resume" (`codex resume X`, `claude --resume X`, `opencode --session ses_X`,
+  pi's quoted transcript paths), including the wider invocations users paste
+  back. `LemonCore.ResumeToken` prints and parses these without naming a vendor.
 - Every `*Subagent` module implements `LemonCore.SubagentRunner`: `id/0`,
   `describe/0` (the tool-description prose, including per-vendor caveats such as
   "ignores `model`"), and a total `cancel/1`.

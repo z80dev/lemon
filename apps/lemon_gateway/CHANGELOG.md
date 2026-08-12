@@ -36,6 +36,10 @@ agent to an engine runtime anything can register with.
   contract is written down in `LemonGateway.Engine`'s moduledoc, along with the
   steer invariant, and `LemonPlatformTest.EngineCase` turns it into tests.
 - The gateway no longer writes chat state; the router is its single writer.
+- CLI engines render resume tokens through `LemonCore.ResumeToken`, which reads
+  the format each vendor package registered at boot. `CliAdapter` had a second
+  copy of the per-vendor table; there is now one source for the syntax an engine
+  prints and the syntax it parses back.
 - Ingress (the HTTP webhook listener and the Twilio SMS utility) is documented
   as gateway-owned by design rather than as "legacy" awaiting migration. It is
   off by default and stays here because it needs synchronous HTTP responses,

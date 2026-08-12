@@ -596,12 +596,15 @@ Engine resolution priority: resume token > engine hint > binding default > proje
 ### Engine Registry
 
 `LemonCore.EngineCatalog` is the shared validation/normalization boundary for known engine IDs.
-`LemonChannels.EngineRegistry` remains only as a compatibility shim for resume parsing that may defer to `LemonGateway.EngineRegistry` when custom engine modules are present.
+`LemonChannels.EngineRegistry` is line-strict resume parsing for inbound messages: it asks the engine runtime first (through `LemonCore.EngineInfoBridge`), then `LemonCore.ResumeToken`, then accepts the generic `<engine> resume <token>` line for any known engine.
+
+How an engine spells "resume" is the engine's own business — each registers a `LemonCore.ResumeFormat` at boot, and channels never names a vendor. In a runtime with no engine package installed, only `lemon resume <id>` and the generic form are recognised.
 
 ```elixir
 LemonCore.EngineCatalog.known?("claude")  # true
 LemonCore.EngineCatalog.normalize(" Claude ") # "claude"
 
+# with lemon_cli_runners installed, which registers claude's format at boot:
 {:ok, %ResumeToken{engine: "claude", value: "abc123"}} =
   LemonChannels.EngineRegistry.extract_resume("claude --resume abc123")
 

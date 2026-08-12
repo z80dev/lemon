@@ -37,6 +37,13 @@ keeping it small and honest.
   application.
 - Capabilities are resolved through the plugin registry. An unregistered
   channel answers `nil`/`false` instead of matching a hardcoded table.
+- Resume lines in inbound messages, and the resume line preserved when
+  splitting a long outbound message, are recognised through
+  `LemonCore.ResumeToken` — that is, through whatever resume formats the
+  installed engines registered — plus the generic `<engine> resume <token>`
+  shape. `engine_registry.ex` and `telegram/truncate.ex` no longer spell out
+  `codex`/`claude` themselves, so a channels runtime recognises every installed
+  engine's syntax rather than the three that happened to be hardcoded.
 
 ### Removed
 

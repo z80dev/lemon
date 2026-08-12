@@ -22,6 +22,8 @@ defmodule LemonChannels.Telegram.Truncate do
   `split_messages/1`.
   """
 
+  alias LemonCore.ResumeToken
+
   @telegram_max_length 4096
 
   # Split thresholds as percentages of max_length
@@ -343,22 +345,24 @@ defmodule LemonChannels.Telegram.Truncate do
     end
   end
 
+  # Which vendor spells resume how is not this module's business: registered
+  # resume formats answer for their own engine, and the generic
+  # `<engine> resume <token>` shape catches engines with no registered format.
   defp resume_line?(line) when is_binary(line) do
-    line = String.trim(String.downcase(line))
+    trimmed = String.trim(line)
 
-    String.starts_with?(line, "codex resume ") ||
-      String.starts_with?(line, "lemon resume ") ||
-      String.starts_with?(line, "claude --resume ") ||
-      Regex.match?(~r/^[a-z0-9_-]+\s+resume\s+/i, line)
+    ResumeToken.is_resume_line(trimmed) ||
+      Regex.match?(~r/^[a-z0-9_-]+\s+resume\s+/i, trimmed)
   end
 
   defp extract_trailing_resume_line(text) when is_binary(text) do
-    regex =
-      ~r/(?:^|\n)(`?(?:codex|lemon)\s+resume\s+[a-zA-Z0-9_-]+`?|`?claude\s+--resume\s+[a-zA-Z0-9_-]+`?)\s*$/i
-
-    case Regex.run(regex, text) do
-      [_, line] -> line
-      _ -> nil
+    text
+    |> String.split("\n")
+    |> Enum.reverse()
+    |> Enum.drop_while(&(String.trim(&1) == ""))
+    |> case do
+      [last | _] -> if resume_line?(last), do: String.trim(last), else: nil
+      [] -> nil
     end
   end
 

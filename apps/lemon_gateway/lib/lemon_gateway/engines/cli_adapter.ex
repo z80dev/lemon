@@ -58,31 +58,12 @@ defmodule LemonGateway.Engines.CliAdapter do
   # kill is a successful cancel, not a FunctionClauseError in the caller.
   def cancel(_ctx), do: :ok
 
+  # The engine id wins over the token's own: the gateway asks an engine to
+  # render a token it is about to run, and a token that arrived tagged with a
+  # different engine is being re-homed, not re-spelled.
   def format_resume(engine_id, %ResumeToken{value: value}) do
-    case engine_id do
-      "codex" -> "codex resume #{value}"
-      "claude" -> "claude --resume #{value}"
-      "kimi" -> "kimi --session #{value}"
-      "opencode" -> "opencode --session #{value}"
-      "pi" -> "pi --session #{quote_token(value)}"
-      _ -> "#{engine_id} resume #{value}"
-    end
+    ResumeToken.format_plain(ResumeToken.new(engine_id, value))
   end
-
-  defp quote_token(value) when is_binary(value) do
-    needs_quotes = Regex.match?(~r/\s/, value)
-
-    cond do
-      not needs_quotes and not String.contains?(value, "\"") ->
-        value
-
-      true ->
-        escaped = String.replace(value, "\"", "\\\"")
-        "\"#{escaped}\""
-    end
-  end
-
-  defp quote_token(value), do: to_string(value)
 
   def extract_resume(engine_id, text) do
     case ResumeToken.extract_resume(text, engine_id) do

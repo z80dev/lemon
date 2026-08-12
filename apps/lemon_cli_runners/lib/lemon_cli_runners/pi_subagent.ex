@@ -5,6 +5,7 @@ defmodule LemonCliRunners.PiSubagent do
 
   alias LemonCliRunners.PiRunner
   alias LemonCore.RunEvents.{ActionEvent, CompletedEvent, StartedEvent}
+  alias LemonCore.ResumeFormat
   alias LemonCore.ResumeToken
 
   @typedoc "A Pi subagent session"
@@ -35,6 +36,55 @@ defmodule LemonCliRunners.PiSubagent do
       caveats: ["ignores `model`: the pi CLI's own configuration selects it"]
     }
   end
+
+  @doc """
+  The pi CLI's resume syntax, registered into `LemonCore.ResumeFormats` at boot
+  so the platform can print and parse it without knowing this vendor.
+
+  Pi identifies a session by transcript path, which may contain spaces — hence
+  the quoting on the way out and the unquoting on the way back in.
+  """
+  @spec resume_format() :: ResumeFormat.t()
+  def resume_format do
+    ResumeFormat.new(id(),
+      pattern: ~r/`?pi\s+--session\s+("(?:[^"\\]|\\.)+"|'(?:[^'\\]|\\.)+'|\S+)`?/i,
+      render: &__MODULE__.render_resume/1,
+      normalize: &__MODULE__.strip_quotes/1
+    )
+  end
+
+  @doc false
+  @spec render_resume(String.t()) :: String.t()
+  def render_resume(value), do: "pi --session #{quote_token(value)}"
+
+  @doc false
+  @spec strip_quotes(String.t()) :: String.t()
+  def strip_quotes(value) when is_binary(value) do
+    trimmed = String.trim(value)
+
+    if String.length(trimmed) >= 2 do
+      first = String.first(trimmed)
+      last = String.last(trimmed)
+
+      if first == last and first in ["\"", "'"] do
+        String.slice(trimmed, 1, String.length(trimmed) - 2)
+      else
+        trimmed
+      end
+    else
+      trimmed
+    end
+  end
+
+  defp quote_token(value) when is_binary(value) do
+    if Regex.match?(~r/\s/, value) or String.contains?(value, "\"") do
+      "\"" <> String.replace(value, "\"", "\\\"") <> "\""
+    else
+      value
+    end
+  end
+
+  defp quote_token(value), do: to_string(value)
 
   @impl true
   @spec start(keyword()) :: {:ok, session()} | {:error, term()}

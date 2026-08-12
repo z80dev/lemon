@@ -1,9 +1,13 @@
 defmodule LemonCore.ResumeToken do
   @moduledoc """
-  Session identifier for resuming interrupted CLI sessions.
+  Session identifier for resuming an interrupted session.
 
-  Each CLI tool (codex, claude, etc.) provides its own session ID format.
-  The ResumeToken captures both the engine and the session value.
+  A token pairs the engine with the value that engine understands. Printing and
+  parsing go through `LemonCore.ResumeFormats`: each engine registers its own
+  syntax at boot, so nothing here knows how any particular CLI spells "resume".
+
+  Engines with no registered format fall back to `<engine> resume <value>`,
+  which is also what the platform prints for an engine it has never seen.
 
   ## Examples
 
@@ -13,10 +17,10 @@ defmodule LemonCore.ResumeToken do
       # Claude session
       %LemonCore.ResumeToken{engine: "claude", value: "session_xyz"}
 
-      # Kimi session
-      %LemonCore.ResumeToken{engine: "kimi", value: "session_kimi"}
-
   """
+  alias LemonCore.ResumeFormat
+  alias LemonCore.ResumeFormats
+
   @type t :: %__MODULE__{
           engine: String.t(),
           value: String.t()
@@ -34,47 +38,35 @@ defmodule LemonCore.ResumeToken do
   end
 
   @doc "Format token for display to user"
-  def format(%__MODULE__{engine: engine, value: value}) do
-    "`" <> format_plain(%__MODULE__{engine: engine, value: value}) <> "`"
-  end
+  def format(%__MODULE__{} = token), do: "`" <> format_plain(token) <> "`"
 
-  @doc "Format token for plain-text display without code fences"
+  @doc """
+  Format token for plain-text display without code fences.
+
+      iex> LemonCore.ResumeToken.format_plain(%LemonCore.ResumeToken{engine: "lemon", value: "abc"})
+      "lemon resume abc"
+
+      iex> LemonCore.ResumeToken.format_plain(%LemonCore.ResumeToken{engine: "custom", value: "abc"})
+      "custom resume abc"
+  """
   @spec format_plain(t()) :: String.t()
   def format_plain(%__MODULE__{engine: engine, value: value}) do
-    case engine do
-      "codex" -> "codex resume #{value}"
-      "claude" -> "claude --resume #{value}"
-      "kimi" -> "kimi --session #{value}"
-      "opencode" -> "opencode --session #{value}"
-      "pi" -> "pi --session #{quote_token(value)}"
-      "lemon" -> "lemon resume #{value}"
-      _ -> "#{engine} resume #{value}"
+    case ResumeFormats.fetch(engine) do
+      {:ok, format} -> ResumeFormat.render(format, value)
+      :error -> generic_line(engine, value)
     end
   end
 
   @doc """
   Extract a resume token from text.
 
-  Searches text for resume line patterns from any supported engine.
-  Returns the first token found, or nil if none.
-
-  Handles various formats:
-  - Plain text: `codex resume abc123`
-  - Backticks: `` `claude --resume xyz` ``
-  - Code blocks: ```codex resume abc123```
+  Tries every registered format in registration order and returns the first
+  token found, or `nil`. Formats match anywhere in the text, so backticks and
+  surrounding prose are fine.
 
   ## Examples
 
-      iex> LemonCore.ResumeToken.extract_resume("Please run `codex resume thread_abc123`")
-      %LemonCore.ResumeToken{engine: "codex", value: "thread_abc123"}
-
-      iex> LemonCore.ResumeToken.extract_resume("Continue with claude --resume session_xyz")
-      %LemonCore.ResumeToken{engine: "claude", value: "session_xyz"}
-
-      iex> LemonCore.ResumeToken.extract_resume("Continue with kimi --session session_kimi")
-      %LemonCore.ResumeToken{engine: "kimi", value: "session_kimi"}
-
-      iex> LemonCore.ResumeToken.extract_resume("lemon resume abc12345")
+      iex> LemonCore.ResumeToken.extract_resume("Continue with `lemon resume abc12345`")
       %LemonCore.ResumeToken{engine: "lemon", value: "abc12345"}
 
       iex> LemonCore.ResumeToken.extract_resume("No resume token here")
@@ -83,36 +75,10 @@ defmodule LemonCore.ResumeToken do
   """
   @spec extract_resume(String.t()) :: t() | nil
   def extract_resume(text) when is_binary(text) do
-    # Try each engine's pattern in order
-    patterns = [
-      # Codex: `codex resume <thread_id>` or codex resume <thread_id>
-      {~r/`?codex\s+resume\s+([a-zA-Z0-9_-]+)`?/i, "codex"},
-      # Claude: `claude --resume <session_id>` or claude --resume <session_id>
-      {~r/`?claude\s+--resume\s+([a-zA-Z0-9_-]+)`?/i, "claude"},
-      # Kimi: `kimi --session <session_id>` or kimi --session <session_id>
-      {~r/`?kimi\s+--session\s+([a-zA-Z0-9_-]+)`?/i, "kimi"},
-      # OpenCode: `opencode --session <ses_...>` (optionally `opencode run --session`)
-      {~r/`?opencode(?:\s+run)?\s+(?:--session|-s)\s+(ses_[A-Za-z0-9]+)`?/i, "opencode"},
-      # Pi: `pi --session <token>` (token may be quoted)
-      {~r/`?pi\s+--session\s+("(?:[^"\\]|\\.)+"|'(?:[^'\\]|\\.)+'|\S+)`?/i, "pi"},
-      # Lemon: `lemon resume <session_id>` or lemon resume <session_id>
-      {~r/`?lemon\s+resume\s+([a-zA-Z0-9_-]+)`?/i, "lemon"}
-    ]
-
-    Enum.find_value(patterns, fn {regex, engine} ->
-      case Regex.run(regex, text) do
-        [_, value] ->
-          value =
-            if engine == "pi" do
-              strip_quotes(value)
-            else
-              value
-            end
-
-          new(engine, value)
-
-        _ ->
-          nil
+    Enum.find_value(ResumeFormats.all(), fn format ->
+      case ResumeFormat.capture(format, text) do
+        value when is_binary(value) -> new(format.engine, value)
+        _ -> nil
       end
     end)
   end
@@ -124,24 +90,18 @@ defmodule LemonCore.ResumeToken do
 
   ## Examples
 
-      iex> LemonCore.ResumeToken.extract_resume("codex resume abc", "codex")
-      %LemonCore.ResumeToken{engine: "codex", value: "abc"}
+      iex> LemonCore.ResumeToken.extract_resume("custom resume abc", "custom")
+      %LemonCore.ResumeToken{engine: "custom", value: "abc"}
 
-      iex> LemonCore.ResumeToken.extract_resume("codex resume abc", "claude")
+      iex> LemonCore.ResumeToken.extract_resume("custom resume abc", "other")
       nil
 
   """
   @spec extract_resume(String.t(), String.t()) :: t() | nil
   def extract_resume(text, engine) when is_binary(text) and is_binary(engine) do
-    regex = resume_regex(engine)
-
-    case Regex.run(regex, text) do
-      [_, value] ->
-        value = if engine == "pi", do: strip_quotes(value), else: value
-        new(engine, value)
-
-      _ ->
-        nil
+    case Regex.run(pattern_for(engine), text) do
+      [_, value] -> new(engine, normalize_for(engine, value))
+      _ -> nil
     end
   end
 
@@ -153,16 +113,10 @@ defmodule LemonCore.ResumeToken do
 
   ## Examples
 
-      iex> LemonCore.ResumeToken.is_resume_line("codex resume thread_abc123")
+      iex> LemonCore.ResumeToken.is_resume_line("`lemon resume abc12345`")
       true
 
-      iex> LemonCore.ResumeToken.is_resume_line("`claude --resume session_xyz`")
-      true
-
-      iex> LemonCore.ResumeToken.is_resume_line("Please run codex resume abc")
-      false
-
-      iex> LemonCore.ResumeToken.is_resume_line("Some other text")
+      iex> LemonCore.ResumeToken.is_resume_line("Please run lemon resume abc")
       false
 
   """
@@ -170,25 +124,7 @@ defmodule LemonCore.ResumeToken do
   # Resume-line detection keeps the LemonGateway.Engine callback name.
   # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
   def is_resume_line(line) when is_binary(line) do
-    line = String.trim(line)
-
-    patterns = [
-      # Strict patterns - line should be essentially just the resume command
-      # Codex
-      ~r/^`?codex\s+resume\s+[a-zA-Z0-9_-]+`?$/i,
-      # Claude
-      ~r/^`?claude\s+--resume\s+[a-zA-Z0-9_-]+`?$/i,
-      # Kimi
-      ~r/^`?kimi\s+--session\s+[a-zA-Z0-9_-]+`?$/i,
-      # OpenCode
-      ~r/^`?opencode(?:\s+run)?\s+(?:--session|-s)\s+ses_[A-Za-z0-9]+`?$/i,
-      # Pi (token may be quoted)
-      ~r/^`?pi\s+--session\s+("(?:[^"\\]|\\.)+"|'(?:[^'\\]|\\.)+'|\S+)`?$/i,
-      # Lemon
-      ~r/^`?lemon\s+resume\s+[a-zA-Z0-9_-]+`?$/i
-    ]
-
-    Enum.any?(patterns, fn regex -> Regex.match?(regex, line) end)
+    Enum.any?(ResumeFormats.all(), &ResumeFormat.resume_line?(&1, line))
   end
 
   # Resume-line detection keeps the LemonGateway.Engine callback name.
@@ -202,71 +138,34 @@ defmodule LemonCore.ResumeToken do
   # Resume-line detection keeps the LemonGateway.Engine callback name.
   # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
   def is_resume_line(line, engine) when is_binary(line) and is_binary(engine) do
-    line = String.trim(line)
-    regex = strict_resume_regex(engine)
-    Regex.match?(regex, line)
-  end
-
-  # Private helpers for engine-specific regex patterns
-
-  defp resume_regex("codex"), do: ~r/`?codex\s+resume\s+([a-zA-Z0-9_-]+)`?/i
-  defp resume_regex("claude"), do: ~r/`?claude\s+--resume\s+([a-zA-Z0-9_-]+)`?/i
-  defp resume_regex("kimi"), do: ~r/`?kimi\s+--session\s+([a-zA-Z0-9_-]+)`?/i
-
-  defp resume_regex("opencode"),
-    do: ~r/`?opencode(?:\s+run)?\s+(?:--session|-s)\s+(ses_[A-Za-z0-9]+)`?/i
-
-  defp resume_regex("pi"),
-    do: ~r/`?pi\s+--session\s+("(?:[^"\\]|\\.)+"|'(?:[^'\\]|\\.)+'|\S+)`?/i
-
-  defp resume_regex("lemon"), do: ~r/`?lemon\s+resume\s+([a-zA-Z0-9_-]+)`?/i
-  defp resume_regex(engine), do: ~r/`?#{Regex.escape(engine)}\s+resume\s+([a-zA-Z0-9_-]+)`?/i
-
-  defp strict_resume_regex("codex"), do: ~r/^`?codex\s+resume\s+[a-zA-Z0-9_-]+`?$/i
-  defp strict_resume_regex("claude"), do: ~r/^`?claude\s+--resume\s+[a-zA-Z0-9_-]+`?$/i
-
-  defp strict_resume_regex("kimi"), do: ~r/^`?kimi\s+--session\s+[a-zA-Z0-9_-]+`?$/i
-
-  defp strict_resume_regex("opencode"),
-    do: ~r/^`?opencode(?:\s+run)?\s+(?:--session|-s)\s+ses_[A-Za-z0-9]+`?$/i
-
-  defp strict_resume_regex("pi"),
-    do: ~r/^`?pi\s+--session\s+("(?:[^"\\]|\\.)+"|'(?:[^'\\]|\\.)+'|\S+)`?$/i
-
-  defp strict_resume_regex("lemon"), do: ~r/^`?lemon\s+resume\s+[a-zA-Z0-9_-]+`?$/i
-
-  defp strict_resume_regex(engine),
-    do: ~r/^`?#{Regex.escape(engine)}\s+resume\s+[a-zA-Z0-9_-]+`?$/i
-
-  defp strip_quotes(value) when is_binary(value) do
-    trimmed = String.trim(value)
-
-    if String.length(trimmed) >= 2 do
-      first = String.first(trimmed)
-      last = String.last(trimmed)
-
-      if first == last and first in ["\"", "'"] do
-        String.slice(trimmed, 1, String.length(trimmed) - 2)
-      else
-        trimmed
-      end
-    else
-      trimmed
+    case ResumeFormats.fetch(engine) do
+      {:ok, format} -> ResumeFormat.resume_line?(format, line)
+      :error -> Regex.match?(generic_strict_pattern(engine), String.trim(line))
     end
   end
 
-  defp quote_token(value) when is_binary(value) do
-    needs_quotes = Regex.match?(~r/\s/, value)
+  defp pattern_for(engine) do
+    case ResumeFormats.fetch(engine) do
+      {:ok, format} -> format.pattern
+      :error -> generic_pattern(engine)
+    end
+  end
 
-    cond do
-      not needs_quotes and not String.contains?(value, "\"") ->
+  defp normalize_for(engine, value) do
+    case ResumeFormats.fetch(engine) do
+      {:ok, %ResumeFormat{normalize: normalize}} when is_function(normalize, 1) ->
+        normalize.(value)
+
+      _ ->
         value
-
-      true ->
-        escaped = String.replace(value, "\"", "\\\"")
-        "\"#{escaped}\""
     end
   end
 
-  defp quote_token(value), do: to_string(value)
+  defp generic_line(engine, value), do: "#{engine} resume #{value}"
+
+  defp generic_pattern(engine),
+    do: ~r/`?#{Regex.escape(engine)}\s+resume\s+([a-zA-Z0-9_-]+)`?/i
+
+  defp generic_strict_pattern(engine),
+    do: ~r/^`?#{Regex.escape(engine)}\s+resume\s+[a-zA-Z0-9_-]+`?$/i
 end

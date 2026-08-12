@@ -176,6 +176,7 @@ it only through the `LemonCore.Store` finalize-run hook the runtime configures.
 | `LemonCore.BindingResolver` | Binding resolution logic |
 | `LemonCore.ChatScope` | Chat scope struct |
 | `LemonCore.ResumeToken` | Resume token for session continuity |
+| `LemonCore.ResumeFormat` / `LemonCore.ResumeFormats` | Per-engine resume syntax, registered at boot |
 
 ### Operations
 

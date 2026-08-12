@@ -1,37 +1,26 @@
 defmodule LemonCore.ResumeTokenTest do
-  use ExUnit.Case, async: true
+  # Registering a resume format writes application env, which is global.
+  use ExUnit.Case, async: false
 
+  alias LemonCore.ResumeFormat
+  alias LemonCore.ResumeFormats
   alias LemonCore.ResumeToken
 
-  test "format_plain/1 renders builtin engine syntax" do
-    assert ResumeToken.format_plain(%ResumeToken{engine: "codex", value: "thread_123"}) ==
-             "codex resume thread_123"
+  doctest LemonCore.ResumeToken
 
-    assert ResumeToken.format_plain(%ResumeToken{engine: "claude", value: "sess_123"}) ==
-             "claude --resume sess_123"
+  # Vendor syntax lives with the vendor: the round-trip for the CLI engines is
+  # in lemon_cli_runners, against the formats its application registers at boot.
+  # What core owns is the generic mechanism and its own `lemon` syntax.
+  setup do
+    ResumeFormats.register(
+      ResumeFormat.new("stub",
+        pattern: ~r/`?stub\s+--continue\s+<([^>]+)>`?/i,
+        render: &("stub --continue <" <> &1 <> ">"),
+        normalize: &String.upcase/1
+      )
+    )
 
-    assert ResumeToken.format_plain(%ResumeToken{engine: "kimi", value: "kimi_123"}) ==
-             "kimi --session kimi_123"
-
-    assert ResumeToken.format_plain(%ResumeToken{engine: "opencode", value: "ses_123"}) ==
-             "opencode --session ses_123"
-
-    assert ResumeToken.format_plain(%ResumeToken{engine: "pi", value: "needs spaces"}) ==
-             ~s(pi --session "needs spaces")
-
-    assert ResumeToken.format_plain(%ResumeToken{engine: "lemon", value: "abc123"}) ==
-             "lemon resume abc123"
-  end
-
-  test "format_plain/1 falls back to generic syntax for unknown engines" do
-    assert ResumeToken.format_plain(%ResumeToken{engine: "custom", value: "token"}) ==
-             "custom resume token"
-  end
-
-  test "format/1 wraps format_plain/1 in backticks" do
-    token = %ResumeToken{engine: "claude", value: "sess_123"}
-
-    assert ResumeToken.format(token) == "`claude --resume sess_123`"
+    on_exit(fn -> ResumeFormats.unregister("stub") end)
   end
 
   describe "new/2 and format/1" do
@@ -50,189 +39,107 @@ defmodule LemonCore.ResumeTokenTest do
              }
     end
 
-    test "formats codex token correctly" do
-      token = ResumeToken.new("codex", "thread_123")
-      assert ResumeToken.format(token) == "`codex resume thread_123`"
-    end
-
-    test "formats claude token correctly" do
-      token = ResumeToken.new("claude", "session_456")
-      assert ResumeToken.format(token) == "`claude --resume session_456`"
-    end
-
-    test "formats unknown engine token" do
-      token = ResumeToken.new("custom", "abc")
-      assert ResumeToken.format(token) == "`custom resume abc`"
-    end
-
-    test "formats lemon token correctly" do
-      token = ResumeToken.new("lemon", "abc12345")
-      assert ResumeToken.format(token) == "`lemon resume abc12345`"
-    end
-
-    test "formats opencode token correctly" do
-      token = ResumeToken.new("opencode", "ses_abc123")
-      assert ResumeToken.format(token) == "`opencode --session ses_abc123`"
-    end
-
-    test "formats pi token correctly" do
-      token = ResumeToken.new("pi", "session_1")
-      assert ResumeToken.format(token) == "`pi --session session_1`"
+    test "format/1 wraps format_plain/1 in backticks" do
+      assert ResumeToken.format(ResumeToken.new("lemon", "abc12345")) == "`lemon resume abc12345`"
     end
   end
 
-  describe "ResumeToken.extract_resume/1" do
-    test "extracts codex token from plain text" do
-      token = ResumeToken.extract_resume("codex resume thread_abc123")
-      assert %{engine: "codex", value: "thread_abc123"} = token
+  describe "format_plain/1" do
+    test "renders the built-in lemon syntax" do
+      assert ResumeToken.format_plain(%ResumeToken{engine: "lemon", value: "abc123"}) ==
+               "lemon resume abc123"
     end
 
-    test "extracts codex token with backticks" do
-      token = ResumeToken.extract_resume("Please run `codex resume thread_abc123`")
-      assert %{engine: "codex", value: "thread_abc123"} = token
+    test "renders a registered format with that format's own renderer" do
+      assert ResumeToken.format_plain(%ResumeToken{engine: "stub", value: "s1"}) ==
+               "stub --continue <s1>"
     end
 
-    test "extracts claude token from plain text" do
-      token = ResumeToken.extract_resume("claude --resume session_xyz")
-      assert %{engine: "claude", value: "session_xyz"} = token
-    end
-
-    test "extracts claude token with backticks" do
-      token = ResumeToken.extract_resume("Run `claude --resume session_xyz` to continue")
-      assert %{engine: "claude", value: "session_xyz"} = token
-    end
-
-    test "extracts lemon token from plain text" do
-      token = ResumeToken.extract_resume("lemon resume abc12345")
-      assert %{engine: "lemon", value: "abc12345"} = token
-    end
-
-    test "extracts lemon token with backticks" do
-      token = ResumeToken.extract_resume("Continue with `lemon resume abc12345`")
-      assert %{engine: "lemon", value: "abc12345"} = token
-    end
-
-    test "extracts opencode token" do
-      token = ResumeToken.extract_resume("opencode --session ses_494719016ffe85dkDMj0FPRbHK")
-      assert %{engine: "opencode", value: value} = token
-      assert String.starts_with?(value, "ses_")
-    end
-
-    test "extracts pi token (including quoted tokens)" do
-      token = ResumeToken.extract_resume("pi --session s1")
-      assert %{engine: "pi", value: "s1"} = token
-
-      token = ResumeToken.extract_resume("pi --session \"~/pi sessions/s1.jsonl\"")
-      assert %{engine: "pi", value: "~/pi sessions/s1.jsonl"} = token
-    end
-
-    test "returns nil when no token found" do
-      assert ResumeToken.extract_resume("No token here") == nil
-      assert ResumeToken.extract_resume("") == nil
-    end
-
-    test "handles case insensitivity" do
-      assert ResumeToken.extract_resume("CODEX resume ABC") != nil
-      assert ResumeToken.extract_resume("Claude --Resume XYZ") != nil
-      assert ResumeToken.extract_resume("LEMON RESUME abc") != nil
-      assert ResumeToken.extract_resume("OPENCODE --SESSION ses_abc") != nil
-      assert ResumeToken.extract_resume("PI --SESSION s1") != nil
-    end
-
-    test "extracts first token when multiple present" do
-      # Codex comes first in pattern list
-      token = ResumeToken.extract_resume("codex resume abc123 and claude --resume xyz")
-      assert token.engine == "codex"
-      assert token.value == "abc123"
-    end
-
-    test "handles tokens with various ID formats" do
-      # Underscores
-      assert ResumeToken.extract_resume("codex resume thread_abc_123").value == "thread_abc_123"
-      # Hyphens
-      assert ResumeToken.extract_resume("claude --resume session-xyz-456").value ==
-               "session-xyz-456"
-
-      # Mixed
-      assert ResumeToken.extract_resume("lemon resume abc-123_xyz").value == "abc-123_xyz"
+    test "falls back to generic syntax for engines with no registered format" do
+      assert ResumeToken.format_plain(%ResumeToken{engine: "custom", value: "token"}) ==
+               "custom resume token"
     end
   end
 
-  describe "ResumeToken.extract_resume/2" do
-    test "extracts only matching engine" do
-      text = "codex resume abc123 and claude --resume xyz"
+  describe "extract_resume/1" do
+    test "extracts the built-in lemon token, bare or backticked" do
+      assert ResumeToken.extract_resume("lemon resume abc12345") ==
+               %ResumeToken{engine: "lemon", value: "abc12345"}
 
-      assert ResumeToken.extract_resume(text, "codex").value == "abc123"
-      assert ResumeToken.extract_resume(text, "claude").value == "xyz"
-      assert ResumeToken.extract_resume("kimi --session sess_xyz", "kimi").value == "sess_xyz"
-      assert ResumeToken.extract_resume(text, "lemon") == nil
-    end
-  end
-
-  describe "ResumeToken.is_resume_line/1" do
-    test "returns true for plain codex resume line" do
-      assert ResumeToken.is_resume_line("codex resume thread_abc123") == true
+      assert ResumeToken.extract_resume("Continue with `lemon resume abc12345`") ==
+               %ResumeToken{engine: "lemon", value: "abc12345"}
     end
 
-    test "returns true for backticked codex resume line" do
-      assert ResumeToken.is_resume_line("`codex resume thread_abc123`") == true
+    test "extracts a registered format's token and applies its normalizer" do
+      assert ResumeToken.extract_resume("run `stub --continue <s1>` next") ==
+               %ResumeToken{engine: "stub", value: "S1"}
     end
 
-    test "returns true for plain claude resume line" do
-      assert ResumeToken.is_resume_line("claude --resume session_xyz") == true
-    end
-
-    test "returns true for backticked claude resume line" do
-      assert ResumeToken.is_resume_line("`claude --resume session_xyz`") == true
-    end
-
-    test "returns true for plain lemon resume line" do
-      assert ResumeToken.is_resume_line("lemon resume abc12345") == true
-    end
-
-    test "returns true for backticked lemon resume line" do
-      assert ResumeToken.is_resume_line("`lemon resume abc12345`") == true
-    end
-
-    test "returns false for line with extra text before" do
-      assert ResumeToken.is_resume_line("Please run codex resume abc") == false
-    end
-
-    test "returns false for line with extra text after" do
-      assert ResumeToken.is_resume_line("codex resume abc to continue") == false
-    end
-
-    test "returns false for non-resume lines" do
-      assert ResumeToken.is_resume_line("Some other text") == false
-      assert ResumeToken.is_resume_line("") == false
-    end
-
-    test "handles whitespace" do
-      assert ResumeToken.is_resume_line("  codex resume abc  ") == true
-      assert ResumeToken.is_resume_line("\tclauded --resume xyz\n") == false
+    test "prefers the format registered first when several match" do
+      assert %ResumeToken{engine: "stub"} =
+               ResumeToken.extract_resume("stub --continue <s1> then lemon resume abc")
     end
 
     test "is case insensitive" do
-      assert ResumeToken.is_resume_line("CODEX RESUME abc") == true
-      assert ResumeToken.is_resume_line("Claude --Resume xyz") == true
+      assert ResumeToken.extract_resume("LEMON RESUME abc") ==
+               %ResumeToken{engine: "lemon", value: "abc"}
     end
 
-    test "matches opencode and pi resume lines" do
-      assert ResumeToken.is_resume_line("opencode --session ses_abc123") == true
-      assert ResumeToken.is_resume_line("`opencode run --session ses_abc123`") == true
-      assert ResumeToken.is_resume_line("pi --session s1") == true
-      assert ResumeToken.is_resume_line("`pi --session \"~/x y.jsonl\"`") == true
-      assert ResumeToken.is_resume_line("Please run pi --session s1") == false
+    test "returns nil when nothing matches" do
+      assert ResumeToken.extract_resume("No token here") == nil
+      assert ResumeToken.extract_resume("") == nil
+      assert ResumeToken.extract_resume(:not_text) == nil
+    end
+
+    test "does not invent tokens for engines with no registered format" do
+      assert ResumeToken.extract_resume("custom resume abc") == nil
     end
   end
 
-  describe "ResumeToken.is_resume_line/2" do
-    test "returns true only for matching engine" do
-      assert ResumeToken.is_resume_line("codex resume abc", "codex") == true
-      assert ResumeToken.is_resume_line("codex resume abc", "claude") == false
-      assert ResumeToken.is_resume_line("claude --resume xyz", "claude") == true
-      assert ResumeToken.is_resume_line("claude --resume xyz", "codex") == false
-      assert ResumeToken.is_resume_line("kimi --session sess_xyz", "kimi") == true
+  describe "extract_resume/2" do
+    test "extracts only the requested engine" do
+      text = "lemon resume abc123 and stub --continue <s1>"
+
+      assert ResumeToken.extract_resume(text, "lemon").value == "abc123"
+      assert ResumeToken.extract_resume(text, "stub").value == "S1"
+    end
+
+    test "accepts generic syntax for engines with no registered format" do
+      assert ResumeToken.extract_resume("custom resume abc", "custom") ==
+               %ResumeToken{engine: "custom", value: "abc"}
+
+      assert ResumeToken.extract_resume("custom resume abc", "other") == nil
+    end
+  end
+
+  describe "is_resume_line/1" do
+    test "accepts a line that is nothing but a resume command" do
+      assert ResumeToken.is_resume_line("lemon resume abc12345")
+      assert ResumeToken.is_resume_line("`lemon resume abc12345`")
+      assert ResumeToken.is_resume_line("  lemon resume abc  ")
+      assert ResumeToken.is_resume_line("LEMON RESUME abc")
+      assert ResumeToken.is_resume_line("stub --continue <s1>")
+    end
+
+    test "rejects a resume command embedded in prose" do
+      assert ResumeToken.is_resume_line("Please run lemon resume abc") == false
+      assert ResumeToken.is_resume_line("lemon resume abc to continue") == false
+      assert ResumeToken.is_resume_line("Some other text") == false
+      assert ResumeToken.is_resume_line("") == false
+      assert ResumeToken.is_resume_line(nil) == false
+    end
+  end
+
+  describe "is_resume_line/2" do
+    test "answers for the named engine only" do
+      assert ResumeToken.is_resume_line("lemon resume abc", "lemon")
+      assert ResumeToken.is_resume_line("lemon resume abc", "stub") == false
+      assert ResumeToken.is_resume_line("stub --continue <s1>", "stub")
+    end
+
+    test "uses generic syntax for engines with no registered format" do
+      assert ResumeToken.is_resume_line("custom resume abc", "custom")
+      assert ResumeToken.is_resume_line("run custom resume abc", "custom") == false
     end
   end
 end

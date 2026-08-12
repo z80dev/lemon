@@ -60,6 +60,7 @@ defmodule LemonCliRunners.ClaudeSubagent do
 
   alias LemonCliRunners.ClaudeRunner
   alias LemonCore.RunEvents.{ActionEvent, CompletedEvent, StartedEvent}
+  alias LemonCore.ResumeFormat
   alias LemonCore.ResumeToken
 
   require Logger
@@ -97,6 +98,22 @@ defmodule LemonCliRunners.ClaudeSubagent do
   def describe do
     %{summary: "Claude Code CLI", caveats: ["accepts a `model` override"]}
   end
+
+  @doc """
+  The Claude Code CLI's resume syntax, registered into `LemonCore.ResumeFormats`
+  at boot so the platform can print and parse it without knowing this vendor.
+  """
+  @spec resume_format() :: ResumeFormat.t()
+  def resume_format do
+    ResumeFormat.new(id(),
+      pattern: ~r/`?claude\s+--resume\s+([a-zA-Z0-9_-]+)`?/i,
+      render: &__MODULE__.render_resume/1
+    )
+  end
+
+  @doc false
+  @spec render_resume(String.t()) :: String.t()
+  def render_resume(value), do: "claude --resume #{value}"
 
   @doc """
   Start a new Claude subagent session.

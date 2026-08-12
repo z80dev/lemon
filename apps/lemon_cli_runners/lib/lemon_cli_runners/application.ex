@@ -1,14 +1,20 @@
 defmodule LemonCliRunners.Application do
   @moduledoc """
-  Contributes this package's vendor CLIs to the platform's subagent registry.
+  Contributes this package's vendor CLIs to the platform's registries.
 
   There is no supervision tree here — the runners are started per run by their
   caller. The application callback exists for one reason: the platform must not
   name vendors, so each vendor package announces itself at boot instead of
   appearing in a list somewhere in `coding_agent` or in `config/config.exs`.
 
+  Two things are announced per vendor: the subagent runner the `task` tool may
+  delegate to, and the resume syntax that vendor's CLI speaks
+  (`LemonCore.ResumeFormats`), so nothing in core has to carry a table of
+  per-vendor regexes.
+
   Registration order is the order engines appear in the `task` tool's
-  description, so it is the order a reader should meet them in.
+  description, so it is the order a reader should meet them in — and, for
+  resume formats, the order text is searched in.
 
   A runtime without `:lemon_core` — or one where its registry has not started —
   simply has no CLI subagents; `register/1` answers `{:error, :unavailable}`
@@ -36,6 +42,7 @@ defmodule LemonCliRunners.Application do
     case Supervisor.start_link([], strategy: :one_for_one, name: LemonCliRunners.Supervisor) do
       {:ok, _supervisor} = ok ->
         register_subagents()
+        register_resume_formats()
         ok
 
       other ->
@@ -53,6 +60,12 @@ defmodule LemonCliRunners.Application do
           Logger.debug("subagent #{inspect(module)} not registered: #{inspect(reason)}")
           :ok
       end
+    end)
+  end
+
+  defp register_resume_formats do
+    Enum.each(@subagents, fn module ->
+      LemonCore.ResumeFormats.register(module.resume_format())
     end)
   end
 end

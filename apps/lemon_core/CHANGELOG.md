@@ -20,6 +20,12 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
   its per-engine tool-description prose, and each engine's default tool policy,
   so no vendor is named in the agent. Runners that declare themselves routable
   also extend `LemonCore.EngineCatalog`'s known-engine set.
+- `LemonCore.ResumeFormat` and `LemonCore.ResumeFormats` — the extension point
+  behind `LemonCore.ResumeToken`. An engine registers how it spells "resume"
+  (a pattern to find its token in text, a renderer to print one) when its own
+  application starts, so core no longer carries a table of per-vendor regexes.
+  `lemon` is built in; engines with no registered format read and print the
+  generic `<engine> resume <value>`.
 - `LemonCore.Store` can run as many named instances as you like. Configuration
   comes from `start_link/1` options first and application environment second,
   so an embedding application no longer has to write into `:lemon_core`'s app
@@ -51,6 +57,12 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
 
 ### Changed
 
+- `LemonCore.ResumeToken` is now a struct plus generic parse/format over the
+  registered resume formats. The per-vendor regex families it used to hold
+  (codex, claude, kimi, opencode, pi) moved to the packages that wrap those
+  CLIs. The API — `format/1`, `format_plain/1`, `extract_resume/1,2`,
+  `is_resume_line/1,2` — is unchanged, and remains the entrypoint for callers
+  that depend on `lemon_core` alone.
 - **`:exqlite`, `:sentry`, `:finch`, `:phoenix_pubsub` and `:file_system` are
   now optional dependencies.** Embedding `lemon_core` no longer drags in a
   SQLite NIF, an HTTP client, an error reporter and a pubsub server. Each one
