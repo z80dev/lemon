@@ -36,11 +36,6 @@ defmodule LemonCliRunners.TypesTest do
       assert ResumeToken.format(token) == "`claude --resume session_456`"
     end
 
-    test "formats droid token correctly" do
-      token = ResumeToken.new("droid", "sess_789")
-      assert ResumeToken.format(token) == "`droid exec -s sess_789`"
-    end
-
     test "formats unknown engine token" do
       token = ResumeToken.new("custom", "abc")
       assert ResumeToken.format(token) == "`custom resume abc`"
@@ -83,11 +78,6 @@ defmodule LemonCliRunners.TypesTest do
       assert %{engine: "claude", value: "session_xyz"} = token
     end
 
-    test "extracts droid token" do
-      token = ResumeToken.extract_resume("droid exec -s sess_xyz")
-      assert %{engine: "droid", value: "sess_xyz"} = token
-    end
-
     test "extracts lemon token from plain text" do
       token = ResumeToken.extract_resume("lemon resume abc12345")
       assert %{engine: "lemon", value: "abc12345"} = token
@@ -120,7 +110,6 @@ defmodule LemonCliRunners.TypesTest do
     test "handles case insensitivity" do
       assert ResumeToken.extract_resume("CODEX resume ABC") != nil
       assert ResumeToken.extract_resume("Claude --Resume XYZ") != nil
-      assert ResumeToken.extract_resume("DROID EXEC -S XYZ") != nil
       assert ResumeToken.extract_resume("LEMON RESUME abc") != nil
       assert ResumeToken.extract_resume("OPENCODE --SESSION ses_abc") != nil
       assert ResumeToken.extract_resume("PI --SESSION s1") != nil
@@ -151,7 +140,7 @@ defmodule LemonCliRunners.TypesTest do
 
       assert ResumeToken.extract_resume(text, "codex").value == "abc123"
       assert ResumeToken.extract_resume(text, "claude").value == "xyz"
-      assert ResumeToken.extract_resume("droid exec -s sess_xyz", "droid").value == "sess_xyz"
+      assert ResumeToken.extract_resume("kimi --session sess_xyz", "kimi").value == "sess_xyz"
       assert ResumeToken.extract_resume(text, "lemon") == nil
     end
   end
@@ -167,10 +156,6 @@ defmodule LemonCliRunners.TypesTest do
 
     test "returns true for plain claude resume line" do
       assert ResumeToken.is_resume_line("claude --resume session_xyz") == true
-    end
-
-    test "returns true for plain droid resume line" do
-      assert ResumeToken.is_resume_line("droid exec -s sess_xyz") == true
     end
 
     test "returns true for backticked claude resume line" do
@@ -223,7 +208,7 @@ defmodule LemonCliRunners.TypesTest do
       assert ResumeToken.is_resume_line("codex resume abc", "claude") == false
       assert ResumeToken.is_resume_line("claude --resume xyz", "claude") == true
       assert ResumeToken.is_resume_line("claude --resume xyz", "codex") == false
-      assert ResumeToken.is_resume_line("droid exec -s sess_xyz", "droid") == true
+      assert ResumeToken.is_resume_line("kimi --session sess_xyz", "kimi") == true
     end
   end
 

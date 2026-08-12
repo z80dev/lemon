@@ -55,7 +55,7 @@ defmodule CodingAgent.Tools.Task do
           "engine" => %{
             "type" => "string",
             "description" =>
-              "Execution engine: internal (default), codex, claude, droid, kimi, opencode, or pi"
+              "Execution engine: internal (default), codex, claude, kimi, opencode, or pi"
           },
           "model" => %{
             "type" => "string",
@@ -63,8 +63,7 @@ defmodule CodingAgent.Tools.Task do
           },
           "thinking_level" => %{
             "type" => "string",
-            "description" =>
-              "Optional thinking level override for internal engine or Droid reasoning effort"
+            "description" => "Optional thinking level override for the internal engine"
           },
           "role" => %{
             "type" => "string",

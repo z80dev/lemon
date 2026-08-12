@@ -21,7 +21,7 @@ Concretely, the tree contains:
   mid-port from the legacy gateway transport; see
   [`docs/platform/transport-unification.md`](docs/platform/transport-unification.md).
 - **Engines** — one `LemonGateway.Engine` behaviour with an in-process
-  implementation plus six CLI coding agents (Claude Code, Codex, Droid, Kimi,
+  implementation plus five CLI coding agents (Claude Code, Codex, Kimi,
   OpenCode, Pi) in [`apps/lemon_gateway/lib/lemon_gateway/engines`](apps/lemon_gateway/lib/lemon_gateway/engines).
 - **Run lifecycle** — single-flight, queue/steer/coalesce, policy, watchdog,
   delivery routing (`apps/lemon_router`).

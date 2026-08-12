@@ -25,7 +25,6 @@ defmodule LemonCore.EngineCatalogTest do
              "echo",
              "codex",
              "claude",
-             "droid",
              "opencode",
              "pi",
              "kimi"

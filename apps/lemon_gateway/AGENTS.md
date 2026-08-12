@@ -95,7 +95,6 @@ Bus event types: `:run_started`, `:run_completed`, `:delta`, `:engine_started`, 
 | _(moved)_ | `CodingAgent.GatewayEngine` | The `lemon` engine now lives in coding_agent and registers itself via `EngineRegistry.register/1`; this app no longer depends on the agent. |
 | `lib/lemon_gateway/engines/claude.ex` | `Engines.Claude` | Claude Code CLI: delegates to CliAdapter with `LemonCliRunners.ClaudeRunner` |
 | `lib/lemon_gateway/engines/codex.ex` | `Engines.Codex` | Codex CLI: delegates to CliAdapter with `LemonCliRunners.CodexRunner` |
-| `lib/lemon_gateway/engines/droid.ex` | `Engines.Droid` | Factory Droid CLI: delegates to CliAdapter with `LemonCliRunners.DroidRunner` |
 | `lib/lemon_gateway/engines/opencode.ex` | `Engines.Opencode` | Opencode CLI: delegates to CliAdapter with `LemonCliRunners.OpencodeRunner` |
 | `lib/lemon_gateway/engines/pi.ex` | `Engines.Pi` | Pi CLI: delegates to CliAdapter with `LemonCliRunners.PiRunner` |
 | `lib/lemon_gateway/engines/echo.ex` | `Engines.Echo` | Test engine: echoes prompt back, no subprocess, useful for integration tests |
@@ -248,7 +247,7 @@ Or modify the default list in `EngineRegistry.init/1`.
 If you want `/myengine` prefix support, update the regex in `EngineDirective.strip/1`:
 
 ```elixir
-~r{^/(lemon|codex|claude|droid|opencode|pi|echo|myengine)\b\s*(.*)$}is
+~r{^/(lemon|codex|claude|opencode|pi|echo|myengine)\b\s*(.*)$}is
 ```
 
 ### Event Protocol

@@ -10,7 +10,7 @@ defmodule LemonPlatformTest.EngineCase do
 
   An engine is the thing that actually answers. `LemonGateway` decides *that* a
   run should happen — concurrency, locking, scheduling, resume — and hands the
-  work to an engine, which wraps a CLI tool (`codex`, `claude`, `droid`), an API,
+  work to an engine, which wraps a CLI tool (`codex`, `claude`, `kimi`), an API,
   or an in-process agent. `LemonGateway.Engines.Echo` is the reference
   implementation and is 60 lines long; `CodingAgent.GatewayEngine` is a real one
   that lives in a different application entirely and registers itself at boot.

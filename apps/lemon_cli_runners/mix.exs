@@ -28,7 +28,7 @@ defmodule LemonCliRunners.MixProject do
   end
 
   defp description do
-    "Vendor AI CLIs (Claude Code, Codex, Droid, Kimi, OpenCode, Pi) wrapped " <>
+    "Vendor AI CLIs (Claude Code, Codex, Kimi, OpenCode, Pi) wrapped " <>
       "as streaming subagents: JSONL subprocess management, per-vendor event " <>
       "schemas, session resume, and lifecycle control."
   end

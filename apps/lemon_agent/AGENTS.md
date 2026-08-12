@@ -60,7 +60,7 @@ LemonAgent.Supervisor (:one_for_one)
 
 ### CLI Runners
 
-The vendor CLI wrappers (Claude Code, Codex, Droid, Kimi, OpenCode, Pi) moved to
+The vendor CLI wrappers (Claude Code, Codex, Kimi, OpenCode, Pi) moved to
 `apps/lemon_cli_runners` as `LemonCliRunners.*`; see that app's AGENTS/README.
 They still consume this app's `EventStream` and `Types`.
 

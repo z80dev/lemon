@@ -16,8 +16,8 @@ agent framework.
 - `LemonCliRunners.JsonlRunner` — base behaviour + GenServer for
   JSONL-streaming CLI subprocesses: port spawning, line buffering, session
   locking, stderr capture, graceful shutdown.
-- Per-vendor runner/schema/subagent triples for Claude Code, Codex, Droid,
-  Kimi, OpenCode, and Pi.
+- Per-vendor runner/schema/subagent triples for Claude Code, Codex, Kimi,
+  OpenCode, and Pi.
 - `LemonCliRunners.Types` — `ResumeToken`, `Action`, `StartedEvent`,
   `ActionEvent`, `CompletedEvent`, `EventFactory`.
 - `LemonCliRunners.Env` — the `:cli_runners`-area environment variable

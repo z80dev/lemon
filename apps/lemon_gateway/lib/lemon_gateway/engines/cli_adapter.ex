@@ -1,6 +1,6 @@
 defmodule LemonGateway.Engines.CliAdapter do
   @moduledoc """
-  Shared CLI subprocess runner used by the Claude, Codex, Droid, Opencode, and Pi engines.
+  Shared CLI subprocess runner used by the Claude, Codex, Kimi, Opencode, and Pi engines.
 
   Provides common logic for starting a CLI runner process, consuming its event
   stream, translating `LemonAgent` events into plain tagged maps via
@@ -63,7 +63,6 @@ defmodule LemonGateway.Engines.CliAdapter do
     case engine_id do
       "codex" -> "codex resume #{value}"
       "claude" -> "claude --resume #{value}"
-      "droid" -> "droid exec -s #{value}"
       "kimi" -> "kimi --session #{value}"
       "opencode" -> "opencode --session #{value}"
       "pi" -> "pi --session #{quote_token(value)}"

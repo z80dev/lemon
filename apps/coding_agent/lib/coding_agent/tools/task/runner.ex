@@ -8,7 +8,6 @@ defmodule CodingAgent.Tools.Task.Runner do
   alias LemonCliRunners.{
     ClaudeSubagent,
     CodexSubagent,
-    DroidSubagent,
     KimiSubagent,
     OpencodeSubagent,
     PiSubagent
@@ -81,7 +80,6 @@ defmodule CodingAgent.Tools.Task.Runner do
       case engine do
         "codex" -> {CodexSubagent, "codex"}
         "claude" -> {ClaudeSubagent, "claude"}
-        "droid" -> {DroidSubagent, "droid"}
         "kimi" -> {KimiSubagent, "kimi"}
         "opencode" -> {OpencodeSubagent, "opencode"}
         "pi" -> {PiSubagent, "pi"}

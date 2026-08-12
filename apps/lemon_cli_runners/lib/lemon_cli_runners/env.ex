@@ -10,18 +10,6 @@ defmodule LemonCliRunners.Env do
 
   @declarations [
     %{
-      name: :factory_api_key,
-      env_var: "FACTORY_API_KEY",
-      aliases: [],
-      type: :string,
-      default: nil,
-      doc: "Factory (Droid CLI) API key.",
-      secret?: true,
-      required?: false,
-      area: :cli_runners,
-      apps: [:lemon_cli_runners]
-    },
-    %{
       name: :lemon_claude_yolo,
       env_var: "LEMON_CLAUDE_YOLO",
       aliases: [],

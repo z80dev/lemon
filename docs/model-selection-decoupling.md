@@ -102,7 +102,7 @@ delegate to `ModelCatalog`.
   provider/credential lookups. No migration needed.
 - `apps/lemon_router/lib/lemon_router/model_selection.ex` is an
   intentionally separate concern: it maps a model string to one of the six
-  CLI *engines* (claude/codex/droid/kimi/opencode/pi) via
+  CLI *engines* (claude/codex/kimi/opencode/pi) via
   `LemonCore.EngineCatalog.known?/1`, not to an LLM API provider
   (anthropic/openai/google/etc.). It already delegates to `EngineCatalog`
   and does not duplicate anything the provider/credential facade owns. Left
