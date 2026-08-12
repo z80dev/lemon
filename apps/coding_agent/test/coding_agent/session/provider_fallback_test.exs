@@ -44,6 +44,118 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
     assert_receive {:attempt, :azure_openai_responses, "fallback-key"}
   end
 
+  test "does not fall back on a client-shaped (400) pre-commit stream error" do
+    primary = LemonAi.Models.get_model(:openai, "gpt-4")
+    settings = routing_settings()
+    parent = self()
+
+    stream_fn = fn model, _context, options ->
+      send(parent, {:attempt, model.provider, options.api_key})
+
+      case model.provider do
+        :openai ->
+          {:ok, error_stream(model, "Invalid request (HTTP 400): messages must be non-empty")}
+
+        :azure_openai_responses ->
+          {:ok, success_stream(model, "unexpected fallback")}
+      end
+    end
+
+    wrapped = ProviderFallback.maybe_wrap(stream_fn, primary, settings, File.cwd!())
+    {:ok, stream} = wrapped.(primary, %Context{}, %StreamOptions{})
+
+    assert {:error, message} = LemonAi.EventStream.result(stream, 1_000)
+    assert message.provider == :openai
+    assert message.error_message =~ "HTTP 400"
+
+    assert_receive {:attempt, :openai, "primary-key"}
+    refute_receive {:attempt, :azure_openai_responses, _}, 100
+  end
+
+  test "does not fall back on a context-length pre-commit stream error" do
+    primary = LemonAi.Models.get_model(:openai, "gpt-4")
+    settings = routing_settings()
+    parent = self()
+
+    stream_fn = fn model, _context, options ->
+      send(parent, {:attempt, model.provider, options.api_key})
+
+      case model.provider do
+        :openai ->
+          {:ok,
+           error_stream(model, "maximum context length is 8192 tokens (context_length_exceeded)")}
+
+        :azure_openai_responses ->
+          {:ok, success_stream(model, "unexpected fallback")}
+      end
+    end
+
+    wrapped = ProviderFallback.maybe_wrap(stream_fn, primary, settings, File.cwd!())
+    {:ok, stream} = wrapped.(primary, %Context{}, %StreamOptions{})
+
+    assert {:error, message} = LemonAi.EventStream.result(stream, 1_000)
+    assert message.provider == :openai
+    assert message.error_message =~ "context_length_exceeded"
+
+    assert_receive {:attempt, :openai, "primary-key"}
+    refute_receive {:attempt, :azure_openai_responses, _}, 100
+  end
+
+  test "falls back on a transient-shaped (503) pre-commit stream error" do
+    primary = LemonAi.Models.get_model(:openai, "gpt-4")
+    settings = routing_settings()
+    parent = self()
+
+    stream_fn = fn model, _context, options ->
+      send(parent, {:attempt, model.provider, options.api_key})
+
+      case model.provider do
+        :openai ->
+          {:ok, error_stream(model, "Service temporarily unavailable (HTTP 503)")}
+
+        :azure_openai_responses ->
+          {:ok, success_stream(model, "fallback response")}
+      end
+    end
+
+    wrapped = ProviderFallback.maybe_wrap(stream_fn, primary, settings, File.cwd!())
+    {:ok, stream} = wrapped.(primary, %Context{}, %StreamOptions{})
+
+    assert {:ok, message} = LemonAi.EventStream.result(stream, 1_000)
+    assert message.provider == :azure_openai_responses
+    assert [%TextContent{text: "fallback response"}] = message.content
+
+    assert_receive {:attempt, :openai, "primary-key"}
+    assert_receive {:attempt, :azure_openai_responses, "fallback-key"}
+  end
+
+  test "falls back on an auth-shaped (401) pre-commit stream error" do
+    primary = LemonAi.Models.get_model(:openai, "gpt-4")
+    settings = routing_settings()
+    parent = self()
+
+    stream_fn = fn model, _context, options ->
+      send(parent, {:attempt, model.provider, options.api_key})
+
+      case model.provider do
+        :openai ->
+          {:ok, error_stream(model, "Authentication failed (HTTP 401): invalid api key")}
+
+        :azure_openai_responses ->
+          {:ok, success_stream(model, "fallback response")}
+      end
+    end
+
+    wrapped = ProviderFallback.maybe_wrap(stream_fn, primary, settings, File.cwd!())
+    {:ok, stream} = wrapped.(primary, %Context{}, %StreamOptions{})
+
+    assert {:ok, message} = LemonAi.EventStream.result(stream, 1_000)
+    assert message.provider == :azure_openai_responses
+
+    assert_receive {:attempt, :openai, "primary-key"}
+    assert_receive {:attempt, :azure_openai_responses, "fallback-key"}
+  end
+
   test "does not fall back after useful content has been emitted" do
     primary = LemonAi.Models.get_model(:openai, "gpt-4")
 
@@ -97,7 +209,7 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
     assert [%TextContent{text: "streamed"}] = message.content
   end
 
-  test "session lifecycle does not wrap explicitly selected models" do
+  test "session lifecycle wraps explicitly selected models" do
     primary = LemonAi.Models.get_model(:openai, "gpt-4")
     settings = routing_settings()
     parent = self()
@@ -107,7 +219,7 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
 
       case model.provider do
         :openai -> {:ok, error_stream(model)}
-        :azure_openai_responses -> {:ok, success_stream(model, "unexpected fallback")}
+        :azure_openai_responses -> {:ok, success_stream(model, "fallback response")}
       end
     end
 
@@ -123,7 +235,7 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
     wait_for_idle(session)
 
     assert_receive {:attempt, :openai, "primary-key"}
-    refute_receive {:attempt, :azure_openai_responses, _}, 100
+    assert_receive {:attempt, :azure_openai_responses, "fallback-key"}
   end
 
   test "session lifecycle wraps default model streams" do
@@ -191,8 +303,8 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
     stream
   end
 
-  defp error_stream(model) do
-    message = message(model, :error, "", "provider_unavailable")
+  defp error_stream(model, error_message \\ "provider_unavailable") do
+    message = message(model, :error, "", error_message)
     {:ok, stream} = LemonAi.EventStream.start_link()
 
     Task.start(fn ->

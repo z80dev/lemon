@@ -134,7 +134,7 @@ defmodule CodingAgent.Session.ProviderFallback do
     |> LemonAi.EventStream.events()
     |> Enum.reduce_while(%{committed: false, buffer: []}, fn event, state ->
       cond do
-        not state.committed and retryable_error?(event) ->
+        not state.committed and failover_error?(event) ->
           {:halt, {:fallback, {:provider_error, event}}}
 
         not state.committed and useful_event?(event) ->
@@ -177,8 +177,28 @@ defmodule CodingAgent.Session.ProviderFallback do
     end
   end
 
-  defp retryable_error?({:error, _reason, _message}), do: true
-  defp retryable_error?(_), do: false
+  # Pre-commit stream errors only walk the fallback chain when the failure is
+  # credential- or provider-specific (per LemonAi.Error.failover_action/1).
+  # Errors that fall through here hit the terminal_event? branch instead and
+  # are relayed terminally without failover:
+  #
+  #   - :fail (client errors): the request itself is malformed — every
+  #     fallback candidate would reject it the same way.
+  #   - :compact (context overflow): no candidate can satisfy an oversized
+  #     context; recovery is owned by LemonAi.CompactingClient upstream, which
+  #     needs to SEE the error to compact and retry.
+  defp failover_error?({:error, _reason, _message} = event) do
+    case LemonAi.Error.failover_action(event) do
+      # NOTE(credential-pools): :next_credential should rotate credentials on
+      # the SAME provider once credential pools exist; until then it degrades
+      # to trying the next provider candidate, same as :next_provider.
+      :next_credential -> true
+      :next_provider -> true
+      _ -> false
+    end
+  end
+
+  defp failover_error?(_), do: false
 
   defp terminal_event?({:done, _reason, _message}), do: true
   defp terminal_event?({:error, _reason, _message}), do: true

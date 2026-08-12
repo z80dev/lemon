@@ -6,8 +6,6 @@ defmodule LemonAi.Providers.RetryHelper do
   transport error classification, and error text pattern matching.
   """
 
-  @default_retryable_statuses [408, 409, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524]
-
   @doc """
   Compute exponential backoff delay with jitter.
 
@@ -21,14 +19,20 @@ defmodule LemonAi.Providers.RetryHelper do
   end
 
   @doc """
-  Check whether an HTTP status code is retryable.
+  Check whether an HTTP status code is retryable in place against the SAME
+  provider (immediate retry with backoff).
 
-  Uses the comprehensive default list when called with one argument.
+  The status set is sourced from `LemonAi.Error.transport_retry_statuses/0`.
+  It is deliberately broader than the failover set encoded by
+  `LemonAi.Error.failover_action/1`: 408/409/425/500 are cheap to retry in
+  place because they are often one-off hiccups, but on their own they never
+  justify failing over to the next provider candidate.
+
   Pass an explicit list of statuses as second argument to override.
   """
   @spec retryable_http_status?(integer()) :: boolean()
   def retryable_http_status?(status) when is_integer(status) do
-    status in @default_retryable_statuses
+    status in LemonAi.Error.transport_retry_statuses()
   end
 
   def retryable_http_status?(_), do: false

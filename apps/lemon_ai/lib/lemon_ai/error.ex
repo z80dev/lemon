@@ -18,6 +18,8 @@ defmodule LemonAi.Error do
   @type error_category ::
           :rate_limit | :auth | :client | :context_length | :server | :transient | :unknown
 
+  @type failover_action :: :retry_same | :next_credential | :next_provider | :compact | :fail
+
   @type rate_limit_info :: %{
           limit: non_neg_integer() | nil,
           remaining: non_neg_integer() | nil,
@@ -337,9 +339,221 @@ defmodule LemonAi.Error do
     end
   end
 
+  @doc """
+  Classify an arbitrary error term into an `t:error_category/0`.
+
+  Accepts flexible input:
+
+  - a parsed error map (`t:parsed_error/0`, or any map with a `:category` key)
+  - an `{:http_error, status, body}` tuple
+  - an `{:error, stop_reason, message}` stream-terminal event, where `message`
+    is an `LemonAi.Types.AssistantMessage` (or any map with an `:error_message`
+    string) — classification falls back to the message text, since stream
+    events carry no structured status
+  - an exception struct (classified on `Exception.message/1`)
+  - a transport reason atom (`:timeout`, `:econnrefused`, ...)
+  - a raw error string
+
+  Anything unclassifiable returns `:unknown`.
+  """
+  @spec classify(term()) :: error_category()
+  def classify(%{category: category})
+      when category in [
+             :rate_limit,
+             :auth,
+             :client,
+             :context_length,
+             :server,
+             :transient,
+             :unknown
+           ],
+      do: category
+
+  def classify({:http_error, status, body}), do: parse_http_error(status, body, []).category
+  def classify({:error, _stop_reason, message}), do: classify(message)
+  def classify({:error, reason}), do: classify(reason)
+  def classify(:context_length_exceeded), do: :context_length
+  def classify(:rate_limited), do: :rate_limit
+
+  def classify(reason)
+      when reason in [
+             :timeout,
+             :closed,
+             :econnrefused,
+             :econnreset,
+             :nxdomain,
+             :enetdown,
+             :ehostunreach
+           ],
+      do: :transient
+
+  def classify(%{error_message: message}) when is_binary(message),
+    do: classify_message_text(message)
+
+  def classify(exception) when is_exception(exception),
+    do: classify_message_text(Exception.message(exception))
+
+  def classify(message) when is_binary(message), do: classify_message_text(message)
+  def classify(_), do: :unknown
+
+  @doc """
+  Decide how the live provider-fallback path should react to an error.
+
+  Classifies the error via `classify/1` and maps the category to an action:
+
+  | Category          | Action             | Rationale                                                        |
+  |-------------------|--------------------|------------------------------------------------------------------|
+  | `:auth`           | `:next_credential` | The credential is bad, not the provider — rotate credentials.     |
+  | `:rate_limit`     | `:next_credential` | The current key is throttled; another credential may have quota.  |
+  | `:transient`      | `:next_provider`   | Provider-side hiccup — another provider can serve the request.    |
+  | `:server`         | `:next_provider`   | Provider-side failure — another provider can serve the request.   |
+  | `:context_length` | `:compact`         | See below.                                                        |
+  | `:client`         | `:fail`            | The request itself is malformed; every provider would reject it.  |
+  | `:unknown`        | `:next_provider`   | Fail-open: keeps failover for genuinely unclassifiable errors.    |
+
+  `:context_length` never fails over: the context is too large for the model,
+  a condition no fallback candidate can satisfy — retrying the same oversized
+  context would just burn every provider in the chain. Context-overflow
+  recovery is owned by `LemonAi.CompactingClient`, which compacts the context
+  and retries, so the error must surface to it (`:compact`) instead of walking
+  the fallback chain.
+
+  `:retry_same` is reserved in the type for callers that retry in place (see
+  `transport_retry_statuses/0` for that set); no category currently maps to it.
+  """
+  @spec failover_action(term()) :: failover_action()
+  def failover_action(error) do
+    case classify(error) do
+      :auth -> :next_credential
+      :rate_limit -> :next_credential
+      :transient -> :next_provider
+      :server -> :next_provider
+      :context_length -> :compact
+      :client -> :fail
+      :unknown -> :next_provider
+    end
+  end
+
+  @doc """
+  Whether a request-level error indicates the SERVICE is unhealthy and should
+  count against the provider's circuit breaker.
+
+  Encodes the failure set used by `LemonAi.CallDispatcher.dispatch/2` for
+  request-level results: HTTP >= 500, transport failures (`:timeout`,
+  `:closed`, `:econnrefused`, `:econnreset`, `:nxdomain`), and timeout-ish
+  error strings. Explicitly NOT 4xx: client errors (400/413), rate limits
+  (429), and auth errors (401/403) are caused by the request or credential,
+  not the service, and must not trip the breaker.
+  """
+  @spec circuit_breaker_failure?(term()) :: boolean()
+  def circuit_breaker_failure?({:http_error, status, _body}) do
+    status >= 500
+  end
+
+  def circuit_breaker_failure?(:timeout), do: true
+  def circuit_breaker_failure?(:closed), do: true
+  def circuit_breaker_failure?(:econnrefused), do: true
+  def circuit_breaker_failure?(:econnreset), do: true
+  def circuit_breaker_failure?(:nxdomain), do: true
+
+  def circuit_breaker_failure?(reason) when is_binary(reason) do
+    downcased = String.downcase(reason)
+    String.contains?(downcased, "timeout") or String.contains?(downcased, "econnrefused")
+  end
+
+  def circuit_breaker_failure?(_), do: false
+
+  @doc """
+  Whether a stream-terminal error should count against a provider's circuit
+  breaker.
+
+  Stream-terminal errors are not automatically service failures: a 401/429/400
+  can surface after the connection is established — the provider rejects the
+  request mid-stream, or the HTTP error body arrives as the stream's terminal
+  event. Classifies the error (via `classify/1`) and exempts the categories
+  caused by the request or credential (`:auth`, `:rate_limit`, `:client`,
+  `:context_length`). Everything else — `:server`, `:transient`, and
+  unclassifiable errors such as broken connections, timeouts, or crashed
+  streaming tasks — counts as a service failure.
+  """
+  @spec stream_terminal_breaker_failure?(term()) :: boolean()
+  def stream_terminal_breaker_failure?(reason) do
+    classify(reason) not in [:auth, :rate_limit, :client, :context_length]
+  end
+
+  @transport_retry_statuses [408, 409, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524]
+
+  @doc """
+  HTTP status codes worth retrying in place against the SAME provider (with
+  backoff). Used by `LemonAi.Providers.RetryHelper.retryable_http_status?/1`.
+
+  This is deliberately broader than the failover path (`failover_action/1`):
+  408/409/425/500 are often one-off hiccups that an immediate same-provider
+  retry absorbs cheaply, but on their own they do not justify abandoning the
+  provider for the next candidate. The failover path instead classifies by
+  category — `:server`/`:transient` (and unclassifiable) errors move to the
+  next candidate, while 4xx client errors fail fast.
+  """
+  @spec transport_retry_statuses() :: [pos_integer()]
+  def transport_retry_statuses, do: @transport_retry_statuses
+
   # ============================================================================
   # Private Helpers
   # ============================================================================
+
+  # Classify an error that only carries message text (stream-terminal events,
+  # exceptions, raw strings). Providers usually strip the HTTP status when the
+  # error body parses, so this leans on message patterns first and any embedded
+  # "HTTP <status>" mention second. Unmatched text stays :unknown, which the
+  # failover path treats fail-open (:next_provider).
+  defp classify_message_text(message) do
+    status = status_from_message(message)
+
+    cond do
+      context_length_error_string?(status, message) -> :context_length
+      auth_message?(message) or status in [401, 403] -> :auth
+      provider_rate_limit_message?(message) or status == 429 -> :rate_limit
+      provider_transient_message?(message) or transient_message?(message) -> :transient
+      is_integer(status) -> classify_status(status)
+      true -> :unknown
+    end
+  end
+
+  defp status_from_message(message) do
+    case Regex.run(~r/(?:HTTP|status)[ :]+(\d{3})\b/i, message) do
+      [_, code] -> String.to_integer(code)
+      nil -> nil
+    end
+  end
+
+  defp auth_message?(message) do
+    downcased = String.downcase(message)
+
+    String.contains?(downcased, "unauthorized") or
+      String.contains?(downcased, "authentication") or
+      String.contains?(downcased, "invalid api key") or
+      String.contains?(downcased, "invalid_api_key") or
+      String.contains?(downcased, "invalid x-api-key") or
+      String.contains?(downcased, "api key not valid") or
+      String.contains?(downcased, "permission denied") or
+      String.contains?(downcased, "forbidden")
+  end
+
+  defp transient_message?(message) do
+    downcased = String.downcase(message)
+
+    String.contains?(downcased, "timeout") or
+      String.contains?(downcased, "timed out") or
+      String.contains?(downcased, "econnrefused") or
+      String.contains?(downcased, "econnreset") or
+      String.contains?(downcased, "connection refused") or
+      String.contains?(downcased, "connection reset") or
+      String.contains?(downcased, "connection closed") or
+      String.contains?(downcased, "nxdomain") or
+      String.contains?(downcased, "502") or
+      String.contains?(downcased, "503") or
+      String.contains?(downcased, "504")
+  end
 
   defp classify_error(status, body, provider_message) do
     cond do

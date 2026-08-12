@@ -176,6 +176,63 @@ defmodule LemonAi.CallDispatcherTest do
       end)
     end
 
+    test "auth-shaped stream terminal error is not recorded as circuit breaker failure",
+         %{provider: provider} do
+      start_supervised!(
+        {RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100}
+      )
+
+      start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 3})
+
+      {:ok, stream} =
+        CallDispatcher.dispatch(provider, fn ->
+          EventStream.start_link(owner: self())
+        end)
+
+      wait_until(fn -> CallDispatcher.get_active_requests(provider) == 1 end)
+
+      {:ok, cb_before} = CircuitBreaker.get_state(provider)
+      assert cb_before.failure_count == 0
+
+      EventStream.error(stream, %{
+        stop_reason: :error,
+        error_message: "Authentication failed (HTTP 401): invalid x-api-key",
+        content: []
+      })
+
+      wait_until(fn -> CallDispatcher.get_active_requests(provider) == 0 end)
+
+      {:ok, cb_after} = CircuitBreaker.get_state(provider)
+      assert cb_after.failure_count == 0
+    end
+
+    test "rate-limit-shaped stream terminal error is not recorded as circuit breaker failure",
+         %{provider: provider} do
+      start_supervised!(
+        {RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100}
+      )
+
+      start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 3})
+
+      {:ok, stream} =
+        CallDispatcher.dispatch(provider, fn ->
+          EventStream.start_link(owner: self())
+        end)
+
+      wait_until(fn -> CallDispatcher.get_active_requests(provider) == 1 end)
+
+      EventStream.error(stream, %{
+        stop_reason: :error,
+        error_message: "Rate limit exceeded (HTTP 429): too many requests",
+        content: []
+      })
+
+      wait_until(fn -> CallDispatcher.get_active_requests(provider) == 0 end)
+
+      {:ok, cb_after} = CircuitBreaker.get_state(provider)
+      assert cb_after.failure_count == 0
+    end
+
     test "stream tracking timeout cancels stalled stream and releases slot", %{provider: provider} do
       start_supervised!(
         {RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100}
