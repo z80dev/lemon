@@ -41,6 +41,19 @@ defmodule LemonChannels.Adapters.Discord.ModelCatalog do
   def model_label(%{id: id}) when is_binary(id), do: id
   def model_label(other), do: inspect(other)
 
+  @doc false
+  # Test seam: the same enabled-provider decision the picker catalog makes,
+  # evaluated against an explicit config instead of `LemonCore.Config.cached()`.
+  # Counts pool-only credentials via `provider_routing`.
+  def provider_enabled_for_config?(provider, cfg) do
+    provider_enabled?(
+      normalize_provider_name(provider),
+      configured_provider_index(cfg),
+      default_provider_hints(cfg),
+      provider_routing_config(cfg)
+    )
+  end
+
   defp available_model_catalog do
     models_module = :"Elixir.LemonAi.Models"
 
@@ -121,13 +134,14 @@ defmodule LemonChannels.Adapters.Discord.ModelCatalog do
     cfg = LemonCore.Config.cached()
     configured = configured_provider_index(cfg)
     defaults = default_provider_hints(cfg)
+    routing = provider_routing_config(cfg)
 
     model_maps
     |> Enum.map(&normalize_provider_name(&1.provider))
     |> Enum.reject(&(&1 == ""))
     |> Enum.uniq()
     |> Enum.filter(fn provider ->
-      provider_enabled?(provider, configured, defaults)
+      provider_enabled?(provider, configured, defaults, routing)
     end)
   rescue
     _ -> []
@@ -167,13 +181,25 @@ defmodule LemonChannels.Adapters.Discord.ModelCatalog do
 
   defp split_model_hint(_), do: {nil, nil}
 
-  defp provider_enabled?(provider, configured, defaults) do
-    Map.has_key?(configured, provider) or provider in defaults or
-      provider_has_credentials?(provider, configured)
+  # Normalized routing config so pool-only credentials
+  # (`provider_routing.credential_pools.<pool>.credentials`) count toward
+  # provider availability in the picker catalog.
+  defp provider_routing_config(cfg) do
+    agent = map_get(cfg, :agent) || %{}
+    map_get(agent, :provider_routing) || %{}
+  rescue
+    _ -> %{}
   end
 
-  defp provider_has_credentials?(provider, configured) do
-    LemonAgent.ModelRuntime.Credentials.provider_has_credentials?(provider, configured)
+  defp provider_enabled?(provider, configured, defaults, routing) do
+    Map.has_key?(configured, provider) or provider in defaults or
+      provider_has_credentials?(provider, configured, routing)
+  end
+
+  defp provider_has_credentials?(provider, configured, routing) do
+    LemonAgent.ModelRuntime.Credentials.provider_has_credentials?(provider, configured,
+      provider_routing: routing
+    )
   rescue
     _ -> false
   end

@@ -109,6 +109,7 @@ defmodule LemonAgent.ModelRuntime.ProviderStatus do
     config_name = ProviderNames.config_name(provider) || normalize_provider(provider)
     provider_cfg = ProviderNames.provider_config(config.providers, provider) || %{}
     env_configured? = env_configured?(provider)
+    routing = provider_routing(config)
 
     %{
       "provider" => canonical || normalize_provider(provider),
@@ -117,7 +118,15 @@ defmodule LemonAgent.ModelRuntime.ProviderStatus do
       "configured" => map_size(provider_cfg) > 0,
       "credentialReady" =>
         if(canonical,
-          do: credential_ready?(canonical, config.providers, provider_cfg, env_configured?, cwd),
+          do:
+            credential_ready?(
+              canonical,
+              config.providers,
+              provider_cfg,
+              env_configured?,
+              cwd,
+              routing
+            ),
           else: false
         ),
       "config" => %{
@@ -251,9 +260,10 @@ defmodule LemonAgent.ModelRuntime.ProviderStatus do
     Map.get(map, key) || Map.get(map, to_string(key))
   end
 
-  defp credential_ready?("openai_codex", providers, provider_cfg, env_configured?, cwd) do
+  defp credential_ready?("openai_codex", providers, provider_cfg, env_configured?, cwd, routing) do
     LemonAgent.ModelRuntime.Credentials.provider_has_credentials?("openai_codex", providers,
-      cwd: cwd
+      cwd: cwd,
+      provider_routing: routing
     ) or
       (not present?(provider_config_value(provider_cfg, :auth_source)) && not env_configured? &&
          LemonAgent.ModelRuntime.Credentials.provider_has_credentials?(
@@ -263,15 +273,28 @@ defmodule LemonAgent.ModelRuntime.ProviderStatus do
          ))
   end
 
-  defp credential_ready?("anthropic", providers, _provider_cfg, _env_configured?, cwd) do
+  defp credential_ready?("anthropic", providers, _provider_cfg, _env_configured?, cwd, routing) do
     LemonAgent.ModelRuntime.Credentials.provider_has_credentials?("anthropic", providers,
-      cwd: cwd
+      cwd: cwd,
+      provider_routing: routing
     )
   end
 
-  defp credential_ready?(canonical, providers, _provider_cfg, _env_configured?, cwd) do
-    LemonAgent.ModelRuntime.Credentials.provider_has_credentials?(canonical, providers, cwd: cwd)
+  defp credential_ready?(canonical, providers, _provider_cfg, _env_configured?, cwd, routing) do
+    LemonAgent.ModelRuntime.Credentials.provider_has_credentials?(canonical, providers,
+      cwd: cwd,
+      provider_routing: routing
+    )
   end
+
+  # Normalized routing config so pool-only credentials
+  # (`provider_routing.credential_pools.<pool>.credentials`) count toward
+  # `credentialReady` the same way ModelResolver's readiness gate counts them.
+  defp provider_routing(%Config{agent: agent}) when is_map(agent) do
+    Map.get(agent, :provider_routing) || Map.get(agent, "provider_routing") || %{}
+  end
+
+  defp provider_routing(_), do: %{}
 
   defp env_configured?(provider) do
     provider

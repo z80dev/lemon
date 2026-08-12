@@ -11,6 +11,7 @@ defmodule LemonAgent.ModelRuntime.ProviderStatusTest do
     OPENAI_CODEX_API_KEY
     CHATGPT_TOKEN
     ZAI_API_KEY
+    POOL_ZAI_KEY
     LEMON_SECRETS_MASTER_KEY
     LEMON_DEFAULT_PROVIDER
     LEMON_DEFAULT_MODEL
@@ -155,6 +156,41 @@ defmodule LemonAgent.ModelRuntime.ProviderStatusTest do
     assert "zai" in routing["fallbackProviders"]
     refute inspect(status) =~ "zai-secret-value"
     refute inspect(status) =~ "ZAI_API_KEY"
+  end
+
+  test "pool-only credentials flip credentialReady and select the provider", %{cwd: cwd} do
+    write_config!(cwd, """
+    [defaults]
+    provider = "zai"
+    model = "glm-4.7"
+
+    [runtime.provider_routing]
+    default_pool = "burst"
+
+    [runtime.provider_routing.credential_pools.burst.credentials]
+    zai = ["env:POOL_ZAI_KEY"]
+    """)
+
+    System.put_env("POOL_ZAI_KEY", "pool-zai-secret-value")
+
+    status =
+      LemonAgent.ModelRuntime.ProviderStatus.snapshot(%{
+        "projectDir" => cwd,
+        "provider" => "zai"
+      })
+
+    provider = Enum.find(status["providers"], &(&1["provider"] == "zai"))
+
+    # Env + secrets are cleared in setup, so readiness can only come from the
+    # routing pool credential.
+    assert provider["credentialReady"]
+
+    assert status["routing"]["selectedProvider"] == "zai"
+    assert status["routing"]["decision"] == "selected_primary"
+
+    rendered = inspect(status)
+    refute rendered =~ "pool-zai-secret-value"
+    refute rendered =~ "POOL_ZAI_KEY"
   end
 
   test "openai-codex oauth readiness ignores ambient raw token env", %{cwd: cwd} do
