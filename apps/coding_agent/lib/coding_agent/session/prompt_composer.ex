@@ -20,6 +20,20 @@ defmodule CodingAgent.Session.PromptComposer do
   2. Prompt template content (if prompt_template option provided)
   3. Lemon base prompt (skills + workspace context)
   4. CLAUDE.md/AGENTS.md content from ResourceLoader
+
+  `build_opts` is merged into the map handed to `CodingAgent.SystemPrompt.build/2`.
+  It carries the run identifiers used for skill-resolution tracing, and — from a
+  caller that has already collected this turn's contributed sections —
+  `:contributed_sections`.
+
+  Passing those sections matters, and not only as an optimisation.
+  `CodingAgent.SystemPrompt.build/2` collects them itself when they are absent,
+  so a caller that collected and then did not pass them would run every
+  contributor twice in one turn: twice the budget, twice the cost, and — for a
+  contributor whose whole reason for existing is that its text changes — two
+  different answers for the same turn, one placed in the system prompt and one
+  in the user message. A caller with no sections of its own (a one-shot build
+  outside a session) simply omits the key and gets the collect it always did.
   """
   @spec compose_system_prompt(
           String.t(),
@@ -37,7 +51,7 @@ defmodule CodingAgent.Session.PromptComposer do
         workspace_dir,
         session_scope,
         skill_context \\ "",
-        trace_opts \\ %{}
+        build_opts \\ %{}
       ) do
     # Load prompt template if specified
     template_content =
@@ -61,7 +75,7 @@ defmodule CodingAgent.Session.PromptComposer do
           session_scope: session_scope,
           skill_context: skill_context
         }
-        |> Map.merge(trace_opts)
+        |> Map.merge(build_opts)
       )
 
     # Load instructions (CLAUDE.md, AGENTS.md) from cwd and parent directories
@@ -109,6 +123,14 @@ defmodule CodingAgent.Session.PromptComposer do
 
   Takes the current state fields needed for prompt composition and
   returns `{:changed, new_prompt}` or `:unchanged`.
+
+  "Changed" is a byte comparison, which is the right test precisely because the
+  provider's prompt cache is keyed the same way: any difference at all
+  invalidates the cached prefix, so any difference at all is worth propagating.
+  The corollary is the one that shapes callers — everything reaching this
+  function through `build_opts` should be text that does *not* differ turn to
+  turn. Volatile material belongs after the last cache breakpoint, in the user
+  message, and never in `:contributed_sections`.
   """
   @spec maybe_refresh_system_prompt(
           String.t(),
@@ -128,7 +150,7 @@ defmodule CodingAgent.Session.PromptComposer do
         session_scope,
         current_prompt,
         skill_context \\ "",
-        trace_opts \\ %{}
+        build_opts \\ %{}
       ) do
     next_prompt =
       compose_system_prompt(
@@ -138,7 +160,7 @@ defmodule CodingAgent.Session.PromptComposer do
         workspace_dir,
         session_scope,
         skill_context,
-        trace_opts
+        build_opts
       )
 
     if next_prompt == current_prompt do

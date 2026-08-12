@@ -50,16 +50,13 @@ Code.require_file("support/mock_ui.ex", __DIR__)
 Code.require_file("support/permission_helpers.ex", __DIR__)
 Code.require_file("support/async_helpers.ex", __DIR__)
 
-# Load shared test support from agent_core app
-agent_core_support = Path.join([__DIR__, "..", "..", "agent_core", "test", "support", "mocks.ex"])
+# Load shared test support from the lemon_agent and lemon_ai apps. These are
+# required unconditionally on purpose: an `if File.exists?` guard turns a moved
+# or renamed support file into dozens of confusing UndefinedFunctionError
+# failures inside individual tests, whereas a hard require fails once, here,
+# with the path that no longer resolves.
+Code.require_file(Path.join([__DIR__, "..", "..", "lemon_agent", "test", "support", "mocks.ex"]))
 
-if File.exists?(agent_core_support) do
-  Code.require_file(agent_core_support)
-end
-
-# Load shared test support from ai app (for integration tests)
-ai_support = Path.join([__DIR__, "..", "..", "ai", "test", "support", "integration_config.ex"])
-
-if File.exists?(ai_support) do
-  Code.require_file(ai_support)
-end
+Code.require_file(
+  Path.join([__DIR__, "..", "..", "lemon_ai", "test", "support", "integration_config.ex"])
+)

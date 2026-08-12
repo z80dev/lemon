@@ -28,6 +28,33 @@ config :lemon_channels, adapters: []
 # Tests start X API token managers explicitly when required.
 config :x_api, start_token_manager: false
 
+# The Honcho satellite reads the vendor's own `HONCHO_API_KEY` when no Lemon-side
+# key is configured, which is a deliberate convenience in dev and prod — and a
+# hazard here: a developer who exported that variable for some other Honcho
+# client would otherwise have `mix test` register the memory provider and the
+# context contributor and ship every prompt, answer and memory search of the
+# suite into their real workspace. `enabled: false` wins over the exported key
+# (the key only fills `:api_key`), so `configured?/1` stays false and nothing
+# registers; `start_session_manager` keeps the supervised session manager out of
+# the tree as well. Suites that exercise Honcho set these explicitly and restart
+# the app.
+config :lemon_honcho, enabled: false
+config :lemon_honcho, start_session_manager: false
+
+# ...and the switch above is not, by itself, enough. `LemonHoncho.Config`
+# resolves OS environment *ahead of* application env, so `LEMON_HONCHO_ENABLED=true`
+# exported in a developer's shell rc overrides `enabled: false` and switches the
+# suite back on — measured: provider registered, contributor registered, and with
+# `:client` unset every umbrella memory search fanning out to the live service.
+# Configuration cannot close that hole with a flag the shell can win.
+#
+# Pinning the transport does close it. `:client` has no environment fallback, so
+# whatever activates the integration, the module it reaches for is one that
+# raises instead of opening a socket. See `LemonHoncho.Client.Tripwire`, which
+# also explains why it lives in `lib/` rather than in a `test/support` file only
+# one app's suite could load.
+config :lemon_honcho, client: LemonHoncho.Client.Tripwire
+
 # Tests mutate HOME/config files frequently; always re-stat config paths on each call.
 config :lemon_core, LemonCore.ConfigCache, mtime_check_interval_ms: 0
 

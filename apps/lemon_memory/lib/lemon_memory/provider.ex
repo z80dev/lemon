@@ -34,11 +34,19 @@ defmodule LemonMemory.Provider do
       run-finalisation path, so it should be cheap; buffer internally if your
       store is slow.
 
-  `LemonMemory.Providers` isolates provider failures and timeouts — each call
-  runs in a task with a per-provider `:timeout_ms`, exceptions and exits are
-  rescued and logged. That is a safety net for the agent, not a licence for the
-  provider: a provider that blocks for its whole timeout on every query makes
-  every memory search that slow.
+  `LemonMemory.Providers` isolates provider failures and timeouts. Each call
+  runs in its own monitored, unlinked process and is dropped at *this*
+  provider's `:timeout_ms` — registering a slow provider never widens anybody
+  else's deadline. Exceptions, throws and exits are rescued and logged, and a
+  provider process that dies some other way (killed from outside, or killed by
+  an abnormal exit from something the provider linked to) is logged as a
+  failure instead of reaching the caller. See `LemonMemory.Providers` for what
+  that isolation does *not* cover.
+
+  It is a safety net for the agent, not a licence for the provider: fan-out is
+  synchronous, so a provider that blocks for its whole timeout on every query
+  makes every memory search that slow, and a provider killed at its deadline
+  gets no chance to clean up.
 
   ## Known gap: search has no error channel
 

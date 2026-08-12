@@ -366,6 +366,12 @@
     max_age_days: 60
   },
   %{
+    path: "docs/user-guide/honcho.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-08-12],
+    max_age_days: 60
+  },
+  %{
     path: "docs/plans/lemon-hermes-parity-expansion-goal-2026-05-24.md",
     owner: "@z80",
     last_reviewed: ~D[2026-08-09],

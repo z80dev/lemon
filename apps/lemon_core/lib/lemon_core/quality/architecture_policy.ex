@@ -54,6 +54,11 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
       :lemon_cli_runners,
       :lemon_core
     ],
+    # A satellite: it implements platform contracts (a memory provider, a
+    # context contributor, agent tools) and registers itself on the way up, so
+    # it depends on the platform while nothing in the platform names it.
+    # test-only: proves its provider against the published contract kit.
+    lemon_honcho: [:lemon_agent, :lemon_ai, :lemon_core, :lemon_memory, :lemon_platform_test],
     lemon_lsp: [:lemon_core],
     lemon_media: [:lemon_core],
     lemon_mcp: [:lemon_agent, :coding_agent, :lemon_core, :lemon_skills],

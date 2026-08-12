@@ -82,6 +82,11 @@ defmodule LemonChannels.Adapters.Email.WebhookTest do
     # warning to say so. These two tests are what makes that loud.
 
     test "authorized?/1 is public, so the router can see it" do
+      # `function_exported?/3` answers false for a module that has not been
+      # loaded yet, which makes this assertion depend on whatever ran before it.
+      # Load it first so the test measures the export and not the load order.
+      {:module, Webhook} = Code.ensure_loaded(Webhook)
+
       assert function_exported?(Webhook, :authorized?, 1),
              "authorized?/1 must be `def`, not `defp` — the router resolves it " <>
                "with function_exported?/3 and silently allows the request when it is missing"

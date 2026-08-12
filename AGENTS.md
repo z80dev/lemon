@@ -25,6 +25,7 @@
 | Build reusable simulation harnesses | `apps/lemon_sim/` |
 | Work with CLI runners/subagent spawning | `apps/lemon_agent/` |
 | Create or modify skills and assistant-platform tools | `apps/lemon_skills/` |
+| Work on Honcho memory integration | `apps/lemon_honcho/` |
 | Work on deterministic eval harnesses | `apps/lemon_evals/` |
 | Build cron jobs or automation | `apps/lemon_automation/` |
 | Work on the web UI | `apps/lemon_web/` |
@@ -299,6 +300,7 @@ coding_agent ─────────→ lemon_core, lemon_browser, agent_cor
 agent_core ───────────→ lemon_core, ai
 lemon_evals ──────────→ lemon_core, agent_core, ai, coding_agent, lemon_skills
 lemon_browser ────────→ lemon_core
+lemon_honcho ─────────→ lemon_core, lemon_memory, agent_core, ai
 lemon_lsp ────────────→ lemon_core
 lemon_media ──────────→ lemon_core
 lemon_mcp ────────────→ coding_agent, agent_core, lemon_skills
@@ -487,6 +489,7 @@ Each app has its own `AGENTS.md` with detailed context:
 | lemon_browser | `apps/lemon_browser/README.md` *(no AGENTS.md yet)* |
 | lemon_core | `apps/lemon_core/AGENTS.md` |
 | lemon_gateway | `apps/lemon_gateway/AGENTS.md` |
+| lemon_honcho | `apps/lemon_honcho/AGENTS.md` |
 | lemon_lsp | `apps/lemon_lsp/README.md` *(no AGENTS.md yet)* |
 | lemon_media | `apps/lemon_media/README.md` *(no AGENTS.md yet)* |
 | lemon_channels | `apps/lemon_channels/AGENTS.md` |

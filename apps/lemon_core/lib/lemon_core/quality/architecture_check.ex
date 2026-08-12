@@ -48,6 +48,7 @@ defmodule LemonCore.Quality.ArchitectureCheck do
     lemon_core: ["LemonCore"],
     lemon_evals: ["LemonEvals"],
     lemon_gateway: ["LemonGateway"],
+    lemon_honcho: ["LemonHoncho"],
     lemon_lsp: ["LemonLsp"],
     lemon_media: ["LemonMedia"],
     lemon_mcp: ["LemonMCP"],
