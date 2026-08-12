@@ -102,7 +102,7 @@ CLI-based engines (Claude, Codex, Kimi, Opencode, Pi) delegate to `Engines.CliAd
 ### Engine Selection Priority
 
 1. Resume token engine (from router-resolved auto-resume or explicit resume)
-2. Inline directive (`/claude`, `/codex`, `/lemon`, etc. via `EngineDirective`)
+2. Inline directive (`/claude`, `/codex`, `/lemon`, etc. via `LemonRouter.StickyEngine`)
 3. Binding `default_engine` (topic-level, then chat-level)
 4. Project `default_engine`
 5. Global `default_engine` from config (default: `"lemon"`)
@@ -171,7 +171,6 @@ failures without parsing rendered command output.
 |--------|------|---------|
 | `LemonGateway.Engine` | `engine.ex` | Behaviour definition for engine plugins |
 | `LemonGateway.EngineRegistry` | `engine_registry.ex` | Engine registration, lookup, and resume token extraction |
-| `LemonGateway.EngineDirective` | `engine_directive.ex` | Parses `/engine` prefix directives from user input |
 | `LemonGateway.Engines.CliAdapter` | `engines/cli_adapter.ex` | Shared CLI subprocess runner for all CLI engines |
 | `LemonGateway.Workspace` | `workspace.ex` | Workspace directory for channel-bound files, configured rather than read from the agent |
 | `LemonGateway.Engines.Claude` | `engines/claude.ex` | Claude Code CLI adapter |

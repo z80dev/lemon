@@ -108,7 +108,6 @@ Gateway config comes from the canonical TOML `[gateway]` section only, via `Lemo
 | `lib/lemon_gateway/config.ex` | `Config` | GenServer holding all runtime config. Access via `Config.get/0` or `Config.get(:key)`. |
 | `lib/lemon_gateway/config_loader.ex` | `ConfigLoader` | Loads from `LemonCore.GatewayConfig.load/0` and parses into typed structs (Project, Binding, queue, SMS, email, etc.); in test env only, honors `Application.get_env(:lemon_gateway, LemonGateway.Config)` as a full replacement override. |
 | `lib/lemon_gateway/binding_resolver.ex` | `BindingResolver` | Resolves engine/cwd/agent metadata for gateway-owned transports. Delegates to `LemonCore.BindingResolver`. |
-| `lib/lemon_gateway/engine_directive.ex` | `EngineDirective` | Strips `/claude`, `/codex`, `/lemon`, etc. from user input to select engine |
 | `lib/lemon_gateway/engine_registry.ex` | `EngineRegistry` | GenServer: engine ID -> module mapping. Also does cross-engine resume token extraction. |
 | `lib/lemon_gateway/engine_lock.ex` | `EngineLock` | GenServer: per-session mutex with FIFO wait queue, configurable timeout, process monitoring, stale lock sweeping |
 
@@ -241,14 +240,6 @@ config :lemon_gateway, :engines, [
 ```
 
 Or modify the default list in `EngineRegistry.init/1`.
-
-### Step 3: Update EngineDirective (optional)
-
-If you want `/myengine` prefix support, update the regex in `EngineDirective.strip/1`:
-
-```elixir
-~r{^/(lemon|codex|claude|opencode|pi|echo|myengine)\b\s*(.*)$}is
-```
 
 ### Event Protocol
 
@@ -404,7 +395,6 @@ Tests are in `apps/lemon_gateway/test/`. Key test files:
 | `thread_worker_test.exs` | ThreadWorker: launch/slot lifecycle and crash handling |
 | `engine_registry_test.exs` | Engine registration, lookup, resume extraction |
 | `engine_lock_test.exs` | EngineLock: acquire/release, FIFO queueing, timeouts |
-| `engine_directive_test.exs` | Directive parsing (`/claude text` -> `{"claude", "text"}`) |
 | `config_loader_test.exs` | TOML config parsing into typed structs |
 | `binding_resolver_test.exs` | Binding resolution for engine, cwd, agent_id |
 | `apps/lemon_core/test/lemon_core/chat_state_test.exs` | ChatState struct operations owned by `lemon_core` |
