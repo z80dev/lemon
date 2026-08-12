@@ -39,8 +39,7 @@ defmodule CodingAgent.Application do
        name: CodingAgent.LaneQueue, caps: lane_caps, task_supervisor: CodingAgent.TaskSupervisor},
       {CodingAgent.Parallel.Semaphore,
        max: task_max_concurrency, name: CodingAgent.TaskSemaphore},
-      {CodingAgent.CompactionHooks, name: CodingAgent.CompactionHooks},
-      CodingAgent.ProviderPoolRotator
+      {CodingAgent.CompactionHooks, name: CodingAgent.CompactionHooks}
     ]
 
     opts = [strategy: :one_for_one, name: CodingAgent.Supervisor]

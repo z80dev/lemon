@@ -8,6 +8,7 @@ defmodule LemonAgent.Application do
   - `LemonAgent.SubagentSupervisor` - DynamicSupervisor for subagent processes
   - `LemonAgent.LoopTaskSupervisor` - Task.Supervisor for agent loop tasks
   - `LemonAgent.ToolTaskSupervisor` - Task.Supervisor for tool execution tasks
+  - `LemonAgent.ModelRuntime.ProviderPoolRotator` - Round-robin state for provider credential pools
 
   ## Supervision Tree
 
@@ -16,7 +17,8 @@ defmodule LemonAgent.Application do
   ├── LemonAgent.AgentRegistry (Registry)
   ├── LemonAgent.SubagentSupervisor (DynamicSupervisor)
   ├── LemonAgent.LoopTaskSupervisor (Task.Supervisor)
-  └── LemonAgent.ToolTaskSupervisor (Task.Supervisor)
+  ├── LemonAgent.ToolTaskSupervisor (Task.Supervisor)
+  └── LemonAgent.ModelRuntime.ProviderPoolRotator (GenServer)
   ```
   """
 
@@ -34,7 +36,9 @@ defmodule LemonAgent.Application do
       # Task.Supervisor for agent loop tasks
       {Task.Supervisor, name: LemonAgent.LoopTaskSupervisor},
       # Task.Supervisor for tool execution tasks
-      {Task.Supervisor, name: LemonAgent.ToolTaskSupervisor}
+      {Task.Supervisor, name: LemonAgent.ToolTaskSupervisor},
+      # Round-robin rotation state for provider credential pools
+      LemonAgent.ModelRuntime.ProviderPoolRotator
     ]
 
     opts = [strategy: :one_for_one, name: LemonAgent.Supervisor]

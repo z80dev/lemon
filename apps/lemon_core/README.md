@@ -57,8 +57,9 @@ This app has **zero dependencies on other umbrella apps** and must remain that w
 | 6 | `LemonCore.ConfigReloader.Watcher` | FileSystem watcher for `config.toml` and `.env` |
 
 Durable memory moved to `lemon_memory`, the workspace stores to `agent_core`,
-and provider credential-pool rotation to `coding_agent`
-(`CodingAgent.ProviderPoolRotator`); each supervises its own processes.
+and provider credential-pool rotation to `lemon_agent`
+(`LemonAgent.ModelRuntime.ProviderPoolRotator`); each supervises its own
+processes.
 
 Browser, media-job, and LSP drivers live in `lemon_browser`, `lemon_media`,
 and `lemon_lsp`. Core doctor diagnostics may probe them at runtime, but

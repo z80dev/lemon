@@ -415,11 +415,14 @@ conservatively: if the default provider is not credential-ready and a configured
 fallback/profile/pool provider is credential-ready with the same model id in
 `LemonAi.Models`, Lemon selects that fallback before starting the supervised agent
 loop. Pools default to priority order; `strategy = "round_robin"` rotates the
-pool's starting provider through `CodingAgent.ProviderPoolRotator`, a supervised
-BEAM process. Explicit user model specs are not rewritten.
+pool's starting provider through `LemonAgent.ModelRuntime.ProviderPoolRotator`,
+a supervised BEAM process. Explicit user model specs are never rewritten at
+resolution time.
 
-The supervised coding-agent loop also wraps default-model streams with the same
-fallback ordering. If a provider returns a terminal stream error before useful
+The supervised coding-agent loop also wraps streams — default-model and
+explicit-model sessions alike — with the same fallback ordering (for an
+explicit model, candidates are other credential-ready providers hosting the
+same model id; the wrapper is a no-op when there are none). If a provider returns a terminal stream error before useful
 assistant content or tool calls are emitted, Lemon retries the same turn against
 the next credential-ready fallback provider with the same model id. Once visible
 content or a tool call has started, the error is surfaced instead of replayed so

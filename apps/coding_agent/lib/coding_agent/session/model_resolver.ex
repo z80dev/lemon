@@ -169,7 +169,7 @@ defmodule CodingAgent.Session.ModelResolver do
 
       true ->
         routing
-        |> routing_fallback_providers(model.id)
+        |> routing_candidate_providers(model.id)
         |> Enum.map(&fallback_model(&1, model.id, settings, routing))
         |> Enum.reject(&is_nil/1)
         |> Enum.reject(
@@ -323,7 +323,7 @@ defmodule CodingAgent.Session.ModelResolver do
 
       true ->
         routing
-        |> routing_fallback_providers(model_id)
+        |> routing_candidate_providers(model_id)
         |> Enum.find_value(provider, fn fallback_provider ->
           if fallback_model_available?(fallback_provider, model_id) and
                provider_credentials_ready?(fallback_provider, settings, routing) do
@@ -356,81 +356,28 @@ defmodule CodingAgent.Session.ModelResolver do
     end
   end
 
-  defp routing_fallback_providers(routing, model_id) when is_map(routing) do
-    profile_name = routing_value(routing, :default_profile)
+  # Ordered fallback provider candidates from the shared routing plan.
+  # LemonAgent.ModelRuntime.ProviderRouting owns the precedence (profile
+  # fallback_providers -> profile distribution -> credential pool -> global
+  # fallback_providers), pool rotation, and circuit-breaker demotion; this
+  # maps the plan's canonical provider ids back to config names so model and
+  # credential lookups keep resolving dashed provider names (e.g.
+  # "openai-codex").
+  #
+  # No stable session identity reaches this resolver today, so pool rotation
+  # runs under the :global scope and advances once per resolution.
+  defp routing_candidate_providers(routing, model_id) when is_map(routing) do
+    config = %LemonCore.Config{agent: %{provider_routing: routing}}
 
-    profile =
-      named_routing_config(
-        routing_value(routing, :profiles, %{}),
-        profile_name
-      )
-
-    pool_name =
-      routing_value(profile || %{}, :credential_pool) || routing_value(routing, :default_pool)
-
-    pool = named_routing_config(routing_value(routing, :credential_pools, %{}), pool_name)
-    pool_providers = routing_value(pool || %{}, :providers, [])
-
-    [
-      routing_value(profile || %{}, :fallback_providers, []),
-      distribution_providers(profile),
-      CodingAgent.ProviderPoolRotator.ordered_providers(
-        {:provider_pool, profile_name, pool_name, model_id},
-        pool_providers,
-        routing_value(pool || %{}, :strategy, "priority")
-      ),
-      routing_value(routing, :fallback_providers, [])
-    ]
-    |> List.flatten()
-    |> Enum.map(&to_string/1)
-    |> Enum.map(&String.trim/1)
-    |> Enum.reject(&(&1 == ""))
+    %{"model" => model_id}
+    |> LemonAgent.ModelRuntime.ProviderRouting.plan(config, rotate?: true, rotation_key: :global)
+    |> Enum.map(fn %{provider: provider} ->
+      LemonAgent.ModelRuntime.ProviderNames.config_name(provider) || provider
+    end)
     |> Enum.uniq()
   end
 
-  defp routing_fallback_providers(_, _), do: []
-
-  defp distribution_providers(profile) when is_map(profile) do
-    profile
-    |> routing_value(:distribution, %{})
-    |> case do
-      distribution when is_map(distribution) ->
-        distribution
-        |> Enum.sort_by(fn {provider, weight} ->
-          {-numeric_weight(weight), to_string(provider)}
-        end)
-        |> Enum.map(fn {provider, _weight} -> provider end)
-
-      _ ->
-        []
-    end
-  end
-
-  defp distribution_providers(_), do: []
-
-  defp named_routing_config(configs, name) when is_map(configs) and is_binary(name) do
-    Map.get(configs, name) || existing_atom_routing_config(configs, name)
-  end
-
-  defp named_routing_config(_, _), do: nil
-
-  defp existing_atom_routing_config(configs, name) do
-    Map.get(configs, String.to_existing_atom(name))
-  rescue
-    ArgumentError -> nil
-  end
-
-  defp routing_value(map, key, default \\ nil)
-
-  defp routing_value(map, key, default) when is_map(map) do
-    Map.get(map, key) || Map.get(map, to_string(key)) || default
-  end
-
-  defp routing_value(_, _, default), do: default
-
-  defp numeric_weight(weight) when is_integer(weight), do: weight
-  defp numeric_weight(weight) when is_float(weight), do: weight
-  defp numeric_weight(_), do: 0
+  defp routing_candidate_providers(_, _), do: []
 
   defp has_api_key_config?(cfg) do
     Map.has_key?(cfg, :api_key) or Map.has_key?(cfg, :api_key_secret) or

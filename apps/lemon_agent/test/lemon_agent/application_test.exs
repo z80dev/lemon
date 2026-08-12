@@ -57,14 +57,15 @@ defmodule LemonAgent.ApplicationTest do
     end
 
     test "supervisor has correct child count" do
-      # The application should have 5 children:
+      # The application should have 6 children:
       # 1. LemonAgent.AbortSignal.TableOwner
       # 2. LemonAgent.AgentRegistry (Registry)
       # 3. LemonAgent.SubagentSupervisor (DynamicSupervisor)
       # 4. LemonAgent.LoopTaskSupervisor (Task.Supervisor)
       # 5. LemonAgent.ToolTaskSupervisor (Task.Supervisor)
+      # 6. LemonAgent.ModelRuntime.ProviderPoolRotator (GenServer)
       children = Supervisor.which_children(LemonAgent.Supervisor)
-      assert length(children) == 5
+      assert length(children) == 6
     end
 
     test "supervisor uses one_for_one strategy" do
@@ -89,8 +90,8 @@ defmodule LemonAgent.ApplicationTest do
     test "supervisor counts children correctly" do
       counts = Supervisor.count_children(LemonAgent.Supervisor)
 
-      assert counts.active == 5
-      assert counts.specs == 5
+      assert counts.active == 6
+      assert counts.specs == 6
       # SubagentSupervisor and Task.Supervisors
       assert counts.supervisors >= 2
       assert counts.workers >= 0
