@@ -31,6 +31,12 @@ agent framework.
 - Every `*Subagent` module implements `LemonCore.SubagentRunner`: `id/0`,
   `describe/0` (the tool-description prose, including per-vendor caveats such as
   "ignores `model`"), and a total `cancel/1`.
+- `resolve_cli_settings/1` on every `*Subagent`: the vendor owns what its
+  `[runtime.cli.<engine>]` config section means — its keys and its defaults
+  (e.g. claude's `dangerously_skip_permissions` defaulting `true`) — moved out
+  of `LemonCore.Config.Agent`. `LemonCliRunners.Application` registers each
+  with `LemonCore.Config.CliResolvers` at boot, so config resolution needs no
+  vendor table in core; the resolved shape runners read is unchanged.
 
 ### Changed
 

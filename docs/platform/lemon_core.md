@@ -3,8 +3,9 @@
 **Status:** stub — package not yet carved out. Plan of record: [../platform-split.md](../platform-split.md).
 
 `lemon_core` is the platform's shared language: the `Bus` and `Event` envelope, the
-`Store` and its pluggable backends, secrets, the config loader, the boundary contracts
-every other package speaks (`RunRequest`, `ExecutionCommand`, `InboundMessage`,
+`Store` and its pluggable backends, secrets, the config loader (whose vendor CLI
+sections resolve through the boot-time `Config.CliResolvers` registry), the boundary
+contracts every other package speaks (`RunRequest`, `ExecutionCommand`, `InboundMessage`,
 `DeliveryIntent`, `EngineRuntime`, `RouterBridge`, `SessionKey`, `ResumeToken` and
 its format registry, `RunEvents`, `SubagentRunner` and its registry, run phases),
 the primitives (clock, id, retry, telemetry, idempotency), and the Extensions

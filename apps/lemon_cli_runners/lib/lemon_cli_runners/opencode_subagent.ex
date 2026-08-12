@@ -57,6 +57,24 @@ defmodule LemonCliRunners.OpencodeSubagent do
   @spec render_resume(String.t()) :: String.t()
   def render_resume(value), do: "opencode --session #{value}"
 
+  @doc """
+  Resolves the raw `[runtime.cli.opencode]` config section.
+
+  Registered with `LemonCore.Config.CliResolvers` at boot; called with `%{}`
+  when the section is unconfigured so the defaults still materialize.
+  """
+  @impl true
+  @spec resolve_cli_settings(map()) :: map()
+  def resolve_cli_settings(opencode) when is_map(opencode) do
+    %{
+      model: normalize_optional_string(opencode["model"])
+    }
+  end
+
+  defp normalize_optional_string(""), do: nil
+  defp normalize_optional_string(str) when is_binary(str), do: str
+  defp normalize_optional_string(_), do: nil
+
   @impl true
   @spec start(keyword()) :: {:ok, session()} | {:error, term()}
   def start(opts) do

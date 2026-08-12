@@ -58,6 +58,29 @@ defmodule LemonCliRunners.PiSubagent do
   @spec render_resume(String.t()) :: String.t()
   def render_resume(value), do: "pi --session #{quote_token(value)}"
 
+  @doc """
+  Resolves the raw `[runtime.cli.pi]` config section.
+
+  Registered with `LemonCore.Config.CliResolvers` at boot; called with `%{}`
+  when the section is unconfigured so the defaults still materialize.
+  """
+  @impl true
+  @spec resolve_cli_settings(map()) :: map()
+  def resolve_cli_settings(pi) when is_map(pi) do
+    %{
+      extra_args: parse_string_list(pi["extra_args"]),
+      model: normalize_optional_string(pi["model"]),
+      provider: normalize_optional_string(pi["provider"])
+    }
+  end
+
+  defp parse_string_list(list) when is_list(list), do: list
+  defp parse_string_list(_), do: []
+
+  defp normalize_optional_string(""), do: nil
+  defp normalize_optional_string(str) when is_binary(str), do: str
+  defp normalize_optional_string(_), do: nil
+
   @doc false
   @spec strip_quotes(String.t()) :: String.t()
   def strip_quotes(value) when is_binary(value) do

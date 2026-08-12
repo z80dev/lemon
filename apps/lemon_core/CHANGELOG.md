@@ -30,6 +30,18 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
   application starts, so core no longer carries a table of per-vendor regexes.
   `lemon` is built in; engines with no registered format read and print the
   generic `<engine> resume <value>`.
+- `LemonCore.Config.CliResolvers` — the extension point behind the config
+  loader's `[runtime.cli.<engine>]` sections. A vendor package registers a
+  resolver for its own section when its application starts (the shape runners
+  read stays exactly as before: atom-keyed vendor maps with the vendor's
+  defaults, materialized even when the section is unconfigured); sections no
+  resolver claims pass through as raw maps rather than being dropped. Core no
+  longer names `codex`/`kimi`/`opencode`/`pi`/`claude` in
+  `LemonCore.Config.Agent`. Registering clears the default
+  `LemonCore.ConfigCache` instance (new `clear/0`/`clear/1`) so config cached
+  before a vendor package boots is not served without its defaults, and
+  `LemonCore.SubagentRunner` gains the optional `resolve_cli_settings/1`
+  callback vendors implement.
 - `LemonCore.Store` can run as many named instances as you like. Configuration
   comes from `start_link/1` options first and application environment second,
   so an embedding application no longer has to write into `:lemon_core`'s app

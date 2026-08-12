@@ -117,6 +117,43 @@ defmodule LemonCliRunners.ClaudeSubagent do
   def render_resume(value), do: "claude --resume #{value}"
 
   @doc """
+  Resolves the raw `[runtime.cli.claude]` config section.
+
+  Registered with `LemonCore.Config.CliResolvers` at boot; called with `%{}`
+  when the section is unconfigured so the defaults still materialize —
+  including `dangerously_skip_permissions: true`, which is this vendor's
+  default for unattended runs.
+  """
+  @impl true
+  @spec resolve_cli_settings(map()) :: map()
+  def resolve_cli_settings(claude) when is_map(claude) do
+    %{
+      dangerously_skip_permissions:
+        if(is_nil(claude["dangerously_skip_permissions"]),
+          do: true,
+          else: claude["dangerously_skip_permissions"]
+        ),
+      allowed_tools: parse_string_list(claude["allowed_tools"]),
+      scrub_env: normalize_scrub_env(claude["scrub_env"]),
+      env_allowlist: parse_string_list(claude["env_allowlist"]),
+      env_allow_prefixes: parse_string_list(claude["env_allow_prefixes"]),
+      env_overrides: normalize_env_overrides(claude["env_overrides"])
+    }
+  end
+
+  defp parse_string_list(list) when is_list(list), do: list
+  defp parse_string_list(_), do: []
+
+  defp normalize_scrub_env("auto"), do: :auto
+  defp normalize_scrub_env("true"), do: true
+  defp normalize_scrub_env("false"), do: false
+  defp normalize_scrub_env(value) when is_boolean(value), do: value
+  defp normalize_scrub_env(_), do: :auto
+
+  defp normalize_env_overrides(map) when is_map(map), do: map
+  defp normalize_env_overrides(_), do: %{}
+
+  @doc """
   Start a new Claude subagent session.
 
   ## Options

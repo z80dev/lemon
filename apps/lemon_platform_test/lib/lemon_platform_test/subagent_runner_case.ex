@@ -38,6 +38,11 @@ defmodule LemonPlatformTest.SubagentRunnerCase do
       `LemonCore.ResumeFormat`, registered under `id/0` and able to read back
       the command it printed. Omitting it means the platform reads and prints
       the generic `<engine> resume <value>` for this engine.
+    * `resolve_cli_settings/1` (optional) — resolves the engine's raw
+      `[runtime.cli.<id>]` config section into the settled map runners read,
+      materializing the vendor's defaults when called with `%{}`. Registered
+      under `id/0` with `LemonCore.Config.CliResolvers`. Omitting it means the
+      raw section passes through config resolution untouched.
     * `default_policy/0` (optional) — the tool policy profile children get.
     * `routable?/0` (optional) — whether `id/0` is also a router-visible engine.
 
@@ -155,6 +160,55 @@ defmodule LemonPlatformTest.SubagentRunnerCase do
   end
 
   @doc """
+  Checks that `id/0` returns a stable slug the subagent registry accepts.
+  """
+  @spec check_id(module()) :: :ok | {:error, String.t()}
+  def check_id(runner) do
+    id = runner.id()
+
+    cond do
+      not is_binary(id) ->
+        {:error, "id/0 must return a binary, got: #{inspect(id)}"}
+
+      not Regex.match?(~r/^[a-z][a-z0-9_-]*$/, id) ->
+        {:error, "runner id #{inspect(id)} must match ~r/^[a-z][a-z0-9_-]*$/"}
+
+      id in reserved_ids() ->
+        {:error, "runner id #{inspect(id)} is reserved by LemonCore.SubagentRegistry"}
+
+      runner.id() != id ->
+        {:error, "id/0 must return the same value on every call"}
+
+      true ->
+        :ok
+    end
+  end
+
+  @doc """
+  Checks an exported `resolve_cli_settings/1` against the contract: called with
+  an unconfigured `%{}` section it must deterministically materialize the
+  vendor's default settings map.
+  """
+  @spec check_cli_resolver_defaults(module()) :: :ok | {:error, String.t()}
+  def check_cli_resolver_defaults(runner) do
+    defaults = apply(runner, :resolve_cli_settings, [%{}])
+
+    cond do
+      not is_map(defaults) ->
+        {:error, "resolve_cli_settings/1 must return a map for an unconfigured section"}
+
+      defaults == %{} ->
+        {:error, "resolve_cli_settings/1 on %{} must materialize this vendor's defaults"}
+
+      apply(runner, :resolve_cli_settings, [%{}]) != defaults ->
+        {:error, "resolve_cli_settings/1 must be deterministic for the same section"}
+
+      true ->
+        :ok
+    end
+  end
+
+  @doc """
   Drains `events/1` until a terminal event, returning the events seen.
 
   Raises when the stream does not end within `timeout_ms`, which is the failure
@@ -202,17 +256,7 @@ defmodule LemonPlatformTest.SubagentRunnerCase do
 
       describe unquote(label <> " id/0") do
         test "is a stable slug the subagent registry accepts" do
-          id = @runner.id()
-
-          assert is_binary(id), "id/0 must return a binary, got: #{inspect(id)}"
-
-          assert Regex.match?(~r/^[a-z][a-z0-9_-]*$/, id),
-                 "runner id #{inspect(id)} must match ~r/^[a-z][a-z0-9_-]*$/"
-
-          refute id in LemonPlatformTest.SubagentRunnerCase.reserved_ids(),
-                 "runner id #{inspect(id)} is reserved by LemonCore.SubagentRegistry"
-
-          assert @runner.id() == id, "id/0 must return the same value on every call"
+          assert LemonPlatformTest.SubagentRunnerCase.check_id(@runner) == :ok
         end
       end
 
@@ -255,6 +299,13 @@ defmodule LemonPlatformTest.SubagentRunnerCase do
                      @runner,
                      @resume_sample
                    ) == :ok
+          end
+        end
+
+        test "resolve_cli_settings/1, when exported, materializes defaults from %{}" do
+          if function_exported?(@runner, :resolve_cli_settings, 1) do
+            assert LemonPlatformTest.SubagentRunnerCase.check_cli_resolver_defaults(@runner) ==
+                     :ok
           end
         end
 

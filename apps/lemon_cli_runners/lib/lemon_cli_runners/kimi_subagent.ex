@@ -59,6 +59,23 @@ defmodule LemonCliRunners.KimiSubagent do
   def render_resume(value), do: "kimi --session #{value}"
 
   @doc """
+  Resolves the raw `[runtime.cli.kimi]` config section.
+
+  Registered with `LemonCore.Config.CliResolvers` at boot; called with `%{}`
+  when the section is unconfigured so the defaults still materialize.
+  """
+  @impl true
+  @spec resolve_cli_settings(map()) :: map()
+  def resolve_cli_settings(kimi) when is_map(kimi) do
+    %{
+      extra_args: parse_string_list(kimi["extra_args"])
+    }
+  end
+
+  defp parse_string_list(list) when is_list(list), do: list
+  defp parse_string_list(_), do: []
+
+  @doc """
   Start a new Kimi subagent session.
   """
   @impl true

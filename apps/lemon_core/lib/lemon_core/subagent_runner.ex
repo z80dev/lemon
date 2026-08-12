@@ -77,6 +77,13 @@ defmodule LemonCore.SubagentRunner do
       runner (`LemonCore.ResumeFormats.register(MyApp.Subagent.resume_format())`)
       so the platform can read and print resume commands in your syntax.
       Omitting it means the generic `<engine> resume <value>` shape.
+    * `c:resolve_cli_settings/1` — how this runner's `[runtime.cli.<id>]`
+      config section is resolved: takes the raw string-keyed TOML section
+      (`%{}` when unconfigured, so defaults still materialize) and returns the
+      settled map runners read from `config.agent.cli`. Register it alongside
+      the runner (`LemonCore.Config.CliResolvers.register(id, &resolver/1)`)
+      so config resolution needs no vendor table in core. Omitting it means
+      the raw section passes through unresolved.
     * `c:default_policy/0` — the tool-policy profile children of this runner get
       by default. The value is an opaque profile name the host interprets
       (`CodingAgent.ToolPolicy` is the reference host). Omitting it means
@@ -144,12 +151,14 @@ defmodule LemonCore.SubagentRunner do
   @callback cancel(session()) :: :ok
   @callback resume_token(session()) :: LemonCore.ResumeToken.t() | nil
   @callback resume_format() :: LemonCore.ResumeFormat.t()
+  @callback resolve_cli_settings(map()) :: map()
   @callback default_policy() :: atom()
   @callback routable?() :: boolean()
 
   @optional_callbacks cancel: 1,
                       resume_token: 1,
                       resume_format: 0,
+                      resolve_cli_settings: 1,
                       default_policy: 0,
                       routable?: 0
 
