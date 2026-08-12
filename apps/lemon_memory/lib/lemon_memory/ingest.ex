@@ -10,6 +10,12 @@ defmodule LemonMemory.Ingest do
     slow down the caller.
   - The `session_search` feature flag gates whether ingest is active.  When the
     flag is `:off` (the default), calls to `ingest/3` are no-ops.
+  - Feature flags are resolved from config loaded via the injected
+    `:config_loader` and cached in the server state with a short TTL
+    (`:config_ttl_ms`, default 30s), so a full TOML config load does
+    NOT happen on every finalized run. When both `session_search` and
+    `routing_feedback` resolve to disabled, the run is skipped without even
+    building a `Document`.
 
   ## Usage
 
@@ -25,7 +31,13 @@ defmodule LemonMemory.Ingest do
   use GenServer
   require Logger
 
+  # How long resolved feature flags stay cached before the config is reloaded.
+  # LemonCore.ConfigCache only caches the legacy base config (no [features]
+  # section), so we cache the resolved Features struct here instead.
+  @config_ttl_ms 30_000
+
   alias LemonCore.Bus
+  alias LemonCore.Config.Features
   alias LemonCore.Events.RoutingFeedback
   alias LemonMemory.Document
   alias LemonMemory.Providers
@@ -43,7 +55,8 @@ defmodule LemonMemory.Ingest do
   Enqueue a finalized run for asynchronous memory ingest.
 
   This is a fire-and-forget cast. Feature flags are evaluated inside the ingest
-  worker so the config only needs to be loaded once per ingest.
+  worker from a TTL-cached config, so the hot path does not re-read TOML from
+  disk on every finalized run.
   """
   @spec ingest(run_id :: term(), record :: map(), summary :: map()) :: :ok
   def ingest(run_id, record, summary) do
@@ -82,11 +95,15 @@ defmodule LemonMemory.Ingest do
       Keyword.get(opts, :config_loader, fn -> LemonCore.Config.Modular.load() end)
 
     memory_store = Keyword.get(opts, :memory_store, Store)
+    config_ttl_ms = Keyword.get(opts, :config_ttl_ms, @config_ttl_ms)
 
     {:ok,
      %{
        config_loader: config_loader,
-       memory_store: memory_store
+       memory_store: memory_store,
+       config_ttl_ms: config_ttl_ms,
+       features: nil,
+       features_loaded_at: nil
      }}
   end
 
@@ -94,47 +111,54 @@ defmodule LemonMemory.Ingest do
   def handle_cast({:ingest, run_id, record, summary}, state) do
     t0 = System.monotonic_time(:microsecond)
 
-    try do
-      doc = Document.from_run(run_id, record, summary)
+    # Resolve feature flags from the TTL-cached config; loading a full TOML
+    # config on every finalized run is too expensive for this hot path.
+    {features, state} = resolve_features(state)
+    session_search? = Features.enabled?(features, :session_search)
+    routing_feedback? = Features.enabled?(features, :routing_feedback)
 
-      if valid_doc?(doc) and Safety.safe_document?(doc) do
-        config = load_config(state.config_loader)
-        features = Map.get(config, :features, %{})
+    # Short-circuit: with both consumers disabled there is nothing to do, so
+    # skip building the Document entirely.
+    if session_search? or routing_feedback? do
+      try do
+        doc = Document.from_run(run_id, record, summary)
 
-        if LemonCore.Config.Features.enabled?(features, :session_search) do
-          put_memory_doc(state.memory_store, doc)
+        if valid_doc?(doc) and Safety.safe_document?(doc) do
+          if session_search? do
+            put_memory_doc(state.memory_store, doc)
+          end
+
+          if routing_feedback? do
+            broadcast_routing_feedback(doc, record)
+          end
+
+          duration_us = System.monotonic_time(:microsecond) - t0
+
+          LemonCore.Telemetry.emit(
+            [:lemon, :memory, :ingest, :ok],
+            %{duration_us: duration_us},
+            %{run_id: run_id, session_key: doc.session_key, agent_id: doc.agent_id}
+          )
+
+          Logger.debug(
+            "[Ingest] ingested doc_id=#{doc.doc_id} run_id=#{doc.run_id} " <>
+              "session=#{doc.session_key} agent=#{doc.agent_id} duration_us=#{duration_us}"
+          )
         end
+      rescue
+        e ->
+          duration_us = System.monotonic_time(:microsecond) - t0
 
-        if LemonCore.Config.Features.enabled?(features, :routing_feedback) do
-          broadcast_routing_feedback(doc, record)
-        end
+          LemonCore.Telemetry.emit(
+            [:lemon, :memory, :ingest, :failure],
+            %{count: 1, duration_us: duration_us},
+            %{run_id: run_id, error: Exception.message(e)}
+          )
 
-        duration_us = System.monotonic_time(:microsecond) - t0
-
-        LemonCore.Telemetry.emit(
-          [:lemon, :memory, :ingest, :ok],
-          %{duration_us: duration_us},
-          %{run_id: run_id, session_key: doc.session_key, agent_id: doc.agent_id}
-        )
-
-        Logger.debug(
-          "[Ingest] ingested doc_id=#{doc.doc_id} run_id=#{doc.run_id} " <>
-            "session=#{doc.session_key} agent=#{doc.agent_id} duration_us=#{duration_us}"
-        )
+          Logger.warning(
+            "[Ingest] ingest failed for run #{inspect(run_id)}: #{Exception.message(e)}"
+          )
       end
-    rescue
-      e ->
-        duration_us = System.monotonic_time(:microsecond) - t0
-
-        LemonCore.Telemetry.emit(
-          [:lemon, :memory, :ingest, :failure],
-          %{count: 1, duration_us: duration_us},
-          %{run_id: run_id, error: Exception.message(e)}
-        )
-
-        Logger.warning(
-          "[Ingest] ingest failed for run #{inspect(run_id)}: #{Exception.message(e)}"
-        )
     end
 
     {:noreply, state}
@@ -146,11 +170,42 @@ defmodule LemonMemory.Ingest do
   defp valid_doc?(%Document{session_key: sk}) when is_binary(sk) and sk != "", do: true
   defp valid_doc?(_), do: false
 
+  # Return the cached Features struct, reloading config when the TTL elapsed.
+  defp resolve_features(state) do
+    now = System.monotonic_time(:millisecond)
+
+    if features_fresh?(state, now) do
+      {state.features, state}
+    else
+      features =
+        state.config_loader
+        |> load_config()
+        |> extract_features()
+
+      {features, %{state | features: features, features_loaded_at: now}}
+    end
+  end
+
+  defp features_fresh?(%{features: %Features{}, features_loaded_at: at, config_ttl_ms: ttl}, now)
+       when is_integer(at),
+       do: now - at < ttl
+
+  defp features_fresh?(_state, _now), do: false
+
   defp load_config(config_loader) do
     try do
       config_loader.()
     rescue
       _ -> %{features: %{}}
+    end
+  end
+
+  # All flags default to :off when the loaded config carries no usable
+  # [features] section (e.g. the loader raised and was rescued above).
+  defp extract_features(config) do
+    case config do
+      %{features: %Features{} = features} -> features
+      _ -> %Features{}
     end
   end
 
