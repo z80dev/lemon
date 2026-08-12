@@ -55,6 +55,12 @@ defmodule LemonGateway.ApplicationTest do
 
   defp stop_application do
     _ = Application.stop(:lemon_gateway)
+
+    # Registrations from other applications started earlier in this VM (e.g.
+    # coding_agent's "lemon" engine, pulled in by an unrelated suite) persist
+    # to :registered_engines and would otherwise fold back into the serving
+    # set on the next start, breaking the exact-list assertions below.
+    Application.delete_env(:lemon_gateway, :registered_engines)
   end
 
   defp configure_minimal_app do
@@ -72,6 +78,7 @@ defmodule LemonGateway.ApplicationTest do
   defp cleanup_config do
     Application.delete_env(:lemon_gateway, Elixir.LemonGateway.Config)
     Application.delete_env(:lemon_gateway, :engines)
+    Application.delete_env(:lemon_gateway, :registered_engines)
     Application.delete_env(:lemon_gateway, :transports)
     Application.delete_env(:lemon_gateway, :commands)
     Application.delete_env(:lemon_gateway, :config_path)

@@ -14,10 +14,16 @@ agent to an engine runtime anything can register with.
 
 - `LemonGateway.EngineRegistry.register/1` — engines register themselves at
   boot instead of being named in the gateway's compiled-in engine list.
-  Registration also updates `:lemon_gateway, :engines`, so a registry restart
-  keeps the engine, and a configured engine whose module is absent from the
-  build is skipped rather than crashing the registry. This is how the platform
-  stopped depending on any particular agent implementation.
+  Registration persists to `:lemon_gateway, :registered_engines`, so a
+  registry restart keeps the engine, and a configured engine whose module is
+  absent from the build is skipped rather than crashing the registry. This is
+  how the platform stopped depending on any particular agent implementation.
+- `LemonGateway.EngineRegistry.register_default/1` — the boot auto-registration
+  call for packages announcing the engines they ship. It is a no-op when the
+  operator explicitly configured `:lemon_gateway, :engines`: that list is a
+  ceiling, and a vendor engine an operator disabled by narrowing it must not
+  come back because the package happens to be in the release. The registry
+  never writes the operator's `:engines` key.
 - `LemonGateway.Workspace` reads `config :lemon_gateway, :workspace_dir`
   (accepting an `{module, function, args}` tuple), replacing a direct call into
   a specific agent's configuration.
@@ -70,6 +76,15 @@ agent to an engine runtime anything can register with.
 - The dependency on any specific coding agent. The in-process engine shim moved
   to the agent that owns it and registers itself; the edge now points from the
   agent to this package.
+- **The dependency on `lemon_cli_runners`, and with it the five vendor engine
+  shells** (`LemonGateway.Engines.{Claude,Codex,Kimi,Opencode,Pi}`). They now
+  live in `lemon_cli_runners` as `LemonCliRunners.Engines.*` and register with
+  `EngineRegistry` at that package's boot, the same way coding_agent
+  contributes the `lemon` engine. The gateway no longer names any vendor; the
+  only engine it ships is `Echo`, and `Engines.CliAdapter` stays here as the
+  vendor-free harness. A runtime that wants the vendor engines must include
+  the `lemon_cli_runners` application; ids, behaviour and configuration are
+  otherwise unchanged.
 
 ### Known gaps
 

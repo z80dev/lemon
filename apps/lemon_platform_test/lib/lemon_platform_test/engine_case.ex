@@ -501,22 +501,27 @@ defmodule LemonPlatformTest.EngineCase do
   end
 
   @doc """
-  Restores `:lemon_gateway, :engines` when the current test ends.
+  Restores the gateway's engine keys when the current test ends.
 
-  `LemonGateway.EngineRegistry.register/1` writes the engine list back to
-  application environment so it survives a registry restart. That is correct for
-  a running system and wrong for a test suite, which would otherwise leave the
-  engine under test registered for everything that runs after it in the same VM.
+  `LemonGateway.EngineRegistry.register/1` persists registrations to
+  `:lemon_gateway, :registered_engines` so they survive a registry restart
+  (the operator's `:engines` key is never written). That is correct for a
+  running system and wrong for a test suite, which would otherwise leave the
+  engine under test registered for everything that runs after it in the same
+  VM. Both keys are snapshotted for suites that set `:engines` themselves.
   """
   @spec restore_engines_on_exit() :: :ok
   def restore_engines_on_exit do
-    original = Application.fetch_env(:lemon_gateway, :engines)
+    originals =
+      for key <- [:engines, :registered_engines] do
+        {key, Application.fetch_env(:lemon_gateway, key)}
+      end
 
     ExUnit.Callbacks.on_exit(fn ->
-      case original do
-        {:ok, engines} -> Application.put_env(:lemon_gateway, :engines, engines)
-        :error -> Application.delete_env(:lemon_gateway, :engines)
-      end
+      Enum.each(originals, fn
+        {key, {:ok, engines}} -> Application.put_env(:lemon_gateway, key, engines)
+        {key, :error} -> Application.delete_env(:lemon_gateway, key)
+      end)
     end)
 
     :ok

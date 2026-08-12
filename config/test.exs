@@ -79,13 +79,18 @@ config :lemon_gateway, LemonGateway.Config,
   bindings: [],
   projects: %{}
 
+# Pin the engine set for tests. Setting the key also marks it as
+# operator-configured, so LemonCliRunners.Application's boot auto-registration
+# is a no-op and suites see the same list whether or not lemon_cli_runners is
+# started. The vendor modules resolve from the umbrella code path even in test
+# runs that never start their application.
 config :lemon_gateway, :engines, [
   LemonGateway.Engines.Echo,
-  LemonGateway.Engines.Codex,
-  LemonGateway.Engines.Claude,
-  LemonGateway.Engines.Opencode,
-  LemonGateway.Engines.Pi,
-  LemonGateway.Engines.Kimi
+  LemonCliRunners.Engines.Codex,
+  LemonCliRunners.Engines.Claude,
+  LemonCliRunners.Engines.Opencode,
+  LemonCliRunners.Engines.Pi,
+  LemonCliRunners.Engines.Kimi
 ]
 
 config :lemon_gateway, :telegram, nil

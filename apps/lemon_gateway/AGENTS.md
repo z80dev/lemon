@@ -91,12 +91,9 @@ Bus event types: `:run_started`, `:run_completed`, `:delta`, `:engine_started`, 
 
 | File | Module | Notes |
 |------|--------|-------|
-| `lib/lemon_gateway/engines/cli_adapter.ex` | `Engines.CliAdapter` | **Read this first for CLI engines.** Shared logic for subprocess start, event stream consumption, resume formatting, and cancellation. |
+| `lib/lemon_gateway/engines/cli_adapter.ex` | `Engines.CliAdapter` | **Read this first for CLI engines.** Shared logic for subprocess start, event stream consumption, resume formatting, and cancellation. Vendor-free: it takes the runner module as an argument. |
 | _(moved)_ | `CodingAgent.GatewayEngine` | The `lemon` engine now lives in coding_agent and registers itself via `EngineRegistry.register/1`; this app no longer depends on the agent. |
-| `lib/lemon_gateway/engines/claude.ex` | `Engines.Claude` | Claude Code CLI: delegates to CliAdapter with `LemonCliRunners.ClaudeRunner` |
-| `lib/lemon_gateway/engines/codex.ex` | `Engines.Codex` | Codex CLI: delegates to CliAdapter with `LemonCliRunners.CodexRunner` |
-| `lib/lemon_gateway/engines/opencode.ex` | `Engines.Opencode` | Opencode CLI: delegates to CliAdapter with `LemonCliRunners.OpencodeRunner` |
-| `lib/lemon_gateway/engines/pi.ex` | `Engines.Pi` | Pi CLI: delegates to CliAdapter with `LemonCliRunners.PiRunner` |
+| _(moved)_ | `LemonCliRunners.Engines.{Claude,Codex,Kimi,Opencode,Pi}` | The vendor CLI engines now live in lemon_cli_runners and register themselves via `EngineRegistry.register_default/1`; this app no longer depends on the vendor package or names any vendor. |
 | `lib/lemon_gateway/engines/echo.ex` | `Engines.Echo` | Test engine: echoes prompt back, no subprocess, useful for integration tests |
 
 ### Configuration and Resolution
@@ -226,20 +223,27 @@ end
 
 ### Step 2: Register the Engine
 
-Add to `config/config.exs` or the application env:
+Register from your application's `start/2` callback (this is how coding_agent
+contributes `lemon` and lemon_cli_runners the vendor CLI engines):
+
+```elixir
+LemonGateway.EngineRegistry.register_default(MyApp.MyEngine)
+```
+
+`register_default/1` respects an operator-configured `:lemon_gateway, :engines`
+list (the configured list is a ceiling; registration is then a no-op), while
+`register/1` always registers. Alternatively, an operator can name the engine
+explicitly:
 
 ```elixir
 config :lemon_gateway, :engines, [
   LemonGateway.Engines.Echo,
-  LemonGateway.Engines.Codex,
-  LemonGateway.Engines.Claude,
-  LemonGateway.Engines.Opencode,
-  LemonGateway.Engines.Pi,
-  LemonGateway.Engines.MyEngine  # Add here
+  LemonGateway.Engines.MyEngine  # the full list to serve — a ceiling
 ]
 ```
 
-Or modify the default list in `EngineRegistry.init/1`.
+Registrations persist to `:lemon_gateway, :registered_engines`; the operator's
+`:engines` key is never written by the registry.
 
 ### Event Protocol
 
@@ -256,7 +260,7 @@ Action detail metadata must stay nested and lossless; in particular,
 
 ### If Using CliAdapter
 
-For CLI-based engines wrapping an `LemonCliRunners.*` module, the implementation is minimal. See `Engines.Claude` as a template -- it is ~35 lines, delegating everything to `CliAdapter`.
+For CLI-based engines wrapping an external CLI runner module, the implementation is minimal. See `LemonCliRunners.Engines.Claude` (in lemon_cli_runners) as a template -- it is ~35 lines, delegating everything to `CliAdapter`.
 
 ## How to Add a New Transport
 
@@ -405,9 +409,7 @@ Tests are in `apps/lemon_gateway/test/`. Key test files:
 | `queue_mode_test.exs` | Router/gateway boundary coverage for queue-semantic-free commands and private `ExecutionRequest` adapters |
 | `run_transport_agnostic_test.exs` | Run process transport-agnostic behavior |
 | `cli_adapter_test.exs` | CliAdapter shared logic |
-| `cli_adapter_claude_test.exs` | Claude-specific CliAdapter behavior |
-| `engines/claude_engine_test.exs` | Claude engine unit tests |
-| `engines/codex_engine_test.exs` | Codex engine unit tests |
+| `cli_adapter_claude_test.exs` | Claude-shaped CliAdapter event mapping (engine tests moved to lemon_cli_runners with the engines) |
 | `lemon_engine_test.exs` | Lemon engine unit tests |
 | `renderers/basic_test.exs` | Basic renderer event-to-text |
 | `health_test.exs` | Health check system |

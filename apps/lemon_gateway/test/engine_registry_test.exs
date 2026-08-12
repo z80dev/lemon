@@ -356,8 +356,11 @@ defmodule LemonGateway.EngineRegistryTest do
       enable_telegram: false
     })
 
+    Application.delete_env(:lemon_gateway, :registered_engines)
+
     on_exit(fn ->
       Application.delete_env(:lemon_gateway, :engines)
+      Application.delete_env(:lemon_gateway, :registered_engines)
     end)
 
     :ok
@@ -520,19 +523,47 @@ defmodule LemonGateway.EngineRegistryTest do
       assert EngineRegistry.list_engines() == ["alpha"]
     end
 
-    test "a runtime registration does not delete a configured engine that is not loadable yet" do
-      # An engine configured from an application that starts after the gateway
-      # is skipped for lookups, but writing the serving set back to :engines
-      # would delete it from the operator's configuration for good.
+    test "a runtime registration never touches the operator's :engines key" do
+      # :engines belongs to the operator — a registration persisting into it
+      # would both delete a configured engine that is not loadable yet and make
+      # narrowing indistinguishable from the registry's own bookkeeping.
+      # Registrations persist to :registered_engines instead.
       Application.put_env(:lemon_gateway, :engines, [AlphaEngine, Definitely.Not.Loaded])
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
       assert EngineRegistry.register(BetaEngine) == :ok
 
-      persisted = Application.get_env(:lemon_gateway, :engines)
-      assert Definitely.Not.Loaded in persisted
-      assert BetaEngine in persisted
-      assert AlphaEngine in persisted
+      assert Application.get_env(:lemon_gateway, :engines) == [
+               AlphaEngine,
+               Definitely.Not.Loaded
+             ]
+
+      assert Application.get_env(:lemon_gateway, :registered_engines) == [BetaEngine]
+    end
+
+    test "boot auto-registration respects an operator-configured engine list" do
+      # register_default/1 is the call packages use at boot. With :engines
+      # explicitly configured, the operator's list is a ceiling: the engine is
+      # neither served nor persisted.
+      Application.put_env(:lemon_gateway, :engines, [AlphaEngine])
+      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+
+      assert EngineRegistry.register_default(BetaEngine) == :ok
+
+      assert EngineRegistry.get_engine("beta") == nil
+      assert EngineRegistry.list_engines() == ["alpha"]
+      assert Application.get_env(:lemon_gateway, :registered_engines, []) == []
+    end
+
+    test "boot auto-registration applies when the operator did not configure engines" do
+      Application.delete_env(:lemon_gateway, :engines)
+      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+
+      assert EngineRegistry.register_default(BetaEngine) == :ok
+
+      assert EngineRegistry.get_engine("beta") == BetaEngine
+      assert "beta" in EngineRegistry.list_engines()
+      assert Application.get_env(:lemon_gateway, :registered_engines) == [BetaEngine]
     end
 
     test "an engine that raises in extract_resume/1 is skipped, not fatal" do

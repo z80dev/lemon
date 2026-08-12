@@ -37,6 +37,15 @@ agent framework.
   of `LemonCore.Config.Agent`. `LemonCliRunners.Application` registers each
   with `LemonCore.Config.CliResolvers` at boot, so config resolution needs no
   vendor table in core; the resolved shape runners read is unchanged.
+- `LemonCliRunners.Engines.{Claude,Codex,Kimi,Opencode,Pi}` — the gateway
+  engine shells, moved from `LemonGateway.Engines.*`. Each implements
+  `LemonGateway.Engine` over `LemonGateway.Engines.CliAdapter` and is
+  registered with `LemonGateway.EngineRegistry.register_default/1` at boot —
+  a no-op when the operator explicitly configured `:lemon_gateway, :engines`,
+  so a narrowed engine list stays narrowed. This package now depends on
+  `lemon_gateway` (which also orders boot: the registry is up before the
+  engines announce themselves); the gateway no longer depends on this package,
+  and `coding_agent`'s dependency closure is vendor-free.
 
 ### Changed
 

@@ -6,18 +6,25 @@ defmodule LemonGateway.EngineRegistry do
   Validates engine IDs on registration and provides lookup and resume
   token extraction across all registered engines.
 
-  The built-in engines are the CLI wrappers this app ships. Engines that live
-  in another application register themselves at boot with `register/1` — that
-  is how coding_agent contributes the `"lemon"` engine without the gateway
-  depending on it. Registration also updates `:lemon_gateway, :engines`, so a
-  registry restart keeps the engine.
+  The only engine this app ships is `LemonGateway.Engines.Echo`. Engines that
+  live in another application register themselves at boot — that is how
+  coding_agent contributes the `"lemon"` engine and lemon_cli_runners the
+  vendor CLI engines, without the gateway depending on either.
 
-  What gets written back is the *union* of the configured list and the runtime
-  registrations, not the set this process is currently serving. Those differ: a
-  configured engine whose module is not loadable yet is skipped for lookups but
-  stays in the configuration, because "not loadable at boot" is a statement
-  about start order, not about intent. Persisting the serving set instead would
-  let one unrelated `register/1` delete an engine the operator configured.
+  Two inputs, and they are not peers (mirrors `LemonCore.EngineCatalog`):
+
+    * `config :lemon_gateway, :engines` is the *operator's* list. This process
+      never writes it. When it is set, it is a ceiling: `register_default/1`
+      (boot auto-registration by installed packages) becomes a no-op, so
+      narrowing the list is how an operator disables an engine the build
+      happens to ship.
+    * `:lemon_gateway, :registered_engines` is what `register/1` persists, so a
+      registry restart keeps runtime registrations. It extends the configured
+      (or default) list; entries with a colliding id replace the stale module.
+
+  A configured engine whose module is not loadable yet is skipped for lookups
+  but stays in the configuration, because "not loadable at boot" is a statement
+  about start order, not about intent.
 
   An engine is third-party code called from inside this process, so every call
   into one — `c:LemonGateway.Engine.id/0` and
@@ -73,6 +80,24 @@ defmodule LemonGateway.EngineRegistry do
   end
 
   @doc """
+  Registers an engine at boot, unless the operator configured the engine list.
+
+  This is the call for packages announcing the engines they ship from their
+  application callback. When `config :lemon_gateway, :engines` is
+  explicitly set, that list is a ceiling — an operator who narrowed it to
+  disable a vendor engine must not have it re-enabled by whichever package
+  happens to be in the release — so the registration is skipped with `:ok`.
+  Without operator configuration this behaves exactly like `register/1`.
+  """
+  @spec register_default(engine_mod()) :: :ok | {:error, term()}
+  def register_default(module) when is_atom(module) do
+    GenServer.call(__MODULE__, {:register_default, module})
+  catch
+    :exit, {:noproc, _} -> {:error, :unavailable}
+    :exit, {:normal, _} -> {:error, :unavailable}
+  end
+
+  @doc """
   Iterates all registered engines and calls extract_resume/1 on each until one returns
   a non-nil ResumeToken. Returns `{:ok, token}` if found, `:none` otherwise.
   """
@@ -83,20 +108,24 @@ defmodule LemonGateway.EngineRegistry do
 
   @impl true
   def init(_opts) do
-    configured =
-      Application.get_env(:lemon_gateway, :engines, [
-        LemonGateway.Engines.Echo,
-        LemonGateway.Engines.Codex,
-        LemonGateway.Engines.Claude,
-        LemonGateway.Engines.Opencode,
-        LemonGateway.Engines.Pi,
-        LemonGateway.Engines.Kimi
-      ])
+    operator_configured? =
+      match?(
+        {:ok, engines} when is_list(engines),
+        Application.fetch_env(:lemon_gateway, :engines)
+      )
+
+    configured = Application.get_env(:lemon_gateway, :engines, [LemonGateway.Engines.Echo])
+    registered = Application.get_env(:lemon_gateway, :registered_engines, [])
 
     # A configured engine may live in an application that is not part of this
     # runtime, or in one that starts later; serve what is loadable now and keep
-    # the rest in :configured so persist_engines/1 never drops it.
-    engines = Enum.filter(configured, &loadable?/1)
+    # the rest in :configured, which this process never writes back anywhere.
+    # Runtime registrations persisted to :registered_engines are folded on top
+    # so a registry restart rebuilds the same serving set.
+    engines =
+      registered
+      |> Enum.reduce(configured, &merge_registered(&2, &1))
+      |> Enum.filter(&loadable?/1)
 
     {map, order} =
       Enum.reduce(engines, {%{}, []}, fn mod, {map, order} = acc ->
@@ -106,23 +135,31 @@ defmodule LemonGateway.EngineRegistry do
         end
       end)
 
-    {:ok, %{map: map, order: order, configured: configured}}
+    {:ok,
+     %{
+       map: map,
+       order: order,
+       configured: configured,
+       registered: registered,
+       operator_configured?: operator_configured?
+     }}
   end
 
   @impl true
   def handle_call({:register, module}, _from, state) do
-    id = module.id()
-    validate_id!(id)
+    do_register(module, state)
+  end
 
-    order = upsert(state.order, module, id)
-    configured = upsert(state.configured, module, id)
+  def handle_call({:register_default, module}, _from, state) do
+    if state.operator_configured? do
+      Logger.debug(
+        "engine #{inspect(module)} not auto-registered: operator configured :lemon_gateway, :engines"
+      )
 
-    persist_engines(configured)
-
-    {:reply, :ok,
-     %{state | map: Map.put(state.map, id, module), order: order, configured: configured}}
-  rescue
-    error -> {:reply, {:error, error}, state}
+      {:reply, :ok, state}
+    else
+      do_register(module, state)
+    end
   end
 
   def handle_call(:list, _from, state) do
@@ -148,6 +185,34 @@ defmodule LemonGateway.EngineRegistry do
       end)
 
     {:reply, result, state}
+  end
+
+  defp do_register(module, state) do
+    id = module.id()
+    validate_id!(id)
+
+    order = upsert(state.order, module, id)
+    registered = upsert(state.registered, module, id)
+
+    persist_registered(registered)
+
+    {:reply, :ok,
+     %{state | map: Map.put(state.map, id, module), order: order, registered: registered}}
+  rescue
+    error -> {:reply, {:error, error}, state}
+  end
+
+  # Fold one persisted runtime registration into the configured list: replace
+  # the configured entry serving the same id, or append. A registration that is
+  # not loadable in this runtime is kept in :registered_engines but cannot
+  # answer id/0, so it is left out of the serving fold.
+  defp merge_registered(list, module) do
+    with true <- loadable?(module),
+         id when is_binary(id) <- safe_id(module) do
+      upsert(list, module, id)
+    else
+      _ -> list
+    end
   end
 
   defp loadable?(module) do
@@ -222,12 +287,13 @@ defmodule LemonGateway.EngineRegistry do
       nil
   end
 
-  # Persist the union of configured and runtime-registered engines so a registry
-  # restart rebuilds the same set. Deliberately not `state.order`: that is only
-  # what is loadable right now, and writing it back would delete a configured
-  # engine whose application had not started yet.
-  defp persist_engines(configured) do
-    Application.put_env(:lemon_gateway, :engines, configured)
+  # Persist runtime registrations so a registry restart rebuilds the same set.
+  # Deliberately a separate key from :engines: that one belongs to the
+  # operator, and writing the serving set into it would both delete configured
+  # engines whose applications had not started yet and make the operator's
+  # narrowing indistinguishable from our own bookkeeping.
+  defp persist_registered(registered) do
+    Application.put_env(:lemon_gateway, :registered_engines, registered)
   end
 
   defp validate_id!(id) when not is_binary(id) do

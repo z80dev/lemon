@@ -1,27 +1,27 @@
-defmodule LemonGateway.CodexIntegrationTest do
+defmodule LemonCliRunners.ClaudeRunnerIntegrationTest do
   use ExUnit.Case
 
-  alias LemonCliRunners.CodexRunner
+  alias LemonCliRunners.ClaudeRunner
   alias LemonCore.RunEvents.CompletedEvent
 
   @tag :integration
-  test "codex runner completes" do
+  test "claude runner completes" do
     cond do
-      not enabled?("LEMON_CODEX_INTEGRATION") ->
+      not enabled?("LEMON_CLAUDE_INTEGRATION") ->
         :ok
 
-      System.find_executable("codex") == nil ->
+      System.find_executable("claude") == nil ->
         :ok
 
       true ->
         {:ok, pid} =
-          CodexRunner.start_link(
+          ClaudeRunner.start_link(
             prompt: "Reply with OK.",
             cwd: File.cwd!(),
             timeout: 180_000
           )
 
-        stream = CodexRunner.stream(pid)
+        stream = ClaudeRunner.stream(pid)
 
         task =
           Task.async(fn ->

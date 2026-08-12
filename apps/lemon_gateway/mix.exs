@@ -79,7 +79,6 @@ defmodule LemonGateway.MixProject do
       {:websockex, "~> 0.4"},
       {:websock_adapter, "~> 0.5"},
       {:lemon_agent, in_umbrella: true},
-      {:lemon_cli_runners, in_umbrella: true},
       {:lemon_core, in_umbrella: true},
       # API documentation
       {:ex_doc, "~> 0.34", only: :dev, runtime: false}

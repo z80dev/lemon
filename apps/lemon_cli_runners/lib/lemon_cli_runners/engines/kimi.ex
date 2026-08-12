@@ -1,17 +1,19 @@
-defmodule LemonGateway.Engines.Codex do
+defmodule LemonCliRunners.Engines.Kimi do
   @moduledoc """
-  Engine adapter for the OpenAI Codex CLI tool.
+  Gateway engine adapter for the Kimi CLI tool.
 
   Delegates to `LemonGateway.Engines.CliAdapter` to manage a
-  `LemonCliRunners.CodexRunner` subprocess for each run.
+  `LemonCliRunners.KimiRunner` subprocess for each run. Registered with
+  `LemonGateway.EngineRegistry` at boot by `LemonCliRunners.Application`,
+  so the gateway itself never names this vendor.
   """
   @behaviour LemonGateway.Engine
 
-  alias LemonGateway.Engines.CliAdapter
   alias LemonCore.ResumeToken
+  alias LemonGateway.Engines.CliAdapter
 
   @impl true
-  def id, do: "codex"
+  def id, do: "kimi"
 
   @impl true
   def format_resume(%ResumeToken{} = token), do: CliAdapter.format_resume(id(), token)
@@ -27,7 +29,7 @@ defmodule LemonGateway.Engines.Codex do
 
   @impl true
   def start_run(job, opts, sink_pid) do
-    CliAdapter.start_run(LemonCliRunners.CodexRunner, id(), job, opts, sink_pid)
+    CliAdapter.start_run(LemonCliRunners.KimiRunner, id(), job, opts, sink_pid)
   end
 
   @impl true

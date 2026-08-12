@@ -1,17 +1,19 @@
-defmodule LemonGateway.Engines.Pi do
+defmodule LemonCliRunners.Engines.Opencode do
   @moduledoc """
-  Engine adapter for the Pi runner CLI tool.
+  Gateway engine adapter for the Opencode CLI tool.
 
-  Delegates to `LemonGateway.Engines.CliAdapter` to manage a
-  `LemonCliRunners.PiRunner` subprocess for each run.
+  Delegates to `LemonGateway.Engines.CliAdapter` to manage an
+  `LemonCliRunners.OpencodeRunner` subprocess for each run. Registered with
+  `LemonGateway.EngineRegistry` at boot by `LemonCliRunners.Application`,
+  so the gateway itself never names this vendor.
   """
   @behaviour LemonGateway.Engine
 
-  alias LemonGateway.Engines.CliAdapter
   alias LemonCore.ResumeToken
+  alias LemonGateway.Engines.CliAdapter
 
   @impl true
-  def id, do: "pi"
+  def id, do: "opencode"
 
   @impl true
   def format_resume(%ResumeToken{} = token), do: CliAdapter.format_resume(id(), token)
@@ -27,7 +29,7 @@ defmodule LemonGateway.Engines.Pi do
 
   @impl true
   def start_run(job, opts, sink_pid) do
-    CliAdapter.start_run(LemonCliRunners.PiRunner, id(), job, opts, sink_pid)
+    CliAdapter.start_run(LemonCliRunners.OpencodeRunner, id(), job, opts, sink_pid)
   end
 
   @impl true
