@@ -20,6 +20,12 @@ agent framework.
   OpenCode, and Pi.
 - `LemonCliRunners.Env` — the `:cli_runners`-area environment variable
   declarations, moved out of `LemonAgent.Env`.
+- `LemonCliRunners.Application` — registers each vendor subagent with
+  `LemonCore.SubagentRegistry` at boot. The package is now an OTP application
+  (with an empty supervision tree) purely so it can announce itself.
+- Every `*Subagent` module implements `LemonCore.SubagentRunner`: `id/0`,
+  `describe/0` (the tool-description prose, including per-vendor caveats such as
+  "ignores `model`"), and a total `cancel/1`.
 
 ### Changed
 

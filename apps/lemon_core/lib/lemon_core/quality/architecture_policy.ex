@@ -63,6 +63,7 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
       :lemon_agent,
       :lemon_ai,
       :lemon_channels,
+      :lemon_cli_runners,
       :lemon_core,
       :lemon_gateway,
       :lemon_memory

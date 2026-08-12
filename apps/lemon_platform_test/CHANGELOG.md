@@ -16,13 +16,14 @@ compliance suite runs against your module.
 
 ### Added
 
-- Four `ExUnit.CaseTemplate`s, used as `use LemonPlatformTest.PluginCase,
+- Five `ExUnit.CaseTemplate`s, used as `use LemonPlatformTest.PluginCase,
   adapter: MyAdapter`:
 
   | Behaviour | Case template |
   |---|---|
   | `LemonChannels.Plugin` | `LemonPlatformTest.PluginCase` |
   | `LemonGateway.Engine` | `LemonPlatformTest.EngineCase` |
+  | `LemonCore.SubagentRunner` | `LemonPlatformTest.SubagentRunnerCase` |
   | `LemonCore.Store.Backend` | `LemonPlatformTest.BackendCase` |
   | `LemonMemory.Provider` | `LemonPlatformTest.ProviderCase` |
 

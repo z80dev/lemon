@@ -2,7 +2,7 @@
 
 Contract-test kit for Lemon's extension behaviours.
 
-Four ExUnit case templates that run the platform's compliance suites against
+Five ExUnit case templates that run the platform's compliance suites against
 *your* implementation of a Lemon behaviour:
 
 | Behaviour | Case template |
@@ -10,6 +10,7 @@ Four ExUnit case templates that run the platform's compliance suites against
 | `LemonCore.Store.Backend` | `LemonPlatformTest.BackendCase` |
 | `LemonChannels.Plugin` | `LemonPlatformTest.PluginCase` |
 | `LemonGateway.Engine` | `LemonPlatformTest.EngineCase` |
+| `LemonCore.SubagentRunner` | `LemonPlatformTest.SubagentRunnerCase` |
 | `LemonMemory.Provider` | `LemonPlatformTest.ProviderCase` |
 
 ```elixir
@@ -38,7 +39,7 @@ SQLite and a Telegram client. Add the app your case targets alongside the kit:
 
 | Case / tool | Add |
 | --- | --- |
-| `BackendCase`, `EventsCase` | `{:lemon_core, "~> 0.1", only: :test}` |
+| `BackendCase`, `EventsCase`, `SubagentRunnerCase` | `{:lemon_core, "~> 0.1", only: :test}` |
 | `PluginCase` | `{:lemon_channels, "~> 0.1", only: :test}` |
 | `EngineCase` | `{:lemon_gateway, "~> 0.1", only: :test}` |
 | `ProviderCase` | `{:lemon_memory, "~> 0.1", only: :test}` |

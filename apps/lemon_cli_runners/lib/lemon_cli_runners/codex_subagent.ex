@@ -123,6 +123,16 @@ defmodule LemonCliRunners.CodexSubagent do
   # Public API
   # ============================================================================
 
+  @behaviour LemonCore.SubagentRunner
+
+  @impl true
+  def id, do: "codex"
+
+  @impl true
+  def describe do
+    %{summary: "OpenAI Codex CLI", caveats: ["accepts a `model` override"]}
+  end
+
   @doc """
   Start a new Codex subagent session.
 
@@ -145,6 +155,7 @@ defmodule LemonCliRunners.CodexSubagent do
       )
 
   """
+  @impl true
   @spec start(keyword()) :: {:ok, session()} | {:error, term()}
   def start(opts) do
     prompt = Keyword.fetch!(opts, :prompt)
@@ -279,6 +290,7 @@ defmodule LemonCliRunners.CodexSubagent do
       end
 
   """
+  @impl true
   @spec events(session()) :: Enumerable.t()
   def events(session) do
     token_agent = session.token_agent
@@ -333,6 +345,7 @@ defmodule LemonCliRunners.CodexSubagent do
   to resume the session later. The token is updated as events are
   processed, so call this after processing events.
   """
+  @impl true
   @spec resume_token(session()) :: ResumeToken.t() | nil
   def resume_token(session) do
     case session.token_agent do
@@ -347,6 +360,14 @@ defmodule LemonCliRunners.CodexSubagent do
         end
     end
   end
+
+  @doc """
+  Stop a running session. Idempotent, and `:ok` for a session already finished.
+  """
+  @impl true
+  @spec cancel(session()) :: :ok
+  def cancel(%{pid: pid}) when is_pid(pid), do: CodexRunner.cancel(pid)
+  def cancel(_session), do: :ok
 
   @doc """
   Run a Codex task synchronously and return the answer.

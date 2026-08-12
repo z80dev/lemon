@@ -283,7 +283,11 @@ Pure text-only external `codex`/`claude` tasks with no explicit `cwd` and no rol
 | `CodingAgent.ParentQuestions` / `ParentQuestionStoreServer` | ETS+DETS store for child-to-parent clarification requests |
 
 The task tool defaults omitted `async` to `true`.
-Its supported external CLI engines are `codex`, `claude`, `kimi`, `opencode`, and `pi`.
+Its engine list is not compiled in: executors implement `LemonCore.SubagentRunner`
+and register with `LemonCore.SubagentRegistry` when their own application boots,
+and the tool's `engine` enum, per-engine prose and default tool policy are all
+read from that registry. This app contributes `internal` (the in-process agent);
+`lemon_cli_runners` contributes `codex`, `claude`, `kimi`, `opencode` and `pi`.
 When a provider omits the task `description` field but sends a valid `prompt`, Lemon now derives a short description from that prompt instead of rejecting the task call outright.
 When an internal task omits `model`, the child session now inherits the live parent session model at execution time instead of relying only on the captured tool opts, so Telegram/session-scoped model overrides also apply to async subtasks.
 Internal task child sessions also have a bounded wait for terminal session events. If a child provider stream wedges or the child session exits without emitting `agent_end` / `error`, the task returns a timeout or session-exit error instead of leaving `join` blocked forever.

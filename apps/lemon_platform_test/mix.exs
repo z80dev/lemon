@@ -59,6 +59,7 @@ defmodule LemonPlatformTest.MixProject do
           LemonPlatformTest.BackendCase,
           LemonPlatformTest.PluginCase,
           LemonPlatformTest.EngineCase,
+          LemonPlatformTest.SubagentRunnerCase,
           LemonPlatformTest.ProviderCase,
           LemonPlatformTest.EventsCase
         ],
@@ -82,15 +83,20 @@ defmodule LemonPlatformTest.MixProject do
       # template guards on `Code.ensure_loaded?` of its target and raises a
       # pointed "add this dep" error if the app is absent (see below).
       #
-      #   BackendCase  -> lemon_core           EngineCase   -> lemon_gateway
-      #   EventsCase   -> lemon_core           ProviderCase -> lemon_memory
-      #   PluginCase   -> lemon_channels       FakeLLM      -> ai + agent_core
+      #   BackendCase        -> lemon_core     EngineCase   -> lemon_gateway
+      #   EventsCase         -> lemon_core     ProviderCase -> lemon_memory
+      #   SubagentRunnerCase -> lemon_core     FakeLLM      -> ai + agent_core
+      #   PluginCase         -> lemon_channels
       #
       # The kit is a leaf: nothing in the platform depends on it, so these edges
       # cannot create a cycle. In the umbrella all siblings are present, so the
       # self-validation suites in test/compliance still compile and pass.
       {:lemon_core, in_umbrella: true, optional: true},
       {:lemon_channels, in_umbrella: true, optional: true},
+      # Not a behaviour host: SubagentRunnerCase targets lemon_core. This edge
+      # exists so the self-validation suite can run a *real* vendor CLI wrapper
+      # through the case, not just the in-repo stub.
+      {:lemon_cli_runners, in_umbrella: true, optional: true},
       {:lemon_gateway, in_umbrella: true, optional: true},
       {:lemon_memory, in_umbrella: true, optional: true},
       {:lemon_ai, in_umbrella: true, optional: true},

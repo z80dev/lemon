@@ -1,5 +1,28 @@
+defmodule CodingAgent.Tools.TaskTest.ProbeSubagent do
+  @moduledoc "Stands in for a vendor package's runner: registered at runtime, never run."
+
+  @behaviour LemonCore.SubagentRunner
+
+  @impl true
+  def id, do: "task-probe"
+
+  @impl true
+  def describe, do: %{summary: "A probe executor", caveats: ["never actually runs"]}
+
+  @impl true
+  def routable?, do: false
+
+  @impl true
+  def start(_opts), do: {:ok, %{}}
+
+  @impl true
+  def events(_session), do: []
+end
+
 defmodule CodingAgent.Tools.TaskTest do
   use ExUnit.Case, async: true
+
+  alias CodingAgent.Tools.TaskTest.ProbeSubagent
 
   alias CodingAgent.Tools.Task.Params
   alias CodingAgent.Tools.Task
@@ -40,6 +63,69 @@ defmodule CodingAgent.Tools.TaskTest do
       assert Map.has_key?(props, "agent_id")
       assert Map.has_key?(props, "queue_mode")
       assert props["description"]["description"] =~ "3-5 words"
+    end
+  end
+
+  describe "registry-driven engines" do
+    setup do
+      :ok = LemonCore.SubagentRegistry.register(ProbeSubagent)
+      on_exit(fn -> LemonCore.SubagentRegistry.unregister("task-probe") end)
+      :ok
+    end
+
+    test "the engine enum and prose come from the registry" do
+      tool = Task.tool("/tmp")
+      engine = tool.parameters["properties"]["engine"]
+
+      assert "task-probe" in engine["enum"]
+      assert "internal" in engine["enum"]
+      assert engine["description"] =~ "internal (default)"
+
+      assert tool.description =~ ~s(- "task-probe": A probe executor)
+      assert tool.description =~ "never actually runs"
+    end
+
+    test "the internal engine is offered first" do
+      assert List.first(Params.valid_engines()) == "internal"
+    end
+
+    test "a registered engine validates" do
+      assert {:ok, validated} =
+               Params.validate_run_params(
+                 %{"description" => "probe", "prompt" => "go", "engine" => "task-probe"},
+                 "/tmp"
+               )
+
+      assert validated.engine == "task-probe"
+    end
+
+    test "an unregistered engine is rejected against the live set" do
+      assert {:error, message} =
+               Params.validate_run_params(
+                 %{"description" => "probe", "prompt" => "go", "engine" => "task-probeee"},
+                 "/tmp"
+               )
+
+      assert message =~ "Engine must be one of: "
+      assert message =~ "task-probe"
+    end
+
+    test "an unregistered engine reaching the runner names the registered ids" do
+      assert {:error, message} =
+               CodingAgent.Tools.Task.Runner.execute_via_cli_engine(
+                 "gone-away",
+                 "prompt",
+                 "/tmp",
+                 "description",
+                 nil,
+                 nil,
+                 nil,
+                 nil,
+                 nil
+               )
+
+      assert message =~ "Unknown task engine \"gone-away\""
+      assert message =~ "task-probe"
     end
   end
 

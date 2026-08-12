@@ -13,6 +13,13 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
 
 ### Added
 
+- `LemonCore.SubagentRunner` and `LemonCore.SubagentRegistry` — the extension
+  point behind the agent's `task` tool. An executor (a vendor CLI wrapper, the
+  in-process agent, anything else) implements the behaviour and registers when
+  its own application starts; the agent reads the registry for its engine list,
+  its per-engine tool-description prose, and each engine's default tool policy,
+  so no vendor is named in the agent. Runners that declare themselves routable
+  also extend `LemonCore.EngineCatalog`'s known-engine set.
 - `LemonCore.Store` can run as many named instances as you like. Configuration
   comes from `start_link/1` options first and application environment second,
   so an embedding application no longer has to write into `:lemon_core`'s app

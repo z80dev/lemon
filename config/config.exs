@@ -33,16 +33,6 @@ config :coding_agent, :lane_caps,
 
 config :coding_agent, :async_followups, default_queue_mode: :steer_backlog
 
-# Task-tool subagent engines. Vendor CLI knowledge lives in lemon_cli_runners,
-# so coding_agent resolves the module at runtime rather than depending on it.
-config :coding_agent, :task_subagents, %{
-  "codex" => LemonCliRunners.CodexSubagent,
-  "claude" => LemonCliRunners.ClaudeSubagent,
-  "kimi" => LemonCliRunners.KimiSubagent,
-  "opencode" => LemonCliRunners.OpencodeSubagent,
-  "pi" => LemonCliRunners.PiSubagent
-}
-
 # The gateway writes channel-bound files into the agent's workspace, but must
 # not depend on the agent product; the reference runtime forwards the value.
 config :lemon_gateway, :workspace_dir, {CodingAgent.Config, :workspace_dir, []}

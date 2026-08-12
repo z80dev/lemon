@@ -23,6 +23,20 @@ defmodule LemonCliRunners.OpencodeSubagent do
           | {:completed, answer :: String.t(), opts :: keyword()}
           | {:error, reason :: term()}
 
+  @behaviour LemonCore.SubagentRunner
+
+  @impl true
+  def id, do: "opencode"
+
+  @impl true
+  def describe do
+    %{
+      summary: "OpenCode CLI",
+      caveats: ["ignores `model`: the opencode CLI's own configuration selects it"]
+    }
+  end
+
+  @impl true
   @spec start(keyword()) :: {:ok, session()} | {:error, term()}
   def start(opts) do
     prompt = Keyword.fetch!(opts, :prompt)
@@ -73,6 +87,7 @@ defmodule LemonCliRunners.OpencodeSubagent do
     end
   end
 
+  @impl true
   @spec events(session()) :: Enumerable.t()
   def events(session) do
     token_agent = session.token_agent
@@ -112,6 +127,7 @@ defmodule LemonCliRunners.OpencodeSubagent do
     collect_answer(session)
   end
 
+  @impl true
   @spec resume_token(session()) :: ResumeToken.t() | nil
   def resume_token(session) do
     token_agent = session.token_agent
@@ -122,6 +138,14 @@ defmodule LemonCliRunners.OpencodeSubagent do
       true -> nil
     end
   end
+
+  @doc """
+  Stop a running session. Idempotent, and `:ok` for a session already finished.
+  """
+  @impl true
+  @spec cancel(session()) :: :ok
+  def cancel(%{pid: pid}) when is_pid(pid), do: OpencodeRunner.cancel(pid)
+  def cancel(_session), do: :ok
 
   defp normalize_event({:cli_event, %StartedEvent{resume: token}}), do: [{:started, token}]
 

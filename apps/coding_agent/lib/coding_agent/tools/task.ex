@@ -54,8 +54,8 @@ defmodule CodingAgent.Tools.Task do
           },
           "engine" => %{
             "type" => "string",
-            "description" =>
-              "Execution engine: internal (default), codex, claude, kimi, opencode, or pi"
+            "enum" => Params.valid_engines(),
+            "description" => Params.engine_param_description()
           },
           "model" => %{
             "type" => "string",

@@ -27,9 +27,23 @@ defmodule LemonCliRunners.KimiSubagent do
           | {:completed, answer :: String.t(), opts :: keyword()}
           | {:error, reason :: term()}
 
+  @behaviour LemonCore.SubagentRunner
+
+  @impl true
+  def id, do: "kimi"
+
+  @impl true
+  def describe do
+    %{
+      summary: "Kimi CLI",
+      caveats: ["ignores `model`: the Kimi CLI's own configuration selects it"]
+    }
+  end
+
   @doc """
   Start a new Kimi subagent session.
   """
+  @impl true
   @spec start(keyword()) :: {:ok, session()} | {:error, term()}
   def start(opts) do
     prompt = Keyword.fetch!(opts, :prompt)
@@ -90,6 +104,7 @@ defmodule LemonCliRunners.KimiSubagent do
   @doc """
   Get the event stream as an enumerable of normalized events.
   """
+  @impl true
   @spec events(session()) :: Enumerable.t()
   def events(session) do
     token_agent = session.token_agent
@@ -138,6 +153,7 @@ defmodule LemonCliRunners.KimiSubagent do
   @doc """
   Return the resume token for a session if available.
   """
+  @impl true
   @spec resume_token(session()) :: ResumeToken.t() | nil
   def resume_token(session) do
     token_agent = session.token_agent
@@ -153,6 +169,14 @@ defmodule LemonCliRunners.KimiSubagent do
         nil
     end
   end
+
+  @doc """
+  Stop a running session. Idempotent, and `:ok` for a session already finished.
+  """
+  @impl true
+  @spec cancel(session()) :: :ok
+  def cancel(%{pid: pid}) when is_pid(pid), do: KimiRunner.cancel(pid)
+  def cancel(_session), do: :ok
 
   # ============================================================================
   # Internal event normalization

@@ -12,6 +12,7 @@ defmodule CodingAgent.Tools.Task.Runner do
   alias CodingAgent.SessionManager
   alias CodingAgent.Subagents
   alias CodingAgent.Tools.Task.Result
+  alias LemonCore.SubagentRegistry
 
   @await_poll_ms 200
   @default_task_session_timeout_ms nil
@@ -19,19 +20,16 @@ defmodule CodingAgent.Tools.Task.Runner do
   @doc """
   Resolve the subagent module that runs `engine` as a Task-tool child.
 
-  Vendor engines live outside this app (they are contributed by whichever package
-  implements them), so the mapping is looked up at runtime instead of compiled in.
+  Engines are contributed by whichever package implements them — the vendor CLIs
+  from `lemon_cli_runners`, the in-process agent from this app — so the module
+  comes from `LemonCore.SubagentRegistry` rather than a table compiled in here.
   """
   @spec subagent_module(String.t()) :: module() | nil
-  def subagent_module(engine) when is_binary(engine) do
-    :coding_agent
-    |> Application.get_env(:task_subagents, %{})
-    |> Map.get(engine)
-  end
+  def subagent_module(engine) when is_binary(engine), do: SubagentRegistry.module(engine)
 
   def subagent_module(_engine), do: nil
 
-  @doc "Whether `engine` is served by an out-of-app subagent module."
+  @doc "Whether `engine` is served by a registered subagent runner."
   @spec subagent_engine?(term()) :: boolean()
   def subagent_engine?(engine), do: subagent_module(engine) != nil
 
@@ -87,15 +85,14 @@ defmodule CodingAgent.Tools.Task.Runner do
         on_update,
         signal
       ) do
-    module = subagent_module(engine)
-
     role_prompt = if role_id, do: get_role_prompt(cwd, role_id), else: nil
 
     Logger.info(
       "Task tool cli engine start engine=#{engine} description=#{inspect(description)} role=#{inspect(role_id)} model=#{inspect(model)} thinking_level=#{inspect(thinking_level)} cwd=#{inspect(cwd)}"
     )
 
-    with {:ok, session} <-
+    with {:ok, module} <- fetch_subagent_module(engine),
+         {:ok, session} <-
            module.start(
              prompt: prompt,
              cwd: cwd,
@@ -147,6 +144,24 @@ defmodule CodingAgent.Tools.Task.Runner do
 
         tool_result
       end
+    end
+  end
+
+  # An engine can pass validation and still be gone by the time the task runs:
+  # validation and execution are separated by the async queue, and a runner is
+  # only present while the application that registered it is up.
+  defp fetch_subagent_module(engine) do
+    case subagent_module(engine) do
+      nil ->
+        registered = SubagentRegistry.list_ids()
+
+        available =
+          if registered == [], do: "none are registered", else: Enum.join(registered, ", ")
+
+        {:error, "Unknown task engine #{inspect(engine)} (registered: #{available})"}
+
+      module ->
+        {:ok, module}
     end
   end
 

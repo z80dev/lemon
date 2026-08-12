@@ -447,20 +447,33 @@ defmodule CodingAgent.ToolPolicy do
 
   @doc """
   Get the default policy for an engine.
+
+  The profile comes from the engine's own registration
+  (`c:LemonCore.SubagentRunner.default_policy/0`), which defaults to
+  `:subagent_restricted` — the right answer for anything running outside this
+  VM. The in-process runner overrides it to `:full_access`.
+
+  An engine nothing registered gets `:full_access`: it is not a subagent this
+  tool spawned, so there is no child to restrict.
   """
-  @spec engine_policy(atom()) :: policy()
-  def engine_policy(:internal), do: from_profile(:full_access)
-  def engine_policy(:codex), do: from_profile(:subagent_restricted)
-  def engine_policy(:claude), do: from_profile(:subagent_restricted)
-  def engine_policy(:kimi), do: from_profile(:subagent_restricted)
-  def engine_policy(:opencode), do: from_profile(:subagent_restricted)
-  def engine_policy(:pi), do: from_profile(:subagent_restricted)
+  @spec engine_policy(atom() | String.t()) :: policy()
+  def engine_policy(engine) when is_atom(engine) and not is_nil(engine) do
+    engine |> Atom.to_string() |> engine_policy()
+  end
+
+  def engine_policy(engine) when is_binary(engine) do
+    case LemonCore.SubagentRegistry.policy(engine) do
+      nil -> from_profile(:full_access)
+      profile -> from_profile(profile)
+    end
+  end
+
   def engine_policy(_), do: from_profile(:full_access)
 
   @doc """
   Create a policy for a subagent based on engine type.
   """
-  @spec subagent_policy(atom(), keyword()) :: policy()
+  @spec subagent_policy(atom() | String.t(), keyword()) :: policy()
   def subagent_policy(engine, opts \\ []) do
     base_policy = engine_policy(engine)
 

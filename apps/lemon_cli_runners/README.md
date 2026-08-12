@@ -33,6 +33,15 @@ The event vocabulary is owned by `lemon_core`, not by this package: every
 engine — these CLI wrappers and Lemon's own native session alike — emits
 `LemonCore.RunEvents` structs, so consumers never branch on the vendor.
 
+## Registration
+
+Each `*Subagent` module implements `LemonCore.SubagentRunner` and is registered
+into `LemonCore.SubagentRegistry` by `LemonCliRunners.Application` at boot. That
+is the whole integration with the agent: the `task` tool reads the registry for
+its engine list, its tool-description prose (from each runner's `describe/0`)
+and the module to run, so nothing in the agent names a vendor. Drop this
+package from a build and those engines simply stop being offered.
+
 ## Quick Start
 
 ### Basic Usage
@@ -257,7 +266,7 @@ end
 
 | File | Description |
 |------|-------------|
-| `types.ex` | Core types: ResumeToken, Action, events, EventFactory |
+| `application.ex` | Registers the vendor subagents with `LemonCore.SubagentRegistry` at boot |
 | `jsonl_runner.ex` | Base GenServer for JSONL subprocess runners |
 | `tool_action_helpers.ex` | Shared helpers for translating tool calls to action events |
 | `codex_schema.ex` | Codex JSONL event parsing |
