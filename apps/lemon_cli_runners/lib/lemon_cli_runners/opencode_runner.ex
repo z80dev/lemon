@@ -21,7 +21,7 @@ defmodule LemonCliRunners.OpencodeRunner do
   }
 
   alias LemonCliRunners.ToolActionHelpers
-  alias LemonCliRunners.Types.EventFactory
+  alias LemonCore.RunEvents.EventFactory
   alias LemonCore.ResumeToken
   alias LemonCore.Config, as: LemonConfig
   alias LemonCore.Introspection

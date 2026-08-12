@@ -4,7 +4,7 @@ defmodule LemonCliRunners.OpencodeSubagent do
   """
 
   alias LemonCliRunners.OpencodeRunner
-  alias LemonCliRunners.Types.{ActionEvent, CompletedEvent, StartedEvent}
+  alias LemonCore.RunEvents.{ActionEvent, CompletedEvent, StartedEvent}
   alias LemonCore.ResumeToken
 
   @typedoc "An OpenCode subagent session"

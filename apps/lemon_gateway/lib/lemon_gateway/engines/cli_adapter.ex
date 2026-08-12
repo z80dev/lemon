@@ -8,10 +8,9 @@ defmodule LemonGateway.Engines.CliAdapter do
   formatting.
   """
 
-  alias LemonCliRunners.Types.{ActionEvent, CompletedEvent, StartedEvent}
-  alias LemonCliRunners.Types.ResumeToken, as: AgentResumeToken
+  alias LemonCore.ResumeToken
+  alias LemonCore.RunEvents.{ActionEvent, CompletedEvent, StartedEvent}
   alias LemonGateway.Event
-  alias LemonCore.ResumeToken, as: GatewayToken
 
   def start_run(runner_module, engine_id, job, opts, sink_pid) do
     run_ref = make_ref()
@@ -59,7 +58,7 @@ defmodule LemonGateway.Engines.CliAdapter do
   # kill is a successful cancel, not a FunctionClauseError in the caller.
   def cancel(_ctx), do: :ok
 
-  def format_resume(engine_id, %GatewayToken{value: value}) do
+  def format_resume(engine_id, %ResumeToken{value: value}) do
     case engine_id do
       "codex" -> "codex resume #{value}"
       "claude" -> "claude --resume #{value}"
@@ -86,12 +85,9 @@ defmodule LemonGateway.Engines.CliAdapter do
   defp quote_token(value), do: to_string(value)
 
   def extract_resume(engine_id, text) do
-    case AgentResumeToken.extract_resume(text, engine_id) do
-      %GatewayToken{engine: ^engine_id, value: value} ->
-        %GatewayToken{engine: engine_id, value: value}
-
-      %AgentResumeToken{engine: ^engine_id, value: value} ->
-        %GatewayToken{engine: engine_id, value: value}
+    case ResumeToken.extract_resume(text, engine_id) do
+      %ResumeToken{engine: ^engine_id, value: value} ->
+        %ResumeToken{engine: engine_id, value: value}
 
       _ ->
         nil
@@ -101,17 +97,14 @@ defmodule LemonGateway.Engines.CliAdapter do
   # Resume-line detection keeps the LemonGateway.Engine callback name.
   # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
   def is_resume_line(engine_id, line) do
-    AgentResumeToken.is_resume_line(line, engine_id)
+    ResumeToken.is_resume_line(line, engine_id)
   end
 
   defp start_runner(runner_module, engine_id, job, opts) do
     resume =
       case job.resume do
-        %GatewayToken{engine: ^engine_id, value: value} ->
-          AgentResumeToken.new(engine_id, value)
-
-        %AgentResumeToken{engine: ^engine_id, value: value} ->
-          AgentResumeToken.new(engine_id, value)
+        %ResumeToken{engine: ^engine_id, value: value} ->
+          ResumeToken.new(engine_id, value)
 
         _ ->
           nil
@@ -252,14 +245,11 @@ defmodule LemonGateway.Engines.CliAdapter do
        }) do
     resume =
       case resume do
-        %GatewayToken{} = token ->
+        %ResumeToken{} = token ->
           token
 
-        %AgentResumeToken{engine: token_engine, value: value} ->
-          %GatewayToken{engine: token_engine, value: value}
-
         %{engine: token_engine, value: value} when is_binary(token_engine) and is_binary(value) ->
-          %GatewayToken{engine: token_engine, value: value}
+          %ResumeToken{engine: token_engine, value: value}
 
         _ ->
           nil
@@ -302,11 +292,8 @@ defmodule LemonGateway.Engines.CliAdapter do
   defp to_event_completed(%CompletedEvent{} = ev) do
     resume =
       case ev.resume do
-        %GatewayToken{} = token ->
+        %ResumeToken{} = token ->
           token
-
-        %AgentResumeToken{engine: engine, value: value} ->
-          %GatewayToken{engine: engine, value: value}
 
         _ ->
           nil

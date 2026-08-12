@@ -3,8 +3,8 @@ defmodule CodingAgent.CliRunners.LemonSubagent do
   High-level API for using Lemon native as a collaborating subagent.
 
   This module provides a convenient interface for spawning Lemon sessions
-  and interacting with them over time. Unlike ClaudeSubagent and CodexSubagent
-  which wrap CLI tools, LemonSubagent wraps the native CodingAgent.Session.
+  and interacting with them over time. Unlike the external subagents, which wrap
+  a vendor CLI, LemonSubagent wraps the native CodingAgent.Session.
 
   ## Features
 
@@ -70,7 +70,7 @@ defmodule CodingAgent.CliRunners.LemonSubagent do
   """
 
   alias CodingAgent.CliRunners.LemonRunner
-  alias LemonCliRunners.Types.{ActionEvent, CompletedEvent, StartedEvent}
+  alias LemonCore.RunEvents.{ActionEvent, CompletedEvent, StartedEvent}
   alias LemonCore.ResumeToken
 
   require Logger

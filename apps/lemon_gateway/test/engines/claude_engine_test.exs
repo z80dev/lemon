@@ -23,14 +23,14 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
   alias LemonGateway.Types.Job
   alias LemonGateway.Event
 
-  alias LemonCliRunners.Types.{
+  alias LemonCore.RunEvents.{
     Action,
     ActionEvent,
     CompletedEvent,
     StartedEvent
   }
 
-  alias LemonCliRunners.Types.ResumeToken, as: CoreResumeToken
+  alias LemonCore.ResumeToken, as: CoreResumeToken
 
   # ============================================================================
   # Engine Identity Tests

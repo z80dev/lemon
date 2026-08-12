@@ -24,10 +24,14 @@ CLI Runners enable you to:
 │                       JsonlRunner                                │
 │           (Generic JSONL subprocess GenServer)                   │
 ├─────────────────────────────────────────────────────────────────┤
-│                         Types                                    │
+│                  LemonCore.RunEvents (lemon_core)                │
 │    (ResumeToken, Action, StartedEvent, ActionEvent, etc.)       │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+The event vocabulary is owned by `lemon_core`, not by this package: every
+engine — these CLI wrappers and Lemon's own native session alike — emits
+`LemonCore.RunEvents` structs, so consumers never branch on the vendor.
 
 ## Quick Start
 
@@ -178,7 +182,7 @@ For more control, use the runner directly:
 
 ```elixir
 alias LemonCliRunners.CodexRunner
-alias LemonCliRunners.Types.ResumeToken
+alias LemonCore.ResumeToken
 
 # Start runner
 {:ok, pid} = CodexRunner.start_link(
@@ -208,7 +212,8 @@ To add support for a new CLI tool (e.g., Claude):
 defmodule LemonCliRunners.ClaudeRunner do
   use LemonCliRunners.JsonlRunner
 
-  alias LemonCliRunners.Types.{EventFactory, ResumeToken}
+  alias LemonCore.RunEvents.EventFactory
+  alias LemonCore.ResumeToken
 
   @impl true
   def engine, do: "claude"
@@ -232,7 +237,7 @@ defmodule LemonCliRunners.ClaudeRunner do
 
   @impl true
   def translate_event(data, state) do
-    # Convert Claude's JSONL events to CLI runner events
+    # Convert Claude's JSONL events to LemonCore.RunEvents structs
     # ... implementation ...
   end
 
@@ -308,7 +313,7 @@ Implement the `LemonCliRunners.JsonlRunner` behaviour:
 defmodule LemonCliRunners.MyEngineRunner do
   use LemonCliRunners.JsonlRunner
 
-  alias LemonCliRunners.Types.EventFactory
+  alias LemonCore.RunEvents.EventFactory
   alias LemonCore.ResumeToken
 
   @engine "myengine"

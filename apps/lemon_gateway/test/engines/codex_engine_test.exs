@@ -26,14 +26,14 @@ defmodule LemonGateway.Engines.CodexEngineTest do
   alias LemonCore.ChatScope
   alias Elixir.LemonGateway.Event
 
-  alias LemonCliRunners.Types.{
+  alias LemonCore.RunEvents.{
     Action,
     ActionEvent,
     CompletedEvent,
     StartedEvent
   }
 
-  alias LemonCliRunners.Types.ResumeToken, as: CoreResumeToken
+  alias LemonCore.ResumeToken, as: CoreResumeToken
 
   # ============================================================================
   # Engine Identity Tests

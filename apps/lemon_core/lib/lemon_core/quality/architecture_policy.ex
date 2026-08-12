@@ -18,7 +18,6 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
       :lemon_agent,
       :lemon_ai,
       :lemon_browser,
-      :lemon_cli_runners,
       :lemon_core,
       :lemon_gateway,
       :lemon_memory,
@@ -68,7 +67,14 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
       :lemon_gateway,
       :lemon_memory
     ],
-    lemon_router: [:lemon_agent, :lemon_ai, :lemon_channels, :lemon_core, :lemon_media, :lemon_memory],
+    lemon_router: [
+      :lemon_agent,
+      :lemon_ai,
+      :lemon_channels,
+      :lemon_core,
+      :lemon_media,
+      :lemon_memory
+    ],
     lemon_sim: [:lemon_agent, :lemon_ai, :lemon_core],
     lemon_sim_ui: [:lemon_ai, :lemon_core, :lemon_sim],
     lemon_skills: [:lemon_agent, :lemon_ai, :lemon_core, :lemon_media, :lemon_memory],

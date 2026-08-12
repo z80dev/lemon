@@ -8,7 +8,7 @@ Lemon enforces direct umbrella dependencies by app. This keeps the harness modul
 | App | Allowed direct umbrella deps |
 | --- | --- |
 
-| `coding_agent` | `lemon_agent`, `lemon_ai`, `lemon_browser`, `lemon_cli_runners`, `lemon_core`, `lemon_gateway`, `lemon_memory`, `lemon_platform_test`, `lemon_skills` |
+| `coding_agent` | `lemon_agent`, `lemon_ai`, `lemon_browser`, `lemon_core`, `lemon_gateway`, `lemon_memory`, `lemon_platform_test`, `lemon_skills` |
 | `coding_agent_ui` | `coding_agent`, `lemon_core` |
 | `lemon_agent` | `lemon_ai`, `lemon_core` |
 | `lemon_ai` | *(none)* |

@@ -82,7 +82,7 @@ defmodule LemonCliRunners.CodexRunner do
     WebSearchItem
   }
 
-  alias LemonCliRunners.Types.EventFactory
+  alias LemonCore.RunEvents.EventFactory
   alias LemonCore.ResumeToken
   alias LemonCore.Config, as: LemonConfig
   alias LemonCore.Introspection

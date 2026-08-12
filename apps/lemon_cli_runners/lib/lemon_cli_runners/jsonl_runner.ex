@@ -59,7 +59,7 @@ defmodule LemonCliRunners.JsonlRunner do
 
   require Logger
 
-  alias LemonCliRunners.Types.{Action, ActionEvent, CompletedEvent, StartedEvent}
+  alias LemonCore.RunEvents.{Action, ActionEvent, CompletedEvent, StartedEvent}
   alias LemonCore.ResumeToken
   alias LemonCore.Introspection
 
@@ -138,16 +138,16 @@ defmodule LemonCliRunners.JsonlRunner do
   - `:done` - true if this is the final event
   """
   @callback translate_event(data :: term(), state :: runner_state()) ::
-              {events :: [LemonCliRunners.Types.cli_event()], state :: runner_state(),
+              {events :: [LemonCore.RunEvents.run_event()], state :: runner_state(),
                opts :: keyword()}
 
   @doc "Handle non-zero exit code"
   @callback handle_exit_error(exit_code :: integer(), state :: runner_state()) ::
-              {events :: [LemonCliRunners.Types.cli_event()], state :: runner_state()}
+              {events :: [LemonCore.RunEvents.run_event()], state :: runner_state()}
 
   @doc "Handle stream end without completion event"
   @callback handle_stream_end(state :: runner_state()) ::
-              {events :: [LemonCliRunners.Types.cli_event()], state :: runner_state()}
+              {events :: [LemonCore.RunEvents.run_event()], state :: runner_state()}
 
   @doc "Optional environment variables"
   @callback env(state :: runner_state()) :: [{String.t(), String.t()}] | nil

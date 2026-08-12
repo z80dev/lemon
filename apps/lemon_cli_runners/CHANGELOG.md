@@ -18,14 +18,16 @@ agent framework.
   locking, stderr capture, graceful shutdown.
 - Per-vendor runner/schema/subagent triples for Claude Code, Codex, Kimi,
   OpenCode, and Pi.
-- `LemonCliRunners.Types` — `ResumeToken`, `Action`, `StartedEvent`,
-  `ActionEvent`, `CompletedEvent`, `EventFactory`.
 - `LemonCliRunners.Env` — the `:cli_runners`-area environment variable
   declarations, moved out of `LemonAgent.Env`.
 
 ### Changed
 
 - Module namespace: `LemonAgent.CliRunners.*` → `LemonCliRunners.*`.
+- The run event vocabulary (`Action`, `StartedEvent`, `ActionEvent`,
+  `CompletedEvent`, `EventFactory`) is no longer defined here: it belongs to
+  `LemonCore.RunEvents`, alongside `LemonCore.ResumeToken`. Every runner in this
+  package translates its vendor's JSONL dialect into those structs.
 - App-env keys `:cli_timeout_ms`, `:cli_cancel_grace_ms`, and
   `:cli_session_lock_max_age_ms` are read from `:lemon_cli_runners`
   (previously `:lemon_agent`).

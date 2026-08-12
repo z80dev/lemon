@@ -2,9 +2,9 @@ defmodule CodingAgent.CliRunners.LemonRunner do
   @moduledoc """
   Native Lemon engine runner that wraps CodingAgent.Session.
 
-  Unlike ClaudeRunner and CodexRunner which manage CLI subprocesses,
-  LemonRunner wraps the native CodingAgent.Session and translates its
-  events to the unified CLI runner event model.
+  Unlike the external CLI engines, which spawn a vendor subprocess and translate
+  its JSONL dialect, LemonRunner wraps the in-process CodingAgent.Session and
+  emits the canonical `LemonCore.RunEvents` vocabulary directly.
 
   ## Features
 
@@ -64,7 +64,7 @@ defmodule CodingAgent.CliRunners.LemonRunner do
 
   use GenServer
 
-  alias LemonCliRunners.Types.EventFactory
+  alias LemonCore.RunEvents.EventFactory
 
   alias LemonCore.ResumeToken
 
@@ -110,7 +110,7 @@ defmodule CodingAgent.CliRunners.LemonRunner do
 
     @behaviour CodingAgent.Session.RunTranslator.Emitter
 
-    alias LemonCliRunners.Types.EventFactory
+    alias LemonCore.RunEvents.EventFactory
     alias LemonAgent.EventStream
     alias CodingAgent.Session.Presentation
 

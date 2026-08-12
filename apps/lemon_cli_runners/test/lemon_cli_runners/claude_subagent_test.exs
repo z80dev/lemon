@@ -10,13 +10,14 @@ defmodule LemonCliRunners.ClaudeSubagentTest do
 
   alias LemonCliRunners.ClaudeSubagent
 
-  alias LemonCliRunners.Types.{
+  alias LemonCore.RunEvents.{
     ActionEvent,
     CompletedEvent,
-    ResumeToken,
     StartedEvent,
     Action
   }
+
+  alias LemonCore.ResumeToken
 
   alias LemonAgent.EventStream
 

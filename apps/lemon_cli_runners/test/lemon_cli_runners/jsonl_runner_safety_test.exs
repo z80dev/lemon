@@ -3,10 +3,11 @@ defmodule LemonCliRunners.JsonlRunnerSafetyTest do
 
   alias LemonCliRunners.JsonlRunner
 
-  alias LemonCliRunners.Types.{
-    ResumeToken,
+  alias LemonCore.RunEvents.{
     StartedEvent
   }
+
+  alias LemonCore.ResumeToken
 
   defmodule SlowRunner do
     @behaviour LemonCliRunners.JsonlRunner

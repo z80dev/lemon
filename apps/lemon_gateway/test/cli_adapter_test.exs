@@ -1,16 +1,16 @@
 defmodule LemonGateway.CliAdapterTest do
   use ExUnit.Case
 
-  alias LemonCliRunners.Types.{
+  alias LemonCore.RunEvents.{
     Action,
     ActionEvent,
     CompletedEvent,
-    ResumeToken,
     StartedEvent
   }
 
+  alias LemonCore.ResumeToken
+
   alias LemonGateway.Engines.CliAdapter
-  alias LemonCore.ResumeToken, as: GatewayToken
 
   test "maps started event" do
     token = ResumeToken.new("codex", "thread_123")
@@ -18,7 +18,7 @@ defmodule LemonGateway.CliAdapterTest do
 
     result = CliAdapter.to_event_map(ev)
 
-    assert %{__event__: :started, engine: "codex", resume: %GatewayToken{value: "thread_123"}} =
+    assert %{__event__: :started, engine: "codex", resume: %ResumeToken{value: "thread_123"}} =
              result
   end
 
@@ -66,7 +66,7 @@ defmodule LemonGateway.CliAdapterTest do
              __event__: :completed,
              ok: true,
              answer: "done",
-             resume: %GatewayToken{value: "thread_123"}
+             resume: %ResumeToken{value: "thread_123"}
            } = result
   end
 

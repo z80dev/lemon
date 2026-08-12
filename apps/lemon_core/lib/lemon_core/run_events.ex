@@ -1,60 +1,25 @@
-defmodule LemonCliRunners.Types do
+defmodule LemonCore.RunEvents do
   @moduledoc """
-  Core type definitions for CLI-based subprocess runners.
+  The canonical run/subagent event vocabulary.
 
-  This module provides the unified event types used by all CLI runners
-  (Codex, Claude, etc.) to communicate with the rest of the system.
+  Every engine — the native Lemon session as well as each external CLI vendor —
+  speaks this vocabulary. Vendors translate their own JSONL dialect *into* these
+  structs (see `LemonCliRunners`); the internal engine emits them natively (see
+  `CodingAgent.CliRunners.LemonRunner`). Consumers (the gateway CLI adapter, the
+  router's tool-status renderer, the Task tool) pattern match on them without
+  knowing which engine produced them.
 
-  ## Event Types
+  ## Event types
 
-  - `ResumeToken` - Session identifier for resuming interrupted sessions
-  - `Action` - A discrete action performed by the CLI agent
-  - `StartedEvent` - Emitted when a session begins
-  - `ActionEvent` - Emitted for action lifecycle (started/updated/completed)
-  - `CompletedEvent` - Emitted when a session ends
+  - `Action` — a discrete action performed during a run
+  - `StartedEvent` — emitted when a run begins, carries the `LemonCore.ResumeToken`
+  - `ActionEvent` — emitted for action lifecycle (started/updated/completed)
+  - `CompletedEvent` — emitted when a run ends
+  - `EventFactory` — stateful builder that stamps the engine and caches the resume token
 
-  ## Design Philosophy
-
-  These types mirror the Takopi project's event model, enabling:
-  - Unified event handling across different CLI tools
-  - Session persistence and resumption
-  - Progress tracking and UI updates
+  This is deliberately *not* a `LemonCore.Events` (Bus) payload: these events are
+  the in-process stream between a runner and its consumer, not a wire format.
   """
-
-  # ============================================================================
-  # Resume Token - canonical definition now lives in LemonCore.ResumeToken
-  # ============================================================================
-
-  # Compatibility alias: LemonCliRunners.Types.ResumeToken is now
-  # LemonCore.ResumeToken.  The nested module below delegates all public
-  # functions and mirrors the struct so that pattern matches on
-  # %LemonCliRunners.Types.ResumeToken{} continue to compile.
-  #
-  # New code should reference LemonCore.ResumeToken directly.
-  defmodule ResumeToken do
-    @moduledoc """
-    Compatibility wrapper - delegates to `LemonCore.ResumeToken`.
-
-    New code should use `LemonCore.ResumeToken` directly.
-    """
-
-    @enforce_keys [:engine, :value]
-    @derive {Jason.Encoder, only: [:engine, :value]}
-    defstruct [:engine, :value]
-
-    @type t :: %__MODULE__{engine: String.t(), value: String.t()}
-
-    defdelegate new(engine, value), to: LemonCore.ResumeToken
-    defdelegate format(token), to: LemonCore.ResumeToken
-    defdelegate extract_resume(text), to: LemonCore.ResumeToken
-    defdelegate extract_resume(text, engine), to: LemonCore.ResumeToken
-    defdelegate is_resume_line(line), to: LemonCore.ResumeToken
-    defdelegate is_resume_line(line, engine), to: LemonCore.ResumeToken
-  end
-
-  # ============================================================================
-  # Action Types
-  # ============================================================================
 
   @typedoc """
   Phase of an action's lifecycle.
@@ -96,13 +61,13 @@ defmodule LemonCliRunners.Types do
 
   defmodule Action do
     @moduledoc """
-    Represents a discrete action performed by a CLI agent.
+    Represents a discrete action performed during a run.
 
     Actions have an ID, kind, human-readable title, and optional detail map.
     """
     @type t :: %__MODULE__{
             id: String.t(),
-            kind: LemonCliRunners.Types.action_kind(),
+            kind: LemonCore.RunEvents.action_kind(),
             title: String.t(),
             detail: map()
           }
@@ -122,13 +87,9 @@ defmodule LemonCliRunners.Types do
     end
   end
 
-  # ============================================================================
-  # Events
-  # ============================================================================
-
   defmodule StartedEvent do
     @moduledoc """
-    Emitted when a CLI session begins.
+    Emitted when a run begins.
 
     Contains the resume token for session identification and optional metadata.
     """
@@ -164,11 +125,11 @@ defmodule LemonCliRunners.Types do
     @type t :: %__MODULE__{
             type: :action,
             engine: String.t(),
-            action: LemonCliRunners.Types.Action.t(),
-            phase: LemonCliRunners.Types.action_phase(),
+            action: LemonCore.RunEvents.Action.t(),
+            phase: LemonCore.RunEvents.action_phase(),
             ok: boolean() | nil,
             message: String.t() | nil,
-            level: LemonCliRunners.Types.action_level() | nil
+            level: LemonCore.RunEvents.action_level() | nil
           }
 
     @enforce_keys [:engine, :action, :phase]
@@ -196,7 +157,7 @@ defmodule LemonCliRunners.Types do
 
   defmodule CompletedEvent do
     @moduledoc """
-    Emitted when a CLI session ends.
+    Emitted when a run ends.
 
     Contains the final answer, success status, and optional resume token
     for future continuation.
@@ -245,25 +206,17 @@ defmodule LemonCliRunners.Types do
     end
   end
 
-  # ============================================================================
-  # Event Type Union
-  # ============================================================================
-
   @typedoc """
-  Union of all CLI runner event types.
+  Union of all run event types.
   """
-  @type cli_event ::
+  @type run_event ::
           StartedEvent.t()
           | ActionEvent.t()
           | CompletedEvent.t()
 
-  # ============================================================================
-  # Event Factory
-  # ============================================================================
-
   defmodule EventFactory do
     @moduledoc """
-    Factory for creating CLI runner events with consistent engine identification.
+    Factory for creating run events with consistent engine identification.
 
     The factory caches the resume token after the first `started/2` call,
     allowing subsequent completion events to reference it automatically.
@@ -282,7 +235,7 @@ defmodule LemonCliRunners.Types do
         completed = EventFactory.completed_ok(factory, "Done!")
 
     """
-    alias LemonCliRunners.Types.{
+    alias LemonCore.RunEvents.{
       Action,
       ActionEvent,
       CompletedEvent,

@@ -12,7 +12,8 @@ defmodule LemonCliRunners.PiRunnerTest do
     ToolExecutionStart
   }
 
-  alias LemonCliRunners.Types.{ActionEvent, CompletedEvent, ResumeToken, StartedEvent}
+  alias LemonCore.RunEvents.{ActionEvent, CompletedEvent, StartedEvent}
+  alias LemonCore.ResumeToken
 
   describe "engine/0" do
     test "returns pi" do

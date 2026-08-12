@@ -3,13 +3,14 @@ defmodule LemonCliRunners.JsonlRunnerTest do
 
   alias LemonCliRunners.JsonlRunner
 
-  alias LemonCliRunners.Types.{
+  alias LemonCore.RunEvents.{
     Action,
     ActionEvent,
     CompletedEvent,
-    ResumeToken,
     StartedEvent
   }
+
+  alias LemonCore.ResumeToken
 
   # ============================================================================
   # Test Runner Modules
