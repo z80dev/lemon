@@ -12,11 +12,19 @@ defmodule LemonAgent.ModelRuntime.ProviderPoolRotator do
 
   If the rotator process is unavailable, ordering degrades to the verbatim
   provider list.
+
+  Session assignments have no explicit release (sessions do not report their
+  end to the rotator), so entries idle for more than 7 days are pruned by an
+  hourly sweep — otherwise a long-running daemon churning through short-lived
+  sessions grows the assignments map without bound. An active session's entry
+  refreshes its last-used timestamp on every resolution.
   """
 
   use GenServer
 
   @name __MODULE__
+  @sweep_interval_ms 60 * 60 * 1000
+  @assignment_ttl_ms 7 * 24 * 60 * 60 * 1000
 
   def start_link(_opts) do
     GenServer.start_link(__MODULE__, %{}, name: @name)
@@ -41,7 +49,10 @@ defmodule LemonAgent.ModelRuntime.ProviderPoolRotator do
   def ordered_providers(_key, _providers, _strategy, _opts), do: []
 
   @impl true
-  def init(_), do: {:ok, %{offsets: %{}, assignments: %{}}}
+  def init(_) do
+    schedule_sweep()
+    {:ok, %{offsets: %{}, assignments: %{}}}
+  end
 
   @impl true
   def handle_call({:ordered_providers, key, :global, providers}, _from, state) do
@@ -50,15 +61,41 @@ defmodule LemonAgent.ModelRuntime.ProviderPoolRotator do
   end
 
   def handle_call({:ordered_providers, key, session_scope, providers}, _from, state) do
+    now = System.system_time(:millisecond)
+
     case Map.fetch(state.assignments, {key, session_scope}) do
-      {:ok, offset} ->
+      {:ok, {offset, _last_used_ms}} ->
+        state = put_assignment(state, {key, session_scope}, offset, now)
         {:reply, rotate(providers, rem(offset, length(providers))), state}
 
       :error ->
         {offset, state} = next_offset(state, key, length(providers))
-        state = %{state | assignments: Map.put(state.assignments, {key, session_scope}, offset)}
+        state = put_assignment(state, {key, session_scope}, offset, now)
         {:reply, rotate(providers, offset), state}
     end
+  end
+
+  @impl true
+  def handle_info(:sweep, state) do
+    cutoff = System.system_time(:millisecond) - @assignment_ttl_ms
+
+    assignments =
+      state.assignments
+      |> Enum.reject(fn {_key, {_offset, last_used_ms}} -> last_used_ms < cutoff end)
+      |> Map.new()
+
+    schedule_sweep()
+    {:noreply, %{state | assignments: assignments}}
+  end
+
+  def handle_info(_msg, state), do: {:noreply, state}
+
+  defp put_assignment(state, key, offset, now) do
+    %{state | assignments: Map.put(state.assignments, key, {offset, now})}
+  end
+
+  defp schedule_sweep do
+    Process.send_after(self(), :sweep, @sweep_interval_ms)
   end
 
   defp next_offset(state, key, count) do

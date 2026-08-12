@@ -192,6 +192,20 @@ defmodule LemonAi.ErrorFailoverTest do
       assert Error.stream_terminal_breaker_failure?(:timeout)
       assert Error.stream_terminal_breaker_failure?({:canceled, :owner_down})
     end
+
+    test "consumer-driven cancel terminals are exempt" do
+      refute Error.stream_terminal_breaker_failure?({:canceled, :aborted})
+      refute Error.stream_terminal_breaker_failure?({:canceled, :redirected})
+      refute Error.stream_terminal_breaker_failure?({:canceled, :user_abort})
+      refute Error.stream_terminal_breaker_failure?({:canceled, :assistant_aborted})
+      refute Error.stream_terminal_breaker_failure?({:canceled, :canceled})
+      refute Error.stream_terminal_breaker_failure?({:canceled, :shutdown})
+    end
+
+    test "hang and crash cancel terminals still count" do
+      assert Error.stream_terminal_breaker_failure?({:canceled, :timeout})
+      assert Error.stream_terminal_breaker_failure?({:canceled, :owner_down})
+    end
   end
 
   describe "transport_retry_statuses/0" do

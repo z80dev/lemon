@@ -860,6 +860,27 @@ live credentials are explicitly enabled and a fallback provider credential
 resolves. The latest run passed on 2026-05-17 with `final_provider: "zai"`,
 `completed_count: 1`, and `failed_count: 0`.
 
+The smoke now runs additional scenarios beyond the original provider-fallback
+check and records them under additive proof-JSON keys (existing consumers of
+the original fields are unaffected):
+
+- `scenarios[]`: one entry per scenario (name, status, redacted details) —
+  `cross_provider_fallback` (the original check) plus
+  `credential_pool_rotation`, which configures a credential pool with invalid
+  leading keys and proves the stream commits after rotating to a later
+  credential of the SAME provider. Scenario details record
+  `details.fallback_fired` so the proof distinguishes "rotation happened" from
+  "primary happened to work".
+- `negative_client_error`: pointer object for the negative control — a
+  client-shaped (HTTP 400) failure must relay terminally WITHOUT walking the
+  fallback chain. It cannot be forced deterministically against a live
+  provider, so the key records that the case is covered by
+  `apps/coding_agent/test/coding_agent/session/provider_fallback_acceptance_test.exs`
+  (`mode: "deterministic_test"`).
+
+The credential-pool scenario is skipped (with a recorded reason) when no pool
+credentials resolve, so a partial proof is still meaningful.
+
 The external client sub-proofs can also be run against an already-running Lemon
 HTTP server. `scripts/live_openai_compat_fetch_client.mjs` accepts
 `LEMON_OPENAI_COMPAT_CHECKS=vision` and `LEMON_OPENAI_COMPAT_IMAGE_BASE64` for
@@ -1594,3 +1615,18 @@ Because environment variables are process-wide, tests that call `System.put_env/
 - Prefer `scripts/test path ...` when validating a narrow change.
 - Keep new lanes documented here and visible in `scripts/test help`.
 - Do not bypass credential scrubbing for unit lanes. Use `LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1` only for explicit live/integration validation.
+
+## Known app-directory gotchas
+
+- `mix test apps/<app>` from the umbrella root silently runs ZERO tests (Mix
+  treats the app directory as a test path containing no `*_test.exs` files and
+  reports success). Either run from inside the app directory
+  (`cd apps/<app> && mix test`) or pass full test paths from the root
+  (`mix test apps/<app>/test/...`), which works.
+- `apps/lemon_channels` and `apps/lemon_gateway` suites are NOT runnable from
+  their own app directories (compile/start dependencies only resolve in the
+  umbrella context) — run them from the umbrella root with full test paths.
+- `apps/lemon_ai` `Auth.*OAuth` tests (~22 tests) fail when run from the
+  `apps/lemon_ai` directory because they need `lemon_core` services; treat
+  those failures as an app-dir artifact, not a regression — run them from the
+  umbrella root when they matter.

@@ -78,6 +78,61 @@ defmodule LemonAgent.ModelRuntime.ProviderPoolRotatorTest do
            ) == pinned
   end
 
+  test "idle session assignments are pruned by the periodic sweep" do
+    providers = ["openai", "zai", "anthropic"]
+    key = {:sweep_test, System.unique_integer([:positive])}
+
+    assert ProviderPoolRotator.ordered_providers(key, providers, "round_robin",
+             session_scope: "sess-idle"
+           ) == providers
+
+    pid = Process.whereis(ProviderPoolRotator)
+    assert Map.has_key?(:sys.get_state(pid).assignments, {key, "sess-idle"})
+
+    # Age every assignment past the TTL, then trigger the sweep directly.
+    :sys.replace_state(pid, fn state ->
+      %{
+        state
+        | assignments: Map.new(state.assignments, fn {k, {offset, _ts}} -> {k, {offset, 0}} end)
+      }
+    end)
+
+    send(pid, :sweep)
+
+    refute Map.has_key?(:sys.get_state(pid).assignments, {key, "sess-idle"})
+
+    # A pruned session simply claims a fresh slot on its next resolution.
+    assert is_list(
+             ProviderPoolRotator.ordered_providers(key, providers, "round_robin",
+               session_scope: "sess-idle"
+             )
+           )
+
+    assert Map.has_key?(:sys.get_state(pid).assignments, {key, "sess-idle"})
+  end
+
+  test "active session assignments refresh their last-used timestamp" do
+    providers = ["openai", "zai"]
+    key = {:refresh_test, System.unique_integer([:positive])}
+
+    first =
+      ProviderPoolRotator.ordered_providers(key, providers, "round_robin",
+        session_scope: "sess-active"
+      )
+
+    pid = Process.whereis(ProviderPoolRotator)
+    {_offset, ts1} = :sys.get_state(pid).assignments[{key, "sess-active"}]
+
+    Process.sleep(5)
+
+    assert ProviderPoolRotator.ordered_providers(key, providers, "round_robin",
+             session_scope: "sess-active"
+           ) == first
+
+    {_offset, ts2} = :sys.get_state(pid).assignments[{key, "sess-active"}]
+    assert ts2 > ts1
+  end
+
   test "single provider pools skip rotation" do
     key = {:single_test, System.unique_integer([:positive])}
 

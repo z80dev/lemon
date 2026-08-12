@@ -475,8 +475,29 @@ defmodule LemonAi.Error do
   `:context_length`). Everything else — `:server`, `:transient`, and
   unclassifiable errors such as broken connections, timeouts, or crashed
   streaming tasks — counts as a service failure.
+
+  Consumer-driven cancellations are also exempt: `{:canceled, reason}` with a
+  user/consumer reason (abort, redirect, explicit cancel, deliberate
+  `:shutdown` teardown) says nothing about the provider's health — a user
+  redirecting or stopping five calls in a row must not open a healthy
+  provider's breaker. `{:canceled, :owner_down}` (owner crash) and
+  `{:canceled, :timeout}` (stream hang) still count as failures.
   """
+  @consumer_cancel_reasons [
+    :aborted,
+    :redirected,
+    :canceled,
+    :user_abort,
+    :user_requested,
+    :assistant_aborted,
+    :shutdown
+  ]
+
   @spec stream_terminal_breaker_failure?(term()) :: boolean()
+  def stream_terminal_breaker_failure?({:canceled, reason})
+      when reason in @consumer_cancel_reasons,
+      do: false
+
   def stream_terminal_breaker_failure?(reason) do
     classify(reason) not in [:auth, :rate_limit, :client, :context_length]
   end

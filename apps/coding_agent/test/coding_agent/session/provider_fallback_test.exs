@@ -493,6 +493,40 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
              }
     end
 
+    test "switch_model clears the session's fallback pin" do
+      settings = routing_settings()
+      parent = self()
+
+      stream_fn = fn model, _context, options ->
+        send(parent, {:attempt, model.provider, options.api_key})
+
+        case model.provider do
+          :openai -> {:ok, error_stream(model)}
+          :azure_openai_responses -> {:ok, success_stream(model, "fallback response")}
+        end
+      end
+
+      {:ok, session} =
+        Session.start_link(
+          cwd: System.tmp_dir!(),
+          settings_manager: settings,
+          stream_fn: stream_fn
+        )
+
+      :ok = Session.prompt(session, "hello")
+      wait_for_idle(session)
+
+      session_id = Session.get_state(session).session_manager.header.id
+
+      assert %{provider: "azure_openai_responses"} =
+               LemonAgent.ModelRuntime.SessionPins.get(session_id)
+
+      # An explicit model choice must outrank stickiness from an old failover.
+      :ok = Session.switch_model(session, LemonAi.Models.get_model(:openai, "gpt-4o"))
+
+      assert LemonAgent.ModelRuntime.SessionPins.get(session_id) == nil
+    end
+
     defp pool_settings do
       %SettingsManager{
         default_model: %{provider: :openai, model_id: "gpt-4", base_url: nil},
@@ -517,6 +551,117 @@ defmodule CodingAgent.Session.ProviderFallbackTest do
         }
       }
     end
+  end
+
+  describe "cancellation, hangs, and model switches" do
+    test "canceling the wrapped output stream tears down the provider-side task" do
+      primary = LemonAi.Models.get_model(:openai, "gpt-4")
+      settings = routing_settings()
+      parent = self()
+
+      stream_fn = fn model, _context, _options ->
+        # Mimic StreamingHelper.start_streaming: the inner stream is owned by
+        # (and linked to) the relay task, and the provider HTTP task is only
+        # ATTACHED (monitored) and pushes fire-and-forget.
+        {:ok, stream} = LemonAi.EventStream.start_link(owner: self())
+        message = message(model, :stop, "hello", nil)
+
+        {:ok, http_task} =
+          Task.Supervisor.start_child(LemonAi.StreamTaskSupervisor, fn ->
+            LemonAi.EventStream.push_async(stream, {:start, message})
+            LemonAi.EventStream.push_async(stream, {:text_delta, 0, "hello", message})
+            send(parent, {:http_task, self()})
+            Process.sleep(:infinity)
+          end)
+
+        LemonAi.EventStream.attach_task(stream, http_task)
+        {:ok, stream}
+      end
+
+      wrapped = ProviderFallback.maybe_wrap(stream_fn, primary, settings, File.cwd!())
+      {:ok, output} = wrapped.(primary, %Context{}, %StreamOptions{})
+
+      assert_receive {:http_task, http_task}, 1_000
+      ref = Process.monitor(http_task)
+
+      LemonAi.EventStream.cancel(output, :redirected)
+
+      # The provider-side task must die with the relay task instead of
+      # streaming the full completion into a dead stream.
+      assert_receive {:DOWN, ^ref, :process, _, _}, 1_000
+    end
+
+    test "a hung provider stream (pre-commit cancel terminal) fails over to the next candidate" do
+      primary = LemonAi.Models.get_model(:openai, "gpt-4")
+      settings = routing_settings()
+      parent = self()
+
+      stream_fn = fn model, _context, _options ->
+        send(parent, {:attempt, model.provider})
+
+        case model.provider do
+          :openai -> {:ok, hang_timeout_stream(model)}
+          :azure_openai_responses -> {:ok, success_stream(model, "fallback response")}
+        end
+      end
+
+      wrapped = ProviderFallback.maybe_wrap(stream_fn, primary, settings, File.cwd!())
+      {:ok, stream} = wrapped.(primary, %Context{}, %StreamOptions{})
+
+      # The outer stream carries no fixed wall-clock timer; serial attempts
+      # must not share a 300s budget that can kill a healthy fallback.
+      assert :sys.get_state(stream).timeout_ref == nil
+
+      assert {:ok, message} = LemonAi.EventStream.result(stream, 1_000)
+      assert message.provider == :azure_openai_responses
+
+      assert_receive {:attempt, :openai}
+      assert_receive {:attempt, :azure_openai_responses}
+    end
+
+    test "fallback candidates track the per-call primary model, not the wrap-time model" do
+      wrap_model = LemonAi.Models.get_model(:openai, "gpt-4")
+      switched_model = LemonAi.Models.get_model(:openai, "gpt-4o")
+      settings = routing_settings()
+      parent = self()
+
+      stream_fn = fn model, _context, _options ->
+        send(parent, {:attempt, model.provider, model.id})
+
+        case model.provider do
+          :openai -> {:ok, error_stream(model)}
+          :azure_openai_responses -> {:ok, success_stream(model, "fallback response")}
+        end
+      end
+
+      wrapped = ProviderFallback.maybe_wrap(stream_fn, wrap_model, settings, File.cwd!())
+
+      # Simulates Session.switch_model/2: the loop passes the CURRENT model to
+      # the wrapper; the fallback tail must be rebuilt for it, not serve the
+      # stale wrap-time model id.
+      {:ok, stream} = wrapped.(switched_model, %Context{}, %StreamOptions{})
+
+      assert {:ok, message} = LemonAi.EventStream.result(stream, 1_000)
+      assert message.provider == :azure_openai_responses
+      assert message.model == "gpt-4o"
+
+      assert_receive {:attempt, :openai, "gpt-4o"}
+      assert_receive {:attempt, :azure_openai_responses, "gpt-4o"}
+      refute_receive {:attempt, _, "gpt-4"}, 100
+    end
+  end
+
+  defp hang_timeout_stream(model) do
+    message = message(model, :error, "", nil)
+    {:ok, stream} = LemonAi.EventStream.start_link()
+
+    Task.start(fn ->
+      LemonAi.EventStream.push(stream, {:start, message})
+      # What a hung provider stream yields when its own stream_timeout fires.
+      LemonAi.EventStream.push(stream, {:canceled, :timeout})
+    end)
+
+    stream
   end
 
   defp success_stream(model, text) do

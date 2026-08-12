@@ -376,7 +376,14 @@ defmodule LemonAgent.Loop do
   # ============================================================================
 
   defp run_loop(context, new_messages, config, signal, stream_fn, stream) do
-    # Check for steering messages at start (user may have typed while waiting)
+    # Check for steering messages at start (user may have typed while waiting).
+    # Clear the redirect flag BEFORE draining: a redirect cast processed before
+    # the drain has its correction included here (a set flag is then cleared
+    # harmlessly, worst case one immediate cancel/retry with the correction
+    # already in context); one processed after the drain keeps its flag, so
+    # the model call is canceled mid-stream and retried with the correction.
+    # Clearing after the drain would swallow that second case silently.
+    AbortSignal.clear_redirect(signal)
     pending_messages = get_steering_messages(config, signal) || []
 
     Logger.debug("LemonAgent.Loop run_loop pending_steering=#{length(pending_messages)}")
@@ -625,11 +632,14 @@ defmodule LemonAgent.Loop do
             if max_tool_turns_exhausted?(config, has_more_tool_calls, tool_turn_count) do
               complete_tool_loop_budget(context, new_messages, config, stream, tool_turn_count)
             else
-              # Get steering messages after turn completes
+              # Get steering messages after turn completes. Flag-clear-before-
+              # drain, same reasoning as in run_loop/6: when steering_after_tools
+              # is non-empty the clear already happened before ToolCalls' drain.
               pending_messages =
                 if steering_after_tools && steering_after_tools != [] do
                   steering_after_tools
                 else
+                  AbortSignal.clear_redirect(signal)
                   get_steering_messages(config, signal) || []
                 end
 

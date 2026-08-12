@@ -233,6 +233,65 @@ defmodule LemonAi.CallDispatcherTest do
       assert cb_after.failure_count == 0
     end
 
+    test "user-driven stream cancel is not recorded as circuit breaker failure",
+         %{provider: provider} do
+      start_supervised!(
+        {RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100}
+      )
+
+      start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 3})
+
+      for reason <- [:aborted, :redirected] do
+        {:ok, stream} =
+          CallDispatcher.dispatch(provider, fn ->
+            EventStream.start_link(owner: self())
+          end)
+
+        wait_until(fn -> CallDispatcher.get_active_requests(provider) == 1 end)
+
+        EventStream.cancel(stream, reason)
+
+        wait_until(fn -> CallDispatcher.get_active_requests(provider) == 0 end)
+      end
+
+      {:ok, cb_after} = CircuitBreaker.get_state(provider)
+      assert cb_after.failure_count == 0
+    end
+
+    test "shutdown link-cascade of the stream is not recorded as circuit breaker failure",
+         %{provider: provider} do
+      start_supervised!(
+        {RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100}
+      )
+
+      start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 3})
+
+      parent = self()
+
+      # The stream's parent/owner is a task that gets shut down mid-stream —
+      # the fallback wrapper's relay-task teardown path.
+      {:ok, owner_task} =
+        Task.Supervisor.start_child(LemonAi.StreamTaskSupervisor, fn ->
+          {:ok, stream} =
+            CallDispatcher.dispatch(provider, fn ->
+              EventStream.start_link(owner: self())
+            end)
+
+          send(parent, {:stream, stream})
+          Process.sleep(:infinity)
+        end)
+
+      assert_receive {:stream, _stream}, 1_000
+      wait_until(fn -> CallDispatcher.get_active_requests(provider) == 1 end)
+
+      Process.exit(owner_task, :shutdown)
+
+      wait_until(fn -> CallDispatcher.get_active_requests(provider) == 0 end)
+
+      {:ok, cb_after} = CircuitBreaker.get_state(provider)
+      assert cb_after.failure_count == 0
+    end
+
     test "stream tracking timeout cancels stalled stream and releases slot", %{provider: provider} do
       start_supervised!(
         {RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100}

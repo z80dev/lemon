@@ -34,6 +34,12 @@ defmodule CodingAgent.Session.ProviderFallback do
   def maybe_wrap(stream_fn, model, %SettingsManager{} = settings, cwd, opts) do
     session_scope = Keyword.get(opts, :session_id)
 
+    # Wrap-time computation is only an emptiness fast path: sessions whose
+    # routing yields no candidates keep the bare stream_fn. The wrapped fn
+    # recomputes candidates PER CALL from the primary model the loop passes
+    # in, so a mid-session model switch (Session.switch_model/2) fails over
+    # to fallbacks built for the CURRENT model — a list captured at init
+    # would keep serving the old model id after a switch.
     candidates =
       ModelResolver.runtime_fallback_models(model, settings, session_scope: session_scope)
 
@@ -43,6 +49,11 @@ defmodule CodingAgent.Session.ProviderFallback do
       base_stream_fn = stream_fn || (&LemonAi.stream/3)
 
       fn primary_model, context, options ->
+        candidates =
+          ModelResolver.runtime_fallback_models(primary_model, settings,
+            session_scope: session_scope
+          )
+
         stream_with_fallback(
           primary_model,
           candidates,
@@ -69,13 +80,20 @@ defmodule CodingAgent.Session.ProviderFallback do
          stream_fn,
          session_scope
        ) do
-    {:ok, output_stream} = LemonAi.EventStream.start_link()
+    # The outer stream carries no wall-clock timer: serial provider x
+    # credential attempts share one turn, so a fixed deadline would kill a
+    # healthy committed fallback just because earlier attempts were slow.
+    # Per-attempt liveness is enforced by each inner provider stream's own
+    # stream_timeout, and pre-commit {:canceled, :timeout} terminals walk the
+    # candidate chain (see failover_action/1 below).
+    {:ok, output_stream} = LemonAi.EventStream.start_link(timeout: :infinity)
 
     {:ok, task_pid} =
       Task.Supervisor.start_child(LemonAi.StreamTaskSupervisor, fn ->
         candidates =
           [primary_model | fallback_models]
           |> Enum.reject(&is_nil/1)
+          |> Enum.uniq_by(&normalize_provider_id(&1.provider))
           |> lead_with_pinned_provider(session_scope)
 
         ctx = %{
@@ -324,9 +342,11 @@ defmodule CodingAgent.Session.ProviderFallback do
   # Pre-commit stream errors only walk the fallback chain when the failure is
   # credential- or provider-specific (per LemonAi.Error.failover_action/1):
   # :next_credential advances to the next credential of the SAME provider,
-  # :next_provider abandons the provider for the next candidate. Errors that
-  # return nil here hit the terminal_event? branch instead and are relayed
-  # terminally without failover:
+  # :next_provider abandons the provider for the next candidate. Pre-commit
+  # {:canceled, _} terminals (a hung provider stream timing out) also walk the
+  # chain — see the clause below. Errors that return nil here hit the
+  # terminal_event? branch instead and are relayed terminally without
+  # failover:
   #
   #   - :fail (client errors): the request itself is malformed — every
   #     fallback candidate would reject it the same way.
@@ -340,6 +360,15 @@ defmodule CodingAgent.Session.ProviderFallback do
       _ -> nil
     end
   end
+
+  # A pre-commit {:canceled, _} terminal comes from the inner provider stream
+  # itself (self-cancel on stream_timeout — the accept-then-hang outage mode —
+  # or its own teardown), never from the consumer: consumer cancels hit the
+  # OUTER stream and kill the relay task before an event is seen here. Treat
+  # it as a provider failure and walk the candidate chain, matching how a
+  # request-level :timeout classifies (:transient -> :next_provider).
+  # Post-commit cancels stay terminal (this fn is only consulted pre-commit).
+  defp failover_action({:canceled, _reason}), do: :next_provider
 
   defp failover_action(_), do: nil
 

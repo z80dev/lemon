@@ -262,6 +262,14 @@ defmodule LemonAi.EventStream do
 
   @impl true
   def init(opts) do
+    # Trap exits so dying linked processes (the parent that start_link'ed this
+    # stream — e.g. a fallback relay task killed by an outer cancel) run
+    # `terminate/2` instead of killing this GenServer silently. Without this,
+    # a link cascade skips both `do_cancel/2` and `terminate/2`, orphaning the
+    # attached provider HTTP task, which then streams the full completion to a
+    # dead stream (full token billing, doubled provider load on redirects).
+    Process.flag(:trap_exit, true)
+
     owner = Keyword.get(opts, :owner, self())
     max_queue = Keyword.get(opts, :max_queue, @default_max_queue)
     drop_strategy = Keyword.get(opts, :drop_strategy, :error)
@@ -415,9 +423,20 @@ defmodule LemonAi.EventStream do
   end
 
   @impl true
-  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{owner_ref: ref} = state) do
-    # Owner died - cancel the stream
-    state = do_cancel(state, :owner_down)
+  def handle_info({:DOWN, ref, :process, _pid, reason}, %{owner_ref: ref} = state) do
+    # Owner died - cancel the stream. A :shutdown reason is a deliberate
+    # teardown (consumer cancel cascade, supervision shutdown), not an owner
+    # crash — surface it as {:canceled, :shutdown} so circuit-breaker
+    # accounting (LemonAi.Error.stream_terminal_breaker_failure?/1) can tell
+    # it apart from a genuine :owner_down failure.
+    cancel_reason =
+      case reason do
+        :shutdown -> :shutdown
+        {:shutdown, _} -> :shutdown
+        _ -> :owner_down
+      end
+
+    state = do_cancel(state, cancel_reason)
     {:stop, :normal, state}
   end
 
@@ -457,6 +476,28 @@ defmodule LemonAi.EventStream do
     {:noreply, state}
   end
 
+  # With trap_exit set, exits from the parent are handled by the GenServer
+  # machinery itself (terminate/2 runs, shutting down the attached task).
+  # Exits from any OTHER linked process arrive here: cancel so waiters are
+  # notified and the attached task is torn down, mirroring the owner-DOWN path.
+  def handle_info({:EXIT, _pid, :normal}, state) do
+    # A linked process exiting normally would not have killed a non-trapping
+    # stream; keep that behavior.
+    {:noreply, state}
+  end
+
+  def handle_info({:EXIT, _pid, reason}, state) do
+    cancel_reason =
+      case reason do
+        :shutdown -> :shutdown
+        {:shutdown, _} -> :shutdown
+        _ -> :owner_down
+      end
+
+    state = do_cancel(state, cancel_reason)
+    {:stop, :normal, state}
+  end
+
   def handle_info(:stream_timeout, state) do
     Logger.debug("EventStream timeout, canceling stream")
     state = do_cancel(state, :timeout)
@@ -464,10 +505,25 @@ defmodule LemonAi.EventStream do
   end
 
   @impl true
-  def terminate(_reason, state) do
-    # Shutdown attached task if still running
-    if state.task_pid && Process.alive?(state.task_pid) do
-      Process.exit(state.task_pid, :brutal_kill)
+  def terminate(reason, state) do
+    # Thanks to trap_exit this also runs when the PARENT process dies (the
+    # GenServer machinery terminates with the parent's exit reason before any
+    # handle_info clause sees it). Run the full cancel path when the stream is
+    # not finished so waiters are notified and the attached task — typically
+    # the provider HTTP streaming task — is shut down instead of orphaned.
+    if state.done or state.canceled do
+      if state.task_pid && Process.alive?(state.task_pid) do
+        Process.exit(state.task_pid, :brutal_kill)
+      end
+    else
+      cancel_reason =
+        case reason do
+          :shutdown -> :shutdown
+          {:shutdown, _} -> :shutdown
+          _ -> :owner_down
+        end
+
+      _ = do_cancel(state, cancel_reason)
     end
 
     :ok

@@ -29,10 +29,14 @@ defmodule LemonAgent.Loop.Streaming do
       {abort_message, context} = finalize_message(abort_message, context, false, stream)
       {:ok, abort_message, context}
     else
-      # A redirect requested before this call starts has already had its
-      # correction drained into pending messages; clear the flag so the fresh
-      # call is not spuriously cancelled.
-      if redirect_requested?(signal), do: AbortSignal.clear_redirect(signal)
+      # NOTE: the redirect flag is deliberately NOT cleared here. The loop
+      # clears it immediately BEFORE each steering drain (see
+      # LemonAgent.Loop / LemonAgent.Loop.ToolCalls): a redirect cast that
+      # lands after a drain keeps its flag set, so the in-stream check below
+      # cancels this call and the loop retries with the correction. Clearing
+      # here — after the drain — could swallow a redirect whose correction is
+      # still sitting undrained in the steering queue, silently delaying it a
+      # full turn.
 
       # Surface very large contexts early (telemetry warning only; no truncation here).
       _ = LemonAgent.Context.check_size(context.messages, context.system_prompt)

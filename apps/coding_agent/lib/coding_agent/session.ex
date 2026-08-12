@@ -772,6 +772,11 @@ defmodule CodingAgent.Session do
   def handle_call({:switch_model, model}, _from, state) do
     :ok = LemonAgent.Agent.set_model(state.agent, model)
 
+    # An explicit model choice outranks stickiness from a previous fallback
+    # commit: clear the session's provider pin so the fallback wrapper cannot
+    # lead the next turn with a provider pinned for the old model.
+    LemonAgent.ModelRuntime.SessionPins.clear(state.session_manager.header.id)
+
     # Record model change in session
     entry =
       SessionEntry.model_change(

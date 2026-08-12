@@ -319,6 +319,19 @@ defmodule LemonAi.CallDispatcher do
           {:stream_tracking_exception, Exception.message(error)}
         )
     catch
+      # A :shutdown exit of the tracked stream is a deliberate teardown — a
+      # consumer cancel propagated through a link cascade (e.g. the fallback
+      # wrapper's relay task being shut down), not a provider failure. Record
+      # neither success nor failure.
+      :exit, :shutdown ->
+        :ok
+
+      :exit, {:shutdown, _} ->
+        :ok
+
+      :exit, {{:shutdown, _}, _} ->
+        :ok
+
       :exit, reason ->
         Logger.warning(
           "CallDispatcher stream tracking exited for #{inspect(provider)}: #{inspect(reason)}"
