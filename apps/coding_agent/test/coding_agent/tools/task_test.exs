@@ -541,17 +541,22 @@ defmodule CodingAgent.Tools.TaskTest do
     end
 
     test "does not infer internal tool policy for external engines" do
+      # Vendor engine ids live in lemon_cli_runners, which is not a dep of this
+      # app, so the guardrail is pinned against a registered probe engine.
+      :ok = LemonCore.SubagentRegistry.register(ProbeSubagent)
+      on_exit(fn -> LemonCore.SubagentRegistry.unregister("task-probe") end)
+
       assert {:ok, validated} =
                Params.validate_run_params(
                  %{
                    "description" => "Inspect repo",
                    "prompt" => "Use bash/read/grep tools only.",
-                   "engine" => "codex"
+                   "engine" => "task-probe"
                  },
                  "/tmp"
                )
 
-      assert validated.engine == "codex"
+      assert validated.engine == "task-probe"
       assert validated.tool_policy == nil
       assert validated.prompt == "Use bash/read/grep tools only."
     end

@@ -1623,9 +1623,14 @@ Because environment variables are process-wide, tests that call `System.put_env/
   reports success). Either run from inside the app directory
   (`cd apps/<app> && mix test`) or pass full test paths from the root
   (`mix test apps/<app>/test/...`), which works.
-- `apps/lemon_channels` and `apps/lemon_gateway` suites are NOT runnable from
-  their own app directories (compile/start dependencies only resolve in the
-  umbrella context) — run them from the umbrella root with full test paths.
+- `apps/lemon_channels`, `apps/lemon_gateway`, `apps/lemon_router`, and
+  `apps/lemon_automation` suites are NOT runnable from their own app
+  directories — run them from the umbrella root with full test paths. Their
+  `test_helper.exs` starts applications that are not in the app's own `deps`
+  (router starts `:coding_agent`, automation starts `:lemon_gateway`), so from
+  the app directory those `.app` files are not on the code path and the helper
+  aborts with `{:error, {:coding_agent, {~c"no such file or directory",
+  ~c"coding_agent.app"}}}` before a single test runs.
 - `apps/lemon_ai` `Auth.*OAuth` tests (~22 tests) fail when run from the
   `apps/lemon_ai` directory because they need `lemon_core` services; treat
   those failures as an app-dir artifact, not a regression — run them from the

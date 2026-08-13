@@ -214,21 +214,13 @@ that should outlive one session. Kanban-dispatched worker runs block the
 
 | Tool | Module | Notes |
 |------|--------|-------|
-| `multiedit` | `Tools.MultiEdit` | Multiple sequential edits to one file |
-| `exec` | `Tools.Exec` | Long-running background processes with poll/kill |
-| `process` | `Tools.Process` | Control interface for `exec` processes, including manual restart of finished runs |
-| `await` | `Tools.Await` | Block until background jobs complete |
-| `webdownload` | `Tools.WebDownload` | Download binary content to disk |
 | `truncate` | `Tools.Truncate` | Truncate long text with configurable strategies |
 | `skill_manage` | `Tools.SkillManage` | Create, patch, delete, and maintain audited Lemon skills |
-| `todoread` / `todowrite` | `Tools.TodoRead` / `Tools.TodoWrite` | Low-level todo primitives |
-| `restart` | `Tools.Restart` | Restart the Lemon BEAM process (dev) |
 | `memory_topic` | `LemonSkills.Tools.MemoryTopic` | Persistent memory topics for cross-session knowledge |
-| `glob` | `Tools.Glob` | File pattern matching |
 | `lsp_formatter` | `Tools.LspFormatter` | Format supported files with local formatters |
 | `ask_parent` | `Tools.AskParent` | Child-only extra tool injected into eligible task-spawned sessions |
 
-**Internal helpers (not exposed as tools):** `Tools.Fuzzy`, `Tools.Hashline`, `Tools.WebCache`, `Tools.WebGuard`, `Tools.TodoStore`, `Tools.TodoStoreOwner`.
+**Internal helpers (not exposed as tools):** `Tools.Hashline`, `Tools.WebCache`, `Tools.WebGuard`, `Tools.TodoStore`, `Tools.TodoStoreOwner`.
 
 Pure text-only external `codex`/`claude` tasks with no explicit `cwd` and no role may skip the CLI entirely and call the provider directly instead. Tasks that explicitly ask to use tools such as `bash`, `read`, or `grep` stay on the normal runner path so they cannot silently bypass tool execution. Internal task runs also infer a restrictive `tool_policy` and verification guardrail when the prompt says `use ... tools only`, so tool-constrained subtasks have to verify against tool output instead of guessing. The fast path also keeps compatible model hints such as `haiku`, `sonnet`, and direct provider model specs off the slow CLI startup path. For internal bash-only tasks, the fast path now accepts both backticked commands and plain phrasings like `Run this exact command and return the output: ...`, which keeps provider-generated shell subtasks off the slower child-session path.
 

@@ -2,9 +2,13 @@ defmodule CodingAgentTest do
   use ExUnit.Case, async: true
 
   describe "coding_tools/2" do
-    test "returns list of 60 tools" do
+    # Builtins only: satellite tools (x_api, lemon_honcho) register through
+    # LemonAgent.ToolRegistry when THEIR app boots, and neither is a dep of
+    # coding_agent. Satellite contribution/precedence is covered by
+    # tool_precedence_test.exs.
+    test "returns list of 52 tools" do
       tools = CodingAgent.coding_tools("/tmp")
-      assert length(tools) == 60
+      assert length(tools) == 52
       assert Enum.all?(tools, &match?(%LemonAgent.Types.AgentTool{}, &1))
     end
 
@@ -61,14 +65,6 @@ defmodule CodingAgentTest do
       assert "parent_question" in names
       assert "tool_auth" in names
       assert "extensions_status" in names
-      assert "x_search" in names
-      assert "post_to_x" in names
-      assert "get_x_mentions" in names
-      assert "honcho_reasoning" in names
-      assert "honcho_search" in names
-      assert "honcho_context" in names
-      assert "honcho_profile" in names
-      assert "honcho_conclude" in names
     end
   end
 

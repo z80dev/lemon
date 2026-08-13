@@ -1,6 +1,12 @@
 # Lemon ↔ Hermes Feature Parity Matrix
 
-Status: active audit ledger
+Status: historical — superseded
+
+> **⚠️ Superseded (2026-08-12).** Statuses in this document are frozen at the
+> 2026-05-18 review and no longer reflect the codebase. The live ledger is the
+> 2026-08-11 Hermes gap audit (`docs/plans/lemon-hermes-gap-audit-2026-08-11.md`)
+> plus the 2026-08-12 improvement plan. Kept for historical reference; do not
+> update statuses here.
 
 Last reviewed: 2026-05-18
 

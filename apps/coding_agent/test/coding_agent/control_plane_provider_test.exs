@@ -3,6 +3,12 @@ defmodule CodingAgent.ControlPlaneProviderTest do
   The provider deliberately carries no `@behaviour` attribute, so that this app
   keeps no compile-time reference to the reference runtime. These tests are what
   replaces that compile-time check.
+
+  `lemon_control_plane` is not a dependency of this app, so the contract and
+  boot-registration checks below only run where the control plane happens to be
+  on the code path (a release or a full-umbrella boot). In an app-dir run
+  (`cd apps/coding_agent && mix test`) they are compiled out; the adapter-shape
+  tests always run.
   """
 
   use ExUnit.Case, async: false
@@ -10,48 +16,51 @@ defmodule CodingAgent.ControlPlaneProviderTest do
   alias CodingAgent.ControlPlaneProvider
 
   @behaviour_module LemonControlPlane.AgentRuntime.Provider
+  @control_plane_loaded Code.ensure_loaded?(@behaviour_module)
 
-  test "implements every callback the control plane declares" do
-    expected = @behaviour_module.behaviour_info(:callbacks) |> Enum.sort()
+  if @control_plane_loaded do
+    test "implements every callback the control plane declares" do
+      expected = @behaviour_module.behaviour_info(:callbacks) |> Enum.sort()
 
-    missing =
-      Enum.reject(expected, fn {fun, arity} ->
-        function_exported?(ControlPlaneProvider, fun, arity)
-      end)
+      missing =
+        Enum.reject(expected, fn {fun, arity} ->
+          function_exported?(ControlPlaneProvider, fun, arity)
+        end)
 
-    assert missing == [],
-           "provider is missing: #{inspect(missing)} — a typo here degrades the method to its fallback silently"
-  end
-
-  test "exports nothing the control plane does not ask for" do
-    declared = @behaviour_module.behaviour_info(:callbacks) |> MapSet.new()
-
-    extra =
-      ControlPlaneProvider.__info__(:functions)
-      |> Enum.reject(&(&1 in declared))
-      |> Enum.reject(fn {fun, _arity} -> fun == :module_info end)
-
-    assert extra == [], "provider exports beyond the contract: #{inspect(extra)}"
-  end
-
-  describe "boot registration" do
-    setup do
-      original = Application.get_env(:lemon_control_plane, :agent_runtime_provider)
-
-      on_exit(fn ->
-        if is_nil(original) do
-          Application.delete_env(:lemon_control_plane, :agent_runtime_provider)
-        else
-          Application.put_env(:lemon_control_plane, :agent_runtime_provider, original)
-        end
-      end)
-
-      :ok
+      assert missing == [],
+             "provider is missing: #{inspect(missing)} — a typo here degrades the method to its fallback silently"
     end
 
-    test "the running application has registered this provider" do
-      assert LemonControlPlane.AgentRuntime.provider() == ControlPlaneProvider
-      assert LemonControlPlane.AgentRuntime.available?()
+    test "exports nothing the control plane does not ask for" do
+      declared = @behaviour_module.behaviour_info(:callbacks) |> MapSet.new()
+
+      extra =
+        ControlPlaneProvider.__info__(:functions)
+        |> Enum.reject(&(&1 in declared))
+        |> Enum.reject(fn {fun, _arity} -> fun == :module_info end)
+
+      assert extra == [], "provider exports beyond the contract: #{inspect(extra)}"
+    end
+
+    describe "boot registration" do
+      setup do
+        original = Application.get_env(:lemon_control_plane, :agent_runtime_provider)
+
+        on_exit(fn ->
+          if is_nil(original) do
+            Application.delete_env(:lemon_control_plane, :agent_runtime_provider)
+          else
+            Application.put_env(:lemon_control_plane, :agent_runtime_provider, original)
+          end
+        end)
+
+        :ok
+      end
+
+      test "the running application has registered this provider" do
+        assert LemonControlPlane.AgentRuntime.provider() == ControlPlaneProvider
+        assert LemonControlPlane.AgentRuntime.available?()
+      end
     end
   end
 

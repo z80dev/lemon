@@ -1,4 +1,4 @@
-defmodule LemonSkills.McpSourceTest.SSEFixture do
+defmodule LemonMCP.SkillsMcpSourceTest.SSEFixture do
   use Plug.Router
 
   alias LemonMCP.Protocol
@@ -64,7 +64,7 @@ defmodule LemonSkills.McpSourceTest.SSEFixture do
   end
 end
 
-defmodule LemonSkills.McpSourceTest.OAuthTokenFixture do
+defmodule LemonMCP.SkillsMcpSourceTest.OAuthTokenFixture do
   use Plug.Router
 
   plug(:match)
@@ -215,7 +215,7 @@ defmodule LemonSkills.McpSourceTest.OAuthTokenFixture do
   defp record(store, event), do: Agent.update(store, &[event | &1])
 end
 
-defmodule LemonSkills.McpSourceTest do
+defmodule LemonMCP.SkillsMcpSourceTest do
   use ExUnit.Case, async: false
 
   alias LemonCore.{Secrets, Store}
@@ -1222,7 +1222,7 @@ defmodule LemonSkills.McpSourceTest do
     pid =
       start_supervised!(
         {Bandit,
-         plug: {LemonSkills.McpSourceTest.SSEFixture, store: store, mcp_server: server},
+         plug: {LemonMCP.SkillsMcpSourceTest.SSEFixture, store: store, mcp_server: server},
          scheme: :http,
          ip: {127, 0, 0, 1},
          port: 0}
@@ -1239,7 +1239,7 @@ defmodule LemonSkills.McpSourceTest do
 
     start_supervised!(
       {Bandit,
-       plug: {LemonSkills.McpSourceTest.OAuthTokenFixture, store: store},
+       plug: {LemonMCP.SkillsMcpSourceTest.OAuthTokenFixture, store: store},
        scheme: :http,
        ip: {127, 0, 0, 1},
        port: port}

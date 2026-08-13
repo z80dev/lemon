@@ -158,19 +158,11 @@ the `kanban` tool through tool policy to avoid recursive board management.
 
 | Tool | Module | Notes |
 |------|--------|-------|
-| `multiedit` | `Tools.MultiEdit` | Multiple sequential edits to one file |
-| `exec` | `Tools.Exec` | Long-running background processes with poll/kill |
-| `process` | `Tools.Process` | Control interface for `exec` processes, including manual restart of finished runs |
-| `await` | `Tools.Await` | Block until background jobs complete |
-| `webdownload` | `Tools.WebDownload` | Download binary content (images, PDFs) to disk |
 | `truncate` | `Tools.Truncate` | Truncate long text with configurable strategies |
-| `todoread` | `Tools.TodoRead` | Low-level todo read (used internally by `todo`) |
-| `todowrite` | `Tools.TodoWrite` | Low-level todo write (used internally by `todo`) |
-| `restart` | `Tools.Restart` | Restart the Lemon BEAM process (dev only) |
 | `lsp_formatter` | `Tools.LspFormatter` | Format supported files with local formatters |
 | `ask_parent` | `Tools.AskParent` | Child-only extra tool injected into eligible task-spawned sessions |
 
-**Internal helpers** (not exposed as tools): `Tools.Fuzzy` (fuzzy match used by `edit`), `Tools.Hashline` (used by `hashline_edit`), `Tools.WebCache`, `Tools.WebGuard`, `Tools.TodoStore`, `Tools.TodoStoreOwner`.
+**Internal helpers** (not exposed as tools): `Tools.Hashline` (used by `hashline_edit`), `Tools.WebCache`, `Tools.WebGuard`, `Tools.TodoStore`, `Tools.TodoStoreOwner`.
 
 ### Tool Infrastructure
 

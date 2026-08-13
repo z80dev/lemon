@@ -78,15 +78,7 @@ defmodule CodingAgent.ToolsTest do
         "agent",
         "parent_question",
         "tool_auth",
-        "extensions_status",
-        "x_search",
-        "post_to_x",
-        "get_x_mentions",
-        "honcho_reasoning",
-        "honcho_search",
-        "honcho_context",
-        "honcho_profile",
-        "honcho_conclude"
+        "extensions_status"
       ]
 
       Enum.each(expected_tools, fn expected_name ->
@@ -94,9 +86,12 @@ defmodule CodingAgent.ToolsTest do
       end)
     end
 
-    test "returns exactly 60 tools" do
+    # Builtins only: satellite tools (x_api, lemon_honcho) register through
+    # LemonAgent.ToolRegistry from their own apps, which are not deps of
+    # coding_agent. See tool_precedence_test.exs for registry contributions.
+    test "returns exactly 52 tools" do
       tools = Tools.coding_tools(@test_cwd)
-      assert length(tools) == 60
+      assert length(tools) == 52
     end
 
     test "passes cwd to each tool" do
@@ -115,7 +110,7 @@ defmodule CodingAgent.ToolsTest do
 
       # Should not raise any errors
       assert is_list(tools)
-      assert length(tools) == 60
+      assert length(tools) == 52
     end
   end
 
@@ -242,15 +237,7 @@ defmodule CodingAgent.ToolsTest do
         "agent",
         "parent_question",
         "tool_auth",
-        "extensions_status",
-        "x_search",
-        "post_to_x",
-        "get_x_mentions",
-        "honcho_reasoning",
-        "honcho_search",
-        "honcho_context",
-        "honcho_profile",
-        "honcho_conclude"
+        "extensions_status"
       ]
 
       Enum.each(expected_tools, fn expected_name ->
@@ -259,9 +246,9 @@ defmodule CodingAgent.ToolsTest do
       end)
     end
 
-    test "returns 61 tools (includes truncate plus skill_manage, memory tools, session_search, checkpoint, browser, media status/generation, kanban, LSP diagnostics, parent_question, X tools, and Honcho tools)" do
+    test "returns 53 tools (includes truncate plus skill_manage, memory tools, session_search, checkpoint, browser, media status/generation, kanban, LSP diagnostics, and parent_question)" do
       tools_map = Tools.all_tools(@test_cwd)
-      assert map_size(tools_map) == 61
+      assert map_size(tools_map) == 53
     end
 
     test "tool names match map keys" do
@@ -352,10 +339,7 @@ defmodule CodingAgent.ToolsTest do
         "task",
         "agent",
         "tool_auth",
-        "extensions_status",
-        "x_search",
-        "post_to_x",
-        "get_x_mentions"
+        "extensions_status"
       ]
 
       Enum.each(known_tools, fn name ->
@@ -449,10 +433,7 @@ defmodule CodingAgent.ToolsTest do
         "task",
         "agent",
         "tool_auth",
-        "extensions_status",
-        "x_search",
-        "post_to_x",
-        "get_x_mentions"
+        "extensions_status"
       ]
 
       tools = Tools.get_tools(all_names, @test_cwd)
