@@ -65,6 +65,33 @@ defmodule LemonAutomation.CronJobTest do
       job = new_job(%{id: "cron_custom_id"})
       assert job.id == "cron_custom_id"
     end
+
+    test "defaults the job-quality fields" do
+      job = new_job()
+
+      assert job.monitor == false
+      assert job.monitor_notify_first_run == true
+      assert job.context_from == nil
+      assert job.model == nil
+      assert job.captured_default_model == nil
+    end
+
+    test "accepts the job-quality fields from atom and string keys" do
+      job =
+        new_job(%{
+          :monitor => true,
+          "monitor_notify_first_run" => false,
+          :context_from => "cron_source",
+          "model" => "model-a",
+          :captured_default_model => "model-default"
+        })
+
+      assert job.monitor == true
+      assert job.monitor_notify_first_run == false
+      assert job.context_from == "cron_source"
+      assert job.model == "model-a"
+      assert job.captured_default_model == "model-default"
+    end
   end
 
   describe "update/2" do
@@ -110,6 +137,43 @@ defmodule LemonAutomation.CronJobTest do
 
       assert updated.updated_at_ms >= before
       assert updated.updated_at_ms <= after_ms
+    end
+
+    test "updates monitor, context_from and model but never captured_default_model" do
+      job =
+        new_job(%{
+          id: "cron_feature_update",
+          monitor: false,
+          monitor_notify_first_run: true,
+          context_from: nil,
+          model: nil,
+          captured_default_model: "model-captured"
+        })
+
+      updated =
+        CronJob.update(job, %{
+          monitor: true,
+          monitor_notify_first_run: false,
+          context_from: "cron_source",
+          model: "model-pinned",
+          captured_default_model: "model-hijacked"
+        })
+
+      assert updated.monitor == true
+      assert updated.monitor_notify_first_run == false
+      assert updated.context_from == "cron_source"
+      assert updated.model == "model-pinned"
+      assert updated.captured_default_model == "model-captured"
+    end
+
+    test "explicit nil clears context_from and model" do
+      job =
+        new_job(%{id: "cron_feature_clear", context_from: "cron_source", model: "model-pinned"})
+
+      updated = CronJob.update(job, %{context_from: nil, model: nil})
+
+      assert updated.context_from == nil
+      assert updated.model == nil
     end
   end
 
@@ -205,6 +269,11 @@ defmodule LemonAutomation.CronJobTest do
                cwd: nil,
                env: nil,
                memory_file: nil,
+               monitor: false,
+               monitor_notify_first_run: true,
+               context_from: nil,
+               model: nil,
+               captured_default_model: nil,
                timezone: "America/Los_Angeles",
                jitter_sec: 22,
                timeout_ms: 75_000,
@@ -339,11 +408,72 @@ defmodule LemonAutomation.CronJobTest do
       assert job.max_retries == 0
       assert job.retry_backoff_ms == 30_000
       assert job.memory_file == nil
+      assert job.monitor == false
+      assert job.monitor_notify_first_run == true
+      assert job.context_from == nil
+      assert job.model == nil
+      assert job.captured_default_model == nil
       assert job.created_at_ms == nil
       assert job.updated_at_ms == nil
       assert job.last_run_at_ms == nil
       assert job.next_run_at_ms == nil
       assert job.meta == nil
+    end
+
+    test "round-trips the job-quality fields through to_map/from_map" do
+      job =
+        new_job(%{
+          id: "cron_roundtrip",
+          monitor: true,
+          monitor_notify_first_run: false,
+          context_from: "cron_source",
+          model: "model-a",
+          captured_default_model: "model-default"
+        })
+
+      restored = job |> CronJob.to_map() |> CronJob.from_map()
+
+      assert restored.monitor == true
+      assert restored.monitor_notify_first_run == false
+      assert restored.context_from == "cron_source"
+      assert restored.model == "model-a"
+      assert restored.captured_default_model == "model-default"
+    end
+
+    test "legacy rows without the job-quality keys fall back to defaults" do
+      # Schema-evolution pin: a row persisted before these fields existed.
+      legacy = %{
+        "id" => "cron_legacy",
+        "name" => "Legacy Job",
+        "schedule" => "* * * * *",
+        "enabled" => true,
+        "agent_id" => "agent_legacy",
+        "session_key" => "agent:agent_legacy:main",
+        "prompt" => "legacy prompt",
+        "command" => nil,
+        "cwd" => nil,
+        "env" => nil,
+        "memory_file" => nil,
+        "timezone" => "UTC",
+        "jitter_sec" => 0,
+        "timeout_ms" => 300_000,
+        "max_retries" => 0,
+        "retry_backoff_ms" => 30_000,
+        "created_at_ms" => 1_000,
+        "updated_at_ms" => 1_000,
+        "last_run_at_ms" => nil,
+        "next_run_at_ms" => nil,
+        "meta" => nil
+      }
+
+      job = CronJob.from_map(legacy)
+
+      assert job.id == "cron_legacy"
+      assert job.monitor == false
+      assert job.monitor_notify_first_run == true
+      assert job.context_from == nil
+      assert job.model == nil
+      assert job.captured_default_model == nil
     end
   end
 end

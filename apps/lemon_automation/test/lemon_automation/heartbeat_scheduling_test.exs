@@ -40,6 +40,7 @@ defmodule LemonAutomation.HeartbeatSchedulingTest do
         interval_ms: 60_000,
         prompt: "HEARTBEAT"
       }
+
       HeartbeatManager.update_config(agent_id, config)
 
       # Then disable
@@ -63,7 +64,8 @@ defmodule LemonAutomation.HeartbeatSchedulingTest do
 
       config = %{
         enabled: true,
-        interval_ms: 5 * 60_000,  # 5 minutes
+        # 5 minutes
+        interval_ms: 5 * 60_000,
         prompt: "HEARTBEAT"
       }
 
@@ -76,7 +78,8 @@ defmodule LemonAutomation.HeartbeatSchedulingTest do
 
       config = %{
         enabled: true,
-        interval_ms: 2 * 60 * 60_000,  # 2 hours
+        # 2 hours
+        interval_ms: 2 * 60 * 60_000,
         prompt: "HEARTBEAT"
       }
 
@@ -109,7 +112,8 @@ defmodule LemonAutomation.HeartbeatSchedulingTest do
 
       config = %{
         enabled: true,
-        interval_ms: 30_000,  # 30 seconds
+        # 30 seconds
+        interval_ms: 30_000,
         prompt: "HEARTBEAT"
       }
 
@@ -127,7 +131,8 @@ defmodule LemonAutomation.HeartbeatSchedulingTest do
 
       config = %{
         enabled: true,
-        interval_ms: 10_000,  # 10 seconds
+        # 10 seconds
+        interval_ms: 10_000,
         prompt: "HEARTBEAT"
       }
 
@@ -140,7 +145,8 @@ defmodule LemonAutomation.HeartbeatSchedulingTest do
 
       config = %{
         enabled: true,
-        interval_ms: 5_000,  # 5 seconds
+        # 5 seconds
+        interval_ms: 5_000,
         prompt: "HEARTBEAT"
       }
 
@@ -153,7 +159,8 @@ defmodule LemonAutomation.HeartbeatSchedulingTest do
 
       config = %{
         enabled: true,
-        interval_ms: 60_000,  # Exactly 60 seconds
+        # Exactly 60 seconds
+        interval_ms: 60_000,
         prompt: "HEARTBEAT"
       }
 
@@ -168,7 +175,8 @@ defmodule LemonAutomation.HeartbeatSchedulingTest do
 
       config = %{
         enabled: true,
-        interval_ms: 90_000,  # 90 seconds = 1.5 minutes
+        # 90 seconds = 1.5 minutes
+        interval_ms: 90_000,
         prompt: "HEARTBEAT"
       }
 
@@ -184,7 +192,8 @@ defmodule LemonAutomation.HeartbeatSchedulingTest do
       # Enable with sub-minute interval
       config = %{
         enabled: true,
-        interval_ms: 15_000,  # 15 seconds
+        # 15 seconds
+        interval_ms: 15_000,
         prompt: "HEARTBEAT"
       }
 
@@ -204,7 +213,8 @@ defmodule LemonAutomation.HeartbeatSchedulingTest do
       # Start with sub-minute interval
       config1 = %{
         enabled: true,
-        interval_ms: 30_000,  # 30 seconds - uses timer
+        # 30 seconds - uses timer
+        interval_ms: 30_000,
         prompt: "HEARTBEAT"
       }
 
@@ -214,7 +224,8 @@ defmodule LemonAutomation.HeartbeatSchedulingTest do
       # Switch to minute interval
       config2 = %{
         enabled: true,
-        interval_ms: 120_000,  # 2 minutes - uses cron
+        # 2 minutes - uses cron
+        interval_ms: 120_000,
         prompt: "HEARTBEAT"
       }
 
@@ -230,7 +241,8 @@ defmodule LemonAutomation.HeartbeatSchedulingTest do
       # Start with minute interval
       config1 = %{
         enabled: true,
-        interval_ms: 120_000,  # 2 minutes - uses cron
+        # 2 minutes - uses cron
+        interval_ms: 120_000,
         prompt: "HEARTBEAT"
       }
 
@@ -240,7 +252,8 @@ defmodule LemonAutomation.HeartbeatSchedulingTest do
       # Switch to sub-minute interval
       config2 = %{
         enabled: true,
-        interval_ms: 20_000,  # 20 seconds - uses timer
+        # 20 seconds - uses timer
+        interval_ms: 20_000,
         prompt: "HEARTBEAT"
       }
 
@@ -259,7 +272,8 @@ defmodule LemonAutomation.HeartbeatSchedulingTest do
 
       config = %{
         enabled: true,
-        interval_ms: 45_000,  # 45 seconds
+        # 45 seconds
+        interval_ms: 45_000,
         prompt: "HEARTBEAT"
       }
 
@@ -274,7 +288,8 @@ defmodule LemonAutomation.HeartbeatSchedulingTest do
 
       config = %{
         enabled: true,
-        interval_ms: 59_000,  # 59 seconds
+        # 59 seconds
+        interval_ms: 59_000,
         prompt: "HEARTBEAT"
       }
 
@@ -290,7 +305,8 @@ defmodule LemonAutomation.HeartbeatSchedulingTest do
 
       config = %{
         enabled: true,
-        interval_ms: 90_000,  # 1.5 minutes
+        # 1.5 minutes
+        interval_ms: 90_000,
         prompt: "HEARTBEAT"
       }
 
@@ -305,7 +321,8 @@ defmodule LemonAutomation.HeartbeatSchedulingTest do
 
       config = %{
         enabled: true,
-        interval_ms: 75_000,  # 1 minute 15 seconds
+        # 1 minute 15 seconds
+        interval_ms: 75_000,
         prompt: "HEARTBEAT"
       }
 

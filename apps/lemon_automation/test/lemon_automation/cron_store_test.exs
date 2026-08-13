@@ -7,12 +7,14 @@ defmodule LemonAutomation.CronStoreTest do
   @jobs_table :cron_jobs
   @runs_table :cron_runs
   @audit_table :cron_audit_events
+  @monitor_table :cron_monitor_state
   @future_ms 4_102_444_800_000
 
   setup do
     clear_table(@jobs_table)
     clear_table(@runs_table)
     clear_table(@audit_table)
+    clear_table(@monitor_table)
 
     {:ok, token: System.unique_integer([:positive, :monotonic])}
   end
@@ -304,6 +306,86 @@ defmodule LemonAutomation.CronStoreTest do
                CronStore.claim_scheduled_run(job, scheduled_for_ms, "router_second")
 
       assert CronStore.get_run(expected_id).run_id == "router_first"
+    end
+  end
+
+  describe "monitor state operations" do
+    test "put/get/delete round-trip", %{token: token} do
+      id = job_id(token, "monitor")
+
+      assert CronStore.get_monitor_state(id) == nil
+
+      :ok =
+        CronStore.put_monitor_state(id, %{
+          last_hash: "abc123",
+          last_run_id: "run_1",
+          last_changed_at_ms: 1_000,
+          updated_at_ms: 1_000,
+          runs_since_change: 0
+        })
+
+      assert %{
+               last_hash: "abc123",
+               last_run_id: "run_1",
+               last_changed_at_ms: 1_000,
+               updated_at_ms: 1_000,
+               runs_since_change: 0
+             } = CronStore.get_monitor_state(id)
+
+      :ok =
+        CronStore.put_monitor_state(id, %{
+          last_hash: "abc123",
+          last_run_id: "run_2",
+          last_changed_at_ms: 1_000,
+          updated_at_ms: 2_000,
+          runs_since_change: 3
+        })
+
+      assert CronStore.get_monitor_state(id).runs_since_change == 3
+      assert CronStore.get_monitor_state(id).last_run_id == "run_2"
+
+      :ok = CronStore.delete_monitor_state(id)
+      assert CronStore.get_monitor_state(id) == nil
+    end
+
+    test "reads string-keyed values back normalized to atom keys", %{token: token} do
+      id = job_id(token, "monitor_strings")
+
+      :ok =
+        Store.put(@monitor_table, id, %{
+          "last_hash" => "deadbeef",
+          "last_run_id" => "run_string",
+          "last_changed_at_ms" => 42,
+          "updated_at_ms" => 43
+        })
+
+      assert %{
+               last_hash: "deadbeef",
+               last_run_id: "run_string",
+               last_changed_at_ms: 42,
+               updated_at_ms: 43,
+               runs_since_change: 0
+             } = CronStore.get_monitor_state(id)
+    end
+
+    test "monitor state is durable across independent reads", %{token: token} do
+      id = job_id(token, "monitor_durable")
+
+      :ok =
+        CronStore.put_monitor_state(id, %{
+          last_hash: "hash",
+          last_run_id: "run",
+          last_changed_at_ms: 1,
+          updated_at_ms: 1,
+          runs_since_change: 0
+        })
+
+      task = Task.async(fn -> CronStore.get_monitor_state(id) end)
+      assert Task.await(task).last_hash == "hash"
+    end
+
+    test "delete of an absent job is a no-op", %{token: token} do
+      assert :ok = CronStore.delete_monitor_state(job_id(token, "monitor_absent"))
     end
   end
 

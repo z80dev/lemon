@@ -106,13 +106,22 @@ defmodule LemonAutomation.SkillCuratorTest do
     assert params.agent_id == "curator-agent"
     assert params.session_key == "agent:curator-agent:main"
     assert params.prompt == "review demo"
-    assert params.tool_policy == %{allow: ["read_skill", "skill_manage", "search_memory", "memory_topic"]}
+
+    assert params.tool_policy == %{
+             allow: ["read_skill", "skill_manage", "search_memory", "memory_topic"]
+           }
+
     assert params.meta.skill_curator == true
     assert params.meta.skill_curator_candidate_count == 1
   end
 
   test "records submitted review run in curator report" do
-    report_path = Path.join(System.tmp_dir!(), "lemon_curator_report_#{System.unique_integer([:positive])}.json")
+    report_path =
+      Path.join(
+        System.tmp_dir!(),
+        "lemon_curator_report_#{System.unique_integer([:positive])}.json"
+      )
+
     File.mkdir_p!(Path.dirname(report_path))
     File.write!(report_path, Jason.encode!(%{"started_at" => "2026-05-06T00:00:00Z"}))
     Process.put(:curator_report_path, report_path)

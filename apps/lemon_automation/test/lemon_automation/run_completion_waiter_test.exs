@@ -59,7 +59,10 @@ defmodule LemonAutomation.RunCompletionWaiterTest do
 
   test "extract_output_from_completion/1 truncates oversized output" do
     long_text = String.duplicate("a", 1_200)
-    assert {:ok, output} = RunCompletionWaiter.extract_output_from_completion(%{answer: long_text})
+
+    assert {:ok, output} =
+             RunCompletionWaiter.extract_output_from_completion(%{answer: long_text})
+
     assert byte_size(output) == 1_000
   end
 end

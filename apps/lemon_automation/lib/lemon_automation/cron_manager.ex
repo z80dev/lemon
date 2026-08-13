@@ -42,6 +42,24 @@ defmodule LemonAutomation.CronManager do
 
       # Get run history
       CronManager.runs("cron_abc", limit: 10)
+
+      # Accept the current global default model for an unpinned job
+      CronManager.refresh_captured_model("cron_abc")
+
+  ## Job Quality Features
+
+  - **Monitor mode** (`monitor: true`) - completed runs whose normalized output
+    is unchanged are suppressed instead of forwarded (see
+    `LemonAutomation.CronMonitor`).
+  - **Job chaining** (`context_from: "cron_other"`) - the source job's latest
+    completed output is prepended to this job's prompt (see
+    `LemonAutomation.CronContext`).
+  - **Model pin / drift guard** (`model:`, `captured_default_model:`) - unpinned
+    jobs fail closed when the global default model changes underneath them
+    until the operator pins a model or calls `refresh_captured_model/1`.
+  - **Pre-dispatch preflight** - target, session, router, and provider
+    readiness are checked before any submitter runs (see
+    `LemonAutomation.CronPreflight`).
   """
 
   use GenServer
@@ -51,6 +69,8 @@ defmodule LemonAutomation.CronManager do
   alias LemonAutomation.{
     CronCommandRunner,
     CronJob,
+    CronMonitor,
+    CronPreflight,
     CronRun,
     CronSchedule,
     CronStore,
@@ -117,6 +137,17 @@ defmodule LemonAutomation.CronManager do
           {:ok, CronJob.t()} | {:error, :not_found} | {:error, {:immutable_fields, [atom()]}}
   def update(job_id, params) do
     GenServer.call(__MODULE__, {:update, job_id, params}, @call_timeout_ms)
+  end
+
+  @doc """
+  Re-capture the current global default model for an unpinned agent job.
+
+  This is the operator's "accept the new default" escape hatch when the model
+  drift guard has started skipping a job's runs.
+  """
+  @spec refresh_captured_model(binary()) :: {:ok, CronJob.t()} | {:error, :not_found}
+  def refresh_captured_model(job_id) do
+    GenServer.call(__MODULE__, {:refresh_captured_model, job_id}, @call_timeout_ms)
   end
 
   @doc """
@@ -208,7 +239,7 @@ defmodule LemonAutomation.CronManager do
   def handle_call({:add, params}, _from, state) do
     case validate_params(params) do
       {:ok, params} ->
-        job = CronJob.new(params)
+        job = params |> CronJob.new() |> capture_default_model()
         next_run = CronSchedule.next_run_ms(job.schedule, job.timezone)
         job = CronJob.set_next_run(job, next_run)
 
@@ -238,7 +269,7 @@ defmodule LemonAutomation.CronManager do
           [] ->
             case prepare_update_patch(job, params) do
               {:ok, params} ->
-                updated = CronJob.update(job, params)
+                updated = job |> CronJob.update(params) |> recapture_on_unpin(job)
 
                 # Recompute next run if schedule changed
                 updated =
@@ -280,10 +311,36 @@ defmodule LemonAutomation.CronManager do
   end
 
   @impl true
+  def handle_call({:refresh_captured_model, job_id}, _from, state) do
+    case Map.fetch(state.jobs, job_id) do
+      {:ok, job} ->
+        updated = capture_default_model(job)
+        CronStore.put_job(updated)
+
+        CronStore.record_audit(:model_recaptured, %{
+          job_id: updated.id,
+          source: :cron_manager,
+          reason:
+            "captured_default_model refreshed to #{updated.captured_default_model || "(unset)"}"
+        })
+
+        Events.emit_job_updated(updated)
+
+        Logger.info("[CronManager] Refreshed captured default model for job: #{job_id}")
+        {:reply, {:ok, updated}, put_in(state.jobs[job_id], updated)}
+
+      :error ->
+        {:reply, {:error, :not_found}, state}
+    end
+  end
+
+  @impl true
   def handle_call({:remove, job_id}, _from, state) do
     case Map.fetch(state.jobs, job_id) do
       {:ok, job} ->
         CronStore.delete_job(job_id)
+        CronStore.delete_monitor_state(job_id)
+        CronStore.delete_preflight_notice_state(job_id)
 
         CronStore.record_audit(:job_deleted, %{
           job_id: job.id,
@@ -447,15 +504,36 @@ defmodule LemonAutomation.CronManager do
         else
           updated_run =
             case result do
-              {:ok, output} -> CronRun.complete(run, output)
-              {:error, error} -> CronRun.fail(run, error)
-              :timeout -> CronRun.timeout(run)
+              {:ok, output} ->
+                CronRun.complete(run, output)
+
+              {:error, error} ->
+                CronRun.fail(run, error)
+
+              :timeout ->
+                CronRun.timeout(run)
+
+              {:preflight_skip, failure} ->
+                run
+                |> CronRun.fail(CronPreflight.format_failure(failure))
+                |> then(&%{&1 | meta: Map.put(&1.meta || %{}, :preflight_failure, failure)})
+            end
+
+          job = Map.get(state.jobs, updated_run.job_id)
+          {updated_run, deliver?} = CronMonitor.apply_policy(job, updated_run)
+
+          # A preflight skip persists until an operator acts, so identical
+          # repeats are deduped rather than forwarded on every occurrence.
+          {updated_run, deliver?} =
+            case CronMonitor.apply_preflight_policy(job, updated_run) do
+              {run, true} -> {run, deliver?}
+              {run, false} -> {run, false}
             end
 
           CronStore.put_run(updated_run)
           Events.emit_run_completed(updated_run)
-          maybe_forward_summary_to_base_session(updated_run)
-          maybe_schedule_retry(Map.get(state.jobs, updated_run.job_id), updated_run)
+          if deliver?, do: maybe_forward_summary_to_base_session(updated_run)
+          maybe_schedule_retry(job, updated_run)
           {:noreply, state}
         end
     end
@@ -681,9 +759,24 @@ defmodule LemonAutomation.CronManager do
     _ =
       start_background_task(fn ->
         result =
-          case CronJob.execution_mode(job) do
-            :command -> command_runner().submit(job, run, run_id: run.run_id)
-            :agent -> run_submitter().submit(job, run, run_id: run.run_id)
+          case preflight_mod().check(job) do
+            :ok ->
+              case CronJob.execution_mode(job) do
+                :command -> command_runner().submit(job, run, run_id: run.run_id)
+                :agent -> run_submitter().submit(job, run, run_id: run.run_id)
+              end
+
+            {:skip, failure} ->
+              CronStore.record_audit(:preflight_failed, %{
+                job_id: job.id,
+                run_id: run.id,
+                router_run_id: run.run_id,
+                source: :cron_manager,
+                triggered_by: run.triggered_by,
+                reason: CronPreflight.format_failure(failure)
+              })
+
+              {:preflight_skip, failure}
           end
 
         send(__MODULE__, {:run_complete, run.id, result})
@@ -691,6 +784,31 @@ defmodule LemonAutomation.CronManager do
 
     :ok
   end
+
+  # Record the global default model at creation time so the drift guard has a
+  # baseline. Only unpinned agent jobs need one.
+  defp capture_default_model(%CronJob{} = job) do
+    if CronJob.execution_mode(job) == :agent and is_nil(job.model) do
+      case preflight_mod().current_default_model() do
+        {:ok, model} when is_binary(model) -> %{job | captured_default_model: model}
+        _ -> job
+      end
+    else
+      job
+    end
+  end
+
+  # Clearing a model pin returns the job to the global default, so it needs a
+  # drift baseline from that moment on. Without this, a job created pinned (and
+  # therefore never captured) would silently follow every future default change
+  # after being unpinned — `captured_default_model` is immutable via `update/2`,
+  # so the manager is the only place this transition can be observed.
+  defp recapture_on_unpin(%CronJob{model: nil} = updated, %CronJob{model: previous})
+       when is_binary(previous) do
+    capture_default_model(updated)
+  end
+
+  defp recapture_on_unpin(%CronJob{} = updated, %CronJob{}), do: updated
 
   defp update_suppressed_scheduled_job(%CronJob{} = job, state) do
     CronStore.record_audit(:scheduled_run_suppressed, %{
@@ -757,8 +875,12 @@ defmodule LemonAutomation.CronManager do
 
   defp maybe_schedule_retry(_job, _run), do: :ok
 
-  defp retryable_run?(%CronRun{status: status, triggered_by: triggered_by}) do
-    status in [:failed, :timeout] and triggered_by in [:schedule, :retry]
+  # Preflight skips are configuration problems, not transient failures: retrying
+  # within one backoff window is pure noise. The next scheduled occurrence
+  # re-checks.
+  defp retryable_run?(%CronRun{status: status, triggered_by: triggered_by} = run) do
+    is_nil(meta_value(run.meta, :preflight_failure)) and
+      status in [:failed, :timeout] and triggered_by in [:schedule, :retry]
   end
 
   defp retry_attempt(%CronRun{meta: meta}) do
@@ -800,6 +922,10 @@ defmodule LemonAutomation.CronManager do
     Application.get_env(:lemon_automation, :cron_command_runner, CronCommandRunner)
   end
 
+  defp preflight_mod do
+    Application.get_env(:lemon_automation, :cron_preflight_mod, CronPreflight)
+  end
+
   defp router_run_id_for(%CronJob{} = job) do
     case CronJob.execution_mode(job) do
       :agent -> LemonCore.Id.run_id()
@@ -838,6 +964,7 @@ defmodule LemonAutomation.CronManager do
     case missing do
       [] ->
         with {:ok, params} <- validate_execution_target(params),
+             {:ok, params} <- validate_add_feature_fields(params),
              {:ok, schedule} <- validate_schedule(params[:schedule] || params["schedule"]) do
           {:ok, Map.put(params, :schedule, schedule)}
         end
@@ -895,8 +1022,113 @@ defmodule LemonAutomation.CronManager do
 
   defp prepare_update_patch(%CronJob{} = job, params) do
     with {:ok, params} <- validate_patch_target(job, params),
+         {:ok, params} <- validate_feature_fields(params, CronJob.execution_mode(job), job.id),
          {:ok, params} <- normalize_schedule_patch(params) do
       {:ok, params}
+    end
+  end
+
+  defp validate_add_feature_fields(params) do
+    mode = if present?(params[:command] || params["command"]), do: :command, else: :agent
+    job_id = params[:id] || params["id"]
+
+    case validate_feature_fields(params, mode, job_id) do
+      {:ok, params} -> {:ok, params}
+      {:invalid_target, reason} -> {:error, {:invalid_target, reason}}
+    end
+  end
+
+  # Shared validation for the four job-quality fields. Returns the normalized
+  # params (atom keys, trimmed values) or an `{:invalid_target, reason}` tuple
+  # that each caller maps onto its own error shape.
+  defp validate_feature_fields(params, mode, job_id) do
+    with {:ok, params} <- validate_monitor_flags(params),
+         {:ok, params} <- validate_model_field(params, mode),
+         {:ok, params} <- validate_context_from(params, mode, job_id) do
+      {:ok, params}
+    end
+  end
+
+  defp validate_monitor_flags(params) do
+    invalid =
+      [:monitor, :monitor_notify_first_run]
+      |> Enum.filter(fn key ->
+        case fetch_param(params, key) do
+          {:ok, value} -> not is_boolean(value)
+          :error -> false
+        end
+      end)
+
+    if invalid == [] do
+      {:ok, params}
+    else
+      {:invalid_target, "monitor flags must be booleans"}
+    end
+  end
+
+  defp validate_model_field(params, mode) do
+    case fetch_param(params, :model) do
+      :error ->
+        {:ok, params}
+
+      {:ok, value} ->
+        params = Map.delete(params, "model")
+
+        cond do
+          mode != :agent ->
+            {:invalid_target, "model can only be set on prompt cron jobs"}
+
+          is_nil(value) ->
+            {:ok, Map.put(params, :model, nil)}
+
+          is_binary(value) and String.trim(value) == "" ->
+            {:ok, Map.put(params, :model, nil)}
+
+          is_binary(value) ->
+            {:ok, Map.put(params, :model, String.trim(value))}
+
+          true ->
+            {:invalid_target, "model must be a string"}
+        end
+    end
+  end
+
+  defp validate_context_from(params, mode, job_id) do
+    case fetch_param(params, :context_from) do
+      :error ->
+        {:ok, params}
+
+      {:ok, value} ->
+        params = Map.delete(params, "context_from")
+
+        cond do
+          is_nil(value) ->
+            {:ok, Map.put(params, :context_from, nil)}
+
+          mode != :agent ->
+            {:invalid_target, "context_from can only be set on prompt cron jobs"}
+
+          not is_binary(value) or String.trim(value) == "" ->
+            {:invalid_target, "context_from must be a non-empty job id"}
+
+          String.trim(value) == job_id ->
+            {:invalid_target, "context_from cannot reference the job itself"}
+
+          is_nil(CronStore.get_job(String.trim(value))) ->
+            {:invalid_target, "context_from references unknown job #{String.trim(value)}"}
+
+          true ->
+            {:ok, Map.put(params, :context_from, String.trim(value))}
+        end
+    end
+  end
+
+  # Fetches a param under its atom key, falling back to the string key, so an
+  # explicit `false`/`nil` value is distinguishable from an absent key.
+  defp fetch_param(params, key) when is_map(params) do
+    case Map.fetch(params, key) do
+      {:ok, value} -> {:ok, value}
+      :error -> Map.fetch(params, Atom.to_string(key))
     end
   end
 
@@ -975,6 +1207,11 @@ defmodule LemonAutomation.CronManager do
     |> maybe_add_immutable(
       :session_key,
       [:session_key, "session_key", :sessionKey, "sessionKey"],
+      params
+    )
+    |> maybe_add_immutable(
+      :captured_default_model,
+      [:captured_default_model, "captured_default_model", "capturedDefaultModel"],
       params
     )
   end

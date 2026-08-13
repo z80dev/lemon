@@ -46,6 +46,15 @@ defmodule LemonAutomation.RunSubmitterTest do
     end
   end
 
+  defmodule StubContext do
+    @moduledoc false
+
+    def augment_prompt(job, prompt) do
+      send(self(), {:augment_prompt_called, job.id, prompt})
+      "CHAINED-CONTEXT-BLOCK\n\n" <> prompt
+    end
+  end
+
   defp sample_job(attrs \\ %{}) do
     memory_file =
       Path.join(
@@ -181,5 +190,47 @@ defmodule LemonAutomation.RunSubmitterTest do
 
     assert {:error, "Exit: :nope"} =
              RunSubmitter.submit(job, run, router_mod: RouterExit, waiter_mod: Waiter)
+  end
+
+  describe "model pinning" do
+    test "build_params omits :model when the job has no pin" do
+      params = RunSubmitter.build_params(sample_job(), sample_run())
+
+      refute Map.has_key?(params, :model)
+      refute Map.has_key?(params.meta, :cron_model_pin)
+    end
+
+    test "build_params omits :model for a blank pin" do
+      params = RunSubmitter.build_params(sample_job(%{model: "   "}), sample_run())
+
+      refute Map.has_key?(params, :model)
+      refute Map.has_key?(params.meta, :cron_model_pin)
+    end
+
+    test "build_params forwards a pinned model and records it in meta" do
+      params = RunSubmitter.build_params(sample_job(%{model: "model-pinned"}), sample_run())
+
+      assert params.model == "model-pinned"
+      assert params.meta.cron_model_pin == "model-pinned"
+    end
+  end
+
+  describe "chained context" do
+    test "build_params runs the prompt through the context module" do
+      job = sample_job(%{id: "cron_context", context_from: "cron_source"})
+      params = RunSubmitter.build_params(job, sample_run(), nil, context_mod: StubContext)
+
+      assert_receive {:augment_prompt_called, "cron_context", "hello"}
+      assert params.prompt =~ "CHAINED-CONTEXT-BLOCK"
+      assert params.prompt =~ "## Task"
+      assert params.prompt =~ "hello"
+    end
+
+    test "build_params defaults to CronContext, which is a no-op without context_from" do
+      params = RunSubmitter.build_params(sample_job(), sample_run())
+
+      refute params.prompt =~ "Chained Context"
+      assert params.prompt =~ "hello"
+    end
   end
 end

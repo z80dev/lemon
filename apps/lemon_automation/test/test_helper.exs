@@ -10,6 +10,11 @@ Application.delete_env(:lemon_gateway, :telegram)
 _ = Application.stop(:lemon_gateway)
 {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
+# Cron dispatch preflight probes real provider credentials; unit suites inject
+# their own preflight/stubs explicitly.
+Application.put_env(:lemon_automation, :cron_preflight, enabled: false)
+Application.put_env(:lemon_automation, :cron_drift_guard, enabled: false)
+
 ExUnit.start()
 
 ExUnit.after_suite(fn _ ->

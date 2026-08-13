@@ -15,6 +15,16 @@ defmodule LemonAutomation.CronJob do
   - `:cwd` - Optional command working directory
   - `:env` - Optional command environment overrides
   - `:memory_file` - Optional markdown file used as persistent cross-run memory
+  - `:monitor` - Monitor semantics: suppress delivery when the normalized output
+    hash is unchanged (default: `false`)
+  - `:monitor_notify_first_run` - Whether the baseline (first) monitored run
+    delivers (default: `true`)
+  - `:context_from` - Job ID whose latest completed output is prepended to this
+    job's prompt (one-hop chaining)
+  - `:model` - Explicit model pin forwarded to the router; disables the model
+    drift guard
+  - `:captured_default_model` - Global default model observed when the job was
+    created. Set by `LemonAutomation.CronManager`, never by `update/2`.
   - `:timezone` - Timezone for schedule interpretation (default: "UTC")
   - `:jitter_sec` - Random delay in seconds to spread load (default: 0)
   - `:timeout_ms` - Maximum execution time in milliseconds
@@ -66,6 +76,9 @@ defmodule LemonAutomation.CronJob do
     :cwd,
     :env,
     :memory_file,
+    :context_from,
+    :model,
+    :captured_default_model,
     :created_at_ms,
     :updated_at_ms,
     :last_run_at_ms,
@@ -76,7 +89,9 @@ defmodule LemonAutomation.CronJob do
     jitter_sec: 0,
     timeout_ms: 300_000,
     max_retries: 0,
-    retry_backoff_ms: 30_000
+    retry_backoff_ms: 30_000,
+    monitor: false,
+    monitor_notify_first_run: true
   ]
 
   @type t :: %__MODULE__{
@@ -91,6 +106,11 @@ defmodule LemonAutomation.CronJob do
           cwd: binary() | nil,
           env: map() | nil,
           memory_file: binary() | nil,
+          monitor: boolean(),
+          monitor_notify_first_run: boolean(),
+          context_from: binary() | nil,
+          model: binary() | nil,
+          captured_default_model: binary() | nil,
           timezone: binary(),
           jitter_sec: non_neg_integer(),
           timeout_ms: non_neg_integer(),
@@ -122,6 +142,11 @@ defmodule LemonAutomation.CronJob do
       cwd: get_attr(attrs, :cwd),
       env: get_attr(attrs, :env),
       memory_file: get_attr(attrs, :memory_file),
+      monitor: get_attr(attrs, :monitor, false),
+      monitor_notify_first_run: get_attr(attrs, :monitor_notify_first_run, true),
+      context_from: get_attr(attrs, :context_from),
+      model: get_attr(attrs, :model),
+      captured_default_model: get_attr(attrs, :captured_default_model),
       timezone: get_attr(attrs, :timezone, "UTC"),
       jitter_sec: get_attr(attrs, :jitter_sec, 0),
       timeout_ms: get_attr(attrs, :timeout_ms, 300_000),
@@ -152,6 +177,11 @@ defmodule LemonAutomation.CronJob do
         cwd: get_attr(attrs, :cwd, job.cwd),
         env: get_attr(attrs, :env, job.env),
         memory_file: get_attr(attrs, :memory_file, job.memory_file),
+        monitor: get_attr(attrs, :monitor, job.monitor),
+        monitor_notify_first_run:
+          get_attr(attrs, :monitor_notify_first_run, job.monitor_notify_first_run),
+        context_from: get_attr(attrs, :context_from, job.context_from),
+        model: get_attr(attrs, :model, job.model),
         timezone: get_attr(attrs, :timezone, job.timezone),
         jitter_sec: get_attr(attrs, :jitter_sec, job.jitter_sec),
         timeout_ms: get_attr(attrs, :timeout_ms, job.timeout_ms),
@@ -207,6 +237,11 @@ defmodule LemonAutomation.CronJob do
       cwd: job.cwd,
       env: job.env,
       memory_file: job.memory_file,
+      monitor: job.monitor,
+      monitor_notify_first_run: job.monitor_notify_first_run,
+      context_from: job.context_from,
+      model: job.model,
+      captured_default_model: job.captured_default_model,
       timezone: job.timezone,
       jitter_sec: job.jitter_sec,
       timeout_ms: job.timeout_ms,
@@ -237,6 +272,11 @@ defmodule LemonAutomation.CronJob do
       cwd: get_attr(map, :cwd),
       env: get_attr(map, :env),
       memory_file: get_attr(map, :memory_file),
+      monitor: get_attr(map, :monitor, false),
+      monitor_notify_first_run: get_attr(map, :monitor_notify_first_run, true),
+      context_from: get_attr(map, :context_from),
+      model: get_attr(map, :model),
+      captured_default_model: get_attr(map, :captured_default_model),
       timezone: get_attr(map, :timezone, "UTC"),
       jitter_sec: get_attr(map, :jitter_sec, 0),
       timeout_ms: get_attr(map, :timeout_ms, 300_000),
