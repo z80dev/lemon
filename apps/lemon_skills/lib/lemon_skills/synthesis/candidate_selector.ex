@@ -138,10 +138,12 @@ defmodule LemonSkills.Synthesis.CandidateSelector do
     fp.task_family not in [:chat, :unknown]
   end
 
-  # Deduplicate by normalised prompt_summary — keep the most recent (first in
-  # the list, which is assumed to be sorted newest-first from Store).
+  # Deduplicate by normalised prompt_summary — keep the most recent. The input
+  # order is NOT assumed: a watermark-driven fetch returns documents
+  # oldest-first, so we sort newest-first explicitly before collapsing.
   defp deduplicate(docs) do
     docs
+    |> Enum.sort_by(&{&1.ingested_at_ms || 0, &1.doc_id}, :desc)
     |> Enum.uniq_by(fn doc ->
       doc.prompt_summary |> String.downcase() |> String.trim()
     end)

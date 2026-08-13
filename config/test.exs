@@ -96,6 +96,10 @@ config :lemon_skills, :http_client, LemonSkills.HttpClient.Mock
 # from submitting real agent runs during unrelated test suites.
 config :lemon_automation, :skill_curator, enabled: false
 
+# Scheduled skill synthesis is tested explicitly; keep the runtime scheduler
+# from generating drafts (and touching the memory store) during unrelated suites.
+config :lemon_automation, :synthesis_runner, enabled: false
+
 # Prevent unit tests from starting real/interactive transports based on a developer's
 # local TOML config. Individual test suites can override these as needed and restart
 # the application under test.

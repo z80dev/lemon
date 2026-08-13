@@ -139,6 +139,45 @@ defmodule LemonMemory.Store do
   LIMIT ?2
   """
 
+  # Watermark variants. These order ASC on purpose: a caller draining a backlog
+  # with a `since_ms` cursor must receive the OLDEST unseen window, so the
+  # cursor only ever advances over a contiguous prefix. Pairing `since_ms` with
+  # a DESC limit would let a backlog larger than `limit` be skipped forever
+  # (the cursor jumps to the newest row, and the rows below the limit can never
+  # satisfy `ingested_at_ms > since_ms` again).
+  @get_by_session_since_sql """
+  SELECT doc_id, run_id, session_key, agent_id, workspace_key, scope,
+         started_at_ms, ingested_at_ms,
+         prompt_summary, answer_summary,
+         tools_used_blob, provider, model, outcome, meta_blob
+  FROM memory_documents
+  WHERE session_key = ?1 AND ingested_at_ms > ?2
+  ORDER BY ingested_at_ms ASC, doc_id ASC
+  LIMIT ?3
+  """
+
+  @get_by_agent_since_sql """
+  SELECT doc_id, run_id, session_key, agent_id, workspace_key, scope,
+         started_at_ms, ingested_at_ms,
+         prompt_summary, answer_summary,
+         tools_used_blob, provider, model, outcome, meta_blob
+  FROM memory_documents
+  WHERE agent_id = ?1 AND ingested_at_ms > ?2
+  ORDER BY ingested_at_ms ASC, doc_id ASC
+  LIMIT ?3
+  """
+
+  @get_by_workspace_since_sql """
+  SELECT doc_id, run_id, session_key, agent_id, workspace_key, scope,
+         started_at_ms, ingested_at_ms,
+         prompt_summary, answer_summary,
+         tools_used_blob, provider, model, outcome, meta_blob
+  FROM memory_documents
+  WHERE workspace_key = ?1 AND ingested_at_ms > ?2
+  ORDER BY ingested_at_ms ASC, doc_id ASC
+  LIMIT ?3
+  """
+
   @delete_by_session_sql """
   DELETE FROM memory_documents WHERE session_key = ?1
   """
@@ -274,7 +313,17 @@ defmodule LemonMemory.Store do
   end
 
   @doc """
-  Fetch the `limit` most recent documents for a session.
+  Fetch documents for a session.
+
+  ## Options
+
+  - `:limit` — maximum documents to return (default: 20)
+  - `:since_ms` — only documents whose `ingested_at_ms` is strictly greater
+    than this watermark. Changes the ordering to **oldest-first**, so a caller
+    threading the newest returned `ingested_at_ms` back as the next `since_ms`
+    drains a backlog window by window without skipping anything.
+
+  Without `:since_ms` the newest `limit` documents are returned, newest-first.
   """
   @spec get_by_session(binary(), keyword()) :: [Document.t()]
   def get_by_session(session_key, opts \\ []) when is_binary(session_key) do
@@ -283,14 +332,15 @@ defmodule LemonMemory.Store do
 
   @spec get_by_session(GenServer.server(), binary(), keyword()) :: [Document.t()]
   def get_by_session(server, session_key, opts) when is_binary(session_key) do
-    limit = Keyword.get(opts, :limit, 20)
-    GenServer.call(server, {:get_by_session, session_key, limit}, 5_000)
+    GenServer.call(server, {:get_by_session, session_key, query_opts(opts)}, 5_000)
   catch
     :exit, _ -> []
   end
 
   @doc """
-  Fetch the `limit` most recent documents for an agent across all sessions.
+  Fetch documents for an agent across all sessions.
+
+  Takes the same options as `get_by_session/2`.
   """
   @spec get_by_agent(binary(), keyword()) :: [Document.t()]
   def get_by_agent(agent_id, opts \\ []) when is_binary(agent_id) do
@@ -299,14 +349,15 @@ defmodule LemonMemory.Store do
 
   @spec get_by_agent(GenServer.server(), binary(), keyword()) :: [Document.t()]
   def get_by_agent(server, agent_id, opts) when is_binary(agent_id) do
-    limit = Keyword.get(opts, :limit, 20)
-    GenServer.call(server, {:get_by_agent, agent_id, limit}, 5_000)
+    GenServer.call(server, {:get_by_agent, agent_id, query_opts(opts)}, 5_000)
   catch
     :exit, _ -> []
   end
 
   @doc """
-  Fetch the `limit` most recent documents for a workspace.
+  Fetch documents for a workspace.
+
+  Takes the same options as `get_by_session/2`.
   """
   @spec get_by_workspace(binary(), keyword()) :: [Document.t()]
   def get_by_workspace(workspace_key, opts \\ []) when is_binary(workspace_key) do
@@ -315,10 +366,19 @@ defmodule LemonMemory.Store do
 
   @spec get_by_workspace(GenServer.server(), binary(), keyword()) :: [Document.t()]
   def get_by_workspace(server, workspace_key, opts) when is_binary(workspace_key) do
-    limit = Keyword.get(opts, :limit, 20)
-    GenServer.call(server, {:get_by_workspace, workspace_key, limit}, 5_000)
+    GenServer.call(server, {:get_by_workspace, workspace_key, query_opts(opts)}, 5_000)
   catch
     :exit, _ -> []
+  end
+
+  defp query_opts(opts) do
+    since_ms =
+      case Keyword.get(opts, :since_ms) do
+        value when is_integer(value) -> value
+        _ -> nil
+      end
+
+    %{limit: Keyword.get(opts, :limit, 20), since_ms: since_ms}
   end
 
   @doc """
@@ -503,18 +563,18 @@ defmodule LemonMemory.Store do
   end
 
   @impl true
-  def handle_call({:get_by_session, session_key, limit}, _from, state) do
-    result = do_query(state, state.stmts.get_by_session, [session_key, limit])
+  def handle_call({:get_by_session, session_key, opts}, _from, state) do
+    result = do_scoped_query(state, :get_by_session, session_key, opts)
     {:reply, result, state}
   end
 
-  def handle_call({:get_by_agent, agent_id, limit}, _from, state) do
-    result = do_query(state, state.stmts.get_by_agent, [agent_id, limit])
+  def handle_call({:get_by_agent, agent_id, opts}, _from, state) do
+    result = do_scoped_query(state, :get_by_agent, agent_id, opts)
     {:reply, result, state}
   end
 
-  def handle_call({:get_by_workspace, workspace_key, limit}, _from, state) do
-    result = do_query(state, state.stmts.get_by_workspace, [workspace_key, limit])
+  def handle_call({:get_by_workspace, workspace_key, opts}, _from, state) do
+    result = do_scoped_query(state, :get_by_workspace, workspace_key, opts)
     {:reply, result, state}
   end
 
@@ -567,6 +627,15 @@ defmodule LemonMemory.Store do
 
   # ── Private helpers ────────────────────────────────────────────────────────────
 
+  defp do_scoped_query(state, stmt_key, scope_key, %{limit: limit, since_ms: nil}) do
+    do_query(state, Map.fetch!(state.stmts, stmt_key), [scope_key, limit])
+  end
+
+  defp do_scoped_query(state, stmt_key, scope_key, %{limit: limit, since_ms: since_ms}) do
+    stmt = Map.fetch!(state.stmts, :"#{stmt_key}_since")
+    do_query(state, stmt, [scope_key, since_ms, limit])
+  end
+
   # Unconfigured, memory lands next to the main store's data so a deployment
   # that points the store at a directory gets its memory database there too.
   defp resolve_path(config) do
@@ -601,6 +670,9 @@ defmodule LemonMemory.Store do
          {:ok, get_by_session} <- Sqlite3.prepare(conn, @get_by_session_sql),
          {:ok, get_by_agent} <- Sqlite3.prepare(conn, @get_by_agent_sql),
          {:ok, get_by_workspace} <- Sqlite3.prepare(conn, @get_by_workspace_sql),
+         {:ok, get_by_session_since} <- Sqlite3.prepare(conn, @get_by_session_since_sql),
+         {:ok, get_by_agent_since} <- Sqlite3.prepare(conn, @get_by_agent_since_sql),
+         {:ok, get_by_workspace_since} <- Sqlite3.prepare(conn, @get_by_workspace_since_sql),
          {:ok, delete_by_session} <- Sqlite3.prepare(conn, @delete_by_session_sql),
          {:ok, delete_by_agent} <- Sqlite3.prepare(conn, @delete_by_agent_sql),
          {:ok, delete_by_workspace} <- Sqlite3.prepare(conn, @delete_by_workspace_sql),
@@ -623,6 +695,9 @@ defmodule LemonMemory.Store do
          get_by_session: get_by_session,
          get_by_agent: get_by_agent,
          get_by_workspace: get_by_workspace,
+         get_by_session_since: get_by_session_since,
+         get_by_agent_since: get_by_agent_since,
+         get_by_workspace_since: get_by_workspace_since,
          delete_by_session: delete_by_session,
          delete_by_agent: delete_by_agent,
          delete_by_workspace: delete_by_workspace,

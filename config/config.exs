@@ -58,6 +58,10 @@ config :lemon_core, :doctor_runtime,
   lsp_server_manager: LemonLsp.ServerManager,
   channel_registry: LemonChannels.Registry
 
+# Diagnostics owned by apps that depend on lemon_core register themselves here.
+# Modules missing from a given build are skipped (see LemonCore.Doctor).
+config :lemon_core, :doctor_checks, [LemonAutomation.Doctor.Checks.Synthesis]
+
 # Environment-variable declarations live with the app that reads them; the
 # framework in LemonCore.Env aggregates whatever is loaded. Apps missing from a
 # given build are skipped, so this list is a superset, not a requirement.

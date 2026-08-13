@@ -17,11 +17,44 @@ defmodule LemonSkills.Synthesis.Pipeline do
       # Generate with project scope
       {:ok, results} = Pipeline.run(:workspace, workspace_key, cwd: "/myproject")
 
+      # Automation pass: explicitly opt in to the opt-in flag and only look at
+      # documents ingested after the caller's watermark
+      {:ok, results} = Pipeline.run(:agent, "my-agent-id", opt_in: true, since_ms: 1_700_000_000_000)
+
+  ## Feature gating
+
+  The `skill_synthesis_drafts` flag has three states.  `"off"` always disables
+  the pipeline (kill switch), `"default-on"` always enables it, and the default
+  `"opt-in"` state only runs when the caller passes `opt_in: true` — which is
+  how `LemonAutomation.SynthesisRunner` drives scheduled passes while manual
+  invocations stay inert.
+
   ## Return value
 
-  `{:ok, %{generated: [key], skipped: [{key, reason}], total_candidates: n}}`
+  `{:ok, %{generated: [key], skipped: [{key, reason}], total_candidates: n,
+  latest_doc_ms: ms | nil, backlog_saturated: boolean()}}`
 
-  or `{:error, :feature_disabled}` when the flag is off.
+  `latest_doc_ms` is the newest `ingested_at_ms` across *all* documents the pass
+  considered (not just the qualified candidates), so a caller tracking a
+  watermark never re-examines documents that failed candidate selection.
+
+  ## Watermarks and the fetch limit
+
+  When `:since_ms` is an integer it is pushed down into the store query, which
+  then returns the **oldest** unseen `max_docs` documents rather than the
+  newest. That ordering is what makes the watermark safe: a pass can only ever
+  advance it over a contiguous prefix of the backlog, so a backlog larger than
+  `max_docs` drains one window per pass instead of being skipped forever.
+
+  `since_ms: nil` means "no watermark" and keeps the newest-first window — the
+  right shape for a one-off manual invocation. A watermark-driven caller with
+  no watermark yet must pass `0`, not `nil`, or its first pass skips everything
+  older than the newest `max_docs` documents.
+
+  `backlog_saturated` is `true` when the fetch came back full (`max_docs`
+  documents), meaning more documents are very likely waiting for the next pass.
+
+  Returns `{:error, :feature_disabled}` when the flag gate rejects the call.
   """
 
   require Logger
@@ -34,7 +67,9 @@ defmodule LemonSkills.Synthesis.Pipeline do
   @type run_result :: %{
           generated: [String.t()],
           skipped: [{String.t(), term()}],
-          total_candidates: non_neg_integer()
+          total_candidates: non_neg_integer(),
+          latest_doc_ms: non_neg_integer() | nil,
+          backlog_saturated: boolean()
         }
 
   @default_max_docs 50
@@ -55,11 +90,20 @@ defmodule LemonSkills.Synthesis.Pipeline do
   - `:global` — write drafts to global draft dir (default: `true`)
   - `:cwd` — project directory for project-scoped drafts
   - `:force` — overwrite existing drafts (default: `false`)
+  - `:opt_in` — accept the `"opt-in"` feature state (default: `false`). `"off"`
+    still disables the pipeline.
+  - `:since_ms` — only consider documents whose `ingested_at_ms` is strictly
+    greater than this watermark (default: `nil`, meaning no filtering). Pushed
+    down into the store query, which then returns the oldest unseen window
+  - `:store_mod` — memory store module (default: `LemonMemory.Store`); injection
+    seam for tests
+  - `:audit_mod` — bundle audit module (default: `LemonSkills.Audit.BundleAudit`);
+    injection seam for tests
   """
   @spec run(scope(), String.t(), keyword()) ::
           {:ok, run_result()} | {:error, :feature_disabled} | {:error, term()}
   def run(scope, scope_key, opts \\ []) do
-    if synthesis_enabled?() do
+    if synthesis_enabled?(opts) do
       do_run(scope, scope_key, opts)
     else
       {:error, :feature_disabled}
@@ -70,12 +114,28 @@ defmodule LemonSkills.Synthesis.Pipeline do
 
   defp do_run(scope, scope_key, opts) do
     max_docs = Keyword.get(opts, :max_docs, @default_max_docs)
+    store_mod = Keyword.get(opts, :store_mod, Store)
+    audit_mod = Keyword.get(opts, :audit_mod, BundleAudit)
+    since_ms = Keyword.get(opts, :since_ms)
 
-    with {:ok, docs} <- fetch_documents(scope, scope_key, max_docs) do
+    fetch_opts = [limit: max_docs, since_ms: since_ms]
+
+    with {:ok, all_docs} <- fetch_documents(scope, scope_key, fetch_opts, store_mod) do
+      # Belt and braces: the store applies `since_ms` in SQL, but an injected
+      # store module may ignore the option.
+      docs = filter_since(all_docs, since_ms)
+      saturated? = length(all_docs) >= max_docs
       candidates = CandidateSelector.select(docs)
       Logger.info("[Synthesis] #{length(docs)} docs → #{length(candidates)} candidates")
 
-      results = Enum.map(candidates, fn doc -> process_candidate(doc, opts) end)
+      if saturated? do
+        Logger.info(
+          "[Synthesis] backlog saturated: fetch returned the full #{max_docs}-document " <>
+            "window, more documents are likely pending for the next pass"
+        )
+      end
+
+      results = Enum.map(candidates, fn doc -> process_candidate(doc, opts, audit_mod) end)
 
       generated = for {:ok, key} <- results, do: key
 
@@ -88,23 +148,39 @@ defmodule LemonSkills.Synthesis.Pipeline do
        %{
          generated: generated,
          skipped: skipped,
-         total_candidates: length(candidates)
+         total_candidates: length(candidates),
+         latest_doc_ms: latest_doc_ms(docs),
+         backlog_saturated: saturated?
        }}
     end
   end
 
-  defp process_candidate(doc, opts) do
+  # The watermark covers every document the pass looked at, not only the ones
+  # that qualified — otherwise unqualified documents would be re-fetched and
+  # re-rejected on every subsequent pass.
+  defp latest_doc_ms(docs) do
+    docs
+    |> Enum.map(& &1.ingested_at_ms)
+    |> Enum.filter(&is_integer/1)
+    |> Enum.max(fn -> nil end)
+  end
+
+  defp filter_since(docs, since_ms) when is_integer(since_ms) do
+    Enum.filter(docs, &(is_integer(&1.ingested_at_ms) and &1.ingested_at_ms > since_ms))
+  end
+
+  defp filter_since(docs, _since_ms), do: docs
+
+  defp process_candidate(doc, opts, audit_mod) do
     key_hint = DraftGenerator.derive_key_hint(doc.prompt_summary)
     scope = draft_scope(opts)
 
     with {:ok, draft} <- DraftGenerator.generate(doc),
          :ok <- DraftStore.put(draft, opts),
          {:ok, audit} <-
-           BundleAudit.audit(DraftStore.draft_dir(draft.key, opts), scope, draft.key,
-             kind: :draft
-           ),
+           audit_mod.audit(DraftStore.draft_dir(draft.key, opts), scope, draft.key, kind: :draft),
          :ok <- DraftStore.record_audit(draft.key, audit, opts),
-         :ok <- check_audit(draft.key, audit, opts) do
+         :ok <- check_audit(draft.key, audit, opts, audit_mod) do
       {:ok, draft.key}
     else
       {:error, :blocked_by_audit} ->
@@ -119,8 +195,8 @@ defmodule LemonSkills.Synthesis.Pipeline do
     end
   end
 
-  defp check_audit(key, audit_record, opts) do
-    case BundleAudit.audit_status(audit_record) do
+  defp check_audit(key, audit_record, opts, audit_mod) do
+    case audit_mod.audit_status(audit_record) do
       :block ->
         Logger.info(
           "[Synthesis] Draft blocked by audit: #{inspect(audit_record["combined_findings"] || [])}"
@@ -142,30 +218,33 @@ defmodule LemonSkills.Synthesis.Pipeline do
     end
   end
 
-  defp fetch_documents(:agent, agent_id, limit) do
-    docs = Store.get_by_agent(agent_id, limit: limit)
+  defp fetch_documents(:agent, agent_id, fetch_opts, store_mod) do
+    docs = store_mod.get_by_agent(agent_id, fetch_opts)
     {:ok, docs}
   catch
     :exit, _ -> {:ok, []}
   end
 
-  defp fetch_documents(:session, session_key, limit) do
-    docs = Store.get_by_session(session_key, limit: limit)
+  defp fetch_documents(:session, session_key, fetch_opts, store_mod) do
+    docs = store_mod.get_by_session(session_key, fetch_opts)
     {:ok, docs}
   catch
     :exit, _ -> {:ok, []}
   end
 
-  defp fetch_documents(:workspace, workspace_key, limit) do
-    docs = Store.get_by_workspace(workspace_key, limit: limit)
+  defp fetch_documents(:workspace, workspace_key, fetch_opts, store_mod) do
+    docs = store_mod.get_by_workspace(workspace_key, fetch_opts)
     {:ok, docs}
   catch
     :exit, _ -> {:ok, []}
   end
 
-  defp synthesis_enabled? do
+  defp synthesis_enabled?(opts) do
     config = LemonCore.Config.Modular.load()
-    LemonCore.Config.Features.enabled?(config.features, :skill_synthesis_drafts)
+
+    LemonCore.Config.Features.enabled?(config.features, :skill_synthesis_drafts,
+      opt_in: Keyword.get(opts, :opt_in, false)
+    )
   rescue
     _ -> false
   end

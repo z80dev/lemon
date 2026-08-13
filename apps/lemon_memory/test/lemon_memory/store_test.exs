@@ -111,6 +111,80 @@ defmodule LemonMemory.StoreTest do
     assert first_order == Enum.sort(first_order, :desc)
   end
 
+  describe "since_ms watermark reads" do
+    test "drains the oldest unseen window so a backlog larger than the limit is never skipped",
+         %{store_pid: pid} do
+      agent_id = "agent_backlog_#{:rand.uniform(9999)}"
+      base = System.system_time(:millisecond) - 200_000
+
+      docs =
+        for i <- 1..120 do
+          %{
+            make_doc(agent_id: agent_id, session_key: "agent:#{agent_id}:main")
+            | doc_id: "mem_backlog_#{String.pad_leading("#{i}", 3, "0")}",
+              ingested_at_ms: base + i
+          }
+        end
+
+      Enum.each(docs, &Store.put(pid, &1))
+
+      assert eventually(fn ->
+               length(Store.get_by_agent(pid, agent_id, limit: 200)) == 120
+             end)
+
+      # Three passes of 50, threading the newest ingested_at_ms back as the
+      # next watermark, must observe all 120 documents exactly once.
+      {seen, watermark} =
+        Enum.reduce(1..3, {[], 0}, fn _pass, {seen, since_ms} ->
+          window = Store.get_by_agent(pid, agent_id, limit: 50, since_ms: since_ms)
+          {seen ++ Enum.map(window, & &1.doc_id), List.last(window).ingested_at_ms}
+        end)
+
+      assert length(seen) == 120
+      assert Enum.uniq(seen) == seen
+      assert MapSet.new(seen) == MapSet.new(docs, & &1.doc_id)
+      assert watermark == base + 120
+      assert Store.get_by_agent(pid, agent_id, limit: 50, since_ms: watermark) == []
+    end
+
+    test "since_ms is strict and applies to session and workspace reads", %{store_pid: pid} do
+      session = "agent:since_scopes:main"
+      wk = "/home/test/since_#{:rand.uniform(9999)}"
+      base = System.system_time(:millisecond) - 100_000
+
+      docs =
+        for i <- 1..3 do
+          %{
+            make_doc(session_key: session, workspace_key: wk, scope: :workspace)
+            | doc_id: "mem_since_#{i}",
+              ingested_at_ms: base + i
+          }
+        end
+
+      Enum.each(docs, &Store.put(pid, &1))
+
+      assert eventually(fn ->
+               length(Store.get_by_session(pid, session, limit: 10)) == 3
+             end)
+
+      # Strictly greater than, and oldest-first.
+      assert Enum.map(
+               Store.get_by_session(pid, session, limit: 10, since_ms: base + 1),
+               & &1.doc_id
+             ) ==
+               ["mem_since_2", "mem_since_3"]
+
+      assert Enum.map(
+               Store.get_by_workspace(pid, wk, limit: 10, since_ms: base + 2),
+               & &1.doc_id
+             ) == ["mem_since_3"]
+
+      # No since_ms keeps the newest-first contract.
+      assert Enum.map(Store.get_by_session(pid, session, limit: 10), & &1.doc_id) ==
+               ["mem_since_3", "mem_since_2", "mem_since_1"]
+    end
+  end
+
   test "get_by_agent returns documents across sessions", %{store_pid: pid} do
     agent_id = "agent_cross_#{:rand.uniform(9999)}"
     doc1 = make_doc(agent_id: agent_id, session_key: "agent:#{agent_id}:main")

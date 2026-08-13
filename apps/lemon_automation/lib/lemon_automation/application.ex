@@ -12,7 +12,8 @@ defmodule LemonAutomation.Application do
       LemonAutomation.GoalContinuationManager,
       LemonAutomation.GoalLoopManager,
       LemonAutomation.KanbanDispatcher,
-      LemonAutomation.SkillCuratorManager
+      LemonAutomation.SkillCuratorManager,
+      LemonAutomation.SynthesisRunnerManager
     ]
 
     opts = [strategy: :one_for_one, name: LemonAutomation.Supervisor]
