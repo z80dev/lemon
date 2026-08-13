@@ -44,6 +44,7 @@ defmodule CodingAgent.ToolPolicy do
     "edit",
     "patch",
     "bash",
+    "execute_code",
     "grep",
     "find",
     "ls",
@@ -123,6 +124,9 @@ defmodule CodingAgent.ToolPolicy do
     "skill_manage",
     "memory",
     "bash",
+    # Bash-equivalent: the script runs with host permissions, and the RPC
+    # allowlist bounds the Lemon tool surface only, not the OS.
+    "execute_code",
     "exec",
     "process",
     "agent",

@@ -84,6 +84,28 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `LEMON_WEB_SEARCH_PROVIDER` | string | `brave` |  | `lemon_core` | Web search provider id (e.g. brave, perplexity). |
 | `LEMON_WEB_SEARCH_TIMEOUT` | integer | `30` |  | `lemon_core` | Web search request timeout, in seconds. |
 
+### Tool disclosure (progressive tool-schema disclosure)
+
+When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS` in estimated schema tokens, `CodingAgent.ToolDisclosure` replaces the MCP/extension/WASM long tail with two bridge tools — `tool_search` (find a deferred tool and read its schema) and `tool_invoke` (call it, with the same policy and approval pipeline a direct call would use). Built-in tools always stay fully disclosed, and a catalog under the budget is left byte-for-byte unchanged. Disclosure is computed once at session start and at extension reload, never per turn, so the tool array stays prompt-cache stable.
+
+| Env Var | Type | Default | Secret | Apps | Description |
+|---|---|---|---|---|---|
+| `LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS` | integer | `40000` |  | `lemon_core` | Estimated tool-schema token total above which long-tail tools are hidden behind tool_search/tool_invoke. |
+| `LEMON_TOOL_DISCLOSURE_CATALOG_TOKENS` | integer | `2000` |  | `lemon_core` | Token budget for the hidden-tool catalog digest embedded in the tool_search description. |
+| `LEMON_TOOL_DISCLOSURE_ENABLED` | boolean | `true` |  | `lemon_core` | Whether tool-schema progressive disclosure may activate when the tool catalog exceeds the token budget. |
+
+### Programmatic tool calling (`execute_code`)
+
+| Env Var | Type | Default | Secret | Apps | Description |
+|---|---|---|---|---|---|
+| `LEMON_EXECUTE_CODE_ENABLED` | boolean | `false` |  | `lemon_core` | Whether the execute_code programmatic tool-calling tool is enabled. |
+| `LEMON_EXECUTE_CODE_MAX_OUTPUT_BYTES` | integer | `50000` |  | `lemon_core` | Maximum script stdout bytes returned to the model (larger output is spilled to a file). |
+| `LEMON_EXECUTE_CODE_MAX_RPC_CALLS` | integer | `100` |  | `lemon_core` | Maximum tool RPC calls one execute_code script may make. |
+| `LEMON_EXECUTE_CODE_MAX_RPC_RESULT_BYTES` | integer | `5242880` |  | `lemon_core` | Total byte budget for tool RPC results returned to one execute_code script. |
+| `LEMON_EXECUTE_CODE_PYTHON_PATH` | string | `` |  | `lemon_core` | Explicit python3 interpreter path for execute_code scripts (empty = find python3 on PATH). |
+| `LEMON_EXECUTE_CODE_TIMEOUT_MS` | integer | `120000` |  | `lemon_core` | Wall-clock cap for one execute_code script run, in milliseconds. |
+| `LEMON_EXECUTE_CODE_TOOLS` | list (comma-separated) | `[]` |  | `lemon_core` | Comma-separated subset of the execute_code RPC allowlist (read, grep, find, ls, webfetch) to expose; empty = full allowlist. |
+
 ### WASM tool runtime
 
 | Env Var | Type | Default | Secret | Apps | Description |
@@ -407,6 +429,13 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `LEMON_GOAL_JUDGE_MODEL` | string | _(none)_ |  | `lemon_automation` | Model id used to judge automation goal completion. |
 | `LEMON_SIM_AUTO_LOOP` | boolean | `false` |  | `lemon_sim_ui` | Whether the werewolf auto-loop starts automatically on boot. |
 | `LEMON_SIM_WEREWOLF_PLAYERS` | integer | `6` |  | `lemon_sim_ui` | Player count for the werewolf auto-loop. |
+
+### Automation (cron)
+
+| Env Var | Type | Default | Secret | Apps | Description |
+|---|---|---|---|---|---|
+| `LEMON_CRON_PREFLIGHT_ENABLED` | boolean | _(none)_ |  | `lemon_automation` | Override the cron pre-dispatch preflight (provider/target readiness) toggle. |
+| `LEMON_CRON_DRIFT_GUARD_ENABLED` | boolean | _(none)_ |  | `lemon_automation` | Override the cron model drift guard (fail closed when the global default model changed under an unpinned job). |
 
 ### Platform / BEAM release (standard names)
 

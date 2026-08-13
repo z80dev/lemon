@@ -873,6 +873,132 @@ defmodule LemonCore.Env.Declarations do
       apps: [:lemon_core]
     },
     %{
+      name: :lemon_tool_disclosure_budget_tokens,
+      env_var: "LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS",
+      aliases: [],
+      type: :integer,
+      default: 40_000,
+      doc:
+        "Estimated tool-schema token total above which long-tail tools are hidden behind tool_search/tool_invoke.",
+      secret?: false,
+      required?: false,
+      area: :tools_disclosure,
+      apps: [:lemon_core]
+    },
+    %{
+      name: :lemon_tool_disclosure_catalog_tokens,
+      env_var: "LEMON_TOOL_DISCLOSURE_CATALOG_TOKENS",
+      aliases: [],
+      type: :integer,
+      default: 2_000,
+      doc:
+        "Token budget for the hidden-tool catalog digest embedded in the tool_search description.",
+      secret?: false,
+      required?: false,
+      area: :tools_disclosure,
+      apps: [:lemon_core]
+    },
+    %{
+      name: :lemon_tool_disclosure_enabled,
+      env_var: "LEMON_TOOL_DISCLOSURE_ENABLED",
+      aliases: [],
+      type: :boolean,
+      default: true,
+      doc:
+        "Whether tool-schema progressive disclosure may activate when the tool catalog exceeds the token budget.",
+      secret?: false,
+      required?: false,
+      area: :tools_disclosure,
+      apps: [:lemon_core]
+    },
+    %{
+      name: :lemon_execute_code_enabled,
+      env_var: "LEMON_EXECUTE_CODE_ENABLED",
+      aliases: [],
+      type: :boolean,
+      default: false,
+      doc: "Whether the execute_code programmatic tool-calling tool is enabled.",
+      secret?: false,
+      required?: false,
+      area: :tools_execute_code,
+      apps: [:lemon_core]
+    },
+    %{
+      name: :lemon_execute_code_max_output_bytes,
+      env_var: "LEMON_EXECUTE_CODE_MAX_OUTPUT_BYTES",
+      aliases: [],
+      type: :integer,
+      default: 50_000,
+      doc:
+        "Maximum script stdout bytes returned to the model (larger output is spilled to a file).",
+      secret?: false,
+      required?: false,
+      area: :tools_execute_code,
+      apps: [:lemon_core]
+    },
+    %{
+      name: :lemon_execute_code_max_rpc_calls,
+      env_var: "LEMON_EXECUTE_CODE_MAX_RPC_CALLS",
+      aliases: [],
+      type: :integer,
+      default: 100,
+      doc: "Maximum tool RPC calls one execute_code script may make.",
+      secret?: false,
+      required?: false,
+      area: :tools_execute_code,
+      apps: [:lemon_core]
+    },
+    %{
+      name: :lemon_execute_code_max_rpc_result_bytes,
+      env_var: "LEMON_EXECUTE_CODE_MAX_RPC_RESULT_BYTES",
+      aliases: [],
+      type: :integer,
+      default: 5_242_880,
+      doc: "Total byte budget for tool RPC results returned to one execute_code script.",
+      secret?: false,
+      required?: false,
+      area: :tools_execute_code,
+      apps: [:lemon_core]
+    },
+    %{
+      name: :lemon_execute_code_python_path,
+      env_var: "LEMON_EXECUTE_CODE_PYTHON_PATH",
+      aliases: [],
+      type: :string,
+      default: "",
+      doc:
+        "Explicit python3 interpreter path for execute_code scripts (empty = find python3 on PATH).",
+      secret?: false,
+      required?: false,
+      area: :tools_execute_code,
+      apps: [:lemon_core]
+    },
+    %{
+      name: :lemon_execute_code_timeout_ms,
+      env_var: "LEMON_EXECUTE_CODE_TIMEOUT_MS",
+      aliases: [],
+      type: :integer,
+      default: 120_000,
+      doc: "Wall-clock cap for one execute_code script run, in milliseconds.",
+      secret?: false,
+      required?: false,
+      area: :tools_execute_code,
+      apps: [:lemon_core]
+    },
+    %{
+      name: :lemon_execute_code_tools,
+      env_var: "LEMON_EXECUTE_CODE_TOOLS",
+      aliases: [],
+      type: :list,
+      default: [],
+      doc:
+        "Comma-separated subset of the execute_code RPC allowlist (read, grep, find, ls, webfetch) to expose; empty = full allowlist.",
+      secret?: false,
+      required?: false,
+      area: :tools_execute_code,
+      apps: [:lemon_core]
+    },
+    %{
       name: :lemon_wasm_auto_build,
       env_var: "LEMON_WASM_AUTO_BUILD",
       aliases: [],

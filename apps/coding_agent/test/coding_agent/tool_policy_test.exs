@@ -25,6 +25,7 @@ defmodule CodingAgent.ToolPolicyTest do
       assert ToolPolicy.allowed?(policy, "find")
       refute ToolPolicy.allowed?(policy, "write")
       refute ToolPolicy.allowed?(policy, "bash")
+      refute ToolPolicy.allowed?(policy, "execute_code")
     end
 
     test "orchestrator can delegate" do
@@ -56,6 +57,7 @@ defmodule CodingAgent.ToolPolicyTest do
       assert ToolPolicy.allowed?(policy, "memory_topic")
       assert ToolPolicy.allowed?(policy, "memory")
       assert ToolPolicy.allowed?(policy, "checkpoint")
+      assert ToolPolicy.allowed?(policy, "execute_code")
       assert ToolPolicy.allowed?(policy, "write")
       assert ToolPolicy.allowed?(policy, "patch")
       assert ToolPolicy.allowed?(policy, "todo")
@@ -111,6 +113,7 @@ defmodule CodingAgent.ToolPolicyTest do
       refute ToolPolicy.allowed?(policy, "memory")
       refute ToolPolicy.allowed?(policy, "bash")
       refute ToolPolicy.allowed?(policy, "exec")
+      refute ToolPolicy.allowed?(policy, "execute_code")
     end
 
     test "subagent_restricted denies dangerous tools and requires approval" do
@@ -119,6 +122,8 @@ defmodule CodingAgent.ToolPolicyTest do
       refute ToolPolicy.allowed?(policy, "write")
       refute ToolPolicy.allowed?(policy, "skill_manage")
       refute ToolPolicy.allowed?(policy, "bash")
+      # Denied via @dangerous_tools, exactly like bash.
+      refute ToolPolicy.allowed?(policy, "execute_code")
       refute ToolPolicy.allowed?(policy, "agent")
       assert ToolPolicy.requires_approval?(policy, "write")
       assert ToolPolicy.requires_approval?(policy, "edit")
@@ -145,6 +150,24 @@ defmodule CodingAgent.ToolPolicyTest do
       refute ToolPolicy.allowed?(policy, "media_transcribe_audio")
       refute ToolPolicy.allowed?(policy, "media_analyze_image")
       refute ToolPolicy.allowed?(policy, "media_generate_video")
+      # execute_code is host-local like bash, so no_external leaves it alone.
+      assert ToolPolicy.allowed?(policy, "execute_code")
+    end
+
+    test "execute_code is classified exactly like bash" do
+      for profile <- [:full_access, :minimal_core, :no_external, :leaf_worker, :orchestrator] do
+        policy = ToolPolicy.from_profile(profile)
+
+        assert ToolPolicy.allowed?(policy, "execute_code"),
+               "#{profile} should allow execute_code (it allows bash)"
+      end
+
+      for profile <- [:read_only, :safe_mode, :subagent_restricted] do
+        policy = ToolPolicy.from_profile(profile)
+
+        refute ToolPolicy.allowed?(policy, "execute_code"),
+               "#{profile} should deny execute_code (it denies bash)"
+      end
     end
 
     test "unknown profile defaults to full_access" do
