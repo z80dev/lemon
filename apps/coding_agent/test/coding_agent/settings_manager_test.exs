@@ -394,6 +394,53 @@ defmodule CodingAgent.SettingsManagerTest do
       assert settings.tools == %{auto_resize_images: false, web: %{search: %{enabled: true}}}
     end
 
+    test "carries the tool disclosure section through verbatim" do
+      # `settings.tools.disclosure` is what `CodingAgent.ToolDisclosure.config/2`
+      # reads to decide whether the MCP/extension long tail is hidden behind
+      # `tool_search`/`tool_invoke`. This pins that
+      # `LemonCore.Config.convert_tools/1` carries it through unmangled, so
+      # build the section the same way the loader does.
+      disclosure = LemonCore.Config.Tools.resolve(%{}).disclosure
+
+      config = %LemonConfig{
+        providers: %{},
+        agent: %{tools: %{auto_resize_images: true, disclosure: disclosure}},
+        tui: %{},
+        logging: %{},
+        gateway: %{},
+        agents: %{}
+      }
+
+      settings = SettingsManager.from_config(config)
+
+      assert settings.tools.disclosure == %{
+               enabled: true,
+               budget_tokens: 40_000,
+               catalog_tokens: 2_000,
+               max_results: 5
+             }
+    end
+
+    test "tool disclosure is absent, not defaulted, when the config omits it" do
+      # Pins that SettingsManager does NOT synthesize a disclosure section:
+      # `CodingAgent.ToolDisclosure.config/2` carries its own copy of the
+      # defaults precisely because hand-built settings and older persisted
+      # configs arrive without this key.
+      config = %LemonConfig{
+        providers: %{},
+        agent: %{tools: %{auto_resize_images: true}},
+        tui: %{},
+        logging: %{},
+        gateway: %{},
+        agents: %{}
+      }
+
+      settings = SettingsManager.from_config(config)
+
+      refute Map.has_key?(settings.tools, :disclosure)
+      assert settings.tools[:disclosure] == nil
+    end
+
     test "extracts extension paths from agent config" do
       config = %LemonConfig{
         providers: %{},

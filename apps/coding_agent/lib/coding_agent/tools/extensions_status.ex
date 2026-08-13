@@ -231,6 +231,15 @@ defmodule CodingAgent.Tools.ExtensionsStatus do
         sections
       end
 
+    sections =
+      case report[:tool_disclosure] do
+        disclosure when is_map(disclosure) ->
+          [format_tool_disclosure_section(disclosure, include_details) | sections]
+
+        _ ->
+          sections
+      end
+
     output = sections |> Enum.reverse() |> Enum.join("\n")
 
     title =
@@ -253,7 +262,8 @@ defmodule CodingAgent.Tools.ExtensionsStatus do
         total_loaded: report.total_loaded,
         total_errors: report.total_errors,
         tool_conflicts: report.tool_conflicts,
-        wasm: report[:wasm]
+        wasm: report[:wasm],
+        tool_disclosure: report[:tool_disclosure]
       }
     }
   end
@@ -313,6 +323,15 @@ defmodule CodingAgent.Tools.ExtensionsStatus do
         sections
       end
 
+    sections =
+      case report[:tool_disclosure] do
+        disclosure when is_map(disclosure) ->
+          [format_tool_disclosure_section(disclosure, include_details) | sections]
+
+        _ ->
+          sections
+      end
+
     output = sections |> Enum.reverse() |> Enum.join("\n")
 
     title =
@@ -334,9 +353,58 @@ defmodule CodingAgent.Tools.ExtensionsStatus do
         total_loaded: report.total_loaded,
         total_errors: report.total_errors,
         tool_conflicts: report.tool_conflicts,
-        wasm: report[:wasm]
+        wasm: report[:wasm],
+        tool_disclosure: report[:tool_disclosure]
       }
     }
+  end
+
+  @doc """
+  Render the tool-disclosure section of a status report.
+
+  Public so the section can be exercised directly; `report[:tool_disclosure]`
+  is absent from reports produced before disclosure existed, and callers must
+  keep working when it is.
+  """
+  @spec format_tool_disclosure_section(map(), boolean()) :: String.t()
+  def format_tool_disclosure_section(disclosure, include_details \\ false) do
+    active = Map.get(disclosure, :active, false)
+
+    header = "\n## Tool Disclosure\n"
+
+    if active do
+      hidden_names = Map.get(disclosure, :hidden_names, [])
+
+      base =
+        "- **Active:** true\n" <>
+          "- **Estimated schema tokens:** #{Map.get(disclosure, :estimated_tokens, 0)} " <>
+          "(budget #{Map.get(disclosure, :budget_tokens, 0)})\n" <>
+          "- **Disclosed tools:** #{Map.get(disclosure, :disclosed_count, 0)} · " <>
+          "**Hidden tools:** #{Map.get(disclosure, :hidden_count, 0)}\n" <>
+          "- **Catalog tier:** #{Map.get(disclosure, :catalog_tier, :inactive)}\n"
+
+      details =
+        if include_details and hidden_names != [] do
+          "- **Hidden:** #{Enum.join(hidden_names, ", ")}\n"
+        else
+          ""
+        end
+
+      shadowed =
+        case Map.get(disclosure, :shadowed_by_bridge, []) do
+          [] -> ""
+          names -> "- **Dropped (bridge name collision):** #{Enum.join(names, ", ")}\n"
+        end
+
+      header <> base <> details <> shadowed
+    else
+      reason = Map.get(disclosure, :reason) || "inactive"
+
+      header <>
+        "- **Active:** false (#{reason})\n" <>
+        "- **Estimated schema tokens:** #{Map.get(disclosure, :estimated_tokens, 0)} " <>
+        "(budget #{Map.get(disclosure, :budget_tokens, 0)})\n"
+    end
   end
 
   @spec format_extensions_section([map()], boolean()) :: String.t()

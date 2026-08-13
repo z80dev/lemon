@@ -139,9 +139,6 @@ defmodule CodingAgent.ToolRegistryTest do
       assert "browser_analyze" in names
       assert "media_analyze_image" in names
       assert "media_generate_video" in names
-      assert "x_search" in names
-      assert "post_to_x" in names
-      assert "get_x_mentions" in names
       assert "parent_question" in names
     end
 
@@ -213,6 +210,92 @@ defmodule CodingAgent.ToolRegistryTest do
       refute "bash" in names
       refute "webfetch" in names
       refute "task" in names
+    end
+  end
+
+  describe "get_tool_tuples/2" do
+    test "tags every source and stays element-wise aligned with get_tools/2", %{tmp_dir: tmp_dir} do
+      ext_dir = Path.join(tmp_dir, ".lemon/extensions")
+      File.mkdir_p!(ext_dir)
+
+      File.write!(Path.join(ext_dir, "tuple_source_extension.ex"), """
+      defmodule TupleSourceExtension do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "tuple-source-ext"
+
+        @impl true
+        def version, do: "1.0.0"
+
+        @impl true
+        def tools(_cwd) do
+          [
+            %LemonAgent.Types.AgentTool{
+              name: "tuple_ext_tool",
+              description: "From extension",
+              parameters: %{},
+              label: "Tuple Ext",
+              execute: fn _, _, _, _ -> %LemonAgent.Types.AgentToolResult{content: []} end
+            }
+          ]
+        end
+      end
+      """)
+
+      opts = [
+        mcp_tools: [mcp_tool("mcp_tuple_tool")],
+        wasm_tools: [wasm_tool("wasm_tuple_tool", [])]
+      ]
+
+      tuples = ToolRegistry.get_tool_tuples(tmp_dir, opts)
+
+      sources = Map.new(tuples, fn {name, _tool, source} -> {name, source} end)
+
+      assert sources["read"] == :builtin
+      assert sources["tuple_ext_tool"] == {:extension, TupleSourceExtension}
+      assert sources["mcp_tuple_tool"] == {:mcp, :fixture}
+      assert match?({:wasm, _}, sources["wasm_tuple_tool"])
+
+      # The refactor pin: get_tools/2 is exactly this with the source dropped.
+      assert Enum.map(tuples, fn {_name, tool, _source} -> tool.name end) ==
+               Enum.map(ToolRegistry.get_tools(tmp_dir, opts), & &1.name)
+
+      :code.purge(TupleSourceExtension)
+      :code.delete(TupleSourceExtension)
+    end
+
+    test "policy-denied tools are absent from the tuples", %{tmp_dir: tmp_dir} do
+      opts = [
+        mcp_tools: [mcp_tool("mcp_secret"), mcp_tool("mcp_public")],
+        tool_policy: CodingAgent.ToolPolicy.custom(deny: ["mcp_secret"])
+      ]
+
+      names = Enum.map(ToolRegistry.get_tool_tuples(tmp_dir, opts), fn {name, _, _} -> name end)
+
+      refute "mcp_secret" in names
+      assert "mcp_public" in names
+    end
+
+    test "approval-required tools carry the wrapped closure", %{tmp_dir: tmp_dir} do
+      unwrapped = mcp_tool("mcp_danger")
+
+      opts = [
+        mcp_tools: [unwrapped],
+        tool_policy: CodingAgent.ToolPolicy.custom(require_approval: ["mcp_danger"]),
+        approval_context: %{approval_request_fun: fn _ -> {:ok, :denied} end}
+      ]
+
+      {_name, tool, _source} =
+        ToolRegistry.get_tool_tuples(tmp_dir, opts)
+        |> Enum.find(fn {name, _, _} -> name == "mcp_danger" end)
+
+      {_, original, _} = unwrapped
+      refute tool.execute == original.execute
+
+      result = tool.execute.("id", %{}, nil, nil)
+      assert %LemonAgent.Types.AgentToolResult{} = result
+      assert result.details[:approval_status] == :denied or result.content != []
     end
   end
 
@@ -331,9 +414,6 @@ defmodule CodingAgent.ToolRegistryTest do
       assert :write in names
       assert :edit in names
       assert :bash in names
-      assert :x_search in names
-      assert :post_to_x in names
-      assert :get_x_mentions in names
       assert :parent_question in names
       assert Enum.all?(names, &is_atom/1)
     end
@@ -936,7 +1016,7 @@ defmodule CodingAgent.ToolRegistryTest do
 
       assert report.conflicts == []
       assert report.shadowed_count == 0
-      assert report.builtin_count == length(ToolRegistry.builtin_tool_names())
+      assert report.builtin_count == length(disclosed_builtin_names())
       assert report.extension_count == 0
       assert report.total_tools == report.builtin_count
     end
@@ -1095,7 +1175,7 @@ defmodule CodingAgent.ToolRegistryTest do
       report = ToolRegistry.tool_conflict_report(tmp_dir)
 
       assert report.conflicts == []
-      assert report.builtin_count == length(ToolRegistry.builtin_tool_names())
+      assert report.builtin_count == length(disclosed_builtin_names())
       assert report.extension_count == 1
       assert report.total_tools == report.builtin_count + report.extension_count
       assert report.shadowed_count == 0
@@ -1165,5 +1245,12 @@ defmodule CodingAgent.ToolRegistryTest do
 
       assert report.load_errors == []
     end
+  end
+
+  # `builtin_tool_names/0` reports the compile-time builtin set, which includes
+  # config-gated tools like `execute_code`. A resolved catalog only contains the
+  # ones actually enabled for the workspace, and `execute_code` is default-off.
+  defp disclosed_builtin_names do
+    Enum.reject(ToolRegistry.builtin_tool_names(), &(&1 == :execute_code))
   end
 end

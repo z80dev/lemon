@@ -85,7 +85,11 @@ defmodule CodingAgent.ToolRegistry do
     {:parent_question, Tools.ParentQuestion},
     {:tool_auth, Tools.ToolAuth},
     {:extensions_status, Tools.ExtensionsStatus},
-    {:hashline_edit, Tools.HashlineEdit}
+    {:hashline_edit, Tools.HashlineEdit},
+    # Appended last on purpose: `execute_code` is config-gated, so keeping it at
+    # the tail leaves the tool-order prefix identical whether or not it is
+    # enabled, which is what prompt caching needs.
+    {:execute_code, Tools.ExecuteCode}
   ]
 
   @doc """
@@ -93,6 +97,24 @@ defmodule CodingAgent.ToolRegistry do
   """
   @spec get_tools(String.t(), tool_opts()) :: [AgentTool.t()]
   def get_tools(cwd, opts \\ []) do
+    cwd
+    |> get_tool_tuples(opts)
+    |> Enum.map(fn {_name, tool, _source} -> tool end)
+  end
+
+  @doc """
+  Get all enabled tools with their source tags, after policy filtering and
+  after approval wrapping — the same pipeline `get_tools/2` runs, with the
+  source kept.
+
+  Callers that need to reason about *where* a tool came from (notably
+  `CodingAgent.ToolDisclosure`, which defers the MCP/extension/WASM long tail)
+  use this so they sit downstream of policy and approval rather than beside
+  them: a denied tool is already gone, and the closure in the tuple is the
+  approval-wrapped one.
+  """
+  @spec get_tool_tuples(String.t(), tool_opts()) :: [tool_tuple()]
+  def get_tool_tuples(cwd, opts \\ []) do
     disabled = Keyword.get(opts, :disabled, [])
     enabled_only = Keyword.get(opts, :enabled_only, nil)
     include_extensions = Keyword.get(opts, :include_extensions, true)
@@ -122,17 +144,13 @@ defmodule CodingAgent.ToolRegistry do
     {resolved_tools, _conflicts} =
       resolve_tools(builtin, wasm_tools, extension_tools, mcp_tools, true)
 
-    tools =
-      resolved_tools
-      |> filter_tools(disabled, enabled_only)
-      |> filter_policy_blocked(Keyword.get(opts, :tool_policy))
-      |> maybe_wrap_approval(
-        Keyword.get(opts, :tool_policy),
-        Keyword.get(opts, :approval_context)
-      )
-      |> Enum.map(fn {_name, tool, _source} -> tool end)
-
-    tools
+    resolved_tools
+    |> filter_tools(disabled, enabled_only)
+    |> filter_policy_blocked(Keyword.get(opts, :tool_policy))
+    |> maybe_wrap_approval(
+      Keyword.get(opts, :tool_policy),
+      Keyword.get(opts, :approval_context)
+    )
   end
 
   @doc """
@@ -340,6 +358,12 @@ defmodule CodingAgent.ToolRegistry do
 
   defp builtin_tool_tuples(cwd, opts) do
     builtin_tools()
+    # A disabled per-tool runtime capability must not reach the prompt at all --
+    # its schema costs tokens and offering a tool that always errors confuses
+    # the model. `builtin_tool_names/0` still reports the compile-time set.
+    |> Enum.reject(fn {name, _module} ->
+      name == :execute_code and not Tools.ExecuteCode.enabled?(cwd, opts)
+    end)
     |> Enum.map(fn {name, module} ->
       {Atom.to_string(name), module.tool(cwd, opts), :builtin}
     end)

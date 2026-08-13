@@ -202,6 +202,10 @@ defmodule CodingAgent.Session.Lifecycle do
       prompt_template: prompt_template,
       workspace_dir: workspace_dir,
       extra_tools: extra_tools,
+      # Kept so a reload recomputes disclosure with the same per-session
+      # override the session started with -- `reload_extensions/1` rebuilds
+      # `tool_opts` from state rather than from the original opts.
+      tool_disclosure: Keyword.get(opts, :tool_disclosure),
       session_scope: session_scope,
       is_streaming: false,
       pending_prompt_timer_ref: nil,
@@ -266,7 +270,8 @@ defmodule CodingAgent.Session.Lifecycle do
       tool_policy: state.tool_policy,
       approval_context: state.approval_context,
       wasm_tools: wasm_reload.wasm_tools,
-      wasm_status: wasm_reload.wasm_status
+      wasm_status: wasm_reload.wasm_status,
+      tool_disclosure: state.tool_disclosure
     ]
 
     lifecycle =

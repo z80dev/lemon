@@ -15,6 +15,7 @@ defmodule CodingAgent.ExtensionLifecycle do
   alias LemonAgent.Types.AgentTool
   alias CodingAgent.Config
   alias CodingAgent.Extensions
+  alias CodingAgent.ToolDisclosure
   alias CodingAgent.ToolExecutor
   alias CodingAgent.ToolRegistry
 
@@ -25,7 +26,8 @@ defmodule CodingAgent.ExtensionLifecycle do
           extension_status_report: Extensions.extension_status_report(),
           extension_paths: [String.t()],
           provider_registration: Extensions.provider_registration_report(),
-          wasm_status: map() | nil
+          wasm_status: map() | nil,
+          tool_disclosure: ToolDisclosure.report()
         }
 
   @doc """
@@ -58,7 +60,10 @@ defmodule CodingAgent.ExtensionLifecycle do
       |> Keyword.put(:wasm_tools, wasm_tools)
       |> Keyword.put(:wasm_status, wasm_status)
 
-    tools =
+    disclosure_cfg =
+      ToolDisclosure.config(settings_manager, Keyword.get(tool_opts, :tool_disclosure))
+
+    {tools, disclosure_report} =
       build_tools(
         cwd,
         tool_opts,
@@ -66,8 +71,11 @@ defmodule CodingAgent.ExtensionLifecycle do
         custom_tools,
         extra_tools,
         tool_policy,
-        approval_context
+        approval_context,
+        disclosure_cfg
       )
+
+    emit_disclosure_telemetry(disclosure_report)
 
     tool_conflict_report = ToolRegistry.tool_conflict_report(cwd, tool_opts)
 
@@ -78,6 +86,7 @@ defmodule CodingAgent.ExtensionLifecycle do
         provider_registration: provider_registration
       )
       |> maybe_attach_wasm_status(wasm_status)
+      |> Map.put(:tool_disclosure, disclosure_report)
 
     %{
       extensions: extensions,
@@ -86,7 +95,8 @@ defmodule CodingAgent.ExtensionLifecycle do
       extension_status_report: extension_status_report,
       extension_paths: extension_paths,
       provider_registration: provider_registration,
-      wasm_status: wasm_status
+      wasm_status: wasm_status,
+      tool_disclosure: disclosure_report
     }
   end
 
@@ -138,7 +148,18 @@ defmodule CodingAgent.ExtensionLifecycle do
         tool_opts
       end
 
-    tools = ToolRegistry.get_tools(cwd, tool_opts) ++ extra_tools
+    disclosure_cfg =
+      ToolDisclosure.config(settings_manager, Keyword.get(tool_opts, :tool_disclosure))
+
+    %{tools: tools, report: disclosure_report} =
+      ToolDisclosure.apply(
+        ToolRegistry.get_tool_tuples(cwd, tool_opts),
+        extra_tools,
+        disclosure_cfg
+      )
+
+    emit_disclosure_telemetry(disclosure_report)
+
     tool_conflict_report = ToolRegistry.tool_conflict_report(cwd, tool_opts)
 
     extension_status_report =
@@ -148,6 +169,7 @@ defmodule CodingAgent.ExtensionLifecycle do
         provider_registration: provider_registration
       )
       |> maybe_attach_wasm_status(wasm_status)
+      |> Map.put(:tool_disclosure, disclosure_report)
 
     %{
       extensions: extensions,
@@ -156,7 +178,8 @@ defmodule CodingAgent.ExtensionLifecycle do
       extension_status_report: extension_status_report,
       extension_paths: extension_paths,
       provider_registration: provider_registration,
-      wasm_status: wasm_status
+      wasm_status: wasm_status,
+      tool_disclosure: disclosure_report
     }
   end
 
@@ -202,8 +225,9 @@ defmodule CodingAgent.ExtensionLifecycle do
           [AgentTool.t()] | nil,
           [AgentTool.t()],
           term(),
-          term()
-        ) :: [AgentTool.t()]
+          term(),
+          ToolDisclosure.config()
+        ) :: {[AgentTool.t()], ToolDisclosure.report()}
   defp build_tools(
          cwd,
          tool_opts,
@@ -211,26 +235,56 @@ defmodule CodingAgent.ExtensionLifecycle do
          custom_tools,
          extra_tools,
          tool_policy,
-         approval_context
+         approval_context,
+         disclosure_cfg
        ) do
     case custom_tools do
       nil ->
-        ToolRegistry.get_tools(cwd, tool_opts) ++ extra_tools
+        %{tools: tools, report: report} =
+          ToolDisclosure.apply(
+            ToolRegistry.get_tool_tuples(cwd, tool_opts),
+            extra_tools,
+            disclosure_cfg
+          )
+
+        {tools, report}
 
       custom ->
         extension_tools = Extensions.get_tools(extensions, cwd)
         all_tools = custom ++ extension_tools ++ extra_tools
 
-        if tool_policy && approval_context do
-          ToolExecutor.wrap_all_with_approval(
-            all_tools,
-            tool_policy,
-            approval_context
-          )
-        else
-          all_tools
-        end
+        tools =
+          if tool_policy && approval_context do
+            ToolExecutor.wrap_all_with_approval(
+              all_tools,
+              tool_policy,
+              approval_context
+            )
+          else
+            all_tools
+          end
+
+        # A hand-assembled toolset is the caller's business: they chose exactly
+        # these tools, so there is no long tail to defer and no registry source
+        # tags to partition by.
+        {tools, ToolDisclosure.skipped_report(:custom_tools)}
     end
+  end
+
+  defp emit_disclosure_telemetry(report) do
+    LemonCore.Telemetry.emit(
+      [:coding_agent, :tool_disclosure, :applied],
+      %{
+        hidden_count: report.hidden_count,
+        disclosed_count: report.disclosed_count,
+        estimated_tokens: report.estimated_tokens
+      },
+      %{
+        active: report.active,
+        catalog_tier: report.catalog_tier,
+        reason: report.reason
+      }
+    )
   end
 
   defp maybe_attach_wasm_status(report, nil), do: report
