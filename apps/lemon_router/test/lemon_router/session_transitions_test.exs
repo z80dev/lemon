@@ -174,6 +174,184 @@ defmodule LemonRouter.SessionTransitionsTest do
            ]
   end
 
+  test "redirect against an active run emits a redirect dispatch with followup fallback" do
+    state = %SessionState{
+      conversation_key: {:session, "s1"},
+      active: %{run_id: "run1", session_key: "s1"},
+      queue: [],
+      last_followup_at_ms: nil,
+      pending_steers: %{}
+    }
+
+    redirect = submission("run2", "s1", :redirect, "two")
+
+    assert {:ok, next_state, effects} = SessionTransitions.submit(state, redirect, 100)
+
+    assert next_state.pending_steers == %{"run1" => [{redirect, :followup}]}
+    assert effects == [{:dispatch_steer, "run1", :redirect, redirect, :followup}]
+    assert next_state.queue == []
+  end
+
+  test "redirect without an active run degrades to a queued followup" do
+    state = SessionState.new(conversation_key: {:session, "s1"})
+
+    assert {:ok, next_state, effects} =
+             SessionTransitions.submit(state, submission("run1", "s1", :redirect, "one"), 100)
+
+    assert [queued] = next_state.queue
+    assert queued.run_id == "run1"
+    assert queued.queue_mode == :followup
+    assert next_state.pending_steers == %{}
+    assert effects == [:maybe_start_next]
+  end
+
+  test "rejected redirect requeues as a followup with router phase events suppressed" do
+    state = %SessionState{
+      conversation_key: {:session, "s1"},
+      active: nil,
+      queue: [],
+      last_followup_at_ms: nil,
+      pending_steers: %{"run1" => [{submission("run2", "s1", :redirect, "two"), :followup}]}
+    }
+
+    assert {:ok, next_state, effects} = SessionTransitions.steer_rejected(state, "run2", 100)
+
+    assert [queued] = next_state.queue
+    assert queued.run_id == "run2"
+    assert queued.queue_mode == :followup
+    assert queued.meta[:suppress_router_phase_events] == true
+    assert next_state.pending_steers == %{}
+    assert effects == [:maybe_start_next]
+  end
+
+  test "failed redirect dispatch requeues as a followup" do
+    state = %SessionState{
+      conversation_key: {:session, "s1"},
+      active: %{run_id: "run1", session_key: "s1"},
+      queue: [],
+      last_followup_at_ms: nil,
+      pending_steers: %{"run1" => [{submission("run2", "s1", :redirect, "two"), :followup}]}
+    }
+
+    assert {:ok, next_state, effects} =
+             SessionTransitions.dispatch_steer_failed(state, "run2", 100)
+
+    assert [queued] = next_state.queue
+    assert queued.queue_mode == :followup
+    assert next_state.pending_steers == %{}
+    assert effects == []
+  end
+
+  test "accepted redirect clears the pending entry without requeueing" do
+    state = %SessionState{
+      conversation_key: {:session, "s1"},
+      active: %{run_id: "run1", session_key: "s1"},
+      queue: [],
+      last_followup_at_ms: nil,
+      pending_steers: %{"run1" => [{submission("run2", "s1", :redirect, "two"), :followup}]}
+    }
+
+    assert {:ok, next_state, effects} = SessionTransitions.steer_accepted(state, "run2")
+
+    assert next_state.queue == []
+    assert next_state.pending_steers == %{}
+    assert effects == [:noop]
+  end
+
+  test "cancel drops pending redirect submissions" do
+    state = %SessionState{
+      conversation_key: {:session, "s1"},
+      active: %{run_id: "run1", session_key: "s1"},
+      queue: [],
+      last_followup_at_ms: nil,
+      pending_steers: %{"run1" => [{submission("run2", "s1", :redirect, "two"), :followup}]}
+    }
+
+    assert {:ok, next_state, effects} = SessionTransitions.cancel(state, :user_requested)
+
+    assert next_state.pending_steers == %{}
+    assert next_state.queue == []
+    assert effects == [{:cancel_active, :user_requested}]
+  end
+
+  test "abort_run drops the pending redirect submission it names" do
+    state = %SessionState{
+      conversation_key: {:session, "s1"},
+      active: %{run_id: "run1", session_key: "s1"},
+      queue: [],
+      last_followup_at_ms: nil,
+      pending_steers: %{"run1" => [{submission("run2", "s1", :redirect, "two"), :followup}]}
+    }
+
+    assert {:ok, next_state, effects} =
+             SessionTransitions.abort_run(state, "run2", :user_requested)
+
+    assert next_state.pending_steers == %{}
+    assert next_state.queue == []
+    assert effects == []
+  end
+
+  test "abort_session drops pending redirect submissions for the aborted session" do
+    state = %SessionState{
+      conversation_key: {:session, "s1"},
+      active: %{run_id: "run1", session_key: "session-a"},
+      queue: [],
+      last_followup_at_ms: nil,
+      pending_steers: %{
+        "run1" => [{submission("run2", "session-a", :redirect, "two"), :followup}]
+      }
+    }
+
+    assert {:ok, next_state, effects} =
+             SessionTransitions.abort_session(state, "session-a", :user_requested)
+
+    assert next_state.pending_steers == %{}
+    assert effects == [{:cancel_active, :user_requested}]
+  end
+
+  test "active_down flushes a pending redirect back into the queue as a followup" do
+    pid = self()
+    mon_ref = make_ref()
+
+    state = %SessionState{
+      conversation_key: {:session, "s1"},
+      active: %{run_id: "run1", session_key: "s1", pid: pid, mon_ref: mon_ref},
+      queue: [],
+      last_followup_at_ms: nil,
+      pending_steers: %{"run1" => [{submission("run2", "s1", :redirect, "two"), :followup}]}
+    }
+
+    assert {:ok, next_state, effects} = SessionTransitions.active_down(state, pid, mon_ref, 100)
+
+    assert next_state.active == nil
+    assert [queued] = next_state.queue
+    assert queued.run_id == "run2"
+    assert queued.queue_mode == :followup
+    assert effects == [:maybe_start_next]
+  end
+
+  test "unknown queue modes still coerce to collect while redirect is preserved" do
+    state = %SessionState{
+      conversation_key: {:session, "s1"},
+      active: %{run_id: "run1", session_key: "s1"},
+      queue: [],
+      last_followup_at_ms: nil,
+      pending_steers: %{}
+    }
+
+    assert {:ok, redirect_state, [{:dispatch_steer, "run1", :redirect, _, :followup}]} =
+             SessionTransitions.submit(state, submission("run2", "s1", :redirect, "two"), 100)
+
+    assert redirect_state.queue == []
+
+    assert {:ok, unknown_state, []} =
+             SessionTransitions.submit(state, submission("run3", "s1", :nonsense, "three"), 100)
+
+    assert [queued] = unknown_state.queue
+    assert queued.queue_mode == :collect
+    assert unknown_state.pending_steers == %{}
+  end
+
   test "active task auto followups are promoted to steer with followup fallback" do
     state = %SessionState{
       conversation_key: {:session, "s1"},

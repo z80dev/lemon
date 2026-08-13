@@ -581,6 +581,7 @@ defmodule LemonRouter.AgentInbox do
   defp normalize_queue_mode(:followup), do: :followup
   defp normalize_queue_mode(:steer), do: :steer
   defp normalize_queue_mode(:steer_backlog), do: :steer_backlog
+  defp normalize_queue_mode(:redirect), do: :redirect
   defp normalize_queue_mode(:interrupt), do: :interrupt
 
   defp normalize_queue_mode(mode) when is_binary(mode) do
@@ -589,6 +590,7 @@ defmodule LemonRouter.AgentInbox do
       "followup" -> :followup
       "steer" -> :steer
       "steer_backlog" -> :steer_backlog
+      "redirect" -> :redirect
       "interrupt" -> :interrupt
       _ -> :followup
     end

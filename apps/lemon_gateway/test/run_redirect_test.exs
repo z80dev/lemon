@@ -302,6 +302,18 @@ defmodule LemonGateway.RunRedirectTest do
   defp test_conversation_key(%Job{session_key: session_key}) when is_binary(session_key),
     do: {:session, session_key}
 
+  # The shape LemonRouter.SessionCoordinator casts for a `:redirect` queue mode.
+  defp make_command(session_key, engine_id, prompt) do
+    %LemonCore.ExecutionCommand{
+      run_id: "run-#{System.unique_integer([:positive])}",
+      session_key: session_key,
+      prompt: prompt,
+      engine_id: engine_id,
+      conversation_key: {:session, session_key},
+      meta: %{}
+    }
+  end
+
   defp start_run_direct(job, slot_ref \\ make_ref()) do
     args = %{
       execution_request:
@@ -359,6 +371,48 @@ defmodule LemonGateway.RunRedirectTest do
 
       assert_receive {:engine_steered, "degraded correction"}, 2000
       assert_receive {:redirect_accepted, ^request}, 2000
+    end
+
+    test "accepts an ExecutionCommand redirect and replies with the original command" do
+      scope = make_scope()
+
+      job =
+        make_job(scope,
+          engine_id: "redirectable_test",
+          meta: %{controller_pid: self(), capability_notify_pid: self()}
+        )
+
+      {:ok, pid} = start_run_direct(job)
+
+      assert_receive {:engine_started, _run_ref}, 2000
+
+      command = make_command(scope, "redirectable_test", "new direction")
+      GenServer.cast(pid, {:redirect, command, self()})
+
+      assert_receive {:engine_redirected, "new direction"}, 2000
+      # The router coordinator matches on the ExecutionCommand it sent, so the
+      # reply must carry that struct back unchanged.
+      assert_receive {:redirect_accepted, ^command}, 2000
+      refute_receive {:engine_steered, _}, 100
+    end
+
+    test "rejects an ExecutionCommand redirect with the original command" do
+      scope = make_scope()
+
+      job =
+        make_job(scope,
+          engine_id: "no_capability_test",
+          meta: %{controller_pid: self()}
+        )
+
+      {:ok, pid} = start_run_direct(job)
+
+      assert_receive {:engine_started, _run_ref}, 2000
+
+      command = make_command(scope, "no_capability_test", "unsupported")
+      GenServer.cast(pid, {:redirect, command, self()})
+
+      assert_receive {:redirect_rejected, ^command}, 2000
     end
 
     test "rejects redirect when the engine supports neither redirect nor steer" do

@@ -10,7 +10,7 @@ defmodule LemonRouter.QueueEffect do
   alias LemonRouter.Submission
 
   @type fallback_mode :: :followup | :collect
-  @type steer_mode :: :steer | :steer_backlog
+  @type steer_mode :: :steer | :steer_backlog | :redirect
 
   @type t ::
           :maybe_start_next

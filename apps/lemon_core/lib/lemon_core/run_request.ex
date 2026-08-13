@@ -12,7 +12,8 @@ defmodule LemonCore.RunRequest do
   alias LemonCore.SessionKey
 
   @type origin :: :channel | :control_plane | :cron | :node | :unknown | atom()
-  @type queue_mode :: :collect | :followup | :steer | :steer_backlog | :interrupt | term()
+  @type queue_mode ::
+          :collect | :followup | :steer | :steer_backlog | :redirect | :interrupt | term()
 
   @type t :: %__MODULE__{
           origin: origin(),

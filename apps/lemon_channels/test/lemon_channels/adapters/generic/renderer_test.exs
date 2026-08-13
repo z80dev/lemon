@@ -126,6 +126,33 @@ defmodule LemonChannels.Adapters.Generic.RendererTest do
                    1_000
   end
 
+  test "dispatch/1 delivers router :notice intents on the status surface" do
+    route = route("generic-renderer-text", "peer-notice")
+    run_id = "run-#{System.unique_integer([:positive])}"
+
+    intent = %{
+      intent(run_id, route, :notice, %{
+        text:
+          "Redirect isn't available for this run — queued your correction as a follow-up instead.",
+        seq: 0
+      })
+      | meta: %{surface: :status, user_msg_id: nil}
+    }
+
+    assert :ok = Renderer.dispatch(intent)
+
+    assert_receive {:delivered,
+                    %LemonChannels.OutboundPayload{
+                      channel_id: "generic-renderer-text",
+                      kind: :text,
+                      content: content,
+                      peer: %{id: "peer-notice"}
+                    }},
+                   1_000
+
+    assert content =~ "follow-up"
+  end
+
   test "dispatch/1 uses edit delivery after the first create on edit-capable channels" do
     route = route("generic-renderer-edit", "peer-2")
     run_id = "run-#{System.unique_integer([:positive])}"

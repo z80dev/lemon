@@ -96,7 +96,9 @@ defmodule LemonRouter.SessionCoordinator do
     case whereis(conversation_key) do
       {:ok, pid} ->
         GenServer.call(pid, :active_run)
-      _ -> :none
+
+      _ ->
+        :none
     end
   end
 
@@ -248,6 +250,29 @@ defmodule LemonRouter.SessionCoordinator do
     {:noreply, next_state}
   end
 
+  def handle_info({:redirect_accepted, %ExecutionCommand{} = request}, state) do
+    {:noreply, next_state} =
+      apply_transition(SessionTransitions.steer_accepted(state, request.run_id), state)
+
+    {:noreply, next_state}
+  end
+
+  def handle_info({:redirect_rejected, %ExecutionCommand{} = request}, state) do
+    notify_redirect_fallback(request)
+
+    {:noreply, next_state} =
+      apply_transition(
+        SessionTransitions.steer_rejected(
+          state,
+          request.run_id,
+          System.monotonic_time(:millisecond)
+        ),
+        state
+      )
+
+    {:noreply, next_state}
+  end
+
   def handle_info(:maybe_start_next, state) do
     {next_state, _result} = maybe_start_next(state, return_result?: false, emit_phase?: true)
     {:noreply, next_state}
@@ -326,6 +351,10 @@ defmodule LemonRouter.SessionCoordinator do
         {state, reply_acc}
 
       :error ->
+        if steer_mode == :redirect do
+          notify_redirect_fallback(submission.execution_request)
+        end
+
         {:ok, next_state, extra_effects} =
           SessionTransitions.dispatch_steer_failed(
             state,
@@ -561,7 +590,7 @@ defmodule LemonRouter.SessionCoordinator do
   defp maybe_cancel_active(state, _reason), do: state
 
   defp dispatch_steer(active_run_id, steer_mode, %ExecutionCommand{} = request)
-       when steer_mode in [:steer, :steer_backlog] do
+       when steer_mode in [:steer, :steer_backlog, :redirect] do
     case runtime_run_pid(active_run_id) do
       nil ->
         :error
@@ -572,6 +601,52 @@ defmodule LemonRouter.SessionCoordinator do
     end
   rescue
     _ -> :error
+  end
+
+  # Redirect degrades to a queued follow-up when the run cannot accept it. The
+  # correction is not lost, but the user asked to change an in-flight request,
+  # so tell them what actually happened. Never crash the coordinator over it.
+  defp notify_redirect_fallback(%ExecutionCommand{run_id: run_id, session_key: session_key}) do
+    parsed = LemonRouter.ChannelContext.parse_session_key(session_key)
+
+    with :channel_peer <- parsed.kind,
+         peer_kind when peer_kind in [:dm, :group, :channel] <- parsed.peer_kind,
+         peer_id when is_binary(peer_id) and peer_id != "" <- parsed.peer_id do
+      route = %LemonCore.DeliveryRoute{
+        channel_id: parsed.channel_id,
+        account_id: parsed.account_id || "default",
+        peer_kind: peer_kind,
+        peer_id: peer_id,
+        thread_id: parsed.thread_id
+      }
+
+      intent = %LemonCore.DeliveryIntent{
+        intent_id: "#{run_id}:redirect:fallback",
+        run_id: run_id,
+        session_key: session_key,
+        route: route,
+        kind: :notice,
+        body: %{
+          text:
+            "Redirect isn't available for this run — queued your correction as a follow-up instead.",
+          seq: 0
+        },
+        meta: %{surface: :status, user_msg_id: nil}
+      }
+
+      _ = dispatcher().dispatch(intent)
+      :ok
+    else
+      _ -> :ok
+    end
+  rescue
+    _ -> :ok
+  end
+
+  defp notify_redirect_fallback(_request), do: :ok
+
+  defp dispatcher do
+    Application.get_env(:lemon_router, :dispatcher, LemonChannels.Dispatcher)
   end
 
   defp put_active_session_registry(%Submission{session_key: session_key, run_id: run_id}) do

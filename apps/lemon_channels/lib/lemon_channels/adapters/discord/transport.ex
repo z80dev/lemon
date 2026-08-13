@@ -58,6 +58,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   # Slash-command schemas live in SlashCommands; re-export the public surface the
   # adapter registration and tests depend on.
   defdelegate slash_commands, to: SlashCommands
+  defdelegate redirect_command_schema, to: SlashCommands
   defdelegate kanban_command_schema, to: SlashCommands
   defdelegate checkpoint_command_schema, to: SlashCommands
   defdelegate rollback_command_schema, to: SlashCommands
@@ -454,6 +455,8 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   defp submit_inbound_now(state, inbound) do
+    {redirect_override, inbound} = apply_redirect_prefix(inbound)
+
     channel_id = inbound.meta[:channel_id]
     thread_id = inbound.meta[:thread_id]
     user_msg_id = inbound.meta[:user_msg_id]
@@ -490,6 +493,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       |> maybe_put(:model_scope, model_scope)
       |> maybe_put(:thinking_level, thinking_hint)
       |> maybe_put(:thinking_scope, thinking_scope)
+      |> maybe_put(:queue_mode, redirect_override)
 
     meta =
       if is_binary(model_hint) and model_hint != "" and not is_binary(meta[:engine_id]) do
@@ -553,6 +557,36 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     state
   end
 
+  # Text-prefix form of the /redirect slash command: `!redirect <correction>`
+  # or `/redirect <correction>`. A bare prefix carries no correction and is
+  # left alone. Ungated — Discord has no `allow_queue_override` equivalent.
+  defp apply_redirect_prefix(inbound) do
+    case parse_redirect_prefix(inbound.message && Map.get(inbound.message, :text)) do
+      {:redirect, rest} ->
+        {:redirect, %{inbound | message: Map.put(inbound.message, :text, rest)}}
+
+      :none ->
+        {nil, inbound}
+    end
+  end
+
+  defp parse_redirect_prefix(text) when is_binary(text) do
+    trimmed = String.trim_leading(text)
+
+    case Regex.run(~r/^[!\/]redirect(?:\s+(.*))?$/is, trimmed) do
+      [_, rest] ->
+        case String.trim_leading(rest) do
+          "" -> :none
+          correction -> {:redirect, correction}
+        end
+
+      _ ->
+        :none
+    end
+  end
+
+  defp parse_redirect_prefix(_text), do: :none
+
   # ============================================================================
   # Interaction Handling (Slash Commands + Component Interactions)
   # ============================================================================
@@ -591,6 +625,9 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
       "resume" ->
         handle_resume_interaction(interaction, state)
+
+      "redirect" ->
+        handle_redirect_interaction(interaction, state)
 
       "cancel" ->
         handle_cancel_interaction(interaction, state)
@@ -679,6 +716,30 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       end
     else
       respond_ephemeral(interaction, "Prompt cannot be empty.")
+      state
+    end
+  end
+
+  # ============================================================================
+  # /redirect Command
+  # ============================================================================
+
+  defp handle_redirect_interaction(interaction, state) do
+    correction = option_value(interaction, "correction")
+
+    if is_binary(correction) and String.trim(correction) != "" do
+      respond_ephemeral(interaction, "Redirecting…")
+
+      inbound = interaction_to_inbound(interaction, correction, nil, state)
+      inbound = %{inbound | meta: Map.put(inbound.meta || %{}, :queue_mode, :redirect)}
+
+      if allowed_inbound?(inbound, state) and binding_allowed?(inbound, state) do
+        submit_inbound_now(state, inbound)
+      else
+        state
+      end
+    else
+      respond_ephemeral(interaction, "Correction cannot be empty.")
       state
     end
   end

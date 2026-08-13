@@ -76,6 +76,15 @@ defmodule LemonChannels.Adapters.Discord.SlashCommands do
     ]
   }
 
+  @redirect_command %{
+    name: "redirect",
+    description: "Redirect the active run with a correction",
+    type: 1,
+    options: [
+      %{type: 3, name: "correction", description: "Corrected instruction", required: true}
+    ]
+  }
+
   @cancel_command %{
     name: "cancel",
     description: "Cancel the current run",
@@ -486,6 +495,7 @@ defmodule LemonChannels.Adapters.Discord.SlashCommands do
       @model_command,
       @thinking_command,
       @resume_command,
+      @redirect_command,
       @cancel_command,
       @checkpoint_command,
       @rollback_command,
@@ -500,6 +510,7 @@ defmodule LemonChannels.Adapters.Discord.SlashCommands do
     ]
   end
 
+  def redirect_command_schema, do: @redirect_command
   def kanban_command_schema, do: @kanban_command
   def checkpoint_command_schema, do: @checkpoint_command
   def rollback_command_schema, do: @rollback_command

@@ -35,7 +35,8 @@ defmodule LemonRouter.RunOrchestrator do
   - `:session_key` - Session key for routing
   - `:agent_id` - Agent identifier
   - `:prompt` - User prompt text
-  - `:queue_mode` - Queue mode (:collect, :followup, :steer, :steer_backlog, :interrupt)
+  - `:queue_mode` - Queue mode (:collect, :followup, :steer, :steer_backlog, :redirect,
+    :interrupt)
   - `:engine_id` - Optional engine override
   - `:model` - Optional model override (independent of profile binding)
   - `:meta` - Additional metadata

@@ -180,11 +180,13 @@ defmodule LemonRouter.SessionTransitions do
          _now_ms,
          requested_mode
        )
-       when submission.queue_mode in [:steer, :steer_backlog] and is_binary(active_run_id) do
+       when submission.queue_mode in [:steer, :steer_backlog, :redirect] and
+              is_binary(active_run_id) do
     {fallback_mode, steer_mode} =
       case submission.queue_mode do
         :steer -> {:followup, :steer}
         :steer_backlog -> {:collect, :steer_backlog}
+        :redirect -> {:followup, :redirect}
       end
 
     submission =
@@ -220,6 +222,15 @@ defmodule LemonRouter.SessionTransitions do
          requested_mode
        ) do
     enqueue_by_mode(state, %{submission | queue_mode: :collect}, now_ms, requested_mode)
+  end
+
+  defp enqueue_by_mode(
+         %SessionState{} = state,
+         %{queue_mode: :redirect} = submission,
+         now_ms,
+         requested_mode
+       ) do
+    enqueue_by_mode(state, %{submission | queue_mode: :followup}, now_ms, requested_mode)
   end
 
   defp enqueue_by_mode(
@@ -288,6 +299,7 @@ defmodule LemonRouter.SessionTransitions do
   defp normalize_queue_mode_value(:followup), do: :followup
   defp normalize_queue_mode_value(:steer), do: :steer
   defp normalize_queue_mode_value(:steer_backlog), do: :steer_backlog
+  defp normalize_queue_mode_value(:redirect), do: :redirect
   defp normalize_queue_mode_value(:interrupt), do: :interrupt
   defp normalize_queue_mode_value(_), do: :collect
 

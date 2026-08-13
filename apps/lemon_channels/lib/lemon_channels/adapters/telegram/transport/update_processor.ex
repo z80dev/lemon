@@ -342,6 +342,12 @@ defmodule LemonChannels.Adapters.Telegram.Transport.UpdateProcessor do
       trimmed = String.trim_leading(text || "")
 
       cond do
+        match_override?(trimmed, "redirect") ->
+          redirect_override(trimmed, "/redirect", text)
+
+        match_bang_override?(trimmed, "redirect") ->
+          redirect_override(trimmed, "!redirect", text)
+
         match_override?(trimmed, "steer") ->
           {:steer, strip_queue_prefix(trimmed, "/steer")}
 
@@ -361,6 +367,19 @@ defmodule LemonChannels.Adapters.Telegram.Transport.UpdateProcessor do
 
   defp match_override?(text, cmd) do
     Regex.match?(~r/^\/#{cmd}(?:\s|$)/i, text)
+  end
+
+  defp match_bang_override?(text, cmd) do
+    Regex.match?(~r/^!#{cmd}(?:\s|$)/i, text)
+  end
+
+  # Unlike /steer, a bare /redirect carries no correction and is meaningless,
+  # so it falls through to the untouched text instead of becoming an override.
+  defp redirect_override(trimmed, prefix, original_text) do
+    case strip_queue_prefix(trimmed, prefix) do
+      "" -> {nil, original_text}
+      rest -> {:redirect, rest}
+    end
   end
 
   defp strip_queue_prefix(text, prefix) do
