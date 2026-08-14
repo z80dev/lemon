@@ -421,8 +421,6 @@ defmodule LemonMCP.Client.HTTP do
 
   defp normalize_reply({:ok, value}), do: {:ok, value}
 
-  defp normalize_reply(other), do: {:error, {:unexpected_response, other}}
-
   defp response_id(%{id: id}), do: id
   defp response_id(_), do: nil
 

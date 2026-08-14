@@ -79,6 +79,7 @@ defmodule LemonAutomation.CronManager do
   }
 
   alias LemonCore.{Bus, Event, RunStore, SessionKey}
+  alias LemonCore.Events, as: CoreEvents
 
   require Logger
 
@@ -1327,13 +1328,16 @@ defmodule LemonAutomation.CronManager do
 
       RunStore.finalize(forwarded_run_id, summary)
 
+      # The run-store summary keeps `completed` as a plain map — that is the shape its readers
+      # expect — while the bus event carries the typed payload every `:run_completed`
+      # subscriber now pattern-matches.
       event =
         Event.new(
           :run_completed,
-          %{
-            completed: completed,
+          CoreEvents.RunCompleted.new(%{
+            completed: CoreEvents.Completion.from_map(completed),
             duration_ms: run.duration_ms
-          },
+          }),
           %{
             run_id: forwarded_run_id,
             session_key: base_session_key,

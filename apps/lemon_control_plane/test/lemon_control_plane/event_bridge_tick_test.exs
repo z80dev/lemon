@@ -258,7 +258,12 @@ defmodule LemonControlPlane.EventBridgeTickTest do
 
         run_started = LemonCore.Event.new(
           :cron_run_started,
-          %{run: %{id: "run-1", job_id: "job-1"}, job: %{name: "test"}},
+          %{
+            cron_run_id: "run-1",
+            job_id: "job-1",
+            job_name: "test",
+            run: %{id: "run-1", job_id: "job-1"}
+          },
           %{}
         )
 

@@ -41,6 +41,7 @@ defmodule LemonHoncho.Client.Tripwire do
   """
 
   @doc false
+  @spec ensure_workspace(term()) :: no_return()
   @spec ensure_workspace(term(), keyword()) :: no_return()
   def ensure_workspace(_config, _opts \\ []), do: blocked!(:ensure_workspace)
 
@@ -61,30 +62,37 @@ defmodule LemonHoncho.Client.Tripwire do
   def add_messages(_config, _session_id, _messages), do: blocked!(:add_messages)
 
   @doc false
+  @spec session_context(term(), term()) :: no_return()
   @spec session_context(term(), term(), keyword()) :: no_return()
   def session_context(_config, _session_id, _opts \\ []), do: blocked!(:session_context)
 
   @doc false
+  @spec peer_context(term(), term()) :: no_return()
   @spec peer_context(term(), term(), keyword()) :: no_return()
   def peer_context(_config, _peer_id, _opts \\ []), do: blocked!(:peer_context)
 
   @doc false
+  @spec chat(term(), term(), term()) :: no_return()
   @spec chat(term(), term(), term(), keyword()) :: no_return()
   def chat(_config, _peer_id, _query, _opts \\ []), do: blocked!(:chat)
 
   @doc false
+  @spec session_search(term(), term(), term()) :: no_return()
   @spec session_search(term(), term(), term(), keyword()) :: no_return()
   def session_search(_config, _session_id, _query, _opts \\ []), do: blocked!(:session_search)
 
   @doc false
+  @spec workspace_search(term(), term()) :: no_return()
   @spec workspace_search(term(), term(), keyword()) :: no_return()
   def workspace_search(_config, _query, _opts \\ []), do: blocked!(:workspace_search)
 
   @doc false
+  @spec get_peer_card(term(), term()) :: no_return()
   @spec get_peer_card(term(), term(), keyword()) :: no_return()
   def get_peer_card(_config, _peer_id, _opts \\ []), do: blocked!(:get_peer_card)
 
   @doc false
+  @spec set_peer_card(term(), term(), term()) :: no_return()
   @spec set_peer_card(term(), term(), term(), keyword()) :: no_return()
   def set_peer_card(_config, _peer_id, _card, _opts \\ []), do: blocked!(:set_peer_card)
 
@@ -93,6 +101,7 @@ defmodule LemonHoncho.Client.Tripwire do
   def create_conclusions(_config, _conclusions), do: blocked!(:create_conclusions)
 
   @doc false
+  @spec query_conclusions(term(), term()) :: no_return()
   @spec query_conclusions(term(), term(), keyword()) :: no_return()
   def query_conclusions(_config, _query, _opts \\ []), do: blocked!(:query_conclusions)
 

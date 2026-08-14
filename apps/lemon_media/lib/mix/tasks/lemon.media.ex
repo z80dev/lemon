@@ -236,6 +236,8 @@ defmodule Mix.Tasks.Lemon.Media do
     }
   end
 
+  # `MediaJobSupervisor.status/0` always returns a map (its own rescue clause
+  # returns one too), so there is no non-map fallback clause to write here.
   defp safe_worker_status(status) when is_map(status) do
     %{
       running: Map.get(status, :running, 0),
@@ -243,8 +245,6 @@ defmodule Mix.Tasks.Lemon.Media do
       max_concurrency: Map.get(status, :max_concurrency)
     }
   end
-
-  defp safe_worker_status(_status), do: %{}
 
   defp safe_job(job) do
     artifact = Map.get(job, :artifact, %{}) || %{}

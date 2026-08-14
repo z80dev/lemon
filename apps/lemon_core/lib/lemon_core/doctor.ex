@@ -18,7 +18,6 @@ defmodule LemonCore.Doctor do
   alias LemonCore.Doctor.Checks.{
     ACP,
     Browser,
-    Channels,
     Config,
     Cron,
     Extensions,
@@ -44,7 +43,6 @@ defmodule LemonCore.Doctor do
     Runtime,
     Providers,
     Usage,
-    Channels,
     Media,
     Memory,
     Browser,

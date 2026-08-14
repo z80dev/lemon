@@ -396,6 +396,18 @@
     max_age_days: 365
   },
   %{
+    path: "docs/plans/lemon-hermes-gap-audit-2026-08-11.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-08-11],
+    max_age_days: 60
+  },
+  %{
+    path: "docs/plans/lemon-improvement-plan-2026-08-12.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-08-12],
+    max_age_days: 60
+  },
+  %{
     path: "docs/architecture/overview.md",
     owner: "@z80",
     last_reviewed: ~D[2026-08-10],

@@ -2,7 +2,8 @@ defmodule LemonCore.ChatScope do
   @moduledoc """
   Transport-specific chat identification.
 
-  Identifies a unique chat context within a transport (e.g. Telegram, Discord, XMTP).
+  Identifies a unique chat context within a transport (a chat platform, an
+  email thread, an inbound webhook).
   The `topic_id` field is optional and used by transports that support threaded conversations.
   """
 

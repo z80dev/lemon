@@ -56,7 +56,7 @@ defmodule Mix.Tasks.Lemon.Help do
   @fallback %{
     "lemon.new" => "Scaffold a new Lemon agent project (installer archive)",
     "lemon.policy" => "Manage per-route model policies (channel/account/peer/thread)",
-    "lemon.channels" => "Show redacted Telegram and Discord launch readiness",
+    "lemon.channels" => "Show redacted channel launch readiness",
     "lemon.config" => "Validate and inspect Lemon configuration",
     "lemon.proofs" => "Show redacted local proof artifact status",
     "lemon.readiness" => "Show a compact redacted launch-readiness summary",

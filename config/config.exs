@@ -56,11 +56,26 @@ config :lemon_core, :doctor_runtime,
   browser_artifacts: LemonBrowser.Artifacts,
   browser_server: LemonBrowser.LocalServer,
   lsp_server_manager: LemonLsp.ServerManager,
-  channel_registry: LemonChannels.Registry
+  channel_diagnostics: LemonChannels.Doctor.Diagnostics,
+  channel_readiness: LemonChannels.Doctor.Readiness,
+  channel_proofs: LemonChannels.Doctor.ProofSpec
 
 # Diagnostics owned by apps that depend on lemon_core register themselves here.
 # Modules missing from a given build are skipped (see LemonCore.Doctor).
-config :lemon_core, :doctor_checks, [LemonAutomation.Doctor.Checks.Synthesis]
+config :lemon_core, :doctor_checks, [
+  LemonAutomation.Doctor.Checks.Synthesis,
+  LemonChannels.Doctor.Checks.Channels
+]
+
+# Per-platform `[gateway.<id>]` config sections. Each module owns its section,
+# its `enable_<id>` flag, its environment variables and its validation rules,
+# so LemonCore.Config.Gateway never names a chat platform.
+# See LemonCore.Config.Gateway.Channel.
+config :lemon_core, :gateway_channels, [
+  LemonChannels.Adapters.Telegram.Config,
+  LemonChannels.Adapters.Discord.Config,
+  LemonChannels.Adapters.Xmtp.Config
+]
 
 # Environment-variable declarations live with the app that reads them; the
 # framework in LemonCore.Env aggregates whatever is loaded. Apps missing from a

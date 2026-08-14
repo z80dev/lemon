@@ -14,7 +14,7 @@ defmodule LemonCore.Config.ModularTest do
       # Clear test env vars
       [
         "LEMON_DEFAULT_MODEL",
-        "LEMON_GATEWAY_ENABLE_TELEGRAM",
+        "LEMON_GATEWAY_ENABLE_WEBHOOK",
         "LEMON_LOG_LEVEL",
         "LEMON_TUI_THEME",
         "ANTHROPIC_API_KEY"
@@ -55,7 +55,8 @@ defmodule LemonCore.Config.ModularTest do
       # Gateway defaults
       assert is_integer(config.gateway.max_concurrent_runs)
       assert is_binary(config.gateway.default_engine)
-      assert is_boolean(config.gateway.enable_telegram)
+      assert is_map(config.gateway.enabled_channels)
+      assert is_map(config.gateway.channels)
 
       # TUI defaults
       assert is_binary(config.tui.theme)
@@ -67,14 +68,14 @@ defmodule LemonCore.Config.ModularTest do
 
     test "environment variables override defaults" do
       System.put_env("LEMON_DEFAULT_MODEL", "gpt-4o")
-      System.put_env("LEMON_GATEWAY_ENABLE_TELEGRAM", "true")
+      System.put_env("LEMON_GATEWAY_ENABLE_WEBHOOK", "true")
       System.put_env("LEMON_LOG_LEVEL", "debug")
       System.put_env("LEMON_TUI_THEME", "dark")
 
       config = Modular.load()
 
       assert config.agent.default_model == "gpt-4o"
-      assert config.gateway.enable_telegram == true
+      assert config.gateway.enable_webhook == true
       assert config.logging.level == :debug
       assert config.tui.theme == "dark"
     end
@@ -140,7 +141,8 @@ defmodule LemonCore.Config.ModularTest do
       assert is_integer(config.gateway.max_concurrent_runs)
       assert is_binary(config.gateway.default_engine)
       assert is_list(config.gateway.bindings)
-      assert is_map(config.gateway.telegram)
+      assert is_map(config.gateway.enabled_channels)
+      assert is_map(config.gateway.channels)
     end
 
     test "providers config is resolved correctly" do

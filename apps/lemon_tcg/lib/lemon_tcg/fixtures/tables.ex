@@ -25,7 +25,7 @@ defmodule LemonTcg.Fixtures.Tables do
   @impl true
   def init(_opts) do
     for table <- @tables, :ets.whereis(table) == :undefined do
-      :ets.new(table, [:named_table, :public, :set, read_concurrency: true])
+      _ = :ets.new(table, [:named_table, :public, :set, read_concurrency: true])
     end
 
     {:ok, %{}}

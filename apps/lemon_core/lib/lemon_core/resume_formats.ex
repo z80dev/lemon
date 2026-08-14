@@ -19,10 +19,10 @@ defmodule LemonCore.ResumeFormats do
   ## Why application env and not a GenServer
 
   `LemonCore.ResumeToken.is_resume_line/1` runs per line while truncating a
-  message for Telegram, so lookups have to be cheap and must not depend on a
-  process being alive. Registration, by contrast, happens once per application
-  at boot — and OTP starts applications one at a time, which is what serialises
-  the writes here.
+  message for a chat transport, so lookups have to be cheap and must not depend
+  on a process being alive. Registration, by contrast, happens once per
+  application at boot — and OTP starts applications one at a time, which is
+  what serialises the writes here.
   """
 
   alias LemonCore.ResumeFormat

@@ -133,14 +133,22 @@ defmodule LemonControlPlane.EventBridgeTest do
 
       send(
         Process.whereis(EventBridge),
-        LemonCore.Event.new(:delta, %{text: "ignored"}, %{run_id: other_run})
+        LemonCore.Event.new(
+          :delta,
+          %{run_id: other_run, seq: 1, text: "ignored"},
+          %{run_id: other_run}
+        )
       )
 
       refute_receive {:event, "chat", %{"runId" => ^other_run}, _}, 200
 
       send(
         Process.whereis(EventBridge),
-        LemonCore.Event.new(:delta, %{text: "delivered"}, %{run_id: subscribed_run})
+        LemonCore.Event.new(
+          :delta,
+          %{run_id: subscribed_run, seq: 1, text: "delivered"},
+          %{run_id: subscribed_run}
+        )
       )
 
       assert_receive {:event, "chat", %{"runId" => ^subscribed_run}, _}, 500
@@ -272,7 +280,7 @@ defmodule LemonControlPlane.EventBridgeTest do
                         "sessionKey" => ^session_key,
                         "action" => %{
                           "id" => "tool_call_missing_tool",
-                          "kind" => "tool",
+                          "kind" => :tool,
                           "title" => "missing_tool_for_runner",
                           "detail" => %{
                             result_meta: %{
@@ -630,6 +638,7 @@ defmodule LemonControlPlane.EventBridgeTest do
             "approval_id" => "approval-oauth-1",
             "decision" => "approve_once",
             "pending" => %{
+              "id" => "approval-oauth-1",
               "run_id" => "run-oauth-1",
               "session_key" => "session:oauth",
               "agent_id" => "default",
@@ -670,6 +679,7 @@ defmodule LemonControlPlane.EventBridgeTest do
             approval_id: "approval-timeout-1",
             decision: :timeout,
             pending: %{
+              id: "approval-timeout-1",
               run_id: "run-timeout-1",
               session_key: "session:timeout",
               agent_id: "default",
@@ -702,7 +712,12 @@ defmodule LemonControlPlane.EventBridgeTest do
         event =
           LemonCore.Event.new(
             :cron_run_started,
-            %{run: %{id: "cron-run-1", job_id: "job-1"}, job: %{name: "test job"}},
+            %{
+              cron_run_id: "cron-run-1",
+              job_id: "job-1",
+              job_name: "test job",
+              run: %{id: "cron-run-1", job_id: "job-1"}
+            },
             %{}
           )
 

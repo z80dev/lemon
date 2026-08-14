@@ -89,7 +89,7 @@ defmodule LemonTcg.MarketData.Sources.Fixture do
     do: put_override(:sol_price, :global, price * 1.0)
 
   def clear_overrides do
-    ensure_table()
+    _ = ensure_table()
     :ets.delete_all_objects(@table)
     :ok
   end
@@ -101,7 +101,7 @@ defmodule LemonTcg.MarketData.Sources.Fixture do
   end
 
   defp override(kind, key) do
-    ensure_table()
+    _ = ensure_table()
 
     case :ets.lookup(@table, {kind, key}) do
       [{_, value}] -> value
@@ -110,7 +110,7 @@ defmodule LemonTcg.MarketData.Sources.Fixture do
   end
 
   defp put_override(kind, key, value) do
-    ensure_table()
+    _ = ensure_table()
     :ets.insert(@table, {{kind, key}, value})
     :ok
   end

@@ -49,6 +49,15 @@ compliance suite runs against your module.
   invisible to the platform" is the common way a third-party implementation
   fails, so the suites check that your adapter, engine or provider actually
   appears in the registry after it registers.
+- `LemonPlatformTest.EventsCase` covers `LemonCore.Events` payload modules —
+  registry completeness, `from_map/1` round-trip and string-key acceptance,
+  strict `new/1`, `Introspection` parity between the struct and the map it
+  replaced, JSON encodability, and `Bus.broadcast_event/4` envelope discipline
+  under both bus backends. It also asserts that a payload module does **not**
+  implement `Access` (`LemonPlatformTest.EventsCase.implements_access?/1`):
+  payloads are pattern-matched or read by field, and a consumer holding one that
+  may still be a legacy map coerces it with `LemonCore.Events.coerce/2`. Reading
+  a payload by key is what lets a field rename ship as a silent `nil`.
 
 ### Notes on safety
 

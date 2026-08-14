@@ -92,7 +92,7 @@ defmodule LemonCli.Onboarding.TerminalUI do
   # buffered line-editing state, and a brief yield lets the IO system
   # complete the transition before the TUI's InputReader starts reading.
   defp flush_stdin do
-    :io.setopts(:standard_io, binary: true)
+    _ = :io.setopts(:standard_io, binary: true)
     Process.sleep(10)
   rescue
     _ -> :ok

@@ -68,19 +68,38 @@ defmodule LemonControlPlane.Methods.AgentWait do
   defp wait_loop(run_id, timeout_ms) do
     receive do
       %LemonCore.Event{type: :run_completed, payload: payload} ->
-        LemonCore.Bus.unsubscribe("run:#{run_id}")
-        completed = payload[:completed] || payload
-        {:ok, format_result(completed)}
+        completed_result(run_id, payload)
 
       %{type: :run_completed, payload: payload} ->
-        LemonCore.Bus.unsubscribe("run:#{run_id}")
-        completed = payload[:completed] || payload
-        {:ok, format_result(completed)}
+        completed_result(run_id, payload)
     after
       timeout_ms ->
         LemonCore.Bus.unsubscribe("run:#{run_id}")
         {:error, :timeout}
     end
+  end
+
+  # A `:run_completed` payload is a `LemonCore.Events.RunCompleted`. A legacy map — the cron
+  # summary `LemonAutomation` forwards onto the session topic, or an injected event — is
+  # coerced into one here, so the completion is read by field and never through `Access`. The
+  # bare-map clause keeps a payload too incomplete to coerce (one whose nested completion has
+  # no `:ok`) unwrapping the same way it did before the typed payloads landed.
+  defp completed_result(run_id, payload) do
+    LemonCore.Bus.unsubscribe("run:#{run_id}")
+
+    completed =
+      case LemonCore.Events.coerce(:run_completed, payload) do
+        %LemonCore.Events.RunCompleted{completed: completed} when not is_nil(completed) ->
+          completed
+
+        %{completed: completed} when not is_nil(completed) ->
+          completed
+
+        other ->
+          other
+      end
+
+    {:ok, format_result(completed)}
   end
 
   defp format_result(completed) when is_map(completed) do

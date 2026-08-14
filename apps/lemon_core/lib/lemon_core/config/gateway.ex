@@ -1,10 +1,19 @@
 defmodule LemonCore.Config.Gateway do
   @moduledoc """
-  Gateway configuration for Telegram, SMS, and engine management.
+  Gateway configuration: engine management, bindings, queueing and the
+  per-platform channel sections.
 
   Inspired by Ironclaw's modular config pattern, this module handles
-  gateway-specific configuration including Telegram bot settings,
-  SMS configuration, engine bindings, and queue management.
+  gateway-specific configuration including engine bindings, SMS and voice
+  settings, and queue management.
+
+  Anything named after a specific chat platform is resolved by the application
+  that implements it: the modules registered under
+  `config :lemon_core, :gateway_channels` own their `[gateway.<id>]` sub-table,
+  their `enable_<id>` flag and their own environment variables. See
+  `LemonCore.Config.Gateway.Channel`. Their results are exposed as
+  `channels` and `enabled_channels`, which `LemonCore.Config` flattens back
+  onto the legacy gateway map as `gateway[<id>]` and `gateway[:enable_<id>]`.
 
   ## Configuration
 
@@ -15,36 +24,27 @@ defmodule LemonCore.Config.Gateway do
       default_engine = "lemon"
       default_cwd = "~/workspace"
       auto_resume = false
-      enable_telegram = true
-      enable_discord = false
-      enable_xmtp = false
       enable_webhook = false
       require_engine_lock = true
       engine_lock_timeout_ms = 60000
 
       [[gateway.bindings]]
-      transport = "telegram"
+      transport = "foo"
       chat_id = 123456789
       agent_id = "default"
-
-      [gateway.telegram]
-      bot_token_secret = "telegram_bot_token"
-
-      [gateway.telegram.compaction]
-      enabled = true
-      context_window_tokens = 400000
-      reserve_tokens = 16384
-      trigger_ratio = 0.9
 
   Environment variables override file configuration:
   - `LEMON_GATEWAY_MAX_CONCURRENT_RUNS`
   - `LEMON_GATEWAY_DEFAULT_ENGINE`
   - `LEMON_GATEWAY_DEFAULT_CWD`
-  - `LEMON_GATEWAY_ENABLE_TELEGRAM`
   - `LEMON_GATEWAY_REQUIRE_ENGINE_LOCK`
   - `LEMON_GATEWAY_ENGINE_LOCK_TIMEOUT_MS`
+
+  A registered channel declares and reads its own `LEMON_GATEWAY_ENABLE_<ID>`
+  variable; the library never names one.
   """
 
+  alias LemonCore.Config.Gateway.Channel
   alias LemonCore.Env
 
   defstruct [
@@ -52,9 +52,6 @@ defmodule LemonCore.Config.Gateway do
     :default_engine,
     :default_cwd,
     :auto_resume,
-    :enable_telegram,
-    :enable_discord,
-    :enable_xmtp,
     :enable_webhook,
     :require_engine_lock,
     :engine_lock_timeout_ms,
@@ -62,10 +59,9 @@ defmodule LemonCore.Config.Gateway do
     :bindings,
     :sms,
     :queue,
-    :telegram,
-    :discord,
+    :enabled_channels,
+    :channels,
     :email,
-    :xmtp,
     :webhook,
     :voice,
     :engines
@@ -81,23 +77,6 @@ defmodule LemonCore.Config.Gateway do
           mode: String.t() | nil,
           cap: integer() | nil,
           drop: String.t() | nil
-        }
-
-  @type telegram_compaction :: %{
-          enabled: boolean(),
-          context_window_tokens: integer(),
-          reserve_tokens: integer(),
-          trigger_ratio: float()
-        }
-
-  @type telegram_config :: %{
-          token: String.t() | nil,
-          bot_token_secret: String.t() | nil,
-          default_account_id: String.t() | nil,
-          default_chat_id: String.t() | integer() | nil,
-          default_thread_id: String.t() | integer() | nil,
-          default_topic_id: String.t() | integer() | nil,
-          compaction: telegram_compaction()
         }
 
   @type voice_config :: %{
@@ -126,9 +105,6 @@ defmodule LemonCore.Config.Gateway do
           default_engine: String.t(),
           default_cwd: String.t() | nil,
           auto_resume: boolean(),
-          enable_telegram: boolean(),
-          enable_discord: boolean(),
-          enable_xmtp: boolean(),
           enable_webhook: boolean(),
           require_engine_lock: boolean(),
           engine_lock_timeout_ms: integer(),
@@ -136,10 +112,9 @@ defmodule LemonCore.Config.Gateway do
           bindings: [binding()],
           sms: map(),
           queue: queue_config(),
-          telegram: telegram_config(),
-          discord: map(),
+          enabled_channels: %{optional(atom()) => boolean()},
+          channels: %{optional(atom()) => map()},
           email: map(),
-          xmtp: map(),
           webhook: map(),
           voice: voice_config(),
           engines: map()
@@ -153,17 +128,13 @@ defmodule LemonCore.Config.Gateway do
   @spec resolve(map()) :: t()
   def resolve(settings) do
     gateway_settings = settings["gateway"] || %{}
+    channels = Channel.registered()
 
     %__MODULE__{
       max_concurrent_runs: resolve_max_concurrent_runs(gateway_settings),
       default_engine: resolve_default_engine(gateway_settings),
       default_cwd: resolve_default_cwd(gateway_settings),
       auto_resume: resolve_auto_resume(gateway_settings),
-      enable_telegram: resolve_enable_telegram(gateway_settings),
-      enable_discord:
-        resolve_enable_flag(gateway_settings, "enable_discord", :lemon_gateway_enable_discord),
-      enable_xmtp:
-        resolve_enable_flag(gateway_settings, "enable_xmtp", :lemon_gateway_enable_xmtp),
       enable_webhook:
         resolve_enable_flag(gateway_settings, "enable_webhook", :lemon_gateway_enable_webhook),
       require_engine_lock: resolve_require_engine_lock(gateway_settings),
@@ -172,10 +143,9 @@ defmodule LemonCore.Config.Gateway do
       bindings: resolve_bindings(gateway_settings),
       sms: resolve_sms(gateway_settings),
       queue: resolve_queue(gateway_settings),
-      telegram: resolve_telegram(gateway_settings),
-      discord: resolve_discord(gateway_settings),
+      enabled_channels: resolve_enabled_channels(gateway_settings, channels),
+      channels: resolve_channels(gateway_settings, channels),
       email: resolve_passthrough(gateway_settings, "email"),
-      xmtp: resolve_xmtp(gateway_settings),
       webhook: resolve_passthrough(gateway_settings, "webhook"),
       voice: resolve_voice(gateway_settings),
       engines: resolve_engines(gateway_settings)
@@ -208,15 +178,23 @@ defmodule LemonCore.Config.Gateway do
     )
   end
 
-  defp resolve_enable_telegram(settings) do
-    Env.get(:lemon_gateway_enable_telegram,
-      default:
-        if(is_nil(settings["enable_telegram"]), do: false, else: settings["enable_telegram"])
-    )
-  end
-
   defp resolve_enable_flag(settings, key, name) do
     Env.get(name, default: if(is_nil(settings[key]), do: false, else: settings[key]))
+  end
+
+  defp resolve_enabled_channels(settings, modules) do
+    Map.new(modules, fn module ->
+      id = module.id()
+      configured = resolve_bool_field(settings["enable_#{id}"], false)
+      {id, module.enabled?(configured) == true}
+    end)
+  end
+
+  defp resolve_channels(settings, modules) do
+    Map.new(modules, fn module ->
+      id = module.id()
+      {id, module.resolve(settings[Atom.to_string(id)] || %{})}
+    end)
   end
 
   defp resolve_require_engine_lock(settings) do
@@ -282,102 +260,6 @@ defmodule LemonCore.Config.Gateway do
     }
   end
 
-  defp resolve_telegram(settings) do
-    telegram = settings["telegram"] || %{}
-
-    # Pass through all telegram config keys (atomized) so the transport sees
-    # allowed_chat_ids, poll_interval_ms, debounce_ms, deny_unbound_chats, etc.
-    base =
-      Enum.reduce(telegram, %{}, fn {k, v}, acc ->
-        Map.put(acc, safe_to_atom(k), v)
-      end)
-
-    Map.merge(base, %{
-      token: resolve_telegram_token(telegram),
-      bot_token_secret: normalize_optional_string(telegram["bot_token_secret"]),
-      compaction: resolve_telegram_compaction(telegram)
-    })
-  end
-
-  defp resolve_telegram_token(telegram) do
-    token = telegram["bot_token"] || telegram["token"]
-
-    cond do
-      is_nil(token) ->
-        nil
-
-      is_binary(token) and String.starts_with?(token, "${") and String.ends_with?(token, "}") ->
-        env_var = token |> String.slice(2..-2//1)
-        Env.string(env_var)
-
-      true ->
-        token
-    end
-  end
-
-  defp resolve_telegram_compaction(telegram) do
-    compaction = telegram["compaction"] || %{}
-
-    %{
-      enabled:
-        Env.get(:lemon_telegram_compaction_enabled,
-          default: if(is_nil(compaction["enabled"]), do: true, else: compaction["enabled"])
-        ),
-      context_window_tokens:
-        Env.get(:lemon_telegram_compaction_context_window,
-          default: compaction["context_window_tokens"] || 400_000
-        ),
-      reserve_tokens:
-        Env.get(:lemon_telegram_compaction_reserve_tokens,
-          default: compaction["reserve_tokens"] || 16_384
-        ),
-      trigger_ratio:
-        Env.get(:lemon_telegram_compaction_trigger_ratio,
-          default: compaction["trigger_ratio"] || 0.9
-        )
-    }
-  end
-
-  defp resolve_discord(settings) do
-    discord = settings["discord"] || %{}
-
-    base = %{
-      bot_token: normalize_optional_string(discord["bot_token"]),
-      bot_token_secret: normalize_optional_string(discord["bot_token_secret"]),
-      default_account_id: normalize_optional_string(discord["default_account_id"]),
-      default_channel_id: normalize_optional_string_or_integer(discord["default_channel_id"]),
-      default_thread_id: normalize_optional_string_or_integer(discord["default_thread_id"]),
-      allowed_guild_ids: discord["allowed_guild_ids"],
-      allowed_channel_ids: discord["allowed_channel_ids"],
-      deny_unbound_channels: resolve_bool_field(discord["deny_unbound_channels"], false),
-      message_content_intent_enabled:
-        resolve_bool_field(discord["message_content_intent_enabled"], false),
-      files: discord["files"]
-    }
-
-    reject_nil_values(base)
-  end
-
-  defp resolve_xmtp(settings) do
-    xmtp = settings["xmtp"] || %{}
-
-    base = %{
-      wallet_key_secret: normalize_optional_string(xmtp["wallet_key_secret"])
-    }
-
-    xmtp
-    |> Enum.reduce(base, fn {k, v}, acc ->
-      atom_key = safe_to_atom(k)
-
-      if Map.has_key?(acc, atom_key) do
-        acc
-      else
-        Map.put(acc, atom_key, v)
-      end
-    end)
-    |> reject_nil_values()
-  end
-
   defp resolve_voice(settings) do
     voice = settings["voice"] || %{}
 
@@ -428,10 +310,6 @@ defmodule LemonCore.Config.Gateway do
   defp normalize_optional_string(str) when is_binary(str), do: str
   defp normalize_optional_string(_), do: nil
 
-  defp normalize_optional_string_or_integer(nil), do: nil
-  defp normalize_optional_string_or_integer(value) when is_integer(value), do: value
-  defp normalize_optional_string_or_integer(value), do: normalize_optional_string(value)
-
   defp reject_nil_values(map) do
     map
     |> Enum.reject(fn {_k, v} -> is_nil(v) end)
@@ -452,18 +330,17 @@ defmodule LemonCore.Config.Gateway do
   Returns the default gateway configuration as a map.
 
   This is used as the base configuration that gets overridden by
-  user settings.
+  user settings. Every registered channel contributes its own disabled flag
+  and empty section, so the shape follows the build rather than a hardcoded
+  list of platforms.
   """
   @spec defaults() :: map()
   def defaults do
-    %{
+    base = %{
       "max_concurrent_runs" => 2,
       "default_engine" => "lemon",
       "default_cwd" => nil,
       "auto_resume" => false,
-      "enable_telegram" => false,
-      "enable_discord" => false,
-      "enable_xmtp" => false,
       "enable_webhook" => false,
       "require_engine_lock" => true,
       "engine_lock_timeout_ms" => 60_000,
@@ -475,13 +352,18 @@ defmodule LemonCore.Config.Gateway do
         "cap" => nil,
         "drop" => nil
       },
-      "telegram" => %{},
-      "discord" => %{},
       "email" => %{},
-      "xmtp" => %{},
       "webhook" => %{},
       "voice" => %{},
       "engines" => %{}
     }
+
+    Enum.reduce(Channel.ids(), base, fn id, acc ->
+      section = Atom.to_string(id)
+
+      acc
+      |> Map.put("enable_#{section}", false)
+      |> Map.put(section, %{})
+    end)
   end
 end

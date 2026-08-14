@@ -38,11 +38,16 @@
   # configuration gap (contrast with the Nostrum `unknown_function` warnings
   # in the same files, which ARE fixable by adding :nostrum to
   # plt_add_apps and are intentionally NOT ignored here; see the burndown
-  # plan). Matched by exact short-description text (not {file, warning}) so
-  # this doesn't also swallow a genuine unknown_function typo elsewhere in
-  # these large, actively-edited transport files.
-  {"lib/lemon_channels/adapters/discord/transport.ex:2106:22:unknown_function Function IEx.Helpers.recompile/0 does not exist.",
-   :unknown_function},
-  {"lib/lemon_channels/adapters/telegram/transport.ex:1163:24:unknown_function Function IEx.Helpers.recompile/0 does not exist.",
-   :unknown_function}
+  # plan).
+  #
+  # Matched by a regex over the warning's short description rather than the
+  # exact `file:line:col:...` text: an exact-text entry is pinned to a line
+  # number, and these two transport files are among the most heavily edited in
+  # the umbrella. A pinned entry that drifts is not merely useless — dialyxir
+  # treats an unused filter as an error and then DISCARDS the entire formatted
+  # warning list (Dialyxir.Dialyzer.Runner.run), so one drifted line number
+  # blanks the whole Dialyzer report and every app looks clean. The regex is
+  # still scoped to these two files and to this one message, so it cannot
+  # swallow a genuine `unknown_function` typo elsewhere in them.
+  ~r{^lib/lemon_channels/adapters/(discord|telegram)/transport\.ex:\d+:\d+:unknown_function Function IEx\.Helpers\.recompile/0 does not exist\.$}
 ]

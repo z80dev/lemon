@@ -23,15 +23,15 @@ defmodule LemonCore.EngineInfoBridgeTest do
   end
 
   defmodule GatewayConfigStub do
-    def replacement_config, do: %{bindings: [%{transport: :telegram}]}
+    def replacement_config, do: %{bindings: [%{transport: :demo}]}
   end
 
   defmodule KeywordConfigStub do
-    def replacement_config, do: [enable_telegram: true]
+    def replacement_config, do: [enable_demo: true]
   end
 
   defmodule ListConfigStub do
-    def replacement_config, do: [%{transport: :discord}]
+    def replacement_config, do: [%{transport: :demo}]
   end
 
   defmodule EmptyConfigStub do
@@ -142,19 +142,19 @@ defmodule LemonCore.EngineInfoBridgeTest do
     test "returns a map as-is" do
       EngineInfoBridge.configure(gateway_config: GatewayConfigStub)
 
-      assert {:ok, %{bindings: [%{transport: :telegram}]}} = EngineInfoBridge.gateway_config()
+      assert {:ok, %{bindings: [%{transport: :demo}]}} = EngineInfoBridge.gateway_config()
     end
 
     test "normalizes a keyword list into a map" do
       EngineInfoBridge.configure(gateway_config: KeywordConfigStub)
 
-      assert EngineInfoBridge.gateway_config() == {:ok, %{enable_telegram: true}}
+      assert EngineInfoBridge.gateway_config() == {:ok, %{enable_demo: true}}
     end
 
     test "treats a bare list as bindings, matching the previous reader" do
       EngineInfoBridge.configure(gateway_config: ListConfigStub)
 
-      assert EngineInfoBridge.gateway_config() == {:ok, %{bindings: [%{transport: :discord}]}}
+      assert EngineInfoBridge.gateway_config() == {:ok, %{bindings: [%{transport: :demo}]}}
     end
 
     test "reports :none when the runtime holds no replacement config" do

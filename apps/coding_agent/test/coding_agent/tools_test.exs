@@ -86,12 +86,13 @@ defmodule CodingAgent.ToolsTest do
       end)
     end
 
-    # Builtins only: satellite tools (x_api, lemon_honcho) register through
-    # LemonAgent.ToolRegistry from their own apps, which are not deps of
-    # coding_agent. See tool_precedence_test.exs for registry contributions.
-    test "returns exactly 52 tools" do
+    # Pins the platform's own 52 builtins. Satellite tools (x_api, lemon_honcho)
+    # register through LemonAgent.ToolRegistry when their app is running in the
+    # test VM, so they are subtracted rather than counted. See
+    # tool_precedence_test.exs for registry contributions.
+    test "returns exactly 52 builtin tools plus registered extras" do
       tools = Tools.coding_tools(@test_cwd)
-      assert length(tools) == 52
+      assert length(builtins_only(tools)) == 52
     end
 
     test "passes cwd to each tool" do
@@ -110,7 +111,7 @@ defmodule CodingAgent.ToolsTest do
 
       # Should not raise any errors
       assert is_list(tools)
-      assert length(tools) == 52
+      assert length(builtins_only(tools)) == 52
     end
   end
 
@@ -246,9 +247,14 @@ defmodule CodingAgent.ToolsTest do
       end)
     end
 
-    test "returns 53 tools (includes truncate plus skill_manage, memory tools, session_search, checkpoint, browser, media status/generation, kanban, LSP diagnostics, and parent_question)" do
+    test "returns 53 builtin tools (includes truncate plus skill_manage, memory tools, session_search, checkpoint, browser, media status/generation, kanban, LSP diagnostics, and parent_question) plus registered extras" do
       tools_map = Tools.all_tools(@test_cwd)
-      assert map_size(tools_map) == 53
+
+      registered =
+        MapSet.new(LemonAgent.ToolRegistry.all(), fn {name, _} -> Atom.to_string(name) end)
+
+      builtins = Map.reject(tools_map, fn {name, _tool} -> MapSet.member?(registered, name) end)
+      assert map_size(builtins) == 53
     end
 
     test "tool names match map keys" do
@@ -732,5 +738,15 @@ defmodule CodingAgent.ToolsTest do
       assert Map.has_key?(all, "truncate")
       refute "truncate" in coding_names
     end
+  end
+
+  # Strips tools contributed at runtime through LemonAgent.ToolRegistry
+  # (x_api, lemon_honcho, ...) so builtin-count assertions hold whether or
+  # not those apps are running in this test VM.
+  defp builtins_only(tools) do
+    registered =
+      MapSet.new(LemonAgent.ToolRegistry.all(), fn {name, _} -> Atom.to_string(name) end)
+
+    Enum.reject(tools, &MapSet.member?(registered, &1.name))
   end
 end

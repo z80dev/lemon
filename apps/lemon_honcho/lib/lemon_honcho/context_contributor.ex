@@ -306,8 +306,6 @@ defmodule LemonHoncho.ContextContributor do
     |> result()
   end
 
-  defp section(_other), do: :skip
-
   defp spec(_title, _placement, ""), do: nil
   defp spec(title, placement, body), do: %{title: title, body: body, placement: placement}
 

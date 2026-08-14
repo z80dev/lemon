@@ -147,7 +147,6 @@ defmodule LemonTcg.Evm.Secp256k1 do
   end
 
   defp add(:infinity, point), do: point
-  defp add(point, :infinity), do: point
 
   defp add({x1, y1}, {x2, y2}) do
     cond do
@@ -163,8 +162,6 @@ defmodule LemonTcg.Evm.Secp256k1 do
     y3 = mod(slope * (x1 - x3) - y1, @p)
     {x3, y3}
   end
-
-  defp double(:infinity), do: :infinity
 
   defp double({x, y}) do
     slope = mod_mul(3 * x * x, inverse(mod(2 * y, @p), @p), @p)

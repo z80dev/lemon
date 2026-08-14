@@ -12,7 +12,6 @@ defmodule LemonCore do
   - `LemonCore.Introspection` - Canonical introspection event contract and persistence API
   - `LemonCore.UsageStore` - Shared usage records, summaries, and quota counters
   - `LemonCore.UsageDiagnostics` - Redacted usage aggregate diagnostics
-  - `LemonCore.Doctor.ChannelReadiness` - Redacted Telegram/Discord launch-gate readiness
   - `LemonCore.Telemetry` - Telemetry event helpers
   - `LemonCore.Clock` - Time utilities
   - `LemonCore.Config` - Configuration access

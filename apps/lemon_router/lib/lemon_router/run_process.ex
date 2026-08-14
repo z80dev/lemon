@@ -593,14 +593,15 @@ defmodule LemonRouter.RunProcess do
         event =
           LemonCore.Event.new(
             :run_completed,
-            %{
-              completed: %{
-                ok: false,
-                error: :gateway_run_missing_after_start,
-                answer: ""
-              },
+            Events.RunCompleted.new(%{
+              completed:
+                Events.Completion.new(%{
+                  ok: false,
+                  error: :gateway_run_missing_after_start,
+                  answer: ""
+                }),
               duration_ms: nil
-            },
+            }),
             %{
               run_id: state.run_id,
               session_key: state.session_key,

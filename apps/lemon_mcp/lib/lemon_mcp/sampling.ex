@@ -73,7 +73,9 @@ defmodule LemonMCP.Sampling do
   defp enforce_max_tokens(%{max_tokens: max_tokens} = summary, opts) do
     limit = Keyword.get(opts, :max_tokens, @default_max_tokens)
 
-    if is_integer(max_tokens) and max_tokens <= limit do
+    # max_tokens is guaranteed to be an integer here: the nil case is
+    # handled by the clause above and integer_value/2 only returns integers
+    if max_tokens <= limit do
       :ok
     else
       {:error, policy_error(:max_tokens_exceeded, summary)}
@@ -157,8 +159,6 @@ defmodule LemonMCP.Sampling do
       detail_hash: hash(detail)
     }
   end
-
-  defp safe_reason(reason), do: %{kind: "policy_error", detail_hash: hash(reason)}
 
   defp requested_model(params) do
     string_value(params, "model") ||

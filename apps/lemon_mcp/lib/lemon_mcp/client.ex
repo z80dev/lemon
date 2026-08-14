@@ -391,7 +391,7 @@ defmodule LemonMCP.Client do
 
   @impl true
   def terminate(_reason, state) do
-    do_close(state)
+    _ = do_close(state)
     :ok
   end
 
@@ -463,7 +463,7 @@ defmodule LemonMCP.Client do
             {:noreply, %{state | pending_requests: new_pending}}
 
           {:error, reason} ->
-            Process.cancel_timer(timer)
+            _ = Process.cancel_timer(timer)
             {:reply, {:error, {:send_failed, reason}}, state}
         end
 
@@ -517,7 +517,7 @@ defmodule LemonMCP.Client do
         {:noreply, state}
 
       {pending, new_state} ->
-        Process.cancel_timer(pending.timer)
+        _ = Process.cancel_timer(pending.timer)
         GenServer.reply(pending.from, {:ok, result.tools})
         {:noreply, new_state}
     end
@@ -530,7 +530,7 @@ defmodule LemonMCP.Client do
         {:noreply, state}
 
       {pending, new_state} ->
-        Process.cancel_timer(pending.timer)
+        _ = Process.cancel_timer(pending.timer)
         GenServer.reply(pending.from, {:error, {:rpc_error, error}})
         {:noreply, new_state}
     end
@@ -542,7 +542,7 @@ defmodule LemonMCP.Client do
         {:noreply, state}
 
       {pending, new_state} ->
-        Process.cancel_timer(pending.timer)
+        _ = Process.cancel_timer(pending.timer)
 
         response =
           if result.isError do
@@ -563,7 +563,7 @@ defmodule LemonMCP.Client do
         {:noreply, state}
 
       {pending, new_state} ->
-        Process.cancel_timer(pending.timer)
+        _ = Process.cancel_timer(pending.timer)
         GenServer.reply(pending.from, {:error, {:rpc_error, error}})
         {:noreply, new_state}
     end
@@ -620,7 +620,7 @@ defmodule LemonMCP.Client do
         {:noreply, state}
 
       {pending, new_state} ->
-        Process.cancel_timer(pending.timer)
+        _ = Process.cancel_timer(pending.timer)
         GenServer.reply(pending.from, {:error, {:rpc_error, error}})
         {:noreply, new_state}
     end
@@ -664,11 +664,13 @@ defmodule LemonMCP.Client do
   end
 
   defp send_response(response, state) do
+    # response is always a map here (either a JSONRPCResponse struct or a
+    # plain error map), so the only meaningful branch is struct vs map
     encoded =
-      cond do
-        is_struct(response) -> Protocol.encode(response)
-        is_map(response) -> Jason.encode(response)
-        true -> {:error, {:unsupported_response, response}}
+      if is_struct(response) do
+        Protocol.encode(response)
+      else
+        Jason.encode(response)
       end
 
     case encoded do
@@ -710,7 +712,7 @@ defmodule LemonMCP.Client do
         {:noreply, state}
 
       {pending, new_state} ->
-        Process.cancel_timer(pending.timer)
+        _ = Process.cancel_timer(pending.timer)
         GenServer.reply(pending.from, response)
         {:noreply, new_state}
     end
@@ -723,7 +725,7 @@ defmodule LemonMCP.Client do
 
     # Cancel all pending requests
     Enum.each(state.pending_requests, fn {_id, pending} ->
-      Process.cancel_timer(pending.timer)
+      _ = Process.cancel_timer(pending.timer)
       GenServer.reply(pending.from, {:error, :connection_closed})
     end)
 

@@ -471,6 +471,47 @@ Auto-refresh is owned by the `XApi.TokenManager` GenServer in `apps/x_api`; the 
 - Preview `/rollback` slash commands alias the same redacted checkpoint rollback flow for Hermes-style command parity.
 - Add `LemonChannels.Adapters.Discord` to `config :lemon_channels, :adapters`
 
+## Doctor Diagnostics
+
+`LemonChannels.Doctor.Diagnostics` (config diagnostics), `Doctor.Readiness`
+(launch-gate summary), `Doctor.Checks.Channels` (the doctor check) and
+`Doctor.ProofSpec` (the per-channel smoke-proof vocabulary) live here rather
+than in `lemon_core`, which must not name a chat platform. They reach the
+doctor framework through the reference runtime's registrations in
+`config/config.exs`: `:doctor_runtime` keys `channel_diagnostics:`,
+`channel_readiness:` and `channel_proofs:`, plus the `:doctor_checks` list.
+`ProofSpec` implements `LemonCore.Doctor.ChannelProofs`; adding a platform gate
+or proof check name means editing `ProofSpec`, not core.
+
+All of it must stay redacted. Discord DM, free-response, reconnect, slash
+registration, deterministic slash and real client-click gates use
+`Doctor.Diagnostics` plus sanitized `LemonCore.Doctor.ProofDiagnostics`
+status/reason kinds, never raw Discord IDs, message bodies, bot tokens or
+secret names. Free-response checks distinguish a missing local Message Content
+Intent declaration from proof artifacts that still report Message Content
+Intent or unmentioned-message delivery drift after declaration. Slash
+client-click checks preserve stable reason kinds for missing, invalid,
+non-promotable and stale proof artifacts, so doctor and support bundles can
+point operators at the exact wait-mode proof step.
+
+`mix lemon.channels` prints the same redacted readiness summary from the CLI.
+
+## Gateway Config Sections
+
+`LemonChannels.Adapters.{Telegram,Discord,Xmtp}.Config` each implement
+`LemonCore.Config.Gateway.Channel` and are registered under
+`config :lemon_core, :gateway_channels`. A module owns one `[gateway.<id>]`
+section and everything named after it: `resolve/1` for the sub-table,
+`enabled?/1` for the `enable_<id>` flag (including its `LEMON_GATEWAY_ENABLE_*`
+override), `validate/2` for the section's rules, and the matching declarations
+in `LemonChannels.Env`. `LemonCore.Config` flattens the results back onto the
+legacy gateway map, so readers keep using `gateway[:telegram]` and
+`gateway[:enable_telegram]`. Shared TOML coercions live in
+`LemonChannels.Adapters.ConfigHelpers`.
+
+Adding a platform means adding a `Config` module, registering it, and declaring
+its variables here — never editing `LemonCore.Config.Gateway`.
+
 ## Binding Resolution
 
 ```elixir

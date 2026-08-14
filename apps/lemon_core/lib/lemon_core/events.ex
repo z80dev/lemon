@@ -4,7 +4,7 @@ defmodule LemonCore.Events do
 
   Each entry maps a `LemonCore.Event` type atom to the module describing its payload.
   Publishing a registered type with a payload that is neither the right struct nor a map
-  is a bug; `LemonCore.Bus.broadcast_event/3` catches it in `:dev` and `:test`.
+  is a bug; `LemonCore.Bus.broadcast_event/4` catches it in `:dev` and `:test`.
 
   Full catalog, migration order and the versioning rules live in
   `docs/platform/bus-events.md` in the Lemon repository.
@@ -22,8 +22,20 @@ defmodule LemonCore.Events do
 
   ## Compatibility
 
-  Every payload module accepts a legacy free-form map through `from_map/1`, and implements
-  `Access` so consumers written against maps keep working for one deprecation cycle.
+  Payload structs do **not** implement `Access`: `payload[:key]` raises, and a consumer reads
+  a field or pattern-matches the struct. A consumer that may still be handed a legacy map —
+  one relaying events from another node, or reading an event injected through the control
+  plane's `events.ingest` — coerces once at its entry point with `coerce/2`, rather than
+  carrying key-probing downstream into the code that reads the payload:
+
+      def handle_info(%LemonCore.Event{type: :run_completed, payload: payload}, state) do
+        %Events.RunCompleted{completed: completed} = coerce(:run_completed, payload)
+        ...
+      end
+
+  `from_map/1` on every payload module is what makes that safe: it accepts string keys, drops
+  unknown ones, and coerces nested payloads. `cast/2` is the strict counterpart for trust
+  boundaries, where a malformed payload should be refused with a reason rather than relayed.
   """
 
   alias LemonCore.Events

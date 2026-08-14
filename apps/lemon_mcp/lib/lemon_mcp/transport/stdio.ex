@@ -146,9 +146,6 @@ defmodule LemonMCP.Transport.Stdio do
     case Port.command(port, message_with_nl) do
       true ->
         {:reply, :ok, state}
-
-      false ->
-        {:reply, {:error, :send_failed}, state}
     end
   end
 
@@ -218,9 +215,6 @@ defmodule LemonMCP.Transport.Stdio do
       case Port.open({:spawn_executable, executable}, port_options) do
         port when is_port(port) ->
           {:ok, port}
-
-        error ->
-          {:error, {:port_open_failed, error}}
       end
     end
   rescue

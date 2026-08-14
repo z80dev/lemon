@@ -7,8 +7,6 @@ defmodule LemonCore.Testing.HermeticEnvTest do
     "ANTHROPIC_API_KEY",
     "OPENAI_API_KEY",
     "OPENROUTER_API_KEY",
-    "TELEGRAM_BOT_TOKEN",
-    "DISCORD_BOT_TOKEN",
     "AWS_SECRET_ACCESS_KEY",
     "LEMON_SECRETS_MASTER_KEY",
     "CHATGPT_TOKEN",
@@ -28,8 +26,7 @@ defmodule LemonCore.Testing.HermeticEnvTest do
     "MINIMAX_API_KEY",
     "FIREWORKS_API_KEY",
     "X_API_BEARER_TOKEN",
-    "X_API_ACCESS_TOKEN_SECRET",
-    "XMTP_WALLET_KEY"
+    "X_API_ACCESS_TOKEN_SECRET"
   ]
 
   setup do
@@ -46,7 +43,7 @@ defmodule LemonCore.Testing.HermeticEnvTest do
     :ok
   end
 
-  test "credential_env_vars lists provider and platform secrets scrubbed from unit lanes" do
+  test "credential_env_vars lists provider secrets scrubbed from unit lanes" do
     credential_vars = HermeticEnv.credential_env_vars()
 
     for key <- @credential_keys do
@@ -54,7 +51,29 @@ defmodule LemonCore.Testing.HermeticEnvTest do
     end
   end
 
-  test "scrub_unit_credentials! removes ambient provider and platform credentials" do
+  test "vars registered under :test_credential_env_vars are unioned in and scrubbed" do
+    original = Application.fetch_env(:lemon_core, :test_credential_env_vars)
+    throwaway = "LEMON_TEST_THROWAWAY_CREDENTIAL"
+
+    Application.put_env(:lemon_core, :test_credential_env_vars, [throwaway])
+
+    on_exit(fn ->
+      case original do
+        {:ok, vars} -> Application.put_env(:lemon_core, :test_credential_env_vars, vars)
+        :error -> Application.delete_env(:lemon_core, :test_credential_env_vars)
+      end
+
+      System.delete_env(throwaway)
+    end)
+
+    System.put_env(throwaway, "ambient-secret")
+
+    assert throwaway in HermeticEnv.credential_env_vars()
+    assert :ok = HermeticEnv.scrub_unit_credentials!()
+    refute System.get_env(throwaway)
+  end
+
+  test "scrub_unit_credentials! removes ambient provider credentials" do
     for key <- @credential_keys do
       System.put_env(key, "ambient-real-secret")
     end
@@ -91,15 +110,15 @@ defmodule LemonCore.Testing.HermeticEnvTest do
   test "with_restored_env restores modified, deleted, and newly created keys" do
     System.put_env("OPENAI_API_KEY", "original")
     System.put_env("NON_SECRET_TEST_VALUE", "original-non-secret")
-    System.delete_env("TELEGRAM_BOT_TOKEN")
+    System.delete_env("OPENROUTER_API_KEY")
 
     result =
       HermeticEnv.with_restored_env(
-        ["OPENAI_API_KEY", "NON_SECRET_TEST_VALUE", "TELEGRAM_BOT_TOKEN"],
+        ["OPENAI_API_KEY", "NON_SECRET_TEST_VALUE", "OPENROUTER_API_KEY"],
         fn ->
           System.put_env("OPENAI_API_KEY", "changed")
           System.delete_env("NON_SECRET_TEST_VALUE")
-          System.put_env("TELEGRAM_BOT_TOKEN", "new-secret")
+          System.put_env("OPENROUTER_API_KEY", "new-secret")
           :inside
         end
       )
@@ -107,6 +126,6 @@ defmodule LemonCore.Testing.HermeticEnvTest do
     assert result == :inside
     assert System.get_env("OPENAI_API_KEY") == "original"
     assert System.get_env("NON_SECRET_TEST_VALUE") == "original-non-secret"
-    refute System.get_env("TELEGRAM_BOT_TOKEN")
+    refute System.get_env("OPENROUTER_API_KEY")
   end
 end

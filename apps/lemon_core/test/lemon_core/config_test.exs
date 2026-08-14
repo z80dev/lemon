@@ -1,3 +1,21 @@
+defmodule LemonCore.ConfigTest.StubChannel do
+  @behaviour LemonCore.Config.Gateway.Channel
+
+  @impl true
+  def id, do: :stub
+
+  @impl true
+  def resolve(section), do: %{resolved: true, raw: section}
+
+  @impl true
+  def enabled?(configured), do: configured
+
+  @impl true
+  def validate(section, errors) do
+    if Map.get(section, :resolved), do: errors, else: ["gateway.stub: invalid" | errors]
+  end
+end
+
 defmodule LemonCore.ConfigTest do
   use ExUnit.Case, async: false
 
@@ -15,6 +33,25 @@ defmodule LemonCore.ConfigTest do
     end)
 
     %{home: tmp_dir}
+  end
+
+  # The legacy map flattens whatever `:gateway_channels` holds. Run against a
+  # stub so the flattening is proven without naming a platform (real channel
+  # modules may be registered by other suites in this VM), and clear the shared
+  # ConfigCache so the stub-shaped resolution is not served to later tests.
+  setup do
+    previous = Application.get_env(:lemon_core, :gateway_channels)
+    Application.put_env(:lemon_core, :gateway_channels, [__MODULE__.StubChannel])
+
+    on_exit(fn ->
+      if is_nil(previous),
+        do: Application.delete_env(:lemon_core, :gateway_channels),
+        else: Application.put_env(:lemon_core, :gateway_channels, previous)
+
+      LemonCore.ConfigCache.clear()
+    end)
+
+    :ok
   end
 
   test "merges global and project config with overrides", %{home: home} do
@@ -350,10 +387,10 @@ defmodule LemonCore.ConfigTest do
 
     File.write!(Path.join(global_dir, "config.toml"), """
     [gateway]
-    enable_telegram = true
+    enable_stub = true
 
     [[gateway.bindings]]
-    transport = "telegram"
+    transport = "demo"
     chat_id = 123
     agent_id = "daily"
     """)
@@ -361,7 +398,7 @@ defmodule LemonCore.ConfigTest do
     config = Config.load()
 
     [binding] = config.gateway.bindings
-    assert binding.transport == :telegram
+    assert binding.transport == :demo
     assert binding.chat_id == 123
     assert binding.agent_id == "daily"
   end
@@ -729,85 +766,26 @@ defmodule LemonCore.ConfigTest do
              resolved.catalog_tokens
   end
 
-  test "parses gateway telegram compaction settings", %{home: home} do
+  test "flattens registered channel sections onto the legacy gateway map", %{home: home} do
     global_dir = Path.join(home, ".lemon")
     File.mkdir_p!(global_dir)
 
     File.write!(Path.join(global_dir, "config.toml"), """
     [gateway]
-    enable_telegram = true
+    enable_stub = true
 
-    [gateway.telegram]
-    default_account_id = "tg-work"
+    [gateway.stub]
+    default_account_id = "demo-work"
     default_chat_id = -100123
-    default_thread_id = 77
-    default_topic_id = 88
-
-    [gateway.telegram.compaction]
-    enabled = true
-    context_window_tokens = 400000
-    reserve_tokens = 16384
-    trigger_ratio = 0.9
     """)
 
     config = Config.load()
 
-    assert config.gateway.telegram.compaction.enabled == true
-    assert config.gateway.telegram.compaction.context_window_tokens == 400_000
-    assert config.gateway.telegram.compaction.reserve_tokens == 16_384
-    assert config.gateway.telegram.compaction.trigger_ratio == 0.9
-    assert config.gateway.telegram.default_chat_id == -100_123
-    assert config.gateway.telegram.default_account_id == "tg-work"
-    assert config.gateway.telegram.default_thread_id == 77
-    assert config.gateway.telegram.default_topic_id == 88
-  end
-
-  test "parses gateway discord settings", %{home: home} do
-    global_dir = Path.join(home, ".lemon")
-    File.mkdir_p!(global_dir)
-
-    File.write!(Path.join(global_dir, "config.toml"), """
-    [gateway]
-    enable_discord = true
-
-    [gateway.discord]
-    bot_token = "discord-token"
-    default_account_id = "dc-work"
-    default_channel_id = "123456"
-    default_thread_id = "789"
-    allowed_guild_ids = [1475727416549969980]
-    deny_unbound_channels = false
-    message_content_intent_enabled = true
-    """)
-
-    config = Config.load()
-
-    assert config.gateway.enable_discord == true
-    assert config.gateway.discord.bot_token == "discord-token"
-    assert config.gateway.discord.default_account_id == "dc-work"
-    assert config.gateway.discord.default_channel_id == "123456"
-    assert config.gateway.discord.default_thread_id == "789"
-    assert config.gateway.discord.allowed_guild_ids == [1_475_727_416_549_969_980]
-    assert config.gateway.discord.deny_unbound_channels == false
-    assert config.gateway.discord.message_content_intent_enabled == true
-  end
-
-  test "preserves gateway discord file settings", %{home: home} do
-    global_dir = Path.join(home, ".lemon")
-    File.mkdir_p!(global_dir)
-
-    File.write!(Path.join(global_dir, "config.toml"), """
-    [gateway.discord.files]
-    enabled = true
-    auto_send_generated_files = true
-    auto_send_generated_max_files = 2
-    """)
-
-    config = Config.load()
-
-    assert config.gateway.discord.files["enabled"] == true
-    assert config.gateway.discord.files["auto_send_generated_files"] == true
-    assert config.gateway.discord.files["auto_send_generated_max_files"] == 2
+    assert config.gateway[:enable_stub] == true
+    assert config.gateway[:stub] == %{
+             resolved: true,
+             raw: %{"default_account_id" => "demo-work", "default_chat_id" => -100_123}
+           }
   end
 
   # Tests may run from the umbrella root or from apps/lemon_core, so locate

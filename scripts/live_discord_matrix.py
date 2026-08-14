@@ -1671,7 +1671,7 @@ def local_discord_channel_diagnostics():
     repo = Path(__file__).resolve().parents[1]
     expression = """
 Application.ensure_all_started(:lemon_core)
-status = LemonCore.Doctor.ChannelDiagnostics.status(project_dir: File.cwd!())
+status = LemonChannels.Doctor.Diagnostics.status(project_dir: File.cwd!())
 discord = Enum.find(status.transports, &(&1.transport == "discord"))
 IO.puts("LEMON_DISCORD_DIAGNOSTICS_JSON:" <> Jason.encode!(discord || %{}))
 """

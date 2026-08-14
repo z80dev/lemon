@@ -24,14 +24,14 @@ defmodule LemonCore.Config.Modular do
 
       # Access specific sections
       config.agent.default_model
-      config.gateway.enable_telegram
+      config.gateway.max_concurrent_runs
       config.providers.providers["anthropic"].api_key
 
   ## Sub-modules
 
   - `LemonCore.Config.Agent` - Agent behavior settings
   - `LemonCore.Config.Tools` - Web tools and WASM configuration
-  - `LemonCore.Config.Gateway` - Telegram, SMS, and engine bindings
+  - `LemonCore.Config.Gateway` - Engine bindings, queueing, channel sections
   - `LemonCore.Config.Logging` - Log file and rotation settings
   - `LemonCore.Config.TUI` - Terminal UI theme and debug
   - `LemonCore.Config.Providers` - LLM provider configurations

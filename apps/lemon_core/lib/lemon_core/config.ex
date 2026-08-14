@@ -210,22 +210,19 @@ defmodule LemonCore.Config do
     |> reject_nil_values()
   end
 
+  # The modular Gateway keeps the per-platform sections in `channels` and their
+  # flags in `enabled_channels` so the library never names a chat platform. The
+  # legacy map keeps the flat shape every reader expects: `gateway[:foo]` and
+  # `gateway[:enable_foo]`.
   defp convert_gateway(gateway) do
-    gateway
-    |> Map.from_struct()
-    |> Map.update(:telegram, %{}, &convert_gateway_telegram/1)
-  end
+    map = Map.from_struct(gateway)
+    {channels, map} = Map.pop(map, :channels, %{})
+    {enabled, map} = Map.pop(map, :enabled_channels, %{})
 
-  # The modular Gateway resolves telegram as %{token:, bot_token_secret:, compaction:}.
-  # The legacy config exposes `bot_token` instead of `token`.
-  defp convert_gateway_telegram(telegram) when is_map(telegram) do
-    telegram
-    |> Map.put(:bot_token, telegram[:token])
-    |> Map.delete(:token)
-    |> reject_nil_values()
+    map
+    |> Map.merge(channels)
+    |> Map.merge(Map.new(enabled, fn {id, value} -> {:"enable_#{id}", value} end))
   end
-
-  defp convert_gateway_telegram(telegram), do: telegram
 
   defp convert_agents(profiles, defaults) when is_map(profiles) do
     defaults = parse_defaults(defaults)

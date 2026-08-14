@@ -31,6 +31,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   alias LemonCore.{
     ChatStateStore,
     Event,
+    Events,
     InboundMessage,
     ProjectBindingStore,
     ResumeToken,
@@ -1855,12 +1856,15 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   # Approval Handling
   # ============================================================================
 
+  # `:approval_requested` payloads are `Events.ApprovalRequested` structs carrying an
+  # `Events.ApprovalPending`; a legacy map is coerced into that pair so the whole record is
+  # read by field. A payload that will not coerce drops out of the `with` as a no-op.
   defp maybe_send_approval_request(state, payload) when is_map(payload) do
-    approval_id = payload[:approval_id] || payload["approval_id"]
-    pending = payload[:pending] || payload["pending"] || %{}
-    session_key = pending[:session_key] || pending["session_key"]
-
-    with true <- is_binary(approval_id) and is_binary(session_key),
+    with %Events.ApprovalRequested{approval_id: approval_id, pending: pending} <-
+           Events.coerce(:approval_requested, payload),
+         %Events.ApprovalPending{session_key: session_key, tool: tool, action: action} <-
+           pending,
+         true <- is_binary(approval_id) and is_binary(session_key),
          %{
            kind: :channel_peer,
            channel_id: "discord",
@@ -1871,9 +1875,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
            SessionKey.parse(session_key),
          true <- is_nil(account_id) or account_id == state.account_id,
          channel_id when is_integer(channel_id) <- parse_id(peer_id) do
-      tool = pending[:tool] || pending["tool"]
-      action = pending[:action] || pending["action"]
-
       text = "**Approval requested:** #{tool}\n**Action:** #{format_action(action)}"
 
       components = [

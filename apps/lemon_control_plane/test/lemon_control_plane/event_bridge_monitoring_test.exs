@@ -326,7 +326,10 @@ defmodule LemonControlPlane.EventBridgeMonitoringTest do
   end
 
   describe "run_started parentRunId field" do
-    test "run_started event includes parentRunId from payload" do
+    # `parent_run_id` is not a `LemonCore.Events.RunStarted` field, so a payload carrying one
+    # loses it on coercion and the bridge reads `meta.parent_run_id` instead. This asserts the
+    # bridge tolerates the extra key rather than that it forwards it.
+    test "run_started drops a parent_run_id the RunStarted contract does not declare" do
       run_id = "run_#{System.unique_integer()}"
       EventBridge.subscribe_run(run_id)
       Process.sleep(10)

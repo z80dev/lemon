@@ -351,7 +351,6 @@ defmodule LemonMCP.Client.SSE do
                true <- response_id(decoded) == id do
             {:matched, normalize_reply({:ok, decoded})}
           else
-            true -> :cont
             false -> :cont
             {:error, reason} -> {:matched, {:error, {:decode_error, reason}}}
           end
@@ -479,7 +478,6 @@ defmodule LemonMCP.Client.SSE do
     do: {:error, {:rpc_error, error}}
 
   defp normalize_reply({:ok, value}), do: {:ok, value}
-  defp normalize_reply(other), do: {:error, {:unexpected_response, other}}
 
   defp response_id(%{id: id}), do: id
   defp response_id(_), do: nil

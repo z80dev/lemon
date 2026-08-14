@@ -978,19 +978,16 @@ defmodule LemonHoncho.SessionManager do
   # does not need to — `context_cadence` decides how often it is even looked at.
   defp summary_opts(%Config{} = config), do: [summary: true, tokens: config.context_tokens]
 
-  # Which peer is asked matters: when the assistant peer observes the other side
-  # it holds the richer view and is asked *about* the user; otherwise the user
-  # peer can only be asked about itself.
+  # The assistant peer is the one asked: it observes the other side in every
+  # supported observation mode (`:directional` and `:unified` both set
+  # `ai.observe_others` to `true`), so it holds the richer view of the user and
+  # is asked *about* the user.
   defp fetch_dialectic(plan, session_id, peers) do
     %{config: config, client: client} = plan
     query = Context.dialectic_query(plan.query, plan.has_base_context?)
     opts = [session_id: session_id, reasoning_level: config.reasoning_level]
 
-    if Config.observation_flags(config).ai.observe_others do
-      answer_of(client.chat(config, peers.ai, query, [{:target, peers.user} | opts]))
-    else
-      answer_of(client.chat(config, peers.user, query, opts))
-    end
+    answer_of(client.chat(config, peers.ai, query, [{:target, peers.user} | opts]))
   end
 
   ## Response shaping
@@ -1070,7 +1067,7 @@ defmodule LemonHoncho.SessionManager do
   # `nil` clause here: retiring nothing is a caller bug, not a state to absorb.
   defp clear_pending(%{pending_refresh: pending} = entry) do
     Process.demonitor(pending.monitor, [:flush])
-    Process.cancel_timer(pending.timer)
+    _ = Process.cancel_timer(pending.timer)
 
     %{entry | pending_refresh: nil}
   end

@@ -6,6 +6,14 @@ defmodule LemonCore.Testing.HermeticEnv do
   provider or platform credentials. Tests that intentionally exercise live
   integrations must opt in explicitly with `LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1`
   or by passing `allow_live?: true`.
+
+  The built-in list covers the credentials this library and its providers know
+  about. Applications that own a transport add the variables that transport
+  reads, so the library does not have to name platforms it does not implement:
+
+      config :lemon_core, :test_credential_env_vars, ~w(MY_PLATFORM_BOT_TOKEN)
+
+  `credential_env_vars/0` returns the union, sorted and deduplicated.
   """
 
   @credential_env_vars ~w(
@@ -22,7 +30,6 @@ defmodule LemonCore.Testing.HermeticEnv do
     CLAUDE_CODE_OAUTH_TOKEN
     DEEPGRAM_API_KEY
     DINGTALK_BOT_TOKEN
-    DISCORD_BOT_TOKEN
     ELEVENLABS_API_KEY
     FEISHU_APP_SECRET
     FEISHU_BOT_TOKEN
@@ -55,7 +62,6 @@ defmodule LemonCore.Testing.HermeticEnv do
     INTEGRATION_API_KEY_SECRET
     SLACK_APP_TOKEN
     SLACK_BOT_TOKEN
-    TELEGRAM_BOT_TOKEN
     TWILIO_AUTH_TOKEN
     XAI_API_KEY
     X_API_ACCESS_TOKEN
@@ -67,7 +73,6 @@ defmodule LemonCore.Testing.HermeticEnv do
     X_API_CONSUMER_SECRET
     X_API_REFRESH_TOKEN
     X_BEARER_TOKEN
-    XMTP_WALLET_KEY
     ZAI_API_KEY
   )
 
@@ -75,9 +80,19 @@ defmodule LemonCore.Testing.HermeticEnv do
 
   @doc """
   Returns env vars considered live provider/platform credentials in unit tests.
+
+  The built-in list plus anything registered under
+  `config :lemon_core, :test_credential_env_vars`, sorted and deduplicated.
   """
   @spec credential_env_vars() :: [String.t()]
-  def credential_env_vars, do: @credential_env_vars
+  def credential_env_vars do
+    :lemon_core
+    |> Application.get_env(:test_credential_env_vars, [])
+    |> Enum.map(&to_string/1)
+    |> Enum.concat(@credential_env_vars)
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
 
   @doc """
   Scrubs live provider/platform credentials for normal unit-test lanes.
@@ -94,7 +109,7 @@ defmodule LemonCore.Testing.HermeticEnv do
     if Keyword.get(opts, :allow_live?, false) or live_credentials_allowed?() do
       {:skipped, :live_credentials_allowed}
     else
-      Enum.each(@credential_env_vars, &System.delete_env/1)
+      Enum.each(credential_env_vars(), &System.delete_env/1)
       :ok
     end
   end

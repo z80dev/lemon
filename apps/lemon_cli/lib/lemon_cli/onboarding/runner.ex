@@ -694,9 +694,6 @@ defmodule LemonCli.Onboarding.Runner do
 
       {:unix, _} ->
         run_system_cmd("xdg-open", [url])
-
-      _ ->
-        {:error, :unsupported_os}
     end
   end
 
@@ -709,7 +706,6 @@ defmodule LemonCli.Onboarding.Runner do
       opts =
         case input do
           nil -> [stderr_to_stdout: true]
-          _ -> [input: input, stderr_to_stdout: true]
         end
 
       case System.cmd(command, args, opts) do

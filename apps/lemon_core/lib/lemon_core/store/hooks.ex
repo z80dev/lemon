@@ -3,7 +3,7 @@ defmodule LemonCore.Store.Hooks do
   Registration and safe invocation of `LemonCore.Store` extension points.
 
   `LemonCore.Store` is a storage primitive: it must not know about run history,
-  memory ingest, Telegram, or any other domain. Collaborators attach to it
+  memory ingest, chat transports, or any other domain. Collaborators attach to it
   instead, either through configuration or at runtime.
 
   ## Extension points

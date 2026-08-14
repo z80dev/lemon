@@ -118,10 +118,9 @@ defmodule LemonCore.Bus do
   @doc """
   Broadcast a typed event, checking the payload against `LemonCore.Events`.
 
-  This is the publishing path for contract topics. When the event type is registered and
-  the payload is not its struct, the mismatch raises in `:dev` and `:test` and is passed
-  through untouched in `:prod` — a malformed payload should fail a developer's test run,
-  not a user's agent run.
+  This is the publishing path for contract topics. When the event type is registered and the
+  payload is not its struct, the mismatch raises in `:dev` and `:test` and is coerced in
+  `:prod` — a malformed payload should fail a developer's test run, not a user's agent run.
 
       Bus.broadcast_event(Bus.run_topic(run_id), :run_started, %Events.RunStarted{...})
 
@@ -131,17 +130,21 @@ defmodule LemonCore.Bus do
           :ok
   def broadcast_event(topic, type, payload, meta \\ nil)
       when is_binary(topic) and is_atom(type) do
-    :ok = check_payload!(type, payload)
-    broadcast(topic, LemonCore.Event.new(type, payload, meta))
+    broadcast(topic, LemonCore.Event.new(type, checked_payload!(type, payload), meta))
   end
 
-  defp check_payload!(type, payload) do
+  # Coercing rather than passing through is what the `:prod` branch owes consumers now that
+  # `LemonCore.Events` payloads no longer implement `Access`: subscribers pattern-match the
+  # struct, so relaying a legacy map untouched would drop the event at every one of them
+  # instead of degrading it. A payload too malformed to coerce is still relayed as-is, for the
+  # subscriber's own defensive handling to deal with.
+  defp checked_payload!(type, payload) do
     module = LemonCore.Events.payload_module(type)
 
     cond do
-      is_nil(module) -> :ok
-      is_struct(payload, module) -> :ok
-      not enforce_payloads?() -> :ok
+      is_nil(module) -> payload
+      is_struct(payload, module) -> payload
+      not enforce_payloads?() -> LemonCore.Events.coerce(type, payload)
       true -> raise ArgumentError, payload_mismatch_message(type, module, payload)
     end
   end

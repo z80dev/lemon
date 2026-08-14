@@ -1,7 +1,13 @@
 defmodule LemonCore.Doctor.Checks.Media do
-  @moduledoc "Checks media provider and channel-delivery readiness from redacted proofs."
+  @moduledoc """
+  Checks media provider readiness from redacted proofs.
 
-  alias LemonCore.Doctor.{Check, ProofDiagnostics}
+  Channel-delivery readiness is contributed by the registered
+  `LemonCore.Doctor.ChannelProofs` spec; without one, only the provider-live
+  check is reported.
+  """
+
+  alias LemonCore.Doctor.{ChannelProofs, Check, ProofDiagnostics}
 
   @providers [
     {["openai_image", "vertex_imagen"], "image", "scripts/live_media_image_smoke.exs",
@@ -22,10 +28,10 @@ defmodule LemonCore.Doctor.Checks.Media do
     project_dir = Keyword.get(opts, :project_dir, File.cwd!())
     proofs = ProofDiagnostics.status(project_dir: project_dir, limit: 1_000)
 
-    [
-      check_channel_delivery(proofs),
-      check_provider_live(proofs)
-    ]
+    case ChannelProofs.call(:media_delivery_check, [proofs], nil) do
+      nil -> [check_provider_live(proofs)]
+      check -> [check, check_provider_live(proofs)]
+    end
   rescue
     error ->
       [
@@ -35,33 +41,6 @@ defmodule LemonCore.Doctor.Checks.Media do
           Exception.message(error)
         )
       ]
-  end
-
-  defp check_channel_delivery(proofs) do
-    telegram? = completed_delivery?(proofs, :telegram_delivery)
-    discord? = completed_delivery?(proofs, :discord_delivery)
-
-    cond do
-      telegram? and discord? ->
-        Check.pass(
-          "media.channel_delivery",
-          "Media attachment delivery proof is completed for Telegram and Discord."
-        )
-
-      telegram? or discord? ->
-        Check.warn(
-          "media.channel_delivery",
-          "Media attachment delivery proof is only complete for #{delivery_label(telegram?, discord?)}.",
-          "Run the generated media/audio or MEDIA directive live matrix for both Telegram and Discord."
-        )
-
-      true ->
-        Check.warn(
-          "media.channel_delivery",
-          "Media attachment delivery proof is missing for Telegram and Discord.",
-          "Run the Telegram and Discord generated media/audio or MEDIA directive live matrix proofs."
-        )
-    end
   end
 
   defp check_provider_live(proofs) do
@@ -94,19 +73,6 @@ defmodule LemonCore.Doctor.Checks.Media do
         )
     end
   end
-
-  defp completed_delivery?(proofs, key) do
-    proofs
-    |> Map.get(:recent_proofs, [])
-    |> Enum.any?(fn proof ->
-      Map.get(proof, :status) == "completed" and
-        get_in(proof, [:media_proof, key]) == true
-    end)
-  end
-
-  defp delivery_label(true, false), do: "Telegram"
-  defp delivery_label(false, true), do: "Discord"
-  defp delivery_label(_, _), do: "neither channel"
 
   defp provider_statuses(proofs) do
     Enum.map(@providers, fn {providers, label, script, proof_path} ->

@@ -11,12 +11,11 @@ defmodule LemonHoncho.Tools.Reasoning do
 
   ## Which peer is asked, and about whom
 
-  The same rule the automatic injection uses (`LemonHoncho.SessionManager`):
-  when the assistant peer observes the other side it holds the richer view and
-  is asked *about* the user, and otherwise the user peer can only be asked
-  about itself. `target: "ai"` flips the question to what the assistant peer
-  knows about itself, which is how an agent inspects its own accumulated
-  behaviour rather than the user's.
+  The same rule the automatic injection uses (`LemonHoncho.SessionManager`): the
+  assistant peer observes the other side in every supported observation mode,
+  so it holds the richer view and is asked *about* the user. `target: "ai"`
+  flips the question to what the assistant peer knows about itself, which is
+  how an agent inspects its own accumulated behaviour rather than the user's.
 
   ## Modes and configuration
 
@@ -222,18 +221,14 @@ defmodule LemonHoncho.Tools.Reasoning do
   end
 
   # Mirrors `LemonHoncho.SessionManager`'s choice so a tool call and an injected
-  # block are answers from the same peer: the assistant peer is the one asked
-  # when it observes the other side, because only then does it hold a view of
-  # the user; otherwise the user peer is asked about itself.
+  # block are answers from the same peer. The assistant peer is the one asked
+  # about the user: it observes the other side in every supported observation
+  # mode (`:directional` and `:unified` both set `ai.observe_others` to `true`),
+  # so it holds the view of the user a question about the user is answered from.
+  # Asking about the assistant itself is the `"ai"` clause above.
   defp dialectic_peer(_config, scope, "ai"), do: {scope.peers.ai, []}
 
-  defp dialectic_peer(%Config{} = config, scope, _user) do
-    if Config.observation_flags(config).ai.observe_others do
-      {scope.peers.ai, [target: scope.peers.user]}
-    else
-      {scope.peers.user, []}
-    end
-  end
+  defp dialectic_peer(%Config{}, scope, _user), do: {scope.peers.ai, [target: scope.peers.user]}
 
   ## Results
 

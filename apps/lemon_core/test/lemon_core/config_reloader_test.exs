@@ -148,7 +148,7 @@ defmodule LemonCore.ConfigReloaderTest do
       assert ConfigReloader.redact_value("providers.anthropic.api_key", "sk-1234") ==
                "[REDACTED]"
 
-      assert ConfigReloader.redact_value("gateway.telegram.bot_token", "123:ABC") ==
+      assert ConfigReloader.redact_value("gateway.demo.bot_token", "123:ABC") ==
                "[REDACTED]"
 
       assert ConfigReloader.redact_value("some.password_hash", "abc") == "[REDACTED]"

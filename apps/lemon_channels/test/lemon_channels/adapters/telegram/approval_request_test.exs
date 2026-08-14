@@ -34,6 +34,7 @@ defmodule LemonChannels.Adapters.Telegram.ApprovalRequestTest do
     payload = %{
       approval_id: "appr_123",
       pending: %{
+        id: "appr_123",
         session_key: "agent:default:telegram:default:group:-1003842984060:thread:35",
         tool: "bash",
         action: %{"command" => "echo APPROVED"}

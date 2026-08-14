@@ -217,9 +217,15 @@ defmodule CodingAgent.ToolRegistry do
   end
 
   # Built-ins plus whatever satellite apps registered at boot (see
-  # `LemonAgent.ToolRegistry`). Built-ins win on name collisions.
+  # `LemonAgent.ToolRegistry`). Built-ins win on name collisions. Satellite
+  # tools slot in BEFORE the config-gated `execute_code`: it must stay the
+  # absolute tail so toggling it changes nothing but the last entry — the
+  # prompt-cache prefix stability its @builtin_tools comment promises.
   defp builtin_tools do
-    @builtin_tools ++ LemonAgent.ToolRegistry.available(Enum.map(@builtin_tools, &elem(&1, 0)))
+    {gated, stable} = Enum.split_with(@builtin_tools, fn {name, _} -> name == :execute_code end)
+
+    stable ++
+      LemonAgent.ToolRegistry.available(Enum.map(@builtin_tools, &elem(&1, 0))) ++ gated
   end
 
   @doc """

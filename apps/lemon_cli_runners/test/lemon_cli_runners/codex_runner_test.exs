@@ -1147,7 +1147,7 @@ defmodule LemonCliRunners.CodexRunnerTest do
   end
 end
 
-defmodule LemonCliRunners.CodexRunnerIntegrationTest do
+defmodule LemonCliRunners.CodexRunnerLifecycleTest do
   @moduledoc """
   Integration tests for CodexRunner GenServer lifecycle and process management.
 

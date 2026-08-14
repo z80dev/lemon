@@ -113,7 +113,7 @@ defmodule LemonCore.StoreHooksTest do
 
       refute source =~ "RunHistoryStore"
       refute source =~ "MemoryIngest"
-      refute source =~ "telegram"
+      refute source =~ "known_targets"
     end
   end
 
@@ -187,11 +187,11 @@ defmodule LemonCore.StoreHooksTest do
       assert Store.get(store, :sessions_index, "s") == %{run_count: 1}
     end
 
-    test "telegram tables are not a core default" do
+    test "channel target tables are not a core default" do
       store = start_store(:store_cached_defaults, backend: EtsBackend)
 
       assert ReadCache.cached?(store, :sessions_index)
-      refute ReadCache.cached?(store, :telegram_known_targets)
+      refute ReadCache.cached?(store, :demo_targets)
     end
 
     test "register_cached_table starts mirroring and warms from the backend" do

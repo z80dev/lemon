@@ -1,11 +1,48 @@
+defmodule LemonCore.Config.ValidatorTest.StubChannel do
+  @behaviour LemonCore.Config.Gateway.Channel
+
+  @impl true
+  def id, do: :stub
+
+  @impl true
+  def resolve(section), do: %{resolved: true, raw: section}
+
+  @impl true
+  def enabled?(configured), do: configured
+
+  @impl true
+  def validate(section, errors) do
+    if Map.get(section, :resolved), do: errors, else: ["gateway.stub: invalid" | errors]
+  end
+end
+
 defmodule LemonCore.Config.ValidatorTest do
   @moduledoc """
   Tests for the Config.Validator module.
+
+  Platform-specific validation is owned by the channel modules registered under
+  `config :lemon_core, :gateway_channels` and asserted in lemon_channels'
+  adapter config tests. These tests cover the generic gateway scalars and the
+  hook that routes per-platform sections through registered channel modules,
+  exercised with a stub.
   """
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias LemonCore.Config.Validator
   alias LemonCore.Config.Modular
+
+  setup do
+    previous = Application.get_env(:lemon_core, :gateway_channels)
+    Application.put_env(:lemon_core, :gateway_channels, [__MODULE__.StubChannel])
+
+    on_exit(fn ->
+      if is_nil(previous),
+        do: Application.delete_env(:lemon_core, :gateway_channels),
+        else: Application.put_env(:lemon_core, :gateway_channels, previous)
+    end)
+
+    :ok
+  end
 
   describe "validate/1" do
     test "returns :ok for valid config" do
@@ -18,7 +55,8 @@ defmodule LemonCore.Config.ValidatorTest do
         gateway: %{
           max_concurrent_runs: 5,
           auto_resume: false,
-          enable_telegram: false,
+          enabled_channels: %{stub: false},
+          channels: %{stub: %{resolved: true, raw: %{}}},
           require_engine_lock: true,
           engine_lock_timeout_ms: 30_000
         },
@@ -181,17 +219,43 @@ defmodule LemonCore.Config.ValidatorTest do
       errors = Validator.validate_gateway(%{auto_resume: "yes"}, [])
       assert Enum.any?(errors, &String.contains?(&1, "gateway.auto_resume"))
 
-      errors = Validator.validate_gateway(%{enable_telegram: "true"}, [])
-      assert Enum.any?(errors, &String.contains?(&1, "gateway.enable_telegram"))
+      # Legacy flat-map shape: enable_<id> flags are validated per registered id.
+      errors = Validator.validate_gateway(%{enable_stub: "true"}, [])
+      assert Enum.any?(errors, &String.contains?(&1, "gateway.enable_stub"))
 
-      errors = Validator.validate_gateway(%{auto_resume: true, enable_telegram: false}, [])
+      # Modular shape: flags live in enabled_channels.
+      errors = Validator.validate_gateway(%{enabled_channels: %{stub: "yes"}}, [])
+      assert Enum.any?(errors, &String.contains?(&1, "gateway.enable_stub"))
+
+      errors = Validator.validate_gateway(%{auto_resume: true, enable_stub: false}, [])
       refute Enum.any?(errors, &String.contains?(&1, "gateway.auto_resume"))
-      refute Enum.any?(errors, &String.contains?(&1, "gateway.enable_telegram"))
+      refute Enum.any?(errors, &String.contains?(&1, "gateway.enable_stub"))
     end
 
     test "accepts nil values" do
       errors = Validator.validate_gateway(%{}, [])
       assert errors == []
+    end
+
+    test "invokes a registered channel's validate/2 and surfaces its errors" do
+      # Modular shape: the resolved section lives under channels.
+      errors = Validator.validate_gateway(%{channels: %{stub: %{resolved: false}}}, [])
+      assert Enum.any?(errors, &String.contains?(&1, "gateway.stub: invalid"))
+
+      # Legacy flat-map shape: the section sits directly on the gateway map.
+      errors = Validator.validate_gateway(%{stub: %{resolved: false}}, [])
+      assert Enum.any?(errors, &String.contains?(&1, "gateway.stub: invalid"))
+
+      errors = Validator.validate_gateway(%{channels: %{stub: %{resolved: true}}}, [])
+      refute Enum.any?(errors, &String.contains?(&1, "gateway.stub"))
+    end
+
+    test "a non-map channel section produces a must-be-a-map error" do
+      errors = Validator.validate_gateway(%{channels: %{stub: "not-a-map"}}, [])
+      assert Enum.any?(errors, &String.contains?(&1, "gateway.stub: must be a map"))
+
+      errors = Validator.validate_gateway(%{stub: 42}, [])
+      assert Enum.any?(errors, &String.contains?(&1, "gateway.stub: must be a map"))
     end
   end
 
@@ -420,63 +484,6 @@ defmodule LemonCore.Config.ValidatorTest do
     end
   end
 
-  describe "validate_telegram_config/2" do
-    test "validates telegram token format" do
-      errors =
-        Validator.validate_telegram_config([], %{
-          token: "123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
-        })
-
-      assert errors == []
-
-      errors =
-        Validator.validate_telegram_config([], %{
-          token: "invalid-token"
-        })
-
-      assert Enum.any?(errors, &String.contains?(&1, "token"))
-    end
-
-    test "accepts env var references in token" do
-      errors =
-        Validator.validate_telegram_config([], %{
-          token: "${TELEGRAM_BOT_TOKEN}"
-        })
-
-      assert errors == []
-    end
-
-    test "validates telegram compaction settings" do
-      errors =
-        Validator.validate_telegram_config([], %{
-          compaction: %{
-            enabled: true,
-            context_window_tokens: 400_000,
-            reserve_tokens: 16_384,
-            trigger_ratio: 0.9
-          }
-        })
-
-      assert errors == []
-
-      errors =
-        Validator.validate_telegram_config([], %{
-          compaction: %{
-            enabled: "yes",
-            trigger_ratio: 1.5
-          }
-        })
-
-      assert Enum.any?(errors, &String.contains?(&1, "enabled"))
-      assert Enum.any?(errors, &String.contains?(&1, "trigger_ratio"))
-    end
-
-    test "accepts nil telegram config" do
-      errors = Validator.validate_telegram_config([], nil)
-      assert errors == []
-    end
-  end
-
   describe "validate_queue_config/2" do
     test "validates queue mode" do
       errors = Validator.validate_queue_config([], %{mode: "fifo"})
@@ -529,117 +536,6 @@ defmodule LemonCore.Config.ValidatorTest do
       # Regression: config.example.toml uses mode = "collect" which was previously rejected
       example_queue = %{mode: "collect", cap: 50, drop: "oldest"}
       errors = Validator.validate_queue_config([], example_queue)
-      assert errors == []
-    end
-  end
-
-  describe "validate_discord_config/2" do
-    test "validates discord bot token format" do
-      # Valid Discord token format (3 parts separated by dots)
-      errors =
-        Validator.validate_discord_config([], %{
-          bot_token: "MTA5ODc2NTQzMjEwOTg3NjU0MzIx.ABC123.XYZ789abc123def456"
-        })
-
-      assert errors == []
-
-      # Invalid token format
-      errors =
-        Validator.validate_discord_config([], %{
-          bot_token: "invalid-token"
-        })
-
-      assert Enum.any?(errors, &String.contains?(&1, "bot_token"))
-    end
-
-    test "accepts env var references in discord token" do
-      errors =
-        Validator.validate_discord_config([], %{
-          bot_token: "${DISCORD_BOT_TOKEN}"
-        })
-
-      assert errors == []
-    end
-
-    test "validates discord allowed_guild_ids" do
-      errors =
-        Validator.validate_discord_config([], %{
-          allowed_guild_ids: [123_456_789, 987_654_321]
-        })
-
-      assert errors == []
-
-      errors =
-        Validator.validate_discord_config([], %{
-          allowed_guild_ids: ["123", "456"]
-        })
-
-      assert Enum.any?(errors, &String.contains?(&1, "allowed_guild_ids"))
-    end
-
-    test "validates discord allowed_channel_ids" do
-      errors =
-        Validator.validate_discord_config([], %{
-          allowed_channel_ids: [123_456_789]
-        })
-
-      assert errors == []
-
-      errors =
-        Validator.validate_discord_config([], %{
-          allowed_channel_ids: "not-a-list"
-        })
-
-      assert Enum.any?(errors, &String.contains?(&1, "allowed_channel_ids"))
-    end
-
-    test "validates discord deny_unbound_channels" do
-      errors =
-        Validator.validate_discord_config([], %{
-          deny_unbound_channels: true
-        })
-
-      assert errors == []
-
-      errors =
-        Validator.validate_discord_config([], %{
-          deny_unbound_channels: "yes"
-        })
-
-      assert Enum.any?(errors, &String.contains?(&1, "deny_unbound_channels"))
-    end
-
-    test "validates discord message_content_intent_enabled" do
-      errors =
-        Validator.validate_discord_config([], %{
-          message_content_intent_enabled: true
-        })
-
-      assert errors == []
-
-      errors =
-        Validator.validate_discord_config([], %{
-          message_content_intent_enabled: "yes"
-        })
-
-      assert Enum.any?(errors, &String.contains?(&1, "message_content_intent_enabled"))
-    end
-
-    test "accepts nil discord config" do
-      errors = Validator.validate_discord_config([], nil)
-      assert errors == []
-    end
-
-    test "validates complete discord config" do
-      errors =
-        Validator.validate_discord_config([], %{
-          bot_token: "MTA5ODc2NTQzMjEwOTg3NjU0MzIx.ABC123.XYZ789abc123def456",
-          allowed_guild_ids: [123_456_789],
-          allowed_channel_ids: [987_654_321],
-          deny_unbound_channels: true,
-          message_content_intent_enabled: true
-        })
-
       assert errors == []
     end
   end
@@ -734,160 +630,57 @@ defmodule LemonCore.Config.ValidatorTest do
     end
   end
 
-  describe "validate_xmtp_config/2" do
-    test "validates xmtp wallet_key" do
-      # Valid Ethereum private key (64 hex chars without 0x prefix)
-      valid_key = "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2"
-      errors = Validator.validate_xmtp_config([], %{wallet_key: valid_key})
-      assert errors == []
+  describe "public generic helpers" do
+    test "validate_boolean/3" do
+      assert Validator.validate_boolean([], nil, "x") == []
+      assert Validator.validate_boolean([], true, "x") == []
+      assert Validator.validate_boolean([], false, "x") == []
 
-      # Valid Ethereum private key (with 0x prefix)
-      valid_key_with_prefix = "0xa1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2"
-      errors = Validator.validate_xmtp_config([], %{wallet_key: valid_key_with_prefix})
-      assert errors == []
-
-      # Invalid format (too short)
-      short_key = "a1b2c3d4"
-      errors = Validator.validate_xmtp_config([], %{wallet_key: short_key})
-      assert Enum.any?(errors, &String.contains?(&1, "wallet_key"))
-
-      # Invalid format (non-hex characters)
-      invalid_key = "g1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2"
-      errors = Validator.validate_xmtp_config([], %{wallet_key: invalid_key})
-      assert Enum.any?(errors, &String.contains?(&1, "wallet_key"))
-
-      # Env var reference is valid
-      errors = Validator.validate_xmtp_config([], %{wallet_key: "${XMTP_WALLET_KEY}"})
-      assert errors == []
+      assert Validator.validate_boolean([], "yes", "gateway.enable_stub") ==
+               ["gateway.enable_stub: must be a boolean"]
     end
 
-    test "validates xmtp environment" do
-      errors = Validator.validate_xmtp_config([], %{environment: "production"})
-      assert errors == []
+    test "validate_positive_integer/3" do
+      assert Validator.validate_positive_integer([], nil, "x") == []
+      assert Validator.validate_positive_integer([], 5, "x") == []
 
-      errors = Validator.validate_xmtp_config([], %{env: "production"})
-      assert errors == []
+      assert Validator.validate_positive_integer([], 0, "gateway.stub.limit") ==
+               ["gateway.stub.limit: must be a positive integer"]
 
-      errors = Validator.validate_xmtp_config([], %{environment: "dev"})
-      assert errors == []
+      assert Validator.validate_positive_integer([], -1, "gateway.stub.limit") ==
+               ["gateway.stub.limit: must be a positive integer"]
 
-      errors = Validator.validate_xmtp_config([], %{environment: "local"})
-      assert errors == []
-
-      errors = Validator.validate_xmtp_config([], %{environment: "invalid"})
-      assert Enum.any?(errors, &String.contains?(&1, "environment"))
-
-      errors = Validator.validate_xmtp_config([], %{environment: 123})
-      assert Enum.any?(errors, &String.contains?(&1, "environment"))
+      assert Validator.validate_positive_integer([], "5", "gateway.stub.limit") ==
+               ["gateway.stub.limit: must be a positive integer"]
     end
 
-    test "validates xmtp wallet_address" do
-      errors =
-        Validator.validate_xmtp_config([], %{
-          wallet_address: "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd"
-        })
+    test "validate_non_negative_integer/3" do
+      assert Validator.validate_non_negative_integer([], nil, "x") == []
+      assert Validator.validate_non_negative_integer([], 0, "x") == []
 
-      assert errors == []
-
-      errors = Validator.validate_xmtp_config([], %{wallet_address: "abcdef"})
-      assert Enum.any?(errors, &String.contains?(&1, "wallet_address"))
+      assert Validator.validate_non_negative_integer([], -1, "gateway.stub.timeout_ms") ==
+               ["gateway.stub.timeout_ms: must be a non-negative integer"]
     end
 
-    test "validates xmtp api_url" do
-      errors = Validator.validate_xmtp_config([], %{api_url: "https://api.xmtp.network"})
-      assert errors == []
+    test "validate_ratio/3" do
+      assert Validator.validate_ratio([], nil, "x") == []
+      assert Validator.validate_ratio([], 0.0, "x") == []
+      assert Validator.validate_ratio([], 1.0, "x") == []
+      assert Validator.validate_ratio([], 0.5, "x") == []
 
-      errors = Validator.validate_xmtp_config([], %{api_url: "http://localhost:5555"})
-      assert errors == []
+      assert Validator.validate_ratio([], 1.5, "gateway.stub.ratio") ==
+               ["gateway.stub.ratio: must be between 0.0 and 1.0"]
 
-      errors = Validator.validate_xmtp_config([], %{api_url: "invalid-url"})
-      assert Enum.any?(errors, &String.contains?(&1, "api_url"))
-
-      errors = Validator.validate_xmtp_config([], %{api_url: 123})
-      assert Enum.any?(errors, &String.contains?(&1, "api_url"))
+      assert Validator.validate_ratio([], "0.5", "gateway.stub.ratio") ==
+               ["gateway.stub.ratio: must be a number between 0.0 and 1.0"]
     end
 
-    test "validates xmtp max_connections" do
-      errors = Validator.validate_xmtp_config([], %{max_connections: 10})
-      assert errors == []
-
-      errors = Validator.validate_xmtp_config([], %{max_connections: 0})
-      assert Enum.any?(errors, &String.contains?(&1, "max_connections"))
-
-      errors = Validator.validate_xmtp_config([], %{max_connections: -1})
-      assert Enum.any?(errors, &String.contains?(&1, "max_connections"))
-
-      errors = Validator.validate_xmtp_config([], %{max_connections: "not-an-integer"})
-      assert Enum.any?(errors, &String.contains?(&1, "max_connections"))
-    end
-
-    test "validates xmtp poll_interval_ms and connect_timeout_ms" do
-      errors =
-        Validator.validate_xmtp_config([], %{
-          poll_interval_ms: 1000,
-          connect_timeout_ms: 5000
-        })
-
-      assert errors == []
-
-      errors = Validator.validate_xmtp_config([], %{poll_interval_ms: 0})
-      assert Enum.any?(errors, &String.contains?(&1, "poll_interval_ms"))
-
-      errors = Validator.validate_xmtp_config([], %{connect_timeout_ms: -1})
-      assert Enum.any?(errors, &String.contains?(&1, "connect_timeout_ms"))
-    end
-
-    test "validates xmtp enable_relay boolean" do
-      errors = Validator.validate_xmtp_config([], %{enable_relay: true})
-      assert errors == []
-
-      errors = Validator.validate_xmtp_config([], %{enable_relay: false})
-      assert errors == []
-
-      errors = Validator.validate_xmtp_config([], %{enable_relay: "yes"})
-      assert Enum.any?(errors, &String.contains?(&1, "enable_relay"))
-    end
-
-    test "validates xmtp mock_mode and require_live booleans" do
-      errors = Validator.validate_xmtp_config([], %{mock_mode: false, require_live: true})
-      assert errors == []
-
-      errors = Validator.validate_xmtp_config([], %{mock_mode: "yes"})
-      assert Enum.any?(errors, &String.contains?(&1, "mock_mode"))
-
-      errors = Validator.validate_xmtp_config([], %{require_live: "yes"})
-      assert Enum.any?(errors, &String.contains?(&1, "require_live"))
-    end
-
-    test "accepts nil xmtp config" do
-      errors = Validator.validate_xmtp_config([], nil)
-      assert errors == []
-    end
-
-    test "validates complete xmtp config" do
-      errors =
-        Validator.validate_xmtp_config([], %{
-          wallet_key: "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2",
-          wallet_address: "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
-          env: "production",
-          api_url: "https://api.xmtp.network",
-          poll_interval_ms: 1000,
-          connect_timeout_ms: 5000,
-          mock_mode: false,
-          require_live: true,
-          max_connections: 10,
-          enable_relay: false
-        })
-
-      assert errors == []
-    end
-
-    test "validates enable_xmtp boolean" do
-      errors = Validator.validate_gateway(%{enable_xmtp: true}, [])
-      refute Enum.any?(errors, &String.contains?(&1, "enable_xmtp"))
-
-      errors = Validator.validate_gateway(%{enable_xmtp: "yes"}, [])
-      assert Enum.any?(errors, &String.contains?(&1, "enable_xmtp"))
+    test "env_var_reference?/1" do
+      assert Validator.env_var_reference?("${MY_SECRET}") == true
+      assert Validator.env_var_reference?("MY_SECRET") == false
+      assert Validator.env_var_reference?("${UNCLOSED") == false
+      assert Validator.env_var_reference?(nil) == false
+      assert Validator.env_var_reference?(123) == false
     end
   end
 

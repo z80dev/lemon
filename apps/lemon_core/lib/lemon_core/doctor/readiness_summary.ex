@@ -4,7 +4,7 @@ defmodule LemonCore.Doctor.ReadinessSummary do
   """
 
   alias LemonCore.Doctor
-  alias LemonCore.Doctor.{ChannelReadiness, ProofDiagnostics, ProofLaunchGates, Report}
+  alias LemonCore.Doctor.{ProofDiagnostics, ProofLaunchGates, Report}
 
   @default_limit 10
 
@@ -13,7 +13,10 @@ defmodule LemonCore.Doctor.ReadinessSummary do
     project_dir = Keyword.get(opts, :project_dir, File.cwd!())
     limit = normalize_limit(Keyword.get(opts, :limit, @default_limit))
     report = Keyword.get_lazy(opts, :report, fn -> Doctor.report(project_dir: project_dir) end)
-    channels = ChannelReadiness.status(project_dir: project_dir)
+
+    channels =
+      probe(runtime_module(:channel_readiness), :status, [[project_dir: project_dir]], %{})
+
     proofs = ProofDiagnostics.status(project_dir: project_dir, limit: 1_000)
     proof_gates = ProofLaunchGates.status(proofs)
     media = media_provider_status(report)
@@ -161,4 +164,20 @@ defmodule LemonCore.Doctor.ReadinessSummary do
   defp normalize_limit(_), do: @default_limit
 
   defp truthy(value), do: value == true
+
+  # Channel readiness is owned by lemon_channels; core looks the module up
+  # through config rather than naming it.
+  defp runtime_module(key), do: LemonCore.Doctor.RuntimeModules.fetch(key)
+
+  defp probe(nil, _fun, _args, fallback), do: fallback
+
+  defp probe(mod, fun, args, fallback) do
+    if Code.ensure_loaded?(mod) and function_exported?(mod, fun, length(args)) do
+      apply(mod, fun, args)
+    else
+      fallback
+    end
+  rescue
+    _ -> fallback
+  end
 end

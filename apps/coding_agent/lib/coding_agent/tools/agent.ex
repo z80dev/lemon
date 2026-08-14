@@ -17,7 +17,7 @@ defmodule CodingAgent.Tools.Agent do
   alias LemonAi.Types.TextContent
   alias CodingAgent.AsyncFollowups
   alias CodingAgent.{RunGraph, Subagents, TaskStore}
-  alias LemonCore.{Bus, RouterBridge, RunRequest, SessionKey, Store}
+  alias LemonCore.{Bus, Events, RouterBridge, RunRequest, SessionKey, Store}
 
   @valid_actions ["run", "poll", "join"]
   @valid_queue_modes ["collect", "followup", "steer", "steer_backlog", "interrupt"]
@@ -733,7 +733,7 @@ defmodule CodingAgent.Tools.Agent do
           await_completion_loop(run_id, deadline_ms, acc_answer <> delta)
 
         %LemonCore.Event{type: :run_completed, payload: payload} ->
-          {:ok, normalize_completion(payload, acc_answer)}
+          {:ok, normalize_completion(Events.coerce(:run_completed, payload), acc_answer)}
 
         _ ->
           await_completion_loop(run_id, deadline_ms, acc_answer)
@@ -778,27 +778,37 @@ defmodule CodingAgent.Tools.Agent do
 
   defp merge_completion_answer(completion, _acc_answer), do: completion
 
+  defp normalize_completion(
+         %Events.RunCompleted{completed: completed, duration_ms: duration_ms},
+         acc_answer
+       ) do
+    build_completion(completed, duration_ms, acc_answer)
+  end
+
   defp normalize_completion(payload, acc_answer) when is_map(payload) do
-    completed =
-      payload[:completed] ||
-        payload["completed"] ||
-        payload
-
-    ok = map_get_default(completed, :ok, true)
-    answer = map_get_default(completed, :answer, acc_answer || "")
-    error = map_get(completed, :error)
-    duration_ms = payload[:duration_ms] || payload["duration_ms"]
-
-    %{
-      ok: ok != false,
-      answer: normalize_answer(answer, acc_answer),
-      error: error,
-      duration_ms: duration_ms
-    }
+    build_completion(
+      map_get(payload, :completed) || payload,
+      map_get(payload, :duration_ms),
+      acc_answer
+    )
   end
 
   defp normalize_completion(_payload, acc_answer) do
     %{ok: true, answer: acc_answer || "", error: nil, duration_ms: nil}
+  end
+
+  # `completed` is a `LemonCore.Events.Completion` off the bus and a plain map when it comes
+  # from the run store; `map_get/2` reads both without needing `Access` on the struct.
+  defp build_completion(completed, duration_ms, acc_answer) do
+    ok = map_get_default(completed, :ok, true)
+    answer = map_get_default(completed, :answer, acc_answer || "")
+
+    %{
+      ok: ok != false,
+      answer: normalize_answer(answer, acc_answer),
+      error: map_get(completed, :error),
+      duration_ms: duration_ms
+    }
   end
 
   defp completion_from_summary(summary) when is_map(summary) do

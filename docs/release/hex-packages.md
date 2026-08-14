@@ -33,6 +33,8 @@ scripts/release_package --list
   lemon_router           lemon_router           0.1.0
   lemon_gateway          lemon_gateway          0.1.0
   lemon_platform_test    lemon_platform_test    0.1.0
+  lemon_browser          lemon_browser          0.1.0
+  lemon_skills           lemon_skills           0.1.0
 ```
 
 `lemon_media` is a package because `lemon_channels` and `lemon_router` depend on
@@ -40,6 +42,12 @@ it (decision D13). It was not in the original list of eight, and leaving it out
 would have blocked both of them — see the second failure mode below.
 `lemon_cli_runners` joined with D15 (vendor CLI wrappers extracted from
 `lemon_agent`).
+`lemon_browser` and `lemon_skills` joined as packages 11 and 12 when D14 was
+approved (2026-08-13): both are shared platform infrastructure that the
+coding-agent product group depends on, and unpublished they blocked its
+extraction. `lemon_skills` went through an API-stabilization pass first
+(externally-consumed modules documented, internals `@moduledoc false`).
+
 
 Tags use the **app** name (`lemon_agent-v0.2.0`): the tag has to name a
 directory the workflow can `cd` into.
@@ -57,7 +65,7 @@ exist on hex.pm at the moment it is published, so the first publish walks the
 dependency graph bottom-up:
 
 ```
-lemon_ai → lemon_core → lemon_media → lemon_agent → lemon_cli_runners → lemon_memory → lemon_channels → lemon_router → lemon_gateway → lemon_platform_test
+lemon_ai → lemon_core → lemon_media → lemon_agent → lemon_cli_runners → lemon_memory → lemon_channels → lemon_router → lemon_gateway → lemon_platform_test → lemon_browser → lemon_skills
 ```
 
 `lemon_channels` precedes `lemon_router` because the router depends on it.

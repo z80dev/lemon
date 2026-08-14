@@ -31,14 +31,14 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.Secrets.Keychain` | macOS keychain integration for master key storage |
 | `LemonCore.Secrets.MasterKey` | Master key resolution (keychain first, then env var) |
 | `LemonCore.Store` | Storage GenServer with pluggable backends and `put_new/3` insert-if-absent claims |
-| `LemonCore.Store.ReadCache` | ETS read cache for hot domains (`:chat`, `:runs`, `:progress`, `:sessions_index`, `:telegram_known_targets`) |
+| `LemonCore.Store.ReadCache` | ETS read cache for hot domains (`:chat`, `:runs`, `:progress`, `:sessions_index`, plus tables collaborators add with `register_cached_table/1`) |
 | `LemonCore.Store.EtsBackend` | In-memory ETS (ephemeral, default) with `:ets.insert_new/2` claims |
 | `LemonCore.Store.SqliteBackend` | SQLite with WAL mode (persistent) and `ON CONFLICT DO NOTHING` claims |
 | `LemonCore.Store.JsonlBackend` | Append-only JSONL (portable, human-readable) with serialized Store-process claims |
 | `LemonCore.Bus` | PubSub wrapper with topic helpers |
 | `LemonCore.Event` | Canonical event struct for Bus and persistence |
 | `LemonCore.EventBridge` | Cross-app event translation |
-| `LemonCore.InboundMessage` | Normalized inbound message from any channel (Telegram, SMS, etc.) |
+| `LemonCore.InboundMessage` | Normalized inbound message from any channel; adapters build the struct directly |
 | `LemonCore.RunRequest` | Canonical run submission struct used by router-facing callers |
 | `LemonCore.ExecutionCommand` | Canonical execution command handed from router to a configured engine runtime |
 | `LemonCore.EngineRuntime` | Behaviour for runtime implementations that submit/cancel runs without router depending on gateway internals |
@@ -100,14 +100,14 @@ aggregate usage/quota pressure. Do not include prompt text, response text,
 message bodies, credentials, or secret values in check messages/remediation.
 
 Support-bundle `channel_readiness.json` and control-plane `channels.status`
-should use `LemonCore.Doctor.ChannelReadiness` for the shared Telegram/Discord
+should use `LemonChannels.Doctor.Readiness` for the shared channel
 launch-gate summary. Keep gate evidence and next actions redacted and
-copy-ready, especially Discord slash client-click wait mode. Do not include bot
+copy-ready, especially slash-command client-click wait modes. Do not include bot
 tokens, secret names, chat/channel/guild ids, message bodies, raw proof paths,
 or raw proof details.
 
 Doctor `channels.readiness` should summarize the same
-`LemonCore.Doctor.ChannelReadiness` launch-gate counts and point at the first
+`LemonChannels.Doctor.Readiness` launch-gate counts and point at the first
 unresolved gate's safe next action without duplicating or leaking proof
 contents.
 
@@ -165,7 +165,7 @@ config = LemonCore.Config.Modular.load!(project_dir: cwd)  # raises on invalid
 - `[runtime]` - Runtime behavior (compaction, retry, shell, provider_routing, tools, cli, extensions, theme, budget_defaults)
 - `[profiles.<id>]` - Per-agent profiles with tool policies
 - `[providers.<name>]` - LLM API keys, base URLs, and secret refs (anthropic, openai, openai-codex, opencode, opencode_go, github_copilot, kimi, zai, minimax, google, google_vertex, azure_openai_responses, amazon_bedrock). Secret-ref fields: `api_key_secret`, `oauth_secret`, `project_secret`, `location_secret`, etc.
-- `[gateway]` - Max concurrent runs, engine bindings, transport settings (Telegram, Discord, XMTP, SMS, Voice), projects. Secret-ref fields: `bot_token_secret`, `auth_token_secret`, `wallet_key_secret`.
+- `[gateway]` - Max concurrent runs, engine bindings, SMS/voice/webhook settings, projects. Per-platform sub-tables (`[gateway.<id>]`) and their `enable_<id>` flags are resolved and validated by the app that implements the platform; see `LemonCore.Config.Gateway.Channel`. Secret-ref fields: `bot_token_secret`, `auth_token_secret`, `wallet_key_secret`.
 - `[tui]` - Theme, debug mode
 - `[logging]` - File logging, level, rotation
 
@@ -310,7 +310,7 @@ policy = LemonCore.PolicyStore.get_agent(agent_id)
 :ok = LemonCore.PolicyStore.put_runtime(policy)  # global override
 policy = LemonCore.PolicyStore.get_runtime()
 
-# Progress mapping (scope + Telegram message ID -> run_id)
+# Progress mapping (scope + transport message ID -> run_id)
 :ok = LemonCore.ProgressStore.put_run(scope, progress_msg_id, run_id)
 run_id = LemonCore.ProgressStore.get_run(scope, progress_msg_id)
 :ok = LemonCore.Store.delete_progress_mapping(scope, progress_msg_id)  # synchronous delete
@@ -328,7 +328,7 @@ run_id = LemonCore.ProgressStore.get_run(scope, progress_msg_id)
 events = LemonCore.Introspection.list(run_id: run_id, limit: 50)
 ```
 
-Telegram reply/session indices are channels-owned state. Use `LemonChannels.Telegram.ResumeIndexStore` for `:telegram_msg_resume` / `:telegram_msg_session`; `LemonCore.Store.finalize_run/2` no longer writes those tables.
+Per-platform reply/session indices are channels-owned state; `LemonCore.Store.finalize_run/2` does not write them. More generally, `lemon_core` must not name a chat platform at all: `LemonCore.Quality.ArchitectureRulesCheck`'s `:core_vendor_channel_reference` rule fails the quality gate on any such mention under `apps/lemon_core/lib`.
 
 ## Event Bus Usage Patterns
 
@@ -414,21 +414,23 @@ Onboarding providers live in `apps/lemon_cli`; see `apps/lemon_cli/README.md`.
 
 ### Doctor Channel Checks
 
-`LemonCore.Doctor.Checks.Channels` must stay redacted. Discord DM,
-free-response, reconnect, slash registration, deterministic slash, and real
-client-click gates should use `ChannelDiagnostics` plus sanitized
-`ProofDiagnostics` status/reason kinds, not raw Discord IDs, message bodies,
-bot tokens, or secret names. Free-response checks distinguish missing local
-Message Content Intent declaration from proof artifacts that still report
-Message Content Intent or unmentioned-message delivery drift after declaration.
-Slash client-click checks should preserve stable reason kinds for missing,
-invalid, non-promotable, and stale proof artifacts so doctor and support bundles
-can point operators at the exact wait-mode proof step.
-Shared proof launch-gate summaries should live in
+Channel diagnostics, launch-gate readiness and the channel doctor check live in
+`lemon_channels` and reach `lemon_core` through `config :lemon_core,
+:doctor_runtime` (`channel_diagnostics:`, `channel_readiness:`,
+`channel_proofs:`) and `config :lemon_core, :doctor_checks`. Core must not name
+a platform: the per-channel proof vocabulary — which smoke-proof check names
+count as a channel media delivery, what evidence each contributes, the
+platform launch gates, the channel-origin cron check names, and the
+failure/setup-error classifications — is supplied by whoever implements
+`LemonCore.Doctor.ChannelProofs`. Unregistered, every one of those degrades to
+its documented generic answer rather than failing.
+
+Shared proof launch-gate summaries still live in
 `LemonCore.Doctor.ProofLaunchGates`, not in a Web or control-plane formatter, so
 support bundles, `proofs.status`, and `readiness.status` stay aligned on
-Discord DM, slash registration, slash client-click, provider media, and
-terminal backend gate state without raw proof details.
+provider media, terminal backend and the registered channel gates without raw
+proof details. Everything a bundle or check emits stays redacted: sanitized
+status/reason kinds, never raw ids, message bodies, bot tokens or secret names.
 
 ## How to Add Quality Checks
 
@@ -593,7 +595,7 @@ key = LemonCore.SessionKey.main("my_agent")
 # Generate channel peer key
 key = LemonCore.SessionKey.channel_peer(%{
   agent_id: "my_agent",
-  channel_id: "telegram",
+  channel_id: "demo",
   account_id: "bot123",
   peer_kind: :dm,
   peer_id: "user456",
@@ -675,7 +677,7 @@ LemonCore.Telemetry.emit([:lemon, :custom], %{count: 1}, %{detail: "info"})
 ```elixir
 # InboundMessage: normalized message from any channel
 msg = %LemonCore.InboundMessage{
-  channel_id: "telegram",
+  channel_id: "demo",
   account_id: "bot123",
   peer: %{kind: :dm, id: "456", thread_id: nil},
   sender: %{id: "789", username: "alice", display_name: "Alice"},
@@ -683,9 +685,6 @@ msg = %LemonCore.InboundMessage{
   raw: %{},  # original update
   meta: %{}
 }
-
-# Build from Telegram update
-msg = LemonCore.InboundMessage.from_telegram(:my_bot, chat_id, telegram_message_map)
 
 # RunRequest: canonical run submission (accepted by RouterBridge.submit_run/1)
 req = LemonCore.RunRequest.new(%{

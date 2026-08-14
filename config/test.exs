@@ -110,6 +110,16 @@ config :lemon_gateway, LemonGateway.Config,
   bindings: [],
   projects: %{}
 
+# Credentials the umbrella's transports read, scrubbed from the unit lane on
+# top of LemonCore.Testing.HermeticEnv's built-in provider list. They live here
+# rather than in the library: the platform an adapter talks to is the adapter's
+# business, not lemon_core's.
+config :lemon_core, :test_credential_env_vars, ~w(
+  DISCORD_BOT_TOKEN
+  TELEGRAM_BOT_TOKEN
+  XMTP_WALLET_KEY
+)
+
 # Pin the engine set for tests. Setting the key also marks it as
 # operator-configured, so boot auto-registration (LemonCliRunners.Application's
 # vendor engines, CodingAgent.Application's lemon engine) is a no-op and suites

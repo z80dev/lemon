@@ -1,67 +1,77 @@
 defmodule LemonCore.Doctor.Checks.Cron do
   @moduledoc "Checks cron preview proof readiness from redacted smoke artifacts."
 
-  alias LemonCore.Doctor.{Check, ProofDiagnostics}
+  alias LemonCore.Doctor.{ChannelProofs, Check, ProofDiagnostics}
 
-  @proofs [
-    %{
-      label: "diagnostics",
-      proof_object: "lemon.cron_diagnostics_smoke",
-      required_count: 4,
-      checks: [
-        "cron_diagnostics_counts",
-        "cron_diagnostics_retry_policy",
-        "cron_diagnostics_redaction",
-        "cron_support_bundle_entry"
-      ],
-      cleanup: [
-        "includes_raw_session_ids",
-        "includes_prompts",
-        "includes_outputs",
-        "includes_errors",
-        "includes_raw_agent_ids",
-        "includes_raw_memory_paths",
-        "includes_meta_values"
-      ]
-    },
-    %{
-      label: "runtime restart",
-      proof_object: "lemon.cron_runtime_restart_smoke",
-      required_count: 7,
-      checks: [
-        "runtime_booted",
-        "cron_api_ready",
-        "pre_restart_scheduled_run_observed",
-        "runtime_restarted",
-        "persisted_cron_state_loaded",
-        "post_restart_scheduled_run_observed",
-        "cleanup_complete"
-      ],
-      cleanup: [
-        "includes_raw_prompts",
-        "includes_raw_session_ids",
-        "includes_raw_outputs",
-        "includes_raw_store_path"
-      ]
-    },
-    %{
-      label: "channel origin",
-      proof_object: "lemon.cron_channel_origin_smoke",
-      required_count: 2,
-      checks: [
-        "telegram_channel_origin_cron_delivery",
-        "discord_channel_origin_cron_delivery"
-      ],
-      cleanup: [
-        "includes_raw_session_ids",
-        "includes_prompts",
-        "includes_outputs",
-        "includes_raw_channel_ids",
-        "includes_raw_peer_ids",
-        "includes_raw_cron_ids"
-      ]
-    }
-  ]
+  # The proof groups this check looks for. Not `proofs`: every function below
+  # already binds that name to the proof-diagnostics status map.
+  defp proof_groups do
+    origin_checks = ChannelProofs.call(:origin_cron_checks, [], [])
+
+    [
+      %{
+        label: "diagnostics",
+        proof_object: "lemon.cron_diagnostics_smoke",
+        required_count: 4,
+        checks: [
+          "cron_diagnostics_counts",
+          "cron_diagnostics_retry_policy",
+          "cron_diagnostics_redaction",
+          "cron_support_bundle_entry"
+        ],
+        cleanup: [
+          "includes_raw_session_ids",
+          "includes_prompts",
+          "includes_outputs",
+          "includes_errors",
+          "includes_raw_agent_ids",
+          "includes_raw_memory_paths",
+          "includes_meta_values"
+        ]
+      },
+      %{
+        label: "runtime restart",
+        proof_object: "lemon.cron_runtime_restart_smoke",
+        required_count: 7,
+        checks: [
+          "runtime_booted",
+          "cron_api_ready",
+          "pre_restart_scheduled_run_observed",
+          "runtime_restarted",
+          "persisted_cron_state_loaded",
+          "post_restart_scheduled_run_observed",
+          "cleanup_complete"
+        ],
+        cleanup: [
+          "includes_raw_prompts",
+          "includes_raw_session_ids",
+          "includes_raw_outputs",
+          "includes_raw_store_path"
+        ]
+      }
+    ] ++ channel_origin_group(origin_checks)
+  end
+
+  defp channel_origin_group([]), do: []
+
+  defp channel_origin_group(checks) do
+    [
+      %{
+        label: "channel origin",
+        proof_object: "lemon.cron_channel_origin_smoke",
+        required_count: length(checks),
+        checks: checks,
+        cleanup: [
+          "includes_raw_session_ids",
+          "includes_prompts",
+          "includes_outputs",
+          "includes_raw_channel_ids",
+          "includes_raw_peer_ids",
+          "includes_raw_cron_ids"
+        ]
+      }
+    ]
+  end
 
   @spec run(keyword()) :: [Check.t()]
   def run(opts \\ []) do
@@ -100,13 +110,13 @@ defmodule LemonCore.Doctor.Checks.Cron do
       true ->
         Check.pass(
           "cron.preview",
-          "Cron preview proof is completed for diagnostics, runtime restart persistence, and Telegram/Discord-shaped channel-origin delivery."
+          "Cron preview proof is completed for #{label_list(completed)}."
         )
     end
   end
 
   defp proof_statuses(proofs) do
-    Enum.map(@proofs, fn proof ->
+    Enum.map(proof_groups(), fn proof ->
       %{
         label: proof.label,
         status: proof_status(proofs, proof)

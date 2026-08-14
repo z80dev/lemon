@@ -1,10 +1,46 @@
+defmodule LemonCore.Config.ExpandedSchemaTest.StubChannel do
+  @behaviour LemonCore.Config.Gateway.Channel
+
+  @impl true
+  def id, do: :stub
+
+  @impl true
+  def resolve(section), do: %{resolved: true, raw: section}
+
+  @impl true
+  def enabled?(configured), do: configured
+
+  @impl true
+  def validate(section, errors) do
+    if Map.get(section, :resolved), do: errors, else: ["gateway.stub: invalid" | errors]
+  end
+end
+
 defmodule LemonCore.Config.ExpandedSchemaTest do
   @moduledoc """
   Tests for expanded canonical schema fields (Section 3 of CONFIGPLAN).
+
+  Vendor-specific `[gateway.<id>]` sections and their enable flags are owned by
+  the channel modules registered under `config :lemon_core, :gateway_channels`;
+  their resolution and validation are asserted in lemon_channels' adapter
+  config tests. The generic mechanism is tested here with a stub channel.
   """
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias LemonCore.Config.{Agent, Providers, Gateway, Tools}
+
+  setup do
+    previous = Application.get_env(:lemon_core, :gateway_channels)
+    Application.put_env(:lemon_core, :gateway_channels, [__MODULE__.StubChannel])
+
+    on_exit(fn ->
+      if is_nil(previous),
+        do: Application.delete_env(:lemon_core, :gateway_channels),
+        else: Application.put_env(:lemon_core, :gateway_channels, previous)
+    end)
+
+    :ok
+  end
 
   describe "Agent budget_defaults" do
     test "defaults to max_children=5" do
@@ -141,34 +177,6 @@ defmodule LemonCore.Config.ExpandedSchemaTest do
   end
 
   describe "Gateway - secret-ref fields" do
-    test "telegram bot_token_secret is parsed" do
-      settings = %{
-        "gateway" => %{
-          "telegram" => %{
-            "bot_token_secret" => "telegram_bot_token"
-          }
-        }
-      }
-
-      config = Gateway.resolve(settings)
-
-      assert config.telegram.bot_token_secret == "telegram_bot_token"
-    end
-
-    test "discord bot_token_secret is parsed" do
-      settings = %{
-        "gateway" => %{
-          "discord" => %{
-            "bot_token_secret" => "discord_bot_token"
-          }
-        }
-      }
-
-      config = Gateway.resolve(settings)
-
-      assert config.discord[:bot_token_secret] == "discord_bot_token"
-    end
-
     test "sms auth_token_secret is parsed" do
       settings = %{
         "gateway" => %{
@@ -185,49 +193,42 @@ defmodule LemonCore.Config.ExpandedSchemaTest do
       assert config.sms["provider"] == "twilio"
     end
 
-    test "xmtp wallet_key_secret is parsed" do
+    test "a registered channel's secret-ref fields land in its resolved section" do
       settings = %{
         "gateway" => %{
-          "xmtp" => %{
-            "wallet_key_secret" => "xmtp_wallet_key",
-            "environment" => "production"
-          }
+          "stub" => %{"bot_token_secret" => "stub_bot_token"}
         }
       }
 
       config = Gateway.resolve(settings)
 
-      assert config.xmtp[:wallet_key_secret] == "xmtp_wallet_key"
-      assert config.xmtp[:environment] == "production"
+      assert config.channels[:stub] == %{
+               resolved: true,
+               raw: %{"bot_token_secret" => "stub_bot_token"}
+             }
     end
   end
 
   describe "Gateway - enable_* flags" do
-    test "all enable flags are resolved" do
+    test "enable_webhook and registered channel flags are resolved" do
       settings = %{
         "gateway" => %{
-          "enable_telegram" => true,
-          "enable_discord" => true,
-          "enable_xmtp" => true,
-          "enable_webhook" => true
+          "enable_webhook" => true,
+          "enable_stub" => true
         }
       }
 
       config = Gateway.resolve(settings)
 
-      assert config.enable_telegram == true
-      assert config.enable_discord == true
-      assert config.enable_xmtp == true
       assert config.enable_webhook == true
+      assert config.enabled_channels[:stub] == true
     end
 
-    test "all enable flags default to false" do
+    test "enable flags default to false" do
       config = Gateway.resolve(%{})
 
-      assert config.enable_telegram == false
-      assert config.enable_discord == false
-      assert config.enable_xmtp == false
       assert config.enable_webhook == false
+      assert config.enabled_channels[:stub] == false
     end
   end
 

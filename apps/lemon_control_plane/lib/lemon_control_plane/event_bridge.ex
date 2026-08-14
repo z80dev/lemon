@@ -74,6 +74,7 @@ defmodule LemonControlPlane.EventBridge do
   require Logger
 
   alias LemonCore.Bus
+  alias LemonCore.Events
   alias LemonControlPlane.Presence
 
   @fanout_supervisor LemonControlPlane.EventBridge.FanoutSupervisor
@@ -398,32 +399,43 @@ defmodule LemonControlPlane.EventBridge do
     _ -> []
   end
 
-  # Map bus events to WebSocket event names and payloads
+  # Map bus events to WebSocket event names and payloads.
+  #
+  # Registered platform payloads are coerced to their struct once, here, so that every clause
+  # below can pattern-match one: a struct passes through untouched and a legacy map — a
+  # hand-built test payload, or an event injected through `events.ingest` — becomes its
+  # struct. A payload too malformed to coerce stays a map, misses its typed clause and is
+  # reported by the catch-all, instead of being fanned out to clients as a frame of nils.
+  #
+  # `meta` is deliberately still a free map (see docs/platform/bus-events.md §4.1), so it is
+  # read with `Access`; the payload never is.
   defp map_event(%LemonCore.Event{type: type, payload: payload, meta: meta}) do
-    map_event_type(type, payload, meta)
+    map_event_type(type, Events.coerce(type, payload), meta || %{})
   end
 
   defp map_event(%{type: type, payload: payload} = event) do
-    meta = event[:meta] || %{}
-    map_event_type(type, payload, meta)
+    map_event_type(type, Events.coerce(type, payload), Map.get(event, :meta) || %{})
   end
 
   defp map_event(_), do: nil
 
   # Run events
-  defp map_event_type(:run_started, payload, meta) do
+  defp map_event_type(:run_started, %Events.RunStarted{} = payload, meta) do
     {"agent",
      %{
        "type" => "started",
-       "runId" => payload[:run_id] || meta[:run_id],
-       "sessionKey" => payload[:session_key] || meta[:session_key],
-       "engine" => payload[:engine],
-       "parentRunId" => payload[:parent_run_id] || meta[:parent_run_id]
+       "runId" => payload.run_id || meta[:run_id],
+       "sessionKey" => payload.session_key || meta[:session_key],
+       "engine" => payload.engine,
+       "parentRunId" => meta[:parent_run_id]
      }}
   end
 
-  defp map_event_type(:run_completed, payload, meta) do
-    completed = payload[:completed] || payload
+  defp map_event_type(:run_completed, %Events.RunCompleted{} = payload, meta) do
+    # Every publisher and `RunCompleted.from_map/1` put a `Events.Completion` here, but a
+    # payload built with `new/1` from a raw nested map keeps that map, so the nested reads go
+    # through `get_field/2` — struct-and-map safe, and not `Access`.
+    completed = payload.completed
 
     {"agent",
      %{
@@ -432,24 +444,24 @@ defmodule LemonControlPlane.EventBridge do
        "sessionKey" => meta[:session_key],
        "ok" => get_field(completed, :ok),
        "answer" => truncate(get_field(completed, :answer), 500),
-       "durationMs" => payload[:duration_ms]
+       "durationMs" => payload.duration_ms
      }}
   end
 
-  defp map_event_type(:delta, payload, meta) do
+  defp map_event_type(:delta, %Events.Delta{} = payload, meta) do
     {"chat",
      %{
        "type" => "delta",
-       "runId" => get_field(payload, :run_id) || meta[:run_id],
+       "runId" => payload.run_id || meta[:run_id],
        "sessionKey" => meta[:session_key],
-       "seq" => get_field(payload, :seq),
-       "text" => get_field(payload, :text)
+       "seq" => payload.seq,
+       "text" => payload.text
      }}
   end
 
   # Engine action events (tool_use)
-  defp map_event_type(:engine_action, payload, meta) do
-    action = get_field(payload, :action) || payload
+  defp map_event_type(:engine_action, %Events.EngineAction{} = payload, meta) do
+    action = payload.action
 
     {"agent",
      %{
@@ -462,9 +474,9 @@ defmodule LemonControlPlane.EventBridge do
          "title" => get_field(action, :title),
          "detail" => get_field(action, :detail)
        },
-       "phase" => get_field(payload, :phase),
-       "ok" => get_field(payload, :ok),
-       "message" => get_field(payload, :message)
+       "phase" => payload.phase,
+       "ok" => payload.ok,
+       "message" => payload.message
      }}
   end
 
@@ -485,7 +497,7 @@ defmodule LemonControlPlane.EventBridge do
      }}
   end
 
-  defp map_event_type(type, payload, meta)
+  defp map_event_type(type, %Events.GoalChanged{} = payload, meta)
        when type in [
               :goal_set,
               :goal_paused,
@@ -499,25 +511,28 @@ defmodule LemonControlPlane.EventBridge do
     {"goal",
      %{
        "type" => Atom.to_string(type),
-       "sessionKey" => get_field(meta, :session_key) || get_field(payload, :session_key),
-       "goalId" => get_field(payload, :goal_id),
-       "agentId" => get_field(payload, :agent_id),
-       "status" => get_field(payload, :status),
-       "objectiveBytes" => get_field(payload, :objective_bytes),
-       "continuationCount" => get_field(payload, :continuation_count),
-       "lastRunId" => get_field(payload, :last_run_id),
-       "loopStatus" => get_field(payload, :loop_status),
-       "loopVerdict" => get_field(payload, :loop_verdict)
+       "sessionKey" => get_field(meta, :session_key) || payload.session_key,
+       "goalId" => payload.goal_id,
+       "agentId" => payload.agent_id,
+       "status" => payload.status,
+       "objectiveBytes" => payload.objective_bytes,
+       "continuationCount" => payload.continuation_count,
+       "lastRunId" => payload.last_run_id,
+       "loopStatus" => payload.loop_status,
+       "loopVerdict" => payload.loop_verdict
      }}
   end
 
   # Approval events
-  defp map_event_type(:approval_requested, payload, _meta) do
-    pending = get_field(payload, :pending) || payload
+  #
+  # `pending` is an `Events.ApprovalPending` from every publisher, but is read with
+  # `get_field/2` for the same reason as `RunCompleted`'s `completed`.
+  defp map_event_type(:approval_requested, %Events.ApprovalRequested{} = payload, _meta) do
+    pending = payload.pending
 
     {"exec.approval.requested",
      %{
-       "approvalId" => get_field(pending, :id) || get_field(payload, :approval_id),
+       "approvalId" => get_field(pending, :id) || payload.approval_id,
        "runId" => get_field(pending, :run_id),
        "sessionKey" => get_field(pending, :session_key),
        "agentId" => get_field(pending, :agent_id),
@@ -529,13 +544,13 @@ defmodule LemonControlPlane.EventBridge do
      }}
   end
 
-  defp map_event_type(:approval_resolved, payload, meta) do
-    pending = get_field(payload, :pending) || %{}
+  defp map_event_type(:approval_resolved, %Events.ApprovalResolved{} = payload, meta) do
+    pending = payload.pending
 
     {"exec.approval.resolved",
      %{
-       "approvalId" => get_field(payload, :approval_id),
-       "decision" => to_string(get_field(payload, :decision) || :resolved),
+       "approvalId" => payload.approval_id,
+       "decision" => to_string(payload.decision || :resolved),
        "runId" => get_field(pending, :run_id) || get_field(meta, :run_id),
        "sessionKey" => get_field(pending, :session_key) || get_field(meta, :session_key),
        "agentId" => get_field(pending, :agent_id),
@@ -544,44 +559,42 @@ defmodule LemonControlPlane.EventBridge do
   end
 
   # Cron events
-  defp map_event_type(:cron_run_started, payload, _meta) do
-    run = payload[:run] || payload
-    job = payload[:job] || %{}
-
+  #
+  # The payloads carry the flat fields this mapping needs; their `run`/`job` records are the
+  # pre-3.1 nested shape, kept on the struct for consumers that want the whole record.
+  defp map_event_type(:cron_run_started, %Events.CronRunStarted{} = payload, _meta) do
     {"cron",
      %{
        "type" => "started",
-       "runId" => run[:run_id] || payload[:router_run_id] || run[:id],
-       "cronRunId" => run[:id] || payload[:cron_run_id],
-       "jobId" => run[:job_id],
-       "jobName" => job[:name] || payload[:job_name],
-       "agentId" => payload[:agent_id],
-       "sessionKey" => payload[:session_key],
-       "triggeredBy" => to_string(payload[:triggered_by] || run[:triggered_by] || :schedule),
-       "startedAtMs" => run[:started_at_ms]
+       "runId" => payload.router_run_id,
+       "cronRunId" => payload.cron_run_id,
+       "jobId" => payload.job_id,
+       "jobName" => payload.job_name,
+       "agentId" => payload.agent_id,
+       "sessionKey" => payload.session_key,
+       "triggeredBy" => to_string(payload.triggered_by || :schedule),
+       "startedAtMs" => payload.started_at_ms
      }}
   end
 
-  defp map_event_type(:cron_run_completed, payload, _meta) do
-    run = payload[:run] || payload
-
+  defp map_event_type(:cron_run_completed, %Events.CronRunCompleted{} = payload, _meta) do
     {"cron",
      %{
        "type" => "completed",
-       "runId" => run[:run_id] || payload[:router_run_id] || run[:id],
-       "cronRunId" => run[:id] || payload[:cron_run_id],
-       "jobId" => run[:job_id],
-       "status" => to_string(run[:status]),
-       "suppressed" => run[:suppressed] || false,
-       "agentId" => payload[:agent_id],
-       "sessionKey" => payload[:session_key],
-       "durationMs" => payload[:duration_ms] || run[:duration_ms],
-       "error" => payload[:error] || run[:error]
+       "runId" => payload.router_run_id,
+       "cronRunId" => payload.cron_run_id,
+       "jobId" => payload.job_id,
+       "status" => to_string(payload.status),
+       "suppressed" => payload.suppressed || false,
+       "agentId" => payload.agent_id,
+       "sessionKey" => payload.session_key,
+       "durationMs" => payload.duration_ms,
+       "error" => payload.error
      }}
   end
 
-  defp map_event_type(:cron_lifecycle_action, payload, _meta) do
-    audit = payload[:audit] || payload
+  defp map_event_type(:cron_lifecycle_action, %Events.CronLifecycleAction{} = payload, _meta) do
+    audit = payload.audit
 
     {"cron.audit",
      %{
@@ -599,20 +612,20 @@ defmodule LemonControlPlane.EventBridge do
      }}
   end
 
-  defp map_event_type(:cron_job_created, payload, _meta) do
+  defp map_event_type(:cron_job_created, %Events.CronJobChanged{} = payload, _meta) do
     map_cron_job_event("created", payload)
   end
 
-  defp map_event_type(:cron_job_updated, payload, _meta) do
+  defp map_event_type(:cron_job_updated, %Events.CronJobChanged{} = payload, _meta) do
     map_cron_job_event("updated", payload)
   end
 
-  defp map_event_type(:cron_job_deleted, payload, _meta) do
+  defp map_event_type(:cron_job_deleted, %Events.CronJobChanged{} = payload, _meta) do
     {"cron.job",
      %{
        "type" => "deleted",
-       "jobId" => payload[:job_id],
-       "name" => payload[:name]
+       "jobId" => payload.job_id,
+       "name" => payload.name
      }}
   end
 
@@ -622,9 +635,8 @@ defmodule LemonControlPlane.EventBridge do
     {"tick", %{"timestampMs" => timestamp}}
   end
 
-  defp map_event_type(:cron_tick, payload, _meta) do
-    timestamp = extract_timestamp(payload)
-    {"tick", %{"timestampMs" => timestamp}}
+  defp map_event_type(:cron_tick, %Events.CronTick{} = payload, _meta) do
+    {"tick", %{"timestampMs" => payload.timestamp_ms}}
   end
 
   # Presence events
@@ -637,11 +649,11 @@ defmodule LemonControlPlane.EventBridge do
   end
 
   # Talk mode events
-  defp map_event_type(:talk_mode_changed, payload, _meta) do
+  defp map_event_type(:talk_mode_changed, %Events.TalkModeChanged{} = payload, _meta) do
     {"talk.mode",
      %{
-       "sessionKey" => payload[:session_key],
-       "mode" => to_string(payload[:mode])
+       "sessionKey" => payload.session_key,
+       "mode" => to_string(payload.mode)
      }}
   end
 
@@ -655,23 +667,23 @@ defmodule LemonControlPlane.EventBridge do
      }}
   end
 
-  defp map_event_type(:heartbeat_alert, payload, _meta) do
+  defp map_event_type(:heartbeat_alert, %Events.HeartbeatAlert{} = payload, _meta) do
     {"heartbeat",
      %{
-       "agentId" => payload[:agent_id],
+       "agentId" => payload.agent_id,
        "status" => "alert",
-       "response" => payload[:response],
-       "timestampMs" => payload[:timestamp_ms] || System.system_time(:millisecond)
+       "response" => payload.response,
+       "timestampMs" => System.system_time(:millisecond)
      }}
   end
 
-  defp map_event_type(:heartbeat_suppressed, payload, _meta) do
+  defp map_event_type(:heartbeat_suppressed, %Events.HeartbeatSuppressed{} = payload, _meta) do
     {"heartbeat",
      %{
-       "agentId" => payload[:agent_id],
+       "agentId" => payload.agent_id,
        "status" => "suppressed",
-       "runId" => payload[:run_id],
-       "jobId" => payload[:job_id],
+       "runId" => payload.run_id,
+       "jobId" => payload.job_id,
        "timestampMs" => System.system_time(:millisecond)
      }}
   end
@@ -886,24 +898,37 @@ defmodule LemonControlPlane.EventBridge do
   # `LemonCore.Events.registry/0` is part of the platform contract: it is published onto a
   # topic this bridge subscribes to, and reaching here means WS clients never see it. Warn
   # once per type so "added an event, forgot the mapping" has a failure mode someone notices.
-  defp map_event_type(type, _payload, _meta) do
-    if LemonCore.Events.registered?(type), do: warn_unmapped_once(type)
+  #
+  # A registered type also lands here when its payload is not — and could not be coerced
+  # into — its struct, which is the failure mode the removal of the `Access` shim introduces.
+  # The two are worth telling apart in the log, because the fix is different.
+  defp map_event_type(type, payload, _meta) do
+    if Events.registered?(type), do: warn_unmapped_once(type, payload)
     nil
   end
 
-  defp warn_unmapped_once(type) do
+  defp warn_unmapped_once(type, payload) do
     key = {__MODULE__, :unmapped_event, type}
 
     if :persistent_term.get(key, nil) == nil do
       :persistent_term.put(key, true)
-
-      Logger.warning(
-        "[EventBridge] #{inspect(type)} is a registered platform event with no client " <>
-          "mapping; it is being dropped rather than forwarded to WS clients"
-      )
+      Logger.warning("[EventBridge] " <> unmapped_reason(type, payload))
     end
 
     :ok
+  end
+
+  defp unmapped_reason(type, payload) do
+    module = Events.payload_module(type)
+
+    if is_struct(payload, module) do
+      "#{inspect(type)} is a registered platform event with no client mapping; it is being " <>
+        "dropped rather than forwarded to WS clients"
+    else
+      "#{inspect(type)} reached the bridge carrying #{inspect(payload, limit: 5)}, which is " <>
+        "not a #{inspect(module)} and could not be coerced into one; it is being dropped " <>
+        "rather than forwarded to WS clients. Publish it with Bus.broadcast_event/4."
+    end
   end
 
   # Helper to extract timestamp from various payload formats
@@ -963,19 +988,19 @@ defmodule LemonControlPlane.EventBridge do
     end
   end
 
-  defp map_cron_job_event(type, payload) do
-    job = payload[:job] || %{}
+  defp map_cron_job_event(type, %Events.CronJobChanged{} = payload) do
+    job = payload.job
 
     {"cron.job",
      %{
        "type" => type,
-       "jobId" => job[:id] || payload[:job_id],
-       "name" => job[:name],
-       "schedule" => job[:schedule],
-       "enabled" => job[:enabled],
-       "agentId" => job[:agent_id],
-       "sessionKey" => job[:session_key],
-       "nextRunAtMs" => job[:next_run_at_ms]
+       "jobId" => get_field(job, :id) || payload.job_id,
+       "name" => get_field(job, :name),
+       "schedule" => get_field(job, :schedule),
+       "enabled" => get_field(job, :enabled),
+       "agentId" => get_field(job, :agent_id),
+       "sessionKey" => get_field(job, :session_key),
+       "nextRunAtMs" => get_field(job, :next_run_at_ms)
      }}
   end
 

@@ -123,7 +123,7 @@ defmodule LemonMCP.Server do
   Calls a tool on the server.
   """
   @spec call_tool(GenServer.server(), String.t(), map()) ::
-          {:ok, Protocol.ToolCallResult.t()} | {:error, term()}
+          {:ok, Protocol.ToolCallResult.t() | map()} | {:error, term()}
   def call_tool(server, name, arguments \\ %{}) do
     GenServer.call(server, {:call_tool, name, arguments})
   end
