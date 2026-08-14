@@ -2,11 +2,11 @@ defmodule LemonAutomation.Doctor.Checks.Synthesis do
   @moduledoc """
   Reports the state of the scheduled skill-synthesis runner.
 
-  The runner (`LemonAutomation.SynthesisRunner`) accumulates the evidence the
-  `:skill_synthesis_drafts` rollout gate needs, so "below threshold" is the
-  expected steady state and never a warning. The check only warns when the
-  runner looks stalled — enabled, with recorded passes, but nothing observed for
-  three intervals — since that means the learning loop silently stopped.
+  The runner (`LemonAutomation.SynthesisRunner`) records one metrics row per
+  pass; this check surfaces those counts so the learning loop is observable.
+  It only warns when the runner looks stalled — enabled, with recorded passes,
+  but nothing observed for three intervals — since that means the loop
+  silently stopped.
 
   Registered via `config :lemon_core, :doctor_checks, [__MODULE__]`.
   """
@@ -48,43 +48,37 @@ defmodule LemonAutomation.Doctor.Checks.Synthesis do
   end
 
   defp enabled_check(state, cfg, opts) do
-    case SynthesisMetrics.gate_status() do
-      :no_data ->
+    summary = summary(state)
+
+    case {recorded_passes(), stalled(cfg, opts)} do
+      {0, _} ->
         Check.pass(
           @name,
           "skill_synthesis_drafts is #{state}; runner enabled; no synthesis passes recorded yet."
         )
 
-      gate ->
-        summary = gate_summary(state, gate)
+      {_, {:stalled, age_hours, interval_hours}} ->
+        Check.warn(
+          @name,
+          summary <>
+            " — last pass #{age_hours}h ago, more than #{@stall_intervals}× the #{interval_hours}h interval.",
+          "Check SynthesisRunnerManager logs; verify lemon_skills/lemon_memory are running."
+        )
 
-        case stalled(cfg, opts) do
-          {:stalled, age_hours, interval_hours} ->
-            Check.warn(
-              @name,
-              summary <>
-                " — last pass #{age_hours}h ago, more than #{@stall_intervals}× the #{interval_hours}h interval.",
-              "Check SynthesisRunnerManager logs; verify lemon_skills/lemon_memory are running."
-            )
-
-          :ok ->
-            Check.pass(@name, summary)
-        end
+      {_, :ok} ->
+        Check.pass(@name, summary)
     end
   end
 
-  defp gate_summary(state, {:ready, computed}) do
-    "skill_synthesis_drafts is #{state}; #{counts(computed)}; rollout gate: READY"
+  defp summary(state) do
+    counts = SynthesisMetrics.aggregate()
+
+    "skill_synthesis_drafts is #{state}; candidates=#{counts.total_candidates} " <>
+      "generated=#{counts.generated} blocked=#{counts.blocked_by_audit}"
   end
 
-  defp gate_summary(state, {:not_ready, reasons, computed}) do
-    "skill_synthesis_drafts is #{state}; accumulating: #{counts(computed)}; " <>
-      "rollout gate: not ready (#{Enum.join(reasons, "; ")})"
-  end
-
-  defp counts(computed) do
-    "candidates=#{computed.total_candidates} generated=#{computed.generated} " <>
-      "blocked=#{computed.blocked_by_audit}"
+  defp recorded_passes do
+    length(SynthesisMetrics.list(limit: 1))
   end
 
   defp stalled(cfg, opts) do

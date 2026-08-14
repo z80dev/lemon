@@ -41,8 +41,7 @@ defmodule LemonAutomation.DoctorChecksSynthesisTest do
       generated: Keyword.get(attrs, :generated, 0),
       blocked_by_audit: Keyword.get(attrs, :blocked_by_audit, 0),
       skipped_other: 0,
-      latest_doc_ms: nil,
-      gate: "fail"
+      latest_doc_ms: nil
     })
   end
 
@@ -63,7 +62,7 @@ defmodule LemonAutomation.DoctorChecksSynthesisTest do
   test "a disabled runner config passes", %{agent_id: agent_id} do
     assert [check] =
              Synthesis.run(
-               features: features(:"opt-in"),
+               features: features(:"default-on"),
                runner_config: runner_config(agent_id, enabled: false)
              )
 
@@ -74,7 +73,7 @@ defmodule LemonAutomation.DoctorChecksSynthesisTest do
   test "an enabled runner with no recorded passes passes", %{agent_id: agent_id} do
     assert [check] =
              Synthesis.run(
-               features: features(:"opt-in"),
+               features: features(:"default-on"),
                runner_config: runner_config(agent_id)
              )
 
@@ -82,35 +81,33 @@ defmodule LemonAutomation.DoctorChecksSynthesisTest do
     assert check.message =~ "no synthesis passes recorded yet"
   end
 
-  test "accumulating below the gate passes with the blocking reasons", %{agent_id: agent_id} do
+  test "recorded passes surface aggregate counts", %{agent_id: agent_id} do
     seed_row(total_candidates: 5, generated: 1, blocked_by_audit: 0)
 
     assert [check] =
              Synthesis.run(
-               features: features(:"opt-in"),
+               features: features(:"default-on"),
                runner_config: runner_config(agent_id)
              )
 
     assert check.status == :pass
-    assert check.message =~ "accumulating"
     assert check.message =~ "candidates=5"
-    assert check.message =~ "not ready"
-    assert check.message =~ "candidate_count"
+    assert check.message =~ "generated=1"
   end
 
-  test "a cleared gate reports READY", %{agent_id: agent_id} do
+  test "counts include audit-blocked drafts in generated", %{agent_id: agent_id} do
     seed_row(total_candidates: 25, generated: 19, blocked_by_audit: 1)
 
     assert [check] =
              Synthesis.run(
-               features: features(:"opt-in"),
+               features: features(:"default-on"),
                runner_config: runner_config(agent_id)
              )
 
     assert check.status == :pass
-    assert check.message =~ "READY"
     assert check.message =~ "candidates=25"
     assert check.message =~ "generated=20"
+    assert check.message =~ "blocked=1"
   end
 
   test "a stalled runner warns with remediation", %{agent_id: agent_id} do
@@ -121,7 +118,7 @@ defmodule LemonAutomation.DoctorChecksSynthesisTest do
 
     assert [check] =
              Synthesis.run(
-               features: features(:"opt-in"),
+               features: features(:"default-on"),
                runner_config: runner_config(agent_id, interval_hours: 6),
                now_ms: now
              )
@@ -139,7 +136,7 @@ defmodule LemonAutomation.DoctorChecksSynthesisTest do
 
     assert [check] =
              Synthesis.run(
-               features: features(:"opt-in"),
+               features: features(:"default-on"),
                runner_config: runner_config(agent_id, interval_hours: 6),
                now_ms: now
              )

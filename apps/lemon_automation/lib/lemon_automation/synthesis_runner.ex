@@ -5,10 +5,10 @@ defmodule LemonAutomation.SynthesisRunner do
   `LemonSkills.Synthesis.Pipeline` closes the learning loop (memory documents →
   linted, audited skill drafts) but nothing invoked it outside
   `mix lemon.skill draft generate`. This module is the automation caller:
-  `LemonAutomation.SynthesisRunnerManager` ticks it, it invokes the pipeline
-  with `opt_in: true`, advances a durable ingest watermark so each pass only
-  looks at documents that arrived since the last one, and records the result in
-  `LemonAutomation.SynthesisMetrics` for the rollout gate.
+  `LemonAutomation.SynthesisRunnerManager` ticks it, it invokes the pipeline,
+  advances a durable ingest watermark so each pass only looks at documents
+  that arrived since the last one, and records the result in
+  `LemonAutomation.SynthesisMetrics` for the doctor check.
 
   ## Configuration
 
@@ -228,6 +228,9 @@ defmodule LemonAutomation.SynthesisRunner do
     state = get_state(agent_id)
 
     run_opts = [
+      # `opt_in: true` keeps scheduled passes running for configs that still
+      # pin the flag to "opt-in"; with the shipped "default-on" default it is a
+      # no-op. "off" remains a kill switch either way.
       opt_in: true,
       max_docs: Keyword.get(cfg, :max_docs, @default_max_docs),
       global: Keyword.get(cfg, :global, true),

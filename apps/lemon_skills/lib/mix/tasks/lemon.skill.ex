@@ -720,8 +720,11 @@ defmodule Mix.Tasks.Lemon.Skill do
         end
 
       {:error, :feature_disabled} ->
-        Mix.shell().error("Skill synthesis is disabled.")
-        Mix.shell().info("Enable with: features.skill_synthesis_drafts = \"default-on\"")
+        Mix.shell().error(
+          "Skill synthesis is disabled (features.skill_synthesis_drafts = \"off\")."
+        )
+
+        Mix.shell().info("Re-enable with: features.skill_synthesis_drafts = \"default-on\"")
         Mix.raise("Feature disabled")
 
       {:error, reason} ->

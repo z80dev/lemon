@@ -184,11 +184,11 @@ Each completed run also records a **routing feedback entry** that tracks:
 This feedback powers the adaptive routing system. See
 [`docs/user-guide/adaptive.md`](adaptive.md) for how it's used.
 
-Enable routing feedback:
+Routing feedback is on by default; to disable it:
 
 ```toml
 [features]
-routing_feedback = "default-on"
+routing_feedback = "off"
 ```
 
 ---
@@ -241,8 +241,8 @@ can also manually delete a document if you need to remove a past entry.
 ```toml
 [features]
 session_search         = "default-on" # full-text search across past runs (default; "off" is the kill switch)
-routing_feedback       = "opt-in"     # record outcome signals for adaptive routing (default)
-skill_synthesis_drafts = "opt-in"     # auto-generate skill drafts from memory (default)
+routing_feedback       = "default-on" # record outcome signals for adaptive routing (default)
+skill_synthesis_drafts = "default-on" # auto-generate skill drafts from memory (default)
 ```
 
 `session_search` can also be disabled per-process with

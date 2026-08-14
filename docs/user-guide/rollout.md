@@ -1,157 +1,84 @@
-# Adaptive Feature Rollout Guide
+# Feature Flag Rollout & Rollback Guide
 
-This document describes the promotion process for adaptive features
-(`routing_feedback` and `skill_synthesis_drafts`), the measurable gates that
-must pass before a feature is enabled by default, and the rollback procedure
-if problems arise.
+This document covers the `routing_feedback` and `skill_synthesis_drafts`
+feature flags: what states they accept, their shipped defaults, and the
+rollback procedure if problems arise.
+
+> **History:** these two flags previously shipped as `"opt-in"` behind a
+> quantitative graduation gate (`LemonRouter.RolloutGate`). Both features were
+> promoted to `"default-on"` by decision on 2026-08-14 and the gate machinery
+> was removed; this guide now documents only states and rollback.
 
 ---
 
 ## Feature States
 
-All adaptive features start at `:off`. The promotion lifecycle is:
+The promotion lifecycle is:
 
 ```
-off → opt-in → default-on
+off ↔ default-on
 ```
 
 | State | Meaning |
 |---|---|
 | `"off"` | Feature is disabled. Code is a no-op. |
-| `"opt-in"` | Feature is available but must be explicitly enabled. Canary/early adopter phase. |
+| `"opt-in"` | Legacy state: behaves like `"off"` unless the caller explicitly opts in. Still parsed for configs written before the 2026-08-14 promotion. |
 | `"default-on"` | Feature is enabled unless the operator disables it. |
 
-**Current state:**
+**Shipped defaults:**
 
 ```toml
 [features]
-routing_feedback       = "opt-in"   # not enabled by default until gates pass
-skill_synthesis_drafts = "opt-in"   # not enabled by default until gates pass
+session_search         = "default-on"  # memory ingest + session_search/search_memory tools
+routing_feedback       = "default-on"  # task fingerprinting + routing feedback recording
+skill_synthesis_drafts = "default-on"  # scheduled skill-draft generation
 ```
+
+All three are on out of the box; each exists as an operator kill switch.
 
 ---
 
-## Enabling a Feature (Operator)
+## Disabling a Feature (Operator)
 
-To opt in to an adaptive feature before it reaches `"default-on"`:
+To turn a feature off:
 
 ```toml
 [features]
-routing_feedback       = "default-on"
-skill_synthesis_drafts = "default-on"
+routing_feedback       = "off"
+skill_synthesis_drafts = "off"
 ```
 
-Restart the runtime after changing `~/.lemon/config.toml`.
+Or without touching config (no restart needed for env vars):
 
-Verify with `mix lemon.doctor` that the feature is active.
-
----
-
-## Rollback Procedure
-
-If an enabled feature causes problems, disable it immediately:
-
-1. Edit `~/.lemon/config.toml`:
-   ```toml
-   [features]
-   routing_feedback       = "off"
-   skill_synthesis_drafts = "off"
-   ```
-
-2. Restart the runtime:
-   ```bash
-   ./bin/lemon-gateway
-   # or for TUI
-   ./bin/lemon-dev
-   ```
+```bash
+export LEMON_FEATURE_ROUTING_FEEDBACK=off
+export LEMON_FEATURE_SKILL_SYNTHESIS_DRAFTS=off
+```
 
 3. Confirm the feature is inactive:
-   ```bash
-   mix lemon.doctor
-   ```
 
-4. File an issue before re-enabling. Include: what the problem was, any logs,
-   and what action triggered the issue.
-
----
-
-## Routing Feedback Gates
-
-The `routing_feedback` feature is ready for `"default-on"` when all gates pass.
-Gates are evaluated via `LemonRouter.RolloutGate.evaluate_routing_from_store/2`.
-
-| Gate | Threshold | What it measures |
-|---|---|---|
-| `min_sample_size` | 20 runs | Minimum recorded feedback entries |
-| `min_success_rate` | 0.60 (60%) | Aggregate success rate across fingerprints |
-| `max_failure_rate` | 0.20 (20%) | Aggregate non-success rate across fingerprints |
-
-### How to check
-
-```elixir
-alias LemonRouter.{RoutingFeedbackStore, RolloutGate}
-
-{:ok, stats} = RoutingFeedbackStore.store_stats()
-{:ok, fingerprints} = RoutingFeedbackStore.list_fingerprints()
-RolloutGate.evaluate_routing_from_store(stats, fingerprints)
-# => {:pass, [...]} or {:fail, [...]}
+```bash
+mix lemon.doctor
 ```
 
-### What to watch for
-
-- **Low sample size**: the system hasn't run enough tasks yet. Keep using it with
-  `routing_feedback = "opt-in"` to accumulate data.
-- **Low success rate**: the model selection is not improving outcomes. Check whether
-  the wrong models are being tracked, or whether the baseline is naturally low for
-  your use cases.
-- **High failure rate**: too many runs are failing. Investigate the failure patterns
-  via `mix lemon.feedback report` before promoting.
+4. Before re-enabling, file an issue with: what the problem was, any logs,
+   and what action triggered it.
 
 ---
 
-## Skill Synthesis Gates
+## Observing the Learning Loop
 
-The `skill_synthesis_drafts` feature is ready for `"default-on"` when all gates pass.
-Gates are evaluated via `LemonRouter.RolloutGate.evaluate_synthesis_from_run/1`.
+There is no gate to evaluate anymore — the flags are on. To inspect what the
+loop is actually doing:
 
-| Gate | Threshold | What it measures |
-|---|---|---|
-| `min_candidates_processed` | 5 | Pipeline has processed at least 5 memory candidates |
-| `max_draft_block_rate` | 0.50 (50%) | Fraction of candidates blocked by audit |
-| `min_generated_rate` | 0.20 (20%) | Fraction of candidates that produce a stored draft |
-
-### How to check
-
-```elixir
-alias LemonSkills.Synthesis.Pipeline
-alias LemonRouter.RolloutGate
-
-{:ok, result} = Pipeline.run(:agent, "my-agent-id", max_docs: 50)
-RolloutGate.evaluate_synthesis_from_run(result)
-# => {:pass, [...]} or {:fail, [...]}
-```
-
-### What to watch for
-
-- **High block rate**: the audit engine is blocking many candidates. This usually
-  means the memory documents contain noisy or low-quality content. Review recent
-  runs for patterns.
-- **Low generation rate**: candidates are being selected but not producing drafts.
-  Common causes: documents already have matching drafts (`:already_exists`), or
-  `DraftStore.put/2` is failing.
-
----
-
-## Promotion Checklist
-
-Before setting a flag to `"default-on"` in the codebase:
-
-- [ ] All gate checks return `{:pass, ...}` on representative data
-- [ ] Feature has been running in `"opt-in"` mode for at least one week
-- [ ] No open issues tagged with the feature's flag name
-- [ ] `mix lemon.quality` passes
-- [ ] Rollback procedure tested at least once on a development setup
-- [ ] CHANGELOG.md updated
+- `mix lemon.feedback stats` / `list` / `inspect KEY` — routing feedback store
+  totals, per-fingerprint success rates, and confidence annotations.
+- `mix lemon.doctor` — the `automation.skill_synthesis` check reports
+  synthesis pass counts (`candidates=… generated=… blocked=…`) and warns when
+  the scheduled runner looks stalled (no pass for 3× its interval).
+- Generated drafts are inert until promoted: review with
+  `mix lemon.skill draft review <key>`, promote with
+  `mix lemon.skill draft promote <key>`.
 
 ---
 
@@ -159,6 +86,6 @@ Before setting a flag to `"default-on"` in the codebase:
 
 - [`docs/user-guide/adaptive.md`](adaptive.md) — using adaptive features day-to-day
 - [`docs/user-guide/memory.md`](memory.md) — memory documents and session search
-- `LemonRouter.RolloutGate` — module documentation and gate thresholds
+- `LemonCore.Config.Features` — flag states, defaults, and env-var overrides
 
-*Last reviewed: 2026-05-16*
+*Last reviewed: 2026-08-14*

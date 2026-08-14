@@ -28,12 +28,12 @@ defmodule LemonCore.Config.FeaturesTest do
       assert Features.enabled?(features, :session_search)
     end
 
-    test "adaptive flags default to opt-in" do
+    test "learning-loop flags default to default-on" do
       features = Features.resolve(%{})
-      assert features.routing_feedback == :"opt-in"
-      assert features.skill_synthesis_drafts == :"opt-in"
-      refute Features.enabled?(features, :routing_feedback)
-      refute Features.enabled?(features, :skill_synthesis_drafts)
+      assert features.routing_feedback == :"default-on"
+      assert features.skill_synthesis_drafts == :"default-on"
+      assert Features.enabled?(features, :routing_feedback)
+      assert Features.enabled?(features, :skill_synthesis_drafts)
     end
 
     test "struct defaults match resolve defaults" do

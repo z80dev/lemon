@@ -3,26 +3,20 @@ defmodule LemonAutomation.SynthesisMetrics do
   Durable metric rows for scheduled skill-synthesis passes.
 
   `LemonAutomation.SynthesisRunner` records one row per pass that examined at
-  least one candidate. The rows accumulate the evidence
-  `LemonRouter.RolloutGate.evaluate_synthesis/1` needs before
-  `skill_synthesis_drafts` can graduate from `"opt-in"` to `"default-on"` —
-  the gate itself is pure and keeps no store, so this module is that store.
+  least one candidate. The rows feed the `automation.skill_synthesis` doctor
+  check (pass counts and stall detection) and operator inspection — pure
+  observability, no gating.
 
   Rows live in the `:synthesis_metrics` table of `LemonCore.Store` and are
   pruned to the newest 500 entries on every write.
 
-  ## Gate semantics
-
-  `aggregate/0` feeds the gate `generated: kept + blocked` — every draft the
+  `aggregate/0` sums `generated` as `kept + blocked` — every draft the
   generator actually produced, whether or not the audit engine later deleted
-  it — and `blocked_by_audit: blocked`. That matches the gate's documented
-  meaning of the false-positive rate ("fraction of *generated* drafts blocked
-  by audit"). Rows store `generated` (kept) and `blocked_by_audit` separately,
-  so a stricter reading only changes this function.
+  it — and `blocked_by_audit: blocked`, matching the historic rollout-gate
+  definitions so long-run trends stay comparable across the gate's removal.
   """
 
   alias LemonCore.Store
-  alias LemonRouter.RolloutGate
 
   @table :synthesis_metrics
   @max_rows 500
@@ -36,8 +30,7 @@ defmodule LemonAutomation.SynthesisMetrics do
           generated: non_neg_integer(),
           blocked_by_audit: non_neg_integer(),
           skipped_other: non_neg_integer(),
-          latest_doc_ms: integer() | nil,
-          gate: String.t()
+          latest_doc_ms: integer() | nil
         }
 
   @type aggregate :: %{
@@ -66,8 +59,7 @@ defmodule LemonAutomation.SynthesisMetrics do
       generated: generated,
       blocked_by_audit: blocked,
       skipped_other: length(skipped) - blocked,
-      latest_doc_ms: Map.get(run_result, :latest_doc_ms),
-      gate: render_pass_gate(run_result)
+      latest_doc_ms: Map.get(run_result, :latest_doc_ms)
     }
 
     Store.put(@table, row.id, row)
@@ -95,8 +87,7 @@ defmodule LemonAutomation.SynthesisMetrics do
   end
 
   @doc """
-  Sum every recorded row into the shape `LemonRouter.RolloutGate.evaluate_synthesis/1`
-  expects.
+  Sum every recorded row into aggregate pass counts.
   """
   @spec aggregate() :: aggregate()
   def aggregate do
@@ -111,20 +102,6 @@ defmodule LemonAutomation.SynthesisMetrics do
   end
 
   @doc """
-  Evaluate the `:skill_synthesis_drafts` rollout gate over all recorded rows.
-
-  Returns `:no_data` when nothing has been recorded yet.
-  """
-  @spec gate_status() ::
-          {:ready, map()} | {:not_ready, [String.t()], map()} | :no_data
-  def gate_status do
-    case aggregate() do
-      %{total_candidates: 0} -> :no_data
-      agg -> RolloutGate.evaluate_synthesis(agg)
-    end
-  end
-
-  @doc """
   Delete every recorded row. Intended for operator cleanup and tests.
   """
   @spec clear() :: :ok
@@ -135,17 +112,6 @@ defmodule LemonAutomation.SynthesisMetrics do
   end
 
   # ── Private helpers ─────────────────────────────────────────────────────────
-
-  # Per-pass informational verdict; the aggregate gate in gate_status/0 is what
-  # actually governs graduation.
-  defp render_pass_gate(run_result) do
-    case RolloutGate.evaluate_synthesis_from_run(run_result) do
-      {:pass, _notes} -> "pass"
-      {:fail, _failures} -> "fail"
-    end
-  rescue
-    _ -> "fail"
-  end
 
   defp prune do
     rows =
@@ -165,7 +131,8 @@ defmodule LemonAutomation.SynthesisMetrics do
   end
 
   # Store backends may round-trip values through serialization, so rows come
-  # back with either atom or string keys.
+  # back with either atom or string keys. Rows recorded before the rollout-gate
+  # removal carried a `gate` verdict field; it is dropped on read.
   defp normalize_row(value) when is_map(value) do
     %{
       id: to_string(field(value, :id) || ""),
@@ -175,8 +142,7 @@ defmodule LemonAutomation.SynthesisMetrics do
       generated: integer_field(value, :generated, 0),
       blocked_by_audit: integer_field(value, :blocked_by_audit, 0),
       skipped_other: integer_field(value, :skipped_other, 0),
-      latest_doc_ms: optional_integer_field(value, :latest_doc_ms),
-      gate: to_string(field(value, :gate) || "")
+      latest_doc_ms: optional_integer_field(value, :latest_doc_ms)
     }
   end
 

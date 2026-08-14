@@ -221,22 +221,22 @@ without ad-hoc environment variables.
 ```toml
 [features]
 session_search               = "default-on" # SessionSearch API + search_memory tool (default)
-routing_feedback             = "opt-in"     # task fingerprinting + routing feedback (default)
-skill_synthesis_drafts       = "opt-in"     # skill synthesis draft pipeline (default)
+routing_feedback             = "default-on" # task fingerprinting + routing feedback (default)
+skill_synthesis_drafts       = "default-on" # skill synthesis draft pipeline (default)
 ```
 
 `session_search` defaults to `"default-on"`: durable memory ingest and search
 are active on a stock install (retention 30 days, max 500 documents per scope;
 runs whose summaries look like they contain a secret are dropped entirely, not
-redacted). Set it to `"off"` to disable. The adaptive flags default to
-`"opt-in"`.
+redacted). Set it to `"off"` to disable. The learning-loop flags
+(`routing_feedback`, `skill_synthesis_drafts`) also default to `"default-on"`.
 
 Valid rollout states:
 
 | State | Meaning |
 |---|---|
 | `"off"` | Feature fully disabled (kill-switch). |
-| `"opt-in"` | Available but disabled by default; must be explicitly opted in. |
+| `"opt-in"` | Legacy pre-promotion state; behaves like `"off"` unless the caller explicitly opts in. |
 | `"default-on"` | Enabled unless explicitly disabled. |
 
 Each flag can be overridden via an environment variable using the pattern

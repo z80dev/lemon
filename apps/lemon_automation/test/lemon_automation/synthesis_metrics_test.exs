@@ -34,8 +34,7 @@ defmodule LemonAutomation.SynthesisMetricsTest do
       generated: Keyword.get(attrs, :generated, 0),
       blocked_by_audit: Keyword.get(attrs, :blocked_by_audit, 0),
       skipped_other: Keyword.get(attrs, :skipped_other, 0),
-      latest_doc_ms: Keyword.get(attrs, :latest_doc_ms),
-      gate: Keyword.get(attrs, :gate, "fail")
+      latest_doc_ms: Keyword.get(attrs, :latest_doc_ms)
     }
 
     Store.put(@table, id, row)
@@ -60,14 +59,12 @@ defmodule LemonAutomation.SynthesisMetricsTest do
       assert row.blocked_by_audit == 1
       assert row.skipped_other == 1
       assert row.latest_doc_ms == 1_700_000_000_000
-      assert row.gate in ["pass", "fail"]
       assert String.starts_with?(row.id, "synmet_")
 
       assert [stored] = SynthesisMetrics.list()
       assert stored.id == row.id
       assert stored.generated == 2
       assert stored.blocked_by_audit == 1
-      assert stored.gate == row.gate
     end
 
     test "a string-keyed row round-trips through list/1" do
@@ -82,8 +79,7 @@ defmodule LemonAutomation.SynthesisMetricsTest do
         "generated" => 5,
         "blocked_by_audit" => 2,
         "skipped_other" => 2,
-        "latest_doc_ms" => 42,
-        "gate" => "fail"
+        "latest_doc_ms" => 42
       })
 
       assert [row] = SynthesisMetrics.list()
@@ -126,33 +122,6 @@ defmodule LemonAutomation.SynthesisMetricsTest do
                generated: 0,
                blocked_by_audit: 0
              }
-    end
-  end
-
-  describe "gate_status/0" do
-    test "returns :no_data with no recorded rows" do
-      assert SynthesisMetrics.gate_status() == :no_data
-    end
-
-    test "returns :not_ready with reasons below the thresholds" do
-      seed_row(ts_ms: 1_000, total_candidates: 5, generated: 1, blocked_by_audit: 0)
-
-      assert {:not_ready, reasons, computed} = SynthesisMetrics.gate_status()
-      assert computed.total_candidates == 5
-      assert Enum.any?(reasons, &String.contains?(&1, "candidate_count"))
-      assert Enum.any?(reasons, &String.contains?(&1, "generation_rate"))
-    end
-
-    test "returns :ready once the aggregate clears the thresholds" do
-      # 25 candidates, 20 generated drafts of which 1 was blocked by audit.
-      seed_row(ts_ms: 1_000, total_candidates: 25, generated: 19, blocked_by_audit: 1)
-
-      assert {:ready, computed} = SynthesisMetrics.gate_status()
-      assert computed.total_candidates == 25
-      assert computed.generated == 20
-      assert computed.blocked_by_audit == 1
-      assert computed.generation_rate == 0.8
-      assert computed.false_positive_rate == 0.05
     end
   end
 

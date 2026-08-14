@@ -1,7 +1,8 @@
 # Adaptive Behavior User Guide
 
 Lemon learns from past runs to make better routing and skill decisions.
-All adaptive features are off by default and controlled by feature flags.
+All adaptive features ship enabled by default and are controlled by feature
+flags (each flag is an operator kill switch).
 
 ---
 
@@ -15,12 +16,12 @@ There are three adaptive subsystems:
 | History-aware routing | `routing_feedback` | Uses past success/failure signals to break ties in model selection |
 | Skill synthesis | `skill_synthesis_drafts` | Auto-generates draft skills from successful runs |
 
-Enable all adaptive features:
+All adaptive features are on by default. To turn any of them off:
 
 ```toml
 [features]
-routing_feedback       = "default-on"
-skill_synthesis_drafts = "default-on"
+routing_feedback       = "off"
+skill_synthesis_drafts = "off"
 ```
 
 ---
@@ -96,14 +97,8 @@ The synthesis pipeline runs on demand and processes recent memory documents:
 
 ### Generating drafts
 
-Enable the feature flag:
-
-```toml
-[features]
-skill_synthesis_drafts = "default-on"
-```
-
-Then generate from your recent memory:
+Draft generation is enabled by default (`skill_synthesis_drafts = "default-on"`;
+set it to `"off"` to disable). Generate from your recent memory:
 
 ```bash
 # From agent memory (most common)
@@ -196,8 +191,8 @@ The routing and synthesis systems classify every task into a family:
 
 ```toml
 [features]
-routing_feedback       = "off"   # "off" | "opt-in" | "default-on"
-skill_synthesis_drafts = "off"
+routing_feedback       = "default-on"  # kill switch: set "off" to disable
+skill_synthesis_drafts = "default-on"
 
 [memory]
 retention_days = 90       # How long to keep memory documents

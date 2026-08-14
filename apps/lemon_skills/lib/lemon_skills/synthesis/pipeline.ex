@@ -17,17 +17,18 @@ defmodule LemonSkills.Synthesis.Pipeline do
       # Generate with project scope
       {:ok, results} = Pipeline.run(:workspace, workspace_key, cwd: "/myproject")
 
-      # Automation pass: explicitly opt in to the opt-in flag and only look at
-      # documents ingested after the caller's watermark
-      {:ok, results} = Pipeline.run(:agent, "my-agent-id", opt_in: true, since_ms: 1_700_000_000_000)
+      # Automation pass: only look at documents ingested after the caller's
+      # watermark
+      {:ok, results} = Pipeline.run(:agent, "my-agent-id", since_ms: 1_700_000_000_000)
 
   ## Feature gating
 
-  The `skill_synthesis_drafts` flag has three states.  `"off"` always disables
-  the pipeline (kill switch), `"default-on"` always enables it, and the default
-  `"opt-in"` state only runs when the caller passes `opt_in: true` — which is
-  how `LemonAutomation.SynthesisRunner` drives scheduled passes while manual
-  invocations stay inert.
+  The `skill_synthesis_drafts` flag ships `"default-on"`; `"off"` is an operator
+  kill switch that disables the pipeline for every caller. The `"opt-in"`
+  state still parses and only runs when the caller passes `opt_in: true` —
+  legacy compatibility for configs written before the flag was promoted
+  (2026-08-14; the rollout-gate machinery that governed the promotion was
+  removed at the same time).
 
   ## Return value
 
@@ -90,8 +91,9 @@ defmodule LemonSkills.Synthesis.Pipeline do
   - `:global` — write drafts to global draft dir (default: `true`)
   - `:cwd` — project directory for project-scoped drafts
   - `:force` — overwrite existing drafts (default: `false`)
-  - `:opt_in` — accept the `"opt-in"` feature state (default: `false`). `"off"`
-    still disables the pipeline.
+  - `:opt_in` — also accept the `"opt-in"` feature state (default: `false`).
+    Legacy compatibility for pre-promotion configs; `"off"` still disables the
+    pipeline either way.
   - `:since_ms` — only consider documents whose `ingested_at_ms` is strictly
     greater than this watermark (default: `nil`, meaning no filtering). Pushed
     down into the store query, which then returns the oldest unseen window

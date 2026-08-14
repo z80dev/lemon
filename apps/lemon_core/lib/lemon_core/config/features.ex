@@ -9,30 +9,18 @@ defmodule LemonCore.Config.Features do
 
       [features]
       session_search             = "default-on" # disable with "off"
-      routing_feedback           = "opt-in"     # enable with "default-on" once gate passes
-      skill_synthesis_drafts     = "opt-in"     # enable with "default-on" once gate passes
+      routing_feedback           = "default-on" # disable with "off"
+      skill_synthesis_drafts     = "default-on" # disable with "off"
 
-  ## Adaptive feature rollout
-
-  `routing_feedback` and `skill_synthesis_drafts` are gated by measurable
-  criteria defined in `LemonRouter.RolloutGate`.  Both flags default to `"opt-in"`
-  (available but inactive) until the quantitative gates pass:
-
-  - **routing_feedback**: requires ≥50 recorded samples, ≥+5pp success-rate
-    improvement over baseline, and no increase in retry rate.
-  - **skill_synthesis_drafts**: requires ≥20 candidate documents evaluated,
-    ≥60% generation rate, and ≤10% audit false-positive rate.
-
-  To check whether a feature is ready to graduate to `"default-on"`, call
-  `LemonRouter.RolloutGate.evaluate_routing_feedback/1` or
-  `LemonRouter.RolloutGate.evaluate_synthesis/1` with a current metrics snapshot.
-
-  To roll back a graduated feature immediately (no restart required for env vars):
+  All three flags ship enabled by default; each is an operator kill switch:
 
       export LEMON_FEATURE_ROUTING_FEEDBACK=off
       export LEMON_FEATURE_SKILL_SYNTHESIS_DRAFTS=off
 
-  See `LemonRouter.RolloutGate` for full rollback and re-evaluation procedure.
+  (These two were previously `"opt-in"` behind a quantitative graduation gate,
+  `LemonRouter.RolloutGate`; the gate machinery was removed 2026-08-14 when
+  both features were promoted to `"default-on"` by decision rather than by
+  threshold.)
 
   ## Rollout states
 
@@ -57,9 +45,11 @@ defmodule LemonCore.Config.Features do
   ## Kill-switch behaviour
 
   Set any flag to `"off"` to disable the feature regardless of code state.
-  `session_search` defaults to `"default-on"`; the fastest rollback is:
+  Every shipped flag defaults to `"default-on"`; the fastest rollback is:
 
       export LEMON_FEATURE_SESSION_SEARCH=off
+      export LEMON_FEATURE_ROUTING_FEEDBACK=off
+      export LEMON_FEATURE_SKILL_SYNTHESIS_DRAFTS=off
 
   Code gated behind a flag must call `LemonCore.Config.Features.enabled?/2`
   (or the equivalent convenience helpers in `LemonCore.Config.Modular`) before
@@ -77,8 +67,8 @@ defmodule LemonCore.Config.Features do
   ]
 
   defstruct session_search: :"default-on",
-            routing_feedback: :"opt-in",
-            skill_synthesis_drafts: :"opt-in"
+            routing_feedback: :"default-on",
+            skill_synthesis_drafts: :"default-on"
 
   @type rollout_state :: :off | :"opt-in" | :"default-on"
 
@@ -92,7 +82,7 @@ defmodule LemonCore.Config.Features do
   Resolves feature flags from the merged TOML settings map.
 
   Priority: environment variables > `[features]` TOML section > per-flag defaults
-  (`session_search` is `:"default-on"`; the adaptive flags are `:"opt-in"`).
+  (all three flags are `:"default-on"`).
   """
   @spec resolve(map()) :: t()
   def resolve(settings) do
@@ -177,11 +167,12 @@ defmodule LemonCore.Config.Features do
     if raw == nil, do: default_state(name), else: parse_state(raw)
   end
 
-  # session_search is enabled by default (LEMON_FEATURE_SESSION_SEARCH=off is
-  # the kill switch); adaptive features are opt-in; all others default to off.
+  # All flags are enabled by default (LEMON_FEATURE_<FLAG>=off is the kill
+  # switch). "opt-in" remains a valid, parseable state for configs that still
+  # carry it, but nothing defaults to it.
   defp default_state("session_search"), do: :"default-on"
-  defp default_state("routing_feedback"), do: :"opt-in"
-  defp default_state("skill_synthesis_drafts"), do: :"opt-in"
+  defp default_state("routing_feedback"), do: :"default-on"
+  defp default_state("skill_synthesis_drafts"), do: :"default-on"
   defp default_state(_), do: :off
 
   defp parse_state("off"), do: :off

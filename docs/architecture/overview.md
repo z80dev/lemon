@@ -310,7 +310,8 @@ Code reads flags via `LemonCore.Config.Features.enabled?(features, :flag_name)`.
 
 Current flags: `session_search` (default `"default-on"`; disable with
 `LEMON_FEATURE_SESSION_SEARCH=off`), `routing_feedback`, and
-`skill_synthesis_drafts` (both default `"opt-in"`).
+`skill_synthesis_drafts` (both default `"default-on"`; disable with
+`LEMON_FEATURE_ROUTING_FEEDBACK=off` / `LEMON_FEATURE_SKILL_SYNTHESIS_DRAFTS=off`).
 
 ---
 
