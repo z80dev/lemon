@@ -1,35 +1,35 @@
 defmodule LemonSkills.Synthesis.CandidateSelector do
-  @moduledoc """
-  Selects memory documents that are good candidates for skill synthesis.
+  @moduledoc false
 
-  A document qualifies when it meets all of the following:
-
-  - `outcome` is `:success` (`:partial` is deliberately excluded — see anti-capture below)
-  - `prompt_summary` is at least `#{__MODULE__}.min_prompt_length/0` characters (non-trivial)
-  - `answer_summary` is at least `#{__MODULE__}.min_answer_length/0` characters (substantive)
-  - Neither summary contains secret-looking content
-  - Neither summary asserts a negative capability claim or unresolved failure
-    ("doesn't work", "not supported", "gave up", ...) — see anti-capture below
-  - The task family (derived from the prompt) is not `:chat` or `:unknown`
-
-  ## Anti-capture
-
-  Synthesized skills feed back into future agent behavior, so a memory that
-  records a clean give-up ("this tool doesn't work", "that can't be done")
-  hardens into a learned refusal: the agent stops trying things it could in
-  fact do. Two guardrails keep those documents out of the candidate pool:
-
-  - **Outcome level** — only `:success` qualifies. `LemonCore.RunOutcome.infer/1`
-    labels a run `:partial` when it completed ok but produced no substantive
-    answer, which is exactly the clean-give-up shape.
-  - **Content level** — documents whose summaries assert negative tool or
-    capability claims are rejected even when the outcome is `:success`, since
-    a "successful" run can still conclude with a confident (and possibly
-    wrong) "there is no way to do X".
-
-  Duplicate candidates (identical prompt_summary after normalization) are
-  collapsed to one entry — the most recent one wins.
-  """
+  # Selects memory documents that are good candidates for skill synthesis.
+  #
+  # A document qualifies when it meets all of the following:
+  #
+  # - `outcome` is `:success` (`:partial` is deliberately excluded — see anti-capture below)
+  # - `prompt_summary` is at least `#{__MODULE__}.min_prompt_length/0` characters (non-trivial)
+  # - `answer_summary` is at least `#{__MODULE__}.min_answer_length/0` characters (substantive)
+  # - Neither summary contains secret-looking content
+  # - Neither summary asserts a negative capability claim or unresolved failure
+  #   ("doesn't work", "not supported", "gave up", ...) — see anti-capture below
+  # - The task family (derived from the prompt) is not `:chat` or `:unknown`
+  #
+  # Anti-capture
+  #
+  # Synthesized skills feed back into future agent behavior, so a memory that
+  # records a clean give-up ("this tool doesn't work", "that can't be done")
+  # hardens into a learned refusal: the agent stops trying things it could in
+  # fact do. Two guardrails keep those documents out of the candidate pool:
+  #
+  # - **Outcome level** — only `:success` qualifies. `LemonCore.RunOutcome.infer/1`
+  #   labels a run `:partial` when it completed ok but produced no substantive
+  #   answer, which is exactly the clean-give-up shape.
+  # - **Content level** — documents whose summaries assert negative tool or
+  #   capability claims are rejected even when the outcome is `:success`, since
+  #   a "successful" run can still conclude with a confident (and possibly
+  #   wrong) "there is no way to do X".
+  #
+  # Duplicate candidates (identical prompt_summary after normalization) are
+  # collapsed to one entry — the most recent one wins.
 
   alias LemonMemory.Document
   alias LemonMemory.Safety

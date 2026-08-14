@@ -1,6 +1,12 @@
 defmodule LemonSkills.Tools.Memory do
   @moduledoc """
   Manage compact assistant-home USER.md and MEMORY.md notes.
+
+  Agents read, add, replace, or remove durable notes in the assistant-home
+  `USER.md` (user profile) and `MEMORY.md` (long-term memory) files, guarded
+  against secrets, invisible characters, and prompt injection. Requires no
+  external service. Registered as a builtin tool in `CodingAgent.ToolRegistry`
+  and exposed through the `CodingAgent.Tools` factories.
   """
 
   alias LemonAgent.AbortSignal
@@ -51,6 +57,14 @@ defmodule LemonSkills.Tools.Memory do
   ]
   @max_text_bytes 4_096
 
+  @doc """
+  Returns the `memory` tool definition wired to `execute/5`.
+
+  `cwd` is unused. `opts` may carry:
+
+  - `:workspace_dir` - assistant-home directory containing `USER.md`/`MEMORY.md`;
+    passed to `execute/5`, where a non-empty binary is required
+  """
   @spec tool(String.t(), keyword()) :: AgentTool.t()
   def tool(_cwd, opts \\ []) do
     workspace_dir = Keyword.get(opts, :workspace_dir)
@@ -93,6 +107,30 @@ defmodule LemonSkills.Tools.Memory do
     }
   end
 
+  @doc """
+  Tool callback invoked by the agent loop: `execute(tool_call_id, params, signal,
+  on_update, workspace_dir)`.
+
+  Reads from `params`:
+
+  - `"target"` (required) - `"user"` or `"memory"`
+  - `"action"` (required) - `"read"`, `"add"`, `"replace"`, or `"remove"`
+  - `"text"` (add/remove) - note text; `remove` falls back to `"old_text"`
+  - `"old_text"` (replace, remove fallback) - exact existing text
+  - `"new_text"` (replace) - replacement text
+
+  Text values must be non-empty strings of at most 4096 bytes without NUL bytes;
+  added/replaced text is additionally screened against secrets, invisible or
+  bidirectional control characters, and prompt-injection patterns.
+
+  Returns `%LemonAgent.Types.AgentToolResult{}` on success: `content` is a single
+  `TextContent` with the status message and resulting file content, and `details`
+  merges action-specific fields (e.g. `exists`, `changed`, `duplicate`) with
+  `target`, `action`, `path`, `bytes`, and `chars`. Errors (invalid/missing
+  params, refused content, size overflow, file I/O) surface as
+  `{:error, String.t()}` tuples; an aborted signal returns
+  `{:error, "Operation aborted"}`.
+  """
   @spec execute(
           String.t(),
           map(),

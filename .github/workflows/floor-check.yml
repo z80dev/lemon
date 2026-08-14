@@ -70,7 +70,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The ten packages published to hex, each declaring `~> 1.15`.
+        # The packages published to hex, each declaring `~> 1.15`.
         app:
           - lemon_ai
           - lemon_core
@@ -82,6 +82,8 @@ jobs:
           - lemon_gateway
           - lemon_channels
           - lemon_platform_test
+          - lemon_browser
+          - lemon_skills
 
     env:
       MIX_ENV: prod

@@ -1,6 +1,10 @@
 defmodule LemonSkills.Tools.Kanban do
   @moduledoc """
   Durable kanban board tool backed by LemonAgent.Workspace.KanbanStore.
+
+  Wired into CodingAgent.ToolRegistry's builtin tool list and the
+  CodingAgent.Tools factories. No external service or credentials are
+  required; boards and tasks persist in the workspace KanbanStore.
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
@@ -9,6 +13,17 @@ defmodule LemonSkills.Tools.Kanban do
 
   @actions ~w(board_list board_create board_get task_list task_get task_create task_update task_comment)
 
+  @doc """
+  Returns the `LemonAgent.Types.AgentTool.t()` definition for the `"kanban"`
+  tool, wired to `execute/6`.
+
+  `cwd` is the project directory; it is the fallback `:kanban_workspace` for
+  `board_create` when neither the `"workspace"` param nor the
+  `:kanban_workspace` opt is set. The `opts` keyword is read for two keys:
+  `:kanban_workspace` (board workspace for `board_create`) and `:agent_id`
+  (owner for `board_create` and author for `task_comment` when the
+  `"owner"`/`"author"` params are absent).
+  """
   @spec tool(String.t(), keyword()) :: AgentTool.t()
   def tool(cwd, opts \\ []) do
     %AgentTool{
@@ -68,6 +83,31 @@ defmodule LemonSkills.Tools.Kanban do
     }
   end
 
+  @doc """
+  Tool callback invoked by the agent loop with, in order: `tool_call_id`,
+  `params` map, `signal`, `on_update` callback, `cwd`, and `opts`.
+
+  Reads the required `"action"` param to dispatch to `board_list`,
+  `board_create`, `board_get`, `task_list`, `task_get`, `task_create`,
+  `task_update`, or `task_comment`. Per action: `board_list` reads `"status"`,
+  `"owner"`, `"workspace"`, `"limit"`; `board_create` requires `"name"` and
+  reads `"workspace"`, `"owner"`, `"columns"`; `board_get` requires
+  `"board_id"` and reads `"include_tasks"` (defaults to `true`) and `"limit"`
+  (defaults to `100`); `task_list` requires `"board_id"` and reads `"status"`,
+  `"assignee"`, `"limit"`; `task_get` requires `"task_id"`; `task_create`
+  requires `"board_id"` and `"title"` and reads `"description"`, `"status"`,
+  `"priority"`, `"assignee"`, `"worker_profile"`, `"session_key"`, `"run_id"`,
+  `"depends_on"`; `task_update` requires `"task_id"` and reads the same
+  optional fields; `task_comment` requires `"task_id"` and `"body"` and reads
+  `"author"`.
+
+  On success returns a `%LemonAgent.Types.AgentToolResult{}` whose `content`
+  is the pretty-printed JSON encoding of the details and whose `details` map
+  holds the payload (board/task data) plus a `:title` summary string. Failures
+  — a missing or unsupported `"action"`, a missing required param, a missing
+  board/task, or a `KanbanStore` error — return `{:error, message}` with a
+  string message (see `required_string/2`, `fetch_board/1`, `format_error/1`).
+  """
   @spec execute(String.t(), map(), reference() | nil, function() | nil, String.t(), keyword()) ::
           AgentToolResult.t() | {:error, term()}
   def execute(_tool_call_id, params, _signal, _on_update, cwd, opts) do

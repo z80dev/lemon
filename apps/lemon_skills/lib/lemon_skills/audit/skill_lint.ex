@@ -1,38 +1,38 @@
 defmodule LemonSkills.Audit.SkillLint do
-  @moduledoc """
-  Validates skill bundle integrity and manifest compliance.
+  @moduledoc false
 
-  ## Contributor contract for official skills
-
-  Skills submitted to the `official/` registry namespace must pass all lint
-  checks with no errors before merge.  The checks are:
-
-  1. **SKILL.md present** — every skill directory must contain `SKILL.md`.
-  2. **Frontmatter parses** — the YAML/TOML frontmatter must be well-formed.
-  3. **`name` required** — must be a non-empty string.
-  4. **`description` required** — must be a non-empty string.
-  5. **Reference paths exist** — every `references[].path` entry must resolve
-     to a real file inside the skill directory.
-  6. **Body non-empty** — the markdown body (after frontmatter) must contain
-     at least some non-whitespace content.
-  7. **Audit clean** — the skill content must not trigger a `:block` verdict
-     from the security audit engine.
-
-  Checks 1–6 report severity `:error` (fail the build).
-  Check 7 reports severity `:warn` for `:warn` audit results and `:error`
-  for `:block` audit results.
-
-  ## Usage
-
-      # Lint a single skill directory
-      result = LemonSkills.Audit.SkillLint.lint_skill("/path/to/skill-dir")
-      result.valid?    # => true | false
-      result.issues    # => [%{code: :missing_description, ...}]
-
-      # Lint all skills under a parent directory
-      results = LemonSkills.Audit.SkillLint.lint_dir("/path/to/skills")
-      Enum.filter(results, &(!&1.valid?))  # failures only
-  """
+  # Validates skill bundle integrity and manifest compliance.
+  #
+  # Contributor contract for official skills
+  #
+  # Skills submitted to the `official/` registry namespace must pass all lint
+  # checks with no errors before merge.  The checks are:
+  #
+  # 1. **SKILL.md present** — every skill directory must contain `SKILL.md`.
+  # 2. **Frontmatter parses** — the YAML/TOML frontmatter must be well-formed.
+  # 3. **`name` required** — must be a non-empty string.
+  # 4. **`description` required** — must be a non-empty string.
+  # 5. **Reference paths exist** — every `references[].path` entry must resolve
+  #    to a real file inside the skill directory.
+  # 6. **Body non-empty** — the markdown body (after frontmatter) must contain
+  #    at least some non-whitespace content.
+  # 7. **Audit clean** — the skill content must not trigger a `:block` verdict
+  #    from the security audit engine.
+  #
+  # Checks 1–6 report severity `:error` (fail the build).
+  # Check 7 reports severity `:warn` for `:warn` audit results and `:error`
+  # for `:block` audit results.
+  #
+  # Usage
+  #
+  #     # Lint a single skill directory
+  #     result = LemonSkills.Audit.SkillLint.lint_skill("/path/to/skill-dir")
+  #     result.valid?    # => true | false
+  #     result.issues    # => [%{code: :missing_description, ...}]
+  #
+  #     # Lint all skills under a parent directory
+  #     results = LemonSkills.Audit.SkillLint.lint_dir("/path/to/skills")
+  #     Enum.filter(results, &(!&1.valid?))  # failures only
 
   alias LemonSkills.{Manifest, PathBoundary}
   alias LemonSkills.Audit.Engine, as: AuditEngine

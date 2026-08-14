@@ -1,6 +1,10 @@
 defmodule LemonSkills.Tools.MediaStatus do
   @moduledoc """
   Read-only media job status for model-facing agent loops.
+
+  Wired into CodingAgent.ToolRegistry's builtin tool list and the
+  CodingAgent.Tools factories. Requires no external credentials; it reads
+  local LemonMedia job state and worker supervisor state.
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
@@ -10,6 +14,15 @@ defmodule LemonSkills.Tools.MediaStatus do
 
   @default_limit 10
 
+  @doc """
+  Returns the `LemonAgent.Types.AgentTool.t()` definition for the
+  `"media_status"` tool, wired to `execute/6`.
+
+  `cwd` is the project directory; it is passed as the `:project_dir` for
+  `MediaJobs.summary/1` and `MediaJobs.recent/1`. The `opts` keyword is read
+  for `:media_jobs_dir` and `:media_artifacts_dir`; nil values are dropped
+  before the media-jobs calls.
+  """
   @spec tool(String.t(), keyword()) :: AgentTool.t()
   def tool(cwd, opts \\ []) do
     %AgentTool{
@@ -31,6 +44,20 @@ defmodule LemonSkills.Tools.MediaStatus do
     }
   end
 
+  @doc """
+  Tool callback invoked by the agent loop with, in order: `tool_call_id`,
+  `params` map, `signal`, `on_update` callback, `cwd`, and `opts`.
+
+  Reads the optional `"limit"` param (defaults to `10`; integers are clamped
+  to 0-50, strings that parse as integers are clamped the same way, anything
+  else falls back to the default).
+
+  Always returns a `%LemonAgent.Types.AgentToolResult{}` with `content` the
+  pretty-printed JSON encoding of the payload and `details` the payload map
+  with `"summary"`, `"recent"`, and `"worker_status"` keys, each a
+  stringified (atoms to strings, recursively) snapshot from
+  `MediaJobs.summary/1`, `MediaJobs.recent/1`, and `MediaJobSupervisor.status/0`.
+  """
   @spec execute(String.t(), map(), reference() | nil, function() | nil, String.t(), keyword()) ::
           AgentToolResult.t()
   def execute(_tool_call_id, params, _signal, _on_update, cwd, opts) do

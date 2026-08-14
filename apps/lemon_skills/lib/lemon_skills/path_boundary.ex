@@ -1,11 +1,11 @@
 defmodule LemonSkills.PathBoundary do
-  @moduledoc """
-  Cross-platform path boundary check.
+  @moduledoc false
 
-  Determines whether a path is `base` itself or a descendant of `base`.
-  Handles both POSIX (`/`) and Windows (`\\`) path separators so that the
-  same check works correctly regardless of the host platform.
-  """
+  # Cross-platform path boundary check.
+  #
+  # Determines whether a path is `base` itself or a descendant of `base`.
+  # Handles both POSIX (`/`) and Windows (`\\`) path separators so that the
+  # same check works correctly regardless of the host platform.
 
   @doc """
   Returns `true` when `path` is `base` itself or a descendant of `base`.

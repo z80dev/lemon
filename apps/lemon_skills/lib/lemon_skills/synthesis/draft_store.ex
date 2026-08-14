@@ -1,30 +1,30 @@
 defmodule LemonSkills.Synthesis.DraftStore do
-  @moduledoc """
-  Manages draft skill directories.
+  @moduledoc false
 
-  Draft skills live in `~/.lemon/agent/skill_drafts/` (global) or
-  `<cwd>/.lemon/skill_drafts/` (project).  Each draft is a self-contained
-  directory with:
-
-      skill_drafts/
-      └── synth-deploy-to-k8s/
-          ├── SKILL.md            # generated skill content
-          └── .draft_meta.json    # synthesis provenance (source_doc_id, timestamps)
-
-  ## Usage
-
-      # Write a new draft
-      :ok = DraftStore.put(%{key: "synth-deploy-k8s", content: "..."}, global: true)
-
-      # List all drafts
-      {:ok, drafts} = DraftStore.list(global: true)
-
-      # Promote a draft to an installed skill
-      {:ok, entry} = DraftStore.promote("synth-deploy-k8s", global: true)
-
-      # Delete a draft
-      :ok = DraftStore.delete("synth-deploy-k8s", global: true)
-  """
+  # Manages draft skill directories.
+  #
+  # Draft skills live in `~/.lemon/agent/skill_drafts/` (global) or
+  # `<cwd>/.lemon/skill_drafts/` (project).  Each draft is a self-contained
+  # directory with:
+  #
+  #     skill_drafts/
+  #     └── synth-deploy-to-k8s/
+  #         ├── SKILL.md            # generated skill content
+  #         └── .draft_meta.json    # synthesis provenance (source_doc_id, timestamps)
+  #
+  # Usage
+  #
+  #     # Write a new draft
+  #     :ok = DraftStore.put(%{key: "synth-deploy-k8s", content: "..."}, global: true)
+  #
+  #     # List all drafts
+  #     {:ok, drafts} = DraftStore.list(global: true)
+  #
+  #     # Promote a draft to an installed skill
+  #     {:ok, entry} = DraftStore.promote("synth-deploy-k8s", global: true)
+  #
+  #     # Delete a draft
+  #     :ok = DraftStore.delete("synth-deploy-k8s", global: true)
 
   alias LemonSkills.Config
   alias LemonSkills.Installer

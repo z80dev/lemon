@@ -64,6 +64,8 @@ PUBLISH_ORDER=(
   lemon_router
   lemon_gateway
   lemon_platform_test
+  lemon_browser
+  lemon_skills
 )
 
 # app name -> hex package name, loaded from hex_package.exs.

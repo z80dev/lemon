@@ -39,7 +39,9 @@ defmodule Lemon.HexPackage do
     lemon_router: :lemon_router,
     lemon_gateway: :lemon_gateway,
     lemon_channels: :lemon_channels,
-    lemon_platform_test: :lemon_platform_test
+    lemon_platform_test: :lemon_platform_test,
+    lemon_browser: :lemon_browser,
+    lemon_skills: :lemon_skills
   }
 
   @doc "The hex package name for a publishable umbrella app."

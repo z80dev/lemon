@@ -1,6 +1,12 @@
 defmodule LemonSkills.Tools.MediaTranscribeAudio do
   @moduledoc """
   Supervised audio-transcription preview tool backed by LemonMedia.MediaJobSupervisor.
+
+  Transcribes a local audio artifact through Lemon's BEAM media worker path:
+  deterministic local previews, OpenAI speech-to-text, or Deepgram speech-to-text.
+  OpenAI/Deepgram runs require the corresponding provider API credentials (explicit
+  opts, config, or secrets). Registered as a builtin tool in `CodingAgent.ToolRegistry`
+  and exposed through the `CodingAgent.Tools` factories.
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
@@ -40,6 +46,24 @@ defmodule LemonSkills.Tools.MediaTranscribeAudio do
     "text" => "text/plain"
   }
 
+  @doc """
+  Returns the `media_transcribe_audio` tool definition wired to `execute/6`.
+
+  `cwd` is the project directory: it scopes `audioPath` resolution, supplies the
+  default media-artifacts directory, and is passed to the supervised media job as
+  `project_dir`. `opts` may carry:
+
+  - `:media_artifacts_dir` - transcript artifact directory (defaults to
+    `MediaJobs.default_artifacts_dir(cwd)`)
+  - `:media_jobs_dir` - media job working directory passed to the supervisor
+  - `:media_transcription_config` - config resolving provider base URLs and
+    credentials (defaults to `Config.load(cwd)`)
+  - `:openai_transcription_api_key` / `:openai_transcription_base_url` - explicit
+    OpenAI credentials/endpoint overrides
+  - `:deepgram_transcription_api_key` / `:deepgram_transcription_base_url` -
+    explicit Deepgram credentials/endpoint overrides
+  - `:media_transcription_http_post` - HTTP post fun (defaults to `&Req.post/2`)
+  """
   @spec tool(String.t(), keyword()) :: AgentTool.t()
   def tool(cwd, opts \\ []) do
     %AgentTool{
@@ -104,6 +128,31 @@ defmodule LemonSkills.Tools.MediaTranscribeAudio do
     }
   end
 
+  @doc """
+  Tool callback invoked by the agent loop: `execute(tool_call_id, params, signal,
+  on_update, cwd, opts)`.
+
+  Reads from `params`:
+
+  - `"audioPath"` (required) - local audio file path under `cwd`
+  - `"provider"` (default `"local_transcript"`) - `"local_transcript"`,
+    `"openai_transcribe"`, or `"deepgram_transcribe"`
+  - `"model"` (optional) - provider model override
+  - `"language"` (optional) - input language hint
+  - `"prompt"` (optional) - provider speech-to-text context
+  - `"filename"` (optional) - transcript artifact filename
+  - `"responseFormat"` (default `"json"`, `"response_format"` accepted) -
+    `"json"` or `"text"`
+  - `"maxRetries"` (default `1`, clamped to 0-3) - transient provider retries
+  - `"sendToChannel"` (default `false`) - request final Telegram/Discord delivery
+  - `"timeoutMs"` (default `15_000`, clamped to 100-120_000) - media worker wait
+
+  Returns `%LemonAgent.Types.AgentToolResult{}` on success with `content` holding
+  the pretty-printed JSON payload and `details` the payload map (job id/status/type,
+  provider, model, transcript text, artifact info, redacted job metadata, and trust
+  metadata). Errors surface directly as `{:error, String.t()}` tuples from the
+  `with` chain: abort, param validation, job start, or timeout failures.
+  """
   @spec execute(String.t(), map(), reference() | nil, function() | nil, String.t(), keyword()) ::
           AgentToolResult.t() | {:error, String.t()}
   def execute(_tool_call_id, params, signal, _on_update, cwd, opts) do

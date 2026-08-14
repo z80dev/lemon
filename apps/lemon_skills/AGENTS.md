@@ -8,6 +8,16 @@ LemonSkills is the skill management system for the Lemon agent platform. It prov
 
 **Entry point**: `LemonSkills` (the facade module) delegates everything to sub-modules. Start reading there.
 
+**Published package**: `lemon_skills` ships to hex. Two consequences for any
+change under `lib/`: it needs a `## [Unreleased]` entry in `CHANGELOG.md`, and
+the public/internal split is load-bearing. A module with a real `@moduledoc` is
+public API — renaming it, or changing what one of its `@doc`-ed functions
+returns, is a breaking change. A module with `@moduledoc false` (`Bundle`,
+`Lockfile`, `InstallPlan`, `PathBoundary`, `Audit.State`, `Audit.SkillLint`,
+the `Synthesis` draft internals, `Application`, `Telemetry`) is free to change.
+Known API warts, and what we would like to fix in 0.2, are listed at the bottom
+of `CHANGELOG.md`.
+
 ## Key Files and Purposes
 
 ### Core Modules
@@ -47,9 +57,6 @@ LemonSkills is the skill management system for the Lemon agent platform. It prov
 | `lib/lemon_skills/tools/media_analyze_image.ex` | `media_analyze_image` | Analyzes images and stores managed artifacts |
 | `lib/lemon_skills/tools/media_generate_video.ex` | `media_generate_video` | Generates managed video artifacts |
 | `lib/lemon_skills/tools/kanban.ex` | `kanban` | Manages durable Lemon kanban boards and tasks |
-| `lib/lemon_skills/tools/x_search.ex` | `x_search` | Searches recent public X posts through X API |
-| `lib/lemon_skills/tools/post_to_x.ex` | `post_to_x` | Posts tweets via X API |
-| `lib/lemon_skills/tools/get_x_mentions.ex` | `get_x_mentions` | Fetches X mentions |
 
 `PromptView` emits `[:lemon_skills, :skill, :prompt_render]` telemetry when skills are surfaced in prompt blocks, with skill keys/counts only and no skill bodies. `read_skill` emits `[:lemon_skills, :skill, :load]` telemetry for successful and missing skill loads. `skill_manage` emits `[:lemon_skills, :skill, :write]` telemetry for accepted and rejected write attempts. These events include session metadata when available, exclude skill body/supporting-file content, update `LemonSkills.Usage` where applicable, and are projected into introspection as `:skill_prompt_render_observed` / `:skill_load_observed` / `:skill_write_observed`.
 
@@ -239,9 +246,11 @@ test/lemon_skills/
   tools/
     read_skill_test.exs          # ReadSkill tool
     skill_manage_test.exs        # SkillManage tool
-    x_search_test.exs            # XSearch tool
-    post_to_x_test.exs           # PostToX tool
-    get_x_mentions_test.exs      # GetXMentions tool
+    memory_test.exs              # Memory tool
+    memory_topic_test.exs        # MemoryTopic tool
+    search_memory_test.exs       # SearchMemory tool
+    kanban_test.exs              # Kanban tool
+    media_*_test.exs             # The six media tools
 test/mix/tasks/
   lemon.skill_test.exs           # Mix task CLI
 ```
@@ -286,7 +295,7 @@ HttpMock.stub("https://skills.lemon.agent/", {:error, :nxdomain})
 | Online discovery | `discovery_test.exs` |
 | Entry struct | `entry_test.exs` |
 | Status checking | `status_test.exs` |
-| Agent tools | `tools/read_skill_test.exs`, `tools/skill_manage_test.exs`, `tools/x_search_test.exs`, `tools/post_to_x_test.exs`, `tools/get_x_mentions_test.exs` |
+| Agent tools | the matching file under `tools/`, e.g. `tools/read_skill_test.exs`, `tools/skill_manage_test.exs`, `tools/kanban_test.exs` |
 | Mix task | `mix/tasks/lemon.skill_test.exs` |
 
 ## Connections to Other Apps
@@ -296,16 +305,17 @@ HttpMock.stub("https://skills.lemon.agent/", {:error, :nxdomain})
 | App | What LemonSkills uses from it |
 |-----|-------------------------------|
 | `lemon_core` | `LemonCore.ExecApprovals` for approval gating in Installer, configured stdio MCP sampling review, and configured HTTP MCP OAuth authorization requests; `LemonCore.Secrets` for GitHub token resolution in Discovery and HTTP MCP OAuth client/token secret storage; `LemonCore.OAuth.LocalCallbackListener` for configured HTTP MCP PKCE callback capture; `LemonCore.Telemetry` for skill load/write events |
-| `agent_core` | `LemonAgent.Types.AgentTool` and `LemonAgent.Types.AgentToolResult` structs for tool definitions |
-| `ai` | `LemonAi.Types.TextContent` struct for tool result content |
-| `x_api` | `XApi` for X API integration (x_search, post_to_x, get_x_mentions tools) |
+| `lemon_agent` | `LemonAgent.Types.AgentTool` and `LemonAgent.Types.AgentToolResult` structs for tool definitions |
+| `lemon_ai` | `LemonAi.Types.TextContent` struct for tool result content; the model call behind the optional LLM audit reviewer |
+| `lemon_memory` | Durable memory behind the `memory`, `memory_topic` and `search_memory` tools |
+| `lemon_media` | Media job records and artifacts behind the six media tools |
 
 ### Consumers (other apps use this)
 
 | App | How it uses LemonSkills |
 |-----|------------------------|
 | `coding_agent` | Calls `LemonSkills.find_relevant/2` to inject skill content into agent system prompts; wraps `LemonSkills.Tools.ReadSkill` and `LemonSkills.Tools.SkillManage` as agent tools; shares `agent_dir` config (fallback: `config :coding_agent, :agent_dir`) |
-| `agent_core` | Provides the common tool structs used by skill tools (`read_skill`, `skill_manage`, `x_search`, `post_to_x`, `get_x_mentions`) |
+| `lemon_agent` | Provides the common tool structs used by every module under `LemonSkills.Tools` |
 
 ### Shared Configuration
 

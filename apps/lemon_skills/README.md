@@ -4,6 +4,27 @@ Skill registry, discovery, installation, audit, and lifecycle management for the
 
 LemonSkills provides a centralized system for extending agent capabilities through modular, file-based skills. Skills are directories containing a `SKILL.md` manifest file with optional YAML/TOML frontmatter, and the system handles discovery from disk, online sources, installation with approval gating, static security audit, optional LLM-backed audit review, status checking, and relevance-based retrieval.
 
+`lemon_skills` is one of the packages that make up the [Lemon](https://github.com/z80dev/lemon)
+agent platform. It depends on `lemon_core`, `lemon_agent`, `lemon_ai`,
+`lemon_memory` and `lemon_media`.
+
+## Installation
+
+```elixir
+def deps do
+  [{:lemon_skills, "~> 0.1"}]
+end
+```
+
+Start the application (it is an OTP application with its own supervision tree)
+and the skill registry is available through the `LemonSkills` facade:
+
+```elixir
+skills = LemonSkills.list()
+{:ok, entry} = LemonSkills.get("my-skill")
+relevant = LemonSkills.find_relevant("deploy a container", max_results: 3)
+```
+
 ## Architecture Overview
 
 ### Skill Lifecycle
@@ -43,7 +64,7 @@ LemonSkills provides a centralized system for extending agent capabilities throu
 
 ### Execution Model
 
-LemonSkills does not execute skills directly. Instead, it serves as a **content and metadata provider** for other parts of the system (primarily `coding_agent` and `agent_core`). The workflow is:
+LemonSkills does not execute skills directly. Instead, it serves as a **content and metadata provider** for other parts of the system (primarily `coding_agent` and `lemon_agent`). The workflow is:
 
 1. **Registration** -- On application start, the `Registry` GenServer loads all skills from global and project directories into an in-memory cache. Built-in skills are seeded first via `BuiltinSeeder`.
 2. **Retrieval** -- Agents and tools query the registry for skills by key or by relevance to a context string. The `find_relevant/2` function scores skills using keyword matching across name, description, keywords, and body content.
@@ -90,10 +111,24 @@ The OTP application (`LemonSkills.Application`) performs two actions on start:
 | `LemonSkills.Tools.MediaAnalyzeImage` | `lib/lemon_skills/tools/media_analyze_image.ex` | Agent tool for managed image analysis artifacts |
 | `LemonSkills.Tools.MediaGenerateVideo` | `lib/lemon_skills/tools/media_generate_video.ex` | Agent tool for managed video generation artifacts |
 | `LemonSkills.Tools.Kanban` | `lib/lemon_skills/tools/kanban.ex` | Agent tool for durable Lemon kanban boards and tasks |
-| `LemonSkills.Tools.XSearch` | `lib/lemon_skills/tools/x_search.ex` | Agent tool for read-only recent public X/Twitter search |
-| `LemonSkills.Tools.PostToX` | `lib/lemon_skills/tools/post_to_x.ex` | Agent tool for posting tweets to X (Twitter) |
-| `LemonSkills.Tools.GetXMentions` | `lib/lemon_skills/tools/get_x_mentions.ex` | Agent tool for fetching recent X mentions |
+| `LemonSkills.SkillView` | `lib/lemon_skills/skill_view.ex` | Display projection of an entry: active state and what is missing |
+| `LemonSkills.PromptView` | `lib/lemon_skills/prompt_view.ex` | Renders skills into an agent's system prompt |
+| `LemonSkills.McpSource` | `lib/lemon_skills/mcp_source.ex` | MCP servers as a runtime tool source (stdio, HTTP, SSE) |
+| `LemonSkills.Source` | `lib/lemon_skills/source.ex` | Behaviour every skill source implements; `Sources.*` are its implementations |
+| `LemonSkills.SourceRouter` | `lib/lemon_skills/source_router.ex` | Resolves a URL or path to the source module that handles it |
+| `LemonSkills.TrustPolicy` | `lib/lemon_skills/trust_policy.ex` | Which trust levels require an audit and which auto-approve |
+| `LemonSkills.Audit.BundleAudit` | `lib/lemon_skills/audit/bundle_audit.ex` | Whole-bundle audit with a fingerprinted verdict cache |
+| `LemonSkills.Curator` | `lib/lemon_skills/curator.ex` | Usage-driven curation pass over installed skills |
+| `LemonSkills.Synthesis.Pipeline` | `lib/lemon_skills/synthesis/pipeline.ex` | Drafts new skills from an agent's own history |
+| `LemonSkills.Usage` | `lib/lemon_skills/usage.ex` | Persisted per-skill usage counters and pinned/archived state |
+| `LemonSkills.Migrator` | `lib/lemon_skills/migrator.ex` | Moves skills forward when a release changes their layout |
 | `Mix.Tasks.Lemon.Skill` | `lib/mix/tasks/lemon.skill.ex` | CLI interface for skill management |
+| `Mix.Tasks.Lemon.Skill.Lint` | `lib/mix/tasks/lemon.skill.lint.ex` | Lints skill directories against the manifest rules |
+
+Modules not listed here are internal to the package (`@moduledoc false`) and
+may change without a major version: `Bundle`, `Lockfile`, `InstallPlan`,
+`PathBoundary`, `Audit.State`, `Audit.SkillLint`, and the `Synthesis` draft
+internals.
 
 ## How Skills Are Defined
 
@@ -214,7 +249,7 @@ Every install/update for a non-builtin skill runs through the audit path before 
 
 Agent-authored skill writes use the same bundle audit path through `skill_manage`. The tool writes only to the configured project or global skill directories, restricts supporting files to `references/`, `templates/`, `scripts/`, and `assets/`, and rolls back blocked audit verdicts before refreshing the registry. `skill_manage` also exposes a `report` action that summarizes usage sidecar rows and flags stale/archive candidates before an agent curates skills.
 
-1. `LemonSkills.Bundle` computes a deterministic bundle hash across `SKILL.md` plus supported files under `references/`, `templates/`, `scripts/`, and `assets/`. Symlinked bundle entries are rejected so the audit payload cannot escape the skill root.
+1. The package computes a deterministic bundle hash across `SKILL.md` plus supported files under `references/`, `templates/`, `scripts/`, and `assets/`. Symlinked bundle entries are rejected so the audit payload cannot escape the skill root.
 2. `LemonSkills.Audit.BundleAudit` reuses cached results from `skills.audit.json` only when the bundle hash and audit fingerprint still match.
 3. `LemonSkills.Audit.Engine` runs deterministic checks for destructive commands, remote execution, exfiltration, traversal, and escape patterns across all auditable text files in the bundle.
 4. If configured, `LemonSkills.Audit.LlmReviewer` reviews a bundle payload and classifies the skill as `pass`, `warn`, or `block`.
@@ -379,7 +414,9 @@ end
 
 ## Agent Tools
 
-Four tools are available for agents to use at runtime:
+Twelve tools are available for agents to mount at runtime. Each module exposes
+`tool/1` or `tool/2`, returning a `LemonAgent.Types.AgentTool` whose `execute`
+closure runs the tool and answers with a `LemonAgent.Types.AgentToolResult`.
 
 ### read_skill
 
@@ -390,40 +427,31 @@ LemonSkills.Tools.ReadSkill.tool(cwd: "/project/path")
 # Parameters: %{"key" => "github", "include_status" => true}
 ```
 
-### x_search
+### skill_manage
 
-Searches recent public X/Twitter posts. This is read-only and can use a
-bearer-token-only configuration.
-
-```elixir
-LemonSkills.Tools.XSearch.tool()
-# Parameters: %{"query" => "lemon lang:en", "limit" => 10}
-```
-
-Requires either `X_API_BEARER_TOKEN` for read-only search or the same OAuth
-credentials used by the other X tools.
-
-### post_to_x
-
-Posts a tweet to X (Twitter) as the configured account. Supports new tweets and replies.
+Creates, edits, patches, deletes and audits local skills. Every write runs
+through the audit engine, so a model cannot install content that a `:block`
+verdict rejects.
 
 ```elixir
-LemonSkills.Tools.PostToX.tool()
-# Parameters: %{"text" => "Hello world", "reply_to" => "tweet_id"}
+LemonSkills.Tools.SkillManage.tool(cwd: "/project/path")
 ```
 
-Requires environment variables: `X_API_CLIENT_ID`, `X_API_CLIENT_SECRET`, `X_API_ACCESS_TOKEN`, `X_API_REFRESH_TOKEN`.
+### memory, memory_topic, search_memory
 
-### get_x_mentions
+Assistant-home notes (`USER.md`/`MEMORY.md`), durable topic memory, and scoped
+search over prior runs. These are backed by `lemon_memory`.
 
-Fetches recent mentions of the configured X account.
+### kanban
 
-```elixir
-LemonSkills.Tools.GetXMentions.tool()
-# Parameters: %{"limit" => 10}
-```
+Durable Lemon kanban boards and tasks for multi-step work.
 
-Same credential requirements as `post_to_x`.
+### media_status, media_generate_image, media_generate_speech, media_generate_video, media_analyze_image, media_transcribe_audio
+
+Managed media generation and analysis. Artifacts and their redacted job records
+go through `lemon_media`; each tool needs the credentials of the provider it
+calls (OpenAI, Vertex, ElevenLabs or Google), and reports a missing credential
+as a tool error rather than raising.
 
 ## Online Discovery
 
@@ -472,6 +500,9 @@ mix lemon.skill info <key>                    # Show skill details
 | `:require_approval` | boolean | `true` | Whether install/update/uninstall requires user approval |
 | `:approval_timeout_ms` | integer | `300_000` | Timeout for approval requests (5 minutes) |
 | `:http_client` | module | `LemonSkills.HttpClient.Httpc` | HTTP client module for discovery |
+| `:mcp_servers` | list | `[]` | MCP servers to expose as tools (see `LemonSkills.McpSource`) |
+| `:mcp_disabled` | boolean | `false` | Turn the MCP tool source off entirely |
+| `:audit_llm` | keyword | `[enabled: false]` | Optional model-backed audit review (`:enabled`, `:model`) |
 
 ### Environment Variables
 
@@ -479,11 +510,9 @@ mix lemon.skill info <key>                    # Show skill details
 |----------|-------------|
 | `LEMON_AGENT_DIR` | Override the global agent directory (takes precedence over app config) |
 | `GITHUB_TOKEN` | GitHub personal access token for higher discovery rate limits |
-| `X_API_BEARER_TOKEN` | X API bearer token for read-only `x_search` |
-| `X_API_CLIENT_ID` | X API client ID (for post_to_x and get_x_mentions tools) |
-| `X_API_CLIENT_SECRET` | X API client secret |
-| `X_API_ACCESS_TOKEN` | X API access token |
-| `X_API_REFRESH_TOKEN` | X API refresh token |
+| `LEMON_MCP_SERVERS` | JSON array of MCP servers to connect as a tool source |
+| `LEMON_MCP_DISABLED` | Set to `1`/`true`/`yes` to turn the MCP tool source off |
+| `LEMON_HARNESS_SKILLS_DIR` | Override the harness-compatible global skills directory |
 
 ### Configuration Files
 
@@ -510,10 +539,13 @@ Project configuration is deep-merged on top of global configuration.
 | Dependency | Type | Purpose |
 |------------|------|---------|
 | `lemon_core` | umbrella | Shared primitives; `LemonCore.ExecApprovals` for approval gating, `LemonCore.Secrets` for secret resolution |
-| `agent_core` | umbrella | Agent types (`AgentTool`, `AgentToolResult`) used by tool definitions |
-| `ai` | umbrella | AI types (`TextContent`) used in tool results |
-| `x_api` | umbrella | X API integration (`XApi`) used by x_search, post_to_x, and get_x_mentions tools |
+| `lemon_agent` | umbrella | Agent types (`AgentTool`, `AgentToolResult`) used by tool definitions |
+| `lemon_ai` | umbrella | AI types (`TextContent`) used in tool results; the model call behind the optional LLM audit |
+| `lemon_memory` | umbrella | Durable memory behind the memory, memory_topic and search_memory tools |
+| `lemon_media` | umbrella | Media job records and artifacts behind the media tools |
 | `jason` | hex | JSON encoding/decoding for `skills.json` configuration files |
+| `phoenix_pubsub` | hex | Broadcasts skill and media lifecycle events on `LemonCore.PubSub` |
+| `req` | hex | HTTP client for the media provider APIs |
 
 ## Installation Flow Detail
 

@@ -1,29 +1,29 @@
 defmodule LemonSkills.Synthesis.DraftGenerator do
-  @moduledoc """
-  Generates a draft SKILL.md from a qualified `Document`.
+  @moduledoc false
 
-  The generator produces a manifest v2 YAML frontmatter block plus a structured
-  body that captures the task pattern and solution.  The output is suitable for
-  passing directly to `LemonSkills.Audit.Engine.audit_content/1` and then to
-  `LemonSkills.Synthesis.DraftStore.put/2`.
-
-  ## Output shape
-
-      %{
-        key:     "deploy-to-k8s",           # URL-safe skill identifier
-        name:    "Deploy to K8s",            # human-readable display name
-        content: "---\n...\n---\n\n# ...",  # full SKILL.md content string
-        source_doc_id: "abc123"             # originating Document ID
-      }
-
-  ## Limitations
-
-  - Generated skills are drafts; they require human review before promotion.
-  - Secret filtering is conservative: if any pattern matches the document is
-    rejected with `{:error, :contains_secrets}`.
-  - The generated SKILL.md body is intentionally terse; it does not reproduce
-    the full conversation, only the distilled pattern.
-  """
+  # Generates a draft SKILL.md from a qualified `Document`.
+  #
+  # The generator produces a manifest v2 YAML frontmatter block plus a structured
+  # body that captures the task pattern and solution.  The output is suitable for
+  # passing directly to `LemonSkills.Audit.Engine.audit_content/1` and then to
+  # `LemonSkills.Synthesis.DraftStore.put/2`.
+  #
+  # Output shape
+  #
+  #     %{
+  #       key:     "deploy-to-k8s",           # URL-safe skill identifier
+  #       name:    "Deploy to K8s",            # human-readable display name
+  #       content: "---\n...\n---\n\n# ...",  # full SKILL.md content string
+  #       source_doc_id: "abc123"             # originating Document ID
+  #     }
+  #
+  # Limitations
+  #
+  # - Generated skills are drafts; they require human review before promotion.
+  # - Secret filtering is conservative: if any pattern matches the document is
+  #   rejected with `{:error, :contains_secrets}`.
+  # - The generated SKILL.md body is intentionally terse; it does not reproduce
+  #   the full conversation, only the distilled pattern.
 
   alias LemonMemory.Document
   alias LemonMemory.TaskFingerprint
