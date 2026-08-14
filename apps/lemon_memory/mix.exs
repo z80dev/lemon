@@ -16,9 +16,9 @@ defmodule LemonMemory.MixProject do
       test_pattern: "*_test.exs",
       elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
-      # Matches the coverage the moved suites already provide (60.17%). The
-      # untested surface came along with the move: SessionSearch has no direct
-      # test, and `mix lemon.memory` has none either.
+      # Floor, not a target: `SessionSearch` now has a direct suite, but
+      # `mix lemon.memory` is still untested, so the threshold stays where the
+      # moved suites put it rather than tracking each gain.
       test_coverage: [summary: [threshold: 60]],
       deps: deps(),
       name: "lemon_memory",

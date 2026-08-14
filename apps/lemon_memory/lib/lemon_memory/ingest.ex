@@ -26,7 +26,30 @@ defmodule LemonMemory.Ingest do
   ## Configuration
 
   Ingest respects `LemonMemory.Store` configuration and the `session_search`
-  feature flag in `[features]` of `~/.lemon/config.toml`.
+  feature flag in `[features]` of `~/.lemon/config.toml`. Its own options come
+  from `start_link/1`, falling back to application env:
+
+      config :lemon_memory, LemonMemory.Ingest,
+        memory_store: LemonMemory.Store,
+        config_ttl_ms: 30_000
+
+  ## Multiple instances
+
+  The worker registers under `:name` (default `LemonMemory.Ingest`), so an
+  embedding application can run several isolated pipelines in one node. Each
+  instance needs its own `:memory_store`; every public function takes the
+  server as an optional first argument, and the finalize-run hook accepts it
+  as a bound argument:
+
+      {:ok, _} =
+        LemonMemory.Ingest.start_link(name: :tenant_a_ingest, memory_store: :tenant_a_store)
+
+      LemonCore.Store.Hooks.register(:tenant_a_store, :finalize_run_hooks,
+        {LemonMemory.Ingest, :handle_finalize_run, [:tenant_a_ingest]})
+
+  Telemetry events and the `"routing_feedback"` bus topic are node-global by
+  design (the topic is platform contract, consumed by `lemon_router`), so
+  instances fan into the same subscribers.
   """
 
   use GenServer
@@ -48,8 +71,21 @@ defmodule LemonMemory.Ingest do
 
   # ── Public API ────────────────────────────────────────────────────────────────
 
+  @doc """
+  Start an ingest worker.
+
+  Options (all optional, taking precedence over application env):
+
+    * `:name` — registered name, default `#{inspect(__MODULE__)}`
+    * `:memory_store` — where documents are written; a pid, a registered
+      `LemonMemory.Store` name, or a module exporting `put/1`. Defaults to
+      `LemonMemory.Store`, which routes through `LemonMemory.Providers`.
+    * `:config_loader` — 0-arity function returning the loaded config
+    * `:config_ttl_ms` — feature-flag cache TTL, default `#{@config_ttl_ms}`
+  """
   def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    name = Keyword.get(opts, :name, __MODULE__)
+    GenServer.start_link(__MODULE__, opts, name: name)
   end
 
   @doc """
@@ -79,6 +115,9 @@ defmodule LemonMemory.Ingest do
 
       config :lemon_core, LemonCore.Store,
         finalize_run_hooks: [{LemonMemory.Ingest, :handle_finalize_run}]
+
+  A non-default instance binds its server name as the hook's leading argument:
+  `{LemonMemory.Ingest, :handle_finalize_run, [:tenant_a_ingest]}`.
   """
   @spec handle_finalize_run(map()) :: :ok
   def handle_finalize_run(event), do: handle_finalize_run(__MODULE__, event)
@@ -92,16 +131,23 @@ defmodule LemonMemory.Ingest do
 
   @impl true
   def init(opts) do
-    config_loader =
-      Keyword.get(opts, :config_loader, fn -> LemonCore.Config.Modular.load() end)
+    # opts passed to start_link take precedence over application env
+    config =
+      :lemon_memory
+      |> Application.get_env(__MODULE__, [])
+      |> Keyword.merge(Keyword.drop(opts, [:name]))
 
-    memory_store = Keyword.get(opts, :memory_store, Store)
-    config_ttl_ms = Keyword.get(opts, :config_ttl_ms, @config_ttl_ms)
+    config_loader =
+      Keyword.get(config, :config_loader, fn -> LemonCore.Config.Modular.load() end)
+
+    memory_store = Keyword.get(config, :memory_store, Store)
+    config_ttl_ms = Keyword.get(config, :config_ttl_ms, @config_ttl_ms)
 
     {:ok,
      %{
        config_loader: config_loader,
        memory_store: memory_store,
+       memory_store_kind: classify_memory_store(memory_store),
        config_ttl_ms: config_ttl_ms,
        features: nil,
        features_loaded_at: nil
@@ -126,7 +172,7 @@ defmodule LemonMemory.Ingest do
 
         if valid_doc?(doc) and Safety.safe_document?(doc) do
           if session_search? do
-            put_memory_doc(state.memory_store, doc)
+            put_memory_doc(state.memory_store_kind, state.memory_store, doc)
           end
 
           if routing_feedback? do
@@ -211,17 +257,31 @@ defmodule LemonMemory.Ingest do
     end
   end
 
-  defp put_memory_doc(memory_store, %Document{} = doc) when is_pid(memory_store) do
-    Store.put(memory_store, doc)
+  # How a configured `:memory_store` is written to is decided once, at init:
+  # a registered instance name and a module exporting `put/1` are both atoms,
+  # and probing the code server on every finalized run to tell them apart
+  # would put a load attempt in the hot path.
+  defp classify_memory_store(Store), do: :providers
+
+  defp classify_memory_store(memory_store) when is_atom(memory_store) do
+    if Code.ensure_loaded?(memory_store) and function_exported?(memory_store, :put, 1) do
+      :module
+    else
+      :server
+    end
   end
 
-  defp put_memory_doc(Store, %Document{} = doc) do
-    Providers.put(doc)
-  end
+  # pids, `{:global, _}` and `{:via, _, _}` — plain `GenServer.server()` refs.
+  defp classify_memory_store(_memory_store), do: :server
 
-  defp put_memory_doc(memory_store, %Document{} = doc) when is_atom(memory_store) do
-    memory_store.put(doc)
-  end
+  # The default store routes through the provider registry so the configured
+  # provider chain still applies; a named or pid'd instance is written directly.
+  defp put_memory_doc(:providers, _memory_store, %Document{} = doc), do: Providers.put(doc)
+
+  defp put_memory_doc(:module, memory_store, %Document{} = doc), do: memory_store.put(doc)
+
+  defp put_memory_doc(:server, memory_store, %Document{} = doc),
+    do: Store.put(memory_store, doc)
 
   defp broadcast_routing_feedback(%Document{} = doc, record) do
     fingerprint = TaskFingerprint.from_document(doc)

@@ -64,7 +64,32 @@ end
 ```elixir
 # `:path` is a directory; memory.sqlite3 is created inside it.
 config :lemon_memory, LemonMemory.Store, path: "/var/lib/my_app/store"
+
+# Ingest options; `start_link/1` opts take precedence over these.
+config :lemon_memory, LemonMemory.Ingest, config_ttl_ms: 30_000
 ```
 
 `LemonMemory.Application` starts `Providers` always, and `Store` plus `Ingest`
-when SQLite is available.
+when SQLite is available, both registered under their module names.
+
+## Running more than one instance
+
+`Store` and `Ingest` both take `:name`, and every public function on them takes
+the server as an optional first argument, so an embedding application can run
+isolated pipelines side by side in one node:
+
+```elixir
+children = [
+  Supervisor.child_spec(
+    {LemonMemory.Store, name: :tenant_a_store, path: "/var/lib/my_app/tenant_a"},
+    id: :tenant_a_store
+  ),
+  Supervisor.child_spec(
+    {LemonMemory.Ingest, name: :tenant_a_ingest, memory_store: :tenant_a_store},
+    id: :tenant_a_ingest
+  )
+]
+```
+
+A non-default ingest worker binds its name into the finalize-run hook:
+`{LemonMemory.Ingest, :handle_finalize_run, [:tenant_a_ingest]}`.
