@@ -30,6 +30,12 @@
 | Build cron jobs or automation | `apps/lemon_automation/` |
 | Work on the web UI | `apps/lemon_web/` |
 | Debug coding agent via RPC | `apps/coding_agent_ui/` |
+| Record or search durable agent memory | `apps/lemon_memory/` |
+| Work on the MCP client/server bridge | `apps/lemon_mcp/` |
+| Work on the LemonSim control room UI | `apps/lemon_sim_ui/` |
+| Work on the on-chain TCG shop arena | `apps/lemon_tcg/` |
+| Write contract tests for platform behaviours | `apps/lemon_platform_test/` |
+| Work on the X (Twitter) API client | `apps/x_api/` |
 | Browser automation via CDP/Playwright | `clients/lemon-browser-node/` |
 
 ---
@@ -122,7 +128,7 @@ When spawning agents for parallel work, **match the agent tier to the task compl
 2. **Update `README.md` files** — If your change affects setup, usage, APIs, or public interfaces, update the relevant README.
 3. **Update architecture docs in `docs/`** — If your change affects design decisions, addendums to existing docs, or new architectural patterns, update or add docs.
 4. **Update inline comments** — Complex logic, public functions, and non-obvious behaviors must have accurate, up-to-date comments.
-5. **Update configuration examples** — If you add/remove config options, update `.lemon/config.toml` examples and config documentation.
+5. **Update configuration examples** — If you add/remove config options, update the tracked `examples/config.example.toml` and config documentation.
 
 ### Examples of Documentation Debt to Avoid:
 
@@ -144,24 +150,30 @@ Future agents (and humans) depend on accurate documentation to be effective. Don
 
 ```
 apps/
-├── agent_core/          # Core agent runtime, CLI runners (claude, codex, pi, kimi, opencode), subagent management
-├── ai/                  # AI provider abstraction (Anthropic, OpenAI, Google, Azure, Bedrock)
 ├── coding_agent/        # Coding agent runtime, coding tools, session management, budget enforcement
-├── coding_agent_ui/     # Thin wrapper that exposes coding_agent via RPC (mostly empty, used for tooling)
+├── coding_agent_ui/     # UI adapters exposing coding_agent over RPC (used for tooling/debugging)
+├── lemon_agent/         # Agent runtime: agentic loop, supervised agents, tool registry, subagents, model routing/credentials
+├── lemon_ai/            # Provider-agnostic LLM client: 27 providers behind one streaming API, model registry, cost tracking
 ├── lemon_automation/    # Cron jobs, heartbeat manager, run submitter
-├── lemon_channels/      # Channel adapters for inbound/outbound delivery (Telegram, Discord, X API, XMTP)
-├── lemon_control_plane/ # HTTP/WebSocket API server with 112+ JSON-RPC methods
-├── lemon_cli/           # User-facing setup, onboarding, and Hermes migration Mix tasks
 ├── lemon_browser/       # Browser capability driver and artifact store
+├── lemon_channels/      # Channel adapters and delivery outbox (Telegram, Discord, WhatsApp, XMTP, email)
+├── lemon_cli/           # User-facing setup, onboarding, and Hermes migration Mix tasks
+├── lemon_cli_runners/   # Vendor AI CLIs (Claude Code, Codex, Kimi, OpenCode, Pi) wrapped as streaming subagents and gateway engines
+├── lemon_control_plane/ # HTTP/WebSocket API server with 150+ JSON-RPC methods
 ├── lemon_core/          # Shared primitives: config, store (ETS/JSONL/SQLite), secrets, PubSub bus
 ├── lemon_evals/         # Deterministic eval harness and mix lemon.eval task
-├── lemon_gateway/       # Gateway engines (claude, codex, pi, opencode, lemon, echo), voice/email/webhook transports
+├── lemon_gateway/       # Engine behaviour, engine registry/scheduler, launch locks; SMS/voice/email/webhook ingress
+├── lemon_honcho/        # Honcho-backed long-term memory: registers a LemonMemory provider and agent tools
 ├── lemon_lsp/           # LSP server registry and supervised JSON-RPC sessions
-├── lemon_media/         # Media job supervisor, metadata store, and mix lemon.media
 ├── lemon_mcp/           # MCP (Model Context Protocol) server/client bridge for CodingAgent tools
-├── lemon_router/        # Message routing, agent directory, run orchestration
+├── lemon_media/         # Media job supervisor, metadata store, and mix lemon.media
+├── lemon_memory/        # Durable agent memory: SQLite full-text store, provider fan-out search, run ingest, redaction
+├── lemon_platform_test/ # Contract-test kit (ExUnit case templates) for Lemon extension behaviours
+├── lemon_router/        # Message routing, agent directory, run orchestration, queue semantics
 ├── lemon_sim/           # Reusable simulation harness primitives (projector/updater/action-space contracts)
+├── lemon_sim_ui/        # Phoenix LiveView control room for observing and driving lemon_sim runs
 ├── lemon_skills/        # Skill registry, discovery, installation, assistant-platform tools
+├── lemon_tcg/           # Live market data and execution for the agent-operated on-chain TCG shop
 ├── lemon_web/           # Phoenix LiveView web interface
 └── x_api/               # Reusable X API client, OAuth helpers, and token manager
 
@@ -277,12 +289,17 @@ On Linux and other non-keychain environments, keep `~/.lemon/secrets_master_key`
     ↓
 [coding_agent] - Execute tools, manage sessions, budget enforcement
     ↓
-[agent_core] - CLI runners (claude/codex/pi/kimi/opencode), subagent spawning
+[lemon_agent] - Agentic loop, tool registry, subagent orchestration, model routing/credentials
     ↓
-[ai] - LLM provider calls (Anthropic, OpenAI, Google, Azure, Bedrock)
+[lemon_ai] - LLM provider calls (Anthropic, OpenAI, Google, Azure, Bedrock)
 ```
 
-Outbound message delivery goes through `lemon_channels` (Telegram, X API, XMTP adapters).
+Vendor CLI engines take a parallel path out of `lemon_gateway`: `lemon_cli_runners` owns the
+`claude`/`codex`/`kimi`/`opencode`/`pi` engines and runs each vendor CLI as a streaming JSONL
+subprocess (extracted from `lemon_agent` in D15), instead of the in-process
+`coding_agent` → `lemon_agent` → `lemon_ai` chain.
+
+Outbound message delivery goes through `lemon_channels` (Telegram, Discord, WhatsApp, XMTP, email adapters).
 The control plane (`lemon_control_plane`) provides the JSON-RPC API used by TUI/web clients.
 
 ### Key Dependencies Between Apps
@@ -290,37 +307,42 @@ The control plane (`lemon_control_plane`) provides the JSON-RPC API used by TUI/
 Derived from mix.exs files and enforced by `mix lemon.quality` (architecture boundary check):
 
 ```
-lemon_control_plane ──→ lemon_core, lemon_browser, lemon_media, lemon_lsp, lemon_router, lemon_channels, lemon_skills, lemon_automation, ai, agent_core, coding_agent*
-lemon_router ─────────→ lemon_core, lemon_media, lemon_channels, agent_core, ai
-lemon_gateway ────────→ lemon_core, agent_core, coding_agent
-lemon_automation ─────→ lemon_core, lemon_router, lemon_skills
-lemon_channels ───────→ lemon_core, lemon_media, agent_core, x_api
-lemon_cli ────────────→ ai, lemon_core
-coding_agent ─────────→ lemon_core, lemon_browser, agent_core, ai, lemon_skills
-agent_core ───────────→ lemon_core, ai
-lemon_evals ──────────→ lemon_core, agent_core, ai, coding_agent, lemon_skills
+lemon_control_plane ──→ lemon_core, lemon_memory, lemon_browser, lemon_media, lemon_lsp, lemon_router, lemon_channels, lemon_skills, lemon_automation, lemon_agent, lemon_ai
+lemon_router ─────────→ lemon_ai, lemon_core, lemon_memory, lemon_media, lemon_channels, lemon_agent
+lemon_gateway ────────→ lemon_agent, lemon_core
+lemon_automation ─────→ lemon_agent, lemon_core, lemon_router, lemon_skills
+lemon_channels ───────→ lemon_core, lemon_media, lemon_agent
+lemon_cli ────────────→ lemon_core, lemon_memory, lemon_ai
+coding_agent ─────────→ lemon_agent, lemon_ai, lemon_skills, lemon_core, lemon_gateway, lemon_memory, lemon_browser, lemon_platform_test*
+coding_agent_ui ──────→ coding_agent, lemon_cli_runners, lemon_core
+lemon_cli_runners ────→ lemon_agent, lemon_ai, lemon_core, lemon_gateway
+lemon_agent ──────────→ lemon_ai, lemon_core
+lemon_evals ──────────→ lemon_agent, lemon_ai, coding_agent, lemon_cli_runners, lemon_core, lemon_skills
+lemon_mcp ────────────→ coding_agent, lemon_cli_runners, lemon_core, lemon_skills, lemon_agent
+lemon_honcho ─────────→ lemon_core, lemon_memory, lemon_agent, lemon_ai, lemon_platform_test*
+lemon_sim ────────────→ lemon_core, lemon_agent, lemon_ai
+lemon_sim_ui ─────────→ lemon_ai, lemon_core, lemon_sim
+lemon_tcg ────────────→ lemon_core, lemon_agent, lemon_ai, lemon_sim
+lemon_skills ─────────→ lemon_core, lemon_memory, lemon_media, lemon_agent, lemon_ai
+lemon_memory ─────────→ lemon_core
 lemon_browser ────────→ lemon_core
-lemon_honcho ─────────→ lemon_core, lemon_memory, agent_core, ai
 lemon_lsp ────────────→ lemon_core
 lemon_media ──────────→ lemon_core
-lemon_mcp ────────────→ coding_agent, agent_core, lemon_skills
-lemon_sim ────────────→ lemon_core, agent_core, ai
-lemon_sim_ui ─────────→ ai, lemon_core, lemon_sim
-lemon_skills ─────────→ lemon_core, lemon_media, agent_core, ai, x_api
+lemon_platform_test ──→ lemon_core, lemon_channels, lemon_cli_runners, lemon_gateway, lemon_memory, lemon_ai, lemon_agent (all optional: true)
 lemon_web ────────────→ lemon_core, lemon_router
-coding_agent_ui ──────→ coding_agent
-x_api ────────────────→ lemon_core
-ai ───────────────────→ (no umbrella deps - standalone LLM client library)
+x_api ────────────────→ lemon_core, lemon_channels, lemon_agent, lemon_ai, lemon_platform_test*
+lemon_ai ─────────────→ (no umbrella deps - standalone LLM client library)
+lemon_core ───────────→ (no umbrella deps - foundational shared library)
 ```
 
-`*` = runtime: false (compile-time only dependency)
+`*` = `only: :test, runtime: false` (compile-time-only test-kit dependency)
 
 ---
 
 ## Configuration
 
 - **User config**: `~/.lemon/config.toml`
-- **Project config**: `.lemon/config.toml` (in repo root)
+- **Project config**: `.lemon/config.toml` (optional, in repo root; not tracked — copy from `examples/config.example.toml`)
 - **Secrets**: Managed via `mix lemon.secrets.*` tasks (`set`, `list`, `delete`, `status`, `init`)
 - **Config inspection**: `mix lemon.config` - show resolved runtime config
 - **Store migration**: `mix lemon.store.migrate_jsonl_to_sqlite`
@@ -452,24 +474,23 @@ This repository includes an optional pre-push hook that uses **kimi** to review 
 
 ## Documentation Index
 
+- `docs/platform-split.md` - **Plan of record** for the platform split: package boundaries, extraction phases, and in-place work-item checkboxes
 - `docs/architecture_boundaries.md` - Dependency boundaries and allowed cross-app references
+- `docs/platform/` - Per-package platform guides (lemon_core, lemon_agent, lemon_ai, lemon_channels, lemon_gateway, lemon_memory, lemon_router, lemon_platform_test)
 - `docs/config.md` - Runtime configuration reference
+- `docs/mix-tasks.md` - Grouped reference for every `mix lemon.*` task, including the quality/cleanup harness (`mix lemon.quality`, `mix lemon.cleanup`)
 - `docs/skills.md` - Skill system documentation
-- `docs/quality_harness.md` - Quality checks and cleanup (`mix lemon.quality`, `mix lemon.cleanup`)
 - `docs/testing.md` - Canonical repo-level test lanes and CI parity guidance
 - `docs/assistant_bootstrap_contract.md` - Bootstrap contract
 - `docs/context.md` - Context management
-- `docs/remote-cli-task-execution-plan.md` - Planning note for remote `codex`/`claude` task execution over generic runner backends
-- `docs/plans/2026-03-19-ai-boundary-extraction-plan.md` - Plan for moving auth/config/storage ownership out of `apps/lemon_ai` before extracting `ai` into its own repo
+- `docs/long-running-agent-harnesses.md` - Long-running harness primitives that keep coding sessions structured across multi-step work
+- `docs/plans/2026-03-19-ai-boundary-extraction-plan.md` - Plan for moving auth/config/storage ownership out of `apps/lemon_ai` before extracting it into its own repo
 - `docs/subagent-parent-questions.md` - Design for subagent-to-parent clarification requests via a narrow `ask_parent` path
-- `docs/missions.md` - Reverse-engineered Factory Missions behavior and Lemon implementation spec
-- `docs/missions_phase1_plan.md` - Concrete Phase 1 implementation plan for Lemon Missions
 - `docs/telemetry.md` - Telemetry and observability
 - `docs/extensions.md` - Extension system
 - `docs/beam_agents.md` - BEAM agent architecture
-- `docs/benchmarks.md` - Performance benchmarks
+- `docs/benchmarks/` - Benchmark platform guarantees, quickstart, and VendingBench guides
 - `docs/model-selection-decoupling.md` - Model selection design
-- `docs/agent-loop/` - Agent loop design docs
 - `docs/testing/` - Testing guides
 - `docs/tools/` - Tool documentation
 
@@ -492,28 +513,33 @@ Each app has its own `AGENTS.md` with detailed context:
 
 | App | Location |
 |-----|----------|
-| agent_core | `apps/lemon_agent/AGENTS.md` |
-| ai | `apps/lemon_ai/AGENTS.md` |
 | coding_agent | `apps/coding_agent/AGENTS.md` |
+| coding_agent_ui | `apps/coding_agent_ui/AGENTS.md` |
+| lemon_agent | `apps/lemon_agent/AGENTS.md` |
+| lemon_ai | `apps/lemon_ai/AGENTS.md` |
+| lemon_automation | `apps/lemon_automation/AGENTS.md` |
 | lemon_browser | `apps/lemon_browser/README.md` *(no AGENTS.md yet)* |
+| lemon_channels | `apps/lemon_channels/AGENTS.md` |
+| lemon_cli | `apps/lemon_cli/README.md` *(no AGENTS.md yet)* |
+| lemon_cli_runners | `apps/lemon_cli_runners/README.md` *(no AGENTS.md yet)* |
+| lemon_control_plane | `apps/lemon_control_plane/AGENTS.md` |
 | lemon_core | `apps/lemon_core/AGENTS.md` |
+| lemon_evals | `apps/lemon_evals/README.md` *(no AGENTS.md yet)* |
 | lemon_gateway | `apps/lemon_gateway/AGENTS.md` |
 | lemon_honcho | `apps/lemon_honcho/AGENTS.md` |
 | lemon_lsp | `apps/lemon_lsp/README.md` *(no AGENTS.md yet)* |
+| lemon_mcp | `apps/lemon_mcp/AGENTS.md` |
 | lemon_media | `apps/lemon_media/README.md` *(no AGENTS.md yet)* |
-| lemon_channels | `apps/lemon_channels/AGENTS.md` |
+| lemon_memory | `apps/lemon_memory/README.md` *(no AGENTS.md yet)* |
+| lemon_platform_test | `apps/lemon_platform_test/README.md` *(no AGENTS.md yet)* |
 | lemon_router | `apps/lemon_router/AGENTS.md` |
-| lemon_control_plane | `apps/lemon_control_plane/AGENTS.md` |
-| lemon_cli | `apps/lemon_cli/README.md` *(no AGENTS.md yet)* |
-| lemon_evals | `apps/lemon_evals/README.md` *(no AGENTS.md yet)* |
 | lemon_sim | `apps/lemon_sim/AGENTS.md` |
+| lemon_sim_ui | `apps/lemon_sim_ui/AGENTS.md` |
 | lemon_skills | `apps/lemon_skills/AGENTS.md` |
-| lemon_automation | `apps/lemon_automation/AGENTS.md` |
+| lemon_tcg | `apps/lemon_tcg/README.md` *(no AGENTS.md yet)* |
 | lemon_web | `apps/lemon_web/AGENTS.md` |
 | x_api | `apps/x_api/README.md` *(no AGENTS.md yet)* |
-| lemon_mcp | `apps/lemon_mcp/README.md` *(no AGENTS.md yet)* |
-| coding_agent_ui | `apps/coding_agent_ui/AGENTS.md` |
 
 ---
 
-*Last updated: 2026-07-02* (moved browser, media jobs, and LSP drivers out of lemon_core)
+*Last updated: 2026-08-13* (reconciled with the `ai`→`lemon_ai` / `agent_core`→`lemon_agent` renames and the D15 `lemon_cli_runners` extraction: full 26-app structure tree, dependency graph regenerated from mix.exs, message flow, doc index, and app guide table)
