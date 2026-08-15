@@ -1,7 +1,8 @@
 name: Release Smoke Tests
 
 # Assembles runtime releases, verifies they start and pass doctor checks,
-# then tears down. Runs on PRs touching release-related files and weekly.
+# then tears down. Runs on PRs touching release-related files (manual via
+# workflow_dispatch for ad-hoc checks).
 
 permissions:
   contents: read
@@ -22,9 +23,6 @@ on:
       - ".github/workflows/release.yml"
       - "scripts/verify_release_artifacts"
       - "scripts/verify_release_runtime_boot"
-  schedule:
-    # Weekly on Monday at 06:00 UTC
-    - cron: "0 6 * * 1"
   workflow_dispatch:
     inputs:
       profile:

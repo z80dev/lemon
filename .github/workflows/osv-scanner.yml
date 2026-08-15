@@ -35,8 +35,6 @@ on:
       - "tools/diagrams/package.json"
       - "tools/diagrams/package-lock.json"
       - ".github/workflows/osv-scanner.yml"
-  schedule:
-    - cron: "0 9 * * 1"
   workflow_dispatch:
 
 permissions:
