@@ -40,6 +40,7 @@ defmodule LemonControlPlane.EventBridge do
   | :goal_loop_status        | goal                      |
   | :approval_requested      | exec.approval.requested   |
   | :approval_resolved       | exec.approval.resolved    |
+  | :channel_delivery        | channel.delivery          |
   | :cron_run_started        | cron                      |
   | :cron_run_completed      | cron                      |
   | :cron_lifecycle_action   | cron.audit                |
@@ -247,6 +248,7 @@ defmodule LemonControlPlane.EventBridge do
     do: ["cron"]
 
   defp topic_for_event("goal"), do: ["goals"]
+  defp topic_for_event("channel.delivery"), do: ["channels"]
   defp topic_for_event("tick"), do: ["cron", "system"]
   defp topic_for_event("presence"), do: ["presence"]
   defp topic_for_event("health"), do: ["system"]
@@ -555,6 +557,27 @@ defmodule LemonControlPlane.EventBridge do
        "sessionKey" => get_field(pending, :session_key) || get_field(meta, :session_key),
        "agentId" => get_field(pending, :agent_id),
        "tool" => get_field(pending, :tool)
+     }}
+  end
+
+  # Channel delivery events — outbound dispatch observations from LemonChannels.Dispatcher.
+  defp map_event_type(:channel_delivery, %Events.ChannelDelivery{} = payload, meta) do
+    {"channel.delivery",
+     %{
+       "intentId" => payload.intent_id,
+       "runId" => payload.run_id || get_field(meta, :run_id),
+       "sessionKey" => payload.session_key || get_field(meta, :session_key),
+       "channelId" => payload.channel_id,
+       "accountId" => payload.account_id,
+       "peerKind" => normalize_atom_or_binary(payload.peer_kind),
+       "peerId" => payload.peer_id,
+       "threadId" => payload.thread_id,
+       "kind" => normalize_atom_or_binary(payload.kind),
+       "textPreview" => truncate(payload.text_preview, 500),
+       "ok" => payload.ok,
+       "error" => payload.error,
+       "durationMs" => payload.duration_ms,
+       "tsMs" => payload.ts_ms
      }}
   end
 

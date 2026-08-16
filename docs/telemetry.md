@@ -135,6 +135,7 @@ remain available as a persisted, queryable alternative.
 | Event | Measurements | Metadata | Emitter |
 |---|---|---|---|
 | `[:lemon, :channels, :inbound]` | `count: 1` | `channel_id`, `account_id`, `peer_kind`, `agent_id` | [`channels/runtime.ex:113`](../apps/lemon_channels/lib/lemon_channels/runtime.ex) and [`router.ex:92`](../apps/lemon_router/lib/lemon_router/router.ex), on each normalized inbound message |
+| `[:lemon, :channels, :dispatch]` | `count: 1`, `duration` (native) | `channel_id`, `account_id`, `kind`, `intent_id`, `run_id`, `session_key`, `ok` (boolean) | [`dispatcher.ex`](../apps/lemon_channels/lib/lemon_channels/dispatcher.ex), after every `LemonChannels.Dispatcher.dispatch/1` — fires for both success and `{:error, _}`, check `ok`. Its bus twin is the `:channel_delivery` event on the `channels` topic (see `docs/platform/bus-events.md` §10) |
 | `[:lemon, :channels, :outbox, :queue]` | `depth`, `max_queue_size`, `count: 1` | caller map plus `event` (`:enqueued`, and other queue transitions) | [`outbox.ex:742`](../apps/lemon_channels/lib/lemon_channels/outbox.ex) |
 | `[:lemon, :channels, :outbox, :rejected]` | `count: 1`, `queue_depth`, `max_queue_size` | `reason: :queue_full`, `channel_id`, `account_id`, `chunk_count` | [`outbox.ex:97`](../apps/lemon_channels/lib/lemon_channels/outbox.ex), when the bounded queue refuses work |
 | `[:lemon, :channels, :deliver, :start]` | `system_time` | `channel_id`, `account_id`, `chunk_index` | [`outbox.ex:574`](../apps/lemon_channels/lib/lemon_channels/outbox.ex) |

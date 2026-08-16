@@ -176,7 +176,7 @@ the only listener silently discards them.
 | `arena:<domain>:league` | `lemon_sim_ui/arena.ex:752` | `arena_leaderboard_live.ex:21` | `%{game_id}` |
 | hosted-game topic | `hosted_game/room_server.ex:1676` | `hosted_werewolf_live.ex` (4 sites) | `%{room_id}` |
 | philosopher-chat topic | `philosopher_chat/thread_server.ex:844` | `philosopher_chat_api_controller.ex:172` | `%{type, event_seq, …}` |
-| `channels` | **none in `lib/`** | `EventBridge` | documented in the Bus contract; reachable only via the control-plane injectors (§6.8) |
+| `channels` | *(was none in `lib/`; since 2026-08-16 `lemon_channels/dispatcher.ex` publishes `:channel_delivery` — §10)* | `EventBridge` | now a typed contract topic |
 | `logs` | **none** | **none** | documented in the Bus contract; dead |
 
 ### 2.7 Envelope discipline, summarised
@@ -813,3 +813,36 @@ every payload module. The shim cannot come back without failing the contract sui
 instead — with consumers pattern-matching structs, passing a legacy map through would drop the
 event at every subscriber rather than degrade it. `:dev`/`:test` still raise, which is what keeps
 publishers honest.
+## 10. Addendum (2026-08-16) — `:channel_delivery` gives `channels` its first publisher
+
+The `channels` topic spent its whole life as a subscriber with no publisher (§6.11):
+`EventBridge` subscribed at startup, and the only way to put an event on the topic was the
+control-plane injectors of §6.8. That is no longer true. The final outbound funnel —
+`LemonChannels.Dispatcher.dispatch/1`, the router-facing semantic delivery entrypoint — was
+the one hop in the message flow invisible on the bus: tests wanting to assert "lemon would
+have sent exactly this to Telegram" had nothing to hook.
+
+**Event.** `:channel_delivery`, payload `LemonCore.Events.ChannelDelivery`, registered in
+`LemonCore.Events.registry/0` under a new `channels` section — which makes `channels` the
+eighth typed contract topic (amending R3's seven).
+
+| Field | Meaning |
+|---|---|
+| `intent_id`, `run_id`, `session_key` | copied from the `LemonCore.DeliveryIntent` |
+| `channel_id`, `account_id`, `peer_kind`, `peer_id`, `thread_id` | the `DeliveryRoute` |
+| `kind` | the intent kind (`:final_text`, `:stream_snapshot`, …) |
+| `text_preview` | bounded excerpt of the outbound text (≤ 200 chars + ellipsis), never the full body |
+| `ok` / `error` | dispatch result; `error` is a bounded `inspect/2` of the reason |
+| `duration_ms`, `ts_ms` | dispatch duration and wall-clock emit time |
+
+**Emission discipline.** The dispatcher emits *after* the renderer's result is known, from a
+helper that rescues and logs — a crashed bus backend or serialization issue can never break a
+real send. It gates on `Bus.running?/0` per §6.6, and emits a
+`[:lemon, :channels, :dispatch]` telemetry twin (see `docs/telemetry.md`).
+
+**Fanout.** `EventBridge` maps `:channel_delivery` → `channel.delivery`
+(`topic_for_event("channel.delivery") → ["channels"]`), `Frames.supported_events/0` lists the
+name, and `events.subscribe` already allowed the `channels` topic.
+
+**Kit.** `LemonPlatformTest.EventsFixtures.channel_delivery/1` builds the payload; the
+compliance suite covers the module through the registry as with every other typed payload.

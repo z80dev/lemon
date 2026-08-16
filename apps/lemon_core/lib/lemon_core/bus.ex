@@ -18,6 +18,8 @@ defmodule LemonCore.Bus do
   - `"system"` - System-wide events (config reload, secret changes, talk mode)
   - `"goals"` - Durable goal lifecycle events
   - `"routing_feedback"` - Finalized run feedback samples for router-owned model selection
+  - `"channels"` - Outbound channel delivery observations (`:channel_delivery`), published
+    by `LemonChannels.Dispatcher` after each dispatch
 
   Topics whose publisher and every subscriber live in one app are *not* platform contract.
   They are listed here only so this is a complete map of what is on the bus: `"nodes"` and
@@ -26,9 +28,10 @@ defmodule LemonCore.Bus do
   `"sim:lobby"`, `"arena:<domain>:league"` plus the hosted-game and philosopher-chat topics
   (lemon_sim / lemon_sim_ui).
 
-  `"channels"` and `"logs"` were listed here as stable topics until Phase 3.1, but no module
-  has ever published to either. `"channels"` is reachable only through the control-plane
-  event-injection methods; `"logs"` is reachable by nothing.
+  `"channels"` and `"logs"` were listed here as stable topics until Phase 3.1 with no
+  publisher at all. Since 2026-08-16 `"channels"` carries the typed `:channel_delivery`
+  event from `LemonChannels.Dispatcher` (plus whatever the control-plane event-injection
+  methods put there); `"logs"` is still reachable by nothing.
 
   The full catalog, including every publisher and subscriber, is in
   `docs/platform/bus-events.md` in the Lemon repository.

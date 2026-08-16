@@ -16,6 +16,10 @@ compliance suite runs against your module.
 
 ### Added
 
+- `LemonPlatformTest.EventsFixtures.channel_delivery/1` — builder for the new
+  `LemonCore.Events.ChannelDelivery` payload (`:channel_delivery` on the
+  `channels` topic); `EventsCase` covers the module through the registry like
+  every other typed payload.
 - Five `ExUnit.CaseTemplate`s, used as `use LemonPlatformTest.PluginCase,
   adapter: MyAdapter`:
 

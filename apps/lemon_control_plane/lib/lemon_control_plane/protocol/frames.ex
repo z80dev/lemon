@@ -272,6 +272,8 @@ defmodule LemonControlPlane.Protocol.Frames do
       # Approval events
       "exec.approval.requested",
       "exec.approval.resolved",
+      # Channel delivery events
+      "channel.delivery",
       # Custom events (from system-event with custom_* types)
       "custom"
     ]

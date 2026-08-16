@@ -386,6 +386,7 @@ defmodule LemonPlatformTest.PluginCase do
 
       describe unquote(label <> " deliver/1") do
         test "is exported with arity 1" do
+          assert Code.ensure_loaded?(@adapter)
           assert function_exported?(@adapter, :deliver, 1)
         end
 

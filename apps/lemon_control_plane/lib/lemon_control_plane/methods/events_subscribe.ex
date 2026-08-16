@@ -20,6 +20,7 @@ defmodule LemonControlPlane.Methods.EventsSubscribe do
     - `"nodes"` - Node events
     - `"presence"` - Presence events
     - `"exec_approvals"` - Approval events
+    - `"channels"` - Outbound channel delivery events (`channel.delivery`)
 
   ## Example
 

@@ -13,6 +13,12 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
 
 ### Added
 
+- `LemonCore.Events.ChannelDelivery` — a typed `:channel_delivery` payload,
+  registered in `LemonCore.Events.registry/0`, which makes `"channels"` a typed
+  contract topic with a real publisher for the first time: the channels
+  dispatcher broadcasts one after every outbound dispatch (route/peer info,
+  intent kind, bounded text preview, result, timings). See
+  `docs/platform/bus-events.md` §10.
 - `LemonCore.SubagentRunner` and `LemonCore.SubagentRegistry` — the extension
   point behind the agent's `task` tool. An executor (a vendor CLI wrapper, the
   in-process agent, anything else) implements the behaviour and registers when

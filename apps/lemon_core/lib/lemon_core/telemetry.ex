@@ -30,6 +30,10 @@ defmodule LemonCore.Telemetry do
   finds no callers even though the run span fires end-to-end.
 
   ### Channels
+  - `[:lemon, :channels, :dispatch]` - measurements: `%{count: 1, duration: native}` meta:
+    `%{channel_id, account_id, kind, intent_id, run_id, session_key, ok}`. Emitted from
+    `LemonChannels.Dispatcher` after every semantic dispatch, success or failure — check
+    `ok`. The bus twin is the `:channel_delivery` event on the `"channels"` topic.
   - `[:lemon, :channels, :deliver, :start]`
   - `[:lemon, :channels, :deliver, :stop]`
   - `[:lemon, :channels, :deliver, :exception]`

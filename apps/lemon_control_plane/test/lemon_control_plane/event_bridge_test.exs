@@ -158,6 +158,60 @@ defmodule LemonControlPlane.EventBridgeTest do
   end
 
   describe "event forwarding" do
+    test "maps channel_delivery events to channel.delivery frames" do
+      conn_id = "conn_#{System.unique_integer()}"
+
+      assert :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+
+      # Subscribe the way events.subscribe does: custom mode, "channels" topic only.
+      assert :ok = Presence.update_subscriptions(conn_id, :custom, MapSet.new(["channels"]))
+      flush_events()
+
+      intent_id = "intent_#{System.unique_integer()}"
+
+      payload =
+        LemonCore.Events.ChannelDelivery.new(%{
+          intent_id: intent_id,
+          run_id: "run-bridge-1",
+          session_key: "agent:default:main",
+          channel_id: "telegram",
+          account_id: "default",
+          peer_kind: :dm,
+          peer_id: "42",
+          kind: :final_text,
+          text_preview: "hello",
+          ok: true,
+          duration_ms: 3,
+          ts_ms: 1_754_800_000_000
+        })
+
+      :ok =
+        LemonCore.Bus.broadcast_event("channels", :channel_delivery, payload, %{
+          run_id: "run-bridge-1",
+          session_key: "agent:default:main"
+        })
+
+      assert_receive {:event, "channel.delivery",
+                      %{
+                        "intentId" => ^intent_id,
+                        "runId" => "run-bridge-1",
+                        "sessionKey" => "agent:default:main",
+                        "channelId" => "telegram",
+                        "accountId" => "default",
+                        "peerKind" => "dm",
+                        "peerId" => "42",
+                        "kind" => "final_text",
+                        "textPreview" => "hello",
+                        "ok" => true,
+                        "error" => nil,
+                        "durationMs" => 3,
+                        "tsMs" => 1_754_800_000_000
+                      }, _state_version},
+                     1_000
+
+      Presence.unregister(conn_id)
+    end
+
     test "processes run_started events" do
       run_id = "run_#{System.unique_integer()}"
 

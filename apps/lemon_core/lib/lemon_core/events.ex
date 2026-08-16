@@ -13,7 +13,7 @@ defmodule LemonCore.Events do
 
   Only *platform contract* topics are registered — those whose payload crosses an app
   boundary or reaches the control plane and its clients: `run:<id>`, `session:<key>`,
-  `exec_approvals`, `cron`, `system`, `goals`, `routing_feedback`.
+  `exec_approvals`, `cron`, `system`, `goals`, `routing_feedback`, `channels`.
 
   Topics whose publisher and every subscriber live in one app (`nodes`, `presence`,
   `run_graph:*`, `parent_question:*`, and the sim/arena family) are deliberately absent.
@@ -81,7 +81,10 @@ defmodule LemonCore.Events do
     goal_loop_status: Events.GoalChanged,
 
     # routing_feedback
-    routing_feedback: Events.RoutingFeedback
+    routing_feedback: Events.RoutingFeedback,
+
+    # channels
+    channel_delivery: Events.ChannelDelivery
   }
 
   @nested [Events.Completion, Events.Action, Events.ApprovalPending]
