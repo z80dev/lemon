@@ -11,82 +11,27 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 from pathlib import Path
 
-from telethon import TelegramClient
 from telethon.tl.types import MessageEntityBold, MessageEntityPre
-from telethon.sessions import StringSession
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-DEFAULT_CREDENTIALS = Path.home() / ".zeebot/api_keys/telegram.txt"
-DEFAULT_BOT = "zeebot_lemon_bot"
-DEFAULT_GROUP = "-1003842984060"
+from telegram_driver import (  # noqa: E402 (path bootstrap above)
+    DEFAULT_BOT,
+    DEFAULT_CREDENTIALS,
+    DEFAULT_GROUP,
+    build_client,
+    load_env,
+    message_row,
+    require_config,
+    row_in_topic,
+)
+
 DEFAULT_TOPIC = 35
 DEFAULT_ISOLATION_TOPICS = [35, 16456]
-
-
-def load_env(path):
-    data = {}
-    for raw in Path(path).read_text().splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line[7:].strip()
-        if "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        data[key.strip()] = value.strip().strip("'\"")
-    return data
-
-
-def require_config(cfg, path):
-    missing = [
-        key
-        for key in ("TELEGRAM_API_ID", "TELEGRAM_API_HASH", "TELEGRAM_SESSION_STRING")
-        if not cfg.get(key)
-    ]
-    if missing:
-        raise SystemExit(f"Missing {', '.join(missing)} in {path}")
-
-
-def build_client(cfg):
-    return TelegramClient(
-        StringSession(cfg["TELEGRAM_SESSION_STRING"]),
-        int(cfg["TELEGRAM_API_ID"]),
-        cfg["TELEGRAM_API_HASH"],
-    )
-
-
-def entity_types(msg):
-    return [type(entity).__name__ for entity in (msg.entities or [])]
-
-
-def row_in_topic(row, expected_topic_id):
-    if expected_topic_id is None:
-        return True
-
-    return (
-        row.get("reply_to_top_id") == expected_topic_id
-        or row.get("reply_to_msg_id") == expected_topic_id
-    )
-
-
-def message_row(msg):
-    reply = msg.reply_to
-
-    return {
-        "id": msg.id,
-        "out": bool(msg.out),
-        "text": msg.raw_text or "",
-        "reply_to_msg_id": getattr(reply, "reply_to_msg_id", None) if reply else None,
-        "reply_to_top_id": getattr(reply, "reply_to_top_id", None) if reply else None,
-        "entity_types": entity_types(msg),
-        "has_document": bool(getattr(msg, "document", None)),
-        "has_photo": bool(getattr(msg, "photo", None)),
-        "file_name": getattr(getattr(msg, "file", None), "name", None),
-    }
 
 
 def now_iso():
