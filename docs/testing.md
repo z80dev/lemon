@@ -26,7 +26,7 @@ scripts/test path apps/lemon_core/test/lemon_core/quality --seed 1
 - `live-eval`: runs the opt-in provider-backed eval lane with `mix lemon.eval --live-model --iterations ${LEMON_EVAL_ITERATIONS:-3}`. It fails before app startup unless `LEMON_EVAL_API_KEY`, `LEMON_EVAL_API_KEY_SECRET`, `INTEGRATION_API_KEY`, `INTEGRATION_API_KEY_SECRET`, or legacy `ANTHROPIC_API_KEY` is set. Secret variables hold the name of a Lemon secret and resolve with env fallback, so local release-candidate runs can use the normal encrypted secret store without printing credentials. Configure the model with `LEMON_EVAL_PROVIDER`, `LEMON_EVAL_MODEL`, `LEMON_EVAL_BASE_URL`, and `LEMON_EVAL_API_TYPE`; matching generic `INTEGRATION_*` variables are also accepted. The current live lane checks that an independent model calls `search_memory` for prior-work recall, chooses `read_skill`/`skill_manage` for reusable skill capture, performs a curator-style umbrella consolidation, respects the scheduled-run blocked cron surface, delegates parallel child work before answering, handles untrusted external content, preserves leaf-worker tool restrictions, verifies child side effects before finalizing, and completes a tiny Elixir coding repair by reading source, patching code, running `elixir test/lemon_release_report_test.exs`, and answering only after the test passes.
 - Script notification changes should keep `MIX_ENV=test mix test apps/lemon_channels/test/lemon_channels/script_send_test.exs --seed 1` green. That focused lane covers `mix lemon.send` parsing, `./bin/lemon send` target formats, default Telegram/Discord target env vars, config-backed default targets, env-over-config precedence, account-scoped delivery and known-target resolution, config-backed default account ids, standalone thread/topic target overrides, reply-to payload routing, Telegram known-target discovery from `LemonChannels.Telegram.KnownTargetStore`, Discord known-target discovery from `LemonChannels.Discord.KnownTargetStore`, list-mode alias metadata, unique Telegram known-name resolution, unique Discord known-name resolution, positional/file/stdin body resolution, `--file -`, repeated `--attach` payload construction up to 10 files, attachment caption handling, attachment filename/count/byte metadata, attachment input errors, dry-run validation without delivery, subject formatting, help text, filtered JSON/list mode, bounded `message_id` extraction, batch delivery `extra_message_ids` extraction, and injected Telegram/Discord direct-delivery payloads without real platform credentials. Attachment changes should also keep the adapter file-delivery lanes green with `MIX_ENV=test mix test apps/lemon_channels/test/lemon_channels/adapters/telegram/outbound_test.exs apps/lemon_channels/test/lemon_channels/adapters/discord/outbound_test.exs --seed 1`. Discord transport changes that affect target indexing should also run `MIX_ENV=test mix test apps/lemon_channels/test/lemon_channels/adapters/discord/transport_test.exs apps/lemon_channels/test/lemon_channels/discord/known_target_store_test.exs --seed 1`. The source wrapper should also be smoke-checked for Unix exit codes: success/list/help/dry-run returns `0`, usage/config/input failures return `2`, attachment usage/input failures return `2`, and platform delivery failures return `1`.
 - Cron lifecycle changes should keep `apps/lemon_automation/test/lemon_automation/cron_schedule_test.exs`, `apps/lemon_automation/test/lemon_automation/cron_manager_update_test.exs`, `apps/lemon_automation/test/lemon_automation/cron_store_test.exs`, `apps/lemon_core/test/lemon_core/doctor/cron_diagnostics_test.exs`, `apps/lemon_core/test/lemon_core/doctor/checks_test.exs`, `apps/lemon_control_plane/test/lemon_control_plane/methods/cron_methods_test.exs`, `apps/lemon_control_plane/test/lemon_control_plane/protocol/schemas_test.exs`, `apps/lemon_control_plane/test/lemon_control_plane/event_bridge_mapping_test.exs`, `apps/lemon_web/test/lemon_web_test.exs`, and `apps/lemon_gateway/test/tools/cron_test.exs` green. That focused lane covers immutable job fields, schedule shorthand normalization, operator-owned no-agent command cron, pause/resume, active-run abort, terminal `aborted` status persistence, durable lifecycle audit events, redacted support-bundle audit diagnostics, `cron.audit` schema/method/event exposure audit visibility, the model-facing cron tool lifecycle actions, and `cron.preview` doctor readiness over the redacted diagnostics, runtime-restart, and channel-origin proof artifacts. TUI cron abort changes should also keep `cd clients/lemon-tui && npm run typecheck` plus focused `useCommands` and `agent-connection` Vitest coverage green for `/cron abort <run-id>` and `cron.abort` WebSocket routing. Channel-origin cron promotion should also run `MIX_ENV=test mix run scripts/live_cron_channel_origin_smoke.exs`, which proves Telegram- and Discord-shaped channel-peer cron completions through `CronManager`, forwarded run history, `LemonRouter.ChannelsDelivery`, and the LemonChannels outbox using proof-only plugins.
-- `smoke`: documents the product-smoke lane and points at `.github/workflows/product-smoke.yml`. It exits successfully locally because the current product smoke builds and boots a release with CI assumptions. The workflow builds a release, boots it, checks control-plane HTTP health, handshakes with the control-plane WebSocket protocol, calls `health`, submits a deterministic `echo` agent run, waits for it through `agent.wait`, checks the web health endpoint for the full runtime profile, verifies release support-bundle generation, lints built-in skills, and runs focused adaptive gate checks.
+- `smoke`: documents the product-smoke lane and points at both `scripts/product_smoke_local` (the local, isolated runner) and `.github/workflows/product-smoke.yml` (the canonical CI definition). `scripts/product_smoke_local` mirrors the CI probe sequence on a dev machine — fixture `config.toml` in a temp `HOME` (telegram disabled), unique `--sname`/random cookie, dynamically chosen free control-plane/web/sim ports, `LEMON_GATEWAY_HEALTH_PORT=0`/`LEMON_ROUTER_HEALTH_PORT=0`, isolated store and dotenv dirs — so it is safe to run beside a production instance and never touches the real `~/.lemon`. Default mode boots from source via `bin/lemon`; `--release` builds and boots the prod release like CI. It asserts control-plane `/healthz`, the WebSocket `connect`/`health`/`echo` agent run through `agent.wait`, and web `/healthz`, then writes a redacted proof to `.lemon/proofs/product-smoke-local-latest.json`. The CI workflow builds a release, boots it, checks control-plane HTTP health, handshakes with the control-plane WebSocket protocol, calls `health`, submits a deterministic `echo` agent run, waits for it through `agent.wait`, checks the web health endpoint for the full runtime profile, verifies release support-bundle generation, lints built-in skills, and runs focused adaptive gate checks.
 - `all`: useful local aggregate for BEAM-centric pre-review confidence: `fast`, `quality`, `eval-fast`, then `smoke`. Run `clients` separately when client code or shared contracts changed.
 - `path`: pass-through to `mix test` for specific paths or ExUnit args, for example `scripts/test path apps/coding_agent/test --only some_tag`.
 
@@ -38,7 +38,7 @@ scripts/test path apps/lemon_core/test/lemon_core/quality --seed 1
 - Child umbrella apps pin the same low `mix test --cover` summary threshold as the umbrella root so focused coverage runs do not inherit Mix's default 90% app threshold. LemonCore reload tests are tagged out during coverage because they intentionally reload app modules, which invalidates Erlang cover data.
 - `eval-fast` is intentionally smaller than CI's `mix lemon.eval --iterations 20` so developers can run it frequently. `live-eval` is intentionally excluded from default local and push/PR CI lanes because it depends on external provider credentials and latency. Use `.github/workflows/live-eval.yml` for manual release-candidate live evals when repository secrets are configured.
 - `.github/workflows/history-check.yml` is a PR-only repository-integrity guard. It checks out the pull request head with full history, fetches the base branch, and rejects unrelated-history PRs when `git merge-base "origin/${GITHUB_BASE_REF}" HEAD` returns no common ancestor.
-- `smoke` is CI-only until there is a stable local release-smoke wrapper; use the GitHub workflow for the full product smoke.
+- The full product smoke runs locally through `scripts/product_smoke_local` (use `--release` for release-boot parity with CI); the GitHub workflow additionally covers release support-bundle generation, skill lint, and adaptive gate checks.
 
 ## Hermetic unit-test environment
 
@@ -1253,11 +1253,76 @@ the final readiness audit validates it by default or
 Use `--executable /path/to/chrome` or `LEMON_BROWSER_EXECUTABLE=/path/to/chrome`
 when Chrome/Chromium is not on `PATH`.
 
+## Hermetic Telegram Transport Smoke
+
+The Telegram transport can be exercised end to end without credentials or
+network using `LemonChannels.Telegram.FakeAPI` — an in-process fake of
+`LemonChannels.Telegram.API` selected via `[gateway.telegram] api_mod =
+"LemonChannels.Telegram.FakeAPI"` (module docs cover the driving API and how
+to steer a live instance over `--rpc-eval`):
+
+```bash
+MIX_ENV=test mix run scripts/live_fake_telegram_smoke.exs
+```
+
+This writes `.lemon/proofs/fake-telegram-smoke-latest.json` and verifies
+string-config `api_mod` resolution (transport init answered by the fake's
+`getMe`), a full inbound round trip (fabricated message update -> poller ->
+pipeline -> router run submission plus captured progress reaction), real
+`getUpdates` offset-advance semantics, the callback-query answer flow, and the
+outbound delivery path (`Outbound.deliver/1` -> captured `sendMessage`). The
+ExUnit twin lives at
+`apps/lemon_channels/test/lemon_channels/adapters/telegram/transport_fake_api_test.exs`.
+It proves transport plumbing hermetically; real-credential channel behavior
+remains covered by the live channel proofs below.
+
+## Agent-Driven Verification
+
+`.claude/skills/verify-lemon/SKILL.md` is the runbook for an agent verifying
+lemon features against a running (or disposable) instance. It organizes the
+tooling on this page into three tiers, cheapest sufficient tier first.
+
+Tier 1 (DIRECT, no Telegram) works against the BEAM node and the control
+plane: non-interactive `elixir --rpc-eval` against the running node, the
+control-plane WebSocket on port 4040 (`connect`/`chat.send`/`agent` +
+`agent.wait` with the deterministic `echo` engine, `events.subscribe`,
+`sessions.list`, `logs.tail`), `LemonCore.Bus.subscribe` on `run:<id>` /
+`session:<key>` topics, the `:channel_delivery` event on the `"channels"`
+topic for outbound-delivery observability, and synthetic channel-shaped
+inbound via `LemonChannels.Runtime.submit_inbound/1`. For anything mutating,
+`scripts/product_smoke_local` is both the local product-smoke gate and the
+reference recipe for booting a fully isolated throwaway instance beside a
+production node.
+
+Tier 2 (FAKE TELEGRAM) is the hermetic transport lane above:
+`LemonChannels.Telegram.FakeAPI` selected via `[gateway.telegram] api_mod`,
+driven directly in ExUnit or over `--rpc-eval`, with
+`scripts/live_fake_telegram_smoke.exs` as the proof harness. Prefer it for
+buttons, approvals, forum topics, and markdown chunking — everything
+Telegram-shaped that does not need the real wire.
+
+Tier 3 (LIVE TELEGRAM) uses `scripts/telegram_driver.py` (library + CLI) and
+the matrix scenarios below, with the standing conventions: probe inside temp
+forum topics with a recognizable prefix in the Lemonade Stand group, always
+clean the topics up afterwards, and never print credentials. The skill file
+carries the full safety rules (production node and real `~/.lemon` are
+off-limits; prefer lower tiers whenever they suffice).
+
 ## Live Channel Proofs
 
 Live channel proofs are release-candidate gates, not normal unit-test lanes. Run
 them with the established Telegram and Discord credentials only when validating
 the channel support boundary, and never print token or session-file contents.
+
+For ad-hoc Telegram flows beyond the fixed matrix scenarios, use
+`scripts/telegram_driver.py` — a composable Telethon driver (library + CLI)
+extracted from the matrix harness. It shares the matrix script's credential
+loading, resolves the Bot API token from the `LEMON_TELEGRAM_BOT_TOKEN` /
+`TELEGRAM_BOT_TOKEN` env override or the lemon secrets store
+(`gateway_telegram_bot_token`), and exposes `send`, `await`,
+`send-and-await`, `press-button`, and forum `topic-create` /
+`topic-delete` / `topic-cleanup` subcommands, each with `--json` output for
+scripted composition (`uv run scripts/telegram_driver.py --help`).
 
 Telegram stable-boundary proof uses Telethon credentials from
 `~/.zeebot/api_keys/telegram.txt` and targets the Lemonade Stand group
