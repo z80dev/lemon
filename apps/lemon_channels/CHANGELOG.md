@@ -12,6 +12,15 @@ keeping it small and honest.
 
 ### Added
 
+- `LemonChannels.Dispatcher` is now observable: after every dispatch it emits a
+  `[:lemon, :channels, :dispatch]` telemetry event (measurements
+  `%{count: 1, duration: native}`; metadata `channel_id`, `account_id`, `kind`,
+  `intent_id`, `run_id`, `session_key`, `ok`) and broadcasts a typed
+  `LemonCore.Events.ChannelDelivery` on the `"channels"` bus topic — carrying
+  route/peer info, the intent kind, a bounded text preview, and the dispatch
+  result. Emission happens after the result is known and is rescue-wrapped, so
+  an observability failure can never break a real send. Tests asserting "lemon
+  would have sent exactly this" subscribe to `"channels"` and match the struct.
 - `LemonChannels.InboundHttp` — an opt-in HTTP listener (plug/bandit) for
   adapters that receive webhooks instead of polling. It is off unless
   configured; this package had no HTTP server before.
@@ -62,6 +71,17 @@ keeping it small and honest.
   `LemonCore.Env.Declarations` with their readers:
   `LEMON_GATEWAY_ENABLE_{TELEGRAM,DISCORD,XMTP}` and the four
   `LEMON_TELEGRAM_COMPACTION_*` variables.
+- `LemonChannels.Telegram.FakeAPI` — an in-process fake of
+  `LemonChannels.Telegram.API` for hermetic transport testing, selectable via
+  `[gateway.telegram] api_mod = "LemonChannels.Telegram.FakeAPI"` in ExUnit or
+  a running release. It mirrors every function the transport calls through its
+  resolved `api_mod`, queues fabricated inbound updates with real `getUpdates`
+  offset semantics (`push_update/1`, `simulate_message/3`,
+  `simulate_callback_query/3`), and captures every outbound API call for
+  introspection (`sent/0`, `await_send/2`, `clear/0`). State lives in a lazily
+  started unlinked GenServer, so no supervision-tree change is required.
+  Exercised by `transport_fake_api_test.exs` and
+  `scripts/live_fake_telegram_smoke.exs` in the umbrella repo.
 
 ### Changed
 

@@ -1434,7 +1434,13 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
       module
     rescue
-      _ -> LemonChannels.Telegram.API
+      _ ->
+        Logger.warning(
+          "telegram api_mod #{inspect(mod)} does not resolve to a loaded module; " <>
+            "falling back to the real Telegram API"
+        )
+
+        LemonChannels.Telegram.API
     end
   end
 

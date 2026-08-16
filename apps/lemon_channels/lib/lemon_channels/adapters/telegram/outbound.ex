@@ -47,6 +47,7 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
 
               {:error, reason}
           end
+
         _ ->
           Logger.error("Telegram outbound text failed: no bot token configured")
           {:error, :telegram_not_configured}
@@ -92,6 +93,7 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
 
               {:error, reason}
           end
+
         _ ->
           Logger.error("Telegram outbound edit failed: no bot token configured")
           {:error, :telegram_not_configured}
@@ -150,6 +152,7 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
 
               {:error, reason}
           end
+
         _ ->
           Logger.error("Telegram outbound delete failed: no bot token configured")
           {:error, :telegram_not_configured}
@@ -189,6 +192,7 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
               end
 
               result
+
             _ ->
               Logger.error("Telegram outbound file failed: no bot token configured")
               {:error, :telegram_not_configured}
@@ -197,6 +201,7 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
           Logger.error("Telegram outbound file failed: API module not available")
           {:error, :telegram_api_not_available}
         end
+
       {:error, reason} ->
         Logger.warning(
           "Telegram outbound file normalization failed: chat_id=#{chat_id} reason=#{inspect(reason)}"
@@ -679,7 +684,13 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
         String.to_existing_atom("Elixir." <> mod)
       end
     rescue
-      _ -> LemonChannels.Telegram.API
+      _ ->
+        Logger.warning(
+          "telegram api_mod #{inspect(mod)} does not resolve to a loaded module; " <>
+            "falling back to the real Telegram API"
+        )
+
+        LemonChannels.Telegram.API
     end
   end
 
