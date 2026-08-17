@@ -15,14 +15,24 @@ defmodule LemonCore.Update.Version do
   @type parsed :: {integer(), integer(), integer()}
 
   @doc """
-  Returns the current Lemon version string, read from the OTP application spec.
-  Falls back to the umbrella mix.exs version when running from source.
+  Returns the current Lemon version string.
+
+  In a packaged runtime this is the release version (`RELEASE_VSN`), which is
+  the umbrella CalVer the release was assembled from. The :lemon_core OTP app
+  spec is only a fallback — it carries the app's independent hex package
+  version (e.g. `0.1.0`), which must never be compared against release CalVer.
   """
   @spec current() :: String.t()
   def current do
-    case Application.spec(:lemon_core, :vsn) do
-      nil -> "0.1.0"
-      vsn -> List.to_string(vsn)
+    case System.get_env("RELEASE_VSN") do
+      vsn when is_binary(vsn) and vsn != "" ->
+        vsn
+
+      _ ->
+        case Application.spec(:lemon_core, :vsn) do
+          nil -> "0.1.0"
+          vsn -> List.to_string(vsn)
+        end
     end
   end
 
