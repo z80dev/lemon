@@ -1,44 +1,58 @@
+# Build context for docker/Dockerfile.runtime (whole umbrella, lemon_runtime_full)
+# and apps/lemon_sim_ui/Dockerfile (sim_broadcast_platform).
+#
+# This is a denylist: anything not excluded here is sent to the daemon. What the
+# prod build needs and must therefore survive: mix.exs, mix.lock, config/, every
+# app under apps/ (Mix compiles all umbrella children, not just the ones named in
+# a release), rel/ (release overlays), the committed priv/static assets, and
+# apps/lemon_sim_ui/assets (npm sources for the sim UI build).
+
+# VCS, CI metadata and agent scratch dirs
 .git
 .github
 .agents
 .claude
 .codex
-.worktrees
 .expert
 **/.expert
+.factory
+.hermes
+.pi
+.omp
+.worktrees
+.DS_Store
+
+# Build output and caches — regenerated inside the image
 _build
 deps
-cover
 tmp
-.lemon
-.env*
-*.log
-node_modules
-**/node_modules
-apps/*/cover
-apps/*/doc
-apps/*/tmp
-apps/*
-!apps/ai
-!apps/ai/**
-!apps/agent_core
-!apps/agent_core/**
-!apps/lemon_core
-!apps/lemon_core/**
-!apps/lemon_sim
-!apps/lemon_sim/**
-!apps/lemon_sim_ui
-!apps/lemon_sim_ui/**
-apps/lemon_sim_ui/assets/node_modules
-**/.expert
+**/tmp
 **/cover
 **/doc
-**/tmp
+node_modules
 **/node_modules
-clients
-docs
-native
-tools
+erl_crash.dump
+*.log
+
+# Local state and secrets — must never reach an image layer
+.lemon
+.env*
+**/.env
+**/.env.*
 *.db3
 *.db3-shm
 *.db3-wal
+
+# Not referenced by any prod compile path (checked: no @external_resource
+# anywhere in apps/, and native/ is a runtime-optional wasm toolchain resolved
+# from ~/.lemon at run time, not built by Mix)
+bench
+bin
+clients
+docs
+examples
+installer
+native
+scripts
+showcase
+tools
