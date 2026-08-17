@@ -27,7 +27,7 @@ function makeClient(url: string, overrides: Record<string, unknown> = {}) {
 	const client = new ControlPlaneClient({
 		url,
 		requestTimeoutMs: 1500,
-		socketOptions: { minBackoffMs: 10, maxBackoffMs: 40, jitter: 0 },
+		socketOptions: { minBackoffMs: 10, maxBackoffMs: 40, jitter: 0, minWatchdogWindowMs: 0 },
 		...overrides,
 	});
 	teardown.push(() => client.close());

@@ -40,6 +40,30 @@ export interface AgentStartedEvent {
 	sessionKey: Nullable<string>;
 	engine?: Nullable<string>;
 	parentRunId?: Nullable<string>;
+	/**
+	 * The model the router *resolved* for this run. Nothing on the daemon persists
+	 * it, so this event is the only place it is ever observable — which makes it
+	 * the authority over anything the client set locally.
+	 */
+	model?: Nullable<string>;
+	provider?: Nullable<string>;
+	thinkingLevel?: Nullable<string>;
+}
+
+/** `LemonControlPlane.UsageTokens.normalize/1`. Every field may be absent. */
+export interface RunUsage {
+	inputTokens?: Nullable<number>;
+	outputTokens?: Nullable<number>;
+	cacheReadTokens?: Nullable<number>;
+	cacheWriteTokens?: Nullable<number>;
+	totalTokens?: Nullable<number>;
+	/**
+	 * The input side of the last turn including cached reads — how large the
+	 * conversation was going into the model, which is what a context gauge wants.
+	 * Excludes output by design.
+	 */
+	contextTokens?: Nullable<number>;
+	costUsd?: Nullable<number>;
 }
 
 export interface AgentCompletedEvent {
@@ -53,6 +77,9 @@ export interface AgentCompletedEvent {
 	 */
 	answer: Nullable<string>;
 	durationMs: Nullable<number>;
+	/** Null when the engine reported no token counts at all. */
+	usage?: Nullable<RunUsage>;
+	model?: Nullable<string>;
 }
 
 export type AgentActionKind =
@@ -325,6 +352,40 @@ export interface ChatHistoryResult {
 export interface SessionSummary {
 	sessionKey?: string;
 	agentId?: string;
+	/**
+	 * `sessions.list` only reports the session's *override* here — the model the
+	 * user pinned, and null when the session inherits one. Full resolution costs a
+	 * profile lookup per row, so it lives in `session.detail`.
+	 */
+	model?: Nullable<string>;
+	[key: string]: unknown;
+}
+
+/**
+ * The `session` block of a `session.detail` reply.
+ *
+ * Unlike a listing row, `model` here is what the session's *next run* resolves to,
+ * with `modelSource` naming the layer that supplied it and `modelOverride` carrying
+ * the session's own pin (null when it inherits).
+ */
+export interface SessionRouting {
+	sessionKey?: string;
+	agentId?: Nullable<string>;
+	model?: Nullable<string>;
+	provider?: Nullable<string>;
+	contextWindow?: Nullable<number>;
+	maxOutput?: Nullable<number>;
+	modelSource?: Nullable<"session" | "profile" | "default">;
+	modelOverride?: Nullable<string>;
+	thinkingLevel?: Nullable<string>;
+	preferredEngine?: Nullable<string>;
+	engine?: Nullable<string>;
+	[key: string]: unknown;
+}
+
+export interface SessionDetailResult {
+	sessionKey?: string;
+	session?: SessionRouting;
 	[key: string]: unknown;
 }
 

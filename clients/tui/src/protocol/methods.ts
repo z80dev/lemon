@@ -27,6 +27,7 @@ import type {
 	HealthResult,
 	LogsTailParams,
 	ModelsListResult,
+	SessionDetailResult,
 	SessionSummary,
 	SessionsListResult,
 	SessionsPatchParams,
@@ -141,8 +142,11 @@ export class ControlPlaneMethods {
 		return this.#call(METHOD.sessionsDelete, params, options);
 	}
 
-	sessionDetail(params: { sessionKey: string }, options?: RequestOptions): Promise<SessionSummary> {
-		return this.#call<SessionSummary>(METHOD.sessionDetail, params, options);
+	sessionDetail(
+		params: { sessionKey: string },
+		options?: RequestOptions,
+	): Promise<SessionDetailResult> {
+		return this.#call<SessionDetailResult>(METHOD.sessionDetail, params, options);
 	}
 
 	// -- models -------------------------------------------------------------

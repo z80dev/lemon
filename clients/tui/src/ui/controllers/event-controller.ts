@@ -220,6 +220,16 @@ export class EventController {
 				session.activeRunId = started.runId;
 				session.busy = true;
 				session.engine = started.engine ?? undefined;
+				// What the run actually resolved to. This is the only place the daemon
+				// ever reveals it, so it outranks whatever `/model` set locally.
+				session.setModel(
+					{
+						model: started.model,
+						provider: started.provider,
+						thinkingLevel: started.thinkingLevel,
+					},
+					"run",
+				);
 				session.ensureAssistant(started.runId);
 				this.#sync(session);
 				this.#onStatusChanged?.();
@@ -243,6 +253,10 @@ export class EventController {
 				const completed = event as AgentCompletedEvent;
 				const session = this.#sessionFor(completed.sessionKey);
 				const focused = session === this.#store.focused;
+				// Token counts for the context gauge, which is the only per-session
+				// number available — `usage.status` is today-wide across all sessions.
+				session.applyUsage(completed.usage);
+				session.setModel({ model: completed.model }, "run");
 				// Whether the single reveal is driving *this* run's block. A
 				// completion for run A must never finish or stop the reveal that is
 				// mid-stream on run B — that would flush B's text early and freeze

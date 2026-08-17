@@ -197,6 +197,17 @@ defmodule LemonGateway.Run do
 
   defp lock_key_for(_), do: {:default, :global}
 
+  # Job meta is atom-keyed everywhere the router builds it, but events replayed through
+  # `events.ingest` or hand-built in tests arrive stringy; read both and never raise.
+  defp meta_field(%Job{meta: meta}, key) when is_map(meta) do
+    case Map.get(meta, key) do
+      nil -> Map.get(meta, Atom.to_string(key))
+      value -> value
+    end
+  end
+
+  defp meta_field(_job, _key), do: nil
+
   @impl true
   def handle_continue({:start_run, %{job: job}}, state) do
     state = maybe_track_phase(state, :dispatched_to_gateway)
@@ -250,7 +261,11 @@ defmodule LemonGateway.Run do
         Events.RunStarted.new(%{
           run_id: state.run_id,
           session_key: state.session_key,
-          engine: engine_id
+          engine: engine_id,
+          # The router stamped the resolved model/thinking level into meta
+          # (LemonRouter.SubmissionBuilder); this is the only event that carries it out.
+          model: meta_field(job, :model),
+          thinking_level: meta_field(job, :thinking_level)
         }),
         build_event_meta(state)
       )
@@ -842,7 +857,10 @@ defmodule LemonGateway.Run do
     origin = get_in(state.job.meta || %{}, [:origin])
     meta = if origin, do: Map.put(meta, :origin, origin), else: meta
 
-    meta
+    # Carry the router's resolved model on every event of the run, not just `run_started`:
+    # a client that attached mid-run still learns what it is talking to at `run_completed`.
+    model = meta_field(state.job, :model)
+    if model, do: Map.put(meta, :model, model), else: meta
   end
 
   defp emit_engine_event_to_bus(state, event) do

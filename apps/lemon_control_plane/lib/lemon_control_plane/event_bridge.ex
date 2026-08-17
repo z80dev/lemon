@@ -423,13 +423,23 @@ defmodule LemonControlPlane.EventBridge do
 
   # Run events
   defp map_event_type(:run_started, %Events.RunStarted{} = payload, meta) do
+    # The resolved model is only ever observable here — nothing persists it — so the provider
+    # is looked up now rather than left for the client to infer from the id.
+    model = normalize_event_string(payload.model) || normalize_event_string(meta[:model])
+
     {"agent",
      %{
        "type" => "started",
        "runId" => payload.run_id || meta[:run_id],
        "sessionKey" => payload.session_key || meta[:session_key],
        "engine" => payload.engine,
-       "parentRunId" => meta[:parent_run_id]
+       "parentRunId" => meta[:parent_run_id],
+       "model" => model,
+       "provider" =>
+         normalize_event_string(payload.provider) || LemonControlPlane.SessionModel.provider_for(model),
+       "thinkingLevel" =>
+         normalize_event_string(payload.thinking_level) ||
+           normalize_event_string(meta[:thinking_level])
      }}
   end
 
@@ -438,6 +448,7 @@ defmodule LemonControlPlane.EventBridge do
     # payload built with `new/1` from a raw nested map keeps that map, so the nested reads go
     # through `get_field/2` — struct-and-map safe, and not `Access`.
     completed = payload.completed
+    model = normalize_event_string(meta[:model])
 
     {"agent",
      %{
@@ -446,7 +457,9 @@ defmodule LemonControlPlane.EventBridge do
        "sessionKey" => meta[:session_key],
        "ok" => get_field(completed, :ok),
        "answer" => truncate(get_field(completed, :answer), 500),
-       "durationMs" => payload.duration_ms
+       "durationMs" => payload.duration_ms,
+       "usage" => LemonControlPlane.UsageTokens.normalize(get_field(completed, :usage)),
+       "model" => model
      }}
   end
 
@@ -958,6 +971,21 @@ defmodule LemonControlPlane.EventBridge do
   defp extract_timestamp(%{timestamp_ms: ts}), do: ts
   defp extract_timestamp(ts) when is_integer(ts), do: ts
   defp extract_timestamp(_), do: System.system_time(:millisecond)
+
+  # Thinking levels are atoms on the bus and strings on the wire; blank strings become nil so
+  # a client can test the key for presence rather than for emptiness.
+  defp normalize_event_string(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp normalize_event_string(value) when is_atom(value) and not is_boolean(value) do
+    if is_nil(value), do: nil, else: Atom.to_string(value)
+  end
+
+  defp normalize_event_string(_), do: nil
 
   defp truncate(nil, _), do: nil
   defp truncate(text, max) when is_binary(text) and byte_size(text) <= max, do: text

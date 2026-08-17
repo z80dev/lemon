@@ -27,6 +27,7 @@
 import { ProcessTerminal, type Terminal } from "@oh-my-pi/pi-tui/terminal";
 import { Container, TUI } from "@oh-my-pi/pi-tui/tui";
 import { indentBlock, pickNumber, pickString } from "./commands/format.ts";
+import { contextWindowFromCache } from "./commands/model.ts";
 import { type CommandHost, type CommandRegistry, createCommandRegistry } from "./commands/index.ts";
 import { SUBMISSION_MODES } from "./commands/registry.ts";
 import { editInExternalEditor } from "./external-editor.ts";
@@ -48,7 +49,11 @@ import { ModelPicker } from "./ui/components/model-picker.ts";
 import { PickerOverlay } from "./ui/components/pickers.ts";
 import { QueuePanelComponent } from "./ui/components/queue-panel.ts";
 import { SessionSwitcher } from "./ui/components/session-switcher.ts";
-import { StatusBar, type StatusBarData } from "./ui/components/status-bar.ts";
+import {
+	type ContextSource,
+	StatusBar,
+	type StatusBarData,
+} from "./ui/components/status-bar.ts";
 import { TranscriptContainer } from "./ui/components/transcript-container.ts";
 import { ClampedText } from "./ui/components/width-safe.ts";
 import { ApprovalController } from "./ui/controllers/approval-controller.ts";
@@ -330,6 +335,9 @@ export class AppShell {
 		this.#renderStatus();
 		try {
 			await this.client.connect();
+			// Only now are the daemon's methods known, so this is the first moment the
+			// status bar can name the model instead of guessing at "no model".
+			void this.sessions.hydrateRouting(this.store.focused);
 		} catch (error) {
 			// The socket keeps retrying in the background; just say so.
 			this.events.notice(`connection failed: ${describeError(error)}`, "error");
@@ -405,11 +413,13 @@ export class AppShell {
 	/** Everything the status bar shows, read fresh on each render. */
 	statusData(): StatusBarData {
 		const session = this.store.focused;
+		const context = contextGauge(session, this.store);
 		return {
 			sessionKey: session.key,
 			model: session.model,
-			contextTokens: contextTokensFrom(this.store.usage),
-			contextWindow: contextWindowFor(this.store, session.model),
+			contextTokens: context.tokens,
+			contextWindow: context.window,
+			contextSource: context.source,
 			sessionCount: this.store.sessions.size,
 			busy: session.busy,
 			busySessions: this.store.busySessions(),
@@ -847,12 +857,29 @@ export class AppShell {
 }
 
 /**
- * Tokens for the context gauge.
+ * What the gauge shows, and how honestly it can be labelled.
  *
- * `usage.status` reports today's totals rather than the live context window, so
- * an explicit context field is preferred wherever a daemon provides one and the
- * token totals are the documented fallback. Either way the gauge is a budget
- * indicator, which is what it is labelled as.
+ * A session that has completed a run knows its own context size from the run's
+ * usage, which is a real denominator-bearing measurement and gets a bar. Before
+ * that, all the client has is `usage.status` — every session's tokens for the
+ * whole day — so the segment falls back to `use 12k` rather than pretending a
+ * day's total is a conversation's size.
+ */
+export function contextGauge(
+	session: SessionStore,
+	store: AppStore,
+): { tokens: number | undefined; window: number | undefined; source: ContextSource } {
+	const window = session.contextWindow ?? contextWindowFor(store, session.model);
+	const own = session.contextTokens;
+	if (own !== undefined) return { tokens: own, window, source: "context" };
+	return { tokens: contextTokensFrom(store.usage), window, source: "aggregate" };
+}
+
+/**
+ * Today's token totals from `usage.status`, for the fallback segment.
+ *
+ * An explicit context field is preferred wherever a daemon provides one; the
+ * totals are the documented fallback.
  */
 export function contextTokensFrom(usage: Record<string, unknown> | undefined): number | undefined {
 	if (!usage) return undefined;
@@ -868,14 +895,7 @@ export function contextTokensFrom(usage: Record<string, unknown> | undefined): n
 
 /** The context window of the session's model, from the `models.list` cache. */
 export function contextWindowFor(store: AppStore, model: string | undefined): number | undefined {
-	if (!model) return undefined;
-	for (const entry of store.models ?? []) {
-		if (entry.id === model || entry.id === model.split(":").pop()) {
-			const window = pickNumber(entry, "contextWindow");
-			if (window !== undefined) return window;
-		}
-	}
-	return undefined;
+	return contextWindowFromCache(store.models, model);
 }
 
 function describeError(error: unknown): string {

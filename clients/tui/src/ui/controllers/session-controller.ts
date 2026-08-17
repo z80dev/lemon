@@ -134,7 +134,7 @@ export class SessionController {
 
 		this.#store.setDraft(previousKey, this.#editor.getExpandedText());
 		const session = this.#store.setFocused(target);
-		await this.#hydrateIfCold(session);
+		await Promise.all([this.#hydrateIfCold(session), this.hydrateRouting(session)]);
 		session.markRead();
 		this.#events.rebuildFocused();
 		this.#editor.setText(this.#store.takeDraft(target));
@@ -219,6 +219,35 @@ export class SessionController {
 
 	// -- hydration -----------------------------------------------------------
 
+	/**
+	 * Ask the daemon what model this session resolves to, so the status bar names
+	 * something true before the first run rather than "no model".
+	 *
+	 * The answer is a prediction about the next run, which is why it is applied at
+	 * the lowest precedence: a `/model` the user just set, or a model a run already
+	 * reported, both outrank it. Failures are silent — a missing model label is not
+	 * worth a notice, and older daemons have no such keys to give.
+	 */
+	async hydrateRouting(session: SessionStore): Promise<void> {
+		if (!this.#methods.supports(METHOD.sessionDetail)) return;
+		try {
+			const result = await this.#methods.sessionDetail({ sessionKey: session.key });
+			const detail = (result?.session ?? {}) as Record<string, unknown>;
+			const changed = session.setModel(
+				{
+					model: asString(detail.model),
+					provider: asString(detail.provider),
+					contextWindow: asNumber(detail.contextWindow),
+					thinkingLevel: asString(detail.thinkingLevel),
+				},
+				"detail",
+			);
+			if (changed) this.#refreshStatus?.();
+		} catch {
+			// Nothing to show and nothing to say: the status bar keeps what it had.
+		}
+	}
+
 	/** Pull stored history for a session that has nothing on screen yet. */
 	async #hydrateIfCold(session: SessionStore): Promise<void> {
 		if (this.#hydrated.has(session.key)) return;
@@ -256,7 +285,12 @@ export class SessionController {
 	 * message: the user cannot tell a duplicate from a repeat.
 	 */
 	async resync(): Promise<void> {
-		await Promise.all([this.#resyncActive(), this.#resyncTail(), this.#resyncApprovals()]);
+		await Promise.all([
+			this.#resyncActive(),
+			this.#resyncTail(),
+			this.#resyncApprovals(),
+			this.hydrateRouting(this.#store.focused),
+		]);
 		this.#refreshStatus?.();
 	}
 
@@ -469,4 +503,12 @@ export function pendingApprovalsFrom(result: unknown): ApprovalRequestedEvent[] 
 
 function describeError(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
+}
+
+function asString(value: unknown): string | undefined {
+	return typeof value === "string" ? value : undefined;
+}
+
+function asNumber(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }

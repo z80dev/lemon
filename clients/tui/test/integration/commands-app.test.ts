@@ -123,13 +123,53 @@ describe("the status bar", () => {
 		}
 	});
 
-	test("shows the context gauge once usage is known", async () => {
+	test("labels today's aggregate usage as usage, not as context", async () => {
 		const { app } = await bootApp();
 		await app.refreshUsage();
 		await app.submit("/model claude-sonnet-4");
 		const line = stripAnsi(app.statusBar.render(120)[0]);
-		expect(line).toContain("48k/200k");
-		expect(line).toContain("24%");
+		// `usage.status` totals every session's whole day. Drawing that against one
+		// model's window would read as "this conversation is 24% full", which it is not.
+		expect(line).toContain("use 48k");
+		expect(line).not.toContain("48k/200k");
+		expect(line).not.toContain("24%");
+	});
+
+	test("draws the gauge from a run's own usage", async () => {
+		const { app, server } = await bootApp();
+		await app.submit("/model claude-sonnet-4");
+		server.pushEvent("agent", {
+			type: "completed",
+			runId: "run-1",
+			sessionKey: "tui-test",
+			ok: true,
+			answer: "done",
+			durationMs: 10,
+			model: "claude-sonnet-4",
+			usage: { inputTokens: 40_000, outputTokens: 500, cacheReadTokens: 8_000 },
+		});
+		await waitFor(() => stripAnsi(app.statusBar.render(120)[0]).includes("48k/200k"), {
+			what: "the context gauge",
+		});
+		expect(stripAnsi(app.statusBar.render(120)[0])).toContain("24%");
+	});
+
+	test("names the model a run reported, over the one set locally", async () => {
+		const { app, server } = await bootApp();
+		await app.submit("/model gpt-4o");
+		expect(stripAnsi(app.statusBar.render(120)[0])).toContain("gpt-4o");
+
+		server.pushEvent("agent", {
+			type: "started",
+			runId: "run-2",
+			sessionKey: "tui-test",
+			engine: "coding_agent",
+			model: "claude-sonnet-4",
+			provider: "anthropic",
+		});
+		await waitFor(() => stripAnsi(app.statusBar.render(120)[0]).includes("claude-sonnet-4"), {
+			what: "the model the run reported",
+		});
 	});
 
 	test("shows the branch the poll reported", async () => {

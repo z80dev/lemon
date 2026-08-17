@@ -63,6 +63,38 @@ describe("the gauge", () => {
 		initTheme({ colorLevel: 3, symbolPreset: "ascii" });
 		expect(renderGauge(100_000, 200_000)).toBe("[####----] 50% 100k/200k");
 	});
+
+	test("aggregate tokens are labelled as usage and get no bar", () => {
+		// Today's total across every session is not a measure of this conversation,
+		// so it must not be drawn inside something the user reads as a budget.
+		expect(renderGauge(48_000, 200_000, "aggregate")).toBe("use 48k");
+	});
+
+	test("aggregate with nothing counted yet still says what it is", () => {
+		expect(renderGauge(undefined, 200_000, "aggregate")).toBe("use —");
+	});
+});
+
+describe("the gauge segment", () => {
+	test("a session's own context earns the bar", () => {
+		const line = stripAnsi(
+			renderStatusLine(data({ contextTokens: 48_000, contextSource: "context" }), 200),
+		);
+		expect(line).toContain("48k/200k");
+	});
+
+	test("today's aggregate does not", () => {
+		const line = stripAnsi(
+			renderStatusLine(data({ contextTokens: 48_000, contextSource: "aggregate" }), 200),
+		);
+		expect(line).toContain("use 48k");
+		expect(line).not.toContain("48k/200k");
+	});
+
+	test("the segment stays pinned even at a width that drops everything else", () => {
+		const line = stripAnsi(renderStatusLine(data({ contextSource: "aggregate" }), 30));
+		expect(line).toContain("use 48k");
+	});
 });
 
 describe("model naming", () => {

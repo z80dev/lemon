@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { FakeControlPlane } from "../../src/dev/fake-server.ts";
-import { computeBackoffDelay, ReconnectingSocket } from "../../src/protocol/ws.ts";
+import { computeBackoffDelay, MIN_WATCHDOG_WINDOW_MS, ReconnectingSocket } from "../../src/protocol/ws.ts";
 
 const teardown: Array<() => void> = [];
 
@@ -82,6 +82,7 @@ describe("ReconnectingSocket", () => {
 			maxBackoffMs: 20,
 			jitter: 0,
 			watchdogMultiplier: 3,
+			minWatchdogWindowMs: 0,
 		});
 		teardown.push(() => socket.close());
 
@@ -117,7 +118,12 @@ describe("ReconnectingSocket", () => {
 	test("traffic keeps the watchdog from firing", async () => {
 		const server = await FakeControlPlane.start();
 		teardown.push(() => server.stop());
-		const socket = new ReconnectingSocket({ url: server.url, minBackoffMs: 10, jitter: 0 });
+		const socket = new ReconnectingSocket({
+			url: server.url,
+			minBackoffMs: 10,
+			jitter: 0,
+			minWatchdogWindowMs: 0,
+		});
 		teardown.push(() => socket.close());
 
 		const stale: unknown[] = [];
@@ -156,5 +162,14 @@ describe("ReconnectingSocket", () => {
 		const socket = new ReconnectingSocket({ url: "ws://127.0.0.1:1/ws" });
 		teardown.push(() => socket.close());
 		expect(socket.send("{}")).toBe(false);
+	});
+
+	test("the liveness window never drops below the default floor", () => {
+		const socket = new ReconnectingSocket({ url: "ws://127.0.0.1:1/ws" });
+		teardown.push(() => socket.close());
+		socket.setTickIntervalMs(1000);
+		expect(socket.livenessWindowMs).toBe(MIN_WATCHDOG_WINDOW_MS);
+		socket.setTickIntervalMs(60_000);
+		expect(socket.livenessWindowMs).toBe(180_000);
 	});
 });

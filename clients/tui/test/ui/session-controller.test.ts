@@ -423,3 +423,53 @@ describe("pendingApprovalsFrom", () => {
 		expect(pendingApprovalsFrom(undefined)).toEqual([]);
 	});
 });
+
+describe("SessionController routing hydration", () => {
+	test("a switch learns the target session's resolved model", async () => {
+		const { app, server } = await bootApp("tui-a");
+		server.respondWith("session.detail", {
+			sessionKey: "tui-b",
+			session: {
+				sessionKey: "tui-b",
+				model: "claude-sonnet-4",
+				provider: "anthropic",
+				contextWindow: 200_000,
+				thinkingLevel: "high",
+				modelSource: "session",
+			},
+		});
+
+		await app.sessions.switch("tui-b");
+		await waitFor(() => app.store.session("tui-b").model !== undefined, {
+			what: "the resolved model",
+		});
+
+		const session = app.store.session("tui-b");
+		expect(session.model).toBe("claude-sonnet-4");
+		expect(session.provider).toBe("anthropic");
+		expect(session.contextWindow).toBe(200_000);
+		expect(session.thinkingLevel).toBe("high");
+		expect(session.modelSource).toBe("detail");
+	});
+
+	test("hydration does not undo a model the session already ran on", async () => {
+		const { app, server } = await bootApp("tui-a");
+		server.respondWith("session.detail", {
+			session: { sessionKey: "tui-b", model: "claude-sonnet-4" },
+		});
+		// A run already told us what this session is actually on.
+		app.store.session("tui-b").setModel({ model: "gpt-4o" }, "run");
+
+		await app.sessions.switch("tui-b");
+		await app.sessions.hydrateRouting(app.store.session("tui-b"));
+
+		expect(app.store.session("tui-b").model).toBe("gpt-4o");
+	});
+
+	test("a daemon that errors on session.detail leaves the status bar alone", async () => {
+		const { app } = await bootApp("tui-a");
+		// No `session.detail` responder is registered, so the call rejects.
+		await app.sessions.hydrateRouting(app.store.focused);
+		expect(app.store.focused.model).toBeUndefined();
+	});
+});

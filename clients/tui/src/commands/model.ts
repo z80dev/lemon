@@ -85,10 +85,38 @@ export async function ensureModels(
 	}
 }
 
+/**
+ * Context window for a model id, out of the cached `models.list` rows.
+ *
+ * Ids reach us both bare and provider-prefixed, and the catalog only lists them bare, so a
+ * `provider:id` is matched on its tail too. Undefined when the catalog has never heard of it —
+ * the caller must then draw no gauge rather than invent a denominator.
+ */
+export function contextWindowFromCache(
+	models: ModelsListResult["models"] | undefined,
+	model: string | undefined,
+): number | undefined {
+	if (!model) return undefined;
+	const bare = model.includes(":") ? model.slice(model.indexOf(":") + 1) : model;
+	for (const entry of models ?? []) {
+		const id = pickString(entry, "id");
+		if (id === model || id === bare) {
+			const window = pickNumber(entry, "contextWindow");
+			if (window !== undefined) return window;
+		}
+	}
+	return undefined;
+}
+
 /** Apply a model to the focused session and mirror it locally. */
 export async function applyModel(ctx: CommandContext, modelId: string): Promise<void> {
 	await ctx.methods.sessionsPatch({ sessionKey: ctx.session.key, model: modelId });
-	ctx.session.model = modelId;
+	// `local` holds until a run reports what the router actually resolved to — the
+	// patch is a request, and the daemon's own precedence may still overrule it.
+	ctx.session.setModel(
+		{ model: modelId, contextWindow: contextWindowFromCache(ctx.store.models, modelId) },
+		"local",
+	);
 	ctx.ui.refreshStatus();
 	ctx.ui.notice(`model: ${modelId} (session ${ctx.session.key})`);
 }

@@ -1,0 +1,81 @@
+# lemon-tui
+
+The lemon terminal client: a Bun application built on
+[`@oh-my-pi/pi-tui`](https://www.npmjs.com/package/@oh-my-pi/pi-tui)
+(differential terminal renderer with native-scrollback streaming) that talks
+to a running lemon daemon over the control-plane WebSocket
+(`ws://127.0.0.1:4040/ws` by default).
+
+Installed users get this client as a compiled per-platform binary
+(`~/.lemon/versions/<v>/tui/bin/lemon-tui`); plain `lemon` in an interactive
+terminal launches it, auto-starting the daemon first. See `docs/install.md`.
+
+## Features
+
+- Streaming markdown transcript committed to native terminal scrollback
+  mid-stream (pi-tui `FinalizableBlock` seam), 30fps grapheme-safe reveal.
+- Tool cards with per-tool formatters (bash, read, edit + diffs, grep, write,
+  patch, find/glob/ls, web, todo, task, process), lifecycle states, shelf
+  merging of consecutive completed tools, and collapsible reasoning sections.
+- Exec approval panel (allow once / session / always / deny, number
+  quick-pick, wrapped command preview, expiry countdown).
+- Three submission modes while the agent is busy: `queue` (client-side,
+  editable), `steer`, `interrupt` — with graceful fallbacks. Interrupted
+  replies keep their partial text.
+- Multi-session: Ctrl+X switcher (live + recent, fuzzy filter, new-with-
+  prompt, close), per-session drafts, unread badges, history hydration.
+- Ctrl+O model picker (two-stage, draft-preserving), 26 slash commands with
+  autocomplete, `!cmd` shell escape, `{!cmd}` inline interpolation,
+  Ctrl+G `$EDITOR` handoff.
+- Progressive-disclosure status bar (model + context gauge pinned), git
+  branch, connection state, session counters.
+- Dark/light themes with OSC 11 terminal-background auto-detection; mouse
+  support in overlays.
+
+## Development
+
+Requires Bun >= 1.3.14 (pinned in `.bun-version`).
+
+```sh
+bun install               # exact-pinned @oh-my-pi/{pi-tui,pi-utils,pi-natives}
+bun src/main.ts --ws-url ws://127.0.0.1:4040/ws   # run against a daemon
+../../bin/lemon-tui       # same, with daemon auto-start (repo dev launcher)
+
+bun test                  # unit + fake-server integration suites
+bun run check             # tsc --noEmit
+bun run lint              # biome
+bun run gallery           # headless render of every component/state
+```
+
+The fake control plane (`src/dev/fake-server.ts`) powers the tests and the
+gallery; no daemon or credentials are needed for either.
+
+### Layout
+
+```
+src/protocol/    WS client: frames, reconnect+liveness, correlation, typed methods
+src/store/       plain mutable stores; controllers are the only writers
+src/ui/          components (pi-tui Component impls) + controllers + theme
+src/commands/    slash-command registry (capability-gated via hello-ok)
+src/formatters/  pure per-tool formatters -> {summary, details[]}
+src/dev/         fake server, gallery, fixtures
+scripts/         build-binary.ts (bun --compile, per-platform artifacts)
+```
+
+### Render-contract notes
+
+pi-tui's append-only scrollback contract is unforgiving; before editing
+components read `~/dev/oh-my-pi/docs/tui-core-renderer.md` (or the pi-tui
+README) and keep to the house rules: return the same array reference from
+`render(width)` when unchanged; never exceed `width` (measure with
+`visibleWidth`, never `.length`); never declare a settled row that could
+still change; animate via `requestComponentRender` only; `initTheme()`
+before constructing any component.
+
+### Releasing
+
+The release workflow cross-compiles `lemon_tui` artifacts for linux-x86_64,
+linux-arm64 and darwin-arm64 via `scripts/build-binary.ts` and ships them in
+`manifest.json` alongside the runtime tarballs; `install.sh` and
+`lemon update` stage both atomically. The three `@oh-my-pi/*` packages are
+exact-pinned and must be bumped together (upstream releases in lockstep).

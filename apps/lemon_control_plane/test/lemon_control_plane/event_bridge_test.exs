@@ -782,4 +782,131 @@ defmodule LemonControlPlane.EventBridgeTest do
       end
     end
   end
+
+  describe "model and usage on agent frames" do
+    setup do
+      conn_id = "conn_#{System.unique_integer([:positive])}"
+      run_id = "run_model_#{System.unique_integer([:positive])}"
+
+      :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+      :ok = Presence.update_subscriptions(conn_id, :custom, MapSet.new(["run:#{run_id}"]))
+      flush_events()
+
+      # Presence is stopped by the file-level teardown, which can win this race when the
+      # whole suite runs; unregistering a conn on a dead registry is a no-op, not a failure.
+      on_exit(fn ->
+        try do
+          Presence.unregister(conn_id)
+        catch
+          :exit, _ -> :ok
+        end
+      end)
+
+      {:ok, run_id: run_id}
+    end
+
+    test "started carries the resolved model, its provider and the thinking level", %{
+      run_id: run_id
+    } do
+      send(
+        Process.whereis(EventBridge),
+        LemonCore.Event.new(
+          :run_started,
+          %{
+            run_id: run_id,
+            session_key: "agent:default:main",
+            engine: "coding_agent",
+            model: "claude-sonnet-4-20250514",
+            thinking_level: :medium
+          },
+          %{run_id: run_id, session_key: "agent:default:main"}
+        )
+      )
+
+      assert_receive {:event, "agent", payload, _version}, 1_000
+
+      assert payload["type"] == "started"
+      assert payload["runId"] == run_id
+      assert payload["engine"] == "coding_agent"
+      assert payload["model"] == "claude-sonnet-4-20250514"
+      # Derived here rather than left to the client to parse out of the id.
+      assert payload["provider"] == "anthropic"
+      assert payload["thinkingLevel"] == "medium"
+    end
+
+    test "started falls back to the model on event meta", %{run_id: run_id} do
+      send(
+        Process.whereis(EventBridge),
+        LemonCore.Event.new(
+          :run_started,
+          %{run_id: run_id, engine: "coding_agent"},
+          %{run_id: run_id, model: "gpt-5.4"}
+        )
+      )
+
+      assert_receive {:event, "agent", %{"type" => "started", "model" => "gpt-5.4"}, _}, 1_000
+    end
+
+    test "started keeps model keys present-but-null when nothing knew one", %{run_id: run_id} do
+      send(
+        Process.whereis(EventBridge),
+        LemonCore.Event.new(:run_started, %{run_id: run_id, engine: "native"}, %{run_id: run_id})
+      )
+
+      assert_receive {:event, "agent", payload, _}, 1_000
+      assert payload["type"] == "started"
+      assert Map.has_key?(payload, "model")
+      assert payload["model"] == nil
+      assert payload["provider"] == nil
+    end
+
+    test "completed carries normalized usage and the model", %{run_id: run_id} do
+      send(
+        Process.whereis(EventBridge),
+        LemonCore.Event.new(
+          :run_completed,
+          %{
+            completed: %{
+              ok: true,
+              answer: "done",
+              usage: %{
+                input_tokens: 1_000,
+                output_tokens: 50,
+                cache_read_input_tokens: 4_000
+              }
+            },
+            duration_ms: 12
+          },
+          %{run_id: run_id, session_key: "agent:default:main", model: "claude-sonnet-4-20250514"}
+        )
+      )
+
+      assert_receive {:event, "agent", payload, _}, 1_000
+
+      assert payload["type"] == "completed"
+      assert payload["ok"] == true
+      assert payload["model"] == "claude-sonnet-4-20250514"
+
+      assert %{
+               "inputTokens" => 1_000,
+               "outputTokens" => 50,
+               "cacheReadTokens" => 4_000,
+               "contextTokens" => 5_000
+             } = payload["usage"]
+    end
+
+    test "completed reports no usage as null rather than zeros", %{run_id: run_id} do
+      send(
+        Process.whereis(EventBridge),
+        LemonCore.Event.new(
+          :run_completed,
+          %{completed: %{ok: false, error: "boom"}, duration_ms: 3},
+          %{run_id: run_id}
+        )
+      )
+
+      assert_receive {:event, "agent", %{"type" => "completed"} = payload, _}, 1_000
+      assert payload["usage"] == nil
+    end
+  end
 end

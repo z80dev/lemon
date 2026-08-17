@@ -42,6 +42,11 @@ export interface ReconnectingSocketOptions {
 	 * interval from hello-ok. Default 3.
 	 */
 	watchdogMultiplier?: number;
+	/**
+	 * Floor for the liveness window. Default {@link MIN_WATCHDOG_WINDOW_MS};
+	 * tests with millisecond ticks pass 0 to disable the floor.
+	 */
+	minWatchdogWindowMs?: number;
 	/** Injectable for tests. */
 	webSocketImpl?: typeof WebSocket;
 	/** Injectable clock, for tests. */
@@ -49,6 +54,9 @@ export interface ReconnectingSocketOptions {
 	/** Deterministic jitter source, for tests. */
 	random?: () => number;
 }
+
+/** Floor for the liveness window regardless of the server's tick interval. */
+export const MIN_WATCHDOG_WINDOW_MS = 10_000;
 
 /** Pure backoff math, exported so tests can assert the curve without timers. */
 export function computeBackoffDelay(
@@ -91,6 +99,7 @@ export class ReconnectingSocket {
 			maxBackoffMs: options.maxBackoffMs ?? 15_000,
 			jitter: options.jitter ?? 0.25,
 			watchdogMultiplier: options.watchdogMultiplier ?? 3,
+			minWatchdogWindowMs: options.minWatchdogWindowMs ?? MIN_WATCHDOG_WINDOW_MS,
 			now: options.now ?? (() => Date.now()),
 			random: options.random ?? Math.random,
 			webSocketImpl: options.webSocketImpl ?? WebSocket,
@@ -156,7 +165,13 @@ export class ReconnectingSocket {
 			this.#clearWatchdog();
 			return;
 		}
-		this.#watchdogWindowMs = tickIntervalMs * this.#options.watchdogMultiplier;
+		// A 1s server tick would give a 3s window — tight enough that a busy
+		// BEAM scheduler or GC pause trips a spurious mid-run reconnect (seen
+		// live). Never allow the window below the configured floor.
+		this.#watchdogWindowMs = Math.max(
+			tickIntervalMs * this.#options.watchdogMultiplier,
+			this.#options.minWatchdogWindowMs,
+		);
 		this.#armWatchdog();
 	}
 

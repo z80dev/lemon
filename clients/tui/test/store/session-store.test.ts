@@ -243,3 +243,128 @@ describe("SessionStore unread", () => {
 		expect(session.unread).toBe(0);
 	});
 });
+
+describe("SessionStore model precedence", () => {
+	test("a detail fetch fills in a session that knows nothing", () => {
+		const session = new SessionStore("s");
+		const changed = session.setModel(
+			{ model: "claude-sonnet-4", provider: "anthropic", contextWindow: 200_000 },
+			"detail",
+		);
+		expect(changed).toBe(true);
+		expect(session.model).toBe("claude-sonnet-4");
+		expect(session.provider).toBe("anthropic");
+		expect(session.contextWindow).toBe(200_000);
+		expect(session.modelSource).toBe("detail");
+	});
+
+	test("a detail fetch never overwrites a local pin", () => {
+		const session = new SessionStore("s");
+		session.setModel({ model: "gpt-4o" }, "local");
+		const changed = session.setModel({ model: "claude-sonnet-4" }, "detail");
+		expect(changed).toBe(false);
+		expect(session.model).toBe("gpt-4o");
+		expect(session.modelSource).toBe("local");
+	});
+
+	test("a run overrides a local pin the daemon evidently did not honour", () => {
+		const session = new SessionStore("s");
+		session.setModel({ model: "gpt-4o" }, "local");
+		session.setModel({ model: "claude-sonnet-4", provider: "anthropic" }, "run");
+		expect(session.model).toBe("claude-sonnet-4");
+		expect(session.provider).toBe("anthropic");
+		expect(session.modelSource).toBe("run");
+	});
+
+	test("a later local pin wins again after a run reported one", () => {
+		const session = new SessionStore("s");
+		session.setModel({ model: "claude-sonnet-4" }, "run");
+		session.setModel({ model: "gpt-4o" }, "local");
+		expect(session.model).toBe("gpt-4o");
+		expect(session.modelSource).toBe("local");
+	});
+
+	test("a detail fetch also never overwrites what a run reported", () => {
+		const session = new SessionStore("s");
+		session.setModel({ model: "claude-sonnet-4" }, "run");
+		session.setModel({ model: "gpt-4o", contextWindow: 128_000 }, "detail");
+		expect(session.model).toBe("claude-sonnet-4");
+		expect(session.contextWindow).toBeUndefined();
+	});
+
+	test("re-naming the same model keeps the provider and window already learned", () => {
+		const session = new SessionStore("s");
+		session.setModel(
+			{ model: "claude-sonnet-4", provider: "anthropic", contextWindow: 200_000 },
+			"run",
+		);
+		// `agent completed` names the model without re-stating either.
+		session.setModel({ model: "claude-sonnet-4" }, "run");
+		expect(session.provider).toBe("anthropic");
+		expect(session.contextWindow).toBe(200_000);
+	});
+
+	test("a different model drops the previous model's provider and window", () => {
+		const session = new SessionStore("s");
+		session.setModel(
+			{ model: "claude-sonnet-4", provider: "anthropic", contextWindow: 200_000 },
+			"run",
+		);
+		session.setModel({ model: "gpt-4o" }, "run");
+		expect(session.provider).toBeUndefined();
+		expect(session.contextWindow).toBeUndefined();
+	});
+
+	test("an event with no model at all changes nothing", () => {
+		const session = new SessionStore("s");
+		session.setModel({ model: "gpt-4o" }, "local");
+		expect(session.setModel({ model: null }, "run")).toBe(false);
+		expect(session.model).toBe("gpt-4o");
+	});
+
+	test("clearing the model is a local gesture only", () => {
+		const session = new SessionStore("s");
+		session.setModel({ model: "gpt-4o" }, "local");
+		expect(session.setModel({ model: undefined }, "local")).toBe(true);
+		expect(session.model).toBeUndefined();
+	});
+});
+
+describe("SessionStore context tokens", () => {
+	test("prefers the daemon's own context figure", () => {
+		const session = new SessionStore("s");
+		session.applyUsage({ inputTokens: 10, cacheReadTokens: 20, contextTokens: 999 });
+		expect(session.contextTokens).toBe(999);
+	});
+
+	test("adds cache reads and writes to the input side", () => {
+		const session = new SessionStore("s");
+		session.applyUsage({ inputTokens: 1_000, cacheReadTokens: 8_000, cacheWriteTokens: 500 });
+		expect(session.contextTokens).toBe(9_500);
+	});
+
+	test("excludes output, which is not part of the context that was sent", () => {
+		const session = new SessionStore("s");
+		session.applyUsage({ inputTokens: 1_000, outputTokens: 4_000 });
+		expect(session.contextTokens).toBe(1_000);
+	});
+
+	test("refuses to treat a cumulative run total as a context size", () => {
+		const session = new SessionStore("s");
+		// Engines report totalTokens across every turn of the run — a live run showed
+		// 86k total against a 21k context — so it cannot stand in for the input side.
+		session.applyUsage({ totalTokens: 86_354 });
+		expect(session.contextTokens).toBeUndefined();
+	});
+
+	test("a run that reported nothing leaves the last known counts alone", () => {
+		const session = new SessionStore("s");
+		session.applyUsage({ contextTokens: 5_000 });
+		session.applyUsage(null);
+		expect(session.contextTokens).toBe(5_000);
+	});
+
+	test("is undefined before any run has completed", () => {
+		expect(new SessionStore("s").contextTokens).toBeUndefined();
+	});
+});

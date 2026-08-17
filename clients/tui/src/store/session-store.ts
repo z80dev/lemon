@@ -11,7 +11,7 @@
  * that produced no deltas at all.
  */
 
-import type { AgentAction } from "../protocol/types.ts";
+import type { AgentAction, RunUsage } from "../protocol/types.ts";
 import {
 	type ApprovalBlock,
 	type AssistantBlock,
@@ -30,6 +30,26 @@ export interface DeltaResult {
 	/** True when an accepted delta landed on a block that had already finalized. */
 	amended: boolean;
 	block: AssistantBlock;
+}
+
+/**
+ * Where a session's model came from, worst authority first.
+ *
+ *   `detail`  what `session.detail` resolved the session to — a prediction about
+ *             the next run, and the only source that ever loses;
+ *   `local`   what the user just pinned with `/model`;
+ *   `run`     what a run actually started on, which is the only observed fact of
+ *             the three and therefore overrides a local pin that the daemon
+ *             evidently did not honour.
+ */
+export type ModelSource = "detail" | "local" | "run";
+
+/** What a `session.detail` fetch or an `agent started` event can teach a session. */
+export interface ModelUpdate {
+	model?: string | null;
+	provider?: string | null;
+	contextWindow?: number | null;
+	thinkingLevel?: string | null;
 }
 
 export interface FinalizeOptions {
@@ -62,6 +82,18 @@ export class SessionStore {
 	engine: string | undefined;
 	/** Model this session runs on, as last set through `/model` or reported. */
 	model: string | undefined;
+	/** Where {@link model} came from. See {@link setModel} for what that buys. */
+	modelSource: ModelSource | undefined;
+	/** Provider of {@link model}, when the daemon named one. */
+	provider: string | undefined;
+	/**
+	 * Context window of {@link model} as the daemon reported it. Preferred over
+	 * the `models.list` cache, which cannot know about a model the daemon has but
+	 * the catalog does not.
+	 */
+	contextWindow: number | undefined;
+	/** Token counts from this session's most recent completed run. */
+	usage: RunUsage | undefined;
 	/** Reasoning effort, as last set through `/think`. */
 	thinkingLevel: string | undefined;
 	/** Tool-policy profile, as last set through `/toolpolicy`. */
@@ -93,6 +125,78 @@ export class SessionStore {
 
 	get lastBlock(): Block | undefined {
 		return this.blocks[this.blocks.length - 1];
+	}
+
+	// -- routing -------------------------------------------------------------
+
+	/**
+	 * Record what model this session is on, resolving against what we already knew.
+	 *
+	 * A `detail` fetch is a prediction and yields to anything better, so switching
+	 * back to a session cannot undo a `/model` the user set moments ago or
+	 * relabel a run that is already going. `local` and `run` always apply, in the
+	 * order they happen: the user pinning a model is the newest intent, and a run
+	 * reporting one is the newest fact.
+	 *
+	 * Returns whether anything visible changed, so callers can skip a repaint.
+	 */
+	setModel(update: ModelUpdate, source: ModelSource): boolean {
+		const model = blankToUndefined(update.model);
+		if (source === "detail" && this.modelSource && this.modelSource !== "detail") return false;
+		if (!model && source !== "local") return false;
+
+		const previous = {
+			model: this.model,
+			provider: this.provider,
+			contextWindow: this.contextWindow,
+			thinkingLevel: this.thinkingLevel,
+		};
+		// Provider and window describe a specific model, so a *different* model
+		// clears them rather than leaving the old model's facts standing beside a new
+		// id. The same model keeps them: `agent completed` names the model without
+		// re-stating either, and must not undo what `started` taught us.
+		const changed = model !== this.model;
+		const provider = blankToUndefined(update.provider);
+		const contextWindow = positive(update.contextWindow);
+		const thinking = blankToUndefined(update.thinkingLevel);
+
+		this.model = model;
+		this.modelSource = source;
+		if (changed || provider !== undefined) this.provider = provider;
+		if (changed || contextWindow !== undefined) this.contextWindow = contextWindow;
+		if (thinking !== undefined) this.thinkingLevel = thinking;
+
+		return (
+			previous.model !== this.model ||
+			previous.provider !== this.provider ||
+			previous.contextWindow !== this.contextWindow ||
+			previous.thinkingLevel !== this.thinkingLevel
+		);
+	}
+
+	/** Take token counts from a completed run. A run that reported none clears nothing. */
+	applyUsage(usage: RunUsage | null | undefined): void {
+		if (!usage) return;
+		this.usage = usage;
+	}
+
+	/**
+	 * Tokens for the context gauge: how big the conversation was on the last turn.
+	 *
+	 * Only a real measurement of the input side counts. `totalTokens` is deliberately
+	 * not a fallback — engines report it cumulatively across every turn of a run (a
+	 * live run showed 86k total against a 21k context), so putting it in the gauge
+	 * would draw a bar that only ever climbs and never matches the conversation.
+	 * Undefined here makes the status bar fall back to its honest `use N` label.
+	 */
+	get contextTokens(): number | undefined {
+		const usage = this.usage;
+		if (!usage) return undefined;
+		const context = positive(usage.contextTokens);
+		if (context !== undefined) return context;
+		const input = positive(usage.inputTokens);
+		if (input === undefined) return undefined;
+		return input + (positive(usage.cacheReadTokens) ?? 0) + (positive(usage.cacheWriteTokens) ?? 0);
 	}
 
 	// -- writes --------------------------------------------------------------
@@ -285,4 +389,15 @@ export class SessionStore {
 		if (!this.focused && block.kind !== "user") this.unread += 1;
 		return block;
 	}
+}
+
+/** The wire says `null` for "not known"; the store says `undefined`. */
+function blankToUndefined(value: string | null | undefined): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const trimmed = value.trim();
+	return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function positive(value: number | null | undefined): number | undefined {
+	return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
