@@ -5,8 +5,11 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsExtendedTest do
   Tests cover:
   - browser.request forwarding to browser nodes
   - tts.convert with system TTS
-  - update.run with update manifest fetching
   - usage.cost with record_usage tracking
+
+  update.run has its own dedicated suite (`update_run_test.exs`): it mutates
+  the global `UpdateStore` singleton and needs a fixture HTTP server, both of
+  which are easier to reason about in isolation.
   """
   use ExUnit.Case, async: false
 
@@ -37,7 +40,6 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsExtendedTest do
     SkillsStatus,
     TerminalBackendsStatus,
     TtsConvert,
-    UpdateRun,
     UsageCost
   }
 
@@ -2777,46 +2779,6 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsExtendedTest do
     test "has correct method name and scopes" do
       assert TtsConvert.name() == "tts.convert"
       assert TtsConvert.scopes() == [:write]
-    end
-  end
-
-  describe "UpdateRun" do
-    test "returns version info when update URL not configured" do
-      {:ok, result} = UpdateRun.handle(%{}, @ctx)
-
-      assert is_binary(result["currentVersion"])
-      assert result["updateAvailable"] == false
-      assert String.contains?(result["message"], "not configured")
-      assert result["summary"]["action"] == "update.run"
-      assert result["summary"]["configured"] == false
-      assert result["summary"]["force"] == false
-      assert result["summary"]["checkOnly"] == false
-      assert result["summary"]["updateAvailable"] == false
-      assert result["summary"]["messageReturned"] == true
-      assert result["summary"]["cleanup"]["includesDownloadUrl"] == false
-      assert result["summary"]["cleanup"]["includesChecksum"] == false
-      assert result["summary"]["cleanup"]["includesDownloadedBytes"] == false
-    end
-
-    test "respects force parameter" do
-      {:ok, result} = UpdateRun.handle(%{"force" => true}, @ctx)
-
-      assert is_binary(result["currentVersion"])
-      assert result["summary"]["force"] == true
-      assert result["summary"]["checkOnly"] == false
-    end
-
-    test "respects checkOnly parameter" do
-      {:ok, result} = UpdateRun.handle(%{"checkOnly" => true}, @ctx)
-
-      assert is_binary(result["currentVersion"])
-      assert result["summary"]["force"] == false
-      assert result["summary"]["checkOnly"] == true
-    end
-
-    test "has correct method name and scopes" do
-      assert UpdateRun.name() == "update.run"
-      assert UpdateRun.scopes() == [:admin]
     end
   end
 

@@ -1180,7 +1180,10 @@ defmodule LemonControlPlane.Protocol.Schemas do
     # Optional capability-gated methods
     "update.run" => %{
       optional: %{
-        "force" => :boolean
+        "force" => :boolean,
+        "checkOnly" => :boolean,
+        "channel" => :string,
+        "version" => :string
       }
     },
     "connect.challenge" => %{

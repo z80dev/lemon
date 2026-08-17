@@ -9,7 +9,6 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsTest do
     TtsEnable,
     TtsDisable,
     TtsSetProvider,
-    UpdateRun,
     ConfigGet,
     ConfigSet,
     ConfigPatch,
@@ -297,27 +296,6 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsTest do
     test "has correct method name and scopes" do
       assert TtsSetProvider.name() == "tts.set-provider"
       assert TtsSetProvider.scopes() == [:admin]
-    end
-  end
-
-  describe "UpdateRun" do
-    test "returns update status" do
-      {:ok, result} = UpdateRun.handle(%{}, @ctx)
-
-      assert is_binary(result["currentVersion"])
-      assert is_boolean(result["updateAvailable"])
-      assert result["summary"]["action"] == "update.run"
-      assert result["summary"]["currentVersion"] == result["currentVersion"]
-      assert result["summary"]["latestVersion"] == result["latestVersion"]
-      assert is_boolean(result["summary"]["configured"])
-      assert result["summary"]["cleanup"]["includesDownloadUrl"] == false
-      assert result["summary"]["cleanup"]["includesChecksum"] == false
-      assert result["summary"]["cleanup"]["includesDownloadedBytes"] == false
-    end
-
-    test "has correct method name and scopes" do
-      assert UpdateRun.name() == "update.run"
-      assert UpdateRun.scopes() == [:admin]
     end
   end
 
