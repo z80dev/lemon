@@ -1,0 +1,299 @@
+#!/usr/bin/env bash
+#
+# lemon - Launcher shim for a packaged Lemon release.
+#
+# This file lives at rel/overlays/bin/lemon and is copied verbatim into
+# every release profile by Mix's `rel/overlays/` convention (mix.exs needs
+# no changes for that to happen). It never touches RELEASE_NAME: the
+# profile-named release script under bin/<profile> already defaults that
+# correctly, and config/runtime.exs branches on it to decide which
+# Phoenix endpoints to configure.
+#
+# Usage:
+#   bin/lemon start|daemon|stop|restart|status|remote|eval|rpc|version|update|doctor
+#   bin/lemon --help
+#
+# The full development CLI (setup, channels, secrets, models, ...) only
+# exists in source checkouts; run it there via ./bin/lemon (through mix).
+
+set -euo pipefail
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m'
+
+info() { echo -e "${GREEN}[lemon]${NC} $1"; }
+warn() { echo -e "${YELLOW}[lemon]${NC} $1"; }
+error() { echo -e "${RED}[lemon]${NC} $1" >&2; }
+
+usage() {
+  cat <<'EOF'
+Usage: bin/lemon <command> [args]
+
+Commands:
+  start                 Run the release in the foreground
+  daemon                Run the release in the background; records pid + root
+  stop                  Stop a running daemon (works after a version flip)
+  restart               Restart a running node in place
+  status                Report pid liveness and control-plane health
+  remote                Attach a remote IEx shell to the running node
+  eval "EXPR"           Evaluate EXPR in a fresh, non-booted system
+  rpc "EXPR"            Evaluate EXPR on the running node
+  version               Print the installed Lemon version
+  update [args]         Run the stage-2 self-updater (see LemonCore.Update.CLI)
+  doctor [bundle_path]  Generate a support bundle (default: ~/.lemon/support-bundle-<ts>.zip)
+  --help, -h            Show this help
+
+This is the packaged-release launcher. The full development CLI (setup,
+channels, secrets, models, providers, ...) only exists in source checkouts;
+run it there via ./bin/lemon (through mix).
+EOF
+}
+
+# ── Resolve the release root: the parent of this script's real directory,
+# following symlinks (mirrors bin/lemon in the source tree). ──
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [ -L "$SCRIPT_PATH" ]; do
+  SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+  SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+  [[ "$SCRIPT_PATH" != /* ]] && SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_PATH"
+done
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+LEMON_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# ── Autodetect the release profile: first executable bin/<profile> wins. ──
+PROFILE=""
+for candidate in lemon_runtime_full lemon_runtime_min sim_broadcast_platform; do
+  if [ -x "$LEMON_ROOT/bin/$candidate" ]; then
+    PROFILE="$candidate"
+    break
+  fi
+done
+
+if [ -z "$PROFILE" ]; then
+  error "no runtime profile found under $LEMON_ROOT/bin"
+  error "expected one of: lemon_runtime_full, lemon_runtime_min, sim_broadcast_platform"
+  exit 1
+fi
+
+RELEASE_BIN="$LEMON_ROOT/bin/$PROFILE"
+
+LEMON_HOME_DIR="$HOME/.lemon"
+COOKIE_FILE="$LEMON_HOME_DIR/cookie"
+ENV_FILE="$LEMON_HOME_DIR/env"
+STATE_DIR="$LEMON_HOME_DIR/run"
+PIDFILE="$STATE_DIR/lemon.pid"
+ROOTFILE="$STATE_DIR/lemon.root"
+
+# ── stop/restart must keep working after `versions/current` is flipped to a
+# newer release, so they prefer the root recorded at `daemon` time over the
+# root this invocation of the shim happens to live under. ──
+resolve_running_release_bin() {
+  RELEASE_BIN="$LEMON_ROOT/bin/$PROFILE"
+
+  if [ -f "$ROOTFILE" ]; then
+    recorded_root="$(cat "$ROOTFILE" 2>/dev/null || true)"
+
+    if [ -n "$recorded_root" ] && [ -x "$recorded_root/bin/$PROFILE" ]; then
+      RELEASE_BIN="$recorded_root/bin/$PROFILE"
+    fi
+  fi
+}
+
+require_cmd() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    error "required command not found: $1"
+    exit 1
+  fi
+}
+
+# ── User-install defaults, applied only when unset so server/tarball
+# installs that already export these keep full control. ──
+setup_environment() {
+  mkdir -p "$LEMON_HOME_DIR" "$STATE_DIR"
+
+  if [ -z "${LEMON_STORE_PATH:-}" ]; then
+    export LEMON_STORE_PATH="$LEMON_HOME_DIR/store"
+  fi
+
+  if [ -z "${RELEASE_COOKIE:-}" ]; then
+    require_cmd openssl
+
+    if [ ! -s "$COOKIE_FILE" ]; then
+      openssl rand -hex 32 > "$COOKIE_FILE"
+      chmod 600 "$COOKIE_FILE"
+    fi
+
+    RELEASE_COOKIE="$(cat "$COOKIE_FILE")"
+    export RELEASE_COOKIE
+  fi
+
+  if [ -f "$ENV_FILE" ]; then
+    # shellcheck disable=SC1090
+    source "$ENV_FILE"
+  fi
+
+  if [ -z "${LEMON_WEB_SECRET_KEY_BASE:-}" ]; then
+    require_cmd openssl
+    generated_secret="$(openssl rand -hex 64)"
+    printf 'export LEMON_WEB_SECRET_KEY_BASE=%q\n' "$generated_secret" >> "$ENV_FILE"
+    chmod 600 "$ENV_FILE"
+    export LEMON_WEB_SECRET_KEY_BASE="$generated_secret"
+  fi
+
+  export PHX_SERVER="${PHX_SERVER:-true}"
+}
+
+# ── doctor's bundle_path is embedded in an Elixir string literal; escape
+# backslashes and quotes so unusual paths can't break out of it. ──
+elixir_escape() {
+  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+}
+
+COMMAND="${1:-}"
+
+case "$COMMAND" in
+  --help|-h)
+    usage
+    exit 0
+    ;;
+  "")
+    usage >&2
+    exit 2
+    ;;
+esac
+
+setup_environment
+
+case "$COMMAND" in
+  start)
+    shift
+    exec "$RELEASE_BIN" start "$@"
+    ;;
+
+  daemon)
+    shift
+    "$RELEASE_BIN" daemon "$@"
+
+    pid=""
+    for _attempt in $(seq 1 15); do
+      pid="$("$RELEASE_BIN" pid 2>/dev/null || true)"
+      [ -n "$pid" ] && break
+      sleep 1
+    done
+
+    if [ -z "$pid" ]; then
+      error "daemon started but its pid could not be determined"
+      exit 1
+    fi
+
+    printf '%s\n' "$pid" > "$PIDFILE"
+    printf '%s\n' "$LEMON_ROOT" > "$ROOTFILE"
+    info "started (pid $pid)"
+    ;;
+
+  stop)
+    shift
+    resolve_running_release_bin
+
+    if [ ! -x "$RELEASE_BIN" ]; then
+      error "no release binary found to stop (looked for $RELEASE_BIN)"
+      exit 1
+    fi
+
+    stop_status=0
+    "$RELEASE_BIN" stop || stop_status=$?
+    rm -f "$PIDFILE" "$ROOTFILE"
+
+    if [ "$stop_status" -ne 0 ]; then
+      error "stop command exited with status $stop_status"
+      exit "$stop_status"
+    fi
+
+    info "stopped"
+    ;;
+
+  restart)
+    shift
+    resolve_running_release_bin
+
+    if [ ! -x "$RELEASE_BIN" ]; then
+      error "no release binary found to restart (looked for $RELEASE_BIN)"
+      exit 1
+    fi
+
+    exec "$RELEASE_BIN" restart
+    ;;
+
+  status)
+    if [ ! -f "$PIDFILE" ]; then
+      echo "lemon: not running (no pidfile)"
+      exit 1
+    fi
+
+    pid="$(cat "$PIDFILE" 2>/dev/null || true)"
+
+    if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+      echo "lemon: not running (stale pidfile: ${pid:-empty})"
+      exit 1
+    fi
+
+    control_port="${LEMON_CONTROL_PLANE_PORT:-4040}"
+
+    if curl -fsS "http://127.0.0.1:$control_port/healthz" >/dev/null 2>&1; then
+      echo "lemon: running (pid $pid), control-plane healthy on port $control_port"
+    else
+      echo "lemon: running (pid $pid), control-plane not reachable on port $control_port"
+    fi
+    ;;
+
+  remote)
+    shift
+    exec "$RELEASE_BIN" remote "$@"
+    ;;
+
+  eval)
+    shift
+    exec "$RELEASE_BIN" eval "$@"
+    ;;
+
+  rpc)
+    shift
+    exec "$RELEASE_BIN" rpc "$@"
+    ;;
+
+  version)
+    exec "$RELEASE_BIN" eval 'IO.puts(LemonCore.Update.Version.current())'
+    ;;
+
+  update)
+    shift
+    export LEMON_UPDATE_ARGS="$*"
+    # The release script's own `eval` handler already appends `-- "$@"`
+    # before invoking elixir; adding another `--` here would leave a stray
+    # leading "--" in System.argv() (elixir only strips one CLI boundary
+    # marker), silently breaking LemonCore.Update.CLI's OptionParser.parse.
+    exec "$RELEASE_BIN" eval 'LemonCore.Update.CLI.main(System.argv())' "$@"
+    ;;
+
+  doctor)
+    shift
+    bundle_path="${1:-}"
+
+    if [ -z "$bundle_path" ]; then
+      timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+      bundle_path="$LEMON_HOME_DIR/support-bundle-$timestamp.zip"
+    fi
+
+    mkdir -p "$(dirname "$bundle_path")"
+    escaped_bundle_path="$(elixir_escape "$bundle_path")"
+    exec "$RELEASE_BIN" eval "LemonCore.Doctor.CLI.bundle!(bundle_path: \"$escaped_bundle_path\")"
+    ;;
+
+  *)
+    error "Unknown command: $COMMAND"
+    usage >&2
+    exit 2
+    ;;
+esac
