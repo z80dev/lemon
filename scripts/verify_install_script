@@ -1,0 +1,589 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+usage: scripts/verify_install_script
+
+Verifies install.sh against a fixture release served from localhost. No network
+access and no published release are required: the script builds a stub release
+tarball, writes a schema-2 manifest for it, and serves both through
+`python3 -m http.server` using the same URL shapes GitHub Releases exposes.
+
+Checks:
+  - unpinned stable install lays out ~/.lemon/versions/<version>, versions/current,
+    and the relative bin/lemon launcher symlink
+  - the downloaded tarball is removed from ~/.lemon/tmp
+  - re-running is an idempotent no-op and --force re-extracts
+  - --verify boots the installed launcher and polls /healthz
+  - a manifest checksum mismatch aborts without leaving a version directory or
+    flipping versions/current
+  - a pinned version resolves through releases/download/v<version>/
+  - an update round-trip flips versions/current and retains the old version
+  - a profile with no published artifact, a non-stable channel without a pin,
+    and an unsupported platform are all refused
+EOF
+  exit 2
+}
+
+if [ "$#" -ne 0 ]; then
+  usage
+fi
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+INSTALL_SH="$ROOT/install.sh"
+
+if [ ! -f "$INSTALL_SH" ]; then
+  echo "error install.sh not found at $INSTALL_SH" >&2
+  exit 2
+fi
+
+work_dir="$(mktemp -d "${TMPDIR:-/tmp}/lemon-install-verify.XXXXXX")"
+server_pid=""
+
+cleanup() {
+  if [ -n "$server_pid" ]; then
+    kill "$server_pid" >/dev/null 2>&1 || true
+  fi
+
+  # Stub daemons started by --verify record their pid under the fixture home.
+  for pidfile in "$work_dir"/home*/.lemon/run/lemon.pid; do
+    if [ -f "$pidfile" ]; then
+      kill "$(cat "$pidfile")" >/dev/null 2>&1 || true
+    fi
+  done
+
+  rm -rf "$work_dir"
+}
+trap cleanup EXIT
+
+failures=0
+checks=0
+
+ok() {
+  checks=$((checks + 1))
+  echo "ok $*"
+}
+
+fail() {
+  checks=$((checks + 1))
+  failures=$((failures + 1))
+  echo "error $*" >&2
+}
+
+free_port() {
+  python3 - <<'PY'
+import socket
+
+sock = socket.socket()
+sock.bind(("127.0.0.1", 0))
+print(sock.getsockname()[1])
+sock.close()
+PY
+}
+
+detect_platform() {
+  local os arch
+
+  case "$(uname -s)" in
+    Linux) os="linux" ;;
+    Darwin) os="darwin" ;;
+    *)
+      echo "error unsupported host for this verifier: $(uname -s)" >&2
+      exit 2
+      ;;
+  esac
+
+  case "$(uname -m)" in
+    x86_64 | amd64) arch="x86_64" ;;
+    arm64 | aarch64) arch="arm64" ;;
+    *)
+      echo "error unsupported host architecture for this verifier: $(uname -m)" >&2
+      exit 2
+      ;;
+  esac
+
+  echo "$os-$arch"
+}
+
+PLATFORM="$(detect_platform)"
+PLATFORM_OS="${PLATFORM%%-*}"
+PLATFORM_ARCH="${PLATFORM##*-}"
+PROFILE="lemon_runtime_full"
+
+# Builds a stub release tarball for <version> and returns its path. The stub
+# bin/lemon answers the subcommands install.sh uses: version, daemon (serves a
+# static /healthz), stop, and status.
+build_fixture_tarball() {
+  local version="$1"
+  local build_dir="$work_dir/build/$version"
+
+  mkdir -p "$build_dir/bin"
+
+  cat > "$build_dir/bin/lemon" <<EOF
+#!/bin/sh
+set -eu
+
+VERSION="$version"
+EOF
+
+  cat >> "$build_dir/bin/lemon" <<'EOF'
+run_dir="$HOME/.lemon/run"
+mkdir -p "$run_dir"
+
+case "${1:-}" in
+  version)
+    echo "lemon $VERSION"
+    ;;
+  daemon|start)
+    health_dir="$run_dir/health"
+    mkdir -p "$health_dir"
+    printf 'ok' > "$health_dir/healthz"
+    (
+      cd "$health_dir"
+      exec python3 -m http.server "${LEMON_CONTROL_PLANE_PORT:-4040}" --bind 127.0.0.1
+    ) >/dev/null 2>&1 &
+    echo "$!" > "$run_dir/lemon.pid"
+    ;;
+  stop)
+    if [ -f "$run_dir/lemon.pid" ]; then
+      kill "$(cat "$run_dir/lemon.pid")" 2>/dev/null || true
+      rm -f "$run_dir/lemon.pid"
+    fi
+    ;;
+  status)
+    if [ -f "$run_dir/lemon.pid" ]; then echo running; else echo stopped; fi
+    ;;
+  *)
+    echo "stub launcher: unsupported subcommand ${1:-}" >&2
+    exit 2
+    ;;
+esac
+EOF
+
+  printf '#!/bin/sh\necho "stub release binary %s"\n' "$version" > "$build_dir/bin/$PROFILE"
+  chmod +x "$build_dir/bin/lemon" "$build_dir/bin/$PROFILE"
+
+  local tarball="$work_dir/build/lemon-$version-stable-$PLATFORM-$PROFILE.tar.gz"
+  tar -czf "$tarball" -C "$build_dir" .
+  echo "$tarball"
+}
+
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+
+# Publishes <tarball> for <version> under a served directory, writing a
+# schema-2 manifest. <sha-override> forges the checksum when non-empty.
+publish() {
+  local dest_dir="$1"
+  local version="$2"
+  local tarball="$3"
+  local sha_override="${4:-}"
+
+  mkdir -p "$dest_dir"
+  cp "$tarball" "$dest_dir/"
+
+  local sha size
+  sha="$(sha256_of "$tarball")"
+  size="$(python3 -c 'import os,sys; print(os.path.getsize(sys.argv[1]))' "$tarball")"
+
+  if [ -n "$sha_override" ]; then
+    sha="$sha_override"
+  fi
+
+  MANIFEST_DEST="$dest_dir/manifest.json" \
+  MANIFEST_VERSION="$version" \
+  MANIFEST_FILE="$(basename "$tarball")" \
+  MANIFEST_SHA="$sha" \
+  MANIFEST_SIZE="$size" \
+  MANIFEST_PLATFORM="$PLATFORM" \
+  MANIFEST_OS="$PLATFORM_OS" \
+  MANIFEST_ARCH="$PLATFORM_ARCH" \
+  MANIFEST_PROFILE="$PROFILE" \
+    python3 - <<'PY'
+import json
+import os
+
+artifact = {
+    "file": os.environ["MANIFEST_FILE"],
+    "profile": os.environ["MANIFEST_PROFILE"],
+    "platform": os.environ["MANIFEST_PLATFORM"],
+    "os": os.environ["MANIFEST_OS"],
+    "arch": os.environ["MANIFEST_ARCH"],
+    "sha256": os.environ["MANIFEST_SHA"],
+    "size": int(os.environ["MANIFEST_SIZE"]),
+}
+
+if artifact["os"] == "linux":
+    artifact["glibc_min"] = "2.39"
+
+manifest = {
+    "schema": 2,
+    "version": os.environ["MANIFEST_VERSION"],
+    "channel": "stable",
+    "commit": "0123456789abcdef0123456789abcdef01234567",
+    "built_at": "2026-08-16T00:00:00Z",
+    "otp": "28.5",
+    "elixir": "1.19.5",
+    "artifacts": [artifact],
+}
+
+with open(os.environ["MANIFEST_DEST"], "w", encoding="utf-8") as handle:
+    json.dump(manifest, handle, indent=2)
+    handle.write("\n")
+PY
+}
+
+# ------------------------------------------------------------ fixture server -
+
+serve_root="$work_dir/serve"
+mkdir -p "$serve_root"
+
+tarball_v1="$(build_fixture_tarball 9999.1.0)"
+tarball_v2="$(build_fixture_tarball 9999.2.0)"
+tarball_v3="$(build_fixture_tarball 9999.3.0)"
+
+# `releases/latest/download/` is the unpinned stable entry point and
+# `releases/download/v<version>/` is the pinned one, exactly as GitHub serves
+# them. 9999.2.0 is deliberately published only under the pinned shape so the
+# pinned-URL assertion cannot pass by accident.
+publish "$serve_root/releases/latest/download" 9999.1.0 "$tarball_v1"
+publish "$serve_root/releases/download/v9999.1.0" 9999.1.0 "$tarball_v1"
+publish "$serve_root/releases/download/v9999.2.0" 9999.2.0 "$tarball_v2"
+
+# A parallel tree whose manifest advertises a checksum the tarball does not have.
+publish "$serve_root/corrupt/releases/latest/download" 9999.3.0 "$tarball_v3" \
+  "$(python3 -c 'print("f" * 64)')"
+
+port="$(free_port)"
+python3 -m http.server "$port" --bind 127.0.0.1 --directory "$serve_root" >"$work_dir/http.log" 2>&1 &
+server_pid=$!
+
+base_url="http://127.0.0.1:$port"
+for _attempt in $(seq 1 40); do
+  if curl -fsS --max-time 2 -o /dev/null "$base_url/releases/latest/download/manifest.json" 2>/dev/null; then
+    break
+  fi
+  sleep 0.25
+done
+
+if ! curl -fsS --max-time 2 -o /dev/null "$base_url/releases/latest/download/manifest.json"; then
+  echo "error fixture release server never became ready on port $port" >&2
+  exit 1
+fi
+
+ok "fixture release server serving $serve_root on $base_url"
+
+# --------------------------------------------------------------- assertions -
+
+home_dir="$work_dir/home"
+mkdir -p "$home_dir"
+
+# run_install <log-file> <home> <base-url> [VAR=value ...] [-- install-args ...]
+#
+# install.sh runs under `env -i` so the verifier's own environment cannot
+# influence the result. The seeded first element keeps the array non-empty:
+# expanding an empty array under `set -u` is an error in bash 3.2, which is
+# still what /bin/bash is on macOS.
+run_install() {
+  local log="$1" home="$2" base="$3"
+  shift 3
+
+  local envs=(LEMON_INSTALL_IGNORE_GLIBC=0)
+  while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do
+    envs+=("$1")
+    shift
+  done
+  if [ "${1:-}" = "--" ]; then
+    shift
+  fi
+
+  env -i \
+    HOME="$home" \
+    PATH="$PATH" \
+    SHELL=/bin/sh \
+    TMPDIR="${TMPDIR:-/tmp}" \
+    LEMON_INSTALL_BASE_URL="$base" \
+    "${envs[@]}" \
+    sh "$INSTALL_SH" "$@" >"$log" 2>&1
+}
+
+# 1. Unpinned stable install.
+if run_install "$work_dir/install-1.log" "$home_dir" "$base_url"; then
+  ok "unpinned stable install exited 0"
+else
+  fail "unpinned stable install failed (see below)"
+  cat "$work_dir/install-1.log" >&2
+fi
+
+if [ -d "$home_dir/.lemon/versions/9999.1.0" ]; then
+  ok "versions/9999.1.0 extracted"
+else
+  fail "versions/9999.1.0 was not extracted"
+fi
+
+current_target="$(readlink "$home_dir/.lemon/versions/current" 2>/dev/null || echo "")"
+if [ "$current_target" = "9999.1.0" ]; then
+  ok "versions/current points at 9999.1.0"
+else
+  fail "versions/current points at '${current_target:-missing}', expected 9999.1.0"
+fi
+
+launcher_target="$(readlink "$home_dir/.lemon/bin/lemon" 2>/dev/null || echo "")"
+if [ "$launcher_target" = "../versions/current/bin/lemon" ]; then
+  ok "bin/lemon is a relative symlink into versions/current"
+else
+  fail "bin/lemon points at '${launcher_target:-missing}'"
+fi
+
+if version_output="$(HOME="$home_dir" "$home_dir/.lemon/bin/lemon" version 2>&1)" &&
+  [ "$version_output" = "lemon 9999.1.0" ]; then
+  ok "bin/lemon resolves and runs: $version_output"
+else
+  fail "bin/lemon did not report the installed version: ${version_output:-no output}"
+fi
+
+leftover="$(find "$home_dir/.lemon/tmp" -mindepth 1 2>/dev/null | wc -l | tr -d ' ')"
+if [ "$leftover" = "0" ]; then
+  ok "download directory .lemon/tmp is empty after install"
+else
+  fail ".lemon/tmp still holds $leftover file(s) after install"
+fi
+
+if [ -z "$(find "$home_dir/.lemon/versions" -maxdepth 1 -name '*.partial' 2>/dev/null)" ]; then
+  ok "no .partial extraction directory left behind"
+else
+  fail ".partial extraction directory left behind"
+fi
+
+# 2. Idempotency: a second unpinned run must not re-extract.
+sentinel="$home_dir/.lemon/versions/9999.1.0/SENTINEL"
+touch "$sentinel"
+
+if run_install "$work_dir/install-2.log" "$home_dir" "$base_url"; then
+  if grep -q "already installed" "$work_dir/install-2.log" && [ -f "$sentinel" ]; then
+    ok "re-running is an idempotent no-op"
+  else
+    fail "re-run did not report an already-installed no-op"
+    cat "$work_dir/install-2.log" >&2
+  fi
+else
+  fail "re-running install.sh exited non-zero"
+  cat "$work_dir/install-2.log" >&2
+fi
+
+# 3. --force re-extracts over the existing version directory.
+if run_install "$work_dir/install-3.log" "$home_dir" "$base_url" -- --force; then
+  if [ ! -f "$sentinel" ] && [ -x "$home_dir/.lemon/versions/9999.1.0/bin/lemon" ]; then
+    ok "--force re-extracted the release"
+  else
+    fail "--force did not replace the version directory"
+  fi
+else
+  fail "--force install exited non-zero"
+  cat "$work_dir/install-3.log" >&2
+fi
+
+# 4. --verify boots the launcher and polls /healthz.
+if run_install "$work_dir/install-4.log" "$home_dir" "$base_url" -- --verify; then
+  if grep -q "answered /healthz" "$work_dir/install-4.log"; then
+    ok "--verify booted the installed launcher and reached /healthz"
+  else
+    fail "--verify did not report a successful health check"
+    cat "$work_dir/install-4.log" >&2
+  fi
+else
+  fail "--verify install exited non-zero"
+  cat "$work_dir/install-4.log" >&2
+fi
+
+# 5. Checksum mismatch aborts cleanly.
+if run_install "$work_dir/install-5.log" "$home_dir" "$base_url/corrupt"; then
+  fail "install.sh accepted a tarball whose checksum did not match the manifest"
+else
+  current_target="$(readlink "$home_dir/.lemon/versions/current" 2>/dev/null || echo "")"
+  if grep -q "checksum mismatch" "$work_dir/install-5.log" &&
+    [ ! -d "$home_dir/.lemon/versions/9999.3.0" ] &&
+    [ "$current_target" = "9999.1.0" ]; then
+    ok "checksum mismatch rejected without installing or flipping versions/current"
+  else
+    fail "checksum mismatch was rejected but left inconsistent state"
+    cat "$work_dir/install-5.log" >&2
+  fi
+fi
+
+# 6. Pinned install resolves through releases/download/v<version>/ and flips.
+if run_install "$work_dir/install-6.log" "$home_dir" "$base_url" LEMON_VERSION=9999.2.0; then
+  ok "pinned install of 9999.2.0 exited 0"
+else
+  fail "pinned install of 9999.2.0 failed"
+  cat "$work_dir/install-6.log" >&2
+fi
+
+if grep -q "releases/download/v9999.2.0" "$work_dir/http.log"; then
+  ok "pinned install requested the releases/download/v9999.2.0 URL shape"
+else
+  fail "pinned install did not use the pinned release URL shape"
+fi
+
+current_target="$(readlink "$home_dir/.lemon/versions/current" 2>/dev/null || echo "")"
+if [ "$current_target" = "9999.2.0" ]; then
+  ok "update round-trip flipped versions/current to 9999.2.0"
+else
+  fail "versions/current is '${current_target:-missing}' after the update round-trip"
+fi
+
+if [ -d "$home_dir/.lemon/versions/9999.1.0" ] && [ -d "$home_dir/.lemon/versions/9999.2.0" ]; then
+  ok "the previous version is retained alongside the new one"
+else
+  fail "the previous version was not retained"
+fi
+
+if version_output="$(HOME="$home_dir" "$home_dir/.lemon/bin/lemon" version 2>&1)" &&
+  [ "$version_output" = "lemon 9999.2.0" ]; then
+  ok "bin/lemon follows the flip: $version_output"
+else
+  fail "bin/lemon did not follow the flip: ${version_output:-no output}"
+fi
+
+# 7. A profile with no published artifact is refused.
+reject_home="$work_dir/home-reject"
+mkdir -p "$reject_home"
+
+if run_install "$work_dir/install-7.log" "$reject_home" "$base_url" LEMON_PROFILE=min; then
+  fail "install.sh installed a profile that is not published"
+else
+  if grep -q "no lemon_runtime_min artifact" "$work_dir/install-7.log"; then
+    ok "unpublished profile refused with the published set listed"
+  else
+    fail "unpublished profile refusal did not explain the published set"
+    cat "$work_dir/install-7.log" >&2
+  fi
+fi
+
+# 8. Non-stable channels require an explicit pin.
+if run_install "$work_dir/install-8.log" "$reject_home" "$base_url" LEMON_CHANNEL=preview; then
+  fail "install.sh accepted a non-stable channel without a pinned version"
+else
+  if grep -q "LEMON_VERSION" "$work_dir/install-8.log"; then
+    ok "non-stable channel without a pin refused with LEMON_VERSION guidance"
+  else
+    fail "non-stable channel refusal did not mention LEMON_VERSION"
+    cat "$work_dir/install-8.log" >&2
+  fi
+fi
+
+# 9. Unsupported platforms are refused. install.sh resolves `uname` through
+#    PATH, so a stub in front of PATH exercises the real detection branch.
+fake_bin="$work_dir/fakebin"
+mkdir -p "$fake_bin"
+cat > "$fake_bin/uname" <<'EOF'
+#!/bin/sh
+case "${1:-}" in
+  -m) echo sparc64 ;;
+  *) echo Plan9 ;;
+esac
+EOF
+chmod +x "$fake_bin/uname"
+
+if env -i \
+  HOME="$reject_home" \
+  PATH="$fake_bin:$PATH" \
+  SHELL=/bin/sh \
+  TMPDIR="${TMPDIR:-/tmp}" \
+  LEMON_INSTALL_BASE_URL="$base_url" \
+  sh "$INSTALL_SH" >"$work_dir/install-9.log" 2>&1; then
+  fail "install.sh installed on an unsupported platform"
+else
+  if grep -q "no prebuilt Lemon release" "$work_dir/install-9.log" &&
+    grep -q "docs/install.md" "$work_dir/install-9.log"; then
+    ok "unsupported platform refused with a pointer to the source install"
+  else
+    fail "unsupported platform refusal was not actionable"
+    cat "$work_dir/install-9.log" >&2
+  fi
+fi
+
+if [ ! -d "$reject_home/.lemon/versions/9999.1.0" ]; then
+  ok "refused installs left no release on disk"
+else
+  fail "a refused install extracted a release anyway"
+fi
+
+# 10. The documented entry point pipes the script into sh, so the shell reads
+#     install.sh from stdin. Prove the piped form installs too.
+piped_home="$work_dir/home-piped"
+mkdir -p "$piped_home"
+
+# shellcheck disable=SC2016  # $1 belongs to the inner shell, not this one
+if env -i \
+  HOME="$piped_home" \
+  PATH="$PATH" \
+  SHELL=/bin/sh \
+  TMPDIR="${TMPDIR:-/tmp}" \
+  LEMON_INSTALL_BASE_URL="$base_url" \
+  sh -c 'cat "$1" | sh' sh "$INSTALL_SH" >"$work_dir/install-10.log" 2>&1 &&
+  [ -d "$piped_home/.lemon/versions/9999.1.0" ]; then
+  ok "curl-to-sh form installs when the script is read from stdin"
+else
+  fail "the piped 'curl ... | sh' form did not install"
+  cat "$work_dir/install-10.log" >&2
+fi
+
+# 11. PATH handling: the rc file is only touched with --modify-path, and the
+#     edit is idempotent. `env -i` sets SHELL first, so a later SHELL= wins.
+path_home="$work_dir/home-path"
+mkdir -p "$path_home"
+
+if run_install "$work_dir/install-11.log" "$path_home" "$base_url" SHELL=/bin/zsh; then
+  if [ ! -e "$path_home/.zshrc" ] && grep -q 'export PATH=' "$work_dir/install-11.log"; then
+    ok "PATH line is printed without touching the shell rc file"
+  else
+    fail "install.sh edited the rc file without --modify-path, or printed no PATH line"
+    cat "$work_dir/install-11.log" >&2
+  fi
+else
+  fail "install into a fresh home for the PATH check failed"
+  cat "$work_dir/install-11.log" >&2
+fi
+
+if run_install "$work_dir/install-12.log" "$path_home" "$base_url" SHELL=/bin/zsh -- --modify-path &&
+  run_install "$work_dir/install-13.log" "$path_home" "$base_url" SHELL=/bin/zsh -- --modify-path; then
+  marker_count="$(grep -c 'added by the lemon installer' "$path_home/.zshrc" || true)"
+  if [ "$marker_count" = "1" ] && grep -q "$path_home/.lemon/bin" "$path_home/.zshrc"; then
+    ok "--modify-path appends the PATH line to ~/.zshrc exactly once"
+  else
+    fail "--modify-path wrote the marker $marker_count time(s) or the wrong path"
+  fi
+else
+  fail "--modify-path install exited non-zero"
+  cat "$work_dir/install-12.log" "$work_dir/install-13.log" >&2
+fi
+
+fish_home="$work_dir/home-fish"
+mkdir -p "$fish_home"
+
+if run_install "$work_dir/install-14.log" "$fish_home" "$base_url" SHELL=/usr/bin/fish; then
+  if grep -q "fish_add_path $fish_home/.lemon/bin" "$work_dir/install-14.log"; then
+    ok "fish shells are given fish_add_path guidance"
+  else
+    fail "fish PATH guidance did not use fish syntax"
+    cat "$work_dir/install-14.log" >&2
+  fi
+else
+  fail "install into a fresh home for the fish PATH check failed"
+  cat "$work_dir/install-14.log" >&2
+fi
+
+echo
+if [ "$failures" -ne 0 ]; then
+  echo "verify_install_script: $failures of $checks check(s) failed" >&2
+  exit 1
+fi
+
+echo "verified install.sh across $checks check(s)"
