@@ -3,35 +3,109 @@ set -euo pipefail
 
 usage() {
   cat >&2 <<'EOF'
-usage: scripts/verify_github_release_artifacts <tag-or-version> [download-directory]
+usage: scripts/verify_github_release_artifacts [--platform <tag>] <tag-or-version> [download-directory]
 
-Downloads a GitHub Release's Linux x86_64 Lemon artifacts plus manifest.json,
-then verifies file size, SHA-256, release boot, health, and support-bundle
-generation with scripts/verify_release_runtime_boot.
+Downloads a GitHub Release's manifest.json plus the tarballs for one
+platform, then verifies file size, SHA-256, release boot, health, and
+support-bundle generation with scripts/verify_release_runtime_boot.
 The release lookup and asset download retry by default; override with
 LEMON_RELEASE_VERIFY_ATTEMPTS and LEMON_RELEASE_VERIFY_SLEEP_SECONDS.
 
+Platform tags: linux-x86_64, linux-arm64, darwin-arm64 (default: detected
+from `uname`, i.e. the platform this script is running on).
+
 Examples:
   scripts/verify_github_release_artifacts v2026.05.0
-  scripts/verify_github_release_artifacts 2026.05.0 /tmp/lemon-release-download
+  scripts/verify_github_release_artifacts --platform linux-arm64 2026.05.0 /tmp/lemon-release-download
 EOF
   exit 2
 }
 
-if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
+detect_platform() {
+  case "$(uname -s)" in
+    Linux)
+      case "$(uname -m)" in
+        x86_64) echo "linux-x86_64" ;;
+        aarch64|arm64) echo "linux-arm64" ;;
+        *) echo "unknown-linux-$(uname -m)" ;;
+      esac
+      ;;
+    Darwin)
+      case "$(uname -m)" in
+        arm64) echo "darwin-arm64" ;;
+        *) echo "unknown-darwin-$(uname -m)" ;;
+      esac
+      ;;
+    *)
+      echo "unknown-$(uname -s)"
+      ;;
+  esac
+}
+
+# Platform -> release profiles, duplicated (with this cross-reference) from
+# the EXPECTED table in scripts/verify_release_artifacts: min+full on every
+# platform, sim_broadcast_platform is Linux-only.
+platform_profiles() {
+  case "$1" in
+    linux-x86_64|linux-arm64)
+      echo "lemon_runtime_min lemon_runtime_full sim_broadcast_platform"
+      ;;
+    darwin-arm64)
+      echo "lemon_runtime_min lemon_runtime_full"
+      ;;
+    *)
+      echo ""
+      ;;
+  esac
+}
+
+PLATFORM=""
+POSITIONAL=()
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --platform)
+      [ "$#" -ge 2 ] || usage
+      PLATFORM="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      ;;
+    --*)
+      usage
+      ;;
+    *)
+      POSITIONAL+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [ "${#POSITIONAL[@]}" -lt 1 ] || [ "${#POSITIONAL[@]}" -gt 2 ]; then
   usage
 fi
 
-TAG="$1"
+if [ -z "$PLATFORM" ]; then
+  PLATFORM="$(detect_platform)"
+fi
+
+PROFILES="$(platform_profiles "$PLATFORM")"
+if [ -z "$PROFILES" ]; then
+  echo "unsupported platform: $PLATFORM (expected linux-x86_64, linux-arm64, or darwin-arm64)" >&2
+  exit 2
+fi
+
+TAG="${POSITIONAL[0]}"
 case "$TAG" in
   v*) ;;
   *) TAG="v$TAG" ;;
 esac
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-DOWNLOAD_DIR="${2:-${TMPDIR:-/tmp}/lemon-release-download-${TAG#v}}"
+DOWNLOAD_DIR="${POSITIONAL[1]:-${TMPDIR:-/tmp}/lemon-release-download-${TAG#v}}"
 CALLER_PROVIDED_DIR=false
-if [ "$#" -eq 2 ]; then
+if [ "${#POSITIONAL[@]}" -eq 2 ]; then
   CALLER_PROVIDED_DIR=true
 fi
 ATTEMPTS="${LEMON_RELEASE_VERIFY_ATTEMPTS:-10}"
@@ -90,16 +164,18 @@ else
   mkdir -p "$DOWNLOAD_DIR"
 fi
 
+download_patterns=(--pattern "manifest.json")
+for profile in $PROFILES; do
+  download_patterns+=(--pattern "lemon-*-${PLATFORM}-${profile}.tar.gz")
+done
+
 downloaded=false
 for attempt in $(seq 1 "$ATTEMPTS"); do
   find "$DOWNLOAD_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 
   if gh release download "$TAG" \
     --dir "$DOWNLOAD_DIR" \
-    --pattern "manifest.json" \
-    --pattern "lemon-*-ubuntu-24.04-x86_64-lemon_runtime_min.tar.gz" \
-    --pattern "lemon-*-ubuntu-24.04-x86_64-lemon_runtime_full.tar.gz" \
-    --pattern "lemon-*-ubuntu-24.04-x86_64-sim_broadcast_platform.tar.gz"; then
+    "${download_patterns[@]}"; then
     downloaded=true
     break
   fi
@@ -115,6 +191,6 @@ if ! $downloaded; then
   exit 66
 fi
 
-"$ROOT/scripts/verify_release_runtime_boot" "$DOWNLOAD_DIR"
+"$ROOT/scripts/verify_release_runtime_boot" --platform "$PLATFORM" "$DOWNLOAD_DIR"
 
-echo "downloaded, verified, and booted GitHub Release artifacts for $TAG in $DOWNLOAD_DIR"
+echo "downloaded, verified, and booted GitHub Release artifacts for $TAG ($PLATFORM) in $DOWNLOAD_DIR"

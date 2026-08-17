@@ -1,12 +1,51 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [ "$#" -ne 1 ]; then
-  echo "usage: scripts/verify_release_artifacts <artifact-directory>" >&2
-  exit 2
-fi
+usage() {
+  cat >&2 <<'EOF'
+usage: scripts/verify_release_artifacts [--platform <tag>] <artifact-directory>
 
-ARTIFACT_DIR="$1"
+Verifies a manifest.json (schema 2) and the release tarballs it describes:
+  - manifest.json shape (schema, version, channel, commit, built_at, otp, elixir)
+  - per-artifact fields (file, profile, platform, os, arch, sha256, size, glibc_min)
+  - filename matches lemon-<version>-<channel>-<platform>-<profile>.tar.gz
+  - file exists on disk with the recorded size and SHA-256
+  - the full 8-artifact profile x platform matrix is present (or, with
+    --platform, only that platform's profiles)
+
+Platform tags: linux-x86_64, linux-arm64, darwin-arm64.
+EOF
+  exit 2
+}
+
+ARTIFACT_DIR=""
+PLATFORM_FILTER=""
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --platform)
+      [ "$#" -ge 2 ] || usage
+      PLATFORM_FILTER="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      ;;
+    --*)
+      usage
+      ;;
+    *)
+      if [ -n "$ARTIFACT_DIR" ]; then
+        usage
+      fi
+      ARTIFACT_DIR="$1"
+      shift
+      ;;
+  esac
+done
+
+[ -n "$ARTIFACT_DIR" ] || usage
+
 MANIFEST="$ARTIFACT_DIR/manifest.json"
 
 if [ ! -d "$ARTIFACT_DIR" ]; then
@@ -19,7 +58,7 @@ if [ ! -f "$MANIFEST" ]; then
   exit 2
 fi
 
-ARTIFACT_DIR="$ARTIFACT_DIR" python3 - <<'PY'
+ARTIFACT_DIR="$ARTIFACT_DIR" PLATFORM_FILTER="$PLATFORM_FILTER" python3 - <<'PY'
 import hashlib
 import json
 import os
@@ -27,19 +66,53 @@ import re
 import sys
 
 artifact_dir = os.environ["ARTIFACT_DIR"]
+platform_filter = os.environ["PLATFORM_FILTER"] or None
 manifest_path = os.path.join(artifact_dir, "manifest.json")
-required_profiles = {"lemon_runtime_min", "lemon_runtime_full", "sim_broadcast_platform"}
-platform_tag = "ubuntu-24.04-x86_64"
+
+# The full release matrix: min+full on all 3 platforms, sim_broadcast_platform
+# is Linux-only. This table is duplicated (with a cross-reference comment) in
+# scripts/verify_release_runtime_boot, which needs the same expected-count
+# logic without importing Python from a bash script.
+PROFILES = ("lemon_runtime_min", "lemon_runtime_full", "sim_broadcast_platform")
+PLATFORMS = ("linux-x86_64", "linux-arm64", "darwin-arm64")
+PLATFORM_OS_ARCH = {
+    "linux-x86_64": ("linux", "x86_64", "2.39"),
+    "linux-arm64": ("linux", "arm64", "2.39"),
+    "darwin-arm64": ("darwin", "arm64", None),
+}
+EXPECTED = {
+    (profile, platform)
+    for profile in PROFILES
+    for platform in PLATFORMS
+    if not (profile == "sim_broadcast_platform" and platform == "darwin-arm64")
+}
+
+if platform_filter is not None and platform_filter not in PLATFORMS:
+    print(f"error --platform must be one of {', '.join(PLATFORMS)}: {platform_filter!r}", file=sys.stderr)
+    sys.exit(2)
+
+required = {
+    (profile, platform)
+    for profile, platform in EXPECTED
+    if platform_filter is None or platform == platform_filter
+}
 
 with open(manifest_path, "r", encoding="utf-8") as handle:
     manifest = json.load(handle)
 
 errors = []
+schema = manifest.get("schema")
 artifacts = manifest.get("artifacts")
 version = manifest.get("version")
 channel = manifest.get("channel")
 commit = manifest.get("commit")
-seen_profiles = set()
+built_at = manifest.get("built_at")
+otp = manifest.get("otp")
+elixir = manifest.get("elixir")
+seen = set()
+
+if schema != 2:
+    errors.append(f"manifest.schema must be 2: {schema!r}")
 
 if not isinstance(version, str) or not version:
     errors.append("manifest.version must be a non-empty string")
@@ -51,8 +124,19 @@ if not isinstance(channel, str) or not channel:
 elif not re.fullmatch(r"[A-Za-z0-9._-]+", channel):
     errors.append(f"manifest.channel contains unsupported characters: {channel!r}")
 
-if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-fA-F]{7,64}", commit):
+if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-fA-F]{7,64}", commit or ""):
     errors.append("manifest.commit must be a 7-64 character hexadecimal Git commit")
+
+if not isinstance(built_at, str) or not re.fullmatch(
+    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", built_at or ""
+):
+    errors.append(f"manifest.built_at must be an ISO-8601 UTC timestamp: {built_at!r}")
+
+if not isinstance(otp, str) or not otp:
+    errors.append("manifest.otp must be a non-empty string")
+
+if not isinstance(elixir, str) or not elixir:
+    errors.append("manifest.elixir must be a non-empty string")
 
 if not isinstance(artifacts, list) or not artifacts:
     errors.append("manifest.artifacts must be a non-empty list")
@@ -76,20 +160,54 @@ for artifact in artifacts:
         continue
 
     filename_match = re.fullmatch(
-        rf"lemon-{re.escape(version or '')}-{re.escape(channel or '')}-{platform_tag}-(lemon_runtime_min|lemon_runtime_full|sim_broadcast_platform)\.tar\.gz",
+        rf"lemon-{re.escape(version or '')}-{re.escape(channel or '')}-"
+        rf"(linux-x86_64|linux-arm64|darwin-arm64)-"
+        rf"(lemon_runtime_min|lemon_runtime_full|sim_broadcast_platform)\.tar\.gz",
         filename,
     )
     if not filename_match:
         errors.append(
-            f"{filename}: artifact filename must match lemon-{version}-{channel}-{platform_tag}-<profile>.tar.gz"
+            f"{filename}: artifact filename must match "
+            f"lemon-{version}-{channel}-<platform>-<profile>.tar.gz"
         )
         continue
 
-    profile = filename_match.group(1)
-    if profile in seen_profiles:
-        errors.append(f"{filename}: duplicate artifact profile {profile}")
+    platform, profile = filename_match.group(1), filename_match.group(2)
+
+    if (profile, platform) not in EXPECTED:
+        errors.append(f"{filename}: unexpected profile/platform combination {profile}/{platform}")
         continue
-    seen_profiles.add(profile)
+
+    if (profile, platform) in seen:
+        errors.append(f"{filename}: duplicate artifact for {profile}/{platform}")
+        continue
+    seen.add((profile, platform))
+
+    if artifact.get("profile") != profile:
+        errors.append(f"{filename}: artifact.profile {artifact.get('profile')!r} does not match filename ({profile!r})")
+
+    if artifact.get("platform") != platform:
+        errors.append(f"{filename}: artifact.platform {artifact.get('platform')!r} does not match filename ({platform!r})")
+
+    expected_os, expected_arch, expected_glibc = PLATFORM_OS_ARCH[platform]
+
+    if artifact.get("os") != expected_os:
+        errors.append(f"{filename}: artifact.os {artifact.get('os')!r} does not match platform ({expected_os!r})")
+
+    if artifact.get("arch") != expected_arch:
+        errors.append(f"{filename}: artifact.arch {artifact.get('arch')!r} does not match platform ({expected_arch!r})")
+
+    glibc_min = artifact.get("glibc_min")
+    if expected_glibc is None:
+        if glibc_min is not None:
+            errors.append(f"{filename}: artifact.glibc_min must be absent for {platform}, got {glibc_min!r}")
+    elif glibc_min != expected_glibc:
+        errors.append(f"{filename}: artifact.glibc_min must be {expected_glibc!r} for {platform}, got {glibc_min!r}")
+
+    if platform_filter is not None and platform != platform_filter:
+        # Present in the manifest (describing the whole release) but not
+        # downloaded/available locally when checking a single platform.
+        continue
 
     if not isinstance(expected_sha, str) or len(expected_sha) != 64:
         errors.append(f"{filename}: sha256 must be a 64-character hex string")
@@ -121,16 +239,16 @@ for artifact in artifacts:
     if actual_size == expected_size and actual_sha == expected_sha.lower():
         print(f"ok {filename} sha256={actual_sha} size={actual_size}")
 
-missing_profiles = required_profiles - seen_profiles
-if missing_profiles:
-    errors.append(
-        "missing required release artifact profile(s): " + ", ".join(sorted(missing_profiles))
-    )
+missing = required - seen
+if missing:
+    missing_desc = ", ".join(f"{profile}/{platform}" for profile, platform in sorted(missing))
+    errors.append(f"missing required release artifact(s): {missing_desc}")
 
 if errors:
     for error in errors:
         print(f"error {error}", file=sys.stderr)
     sys.exit(1)
 
-print(f"verified {len(artifacts)} artifact(s) for Lemon {manifest['version']} ({manifest['channel']})")
+scope = f" for platform {platform_filter}" if platform_filter else ""
+print(f"verified {len(required)} artifact(s){scope} for Lemon {manifest.get('version')} ({manifest.get('channel')})")
 PY

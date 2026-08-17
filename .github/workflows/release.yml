@@ -4,15 +4,20 @@ name: Release
 #
 # Triggers:
 #   - push a tag matching `v*.*.*` (e.g. v2026.03.0)
-#   - manually dispatch with an existing tag input
+#   - manually dispatch with an existing tag input (defaults to a draft release,
+#     the dry-run mechanism ahead of a first real publish)
 #
 # Steps:
 #   1. Verify the tag matches CalVer (YYYY.MM.PATCH).
 #   2. Confirm mix.exs version matches the tag.
-#   3. Build release tarballs for each profile × platform matrix.
-#   4. Generate a manifest.json with version, channel, and SHA-256 checksums.
-#   5. Verify the assembled artifact directory before publishing.
-#   6. Create a GitHub Release and upload artifacts.
+#   3. Build release tarballs for each profile x platform matrix (8 artifacts:
+#      lemon_runtime_min/lemon_runtime_full on linux-x86_64/linux-arm64/darwin-arm64,
+#      sim_broadcast_platform on the two Linux platforms only) and boot-verify each
+#      on its native runner before upload.
+#   4. Generate a manifest.json (schema 2) with version, channel, commit, toolchain,
+#      and per-artifact checksums/platform metadata.
+#   5. Re-verify the assembled artifact directory before publishing.
+#   6. Create a GitHub Release and upload artifacts (+ install.sh once Phase B lands).
 #
 # See docs/release/versioning_and_channels.md for the versioning model.
 
@@ -29,6 +34,14 @@ on:
         description: "Release channel (stable, preview, nightly)"
         required: false
         default: "preview"
+      draft:
+        description: "Create a draft GitHub release (dry-run mechanism)"
+        required: false
+        default: "true"
+
+env:
+  OTP_VERSION: "28.5"
+  ELIXIR_VERSION: "1.19.5"
 
 jobs:
   # ── Validate tag and version consistency ────────────────────────────────────
@@ -49,8 +62,8 @@ jobs:
       - name: Setup BEAM
         uses: erlef/setup-beam@v1
         with:
-          otp-version: "28.5"
-          elixir-version: "1.19.5"
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
 
       - name: Install deps (minimal)
         run: mix deps.get --only prod
@@ -88,7 +101,7 @@ jobs:
 
   # ── Build release artifacts ──────────────────────────────────────────────────
   build:
-    name: Build ${{ matrix.profile }} (${{ matrix.os }})
+    name: Build ${{ matrix.profile }} (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
     needs: validate
     timeout-minutes: 30
@@ -96,12 +109,31 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        profile:
-          - lemon_runtime_min
-          - lemon_runtime_full
-          - sim_broadcast_platform
-        os:
-          - ubuntu-24.04
+        include:
+          - os: ubuntu-24.04
+            platform: linux-x86_64
+            profile: lemon_runtime_min
+          - os: ubuntu-24.04
+            platform: linux-x86_64
+            profile: lemon_runtime_full
+          - os: ubuntu-24.04
+            platform: linux-x86_64
+            profile: sim_broadcast_platform
+          - os: ubuntu-24.04-arm
+            platform: linux-arm64
+            profile: lemon_runtime_min
+          - os: ubuntu-24.04-arm
+            platform: linux-arm64
+            profile: lemon_runtime_full
+          - os: ubuntu-24.04-arm
+            platform: linux-arm64
+            profile: sim_broadcast_platform
+          - os: macos-15
+            platform: darwin-arm64
+            profile: lemon_runtime_min
+          - os: macos-15
+            platform: darwin-arm64
+            profile: lemon_runtime_full
 
     env:
       MIX_ENV: prod
@@ -114,14 +146,23 @@ jobs:
         with:
           ref: ${{ github.event.inputs.tag || github.ref_name }}
 
+      # erlef/setup-beam publishes precompiled OTP/Elixir for macOS runners
+      # (in addition to Linux/Windows) as of the versions pinned here, so one
+      # setup step covers every runner in the matrix. If a future OTP/Elixir
+      # bump ever drops macOS precompiled support, the fallback is installing
+      # via `mise install` against this repo's .tool-versions (already pinned
+      # to the same 28.5 / 1.19.5-otp-28), not Homebrew (its formulae track
+      # different, unpinned versions).
       - name: Setup BEAM
         uses: erlef/setup-beam@v1
         with:
-          otp-version: "28.5"
-          elixir-version: "1.19.5"
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
 
+      # Both lemon_runtime_full and sim_broadcast_platform bundle lemon_sim_ui,
+      # so both need its npm-built, digested assets.
       - name: Setup Node
-        if: matrix.profile == 'sim_broadcast_platform'
+        if: matrix.profile != 'lemon_runtime_min'
         uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -134,17 +175,34 @@ jobs:
           path: |
             deps
             _build
-          key: ${{ runner.os }}-mix-release-${{ hashFiles('mix.lock') }}-${{ matrix.profile }}
+          key: ${{ matrix.platform }}-mix-release-${{ hashFiles('mix.lock') }}-${{ matrix.profile }}
           restore-keys: |
-            ${{ runner.os }}-mix-release-${{ hashFiles('mix.lock') }}-
-            ${{ runner.os }}-mix-release-
+            ${{ matrix.platform }}-mix-release-${{ hashFiles('mix.lock') }}-
+            ${{ matrix.platform }}-mix-release-
 
       - name: Install deps
         run: mix deps.get --only prod
 
       - name: Build Sim UI assets
-        if: matrix.profile == 'sim_broadcast_platform'
+        if: matrix.profile != 'lemon_runtime_min'
         run: mix sim_ui.assets.deploy
+
+      # lemon_web ships its static assets checked into priv/static with no
+      # npm/esbuild pipeline of its own; it only needs a checksum digest so
+      # cache_static_manifest (config/prod.exs) has a manifest to read.
+      # `--app` is required: at the umbrella root, a bare `mix phx.digest <path>`
+      # re-runs per child app with that app as cwd, fails on the relative path in
+      # all of them, and still exits 0 — producing no manifest. Neither digest
+      # task fails loudly, hence the explicit manifest assertions below.
+      - name: Digest lemon_web assets
+        if: matrix.profile == 'lemon_runtime_full'
+        run: |
+          mix 'do' --app lemon_web phx.digest
+          test -f apps/lemon_web/priv/static/cache_manifest.json
+
+      - name: Assert Sim UI digest manifest
+        if: matrix.profile != 'lemon_runtime_min'
+        run: test -f apps/lemon_sim_ui/priv/static/cache_manifest.json
 
       - name: Compile (prod)
         run: mix compile
@@ -158,30 +216,250 @@ jobs:
           VERSION="${{ needs.validate.outputs.version }}"
           CHANNEL="${{ needs.validate.outputs.channel }}"
           PROFILE="${{ matrix.profile }}"
-          OS_TAG="ubuntu-24.04-x86_64"
-          ARTIFACT_NAME="lemon-${VERSION}-${CHANNEL}-${OS_TAG}-${PROFILE}.tar.gz"
+          PLATFORM="${{ matrix.platform }}"
+          ARTIFACT_NAME="lemon-${VERSION}-${CHANNEL}-${PLATFORM}-${PROFILE}.tar.gz"
 
           # Create tarball of the release directory
           tar -czf "$ARTIFACT_NAME" \
             -C "./_build/prod/rel/$PROFILE" .
 
-          SHA256=$(sha256sum "$ARTIFACT_NAME" | awk '{print $1}')
+          if command -v sha256sum >/dev/null 2>&1; then
+            SHA256=$(sha256sum "$ARTIFACT_NAME" | awk '{print $1}')
+          else
+            SHA256=$(shasum -a 256 "$ARTIFACT_NAME" | awk '{print $1}')
+          fi
+
           echo "artifact_name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
           echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
           echo "Artifact: $ARTIFACT_NAME  SHA256: $SHA256"
 
+      - name: Boot-verify artifact on native runner
+        run: |
+          scripts/verify_release_runtime_boot \
+            --single "${{ steps.package.outputs.artifact_name }}" \
+            --profile "${{ matrix.profile }}"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: release-${{ matrix.profile }}-${{ matrix.os }}
+          name: release-${{ matrix.profile }}-${{ matrix.platform }}
           path: ${{ steps.package.outputs.artifact_name }}
           retention-days: 30
+
+  # ── Multi-arch container image ───────────────────────────────────────────────
+  # Each architecture is built natively on its own runner and pushed by digest;
+  # docker-merge assembles the manifest list and is the only step that creates
+  # tags, so a failed smoke test leaves the previous `latest`/`<channel>` intact.
+  docker-build:
+    name: Docker ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    needs: validate
+    timeout-minutes: 60
+
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+            arch: amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            arch: arm64
+
+    env:
+      IMAGE_NAME: ghcr.io/z80dev/lemon
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.runtime
+          platforms: ${{ matrix.platform }}
+          provenance: false
+          sbom: false
+          build-args: |
+            LEMON_GIT_SHA=${{ github.sha }}
+          cache-from: type=gha,scope=docker-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=docker-${{ matrix.arch }}
+          outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+
+      # Runs before any tag exists, against the untagged digest that was just
+      # pushed. Env mirrors scripts/verify_release_runtime_boot: PHX_SERVER, HOME
+      # and LEMON_STORE_PATH are baked into the image, and the entrypoint would
+      # generate the two secrets below, but passing them explicitly keeps them in
+      # the container config so `docker exec` sees them too (config/runtime.exs
+      # calls System.fetch_env! for LEMON_WEB_SECRET_KEY_BASE on every entry).
+      # Sim-UI vars are deliberately absent: setting LEMON_SIM_UI_SECRET_KEY_BASE
+      # switches that endpoint on and drags in its whole required env block.
+      - name: Container smoke (amd64)
+        if: matrix.arch == 'amd64'
+        env:
+          IMAGE_REF: ${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+
+          docker run -d --name lemon-smoke \
+            -p 127.0.0.1:4040:4040 \
+            -p 127.0.0.1:4080:4080 \
+            -e LEMON_SECRETS_MASTER_KEY=container-smoke-dummy-key-32char \
+            -e LEMON_WEB_SECRET_KEY_BASE=container_smoke_secret_key_base_container_smoke_secret_key_base_x \
+            -e LEMON_GATEWAY_NODE_COOKIE=container-smoke-cookie \
+            "$IMAGE_REF"
+
+          wait_for() {
+            url="$1"
+            label="$2"
+            for _ in $(seq 1 60); do
+              if curl -fsS --max-time 2 "$url" >/dev/null 2>&1; then
+                echo "ok $label"
+                return 0
+              fi
+              if [ "$(docker inspect -f '{{.State.Running}}' lemon-smoke)" != "true" ]; then
+                echo "::error::container exited before $label became healthy"
+                return 1
+              fi
+              sleep 2
+            done
+            echo "::error::timed out waiting for $label at $url"
+            return 1
+          }
+
+          wait_for http://127.0.0.1:4040/healthz "control plane /healthz"
+          wait_for http://127.0.0.1:4080/healthz "lemon_web /healthz"
+
+          # pid 1 is the BEAM, and it must not be root (the entrypoint drops
+          # privileges with gosu; `docker exec` itself still enters as root).
+          docker exec lemon-smoke grep -q '^Uid:[[:space:]]*10001' /proc/1/status
+
+          # The release carries the commit it was built from, same assertion the
+          # tarball jobs make via scripts/verify_release_runtime_boot.
+          docker exec lemon-smoke /app/bin/lemon_runtime_full eval \
+            'IO.puts(LemonCore.BuildInfo.current().git.commit)' | grep -q "${GITHUB_SHA}"
+
+          # Digested assets: the release must not ship without them.
+          docker exec lemon-smoke sh -c \
+            'test -f /app/lib/lemon_web-*/priv/static/cache_manifest.json'
+          if docker logs lemon-smoke 2>&1 | grep -q "Could not warm up static assets"; then
+            echo "::error::release booted without digested static assets"
+            exit 1
+          fi
+
+          # Survives SIGTERM and comes back on the same volume.
+          docker restart lemon-smoke
+          wait_for http://127.0.0.1:4040/healthz "control plane /healthz after restart"
+
+      - name: Dump container logs on failure
+        if: failure() && matrix.arch == 'amd64'
+        run: docker logs lemon-smoke || true
+
+      - name: Remove smoke container
+        if: always() && matrix.arch == 'amd64'
+        run: docker rm -f lemon-smoke || true
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-digest-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # ── Merge per-arch digests into one tagged manifest list ─────────────────────
+  docker-merge:
+    name: Docker manifest
+    runs-on: ubuntu-24.04
+    needs: [validate, docker-build]
+    timeout-minutes: 15
+
+    permissions:
+      contents: read
+      packages: write
+
+    env:
+      IMAGE_NAME: ghcr.io/z80dev/lemon
+
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: docker-digest-*
+          merge-multiple: true
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push manifest list
+        working-directory: /tmp/digests
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          CHANNEL: ${{ needs.validate.outputs.channel }}
+        run: |
+          set -euo pipefail
+
+          tags="-t ${IMAGE_NAME}:${VERSION} -t ${IMAGE_NAME}:${CHANNEL}"
+          if [ "$CHANNEL" = "stable" ]; then
+            tags="$tags -t ${IMAGE_NAME}:latest"
+          fi
+
+          sources=""
+          for digest in *; do
+            sources="$sources ${IMAGE_NAME}@sha256:${digest}"
+          done
+          [ -n "$sources" ] || { echo "::error::no digests to merge"; exit 1; }
+
+          # shellcheck disable=SC2086
+          docker buildx imagetools create $tags $sources
+
+      - name: Inspect published manifest
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect "${IMAGE_NAME}:${VERSION}" | tee /tmp/manifest.txt
+          grep -q "linux/amd64" /tmp/manifest.txt
+          grep -q "linux/arm64" /tmp/manifest.txt
 
   # ── Assemble manifest and publish GitHub release ─────────────────────────────
   publish:
     name: Publish release
     runs-on: ubuntu-latest
-    needs: [validate, build]
+    needs: [validate, build, docker-merge]
     permissions:
       contents: write
 
@@ -200,33 +478,66 @@ jobs:
 
       - name: Generate manifest.json
         run: |
-          VERSION="${{ needs.validate.outputs.version }}"
-          CHANNEL="${{ needs.validate.outputs.channel }}"
-          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           export TIMESTAMP
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
           cd release-artifacts
           python3 - <<'PYEOF'
-          import json, hashlib, os, glob, sys
+          import json, hashlib, os, glob, re, sys
 
           version = os.environ['VERSION']
           channel = os.environ['CHANNEL']
           timestamp = os.environ['TIMESTAMP']
           commit = os.environ['COMMIT']
+          otp = os.environ['OTP_VERSION']
+          elixir = os.environ['ELIXIR_VERSION']
+
+          platform_os_arch = {
+            'linux-x86_64': ('linux', 'x86_64', '2.39'),
+            'linux-arm64': ('linux', 'arm64', '2.39'),
+            'darwin-arm64': ('darwin', 'arm64', None),
+          }
+          name_re = re.compile(
+            r'^lemon-' + re.escape(version) + r'-' + re.escape(channel) + r'-'
+            r'(linux-x86_64|linux-arm64|darwin-arm64)-'
+            r'(lemon_runtime_min|lemon_runtime_full|sim_broadcast_platform)\.tar\.gz$'
+          )
 
           artifacts = []
           for path in glob.glob('*.tar.gz'):
+            match = name_re.fullmatch(path)
+            if not match:
+              print(f'::error::unrecognized release artifact filename: {path}', file=sys.stderr)
+              sys.exit(1)
+            platform, profile = match.group(1), match.group(2)
+            os_name, arch, glibc_min = platform_os_arch[platform]
+
             with open(path, 'rb') as f:
               sha256 = hashlib.sha256(f.read()).hexdigest()
             size = os.path.getsize(path)
-            artifacts.append({'file': path, 'sha256': sha256, 'size': size})
+
+            entry = {
+              'file': path,
+              'profile': profile,
+              'platform': platform,
+              'os': os_name,
+              'arch': arch,
+              'sha256': sha256,
+              'size': size,
+            }
+            if glibc_min is not None:
+              entry['glibc_min'] = glibc_min
+            artifacts.append(entry)
 
           manifest = {
+            'schema': 2,
             'version': version,
             'channel': channel,
             'commit': commit,
             'built_at': timestamp,
-            'artifacts': sorted(artifacts, key=lambda a: a['file'])
+            'otp': otp,
+            'elixir': elixir,
+            'artifacts': sorted(artifacts, key=lambda a: a['file']),
           }
           with open('manifest.json', 'w') as f:
             json.dump(manifest, f, indent=2)
@@ -236,12 +547,16 @@ jobs:
           VERSION: ${{ needs.validate.outputs.version }}
           CHANNEL: ${{ needs.validate.outputs.channel }}
           COMMIT: ${{ github.sha }}
+          OTP_VERSION: ${{ env.OTP_VERSION }}
+          ELIXIR_VERSION: ${{ env.ELIXIR_VERSION }}
 
       - name: Verify assembled release artifacts
         run: scripts/verify_release_artifacts release-artifacts
 
-      - name: Boot and verify assembled release artifacts
-        run: scripts/verify_release_runtime_boot release-artifacts
+      # Full re-verify (checksums + boot) for one platform here; each artifact
+      # already boot-verified on its own native runner in the build job above.
+      - name: Boot and verify Linux x86_64 release artifacts
+        run: scripts/verify_release_runtime_boot --platform linux-x86_64 release-artifacts
 
       - name: Extract changelog section
         id: changelog
@@ -255,6 +570,34 @@ jobs:
             echo "NOTES_EOF"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Determine draft flag
+        id: draft
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "value=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${{ github.event.inputs.draft || 'true' }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Determine release file list
+        id: files
+        run: |
+          FILES="release-artifacts/*.tar.gz
+          release-artifacts/manifest.json"
+
+          # install.sh lands in Phase B; guard so this workflow keeps working
+          # against tags cut before it exists.
+          if [ -f install.sh ]; then
+            FILES="$FILES
+          install.sh"
+          fi
+
+          {
+            echo "list<<FILES_EOF"
+            echo "$FILES"
+            echo "FILES_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -262,7 +605,6 @@ jobs:
           name: "Lemon ${{ needs.validate.outputs.version }} (${{ needs.validate.outputs.channel }})"
           body: ${{ steps.changelog.outputs.notes }}
           prerelease: ${{ needs.validate.outputs.channel != 'stable' }}
-          files: |
-            release-artifacts/*.tar.gz
-            release-artifacts/manifest.json
+          draft: ${{ steps.draft.outputs.value == 'true' }}
+          files: ${{ steps.files.outputs.list }}
           fail_on_unmatched_files: true

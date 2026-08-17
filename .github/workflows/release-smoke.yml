@@ -20,8 +20,11 @@ on:
       - ".dockerignore"
       - ".github/workflows/release-smoke.yml"
       - ".github/workflows/release.yml"
+      - "rel/overlays/bin/lemon"
       - "scripts/verify_release_artifacts"
       - "scripts/verify_release_runtime_boot"
+      - "install.sh"
+      - "scripts/verify_install_script"
   schedule:
     # Weekly on Monday at 06:00 UTC
     - cron: "0 6 * * 1"
@@ -174,6 +177,127 @@ jobs:
             _build/prod/rel/${{ matrix.profile }}/tmp/log/
             ~/.lemon/config.toml
           retention-days: 7
+
+  overlay-shim-smoke:
+    name: Overlay shim smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    # Isolate this job from the workflow-level env: it exercises the shim's
+    # own cookie/secret-key-base generation, which only fires when unset.
+    env:
+      LEMON_WEB_SECRET_KEY_BASE: ""
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-24.04
+          - macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Shellcheck overlay shim
+        run: shellcheck rel/overlays/bin/lemon
+
+      # erlef/setup-beam publishes precompiled OTP/Elixir for macOS runners
+      # too (see .github/workflows/release.yml for the fallback note if this
+      # ever stops being true).
+      - name: Setup BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28.5"
+          elixir-version: "1.19.5"
+
+      - name: Cache Mix deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ matrix.os }}-mix-release-${{ hashFiles('mix.lock') }}-lemon_runtime_min
+          restore-keys: |
+            ${{ matrix.os }}-mix-release-${{ hashFiles('mix.lock') }}-
+            ${{ matrix.os }}-mix-release-
+
+      - name: Install deps
+        run: mix deps.get --only prod
+
+      - name: Compile (prod)
+        run: mix compile
+
+      - name: Build release
+        run: mix release lemon_runtime_min --overwrite
+
+      - name: Smoke the overlay shim
+        env:
+          HOME: ${{ runner.temp }}/lemon-shim-home
+        run: |
+          mkdir -p "$HOME"
+
+          RELEASE_DIR="_build/prod/rel/lemon_runtime_min"
+          SHIM="$RELEASE_DIR/bin/lemon"
+          test -x "$SHIM"
+
+          "$SHIM" --help > /dev/null
+
+          version_output="$("$SHIM" version)"
+          echo "reported version: $version_output"
+          [ -n "$version_output" ]
+
+          "$SHIM" daemon
+
+          status_ok=0
+          for _attempt in $(seq 1 20); do
+            if "$SHIM" status; then
+              status_ok=1
+              break
+            fi
+            sleep 1
+          done
+          [ "$status_ok" -eq 1 ]
+
+          test -f "$HOME/.lemon/cookie"
+          test -f "$HOME/.lemon/env"
+          test -f "$HOME/.lemon/run/lemon.pid"
+          test -f "$HOME/.lemon/run/lemon.root"
+          grep -q LEMON_WEB_SECRET_KEY_BASE "$HOME/.lemon/env"
+
+          # macOS `stat` has no GNU -c; fall back to BSD -f.
+          cookie_perms="$(stat -c '%a' "$HOME/.lemon/cookie" 2>/dev/null || stat -f '%Lp' "$HOME/.lemon/cookie")"
+          env_perms="$(stat -c '%a' "$HOME/.lemon/env" 2>/dev/null || stat -f '%Lp' "$HOME/.lemon/env")"
+          [ "$cookie_perms" = "600" ]
+          [ "$env_perms" = "600" ]
+
+          "$SHIM" stop
+
+          test ! -f "$HOME/.lemon/run/lemon.pid"
+
+          echo "overlay shim smoke passed"
+
+      - name: Collect logs on failure
+        if: failure()
+        env:
+          HOME: ${{ runner.temp }}/lemon-shim-home
+        run: |
+          LOG_DIR="_build/prod/rel/lemon_runtime_min/tmp/log"
+          if [ -d "$LOG_DIR" ]; then
+            echo "=== Release logs ==="
+            cat "$LOG_DIR"/*.log 2>/dev/null || echo "(no *.log files found)"
+          fi
+          echo "=== ~/.lemon/run ==="
+          ls -la "$HOME/.lemon/run" 2>/dev/null || true
+
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: overlay-shim-smoke-logs-${{ matrix.os }}-${{ github.run_id }}
+          path: |
+            _build/prod/rel/lemon_runtime_min/tmp/log/
+          retention-days: 7
+          if-no-files-found: ignore
 
   sim-container-smoke:
     name: Sim broadcast container
@@ -412,3 +536,35 @@ jobs:
       - name: Stop hosted test server
         if: always()
         run: kill "$HOSTED_SERVER_PID" 2>/dev/null || true
+
+  install-script:
+    name: Install script (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-24.04
+          - macos-15
+
+    # The installer must be exercised with the environment a real user has,
+    # not this workflow's MIX_ENV/LEMON_* smoke settings; the verifier runs
+    # install.sh under `env -i` and this override keeps the job honest.
+    env:
+      MIX_ENV: ""
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Both runner images ship python3; setup-python makes the installer's
+      # manifest-parsing prerequisite explicit, matching docs/install.md.
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify install.sh against a fixture release
+        run: scripts/verify_install_script
