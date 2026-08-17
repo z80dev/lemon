@@ -10,6 +10,12 @@ defmodule CodingAgent.Tools.ExecuteCode.Config do
 
   The allowlist is fixed at compile time: config may *narrow* it but never widen
   it, so no configuration can hand a script `bash`, `write`, or `edit`.
+
+  `kernel_mode` and the kernel bounds freeze the persistent-interpreter
+  contract: only an explicit "session" selects session mode and anything
+  unrecognized stays `per_call`, so a config mistake can never silently enable
+  persistence. The bounds are normalized here for the session path; until that
+  path lands every run still executes per-call.
   """
 
   @rpc_allowlist ~w(read grep find ls webfetch)
@@ -18,6 +24,10 @@ defmodule CodingAgent.Tools.ExecuteCode.Config do
   @default_max_rpc_calls 100
   @default_max_rpc_result_bytes 5_242_880
   @default_max_output_bytes 50_000
+  @default_kernel_mode "per_call"
+  @default_kernel_idle_timeout_ms 1_800_000
+  @default_max_live_kernels 16
+  @default_max_queued_cells_per_kernel 8
 
   @type t :: %__MODULE__{
           enabled: boolean(),
@@ -26,8 +36,19 @@ defmodule CodingAgent.Tools.ExecuteCode.Config do
           max_rpc_calls: pos_integer(),
           max_rpc_result_bytes: pos_integer(),
           max_output_bytes: pos_integer(),
+          kernel_mode: kernel_mode(),
+          kernel_idle_timeout_ms: pos_integer(),
+          max_live_kernels: pos_integer(),
+          max_queued_cells_per_kernel: pos_integer(),
           tools: [String.t()]
         }
+
+  @typedoc """
+  `"per_call"` (default): every script runs in a fresh process. `"session"`:
+  scripts share a persistent interpreter. Normalization maps every other
+  spelling to `"per_call"`.
+  """
+  @type kernel_mode :: String.t()
 
   defstruct enabled: false,
             python_path: nil,
@@ -35,6 +56,10 @@ defmodule CodingAgent.Tools.ExecuteCode.Config do
             max_rpc_calls: @default_max_rpc_calls,
             max_rpc_result_bytes: @default_max_rpc_result_bytes,
             max_output_bytes: @default_max_output_bytes,
+            kernel_mode: @default_kernel_mode,
+            kernel_idle_timeout_ms: @default_kernel_idle_timeout_ms,
+            max_live_kernels: @default_max_live_kernels,
+            max_queued_cells_per_kernel: @default_max_queued_cells_per_kernel,
             tools: @rpc_allowlist
 
   @doc """
@@ -67,6 +92,15 @@ defmodule CodingAgent.Tools.ExecuteCode.Config do
       max_rpc_result_bytes:
         parse_positive_integer(ec["max_rpc_result_bytes"], @default_max_rpc_result_bytes),
       max_output_bytes: parse_positive_integer(ec["max_output_bytes"], @default_max_output_bytes),
+      kernel_mode: parse_kernel_mode(ec["kernel_mode"]),
+      kernel_idle_timeout_ms:
+        parse_positive_integer(ec["kernel_idle_timeout_ms"], @default_kernel_idle_timeout_ms),
+      max_live_kernels: parse_positive_integer(ec["max_live_kernels"], @default_max_live_kernels),
+      max_queued_cells_per_kernel:
+        parse_positive_integer(
+          ec["max_queued_cells_per_kernel"],
+          @default_max_queued_cells_per_kernel
+        ),
       tools: parse_tools(ec["tools"])
     }
   end
@@ -110,6 +144,12 @@ defmodule CodingAgent.Tools.ExecuteCode.Config do
   end
 
   defp parse_string_list(_), do: []
+
+  # Only an explicit "session" (string or atom spelling) selects session mode.
+  # Everything else — typos, booleans, integers — stays per_call so invalid
+  # config can never silently enable persistence.
+  defp parse_kernel_mode(value) when value in ["session", :session], do: "session"
+  defp parse_kernel_mode(_value), do: @default_kernel_mode
 
   defp parse_boolean(nil, default), do: default
   defp parse_boolean(value, _default) when value in [true, "true", "1", 1], do: true

@@ -11,15 +11,20 @@ defmodule CodingAgent.Tools.ExecuteCodeSchemaTest do
   @moduletag :tmp_dir
 
   describe "tool/2 schema" do
-    test "names, labels and requires a script", %{tmp_dir: cwd} do
+    test "names, labels, required script, and the additive reset parameter", %{tmp_dir: cwd} do
       tool = ExecuteCode.tool(cwd, enabled_opts())
 
       assert tool.name == "execute_code"
       assert tool.label == "Execute Code"
       assert tool.parameters["required"] == ["script"]
-      assert Map.keys(tool.parameters["properties"]) |> Enum.sort() == ["script", "timeout_ms"]
+
+      assert Map.keys(tool.parameters["properties"]) |> Enum.sort() ==
+               ["reset", "script", "timeout_ms"]
+
       assert tool.parameters["properties"]["script"]["type"] == "string"
       assert tool.parameters["properties"]["timeout_ms"]["type"] == "integer"
+      assert tool.parameters["properties"]["reset"]["type"] == "boolean"
+      assert tool.parameters["properties"]["reset"]["default"] == false
     end
 
     test "the description lists every enabled helper and the limits", %{tmp_dir: cwd} do
@@ -30,6 +35,18 @@ defmodule CodingAgent.Tools.ExecuteCodeSchemaTest do
       assert tool.description =~ "9 tool calls"
       assert tool.description =~ "only what the script prints to stdout is returned"
       assert tool.description =~ "offset by 1"
+    end
+
+    test "the description states the resolved kernel mode", %{tmp_dir: cwd} do
+      per_call = ExecuteCode.tool(cwd, enabled_opts())
+
+      assert per_call.description =~ "Kernel mode: per_call"
+      refute per_call.description =~ "Kernel mode: session"
+
+      session = ExecuteCode.tool(cwd, enabled_opts(%{kernel_mode: "session"}))
+
+      assert session.description =~ "Kernel mode: session"
+      assert session.description =~ "reset=true"
     end
 
     test "a narrowed allowlist omits the other helpers", %{tmp_dir: cwd} do
@@ -81,6 +98,20 @@ defmodule CodingAgent.Tools.ExecuteCodeSchemaTest do
 
       assert {:error, "Missing required parameter: script"} =
                ExecuteCode.execute("call-1", %{"script" => ""}, nil, nil, cwd, enabled_opts())
+    end
+
+    test "a non-boolean reset parameter is rejected before anything runs", %{tmp_dir: cwd} do
+      for value <- ["true", 1, [], %{}] do
+        assert {:error, "reset must be a boolean"} =
+                 ExecuteCode.execute(
+                   "call-1",
+                   %{"script" => "print(1)", "reset" => value},
+                   nil,
+                   nil,
+                   cwd,
+                   enabled_opts()
+                 )
+      end
     end
 
     test "a configured python_path that does not exist names the path", %{tmp_dir: cwd} do
@@ -475,6 +506,37 @@ defmodule CodingAgent.Tools.ExecuteCodeTest do
       path = result.details.full_output_path
       assert File.exists?(path)
       assert File.stat!(path).size > 50_000
+    end
+  end
+
+  describe "reset parameter in per-call mode" do
+    test "a boolean reset runs unchanged and keeps the per-call detail shape", %{tmp_dir: cwd} do
+      for reset <- [true, false] do
+        result =
+          ExecuteCode.execute(
+            "call-1",
+            %{"script" => "print(21 * 2)", "reset" => reset},
+            nil,
+            nil,
+            cwd,
+            opts()
+          )
+
+        assert text(result) =~ "42"
+        assert result.details.exit_code == 0
+
+        # The persistent-kernel detail fields land with the session path; a
+        # per-call result keeps exactly its existing shape.
+        assert Map.keys(result.details) |> Enum.sort() == [
+                 :exit_code,
+                 :rpc_bytes,
+                 :rpc_calls,
+                 :rpc_denied,
+                 :rpc_errors,
+                 :rpc_tools,
+                 :truncated
+               ]
+      end
     end
   end
 

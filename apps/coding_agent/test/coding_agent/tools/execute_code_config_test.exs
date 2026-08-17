@@ -15,6 +15,10 @@ defmodule CodingAgent.Tools.ExecuteCodeConfigTest do
       assert config.max_rpc_calls == 100
       assert config.max_rpc_result_bytes == 5_242_880
       assert config.max_output_bytes == 50_000
+      assert config.kernel_mode == "per_call"
+      assert config.kernel_idle_timeout_ms == 1_800_000
+      assert config.max_live_kernels == 16
+      assert config.max_queued_cells_per_kernel == 8
       assert config.tools == Config.allowlist()
     end
 
@@ -102,6 +106,33 @@ defmodule CodingAgent.Tools.ExecuteCodeConfigTest do
 
       assert Config.load(@cwd, settings(%{python_path: "bin/py"})).python_path ==
                Path.join(@cwd, "bin/py")
+    end
+  end
+
+  describe "load/2 kernel settings" do
+    test "an explicit session mode parses from string and atom spellings" do
+      assert load_field(:kernel_mode, "session") == "session"
+      assert load_field(:kernel_mode, :session) == "session"
+      assert load_field(:kernel_mode, "per_call") == "per_call"
+    end
+
+    test "an unrecognized mode never selects session" do
+      for value <- ["persistent", "SESSION", "", true, 42, []] do
+        assert load_field(:kernel_mode, value) == "per_call"
+      end
+    end
+
+    test "kernel bounds coerce integer strings and clamp non-positive values to 1" do
+      assert load_field(:kernel_idle_timeout_ms, "900000") == 900_000
+      assert load_field(:max_live_kernels, "4") == 4
+      assert load_field(:max_queued_cells_per_kernel, 2) == 2
+      assert load_field(:max_live_kernels, 0) == 1
+    end
+
+    test "invalid kernel bounds keep their defaults" do
+      assert load_field(:kernel_idle_timeout_ms, "abc") == 1_800_000
+      assert load_field(:max_live_kernels, nil) == 16
+      assert load_field(:max_queued_cells_per_kernel, []) == 8
     end
   end
 

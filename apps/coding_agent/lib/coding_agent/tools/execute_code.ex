@@ -41,7 +41,10 @@ defmodule CodingAgent.Tools.ExecuteCode do
   would need a python interpreter shipped to WASM — out of scope for v1.
   Likewise docker/ssh placement of the workspace: the `:script_runner` seam and
   the file protocol are designed for it (bind-mount the workspace), but v1 runs
-  locally only.
+  locally only. Persistent interpreter state follows the same rule:
+  `kernel_mode = "session"`, the kernel bounds, and the optional `reset`
+  parameter freeze the public/config contract now, but every run still executes
+  per-call until the supervised session path lands.
   """
 
   import Bitwise
@@ -110,6 +113,12 @@ defmodule CodingAgent.Tools.ExecuteCode do
             "type" => "integer",
             "description" =>
               "Optional wall-time cap in ms for this run (clamped to the configured maximum)."
+          },
+          "reset" => %{
+            "type" => "boolean",
+            "default" => false,
+            "description" =>
+              "Optional. Discard any retained interpreter state (imports, globals, objects) before running this script. No effect when every script already runs in a fresh process."
           }
         },
         "required" => ["script"]
@@ -131,7 +140,17 @@ defmodule CodingAgent.Tools.ExecuteCode do
         "The script can call these pre-imported helper functions, which invoke the corresponding agent tools and return their text output as a string: #{helpers}. Failed calls raise ToolError."
       end
 
+    mode_sentence =
+      case config.kernel_mode do
+        "session" ->
+          "Kernel mode: session — this workspace keeps a persistent python3 interpreter, so imports, globals, and objects survive across calls; pass reset=true to discard retained state before a run."
+
+        "per_call" ->
+          "Kernel mode: per_call — each script runs in a fresh python3 process and nothing survives across calls; reset is accepted but has no effect."
+      end
+
     "Run a python3 script for multi-step exploration. " <>
+      mode_sentence <>
       helper_sentence <>
       " Intermediate results stay out of the conversation — only what the script prints to stdout is returned, so filter and aggregate in the script and print a compact final answer." <>
       " Limits: #{config.timeout_ms} ms wall time, #{config.max_rpc_calls} tool calls, #{config.max_rpc_result_bytes} total tool-result bytes, stdout capped at #{config.max_output_bytes} bytes." <>
@@ -143,8 +162,8 @@ defmodule CodingAgent.Tools.ExecuteCode do
 
   ## Parameters
 
-    * `tool_call_id` - Unique identifier for this tool invocation
-    * `params` - Map containing "script" (required) and optional "timeout_ms"
+    * `params` - Map containing "script" (required), optional "timeout_ms", and
+      optional boolean "reset" (validated; per-call runs treat it as redundant)
     * `signal` - Abort signal reference for cancellation (can be nil)
     * `on_update` - Streaming callback (unused: script output is not streamed)
     * `cwd` - Working directory the script runs in
@@ -168,6 +187,7 @@ defmodule CodingAgent.Tools.ExecuteCode do
 
       with :ok <- check_enabled(config),
            {:ok, script} <- fetch_script(params),
+           :ok <- check_reset(params),
            {:ok, python} <- resolve_python(config, opts) do
         run(script, python, config, params, signal, cwd, opts)
       end
@@ -183,6 +203,15 @@ defmodule CodingAgent.Tools.ExecuteCode do
     case Map.get(params, "script") do
       script when is_binary(script) and script != "" -> {:ok, script}
       _ -> {:error, "Missing required parameter: script"}
+    end
+  end
+
+  # `reset` asks for a fresh interpreter in session mode. The persistent path
+  # is not wired yet, so per-call runs validate it and treat it as redundant.
+  defp check_reset(params) do
+    case Map.get(params, "reset") do
+      reset when is_nil(reset) or is_boolean(reset) -> :ok
+      _other -> {:error, "reset must be a boolean"}
     end
   end
 

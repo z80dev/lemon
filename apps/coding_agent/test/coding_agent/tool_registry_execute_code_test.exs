@@ -37,6 +37,37 @@ defmodule CodingAgent.ToolRegistryExecuteCodeTest do
       assert Enum.reject(enabled, &(elem(&1, 0) == "execute_code")) == disabled
     end
 
+    test "kernel settings alone never enable the tool", %{tmp_dir: cwd} do
+      opts =
+        Keyword.put(
+          base_opts(),
+          :settings_manager,
+          %{tools: %{execute_code: %{kernel_mode: "session", max_live_kernels: 4}}}
+        )
+
+      refute "execute_code" in names(cwd, opts)
+    end
+
+    test "session mode keeps it last and adds only the reset property", %{tmp_dir: cwd} do
+      opts =
+        Keyword.put(
+          base_opts(),
+          :settings_manager,
+          %{tools: %{execute_code: %{enabled: true, kernel_mode: "session"}}}
+        )
+
+      assert List.last(names(cwd, opts)) == "execute_code"
+
+      assert {:ok, tool} = ToolRegistry.get_tool(cwd, "execute_code", opts)
+      assert tool.description =~ "Kernel mode: session"
+      assert tool.parameters["properties"]["reset"]["type"] == "boolean"
+      assert tool.parameters["required"] == ["script"]
+
+      # The schema change is additive: every other tool's schema is untouched.
+      assert Enum.reject(schemas(cwd, opts), &(elem(&1, 0) == "execute_code")) ==
+               schemas(cwd, base_opts())
+    end
+
     test "tool_conflict_report/2 counts it as a builtin when enabled", %{tmp_dir: cwd} do
       disabled = ToolRegistry.tool_conflict_report(cwd, base_opts())
       enabled = ToolRegistry.tool_conflict_report(cwd, enabled_opts())
