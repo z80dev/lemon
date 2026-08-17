@@ -36,6 +36,8 @@ export interface ControlPlaneConfig {
 export interface AgentConfig {
 	default_provider?: string;
 	default_model?: string;
+	/** Theme name the TUI installs at startup (`/theme <name>` writes it). */
+	theme?: string;
 }
 
 export interface LemonConfig {

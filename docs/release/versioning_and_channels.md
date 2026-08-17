@@ -62,9 +62,12 @@ Current release automation produces:
 - A `manifest.json` describing every artifact in the release.
 
 The published matrix is `lemon_runtime_min` and `lemon_runtime_full` on all
-three platform tags, plus `sim_broadcast_platform` on Linux only. The container
-image on `ghcr.io/z80dev/lemon` is published as a multi-arch (`amd64`/`arm64`)
-manifest and remains the portable Linux deployment contract.
+three platform tags, `sim_broadcast_platform` on the two Linux tags, and
+`lemon_tui` on all three tags: 11 artifacts total. `lemon_tui` is a
+pseudo-profile for a Bun-compiled client tarball containing
+`tui/bin/lemon-tui`, not a BEAM release. The container image on
+`ghcr.io/z80dev/lemon` is published as a multi-arch (`amd64`/`arm64`) manifest
+and remains the portable Linux deployment contract.
 
 macOS source installs are best effort. macOS `x86_64` and Windows have no
 release artifacts; use a source install, WSL, or the container image.
@@ -124,10 +127,12 @@ There are two update paths, and they do different jobs.
 **Installed runtimes** (`~/.lemon`, from `install.sh` or a previous
 `lemon update`) use the launcher's `lemon update`. It fetches the manifest for
 the configured channel, compares versions with `LemonCore.Update.Version`,
-downloads and SHA-256 verifies the matching artifact, extracts it beside the
-current one, and flips `~/.lemon/versions/current`. Applying the new version
-requires a restart: Lemon does not hot-upgrade a running node. The two previous
-versions are retained for `lemon update --rollback`.
+downloads and SHA-256 verifies the matching runtime and, unless
+`LEMON_NO_TUI=1` or the profile is `sim_broadcast_platform`, the matching
+`lemon_tui` artifact. It stages both into the new version before flipping
+`~/.lemon/versions/current`. Applying the new version requires a restart: Lemon
+does not hot-upgrade a running node. The two previous versions are retained for
+`lemon update --rollback`.
 
 **Source checkouts** use `mix lemon.update` (or the source wrapper
 `./bin/lemon update`), which remains a stage-1 local maintenance task and never

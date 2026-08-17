@@ -44,6 +44,7 @@ under `~/.lemon`:
 
 ```
 ~/.lemon/versions/<version>/   extracted release
+~/.lemon/versions/<version>/tui/bin/lemon-tui  compiled TUI when installed
 ~/.lemon/versions/current      symlink to the active version
 ~/.lemon/bin/lemon             -> ../versions/current/bin/lemon
 ~/.lemon/{cookie,env}          generated once by the launcher, mode 600
@@ -54,18 +55,21 @@ under `~/.lemon`:
 `bin/lemon` inside every release is a launcher shim that picks the bundled
 profile and applies user-install defaults before delegating to
 `bin/<profile>`. It accepts `start`, `daemon`, `stop`, `restart`, `status`,
-`remote`, `eval`, `rpc`, `version`, `update`, and `doctor`; anything else exits
-`2` with a pointer to a source checkout.
+`remote`, `eval`, `rpc`, `version`, `update`, `doctor`, and `tui`. With no
+arguments it launches the TUI in an interactive terminal, auto-starting the
+daemon; non-interactive invocation prints usage.
 
 ```bash
 lemon daemon    # background start, recording pid and version root in ~/.lemon/run
 lemon status    # pidfile plus a control-plane /healthz probe
 lemon stop      # stops through the recorded root, so it works across a flip
-lemon update    # download + verify + stage the next release, then flip current
+lemon update    # stage runtime + TUI atomically, then flip current
 lemon stop && lemon daemon   # restart to apply a staged version
 ```
 
-Updating is a symlink flip plus a restart; there are no hot upgrades. Roll back
+Updating stages the runtime and matching TUI artifacts together for full/min
+profiles, then flips the symlink; the sim profile has no TUI artifact. There
+are no hot upgrades. Roll back
 with `lemon update --rollback`, which flips `versions/current` back to the
 previously installed version (the two most recent are retained) and again needs
 a restart to take effect.
@@ -96,7 +100,9 @@ files with no pipeline, so it needs the digest step only. Skipping either one
 makes the release log "Could not warm up static assets" at boot and serve
 undigested assets.
 
-Releases are written to `_build/prod/rel/<profile>/`.
+Releases are written to `_build/prod/rel/<profile>/`. Release automation also
+builds the `lemon_tui` pseudo-profile as a Bun binary, producing 11 published
+artifacts total: three min, three full, two sim, and three TUI artifacts.
 
 Release automation packages the assembled release directory as a `.tar.gz`:
 
@@ -258,6 +264,7 @@ endpoint during release boot before the eval expression is executed.
 | `lemon_runtime_min` | gateway, router, channels, control-plane | Headless / API-only server |
 | `lemon_runtime_full` | + automation, skills, web, sim-ui | Full local runtime with UI |
 | `sim_broadcast_platform` | lemon_core, lemon_sim, lemon_sim_ui | Public sim broadcast deployment |
+| `lemon_tui` | `tui/bin/lemon-tui` | Bun-compiled client pseudo-profile, not a BEAM release |
 
 ---
 
@@ -265,11 +272,19 @@ endpoint during release boot before the eval expression is executed.
 
 Connect a client to an already-running Lemon runtime — either the source-dev instance or a release.
 
-### TUI client (`lemon-tui`)
+### TUI client
+
+For an installed full/min release, use the plain command from an interactive
+terminal; it starts the daemon when needed. The explicit form is:
 
 ```bash
-cd clients/lemon-tui
-npm start
+lemon tui
+```
+
+For source development, the launcher runs `bun src/main.ts` from `clients/tui`:
+
+```bash
+./bin/lemon-tui
 ```
 
 The TUI connects to the control-plane at `http://localhost:4040` by default.
@@ -291,11 +306,6 @@ npm start
 
 Connects to `http://localhost:4080` (the web Phoenix endpoint).
 
-### Python TUI (CLI wrapper)
-
-```bash
-python apps/lemon_tui/lemon_tui/main.py
-```
 
 ---
 

@@ -17,6 +17,9 @@ Checks:
     that the release ships no TUI
   - LEMON_NO_TUI=1 installs the runtime only even when a TUI is published
   - a TUI checksum mismatch aborts the whole install, leaving no version directory
+  - fault injection: a failing TUI download, and a staged tree that cannot be
+    moved into place, both leave the live version usable with no .partial,
+    .previous.*, or tarball residue
   - the downloaded tarballs are removed from ~/.lemon/tmp
   - re-running is an idempotent no-op and --force re-extracts
   - --verify boots the installed launcher and polls /healthz
@@ -756,6 +759,106 @@ else
   else
     fail "a TUI checksum mismatch left state behind"
     cat "$work_dir/install-17.log" >&2
+  fi
+fi
+
+# 15. Fault injection: the TUI download fails after the runtime download has
+#     already succeeded. The half-finished upgrade must not disturb the
+#     version that is currently live.
+#
+#     install.sh resolves curl through PATH, and `env -i` in run_install sets
+#     PATH before the caller-supplied variables, so a later PATH= wins — the
+#     same trick the SHELL checks above rely on.
+fault_bin="$work_dir/fakebin-curl"
+mkdir -p "$fault_bin"
+real_curl="$(command -v curl)"
+
+cat > "$fault_bin/curl" <<EOF
+#!/bin/sh
+for arg in "\$@"; do
+  case "\$arg" in
+    *-$TUI_PROFILE.tar.gz)
+      echo "curl: (22) simulated transport failure" >&2
+      exit 22
+      ;;
+  esac
+done
+exec $real_curl "\$@"
+EOF
+chmod +x "$fault_bin/curl"
+
+fault_home="$work_dir/home-fault"
+mkdir -p "$fault_home"
+
+if ! run_install "$work_dir/install-19.log" "$fault_home" "$base_url"; then
+  fail "seeding the fault-injection home failed"
+  cat "$work_dir/install-19.log" >&2
+elif run_install "$work_dir/install-20.log" "$fault_home" "$base_url" \
+  LEMON_VERSION=9999.2.0 "PATH=$fault_bin:$PATH"; then
+  fail "install.sh reported success when the TUI download failed"
+else
+  current_target="$(readlink "$fault_home/.lemon/versions/current" 2>/dev/null || echo "")"
+  version_output="$(HOME="$fault_home" "$fault_home/.lemon/bin/lemon" version 2>&1 || echo "")"
+
+  if [ "$current_target" = "9999.1.0" ] &&
+    [ "$version_output" = "lemon 9999.1.0" ] &&
+    [ ! -d "$fault_home/.lemon/versions/9999.2.0" ] &&
+    [ -z "$(find "$fault_home/.lemon/versions" -maxdepth 1 \( -name '*.partial' -o -name '*.previous.*' \) 2>/dev/null)" ] &&
+    [ "$(find "$fault_home/.lemon/tmp" -mindepth 1 2>/dev/null | wc -l | tr -d ' ')" = "0" ]; then
+    ok "a failed TUI download leaves the live version untouched and no residue"
+  else
+    fail "a failed TUI download left inconsistent state"
+    cat "$work_dir/install-20.log" >&2
+  fi
+fi
+
+# 16. Fault injection: the staged tree cannot be moved into place. The old
+#     version has already been moved aside at that point, so install.sh must
+#     put it back rather than leave versions/current dangling.
+promote_bin="$work_dir/fakebin-mv"
+mkdir -p "$promote_bin"
+real_mv="$(command -v mv)"
+
+cat > "$promote_bin/mv" <<EOF
+#!/bin/sh
+case "\$1" in
+  *.partial)
+    echo "mv: simulated failure moving the staged install into place" >&2
+    exit 1
+    ;;
+esac
+exec $real_mv "\$@"
+EOF
+chmod +x "$promote_bin/mv"
+
+promote_home="$work_dir/home-promote"
+mkdir -p "$promote_home"
+
+if ! run_install "$work_dir/install-21.log" "$promote_home" "$base_url"; then
+  fail "seeding the interrupted-promotion home failed"
+  cat "$work_dir/install-21.log" >&2
+else
+  promote_sentinel="$promote_home/.lemon/versions/9999.1.0/SENTINEL"
+  touch "$promote_sentinel"
+
+  if run_install "$work_dir/install-22.log" "$promote_home" "$base_url" \
+    "PATH=$promote_bin:$PATH" -- --force; then
+    fail "install.sh reported success when the staged tree could not be moved into place"
+  else
+    current_target="$(readlink "$promote_home/.lemon/versions/current" 2>/dev/null || echo "")"
+    version_output="$(HOME="$promote_home" "$promote_home/.lemon/bin/lemon" version 2>&1 || echo "")"
+
+    if [ "$current_target" = "9999.1.0" ] &&
+      [ -f "$promote_sentinel" ] &&
+      [ "$version_output" = "lemon 9999.1.0" ] &&
+      grep -q "previous version was restored" "$work_dir/install-22.log" &&
+      [ -z "$(find "$promote_home/.lemon/versions" -maxdepth 1 \( -name '*.partial' -o -name '*.previous.*' \) 2>/dev/null)" ] &&
+      [ "$(find "$promote_home/.lemon/tmp" -mindepth 1 2>/dev/null | wc -l | tr -d ' ')" = "0" ]; then
+      ok "a failed promotion restores the previous version and leaves no residue"
+    else
+      fail "a failed promotion left inconsistent state"
+      cat "$work_dir/install-22.log" >&2
+    fi
   fi
 fi
 

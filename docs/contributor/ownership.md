@@ -12,7 +12,7 @@ when adding new files.
 | **skills** | `@lemon/skills` | `lemon_skills` app and all skill-related tooling |
 | **agent** | `@lemon/agent` | `coding_agent`, `agent_core`, `ai` apps |
 | **memory** | `@lemon/memory` | Stores, session search, routing feedback, outcome models |
-| **client** | `@lemon/client` | `clients/lemon-tui`, `clients/lemon-web` |
+| **client** | `@lemon/client` | `clients/tui`, `clients/lemon-web`, `clients/lemon-browser-node` |
 | **release** | `@lemon/release` | `scripts/`, `.github/workflows/` |
 | **docs** | `@lemon/docs` | Everything under `docs/` |
 

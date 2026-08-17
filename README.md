@@ -61,7 +61,8 @@ would.
 
 **Reference runtime** (in-repo, unpublished): control plane, CLI, web UI,
 automation, skills, browser, LSP. **Products** (leaving for their own
-repos): the coding agent, the sim arenas, the showcase site, the TS clients.
+repos): the coding agent, the sim arenas, the showcase site, and the web/TUI
+clients.
 **Satellites** are the model for vendor integrations — `apps/x_api` carries the
 X client, its channel adapter and its three tools, and self-registers at boot,
 so the platform holds zero compile-time knowledge of X.
@@ -266,8 +267,8 @@ git clone https://github.com/z80dev/lemon.git && cd lemon
 mix deps.get && mix compile
 mix lemon.secrets.set llm_anthropic_api_key_raw "sk-ant-..."
 ./bin/lemon doctor            # environment + config diagnostics
-./bin/lemon                   # web console on :4080, ops dashboard at /ops
-./bin/lemon-dev /path/to/repo # terminal UI
+./bin/lemon                   # interactive TUI; auto-starts the daemon
+./bin/lemon-tui              # dev-mode TUI from clients/tui
 ./bin/lemon-gateway           # Telegram/Discord gateway
 ```
 
@@ -280,6 +281,11 @@ Any shell or CI job can push a message into a channel with
 attachments, thread/reply targeting, named targets and a credential-free
 `--dry-run`. The full reference is in
 [`apps/lemon_channels/README.md`](apps/lemon_channels/README.md#script-notifications).
+
+The TUI source lives in [`clients/tui`](clients/tui) and is built on
+[`@oh-my-pi/pi-tui`](https://www.npmjs.com/package/@oh-my-pi/pi-tui). In an
+installed full/min release, plain `lemon` launches it from an interactive
+terminal and starts the daemon when needed; `lemon tui` is the explicit form.
 
 ## Arenas
 
@@ -365,6 +371,6 @@ with architectural ideas from [Oh-My-Pi](https://github.com/can1357/oh-my-pi),
 library was bootstrapped from
 [Hermes Agent](https://github.com/NousResearch/hermes-agent). Built with
 [Elixir](https://elixir-lang.org/); the TUI is powered by
-[@mariozechner/pi-tui](https://www.npmjs.com/package/@mariozechner/pi-tui).
+[@oh-my-pi/pi-tui](https://www.npmjs.com/package/@oh-my-pi/pi-tui).
 
 Named after a very good cat.

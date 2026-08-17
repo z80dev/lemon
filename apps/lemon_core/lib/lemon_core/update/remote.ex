@@ -112,8 +112,11 @@ defmodule LemonCore.Update.Remote do
   and verifies its SHA-256 against the manifest (mandatory; a missing or
   mismatched checksum is a hard error and the partial downloads are deleted).
   Only once the runtime and, when published, the TUI are both verified does it
-  extract them into `versions/<version>.partial`, rename that into place, and
-  atomically flip `versions/current` via symlink-tmp + rename. Prunes old
+  extract them into `versions/<version>.partial`, assert the staged tree holds
+  the executables it should, rename that into place, and atomically flip
+  `versions/current` via symlink-tmp + rename. An existing usable install of
+  the same version is reused rather than deleted and re-extracted, so the
+  directory `current` points at is never cleared to make room. Prunes old
   versions, keeping the newly staged one plus the #{@keep_versions} most recent others.
 
   Never restarts the node. On success, `restart_required: true` tells the
@@ -291,8 +294,7 @@ defmodule LemonCore.Update.Remote do
   defp do_apply(%{artifact: artifact, latest: version, current: current} = info, opts) do
     tui_artifact = Map.get(info, :tui_artifact)
 
-    with {:ok, tarballs} <- download_verified(artifact, tui_artifact, version, opts),
-         {:ok, final_dir} <- stage_artifacts(tarballs, version, opts),
+    with {:ok, final_dir} <- stage(artifact, tui_artifact, version, opts),
          :ok <- flip_current(version, opts) do
       prune(opts, version)
 
@@ -304,6 +306,33 @@ defmodule LemonCore.Update.Remote do
          latest: version,
          path: final_dir
        }}
+    end
+  end
+
+  # Downloads, extraction, and validation, with a guaranteed cleanup of the
+  # staging directory and both downloads. The `after` block also covers raises
+  # from the bang calls and file streaming below, which would otherwise sail
+  # past every explicit cleanup path and strand a `<version>.partial` directory
+  # that the next update would have to guess about. On the success path it is a
+  # no-op: `promote/2` has already renamed the staging directory away.
+  defp stage(artifact, tui_artifact, version, opts) do
+    dir = versions_dir(opts)
+    partial = Path.join(dir, "#{version}.partial")
+    downloads = Enum.map([artifact, tui_artifact], &artifact_path(&1, opts))
+
+    try do
+      with {:ok, tarballs} <- download_verified(artifact, tui_artifact, version, opts),
+           :ok <- unpack(tarballs, partial),
+           :ok <- verify_staged(partial, tui_artifact) do
+        promote(partial, Path.join(dir, version))
+      end
+    after
+      File.rm_rf(partial)
+
+      Enum.each(downloads, fn
+        nil -> :ok
+        path -> File.rm(path)
+      end)
     end
   end
 
@@ -332,12 +361,31 @@ defmodule LemonCore.Update.Remote do
     end
   end
 
+  # A manifest is fetched over the network, so its `file` is untrusted input:
+  # anything that is not a bare filename would let a release write outside the
+  # download directory.
+  defp artifact_path(nil, _opts), do: nil
+
+  defp artifact_path(artifact, opts) do
+    case Map.get(artifact, "file") do
+      file when is_binary(file) and file != "" ->
+        if Path.basename(file) == file, do: Path.join(tmp_dir(opts), file)
+
+      _ ->
+        nil
+    end
+  end
+
   defp download_artifact(artifact, version, opts) do
-    file = Map.fetch!(artifact, "file")
+    case artifact_path(artifact, opts) do
+      nil -> {:error, {:invalid_artifact_file, Map.get(artifact, "file")}}
+      dest -> download_to(dest, Map.get(artifact, "file"), version, opts)
+    end
+  end
+
+  defp download_to(dest, file, version, opts) do
     url = "#{base_url(opts)}/releases/download/v#{version}/#{file}"
-    dir = tmp_dir(opts)
-    File.mkdir_p!(dir)
-    dest = Path.join(dir, file)
+    File.mkdir_p!(tmp_dir(opts))
     File.rm(dest)
 
     request = {String.to_charlist(url), []}
@@ -388,22 +436,35 @@ defmodule LemonCore.Update.Remote do
 
   # The runtime owns bin/ and lib/, the TUI owns tui/, so both unpack into one
   # staging directory and ride the same rename into place.
-  defp stage_artifacts({tarball, tui_tarball}, version, opts) do
-    dir = versions_dir(opts)
-    File.mkdir_p!(dir)
-    partial = Path.join(dir, "#{version}.partial")
+  defp unpack({tarball, tui_tarball}, partial) do
     File.rm_rf(partial)
-    File.mkdir_p!(partial)
 
-    case extract_all(partial, [tarball, tui_tarball]) do
-      :ok ->
-        rm_tarballs([tarball, tui_tarball])
-        promote(partial, Path.join(dir, version))
+    case File.mkdir_p(partial) do
+      :ok -> extract_all(partial, [tarball, tui_tarball])
+      {:error, reason} -> {:error, {:staging_failed, reason}}
+    end
+  end
 
-      {:error, reason} ->
-        File.rm_rf(partial)
-        rm_tarballs([tarball, tui_tarball])
-        {:error, reason}
+  # Nothing is promoted until the staged tree actually holds the launchers it
+  # is supposed to, mirroring the same assertions install.sh makes. A tarball
+  # that unpacked into the wrong shape must not become `versions/current`.
+  defp verify_staged(partial, tui_artifact) do
+    cond do
+      not executable?(Path.join(partial, "bin/lemon")) ->
+        {:error, {:incomplete_release, "bin/lemon"}}
+
+      not is_nil(tui_artifact) and not executable?(Path.join(partial, "tui/bin/lemon-tui")) ->
+        {:error, {:incomplete_release, "tui/bin/lemon-tui"}}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp executable?(path) do
+    case File.stat(path) do
+      {:ok, %File.Stat{type: :regular, mode: mode}} -> Bitwise.band(mode, 0o111) != 0
+      _ -> false
     end
   end
 
@@ -425,36 +486,71 @@ defmodule LemonCore.Update.Remote do
     end
   end
 
+  # Never clear the destination to make room. Re-staging a version that is
+  # already installed would otherwise delete the very directory `current`
+  # points at, and an interruption mid-delete leaves a dangling `current` with
+  # nothing to fall back to. A usable install is kept as-is; only a broken one
+  # is replaced, and it is moved aside rather than deleted so the swap can be
+  # undone if the rename fails.
   defp promote(partial, final) do
-    File.rm_rf(final)
-
-    case File.rename(partial, final) do
-      :ok ->
-        {:ok, final}
-
-      {:error, reason} ->
-        File.rm_rf(partial)
-        {:error, {:rename_failed, reason}}
+    cond do
+      usable_install?(final) -> {:ok, final}
+      File.exists?(final) -> replace(partial, final)
+      true -> rename_into_place(partial, final)
     end
   end
 
-  defp rm_tarballs(tarballs) do
-    Enum.each(tarballs, fn
-      nil -> :ok
-      path -> File.rm(path)
-    end)
+  defp replace(partial, final) do
+    aside = "#{final}.broken.#{os_pid()}"
+    File.rm_rf(aside)
+
+    case File.rename(final, aside) do
+      :ok -> swap_in(partial, final, aside)
+      {:error, reason} -> {:error, {:rename_failed, reason}}
+    end
   end
 
+  defp swap_in(partial, final, aside) do
+    case rename_into_place(partial, final) do
+      {:ok, dir} ->
+        File.rm_rf(aside)
+        {:ok, dir}
+
+      {:error, reason} ->
+        File.rename(aside, final)
+        {:error, reason}
+    end
+  end
+
+  defp rename_into_place(partial, final) do
+    case File.rename(partial, final) do
+      :ok -> {:ok, final}
+      {:error, reason} -> {:error, {:rename_failed, reason}}
+    end
+  end
+
+  defp usable_install?(dir), do: executable?(Path.join(dir, "bin/lemon"))
+
+  defp os_pid, do: List.to_string(:os.getpid())
+
+  # A fixed temp name races a concurrent updater and, if the rename fails,
+  # leaves a stray symlink sitting in versions/ forever.
   defp flip_current(version, opts) do
     dir = versions_dir(opts)
     current = Path.join(dir, "current")
-    tmp = Path.join(dir, ".current.tmp")
+    tmp = Path.join(dir, ".current.tmp.#{os_pid()}")
 
-    File.rm(tmp)
+    try do
+      File.rm(tmp)
 
-    case File.ln_s(version, tmp) do
-      :ok -> File.rename(tmp, current)
-      {:error, reason} -> {:error, {:symlink_failed, reason}}
+      with :ok <- File.ln_s(version, tmp),
+           :ok <- File.rename(tmp, current) do
+        :ok
+      else
+        {:error, reason} -> {:error, {:symlink_failed, reason}}
+      end
+    after
+      File.rm(tmp)
     end
   end
 
@@ -484,8 +580,9 @@ defmodule LemonCore.Update.Remote do
     case File.ls(dir) do
       {:ok, entries} ->
         entries
-        |> Enum.reject(&(&1 in ["current", ".current.tmp"]))
-        |> Enum.reject(&String.ends_with?(&1, ".partial"))
+        |> Enum.reject(&(&1 == "current"))
+        |> Enum.reject(&String.starts_with?(&1, "."))
+        |> Enum.reject(&(String.ends_with?(&1, ".partial") or String.contains?(&1, ".broken.")))
         |> Enum.filter(&File.dir?(Path.join(dir, &1)))
 
       {:error, _reason} ->

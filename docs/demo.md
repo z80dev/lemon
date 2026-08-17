@@ -63,7 +63,7 @@ pending approvals, cron/skills/channel/memory activity, and support bundles, use
 
 - `mix lemon.doctor` (and `mix lemon.doctor --bundle`, see Demo 4)
 - the control-plane run APIs (JSON-RPC over `bin/lemon-control-plane`)
-- the TUI (`./bin/lemon-dev`, see Demo 3)
+- the TUI (`./bin/lemon-tui`, see Demo 3)
 - runtime logs
 
 ## Demo 3: TUI From a Project
@@ -71,7 +71,7 @@ pending approvals, cron/skills/channel/memory activity, and support bundles, use
 Start Lemon attached to a repository:
 
 ```bash
-./bin/lemon-dev /path/to/your/project
+./bin/lemon-tui
 ```
 
 Use a small prompt that does not require edits:

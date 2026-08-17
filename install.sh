@@ -384,6 +384,54 @@ TMP_DIR="$LEMON_ROOT/tmp"
 
 mkdir -p "$VERSIONS_DIR" "$BIN_DIR" "$TMP_DIR" "$LEMON_ROOT/run" "$LEMON_ROOT/store"
 
+# ----------------------------------------------------------------- cleanup ---
+#
+# Every path the install creates before it commits is registered here, so an
+# error, a Ctrl-C, or a SIGTERM cannot leave downloads, a half-extracted
+# staging directory, or an orphaned .previous copy behind. The last of those
+# matters most: if the interrupt lands between moving the old version aside and
+# moving the new one in, `versions/current` points at nothing, and only this
+# handler can put it back.
+
+INSTALL_COMMITTED=0
+CLEANUP_TARBALL=""
+CLEANUP_TUI_TARBALL=""
+CLEANUP_PARTIAL=""
+CLEANUP_PREVIOUS=""
+CLEANUP_TARGET=""
+
+cleanup() {
+  if [ "$INSTALL_COMMITTED" = "1" ]; then
+    return 0
+  fi
+
+  if [ -n "$CLEANUP_TARBALL" ]; then
+    rm -f "$CLEANUP_TARBALL"
+  fi
+
+  if [ -n "$CLEANUP_TUI_TARBALL" ]; then
+    rm -f "$CLEANUP_TUI_TARBALL"
+  fi
+
+  if [ -n "$CLEANUP_PARTIAL" ]; then
+    rm -rf "$CLEANUP_PARTIAL"
+  fi
+
+  if [ -n "$CLEANUP_PREVIOUS" ] && [ -d "$CLEANUP_PREVIOUS" ]; then
+    if [ -n "$CLEANUP_TARGET" ] && [ ! -d "$CLEANUP_TARGET" ]; then
+      mv "$CLEANUP_PREVIOUS" "$CLEANUP_TARGET" || true
+    else
+      rm -rf "$CLEANUP_PREVIOUS"
+    fi
+  fi
+
+  return 0
+}
+
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
+
 ensure_links() {
   # ensure_links <version>
   atomic_symlink "$1" "$VERSIONS_DIR/current"
@@ -555,6 +603,7 @@ if [ -d "$TARGET_DIR" ] && [ "$FORCE" != "1" ]; then
 fi
 
 tarball="$TMP_DIR/$ARTIFACT_FILE"
+CLEANUP_TARBALL="$tarball"
 rm -f "$tarball"
 
 info "Downloading $ARTIFACT_FILE ($ARTIFACT_SIZE bytes) ..."
@@ -578,6 +627,7 @@ info "ok sha256 $actual_sha"
 tui_tarball=""
 if [ -n "$TUI_FILE" ]; then
   tui_tarball="$TMP_DIR/$TUI_FILE"
+  CLEANUP_TUI_TARBALL="$tui_tarball"
   rm -f "$tui_tarball"
 
   info "Downloading $TUI_FILE ($TUI_SIZE bytes) ..."
@@ -599,6 +649,7 @@ if [ -n "$TUI_FILE" ]; then
 fi
 
 partial_dir="$TARGET_DIR.partial"
+CLEANUP_PARTIAL="$partial_dir"
 rm -rf "$partial_dir"
 mkdir -p "$partial_dir"
 
@@ -635,20 +686,47 @@ if [ -n "$TUI_FILE" ] && [ ! -x "$partial_dir/tui/bin/lemon-tui" ]; then
   Set LEMON_NO_TUI=1 to install the runtime only."
 fi
 
+# A directory swap is two renames, and POSIX offers no way to make that one
+# step. The old copy is therefore moved aside rather than deleted, restored if
+# the second rename fails, and only discarded once versions/current has been
+# flipped onto the new one.
+previous_dir=""
+
 if [ -d "$TARGET_DIR" ]; then
   previous_dir="$TARGET_DIR.previous.$$"
-  mv "$TARGET_DIR" "$previous_dir"
-  mv "$partial_dir" "$TARGET_DIR"
   rm -rf "$previous_dir"
+  CLEANUP_PREVIOUS="$previous_dir"
+  CLEANUP_TARGET="$TARGET_DIR"
+
+  mv "$TARGET_DIR" "$previous_dir"
+
+  if ! mv "$partial_dir" "$TARGET_DIR"; then
+    mv "$previous_dir" "$TARGET_DIR"
+    CLEANUP_PREVIOUS=""
+    rm -rf "$partial_dir"
+    CLEANUP_PARTIAL=""
+    die "could not move the staged install into $TARGET_DIR; the previous version was restored."
+  fi
 else
   mv "$partial_dir" "$TARGET_DIR"
 fi
+
+CLEANUP_PARTIAL=""
 
 if [ "$PLATFORM_OS" = "darwin" ] && command -v xattr >/dev/null 2>&1; then
   xattr -dr com.apple.quarantine "$TARGET_DIR" >/dev/null 2>&1 || true
 fi
 
 ensure_links "$VERSION"
+
+# Past this point the install is live: versions/current resolves to the new
+# tree, so the leftovers below are garbage rather than a rollback path.
+INSTALL_COMMITTED=1
+
+if [ -n "$previous_dir" ]; then
+  rm -rf "$previous_dir"
+  CLEANUP_PREVIOUS=""
+fi
 
 info ""
 info "Installed Lemon $VERSION ($RESOLVED_CHANNEL, $PROFILE) to $TARGET_DIR"

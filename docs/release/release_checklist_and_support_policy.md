@@ -12,11 +12,11 @@ The initial stable 1.0 release artifact support target is:
 | Area | Supported for 1.0 | Notes |
 | --- | --- | --- |
 | Release artifacts | `linux-x86_64`, `linux-arm64`, `darwin-arm64` tarballs | Built by `.github/workflows/release.yml` on pinned `ubuntu-24.04`, `ubuntu-24.04-arm`, and `macos-15` runners; Linux artifacts carry a glibc 2.39 baseline |
-| Release profiles | `lemon_runtime_min`, `lemon_runtime_full` on all platforms; `sim_broadcast_platform` on Linux | All must boot from extracted tarballs before stable 1.0; the sim profile also verifies local assets, access control, and persistent spectator state |
+| Release profiles | `lemon_runtime_min`, `lemon_runtime_full`, and `lemon_tui` on all platforms; `sim_broadcast_platform` on Linux | All BEAM runtime artifacts must boot from extracted tarballs; the three `lemon_tui` artifacts are Bun binaries verified on native runners; the sim profile also verifies local assets, access control, and persistent spectator state |
 | Source install | Linux and macOS, best effort | Requires Elixir 1.19.5+ and Erlang/OTP 28.5+ |
 | Windows and macOS `x86_64` | Not supported for 1.0 | Use WSL, the container image, or source-level experimentation |
 | Install script | Supported with scope | `install.sh` on the `stable` channel for the three platform tags; `preview`/`nightly` require a pinned `LEMON_VERSION` |
-| Update | Supported with scope | `lemon update` for `~/.lemon` installs: symlink flip plus operator restart, with `--rollback`. No hot upgrades, no background auto-update |
+| Update | Supported with scope | `lemon update` stages runtime plus TUI artifacts atomically for full/min installs, then flips the symlink plus operator restart, with `--rollback`. No hot upgrades, no background auto-update |
 | Container image | `ghcr.io/z80dev/lemon` multi-arch | `amd64` and `arm64` under one tag |
 | Hosted Lemon service | Not supported for 1.0 | Lemon is local-first/self-hosted |
 | Stable remote channel | Telegram | Text-first support boundary; other channel adapters are preview unless promoted |
@@ -52,8 +52,8 @@ Before cutting a stable release:
       version retention, and the `versions/current` flip.
 - [ ] Run `scripts/test fast`.
 - [ ] Run `scripts/test quality`.
-- [ ] Run `scripts/test clients` so the Python CLI lint/test/package build and
-      the Node client checks match CI before release.
+- [ ] Run `scripts/test clients` so the Bun TUI checks and the Node client
+      checks match CI before release.
 - [ ] Run `scripts/test eval-fast`.
 - [ ] Run `scripts/test live-eval` with release-candidate eval credentials, or
       dispatch `.github/workflows/live-eval.yml` with `LEMON_EVAL_API_KEY`
@@ -510,16 +510,17 @@ Before cutting a stable release:
 - [ ] Build local Sim UI assets and `sim_broadcast_platform` with
       `MIX_ENV=prod mix sim_ui.assets.deploy` and
       `MIX_ENV=prod mix release sim_broadcast_platform --overwrite`.
-- [ ] Package all three release directories as Linux `x86_64` tarballs.
-- [ ] Verify SHA-256 for each tarball and include all three in `manifest.json`.
+- [ ] Build and package the `clients/tui` Bun binary for
+      `linux-x86_64`, `linux-arm64`, and `darwin-arm64` as the `lemon_tui`
+      artifacts.
+- [ ] Verify SHA-256 for all 11 tarballs and include all 11 in `manifest.json`.
 - [ ] Run `scripts/verify_release_artifacts {artifact-directory}` against the
       assembled artifact directory. The verifier must see
-      `lemon_runtime_min`, `lemon_runtime_full`, and `sim_broadcast_platform`
-      Linux `x86_64` tarballs.
+      the BEAM runtime tarballs plus the three `lemon_tui` tarballs (11 total).
 - [ ] Run `scripts/verify_release_runtime_boot {artifact-directory}` against
-      the assembled artifact directory. The verifier must extract all three
-      tarballs. Min/full check `/healthz` and generate support bundles through
-      release `eval`; the sim profile checks `/readyz`, digested assets, admin
+      the assembled artifact directory. The verifier extracts the eight BEAM
+      tarballs and skips the `lemon_tui` pseudo-profile. Min/full check
+      `/healthz` and generate support bundles through release `eval`; the sim profile checks `/readyz`, digested assets, admin
       denial, a persisted Werewolf spectator fixture, and restart recovery.
       When hosted rooms are enabled, also run
       `npm --prefix apps/lemon_sim_ui/assets run smoke:hosted-werewolf` against
@@ -538,11 +539,12 @@ Before cutting a stable release:
 - [ ] Confirm issue templates and support-bundle docs reference the current artifact names.
 - [ ] Confirm known dependency audit findings are recorded and accepted or fixed.
 - [ ] Confirm the OSV Scanner workflow is present and scoped to the first-party
-      Mix, npm, and uv lockfiles before publishing a release candidate.
+      Mix, npm, and Bun lockfiles before publishing a release candidate.
 - [ ] Confirm the History Check workflow is present and blocks
       unrelated-history PRs before merge.
-- [ ] Confirm the Python CLI package workflow is present and building both the
-      `lemon-cli` wheel and source distribution without publishing them.
+- [ ] Confirm the Bun TUI package and release lanes validate `clients/tui` and
+      publish all three `lemon_tui` platform artifacts without publishing a
+      separate package.
 - [ ] Run `LEMON_DISCORD_LIVE_PROOF_JSON=tmp/discord-live-proof.json
       LEMON_DISCORD_LIVE_REDACTED_PROOF_JSON=.lemon/proofs/discord-live-matrix-latest.json
       LEMON_DISCORD_MEDIA_SLASH_PROOF_JSON=tmp/discord-media-slash-proof-check.json
@@ -595,8 +597,8 @@ maintainer decision recorded in the launch ledger.
 requests and pushes that touch dependency manifests, on a weekly `main`
 schedule, and through manual dispatch. It uses Google's pinned reusable OSV
 scanner workflow, grants `security-events: write` for SARIF upload, and scans
-`mix.lock`, the Lemon web/TUI/browser npm lockfiles, the Python CLI `uv.lock`,
-the gateway private npm lockfile, and the diagrams npm lockfile. The workflow is
+      `mix.lock`, the Lemon web/browser npm lockfiles, `clients/tui/bun.lock`,
+      the gateway private npm lockfile, and the diagrams npm lockfile. The workflow is
 configured with `fail-on-vuln: false` so findings are detection signals, not
 automatic release decisions; release candidates still require maintainer triage
 for high or critical runtime findings.
@@ -614,18 +616,13 @@ history and collapsing blame across a large umbrella snapshot. Failed PRs
 should be recreated from the current target branch, then the intended changes
 should be cherry-picked or re-applied.
 
-## Python CLI Package Check
+## Bun TUI Package Check
 
-`.github/workflows/python-cli.yml` is the non-publishing package-quality lane
-for `clients/lemon-cli`. It runs on Python CLI changes, manual dispatch, and
-`main` pushes touching the package. The workflow installs with `uv sync
---locked --dev`, runs ruff and pytest, builds both the wheel and source
-distribution, verifies the wheel metadata, and uploads the built distributions
-as short-lived CI artifacts.
-
-This is intentionally not a PyPI publish workflow. Lemon's supported release
-artifacts remain the BEAM runtime tarballs until maintainers decide to promote a
-published Python CLI package.
+The client-quality lane validates `clients/tui` with the pinned Bun toolchain,
+`bun install --frozen-lockfile`, `bun run check`, `bun run lint`, and `bun test`.
+The release lane additionally compiles the `lemon_tui` pseudo-profile for each
+supported platform. It is a client binary packaged alongside the BEAM runtime,
+not a separately published package.
 
 The docs site is static output. VitePress, Vite, esbuild, and
 `markdown-link-check` are development/build-time tooling for `docs/`; they are
@@ -707,6 +704,9 @@ Publishing a tag and hosted release is distribution work. It is not part of the
   - `lemon-{version}-{channel}-{platform}-lemon_runtime_full.tar.gz` for the
     same three platform tags
   - `lemon-{version}-{channel}-linux-{x86_64,arm64}-sim_broadcast_platform.tar.gz`
+  - `lemon-{version}-{channel}-{platform}-lemon_tui.tar.gz` for
+    `linux-x86_64`, `linux-arm64`, and `darwin-arm64`
+  - 11 release tarballs total
   - `manifest.json` (schema 2)
   - `install.sh`
 
@@ -817,7 +817,7 @@ Keep these files current during the 1.0 launch process:
 - `.github/workflows/live-eval.yml`
 - `.github/workflows/history-check.yml`
 - `.github/workflows/osv-scanner.yml`
-- `.github/workflows/python-cli.yml`
+- `.github/workflows/release-smoke.yml`
 - `scripts/bump_version.sh`
 - `scripts/lint_ci_docs.sh`
 - `scripts/audit_1_0_readiness`

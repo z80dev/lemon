@@ -38,6 +38,7 @@ prints usage.
 | `LEMON_VERSION` | *(latest stable)* | Pin an exact version, for example `2026.08.0`. Required for any channel other than `stable`. |
 | `LEMON_CHANNEL` | `stable` | Release channel. `preview` and `nightly` are not discoverable without the GitHub API, so they must be combined with `LEMON_VERSION`. |
 | `LEMON_PROFILE` | `lemon_runtime_full` | `full`, `min`, or `sim`, or the full profile name. `sim` (`sim_broadcast_platform`) is Linux-only. |
+| `LEMON_NO_TUI` | *(unset)* | Set to `1` to install or update the runtime without the TUI artifact. The `sim` profile is runtime-only regardless. |
 | `LEMON_INSTALL_IGNORE_GLIBC` | *(unset)* | Set to `1` to silence the Linux glibc baseline warning. |
 | `LEMON_INSTALL_BASE_URL` | `https://github.com/z80dev/lemon` | Release base URL. Test seam used by `scripts/verify_install_script`. |
 
@@ -45,6 +46,7 @@ prints usage.
 
 ```
 ~/.lemon/versions/<version>/   extracted release
+~/.lemon/versions/<version>/tui/bin/lemon-tui  compiled TUI for full/min installs
 ~/.lemon/versions/current      symlink to the active version (atomic flip point)
 ~/.lemon/bin/lemon             -> ../versions/current/bin/lemon
 ~/.lemon/{cookie,env}          generated once by the launcher, mode 600
@@ -80,6 +82,14 @@ lemon stop
 source path. To have the installer prove the boot for you, run it with
 `--verify`.
 
+### Launching the TUI
+
+For an installed `lemon_runtime_min` or `lemon_runtime_full` profile, `lemon`
+with no arguments launches the TUI when attached to an interactive terminal;
+it auto-starts the daemon when needed. In a non-interactive shell, no arguments
+continue to print usage. Use `lemon tui` as the explicit form. Set
+`LEMON_NO_TUI=1` at install or update time to omit the TUI artifact.
+
 ### Updating
 
 ```bash
@@ -88,9 +98,11 @@ lemon update --check    # report the latest published version only
 lemon update --rollback # return to the previous installed version
 ```
 
-Updates are a symlink flip plus a restart; Lemon does not hot-upgrade a running
-node. Restart the runtime (`lemon stop && lemon daemon`) to pick up a staged
-version. The two most recent previous versions are retained for rollback.
+Updates stage and verify the runtime and matching TUI artifacts together for
+full/min installs, then flip the version symlink atomically; the sim profile
+stages only its runtime artifact. Lemon does not hot-upgrade a running node.
+Restart the runtime (`lemon stop && lemon daemon`) to pick up a staged version.
+The two most recent previous versions are retained for rollback.
 
 ### Uninstall
 
@@ -111,12 +123,16 @@ Also remove the PATH line from your shell rc file if you added one.
 
 ### Platform support
 
-| Platform | Tag | Profiles |
-| --- | --- | --- |
-| Linux `x86_64` | `linux-x86_64` | `lemon_runtime_min`, `lemon_runtime_full`, `sim_broadcast_platform` |
-| Linux `arm64` | `linux-arm64` | `lemon_runtime_min`, `lemon_runtime_full`, `sim_broadcast_platform` |
-| macOS Apple Silicon | `darwin-arm64` | `lemon_runtime_min`, `lemon_runtime_full` |
-| macOS Intel, Windows | *(none)* | Use a source install, WSL, or the container image |
+Full and min installs include the matching `lemon_tui` artifact by default.
+The `sim` profile is runtime-only, and `LEMON_NO_TUI=1` opts out of the TUI for
+other profiles.
+
+| Platform | Tag | Runtime profiles | TUI by default |
+| --- | --- | --- | --- |
+| Linux `x86_64` | `linux-x86_64` | `lemon_runtime_min`, `lemon_runtime_full`, `sim_broadcast_platform` | min/full only |
+| Linux `arm64` | `linux-arm64` | `lemon_runtime_min`, `lemon_runtime_full`, `sim_broadcast_platform` | min/full only |
+| macOS Apple Silicon | `darwin-arm64` | `lemon_runtime_min`, `lemon_runtime_full` | yes |
+| macOS Intel, Windows | *(none)* | Use a source install, WSL, or the container image | — |
 
 macOS binaries are unsigned. The `curl` install path avoids Gatekeeper
 quarantine, and the installer additionally clears the quarantine attribute
@@ -132,7 +148,8 @@ Requirements:
 
 - Elixir 1.19.5+
 - Erlang/OTP 28.5+
-- Node.js 24 LTS+ if you want TUI or web client work
+- Bun 1.3.14+ if you want TUI client work
+- Node.js 24 LTS+ if you want web client work
 - An Anthropic, OpenAI, or compatible provider credential
 
 ```bash
@@ -159,7 +176,7 @@ mix compile
 Start Lemon locally:
 
 ```bash
-./bin/lemon-dev /path/to/your/project
+./bin/lemon-tui
 ```
 
 If you want a repeatable local proof of the source path after building, run:
@@ -283,6 +300,10 @@ Current release profiles:
 - `lemon_runtime_min`
 - `lemon_runtime_full`
 - `sim_broadcast_platform` (Linux only)
+- `lemon_tui` (pseudo-profile; all three supported platforms)
+
+`lemon_tui` is a per-platform Bun-compiled client binary packaged under
+`tui/bin/lemon-tui`; it is not a BEAM release profile.
 
 Build locally:
 

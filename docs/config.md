@@ -110,10 +110,6 @@ max_tool_invoke_depth = 4
 [tui]
 theme = "lemon"
 debug = false
-compact = false
-timestamps = false
-bell = true
-thinking = false
 
 [logging]
 # Optional: write logs to a file for later analysis.
@@ -204,9 +200,8 @@ Docker limits, invalid Docker image/network names, invalid SSH ports, invalid
 SSH connect timeouts, and unsupported strict-host-key values fail closed at the
 policy boundary instead of reaching Docker or OpenSSH.
 
-`[tui].thinking` controls whether assistant reasoning/thinking blocks are shown in the
-Python CLI. It is loaded at startup and can be toggled for the current process with
-`/thinking`.
+The Bun TUI uses the runtime's model and thinking defaults from `[defaults]`.
+The `[tui]` section controls terminal presentation settings loaded at startup.
 
 Async followup queue defaults for background `task` completions and delegated `agent`
 completions are currently umbrella app config, not TOML. The default lives in
@@ -273,7 +268,7 @@ Deprecated sections now fail validation and runtime loading:
 
 Lemon can auto-load a `.env` file at startup:
 
-- `./bin/lemon-dev` / `lemon-tui`: loads `<cwd>/.env` where `<cwd>` is the agent working directory (`--cwd`, or current directory).
+- `./bin/lemon-tui`: loads `<cwd>/.env` where `<cwd>` is the agent working directory (`--cwd`, or current directory).
 - `clients/lemon-web/server` bridge: loads `<cwd>/.env` from `--cwd` (or current directory).
 - `./bin/lemon-gateway`: loads `.env` from the directory where you launch the script.
 

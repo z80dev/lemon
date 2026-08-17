@@ -131,6 +131,9 @@ export class ControlPlaneClient {
 	}> = [];
 	#closed = false;
 	#probeInFlight = false;
+	/** One-line summaries of recent traffic, oldest first (see `/debug`). */
+	readonly #frameLog: string[] = [];
+	#frameLogLimit = 200;
 
 	constructor(options: ControlPlaneClientOptions = {}) {
 		const url = options.url ?? DEFAULT_WS_URL;
@@ -179,6 +182,16 @@ export class ControlPlaneClient {
 		}));
 	}
 
+	/**
+	 * Recent frames, oldest first, as one-line summaries. Payloads are described
+	 * rather than dumped: the log is a debugging aid, not a transcript, and a
+	 * streaming run would otherwise fill it with delta bodies.
+	 */
+	recentFrames(limit = this.#frameLogLimit): readonly string[] {
+		if (limit >= this.#frameLog.length) return [...this.#frameLog];
+		return this.#frameLog.slice(this.#frameLog.length - limit);
+	}
+
 	/** True when the connected daemon advertises `method` (or before handshake). */
 	supports(method: string): boolean {
 		if (!this.#helloOk) return true;
@@ -209,6 +222,16 @@ export class ControlPlaneClient {
 		this.#setState(this.#state === "offline" ? "connecting" : this.#state);
 		this.#socket.connect();
 		return waiter;
+	}
+
+	/**
+	 * Drop the socket and dial again immediately (`/reconnect`). In-flight
+	 * requests fail with NotConnectedError as they would on any disconnect.
+	 */
+	reconnect(reason = "user requested"): void {
+		if (this.#closed) return;
+		this.#log(`-- reconnect (${reason})`);
+		this.#socket.forceReconnect(reason);
 	}
 
 	/** Close permanently. Pending and queued requests reject. */
@@ -327,16 +350,33 @@ export class ControlPlaneClient {
 		}
 	}
 
+	/** Append one line to the ring buffer, dropping the oldest when full. */
+	#log(line: string): void {
+		const stamp = new Date().toISOString().slice(11, 23);
+		this.#frameLog.push(`${stamp} ${line}`);
+		if (this.#frameLog.length > this.#frameLogLimit) {
+			this.#frameLog.splice(0, this.#frameLog.length - this.#frameLogLimit);
+		}
+	}
+
 	#handleFrame(frame: ResFrame | EventFrame | HelloOkFrame): void {
 		if (isHelloOkFrame(frame)) {
+			this.#log(
+				`<- hello-ok ${frame.server?.version ?? "?"} (${frame.features?.methods?.length ?? 0} methods)`,
+			);
 			this.#onHelloOk(frame);
 			return;
 		}
 		if (isResFrame(frame)) {
+			const pending = this.#pending.get(frame.id);
+			this.#log(
+				`<- res ${pending?.method ?? frame.id} ${frame.ok ? "ok" : `error ${frame.error?.code ?? "?"}`}`,
+			);
 			this.#onRes(frame);
 			return;
 		}
 		if (isEventFrame(frame)) {
+			this.#log(`<- event ${frame.event}${describeEventPayload(frame.payload)}`);
 			this.#onEvent(frame);
 		}
 	}
@@ -415,6 +455,7 @@ export class ControlPlaneClient {
 				pending.timer.unref?.();
 			}
 			this.#pending.set(frame.id, pending);
+			this.#log(`-> req ${method}`);
 			if (!this.#socket.send(encodeFrame(frame))) {
 				this.#pending.delete(frame.id);
 				if (pending.timer) clearTimeout(pending.timer);
@@ -515,6 +556,21 @@ const KNOWN_EVENTS = new Set<string>([
 
 function isKnownEvent(name: string): boolean {
 	return KNOWN_EVENTS.has(name);
+}
+
+/**
+ * A short, bounded description of an event payload for the frame log. Streaming
+ * deltas are summarized by length: their bodies would swamp the ring buffer and
+ * put model output somewhere the user did not ask for it.
+ */
+function describeEventPayload(payload: unknown): string {
+	if (typeof payload !== "object" || payload === null) return "";
+	const record = payload as Record<string, unknown>;
+	const parts: string[] = [];
+	if (typeof record.type === "string") parts.push(record.type);
+	if (typeof record.runId === "string") parts.push(record.runId);
+	if (typeof record.text === "string") parts.push(`${record.text.length}b`);
+	return parts.length > 0 ? ` ${parts.join(" ")}` : "";
 }
 
 /**

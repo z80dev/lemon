@@ -179,8 +179,7 @@ apps/
 
 clients/
 ├── lemon-browser-node/  # Browser automation node via CDP/Playwright (TypeScript)
-├── lemon-cli/           # Python TUI client packaged with uv
-├── lemon-tui/           # Terminal UI client (TypeScript)
+├── tui/                 # Bun terminal UI client built on @oh-my-pi/pi-tui
 └── lemon-web/           # Web workspace (shared, server, web packages)
 
 docs/                    # Architecture docs, design decisions
@@ -209,7 +208,7 @@ MIX_ENV=prod mix sim_ui.assets.deploy  # build + digest/precompress for release
 scripts/test help
 scripts/test fast       # compile with warnings as errors + ExUnit excluding integration
 scripts/test quality    # Lemon quality gates and focused quality tests
-scripts/test clients    # Python CLI + Node client CI parity checks
+scripts/test clients    # Bun TUI + web/browser client CI parity checks
 scripts/test eval-fast  # small eval harness run
 scripts/test smoke      # CI-only product-smoke pointer
 scripts/test all        # useful local aggregate
@@ -219,24 +218,14 @@ scripts/test path apps/lemon_ai/test --seed 1
 mix format
 ```
 
-### TUI Client (TypeScript)
+### TUI Client (Bun)
 
 ```bash
-cd clients/lemon-tui
-npm install
-npm run build
-npm run test:coverage
-npm run dev      # Watch mode
-```
-
-### Python CLI Client
-
-```bash
-cd clients/lemon-cli
-uv sync --locked --dev
-uv run ruff check src tests
-uv run pytest
-uv build --sdist --wheel
+cd clients/tui
+bun install
+bun test
+bun run check
+bun src/main.ts      # Dev mode
 ```
 
 ### Web Client
@@ -262,12 +251,11 @@ npm run dev      # Watch mode
 ### Quick Dev Bootstrap
 
 ```bash
-./bin/lemon-dev    # Installs deps, builds, launches TUI
 ./bin/lemon        # Unified runtime (gateway + control plane + router + channels + web)
 ./bin/lemon send --to telegram:<chat_id> "done"  # Script notification to Telegram/Discord
 ./bin/lemon send --to discord:#ops --attach report.txt --attach trace.log "done"  # Upload script artifacts
 ./bin/lemon send --dry-run --to discord:#ops --attach report.txt "done"  # Validate without delivery
-./bin/lemon-tui    # TUI attached to unified runtime; auto-starts runtime if needed
+./bin/lemon-tui    # Dev TUI; runs clients/tui/src/main.ts and auto-starts runtime
 ```
 
 On Linux and other non-keychain environments, keep `~/.lemon/secrets_master_key` as the canonical local master key file. `./bin/lemon` now normalizes `LEMON_SECRETS_MASTER_KEY` from that file at startup so stale inherited shell env does not break provider or transport secret decryption.

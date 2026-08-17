@@ -157,12 +157,28 @@ elixir_escape() {
   printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
 }
 
+# ── A 200 from /healthz is not proof that *lemon* answered it: any service
+# that happens to hold the port would satisfy `curl -f`, and the TUI would
+# then be pointed at a stranger's /ws. Require the documented body,
+# {"ok":true}, before treating the daemon as already running. ──
+control_plane_healthy() {
+  local body
+
+  body="$(curl -fsS --max-time 2 "http://127.0.0.1:$1/healthz" 2>/dev/null || true)"
+
+  if [ -z "$body" ]; then
+    return 1
+  fi
+
+  printf '%s' "$body" | grep -q '"ok"[[:space:]]*:[[:space:]]*true'
+}
+
 # ── Start the daemon and record pid + root. Shared by `daemon` and `tui`. ──
 start_daemon() {
   "$RELEASE_BIN" daemon "$@"
 
   pid=""
-  for _attempt in $(seq 1 15); do
+  for ((attempt = 1; attempt <= 15; attempt++)); do
     pid="$("$RELEASE_BIN" pid 2>/dev/null || true)"
     [ -n "$pid" ] && break
     sleep 1
@@ -213,13 +229,13 @@ case "$COMMAND" in
 
     control_port="${LEMON_CONTROL_PLANE_PORT:-4040}"
 
-    if ! curl -fsS "http://127.0.0.1:$control_port/healthz" >/dev/null 2>&1; then
+    if ! control_plane_healthy "$control_port"; then
       info "daemon not running; starting it"
       start_daemon
 
       healthy=""
-      for _attempt in $(seq 1 30); do
-        if curl -fsS "http://127.0.0.1:$control_port/healthz" >/dev/null 2>&1; then
+      for ((attempt = 1; attempt <= 30; attempt++)); do
+        if control_plane_healthy "$control_port"; then
           healthy=1
           break
         fi

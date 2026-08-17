@@ -275,7 +275,6 @@ jobs:
           cache: npm
           cache-dependency-path: |
             clients/lemon-web/package-lock.json
-            clients/lemon-tui/package-lock.json
             clients/lemon-browser-node/package-lock.json
 
       # --- lemon-web ---
@@ -311,30 +310,35 @@ jobs:
         working-directory: clients/lemon-web
         run: npm audit --omit=dev --audit-level=high
 
-      # --- lemon-tui ---
-      - name: Install lemon-tui deps
-        working-directory: clients/lemon-tui
-        run: npm ci
+      # --- tui ---
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: clients/tui/.bun-version
 
-      - name: lemon-tui typecheck
-        working-directory: clients/lemon-tui
-        run: npm run typecheck
+      - name: Cache Bun install cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('clients/tui/bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
 
-      - name: lemon-tui lint
-        working-directory: clients/lemon-tui
-        run: npm run lint
+      - name: Install tui deps
+        working-directory: clients/tui
+        run: bun install --frozen-lockfile
 
-      - name: lemon-tui build
-        working-directory: clients/lemon-tui
-        run: npm run build
+      - name: tui typecheck
+        working-directory: clients/tui
+        run: bun run check
 
-      - name: lemon-tui tests
-        working-directory: clients/lemon-tui
-        run: npm run test:coverage
+      - name: tui lint
+        working-directory: clients/tui
+        run: bun run lint
 
-      - name: lemon-tui audit
-        working-directory: clients/lemon-tui
-        run: npm audit --omit=dev --audit-level=high
+      - name: tui tests
+        working-directory: clients/tui
+        run: bun test
 
       # --- lemon-browser-node ---
       - name: Install lemon-browser-node deps

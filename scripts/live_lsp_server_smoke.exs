@@ -198,23 +198,21 @@ defmodule LemonScripts.LiveLspServerSmoke do
   end
 
   defp server_fixture(:pyright, :real_repo) do
-    source_file = "clients/lemon-cli/src/lemon_cli/theme.py"
+    source_file = "examples/external_agents/baseline_agent.py"
     fixed_text = repo_file!(source_file)
 
     %{
-      path: "lemon_cli/theme.py",
+      path: "baseline_agent.py",
       language_id: "python",
       text:
         String.replace(
           fixed_text,
-          "def get_theme(name: str) -> ThemeColors | None:\n",
-          "def get_theme(name: str -> ThemeColors | None:\n",
+          "def emit(message):\n",
+          "def emit(message:\n",
           global: false
         ),
       fixed_text: fixed_text,
       prepare: fn root ->
-        File.mkdir_p!(Path.join(root, "lemon_cli"))
-
         File.write!(
           Path.join(root, "pyproject.toml"),
           "[project]\nname = \"lemon-lsp-real-repo-python\"\nversion = \"0.1.0\"\n"
@@ -275,7 +273,7 @@ defmodule LemonScripts.LiveLspServerSmoke do
   end
 
   defp server_fixture(:typescript_language_server, :real_repo) do
-    fixed_text = repo_file!("clients/lemon-tui/src/theme.ts")
+    fixed_text = repo_file!("clients/tui/src/ui/theme/theme.ts")
 
     %{
       path: "src/theme.ts",
@@ -296,7 +294,7 @@ defmodule LemonScripts.LiveLspServerSmoke do
           root_marker_count: 2,
           companion_file_count: 0,
           real_repo_fixture: true,
-          source_file: "clients/lemon-tui/src/theme.ts",
+          source_file: "clients/tui/src/ui/theme/theme.ts",
           source_hash: content_hash(fixed_text)
         }
       end

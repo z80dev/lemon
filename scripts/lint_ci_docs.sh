@@ -342,6 +342,13 @@ def expect(label, value, expected):
     if value != expected:
         errors.append(f"{label}: {value!r} != {expected!r}")
 
+def normalize_calver(value):
+    match = re.fullmatch(r"(\d{4})\.(\d{1,2})\.(\d+)", value or "")
+    if not match:
+        return value
+    year, month, patch = match.groups()
+    return f"{year}.{int(month):02d}.{patch}"
+
 mix_text = read_text("mix.exs")
 mix_match = re.search(r'version:\s*"([^"]+)"', mix_text)
 if not mix_match:
@@ -353,7 +360,7 @@ else:
         errors.append(f"mix.exs: {mix_version!r} is not CalVer YYYY.MM.PATCH")
 
 package_json_paths = [
-    "clients/lemon-tui/package.json",
+    "clients/tui/package.json",
     "clients/lemon-browser-node/package.json",
     "clients/lemon-web/package.json",
     "clients/lemon-web/server/package.json",
@@ -364,11 +371,17 @@ package_json_paths = [
 for path in package_json_paths:
     with (root / path).open(encoding="utf-8") as f:
         data = json.load(f)
-    expect(path, data.get("version"), mix_version)
-    expect(f"{path}:engines.node", data.get("engines", {}).get("node"), ">=24.0.0")
+    version = data.get("version")
+    if path == "clients/tui/package.json":
+        expect(path, normalize_calver(version), normalize_calver(mix_version))
+    else:
+        expect(path, version, mix_version)
+    if path == "clients/tui/package.json":
+        expect(f"{path}:engines.bun", data.get("engines", {}).get("bun"), ">=1.3.14")
+    else:
+        expect(f"{path}:engines.node", data.get("engines", {}).get("node"), ">=24.0.0")
 
 package_lock_roots = [
-    "clients/lemon-tui/package-lock.json",
     "clients/lemon-browser-node/package-lock.json",
 ]
 
@@ -386,17 +399,8 @@ for package in ("server", "shared", "web"):
         mix_version,
     )
 
-pyproject = read_text("clients/lemon-cli/pyproject.toml")
-pyproject_match = re.search(r'(?m)^version = "([^"]+)"', pyproject)
-expect("clients/lemon-cli/pyproject.toml", pyproject_match.group(1) if pyproject_match else None, mix_version)
-
-uv_lock = read_text("clients/lemon-cli/uv.lock")
-uv_match = re.search(r'(?ms)\[\[package\]\]\nname = "lemon-cli"\nversion = "([^"]+)"', uv_lock)
-expect("clients/lemon-cli/uv.lock:[[package]] lemon-cli", uv_match.group(1) if uv_match else None, mix_version)
-
-banner = read_text("clients/lemon-cli/src/lemon_cli/tui/banner.py")
-banner_match = re.search(r"lemon-cli v(\d{4}\.\d{1,2}\.\d+)", banner)
-expect("clients/lemon-cli/src/lemon_cli/tui/banner.py", banner_match.group(1) if banner_match else None, mix_version)
+bun_version = read_text("clients/tui/.bun-version").strip()
+expect("clients/tui/.bun-version", bun_version, "1.3.14")
 
 if errors:
     print("\n".join(errors), file=sys.stderr)
@@ -1338,9 +1342,8 @@ requirements = [
             (".github/workflows/osv-scanner.yml", "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@c51854704019a247608d928f370c98740469d4b5"),
             (".github/workflows/osv-scanner.yml", "security-events: write"),
             (".github/workflows/osv-scanner.yml", "--lockfile=mix.lock"),
-            (".github/workflows/osv-scanner.yml", "--lockfile=clients/lemon-cli/uv.lock"),
             (".github/workflows/osv-scanner.yml", "--lockfile=clients/lemon-web/package-lock.json"),
-            (".github/workflows/osv-scanner.yml", "--lockfile=clients/lemon-tui/package-lock.json"),
+            (".github/workflows/osv-scanner.yml", "--lockfile=clients/tui/bun.lock"),
             (".github/workflows/osv-scanner.yml", "--lockfile=clients/lemon-browser-node/package-lock.json"),
             (".github/workflows/osv-scanner.yml", "--lockfile=apps/lemon_gateway/priv/package-lock.json"),
             (".github/workflows/osv-scanner.yml", "--lockfile=tools/diagrams/package-lock.json"),
@@ -1408,26 +1411,23 @@ else
   fail "J32: PR history integrity check is missing or undocumented"
 fi
 
-# ── J33: Python CLI package checks must stay wired and documented ────────────
+# ── J33: Bun TUI checks must stay wired and documented ───────────────────────
 if python3 - "$ROOT" <<'PYEOF'
 from pathlib import Path
 import sys
 
 root = Path(sys.argv[1])
 requirements = [
-    (".github/workflows/python-cli.yml", "name: Python CLI"),
-    (".github/workflows/python-cli.yml", 'python-version: "3.13"'),
-    (".github/workflows/python-cli.yml", "astral-sh/setup-uv@v6"),
-    (".github/workflows/python-cli.yml", "uv sync --locked --dev"),
-    (".github/workflows/python-cli.yml", "uv run ruff check src tests"),
-    (".github/workflows/python-cli.yml", "uv run pytest"),
-    (".github/workflows/python-cli.yml", "uv build --sdist --wheel"),
-    (".github/workflows/python-cli.yml", "lemon-cli-distributions"),
-    ("scripts/test", "uv run ruff check src tests"),
-    ("scripts/test", "uv build --sdist --wheel"),
-    ("docs/testing.md", "lemon-cli"),
-    ("docs/release/release_checklist_and_support_policy.md", "Python CLI package workflow"),
-    ("docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md", "PyPI-style CLI package"),
+    (".github/workflows/quality.yml", "oven-sh/setup-bun@v2"),
+    (".github/workflows/quality.yml", "bun-version-file: clients/tui/.bun-version"),
+    (".github/workflows/quality.yml", "hashFiles('clients/tui/bun.lock')"),
+    (".github/workflows/quality.yml", "bun install --frozen-lockfile"),
+    (".github/workflows/quality.yml", "bun run check"),
+    (".github/workflows/quality.yml", "bun run lint"),
+    (".github/workflows/quality.yml", "bun test"),
+    ("scripts/test", "(cd clients/tui && bun run check && bun test)"),
+    ("docs/testing.md", "Bun TUI in `clients/tui`"),
+    ("docs/release/release_checklist_and_support_policy.md", "## Bun TUI Package Check"),
 ]
 contents = {}
 missing = []
@@ -1444,9 +1444,9 @@ if missing:
     sys.exit(1)
 PYEOF
 then
-  pass "J33: Python CLI package check workflow is wired and documented"
+  pass "J33: Bun TUI checks are wired and documented"
 else
-  fail "J33: Python CLI package check workflow is missing or undocumented"
+  fail "J33: Bun TUI checks are missing or undocumented"
 fi
 
 # ── J34: Script-send CLI must stay scoped to Telegram/Discord and documented ─

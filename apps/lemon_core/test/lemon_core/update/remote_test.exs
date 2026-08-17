@@ -34,11 +34,38 @@ defmodule LemonCore.Update.RemoteTest do
   defp build_fixture_tarball(tmp_dir) do
     src = Path.join(tmp_dir, "src")
     File.mkdir_p!(Path.join(src, "bin"))
-    File.write!(Path.join(src, "bin/lemon"), "#!/bin/sh\necho hi\n")
+    write_executable!(Path.join(src, "bin/lemon"), "#!/bin/sh\necho hi\n")
     tarball = Path.join(tmp_dir, "artifact.tar.gz")
     {_output, 0} = System.cmd("tar", ["-czf", tarball, "-C", src, "."])
 
     digest(tarball)
+  end
+
+  # A tarball shaped like a release but missing the executable bit on its
+  # launcher — the staged tree must never be promoted.
+  defp build_unusable_tarball(tmp_dir) do
+    src = Path.join(tmp_dir, "bad-src")
+    File.mkdir_p!(Path.join(src, "bin"))
+    File.write!(Path.join(src, "bin/lemon"), "#!/bin/sh\necho hi\n")
+    tarball = Path.join(tmp_dir, "bad-artifact.tar.gz")
+    {_output, 0} = System.cmd("tar", ["-czf", tarball, "-C", src, "."])
+
+    digest(tarball)
+  end
+
+  defp build_unusable_tui_tarball(tmp_dir) do
+    src = Path.join(tmp_dir, "bad-tui-src")
+    File.mkdir_p!(Path.join(src, "tui/bin"))
+    File.write!(Path.join(src, "tui/bin/lemon-tui"), "#!/bin/sh\necho tui\n")
+    tarball = Path.join(tmp_dir, "bad-tui-artifact.tar.gz")
+    {_output, 0} = System.cmd("tar", ["-czf", tarball, "-C", src, "tui"])
+
+    digest(tarball)
+  end
+
+  defp write_executable!(path, contents) do
+    File.write!(path, contents)
+    File.chmod!(path, 0o755)
   end
 
   # The TUI ships a single top-level tui/ directory so it can be unpacked over
@@ -46,7 +73,7 @@ defmodule LemonCore.Update.RemoteTest do
   defp build_fixture_tui_tarball(tmp_dir) do
     src = Path.join(tmp_dir, "tui-src")
     File.mkdir_p!(Path.join(src, "tui/bin"))
-    File.write!(Path.join(src, "tui/bin/lemon-tui"), "#!/bin/sh\necho tui\n")
+    write_executable!(Path.join(src, "tui/bin/lemon-tui"), "#!/bin/sh\necho tui\n")
     tarball = Path.join(tmp_dir, "tui-artifact.tar.gz")
     {_output, 0} = System.cmd("tar", ["-czf", tarball, "-C", src, "tui"])
 
@@ -99,6 +126,17 @@ defmodule LemonCore.Update.RemoteTest do
     release_root = Path.join([state, "versions", release_version])
     File.mkdir_p!(release_root)
     {home, state, release_root}
+  end
+
+  defp remote_opts(base_url, home, release_root) do
+    [
+      base_url: base_url,
+      channel: "stable",
+      platform: "test-platform",
+      profile: "test_profile",
+      paths_opts: [home_dir: home],
+      release_root: release_root
+    ]
   end
 
   describe "check/1" do
@@ -320,6 +358,153 @@ defmodule LemonCore.Update.RemoteTest do
       # The verified runtime tarball is discarded too — nothing is left staged.
       refute File.exists?(Path.join([state, "tmp", "pkg.tar.gz"]))
       refute File.exists?(Path.join([state, "tmp", "tui.tar.gz"]))
+    end
+  end
+
+  describe "apply/1 — staging safety" do
+    test "refuses to promote a tarball whose bin/lemon is not executable", %{tmp_dir: tmp_dir} do
+      {bytes, sha256, size} = build_unusable_tarball(tmp_dir)
+      artifacts = [artifact("pkg.tar.gz", "test_profile", "test-platform", sha256, size)]
+
+      router =
+        artifact_router(
+          manifest("2099.01.0", artifacts),
+          "/releases/download/v2099.01.0/pkg.tar.gz",
+          bytes
+        )
+
+      base_url = start_server(router)
+      {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
+
+      assert {:error, {:incomplete_release, "bin/lemon"}} =
+               Remote.apply(remote_opts(base_url, home, release_root))
+
+      versions_dir = Path.join(state, "versions")
+      refute File.exists?(Path.join(versions_dir, "2099.01.0"))
+      refute File.exists?(Path.join(versions_dir, "2099.01.0.partial"))
+      refute File.exists?(Path.join(versions_dir, "current"))
+      assert File.ls!(Path.join(state, "tmp")) == []
+    end
+
+    test "refuses to promote when the staged TUI is not executable", %{tmp_dir: tmp_dir} do
+      {bytes, sha256, size} = build_fixture_tarball(tmp_dir)
+      {tui_bytes, tui_sha, tui_size} = build_unusable_tui_tarball(tmp_dir)
+
+      artifacts = [
+        artifact("pkg.tar.gz", "test_profile", "test-platform", sha256, size),
+        artifact("tui.tar.gz", "lemon_tui", "test-platform", tui_sha, tui_size)
+      ]
+
+      router =
+        downloads_router(manifest("2099.01.0", artifacts), %{
+          "/releases/download/v2099.01.0/pkg.tar.gz" => bytes,
+          "/releases/download/v2099.01.0/tui.tar.gz" => tui_bytes
+        })
+
+      base_url = start_server(router)
+      {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
+
+      assert {:error, {:incomplete_release, "tui/bin/lemon-tui"}} =
+               Remote.apply(remote_opts(base_url, home, release_root))
+
+      versions_dir = Path.join(state, "versions")
+      refute File.exists?(Path.join(versions_dir, "2099.01.0"))
+      refute File.exists?(Path.join(versions_dir, "2099.01.0.partial"))
+      assert File.ls!(Path.join(state, "tmp")) == []
+    end
+
+    test "keeps an existing usable install of the same version instead of re-extracting it", %{
+      tmp_dir: tmp_dir
+    } do
+      {bytes, sha256, size} = build_fixture_tarball(tmp_dir)
+      artifacts = [artifact("pkg.tar.gz", "test_profile", "test-platform", sha256, size)]
+
+      router =
+        artifact_router(
+          manifest("2099.01.0", artifacts),
+          "/releases/download/v2099.01.0/pkg.tar.gz",
+          bytes
+        )
+
+      base_url = start_server(router)
+      {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
+
+      # The target version is already on disk and usable — the directory
+      # `current` would point at. Deleting it to make room is the failure mode
+      # this guards.
+      versions_dir = Path.join(state, "versions")
+      existing = Path.join(versions_dir, "2099.01.0")
+      File.mkdir_p!(Path.join(existing, "bin"))
+      write_executable!(Path.join(existing, "bin/lemon"), "#!/bin/sh\necho existing\n")
+      sentinel = Path.join(existing, "SENTINEL")
+      File.write!(sentinel, "keep me")
+
+      assert {:ok, %{staged: "2099.01.0"}} =
+               Remote.apply(remote_opts(base_url, home, release_root))
+
+      assert File.exists?(sentinel)
+      assert {:ok, "2099.01.0"} = File.read_link(Path.join(versions_dir, "current"))
+      refute File.exists?(Path.join(versions_dir, "2099.01.0.partial"))
+    end
+
+    test "replaces an existing broken install of the same version", %{tmp_dir: tmp_dir} do
+      {bytes, sha256, size} = build_fixture_tarball(tmp_dir)
+      artifacts = [artifact("pkg.tar.gz", "test_profile", "test-platform", sha256, size)]
+
+      router =
+        artifact_router(
+          manifest("2099.01.0", artifacts),
+          "/releases/download/v2099.01.0/pkg.tar.gz",
+          bytes
+        )
+
+      base_url = start_server(router)
+      {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
+
+      versions_dir = Path.join(state, "versions")
+      broken = Path.join(versions_dir, "2099.01.0")
+      File.mkdir_p!(broken)
+      File.write!(Path.join(broken, "TRUNCATED"), "no launcher here")
+
+      assert {:ok, %{staged: "2099.01.0"}} =
+               Remote.apply(remote_opts(base_url, home, release_root))
+
+      assert File.exists?(Path.join([versions_dir, "2099.01.0", "bin", "lemon"]))
+      refute File.exists?(Path.join([versions_dir, "2099.01.0", "TRUNCATED"]))
+
+      # The moved-aside copy is discarded once the swap lands, and must not
+      # show up as a rollback candidate in the meantime.
+      assert versions_dir |> File.ls!() |> Enum.filter(&String.contains?(&1, ".broken.")) == []
+    end
+
+    test "an exception during staging leaves no partial directory behind", %{tmp_dir: tmp_dir} do
+      {bytes, sha256, size} = build_fixture_tarball(tmp_dir)
+      artifacts = [artifact("pkg.tar.gz", "test_profile", "test-platform", sha256, size)]
+
+      router =
+        artifact_router(
+          manifest("2099.01.0", artifacts),
+          "/releases/download/v2099.01.0/pkg.tar.gz",
+          bytes
+        )
+
+      base_url = start_server(router)
+      {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
+
+      # ~/.lemon/tmp occupied by a regular file makes the download's
+      # `File.mkdir_p!` raise, the class of failure that used to sail past
+      # every explicit cleanup path.
+      File.mkdir_p!(state)
+      File.write!(Path.join(state, "tmp"), "not a directory")
+
+      assert_raise File.Error, fn ->
+        Remote.apply(remote_opts(base_url, home, release_root))
+      end
+
+      versions_dir = Path.join(state, "versions")
+      refute File.exists?(Path.join(versions_dir, "2099.01.0.partial"))
+      refute File.exists?(Path.join(versions_dir, "current"))
+      assert File.dir?(Path.join(versions_dir, "2020.01.0"))
     end
   end
 

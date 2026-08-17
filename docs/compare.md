@@ -40,7 +40,7 @@ What is ready enough to evaluate:
 
 - source install on a developer machine
 - provider configuration through setup docs and secrets commands
-- local runtime startup through `./bin/lemon-dev` or `./bin/lemon`
+- local runtime startup through `./bin/lemon-tui` or `./bin/lemon`
 - doctor diagnostics and redacted support bundles
 - Hermes-class parity tracking through the launch scorecard
 - first-party text web search/fetch behavior in supported agent runs
@@ -97,7 +97,7 @@ Do not pick Lemon yet if you need:
 
 1. Install from [Install Lemon](install.md).
 2. Run `mix lemon.doctor`.
-3. Start the runtime with `./bin/lemon-dev /path/to/project`.
+3. Start the TUI with `./bin/lemon-tui`.
 4. Exercise a deterministic flow from [Demo Lemon](demo.md).
 5. Check current gaps in the [Mainstream Readiness Plan](plans/lemon-1.0-mainstream-readiness.md).
 6. Use [Support](support.md) if you hit setup or runtime issues.

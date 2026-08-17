@@ -6,6 +6,7 @@ import { ControlPlaneClient } from "../src/protocol/client.ts";
 import { initTheme, resetTheme } from "../src/ui/theme/theme.ts";
 import { invalidateThemeAdapters } from "../src/ui/theme/tui-adapters.ts";
 import { MemoryTerminal, renderPlain } from "./helpers/memory-terminal.ts";
+import { waitForText } from "./helpers/wait.ts";
 
 const teardown: Array<() => void> = [];
 
@@ -94,8 +95,8 @@ describe("AppShell", () => {
 			seq: 2,
 			text: "world",
 		});
-		await Bun.sleep(40);
-		expect(chatText(app)).toContain("Hello world");
+		// The reveal lands the text over a few 30fps frames.
+		await waitForText(() => chatText(app), "Hello world");
 
 		server.pushEvent("agent", {
 			type: "completed",
@@ -173,6 +174,19 @@ describe("AppShell", () => {
 		for (const width of [40, 60, 80, 120]) {
 			for (const line of app.chatContainer.render(width)) {
 				expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+			}
+		}
+	});
+
+	test("chrome rows fit even a very narrow terminal", async () => {
+		const { app } = await bootApp();
+		// pi-tui keeps a Text's padding at every width, so the banner, connection
+		// and status lines must clamp their own rows.
+		for (const width of [1, 2, 3, 4, 6, 10]) {
+			for (const container of [app.bannerContainer, app.statusLineContainer]) {
+				for (const line of container.render(width)) {
+					expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+				}
 			}
 		}
 	});

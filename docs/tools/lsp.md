@@ -240,7 +240,7 @@ It completed `pyright`, `gopls`, `clangd`, `rust_analyzer`,
 `typescript_language_server`, and `elixir_ls` with `completed_count: 6`,
 `failed_count: 0`, `fixture_profile: "real_repo"`, safe proof scope
 `lsp_real_repo_fixtures_smoke`, and six completed editor-flow checks. The copied
-or maintained source fixtures were `clients/lemon-cli/src/lemon_cli/theme.py`
+or maintained source fixtures included the pyright Python fixture
 (`source_hash: "209e9eb250c87516"`),
 `scripts/fixtures/lsp/real_repo/go/main.go`
 (`source_hash: "6c5dd41c620753d3"`),
@@ -248,7 +248,7 @@ or maintained source fixtures were `clients/lemon-cli/src/lemon_cli/theme.py`
 (`source_hash: "c82451181bce5e23"`),
 `native/lemon-wasm-runtime/src/protocol.rs`
 (`source_hash: "905becfa4c9066e7"`),
-`clients/lemon-tui/src/theme.ts` (`source_hash: "ae48222ccd5d3ca8"`), and
+`clients/tui/src/ui/theme/theme.ts` (`source_hash: "8800a18b5b8e0f84"`), and
 `apps/lemon_core/lib/lemon_core/event.ex`
 (`source_hash: "10c89df1100a6ea9"`). Every server reported diagnostics for the
 injected breakage, cleared after repair, reintroduced diagnostics, cleared

@@ -10,8 +10,8 @@ Full walkthrough for getting Lemon running on your machine.
 |---|---|---|
 | Elixir | 1.19.5+ | See below for install |
 | Erlang/OTP | 28.5+ | Bundled with asdf/Elixir install |
-| Node.js | 24 LTS+ | TUI and Web clients only |
-| Python | 3.10+ | Debug CLI only (optional) |
+| Node.js | 24 LTS+ | Web client only |
+| Bun | 1.3.14+ | TUI client only |
 | Rust/Cargo | stable | WASM tool auto-build (optional) |
 
 ### Installing Elixir
@@ -55,12 +55,18 @@ sudo dnf install -y elixir erlang
 ```
 </details>
 
-**Node.js (TUI/Web clients only):**
+**Node.js (Web client only):**
 ```bash
 # macOS
 brew install node@24
 # Linux (nvm)
 nvm install 24
+```
+
+**Bun (TUI client only):**
+```bash
+curl -fsSL https://bun.sh/install | bash
+bun --version
 ```
 
 ---
@@ -77,9 +83,9 @@ mix compile
 
 **Optional — build the TUI client:**
 ```bash
-cd clients/lemon-tui
-npm install
-npm run build
+cd clients/tui
+bun install
+bun run check
 cd ../..
 ```
 
@@ -248,14 +254,11 @@ Prints the distributed node name on boot. Use it to attach a remote shell:
 ### Development / TUI
 
 ```bash
-# Starts Elixir backend + TUI
-./bin/lemon-dev /path/to/your/project
+# Starts the dev-mode TUI and auto-starts the runtime when needed
+./bin/lemon-tui
 
-# Custom model
-./bin/lemon-dev /path/to/project --model anthropic:claude-sonnet-4-20250514
-
-# Local model via OpenAI-compat API
-./bin/lemon-dev /path --model openai:llama3.1:8b --base-url http://localhost:11434/v1
+# Custom control-plane endpoint
+./bin/lemon-tui --ws-url ws://localhost:4040/ws
 ```
 
 ### Web UI
