@@ -122,6 +122,13 @@ async function resolve(
 		return;
 	}
 	const row = pending[index];
+	// The host owns the resolve when there is one: it dismisses the panel, writes
+	// the store and annotates the transcript record. Only a host without an
+	// approval controller (a bare command harness) falls back to the raw call.
+	if (ctx.ui.resolveApproval) {
+		await ctx.ui.resolveApproval(row.approvalId, decision);
+		return;
+	}
 	await ctx.methods.approvalResolve({ approvalId: row.approvalId, decision });
 	// The `exec.approval.resolved` event clears the store; this keeps the local
 	// view honest when the daemon resolves without echoing (older builds).

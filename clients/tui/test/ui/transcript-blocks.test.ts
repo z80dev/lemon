@@ -1,9 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
-import type { ToolBlock } from "../../src/store/transcript-model.ts";
 import { AssistantMessageComponent } from "../../src/ui/components/assistant-message.ts";
 import { NoticeComponent } from "../../src/ui/components/notice-message.ts";
-import { ToolLineComponent } from "../../src/ui/components/tool-block.ts";
 import { TranscriptContainer } from "../../src/ui/components/transcript-container.ts";
 import { UserMessageComponent } from "../../src/ui/components/user-message.ts";
 import { initTheme, resetTheme } from "../../src/ui/theme/theme.ts";
@@ -20,23 +18,6 @@ afterEach(() => {
 	resetTheme();
 	invalidateThemeAdapters();
 });
-
-function toolBlock(overrides: Partial<ToolBlock> = {}): ToolBlock {
-	return {
-		id: "tool-1",
-		kind: "tool",
-		at: 0,
-		runId: "run-1",
-		actionId: "a1",
-		toolKind: "command",
-		title: "bash",
-		detail: undefined,
-		phase: "started",
-		ok: undefined,
-		message: undefined,
-		...overrides,
-	};
-}
 
 function fitsWidth(lines: readonly string[], width = WIDTH): boolean {
 	return lines.every((line) => visibleWidth(line) <= width);
@@ -145,27 +126,6 @@ describe("AssistantMessageComponent", () => {
 		const text = renderPlain(component.render(WIDTH));
 		expect(text).toContain("partial");
 		expect(text).toContain("Error: provider exploded");
-	});
-});
-
-describe("ToolLineComponent", () => {
-	test("stays unfinalized until the tool completes", () => {
-		const component = new ToolLineComponent(toolBlock());
-		expect(component.isTranscriptBlockFinalized()).toBe(false);
-		expect(renderPlain(component.render(WIDTH))).toContain("bash");
-
-		component.update(toolBlock({ phase: "completed", ok: true, message: "exit 0" }));
-		expect(component.isTranscriptBlockFinalized()).toBe(true);
-		const text = renderPlain(component.render(WIDTH));
-		expect(text).toContain("✓ bash");
-		expect(text).toContain("exit 0");
-	});
-
-	test("a failed tool renders the error glyph", () => {
-		const component = new ToolLineComponent(
-			toolBlock({ phase: "completed", ok: false, message: "exit 1" }),
-		);
-		expect(renderPlain(component.render(WIDTH))).toContain("✗ bash");
 	});
 });
 

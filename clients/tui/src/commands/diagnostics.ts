@@ -139,6 +139,21 @@ export const usageCommand: SlashCommand = {
 	},
 };
 
+/** Translate a range word (7d, 30d, today, week, month) into startDate/endDate. */
+function costRangeParams(range: string): { startDate: string; endDate: string } | undefined {
+	const DAY_MS = 24 * 60 * 60 * 1000;
+	const iso = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+	const now = Date.now();
+	const daysMatch = /^(\d{1,3})d$/.exec(range.toLowerCase());
+	let days: number | undefined;
+	if (daysMatch) days = Number(daysMatch[1]);
+	else if (range === "today") days = 0;
+	else if (range === "week") days = 7;
+	else if (range === "month") days = 30;
+	if (days === undefined) return undefined;
+	return { startDate: iso(now - days * DAY_MS), endDate: iso(now) };
+}
+
 export const costCommand: SlashCommand = {
 	name: "cost",
 	summary: "spend breakdown",
@@ -147,19 +162,31 @@ export const costCommand: SlashCommand = {
 	methods: [METHOD.usageCost],
 	async run(ctx, argv) {
 		const range = argv[0];
-		const result = await ctx.methods.usageCost(range ? { range, period: range } : undefined);
+		// The server only understands startDate/endDate (ISO dates); range
+		// words are a client-side convenience translated here.
+		const params = range ? costRangeParams(range) : undefined;
+		if (range && !params) {
+			ctx.ui.noticeBlock([`cost: unrecognized range "${range}" (try 7d, 30d, today, week, month)`]);
+			return;
+		}
+		const result = await ctx.methods.usageCost(params);
 		const lines = [`cost${range ? ` — ${range}` : ""}`];
-		const total = pickNumber(result, "total", "cost", "summary.total");
+		const span = `${pickString(result, "startDate") ?? "?"} → ${pickString(result, "endDate") ?? "?"}`;
+		lines.push(`period: ${span}`);
+		const total = pickNumber(result, "totalCost", "total", "cost", "summary.total");
 		if (total !== undefined) lines.push(`total: ${humanCost(total)}`);
-		const providers = asArray(result.providers ?? result.breakdown);
-		if (providers.length > 0) {
+		const breakdown = result.breakdown;
+		if (breakdown && typeof breakdown === "object" && !Array.isArray(breakdown)) {
+			for (const [provider, cost] of Object.entries(breakdown as Record<string, unknown>)) {
+				if (typeof cost === "number") lines.push(`  ${provider}: ${humanCost(cost)}`);
+			}
+		} else {
+			const providers = asArray(result.providers ?? breakdown);
 			for (const provider of providers) {
 				lines.push(
 					`  ${pickString(provider, "provider", "name") ?? "?"}: ${humanCost(pickNumber(provider, "cost", "total")) ?? "$0"}`,
 				);
 			}
-		} else if (total === undefined) {
-			lines.push(...shallowLines(result));
 		}
 		ctx.ui.noticeBlock(lines);
 	},

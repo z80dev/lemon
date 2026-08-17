@@ -196,9 +196,15 @@ export class ToolShelfComponent implements Component {
 	 */
 	#recompute(): void {
 		const merge = this.#entries.length >= SHELF_MERGE_THRESHOLD;
+		let changed = false;
 		for (const card of this.#entries) {
-			card.setCompact(merge && card.isTranscriptBlockFinalized());
+			const compact = merge && card.isTranscriptBlockFinalized();
+			if (card.compact !== compact) changed = true;
+			card.setCompact(compact);
 		}
-		this.#version++;
+		// Only a real shape change bumps the version. An update the card dropped
+		// (a replayed phase regression) must leave this block byte-identical, and
+		// a version bump alone would force the transcript to re-emit its rows.
+		if (changed) this.#version++;
 	}
 }

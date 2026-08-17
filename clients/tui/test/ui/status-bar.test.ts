@@ -124,6 +124,26 @@ describe("breakpoints", () => {
 	});
 });
 
+describe("sessions off screen", () => {
+	const line = (overrides: Partial<StatusBarData>) =>
+		stripAnsi(renderStatusLine(data(overrides), 120));
+
+	test("counts the sessions that are working somewhere else", () => {
+		expect(line({ busy: false, busySessions: 1 })).toContain("3 sessions ●1");
+		expect(line({ busy: true, busySessions: 2 })).toContain("3 sessions ●2");
+	});
+
+	test("says nothing extra when the session on screen is the only one working", () => {
+		expect(line({ busy: true, busySessions: 1 })).toContain("3 sessions");
+		expect(line({ busy: true, busySessions: 1 })).not.toContain("●");
+		expect(line({ busy: false, busySessions: 0 })).not.toContain("●");
+	});
+
+	test("a single session never grows the segment", () => {
+		expect(line({ sessionCount: 1, busySessions: 1 })).not.toContain("sessions");
+	});
+});
+
 describe("the component", () => {
 	test("returns the same array while nothing changed", () => {
 		const bar = new StatusBar({ data: () => data() });

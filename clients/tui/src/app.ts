@@ -6,9 +6,15 @@
  *   banner        welcome + connection state
  *   chat          TranscriptContainer: the blocks, with the native-scrollback
  *                 commit seam (`getNativeScrollbackLiveRegionStart`)
- *   status        panels that sit above the status line (P4 approvals, queue)
+ *   queue         the editable backlog, when there is one
+ *   approval      the decision panel, when a tool is waiting
+ *   status        spare slot above the status line
  *   statusLine    one line: session, activity, approvals
  *   editor        the prompt
+ *
+ * The two panels sit *below* the transcript on purpose: everything under the
+ * transcript's live region is repainted every frame, so a panel that appears,
+ * grows and vanishes can never strand a row in the terminal's own scrollback.
  *
  * Wiring rules this file keeps to, because later phases depend on them:
  *   - controllers own the stores and the UI; components stay dumb
@@ -20,26 +26,42 @@
 
 import { ProcessTerminal, type Terminal } from "@oh-my-pi/pi-tui/terminal";
 import { Container, TUI } from "@oh-my-pi/pi-tui/tui";
-import { indentBlock, pickNumber } from "./commands/format.ts";
+import { indentBlock, pickNumber, pickString } from "./commands/format.ts";
 import { type CommandHost, type CommandRegistry, createCommandRegistry } from "./commands/index.ts";
+import { SUBMISSION_MODES } from "./commands/registry.ts";
 import { editInExternalEditor } from "./external-editor.ts";
 import { getGitModeline } from "./git-utils.ts";
 import { ControlPlaneClient } from "./protocol/client.ts";
-import { ControlPlaneMethods } from "./protocol/methods.ts";
-import type { AgentEvent, ChatHistoryMessage } from "./protocol/types.ts";
-import { AppStore } from "./store/app-store.ts";
+import { ControlPlaneMethods, METHOD } from "./protocol/methods.ts";
+import type {
+	AgentCompletedEvent,
+	AgentEvent,
+	ChatHistoryMessage,
+	QueueMode,
+} from "./protocol/types.ts";
+import { AppStore, type SubmissionMode } from "./store/app-store.ts";
+import type { QueueItem } from "./store/queue-store.ts";
 import type { SessionStore } from "./store/session-store.ts";
 import type { NoticeLevel } from "./store/transcript-model.ts";
 import { CustomEditor } from "./ui/components/custom-editor.ts";
 import { ModelPicker } from "./ui/components/model-picker.ts";
 import { PickerOverlay } from "./ui/components/pickers.ts";
+import { QueuePanelComponent } from "./ui/components/queue-panel.ts";
+import { SessionSwitcher } from "./ui/components/session-switcher.ts";
 import { StatusBar, type StatusBarData } from "./ui/components/status-bar.ts";
 import { TranscriptContainer } from "./ui/components/transcript-container.ts";
 import { ClampedText } from "./ui/components/width-safe.ts";
-import { CommandController } from "./ui/controllers/command-controller.ts";
+import { ApprovalController } from "./ui/controllers/approval-controller.ts";
+import { CommandController, type DeliverOptions } from "./ui/controllers/command-controller.ts";
 import { EventController } from "./ui/controllers/event-controller.ts";
 import { InputController } from "./ui/controllers/input-controller.ts";
 import { SelectorController } from "./ui/controllers/selector-controller.ts";
+import {
+	type ConfirmSpec,
+	SessionController,
+	synthesizeHistory,
+} from "./ui/controllers/session-controller.ts";
+import { AppearanceController, type ThemePreference } from "./ui/theme/appearance.ts";
 import { getTheme } from "./ui/theme/theme.ts";
 import { getEditorTheme } from "./ui/theme/tui-adapters.ts";
 
@@ -60,6 +82,11 @@ export interface AppShellOptions {
 	cwd?: string;
 	/** Test seam for the status bar's git poll. */
 	readBranch?: (cwd: string) => Promise<string | null>;
+	/**
+	 * What `main.ts` resolved from env + config. `auto` keeps following the
+	 * terminal's OSC 11 reports for as long as the client runs.
+	 */
+	themePreference?: ThemePreference;
 }
 
 export function defaultSessionKey(now: Date = new Date()): string {
@@ -77,9 +104,14 @@ export class AppShell {
 	readonly selectors: SelectorController;
 	readonly commandController: CommandController;
 	readonly input: InputController;
+	readonly approvals: ApprovalController;
+	readonly sessions: SessionController;
+	readonly appearance: AppearanceController;
 
 	readonly bannerContainer = new Container();
 	readonly chatContainer = new TranscriptContainer();
+	readonly queueContainer = new Container();
+	readonly approvalContainer = new Container();
 	readonly statusContainer = new Container();
 	readonly statusLineContainer = new Container();
 	readonly editorContainer = new Container();
@@ -91,6 +123,8 @@ export class AppShell {
 	readonly #statusBar: StatusBar;
 	readonly #editor: CustomEditor;
 	readonly #modelPicker: ModelPicker;
+	readonly #switcher: SessionSwitcher;
+	readonly #queuePanel: QueuePanelComponent;
 	readonly #host: CommandHost;
 
 	readonly #version: string;
@@ -99,6 +133,11 @@ export class AppShell {
 
 	#disposers: Array<() => void> = [];
 	#started = false;
+	#queueMounted = false;
+	/** True while the queue panel, rather than the editor, owns the keyboard. */
+	#queueFocused = false;
+	/** Set by Alt+Enter; consumed by the very next submission and then forgotten. */
+	#modeOverride: SubmissionMode | undefined;
 
 	constructor(options: AppShellOptions) {
 		this.#version = options.version ?? "dev";
@@ -115,6 +154,7 @@ export class AppShell {
 			onAbort: () => this.#abortActiveRun(),
 			onQuit: (code) => this.requestExit(code),
 			onExternalEdit: () => this.openExternalEditor(),
+			onCycleMode: () => this.cycleSubmissionMode(),
 			notice: (text, level) => this.events.notice(text, level),
 			requestRender: () => this.tui.requestRender(),
 		});
@@ -126,6 +166,23 @@ export class AppShell {
 			transcript: this.chatContainer,
 			onStatusChanged: () => this.#renderStatus(),
 			smoothStreaming: () => smooth,
+		});
+
+		this.#queuePanel = new QueuePanelComponent({
+			onEdit: (item) => this.editQueued(item),
+			onDelete: (item) => this.deleteQueued(item),
+			onBlur: () => this.blurQueue(),
+			requestRender: () => this.tui.requestRender(),
+		});
+		this.approvals = new ApprovalController({
+			store: this.store,
+			methods: this.methods,
+			events: this.events,
+			tui: this.tui,
+			container: this.approvalContainer,
+			notice: (text, level) => this.events.notice(text, level),
+			focusEditor: () => this.#restoreFocus(),
+			refreshStatus: () => this.#renderStatus(),
 		});
 
 		this.#statusBar = new StatusBar({
@@ -147,6 +204,33 @@ export class AppShell {
 			present: (overlay) => this.selectors.open(overlay),
 			repaint: () => this.selectors.repaint(),
 		});
+		this.sessions = new SessionController({
+			store: this.store,
+			methods: this.methods,
+			events: this.events,
+			tui: this.tui,
+			editor: this.#editor,
+			sendPrompt: (text) => this.sendPrompt(text),
+			refreshStatus: () => this.#renderStatus(),
+			confirm: (spec) => this.#confirm(spec),
+		});
+		this.#switcher = new SessionSwitcher({
+			store: this.store,
+			methods: this.methods,
+			present: (overlay) => this.selectors.open(overlay),
+			repaint: () => this.selectors.repaint(),
+			switchSession: (key) => this.sessions.switch(key),
+			createSession: async (key, prompt) => {
+				await this.sessions.create(key, prompt);
+			},
+			closeSession: (key) => this.sessions.requestClose(key),
+			notice: (text, level) => this.events.notice(text, level),
+		});
+		this.appearance = new AppearanceController({
+			terminal: this.tui.terminal,
+			preference: options.themePreference,
+			onChange: () => this.#themeChanged(),
+		});
 		this.#host = this.#buildHost();
 		this.commands = createCommandRegistry({
 			openExternalEditor: () => this.openExternalEditor(),
@@ -157,16 +241,20 @@ export class AppShell {
 			methods: this.methods,
 			client: this.client,
 			host: this.#host,
-			sink: { deliver: (text) => this.sendPrompt(text) },
+			sink: { deliver: (text, options) => this.sendPrompt(text, options) },
 			tui: this.tui,
 			cwd: this.#cwd,
 		});
 		this.input = new InputController({
 			tui: this.tui,
-			hasOverlay: () => this.selectors.isOpen,
+			// A pending approval is modal: Ctrl+L must not clear the transcript out
+			// from under a question the daemon is blocked on.
+			hasOverlay: () => this.selectors.isOpen || this.approvals.panel.visible,
 			openModelPicker: () => this.#modelPicker.open(),
+			openSessionSwitcher: () => this.#switcher.open(),
 			openExternalEditor: () => this.openExternalEditor(),
 			clearTranscript: () => this.#host.clearTranscript(),
+			focusQueue: () => this.focusQueue(),
 			notice: (text) => this.events.notice(text),
 		});
 	}
@@ -199,23 +287,45 @@ export class AppShell {
 		this.#buildUi();
 		this.input.attach();
 		this.events.attach();
+		this.approvals.attach();
 		this.#disposers.push(
 			this.client.events.on("state", () => this.#renderConnection()),
-			this.client.events.on("queued", () => this.#renderConnection()),
-			this.client.events.on("queue-flushed", () => this.#renderConnection()),
+			this.client.events.on("queued", () => {
+				this.#renderConnection();
+				this.syncQueuePanel();
+			}),
+			this.client.events.on("queue-flushed", () => {
+				this.#renderConnection();
+				this.syncQueuePanel();
+			}),
 			// A finished run is the moment the branch and the token budget can
-			// both have moved, and the only one worth spending a request on.
+			// both have moved, and the only one worth spending a request on. It is
+			// also the moment the session's backlog is allowed to move.
 			this.client.events.on("agent", (event: AgentEvent) => {
 				if (event?.type !== "completed") return;
 				void this.#statusBar.refreshBranch();
 				void this.refreshUsage();
+				void this.drainQueue((event as AgentCompletedEvent).sessionKey ?? this.store.focusedKey);
 			}),
+			// A re-handshake means the client's picture of the daemon is stale: which
+			// sessions are live, what landed while the socket was down, and which
+			// approvals are still waiting all have to be re-read.
+			this.client.events.on("resync-needed", () => void this.sessions.resync()),
 			this.store.events.on("mode-changed", () => this.#renderStatus()),
+			this.store.events.on("session-changed", () => this.syncQueuePanel()),
+			this.store.queue.events.on("changed", ({ sessionKey }) => {
+				if (sessionKey === this.store.focusedKey) this.syncQueuePanel();
+				this.#renderStatus();
+			}),
 			() => this.#statusBar.dispose(),
 			() => this.selectors.dispose(),
+			() => this.approvals.dispose(),
 			() => this.input.dispose(),
 		);
 		this.tui.start();
+		// After tui.start(), so the terminal is listening when pi-tui's OSC 11
+		// query comes back with the background color.
+		this.appearance.start();
 		this.#statusBar.start();
 		this.#renderStatus();
 		try {
@@ -237,13 +347,7 @@ export class AppShell {
 	// -- ui -----------------------------------------------------------------
 
 	#buildUi(): void {
-		const theme = getTheme();
-		this.#banner.setText(
-			`${theme.fg("bannerTitle", "lemon")} ${theme.fg("bannerSubtitle", `tui ${this.#version}`)}  ${theme.fg(
-				"dim",
-				"/help · Ctrl+O model · Ctrl+G editor · Ctrl+C abort/quit",
-			)}`,
-		);
+		this.#buildBanner();
 		this.bannerContainer.addChild(this.#banner);
 		this.bannerContainer.addChild(this.#connectionLine);
 		this.statusLineContainer.addChild(this.#statusBar);
@@ -261,11 +365,24 @@ export class AppShell {
 
 		this.tui.addChild(this.bannerContainer);
 		this.tui.addChild(this.chatContainer);
+		this.tui.addChild(this.queueContainer);
+		this.tui.addChild(this.approvalContainer);
 		this.tui.addChild(this.statusContainer);
 		this.tui.addChild(this.statusLineContainer);
 		this.tui.addChild(this.editorContainer);
 		this.tui.setFocus(this.#editor);
 		this.#renderConnection();
+	}
+
+	/** The banner text, rebuilt whenever the palette changes under it. */
+	#buildBanner(): void {
+		const theme = getTheme();
+		this.#banner.setText(
+			`${theme.fg("bannerTitle", "lemon")} ${theme.fg("bannerSubtitle", `tui ${this.#version}`)}  ${theme.fg(
+				"dim",
+				"/help · Ctrl+X sessions · Ctrl+O model · Ctrl+G editor · Ctrl+C abort/quit",
+			)}`,
+		);
 	}
 
 	#renderConnection(): void {
@@ -295,10 +412,13 @@ export class AppShell {
 			contextWindow: contextWindowFor(this.store, session.model),
 			sessionCount: this.store.sessions.size,
 			busy: session.busy,
+			busySessions: this.store.busySessions(),
 			unread: this.store.totalUnread(),
 			approvals: this.store.pendingApprovals,
 			connection: this.client.state,
-			mode: this.store.submissionMode,
+			// What the *next* prompt will do, which is what the user is about to
+			// decide — not the standing default it may be overriding.
+			mode: this.effectiveMode,
 			thinking: session.thinkingLevel,
 			engine: session.engine,
 			queued: this.client.queued.length,
@@ -326,8 +446,146 @@ export class AppShell {
 		this.events.notice("aborting…");
 		void this.methods
 			.chatAbort({ runId, sessionKey: session.key })
+			// The reply is the daemon agreeing to stop, which is the moment the
+			// partial answer becomes final: seal it with the interrupted marker
+			// rather than waiting for a `completed` that may never describe it as
+			// anything but a normal end.
+			.then(() => this.events.markInterrupted(runId, session))
 			.catch((error) => this.events.notice(`abort failed: ${describeError(error)}`, "error"));
 		return true;
+	}
+
+	// -- the queue ------------------------------------------------------------
+
+	/** Focus the queue panel. False when there is nothing queued to focus. */
+	focusQueue(): boolean {
+		this.syncQueuePanel();
+		if (!this.#queuePanel.visible) return false;
+		this.#queueFocused = true;
+		this.#queuePanel.focused = true;
+		this.tui.setFocus(this.#queuePanel);
+		this.tui.requestRender();
+		return true;
+	}
+
+	/** Hand the keyboard back to the editor, leaving the queue on screen. */
+	blurQueue(): void {
+		this.#queueFocused = false;
+		this.#queuePanel.focused = false;
+		this.#focusEditor();
+	}
+
+	/** Enter in the panel: the item goes back to being a draft. */
+	editQueued(item: QueueItem): void {
+		if (item.state !== "queued-local") {
+			this.events.notice("that one is already on its way to the daemon", "warning");
+			return;
+		}
+		this.store.queue.remove(this.store.focusedKey, item.id);
+		this.#editor.setText(item.text);
+		this.blurQueue();
+	}
+
+	deleteQueued(item: QueueItem): void {
+		if (item.state !== "queued-local") {
+			this.events.notice("that one is already on its way to the daemon", "warning");
+			return;
+		}
+		this.store.queue.remove(this.store.focusedKey, item.id);
+	}
+
+	/**
+	 * Mirror the store into the panel, mounting or unmounting it as the backlog
+	 * appears and empties. Requests the protocol client parked while offline are
+	 * shown alongside ours: from the user's seat both are "typed but not answered",
+	 * and hiding half of that would make the client look like it lost a prompt.
+	 */
+	syncQueuePanel(): void {
+		const key = this.store.focusedKey;
+		const local = this.store.queue.items(key);
+		const parked = this.client.queued
+			.filter(
+				(entry) =>
+					entry.method === METHOD.chatSend && pickString(entry.params, "sessionKey") === key,
+			)
+			.map(
+				(entry): QueueItem => ({
+					id: `offline:${entry.id}`,
+					text: pickString(entry.params, "prompt") ?? "",
+					state: "waiting-connection",
+					at: 0,
+				}),
+			);
+		const items = parked.length > 0 ? [...local, ...parked] : local;
+		this.#queuePanel.update(items);
+		if (items.length === 0) this.#unmountQueue();
+		else this.#mountQueue();
+		this.tui.requestRender();
+	}
+
+	/**
+	 * Send the head of a session's backlog now that its run is over. One item per
+	 * completion: the next one waits for the run this one starts, which is what
+	 * makes the queue a queue rather than a burst.
+	 */
+	async drainQueue(sessionKey: string): Promise<void> {
+		const session = this.store.sessions.get(sessionKey);
+		if (!session || session.busy) return;
+		const item = this.store.queue.shift(sessionKey);
+		if (!item) return;
+		await this.#send(item.text, session);
+	}
+
+	#mountQueue(): void {
+		if (this.#queueMounted) return;
+		this.#queueMounted = true;
+		this.queueContainer.addChild(this.#queuePanel);
+	}
+
+	#unmountQueue(): void {
+		if (!this.#queueMounted) return;
+		this.#queueMounted = false;
+		this.queueContainer.clear();
+		const hadFocus = this.#queueFocused;
+		this.#queueFocused = false;
+		this.#queuePanel.focused = false;
+		if (hadFocus) this.#focusEditor();
+	}
+
+	#focusEditor(): void {
+		this.tui.setFocus(this.#editor);
+		this.tui.requestRender();
+	}
+
+	/** Where focus belongs once a modal panel goes away. */
+	#restoreFocus(): void {
+		if (this.#queueFocused && this.#queuePanel.visible) {
+			this.tui.setFocus(this.#queuePanel);
+			this.tui.requestRender();
+			return;
+		}
+		this.#focusEditor();
+	}
+
+	/**
+	 * Alt+Enter: pick a different mode for the next submission without changing
+	 * the default. One-shot because that is what the key is for — the standing
+	 * choice is `/mode`, and a chord that silently rewrote it would make the
+	 * status line's promise wrong for every prompt after this one.
+	 */
+	cycleSubmissionMode(): SubmissionMode {
+		const current = this.#modeOverride ?? this.store.submissionMode;
+		const index = SUBMISSION_MODES.indexOf(current);
+		const next = SUBMISSION_MODES[(index + 1) % SUBMISSION_MODES.length]!;
+		this.#modeOverride = next;
+		this.events.notice(`next submission: ${next} (alt+enter cycles · /mode sets the default)`);
+		this.#renderStatus();
+		return next;
+	}
+
+	/** The mode the next submission will use, override included. */
+	get effectiveMode(): SubmissionMode {
+		return this.#modeOverride ?? this.store.submissionMode;
 	}
 
 	/** Ctrl+G / `/editor`: hand the draft to $EDITOR and take back what returns. */
@@ -360,24 +618,100 @@ export class AppShell {
 	}
 
 	/**
-	 * The prompt sink: echo the user's text and send it.
+	 * The prompt sink, and the whole submission state machine.
 	 *
-	 * P4 wraps this (queue / steer / interrupt) by replacing the `sink` handed to
-	 * the {@link CommandController}; the signature is the contract.
+	 *   idle                     -> `chat.send` (the daemon's default, collect)
+	 *   busy + queue             -> held in the {@link QueueStore}, never sent
+	 *   busy + steer             -> `chat.send queueMode: steer`
+	 *   busy + interrupt         -> `chat.send queueMode: interrupt`, and the
+	 *                               partial answer is sealed as interrupted
+	 *
+	 * Both degradations are visible rather than silent. Steering a run that just
+	 * ended is a lost race, not a mistake, so the prompt still goes out as a new
+	 * turn and says so; a daemon that refuses `steer` or `interrupt` outright
+	 * leaves the prompt in the queue, where the user can still get at it, instead
+	 * of dropping it on the floor.
 	 */
-	async sendPrompt(text: string): Promise<void> {
+	async sendPrompt(text: string, options: DeliverOptions = {}): Promise<void> {
 		const prompt = text.trim();
 		if (prompt.length === 0) return;
 		const session = this.store.focused;
-		this.events.addUserBlock(prompt, session);
+		const mode = options.mode ?? this.#takeModeOverride();
 		this.#editor.disarm();
 
+		if (!session.busy) {
+			if (mode !== "queue" && justFinished(session)) {
+				this.events.notice(`the run finished first — sending as a new turn`, "warning", session);
+			}
+			await this.#send(prompt, session);
+			return;
+		}
+		if (mode === "queue") {
+			this.store.queue.push(session.key, prompt);
+			this.events.notice(
+				`queued (${this.store.queue.length(session.key)}) — ctrl+q to edit`,
+				"info",
+				session,
+			);
+			return;
+		}
+		await this.#sendWhileBusy(prompt, session, mode);
+	}
+
+	/** A plain send: echo, dispatch, remember the run. */
+	async #send(prompt: string, session: SessionStore, queueMode?: QueueMode): Promise<void> {
+		this.events.addUserBlock(prompt, session);
 		try {
-			const result = await this.methods.chatSend({ sessionKey: session.key, prompt });
+			const result = await this.methods.chatSend({
+				sessionKey: session.key,
+				prompt,
+				...(queueMode ? { queueMode } : {}),
+			});
 			if (result?.runId) this.events.noteRunStarted(result.runId, session);
 		} catch (error) {
 			this.events.notice(`send failed: ${describeError(error)}`, "error", session);
 		}
+	}
+
+	/**
+	 * Steer or interrupt a run in flight.
+	 *
+	 * The send is awaited *before* anything is drawn: an interrupt that the
+	 * daemon refuses must not leave a run marked as stopped when it is still
+	 * going, and the echo of the interrupting prompt has to land below the block
+	 * it interrupted, not above it.
+	 */
+	async #sendWhileBusy(
+		prompt: string,
+		session: SessionStore,
+		mode: Exclude<SubmissionMode, "queue">,
+	): Promise<void> {
+		const runId = session.activeRunId;
+		try {
+			const result = await this.methods.chatSend({
+				sessionKey: session.key,
+				prompt,
+				queueMode: mode,
+			});
+			if (mode === "interrupt" && runId) this.events.markInterrupted(runId, session);
+			this.events.addUserBlock(prompt, session);
+			if (result?.runId) this.events.noteRunStarted(result.runId, session);
+		} catch (error) {
+			this.store.queue.push(session.key, prompt);
+			this.events.notice(
+				`${mode} refused (${describeError(error)}) — queued instead, ctrl+q to edit`,
+				"warning",
+				session,
+			);
+		}
+	}
+
+	/** Read and clear the one-shot Alt+Enter override. */
+	#takeModeOverride(): SubmissionMode {
+		const override = this.#modeOverride;
+		this.#modeOverride = undefined;
+		if (override) this.#renderStatus();
+		return override ?? this.store.submissionMode;
 	}
 
 	// -- the command host ----------------------------------------------------
@@ -417,14 +751,73 @@ export class AppShell {
 				this.selectors.open(overlay);
 			},
 			closeOverlay: () => this.selectors.close(),
+			openSessionSwitcher: () => void this.#switcher.open(),
+			switchSession: (sessionKey: string) => this.sessions.switch(sessionKey),
+			createSession: async (sessionKey?: string, prompt?: string) => {
+				await this.sessions.create(sessionKey, prompt);
+			},
+			closeSession: (sessionKey: string) => this.sessions.requestClose(sessionKey),
+			resetSession: (sessionKey: string) => this.sessions.resetLocal(sessionKey),
+			focusQueue: () => this.focusQueue(),
+			queuedPrompts: () => this.store.queue.items(this.store.focusedKey).map((item) => item.text),
+			resolveApproval: (approvalId: string, decision: string) =>
+				this.approvals.resolve(approvalId, decision),
+			markInterrupted: (runId: string) => this.events.markInterrupted(runId),
+			keyHelp: () => [
+				...this.input.describe(),
+				"alt+enter — use a different submission mode for the next prompt only",
+			],
 			frameLog: () => this.client.recentFrames(),
 			replayHistory: (messages: ChatHistoryMessage[]) => this.#replayHistory(messages),
 			openModelPicker: () => this.#modelPicker.open(),
-			themeChanged: () => {
-				this.tui.invalidate();
-				this.tui.requestRender(true);
-			},
+			themeChanged: () => this.#themeChanged(),
+			setThemePreference: (preference: ThemePreference) =>
+				this.appearance.setPreference(preference),
+			themeStatus: () => ({
+				preference: this.appearance.preference,
+				appearance: this.appearance.appearance,
+				source:
+					this.appearance.preference === "auto"
+						? this.appearance.reported
+							? "the terminal"
+							: "the default"
+						: "your setting",
+			}),
 		};
+	}
+
+	/**
+	 * Repaint everything in the new palette. The theme object is mutated rather
+	 * than replaced, so the style functions components captured keep working —
+	 * but every cached *row* in the tree was rendered with the old colors, hence
+	 * the tree-wide invalidate and the forced redraw.
+	 */
+	#themeChanged(): void {
+		this.#buildBanner();
+		this.tui.invalidate();
+		this.tui.requestRender(true);
+	}
+
+	/** A two-option overlay for a decision that cannot be undone. */
+	#confirm(spec: ConfirmSpec): void {
+		const overlay = new PickerOverlay({
+			title: spec.title,
+			items: [
+				{ value: "confirm", label: spec.confirmLabel },
+				{ value: "cancel", label: "cancel" },
+			],
+			footer: "enter chooses · esc cancels",
+			onSelect: (item) => {
+				this.selectors.close();
+				if (item.value === "confirm") void spec.onConfirm();
+				else spec.onCancel?.();
+			},
+			onCancel: () => {
+				this.selectors.close();
+				spec.onCancel?.();
+			},
+		});
+		this.selectors.open(overlay);
 	}
 
 	/**
@@ -447,19 +840,7 @@ export class AppShell {
 	 * into it.
 	 */
 	#replayHistory(messages: ChatHistoryMessage[]): void {
-		const session = this.store.focused;
-		for (const message of messages) {
-			const at = message.timestampMs ?? Date.now();
-			const content = message.content ?? "";
-			if (message.role === "user") {
-				session.addUser(content, at);
-				continue;
-			}
-			const runId = `history:${message.id}`;
-			session.ensureAssistant(runId, at);
-			session.appendDelta(runId, Number.NaN, content);
-			session.finalizeRun(runId, { ok: true });
-		}
+		synthesizeHistory(this.store.focused, messages);
 		this.events.rebuildFocused();
 		this.tui.requestRender(true, { clearScrollback: true });
 	}
@@ -500,4 +881,18 @@ export function contextWindowFor(store: AppStore, model: string | undefined): nu
 function describeError(error: unknown): string {
 	if (error instanceof Error) return error.message;
 	return String(error);
+}
+
+/** How long after a run ends a `steer` still counts as having lost a race. */
+export const STEER_GRACE_MS = 2000;
+
+/**
+ * True when the session's run ended moments ago. A `steer` submitted in that
+ * window was aimed at a run that was still going when the user pressed Enter,
+ * so it earns an explanation; one typed into a long-idle session is just a
+ * prompt and gets none.
+ */
+export function justFinished(session: SessionStore, nowMs: number = Date.now()): boolean {
+	if (session.lastRunEndedAtMs <= 0) return false;
+	return nowMs - session.lastRunEndedAtMs < STEER_GRACE_MS;
 }

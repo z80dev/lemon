@@ -128,11 +128,27 @@ describe("diagnostics", () => {
 		expect(harness.host.statusRefreshes).toBeGreaterThan(0);
 	});
 
-	test("/cost passes a range through", async () => {
-		harness.server.respondWith("usage.cost", { total: 4.5, providers: [] });
+	test("/cost translates a range word into startDate/endDate", async () => {
+		harness.server.respondWith("usage.cost", {
+			startDate: "2026-08-10",
+			endDate: "2026-08-17",
+			totalCost: 4.5,
+			breakdown: { anthropic: 4.5 },
+		});
 		await harness.run("/cost week");
-		expect(harness.server.requestsFor("usage.cost")[0].params).toMatchObject({ range: "week" });
+		const params = harness.server.requestsFor("usage.cost")[0].params as Record<string, unknown>;
+		expect(typeof params.startDate).toBe("string");
+		expect(typeof params.endDate).toBe("string");
+		expect(params.startDate as string).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+		expect(params.range).toBeUndefined();
 		expect(harness.host.text).toContain("$4.50");
+		expect(harness.host.text).toContain("anthropic");
+	});
+
+	test("/cost rejects an unknown range word locally", async () => {
+		await harness.run("/cost fortnight");
+		expect(harness.server.requestsFor("usage.cost")).toHaveLength(0);
+		expect(harness.host.text).toContain("unrecognized range");
 	});
 
 	test("/logs tails with a limit and a level", async () => {

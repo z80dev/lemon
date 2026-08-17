@@ -34,7 +34,16 @@ import { getTheme, type Theme } from "../theme/theme.ts";
 import { buildToolView, type ToolCardState, type ToolView } from "../tool-view.ts";
 import { AccordionComponent, type AccordionState, resolveAccordionState } from "./accordion.ts";
 import { renderDiff } from "./diff.ts";
-import type { ToolBlockComponent } from "./tool-block.ts";
+
+/**
+ * What the transcript needs from a tool renderer: a component that can be
+ * re-driven from the block's current state. {@link ToolShelfComponent} holds
+ * these; nothing else constructs one.
+ */
+export interface ToolBlockComponent extends Component {
+	/** Re-render from the block's current state (phase, ok, detail). */
+	update(block: ToolBlock): void;
+}
 
 /** Redraw live cards at the spinner's glyph rate; faster only repaints identical frames. */
 export const SPINNER_INTERVAL_MS = 80;
@@ -129,6 +138,8 @@ export class ToolCardComponent implements ToolBlockComponent {
 	#spinnerTimer: ReturnType<typeof setInterval> | undefined;
 
 	#version = 0;
+	/** Fingerprint of the header's inputs, for no-op detection in #applyView. */
+	#headerKey = "";
 	#cachedVersion = -1;
 	#cachedWidth = -1;
 	#cachedAccordion = -1;
@@ -160,8 +171,19 @@ export class ToolCardComponent implements ToolBlockComponent {
 		return this.#accordion;
 	}
 
-	/** Re-derive everything from the block's current state. */
+	/**
+	 * Re-derive everything from the block's current state.
+	 *
+	 * Phase regressions are dropped. `SessionStore.upsertTool` already refuses
+	 * them, but the guard is repeated here because this is the component that
+	 * would actually rewrite the bytes: a card that has reported finalized may
+	 * already be in native scrollback, where nothing can be rewritten. The test
+	 * is against this card's own recorded completion, not `block.phase` — the
+	 * store hands back the same mutable block object, so reading the phase off
+	 * the argument would just re-read what the store already decided.
+	 */
 	update(block: ToolBlock): void {
+		if (this.#completedAt !== undefined && block.phase !== "completed") return;
 		this.#block = block;
 		this.#view = buildToolView(block);
 		if (block.phase === "completed" && this.#completedAt === undefined) {
@@ -298,9 +320,18 @@ export class ToolCardComponent implements ToolBlockComponent {
 				lines.push(theme.fg(slot, line));
 			}
 		}
+		// Only a real change bumps the version. `SessionStore.upsertTool` returns
+		// the same mutable block object it already holds, so a replayed frame it
+		// refused arrives here as an update whose content is identical — and a
+		// version bump alone makes the transcript re-emit rows that never moved.
+		const before = this.#accordion.version;
 		this.#accordion.setLines(lines);
 		this.#accordion.setSummary(summary.length > 0 ? theme.fg("toolDetail", summary) : "");
-		this.#version++;
+		const headerKey = `${this.#view.state}|${this.#view.kind}|${this.#view.title}|${this.#view.isError}|${this.#completedAt ?? "-"}`;
+		if (headerKey !== this.#headerKey || this.#accordion.version !== before) {
+			this.#headerKey = headerKey;
+			this.#version++;
+		}
 		this.#syncAnimation();
 	}
 

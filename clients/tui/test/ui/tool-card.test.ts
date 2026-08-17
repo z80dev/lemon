@@ -166,6 +166,47 @@ describe("render contract", () => {
 		expect(component.getTranscriptBlockVersion()).toBeGreaterThan(afterUpdate);
 	});
 
+	test("a replayed phase regression leaves a finalized card byte-identical", () => {
+		const fixture = fixtureByName("bash");
+		if (!fixture) throw new Error("no bash fixture");
+		const component = new ToolCardComponent(fixtureBlock(fixture, "running", { at: NOW - 2400 }), {
+			now: () => NOW,
+		});
+		component.update(fixtureBlock(fixture, "success", { at: NOW - 2400 }));
+		const sealed = component.render(80);
+		const version = component.getTranscriptBlockVersion();
+
+		// A reconnect redelivers `started`/`updated` after the result landed. The
+		// card has reported finalized, so its rows may already be in native
+		// scrollback — nothing about it may change again.
+		for (const state of ["streaming", "running"] as ToolCardState[]) {
+			component.update(fixtureBlock(fixture, state, { at: NOW - 2400 }));
+			expect(component.isTranscriptBlockFinalized()).toBe(true);
+			expect(component.getTranscriptBlockVersion()).toBe(version);
+			expect(component.render(80)).toBe(sealed);
+		}
+	});
+
+	test("never emits more columns than asked, down to a single column", () => {
+		for (const fixture of TOOL_FIXTURES) {
+			for (const state of STATES) {
+				for (const width of [1, 2, 3, 4, 5, 8, 12]) {
+					const component = new ToolCardComponent(
+						fixtureBlock(fixture, state, { at: NOW - 2400 }),
+						{ now: () => NOW },
+					);
+					for (const line of component.render(width)) {
+						expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+					}
+					component.setCompact(true);
+					for (const line of component.render(width)) {
+						expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+					}
+				}
+			}
+		}
+	});
+
 	test("declares no settled rows — a card commits whole or not at all", () => {
 		const component = card("bash", "running") as unknown as {
 			getTranscriptBlockSettledRows?: () => number;
@@ -269,6 +310,32 @@ describe("AccordionComponent", () => {
 		expect(accordion.version).toBe(version);
 		accordion.setLines(["a", "c"]);
 		expect(accordion.version).toBeGreaterThan(version);
+	});
+
+	test("the indent yields to the width rather than breaching it", () => {
+		const accordion = new AccordionComponent("expanded");
+		accordion.setLines(["abcdefghijkl", "mnop"]);
+		accordion.setSummary("abcdefghijkl");
+		for (const state of ["expanded", "collapsed"] as const) {
+			accordion.setState(state);
+			for (const width of [1, 2, 3, 4, 5, 8, 11]) {
+				for (const line of accordion.render(width)) {
+					expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+				}
+			}
+		}
+	});
+
+	test("the collapsed hint is dropped when it cannot coexist with the summary", () => {
+		const accordion = new AccordionComponent("collapsed");
+		accordion.setLines(["summary", "a", "b"]);
+		accordion.setSummary("summary");
+		// Wide enough for both.
+		expect(renderPlain(accordion.render(40))).toContain("+2 more");
+		// Too narrow: the summary wins, and the row still fits.
+		const narrow = accordion.render(8);
+		expect(renderPlain(narrow)).not.toContain("more");
+		expect(visibleWidth(narrow[0] ?? "")).toBeLessThanOrEqual(8);
 	});
 
 	test("cycleOverride walks the global default and back to unset", () => {

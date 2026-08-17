@@ -17,6 +17,7 @@ export const LEMON_KEYBINDINGS = {
 	"lemon.sessions.switch": { defaultKeys: "ctrl+x", description: "Switch session" },
 	"lemon.editor.external": { defaultKeys: "ctrl+g", description: "Edit the draft in $EDITOR" },
 	"lemon.transcript.clear": { defaultKeys: "ctrl+l", description: "Clear the transcript" },
+	"lemon.queue.focus": { defaultKeys: "ctrl+q", description: "Edit the queued prompts" },
 } as const;
 
 export type LemonKeybinding = keyof typeof LEMON_KEYBINDINGS;
@@ -29,6 +30,8 @@ export interface InputControllerOptions {
 	openSessionSwitcher?: () => void | Promise<void>;
 	openExternalEditor?: () => void | Promise<void>;
 	clearTranscript?: () => void;
+	/** Focus the queue panel. False when there is nothing queued to focus. */
+	focusQueue?: () => boolean;
 	notice?: (text: string) => void;
 }
 
@@ -68,6 +71,12 @@ export class InputController {
 			}
 			if (this.#matches(data, "lemon.transcript.clear")) {
 				this.#options.clearTranscript?.();
+				return { consume: true };
+			}
+			if (this.#matches(data, "lemon.queue.focus")) {
+				if (this.#options.focusQueue?.() === false) {
+					this.#options.notice?.("nothing is queued");
+				}
 				return { consume: true };
 			}
 			// Ctrl+G, Ctrl+C and Ctrl+D belong to the editor, which has focus in

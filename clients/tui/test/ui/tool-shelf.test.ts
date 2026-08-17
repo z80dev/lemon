@@ -204,6 +204,23 @@ describe("render contract", () => {
 		expect(shelf.render(80)).toBe(shelf.render(80));
 	});
 
+	test("an update the card drops leaves the shelf byte-identical", () => {
+		const session = new SessionStore("t");
+		const action = { id: "cmd-1", kind: "command", title: "`mix test`", detail: null };
+		const shelf = new ToolShelfComponent({ now: () => NOW });
+		shelf.add(session.upsertTool(action, "started", { runId: "r" }));
+		shelf.update(session.upsertTool(action, "completed", { runId: "r", ok: true }));
+		const sealed = shelf.render(80);
+		const version = shelf.getTranscriptBlockVersion();
+
+		// The store refuses the regression, so the block comes back unchanged; the
+		// shelf must not bump its version for a no-op either, or the transcript
+		// re-emits rows that never changed.
+		shelf.update(session.upsertTool(action, "started", { runId: "r" }));
+		expect(shelf.getTranscriptBlockVersion()).toBe(version);
+		expect(shelf.render(80)).toBe(sealed);
+	});
+
 	test("a new entry produces a fresh array and a higher version", () => {
 		const shelf = shelfWith([["read", "success"]]);
 		const first = shelf.render(80);

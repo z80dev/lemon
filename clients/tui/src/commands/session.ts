@@ -6,24 +6,45 @@
  * degrades to a plain list when the host has no picker mounted.
  */
 
+import type { ControlPlaneMethods } from "../protocol/methods.ts";
 import { METHOD } from "../protocol/methods.ts";
 import type { ChatHistoryMessage, SessionSummary } from "../protocol/types.ts";
+import type { AppStore } from "../store/app-store.ts";
 import { asArray, asRecord, humanTime, pickNumber, pickString } from "./format.ts";
 import type { CommandContext, PickerChoice, SlashCommand } from "./registry.ts";
 
 const HISTORY_DEFAULT = 20;
 
-interface SessionRow {
+/** How many stored sessions the merged list asks for. */
+export const SESSION_LIST_LIMIT = 100;
+
+export interface SessionRow {
 	key: string;
 	agentId?: string;
+	/** Running server-side, or busy in this client. */
 	active: boolean;
 	updatedAtMs?: number;
 	runCount?: number;
+	/** This client has a transcript for it. */
 	local: boolean;
+	/** Blocks that arrived while it was off screen. */
+	unread: number;
+	model?: string;
 }
 
-/** Merge `sessions.active.list`, `sessions.list` and locally-known sessions. */
-export async function collectSessions(ctx: CommandContext): Promise<SessionRow[]> {
+/** What the merge needs; {@link CommandContext} satisfies it structurally. */
+export interface SessionSource {
+	store: AppStore;
+	methods: ControlPlaneMethods;
+}
+
+/**
+ * Merge `sessions.active.list`, `sessions.list` and locally-known sessions into
+ * one list, newest first with live sessions on top. Both remote calls are
+ * best-effort: a daemon that cannot answer one still produces a usable list from
+ * the others, which is what keeps the switcher openable while reconnecting.
+ */
+export async function collectSessions(source: SessionSource): Promise<SessionRow[]> {
 	const rows = new Map<string, SessionRow>();
 	const add = (summary: SessionSummary, active: boolean) => {
 		const key = pickString(summary, "sessionKey", "session_key", "key");
@@ -36,26 +57,34 @@ export async function collectSessions(ctx: CommandContext): Promise<SessionRow[]
 			updatedAtMs: pickNumber(summary, "updatedAtMs") ?? existing?.updatedAtMs,
 			runCount: pickNumber(summary, "runCount") ?? existing?.runCount,
 			local: existing?.local ?? false,
+			unread: existing?.unread ?? 0,
+			model: pickString(summary, "model") ?? existing?.model,
 		});
 	};
 
-	if (ctx.methods.supports(METHOD.sessionsActiveList)) {
-		const result = await ctx.methods.sessionsActiveList().catch(() => undefined);
+	if (source.methods.supports(METHOD.sessionsActiveList)) {
+		const result = await source.methods.sessionsActiveList().catch(() => undefined);
 		for (const entry of asArray(result?.sessions)) add(entry as SessionSummary, true);
 	}
-	if (ctx.methods.supports(METHOD.sessionsList)) {
-		const result = await ctx.methods.sessionsList().catch(() => undefined);
+	if (source.methods.supports(METHOD.sessionsList)) {
+		const result = await source.methods
+			.sessionsList({ limit: SESSION_LIST_LIMIT })
+			.catch(() => undefined);
 		for (const entry of asArray(result?.sessions)) add(entry as SessionSummary, false);
 	}
-	for (const session of ctx.store.sessions.values()) {
+	for (const session of source.store.sessions.values()) {
 		const existing = rows.get(session.key);
 		rows.set(session.key, {
 			key: session.key,
 			agentId: existing?.agentId,
-			active: existing?.active ?? session.busy,
-			updatedAtMs: existing?.updatedAtMs,
+			active: session.busy || (existing?.active ?? false),
+			// A locally-known session's last block is a better "when" than a
+			// remote timestamp the daemon may only refresh on completion.
+			updatedAtMs: Math.max(existing?.updatedAtMs ?? 0, session.lastBlock?.at ?? 0) || undefined,
 			runCount: existing?.runCount,
 			local: true,
+			unread: session.unread,
+			model: session.model ?? existing?.model,
 		});
 	}
 	return [...rows.values()].sort((left, right) => {
@@ -69,6 +98,7 @@ function describeRow(row: SessionRow, focusedKey: string): PickerChoice {
 		row.key === focusedKey ? "current" : undefined,
 		row.active ? "active" : undefined,
 		row.local ? "local" : undefined,
+		row.unread > 0 ? `${row.unread} unread` : undefined,
 		row.runCount !== undefined ? `${row.runCount} run(s)` : undefined,
 		humanTime(row.updatedAtMs),
 	].filter(Boolean);
@@ -77,16 +107,18 @@ function describeRow(row: SessionRow, focusedKey: string): PickerChoice {
 
 export const sessionsCommand: SlashCommand = {
 	name: "sessions",
-	summary: "list sessions and switch between them",
+	summary: "list sessions and switch between them (also Ctrl+X)",
 	group: "sessions",
 	async run(ctx) {
+		// The switcher shows the same merged list with the lifecycle keys bound,
+		// so it wins whenever the UI has one mounted.
+		if (ctx.ui.openSessionSwitcher) {
+			ctx.ui.openSessionSwitcher();
+			return;
+		}
 		const rows = await collectSessions(ctx);
 		if (rows.length === 0) {
 			ctx.ui.notice("no sessions");
-			return;
-		}
-		if (ctx.ui.openSessionSwitcher) {
-			ctx.ui.openSessionSwitcher();
 			return;
 		}
 		const items = rows.map((row) => describeRow(row, ctx.store.focusedKey));
@@ -117,7 +149,7 @@ async function switchTo(ctx: CommandContext, key: string): Promise<void> {
 export const sessionCommand: SlashCommand = {
 	name: "session",
 	summary: "session lifecycle",
-	usage: "<new [key] | reset | delete | switch <key> | info>",
+	usage: "<new [key] [prompt…] | reset | delete [key] | switch <key> | info>",
 	group: "sessions",
 	async run(ctx, argv) {
 		const action = (argv[0] ?? "info").toLowerCase();
@@ -136,13 +168,16 @@ export const sessionCommand: SlashCommand = {
 				return;
 			}
 			case "new": {
-				const key = argv[1] ?? defaultNewSessionKey();
-				if (!ctx.ui.switchSession) {
-					ctx.ui.notice("creating sessions needs the switcher (P6)", "warning");
+				// `/session new [key] [first prompt…]` — everything past the key is
+				// the first message, which is also what mints the session daemon-side.
+				const key = argv[1];
+				const prompt = argv.slice(2).join(" ").trim();
+				if (!ctx.ui.createSession) {
+					ctx.ui.notice("this build cannot create sessions", "warning");
 					return;
 				}
-				await ctx.ui.switchSession(key);
-				ctx.ui.notice(`new session ${key}`);
+				await ctx.ui.createSession(key, prompt.length > 0 ? prompt : undefined);
+				ctx.ui.notice(`new session ${ctx.store.focusedKey}`);
 				return;
 			}
 			case "switch": {
@@ -160,15 +195,25 @@ export const sessionCommand: SlashCommand = {
 					return;
 				}
 				await ctx.methods.sessionsReset({ sessionKey: ctx.session.key });
-				ctx.ui.notice(`reset ${ctx.session.key} (server-side history cleared)`);
+				// Both sides forget together: a cleared server history under a
+				// transcript still on screen is a session the user cannot reason
+				// about, and the next switch would rebuild the stale half.
+				ctx.ui.resetSession?.(ctx.session.key);
+				ctx.ui.notice(`reset ${ctx.session.key} (history cleared here and on the daemon)`);
 				return;
 			}
-			case "delete": {
+			case "delete":
+			case "close": {
+				const key = argv[1] ?? ctx.session.key;
+				if (ctx.ui.closeSession) {
+					// The host asks for confirmation in an overlay.
+					await ctx.ui.closeSession(key);
+					return;
+				}
 				if (!ctx.methods.supports(METHOD.sessionsDelete)) {
 					ctx.ui.notice(`daemon does not support ${METHOD.sessionsDelete}`, "warning");
 					return;
 				}
-				const key = argv[1] ?? ctx.session.key;
 				// Deleting a session throws away server-side history, so the user
 				// has to name it: `/session delete` alone only asks.
 				if (argv[1] === undefined) {
@@ -188,10 +233,6 @@ export const sessionCommand: SlashCommand = {
 	},
 };
 
-function defaultNewSessionKey(now: Date = new Date()): string {
-	return `tui-${now.toISOString().replace(/[-:.]/g, "").slice(0, 15)}`;
-}
-
 export const resumeCommand: SlashCommand = {
 	name: "resume",
 	summary: "replay a session's stored history into the transcript",
@@ -202,6 +243,14 @@ export const resumeCommand: SlashCommand = {
 		const key = argv[0] && !/^\d+$/.test(argv[0]) ? argv[0] : ctx.session.key;
 		const countArg = argv.find((arg) => /^\d+$/.test(arg));
 		const limit = countArg ? Math.min(Number.parseInt(countArg, 10), 200) : 50;
+		// Resuming another session is a switch, and the switch already hydrates
+		// from stored history — replaying it into *this* transcript instead would
+		// mix two sessions' messages under one key.
+		if (key !== ctx.session.key && ctx.ui.switchSession) {
+			await ctx.ui.switchSession(key);
+			ctx.ui.notice(`switched to ${key}`);
+			return;
+		}
 		const result = await ctx.methods.chatHistory({
 			sessionKey: key,
 			limit,

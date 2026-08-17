@@ -84,9 +84,15 @@ const DEFAULT_CONFIG: LemonConfig = {
 
 /**
  * Get the config directory path (~/.lemon/)
+ *
+ * `$HOME` is read on every call rather than through Bun's cached `homedir()`,
+ * which is what the daemon does (`LemonCore.Paths.home_dir/1`). A client run
+ * against a scoped home must read and write the same file the daemon does —
+ * and it keeps a test that points `$HOME` at a temp dir off the real config.
  */
 export function getConfigDir(): string {
-	return path.join(os.homedir(), ".lemon");
+	const home = process.env.HOME?.trim();
+	return path.join(home && home.length > 0 ? home : os.homedir(), ".lemon");
 }
 
 /**

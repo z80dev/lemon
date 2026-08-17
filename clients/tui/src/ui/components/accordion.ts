@@ -170,15 +170,25 @@ export class AccordionComponent implements Component {
 
 	#build(width: number): readonly string[] {
 		if (this.#state === "hidden" || this.#lines.length === 0) return EMPTY;
-		const inner = Math.max(1, width - this.#indent);
-		const pad = " ".repeat(this.#indent);
+		// The indent is a preference, not an entitlement: at a width narrower than
+		// the indent itself, `pad + truncateToWidth(line, 1)` would emit more
+		// columns than the caller asked for. Give the content at least one column
+		// and spend whatever is left on indentation.
+		if (width < 1) return EMPTY;
+		const indent = Math.min(this.#indent, width - 1);
+		const inner = width - indent;
+		const pad = " ".repeat(indent);
 		if (this.#state === "collapsed") {
 			const theme = getTheme();
 			const summary = this.#summary || this.#lines[0] || "";
 			const hidden = this.#lines.length - 1;
 			const hint = hidden > 0 ? theme.fg("dim", ` ${this.#moreHint(hidden)}`) : "";
-			const room = Math.max(1, inner - visibleWidth(hint));
-			return [`${pad}${truncateToWidth(summary, room)}${hint}`];
+			const hintWidth = visibleWidth(hint);
+			// The hint is the first thing to go when it cannot coexist with at least
+			// one column of the summary it is annotating.
+			const fits = hintWidth > 0 && hintWidth + 1 <= inner;
+			const room = fits ? inner - hintWidth : inner;
+			return [`${pad}${truncateToWidth(summary, room)}${fits ? hint : ""}`];
 		}
 		const out: string[] = new Array(this.#lines.length);
 		for (let i = 0; i < this.#lines.length; i++) {

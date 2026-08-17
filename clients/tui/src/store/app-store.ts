@@ -15,6 +15,7 @@ import type {
 	ModelsListResult,
 } from "../protocol/types.ts";
 import { Emitter } from "./events.ts";
+import { QueueStore } from "./queue-store.ts";
 import { SessionStore } from "./session-store.ts";
 import type { ApprovalBlock } from "./transcript-model.ts";
 
@@ -29,8 +30,15 @@ export interface AppStoreEventMap {
 }
 
 /**
- * What happens to a prompt submitted while a run is in flight. P5 only stores
- * the setting; P4 gives `queue`/`steer`/`interrupt` their behaviour.
+ * What happens to a prompt submitted while a run is in flight:
+ *
+ *   `queue`      hold it in the {@link QueueStore} and send it when the run
+ *                ends — it never reaches the daemon before then, which is what
+ *                keeps it editable;
+ *   `steer`      send it into the running turn (`chat.send queueMode: steer`);
+ *   `interrupt`  stop the run and send it (`queueMode: interrupt`).
+ *
+ * The setting is the default; Alt+Enter overrides it for one submission.
  */
 export type SubmissionMode = "queue" | "steer" | "interrupt";
 
@@ -43,6 +51,14 @@ export class AppStore {
 	readonly events = new Emitter<AppStoreEventMap>();
 	readonly sessions = new Map<string, SessionStore>();
 	readonly approvals = new Map<string, PendingApproval>();
+	/**
+	 * Unsent editor text, per session. A switch parks the outgoing session's
+	 * draft here and takes the incoming one back out, so a half-typed prompt
+	 * survives a trip to another session instead of following the user around.
+	 */
+	readonly drafts = new Map<string, string>();
+	/** Prompts held client-side while a run is in flight, per session. */
+	readonly queue = new QueueStore();
 
 	connection: ConnectionState = "offline";
 	serverVersion: string | undefined;
@@ -137,5 +153,38 @@ export class AppStore {
 			if (session.key !== this.#focusedKey) total += session.unread;
 		}
 		return total;
+	}
+
+	/**
+	 * Sessions with a run in flight, on screen or not. The status line shows this
+	 * next to the session count: work continuing in a session the user is not
+	 * looking at is exactly the thing a single-session status line hides.
+	 */
+	busySessions(): number {
+		let busy = 0;
+		for (const session of this.sessions.values()) {
+			if (session.busy) busy += 1;
+		}
+		return busy;
+	}
+
+	/** Park the editor's text for a session (empty drafts are forgotten). */
+	setDraft(key: string, text: string): void {
+		if (text.length === 0) this.drafts.delete(key);
+		else this.drafts.set(key, text);
+	}
+
+	/** Take a session's parked draft back out; sessions with none get "". */
+	takeDraft(key: string): string {
+		return this.drafts.get(key) ?? "";
+	}
+
+	/** Forget a session entirely: transcript, draft, and focus if it had it. */
+	forgetSession(key: string): void {
+		this.sessions.delete(key);
+		this.drafts.delete(key);
+		// A backlog for a session that no longer exists would be sent at the next
+		// completion of a session that happens to reuse the key.
+		this.queue.clear(key);
 	}
 }

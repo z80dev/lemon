@@ -13,10 +13,11 @@
  *   Esc Esc  discards the draft — recoverable with ↑, because a discard the
  *            user did not mean is otherwise unrecoverable.
  *   ↑ / ↓    recall sent prompts while the draft is empty.
+ *   Alt+↵    cycle the submission mode for the next submission only.
  *
  * Submission funnels through one callback, {@link CustomEditorOptions.onSubmit}.
- * That single seam is where P4 layers queue / steer / interrupt; nothing else in
- * the client sends a prompt.
+ * That single seam is where the shell layers queue / steer / interrupt; nothing
+ * else in the client sends a prompt.
  */
 
 import { CombinedAutocompleteProvider } from "@oh-my-pi/pi-tui/autocomplete";
@@ -40,6 +41,13 @@ export interface CustomEditorOptions {
 	onQuit?: (code: number) => void;
 	/** Ctrl+G / `/editor`. */
 	onExternalEdit?: () => void | Promise<void>;
+	/**
+	 * Alt+Enter: cycle the submission mode for *this* submission only. The base
+	 * editor reserves Alt+Enter for exactly this kind of host hook (it inserts a
+	 * newline only when none is installed), and Shift+Enter is already the
+	 * newline key, so this is the one free chord next to the submit key.
+	 */
+	onCycleMode?: () => void;
 	notice?: (text: string, level?: NoticeLevel) => void;
 	/** Called after a key changed something the host may want repainted. */
 	requestRender?: () => void;
@@ -66,6 +74,10 @@ export class CustomEditor extends Editor {
 		this.#now = options.now ?? Date.now;
 		// Base Editor exposes submission as a property; ours is the only writer.
 		this.onSubmit = (text: string) => this.#submit(text);
+		if (options.onCycleMode) {
+			// Installing the hook is what stops Alt+Enter inserting a newline.
+			this.onAltEnter = () => options.onCycleMode?.();
+		}
 	}
 
 	/** Sent prompts, oldest first (the ↑ ring). */

@@ -23,7 +23,14 @@ export const abortCommand: SlashCommand = {
 			return;
 		}
 		const result = await ctx.methods.chatAbort({ runId, sessionKey: ctx.session.key });
-		ctx.ui.notice(result?.aborted === false ? `run ${runId} was already done` : `aborted ${runId}`);
+		if (result?.aborted === false) {
+			ctx.ui.notice(`run ${runId} was already done`);
+			return;
+		}
+		// A stopped run keeps the text it produced; the marker says the rest is
+		// missing because the user said so, not because the model stopped there.
+		ctx.ui.markInterrupted?.(runId);
+		ctx.ui.notice(`aborted ${runId}`);
 	},
 };
 
@@ -38,6 +45,9 @@ export const queueCommand: SlashCommand = {
 			ctx.ui.notice(`queue is empty (mode: ${ctx.store.submissionMode})`);
 			return;
 		}
+		// The panel already lists them, editably. Printing the same lines into the
+		// transcript on top of that would be a duplicate the user has to scroll past.
+		if (ctx.ui.focusQueue?.()) return;
 		const lines = [`queue — mode ${ctx.store.submissionMode}`];
 		for (const [index, text] of queued.entries()) lines.push(`${index + 1}. ${oneLine(text)}`);
 		for (const entry of parked) {
@@ -45,7 +55,6 @@ export const queueCommand: SlashCommand = {
 			lines.push(`(offline) ${oneLine(prompt)}`);
 		}
 		ctx.ui.noticeBlock(lines);
-		ctx.ui.focusQueue?.();
 	},
 };
 

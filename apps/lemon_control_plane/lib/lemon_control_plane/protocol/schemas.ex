@@ -487,7 +487,8 @@ defmodule LemonControlPlane.Protocol.Schemas do
       optional: %{
         "toolPolicy" => :map,
         "model" => :string,
-        "thinkingLevel" => :string
+        "thinkingLevel" => :string,
+        "preferredEngine" => :string
       }
     },
     "sessions.reset" => %{

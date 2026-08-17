@@ -15,6 +15,7 @@
 import { type SelectItem, SelectList } from "@oh-my-pi/pi-tui/components/select-list";
 import { fuzzyRank } from "@oh-my-pi/pi-tui/fuzzy";
 import { matchesKey } from "@oh-my-pi/pi-tui/keys";
+import { type MouseRoutable, routeSgrMouseInput, type SgrMouseEvent } from "@oh-my-pi/pi-tui/mouse";
 import type { Component } from "@oh-my-pi/pi-tui/tui";
 import { truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import { getTheme } from "../theme/theme.ts";
@@ -38,6 +39,19 @@ export interface PickerOptions {
 	 * toggle, a back step out of a second stage). Return true to consume.
 	 */
 	onKey?: (data: string) => boolean;
+	/**
+	 * Pointer events the host wants first refusal on, same contract as
+	 * {@link onKey}. A host that has taken over the keyboard (the switcher's
+	 * inline prompt) uses this to take the pointer with it, rather than letting a
+	 * stray click confirm a row behind the mode it is in.
+	 */
+	onMouse?: (event: SgrMouseEvent) => boolean;
+	/**
+	 * An extra line under the filter, recomputed on every repaint. The session
+	 * switcher renders its inline "new session" prompt here; returning undefined
+	 * leaves the row out entirely rather than drawing a blank one.
+	 */
+	detail?: () => string | undefined;
 }
 
 /**
@@ -54,7 +68,7 @@ export function filterItems(items: readonly PickerItem[], query: string): Picker
 	).map((entry) => entry.item);
 }
 
-export class PickerOverlay implements Component {
+export class PickerOverlay implements Component, MouseRoutable {
 	readonly #options: PickerOptions;
 	#filter: string;
 	#filtered: PickerItem[];
@@ -65,6 +79,12 @@ export class PickerOverlay implements Component {
 	#cachedWidth = -1;
 	#revision = 0;
 	#cachedRevision = -1;
+	/**
+	 * Frame-local row the list body starts on, recorded by the last render. The
+	 * chrome above it is fixed except for the optional detail row, so the pointer
+	 * cannot be hit-tested against a constant.
+	 */
+	#listTopRow = 3;
 
 	constructor(options: PickerOptions) {
 		this.#options = options;
@@ -91,6 +111,13 @@ export class PickerOverlay implements Component {
 		this.#filter = filter;
 		this.#filtered = filterItems(this.#options.items, filter);
 		this.#list = this.#buildList();
+		this.#invalidateCache();
+	}
+
+	/** Replace the hint line (a mode change inside one overlay). */
+	setFooter(footer: string): void {
+		if (this.#options.footer === footer) return;
+		this.#options.footer = footer;
 		this.#invalidateCache();
 	}
 
@@ -122,7 +149,34 @@ export class PickerOverlay implements Component {
 		this.#invalidateCache();
 	}
 
+	/**
+	 * Pointer events, at coordinates local to the overlay's own frame.
+	 *
+	 * Wheel ticks scroll the list wherever the pointer is — inside a modal the
+	 * wheel is the list's, since the terminal's own scrollback is not reachable
+	 * while the alternate screen is up. Clicks and hover only count on a row that
+	 * hit-tests to an item.
+	 */
+	routeMouse(event: SgrMouseEvent, line: number, _col: number): void {
+		if (this.#options.onMouse?.(event)) {
+			this.#invalidateCache();
+			return;
+		}
+		this.#list.routeMouse(event, line - this.#listTopRow, 0);
+		this.#invalidateCache();
+	}
+
 	handleInput(data: string): void {
+		// Mouse reports arrive on the same channel as keys; they are never filter
+		// text and must not reach the list's own key handling. The screen row is
+		// the frame-local row because overlays are mounted at the window origin
+		// (see SelectorController), which is also what makes tracking legal: the
+		// terminal only reports pointers while the alternate screen is up.
+		const routed = routeSgrMouseInput(data, (event) => {
+			this.routeMouse(event, event.row, event.col);
+			return true;
+		});
+		if (routed) return;
 		if (this.#options.onKey?.(data)) {
 			this.#invalidateCache();
 			return;
@@ -183,6 +237,14 @@ export class PickerOverlay implements Component {
 		const prompt = `${theme.cursor} `;
 		const filterText = truncateToWidth(this.#filter, Math.max(1, inner - visibleWidth(prompt)));
 		line(`${prompt}${filterText}`, `${theme.fg("dim", prompt)}${theme.fg("text", filterText)}`);
+
+		const detail = this.#options.detail?.();
+		if (detail !== undefined) {
+			const text = truncateToWidth(detail, inner);
+			line(text, theme.fg("info", text));
+		}
+		// Where the list body starts, for pointer hit-testing.
+		this.#listTopRow = rows.length;
 
 		// The list is asked for the inner width, so its own truncation keeps every
 		// row inside the box rather than pushing the right border off-screen.

@@ -83,8 +83,11 @@ export const MAX_BODY_LINES = 24;
 const TOOL_NAME_ALIASES: Record<string, string> = {
 	agent: "task",
 	applypatch: "patch",
+	editfile: "edit",
 	execute: "bash",
 	fetch: "webfetch",
+	fileread: "read",
+	filewrite: "write",
 	killshell: "bash",
 	listdirectory: "ls",
 	readfile: "read",
@@ -95,6 +98,7 @@ const TOOL_NAME_ALIASES: Record<string, string> = {
 	strreplace: "edit",
 	strreplaceeditor: "edit",
 	todo: "todowrite",
+	updatefile: "edit",
 	writefile: "write",
 };
 

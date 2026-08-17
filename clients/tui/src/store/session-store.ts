@@ -52,6 +52,12 @@ export class SessionStore {
 	focused = false;
 	/** Blocks appended while this session was not focused. */
 	unread = 0;
+	/**
+	 * When the last run ended, or 0 while none ever has. Read by the submission
+	 * modes: a `steer` that arrives moments after a run finished lost a race
+	 * rather than being nonsense, and says so instead of failing silently.
+	 */
+	lastRunEndedAtMs = 0;
 	/** Last engine reported by `agent started`, for the status line. */
 	engine: string | undefined;
 	/** Model this session runs on, as last set through `/model` or reported. */
@@ -185,6 +191,15 @@ export class SessionStore {
 		const existing = this.byActionId.get(actionId);
 		const detail = (action?.detail ?? undefined) as Record<string, unknown> | undefined;
 		if (existing) {
+			// A tool action's phase only ever advances. The transport can redeliver a
+			// `started`/`updated` frame after the result landed (a reconnect replay,
+			// an engine that re-announces a call), and applying it would regress a
+			// finalized ✓/✗ card back to running: the transcript would reopen its
+			// commit seam, and any completed row already written to native scrollback
+			// would be stranded there as stale bytes. The whole update is dropped,
+			// not just the phase — a `started` frame carries the pre-result detail,
+			// so merging it would erase the result from an already-sealed card.
+			if (existing.phase === "completed" && phase !== "completed") return existing;
 			existing.phase = phase;
 			existing.title = toolTitle(action) || existing.title;
 			if (detail !== undefined) existing.detail = detail;
@@ -228,6 +243,7 @@ export class SessionStore {
 		if (this.activeRunId === runId) {
 			this.activeRunId = undefined;
 			this.busy = false;
+			this.lastRunEndedAtMs = Date.now();
 		}
 		if (!block) return undefined;
 		if (block.status !== "streaming") return block;

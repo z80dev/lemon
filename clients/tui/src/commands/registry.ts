@@ -19,6 +19,7 @@ import type { ChatHistoryMessage } from "../protocol/types.ts";
 import type { AppStore, SubmissionMode } from "../store/app-store.ts";
 import type { SessionStore } from "../store/session-store.ts";
 import type { NoticeLevel } from "../store/transcript-model.ts";
+import type { ThemePreference } from "../ui/theme/appearance.ts";
 
 /** One entry in a picker overlay opened from a command. */
 export interface PickerChoice {
@@ -65,16 +66,36 @@ export interface CommandHost {
 	frameLog(): readonly string[];
 	/** Replay server-side history into the transcript (`/resume`). */
 	replayHistory(messages: ChatHistoryMessage[]): void;
-	/** P6: the Ctrl+X session switcher. */
+	/** The Ctrl+X session switcher. */
 	openSessionSwitcher?(): void;
-	/** P6: focus another session, hydrating it if cold. */
+	/** Focus another session, hydrating it if cold. */
 	switchSession?(sessionKey: string): void | Promise<void>;
-	/** P4: focus the pending-queue panel. */
-	focusQueue?(): void;
-	/** P4: the client-side queue, for `/queue` to describe. */
+	/** Mint a session (optionally keyed, optionally with a first prompt). */
+	createSession?(sessionKey?: string, prompt?: string): void | Promise<void>;
+	/** Drop a session locally and server-side, after confirming. */
+	closeSession?(sessionKey: string): void | Promise<void>;
+	/** Forget a session's transcript locally without touching the daemon. */
+	resetSession?(sessionKey: string): void;
+	/** Focus the pending-queue panel (`/queue`, Ctrl+Q). */
+	focusQueue?(): boolean;
+	/** The client-side queue for the focused session, for `/queue` to describe. */
 	queuedPrompts?(): readonly string[];
+	/**
+	 * Answer a pending approval. Routed through the host so the panel, the store
+	 * and the transcript record all learn about it — a command that called
+	 * `exec.approval.resolve` itself would leave the panel on screen.
+	 */
+	resolveApproval?(approvalId: string, decision: string): Promise<void>;
+	/** Render a user-stopped run as interrupted (partial text kept). */
+	markInterrupted?(runId: string): void;
+	/** One line per global key, appended to `/help` by the host that owns them. */
+	keyHelp?(): string[];
 	/** Re-render everything after a theme swap. */
 	themeChanged?(): void;
+	/** Install a theme preference; returns the appearance now on screen. */
+	setThemePreference?(preference: ThemePreference): "dark" | "light";
+	/** What `/theme` reports with no argument. */
+	themeStatus?(): { preference: ThemePreference; appearance: "dark" | "light"; source?: string };
 	/** The two-stage model picker (Ctrl+O), when the UI has one mounted. */
 	openModelPicker?(): void | Promise<void>;
 }
@@ -294,5 +315,5 @@ export function describeError(error: unknown): string {
 	return String(error);
 }
 
-/** Submission modes `/mode` cycles between. P4 gives them their behaviour. */
+/** Submission modes `/mode` sets and Alt+Enter cycles. */
 export const SUBMISSION_MODES: readonly SubmissionMode[] = ["queue", "steer", "interrupt"];

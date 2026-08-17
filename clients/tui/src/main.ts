@@ -8,8 +8,9 @@
  */
 
 import { AppShell } from "./app.ts";
+import { loadConfig } from "./config.ts";
 import { DEFAULT_WS_URL } from "./protocol/client.ts";
-import { initTheme } from "./ui/theme/theme.ts";
+import { initAppearanceTheme } from "./ui/theme/appearance.ts";
 
 /** Injected by `scripts/build-binary.ts` via Bun's `define`. */
 declare const LEMON_TUI_VERSION: string | undefined;
@@ -173,8 +174,13 @@ export async function main(argv: string[] = Bun.argv.slice(2)): Promise<number> 
 	}
 
 	// Must run before any pi-tui component is constructed: they take their theme
-	// by constructor argument and pi-tui ships no defaults.
-	initTheme();
+	// by constructor argument and pi-tui ships no defaults. `auto` installs the
+	// dark palette now and swaps it if the terminal answers the OSC 11 query
+	// with a light background — the answer arrives after the first frame.
+	const configuredTheme = await loadConfig()
+		.then((config) => config.agent?.theme)
+		.catch(() => undefined);
+	const theme = initAppearanceTheme({ configured: configuredTheme });
 
 	const version = await resolveVersion();
 	return await new Promise<number>((resolve) => {
@@ -182,6 +188,7 @@ export async function main(argv: string[] = Bun.argv.slice(2)): Promise<number> 
 			url: options.url,
 			sessionKey: options.sessionKey,
 			version,
+			themePreference: theme.preference,
 			onExit: (code) => resolve(code),
 		});
 		const shutdown = () => {

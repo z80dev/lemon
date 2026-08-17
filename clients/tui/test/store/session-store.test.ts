@@ -165,6 +165,53 @@ describe("SessionStore tools", () => {
 		expect(session.blocks.filter((b) => b.kind === "tool")).toHaveLength(1);
 	});
 
+	test("a phase never regresses once the action completed", () => {
+		const session = new SessionStore("s");
+		const action = { id: "a1", kind: "command", title: "bash", detail: null };
+		session.upsertTool(
+			{ ...action, detail: { name: "bash", args: { command: "ls" } } },
+			"started",
+			{
+				runId: "run-1",
+			},
+		);
+		const completed = session.upsertTool(
+			{ ...action, detail: { name: "bash", args: { command: "ls" } as unknown, result: "a\nb" } },
+			"completed",
+			{ runId: "run-1", ok: true, message: "exit 0" },
+		);
+
+		// A reconnect redelivers the opening frames. Applying them would regress a
+		// finalized card back to running and, worse, replace its result with the
+		// pre-result detail — rewriting rows that may already be in scrollback.
+		for (const phase of ["started", "updated"] as const) {
+			const replayed = session.upsertTool(
+				{ ...action, detail: { name: "bash", args: { command: "ls" } } },
+				phase,
+				{ runId: "run-1", ok: null, message: null },
+			);
+			expect(replayed).toBe(completed);
+			expect(replayed.phase).toBe("completed");
+			expect(replayed.ok).toBe(true);
+			expect(replayed.message).toBe("exit 0");
+			expect(replayed.detail?.result).toBe("a\nb");
+		}
+		expect(session.blocks.filter((b) => b.kind === "tool")).toHaveLength(1);
+	});
+
+	test("a late completed frame may still correct a completed action", () => {
+		const session = new SessionStore("s");
+		const action = { id: "a1", kind: "command", title: "bash", detail: null };
+		session.upsertTool(action, "completed", { runId: "run-1", ok: true });
+		const corrected = session.upsertTool(action, "completed", {
+			runId: "run-1",
+			ok: false,
+			message: "actually it failed",
+		});
+		expect(corrected.ok).toBe(false);
+		expect(corrected.message).toBe("actually it failed");
+	});
+
 	test("actions without an id fall back to a run+title key", () => {
 		const session = new SessionStore("s");
 		session.upsertTool({ id: null, kind: "tool", title: "read", detail: null }, "started", {

@@ -5,19 +5,23 @@
  */
 
 import { saveConfigKey } from "../config.ts";
-import { DARK_PALETTE, initTheme, type Palette, peekTheme } from "../ui/theme/theme.ts";
-import { invalidateThemeAdapters } from "../ui/theme/tui-adapters.ts";
+import {
+	installAppearance,
+	normalizePreference,
+	type ThemePreference,
+} from "../ui/theme/appearance.ts";
+import { DARK_PALETTE, LIGHT_PALETTE, type Palette, peekTheme } from "../ui/theme/theme.ts";
 import { indentBlock } from "./format.ts";
 import { describeError, type SlashCommand, SUBMISSION_MODES } from "./registry.ts";
 
-/**
- * Theme registry. P7 owns the light palette and OSC 11 auto-detection; until it
- * lands this is the honest list — one theme, and `/theme` says so rather than
- * pretending a name it cannot install.
- */
+/** The palettes `/theme` can install, by the name they are stored under. */
 export const THEMES: Record<string, { palette: Palette; appearance: "dark" | "light" }> = {
 	"lemon-dark": { palette: DARK_PALETTE, appearance: "dark" },
+	"lemon-light": { palette: LIGHT_PALETTE, appearance: "light" },
 };
+
+/** What `/theme` accepts, in the order it prints them. */
+export const THEME_PREFERENCES: readonly ThemePreference[] = ["dark", "light", "auto"];
 
 export const helpCommand: SlashCommand = {
 	name: "help",
@@ -26,7 +30,12 @@ export const helpCommand: SlashCommand = {
 	usage: "[command]",
 	group: "general",
 	run(ctx, argv) {
-		ctx.ui.noticeBlock(ctx.registry.renderHelp(ctx, argv[0]));
+		const lines = [...ctx.registry.renderHelp(ctx, argv[0])];
+		// Only the full listing gets the key section; `/help mode` is about one
+		// command and should stay one command long.
+		const keys = argv[0] ? undefined : ctx.ui.keyHelp?.();
+		if (keys?.length) lines.push("", "keys:", ...keys.map((line) => `  ${line}`));
+		ctx.ui.noticeBlock(lines);
 	},
 };
 
@@ -92,6 +101,7 @@ export const modeCommand: SlashCommand = {
 				"queue — hold the prompt until the run finishes, then send it",
 				"steer — send it into the running turn",
 				"interrupt — stop the run and send it",
+				"alt+enter picks a mode for the next prompt only",
 			]);
 			return;
 		}
@@ -108,26 +118,41 @@ export const modeCommand: SlashCommand = {
 
 export const themeCommand: SlashCommand = {
 	name: "theme",
-	summary: "switch the color theme",
-	usage: "[name]",
+	summary: "switch the color theme (auto follows the terminal background)",
+	usage: "[dark|light|auto]",
 	group: "general",
 	async run(ctx, argv) {
-		const names = Object.keys(THEMES);
-		const requested = argv[0]?.toLowerCase();
+		const requested = normalizePreference(argv[0]);
+		if (!argv[0]) {
+			const status = ctx.ui.themeStatus?.();
+			const current = peekTheme();
+			const lines = [
+				`theme: ${current?.name ?? "(none)"}${status ? ` (${status.preference})` : ""}`,
+				`available: ${THEME_PREFERENCES.join(", ")}`,
+			];
+			if (status?.source) lines.push(`appearance ${status.appearance} — from ${status.source}`);
+			ctx.ui.noticeBlock(lines);
+			return;
+		}
 		if (!requested) {
-			const current = peekTheme()?.name ?? "(none)";
-			ctx.ui.noticeBlock([`theme: ${current}`, `available: ${names.join(", ")}`]);
+			ctx.ui.notice(
+				`unknown theme "${argv[0]}" (available: ${THEME_PREFERENCES.join(", ")})`,
+				"error",
+			);
 			return;
 		}
-		const entry = THEMES[requested];
-		if (!entry) {
-			ctx.ui.notice(`unknown theme "${requested}" (available: ${names.join(", ")})`, "error");
-			return;
-		}
-		initTheme({ name: requested, appearance: entry.appearance, palette: entry.palette });
-		invalidateThemeAdapters();
+		// The host owns the OSC 11 subscription, so it is the one that can honour
+		// `auto`. Without it (a command-only harness) `auto` can still resolve to
+		// a palette, it just will not keep following the terminal.
+		const appearance =
+			ctx.ui.setThemePreference?.(requested) ??
+			installAppearance(requested === "auto" ? "dark" : requested).appearance;
 		ctx.ui.themeChanged?.();
-		ctx.ui.notice(`theme: ${requested}`);
+		ctx.ui.notice(
+			requested === "auto"
+				? `theme: auto (${appearance})`
+				: `theme: ${peekTheme()?.name ?? requested}`,
+		);
 		try {
 			await saveConfigKey("agent", { theme: requested });
 		} catch (error) {

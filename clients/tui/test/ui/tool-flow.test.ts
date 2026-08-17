@@ -251,6 +251,52 @@ describe("shelf merging", () => {
 	});
 });
 
+describe("replayed frames", () => {
+	test("a started frame redelivered after completed cannot reopen the commit seam", async () => {
+		const { app, server } = await boot();
+		const detail = { name: "bash", args: { command: "ls -la" } };
+		server.pushEvent("agent", { type: "started", runId: "run-1", sessionKey: SESSION });
+		tool(server, { id: "t1", kind: "command", title: "`ls -la`", detail, phase: "started" });
+		await waitFor(() => toolBlocks(app).length === 1, { what: "the tool block" });
+		tool(server, {
+			id: "t1",
+			kind: "command",
+			title: "`ls -la`",
+			detail: { ...detail, result: "biome.json", result_meta: { exit_code: 0 } },
+			phase: "completed",
+			ok: true,
+		});
+		server.pushEvent("agent", {
+			type: "completed",
+			runId: "run-1",
+			sessionKey: SESSION,
+			ok: true,
+			answer: "done",
+		});
+		await waitFor(
+			() => {
+				app.chatContainer.render(100);
+				return app.chatContainer.getNativeScrollbackLiveRegionStart() === undefined;
+			},
+			{ what: "the seam to close" },
+		);
+		const sealed = transcript(app);
+
+		// A reconnect replays the opening frames. Nothing may move: the sealed rows
+		// may already be in native scrollback, where they cannot be rewritten.
+		tool(server, { id: "t1", kind: "command", title: "`ls -la`", detail, phase: "started" });
+		tool(server, { id: "t1", kind: "command", title: "`ls -la`", detail, phase: "updated" });
+		await waitFor(() => app.store.focused.byActionId.get("t1")?.phase === "completed", {
+			what: "the phase to stay completed",
+		});
+
+		expect(transcript(app)).toBe(sealed);
+		expect(transcript(app)).toContain("biome.json");
+		app.chatContainer.render(100);
+		expect(app.chatContainer.getNativeScrollbackLiveRegionStart()).toBeUndefined();
+	});
+});
+
 describe("action kinds", () => {
 	test("reasoning collapses to a summary line, subagents get their own glyph", async () => {
 		const { app, server } = await boot();

@@ -8,6 +8,16 @@
  * The controller also owns focus: the overlay takes it while it is up, and the
  * editor gets it back on close — with its draft untouched, because overlays
  * never write to the editor.
+ *
+ * **Why overlays are fullscreen.** pi-tui reports pointer events only while a
+ * fullscreen overlay holds the alternate screen, and that restriction is the
+ * feature: on the normal screen the wheel belongs to the terminal's own
+ * scrollback, which is where our transcript lives. Borrowing the alt screen for
+ * the modal is what lets a list be clicked and wheel-scrolled without ever
+ * taking the wheel away from the transcript. Mounting at the window origin
+ * (`row: 0, col: 0`) is the other half: a component's own rendered rows then
+ * line up 1:1 with the reported screen coordinates, so hit-testing needs no
+ * knowledge of pi-tui's overlay layout maths.
  */
 
 import type { Component, OverlayHandle, OverlayOptions, TUI } from "@oh-my-pi/pi-tui/tui";
@@ -19,10 +29,13 @@ export interface SelectorControllerOptions {
 }
 
 const DEFAULT_OVERLAY: OverlayOptions = {
-	width: "70%",
-	minWidth: 40,
-	maxHeight: "70%",
-	anchor: "center",
+	width: "100%",
+	maxHeight: "100%",
+	margin: 0,
+	row: 0,
+	col: 0,
+	fullscreen: true,
+	mouseTracking: true,
 };
 
 export class SelectorController {

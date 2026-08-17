@@ -35,6 +35,7 @@ import {
 	type ToolBlock,
 	toToolPhase,
 } from "../../store/transcript-model.ts";
+import { ApprovalRecordComponent } from "../components/approval-panel.ts";
 import { AssistantMessageComponent } from "../components/assistant-message.ts";
 import { NoticeComponent } from "../components/notice-message.ts";
 import { ToolShelfComponent } from "../components/tool-shelf.ts";
@@ -115,8 +116,8 @@ export class EventController {
 			this.#onApprovalRequested(event),
 		);
 		on("exec.approval.resolved", (event: ApprovalResolvedEvent) => {
-			this.#store.resolveApproval(event.approvalId, event.decision);
-			this.#onStatusChanged?.();
+			// Someone else answered: another client, or the daemon's own timeout.
+			this.resolveApproval(event.approvalId, event.decision);
 		});
 		on("shutdown", () => this.notice("daemon is shutting down", "warning"));
 	}
@@ -284,14 +285,28 @@ export class EventController {
 	#onApprovalRequested(event: ApprovalRequestedEvent): void {
 		const session = this.#sessionFor(event.sessionKey);
 		const block = session.addApprovalBlock(event.approvalId, event.tool ?? undefined);
+		// The block is the transcript's record; the panel (mounted by the approval
+		// controller, which watches the store) is where the decision is made.
 		this.#store.addApproval(event, block);
-		// P4 replaces this with the decision panel; until then the transcript at
-		// least records that something is waiting on the user.
-		this.notice(
-			`approval requested for ${event.tool ?? "a tool"} (${event.approvalId})`,
-			"warning",
-			session,
-		);
+		this.#sync(session);
+		this.#onStatusChanged?.();
+	}
+
+	/**
+	 * Forget a resolved approval and annotate its transcript record.
+	 *
+	 * Every resolve path funnels here — the panel, `/approve`, `/deny`, and the
+	 * daemon's own `exec.approval.resolved` — so the store, the block model and
+	 * the rendered line can never disagree about what was decided.
+	 */
+	resolveApproval(approvalId: string, decision: string): void {
+		const resolved = this.#store.resolveApproval(approvalId, decision);
+		const blockId = resolved?.block?.id;
+		if (blockId) {
+			const component = this.#components.get(blockId);
+			if (component instanceof ApprovalRecordComponent) component.annotate(decision);
+		}
+		this.#scheduleRender();
 		this.#onStatusChanged?.();
 	}
 
@@ -402,8 +417,13 @@ export class EventController {
 			case "notice":
 				return new NoticeComponent(block.text, block.level);
 			case "approval":
-				// P4 owns the approval panel; the notice beside it carries the news.
-				return undefined;
+				// The decision itself belongs to the panel below the transcript; this
+				// is only the history line, sealed once an answer exists.
+				return new ApprovalRecordComponent(
+					block.approvalId,
+					block.tool,
+					block.status === "resolved" ? (block.decision ?? "resolved") : undefined,
+				);
 			default:
 				return undefined;
 		}
