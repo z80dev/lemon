@@ -138,6 +138,8 @@ defmodule LemonCore.Update.CLI do
   defp report(:check, info, false) do
     IO.puts("Current: #{info.current}")
     IO.puts("Latest:  #{info.latest || "unknown"}")
+    report_artifact("Runtime", info[:artifact])
+    report_artifact("TUI", info[:tui_artifact])
     IO.puts(if info.update_available?, do: "Update available.", else: "Up to date.")
   end
 
@@ -151,6 +153,15 @@ defmodule LemonCore.Update.CLI do
 
   defp report(:rollback, info, false) do
     IO.puts("Rolled back. Active version: #{info.active}")
+  end
+
+  defp report_artifact(_label, nil), do: :ok
+
+  defp report_artifact(label, artifact) do
+    case artifact["file"] do
+      file when is_binary(file) -> IO.puts("#{label}: #{file}")
+      _ -> :ok
+    end
   end
 
   defp report_error(reason, true) do

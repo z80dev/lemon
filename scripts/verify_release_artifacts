@@ -10,8 +10,9 @@ Verifies a manifest.json (schema 2) and the release tarballs it describes:
   - per-artifact fields (file, profile, platform, os, arch, sha256, size, glibc_min)
   - filename matches lemon-<version>-<channel>-<platform>-<profile>.tar.gz
   - file exists on disk with the recorded size and SHA-256
-  - the full 8-artifact profile x platform matrix is present (or, with
+  - the full 11-artifact profile x platform matrix is present (or, with
     --platform, only that platform's profiles)
+  - lemon_tui is required on every platform but is not a BEAM release
 
 Platform tags: linux-x86_64, linux-arm64, darwin-arm64.
 EOF
@@ -69,11 +70,11 @@ artifact_dir = os.environ["ARTIFACT_DIR"]
 platform_filter = os.environ["PLATFORM_FILTER"] or None
 manifest_path = os.path.join(artifact_dir, "manifest.json")
 
-# The full release matrix: min+full on all 3 platforms, sim_broadcast_platform
-# is Linux-only. This table is duplicated (with a cross-reference comment) in
-# scripts/verify_release_runtime_boot, which needs the same expected-count
-# logic without importing Python from a bash script.
-PROFILES = ("lemon_runtime_min", "lemon_runtime_full", "sim_broadcast_platform")
+# The full release matrix: min+full+lemon_tui on all 3 platforms,
+# sim_broadcast_platform is Linux-only. The BEAM-only subset is duplicated
+# (with a cross-reference comment) in scripts/verify_release_runtime_boot,
+# which deliberately excludes lemon_tui from boot verification.
+PROFILES = ("lemon_runtime_min", "lemon_runtime_full", "sim_broadcast_platform", "lemon_tui")
 PLATFORMS = ("linux-x86_64", "linux-arm64", "darwin-arm64")
 PLATFORM_OS_ARCH = {
     "linux-x86_64": ("linux", "x86_64", "2.39"),
@@ -162,7 +163,7 @@ for artifact in artifacts:
     filename_match = re.fullmatch(
         rf"lemon-{re.escape(version or '')}-{re.escape(channel or '')}-"
         rf"(linux-x86_64|linux-arm64|darwin-arm64)-"
-        rf"(lemon_runtime_min|lemon_runtime_full|sim_broadcast_platform)\.tar\.gz",
+        rf"(lemon_runtime_min|lemon_runtime_full|sim_broadcast_platform|lemon_tui)\.tar\.gz",
         filename,
     )
     if not filename_match:

@@ -78,38 +78,62 @@ grep -q "requires a live model credential" "$live_eval_out" ||
 rm -rf "$live_tmp_root"
 
 artifact_tmp="$(mktemp -d "${TMPDIR:-/tmp}/lemon-artifact-contract.XXXXXX")"
-printf 'min-runtime' > "$artifact_tmp/lemon-2026.05.0-stable-ubuntu-24.04-x86_64-lemon_runtime_min.tar.gz"
-printf 'full-runtime' > "$artifact_tmp/lemon-2026.05.0-stable-ubuntu-24.04-x86_64-lemon_runtime_full.tar.gz"
-printf 'sim-runtime' > "$artifact_tmp/lemon-2026.05.0-stable-ubuntu-24.04-x86_64-sim_broadcast_platform.tar.gz"
+printf 'min-runtime' > "$artifact_tmp/lemon-2026.05.0-stable-linux-x86_64-lemon_runtime_min.tar.gz"
+printf 'full-runtime' > "$artifact_tmp/lemon-2026.05.0-stable-linux-x86_64-lemon_runtime_full.tar.gz"
+printf 'sim-runtime' > "$artifact_tmp/lemon-2026.05.0-stable-linux-x86_64-sim_broadcast_platform.tar.gz"
+printf 'tui-binary' > "$artifact_tmp/lemon-2026.05.0-stable-linux-x86_64-lemon_tui.tar.gz"
 python3 - "$artifact_tmp" <<'PY'
 import hashlib
 import json
 import pathlib
+import re
 import sys
 
 root = pathlib.Path(sys.argv[1])
 artifacts = []
 
 for path in sorted(root.glob("*.tar.gz")):
+    match = re.fullmatch(
+        r"lemon-2026\.05\.0-stable-(linux-x86_64)-(lemon_runtime_min|lemon_runtime_full|sim_broadcast_platform|lemon_tui)\.tar\.gz",
+        path.name,
+    )
+    platform, profile = match.groups()
     artifacts.append(
         {
             "file": path.name,
+            "profile": profile,
+            "platform": platform,
+            "os": "linux",
+            "arch": "x86_64",
+            "glibc_min": "2.39",
             "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
             "size": path.stat().st_size,
         }
     )
 
 (root / "manifest.json").write_text(
-    json.dumps({"version": "2026.05.0", "channel": "stable", "commit": "abcdef123456", "artifacts": artifacts}, indent=2),
+    json.dumps(
+        {
+            "schema": 2,
+            "version": "2026.05.0",
+            "channel": "stable",
+            "commit": "abcdef123456",
+            "built_at": "2026-05-01T12:00:00Z",
+            "otp": "28.0",
+            "elixir": "1.18.4",
+            "artifacts": artifacts,
+        },
+        indent=2,
+    ),
     encoding="utf-8",
 )
 PY
 artifact_valid_out="$artifact_tmp/valid.out"
-"$ROOT/scripts/verify_release_artifacts" "$artifact_tmp" >"$artifact_valid_out" 2>&1 ||
-  fail "release artifact verifier should accept complete min/full/sim Linux manifest"
+"$ROOT/scripts/verify_release_artifacts" --platform linux-x86_64 "$artifact_tmp" >"$artifact_valid_out" 2>&1 ||
+  fail "release artifact verifier should accept complete min/full/sim/TUI Linux manifest"
 
 incomplete_artifact_tmp="$(mktemp -d "${TMPDIR:-/tmp}/lemon-artifact-contract-incomplete.XXXXXX")"
-cp "$artifact_tmp/lemon-2026.05.0-stable-ubuntu-24.04-x86_64-lemon_runtime_min.tar.gz" "$incomplete_artifact_tmp/"
+cp "$artifact_tmp/lemon-2026.05.0-stable-linux-x86_64-lemon_runtime_min.tar.gz" "$incomplete_artifact_tmp/"
 python3 - "$incomplete_artifact_tmp" <<'PY'
 import hashlib
 import json
@@ -117,16 +141,25 @@ import pathlib
 import sys
 
 root = pathlib.Path(sys.argv[1])
-path = root / "lemon-2026.05.0-stable-ubuntu-24.04-x86_64-lemon_runtime_min.tar.gz"
+path = root / "lemon-2026.05.0-stable-linux-x86_64-lemon_runtime_min.tar.gz"
 (root / "manifest.json").write_text(
     json.dumps(
         {
+            "schema": 2,
             "version": "2026.05.0",
             "channel": "stable",
             "commit": "abcdef123456",
+            "built_at": "2026-05-01T12:00:00Z",
+            "otp": "28.0",
+            "elixir": "1.18.4",
             "artifacts": [
                 {
                     "file": path.name,
+                    "profile": "lemon_runtime_min",
+                    "platform": "linux-x86_64",
+                    "os": "linux",
+                    "arch": "x86_64",
+                    "glibc_min": "2.39",
                     "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                     "size": path.stat().st_size,
                 }
@@ -138,10 +171,10 @@ path = root / "lemon-2026.05.0-stable-ubuntu-24.04-x86_64-lemon_runtime_min.tar.
 )
 PY
 artifact_incomplete_out="$incomplete_artifact_tmp/incomplete.out"
-"$ROOT/scripts/verify_release_artifacts" "$incomplete_artifact_tmp" >"$artifact_incomplete_out" 2>&1 &&
-  fail "release artifact verifier should reject manifests missing full and sim profiles"
-grep -q "missing required release artifact profile" "$artifact_incomplete_out" ||
-  fail "release artifact verifier should explain missing required profiles"
+"$ROOT/scripts/verify_release_artifacts" --platform linux-x86_64 "$incomplete_artifact_tmp" >"$artifact_incomplete_out" 2>&1 &&
+  fail "release artifact verifier should reject manifests missing full, sim, and TUI profiles"
+grep -q "missing required release artifact(s)" "$artifact_incomplete_out" ||
+  fail "release artifact verifier should explain missing required artifacts"
 
 rm -rf "$artifact_tmp" "$incomplete_artifact_tmp"
 

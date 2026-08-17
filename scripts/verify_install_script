@@ -12,8 +12,12 @@ tarball, writes a schema-2 manifest for it, and serves both through
 
 Checks:
   - unpinned stable install lays out ~/.lemon/versions/<version>, versions/current,
-    and the relative bin/lemon launcher symlink
-  - the downloaded tarball is removed from ~/.lemon/tmp
+    the relative bin/lemon launcher symlink, and tui/bin/lemon-tui
+  - a manifest without a lemon_tui artifact still installs the runtime, warning
+    that the release ships no TUI
+  - LEMON_NO_TUI=1 installs the runtime only even when a TUI is published
+  - a TUI checksum mismatch aborts the whole install, leaving no version directory
+  - the downloaded tarballs are removed from ~/.lemon/tmp
   - re-running is an idempotent no-op and --force re-extracts
   - --verify boots the installed launcher and polls /healthz
   - a manifest checksum mismatch aborts without leaving a version directory or
@@ -110,6 +114,7 @@ PLATFORM="$(detect_platform)"
 PLATFORM_OS="${PLATFORM%%-*}"
 PLATFORM_ARCH="${PLATFORM##*-}"
 PROFILE="lemon_runtime_full"
+TUI_PROFILE="lemon_tui"
 
 # Builds a stub release tarball for <version> and returns its path. The stub
 # bin/lemon answers the subcommands install.sh uses: version, daemon (serves a
@@ -169,6 +174,27 @@ EOF
   echo "$tarball"
 }
 
+# Builds the stub TUI tarball for <version>. Shaped like the real one: a single
+# top-level tui/ directory holding the binary and its native modules, so it can
+# be unpacked over the runtime's staging directory without colliding.
+build_fixture_tui_tarball() {
+  local version="$1"
+  local build_dir="$work_dir/build-tui/$version"
+
+  mkdir -p "$build_dir/tui/bin"
+
+  cat > "$build_dir/tui/bin/lemon-tui" <<EOF
+#!/bin/sh
+echo "lemon-tui $version"
+EOF
+  chmod +x "$build_dir/tui/bin/lemon-tui"
+  printf 'stub native module\n' > "$build_dir/tui/bin/pi_natives.stub.node"
+
+  local tarball="$work_dir/build-tui/lemon-$version-stable-$PLATFORM-$TUI_PROFILE.tar.gz"
+  tar -czf "$tarball" -C "$build_dir" tui
+  echo "$tarball"
+}
+
 sha256_of() {
   if command -v sha256sum >/dev/null 2>&1; then
     sha256sum "$1" | awk '{print $1}'
@@ -178,12 +204,16 @@ sha256_of() {
 }
 
 # Publishes <tarball> for <version> under a served directory, writing a
-# schema-2 manifest. <sha-override> forges the checksum when non-empty.
+# schema-2 manifest. <sha-override> forges the runtime checksum when non-empty.
+# <tui-tarball> adds the lemon_tui artifact (empty publishes a TUI-less release,
+# the shape pre-TUI versions have) and <tui-sha-override> forges its checksum.
 publish() {
   local dest_dir="$1"
   local version="$2"
   local tarball="$3"
   local sha_override="${4:-}"
+  local tui_tarball="${5:-}"
+  local tui_sha_override="${6:-}"
 
   mkdir -p "$dest_dir"
   cp "$tarball" "$dest_dir/"
@@ -196,6 +226,18 @@ publish() {
     sha="$sha_override"
   fi
 
+  local tui_file="" tui_sha="" tui_size=""
+  if [ -n "$tui_tarball" ]; then
+    cp "$tui_tarball" "$dest_dir/"
+    tui_file="$(basename "$tui_tarball")"
+    tui_sha="$(sha256_of "$tui_tarball")"
+    tui_size="$(python3 -c 'import os,sys; print(os.path.getsize(sys.argv[1]))' "$tui_tarball")"
+
+    if [ -n "$tui_sha_override" ]; then
+      tui_sha="$tui_sha_override"
+    fi
+  fi
+
   MANIFEST_DEST="$dest_dir/manifest.json" \
   MANIFEST_VERSION="$version" \
   MANIFEST_FILE="$(basename "$tarball")" \
@@ -205,22 +247,50 @@ publish() {
   MANIFEST_OS="$PLATFORM_OS" \
   MANIFEST_ARCH="$PLATFORM_ARCH" \
   MANIFEST_PROFILE="$PROFILE" \
+  MANIFEST_TUI_PROFILE="$TUI_PROFILE" \
+  MANIFEST_TUI_FILE="$tui_file" \
+  MANIFEST_TUI_SHA="$tui_sha" \
+  MANIFEST_TUI_SIZE="$tui_size" \
     python3 - <<'PY'
 import json
 import os
 
-artifact = {
-    "file": os.environ["MANIFEST_FILE"],
-    "profile": os.environ["MANIFEST_PROFILE"],
-    "platform": os.environ["MANIFEST_PLATFORM"],
-    "os": os.environ["MANIFEST_OS"],
-    "arch": os.environ["MANIFEST_ARCH"],
-    "sha256": os.environ["MANIFEST_SHA"],
-    "size": int(os.environ["MANIFEST_SIZE"]),
-}
 
-if artifact["os"] == "linux":
-    artifact["glibc_min"] = "2.39"
+def entry(profile, filename, sha, size):
+    artifact = {
+        "file": filename,
+        "profile": profile,
+        "platform": os.environ["MANIFEST_PLATFORM"],
+        "os": os.environ["MANIFEST_OS"],
+        "arch": os.environ["MANIFEST_ARCH"],
+        "sha256": sha,
+        "size": int(size),
+    }
+
+    if artifact["os"] == "linux":
+        artifact["glibc_min"] = "2.39"
+
+    return artifact
+
+
+artifacts = [
+    entry(
+        os.environ["MANIFEST_PROFILE"],
+        os.environ["MANIFEST_FILE"],
+        os.environ["MANIFEST_SHA"],
+        os.environ["MANIFEST_SIZE"],
+    )
+]
+
+if os.environ["MANIFEST_TUI_FILE"]:
+    artifacts.append(
+        entry(
+            os.environ["MANIFEST_TUI_PROFILE"],
+            os.environ["MANIFEST_TUI_FILE"],
+            os.environ["MANIFEST_TUI_SHA"],
+            os.environ["MANIFEST_TUI_SIZE"],
+        )
+    )
 
 manifest = {
     "schema": 2,
@@ -230,7 +300,7 @@ manifest = {
     "built_at": "2026-08-16T00:00:00Z",
     "otp": "28.5",
     "elixir": "1.19.5",
-    "artifacts": [artifact],
+    "artifacts": artifacts,
 }
 
 with open(os.environ["MANIFEST_DEST"], "w", encoding="utf-8") as handle:
@@ -247,18 +317,32 @@ mkdir -p "$serve_root"
 tarball_v1="$(build_fixture_tarball 9999.1.0)"
 tarball_v2="$(build_fixture_tarball 9999.2.0)"
 tarball_v3="$(build_fixture_tarball 9999.3.0)"
+tarball_v4="$(build_fixture_tarball 9999.4.0)"
+tarball_v5="$(build_fixture_tarball 9999.5.0)"
+
+tui_v1="$(build_fixture_tui_tarball 9999.1.0)"
+tui_v2="$(build_fixture_tui_tarball 9999.2.0)"
+tui_v5="$(build_fixture_tui_tarball 9999.5.0)"
+
+forged_sha="$(python3 -c 'print("f" * 64)')"
 
 # `releases/latest/download/` is the unpinned stable entry point and
 # `releases/download/v<version>/` is the pinned one, exactly as GitHub serves
 # them. 9999.2.0 is deliberately published only under the pinned shape so the
 # pinned-URL assertion cannot pass by accident.
-publish "$serve_root/releases/latest/download" 9999.1.0 "$tarball_v1"
-publish "$serve_root/releases/download/v9999.1.0" 9999.1.0 "$tarball_v1"
-publish "$serve_root/releases/download/v9999.2.0" 9999.2.0 "$tarball_v2"
+publish "$serve_root/releases/latest/download" 9999.1.0 "$tarball_v1" "" "$tui_v1"
+publish "$serve_root/releases/download/v9999.1.0" 9999.1.0 "$tarball_v1" "" "$tui_v1"
+publish "$serve_root/releases/download/v9999.2.0" 9999.2.0 "$tarball_v2" "" "$tui_v2"
 
 # A parallel tree whose manifest advertises a checksum the tarball does not have.
-publish "$serve_root/corrupt/releases/latest/download" 9999.3.0 "$tarball_v3" \
-  "$(python3 -c 'print("f" * 64)')"
+publish "$serve_root/corrupt/releases/latest/download" 9999.3.0 "$tarball_v3" "$forged_sha"
+
+# A release published before the TUI existed: runtime artifact only.
+publish "$serve_root/notui/releases/latest/download" 9999.4.0 "$tarball_v4"
+
+# A release whose runtime checksum is honest but whose TUI checksum is forged.
+publish "$serve_root/tui-corrupt/releases/latest/download" 9999.5.0 "$tarball_v5" "" \
+  "$tui_v5" "$forged_sha"
 
 port="$(free_port)"
 python3 -m http.server "$port" --bind 127.0.0.1 --directory "$serve_root" >"$work_dir/http.log" 2>&1 &
@@ -346,6 +430,25 @@ if version_output="$(HOME="$home_dir" "$home_dir/.lemon/bin/lemon" version 2>&1)
   ok "bin/lemon resolves and runs: $version_output"
 else
   fail "bin/lemon did not report the installed version: ${version_output:-no output}"
+fi
+
+tui_bin="$home_dir/.lemon/versions/9999.1.0/tui/bin/lemon-tui"
+if [ -x "$tui_bin" ]; then
+  ok "tui/bin/lemon-tui installed next to the runtime and executable"
+else
+  fail "tui/bin/lemon-tui is missing or not executable"
+fi
+
+if [ -f "$home_dir/.lemon/versions/9999.1.0/tui/bin/pi_natives.stub.node" ]; then
+  ok "the TUI's native modules landed beside the binary"
+else
+  fail "the TUI tarball's native modules were not extracted"
+fi
+
+if tui_output="$("$tui_bin" 2>&1)" && [ "$tui_output" = "lemon-tui 9999.1.0" ]; then
+  ok "the installed TUI runs: $tui_output"
+else
+  fail "the installed TUI did not run: ${tui_output:-no output}"
 fi
 
 leftover="$(find "$home_dir/.lemon/tmp" -mindepth 1 2>/dev/null | wc -l | tr -d ' ')"
@@ -449,6 +552,12 @@ if version_output="$(HOME="$home_dir" "$home_dir/.lemon/bin/lemon" version 2>&1)
   ok "bin/lemon follows the flip: $version_output"
 else
   fail "bin/lemon did not follow the flip: ${version_output:-no output}"
+fi
+
+if [ -x "$home_dir/.lemon/versions/9999.2.0/tui/bin/lemon-tui" ]; then
+  ok "the update round-trip installed the new version's TUI too"
+else
+  fail "the update round-trip left 9999.2.0 without a TUI"
 fi
 
 # 7. A profile with no published artifact is refused.
@@ -578,6 +687,76 @@ if run_install "$work_dir/install-14.log" "$fish_home" "$base_url" SHELL=/usr/bi
 else
   fail "install into a fresh home for the fish PATH check failed"
   cat "$work_dir/install-14.log" >&2
+fi
+
+# 12. Releases published before the TUI existed still install the runtime, with
+#     a warning instead of a hard failure.
+notui_home="$work_dir/home-notui"
+mkdir -p "$notui_home"
+
+if run_install "$work_dir/install-15.log" "$notui_home" "$base_url/notui"; then
+  if [ -d "$notui_home/.lemon/versions/9999.4.0" ] &&
+    [ ! -e "$notui_home/.lemon/versions/9999.4.0/tui" ] &&
+    grep -q "no TUI artifact" "$work_dir/install-15.log"; then
+    ok "a TUI-less release installs the runtime and warns about the missing TUI"
+  else
+    fail "a TUI-less release did not install runtime-only with a warning"
+    cat "$work_dir/install-15.log" >&2
+  fi
+else
+  fail "a TUI-less release failed to install at all"
+  cat "$work_dir/install-15.log" >&2
+fi
+
+# 13. LEMON_NO_TUI=1 opts out even when the manifest advertises a TUI.
+no_tui_home="$work_dir/home-no-tui-env"
+mkdir -p "$no_tui_home"
+
+if run_install "$work_dir/install-16.log" "$no_tui_home" "$base_url" LEMON_NO_TUI=1; then
+  if [ -x "$no_tui_home/.lemon/versions/9999.1.0/bin/lemon" ] &&
+    [ ! -e "$no_tui_home/.lemon/versions/9999.1.0/tui" ]; then
+    ok "LEMON_NO_TUI=1 installs the runtime without the published TUI"
+  else
+    fail "LEMON_NO_TUI=1 installed the TUI anyway, or skipped the runtime"
+  fi
+else
+  fail "LEMON_NO_TUI=1 install exited non-zero"
+  cat "$work_dir/install-16.log" >&2
+fi
+
+# Re-running without the opt-out hits the already-installed fast path, which
+# must point out that the version on disk is missing the published TUI.
+if run_install "$work_dir/install-18.log" "$no_tui_home" "$base_url"; then
+  if grep -q "already installed" "$work_dir/install-18.log" &&
+    grep -q "publishes one" "$work_dir/install-18.log" &&
+    grep -q -- "--force" "$work_dir/install-18.log"; then
+    ok "the already-installed path flags a runtime-only install and suggests --force"
+  else
+    fail "the already-installed path did not flag the missing TUI"
+    cat "$work_dir/install-18.log" >&2
+  fi
+else
+  fail "re-running over a runtime-only install exited non-zero"
+  cat "$work_dir/install-18.log" >&2
+fi
+
+# 14. A forged TUI checksum aborts the whole install: both-or-neither.
+tui_corrupt_home="$work_dir/home-tui-corrupt"
+mkdir -p "$tui_corrupt_home"
+
+if run_install "$work_dir/install-17.log" "$tui_corrupt_home" "$base_url/tui-corrupt"; then
+  fail "install.sh accepted a TUI tarball whose checksum did not match the manifest"
+else
+  if grep -q "checksum mismatch for lemon-9999.5.0-stable-$PLATFORM-$TUI_PROFILE" "$work_dir/install-17.log" &&
+    [ ! -d "$tui_corrupt_home/.lemon/versions/9999.5.0" ] &&
+    [ ! -e "$tui_corrupt_home/.lemon/versions/current" ] &&
+    [ -z "$(find "$tui_corrupt_home/.lemon/versions" -maxdepth 1 -name '*.partial' 2>/dev/null)" ] &&
+    [ "$(find "$tui_corrupt_home/.lemon/tmp" -mindepth 1 2>/dev/null | wc -l | tr -d ' ')" = "0" ]; then
+    ok "a TUI checksum mismatch aborts the install with nothing left on disk"
+  else
+    fail "a TUI checksum mismatch left state behind"
+    cat "$work_dir/install-17.log" >&2
+  fi
 fi
 
 echo

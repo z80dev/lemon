@@ -38,6 +38,22 @@ defmodule LemonCore.Update.RemoteTest do
     tarball = Path.join(tmp_dir, "artifact.tar.gz")
     {_output, 0} = System.cmd("tar", ["-czf", tarball, "-C", src, "."])
 
+    digest(tarball)
+  end
+
+  # The TUI ships a single top-level tui/ directory so it can be unpacked over
+  # the runtime's staging directory without colliding with bin/ or lib/.
+  defp build_fixture_tui_tarball(tmp_dir) do
+    src = Path.join(tmp_dir, "tui-src")
+    File.mkdir_p!(Path.join(src, "tui/bin"))
+    File.write!(Path.join(src, "tui/bin/lemon-tui"), "#!/bin/sh\necho tui\n")
+    tarball = Path.join(tmp_dir, "tui-artifact.tar.gz")
+    {_output, 0} = System.cmd("tar", ["-czf", tarball, "-C", src, "tui"])
+
+    digest(tarball)
+  end
+
+  defp digest(tarball) do
     bytes = File.read!(tarball)
     sha256 = :sha256 |> :crypto.hash(bytes) |> Base.encode16(case: :lower)
     {bytes, sha256, byte_size(bytes)}
@@ -58,11 +74,22 @@ defmodule LemonCore.Update.RemoteTest do
   end
 
   defp artifact_router(manifest_body, path, bytes) do
+    downloads_router(manifest_body, %{path => bytes})
+  end
+
+  defp downloads_router(manifest_body, downloads) do
     fn
-      "/releases/latest/download/manifest.json" -> {:redirect, "/manifest-body.json"}
-      "/manifest-body.json" -> {200, "application/json", manifest_body}
-      ^path -> {200, "application/gzip", bytes}
-      _ -> {404, "text/plain", "not found"}
+      "/releases/latest/download/manifest.json" ->
+        {:redirect, "/manifest-body.json"}
+
+      "/manifest-body.json" ->
+        {200, "application/json", manifest_body}
+
+      path ->
+        case Map.fetch(downloads, path) do
+          {:ok, bytes} -> {200, "application/gzip", bytes}
+          :error -> {404, "text/plain", "not found"}
+        end
     end
   end
 
@@ -111,6 +138,76 @@ defmodule LemonCore.Update.RemoteTest do
 
       assert {:ok, %{artifact: nil}} =
                Remote.check(opts ++ [platform: "linux-arm64", profile: "lemon_runtime_full"])
+    end
+
+    test "reports the TUI artifact for the same platform alongside the runtime" do
+      artifacts = [
+        artifact("lemon-a.tar.gz", "lemon_runtime_full", "linux-x86_64", "aa", 10),
+        artifact("lemon-tui-x86.tar.gz", "lemon_tui", "linux-x86_64", "bb", 10),
+        artifact("lemon-tui-arm.tar.gz", "lemon_tui", "linux-arm64", "cc", 10)
+      ]
+
+      base_url = start_server(manifest_router(manifest("2099.01.0", artifacts)))
+
+      assert {:ok, %{artifact: %{"file" => "lemon-a.tar.gz"}, tui_artifact: tui}} =
+               Remote.check(
+                 base_url: base_url,
+                 channel: "stable",
+                 platform: "linux-x86_64",
+                 profile: "lemon_runtime_full"
+               )
+
+      assert tui["file"] == "lemon-tui-x86.tar.gz"
+    end
+
+    test "tui_artifact is nil when the release publishes no TUI" do
+      artifacts = [artifact("lemon-a.tar.gz", "lemon_runtime_full", "linux-x86_64", "aa", 10)]
+      base_url = start_server(manifest_router(manifest("2099.01.0", artifacts)))
+
+      assert {:ok, %{artifact: %{"file" => "lemon-a.tar.gz"}, tui_artifact: nil}} =
+               Remote.check(
+                 base_url: base_url,
+                 channel: "stable",
+                 platform: "linux-x86_64",
+                 profile: "lemon_runtime_full"
+               )
+    end
+
+    test "the sim profile never selects a TUI artifact, even when one is published" do
+      artifacts = [
+        artifact("lemon-sim.tar.gz", "sim_broadcast_platform", "linux-x86_64", "aa", 10),
+        artifact("lemon-tui.tar.gz", "lemon_tui", "linux-x86_64", "bb", 10)
+      ]
+
+      base_url = start_server(manifest_router(manifest("2099.01.0", artifacts)))
+
+      assert {:ok, %{artifact: %{"file" => "lemon-sim.tar.gz"}, tui_artifact: nil}} =
+               Remote.check(
+                 base_url: base_url,
+                 channel: "stable",
+                 platform: "linux-x86_64",
+                 profile: "sim_broadcast_platform"
+               )
+    end
+
+    test "LEMON_NO_TUI=1 opts out of the TUI artifact, as it does in the installer" do
+      System.put_env("LEMON_NO_TUI", "1")
+      on_exit(fn -> System.delete_env("LEMON_NO_TUI") end)
+
+      artifacts = [
+        artifact("lemon-a.tar.gz", "lemon_runtime_full", "linux-x86_64", "aa", 10),
+        artifact("lemon-tui.tar.gz", "lemon_tui", "linux-x86_64", "bb", 10)
+      ]
+
+      base_url = start_server(manifest_router(manifest("2099.01.0", artifacts)))
+
+      assert {:ok, %{artifact: %{"file" => "lemon-a.tar.gz"}, tui_artifact: nil}} =
+               Remote.check(
+                 base_url: base_url,
+                 channel: "stable",
+                 platform: "linux-x86_64",
+                 profile: "lemon_runtime_full"
+               )
     end
 
     test "update_available? is false when the manifest carries no version" do
@@ -185,6 +282,45 @@ defmodule LemonCore.Update.RemoteTest do
       refute File.exists?(Path.join([state, "tmp", "pkg.tar.gz"]))
       refute File.dir?(Path.join([state, "versions", "2099.01.0"]))
     end
+
+    test "a bad TUI checksum aborts the whole update, staging neither half", %{tmp_dir: tmp_dir} do
+      {bytes, sha256, size} = build_fixture_tarball(tmp_dir)
+      {tui_bytes, _tui_sha, tui_size} = build_fixture_tui_tarball(tmp_dir)
+
+      artifacts = [
+        artifact("pkg.tar.gz", "test_profile", "test-platform", sha256, size),
+        artifact("tui.tar.gz", "lemon_tui", "test-platform", String.duplicate("0", 64), tui_size)
+      ]
+
+      router =
+        downloads_router(manifest("2099.01.0", artifacts), %{
+          "/releases/download/v2099.01.0/pkg.tar.gz" => bytes,
+          "/releases/download/v2099.01.0/tui.tar.gz" => tui_bytes
+        })
+
+      base_url = start_server(router)
+      {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
+
+      opts = [
+        base_url: base_url,
+        channel: "stable",
+        platform: "test-platform",
+        profile: "test_profile",
+        paths_opts: [home_dir: home],
+        release_root: release_root
+      ]
+
+      assert {:error, {:checksum_mismatch, _}} = Remote.apply(opts)
+
+      versions_dir = Path.join(state, "versions")
+      refute File.dir?(Path.join(versions_dir, "2099.01.0"))
+      refute File.exists?(Path.join(versions_dir, "2099.01.0.partial"))
+      refute File.exists?(Path.join(versions_dir, "current"))
+
+      # The verified runtime tarball is discarded too — nothing is left staged.
+      refute File.exists?(Path.join([state, "tmp", "pkg.tar.gz"]))
+      refute File.exists?(Path.join([state, "tmp", "tui.tar.gz"]))
+    end
   end
 
   describe "apply/1 — success" do
@@ -214,6 +350,110 @@ defmodule LemonCore.Update.RemoteTest do
       assert File.exists?(Path.join([versions_dir, "2099.01.0", "bin", "lemon"]))
       assert {:ok, "2099.01.0"} = File.read_link(Path.join(versions_dir, "current"))
       refute File.exists?(Path.join([state, "tmp", "pkg.tar.gz"]))
+    end
+
+    test "stages the runtime and the TUI into the same version directory", %{tmp_dir: tmp_dir} do
+      {bytes, sha256, size} = build_fixture_tarball(tmp_dir)
+      {tui_bytes, tui_sha, tui_size} = build_fixture_tui_tarball(tmp_dir)
+
+      artifacts = [
+        artifact("pkg.tar.gz", "test_profile", "test-platform", sha256, size),
+        artifact("tui.tar.gz", "lemon_tui", "test-platform", tui_sha, tui_size)
+      ]
+
+      router =
+        downloads_router(manifest("2099.01.0", artifacts), %{
+          "/releases/download/v2099.01.0/pkg.tar.gz" => bytes,
+          "/releases/download/v2099.01.0/tui.tar.gz" => tui_bytes
+        })
+
+      base_url = start_server(router)
+      {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
+
+      opts = [
+        base_url: base_url,
+        channel: "stable",
+        platform: "test-platform",
+        profile: "test_profile",
+        paths_opts: [home_dir: home],
+        release_root: release_root
+      ]
+
+      assert {:ok, %{staged: "2099.01.0", restart_required: true}} = Remote.apply(opts)
+
+      versions_dir = Path.join(state, "versions")
+      assert File.exists?(Path.join([versions_dir, "2099.01.0", "bin", "lemon"]))
+      assert File.exists?(Path.join([versions_dir, "2099.01.0", "tui", "bin", "lemon-tui"]))
+      assert {:ok, "2099.01.0"} = File.read_link(Path.join(versions_dir, "current"))
+      refute File.exists?(Path.join([state, "tmp", "pkg.tar.gz"]))
+      refute File.exists?(Path.join([state, "tmp", "tui.tar.gz"]))
+    end
+
+    test "updates the runtime alone when the release publishes no TUI", %{tmp_dir: tmp_dir} do
+      {bytes, sha256, size} = build_fixture_tarball(tmp_dir)
+      artifacts = [artifact("pkg.tar.gz", "test_profile", "test-platform", sha256, size)]
+
+      router =
+        artifact_router(
+          manifest("2099.01.0", artifacts),
+          "/releases/download/v2099.01.0/pkg.tar.gz",
+          bytes
+        )
+
+      base_url = start_server(router)
+      {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
+
+      opts = [
+        base_url: base_url,
+        channel: "stable",
+        platform: "test-platform",
+        profile: "test_profile",
+        paths_opts: [home_dir: home],
+        release_root: release_root
+      ]
+
+      assert {:ok, %{staged: "2099.01.0"}} = Remote.apply(opts)
+
+      versions_dir = Path.join(state, "versions")
+      assert File.exists?(Path.join([versions_dir, "2099.01.0", "bin", "lemon"]))
+      refute File.exists?(Path.join([versions_dir, "2099.01.0", "tui"]))
+    end
+
+    test "the sim profile stages the runtime without fetching a TUI", %{tmp_dir: tmp_dir} do
+      {bytes, sha256, size} = build_fixture_tarball(tmp_dir)
+      {_tui_bytes, tui_sha, tui_size} = build_fixture_tui_tarball(tmp_dir)
+
+      artifacts = [
+        artifact("pkg.tar.gz", "sim_broadcast_platform", "test-platform", sha256, size),
+        artifact("tui.tar.gz", "lemon_tui", "test-platform", tui_sha, tui_size)
+      ]
+
+      # The TUI tarball is deliberately not served: reaching for it 404s the
+      # update instead of silently succeeding.
+      router =
+        artifact_router(
+          manifest("2099.01.0", artifacts),
+          "/releases/download/v2099.01.0/pkg.tar.gz",
+          bytes
+        )
+
+      base_url = start_server(router)
+      {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
+
+      opts = [
+        base_url: base_url,
+        channel: "stable",
+        platform: "test-platform",
+        profile: "sim_broadcast_platform",
+        paths_opts: [home_dir: home],
+        release_root: release_root
+      ]
+
+      assert {:ok, %{staged: "2099.01.0"}} = Remote.apply(opts)
+
+      versions_dir = Path.join(state, "versions")
+      assert File.exists?(Path.join([versions_dir, "2099.01.0", "bin", "lemon"]))
+      refute File.exists?(Path.join([versions_dir, "2099.01.0", "tui"]))
     end
 
     test "prunes old versions, keeping the newly staged one plus the 2 most recent others", %{

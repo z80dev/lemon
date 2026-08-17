@@ -115,9 +115,10 @@ detect_platform() {
   esac
 }
 
-# Platform -> expected profile count, duplicated (with this cross-reference)
+# Platform -> expected BEAM profile count, duplicated (with this cross-reference)
 # from the EXPECTED table in scripts/verify_release_artifacts: min+full on
-# every platform, sim_broadcast_platform is Linux-only.
+# every platform, sim_broadcast_platform is Linux-only. The Bun-compiled
+# lemon_tui pseudo-profile is deliberately excluded from boot verification.
 expected_profile_count() {
   case "$1" in
     linux-x86_64|linux-arm64) echo 3 ;;

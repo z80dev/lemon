@@ -11,6 +11,12 @@
 #   ~/.lemon/versions/current      symlink, atomic flip point
 #   ~/.lemon/bin/lemon             -> ../versions/current/bin/lemon
 #
+# Releases that publish one also install the terminal UI alongside the runtime,
+# into ~/.lemon/versions/<version>/tui/bin/lemon-tui. Both tarballs are
+# downloaded and verified before either is extracted, and both land in the same
+# staging directory, so the single rename + symlink flip installs them
+# together or not at all.
+#
 # POSIX sh: no bashisms, no arrays, no [[ ]], no local.
 set -eu
 
@@ -57,6 +63,9 @@ Environment:
   LEMON_PROFILE               full | min | sim, or a full profile name
                               (lemon_runtime_full, lemon_runtime_min,
                               sim_broadcast_platform). Default: lemon_runtime_full.
+  LEMON_NO_TUI                Set to 1 to install the runtime only, skipping the
+                              terminal UI (\`lemon-tui\`). Roughly halves the
+                              download. The sim profile never ships a TUI.
   LEMON_INSTALL_IGNORE_GLIBC  Set to 1 to silence the Linux glibc baseline check.
   LEMON_INSTALL_BASE_URL      Override the GitHub release base URL (test seam).
 
@@ -229,11 +238,15 @@ fetch() {
 }
 
 select_artifact() {
+  # select_artifact <manifest-path> <profile> [allow-missing]
+  #
   # Prints "<file>\t<sha256>\t<size>\t<version>\t<channel>" for the artifact
-  # matching this platform and profile, selecting on structured manifest
-  # fields rather than the filename.
-  MANIFEST_PATH="$1" WANT_PLATFORM="$PLATFORM" WANT_PROFILE="$PROFILE" \
-    WANT_CHANNEL="$CHANNEL" WANT_VERSION="$PIN" python3 - <<'PY'
+  # matching this platform and the requested profile, selecting on structured
+  # manifest fields rather than the filename. With allow-missing set to 1 a
+  # manifest that publishes no such artifact prints nothing and succeeds, so
+  # optional artifacts (the TUI) can be looked up in the same manifest.
+  MANIFEST_PATH="$1" WANT_PROFILE="$2" ALLOW_MISSING="${3:-0}" \
+    WANT_PLATFORM="$PLATFORM" WANT_CHANNEL="$CHANNEL" WANT_VERSION="$PIN" python3 - <<'PY'
 import json
 import os
 import sys
@@ -243,6 +256,7 @@ want_platform = os.environ["WANT_PLATFORM"]
 want_profile = os.environ["WANT_PROFILE"]
 want_channel = os.environ["WANT_CHANNEL"]
 want_version = os.environ["WANT_VERSION"]
+allow_missing = os.environ.get("ALLOW_MISSING") == "1"
 
 
 def fail(message):
@@ -292,6 +306,9 @@ matches = [
     and artifact.get("platform") == want_platform
     and artifact.get("profile") == want_profile
 ]
+
+if not matches and allow_missing:
+    raise SystemExit(0)
 
 if not matches:
     available = sorted(
@@ -479,10 +496,27 @@ if ! fetch "$MANIFEST_URL" "$manifest_file"; then
 fi
 
 artifact_line=""
-if ! artifact_line="$(select_artifact "$manifest_file")"; then
+if ! artifact_line="$(select_artifact "$manifest_file" "$PROFILE")"; then
   rm -f "$manifest_file"
   exit 1
 fi
+
+# The TUI is a second, optional artifact in the same manifest: a separate
+# per-platform tarball that unpacks into tui/ next to the runtime's bin/.
+# The sim profile has no terminal UI, and LEMON_NO_TUI=1 opts out.
+WANT_TUI=1
+if [ "$PROFILE" = "sim_broadcast_platform" ] || [ "${LEMON_NO_TUI:-0}" = "1" ]; then
+  WANT_TUI=0
+fi
+
+tui_line=""
+if [ "$WANT_TUI" = "1" ]; then
+  if ! tui_line="$(select_artifact "$manifest_file" "lemon_tui" 1)"; then
+    rm -f "$manifest_file"
+    exit 1
+  fi
+fi
+
 rm -f "$manifest_file"
 
 ARTIFACT_FILE="$(printf '%s\n' "$artifact_line" | cut -f1)"
@@ -491,11 +525,25 @@ ARTIFACT_SIZE="$(printf '%s\n' "$artifact_line" | cut -f3)"
 VERSION="$(printf '%s\n' "$artifact_line" | cut -f4)"
 RESOLVED_CHANNEL="$(printf '%s\n' "$artifact_line" | cut -f5)"
 
+TUI_FILE=""
+TUI_SHA=""
+TUI_SIZE=""
+if [ -n "$tui_line" ]; then
+  TUI_FILE="$(printf '%s\n' "$tui_line" | cut -f1)"
+  TUI_SHA="$(printf '%s\n' "$tui_line" | cut -f2)"
+  TUI_SIZE="$(printf '%s\n' "$tui_line" | cut -f3)"
+elif [ "$WANT_TUI" = "1" ]; then
+  warn "this release has no TUI artifact for $PLATFORM; installing runtime only"
+fi
+
 TARGET_DIR="$VERSIONS_DIR/$VERSION"
 
 if [ -d "$TARGET_DIR" ] && [ "$FORCE" != "1" ]; then
   ensure_links "$VERSION"
   info "Lemon $VERSION ($RESOLVED_CHANNEL) is already installed at $TARGET_DIR."
+  if [ -n "$TUI_FILE" ] && [ ! -x "$TARGET_DIR/tui/bin/lemon-tui" ]; then
+    info "This install has no terminal UI, but $VERSION publishes one."
+  fi
   info "Re-run with --force to reinstall it."
 
   if [ "$VERIFY" = "1" ]; then
@@ -525,6 +573,31 @@ if [ "$actual_sha" != "$ARTIFACT_SHA" ]; then
 fi
 info "ok sha256 $actual_sha"
 
+# Both tarballs are downloaded and verified before either is extracted: a bad
+# TUI download must not leave a half-installed version behind.
+tui_tarball=""
+if [ -n "$TUI_FILE" ]; then
+  tui_tarball="$TMP_DIR/$TUI_FILE"
+  rm -f "$tui_tarball"
+
+  info "Downloading $TUI_FILE ($TUI_SIZE bytes) ..."
+  if ! fetch "$DOWNLOAD_BASE/$TUI_FILE" "$tui_tarball"; then
+    rm -f "$tarball" "$tui_tarball"
+    die "could not download $DOWNLOAD_BASE/$TUI_FILE
+  Nothing was installed. Set LEMON_NO_TUI=1 to install the runtime only."
+  fi
+
+  actual_sha="$(sha256_of "$tui_tarball")"
+  if [ "$actual_sha" != "$TUI_SHA" ]; then
+    rm -f "$tarball" "$tui_tarball"
+    die "checksum mismatch for $TUI_FILE
+  expected $TUI_SHA
+  actual   $actual_sha
+  Nothing was installed."
+  fi
+  info "ok sha256 $actual_sha"
+fi
+
 partial_dir="$TARGET_DIR.partial"
 rm -rf "$partial_dir"
 mkdir -p "$partial_dir"
@@ -532,14 +605,34 @@ mkdir -p "$partial_dir"
 if ! tar -xzf "$tarball" -C "$partial_dir"; then
   rm -rf "$partial_dir"
   rm -f "$tarball"
+  if [ -n "$tui_tarball" ]; then
+    rm -f "$tui_tarball"
+  fi
   die "could not extract $ARTIFACT_FILE"
 fi
 
 rm -f "$tarball"
 
+# The runtime owns bin/ and lib/, the TUI owns tui/ — no collisions, so both
+# unpack into the same staging directory and ride the one rename below.
+if [ -n "$tui_tarball" ]; then
+  if ! tar -xzf "$tui_tarball" -C "$partial_dir"; then
+    rm -rf "$partial_dir"
+    rm -f "$tui_tarball"
+    die "could not extract $TUI_FILE"
+  fi
+  rm -f "$tui_tarball"
+fi
+
 if [ ! -x "$partial_dir/bin/lemon" ]; then
   rm -rf "$partial_dir"
   die "the release tarball has no executable bin/lemon launcher; refusing to install it."
+fi
+
+if [ -n "$TUI_FILE" ] && [ ! -x "$partial_dir/tui/bin/lemon-tui" ]; then
+  rm -rf "$partial_dir"
+  die "the TUI tarball has no executable tui/bin/lemon-tui; refusing to install it.
+  Set LEMON_NO_TUI=1 to install the runtime only."
 fi
 
 if [ -d "$TARGET_DIR" ]; then
@@ -560,6 +653,9 @@ ensure_links "$VERSION"
 info ""
 info "Installed Lemon $VERSION ($RESOLVED_CHANNEL, $PROFILE) to $TARGET_DIR"
 info "  launcher: $BIN_DIR/lemon -> ../versions/current/bin/lemon"
+if [ -n "$TUI_FILE" ]; then
+  info "  tui:      $TARGET_DIR/tui/bin/lemon-tui"
+fi
 info "  state:    $LEMON_ROOT/store"
 
 if ! "$BIN_DIR/lemon" version; then
@@ -574,6 +670,9 @@ path_hint
 
 info ""
 info "Next steps:"
+if [ -n "$TUI_FILE" ]; then
+  info "    lemon              # launch the terminal UI (starts the daemon for you)"
+fi
 info "    lemon --help       # available commands"
 info "    lemon daemon       # start the runtime in the background"
 info "    lemon status       # check it is healthy"

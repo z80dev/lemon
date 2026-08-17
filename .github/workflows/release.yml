@@ -10,10 +10,12 @@ name: Release
 # Steps:
 #   1. Verify the tag matches CalVer (YYYY.MM.PATCH).
 #   2. Confirm mix.exs version matches the tag.
-#   3. Build release tarballs for each profile x platform matrix (8 artifacts:
+#   3. Build release tarballs for each profile x platform matrix (11 artifacts:
 #      lemon_runtime_min/lemon_runtime_full on linux-x86_64/linux-arm64/darwin-arm64,
-#      sim_broadcast_platform on the two Linux platforms only) and boot-verify each
-#      on its native runner before upload.
+#      sim_broadcast_platform on the two Linux platforms only, and the lemon_tui
+#      terminal client on all three) and boot-verify each on its native runner
+#      before upload. lemon_tui is a compiled Bun binary rather than a BEAM
+#      release, so it is built and verified by its own jobs.
 #   4. Generate a manifest.json (schema 2) with version, channel, commit, toolchain,
 #      and per-artifact checksums/platform metadata.
 #   5. Re-verify the assembled artifact directory before publishing.
@@ -246,6 +248,157 @@ jobs:
           path: ${{ steps.package.outputs.artifact_name }}
           retention-days: 30
 
+  # ── Build the lemon_tui terminal client ──────────────────────────────────────
+  # All three platforms cross-compile from one x86_64 Linux runner: `bun build
+  # --compile` fetches the Bun runtime for the requested target itself, and the
+  # native addon comes from the matching prebuilt `@oh-my-pi/pi-natives-*` npm
+  # package. The tarball holds `tui/bin/lemon-tui` plus the `.node` addons that
+  # must sit beside the binary (the pi-natives loader probes the executable's
+  # own directory).
+  build-tui:
+    name: Build lemon_tui
+    runs-on: ubuntu-24.04
+    needs: validate
+    timeout-minutes: 30
+
+    env:
+      LEMON_VERSION: ${{ needs.validate.outputs.version }}
+      LEMON_GIT_SHA: ${{ github.sha }}
+      CHANNEL: ${{ needs.validate.outputs.channel }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+
+      # clients/tui/.bun-version is the single source of truth for the Bun
+      # toolchain; quality.yml and release-smoke.yml read the same file.
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: clients/tui/.bun-version
+
+      - name: Cache Bun install cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('clients/tui/bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Install client dependencies
+        working-directory: clients/tui
+        run: bun install --frozen-lockfile
+
+      - name: Build binaries and package artifacts
+        working-directory: clients/tui
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/tui-artifacts"
+
+          for PLATFORM in linux-x86_64 linux-arm64 darwin-arm64; do
+            bun scripts/build-binary.ts --target "$PLATFORM"
+
+            ARTIFACT_NAME="lemon-${LEMON_VERSION}-${CHANNEL}-${PLATFORM}-lemon_tui.tar.gz"
+            tar -czf "$GITHUB_WORKSPACE/tui-artifacts/$ARTIFACT_NAME" \
+              -C "dist/$PLATFORM" tui
+
+            SHA256=$(sha256sum "$GITHUB_WORKSPACE/tui-artifacts/$ARTIFACT_NAME" | awk '{print $1}')
+            echo "Artifact: $ARTIFACT_NAME  SHA256: $SHA256"
+          done
+
+      # The compiled binary must print the release CalVer (baked in via
+      # LEMON_VERSION) and must do it without a TTY — the same contract the
+      # `lemon` shim and the installer rely on. It also proves the native addon
+      # resolved: pi-tui loads it during module init, so a missing or
+      # mismatched `.node` fails here rather than in a user's terminal.
+      - name: Smoke the linux-x86_64 binary
+        working-directory: clients/tui
+        run: |
+          set -euo pipefail
+          REPORTED=$(./dist/linux-x86_64/tui/bin/lemon-tui --version)
+          echo "lemon-tui --version -> $REPORTED"
+          if [ "$REPORTED" != "$LEMON_VERSION" ]; then
+            echo "::error::lemon-tui reported '$REPORTED', expected '$LEMON_VERSION'"
+            exit 1
+          fi
+
+      - name: Upload linux-x86_64 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-lemon_tui-linux-x86_64
+          path: tui-artifacts/lemon-*-linux-x86_64-lemon_tui.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload linux-arm64 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-lemon_tui-linux-arm64
+          path: tui-artifacts/lemon-*-linux-arm64-lemon_tui.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload darwin-arm64 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-lemon_tui-darwin-arm64
+          path: tui-artifacts/lemon-*-darwin-arm64-lemon_tui.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+
+  # ── Verify each lemon_tui artifact on its native runner ──────────────────────
+  # The TUI is not a BEAM release: scripts/verify_release_runtime_boot never
+  # runs against these tarballs. Running the cross-compiled binary on real
+  # hardware is the check that matters — it catches a bad Bun target triple, a
+  # missing/mismatched native addon, and (on macOS) a rejected code signature.
+  verify-tui:
+    name: Verify lemon_tui (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    needs: [validate, build-tui]
+    timeout-minutes: 15
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: linux-x86_64
+          - os: ubuntu-24.04-arm
+            platform: linux-arm64
+          - os: macos-15
+            platform: darwin-arm64
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-lemon_tui-${{ matrix.platform }}
+          path: tui-artifact
+
+      - name: Extract and run
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          CHANNEL: ${{ needs.validate.outputs.channel }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          TARBALL="tui-artifact/lemon-${VERSION}-${CHANNEL}-${PLATFORM}-lemon_tui.tar.gz"
+          test -f "$TARBALL"
+
+          mkdir -p extracted
+          tar -xzf "$TARBALL" -C extracted
+          test -x extracted/tui/bin/lemon-tui
+          ls extracted/tui/bin/pi_natives.*.node >/dev/null
+
+          REPORTED=$(cd extracted && ./tui/bin/lemon-tui --version)
+          echo "lemon-tui --version -> $REPORTED"
+          if [ "$REPORTED" != "$VERSION" ]; then
+            echo "::error::lemon-tui on $PLATFORM reported '$REPORTED', expected '$VERSION'"
+            exit 1
+          fi
+
   # ── Multi-arch container image ───────────────────────────────────────────────
   # Each architecture is built natively on its own runner and pushed by digest;
   # docker-merge assembles the manifest list and is the only step that creates
@@ -459,7 +612,7 @@ jobs:
   publish:
     name: Publish release
     runs-on: ubuntu-latest
-    needs: [validate, build, docker-merge]
+    needs: [validate, build, build-tui, verify-tui, docker-merge]
     permissions:
       contents: write
 
@@ -500,7 +653,7 @@ jobs:
           name_re = re.compile(
             r'^lemon-' + re.escape(version) + r'-' + re.escape(channel) + r'-'
             r'(linux-x86_64|linux-arm64|darwin-arm64)-'
-            r'(lemon_runtime_min|lemon_runtime_full|sim_broadcast_platform)\.tar\.gz$'
+            r'(lemon_runtime_min|lemon_runtime_full|sim_broadcast_platform|lemon_tui)\.tar\.gz$'
           )
 
           artifacts = []

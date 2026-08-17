@@ -16,9 +16,20 @@ defmodule LemonCore.Update.Remote do
 
   ## Install layout
 
-      ~/.lemon/versions/<version>/   # extracted release
-      ~/.lemon/versions/current      # symlink, atomic flip point
-      ~/.lemon/tmp/                  # download staging
+      ~/.lemon/versions/<version>/          # extracted release
+      ~/.lemon/versions/<version>/tui/bin/  # terminal UI, when published
+      ~/.lemon/versions/current             # symlink, atomic flip point
+      ~/.lemon/tmp/                         # download staging
+
+  The terminal UI ships as its own per-platform artifact (profile
+  `lemon_tui`) that unpacks into `tui/` beside the runtime's `bin/`. Both
+  tarballs are downloaded and checksum-verified before either is extracted,
+  and both are staged into the same `versions/<version>.partial` directory, so
+  the single rename plus symlink flip installs them together or not at all. A
+  manifest without a `lemon_tui` entry updates the runtime only — the same
+  degradation the installer applies to pre-TUI releases. The
+  `sim_broadcast_platform` profile never fetches one, and `LEMON_NO_TUI=1`
+  opts out, mirroring the installer.
 
   `apply/1` refuses to run outside this layout (manual tarball / server
   installs opt out by construction — they don't live under
@@ -46,6 +57,8 @@ defmodule LemonCore.Update.Remote do
   @default_base_url "https://github.com/z80dev/lemon"
   @default_channel "stable"
   @keep_versions 2
+  @tui_profile "lemon_tui"
+  @sim_profile "sim_broadcast_platform"
 
   @type opts :: keyword()
   @type artifact :: %{optional(String.t()) => term()}
@@ -54,6 +67,7 @@ defmodule LemonCore.Update.Remote do
           latest: String.t() | nil,
           update_available?: boolean(),
           artifact: artifact() | nil,
+          tui_artifact: artifact() | nil,
           channel: String.t(),
           auto_update: boolean()
         }
@@ -82,6 +96,7 @@ defmodule LemonCore.Update.Remote do
          latest: latest,
          update_available?: update_available?(current, latest),
          artifact: select_artifact(manifest, opts),
+         tui_artifact: select_tui_artifact(manifest, opts),
          channel: channel,
          auto_update: auto_update?(opts)
        }}
@@ -89,16 +104,17 @@ defmodule LemonCore.Update.Remote do
   end
 
   @doc """
-  Downloads, verifies, and stages the latest matching artifact.
+  Downloads, verifies, and stages the latest matching artifacts.
 
   Refuses to run unless the current release is installed under
-  `<state_home>/versions/<version>/` (the layout guard). Streams the download
+  `<state_home>/versions/<version>/` (the layout guard). Streams each download
   to `<state_home>/tmp/` — the response body is never buffered in memory —
-  verifies its SHA-256 against the manifest (mandatory; a missing or mismatched
-  checksum is a hard error and the partial download is deleted), extracts it
-  into `versions/<version>.partial`, renames it into place, and atomically
-  flips `versions/current` via symlink-tmp + rename. Prunes old versions,
-  keeping the newly staged one plus the #{@keep_versions} most recent others.
+  and verifies its SHA-256 against the manifest (mandatory; a missing or
+  mismatched checksum is a hard error and the partial downloads are deleted).
+  Only once the runtime and, when published, the TUI are both verified does it
+  extract them into `versions/<version>.partial`, rename that into place, and
+  atomically flip `versions/current` via symlink-tmp + rename. Prunes old
+  versions, keeping the newly staged one plus the #{@keep_versions} most recent others.
 
   Never restarts the node. On success, `restart_required: true` tells the
   caller a restart is needed to run the staged version.
@@ -178,14 +194,35 @@ defmodule LemonCore.Update.Remote do
   defp update_available?(current, latest), do: Version.newer?(current, latest)
 
   defp select_artifact(manifest, opts) do
-    with platform when is_binary(platform) <- platform(opts),
-         profile when is_binary(profile) <- profile(opts),
-         artifacts when is_list(artifacts) <- manifest["artifacts"] do
-      Enum.find(artifacts, fn a -> a["platform"] == platform and a["profile"] == profile end)
-    else
+    case profile(opts) do
+      profile when is_binary(profile) -> find_artifact(manifest, platform(opts), profile)
       _ -> nil
     end
   end
+
+  # The terminal UI is optional: releases published before it existed have no
+  # such entry, the sim profile has no terminal UI at all, and LEMON_NO_TUI=1
+  # is the same opt-out the installer honours — an operator who installed
+  # runtime-only should not have one appear underneath them on update.
+  defp select_tui_artifact(manifest, opts) do
+    if profile(opts) == @sim_profile or System.get_env("LEMON_NO_TUI") == "1" do
+      nil
+    else
+      find_artifact(manifest, platform(opts), @tui_profile)
+    end
+  end
+
+  defp find_artifact(manifest, platform, profile) when is_binary(platform) do
+    case manifest["artifacts"] do
+      artifacts when is_list(artifacts) ->
+        Enum.find(artifacts, fn a -> a["platform"] == platform and a["profile"] == profile end)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp find_artifact(_manifest, _platform, _profile), do: nil
 
   defp profile(opts), do: Keyword.get(opts, :profile) || System.get_env("RELEASE_NAME")
   defp platform(opts), do: Keyword.get(opts, :platform) || detect_platform()
@@ -251,11 +288,11 @@ defmodule LemonCore.Update.Remote do
 
   defp do_apply(%{artifact: nil}, _opts), do: {:error, :no_matching_artifact}
 
-  defp do_apply(%{artifact: artifact, latest: version, current: current}, opts) do
-    with {:ok, tarball} <- download_artifact(artifact, version, opts),
-         :ok <- verify_checksum(tarball, artifact),
-         {:ok, final_dir} <- extract_artifact(tarball, version, opts),
-         _ <- File.rm(tarball),
+  defp do_apply(%{artifact: artifact, latest: version, current: current} = info, opts) do
+    tui_artifact = Map.get(info, :tui_artifact)
+
+    with {:ok, tarballs} <- download_verified(artifact, tui_artifact, version, opts),
+         {:ok, final_dir} <- stage_artifacts(tarballs, version, opts),
          :ok <- flip_current(version, opts) do
       prune(opts, version)
 
@@ -267,6 +304,31 @@ defmodule LemonCore.Update.Remote do
          latest: version,
          path: final_dir
        }}
+    end
+  end
+
+  # Every byte is on disk and checksum-verified before anything is extracted:
+  # a bad TUI download must not leave a half-staged version behind.
+  defp download_verified(artifact, tui_artifact, version, opts) do
+    with {:ok, tarball} <- download_one(artifact, version, opts) do
+      case download_optional(tui_artifact, version, opts) do
+        {:ok, tui_tarball} ->
+          {:ok, {tarball, tui_tarball}}
+
+        {:error, reason} ->
+          File.rm(tarball)
+          {:error, reason}
+      end
+    end
+  end
+
+  defp download_optional(nil, _version, _opts), do: {:ok, nil}
+  defp download_optional(artifact, version, opts), do: download_one(artifact, version, opts)
+
+  defp download_one(artifact, version, opts) do
+    with {:ok, tarball} <- download_artifact(artifact, version, opts),
+         :ok <- verify_checksum(tarball, artifact) do
+      {:ok, tarball}
     end
   end
 
@@ -324,27 +386,63 @@ defmodule LemonCore.Update.Remote do
     |> Base.encode16(case: :lower)
   end
 
-  defp extract_artifact(tarball, version, opts) do
+  # The runtime owns bin/ and lib/, the TUI owns tui/, so both unpack into one
+  # staging directory and ride the same rename into place.
+  defp stage_artifacts({tarball, tui_tarball}, version, opts) do
     dir = versions_dir(opts)
     File.mkdir_p!(dir)
     partial = Path.join(dir, "#{version}.partial")
     File.rm_rf(partial)
     File.mkdir_p!(partial)
 
-    case System.cmd("tar", ["-xzf", tarball, "-C", partial], stderr_to_stdout: true) do
-      {_output, 0} ->
-        final = Path.join(dir, version)
-        File.rm_rf(final)
+    case extract_all(partial, [tarball, tui_tarball]) do
+      :ok ->
+        rm_tarballs([tarball, tui_tarball])
+        promote(partial, Path.join(dir, version))
 
-        case File.rename(partial, final) do
-          :ok -> {:ok, final}
-          {:error, reason} -> {:error, {:rename_failed, reason}}
-        end
-
-      {output, code} ->
+      {:error, reason} ->
         File.rm_rf(partial)
-        {:error, {:extract_failed, code, output}}
+        rm_tarballs([tarball, tui_tarball])
+        {:error, reason}
     end
+  end
+
+  defp extract_all(partial, tarballs) do
+    Enum.reduce_while(tarballs, :ok, fn tarball, :ok ->
+      case extract_into(partial, tarball) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp extract_into(_partial, nil), do: :ok
+
+  defp extract_into(partial, tarball) do
+    case System.cmd("tar", ["-xzf", tarball, "-C", partial], stderr_to_stdout: true) do
+      {_output, 0} -> :ok
+      {output, code} -> {:error, {:extract_failed, code, output}}
+    end
+  end
+
+  defp promote(partial, final) do
+    File.rm_rf(final)
+
+    case File.rename(partial, final) do
+      :ok ->
+        {:ok, final}
+
+      {:error, reason} ->
+        File.rm_rf(partial)
+        {:error, {:rename_failed, reason}}
+    end
+  end
+
+  defp rm_tarballs(tarballs) do
+    Enum.each(tarballs, fn
+      nil -> :ok
+      path -> File.rm(path)
+    end)
   end
 
   defp flip_current(version, opts) do

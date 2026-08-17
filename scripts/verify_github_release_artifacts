@@ -43,15 +43,15 @@ detect_platform() {
 }
 
 # Platform -> release profiles, duplicated (with this cross-reference) from
-# the EXPECTED table in scripts/verify_release_artifacts: min+full on every
-# platform, sim_broadcast_platform is Linux-only.
+# the EXPECTED table in scripts/verify_release_artifacts: min+full+lemon_tui
+# on every platform, sim_broadcast_platform is Linux-only.
 platform_profiles() {
   case "$1" in
     linux-x86_64|linux-arm64)
-      echo "lemon_runtime_min lemon_runtime_full sim_broadcast_platform"
+      echo "lemon_runtime_min lemon_runtime_full sim_broadcast_platform lemon_tui"
       ;;
     darwin-arm64)
-      echo "lemon_runtime_min lemon_runtime_full"
+      echo "lemon_runtime_min lemon_runtime_full lemon_tui"
       ;;
     *)
       echo ""
@@ -193,4 +193,4 @@ fi
 
 "$ROOT/scripts/verify_release_runtime_boot" --platform "$PLATFORM" "$DOWNLOAD_DIR"
 
-echo "downloaded, verified, and booted GitHub Release artifacts for $TAG ($PLATFORM) in $DOWNLOAD_DIR"
+echo "downloaded and verified GitHub Release artifacts, and booted BEAM releases, for $TAG ($PLATFORM) in $DOWNLOAD_DIR"

@@ -10,7 +10,8 @@
 # Phoenix endpoints to configure.
 #
 # Usage:
-#   bin/lemon start|daemon|stop|restart|status|remote|eval|rpc|version|update|doctor
+#   bin/lemon                 # interactive terminal: launches the TUI (daemon auto-start)
+#   bin/lemon tui|start|daemon|stop|restart|status|remote|eval|rpc|version|update|doctor
 #   bin/lemon --help
 #
 # The full development CLI (setup, channels, secrets, models, ...) only
@@ -31,7 +32,11 @@ usage() {
   cat <<'EOF'
 Usage: bin/lemon <command> [args]
 
+Running with no command in an interactive terminal launches the TUI,
+starting the daemon first if it is not already running.
+
 Commands:
+  tui [args]            Launch the terminal UI (auto-starts the daemon)
   start                 Run the release in the foreground
   daemon                Run the release in the background; records pid + root
   stop                  Stop a running daemon (works after a version flip)
@@ -78,6 +83,7 @@ if [ -z "$PROFILE" ]; then
 fi
 
 RELEASE_BIN="$LEMON_ROOT/bin/$PROFILE"
+TUI_BIN="$LEMON_ROOT/tui/bin/lemon-tui"
 
 LEMON_HOME_DIR="$HOME/.lemon"
 COOKIE_FILE="$LEMON_HOME_DIR/cookie"
@@ -151,6 +157,27 @@ elixir_escape() {
   printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
 }
 
+# ── Start the daemon and record pid + root. Shared by `daemon` and `tui`. ──
+start_daemon() {
+  "$RELEASE_BIN" daemon "$@"
+
+  pid=""
+  for _attempt in $(seq 1 15); do
+    pid="$("$RELEASE_BIN" pid 2>/dev/null || true)"
+    [ -n "$pid" ] && break
+    sleep 1
+  done
+
+  if [ -z "$pid" ]; then
+    error "daemon started but its pid could not be determined"
+    exit 1
+  fi
+
+  printf '%s\n' "$pid" > "$PIDFILE"
+  printf '%s\n' "$LEMON_ROOT" > "$ROOTFILE"
+  info "started (pid $pid)"
+}
+
 COMMAND="${1:-}"
 
 case "$COMMAND" in
@@ -159,14 +186,56 @@ case "$COMMAND" in
     exit 0
     ;;
   "")
-    usage >&2
-    exit 2
+    # No command: interactive terminals get the TUI; scripts keep the
+    # historical usage-and-exit-2 contract.
+    if [ -t 0 ] && [ -t 1 ]; then
+      COMMAND="tui"
+      set -- tui
+    else
+      usage >&2
+      exit 2
+    fi
     ;;
 esac
 
 setup_environment
 
 case "$COMMAND" in
+  tui)
+    shift
+
+    if [ ! -x "$TUI_BIN" ]; then
+      error "TUI not installed at $TUI_BIN"
+      error "this install may predate the TUI artifact, or was installed with LEMON_NO_TUI=1;"
+      error "re-run the installer, or use 'lemon --help' for daemon commands"
+      exit 1
+    fi
+
+    control_port="${LEMON_CONTROL_PLANE_PORT:-4040}"
+
+    if ! curl -fsS "http://127.0.0.1:$control_port/healthz" >/dev/null 2>&1; then
+      info "daemon not running; starting it"
+      start_daemon
+
+      healthy=""
+      for _attempt in $(seq 1 30); do
+        if curl -fsS "http://127.0.0.1:$control_port/healthz" >/dev/null 2>&1; then
+          healthy=1
+          break
+        fi
+        sleep 1
+      done
+
+      if [ -z "$healthy" ]; then
+        error "daemon did not become healthy on port $control_port within 30s"
+        error "check 'lemon status' and the logs, then retry"
+        exit 1
+      fi
+    fi
+
+    exec "$TUI_BIN" --ws-url "ws://127.0.0.1:$control_port/ws" "$@"
+    ;;
+
   start)
     shift
     exec "$RELEASE_BIN" start "$@"
@@ -174,23 +243,7 @@ case "$COMMAND" in
 
   daemon)
     shift
-    "$RELEASE_BIN" daemon "$@"
-
-    pid=""
-    for _attempt in $(seq 1 15); do
-      pid="$("$RELEASE_BIN" pid 2>/dev/null || true)"
-      [ -n "$pid" ] && break
-      sleep 1
-    done
-
-    if [ -z "$pid" ]; then
-      error "daemon started but its pid could not be determined"
-      exit 1
-    fi
-
-    printf '%s\n' "$pid" > "$PIDFILE"
-    printf '%s\n' "$LEMON_ROOT" > "$ROOTFILE"
-    info "started (pid $pid)"
+    start_daemon "$@"
     ;;
 
   stop)

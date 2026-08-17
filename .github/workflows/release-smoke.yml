@@ -21,6 +21,7 @@ on:
       - ".github/workflows/release-smoke.yml"
       - ".github/workflows/release.yml"
       - "rel/overlays/bin/lemon"
+      - "clients/tui/**"
       - "scripts/verify_release_artifacts"
       - "scripts/verify_release_runtime_boot"
       - "install.sh"
@@ -536,6 +537,62 @@ jobs:
       - name: Stop hosted test server
         if: always()
         run: kill "$HOSTED_SERVER_PID" 2>/dev/null || true
+
+  tui-smoke:
+    name: TUI binary (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-24.04
+          - macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: clients/tui/.bun-version
+
+      - name: Cache Bun install cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('clients/tui/bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Install client dependencies
+        working-directory: clients/tui
+        run: bun install --frozen-lockfile
+
+      # Host target only: the release workflow owns the three-platform
+      # cross-build. This job guards the compile path itself — the binary must
+      # be produced, load its native addon (pi-tui pulls it in during module
+      # init), and answer `--version` with no TTY.
+      - name: Build host binary
+        working-directory: clients/tui
+        run: bun scripts/build-binary.ts
+
+      - name: Run the compiled binary
+        working-directory: clients/tui
+        run: |
+          set -euo pipefail
+          case "$(uname -s)" in
+            Darwin) PLATFORM=darwin-arm64 ;;
+            *) PLATFORM=linux-x86_64 ;;
+          esac
+          BIN="dist/$PLATFORM/tui/bin/lemon-tui"
+          test -x "$BIN"
+          ls "dist/$PLATFORM/tui/bin/"pi_natives.*.node >/dev/null
+          REPORTED=$("$BIN" --version)
+          echo "lemon-tui --version -> $REPORTED"
+          test -n "$REPORTED"
 
   install-script:
     name: Install script (${{ matrix.os }})
