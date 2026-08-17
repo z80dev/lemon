@@ -446,13 +446,47 @@ boot_one_profile() {
   if [ "$profile" = "sim_broadcast_platform" ]; then
     wait_for_health "http://127.0.0.1:$sim_port/readyz" "$profile sim-ui"
     curl -fsS "http://127.0.0.1:$sim_port/" | grep -q '/assets/app-'
-    [ "$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$sim_port/admin")" = "401" ]
+
+    # Unauthenticated operator surfaces: the browser route bounces to the
+    # admin login form (RequireAccessToken on_failure: redirect), while the
+    # JSON API rejects outright with 401.
+    admin_headers=$(curl -sS -o /dev/null -D - "http://127.0.0.1:$sim_port/admin")
+    admin_status=$(printf '%s' "$admin_headers" | head -1 | awk '{print $2}')
+    case "$admin_status" in
+      30[123578]) ;;
+      *)
+        echo "$profile: unauthenticated /admin returned $admin_status, expected a redirect to the login form" >&2
+        exit 1
+        ;;
+    esac
+    if ! printf '%s' "$admin_headers" | grep -qi '^location:.*/admin/login'; then
+      echo "$profile: unauthenticated /admin did not redirect to /admin/login" >&2
+      exit 1
+    fi
+    api_status=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$sim_port/api/admin/metrics")
+    if [ "$api_status" != "401" ]; then
+      echo "$profile: unauthenticated /api/admin/metrics returned $api_status, expected 401" >&2
+      exit 1
+    fi
 
     run_release rpc \
       'state = LemonSim.Examples.Werewolf.initial_state(sim_id: "artifact_werewolf", player_count: 5, seed: 7); state = LemonSim.Kernel.State.put_world(state, %{phase: "game_over", status: "game_over", winner: "villagers"}); LemonSim.Kernel.Store.put_state(state)'
     curl -fsS "http://127.0.0.1:$sim_port/watch/artifact_werewolf" | grep -q 'VILLAGERS WIN'
 
     run_release stop
+    # `stop` returns as soon as the shutdown rpc is accepted, but the node
+    # needs a moment to exit and release its epmd name registration; starting
+    # the next daemon before that kills it with "name … seems to be in use".
+    for _ in $(seq 1 30); do
+      if ! run_release pid >/dev/null 2>&1; then
+        break
+      fi
+      sleep 1
+    done
+    if run_release pid >/dev/null 2>&1; then
+      echo "$profile: node did not exit within 30s of stop" >&2
+      exit 1
+    fi
     run_release daemon
     wait_for_health "http://127.0.0.1:$sim_port/readyz" "$profile restarted sim-ui"
     curl -fsS "http://127.0.0.1:$sim_port/watch/artifact_werewolf" | grep -q 'VILLAGERS WIN'
