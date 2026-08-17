@@ -1,6 +1,6 @@
 {
   "name": "@lemon-web/shared",
-  "version": "2026.05.0",
+  "version": "2026.08.0",
   "private": true,
   "type": "module",
   "main": "dist/index.js",

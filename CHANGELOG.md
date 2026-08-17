@@ -12,6 +12,57 @@ No unreleased changes yet.
 
 ---
 
+## [2026.08.0]
+
+### Added
+
+**Distribution — prebuilt install story**
+- Prebuilt release tarballs for `linux-x86_64`, `linux-arm64`, and
+  `darwin-arm64` (`lemon_runtime_min`/`lemon_runtime_full` everywhere,
+  `sim_broadcast_platform` on Linux), each boot-verified on its native
+  runner before publication, described by a schema-2 `manifest.json`
+- One-line installer (`install.sh`): checksum-verified install into
+  `~/.lemon/versions/<version>` with an atomic `current` symlink, plus an
+  offline CI verification harness (`scripts/verify_install_script`)
+- `bin/lemon` launcher shim shipped inside every release
+  (start/daemon/stop/status/version/update/doctor and friends)
+- Stage-2 self-update: `lemon update` checks the published manifest,
+  stream-downloads with mandatory sha256, stages, flips atomically, and
+  supports `--rollback`; the control-plane `update.run` method now rides
+  the same code path
+- Multi-arch container image `ghcr.io/z80dev/lemon` (amd64 + arm64),
+  smoke-tested in CI before tagging; a failed image blocks the release
+
+**Platform (since 2026.05.0)**
+- Platform split: 12 packages published to Hex, engine registries and CLI
+  resolvers extracted, `lemon_cli_runners` and `lemon_browser`/`lemon_skills`
+  as standalone packages
+- Always-on model arenas (werewolf, space station, stock market, survivor,
+  poker) with leagues, ratings, and spectator UI
+- Provider resilience: failover classifier, unified routing fallback,
+  multi-key credential pools with health/cooldown
+- Redirect-style interruption end to end, including Telegram/Discord
+  `/redirect`
+- Learning loop on by default: session search (scoped), routing feedback,
+  scheduled skill synthesis
+- Tool-search tiered disclosure, programmatic tool calling
+  (`execute_code`), cron monitor mode/chaining/drift guard/preflight
+- Channel delivery observability, hermetic Telegram test API, and the
+  three-tier product verification stack
+
+### Changed
+- `lemon_runtime_full` releases now ship digested static assets for both
+  web endpoints (previously booted with a static-manifest warning)
+- Release artifact naming switched to runner-agnostic platform tags
+
+### Fixed
+- Control-plane `update.run` no longer buffers downloads in memory or
+  skips checksum verification on unrecognized prefixes
+- Sim UI Dockerfile references the post-rename app paths and the shared
+  `hex_package.exs`
+
+---
+
 ## [2026.05.0]
 
 ### Added
