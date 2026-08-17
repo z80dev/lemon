@@ -59,15 +59,6 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.inputs.tag || github.ref_name }}
 
-      - name: Setup BEAM
-        uses: erlef/setup-beam@v1
-        with:
-          otp-version: ${{ env.OTP_VERSION }}
-          elixir-version: ${{ env.ELIXIR_VERSION }}
-
-      - name: Install deps (minimal)
-        run: mix deps.get --only prod
-
       - name: Parse tag and determine channel
         id: parse
         run: |
@@ -88,9 +79,18 @@ jobs:
           echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
           echo "Version: $VERSION  Channel: $CHANNEL"
 
+      # Read the version straight from mix.exs rather than booting Mix:
+      # `mix run` compiles the umbrella and (as of the first live run of this
+      # workflow) fails outright because deps were fetched --only prod while
+      # Mix defaults to the dev env. scripts/bump_version.sh writes this line,
+      # so the textual form is stable.
       - name: Confirm mix.exs version matches tag
         run: |
-          MIX_VERSION=$(mix run --no-start -e "IO.puts(Mix.Project.config()[:version])")
+          MIX_VERSION=$(sed -n 's/^ *version: "\([0-9.]*\)",$/\1/p' mix.exs | head -1)
+          if [ -z "$MIX_VERSION" ]; then
+            echo "::error::could not extract version from mix.exs"
+            exit 1
+          fi
           TAG_VERSION="${{ steps.parse.outputs.version }}"
           if [ "$MIX_VERSION" != "$TAG_VERSION" ]; then
             echo "::error::mix.exs version ($MIX_VERSION) does not match tag ($TAG_VERSION)."
