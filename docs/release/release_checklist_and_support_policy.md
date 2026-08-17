@@ -1,6 +1,6 @@
 # Release Checklist and Support Policy
 
-Last reviewed: 2026-05-12
+Last reviewed: 2026-08-16
 
 This document defines the operational checklist for Lemon 1.0 release
 candidates, rollback handling, and public support boundaries.
@@ -11,17 +11,18 @@ The initial stable 1.0 release artifact support target is:
 
 | Area | Supported for 1.0 | Notes |
 | --- | --- | --- |
-| Release artifacts | Ubuntu 24.04 `x86_64` tarballs | Built by `.github/workflows/release.yml` on pinned `ubuntu-24.04` runners |
-| Release profiles | `lemon_runtime_min`, `lemon_runtime_full`, `sim_broadcast_platform` | All must boot from extracted tarballs before stable 1.0; the sim profile also verifies local assets, access control, and persistent spectator state |
+| Release artifacts | `linux-x86_64`, `linux-arm64`, `darwin-arm64` tarballs | Built by `.github/workflows/release.yml` on pinned `ubuntu-24.04`, `ubuntu-24.04-arm`, and `macos-15` runners; Linux artifacts carry a glibc 2.39 baseline |
+| Release profiles | `lemon_runtime_min`, `lemon_runtime_full` on all platforms; `sim_broadcast_platform` on Linux | All must boot from extracted tarballs before stable 1.0; the sim profile also verifies local assets, access control, and persistent spectator state |
 | Source install | Linux and macOS, best effort | Requires Elixir 1.19.5+ and Erlang/OTP 28.5+ |
-| Windows | Not supported for 1.0 | Use WSL or source-level experimentation |
-| Auto-update | Not supported for 1.0 | `mix lemon.update` remains a local maintenance task |
-| Install script | Not supported for 1.0 | Source install and verified tarballs are the supported paths |
+| Windows and macOS `x86_64` | Not supported for 1.0 | Use WSL, the container image, or source-level experimentation |
+| Install script | Supported with scope | `install.sh` on the `stable` channel for the three platform tags; `preview`/`nightly` require a pinned `LEMON_VERSION` |
+| Update | Supported with scope | `lemon update` for `~/.lemon` installs: symlink flip plus operator restart, with `--rollback`. No hot upgrades, no background auto-update |
+| Container image | `ghcr.io/z80dev/lemon` multi-arch | `amd64` and `arm64` under one tag |
 | Hosted Lemon service | Not supported for 1.0 | Lemon is local-first/self-hosted |
 | Stable remote channel | Telegram | Text-first support boundary; other channel adapters are preview unless promoted |
 
-Expanding release artifacts to macOS or other platforms requires release-matrix
-work, local artifact proof, and support-bundle verification for each target.
+Expanding release artifacts to further platforms requires release-matrix work,
+local artifact proof, and support-bundle verification for each target.
 
 ## Release Candidate Checklist
 
@@ -45,6 +46,10 @@ Before cutting a stable release:
       status, source-wrapper skill listing, source-wrapper usage diagnostics,
       source-wrapper stage-1 local update dry-run dispatch, source-wrapper
       doctor JSON diagnostics, and redacted support-bundle generation.
+- [ ] Run `scripts/verify_install_script` to prove the one-line installer
+      against a fixture release: install layout, checksum rejection,
+      idempotency, `--force`, `--verify` boot, pinned-version resolution,
+      version retention, and the `versions/current` flip.
 - [ ] Run `scripts/test fast`.
 - [ ] Run `scripts/test quality`.
 - [ ] Run `scripts/test clients` so the Python CLI lint/test/package build and
@@ -697,16 +702,29 @@ Publishing a tag and hosted release is distribution work. It is not part of the
 - [ ] Confirm the workflow used the version-specific `CHANGELOG.md` section for
       release notes.
 - [ ] Confirm the workflow uploads:
-  - `lemon-{version}-{channel}-ubuntu-24.04-x86_64-lemon_runtime_min.tar.gz`
-  - `lemon-{version}-{channel}-ubuntu-24.04-x86_64-lemon_runtime_full.tar.gz`
-  - `lemon-{version}-{channel}-ubuntu-24.04-x86_64-sim_broadcast_platform.tar.gz`
-  - `manifest.json`
+  - `lemon-{version}-{channel}-{platform}-lemon_runtime_min.tar.gz` for
+    `linux-x86_64`, `linux-arm64`, and `darwin-arm64`
+  - `lemon-{version}-{channel}-{platform}-lemon_runtime_full.tar.gz` for the
+    same three platform tags
+  - `lemon-{version}-{channel}-linux-{x86_64,arm64}-sim_broadcast_platform.tar.gz`
+  - `manifest.json` (schema 2)
+  - `install.sh`
 
 ## Rollback Checklist
 
 Rollback means recommending or restoring a previous known-good release artifact.
-Lemon 1.0 does not have a remote binary auto-updater, so rollback is an operator
-procedure.
+Rollback is always an operator action; nothing rolls back on its own.
+
+For runtimes installed by `install.sh` into `~/.lemon`, the two most recent
+previous versions are retained on disk:
+
+```bash
+lemon update --rollback   # flips ~/.lemon/versions/current back
+lemon stop && lemon daemon
+lemon status
+```
+
+For manual tarball and container installs, use the full procedure:
 
 - [ ] Identify the previous known-good artifact profile.
 - [ ] Download the previous artifact and `manifest.json`.
@@ -736,12 +754,29 @@ Supported for stable 1.0:
   failures are reproducible through first-party runtime or Web operations paths.
 - Bugs accompanied by a redacted support bundle when diagnostics are needed.
 
+Supported with scope:
+
+- The one-line install script (`install.sh`) on the `stable` channel for
+  `linux-x86_64`, `linux-arm64`, and `darwin-arm64`. It requires `curl`, `tar`,
+  and `python3`, verifies every artifact's SHA-256 against the release manifest,
+  and installs into the `~/.lemon` layout. Installing a `preview` or `nightly`
+  release requires an explicit `LEMON_VERSION` pin.
+- Remote update through `lemon update` for runtimes installed in that layout.
+  Update is a symlink flip plus an operator restart, with `--rollback` to the
+  previous retained version. Manual tarball and container installs are not
+  managed by the updater.
+- Multi-arch container images on `ghcr.io/z80dev/lemon` (`amd64`, `arm64`).
+
 Not supported for stable 1.0:
 
 - Windows-native release artifacts.
-- Unverified platform-specific packaging.
-- Remote auto-update.
-- Remote one-line install scripts.
+- macOS `x86_64` release artifacts.
+- Unverified platform-specific packaging, including OS package managers
+  (Homebrew, apt, AUR) and desktop bundles.
+- Hot code upgrades. Applying an update always requires a restart.
+- Background or unattended auto-update. `[runtime] auto_update` is read and
+  reported only; there is no update timer.
+- Signed or notarized macOS binaries.
 - Hosted multi-tenant operation.
 - Stable support guarantees for preview channel adapters.
 - Production-grade scheduling guarantees, external scheduler integrations, or
@@ -789,3 +824,5 @@ Keep these files current during the 1.0 launch process:
 - `scripts/prepare_release_notes`
 - `scripts/verify_release_artifacts`
 - `scripts/verify_release_runtime_boot`
+- `install.sh`
+- `scripts/verify_install_script`

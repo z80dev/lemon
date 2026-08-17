@@ -32,6 +32,48 @@ mix run --no-halt
 
 A self-contained Erlang/OTP release with the BEAM bundled — no Elixir or Mix required on the target machine.
 
+### Installer flow (workstations and single-machine hosts)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh
+```
+
+`install.sh` resolves the platform from `uname`, downloads the matching artifact
+named in the release `manifest.json`, verifies its SHA-256, and installs it
+under `~/.lemon`:
+
+```
+~/.lemon/versions/<version>/   extracted release
+~/.lemon/versions/current      symlink to the active version
+~/.lemon/bin/lemon             -> ../versions/current/bin/lemon
+~/.lemon/{cookie,env}          generated once by the launcher, mode 600
+~/.lemon/run/                  pid and runtime-root records
+~/.lemon/store                 default store path for user installs
+```
+
+`bin/lemon` inside every release is a launcher shim that picks the bundled
+profile and applies user-install defaults before delegating to
+`bin/<profile>`. It accepts `start`, `daemon`, `stop`, `restart`, `status`,
+`remote`, `eval`, `rpc`, `version`, `update`, and `doctor`; anything else exits
+`2` with a pointer to a source checkout.
+
+```bash
+lemon daemon    # background start, recording pid and version root in ~/.lemon/run
+lemon status    # pidfile plus a control-plane /healthz probe
+lemon stop      # stops through the recorded root, so it works across a flip
+lemon update    # download + verify + stage the next release, then flip current
+lemon stop && lemon daemon   # restart to apply a staged version
+```
+
+Updating is a symlink flip plus a restart; there are no hot upgrades. Roll back
+with `lemon update --rollback`, which flips `versions/current` back to the
+previously installed version (the two most recent are retained) and again needs
+a restart to take effect.
+
+Environment knobs, the uninstall procedure, and the platform support table live
+in `docs/install.md`. `scripts/verify_install_script` proves this flow against a
+fixture release served from localhost, with no published release required.
+
 ### Build
 
 ```bash
@@ -39,6 +81,8 @@ A self-contained Erlang/OTP release with the BEAM bundled — no Elixir or Mix r
 MIX_ENV=prod mix release lemon_runtime_min
 
 # Full local runtime (+ automation, skills, web UI, sim UI)
+MIX_ENV=prod mix sim_ui.assets.deploy
+MIX_ENV=prod mix phx.digest apps/lemon_web/priv/static -o apps/lemon_web/priv/static
 MIX_ENV=prod mix release lemon_runtime_full
 
 # Public sim broadcast site (dashboard + spectator UI)
@@ -46,23 +90,43 @@ MIX_ENV=prod mix sim_ui.assets.deploy
 MIX_ENV=prod mix release sim_broadcast_platform
 ```
 
+The full profile bundles both web surfaces. `lemon_sim_ui` has an esbuild/
+tailwind pipeline, so it needs `sim_ui.assets.deploy`; `lemon_web` ships static
+files with no pipeline, so it needs the digest step only. Skipping either one
+makes the release log "Could not warm up static assets" at boot and serve
+undigested assets.
+
 Releases are written to `_build/prod/rel/<profile>/`.
 
 Release automation packages the assembled release directory as a `.tar.gz`:
 
 ```bash
-tar -czf lemon-<version>-<channel>-ubuntu-24.04-x86_64-<profile>.tar.gz \
+tar -czf lemon-<version>-<channel>-<platform>-<profile>.tar.gz \
   -C ./_build/prod/rel/<profile> .
 ```
 
+Platform tags are `linux-x86_64`, `linux-arm64`, and `darwin-arm64`; see
+`docs/release/versioning_and_channels.md`.
+
+### Manual tarball install (servers)
+
+Servers that manage their own directory layout, service unit, and rollback
+should keep installing tarballs directly rather than through `install.sh`.
 Install an artifact by verifying its SHA-256 from `manifest.json`, extracting it
 into the target directory, setting the required runtime environment variables,
-and running `bin/<profile>` from the extracted directory.
+and running `bin/<profile>` from the extracted directory. `bin/lemon` is present
+too, but the explicit `bin/<profile>` entry point is the one to script against
+when the layout is not `~/.lemon`.
 
 ```bash
 scripts/verify_release_artifacts /path/to/downloaded-artifacts
 scripts/verify_release_runtime_boot /path/to/downloaded-artifacts
 ```
+
+`lemon update` refuses to run against this layout: it only manages the
+`~/.lemon/versions` shape, so a manual install is never mutated underneath its
+operator. Roll back with the operator procedure in
+`docs/release/release_checklist_and_support_policy.md`.
 
 ### Run
 
@@ -261,6 +325,8 @@ reconnect, completion, export, rematch, and the supported responsive viewports.
 
 ## See also
 
+- `docs/install.md` — one-line installer, `~/.lemon` layout, env knobs, uninstall
+- `install.sh` / `scripts/verify_install_script` — installer and its fixture-server verifier
 - `docs/release/versioning_and_channels.md` — CalVer scheme and channel model
 - `docs/release/release_checklist_and_support_policy.md` — release-candidate checklist, rollback checklist, and public support boundaries
 - `apps/lemon_core/lib/lemon_core/runtime/` — Boot, Profile, Health, Env modules
