@@ -57,6 +57,10 @@ defmodule LemonCore.Config.ToolsTest do
         "LEMON_EXECUTE_CODE_MAX_RPC_RESULT_BYTES",
         "LEMON_EXECUTE_CODE_MAX_OUTPUT_BYTES",
         "LEMON_EXECUTE_CODE_TOOLS",
+        "LEMON_EXECUTE_CODE_KERNEL_MODE",
+        "LEMON_EXECUTE_CODE_KERNEL_IDLE_TIMEOUT_MS",
+        "LEMON_EXECUTE_CODE_MAX_LIVE_KERNELS",
+        "LEMON_EXECUTE_CODE_MAX_QUEUED_CELLS_PER_KERNEL",
         "LEMON_TOOL_DISCLOSURE_ENABLED",
         "LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS",
         "LEMON_TOOL_DISCLOSURE_CATALOG_TOKENS",
@@ -459,6 +463,10 @@ defmodule LemonCore.Config.ToolsTest do
       assert config.execute_code.max_rpc_result_bytes == 5_242_880
       assert config.execute_code.max_output_bytes == 50_000
       assert config.execute_code.tools == []
+      assert config.execute_code.kernel_mode == "per_call"
+      assert config.execute_code.kernel_idle_timeout_ms == 1_800_000
+      assert config.execute_code.max_live_kernels == 16
+      assert config.execute_code.max_queued_cells_per_kernel == 8
     end
 
     test "uses execute_code settings from config" do
@@ -471,7 +479,11 @@ defmodule LemonCore.Config.ToolsTest do
             "max_rpc_calls" => 12,
             "max_rpc_result_bytes" => 1_024,
             "max_output_bytes" => 2_048,
-            "tools" => ["read", "grep"]
+            "tools" => ["read", "grep"],
+            "kernel_mode" => "session",
+            "kernel_idle_timeout_ms" => 600_000,
+            "max_live_kernels" => 3,
+            "max_queued_cells_per_kernel" => 2
           }
         }
       }
@@ -485,6 +497,10 @@ defmodule LemonCore.Config.ToolsTest do
       assert config.execute_code.max_rpc_result_bytes == 1_024
       assert config.execute_code.max_output_bytes == 2_048
       assert config.execute_code.tools == ["read", "grep"]
+      assert config.execute_code.kernel_mode == "session"
+      assert config.execute_code.kernel_idle_timeout_ms == 600_000
+      assert config.execute_code.max_live_kernels == 3
+      assert config.execute_code.max_queued_cells_per_kernel == 2
     end
 
     test "environment variables override execute_code settings" do
@@ -492,6 +508,10 @@ defmodule LemonCore.Config.ToolsTest do
       System.put_env("LEMON_EXECUTE_CODE_MAX_RPC_CALLS", "7")
       System.put_env("LEMON_EXECUTE_CODE_TIMEOUT_MS", "3000")
       System.put_env("LEMON_EXECUTE_CODE_TOOLS", "read,ls")
+      System.put_env("LEMON_EXECUTE_CODE_KERNEL_MODE", "session")
+      System.put_env("LEMON_EXECUTE_CODE_KERNEL_IDLE_TIMEOUT_MS", "240000")
+      System.put_env("LEMON_EXECUTE_CODE_MAX_LIVE_KERNELS", "5")
+      System.put_env("LEMON_EXECUTE_CODE_MAX_QUEUED_CELLS_PER_KERNEL", "4")
 
       settings = %{
         "tools" => %{
@@ -499,7 +519,11 @@ defmodule LemonCore.Config.ToolsTest do
             "enabled" => false,
             "timeout_ms" => 5_000,
             "max_rpc_calls" => 12,
-            "tools" => ["grep"]
+            "tools" => ["grep"],
+            "kernel_mode" => "per_call",
+            "kernel_idle_timeout_ms" => 1_800_000,
+            "max_live_kernels" => 16,
+            "max_queued_cells_per_kernel" => 8
           }
         }
       }
@@ -510,6 +534,15 @@ defmodule LemonCore.Config.ToolsTest do
       assert config.execute_code.max_rpc_calls == 7
       assert config.execute_code.timeout_ms == 3_000
       assert config.execute_code.tools == ["read", "ls"]
+      assert config.execute_code.kernel_mode == "session"
+      assert config.execute_code.kernel_idle_timeout_ms == 240_000
+      assert config.execute_code.max_live_kernels == 5
+      assert config.execute_code.max_queued_cells_per_kernel == 4
+
+      System.delete_env("LEMON_EXECUTE_CODE_KERNEL_MODE")
+      System.delete_env("LEMON_EXECUTE_CODE_KERNEL_IDLE_TIMEOUT_MS")
+      System.delete_env("LEMON_EXECUTE_CODE_MAX_LIVE_KERNELS")
+      System.delete_env("LEMON_EXECUTE_CODE_MAX_QUEUED_CELLS_PER_KERNEL")
     end
 
     test "defaults/0 documents the execute_code section" do
@@ -520,8 +553,107 @@ defmodule LemonCore.Config.ToolsTest do
                "max_rpc_calls" => 100,
                "max_rpc_result_bytes" => 5_242_880,
                "max_output_bytes" => 50_000,
-               "tools" => []
+               "tools" => [],
+               "kernel_mode" => "per_call",
+               "kernel_idle_timeout_ms" => 1_800_000,
+               "max_live_kernels" => 16,
+               "max_queued_cells_per_kernel" => 8
              }
+    end
+
+    test "kernel_mode accepts only per_call or session and trims whitespace" do
+      System.put_env("LEMON_EXECUTE_CODE_KERNEL_MODE", "  session\n")
+      assert Tools.resolve(%{}).execute_code.kernel_mode == "session"
+
+      System.put_env("LEMON_EXECUTE_CODE_KERNEL_MODE", "per_call")
+
+      assert Tools.resolve(%{"tools" => %{"execute_code" => %{"kernel_mode" => "session"}}}).execute_code.kernel_mode ==
+               "per_call"
+
+      System.delete_env("LEMON_EXECUTE_CODE_KERNEL_MODE")
+    end
+
+    test "invalid kernel_mode values fail closed to per_call" do
+      # Fail-closed contract: no malformed spelling (TOML or env) can select
+      # session mode; persistence requires the exact string "session".
+      for bad_mode <- ["Session", "SESSION", "persistent", "per-call", "percall", 42, true] do
+        settings = %{"tools" => %{"execute_code" => %{"kernel_mode" => bad_mode}}}
+
+        assert Tools.resolve(settings).execute_code.kernel_mode == "per_call"
+      end
+
+      # A malformed env override never defers to a valid TOML "session".
+      System.put_env("LEMON_EXECUTE_CODE_KERNEL_MODE", "sessions")
+
+      assert Tools.resolve(%{"tools" => %{"execute_code" => %{"kernel_mode" => "session"}}}).execute_code.kernel_mode ==
+               "per_call"
+
+      System.delete_env("LEMON_EXECUTE_CODE_KERNEL_MODE")
+    end
+
+    test "kernel bounds resolve only positive integers" do
+      # Zero, negative, or non-integer TOML bounds fall back to the hardcoded
+      # default rather than reading downstream as "unlimited" or "reap
+      # immediately".
+      for bad_bound <- [0, -1, -1_800_000, "eight", 2.5, true] do
+        settings = %{"tools" => %{"execute_code" => %{"max_live_kernels" => bad_bound}}}
+
+        assert Tools.resolve(settings).execute_code.max_live_kernels == 16
+      end
+
+      assert Tools.resolve(%{
+               "tools" => %{"execute_code" => %{"kernel_idle_timeout_ms" => 0}}
+             }).execute_code.kernel_idle_timeout_ms == 1_800_000
+
+      assert Tools.resolve(%{
+               "tools" => %{"execute_code" => %{"max_queued_cells_per_kernel" => -8}}
+             }).execute_code.max_queued_cells_per_kernel == 8
+    end
+
+    test "invalid kernel bound env overrides defer to TOML, never to zero or unlimited" do
+      settings = %{
+        "tools" => %{
+          "execute_code" => %{
+            "max_live_kernels" => 4,
+            "kernel_idle_timeout_ms" => 300_000,
+            "max_queued_cells_per_kernel" => 6
+          }
+        }
+      }
+
+      for bad_env <- ["abc", "0", "-2", ""] do
+        System.put_env("LEMON_EXECUTE_CODE_MAX_LIVE_KERNELS", bad_env)
+        assert Tools.resolve(settings).execute_code.max_live_kernels == 4
+      end
+
+      System.delete_env("LEMON_EXECUTE_CODE_MAX_LIVE_KERNELS")
+
+      System.put_env("LEMON_EXECUTE_CODE_KERNEL_IDLE_TIMEOUT_MS", "soon")
+      assert Tools.resolve(settings).execute_code.kernel_idle_timeout_ms == 300_000
+      System.delete_env("LEMON_EXECUTE_CODE_KERNEL_IDLE_TIMEOUT_MS")
+
+      System.put_env("LEMON_EXECUTE_CODE_MAX_QUEUED_CELLS_PER_KERNEL", "0")
+      assert Tools.resolve(settings).execute_code.max_queued_cells_per_kernel == 6
+      System.delete_env("LEMON_EXECUTE_CODE_MAX_QUEUED_CELLS_PER_KERNEL")
+
+      # With nothing valid anywhere, the hardcoded defaults win.
+      System.put_env("LEMON_EXECUTE_CODE_MAX_LIVE_KERNELS", "junk")
+
+      config = Tools.resolve(%{})
+
+      assert config.execute_code.max_live_kernels == 16
+      assert config.execute_code.kernel_idle_timeout_ms == 1_800_000
+      assert config.execute_code.max_queued_cells_per_kernel == 8
+
+      System.delete_env("LEMON_EXECUTE_CODE_MAX_LIVE_KERNELS")
+    end
+
+    test "defaults/0 round-trips through resolve/1 unchanged for execute_code" do
+      # Guards against key-name drift between the `defaults/0` advertisement
+      # (string keys, what `lemon config init` writes) and the resolver
+      # (which reads those same string keys back out of a TOML file).
+      assert Tools.resolve(%{"tools" => Tools.defaults()}).execute_code ==
+               Tools.resolve(%{}).execute_code
     end
   end
 
