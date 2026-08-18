@@ -13,14 +13,8 @@ defmodule LemonAgent.ModelRuntime.ProviderRoutingTest do
   defp open_breaker!(provider_atom) do
     {:ok, _} = LemonAi.CircuitBreaker.ensure_started(provider_atom, failure_threshold: 1)
 
-    Enum.reduce_while(1..20, :ok, fn _, _ ->
+    Enum.each(1..20, fn _ ->
       LemonAi.CircuitBreaker.record_failure(provider_atom, :test_failure)
-
-      if LemonAi.CircuitBreaker.open?(provider_atom) do
-        {:halt, :ok}
-      else
-        {:cont, :ok}
-      end
     end)
 
     assert LemonAi.CircuitBreaker.open?(provider_atom)
