@@ -130,7 +130,7 @@ defmodule LemonCli.CLI do
   # ──────────────────────────────────────────────────────────────────────────
 
   defp dispatch([]) do
-    print_usage()
+    print_usage(:stderr)
     @exit_usage
   end
 
@@ -139,13 +139,14 @@ defmodule LemonCli.CLI do
     @exit_ok
   end
 
+  defp dispatch([command, flag])
+       when command in @commands and flag in ["--help", "-h"] do
+    print_command_usage(command)
+    @exit_ok
+  end
+
   defp dispatch([command | rest]) when command in @commands do
-    if help_requested?(rest) do
-      print_command_usage(command)
-      @exit_ok
-    else
-      run_command(command, rest)
-    end
+    run_command(command, rest)
   end
 
   defp dispatch([command | _rest]) do
@@ -155,7 +156,6 @@ defmodule LemonCli.CLI do
     @exit_usage
   end
 
-  defp help_requested?(args), do: Enum.any?(args, &(&1 in ["--help", "-h"]))
 
   defp run_command("setup", args), do: run_setup(args)
   defp run_command("model", args), do: run_model(args)
@@ -212,16 +212,15 @@ defmodule LemonCli.CLI do
   @doc """
   Runs diagnostics and prints a report without halting.
 
-  Returns `0` when no checks fail and `1` otherwise. Reused by
-  `LemonCli.Setup.Wizard` for the `setup doctor` subcommand.
+  Returns `0` when no checks fail, `1` when diagnostics fail, and `2` for
+  invalid command arguments. Reused by `LemonCli.Setup.Wizard` for the
+  `setup doctor` subcommand.
   """
-  @spec doctor([String.t()]) :: 0 | 1
+  @spec doctor([String.t()]) :: 0 | 1 | 2
   def doctor(args) do
-    ensure_apps_started!([:lemon_core])
-
-    {opts, positional, _invalid} =
+    {opts, positional, invalid} =
       OptionParser.parse(args,
-        switches: [
+        strict: [
           verbose: :boolean,
           json: :boolean,
           project_dir: :string,
@@ -231,24 +230,44 @@ defmodule LemonCli.CLI do
         aliases: [v: :verbose]
       )
 
-    report = Doctor.report(Keyword.take(opts, [:project_dir]))
+    cond do
+      invalid != [] ->
+        print_usage_error("Invalid options: #{inspect(invalid)}", &print_doctor_usage/1)
 
-    if opts[:json] do
-      IO.puts(Report.to_json(report))
-    else
-      print_report(report, opts[:verbose] || false)
-    end
+      not valid_doctor_positionals?(opts, positional) ->
+        print_usage_error(
+          "Unsupported arguments: #{Enum.map_join(positional, " ", &inspect/1)}",
+          &print_doctor_usage/1
+        )
 
-    maybe_write_bundle(report, opts, positional)
+      true ->
+        ensure_apps_started!([:lemon_core])
 
-    if Report.ok?(report) do
-      @exit_ok
-    else
-      IO.puts(:stderr, "Diagnostics failed: #{report.fail} check(s) failed.")
-      @exit_error
+        report = Doctor.report(Keyword.take(opts, [:project_dir]))
+
+        if opts[:json] do
+          IO.puts(Report.to_json(report))
+        else
+          print_report(report, opts[:verbose] || false)
+        end
+
+        maybe_write_bundle(report, opts, positional)
+
+        if Report.ok?(report) do
+          @exit_ok
+        else
+          IO.puts(:stderr, "Diagnostics failed: #{report.fail} check(s) failed.")
+          @exit_error
+        end
     end
   end
 
+  defp valid_doctor_positionals?(_opts, []), do: true
+
+  defp valid_doctor_positionals?(opts, [path]) when is_binary(path) and path != "",
+    do: opts[:bundle] == true
+
+  defp valid_doctor_positionals?(_opts, _positional), do: false
 
   defp maybe_write_bundle(report, opts, positional) do
     if opts[:bundle] do
@@ -323,16 +342,32 @@ defmodule LemonCli.CLI do
   # ──────────────────────────────────────────────────────────────────────────
 
   defp run_config(args) do
-    {opts, positional, _invalid} =
+    {opts, positional, invalid} =
       OptionParser.parse(args,
-        switches: [verbose: :boolean, project_dir: :string],
+        strict: [verbose: :boolean, project_dir: :string],
         aliases: [v: :verbose, p: :project_dir]
       )
 
-    case positional do
-      ["validate"] -> validate_config(opts)
-      ["show"] -> show_config(opts)
-      _other -> print_config_usage()
+    case {invalid, positional} do
+      {[_ | _], _} ->
+        print_usage_error("Invalid options: #{inspect(invalid)}", &print_config_usage/1)
+
+      {[], ["validate"]} ->
+        validate_config(opts)
+
+      {[], ["show"]} ->
+        show_config(opts)
+      {[], []} ->
+        print_usage_error(
+          "Missing config command. Expected `validate` or `show`.",
+          &print_config_usage/1
+        )
+
+      {[], _} ->
+        print_usage_error(
+          "Unsupported arguments: #{Enum.map_join(positional, " ", &inspect/1)}",
+          &print_config_usage/1
+        )
     end
   end
 
@@ -449,8 +484,8 @@ defmodule LemonCli.CLI do
     end
   end
 
-  defp print_config_usage do
-    IO.puts("""
+  defp print_config_usage(device \\ :stdio) do
+    IO.puts(device, """
     Usage: lemon config [validate|show] [options]
 
     Commands:
@@ -461,8 +496,6 @@ defmodule LemonCli.CLI do
       --verbose, -v           Verbose output
       --project-dir, -p PATH  Project directory for project-config checks
     """)
-
-    @exit_usage
   end
 
   # ──────────────────────────────────────────────────────────────────────────
@@ -893,6 +926,13 @@ defmodule LemonCli.CLI do
   # Usage
   # ──────────────────────────────────────────────────────────────────────────
 
+  defp print_usage_error(message, usage) do
+    IO.puts(:stderr, message)
+    IO.puts(:stderr, "")
+    usage.(:stderr)
+    @exit_usage
+  end
+
   defp print_usage(device \\ :stdio) do
     IO.puts(device, """
     Usage: lemon <command> [options]
@@ -955,15 +995,17 @@ defmodule LemonCli.CLI do
     """)
   end
 
-  defp print_command_usage("doctor") do
-    IO.puts("""
+  defp print_command_usage("doctor"), do: print_doctor_usage()
+
+  defp print_doctor_usage(device \\ :stdio) do
+    IO.puts(device, """
     Usage: lemon doctor [options]
 
     Options:
       --verbose, -v       Show all checks including passing and skipped ones
       --json              Output results as a JSON document (CI-friendly)
       --project-dir PATH  Use a specific project directory for checks
-      --bundle            Write a redacted support bundle zip
+      --bundle [PATH]     Write a redacted support bundle zip
       --bundle-path PATH  Write the support bundle to a specific path
     """)
   end

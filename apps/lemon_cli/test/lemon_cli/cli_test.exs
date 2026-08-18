@@ -88,6 +88,59 @@ defmodule LemonCli.CLITest do
     assert error =~ "Run `lemon <command> --help` for command options."
   end
 
+  test "routes empty-argument usage to stderr" do
+    error =
+      capture_io(:stderr, fn ->
+        assert CLI.run([]) == 2
+      end)
+
+    assert error =~ "Usage: lemon <command> [options]"
+    assert error =~ "Run `lemon <command> --help` for command options."
+  end
+
+  test "rejects unknown doctor options before running diagnostics" do
+    error =
+      capture_io(:stderr, fn ->
+        assert CLI.run(["doctor", "--not-an-option"]) == 2
+      end)
+
+    assert error =~ "Invalid options:"
+    assert error =~ "Usage: lemon doctor [options]"
+    assert error =~ "--bundle [PATH]"
+    refute error =~ "Diagnostics failed:"
+  end
+
+  test "rejects unsupported doctor positional arguments" do
+    error =
+      capture_io(:stderr, fn ->
+        assert CLI.run(["doctor", "unexpected"]) == 2
+      end)
+
+    assert error =~ "Unsupported arguments: \"unexpected\""
+    assert error =~ "Usage: lemon doctor [options]"
+  end
+
+  test "rejects unknown config options with config usage on stderr" do
+    error =
+      capture_io(:stderr, fn ->
+        assert CLI.run(["config", "validate", "--not-an-option"]) == 2
+      end)
+
+    assert error =~ "Invalid options:"
+    assert error =~ "Usage: lemon config [validate|show] [options]"
+    assert error =~ "--project-dir, -p PATH"
+  end
+
+  test "rejects unsupported config positional arguments" do
+    error =
+      capture_io(:stderr, fn ->
+        assert CLI.run(["config", "show", "unexpected"]) == 2
+      end)
+
+    assert error =~ "Unsupported arguments: \"show\" \"unexpected\""
+    assert error =~ "Usage: lemon config [validate|show] [options]"
+  end
+
   defp clear_secrets_table do
     Secrets.table()
     |> LemonCore.Store.list()
