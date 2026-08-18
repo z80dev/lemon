@@ -46,6 +46,7 @@ defmodule CodingAgent.PythonRepl.Session do
   require Logger
 
   alias CodingAgent.PythonRepl.Process, as: KernelProcess
+  alias CodingAgent.PythonRepl.Telemetry
 
   @default_process_mod KernelProcess
   @default_protocol_mod CodingAgent.PythonRepl.Protocol
@@ -99,7 +100,9 @@ defmodule CodingAgent.PythonRepl.Session do
       :started?,
       :exception,
       :output,
-      :replied?
+      :replied?,
+      :telemetry_stopped?,
+      :cancel_telemetry_emitted?
     ]
   end
 
@@ -481,7 +484,9 @@ defmodule CodingAgent.PythonRepl.Session do
         started?: false,
         exception: nil,
         output: state.mods.output.new(state.limits.max_output_bytes),
-        replied?: false
+        replied?: false,
+        telemetry_stopped?: false,
+        cancel_telemetry_emitted?: false
       )
 
     # The active-cell timeout is armed at dispatch, before the request is
@@ -496,6 +501,8 @@ defmodule CodingAgent.PythonRepl.Session do
       state.process,
       eval_request(id, request.code, cwd, request[:bridge])
     )
+
+    Telemetry.cell_started(:queue.len(state.queue), state.limits.max_queued_cells)
 
     %{state | active: active, next_id: state.next_id + 1, phase: :running}
   end
@@ -567,7 +574,7 @@ defmodule CodingAgent.PythonRepl.Session do
     state
     |> Map.put(:active, active)
     |> fail_active(timeout_result(state, state.active))
-    |> begin_cancellation()
+    |> begin_cancellation(:timeout)
   end
 
   def handle_info({:cell_timeout, _id}, state), do: {:noreply, state}
@@ -599,7 +606,8 @@ defmodule CodingAgent.PythonRepl.Session do
 
         state
         |> Map.put(:active, %{state.active | replied?: true})
-        |> begin_cancellation()
+        |> emit_cell_stopped(:interrupted)
+        |> begin_cancellation(:caller_exit)
 
       find_queued(state.queue, ref) != nil ->
         # A dead queued caller removes only its own request.
@@ -709,28 +717,31 @@ defmodule CodingAgent.PythonRepl.Session do
     state = cancel_active_timers(state)
     finished = output_info(state, active)
 
-    result =
+    {outcome, result} =
       if active.exception do
-        {:error,
-         %{
-           request_id: active.id,
-           reason: :exception,
-           state_retained: true,
-           exception: active.exception,
-           duration_ms: duration_ms(active)
-         }
-         |> Map.merge(finished)}
+        {:exception,
+         {:error,
+          %{
+            request_id: active.id,
+            reason: :exception,
+            state_retained: true,
+            exception: active.exception,
+            duration_ms: duration_ms(active)
+          }
+          |> Map.merge(finished)}}
       else
         {:ok,
-         %{
-           request_id: active.id,
-           state_retained: true,
-           duration_ms: duration_ms(active),
-           cells_completed: state.completed_cells + 1
-         }
-         |> Map.merge(finished)}
+         {:ok,
+          %{
+            request_id: active.id,
+            state_retained: true,
+            duration_ms: duration_ms(active),
+            cells_completed: state.completed_cells + 1
+          }
+          |> Map.merge(finished)}}
       end
 
+    state = emit_cell_stopped(state, outcome)
     GenServer.reply(active.from, result)
 
     state
@@ -776,10 +787,11 @@ defmodule CodingAgent.PythonRepl.Session do
 
   # Marks the namespace unsafe: replies the active caller (already done for
   # timeouts), fails every queued caller, interrupts, and arms the INT grace.
-  defp begin_cancellation(state) do
+  defp begin_cancellation(state, cause) do
     state =
       state
       |> Map.put(:phase, :cancelling)
+      |> emit_cell_cancelled(cause)
       |> fail_queued(:kernel_discarded)
 
     if state.process == nil do
@@ -834,6 +846,8 @@ defmodule CodingAgent.PythonRepl.Session do
     if active.replied? do
       state
     else
+      state = emit_cell_stopped(state, cell_outcome(result))
+      active = state.active
       GenServer.reply(active.from, result)
       %{state | active: %{active | replied?: true}}
     end
@@ -886,6 +900,13 @@ defmodule CodingAgent.PythonRepl.Session do
   def terminate(_reason, state) do
     # Exactly-once, idempotent cleanup for every exit path.
     state = cancel_all_timers(state)
+
+    state =
+      if state.active != nil and state.phase in [:running, :cancelling] do
+        emit_cell_cancelled(state, :shutdown)
+      else
+        state
+      end
 
     state =
       if state.active != nil and not state.active.replied? do
@@ -1012,6 +1033,28 @@ defmodule CodingAgent.PythonRepl.Session do
     from = active.started_at || active.dispatched_at
     max(monotonic_ms() - from, 0)
   end
+
+  defp emit_cell_stopped(%{active: nil} = state, _outcome), do: state
+
+  defp emit_cell_stopped(%{active: %{telemetry_stopped?: true}} = state, _outcome), do: state
+
+  defp emit_cell_stopped(%{active: active} = state, outcome) do
+    Telemetry.cell_stopped(duration_ms(active), outcome)
+    %{state | active: %{active | telemetry_stopped?: true}}
+  end
+
+  defp emit_cell_cancelled(%{active: nil} = state, _cause), do: state
+
+  defp emit_cell_cancelled(%{active: %{cancel_telemetry_emitted?: true}} = state, _cause),
+    do: state
+
+  defp emit_cell_cancelled(%{active: active} = state, cause) do
+    Telemetry.cell_cancelled(duration_ms(active), cause)
+    %{state | active: %{active | cancel_telemetry_emitted?: true}}
+  end
+
+  defp cell_outcome({_, %{reason: reason}}), do: reason
+  defp cell_outcome(_result), do: :unknown
 
   defp exception_info(frame) do
     %{

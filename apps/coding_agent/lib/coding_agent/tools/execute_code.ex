@@ -48,7 +48,7 @@ defmodule CodingAgent.Tools.ExecuteCode do
 
   alias CodingAgent.BashExecutor
   alias CodingAgent.PythonRepl
-  alias CodingAgent.PythonRepl.{Key, Protocol}
+  alias CodingAgent.PythonRepl.{Key, Protocol, Telemetry}
   alias CodingAgent.Tools
   alias CodingAgent.Tools.ExecuteCode.{Config, PythonShim, Rpc, RpcServer}
   alias LemonAgent.AbortSignal
@@ -554,7 +554,8 @@ defmodule CodingAgent.Tools.ExecuteCode do
       signal: signal,
       rpc_dir: bridge.dir,
       token: bridge.token,
-      poll_interval_ms: @poll_interval_ms
+      poll_interval_ms: @poll_interval_ms,
+      persistent_repl?: true
     }
 
     case rpc_server.start_link(ctx) do
@@ -859,6 +860,7 @@ defmodule CodingAgent.Tools.ExecuteCode do
          reset_performed,
          started_at
        ) do
+    Telemetry.fallback(reason)
     # `python` is resolved before this path. A missing scope occurs after
     # resolution, while facade admission failures reach this helper with nil.
     python = python || resolve_fallback_python(config, opts)

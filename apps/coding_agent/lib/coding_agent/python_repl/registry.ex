@@ -9,7 +9,7 @@ defmodule CodingAgent.PythonRepl.Registry do
 
   use GenServer
 
-  alias CodingAgent.PythonRepl.{Key, Session, SessionSupervisor}
+  alias CodingAgent.PythonRepl.{Key, Session, SessionSupervisor, Telemetry}
 
   @default_max_live_kernels 16
   @default_idle_timeout_ms 1_800_000
@@ -232,12 +232,14 @@ defmodule CodingAgent.PythonRepl.Registry do
 
   def handle_info({:reap_idle, _stale_token}, state), do: {:noreply, state}
 
-  def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
+  def handle_info({:DOWN, ref, :process, pid, reason}, state) do
     case Map.get(state.worker_refs, ref) do
       %{entry_key: ekey, generation: generation, pid: ^pid} ->
         case Map.get(state.entries, ekey) do
-          %{ref: ^ref, generation: ^generation, pid: ^pid} ->
-            {:noreply, drop_entry(state, ekey)}
+          %{ref: ^ref, generation: ^generation, pid: ^pid} = entry ->
+            state = drop_entry(state, ekey)
+            emit_session_exit(state, entry, reason)
+            {:noreply, state}
 
           _ ->
             {:noreply, state}
@@ -278,7 +280,9 @@ defmodule CodingAgent.PythonRepl.Registry do
               owners: MapSet.new(),
               leases: MapSet.new(),
               last_use_ms: now_ms(state),
-              idle_timeout_ms: idle_timeout_ms
+              started_at_ms: now_ms(state),
+              idle_timeout_ms: idle_timeout_ms,
+              capacity: max_live_kernels
             }
 
             state = %{
@@ -297,12 +301,27 @@ defmodule CodingAgent.PythonRepl.Registry do
             {state, lease} = checkout(state, ekey, owner, caller)
             state = maybe_schedule_reap(state)
             entry = Map.fetch!(state.entries, ekey)
+            Telemetry.session_started(map_size(state.entries), entry.capacity)
             {:reply, {:ok, allocation(entry, false, state.session_mod, lease)}, state}
 
           {:error, {:shutdown, {:startup_failed, detail}}} ->
+            Telemetry.session_crashed(
+              0,
+              map_size(state.entries),
+              max_live_kernels,
+              :startup_failure
+            )
+
             {:reply, {:error, {:startup_failed, detail}}, state}
 
           {:error, reason} ->
+            Telemetry.session_crashed(
+              0,
+              map_size(state.entries),
+              max_live_kernels,
+              :startup_failure
+            )
+
             {:reply, {:error, {:startup_failed, reason}}, state}
         end
       catch
@@ -329,7 +348,7 @@ defmodule CodingAgent.PythonRepl.Registry do
           {:error, :capacity_exhausted, state}
 
         ekey = lru_quiescent(state) ->
-          stop_entry(state, ekey)
+          stop_entry(state, ekey, :capacity_eviction)
 
         true ->
           {:error, :capacity_exhausted, state}
@@ -420,7 +439,7 @@ defmodule CodingAgent.PythonRepl.Registry do
 
         if MapSet.size(remaining_owners) == 0 or owner_leased?(entry, owner) or
              not quiescent_status?(current) do
-          case stop_entry(state, ekey) do
+          case stop_entry(state, ekey, :owner_detached) do
             {:ok, state} -> {:ok, state}
             {:error, _reason, state} -> {:error, state}
           end
@@ -436,7 +455,7 @@ defmodule CodingAgent.PythonRepl.Registry do
     end
   end
 
-  defp stop_entry(state, ekey) do
+  defp stop_entry(state, ekey, reason \\ :shutdown) do
     case Map.get(state.entries, ekey) do
       nil ->
         {:ok, state}
@@ -448,16 +467,14 @@ defmodule CodingAgent.PythonRepl.Registry do
                entry.pid,
                entry.ref
              ) do
-          :ok -> {:ok, drop_entry(state, ekey)}
-          {:error, _reason} -> {:error, :stop_failed, state}
-        end
-    end
-  end
+          :ok ->
+            stopped_state = drop_entry(state, ekey)
+            emit_session_stop(stopped_state, entry, reason)
+            {:ok, stopped_state}
 
-  defp stop_entry_or_keep(state, ekey) do
-    case stop_entry(state, ekey) do
-      {:ok, state} -> state
-      {:error, _reason, state} -> state
+          {:error, _reason} ->
+            {:error, :stop_failed, state}
+        end
     end
   end
 
@@ -557,7 +574,7 @@ defmodule CodingAgent.PythonRepl.Registry do
   defp valid_phase_status?(_phase, _queue_depth, _active_request_id), do: false
 
   defp reset_by_stopping(state, ekey, forked?) do
-    case stop_entry(state, ekey) do
+    case stop_entry(state, ekey, :reset) do
       {:ok, state} ->
         {:reply, {:ok, %{reset_performed: true, forked: forked?}}, state}
 
@@ -742,14 +759,35 @@ defmodule CodingAgent.PythonRepl.Registry do
         entry ->
           current = status(entry, acc.session_mod)
 
-          if current == :unreachable or
-               (expired?(entry, acc, now) and evictable?(entry, current)) do
-            stop_entry_or_keep(acc, ekey)
-          else
-            acc
+          cond do
+            current == :unreachable ->
+              reap_entry(acc, ekey, entry, now, :unreachable)
+
+            expired?(entry, acc, now) and evictable?(entry, current) ->
+              reap_entry(acc, ekey, entry, now, :idle)
+
+            true ->
+              acc
           end
       end
     end)
+  end
+
+  defp reap_entry(state, ekey, entry, now, reason) do
+    case stop_entry(state, ekey) do
+      {:ok, state} ->
+        Telemetry.session_reaped(
+          now - entry.last_use_ms,
+          map_size(state.entries),
+          entry.capacity,
+          reason
+        )
+
+        state
+
+      {:error, _reason, state} ->
+        state
+    end
   end
 
   defp maybe_schedule_reap(%{reap_timer_token: nil} = state) do
@@ -771,4 +809,49 @@ defmodule CodingAgent.PythonRepl.Registry do
     do: %{starting: 0, idle: 0, running: 0, cancelling: 0, stopping: 0, unreachable: 0}
 
   defp now_ms(state), do: state.now_ms.()
+
+  defp emit_session_stop(state, entry, reason) do
+    Telemetry.session_stopped(
+      now_ms(state) - entry.started_at_ms,
+      map_size(state.entries),
+      entry.capacity,
+      session_stop_reason(reason)
+    )
+  end
+
+  defp emit_session_crash(state, entry, reason) do
+    Telemetry.session_crashed(
+      now_ms(state) - entry.started_at_ms,
+      max(map_size(state.entries) - 1, 0),
+      entry.capacity,
+      session_crash_reason(reason)
+    )
+  end
+
+  defp emit_session_exit(state, entry, reason) do
+    case session_exit_kind(reason) do
+      {:stop, stop_reason} -> emit_session_stop(state, entry, stop_reason)
+      {:crash, crash_reason} -> emit_session_crash(state, entry, crash_reason)
+    end
+  end
+
+  defp session_exit_kind({:shutdown, :bye}), do: {:stop, :shutdown}
+  defp session_exit_kind(:normal), do: {:stop, :shutdown}
+  defp session_exit_kind(:shutdown), do: {:stop, :shutdown}
+  defp session_exit_kind(reason), do: {:crash, reason}
+
+  defp session_stop_reason(:reset), do: :reset
+  defp session_stop_reason(:owner_detached), do: :owner_detached
+  defp session_stop_reason(:capacity_eviction), do: :capacity_eviction
+  defp session_stop_reason(_reason), do: :shutdown
+
+  defp session_crash_reason({:shutdown, {:port_exit, _status}}), do: :port_exit
+  defp session_crash_reason({:shutdown, {:protocol_fault, _detail}}), do: :protocol_fault
+  defp session_crash_reason({:shutdown, :startup_timeout}), do: :startup_failure
+
+  defp session_crash_reason({:shutdown, reason})
+       when reason in [:interrupt_grace_expired, :no_soft_interrupt],
+       do: :cancellation_escalation
+
+  defp session_crash_reason(_reason), do: :unknown
 end

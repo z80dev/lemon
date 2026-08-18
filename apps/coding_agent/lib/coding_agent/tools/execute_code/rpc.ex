@@ -18,6 +18,7 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
 
   alias CodingAgent.ToolExecutor
   alias CodingAgent.ToolPolicy
+  alias CodingAgent.PythonRepl.Telemetry
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
 
@@ -180,6 +181,7 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
 
   defp authentication_failed(id, ctx, stats) do
     respond_error(ctx, id, @authentication_error)
+    maybe_emit_bridge_denial(ctx)
     %{stats | denied: stats.denied + 1}
   end
 
@@ -353,6 +355,10 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   end
 
   defp approval_block_reason(_details), do: nil
+
+  defp maybe_emit_bridge_denial(ctx) do
+    if Map.get(ctx, :persistent_repl?) == true, do: Telemetry.bridge_denied(:authentication)
+  end
 
   defp content_text(blocks) when is_list(blocks) do
     blocks
