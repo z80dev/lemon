@@ -205,6 +205,10 @@ generations.
   its current and stale private staging roots, retaining continuations for later windows.
   The current root is always processed first; one stale root may use its remaining budget.
   Only expired regular `pi-python-repl-*` files that are no longer live are eligible.
+- Workspace and bridge teardown is bounded: removal visits at most 10,000 entries per
+  tree (no symlink following), so a script that planted a huge tree cannot stall the
+  owning process in `rm_rf`. Any remainder stays owner-only under the private staging
+  root and is eligible for the boot-time stale-root sweep on a later node.
 - Once at node boot, the reaper discovers sibling private staging roots left by prior
   nodes (or a prior first-root race), but only when their `0600` owner marker identifies a
   dead OS process. Empty stale roots are removed best-effort; non-empty roots are never

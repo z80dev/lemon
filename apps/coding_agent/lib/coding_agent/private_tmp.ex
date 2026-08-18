@@ -63,6 +63,7 @@ defmodule CodingAgent.PrivateTmp do
   @mktemp_key {__MODULE__, :mktemp}
 
   @owner_marker ".lemon-owner"
+  @remove_tree_limit 10_000
 
   @typep reservation :: {:ok, String.t()} | {:error, term()}
 
@@ -705,4 +706,64 @@ defmodule CodingAgent.PrivateTmp do
   # `.res-3-XXXXXXXXXX` first, so incomplete reservations never collide with
   # protocol globs such as `req-*.json` or `*.tmp`.
   defp reservation_prefix(name), do: "." <> Path.rootname(name) <> "-"
+
+  ## Bounded tree removal
+
+  @doc """
+  Removes a file, link, or directory tree with bounded work.
+
+  `File.rm_rf/1` gives callers no bound: a hostile or runaway script that
+  planted an arbitrarily deep or wide tree (an `execute_code` workspace or
+  bridge base is writable by the script that runs in it) can make teardown
+  enumerate and delete without limit, stalling the owning process. This
+  helper performs an iterative post-order traversal that never follows
+  symlinks and visits at most `:max_entries` entries (default
+  `#{@remove_tree_limit}`).
+
+  Returns `:complete` when the whole tree was removed and `:truncated` when
+  the budget ran out first — in that case the remainder is left in place
+  (owner-only, inside the private root) and the caller should log; leftover
+  `lemon-private-*` roots are candidates for the boot-time stale-root sweep
+  on a later node. Per-entry errors (races with a still-writing script) are
+  ignored: removal is best-effort, exactly like `File.rm_rf/1`, but bounded.
+
+  `File.ls/1` materializes each directory's listing; the cap bounds entry
+  visits (`lstat`/delete work), not the directory enumeration itself.
+  """
+  @spec remove_tree(String.t(), keyword()) :: :complete | :truncated
+  def remove_tree(path, opts \\ []) when is_binary(path) and is_list(opts) do
+    limit = Keyword.get(opts, :max_entries, @remove_tree_limit)
+    walk_tree([path], limit)
+  end
+
+  defp walk_tree([], _budget), do: :complete
+  defp walk_tree(_stack, budget) when budget <= 0, do: :truncated
+
+  defp walk_tree([{:dir, path} | rest], budget) do
+    _ = File.rmdir(path)
+    walk_tree(rest, budget - 1)
+  end
+
+  defp walk_tree([path | rest], budget) do
+    case File.lstat(path) do
+      {:ok, %File.Stat{type: :directory}} ->
+        children =
+          case File.ls(path) do
+            {:ok, names} -> Enum.map(names, &Path.join(path, &1))
+            {:error, _reason} -> []
+          end
+
+        # Re-push the directory itself after its children so it is rmdir'd
+        # post-order; the marker cannot collide with a real child because it
+        # is tagged.
+        walk_tree(children ++ [{:dir, path} | rest], budget - 1)
+
+      {:ok, %File.Stat{}} ->
+        _ = File.rm(path)
+        walk_tree(rest, budget - 1)
+
+      {:error, _reason} ->
+        walk_tree(rest, budget - 1)
+    end
+  end
 end

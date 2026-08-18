@@ -435,6 +435,65 @@ defmodule CodingAgent.PrivateTmpTest do
     end
   end
 
+  describe "remove_tree/2" do
+    test "removes a nested tree post-order without following symlinks", %{tmp_dir: tmp_dir} do
+      tree = Path.join(tmp_dir, "tree")
+      nested = Path.join(tree, "a/b/c")
+      File.mkdir_p!(nested)
+      File.write!(Path.join(nested, "leaf.txt"), "leaf")
+      File.write!(Path.join(tree, "a/top.txt"), "top")
+
+      outside = Path.join(tmp_dir, "outside.txt")
+      File.write!(outside, "outside")
+      File.ln_s!(outside, Path.join(nested, "link"))
+
+      assert :complete = PrivateTmp.remove_tree(tree)
+      refute File.exists?(tree)
+      assert File.read!(outside) == "outside"
+    end
+
+    test "removes a bare file and tolerates a missing path", %{tmp_dir: tmp_dir} do
+      file = Path.join(tmp_dir, "file.txt")
+      File.write!(file, "contents")
+
+      assert :complete = PrivateTmp.remove_tree(file)
+      refute File.exists?(file)
+      assert :complete = PrivateTmp.remove_tree(file)
+    end
+
+    test "an exact-fit tree is complete, one over the budget is truncated", %{tmp_dir: tmp_dir} do
+      exact = Path.join(tmp_dir, "exact")
+      File.mkdir!(exact)
+      File.write!(Path.join(exact, "one"), "1")
+
+      # Visits: the root, the child, and the root rmdir marker.
+      assert :complete = PrivateTmp.remove_tree(exact, max_entries: 3)
+      refute File.exists?(exact)
+
+      over = Path.join(tmp_dir, "over")
+      File.mkdir!(over)
+      File.write!(Path.join(over, "one"), "1")
+
+      assert :truncated = PrivateTmp.remove_tree(over, max_entries: 2)
+      assert File.exists?(over)
+    end
+
+    test "a planted wide tree cannot force unbounded deletion work", %{tmp_dir: tmp_dir} do
+      tree = Path.join(tmp_dir, "flood")
+      File.mkdir!(tree)
+
+      for index <- 1..50 do
+        File.write!(Path.join(tree, "f-#{index}"), "x")
+      end
+
+      assert :truncated = PrivateTmp.remove_tree(tree, max_entries: 10)
+      assert File.dir?(tree)
+
+      assert :complete = PrivateTmp.remove_tree(tree)
+      refute File.exists?(tree)
+    end
+  end
+
   defp isolate_system_tmp(tmp_dir) do
     keys = [
       {PrivateTmp, :root},

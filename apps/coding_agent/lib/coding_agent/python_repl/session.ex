@@ -1131,9 +1131,22 @@ defmodule CodingAgent.PythonRepl.Session do
 
   defp remove_workspace(nil), do: :ok
 
+  # Bounded: cell code could have planted an arbitrarily large tree in its
+  # workspace, and File.rm_rf/1 would enumerate without limit. Leftovers
+  # stay owner-only under the private root for the boot-time sweep.
   defp remove_workspace(workspace) do
-    File.rm_rf(workspace)
-    :ok
+    case PrivateTmp.remove_tree(workspace) do
+      :complete ->
+        :ok
+
+      :truncated ->
+        Logger.warning(
+          "PythonRepl.Session: workspace teardown hit the entry limit; " <>
+            "remainder left under the private root"
+        )
+
+        :ok
+    end
   end
 
   ## Wire encoding (parent -> child NDJSON requests)

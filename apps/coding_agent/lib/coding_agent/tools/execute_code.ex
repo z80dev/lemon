@@ -71,6 +71,8 @@ defmodule CodingAgent.Tools.ExecuteCode do
 
   import Bitwise
 
+  require Logger
+
   alias CodingAgent.BashExecutor
   alias CodingAgent.PrivateTmp
   alias CodingAgent.PythonRepl
@@ -359,7 +361,7 @@ defmodule CodingAgent.Tools.ExecuteCode do
           emit_telemetry(started_at, stats, task_result)
           format(outcome, task_result, stats, signal, timeout_ms)
         after
-          File.rm_rf(base)
+          bounded_tree_removal(base, "execute_code workspace")
         end
 
       {:error, reason} ->
@@ -540,7 +542,7 @@ defmodule CodingAgent.Tools.ExecuteCode do
                 try do
                   _ = stop_rpc_server(Keyword.get(opts, :rpc_server, RpcServer), rpc_server)
                 after
-                  File.rm_rf(base)
+                  bounded_tree_removal(base, "execute_code cell bridge")
                 end
               end
 
@@ -702,7 +704,7 @@ defmodule CodingAgent.Tools.ExecuteCode do
       receive do
         {:DOWN, ^monitor, :process, ^owner, _reason} ->
           terminate_facade_task(task_pid)
-          File.rm_rf(base)
+          bounded_tree_removal(base, "execute_code cell bridge")
 
         :stop ->
           Process.demonitor(monitor, [:flush])
@@ -715,6 +717,24 @@ defmodule CodingAgent.Tools.ExecuteCode do
     :ok
   catch
     :exit, _ -> :ok
+  end
+
+  # Workspace/bridge teardown must stay bounded: the script that ran inside
+  # could have planted an arbitrarily large tree, and File.rm_rf/1 would
+  # enumerate and delete without limit. Leftovers stay owner-only inside the
+  # private root and are candidates for the boot-time stale-root sweep.
+  defp bounded_tree_removal(base, label) do
+    case PrivateTmp.remove_tree(base) do
+      :complete ->
+        :ok
+
+      :truncated ->
+        Logger.warning(
+          "#{label} teardown hit the entry limit; remainder left under the private root"
+        )
+
+        :ok
+    end
   end
 
   defp stop_owner_guard(owner_guard), do: send(owner_guard, :stop)
