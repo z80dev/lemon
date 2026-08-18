@@ -13,7 +13,8 @@ defmodule CodingAgent.PythonRepl.Output do
   (tail), and the full output is spilled to a `0600` temporary file created
   only at that moment. `finish/1` returns the retained output with a
   truncation marker between head and tail, the byte totals, and the spill
-  path (present only when truncation happened).
+  path (present only when truncation happened). Spill files remain readable
+  after a cell completes and are reaped best-effort after 24 hours.
   """
 
   alias CodingAgent.BashExecutor
@@ -148,7 +149,8 @@ defmodule CodingAgent.PythonRepl.Output do
   inserted between head and tail when bytes were dropped), the combined and
   per-stream sanitized totals, the number of dropped bytes, and — only when
   the capture was truncated — the path of the `0600` spill file holding the
-  full combined output.
+  full combined output. The path remains readable after completion; spill
+  files are reaped best-effort after 24 hours.
   """
   @spec finish(t()) :: Result.t()
   def finish(%__MODULE__{} = output) do
@@ -331,8 +333,9 @@ defmodule CodingAgent.PythonRepl.Output do
   # application-private root — so it is owner-only from the moment it exists;
   # there is no chmod-after-create window. The handle keeps the reserved path
   # (no rename): a successful spill survives the cell because its path is part
-  # of the result contract, while any failure closes and removes exactly the
-  # file reserved here.
+  # of the result contract, then becomes eligible for best-effort reaping
+  # after 24 hours. Any failure closes and removes exactly the file reserved
+  # here.
   defp open_spill(output, combined) do
     with {:ok, root} <- PrivateTmp.root(),
          {:ok, path} <- PrivateTmp.reserve_file(root, "pi-python-repl"),

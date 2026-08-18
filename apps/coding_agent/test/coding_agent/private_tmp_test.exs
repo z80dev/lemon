@@ -5,7 +5,7 @@ defmodule CodingAgent.PrivateTmpTest do
   publication, and fail-closed behavior on every mktemp failure shape.
   """
 
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   import Bitwise
 
@@ -25,6 +25,68 @@ defmodule CodingAgent.PrivateTmpTest do
       assert band(stat.mode, 0o777) == 0o700
 
       assert PrivateTmp.root() == {:ok, root}
+    end
+  end
+
+  describe "spill reaping" do
+    setup do
+      {:ok, previous_root} = PrivateTmp.root()
+
+      {:ok, root} =
+        PrivateTmp.reserve_dir(System.tmp_dir!(), "lemon-private-spill-reaper")
+
+      :persistent_term.put({PrivateTmp, :root}, root)
+      :persistent_term.erase({PrivateTmp, :spill_sweep_at})
+
+      on_exit(fn ->
+        :persistent_term.put({PrivateTmp, :root}, previous_root)
+        :persistent_term.erase({PrivateTmp, :spill_sweep_at})
+        File.rm_rf(root)
+      end)
+
+      %{root: root}
+    end
+
+    test "removes only expired regular Python REPL spills", %{root: root, tmp_dir: tmp_dir} do
+      expired = stale_file(root, "pi-python-repl-expired")
+      recent = write_file(root, "pi-python-repl-recent")
+      wrong_prefix = stale_file(root, "bash-output-expired")
+      spill_directory = Path.join(root, "pi-python-repl-directory")
+      File.mkdir!(spill_directory)
+
+      symlink_target = Path.join(tmp_dir, "spill-symlink-target")
+      File.write!(symlink_target, "target remains")
+      spill_symlink = Path.join(root, "pi-python-repl-symlink")
+      File.ln_s!(symlink_target, spill_symlink)
+
+      assert {:ok, ^root} = PrivateTmp.root()
+
+      refute File.exists?(expired)
+      assert File.read!(recent) == "contents"
+      assert File.read!(wrong_prefix) == "contents"
+      assert File.dir?(spill_directory)
+      assert File.lstat!(spill_symlink).type == :symlink
+      assert File.read!(symlink_target) == "target remains"
+    end
+
+    test "runs at most once per retention window", %{root: root} do
+      first = stale_file(root, "pi-python-repl-first")
+
+      assert {:ok, ^root} = PrivateTmp.root()
+      refute File.exists?(first)
+
+      second = stale_file(root, "pi-python-repl-second")
+
+      assert {:ok, ^root} = PrivateTmp.root()
+      assert File.exists?(second)
+
+      :persistent_term.put(
+        {PrivateTmp, :spill_sweep_at},
+        System.monotonic_time(:second) - 24 * 60 * 60 - 1
+      )
+
+      assert {:ok, ^root} = PrivateTmp.root()
+      refute File.exists?(second)
     end
   end
 
@@ -210,5 +272,17 @@ defmodule CodingAgent.PrivateTmpTest do
 
       assert File.ls!(parent) == []
     end
+  end
+
+  defp stale_file(root, name) do
+    path = write_file(root, name)
+    File.touch!(path, System.os_time(:second) - 24 * 60 * 60 - 60)
+    path
+  end
+
+  defp write_file(root, name) do
+    path = Path.join(root, name)
+    File.write!(path, "contents")
+    path
   end
 end

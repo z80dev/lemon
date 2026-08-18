@@ -42,8 +42,17 @@ defmodule CodingAgent.PrivateTmp do
   @file_mode 0o600
   @rand String.duplicate("X", 10)
 
+  # Python REPL output spill files are part of a completed-cell result, so
+  # they cannot be removed at cell teardown. Reap them from the only point
+  # that has already validated the cached staging root.
+  @spill_prefix "pi-python-repl-"
+  @spill_ttl_seconds 24 * 60 * 60
+  @spill_sweep_limit 1_000
+
   @root_prefix "lemon-private"
   @root_key {__MODULE__, :root}
+  @spill_sweep_key {__MODULE__, :spill_sweep_at}
+  @spill_sweep_lock {__MODULE__, :spill_sweep_lock}
   @mktemp_key {__MODULE__, :mktemp}
 
   @typep reservation :: {:ok, String.t()} | {:error, term()}
@@ -57,7 +66,10 @@ defmodule CodingAgent.PrivateTmp do
   validated) and cached for the node's lifetime in `:persistent_term/0`.
   Concurrent first calls may each create a root; every root is private, so the
   race is benign — only the cached one is reused, and a cached root that was
-  removed or no longer validates is replaced on the next call.
+  removed or no longer validates is replaced on the next call. A successful
+  root lookup also opportunistically reaps up to #{@spill_sweep_limit} expired
+  Python REPL output spills once per #{@spill_ttl_seconds / 3600}-hour window;
+  the reaper is best-effort and never affects a root reservation.
   """
   @spec root() :: reservation()
   def root do
@@ -68,6 +80,7 @@ defmodule CodingAgent.PrivateTmp do
       path ->
         with :ok <- validate_shape(path, System.tmp_dir!(), @root_prefix),
              :ok <- confirm(path, :directory) do
+          maybe_reap_spills(path)
           {:ok, path}
         else
           _ -> create_root()
@@ -79,6 +92,7 @@ defmodule CodingAgent.PrivateTmp do
     case reserve(System.tmp_dir!(), @root_prefix, :directory, []) do
       {:ok, path} = ok ->
         :persistent_term.put(@root_key, path)
+        maybe_reap_spills(path)
         ok
 
       {:error, _reason} = error ->
@@ -151,6 +165,76 @@ defmodule CodingAgent.PrivateTmp do
   end
 
   ## Internals
+
+  # This is deliberately attached to `root/0`, rather than output capture:
+  # the root is already cached and validated there, and every spill creation
+  # obtains it. A persistent-term timestamp is the fast path; the local
+  # `:global` lock closes the first-call race so a node runs no more than one
+  # sweep per window.
+  defp maybe_reap_spills(root) do
+    if sweep_due?(System.monotonic_time(:second)) do
+      try do
+        :global.trans(
+          @spill_sweep_lock,
+          fn ->
+            now = System.monotonic_time(:second)
+
+            if sweep_due?(now) do
+              :persistent_term.put(@spill_sweep_key, now)
+              reap_expired_spills(root)
+            end
+          end,
+          [node()]
+        )
+      rescue
+        _error -> :ok
+      catch
+        _kind, _reason -> :ok
+      end
+    end
+
+    :ok
+  end
+
+  defp sweep_due?(now) do
+    case :persistent_term.get(@spill_sweep_key, nil) do
+      last_sweep when is_integer(last_sweep) -> now - last_sweep >= @spill_ttl_seconds
+      _ -> true
+    end
+  end
+
+  # The root may contain other private reservations. Limit filesystem work per
+  # opportunity and inspect only direct children whose basenames match the
+  # dedicated REPL spill prefix. `lstat` refuses to follow a planted symlink;
+  # `File.rm/1` likewise removes a raced replacement rather than its target.
+  defp reap_expired_spills(root) do
+    cutoff = System.system_time(:second) - @spill_ttl_seconds
+
+    case File.ls(root) do
+      {:ok, names} ->
+        names
+        |> Enum.take(@spill_sweep_limit)
+        |> Enum.each(&remove_expired_spill(root, &1, cutoff))
+
+      {:error, _reason} ->
+        :ok
+    end
+  end
+
+  defp remove_expired_spill(root, name, cutoff) do
+    if String.starts_with?(name, @spill_prefix) do
+      path = Path.join(root, name)
+
+      case File.lstat(path, time: :posix) do
+        {:ok, %File.Stat{type: :regular, mtime: modified_at}} when modified_at < cutoff ->
+          _ = File.rm(path)
+          :ok
+
+        _ ->
+          :ok
+      end
+    end
+  end
 
   # The printed reservation is only trusted once it is a single absolute path
   # directly inside the parent we named, carrying the prefix we asked for.

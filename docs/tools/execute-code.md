@@ -176,7 +176,8 @@ Only what the script writes to stdout/stderr is returned — there is no implici
 final-expression repr. Output is sanitized, capped at `max_output_bytes` keeping the first
 40% plus a rolling last 60% with a truncation marker, and the full combined output spills
 to a `0600` file whose path appears in the result as `full_output_path` and in
-`[Full output saved to: ...]` text.
+`[Full output saved to: ...]` text. The path remains readable after the cell completes;
+spill files are reaped best-effort after 24 hours.
 
 Result `details` always include `rpc_calls`, `rpc_denied`, `rpc_errors`, `rpc_bytes`,
 `rpc_tools`, `exit_code`, and `truncated`. Session-mode details add `persistent`,
@@ -197,6 +198,11 @@ generations.
 - Python memory and child processes inside a kernel are **not** OS-sandboxed; a runaway
   script can consume host resources until its cell timeout fires.
 
+- Python REPL full-output spill files remain available after cell completion and are
+  reaped best-effort after 24 hours. Each node inspects at most 1,000 direct entries in its
+  private staging root per retention window; only expired regular `pi-python-repl-*` files
+  are eligible.
+
 ## Security
 
 `execute_code` runs **local host code with bash-equivalent authority**. It is classified
@@ -211,9 +217,11 @@ code running in the same interpreter and is not a sandbox.
 NFS is unsupported. A per-node staging root and every workspace/bridge/spill object
 beneath it are created atomically at exactly `0700` (directories) / `0600` (files) and
 validated; there is no chmod-after-create and no fallback to loosely-permissioned temp
-directories. On platforms without a suitable GNU `mktemp`, or if validation fails, the
-run fails closed **before any script executes** (per-call: a workspace-creation error;
-session mode: `startup_failed` fallback).
+directories. Python REPL spills are retained for up to 24 hours so their returned paths
+remain usable after a cell completes, then a best-effort reaper checks only direct regular
+`pi-python-repl-*` entries with `lstat` and never follows symlinks. On platforms without a
+suitable GNU `mktemp`, or if validation fails, the run fails closed **before any script
+executes** (per-call: a workspace-creation error; session mode: `startup_failed` fallback).
 
 ## Telemetry and introspection
 
