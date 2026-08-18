@@ -423,8 +423,8 @@ ok "source-wrapper usage diagnostics work"
 run_onboarding "$update_output" update --check --no-skill-sync --verbose
 grep -q "Version:" "$update_output" ||
   fail "update check output did not include current version"
-grep -q "Remote update check: not yet available" "$update_output" ||
-  fail "update check output did not document the stage-1 remote-update boundary"
+grep -Fq "Source checkout: this task does not download or apply updates (use git pull)." "$update_output" ||
+  fail "update check did not document the source-checkout update boundary"
 ok "stage-1 update dry-run dispatch works"
 
 if ! $SKIP_DOCTOR; then
