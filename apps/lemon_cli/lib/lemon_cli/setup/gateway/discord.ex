@@ -65,7 +65,7 @@ defmodule LemonCli.Setup.Gateway.Discord do
       io.error.("Encrypted secrets are not configured.")
       io.info.("")
       io.info.("Run this first, then retry:")
-      io.info.("  mix lemon.secrets.init")
+      io.info.("  lemon secrets init")
       io.info.("")
       {:error, :secrets_not_configured}
     end
@@ -91,7 +91,7 @@ defmodule LemonCli.Setup.Gateway.Discord do
       {:error, _reason} when non_interactive? ->
         io.error.("Bot token not found in encrypted secrets (key: #{secret_key}).")
         io.info.("Pass --token or store it first with:")
-        io.info.("  mix lemon.secrets.set #{secret_key}")
+        io.info.("  lemon secrets set #{secret_key}")
         {:error, :token_not_found}
 
       {:error, _reason} ->

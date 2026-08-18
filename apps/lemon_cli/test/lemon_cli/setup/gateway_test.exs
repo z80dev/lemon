@@ -108,6 +108,35 @@ defmodule LemonCli.Setup.GatewayTest do
   # ──────────────────────────────────────────────────────────────────────────
 
   describe "Discord.run/2" do
+    test "gives packaged-install guidance when encrypted secrets are not configured" do
+      {io, get_log} =
+        capture_io(%{
+          secrets_status: fn -> %{configured: false} end
+        })
+
+      assert {:error, :secrets_not_configured} = Discord.run(["--non-interactive"], io)
+
+      output = messages(get_log.())
+      assert Enum.any?(output, &String.contains?(&1, "lemon secrets init"))
+      refute Enum.any?(output, &String.contains?(&1, "mix lemon"))
+    end
+
+    test "gives packaged-install guidance for a missing non-interactive token" do
+      {io, get_log} =
+        capture_io(%{
+          secrets_status: fn -> %{configured: true} end,
+          secret_get: fn _key -> {:error, :not_found} end
+        })
+
+      assert {:error, :token_not_found} =
+               Discord.run(["--non-interactive", "--default-channel-id", "123456789012345678"], io)
+
+      output = messages(get_log.())
+      assert Enum.any?(output, &String.contains?(&1, "--token"))
+      assert Enum.any?(output, &String.contains?(&1, "lemon secrets set discord_bot_token"))
+      refute Enum.any?(output, &String.contains?(&1, "mix lemon"))
+    end
+
     test "configures from non-interactive flags without persisting or printing the token" do
       token = "1234567890.abcde.12345"
       config_path = Path.join(System.tmp_dir!(), "lemon-discord-#{System.unique_integer([:positive])}.toml")
