@@ -73,6 +73,38 @@ auto_approve = false
 [runtime.cli.kimi]
 extra_args = []
 
+# Programmatic tool calling: the model submits a python3 script that can call a fixed
+# allowlist of agent tools (read, grep, find, ls, webfetch); only what the script prints
+# comes back. The script runs as HOST CODE with bash-equivalent permissions — this is not
+# a sandbox. Default-off; requires python3 (or python_path) plus, on GNU/Linux, GNU
+# mktemp and a local-filesystem TMPDIR for the private workspace.
+# See docs/tools/execute-code.md before enabling.
+#
+# [runtime.tools.execute_code]
+# enabled = false
+# python_path = ""              # empty = find python3 on PATH
+# timeout_ms = 120000           # wall-time cap per run
+# max_rpc_calls = 100           # helper calls per run
+# max_rpc_result_bytes = 5242880
+# max_output_bytes = 50000
+# tools = []                    # helper subset; empty = full fixed allowlist
+#
+# kernel_mode = "per_call"      # "per_call" (default): every run is a fresh process.
+#                               # "session": opt-in persistent interpreter per
+#                               # session/cwd/interpreter/helper identity. State is live
+#                               # process memory only — never durable — and is lost on
+#                               # session close/reset, idle reap, eviction, or restart.
+# kernel_idle_timeout_ms = 1800000   # idle kernels reaped after 30 minutes
+# max_live_kernels = 16              # strict cap; idle-only LRU eviction
+# max_queued_cells_per_kernel = 8    # serialized cells; full queue = busy error
+#
+# Env overrides: LEMON_EXECUTE_CODE_ENABLED, LEMON_EXECUTE_CODE_PYTHON_PATH,
+# LEMON_EXECUTE_CODE_TIMEOUT_MS, LEMON_EXECUTE_CODE_MAX_RPC_CALLS,
+# LEMON_EXECUTE_CODE_MAX_RPC_RESULT_BYTES, LEMON_EXECUTE_CODE_MAX_OUTPUT_BYTES,
+# LEMON_EXECUTE_CODE_TOOLS, LEMON_EXECUTE_CODE_KERNEL_MODE,
+# LEMON_EXECUTE_CODE_KERNEL_IDLE_TIMEOUT_MS, LEMON_EXECUTE_CODE_MAX_LIVE_KERNELS,
+# LEMON_EXECUTE_CODE_MAX_QUEUED_CELLS_PER_KERNEL
+
 [tui]
 theme = "lemon"
 debug = false

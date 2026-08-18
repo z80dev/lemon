@@ -9,7 +9,7 @@ defmodule CodingAgent.Tools.ExecuteCode do
   results travel over a file-based RPC protocol in a per-invocation temp
   directory and never enter the model transcript.
 
-  ## Shape of a run
+  ## Shape of a per-call run (default `kernel_mode = "per_call"`)
 
   1. A temp workspace is created (`0700`) holding `lemon_tools.py` (the
      generated shim, see `CodingAgent.Tools.ExecuteCode.PythonShim`),
@@ -22,6 +22,31 @@ defmodule CodingAgent.Tools.ExecuteCode do
      script runs, policy-checking and approval-gating every call exactly like a
      direct tool call.
   4. The workspace is removed when the run ends.
+
+  ## Shape of a session run (`kernel_mode = "session"`, opt-in)
+
+  1. The run becomes a *cell* on a persistent interpreter (a kernel) owned by
+     `CodingAgent.PythonRepl`: a registry serializes attach/reset and enforces
+     live-kernel capacity; a temporary `PythonRepl.Session` worker owns exactly
+     one python3 process and serializes cells (one active, bounded FIFO queue).
+  2. The kernel is keyed by persisted session id, agent id, canonical cwd,
+     canonical interpreter, helper set, and protocol version — never by
+     `run_id`, tool-call id, or the caller-overridable session key. Subagents
+     isolate through their own persisted session ids.
+  3. Each cell gets a fresh bridge: a new `0700` RPC directory and a new
+     256-bit token serviced by a temporary
+     `CodingAgent.Tools.ExecuteCode.RpcServer`, so helper authority is
+     re-established per cell and stale credentials cannot call.
+  4. Imports, globals, objects, the module cache, and `os.environ` survive
+     across cells — live process memory only, never durable. Ordinary
+     exceptions retain that state; an active timeout, cancellation, caller
+     death, crash, or protocol fault discards the whole interpreter (partial
+     output may be returned with `state_retained: false`). Started code is
+     never replayed. `reset: true` replaces the kernel before the script runs.
+  5. Session mode may fall back to the isolated per-call path only before code
+     starts (missing session scope, unavailable registry, exhausted capacity,
+     startup failure); the result reports `persistent: false` and the
+     `fallback_reason`. A full queue never falls back.
 
   ## Danger
 

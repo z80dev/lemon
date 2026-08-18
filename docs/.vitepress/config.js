@@ -102,6 +102,7 @@ export default {
         items: [
           { text: "Web", link: "/tools/web" },
           { text: "Firecrawl", link: "/tools/firecrawl" },
+          { text: "Execute Code", link: "/tools/execute-code" },
           { text: "WASM", link: "/tools/wasm" },
         ],
       },

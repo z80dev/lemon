@@ -67,11 +67,23 @@ Tools are divided into two sets. `coding_tools/2` is the default set passed to s
 |----------|-------|
 | **File Operations / Skills** | `read`, `read_skill`, `skill_manage`, `memory_topic`, `memory`, `search_memory`, `session_search`, `checkpoint`, `write`, `edit`, `patch`, `hashline_edit`, `lsp_diagnostics`, `ls` |
 | **Search** | `grep`, `find` |
-| **Execution** | `bash` |
+| **Execution** | `bash` (`execute_code` is a config-gated builtin appended last in `@builtin_tools`: default-off via `[runtime.tools.execute_code] enabled`, bash-equivalent, and filtered out of the disclosed set unless enabled) |
 | **Web / Browser / Media** | `websearch`, `webfetch`, `browser_navigate`, `browser_snapshot`, `browser_get_content`, `browser_click`, `browser_type`, `browser_hover`, `browser_select_option`, `browser_upload_file`, `browser_download`, `browser_press`, `browser_scroll`, `browser_back`, `browser_wait_for_selector`, `browser_evaluate`, `browser_events`, `browser_get_cookies`, `browser_set_cookies`, `browser_clear_state`, `browser_screenshot`, `browser_analyze`, `media_status`, `media_generate_image`, `media_generate_speech`, `media_transcribe_audio`, `media_analyze_image`, `media_generate_video` |
 | **Task/Agent** | `task`, `agent`, `parent_question`, `todo`, `kanban` |
 | **Social** | `x_search`, `post_to_x`, `get_x_mentions` |
 | **System** | `tool_auth`, `extensions_status` |
+
+`execute_code` is programmatic tool calling: the model submits a python3 script that
+invokes a fixed compile-time helper allowlist (`read`, `grep`, `find`, `ls`, `webfetch`)
+through the same policy/approval path as direct tool calls, and only printed output
+returns. It runs as host code with bash-equivalent authority -- never a sandbox. The
+default `kernel_mode = "per_call"` gives every run a fresh process; the opt-in `"session"`
+mode dispatches serialized cells to a persistent supervised interpreter keyed by persisted
+session id + agent id + canonical cwd/interpreter + helper set + protocol version (see
+`CodingAgent.PythonRepl`). Kernel state is live process memory only -- never durable or
+transcript-restored -- and is discarded on reset, session close/reset, idle reap,
+capacity eviction, timeout/cancellation, or crash. The canonical operator contract is
+`docs/tools/execute-code.md`.
 
 `browser_screenshot` writes screenshot bytes to local artifacts by default
 instead of returning base64 to the model. Pass `includeImage: true` only when a

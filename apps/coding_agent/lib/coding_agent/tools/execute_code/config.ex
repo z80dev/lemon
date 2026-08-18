@@ -14,8 +14,8 @@ defmodule CodingAgent.Tools.ExecuteCode.Config do
   `kernel_mode` and the kernel bounds freeze the persistent-interpreter
   contract: only an explicit "session" selects session mode and anything
   unrecognized stays `per_call`, so a config mistake can never silently enable
-  persistence. The bounds are normalized here for the session path; until that
-  path lands every run still executes per-call.
+  persistence. The bounds are consumed by the `CodingAgent.PythonRepl`
+  session path; `per_call` runs ignore them.
   """
 
   @rpc_allowlist ~w(read grep find ls webfetch)

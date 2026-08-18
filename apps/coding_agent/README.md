@@ -61,6 +61,9 @@ CodingAgent.Supervisor (one_for_one)
   +-- SessionSupervisor (DynamicSupervisor for Session processes)
   +-- Wasm.SidecarSupervisor
   +-- TaskSupervisor (Task.Supervisor for async ops)
+  +-- PythonRepl.Supervisor (one_for_all: PythonRepl.Registry + PythonRepl.SessionSupervisor;
+  |   supervised temporary workers for persistent execute_code kernels; starts after
+  |   TaskSupervisor because per-cell RPC servers depend on it)
   +-- TaskStoreServer (DETS-backed async task tracking)
   +-- ParentQuestionStoreServer (DETS-backed child-to-parent question tracking)
   +-- RunGraphServer (ETS+DETS persistent run graph)
@@ -115,11 +118,20 @@ CodingAgent.Supervisor (one_for_one)
 |----------|-------|
 | File I/O / Skills | `read`, `read_skill`, `skill_manage`, `memory_topic`, `memory`, `search_memory`, `session_search`, `checkpoint`, `write`, `edit`, `hashline_edit`, `patch`, `lsp_diagnostics`, `ls` |
 | Search | `grep`, `find` |
-| Execution | `bash` |
+| Execution | `bash` (`execute_code` is a config-gated builtin appended last: default-off via `[runtime.tools.execute_code] enabled`, bash-equivalent, and absent from the disclosed set unless enabled) |
 | Web / Browser / Media | `websearch`, `webfetch`, `browser_navigate`, `browser_snapshot`, `browser_get_content`, `browser_click`, `browser_type`, `browser_hover`, `browser_select_option`, `browser_upload_file`, `browser_download`, `browser_press`, `browser_scroll`, `browser_back`, `browser_wait_for_selector`, `browser_evaluate`, `browser_events`, `browser_get_cookies`, `browser_set_cookies`, `browser_clear_state`, `browser_screenshot`, `browser_analyze`, `media_status`, `media_generate_image`, `media_generate_speech`, `media_transcribe_audio`, `media_analyze_image`, `media_generate_video` |
 | Task / Agent | `task`, `agent`, `parent_question`, `todo`, `kanban` |
 | Social | `x_search`, `post_to_x`, `get_x_mentions` |
 | System | `tool_auth`, `extensions_status` |
+
+`execute_code` is programmatic tool calling: the model submits a python3 script that can
+call a fixed compile-time allowlist of agent tools (`read`, `grep`, `find`, `ls`,
+`webfetch`) through policy- and approval-gated helpers, and only what the script prints
+comes back. It is bash-equivalent host code, not a sandbox. The default `kernel_mode =
+"per_call"` runs every script in a fresh process; the opt-in `"session"` mode reuses one
+supervised persistent interpreter per session/cwd/interpreter/helper identity whose state
+is live process memory only (never durable) and is discarded on reset, close, idle reap,
+or cancellation. See `docs/tools/execute-code.md` for the full contract.
 
 `browser_screenshot` writes screenshot bytes to local artifacts by default
 instead of returning base64 to the model. Pass `includeImage: true` only when a
@@ -268,6 +280,9 @@ Pure text-only external `codex`/`claude` tasks with no explicit `cwd` and no rol
 | `CodingAgent.Coordinator` | GenServer orchestrating concurrent subagent sessions with timeout management |
 | `CodingAgent.Parallel` | Semaphore-based concurrency control and `map_with_concurrency_limit` |
 | `CodingAgent.ProcessManager` | DynamicSupervisor for background `exec` processes |
+| `CodingAgent.PythonRepl` | Facade for persistent `execute_code` kernels -- `execute/1`, `reset/3`, `detach_owner/2`, aggregate-only `snapshot/1` |
+| `CodingAgent.PythonRepl.Registry` | Serialized ownership/lifetime authority: key/owner mappings, generations, strict `max_live_kernels` admission with idle-only LRU eviction, idle reaping, owner monitors and co-owner forks |
+| `CodingAgent.PythonRepl.SessionSupervisor` | DynamicSupervisor for temporary `PythonRepl.Session` kernel workers (one python3 process each; serialized cells, bounded queue, live in-memory state only) |
 | `CodingAgent.ProcessSession` | GenServer for a single background process |
 | `CodingAgent.ProcessStore` / `ProcessStoreServer` | ETS store for background process state |
 | `LemonCore.TerminalBackend` / `TerminalBackends` | Shared backend contract and registry for supervised terminal/process execution |

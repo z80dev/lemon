@@ -216,6 +216,12 @@
     max_age_days: 90
   },
   %{
+    path: "docs/tools/execute-code.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-08-17],
+    max_age_days: 90
+  },
+  %{
     path: "docs/tools/firecrawl.md",
     owner: "@z80",
     last_reviewed: ~D[2026-06-17],
