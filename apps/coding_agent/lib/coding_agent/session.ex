@@ -40,6 +40,7 @@ defmodule CodingAgent.Session do
   # its end-of-run checks (avoids a race in very fast mock runs).
   @prompt_defer_ms 10
   @reset_abort_wait_ms 5_000
+  @python_repl_terminate_detach_wait_ms 100
 
   alias LemonAgent.ContextRegistry
   alias LemonAgent.Types.AgentTool
@@ -1125,7 +1126,11 @@ defmodule CodingAgent.Session do
   @spec terminate(term(), t()) :: :ok
   @impl true
   def terminate(_reason, state) do
-    Lifecycle.detach_owner_on_terminate(state.python_repl_mod, self())
+    Lifecycle.detach_owner_on_terminate(
+      state.python_repl_mod,
+      self(),
+      @python_repl_terminate_detach_wait_ms
+    )
 
     # Emit introspection event for session end
     Introspection.record(

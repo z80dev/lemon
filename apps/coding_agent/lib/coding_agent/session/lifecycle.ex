@@ -416,9 +416,35 @@ defmodule CodingAgent.Session.Lifecycle do
   end
 
   @doc false
-  @spec detach_owner_on_terminate(module() | nil, pid()) :: :ok
-  def detach_owner_on_terminate(python_repl_mod, owner_pid) when is_pid(owner_pid) do
-    case safe_detach_owner(python_repl_mod, owner_pid) do
+  @spec detach_owner_on_terminate(module() | nil, pid(), non_neg_integer()) :: :ok
+  def detach_owner_on_terminate(nil, owner_pid, timeout_ms)
+      when is_pid(owner_pid) and is_integer(timeout_ms) and timeout_ms >= 0,
+      do: :ok
+
+  def detach_owner_on_terminate(python_repl_mod, owner_pid, timeout_ms)
+      when is_pid(owner_pid) and is_integer(timeout_ms) and timeout_ms >= 0 do
+    # The facade ultimately makes an unbounded registry call. Keep reset on
+    # the synchronous path above, but bound termination so later cleanup can
+    # still run within the supervisor shutdown budget. The registry continues
+    # any call already in flight and its owner monitor observes this process
+    # exiting after terminate/2 returns.
+    task = Task.async(fn -> safe_detach_owner(python_repl_mod, owner_pid) end)
+    Process.unlink(task.pid)
+
+    result =
+      case Task.yield(task, timeout_ms) do
+        {:ok, result} ->
+          result
+
+        {:exit, reason} ->
+          {:error, {:detach_task_exit, reason}}
+
+        nil ->
+          _ = Task.shutdown(task, :brutal_kill)
+          {:error, :timeout}
+      end
+
+    case result do
       :ok ->
         :ok
 

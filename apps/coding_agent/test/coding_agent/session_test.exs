@@ -1234,6 +1234,21 @@ defmodule CodingAgent.SessionTest do
       assert_receive {:DOWN, ^monitor, :process, ^session, :normal}
     end
 
+    test "termination bounds a hanging Python REPL detach and continues agent cleanup" do
+      configure_python_repl({:block, :ok})
+      session = start_session(python_repl_mod: PythonRepl)
+      agent = Session.get_state(session).agent
+      session_monitor = Process.monitor(session)
+      agent_monitor = Process.monitor(agent)
+
+      stop_task = Task.async(fn -> GenServer.stop(session, :normal) end)
+
+      assert_receive {:python_repl_detach_owner, ^session, true}, 250
+      assert :ok = Task.await(stop_task, 500)
+      assert_receive {:DOWN, ^agent_monitor, :process, ^agent, :normal}, 100
+      assert_receive {:DOWN, ^session_monitor, :process, ^session, :normal}, 100
+    end
+
     test "reset during active run aborts work and stream subscribers get canceled terminal" do
       parent = self()
 
