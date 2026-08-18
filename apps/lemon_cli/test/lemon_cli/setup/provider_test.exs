@@ -6,7 +6,7 @@ defmodule LemonCli.Setup.ProviderTest do
   alias LemonCli.Setup.{Provider, Verification}
   alias LemonCore.Secrets
 
-  # IO callbacks that capture error messages for inspection
+  # IO callbacks that capture output messages for inspection
   defp capturing_io do
     pid = self()
 
@@ -98,6 +98,7 @@ defmodule LemonCli.Setup.ProviderTest do
     } do
       set_master_key_env()
       io = capturing_io()
+
       result =
         Provider.run(onboard_args(config_path, ["--set-default", "--model", "gpt-5"]), io,
           live_verify: true,
@@ -107,18 +108,27 @@ defmodule LemonCli.Setup.ProviderTest do
           end
         )
 
+      assert result == :ok
 
       # The live verifier received the stored credential and the registry's
       # endpoint details for the selected model.
       assert_received {:live_check,
-                       %{provider: "openai", model: "openai:gpt-5", api_key: "provider-test-token"} = input}
+                       %{
+                         provider: "openai",
+                         model: "openai:gpt-5",
+                         api_key: "provider-test-token"
+                       } = input}
 
       assert is_binary(input.base_url) and input.base_url =~ "api.openai.com"
 
       events = drain_events([])
 
       assert info_event?(events, &String.contains?(&1, "Verifying provider configuration"))
-      assert info_event?(events, &String.contains?(&1, "Provider configuration verified: openai / openai:gpt-5"))
+
+      assert info_event?(
+               events,
+               &String.contains?(&1, "Provider configuration verified: openai / openai:gpt-5")
+             )
     end
 
     test "failed live verification returns the user to recovery without claiming success", %{
@@ -126,6 +136,7 @@ defmodule LemonCli.Setup.ProviderTest do
     } do
       set_master_key_env()
       io = capturing_io()
+
       result =
         Provider.run(onboard_args(config_path, ["--set-default", "--model", "gpt-5"]), io,
           live_verify: true,
@@ -149,6 +160,7 @@ defmodule LemonCli.Setup.ProviderTest do
     } do
       set_master_key_env()
       io = capturing_io()
+
       result =
         Provider.run(
           onboard_args(config_path, ["--set-default", "--model", "gpt-5", "--skip-verify"]),
@@ -160,6 +172,7 @@ defmodule LemonCli.Setup.ProviderTest do
           end
         )
 
+      assert result == :ok
       refute_received :live_check_ran
 
       events = drain_events([])
@@ -195,6 +208,7 @@ defmodule LemonCli.Setup.ProviderTest do
     } do
       set_master_key_env()
       io = capturing_io()
+
       result =
         Provider.run(onboard_args(config_path, ["--set-default", "--model", "gpt-5"]), io,
           live_verify: true,
@@ -264,7 +278,7 @@ defmodule LemonCli.Setup.ProviderTest do
 
     test "a decryptable stored secret completes the provider step", %{config_path: config_path} do
       set_master_key_env()
-      :ok = Secrets.set("stored_provider_secret", "sk-stored")
+      assert {:ok, _metadata} = Secrets.set("stored_provider_secret", "sk-stored")
       write_config(config_path, defaults: true, secret_ref: "stored_provider_secret")
 
       state = Verification.setup_state(config_path: config_path)
@@ -275,7 +289,7 @@ defmodule LemonCli.Setup.ProviderTest do
 
     test "a default model owned by another provider is rejected", %{config_path: config_path} do
       set_master_key_env()
-      :ok = Secrets.set("mismatch_secret", "sk-stored")
+      assert {:ok, _metadata} = Secrets.set("mismatch_secret", "sk-stored")
 
       File.write!(config_path, """
       [defaults]
@@ -307,8 +321,9 @@ defmodule LemonCli.Setup.ProviderTest do
 
     test "skip_verify disables the live check for offline use", %{config_path: config_path} do
       set_master_key_env()
-      :ok = Secrets.set("skip_verify_secret", "sk-stored")
+      assert {:ok, _metadata} = Secrets.set("skip_verify_secret", "sk-stored")
       write_config(config_path, defaults: true, secret_ref: "skip_verify_secret")
+
       assert {:ok, %{live: :disabled, provider: "openai", model: "openai:gpt-5"}} =
                Verification.verify_provider(config_path: config_path, skip_verify: true)
     end
@@ -317,7 +332,7 @@ defmodule LemonCli.Setup.ProviderTest do
       config_path: config_path
     } do
       set_master_key_env()
-      :ok = Secrets.set("live_fail_secret", "sk-stored")
+      assert {:ok, _metadata} = Secrets.set("live_fail_secret", "sk-stored")
       write_config(config_path, defaults: true, secret_ref: "live_fail_secret")
 
       assert {:error, failure} =
@@ -375,11 +390,19 @@ defmodule LemonCli.Setup.ProviderTest do
     System.put_env("LEMON_SECRETS_MASTER_KEY", Base.encode64(:crypto.strong_rand_bytes(32)))
   end
 
-  defp info_event?(events, predicate),
-    do: Enum.any?(events, fn {:info, message} -> predicate.(message) end)
+  defp info_event?(events, predicate) do
+    Enum.any?(events, fn
+      {:info, message} -> predicate.(message)
+      _other -> false
+    end)
+  end
 
-  defp error_event?(events, predicate),
-    do: Enum.any?(events, fn {:error, message} -> predicate.(message) end)
+  defp error_event?(events, predicate) do
+    Enum.any?(events, fn
+      {:error, message} -> predicate.(message)
+      _other -> false
+    end)
+  end
 
   defp drain_events(acc) do
     receive do

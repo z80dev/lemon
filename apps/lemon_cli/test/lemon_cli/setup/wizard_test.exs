@@ -108,7 +108,7 @@ defmodule LemonCli.Setup.WizardTest do
 
       events = drain_events([])
 
-      assert info_event?(events, &String.contains?(&1, "[pending] provider"))
+      assert info_event?(events, &String.contains?(squish(&1), "[pending] provider"))
       assert info_event?(events, &String.contains?(&1, "lemon setup provider"))
       assert info_event?(events, &String.contains?(&1, "Setup unfinished"))
 
@@ -136,9 +136,9 @@ defmodule LemonCli.Setup.WizardTest do
 
       events = drain_events([])
 
-      assert info_event?(events, &String.contains?(&1, "[done] config"))
-      assert info_event?(events, &String.contains?(&1, "[done] secrets"))
-      assert info_event?(events, &String.contains?(&1, "[pending] provider"))
+      assert info_event?(events, &String.contains?(squish(&1), "[done] config"))
+      assert info_event?(events, &String.contains?(squish(&1), "[done] secrets"))
+      assert info_event?(events, &String.contains?(squish(&1), "[pending] provider"))
       assert info_event?(events, &String.contains?(&1, "Setup unfinished"))
       refute info_event?(events, &String.contains?(&1, "initializing one now"))
       refute info_event?(events, &String.contains?(&1, "Creating minimal config"))
@@ -164,9 +164,9 @@ defmodule LemonCli.Setup.WizardTest do
 
       events = drain_events([])
 
-      assert info_event?(events, &String.contains?(&1, "[done] config"))
-      assert info_event?(events, &String.contains?(&1, "[done] secrets"))
-      assert info_event?(events, &String.contains?(&1, "[pending] provider"))
+      assert info_event?(events, &String.contains?(squish(&1), "[done] config"))
+      assert info_event?(events, &String.contains?(squish(&1), "[done] secrets"))
+      assert info_event?(events, &String.contains?(squish(&1), "[pending] provider"))
       refute info_event?(events, &String.contains?(&1, "Setup complete"))
     end
   end
@@ -176,7 +176,7 @@ defmodule LemonCli.Setup.WizardTest do
       config_path: config_path
     } do
       set_master_key_env()
-      :ok = Secrets.set("wizard_openai_key", "sk-wizard-complete")
+      assert {:ok, _metadata} = Secrets.set("wizard_openai_key", "sk-wizard-complete")
 
       File.write!(config_path, """
       [defaults]
@@ -194,14 +194,13 @@ defmodule LemonCli.Setup.WizardTest do
 
       events = drain_events([])
 
-      assert info_event?(events, &String.contains?(&1, "[done] provider"))
+      assert info_event?(events, &String.contains?(squish(&1), "[done] provider"))
       assert info_event?(events, &String.contains?(&1, "Provider already configured"))
       assert info_event?(events, &String.contains?(&1, "Setup complete"))
 
       # Provider onboarding is never asked for again; runtime stays optional.
       assert Enum.any?(prompt_events(events), &String.contains?(&1, "Configure runtime profile"))
       assert Enum.all?(prompt_events(events), &not String.contains?(&1, "Onboard an AI provider"))
-
 
       refute info_event?(events, &String.contains?(&1, "Verifying provider"))
     end
@@ -214,6 +213,7 @@ defmodule LemonCli.Setup.WizardTest do
       assert Wizard.run(["--non-interactive", "--config-path", config_path], io) == :ok
 
       assert File.exists?(config_path)
+
       events = drain_events([])
       assert info_event?(events, &String.contains?(&1, "Setup unfinished"))
     end
@@ -291,17 +291,30 @@ defmodule LemonCli.Setup.WizardTest do
     }
   end
 
-  defp info_event?(events, predicate),
-    do: Enum.any?(events, fn {:info, message} -> predicate.(message) end)
+  defp info_event?(events, predicate) do
+    Enum.any?(events, fn
+      {:info, message} -> predicate.(message)
+      _other -> false
+    end)
+  end
 
-  defp error_event?(events, predicate),
-    do: Enum.any?(events, fn {:error, message} -> predicate.(message) end)
+  defp error_event?(events, predicate) do
+    Enum.any?(events, fn
+      {:error, message} -> predicate.(message)
+      _other -> false
+    end)
+  end
 
   defp prompt_events(events),
     do:
       events
       |> Enum.filter(&match?({:prompt, _}, &1))
       |> Enum.map(fn {:prompt, message} -> message end)
+
+  # Status lines pad their markers to a fixed column; assertions match on
+  # squished text so they survive padding changes.
+  defp squish(message) when is_binary(message),
+    do: message |> String.split() |> Enum.join(" ")
 
   defp pop_response(agent) do
     Agent.get_and_update(agent, fn
