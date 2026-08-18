@@ -1210,6 +1210,67 @@ import sys
 
 root = pathlib.Path(sys.argv[1])
 errors = []
+expected_pins = {"otp-version": "28.5", "elixir-version": "1.19.5"}
+
+# .tool-versions is the development-toolchain source of truth. Keep its OTP
+# qualifier aligned with the released OTP family as well as checking the
+# version that erlef/setup-beam receives.
+tool_versions = {}
+for line in (root / ".tool-versions").read_text(encoding="utf-8").splitlines():
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        continue
+    tool, _, version = stripped.partition(" ")
+    tool_versions[tool] = version.strip()
+
+if tool_versions.get("erlang") != expected_pins["otp-version"]:
+    errors.append(
+        ".tool-versions: expected erlang 28.5, "
+        f"found {tool_versions.get('erlang', '<missing>')}"
+    )
+if tool_versions.get("elixir") != "1.19.5-otp-28":
+    errors.append(
+        ".tool-versions: expected elixir 1.19.5-otp-28, "
+        f"found {tool_versions.get('elixir', '<missing>')}"
+    )
+
+def yaml_scalar(value):
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+        return value[1:-1]
+    return value
+
+def root_env(content):
+    """Return literal constants declared in a workflow's top-level env mapping."""
+    constants = {}
+    in_env = False
+
+    for line in content.splitlines():
+        stripped = line.strip()
+        indent = len(line) - len(line.lstrip())
+        if not in_env:
+            if indent == 0 and stripped == "env:":
+                in_env = True
+            continue
+        if stripped and indent == 0:
+            break
+        match = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*?)\s*(?:#.*)?$", line)
+        if match:
+            constants[match.group(1)] = yaml_scalar(match.group(2))
+
+    return constants
+
+def resolve_version(value, constants):
+    value = yaml_scalar(value)
+    reference = re.fullmatch(r"\$\{\{\s*env\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}", value)
+    if not reference:
+        return value, None
+
+    name = reference.group(1)
+    resolved = constants.get(name)
+    if resolved is None:
+        return None, f"references top-level env.{name}, which is not defined"
+    return resolved, None
 
 # floor-check.yml deliberately pins the *declared floor* (Elixir 1.15 / OTP
 # 26), not the current first-party toolchain — that is the whole point of the
@@ -1228,10 +1289,18 @@ for workflow in sorted((root / ".github" / "workflows").glob("*.yml")):
                 if not pattern.match(value):
                     errors.append(f"{workflow.relative_to(root)}: {field}: {value} is not on the declared floor")
         continue
-    for field, expected in (("otp-version", "28.5"), ("elixir-version", "1.19.5")):
-        for match in re.finditer(rf"{field}:\s*['\"]?([^'\"\s]+)", content):
-            if match.group(1) != expected:
-                errors.append(f"{workflow.relative_to(root)}: expected {field}: {expected}, found {match.group(1)}")
+
+    constants = root_env(content)
+    for match in re.finditer(r"^\s*(otp-version|elixir-version):\s*(.*?)\s*(?:#.*)?$", content, re.MULTILINE):
+        field, value = match.groups()
+        resolved, resolution_error = resolve_version(value, constants)
+        if resolution_error:
+            errors.append(f"{workflow.relative_to(root)}: {field}: {resolution_error}")
+        elif resolved != expected_pins[field]:
+            errors.append(
+                f"{workflow.relative_to(root)}: expected {field}: {expected_pins[field]}, "
+                f"found {value.strip()} (resolved to {resolved})"
+            )
 
 sim_ui_dockerfile = root / "apps" / "lemon_sim_ui" / "Dockerfile"
 sim_ui = sim_ui_dockerfile.read_text(encoding="utf-8")
