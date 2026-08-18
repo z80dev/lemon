@@ -1,19 +1,24 @@
 defmodule LemonCli.Setup.Wizard do
   @moduledoc """
-  Interactive setup wizard for `mix lemon.setup`.
+  Interactive setup wizard for `mix lemon.setup` and the packaged `lemon setup`
+  command.
 
   Handles:
+  - Subcommand dispatch (`run/3`) — the Mix task and the release CLI share it
   - Full first-time wizard (`run_full/3`)
   - Runtime profile and port configuration (`run_runtime/3`)
 
-  Both modes support interactive (TUI/prompt) and non-interactive
+  All modes support interactive (TUI/prompt) and non-interactive
   (flag-driven, CI-friendly) operation through the shared `io_callbacks` map.
   """
 
+  alias LemonCli.Onboarding.Runner
+  alias LemonCli.Setup.{Gateway, Provider, Scaffold}
   alias LemonCore.Config.Modular
   alias LemonCore.Runtime.{Env, Profile}
   alias LemonCore.Secrets
-  alias LemonCli.Setup.{Provider, Scaffold}
+  alias LemonCore.Secrets.MasterKey
+
 
   @type io_callbacks :: %{
           required(:info) => (String.t() -> any()),
@@ -22,6 +27,62 @@ defmodule LemonCli.Setup.Wizard do
           required(:secret) => (String.t() -> String.t() | charlist() | nil),
           optional(:select) => (map() -> any())
         }
+
+  @doc """
+  Dispatches `setup` subcommands.
+
+  Runtime-only (no Mix): `Mix.Tasks.Lemon.Setup` and `LemonCli.CLI` both
+  delegate here. Options:
+
+    * `:usage_command` - command shown in usage errors (default
+      `"mix lemon.setup"`); the packaged CLI passes `"lemon setup"`.
+  """
+  @spec run([String.t()], io_callbacks(), keyword()) :: :ok | {:error, term()}
+  def run(args, io, opts \\ []) when is_list(args) and is_map(io) do
+    usage_command = Keyword.get(opts, :usage_command, "mix lemon.setup")
+
+    # parse_head stops at the first non-flag argument (the subcommand name),
+    # leaving subcommand-specific flags untouched so subcommand parsers get them.
+    {parsed, rest, _invalid} =
+      OptionParser.parse_head(args,
+        switches: [non_interactive: :boolean, config_path: :string],
+        aliases: [n: :non_interactive]
+      )
+
+    case rest do
+      ["provider" | provider_args] ->
+        Provider.run(provider_args, io)
+
+      ["runtime" | runtime_args] ->
+        run_runtime(runtime_args, io, parsed)
+
+      ["gateway" | gateway_args] ->
+        Gateway.run(gateway_args, io)
+
+      ["doctor" | doctor_args] ->
+        case LemonCli.CLI.doctor(doctor_args) do
+          0 -> :ok
+          _ -> {:error, :doctor_failed}
+        end
+
+      [] ->
+        Runner.ensure_required_apps!()
+        run_full([], io, parsed)
+
+      [subcommand | _] ->
+        io.error.("Unknown subcommand: #{inspect(subcommand)}")
+        io.info.("")
+        io.info.("Usage: #{usage_command} [provider|runtime|gateway|doctor] [options]")
+        print_help_hint(io, usage_command)
+        {:error, :unknown_subcommand}
+    end
+  end
+
+  defp print_help_hint(io, "mix lemon.setup"),
+    do: io.info.("Run `mix help lemon.setup` for full documentation.")
+
+  defp print_help_hint(io, usage_command),
+    do: io.info.("Run `#{usage_command} --help` for full documentation.")
 
   @doc """
   Runs the full interactive first-time setup wizard.
@@ -133,25 +194,54 @@ defmodule LemonCli.Setup.Wizard do
       io.info.("Encrypted secrets are not yet initialized.")
 
       if non_interactive? do
-        io.info.("Run `mix lemon.secrets.init` to set up secrets, then re-run setup.")
+        io.info.("Run `lemon secrets init` to set up secrets, then re-run setup.")
       else
         answer = prompt_yes_no?("Initialize secrets now?", true, io)
 
         if answer do
-          Mix.Task.run("lemon.secrets.init", [])
+          init_secrets_now(io)
         else
-          io.info.("Skipped. Run `mix lemon.secrets.init` before onboarding a provider.")
+          io.info.("Skipped. Run `lemon secrets init` before onboarding a provider.")
         end
       end
     end
   end
+
+  # Runtime equivalent of `lemon secrets init`: the Mix task is not available
+  # from packaged releases, so drive the master-key API directly.
+  defp init_secrets_now(io) do
+    case MasterKey.init() do
+      {:ok, %{source: :file, key_file: path}} ->
+        io.info.("Secrets master key written to #{path} (0600)")
+
+      {:ok, %{source: source}} ->
+        io.info.("Secrets master key initialized in #{source}")
+
+      {:error, :keychain_unavailable} ->
+        Runner.fail!(
+          "Keychain is unavailable on this system and no key file location could be " <>
+            "determined. Set #{MasterKey.env_var()}, or configure " <>
+            "`config :lemon_core, LemonCore.Secrets, key_file: ...`."
+        )
+
+      {:error, {:key_file_exists, path}} ->
+        Runner.fail!(
+          "A secrets master key already exists at #{path}. Every secret encrypted " <>
+            "under the old key becomes unreadable when it is replaced."
+        )
+
+      {:error, reason} ->
+        Runner.fail!("Failed to initialize secrets master key: #{inspect(reason)}")
+    end
+  end
+
 
   defp step_offer_provider(io, non_interactive?) do
     io.info.("")
 
     if non_interactive? do
       io.info.(
-        "Skipping provider setup (non-interactive). Run `mix lemon.setup provider` to onboard a provider."
+        "Skipping provider setup (non-interactive). Run `lemon setup provider` to onboard a provider."
       )
     else
       answer = prompt_yes_no?("Onboard an AI provider now?", true, io)
@@ -159,7 +249,7 @@ defmodule LemonCli.Setup.Wizard do
       if answer do
         Provider.run([], io)
       else
-        io.info.("Skipped. Run `mix lemon.setup provider` when ready.")
+        io.info.("Skipped. Run `lemon setup provider` when ready.")
       end
     end
   end
@@ -169,7 +259,7 @@ defmodule LemonCli.Setup.Wizard do
 
     if non_interactive? do
       io.info.(
-        "Skipping runtime configuration (non-interactive). Run `mix lemon.setup runtime` to configure."
+        "Skipping runtime configuration (non-interactive). Run `lemon setup runtime` to configure."
       )
     else
       answer = prompt_yes_no?("Configure runtime profile now?", false, io)
@@ -177,7 +267,7 @@ defmodule LemonCli.Setup.Wizard do
       if answer do
         run_runtime([], io, non_interactive: false)
       else
-        io.info.("Skipped. Run `mix lemon.setup runtime` when ready.")
+        io.info.("Skipped. Run `lemon setup runtime` when ready.")
       end
     end
   end
@@ -185,10 +275,10 @@ defmodule LemonCli.Setup.Wizard do
   defp print_next_steps(io) do
     io.info.("")
     io.info.("Setup complete. Next steps:")
-    io.info.("  mix lemon.config validate    — verify configuration")
-    io.info.("  mix lemon.setup provider     — onboard another AI provider")
-    io.info.("  mix lemon.setup runtime      — change runtime profile / ports")
-    io.info.("  mix lemon.setup doctor       — run diagnostics")
+    io.info.("  lemon config validate        — verify configuration")
+    io.info.("  lemon setup provider         — onboard another AI provider")
+    io.info.("  lemon setup runtime          — change runtime profile / ports")
+    io.info.("  lemon setup doctor           — run diagnostics")
     io.info.("")
   end
 
