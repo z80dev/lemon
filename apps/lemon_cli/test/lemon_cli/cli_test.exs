@@ -83,8 +83,9 @@ defmodule LemonCli.CLITest do
         assert CLI.run(["not-a-command"]) == 2
       end)
 
-    assert error =~ "Unknown command"
-    assert error =~ "Usage"
+    assert error =~ "Unknown command: not-a-command"
+    assert error =~ "Usage: lemon <command> [options]"
+    assert error =~ "Run `lemon <command> --help` for command options."
   end
 
   defp clear_secrets_table do

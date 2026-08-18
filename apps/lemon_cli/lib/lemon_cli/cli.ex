@@ -151,7 +151,7 @@ defmodule LemonCli.CLI do
   defp dispatch([command | _rest]) do
     IO.puts(:stderr, "Unknown command: #{command}")
     IO.puts(:stderr, "")
-    print_usage()
+    print_usage(:stderr)
     @exit_usage
   end
 
@@ -825,7 +825,10 @@ defmodule LemonCli.CLI do
 
       project_dir = opts[:project_dir] || File.cwd!()
 
-      status = LemonChannels.Doctor.Readiness.status(project_dir: project_dir)
+      status =
+        :channel_readiness
+        |> LemonCore.Doctor.RuntimeModules.fetch()
+        |> apply(:status, [[project_dir: project_dir]])
 
       if opts[:json] do
         IO.puts(Jason.encode!(status, pretty: true))
@@ -890,8 +893,8 @@ defmodule LemonCli.CLI do
   # Usage
   # ──────────────────────────────────────────────────────────────────────────
 
-  defp print_usage do
-    IO.puts("""
+  defp print_usage(device \\ :stdio) do
+    IO.puts(device, """
     Usage: lemon <command> [options]
 
     Commands:
