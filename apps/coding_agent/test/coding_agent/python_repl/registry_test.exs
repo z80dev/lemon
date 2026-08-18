@@ -283,6 +283,96 @@ defmodule CodingAgent.PythonRepl.RegistryTest do
     release(registry, same)
   end
 
+  test "a failed owner-death stop quarantines only that worker and keeps the registry alive", %{
+    sup: sup,
+    key: key
+  } do
+    registry = String.to_atom("repl_failed_stop_#{System.unique_integer([:positive])}")
+    parent = self()
+
+    start_supervised!(
+      {Registry,
+       name: registry,
+       session_supervisor: sup,
+       session_mod: FakeSession,
+       stop_session_fun: fn _supervisor, _session_mod, _pid, _monitor_ref ->
+         send(parent, :stop_attempt)
+         {:error, :forced}
+       end,
+       idle_timeout_ms: :infinity,
+       reap_interval_ms: 60_000},
+      id: registry
+    )
+
+    doomed = owner()
+    {:ok, failed} = Registry.acquire(registry, key, doomed)
+    {:ok, unrelated} = Registry.acquire(registry, key("unrelated"), owner())
+
+    Process.exit(doomed, :kill)
+
+    wait_until(fn ->
+      case Map.values(:sys.get_state(registry).stopping) do
+        [%{stop_status: :failed}] -> true
+        _ -> false
+      end
+    end)
+
+    assert_receive :stop_attempt
+    send(registry, :reap_idle)
+    assert_receive :stop_attempt
+
+    registry_pid = Process.whereis(registry)
+    assert is_pid(registry_pid)
+    assert Process.alive?(registry_pid)
+    assert Process.alive?(unrelated.pid)
+
+    snapshot = Registry.snapshot(registry)
+    assert snapshot.capacity == %{live: 1, max: 16, available: 15}
+    assert snapshot.phases.starting == 1
+    assert snapshot.phases.unreachable == 1
+
+    {:ok, after_failure} = Registry.acquire(registry, key("after-failure"), owner())
+    assert Process.alive?(after_failure.pid)
+    assert Process.alive?(failed.pid)
+  end
+
+  test "logical stops leave the registry responsive while physical termination is slow", %{
+    sup: sup,
+    key: key,
+    owner: owner
+  } do
+    registry = String.to_atom("repl_slow_stop_#{System.unique_integer([:positive])}")
+
+    start_supervised!(
+      {Registry,
+       name: registry,
+       session_supervisor: sup,
+       session_mod: FakeSession,
+       stop_session_fun: fn _supervisor, _session_mod, _pid, _monitor_ref ->
+         Process.sleep(1_000)
+         :ok
+       end,
+       idle_timeout_ms: :infinity},
+      id: registry
+    )
+
+    {:ok, first} = Registry.acquire(registry, key, owner)
+    first_pid = first.pid
+    worker_ref = Process.monitor(first_pid)
+
+    assert {:ok, %{reset_performed: true, forked: false}} =
+             Registry.reset(registry, key, owner)
+
+    assert Registry.snapshot(registry).capacity == %{live: 0, max: 16, available: 16}
+    {:ok, replacement} = Registry.acquire(registry, key, owner)
+    assert replacement.generation == first.generation + 1
+
+    Process.exit(first_pid, :kill)
+    assert_receive {:DOWN, ^worker_ref, :process, ^first_pid, _reason}
+    assert Registry.snapshot(registry).capacity == %{live: 1, max: 16, available: 15}
+    release(registry, replacement)
+  end
+
   test "owner death stops ownerless workers and clears all monitor bookkeeping", %{
     registry: registry,
     key: key
@@ -501,6 +591,15 @@ defmodule CodingAgent.PythonRepl.RegistryTest do
     advance_clock(clock, 1)
     send(registry, :reap_idle)
 
+    quarantined_snapshot = Registry.snapshot(registry)
+    assert quarantined_snapshot.capacity == %{live: 0, max: 16, available: 16}
+    assert quarantined_snapshot.phases.unreachable == 1
+    assert quarantined_snapshot.inflight_cells == 0
+    assert quarantined_snapshot.owners == 0
+
+    assert_receive {:DOWN, ^worker_ref, :process, _pid, _reason}
+    wait_until(fn -> map_size(:sys.get_state(registry).stopping) == 0 end)
+
     assert Registry.snapshot(registry) == %{
              capacity: %{live: 0, max: 16, available: 16},
              phases: %{
@@ -516,8 +615,6 @@ defmodule CodingAgent.PythonRepl.RegistryTest do
              forked_owners: 0,
              reap: %{idle_timeout_ms: 1, interval_ms: 60_000}
            }
-
-    assert_receive {:DOWN, ^worker_ref, :process, _pid, _reason}
   end
 
   test "idle reaping uses each entry's request timeout", %{
@@ -803,6 +900,24 @@ defmodule CodingAgent.PythonRepl.RegistryTest do
                timeout_ms: 100,
                registry: registry
              })
+  end
+
+  defp wait_until(fun, timeout \\ 1_000) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+    wait_loop(fun, deadline)
+  end
+
+  defp wait_loop(fun, deadline) do
+    if fun.() do
+      :ok
+    else
+      if System.monotonic_time(:millisecond) >= deadline do
+        flunk("condition was not met before timeout")
+      end
+
+      Process.sleep(10)
+      wait_loop(fun, deadline)
+    end
   end
 
   defp release(registry, allocation) do

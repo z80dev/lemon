@@ -5,6 +5,13 @@ defmodule CodingAgent.PythonRepl.Registry do
   Workers are never registered by key. This GenServer owns the key-to-worker
   mapping and monitors both workers and owners, which makes invalidation,
   capacity admission, and delayed `:DOWN` messages race-safe.
+
+  Logical stops synchronously release an entry's ownership, lease, and capacity
+  bookkeeping, then physical termination runs outside this GenServer. A worker
+  that has not yet died is quarantined by its original monitor; it is excluded
+  from capacity, reported as `:unreachable` in snapshots, and retried by
+  reaping after a failed stop. Only the registry's worker monitor finalizes that
+  quarantine, so a delayed `:DOWN` cannot affect a replacement generation.
   """
 
   use GenServer
@@ -45,12 +52,12 @@ defmodule CodingAgent.PythonRepl.Registry do
   end
 
   @spec reset(GenServer.server(), Key.t(), pid()) ::
-          {:ok, %{reset_performed: boolean(), forked: boolean()}} | {:error, :stop_failed}
+          {:ok, %{reset_performed: boolean(), forked: boolean()}}
   def reset(server, %Key{} = key, owner_pid) when is_pid(owner_pid) do
     GenServer.call(server, {:reset, key, owner_pid}, :infinity)
   end
 
-  @spec detach_owner(GenServer.server(), pid()) :: :ok | {:error, :stop_failed}
+  @spec detach_owner(GenServer.server(), pid()) :: :ok
   def detach_owner(server, owner_pid) when is_pid(owner_pid) do
     GenServer.call(server, {:detach_owner, owner_pid}, :infinity)
   end
@@ -84,9 +91,12 @@ defmodule CodingAgent.PythonRepl.Registry do
       owner_refs: %{},
       owner_entries: %{},
       owner_forks: %{},
+      stopping: %{},
+      stop_task_refs: %{},
       next_generation: 1,
       session_supervisor: Keyword.get(opts, :session_supervisor, SessionSupervisor),
       session_mod: Keyword.get(opts, :session_mod, Session),
+      stop_session_fun: Keyword.get(opts, :stop_session_fun, &SessionSupervisor.stop_session/4),
       max_live_kernels: max,
       idle_timeout_ms: idle,
       reap_interval_ms: interval,
@@ -130,22 +140,18 @@ defmodule CodingAgent.PythonRepl.Registry do
               {:reply, {:ok, allocation(entry, true, state.session_mod, lease)}, state}
 
             _ ->
-              case stop_entry(state, ekey) do
-                {:ok, state} ->
-                  start_entry(
-                    state,
-                    ekey,
-                    key,
-                    owner,
-                    caller,
-                    worker_opts,
-                    max_live_kernels,
-                    idle_timeout_ms
-                  )
+              state = stop_entry(state, ekey)
 
-                {:error, reason, state} ->
-                  {:reply, {:error, reason}, state}
-              end
+              start_entry(
+                state,
+                ekey,
+                key,
+                owner,
+                caller,
+                worker_opts,
+                max_live_kernels,
+                idle_timeout_ms
+              )
           end
       end
     else
@@ -176,28 +182,24 @@ defmodule CodingAgent.PythonRepl.Registry do
             reset_by_stopping(state, ekey, false)
 
           true ->
-            case detach_from_entry(state, ekey, owner) do
-              {:ok, state} ->
-                state = install_fork(state, key, owner)
-                {:reply, {:ok, %{reset_performed: true, forked: true}}, state}
+            state =
+              state
+              |> detach_from_entry(ekey, owner)
+              |> install_fork(key, owner)
 
-              {:error, state} ->
-                {:reply, {:error, :stop_failed}, state}
-            end
+            {:reply, {:ok, %{reset_performed: true, forked: true}}, state}
         end
     end
   end
 
   def handle_call({:detach_owner, owner}, _from, state) do
-    case detach_owner_state(state, owner, true) do
-      {:ok, state} -> {:reply, :ok, state}
-      {:error, state} -> {:reply, {:error, :stop_failed}, state}
-    end
+    {:reply, :ok, detach_owner_state(state, owner, true)}
   end
 
   def handle_call(:snapshot, _from, state) do
     phases =
-      Enum.reduce(state.entries, empty_phases(), fn {_ekey, entry}, acc ->
+      state.entries
+      |> Enum.reduce(empty_phases(), fn {_ekey, entry}, acc ->
         case status(entry, state.session_mod) do
           %{phase: phase} when phase in [:starting, :idle, :running, :cancelling, :stopping] ->
             Map.update!(acc, phase, &(&1 + 1))
@@ -206,6 +208,7 @@ defmodule CodingAgent.PythonRepl.Registry do
             Map.update!(acc, :unreachable, &(&1 + 1))
         end
       end)
+      |> Map.update!(:unreachable, &(&1 + map_size(state.stopping)))
 
     {:reply,
      %{
@@ -232,6 +235,10 @@ defmodule CodingAgent.PythonRepl.Registry do
 
   def handle_info({:reap_idle, _stale_token}, state), do: {:noreply, state}
 
+  def handle_info({:stop_completed, worker_ref, generation, pid, task_token, result}, state) do
+    {:noreply, handle_stop_completed(state, worker_ref, generation, pid, task_token, result)}
+  end
+
   def handle_info({:DOWN, ref, :process, pid, reason}, state) do
     case Map.get(state.worker_refs, ref) do
       %{entry_key: ekey, generation: generation, pid: ^pid} ->
@@ -242,11 +249,19 @@ defmodule CodingAgent.PythonRepl.Registry do
             {:noreply, state}
 
           _ ->
-            {:noreply, state}
+            case Map.get(state.stopping, ref) do
+              %{generation: ^generation, pid: ^pid} = entry ->
+                state = drop_stopping_entry(state, ref)
+                emit_session_stop(state, entry, entry.stop_reason)
+                {:noreply, state}
+
+              _ ->
+                {:noreply, state}
+            end
         end
 
       nil ->
-        handle_non_worker_down(state, ref)
+        handle_stop_task_down_or_non_worker(state, ref)
 
       _stale_or_mismatched_worker ->
         {:noreply, state}
@@ -337,37 +352,31 @@ defmodule CodingAgent.PythonRepl.Registry do
        do: {:ok, state}
 
   defp admit(state, max_live_kernels) do
-    with {:ok, state} <- discard_nonlive_entries(state) do
-      live = map_size(state.entries)
+    state = discard_nonlive_entries(state)
+    live = map_size(state.entries)
 
-      cond do
-        live < max_live_kernels ->
-          {:ok, state}
+    cond do
+      live < max_live_kernels ->
+        {:ok, state}
 
-        live > max_live_kernels ->
-          {:error, :capacity_exhausted, state}
+      live > max_live_kernels ->
+        {:error, :capacity_exhausted, state}
 
-        ekey = lru_quiescent(state) ->
-          stop_entry(state, ekey, :capacity_eviction)
+      ekey = lru_quiescent(state) ->
+        {:ok, stop_entry(state, ekey, :capacity_eviction)}
 
-        true ->
-          {:error, :capacity_exhausted, state}
-      end
+      true ->
+        {:error, :capacity_exhausted, state}
     end
   end
 
   defp discard_nonlive_entries(state) do
-    Enum.reduce_while(Map.keys(state.entries), {:ok, state}, fn ekey, {:ok, acc} ->
+    Enum.reduce(Map.keys(state.entries), state, fn ekey, acc ->
       entry = Map.fetch!(acc.entries, ekey)
 
-      if live?(status(entry, acc.session_mod)) do
-        {:cont, {:ok, acc}}
-      else
-        case stop_entry(acc, ekey) do
-          {:ok, acc} -> {:cont, {:ok, acc}}
-          {:error, reason, acc} -> {:halt, {:error, reason, acc}}
-        end
-      end
+      if live?(status(entry, acc.session_mod)),
+        do: acc,
+        else: stop_entry(acc, ekey)
     end)
   end
 
@@ -402,36 +411,25 @@ defmodule CodingAgent.PythonRepl.Registry do
   end
 
   defp detach_owner_state(state, owner, clear_forks?) do
-    result =
+    state =
       state.owner_entries
       |> Map.get(owner, MapSet.new())
-      |> Enum.reduce_while({:ok, state}, fn ekey, {:ok, acc} ->
-        case detach_from_entry(acc, ekey, owner) do
-          {:ok, acc} -> {:cont, {:ok, acc}}
-          {:error, acc} -> {:halt, {:error, acc}}
-        end
-      end)
+      |> Enum.reduce(state, fn ekey, acc -> detach_from_entry(acc, ekey, owner) end)
 
-    case result do
-      {:ok, state} ->
-        state =
-          if clear_forks? do
-            %{state | owner_forks: Map.delete(state.owner_forks, owner)}
-          else
-            state
-          end
+    state =
+      if clear_forks? do
+        %{state | owner_forks: Map.delete(state.owner_forks, owner)}
+      else
+        state
+      end
 
-        {:ok, maybe_demonitor_owner(state, owner)}
-
-      {:error, state} ->
-        {:error, state}
-    end
+    maybe_demonitor_owner(state, owner)
   end
 
   defp detach_from_entry(state, ekey, owner) do
     case Map.get(state.entries, ekey) do
       nil ->
-        {:ok, state}
+        state
 
       entry ->
         remaining_owners = MapSet.delete(entry.owners, owner)
@@ -439,18 +437,12 @@ defmodule CodingAgent.PythonRepl.Registry do
 
         if MapSet.size(remaining_owners) == 0 or owner_leased?(entry, owner) or
              not quiescent_status?(current) do
-          case stop_entry(state, ekey, :owner_detached) do
-            {:ok, state} -> {:ok, state}
-            {:error, _reason, state} -> {:error, state}
-          end
+          stop_entry(state, ekey, :owner_detached)
         else
           entry = %{entry | owners: remaining_owners}
 
-          state =
-            %{state | entries: Map.put(state.entries, ekey, entry)}
-            |> remove_owner_entry(owner, ekey)
-
-          {:ok, state}
+          %{state | entries: Map.put(state.entries, ekey, entry)}
+          |> remove_owner_entry(owner, ekey)
         end
     end
   end
@@ -458,23 +450,171 @@ defmodule CodingAgent.PythonRepl.Registry do
   defp stop_entry(state, ekey, reason \\ :shutdown) do
     case Map.get(state.entries, ekey) do
       nil ->
-        {:ok, state}
+        state
 
       entry ->
-        case SessionSupervisor.stop_session(
-               state.session_supervisor,
-               state.session_mod,
-               entry.pid,
-               entry.ref
-             ) do
+        state
+        |> quarantine_entry(ekey, entry, reason)
+        |> start_stop_task(entry.ref)
+        |> maybe_schedule_reap()
+    end
+  end
+
+  defp quarantine_entry(state, ekey, entry, reason) do
+    lease_refs =
+      Enum.reduce(entry.leases, state.lease_refs, fn lease, refs ->
+        caller_ref = lease_monitor(lease)
+        Process.demonitor(caller_ref, [:flush])
+        Map.delete(refs, caller_ref)
+      end)
+
+    state = %{
+      state
+      | entries: Map.delete(state.entries, ekey),
+        lease_refs: lease_refs,
+        stopping:
+          Map.put(
+            state.stopping,
+            entry.ref,
+            Map.merge(entry, %{
+              stop_reason: reason,
+              stop_status: :starting,
+              stop_task_ref: nil,
+              stop_task_token: nil
+            })
+          )
+    }
+
+    Enum.reduce(entry.owners, state, fn owner, acc ->
+      acc |> remove_owner_entry(owner, ekey) |> maybe_demonitor_owner(owner)
+    end)
+  end
+
+  defp start_stop_task(state, worker_ref) do
+    case Map.get(state.stopping, worker_ref) do
+      %{stop_task_ref: nil} = entry ->
+        registry = self()
+        task_token = make_ref()
+        stop_session_fun = state.stop_session_fun
+        session_supervisor = state.session_supervisor
+        session_mod = state.session_mod
+
+        {task_pid, task_ref} =
+          spawn_monitor(fn ->
+            stop_monitor = Process.monitor(entry.pid)
+
+            result =
+              try do
+                stop_session_fun.(session_supervisor, session_mod, entry.pid, stop_monitor)
+              catch
+                :exit, reason -> {:error, reason}
+              end
+
+            send(
+              registry,
+              {:stop_completed, worker_ref, entry.generation, entry.pid, task_token, result}
+            )
+          end)
+
+        stopping_entry =
+          Map.merge(entry, %{
+            stop_task_ref: task_ref,
+            stop_task_token: task_token,
+            stop_task_pid: task_pid,
+            stop_status: :stopping
+          })
+
+        %{
+          state
+          | stopping: Map.put(state.stopping, worker_ref, stopping_entry),
+            stop_task_refs: Map.put(state.stop_task_refs, task_ref, worker_ref)
+        }
+
+      _ ->
+        state
+    end
+  end
+
+  defp handle_stop_completed(state, worker_ref, generation, pid, task_token, result) do
+    case Map.get(state.stopping, worker_ref) do
+      %{
+        generation: ^generation,
+        pid: ^pid,
+        stop_task_token: ^task_token,
+        stop_task_ref: task_ref
+      } ->
+        state = clear_stop_task(state, worker_ref, task_ref)
+
+        case result do
           :ok ->
-            stopped_state = drop_entry(state, ekey)
-            emit_session_stop(stopped_state, entry, reason)
-            {:ok, stopped_state}
+            put_in(state.stopping[worker_ref].stop_status, :awaiting_down)
 
           {:error, _reason} ->
-            {:error, :stop_failed, state}
+            report_stop_failure(state, worker_ref)
+
+          _ ->
+            report_stop_failure(state, worker_ref)
         end
+
+      _ ->
+        state
+    end
+  end
+
+  defp handle_stop_task_down_or_non_worker(state, ref) do
+    case Map.pop(state.stop_task_refs, ref) do
+      {nil, _} ->
+        handle_non_worker_down(state, ref)
+
+      {worker_ref, stop_task_refs} ->
+        state = %{state | stop_task_refs: stop_task_refs}
+
+        case Map.get(state.stopping, worker_ref) do
+          %{stop_task_ref: ^ref} ->
+            {:noreply, report_stop_failure(state, worker_ref)}
+
+          _ ->
+            {:noreply, state}
+        end
+    end
+  end
+
+  defp clear_stop_task(state, worker_ref, task_ref) do
+    Process.demonitor(task_ref, [:flush])
+
+    state
+    |> Map.update!(:stop_task_refs, &Map.delete(&1, task_ref))
+    |> update_in([:stopping, worker_ref], fn entry -> %{entry | stop_task_ref: nil} end)
+  end
+
+  defp report_stop_failure(state, worker_ref) do
+    state =
+      update_in(state.stopping[worker_ref], fn entry ->
+        %{entry | stop_status: :failed, stop_task_ref: nil}
+      end)
+
+    Telemetry.fallback(:stop_failed)
+    maybe_schedule_reap(state)
+  end
+
+  defp drop_stopping_entry(state, worker_ref) do
+    case Map.pop(state.stopping, worker_ref) do
+      {nil, _} ->
+        state
+
+      {entry, stopping} ->
+        if entry.stop_task_ref, do: Process.demonitor(entry.stop_task_ref, [:flush])
+
+        %{
+          state
+          | stopping: stopping,
+            worker_refs: Map.delete(state.worker_refs, worker_ref),
+            stop_task_refs:
+              if(entry.stop_task_ref,
+                do: Map.delete(state.stop_task_refs, entry.stop_task_ref),
+                else: state.stop_task_refs
+              )
+        }
     end
   end
 
@@ -574,22 +714,14 @@ defmodule CodingAgent.PythonRepl.Registry do
   defp valid_phase_status?(_phase, _queue_depth, _active_request_id), do: false
 
   defp reset_by_stopping(state, ekey, forked?) do
-    case stop_entry(state, ekey, :reset) do
-      {:ok, state} ->
-        {:reply, {:ok, %{reset_performed: true, forked: forked?}}, state}
-
-      {:error, reason, state} ->
-        {:reply, {:error, reason}, state}
-    end
+    state = stop_entry(state, ekey, :reset)
+    {:reply, {:ok, %{reset_performed: true, forked: forked?}}, state}
   end
 
   defp handle_non_worker_down(state, ref) do
     case Enum.find(state.owner_refs, fn {_owner, owner_ref} -> owner_ref == ref end) do
       {owner, _ref} ->
-        case detach_owner_state(state, owner, true) do
-          {:ok, state} -> {:noreply, state}
-          {:error, state} -> {:stop, :stop_failed, state}
-        end
+        {:noreply, detach_owner_state(state, owner, true)}
 
       nil ->
         case Map.get(state.lease_refs, ref) do
@@ -751,47 +883,49 @@ defmodule CodingAgent.PythonRepl.Registry do
   defp reap_idle(state) do
     now = now_ms(state)
 
-    Enum.reduce(Map.keys(state.entries), state, fn ekey, acc ->
-      case Map.get(acc.entries, ekey) do
-        nil ->
-          acc
+    state =
+      Enum.reduce(Map.keys(state.entries), state, fn ekey, acc ->
+        case Map.get(acc.entries, ekey) do
+          nil ->
+            acc
 
-        entry ->
-          current = status(entry, acc.session_mod)
+          entry ->
+            current = status(entry, acc.session_mod)
 
-          cond do
-            current == :unreachable ->
-              reap_entry(acc, ekey, entry, now, :unreachable)
+            cond do
+              current == :unreachable ->
+                reap_entry(acc, ekey, entry, now, :unreachable)
 
-            expired?(entry, acc, now) and evictable?(entry, current) ->
-              reap_entry(acc, ekey, entry, now, :idle)
+              expired?(entry, acc, now) and evictable?(entry, current) ->
+                reap_entry(acc, ekey, entry, now, :idle)
 
-            true ->
-              acc
-          end
-      end
+              true ->
+                acc
+            end
+        end
+      end)
+
+    Enum.reduce(state.stopping, state, fn
+      {worker_ref, %{stop_status: :failed}}, acc -> start_stop_task(acc, worker_ref)
+      {_worker_ref, _entry}, acc -> acc
     end)
   end
 
   defp reap_entry(state, ekey, entry, now, reason) do
-    case stop_entry(state, ekey) do
-      {:ok, state} ->
-        Telemetry.session_reaped(
-          now - entry.last_use_ms,
-          map_size(state.entries),
-          entry.capacity,
-          reason
-        )
+    state = stop_entry(state, ekey)
 
-        state
+    Telemetry.session_reaped(
+      now - entry.last_use_ms,
+      map_size(state.entries),
+      entry.capacity,
+      reason
+    )
 
-      {:error, _reason, state} ->
-        state
-    end
+    state
   end
 
   defp maybe_schedule_reap(%{reap_timer_token: nil} = state) do
-    if state.idle_timeout_ms != :infinity or
+    if map_size(state.stopping) > 0 or state.idle_timeout_ms != :infinity or
          Enum.any?(state.entries, fn {_ekey, entry} ->
            entry.idle_timeout_ms != :infinity
          end) do

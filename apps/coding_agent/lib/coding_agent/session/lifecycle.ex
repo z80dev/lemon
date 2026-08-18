@@ -478,10 +478,9 @@ defmodule CodingAgent.Session.Lifecycle do
         %{state | execute_code_effective: new_effective}
 
       {:error, reason} ->
-        # The detach failed (for example :stop_failed), so kernels are still
-        # retained under this owner and the session is still effectively in
-        # session mode. Keep the previous effective state so the next config
-        # reload retries the transition instead of lying about identity.
+        # A detach error means the registry did not accept the logical
+        # ownership transition. Keep the prior state so the next reload
+        # retries instead of lying about the session's identity.
         Logger.warning(
           "Failed to detach Python REPL kernels during execute_code config transition: " <>
             "#{inspect(reason)}; keeping previous effective state for retry"

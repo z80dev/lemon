@@ -38,10 +38,7 @@ defmodule CodingAgent.PythonRepl do
   def reset(value, owner_pid, opts \\ []) when is_list(opts) do
     with {:ok, key} <- key(value), {:ok, owner} <- owner(owner_pid) do
       try do
-        case Registry.reset(Keyword.get(opts, :registry, Registry), key, owner) do
-          {:error, :stop_failed} -> {:error, error(:stop_failed)}
-          result -> result
-        end
+        Registry.reset(Keyword.get(opts, :registry, Registry), key, owner)
       catch
         :exit, _ -> {:error, error(:registry_unavailable)}
       end
@@ -54,10 +51,7 @@ defmodule CodingAgent.PythonRepl do
   def detach_owner(owner_pid, opts \\ []) when is_list(opts) do
     with {:ok, owner} <- owner(owner_pid) do
       try do
-        case Registry.detach_owner(Keyword.get(opts, :registry, Registry), owner) do
-          {:error, :stop_failed} -> {:error, error(:stop_failed)}
-          result -> result
-        end
+        Registry.detach_owner(Keyword.get(opts, :registry, Registry), owner)
       catch
         :exit, _ -> {:error, error(:registry_unavailable)}
       end
