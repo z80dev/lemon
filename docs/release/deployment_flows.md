@@ -55,9 +55,13 @@ under `~/.lemon`:
 `bin/lemon` inside every release is a launcher shim that picks the bundled
 profile and applies user-install defaults before delegating to
 `bin/<profile>`. It accepts `start`, `daemon`, `stop`, `restart`, `status`,
-`remote`, `eval`, `rpc`, `version`, `update`, `doctor`, and `tui`. With no
-arguments it launches the TUI in an interactive terminal, auto-starting the
-daemon; non-interactive invocation prints usage.
+`remote`, `eval`, `rpc`, `version`, `update`, and `tui`. The full and minimal
+runtime profiles additionally accept `setup`, `model`, `gateway`, `config`,
+`secrets`, `channels`, and `doctor`; `doctor --bundle [path]` generates a
+redacted support bundle. The sim profile does not bundle the runtime CLI, but
+does support `doctor --bundle`. With no arguments the launcher starts the TUI
+in an interactive terminal, auto-starting the daemon; non-interactive
+invocation prints usage.
 
 ```bash
 lemon daemon    # background start, recording pid and version root in ~/.lemon/run
@@ -65,6 +69,14 @@ lemon status    # pidfile plus a control-plane /healthz probe
 lemon stop      # stops through the recorded root, so it works across a flip
 lemon update    # stage runtime + TUI atomically, then flip current
 lemon stop && lemon daemon   # restart to apply a staged version
+```
+
+```bash
+lemon setup                         # first-time configuration in a full/min release
+lemon model                         # configure a model provider
+lemon gateway setup                 # configure a gateway adapter
+lemon doctor --json                 # ordinary runtime diagnostics
+lemon doctor --bundle               # redacted support bundle
 ```
 
 Updating stages the runtime and matching TUI artifacts together for full/min
@@ -242,15 +254,11 @@ anonymous `/rooms/:id/watch` request.
 # Wait for the control-plane to become ready
 curl -sS http://localhost:4040/healthz
 
-# Or use the doctor command from the source tree
-mix lemon.doctor --json
+# Run diagnostics from a full or minimal release
+./_build/prod/rel/lemon_runtime_full/bin/lemon doctor --json
 
-# Generate a redacted support bundle from the source tree
-mix lemon.doctor --bundle
-
-# Generate a redacted support bundle from a release artifact
-./_build/prod/rel/lemon_runtime_full/bin/lemon_runtime_full eval \
-  'LemonCore.Doctor.CLI.bundle!()'
+# Generate a redacted support bundle from any release profile
+./_build/prod/rel/lemon_runtime_full/bin/lemon doctor --bundle
 ```
 
 For `lemon_runtime_full`, include `LEMON_WEB_SECRET_KEY_BASE` in release `eval`
@@ -261,7 +269,7 @@ endpoint during release boot before the eval expression is executed.
 
 | Profile | Apps | Use case |
 |---|---|---|
-| `lemon_runtime_min` | gateway, router, channels, control-plane | Headless / API-only server |
+| `lemon_runtime_min` | gateway, CLI, router, channels, control-plane | Headless / API-only server |
 | `lemon_runtime_full` | + automation, skills, web, sim-ui | Full local runtime with UI |
 | `sim_broadcast_platform` | lemon_core, lemon_sim, lemon_sim_ui | Public sim broadcast deployment |
 | `lemon_tui` | `tui/bin/lemon-tui` | Bun-compiled client pseudo-profile, not a BEAM release |
@@ -340,5 +348,5 @@ reconnect, completion, export, rematch, and the supported responsive viewports.
 - `docs/release/versioning_and_channels.md` — CalVer scheme and channel model
 - `docs/release/release_checklist_and_support_policy.md` — release-candidate checklist, rollback checklist, and public support boundaries
 - `apps/lemon_core/lib/lemon_core/runtime/` — Boot, Profile, Health, Env modules
-- `mix lemon.doctor` / `LemonCore.Doctor.CLI.bundle!()` — diagnostic check suite and redacted support bundles
-- `mix lemon.setup` — first-time configuration wizard
+- `lemon doctor` / `mix lemon.doctor` — diagnostics in a release / source checkout; append `--bundle` for a redacted support bundle
+- `lemon setup` / `mix lemon.setup` — first-time configuration wizard in a release / source checkout

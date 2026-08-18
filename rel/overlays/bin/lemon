@@ -11,11 +11,10 @@
 #
 # Usage:
 #   bin/lemon                 # interactive terminal: launches the TUI (daemon auto-start)
-#   bin/lemon tui|start|daemon|stop|restart|status|remote|eval|rpc|version|update|doctor
-#   bin/lemon --help
 #
-# The full development CLI (setup, channels, secrets, models, ...) only
-# exists in source checkouts; run it there via ./bin/lemon (through mix).
+#   bin/lemon tui|start|daemon|stop|restart|status|remote|eval|rpc|version|update
+#   bin/lemon setup|model|gateway|config|secrets|channels|doctor
+#   bin/lemon --help
 
 set -euo pipefail
 
@@ -47,12 +46,18 @@ Commands:
   rpc "EXPR"            Evaluate EXPR on the running node
   version               Print the installed Lemon version
   update [args]         Run the stage-2 self-updater (see LemonCore.Update.CLI)
-  doctor [bundle_path]  Generate a support bundle (default: ~/.lemon/support-bundle-<ts>.zip)
+  setup [args]          Run first-time Lemon setup
+  model [args]          Configure a model provider
+  gateway [args]        Configure a gateway adapter
+  config [args]         Inspect or update configuration
+  secrets [args]        Manage secrets
+  channels [args]       Configure channel adapters
+  doctor [args]         Run runtime diagnostics
+  doctor --bundle [path] Generate a support bundle (default: ~/.lemon/support-bundle-<ts>.zip)
   --help, -h            Show this help
 
-This is the packaged-release launcher. The full development CLI (setup,
-channels, secrets, models, providers, ...) only exists in source checkouts;
-run it there via ./bin/lemon (through mix).
+Runtime CLI commands are available in lemon_runtime_min and lemon_runtime_full.
+The sim_broadcast_platform profile supports only `doctor --bundle`.
 EOF
 }
 
@@ -149,6 +154,20 @@ setup_environment() {
   fi
 
   export PHX_SERVER="${PHX_SERVER:-true}"
+}
+
+# ── Runtime CLI commands need lemon_cli, which the sim-only release does not
+# bundle. The profile check turns a missing-module crash into a useful command
+# error. The release script owns the single eval argument boundary, so pass the
+# command argv directly after the expression. ──
+run_runtime_cli() {
+  if [ "$PROFILE" = "sim_broadcast_platform" ]; then
+    error "'$1' is unavailable in the sim_broadcast_platform release"
+    error "use lemon_runtime_min or lemon_runtime_full for runtime CLI commands"
+    exit 1
+  fi
+
+  exec "$RELEASE_BIN" eval 'LemonCli.CLI.main(System.argv())' "$@"
 }
 
 # ── doctor's bundle_path is embedded in an Elixir string literal; escape
@@ -346,8 +365,24 @@ case "$COMMAND" in
     exec "$RELEASE_BIN" eval 'LemonCore.Update.CLI.main(System.argv())' "$@"
     ;;
 
+  setup|model|gateway|config|secrets|channels)
+    run_runtime_cli "$@"
+    ;;
+
   doctor)
     shift
+
+    if [ "${1:-}" != "--bundle" ]; then
+      run_runtime_cli doctor "$@"
+    fi
+
+    shift
+
+    if [ "$#" -gt 1 ]; then
+      error "doctor --bundle accepts at most one output path"
+      exit 2
+    fi
+
     bundle_path="${1:-}"
 
     if [ -z "$bundle_path" ]; then
