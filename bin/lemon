@@ -9,7 +9,8 @@
 #   ./bin/lemon [--daemon] [--debug] [--port <control_plane_port>] [--web-port <lemon_web_port>]
 #               [--name <name@host> | --sname <name>] [--cookie <cookie>] [--no-distribution]
 #   ./bin/lemon setup runtime --non-interactive
-#   ./bin/lemon channels
+#   ./bin/lemon model --provider anthropic
+#   ./bin/lemon gateway setup telegram --non-interactive
 #   ./bin/lemon config validate
 #   ./bin/lemon doctor --json
 #   ./bin/lemon send --to telegram:<chat_id> "deploy finished"
@@ -44,7 +45,8 @@ show_help() {
   cat << 'EOF'
 Usage: ./bin/lemon [options]
        ./bin/lemon setup runtime --non-interactive
-       ./bin/lemon channels
+       ./bin/lemon model --provider anthropic
+       ./bin/lemon gateway setup [transport] --non-interactive
        ./bin/lemon config validate
        ./bin/lemon doctor --json
        ./bin/lemon send --to telegram:<chat_id> "message"
@@ -113,6 +115,74 @@ if [[ "${1:-}" == "setup" ]]; then
   shift
   cd "$LEMON_ROOT"
   exec mix lemon.setup "$@"
+fi
+
+show_model_help() {
+  cat << 'EOF'
+Usage: ./bin/lemon model [options]
+
+Configure an AI provider from a source checkout.
+
+Options:
+  --provider NAME         Provider to configure
+  --token TOKEN           Provider credential
+  --auth oauth|api_key    Authentication flow
+  --model MODEL           Model to configure
+  --set-default           Set the provider and model as defaults
+EOF
+}
+
+if [[ "${1:-}" == "model" ]]; then
+  shift
+
+  if [[ "${1:-}" == "help" || "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    show_model_help
+    exit 0
+  fi
+
+  cd "$LEMON_ROOT"
+  exec mix lemon.onboard "$@"
+fi
+
+show_gateway_help() {
+  cat << 'EOF'
+Usage: ./bin/lemon gateway setup [transport] [options]
+
+Configure a gateway adapter from a source checkout.
+
+Examples:
+  ./bin/lemon gateway setup
+  ./bin/lemon gateway setup telegram
+  ./bin/lemon gateway setup --transport discord --non-interactive
+EOF
+}
+
+if [[ "${1:-}" == "gateway" ]]; then
+  shift
+  gateway_action="${1:-}"
+
+  case "$gateway_action" in
+    setup)
+      shift
+
+      if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+        show_gateway_help
+        exit 0
+      fi
+
+      cd "$LEMON_ROOT"
+      exec mix lemon.setup gateway "$@"
+      ;;
+    ""|help|--help|-h)
+      show_gateway_help
+      exit 0
+      ;;
+    *)
+      error "Unknown gateway command: $gateway_action"
+      show_gateway_help >&2
+      exit 2
+      ;;
+  esac
 fi
 
 if [[ "${1:-}" == "channels" ]]; then

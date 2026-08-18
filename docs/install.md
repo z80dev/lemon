@@ -193,6 +193,14 @@ mix compile
 ./bin/lemon usage
 ```
 
+The source wrapper exposes the same onboarding commands as an installed
+runtime:
+
+```bash
+./bin/lemon model --provider anthropic
+./bin/lemon gateway setup
+```
+
 Start Lemon locally:
 
 ```bash

@@ -21,27 +21,28 @@ not start a supervision tree; tasks run the flows on demand.
 
 ## Commands
 
-Use the packaged executable when Lemon is installed from a release:
+Use the same command nouns from a release or source checkout:
 
 ```bash
+# Installed release
 lemon setup
 lemon model --provider anthropic
 lemon gateway setup
 lemon doctor
+
+# Source checkout
+./bin/lemon setup
+./bin/lemon model --provider anthropic
+./bin/lemon gateway setup
+./bin/lemon doctor
 ```
 
-From a source checkout, use the equivalent Mix adapters:
-
-```bash
-mix lemon.setup
-mix lemon.onboard anthropic
-mix lemon.setup gateway
-mix lemon.doctor
-```
+The source wrapper delegates to the corresponding Mix tasks; direct Mix
+adapters remain available for development.
 
 ## Gateway Setup
 
-`mix lemon.setup gateway` configures supported messaging gateways. The picker
+`./bin/lemon gateway setup` configures supported messaging gateways. The picker
 offers both adapters:
 
 - `telegram` stores a Telegram bot token in encrypted secrets and verifies it
@@ -52,14 +53,14 @@ offers both adapters:
 
 ```bash
 # Choose Telegram or Discord interactively.
-mix lemon.setup gateway
+./bin/lemon gateway setup
 
 # Run a specific adapter.
-mix lemon.setup gateway telegram
-mix lemon.setup gateway discord
+./bin/lemon gateway setup telegram
+./bin/lemon gateway setup discord
 
 # Supply Discord setup inputs without prompts.
-mix lemon.setup gateway discord --non-interactive \
+./bin/lemon gateway setup discord --non-interactive \
   --token "$DISCORD_BOT_TOKEN" \
   --default-channel-id 123456789012345678 \
   --allowed-channel-id 234567890123456789
@@ -101,19 +102,19 @@ lemon model --provider github-copilot --skip-enable-models
 lemon model --provider github-copilot --token <token>
 ```
 
-From source, the equivalent Mix task and provider-specific aliases remain available:
+From a source checkout, pass the same provider arguments through the wrapper:
 
 ```bash
-mix lemon.onboard.antigravity --token <token> --set-default --model gemini-3-pro-high
-mix lemon.onboard.gemini --project-id your-gcp-project
-mix lemon.onboard.gemini --token <token> --set-default --model gemini-2.5-pro
-mix lemon.onboard.codex --token <token> --set-default --model gpt-5.2
-mix lemon.onboard.codex --token <token> --config-path /path/to/config.toml
-mix lemon.onboard zai --token <token> --set-default --model glm-5
-mix lemon.onboard minimax --token <token> --set-default --model MiniMax-M2.7
-mix lemon.onboard.copilot --enterprise-domain company.ghe.com
-mix lemon.onboard.copilot --skip-enable-models
-mix lemon.onboard.copilot --token <token>
-mix lemon.onboard.copilot --token <token> --set-default --model gpt-5
-mix lemon.onboard.copilot --token <token> --config-path /path/to/config.toml
+./bin/lemon model --provider antigravity --token <token> --set-default --model gemini-3-pro-high
+./bin/lemon model --provider gemini --project-id your-gcp-project
+./bin/lemon model --provider gemini --token <token> --set-default --model gemini-2.5-pro
+./bin/lemon model --provider openai-codex --token <token> --set-default --model gpt-5.2
+./bin/lemon model --provider openai-codex --token <token> --config-path /path/to/config.toml
+./bin/lemon model --provider zai --token <token> --set-default --model glm-5
+./bin/lemon model --provider minimax --token <token> --set-default --model MiniMax-M2.7
+./bin/lemon model --provider github-copilot --enterprise-domain company.ghe.com
+./bin/lemon model --provider github-copilot --skip-enable-models
+./bin/lemon model --provider github-copilot --token <token>
+./bin/lemon model --provider github-copilot --token <token> --set-default --model gpt-5
+./bin/lemon model --provider github-copilot --token <token> --config-path /path/to/config.toml
 ```
