@@ -90,35 +90,66 @@ defmodule CodingAgent.PythonRepl.Registry do
       max_live_kernels: max,
       idle_timeout_ms: idle,
       reap_interval_ms: interval,
+      reap_timer_token: nil,
       now_ms: now_ms
     }
 
-    if idle != :infinity, do: Process.send_after(self(), :reap_idle, interval)
-    {:ok, state}
+    {:ok, maybe_schedule_reap(state)}
   end
 
   @impl true
   def handle_call({:acquire, key, owner, worker_opts}, {caller, _tag}, state) do
-    ekey = entry_key(state, key, owner)
+    with {:ok, max_live_kernels, idle_timeout_ms} <- acquire_bounds(state, worker_opts) do
+      ekey = entry_key(state, key, owner)
 
-    case Map.get(state.entries, ekey) do
-      nil ->
-        start_entry(state, ekey, key, owner, caller, worker_opts)
+      case Map.get(state.entries, ekey) do
+        nil ->
+          start_entry(
+            state,
+            ekey,
+            key,
+            owner,
+            caller,
+            worker_opts,
+            max_live_kernels,
+            idle_timeout_ms
+          )
 
-      entry ->
-        case status(entry, state.session_mod) do
-          %{phase: phase} when phase in @attachable_phases ->
-            state = state |> attach_owner(ekey, owner) |> touch(ekey)
-            {state, lease} = checkout(state, ekey, owner, caller)
-            entry = Map.fetch!(state.entries, ekey)
-            {:reply, {:ok, allocation(entry, true, state.session_mod, lease)}, state}
+        entry ->
+          case status(entry, state.session_mod) do
+            %{phase: phase} when phase in @attachable_phases ->
+              state =
+                state
+                |> attach_owner(ekey, owner)
+                |> put_idle_timeout(ekey, idle_timeout_ms)
+                |> touch(ekey)
+                |> maybe_schedule_reap()
 
-          _ ->
-            case stop_entry(state, ekey) do
-              {:ok, state} -> start_entry(state, ekey, key, owner, caller, worker_opts)
-              {:error, reason, state} -> {:reply, {:error, reason}, state}
-            end
-        end
+              {state, lease} = checkout(state, ekey, owner, caller)
+              entry = Map.fetch!(state.entries, ekey)
+              {:reply, {:ok, allocation(entry, true, state.session_mod, lease)}, state}
+
+            _ ->
+              case stop_entry(state, ekey) do
+                {:ok, state} ->
+                  start_entry(
+                    state,
+                    ekey,
+                    key,
+                    owner,
+                    caller,
+                    worker_opts,
+                    max_live_kernels,
+                    idle_timeout_ms
+                  )
+
+                {:error, reason, state} ->
+                  {:reply, {:error, reason}, state}
+              end
+          end
+      end
+    else
+      {:error, reason} -> {:reply, {:error, reason}, state}
     end
   end
 
@@ -191,32 +222,14 @@ defmodule CodingAgent.PythonRepl.Registry do
   end
 
   @impl true
-  def handle_info(:reap_idle, state) do
-    now = now_ms(state)
+  def handle_info(:reap_idle, state), do: {:noreply, reap_idle(state)}
 
-    state =
-      Enum.reduce(Map.keys(state.entries), state, fn ekey, acc ->
-        case Map.get(acc.entries, ekey) do
-          nil ->
-            acc
-
-          entry ->
-            current = status(entry, acc.session_mod)
-
-            if current == :unreachable or
-                 (expired?(entry, acc, now) and evictable?(entry, current)) do
-              stop_entry_or_keep(acc, ekey)
-            else
-              acc
-            end
-        end
-      end)
-
-    if state.idle_timeout_ms != :infinity,
-      do: Process.send_after(self(), :reap_idle, state.reap_interval_ms)
-
-    {:noreply, state}
+  def handle_info({:reap_idle, token}, %{reap_timer_token: token} = state) do
+    state = %{state | reap_timer_token: nil}
+    {:noreply, state |> reap_idle() |> maybe_schedule_reap()}
   end
+
+  def handle_info({:reap_idle, _stale_token}, state), do: {:noreply, state}
 
   def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
     case Map.get(state.worker_refs, ref) do
@@ -237,8 +250,17 @@ defmodule CodingAgent.PythonRepl.Registry do
     end
   end
 
-  defp start_entry(state, ekey, key, owner, caller, worker_opts) do
-    with {:ok, state} <- admit(state) do
+  defp start_entry(
+         state,
+         ekey,
+         key,
+         owner,
+         caller,
+         worker_opts,
+         max_live_kernels,
+         idle_timeout_ms
+       ) do
+    with {:ok, state} <- admit(state, max_live_kernels) do
       generation = state.next_generation
       opts = worker_options(worker_opts, key, generation)
 
@@ -254,7 +276,8 @@ defmodule CodingAgent.PythonRepl.Registry do
               generation: generation,
               owners: MapSet.new(),
               leases: MapSet.new(),
-              last_use_ms: now_ms(state)
+              last_use_ms: now_ms(state),
+              idle_timeout_ms: idle_timeout_ms
             }
 
             state = %{
@@ -271,6 +294,7 @@ defmodule CodingAgent.PythonRepl.Registry do
 
             state = attach_owner(state, ekey, owner)
             {state, lease} = checkout(state, ekey, owner, caller)
+            state = maybe_schedule_reap(state)
             entry = Map.fetch!(state.entries, ekey)
             {:reply, {:ok, allocation(entry, false, state.session_mod, lease)}, state}
 
@@ -288,14 +312,20 @@ defmodule CodingAgent.PythonRepl.Registry do
     end
   end
 
-  defp admit(state) when map_size(state.entries) < state.max_live_kernels,
-    do: {:ok, state}
+  defp admit(state, max_live_kernels)
+       when map_size(state.entries) < max_live_kernels,
+       do: {:ok, state}
 
-  defp admit(state) do
+  defp admit(state, max_live_kernels) do
     with {:ok, state} <- discard_nonlive_entries(state) do
+      live = map_size(state.entries)
+
       cond do
-        map_size(state.entries) < state.max_live_kernels ->
+        live < max_live_kernels ->
           {:ok, state}
+
+        live > max_live_kernels ->
+          {:error, :capacity_exhausted, state}
 
         ekey = lru_quiescent(state) ->
           stop_entry(state, ekey)
@@ -622,6 +652,23 @@ defmodule CodingAgent.PythonRepl.Registry do
     end)
   end
 
+  defp acquire_bounds(state, worker_opts) do
+    max_live_kernels = Keyword.get(worker_opts, :max_live_kernels, state.max_live_kernels)
+    idle_timeout_ms = Keyword.get(worker_opts, :idle_timeout_ms, state.idle_timeout_ms)
+
+    cond do
+      not (is_integer(max_live_kernels) and max_live_kernels > 0) ->
+        {:error, :invalid_request}
+
+      idle_timeout_ms != :infinity and
+          not (is_integer(idle_timeout_ms) and idle_timeout_ms > 0) ->
+        {:error, :invalid_request}
+
+      true ->
+        {:ok, max_live_kernels, idle_timeout_ms}
+    end
+  end
+
   defp worker_options(worker_opts, key, generation) do
     extras =
       worker_opts
@@ -664,6 +711,9 @@ defmodule CodingAgent.PythonRepl.Registry do
   defp touch(state, ekey),
     do: update_in(state.entries[ekey].last_use_ms, fn _ -> now_ms(state) end)
 
+  defp put_idle_timeout(state, ekey, idle_timeout_ms),
+    do: put_in(state.entries[ekey].idle_timeout_ms, idle_timeout_ms)
+
   defp live?(%{phase: phase}) when phase in @attachable_phases, do: true
   defp live?(_), do: false
 
@@ -675,8 +725,46 @@ defmodule CodingAgent.PythonRepl.Registry do
   defp evictable?(entry, current),
     do: MapSet.size(entry.leases) == 0 and quiescent_status?(current)
 
-  defp expired?(entry, state, now),
-    do: state.idle_timeout_ms != :infinity and now - entry.last_use_ms >= state.idle_timeout_ms
+  defp expired?(entry, _state, now),
+    do:
+      entry.idle_timeout_ms != :infinity and
+        now - entry.last_use_ms >= entry.idle_timeout_ms
+
+  defp reap_idle(state) do
+    now = now_ms(state)
+
+    Enum.reduce(Map.keys(state.entries), state, fn ekey, acc ->
+      case Map.get(acc.entries, ekey) do
+        nil ->
+          acc
+
+        entry ->
+          current = status(entry, acc.session_mod)
+
+          if current == :unreachable or
+               (expired?(entry, acc, now) and evictable?(entry, current)) do
+            stop_entry_or_keep(acc, ekey)
+          else
+            acc
+          end
+      end
+    end)
+  end
+
+  defp maybe_schedule_reap(%{reap_timer_token: nil} = state) do
+    if state.idle_timeout_ms != :infinity or
+         Enum.any?(state.entries, fn {_ekey, entry} ->
+           entry.idle_timeout_ms != :infinity
+         end) do
+      token = make_ref()
+      Process.send_after(self(), {:reap_idle, token}, state.reap_interval_ms)
+      %{state | reap_timer_token: token}
+    else
+      state
+    end
+  end
+
+  defp maybe_schedule_reap(state), do: state
 
   defp empty_phases,
     do: %{starting: 0, idle: 0, running: 0, cancelling: 0, stopping: 0, unreachable: 0}

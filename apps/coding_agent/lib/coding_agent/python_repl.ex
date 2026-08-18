@@ -20,7 +20,8 @@ defmodule CodingAgent.PythonRepl do
          {:ok, owner} <- owner(opts[:owner_pid]),
          {:ok, request} <- request(opts),
          {:ok, timeout} <- timeout(opts[:timeout_ms]),
-         {:ok, allocation} <- acquire(registry, opts, key, owner) do
+         {:ok, bounds} <- bounds(opts),
+         {:ok, allocation} <- acquire(registry, opts, bounds, key, owner) do
       try do
         execute_once(allocation, request, timeout)
       after
@@ -74,10 +75,11 @@ defmodule CodingAgent.PythonRepl do
     end
   end
 
-  defp acquire(registry, opts, key, owner) do
+  defp acquire(registry, opts, bounds, key, owner) do
     worker_opts =
       opts
       |> Map.take([:runner_path, :helper_source, :max_queued_cells, :max_output_bytes])
+      |> Map.merge(bounds)
       |> Map.to_list()
 
     try do
@@ -132,5 +134,26 @@ defmodule CodingAgent.PythonRepl do
 
   defp timeout(value) when is_integer(value) and value > 0, do: {:ok, value}
   defp timeout(_), do: {:error, :invalid_request}
+
+  defp bounds(opts) do
+    with {:ok, max_live} <- optional_positive(opts, :max_live_kernels),
+         {:ok, idle_timeout} <- optional_positive(opts, :kernel_idle_timeout_ms) do
+      {:ok,
+       %{}
+       |> maybe_put_bound(:max_live_kernels, max_live)
+       |> maybe_put_bound(:idle_timeout_ms, idle_timeout)}
+    end
+  end
+
+  defp optional_positive(opts, key) do
+    case Map.fetch(opts, key) do
+      :error -> {:ok, :default}
+      {:ok, value} when is_integer(value) and value > 0 -> {:ok, value}
+      {:ok, _value} -> {:error, :invalid_request}
+    end
+  end
+
+  defp maybe_put_bound(bounds, _key, :default), do: bounds
+  defp maybe_put_bound(bounds, key, value), do: Map.put(bounds, key, value)
   defp error(reason), do: %{reason: reason, state_retained: false}
 end

@@ -342,6 +342,43 @@ defmodule CodingAgent.PythonRepl.RegistryTest do
     release(registry, second)
   end
 
+  test "a lower per-request cap blocks admission until live entries fall below it", %{
+    registry: registry,
+    key: first_key,
+    owner: first_owner
+  } do
+    second_key = key("request-cap-second")
+    second_owner = owner()
+
+    {:ok, first} = Registry.acquire(registry, first_key, first_owner)
+    {:ok, second} = Registry.acquire(registry, second_key, second_owner)
+    release(registry, first)
+    release(registry, second)
+
+    capped_key = key("request-cap-capped")
+    capped_owner = owner()
+
+    capped_request = %{
+      key: capped_key,
+      owner_pid: capped_owner,
+      code: "1",
+      timeout_ms: 100,
+      max_live_kernels: 1,
+      kernel_idle_timeout_ms: 777,
+      registry: registry
+    }
+
+    assert {:error, %{reason: :capacity_exhausted, state_retained: false}} =
+             PythonRepl.execute(capped_request)
+
+    assert Registry.snapshot(registry).capacity == %{live: 2, max: 16, available: 14}
+    assert {:ok, %{reset_performed: true}} = Registry.reset(registry, first_key, first_owner)
+    assert {:ok, %{reset_performed: true}} = Registry.reset(registry, second_key, second_owner)
+
+    assert {:ok, %{kernel_reused: false}} = PythonRepl.execute(capped_request)
+    assert :sys.get_state(registry).entries[capped_key].idle_timeout_ms == 777
+  end
+
   test "stale lease release cannot unreserve a replacement generation", %{
     sup: sup,
     key: key,
@@ -413,6 +450,58 @@ defmodule CodingAgent.PythonRepl.RegistryTest do
     send(registry, :reap_idle)
     _ = Registry.snapshot(registry)
     assert_receive {:DOWN, ^worker_ref, :process, _pid, _reason}
+  end
+
+  test "idle reaping uses each entry's request timeout", %{
+    sup: sup,
+    owner: first_owner
+  } do
+    clock = start_clock(1_000)
+    registry = String.to_atom("repl_entry_reaper_#{System.unique_integer([:positive])}")
+
+    start_supervised!(
+      {Registry,
+       name: registry,
+       session_supervisor: sup,
+       session_mod: FakeSession,
+       idle_timeout_ms: :infinity,
+       reap_interval_ms: 60_000,
+       now_ms: fn -> clock_now(clock) end},
+      id: registry
+    )
+
+    short_key = key("short-idle")
+    long_key = key("long-idle")
+
+    {:ok, short} =
+      Registry.acquire(registry, short_key, first_owner, idle_timeout_ms: 10)
+
+    {:ok, long} =
+      Registry.acquire(registry, long_key, owner(), idle_timeout_ms: 100)
+
+    FakeSession.set_status(short.pid, :idle)
+    FakeSession.set_status(long.pid, :idle)
+    release(registry, short)
+    release(registry, long)
+
+    state = :sys.get_state(registry)
+    assert state.entries[short_key].idle_timeout_ms == 10
+    assert state.entries[long_key].idle_timeout_ms == 100
+
+    short_ref = Process.monitor(short.pid)
+    long_ref = Process.monitor(long.pid)
+    advance_clock(clock, 10)
+    send(registry, :reap_idle)
+    _ = Registry.snapshot(registry)
+
+    assert_receive {:DOWN, ^short_ref, :process, _pid, _reason}
+    refute_receive {:DOWN, ^long_ref, :process, _pid, _reason}
+    assert Process.alive?(long.pid)
+
+    advance_clock(clock, 90)
+    send(registry, :reap_idle)
+    _ = Registry.snapshot(registry)
+    assert_receive {:DOWN, ^long_ref, :process, _pid, _reason}
   end
 
   test "malformed, dead, generation-mismatched, and key-mismatched status is replaced", %{
@@ -537,6 +626,39 @@ defmodule CodingAgent.PythonRepl.RegistryTest do
         ] do
       assert {:error, %{reason: :invalid_request, state_retained: false}} =
                PythonRepl.execute(Map.merge(base_opts, timeout_opts))
+    end
+
+    assert Director.starts() == []
+    state = :sys.get_state(registry)
+    assert state.entries == %{}
+    assert state.lease_refs == %{}
+  end
+
+  test "facade rejects non-positive request bounds before acquiring a lease", %{
+    registry: registry,
+    key: key,
+    owner: owner
+  } do
+    base_opts = %{
+      key: key,
+      owner_pid: owner,
+      code: "1",
+      timeout_ms: 100,
+      registry: registry
+    }
+
+    for {field, value} <- [
+          {:max_live_kernels, nil},
+          {:max_live_kernels, 0},
+          {:max_live_kernels, -1},
+          {:max_live_kernels, :infinity},
+          {:kernel_idle_timeout_ms, nil},
+          {:kernel_idle_timeout_ms, 0},
+          {:kernel_idle_timeout_ms, -1},
+          {:kernel_idle_timeout_ms, :infinity}
+        ] do
+      assert {:error, %{reason: :invalid_request, state_retained: false}} =
+               PythonRepl.execute(Map.put(base_opts, field, value))
     end
 
     assert Director.starts() == []
