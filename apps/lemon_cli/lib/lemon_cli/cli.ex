@@ -174,14 +174,14 @@ defmodule LemonCli.CLI do
     end
   end
 
-  defp help_requested?(args), do: Enum.any?(args, &(&1 in ["--help", "-h", "help"]))
-
   defp dispatch([command | _rest]) do
     IO.puts(:stderr, "Unknown command: #{command}")
     IO.puts(:stderr, "")
     print_usage(:stderr)
     @exit_usage
   end
+
+  defp help_requested?(args), do: Enum.any?(args, &(&1 in ["--help", "-h", "help"]))
 
   defp run_command("setup", args), do: run_setup(args)
   defp run_command("model", args), do: run_model(args)
