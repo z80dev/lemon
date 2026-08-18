@@ -215,6 +215,7 @@ defmodule CodingAgent.PythonRepl.Registry do
          available: max(state.max_live_kernels - map_size(state.entries), 0)
        },
        phases: phases,
+       inflight_cells: map_size(state.lease_refs),
        owners: map_size(state.owner_entries),
        forked_owners: map_size(state.owner_forks),
        reap: %{idle_timeout_ms: state.idle_timeout_ms, interval_ms: state.reap_interval_ms}

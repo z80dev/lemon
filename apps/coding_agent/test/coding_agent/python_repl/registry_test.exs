@@ -128,6 +128,47 @@ defmodule CodingAgent.PythonRepl.RegistryTest do
     Enum.each(allocations, &release(registry, &1))
   end
 
+  test "snapshot exposes only bounded aggregate counts across all live phases", %{
+    registry: registry,
+    key: starting_key,
+    owner: first_owner
+  } do
+    second_owner = owner()
+
+    {:ok, starting} = Registry.acquire(registry, starting_key, first_owner)
+    {:ok, idle} = Registry.acquire(registry, key("snapshot-idle"), first_owner)
+    {:ok, running} = Registry.acquire(registry, key("snapshot-running"), second_owner)
+    {:ok, cancelling} = Registry.acquire(registry, key("snapshot-cancelling"), second_owner)
+    {:ok, stopping} = Registry.acquire(registry, key("snapshot-stopping"), second_owner)
+    {:ok, unreachable} = Registry.acquire(registry, key("snapshot-unreachable"), second_owner)
+
+    FakeSession.set_status(idle.pid, :idle)
+    FakeSession.set_status(running.pid, :running, 0, "snapshot-running")
+    FakeSession.set_status(cancelling.pid, :cancelling, 0, "snapshot-cancelling")
+    FakeSession.set_status(stopping.pid, :stopping, 0, "snapshot-stopping")
+    FakeSession.update_status(unreachable.pid, %{process_alive: false})
+
+    Enum.each([idle, running, cancelling, stopping, unreachable], &release(registry, &1))
+
+    assert Registry.snapshot(registry) == %{
+             capacity: %{live: 6, max: 16, available: 10},
+             phases: %{
+               starting: 1,
+               idle: 1,
+               running: 1,
+               cancelling: 1,
+               stopping: 1,
+               unreachable: 1
+             },
+             inflight_cells: 1,
+             owners: 2,
+             forked_owners: 0,
+             reap: %{idle_timeout_ms: :infinity, interval_ms: 60_000}
+           }
+
+    release(registry, starting)
+  end
+
   test "sole-owner reset invalidates before the next generation", %{
     registry: registry,
     key: key,
@@ -227,9 +268,14 @@ defmodule CodingAgent.PythonRepl.RegistryTest do
     assert {:ok, _result} = Registry.reset(registry, key, owner)
     {:ok, replacement} = Registry.acquire(registry, key, owner)
 
+    expected_snapshot = Registry.snapshot(registry)
+    assert expected_snapshot.capacity == %{live: 1, max: 16, available: 15}
+    assert expected_snapshot.phases.starting == 1
+    assert expected_snapshot.inflight_cells == 1
+
     send(registry, {:DOWN, make_ref(), :process, first.pid, :normal})
     send(registry, {:DOWN, old_ref, :process, first.pid, :normal})
-    _ = Registry.snapshot(registry)
+    assert Registry.snapshot(registry) == expected_snapshot
 
     assert {:ok, same} = Registry.acquire(registry, key, owner)
     assert same.pid == replacement.pid
@@ -435,7 +481,10 @@ defmodule CodingAgent.PythonRepl.RegistryTest do
     FakeSession.set_status(allocation.pid, :idle)
     advance_clock(clock, 1)
     send(registry, :reap_idle)
-    _ = Registry.snapshot(registry)
+    leased_snapshot = Registry.snapshot(registry)
+    assert leased_snapshot.capacity.live == 1
+    assert leased_snapshot.phases.idle == 1
+    assert leased_snapshot.inflight_cells == 1
     assert Process.alive?(allocation.pid)
 
     release(registry, allocation)
@@ -443,12 +492,31 @@ defmodule CodingAgent.PythonRepl.RegistryTest do
 
     worker_ref = Process.monitor(allocation.pid)
     send(registry, :reap_idle)
-    _ = Registry.snapshot(registry)
+    idle_snapshot = Registry.snapshot(registry)
+    assert idle_snapshot.capacity.live == 1
+    assert idle_snapshot.phases.idle == 1
+    assert idle_snapshot.inflight_cells == 0
     assert Process.alive?(allocation.pid)
 
     advance_clock(clock, 1)
     send(registry, :reap_idle)
-    _ = Registry.snapshot(registry)
+
+    assert Registry.snapshot(registry) == %{
+             capacity: %{live: 0, max: 16, available: 16},
+             phases: %{
+               starting: 0,
+               idle: 0,
+               running: 0,
+               cancelling: 0,
+               stopping: 0,
+               unreachable: 0
+             },
+             inflight_cells: 0,
+             owners: 0,
+             forked_owners: 0,
+             reap: %{idle_timeout_ms: 1, interval_ms: 60_000}
+           }
+
     assert_receive {:DOWN, ^worker_ref, :process, _pid, _reason}
   end
 
@@ -608,6 +676,14 @@ defmodule CodingAgent.PythonRepl.RegistryTest do
     state_after = :sys.get_state(registry)
     assert state_after.entries[key].last_use_ms == 1_001
     assert MapSet.size(state_after.entries[key].leases) == 0
+  end
+
+  test "facade normalizes an unavailable registry without exposing the exit reason" do
+    missing_registry =
+      String.to_atom("missing_repl_registry_#{System.unique_integer([:positive])}")
+
+    assert {:error, %{reason: :registry_unavailable, state_retained: false}} =
+             PythonRepl.snapshot(missing_registry)
   end
 
   test "facade rejects unbounded or non-positive timeouts before acquiring a lease", %{

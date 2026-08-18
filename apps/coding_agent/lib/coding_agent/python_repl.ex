@@ -66,12 +66,12 @@ defmodule CodingAgent.PythonRepl do
     end
   end
 
-  @spec snapshot(GenServer.server()) :: {:ok, map()} | {:error, :registry_unavailable}
+  @spec snapshot(GenServer.server()) :: {:ok, map()} | {:error, map()}
   def snapshot(registry \\ Registry) do
     try do
       {:ok, Registry.snapshot(registry)}
     catch
-      :exit, _ -> {:error, :registry_unavailable}
+      :exit, _ -> {:error, error(:registry_unavailable)}
     end
   end
 
