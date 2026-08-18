@@ -1534,10 +1534,9 @@ fi
 #    a newline fails the check even though the prose is unchanged. Prefer short
 #    tokens (a flag, a module name, a config key) over sentence fragments; if a
 #    phrase must be pinned, keep it short enough to survive a rewrap.
-# 2. The canonical home of the script-send reference is
-#    apps/lemon_channels/README.md, next to the code. The root README only has
-#    to point at it — the reference used to be pinned in both, which made the
-#    root README un-editable without tripping this check.
+# 2. The canonical script-send reference is
+#    apps/lemon_channels/README.md, next to the code. The root README carries
+#    one canonical Telegram send example and links to the full reference.
 if python3 - "$ROOT" <<'PYEOF'
 from pathlib import Path
 import sys
@@ -1558,7 +1557,7 @@ files = {
     "channels_agents": root / "apps/lemon_channels/AGENTS.md",
     "config_docs": root / "docs/config.md",
     "config_example": root / "examples/config.example.toml",
-    "gateway_config": root / "apps/lemon_core/lib/lemon_core/config/gateway.ex",
+    "discord_config": root / "apps/lemon_channels/lib/lemon_channels/adapters/discord/config.ex",
     "parity_matrix": root / "docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md",
     "scorecard": root / "docs/plans/lemon-hermes-agent-harness-parity-scorecard.md",
 }
@@ -1644,7 +1643,7 @@ contracts = [
         ],
     ),
     (
-        "root README points at the script-send reference",
+        "root README script-send entry point",
         [
             ("root_readme", "./bin/lemon send --to telegram:<chat_id>"),
             ("root_readme", "apps/lemon_channels/README.md"),
@@ -1724,7 +1723,7 @@ contracts = [
             ("config_example", "default_chat_id"),
             ("config_example", "default_account_id"),
             ("config_example", "default_channel_id"),
-            ("gateway_config", "default_channel_id"),
+            ("discord_config", "default_channel_id"),
         ],
     ),
     (

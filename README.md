@@ -313,7 +313,11 @@ Use the source wrapper for the corresponding commands:
 ./bin/lemon config validate
 ./bin/lemon secrets status
 ./bin/lemon channels
+./bin/lemon send --to telegram:<chat_id> "deploy finished"
 ```
+
+For target forms, attachments, default targets, and delivery output, see the
+[script-send reference](apps/lemon_channels/README.md#script-notifications).
 
 ## Arenas
 
