@@ -140,6 +140,55 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
     end
   end
 
+  test "caps each sweep and continues through higher request ids", %{rpc_dir: rpc_dir} do
+    for id <- 1..7, do: write_request(rpc_dir, id, "echo", %{"value" => "request #{id}"})
+
+    ctx = ctx(rpc_dir, max_requests_per_sweep: 3)
+
+    stats = Rpc.process_pending(ctx, Rpc.initial_stats())
+    assert stats.calls == 3
+
+    for id <- 1..3, do: assert(%{"id" => ^id, "ok" => true} = read_response(rpc_dir, id))
+    for id <- 4..7, do: refute(File.exists?(Path.join(rpc_dir, "res-#{id}.json")))
+
+    stats = Rpc.process_pending(ctx, stats)
+    assert stats.calls == 6
+
+    for id <- 4..6, do: assert(%{"id" => ^id, "ok" => true} = read_response(rpc_dir, id))
+    refute File.exists?(Path.join(rpc_dir, "res-7.json"))
+
+    stats = Rpc.process_pending(ctx, stats)
+    assert stats.calls == 7
+    assert %{"id" => 7, "ok" => true} = read_response(rpc_dir, 7)
+    assert Path.wildcard(Path.join(rpc_dir, "req-*.json")) == []
+  end
+
+  test "caps wrong-token denials before request parsing can reach dispatch", %{rpc_dir: rpc_dir} do
+    for id <- 1..7,
+        do: write_request(rpc_dir, id, "echo", %{"value" => "ignored"}, @stale_token)
+
+    ctx = ctx(rpc_dir, max_requests_per_sweep: 3)
+
+    stats = Rpc.process_pending(ctx, Rpc.initial_stats())
+    assert stats.calls == 0
+    assert stats.denied == 3
+
+    for id <- 1..3 do
+      assert %{"id" => ^id, "ok" => false, "error" => "rpc authentication failed"} =
+               read_response(rpc_dir, id)
+    end
+
+    for id <- 4..7, do: refute(File.exists?(Path.join(rpc_dir, "res-#{id}.json")))
+
+    stats = Rpc.process_pending(ctx, stats)
+    assert stats.denied == 6
+    stats = Rpc.process_pending(ctx, stats)
+    assert stats.denied == 7
+
+    assert %{"id" => 7, "ok" => false, "error" => "rpc authentication failed"} =
+             read_response(rpc_dir, 7)
+  end
+
   describe "serve/2 rejections" do
     test "malformed json is denied without consuming a call", %{rpc_dir: rpc_dir} do
       pump = start_pump(ctx(rpc_dir))
@@ -459,6 +508,7 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
       approval_context: Keyword.get(overrides, :approval_context),
       max_calls: Keyword.get(overrides, :max_calls, 100),
       max_result_bytes: Keyword.get(overrides, :max_result_bytes, 5_242_880),
+      max_requests_per_sweep: Keyword.get(overrides, :max_requests_per_sweep, 100),
       signal: Keyword.get(overrides, :signal),
       rpc_dir: rpc_dir,
       token: Keyword.get(overrides, :token, @token),

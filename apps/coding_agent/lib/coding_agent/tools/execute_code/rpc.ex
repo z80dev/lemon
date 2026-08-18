@@ -28,16 +28,19 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   @replay_error "rpc request already processed"
   @unexpected_error "rpc request failed"
 
+  @default_max_requests_per_sweep 100
+
   @type ctx :: %{
-          tools: %{String.t() => LemonAgent.Types.AgentTool.t()},
-          tool_policy: map() | nil,
-          approval_context: map() | nil,
-          max_calls: pos_integer(),
-          max_result_bytes: pos_integer(),
-          signal: reference() | nil,
-          rpc_dir: String.t(),
-          token: binary(),
-          poll_interval_ms: pos_integer()
+          required(:tools) => %{String.t() => LemonAgent.Types.AgentTool.t()},
+          required(:tool_policy) => map() | nil,
+          required(:approval_context) => map() | nil,
+          required(:max_calls) => pos_integer(),
+          required(:max_result_bytes) => pos_integer(),
+          required(:signal) => reference() | nil,
+          required(:rpc_dir) => String.t(),
+          required(:token) => binary(),
+          required(:poll_interval_ms) => pos_integer(),
+          optional(:max_requests_per_sweep) => pos_integer()
         }
 
   @type stats :: %{
@@ -67,6 +70,11 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   @doc """
   Serve RPC requests until the script task finishes.
 
+  Each poll processes at most `:max_requests_per_sweep` requests (100 by
+  default). Requests are selected in ascending id order; every selected file,
+  including malformed and unauthenticated requests, is consumed, so later
+  polls continue through the remaining files without reprocessing the head.
+
   Returns `{:ok, task_result, stats}` when the task returned normally, or
   `{:exit, reason, stats}` when it died.
   """
@@ -76,14 +84,20 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   end
 
   @doc """
-  Process one snapshot of pending requests and return updated statistics.
+  Process one bounded snapshot of pending requests and return updated statistics.
+
+  At most `:max_requests_per_sweep` requests are selected in ascending id
+  order (100 by default). Each selected file is consumed whether it
+  authenticates or not, so the next sweep continues with the remaining ids.
+  Authentication still occurs after selection, before any budget accounting or
+  tool dispatch.
 
   This is the shared polling entry point for the persistent-cell RPC server.
   """
   @spec process_pending(ctx(), stats()) :: stats()
   def process_pending(ctx, stats) do
     ctx.rpc_dir
-    |> pending_requests()
+    |> pending_requests(max_requests_per_sweep(ctx))
     |> Enum.reduce(stats, fn {id, path}, acc -> process_request_path(id, path, ctx, acc) end)
   end
 
@@ -132,21 +146,36 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
     end
   end
 
-  defp pending_requests(rpc_dir) do
+  defp pending_requests(rpc_dir, max_requests_per_sweep) do
     rpc_dir
     |> Path.join("req-*.json")
     |> Path.wildcard()
-    |> Enum.flat_map(fn path ->
+    |> Enum.map(fn path ->
       case Integer.parse(Path.basename(path, ".json") |> String.replace_prefix("req-", "")) do
-        {id, ""} ->
-          [{id, path}]
-
-        _ ->
-          consume_request(path)
-          []
+        {id, ""} -> {:request, id, path}
+        _ -> {:invalid, path}
       end
     end)
-    |> Enum.sort_by(fn {id, path} -> {id, path} end)
+    |> Enum.sort_by(fn
+      {:request, id, path} -> {0, id, path}
+      {:invalid, path} -> {1, path}
+    end)
+    |> Enum.take(max_requests_per_sweep)
+    |> Enum.flat_map(fn
+      {:request, id, path} -> [{id, path}]
+      {:invalid, path} -> consume_request(path) && []
+    end)
+  end
+
+  defp max_requests_per_sweep(ctx) do
+    case Map.get(ctx, :max_requests_per_sweep, @default_max_requests_per_sweep) do
+      max_requests_per_sweep
+      when is_integer(max_requests_per_sweep) and max_requests_per_sweep > 0 ->
+        max_requests_per_sweep
+
+      _ ->
+        @default_max_requests_per_sweep
+    end
   end
 
   defp process_request_path(id, request, ctx, stats) do

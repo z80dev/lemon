@@ -34,17 +34,19 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
       stats = RpcServer.stats(server)
       :ok = RpcServer.stop(server)
 
-    * `start_link/2` validates the ctx, links and monitors the calling
-      process (the future session integration), and schedules the first poll.
+    * `start_link/2` validates the ctx, is linked to its `start_link/2`
+      parent, monitors the configured caller (the future session integration),
+      and schedules the first poll.
     * Every `poll_interval_ms` the server checks the abort signal and then
-      runs exactly one sweep; once aborted it retains its final stats without
+      runs one bounded sweep of at most `:max_requests_per_sweep` requests
+      (100 by default); once aborted it retains its final stats without
       dispatching new requests. Sweeps never overlap, so accounting stays
       single-threaded.
     * `stop/2` is synchronous and idempotent. Every stop path — explicit
       stop, caller death, supervisor shutdown — funnels through
-      `terminate/2`, which removes the protocol files (bounded, files and
-      links only; the `0700` workspace directory itself belongs to the
-      workspace teardown).
+      `terminate/2`, which materializes the directory entries and then removes
+      at most 10,000 protocol files (files and links only; the `0700`
+      workspace directory itself belongs to the workspace teardown).
     * The process is `restart: :temporary`: a dead cell server is never
       resurrected against a directory its token has already rotated out of.
 
@@ -60,17 +62,20 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
   option so tests can substitute a fake. The server treats pump stats as
   opaque and only calls:
 
-    * `initial_stats/0` — zeroed pump statistics.
     * `process_pending(ctx, stats)` — one bounded sweep over `ctx.rpc_dir`.
-      For every pending `req-<id>.json` it verifies the request `token`
-      against `ctx.token` in constant time *before* the request is counted or
-      dispatched (stale, wrong, or missing tokens are denied and never
-      appear in results or logs), enforces the call and result-byte budgets,
-      runs allowed tools through the current `ToolPolicy`/`ToolExecutor`
-      approval path, writes `res-<id>.json` atomically, and returns updated
-      stats. The stats carry the pump's replay-tracking state, so a request
-      id that was already answered — including one replayed after its
-      response file was consumed — is refused and never re-dispatched.
+      It selects at most `ctx.max_requests_per_sweep` requests (100 by
+      default) in ascending id order before decoding or authenticating their
+      bodies. Every selected request is consumed, including stale, wrong, or
+      missing tokens, so the next sweep continues through the remaining files.
+      Authentication is constant-time and precedes any request counting,
+      budget enforcement, or dispatch (stale, wrong, or missing tokens are
+      denied and never appear in results or logs), enforces the call and
+      result-byte budgets, runs allowed tools through the current
+      `ToolPolicy`/`ToolExecutor` approval path, writes `res-<id>.json`
+      atomically, and returns updated stats. The stats carry the pump's
+      replay-tracking state, so a request id that was already answered —
+      including one replayed after its response was consumed — is refused and
+      never re-dispatched.
     * `process_request(id, ctx, stats)` — the single-request building block
       shared with `Rpc.serve/2`; not called by this server, which always
       sweeps via `process_pending/2`.
@@ -95,10 +100,11 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
   @stop_timeout_ms 5_000
   @stats_timeout_ms 5_000
 
-  # Stop-time cleanup removes every file the cell dropped in the rpc dir, but
-  # it must stay bounded work: a cell that planted an unbounded number of
-  # files cannot make teardown unbounded too. Directories are left to the
-  # workspace teardown, which owns the `0700` tree.
+  # Stop-time cleanup materializes every directory entry before the cap can
+  # apply, so enumeration itself is not bounded. The cap limits deletions: a
+  # cell that planted an unbounded number of files cannot make teardown delete
+  # an unbounded number of files. Directories are left to the workspace
+  # teardown, which owns the `0700` tree.
   @max_cleanup_files 10_000
 
   @typedoc """
@@ -115,7 +121,8 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
           required(:signal) => reference() | nil,
           required(:rpc_dir) => String.t(),
           required(:token) => String.t(),
-          optional(:poll_interval_ms) => pos_integer()
+          optional(:poll_interval_ms) => pos_integer(),
+          optional(:max_requests_per_sweep) => pos_integer()
         }
 
   @type option ::
@@ -136,8 +143,8 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
     * `:poll_interval_ms` — overrides `ctx.poll_interval_ms` (which defaults
       to #{@default_poll_interval_ms} ms). Test seam.
     * `:caller` — process whose death stops the server; defaults to the
-      caller of `start_link/2`, which is monitored and linked.
-    * `:name` — optional registration, passed to `GenServer.start_link/3`.
+      caller of `start_link/2`, which the server monitors. The server is
+      linked to its `start_link/2` parent.
 
   Returns `{:error, {:invalid_ctx, key}}` without starting a process when a
   required ctx key is missing or malformed.
@@ -348,6 +355,8 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
     case File.ls(rpc_dir) do
       {:ok, entries} ->
         entries
+        # File.ls/1 has already materialized every entry; this cap bounds only
+        # the subsequent deletion work.
         |> Enum.take(@max_cleanup_files)
         # File.rm removes files and symlinks and reports {:error, :eisdir}
         # for directories — recursion into planted trees would be unbounded
@@ -362,6 +371,13 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
   end
 
   defp validate_ctx(ctx) do
+    with :ok <- validate_required_ctx(ctx),
+         :ok <- validate_optional_ctx(ctx) do
+      :ok
+    end
+  end
+
+  defp validate_required_ctx(ctx) do
     Enum.reduce_while(
       [:rpc_dir, :token, :tools, :max_calls, :max_result_bytes],
       :ok,
@@ -373,11 +389,26 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
     )
   end
 
+  defp validate_optional_ctx(ctx) do
+    case Map.fetch(ctx, :max_requests_per_sweep) do
+      :error ->
+        :ok
+
+      {:ok, value} ->
+        if valid_ctx_value?(:max_requests_per_sweep, value) do
+          :ok
+        else
+          {:error, {:invalid_ctx, :max_requests_per_sweep}}
+        end
+    end
+  end
+
   defp valid_ctx_value?(:rpc_dir, value), do: is_binary(value) and value != ""
   defp valid_ctx_value?(:token, value), do: is_binary(value) and value != ""
   defp valid_ctx_value?(:tools, value), do: is_map(value)
   defp valid_ctx_value?(:max_calls, value), do: is_integer(value) and value > 0
   defp valid_ctx_value?(:max_result_bytes, value), do: is_integer(value) and value > 0
+  defp valid_ctx_value?(:max_requests_per_sweep, value), do: is_integer(value) and value > 0
 
   defp resolve_poll_interval(ctx, opts) do
     value =

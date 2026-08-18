@@ -194,6 +194,17 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
     end
   end
 
+  defmodule InspectingRpc do
+    @moduledoc false
+
+    def initial_stats, do: FakeRpc.initial_stats()
+
+    def process_pending(%{test_pid: test_pid} = ctx, stats) do
+      send(test_pid, {:sweep_ctx, ctx})
+      stats
+    end
+  end
+
   defmodule BlockingApprovalRpc do
     @moduledoc false
 
@@ -226,6 +237,9 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
       assert {:error, {:invalid_ctx, :max_calls}} =
                RpcServer.start_link(ctx(rpc_dir, max_calls: 0), rpc: FakeRpc)
 
+      assert {:error, {:invalid_ctx, :max_requests_per_sweep}} =
+               RpcServer.start_link(ctx(rpc_dir, max_requests_per_sweep: 0), rpc: FakeRpc)
+
       assert {:error, {:invalid_ctx, :poll_interval_ms}} =
                RpcServer.start_link(ctx(rpc_dir), rpc: FakeRpc, poll_interval_ms: 0)
     end
@@ -240,6 +254,17 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
       assert stats.bytes == 0
       assert MapSet.to_list(stats.tools_used) == []
 
+      assert :ok = RpcServer.stop(server)
+    end
+
+    test "passes the optional per-sweep cap to the pump", %{rpc_dir: rpc_dir} do
+      {:ok, server} =
+        start_server(
+          ctx(rpc_dir, max_requests_per_sweep: 3, test_pid: self()),
+          rpc: InspectingRpc
+        )
+
+      assert_receive {:sweep_ctx, %{max_requests_per_sweep: 3}}
       assert :ok = RpcServer.stop(server)
     end
   end
@@ -466,6 +491,7 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
       approval_context: nil,
       max_calls: Keyword.get(overrides, :max_calls, 100),
       max_result_bytes: Keyword.get(overrides, :max_result_bytes, 5_242_880),
+      max_requests_per_sweep: Keyword.get(overrides, :max_requests_per_sweep, 100),
       signal: Keyword.get(overrides, :signal),
       rpc_dir: rpc_dir,
       token: Keyword.get(overrides, :token, @token),
