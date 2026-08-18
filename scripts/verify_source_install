@@ -32,6 +32,15 @@ EOF
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT_DIR="$ROOT"
 SKIP_COMPILE=false
+# asdf shims resolve their tool installations relative to HOME unless this is
+# explicit. Fixture commands replace HOME to isolate Lemon state, so retain the
+# invoking shell's asdf data directory when it is available. Plain system/Mise
+# installs keep this empty and are unaffected.
+toolchain_asdf_data_dir="${ASDF_DATA_DIR:-}"
+if [ -z "$toolchain_asdf_data_dir" ] && [ -n "${HOME:-}" ] && [ -d "$HOME/.asdf" ]; then
+  toolchain_asdf_data_dir="$HOME/.asdf"
+fi
+
 SKIP_DOCTOR=false
 
 while [ "$#" -gt 0 ]; do
@@ -159,6 +168,12 @@ cleanup_setup_output() {
   rm -f "$usage_output"
   rm -f "$update_output"
 }
+preserve_toolchain() {
+  if [ -n "$toolchain_asdf_data_dir" ]; then
+    export ASDF_DATA_DIR="$toolchain_asdf_data_dir"
+  fi
+}
+
 # Keep fixture readiness independent of any developer or CI credential that
 # could otherwise satisfy a configured default provider through env fallback.
 clear_provider_credentials() {
@@ -172,8 +187,6 @@ clear_provider_credentials() {
     CEREBRAS_API_KEY KIMI_API_KEY MOONSHOT_API_KEY OPENCODE_API_KEY \
     OPENROUTER_API_KEY PERPLEXITY_API_KEY
 }
-
-
 run_onboarding() {
   local output="$1"
   shift
@@ -181,6 +194,8 @@ run_onboarding() {
   (
     cd "$onboarding_project"
     clear_provider_credentials
+    preserve_toolchain
+
 
 
     HOME="$onboarding_home" \
@@ -201,6 +216,8 @@ run_onboarding_split_output() {
   (
     cd "$onboarding_project"
     clear_provider_credentials
+    preserve_toolchain
+
 
 
     HOME="$onboarding_home" \
@@ -223,6 +240,8 @@ assert_setup_required() {
 
   if (
     clear_provider_credentials
+    preserve_toolchain
+
 
     HOME="$onboarding_home" \
       XDG_CONFIG_HOME="$onboarding_home/.config" \
@@ -249,12 +268,10 @@ assert_setup_required() {
   ) >"$setup_required_output" 2>&1; then
     ok "source-wrapper setup_required? is $expected"
   else
-    fail "source-wrapper setup_required? was not $expected"
     cat "$setup_required_output" >&2
+    fail "source-wrapper setup_required? was not $expected"
   fi
 }
-
-trap cleanup_setup_output EXIT
 
 assert_setup_required true
 
