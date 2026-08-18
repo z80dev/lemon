@@ -9,7 +9,8 @@ Verifies the supported source-install path:
   - checks Elixir and Erlang/OTP toolchain availability
   - checks source-wrapper help advertises setup/model/gateway/channels/config/doctor/send/media/models/providers/policy/proofs/readiness/secrets/skill/usage/update
   - checks locked dependency resolution
-  - checks source-wrapper installed-style setup/model/gateway onboarding command discovery without provider credentials
+  - checks source-wrapper setup readiness is required before fixture onboarding,
+    then satisfied by a locally stored fixture credential and default model
   - checks source-wrapper non-interactive setup runtime dispatch
   - checks source-wrapper promoted channel readiness
   - checks source-wrapper config validation
@@ -124,7 +125,7 @@ fi
 onboarding_home="$(mktemp -d "${TMPDIR:-/tmp}/lemon-source-install-onboarding.XXXXXX")"
 onboarding_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-onboarding.XXXXXX")"
 onboarding_master_key="MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
-setup_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-runtime.XXXXXX")"
+setup_required_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-setup-required.XXXXXX")"
 channels_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-channels.XXXXXX")"
 config_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-config.XXXXXX")"
 media_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-media.XXXXXX")"
@@ -140,7 +141,7 @@ update_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-update.XXXXXX")"
 cleanup_setup_output() {
   rm -rf "$onboarding_home"
   rm -f "$onboarding_output"
-  rm -f "$setup_output"
+  rm -f "$setup_required_output"
   rm -f "$channels_output"
   rm -f "$config_output"
   rm -f "$media_output"
@@ -160,12 +161,55 @@ run_onboarding_help() {
     XDG_CONFIG_HOME="$onboarding_home/.config" \
     XDG_DATA_HOME="$onboarding_home/.local/share" \
     XDG_CACHE_HOME="$onboarding_home/.cache" \
+    LEMON_STORE_PATH="$onboarding_home/.lemon/store" \
     LEMON_SECRETS_MASTER_KEY="$onboarding_master_key" \
     MIX_ENV=test \
     ./bin/lemon "$@" >"$onboarding_output" 2>&1
 }
 
+assert_setup_required() {
+  local expected="$1"
+
+  if HOME="$onboarding_home" \
+    XDG_CONFIG_HOME="$onboarding_home/.config" \
+    XDG_DATA_HOME="$onboarding_home/.local/share" \
+    XDG_CACHE_HOME="$onboarding_home/.cache" \
+    LEMON_STORE_PATH="$onboarding_home/.lemon/store" \
+    LEMON_SECRETS_MASTER_KEY="$onboarding_master_key" \
+    LEMON_EXPECT_SETUP_REQUIRED="$expected" \
+    MIX_ENV=test \
+    mix run --no-start -e '
+      expected = System.fetch_env!("LEMON_EXPECT_SETUP_REQUIRED") == "true"
+      actual = LemonCli.CLI.setup_required?()
+
+      if actual != expected do
+        IO.puts(:stderr, "expected setup_required?=#{expected}, got #{actual}")
+        System.halt(1)
+      end
+    ' >"$setup_required_output" 2>&1; then
+    ok "source-wrapper setup_required? is $expected"
+  else
+    fail "source-wrapper setup_required? was not $expected"
+    cat "$setup_required_output" >&2
+  fi
+}
+
 trap cleanup_setup_output EXIT
+
+assert_setup_required true
+
+run_onboarding_help model \
+  --provider openai \
+  --token source-install-fixture-token \
+  --secret-name source_install_fixture_openai \
+  --set-default \
+  --model gpt-5
+
+grep -q "OpenAI onboarding complete." "$onboarding_output" ||
+  fail "fixture provider onboarding did not complete"
+
+assert_setup_required false
+
 
 run_onboarding_help setup --help
 grep -qi "setup" "$onboarding_output" ||

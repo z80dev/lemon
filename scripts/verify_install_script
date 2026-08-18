@@ -33,9 +33,11 @@ Checks:
     as arguments: the eval expression stays a fixed constant, option order is
     preserved, and a --bundle path containing literal Elixir interpolation
     syntax survives verbatim
-  - the launcher creates first-run state privately: ~/.lemon and run/ are
-    0700, cookie and env are 0600
-EOF
+  - first-run setup is invoked once through an allocated fixture terminal,
+    while --skip-setup, the sim profile, and an unavailable terminal do not
+    invoke it; unavailable terminals print the exact absolute setup command
+  - the fixture TUI gates an incomplete installation through setup once, then
+    does not repeat setup once its config and credential source are ready
   exit 2
 }
 
@@ -125,12 +127,14 @@ PLATFORM_ARCH="${PLATFORM##*-}"
 PROFILE="lemon_runtime_full"
 TUI_PROFILE="lemon_tui"
 
-# Builds a stub release tarball for <version> and returns its path. The stub
-# bin/lemon answers the subcommands install.sh uses: version, daemon (serves a
-# static /healthz), stop, and status.
+# Builds a stub release tarball for <version> and optional <profile>, returning
+# its path. The stub bin/lemon answers the subcommands install.sh uses: version,
+# setup (which creates a fixture default and credential source), tui, daemon
+# (serves a static /healthz), stop, and status.
 build_fixture_tarball() {
   local version="$1"
-  local build_dir="$work_dir/build/$version"
+  local profile="${2:-$PROFILE}"
+  local build_dir="$work_dir/build/$version-$profile"
 
   mkdir -p "$build_dir/bin"
 
@@ -139,6 +143,7 @@ build_fixture_tarball() {
 set -eu
 
 VERSION="$version"
+PROFILE="$profile"
 EOF
 
   cat >> "$build_dir/bin/lemon" <<'EOF'
@@ -154,7 +159,7 @@ while [ -L "$script_path" ]; do
 done
 script_dir="$(CDPATH= cd "$(dirname "$script_path")" && pwd)"
 release_root="$(CDPATH= cd "$script_dir/.." && pwd)"
-release_bin="$release_root/bin/lemon_runtime_full"
+release_bin="$release_root/bin/$PROFILE"
 
 # First-run state, mirroring rel/overlays/bin/lemon: the restrictive umask
 # is applied before anything is created, so ~/.lemon, run/, cookie, and env
@@ -177,6 +182,13 @@ if [ ! -s "$env_file" ]; then
   printf 'export LEMON_WEB_SECRET_KEY_BASE=%s\n' \
     "$(od -An -N32 -t x1 /dev/urandom | tr -d ' \n')" >> "$env_file"
 fi
+
+# The fixture setup flow creates the same two readiness inputs the production
+# predicate requires: a default provider/model and a usable credential source.
+# A line is appended for every setup invocation so the install and TUI proofs
+# can detect accidental repetition without reading any user state.
+fixture_config="$home_dir/config.toml"
+fixture_credential="$home_dir/fixture-provider-token"
 
 case "${1:-}" in
   version)
@@ -201,6 +213,27 @@ case "${1:-}" in
   status)
     if [ -f "$run_dir/lemon.pid" ]; then echo running; else echo stopped; fi
     ;;
+  setup)
+    printf 'setup\n' >> "$home_dir/setup-invocations"
+    cat > "$fixture_config" <<'CONFIG'
+[defaults]
+provider = "fixture"
+model = "fixture:model"
+
+[providers.fixture]
+api_key_secret = "fixture-provider-token"
+CONFIG
+    printf 'fixture-token\n' > "$fixture_credential"
+    ;;
+  ""|tui)
+    if ! grep -q '^provider = "fixture"$' "$fixture_config" 2>/dev/null ||
+      ! grep -q '^model = "fixture:model"$' "$fixture_config" 2>/dev/null ||
+      [ ! -s "$fixture_credential" ]; then
+      exec "$0" setup
+    fi
+
+    echo "fixture TUI launched"
+    ;;
   doctor)
     # Mirror of the packaged launcher: the complete doctor argv crosses to
     # the runtime CLI entrypoint as arguments, never as source text.
@@ -216,7 +249,7 @@ EOF
 
   # The profile stub records its argv so the launcher checks below can prove
   # exactly what crossed the exec boundary, in order.
-  cat > "$build_dir/bin/$PROFILE" <<EOF
+  cat > "$build_dir/bin/$profile" <<EOF
 #!/bin/sh
 echo "stub release binary $version"
 if [ "\$#" -gt 0 ]; then
@@ -225,9 +258,9 @@ if [ "\$#" -gt 0 ]; then
   done
 fi
 EOF
-  chmod +x "$build_dir/bin/lemon" "$build_dir/bin/$PROFILE"
+  chmod +x "$build_dir/bin/lemon" "$build_dir/bin/$profile"
 
-  local tarball="$work_dir/build/lemon-$version-stable-$PLATFORM-$PROFILE.tar.gz"
+  local tarball="$work_dir/build/lemon-$version-stable-$PLATFORM-$profile.tar.gz"
   tar -czf "$tarball" -C "$build_dir" .
   echo "$tarball"
 }
@@ -274,6 +307,7 @@ mode_of() {
 # schema-2 manifest. <sha-override> forges the runtime checksum when non-empty.
 # <tui-tarball> adds the lemon_tui artifact (empty publishes a TUI-less release,
 # the shape pre-TUI versions have) and <tui-sha-override> forges its checksum.
+# <profile> selects the runtime profile advertised in the manifest.
 publish() {
   local dest_dir="$1"
   local version="$2"
@@ -281,6 +315,7 @@ publish() {
   local sha_override="${4:-}"
   local tui_tarball="${5:-}"
   local tui_sha_override="${6:-}"
+  local profile="${7:-$PROFILE}"
 
   mkdir -p "$dest_dir"
   cp "$tarball" "$dest_dir/"
@@ -313,7 +348,7 @@ publish() {
   MANIFEST_PLATFORM="$PLATFORM" \
   MANIFEST_OS="$PLATFORM_OS" \
   MANIFEST_ARCH="$PLATFORM_ARCH" \
-  MANIFEST_PROFILE="$PROFILE" \
+  MANIFEST_PROFILE="$profile" \
   MANIFEST_TUI_PROFILE="$TUI_PROFILE" \
   MANIFEST_TUI_FILE="$tui_file" \
   MANIFEST_TUI_SHA="$tui_sha" \
@@ -390,6 +425,7 @@ tarball_v5="$(build_fixture_tarball 9999.5.0)"
 tui_v1="$(build_fixture_tui_tarball 9999.1.0)"
 tui_v2="$(build_fixture_tui_tarball 9999.2.0)"
 tui_v5="$(build_fixture_tui_tarball 9999.5.0)"
+sim_v1="$(build_fixture_tarball 9999.1.0 sim_broadcast_platform)"
 
 forged_sha="$(python3 -c 'print("f" * 64)')"
 
@@ -400,6 +436,8 @@ forged_sha="$(python3 -c 'print("f" * 64)')"
 publish "$serve_root/releases/latest/download" 9999.1.0 "$tarball_v1" "" "$tui_v1"
 publish "$serve_root/releases/download/v9999.1.0" 9999.1.0 "$tarball_v1" "" "$tui_v1"
 publish "$serve_root/releases/download/v9999.2.0" 9999.2.0 "$tarball_v2" "" "$tui_v2"
+publish "$serve_root/sim/releases/latest/download" 9999.1.0 "$sim_v1" "" "" "" \
+  sim_broadcast_platform
 
 # A parallel tree whose manifest advertises a checksum the tarball does not have.
 publish "$serve_root/corrupt/releases/latest/download" 9999.3.0 "$tarball_v3" "$forged_sha"
@@ -454,6 +492,9 @@ run_install() {
     shift
   fi
 
+  # The verifier may itself be launched from a terminal. Start a fresh session
+  # so these ordinary fixture installs exercise the real no-controlling-TTY
+  # branch instead of depending on the caller's terminal.
   env -i \
     HOME="$home" \
     PATH="$PATH" \
@@ -461,8 +502,159 @@ run_install() {
     TMPDIR="${TMPDIR:-/tmp}" \
     LEMON_INSTALL_BASE_URL="$base" \
     "${envs[@]}" \
-    sh "$INSTALL_SH" "$@" >"$log" 2>&1
+    python3 -c 'import os, sys; os.setsid(); os.execvpe("sh", ["sh", *sys.argv[1:]], os.environ)' \
+    "$INSTALL_SH" "$@" >"$log" 2>&1
 }
+
+# run_install_with_tty has the same hermetic environment as run_install, but
+# allocates a local pseudo-terminal. `install.sh` probes /dev/tty itself, so
+# this is a controllable terminal fixture rather than an installer-only hook.
+run_install_with_tty() {
+  local log="$1" home="$2" base="$3"
+  shift 3
+
+  local envs=(LEMON_INSTALL_IGNORE_GLIBC=0)
+  while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do
+    envs+=("$1")
+    shift
+  done
+  if [ "${1:-}" = "--" ]; then
+    shift
+  fi
+
+  local command
+  printf -v command '%q ' env -i \
+    "HOME=$home" \
+    "PATH=$PATH" \
+    SHELL=/bin/sh \
+    "TMPDIR=${TMPDIR:-/tmp}" \
+    "LEMON_INSTALL_BASE_URL=$base" \
+    "${envs[@]}" \
+    sh "$INSTALL_SH" "$@"
+
+  script -q -e -c "$command" /dev/null >"$log" 2>&1
+}
+
+run_launcher_with_tty() {
+  local log="$1" home="$2"
+  shift 2
+
+  local command
+  printf -v command '%q ' env -i \
+    "HOME=$home" \
+    "PATH=$PATH" \
+    SHELL=/bin/sh \
+    "$home/.lemon/bin/lemon" "$@"
+
+  script -q -e -c "$command" /dev/null >"$log" 2>&1
+}
+
+setup_count() {
+  local home="$1"
+
+  if [ -f "$home/.lemon/setup-invocations" ]; then
+    wc -l < "$home/.lemon/setup-invocations" | tr -d ' '
+  else
+    echo 0
+  fi
+}
+
+# ------------------------------------------------------- first-run assertions -
+
+# The default packaged path is interactive when /dev/tty opens. The stub setup
+# persists an explicit default and credential source, then records the call.
+setup_home="$work_dir/home-setup"
+mkdir -p "$setup_home"
+
+if run_install_with_tty "$work_dir/install-setup.log" "$setup_home" "$base_url"; then
+  if [ "$(setup_count "$setup_home")" = "1" ]; then
+    ok "interactive install invokes absolute lemon setup exactly once"
+  else
+    fail "interactive install did not invoke setup exactly once"
+    cat "$work_dir/install-setup.log" >&2
+  fi
+else
+  fail "interactive install exited non-zero"
+  cat "$work_dir/install-setup.log" >&2
+fi
+
+# A configured TUI must not reopen the wizard on later launches.
+if run_launcher_with_tty "$work_dir/tui-ready.log" "$setup_home" tui &&
+  [ "$(setup_count "$setup_home")" = "1" ]; then
+  ok "a ready TUI launch does not repeat setup"
+else
+  fail "a ready TUI launch repeated setup or failed"
+  cat "$work_dir/tui-ready.log" >&2
+fi
+
+# --skip-setup is still an interactive install but must leave readiness alone.
+skip_home="$work_dir/home-skip-setup"
+mkdir -p "$skip_home"
+
+if run_install_with_tty "$work_dir/install-skip-setup.log" "$skip_home" "$base_url" -- --skip-setup; then
+  if [ "$(setup_count "$skip_home")" = "0" ]; then
+    ok "--skip-setup does not invoke setup"
+  else
+    fail "--skip-setup invoked setup"
+    cat "$work_dir/install-skip-setup.log" >&2
+  fi
+else
+  fail "--skip-setup install exited non-zero"
+  cat "$work_dir/install-skip-setup.log" >&2
+fi
+
+# An incomplete first TUI launch enters setup once, and the derived fixture
+# readiness inputs prevent the next launch from entering it again.
+if run_launcher_with_tty "$work_dir/tui-incomplete.log" "$skip_home" tui &&
+  [ "$(setup_count "$skip_home")" = "1" ] &&
+  run_launcher_with_tty "$work_dir/tui-rerun.log" "$skip_home" tui &&
+  [ "$(setup_count "$skip_home")" = "1" ]; then
+  ok "an incomplete TUI gates through setup once and remains ready on rerun"
+else
+  fail "the incomplete TUI did not gate through setup exactly once"
+  cat "$work_dir/tui-incomplete.log" "$work_dir/tui-rerun.log" >&2
+fi
+
+# No TTY is deliberately forced by run_install. It remains successful and
+# prints the one exact command a user can run later.
+no_tty_home="$work_dir/home-no-tty"
+mkdir -p "$no_tty_home"
+no_tty_setup_line="    $no_tty_home/.lemon/bin/lemon setup"
+
+if run_install "$work_dir/install-no-tty.log" "$no_tty_home" "$base_url"; then
+  if [ "$(setup_count "$no_tty_home")" = "0" ] &&
+    grep -Fqx "No interactive terminal is available. Run this when you are ready to configure Lemon:" \
+      "$work_dir/install-no-tty.log" &&
+    grep -Fqx "$no_tty_setup_line" "$work_dir/install-no-tty.log"; then
+    ok "a non-TTY install succeeds and prints the exact setup next step"
+  else
+    fail "a non-TTY install did not preserve the exact setup handoff"
+    cat "$work_dir/install-no-tty.log" >&2
+  fi
+else
+  fail "a non-TTY install exited non-zero"
+  cat "$work_dir/install-no-tty.log" >&2
+fi
+
+# The sim profile never has an interactive setup journey, even when a terminal
+# is available.
+sim_home="$work_dir/home-sim"
+mkdir -p "$sim_home"
+
+if run_install_with_tty "$work_dir/install-sim.log" "$sim_home" "$base_url/sim" LEMON_PROFILE=sim; then
+  if [ "$(setup_count "$sim_home")" = "0" ] &&
+    ! grep -Fq "$sim_home/.lemon/bin/lemon setup" "$work_dir/install-sim.log"; then
+    ok "the sim profile skips setup even with an interactive terminal"
+  else
+    fail "the sim profile attempted or advertised setup"
+    cat "$work_dir/install-sim.log" >&2
+  fi
+else
+  fail "the sim profile install exited non-zero"
+  cat "$work_dir/install-sim.log" >&2
+fi
+
+# --------------------------------------------------------------- assertions -
 
 # 1. Unpinned stable install.
 if run_install "$work_dir/install-1.log" "$home_dir" "$base_url"; then
