@@ -15,8 +15,11 @@ defmodule CodingAgent.PythonRepl.Process do
       POSIX. Platforms without a reliable soft interrupt return
       `{:error, :unsupported}` and callers must escalate straight to
       `terminate_tree/1`.
-    * `terminate_tree/1` escalates SIGTERM over the process group (bounded
-      grace) to SIGKILL, then closes the port. Synchronous and bounded.
+    * `terminate_tree/1` first verifies that the OS process is alive, then
+      escalates SIGTERM over the process group (bounded grace) to SIGKILL, and
+      closes the port. Because PID liveness and signalling are separate OS
+      operations, a PID can still be reused between them; callers MUST use
+      close-only teardown once a port exit confirms the interpreter is dead.
     * `alive?/1` reports whether the OS process (not just the port) is alive.
 
   This module is a plain data wrapper with no process of its own. The owning
@@ -137,26 +140,35 @@ defmodule CodingAgent.PythonRepl.Process do
   @doc """
   Terminates the interpreter and its whole process tree, synchronously.
 
-  POSIX: SIGTERM to the group (falling back to the single PID), a bounded
-  grace poll, then SIGKILL with one more bounded poll. Windows:
-  `taskkill /F /T`. The port is always closed before returning, so no further
-  port messages are delivered.
+  It only signals after `alive?/1` reports a live OS process, and checks
+  liveness again before escalating from SIGTERM to SIGKILL. POSIX sends each
+  signal to the group (falling back to the single PID), with bounded polls
+  between signals. Windows uses `taskkill /F /T`. The port is always closed
+  before returning, so no further port messages are delivered.
+
+  The liveness check cannot make a PID identity-safe: the OS may reuse a PID
+  between the check and the signal. Confirmed-dead port-exit paths MUST call
+  `close/1` instead.
   """
   @spec terminate_tree(t()) :: :ok
   def terminate_tree(%__MODULE__{} = process) do
-    case :os.type() do
-      {:unix, _} ->
-        signal(process, :term)
+    if alive?(process) do
+      case :os.type() do
+        {:unix, _} ->
+          signal(process, :term)
 
-        unless down_within?(process, process.term_grace_ms) do
-          signal(process, :kill)
-          down_within?(process, process.kill_grace_ms)
-        end
+          unless down_within?(process, process.term_grace_ms) do
+            if alive?(process) do
+              signal(process, :kill)
+              down_within?(process, process.kill_grace_ms)
+            end
+          end
 
-      {:win32, _} ->
-        if os_pid = process.os_pid do
-          safe_cmd("taskkill", ["/F", "/T", "/PID", Integer.to_string(os_pid)])
-        end
+        {:win32, _} ->
+          if os_pid = process.os_pid do
+            safe_cmd("taskkill", ["/F", "/T", "/PID", Integer.to_string(os_pid)])
+          end
+      end
     end
 
     close(process)

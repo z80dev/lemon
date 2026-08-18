@@ -602,7 +602,7 @@ defmodule CodingAgent.PythonRepl.Session do
 
   def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
     cond do
-      state.active != nil and state.active.monitor == ref ->
+      state.active != nil and state.active.monitor == ref and not state.active.replied? ->
         Logger.debug("PythonRepl.Session: active caller died; discarding interpreter")
 
         state
@@ -832,9 +832,9 @@ defmodule CodingAgent.PythonRepl.Session do
 
     state =
       state
-      |> fail_active(active_error_result(state, :port_exit))
+      |> fail_unreplied_active(:port_exit)
       |> fail_queued(:port_exit)
-      |> hard_teardown()
+      |> hard_teardown(:close)
 
     {:stop, {:shutdown, {:port_exit, status}}, state}
   end
@@ -846,7 +846,7 @@ defmodule CodingAgent.PythonRepl.Session do
 
     state =
       state
-      |> fail_active(active_error_result(state, :protocol_fault))
+      |> fail_unreplied_active(:protocol_fault)
       |> fail_queued(:protocol_fault)
       |> hard_teardown()
 
@@ -865,6 +865,15 @@ defmodule CodingAgent.PythonRepl.Session do
       %{state | active: %{active | replied?: true}}
     end
   end
+
+  # Captures are finalized before a timeout reply. Do not build a second error
+  # result for an already-replied active cell: `finish/1` may otherwise flush
+  # stale pending data into its closed spill device.
+  defp fail_unreplied_active(%{active: %{replied?: false}} = state, reason) do
+    fail_active(state, active_error_result(state, reason))
+  end
+
+  defp fail_unreplied_active(state, _reason), do: state
 
   defp fail_queued(state, reason) do
     entries = :queue.to_list(state.queue)
@@ -897,12 +906,19 @@ defmodule CodingAgent.PythonRepl.Session do
     {:stop, {:shutdown, reason}, state}
   end
 
-  # Idempotent: cancels timers, terminates the tree, removes the workspace.
-  defp hard_teardown(state) do
+  # Idempotent: cancels timers and removes the workspace. Confirmed-dead
+  # port-exit paths use :close so they only close the port; every path where
+  # the interpreter may still be alive terminates its tree.
+  defp hard_teardown(state, mode \\ :terminate)
+
+  defp hard_teardown(state, mode) when mode in [:terminate, :close] do
     state = cancel_all_timers(state)
 
     if state.process != nil do
-      state.mods.process.terminate_tree(state.process)
+      case mode do
+        :terminate -> state.mods.process.terminate_tree(state.process)
+        :close -> state.mods.process.close(state.process)
+      end
     end
 
     remove_workspace(state.workspace)

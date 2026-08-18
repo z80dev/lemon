@@ -67,6 +67,16 @@ defmodule CodingAgent.PythonRepl.SessionTest do
       :ok
     end
 
+    def close(proc) do
+      record({:close, proc.port})
+
+      Agent.update(__MODULE__, fn st ->
+        %{st | procs: Map.put(st.procs, proc.port, %{dead: true})}
+      end)
+
+      :ok
+    end
+
     def alive?(proc) do
       Agent.get(__MODULE__, fn st -> get_in(st, [:procs, proc.port, :dead]) != true end)
     end
@@ -91,6 +101,8 @@ defmodule CodingAgent.PythonRepl.SessionTest do
     def interrupted?, do: Enum.any?(calls(), &match?({:interrupt, _}, &1))
 
     def terminated?, do: Enum.any?(calls(), &match?({:terminate_tree, _}, &1))
+
+    def closed?, do: Enum.any?(calls(), &match?({:close, _}, &1))
 
     def emit(session, proc, data), do: send(session, {proc.port, {:data, data}})
 
@@ -781,6 +793,83 @@ defmodule CodingAgent.PythonRepl.SessionTest do
       File.rm!(result.full_output_path)
     end
 
+    test "does not re-finish a timed-out spilled capture when the port exits", ctx do
+      pid =
+        start_session(ctx,
+          output_mod: Output,
+          max_output_bytes: 4,
+          interrupt_grace_ms: 500
+        )
+        |> bring_idle()
+
+      task = Task.async(fn -> Session.execute(pid, %{code: "slow()"}, 60) end)
+      wait_until(fn -> active_id(pid) == "cell-1" end)
+
+      FakeProtocol.script([
+        {:ok,
+         [
+           %{type: :started, id: "cell-1"},
+           %{type: :stream, id: "cell-1", stream: :stdout, data: "spill"},
+           %{type: :stream, id: "cell-1", stream: :stdout, data: "\e["}
+         ]}
+      ])
+
+      FakeProcess.emit(pid, FakeProcess.proc(), "started-spilled-pending")
+
+      assert {:error, result} = Task.await(task, 1_000)
+      assert result.reason == :timeout
+      assert result.truncated
+
+      wait_until(fn ->
+        Session.status(pid).phase == :cancelling and FakeProcess.interrupted?()
+      end)
+
+      ref = monitor(pid)
+      FakeProcess.emit_exit(pid, FakeProcess.proc(), 1)
+
+      assert_stops(pid, ref, {:shutdown, {:port_exit, 1}})
+      assert FakeProcess.closed?()
+      File.rm!(result.full_output_path)
+    end
+
+    test "does not interrupt twice when a timed-out caller exits after its reply", ctx do
+      pid = start_session(ctx, interrupt_grace_ms: 300, bye_timeout_ms: 200) |> bring_idle()
+
+      task = Task.async(fn -> Session.execute(pid, %{code: "slow()"}, 60) end)
+      task_ref = Process.monitor(task.pid)
+      wait_until(fn -> active_id(pid) == "cell-1" end)
+
+      assert {:error, %{reason: :timeout}} = Task.await(task, 1_000)
+      assert_receive {:DOWN, ^task_ref, :process, _pid, :normal}, 1_000
+
+      wait_until(fn -> FakeProcess.interrupted?() end)
+      Process.sleep(100)
+
+      assert Enum.count(FakeProcess.calls(), &match?({:interrupt, _}, &1)) == 1
+
+      ref = monitor(pid)
+
+      FakeProtocol.script([
+        {:ok,
+         [
+           %{type: :exception, id: "cell-1", kind: :interrupted, name: "KeyboardInterrupt"},
+           %{type: :done, id: "cell-1"}
+         ]}
+      ])
+
+      FakeProcess.emit(pid, FakeProcess.proc(), "quiesce")
+
+      wait_until(fn ->
+        Enum.any?(FakeProcess.writes(), &String.contains?(&1, ~s("type":"shutdown")))
+      end)
+
+      FakeProtocol.script([{:ok, [%{type: :bye}]}])
+      FakeProcess.emit(pid, FakeProcess.proc(), "bye")
+
+      assert_stops(pid, ref)
+      assert FakeProcess.terminated?()
+    end
+
     test "fires and terminates when the runner suppresses the started frame", ctx do
       before = pyrepl_dirs()
       pid = start_session(ctx, interrupt_grace_ms: 100) |> bring_idle()
@@ -988,7 +1077,8 @@ defmodule CodingAgent.PythonRepl.SessionTest do
       assert result.state_retained == false
 
       assert_stops(pid, ref)
-      assert FakeProcess.terminated?()
+      refute FakeProcess.terminated?()
+      assert FakeProcess.closed?()
       assert_no_workspace_leak(before)
       assert [_] = eval_writes_containing("os._exit(1)")
     end
@@ -1021,7 +1111,8 @@ defmodule CodingAgent.PythonRepl.SessionTest do
 
       assert {:error, %{reason: :port_exit, state_retained: false}} = Task.await(task, 1_000)
       assert_stops(pid, ref, {:shutdown, {:port_exit, nil}})
-      assert FakeProcess.terminated?()
+      refute FakeProcess.terminated?()
+      assert FakeProcess.closed?()
       assert_no_workspace_leak(before)
       assert [_] = eval_writes_containing("os._exit(1)")
     end
