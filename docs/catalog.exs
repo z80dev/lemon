@@ -434,7 +434,13 @@
   %{
     path: "docs/plans/2026-04-12-subagent-reasoning-surfacing-plan.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-06-17],
+    last_reviewed: ~D[2026-08-18],
+    max_age_days: 60
+  },
+  %{
+    path: "docs/plans/2026-08-17-persistent-python-repl-plan.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-08-18],
     max_age_days: 60
   },
   %{

@@ -1,28 +1,27 @@
 # Subagent Reasoning Surfacing Plan
 
-Status: proposed
+Status: partially implemented
 
-Last reviewed: 2026-04-12
+Last reviewed: 2026-08-18
 
 ## Summary
 
-Lemon already captures some subagent reasoning upstream, but it does not treat that data as a first-class surfaced signal through the `task` and delegated-subagent pipeline.
+Lemon now carries subagent reasoning as a first-class, bounded structured signal through most of the `task` and delegated-subagent pipeline. The original proposal below records the design decisions that guided the work; the implementation status identifies what remains.
 
-Today:
+Delivered:
 
-- external runners such as Codex, Claude, and Droid normalize reasoning/thinking as CLI `:note` actions
-- router task/tool status drops `:note` actions entirely
-- `task` child-run projection only forwards `current_action`, not reasoning
-- internal `task` runs can emit `[thinking] ...` text in partial updates, but task result/poll paths strip that back out
-- monitoring APIs persist generic task events, but there is no stable reasoning field for clients to render
+- task runners emit structured `details.reasoning`, including normalized external-runner reasoning;
+- task results expose reasoning through poll/get, rather than only transient `[thinking]` text;
+- async task handling persists and projects reasoning, and projection creates canonical reasoning engine actions;
+- router coalescing and rendering retain and display reasoning;
+- control-plane task lists expose `latestReasoning` and related summary fields; and
+- the TUI renders task reasoning.
 
-The result is uneven behavior:
+Remaining work is intentionally narrow:
 
-- top-level assistant messages can expose thinking blocks in web/TUI
-- subagent tool progress is visible on the parent task surface
-- subagent reasoning is mostly lost, or only available indirectly through raw event blobs
-
-This plan adds a bounded, explicit reasoning path for subagents and tasks.
+- add a visibility/channel filter so transport-specific suppression is enforceable;
+- extend web monitoring types and presentation; and
+- make TaskStore reasoning summaries stored fields rather than event-derived summaries.
 
 ## Goals
 
@@ -39,50 +38,40 @@ This plan adds a bounded, explicit reasoning path for subagents and tasks.
 - Do not block this work on a general-purpose trace store.
 - Do not conflate reasoning with normal tool actions in ways that break existing tool-status rendering.
 
-## Current State
+## Implementation Status
 
-### What exists already
+### Delivered as of 2026-08-18
 
-1. External runner normalization:
-   - Codex runner emits reasoning as `:note` action events.
-   - Claude runner emits thinking blocks as completed `:note` actions.
-   - Droid runner emits reasoning events as started/updated/completed `:note` actions.
+1. Structured task reasoning:
+   - runners emit `details.reasoning` for internal thinking and normalized external-runner reasoning;
+   - `CodingAgent.Tools.Task.Result` carries it into task poll/get results instead of relying only on `[thinking]` text.
 
-2. Internal task updates:
-   - internal `task` sessions emit `AgentToolResult` updates
-   - updates can include `details.current_action`
-   - internal assistant thinking is available through `LemonAi.get_thinking/1`
+2. Task persistence and projection:
+   - `CodingAgent.Tools.Task.Async` persists reasoning updates and projects them with child-run progress;
+   - `CodingAgent.Tools.Task.Projection` creates canonical reasoning engine actions alongside normal actions.
 
-3. Task persistence:
-   - async task records live in `CodingAgent.TaskStore`
-   - recent task events are already persisted in bounded form
+3. Router surfaces:
+   - `LemonRouter.ToolStatusCoalescer` accepts reasoning rather than discarding it with generic notes;
+   - `LemonRouter.ToolStatusRenderer` renders reasoning on task surfaces.
 
-4. Parent task rebinding:
-   - child task progress can be rebound onto the parent task line through `parent_tool_use_id`
-   - router already renders nested child actions on dedicated task surfaces
+4. Operator-facing summaries:
+   - control-plane active and recent task lists expose `latestReasoning`, `latestReasoningPhase`, `latestReasoningSource`, and `reasoningCount`;
+   - the TUI parses and renders task reasoning.
 
-### Where reasoning is lost
+### Remaining implementation work
 
-1. Router drop on ingest:
-   - `LemonRouter.ToolStatusCoalescer.normalize_action_event/1` skips `kind in ["note", :note]`
-   - this discards reasoning from Codex/Claude/Droid before any surface can render it
+1. Transport visibility policy:
+   - the renderer/coalescer path has no visibility or channel filter yet;
+   - transport-specific suppression for narrow chat channels therefore is not enforceable.
 
-2. Missing projection path:
-   - `CodingAgent.Tools.Task.Projection.engine_action_from_update/2` only projects `details.current_action`
-   - there is no sibling projection for `details.reasoning` or equivalent metadata
+2. Web monitoring:
+   - monitoring types and presentation have not yet been updated to render the delivered reasoning summaries.
 
-3. Internal task reasoning is flattened:
-   - `CodingAgent.Tools.Task.Result.build_update_content/2` emits reasoning as `[thinking] ...` text
-   - `visible_content_text/1` strips `[thinking]` markers for previews and poll/get output
-   - reasoning therefore survives as transient text but not as structured task state
+3. TaskStore summary ownership:
+   - current task summaries are derived from bounded events;
+   - the original design's explicit stored summary fields have not been implemented.
 
-4. Monitoring shape is too generic:
-   - `tasks.active.list` / `tasks.recent.list` expose `events` and `record`, but no stable reasoning summary fields
-   - clients would need to scrape raw event blobs
-
-5. Delegated `agent` path is coarse:
-   - `CodingAgent.Tools.Agent` persists queue/running/completion state
-   - it does not project inner reasoning/tool progress onto parent surfaces the way `task` does
+The original design record below remains useful for the completed path and for these remaining changes.
 
 ## Desired Semantics
 
@@ -101,7 +90,7 @@ Treat subagent reasoning as a first-class signal with two visibility levels:
    - available through monitoring/task APIs
    - not auto-inlined into normal completion followups
 
-## Proposed Data Model
+## Design Record: Data Model
 
 Add explicit reasoning metadata to task/subagent updates instead of encoding it as only free text.
 
@@ -146,7 +135,7 @@ Expose these as stable summary fields in task details and monitoring payloads:
 
 `events` remains the raw escape hatch, but clients should not need to scrape it for the common case.
 
-## Proposed Event Model
+## Design Record: Event Model
 
 ### Option A: keep reasoning as `:note`, but stop dropping it
 
@@ -185,7 +174,7 @@ Use a staged approach:
 
 This keeps the first implementation small and reversible.
 
-## Proposed Pipeline Changes
+## Design Record: Pipeline Changes
 
 ### Phase 1: Structured reasoning in `task` updates
 
@@ -237,7 +226,7 @@ Recommendation:
 - add `detail.reasoning_text` and `detail.reasoning_source`
 - use a distinct `kind` at the router layer such as `"reasoning"` even if upstream source remained `:note`
 
-## Router Changes
+## Design Record: Router Changes
 
 Files:
 
@@ -270,7 +259,7 @@ Recommendation:
 - add a transport-aware option in coalescer/render opts such as `show_reasoning?: boolean`
 - default false for narrow chat transports, true for operator surfaces
 
-## Persistence And API Changes
+## Design Record: Persistence And API Changes
 
 Files:
 
@@ -304,7 +293,7 @@ Changes:
    - optional follow-on work: add `task.reasoning` event if live monitoring needs reasoning updates without full list refresh
    - not required for the first pass if clients already refresh task lists aggressively enough
 
-## UI Changes
+## Design Record: UI Changes
 
 ### Web Monitoring
 
@@ -353,7 +342,7 @@ Changes:
 2. Show latest reasoning snippet beneath current task action.
 3. Keep the existing assistant-message thinking UI unchanged for top-level assistant blocks.
 
-## Delegated `agent` Tool Follow-On
+## Design Record: Delegated `agent` Tool Follow-On
 
 Files:
 
@@ -374,7 +363,7 @@ Recommendation:
 - keep this out of the first implementation
 - finish `task` first, then decide whether `agent` should converge on the same machinery
 
-## Guardrails
+## Design Record: Guardrails
 
 Reasoning is high-volume and can be sensitive. Add explicit caps.
 
@@ -386,35 +375,23 @@ Recommended defaults:
 - monitoring/web/TUI default: show bounded reasoning
 - auto-followup completion text: never include reasoning by default
 
-## Rollout Sequence
+## Delivery Status
 
-### PR 1: Structured task reasoning
+### Completed delivery
 
-- add `details.reasoning` to internal and CLI task updates
-- add task result summary fields
-- extend poll/get to expose latest reasoning
-- add unit tests around `task` update/result shaping
+- structured `details.reasoning` is emitted by task runners and exposed by task results;
+- child reasoning is persisted and projected as canonical engine actions;
+- router coalescing and rendering support reasoning;
+- control-plane lists expose reasoning summaries; and
+- the TUI renders task reasoning.
 
-### PR 2: Parent surface projection
+### Remaining delivery
 
-- project child reasoning alongside child actions
-- stop dropping projected reasoning in router coalescing
-- render reasoning on task surfaces for non-chat channels
-- add router integration tests for nested reasoning rendering
+1. Add a visibility/channel policy to the coalescer or renderer, then apply narrow-chat suppression through that policy.
+2. Extend web monitoring types, reducers, and task/run presentation to consume the existing summary fields.
+3. Store TaskStore reasoning summaries directly instead of deriving them from the retained event list.
 
-### PR 3: Monitoring and UI
-
-- extend control-plane task list payloads
-- add reasoning summary to monitoring reducers/types
-- render reasoning in web monitoring and TUI task views
-
-### PR 4: Transport policy and polish
-
-- add config/policy switch for reasoning on status surfaces
-- suppress or heavily truncate on Telegram/WhatsApp
-- refine formatting and caps based on operator feedback
-
-## Test Plan
+## Test Coverage and Remaining Test Work
 
 ### CodingAgent
 
@@ -433,7 +410,7 @@ Recommended defaults:
 - `apps/lemon_router/test/lemon_router/tool_status_renderer_test.exs`
   - reasoning line formatting
   - nested reasoning indentation under parent task
-  - channel-specific truncation/suppression
+  - add channel-specific truncation/suppression coverage with the visibility/channel filter
 
 - `apps/lemon_router/test/lemon_router/run_process_test.exs`
   - child reasoning stays attached to the originating task surface
@@ -442,16 +419,22 @@ Recommended defaults:
 
 - task list endpoint tests for reasoning summary fields
 
-### Web/TUI
+### Web Monitoring (remaining)
 
-- formatter and reducer tests for structured reasoning parsing
-- task inspector / tool timeline rendering tests
+- add monitoring type and reducer tests for structured reasoning parsing
+- add task inspector / tool timeline rendering tests
 
-## Open Questions Evaluation
+### TUI
+
+- retain formatter coverage for structured reasoning parsing and task rendering
+
+## Historical Design Decisions
+
+The following decisions and questions are retained from the original proposal. The implementation status above is authoritative where delivery has superseded the proposal.
 
 1. **Should reasoning be represented as a dedicated router action kind immediately, or only as enriched `detail` on the first pass?**
-   - **Recommendation:** Only as enriched `detail` on the first pass.
-   - **Reasoning:** `LemonRouter.ToolStatusCoalescer.normalize_action_event/1` (around line 431) uses a strict allowlist of kinds (`"tool"`, `"command"`, `"file_change"`, `"web_search"`, `"subagent"`). Adding a new `"reasoning"` kind requires updating this allowlist and handling it explicitly across `LemonRouter.ToolStatusRenderer.format_action_line/2` (around line 147). Passing it within `detail` keeps router changes limited to the existing embedded child extraction logic (`embedded_child_action/1`).
+   - **Original recommendation:** Only as enriched `detail` on the first pass.
+   - **Implementation note:** Canonical reasoning engine actions now exist. This historical rationale explains why the upstream runner contract stayed structured and bounded rather than requiring a broad runner rewrite.
 
 2. **Do we want a live `task.reasoning` event on the control-plane feed, or are list refreshes enough?**
    - **Recommendation:** List refreshes and existing tool status streams are enough for the first pass.
@@ -465,20 +448,18 @@ Recommended defaults:
    - **Recommendation:** Only operator UIs (TUI, Web).
    - **Reasoning:** Chat transports are already constrained by platform limits. For example, `LemonRouter.ToolStatusCoalescer.combine_prefix_and_status/2` (line 348) has to aggressively budget characters to avoid Telegram's 4096 max length. Adding verbose reasoning lines will rapidly push actionable tool progress out of the visible status block.
 
-## Identified Risks and Missing Questions
+## Remaining Risks
 
 - **Risk - TaskStore Bloat:** If `task` updates append every reasoning delta as a new event, `CodingAgent.TaskStore` memory usage will balloon. The plan mentions "bounded event retention," but we must specifically ensure `details.reasoning` replaces the previous reasoning state in the task record rather than appending hundreds of incremental events.
 - **Risk - Coalescer Thrashing:** High-frequency reasoning updates (e.g. from internal models streaming thinking tokens) could trigger excessive `ToolStatusCoalescer` processing. The coalescer debounces flushes (via `@default_idle_ms 400`), but we should still limit how often runners push reasoning updates to the bus.
-- **Missing Question:** How exactly should `LemonRouter.ToolStatusRenderer` format a reasoning line visually? `format_action_line/2` currently only handles `:started`, `:updated`, and `:completed` phases with specific symbols (`▸`, `✓`, `✗`). We need a distinct visual treatment (e.g., italicized text or a different symbol) so users don't confuse reasoning with actual tool execution.
+- **Resolved formatting question:** `LemonRouter.ToolStatusRenderer` now supports reasoning. The remaining presentation work is web monitoring, listed above.
 
-## Recommended First Cut
+## Delivered First Cut and Remaining Completion
 
-Build the smallest coherent version:
+The delivered first cut covers the structured runner-to-task-to-router path, task poll/get results, control-plane list summaries, and TUI rendering. It deliberately does not yet claim transport suppression, web monitoring presentation, or stored TaskStore summary fields.
 
-1. add structured `details.reasoning` to task updates
-2. persist and expose latest reasoning in task poll/get/list APIs
-3. project child reasoning onto parent task surfaces
-4. render reasoning only in web/TUI/monitoring by default
-5. leave delegated `agent` unchanged for now
+Complete the plan by:
 
-That gets reasoning visible where operators need it without forcing raw reasoning into every transport or requiring a broad runner rewrite.
+1. adding the visibility/channel filter and applying it to narrow chat transports;
+2. adding web monitoring types and presentation for the delivered summary fields; and
+3. making TaskStore summary fields stored state, while retaining bounded events as the raw audit trail.
