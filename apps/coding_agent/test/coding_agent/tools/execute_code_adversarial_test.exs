@@ -15,10 +15,9 @@ defmodule CodingAgent.Tools.ExecuteCodeAdversarialRpcTest do
   @moduletag :tmp_dir
   @token String.duplicate("a", 43)
 
-  setup %{tmp_dir: tmp_dir} do
-    rpc_dir = Path.join(tmp_dir, "rpc")
-    File.mkdir_p!(rpc_dir)
-    {:ok, rpc_dir: rpc_dir}
+  setup %{tmp_dir: base} do
+    assert {:ok, _rpc_dir} = CodingAgent.PrivateTmp.reserve_dir(base, "rpc")
+    {:ok, rpc_dir: discover_rpc_dir!(base)}
   end
 
   describe "malformed frames" do
@@ -255,7 +254,21 @@ defmodule CodingAgent.Tools.ExecuteCodeAdversarialRpcTest do
     Task.await(pump.runner, 30_000)
   end
 
+  defp discover_rpc_dir!(base) do
+    rpc_dirs =
+      base
+      |> Path.join("rpc-*")
+      |> Path.wildcard()
+      |> Enum.filter(&File.dir?/1)
+
+    assert [rpc_dir] = rpc_dirs,
+           "expected exactly one rpc-* directory under #{base}, got: #{inspect(rpc_dirs)}"
+
+    rpc_dir
+  end
+
   defp write_request(rpc_dir, id, tool, params, token \\ @token) do
+    assert File.dir?(rpc_dir), "rpc directory does not exist: #{rpc_dir}"
     tmp = Path.join(rpc_dir, "req-#{id}.json.tmp")
 
     File.write!(
@@ -634,7 +647,7 @@ defmodule CodingAgent.Tools.ExecuteCodeAdversarialTest do
 
     runner = fn command, _runner_cwd, _runner_opts ->
       base = command_base(command)
-      rpc_dir = Path.join(base, "rpc")
+      rpc_dir = discover_rpc_dir!(base)
       token = configured_token(base)
 
       answers =
@@ -690,6 +703,19 @@ defmodule CodingAgent.Tools.ExecuteCodeAdversarialTest do
     Path.dirname(script_path)
   end
 
+  defp discover_rpc_dir!(base) do
+    rpc_dirs =
+      base
+      |> Path.join("rpc-*")
+      |> Path.wildcard()
+      |> Enum.filter(&File.dir?/1)
+
+    assert [rpc_dir] = rpc_dirs,
+           "expected exactly one rpc-* directory under #{base}, got: #{inspect(rpc_dirs)}"
+
+    rpc_dir
+  end
+
   defp configured_token(base) do
     source = File.read!(Path.join(base, "lemon_tools.py"))
 
@@ -700,6 +726,7 @@ defmodule CodingAgent.Tools.ExecuteCodeAdversarialTest do
   end
 
   defp write_request(rpc_dir, id, tool, params, token) do
+    assert File.dir?(rpc_dir), "rpc directory does not exist: #{rpc_dir}"
     tmp = Path.join(rpc_dir, "req-#{id}.json.tmp")
 
     File.write!(
