@@ -125,6 +125,7 @@ fi
 onboarding_home="$(mktemp -d "${TMPDIR:-/tmp}/lemon-source-install-onboarding.XXXXXX")"
 onboarding_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-onboarding.XXXXXX")"
 onboarding_master_key="MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+setup_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-runtime.XXXXXX")"
 setup_required_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-setup-required.XXXXXX")"
 channels_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-channels.XXXXXX")"
 config_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-config.XXXXXX")"
@@ -141,6 +142,7 @@ update_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-update.XXXXXX")"
 cleanup_setup_output() {
   rm -rf "$onboarding_home"
   rm -f "$onboarding_output"
+  rm -f "$setup_output"
   rm -f "$setup_required_output"
   rm -f "$channels_output"
   rm -f "$config_output"
@@ -156,7 +158,10 @@ cleanup_setup_output() {
   rm -f "$update_output"
 }
 
-run_onboarding_help() {
+run_onboarding() {
+  local output="$1"
+  shift
+
   HOME="$onboarding_home" \
     XDG_CONFIG_HOME="$onboarding_home/.config" \
     XDG_DATA_HOME="$onboarding_home/.local/share" \
@@ -164,7 +169,25 @@ run_onboarding_help() {
     LEMON_STORE_PATH="$onboarding_home/.lemon/store" \
     LEMON_SECRETS_MASTER_KEY="$onboarding_master_key" \
     MIX_ENV=test \
-    ./bin/lemon "$@" >"$onboarding_output" 2>&1
+    ./bin/lemon "$@" >"$output" 2>&1
+}
+
+run_onboarding_split_output() {
+  local output="$1" error_output="$2"
+  shift 2
+
+  HOME="$onboarding_home" \
+    XDG_CONFIG_HOME="$onboarding_home/.config" \
+    XDG_DATA_HOME="$onboarding_home/.local/share" \
+    XDG_CACHE_HOME="$onboarding_home/.cache" \
+    LEMON_STORE_PATH="$onboarding_home/.lemon/store" \
+    LEMON_SECRETS_MASTER_KEY="$onboarding_master_key" \
+    MIX_ENV=test \
+    ./bin/lemon "$@" >"$output" 2>"$error_output"
+}
+
+run_onboarding_help() {
+  run_onboarding "$onboarding_output" "$@"
 }
 
 assert_setup_required() {
@@ -226,12 +249,12 @@ grep -qi "gateway" "$onboarding_output" ||
 ok "installed-style onboarding commands are discoverable without provider credentials"
 
 
-MIX_ENV=test ./bin/lemon setup runtime --profile runtime_min --non-interactive >"$setup_output"
+run_onboarding "$setup_output" setup runtime --profile runtime_min --non-interactive
 grep -q "mix release lemon_runtime_min" "$setup_output" ||
   fail "setup runtime output did not include lemon_runtime_min release command"
 ok "non-interactive setup runtime dispatch works"
 
-MIX_ENV=test ./bin/lemon channels --project-dir "$PROJECT_DIR" >"$channels_output"
+run_onboarding "$channels_output" channels --project-dir "$PROJECT_DIR"
 grep -q "Lemon Channels" "$channels_output" ||
   fail "channels output did not include readiness heading"
 grep -q "Promoted platforms: telegram, discord" "$channels_output" ||
@@ -242,12 +265,12 @@ grep -q "Includes raw proof details: false" "$channels_output" ||
   fail "channels output did not document proof-detail cleanup"
 ok "source-wrapper promoted channel readiness works"
 
-MIX_ENV=test ./bin/lemon config validate --project-dir "$PROJECT_DIR" >"$config_output"
+run_onboarding "$config_output" config validate --project-dir "$PROJECT_DIR"
 grep -q "Configuration is valid" "$config_output" ||
   fail "config validation output did not report a valid configuration"
 ok "source-wrapper config validation works"
 
-MIX_ENV=test ./bin/lemon media --project-dir "$PROJECT_DIR" --limit 1 >"$media_output"
+run_onboarding "$media_output" media --project-dir "$PROJECT_DIR" --limit 1
 grep -q "Lemon Media" "$media_output" ||
   fail "media output did not include media heading"
 grep -q "Provider proofs:" "$media_output" ||
@@ -258,26 +281,26 @@ grep -q "Includes provider responses: false" "$media_output" ||
   fail "media output did not document provider-response cleanup"
 ok "source-wrapper media diagnostics work"
 
-MIX_ENV=test ./bin/lemon models --provider anthropic --limit 1 >"$models_output"
+run_onboarding "$models_output" models --provider anthropic --limit 1
 grep -q "Lemon Models" "$models_output" ||
   fail "models output did not include catalog heading"
 grep -q "Includes credentials: false" "$models_output" ||
   fail "models output did not document credential cleanup"
 ok "source-wrapper model catalog listing works"
 
-MIX_ENV=test ./bin/lemon providers --provider anthropic --project-dir "$PROJECT_DIR" >"$providers_output"
+run_onboarding "$providers_output" providers --provider anthropic --project-dir "$PROJECT_DIR"
 grep -q "Lemon Providers" "$providers_output" ||
   fail "providers output did not include readiness heading"
 grep -q "Includes raw API keys: false" "$providers_output" ||
   fail "providers output did not document API key cleanup"
 ok "source-wrapper provider readiness listing works"
 
-MIX_ENV=test ./bin/lemon policy list >"$policy_output"
+run_onboarding "$policy_output" policy list
 grep -Eq "No model policies set\.|Model Policies:" "$policy_output" ||
   fail "policy list output did not report model policy state"
 ok "source-wrapper model policy listing works"
 
-MIX_ENV=test ./bin/lemon proofs --project-dir "$PROJECT_DIR" --limit 1 >"$proofs_output"
+run_onboarding "$proofs_output" proofs --project-dir "$PROJECT_DIR" --limit 1
 grep -q "Lemon Proofs" "$proofs_output" ||
   fail "proofs output did not include proof heading"
 grep -q "Includes raw paths: false" "$proofs_output" ||
@@ -286,7 +309,7 @@ grep -q "Includes raw filenames: false" "$proofs_output" ||
   fail "proofs output did not document raw filename cleanup"
 ok "source-wrapper proof artifact listing works"
 
-MIX_ENV=test ./bin/lemon readiness --project-dir "$PROJECT_DIR" --limit 1 >"$readiness_output"
+run_onboarding "$readiness_output" readiness --project-dir "$PROJECT_DIR" --limit 1
 grep -q "Lemon Readiness" "$readiness_output" ||
   fail "readiness output did not include readiness heading"
 grep -q "Provider media:" "$readiness_output" ||
@@ -299,19 +322,19 @@ grep -q "Includes raw provider responses: false" "$readiness_output" ||
   fail "readiness output did not document provider-response cleanup"
 ok "source-wrapper readiness summary works"
 
-MIX_ENV=test ./bin/lemon secrets status >"$secrets_output"
+run_onboarding "$secrets_output" secrets status
 grep -q "configured:" "$secrets_output" ||
   fail "secrets status output did not include configured state"
 grep -q "count:" "$secrets_output" ||
   fail "secrets status output did not include secret count"
 ok "source-wrapper secrets status works"
 
-MIX_ENV=test ./bin/lemon skill list >"$skill_output"
+run_onboarding "$skill_output" skill list
 grep -Eq "KEY|No skills installed" "$skill_output" ||
   fail "skill list output did not report installed skill state"
 ok "source-wrapper skill listing works"
 
-MIX_ENV=test ./bin/lemon usage >"$usage_output"
+run_onboarding "$usage_output" usage
 grep -q "Lemon Usage" "$usage_output" ||
   fail "usage output did not include usage heading"
 grep -q "Includes prompts: false" "$usage_output" ||
@@ -320,7 +343,7 @@ grep -q "Includes credentials: false" "$usage_output" ||
   fail "usage output did not document credential cleanup"
 ok "source-wrapper usage diagnostics work"
 
-MIX_ENV=test ./bin/lemon update --check --no-skill-sync --verbose >"$update_output"
+run_onboarding "$update_output" update --check --no-skill-sync --verbose
 grep -q "Version:" "$update_output" ||
   fail "update check output did not include current version"
 grep -q "Remote update check: not yet available" "$update_output" ||
@@ -340,7 +363,8 @@ if ! $SKIP_DOCTOR; then
   bundle_path="$work_dir/support-bundle.zip"
 
   set +e
-  MIX_ENV=test ./bin/lemon doctor --json --project-dir "$PROJECT_DIR" --bundle --bundle-path "$bundle_path" >"$doctor_json" 2>"$doctor_err"
+  run_onboarding_split_output "$doctor_json" "$doctor_err" doctor --json --project-dir "$PROJECT_DIR" \
+    --bundle --bundle-path "$bundle_path"
   doctor_status=$?
   set -e
 
