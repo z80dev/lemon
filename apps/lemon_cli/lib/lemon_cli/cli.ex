@@ -114,7 +114,7 @@ defmodule LemonCli.CLI do
     |> List.wrap()
     |> dispatch()
   rescue
-    %Error{} = error ->
+    error in Error ->
       IO.puts(:stderr, "Error: #{error.message}")
       error.exit_code
 
