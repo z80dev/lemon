@@ -657,16 +657,28 @@ defmodule CodingAgent.PythonRepl.Session do
     {:noreply, %{state | active: active}}
   end
 
-  defp handle_frame(%{type: :stream, id: id, stream: stream, data: data}, state)
-       when stream in [:stdout, :stderr] do
-    case state do
-      %{phase: phase, active: %{id: ^id} = active} when phase in [:running, :cancelling] ->
-        active = %{active | output: state.mods.output.append(active.output, stream, data)}
-        {:noreply, %{state | active: active}}
+  defp handle_frame(
+         %{type: :stream, id: id, stream: stream, data: data},
+         %{phase: :running, active: %{id: active_id} = active} = state
+       )
+       when stream in [:stdout, :stderr] and active_id == id do
+    active = %{active | output: state.mods.output.append(active.output, stream, data)}
+    {:noreply, %{state | active: active}}
+  end
 
-      _ ->
-        protocol_fault(state, {:unexpected_stream, id})
-    end
+  # Timeout snapshots finish the active capture before cancellation begins.
+  # A late stream would append to its closed spill device, while exception
+  # and done frames must still reach their clauses below to quiesce cleanly.
+  defp handle_frame(
+         %{type: :stream, id: id, stream: stream},
+         %{phase: :cancelling, active: %{id: active_id}} = state
+       )
+       when stream in [:stdout, :stderr] and active_id == id,
+       do: {:noreply, state}
+
+  defp handle_frame(%{type: :stream, id: id, stream: stream}, state)
+       when stream in [:stdout, :stderr] do
+    protocol_fault(state, {:unexpected_stream, id})
   end
 
   # exception is pre-terminal information; done closes the cell. Repeats

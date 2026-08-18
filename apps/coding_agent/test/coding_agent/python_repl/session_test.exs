@@ -13,7 +13,7 @@ defmodule CodingAgent.PythonRepl.SessionTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.PythonRepl
-  alias CodingAgent.PythonRepl.{Key, Registry, Session}
+  alias CodingAgent.PythonRepl.{Key, Output, Registry, Session}
   alias CodingAgent.Tools.ExecuteCode.PythonShim
 
   defmodule FakeProcess do
@@ -712,6 +712,73 @@ defmodule CodingAgent.PythonRepl.SessionTest do
 
       assert_stops(pid, ref)
       assert FakeProcess.terminated?()
+    end
+
+    test "drops post-timeout streams after finalizing a spilled capture", ctx do
+      pid =
+        start_session(ctx,
+          output_mod: Output,
+          max_output_bytes: 4,
+          interrupt_grace_ms: 500,
+          bye_timeout_ms: 200
+        )
+        |> bring_idle()
+
+      task = Task.async(fn -> Session.execute(pid, %{code: "slow()"}, 60) end)
+      wait_until(fn -> active_id(pid) == "cell-1" end)
+
+      FakeProtocol.script([
+        {:ok,
+         [
+           %{type: :started, id: "cell-1"},
+           %{type: :stream, id: "cell-1", stream: :stdout, data: "spill"}
+         ]}
+      ])
+
+      FakeProcess.emit(pid, FakeProcess.proc(), "started-and-spilled")
+
+      ref = monitor(pid)
+      assert {:error, result} = Task.await(task, 1_000)
+      assert result.reason == :timeout
+      assert result.truncated
+      assert is_binary(result.full_output_path)
+      assert File.exists?(result.full_output_path)
+
+      wait_until(fn ->
+        Session.status(pid).phase == :cancelling and FakeProcess.interrupted?()
+      end)
+
+      # `finish/1` closed the spill during the timeout reply. This matching
+      # late stream must be ignored rather than writing to that closed device.
+      FakeProtocol.script([
+        {:ok, [%{type: :stream, id: "cell-1", stream: :stdout, data: "late"}]}
+      ])
+
+      FakeProcess.emit(pid, FakeProcess.proc(), "late-stream")
+      assert Process.alive?(pid)
+      assert Session.status(pid).phase == :cancelling
+
+      # Pre-terminal frames still control the normal interrupt -> bye shutdown.
+      FakeProtocol.script([
+        {:ok,
+         [
+           %{type: :exception, id: "cell-1", kind: :interrupted, name: "KeyboardInterrupt"},
+           %{type: :done, id: "cell-1"}
+         ]}
+      ])
+
+      FakeProcess.emit(pid, FakeProcess.proc(), "quiesce")
+
+      wait_until(fn ->
+        Enum.any?(FakeProcess.writes(), &String.contains?(&1, ~s("type":"shutdown")))
+      end)
+
+      FakeProtocol.script([{:ok, [%{type: :bye}]}])
+      FakeProcess.emit(pid, FakeProcess.proc(), "bye")
+
+      assert_stops(pid, ref)
+      assert FakeProcess.terminated?()
+      File.rm!(result.full_output_path)
     end
 
     test "fires and terminates when the runner suppresses the started frame", ctx do
