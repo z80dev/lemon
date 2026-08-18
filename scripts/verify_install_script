@@ -38,6 +38,7 @@ Checks:
     invoke it; unavailable terminals print the exact absolute setup command
   - the fixture TUI gates an incomplete installation through setup once, then
     does not repeat setup once its config and credential source are ready
+EOF
   exit 2
 }
 
