@@ -626,7 +626,7 @@ defmodule CodingAgent.PythonRepl.Registry do
     extras =
       worker_opts
       |> List.wrap()
-      |> Keyword.take([:max_output_bytes, :max_queued_cells, :runner_path])
+      |> Keyword.take([:max_output_bytes, :max_queued_cells, :runner_path, :helper_source])
 
     [key: key, cwd: key.cwd, interpreter: key.interpreter, generation: generation] ++
       extras

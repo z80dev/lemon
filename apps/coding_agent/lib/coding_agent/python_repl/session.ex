@@ -181,6 +181,8 @@ defmodule CodingAgent.PythonRepl.Session do
     * `:generation` - registry generation for this kernel (default `1`)
     * `:runner_path` - source runner script staged into the workspace
       (default: `priv/python_repl/runner.py` of `:coding_agent`)
+    * `:helper_source` - optional authority-free `lemon_tools.py` source staged
+      beside the runner with owner-only permissions
     * `:startup_timeout_ms`, `:bye_timeout_ms`, `:interrupt_grace_ms`,
       `:term_grace_ms`, `:kill_grace_ms`, `:max_queued_cells`,
       `:max_output_bytes` - bounds (tested defaults above)
@@ -267,8 +269,9 @@ defmodule CodingAgent.PythonRepl.Session do
     }
 
     runner_source = Keyword.get(opts, :runner_path) || default_runner_source()
+    helper_source = Keyword.fetch(opts, :helper_source)
 
-    case boot(state, runner_source, interpreter) do
+    case boot(state, runner_source, helper_source, interpreter) do
       {:ok, ctx} ->
         startup_timer = Process.send_after(self(), :startup_timeout, state.limits.startup_ms)
 
@@ -289,7 +292,7 @@ defmodule CodingAgent.PythonRepl.Session do
 
   # Boot walks a context map so any failure knows exactly which resources
   # exist and must be destroyed.
-  defp boot(state, runner_source, interpreter) do
+  defp boot(state, runner_source, helper_source, interpreter) do
     process_mod = state.mods.process
 
     steps = [
@@ -303,6 +306,12 @@ defmodule CodingAgent.PythonRepl.Session do
         case stage_runner(runner_source, ctx.workspace) do
           {:ok, dest} -> {:ok, Map.put(ctx, :runner_dest, dest)}
           {:error, reason} -> {:error, Map.put(ctx, :reason, {:runner_stage_failed, reason})}
+        end
+      end,
+      fn ctx ->
+        case stage_helper_module(helper_source, ctx.workspace) do
+          {:ok, dest} -> {:ok, Map.put(ctx, :helper_dest, dest)}
+          {:error, reason} -> {:error, Map.put(ctx, :reason, {:helper_stage_failed, reason})}
         end
       end,
       fn ctx ->
@@ -1033,6 +1042,19 @@ defmodule CodingAgent.PythonRepl.Session do
       {:error, reason} -> {:error, reason}
     end
   end
+
+  defp stage_helper_module(:error, _workspace), do: {:ok, nil}
+
+  defp stage_helper_module({:ok, source}, workspace) when is_binary(source) do
+    dest = Path.join(workspace, "lemon_tools.py")
+
+    with :ok <- File.write(dest, source),
+         :ok <- File.chmod(dest, 0o600) do
+      {:ok, dest}
+    end
+  end
+
+  defp stage_helper_module({:ok, _source}, _workspace), do: {:error, :invalid_source}
 
   defp remove_workspace(nil), do: :ok
 

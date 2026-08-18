@@ -21,11 +21,14 @@ defmodule CodingAgent.Tools.ExecuteCode.PythonShim do
   @stub_order ~w(read grep find ls webfetch)
 
   @doc """
-  Render an unconfigured `lemon_tools.py`, defining a stub per enabled tool.
-  Persistent Python sessions configure its per-cell bridge with `_configure/2`.
+  Render an unconfigured, authority-free `lemon_tools.py` module defining a
+  stub per enabled tool.
+
+  Persistent Python sessions stage this source once and rotate its bridge
+  credentials per cell with `_configure/2`.
   """
-  @spec render_prelude(tools :: [String.t()]) :: String.t()
-  def render_prelude(tools) when is_list(tools) do
+  @spec render_module(tools :: [String.t()]) :: String.t()
+  def render_module(tools) when is_list(tools) do
     enabled = enabled_tools(tools)
 
     header = """
@@ -74,6 +77,15 @@ defmodule CodingAgent.Tools.ExecuteCode.PythonShim do
 
     Enum.reduce(enabled, header, fn name, acc -> acc <> "\n\n" <> stub(name) end)
   end
+
+  @doc """
+  Render an unconfigured `lemon_tools.py`.
+
+  Kept for the one-shot compatibility path; persistent callers should use
+  `render_module/1` to make the absence of initial bridge authority explicit.
+  """
+  @spec render_prelude(tools :: [String.t()]) :: String.t()
+  def render_prelude(tools) when is_list(tools), do: render_module(tools)
 
   @doc """
   Render `lemon_tools.py` preconfigured for a one-shot `execute_code` run.

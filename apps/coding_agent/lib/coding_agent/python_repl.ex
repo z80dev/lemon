@@ -77,7 +77,7 @@ defmodule CodingAgent.PythonRepl do
   defp acquire(registry, opts, key, owner) do
     worker_opts =
       opts
-      |> Map.take([:runner_path, :max_queued_cells, :max_output_bytes])
+      |> Map.take([:runner_path, :helper_source, :max_queued_cells, :max_output_bytes])
       |> Map.to_list()
 
     try do

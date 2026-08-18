@@ -12,7 +12,9 @@ defmodule CodingAgent.PythonRepl.SessionTest do
 
   use ExUnit.Case, async: false
 
-  alias CodingAgent.PythonRepl.Session
+  alias CodingAgent.PythonRepl
+  alias CodingAgent.PythonRepl.{Key, Registry, Session}
+  alias CodingAgent.Tools.ExecuteCode.PythonShim
 
   defmodule FakeProcess do
     @moduledoc false
@@ -28,11 +30,16 @@ defmodule CodingAgent.PythonRepl.SessionTest do
 
     ## Session-facing API
 
-    def start(_opts) do
+    def start(opts) do
       port = make_ref()
 
       Agent.update(__MODULE__, fn st ->
-        %{st | procs: Map.put(st.procs, port, %{dead: false}), last: port}
+        %{
+          st
+          | calls: [{:start, opts} | st.calls],
+            procs: Map.put(st.procs, port, %{dead: false}),
+            last: port
+        }
       end)
 
       {:ok, %{port: port}}
@@ -73,6 +80,13 @@ defmodule CodingAgent.PythonRepl.SessionTest do
     def calls, do: Agent.get(__MODULE__, fn st -> Enum.reverse(st.calls) end)
 
     def writes, do: calls() |> Enum.filter(&match?({:write, _, _}, &1)) |> Enum.map(&elem(&1, 2))
+
+    def start_opts do
+      Enum.find_value(calls(), fn
+        {:start, opts} -> opts
+        _other -> nil
+      end)
+    end
 
     def interrupted?, do: Enum.any?(calls(), &match?({:interrupt, _}, &1))
 
@@ -158,6 +172,50 @@ defmodule CodingAgent.PythonRepl.SessionTest do
     end
   end
 
+  defmodule RegistrySession do
+    @moduledoc false
+    use GenServer
+
+    def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
+
+    def status(pid), do: GenServer.call(pid, :status)
+    def options(pid), do: GenServer.call(pid, :options)
+    def set_phase(pid, phase), do: GenServer.call(pid, {:set_phase, phase})
+
+    def execute(pid, _request, _timeout) do
+      GenServer.call(pid, :execute)
+    end
+
+    def shutdown(pid, timeout), do: GenServer.stop(pid, :shutdown, timeout)
+
+    @impl true
+    def init(opts), do: {:ok, %{opts: opts, phase: :idle}}
+
+    @impl true
+    def handle_call(:status, _from, state) do
+      active_request_id = if state.phase == :idle, do: nil, else: "replacement"
+
+      {:reply,
+       %{
+         phase: state.phase,
+         generation: Keyword.fetch!(state.opts, :generation),
+         key: Keyword.fetch!(state.opts, :key),
+         queue_depth: 0,
+         active_request_id: active_request_id,
+         cells_completed: 0,
+         process_alive: true
+       }, state}
+    end
+
+    def handle_call(:options, _from, state), do: {:reply, state.opts, state}
+
+    def handle_call({:set_phase, phase}, _from, state),
+      do: {:reply, :ok, %{state | phase: phase}}
+
+    def handle_call(:execute, _from, state),
+      do: {:reply, {:ok, %{state_retained: true, duration_ms: 0}}, state}
+  end
+
   setup do
     FakeProcess.reset()
     FakeProtocol.reset()
@@ -176,7 +234,7 @@ defmodule CodingAgent.PythonRepl.SessionTest do
       if pid = Process.whereis(FakeProtocol), do: Agent.stop(pid)
     end)
 
-    {:ok, runner: runner}
+    {:ok, runner: runner, helper_source: "# session helper stub\n"}
   end
 
   defp start_session(ctx, opts \\ []) do
@@ -185,6 +243,7 @@ defmodule CodingAgent.PythonRepl.SessionTest do
       cwd: "/tmp",
       interpreter: "python3",
       runner_path: ctx.runner,
+      helper_source: ctx.helper_source,
       startup_timeout_ms: 500,
       bye_timeout_ms: 150,
       interrupt_grace_ms: 100,
@@ -193,7 +252,7 @@ defmodule CodingAgent.PythonRepl.SessionTest do
       output_mod: FakeOutput
     ]
 
-    {:ok, pid} = Session.start_link(defaults ++ opts)
+    {:ok, pid} = Session.start_link(Keyword.merge(defaults, opts))
     Process.unlink(pid)
 
     on_exit(fn ->
@@ -268,6 +327,140 @@ defmodule CodingAgent.PythonRepl.SessionTest do
 
   defp eval_writes_containing(code) do
     FakeProcess.writes() |> Enum.filter(&String.contains?(&1, Jason.encode!(code)))
+  end
+
+  describe "helper staging" do
+    test "stages an authority-free module with owner-only permissions and removes it", ctx do
+      before = pyrepl_dirs()
+      source = PythonShim.render_module(["read"])
+
+      assert PythonShim.render_prelude(["read"]) == source
+      assert String.contains?(source, "_RPC_DIR = None")
+      assert String.contains?(source, "_TOKEN = None")
+
+      pid = start_session(ctx, helper_source: source)
+      workspace = FakeProcess.start_opts() |> Keyword.fetch!(:cwd)
+      helper_path = Path.join(workspace, "lemon_tools.py")
+
+      assert File.read!(helper_path) == source
+      assert Bitwise.band(File.stat!(workspace).mode, 0o777) == 0o700
+      assert Bitwise.band(File.stat!(helper_path).mode, 0o777) == 0o600
+
+      ref = monitor(pid)
+      assert :ok = Session.shutdown(pid)
+      assert_stops(pid, ref)
+
+      refute File.exists?(workspace)
+      assert FakeProcess.terminated?()
+      assert_no_workspace_leak(before)
+    end
+
+    test "the real runner imports the staged module and rotates bridge authority per cell" do
+      before = pyrepl_dirs()
+      interpreter = System.find_executable("python3") || flunk("python3 is required")
+      runner = Application.app_dir(:coding_agent, "priv/python_repl/runner.py")
+      source = PythonShim.render_module(["read"])
+
+      {:ok, pid} =
+        Session.start_link(
+          key: {:scope, "real-helper"},
+          cwd: System.tmp_dir!(),
+          interpreter: interpreter,
+          runner_path: runner,
+          helper_source: source,
+          startup_timeout_ms: 3_000
+        )
+
+      Process.unlink(pid)
+
+      on_exit(fn ->
+        if Process.alive?(pid), do: Session.shutdown(pid, 2_000)
+      end)
+
+      first_dir = Path.join(System.tmp_dir!(), "bridge-first")
+      second_dir = Path.join(System.tmp_dir!(), "bridge-second")
+
+      first_code = """
+      import lemon_tools
+      assert lemon_tools._RPC_DIR == #{Jason.encode!(first_dir)}
+      assert lemon_tools._TOKEN == "first-token"
+      print("first")
+      """
+
+      second_code = """
+      import lemon_tools
+      assert lemon_tools._RPC_DIR == #{Jason.encode!(second_dir)}
+      assert lemon_tools._TOKEN == "second-token"
+      print("second")
+      """
+
+      assert {:ok, %{output: "first\n", cells_completed: 1}} =
+               Session.execute(
+                 pid,
+                 %{code: first_code, bridge: %{dir: first_dir, token: "first-token"}},
+                 2_000
+               )
+
+      assert {:ok, %{output: "second\n", cells_completed: 2}} =
+               Session.execute(
+                 pid,
+                 %{code: second_code, bridge: %{dir: second_dir, token: "second-token"}},
+                 2_000
+               )
+
+      ref = monitor(pid)
+      assert :ok = Session.shutdown(pid)
+      assert_stops(pid, ref)
+      assert_no_workspace_leak(before)
+    end
+
+    test "facade and registry propagate helper source to a replacement worker" do
+      supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+
+      registry =
+        start_supervised!(
+          {Registry,
+           name: nil,
+           session_supervisor: supervisor,
+           session_mod: RegistrySession,
+           idle_timeout_ms: :infinity}
+        )
+
+      key = %Key{
+        scope_id: "scope",
+        agent_id: "agent",
+        cwd: System.tmp_dir!(),
+        interpreter: System.find_executable("python3") || "python3",
+        helpers: ["read"],
+        protocol_version: 1,
+        digest: "helper-source-test"
+      }
+
+      source = PythonShim.render_module(key.helpers)
+
+      request = [
+        registry: registry,
+        key: key,
+        owner_pid: self(),
+        code: "pass",
+        timeout_ms: 100,
+        helper_source: source
+      ]
+
+      assert {:ok, %{kernel_reused: false}} = PythonRepl.execute(request)
+
+      {:ok, first} = Registry.acquire(registry, key, self())
+      assert Keyword.fetch!(RegistrySession.options(first.pid), :helper_source) == source
+      assert :ok = Registry.release(registry, first.lease)
+      assert :ok = RegistrySession.set_phase(first.pid, :stopping)
+
+      assert {:ok, %{kernel_reused: false}} = PythonRepl.execute(request)
+
+      {:ok, replacement} = Registry.acquire(registry, key, self())
+      assert replacement.pid != first.pid
+      assert Keyword.fetch!(RegistrySession.options(replacement.pid), :helper_source) == source
+      assert :ok = Registry.release(registry, replacement.lease)
+    end
   end
 
   describe "boot and serialization" do
@@ -770,6 +963,32 @@ defmodule CodingAgent.PythonRepl.SessionTest do
 
       assert_stops(pid, ref)
       assert FakeProcess.terminated?()
+      assert_no_workspace_leak(before)
+    end
+
+    test "an invalid helper source fails before process spawn and cleans the workspace", ctx do
+      before = pyrepl_dirs()
+      reason = {:shutdown, {:startup_failed, {:helper_stage_failed, :invalid_source}}}
+      previous_trap_exit = Process.flag(:trap_exit, true)
+
+      try do
+        assert {:error, ^reason} =
+                 Session.start_link(
+                   key: {:scope, "scope-1"},
+                   cwd: "/tmp",
+                   interpreter: "python3",
+                   runner_path: ctx.runner,
+                   helper_source: ["not", "a", "binary"],
+                   startup_timeout_ms: 100,
+                   process_mod: FakeProcess,
+                   protocol_mod: FakeProtocol,
+                   output_mod: FakeOutput
+                 )
+      after
+        Process.flag(:trap_exit, previous_trap_exit)
+      end
+
+      assert FakeProcess.start_opts() == nil
       assert_no_workspace_leak(before)
     end
 
