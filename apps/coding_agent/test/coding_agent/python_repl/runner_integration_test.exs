@@ -148,6 +148,17 @@ defmodule CodingAgent.PythonRepl.RunnerIntegrationTest do
   # frame helpers
   # ---------------------------------------------------------------------------
 
+  # A cell's output may legitimately arrive as one or several stream frames
+  # (write scheduling decides the chunking), so assert the protocol ordering
+  # contract rather than an exact frame count.
+  defp assert_started_done_frames!(frames, cell_id) do
+    types = frame_types(frames)
+    assert hd(types) == "started"
+    assert List.last(types) == "done"
+    assert Enum.all?(Enum.drop(types, 1), &(&1 in ["stream", "done"]))
+    assert hd(frames)["id"] == cell_id
+  end
+
   defp frame_types(frames), do: Enum.map(frames, & &1["type"])
 
   defp frames_of(frames, type), do: Enum.filter(frames, &(&1["type"] == type))
@@ -187,14 +198,13 @@ defmodule CodingAgent.PythonRepl.RunnerIntegrationTest do
       send_eval(port, "cell-1", "a = 41\nprint('hello')")
 
       frames = frames_until(port, "done")
-      assert frame_types(frames) == ["started", "stream", "done"]
-      assert hd(frames)["id"] == "cell-1"
+      assert_started_done_frames!(frames, "cell-1")
       assert decoded(frames, "stdout") == "hello\n"
 
       send_eval(port, "cell-2", "print(a + 1)")
 
       frames = frames_until(port, "done")
-      assert frame_types(frames) == ["started", "stream", "done"]
+      assert_started_done_frames!(frames, "cell-2")
       assert decoded(frames, "stdout") == "42\n"
 
       # No second ready ever arrives; init is once per process.
@@ -229,7 +239,7 @@ defmodule CodingAgent.PythonRepl.RunnerIntegrationTest do
       # State written before the raise survived the failure.
       send_eval(port, "cell-2", "print(len(vals))")
       frames = frames_until(port, "done")
-      assert frame_types(frames) == ["started", "stream", "done"]
+      assert_started_done_frames!(frames, "cell-2")
       assert decoded(frames, "stdout") == "2\n"
 
       shutdown_runner(port)
@@ -457,7 +467,7 @@ defmodule CodingAgent.PythonRepl.RunnerIntegrationTest do
       send_eval(port, "cell-1", code)
       frames = frames_until(port, "done")
 
-      assert frame_types(frames) == ["started", "stream", "done"]
+      assert_started_done_frames!(frames, "cell-1")
       assert decoded(frames, "stdout") == "cell-output\n"
 
       shutdown_runner(port)
