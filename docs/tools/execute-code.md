@@ -18,7 +18,7 @@ code with the user's permissions. This is not a sandbox — see [Security](#secu
 [runtime.tools.execute_code]
 enabled = false                        # default: tool is not registered at all
 python_path = ""                       # explicit interpreter; empty = find python3 on PATH
-timeout_ms = 120000                    # max wall-time cap per run; per-call timeout_ms clamps here
+timeout_ms = 120000                    # end-to-end wall-time cap per run, including session queue wait
 max_rpc_calls = 100                    # helper calls one run may make
 max_rpc_result_bytes = 5242880         # total helper-result bytes one run may consume (5 MiB)
 max_output_bytes = 50000               # script stdout/stderr bytes returned to the model
@@ -92,11 +92,12 @@ requester onto a fresh kernel and leaves siblings on the shared one.
 Each kernel runs **one active cell at a time**; further calls wait in a FIFO queue bounded
 by `max_queued_cells_per_kernel` (default 8). A full queue returns a busy error — it never
 silently falls back, because a fresh process would not see the expected namespace. A queued
-call that is cancelled simply leaves the queue; the active cell is undisturbed.
+call whose external abort fires or whose deadline expires simply leaves the queue; the active
+cell is undisturbed.
 
-`timeout_ms` (minimum 1,000 ms, clamped to the configured `timeout_ms`) measures **active
-cell time**, starting when the cell is dispatched to the kernel — including ordinary
-helper/approval waits — never queue time.
+`timeout_ms` (minimum 1,000 ms, clamped to the configured `timeout_ms`) is an
+**end-to-end wall-clock limit**. In session mode it includes FIFO queue wait, active-cell
+execution, and ordinary helper/approval waits.
 
 ## State retention and loss
 
@@ -107,7 +108,7 @@ helper/approval waits — never queue time.
 | `SystemExit` | cell error | retained |
 | `input()` / stdin read | explicit unsupported-input error | retained |
 | Helper denial / error / budget limit | catchable `ToolError` in the script | retained |
-| Active-cell timeout / abort / caller death | partial output may return, `state_retained: false` | **discarded** — the kernel is destroyed |
+| Timeout (including queued wait) / abort / caller death | partial output may return, `state_retained: false` | **discarded** when active; a queued caller simply leaves the queue |
 | Interpreter crash, `os._exit`, protocol fault | error, `state_retained: false` | **discarded** |
 
 Cancellation escalates SIGINT → SIGTERM → SIGKILL against the interpreter process group

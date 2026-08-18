@@ -581,7 +581,7 @@ behavior, security, and lifecycle contract see
 [runtime.tools.execute_code]
 enabled = false
 python_path = ""              # empty = find python3 on PATH
-timeout_ms = 120000           # wall-time cap per run
+timeout_ms = 120000           # end-to-end wall-time cap per run, including session queue wait
 max_rpc_calls = 100           # helper calls per run
 max_rpc_result_bytes = 5242880
 max_output_bytes = 50000

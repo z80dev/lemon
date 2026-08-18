@@ -138,7 +138,7 @@ defmodule CodingAgent.Tools.ExecuteCode do
           "timeout_ms" => %{
             "type" => "integer",
             "description" =>
-              "Optional wall-time cap in ms for this run (clamped to the configured maximum)."
+              "Optional end-to-end wall-time cap in ms for this run, including session queue wait (clamped to the configured maximum)."
           },
           "reset" => %{
             "type" => "boolean",
@@ -449,6 +449,7 @@ defmodule CodingAgent.Tools.ExecuteCode do
          timeout_ms,
          started_at
        ) do
+    deadline_ms = clock_now(opts) + timeout_ms
     repl = Keyword.get(opts, :python_repl, PythonRepl)
 
     with {:ok, reset_performed} <- maybe_reset(repl, key, owner_pid, params, opts) do
@@ -498,6 +499,7 @@ defmodule CodingAgent.Tools.ExecuteCode do
                       cell_signal,
                       rpc_server_module,
                       rpc_server,
+                      deadline_ms,
                       opts
                     )
 
@@ -646,26 +648,41 @@ defmodule CodingAgent.Tools.ExecuteCode do
   # propagate that death. The separate cell signal belongs only to this bridge:
   # it is aborted before formatting so an RPC approval or tool cannot outlive
   # the cell.
-  defp await_session_task(task, signal, cell_signal, rpc_server, server, opts) do
+  defp await_session_task(task, signal, cell_signal, rpc_server, server, deadline_ms, opts) do
     poll_interval_ms = Keyword.get(opts, :persistent_poll_interval_ms, @poll_interval_ms)
+    remaining_ms = deadline_ms - clock_now(opts)
 
-    case Task.yield(task, poll_interval_ms) do
-      {:ok, result} ->
-        abort_cell(cell_signal, rpc_server, server)
-        {:completed, result}
-
-      {:exit, reason} ->
-        abort_cell(cell_signal, rpc_server, server)
-        {:task_exit, reason}
-
-      nil ->
-        if aborted?(signal, opts) do
+    if remaining_ms <= 0 do
+      abort_cell(cell_signal, rpc_server, server)
+      _ = Task.shutdown(task, :brutal_kill)
+      :timed_out
+    else
+      case Task.yield(task, min(poll_interval_ms, remaining_ms)) do
+        {:ok, result} ->
           abort_cell(cell_signal, rpc_server, server)
-          _ = Task.shutdown(task, :brutal_kill)
-          :aborted
-        else
-          await_session_task(task, signal, cell_signal, rpc_server, server, opts)
-        end
+          {:completed, result}
+
+        {:exit, reason} ->
+          abort_cell(cell_signal, rpc_server, server)
+          {:task_exit, reason}
+
+        nil ->
+          if aborted?(signal, opts) do
+            abort_cell(cell_signal, rpc_server, server)
+            _ = Task.shutdown(task, :brutal_kill)
+            :aborted
+          else
+            await_session_task(
+              task,
+              signal,
+              cell_signal,
+              rpc_server,
+              server,
+              deadline_ms,
+              opts
+            )
+          end
+      end
     end
   end
 
@@ -725,6 +742,27 @@ defmodule CodingAgent.Tools.ExecuteCode do
     rpc_server.stop(server)
   catch
     :exit, _ -> :ok
+  end
+
+  defp format_session_result(
+         :timed_out,
+         stats,
+         signal,
+         timeout_ms,
+         reset_performed,
+         started_at,
+         opts
+       ) do
+    result = %{reason: :timeout, state_retained: false, kernel_reused: false}
+
+    session_tool_result(
+      session_text(result, {:error, signal, timeout_ms}),
+      result,
+      stats,
+      reset_performed,
+      started_at,
+      opts
+    )
   end
 
   defp format_session_result(

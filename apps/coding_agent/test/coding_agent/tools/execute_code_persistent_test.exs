@@ -112,6 +112,93 @@ defmodule CodingAgent.Tools.ExecuteCodePersistentTest do
     refute_receive {:fallback_runner, _command}
   end
 
+  test "facade deadline expires a queued cell without external cancellation", %{cwd: cwd} do
+    set_response(:block)
+
+    set_stats(%{
+      calls: 1,
+      denied: 0,
+      errors: 0,
+      bytes: 8,
+      tools_used: MapSet.new(["read"]),
+      seen_ids: MapSet.new([1])
+    })
+
+    signal = AbortSignal.new()
+    clock = sequence_clock([0, 0, 0, 1_000])
+
+    task =
+      Task.async(fn ->
+        opts = [
+          settings_manager: settings(),
+          session_id: "session-1",
+          session_pid: self(),
+          session_module: FakeSession,
+          agent_id: "agent-1",
+          python_repl: FakePythonRepl,
+          rpc_server: FakeRpcServer,
+          python_repl_registry: self(),
+          clock: clock
+        ]
+
+        ExecuteCode.execute(
+          "call-1",
+          %{"script" => "queued()", "timeout_ms" => 1_000},
+          signal,
+          nil,
+          cwd,
+          opts
+        )
+      end)
+
+    assert_receive {:facade_pid, facade}
+    monitor = Process.monitor(facade)
+    assert_receive {:execute, _request}
+    assert_receive {:rpc_started, %{signal: cell_signal}, _modes}
+
+    result = Task.await(task, 5_000)
+
+    assert_receive {:DOWN, ^monitor, :process, ^facade, _reason}, 5_000
+    assert result.details.persistent
+    assert result.details.reason == :timeout
+    refute result.details.state_retained
+    refute result.details.kernel_reused
+    assert text(result) == "Script timed out after 1000ms."
+    assert result.details.rpc_calls == 1
+    assert result.details.rpc_tools == ["read"]
+    assert AbortSignal.aborted?(cell_signal)
+    assert_receive {:rpc_aborted, _server}
+    refute AbortSignal.aborted?(signal)
+  end
+
+  test "a cell that completes before the facade deadline is unaffected", %{cwd: cwd} do
+    set_response({:ok, %{output: "on time", state_retained: true, kernel_reused: true}})
+
+    result =
+      execute(cwd, %{"script" => "print('on time')", "timeout_ms" => 1_000}, clock: fn -> 0 end)
+
+    assert text(result) == "on time"
+    assert result.details.persistent
+    assert result.details.state_retained
+    assert result.details.kernel_reused
+    refute Map.has_key?(result.details, :reason)
+  end
+
+  test "facade deadline begins at session-cell entry using the injected clock", %{cwd: cwd} do
+    set_response({:ok, %{output: "on time", state_retained: true, kernel_reused: false}})
+
+    result =
+      execute(cwd, %{"script" => "print('on time')", "timeout_ms" => 1_000},
+        clock: sequence_clock([0, 500, 1_250])
+      )
+
+    assert text(result) == "on time"
+    assert result.details.persistent
+    assert result.details.state_retained
+    refute result.details.kernel_reused
+    refute Map.has_key?(result.details, :reason)
+  end
+
   test "abort preserves RPC statistics and the resulting trust classification", %{cwd: cwd} do
     set_response(:block)
 
@@ -445,6 +532,17 @@ defmodule CodingAgent.Tools.ExecuteCodePersistentTest do
   defp set_response(response), do: Agent.update(@state, &Map.put(&1, :response, response))
   defp set_reset(reset), do: Agent.update(@state, &Map.put(&1, :reset, reset))
   defp set_stats(stats), do: Agent.update(@state, &Map.put(&1, :stats, stats))
+
+  defp sequence_clock(values) do
+    values = List.to_tuple(values)
+    last_index = tuple_size(values) - 1
+    counter = :atomics.new(1, [])
+
+    fn ->
+      index = :atomics.add_get(counter, 1, 1) - 1
+      elem(values, min(index, last_index))
+    end
+  end
 
   defp set_query_response(response),
     do: Agent.update(@state, &Map.put(&1, :query_response, response))
