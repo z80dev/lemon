@@ -123,6 +123,7 @@ if ! $SKIP_COMPILE; then
 fi
 
 onboarding_home="$(mktemp -d "${TMPDIR:-/tmp}/lemon-source-install-onboarding.XXXXXX")"
+onboarding_project="$(mktemp -d "${TMPDIR:-/tmp}/lemon-source-install-project.XXXXXX")"
 onboarding_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-onboarding.XXXXXX")"
 onboarding_master_key="MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
 setup_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-runtime.XXXXXX")"
@@ -141,6 +142,7 @@ usage_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-usage.XXXXXX")"
 update_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-update.XXXXXX")"
 cleanup_setup_output() {
   rm -rf "$onboarding_home"
+  rm -rf "$onboarding_project"
   rm -f "$onboarding_output"
   rm -f "$setup_output"
   rm -f "$setup_required_output"
@@ -162,28 +164,36 @@ run_onboarding() {
   local output="$1"
   shift
 
-  HOME="$onboarding_home" \
-    XDG_CONFIG_HOME="$onboarding_home/.config" \
-    XDG_DATA_HOME="$onboarding_home/.local/share" \
-    XDG_CACHE_HOME="$onboarding_home/.cache" \
-    LEMON_STORE_PATH="$onboarding_home/.lemon/store" \
-    LEMON_SECRETS_MASTER_KEY="$onboarding_master_key" \
-    MIX_ENV=test \
-    ./bin/lemon "$@" >"$output" 2>&1
+  (
+    cd "$onboarding_project"
+
+    HOME="$onboarding_home" \
+      XDG_CONFIG_HOME="$onboarding_home/.config" \
+      XDG_DATA_HOME="$onboarding_home/.local/share" \
+      XDG_CACHE_HOME="$onboarding_home/.cache" \
+      LEMON_STORE_PATH="$onboarding_home/.lemon/store" \
+      LEMON_SECRETS_MASTER_KEY="$onboarding_master_key" \
+      MIX_ENV=test \
+      "$ROOT/bin/lemon" "$@"
+  ) >"$output" 2>&1
 }
 
 run_onboarding_split_output() {
   local output="$1" error_output="$2"
   shift 2
 
-  HOME="$onboarding_home" \
-    XDG_CONFIG_HOME="$onboarding_home/.config" \
-    XDG_DATA_HOME="$onboarding_home/.local/share" \
-    XDG_CACHE_HOME="$onboarding_home/.cache" \
-    LEMON_STORE_PATH="$onboarding_home/.lemon/store" \
-    LEMON_SECRETS_MASTER_KEY="$onboarding_master_key" \
-    MIX_ENV=test \
-    ./bin/lemon "$@" >"$output" 2>"$error_output"
+  (
+    cd "$onboarding_project"
+
+    HOME="$onboarding_home" \
+      XDG_CONFIG_HOME="$onboarding_home/.config" \
+      XDG_DATA_HOME="$onboarding_home/.local/share" \
+      XDG_CACHE_HOME="$onboarding_home/.cache" \
+      LEMON_STORE_PATH="$onboarding_home/.lemon/store" \
+      LEMON_SECRETS_MASTER_KEY="$onboarding_master_key" \
+      MIX_ENV=test \
+      "$ROOT/bin/lemon" "$@"
+  ) >"$output" 2>"$error_output"
 }
 
 run_onboarding_help() {
@@ -200,10 +210,15 @@ assert_setup_required() {
     LEMON_STORE_PATH="$onboarding_home/.lemon/store" \
     LEMON_SECRETS_MASTER_KEY="$onboarding_master_key" \
     LEMON_EXPECT_SETUP_REQUIRED="$expected" \
+    LEMON_ONBOARDING_PROJECT="$onboarding_project" \
     MIX_ENV=test \
     mix run --no-start -e '
       expected = System.fetch_env!("LEMON_EXPECT_SETUP_REQUIRED") == "true"
-      actual = LemonCli.CLI.setup_required?()
+
+      actual =
+        File.cd!(System.fetch_env!("LEMON_ONBOARDING_PROJECT"), fn ->
+          LemonCli.CLI.setup_required?()
+        end)
 
       if actual != expected do
         IO.puts(:stderr, "expected setup_required?=#{expected}, got #{actual}")
