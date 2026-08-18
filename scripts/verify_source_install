@@ -7,9 +7,9 @@ usage: scripts/verify_source_install [--project-dir PATH] [--skip-compile] [--sk
 
 Verifies the supported source-install path:
   - checks Elixir and Erlang/OTP toolchain availability
-  - checks source-wrapper help advertises setup/channels/config/doctor/send/media/models/providers/policy/proofs/readiness/secrets/skill/usage/update
+  - checks source-wrapper help advertises setup/model/gateway/channels/config/doctor/send/media/models/providers/policy/proofs/readiness/secrets/skill/usage/update
   - checks locked dependency resolution
-  - compiles with warnings as errors unless --skip-compile is set
+  - checks source-wrapper installed-style setup/model/gateway onboarding command discovery without provider credentials
   - checks source-wrapper non-interactive setup runtime dispatch
   - checks source-wrapper promoted channel readiness
   - checks source-wrapper config validation
@@ -81,13 +81,13 @@ require_command mix
 
 help_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-help.XXXXXX")"
 ./bin/lemon --help >"$help_output"
-for subcommand in setup channels config doctor send media models providers policy proofs readiness secrets skill usage update; do
+for subcommand in setup model gateway channels config doctor send media models providers policy proofs readiness secrets skill usage update; do
   if ! grep -q "./bin/lemon $subcommand" "$help_output"; then
     fail "source wrapper help did not advertise ./bin/lemon $subcommand"
   fi
 done
 rm -f "$help_output"
-ok "source-wrapper help advertises setup/channels/config/doctor/send/media/models/providers/policy/proofs/readiness/secrets/skill/usage/update"
+ok "source-wrapper help advertises setup/model/gateway/channels/config/doctor/send/media/models/providers/policy/proofs/readiness/secrets/skill/usage/update"
 
 elixir -e '
 required = Version.parse!("1.19.5")
@@ -121,6 +121,9 @@ if ! $SKIP_COMPILE; then
   ok "test compile passes with warnings as errors"
 fi
 
+onboarding_home="$(mktemp -d "${TMPDIR:-/tmp}/lemon-source-install-onboarding.XXXXXX")"
+onboarding_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-onboarding.XXXXXX")"
+onboarding_master_key="MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
 setup_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-runtime.XXXXXX")"
 channels_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-channels.XXXXXX")"
 config_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-config.XXXXXX")"
@@ -135,6 +138,8 @@ skill_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-skill.XXXXXX")"
 usage_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-usage.XXXXXX")"
 update_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-update.XXXXXX")"
 cleanup_setup_output() {
+  rm -rf "$onboarding_home"
+  rm -f "$onboarding_output"
   rm -f "$setup_output"
   rm -f "$channels_output"
   rm -f "$config_output"
@@ -149,7 +154,33 @@ cleanup_setup_output() {
   rm -f "$usage_output"
   rm -f "$update_output"
 }
+
+run_onboarding_help() {
+  HOME="$onboarding_home" \
+    XDG_CONFIG_HOME="$onboarding_home/.config" \
+    XDG_DATA_HOME="$onboarding_home/.local/share" \
+    XDG_CACHE_HOME="$onboarding_home/.cache" \
+    LEMON_SECRETS_MASTER_KEY="$onboarding_master_key" \
+    MIX_ENV=test \
+    ./bin/lemon "$@" >"$onboarding_output" 2>&1
+}
+
 trap cleanup_setup_output EXIT
+
+run_onboarding_help setup --help
+grep -qi "setup" "$onboarding_output" ||
+  fail "installed-style setup help did not identify the setup command"
+
+run_onboarding_help model --help
+grep -qi "model" "$onboarding_output" ||
+  fail "installed-style model help did not identify the model command"
+
+run_onboarding_help gateway setup --help
+grep -qi "gateway" "$onboarding_output" ||
+  fail "installed-style gateway setup help did not identify the gateway command"
+
+ok "installed-style onboarding commands are discoverable without provider credentials"
+
 
 MIX_ENV=test ./bin/lemon setup runtime --profile runtime_min --non-interactive >"$setup_output"
 grep -q "mix release lemon_runtime_min" "$setup_output" ||

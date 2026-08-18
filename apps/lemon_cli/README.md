@@ -1,10 +1,10 @@
 # Lemon CLI
 
-`lemon_cli` owns user-facing Mix tasks and interactive setup flows that sit
-above the core foundation:
+`lemon_cli` owns user-facing release CLI commands and source-checkout Mix adapters
+for setup flows above the core foundation:
 
-- provider onboarding through `mix lemon.onboard`
-- first-time setup through `mix lemon.setup`
+- provider onboarding through `lemon model` or `mix lemon.onboard`
+- first-time setup through `lemon setup` or `mix lemon.setup`
 - Hermes import audit and migration through `mix lemon.hermes.*`
 
 The app depends on `lemon_core` for config, secrets, store, and shared runtime
@@ -19,16 +19,24 @@ not start a supervision tree; tasks run the flows on demand.
 4. Update config via `LemonCore.Config.TomlPatch`.
 5. Add focused tests in `test/mix/tasks/` and `test/lemon_cli/onboarding/`.
 
-## Tasks
+## Commands
+
+Use the packaged executable when Lemon is installed from a release:
 
 ```bash
-mix lemon.onboard
-mix lemon.onboard anthropic
-mix lemon.onboard codex
-mix lemon.onboard gemini
+lemon setup
+lemon model --provider anthropic
+lemon gateway setup
+lemon doctor
+```
+
+From a source checkout, use the equivalent Mix adapters:
+
+```bash
 mix lemon.setup
-mix lemon.hermes.audit
-mix lemon.hermes.migrate --dry-run
+mix lemon.onboard anthropic
+mix lemon.setup gateway
+mix lemon.doctor
 ```
 
 ## Gateway Setup
@@ -78,6 +86,22 @@ keys live in `llm_anthropic_api_key_raw` and should be referenced by
 `providers.anthropic.oauth_secret`, and Lemon prefers refreshable Claude Code
 credentials from `~/.claude/.credentials.json` over a stale static
 `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_TOKEN`.
+
+The packaged command accepts the provider as an explicit flag:
+
+```bash
+lemon model --provider antigravity --token <token> --set-default --model gemini-3-pro-high
+lemon model --provider gemini --project-id your-gcp-project
+lemon model --provider gemini --token <token> --set-default --model gemini-2.5-pro
+lemon model --provider openai-codex --token <token> --set-default --model gpt-5.2
+lemon model --provider zai --token <token> --set-default --model glm-5
+lemon model --provider minimax --token <token> --set-default --model MiniMax-M2.7
+lemon model --provider github-copilot --enterprise-domain company.ghe.com
+lemon model --provider github-copilot --skip-enable-models
+lemon model --provider github-copilot --token <token>
+```
+
+From source, the equivalent Mix task and provider-specific aliases remain available:
 
 ```bash
 mix lemon.onboard.antigravity --token <token> --set-default --model gemini-3-pro-high
