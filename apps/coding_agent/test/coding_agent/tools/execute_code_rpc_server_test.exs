@@ -1,0 +1,501 @@
+defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
+  @moduledoc """
+  Lifecycle tests for the per-cell `RpcServer`, driven through a faithful
+  fake of the shared pump contract (no python3, no real policy/approval
+  machinery): the test writes `req-*.json` files directly and reads the
+  `res-*.json` files back, exactly like the generated shim does.
+  """
+  use ExUnit.Case, async: false
+
+  alias CodingAgent.Tools.ExecuteCode.RpcServer
+  alias LemonAgent.AbortSignal
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.TextContent
+
+  @moduletag :tmp_dir
+
+  # 256-bit hex token, the shape every cell gets.
+  @token String.duplicate("ab", 32)
+
+  defmodule FakeRpc do
+    @moduledoc """
+    Faithful stand-in for the shared `Rpc` contract: same stats shape, same
+    file protocol, same accounting decisions (constant-time token comparison
+    is the real pump's concern; plain equality suffices here).
+    """
+
+    alias LemonAgent.Types.AgentToolResult
+    alias LemonAi.Types.TextContent
+
+    def initial_stats do
+      %{
+        calls: 0,
+        denied: 0,
+        errors: 0,
+        bytes: 0,
+        tools_used: MapSet.new(),
+        seen_ids: MapSet.new()
+      }
+    end
+
+    def process_pending(ctx, stats) do
+      ctx.rpc_dir
+      |> pending_ids()
+      |> Enum.reduce(stats, fn id, acc -> process_request(id, ctx, acc) end)
+    end
+
+    def process_request(id, ctx, stats) do
+      cond do
+        MapSet.member?(stats.seen_ids, id) ->
+          respond_error(ctx, id, "duplicate rpc request id")
+          %{stats | errors: stats.errors + 1}
+
+        stats.calls >= ctx.max_calls ->
+          respond_error(ctx, id, "rpc call limit exceeded (max #{ctx.max_calls} calls per cell)")
+          %{stats | errors: stats.errors + 1}
+
+        true ->
+          case read_request(ctx.rpc_dir, id) do
+            {:ok, %{"token" => token} = request} when token == ctx.token ->
+              stats = %{stats | calls: stats.calls + 1, seen_ids: MapSet.put(stats.seen_ids, id)}
+              dispatch(id, request, ctx, stats)
+
+            _other ->
+              respond_error(ctx, id, "rpc authentication failed")
+              %{stats | denied: stats.denied + 1, seen_ids: MapSet.put(stats.seen_ids, id)}
+          end
+      end
+    end
+
+    defp dispatch(id, request, ctx, stats) do
+      tool_name = Map.get(request, "tool")
+      params = Map.get(request, "params") || %{}
+
+      case Map.fetch(ctx.tools, tool_name || "") do
+        :error ->
+          respond_error(
+            ctx,
+            id,
+            "tool '#{tool_name}' is not available inside execute_code scripts"
+          )
+
+          %{stats | errors: stats.errors + 1}
+
+        {:ok, tool} ->
+          execute(id, tool, tool_name, params, ctx, stats)
+      end
+    end
+
+    defp execute(id, tool, tool_name, params, ctx, stats) do
+      result =
+        try do
+          tool.execute.("exec_code_rpc_#{id}", params, ctx.signal, nil)
+        rescue
+          error -> {:error, Exception.message(error)}
+        end
+
+      case result do
+        %AgentToolResult{} = tool_result ->
+          account(id, tool_name, content_text(tool_result.content), ctx, stats)
+
+        {:error, message} ->
+          respond_error(ctx, id, message)
+          %{stats | errors: stats.errors + 1}
+      end
+    end
+
+    defp account(id, tool_name, content, ctx, stats) do
+      remaining = ctx.max_result_bytes - stats.bytes
+
+      if byte_size(content) > remaining do
+        respond_error(ctx, id, "rpc result byte budget exceeded")
+        %{stats | errors: stats.errors + 1}
+      else
+        respond_ok(ctx, id, content)
+
+        %{
+          stats
+          | bytes: stats.bytes + byte_size(content),
+            tools_used: MapSet.put(stats.tools_used, tool_name)
+        }
+      end
+    end
+
+    defp content_text(blocks) when is_list(blocks) do
+      blocks
+      |> Enum.map(fn
+        %TextContent{text: text} when is_binary(text) -> text
+        _ -> "[non-text content omitted]"
+      end)
+      |> Enum.join("\n")
+    end
+
+    defp content_text(_), do: ""
+
+    defp read_request(rpc_dir, id) do
+      with {:ok, body} <- File.read(request_path(rpc_dir, id)),
+           {:ok, decoded} <- Jason.decode(body),
+           %{"tool" => tool} when is_binary(tool) <- decoded do
+        {:ok, decoded}
+      else
+        _ -> :error
+      end
+    end
+
+    defp pending_ids(rpc_dir) do
+      rpc_dir
+      |> Path.join("req-*.json")
+      |> Path.wildcard()
+      |> Enum.flat_map(fn path ->
+        case Integer.parse(path |> Path.basename(".json") |> String.replace_prefix("req-", "")) do
+          {id, ""} -> [id]
+          _ -> []
+        end
+      end)
+      |> Enum.sort()
+      |> Enum.reject(&File.exists?(response_path(rpc_dir, &1)))
+    end
+
+    defp respond_ok(ctx, id, content) do
+      write_response(ctx.rpc_dir, id, %{"id" => id, "ok" => true, "content" => content})
+    end
+
+    defp respond_error(ctx, id, message) do
+      write_response(ctx.rpc_dir, id, %{"id" => id, "ok" => false, "error" => message})
+    end
+
+    defp write_response(rpc_dir, id, payload) do
+      final = response_path(rpc_dir, id)
+      tmp = final <> ".tmp"
+      File.write!(tmp, Jason.encode!(payload))
+      File.rename!(tmp, final)
+      :ok
+    end
+
+    def request_path(rpc_dir, id), do: Path.join(rpc_dir, "req-#{id}.json")
+    def response_path(rpc_dir, id), do: Path.join(rpc_dir, "res-#{id}.json")
+  end
+
+  defmodule FlakyRpc do
+    @moduledoc """
+    `FakeRpc` that raises while a `.raise-sweep` marker file exists in the
+    rpc dir, to prove a broken sweep is contained by the server.
+    """
+
+    def initial_stats, do: FakeRpc.initial_stats()
+
+    def process_pending(ctx, stats) do
+      if File.exists?(Path.join(ctx.rpc_dir, ".raise-sweep")) do
+        File.touch(Path.join(ctx.rpc_dir, ".raise-sweep-hit"))
+        raise "sweep exploded"
+      end
+
+      FakeRpc.process_pending(ctx, stats)
+    end
+  end
+
+  setup %{tmp_dir: tmp_dir} do
+    rpc_dir = Path.join(tmp_dir, "rpc")
+    File.mkdir_p!(rpc_dir)
+    {:ok, rpc_dir: rpc_dir}
+  end
+
+  describe "start_link/2" do
+    test "rejects an invalid ctx without starting a process", %{rpc_dir: rpc_dir} do
+      assert {:error, {:invalid_ctx, :rpc_dir}} = RpcServer.start_link(%{})
+
+      assert {:error, {:invalid_ctx, :token}} =
+               RpcServer.start_link(ctx(rpc_dir, token: ""), rpc: FakeRpc)
+
+      assert {:error, {:invalid_ctx, :max_calls}} =
+               RpcServer.start_link(ctx(rpc_dir, max_calls: 0), rpc: FakeRpc)
+
+      assert {:error, {:invalid_ctx, :poll_interval_ms}} =
+               RpcServer.start_link(ctx(rpc_dir), rpc: FakeRpc, poll_interval_ms: 0)
+    end
+
+    test "starts with zeroed stats", %{rpc_dir: rpc_dir} do
+      {:ok, server} = start_server(ctx(rpc_dir))
+
+      stats = RpcServer.stats(server)
+      assert stats.calls == 0
+      assert stats.denied == 0
+      assert stats.errors == 0
+      assert stats.bytes == 0
+      assert MapSet.to_list(stats.tools_used) == []
+
+      assert :ok = RpcServer.stop(server)
+    end
+  end
+
+  describe "polling" do
+    test "serves authenticated requests and accumulates stats across polls", %{
+      rpc_dir: rpc_dir
+    } do
+      {:ok, server} = start_server(ctx(rpc_dir))
+
+      write_request(rpc_dir, 1, "echo", %{"value" => "hello"})
+      write_request(rpc_dir, 2, "echo", %{"value" => "world"})
+
+      assert %{"id" => 1, "ok" => true, "content" => "hello"} = await_response(rpc_dir, 1)
+      assert %{"id" => 2, "ok" => true, "content" => "world"} = await_response(rpc_dir, 2)
+      assert_receive {:dispatched, "exec_code_rpc_1"}
+      assert_receive {:dispatched, "exec_code_rpc_2"}
+
+      stats = RpcServer.stats(server)
+      assert stats.calls == 2
+      assert stats.denied == 0
+      assert stats.errors == 0
+      assert stats.bytes == byte_size("hello") + byte_size("world")
+      assert MapSet.to_list(stats.tools_used) == ["echo"]
+
+      assert :ok = RpcServer.stop(server)
+    end
+
+    test "wrong or missing tokens are denied and never dispatched", %{rpc_dir: rpc_dir} do
+      {:ok, server} = start_server(ctx(rpc_dir))
+
+      write_request(rpc_dir, 1, "echo", %{"value" => "nope"}, String.duplicate("cd", 32))
+      write_request(rpc_dir, 2, "echo", %{"value" => "nope"}, nil)
+
+      assert %{"ok" => false, "error" => "rpc authentication failed"} =
+               await_response(rpc_dir, 1)
+
+      assert %{"ok" => false, "error" => "rpc authentication failed"} =
+               await_response(rpc_dir, 2)
+
+      refute_receive {:dispatched, _}, 100
+
+      stats = RpcServer.stats(server)
+      assert stats.calls == 0
+      assert stats.denied == 2
+      assert stats.bytes == 0
+
+      assert :ok = RpcServer.stop(server)
+    end
+
+    test "a request id replayed after its response was consumed is refused", %{
+      rpc_dir: rpc_dir
+    } do
+      {:ok, server} = start_server(ctx(rpc_dir))
+
+      write_request(rpc_dir, 1, "echo", %{"value" => "first"})
+      assert %{"ok" => true, "content" => "first"} = await_response(rpc_dir, 1)
+      assert_receive {:dispatched, "exec_code_rpc_1"}
+
+      # The shim consumed the response; an adversarial script replays the id.
+      File.rm!(Path.join(rpc_dir, "res-1.json"))
+      write_request(rpc_dir, 1, "echo", %{"value" => "replay"})
+
+      assert %{"ok" => false, "error" => "duplicate rpc request id"} =
+               await_response(rpc_dir, 1)
+
+      refute_receive {:dispatched, _}, 100
+
+      stats = RpcServer.stats(server)
+      assert stats.calls == 1
+      assert stats.errors == 1
+
+      assert :ok = RpcServer.stop(server)
+    end
+
+    test "a request with a pre-existing response is never reprocessed", %{rpc_dir: rpc_dir} do
+      File.write!(
+        Path.join(rpc_dir, "res-2.json"),
+        Jason.encode!(%{"id" => 2, "ok" => true, "content" => "preexisting"})
+      )
+
+      {:ok, server} = start_server(ctx(rpc_dir))
+      write_request(rpc_dir, 2, "echo", %{"value" => "fresh"})
+
+      # Several polls pass; the pre-existing answer must stand untouched.
+      Process.sleep(50)
+      assert %{"content" => "preexisting"} = read_response(rpc_dir, 2)
+      assert RpcServer.stats(server).calls == 0
+      refute_receive {:dispatched, _}, 10
+
+      assert :ok = RpcServer.stop(server)
+    end
+  end
+
+  describe "abort and caller death" do
+    test "stops when the abort signal fires and cleans the rpc dir", %{rpc_dir: rpc_dir} do
+      signal = AbortSignal.new()
+      {:ok, server} = start_server(ctx(rpc_dir, signal: signal))
+
+      File.write!(Path.join(rpc_dir, "junk.txt"), "x")
+      monitor = Process.monitor(server)
+
+      :ok = AbortSignal.abort(signal)
+      assert_receive {:DOWN, ^monitor, :process, ^server, :normal}, 2_000
+      refute Process.alive?(server)
+      assert File.ls(rpc_dir) == {:ok, []}
+    end
+
+    test "stops when the monitored caller dies", %{rpc_dir: rpc_dir} do
+      caller =
+        spawn(fn ->
+          receive do
+            :never -> :ok
+          end
+        end)
+
+      {:ok, server} = start_server(ctx(rpc_dir), caller: caller)
+      monitor = Process.monitor(server)
+
+      Process.exit(caller, :boom)
+      assert_receive {:DOWN, ^monitor, :process, ^server, :normal}, 2_000
+    end
+
+    test "stops when the linked starter exits", %{rpc_dir: rpc_dir} do
+      test = self()
+
+      starter =
+        spawn(fn ->
+          {:ok, server} = start_server(ctx(rpc_dir))
+          send(test, {:server, server})
+        end)
+
+      server =
+        receive do
+          {:server, pid} -> pid
+        after
+          2_000 -> flunk("server never started")
+        end
+
+      monitor = Process.monitor(server)
+      # The starter is linked to the server and has already exited normally.
+      refute Process.alive?(starter)
+      assert_receive {:DOWN, ^monitor, :process, ^server, _reason}, 2_000
+    end
+  end
+
+  describe "failure isolation" do
+    @tag :capture_log
+    test "a raising sweep is contained and the server resumes serving", %{rpc_dir: rpc_dir} do
+      File.touch(Path.join(rpc_dir, ".raise-sweep"))
+      {:ok, server} = start_server(ctx(rpc_dir), rpc: FlakyRpc)
+
+      await_file(Path.join(rpc_dir, ".raise-sweep-hit"))
+      assert Process.alive?(server)
+      assert RpcServer.stats(server).calls == 0
+
+      File.rm!(Path.join(rpc_dir, ".raise-sweep"))
+      write_request(rpc_dir, 1, "echo", %{"value" => "after the storm"})
+
+      assert %{"ok" => true, "content" => "after the storm"} = await_response(rpc_dir, 1)
+      assert RpcServer.stats(server).calls == 1
+
+      assert :ok = RpcServer.stop(server)
+    end
+  end
+
+  describe "stop/1 and cleanup" do
+    test "stop is synchronous and idempotent and removes every dropped file", %{
+      rpc_dir: rpc_dir
+    } do
+      {:ok, server} = start_server(ctx(rpc_dir))
+
+      write_request(rpc_dir, 1, "echo", %{"value" => "served"})
+      assert %{"ok" => true} = await_response(rpc_dir, 1)
+
+      # Protocol leftovers and arbitrary junk the cell dropped in the dir.
+      File.write!(Path.join(rpc_dir, "req-9.json.tmp"), "{}")
+      File.write!(Path.join(rpc_dir, ".hidden"), "x")
+      File.write!(Path.join(rpc_dir, "junk.txt"), "x")
+
+      assert :ok = RpcServer.stop(server)
+      refute Process.alive?(server)
+      assert File.ls(rpc_dir) == {:ok, []}
+
+      assert :ok = RpcServer.stop(server)
+    end
+  end
+
+  # ==========================================================================
+  # Helpers
+  # ==========================================================================
+
+  defp ctx(rpc_dir, overrides \\ []) do
+    %{
+      tools: stub_tools(),
+      tool_policy: nil,
+      approval_context: nil,
+      max_calls: Keyword.get(overrides, :max_calls, 100),
+      max_result_bytes: Keyword.get(overrides, :max_result_bytes, 5_242_880),
+      signal: Keyword.get(overrides, :signal),
+      rpc_dir: rpc_dir,
+      token: Keyword.get(overrides, :token, @token),
+      poll_interval_ms: 5
+    }
+  end
+
+  defp start_server(ctx, opts \\ []) do
+    RpcServer.start_link(ctx, Keyword.merge([rpc: FakeRpc, poll_interval_ms: 5], opts))
+  end
+
+  defp stub_tools do
+    test = self()
+
+    %{
+      "echo" => %AgentTool{
+        name: "echo",
+        description: "stub",
+        label: "echo",
+        parameters: %{"type" => "object", "properties" => %{}},
+        execute: fn call_id, params, _signal, _on_update ->
+          send(test, {:dispatched, call_id})
+
+          %AgentToolResult{
+            content: [%TextContent{text: params["value"] || ""}]
+          }
+        end
+      }
+    }
+  end
+
+  # Writes the request exactly like the generated shim does: `.tmp` file
+  # atomically renamed into place, carrying the current cell token.
+  defp write_request(rpc_dir, id, tool, params, token \\ @token) do
+    payload = %{"id" => id, "tool" => tool, "params" => params}
+    payload = if token, do: Map.put(payload, "token", token), else: payload
+
+    tmp = Path.join(rpc_dir, "req-#{id}.json.tmp")
+    File.write!(tmp, Jason.encode!(payload))
+    File.rename!(tmp, Path.join(rpc_dir, "req-#{id}.json"))
+  end
+
+  defp await_response(rpc_dir, id, attempts \\ 400) do
+    path = Path.join(rpc_dir, "res-#{id}.json")
+
+    cond do
+      File.exists?(path) ->
+        read_response(rpc_dir, id)
+
+      attempts <= 0 ->
+        flunk("no response for request #{id}")
+
+      true ->
+        Process.sleep(5)
+        await_response(rpc_dir, id, attempts - 1)
+    end
+  end
+
+  defp read_response(rpc_dir, id) do
+    rpc_dir |> Path.join("res-#{id}.json") |> File.read!() |> Jason.decode!()
+  end
+
+  defp await_file(path, attempts \\ 400) do
+    cond do
+      File.exists?(path) ->
+        :ok
+
+      attempts <= 0 ->
+        flunk("timed out waiting for #{path}")
+
+      true ->
+        Process.sleep(5)
+        await_file(path, attempts - 1)
+    end
+  end
+end
