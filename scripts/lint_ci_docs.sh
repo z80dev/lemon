@@ -302,11 +302,16 @@ import sys
 root = Path(sys.argv[1])
 path = root / ".github/workflows/release.yml"
 content = path.read_text(encoding="utf-8")
+summary, separator, _ = content.partition("\non:")
+if not separator:
+    print(f"{path.relative_to(root)} missing workflow summary", file=sys.stderr)
+    sys.exit(1)
+
 tokens = [
-    "Verify the assembled artifact directory before publishing",
-    "Generate a manifest.json with version, channel, and SHA-256 checksums",
+    "Generate manifest.json with release metadata and per-artifact SHA-256 checksums",
+    "Verify the manifest and every assembled artifact before publishing",
 ]
-missing = [token for token in tokens if token not in content]
+missing = [token for token in tokens if token not in summary]
 if missing:
     print("\n".join(f"{path.relative_to(root)} missing {token!r}" for token in missing), file=sys.stderr)
     sys.exit(1)

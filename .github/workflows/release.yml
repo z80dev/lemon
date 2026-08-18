@@ -16,9 +16,8 @@ name: Release
 #      terminal client on all three) and boot-verify each on its native runner
 #      before upload. lemon_tui is a compiled Bun binary rather than a BEAM
 #      release, so it is built and verified by its own jobs.
-#   4. Generate a manifest.json (schema 2) with version, channel, commit, toolchain,
-#      and per-artifact checksums/platform metadata.
-#   5. Re-verify the assembled artifact directory before publishing.
+#   4. Generate manifest.json with release metadata and per-artifact SHA-256 checksums.
+#   5. Verify the manifest and every assembled artifact before publishing.
 #   6. Create a GitHub Release and upload artifacts (+ install.sh once Phase B lands).
 #
 # See docs/release/versioning_and_channels.md for the versioning model.
