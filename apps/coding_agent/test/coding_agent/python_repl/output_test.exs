@@ -322,7 +322,10 @@ defmodule CodingAgent.PythonRepl.OutputTest do
       assert is_binary(path)
       on_exit(fn -> File.rm(path) end)
 
-      assert Path.dirname(path) == System.tmp_dir!()
+      # The spill is reserved beneath the application-private root, not
+      # directly under the system temp dir.
+      {:ok, private_root} = CodingAgent.PrivateTmp.root()
+      assert Path.dirname(path) == private_root
       assert File.read!(path) == content
 
       stat = File.stat!(path)

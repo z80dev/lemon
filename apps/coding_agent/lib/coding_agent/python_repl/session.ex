@@ -45,6 +45,7 @@ defmodule CodingAgent.PythonRepl.Session do
 
   require Logger
 
+  alias CodingAgent.PrivateTmp
   alias CodingAgent.PythonRepl.Process, as: KernelProcess
   alias CodingAgent.PythonRepl.Telemetry
 
@@ -1069,28 +1070,22 @@ defmodule CodingAgent.PythonRepl.Session do
 
   ## Workspace management
 
+  # All three objects come from `PrivateTmp`: the workspace is reserved
+  # atomically at 0700 and both staged files are reserved at 0600 and
+  # published by rename. `File.cp/2` is deliberately not used — it copies the
+  # source's mode bits onto the destination — and nothing chmods after
+  # creation, so no staged object is ever observable with umask-derived
+  # permissions.
   defp create_workspace do
-    dir =
-      Path.join(
-        System.tmp_dir!(),
-        "lemon-pyrepl-" <> Base.encode16(:crypto.strong_rand_bytes(10), case: :lower)
-      )
-
-    case File.mkdir(dir) do
-      :ok ->
-        :ok = File.chmod(dir, 0o700)
-        {:ok, dir}
-
-      {:error, reason} ->
-        {:error, reason}
+    with {:ok, root} <- PrivateTmp.root(),
+         {:ok, dir} <- PrivateTmp.reserve_dir(root, "lemon-pyrepl") do
+      {:ok, dir}
     end
   end
 
   defp stage_runner(source, workspace) do
-    dest = Path.join(workspace, "runner.py")
-
-    case File.cp(source, dest) do
-      :ok -> {:ok, dest}
+    case PrivateTmp.copy_file(source, workspace, "runner.py") do
+      :ok -> {:ok, Path.join(workspace, "runner.py")}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -1098,11 +1093,9 @@ defmodule CodingAgent.PythonRepl.Session do
   defp stage_helper_module(:error, _workspace), do: {:ok, nil}
 
   defp stage_helper_module({:ok, source}, workspace) when is_binary(source) do
-    dest = Path.join(workspace, "lemon_tools.py")
-
-    with :ok <- File.write(dest, source),
-         :ok <- File.chmod(dest, 0o600) do
-      {:ok, dest}
+    case PrivateTmp.write_file(workspace, "lemon_tools.py", source) do
+      :ok -> {:ok, Path.join(workspace, "lemon_tools.py")}
+      {:error, reason} -> {:error, reason}
     end
   end
 

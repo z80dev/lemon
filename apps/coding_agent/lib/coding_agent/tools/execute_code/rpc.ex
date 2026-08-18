@@ -16,6 +16,7 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
 
   require Logger
 
+  alias CodingAgent.PrivateTmp
   alias CodingAgent.ToolExecutor
   alias CodingAgent.ToolPolicy
   alias CodingAgent.PythonRepl.Telemetry
@@ -149,7 +150,7 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   end
 
   defp process_request_path(id, request, ctx, stats) do
-    if File.exists?(response_path(ctx.rpc_dir, id)) do
+    if response_present?(response_path(ctx.rpc_dir, id)) do
       consume_request(request)
       remember_id(stats, id)
     else
@@ -157,6 +158,14 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
       consume_request(request)
       authenticate_and_process(id, parsed, ctx, stats)
     end
+  end
+
+  # Only a regular file published by the atomic rename counts as an answered
+  # id. `File.exists?/1` follows symlinks, so a planted `res-<id>.json`
+  # symlink must not masquerade as an already-written response and swallow
+  # the request; the responder replaces such a link instead of following it.
+  defp response_present?(path) do
+    match?({:ok, %File.Stat{type: :regular}}, File.lstat(path))
   end
 
   defp parse_request(path) do
@@ -379,20 +388,26 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
     write_response(ctx.rpc_dir, id, %{"id" => id, "ok" => false, "error" => message})
   end
 
+  # The response body is reserved as a private 0600 file (hidden, random
+  # name) and published by same-directory rename: a half-written response is
+  # never visible under `res-<id>.json`, the published inode is owner-only,
+  # and a planted symlink at the final name is replaced, not followed.
   defp write_response(rpc_dir, id, payload) do
-    final = response_path(rpc_dir, id)
-    tmp = final <> ".tmp"
+    name = "res-#{id}.json"
 
     try do
-      File.write!(tmp, Jason.encode!(payload))
-      File.rename!(tmp, final)
-      :ok
+      case PrivateTmp.write_file(rpc_dir, name, Jason.encode!(payload)) do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning("execute_code rpc response write failed: #{inspect(reason)}")
+          :ok
+      end
     rescue
       error ->
         Logger.warning("execute_code rpc response write failed: #{Exception.message(error)}")
         :ok
-    after
-      consume_request(tmp)
     end
   end
 

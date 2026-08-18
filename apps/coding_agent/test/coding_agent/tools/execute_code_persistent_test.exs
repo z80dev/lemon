@@ -31,11 +31,24 @@ defmodule CodingAgent.Tools.ExecuteCodePersistentTest do
 
     result = execute(cwd, %{"script" => "print(answer)", "reset" => true})
 
+    # The per-cell bridge is private at creation: both the base and the rpc
+    # directory are exactly 0700, stat'd inside the fake server while the cell
+    # still owns them (the after-block removes the base before execute
+    # returns), and the base is gone once the cell is over.
+    assert_received {:rpc_started, bridge_ctx, modes}
+    assert {:ok, base_stat} = modes.base
+    assert Bitwise.band(base_stat.mode, 0o777) == 0o700
+    assert {:ok, rpc_stat} = modes.rpc
+    assert Bitwise.band(rpc_stat.mode, 0o777) == 0o700
+
+    bridge_base = Path.dirname(bridge_ctx.rpc_dir)
+
     assert text(result) == "answer"
     assert result.details.persistent
     assert result.details.kernel_reused
     assert result.details.reset_performed
     assert result.details.state_retained
+    refute File.exists?(bridge_base)
     assert_receive {:reset, _key, owner, _opts}
     assert owner == self()
     assert_receive {:execute, request}
@@ -110,7 +123,7 @@ defmodule CodingAgent.Tools.ExecuteCodePersistentTest do
       end)
 
     assert_receive {:execute, _request}
-    assert_receive {:rpc_started, %{signal: cell_signal}}
+    assert_receive {:rpc_started, %{signal: cell_signal}, _modes}
     refute cell_signal == signal
 
     :ok = AbortSignal.abort(signal)
@@ -394,8 +407,12 @@ defmodule CodingAgent.Tools.ExecuteCodePersistentTest do
 
     def start_link(ctx) do
       state = Agent.get(@state, & &1)
-      send(state.test_pid, {:rpc_started, ctx})
+      send(state.test_pid, {:rpc_started, ctx, bridge_modes(ctx.rpc_dir)})
       {:ok, make_ref()}
+    end
+
+    defp bridge_modes(rpc_dir) do
+      %{base: File.stat(Path.dirname(rpc_dir)), rpc: File.stat(rpc_dir)}
     end
 
     def abort(server) do

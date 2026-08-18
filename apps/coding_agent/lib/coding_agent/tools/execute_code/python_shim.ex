@@ -61,8 +61,24 @@ defmodule CodingAgent.Tools.ExecuteCode.PythonShim do
         params = {k: v for k, v in params.items() if v is not None}
         tmp = os.path.join(rpc_dir, "req-%d.json.tmp" % req_id)
         final = os.path.join(rpc_dir, "req-%d.json" % req_id)
-        with open(tmp, "w") as f:
-            json.dump({"id": req_id, "token": token, "tool": tool, "params": params}, f)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            fd = os.open(tmp, flags, 0o600)
+        except FileExistsError:
+            raise ToolError("rpc request temp for id %d already exists" % req_id)
+        if (os.fstat(fd).st_mode & 0o777) != 0o600:
+            os.close(fd)
+            os.unlink(tmp)
+            raise ToolError("rpc request temp for id %d is not owner-only" % req_id)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump({"id": req_id, "token": token, "tool": tool, "params": params}, f)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
         os.replace(tmp, final)
         res_path = os.path.join(rpc_dir, "res-%d.json" % req_id)
         while True:

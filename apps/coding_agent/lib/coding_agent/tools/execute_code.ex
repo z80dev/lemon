@@ -47,6 +47,7 @@ defmodule CodingAgent.Tools.ExecuteCode do
   import Bitwise
 
   alias CodingAgent.BashExecutor
+  alias CodingAgent.PrivateTmp
   alias CodingAgent.PythonRepl
   alias CodingAgent.PythonRepl.{Key, Protocol, Telemetry}
   alias CodingAgent.Tools
@@ -251,40 +252,47 @@ defmodule CodingAgent.Tools.ExecuteCode do
   defp run(script, python, config, params, signal, cwd, opts) do
     started_at = System.monotonic_time(:microsecond)
     timeout_ms = clamp_timeout(Map.get(params, "timeout_ms"), config)
-    {base, rpc_dir, token} = build_workspace(script, config)
 
-    try do
-      command = "exec #{shell_escape(python)} #{shell_escape(Path.join(base, "script.py"))}"
-      runner = Keyword.get(opts, :script_runner, &BashExecutor.execute/3)
+    case build_workspace(script, config) do
+      {:ok, base, rpc_dir, token} ->
+        try do
+          command = "exec #{shell_escape(python)} #{shell_escape(Path.join(base, "script.py"))}"
+          runner = Keyword.get(opts, :script_runner, &BashExecutor.execute/3)
 
-      task =
-        Task.Supervisor.async_nolink(CodingAgent.TaskSupervisor, fn ->
-          runner.(command, cwd,
-            on_chunk: nil,
+          task =
+            Task.Supervisor.async_nolink(CodingAgent.TaskSupervisor, fn ->
+              runner.(command, cwd,
+                on_chunk: nil,
+                signal: signal,
+                timeout: timeout_ms,
+                max_bytes: config.max_output_bytes
+              )
+            end)
+
+          ctx = %{
+            tools: inner_tools(config, cwd, opts),
+            tool_policy: Keyword.get(opts, :tool_policy),
+            approval_context: Keyword.get(opts, :approval_context),
+            max_calls: config.max_rpc_calls,
+            max_result_bytes: config.max_rpc_result_bytes,
             signal: signal,
-            timeout: timeout_ms,
-            max_bytes: config.max_output_bytes
-          )
-        end)
+            rpc_dir: rpc_dir,
+            token: token,
+            poll_interval_ms: @poll_interval_ms
+          }
 
-      ctx = %{
-        tools: inner_tools(config, cwd, opts),
-        tool_policy: Keyword.get(opts, :tool_policy),
-        approval_context: Keyword.get(opts, :approval_context),
-        max_calls: config.max_rpc_calls,
-        max_result_bytes: config.max_rpc_result_bytes,
-        signal: signal,
-        rpc_dir: rpc_dir,
-        token: token,
-        poll_interval_ms: @poll_interval_ms
-      }
+          {outcome, task_result, stats} = Rpc.serve(task, ctx)
 
-      {outcome, task_result, stats} = Rpc.serve(task, ctx)
+          emit_telemetry(started_at, stats, task_result)
+          format(outcome, task_result, stats, signal, timeout_ms)
+        after
+          File.rm_rf(base)
+        end
 
-      emit_telemetry(started_at, stats, task_result)
-      format(outcome, task_result, stats, signal, timeout_ms)
-    after
-      File.rm_rf(base)
+      {:error, reason} ->
+        # Unusable mktemp or a rejected/failed reservation: fail closed
+        # before any interpreter or script runs.
+        {:error, "execute_code could not create its private workspace: #{inspect(reason)}"}
     end
   end
 
@@ -524,21 +532,15 @@ defmodule CodingAgent.Tools.ExecuteCode do
   end
 
   defp build_bridge do
-    suffix = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
-    base = Path.join(System.tmp_dir!(), "lemon-exec-code-cell-" <> suffix)
-    rpc_dir = Path.join(base, "rpc")
     token = :crypto.strong_rand_bytes(32) |> Base.url_encode64(padding: false)
 
-    try do
-      :ok = File.mkdir(base)
-      :ok = File.chmod(base, 0o700)
-      :ok = File.mkdir(rpc_dir)
-      :ok = File.chmod(rpc_dir, 0o700)
-      {:ok, base, %{dir: rpc_dir, token: token}}
-    rescue
-      error ->
-        File.rm_rf(base)
-        {:error, {:bridge_setup_failed, error.__struct__}}
+    case private_base("lemon-exec-code-cell", fn base ->
+           with {:ok, rpc_dir} <- PrivateTmp.reserve_dir(base, "rpc") do
+             {:ok, %{dir: rpc_dir, token: token}}
+           end
+         end) do
+      {:ok, base, bridge} -> {:ok, base, bridge}
+      {:error, reason} -> {:error, {:bridge_setup_failed, reason}}
     end
   end
 
@@ -919,25 +921,53 @@ defmodule CodingAgent.Tools.ExecuteCode do
 
   defp clamp_timeout(_value, %Config{timeout_ms: max_ms}), do: max_ms
 
+  # The whole workspace is assembled through `PrivateTmp`: the base and rpc
+  # directories are reserved atomically at 0700 and both staged files are
+  # reserved at 0600 and published by same-directory rename, so no object is
+  # ever observable with umask-derived permissions and no chmod window
+  # exists. A failure after the base was reserved removes exactly that base.
   defp build_workspace(script, %Config{} = config) do
-    suffix = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
     token = :crypto.strong_rand_bytes(32) |> Base.url_encode64(padding: false)
-    base = Path.join(System.tmp_dir!(), "lemon-exec-code-" <> suffix)
-    rpc_dir = Path.join(base, "rpc")
 
-    File.mkdir!(base)
-    :ok = File.chmod(base, 0o700)
-    File.mkdir!(rpc_dir)
-    :ok = File.chmod(rpc_dir, 0o700)
+    case private_base("lemon-exec-code", &stage_workspace(script, config, token, &1)) do
+      {:ok, base, rpc_dir} -> {:ok, base, rpc_dir, token}
+      {:error, reason} -> {:error, {:workspace_setup_failed, reason}}
+    end
+  end
 
-    File.write!(
-      Path.join(base, "lemon_tools.py"),
-      PythonShim.render_prelude(rpc_dir, token, config.tools)
-    )
+  defp stage_workspace(script, config, token, base) do
+    with {:ok, rpc_dir} <- PrivateTmp.reserve_dir(base, "rpc"),
+         :ok <-
+           PrivateTmp.write_file(
+             base,
+             "lemon_tools.py",
+             PythonShim.render_prelude(rpc_dir, token, config.tools)
+           ),
+         :ok <-
+           PrivateTmp.write_file(
+             base,
+             "script.py",
+             PythonShim.render_script(script, config.tools)
+           ) do
+      {:ok, rpc_dir}
+    end
+  end
 
-    File.write!(Path.join(base, "script.py"), PythonShim.render_script(script, config.tools))
+  # Reserves a one-owner base directory and hands it to `builder`. If
+  # anything inside fails, only the base this call reserved is removed; a
+  # reservation that mktemp never confirmed is never deleted speculatively.
+  defp private_base(prefix, builder) do
+    with {:ok, root} <- PrivateTmp.root(),
+         {:ok, base} <- PrivateTmp.reserve_dir(root, prefix) do
+      case builder.(base) do
+        {:ok, value} ->
+          {:ok, base, value}
 
-    {base, rpc_dir, token}
+        {:error, reason} ->
+          File.rm_rf(base)
+          {:error, reason}
+      end
+    end
   end
 
   # The pump applies policy and approval per call, so the inner tools stay

@@ -314,10 +314,16 @@ defmodule CodingAgent.PythonRepl.SessionTest do
   end
 
   defp pyrepl_dirs do
-    System.tmp_dir!()
-    |> File.ls!()
-    |> Enum.filter(&String.starts_with?(&1, "lemon-pyrepl-"))
-    |> MapSet.new()
+    case CodingAgent.PrivateTmp.root() do
+      {:ok, root} ->
+        root
+        |> File.ls!()
+        |> Enum.filter(&String.starts_with?(&1, "lemon-pyrepl-"))
+        |> MapSet.new()
+
+      {:error, _} ->
+        MapSet.new()
+    end
   end
 
   defp assert_no_workspace_leak(before) do

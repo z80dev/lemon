@@ -17,6 +17,7 @@ defmodule CodingAgent.PythonRepl.Output do
   """
 
   alias CodingAgent.BashExecutor
+  alias CodingAgent.PrivateTmp
   alias LemonAi.Text
 
   defmodule Result do
@@ -326,20 +327,24 @@ defmodule CodingAgent.PythonRepl.Output do
     end
   end
 
+  # The spill is reserved by `PrivateTmp` — a fresh 0600 file beneath the
+  # application-private root — so it is owner-only from the moment it exists;
+  # there is no chmod-after-create window. The handle keeps the reserved path
+  # (no rename): a successful spill survives the cell because its path is part
+  # of the result contract, while any failure closes and removes exactly the
+  # file reserved here.
   defp open_spill(output, combined) do
-    random = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
-    path = Path.join(System.tmp_dir!(), "pi-python-repl-#{random}.log")
-
-    case File.open(path, [:write, :binary]) do
-      {:ok, io} ->
-        with :ok <- File.chmod(path, 0o600),
-             :ok <- IO.binwrite(io, combined) do
+    with {:ok, root} <- PrivateTmp.root(),
+         {:ok, path} <- PrivateTmp.reserve_file(root, "pi-python-repl"),
+         {:ok, io} <- File.open(path, [:write, :binary]) do
+      case IO.binwrite(io, combined) do
+        :ok ->
           %{output | spill: io, spill_path: path, spill_error: nil}
-        else
-          {:error, reason} ->
-            spill_failed(output, io, path, reason)
-        end
 
+        {:error, reason} ->
+          spill_failed(output, io, path, reason)
+      end
+    else
       {:error, reason} ->
         %{output | spill: nil, spill_path: nil, spill_error: reason}
     end

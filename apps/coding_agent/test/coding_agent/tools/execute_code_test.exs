@@ -615,7 +615,39 @@ defmodule CodingAgent.Tools.ExecuteCodeTest do
 
       assert text(timed_out) =~ "timed out"
       refute File.exists?(timeout_base)
-      assert Path.wildcard(Path.join(System.tmp_dir!(), "lemon-exec-code-*")) == []
+      # Workspaces live beneath the application-private root now; nothing may
+      # leak there. (Legacy pre-private-root dirs directly under the system
+      # temp dir are outside this assertion.)
+      {:ok, private_root} = CodingAgent.PrivateTmp.root()
+      assert Path.wildcard(Path.join(private_root, "lemon-exec-code*")) == []
+    end
+
+    test "every workspace object is private at creation, before the script runs", %{tmp_dir: cwd} do
+      test = self()
+
+      runner = fn command, runner_cwd, runner_opts ->
+        # The workspace exists only until the run ends, so capture the modes
+        # here, inside the runner — not after execute/6 has cleaned up.
+        base = command_base(command)
+        shim = File.read!(Path.join(base, "lemon_tools.py"))
+        [_, rpc_dir, _token] = Regex.run(~r/_configure\("([^"]+)", "([^"]+)"\)/, shim)
+
+        modes = %{
+          base: mode(base),
+          rpc: mode(rpc_dir),
+          lemon_tools: mode(Path.join(base, "lemon_tools.py")),
+          script: mode(Path.join(base, "script.py"))
+        }
+
+        send(test, {:modes, modes})
+        BashExecutor.execute(command, runner_cwd, runner_opts)
+      end
+
+      result = run(cwd, ~s|print("ok")|, opts(%{}, script_runner: runner))
+      assert text(result) =~ "ok"
+
+      assert_received {:modes, modes}
+      assert modes == %{base: 0o700, rpc: 0o700, lemon_tools: 0o600, script: 0o600}
     end
 
     test "each run uses a fresh token that does not reach its result or details", %{tmp_dir: cwd} do
@@ -754,6 +786,8 @@ defmodule CodingAgent.Tools.ExecuteCodeTest do
 
     {result, base}
   end
+
+  defp mode(path), do: Bitwise.band(File.stat!(path).mode, 0o777)
 
   # "exec '<python>' '<base>/script.py'" -> "<base>"
   defp command_base(command) do

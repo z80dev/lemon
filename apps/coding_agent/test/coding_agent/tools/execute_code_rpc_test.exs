@@ -29,12 +29,46 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
       write_request(rpc_dir, 1, "echo", %{"value" => "hello"})
       assert %{"id" => 1, "ok" => true, "content" => "hello"} = await_response(rpc_dir, 1)
 
+      # The published response is owner-only, exactly 0600.
+      assert Bitwise.band(File.stat!(Path.join(rpc_dir, "res-1.json")).mode, 0o777) == 0o600
+
       {:ok, :done, stats} = finish_pump(pump)
       assert stats.calls == 1
       assert stats.errors == 0
       assert stats.denied == 0
       assert stats.bytes == byte_size("hello")
       assert MapSet.to_list(stats.tools_used) == ["echo"]
+    end
+
+    test "a planted symlink at the response name is replaced, not followed", %{rpc_dir: rpc_dir} do
+      victim =
+        Path.join(Path.dirname(rpc_dir), "victim-#{System.unique_integer([:positive])}.txt")
+
+      File.write!(victim, "untouched")
+      on_exit(fn -> File.rm(victim) end)
+      File.ln_s!(victim, Path.join(rpc_dir, "res-1.json"))
+
+      pump = start_pump(ctx(rpc_dir))
+
+      write_request(rpc_dir, 1, "echo", %{"value" => "hello"})
+      # The planted symlink satisfies File.exists?/1 immediately, so wait for
+      # the atomic replace itself: a regular file at the response path.
+      path = Path.join(rpc_dir, "res-1.json")
+
+      response =
+        Enum.find_value(1..500, fn _ ->
+          case File.lstat(path) do
+            {:ok, %File.Stat{type: :regular}} -> Jason.decode!(File.read!(path))
+            _other -> Process.sleep(10) && nil
+          end
+        end)
+
+      assert %{"id" => 1, "ok" => true, "content" => "hello"} = response
+
+      {:ok, :done, _stats} = finish_pump(pump)
+
+      assert File.read!(victim) == "untouched"
+      assert File.lstat!(Path.join(rpc_dir, "res-1.json")).type == :regular
     end
 
     test "responses land atomically and requests with a response are never reprocessed", %{
@@ -57,8 +91,10 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
       assert %{"content" => "preexisting"} = read_response(rpc_dir, 2)
       assert stats.calls == 1
       assert Path.wildcard(Path.join(rpc_dir, "req-*.json")) == []
-      # Nothing is left half-written: no `.tmp` files survive the handshake.
+      # Nothing is left half-written: no `.tmp` files and no hidden private
+      # reservations survive the handshake.
       assert Path.wildcard(Path.join(rpc_dir, "*.tmp")) == []
+      assert rpc_dir |> File.ls!() |> Enum.filter(&String.starts_with?(&1, ".")) == []
     end
 
     test "concurrently written requests are all served, lowest id first", %{rpc_dir: rpc_dir} do
