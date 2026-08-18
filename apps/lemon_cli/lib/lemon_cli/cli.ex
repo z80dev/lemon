@@ -24,6 +24,7 @@ defmodule LemonCli.CLI do
   gateway setup adapters.
   """
 
+  alias LemonCore.Config.Modular
   alias LemonCli.Onboarding.Runner
   alias LemonCli.Setup.{Gateway, Provider, Verification, Wizard}
   alias LemonCore.Doctor
@@ -103,8 +104,14 @@ defmodule LemonCli.CLI do
   """
   @spec setup_required?() :: boolean()
   def setup_required? do
-    (Verification.setup_state()
-     |> Verification.pending_steps()) != []
+    case ensure_lemon_core_started() do
+      :ok ->
+        (Verification.setup_state()
+         |> Verification.pending_steps()) != []
+
+      :error ->
+        true
+    end
   rescue
     _ -> true
   catch
@@ -926,6 +933,13 @@ defmodule LemonCli.CLI do
           raise Error, message: "Failed to start #{inspect(app)}: #{inspect(reason)}"
       end
     end)
+  end
+
+  defp ensure_lemon_core_started do
+    case Application.ensure_all_started(:lemon_core) do
+      {:ok, _started} -> :ok
+      {:error, _reason} -> :error
+    end
   end
 
 
