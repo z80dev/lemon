@@ -43,11 +43,11 @@ defmodule CodingAgent.PythonRepl.SessionSupervisor do
   end
 
   @doc """
-  Stops a registry-owned worker without releasing its capacity slot until death
-  is confirmed.
+  Physically stops a worker after the registry has already released its logical
+  ownership and capacity slot.
 
   A worker that is no longer known to the dynamic supervisor is first offered
-  the Session cleanup path. If it remains alive, the existing worker monitor is
+  the Session cleanup path. If it remains alive, the caller-owned monitor is
   used to await a final, untrappable kill.
   """
   @spec stop_session(

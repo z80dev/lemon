@@ -336,21 +336,26 @@ defmodule CodingAgent.PythonRepl.RegistryTest do
     assert Process.alive?(failed.pid)
   end
 
-  test "logical stops leave the registry responsive while physical termination is slow", %{
+  test "logical stops leave the registry responsive while physical termination is held", %{
     sup: sup,
     key: key,
     owner: owner
   } do
     registry = String.to_atom("repl_slow_stop_#{System.unique_integer([:positive])}")
+    shared_key = key("slow-stop-unrelated")
 
     start_supervised!(
       {Registry,
        name: registry,
        session_supervisor: sup,
        session_mod: FakeSession,
-       stop_session_fun: fn _supervisor, _session_mod, _pid, _monitor_ref ->
-         Process.sleep(1_000)
-         :ok
+       stop_session_fun: fn session_supervisor, session_mod, pid, monitor_ref ->
+         Director.record_shutdown(self())
+
+         receive do
+           :continue_shutdown ->
+             SessionSupervisor.stop_session(session_supervisor, session_mod, pid, monitor_ref)
+         end
        end,
        idle_timeout_ms: :infinity},
       id: registry
@@ -359,18 +364,30 @@ defmodule CodingAgent.PythonRepl.RegistryTest do
     {:ok, first} = Registry.acquire(registry, key, owner)
     first_pid = first.pid
     worker_ref = Process.monitor(first_pid)
+    unrelated_owner = owner()
+    {:ok, unrelated} = Registry.acquire(registry, shared_key, unrelated_owner)
+    release(registry, unrelated)
 
-    assert {:ok, %{reset_performed: true, forked: false}} =
-             Registry.reset(registry, key, owner)
+    reset_task = Task.async(fn -> Registry.reset(registry, key, owner) end)
+    wait_until(fn -> length(Director.shutdowns()) == 1 end)
+    [stop_task_pid] = Director.shutdowns()
+    assert stop_task_pid != first_pid
 
-    assert Registry.snapshot(registry).capacity == %{live: 0, max: 16, available: 16}
-    {:ok, replacement} = Registry.acquire(registry, key, owner)
-    assert replacement.generation == first.generation + 1
+    snapshot_task = Task.async(fn -> Registry.snapshot(registry) end)
 
-    Process.exit(first_pid, :kill)
+    assert %{capacity: %{live: 1, max: 16, available: 15}} =
+             Task.await(snapshot_task, 100)
+
+    acquire_task = Task.async(fn -> Registry.acquire(registry, shared_key, owner()) end)
+    assert {:ok, reused} = Task.await(acquire_task, 100)
+    assert reused.pid == unrelated.pid
+    assert reused.reused?
+    release(registry, reused)
+    assert Process.alive?(first_pid)
+
+    send(stop_task_pid, :continue_shutdown)
+    assert {:ok, %{reset_performed: true, forked: false}} = Task.await(reset_task, 100)
     assert_receive {:DOWN, ^worker_ref, :process, ^first_pid, _reason}
-    assert Registry.snapshot(registry).capacity == %{live: 1, max: 16, available: 15}
-    release(registry, replacement)
   end
 
   test "owner death stops ownerless workers and clears all monitor bookkeeping", %{
