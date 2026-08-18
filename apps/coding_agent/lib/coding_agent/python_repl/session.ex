@@ -9,7 +9,10 @@ defmodule CodingAgent.PythonRepl.Session do
   plan:
 
     * **Serialization** - one active cell per worker. Active-cell timeout
-      starts at the runner's `started` acknowledgement, never while queued.
+      starts when the cell is dispatched (written) to the runner, never
+      while queued. The runner's `started` acknowledgement confirms
+      protocol state but is never required for timer safety: an untrusted
+      runner cannot bypass the bound by suppressing or delaying it.
     * **Exactly-once replies** - every caller is replied to exactly once,
       whatever race ends the cell (completion, timeout, caller death,
       protocol fault, port death, shutdown).
@@ -197,8 +200,10 @@ defmodule CodingAgent.PythonRepl.Session do
   @doc """
   Executes one cell against the kernel, queueing behind any active cell.
 
-  `timeout` bounds active cell time measured from the runner's `started`
-  acknowledgement; queue wait is not counted. The caller is monitored: death
+  `timeout` bounds active cell time measured from dispatch to the runner;
+  queue wait is not counted. The runner's `started` acknowledgement is not
+  required for the bound: suppressing it cannot extend the cell's lifetime.
+  The caller is monitored: death
   of a queued caller drops only its request; death of the active caller
   discards the interpreter.
   """
@@ -479,6 +484,13 @@ defmodule CodingAgent.PythonRepl.Session do
         replied?: false
       )
 
+    # The active-cell timeout is armed at dispatch, before the request is
+    # written, and is never re-armed later. The runner's `started`
+    # acknowledgement only confirms protocol state; an untrusted runner that
+    # suppresses or delays `started` cannot bypass the bound, and even a
+    # failed write terminates within the timeout.
+    active = %{active | timeout_timer: arm_cell_timer(active)}
+
     send_request(
       state.mods.process,
       state.process,
@@ -626,15 +638,12 @@ defmodule CodingAgent.PythonRepl.Session do
     {:noreply, dequeue_next(state)}
   end
 
-  # started: the no-retry boundary. Active-cell timeout starts here.
+  # started: the no-retry boundary. Confirms protocol state only; the
+  # active-cell timer was armed at dispatch and is never re-armed here, so
+  # no double timer can exist.
   defp handle_frame(%{type: :started, id: id}, %{phase: :running, active: active} = state)
        when active != nil and active.id == id and active.started? == false do
-    active = %{
-      active
-      | started?: true,
-        started_at: monotonic_ms(),
-        timeout_timer: arm_cell_timer(active)
-    }
+    active = %{active | started?: true, started_at: monotonic_ms()}
 
     {:noreply, %{state | active: active}}
   end

@@ -707,6 +707,132 @@ defmodule CodingAgent.PythonRepl.SessionTest do
       assert_stops(pid, ref)
       assert FakeProcess.terminated?()
     end
+
+    test "fires and terminates when the runner suppresses the started frame", ctx do
+      before = pyrepl_dirs()
+      pid = start_session(ctx, interrupt_grace_ms: 100) |> bring_idle()
+
+      task_a = Task.async(fn -> Session.execute(pid, %{code: "hang()"}, 60) end)
+      wait_until(fn -> active_id(pid) == "cell-1" end)
+
+      # The untrusted runner never acknowledges the cell: no started frame
+      # is ever emitted. The dispatch-armed timer must still bound the cell.
+      ref = monitor(pid)
+      assert {:error, result} = Task.await(task_a, 1_000)
+      assert result.reason == :timeout
+      assert result.request_id == "cell-1"
+      assert result.state_retained == false
+      assert result.output == ""
+      assert result.duration_ms >= 60
+
+      # Exactly-once dispatch, no replay; interrupt escalation follows.
+      assert [_] = eval_writes_containing("hang()")
+      wait_until(fn -> FakeProcess.interrupted?() end)
+
+      # Grace expires with no terminal frame: bounded tree teardown.
+      assert_stops(pid, ref)
+      assert FakeProcess.terminated?()
+      assert_no_workspace_leak(before)
+      assert [_] = eval_writes_containing("hang()")
+    end
+
+    test "a delayed started frame never re-arms the dispatch timer", ctx do
+      before = pyrepl_dirs()
+      pid = start_session(ctx, interrupt_grace_ms: 100) |> bring_idle()
+
+      task_a = Task.async(fn -> Session.execute(pid, %{code: "slow()"}, 120) end)
+      wait_until(fn -> active_id(pid) == "cell-1" end)
+      dispatched_ms = System.monotonic_time(:millisecond)
+
+      # The runner acknowledges only after most of the budget has elapsed.
+      # If `started` (re-)armed the timer the cell would live until
+      # started+120ms; the dispatch-armed timer must fire at ~120ms.
+      Process.sleep(80)
+      FakeProtocol.script([{:ok, [%{type: :started, id: "cell-1"}]}])
+      FakeProcess.emit(pid, FakeProcess.proc(), "late-started")
+
+      ref = monitor(pid)
+      assert {:error, result} = Task.await(task_a, 1_000)
+      assert result.reason == :timeout
+      assert result.request_id == "cell-1"
+      elapsed_ms = System.monotonic_time(:millisecond) - dispatched_ms
+      assert elapsed_ms < 175
+
+      wait_until(fn -> FakeProcess.interrupted?() end)
+      assert_stops(pid, ref)
+      assert FakeProcess.terminated?()
+      assert_no_workspace_leak(before)
+      assert [_] = eval_writes_containing("slow()")
+    end
+
+    test "a queued cell's timeout does not start until it is dispatched", ctx do
+      pid = start_session(ctx, interrupt_grace_ms: 100) |> bring_idle()
+
+      task_a = Task.async(fn -> Session.execute(pid, %{code: "a=1"}, :infinity) end)
+      wait_until(fn -> active_id(pid) == "cell-1" end)
+
+      task_b = Task.async(fn -> Session.execute(pid, %{code: "b=2"}, 80) end)
+      wait_until(fn -> Session.status(pid).queue_depth == 1 end)
+
+      # B waits in the queue longer than its own timeout: the bound must
+      # not run while queued.
+      Process.sleep(120)
+      assert Task.yield(task_b, 0) == nil
+      assert %{phase: :running, queue_depth: 1} = Session.status(pid)
+
+      # Completing A dispatches B; with the runner silent, B times out on
+      # its own dispatch clock.
+      FakeProtocol.script([
+        {:ok, [%{type: :started, id: "cell-1"}, %{type: :done, id: "cell-1"}]}
+      ])
+
+      FakeProcess.emit(pid, FakeProcess.proc(), "cell-1-frames")
+      assert {:ok, _} = Task.await(task_a)
+      wait_until(fn -> active_id(pid) == "cell-2" end)
+
+      ref = monitor(pid)
+      assert {:error, result} = Task.await(task_b, 1_000)
+      assert result.reason == :timeout
+      assert result.request_id == "cell-2"
+
+      wait_until(fn -> FakeProcess.interrupted?() end)
+      assert_stops(pid, ref)
+      assert [_] = eval_writes_containing("b=2")
+    end
+
+    test "a cell that completes within budget replies normally and cancels the timer", ctx do
+      pid = start_session(ctx) |> bring_idle()
+
+      task_a = Task.async(fn -> Session.execute(pid, %{code: "fast()"}, 120) end)
+      wait_until(fn -> active_id(pid) == "cell-1" end)
+
+      FakeProtocol.script([
+        {:ok, [%{type: :started, id: "cell-1"}, %{type: :done, id: "cell-1"}]}
+      ])
+
+      FakeProcess.emit(pid, FakeProcess.proc(), "cell-1-frames")
+      assert {:ok, result} = Task.await(task_a)
+      assert result.state_retained == true
+
+      # Well past the original budget: no stale timer fires and the worker
+      # idles, ready to serve the next cell with started semantics intact.
+      Process.sleep(200)
+      assert %{phase: :idle, cells_completed: 1, process_alive: true} = Session.status(pid)
+
+      task_b = Task.async(fn -> Session.execute(pid, %{code: "next()"}, 120) end)
+      wait_until(fn -> active_id(pid) == "cell-2" end)
+
+      FakeProtocol.script([
+        {:ok, [%{type: :started, id: "cell-2"}, %{type: :done, id: "cell-2"}]}
+      ])
+
+      FakeProcess.emit(pid, FakeProcess.proc(), "cell-2-frames")
+      assert {:ok, _} = Task.await(task_b)
+
+      ref = monitor(pid)
+      assert :ok = Session.shutdown(pid)
+      assert_stops(pid, ref)
+    end
   end
 
   describe "protocol faults" do
