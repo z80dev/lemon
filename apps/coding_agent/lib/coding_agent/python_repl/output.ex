@@ -14,7 +14,8 @@ defmodule CodingAgent.PythonRepl.Output do
   only at that moment. `finish/1` returns the retained output with a
   truncation marker between head and tail, the byte totals, and the spill
   path (present only when truncation happened). Spill files remain readable
-  after a cell completes and are reaped best-effort after 24 hours.
+  after a cell completes; only non-live spills are reaped best-effort after
+  24 hours.
   """
 
   alias CodingAgent.BashExecutor
@@ -149,13 +150,17 @@ defmodule CodingAgent.PythonRepl.Output do
   inserted between head and tail when bytes were dropped), the combined and
   per-stream sanitized totals, the number of dropped bytes, and — only when
   the capture was truncated — the path of the `0600` spill file holding the
-  full combined output. The path remains readable after completion; spill
-  files are reaped best-effort after 24 hours.
+  full combined output. The path remains readable after completion; only
+  non-live spill files are reaped best-effort after 24 hours.
   """
   @spec finish(t()) :: Result.t()
   def finish(%__MODULE__{} = output) do
     output = flush_pending(output)
-    if output.spill, do: File.close(output.spill)
+
+    if output.spill do
+      File.close(output.spill)
+      PrivateTmp.unregister_live_spill(output.spill_path)
+    end
 
     if output.truncated do
       retained = byte_size(output.head) + byte_size(output.tail)
@@ -334,18 +339,27 @@ defmodule CodingAgent.PythonRepl.Output do
   # there is no chmod-after-create window. The handle keeps the reserved path
   # (no rename): a successful spill survives the cell because its path is part
   # of the result contract, then becomes eligible for best-effort reaping
-  # after 24 hours. Any failure closes and removes exactly the file reserved
-  # here.
+  # after it finishes and reaches 24 hours. Any failure closes and removes
+  # exactly the file reserved here.
   defp open_spill(output, combined) do
     with {:ok, root} <- PrivateTmp.root(),
-         {:ok, path} <- PrivateTmp.reserve_file(root, "pi-python-repl"),
-         {:ok, io} <- File.open(path, [:write, :binary]) do
-      case IO.binwrite(io, combined) do
-        :ok ->
-          %{output | spill: io, spill_path: path, spill_error: nil}
+         {:ok, path} <- PrivateTmp.reserve_file(root, "pi-python-repl") do
+      PrivateTmp.register_live_spill(path)
+
+      case File.open(path, [:write, :binary]) do
+        {:ok, io} ->
+          case IO.binwrite(io, combined) do
+            :ok ->
+              %{output | spill: io, spill_path: path, spill_error: nil}
+
+            {:error, reason} ->
+              spill_failed(output, io, path, reason)
+          end
 
         {:error, reason} ->
-          spill_failed(output, io, path, reason)
+          PrivateTmp.unregister_live_spill(path)
+          File.rm(path)
+          %{output | spill: nil, spill_path: nil, spill_error: reason}
       end
     else
       {:error, reason} ->
@@ -355,6 +369,7 @@ defmodule CodingAgent.PythonRepl.Output do
 
   defp spill_failed(output, io, path, reason) do
     File.close(io)
+    PrivateTmp.unregister_live_spill(path)
     File.rm(path)
     %{output | spill: nil, spill_path: nil, spill_error: reason}
   end

@@ -51,8 +51,14 @@ defmodule CodingAgent.PrivateTmp do
 
   @root_prefix "lemon-private"
   @root_key {__MODULE__, :root}
+  @root_lock {__MODULE__, :root_lock}
   @spill_sweep_key {__MODULE__, :spill_sweep_at}
   @spill_sweep_lock {__MODULE__, :spill_sweep_lock}
+  @spill_continuations_key {__MODULE__, :spill_sweep_continuations}
+  @live_spills_key {__MODULE__, :live_spills}
+  @live_spills_lock {__MODULE__, :live_spills_lock}
+  @stale_root_sweep_key {__MODULE__, :stale_root_sweep_done}
+  @stale_root_sweep_lock {__MODULE__, :stale_root_sweep_lock}
   @mktemp_key {__MODULE__, :mktemp}
 
   @typep reservation :: {:ok, String.t()} | {:error, term()}
@@ -64,40 +70,73 @@ defmodule CodingAgent.PrivateTmp do
 
   Created on first use as `<tmpdir>/#{@root_prefix}-XXXXXXXXXX` (`0700`,
   validated) and cached for the node's lifetime in `:persistent_term/0`.
-  Concurrent first calls may each create a root; every root is private, so the
-  race is benign — only the cached one is reused, and a cached root that was
-  removed or no longer validates is replaced on the next call. A successful
-  root lookup also opportunistically reaps up to #{@spill_sweep_limit} expired
-  Python REPL output spills once per #{@spill_ttl_seconds / 3600}-hour window;
-  the reaper is best-effort and never affects a root reservation.
+  Concurrent first calls are serialized, so every caller receives the same
+  root. A cached root that was removed or no longer validates is replaced on
+  the next call. A successful root lookup also opportunistically reaps up to
+  #{@spill_sweep_limit} entries from expired Python REPL output spills once
+  per 24-hour window; the reaper is best-effort and never affects a root
+  reservation. The first lookup on a node also makes one best-effort pass over
+  validated sibling roots left by prior nodes.
   """
   @spec root() :: reservation()
   def root do
-    case :persistent_term.get(@root_key, nil) do
-      nil ->
-        create_root()
+    case cached_root() do
+      {:ok, path} ->
+        finish_root_lookup(path)
 
-      path ->
-        with :ok <- validate_shape(path, System.tmp_dir!(), @root_prefix),
-             :ok <- confirm(path, :directory) do
-          maybe_reap_spills(path)
-          {:ok, path}
-        else
-          _ -> create_root()
-        end
+      :error ->
+        create_root()
     end
   end
 
   defp create_root do
-    case reserve(System.tmp_dir!(), @root_prefix, :directory, []) do
-      {:ok, path} = ok ->
-        :persistent_term.put(@root_key, path)
-        maybe_reap_spills(path)
-        ok
+    case with_node_lock(@root_lock, fn ->
+           case cached_root() do
+             {:ok, path} ->
+               {:ok, path}
+
+             :error ->
+               case reserve(System.tmp_dir!(), @root_prefix, :directory, []) do
+                 {:ok, path} = ok ->
+                   :persistent_term.put(@root_key, path)
+                   ok
+
+                 {:error, _reason} = error ->
+                   error
+               end
+           end
+         end) do
+      {:ok, path} ->
+        finish_root_lookup(path)
 
       {:error, _reason} = error ->
         error
     end
+  end
+
+  defp cached_root do
+    case :persistent_term.get(@root_key, nil) do
+      path when is_binary(path) ->
+        with :ok <- validate_shape(path, System.tmp_dir!(), @root_prefix),
+             :ok <- confirm(path, :directory) do
+          {:ok, path}
+        else
+          _ -> :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp finish_root_lookup(path) do
+    maybe_reap_spills(path)
+
+    if maybe_reap_stale_roots(path) == :already_swept do
+      continue_stale_root_sweeps(path)
+    end
+
+    {:ok, path}
   end
 
   ## Reservations
@@ -164,28 +203,53 @@ defmodule CodingAgent.PrivateTmp do
     end
   end
 
+  @doc false
+  @spec register_live_spill(String.t()) :: :ok
+  def register_live_spill(path) when is_binary(path) do
+    _ =
+      with_node_lock(@live_spills_lock, fn ->
+        live_spills = :persistent_term.get(@live_spills_key, MapSet.new())
+        :persistent_term.put(@live_spills_key, MapSet.put(live_spills, path))
+      end)
+
+    :ok
+  end
+
+  @doc false
+  @spec unregister_live_spill(String.t()) :: :ok
+  def unregister_live_spill(path) when is_binary(path) do
+    _ =
+      with_node_lock(@live_spills_lock, fn ->
+        live_spills = :persistent_term.get(@live_spills_key, MapSet.new())
+        remaining = MapSet.delete(live_spills, path)
+
+        if MapSet.size(remaining) == 0 do
+          :persistent_term.erase(@live_spills_key)
+        else
+          :persistent_term.put(@live_spills_key, remaining)
+        end
+      end)
+
+    :ok
+  end
+
   ## Internals
 
   # This is deliberately attached to `root/0`, rather than output capture:
   # the root is already cached and validated there, and every spill creation
-  # obtains it. A persistent-term timestamp is the fast path; the local
-  # `:global` lock closes the first-call race so a node runs no more than one
-  # sweep per window.
+  # obtains it. A persistent-term timestamp is the fast path; a node-scoped
+  # lock serializes the due check and sweep.
   defp maybe_reap_spills(root) do
     if sweep_due?(System.monotonic_time(:second)) do
       try do
-        :global.trans(
-          @spill_sweep_lock,
-          fn ->
-            now = System.monotonic_time(:second)
+        with_node_lock(@spill_sweep_lock, fn ->
+          now = System.monotonic_time(:second)
 
-            if sweep_due?(now) do
-              :persistent_term.put(@spill_sweep_key, now)
-              reap_expired_spills(root)
-            end
-          end,
-          [node()]
-        )
+          if sweep_due?(now) do
+            :persistent_term.put(@spill_sweep_key, now)
+            reap_expired_spills(root)
+          end
+        end)
       rescue
         _error -> :ok
       catch
@@ -196,6 +260,28 @@ defmodule CodingAgent.PrivateTmp do
     :ok
   end
 
+  defp maybe_reap_stale_roots(root) do
+    if :persistent_term.get(@stale_root_sweep_key, false) == true do
+      :already_swept
+    else
+      try do
+        with_node_lock(@stale_root_sweep_lock, fn ->
+          if :persistent_term.get(@stale_root_sweep_key, false) == true do
+            :already_swept
+          else
+            :persistent_term.put(@stale_root_sweep_key, true)
+            reap_stale_roots(root)
+            :swept
+          end
+        end)
+      rescue
+        _error -> :failed
+      catch
+        _kind, _reason -> :failed
+      end
+    end
+  end
+
   defp sweep_due?(now) do
     case :persistent_term.get(@spill_sweep_key, nil) do
       last_sweep when is_integer(last_sweep) -> now - last_sweep >= @spill_ttl_seconds
@@ -203,37 +289,109 @@ defmodule CodingAgent.PrivateTmp do
     end
   end
 
-  # The root may contain other private reservations. Limit filesystem work per
-  # opportunity and inspect only direct children whose basenames match the
-  # dedicated REPL spill prefix. `lstat` refuses to follow a planted symlink;
-  # `File.rm/1` likewise removes a raced replacement rather than its target.
+  # `File.ls/1` materializes a directory listing, but only this bounded batch
+  # receives `lstat`/removal work. The unprocessed names persist by root and
+  # are resumed on the next sweep instead of repeatedly stranding entries
+  # behind the same leading batch.
   defp reap_expired_spills(root) do
-    cutoff = System.system_time(:second) - @spill_ttl_seconds
+    with {:ok, names} <- next_spill_batch(root) do
+      cutoff = System.system_time(:second) - @spill_ttl_seconds
+      Enum.each(names, &remove_expired_spill(root, &1, cutoff))
+    end
 
-    case File.ls(root) do
+    :ok
+  end
+
+  defp next_spill_batch(root) do
+    continuations = :persistent_term.get(@spill_continuations_key, %{})
+
+    case Map.pop(continuations, root) do
+      {nil, _remaining_continuations} ->
+        case File.ls(root) do
+          {:ok, names} -> split_spill_batch(root, names, continuations)
+          {:error, reason} -> {:error, reason}
+        end
+
+      {names, remaining_continuations} ->
+        split_spill_batch(root, names, remaining_continuations)
+    end
+  end
+
+  defp split_spill_batch(root, names, continuations) do
+    {batch, remainder} = Enum.split(names, @spill_sweep_limit)
+
+    updated_continuations =
+      if remainder == [] do
+        continuations
+      else
+        Map.put(continuations, root, remainder)
+      end
+
+    if map_size(updated_continuations) == 0 do
+      :persistent_term.erase(@spill_continuations_key)
+    else
+      :persistent_term.put(@spill_continuations_key, updated_continuations)
+    end
+
+    {:ok, batch}
+  end
+
+  defp reap_stale_roots(current_root) do
+    tmp_dir = System.tmp_dir!()
+
+    case File.ls(tmp_dir) do
       {:ok, names} ->
-        names
-        |> Enum.take(@spill_sweep_limit)
-        |> Enum.each(&remove_expired_spill(root, &1, cutoff))
+        Enum.each(names, fn name ->
+          root = Path.join(tmp_dir, name)
+
+          if root != current_root and
+               String.starts_with?(Path.basename(name), @root_prefix <> "-") do
+            sweep_stale_root(root, tmp_dir)
+          end
+        end)
 
       {:error, _reason} ->
         :ok
     end
   end
 
+  defp continue_stale_root_sweeps(current_root) do
+    :persistent_term.get(@spill_continuations_key, %{})
+    |> Map.keys()
+    |> Enum.reject(&(&1 == current_root))
+    |> Enum.each(&sweep_stale_root(&1, System.tmp_dir!()))
+  end
+
+  defp sweep_stale_root(root, tmp_dir) do
+    with :ok <- validate_shape(root, tmp_dir, @root_prefix),
+         :ok <- confirm(root, :directory) do
+      _ = with_node_lock(@spill_sweep_lock, fn -> reap_expired_spills(root) end)
+      _ = File.rmdir(root)
+    end
+  end
+
   defp remove_expired_spill(root, name, cutoff) do
-    if String.starts_with?(name, @spill_prefix) do
+    if String.starts_with?(Path.basename(name), @spill_prefix) do
       path = Path.join(root, name)
 
       case File.lstat(path, time: :posix) do
         {:ok, %File.Stat{type: :regular, mtime: modified_at}} when modified_at < cutoff ->
-          _ = File.rm(path)
+          if not live_spill?(path), do: _ = File.rm(path)
           :ok
 
         _ ->
           :ok
       end
     end
+  end
+
+  defp live_spill?(path) do
+    :persistent_term.get(@live_spills_key, MapSet.new())
+    |> MapSet.member?(path)
+  end
+
+  defp with_node_lock(resource, fun) do
+    :global.trans({resource, self()}, fun, [node()])
   end
 
   # The printed reservation is only trusted once it is a single absolute path

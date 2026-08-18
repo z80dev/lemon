@@ -10,6 +10,7 @@ defmodule CodingAgent.PrivateTmpTest do
   import Bitwise
 
   alias CodingAgent.PrivateTmp
+  alias CodingAgent.PythonRepl.Output
 
   @moduletag :tmp_dir
 
@@ -25,6 +26,34 @@ defmodule CodingAgent.PrivateTmpTest do
       assert band(stat.mode, 0o777) == 0o700
 
       assert PrivateTmp.root() == {:ok, root}
+    end
+
+    test "serializes concurrent first callers onto one root", %{tmp_dir: tmp_dir} do
+      isolate_system_tmp(tmp_dir)
+      parent = self()
+
+      tasks =
+        for _ <- 1..16 do
+          Task.async(fn ->
+            send(parent, {:root_ready, self()})
+
+            receive do
+              :create_root -> PrivateTmp.root()
+            end
+          end)
+        end
+
+      for _ <- tasks, do: assert_receive({:root_ready, _})
+      Enum.each(tasks, &send(&1.pid, :create_root))
+
+      roots = Enum.map(tasks, &Task.await(&1, 5_000))
+      assert [{:ok, root}] = Enum.uniq(roots)
+
+      assert [^root] =
+               tmp_dir
+               |> File.ls!()
+               |> Enum.filter(&String.starts_with?(&1, "lemon-private-"))
+               |> Enum.map(&Path.join(tmp_dir, &1))
     end
   end
 
@@ -56,6 +85,7 @@ defmodule CodingAgent.PrivateTmpTest do
 
       symlink_target = Path.join(tmp_dir, "spill-symlink-target")
       File.write!(symlink_target, "target remains")
+      File.touch!(symlink_target, System.os_time(:second) - 24 * 60 * 60 - 60)
       spill_symlink = Path.join(root, "pi-python-repl-symlink")
       File.ln_s!(symlink_target, spill_symlink)
 
@@ -87,6 +117,91 @@ defmodule CodingAgent.PrivateTmpTest do
 
       assert {:ok, ^root} = PrivateTmp.root()
       refute File.exists?(second)
+    end
+
+    test "resumes the reaper after its bounded entry batch", %{root: root} do
+      for index <- 1..1_001 do
+        stale_file(root, "pi-python-repl-batch-#{index}")
+      end
+
+      assert {:ok, ^root} = PrivateTmp.root()
+      assert [_remaining] = File.ls!(root)
+
+      :persistent_term.put(
+        {PrivateTmp, :spill_sweep_at},
+        System.monotonic_time(:second) - 24 * 60 * 60 - 1
+      )
+
+      assert {:ok, ^root} = PrivateTmp.root()
+      assert File.ls!(root) == []
+    end
+
+    test "keeps live spills until their capture finishes", %{root: root} do
+      output =
+        Output.new(10)
+        |> Output.append(:stdout, String.duplicate("x", 11))
+
+      path = output.spill_path
+      File.touch!(path, System.os_time(:second) - 24 * 60 * 60 - 60)
+
+      :persistent_term.put(
+        {PrivateTmp, :spill_sweep_at},
+        System.monotonic_time(:second) - 24 * 60 * 60 - 1
+      )
+
+      assert {:ok, ^root} = PrivateTmp.root()
+      assert File.exists?(path)
+
+      result = Output.finish(output)
+      assert result.full_output_path == path
+
+      :persistent_term.put(
+        {PrivateTmp, :spill_sweep_at},
+        System.monotonic_time(:second) - 24 * 60 * 60 - 1
+      )
+
+      assert {:ok, ^root} = PrivateTmp.root()
+      refute File.exists?(path)
+    end
+
+    test "sweeps stale sibling roots once per node boot", %{tmp_dir: tmp_dir} do
+      isolate_system_tmp(tmp_dir)
+
+      {:ok, emptied_root} = PrivateTmp.reserve_dir(tmp_dir, "lemon-private-stale-empty")
+      stale_file(emptied_root, "pi-python-repl-expired")
+
+      {:ok, nonempty_root} = PrivateTmp.reserve_dir(tmp_dir, "lemon-private-stale-nonempty")
+      expired = stale_file(nonempty_root, "pi-python-repl-expired")
+      live = write_file(nonempty_root, "pi-python-repl-live")
+      wrong_prefix = stale_file(nonempty_root, "bash-output-expired")
+      spill_directory = Path.join(nonempty_root, "pi-python-repl-directory")
+      File.mkdir!(spill_directory)
+
+      symlink_target = stale_file(tmp_dir, "expired-symlink-target")
+      spill_symlink = Path.join(nonempty_root, "pi-python-repl-symlink")
+      File.ln_s!(symlink_target, spill_symlink)
+
+      {:ok, overflow_root} = PrivateTmp.reserve_dir(tmp_dir, "lemon-private-stale-overflow")
+
+      for index <- 1..1_001 do
+        stale_file(overflow_root, "pi-python-repl-overflow-#{index}")
+      end
+
+      {:ok, current_root} = PrivateTmp.root()
+
+      refute File.exists?(emptied_root)
+      refute File.exists?(expired)
+      assert File.read!(live) == "contents"
+      assert File.read!(wrong_prefix) == "contents"
+      assert File.dir?(spill_directory)
+      assert File.lstat!(spill_symlink).type == :symlink
+      assert File.dir?(nonempty_root)
+      assert [_remaining] = File.ls!(overflow_root)
+
+      later = stale_file(nonempty_root, "pi-python-repl-after-boot")
+      assert {:ok, ^current_root} = PrivateTmp.root()
+      assert File.exists?(later)
+      refute File.exists?(overflow_root)
     end
   end
 
@@ -273,6 +388,34 @@ defmodule CodingAgent.PrivateTmpTest do
       assert File.ls!(parent) == []
     end
   end
+
+  defp isolate_system_tmp(tmp_dir) do
+    keys = [
+      {PrivateTmp, :root},
+      {PrivateTmp, :spill_sweep_at},
+      {PrivateTmp, :spill_sweep_continuations},
+      {PrivateTmp, :live_spills},
+      {PrivateTmp, :stale_root_sweep_done}
+    ]
+
+    saved = Map.new(keys, &{&1, :persistent_term.get(&1, nil)})
+    previous_tmp_dir = System.get_env("TMPDIR")
+
+    System.put_env("TMPDIR", tmp_dir)
+    Enum.each(keys, &:persistent_term.erase/1)
+
+    on_exit(fn ->
+      restore_tmp_dir(previous_tmp_dir)
+
+      Enum.each(saved, fn
+        {key, nil} -> :persistent_term.erase(key)
+        {key, value} -> :persistent_term.put(key, value)
+      end)
+    end)
+  end
+
+  defp restore_tmp_dir(nil), do: System.delete_env("TMPDIR")
+  defp restore_tmp_dir(path), do: System.put_env("TMPDIR", path)
 
   defp stale_file(root, name) do
     path = write_file(root, name)
