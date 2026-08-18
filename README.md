@@ -237,55 +237,83 @@ evidence in [§8 of the plan](docs/platform-split.md).
 
 ## Quickstart
 
-To build your own agent on the platform, `mix lemon.new` scaffolds a project
-with one example tool and one channel wired:
+### Install Lemon and start chatting
+
+From an interactive terminal, install the prebuilt runtime:
 
 ```bash
-# from a checkout of this repo; the subshell keeps the cd from leaking
-(cd installer && MIX_ENV=prod mix do archive.build + archive.install --force)
-
-cd ~/code                              # anywhere outside this repo
-mix lemon.new my_agent --channel --memory --install
-cd my_agent && mix test
+curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh
 ```
 
-The generator lives in [`installer/`](installer/README.md) and is installed as
-a Mix archive rather than fetched from Hex, because the platform packages are
-not published yet — generated projects depend on them by path, baked in from
-the checkout the archive was built from and overridable with `--lemon-path` or
-`$LEMON_PATH`. Both flags are optional: a bare `mix lemon.new my_agent` gives a
-working project too. The guides it is written against are in
-[`docs/getting-started/`](docs/getting-started/build-your-first-agent.md):
-build your first agent, add a tool, add a channel, persist memory.
+The installer downloads and verifies the release, then hands off to the
+interactive `lemon setup` wizard for the `full` and `min` profiles. The wizard
+creates first-time configuration only when it is absent, initializes encrypted
+secrets when needed, and guides provider authentication and default-model
+selection. It verifies provider configuration; it does not configure messaging
+channels or run general diagnostics automatically.
 
-Running the reference runtime from a source checkout works today. Requires
-Elixir 1.19.5+ / OTP 28.5+ (pinned in `.tool-versions`) and a model provider
-key:
+After setup, open the interactive TUI and send your first message:
 
 ```bash
-git clone https://github.com/z80dev/lemon.git && cd lemon
-mix deps.get && mix compile
-mix lemon.secrets.set llm_anthropic_api_key_raw "sk-ant-..."
-./bin/lemon doctor            # environment + config diagnostics
-./bin/lemon                   # interactive TUI; auto-starts the daemon
-./bin/lemon-tui              # dev-mode TUI from clients/tui
-./bin/lemon-gateway           # Telegram/Discord gateway
+$HOME/.lemon/bin/lemon
 ```
 
-Configuration lives in `~/.lemon/config.toml`; the full reference is
-[`docs/config.md`](docs/config.md) and first-run setup, including the Telegram
-bot walkthrough, is [`docs/user-guide/setup.md`](docs/user-guide/setup.md).
+The installer prints the PATH entry; after adding `~/.lemon/bin`, use `lemon`.
+The first interactive launch checks provider readiness and opens `lemon setup`
+before starting an unconfigured daemon. If it has no terminal, run `lemon
+setup` later from an interactive terminal instead.
 
-Any shell or CI job can push a message into a channel with
-`./bin/lemon send --to telegram:<chat_id> "deploy finished"`, including file
-attachments, thread/reply targeting, named targets and a credential-free
-`--dry-run`. The full reference is in
-[`apps/lemon_channels/README.md`](apps/lemon_channels/README.md#script-notifications).
+To defer setup, including for automation, pass `--skip-setup` to the installer:
 
-The TUI source lives in [`clients/tui`](clients/tui) and is built on
-[`@oh-my-pi/pi-tui`](https://www.npmjs.com/package/@oh-my-pi/pi-tui). In an
-installed full/min release, plain `lemon` launches it from an interactive
-terminal and starts the daemon when needed; `lemon tui` is the explicit form.
+```bash
+curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh -s -- --skip-setup
+```
+
+Without a TTY, the installer does not block; it prints the absolute setup
+command to run later. The `sim` profile has no provider setup wizard. For
+provider, model, diagnostics, and optional channels after installation, use:
+
+```bash
+lemon setup
+lemon model --provider anthropic
+lemon doctor
+lemon gateway setup       # optional: choose Telegram or Discord
+lemon channels
+```
+
+`lemon setup provider` performs live provider verification when supported;
+append `--skip-verify` to defer that network check when offline. See the
+[Install guide](docs/install.md) for the non-interactive flow, platform
+requirements, and release lifecycle.
+
+### Source development
+
+Use a source checkout for development, unsupported platforms, or building
+release artifacts. This path—not the prebuilt installer—requires Elixir
+1.19.5+, Erlang/OTP 28.5+, Bun 1.3.14+ for TUI development, and Node.js 24
+LTS+ for web development:
+
+```bash
+git clone https://github.com/z80dev/lemon.git
+cd lemon
+mix local.hex --force
+mix deps.get
+mix compile
+./bin/lemon setup
+./bin/lemon doctor
+./bin/lemon-tui
+```
+
+Use the source wrapper for the corresponding commands:
+
+```bash
+./bin/lemon model --provider anthropic
+./bin/lemon gateway setup telegram
+./bin/lemon gateway setup discord
+./bin/lemon config validate
+./bin/lemon secrets status
+./bin/lemon channels
+```
 
 ## Arenas
 
