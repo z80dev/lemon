@@ -29,22 +29,47 @@ grep -q "scripts/test live-eval" "$DOC" || fail "docs/testing.md must document l
 grep -q "LemonCore.Testing.HermeticEnv" "$DOC" || fail "docs/testing.md must mention shared hermetic env helper"
 grep -q "OPENAI_API_KEY" "$RUNNER" || fail "runner must scrub common provider credentials"
 grep -q "TELEGRAM_BOT_TOKEN" "$RUNNER" || fail "runner must scrub common platform credentials"
-python3 - "$RUNNER" "$ROOT/apps/lemon_core/lib/lemon_core/testing/hermetic_env.ex" <<'PY' || fail "runner and HermeticEnv scrub lists must match"
+# Keep the runner in lockstep with LemonCore's generic built-ins and the
+# channel-owned test credential extensions registered in config/test.exs.
+python3 - "$RUNNER" "$ROOT/apps/lemon_core/lib/lemon_core/testing/hermetic_env.ex" "$ROOT/config/test.exs" <<'PY' ||
+  fail "runner scrub list must match LemonCore built-ins plus registered channel credential extensions"
 import re
 import sys
 
 runner = open(sys.argv[1], encoding="utf-8").read()
 elixir = open(sys.argv[2], encoding="utf-8").read()
+test_config = open(sys.argv[3], encoding="utf-8").read()
 
-runner_match = re.search(r"SCRUB_CREDENTIAL_ENV_VARS=\((.*?)\n\)", runner, re.S)
-elixir_match = re.search(r"@credential_env_vars ~w\((.*?)\n  \)", elixir, re.S)
-if not runner_match or not elixir_match:
-    raise SystemExit(1)
+def declaration_block(source, pattern):
+    matches = list(re.finditer(pattern, source, re.MULTILINE | re.DOTALL))
+    if len(matches) != 1:
+        raise SystemExit(1)
+    return matches[0].group("vars")
 
-def vars(block):
-    return sorted(word for line in block.splitlines() if not line.strip().startswith("#") for word in line.split())
+def env_vars(block):
+    result = []
+    for line in block.splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        for value in line.split():
+            if not re.fullmatch(r"[A-Z][A-Z0-9_]*", value):
+                raise SystemExit(1)
+            result.append(value)
+    return result
 
-if vars(runner_match.group(1)) != vars(elixir_match.group(1)):
+runner_vars = env_vars(declaration_block(
+    runner, r"^SCRUB_CREDENTIAL_ENV_VARS=\(\n(?P<vars>.*?)^\)"
+))
+built_in_vars = env_vars(declaration_block(
+    elixir, r"^[ \t]*@credential_env_vars[ \t]+~w\(\n(?P<vars>.*?)^[ \t]*\)"
+))
+extension_vars = env_vars(declaration_block(
+    test_config,
+    r"^config[ \t]+:lemon_core,[ \t]*:test_credential_env_vars,[ \t]*~w\(\n(?P<vars>.*?)^[ \t]*\)",
+))
+
+if sorted(runner_vars) != sorted(set(built_in_vars) | set(extension_vars)):
     raise SystemExit(1)
 PY
 
