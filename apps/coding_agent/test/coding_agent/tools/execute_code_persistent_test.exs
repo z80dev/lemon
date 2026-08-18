@@ -11,7 +11,7 @@ defmodule CodingAgent.Tools.ExecuteCodePersistentTest do
   alias CodingAgent.Tools.ExecuteCodePersistentTest.{
     FakePythonRepl,
     FakeRpcServer,
-    FakeSession
+    FakeSessionConfig
   }
 
   @state CodingAgent.Tools.ExecuteCodePersistentTest.State
@@ -133,7 +133,7 @@ defmodule CodingAgent.Tools.ExecuteCodePersistentTest do
           settings_manager: settings(),
           session_id: "session-1",
           session_pid: self(),
-          session_module: FakeSession,
+          session_module: FakeSessionConfig,
           agent_id: "agent-1",
           python_repl: FakePythonRepl,
           rpc_server: FakeRpcServer,
@@ -214,7 +214,7 @@ defmodule CodingAgent.Tools.ExecuteCodePersistentTest do
       settings_manager: settings(),
       session_id: "session-1",
       session_pid: self(),
-      session_module: FakeSession,
+      session_module: FakeSessionConfig,
       agent_id: "agent-1",
       python_repl: FakePythonRepl,
       rpc_server: FakeRpcServer,
@@ -266,7 +266,7 @@ defmodule CodingAgent.Tools.ExecuteCodePersistentTest do
           settings_manager: settings(),
           session_id: "session-1",
           session_pid: self(),
-          session_module: FakeSession,
+          session_module: FakeSessionConfig,
           agent_id: "agent-1",
           python_repl: FakePythonRepl,
           rpc_server: FakeRpcServer,
@@ -301,7 +301,7 @@ defmodule CodingAgent.Tools.ExecuteCodePersistentTest do
           settings_manager: settings(),
           session_id: "session-1",
           session_pid: self(),
-          session_module: FakeSession,
+          session_module: FakeSessionConfig,
           agent_id: "agent-1",
           python_repl: FakePythonRepl,
           rpc_server: FakeRpcServer,
@@ -536,7 +536,7 @@ defmodule CodingAgent.Tools.ExecuteCodePersistentTest do
         settings_manager: settings(),
         session_id: "session-1",
         session_pid: self(),
-        session_module: FakeSession,
+        session_module: FakeSessionConfig,
         agent_id: "agent-1",
         python_repl: FakePythonRepl,
         rpc_server: FakeRpcServer,
@@ -651,7 +651,7 @@ defmodule CodingAgent.Tools.ExecuteCodePersistentTest do
     end
   end
 
-  defmodule FakeSession do
+  defmodule FakeSessionConfig do
     @state CodingAgent.Tools.ExecuteCodePersistentTest.State
 
     def execute_code_config(session_pid, timeout_ms) do
