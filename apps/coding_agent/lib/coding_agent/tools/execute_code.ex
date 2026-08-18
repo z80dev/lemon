@@ -405,7 +405,7 @@ defmodule CodingAgent.Tools.ExecuteCode do
                     repl.execute(request)
                   end)
 
-                owner_guard = monitor_task_owner(owner, task.pid)
+                owner_guard = monitor_task_owner(owner, task.pid, base)
 
                 try do
                   rpc_server_module = Keyword.get(opts, :rpc_server, RpcServer)
@@ -593,13 +593,14 @@ defmodule CodingAgent.Tools.ExecuteCode do
     end
   end
 
-  defp monitor_task_owner(owner, task_pid) do
+  defp monitor_task_owner(owner, task_pid, base) do
     spawn(fn ->
       monitor = Process.monitor(owner)
 
       receive do
         {:DOWN, ^monitor, :process, ^owner, _reason} ->
           terminate_facade_task(task_pid)
+          File.rm_rf(base)
 
         :stop ->
           Process.demonitor(monitor, [:flush])

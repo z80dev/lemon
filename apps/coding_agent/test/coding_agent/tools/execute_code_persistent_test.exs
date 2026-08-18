@@ -145,11 +145,15 @@ defmodule CodingAgent.Tools.ExecuteCodePersistentTest do
 
     assert_receive {:facade_pid, facade}
     assert_receive {:execute, _request}
+    assert_receive {:rpc_started, %{rpc_dir: rpc_dir}}
+    base = Path.dirname(rpc_dir)
+
     monitor = Process.monitor(facade)
 
     Process.exit(outer, :kill)
 
     assert_receive {:DOWN, ^monitor, :process, ^facade, _reason}, 5_000
+    assert :ok = await_absent(base)
   end
 
   test "worker crashes never replay active code in a new interpreter", %{cwd: cwd} do
@@ -348,6 +352,19 @@ defmodule CodingAgent.Tools.ExecuteCodePersistentTest do
       }
     }
   end
+
+  defp await_absent(path, attempts \\ 100)
+
+  defp await_absent(path, attempts) when attempts > 0 do
+    if File.exists?(path) do
+      Process.sleep(10)
+      await_absent(path, attempts - 1)
+    else
+      :ok
+    end
+  end
+
+  defp await_absent(path, 0), do: flunk("bridge directory was not removed: #{path}")
 
   defp text(%AgentToolResult{content: [%TextContent{text: text} | _]}), do: text
 
