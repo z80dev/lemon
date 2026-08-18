@@ -106,8 +106,8 @@ defmodule LemonCli.CLI do
   def setup_required? do
     case ensure_lemon_core_started() do
       :ok ->
-        (Verification.setup_state()
-         |> Verification.pending_steps()) != []
+        Verification.setup_state()
+        |> Verification.pending_steps() != []
 
       :error ->
         true
@@ -945,7 +945,6 @@ defmodule LemonCli.CLI do
       {:error, _reason} -> :error
     end
   end
-
 
   # ──────────────────────────────────────────────────────────────────────────
   # Usage

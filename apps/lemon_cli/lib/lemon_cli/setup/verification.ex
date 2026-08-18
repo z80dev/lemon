@@ -55,7 +55,10 @@ defmodule LemonCli.Setup.Verification do
 
   @type setup_state :: %{
           required(:config) => %{required(:complete) => boolean(), required(:path) => String.t()},
-          required(:secrets) => %{required(:complete) => boolean(), required(:source) => atom() | nil},
+          required(:secrets) => %{
+            required(:complete) => boolean(),
+            required(:source) => atom() | nil
+          },
           required(:provider) => provider_state()
         }
 
@@ -237,11 +240,13 @@ defmodule LemonCli.Setup.Verification do
         "(missing or undecryptable secret). Re-run `lemon setup provider` to store a fresh credential."
 
   defp provider_failure_message(_provider, :model_provider_mismatch),
-    do: "The configured default model does not belong to the default provider. " <>
-          "Run `lemon setup provider --set-default` to align them."
+    do:
+      "The configured default model does not belong to the default provider. " <>
+        "Run `lemon setup provider --set-default` to align them."
 
   defp provider_failure_message(provider, reason),
-    do: "Provider configuration for #{provider || "the default provider"} is incomplete (#{inspect(reason)})."
+    do:
+      "Provider configuration for #{provider || "the default provider"} is incomplete (#{inspect(reason)})."
 
   defp run_live_check(%{provider: provider, model: model}, opts) do
     skip_verify? = Keyword.get(opts, :skip_verify, false)
@@ -249,7 +254,7 @@ defmodule LemonCli.Setup.Verification do
     if skip_verify? do
       {:ok, %{provider: provider, model: model, live: :disabled}}
     else
-      verifier = Keyword.get(opts, :verifier) || &default_live_check/1
+      verifier = Keyword.get(opts, :verifier) || (&default_live_check/1)
 
       case build_live_input(opts, provider, model) do
         {:ok, live_input} ->
@@ -318,7 +323,10 @@ defmodule LemonCli.Setup.Verification do
       inline = normalize_optional_string(provider_cfg["api_key"]) ->
         {:ok, inline}
 
-      name = normalize_optional_string(provider_cfg["oauth_secret"] || provider_cfg["api_key_secret"]) ->
+      name =
+          normalize_optional_string(
+            provider_cfg["oauth_secret"] || provider_cfg["api_key_secret"]
+          ) ->
         case Secrets.resolve(name, prefer_env: false) do
           {:ok, value, _source} -> {:ok, value}
           {:error, reason} -> {:skip, {:credential_unavailable, reason}}
@@ -396,7 +404,6 @@ defmodule LemonCli.Setup.Verification do
       ssl_opts
     end
   end
-
 
   defp live_failure_message(_live_input, :unauthorized) do
     "The provider rejected the credential (HTTP 401/403). Re-run `lemon setup provider` " <>

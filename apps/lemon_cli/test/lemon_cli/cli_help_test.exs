@@ -14,7 +14,8 @@ defmodule LemonCli.CLIHelpTest do
   @help_cases [
     {["setup", "--help"], "Usage: lemon setup", "Welcome to Lemon setup!"},
     {["model", "--help"], "Usage: lemon model", "Lemon Provider Onboarding"},
-    {["gateway", "setup", "--help"], "Usage: lemon gateway setup", "Available gateway transports:"},
+    {["gateway", "setup", "--help"], "Usage: lemon gateway setup",
+     "Available gateway transports:"},
     {["gateway", "--help"], "Usage: lemon gateway setup", "Available gateway transports:"},
     {["doctor", "--help"], "Usage: lemon doctor", "Lemon Doctor"},
     {["config", "--help"], "Usage: lemon config", "Validating Lemon configuration"},

@@ -58,7 +58,6 @@ defmodule LemonCli.Setup.Wizard do
       ["provider" | provider_args] ->
         Provider.run(provider_args, io, setup_verify_opts(opts))
 
-
       ["runtime" | runtime_args] ->
         run_runtime(runtime_args, io, parsed)
 
@@ -140,7 +139,6 @@ defmodule LemonCli.Setup.Wizard do
     result
   end
 
-
   @doc """
   Runs the runtime configuration wizard.
 
@@ -197,8 +195,15 @@ defmodule LemonCli.Setup.Wizard do
     io.info.("Setup status:")
 
     io.info.("  #{step_marker(state.config.complete)} config    #{state.config.path}")
-    io.info.("  #{step_marker(state.secrets.complete)} secrets   #{secrets_detail(state.secrets)}")
-    io.info.("  #{step_marker(state.provider.complete)} provider  #{provider_detail(state.provider)}")
+
+    io.info.(
+      "  #{step_marker(state.secrets.complete)} secrets   #{secrets_detail(state.secrets)}"
+    )
+
+    io.info.(
+      "  #{step_marker(state.provider.complete)} provider  #{provider_detail(state.provider)}"
+    )
+
     io.info.("")
   end
 
@@ -304,7 +309,10 @@ defmodule LemonCli.Setup.Wizard do
 
     cond do
       provider_state.complete and is_nil(forced) ->
-        io.info.("Provider already configured: #{provider_state.provider} / #{provider_state.model}")
+        io.info.(
+          "Provider already configured: #{provider_state.provider} / #{provider_state.model}"
+        )
+
         io.info.("Skipping onboarding. Run `lemon setup provider` to change it.")
         :ok
 
@@ -343,7 +351,6 @@ defmodule LemonCli.Setup.Wizard do
     |> Keyword.take([:verifier, :skip_verify])
     |> Keyword.put(:live_verify, true)
   end
-
 
   defp step_offer_runtime(io, non_interactive?) do
     io.info.("")

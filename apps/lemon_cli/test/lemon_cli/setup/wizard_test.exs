@@ -200,7 +200,11 @@ defmodule LemonCli.Setup.WizardTest do
 
       # Provider onboarding is never asked for again; runtime stays optional.
       assert Enum.any?(prompt_events(events), &String.contains?(&1, "Configure runtime profile"))
-      assert Enum.all?(prompt_events(events), &not String.contains?(&1, "Onboard an AI provider"))
+
+      assert Enum.all?(
+               prompt_events(events),
+               &(not String.contains?(&1, "Onboard an AI provider"))
+             )
 
       refute info_event?(events, &String.contains?(&1, "Verifying provider"))
     end
@@ -220,9 +224,10 @@ defmodule LemonCli.Setup.WizardTest do
   end
 
   describe "run/3 — provider verification failure" do
-    test "returns {:error, :verification_failed} with actionable recovery and no success claim", %{
-      config_path: config_path
-    } do
+    test "returns {:error, :verification_failed} with actionable recovery and no success claim",
+         %{
+           config_path: config_path
+         } do
       set_master_key_env()
 
       io = recording_io()

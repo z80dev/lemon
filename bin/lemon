@@ -47,6 +47,7 @@ Usage: ./bin/lemon [options]
        ./bin/lemon setup runtime --non-interactive
        ./bin/lemon model --provider anthropic
        ./bin/lemon gateway setup [transport] --non-interactive
+       ./bin/lemon channels
        ./bin/lemon config validate
        ./bin/lemon doctor --json
        ./bin/lemon send --to telegram:<chat_id> "message"

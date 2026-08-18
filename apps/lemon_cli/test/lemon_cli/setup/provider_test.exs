@@ -85,8 +85,10 @@ defmodule LemonCli.Setup.ProviderTest do
             flunk("Expected an error when config directory is unwritable, got :ok")
         end
       after
-        if original_home, do: System.put_env("HOME", original_home),
-                          else: System.delete_env("HOME")
+        if original_home,
+          do: System.put_env("HOME", original_home),
+          else: System.delete_env("HOME")
+
         System.delete_env("LEMON_SECRETS_MASTER_KEY")
       end
     end
@@ -109,7 +111,6 @@ defmodule LemonCli.Setup.ProviderTest do
         )
 
       assert result == :ok
-
       # The live verifier received the stored credential and the registry's
       # endpoint details for the selected model.
       assert_received {:live_check,

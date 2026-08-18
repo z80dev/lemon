@@ -86,7 +86,6 @@ defmodule LemonCli.Setup.Provider do
   # Post-onboarding verification
   # ──────────────────────────────────────────────────────────────────────────
 
-
   defp verify_onboarded_config(args, skip_verify?, io, opts) do
     config_path = extract_config_path(args)
 
