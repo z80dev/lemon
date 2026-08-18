@@ -203,11 +203,12 @@ generations.
 - Python REPL full-output spill files remain available after cell completion. A node
   processes one batch of at most 1,000 direct entries per 24-hour reaper window across
   its current and stale private staging roots, retaining continuations for later windows.
+  The current root is always processed first; one stale root may use its remaining budget.
   Only expired regular `pi-python-repl-*` files that are no longer live are eligible.
 - Once at node boot, the reaper discovers sibling private staging roots left by prior
   nodes (or a prior first-root race), but only when their `0600` owner marker identifies a
-  dead OS process. It selects at most one such stale root per reaper window. Empty stale
-  roots are removed best-effort; non-empty roots are never removed or traversed recursively.
+  dead OS process. Empty stale roots are removed best-effort; non-empty roots are never
+  removed or traversed recursively.
 
 ## Security
 

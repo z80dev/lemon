@@ -136,6 +136,24 @@ defmodule CodingAgent.PrivateTmpTest do
       assert File.ls!(root) == []
     end
 
+    test "reaps the current root before advancing a stale-root queue", %{root: root} do
+      current_spill = stale_file(root, "pi-python-repl-current")
+      {:ok, stale_root} = PrivateTmp.reserve_dir(System.tmp_dir!(), "lemon-private-queued")
+      on_exit(fn -> File.rm_rf(stale_root) end)
+
+      dead_owner_marker(stale_root)
+      stale_spill = stale_file(stale_root, "pi-python-repl-stale")
+
+      :persistent_term.put({PrivateTmp, :stale_root_sweep_done}, true)
+      :persistent_term.put({PrivateTmp, :stale_roots}, [stale_root])
+      force_sweep_window()
+
+      assert {:ok, ^root} = PrivateTmp.root()
+      refute File.exists?(current_spill)
+      refute File.exists?(stale_spill)
+      refute File.exists?(stale_root)
+    end
+
     test "keeps live spills until their capture finishes", %{root: root} do
       output =
         Output.new(10)

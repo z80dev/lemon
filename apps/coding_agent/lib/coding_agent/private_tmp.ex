@@ -258,8 +258,9 @@ defmodule CodingAgent.PrivateTmp do
   ## Internals
 
   # The one bounded batch per window is shared by the current root and stale
-  # roots. Stale roots are selected first, one per window, so a large number
-  # of abandoned roots cannot multiply a normal root lookup's filesystem work.
+  # roots. The current root always receives the first part of the budget; at
+  # most one stale root receives any remainder, so abandoned roots cannot
+  # multiply a normal root lookup's filesystem work.
   defp maybe_reap_spills(root) do
     if sweep_due?(System.monotonic_time(:second)) do
       try do
@@ -268,15 +269,11 @@ defmodule CodingAgent.PrivateTmp do
 
           if sweep_due?(now) do
             :persistent_term.put(@spill_sweep_key, now)
+            current_count = reap_expired_spills(root, @spill_sweep_limit)
+            remaining = @spill_sweep_limit - current_count
 
-            case next_reap_target(root) do
-              {:current, current_root} ->
-                reap_expired_spills(current_root)
-
-              {:stale, stale_root} ->
-                if reap_stale_root(stale_root, System.tmp_dir!()) == :continue do
-                  enqueue_stale_root(stale_root)
-                end
+            if remaining > 0 do
+              reap_one_stale_root(remaining)
             end
           end
         end)
@@ -320,32 +317,33 @@ defmodule CodingAgent.PrivateTmp do
   # receives `lstat`/removal work. The unprocessed names persist by root and
   # are resumed on the next sweep instead of repeatedly stranding entries
   # behind the same leading batch.
-  defp reap_expired_spills(root) do
-    with {:ok, names} <- next_spill_batch(root) do
+  defp reap_expired_spills(root, limit) do
+    with {:ok, names} <- next_spill_batch(root, limit) do
       cutoff = System.system_time(:second) - @spill_ttl_seconds
       Enum.each(names, &remove_expired_spill(root, &1, cutoff))
+      length(names)
+    else
+      _ -> 0
     end
-
-    :ok
   end
 
-  defp next_spill_batch(root) do
+  defp next_spill_batch(root, limit) do
     continuations = :persistent_term.get(@spill_continuations_key, %{})
 
     case Map.pop(continuations, root) do
       {nil, _remaining_continuations} ->
         case File.ls(root) do
-          {:ok, names} -> split_spill_batch(root, names, continuations)
+          {:ok, names} -> split_spill_batch(root, names, continuations, limit)
           {:error, reason} -> {:error, reason}
         end
 
       {names, remaining_continuations} ->
-        split_spill_batch(root, names, remaining_continuations)
+        split_spill_batch(root, names, remaining_continuations, limit)
     end
   end
 
-  defp split_spill_batch(root, names, continuations) do
-    {batch, remainder} = Enum.split(names, @spill_sweep_limit)
+  defp split_spill_batch(root, names, continuations, limit) do
+    {batch, remainder} = Enum.split(names, limit)
 
     updated_continuations =
       if remainder == [] do
@@ -404,14 +402,17 @@ defmodule CodingAgent.PrivateTmp do
     end
   end
 
-  defp next_reap_target(current_root) do
+  defp reap_one_stale_root(limit) do
     case :persistent_term.get(@stale_roots_key, []) do
       [stale_root | remaining] ->
         put_stale_roots(remaining)
-        {:stale, stale_root}
+
+        if reap_stale_root(stale_root, System.tmp_dir!(), limit) == :continue do
+          enqueue_stale_root(stale_root)
+        end
 
       _ ->
-        {:current, current_root}
+        :ok
     end
   end
 
@@ -423,12 +424,12 @@ defmodule CodingAgent.PrivateTmp do
   defp put_stale_roots([]), do: :persistent_term.erase(@stale_roots_key)
   defp put_stale_roots(roots), do: :persistent_term.put(@stale_roots_key, roots)
 
-  defp reap_stale_root(root, tmp_dir) do
+  defp reap_stale_root(root, tmp_dir, limit) do
     with :ok <- validate_shape(root, tmp_dir, @root_prefix),
          :ok <- confirm(root, :directory),
          {:ok, marker, pid} <- owner_marker(root),
          false <- os_pid_alive?(pid) do
-      reap_expired_spills(root)
+      reap_expired_spills(root, limit)
 
       if has_spill_continuation?(root) do
         :continue
