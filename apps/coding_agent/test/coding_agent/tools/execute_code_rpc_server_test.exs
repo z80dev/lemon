@@ -194,6 +194,22 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
     end
   end
 
+  defmodule BlockingApprovalRpc do
+    @moduledoc false
+
+    def initial_stats, do: FakeRpc.initial_stats()
+
+    def process_pending(%{test_pid: test_pid}, stats) do
+      send(test_pid, {:approval_pending, self()})
+
+      receive do
+        :approve ->
+          send(test_pid, :post_approval_tool_executed)
+          stats
+      end
+    end
+  end
+
   setup %{tmp_dir: tmp_dir} do
     rpc_dir = Path.join(tmp_dir, "rpc")
     File.mkdir_p!(rpc_dir)
@@ -319,17 +335,44 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
   end
 
   describe "abort and caller death" do
-    test "stops when the abort signal fires and cleans the rpc dir", %{rpc_dir: rpc_dir} do
+    test "abort retains final stats until explicit cleanup", %{rpc_dir: rpc_dir} do
       signal = AbortSignal.new()
       {:ok, server} = start_server(ctx(rpc_dir, signal: signal))
 
-      File.write!(Path.join(rpc_dir, "junk.txt"), "x")
-      monitor = Process.monitor(server)
+      write_request(rpc_dir, 1, "echo", %{"value" => "before abort"})
+      assert %{"ok" => true, "content" => "before abort"} = await_response(rpc_dir, 1)
+      assert_receive {:dispatched, "exec_code_rpc_1"}
 
+      File.write!(Path.join(rpc_dir, "junk.txt"), "x")
       :ok = AbortSignal.abort(signal)
-      assert_receive {:DOWN, ^monitor, :process, ^server, :normal}, 2_000
-      refute Process.alive?(server)
+      Process.sleep(25)
+
+      assert Process.alive?(server)
+      assert RpcServer.stats(server).calls == 1
+      assert File.exists?(Path.join(rpc_dir, "junk.txt"))
+
+      assert :ok = RpcServer.stop(server)
       assert File.ls(rpc_dir) == {:ok, []}
+    end
+
+    test "aborting a timed-out cell cancels pending approval before it can dispatch", %{
+      rpc_dir: rpc_dir
+    } do
+      signal = AbortSignal.new()
+
+      {:ok, server} =
+        start_server(ctx(rpc_dir, signal: signal, test_pid: self()), rpc: BlockingApprovalRpc)
+
+      assert_receive {:approval_pending, approval_task}
+      :ok = AbortSignal.abort(signal)
+      assert :ok = RpcServer.abort(server)
+      assert Process.alive?(server)
+
+      send(approval_task, :approve)
+      refute_receive :post_approval_tool_executed, 100
+      assert RpcServer.stats(server).calls == 0
+
+      assert :ok = RpcServer.stop(server)
     end
 
     test "stops when the monitored caller dies", %{rpc_dir: rpc_dir} do
@@ -426,7 +469,8 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
       signal: Keyword.get(overrides, :signal),
       rpc_dir: rpc_dir,
       token: Keyword.get(overrides, :token, @token),
-      poll_interval_ms: 5
+      poll_interval_ms: 5,
+      test_pid: Keyword.get(overrides, :test_pid)
     }
   end
 

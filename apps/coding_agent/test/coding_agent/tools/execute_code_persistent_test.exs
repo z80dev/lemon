@@ -80,8 +80,18 @@ defmodule CodingAgent.Tools.ExecuteCodePersistentTest do
     refute_receive {:fallback_runner, _command}
   end
 
-  test "abort kills the facade caller and reports discarded state", %{cwd: cwd} do
+  test "abort preserves RPC statistics and the resulting trust classification", %{cwd: cwd} do
     set_response(:block)
+
+    set_stats(%{
+      calls: 1,
+      denied: 0,
+      errors: 0,
+      bytes: 8,
+      tools_used: MapSet.new(["webfetch"]),
+      seen_ids: MapSet.new([1])
+    })
+
     signal = AbortSignal.new()
 
     task =
@@ -100,12 +110,46 @@ defmodule CodingAgent.Tools.ExecuteCodePersistentTest do
       end)
 
     assert_receive {:execute, _request}
+    assert_receive {:rpc_started, %{signal: cell_signal}}
+    refute cell_signal == signal
+
     :ok = AbortSignal.abort(signal)
 
     result = Task.await(task, 5_000)
     assert result.details.persistent
     refute result.details.state_retained
-    assert text(result) == "Script cancelled."
+    assert result.trust == :untrusted
+    assert text(result) =~ "<<<EXTERNAL_UNTRUSTED_CONTENT>>>"
+    assert result.details.rpc_calls == 1
+    assert result.details.rpc_tools == ["webfetch"]
+    assert AbortSignal.aborted?(cell_signal)
+    assert_receive {:rpc_aborted, _server}
+    assert text(result) =~ "Script cancelled."
+  end
+
+  test "outer execute caller death kills its linked facade task", %{cwd: cwd} do
+    outer =
+      spawn(fn ->
+        opts = [
+          settings_manager: settings(),
+          session_id: "session-1",
+          session_pid: self(),
+          agent_id: "agent-1",
+          python_repl: FakePythonRepl,
+          rpc_server: FakeRpcServer,
+          python_repl_registry: self()
+        ]
+
+        ExecuteCode.execute("call-1", %{"script" => "mutate()"}, nil, nil, cwd, opts)
+      end)
+
+    assert_receive {:facade_pid, facade}
+    assert_receive {:execute, _request}
+    monitor = Process.monitor(facade)
+
+    Process.exit(outer, :kill)
+
+    assert_receive {:DOWN, ^monitor, :process, ^facade, _reason}, 5_000
   end
 
   test "worker crashes never replay active code in a new interpreter", %{cwd: cwd} do
@@ -140,16 +184,47 @@ defmodule CodingAgent.Tools.ExecuteCodePersistentTest do
   end
 
   for reason <- [:capacity_exhausted, :registry_unavailable, :startup_failed] do
-    test "#{reason} falls back only before a session cell starts", %{cwd: cwd} do
+    test "#{reason} falls back only before a session cell starts and preserves reset metadata", %{
+      cwd: cwd
+    } do
       set_response({:error, %{reason: unquote(reason), state_retained: false}})
 
-      result = execute(cwd, %{"script" => "print('fallback')"}, fallback_opts())
+      result = execute(cwd, %{"script" => "print('fallback')", "reset" => true}, fallback_opts())
 
       refute result.details.persistent
       assert result.details.fallback_reason == unquote(reason)
+      assert result.details.reset_performed
+      assert_receive {:reset, _key, _owner, _opts}
       assert_receive {:execute, _request}
       assert_receive {:fallback_runner, _command}
     end
+  end
+
+  for reason <- [:registry_unavailable, :stop_failed] do
+    test "reset #{reason} falls back before a session cell starts", %{cwd: cwd} do
+      set_reset({:error, %{reason: unquote(reason)}})
+
+      result = execute(cwd, %{"script" => "print('fallback')", "reset" => true}, fallback_opts())
+
+      refute result.details.persistent
+      assert result.details.fallback_reason == unquote(reason)
+      refute result.details.reset_performed
+      assert_receive {:reset, _key, _owner, _opts}
+      assert_receive {:fallback_runner, _command}
+      refute_receive {:execute, _request}
+    end
+  end
+
+  test "reset failures after an admission boundary are errors, not fallbacks", %{cwd: cwd} do
+    set_reset({:error, %{reason: :queue_full}})
+
+    result = execute(cwd, %{"script" => "queued()", "reset" => true}, fallback_opts())
+
+    assert result.details.persistent
+    assert result.details.reason == {:reset_failed, :queue_full}
+    assert_receive {:reset, _key, _owner, _opts}
+    refute_receive {:execute, _request}
+    refute_receive {:fallback_runner, _command}
   end
 
   test "a full kernel queue is an error, not a fallback", %{cwd: cwd} do
@@ -255,6 +330,7 @@ defmodule CodingAgent.Tools.ExecuteCodePersistentTest do
   end
 
   defp set_response(response), do: Agent.update(@state, &Map.put(&1, :response, response))
+  defp set_reset(reset), do: Agent.update(@state, &Map.put(&1, :reset, reset))
   defp set_stats(stats), do: Agent.update(@state, &Map.put(&1, :stats, stats))
 
   defp initial_state(test_pid) do
@@ -286,6 +362,7 @@ defmodule CodingAgent.Tools.ExecuteCodePersistentTest do
 
     def execute(request) do
       state = Agent.get(@state, & &1)
+      send(state.test_pid, {:facade_pid, self()})
       send(state.test_pid, {:execute, request})
 
       case state.response do
@@ -302,6 +379,12 @@ defmodule CodingAgent.Tools.ExecuteCodePersistentTest do
       state = Agent.get(@state, & &1)
       send(state.test_pid, {:rpc_started, ctx})
       {:ok, make_ref()}
+    end
+
+    def abort(server) do
+      state = Agent.get(@state, & &1)
+      send(state.test_pid, {:rpc_aborted, server})
+      :ok
     end
 
     def stats(_server), do: Agent.get(@state, & &1.stats)

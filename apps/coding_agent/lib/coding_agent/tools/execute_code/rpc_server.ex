@@ -4,10 +4,11 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
 
   Where `Rpc.serve/2` pumps requests for a single per-call script task, this
   GenServer pumps the rpc directory of one *cell* of a persistent python
-  kernel. It is started by the execute_code session integration once per cell
-  with the fresh `{dir, token}` bridge that `PythonRepl.Session` forwards to
-  the runner, and it lives until the cell ends, the abort signal fires, or the
-  owning caller dies.
+  kernel. It is started once per cell with the fresh `{dir, token}` bridge
+  forwarded to the runner, and it lives until the owning caller ends the cell
+  or dies. An abort signal gates further dispatch but does not stop the server:
+  the owning execute process must be able to read final stats before explicit
+  cleanup.
 
   The server runs in its own process, outside `PythonRepl.Session`: a slow
   tool or an approval wait inside a sweep occupies only this process, so the
@@ -36,10 +37,11 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
     * `start_link/2` validates the ctx, links and monitors the calling
       process (the future session integration), and schedules the first poll.
     * Every `poll_interval_ms` the server checks the abort signal and then
-      runs exactly one sweep; sweeps never overlap, so accounting stays
+      runs exactly one sweep; once aborted it retains its final stats without
+      dispatching new requests. Sweeps never overlap, so accounting stays
       single-threaded.
     * `stop/2` is synchronous and idempotent. Every stop path — explicit
-      stop, abort, caller death, supervisor shutdown — funnels through
+      stop, caller death, supervisor shutdown — funnels through
       `terminate/2`, which removes the protocol files (bounded, files and
       links only; the `0700` workspace directory itself belongs to the
       workspace teardown).
@@ -122,7 +124,7 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
           | {:caller, pid()}
           | {:name, GenServer.name()}
 
-  defstruct [:ctx, :rpc, :stats, :poll_interval_ms, :caller, :caller_monitor]
+  defstruct [:ctx, :rpc, :stats, :poll_interval_ms, :caller, :caller_monitor, :sweep_task]
 
   @doc """
   Starts a pump server for one cell.
@@ -155,6 +157,17 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
 
       GenServer.start_link(__MODULE__, {ctx, rpc, poll_interval_ms, caller}, gen_opts)
     end
+  end
+
+  @doc """
+  Cancels any in-flight dispatch while retaining the server for a final stats
+  read. The owning execute process must still call `stop/2`.
+  """
+  @spec abort(GenServer.server(), timeout()) :: :ok
+  def abort(server, timeout \\ @stop_timeout_ms) do
+    GenServer.call(server, :abort, timeout)
+  catch
+    :exit, _reason -> :ok
   end
 
   @doc """
@@ -210,20 +223,50 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
     {:reply, state.stats, state}
   end
 
+  def handle_call(:abort, _from, state) do
+    :ok = abort_signal(state.ctx.signal)
+    {:reply, :ok, cancel_sweep(state)}
+  end
+
   @impl true
   def handle_info(:poll, state) do
     if AbortSignal.aborted?(state.ctx.signal) do
-      {:stop, :normal, state}
-    else
-      state = sweep(state)
-      schedule_poll(state.poll_interval_ms)
+      # ExecuteCode reads this snapshot after cancelling its facade task, then
+      # explicitly stops us. Keeping the process alive preserves tool-use
+      # accounting and the resulting trust classification through abort.
       {:noreply, state}
+    else
+      task =
+        Task.Supervisor.async_nolink(CodingAgent.TaskSupervisor, fn ->
+          sweep(state.rpc, state.ctx, state.stats)
+        end)
+
+      {:noreply, %{state | sweep_task: task}}
     end
+  end
+
+  def handle_info({ref, stats}, %{sweep_task: %Task{ref: ref}} = state) when is_map(stats) do
+    Process.demonitor(ref, [:flush])
+    state = %{state | stats: stats, sweep_task: nil}
+    schedule_next_poll(state)
+    {:noreply, state}
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{sweep_task: %Task{ref: ref}} = state) do
+    state = %{state | sweep_task: nil}
+    schedule_next_poll(state)
+    {:noreply, state}
   end
 
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %{caller_monitor: ref} = state) do
     {:stop, :normal, state}
   end
+
+  # A cancelled task can race its result or DOWN message with the abort call.
+  # It no longer owns state after `cancel_sweep/1`, so those late notifications
+  # are intentionally ignored.
+  def handle_info({ref, _result}, state) when is_reference(ref), do: {:noreply, state}
+  def handle_info({:DOWN, _ref, :process, _pid, _reason}, state), do: {:noreply, state}
 
   def handle_info({:EXIT, pid, reason}, state) do
     cond do
@@ -245,6 +288,7 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
 
   @impl true
   def terminate(_reason, state) do
+    _ = cancel_sweep(state)
     cleanup_files(state.ctx.rpc_dir)
     :ok
   end
@@ -256,9 +300,8 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
   # A broken sweep must never take the server down: the cell would hang
   # waiting for responses nobody will write. Keep the previous stats so the
   # next poll resumes from a consistent accounting state.
-  defp sweep(state) do
-    stats = state.rpc.process_pending(state.ctx, state.stats)
-    %{state | stats: stats}
+  defp sweep(rpc, ctx, stats) do
+    rpc.process_pending(ctx, stats)
   rescue
     error ->
       # Class only: exception payloads can embed the request body, which
@@ -267,12 +310,34 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
         "execute_code rpc sweep failed (#{inspect(error.__struct__)}); keeping previous stats"
       )
 
-      state
+      stats
   catch
     kind, _value ->
       Logger.warning("execute_code rpc sweep failed (#{kind}); keeping previous stats")
 
-      state
+      stats
+  end
+
+  defp cancel_sweep(%{sweep_task: nil} = state), do: state
+
+  defp cancel_sweep(%{sweep_task: task} = state) do
+    case Task.yield(task, 0) do
+      {:ok, stats} when is_map(stats) ->
+        %{state | stats: stats, sweep_task: nil}
+
+      _ ->
+        _ = Task.shutdown(task, :brutal_kill)
+        %{state | sweep_task: nil}
+    end
+  end
+
+  defp abort_signal(nil), do: :ok
+  defp abort_signal(signal), do: AbortSignal.abort(signal)
+
+  defp schedule_next_poll(state) do
+    unless AbortSignal.aborted?(state.ctx.signal) do
+      schedule_poll(state.poll_interval_ms)
+    end
   end
 
   defp schedule_poll(poll_interval_ms) do

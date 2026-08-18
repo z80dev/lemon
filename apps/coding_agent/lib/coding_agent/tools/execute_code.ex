@@ -297,7 +297,18 @@ defmodule CodingAgent.Tools.ExecuteCode do
 
     case session_identity(python, config, cwd, opts) do
       {:fallback, reason} ->
-        session_fallback(script, python, config, params, signal, cwd, opts, reason, started_at)
+        session_fallback(
+          script,
+          python,
+          config,
+          params,
+          signal,
+          cwd,
+          opts,
+          reason,
+          false,
+          started_at
+        )
 
       {:error, reason} ->
         session_error(reason, false, false, Rpc.initial_stats(), started_at, opts)
@@ -362,7 +373,9 @@ defmodule CodingAgent.Tools.ExecuteCode do
     with {:ok, reset_performed} <- maybe_reset(repl, key, owner_pid, params, opts) do
       case build_bridge() do
         {:ok, base, bridge} ->
-          case start_rpc_server(bridge, config, signal, cwd, opts) do
+          cell_signal = AbortSignal.new()
+
+          case start_rpc_server(bridge, config, cell_signal, cwd, opts) do
             {:ok, rpc_server} ->
               try do
                 request = %{
@@ -372,6 +385,8 @@ defmodule CodingAgent.Tools.ExecuteCode do
                   cwd: cwd,
                   bridge: bridge,
                   timeout_ms: timeout_ms,
+                  max_live_kernels: config.max_live_kernels,
+                  kernel_idle_timeout_ms: config.kernel_idle_timeout_ms,
                   max_queued_cells: config.max_queued_cells_per_kernel,
                   max_output_bytes: config.max_output_bytes,
                   helper_source: PythonShim.render_module(config.tools)
@@ -383,38 +398,58 @@ defmodule CodingAgent.Tools.ExecuteCode do
                     :error -> request
                   end
 
+                owner = self()
+
                 task =
-                  Task.Supervisor.async_nolink(CodingAgent.TaskSupervisor, fn ->
+                  Task.Supervisor.async(CodingAgent.TaskSupervisor, fn ->
                     repl.execute(request)
                   end)
 
-                result = await_session_task(task, signal, opts)
-                stats = rpc_stats(Keyword.get(opts, :rpc_server, RpcServer), rpc_server)
+                owner_guard = monitor_task_owner(owner, task.pid)
 
-                case format_session_result(
-                       result,
-                       stats,
-                       signal,
-                       timeout_ms,
-                       reset_performed,
-                       started_at,
-                       opts
-                     ) do
-                  {:prestart_fallback, reason} ->
-                    session_fallback(
-                      script,
-                      nil,
-                      config,
-                      params,
+                try do
+                  rpc_server_module = Keyword.get(opts, :rpc_server, RpcServer)
+
+                  result =
+                    await_session_task(
+                      task,
                       signal,
-                      cwd,
-                      opts,
-                      reason,
-                      started_at
+                      cell_signal,
+                      rpc_server_module,
+                      rpc_server,
+                      opts
                     )
 
-                  tool_result ->
-                    tool_result
+                  stats = rpc_stats(rpc_server_module, rpc_server)
+
+                  case format_session_result(
+                         result,
+                         stats,
+                         signal,
+                         timeout_ms,
+                         reset_performed,
+                         started_at,
+                         opts
+                       ) do
+                    {:prestart_fallback, reason} ->
+                      session_fallback(
+                        script,
+                        nil,
+                        config,
+                        params,
+                        signal,
+                        cwd,
+                        opts,
+                        reason,
+                        reset_performed,
+                        started_at
+                      )
+
+                    tool_result ->
+                      tool_result
+                  end
+                after
+                  stop_owner_guard(owner_guard)
                 end
               after
                 try do
@@ -433,6 +468,20 @@ defmodule CodingAgent.Tools.ExecuteCode do
           session_error(reason, false, reset_performed, Rpc.initial_stats(), started_at, opts)
       end
     else
+      {:fallback, reason, reset_performed} ->
+        session_fallback(
+          script,
+          nil,
+          config,
+          params,
+          signal,
+          cwd,
+          opts,
+          reason,
+          reset_performed,
+          started_at
+        )
+
       {:error, reason} ->
         session_error(reason, false, false, Rpc.initial_stats(), started_at, opts)
     end
@@ -447,11 +496,27 @@ defmodule CodingAgent.Tools.ExecuteCode do
         end
 
       case repl.reset(key, owner_pid, reset_opts) do
-        {:ok, %{reset_performed: performed}} when is_boolean(performed) -> {:ok, performed}
-        {:ok, _} -> {:ok, true}
-        {:error, %{reason: reason}} -> {:error, {:reset_failed, reason}}
-        {:error, reason} -> {:error, {:reset_failed, reason}}
-        other -> {:error, {:reset_failed, other}}
+        {:ok, %{reset_performed: performed}} when is_boolean(performed) ->
+          {:ok, performed}
+
+        {:ok, _} ->
+          {:ok, true}
+
+        {:error, %{reason: reason} = result}
+        when reason in [:registry_unavailable, :stop_failed] ->
+          {:fallback, reason, Map.get(result, :reset_performed, false)}
+
+        {:error, reason} when reason in [:registry_unavailable, :stop_failed] ->
+          {:fallback, reason, false}
+
+        {:error, %{reason: reason}} ->
+          {:error, {:reset_failed, reason}}
+
+        {:error, reason} ->
+          {:error, {:reset_failed, reason}}
+
+        other ->
+          {:error, {:reset_failed, other}}
       end
     else
       {:ok, false}
@@ -499,27 +564,68 @@ defmodule CodingAgent.Tools.ExecuteCode do
     end
   end
 
-  # The task is the `GenServer.call` caller from PythonRepl's point of view.
-  # Killing it on abort triggers the Session caller-DOWN path, which discards
-  # mutated state instead of letting an interrupted cell poison a later one.
-  defp await_session_task(task, signal, opts) do
+  # The facade task is the `GenServer.call` caller from PythonRepl's point of
+  # view. A linked task plus its explicit owner guard makes caller death
+  # discard the active cell even when Task.Supervisor link semantics do not
+  # propagate that death. The separate cell signal belongs only to this bridge:
+  # it is aborted before formatting so an RPC approval or tool cannot outlive
+  # the cell.
+  defp await_session_task(task, signal, cell_signal, rpc_server, server, opts) do
     poll_interval_ms = Keyword.get(opts, :persistent_poll_interval_ms, @poll_interval_ms)
 
     case Task.yield(task, poll_interval_ms) do
       {:ok, result} ->
+        abort_cell(cell_signal, rpc_server, server)
         {:completed, result}
 
       {:exit, reason} ->
+        abort_cell(cell_signal, rpc_server, server)
         {:task_exit, reason}
 
       nil ->
         if aborted?(signal, opts) do
+          abort_cell(cell_signal, rpc_server, server)
           _ = Task.shutdown(task, :brutal_kill)
           :aborted
         else
-          await_session_task(task, signal, opts)
+          await_session_task(task, signal, cell_signal, rpc_server, server, opts)
         end
     end
+  end
+
+  defp monitor_task_owner(owner, task_pid) do
+    spawn(fn ->
+      monitor = Process.monitor(owner)
+
+      receive do
+        {:DOWN, ^monitor, :process, ^owner, _reason} ->
+          terminate_facade_task(task_pid)
+
+        :stop ->
+          Process.demonitor(monitor, [:flush])
+      end
+    end)
+  end
+
+  defp terminate_facade_task(task_pid) do
+    _ = Task.Supervisor.terminate_child(CodingAgent.TaskSupervisor, task_pid)
+    :ok
+  catch
+    :exit, _ -> :ok
+  end
+
+  defp stop_owner_guard(owner_guard), do: send(owner_guard, :stop)
+
+  defp abort_cell(cell_signal, rpc_server, server) do
+    :ok = AbortSignal.abort(cell_signal)
+    _ = abort_rpc_server(rpc_server, server)
+    :ok
+  end
+
+  defp abort_rpc_server(rpc_server, server) do
+    rpc_server.abort(server)
+  catch
+    :exit, _ -> :ok
   end
 
   defp aborted?(nil, _opts), do: false
@@ -740,7 +846,18 @@ defmodule CodingAgent.Tools.ExecuteCode do
     |> maybe_put(:reason, Map.get(result, :reason))
   end
 
-  defp session_fallback(script, python, config, params, signal, cwd, opts, reason, started_at) do
+  defp session_fallback(
+         script,
+         python,
+         config,
+         params,
+         signal,
+         cwd,
+         opts,
+         reason,
+         reset_performed,
+         started_at
+       ) do
     # `python` is resolved before this path. A missing scope occurs after
     # resolution, while facade admission failures reach this helper with nil.
     python = python || resolve_fallback_python(config, opts)
@@ -752,7 +869,7 @@ defmodule CodingAgent.Tools.ExecuteCode do
           Map.merge(tool_result.details || %{}, %{
             persistent: false,
             kernel_reused: false,
-            reset_performed: false,
+            reset_performed: reset_performed,
             state_retained: false,
             fallback_reason: reason,
             duration_ms: max(clock_now(opts) - started_at, 0)
