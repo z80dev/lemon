@@ -456,105 +456,106 @@ defmodule CodingAgent.Tools.ExecuteCode do
        ) do
     repl = Keyword.get(opts, :python_repl, PythonRepl)
 
-    with {:ok, reset_performed} <- maybe_reset(repl, key, owner_pid, params, opts) do
-      case build_bridge() do
-        {:ok, base, bridge} ->
-          cell_signal = AbortSignal.new()
+    case maybe_reset(repl, key, owner_pid, params, opts) do
+      {:ok, reset_performed} ->
+        case build_bridge() do
+          {:ok, base, bridge} ->
+            cell_signal = AbortSignal.new()
 
-          case start_rpc_server(bridge, config, cell_signal, cwd, opts) do
-            {:ok, rpc_server} ->
-              try do
-                request = %{
-                  key: key,
-                  owner_pid: owner_pid,
-                  code: PythonShim.render_script(script, config.tools),
-                  cwd: cwd,
-                  bridge: bridge,
-                  timeout_ms: timeout_ms,
-                  max_live_kernels: config.max_live_kernels,
-                  kernel_idle_timeout_ms: config.kernel_idle_timeout_ms,
-                  max_queued_cells: config.max_queued_cells_per_kernel,
-                  max_output_bytes: config.max_output_bytes,
-                  helper_source: PythonShim.render_module(config.tools)
-                }
-
-                request =
-                  case Keyword.fetch(opts, :python_repl_registry) do
-                    {:ok, registry} -> Map.put(request, :registry, registry)
-                    :error -> request
-                  end
-
-                owner = self()
-
-                task =
-                  Task.Supervisor.async(CodingAgent.TaskSupervisor, fn ->
-                    repl.execute(request)
-                  end)
-
-                owner_guard = monitor_task_owner(owner, task.pid, base)
-
+            case start_rpc_server(bridge, config, cell_signal, cwd, opts) do
+              {:ok, rpc_server} ->
                 try do
-                  rpc_server_module = Keyword.get(opts, :rpc_server, RpcServer)
+                  request = %{
+                    key: key,
+                    owner_pid: owner_pid,
+                    code: PythonShim.render_script(script, config.tools),
+                    cwd: cwd,
+                    bridge: bridge,
+                    timeout_ms: timeout_ms,
+                    max_live_kernels: config.max_live_kernels,
+                    kernel_idle_timeout_ms: config.kernel_idle_timeout_ms,
+                    max_queued_cells: config.max_queued_cells_per_kernel,
+                    max_output_bytes: config.max_output_bytes,
+                    helper_source: PythonShim.render_module(config.tools)
+                  }
 
-                  result =
-                    await_session_task(
-                      task,
-                      signal,
-                      cell_signal,
-                      rpc_server_module,
-                      rpc_server,
-                      deadline_ms,
-                      opts
-                    )
+                  request =
+                    case Keyword.fetch(opts, :python_repl_registry) do
+                      {:ok, registry} -> Map.put(request, :registry, registry)
+                      :error -> request
+                    end
 
-                  stats = rpc_stats(rpc_server_module, rpc_server)
+                  owner = self()
 
-                  case format_session_result(
-                         result,
-                         stats,
-                         signal,
-                         timeout_ms,
-                         reset_performed,
-                         started_at,
-                         opts
-                       ) do
-                    {:prestart_fallback, reason} ->
-                      session_fallback(
-                        script,
-                        nil,
-                        config,
-                        params,
+                  task =
+                    Task.Supervisor.async(CodingAgent.TaskSupervisor, fn ->
+                      repl.execute(request)
+                    end)
+
+                  owner_guard = monitor_task_owner(owner, task.pid, base)
+
+                  try do
+                    rpc_server_module = Keyword.get(opts, :rpc_server, RpcServer)
+
+                    result =
+                      await_session_task(
+                        task,
                         signal,
-                        cwd,
-                        opts,
-                        reason,
-                        reset_performed,
-                        started_at
+                        cell_signal,
+                        rpc_server_module,
+                        rpc_server,
+                        deadline_ms,
+                        opts
                       )
 
-                    tool_result ->
-                      tool_result
+                    stats = rpc_stats(rpc_server_module, rpc_server)
+
+                    case format_session_result(
+                           result,
+                           stats,
+                           signal,
+                           timeout_ms,
+                           reset_performed,
+                           started_at,
+                           opts
+                         ) do
+                      {:prestart_fallback, reason} ->
+                        session_fallback(
+                          script,
+                          nil,
+                          config,
+                          params,
+                          signal,
+                          cwd,
+                          opts,
+                          reason,
+                          reset_performed,
+                          started_at
+                        )
+
+                      tool_result ->
+                        tool_result
+                    end
+                  after
+                    stop_owner_guard(owner_guard)
                   end
                 after
-                  stop_owner_guard(owner_guard)
+                  try do
+                    _ = stop_rpc_server(Keyword.get(opts, :rpc_server, RpcServer), rpc_server)
+                  after
+                    bounded_tree_removal(base, "execute_code cell bridge")
+                  end
                 end
-              after
-                try do
-                  _ = stop_rpc_server(Keyword.get(opts, :rpc_server, RpcServer), rpc_server)
-                after
-                  bounded_tree_removal(base, "execute_code cell bridge")
-                end
-              end
 
-            {:error, reason} ->
-              File.rm_rf(base)
-              session_error(reason, false, reset_performed, Rpc.initial_stats(), started_at, opts)
-          end
+              {:error, reason} ->
+                File.rm_rf(base)
+                session_error(reason, false, reset_performed, Rpc.initial_stats(), started_at, opts)
+            end
 
-        {:error, reason} ->
-          session_error(reason, false, reset_performed, Rpc.initial_stats(), started_at, opts)
-      end
-    else
+          {:error, reason} ->
+            session_error(reason, false, reset_performed, Rpc.initial_stats(), started_at, opts)
+        end
+
       {:fallback, reason, reset_performed} ->
         session_fallback(
           script,

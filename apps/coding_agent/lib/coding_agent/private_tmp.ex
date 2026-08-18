@@ -319,12 +319,14 @@ defmodule CodingAgent.PrivateTmp do
   # are resumed on the next sweep instead of repeatedly stranding entries
   # behind the same leading batch.
   defp reap_expired_spills(root, limit) do
-    with {:ok, names} <- next_spill_batch(root, limit) do
-      cutoff = System.system_time(:second) - @spill_ttl_seconds
-      Enum.each(names, &remove_expired_spill(root, &1, cutoff))
-      length(names)
-    else
-      _ -> 0
+    case next_spill_batch(root, limit) do
+      {:ok, names} ->
+        cutoff = System.system_time(:second) - @spill_ttl_seconds
+        Enum.each(names, &remove_expired_spill(root, &1, cutoff))
+        length(names)
+
+      _ ->
+        0
     end
   end
 

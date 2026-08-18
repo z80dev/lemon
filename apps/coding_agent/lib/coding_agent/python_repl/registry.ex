@@ -109,53 +109,55 @@ defmodule CodingAgent.PythonRepl.Registry do
 
   @impl true
   def handle_call({:acquire, key, owner, worker_opts}, {caller, _tag}, state) do
-    with {:ok, max_live_kernels, idle_timeout_ms} <- acquire_bounds(state, worker_opts) do
-      ekey = entry_key(state, key, owner)
+    case acquire_bounds(state, worker_opts) do
+      {:ok, max_live_kernels, idle_timeout_ms} ->
+        ekey = entry_key(state, key, owner)
 
-      case Map.get(state.entries, ekey) do
-        nil ->
-          start_entry(
-            state,
-            ekey,
-            key,
-            owner,
-            caller,
-            worker_opts,
-            max_live_kernels,
-            idle_timeout_ms
-          )
+        case Map.get(state.entries, ekey) do
+          nil ->
+            start_entry(
+              state,
+              ekey,
+              key,
+              owner,
+              caller,
+              worker_opts,
+              max_live_kernels,
+              idle_timeout_ms
+            )
 
-        entry ->
-          case status(entry, state.session_mod) do
-            %{phase: phase} when phase in @attachable_phases ->
-              state =
-                state
-                |> attach_owner(ekey, owner)
-                |> put_idle_timeout(ekey, idle_timeout_ms)
-                |> touch(ekey)
-                |> maybe_schedule_reap()
+          entry ->
+            case status(entry, state.session_mod) do
+              %{phase: phase} when phase in @attachable_phases ->
+                state =
+                  state
+                  |> attach_owner(ekey, owner)
+                  |> put_idle_timeout(ekey, idle_timeout_ms)
+                  |> touch(ekey)
+                  |> maybe_schedule_reap()
 
-              {state, lease} = checkout(state, ekey, owner, caller)
-              entry = Map.fetch!(state.entries, ekey)
-              {:reply, {:ok, allocation(entry, true, state.session_mod, lease)}, state}
+                {state, lease} = checkout(state, ekey, owner, caller)
+                entry = Map.fetch!(state.entries, ekey)
+                {:reply, {:ok, allocation(entry, true, state.session_mod, lease)}, state}
 
-            _ ->
-              state = stop_entry(state, ekey)
+              _ ->
+                state = stop_entry(state, ekey)
 
-              start_entry(
-                state,
-                ekey,
-                key,
-                owner,
-                caller,
-                worker_opts,
-                max_live_kernels,
-                idle_timeout_ms
-              )
-          end
-      end
-    else
-      {:error, reason} -> {:reply, {:error, reason}, state}
+                start_entry(
+                  state,
+                  ekey,
+                  key,
+                  owner,
+                  caller,
+                  worker_opts,
+                  max_live_kernels,
+                  idle_timeout_ms
+                )
+            end
+        end
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
   end
 
@@ -278,72 +280,74 @@ defmodule CodingAgent.PythonRepl.Registry do
          max_live_kernels,
          idle_timeout_ms
        ) do
-    with {:ok, state} <- admit(state, max_live_kernels) do
-      generation = state.next_generation
-      opts = worker_options(worker_opts, key, generation)
+    case admit(state, max_live_kernels) do
+      {:ok, state} ->
+        generation = state.next_generation
+        opts = worker_options(worker_opts, key, generation)
 
-      try do
-        case SessionSupervisor.start_session(state.session_supervisor, state.session_mod, opts) do
-          {:ok, pid} ->
-            ref = Process.monitor(pid)
+        try do
+          case SessionSupervisor.start_session(state.session_supervisor, state.session_mod, opts) do
+            {:ok, pid} ->
+              ref = Process.monitor(pid)
 
-            entry = %{
-              pid: pid,
-              ref: ref,
-              key: key,
-              generation: generation,
-              owners: MapSet.new(),
-              leases: MapSet.new(),
-              last_use_ms: now_ms(state),
-              started_at_ms: now_ms(state),
-              idle_timeout_ms: idle_timeout_ms,
-              capacity: max_live_kernels
-            }
+              entry = %{
+                pid: pid,
+                ref: ref,
+                key: key,
+                generation: generation,
+                owners: MapSet.new(),
+                leases: MapSet.new(),
+                last_use_ms: now_ms(state),
+                started_at_ms: now_ms(state),
+                idle_timeout_ms: idle_timeout_ms,
+                capacity: max_live_kernels
+              }
 
-            state = %{
-              state
-              | entries: Map.put(state.entries, ekey, entry),
-                worker_refs:
-                  Map.put(state.worker_refs, ref, %{
-                    entry_key: ekey,
-                    generation: generation,
-                    pid: pid
-                  }),
-                next_generation: generation + 1
-            }
+              state = %{
+                state
+                | entries: Map.put(state.entries, ekey, entry),
+                  worker_refs:
+                    Map.put(state.worker_refs, ref, %{
+                      entry_key: ekey,
+                      generation: generation,
+                      pid: pid
+                    }),
+                  next_generation: generation + 1
+              }
 
-            state = attach_owner(state, ekey, owner)
-            {state, lease} = checkout(state, ekey, owner, caller)
-            state = maybe_schedule_reap(state)
-            entry = Map.fetch!(state.entries, ekey)
-            Telemetry.session_started(map_size(state.entries), entry.capacity)
-            {:reply, {:ok, allocation(entry, false, state.session_mod, lease)}, state}
+              state = attach_owner(state, ekey, owner)
+              {state, lease} = checkout(state, ekey, owner, caller)
+              state = maybe_schedule_reap(state)
+              entry = Map.fetch!(state.entries, ekey)
+              Telemetry.session_started(map_size(state.entries), entry.capacity)
+              {:reply, {:ok, allocation(entry, false, state.session_mod, lease)}, state}
 
-          {:error, {:shutdown, {:startup_failed, detail}}} ->
-            Telemetry.session_crashed(
-              0,
-              map_size(state.entries),
-              max_live_kernels,
-              :startup_failure
-            )
+            {:error, {:shutdown, {:startup_failed, detail}}} ->
+              Telemetry.session_crashed(
+                0,
+                map_size(state.entries),
+                max_live_kernels,
+                :startup_failure
+              )
 
-            {:reply, {:error, {:startup_failed, detail}}, state}
+              {:reply, {:error, {:startup_failed, detail}}, state}
 
-          {:error, reason} ->
-            Telemetry.session_crashed(
-              0,
-              map_size(state.entries),
-              max_live_kernels,
-              :startup_failure
-            )
+            {:error, reason} ->
+              Telemetry.session_crashed(
+                0,
+                map_size(state.entries),
+                max_live_kernels,
+                :startup_failure
+              )
 
-            {:reply, {:error, {:startup_failed, reason}}, state}
+              {:reply, {:error, {:startup_failed, reason}}, state}
+          end
+        catch
+          :exit, _ -> {:reply, {:error, :registry_unavailable}, state}
         end
-      catch
-        :exit, _ -> {:reply, {:error, :registry_unavailable}, state}
-      end
-    else
-      {:error, reason, state} -> {:reply, {:error, reason}, state}
+
+      {:error, reason, state} ->
+        {:reply, {:error, reason}, state}
     end
   end
 

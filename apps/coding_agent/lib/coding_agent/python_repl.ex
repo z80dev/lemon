@@ -49,14 +49,16 @@ defmodule CodingAgent.PythonRepl do
 
   @spec detach_owner(pid(), keyword()) :: :ok | {:error, map()}
   def detach_owner(owner_pid, opts \\ []) when is_list(opts) do
-    with {:ok, owner} <- owner(owner_pid) do
-      try do
-        Registry.detach_owner(Keyword.get(opts, :registry, Registry), owner)
-      catch
-        :exit, _ -> {:error, error(:registry_unavailable)}
-      end
-    else
-      {:error, reason} -> {:error, error(reason)}
+    case owner(owner_pid) do
+      {:ok, owner} ->
+        try do
+          Registry.detach_owner(Keyword.get(opts, :registry, Registry), owner)
+        catch
+          :exit, _ -> {:error, error(:registry_unavailable)}
+        end
+
+      {:error, reason} ->
+        {:error, error(reason)}
     end
   end
 
