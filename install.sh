@@ -101,6 +101,7 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --force) FORCE=1 ;;
     --verify) VERIFY=1 ;;
+    --modify-path) MODIFY_PATH=1 ;;
     --skip-setup) SKIP_SETUP=1 ;;
     -h|--help)
       usage
