@@ -150,9 +150,14 @@ defmodule LemonCli.Setup.Gateway.Discord do
           else: normalize_input(io.prompt.("Discord channel ID to allow (snowflake): "))
         )
 
-    with {:ok, default_channel_id} <- parse_snowflake(default_channel_id, "default channel ID", io),
+    with {:ok, default_channel_id} <-
+           parse_snowflake(default_channel_id, "default channel ID", io),
          {:ok, allowed_channel_ids} <-
-           parse_snowflakes(Keyword.get_values(opts, :allowed_channel_id), "allowed channel ID", io),
+           parse_snowflakes(
+             Keyword.get_values(opts, :allowed_channel_id),
+             "allowed channel ID",
+             io
+           ),
          {:ok, allowed_guild_ids} <-
            parse_snowflakes(Keyword.get_values(opts, :allowed_guild_id), "allowed guild ID", io) do
       {:ok,
@@ -275,7 +280,11 @@ defmodule LemonCli.Setup.Gateway.Discord do
       "allowed_channel_ids",
       "allowed_channel_ids = [#{allowed_channel_ids}]"
     )
-    |> TomlPatch.upsert_raw_line("gateway.discord", "deny_unbound_channels", "deny_unbound_channels = true")
+    |> TomlPatch.upsert_raw_line(
+      "gateway.discord",
+      "deny_unbound_channels",
+      "deny_unbound_channels = true"
+    )
     |> maybe_patch_allowed_guild_ids(scope.allowed_guild_ids)
     |> then(&{:ok, &1})
   end
@@ -319,7 +328,9 @@ defmodule LemonCli.Setup.Gateway.Discord do
   defp http_get(io, token), do: Map.get(io, :http_get, &get_me/1).(token)
   defp secrets_status(io), do: Map.get(io, :secrets_status, &Secrets.status/0).()
   defp secret_get(io, key), do: Map.get(io, :secret_get, &Secrets.get/1).(key)
-  defp secret_set(io, key, token), do: Map.get(io, :secret_set, &Secrets.set(&1, &2, [])).(key, token)
+
+  defp secret_set(io, key, token),
+    do: Map.get(io, :secret_set, &Secrets.set(&1, &2, [])).(key, token)
 
   defp get_me(token) do
     ssl_opts = [verify: :verify_peer] |> maybe_put_cacerts()
@@ -345,8 +356,11 @@ defmodule LemonCli.Setup.Gateway.Discord do
   defp maybe_put_cacerts(ssl_opts) do
     if function_exported?(:public_key, :cacerts_get, 0) do
       case apply(:public_key, :cacerts_get, []) do
-        cacerts when is_list(cacerts) and cacerts != [] -> Keyword.put(ssl_opts, :cacerts, cacerts)
-        _ -> ssl_opts
+        cacerts when is_list(cacerts) and cacerts != [] ->
+          Keyword.put(ssl_opts, :cacerts, cacerts)
+
+        _ ->
+          ssl_opts
       end
     else
       ssl_opts

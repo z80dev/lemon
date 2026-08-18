@@ -9,7 +9,6 @@ defmodule LemonCli.Onboarding.Runner do
   alias LemonCore.Config.TomlPatch
   alias LemonCore.Secrets
 
-
   @common_switches [
     token: :string,
     secret_name: :string,
@@ -40,7 +39,6 @@ defmodule LemonCli.Onboarding.Runner do
     }
   end
 
-
   @spec run([String.t()], Provider.t(), keyword()) :: :ok
   def run(args, %Provider{} = spec, opts \\ []) when is_list(args) do
     io = Keyword.get(opts, :io, default_io())
@@ -52,7 +50,6 @@ defmodule LemonCli.Onboarding.Runner do
 
   defp do_run(args, %Provider{} = spec, io) do
     ensure_required_apps!()
-
 
     {cli_opts, _positional, _invalid} =
       OptionParser.parse(args, switches: @common_switches ++ spec.switches)
@@ -303,8 +300,10 @@ defmodule LemonCli.Onboarding.Runner do
 
   defp run_oauth_flow!(opts, %Provider{oauth_module: oauth_module} = spec, io) do
     unless oauth_module && Code.ensure_loaded?(oauth_module) do
-      fail!(spec.oauth_missing_hint ||
-        "#{spec.display_name} OAuth module is unavailable. Make sure the :lemon_ai app is compiled.")
+      fail!(
+        spec.oauth_missing_hint ||
+          "#{spec.display_name} OAuth module is unavailable. Make sure the :lemon_ai app is compiled."
+      )
     end
 
     oauth_opts =
@@ -362,7 +361,9 @@ defmodule LemonCli.Onboarding.Runner do
           apply(oauth_module, :resolve_access_token, [])
 
         true ->
-          fail!("#{inspect(oauth_module)} does not expose a supported OAuth entrypoint. Expected login_device_flow/1 or resolve_access_token/0.")
+          fail!(
+            "#{inspect(oauth_module)} does not expose a supported OAuth entrypoint. Expected login_device_flow/1 or resolve_access_token/0."
+          )
       end
 
     normalize_oauth_result!(result, oauth_module, spec)
@@ -381,8 +382,10 @@ defmodule LemonCli.Onboarding.Runner do
     payload = encode_oauth_payload!(payload, oauth_module)
 
     if payload == "" do
-      fail!(spec.token_resolution_hint ||
-        "#{spec.display_name} OAuth flow did not return credentials.")
+      fail!(
+        spec.token_resolution_hint ||
+          "#{spec.display_name} OAuth flow did not return credentials."
+      )
     else
       payload
     end
@@ -410,7 +413,9 @@ defmodule LemonCli.Onboarding.Runner do
         metadata
 
       {:error, :missing_master_key} ->
-        fail!("Missing secrets master key. Run mix lemon.secrets.init or set LEMON_SECRETS_MASTER_KEY.")
+        fail!(
+          "Missing secrets master key. Run mix lemon.secrets.init or set LEMON_SECRETS_MASTER_KEY."
+        )
 
       {:error, reason} ->
         fail!("Failed to store #{spec.display_name} credentials in secrets: #{inspect(reason)}")
@@ -431,7 +436,9 @@ defmodule LemonCli.Onboarding.Runner do
     if requested_model in available do
       requested_model
     else
-      fail!("Unknown model #{inspect(requested_model)} for #{spec.id}. Available: #{Enum.join(available, ", ")}")
+      fail!(
+        "Unknown model #{inspect(requested_model)} for #{spec.id}. Available: #{Enum.join(available, ", ")}"
+      )
     end
   end
 

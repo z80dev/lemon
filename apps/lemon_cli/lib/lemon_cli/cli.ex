@@ -156,7 +156,6 @@ defmodule LemonCli.CLI do
     @exit_usage
   end
 
-
   defp run_command("setup", args), do: run_setup(args)
   defp run_command("model", args), do: run_model(args)
   defp run_command("gateway", args), do: run_gateway(args)
@@ -327,9 +326,7 @@ defmodule LemonCli.CLI do
     IO.puts(
       IO.ANSI.format([
         Check.color(Report.overall(report)),
-        "#{report.pass} passed  #{report.warn} warnings  #{report.fail} failed  #{
-          report.skip
-        } skipped",
+        "#{report.pass} passed  #{report.warn} warnings  #{report.fail} failed  #{report.skip} skipped",
         :reset
       ])
     )
@@ -357,6 +354,7 @@ defmodule LemonCli.CLI do
 
       {[], ["show"]} ->
         show_config(opts)
+
       {[], []} ->
         print_usage_error(
           "Missing config command. Expected `validate` or `show`.",
@@ -412,7 +410,6 @@ defmodule LemonCli.CLI do
         @exit_error
     end
   end
-
 
   defp show_config(opts) do
     ensure_apps_started!([:lemon_core])
@@ -535,7 +532,6 @@ defmodule LemonCli.CLI do
     @exit_ok
   end
 
-
   defp secrets_init(args) do
     ensure_apps_started!([:lemon_core])
 
@@ -589,61 +585,59 @@ defmodule LemonCli.CLI do
     ensure_apps_started!([:lemon_core])
 
     {opts, positional, _invalid} =
-        OptionParser.parse(args,
-          switches: [name: :string, value: :string, provider: :string, expires_at: :integer],
-          aliases: [n: :name, v: :value]
-        )
+      OptionParser.parse(args,
+        switches: [name: :string, value: :string, provider: :string, expires_at: :integer],
+        aliases: [n: :name, v: :value]
+      )
 
-      case parse_name_and_value(opts, positional) do
-        {:ok, name, value} ->
-          secrets_opts =
-            []
-            |> maybe_put(:provider, opts[:provider])
-            |> maybe_put(:expires_at, opts[:expires_at])
+    case parse_name_and_value(opts, positional) do
+      {:ok, name, value} ->
+        secrets_opts =
+          []
+          |> maybe_put(:provider, opts[:provider])
+          |> maybe_put(:expires_at, opts[:expires_at])
 
-          case Secrets.set(name, value, secrets_opts) do
-            {:ok, metadata} ->
-              IO.puts("Stored secret #{metadata.name} (owner=#{metadata.owner})")
-              @exit_ok
+        case Secrets.set(name, value, secrets_opts) do
+          {:ok, metadata} ->
+            IO.puts("Stored secret #{metadata.name} (owner=#{metadata.owner})")
+            @exit_ok
 
-            {:error, :missing_master_key} ->
-              IO.puts(
-                :stderr,
-                "Missing secrets master key. Run `lemon secrets init` or set #{
-                  MasterKey.env_var()
-                }."
-              )
+          {:error, :missing_master_key} ->
+            IO.puts(
+              :stderr,
+              "Missing secrets master key. Run `lemon secrets init` or set #{MasterKey.env_var()}."
+            )
 
-              @exit_error
+            @exit_error
 
-            {:error, :weak_master_key} ->
-              IO.puts(
-                :stderr,
-                "Secrets master key is not base64-encoded 32-byte key material. " <>
-                  "Generate one with `lemon secrets init` or openssl rand -base64 32."
-              )
+          {:error, :weak_master_key} ->
+            IO.puts(
+              :stderr,
+              "Secrets master key is not base64-encoded 32-byte key material. " <>
+                "Generate one with `lemon secrets init` or openssl rand -base64 32."
+            )
 
-              @exit_error
+            @exit_error
 
-            {:error, {:keychain_failed, reason}} ->
-              IO.puts(
-                :stderr,
-                "Failed to read secrets master key from keychain: #{inspect(reason)}. " <>
-                  "Run `lemon secrets status` for diagnostics, then re-run `lemon secrets init` " <>
-                  "or set #{MasterKey.env_var()}."
-              )
+          {:error, {:keychain_failed, reason}} ->
+            IO.puts(
+              :stderr,
+              "Failed to read secrets master key from keychain: #{inspect(reason)}. " <>
+                "Run `lemon secrets status` for diagnostics, then re-run `lemon secrets init` " <>
+                "or set #{MasterKey.env_var()}."
+            )
 
-              @exit_error
+            @exit_error
 
-            {:error, reason} ->
-              IO.puts(:stderr, "Failed to store secret: #{inspect(reason)}")
-              @exit_error
-          end
+          {:error, reason} ->
+            IO.puts(:stderr, "Failed to store secret: #{inspect(reason)}")
+            @exit_error
+        end
 
-        {:error, :usage} ->
-          IO.puts(:stderr, "Usage: lemon secrets set <name> <value>")
-          @exit_usage
-      end
+      {:error, :usage} ->
+        IO.puts(:stderr, "Usage: lemon secrets set <name> <value>")
+        @exit_usage
+    end
   end
 
   defp parse_name_and_value(opts, positional) do
@@ -669,9 +663,7 @@ defmodule LemonCli.CLI do
     else
       Enum.each(entries, fn entry ->
         IO.puts(
-          "#{entry.name} provider=#{entry.provider} usage=#{entry.usage_count} expires_at=#{
-            format_optional(entry.expires_at)
-          }"
+          "#{entry.name} provider=#{entry.provider} usage=#{entry.usage_count} expires_at=#{format_optional(entry.expires_at)}"
         )
       end)
     end
@@ -679,29 +671,28 @@ defmodule LemonCli.CLI do
     @exit_ok
   end
 
-
   defp secrets_delete(args) do
     ensure_apps_started!([:lemon_core])
 
     {opts, positional, _invalid} =
-        OptionParser.parse(args, switches: [name: :string], aliases: [n: :name])
+      OptionParser.parse(args, switches: [name: :string], aliases: [n: :name])
 
-      name = opts[:name] || List.first(positional)
+    name = opts[:name] || List.first(positional)
 
-      if not is_binary(name) or String.trim(name) == "" do
-        IO.puts(:stderr, "Usage: lemon secrets delete <name>")
-        @exit_usage
-      else
-        case Secrets.delete(name) do
-          :ok ->
-            IO.puts("Deleted secret #{String.trim(name)}")
-            @exit_ok
+    if not is_binary(name) or String.trim(name) == "" do
+      IO.puts(:stderr, "Usage: lemon secrets delete <name>")
+      @exit_usage
+    else
+      case Secrets.delete(name) do
+        :ok ->
+          IO.puts("Deleted secret #{String.trim(name)}")
+          @exit_ok
 
-          {:error, reason} ->
-            IO.puts(:stderr, "Failed to delete secret: #{inspect(reason)}")
-            @exit_error
-        end
+        {:error, reason} ->
+          IO.puts(:stderr, "Failed to delete secret: #{inspect(reason)}")
+          @exit_error
       end
+    end
   end
 
   defp secrets_check do
@@ -723,7 +714,6 @@ defmodule LemonCli.CLI do
 
     @exit_ok
   end
-
 
   defp check_secret(name, max_name_len) do
     case Secrets.resolve(name) do

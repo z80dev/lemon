@@ -19,7 +19,6 @@ defmodule LemonCli.Setup.Wizard do
   alias LemonCore.Secrets
   alias LemonCore.Secrets.MasterKey
 
-
   @type io_callbacks :: %{
           required(:info) => (String.t() -> any()),
           required(:error) => (String.t() -> any()),
@@ -234,7 +233,6 @@ defmodule LemonCli.Setup.Wizard do
         Runner.fail!("Failed to initialize secrets master key: #{inspect(reason)}")
     end
   end
-
 
   defp step_offer_provider(io, non_interactive?) do
     io.info.("")

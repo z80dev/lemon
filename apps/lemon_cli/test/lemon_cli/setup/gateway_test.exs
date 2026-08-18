@@ -129,7 +129,10 @@ defmodule LemonCli.Setup.GatewayTest do
         })
 
       assert {:error, :token_not_found} =
-               Discord.run(["--non-interactive", "--default-channel-id", "123456789012345678"], io)
+               Discord.run(
+                 ["--non-interactive", "--default-channel-id", "123456789012345678"],
+                 io
+               )
 
       output = messages(get_log.())
       assert Enum.any?(output, &String.contains?(&1, "--token"))
@@ -139,7 +142,10 @@ defmodule LemonCli.Setup.GatewayTest do
 
     test "configures from non-interactive flags without persisting or printing the token" do
       token = "1234567890.abcde.12345"
-      config_path = Path.join(System.tmp_dir!(), "lemon-discord-#{System.unique_integer([:positive])}.toml")
+
+      config_path =
+        Path.join(System.tmp_dir!(), "lemon-discord-#{System.unique_integer([:positive])}.toml")
+
       on_exit(fn -> File.rm(config_path) end)
 
       {io, get_log} =
@@ -147,7 +153,10 @@ defmodule LemonCli.Setup.GatewayTest do
           config_path: config_path,
           secrets_status: fn -> %{configured: true} end,
           secret_get: fn _key -> {:error, :not_found} end,
-          secret_set: fn key, value -> send(self(), {:secret_set, key, value}); {:ok, :stored} end,
+          secret_set: fn key, value ->
+            send(self(), {:secret_set, key, value})
+            {:ok, :stored}
+          end,
           http_get: fn ^token -> {:ok, "lemon-bot"} end
         })
 
