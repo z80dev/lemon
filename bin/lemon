@@ -114,6 +114,11 @@ fi
 if [[ "${1:-}" == "setup" ]]; then
   shift
   cd "$LEMON_ROOT"
+
+  if [[ "${1:-}" == "help" || "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    exec mix help lemon.setup
+  fi
+
   exec mix lemon.setup "$@"
 fi
 
