@@ -997,19 +997,6 @@ defmodule LemonCli.CLI do
 
   defp print_command_usage("doctor"), do: print_doctor_usage()
 
-  defp print_doctor_usage(device \\ :stdio) do
-    IO.puts(device, """
-    Usage: lemon doctor [options]
-
-    Options:
-      --verbose, -v       Show all checks including passing and skipped ones
-      --json              Output results as a JSON document (CI-friendly)
-      --project-dir PATH  Use a specific project directory for checks
-      --bundle [PATH]     Write a redacted support bundle zip
-      --bundle-path PATH  Write the support bundle to a specific path
-    """)
-  end
-
   defp print_command_usage("config"), do: print_config_usage()
 
   defp print_command_usage("secrets"), do: print_secrets_usage()
@@ -1021,6 +1008,19 @@ defmodule LemonCli.CLI do
     Options:
       --project-dir PATH  Project root to scan (defaults to the cwd)
       --json              Emit the raw redacted readiness JSON
+    """)
+  end
+
+  defp print_doctor_usage(device \\ :stdio) do
+    IO.puts(device, """
+    Usage: lemon doctor [options]
+
+    Options:
+      --verbose, -v       Show all checks including passing and skipped ones
+      --json              Output results as a JSON document (CI-friendly)
+      --project-dir PATH  Use a specific project directory for checks
+      --bundle [PATH]     Write a redacted support bundle zip
+      --bundle-path PATH  Write the support bundle to a specific path
     """)
   end
 end
