@@ -13,6 +13,7 @@ defmodule CodingAgent.Tools.ExecuteCodeAdversarialRpcTest do
   alias LemonAi.Types.TextContent
 
   @moduletag :tmp_dir
+  @token String.duplicate("a", 43)
 
   setup %{tmp_dir: tmp_dir} do
     rpc_dir = Path.join(tmp_dir, "rpc")
@@ -26,11 +27,12 @@ defmodule CodingAgent.Tools.ExecuteCodeAdversarialRpcTest do
 
       bodies = %{
         1 => "{not json",
-        2 => Jason.encode!([%{"tool" => "echo"}]),
-        3 => Jason.encode!(%{"tool" => 42, "params" => %{}}),
-        4 => Jason.encode!(%{"params" => %{}}),
-        5 => Jason.encode!(%{"tool" => "echo", "params" => ["not", "a", "map"]}),
-        6 => Jason.encode!(%{"tool" => "echo", "params" => "value=hello"}),
+        2 => Jason.encode!([%{"token" => @token, "tool" => "echo"}]),
+        3 => Jason.encode!(%{"token" => @token, "tool" => 42, "params" => %{}}),
+        4 => Jason.encode!(%{"token" => @token, "params" => %{}}),
+        5 =>
+          Jason.encode!(%{"token" => @token, "tool" => "echo", "params" => ["not", "a", "map"]}),
+        6 => Jason.encode!(%{"token" => @token, "tool" => "echo", "params" => "value=hello"}),
         7 => "",
         8 => Jason.encode!("just a string")
       }
@@ -38,25 +40,41 @@ defmodule CodingAgent.Tools.ExecuteCodeAdversarialRpcTest do
       for {id, body} <- bodies, do: File.write!(Path.join(rpc_dir, "req-#{id}.json"), body)
 
       # An unanswered frame would hang the script until its wall clock ran out,
-      # so "rejected" must always mean "rejected in writing".
-      for {id, _body} <- bodies do
-        assert %{"ok" => false, "error" => "invalid rpc request"} = await_response(rpc_dir, id)
+      # so "rejected" must always mean "rejected in writing". Undecodable or
+      # non-map frames cannot authenticate; authenticated malformed calls reach
+      # structural validation, but none reach a tool.
+      for id <- [1, 2, 7, 8] do
+        assert %{"ok" => false, "error" => "rpc authentication failed"} =
+                 await_response(rpc_dir, id)
+      end
+
+      for id <- 3..6 do
+        assert %{"ok" => false, "error" => "invalid rpc request"} =
+                 await_response(rpc_dir, id)
       end
 
       write_request(rpc_dir, 9, "echo", %{"value" => "still serving"})
       assert %{"ok" => true, "content" => "still serving"} = await_response(rpc_dir, 9)
 
       {:ok, :done, stats} = finish_pump(pump)
-      assert stats.errors == map_size(bodies)
-      assert stats.calls == map_size(bodies) + 1
+      assert stats.denied == 4
+      assert stats.errors == 4
+      assert stats.calls == 5
+      assert Path.wildcard(Path.join(rpc_dir, "req-*.json")) == []
       assert Path.wildcard(Path.join(rpc_dir, "*.tmp")) == []
     end
 
-    test "a request that is a directory is rejected, not raised on", %{rpc_dir: rpc_dir} do
+    test "a request that is a directory is consumed and denied, not raised on", %{
+      rpc_dir: rpc_dir
+    } do
       pump = start_pump(ctx(rpc_dir))
 
       File.mkdir_p!(Path.join(rpc_dir, "req-1.json"))
-      assert %{"ok" => false, "error" => "invalid rpc request"} = await_response(rpc_dir, 1)
+
+      assert %{"ok" => false, "error" => "rpc authentication failed"} =
+               await_response(rpc_dir, 1)
+
+      refute File.exists?(Path.join(rpc_dir, "req-1.json"))
 
       write_request(rpc_dir, 2, "echo", %{"value" => "alive"})
       assert %{"ok" => true, "content" => "alive"} = await_response(rpc_dir, 2)
@@ -64,19 +82,21 @@ defmodule CodingAgent.Tools.ExecuteCodeAdversarialRpcTest do
       finish_pump(pump)
     end
 
-    test "a frame whose id is not an integer is ignored entirely", %{rpc_dir: rpc_dir} do
+    test "a frame whose id is not an integer is consumed without dispatch", %{rpc_dir: rpc_dir} do
       pump = start_pump(ctx(rpc_dir))
 
       File.write!(
         Path.join(rpc_dir, "req-abc.json"),
-        Jason.encode!(%{"tool" => "tattle", "params" => %{}})
+        Jason.encode!(%{"token" => @token, "tool" => "tattle", "params" => %{}})
       )
 
       write_request(rpc_dir, 1, "echo", %{"value" => "numeric"})
       assert %{"ok" => true, "content" => "numeric"} = await_response(rpc_dir, 1)
 
-      # No id, no dispatch: the tool behind the unparseable name never ran.
+      # No integer id means there is no safe response name and no dispatch, but
+      # the malformed frame must not remain to be scanned forever.
       refute_received {:called, "tattle"}
+      refute File.exists?(Path.join(rpc_dir, "req-abc.json"))
       refute File.exists?(Path.join(rpc_dir, "res-abc.json"))
 
       {:ok, :done, stats} = finish_pump(pump)
@@ -94,8 +114,7 @@ defmodule CodingAgent.Tools.ExecuteCodeAdversarialRpcTest do
       names =
         rpc_dir |> Path.join("*") |> Path.wildcard() |> Enum.map(&Path.basename/1) |> Enum.sort()
 
-      assert names == ["req--3.json", "res--3.json"]
-
+      assert names == ["res--3.json"]
       finish_pump(pump)
     end
   end
@@ -173,8 +192,9 @@ defmodule CodingAgent.Tools.ExecuteCodeAdversarialRpcTest do
       approval_context: Keyword.get(overrides, :approval_context),
       max_calls: Keyword.get(overrides, :max_calls, 100),
       max_result_bytes: Keyword.get(overrides, :max_result_bytes, 5_242_880),
-      signal: nil,
+      signal: Keyword.get(overrides, :signal),
       rpc_dir: rpc_dir,
+      token: Keyword.get(overrides, :token, @token),
       poll_interval_ms: 5
     }
   end
@@ -235,9 +255,14 @@ defmodule CodingAgent.Tools.ExecuteCodeAdversarialRpcTest do
     Task.await(pump.runner, 30_000)
   end
 
-  defp write_request(rpc_dir, id, tool, params) do
+  defp write_request(rpc_dir, id, tool, params, token \\ @token) do
     tmp = Path.join(rpc_dir, "req-#{id}.json.tmp")
-    File.write!(tmp, Jason.encode!(%{"id" => id, "tool" => tool, "params" => params}))
+
+    File.write!(
+      tmp,
+      Jason.encode!(%{"id" => id, "token" => token, "tool" => tool, "params" => params})
+    )
+
     File.rename!(tmp, Path.join(rpc_dir, "req-#{id}.json"))
   end
 
@@ -610,12 +635,13 @@ defmodule CodingAgent.Tools.ExecuteCodeAdversarialTest do
     runner = fn command, _runner_cwd, _runner_opts ->
       base = command_base(command)
       rpc_dir = Path.join(base, "rpc")
+      token = configured_token(base)
 
       answers =
         frames
         |> Enum.with_index(1)
         |> Enum.map(fn {{name, params}, id} ->
-          write_request(rpc_dir, id, name, params)
+          write_request(rpc_dir, id, name, params, token)
           await_response(rpc_dir, id)
         end)
 
@@ -664,9 +690,23 @@ defmodule CodingAgent.Tools.ExecuteCodeAdversarialTest do
     Path.dirname(script_path)
   end
 
-  defp write_request(rpc_dir, id, tool, params) do
+  defp configured_token(base) do
+    source = File.read!(Path.join(base, "lemon_tools.py"))
+
+    [_, encoded] =
+      Regex.run(~r/_configure\(.*,\s*("(?:[^"\\]|\\.)*")\)\s*\z/s, source)
+
+    Jason.decode!(encoded)
+  end
+
+  defp write_request(rpc_dir, id, tool, params, token) do
     tmp = Path.join(rpc_dir, "req-#{id}.json.tmp")
-    File.write!(tmp, Jason.encode!(%{"id" => id, "tool" => tool, "params" => params}))
+
+    File.write!(
+      tmp,
+      Jason.encode!(%{"id" => id, "token" => token, "tool" => tool, "params" => params})
+    )
+
     File.rename!(tmp, Path.join(rpc_dir, "req-#{id}.json"))
   end
 

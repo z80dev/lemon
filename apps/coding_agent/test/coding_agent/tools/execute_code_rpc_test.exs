@@ -8,10 +8,13 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
 
   alias CodingAgent.ToolPolicy
   alias CodingAgent.Tools.ExecuteCode.Rpc
+  alias LemonAgent.AbortSignal
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.{ImageContent, TextContent}
 
   @moduletag :tmp_dir
+  @token String.duplicate("a", 43)
+  @stale_token String.duplicate("b", 43)
 
   setup %{tmp_dir: tmp_dir} do
     rpc_dir = Path.join(tmp_dir, "rpc")
@@ -53,6 +56,7 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
 
       assert %{"content" => "preexisting"} = read_response(rpc_dir, 2)
       assert stats.calls == 1
+      assert Path.wildcard(Path.join(rpc_dir, "req-*.json")) == []
       # Nothing is left half-written: no `.tmp` files survive the handshake.
       assert Path.wildcard(Path.join(rpc_dir, "*.tmp")) == []
     end
@@ -82,20 +86,131 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
     end
   end
 
+  describe "process_pending/2" do
+    test "runs the same authenticated dispatch and accounting path without a task", %{
+      rpc_dir: rpc_dir
+    } do
+      write_request(rpc_dir, 1, "echo", %{"value" => "persistent"})
+
+      stats = Rpc.process_pending(ctx(rpc_dir), Rpc.initial_stats())
+
+      assert %{"id" => 1, "ok" => true, "content" => "persistent"} =
+               read_response(rpc_dir, 1)
+
+      assert stats.calls == 1
+      assert stats.bytes == byte_size("persistent")
+      assert MapSet.to_list(stats.tools_used) == ["echo"]
+      refute File.exists?(Path.join(rpc_dir, "req-1.json"))
+    end
+  end
+
   describe "serve/2 rejections" do
-    test "malformed json is answered, not crashed on", %{rpc_dir: rpc_dir} do
+    test "malformed json is denied without consuming a call", %{rpc_dir: rpc_dir} do
       pump = start_pump(ctx(rpc_dir))
 
       File.write!(Path.join(rpc_dir, "req-1.json"), "{not json")
-      assert %{"ok" => false, "error" => "invalid rpc request"} = await_response(rpc_dir, 1)
+
+      assert %{"id" => 1, "ok" => false, "error" => "rpc authentication failed"} =
+               await_response(rpc_dir, 1)
 
       # The pump keeps serving afterwards.
       write_request(rpc_dir, 2, "echo", %{"value" => "still here"})
       assert %{"ok" => true, "content" => "still here"} = await_response(rpc_dir, 2)
 
       {:ok, :done, stats} = finish_pump(pump)
+      assert stats.denied == 1
+      assert stats.errors == 0
+      assert stats.calls == 1
+    end
+
+    test "missing, wrong, stale, and malformed tokens share one bounded denial", %{
+      rpc_dir: rpc_dir
+    } do
+      pump = start_pump(ctx(rpc_dir, max_calls: 1, max_result_bytes: 5))
+
+      payloads = %{
+        1 => %{"tool" => "not-available", "params" => %{}},
+        2 => %{"token" => "wrong", "tool" => "not-available", "params" => %{}},
+        3 => %{"token" => @stale_token, "tool" => "echo", "params" => %{"value" => "no"}},
+        4 => %{"token" => nil, "tool" => "echo", "params" => %{}},
+        5 => %{"token" => 42, "tool" => "echo", "params" => %{}},
+        6 => %{"token" => %{"nested" => true}, "tool" => "echo", "params" => %{}}
+      }
+
+      for {id, payload} <- payloads, do: write_payload(rpc_dir, id, payload)
+
+      errors =
+        for {id, _payload} <- payloads do
+          assert %{"id" => ^id, "ok" => false, "error" => error} =
+                   await_response(rpc_dir, id)
+
+          error
+        end
+
+      assert Enum.uniq(errors) == ["rpc authentication failed"]
+      assert byte_size(hd(errors)) < 64
+
+      # Denied authentication spends neither call nor result budget and never
+      # reaches the unavailable-tool lookup.
+      write_request(rpc_dir, 7, "echo", %{"value" => "hello"})
+      assert %{"ok" => true, "content" => "hello"} = await_response(rpc_dir, 7)
+
+      # Authentication still wins after both budgets are exhausted; a stale
+      # caller cannot use cap errors as an oracle or reach tool lookup.
+      write_request(rpc_dir, 8, "not-available", %{}, @stale_token)
+
+      assert %{"id" => 8, "ok" => false, "error" => "rpc authentication failed"} =
+               await_response(rpc_dir, 8)
+
+      {:ok, :done, stats} = finish_pump(pump)
+      assert stats.calls == 1
+      assert stats.bytes == 5
+      assert stats.denied == map_size(payloads) + 1
+      assert stats.errors == 0
+      assert MapSet.to_list(stats.tools_used) == ["echo"]
+      assert Path.wildcard(Path.join(rpc_dir, "req-*.json")) == []
+      assert Path.wildcard(Path.join(rpc_dir, "*.tmp")) == []
+    end
+
+    test "an unconfigured server fails closed instead of accepting any request token", %{
+      rpc_dir: rpc_dir
+    } do
+      pump = start_pump(ctx(rpc_dir, token: nil))
+
+      write_request(rpc_dir, 1, "echo", %{"value" => "must not run"})
+
+      assert %{"id" => 1, "ok" => false, "error" => "rpc authentication failed"} =
+               await_response(rpc_dir, 1)
+
+      {:ok, :done, stats} = finish_pump(pump)
+      assert stats.calls == 0
+      assert stats.bytes == 0
+      assert stats.denied == 1
+      assert MapSet.size(stats.tools_used) == 0
+    end
+
+    test "an authenticated request id cannot be replayed after its response is removed", %{
+      rpc_dir: rpc_dir
+    } do
+      pump = start_pump(ctx(rpc_dir))
+
+      write_request(rpc_dir, 1, "order", %{"value" => "first"})
+      assert %{"ok" => true, "content" => "first"} = await_response(rpc_dir, 1)
+      assert_receive {:ordered, 1}
+
+      File.rm!(Path.join(rpc_dir, "res-1.json"))
+      write_request(rpc_dir, 1, "order", %{"value" => "replayed"})
+
+      assert %{"id" => 1, "ok" => false, "error" => "rpc request already processed"} =
+               await_response(rpc_dir, 1)
+
+      refute_receive {:ordered, 1}, 50
+
+      {:ok, :done, stats} = finish_pump(pump)
+      assert stats.calls == 1
       assert stats.errors == 1
-      assert stats.calls == 2
+      assert MapSet.to_list(stats.tools_used) == ["order"]
+      refute File.exists?(Path.join(rpc_dir, "req-1.json"))
     end
 
     test "a tool outside the script allowlist is rejected", %{rpc_dir: rpc_dir} do
@@ -146,6 +261,20 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
 
       {:ok, :done, stats} = finish_pump(pump)
       assert stats.errors == 1
+    end
+
+    test "the current abort signal reaches the inner tool unchanged", %{rpc_dir: rpc_dir} do
+      signal = AbortSignal.new()
+      AbortSignal.abort(signal)
+      pump = start_pump(ctx(rpc_dir, signal: signal))
+
+      write_request(rpc_dir, 1, "signal", %{})
+      assert %{"ok" => true, "content" => "aborted"} = await_response(rpc_dir, 1)
+      assert_received {:inner_signal, ^signal}
+
+      {:ok, :done, stats} = finish_pump(pump)
+      assert stats.calls == 1
+      assert MapSet.to_list(stats.tools_used) == ["signal"]
     end
   end
 
@@ -294,8 +423,9 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
       approval_context: Keyword.get(overrides, :approval_context),
       max_calls: Keyword.get(overrides, :max_calls, 100),
       max_result_bytes: Keyword.get(overrides, :max_result_bytes, 5_242_880),
-      signal: nil,
+      signal: Keyword.get(overrides, :signal),
       rpc_dir: rpc_dir,
+      token: Keyword.get(overrides, :token, @token),
       poll_interval_ms: 5
     }
   end
@@ -314,6 +444,16 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
         stub_tool("big", fn params -> text(String.duplicate("x", params["size"] || 10)) end),
       "boom" => stub_tool("boom", fn _params -> raise "boom went off" end),
       "failing" => stub_tool("failing", fn _params -> {:error, "no such file"} end),
+      "signal" => %AgentTool{
+        name: "signal",
+        description: "stub",
+        label: "signal",
+        parameters: %{"type" => "object", "properties" => %{}},
+        execute: fn _id, _params, signal, _on_update ->
+          send(test, {:inner_signal, signal})
+          text(if AbortSignal.aborted?(signal), do: "aborted", else: "running")
+        end
+      },
       "mixed" =>
         stub_tool("mixed", fn _params ->
           %AgentToolResult{
@@ -368,10 +508,20 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
     Task.await(pump.runner, 5_000)
   end
 
-  defp write_request(rpc_dir, id, tool, params) do
+  defp write_request(rpc_dir, id, tool, params, token \\ @token) do
     params = Map.put_new(params, "id", id)
+
+    write_payload(rpc_dir, id, %{
+      "id" => id,
+      "token" => token,
+      "tool" => tool,
+      "params" => params
+    })
+  end
+
+  defp write_payload(rpc_dir, id, payload) do
     tmp = Path.join(rpc_dir, "req-#{id}.json.tmp")
-    File.write!(tmp, Jason.encode!(%{"id" => id, "tool" => tool, "params" => params}))
+    File.write!(tmp, Jason.encode!(payload))
     File.rename!(tmp, Path.join(rpc_dir, "req-#{id}.json"))
   end
 

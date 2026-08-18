@@ -150,7 +150,7 @@ defmodule CodingAgent.Tools.ExecuteCodeSchemaTest do
 
   describe "PythonShim" do
     test "the prelude defines only the enabled stubs" do
-      prelude = PythonShim.render_prelude("/tmp/rpc", ["read"])
+      prelude = PythonShim.render_prelude(["read"])
 
       assert prelude =~ "def read(path, offset=None, limit=None):"
       refute prelude =~ "def grep("
@@ -158,20 +158,53 @@ defmodule CodingAgent.Tools.ExecuteCodeSchemaTest do
       assert prelude =~ "class ToolError(Exception):"
     end
 
-    test "the rpc dir is embedded exactly once, json-escaped" do
-      prelude = PythonShim.render_prelude("/tmp/it's here", Config.allowlist())
+    test "a configured prelude embeds its rpc dir and token exactly once, json-escaped" do
+      token = "token-0123"
+      prelude = PythonShim.render_prelude("/tmp/it's here", token, Config.allowlist())
 
-      assert prelude =~ ~s(_RPC_DIR = "/tmp/it's here")
+      assert prelude =~ ~s|_configure("/tmp/it's here", "token-0123")|
       assert length(String.split(prelude, "/tmp/it's here")) == 2
+      assert length(String.split(prelude, token)) == 2
     end
 
     test "stubs are emitted in a fixed order regardless of config order" do
-      a = PythonShim.render_prelude("/tmp/rpc", ["webfetch", "read", "grep"])
-      b = PythonShim.render_prelude("/tmp/rpc", ["grep", "webfetch", "read"])
+      a = PythonShim.render_prelude(["webfetch", "read", "grep"])
+      b = PythonShim.render_prelude(["grep", "webfetch", "read"])
 
       assert a == b
       assert index_of(a, "def read(") < index_of(a, "def grep(")
       assert index_of(a, "def grep(") < index_of(a, "def webfetch(")
+    end
+
+    test "the rendered shim rotates bridge configuration for each call", %{tmp_dir: tmp_dir} do
+      File.write!(Path.join(tmp_dir, "lemon_tools.py"), PythonShim.render_prelude(["read"]))
+
+      script = """
+      import json, os
+      import lemon_tools
+
+      requests = []
+      for request_id, token in enumerate(("first-token", "second-token"), 1):
+          rpc_dir = "rpc-%d" % request_id
+          os.mkdir(rpc_dir)
+          with open(os.path.join(rpc_dir, "res-%d.json" % request_id), "w") as response:
+              json.dump({"id": request_id, "ok": True, "content": ""}, response)
+
+          lemon_tools._configure(rpc_dir, token)
+          lemon_tools.read("ignored")
+
+          with open(os.path.join(rpc_dir, "req-%d.json" % request_id)) as request:
+              requests.append(json.load(request))
+
+      print(json.dumps(requests))
+      """
+
+      {output, 0} = System.cmd("python3", ["-c", script], cd: tmp_dir)
+
+      assert [
+               %{"id" => 1, "token" => "first-token", "tool" => "read"},
+               %{"id" => 2, "token" => "second-token", "tool" => "read"}
+             ] = Jason.decode!(output)
     end
 
     test "the import line only imports enabled names" do
@@ -574,6 +607,45 @@ defmodule CodingAgent.Tools.ExecuteCodeTest do
       assert text(timed_out) =~ "timed out"
       refute File.exists?(timeout_base)
       assert Path.wildcard(Path.join(System.tmp_dir!(), "lemon-exec-code-*")) == []
+    end
+
+    test "each run uses a fresh token that does not reach its result or details", %{tmp_dir: cwd} do
+      File.write!(Path.join(cwd, "f.txt"), "private bridge authority stays private")
+      test = self()
+
+      runner = fn command, runner_cwd, runner_opts ->
+        base = command_base(command)
+        shim = File.read!(Path.join(base, "lemon_tools.py"))
+        send(test, {:shim, shim})
+        BashExecutor.execute(command, runner_cwd, runner_opts)
+      end
+
+      first = run(cwd, ~s|print(read("f.txt"))|, opts(%{}, script_runner: runner))
+      assert_received {:shim, first_shim}
+
+      second = run(cwd, ~s|print(read("f.txt"))|, opts(%{}, script_runner: runner))
+      assert_received {:shim, second_shim}
+
+      [_, first_rpc_dir, first_token] =
+        Regex.run(~r/_configure\("([^"]+)", "([^"]+)"\)/, first_shim)
+
+      [_, second_rpc_dir, second_token] =
+        Regex.run(~r/_configure\("([^"]+)", "([^"]+)"\)/, second_shim)
+
+      assert first_token =~ ~r/^[A-Za-z0-9_-]{43}$/
+      assert second_token =~ ~r/^[A-Za-z0-9_-]{43}$/
+      refute first_token == second_token
+
+      for {result, rpc_dir, token} <- [
+            {first, first_rpc_dir, first_token},
+            {second, second_rpc_dir, second_token}
+          ] do
+        assert text(result) =~ "private bridge authority stays private"
+        refute text(result) =~ token
+        refute text(result) =~ rpc_dir
+        refute inspect(result.details) =~ token
+        refute inspect(result.details) =~ rpc_dir
+      end
     end
 
     test "concurrent runs in separate workspaces do not cross-talk", %{tmp_dir: cwd} do

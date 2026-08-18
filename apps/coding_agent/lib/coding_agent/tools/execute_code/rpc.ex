@@ -1,20 +1,17 @@
 defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   @moduledoc """
-  The file-RPC pump that serves tool calls made by a running `execute_code`
-  script.
+  The authenticated file-RPC pump shared by isolated and persistent Python
+  execution.
 
-  While the script task runs, `serve/2` polls the per-invocation rpc directory
-  for `req-<id>.json` files, runs the requested tool through the same policy and
-  approval machinery a direct tool call goes through, and writes
-  `res-<id>.json` back atomically (`.tmp` + rename), so the script never reads a
-  half-written response.
+  Requests and responses live only in a fresh, private directory. Every request
+  must carry the directory's configured token; authentication happens before a
+  request can consume a call or result-byte budget or reach tool lookup. A
+  completed request is consumed, and responses are published atomically with a
+  temporary file followed by rename.
 
-  Everything here happens outside the model transcript: the request and response
-  payloads live only on disk, and the tool result the model eventually sees is
-  the script's stdout.
-
-  `serve/2` must run in the process that started the task — `Task.yield/2`
-  requires task ownership, and the yield doubles as the poll sleep.
+  `serve/2` must run in the process that started the task because `Task.yield/2`
+  requires task ownership. Persistent cells use `process_pending/2` to run the
+  same parsing, authentication, policy, approval, dispatch, and accounting path.
   """
 
   require Logger
@@ -24,6 +21,11 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
 
+  @authentication_error "rpc authentication failed"
+  @invalid_request_error "invalid rpc request"
+  @replay_error "rpc request already processed"
+  @unexpected_error "rpc request failed"
+
   @type ctx :: %{
           tools: %{String.t() => LemonAgent.Types.AgentTool.t()},
           tool_policy: map() | nil,
@@ -32,6 +34,7 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
           max_result_bytes: pos_integer(),
           signal: reference() | nil,
           rpc_dir: String.t(),
+          token: binary(),
           poll_interval_ms: pos_integer()
         }
 
@@ -40,7 +43,8 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
           denied: non_neg_integer(),
           errors: non_neg_integer(),
           bytes: non_neg_integer(),
-          tools_used: MapSet.t(String.t())
+          tools_used: MapSet.t(String.t()),
+          seen_ids: MapSet.t(integer())
         }
 
   @doc """
@@ -48,7 +52,14 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   """
   @spec initial_stats() :: stats()
   def initial_stats do
-    %{calls: 0, denied: 0, errors: 0, bytes: 0, tools_used: MapSet.new()}
+    %{
+      calls: 0,
+      denied: 0,
+      errors: 0,
+      bytes: 0,
+      tools_used: MapSet.new(),
+      seen_ids: MapSet.new()
+    }
   end
 
   @doc """
@@ -61,6 +72,46 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   def serve(%Task{} = task, ctx) do
     loop(task, ctx, initial_stats())
   end
+
+  @doc """
+  Process one snapshot of pending requests and return updated statistics.
+
+  This is the shared polling entry point for the persistent-cell RPC server.
+  """
+  @spec process_pending(ctx(), stats()) :: stats()
+  def process_pending(ctx, stats) do
+    ctx.rpc_dir
+    |> pending_requests()
+    |> Enum.reduce(stats, fn {id, path}, acc -> process_request_path(id, path, ctx, acc) end)
+  end
+
+  @doc """
+  Consume and process one request id through the complete authenticated path.
+
+  The function is intentionally reusable by a server that owns polling and
+  lifecycle itself. Invalid or denied requests are always answered in writing.
+  """
+  @spec process_request(integer(), ctx(), stats()) :: stats()
+  def process_request(id, ctx, stats) when is_integer(id) do
+    process_request_path(id, request_path(ctx.rpc_dir, id), ctx, stats)
+  end
+
+  @doc false
+  @spec authenticated?(map(), binary() | nil) :: boolean()
+  def authenticated?(%{"token" => provided}, expected)
+      when is_binary(provided) and is_binary(expected) and byte_size(expected) > 0 do
+    byte_size(provided) == byte_size(expected) and :crypto.hash_equals(provided, expected)
+  end
+
+  def authenticated?(_request, _expected), do: false
+
+  @doc false
+  @spec request_path(String.t(), integer()) :: String.t()
+  def request_path(rpc_dir, id), do: Path.join(rpc_dir, "req-#{id}.json")
+
+  @doc false
+  @spec response_path(String.t(), integer()) :: String.t()
+  def response_path(rpc_dir, id), do: Path.join(rpc_dir, "res-#{id}.json")
 
   defp loop(task, ctx, stats) do
     case Task.yield(task, ctx.poll_interval_ms) do
@@ -75,72 +126,118 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
         {:exit, reason, stats}
 
       nil ->
-        loop(task, ctx, serve_pending(ctx, stats))
+        loop(task, ctx, process_pending(ctx, stats))
     end
   end
 
-  defp serve_pending(ctx, stats) do
-    ctx.rpc_dir
-    |> pending_ids()
-    |> Enum.reduce(stats, fn id, acc -> handle_request(id, ctx, acc) end)
-  end
-
-  defp pending_ids(rpc_dir) do
+  defp pending_requests(rpc_dir) do
     rpc_dir
     |> Path.join("req-*.json")
     |> Path.wildcard()
     |> Enum.flat_map(fn path ->
       case Integer.parse(Path.basename(path, ".json") |> String.replace_prefix("req-", "")) do
-        {id, ""} -> [id]
-        _ -> []
+        {id, ""} ->
+          [{id, path}]
+
+        _ ->
+          consume_request(path)
+          []
       end
     end)
-    |> Enum.sort()
-    |> Enum.reject(&File.exists?(response_path(rpc_dir, &1)))
+    |> Enum.sort_by(fn {id, path} -> {id, path} end)
   end
 
-  defp handle_request(id, ctx, stats) do
-    if stats.calls >= ctx.max_calls do
-      respond_error(
-        ctx,
-        id,
-        "rpc call limit exceeded (max #{ctx.max_calls} calls per script)"
-      )
-
-      %{stats | errors: stats.errors + 1}
+  defp process_request_path(id, request, ctx, stats) do
+    if File.exists?(response_path(ctx.rpc_dir, id)) do
+      consume_request(request)
+      remember_id(stats, id)
     else
-      stats = %{stats | calls: stats.calls + 1}
-      dispatch(id, ctx, stats)
+      parsed = parse_request(request)
+      consume_request(request)
+      authenticate_and_process(id, parsed, ctx, stats)
     end
   end
 
-  defp dispatch(id, ctx, stats) do
-    case read_request(ctx.rpc_dir, id) do
-      {:ok, tool_name, params} ->
-        run_tool(id, tool_name, params, ctx, stats)
-
-      :error ->
-        respond_error(ctx, id, "invalid rpc request")
-        %{stats | errors: stats.errors + 1}
-    end
-  end
-
-  defp read_request(rpc_dir, id) do
-    with {:ok, body} <- File.read(request_path(rpc_dir, id)),
-         {:ok, decoded} <- Jason.decode(body),
-         %{"tool" => tool} when is_binary(tool) <- decoded,
-         params when is_map(params) <- Map.get(decoded, "params") || %{} do
-      {:ok, tool, params}
+  defp parse_request(path) do
+    with {:ok, body} <- File.read(path),
+         {:ok, decoded} when is_map(decoded) <- Jason.decode(body) do
+      {:ok, decoded}
     else
       _ -> :error
     end
   end
 
+  defp authenticate_and_process(id, {:ok, request}, ctx, stats) do
+    if authenticated?(request, Map.get(ctx, :token)) do
+      safely_process_authenticated(id, request, ctx, stats)
+    else
+      authentication_failed(id, ctx, stats)
+    end
+  end
+
+  defp authenticate_and_process(id, :error, ctx, stats),
+    do: authentication_failed(id, ctx, stats)
+
+  defp authentication_failed(id, ctx, stats) do
+    respond_error(ctx, id, @authentication_error)
+    %{stats | denied: stats.denied + 1}
+  end
+
+  defp safely_process_authenticated(id, request, ctx, stats) do
+    process_authenticated(id, request, ctx, stats)
+  rescue
+    _error ->
+      respond_error(ctx, id, @unexpected_error)
+      stats |> remember_id(id) |> increment_errors()
+  catch
+    _kind, _value ->
+      respond_error(ctx, id, @unexpected_error)
+      stats |> remember_id(id) |> increment_errors()
+  end
+
+  defp process_authenticated(id, request, ctx, stats) do
+    cond do
+      seen?(stats, id) ->
+        respond_error(ctx, id, @replay_error)
+        increment_errors(stats)
+
+      stats.calls >= ctx.max_calls ->
+        respond_error(
+          ctx,
+          id,
+          "rpc call limit exceeded (max #{ctx.max_calls} calls per script)"
+        )
+
+        stats |> remember_id(id) |> increment_errors()
+
+      true ->
+        stats = stats |> remember_id(id) |> Map.update!(:calls, &(&1 + 1))
+
+        case parse_call(request) do
+          {:ok, tool_name, params} ->
+            run_tool(id, tool_name, params, ctx, stats)
+
+          :error ->
+            respond_error(ctx, id, @invalid_request_error)
+            increment_errors(stats)
+        end
+    end
+  end
+
+  defp parse_call(%{"tool" => tool} = request) when is_binary(tool) do
+    case Map.get(request, "params") || %{} do
+      params when is_map(params) -> {:ok, tool, params}
+      _ -> :error
+    end
+  end
+
+  defp parse_call(_request), do: :error
+
   defp run_tool(id, tool_name, params, ctx, stats) do
     cond do
       not Map.has_key?(ctx.tools, tool_name) ->
         respond_error(ctx, id, "tool '#{tool_name}' is not available inside execute_code scripts")
-        %{stats | errors: stats.errors + 1}
+        increment_errors(stats)
 
       denied_by_policy?(ctx.tool_policy, tool_name) ->
         reason =
@@ -182,7 +279,7 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
 
       {:error, message} ->
         respond_error(ctx, id, message)
-        %{stats | errors: stats.errors + 1}
+        increment_errors(stats)
 
       {:ok, content} ->
         account(id, tool_name, content, ctx, stats)
@@ -206,7 +303,7 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
         "rpc result byte budget exceeded (result #{size} bytes, #{remaining} bytes remaining of #{ctx.max_result_bytes})"
       )
 
-      %{stats | errors: stats.errors + 1}
+      increment_errors(stats)
     else
       respond_ok(ctx, id, content)
 
@@ -280,15 +377,29 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
     final = response_path(rpc_dir, id)
     tmp = final <> ".tmp"
 
-    File.write!(tmp, Jason.encode!(payload))
-    File.rename!(tmp, final)
-    :ok
-  rescue
-    error ->
-      Logger.warning("execute_code rpc response write failed: #{Exception.message(error)}")
+    try do
+      File.write!(tmp, Jason.encode!(payload))
+      File.rename!(tmp, final)
       :ok
+    rescue
+      error ->
+        Logger.warning("execute_code rpc response write failed: #{Exception.message(error)}")
+        :ok
+    after
+      consume_request(tmp)
+    end
   end
 
-  defp request_path(rpc_dir, id), do: Path.join(rpc_dir, "req-#{id}.json")
-  defp response_path(rpc_dir, id), do: Path.join(rpc_dir, "res-#{id}.json")
+  defp consume_request(path) do
+    _ = File.rm_rf(path)
+    :ok
+  end
+
+  defp seen?(stats, id), do: MapSet.member?(Map.get(stats, :seen_ids, MapSet.new()), id)
+
+  defp remember_id(stats, id) do
+    Map.put(stats, :seen_ids, MapSet.put(Map.get(stats, :seen_ids, MapSet.new()), id))
+  end
+
+  defp increment_errors(stats), do: %{stats | errors: stats.errors + 1}
 end

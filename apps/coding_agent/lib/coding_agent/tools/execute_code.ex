@@ -247,8 +247,7 @@ defmodule CodingAgent.Tools.ExecuteCode do
   defp run(script, python, config, params, signal, cwd, opts) do
     started_at = System.monotonic_time(:microsecond)
     timeout_ms = clamp_timeout(Map.get(params, "timeout_ms"), config)
-    base = build_workspace(script, config)
-    rpc_dir = Path.join(base, "rpc")
+    {base, rpc_dir, token} = build_workspace(script, config)
 
     try do
       command = "exec #{shell_escape(python)} #{shell_escape(Path.join(base, "script.py"))}"
@@ -272,6 +271,7 @@ defmodule CodingAgent.Tools.ExecuteCode do
         max_result_bytes: config.max_rpc_result_bytes,
         signal: signal,
         rpc_dir: rpc_dir,
+        token: token,
         poll_interval_ms: @poll_interval_ms
       }
 
@@ -291,20 +291,23 @@ defmodule CodingAgent.Tools.ExecuteCode do
 
   defp build_workspace(script, %Config{} = config) do
     suffix = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
+    token = :crypto.strong_rand_bytes(32) |> Base.url_encode64(padding: false)
     base = Path.join(System.tmp_dir!(), "lemon-exec-code-" <> suffix)
     rpc_dir = Path.join(base, "rpc")
 
-    File.mkdir_p!(rpc_dir)
-    File.chmod(base, 0o700)
+    File.mkdir!(base)
+    :ok = File.chmod(base, 0o700)
+    File.mkdir!(rpc_dir)
+    :ok = File.chmod(rpc_dir, 0o700)
 
     File.write!(
       Path.join(base, "lemon_tools.py"),
-      PythonShim.render_prelude(rpc_dir, config.tools)
+      PythonShim.render_prelude(rpc_dir, token, config.tools)
     )
 
     File.write!(Path.join(base, "script.py"), PythonShim.render_script(script, config.tools))
 
-    base
+    {base, rpc_dir, token}
   end
 
   # The pump applies policy and approval per call, so the inner tools stay
