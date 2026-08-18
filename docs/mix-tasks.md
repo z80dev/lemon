@@ -15,6 +15,36 @@ the one-liner can't.
 
 Each task's own docs are always available with `mix help lemon.<task>`.
 
+> **Packaged and source users:** use the release CLI (`lemon …`) or the
+> matching source wrapper (`./bin/lemon …`) for normal setup and diagnostics.
+> The Mix commands on this page are the direct contributor interfaces behind
+> those user-facing verbs.
+
+```bash
+# Installed release
+lemon setup
+lemon model --provider anthropic
+lemon gateway setup
+lemon config validate
+lemon secrets status
+lemon channels
+lemon doctor
+
+# Source checkout
+./bin/lemon setup
+./bin/lemon model --provider anthropic
+./bin/lemon gateway setup
+./bin/lemon config validate
+./bin/lemon secrets status
+./bin/lemon channels
+./bin/lemon doctor
+```
+
+The installed `lemon` runtime CLI is included in the minimal and full release
+profiles. It returns `0` for success, `1` for command failures, and `2` for
+usage errors; command-specific help returns `0` without running the command.
+The simulation release does not include this runtime CLI.
+
 ---
 
 ## Onboarding & setup
@@ -24,8 +54,8 @@ Getting a fresh checkout or a fresh machine to a working agent.
 | Task | Purpose |
 | --- | --- |
 | `mix lemon.new NAME` | Scaffold a new Lemon agent project. Ships in the `installer/` archive, **not** the umbrella — install it with `mix archive.install` before use. Flags: `--channel`, `--memory`, `--install`. |
-| `mix lemon.setup` | First-time setup and configuration. |
-| `mix lemon.onboard` | Top-level interactive provider onboarding (delegates to the per-provider tasks below). |
+| `mix lemon.setup` | Idempotent first-run setup: derives config/secrets/provider state, creates only missing config and secrets state, skips an already usable provider, and verifies a newly configured provider unless `--skip-verify` defers its live check. This is the contributor alternative to `lemon setup` / `./bin/lemon setup`. |
+| `mix lemon.onboard` | Top-level interactive provider onboarding. Contributor alternative to `lemon model` / `./bin/lemon model`. |
 | `mix lemon.onboard.anthropic` | Interactive onboarding for the Anthropic provider. |
 | `mix lemon.onboard.codex` | Interactive onboarding for the OpenAI Codex provider. |
 | `mix lemon.onboard.copilot` | Interactive onboarding for the GitHub Copilot provider. |
@@ -39,8 +69,10 @@ Getting a fresh checkout or a fresh machine to a working agent.
 
 ## Secrets
 
-Encrypted secret store plus the voice-specific helper. `mix lemon.secrets.init`
-must run once to create the master key before the others resolve.
+Encrypted secret store plus the voice-specific helper. When running the
+individual secrets tasks directly, `mix lemon.secrets.init` must run once to
+create the master key. The full `mix lemon.setup` / `lemon setup` journey
+initializes a missing master key itself and does not replace an existing one.
 
 | Task | Purpose |
 | --- | --- |

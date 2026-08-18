@@ -136,6 +136,7 @@ max_concurrent_runs = 2
 default_engine = "lemon"
 auto_resume = false
 enable_telegram = false
+enable_discord = false
 enable_xmtp = false
 
 [gateway.telegram]
@@ -144,6 +145,15 @@ allowed_chat_ids = [12345678]
 default_account_id = "default"   # optional account for ./bin/lemon send account-scoped lookups
 default_chat_id = 12345678       # optional default for ./bin/lemon send --to telegram
 default_thread_id = 35           # optional forum topic/thread
+
+[gateway.discord]
+# `lemon gateway setup discord` stores the token in encrypted secrets and
+# writes this secret reference plus the restricted channel scope.
+bot_token_secret = "discord_bot_token"
+default_channel_id = 123456789012345678
+allowed_channel_ids = [123456789012345678]
+deny_unbound_channels = true
+# allowed_guild_ids = [123456789012345678] # optional additional restriction
 
 [gateway.xmtp]
 env = "production"                  # production | dev | local
@@ -294,10 +304,20 @@ By default, existing environment variables are preserved. `.env` values only fil
 Lemon supports the **Codex subscription** provider as `openai-codex` (it uses the ChatGPT OAuth JWT, not `OPENAI_API_KEY`).
 The canonical config key is `providers.openai-codex`; `providers.openai_codex` is also accepted for backward compatibility by native Lemon/CodingAgent runs.
 
-Primary setup paths:
+Primary setup paths use the installed `lemon` command, or the matching source
+wrapper from a checkout:
 
 ```bash
-mix lemon.onboard
+# Installed release
+lemon setup
+lemon model --provider openai-codex
+
+# Source checkout
+./bin/lemon setup
+./bin/lemon model --provider openai-codex
+
+# Contributor-level Mix alternatives
+mix lemon.setup
 mix lemon.onboard.codex
 ```
 
@@ -334,6 +354,11 @@ engine = "lemon"
 Then store the endpoint key:
 
 ```bash
+# Installed release / source checkout
+lemon secrets set llm_local_openai_api_key "local"
+./bin/lemon secrets set llm_local_openai_api_key "local"
+
+# Contributor-level Mix alternative
 mix lemon.secrets.set llm_local_openai_api_key "local"
 ```
 
@@ -345,25 +370,50 @@ providers. Each provider gets its own `[providers.<id>]` table with
 
 ## Provider Onboarding (CLI)
 
-Lemon includes a top-level onboarding picker for provider credentials:
+For an installed release, start provider onboarding with `lemon model`. From a
+source checkout, use the matching `./bin/lemon model` wrapper. The direct Mix
+tasks below remain the contributor interface.
 
 ```bash
+# Installed release
+lemon model
+lemon model --provider anthropic
+lemon model --provider openai-codex
+lemon model --provider gemini
+lemon model --provider zai
+lemon model --provider minimax
+
+# Source checkout
+./bin/lemon model
+./bin/lemon model --provider anthropic
+./bin/lemon model --provider openai-codex
+./bin/lemon model --provider gemini
+./bin/lemon model --provider zai
+./bin/lemon model --provider minimax
+
+# Contributor-level Mix alternatives
 mix lemon.onboard
 mix lemon.onboard anthropic
 mix lemon.onboard codex
 mix lemon.onboard gemini
 mix lemon.onboard zai
 mix lemon.onboard minimax
-
-# Provider-specific aliases still work
 mix lemon.onboard.antigravity
-mix lemon.onboard.gemini
-mix lemon.onboard.codex
 mix lemon.onboard.copilot
 ```
 
-All onboarding flows:
-- Verify encrypted secrets are configured
+`lemon setup` is the idempotent first-run journey: it derives config, secrets,
+and provider readiness; creates missing config and a secrets master key without
+replacing existing state; skips a provider that is already usable; and checks a
+new provider configuration before it reports setup complete. Setup always runs
+offline checks and normally runs a live provider check. Use
+`lemon setup --skip-verify` only to defer that live check when offline.
+
+The focused `lemon model` command onboards one provider. It requires a usable
+encrypted secrets store; use `lemon setup` when a fresh machine still needs the
+config/secrets bootstrap and readiness verification.
+
+Provider onboarding flows:
 - Let you choose a provider when none is passed
 - Use an interactive arrow-key TUI for provider/auth/model selection when a TTY is available
 - Run provider OAuth flow by default when supported, or prompt for an API key/token otherwise
@@ -440,7 +490,17 @@ the next credential-ready fallback provider with the same model id. Once visible
 content or a tool call has started, the error is surfaced instead of replayed so
 the transcript cannot duplicate partial output.
 
-Google Gemini CLI onboarding (`mix lemon.onboard gemini`) resolves OAuth credentials via `LemonAi.Auth.GoogleGeminiCliOAuth`, stores the encrypted payload in `providers.google_gemini_cli.api_key_secret`, writes `providers.google_gemini_cli.auth_source = "oauth"`, and can take `--project-id <gcp-project-id>` to force a specific Code Assist project. At runtime, Lemon re-resolves the active Gemini project from `providers.google_gemini_cli.project_id`, `providers.google_gemini_cli.project_secret`, `LEMON_GEMINI_PROJECT_ID`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_PROJECT_ID`, or `GCLOUD_PROJECT`, with those values overriding the `projectId` stored inside the OAuth payload.
+Google Gemini CLI onboarding (`lemon model --provider gemini`, or
+`./bin/lemon model --provider gemini` from a checkout) resolves OAuth
+credentials via `LemonAi.Auth.GoogleGeminiCliOAuth`, stores the encrypted payload
+in `providers.google_gemini_cli.api_key_secret`, writes
+`providers.google_gemini_cli.auth_source = "oauth"`, and can take
+`--project-id <gcp-project-id>` to force a specific Code Assist project. The
+contributor task is `mix lemon.onboard gemini`. At runtime, Lemon re-resolves
+the active Gemini project from `providers.google_gemini_cli.project_id`,
+`providers.google_gemini_cli.project_secret`, `LEMON_GEMINI_PROJECT_ID`,
+`GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_PROJECT_ID`, or `GCLOUD_PROJECT`, with
+those values overriding the `projectId` stored inside the OAuth payload.
 
 The onboarding alias `gemini` maps to the runtime provider `google_gemini_cli`. This is distinct from the AI Studio provider `google`, which expects a separate API key such as `GOOGLE_GENERATIVE_AI_API_KEY`.
 
@@ -455,26 +515,34 @@ Environment variables are supported as fallback:
 Common non-interactive usage:
 
 ```bash
-# Google Antigravity
+# Installed release
+lemon model --provider antigravity --token <token> --set-default --model gemini-3-pro-high
+lemon model --provider gemini --project-id your-gcp-project
+lemon model --provider gemini --token <token> --set-default --model gemini-2.5-pro
+lemon model --provider openai-codex --token <token> --set-default --model gpt-5.2
+lemon model --provider github-copilot --enterprise-domain company.ghe.com
+lemon model --provider github-copilot --skip-enable-models
+lemon model --provider github-copilot --token <token> --set-default --model gpt-5
+lemon model --provider zai --token <token> --set-default --model glm-5
+lemon model --provider minimax --token <token> --set-default --model MiniMax-M2.7
+
+# Source checkout
+./bin/lemon model --provider antigravity --token <token> --set-default --model gemini-3-pro-high
+./bin/lemon model --provider gemini --project-id your-gcp-project
+./bin/lemon model --provider gemini --token <token> --set-default --model gemini-2.5-pro
+./bin/lemon model --provider openai-codex --token <token> --set-default --model gpt-5.2
+./bin/lemon model --provider github-copilot --enterprise-domain company.ghe.com
+./bin/lemon model --provider github-copilot --skip-enable-models
+./bin/lemon model --provider github-copilot --token <token> --set-default --model gpt-5
+./bin/lemon model --provider zai --token <token> --set-default --model glm-5
+./bin/lemon model --provider minimax --token <token> --set-default --model MiniMax-M2.7
+
+# Contributor-level Mix alternatives
 mix lemon.onboard.antigravity --token <token> --set-default --model gemini-3-pro-high
-
-# Google Gemini CLI / Code Assist
 mix lemon.onboard.gemini --project-id your-gcp-project
-mix lemon.onboard.gemini --token <token> --set-default --model gemini-2.5-pro
-
-# OpenAI Codex
 mix lemon.onboard.codex --token <token> --set-default --model gpt-5.2
-
-# GitHub Copilot (enterprise + optional model enablement toggle)
 mix lemon.onboard.copilot --enterprise-domain company.ghe.com
-mix lemon.onboard.copilot --skip-enable-models
-mix lemon.onboard.copilot --token <token> --set-default --model gpt-5
-mix lemon.onboard.copilot --token <token> --config-path /path/to/config.toml
-
-# Z.AI
 mix lemon.onboard zai --token <token> --set-default --model glm-5
-
-# MiniMax
 mix lemon.onboard minimax --token <token> --set-default --model MiniMax-M2.7
 ```
 
