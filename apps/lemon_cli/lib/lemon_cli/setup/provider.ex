@@ -66,6 +66,22 @@ defmodule LemonCli.Setup.Provider do
       verify_onboarded_config(rest, skip_verify? or not live_verify?, io, opts)
     end
   end
+
+  defp onboard(args, io) do
+    LogSilencer.with_quiet_logs(interactive_tui_session?(io), fn ->
+      {provider_name, remaining_args} = extract_provider_arg(args)
+
+      provider =
+        case provider_name do
+          nil -> choose_provider(remaining_args, io)
+          value -> fetch_provider!(value)
+        end
+
+      Runner.run(remaining_args, provider, io: io)
+      :ok
+    end)
+  end
+
   # ──────────────────────────────────────────────────────────────────────────
   # Post-onboarding verification
   # ──────────────────────────────────────────────────────────────────────────
