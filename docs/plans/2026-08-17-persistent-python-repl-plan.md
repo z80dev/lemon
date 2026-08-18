@@ -115,7 +115,12 @@ Owner is the stable `CodingAgent.Session` PID (`:session_pid`), monitored by reg
 
 ### Serialization and queueing
 
-One active cell per worker, FIFO queue, default maximum 8 queued cells. Active timeout begins when the parent dispatches the eval request, before the runner can emit `started`; this bounds a wedged or malicious runner that accepts the write but never acknowledges it. Queue wait does not consume the cell timeout. Outer abort/tool timeout still cancels a queued caller. Queue full returns busy; it does not fall back to per-call because that would silently leave the expected namespace.
+One active cell per worker, FIFO queue, default maximum 8 queued cells. The facade starts one
+absolute `timeout_ms` deadline when the session run begins; it includes queue wait, active-cell
+execution, and ordinary helper/approval waits. The kernel receives the same timeout for active
+execution, while the facade remains authoritative for the end-to-end bound. Outer abort/tool
+timeout still cancels a queued caller. Queue full returns busy; it does not fall back to per-call
+because that would silently leave the expected namespace.
 
 ### Failure semantics
 
@@ -123,9 +128,9 @@ One active cell per worker, FIFO queue, default maximum 8 queued cells. Active t
 - `SystemExit`: cell error, process retained.
 - `input()`: explicit unsupported-input error, process retained.
 - Helper denial/error/limit: Python `ToolError`; catchable; state retained.
-- Active timeout/abort/caller death: partial output may return, but state is discarded.
+- Active timeout, abort, or caller death: partial output may return, but state is discarded.
 - Port death, `os._exit`, native crash, malformed protocol: state discarded.
-- Queued cancellation: no effect on active state.
+- A queued caller whose abort or deadline fires leaves the queue without affecting the active cell.
 - Never replay after `started`; side effects may already exist.
 
 Cancellation is SIGINT to the process group on POSIX, 1-second grace, SIGTERM, 1-second grace, then SIGKILL/Port close. Platforms without reliable soft interrupt go directly to tree termination. User-visible contract is state loss, not `KeyboardInterrupt` recovery.
@@ -189,7 +194,9 @@ Schema:
 }
 ```
 
-`timeout_ms` retains minimum 1,000 ms and configured maximum. It measures active cell time including ordinary helper/approval waits.
+`timeout_ms` retains minimum 1,000 ms and configured maximum. It is an end-to-end wall-clock
+limit from session-run entry, including queue wait, active-cell execution, and ordinary
+helper/approval waits.
 
 Retain existing detail fields and add:
 
@@ -198,7 +205,7 @@ Retain existing detail fields and add:
 - `reset_performed`
 - `state_retained`
 - `fallback_reason` (`nil`, `missing_scope`, `unsupported_platform`, `registry_unavailable`, `capacity_exhausted`, `startup_failed`)
-- `duration_ms` (active cell only)
+- `duration_ms` (end-to-end wall-clock duration)
 
 Never expose PIDs, raw keys, owners, tokens, bridge paths, or generations. Timeout/cancellation/crash text says state was discarded. Session-mode fallback text says this call ran isolated and will not persist.
 

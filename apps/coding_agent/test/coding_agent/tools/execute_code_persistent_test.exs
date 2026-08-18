@@ -184,19 +184,66 @@ defmodule CodingAgent.Tools.ExecuteCodePersistentTest do
     refute Map.has_key?(result.details, :reason)
   end
 
-  test "facade deadline begins at session-cell entry using the injected clock", %{cwd: cwd} do
+  test "facade deadline includes elapsed session setup using the injected clock", %{cwd: cwd} do
     set_response({:ok, %{output: "on time", state_retained: true, kernel_reused: false}})
 
     result =
       execute(cwd, %{"script" => "print('on time')", "timeout_ms" => 1_000},
-        clock: sequence_clock([0, 500, 1_250])
+        clock: sequence_clock([0, 1_250])
       )
 
-    assert text(result) == "on time"
+    assert text(result) == "Script timed out after 1000ms."
     assert result.details.persistent
-    assert result.details.state_retained
+    assert result.details.reason == :timeout
+    refute result.details.state_retained
     refute result.details.kernel_reused
-    refute Map.has_key?(result.details, :reason)
+  end
+
+  test "external abort takes precedence over an expired facade deadline", %{cwd: cwd} do
+    set_response(:block)
+
+    signal = AbortSignal.new()
+    test_pid = self()
+
+    set_reset(fn _key, _owner_pid, _opts ->
+      :ok = AbortSignal.abort(signal)
+      {:ok, %{reset_performed: true}}
+    end)
+
+    opts = [
+      settings_manager: settings(),
+      session_id: "session-1",
+      session_pid: self(),
+      session_module: FakeSession,
+      agent_id: "agent-1",
+      python_repl: FakePythonRepl,
+      rpc_server: FakeRpcServer,
+      python_repl_registry: self(),
+      clock: sequence_clock([0, 1_000]),
+      poll: fn received_signal ->
+        send(test_pid, {:polled, received_signal})
+        AbortSignal.aborted?(received_signal)
+      end
+    ]
+
+    result =
+      ExecuteCode.execute(
+        "call-1",
+        %{"script" => "cancelled()", "timeout_ms" => 1_000, "reset" => true},
+        signal,
+        nil,
+        cwd,
+        opts
+      )
+
+    assert_receive {:polled, ^signal}
+    assert_receive {:rpc_started, %{signal: cell_signal}, _modes}
+    assert text(result) == "Script cancelled."
+    assert result.details.persistent
+    assert result.details.reason == :cancelled
+    refute result.details.state_retained
+    refute result.details.kernel_reused
+    assert AbortSignal.aborted?(cell_signal)
   end
 
   test "abort preserves RPC statistics and the resulting trust classification", %{cwd: cwd} do
@@ -585,7 +632,11 @@ defmodule CodingAgent.Tools.ExecuteCodePersistentTest do
     def reset(key, owner_pid, opts) do
       state = Agent.get(@state, & &1)
       send(state.test_pid, {:reset, key, owner_pid, opts})
-      state.reset
+
+      case state.reset do
+        reset when is_function(reset, 3) -> reset.(key, owner_pid, opts)
+        reset -> reset
+      end
     end
 
     def execute(request) do

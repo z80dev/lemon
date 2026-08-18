@@ -96,8 +96,8 @@ call whose external abort fires or whose deadline expires simply leaves the queu
 cell is undisturbed.
 
 `timeout_ms` (minimum 1,000 ms, clamped to the configured `timeout_ms`) is an
-**end-to-end wall-clock limit**. In session mode it includes FIFO queue wait, active-cell
-execution, and ordinary helper/approval waits.
+**end-to-end wall-clock limit from session-run entry**. In session mode it includes FIFO queue
+wait, active-cell execution, and ordinary helper/approval waits.
 
 ## State retention and loss
 
