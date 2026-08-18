@@ -549,7 +549,15 @@ defmodule CodingAgent.Tools.ExecuteCode do
 
               {:error, reason} ->
                 File.rm_rf(base)
-                session_error(reason, false, reset_performed, Rpc.initial_stats(), started_at, opts)
+
+                session_error(
+                  reason,
+                  false,
+                  reset_performed,
+                  Rpc.initial_stats(),
+                  started_at,
+                  opts
+                )
             end
 
           {:error, reason} ->
