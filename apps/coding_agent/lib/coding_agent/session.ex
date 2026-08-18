@@ -41,6 +41,7 @@ defmodule CodingAgent.Session do
   @prompt_defer_ms 10
   @reset_abort_wait_ms 5_000
   @python_repl_terminate_detach_wait_ms 100
+  @execute_code_config_query_timeout_ms 1_000
 
   alias LemonAgent.ContextRegistry
   alias LemonAgent.Types.AgentTool
@@ -63,6 +64,7 @@ defmodule CodingAgent.Session do
   alias CodingAgent.SessionManager.{Session, SessionEntry}
   alias CodingAgent.UI.Context, as: UIContext
   alias CodingAgent.Messages.CustomMessage
+  alias CodingAgent.Tools.ExecuteCode.Config, as: ExecuteCodeConfig
 
   # ============================================================================
   # State
@@ -102,6 +104,8 @@ defmodule CodingAgent.Session do
     :register_session,
     :session_registry,
     :python_repl_mod,
+    :execute_code_effective,
+    :settings_manager_static,
     :convert_to_llm,
     :transform_context,
     :tool_policy,
@@ -162,6 +166,8 @@ defmodule CodingAgent.Session do
           register_session: boolean(),
           session_registry: atom(),
           python_repl_mod: module() | nil,
+          execute_code_effective: ExecuteCodeConfig.t(),
+          settings_manager_static: boolean(),
           convert_to_llm: (list() -> list()),
           transform_context: (list(), reference() | nil ->
                                 list() | {:ok, list()} | {:error, term()}),
@@ -399,6 +405,30 @@ defmodule CodingAgent.Session do
   end
 
   @doc """
+  Return the authoritative execute-code config for this session.
+
+  The call is deliberately bounded. Tool closures use it at invocation time so
+  a closure created before a config reload cannot select persistence from its
+  stale settings snapshot.
+  """
+  @spec execute_code_config(GenServer.server(), pos_integer()) ::
+          {:ok, ExecuteCodeConfig.t()} | {:error, :session_unavailable}
+  def execute_code_config(session, timeout_ms \\ @execute_code_config_query_timeout_ms)
+
+  def execute_code_config(session, timeout_ms)
+      when is_integer(timeout_ms) and timeout_ms > 0 do
+    timeout_ms = min(timeout_ms, @execute_code_config_query_timeout_ms)
+
+    try do
+      GenServer.call(session, :execute_code_config, timeout_ms)
+    catch
+      :exit, _reason -> {:error, :session_unavailable}
+    end
+  end
+
+  def execute_code_config(_session, _timeout_ms), do: {:error, :session_unavailable}
+
+  @doc """
   Get session statistics including message count, token usage, etc.
   """
   @spec get_stats(GenServer.server()) :: map()
@@ -594,6 +624,7 @@ defmodule CodingAgent.Session do
     send(self(), {:publish_extension_status_report, extension_status_report})
 
     maybe_subscribe_exec_approvals(state)
+    subscribe_config_reload()
 
     {:ok, state}
   end
@@ -675,6 +706,10 @@ defmodule CodingAgent.Session do
   def handle_call({:subscribe, pid}, _from, state) do
     {unsubscribe, new_state} = Notifier.subscribe_direct(state, pid, self())
     {:reply, unsubscribe, new_state}
+  end
+
+  def handle_call(:execute_code_config, _from, state) do
+    {:reply, {:ok, state.execute_code_effective}, state}
   end
 
   def handle_call(:get_state, _from, state) do
@@ -1117,6 +1152,10 @@ defmodule CodingAgent.Session do
 
   def handle_info({:do_prompt, %CustomMessage{} = message}, state) do
     handle_info({:do_prompt, message, state.system_prompt}, state)
+  end
+
+  def handle_info(%LemonCore.Event{type: :config_reloaded}, state) do
+    {:noreply, Lifecycle.apply_execute_code_config_transition(state, self())}
   end
 
   def handle_info(_msg, state) do
@@ -1624,6 +1663,8 @@ defmodule CodingAgent.Session do
   end
 
   defp maybe_subscribe_exec_approvals(_state), do: :ok
+
+  defp subscribe_config_reload, do: LemonCore.Bus.subscribe("system")
 
   defp approval_event_payload(payload, state) when is_map(payload) do
     pending = map_value(payload, :pending)

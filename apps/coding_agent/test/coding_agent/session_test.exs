@@ -2,10 +2,12 @@ defmodule CodingAgent.SessionTest do
   use ExUnit.Case, async: true
 
   alias CodingAgent.Config
+  alias CodingAgent.BashExecutor
   alias CodingAgent.Session
   alias CodingAgent.SessionManager
   alias CodingAgent.SettingsManager
   alias CodingAgent.SessionTest.{PythonRepl, PythonReplDirector}
+  alias CodingAgent.Tools.ExecuteCode.Config, as: ExecuteCodeConfig
 
   alias LemonAi.Types.{
     AssistantMessage,
@@ -191,6 +193,64 @@ defmodule CodingAgent.SessionTest do
 
   defp configure_python_repl(response) do
     start_supervised!({PythonReplDirector, {self(), response}})
+  end
+
+  defp write_execute_code_config(cwd, opts) do
+    config_dir = Path.join(cwd, ".lemon")
+    File.mkdir_p!(config_dir)
+
+    enabled = Keyword.fetch!(opts, :enabled)
+    kernel_mode = Keyword.fetch!(opts, :kernel_mode)
+    timeout_ms = Keyword.get(opts, :timeout_ms, 1_000)
+    max_output_bytes = Keyword.get(opts, :max_output_bytes, 50_000)
+
+    File.write!(Path.join(config_dir, "config.toml"), """
+    [runtime.tools.execute_code]
+    enabled = #{enabled}
+    kernel_mode = "#{kernel_mode}"
+    timeout_ms = #{timeout_ms}
+    max_output_bytes = #{max_output_bytes}
+    """)
+
+    _ = LemonCore.Config.reload(cwd)
+    :ok
+  end
+
+  defp broadcast_config_reload do
+    reload_id = "session-test-#{System.unique_integer([:positive, :monotonic])}"
+
+    LemonCore.Bus.broadcast(
+      "system",
+      LemonCore.Event.new(:config_reloaded, %{reload_id: reload_id})
+    )
+  end
+
+  defp execute_code_tool(session) do
+    session
+    |> Session.get_state()
+    |> Map.fetch!(:tools)
+    |> Enum.find(&(&1.name == "execute_code"))
+  end
+
+  defp per_call_runner(test_pid) do
+    fn _command, _cwd, runner_opts ->
+      send(test_pid, {:per_call_run, runner_opts})
+
+      {:ok,
+       %BashExecutor.Result{
+         output: "per-call",
+         exit_code: 0,
+         cancelled: false,
+         truncated: false
+       }}
+    end
+  end
+
+  defp fake_python(cwd) do
+    path = Path.join(cwd, "python3")
+    File.write!(path, "#!/bin/sh\nexit 0\n")
+    File.chmod!(path, 0o700)
+    path
   end
 
   defp wait_for_streaming_complete(session) do
@@ -721,6 +781,201 @@ defmodule CodingAgent.SessionTest do
 
       assert state.settings_manager.default_thinking_level == :medium
       assert state.settings_manager.compaction_enabled == false
+    end
+  end
+
+  describe "execute_code config reload transitions" do
+    @tag :tmp_dir
+    test "a call before session to per_call reload may persist, then disposal prevents reacquire",
+         %{tmp_dir: cwd} do
+      configure_python_repl(:ok)
+
+      write_execute_code_config(cwd,
+        enabled: true,
+        kernel_mode: "session",
+        timeout_ms: 4_000,
+        max_output_bytes: 40_000
+      )
+
+      python = fake_python(cwd)
+
+      session =
+        start_session(
+          cwd: cwd,
+          python_repl_mod: PythonRepl,
+          python_repl: PythonRepl,
+          python_finder: fn "python3" -> python end,
+          script_runner: per_call_runner(self())
+        )
+
+      stale_tool = execute_code_tool(session)
+
+      before_reload =
+        stale_tool.execute.("call-before", %{"script" => "print('before')"}, nil, nil)
+
+      assert %AgentToolResult{details: %{persistent: true}} = before_reload
+      assert_receive {:python_repl_execute, ^session}
+
+      write_execute_code_config(cwd,
+        enabled: true,
+        kernel_mode: "per_call",
+        timeout_ms: 1_321,
+        max_output_bytes: 654
+      )
+
+      broadcast_config_reload()
+
+      assert_receive {:python_repl_detach_owner, ^session, true}
+
+      assert {:ok,
+              %ExecuteCodeConfig{
+                enabled: true,
+                kernel_mode: "per_call",
+                timeout_ms: 1_321,
+                max_output_bytes: 654
+              }} = Session.execute_code_config(session)
+
+      after_reload =
+        stale_tool.execute.(
+          "call-after",
+          %{"script" => "print('after')", "timeout_ms" => 999_999},
+          nil,
+          nil
+        )
+
+      assert %AgentToolResult{content: [%TextContent{text: "per-call"}], details: details} =
+               after_reload
+
+      refute Map.has_key?(details, :persistent)
+      assert_receive {:per_call_run, runner_opts}
+      assert runner_opts[:timeout] == 1_321
+      assert runner_opts[:max_bytes] == 654
+      refute_receive {:python_repl_execute, ^session}
+    end
+
+    @tag :tmp_dir
+    test "session to disabled disposes ownership and rejects a stale listed tool", %{tmp_dir: cwd} do
+      configure_python_repl(:ok)
+      write_execute_code_config(cwd, enabled: true, kernel_mode: "session")
+
+      session =
+        start_session(
+          cwd: cwd,
+          python_repl_mod: PythonRepl,
+          python_repl: PythonRepl,
+          python_finder: fn "python3" -> "/test/python3" end,
+          script_runner: per_call_runner(self())
+        )
+
+      stale_tool = execute_code_tool(session)
+
+      write_execute_code_config(cwd, enabled: false, kernel_mode: "per_call")
+      broadcast_config_reload()
+
+      assert_receive {:python_repl_detach_owner, ^session, true}
+
+      assert {:ok, %ExecuteCodeConfig{enabled: false, kernel_mode: "per_call"}} =
+               Session.execute_code_config(session)
+
+      assert {:error, message} =
+               stale_tool.execute.("call-disabled", %{"script" => "print('no')"}, nil, nil)
+
+      assert message =~ "execute_code is disabled"
+      refute_receive {:python_repl_execute, ^session}
+      refute_receive {:per_call_run, _runner_opts}
+    end
+
+    @tag :tmp_dir
+    test "detach failure keeps the truthful session config and a later reload retries", %{
+      tmp_dir: cwd
+    } do
+      configure_python_repl({:sequence, [{:error, %{reason: :stop_failed}}, :ok]})
+
+      write_execute_code_config(cwd,
+        enabled: true,
+        kernel_mode: "session",
+        timeout_ms: 4_000
+      )
+
+      session = start_session(cwd: cwd, python_repl_mod: PythonRepl)
+
+      write_execute_code_config(cwd,
+        enabled: true,
+        kernel_mode: "per_call",
+        timeout_ms: 500
+      )
+
+      broadcast_config_reload()
+
+      assert_receive {:python_repl_detach_owner, ^session, true}
+
+      assert {:ok, %ExecuteCodeConfig{kernel_mode: "session", timeout_ms: 4_000}} =
+               Session.execute_code_config(session)
+
+      broadcast_config_reload()
+
+      assert_receive {:python_repl_detach_owner, ^session, true}
+
+      assert {:ok, %ExecuteCodeConfig{kernel_mode: "per_call", timeout_ms: 500}} =
+               Session.execute_code_config(session)
+    end
+
+    @tag :tmp_dir
+    test "an explicitly injected settings manager stays static across reload events", %{
+      tmp_dir: cwd
+    } do
+      configure_python_repl(:ok)
+
+      settings = %SettingsManager{
+        tools: %{
+          execute_code: %{enabled: true, kernel_mode: "session", timeout_ms: 888}
+        }
+      }
+
+      session =
+        start_session(
+          cwd: cwd,
+          settings_manager: settings,
+          python_repl_mod: PythonRepl
+        )
+
+      write_execute_code_config(cwd, enabled: false, kernel_mode: "per_call")
+      broadcast_config_reload()
+
+      assert {:ok, %ExecuteCodeConfig{enabled: true, kernel_mode: "session", timeout_ms: 888}} =
+               Session.execute_code_config(session)
+
+      refute_receive {:python_repl_detach_owner, ^session, true}
+    end
+
+    @tag :tmp_dir
+    test "reload transition state and disposal are scoped independently per session", %{
+      tmp_dir: tmp_dir
+    } do
+      configure_python_repl(:ok)
+      cwd_a = Path.join(tmp_dir, "project-a")
+      cwd_b = Path.join(tmp_dir, "project-b")
+      File.mkdir_p!(cwd_a)
+      File.mkdir_p!(cwd_b)
+
+      write_execute_code_config(cwd_a, enabled: true, kernel_mode: "session")
+      write_execute_code_config(cwd_b, enabled: true, kernel_mode: "session")
+
+      session_a = start_session(cwd: cwd_a, python_repl_mod: PythonRepl)
+      session_b = start_session(cwd: cwd_b, python_repl_mod: PythonRepl)
+
+      write_execute_code_config(cwd_a, enabled: true, kernel_mode: "per_call")
+      broadcast_config_reload()
+
+      assert_receive {:python_repl_detach_owner, ^session_a, true}
+
+      assert {:ok, %ExecuteCodeConfig{kernel_mode: "per_call"}} =
+               Session.execute_code_config(session_a)
+
+      assert {:ok, %ExecuteCodeConfig{kernel_mode: "session"}} =
+               Session.execute_code_config(session_b)
+
+      refute_receive {:python_repl_detach_owner, ^session_b, true}
     end
   end
 
@@ -2131,7 +2386,20 @@ defmodule CodingAgent.SessionTest.PythonReplDirector do
 
   @spec detach_owner(pid()) :: :ok | {:error, map()} | no_return()
   def detach_owner(owner_pid) do
-    %{test_pid: test_pid, response: response} = Agent.get(__MODULE__, & &1)
+    {test_pid, response} =
+      Agent.get_and_update(__MODULE__, fn state ->
+        case state.response do
+          {:sequence, [response | rest]} ->
+            {{state.test_pid, response}, %{state | response: {:sequence, rest}}}
+
+          {:sequence, []} ->
+            {{state.test_pid, :ok}, state}
+
+          response ->
+            {{state.test_pid, response}, state}
+        end
+      end)
+
     send(test_pid, {:python_repl_detach_owner, owner_pid, Process.alive?(owner_pid)})
 
     case response do
@@ -2147,10 +2415,20 @@ defmodule CodingAgent.SessionTest.PythonReplDirector do
         result
     end
   end
+
+  @spec execute(map()) :: {:ok, map()}
+  def execute(%{owner_pid: owner_pid}) do
+    test_pid = Agent.get(__MODULE__, & &1.test_pid)
+    send(test_pid, {:python_repl_execute, owner_pid})
+    {:ok, %{output: "session", state_retained: true, kernel_reused: false}}
+  end
 end
 
 defmodule CodingAgent.SessionTest.PythonRepl do
   @spec detach_owner(pid()) :: :ok | {:error, map()} | no_return()
   def detach_owner(owner_pid),
     do: CodingAgent.SessionTest.PythonReplDirector.detach_owner(owner_pid)
+
+  @spec execute(map()) :: {:ok, map()}
+  def execute(request), do: CodingAgent.SessionTest.PythonReplDirector.execute(request)
 end

@@ -84,6 +84,7 @@ defmodule CodingAgent.Tools.ExecuteCode do
 
   @min_timeout_ms 1_000
   @poll_interval_ms 25
+  @session_config_query_timeout_ms 1_000
 
   @tool_modules %{
     "read" => Tools.Read,
@@ -193,10 +194,10 @@ defmodule CodingAgent.Tools.ExecuteCode do
     * `on_update` - Streaming callback (unused: script output is not streamed)
     * `cwd` - Working directory the script runs in
     * `opts` - Tool options (`:settings_manager`, `:tool_policy`,
-      `:approval_context`, `:session_id`, `:session_pid`, `:agent_id`, plus
-      the `@doc false` test seams `:python_finder`, `:script_runner`,
-      `:execute_code_tool_overrides`, `:python_repl`, `:rpc_server`,
-      `:python_repl_registry`, `:clock`, and `:poll`)
+      `:approval_context`, `:session_id`, `:session_pid`, `:session_module`,
+      `:agent_id`, plus the `@doc false` test seams `:python_finder`,
+      `:script_runner`, `:execute_code_tool_overrides`, `:python_repl`,
+      `:rpc_server`, `:python_repl_registry`, `:clock`, and `:poll`)
   """
   @spec execute(
           tool_call_id :: String.t(),
@@ -210,7 +211,7 @@ defmodule CodingAgent.Tools.ExecuteCode do
     if signal && AbortSignal.aborted?(signal) do
       %AgentToolResult{content: [%TextContent{text: "Script cancelled."}]}
     else
-      config = Config.load(cwd, Keyword.get(opts, :settings_manager))
+      config = invocation_config(cwd, opts)
 
       with :ok <- check_enabled(config),
            {:ok, script} <- fetch_script(params),
@@ -223,6 +224,53 @@ defmodule CodingAgent.Tools.ExecuteCode do
       end
     end
   end
+
+  defp invocation_config(cwd, opts) do
+    configured = Config.load(cwd, Keyword.get(opts, :settings_manager))
+
+    case Keyword.get(opts, :session_pid) do
+      session_pid when is_pid(session_pid) ->
+        case query_session_config(session_pid, opts) do
+          {:ok, %Config{} = effective} ->
+            effective
+
+          _unavailable ->
+            # A dead, wedged, or incompatible owner cannot authorize retaining
+            # an interpreter. Preserve the closure's other validated settings
+            # but force the fresh-process path.
+            %{configured | kernel_mode: "per_call"}
+        end
+
+      _no_session ->
+        configured
+    end
+  end
+
+  defp query_session_config(session_pid, opts) do
+    session_module = Keyword.get(opts, :session_module, CodingAgent.Session)
+
+    timeout_ms =
+      opts
+      |> Keyword.get(:session_config_query_timeout_ms, @session_config_query_timeout_ms)
+      |> bounded_session_config_timeout()
+
+    if is_atom(session_module) and Code.ensure_loaded?(session_module) and
+         function_exported?(session_module, :execute_code_config, 2) do
+      session_module.execute_code_config(session_pid, timeout_ms)
+    else
+      {:error, :session_unavailable}
+    end
+  rescue
+    _error -> {:error, :session_unavailable}
+  catch
+    :exit, _reason -> {:error, :session_unavailable}
+  end
+
+  defp bounded_session_config_timeout(timeout_ms)
+       when is_integer(timeout_ms) and timeout_ms > 0,
+       do: min(timeout_ms, @session_config_query_timeout_ms)
+
+  defp bounded_session_config_timeout(_timeout_ms), do: @session_config_query_timeout_ms
 
   defp check_enabled(%Config{enabled: true}), do: :ok
 

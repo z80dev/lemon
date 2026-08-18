@@ -3,10 +3,16 @@ defmodule CodingAgent.Tools.ExecuteCodePersistentTest do
 
   alias CodingAgent.BashExecutor
   alias CodingAgent.Tools.ExecuteCode
+  alias CodingAgent.Tools.ExecuteCode.Config
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
-  alias CodingAgent.Tools.ExecuteCodePersistentTest.{FakePythonRepl, FakeRpcServer}
+
+  alias CodingAgent.Tools.ExecuteCodePersistentTest.{
+    FakePythonRepl,
+    FakeRpcServer,
+    FakeSession
+  }
 
   @state CodingAgent.Tools.ExecuteCodePersistentTest.State
   @moduletag :tmp_dir
@@ -19,7 +25,20 @@ defmodule CodingAgent.Tools.ExecuteCodePersistentTest do
       {:ok, _state} = Agent.start_link(fn -> initial_state(test_pid) end, name: @state)
 
       on_exit(fn ->
-        if pid = Process.whereis(@state), do: Agent.stop(pid)
+        case Process.whereis(@state) do
+          nil ->
+            :ok
+
+          pid ->
+            monitor = Process.monitor(pid)
+            if Process.alive?(pid), do: Process.exit(pid, :shutdown)
+
+            receive do
+              {:DOWN, ^monitor, :process, ^pid, _reason} -> :ok
+            after
+              100 -> Process.demonitor(monitor, [:flush])
+            end
+        end
       end)
 
       %{cwd: cwd}
@@ -113,6 +132,7 @@ defmodule CodingAgent.Tools.ExecuteCodePersistentTest do
           settings_manager: settings(),
           session_id: "session-1",
           session_pid: self(),
+          session_module: FakeSession,
           agent_id: "agent-1",
           python_repl: FakePythonRepl,
           rpc_server: FakeRpcServer,
@@ -147,6 +167,7 @@ defmodule CodingAgent.Tools.ExecuteCodePersistentTest do
           settings_manager: settings(),
           session_id: "session-1",
           session_pid: self(),
+          session_module: FakeSession,
           agent_id: "agent-1",
           python_repl: FakePythonRepl,
           rpc_server: FakeRpcServer,
@@ -305,12 +326,83 @@ defmodule CodingAgent.Tools.ExecuteCodePersistentTest do
     assert result.details.rpc_tools == ["read", "webfetch"]
   end
 
+  test "a stale session closure uses the owner's current per-call config and bounds", %{cwd: cwd} do
+    authoritative =
+      Config.load(
+        cwd,
+        settings(%{
+          kernel_mode: "per_call",
+          timeout_ms: 1_321,
+          max_output_bytes: 654
+        })
+      )
+
+    result =
+      execute(
+        cwd,
+        %{"script" => "print('fresh')", "timeout_ms" => 999_999},
+        fallback_opts() ++
+          [
+            authoritative_execute_code_config: {:ok, authoritative},
+            session_config_query_timeout_ms: 50_000
+          ]
+      )
+
+    assert text(result) == "fallback"
+    refute Map.has_key?(result.details, :persistent)
+    assert_receive {:session_config_query, _session_pid, 1_000}
+    assert_receive {:fallback_runner, _command}
+    assert_receive {:fallback_runner_opts, runner_opts}
+    assert runner_opts[:timeout] == 1_321
+    assert runner_opts[:max_bytes] == 654
+    refute_receive {:execute, _request}
+  end
+
+  test "the owner's disabled config rejects a stale listed session tool", %{cwd: cwd} do
+    authoritative =
+      Config.load(cwd, settings(%{enabled: false, kernel_mode: "per_call"}))
+
+    assert {:error, message} =
+             execute(
+               cwd,
+               %{"script" => "print('blocked')"},
+               authoritative_execute_code_config: {:ok, authoritative}
+             )
+
+    assert message =~ "execute_code is disabled"
+    assert_receive {:session_config_query, _session_pid, 1_000}
+    refute_receive {:execute, _request}
+    refute_receive {:fallback_runner, _command}
+  end
+
+  test "a dead session owner degrades to per-call without acquiring a kernel", %{cwd: cwd} do
+    dead_session = spawn(fn -> :ok end)
+    monitor = Process.monitor(dead_session)
+    assert_receive {:DOWN, ^monitor, :process, ^dead_session, _reason}
+
+    result =
+      execute(
+        cwd,
+        %{"script" => "print('fresh')"},
+        fallback_opts() ++
+          [session_pid: dead_session, session_module: CodingAgent.Session]
+      )
+
+    assert text(result) == "fallback"
+    refute Map.has_key?(result.details, :persistent)
+    assert_receive {:fallback_runner, _command}
+    refute_receive {:execute, _request}
+  end
+
   defp execute(cwd, params, extra \\ []) do
+    {authoritative, extra} = Keyword.pop(extra, :authoritative_execute_code_config)
+
     opts =
       [
         settings_manager: settings(),
         session_id: "session-1",
         session_pid: self(),
+        session_module: FakeSession,
         agent_id: "agent-1",
         python_repl: FakePythonRepl,
         rpc_server: FakeRpcServer,
@@ -318,6 +410,9 @@ defmodule CodingAgent.Tools.ExecuteCodePersistentTest do
         clock: fn -> System.monotonic_time(:millisecond) end
       ]
       |> Keyword.merge(extra)
+
+    configured = Config.load(cwd, Keyword.fetch!(opts, :settings_manager))
+    set_query_response(authoritative || {:ok, configured})
 
     ExecuteCode.execute("call-1", params, nil, nil, cwd, opts)
   end
@@ -327,9 +422,10 @@ defmodule CodingAgent.Tools.ExecuteCodePersistentTest do
       settings_manager: settings(),
       python_repl: FakePythonRepl,
       rpc_server: FakeRpcServer,
-      script_runner: fn command, _cwd, _opts ->
+      script_runner: fn command, _cwd, runner_opts ->
         test_pid = Agent.get(@state, & &1.test_pid)
         send(test_pid, {:fallback_runner, command})
+        send(test_pid, {:fallback_runner_opts, runner_opts})
 
         {:ok,
          %BashExecutor.Result{
@@ -350,10 +446,14 @@ defmodule CodingAgent.Tools.ExecuteCodePersistentTest do
   defp set_reset(reset), do: Agent.update(@state, &Map.put(&1, :reset, reset))
   defp set_stats(stats), do: Agent.update(@state, &Map.put(&1, :stats, stats))
 
+  defp set_query_response(response),
+    do: Agent.update(@state, &Map.put(&1, :query_response, response))
+
   defp initial_state(test_pid) do
     %{
       test_pid: test_pid,
       response: {:ok, %{output: "ok", state_retained: true, kernel_reused: false}},
+      query_response: {:ok, Config.load("/tmp", settings())},
       reset: {:ok, %{reset_performed: true}},
       stats: %{
         calls: 0,
@@ -399,6 +499,16 @@ defmodule CodingAgent.Tools.ExecuteCodePersistentTest do
         :block -> Process.sleep(:infinity)
         response -> response
       end
+    end
+  end
+
+  defmodule FakeSession do
+    @state CodingAgent.Tools.ExecuteCodePersistentTest.State
+
+    def execute_code_config(session_pid, timeout_ms) do
+      state = Agent.get(@state, & &1)
+      send(state.test_pid, {:session_config_query, session_pid, timeout_ms})
+      state.query_response
     end
   end
 

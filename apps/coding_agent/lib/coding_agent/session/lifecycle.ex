@@ -19,6 +19,7 @@ defmodule CodingAgent.Session.Lifecycle do
 
   alias CodingAgent.SessionManager
   alias CodingAgent.Workspace
+  alias CodingAgent.Tools.ExecuteCode.Config, as: ExecuteCodeConfig
 
   @spec initialize(keyword(), pid()) ::
           {:ok, Session.t(), Extensions.extension_status_report() | nil}
@@ -49,8 +50,16 @@ defmodule CodingAgent.Session.Lifecycle do
         session_manager.header.parent_session
       )
 
+    injected_settings_manager = Keyword.get(opts, :settings_manager)
+
     settings_manager =
-      Keyword.get(opts, :settings_manager) || CodingAgent.SettingsManager.load(cwd)
+      injected_settings_manager || CodingAgent.SettingsManager.load(cwd)
+
+    # The session owns this full validated snapshot because stale tool closures
+    # must also pick up changed bounds and helper policy, not only the mode.
+    # An injected settings manager is immutable for this session.
+    settings_manager_static = not is_nil(injected_settings_manager)
+    execute_code_effective = effective_execute_code(cwd, settings_manager)
 
     run_id = Keyword.get(opts, :run_id)
     session_key = Keyword.get(opts, :session_key, session_manager.header.id)
@@ -221,6 +230,8 @@ defmodule CodingAgent.Session.Lifecycle do
       register_session: register_session,
       session_registry: session_registry,
       python_repl_mod: python_repl_mod,
+      execute_code_effective: execute_code_effective,
+      settings_manager_static: settings_manager_static,
       convert_to_llm: convert_to_llm,
       transform_context: transform_context,
       tool_policy: tool_policy,
@@ -414,6 +425,87 @@ defmodule CodingAgent.Session.Lifecycle do
         {:error, :busy}
     end
   end
+
+  # The session adopts a non-persistent config only after owner detachment has
+  # succeeded. On failure the old snapshot remains authoritative and a later
+  # reload retries the same transition.
+  @doc false
+  @spec apply_execute_code_config_transition(Session.t(), pid()) :: Session.t()
+  def apply_execute_code_config_transition(state, session_pid) when is_pid(session_pid) do
+    case reload_execute_code_effective(state) do
+      {:ok, new_effective} ->
+        if session_kernels_retained?(state.execute_code_effective) and
+             not session_kernels_retained?(new_effective) do
+          detach_owner_for_transition(state, new_effective, session_pid)
+        else
+          %{state | execute_code_effective: new_effective}
+        end
+
+      {:error, reason} ->
+        # A settings source that fails to load must not lie about the
+        # session's effective state; the next reload event retries.
+        Logger.warning(
+          "Failed to recompute execute_code config after config reload: " <>
+            "#{inspect(reason)}; keeping previous effective state"
+        )
+
+        state
+    end
+  end
+
+  defp session_kernels_retained?(%ExecuteCodeConfig{
+         enabled: true,
+         kernel_mode: "session"
+       }),
+       do: true
+
+  defp session_kernels_retained?(_effective), do: false
+
+  defp detach_owner_for_transition(state, new_effective, session_pid) do
+    case safe_detach_owner(state.python_repl_mod, session_pid) do
+      :ok ->
+        %{state | execute_code_effective: new_effective}
+
+      {:error, :registry_unavailable} ->
+        # The REPL supervisor is :one_for_all over the worker supervisor and
+        # registry, so a down registry means owned workers are already being
+        # disposed by supervision; adopting the new state lies about nothing.
+        Logger.warning(
+          "Python REPL registry unavailable during execute_code config transition; " <>
+            "relying on subsystem supervision to dispose owned kernels"
+        )
+
+        %{state | execute_code_effective: new_effective}
+
+      {:error, reason} ->
+        # The detach failed (for example :stop_failed), so kernels are still
+        # retained under this owner and the session is still effectively in
+        # session mode. Keep the previous effective state so the next config
+        # reload retries the transition instead of lying about identity.
+        Logger.warning(
+          "Failed to detach Python REPL kernels during execute_code config transition: " <>
+            "#{inspect(reason)}; keeping previous effective state for retry"
+        )
+
+        state
+    end
+  end
+
+  defp reload_execute_code_effective(%{
+         settings_manager_static: true,
+         execute_code_effective: effective
+       }),
+       do: {:ok, effective}
+
+  defp reload_execute_code_effective(state) do
+    settings_manager = CodingAgent.SettingsManager.load(state.cwd)
+    {:ok, effective_execute_code(state.cwd, settings_manager)}
+  rescue
+    error -> {:error, error}
+  end
+
+  defp effective_execute_code(cwd, settings_manager),
+    do: ExecuteCodeConfig.load(cwd, settings_manager)
 
   @doc false
   @spec detach_owner_on_terminate(module() | nil, pid(), non_neg_integer()) :: :ok
