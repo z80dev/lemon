@@ -18,9 +18,17 @@ defmodule LemonCli.CLITest do
 
     original_home = System.get_env("HOME")
     original_master_key = System.get_env("LEMON_SECRETS_MASTER_KEY")
+    original_anthropic_api_key = System.get_env("ANTHROPIC_API_KEY")
+    original_openai_api_key = System.get_env("OPENAI_API_KEY")
+    original_default_provider = System.get_env("LEMON_DEFAULT_PROVIDER")
+    original_default_model = System.get_env("LEMON_DEFAULT_MODEL")
 
     System.put_env("HOME", home)
     System.put_env("LEMON_SECRETS_MASTER_KEY", :crypto.strong_rand_bytes(32) |> Base.encode64())
+    System.delete_env("ANTHROPIC_API_KEY")
+    System.delete_env("OPENAI_API_KEY")
+    System.delete_env("LEMON_DEFAULT_PROVIDER")
+    System.delete_env("LEMON_DEFAULT_MODEL")
     clear_secrets_table()
 
     on_exit(fn ->
@@ -29,6 +37,11 @@ defmodule LemonCli.CLITest do
       if original_master_key,
         do: System.put_env("LEMON_SECRETS_MASTER_KEY", original_master_key),
         else: System.delete_env("LEMON_SECRETS_MASTER_KEY")
+
+      restore_env("ANTHROPIC_API_KEY", original_anthropic_api_key)
+      restore_env("OPENAI_API_KEY", original_openai_api_key)
+      restore_env("LEMON_DEFAULT_PROVIDER", original_default_provider)
+      restore_env("LEMON_DEFAULT_MODEL", original_default_model)
 
       clear_secrets_table()
       File.rm_rf!(tmp_dir)
@@ -140,6 +153,57 @@ defmodule LemonCli.CLITest do
     assert error =~ "Unsupported arguments: \"show\" \"unexpected\""
     assert error =~ "Usage: lemon config [validate|show] [options]"
   end
+
+  describe "setup_required?/0" do
+    test "requires setup when no configuration exists" do
+      assert CLI.setup_required?()
+    end
+
+    test "fails closed when configuration is malformed" do
+      config_path = global_config_path()
+      File.mkdir_p!(Path.dirname(config_path))
+      File.write!(config_path, "[defaults\nprovider = \"openai\"\n")
+      assert CLI.setup_required?()
+    end
+
+    test "requires setup when the default provider credential is missing" do
+      write_openai_config("missing_setup_required_credential")
+
+      assert CLI.setup_required?()
+    end
+
+    test "does not require setup with a resolved default provider credential" do
+      secret_name = "ready_setup_required_credential"
+      write_openai_config(secret_name)
+      assert {:ok, _metadata} = Secrets.set(secret_name, "test-provider-credential")
+
+      refute CLI.setup_required?()
+    end
+  end
+
+  defp global_config_path do
+    Path.join([System.fetch_env!("HOME"), ".lemon", "config.toml"])
+  end
+
+  defp write_openai_config(secret_name) do
+    config_path = global_config_path()
+    File.mkdir_p!(Path.dirname(config_path))
+
+    File.write!(
+      config_path,
+      """
+      [defaults]
+      provider = "openai"
+      model = "openai:gpt-5"
+
+      [providers.openai]
+      api_key_secret = "#{secret_name}"
+      """
+    )
+  end
+
+  defp restore_env(name, nil), do: System.delete_env(name)
+  defp restore_env(name, value), do: System.put_env(name, value)
 
   defp clear_secrets_table do
     Secrets.table()

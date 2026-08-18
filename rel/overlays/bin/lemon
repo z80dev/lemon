@@ -181,6 +181,46 @@ run_runtime_cli() {
   exec "$RELEASE_BIN" eval 'LemonCli.CLI.main(System.argv())' "$@"
 }
 
+# ── The first interactive TUI launch must not start an unconfigured daemon.
+# This calls the public Mix-free predicate directly in the release, rather
+# than parsing configuration or secrets in the shell. ──
+setup_required() {
+  if [ "$PROFILE" = "sim_broadcast_platform" ]; then
+    return 1
+  fi
+
+  "$RELEASE_BIN" eval 'if LemonCli.CLI.setup_required?(), do: System.halt(0), else: System.halt(1)'
+}
+
+complete_interactive_setup() {
+  if ! setup_required; then
+    return 0
+  fi
+
+  if ! exec 3</dev/tty; then
+    error "Setup is required, but the terminal could not be opened."
+    error "Run \`lemon setup\` to finish configuration."
+    return 1
+  fi
+
+  info "Setup is required; launching lemon setup"
+
+  # Invoke the release CLI directly so setup cannot recurse through this
+  # launcher's TUI path. Its prompt reads the controlling terminal even when
+  # this shim's stdin was redirected by a caller.
+  if "$RELEASE_BIN" eval 'LemonCli.CLI.main(["setup"])' <&3; then
+    :
+  fi
+
+  exec 3<&-
+
+  if setup_required; then
+    error "Setup is incomplete."
+    error "Run \`lemon setup\` to finish configuration."
+    return 1
+  fi
+}
+
 # ── A 200 from /healthz is not proof that *lemon* answered it: any service
 # that happens to hold the port would satisfy `curl -f`, and the TUI would
 # then be pointed at a stranger's /ws. Require the documented body,
@@ -248,6 +288,10 @@ case "$COMMAND" in
       error "TUI not installed at $TUI_BIN"
       error "this install may predate the TUI artifact, or was installed with LEMON_NO_TUI=1;"
       error "re-run the installer, or use 'lemon --help' for daemon commands"
+      exit 1
+    fi
+
+    if [ -t 0 ] && [ -t 1 ] && ! complete_interactive_setup; then
       exit 1
     fi
 

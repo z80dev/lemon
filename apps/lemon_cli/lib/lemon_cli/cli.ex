@@ -24,13 +24,14 @@ defmodule LemonCli.CLI do
   gateway setup adapters.
   """
 
-  alias LemonCli.Onboarding.Runner
-  alias LemonCli.Setup.{Gateway, Provider, Wizard}
   alias LemonCore.Config.Modular
-  alias LemonCore.Doctor
-  alias LemonCore.Doctor.{Check, Report, SupportBundle}
+  alias LemonCore.Config.Providers, as: ProviderConfig
   alias LemonCore.Secrets
   alias LemonCore.Secrets.MasterKey
+  alias LemonCli.Onboarding.Runner
+  alias LemonCli.Setup.{Gateway, Provider, Wizard}
+  alias LemonCore.Doctor
+  alias LemonCore.Doctor.{Check, Report, SupportBundle}
 
   defmodule Error do
     @moduledoc """
@@ -94,6 +95,31 @@ defmodule LemonCli.CLI do
     "MARKET_INTEL_OPENAI_KEY",
     "MARKET_INTEL_ANTHROPIC_KEY"
   ]
+
+  @doc """
+  Returns whether interactive setup is still required.
+
+  Readiness requires a valid, readable resolved configuration with a default
+  provider and model, plus a usable credential for that provider. Configuration
+  and secret resolution failures intentionally fail closed. This is Mix-free
+  so packaged launchers can call it before starting the daemon.
+  """
+  @spec setup_required?() :: boolean()
+  def setup_required? do
+    with :ok <- ensure_lemon_core_started(),
+         :ok <- config_sources_readable?(),
+         {:ok, config} <- resolved_config(),
+         true <- default_model_configured?(config),
+         true <- default_provider_credential_ready?(config) do
+      false
+    else
+      _ -> true
+    end
+  rescue
+    _ -> true
+  catch
+    _, _ -> true
+  end
 
   @doc """
   Halting entry point. Exits `0` on success, `1` on failure, `2` on usage
@@ -911,6 +937,82 @@ defmodule LemonCli.CLI do
       end
     end)
   end
+
+  defp ensure_lemon_core_started do
+    case Application.ensure_all_started(:lemon_core) do
+      {:ok, _started} -> :ok
+      {:error, _reason} -> :error
+    end
+  end
+
+  defp config_sources_readable? do
+    File.cwd!()
+    |> then(fn cwd ->
+      [Modular.global_path(), Modular.project_path(cwd)]
+      |> Enum.uniq()
+      |> Enum.all?(&config_source_readable?/1)
+    end)
+    |> case do
+      true -> :ok
+      false -> :error
+    end
+  end
+
+  defp config_source_readable?(path) do
+    case File.read(path) do
+      {:ok, contents} -> match?({:ok, settings} when is_map(settings), Toml.decode(contents))
+      {:error, :enoent} -> true
+      {:error, _reason} -> false
+    end
+  end
+
+  defp resolved_config do
+    {:ok, Modular.load()}
+  rescue
+    _ -> :error
+  catch
+    _, _ -> :error
+  end
+
+  defp default_model_configured?(%Modular{agent: agent}) do
+    present?(agent.default_provider) and present?(agent.default_model)
+  end
+
+  defp default_model_configured?(_config), do: false
+
+  defp default_provider_credential_ready?(%Modular{agent: agent, providers: providers}) do
+    provider = agent.default_provider
+
+    credential_value?(ProviderConfig.get_api_key(providers, provider)) or
+      oauth_secret_credential_ready?(ProviderConfig.get_provider(providers, provider))
+  end
+
+  defp default_provider_credential_ready?(_config), do: false
+
+  defp oauth_secret_credential_ready?(provider_config) when is_map(provider_config) do
+    case Map.get(provider_config, :oauth_secret) do
+      secret_name when is_binary(secret_name) and secret_name != "" ->
+        case Secrets.resolve(secret_name, env_fallback: true) do
+          {:ok, value, _source} -> credential_value?(value)
+          {:error, _reason} -> false
+        end
+
+      _ ->
+        false
+    end
+  rescue
+    _ -> false
+  catch
+    _, _ -> false
+  end
+
+  defp oauth_secret_credential_ready?(_provider_config), do: false
+
+  defp credential_value?(value) when is_binary(value), do: byte_size(value) > 0
+  defp credential_value?(_value), do: false
+
+  defp present?(value) when is_binary(value), do: byte_size(value) > 0
+  defp present?(_value), do: false
 
   # ──────────────────────────────────────────────────────────────────────────
   # Usage
