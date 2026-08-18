@@ -29,6 +29,8 @@ GLIBC_MIN_MINOR=39
 FORCE=0
 VERIFY=0
 MODIFY_PATH=0
+SKIP_SETUP=0
+
 
 BASE_URL="${LEMON_INSTALL_BASE_URL:-$DEFAULT_BASE_URL}"
 CHANNEL="${LEMON_CHANNEL:-stable}"
@@ -41,7 +43,7 @@ Lemon installer
 
 Usage:
   curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh
-  sh install.sh [--force] [--verify] [--modify-path] [--help]
+  sh install.sh [--force] [--verify] [--modify-path] [--skip-setup] [--help]
 
 Options:
   --force         Reinstall even if the target version is already present.
@@ -49,6 +51,9 @@ Options:
                   then stop it. Fails the install if the smoke check fails.
   --modify-path   Append the PATH export to your shell rc file. Without it the
                   installer only prints the line for you to add.
+  --skip-setup    Do not start the interactive provider setup wizard after
+                  installing. Run \$HOME/.lemon/bin/lemon setup later to
+                  configure Lemon.
   --help          Show this help.
 
 Prerequisites:
@@ -96,7 +101,7 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --force) FORCE=1 ;;
     --verify) VERIFY=1 ;;
-    --modify-path) MODIFY_PATH=1 ;;
+    --skip-setup) SKIP_SETUP=1 ;;
     -h|--help)
       usage
       exit 0
@@ -526,10 +531,28 @@ verify_boot() {
   LEMON_CONTROL_PLANE_PORT="$control_port" "$BIN_DIR/lemon" stop >/dev/null 2>&1 || true
 
   if [ "$healthy" != "1" ]; then
+
     die "the runtime started but /healthz never became ready on port $control_port."
   fi
 
   info "ok runtime booted and answered /healthz"
+}
+setup_handoff() {
+  if [ "$PROFILE" = "sim_broadcast_platform" ]; then
+    info "Setup is not available for the sim profile."
+  elif [ "$SKIP_SETUP" = "1" ]; then
+    info "Setup skipped. Run this when you are ready to configure Lemon:"
+    info "    $BIN_DIR/lemon setup"
+  elif (exec </dev/tty) 2>/dev/null; then
+    info ""
+    info "Starting interactive setup..."
+    if ! "$BIN_DIR/lemon" setup </dev/tty; then
+      die "Lemon setup did not complete. The runtime remains installed at $TARGET_DIR. Re-run: $BIN_DIR/lemon setup"
+    fi
+  else
+    info "No interactive terminal is available. Run this when you are ready to configure Lemon:"
+    info "    $BIN_DIR/lemon setup"
+  fi
 }
 
 # ----------------------------------------------------------------- install ---
@@ -599,6 +622,7 @@ if [ -d "$TARGET_DIR" ] && [ "$FORCE" != "1" ]; then
   fi
 
   path_hint
+  setup_handoff
   exit 0
 fi
 
@@ -745,6 +769,8 @@ if [ "$VERIFY" = "1" ]; then
 fi
 
 path_hint
+setup_handoff
+
 
 info ""
 info "Next steps:"

@@ -1,6 +1,6 @@
 # Install Lemon
 
-Last reviewed: 2026-08-16
+Last reviewed: 2026-08-18
 
 This page is the short install landing page for the public docs site. For the
 full setup walkthrough, including provider details and Telegram configuration,
@@ -17,6 +17,25 @@ verifies its SHA-256 against the release `manifest.json`, and installs it under
 `~/.lemon`. It never calls the GitHub API, so it is not subject to API rate
 limits.
 
+For `min` and `full` profiles, the installer starts `lemon setup` after it has
+committed the runtime and completed its version check (and `--verify`, when
+requested). The wizard reads from `/dev/tty`, so the one-line `curl | sh`
+command remains interactive. If no terminal is available, the install succeeds
+without blocking and prints the absolute command to run later:
+
+```bash
+$HOME/.lemon/bin/lemon setup
+```
+
+To install without starting the wizard, including in a terminal, pass
+`--skip-setup`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh -s -- --skip-setup
+```
+
+The `sim` profile has no provider setup wizard.
+
 Prerequisites:
 
 - `curl`, `tar`, and `python3`. `python3` reads the release manifest and
@@ -28,7 +47,8 @@ Prerequisites:
 
 Flags: `--force` reinstalls a version that is already present, `--verify` boots
 the installed runtime on ephemeral ports and polls `/healthz` before finishing,
-`--modify-path` appends the PATH line to your shell rc file, and `--help`
+`--modify-path` appends the PATH line to your shell rc file, `--skip-setup`
+leaves provider configuration for `$HOME/.lemon/bin/lemon setup`, and `--help`
 prints usage.
 
 ### Environment knobs
