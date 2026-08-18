@@ -2,21 +2,23 @@ defmodule LemonCli.Setup.GatewayTest do
   use ExUnit.Case, async: true
 
   alias LemonCli.Setup.Gateway
-  alias LemonCli.Setup.Gateway.Telegram
+  alias LemonCli.Setup.Gateway.{Discord, Telegram}
 
   # ──────────────────────────────────────────────────────────────────────────
   # Test helpers
   # ──────────────────────────────────────────────────────────────────────────
 
-  defp capture_io do
+  defp capture_io(overrides \\ %{}) do
     agent_ref = start_supervised!({Agent, fn -> [] end})
 
-    io = %{
-      info: fn msg -> Agent.update(agent_ref, &[{:info, msg} | &1]) end,
-      error: fn msg -> Agent.update(agent_ref, &[{:error, msg} | &1]) end,
-      prompt: fn _msg -> "" end,
-      secret: fn _msg -> "" end
-    }
+    io =
+      %{
+        info: fn msg -> Agent.update(agent_ref, &[{:info, msg} | &1]) end,
+        error: fn msg -> Agent.update(agent_ref, &[{:error, msg} | &1]) end,
+        prompt: fn _msg -> "" end,
+        secret: fn _msg -> "" end
+      }
+      |> Map.merge(overrides)
 
     {io, fn -> Agent.get(agent_ref, &Enum.reverse/1) end}
   end
@@ -50,6 +52,15 @@ defmodule LemonCli.Setup.GatewayTest do
     test "Telegram.name/0 is \"telegram\"" do
       assert Telegram.name() == "telegram"
     end
+
+    test "Discord implements all required callbacks" do
+      Code.ensure_loaded!(Discord)
+
+      assert function_exported?(Discord, :name, 0)
+      assert function_exported?(Discord, :description, 0)
+      assert function_exported?(Discord, :run, 2)
+      assert Discord.name() == "discord"
+    end
   end
 
   # ──────────────────────────────────────────────────────────────────────────
@@ -64,6 +75,7 @@ defmodule LemonCli.Setup.GatewayTest do
 
       assert result == :ok
       assert Enum.any?(messages(log), &String.contains?(&1, "telegram"))
+      assert Enum.any?(messages(log), &String.contains?(&1, "discord"))
       assert Enum.any?(messages(log), &String.contains?(&1, "gateway"))
     end
   end
@@ -87,6 +99,110 @@ defmodule LemonCli.Setup.GatewayTest do
 
       log = get_log.()
       assert Enum.any?(messages(log), &String.contains?(&1, "telegram"))
+      assert Enum.any?(messages(log), &String.contains?(&1, "discord"))
+    end
+  end
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Discord adapter: non-interactive setup and smoke failures
+  # ──────────────────────────────────────────────────────────────────────────
+
+  describe "Discord.run/2" do
+    test "configures from non-interactive flags without persisting or printing the token" do
+      token = "1234567890.abcde.12345"
+      config_path = Path.join(System.tmp_dir!(), "lemon-discord-#{System.unique_integer([:positive])}.toml")
+      on_exit(fn -> File.rm(config_path) end)
+
+      {io, get_log} =
+        capture_io(%{
+          config_path: config_path,
+          secrets_status: fn -> %{configured: true} end,
+          secret_get: fn _key -> {:error, :not_found} end,
+          secret_set: fn key, value -> send(self(), {:secret_set, key, value}); {:ok, :stored} end,
+          http_get: fn ^token -> {:ok, "lemon-bot"} end
+        })
+
+      assert :ok =
+               Discord.run(
+                 [
+                   "--non-interactive",
+                   "--token",
+                   token,
+                   "--default-channel-id",
+                   "123456789012345678",
+                   "--allowed-channel-id",
+                   "234567890123456789",
+                   "--skip-smoke"
+                 ],
+                 io
+               )
+
+      assert_receive {:secret_set, "discord_bot_token", ^token}
+
+      config = File.read!(config_path)
+      assert config =~ "enable_discord = true"
+      assert config =~ ~s(bot_token_secret = "discord_bot_token")
+      assert config =~ "default_channel_id = 123456789012345678"
+      assert config =~ "allowed_channel_ids = [123456789012345678, 234567890123456789]"
+      assert config =~ "deny_unbound_channels = true"
+      refute config =~ token
+      refute Enum.any?(messages(get_log.()), &String.contains?(&1, token))
+    end
+
+    test "reports an actionable unauthorized token without exposing it" do
+      token = "1234567890.abcde.12345"
+
+      {io, get_log} =
+        capture_io(%{
+          config_path: Path.join(System.tmp_dir!(), "unused-discord-config.toml"),
+          secrets_status: fn -> %{configured: true} end,
+          secret_set: fn _key, _value -> {:ok, :stored} end,
+          http_get: fn ^token -> {:error, :unauthorized} end
+        })
+
+      assert {:error, :unauthorized} =
+               Discord.run(
+                 [
+                   "--non-interactive",
+                   "--token",
+                   token,
+                   "--default-channel-id",
+                   "123456789012345678"
+                 ],
+                 io
+               )
+
+      errors = error_messages(get_log.())
+      assert Enum.any?(errors, &String.contains?(&1, "401"))
+      refute Enum.any?(messages(get_log.()), &String.contains?(&1, token))
+    end
+
+    test "reports an actionable Discord transport failure without exposing the token" do
+      token = "1234567890.abcde.12345"
+
+      {io, get_log} =
+        capture_io(%{
+          config_path: Path.join(System.tmp_dir!(), "unused-discord-config.toml"),
+          secrets_status: fn -> %{configured: true} end,
+          secret_set: fn _key, _value -> {:ok, :stored} end,
+          http_get: fn ^token -> {:error, :econnrefused} end
+        })
+
+      assert {:error, :discord_unreachable} =
+               Discord.run(
+                 [
+                   "--non-interactive",
+                   "--token",
+                   token,
+                   "--default-channel-id",
+                   "123456789012345678"
+                 ],
+                 io
+               )
+
+      errors = error_messages(get_log.())
+      assert Enum.any?(errors, &String.contains?(&1, "Could not reach Discord API"))
+      refute Enum.any?(messages(get_log.()), &String.contains?(&1, token))
     end
   end
 

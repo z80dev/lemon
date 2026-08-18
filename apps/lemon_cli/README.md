@@ -8,8 +8,8 @@ above the core foundation:
 - Hermes import audit and migration through `mix lemon.hermes.*`
 
 The app depends on `lemon_core` for config, secrets, store, and shared runtime
-primitives, and on `ai` for provider model and OAuth integration. It does not
-start a supervision tree; tasks run the flows on demand.
+primitives, and on `lemon_ai` for provider model and OAuth integration. It does
+not start a supervision tree; tasks run the flows on demand.
 
 ## Onboarding Providers
 
@@ -30,6 +30,37 @@ mix lemon.setup
 mix lemon.hermes.audit
 mix lemon.hermes.migrate --dry-run
 ```
+
+## Gateway Setup
+
+`mix lemon.setup gateway` configures supported messaging gateways. The picker
+offers both adapters:
+
+- `telegram` stores a Telegram bot token in encrypted secrets and verifies it
+  with the Telegram Bot API.
+- `discord` stores a Discord bot token in encrypted secrets, enables
+  `[gateway.discord]`, and restricts inbound handling to the configured default
+  channel (and any additional explicitly allowed channels).
+
+```bash
+# Choose Telegram or Discord interactively.
+mix lemon.setup gateway
+
+# Run a specific adapter.
+mix lemon.setup gateway telegram
+mix lemon.setup gateway discord
+
+# Supply Discord setup inputs without prompts.
+mix lemon.setup gateway discord --non-interactive \
+  --token "$DISCORD_BOT_TOKEN" \
+  --default-channel-id 123456789012345678 \
+  --allowed-channel-id 234567890123456789
+```
+
+The Discord token is persisted as `discord_bot_token` by default and only its
+secret key is written to TOML. Pass `--secret-key <name>` to use another key,
+`--allowed-guild-id <id>` to restrict by guild as well, or `--skip-smoke` when
+the Discord API identity check cannot be reached.
 
 Guided provider setup picks a provider from a menu or accepts one directly,
 runs OAuth when supported, prompts for API keys otherwise, stores credentials in
