@@ -31,8 +31,7 @@ grep -q "OPENAI_API_KEY" "$RUNNER" || fail "runner must scrub common provider cr
 grep -q "TELEGRAM_BOT_TOKEN" "$RUNNER" || fail "runner must scrub common platform credentials"
 # Keep the runner in lockstep with LemonCore's generic built-ins and the
 # channel-owned test credential extensions registered in config/test.exs.
-python3 - "$RUNNER" "$ROOT/apps/lemon_core/lib/lemon_core/testing/hermetic_env.ex" "$ROOT/config/test.exs" <<'PY' ||
-  fail "runner scrub list must match LemonCore built-ins plus registered channel credential extensions"
+if ! python3 - "$RUNNER" "$ROOT/apps/lemon_core/lib/lemon_core/testing/hermetic_env.ex" "$ROOT/config/test.exs" <<'PY'
 import re
 import sys
 
@@ -72,6 +71,9 @@ extension_vars = env_vars(declaration_block(
 if sorted(runner_vars) != sorted(set(built_in_vars) | set(extension_vars)):
     raise SystemExit(1)
 PY
+then
+  fail "runner scrub list must match LemonCore built-ins plus registered channel credential extensions"
+fi
 
 contract_tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/lemon-contract-root.XXXXXX")"
 contract_path_out="$contract_tmp_root/path.out"
@@ -205,34 +207,36 @@ rm -rf "$artifact_tmp" "$incomplete_artifact_tmp"
 
 [ -x "$ROOT/scripts/verify_source_install" ] || fail "source install verifier must be executable"
 bash -n "$ROOT/scripts/verify_source_install"
-grep -q './bin/lemon setup runtime --profile runtime_min --non-interactive' "$ROOT/scripts/verify_source_install" ||
-  fail "source install verifier must exercise the ./bin/lemon setup wrapper"
-grep -q './bin/lemon channels --project-dir' "$ROOT/scripts/verify_source_install" ||
-  fail "source install verifier must exercise the ./bin/lemon channels wrapper"
-grep -q './bin/lemon config validate --project-dir' "$ROOT/scripts/verify_source_install" ||
-  fail "source install verifier must exercise the ./bin/lemon config wrapper"
-grep -q './bin/lemon doctor --json' "$ROOT/scripts/verify_source_install" ||
-  fail "source install verifier must exercise the ./bin/lemon doctor wrapper"
-grep -q './bin/lemon media --project-dir' "$ROOT/scripts/verify_source_install" ||
-  fail "source install verifier must exercise the ./bin/lemon media wrapper"
-grep -q './bin/lemon models --provider anthropic --limit 1' "$ROOT/scripts/verify_source_install" ||
-  fail "source install verifier must exercise the ./bin/lemon models wrapper"
-grep -q './bin/lemon providers --provider anthropic --project-dir' "$ROOT/scripts/verify_source_install" ||
-  fail "source install verifier must exercise the ./bin/lemon providers wrapper"
-grep -q './bin/lemon policy list' "$ROOT/scripts/verify_source_install" ||
-  fail "source install verifier must exercise the ./bin/lemon policy wrapper"
-grep -q './bin/lemon proofs --project-dir' "$ROOT/scripts/verify_source_install" ||
-  fail "source install verifier must exercise the ./bin/lemon proofs wrapper"
-grep -q './bin/lemon readiness --project-dir' "$ROOT/scripts/verify_source_install" ||
-  fail "source install verifier must exercise the ./bin/lemon readiness wrapper"
-grep -q './bin/lemon secrets status' "$ROOT/scripts/verify_source_install" ||
-  fail "source install verifier must exercise the ./bin/lemon secrets wrapper"
-grep -q './bin/lemon skill list' "$ROOT/scripts/verify_source_install" ||
-  fail "source install verifier must exercise the ./bin/lemon skill wrapper"
-grep -q './bin/lemon usage' "$ROOT/scripts/verify_source_install" ||
-  fail "source install verifier must exercise the ./bin/lemon usage wrapper"
-grep -q './bin/lemon update --check --no-skill-sync --verbose' "$ROOT/scripts/verify_source_install" ||
-  fail "source install verifier must exercise the ./bin/lemon update wrapper"
+grep -Fq '"$ROOT/bin/lemon" "$@"' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier helpers must invoke the ./bin/lemon wrapper"
+grep -Fq 'run_onboarding "$setup_output" setup runtime --profile runtime_min --non-interactive' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise setup through the wrapper helper"
+grep -Fq 'run_onboarding "$channels_output" channels --project-dir "$PROJECT_DIR"' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise channels through the wrapper helper"
+grep -Fq 'run_onboarding "$config_output" config validate --project-dir "$PROJECT_DIR"' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise config through the wrapper helper"
+grep -Fq 'run_onboarding_split_output "$doctor_json" "$doctor_err" doctor --json --project-dir "$PROJECT_DIR"' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise doctor through the wrapper helper"
+grep -Fq 'run_onboarding "$media_output" media --project-dir "$PROJECT_DIR" --limit 1' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise media through the wrapper helper"
+grep -Fq 'run_onboarding "$models_output" models --provider anthropic --limit 1' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise models through the wrapper helper"
+grep -Fq 'run_onboarding "$providers_output" providers --provider anthropic --project-dir "$PROJECT_DIR"' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise providers through the wrapper helper"
+grep -Fq 'run_onboarding "$policy_output" policy list' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise policy through the wrapper helper"
+grep -Fq 'run_onboarding "$proofs_output" proofs --project-dir "$PROJECT_DIR" --limit 1' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise proofs through the wrapper helper"
+grep -Fq 'run_onboarding "$readiness_output" readiness --project-dir "$PROJECT_DIR" --limit 1' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise readiness through the wrapper helper"
+grep -Fq 'run_onboarding "$secrets_output" secrets status' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise secrets through the wrapper helper"
+grep -Fq 'run_onboarding "$skill_output" skill list' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise skills through the wrapper helper"
+grep -Fq 'run_onboarding "$usage_output" usage' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise usage through the wrapper helper"
+grep -Fq 'run_onboarding "$update_output" update --check --no-skill-sync --verbose' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise update through the wrapper helper"
 source_install_tmp="$(mktemp -d "${TMPDIR:-/tmp}/lemon-source-install-help.XXXXXX")"
 source_install_help_out="$source_install_tmp/help.out"
 "$ROOT/scripts/verify_source_install" --help >"$source_install_help_out" 2>&1 &&
