@@ -47,8 +47,8 @@ under `~/.lemon`:
 ~/.lemon/versions/<version>/tui/bin/lemon-tui  compiled TUI when installed
 ~/.lemon/versions/current      symlink to the active version
 ~/.lemon/bin/lemon             -> ../versions/current/bin/lemon
-~/.lemon/{cookie,env}          generated once by the launcher, mode 600
-~/.lemon/run/                  pid and runtime-root records
+~/.lemon/{cookie,env}          generated once by the launcher, mode 600 from creation
+~/.lemon/run/                  pid and runtime-root records, mode 700
 ~/.lemon/store                 default store path for user installs
 ```
 
@@ -62,6 +62,14 @@ redacted support bundle. The sim profile does not bundle the runtime CLI, but
 does support `doctor --bundle`. With no arguments the launcher starts the TUI
 in an interactive terminal, auto-starting the daemon; non-interactive
 invocation prints usage.
+
+The launcher never builds Elixir source from user input. `doctor` argv is
+forwarded verbatim to `LemonCli.CLI.main/1`, so option order is preserved and
+`#{...}` in a bundle path stays literal; the sim profile's `doctor --bundle`
+path reaches the release through the `LEMON_DOCTOR_BUNDLE_PATH` environment
+variable instead of eval source. Launcher-created state — `~/.lemon` itself,
+`run/`, the cookie, and `env` — is written under `umask 077`, so secrets are
+private from their first byte (directories 0700, files 0600).
 
 ```bash
 lemon daemon    # background start, recording pid and version root in ~/.lemon/run

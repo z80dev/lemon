@@ -122,7 +122,15 @@ require_cmd() {
 # ── User-install defaults, applied only when unset so server/tarball
 # installs that already export these keep full control. ──
 setup_environment() {
+  # ~/.lemon holds per-user state, including the distribution cookie and a
+  # generated web secret. Apply a restrictive umask before anything is
+  # created so every directory and file is private from its first byte --
+  # never transiently group- or world-readable -- and tighten anything an
+  # earlier install may have left broader.
+  umask 077
+
   mkdir -p "$LEMON_HOME_DIR" "$STATE_DIR"
+  chmod 700 "$LEMON_HOME_DIR" "$STATE_DIR"
 
   if [ -z "${LEMON_STORE_PATH:-}" ]; then
     export LEMON_STORE_PATH="$LEMON_HOME_DIR/store"
@@ -133,6 +141,8 @@ setup_environment() {
 
     if [ ! -s "$COOKIE_FILE" ]; then
       openssl rand -hex 32 > "$COOKIE_FILE"
+      # umask already makes a fresh file 600; this also tightens a legacy
+      # file being regenerated with a broader mode.
       chmod 600 "$COOKIE_FILE"
     fi
 
@@ -149,6 +159,7 @@ setup_environment() {
     require_cmd openssl
     generated_secret="$(openssl rand -hex 64)"
     printf 'export LEMON_WEB_SECRET_KEY_BASE=%q\n' "$generated_secret" >> "$ENV_FILE"
+    # Same belt-and-braces tightening as the cookie for a pre-existing env.
     chmod 600 "$ENV_FILE"
     export LEMON_WEB_SECRET_KEY_BASE="$generated_secret"
   fi
@@ -168,12 +179,6 @@ run_runtime_cli() {
   fi
 
   exec "$RELEASE_BIN" eval 'LemonCli.CLI.main(System.argv())' "$@"
-}
-
-# ── doctor's bundle_path is embedded in an Elixir string literal; escape
-# backslashes and quotes so unusual paths can't break out of it. ──
-elixir_escape() {
-  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
 }
 
 # ── A 200 from /healthz is not proof that *lemon* answered it: any service
@@ -372,6 +377,19 @@ case "$COMMAND" in
   doctor)
     shift
 
+    # Full and minimal releases bundle lemon_cli, whose doctor parser owns
+    # --bundle/--bundle-path handling. Forward the argv untouched: the eval
+    # expression stays a fixed constant, so no user string can become
+    # Elixir source, option order is preserved, and `#{...}` in a path
+    # stays literal.
+    if [ "$PROFILE" != "sim_broadcast_platform" ]; then
+      run_runtime_cli doctor "$@"
+    fi
+
+    # Sim-only `doctor --bundle [path]`: this release has no lemon_cli, so
+    # the shim drives LemonCore.Doctor.CLI.bundle!/1 itself. The path
+    # crosses the eval boundary through the environment, never as source
+    # text.
     if [ "${1:-}" != "--bundle" ]; then
       run_runtime_cli doctor "$@"
     fi
@@ -391,8 +409,8 @@ case "$COMMAND" in
     fi
 
     mkdir -p "$(dirname "$bundle_path")"
-    escaped_bundle_path="$(elixir_escape "$bundle_path")"
-    exec "$RELEASE_BIN" eval "LemonCore.Doctor.CLI.bundle!(bundle_path: \"$escaped_bundle_path\")"
+    export LEMON_DOCTOR_BUNDLE_PATH="$bundle_path"
+    exec "$RELEASE_BIN" eval 'LemonCore.Doctor.CLI.bundle!(bundle_path: System.fetch_env!("LEMON_DOCTOR_BUNDLE_PATH"))'
     ;;
 
   *)

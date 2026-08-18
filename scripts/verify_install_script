@@ -29,6 +29,12 @@ Checks:
   - an update round-trip flips versions/current and retains the old version
   - a profile with no published artifact, a non-stable channel without a pin,
     and an unsupported platform are all refused
+  - bin/lemon doctor forwards the complete argv to the runtime CLI entrypoint
+    as arguments: the eval expression stays a fixed constant, option order is
+    preserved, and a --bundle path containing literal Elixir interpolation
+    syntax survives verbatim
+  - the launcher creates first-run state privately: ~/.lemon and run/ are
+    0700, cookie and env are 0600
 EOF
   exit 2
 }
@@ -136,8 +142,41 @@ VERSION="$version"
 EOF
 
   cat >> "$build_dir/bin/lemon" <<'EOF'
-run_dir="$HOME/.lemon/run"
+# Resolve the release root through the bin/lemon symlink the way the
+# packaged launcher does, so doctor can delegate to bin/<profile>.
+script_path=$0
+while [ -L "$script_path" ]; do
+  link_target="$(readlink "$script_path")"
+  case $link_target in
+    /*) script_path=$link_target ;;
+    *) script_path="$(dirname "$script_path")/$link_target" ;;
+  esac
+done
+script_dir="$(CDPATH= cd "$(dirname "$script_path")" && pwd)"
+release_root="$(CDPATH= cd "$script_dir/.." && pwd)"
+release_bin="$release_root/bin/lemon_runtime_full"
+
+# First-run state, mirroring rel/overlays/bin/lemon: the restrictive umask
+# is applied before anything is created, so ~/.lemon, run/, cookie, and env
+# are private from their first byte; explicit chmod tightens whatever the
+# installer's ambient umask left broader.
+home_dir="$HOME/.lemon"
+run_dir="$home_dir/run"
+cookie_file="$home_dir/cookie"
+env_file="$home_dir/env"
+
+umask 077
 mkdir -p "$run_dir"
+chmod 700 "$home_dir" "$run_dir"
+
+if [ ! -s "$cookie_file" ]; then
+  od -An -N32 -t x1 /dev/urandom | tr -d ' \n' > "$cookie_file"
+fi
+
+if [ ! -s "$env_file" ]; then
+  printf 'export LEMON_WEB_SECRET_KEY_BASE=%s\n' \
+    "$(od -An -N32 -t x1 /dev/urandom | tr -d ' \n')" >> "$env_file"
+fi
 
 case "${1:-}" in
   version)
@@ -162,6 +201,12 @@ case "${1:-}" in
   status)
     if [ -f "$run_dir/lemon.pid" ]; then echo running; else echo stopped; fi
     ;;
+  doctor)
+    # Mirror of the packaged launcher: the complete doctor argv crosses to
+    # the runtime CLI entrypoint as arguments, never as source text.
+    shift
+    exec "$release_bin" eval 'LemonCli.CLI.main(System.argv())' doctor "$@"
+    ;;
   *)
     echo "stub launcher: unsupported subcommand ${1:-}" >&2
     exit 2
@@ -169,7 +214,17 @@ case "${1:-}" in
 esac
 EOF
 
-  printf '#!/bin/sh\necho "stub release binary %s"\n' "$version" > "$build_dir/bin/$PROFILE"
+  # The profile stub records its argv so the launcher checks below can prove
+  # exactly what crossed the exec boundary, in order.
+  cat > "$build_dir/bin/$PROFILE" <<EOF
+#!/bin/sh
+echo "stub release binary $version"
+if [ "\$#" -gt 0 ]; then
+  for arg in "\$@"; do
+    printf 'arg:%s\\n' "\$arg"
+  done
+fi
+EOF
   chmod +x "$build_dir/bin/lemon" "$build_dir/bin/$PROFILE"
 
   local tarball="$work_dir/build/lemon-$version-stable-$PLATFORM-$PROFILE.tar.gz"
@@ -203,6 +258,15 @@ sha256_of() {
     sha256sum "$1" | awk '{print $1}'
   else
     shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+
+# Portable mode reporting: GNU stat and BSD stat disagree on flags.
+mode_of() {
+  if stat -c '%a' "$1" >/dev/null 2>&1; then
+    stat -c '%a' "$1"
+  else
+    stat -f '%Lp' "$1"
   fi
 }
 
@@ -859,6 +923,56 @@ else
       fail "a failed promotion left inconsistent state"
       cat "$work_dir/install-22.log" >&2
     fi
+  fi
+fi
+
+# 17. Launcher security contract: doctor argv forwarding and first-run
+#     privacy. The fixture launcher mirrors rel/overlays/bin/lemon -- the
+#     doctor argv crosses to the runtime CLI entrypoint as arguments behind
+#     a fixed eval expression, and first-run state is created under umask
+#     077 -- and the profile stub records what crossed the boundary.
+doctor_home="$work_dir/home-doctor"
+mkdir -p "$doctor_home"
+
+if ! run_install "$work_dir/install-23.log" "$doctor_home" "$base_url"; then
+  fail "seeding the launcher-contract home failed"
+  cat "$work_dir/install-23.log" >&2
+else
+  launcher="$doctor_home/.lemon/bin/lemon"
+
+  # The first launcher execution creates cookie/env/run and tightens
+  # ~/.lemon itself, which install.sh laid out under the ambient umask.
+  if first_run="$(HOME="$doctor_home" "$launcher" version 2>&1)" &&
+    [ "$first_run" = "lemon 9999.1.0" ] &&
+    [ "$(mode_of "$doctor_home/.lemon")" = "700" ] &&
+    [ "$(mode_of "$doctor_home/.lemon/run")" = "700" ] &&
+    [ "$(mode_of "$doctor_home/.lemon/cookie")" = "600" ] &&
+    [ "$(mode_of "$doctor_home/.lemon/env")" = "600" ]; then
+    ok "first-run launcher state is private: ~/.lemon and run/ 0700, cookie and env 0600"
+  else
+    fail "first-run launcher state is not private (.lemon=$(mode_of "$doctor_home/.lemon" 2>/dev/null || echo missing) run=$(mode_of "$doctor_home/.lemon/run" 2>/dev/null || echo missing) cookie=$(mode_of "$doctor_home/.lemon/cookie" 2>/dev/null || echo missing) env=$(mode_of "$doctor_home/.lemon/env" 2>/dev/null || echo missing))"
+  fi
+
+  # A bundle path holding literal Elixir interpolation syntax -- the payload
+  # that would execute if spliced into a double-quoted Elixir string --
+  # combined with doctor options on both sides of it. Expected boundary
+  # traffic: the fixed eval expression, then the untouched argv in order.
+  bundle_path="$doctor_home/.lemon/pwn #{System.cmd('touch',['/tmp/lemon-doctor-pwned'])} \"dq\" b\\s.zip"
+  doctor_out="$(HOME="$doctor_home" "$launcher" doctor --json --bundle "$bundle_path" --verbose 2>&1)"
+  expected_doctor_out="stub release binary 9999.1.0
+arg:eval
+arg:LemonCli.CLI.main(System.argv())
+arg:doctor
+arg:--json
+arg:--bundle
+arg:$bundle_path
+arg:--verbose"
+
+  if [ "$doctor_out" = "$expected_doctor_out" ]; then
+    ok "doctor forwards argv verbatim: fixed eval source, option order kept, interpolation syntax literal"
+  else
+    fail "doctor argv did not cross the exec boundary verbatim"
+    printf 'expected:\n%s\n\ngot:\n%s\n' "$expected_doctor_out" "$doctor_out" >&2
   fi
 fi
 
