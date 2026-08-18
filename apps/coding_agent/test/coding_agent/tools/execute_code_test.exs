@@ -158,6 +158,15 @@ defmodule CodingAgent.Tools.ExecuteCodeSchemaTest do
       assert prelude =~ "class ToolError(Exception):"
     end
 
+    test "the persistent module starts without bridge authority" do
+      module = PythonShim.render_module(["read"])
+
+      assert module =~ "def _configure(rpc_dir, token):"
+      assert module =~ "lemon_tools is not configured for this cell"
+      refute module =~ "_configure(\""
+      refute module =~ "_TOKEN = \""
+    end
+
     test "a configured prelude embeds its rpc dir and token exactly once, json-escaped" do
       token = "token-0123"
       prelude = PythonShim.render_prelude("/tmp/it's here", token, Config.allowlist())

@@ -41,17 +41,16 @@ defmodule CodingAgent.Tools.ExecuteCode do
   would need a python interpreter shipped to WASM — out of scope for v1.
   Likewise docker/ssh placement of the workspace: the `:script_runner` seam and
   the file protocol are designed for it (bind-mount the workspace), but v1 runs
-  locally only. Persistent interpreter state follows the same rule:
-  `kernel_mode = "session"`, the kernel bounds, and the optional `reset`
-  parameter freeze the public/config contract now, but every run still executes
-  per-call until the supervised session path lands.
+  locally only.
   """
 
   import Bitwise
 
   alias CodingAgent.BashExecutor
+  alias CodingAgent.PythonRepl
+  alias CodingAgent.PythonRepl.{Key, Protocol}
   alias CodingAgent.Tools
-  alias CodingAgent.Tools.ExecuteCode.{Config, PythonShim, Rpc}
+  alias CodingAgent.Tools.ExecuteCode.{Config, PythonShim, Rpc, RpcServer}
   alias LemonAgent.AbortSignal
   alias LemonAgent.Security.ExternalContent
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
@@ -168,8 +167,10 @@ defmodule CodingAgent.Tools.ExecuteCode do
     * `on_update` - Streaming callback (unused: script output is not streamed)
     * `cwd` - Working directory the script runs in
     * `opts` - Tool options (`:settings_manager`, `:tool_policy`,
-      `:approval_context`, plus the `@doc false` test seams `:python_finder`,
-      `:script_runner` and `:execute_code_tool_overrides`)
+      `:approval_context`, `:session_id`, `:session_pid`, `:agent_id`, plus
+      the `@doc false` test seams `:python_finder`, `:script_runner`,
+      `:execute_code_tool_overrides`, `:python_repl`, `:rpc_server`,
+      `:python_repl_registry`, `:clock`, and `:poll`)
   """
   @spec execute(
           tool_call_id :: String.t(),
@@ -189,7 +190,10 @@ defmodule CodingAgent.Tools.ExecuteCode do
            {:ok, script} <- fetch_script(params),
            :ok <- check_reset(params),
            {:ok, python} <- resolve_python(config, opts) do
-        run(script, python, config, params, signal, cwd, opts)
+        case config.kernel_mode do
+          "session" -> run_session(script, python, config, params, signal, cwd, opts)
+          "per_call" -> run(script, python, config, params, signal, cwd, opts)
+        end
       end
     end
   end
@@ -206,8 +210,8 @@ defmodule CodingAgent.Tools.ExecuteCode do
     end
   end
 
-  # `reset` asks for a fresh interpreter in session mode. The persistent path
-  # is not wired yet, so per-call runs validate it and treat it as redundant.
+  # `reset` asks for a fresh interpreter in session mode. Per-call runs still
+  # validate it and treat it as redundant.
   defp check_reset(params) do
     case Map.get(params, "reset") do
       reset when is_nil(reset) or is_boolean(reset) -> :ok
@@ -283,6 +287,512 @@ defmodule CodingAgent.Tools.ExecuteCode do
       File.rm_rf(base)
     end
   end
+
+  # Session execution deliberately has a separate entry point from `run/6`.
+  # The per-call path remains byte-for-byte compatible for the default mode;
+  # this path owns a fresh bridge and re-evaluates all authority for every cell.
+  defp run_session(script, python, config, params, signal, cwd, opts) do
+    started_at = clock_now(opts)
+    timeout_ms = clamp_timeout(Map.get(params, "timeout_ms"), config)
+
+    case session_identity(python, config, cwd, opts) do
+      {:fallback, reason} ->
+        session_fallback(script, python, config, params, signal, cwd, opts, reason, started_at)
+
+      {:error, reason} ->
+        session_error(reason, false, false, Rpc.initial_stats(), started_at, opts)
+
+      {:ok, key, owner_pid} ->
+        run_session_cell(
+          script,
+          config,
+          params,
+          signal,
+          cwd,
+          opts,
+          key,
+          owner_pid,
+          timeout_ms,
+          started_at
+        )
+    end
+  end
+
+  defp session_identity(python, config, cwd, opts) do
+    session_id = Keyword.get(opts, :session_id)
+    session_pid = Keyword.get(opts, :session_pid)
+    agent_id = Keyword.get(opts, :agent_id)
+
+    if valid_session_scope?(session_id, session_pid, agent_id) do
+      case Key.new(
+             scope_id: session_id,
+             agent_id: agent_id,
+             cwd: cwd,
+             interpreter: python,
+             helpers: config.tools,
+             protocol_version: Protocol.version()
+           ) do
+        {:ok, key} -> {:ok, key, session_pid}
+        {:error, reason} -> {:error, {:invalid_session_key, reason}}
+      end
+    else
+      {:fallback, :missing_session_scope}
+    end
+  end
+
+  defp valid_session_scope?(session_id, session_pid, agent_id) do
+    is_binary(session_id) and String.trim(session_id) != "" and is_pid(session_pid) and
+      is_binary(agent_id) and String.trim(agent_id) != ""
+  end
+
+  defp run_session_cell(
+         script,
+         config,
+         params,
+         signal,
+         cwd,
+         opts,
+         key,
+         owner_pid,
+         timeout_ms,
+         started_at
+       ) do
+    repl = Keyword.get(opts, :python_repl, PythonRepl)
+
+    with {:ok, reset_performed} <- maybe_reset(repl, key, owner_pid, params, opts) do
+      case build_bridge() do
+        {:ok, base, bridge} ->
+          case start_rpc_server(bridge, config, signal, cwd, opts) do
+            {:ok, rpc_server} ->
+              try do
+                request = %{
+                  key: key,
+                  owner_pid: owner_pid,
+                  code: PythonShim.render_script(script, config.tools),
+                  cwd: cwd,
+                  bridge: bridge,
+                  timeout_ms: timeout_ms,
+                  max_queued_cells: config.max_queued_cells_per_kernel,
+                  max_output_bytes: config.max_output_bytes,
+                  helper_source: PythonShim.render_module(config.tools)
+                }
+
+                request =
+                  case Keyword.fetch(opts, :python_repl_registry) do
+                    {:ok, registry} -> Map.put(request, :registry, registry)
+                    :error -> request
+                  end
+
+                task =
+                  Task.Supervisor.async_nolink(CodingAgent.TaskSupervisor, fn ->
+                    repl.execute(request)
+                  end)
+
+                result = await_session_task(task, signal, opts)
+                stats = rpc_stats(Keyword.get(opts, :rpc_server, RpcServer), rpc_server)
+
+                case format_session_result(
+                       result,
+                       stats,
+                       signal,
+                       timeout_ms,
+                       reset_performed,
+                       started_at,
+                       opts
+                     ) do
+                  {:prestart_fallback, reason} ->
+                    session_fallback(
+                      script,
+                      nil,
+                      config,
+                      params,
+                      signal,
+                      cwd,
+                      opts,
+                      reason,
+                      started_at
+                    )
+
+                  tool_result ->
+                    tool_result
+                end
+              after
+                try do
+                  _ = stop_rpc_server(Keyword.get(opts, :rpc_server, RpcServer), rpc_server)
+                after
+                  File.rm_rf(base)
+                end
+              end
+
+            {:error, reason} ->
+              File.rm_rf(base)
+              session_error(reason, false, reset_performed, Rpc.initial_stats(), started_at, opts)
+          end
+
+        {:error, reason} ->
+          session_error(reason, false, reset_performed, Rpc.initial_stats(), started_at, opts)
+      end
+    else
+      {:error, reason} ->
+        session_error(reason, false, false, Rpc.initial_stats(), started_at, opts)
+    end
+  end
+
+  defp maybe_reset(repl, key, owner_pid, params, opts) do
+    if Map.get(params, "reset") == true do
+      reset_opts =
+        case Keyword.fetch(opts, :python_repl_registry) do
+          {:ok, registry} -> [registry: registry]
+          :error -> []
+        end
+
+      case repl.reset(key, owner_pid, reset_opts) do
+        {:ok, %{reset_performed: performed}} when is_boolean(performed) -> {:ok, performed}
+        {:ok, _} -> {:ok, true}
+        {:error, %{reason: reason}} -> {:error, {:reset_failed, reason}}
+        {:error, reason} -> {:error, {:reset_failed, reason}}
+        other -> {:error, {:reset_failed, other}}
+      end
+    else
+      {:ok, false}
+    end
+  end
+
+  defp build_bridge do
+    suffix = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
+    base = Path.join(System.tmp_dir!(), "lemon-exec-code-cell-" <> suffix)
+    rpc_dir = Path.join(base, "rpc")
+    token = :crypto.strong_rand_bytes(32) |> Base.url_encode64(padding: false)
+
+    try do
+      :ok = File.mkdir(base)
+      :ok = File.chmod(base, 0o700)
+      :ok = File.mkdir(rpc_dir)
+      :ok = File.chmod(rpc_dir, 0o700)
+      {:ok, base, %{dir: rpc_dir, token: token}}
+    rescue
+      error ->
+        File.rm_rf(base)
+        {:error, {:bridge_setup_failed, error.__struct__}}
+    end
+  end
+
+  defp start_rpc_server(bridge, config, signal, cwd, opts) do
+    rpc_server = Keyword.get(opts, :rpc_server, RpcServer)
+
+    ctx = %{
+      tools: inner_tools(config, cwd, opts),
+      tool_policy: Keyword.get(opts, :tool_policy),
+      approval_context: Keyword.get(opts, :approval_context),
+      max_calls: config.max_rpc_calls,
+      max_result_bytes: config.max_rpc_result_bytes,
+      signal: signal,
+      rpc_dir: bridge.dir,
+      token: bridge.token,
+      poll_interval_ms: @poll_interval_ms
+    }
+
+    case rpc_server.start_link(ctx) do
+      {:ok, server} -> {:ok, server}
+      {:error, reason} -> {:error, {:rpc_start_failed, reason}}
+      other -> {:error, {:rpc_start_failed, other}}
+    end
+  end
+
+  # The task is the `GenServer.call` caller from PythonRepl's point of view.
+  # Killing it on abort triggers the Session caller-DOWN path, which discards
+  # mutated state instead of letting an interrupted cell poison a later one.
+  defp await_session_task(task, signal, opts) do
+    poll_interval_ms = Keyword.get(opts, :persistent_poll_interval_ms, @poll_interval_ms)
+
+    case Task.yield(task, poll_interval_ms) do
+      {:ok, result} ->
+        {:completed, result}
+
+      {:exit, reason} ->
+        {:task_exit, reason}
+
+      nil ->
+        if aborted?(signal, opts) do
+          _ = Task.shutdown(task, :brutal_kill)
+          :aborted
+        else
+          await_session_task(task, signal, opts)
+        end
+    end
+  end
+
+  defp aborted?(nil, _opts), do: false
+
+  defp aborted?(signal, opts) do
+    case Keyword.get(opts, :poll) do
+      nil -> AbortSignal.aborted?(signal)
+      poll when is_function(poll, 1) -> poll.(signal)
+      poll -> poll.aborted?(signal)
+    end
+  end
+
+  defp rpc_stats(rpc_server, server) do
+    rpc_server.stats(server)
+  catch
+    :exit, _ -> Rpc.initial_stats()
+  end
+
+  defp stop_rpc_server(rpc_server, server) do
+    rpc_server.stop(server)
+  catch
+    :exit, _ -> :ok
+  end
+
+  defp format_session_result(
+         :aborted,
+         stats,
+         _signal,
+         _timeout_ms,
+         reset_performed,
+         started_at,
+         opts
+       ) do
+    session_tool_result(
+      "Script cancelled.",
+      %{reason: :cancelled, state_retained: false, kernel_reused: false},
+      stats,
+      reset_performed,
+      started_at,
+      opts
+    )
+  end
+
+  defp format_session_result(
+         {:task_exit, reason},
+         stats,
+         _signal,
+         _timeout_ms,
+         reset_performed,
+         started_at,
+         opts
+       ) do
+    session_tool_result(
+      "execute_code session task exited: #{inspect(reason)}",
+      %{reason: :task_exit, state_retained: false, kernel_reused: false},
+      stats,
+      reset_performed,
+      started_at,
+      opts
+    )
+  end
+
+  defp format_session_result(
+         {:completed, {:ok, result}},
+         stats,
+         _signal,
+         _timeout_ms,
+         reset_performed,
+         started_at,
+         opts
+       )
+       when is_map(result) do
+    session_tool_result(
+      session_text(result, :ok),
+      result,
+      stats,
+      reset_performed,
+      started_at,
+      opts
+    )
+  end
+
+  defp format_session_result(
+         {:completed, {:error, %{reason: reason} = _result}},
+         stats,
+         signal,
+         timeout_ms,
+         reset_performed,
+         started_at,
+         _opts
+       )
+       when reason in [:capacity_exhausted, :registry_unavailable, :startup_failed] do
+    # These are the only façade failures known to occur before a cell starts.
+    # A Session result such as :worker_exit or :queue_full is intentionally not
+    # retried in a fresh interpreter.
+    _ = {stats, signal, timeout_ms, reset_performed, started_at}
+    {:prestart_fallback, reason}
+  end
+
+  defp format_session_result(
+         {:completed, {:error, result}},
+         stats,
+         signal,
+         timeout_ms,
+         reset_performed,
+         started_at,
+         opts
+       )
+       when is_map(result) do
+    session_tool_result(
+      session_text(result, {:error, signal, timeout_ms}),
+      result,
+      stats,
+      reset_performed,
+      started_at,
+      opts
+    )
+  end
+
+  defp format_session_result(
+         {:completed, other},
+         stats,
+         _signal,
+         _timeout_ms,
+         reset_performed,
+         started_at,
+         opts
+       ) do
+    session_tool_result(
+      "execute_code session returned an invalid result: #{inspect(other)}",
+      %{reason: :invalid_result, state_retained: false, kernel_reused: false},
+      stats,
+      reset_performed,
+      started_at,
+      opts
+    )
+  end
+
+  defp session_text(result, :ok) do
+    case Map.get(result, :output, "") do
+      "" -> "(script produced no output)"
+      output -> maybe_full_output(output, result)
+    end
+  end
+
+  defp session_text(result, {:error, signal, timeout_ms}) do
+    output = Map.get(result, :output, "")
+
+    headline =
+      case Map.get(result, :reason) do
+        :timeout ->
+          "Script timed out after #{timeout_ms}ms."
+
+        :cancelled ->
+          if(signal && AbortSignal.aborted?(signal),
+            do: "Script cancelled.",
+            else: "Script cancelled."
+          )
+
+        :exception ->
+          exception_headline(Map.get(result, :exception))
+
+        reason ->
+          "execute_code session failed: #{inspect(reason)}"
+      end
+
+    if output == "", do: headline, else: "#{headline}\n\n#{maybe_full_output(output, result)}"
+  end
+
+  defp exception_headline(%{name: name, message: message})
+       when is_binary(name) and is_binary(message),
+       do: "Script raised #{name}: #{message}"
+
+  defp exception_headline(_), do: "Script raised an exception."
+
+  defp maybe_full_output(output, %{truncated: true, full_output_path: path}) when is_binary(path),
+    do: "#{output}\n\n[Full output saved to: #{path}]"
+
+  defp maybe_full_output(output, _result), do: output
+
+  defp session_tool_result(text, result, stats, reset_performed, started_at, opts) do
+    used_webfetch? = MapSet.member?(stats.tools_used, "webfetch")
+
+    %AgentToolResult{
+      content: [
+        %TextContent{
+          text:
+            if(used_webfetch?, do: ExternalContent.wrap_web_content(text, :web_fetch), else: text)
+        }
+      ],
+      details:
+        session_details(
+          result,
+          stats,
+          reset_performed,
+          clock_now(opts) - started_at
+        ),
+      trust: if(used_webfetch?, do: :untrusted, else: :trusted)
+    }
+  end
+
+  defp session_details(result, stats, reset_performed, duration_ms) do
+    %{
+      persistent: true,
+      kernel_reused: Map.get(result, :kernel_reused, false),
+      reset_performed: reset_performed,
+      state_retained: Map.get(result, :state_retained, false),
+      duration_ms: max(duration_ms, 0),
+      exit_code: Map.get(result, :exit_status),
+      truncated: Map.get(result, :truncated, false),
+      rpc_calls: stats.calls,
+      rpc_denied: stats.denied,
+      rpc_errors: stats.errors,
+      rpc_bytes: stats.bytes,
+      rpc_tools: stats.tools_used |> MapSet.to_list() |> Enum.sort()
+    }
+    |> maybe_put(:full_output_path, Map.get(result, :full_output_path))
+    |> maybe_put(:reason, Map.get(result, :reason))
+  end
+
+  defp session_fallback(script, python, config, params, signal, cwd, opts, reason, started_at) do
+    # `python` is resolved before this path. A missing scope occurs after
+    # resolution, while facade admission failures reach this helper with nil.
+    python = python || resolve_fallback_python(config, opts)
+    result = run(script, python, config, params, signal, cwd, opts)
+
+    case result do
+      %AgentToolResult{} = tool_result ->
+        details =
+          Map.merge(tool_result.details || %{}, %{
+            persistent: false,
+            kernel_reused: false,
+            reset_performed: false,
+            state_retained: false,
+            fallback_reason: reason,
+            duration_ms: max(clock_now(opts) - started_at, 0)
+          })
+
+        %{tool_result | details: details}
+
+      other ->
+        other
+    end
+  end
+
+  defp resolve_fallback_python(config, opts) do
+    case resolve_python(config, opts) do
+      {:ok, python} -> python
+      {:error, reason} -> raise "unreachable session fallback without python: #{inspect(reason)}"
+    end
+  end
+
+  defp session_error(reason, state_retained, reset_performed, stats, started_at, opts) do
+    session_tool_result(
+      "execute_code session failed: #{inspect(reason)}",
+      %{reason: reason, state_retained: state_retained, kernel_reused: false},
+      stats,
+      reset_performed,
+      started_at,
+      opts
+    )
+  end
+
+  defp clock_now(opts) do
+    case Keyword.get(opts, :clock) do
+      nil -> System.monotonic_time(:millisecond)
+      clock when is_function(clock, 0) -> clock.()
+      clock -> clock.monotonic_time(:millisecond)
+    end
+  end
+
+  defp maybe_put(details, _key, nil), do: details
+  defp maybe_put(details, key, value), do: Map.put(details, key, value)
 
   defp clamp_timeout(value, %Config{timeout_ms: max_ms}) when is_integer(value),
     do: max(@min_timeout_ms, min(value, max_ms))
