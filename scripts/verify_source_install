@@ -209,6 +209,29 @@ run_onboarding() {
   ) >"$output" 2>&1
 }
 
+# The credential proof crosses fresh BEAM processes. Test mode's ETS store is
+# intentionally ephemeral, so use the normal durable encrypted store under the
+# same isolated fixture path for provider onboarding only.
+run_onboarding_durable() {
+  local output="$1"
+  shift
+
+  (
+    cd "$onboarding_project"
+    clear_provider_credentials
+    preserve_toolchain
+
+    HOME="$onboarding_home" \
+      XDG_CONFIG_HOME="$onboarding_home/.config" \
+      XDG_DATA_HOME="$onboarding_home/.local/share" \
+      XDG_CACHE_HOME="$onboarding_home/.cache" \
+      LEMON_STORE_PATH="$onboarding_home/.lemon/store" \
+      LEMON_SECRETS_MASTER_KEY="$onboarding_master_key" \
+      MIX_ENV=dev \
+      "$ROOT/bin/lemon" "$@"
+  ) >"$output" 2>&1
+}
+
 run_onboarding_split_output() {
   local output="$1" error_output="$2"
   shift 2
@@ -251,7 +274,7 @@ assert_setup_required() {
       LEMON_SECRETS_MASTER_KEY="$onboarding_master_key" \
       LEMON_EXPECT_SETUP_REQUIRED="$expected" \
       LEMON_ONBOARDING_PROJECT="$onboarding_project" \
-      MIX_ENV=test \
+      MIX_ENV=dev \
       mix run --no-start -e '
         expected = System.fetch_env!("LEMON_EXPECT_SETUP_REQUIRED") == "true"
 
@@ -275,7 +298,7 @@ assert_setup_required() {
 
 assert_setup_required true
 
-run_onboarding_help model \
+run_onboarding_durable "$onboarding_output" model \
   --provider openai \
   --token source-install-fixture-token \
   --secret-name source_install_fixture_openai \
