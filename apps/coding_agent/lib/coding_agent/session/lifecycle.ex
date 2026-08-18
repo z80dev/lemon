@@ -35,6 +35,7 @@ defmodule CodingAgent.Session.Lifecycle do
     workspace_dir = Keyword.get(opts, :workspace_dir, CodingAgent.Config.workspace_dir())
     register_session = Keyword.get(opts, :register, false)
     session_registry = Keyword.get(opts, :registry, CodingAgent.SessionRegistry)
+    python_repl_mod = Keyword.get(opts, :python_repl_mod, CodingAgent.PythonRepl)
 
     Notifier.maybe_register_ui_tracker(ui_context)
     Workspace.ensure_workspace(workspace_dir: workspace_dir)
@@ -219,6 +220,7 @@ defmodule CodingAgent.Session.Lifecycle do
       session_file: session_file,
       register_session: register_session,
       session_registry: session_registry,
+      python_repl_mod: python_repl_mod,
       convert_to_llm: convert_to_llm,
       transform_context: transform_context,
       tool_policy: tool_policy,
@@ -319,40 +321,52 @@ defmodule CodingAgent.Session.Lifecycle do
 
     case wait_for_reset_abort(state, was_streaming, had_pending_prompt, reset_abort_wait_ms) do
       :ok ->
-        state =
-          if was_streaming do
-            Notifier.broadcast_event(state, {:canceled, :reset})
-            Notifier.complete_event_streams(state, {:canceled, :reset})
+        # The agent is confirmed idle. Before rotating the session identity,
+        # synchronously dispose every persistent Python kernel owned by this
+        # session PID: the identity encodes into kernel keys, so kernels that
+        # survive rotation would be unreachable garbage until reaped.
+        case detach_owner_for_reset(state.python_repl_mod, self()) do
+          :ok ->
+            state =
+              if was_streaming do
+                Notifier.broadcast_event(state, {:canceled, :reset})
+                Notifier.complete_event_streams(state, {:canceled, :reset})
 
-            if not had_pending_prompt do
-              BackgroundTasks.flush_queued_agent_events()
-            end
+                if not had_pending_prompt do
+                  BackgroundTasks.flush_queued_agent_events()
+                end
 
-            %{state | is_streaming: false, event_streams: %{}, steering_queue: :queue.new()}
-          else
-            state
-          end
+                %{state | is_streaming: false, event_streams: %{}, steering_queue: :queue.new()}
+              else
+                state
+              end
 
-        :ok = LemonAgent.Agent.reset(state.agent)
+            :ok = LemonAgent.Agent.reset(state.agent)
 
-        previous_session_id = state.session_manager.header.id
-        new_session_manager = SessionManager.new(state.cwd)
+            previous_session_id = state.session_manager.header.id
+            new_session_manager = SessionManager.new(state.cwd)
 
-        Persistence.maybe_unregister_session(
-          previous_session_id,
-          state.register_session,
-          state.session_registry
-        )
+            Persistence.maybe_unregister_session(
+              previous_session_id,
+              state.register_session,
+              state.session_registry
+            )
 
-        Persistence.maybe_register_session(
-          new_session_manager,
-          state.cwd,
-          state.register_session,
-          state.session_registry
-        )
+            Persistence.maybe_register_session(
+              new_session_manager,
+              state.cwd,
+              state.register_session,
+              state.session_registry
+            )
 
-        Notifier.ui_set_working_message(state, nil)
-        {:ok, State.reset_runtime(state, new_session_manager, System.system_time(:millisecond))}
+            Notifier.ui_set_working_message(state, nil)
+
+            {:ok,
+             State.reset_runtime(state, new_session_manager, System.system_time(:millisecond))}
+
+          {:error, :busy} ->
+            {:error, :busy, state}
+        end
 
       {:error, :timeout} ->
         Logger.warning("Timed out waiting for agent abort during reset")
@@ -366,6 +380,71 @@ defmodule CodingAgent.Session.Lifecycle do
   defp wait_for_reset_abort(state, true, false, reset_abort_wait_ms) do
     LemonAgent.Agent.abort(state.agent)
     LemonAgent.Agent.wait_for_idle(state.agent, timeout: reset_abort_wait_ms)
+  end
+
+  # Persistent Python REPL owner cleanup. The module is injectable via the
+  # `:python_repl_mod` Session option; `nil` means the subsystem is not
+  # running and there is nothing to detach.
+  @doc false
+  @spec detach_owner_for_reset(module() | nil, pid()) :: :ok | {:error, :busy}
+  def detach_owner_for_reset(python_repl_mod, owner_pid) when is_pid(owner_pid) do
+    case safe_detach_owner(python_repl_mod, owner_pid) do
+      :ok ->
+        :ok
+
+      {:error, :registry_unavailable} ->
+        # The REPL supervisor is :one_for_all over the worker supervisor and
+        # registry. A down registry therefore means its workers are already
+        # being disposed by supervision.
+        Logger.warning(
+          "Python REPL registry unavailable during session reset; " <>
+            "relying on subsystem supervision to dispose owned kernels"
+        )
+
+        :ok
+
+      {:error, reason} ->
+        # A kernel may still be alive for this owner. Do not rotate the
+        # identity that is part of its key until cleanup has succeeded.
+        Logger.warning(
+          "Failed to detach Python REPL kernels during session reset: #{inspect(reason)}; " <>
+            "keeping current session identity"
+        )
+
+        {:error, :busy}
+    end
+  end
+
+  @doc false
+  @spec detach_owner_on_terminate(module() | nil, pid()) :: :ok
+  def detach_owner_on_terminate(python_repl_mod, owner_pid) when is_pid(owner_pid) do
+    case safe_detach_owner(python_repl_mod, owner_pid) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        # Termination must not fail because the registry's owner monitor is
+        # still the crash-cleanup fallback.
+        Logger.warning(
+          "Best-effort Python REPL owner detach failed during session termination: " <>
+            "#{inspect(reason)}; relying on registry owner monitor"
+        )
+
+        :ok
+    end
+  end
+
+  defp safe_detach_owner(nil, _owner_pid), do: :ok
+
+  defp safe_detach_owner(python_repl_mod, owner_pid) do
+    case python_repl_mod.detach_owner(owner_pid) do
+      :ok -> :ok
+      {:error, %{reason: reason}} -> {:error, reason}
+      {:error, reason} when is_atom(reason) -> {:error, reason}
+      result -> {:error, {:unexpected_result, result}}
+    end
+  catch
+    kind, reason -> {:error, {kind, reason}}
   end
 
   defp load_or_create_session(cwd, nil, session_id, parent_session) do

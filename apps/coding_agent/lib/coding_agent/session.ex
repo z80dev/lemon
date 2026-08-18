@@ -100,6 +100,7 @@ defmodule CodingAgent.Session do
     :session_file,
     :register_session,
     :session_registry,
+    :python_repl_mod,
     :convert_to_llm,
     :transform_context,
     :tool_policy,
@@ -159,6 +160,7 @@ defmodule CodingAgent.Session do
           session_file: String.t() | nil,
           register_session: boolean(),
           session_registry: atom(),
+          python_repl_mod: module() | nil,
           convert_to_llm: (list() -> list()),
           transform_context: (list(), reference() | nil ->
                                 list() | {:ok, list()} | {:error, term()}),
@@ -233,6 +235,8 @@ defmodule CodingAgent.Session do
     * `:context_guardrails` - Optional map/list overrides for built-in context guardrails
       (for example `max_tool_result_bytes`, `max_tool_result_images`, `spill_dir`)
     * `:name` - GenServer name for registration
+    * `:python_repl_mod` - Persistent Python REPL facade to use for owner cleanup
+      (default: `CodingAgent.PythonRepl`; set to `nil` when the subsystem is unavailable)
 
   ## System Prompt Composition
 
@@ -1121,6 +1125,8 @@ defmodule CodingAgent.Session do
   @spec terminate(term(), t()) :: :ok
   @impl true
   def terminate(_reason, state) do
+    Lifecycle.detach_owner_on_terminate(state.python_repl_mod, self())
+
     # Emit introspection event for session end
     Introspection.record(
       :session_ended,

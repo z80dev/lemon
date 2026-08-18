@@ -5,6 +5,7 @@ defmodule CodingAgent.SessionTest do
   alias CodingAgent.Session
   alias CodingAgent.SessionManager
   alias CodingAgent.SettingsManager
+  alias CodingAgent.SessionTest.{PythonRepl, PythonReplDirector}
 
   alias LemonAi.Types.{
     AssistantMessage,
@@ -186,6 +187,10 @@ defmodule CodingAgent.SessionTest do
     opts = default_opts(opts)
     {:ok, session} = Session.start_link(opts)
     session
+  end
+
+  defp configure_python_repl(response) do
+    start_supervised!({PythonReplDirector, {self(), response}})
   end
 
   defp wait_for_streaming_complete(session) do
@@ -1168,6 +1173,67 @@ defmodule CodingAgent.SessionTest do
       assert :queue.len(state.follow_up_queue) == 0
     end
 
+    test "detaches Python REPL ownership before rotating the session identity" do
+      registry = :"session_registry_#{System.unique_integer([:positive])}"
+      start_supervised!({Registry, keys: :unique, name: registry})
+      configure_python_repl({:block, :ok})
+
+      old_id = "session-#{System.unique_integer([:positive])}"
+
+      session =
+        start_session(
+          session_id: old_id,
+          register: true,
+          registry: registry,
+          python_repl_mod: PythonRepl
+        )
+
+      assert [{^session, _metadata}] = Registry.lookup(registry, old_id)
+
+      reset_task = Task.async(fn -> Session.reset(session) end)
+
+      assert_receive {:python_repl_detach_owner, ^session, true}
+      assert [{^session, _metadata}] = Registry.lookup(registry, old_id)
+
+      send(session, {:resume_python_repl_detach, self()})
+
+      assert :ok = Task.await(reset_task)
+      state = Session.get_state(session)
+      refute state.session_manager.header.id == old_id
+      assert [] == Registry.lookup(registry, old_id)
+      assert [{^session, _metadata}] = Registry.lookup(registry, state.session_manager.header.id)
+    end
+
+    test "keeps the session identity when Python REPL detach fails" do
+      configure_python_repl({:error, %{reason: :stop_failed}})
+      old_id = "session-#{System.unique_integer([:positive])}"
+      session = start_session(session_id: old_id, python_repl_mod: PythonRepl)
+
+      assert {:error, :busy} = Session.reset(session)
+      assert_receive {:python_repl_detach_owner, ^session, true}
+      assert Session.get_state(session).session_manager.header.id == old_id
+    end
+
+    test "resets when the Python REPL registry is unavailable" do
+      configure_python_repl({:error, %{reason: :registry_unavailable}})
+      old_id = "session-#{System.unique_integer([:positive])}"
+      session = start_session(session_id: old_id, python_repl_mod: PythonRepl)
+
+      assert :ok = Session.reset(session)
+      assert_receive {:python_repl_detach_owner, ^session, true}
+      refute Session.get_state(session).session_manager.header.id == old_id
+    end
+
+    test "termination detaches the live owner best-effort" do
+      configure_python_repl({:raise, "simulated detach failure"})
+      session = start_session(python_repl_mod: PythonRepl)
+      monitor = Process.monitor(session)
+
+      assert :ok = GenServer.stop(session, :normal)
+      assert_receive {:python_repl_detach_owner, ^session, true}
+      assert_receive {:DOWN, ^monitor, :process, ^session, :normal}
+    end
+
     test "reset during active run aborts work and stream subscribers get canceled terminal" do
       parent = self()
 
@@ -2038,4 +2104,38 @@ defmodule CodingAgent.SessionTest do
       assert last_entry.message["trust"] == "trusted"
     end
   end
+end
+
+defmodule CodingAgent.SessionTest.PythonReplDirector do
+  use Agent
+
+  @spec start_link({pid(), term()}) :: Agent.on_start()
+  def start_link({test_pid, response}) do
+    Agent.start_link(fn -> %{test_pid: test_pid, response: response} end, name: __MODULE__)
+  end
+
+  @spec detach_owner(pid()) :: :ok | {:error, map()} | no_return()
+  def detach_owner(owner_pid) do
+    %{test_pid: test_pid, response: response} = Agent.get(__MODULE__, & &1)
+    send(test_pid, {:python_repl_detach_owner, owner_pid, Process.alive?(owner_pid)})
+
+    case response do
+      {:block, result} ->
+        receive do
+          {:resume_python_repl_detach, ^test_pid} -> result
+        end
+
+      {:raise, message} ->
+        raise RuntimeError, message
+
+      result ->
+        result
+    end
+  end
+end
+
+defmodule CodingAgent.SessionTest.PythonRepl do
+  @spec detach_owner(pid()) :: :ok | {:error, map()} | no_return()
+  def detach_owner(owner_pid),
+    do: CodingAgent.SessionTest.PythonReplDirector.detach_owner(owner_pid)
 end
