@@ -71,9 +71,11 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   Serve RPC requests until the script task finishes.
 
   Each poll processes at most `:max_requests_per_sweep` requests (100 by
-  default). Requests are selected in ascending id order; every selected file,
-  including malformed and unauthenticated requests, is consumed, so later
-  polls continue through the remaining files without reprocessing the head.
+  default). Regular request files and symlinks are selected in ascending id
+  order; request directories are skipped for workspace teardown. Each selected
+  request is removed non-recursively after handling, including malformed and
+  unauthenticated requests, so later polls continue through the remaining
+  files without reprocessing the head.
 
   Returns `{:ok, task_result, stats}` when the task returned normally, or
   `{:exit, reason, stats}` when it died.
@@ -86,8 +88,9 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   @doc """
   Process one bounded snapshot of pending requests and return updated statistics.
 
-  At most `:max_requests_per_sweep` requests are selected in ascending id
-  order (100 by default). Each selected file is consumed whether it
+  At most `:max_requests_per_sweep` regular request files or symlinks are
+  selected in ascending id order (100 by default); directories are skipped.
+  Each selected request is removed non-recursively after handling whether it
   authenticates or not, so the next sweep continues with the remaining ids.
   Authentication still occurs after selection, before any budget accounting or
   tool dispatch.
@@ -156,6 +159,10 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
         _ -> {:invalid, path}
       end
     end)
+    |> Enum.filter(fn
+      {:request, _id, path} -> request_file?(path)
+      {:invalid, path} -> request_file?(path)
+    end)
     |> Enum.sort_by(fn
       {:request, id, path} -> {0, id, path}
       {:invalid, path} -> {1, path}
@@ -165,6 +172,13 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
       {:request, id, path} -> [{id, path}]
       {:invalid, path} -> consume_request(path) && []
     end)
+  end
+
+  defp request_file?(path) do
+    case File.lstat(path) do
+      {:ok, %File.Stat{type: type}} when type in [:regular, :symlink] -> true
+      _ -> false
+    end
   end
 
   defp max_requests_per_sweep(ctx) do
@@ -440,8 +454,11 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
     end
   end
 
+  # Never recurse through a request path. If selection races with replacement
+  # by a directory, File.rm/1 returns :eisdir and the directory remains for
+  # workspace teardown.
   defp consume_request(path) do
-    _ = File.rm_rf(path)
+    _ = File.rm(path)
     :ok
   end
 

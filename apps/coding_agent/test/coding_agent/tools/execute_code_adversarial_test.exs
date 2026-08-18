@@ -63,22 +63,32 @@ defmodule CodingAgent.Tools.ExecuteCodeAdversarialRpcTest do
       assert Path.wildcard(Path.join(rpc_dir, "*.tmp")) == []
     end
 
-    test "a request that is a directory is consumed and denied, not raised on", %{
+    test "a request directory with descendants is skipped without consuming the sweep cap", %{
       rpc_dir: rpc_dir
     } do
-      pump = start_pump(ctx(rpc_dir))
-
-      File.mkdir_p!(Path.join(rpc_dir, "req-1.json"))
-
-      assert %{"ok" => false, "error" => "rpc authentication failed"} =
-               await_response(rpc_dir, 1)
-
-      refute File.exists?(Path.join(rpc_dir, "req-1.json"))
+      request_dir = Path.join(rpc_dir, "req-1.json")
+      descendant = Path.join(request_dir, "nested/request.json")
+      File.mkdir_p!(Path.dirname(descendant))
+      File.write!(descendant, "must survive")
 
       write_request(rpc_dir, 2, "echo", %{"value" => "alive"})
-      assert %{"ok" => true, "content" => "alive"} = await_response(rpc_dir, 2)
 
-      finish_pump(pump)
+      ctx = Map.put(ctx(rpc_dir), :max_requests_per_sweep, 1)
+      stats = Rpc.process_pending(ctx, Rpc.initial_stats())
+
+      assert %{"ok" => true, "content" => "alive"} = read_response(rpc_dir, 2)
+      assert stats.calls == 1
+      refute File.exists?(Path.join(rpc_dir, "res-1.json"))
+      assert File.lstat!(request_dir).type == :directory
+      assert File.read!(descendant) == "must survive"
+
+      # A file that becomes a directory after selection also remains intact:
+      # File.rm/1 rejects it instead of recursively removing its descendants.
+      stats = Rpc.process_request(1, ctx, stats)
+      assert %{"ok" => false, "error" => "rpc authentication failed"} = read_response(rpc_dir, 1)
+      assert stats.denied == 1
+      assert File.lstat!(request_dir).type == :directory
+      assert File.read!(descendant) == "must survive"
     end
 
     test "a frame whose id is not an integer is consumed without dispatch", %{rpc_dir: rpc_dir} do

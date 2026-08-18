@@ -63,11 +63,13 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
   opaque and only calls:
 
     * `process_pending(ctx, stats)` — one bounded sweep over `ctx.rpc_dir`.
-      It selects at most `ctx.max_requests_per_sweep` requests (100 by
-      default) in ascending id order before decoding or authenticating their
-      bodies. Every selected request is consumed, including stale, wrong, or
-      missing tokens, so the next sweep continues through the remaining files.
-      Authentication is constant-time and precedes any request counting,
+      It selects at most `ctx.max_requests_per_sweep` regular request files or
+      symlinks (100 by default) in ascending id order before decoding or
+      authenticating their bodies; request directories are skipped for
+      workspace teardown. Each selected request is removed non-recursively
+      after handling, including stale, wrong, or missing tokens, so the next
+      sweep continues through the remaining files. Authentication is
+      constant-time and precedes any request counting,
       budget enforcement, or dispatch (stale, wrong, or missing tokens are
       denied and never appear in results or logs), enforces the call and
       result-byte budgets, runs allowed tools through the current
