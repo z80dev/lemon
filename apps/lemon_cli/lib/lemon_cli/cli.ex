@@ -162,15 +162,19 @@ defmodule LemonCli.CLI do
     @exit_ok
   end
 
-  defp dispatch([command, flag])
-       when command in @commands and flag in ["--help", "-h"] do
-    print_command_usage(command)
-    @exit_ok
+  defp dispatch([command | rest]) when command in @commands do
+    # Intercept help anywhere in the command's arguments — including after
+    # subcommand words like `gateway setup --help` — so nothing downstream
+    # (wizard, provider picker, gateway adapters, prompts on EOF) ever runs.
+    if help_requested?(rest) do
+      print_command_usage(command)
+      @exit_ok
+    else
+      run_command(command, rest)
+    end
   end
 
-  defp dispatch([command | rest]) when command in @commands do
-    run_command(command, rest)
-  end
+  defp help_requested?(args), do: Enum.any?(args, &(&1 in ["--help", "-h", "help"]))
 
   defp dispatch([command | _rest]) do
     IO.puts(:stderr, "Unknown command: #{command}")
