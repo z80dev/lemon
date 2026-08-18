@@ -158,7 +158,7 @@ defmodule CodingAgent.Tools.ExecuteCodePersistentTest do
 
     assert_receive {:facade_pid, facade}
     assert_receive {:execute, _request}
-    assert_receive {:rpc_started, %{rpc_dir: rpc_dir}}
+    assert_receive {:rpc_started, %{rpc_dir: rpc_dir}, _modes}
     base = Path.dirname(rpc_dir)
 
     monitor = Process.monitor(facade)
