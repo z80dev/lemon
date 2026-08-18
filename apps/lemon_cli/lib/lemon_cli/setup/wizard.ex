@@ -5,7 +5,8 @@ defmodule LemonCli.Setup.Wizard do
 
   Handles:
   - Subcommand dispatch (`run/3`) — the Mix task and the release CLI share it
-  - Full first-time wizard (`run_full/3`)
+  - Full setup wizard (`run_full/3`) — an idempotent state machine over the
+    config, secrets, and provider steps
   - Runtime profile and port configuration (`run_runtime/3`)
 
   All modes support interactive (TUI/prompt) and non-interactive
@@ -13,7 +14,7 @@ defmodule LemonCli.Setup.Wizard do
   """
 
   alias LemonCli.Onboarding.Runner
-  alias LemonCli.Setup.{Gateway, Provider, Scaffold}
+  alias LemonCli.Setup.{Gateway, Provider, Scaffold, Verification}
   alias LemonCore.Config.Modular
   alias LemonCore.Runtime.{Env, Profile}
   alias LemonCore.Secrets
@@ -44,13 +45,19 @@ defmodule LemonCli.Setup.Wizard do
     # leaving subcommand-specific flags untouched so subcommand parsers get them.
     {parsed, rest, _invalid} =
       OptionParser.parse_head(args,
-        switches: [non_interactive: :boolean, config_path: :string],
+        switches: [
+          non_interactive: :boolean,
+          config_path: :string,
+          provider: :string,
+          skip_verify: :boolean
+        ],
         aliases: [n: :non_interactive]
       )
 
     case rest do
       ["provider" | provider_args] ->
-        Provider.run(provider_args, io)
+        Provider.run(provider_args, io, setup_verify_opts(opts))
+
 
       ["runtime" | runtime_args] ->
         run_runtime(runtime_args, io, parsed)
@@ -66,7 +73,7 @@ defmodule LemonCli.Setup.Wizard do
 
       [] ->
         Runner.ensure_required_apps!()
-        run_full([], io, parsed)
+        run_full([], io, Keyword.merge(opts, parsed))
 
       [subcommand | _] ->
         io.error.("Unknown subcommand: #{inspect(subcommand)}")
@@ -84,37 +91,55 @@ defmodule LemonCli.Setup.Wizard do
     do: io.info.("Run `#{usage_command} --help` for full documentation.")
 
   @doc """
-  Runs the full interactive first-time setup wizard.
+  Runs the full setup wizard as an idempotent state machine.
 
-  Steps:
-  1. Greet and explain what will happen.
-  2. Bootstrap the global config scaffold when none exists yet.
-  3. Check secrets initialization, guide through init if needed.
-  4. Offer to onboard an AI provider.
-  5. Offer to configure runtime profile.
-  6. Print next steps.
+  Each pass derives the completed/pending state of the config, secrets, and
+  provider steps (`LemonCli.Setup.Verification.setup_state/1`), performs only
+  the pending work, and re-derives the state for the final summary:
+
+  1. Greet and show the current step status.
+  2. Bootstrap the global config scaffold when none exists yet (never
+     replaces an existing file).
+  3. Initialize the secrets master key when absent — automatically, never
+     by replacing an existing key.
+  4. Onboard an AI provider unless the configured one is already usable.
+     An explicit `:provider` forces reconfiguration.
+  5. Verify the resulting provider/model/credential (offline checks always;
+     live check unless `:skip_verify`).
+  6. Offer to configure the runtime profile (optional).
+  7. Print a summary that only claims completion when nothing is pending.
 
   ## Options
 
     * `:non_interactive` - skip interactive prompts (default: false)
     * `:config_path` - override config path
+    * `:provider` - force provider onboarding even when one is usable
+    * `:skip_verify` - skip the post-onboarding live provider check
+    * `:verifier` - injectable live-check function (testing; no network)
   """
-  @spec run_full([String.t()], io_callbacks(), keyword()) :: :ok
+  @spec run_full([String.t()], io_callbacks(), keyword()) :: :ok | {:error, term()}
   def run_full(_args, io, opts \\ []) do
     non_interactive? = Keyword.get(opts, :non_interactive, false)
-
-    print_banner(io)
-
     config_path = Keyword.get(opts, :config_path) || Modular.global_path()
 
-    step_bootstrap_config(config_path, io, non_interactive?)
-    step_check_secrets(io, non_interactive?)
-    step_offer_provider(io, non_interactive?)
-    step_offer_runtime(io, non_interactive?)
-    print_next_steps(io)
+    print_banner(io)
+    print_status(io, Verification.setup_state(config_path: config_path))
 
-    :ok
+    result =
+      with :ok <- ensure_config(config_path, io),
+           :ok <- ensure_secrets(io) do
+        ensure_provider(config_path, io, non_interactive?, opts)
+      end
+
+    if result == :ok do
+      step_offer_runtime(io, non_interactive?)
+    end
+
+    print_summary(io, Verification.setup_state(config_path: config_path), result)
+
+    result
   end
+
 
   @doc """
   Runs the runtime configuration wizard.
@@ -168,89 +193,157 @@ defmodule LemonCli.Setup.Wizard do
     io.info.("")
   end
 
-  defp step_bootstrap_config(config_path, io, _non_interactive?) do
-    unless Scaffold.global_config_exists?() do
-      io.info.("Creating minimal config at #{config_path} ...")
+  defp print_status(io, state) do
+    io.info.("Setup status:")
 
-      case Scaffold.write_unless_exists(config_path, Scaffold.generate()) do
+    io.info.("  #{step_marker(state.config.complete)} config    #{state.config.path}")
+    io.info.("  #{step_marker(state.secrets.complete)} secrets   #{secrets_detail(state.secrets)}")
+    io.info.("  #{step_marker(state.provider.complete)} provider  #{provider_detail(state.provider)}")
+    io.info.("")
+  end
+
+  defp step_marker(true), do: String.pad_trailing("[done]", 10)
+  defp step_marker(false), do: String.pad_trailing("[pending]", 10)
+
+  defp secrets_detail(%{complete: true, source: source}) when not is_nil(source),
+    do: "master key via #{source}"
+
+  defp secrets_detail(%{complete: true}),
+    do: "master key configured"
+
+  defp secrets_detail(%{complete: false}),
+    do: "master key not initialized"
+
+  defp provider_detail(%{complete: true, provider: provider, model: model}),
+    do: "#{provider} / #{model}"
+
+  defp provider_detail(%{reason: :model_provider_mismatch, provider: provider, model: model}),
+    do: "#{provider} / #{model} (model does not match provider)"
+
+  defp provider_detail(%{provider: nil, model: nil}),
+    do: "no default provider/model configured"
+
+  defp provider_detail(%{provider: nil}),
+    do: "no default provider configured"
+
+  defp provider_detail(%{provider: provider, model: nil}),
+    do: "#{provider} has no default model"
+
+  defp provider_detail(%{provider: provider}),
+    do: "#{provider} credentials not usable"
+
+  defp ensure_config(config_path, io) do
+    expanded = Path.expand(config_path)
+
+    if File.exists?(expanded) do
+      io.info.("Config: #{expanded} (already exists)")
+      :ok
+    else
+      io.info.("Creating minimal config at #{expanded} ...")
+
+      case Scaffold.write_unless_exists(expanded, Scaffold.generate()) do
         {:ok, path} ->
           io.info.("Created: #{path}")
+          :ok
 
         {:exists, _path} ->
           :ok
 
         {:error, reason} ->
           io.error.("Could not create config scaffold: #{inspect(reason)}")
+          {:error, {:scaffold_failed, reason}}
       end
     end
   end
 
-  defp step_check_secrets(io, non_interactive?) do
-    status = Secrets.status()
-
-    unless status.configured do
+  # The Mix task for `lemon secrets init` is not available from packaged
+  # releases, so drive the master-key API directly. Initialization is
+  # automatic on every path — interactive and non-interactive alike — because
+  # stopping to ask the user to run a second command before setup can proceed
+  # is exactly the dead end first-run onboarding must avoid.
+  defp ensure_secrets(io) do
+    if Secrets.status().configured do
+      :ok
+    else
       io.info.("")
-      io.info.("Encrypted secrets are not yet initialized.")
+      io.info.("Secrets master key not found — initializing one now.")
 
-      if non_interactive? do
-        io.info.("Run `lemon secrets init` to set up secrets, then re-run setup.")
-      else
-        answer = prompt_yes_no?("Initialize secrets now?", true, io)
+      case MasterKey.init() do
+        {:ok, %{source: :file, key_file: path}} ->
+          io.info.("Secrets master key written to #{path} (0600)")
+          :ok
+
+        {:ok, %{source: source}} ->
+          io.info.("Secrets master key initialized in #{source}")
+          :ok
+
+        {:error, :keychain_unavailable} ->
+          io.error.("Could not initialize a secrets master key: the system keychain is")
+          io.error.("unavailable and no key file location could be determined.")
+          io.error.("Set #{MasterKey.env_var()} or configure")
+          io.error.("`config :lemon_core, LemonCore.Secrets, key_file: ...`, then re-run setup.")
+          {:error, :secrets_init_failed}
+
+        {:error, {:key_file_exists, path}} ->
+          io.error.("A secrets master key already exists at #{path}; it will not be replaced —")
+          io.error.("every secret encrypted under the old key becomes unreadable when a key is")
+          io.error.("replaced. Make the existing key resolvable (set #{MasterKey.env_var()} or")
+          io.error.("restore #{path}), then re-run setup.")
+          {:error, :secrets_init_failed}
+
+        {:error, reason} ->
+          io.error.("Failed to initialize secrets master key: #{inspect(reason)}")
+          {:error, {:secrets_init_failed, reason}}
+      end
+    end
+  end
+
+  defp ensure_provider(config_path, io, non_interactive?, opts) do
+    provider_state = Verification.setup_state(config_path: config_path).provider
+    forced = Keyword.get(opts, :provider)
+
+    cond do
+      provider_state.complete and is_nil(forced) ->
+        io.info.("Provider already configured: #{provider_state.provider} / #{provider_state.model}")
+        io.info.("Skipping onboarding. Run `lemon setup provider` to change it.")
+        :ok
+
+      non_interactive? and is_nil(forced) ->
+        io.info.(
+          "Skipping provider setup (non-interactive). Run `lemon setup provider` to onboard a provider."
+        )
+
+        :ok
+
+      true ->
+        answer =
+          if non_interactive? or forced do
+            true
+          else
+            prompt_yes_no?("Onboard an AI provider now?", true, io)
+          end
 
         if answer do
-          init_secrets_now(io)
+          provider_args =
+            ["--config-path", config_path] ++
+              if(forced, do: ["--provider", forced], else: [])
+
+          Provider.run(provider_args, io, setup_verify_opts(opts))
         else
-          io.info.("Skipped. Run `lemon secrets init` before onboarding a provider.")
+          io.info.("Skipped. Run `lemon setup provider` when ready.")
+          :ok
         end
-      end
     end
   end
 
-  # Runtime equivalent of `lemon secrets init`: the Mix task is not available
-  # from packaged releases, so drive the master-key API directly.
-  defp init_secrets_now(io) do
-    case MasterKey.init() do
-      {:ok, %{source: :file, key_file: path}} ->
-        io.info.("Secrets master key written to #{path} (0600)")
-
-      {:ok, %{source: source}} ->
-        io.info.("Secrets master key initialized in #{source}")
-
-      {:error, :keychain_unavailable} ->
-        Runner.fail!(
-          "Keychain is unavailable on this system and no key file location could be " <>
-            "determined. Set #{MasterKey.env_var()}, or configure " <>
-            "`config :lemon_core, LemonCore.Secrets, key_file: ...`."
-        )
-
-      {:error, {:key_file_exists, path}} ->
-        Runner.fail!(
-          "A secrets master key already exists at #{path}. Every secret encrypted " <>
-            "under the old key becomes unreadable when it is replaced."
-        )
-
-      {:error, reason} ->
-        Runner.fail!("Failed to initialize secrets master key: #{inspect(reason)}")
-    end
+  # Setup-journey callers opt into the live credential check; direct
+  # `lemon model` onboarding (LemonCli.CLI) stays offline-strong only.
+  defp setup_verify_opts(opts) do
+    opts
+    |> Keyword.take([:verifier, :skip_verify])
+    |> Keyword.put(:live_verify, true)
   end
 
-  defp step_offer_provider(io, non_interactive?) do
-    io.info.("")
-
-    if non_interactive? do
-      io.info.(
-        "Skipping provider setup (non-interactive). Run `lemon setup provider` to onboard a provider."
-      )
-    else
-      answer = prompt_yes_no?("Onboard an AI provider now?", true, io)
-
-      if answer do
-        Provider.run([], io)
-      else
-        io.info.("Skipped. Run `lemon setup provider` when ready.")
-      end
-    end
-  end
 
   defp step_offer_runtime(io, non_interactive?) do
     io.info.("")
@@ -270,14 +363,43 @@ defmodule LemonCli.Setup.Wizard do
     end
   end
 
-  defp print_next_steps(io) do
+  defp print_summary(io, state, result) do
     io.info.("")
-    io.info.("Setup complete. Next steps:")
-    io.info.("  lemon config validate        — verify configuration")
-    io.info.("  lemon setup provider         — onboard another AI provider")
-    io.info.("  lemon setup runtime          — change runtime profile / ports")
-    io.info.("  lemon setup doctor           — run diagnostics")
-    io.info.("")
+
+    case Verification.pending_steps(state) do
+      [] when result == :ok ->
+        io.info.("Setup complete. Next steps:")
+        io.info.("  lemon config validate        — verify configuration")
+        io.info.("  lemon setup provider         — onboard another AI provider")
+        io.info.("  lemon setup runtime          — change runtime profile / ports")
+        io.info.("  lemon setup doctor           — run diagnostics")
+        io.info.("")
+
+      [] ->
+        # Verification (or another step) failed even though every step is
+        # configured; never claim completion after a failure.
+        io.info.("Setup did not complete — resolve the errors above, then re-run.")
+        io.info.("")
+
+      pending ->
+        io.info.("Setup unfinished — pending steps:")
+        print_pending(pending, state, io)
+
+        if result != :ok do
+          io.info.("")
+          io.info.("Setup did not complete — resolve the errors above, then re-run.")
+        end
+
+        io.info.("")
+    end
+  end
+
+  defp print_pending(pending, state, io) do
+    Enum.each(pending, fn
+      :config -> io.info.("  config:   re-run `lemon setup` or create #{state.config.path}")
+      :secrets -> io.info.("  secrets:  re-run `lemon setup` (or run `lemon secrets init`)")
+      :provider -> io.info.("  provider: run `lemon setup provider`")
+    end)
   end
 
   # ──────────────────────────────────────────────────────────────────────────

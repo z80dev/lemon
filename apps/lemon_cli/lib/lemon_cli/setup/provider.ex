@@ -8,10 +8,19 @@ defmodule LemonCli.Setup.Provider do
   config scaffold before the onboarding proper. The provider picker (shared
   with `Mix.Tasks.Lemon.Onboard`) and the onboarding execution both run
   without Mix, so packaged releases reuse this module directly.
+
+  After a successful onboarding the resulting configuration is verified with
+  `LemonCli.Setup.Verification`: the default provider/model must resolve and
+  the referenced credential must be usable. When the provider exposes a
+  lightweight models endpoint, a live request validates the credential;
+  pass `--skip-verify` to defer it when offline. A failed verification
+  returns `{:error, :verification_failed}` with actionable recovery text —
+  it never reports setup as complete.
   """
 
   alias LemonCli.Onboarding.{LogSilencer, Providers, Runner, TerminalUI}
   alias LemonCli.Onboarding.Provider, as: ProviderSpec
+  alias LemonCli.Setup.Verification
   alias LemonCore.Secrets
   alias LemonCli.Setup.Scaffold
 
@@ -28,30 +37,82 @@ defmodule LemonCli.Setup.Provider do
   the interactive picker) and delegates to
   `LemonCli.Onboarding.Runner.run/3` for the actual onboarding flow
   (OAuth/API-key, secret storage, config update, default model).
+
+  Finally verifies the resulting configuration with
+  `Verification.verify_provider/1`: the offline strong checks (default
+  provider/model resolvable, credential decryptable) always run. The live
+  credential check runs only for setup-journey callers that pass
+  `live_verify: true` (the wizard and `setup provider`); `lemon model`
+  shares this module without a network round-trip. `--skip-verify` defers
+  the live check when offline.
+
+  ## Options
+
+    * `:live_verify` - run the live credential check after onboarding
+      (default: `false`; the setup wizard enables it)
+    * `:verifier` - injectable live-check function, forwarded to
+      `Verification.verify_provider/1` (used by tests to avoid network)
   """
-  @spec run([String.t()], map()) :: :ok | {:error, term()}
-  def run(args, io) when is_list(args) and is_map(io) do
+  @spec run([String.t()], map(), keyword()) :: :ok | {:error, term()}
+  def run(args, io, opts \\ []) when is_list(args) and is_map(io) do
     Runner.ensure_required_apps!()
 
+    {skip_verify?, rest} = extract_skip_verify(args)
+    live_verify? = Keyword.get(opts, :live_verify, false)
+
     with :ok <- ensure_secrets_ready(io),
-         :ok <- maybe_bootstrap_config(io) do
-      onboard(args, io)
+         :ok <- maybe_bootstrap_config(io),
+         :ok <- onboard(rest, io) do
+      verify_onboarded_config(rest, skip_verify? or not live_verify?, io, opts)
+    end
+  end
+  # ──────────────────────────────────────────────────────────────────────────
+  # Post-onboarding verification
+  # ──────────────────────────────────────────────────────────────────────────
+
+
+  defp verify_onboarded_config(args, skip_verify?, io, opts) do
+    config_path = extract_config_path(args)
+
+    if Verification.setup_state(config_path: config_path).provider.complete do
+      io.info.("")
+      io.info.("Verifying provider configuration...")
+
+      case Verification.verify_provider(
+             config_path: config_path,
+             verifier: Keyword.get(opts, :verifier),
+             skip_verify: skip_verify?
+           ) do
+        {:ok, %{provider: provider, model: model, live: live} = result} ->
+          io.info.(
+            "Provider configuration verified: #{provider} / #{model} " <>
+              "(credential usable#{live_detail(live, result)})."
+          )
+
+          :ok
+
+        {:error, %{message: message}} ->
+          io.error.("Verification failed — setup is not complete.")
+          io.error.(message)
+          {:error, :verification_failed}
+      end
+    else
+      io.info.("")
+      io.info.("Credentials stored, but no default provider/model was set.")
+      io.info.("Run `lemon setup provider --set-default` to make this provider the default.")
+      :ok
     end
   end
 
-  defp onboard(args, io) do
-    LogSilencer.with_quiet_logs(interactive_tui_session?(io), fn ->
-      {provider_name, remaining_args} = extract_provider_arg(args)
+  defp live_detail(:ok, %{live_note: note}) when is_binary(note), do: ", #{note}"
+  defp live_detail(:skipped, %{live_note: note}) when is_binary(note), do: "; #{note}"
 
-      provider =
-        case provider_name do
-          nil -> choose_provider(remaining_args, io)
-          value -> fetch_provider!(value)
-        end
+  defp live_detail(:skipped, _result), do: "; live check not available"
+  defp live_detail(:disabled, _result), do: "; live check skipped (--skip-verify)"
+  defp live_detail(:ok, _result), do: ", live check passed"
 
-      Runner.run(remaining_args, provider, io: io)
-      :ok
-    end)
+  defp extract_skip_verify(args) do
+    {"--skip-verify" in args, Enum.reject(args, &(&1 == "--skip-verify"))}
   end
 
   # ──────────────────────────────────────────────────────────────────────────
