@@ -521,26 +521,52 @@ defmodule CodingAgent.PythonRepl.RegistryTest do
     assert MapSet.size(state_after.entries[key].leases) == 0
   end
 
-  test "facade always releases its lease and publishes reused under one field", %{
+  test "facade rejects unbounded or non-positive timeouts before acquiring a lease", %{
     registry: registry,
     key: key,
     owner: owner
   } do
-    assert {:ok, %{kernel_reused: false}} =
+    base_opts = %{key: key, owner_pid: owner, code: "1", registry: registry}
+
+    for timeout_opts <- [
+          %{},
+          %{timeout_ms: nil},
+          %{timeout_ms: :infinity},
+          %{timeout_ms: 0},
+          %{timeout_ms: -1}
+        ] do
+      assert {:error, %{reason: :invalid_request, state_retained: false}} =
+               PythonRepl.execute(Map.merge(base_opts, timeout_opts))
+    end
+
+    assert Director.starts() == []
+    state = :sys.get_state(registry)
+    assert state.entries == %{}
+    assert state.lease_refs == %{}
+  end
+
+  test "facade passes positive timeouts through and always releases its lease", %{
+    registry: registry,
+    key: key,
+    owner: owner
+  } do
+    assert {:ok, %{kernel_reused: false, timeout: 1_234}} =
              PythonRepl.execute(%{
                key: key,
                owner_pid: owner,
                code: "1",
+               timeout_ms: 1_234,
                registry: registry
              })
 
     assert :sys.get_state(registry).lease_refs == %{}
 
-    assert {:ok, %{kernel_reused: true}} =
+    assert {:ok, %{kernel_reused: true, timeout: 5_678}} =
              PythonRepl.execute(%{
                key: key,
                owner_pid: owner,
                code: "2",
+               timeout_ms: 5_678,
                registry: registry
              })
 
@@ -562,7 +588,12 @@ defmodule CodingAgent.PythonRepl.RegistryTest do
     release(registry, replacement)
 
     assert {:error, %{reason: :invalid_key}} =
-             PythonRepl.execute(%{key: :bad, owner_pid: owner, code: "1"})
+             PythonRepl.execute(%{
+               key: :bad,
+               owner_pid: owner,
+               code: "1",
+               timeout_ms: 100
+             })
 
     Director.fail_start(true)
 
@@ -571,6 +602,7 @@ defmodule CodingAgent.PythonRepl.RegistryTest do
                key: key("failure"),
                owner_pid: owner(),
                code: "1",
+               timeout_ms: 100,
                registry: registry
              })
   end

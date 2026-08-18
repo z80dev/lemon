@@ -2,7 +2,9 @@ defmodule CodingAgent.PythonRepl do
   @moduledoc """
   Public boundary for persistent Python execution.
 
-  Validation and allocation failures are mapped here. After allocation, a cell
+  Validation and allocation failures are mapped here. `execute/1` requires a
+  positive integer `:timeout_ms`; callers must clamp it against the configured
+  `execute_code` timeout before invoking this boundary. After allocation, a cell
   is dispatched exactly once: an exited worker is reported, never retried in a
   replacement namespace.
   """
@@ -128,8 +130,6 @@ defmodule CodingAgent.PythonRepl do
       else: {:error, :invalid_request}
   end
 
-  defp timeout(nil), do: {:ok, :infinity}
-  defp timeout(:infinity), do: {:ok, :infinity}
   defp timeout(value) when is_integer(value) and value > 0, do: {:ok, value}
   defp timeout(_), do: {:error, :invalid_request}
   defp error(reason), do: %{reason: reason, state_retained: false}
