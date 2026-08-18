@@ -164,15 +164,44 @@ defmodule CodingAgent.PrivateTmpTest do
       refute File.exists?(path)
     end
 
-    test "sweeps stale sibling roots once per node boot", %{tmp_dir: tmp_dir} do
+    test "prunes spills when their tracking owner dies", %{root: root} do
+      path = stale_file(root, "pi-python-repl-dead-owner")
+      parent = self()
+
+      owner =
+        spawn(fn ->
+          send(parent, {:live_spill_registered, PrivateTmp.register_live_spill(path)})
+
+          receive do
+            :stop -> :ok
+          end
+        end)
+
+      assert_receive {:live_spill_registered, :ok}
+      force_sweep_window()
+      assert {:ok, ^root} = PrivateTmp.root()
+      assert File.exists?(path)
+
+      monitor = Process.monitor(owner)
+      Process.exit(owner, :kill)
+      assert_receive {:DOWN, ^monitor, :process, ^owner, :killed}
+
+      force_sweep_window()
+      assert {:ok, ^root} = PrivateTmp.root()
+      refute File.exists?(path)
+    end
+
+    test "sweeps only dead-owner sibling roots once per node boot", %{tmp_dir: tmp_dir} do
       isolate_system_tmp(tmp_dir)
 
       {:ok, emptied_root} = PrivateTmp.reserve_dir(tmp_dir, "lemon-private-stale-empty")
+      dead_owner_marker(emptied_root)
       stale_file(emptied_root, "pi-python-repl-expired")
 
       {:ok, nonempty_root} = PrivateTmp.reserve_dir(tmp_dir, "lemon-private-stale-nonempty")
+      dead_owner_marker(nonempty_root)
       expired = stale_file(nonempty_root, "pi-python-repl-expired")
-      live = write_file(nonempty_root, "pi-python-repl-live")
+      recent = write_file(nonempty_root, "pi-python-repl-recent")
       wrong_prefix = stale_file(nonempty_root, "bash-output-expired")
       spill_directory = Path.join(nonempty_root, "pi-python-repl-directory")
       File.mkdir!(spill_directory)
@@ -181,27 +210,26 @@ defmodule CodingAgent.PrivateTmpTest do
       spill_symlink = Path.join(nonempty_root, "pi-python-repl-symlink")
       File.ln_s!(symlink_target, spill_symlink)
 
-      {:ok, overflow_root} = PrivateTmp.reserve_dir(tmp_dir, "lemon-private-stale-overflow")
+      {:ok, live_owner_root} = PrivateTmp.reserve_dir(tmp_dir, "lemon-private-live-owner")
+      live_owner_marker(live_owner_root)
+      live_owner_spill = stale_file(live_owner_root, "pi-python-repl-expired")
 
-      for index <- 1..1_001 do
-        stale_file(overflow_root, "pi-python-repl-overflow-#{index}")
-      end
+      {:ok, missing_owner_root} = PrivateTmp.reserve_dir(tmp_dir, "lemon-private-missing-owner")
+      missing_owner_spill = stale_file(missing_owner_root, "pi-python-repl-expired")
 
       {:ok, current_root} = PrivateTmp.root()
+      force_sweep_window()
+      assert {:ok, ^current_root} = PrivateTmp.root()
 
       refute File.exists?(emptied_root)
       refute File.exists?(expired)
-      assert File.read!(live) == "contents"
+      assert File.read!(recent) == "contents"
       assert File.read!(wrong_prefix) == "contents"
       assert File.dir?(spill_directory)
       assert File.lstat!(spill_symlink).type == :symlink
       assert File.dir?(nonempty_root)
-      assert [_remaining] = File.ls!(overflow_root)
-
-      later = stale_file(nonempty_root, "pi-python-repl-after-boot")
-      assert {:ok, ^current_root} = PrivateTmp.root()
-      assert File.exists?(later)
-      refute File.exists?(overflow_root)
+      assert File.exists?(live_owner_spill)
+      assert File.exists?(missing_owner_spill)
     end
   end
 
@@ -395,7 +423,8 @@ defmodule CodingAgent.PrivateTmpTest do
       {PrivateTmp, :spill_sweep_at},
       {PrivateTmp, :spill_sweep_continuations},
       {PrivateTmp, :live_spills},
-      {PrivateTmp, :stale_root_sweep_done}
+      {PrivateTmp, :stale_root_sweep_done},
+      {PrivateTmp, :stale_roots}
     ]
 
     saved = Map.new(keys, &{&1, :persistent_term.get(&1, nil)})
@@ -416,6 +445,21 @@ defmodule CodingAgent.PrivateTmpTest do
 
   defp restore_tmp_dir(nil), do: System.delete_env("TMPDIR")
   defp restore_tmp_dir(path), do: System.put_env("TMPDIR", path)
+
+  defp dead_owner_marker(root) do
+    :ok = PrivateTmp.write_file(root, ".lemon-owner", "stale@node\n999999\n")
+  end
+
+  defp live_owner_marker(root) do
+    :ok = PrivateTmp.write_file(root, ".lemon-owner", "#{node()}\n#{System.pid()}\n")
+  end
+
+  defp force_sweep_window do
+    :persistent_term.put(
+      {PrivateTmp, :spill_sweep_at},
+      System.monotonic_time(:second) - 24 * 60 * 60 - 1
+    )
+  end
 
   defp stale_file(root, name) do
     path = write_file(root, name)

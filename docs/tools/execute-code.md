@@ -178,8 +178,8 @@ final-expression repr. Output is sanitized, capped at `max_output_bytes` keeping
 40% plus a rolling last 60% with a truncation marker, and the full combined output spills
 to a `0600` file whose path appears in the result as `full_output_path` and in
 `[Full output saved to: ...]` text. The path remains readable after the cell completes. A
-finished spill becomes eligible for best-effort reaping after 24 hours; an active capture is
-never reaped.
+finished spill becomes eligible for best-effort reaping after 24 hours; an active capture
+owned by a live BEAM process is never reaped.
 
 Result `details` always include `rpc_calls`, `rpc_denied`, `rpc_errors`, `rpc_bytes`,
 `rpc_tools`, `exit_code`, and `truncated`. Session-mode details add `persistent`,
@@ -201,13 +201,13 @@ generations.
   script can consume host resources until its cell timeout fires.
 
 - Python REPL full-output spill files remain available after cell completion. A node
-  processes at most 1,000 direct entries from its current private staging root per
-  24-hour reaper window, retaining a continuation for later windows. Only expired regular
-  `pi-python-repl-*` files that are no longer live are eligible.
+  processes one batch of at most 1,000 direct entries per 24-hour reaper window across
+  its current and stale private staging roots, retaining continuations for later windows.
+  Only expired regular `pi-python-repl-*` files that are no longer live are eligible.
 - Once at node boot, the reaper discovers sibling private staging roots left by prior
-  nodes (or a prior first-root race) and applies the same per-root entry bound. Any
-  unfinished stale-root batches resume on later root lookups. Empty stale roots are removed
-  best-effort; non-empty roots are never removed or traversed recursively.
+  nodes (or a prior first-root race), but only when their `0600` owner marker identifies a
+  dead OS process. It selects at most one such stale root per reaper window. Empty stale
+  roots are removed best-effort; non-empty roots are never removed or traversed recursively.
 
 ## Security
 
@@ -224,11 +224,13 @@ NFS is unsupported. A per-node staging root and every workspace/bridge/spill obj
 beneath it are created atomically at exactly `0700` (directories) / `0600` (files) and
 validated; there is no chmod-after-create and no fallback to loosely-permissioned temp
 directories. Finished Python REPL spills become eligible for best-effort reaping after
-24 hours; active captures are excluded. Each node also makes one best-effort pass over
-stale sibling staging roots at boot. The reaper checks only direct regular
-`pi-python-repl-*` entries with `lstat` and never follows symlinks. On platforms without a
-suitable GNU `mktemp`, or if validation fails, the run fails closed **before any script
-executes** (per-call: a workspace-creation error; session mode: `startup_failed` fallback).
+24 hours; active captures are excluded. At boot, a node considers a sibling staging root
+only when its validated owner marker names a dead OS PID; missing, malformed, and
+live-owner markers are skipped. OS PID reuse can therefore conservatively defer stale-root
+cleanup until a later boot. The reaper checks only direct regular `pi-python-repl-*` entries
+with `lstat` and never follows symlinks. On platforms without a suitable GNU `mktemp`, or if
+validation fails, the run fails closed **before any script executes** (per-call: a
+workspace-creation error; session mode: `startup_failed` fallback).
 
 ## Telemetry and introspection
 

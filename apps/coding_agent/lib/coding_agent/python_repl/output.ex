@@ -19,6 +19,8 @@ defmodule CodingAgent.PythonRepl.Output do
   """
 
   alias CodingAgent.BashExecutor
+  require Logger
+
   alias CodingAgent.PrivateTmp
   alias LemonAi.Text
 
@@ -159,7 +161,7 @@ defmodule CodingAgent.PythonRepl.Output do
 
     if output.spill do
       File.close(output.spill)
-      PrivateTmp.unregister_live_spill(output.spill_path)
+      release_live_spill(output.spill_path)
     end
 
     if output.truncated do
@@ -344,20 +346,12 @@ defmodule CodingAgent.PythonRepl.Output do
   defp open_spill(output, combined) do
     with {:ok, root} <- PrivateTmp.root(),
          {:ok, path} <- PrivateTmp.reserve_file(root, "pi-python-repl") do
-      PrivateTmp.register_live_spill(path)
-
-      case File.open(path, [:write, :binary]) do
-        {:ok, io} ->
-          case IO.binwrite(io, combined) do
-            :ok ->
-              %{output | spill: io, spill_path: path, spill_error: nil}
-
-            {:error, reason} ->
-              spill_failed(output, io, path, reason)
-          end
+      case PrivateTmp.register_live_spill(path) do
+        :ok ->
+          open_registered_spill(output, path, combined)
 
         {:error, reason} ->
-          PrivateTmp.unregister_live_spill(path)
+          log_spill_tracking_failure(reason)
           File.rm(path)
           %{output | spill: nil, spill_path: nil, spill_error: reason}
       end
@@ -367,11 +361,43 @@ defmodule CodingAgent.PythonRepl.Output do
     end
   end
 
+  defp open_registered_spill(output, path, combined) do
+    case File.open(path, [:write, :binary]) do
+      {:ok, io} ->
+        case IO.binwrite(io, combined) do
+          :ok ->
+            %{output | spill: io, spill_path: path, spill_error: nil}
+
+          {:error, reason} ->
+            spill_failed(output, io, path, reason)
+        end
+
+      {:error, reason} ->
+        release_live_spill(path)
+        File.rm(path)
+        %{output | spill: nil, spill_path: nil, spill_error: reason}
+    end
+  end
+
   defp spill_failed(output, io, path, reason) do
     File.close(io)
-    PrivateTmp.unregister_live_spill(path)
+    release_live_spill(path)
     File.rm(path)
     %{output | spill: nil, spill_path: nil, spill_error: reason}
+  end
+
+  defp release_live_spill(path) do
+    case PrivateTmp.unregister_live_spill(path) do
+      :ok -> :ok
+      {:error, reason} -> log_spill_tracking_failure(reason)
+    end
+  end
+
+  defp log_spill_tracking_failure(reason) do
+    unless Process.get({__MODULE__, :spill_tracking_failure_logged}) do
+      Logger.warning("Python REPL spill tracking unavailable: #{inspect(reason)}")
+      Process.put({__MODULE__, :spill_tracking_failure_logged}, true)
+    end
   end
 
   defp write_spill(%{spill: nil} = output, _chunk), do: output
