@@ -235,6 +235,36 @@ defmodule CodingAgent.PythonRepl.RunnerIntegrationTest do
       shutdown_runner(port)
     end
 
+    test "a surrogate-containing exception stays a cell error and keeps the namespace", %{
+      tmp_dir: cwd
+    } do
+      port = start_runner(cwd)
+      init_runner(port, cwd)
+
+      send_eval(
+        port,
+        "cell-1",
+        """
+        retained = 41
+        import os
+        raise ValueError(os.fsdecode(b"\\xff"))
+        """
+      )
+
+      frames = frames_until(port, "done")
+      assert frame_types(frames) == ["started", "exception", "done"]
+
+      exception = single_frame!(frames, "exception")
+      assert exception["name"] == "ValueError"
+      assert exception["message"] == "\uFFFD"
+      assert exception["traceback"] =~ "ValueError: \uFFFD"
+
+      send_eval(port, "cell-2", "print(retained + 1)")
+      assert decoded(frames_until(port, "done"), "stdout") == "42\n"
+
+      shutdown_runner(port)
+    end
+
     test "a multi-megabyte exception is truncated without killing the retained kernel", %{
       tmp_dir: cwd
     } do

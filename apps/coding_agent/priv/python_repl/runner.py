@@ -447,6 +447,16 @@ def _safe_str(value):
         return "<unprintable %s>" % type(value).__name__
 
 
+def _unicode_scalar_safe_text(value):
+    """Replace lone UTF-16 surrogates, which JSON decoders must reject."""
+    if not any(0xD800 <= ord(char) <= 0xDFFF for char in value):
+        return value
+
+    return "".join(
+        "\uFFFD" if 0xD800 <= ord(char) <= 0xDFFF else char for char in value
+    )
+
+
 def _json_escaped_character_size(char):
     """Return the byte count `json.dumps(char)` contributes inside quotes."""
     codepoint = ord(char)
@@ -463,6 +473,8 @@ def _json_escaped_character_size(char):
 
 def _bounded_exception_text(value, max_json_bytes):
     """Limit a JSON string without splitting Unicode or hiding truncation."""
+    value = _unicode_scalar_safe_text(value)
+
     marker_bytes = sum(_json_escaped_character_size(char) for char in EXCEPTION_TRUNCATION_MARKER)
     content_limit = max_json_bytes - 2
     used = 0
