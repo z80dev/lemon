@@ -210,8 +210,8 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
   @impl true
   def init({ctx, rpc, poll_interval_ms, caller}) do
     # Trapping exits guarantees terminate/2 — and with it protocol-file
-    # cleanup — on supervisor shutdown, and turns a linked caller's death
-    # into a controlled stop instead of a propagated crash.
+    # cleanup — on supervisor shutdown or linked-parent death. A monitored
+    # caller's death arrives as :DOWN and stops the server below.
     Process.flag(:trap_exit, true)
     caller_monitor = Process.monitor(caller)
     schedule_poll(poll_interval_ms)

@@ -7,7 +7,7 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
   """
   use ExUnit.Case, async: false
 
-  alias CodingAgent.Tools.ExecuteCode.RpcServer
+  alias CodingAgent.Tools.ExecuteCode.{Rpc, RpcServer}
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
@@ -194,17 +194,6 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
     end
   end
 
-  defmodule InspectingRpc do
-    @moduledoc false
-
-    def initial_stats, do: FakeRpc.initial_stats()
-
-    def process_pending(%{test_pid: test_pid} = ctx, stats) do
-      send(test_pid, {:sweep_ctx, ctx})
-      stats
-    end
-  end
-
   defmodule BlockingApprovalRpc do
     @moduledoc false
 
@@ -237,8 +226,13 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
       assert {:error, {:invalid_ctx, :max_calls}} =
                RpcServer.start_link(ctx(rpc_dir, max_calls: 0), rpc: FakeRpc)
 
-      assert {:error, {:invalid_ctx, :max_requests_per_sweep}} =
-               RpcServer.start_link(ctx(rpc_dir, max_requests_per_sweep: 0), rpc: FakeRpc)
+      for invalid_cap <- [0, -1, "3"] do
+        assert {:error, {:invalid_ctx, :max_requests_per_sweep}} =
+                 RpcServer.start_link(
+                   ctx(rpc_dir, max_requests_per_sweep: invalid_cap),
+                   rpc: FakeRpc
+                 )
+      end
 
       assert {:error, {:invalid_ctx, :poll_interval_ms}} =
                RpcServer.start_link(ctx(rpc_dir), rpc: FakeRpc, poll_interval_ms: 0)
@@ -257,14 +251,22 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
       assert :ok = RpcServer.stop(server)
     end
 
-    test "passes the optional per-sweep cap to the pump", %{rpc_dir: rpc_dir} do
-      {:ok, server} =
-        start_server(
-          ctx(rpc_dir, max_requests_per_sweep: 3, test_pid: self()),
-          rpc: InspectingRpc
-        )
+    test "enforces the optional per-sweep cap through the real pump", %{rpc_dir: rpc_dir} do
+      ctx = %{ctx(rpc_dir, max_requests_per_sweep: 3) | tools: blocking_tools(self())}
 
-      assert_receive {:sweep_ctx, %{max_requests_per_sweep: 3}}
+      {:ok, server} = start_server(ctx, rpc: Rpc, poll_interval_ms: 50)
+
+      for id <- 1..4, do: write_request(rpc_dir, id, "block", %{})
+
+      for id <- 1..3 do
+        call_id = "exec_code_rpc_#{id}"
+        assert_receive {:blocking_dispatch, ^call_id, sweep_pid}, 2_000
+        send(sweep_pid, :release)
+        assert %{"id" => ^id, "ok" => true} = await_response(rpc_dir, id)
+      end
+
+      refute_receive {:blocking_dispatch, "exec_code_rpc_4", _sweep_pid}, 25
+      refute File.exists?(Path.join(rpc_dir, "res-4.json"))
       assert :ok = RpcServer.stop(server)
     end
   end
@@ -519,6 +521,24 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
           %AgentToolResult{
             content: [%TextContent{text: params["value"] || ""}]
           }
+        end
+      }
+    }
+  end
+
+  defp blocking_tools(test) do
+    %{
+      "block" => %AgentTool{
+        name: "block",
+        description: "block",
+        label: "block",
+        parameters: %{"type" => "object", "properties" => %{}},
+        execute: fn call_id, _params, _signal, _on_update ->
+          send(test, {:blocking_dispatch, call_id, self()})
+
+          receive do
+            :release -> %AgentToolResult{content: [%TextContent{text: "released"}]}
+          end
         end
       }
     }
