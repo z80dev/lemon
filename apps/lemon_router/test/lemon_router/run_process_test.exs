@@ -3088,6 +3088,13 @@ defmodule LemonRouter.RunProcessTest do
         )
 
       :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), action_event)
+
+      assert eventually(fn ->
+               :sys.get_state(pid).requested_send_files == [
+                 %{path: "workspace/image.png", filename: "renamed.png", caption: "Generated"}
+               ]
+             end)
+
       :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
 
       assert_receive {:delivered,
