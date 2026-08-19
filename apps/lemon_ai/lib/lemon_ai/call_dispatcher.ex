@@ -297,8 +297,19 @@ defmodule LemonAi.CallDispatcher do
     case Task.Supervisor.start_child(LemonAi.StreamTaskSupervisor, fn ->
            track_stream_result(provider, slot_ref, stream_pid)
          end) do
-      {:ok, _pid} -> :ok
-      {:error, reason} -> {:error, reason}
+      {:ok, tracker_pid} ->
+        case LemonAi.EventStream.subscribe_result(stream_pid, tracker_pid) do
+          {:ok, result_ref} ->
+            send(tracker_pid, {:track_stream_result, result_ref})
+            :ok
+
+          {:error, reason} ->
+            Process.exit(tracker_pid, :shutdown)
+            {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
     end
   catch
     :exit, reason -> {:error, reason}
@@ -346,17 +357,28 @@ defmodule LemonAi.CallDispatcher do
   defp await_stream_terminal_result(stream_pid) do
     timeout_ms = stream_result_timeout_ms()
 
-    case LemonAi.EventStream.result(stream_pid, timeout_ms) do
-      {:error, :timeout} = timeout_error ->
-        Logger.warning(
-          "CallDispatcher stream tracking timeout after #{timeout_ms}ms stream=#{inspect(stream_pid)}"
-        )
+    receive do
+      {:track_stream_result, result_ref} ->
+        stream_ref = Process.monitor(stream_pid)
 
-        _ = LemonAi.EventStream.cancel(stream_pid, @default_stream_cancel_reason)
-        timeout_error
+        receive do
+          {:event_stream_result, ^result_ref, terminal_result} ->
+            Process.demonitor(stream_ref, [:flush])
+            terminal_result
 
-      other ->
-        other
+          {:DOWN, ^stream_ref, :process, ^stream_pid, reason} ->
+            {:error, {:stream_exit, reason}}
+        after
+          timeout_ms ->
+            Process.demonitor(stream_ref, [:flush])
+
+            Logger.warning(
+              "CallDispatcher stream tracking timeout after #{timeout_ms}ms stream=#{inspect(stream_pid)}"
+            )
+
+            _ = LemonAi.EventStream.cancel(stream_pid, @default_stream_cancel_reason)
+            {:error, :timeout}
+        end
     end
   end
 

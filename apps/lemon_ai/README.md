@@ -89,6 +89,11 @@ text            = LemonAi.EventStream.collect_text(stream)   # blocking, returns
 LemonAi.EventStream.cancel(stream, :user_requested)
 ```
 
+Non-blocking lifecycle observers can call
+`LemonAi.EventStream.subscribe_result/2`; it synchronously registers the
+subscriber and later sends `{:event_stream_result, reference, result}`. This
+guarantees that a subsequent cancellation cannot overtake result registration.
+
 `LemonAi.complete/3` is just `stream/3` + `EventStream.result/1` collected for you.
 
 ## Tool use

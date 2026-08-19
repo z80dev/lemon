@@ -76,11 +76,12 @@ lemon gateway setup discord
 Send messages or upload build artifacts directly to your channels from shell scripts or CI pipelines:
 
 ```bash
-# Installed runtime (use ./bin/lemon in a source checkout)
+# Installed runtime
 lemon send --to telegram:<chat_id> "Deployment complete"
-
-# Send an alert with attachments
 lemon send --to discord:#ops --attach release-notes.md --attach build.log "Build finished"
+
+# Source checkout
+./bin/lemon send --to telegram:<chat_id> "Deployment complete"
 ```
 *(See [Script Notifications Reference](apps/lemon_channels/README.md#script-notifications) for delivery options and default target configuration.)*
 

@@ -232,6 +232,25 @@ defmodule LemonAi.EventStream do
   end
 
   @doc """
+  Subscribe a process to the final stream result without blocking the caller.
+
+  The subscriber receives `{:event_stream_result, reference, result}` exactly
+  once. Registration is synchronous, so a cancellation issued after this
+  function returns cannot race ahead of the result subscription.
+  """
+  @spec subscribe_result(t(), pid()) :: {:ok, reference()} | {:error, :stream_not_found}
+  def subscribe_result(stream, subscriber \\ self()) when is_pid(subscriber) do
+    reference = make_ref()
+
+    case GenServer.call(stream, {:subscribe_result, subscriber, reference}) do
+      :ok -> {:ok, reference}
+    end
+  catch
+    :exit, {:noproc, _} -> {:error, :stream_not_found}
+    :exit, {:normal, _} -> {:error, :stream_not_found}
+  end
+
+  @doc """
   Collect all text from the stream into a single string.
   """
   @spec collect_text(t()) :: String.t()
@@ -339,8 +358,20 @@ defmodule LemonAi.EventStream do
     if state.done do
       {:reply, state.result, state}
     else
-      result_waiters = :queue.in(from, state.result_waiters)
+      result_waiters = :queue.in({:caller, from}, state.result_waiters)
       {:noreply, %{state | result_waiters: result_waiters}}
+    end
+  end
+
+  def handle_call({:subscribe_result, subscriber, reference}, _from, state) do
+    waiter = {:subscriber, subscriber, reference}
+
+    if state.done do
+      notify_result_waiter(waiter, state.result)
+      {:reply, :ok, state}
+    else
+      result_waiters = :queue.in(waiter, state.result_waiters)
+      {:reply, :ok, %{state | result_waiters: result_waiters}}
     end
   end
 
@@ -618,8 +649,8 @@ defmodule LemonAi.EventStream do
   end
 
   defp notify_result_waiters(state) do
-    Enum.each(:queue.to_list(state.result_waiters), fn from ->
-      GenServer.reply(from, state.result)
+    Enum.each(:queue.to_list(state.result_waiters), fn waiter ->
+      notify_result_waiter(waiter, state.result)
     end)
 
     # Also wake up take waiters with :done
@@ -628,6 +659,12 @@ defmodule LemonAi.EventStream do
     end)
 
     %{state | result_waiters: :queue.new(), take_waiters: :queue.new()}
+  end
+
+  defp notify_result_waiter({:caller, from}, result), do: GenServer.reply(from, result)
+
+  defp notify_result_waiter({:subscriber, subscriber, reference}, result) do
+    send(subscriber, {:event_stream_result, reference, result})
   end
 
   defp do_cancel(state, reason) do

@@ -55,9 +55,15 @@ const ANSI_PATTERN = new RegExp(
 	`${ESC}\\[[0-9;?]*[A-Za-z]|${ESC}\\][^${BEL}${ESC}]*(?:${BEL}|${ESC}\\\\)`,
 	"g",
 );
+const TEXT_SIZING_PATTERN = new RegExp(
+	`${ESC}\\]66;[^;]*;([^${ESC}]*)${ESC}\\\\`,
+	"g",
+);
 
 export function stripAnsi(text: string): string {
-	return text.replace(ANSI_PATTERN, "");
+	// OSC 66 carries visible text inside the control sequence. Preserve its
+	// payload before removing ordinary ANSI/OSC wrappers.
+	return text.replace(TEXT_SIZING_PATTERN, "$1").replace(ANSI_PATTERN, "");
 }
 
 export function renderPlain(lines: readonly string[]): string {

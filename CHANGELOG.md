@@ -12,6 +12,49 @@ No unreleased changes yet.
 
 ---
 
+## [2026.08.1]
+
+### Added
+
+- First-run onboarding in packaged `lemon_runtime_min` and
+  `lemon_runtime_full` releases, including interactive provider/model setup,
+  setup-readiness gating before TUI startup, and installer handoff to the
+  setup wizard
+- Packaged runtime CLI parity for setup, model, gateway, configuration,
+  secrets, channels, and diagnostics commands
+- Telegram and Discord gateway setup flows with encrypted credential storage
+  and verification
+- New Bun/`pi-tui` terminal client with streaming transcripts, tool cards,
+  approvals, queue/steer/interrupt controls, multiple sessions, themes, mouse
+  support, resolved-model display, and per-run usage
+- Persistent supervised Python kernels for `execute_code`, with authenticated
+  RPC, bounded requests and execution, cancellation, lifecycle cleanup, and
+  redacted telemetry
+
+### Changed
+
+- Installation and onboarding documentation now describes the packaged
+  first-run flow and distinguishes installed-runtime commands from source
+  wrappers
+- Release verification now proves packaged onboarding, source setup
+  dispatch, readiness isolation, credential scrubbing, and release artifact
+  summaries
+
+### Fixed
+
+- Closed an argument-injection path in packaged doctor dispatch
+- Hardened persistent Python kernel ownership, teardown, timeout, spill
+  cleanup, and late-frame handling
+- Preserved installer `--modify-path` behavior while adding setup handoff
+- Corrected provider routing circuit-breaker iteration and hermetic channel
+  credential handling
+- Made stream-result subscription synchronous so user cancellation cannot be
+  miscounted as a provider circuit-breaker failure
+- Made the live coding-repair release eval specify the patch tool contract
+  explicitly, preventing model-dependent shell-edit detours
+
+---
+
 ## [2026.08.0]
 
 ### Added

@@ -1,6 +1,6 @@
 {
   "name": "lemon-tui",
-  "version": "2026.8.0",
+  "version": "2026.08.1",
   "description": "Lemon terminal client built on pi-tui",
   "type": "module",
   "license": "MIT",

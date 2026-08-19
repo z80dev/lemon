@@ -1396,12 +1396,22 @@ defmodule LemonEvals.Evals.LiveModel do
     You are running a live-model Lemon coding repair eval.
 
     This workspace is a tiny Elixir project. You must:
-    1. Read `lib/lemon_release_report.ex`.
-    2. Patch only `lib/lemon_release_report.ex`.
-    3. Run `elixir test/lemon_release_report_test.exs`.
-    4. After the bash result shows the test passes, answer with the exact marker LIVE_CODING_REPAIR_DONE and one short sentence naming the behavior you fixed.
+    1. Call `read` for `lib/lemon_release_report.ex`.
+    2. Call `patch` exactly once for only `lib/lemon_release_report.ex`. Pass a
+       `patch_text` string in this form:
+       *** Begin Patch
+       *** Update File: lib/lemon_release_report.ex
+       @@
+       -old line
+       +new line
+       *** End Patch
+    3. After the patch succeeds, call `bash` with
+       `elixir test/lemon_release_report_test.exs`.
+    4. After the bash result shows the test passes, answer with the exact marker
+       LIVE_CODING_REPAIR_DONE and one short sentence naming the behavior fixed.
 
-    Do not edit the test. Do not answer before running the test.
+    Do not edit the test. Do not use bash to read or edit files. Do not answer
+    before the bash test passes.
     """
   end
 

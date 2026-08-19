@@ -192,7 +192,14 @@ defmodule CodingAgent.SessionTest do
   end
 
   defp configure_python_repl(response) do
-    start_supervised!({PythonReplDirector, {self(), response}})
+    test_pid = self()
+
+    start_supervised!(%{
+      id: PythonReplDirector,
+      start:
+        {Agent, :start_link,
+         [fn -> %{test_pid: test_pid, response: response} end, [name: PythonReplDirector]]}
+    })
   end
 
   defp write_execute_code_config(cwd, opts) do

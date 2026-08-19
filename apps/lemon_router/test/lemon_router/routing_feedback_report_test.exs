@@ -11,12 +11,17 @@ defmodule LemonRouter.RoutingFeedbackReportTest do
     File.mkdir_p!(dir)
 
     {:ok, pid} =
-      GenServer.start_link(RoutingFeedbackStore, [path: dir],
+      GenServer.start_link(RoutingFeedbackStore, [path: dir, subscribe?: false],
         name: :"rfr_#{:erlang.unique_integer([:positive])}"
       )
 
     on_exit(fn ->
-      if Process.alive?(pid), do: GenServer.stop(pid)
+      try do
+        GenServer.stop(pid)
+      catch
+        :exit, {:noproc, _} -> :ok
+      end
+
       File.rm_rf!(dir)
     end)
 
