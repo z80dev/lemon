@@ -54,6 +54,8 @@ No unreleased changes yet.
   explicitly, preventing model-dependent shell-edit detours
 - Cleaned cached release assembly directories before packaging so artifacts
   cannot retain stale application or dependency versions
+- Corrected secret error type specifications and unreachable CLI config
+  branches so the allowlisted `lemon_cli` Dialyzer gate remains clean
 
 ---
 

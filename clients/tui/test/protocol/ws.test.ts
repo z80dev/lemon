@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { FakeControlPlane } from "../../src/dev/fake-server.ts";
-import { computeBackoffDelay, MIN_WATCHDOG_WINDOW_MS, ReconnectingSocket } from "../../src/protocol/ws.ts";
+import {
+	computeBackoffDelay,
+	MIN_WATCHDOG_WINDOW_MS,
+	ReconnectingSocket,
+} from "../../src/protocol/ws.ts";
 
 const teardown: Array<() => void> = [];
 

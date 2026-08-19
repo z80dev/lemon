@@ -463,30 +463,30 @@ defmodule LemonCli.CLI do
   defp print_config_summary(config) do
     IO.puts("")
     IO.puts("Agent:")
-    IO.puts("  Default model: #{config.agent.default_model || "(not set)"}")
-    IO.puts("  Default provider: #{config.agent.default_provider || "(not set)"}")
-    IO.puts("  Thinking level: #{config.agent.default_thinking_level || "(not set)"}")
+    IO.puts("  Default model: #{config.agent.default_model}")
+    IO.puts("  Default provider: #{config.agent.default_provider}")
+    IO.puts("  Thinking level: #{config.agent.default_thinking_level}")
 
     IO.puts("")
     IO.puts("Gateway:")
-    IO.puts("  Max concurrent runs: #{config.gateway.max_concurrent_runs || "(not set)"}")
-    IO.puts("  Auto resume: #{config.gateway.auto_resume || "(not set)"}")
+    IO.puts("  Max concurrent runs: #{config.gateway.max_concurrent_runs}")
+    IO.puts("  Auto resume: #{config.gateway.auto_resume}")
     IO.puts("  Channels enabled: #{enabled_channels(config.gateway)}")
 
     IO.puts("")
     IO.puts("Logging:")
-    IO.puts("  Level: #{config.logging.level || "(not set)"}")
-    IO.puts("  File: #{config.logging.file || "(not set)"}")
+    IO.puts("  Level: #{config.logging.level}")
+    IO.puts("  File: #{config.logging.file}")
 
     IO.puts("")
     IO.puts("TUI:")
-    IO.puts("  Theme: #{config.tui.theme || "(not set)"}")
-    IO.puts("  Debug: #{config.tui.debug || "(not set)"}")
+    IO.puts("  Theme: #{config.tui.theme}")
+    IO.puts("  Debug: #{config.tui.debug}")
 
     IO.puts("")
     IO.puts("Providers:")
 
-    if config.providers.providers && map_size(config.providers.providers) > 0 do
+    if map_size(config.providers.providers) > 0 do
       Enum.each(config.providers.providers, fn {name, provider_config} ->
         has_key = if provider_config.api_key, do: "✓", else: "✗"
         IO.puts("  #{name}: API key #{has_key}")

@@ -249,9 +249,6 @@ defmodule LemonCli.Setup.Gateway.Discord do
       {:error, :config_write_failed} ->
         io.error.("Could not update the canonical Lemon config file.")
         {:error, :config_write_failed}
-
-      error ->
-        error
     end
   end
 

@@ -45,6 +45,7 @@ defmodule LemonCore.Secrets do
 
   @type owner :: String.t()
   @type name :: String.t()
+  @type error_reason :: atom() | tuple()
 
   @type secret_metadata :: %{
           required(:owner) => owner(),
@@ -64,7 +65,8 @@ defmodule LemonCore.Secrets do
   @spec default_owner() :: owner()
   def default_owner, do: @default_owner
 
-  @spec set(name(), String.t(), keyword()) :: {:ok, secret_metadata()} | {:error, atom()}
+  @spec set(name(), String.t(), keyword()) ::
+          {:ok, secret_metadata()} | {:error, error_reason()}
   def set(name, value, opts \\ [])
 
   def set(name, value, opts) when is_binary(value) do
@@ -102,7 +104,7 @@ defmodule LemonCore.Secrets do
 
   def set(_, _, _), do: {:error, :invalid_secret_value}
 
-  @spec get(name(), keyword()) :: {:ok, String.t()} | {:error, atom()}
+  @spec get(name(), keyword()) :: {:ok, String.t()} | {:error, error_reason()}
   def get(name, opts \\ []) do
     with {:ok, name} <- normalize_name(name),
          {:ok, owner} <- normalize_owner(opts),
@@ -139,7 +141,8 @@ defmodule LemonCore.Secrets do
     end
   end
 
-  @spec resolve(name(), keyword()) :: {:ok, String.t(), :store | :env} | {:error, atom()}
+  @spec resolve(name(), keyword()) ::
+          {:ok, String.t(), :store | :env} | {:error, error_reason()}
   def resolve(name, opts \\ []) do
     prefer_env = Keyword.get(opts, :prefer_env, false)
     env_fallback = Keyword.get(opts, :env_fallback, true)
@@ -185,7 +188,8 @@ defmodule LemonCore.Secrets do
       iex> LemonCore.Secrets.persist("MY_API_KEY", "sk-...")
       {:ok, %{name: "MY_API_KEY", ...}}
   """
-  @spec persist(name(), String.t(), keyword()) :: {:ok, secret_metadata()} | {:error, atom()}
+  @spec persist(name(), String.t(), keyword()) ::
+          {:ok, secret_metadata()} | {:error, error_reason()}
   def persist(name, value, opts \\ []) do
     set(name, value, opts)
   end
@@ -205,7 +209,8 @@ defmodule LemonCore.Secrets do
       iex> LemonCore.Secrets.import_from_env("NEW_API_KEY", env_name: "OLD_API_KEY")
       {:ok, %{name: "NEW_API_KEY", ...}}
   """
-  @spec import_from_env(name(), keyword()) :: {:ok, secret_metadata()} | {:error, atom()}
+  @spec import_from_env(name(), keyword()) ::
+          {:ok, secret_metadata()} | {:error, error_reason()}
   def import_from_env(name, opts \\ []) do
     env_name = Keyword.get(opts, :env_name, name)
     delete_after = Keyword.get(opts, :delete_after, false)

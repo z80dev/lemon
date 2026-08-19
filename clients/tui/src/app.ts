@@ -27,8 +27,8 @@
 import { ProcessTerminal, type Terminal } from "@oh-my-pi/pi-tui/terminal";
 import { Container, TUI } from "@oh-my-pi/pi-tui/tui";
 import { indentBlock, pickNumber, pickString } from "./commands/format.ts";
-import { contextWindowFromCache } from "./commands/model.ts";
 import { type CommandHost, type CommandRegistry, createCommandRegistry } from "./commands/index.ts";
+import { contextWindowFromCache } from "./commands/model.ts";
 import { SUBMISSION_MODES } from "./commands/registry.ts";
 import { editInExternalEditor } from "./external-editor.ts";
 import { getGitModeline } from "./git-utils.ts";
@@ -49,11 +49,7 @@ import { ModelPicker } from "./ui/components/model-picker.ts";
 import { PickerOverlay } from "./ui/components/pickers.ts";
 import { QueuePanelComponent } from "./ui/components/queue-panel.ts";
 import { SessionSwitcher } from "./ui/components/session-switcher.ts";
-import {
-	type ContextSource,
-	StatusBar,
-	type StatusBarData,
-} from "./ui/components/status-bar.ts";
+import { type ContextSource, StatusBar, type StatusBarData } from "./ui/components/status-bar.ts";
 import { TranscriptContainer } from "./ui/components/transcript-container.ts";
 import { ClampedText } from "./ui/components/width-safe.ts";
 import { ApprovalController } from "./ui/controllers/approval-controller.ts";

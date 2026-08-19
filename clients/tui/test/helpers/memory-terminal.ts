@@ -55,10 +55,7 @@ const ANSI_PATTERN = new RegExp(
 	`${ESC}\\[[0-9;?]*[A-Za-z]|${ESC}\\][^${BEL}${ESC}]*(?:${BEL}|${ESC}\\\\)`,
 	"g",
 );
-const TEXT_SIZING_PATTERN = new RegExp(
-	`${ESC}\\]66;[^;]*;([^${ESC}]*)${ESC}\\\\`,
-	"g",
-);
+const TEXT_SIZING_PATTERN = new RegExp(`${ESC}\\]66;[^;]*;([^${ESC}]*)${ESC}\\\\`, "g");
 
 export function stripAnsi(text: string): string {
 	// OSC 66 carries visible text inside the control sequence. Preserve its

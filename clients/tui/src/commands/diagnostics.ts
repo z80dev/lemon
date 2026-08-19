@@ -17,7 +17,6 @@ import {
 	pickBoolean,
 	pickNumber,
 	pickString,
-	shallowLines,
 } from "./format.ts";
 import type { SlashCommand } from "./registry.ts";
 
