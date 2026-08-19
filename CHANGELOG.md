@@ -52,6 +52,8 @@ No unreleased changes yet.
   miscounted as a provider circuit-breaker failure
 - Made the live coding-repair release eval specify the patch tool contract
   explicitly, preventing model-dependent shell-edit detours
+- Cleaned cached release assembly directories before packaging so artifacts
+  cannot retain stale application or dependency versions
 
 ---
 

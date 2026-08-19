@@ -207,9 +207,13 @@ jobs:
 
       - name: Compile (prod)
         run: mix compile
-
+      # Cached _build trees may retain files from an older release assembly.
+      # Remove only this profile's generated output so --overwrite cannot
+      # package stale app/dependency versions beside the current release.
       - name: Build release
-        run: mix release ${{ matrix.profile }} --overwrite
+        run: |
+          rm -rf "_build/prod/rel/${{ matrix.profile }}"
+          mix release ${{ matrix.profile }}
 
       - name: Package artifact
         id: package
