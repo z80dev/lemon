@@ -3,6 +3,7 @@ defmodule LemonCli.Onboarding.Runner do
 
   alias LemonCli.CLI
   alias LemonCli.Onboarding.LogSilencer
+  alias LemonCore.OAuth.LocalCallbackListener
   alias LemonCli.Onboarding.Provider
   alias LemonCli.Onboarding.TerminalUI
   alias LemonCore.Config
@@ -322,6 +323,7 @@ defmodule LemonCli.Onboarding.Runner do
 
           io.info.("")
         end,
+        local_callback_listener: LocalCallbackListener,
         on_progress: fn message ->
           io.info.(message)
         end,

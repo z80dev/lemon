@@ -117,6 +117,13 @@ keys live in `llm_anthropic_api_key_raw` and should be referenced by
 credentials from `~/.claude/.credentials.json` over a stale static
 `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_TOKEN`.
 
+OpenAI Codex browser sign-in starts a temporary loopback HTTP listener before
+opening the authorization URL. The listener binds the redirect URI's port
+(`http://localhost:1455/auth/callback` by default), captures the authorization
+code, returns a completion page to the browser, and then shuts down. If the
+port cannot be bound or no callback arrives within two minutes, onboarding
+falls back to accepting the callback URL or authorization code manually.
+
 ```bash
 # Installed release
 lemon model --provider antigravity --token <token> --set-default --model gemini-3-pro-high

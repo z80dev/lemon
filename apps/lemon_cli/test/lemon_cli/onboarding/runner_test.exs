@@ -7,6 +7,11 @@ defmodule LemonCli.Onboarding.RunnerTest do
 
   defmodule FakeOAuth do
     def login_device_flow(opts) do
+      unless Keyword.get(opts, :local_callback_listener) ==
+               LemonCore.OAuth.LocalCallbackListener do
+        raise "expected onboarding to provide the localhost OAuth callback listener"
+      end
+
       if on_auth = Keyword.get(opts, :on_auth) do
         on_auth.("https://github.com/login/device", "Enter code: ABCD-EFGH")
       end
