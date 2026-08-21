@@ -86,37 +86,114 @@ defmodule LemonCore.Config.Validator do
   end
 
   @doc """
-  Validates settings for deprecated sections, returning an ok/error tuple.
+  Validates settings for removed configuration sections and engine-routing keys,
+  returning an ok/error tuple.
 
-  Returns `:ok` if no deprecated sections are found, or `{:error, errors}`.
+  Returns `:ok` if no removed settings are found, or `{:error, errors}`.
   """
   @spec validate_deprecated_sections(map()) :: :ok | {:error, [String.t()]}
   def validate_deprecated_sections(settings) when is_map(settings) do
-    []
-    |> check_deprecated(
-      is_map(settings["agent"]),
-      "[agent] is deprecated. Move fields to [defaults] (provider, model, thinking_level) and [runtime] (other settings)."
-    )
-    |> check_deprecated(
-      is_map(settings["agents"]),
-      "[agents.<id>] is deprecated. Use [profiles.<id>] instead."
-    )
-    |> check_deprecated(
-      is_map(settings["agent"]) and is_map(settings["agent"]["tools"]),
-      "[agent.tools.*] is deprecated. Use [runtime.tools.*] instead."
-    )
-    |> check_deprecated(
-      is_map(settings["tools"]),
-      "[tools.*] is deprecated. Use [runtime.tools.*] instead."
-    )
+    deprecated_errors =
+      []
+      |> check_deprecated(
+        is_map(settings["agent"]),
+        "[agent] is deprecated. Move fields to [defaults] (provider, model, thinking_level) and [runtime] (other settings)."
+      )
+      |> check_deprecated(
+        is_map(settings["agents"]),
+        "[agents.<id>] is deprecated. Use [profiles.<id>] instead."
+      )
+      |> check_deprecated(
+        is_map(settings["agent"]) and is_map(settings["agent"]["tools"]),
+        "[agent.tools.*] is deprecated. Use [runtime.tools.*] instead."
+      )
+      |> check_deprecated(
+        is_map(settings["tools"]),
+        "[tools.*] is deprecated. Use [runtime.tools.*] instead."
+      )
+      |> Enum.reverse()
+
+    (deprecated_errors ++ removed_engine_config_errors(settings))
     |> errors_to_result()
+  end
+
+  @removed_engine_keys ~w(
+    engine
+    default_engine
+    engine_preference
+    preferred_engine
+    preferred_engines
+    preferred-engine
+    preferred-engines
+    preferredEngine
+    preferredEngines
+    known_engine
+    known_engines
+    custom_engine
+    custom_engines
+    engine_registry
+    engine_module
+    engine_modules
+    engines
+    gateway_engines
+  )
+  @runtime_cli_path ["runtime", "cli"]
+
+  defp removed_engine_config_errors(settings) do
+    settings
+    |> collect_removed_engine_config_errors([], [])
+    |> Enum.reverse()
+  end
+
+  defp collect_removed_engine_config_errors(settings, path, errors) when is_map(settings) do
+    settings
+    |> Enum.sort_by(fn {key, _value} -> to_string(key) end)
+    |> Enum.reduce(errors, fn {key, value}, errors ->
+      key = to_string(key)
+      current_path = path ++ [key]
+
+      cond do
+        current_path == @runtime_cli_path ->
+          errors
+
+        key in @removed_engine_keys ->
+          [removed_engine_config_message(format_config_path(current_path)) | errors]
+
+        true ->
+          collect_removed_engine_config_errors(value, current_path, errors)
+      end
+    end)
+  end
+
+  defp collect_removed_engine_config_errors(settings, path, errors) when is_list(settings) do
+    settings
+    |> Enum.with_index()
+    |> Enum.reduce(errors, fn {value, index}, errors ->
+      collect_removed_engine_config_errors(value, path ++ [index], errors)
+    end)
+  end
+
+  defp collect_removed_engine_config_errors(_settings, _path, errors), do: errors
+
+  defp format_config_path(path) do
+    Enum.reduce(path, "", fn
+      index, "" when is_integer(index) -> "[#{index}]"
+      index, path when is_integer(index) -> "#{path}[#{index}]"
+      key, "" -> key
+      key, path -> "#{path}.#{key}"
+    end)
+  end
+
+  defp removed_engine_config_message(path) do
+    "#{path} is no longer supported. Lemon runs natively; remove this engine-routing setting. " <>
+      "Configure vendor CLI options only under [runtime.cli.<vendor>] and delegate to them with the task tool's engine option."
   end
 
   defp check_deprecated(errors, true, message), do: [message | errors]
   defp check_deprecated(errors, false, _message), do: errors
 
   defp errors_to_result([]), do: :ok
-  defp errors_to_result(errors), do: {:error, Enum.reverse(errors)}
+  defp errors_to_result(errors), do: {:error, errors}
 
   @doc """
   Validates agent configuration.

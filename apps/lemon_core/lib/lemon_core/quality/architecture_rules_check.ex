@@ -89,14 +89,7 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
       code: :router_channels_runtime_dependency,
       message: "Router must not depend on LemonChannels runtime/config helpers directly",
       files: ["apps/lemon_router/lib/**/*.ex"],
-      patterns: ["LemonChannels.GatewayConfig", "LemonChannels.EngineRegistry"]
-    },
-    %{
-      code: :router_gateway_engine_registry_dependency,
-      message:
-        "Router must validate engines through LemonCore.EngineCatalog, not gateway registry",
-      files: ["apps/lemon_router/lib/**/*.ex"],
-      patterns: ["LemonGateway.EngineRegistry"]
+      patterns: ["LemonChannels.GatewayConfig"]
     },
     %{
       code: :router_gateway_cwd_dependency,
@@ -123,7 +116,7 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
       code: :router_resume_parser_leak,
       message: "Router must not parse free-form channel resume syntax",
       files: ["apps/lemon_router/lib/**/*.ex"],
-      patterns: ["extract_resume_and_strip_prompt", "EngineRegistry.extract_resume"]
+      patterns: ["extract_resume_and_strip_prompt"]
     },
     %{
       code: :router_telegram_store_leak,
@@ -170,21 +163,6 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
         ":telegram_pending_compaction",
         "auto_compacted",
         "build_pending_compaction_prompt"
-      ]
-    },
-    %{
-      code: :channels_engine_registry_format_validation,
-      message:
-        "Channels must use LemonCore.EngineCatalog and LemonCore.ResumeToken for validation/formatting; EngineRegistry is parsing-only",
-      files: ["apps/lemon_channels/lib/**/*.ex"],
-      exclude: ["apps/lemon_channels/lib/lemon_channels/engine_registry.ex"],
-      patterns: [
-        "EngineRegistry.get_engine(",
-        "EngineRegistry.engine_known?(",
-        "EngineRegistry.format_resume(",
-        "LemonChannels.EngineRegistry.get_engine(",
-        "LemonChannels.EngineRegistry.engine_known?(",
-        "LemonChannels.EngineRegistry.format_resume("
       ]
     },
     %{
@@ -321,6 +299,18 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
       message: "Gateway run handling must not keep legacy Job compatibility branches",
       files: ["apps/lemon_gateway/lib/lemon_gateway/run.ex"],
       patterns: ["def handle_cast({:steer, %Job", "def handle_cast({:steer_backlog, %Job"]
+    },
+    %{
+      code: :top_level_engine_selector,
+      message:
+        "Top-level run/execution contracts must not expose an engine_id selector; task runner IDs belong only to task APIs",
+      files: [
+        "apps/lemon_core/lib/lemon_core/run_request.ex",
+        "apps/lemon_core/lib/lemon_core/execution_command.ex",
+        "apps/lemon_gateway/lib/lemon_gateway/execution_request.ex",
+        "apps/lemon_gateway/lib/lemon_gateway/executor.ex"
+      ],
+      patterns: ["engine_id"]
     },
     %{
       code: :heartbeat_store_wrapper_bypass,
@@ -583,6 +573,27 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
         "apps/lemon_channels/lib/**/*.ex",
         "apps/lemon_control_plane/lib/**/*.ex"
       ]
+    },
+    %{
+      code: :cli_runners_gateway_boundary,
+      message:
+        "CLI task runners must not depend on LemonGateway.*; executor dispatches registered task runners",
+      prefixes: ["LemonGateway"],
+      files: ["apps/lemon_cli_runners/lib/**/*.ex"]
+    },
+    %{
+      code: :gateway_coding_agent_boundary,
+      message:
+        "Gateway must not depend on CodingAgent.*; task execution goes through registered runners",
+      prefixes: ["CodingAgent"],
+      files: ["apps/lemon_gateway/lib/**/*.ex"]
+    },
+    %{
+      code: :engine_catalog_boundary,
+      message:
+        "Top-level execution must not use LemonCore.EngineCatalog; task runner identities belong to SubagentRegistry",
+      prefixes: ["LemonCore.EngineCatalog"],
+      files: ["apps/*/lib/**/*.ex"]
     },
     %{
       code: :router_internals_boundary,

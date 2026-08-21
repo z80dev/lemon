@@ -11,6 +11,18 @@ CLI Runners enable you to:
 - **Maintain long-lived sessions** with resume capability
 - **Integrate external agents** as collaborators in your main agent loop
 
+
+## Boundary
+
+CLI Runners supplies delegated task subagents only. It never supplies a
+LemonGateway executor, and a vendor CLI cannot be selected for a top-level TUI
+or gateway run. Lemon's native executor owns those runs.
+
+Configure a vendor subagent with `[runtime.cli.<vendor>]` (for example,
+`[runtime.cli.codex]` or `[runtime.cli.claude]`). Those settings apply only
+when the `task` tool invokes that vendor. Adding or configuring a CLI runner
+does not create a top-level execution choice.
+
 ## Architecture
 
 ```
@@ -30,24 +42,25 @@ CLI Runners enable you to:
 ```
 
 The event vocabulary is owned by `lemon_core`, not by this package: every
-engine — these CLI wrappers and Lemon's own native session alike — emits
-`LemonCore.RunEvents` structs, so consumers never branch on the vendor.
+delegated CLI wrapper and Lemon's native session emit `LemonCore.RunEvents`
+structs, so consumers never branch on the vendor. This shared vocabulary does
+not make a CLI wrapper a gateway executor.
 
 ## Registration
 
 Each `*Subagent` module implements `LemonCore.SubagentRunner` and is registered
-into `LemonCore.SubagentRegistry` by `LemonCliRunners.Application` at boot. That
-is the whole integration with the agent: the `task` tool reads the registry for
-its engine list, its tool-description prose (from each runner's `describe/0`)
-and the module to run, so nothing in the agent names a vendor. Drop this
-package from a build and those engines simply stop being offered.
+into `LemonCore.SubagentRegistry` by `LemonCliRunners.Application` at boot. The
+`task` tool reads that registry for its subagent choices, tool-description prose
+(from each runner's `describe/0`), and the module to run, so nothing in the
+agent names a vendor. Drop this package from a build and those subagents simply
+stop being offered.
 
 Each `*Subagent` also declares `resume_format/0` — how its CLI spells "resume"
 (`codex resume X`, `claude --resume X`, pi's quoted transcript paths) — which
 `LemonCliRunners.Application` registers into `LemonCore.ResumeFormats`.
-`LemonCore.ResumeToken` prints and parses those lines for the whole platform
-without knowing any vendor; without this package it falls back to the generic
-`<engine> resume <token>`.
+`LemonCore.ResumeToken` prints and parses those lines for delegated task
+subagents without knowing any vendor; without this package it falls back to the
+generic `<runner> resume <token>`.
 
 ## Quick Start
 
@@ -222,7 +235,9 @@ end
 
 ## Implementing New Runners
 
-To add support for a new CLI tool (e.g., Claude):
+New runners are task subagents, not gateway engines. The `engine/0` callback
+below names the runner in task events and resume tokens; it does not register a
+top-level executor. Implement the `LemonCliRunners.JsonlRunner` behaviour:
 
 ```elixir
 defmodule LemonCliRunners.ClaudeRunner do
@@ -323,7 +338,9 @@ This allows the same UI/progress tracking code to work with any CLI tool.
 
 ## Adding a New CLI Runner
 
-Implement the `LemonCliRunners.JsonlRunner` behaviour:
+Adding a runner makes another delegated task subagent available; it must not
+add a gateway executor or a top-level engine-selection setting. Implement the
+`LemonCliRunners.JsonlRunner` behaviour:
 
 ```elixir
 defmodule LemonCliRunners.MyEngineRunner do

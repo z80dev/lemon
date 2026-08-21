@@ -1,6 +1,6 @@
 # LemonGateway
 
-Multi-engine execution gateway for Elixir. It sits behind router-owned conversations and handles execution-slot scheduling, per-conversation launch isolation, session resumption, and streaming engine output via the event bus.
+Gateway for Lemon's configured singleton native executor. It sits behind router-owned conversations and handles execution-slot scheduling, per-conversation launch isolation, session resumption, and streaming native-executor output via the event bus.
 
 Part of the `lemon` Elixir umbrella project.
 
@@ -42,16 +42,14 @@ Part of the `lemon` Elixir umbrella project.
                                             v
                         +-------------------+---------------------+
                         |          LemonGateway.Run                |
-                        |    engine lifecycle, bus events,         |
-                        |    streaming deltas, steer/cancel        |
+                        |  native execution lifecycle, bus events, |
+                        |       streaming deltas, steer/cancel     |
                         +-------------------+---------------------+
-                                            |
-                                   Engine.start_run
                                             |
                                             v
                         +-------------------+---------------------+
-                        |        Engine (behaviour)                |
-                        | Lemon | Claude | Codex | Opencode | Pi  |
+                        |       CodingAgent.Executor               |
+                        |    configured native executor            |
                         +-------------------+---------------------+
                                             |
                                   events & deltas
@@ -70,45 +68,40 @@ Part of the `lemon` Elixir umbrella project.
 2. Gateway-owned transports that still live in this app submit `%LemonCore.RunRequest{}` through `LemonCore.RouterBridge`, not directly into gateway internals.
 3. The **Scheduler** routes each execution request by the router-supplied `conversation_key` and allocates a concurrency slot.
 4. The **ThreadWorker** is only a per-conversation launcher/slot waiter. It does not own product queue semantics.
-5. On slot grant, the worker starts a **Run** via `RunSupervisor`. The Run acquires `EngineLock`, resolves the engine, and calls `Engine.start_run/3`.
-6. The **Engine** executes the AI request and streams lifecycle events and deltas back to the Run process.
+5. On slot grant, the worker starts a **Run** via `RunSupervisor`. The Run acquires `EngineLock` and starts Lemon's native executor.
+6. The native executor executes the AI request and streams lifecycle events and deltas back to the Run process.
 7. The **Run** broadcasts all events to `LemonCore.Bus` on topic `"run:<run_id>"`. Router and channels consume those events and handle semantic output plus channel rendering.
 8. On completion, the Run stores chat state for future auto-resume, releases the engine lock and scheduler slot, and finalizes its lifecycle.
 
-## Supported Engines
+## Singleton Executor Contract
 
-| Engine ID | Module | Runner | Steering | Description |
-|-----------|--------|--------|----------|-------------|
-| `lemon` | `CodingAgent.GatewayEngine` (registered by coding_agent) | `CodingAgent.Session` via `CodingAgent.GatewayEngine.SessionRunner` | Yes | Native Elixir engine with full CodingAgent tool support, session persistence, and mid-run steering. Absent in a runtime without coding_agent |
-| `claude` | `LemonCliRunners.Engines.Claude` (registered by lemon_cli_runners) | `LemonCliRunners.ClaudeRunner` | No | Claude Code CLI wrapper via CliAdapter |
-| `codex` | `LemonCliRunners.Engines.Codex` (registered by lemon_cli_runners) | `LemonCliRunners.CodexRunner` | No | OpenAI Codex CLI wrapper via CliAdapter |
-| `kimi` | `LemonCliRunners.Engines.Kimi` (registered by lemon_cli_runners) | `LemonCliRunners.KimiRunner` | No | Kimi CLI wrapper via CliAdapter |
-| `opencode` | `LemonCliRunners.Engines.Opencode` (registered by lemon_cli_runners) | `LemonCliRunners.OpencodeRunner` | No | Opencode CLI wrapper via CliAdapter |
-| `pi` | `LemonCliRunners.Engines.Pi` (registered by lemon_cli_runners) | `LemonCliRunners.PiRunner` | No | Pi CLI wrapper via CliAdapter |
-| `echo` | `Engines.Echo` | (in-process Task) | No | Test/debug engine that echoes the prompt back |
+Gateway has one configured top-level executor: `CodingAgent.Executor`, invoked
+through the `LemonGateway.Executor` boundary. LemonGateway owns its scheduling,
+run lifecycle, event delivery, cancellation, session resumption, and readiness
+check. Every gateway run retains the fixed provenance `engine: "lemon"`.
 
-### Engine Abstraction
+This is an intentional breaking removal of the Gateway engine platform. Gateway
+runs cannot be routed to a vendor CLI, custom engine, registered engine, or
+`Echo` implementation. Remove legacy `engine`, `default_engine`, and
+`engine_preference` keys along with every `[gateway.engines.<id>]` table.
+There is no Gateway configuration replacement for selecting a top-level external
+or custom executor.
 
-All engines implement the `LemonGateway.Engine` behaviour:
+Choose an extension boundary instead:
 
-- `id/0` -- unique lowercase string identifier
-- `start_run/3` -- starts the AI run, returns `{:ok, run_ref, cancel_ctx}`
-- `cancel/1` -- cancels an active run
-- `supports_steer?/0` -- whether mid-run message injection is supported
-- `steer/2` -- inject text into an active run (optional callback)
-- `format_resume/1`, `extract_resume/1`, `is_resume_line/1` -- resume token serialization
+| Need | Use |
+| --- | --- |
+| Integrate a model/API | a `LemonAi` provider |
+| Add in-process agent capability | a `CodingAgent` tool |
+| Delegate work to another executable | `LemonCore.SubagentRunner` |
 
-CLI-based engines (Claude, Codex, Kimi, Opencode, Pi) delegate to `Engines.CliAdapter`, which provides shared logic for subprocess management, event stream consumption, resume token formatting, and cancellation. Neither they nor the `lemon` engine are part of this app: the vendor engines live in lemon_cli_runners as `LemonCliRunners.Engines.*` and register through `EngineRegistry.register_default/1` at boot (a no-op when the operator configured `:lemon_gateway, :engines` — the configured list is a ceiling), while `lemon` lives in coding_agent as `CodingAgent.GatewayEngine` and registers itself through `EngineRegistry.register/1`.
-
-### Engine Selection Priority
-
-1. Resume token engine (from router-resolved auto-resume or explicit resume)
-2. Inline directive (`/claude`, `/codex`, `/lemon`, etc. via `LemonRouter.StickyEngine`)
-3. Binding `default_engine` (topic-level, then chat-level)
-4. Project `default_engine`
-5. Global `default_engine` from config (default: `"lemon"`)
-
-Composite engine IDs like `"claude:claude-3-opus"` are resolved by prefix fallback to `"claude"`.
+`LemonCore.ResumeToken` and `LemonCore.ResumeFormats` continue to support both
+native-executor and delegated-task resume tokens. Top-level run provenance remains
+`engine: "lemon"` while delegated task records retain their actual `task.engine`
+runner ID; neither field routes Gateway execution. Claude Code, Codex, Kimi,
+OpenCode, and Pi remain optional vendor task runners in `lemon_cli_runners`. Their
+`[runtime.cli.<vendor>]` settings configure the subprocess for delegated tasks only;
+they never select or replace the Gateway executor.
 
 ## Transports
 
@@ -132,18 +125,18 @@ Webhook, SMS, and voice are gateway-owned by design, not pending migration: `Lem
 
 | Module | File | Purpose |
 |--------|------|---------|
-| `LemonGateway` | `lemon_gateway.ex` | Public API entry point (`submit/1` delegates to `submit_execution/1`) |
+| `LemonGateway` | `lemon_gateway.ex` | Public API entry point for `submit_execution/1` and health helpers |
 | `LemonGateway.Application` | `application.ex` | Execution runtime supervision tree with optional health and explicit legacy ingress children |
 | `LemonGateway.IngressSupervisor` | `ingress_supervisor.ex` | Supervisor for gateway-owned transport, command, SMS, and voice startup |
 | `LemonGateway.Runtime` | `runtime.ex` | Execution submission and cancellation API |
 | `LemonGateway.Config` | `config.ex` | TOML-backed runtime configuration GenServer |
 | `LemonGateway.ConfigLoader` | `config_loader.ex` | Loads and parses TOML config into typed structs |
 | `LemonGateway.ExecutionRequest` | `execution_request.ex` | Gateway-private scheduler adapter with no queue semantics |
-| `LemonGateway.Types` | `types.ex` | Legacy compatibility types (`Job`, `engine_id`, `lane`) |
+| `LemonGateway.Types` | `types.ex` | Shared gateway lane type |
 | `LemonGateway.Event` | `event.ex` | Run lifecycle events (plain tagged maps with guards) and `Delta` struct |
 | `LemonCore.ChatState` | `../lemon_core/lib/lemon_core/chat_state.ex` | Session state struct for auto-resume tracking |
 | `LemonGateway.Cwd` | `cwd.ex` | Default working directory resolver |
-| `LemonGateway.Project` | `project.ex` | Project configuration struct (`id`, `root`, `default_engine`) |
+| `LemonGateway.Project` | `project.ex` | Project configuration struct (`id`, `root`) |
 | `LemonGateway.Shared` | `shared.ex` | Shared utilities (config access, data normalization, IP parsing) |
 | `LemonGateway.DependencyManager` | `dependency_manager.ex` | Centralized app startup, module availability checks, safe bus/telemetry |
 | `LemonGateway.AI` | `ai.ex` | Direct HTTP chat completions for OpenAI and Anthropic APIs |
@@ -157,7 +150,7 @@ Webhook, SMS, and voice are gateway-owned by design, not pending migration: `Lem
 | `LemonGateway.ThreadWorker` | `thread_worker.ex` | Per-conversation launcher / slot waiter with no queue-mode logic |
 | `LemonGateway.ThreadRegistry` | `thread_registry.ex` | Registry for thread workers (unique key by `thread_key`) |
 | `LemonGateway.ThreadWorkerSupervisor` | `thread_worker_supervisor.ex` | DynamicSupervisor for thread workers |
-| `LemonGateway.Run` | `run.ex` | Individual run GenServer: engine lifecycle, bus events, steer/cancel |
+| `LemonGateway.Run` | `run.ex` | Individual run GenServer: native execution lifecycle, bus events, steer/cancel |
 | `LemonGateway.RunSupervisor` | `run_supervisor.ex` | DynamicSupervisor for run processes (temporary restart) |
 | `LemonGateway.EngineLock` | `engine_lock.ex` | Per-session mutex with FIFO queueing, timeouts, and stale lock reaping |
 
@@ -166,17 +159,18 @@ including safe failure fields such as `error_type`, `timeout_ms`, and
 `exit_code`, so downstream router and control-plane consumers can classify tool
 failures without parsing rendered command output.
 
-### Engine Layer
+### Native Execution Boundary
 
 | Module | File | Purpose |
 |--------|------|---------|
-| `LemonGateway.Engine` | `engine.ex` | Behaviour definition for engine plugins |
-| `LemonGateway.EngineRegistry` | `engine_registry.ex` | Engine registration, lookup, and resume token extraction |
-| `LemonGateway.Engines.CliAdapter` | `engines/cli_adapter.ex` | Shared CLI subprocess runner for all CLI engines |
+| `LemonGateway.Executor` | `executor.ex` | Validates and invokes the configured singleton executor |
 | `LemonGateway.Workspace` | `workspace.ex` | Workspace directory for channel-bound files, configured rather than read from the agent |
-| `LemonGateway.Engines.Echo` | `engines/echo.ex` | Test/debug echo engine |
 
-The vendor CLI engines (`LemonCliRunners.Engines.{Claude,Codex,Kimi,Opencode,Pi}`) live in `lemon_cli_runners` and register themselves at boot via `EngineRegistry.register_default/1`.
+The public engine plugin, registration, enumeration, and test-compliance
+surfaces are removed. `EngineInfoBridge` retains transport-registry and
+gateway-config capabilities only. Operators must not register Gateway engines or
+use vendor CLI runners as Gateway executors; vendor CLIs remain delegated task
+runners in `lemon_cli_runners`.
 
 ### Transport Layer
 
@@ -191,8 +185,8 @@ The vendor CLI engines (`LemonCliRunners.Engines.{Claude,Codex,Kimi,Opencode,Pi}
 
 | Module | File | Purpose |
 |--------|------|---------|
-| `LemonGateway.Binding` | `binding_resolver.ex` | Struct mapping transport/chat/topic to project/engine/queue_mode |
-| `LemonGateway.BindingResolver` | `binding_resolver.ex` | Resolves engine, cwd, agent_id, queue_mode from `ChatScope` |
+| `LemonGateway.Binding` | `binding_resolver.ex` | Struct mapping transport/chat/topic to project, agent, and queue mode |
+| `LemonGateway.BindingResolver` | `binding_resolver.ex` | Resolves cwd, agent_id, and queue_mode from `ChatScope` |
 | `LemonGateway.Renderer` | `renderer.ex` | Behaviour for event-to-text rendering |
 | `LemonGateway.Renderers.Basic` | `renderers/basic.ex` | Plain-text renderer with action lists and resume info |
 
@@ -227,7 +221,7 @@ The vendor CLI engines (`LemonCliRunners.Engines.{Claude,Codex,Kimi,Opencode,Pi}
 | `LemonGateway.Voice.AudioConversion` | `voice/audio_conversion.ex` | PCM-to-mulaw and MP3 detection utilities |
 | `LemonGateway.Voice.Config` | `voice/config.ex` | Voice configuration (Twilio, Deepgram, ElevenLabs credentials) |
 
-### Gateway Tools (injected into Lemon engine runs)
+### Gateway Tools (injected into native executor runs)
 
 | Module | File | Purpose |
 |--------|------|---------|
@@ -246,37 +240,36 @@ The vendor CLI engines (`LemonCliRunners.Engines.{Claude,Codex,Kimi,Opencode,Pi}
 | `LemonGateway.Health` | `health.ex` | Health check system with built-in and custom checks |
 | `LemonGateway.Health.Router` | `health/router.ex` | Plug router serving `GET /health` (port 4042) |
 
-## Engine Lifecycle
+## Native Execution Lifecycle
 
 ### Start
 
 1. `Run.init/1` acquires the `EngineLock` for the session's thread key (or fails fast with `:lock_timeout`).
-2. `Run.handle_continue(:start_run)` resolves the engine from `EngineRegistry`, resolves the working directory, and calls `engine.start_run(job, opts, self())`.
-3. The engine returns `{:ok, run_ref, cancel_ctx}`. For CLI engines, `CliAdapter` starts a runner subprocess and spawns a linked `Task` that consumes the runner's event stream. Lemon starts a private `SessionRunner` GenServer that subscribes to `CodingAgent.Session` events.
+2. The Run resolves the working directory and invokes the configured `CodingAgent.Executor` through `LemonGateway.Executor`.
+3. The native executor starts the session and returns the run and cancellation state; vendor CLI subprocesses are never started for a Gateway run.
 
 ### Streaming
 
-- Engines send `{:engine_delta, run_ref, text}` messages for incremental text output.
+- The native executor sends `{:engine_delta, run_ref, text}` messages for incremental text output.
 - The Run process assigns monotonic sequence numbers, builds `Event.Delta` structs, and broadcasts them to `LemonCore.Bus`.
 - First-token latency telemetry is emitted on the first delta.
 
 ### Completion
 
-- Engines send `{:engine_event, run_ref, completed_event}` when done.
+- The native executor sends `{:engine_event, run_ref, completed_event}` when done.
 - The Run process stores chat state for auto-resume, emits `:run_completed` to the bus, finalizes the run in `LemonCore.Store`, releases the engine lock and scheduler slot, and notifies the worker and `meta.notify_pid`.
 - On context-length overflow errors, the `ChatState` is automatically cleared so the next run starts fresh.
 
 ### Steering
 
-- Only the Lemon engine supports steering (`supports_steer?/0` returns `true`).
+- The native executor supports low-level steering for an active session.
 - Router-owned `SessionCoordinator` decides whether a submission should be steered, queued, or interrupted before anything reaches the gateway.
-- When the active run is already live, the gateway `Run` only handles the low-level steer attempt by calling `engine.steer(cancel_ctx, text)`.
 - Any fallback from `:steer` / `:steer_backlog` is router behavior, not gateway queue behavior.
 
 ### Cancellation
 
 - `Runtime.cancel_by_run_id/2` looks up the run in `RunRegistry` and casts `{:cancel, reason}` to the run process.
-- The Run calls `engine.cancel(cancel_ctx)`, emits a failed completion event, and terminates normally.
+- The Run cancels the native executor, emits a failed completion event, and terminates normally.
 
 ## Queue Semantics
 
@@ -312,12 +305,12 @@ Incoming Call -> Twilio -> Voice.WebhookRouter -> CallSession GenServer
 
 1. Twilio sends SMS webhooks to `Sms.WebhookServer` (validates signatures via `TwilioSignature`).
 2. `Sms.Inbox` stores messages with extracted verification codes (4-8 digit sequences).
-3. Lemon engine runs can use injected tools (`sms_wait_for_code`, `sms_list_messages`, `sms_claim_message`) to interact with the inbox.
+3. Native executor runs can use injected tools (`sms_wait_for_code`, `sms_list_messages`, `sms_claim_message`) to interact with the inbox.
 4. Messages can be "claimed" to prevent cross-session conflicts.
 
 ## Binding System
 
-Bindings map `transport + chat_id + topic_id` to a project, agent, engine, and queue mode:
+Bindings map `transport + chat_id + topic_id` to a project, agent, and queue mode:
 
 ```toml
 [[gateway.bindings]]
@@ -326,13 +319,11 @@ chat_id = 123456789
 topic_id = 42
 project = "myproject"
 agent_id = "coder"
-default_engine = "claude"
 queue_mode = "steer"
 ```
 
 `BindingResolver` delegates to `LemonCore.BindingResolver` and provides:
 - `resolve_binding/1` -- most specific matching binding
-- `resolve_engine/3` -- engine with priority cascade
 - `resolve_cwd/1` -- project root directory
 - `resolve_agent_id/1` -- agent identifier
 - `resolve_queue_mode/1` -- queue mode from binding
@@ -346,11 +337,10 @@ Configuration loads from `~/.lemon/config.toml` (the `[gateway]` section) via `L
 | Key | Default | Description |
 |-----|---------|-------------|
 | `max_concurrent_runs` | `2` | Maximum concurrent AI runs across all threads |
-| `default_engine` | `"lemon"` | Engine when no hint or resume token present |
 | `default_cwd` | `nil` | Default working directory (falls back to `$HOME`) |
 | `auto_resume` | `false` | Automatically resume sessions from stored `ChatState` |
-| `require_engine_lock` | `true` | Acquire per-session mutex before engine runs |
-| `engine_lock_timeout_ms` | `60000` | Timeout for engine lock acquisition |
+| `require_engine_lock` | `true` | Acquire the per-session mutex before native execution |
+| `engine_lock_timeout_ms` | `60000` | Timeout for native-execution lock acquisition |
 
 ### Startup Options
 
@@ -389,7 +379,6 @@ Discord and email are not gateway transports. If a `discord` or `email` module i
 ```toml
 [gateway]
 max_concurrent_runs = 2
-default_engine = "lemon"
 auto_resume = true
 require_engine_lock = true
 
@@ -405,31 +394,25 @@ deny_unbound_chats = true
 
 [gateway.projects.myproject]
 root = "/path/to/project"
-default_engine = "lemon"
 
 [[gateway.bindings]]
 transport = "telegram"
 chat_id = 123456789
 project = "myproject"
 agent_id = "coder"
-default_engine = "claude"
 queue_mode = "steer"
 
 [gateway.sms]
 inbox_number = "+1234567890"
 webhook_port = 4045
 
-[gateway.engines.lemon]
-enabled = true
-
-[gateway.engines.claude]
-enabled = true
-cli_path = "/usr/local/bin/claude"
 ```
 
 ## Event Protocol
 
-Engines emit events to the Run process as `{:engine_event, run_ref, event}` messages where events are plain tagged maps:
+The configured native executor emits events to the Run process as
+`{:engine_event, run_ref, event}` messages where events are plain tagged maps.
+The `engine` field is always the fixed top-level provenance `"lemon"`:
 
 | Event Tag | Key Fields | Description |
 |-----------|-----------|-------------|
@@ -448,9 +431,9 @@ The health endpoint runs on port 4042 (configurable via `:health_port` or
 
 - Supervisor process liveness
 - Scheduler state (in_flight count, waitq length, max slots)
+- Configured executor readiness
 - RunSupervisor active children
 - EngineLock process liveness
-- XMTP transport status (when enabled)
 
 Custom health checks can be registered via the `:health_checks` application environment.
 
@@ -460,9 +443,8 @@ Custom health checks can be registered via the `:health_checks` application envi
 
 | App | Purpose |
 |-----|---------|
-| `agent_core` | CLI runner infrastructure, tool types (`AgentTool`, `AgentToolResult`), event stream |
-| `coding_agent` | Native Lemon AI engine (`CodingAgent.Session`, `CodingAgent.Session.Presentation`) |
-| `lemon_core` | Shared primitives: `Store`, `Bus`, `Telemetry`, `ResumeToken`, `ChatScope`, `Binding`, `Secrets`, `GatewayConfig` |
+| `coding_agent` | Configured singleton native executor and in-process tools |
+| `lemon_core` | Shared primitives: `Store`, `Bus`, `Telemetry`, `ResumeToken`, `ResumeFormats`, `ChatScope`, `Binding`, `Secrets`, `GatewayConfig` |
 
 ### External Libraries
 
@@ -489,4 +471,4 @@ mix test apps/lemon_gateway/test/run_test.exs
 mix test apps/lemon_gateway --trace
 ```
 
-Tests use `async: false` by default due to shared GenServer state (Config, Scheduler, EngineRegistry). The test helper sets up an isolated lock directory to avoid collisions with running development instances.
+Tests use `async: false` by default due to shared GenServer state (Config, Scheduler, and the singleton executor boundary). The test helper sets up an isolated lock directory to avoid collisions with running development instances.

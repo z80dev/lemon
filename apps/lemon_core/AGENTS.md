@@ -693,7 +693,6 @@ req = LemonCore.RunRequest.new(%{
   agent_id: "default",
   prompt: "Hello",
   queue_mode: :collect,  # :collect | :followup | :steer | :interrupt
-  engine_id: nil,
   model: nil,
   cwd: "/path/to/project",
   tool_policy: nil,

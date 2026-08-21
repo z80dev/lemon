@@ -45,7 +45,6 @@ defmodule LemonGateway.ConfigLoaderTest do
     File.write!(Path.join(config_dir, "config.toml"), """
     [gateway]
     max_concurrent_runs = 3
-    default_engine = "lemon"
     default_cwd = "/tmp/lemon-home"
     enable_telegram = true
     enable_xmtp = true
@@ -60,19 +59,12 @@ defmodule LemonGateway.ConfigLoaderTest do
 
     [gateway.projects.demo]
     root = "/tmp/demo"
-    default_engine = "lemon"
 
     [[gateway.bindings]]
     transport = "telegram"
     chat_id = 123
     topic_id = 0
     project = "demo"
-    default_engine = "lemon"
-    queue_mode = "collect"
-
-    [gateway.engines.lemon]
-    cli_path = "lemon"
-    enabled = true
 
     [gateway.xmtp]
     env = "production"
@@ -84,7 +76,8 @@ defmodule LemonGateway.ConfigLoaderTest do
     config = ConfigLoader.load()
 
     assert config.max_concurrent_runs == 3
-    assert config.default_engine == "lemon"
+    refute Map.has_key?(config, :default_engine)
+    refute Map.has_key?(config, :engines)
     assert config.default_cwd == "/tmp/lemon-home"
     assert config.enable_telegram == true
     assert config.enable_xmtp == true
@@ -99,8 +92,6 @@ defmodule LemonGateway.ConfigLoaderTest do
 
     assert %{"demo" => %Project{root: "/tmp/demo"}} = config.projects
     assert [%Binding{transport: :telegram, chat_id: 123, project: "demo"}] = config.bindings
-
-    assert %{lemon: %{cli_path: "lemon", enabled: true}} = config.engines
   end
 
   test "parses telegram files auto-send settings from override config" do
@@ -218,7 +209,6 @@ defmodule LemonGateway.ConfigLoaderTest do
               "session_key" => "agent:n8n:main",
               "agent_id" => "n8n",
               "queue_mode" => "followup",
-              "default_engine" => "codex",
               "cwd" => "/tmp/n8n",
               "callback_url" => "https://example.test/callback",
               "allow_callback_override" => false,
@@ -258,7 +248,6 @@ defmodule LemonGateway.ConfigLoaderTest do
     assert config.webhook.integrations["n8n-demo"].session_key == "agent:n8n:main"
     assert config.webhook.integrations["n8n-demo"].agent_id == "n8n"
     assert config.webhook.integrations["n8n-demo"].queue_mode == :followup
-    assert config.webhook.integrations["n8n-demo"].default_engine == "codex"
     assert config.webhook.integrations["n8n-demo"].cwd == "/tmp/n8n"
     assert config.webhook.integrations["n8n-demo"].callback_url == "https://example.test/callback"
     assert config.webhook.integrations["n8n-demo"].allow_callback_override == false

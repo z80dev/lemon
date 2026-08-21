@@ -161,7 +161,6 @@ defmodule LemonRouter.RunOrchestratorTest do
             nil -> Application.delete_env(:lemon_router, :event_bridge_test_pid)
             bridge_pid -> Application.put_env(:lemon_router, :event_bridge_test_pid, bridge_pid)
           end
-
         end)
 
         {:ok, orchestrator_pid: pid}
@@ -182,7 +181,6 @@ defmodule LemonRouter.RunOrchestratorTest do
             nil -> Application.delete_env(:lemon_router, :event_bridge_test_pid)
             bridge_pid -> Application.put_env(:lemon_router, :event_bridge_test_pid, bridge_pid)
           end
-
         end)
 
         {:ok, orchestrator_pid: pid}
@@ -367,7 +365,6 @@ defmodule LemonRouter.RunOrchestratorTest do
           run_id: run_id,
           session_key: session_key,
           prompt: "start directly",
-          engine_id: "codex",
           conversation_key: conversation_key,
           meta: %{}
         }
@@ -430,7 +427,6 @@ defmodule LemonRouter.RunOrchestratorTest do
           run_id: run_id,
           session_key: session_key,
           prompt: "start directly",
-          engine_id: "codex",
           conversation_key: conversation_key,
           meta: %{}
         },
@@ -579,132 +575,7 @@ defmodule LemonRouter.RunOrchestratorTest do
     end
   end
 
-  describe "session config application" do
-    test "applies model from session config" do
-      session_key = "test:session:model:#{System.unique_integer()}"
-
-      # Store session config with model
-      LemonCore.Store.put_session_policy(session_key, %{
-        model: "claude-3-opus"
-      })
-
-      params = %{
-        origin: :control_plane,
-        session_key: session_key,
-        agent_id: "test",
-        prompt: "Hello"
-      }
-
-      # The orchestrator should pick up the model from session config
-      result = RunOrchestrator.submit(request(params))
-      assert match?({:ok, _}, result) or match?({:error, _}, result)
-    end
-
-    test "applies thinking_level from session config" do
-      session_key = "test:session:thinking:#{System.unique_integer()}"
-
-      LemonCore.Store.put_session_policy(session_key, %{
-        thinking_level: "high"
-      })
-
-      params = %{
-        origin: :control_plane,
-        session_key: session_key,
-        agent_id: "test",
-        prompt: "Hello"
-      }
-
-      result = RunOrchestrator.submit(request(params))
-      assert match?({:ok, _}, result) or match?({:error, _}, result)
-    end
-
-    test "meta thinking_level overrides session config thinking_level" do
-      run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
-
-      {:ok, orchestrator_pid} =
-        GenServer.start_link(
-          RunOrchestrator,
-          run_supervisor: run_supervisor,
-          run_process_module: CapturingRunProcess,
-          run_process_opts: %{notify_pid: self()}
-        )
-
-      session_key = "test:session:thinking:override:#{System.unique_integer()}"
-
-      LemonCore.Store.put_session_policy(session_key, %{
-        thinking_level: "low"
-      })
-
-      on_exit(fn ->
-        if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
-        LemonCore.Store.delete_session_policy(session_key)
-      end)
-
-      params = %{
-        origin: :channel,
-        session_key: session_key,
-        agent_id: "test",
-        prompt: "Hello",
-        meta: %{thinking_level: "high"}
-      }
-
-      assert {:ok, _run_id} = RunOrchestrator.submit(orchestrator_pid, request(params))
-      assert_receive {:captured_job, job}, 500
-      assert job.meta[:thinking_level] == :high
-    end
-
-    test "explicit engine_id overrides session model" do
-      session_key = "test:session:override:#{System.unique_integer()}"
-
-      LemonCore.Store.put_session_policy(session_key, %{
-        model: "claude-3-haiku"
-      })
-
-      params = %{
-        origin: :control_plane,
-        session_key: session_key,
-        agent_id: "test",
-        prompt: "Hello",
-        # This should take precedence
-        engine_id: "explicit:engine"
-      }
-
-      result = RunOrchestrator.submit(request(params))
-      assert match?({:ok, _}, result) or match?({:error, _}, result)
-    end
-
-    test "handles missing session config gracefully" do
-      session_key = "test:session:missing:#{System.unique_integer()}"
-
-      # Don't set any session config
-
-      params = %{
-        origin: :control_plane,
-        session_key: session_key,
-        agent_id: "test",
-        prompt: "Hello"
-      }
-
-      result = RunOrchestrator.submit(request(params))
-      assert match?({:ok, _}, result) or match?({:error, _}, result)
-    end
-  end
-
-  describe "structured resume handling" do
-    test "respects structured resume tokens supplied by the caller" do
-      params = %{
-        origin: :channel,
-        session_key: unique_oracle_session_key(),
-        agent_id: "test",
-        prompt: "Please continue with this task.",
-        resume: %ResumeToken{engine: "codex", value: "thread_abc123"}
-      }
-
-      assert match?({:ok, _run_id}, RunOrchestrator.submit(request(params)))
-    end
-  end
-
-  describe "agent profile defaults" do
+  describe "native-only routing" do
     setup do
       original_state = :sys.get_state(LemonRouter.AgentProfiles)
 
@@ -715,7 +586,7 @@ defmodule LemonRouter.RunOrchestratorTest do
       :ok
     end
 
-    test "applies system_prompt, model and tool_policy from agent profile" do
+    test "applies model and profile policy" do
       run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
       session_key = unique_oracle_session_key()
 
@@ -736,23 +607,26 @@ defmodule LemonRouter.RunOrchestratorTest do
         %{state | profiles: profile_map_with_oracle()}
       end)
 
-      params = %{
-        origin: :control_plane,
-        session_key: session_key,
-        agent_id: "oracle",
-        prompt: "Hello oracle"
-      }
+      assert {:ok, _run_id} =
+               RunOrchestrator.submit(
+                 orchestrator_pid,
+                 request(%{
+                   origin: :control_plane,
+                   session_key: session_key,
+                   agent_id: "oracle",
+                   prompt: "Hello oracle",
+                   tool_policy: %{blocked_tools: ["rm"]}
+                 })
+               )
 
-      assert {:ok, _run_id} = RunOrchestrator.submit(orchestrator_pid, request(params))
       assert_receive {:captured_job, job}, 500
-
-      assert job.engine_id == "echo"
       assert job.meta[:model] == "openai-codex:gpt-5.3-codex"
       assert job.meta[:system_prompt] == "You are the oracle."
       assert "bash" in (job.tool_policy[:blocked_tools] || [])
+      assert "rm" in (job.tool_policy[:blocked_tools] || [])
     end
 
-    test "treats engine-prefixed model as engine override" do
+    test "keeps structured resume provenance while executing through lemon" do
       run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
       session_key = unique_oracle_session_key()
 
@@ -766,64 +640,31 @@ defmodule LemonRouter.RunOrchestratorTest do
 
       on_exit(fn ->
         if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
-        LemonCore.Store.delete_session_policy(session_key)
       end)
 
-      :sys.replace_state(LemonRouter.AgentProfiles, fn state ->
-        %{state | profiles: profile_map_with_oracle("codex:gpt-test")}
-      end)
+      resume = %ResumeToken{engine: "lemon", value: "session_abc123"}
 
-      params = %{
-        origin: :control_plane,
-        session_key: session_key,
-        agent_id: "oracle",
-        prompt: "Hello oracle"
-      }
+      assert {:ok, _run_id} =
+               RunOrchestrator.submit(
+                 orchestrator_pid,
+                 request(%{
+                   origin: :channel,
+                   session_key: session_key,
+                   agent_id: "test",
+                   prompt: "Please continue with this task.",
+                   resume: resume
+                 })
+               )
 
-      assert {:ok, _run_id} = RunOrchestrator.submit(orchestrator_pid, request(params))
       assert_receive {:captured_job, job}, 500
-
-      assert job.engine_id == "codex:gpt-test"
-      assert job.meta[:model] == "codex:gpt-test"
+      assert job.resume == resume
+      assert job.meta[:resume_source] == :explicit
     end
 
-    test "explicit engine_id still overrides profile defaults" do
+    test "request model takes precedence over session and profile models" do
       run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
       session_key = unique_oracle_session_key()
-
-      {:ok, orchestrator_pid} =
-        GenServer.start_link(
-          RunOrchestrator,
-          run_supervisor: run_supervisor,
-          run_process_module: CapturingRunProcess,
-          run_process_opts: %{notify_pid: self()}
-        )
-
-      on_exit(fn ->
-        if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
-        LemonCore.Store.delete_session_policy(session_key)
-      end)
-
-      :sys.replace_state(LemonRouter.AgentProfiles, fn state ->
-        %{state | profiles: profile_map_with_oracle()}
-      end)
-
-      params = %{
-        origin: :control_plane,
-        session_key: session_key,
-        agent_id: "oracle",
-        prompt: "Hello oracle",
-        engine_id: "explicit:engine"
-      }
-
-      assert {:ok, _run_id} = RunOrchestrator.submit(orchestrator_pid, request(params))
-      assert_receive {:captured_job, job}, 500
-      assert job.engine_id == "explicit:engine"
-    end
-
-    test "top-level request model overrides profile model without requiring meta" do
-      run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
-      session_key = unique_oracle_session_key()
+      LemonCore.Store.put_session_policy(session_key, %{model: "session-model"})
 
       {:ok, orchestrator_pid} =
         GenServer.start_link(
@@ -842,22 +683,27 @@ defmodule LemonRouter.RunOrchestratorTest do
         %{state | profiles: profile_map_with_oracle("profile-model")}
       end)
 
-      params = %{
-        origin: :control_plane,
-        session_key: session_key,
-        agent_id: "oracle",
-        prompt: "Hello oracle",
-        model: "request-model"
-      }
+      assert {:ok, _run_id} =
+               RunOrchestrator.submit(
+                 orchestrator_pid,
+                 request(%{
+                   origin: :control_plane,
+                   session_key: session_key,
+                   agent_id: "oracle",
+                   prompt: "Hello oracle",
+                   model: "request-model"
+                 })
+               )
 
-      assert {:ok, _run_id} = RunOrchestrator.submit(orchestrator_pid, request(params))
       assert_receive {:captured_job, job}, 500
       assert job.meta[:model] == "request-model"
     end
 
-    test "records warning when explicit engine conflicts with model-implied engine" do
+    test "does not mutate the session policy during submission" do
       run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
       session_key = unique_oracle_session_key()
+      session_policy = %{model: "session-model"}
+      LemonCore.Store.put_session_policy(session_key, session_policy)
 
       {:ok, orchestrator_pid} =
         GenServer.start_link(
@@ -872,199 +718,19 @@ defmodule LemonRouter.RunOrchestratorTest do
         LemonCore.Store.delete_session_policy(session_key)
       end)
 
-      :sys.replace_state(LemonRouter.AgentProfiles, fn state ->
-        %{state | profiles: profile_map_with_oracle()}
-      end)
+      assert {:ok, _run_id} =
+               RunOrchestrator.submit(
+                 orchestrator_pid,
+                 request(%{
+                   origin: :control_plane,
+                   session_key: session_key,
+                   agent_id: "test",
+                   prompt: "Hello"
+                 })
+               )
 
-      params = %{
-        origin: :control_plane,
-        session_key: session_key,
-        agent_id: "oracle",
-        prompt: "Hello oracle",
-        engine_id: "claude",
-        model: "codex:gpt-5"
-      }
-
-      assert {:ok, _run_id} = RunOrchestrator.submit(orchestrator_pid, request(params))
       assert_receive {:captured_job, job}, 500
-      assert job.engine_id == "claude"
-      assert is_binary(job.meta[:model_resolution_warning])
-    end
-  end
-
-  describe "sticky engine preference" do
-    setup do
-      original_state = :sys.get_state(LemonRouter.AgentProfiles)
-
-      on_exit(fn ->
-        :sys.replace_state(LemonRouter.AgentProfiles, fn _ -> original_state end)
-      end)
-
-      :ok
-    end
-
-    test "applies sticky engine from session policy when no explicit engine given" do
-      run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
-
-      {:ok, orchestrator_pid} =
-        GenServer.start_link(
-          RunOrchestrator,
-          run_supervisor: run_supervisor,
-          run_process_module: CapturingRunProcess,
-          run_process_opts: %{notify_pid: self()}
-        )
-
-      on_exit(fn ->
-        if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
-      end)
-
-      session_key = "test:sticky:#{System.unique_integer()}"
-
-      # Set preferred_engine in session policy
-      LemonCore.Store.put_session_policy(session_key, %{
-        preferred_engine: "echo"
-      })
-
-      params = %{
-        origin: :control_plane,
-        session_key: session_key,
-        agent_id: "test",
-        prompt: "Hello"
-      }
-
-      assert {:ok, _run_id} = RunOrchestrator.submit(orchestrator_pid, request(params))
-      assert_receive {:captured_job, job}, 500
-
-      # The sticky engine from session should be used
-      assert job.engine_id == "echo"
-
-      # Cleanup
-      LemonCore.Store.delete_session_policy(session_key)
-    end
-
-    test "prompt engine directive overrides session sticky engine" do
-      run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
-
-      {:ok, orchestrator_pid} =
-        GenServer.start_link(
-          RunOrchestrator,
-          run_supervisor: run_supervisor,
-          run_process_module: CapturingRunProcess,
-          run_process_opts: %{notify_pid: self()}
-        )
-
-      on_exit(fn ->
-        if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
-      end)
-
-      session_key = "test:sticky:prompt:#{System.unique_integer()}"
-
-      # Set a different preferred_engine in session policy
-      LemonCore.Store.put_session_policy(session_key, %{
-        preferred_engine: "lemon"
-      })
-
-      params = %{
-        origin: :control_plane,
-        session_key: session_key,
-        agent_id: "test",
-        prompt: "use echo then help me"
-      }
-
-      assert {:ok, _run_id} = RunOrchestrator.submit(orchestrator_pid, request(params))
-      assert_receive {:captured_job, job}, 500
-
-      # The prompt-detected engine should override the session preference
-      assert job.engine_id == "echo"
-
-      # Verify the session policy was updated with the new preference
-      stored = LemonCore.Store.get_session_policy(session_key)
-      assert stored[:preferred_engine] == "echo"
-
-      # Cleanup
-      LemonCore.Store.delete_session_policy(session_key)
-    end
-
-    test "explicit engine_id persists as sticky preference" do
-      run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
-
-      {:ok, orchestrator_pid} =
-        GenServer.start_link(
-          RunOrchestrator,
-          run_supervisor: run_supervisor,
-          run_process_module: CapturingRunProcess,
-          run_process_opts: %{notify_pid: self()}
-        )
-
-      on_exit(fn ->
-        if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
-      end)
-
-      session_key = "test:sticky:explicit:#{System.unique_integer()}"
-
-      params = %{
-        origin: :control_plane,
-        session_key: session_key,
-        agent_id: "test",
-        prompt: "Hello",
-        engine_id: "echo"
-      }
-
-      assert {:ok, _run_id} = RunOrchestrator.submit(orchestrator_pid, request(params))
-      assert_receive {:captured_job, job}, 500
-      assert job.engine_id == "echo"
-
-      # Verify engine was persisted to session policy
-      stored = LemonCore.Store.get_session_policy(session_key)
-      assert stored[:preferred_engine] == "echo"
-
-      # Cleanup
-      LemonCore.Store.delete_session_policy(session_key)
-    end
-
-    test "sticky engine persists across multiple runs" do
-      run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
-
-      {:ok, orchestrator_pid} =
-        GenServer.start_link(
-          RunOrchestrator,
-          run_supervisor: run_supervisor,
-          run_process_module: CapturingRunProcess,
-          run_process_opts: %{notify_pid: self()}
-        )
-
-      on_exit(fn ->
-        if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
-      end)
-
-      session_key = "test:sticky:persist:#{System.unique_integer()}"
-
-      # First run: set engine via prompt directive
-      params1 = %{
-        origin: :control_plane,
-        session_key: session_key,
-        agent_id: "test",
-        prompt: "use echo then help me"
-      }
-
-      assert {:ok, _run_id} = RunOrchestrator.submit(orchestrator_pid, request(params1))
-      assert_receive {:captured_job, job1}, 500
-      assert job1.engine_id == "echo"
-
-      # Second run: no engine directive, should still use echo
-      params2 = %{
-        origin: :control_plane,
-        session_key: session_key,
-        agent_id: "test",
-        prompt: "Help me with something else"
-      }
-
-      assert {:ok, _run_id} = RunOrchestrator.submit(orchestrator_pid, request(params2))
-      assert_receive {:captured_job, job2}, 500
-      assert job2.engine_id == "echo"
-
-      # Cleanup
-      LemonCore.Store.delete_session_policy(session_key)
+      assert LemonCore.Store.get_session_policy(session_key) == session_policy
     end
   end
 
@@ -1080,7 +746,6 @@ defmodule LemonRouter.RunOrchestratorTest do
       name: "Test Agent",
       description: nil,
       avatar: nil,
-      default_engine: "lemon",
       tool_policy: nil,
       system_prompt: nil,
       model: nil,
@@ -1093,7 +758,6 @@ defmodule LemonRouter.RunOrchestratorTest do
       "default" => %{
         id: "default",
         name: "Default Agent",
-        default_engine: "lemon",
         tool_policy: nil,
         system_prompt: nil,
         model: nil
@@ -1101,7 +765,6 @@ defmodule LemonRouter.RunOrchestratorTest do
       "oracle" => %{
         id: "oracle",
         name: "Oracle",
-        default_engine: "echo",
         tool_policy: %{blocked_tools: ["bash"]},
         system_prompt: "You are the oracle.",
         model: model
@@ -1137,7 +800,7 @@ defmodule LemonRouter.RunOrchestratorTest do
         :telemetry.execute([:lemon, :run, :submit], %{count: 1}, %{
           session_key: "test:counts:#{idx}",
           origin: :test,
-          engine: "echo"
+          engine: "lemon"
         })
       end
 

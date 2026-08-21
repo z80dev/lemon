@@ -193,14 +193,16 @@ defmodule LemonControlPlane.Methods.SessionDetail do
     :exit, _ -> %{}
   end
 
-  # `model`/`provider`/`contextWindow`/`thinkingLevel`/`preferredEngine` — what this session's
-  # next run resolves to, not what the last one used. `modelSource` says which layer supplied
-  # it, so a client can tell a pinned model from an inherited default; `modelOverride` is the
-  # session's own pin, or nil.
+  # `model`/`provider`/`contextWindow`/`thinkingLevel` — what this session's next run resolves
+  # to, not what the last one used. `modelSource` says which layer supplied it, so a client can
+  # tell a pinned model from an inherited default; `modelOverride` is the session's own pin, or
+  # nil.
   defp routing_meta(session_key, agent_id) do
     resolved = LemonControlPlane.SessionModel.resolve(session_key, agent_id)
 
-    Map.put(resolved, "modelOverride", LemonControlPlane.SessionModel.override(session_key))
+    resolved
+    |> Map.drop(["defaultEngine", "preferredEngine"])
+    |> Map.put("modelOverride", LemonControlPlane.SessionModel.override(session_key))
   rescue
     _ -> %{}
   catch

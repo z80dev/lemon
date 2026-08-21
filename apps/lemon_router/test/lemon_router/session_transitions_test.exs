@@ -814,7 +814,6 @@ defmodule LemonRouter.SessionTransitionsTest do
       run_id: run_id,
       session_key: session_key,
       prompt: prompt,
-      engine_id: "codex",
       conversation_key: {:session, session_key},
       meta: Keyword.get(opts, :request_meta, %{})
     }

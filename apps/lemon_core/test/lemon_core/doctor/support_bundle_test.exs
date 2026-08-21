@@ -249,7 +249,6 @@ defmodule LemonCore.Doctor.SupportBundleTest do
 
       [gateway]
       max_concurrent_runs = 2
-      default_engine = "openai"
       auto_resume = true
       """
     )

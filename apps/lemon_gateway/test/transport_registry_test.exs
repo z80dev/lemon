@@ -198,12 +198,10 @@ defmodule LemonGateway.TransportRegistryTest do
 
     Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
       max_concurrent_runs: 1,
-      default_engine: "echo",
       enable_telegram: false,
       enable_xmtp: false
     })
 
-    Application.put_env(:lemon_gateway, :engines, [Elixir.LemonGateway.Engines.Echo])
     Application.put_env(:lemon_gateway, :commands, [])
     Application.put_env(:lemon_gateway, :transports, [])
     Application.put_env(:lemon_gateway, :gateway_ingress_enabled, true)
@@ -272,7 +270,6 @@ defmodule LemonGateway.TransportRegistryTest do
 
     Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
       max_concurrent_runs: 1,
-      default_engine: "echo",
       enable_telegram: false
     })
 
@@ -294,7 +291,6 @@ defmodule LemonGateway.TransportRegistryTest do
 
     Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
       max_concurrent_runs: 1,
-      default_engine: "echo",
       enable_telegram: true
     })
 
@@ -315,7 +311,6 @@ defmodule LemonGateway.TransportRegistryTest do
 
     Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
       max_concurrent_runs: 1,
-      default_engine: "echo",
       enable_telegram: false,
       enable_discord: true
     })
@@ -346,7 +341,6 @@ defmodule LemonGateway.TransportRegistryTest do
 
     Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
       max_concurrent_runs: 1,
-      default_engine: "echo",
       enable_telegram: false
     })
 
@@ -369,7 +363,6 @@ defmodule LemonGateway.TransportRegistryTest do
 
     Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
       max_concurrent_runs: 1,
-      default_engine: "echo",
       enable_webhook: true
     })
 
@@ -392,7 +385,6 @@ defmodule LemonGateway.TransportRegistryTest do
 
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
         max_concurrent_runs: 1,
-        default_engine: "echo",
         enable_telegram: false
       })
 
@@ -408,8 +400,7 @@ defmodule LemonGateway.TransportRegistryTest do
       Application.put_env(:lemon_gateway, :transports, [__MODULE__.MockTelegramTransportRegistry])
 
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
-        max_concurrent_runs: 1,
-        default_engine: "echo"
+        max_concurrent_runs: 1
       })
 
       {:ok, _} = restart_config_and_registry()
@@ -427,7 +418,6 @@ defmodule LemonGateway.TransportRegistryTest do
 
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config,
         max_concurrent_runs: 1,
-        default_engine: "echo",
         enable_telegram: true
       )
 
@@ -444,7 +434,6 @@ defmodule LemonGateway.TransportRegistryTest do
 
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config,
         max_concurrent_runs: 1,
-        default_engine: "echo",
         enable_telegram: false
       )
 
@@ -459,10 +448,7 @@ defmodule LemonGateway.TransportRegistryTest do
     test "telegram disabled when enable_telegram key missing from keyword list" do
       Application.put_env(:lemon_gateway, :transports, [__MODULE__.MockTelegramTransportRegistry])
 
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config,
-        max_concurrent_runs: 1,
-        default_engine: "echo"
-      )
+      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, max_concurrent_runs: 1)
 
       {:ok, _} = restart_config_and_registry()
 

@@ -86,7 +86,8 @@ defmodule LemonRouter.SessionCoordinatorTest do
     def init(opts), do: {:ok, opts}
 
     @impl true
-    def handle_cast({_kind, _request, _worker_pid}, state), do: {:noreply, state}
+    def handle_cast({_kind, _submission_run_id, _prompt, _worker_pid}, state),
+      do: {:noreply, state}
   end
 
   defmodule SessionCoordinatorForwardingRunStub do
@@ -104,8 +105,8 @@ defmodule LemonRouter.SessionCoordinatorTest do
     def init(opts), do: {:ok, opts}
 
     @impl true
-    def handle_cast({kind, request, worker_pid}, state) do
-      send(state[:test_pid], {:run_cast, kind, request, worker_pid})
+    def handle_cast({kind, submission_run_id, prompt, worker_pid}, state) do
+      send(state[:test_pid], {:run_cast, kind, submission_run_id, prompt, worker_pid})
       {:noreply, state}
     end
   end
@@ -521,7 +522,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
     GenServer.stop(runtime_run)
   end
 
-  test "redirect dispatch casts the exact redirect shape LemonGateway.Run consumes", %{
+  test "redirect dispatch casts the stable control tuple LemonGateway.Run consumes", %{
     run_supervisor: run_supervisor
   } do
     key = {:session, unique_session_key()}
@@ -532,10 +533,8 @@ defmodule LemonRouter.SessionCoordinatorTest do
 
     :ok = submit(key, "run2", "two", :redirect, run_supervisor)
 
-    assert_receive {:run_cast, :redirect, %ExecutionCommand{run_id: "run2"} = request, coord_pid},
-                   500
+    assert_receive {:run_cast, :redirect, "run2", "two", coord_pid}, 500
 
-    assert request.prompt == "two"
     assert is_pid(coord_pid)
     assert coord_pid == coordinator_pid(key)
 
@@ -552,10 +551,52 @@ defmodule LemonRouter.SessionCoordinatorTest do
     runtime_run = start_runtime_run("run1")
 
     :ok = submit(key, "run2", "two", :redirect, run_supervisor)
-    assert_receive {:run_cast, :redirect, request, coord_pid}, 500
+    assert_receive {:run_cast, :redirect, "run2", "two", coord_pid}, 500
 
-    send(coord_pid, {:redirect_accepted, request})
+    send(coord_pid, {:redirect_accepted, "run2"})
     # Flush the coordinator mailbox so the acceptance is applied before run1 exits.
+    assert {:ok, "run1"} = SessionCoordinator.active_run(key)
+
+    stop_active_run(run_supervisor)
+    refute_receive {:started, "run2", _}, 300
+
+    GenServer.stop(runtime_run)
+  end
+
+  test "accepted steer acknowledgement matches the submitted run id", %{
+    run_supervisor: run_supervisor
+  } do
+    key = {:session, unique_session_key()}
+
+    :ok = submit(key, "run1", "one", :collect, run_supervisor)
+    assert_receive {:started, "run1", _}, 500
+    runtime_run = start_runtime_run("run1")
+
+    :ok = submit(key, "run2", "two", :steer, run_supervisor)
+    assert_receive {:run_cast, :steer, "run2", "two", coord_pid}, 500
+
+    send(coord_pid, {:steer_accepted, "run2"})
+    assert {:ok, "run1"} = SessionCoordinator.active_run(key)
+
+    stop_active_run(run_supervisor)
+    refute_receive {:started, "run2", _}, 300
+
+    GenServer.stop(runtime_run)
+  end
+
+  test "accepted steer backlog acknowledgement matches the submitted run id", %{
+    run_supervisor: run_supervisor
+  } do
+    key = {:session, unique_session_key()}
+
+    :ok = submit(key, "run1", "one", :collect, run_supervisor)
+    assert_receive {:started, "run1", _}, 500
+    runtime_run = start_runtime_run("run1")
+
+    :ok = submit(key, "run2", "two", :steer_backlog, run_supervisor)
+    assert_receive {:run_cast, :steer_backlog, "run2", "two", coord_pid}, 500
+
+    send(coord_pid, {:steer_backlog_accepted, "run2"})
     assert {:ok, "run1"} = SessionCoordinator.active_run(key)
 
     stop_active_run(run_supervisor)
@@ -575,9 +616,9 @@ defmodule LemonRouter.SessionCoordinatorTest do
       runtime_run = start_runtime_run("run1")
 
       :ok = submit(key, "run2", "two", :redirect, run_supervisor)
-      assert_receive {:run_cast, :redirect, request, coord_pid}, 500
+      assert_receive {:run_cast, :redirect, "run2", "two", coord_pid}, 500
 
-      send(coord_pid, {:redirect_rejected, request})
+      send(coord_pid, {:redirect_rejected, "run2"})
 
       assert_receive {:notice_dispatched, %LemonCore.DeliveryIntent{} = intent}, 500
       assert intent.kind == :notice
@@ -637,9 +678,9 @@ defmodule LemonRouter.SessionCoordinatorTest do
       runtime_run = start_runtime_run("run1")
 
       :ok = submit(key, "run2", "two", :redirect, run_supervisor)
-      assert_receive {:run_cast, :redirect, request, coord_pid}, 500
+      assert_receive {:run_cast, :redirect, "run2", "two", coord_pid}, 500
 
-      send(coord_pid, {:redirect_rejected, request})
+      send(coord_pid, {:redirect_rejected, "run2"})
       refute_receive {:notice_dispatched, _}, 200
 
       # The coordinator survives and still applies the followup fallback.
@@ -702,7 +743,6 @@ defmodule LemonRouter.SessionCoordinatorTest do
       run_id: run_id,
       session_key: elem(key, 1),
       prompt: prompt,
-      engine_id: "codex",
       conversation_key: key,
       meta: %{}
     }

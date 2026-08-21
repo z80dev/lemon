@@ -443,7 +443,6 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
     session_key = SessionRouting.build_session_key(state.account_id, inbound, scope)
 
     agent_id = BindingResolver.resolve_agent_id(scope)
-    engine_id = BindingResolver.resolve_engine(scope, nil, nil)
     queue_mode = BindingResolver.resolve_queue_mode(scope) || :collect
     cwd = BindingResolver.resolve_cwd(scope)
 
@@ -455,7 +454,7 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
         thread_id
       )
 
-    {thinking_hint, _thinking_source} =
+    {thinking_hint, thinking_source} =
       ModelPolicyAdapter.resolve_thinking_hint(state.account_id, peer_id, thread_id)
 
     inbound =
@@ -465,18 +464,18 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
         [Access.key!(:meta)],
         Map.merge(inbound.meta || %{}, %{
           agent_id: agent_id,
-          engine_id: engine_id,
           queue_mode: queue_mode,
           cwd: cwd,
-          model_hint: model_hint,
-          model_hint_source: model_source,
-          thinking_hint: thinking_hint
+          model: model_hint,
+          model_scope: model_source,
+          thinking_level: thinking_hint,
+          thinking_scope: thinking_source
         })
       )
 
     Logger.info(
       "whatsapp inbound routing: peer=#{peer_id} session_key=#{inspect(session_key)} " <>
-        "agent=#{agent_id} engine=#{engine_id || "default"}"
+        "agent=#{agent_id}"
     )
 
     # Send typing indicator

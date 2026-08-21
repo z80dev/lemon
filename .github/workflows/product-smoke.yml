@@ -1,9 +1,9 @@
 name: Product Smoke
 
 # Validates the packaged runtime end-to-end: boots a release, checks HTTP/WebSocket
-# control-plane health, runs a deterministic echo agent through WebSocket,
-# checks the web endpoint for full profiles, runs skill lint, and exercises
-# adaptive-eval gate checks.
+# control-plane health, runs a native agent through WebSocket against a local
+# deterministic provider fixture, checks the web endpoint for full profiles, runs
+# skill lint, and exercises adaptive-eval gate checks.
 # Complements release-smoke.yml (which focuses on assembly and boot only).
 
 on:
@@ -33,6 +33,7 @@ env:
   LEMON_WEB_PORT: "14080"
   LEMON_SIM_UI_PORT: "14090"
   LEMON_GATEWAY_NODE_COOKIE: "product-smoke-cookie"
+  OPENAI_API_KEY: "product-smoke-local-provider-key"
   # Phoenix releases never bind an HTTP listener on their own — the `:server`
   # endpoint option (set here via configure_endpoint/5 in config/runtime.exs,
   # gated on PHX_SERVER) is opt-in by design, so release commands like `eval`
@@ -93,6 +94,93 @@ jobs:
         env:
           MIX_ENV: prod
 
+      # ── Local deterministic provider fixture ───────────────────────────────────
+
+      - name: Start deterministic local provider fixture
+        run: |
+          cat > /tmp/lemon_native_provider_fixture.py <<'PY'
+          import json
+          from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+
+          class FixtureHandler(BaseHTTPRequestHandler):
+              protocol_version = "HTTP/1.1"
+
+              def log_message(self, _format, *_args):
+                  pass
+
+              def do_GET(self):
+                  if self.path == "/healthz":
+                      self.send_response(200)
+                      self.send_header("Content-Type", "text/plain")
+                      self.send_header("Content-Length", "2")
+                      self.end_headers()
+                      self.wfile.write(b"ok")
+                      return
+
+                  self.send_error(404)
+
+              def do_POST(self):
+                  if self.path != "/v1/responses":
+                      self.send_error(404)
+                      return
+
+                  length = int(self.headers.get("Content-Length", "0"))
+                  json.loads(self.rfile.read(length))
+
+                  events = [
+                      {
+                          "type": "response.output_item.added",
+                          "item": {"type": "message"}
+                      },
+                      {
+                          "type": "response.output_text.delta",
+                          "delta": "Native product smoke fixture response"
+                      },
+                      {
+                          "type": "response.completed",
+                          "response": {
+                              "status": "completed",
+                              "usage": {
+                                  "input_tokens": 1,
+                                  "output_tokens": 1,
+                                  "total_tokens": 2
+                              }
+                          }
+                      }
+                  ]
+
+                  body = "".join(
+                      f"data: {json.dumps(event, separators=(',', ':'))}\n\n"
+                      for event in events
+                  ) + "data: [DONE]\n\n"
+                  encoded = body.encode()
+
+                  self.send_response(200)
+                  self.send_header("Content-Type", "text/event-stream")
+                  self.send_header("Cache-Control", "no-cache")
+                  self.send_header("Content-Length", str(len(encoded)))
+                  self.end_headers()
+                  self.wfile.write(encoded)
+
+
+          ThreadingHTTPServer(("127.0.0.1", 14110), FixtureHandler).serve_forever()
+          PY
+
+          python3 /tmp/lemon_native_provider_fixture.py > /tmp/lemon_native_provider_fixture.log 2>&1 &
+          echo "LEMON_NATIVE_PROVIDER_FIXTURE_PID=$!" >> "$GITHUB_ENV"
+
+          for i in $(seq 1 20); do
+            if curl -fsS --max-time 1 http://127.0.0.1:14110/healthz > /dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+
+          echo "::error::Local deterministic provider fixture did not start."
+          cat /tmp/lemon_native_provider_fixture.log
+          exit 1
+
       # ── Config fixture ─────────────────────────────────────────────────────────
 
       - name: Write fixture config
@@ -100,8 +188,11 @@ jobs:
           mkdir -p ~/.lemon
           cat > ~/.lemon/config.toml <<'EOF'
           [defaults]
-          provider = "anthropic"
-          model = "claude-haiku-4-5-20251001"
+          provider = "openai"
+          model = "gpt-4o-mini"
+
+          [providers.openai]
+          base_url = "http://127.0.0.1:14110/v1"
 
           [gateway]
           max_concurrent_runs = 1
@@ -235,11 +326,10 @@ jobs:
             raise "unexpected health response: #{inspect(health)}"
           end
 
-          prompt = "product-smoke-echo-#{System.unique_integer([:positive])}"
+          prompt = "product-smoke-native-#{System.unique_integer([:positive])}"
 
           send_req.("agent-1", "agent", %{
             "prompt" => prompt,
-            "engine_id" => "echo",
             "session_key" => "agent:product-smoke:main",
             "idempotency_key" => "product-smoke-#{System.system_time(:millisecond)}"
           })
@@ -252,17 +342,17 @@ jobs:
 
           send_req.("agent-wait-1", "agent.wait", %{
             "runId" => agent["payload"]["run_id"],
-            "timeoutMs" => 10_000
+            "timeoutMs" => 20_000
           })
 
-          completed = receive_response.("agent-wait-1", 15_000)
+          completed = receive_response.("agent-wait-1", 25_000)
 
           unless completed["ok"] == true and completed["payload"]["ok"] == true and
-                   completed["payload"]["answer"] == "Echo: #{prompt}" do
+                   completed["payload"]["answer"] == "Native product smoke fixture response" do
             raise "unexpected agent.wait response: #{inspect(completed)}"
           end
 
-          IO.puts("control-plane websocket health and echo agent run ok")
+          IO.puts("control-plane websocket native agent run ok")
           EOF
 
           MIX_ENV=prod mix run --no-start /tmp/lemon_control_plane_ws_probe.exs

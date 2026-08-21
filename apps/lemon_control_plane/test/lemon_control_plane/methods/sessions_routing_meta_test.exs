@@ -66,19 +66,19 @@ defmodule LemonControlPlane.Methods.SessionsRoutingMetaTest do
       LemonCore.Store.delete_session_policy(key)
     end
 
-    test "reports thinking level and preferred engine alongside the model" do
+    test "reports thinking level with fixed native provenance" do
       key = fresh_key()
 
       LemonCore.Store.put_session_policy(key, %{
         model: "gpt-5.4",
-        thinking_level: "high",
-        preferred_engine: "codex"
+        thinking_level: "high"
       })
 
       {:ok, result} = SessionDetail.handle(%{"sessionKey" => key}, %{})
 
       assert result["session"]["thinkingLevel"] == "high"
-      assert result["session"]["preferredEngine"] == "codex"
+      assert result["session"]["engine"] == "lemon"
+      refute Map.has_key?(result["session"], "preferredEngine")
 
       LemonCore.Store.delete_session_policy(key)
     end

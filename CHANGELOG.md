@@ -8,7 +8,24 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Changed
+
+- Product releases can now be cut and published from one manual Release
+  workflow dispatch; the workflow derives CalVer, consumes the Unreleased
+  notes, commits and tags the release, verifies every artifact, publishes the
+  GitHub Release, and only then promotes mutable container channel tags
+
+### Removed
+
+- Breaking: top-level engine selection and custom Gateway engine extensions
+  were removed. Every conversation now uses the native `CodingAgent.Executor`;
+  `LemonGateway.Engine`, `EngineRegistry`, Echo, vendor gateway adapters,
+  `LemonCore.EngineCatalog`, and `LemonPlatformTest.EngineCase` no longer
+  exist.
+- The `engine_id`, `default_engine`, `preferred_engine`, and
+  `[gateway.engines.*]` configuration/API selectors are rejected with migration
+  guidance. Codex, Claude, Kimi, OpenCode, and Pi remain available through the
+  native agent's delegated `task` runners.
 
 ---
 
@@ -81,9 +98,9 @@ No unreleased changes yet.
   smoke-tested in CI before tagging; a failed image blocks the release
 
 **Platform (since 2026.05.0)**
-- Platform split: 12 packages published to Hex, engine registries and CLI
-  resolvers extracted, `lemon_cli_runners` and `lemon_browser`/`lemon_skills`
-  as standalone packages
+- Platform split: 12 packages published to Hex, one native top-level executor,
+  delegated CLI runners, and standalone `lemon_browser`/`lemon_skills`
+  packages
 - Always-on model arenas (werewolf, space station, stock market, survivor,
   poker) with leagues, ratings, and spectator UI
 - Provider resilience: failover classifier, unified routing fallback,

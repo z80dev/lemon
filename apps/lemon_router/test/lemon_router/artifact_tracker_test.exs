@@ -274,7 +274,6 @@ defmodule LemonRouter.RunProcess.ArtifactTrackerTest do
       run_id: "run-artifacts",
       session_key: "agent:test:main",
       prompt: "test",
-      engine_id: "echo",
       cwd: cwd
     }
   end

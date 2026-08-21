@@ -125,14 +125,13 @@ When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BU
 | `LEMON_WASM_RUNTIME_PATH` | string | `` |  | `lemon_core` | Path to the WASM runtime executable/library. |
 | `LEMON_WASM_TOOL_PATHS` | list (comma-separated) | `[]` |  | `lemon_core` | Comma-separated extra directories to search for WASM tools. |
 
-### Gateway (transports, engine scheduling)
+### Gateway (transports and execution scheduling)
 
 | Env Var | Type | Default | Secret | Apps | Description |
 |---|---|---|---|---|---|
 | `DISCORD_BOT_TOKEN` | string | _(none)_ | yes | `lemon_channels` | Discord bot token (ecosystem-standard name). |
 | `LEMON_GATEWAY_AUTO_RESUME` | boolean | `false` |  | `lemon_core`, `lemon_gateway` | Whether the gateway auto-resumes interrupted runs on boot. |
 | `LEMON_GATEWAY_DEFAULT_CWD` | string | _(none)_ |  | `lemon_core`, `lemon_gateway` | Default working directory for gateway-initiated runs. |
-| `LEMON_GATEWAY_DEFAULT_ENGINE` | string | `lemon` |  | `lemon_core`, `lemon_gateway` | Default coding-agent engine used for gateway-initiated runs. |
 | `LEMON_GATEWAY_ENABLE_DISCORD` | boolean | `false` |  | `lemon_core`, `lemon_channels` | Whether the Discord transport is enabled. |
 | `LEMON_GATEWAY_ENABLE_TELEGRAM` | boolean | `false` |  | `lemon_core`, `lemon_channels` | Whether the Telegram transport is enabled. |
 | `LEMON_GATEWAY_ENABLE_WEBHOOK` | boolean | `false` |  | `lemon_core`, `lemon_gateway` | Whether the generic webhook transport is enabled. |

@@ -34,7 +34,6 @@ api_key_secret = "google_api_key"
 provider = "anthropic"
 model = "claude-sonnet-4-20250514"
 thinking_level = "medium"
-engine = "lemon"
 
 [runtime]
 theme = "default"
@@ -50,6 +49,8 @@ enabled = true
 max_retries = 3
 base_delay_ms = 1000
 
+# Delegated task-runner configuration. These vendor CLI settings apply only when
+# Lemon delegates a task to that runner; they never select the gateway executor.
 [runtime.cli.codex]
 extra_args = ["-c", "notify=[]"]
 auto_approve = false
@@ -111,7 +112,6 @@ debug = false
 
 [gateway]
 max_concurrent_runs = 2
-default_engine = "lemon"
 # Optional fallback working directory for unbound chats/sessions.
 # If omitted, Lemon defaults to your home directory.
 default_cwd = "~/"
@@ -165,19 +165,13 @@ mock_mode = false
 
 [gateway.projects.example]
 root = "/path/to/project"
-default_engine = "lemon"
 
 [[gateway.bindings]]
 transport = "telegram"
 chat_id = 12345678
 topic_id = 0
 project = "example"
-default_engine = "lemon"
 queue_mode = "collect"
-
-[gateway.engines.lemon]
-cli_path = "lemon"
-enabled = true
 
 # --- Logging ---
 

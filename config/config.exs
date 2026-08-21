@@ -37,6 +37,11 @@ config :coding_agent, :async_followups, default_queue_mode: :steer_backlog
 # not depend on the agent product; the reference runtime forwards the value.
 config :lemon_gateway, :workspace_dir, {CodingAgent.Config, :workspace_dir, []}
 
+# The native executor is owned by coding_agent. The gateway looks this up
+# dynamically through LemonGateway.Executor, so this wiring creates no gateway
+# dependency on the agent product.
+config :lemon_gateway, :executor, CodingAgent.Executor
+
 config :lemon_router, :engine_runtime, LemonGateway.Runtime
 
 # Support bundles include workspace (goal/kanban) diagnostics when the agent

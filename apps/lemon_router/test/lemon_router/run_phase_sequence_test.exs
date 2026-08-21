@@ -61,9 +61,9 @@ defmodule LemonRouter.RunPhaseSequenceTest do
     def init(opts), do: {:ok, %{test_pid: opts[:test_pid]}}
 
     @impl true
-    def handle_cast({kind, %ExecutionCommand{} = request, worker_pid}, state)
-        when kind in [:steer, :steer_backlog] do
-      send(state.test_pid, {:steer_dispatched, kind, request, worker_pid})
+    def handle_cast({kind, submission_run_id, _prompt, worker_pid}, state)
+        when kind in [:steer, :steer_backlog] and is_binary(submission_run_id) do
+      send(state.test_pid, {:steer_dispatched, kind, submission_run_id, worker_pid})
       {:noreply, state}
     end
   end
@@ -171,11 +171,9 @@ defmodule LemonRouter.RunPhaseSequenceTest do
 
     :ok = submit(key, run_id_2, "two", :steer, run_supervisor)
 
-    assert_receive {:steer_dispatched, :steer, %ExecutionCommand{run_id: ^run_id_2} = request,
-                    worker_pid},
-                   500
+    assert_receive {:steer_dispatched, :steer, ^run_id_2, worker_pid}, 500
 
-    send(worker_pid, {:steer_rejected, request})
+    send(worker_pid, {:steer_rejected, run_id_2})
     refute_phase_event(run_id_2)
 
     SessionCoordinator.cancel(session_key, :user_requested)
@@ -251,7 +249,6 @@ defmodule LemonRouter.RunPhaseSequenceTest do
       run_id: run_id,
       session_key: elem(key, 1),
       prompt: prompt,
-      engine_id: "codex",
       conversation_key: key,
       meta: meta
     }

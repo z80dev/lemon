@@ -2,20 +2,14 @@ defmodule LemonCore.SubagentRunner do
   @moduledoc """
   Contract for a subagent runner — the thing that executes a delegated subtask.
 
-  A runner is what the agent's `task` tool hands work to. It is deliberately a
-  *different* extension point from `LemonGateway.Engine`, and the two are not
-  merged:
+  A runner is what the agent's `task` tool hands work to. It is started by a
+  tool call inside an already-running native agent turn. There is no Gateway
+  scheduler in this path: `c:start/1` returns a session, `c:events/1` returns a
+  lazy stream, and the caller folds that stream into a tool result while the
+  parent turn waits.
 
-    * an **engine** answers a run the gateway scheduled. The gateway owns
-      concurrency, locking and resume; the engine streams events to a sink
-      process and the gateway assembles the run.
-    * a **runner** is started by a tool call inside an already-running agent
-      turn. There is no scheduler: `c:start/1` returns a session, `c:events/1`
-      returns a lazy stream, and the caller folds that stream into a tool
-      result while the parent turn waits.
-
-  What they share is the event language — `LemonCore.RunEvents` — so one vendor
-  CLI wrapper can back both without translating twice.
+  Top-level conversations are not a runner extension point. They always use
+  the configured native executor.
 
   ## The contract
 
@@ -72,11 +66,11 @@ defmodule LemonCore.SubagentRunner do
       `:ok` for a session that already finished, and for one whose process is
       gone. Runners that cannot be cancelled simply omit it.
     * `c:resume_token/1` — the token a later `resume` would take, or `nil`.
-    * `c:resume_format/0` — how this runner's engine spells "resume" on a
-      command line, as a `LemonCore.ResumeFormat`. Register it alongside the
-      runner (`LemonCore.ResumeFormats.register(MyApp.Subagent.resume_format())`)
-      so the platform can read and print resume commands in your syntax.
-      Omitting it means the generic `<engine> resume <value>` shape.
+    * `c:resume_format/0` — how this runner spells "resume" on a command line,
+      as a `LemonCore.ResumeFormat`. Register it alongside the runner
+      (`LemonCore.ResumeFormats.register(MyApp.Subagent.resume_format())`) so
+      the platform can read and print resume commands in your syntax. Omitting
+      it means the generic `<engine> resume <value>` shape.
     * `c:resolve_cli_settings/1` — how this runner's `[runtime.cli.<id>]`
       config section is resolved: takes the raw string-keyed TOML section
       (`%{}` when unconfigured, so defaults still materialize) and returns the
@@ -89,10 +83,6 @@ defmodule LemonCore.SubagentRunner do
       (`CodingAgent.ToolPolicy` is the reference host). Omitting it means
       `#{inspect(:subagent_restricted)}`, which is the right answer for anything
       running outside this VM.
-    * `c:routable?/0` — whether `c:id/0` is *also* a gateway engine id the
-      router may switch a conversation to. Default `true`. The in-process
-      runner answers `false`: its runner id (`"internal"`) is a tool-level
-      alias, while the router knows that engine as `"lemon"`.
 
   ## Minimal implementation
 
@@ -153,14 +143,12 @@ defmodule LemonCore.SubagentRunner do
   @callback resume_format() :: LemonCore.ResumeFormat.t()
   @callback resolve_cli_settings(map()) :: map()
   @callback default_policy() :: atom()
-  @callback routable?() :: boolean()
 
   @optional_callbacks cancel: 1,
                       resume_token: 1,
                       resume_format: 0,
                       resolve_cli_settings: 1,
-                      default_policy: 0,
-                      routable?: 0
+                      default_policy: 0
 
   @default_policy :subagent_restricted
 

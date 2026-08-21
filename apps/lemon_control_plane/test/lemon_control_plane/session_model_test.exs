@@ -31,14 +31,12 @@ defmodule LemonControlPlane.SessionModelTest do
 
       LemonCore.Store.put_session_policy(key, %{
         model: "claude-sonnet-4-20250514",
-        thinking_level: :high,
-        preferred_engine: "codex"
+        thinking_level: :high
       })
 
       assert %{
                model: "claude-sonnet-4-20250514",
-               thinking_level: "high",
-               preferred_engine: "codex"
+               thinking_level: "high"
              } = SessionModel.overrides(key)
 
       LemonCore.Store.delete_session_policy(key)
@@ -92,20 +90,19 @@ defmodule LemonControlPlane.SessionModelTest do
       LemonCore.Store.delete_session_policy(key)
     end
 
-    test "carries thinking level and preferred engine through" do
+    test "carries thinking level with fixed native provenance" do
       key = fresh_key()
 
       LemonCore.Store.put_session_policy(key, %{
         model: "gpt-5.4",
-        thinking_level: "medium",
-        preferred_engine: "codex"
+        thinking_level: "medium"
       })
 
       resolved = SessionModel.resolve(key)
 
       assert resolved["thinkingLevel"] == "medium"
-      assert resolved["preferredEngine"] == "codex"
-      assert resolved["engine"] == "codex"
+      assert resolved["engine"] == "lemon"
+      refute Map.has_key?(resolved, "preferredEngine")
 
       LemonCore.Store.delete_session_policy(key)
     end

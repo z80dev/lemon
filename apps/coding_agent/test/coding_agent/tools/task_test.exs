@@ -10,13 +10,79 @@ defmodule CodingAgent.Tools.TaskTest.ProbeSubagent do
   def describe, do: %{summary: "A probe executor", caveats: ["never actually runs"]}
 
   @impl true
-  def routable?, do: false
-
-  @impl true
   def start(_opts), do: {:ok, %{}}
 
   @impl true
   def events(_session), do: []
+end
+
+defmodule CodingAgent.Tools.TaskTest.CancellationProbeSubagent do
+  @moduledoc false
+
+  @behaviour LemonCore.SubagentRunner
+
+  @test_pid_key {__MODULE__, :test_pid}
+
+  def test_pid_key, do: @test_pid_key
+
+  @impl true
+  def id, do: "task-cancellation-probe"
+
+  @impl true
+  def describe, do: %{summary: "A cancellable external runner", caveats: []}
+
+  @impl true
+  def start(_opts) do
+    test_pid = :persistent_term.get(@test_pid_key)
+
+    child =
+      spawn(fn ->
+        receive do
+          :cancel ->
+            send(test_pid, {:cancellation_probe_child_stopped, self()})
+        end
+      end)
+
+    wrapper =
+      spawn(fn ->
+        child_ref = Process.monitor(child)
+        send(test_pid, {:cancellation_probe_started, self(), child})
+
+        receive do
+          :cancel ->
+            send(test_pid, {:cancellation_probe_wrapper_cancelling, self()})
+            send(child, :cancel)
+
+            receive do
+              {:DOWN, ^child_ref, :process, ^child, _reason} -> :ok
+            end
+        end
+
+        send(test_pid, {:cancellation_probe_wrapper_stopped, self()})
+      end)
+
+    {:ok, %{pid: wrapper, child: child}}
+  end
+
+  @impl true
+  def events(%{pid: wrapper}) do
+    Stream.resource(
+      fn -> Process.monitor(wrapper) end,
+      fn ref ->
+        receive do
+          {:DOWN, ^ref, :process, ^wrapper, _reason} -> {:halt, ref}
+        end
+      end,
+      &Process.demonitor(&1, [:flush])
+    )
+  end
+
+  @impl true
+  def cancel(%{pid: wrapper}) do
+    send(:persistent_term.get(@test_pid_key), {:cancellation_probe_cancel_called, wrapper})
+    send(wrapper, :cancel)
+    :ok
+  end
 end
 
 defmodule CodingAgent.Tools.TaskTest do
@@ -25,6 +91,7 @@ defmodule CodingAgent.Tools.TaskTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.Tools.TaskTest.ProbeSubagent
+  alias CodingAgent.Tools.TaskTest.CancellationProbeSubagent
 
   alias CodingAgent.Tools.Task.Params
   alias CodingAgent.Tools.Task
@@ -128,6 +195,74 @@ defmodule CodingAgent.Tools.TaskTest do
 
       assert message =~ "Unknown task engine \"gone-away\""
       assert message =~ "task-probe"
+    end
+  end
+
+  describe "external subagent cancellation" do
+    setup do
+      :persistent_term.put(CancellationProbeSubagent.test_pid_key(), self())
+      :ok = LemonCore.SubagentRegistry.register(CancellationProbeSubagent)
+
+      on_exit(fn ->
+        :persistent_term.erase(CancellationProbeSubagent.test_pid_key())
+        LemonCore.SubagentRegistry.unregister("task-cancellation-probe")
+      end)
+
+      :ok
+    end
+
+    test "cancels a runner session and terminates its event stream outside Gateway" do
+      signal = AbortSignal.new()
+      on_exit(fn -> AbortSignal.clear(signal) end)
+
+      task =
+        Elixir.Task.async(fn ->
+          CodingAgent.Tools.Task.Runner.execute_via_cli_engine(
+            "task-cancellation-probe",
+            "prompt",
+            "/tmp",
+            "cancellation probe",
+            nil,
+            nil,
+            nil,
+            nil,
+            signal
+          )
+        end)
+
+      assert_receive {:cancellation_probe_started, wrapper, child}, 1_000
+      wrapper_ref = Process.monitor(wrapper)
+      child_ref = Process.monitor(child)
+
+      on_exit(fn ->
+        Enum.each([wrapper, child], fn pid ->
+          if Process.alive?(pid), do: Process.exit(pid, :kill)
+        end)
+      end)
+
+      AbortSignal.abort(signal)
+
+      assert_receive {:cancellation_probe_cancel_called, ^wrapper}, 1_000
+      assert_receive {:cancellation_probe_wrapper_cancelling, ^wrapper}, 1_000
+      assert_receive {:cancellation_probe_child_stopped, ^child}, 1_000
+      assert_receive {:cancellation_probe_wrapper_stopped, ^wrapper}, 1_000
+      assert_receive {:DOWN, ^child_ref, :process, ^child, :normal}, 1_000
+      assert_receive {:DOWN, ^wrapper_ref, :process, ^wrapper, :normal}, 1_000
+
+      assert {:error, %{message: "Task aborted", details: details, answer: ""}} =
+               Elixir.Task.await(task, 1_000)
+
+      assert details == %{
+               description: "cancellation probe",
+               status: "error",
+               engine: "task-cancellation-probe",
+               role: nil,
+               model: nil,
+               thinking_level: nil,
+               resume_token: nil,
+               error: "Task aborted",
+               stderr: nil
+             }
     end
   end
 

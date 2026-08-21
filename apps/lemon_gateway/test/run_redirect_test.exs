@@ -1,79 +1,70 @@
 defmodule LemonGateway.RunRedirectTest do
   @moduledoc """
-  Tests for redirect handling in LemonGateway.Run.
+  Tests redirect handling in `LemonGateway.Run` through its configured executor.
 
-  Redirect is an optional engine capability (`supports_redirect?/0`,
-  defaulting to false for engines that do not export it). A redirect cast is
-  forwarded to `engine.redirect/2` when supported, degrades to a steer when
-  the engine only supports steering, and is rejected otherwise.
+  Redirect is forwarded to `executor.redirect/2`. Only
+  `{:error, :unsupported}` degrades to `executor.steer/2`; every other
+  redirect failure remains rejected.
   """
   use ExUnit.Case, async: false
 
   alias LemonGateway.Run
   alias LemonGateway.ExecutionRequest
-  alias LemonGateway.Types.Job
   alias LemonCore.ResumeToken
   alias LemonGateway.Event
 
   # ============================================================================
-  # Test Engines
+  # Configured executor fixture
   # ============================================================================
 
-  defmodule RedirectableEngine do
-    @behaviour LemonGateway.Engine
+  defmodule RunRedirectFixtureExecutor do
+    @behaviour LemonGateway.Executor
 
-    alias LemonGateway.Types.Job
     alias LemonCore.ResumeToken
     alias LemonGateway.Event
+    alias LemonGateway.ExecutionRequest
 
     @impl true
-    def id, do: "redirectable_test"
-
-    @impl true
-    def format_resume(%ResumeToken{value: sid}), do: "redirectable_test resume #{sid}"
-
-    @impl true
-    def extract_resume(_text), do: nil
-
-    @impl true
-    def is_resume_line(_line), do: false
-
-    @impl true
-    def supports_steer?, do: true
-
-    @impl true
-    def supports_redirect?, do: true
-
-    @impl true
-    def start_run(%Job{} = job, _opts, sink_pid) do
+    def start_run(%ExecutionRequest{} = request, _opts, sink_pid) do
       run_ref = make_ref()
-      resume = job.resume || %ResumeToken{engine: id(), value: unique_id()}
-      notify_pid = (job.meta || %{})[:capability_notify_pid]
-      controller_pid = (job.meta || %{})[:controller_pid]
+      scenario = (request.meta || %{})[:scenario]
+      meta = request.meta || %{}
+      resume = request.resume || %ResumeToken{engine: "lemon", value: unique_id()}
 
       {:ok, task_pid} =
         Task.start(fn ->
-          send(sink_pid, {:engine_event, run_ref, Event.started(%{engine: id(), resume: resume})})
-          if controller_pid, do: send(controller_pid, {:engine_started, run_ref})
+          send(
+            sink_pid,
+            {:engine_event, run_ref, Event.started(%{engine: "lemon", resume: resume})}
+          )
+
+          if controller_pid = Map.get(meta, :controller_pid) do
+            send(controller_pid, {:executor_started, run_ref, request})
+          end
 
           receive do
             {:complete, answer} ->
               send(
                 sink_pid,
                 {:engine_event, run_ref,
-                 Event.completed(%{engine: id(), resume: resume, ok: true, answer: answer})}
+                 Event.completed(%{engine: "lemon", resume: resume, ok: true, answer: answer})}
               )
           after
             30_000 ->
               send(
                 sink_pid,
                 {:engine_event, run_ref,
-                 Event.completed(%{engine: id(), resume: resume, ok: false, error: :timeout})}
+                 Event.completed(%{engine: "lemon", resume: resume, ok: false, error: :timeout})}
               )
           end
         end)
 
-      {:ok, run_ref, %{task_pid: task_pid, notify_pid: notify_pid}}
+      {:ok, run_ref,
+       %{
+         task_pid: task_pid,
+         scenario: scenario,
+         notify_pid: Map.get(meta, :capability_notify_pid)
+       }}
     end
 
     @impl true
@@ -85,160 +76,26 @@ defmodule LemonGateway.RunRedirectTest do
     def cancel(_ctx), do: :ok
 
     @impl true
-    def steer(%{notify_pid: notify_pid}, text) when is_pid(notify_pid) do
-      send(notify_pid, {:engine_steered, text})
+    def steer(%{scenario: scenario, notify_pid: notify_pid}, text)
+        when scenario in ["redirectable_test", "steer_only_test", "redirect_fails_test"] and
+               is_pid(notify_pid) do
+      send(notify_pid, {:executor_steered, text})
       :ok
     end
 
-    def steer(_ctx, _text), do: :ok
+    def steer(_ctx, _text), do: {:error, :unsupported}
 
     @impl true
-    def redirect(%{notify_pid: notify_pid}, text) when is_pid(notify_pid) do
-      send(notify_pid, {:engine_redirected, text})
+    def redirect(%{scenario: "redirectable_test", notify_pid: notify_pid}, text)
+        when is_pid(notify_pid) do
+      send(notify_pid, {:executor_redirected, text})
       :ok
     end
 
-    def redirect(_ctx, _text), do: :ok
-
-    defp unique_id, do: Integer.to_string(System.unique_integer([:positive]))
-  end
-
-  # Supports steering but does not export supports_redirect?/0: a redirect
-  # must degrade to a steer.
-  defmodule SteerOnlyEngine do
-    @behaviour LemonGateway.Engine
-
-    alias LemonGateway.Types.Job
-    alias LemonCore.ResumeToken
-    alias LemonGateway.Event
-
-    @impl true
-    def id, do: "steer_only_test"
-
-    @impl true
-    def format_resume(%ResumeToken{value: sid}), do: "steer_only_test resume #{sid}"
-
-    @impl true
-    def extract_resume(_text), do: nil
-
-    @impl true
-    def is_resume_line(_line), do: false
-
-    @impl true
-    def supports_steer?, do: true
-
-    @impl true
-    def start_run(%Job{} = job, _opts, sink_pid) do
-      run_ref = make_ref()
-      resume = job.resume || %ResumeToken{engine: id(), value: unique_id()}
-      notify_pid = (job.meta || %{})[:capability_notify_pid]
-      controller_pid = (job.meta || %{})[:controller_pid]
-
-      {:ok, task_pid} =
-        Task.start(fn ->
-          send(sink_pid, {:engine_event, run_ref, Event.started(%{engine: id(), resume: resume})})
-          if controller_pid, do: send(controller_pid, {:engine_started, run_ref})
-
-          receive do
-            {:complete, answer} ->
-              send(
-                sink_pid,
-                {:engine_event, run_ref,
-                 Event.completed(%{engine: id(), resume: resume, ok: true, answer: answer})}
-              )
-          after
-            30_000 ->
-              send(
-                sink_pid,
-                {:engine_event, run_ref,
-                 Event.completed(%{engine: id(), resume: resume, ok: false, error: :timeout})}
-              )
-          end
-        end)
-
-      {:ok, run_ref, %{task_pid: task_pid, notify_pid: notify_pid}}
-    end
-
-    @impl true
-    def cancel(%{task_pid: pid}) when is_pid(pid) do
-      Process.exit(pid, :kill)
-      :ok
-    end
-
-    def cancel(_ctx), do: :ok
-
-    @impl true
-    def steer(%{notify_pid: notify_pid}, text) when is_pid(notify_pid) do
-      send(notify_pid, {:engine_steered, text})
-      :ok
-    end
-
-    def steer(_ctx, _text), do: :ok
-
-    defp unique_id, do: Integer.to_string(System.unique_integer([:positive]))
-  end
-
-  # Supports neither steering nor redirect.
-  defmodule NoCapabilityEngine do
-    @behaviour LemonGateway.Engine
-
-    alias LemonGateway.Types.Job
-    alias LemonCore.ResumeToken
-    alias LemonGateway.Event
-
-    @impl true
-    def id, do: "no_capability_test"
-
-    @impl true
-    def format_resume(%ResumeToken{value: sid}), do: "no_capability_test resume #{sid}"
-
-    @impl true
-    def extract_resume(_text), do: nil
-
-    @impl true
-    def is_resume_line(_line), do: false
-
-    @impl true
-    def supports_steer?, do: false
-
-    @impl true
-    def start_run(%Job{} = job, _opts, sink_pid) do
-      run_ref = make_ref()
-      resume = job.resume || %ResumeToken{engine: id(), value: unique_id()}
-      controller_pid = (job.meta || %{})[:controller_pid]
-
-      {:ok, task_pid} =
-        Task.start(fn ->
-          send(sink_pid, {:engine_event, run_ref, Event.started(%{engine: id(), resume: resume})})
-          if controller_pid, do: send(controller_pid, {:engine_started, run_ref})
-
-          receive do
-            {:complete, answer} ->
-              send(
-                sink_pid,
-                {:engine_event, run_ref,
-                 Event.completed(%{engine: id(), resume: resume, ok: true, answer: answer})}
-              )
-          after
-            30_000 ->
-              send(
-                sink_pid,
-                {:engine_event, run_ref,
-                 Event.completed(%{engine: id(), resume: resume, ok: false, error: :timeout})}
-              )
-          end
-        end)
-
-      {:ok, run_ref, %{task_pid: task_pid}}
-    end
-
-    @impl true
-    def cancel(%{task_pid: pid}) when is_pid(pid) do
-      Process.exit(pid, :kill)
-      :ok
-    end
-
-    def cancel(_ctx), do: :ok
+    # The Run contract, rather than executor capability introspection, decides
+    # to fall back to steer for this explicit result only.
+    def redirect(%{scenario: "redirect_fails_test"}, _text), do: {:error, :transport_failed}
+    def redirect(_ctx, _text), do: {:error, :unsupported}
 
     defp unique_id, do: Integer.to_string(System.unique_integer([:positive]))
   end
@@ -252,17 +109,11 @@ defmodule LemonGateway.RunRedirectTest do
 
     Application.put_env(:lemon_gateway, LemonGateway.Config, %{
       max_concurrent_runs: 10,
-      default_engine: "redirectable_test",
       enable_telegram: false,
       require_engine_lock: false
     })
 
-    Application.put_env(:lemon_gateway, :engines, [
-      RedirectableEngine,
-      SteerOnlyEngine,
-      NoCapabilityEngine,
-      LemonGateway.Engines.Echo
-    ])
+    Application.put_env(:lemon_gateway, :executor, RunRedirectFixtureExecutor)
 
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
@@ -273,51 +124,27 @@ defmodule LemonGateway.RunRedirectTest do
     "test:#{chat_id}"
   end
 
-  defp make_job(session_key, opts) do
+  defp make_request(session_key, opts) do
     user_msg_id = Keyword.get(opts, :user_msg_id, 1)
-    base_meta = %{notify_pid: self(), user_msg_id: user_msg_id}
-    meta_opt = Keyword.get(opts, :meta, %{})
 
     meta =
-      cond do
-        is_nil(meta_opt) -> nil
-        is_map(meta_opt) -> Map.merge(base_meta, meta_opt)
-        true -> meta_opt
-      end
+      %{notify_pid: self(), user_msg_id: user_msg_id}
+      |> Map.merge(Keyword.get(opts, :meta, %{}))
+      |> Map.put(:scenario, Keyword.fetch!(opts, :scenario))
 
-    %Job{
+    %ExecutionRequest{
+      run_id: Keyword.get(opts, :run_id, "run-#{System.unique_integer([:positive])}"),
       session_key: session_key,
       prompt: Keyword.get(opts, :prompt, Keyword.get(opts, :text, "test message")),
-      engine_id: Keyword.fetch!(opts, :engine_id),
+      conversation_key: {:session, session_key},
       resume: Keyword.get(opts, :resume),
       meta: meta
     }
   end
 
-  defp make_request(session_key, opts) do
-    job = make_job(session_key, opts)
-    ExecutionRequest.from_job(job, conversation_key: test_conversation_key(job))
-  end
-
-  defp test_conversation_key(%Job{session_key: session_key}) when is_binary(session_key),
-    do: {:session, session_key}
-
-  # The shape LemonRouter.SessionCoordinator casts for a `:redirect` queue mode.
-  defp make_command(session_key, engine_id, prompt) do
-    %LemonCore.ExecutionCommand{
-      run_id: "run-#{System.unique_integer([:positive])}",
-      session_key: session_key,
-      prompt: prompt,
-      engine_id: engine_id,
-      conversation_key: {:session, session_key},
-      meta: %{}
-    }
-  end
-
-  defp start_run_direct(job, slot_ref \\ make_ref()) do
+  defp start_run_direct(request, slot_ref \\ make_ref()) do
     args = %{
-      execution_request:
-        ExecutionRequest.from_job(job, conversation_key: test_conversation_key(job)),
+      execution_request: request,
       slot_ref: slot_ref,
       worker_pid: self()
     }
@@ -330,108 +157,138 @@ defmodule LemonGateway.RunRedirectTest do
   # ============================================================================
 
   describe "redirect behavior" do
-    test "forwards redirect to an engine that supports it" do
+    test "forwards redirect to the configured executor" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_id: "redirectable_test",
+      request =
+        make_request(scope,
+          scenario: "redirectable_test",
           meta: %{controller_pid: self(), capability_notify_pid: self()}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
-      assert_receive {:engine_started, _run_ref}, 2000
+      assert_receive {:executor_started, _run_ref,
+                      %ExecutionRequest{meta: %{scenario: "redirectable_test"}}},
+                     2000
 
-      request = make_request(scope, engine_id: "redirectable_test", text: "new direction")
-      GenServer.cast(pid, {:redirect, request, self()})
+      submission_run_id = "redirect-submission-#{System.unique_integer([:positive])}"
+      GenServer.cast(pid, {:redirect, submission_run_id, "new direction", self()})
 
-      assert_receive {:engine_redirected, "new direction"}, 2000
-      assert_receive {:redirect_accepted, ^request}, 2000
+      assert_receive {:executor_redirected, "new direction"}, 2000
+      assert_receive {:redirect_accepted, ^submission_run_id}, 2000
 
-      # It must NOT have been degraded to a steer
-      refute_receive {:engine_steered, _}, 100
+      # A successful redirect must not also steer.
+      refute_receive {:executor_steered, _}, 100
     end
 
-    test "degrades to steer when the engine only supports steering" do
+    test "falls back to steer only when redirect returns unsupported" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_id: "steer_only_test",
+      request =
+        make_request(scope,
+          scenario: "steer_only_test",
           meta: %{controller_pid: self(), capability_notify_pid: self()}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
-      assert_receive {:engine_started, _run_ref}, 2000
+      assert_receive {:executor_started, _run_ref,
+                      %ExecutionRequest{meta: %{scenario: "steer_only_test"}}},
+                     2000
 
-      request = make_request(scope, engine_id: "steer_only_test", text: "degraded correction")
-      GenServer.cast(pid, {:redirect, request, self()})
+      submission_run_id = "redirect-submission-#{System.unique_integer([:positive])}"
+      GenServer.cast(pid, {:redirect, submission_run_id, "degraded correction", self()})
 
-      assert_receive {:engine_steered, "degraded correction"}, 2000
-      assert_receive {:redirect_accepted, ^request}, 2000
+      assert_receive {:executor_steered, "degraded correction"}, 2000
+      assert_receive {:redirect_accepted, ^submission_run_id}, 2000
     end
 
-    test "accepts an ExecutionCommand redirect and replies with the original command" do
+    test "does not fall back to steer for other redirect errors" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_id: "redirectable_test",
+      request =
+        make_request(scope,
+          scenario: "redirect_fails_test",
           meta: %{controller_pid: self(), capability_notify_pid: self()}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
-      assert_receive {:engine_started, _run_ref}, 2000
+      assert_receive {:executor_started, _run_ref,
+                      %ExecutionRequest{meta: %{scenario: "redirect_fails_test"}}},
+                     2000
 
-      command = make_command(scope, "redirectable_test", "new direction")
-      GenServer.cast(pid, {:redirect, command, self()})
+      submission_run_id = "redirect-submission-#{System.unique_integer([:positive])}"
+      GenServer.cast(pid, {:redirect, submission_run_id, "do not steer", self()})
 
-      assert_receive {:engine_redirected, "new direction"}, 2000
-      # The router coordinator matches on the ExecutionCommand it sent, so the
-      # reply must carry that struct back unchanged.
-      assert_receive {:redirect_accepted, ^command}, 2000
-      refute_receive {:engine_steered, _}, 100
+      assert_receive {:redirect_rejected, ^submission_run_id}, 2000
+      refute_receive {:executor_steered, _}, 100
     end
 
-    test "rejects an ExecutionCommand redirect with the original command" do
+    test "acknowledges redirects with the supplied submission run ID" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_id: "no_capability_test",
+      request =
+        make_request(scope,
+          scenario: "redirectable_test",
+          meta: %{controller_pid: self(), capability_notify_pid: self()}
+        )
+
+      {:ok, pid} = start_run_direct(request)
+
+      assert_receive {:executor_started, _run_ref,
+                      %ExecutionRequest{meta: %{scenario: "redirectable_test"}}},
+                     2000
+
+      submission_run_id = "stable-submission-run-id"
+      GenServer.cast(pid, {:redirect, submission_run_id, "new direction", self()})
+
+      assert_receive {:executor_redirected, "new direction"}, 2000
+      assert_receive {:redirect_accepted, ^submission_run_id}, 2000
+      refute_receive {:executor_steered, _}, 100
+    end
+
+    test "rejects unsupported redirects with the supplied submission run ID" do
+      scope = make_scope()
+
+      request =
+        make_request(scope,
+          scenario: "no_capability_test",
           meta: %{controller_pid: self()}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
-      assert_receive {:engine_started, _run_ref}, 2000
+      assert_receive {:executor_started, _run_ref,
+                      %ExecutionRequest{meta: %{scenario: "no_capability_test"}}},
+                     2000
 
-      command = make_command(scope, "no_capability_test", "unsupported")
-      GenServer.cast(pid, {:redirect, command, self()})
+      submission_run_id = "unsupported-submission-run-id"
+      GenServer.cast(pid, {:redirect, submission_run_id, "unsupported", self()})
 
-      assert_receive {:redirect_rejected, ^command}, 2000
+      assert_receive {:redirect_rejected, ^submission_run_id}, 2000
     end
 
-    test "rejects redirect when the engine supports neither redirect nor steer" do
+    test "rejects redirect when the executor does not support either control" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_id: "no_capability_test",
+      request =
+        make_request(scope,
+          scenario: "no_capability_test",
           meta: %{controller_pid: self()}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
-      assert_receive {:engine_started, _run_ref}, 2000
+      assert_receive {:executor_started, _run_ref,
+                      %ExecutionRequest{meta: %{scenario: "no_capability_test"}}},
+                     2000
 
-      request = make_request(scope, engine_id: "no_capability_test", text: "unsupported")
-      GenServer.cast(pid, {:redirect, request, self()})
+      submission_run_id = "rejected-submission-run-id"
+      GenServer.cast(pid, {:redirect, submission_run_id, "unsupported", self()})
 
-      assert_receive {:redirect_rejected, ^request}, 2000
+      assert_receive {:redirect_rejected, ^submission_run_id}, 2000
     end
   end
 end

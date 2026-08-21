@@ -161,7 +161,7 @@ export const sessionCommand: SlashCommand = {
 					`blocks: ${session.blocks.length} · unread: ${session.unread}`,
 					`busy: ${session.busy}${session.activeRunId ? ` (run ${session.activeRunId})` : ""}`,
 					`model: ${session.model ?? "(daemon default)"}`,
-					`engine: ${session.engine ?? "(daemon default)"}`,
+					`native runtime: ${session.engine ?? "(not reported)"}`,
 					`thinking: ${session.thinkingLevel ?? "(daemon default)"}`,
 					`tool policy: ${session.toolPolicy ?? "(daemon default)"}`,
 				]);

@@ -322,13 +322,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport.UpdateProcessor do
     queue_mode = override_mode || base_queue_mode || :collect
     text_after_queue = if override_mode, do: stripped_after_override, else: inbound.message.text
 
-    engine_id = extract_command_hint(text_after_queue)
-
     meta =
       (inbound.meta || %{})
       |> Map.put(:agent_id, agent_id || (inbound.meta && inbound.meta[:agent_id]) || "default")
       |> Map.put(:queue_mode, queue_mode)
-      |> Map.put(:engine_id, engine_id)
       |> Map.put(:topic_id, topic_id)
       |> maybe_put(:cwd, cwd)
 
@@ -386,26 +383,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.UpdateProcessor do
     prefix_len = String.length(prefix)
     remaining = String.slice(text, prefix_len..-1//1)
     String.trim_leading(remaining)
-  end
-
-  defp extract_command_hint(text) do
-    trimmed = String.trim_leading(text || "")
-
-    case Regex.run(~r{^/([a-z][a-z0-9_-]*)(?:\s|$)}i, trimmed) do
-      [_, cmd] ->
-        cmd_lower = String.downcase(cmd)
-
-        if LemonCore.EngineCatalog.known?(cmd_lower) do
-          cmd_lower
-        else
-          nil
-        end
-
-      _ ->
-        nil
-    end
-  rescue
-    _ -> nil
   end
 
   defp maybe_log_drop(state, inbound, reason) do

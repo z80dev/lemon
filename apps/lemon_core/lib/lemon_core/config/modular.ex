@@ -92,7 +92,7 @@ defmodule LemonCore.Config.Modular do
     project_dir = Keyword.get(opts, :project_dir, File.cwd!())
     validate? = Keyword.get(opts, :validate, false)
 
-    # Load, check deprecated sections (hard-fail), and resolve
+    # Load, reject removed settings, and resolve.
     settings = load_merged_settings(project_dir)
     check_deprecated_sections!(settings)
     config = resolve_settings(settings)
@@ -167,8 +167,8 @@ defmodule LemonCore.Config.Modular do
     project_dir = Keyword.get(opts, :project_dir, File.cwd!())
     settings = load_merged_settings(project_dir)
 
-    # Check deprecated sections via tuple-returning variant instead of raising
-    deprecated_errors =
+    # Return removed-setting errors alongside resolved-config validation errors.
+    removed_setting_errors =
       case Validator.validate_deprecated_sections(settings) do
         :ok -> []
         {:error, errs} -> errs
@@ -182,7 +182,7 @@ defmodule LemonCore.Config.Modular do
         {:error, errs} -> errs
       end
 
-    case deprecated_errors ++ validation_errors do
+    case removed_setting_errors ++ validation_errors do
       [] -> {:ok, config}
       errors -> {:error, errors}
     end
@@ -201,62 +201,21 @@ defmodule LemonCore.Config.Modular do
   def project_path(dir), do: LemonCore.Paths.project_config(dir)
 
   @doc """
-  Checks for deprecated TOML sections and raises ValidationError if found.
+  Checks for removed TOML sections and engine-routing settings, raising
+  `ValidationError` when found.
 
-  Deprecated sections:
-  - `[agent]` - use `[defaults]` and `[runtime]` instead
-  - `[agents]` - use `[profiles.<id>]` instead
-  - `[agent.tools]` - use `[runtime.tools.*]` instead
-  - `[tools]` - use `[runtime.tools.*]` instead
+  Removed settings include legacy agent/tool sections and every engine-routing
+  key outside `[runtime.cli.*]`.
   """
   @spec check_deprecated_sections!(map()) :: :ok
   def check_deprecated_sections!(settings) when is_map(settings) do
-    errors = collect_deprecated_errors(settings)
-
-    case errors do
-      [] ->
+    case Validator.validate_deprecated_sections(settings) do
+      :ok ->
         :ok
 
-      _ ->
-        raise ValidationError, message: "Configuration uses deprecated sections", errors: errors
+      {:error, errors} ->
+        raise ValidationError, message: "Configuration uses removed settings", errors: errors
     end
-  end
-
-  defp collect_deprecated_errors(settings) do
-    errors = []
-
-    errors =
-      if is_map(settings["agent"]) do
-        [
-          "[agent] is deprecated. Move fields to [defaults] (provider, model, thinking_level) and [runtime] (other settings)."
-          | errors
-        ]
-      else
-        errors
-      end
-
-    errors =
-      if is_map(settings["agents"]) do
-        ["[agents.<id>] is deprecated. Use [profiles.<id>] instead." | errors]
-      else
-        errors
-      end
-
-    errors =
-      if is_map(settings["agent"]) and is_map(settings["agent"]["tools"]) do
-        ["[agent.tools.*] is deprecated. Use [runtime.tools.*] instead." | errors]
-      else
-        errors
-      end
-
-    errors =
-      if is_map(settings["tools"]) do
-        ["[tools.*] is deprecated. Use [runtime.tools.*] instead." | errors]
-      else
-        errors
-      end
-
-    Enum.reverse(errors)
   end
 
   # Normalizes settings and resolves each section into the modular config struct.

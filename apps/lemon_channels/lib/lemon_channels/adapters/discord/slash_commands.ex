@@ -15,8 +15,7 @@ defmodule LemonChannels.Adapters.Discord.SlashCommands do
     description: "Run a Lemon prompt",
     type: 1,
     options: [
-      %{type: 3, name: "prompt", description: "Prompt text", required: true},
-      %{type: 3, name: "engine", description: "Optional engine override", required: false}
+      %{type: 3, name: "prompt", description: "Prompt text", required: true}
     ]
   }
 

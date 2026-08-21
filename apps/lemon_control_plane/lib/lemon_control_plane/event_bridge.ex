@@ -432,11 +432,12 @@ defmodule LemonControlPlane.EventBridge do
        "type" => "started",
        "runId" => payload.run_id || meta[:run_id],
        "sessionKey" => payload.session_key || meta[:session_key],
-       "engine" => payload.engine,
+       "engine" => "lemon",
        "parentRunId" => meta[:parent_run_id],
        "model" => model,
        "provider" =>
-         normalize_event_string(payload.provider) || LemonControlPlane.SessionModel.provider_for(model),
+         normalize_event_string(payload.provider) ||
+           LemonControlPlane.SessionModel.provider_for(model),
        "thinkingLevel" =>
          normalize_event_string(payload.thinking_level) ||
            normalize_event_string(meta[:thinking_level])

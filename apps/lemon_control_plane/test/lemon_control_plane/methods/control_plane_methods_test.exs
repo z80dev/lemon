@@ -577,7 +577,8 @@ defmodule LemonControlPlane.Methods.ControlPlaneMethodsTest do
       assert Map.has_key?(result, "capabilities")
 
       assert result["summary"]["agentId"] == result["agentId"]
-      assert result["summary"]["defaultEngine"] == result["defaultEngine"]
+      refute Map.has_key?(result, "defaultEngine")
+      refute Map.has_key?(result["summary"], "defaultEngine")
       assert result["summary"]["capabilityCount"] == map_size(result["capabilities"])
       assert "streaming" in result["summary"]["enabledCapabilities"]
       assert "tools" in result["summary"]["enabledCapabilities"]

@@ -233,7 +233,6 @@ defmodule LemonCore.ConfigTest do
     File.write!(Path.join(global_dir, "config.toml"), """
     [profiles.default]
     name = "Daily Assistant"
-    default_engine = "lemon"
     system_prompt = "You are my daily assistant."
     model = "anthropic:claude-sonnet-4-20250514"
 
@@ -247,7 +246,6 @@ defmodule LemonCore.ConfigTest do
     config = Config.load()
 
     assert config.agents["default"].name == "Daily Assistant"
-    assert config.agents["default"].default_engine == "lemon"
     assert config.agents["default"].system_prompt == "You are my daily assistant."
     assert config.agents["default"].model == "anthropic:claude-sonnet-4-20250514"
     assert config.agents["default"].tool_policy.allow == :all
@@ -281,7 +279,6 @@ defmodule LemonCore.ConfigTest do
     provider = "openai"
     model = "openai:gpt-5"
     thinking_level = "high"
-    engine = "codex"
 
     [runtime]
     theme = "default"
@@ -305,17 +302,15 @@ defmodule LemonCore.ConfigTest do
     assert config.agents["default"].name == "Default Profile"
     assert config.agents["default"].system_prompt == "You are concise."
     assert config.agents["default"].model == "openai:gpt-5"
-    assert config.agents["default"].default_engine == "codex"
   end
 
-  test "defaults model and engine are applied only to the default profile", %{home: home} do
+  test "defaults model is applied only to the default profile", %{home: home} do
     global_dir = Path.join(home, ".lemon")
     File.mkdir_p!(global_dir)
 
     File.write!(Path.join(global_dir, "config.toml"), """
     [defaults]
     model = "openai:gpt-5"
-    engine = "codex"
 
     [profiles.worker]
     name = "Worker"
@@ -324,9 +319,7 @@ defmodule LemonCore.ConfigTest do
     config = Config.load()
 
     assert config.agents["default"].model == "openai:gpt-5"
-    assert config.agents["default"].default_engine == "codex"
     assert config.agents["worker"].model == nil
-    assert config.agents["worker"].default_engine == nil
   end
 
   test "runtime and profiles are the canonical config sections", %{home: home} do
@@ -782,6 +775,7 @@ defmodule LemonCore.ConfigTest do
     config = Config.load()
 
     assert config.gateway[:enable_stub] == true
+
     assert config.gateway[:stub] == %{
              resolved: true,
              raw: %{"default_account_id" => "demo-work", "default_chat_id" => -100_123}

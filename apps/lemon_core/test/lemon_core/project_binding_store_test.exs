@@ -5,7 +5,7 @@ defmodule LemonCore.ProjectBindingStoreTest do
 
   test "round-trips project overrides and dynamic bindings through the typed wrapper" do
     project_id = "project_#{System.unique_integer([:positive])}"
-    override = %{cwd: "/tmp/project", default_engine: "codex"}
+    override = %{cwd: "/tmp/project"}
     dynamic = %{path: "/tmp/project", source: :test}
 
     assert :ok = ProjectBindingStore.put_override(project_id, override)

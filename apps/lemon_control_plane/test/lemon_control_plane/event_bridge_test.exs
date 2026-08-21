@@ -827,7 +827,7 @@ defmodule LemonControlPlane.EventBridgeTest do
 
       assert payload["type"] == "started"
       assert payload["runId"] == run_id
-      assert payload["engine"] == "coding_agent"
+      assert payload["engine"] == "lemon"
       assert payload["model"] == "claude-sonnet-4-20250514"
       # Derived here rather than left to the client to parse out of the id.
       assert payload["provider"] == "anthropic"

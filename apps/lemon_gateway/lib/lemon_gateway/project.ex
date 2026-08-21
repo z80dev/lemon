@@ -1,17 +1,14 @@
 defmodule LemonGateway.Project do
   @moduledoc """
   Represents a project configuration.
-
-  Projects define a root directory for running agents and can specify
-  a default engine to use for jobs bound to this project.
+  Projects define a root directory for running agents.
   """
 
   @enforce_keys [:id, :root]
-  defstruct [:id, :root, :default_engine]
+  defstruct [:id, :root]
 
   @type t :: %__MODULE__{
           id: String.t(),
-          root: String.t(),
-          default_engine: String.t() | nil
+          root: String.t()
         }
 end

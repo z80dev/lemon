@@ -211,7 +211,6 @@ defmodule LemonRouter.RunProcessTest do
         run_id: run_id,
         session_key: nil,
         prompt: "test",
-        engine_id: "echo",
         conversation_key: {:session, "test:#{run_id}"},
         meta: meta
       },
@@ -273,8 +272,7 @@ defmodule LemonRouter.RunProcessTest do
       job = %{
         run_id: run_id,
         session_key: session_key,
-        prompt: "test",
-        engine_id: "echo"
+        prompt: "test"
       }
 
       on_exit(fn -> Process.flag(:trap_exit, previous) end)
@@ -2874,8 +2872,7 @@ defmodule LemonRouter.RunProcessTest do
         execution_request: %LemonCore.ExecutionCommand{
           run_id: "run-estimate",
           session_key: "session-estimate",
-          prompt: String.duplicate("a", 400),
-          engine_id: "codex"
+          prompt: String.duplicate("a", 400)
         }
       }
 
@@ -2887,8 +2884,7 @@ defmodule LemonRouter.RunProcessTest do
         execution_request: %LemonCore.ExecutionCommand{
           run_id: "run-estimate-nil",
           session_key: "session-estimate-nil",
-          prompt: nil,
-          engine_id: "codex"
+          prompt: nil
         }
       }
 

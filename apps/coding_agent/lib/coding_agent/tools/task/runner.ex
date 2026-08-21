@@ -16,6 +16,8 @@ defmodule CodingAgent.Tools.Task.Runner do
 
   @await_poll_ms 200
   @default_task_session_timeout_ms nil
+  @runner_cancel_timeout_ms 100
+  @runner_shutdown_timeout_ms 200
 
   @doc """
   Resolve the subagent module that runs `engine` as a Task-tool child.
@@ -100,7 +102,7 @@ defmodule CodingAgent.Tools.Task.Runner do
              model: model,
              thinking_level: thinking_level
            ) do
-      abort_monitor = maybe_start_abort_monitor(signal, session.pid)
+      abort_monitor = maybe_start_abort_monitor(signal, module, session)
 
       result =
         reduce_cli_events(module.events(session), description, engine, on_update, signal)
@@ -371,13 +373,13 @@ defmodule CodingAgent.Tools.Task.Runner do
     end
   end
 
-  defp maybe_start_abort_monitor(nil, _pid), do: nil
+  defp maybe_start_abort_monitor(nil, _module, _session), do: nil
 
-  defp maybe_start_abort_monitor(signal, pid) when is_reference(signal) and is_pid(pid) do
-    spawn(fn -> abort_monitor_loop(signal, pid) end)
+  defp maybe_start_abort_monitor(signal, module, session) when is_reference(signal) do
+    spawn(fn -> abort_monitor_loop(signal, module, session) end)
   end
 
-  defp maybe_start_abort_monitor(_signal, _pid), do: nil
+  defp maybe_start_abort_monitor(_signal, _module, _session), do: nil
 
   defp maybe_stop_abort_monitor(nil), do: :ok
 
@@ -458,7 +460,7 @@ defmodule CodingAgent.Tools.Task.Runner do
 
   defp maybe_apply_abort(result, signal) do
     if AbortSignal.aborted?(signal) do
-      %{result | error: result.error || "Task aborted"}
+      %{result | error: "Task aborted"}
     else
       result
     end
@@ -488,19 +490,74 @@ defmodule CodingAgent.Tools.Task.Runner do
 
   defp maybe_add_action_detail(details, _detail), do: details
 
-  defp abort_monitor_loop(signal, pid) do
+  defp abort_monitor_loop(signal, module, session) do
     receive do
-      :stop -> :ok
+      :stop ->
+        :ok
     after
       200 ->
         if AbortSignal.aborted?(signal) do
-          Process.exit(pid, :kill)
+          cancel_subagent(module, session)
+          terminate_session_wrapper(session)
           :ok
         else
-          abort_monitor_loop(signal, pid)
+          abort_monitor_loop(signal, module, session)
         end
     end
   end
+
+  # Runner cancellation is extension code. Isolate it so an invalid or stuck
+  # implementation cannot leave the task's event enumeration blocked forever.
+  defp cancel_subagent(module, session) when is_atom(module) do
+    if function_exported?(module, :cancel, 1) do
+      {pid, ref} =
+        spawn_monitor(fn ->
+          try do
+            _ = module.cancel(session)
+          rescue
+            _ -> :ok
+          catch
+            _, _ -> :ok
+          end
+        end)
+
+      receive do
+        {:DOWN, ^ref, :process, ^pid, _reason} ->
+          :ok
+      after
+        @runner_cancel_timeout_ms ->
+          Process.exit(pid, :kill)
+          Process.demonitor(ref, [:flush])
+          :ok
+      end
+    else
+      :ok
+    end
+  end
+
+  defp cancel_subagent(_module, _session), do: :ok
+
+  defp terminate_session_wrapper(%{pid: pid}) when is_pid(pid) do
+    ref = Process.monitor(pid)
+
+    receive do
+      {:DOWN, ^ref, :process, ^pid, _reason} ->
+        :ok
+    after
+      @runner_shutdown_timeout_ms ->
+        Process.exit(pid, :kill)
+
+        receive do
+          {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+        after
+          @runner_shutdown_timeout_ms ->
+            Process.demonitor(ref, [:flush])
+            :ok
+        end
+    end
+  end
+
+  defp terminate_session_wrapper(_session), do: :ok
 
   defp await_result(
          session,

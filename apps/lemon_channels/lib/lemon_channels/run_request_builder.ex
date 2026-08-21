@@ -15,7 +15,6 @@ defmodule LemonChannels.RunRequestBuilder do
       agent_id: agent_id,
       prompt: message_text(msg),
       queue_mode: meta_value(meta, :queue_mode),
-      engine_id: meta_value(meta, :engine_id),
       model: meta_value(meta, :model),
       resume: normalize_resume_token(meta_value(meta, :resume)),
       cwd: meta_value(meta, :cwd),
@@ -64,16 +63,14 @@ defmodule LemonChannels.RunRequestBuilder do
   defp meta_value(meta, key) when is_atom(key),
     do: Map.get(meta, key) || Map.get(meta, Atom.to_string(key))
 
-  defp normalize_resume_token(%ResumeToken{} = resume), do: resume
+  defp normalize_resume_token(%ResumeToken{engine: "lemon"} = resume), do: resume
 
-  defp normalize_resume_token(%{engine: engine, value: value})
-       when is_binary(engine) and is_binary(value) do
-    %ResumeToken{engine: engine, value: value}
+  defp normalize_resume_token(%{engine: "lemon", value: value}) when is_binary(value) do
+    %ResumeToken{engine: "lemon", value: value}
   end
 
-  defp normalize_resume_token(%{"engine" => engine, "value" => value})
-       when is_binary(engine) and is_binary(value) do
-    %ResumeToken{engine: engine, value: value}
+  defp normalize_resume_token(%{"engine" => "lemon", "value" => value}) when is_binary(value) do
+    %ResumeToken{engine: "lemon", value: value}
   end
 
   defp normalize_resume_token(_), do: nil

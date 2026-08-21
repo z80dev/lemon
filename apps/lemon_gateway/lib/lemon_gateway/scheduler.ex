@@ -40,7 +40,7 @@ defmodule LemonGateway.Scheduler do
     GenServer.cast(__MODULE__, {:release_slot, slot_ref})
   end
 
-  @doc "Cancels a running job by sending a cancel cast to the run process."
+  @doc "Cancels a running execution by sending a cancel cast to the run process."
   @spec cancel(pid(), term()) :: :ok
   def cancel(run_pid, reason \\ :user_requested) do
     if is_pid(run_pid) do
@@ -226,10 +226,7 @@ defmodule LemonGateway.Scheduler do
 
     Introspection.record(
       :scheduled_job_triggered,
-      %{
-        engine_id: request.engine_id,
-        thread_key: inspect(thread_key)
-      },
+      %{thread_key: inspect(thread_key)},
       run_id: request.run_id,
       session_key: request.session_key,
       engine: "lemon",

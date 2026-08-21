@@ -1,6 +1,6 @@
 ---
 name: Integration / extension
-about: Propose or track a new channel, engine, storage backend, or memory provider
+about: Propose or track a new channel, task runner, storage backend, or memory provider
 labels: integration
 assignees: z80
 ---
@@ -10,7 +10,7 @@ assignees: z80
 Which extension point does this integration implement?
 
 - [ ] Channel adapter (`LemonChannels.Plugin`)
-- [ ] Engine (`LemonGateway.Engine`)
+- [ ] Delegated task runner (`LemonCore.SubagentRunner`)
 - [ ] Storage backend (`LemonCore.Store.Backend`)
 - [ ] Memory provider (`LemonMemory.Provider`)
 - [ ] Other: ___

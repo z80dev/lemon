@@ -6,12 +6,11 @@ defmodule LemonRouter.IntrospectionTest do
 
   alias LemonCore.Introspection
 
-  defp make_test_request(run_id, session_key, engine_id, meta) do
+  defp make_test_request(run_id, session_key, meta) do
     %LemonCore.ExecutionCommand{
       run_id: run_id,
       session_key: session_key,
       prompt: "test",
-      engine_id: engine_id,
       conversation_key: {:session, session_key},
       meta: meta
     }
@@ -32,7 +31,7 @@ defmodule LemonRouter.IntrospectionTest do
       run_id = "introspection_run_#{token}"
       session_key = "agent:introspection_test:#{token}:main"
 
-      execution_request = make_test_request(run_id, session_key, "lemon", %{origin: :test})
+      execution_request = make_test_request(run_id, session_key, %{origin: :test})
 
       {:ok, pid} =
         LemonRouter.RunProcess.start_link(
@@ -53,7 +52,6 @@ defmodule LemonRouter.IntrospectionTest do
       assert evt.engine == "lemon"
       assert evt.run_id == run_id
       assert evt.session_key == session_key
-      assert evt.payload.engine_id == "lemon"
       assert evt.payload.queue_mode == :collect
 
       # Clean up
@@ -65,7 +63,7 @@ defmodule LemonRouter.IntrospectionTest do
       run_id = "introspection_complete_#{token}"
       session_key = "agent:introspection_complete:#{token}:main"
 
-      execution_request = make_test_request(run_id, session_key, "echo", %{origin: :test})
+      execution_request = make_test_request(run_id, session_key, %{origin: :test})
 
       {:ok, pid} =
         LemonRouter.RunProcess.start_link(

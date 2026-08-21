@@ -104,39 +104,13 @@ defmodule LemonChannels.Adapters.Telegram.Transport.PerChatState do
 
   def bump_thread_generation(_account_id, _chat_id, _thread_id), do: {0, 0}
 
-  @spec update_chat_state_last_engine(binary(), binary()) :: :ok
-  def update_chat_state_last_engine(session_key, engine)
-      when is_binary(session_key) and is_binary(engine) do
-    now = System.system_time(:millisecond)
-    existing = safe_get_chat_state(session_key)
-
-    payload =
-      case existing do
-        %{last_resume_token: token} ->
-          %{last_engine: engine, last_resume_token: token, updated_at: now}
-
-        %{"last_resume_token" => token} ->
-          %{last_engine: engine, last_resume_token: token, updated_at: now}
-
-        _ ->
-          %{last_engine: engine, updated_at: now}
-      end
-
-    ChatStateStore.put(session_key, payload)
-    :ok
-  rescue
-    _ -> :ok
-  end
-
-  def update_chat_state_last_engine(_session_key, _engine), do: :ok
-
   @spec set_chat_resume(ChatScope.t(), binary(), ResumeToken.t()) :: :ok
-  def set_chat_resume(%ChatScope{} = scope, session_key, %ResumeToken{} = resume)
+  def set_chat_resume(%ChatScope{} = scope, session_key, %ResumeToken{engine: "lemon"} = resume)
       when is_binary(session_key) do
     now = System.system_time(:millisecond)
 
     ChatStateStore.put(session_key, %{
-      last_engine: resume.engine,
+      last_engine: "lemon",
       last_resume_token: resume.value,
       updated_at: now
     })
@@ -148,19 +122,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.PerChatState do
     _ -> :ok
   end
 
-  @spec last_engine_hint(term()) :: binary() | nil
-  def last_engine_hint(session_key) when is_binary(session_key) do
-    state = safe_get_chat_state(session_key)
-    engine = state && chat_state_value(state, :last_engine)
-    if is_binary(engine) and engine != "", do: engine, else: nil
-  rescue
-    _ -> nil
-  end
-
-  def last_engine_hint(_), do: nil
-
-  defp chat_state_value(%{} = state, key), do: Map.get(state, key) || Map.get(state, Atom.to_string(key))
-  defp chat_state_value(_state, _key), do: nil
+  def set_chat_resume(_scope, _session_key, _resume), do: :ok
 
   @spec state_account_id_from_session_key(term()) :: binary()
   def state_account_id_from_session_key(session_key) when is_binary(session_key) do

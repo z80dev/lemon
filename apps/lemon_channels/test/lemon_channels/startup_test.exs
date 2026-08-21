@@ -59,7 +59,6 @@ defmodule LemonChannels.StartupTest do
 
     Application.put_env(:lemon_gateway, @gateway_config_key, %{
       max_concurrent_runs: 1,
-      default_engine: "echo",
       enable_telegram: true,
       bindings: [],
       telegram: %{
@@ -86,7 +85,6 @@ defmodule LemonChannels.StartupTest do
         enable_discord: false,
         enable_xmtp: false,
         max_concurrent_runs: 1,
-        default_engine: "lemon",
         telegram: %{
           bot_token: nil,
           allowed_chat_ids: nil,
@@ -98,14 +96,6 @@ defmodule LemonChannels.StartupTest do
         discord: %{bot_token: nil}
       })
 
-      Application.put_env(:lemon_channels, :engines, [
-        "lemon",
-        "echo",
-        "codex",
-        "claude",
-        "opencode",
-        "pi"
-      ])
 
       Application.put_env(:lemon_channels, :adapters, [])
 

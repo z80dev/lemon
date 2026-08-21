@@ -26,9 +26,9 @@ defmodule LemonGateway.MixProject do
   end
 
   defp description do
-    "Engine execution runtime for Lemon agents: the Engine behaviour, engine " <>
-      "registry and scheduler, per-conversation launch locks and session " <>
-      "resumption, plus the HTTP and SMS ingress surfaces that are not channels."
+    "Native run execution runtime for Lemon agents: singleton executor scheduling, " <>
+      "per-conversation launch locks, lifecycle and session resumption, plus the " <>
+      "HTTP and SMS ingress surfaces that are not channels."
   end
 
   defp package do

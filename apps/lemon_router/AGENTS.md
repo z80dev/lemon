@@ -142,10 +142,10 @@ Telegram-specific router tests should assert against channels-owned wrappers:
 Start in `session_coordinator.ex`.
 Do not add queue-mode branches to `lemon_gateway`.
 
-### Change model or engine resolution
+### Change model or resume resolution
 
-Start in `run_orchestrator.ex`, `resume_resolver.ex`, `model_selection.ex`, and `sticky_engine.ex`.
-Use `LemonCore.EngineCatalog` for engine ID validation/normalization and `LemonCore.Cwd` for default cwd selection.
+Start in `run_orchestrator.ex`, `resume_resolver.ex`, and `model_selection.ex`.
+Top-level execution is always native; use `LemonCore.Cwd` for default cwd selection.
 
 ### Change output behavior
 

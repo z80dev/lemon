@@ -1,10 +1,10 @@
 /**
- * Session-scoped routing overrides: model, reasoning effort, engine, tools.
+ * Session-scoped routing overrides: model, reasoning effort, and tools.
  *
- * All four are one `sessions.patch` away — the daemon accepts `model`,
- * `thinkingLevel`, `preferredEngine` and `toolPolicy` on a session and its
- * router reads them per run. The local `SessionStore` mirrors what we set so
- * the status bar can show it without a round-trip.
+ * All three are one `sessions.patch` away — the daemon accepts `model`,
+ * `thinkingLevel`, and `toolPolicy` on a session and its router reads them per
+ * run. The local `SessionStore` mirrors what we set so the status bar can show
+ * it without a round-trip.
  */
 
 import { METHOD } from "../protocol/methods.ts";
@@ -199,25 +199,6 @@ export const thinkCommand: SlashCommand = {
 		ctx.session.thinkingLevel = level;
 		ctx.ui.refreshStatus();
 		ctx.ui.notice(`thinking: ${level}`);
-	},
-};
-
-export const engineCommand: SlashCommand = {
-	name: "engine",
-	summary: "prefer a specific execution engine for this session",
-	usage: "<name>",
-	group: "routing",
-	methods: [METHOD.sessionsPatch],
-	async run(ctx, argv) {
-		const requested = argv[0];
-		if (!requested) {
-			ctx.ui.notice(`engine: ${ctx.session.engine ?? "(daemon default)"}`);
-			return;
-		}
-		await ctx.methods.sessionsPatch({ sessionKey: ctx.session.key, preferredEngine: requested });
-		ctx.session.engine = requested;
-		ctx.ui.refreshStatus();
-		ctx.ui.notice(`engine: ${requested}`);
 	},
 };
 

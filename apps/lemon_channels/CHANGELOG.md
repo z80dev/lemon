@@ -85,25 +85,13 @@ keeping it small and honest.
 
 ### Changed
 
-- Channels ask `lemon_core` about the gateway (through
-  `LemonCore.EngineInfoBridge`) instead of building `LemonGateway.*` atoms at
-  runtime. `gateway_config.ex` and `engine_registry.ex` no longer name another
-  application.
+- Channels query gateway configuration through `LemonCore.EngineInfoBridge`
+  instead of constructing `LemonGateway.*` atoms at runtime.
 - Capabilities are resolved through the plugin registry. An unregistered
   channel answers `nil`/`false` instead of matching a hardcoded table.
-- Resume lines in inbound messages, and the resume line preserved when
-  splitting a long outbound message, are recognised through
-  `LemonCore.ResumeToken` — that is, through whatever resume formats the
-  installed engines registered — plus a generic
-  `<engine> resume|--resume|--session <token>` line for any engine
-  `LemonCore.EngineCatalog` knows. `engine_registry.ex` and
-  `telegram/truncate.ex` no longer spell out `codex`/`claude` themselves, so a
-  channels runtime recognises every installed engine's syntax rather than the
-  three that happened to be hardcoded. Note the trade in the other direction:
-  the exact vendor spellings are no longer a floor this package provides on its
-  own. Embed it without the package that wraps a given CLI and that engine's
-  lines are read only in the generic shape above — which is also the only
-  runtime where that engine cannot be run at all.
+- Top-level resume selection and outbound resume-line preservation accept only
+  native `lemon` tokens. Vendor resume formats remain available as delegated
+  task metadata but cannot select or leak into channel conversation routing.
 - The Discord and Telegram approval sinks read `:approval_requested` events by
   pattern-matching `LemonCore.Events.ApprovalRequested` and its nested
   `ApprovalPending`, instead of `payload[:approval_id] || payload["approval_id"]`

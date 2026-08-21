@@ -16,7 +16,7 @@ defmodule LemonRouter.SessionCoordinator do
 
   require Logger
 
-  alias LemonCore.{ExecutionCommand, MapHelpers}
+  alias LemonCore.MapHelpers
 
   alias LemonRouter.{
     PhasePublisher,
@@ -208,26 +208,29 @@ defmodule LemonRouter.SessionCoordinator do
     {:noreply, next_state}
   end
 
-  def handle_info({:steer_accepted, %ExecutionCommand{} = request}, state) do
+  def handle_info({:steer_accepted, submission_run_id}, state)
+      when is_binary(submission_run_id) do
     {:noreply, next_state} =
-      apply_transition(SessionTransitions.steer_accepted(state, request.run_id), state)
+      apply_transition(SessionTransitions.steer_accepted(state, submission_run_id), state)
 
     {:noreply, next_state}
   end
 
-  def handle_info({:steer_backlog_accepted, %ExecutionCommand{} = request}, state) do
+  def handle_info({:steer_backlog_accepted, submission_run_id}, state)
+      when is_binary(submission_run_id) do
     {:noreply, next_state} =
-      apply_transition(SessionTransitions.steer_accepted(state, request.run_id), state)
+      apply_transition(SessionTransitions.steer_accepted(state, submission_run_id), state)
 
     {:noreply, next_state}
   end
 
-  def handle_info({:steer_rejected, %ExecutionCommand{} = request}, state) do
+  def handle_info({:steer_rejected, submission_run_id}, state)
+      when is_binary(submission_run_id) do
     {:noreply, next_state} =
       apply_transition(
         SessionTransitions.steer_rejected(
           state,
-          request.run_id,
+          submission_run_id,
           System.monotonic_time(:millisecond)
         ),
         state
@@ -236,12 +239,13 @@ defmodule LemonRouter.SessionCoordinator do
     {:noreply, next_state}
   end
 
-  def handle_info({:steer_backlog_rejected, %ExecutionCommand{} = request}, state) do
+  def handle_info({:steer_backlog_rejected, submission_run_id}, state)
+      when is_binary(submission_run_id) do
     {:noreply, next_state} =
       apply_transition(
         SessionTransitions.steer_rejected(
           state,
-          request.run_id,
+          submission_run_id,
           System.monotonic_time(:millisecond)
         ),
         state
@@ -250,21 +254,23 @@ defmodule LemonRouter.SessionCoordinator do
     {:noreply, next_state}
   end
 
-  def handle_info({:redirect_accepted, %ExecutionCommand{} = request}, state) do
+  def handle_info({:redirect_accepted, submission_run_id}, state)
+      when is_binary(submission_run_id) do
     {:noreply, next_state} =
-      apply_transition(SessionTransitions.steer_accepted(state, request.run_id), state)
+      apply_transition(SessionTransitions.steer_accepted(state, submission_run_id), state)
 
     {:noreply, next_state}
   end
 
-  def handle_info({:redirect_rejected, %ExecutionCommand{} = request}, state) do
-    notify_redirect_fallback(request)
+  def handle_info({:redirect_rejected, submission_run_id}, state)
+      when is_binary(submission_run_id) do
+    notify_redirect_fallback(pending_submission(state, submission_run_id))
 
     {:noreply, next_state} =
       apply_transition(
         SessionTransitions.steer_rejected(
           state,
-          request.run_id,
+          submission_run_id,
           System.monotonic_time(:millisecond)
         ),
         state
@@ -346,13 +352,18 @@ defmodule LemonRouter.SessionCoordinator do
          reply_acc,
          opts
        ) do
-    case dispatch_steer(active_run_id, steer_mode, submission.execution_request) do
+    case dispatch_steer(
+           active_run_id,
+           steer_mode,
+           submission.run_id,
+           submission.execution_request.prompt
+         ) do
       :ok ->
         {state, reply_acc}
 
       :error ->
         if steer_mode == :redirect do
-          notify_redirect_fallback(submission.execution_request)
+          notify_redirect_fallback(submission)
         end
 
         {:ok, next_state, extra_effects} =
@@ -589,14 +600,14 @@ defmodule LemonRouter.SessionCoordinator do
 
   defp maybe_cancel_active(state, _reason), do: state
 
-  defp dispatch_steer(active_run_id, steer_mode, %ExecutionCommand{} = request)
-       when steer_mode in [:steer, :steer_backlog, :redirect] do
+  defp dispatch_steer(active_run_id, steer_mode, submission_run_id, prompt)
+       when steer_mode in [:steer, :steer_backlog, :redirect] and is_binary(submission_run_id) do
     case runtime_run_pid(active_run_id) do
       nil ->
         :error
 
       run_pid ->
-        GenServer.cast(run_pid, {steer_mode, request, self()})
+        GenServer.cast(run_pid, {steer_mode, submission_run_id, prompt || "", self()})
         :ok
     end
   rescue
@@ -606,7 +617,7 @@ defmodule LemonRouter.SessionCoordinator do
   # Redirect degrades to a queued follow-up when the run cannot accept it. The
   # correction is not lost, but the user asked to change an in-flight request,
   # so tell them what actually happened. Never crash the coordinator over it.
-  defp notify_redirect_fallback(%ExecutionCommand{run_id: run_id, session_key: session_key}) do
+  defp notify_redirect_fallback(%Submission{run_id: run_id, session_key: session_key}) do
     parsed = LemonRouter.ChannelContext.parse_session_key(session_key)
 
     with :channel_peer <- parsed.kind,
@@ -643,7 +654,18 @@ defmodule LemonRouter.SessionCoordinator do
     _ -> :ok
   end
 
-  defp notify_redirect_fallback(_request), do: :ok
+  defp notify_redirect_fallback(_submission), do: :ok
+
+  defp pending_submission(%SessionState{pending_steers: pending_steers}, submission_run_id) do
+    Enum.find_value(pending_steers, fn {_active_run_id, entries} ->
+      case Enum.find(entries, fn {submission, _fallback_mode} ->
+             submission.run_id == submission_run_id
+           end) do
+        {submission, _fallback_mode} -> submission
+        nil -> nil
+      end
+    end)
+  end
 
   defp dispatcher do
     Application.get_env(:lemon_router, :dispatcher, LemonChannels.Dispatcher)

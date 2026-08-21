@@ -171,7 +171,6 @@ Environment variables:
 Gateway configuration:
 
 - `max_concurrent_runs` - Concurrent run limit
-- `default_engine` - Default execution engine
 - `default_cwd` - Default working directory
 - `enable_webhook` - Enable the generic webhook transport
 - `bindings` - Transport bindings
@@ -185,7 +184,6 @@ Gateway configuration:
 
 Environment variables:
 - `LEMON_GATEWAY_MAX_CONCURRENT_RUNS`
-- `LEMON_GATEWAY_DEFAULT_ENGINE`
 - `LEMON_GATEWAY_ENABLE_WEBHOOK`
 
 ### Config.Logging

@@ -12,8 +12,8 @@
 #   1. writes a fixture ~/.lemon/config.toml (telegram disabled) into a temp HOME
 #   2. boots a throwaway runtime (dev: bin/lemon; --release: mix release + daemon)
 #   3. polls control-plane /healthz until healthy
-#   4. WebSocket probe: connect -> hello-ok -> health -> agent (engine "echo")
-#      -> agent.wait asserting the "Echo: <prompt>" reply
+#   4. WebSocket probe: connect -> hello-ok -> health -> native agent
+#      -> agent.wait asserting a deterministic local-provider reply
 #   5. checks web /healthz (full runtime profile serves "ok")
 #   6. writes a redacted proof artifact to .lemon/proofs/product-smoke-local-latest.json
 #
@@ -76,6 +76,7 @@ trap 'rm -rf "$WORK"' EXIT
 # Keep mix/hex caches warm before HOME moves to the temp dir.
 export MIX_HOME="${MIX_HOME:-$REAL_HOME/.mix}"
 export HEX_HOME="${HEX_HOME:-$REAL_HOME/.hex}"
+export ASDF_DATA_DIR="${ASDF_DATA_DIR:-$REAL_HOME/.asdf}"
 
 export HOME="$WORK/home"
 mkdir -p "$HOME/.lemon" "$WORK/dotenv" "$WORK/store"
@@ -110,12 +111,12 @@ done
 SNAME="product_smoke_$$"
 COOKIE="$(python3 -c 'import secrets; print("product_smoke_" + secrets.token_hex(16))')"
 
-# Three distinct free ports, held simultaneously while chosen.
-read -r CONTROL_PORT WEB_PORT SIM_PORT < <(python3 - <<'PY'
+# Four distinct free ports, held simultaneously while chosen.
+read -r CONTROL_PORT WEB_PORT SIM_PORT PROVIDER_PORT < <(python3 - <<'PY'
 import socket
 
 socks = []
-for _ in range(3):
+for _ in range(4):
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
     socks.append(s)
@@ -142,14 +143,18 @@ export LEMON_GATEWAY_NODE_COOKIE="$COOKIE"
 # Same non-secret dummy values the CI workflow uses.
 export LEMON_SECRETS_MASTER_KEY="smoke-test-dummy-key-32-chars-!!"
 export LEMON_WEB_SECRET_KEY_BASE="product_smoke_secret_key_base_product_smoke_secret_key_base_product_smoke"
+export OPENAI_API_KEY="product-smoke-local-provider-key"
 export PHX_SERVER=1
 
 # ── Fixture config (identical to the CI fixture) ─────────────────────────────
 
-cat > "$HOME/.lemon/config.toml" <<'EOF'
+cat > "$HOME/.lemon/config.toml" <<EOF
 [defaults]
-provider = "anthropic"
-model = "claude-haiku-4-5-20251001"
+provider = "openai"
+model = "gpt-4o-mini"
+
+[providers.openai]
+base_url = "http://127.0.0.1:$PROVIDER_PORT/v1"
 
 [gateway]
 max_concurrent_runs = 1
@@ -164,6 +169,7 @@ EOF
 # ── Cleanup ──────────────────────────────────────────────────────────────────
 
 RUNTIME_PID=""
+PROVIDER_PID=""
 RELEASE_BIN=""
 PASSED=0
 
@@ -177,6 +183,9 @@ cleanup() {
     "$RELEASE_BIN" stop > /dev/null 2>&1
   fi
 
+  if [ -n "$PROVIDER_PID" ] && kill -0 "$PROVIDER_PID" 2> /dev/null; then
+    kill -TERM "$PROVIDER_PID" 2> /dev/null
+  fi
   if [ -n "$RUNTIME_PID" ] && kill -0 "$RUNTIME_PID" 2> /dev/null; then
     # Kill only the runtime this script started (plus any still-running
     # direct child, e.g. an in-flight `mix compile` during early abort).
@@ -212,6 +221,86 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+
+# ── Deterministic local provider ─────────────────────────────────────────────
+
+cat > "$WORK/native_provider_fixture.py" <<'PY'
+import json
+import os
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, _format, *_args):
+        pass
+
+    def do_GET(self):
+        if self.path == "/healthz":
+            body = b"ok"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        self.send_error(404)
+
+    def do_POST(self):
+        if self.path != "/v1/responses":
+            self.send_error(404)
+            return
+        length = int(self.headers.get("Content-Length", "0"))
+        json.loads(self.rfile.read(length))
+        events = [
+            {
+                "type": "response.output_item.added",
+                "item": {"type": "message"}
+            },
+            {
+                "type": "response.output_text.delta",
+                "delta": "Native product smoke fixture response"
+            },
+            {
+                "type": "response.completed",
+                "response": {
+                    "status": "completed",
+                    "usage": {
+                        "input_tokens": 1,
+                        "output_tokens": 1,
+                        "total_tokens": 2
+                    }
+                }
+            }
+        ]
+        body = "".join(
+            f"data: {json.dumps(event, separators=(',', ':'))}\n\n"
+            for event in events
+        ) + "data: [DONE]\n\n"
+        encoded = body.encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
+
+
+ThreadingHTTPServer(
+    ("127.0.0.1", int(os.environ["PROVIDER_PORT"])), Handler
+).serve_forever()
+PY
+
+PROVIDER_PORT="$PROVIDER_PORT" python3 "$WORK/native_provider_fixture.py" \
+  > "$WORK/native_provider_fixture.log" 2>&1 &
+PROVIDER_PID=$!
+
+for _ in $(seq 1 20); do
+  curl -fsS --max-time 1 "http://127.0.0.1:$PROVIDER_PORT/healthz" > /dev/null && break
+  sleep 0.25
+done
+curl -fsS --max-time 1 "http://127.0.0.1:$PROVIDER_PORT/healthz" > /dev/null
 
 # ── Boot ─────────────────────────────────────────────────────────────────────
 
@@ -377,11 +466,10 @@ unless health["type"] == "res" and health["id"] == "health-1" and
   raise "unexpected health response: #{inspect(health)}"
 end
 
-prompt = "product-smoke-echo-#{System.unique_integer([:positive])}"
+prompt = "product-smoke-native-#{System.unique_integer([:positive])}"
 
 send_req.("agent-1", "agent", %{
   "prompt" => prompt,
-  "engine_id" => "echo",
   "session_key" => "agent:product-smoke:main",
   "idempotency_key" => "product-smoke-#{System.system_time(:millisecond)}"
 })
@@ -400,14 +488,14 @@ send_req.("agent-wait-1", "agent.wait", %{
 completed = receive_response.("agent-wait-1", 15_000)
 
 unless completed["ok"] == true and completed["payload"]["ok"] == true and
-         completed["payload"]["answer"] == "Echo: #{prompt}" do
+         completed["payload"]["answer"] == "Native product smoke fixture response" do
   raise "unexpected agent.wait response: #{inspect(completed)}"
 end
 
-IO.puts("control-plane websocket health and echo agent run ok")
+IO.puts("control-plane websocket health and native agent run ok")
 EOF
 
-echo "[smoke] Running WebSocket probe (connect -> health -> echo agent)..."
+echo "[smoke] Running WebSocket probe (connect -> health -> native agent)..."
 PROBE_MIX_ENV="dev"
 [ "$MODE" = "release" ] && PROBE_MIX_ENV="prod"
 LEMON_CONTROL_PLANE_WS_URL="ws://127.0.0.1:$CONTROL_PORT/ws" \

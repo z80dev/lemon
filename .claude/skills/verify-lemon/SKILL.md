@@ -80,7 +80,7 @@ methods (exact names from `LemonControlPlane.Methods.Registry`):
 
 - `connect` → `hello-ok` handshake (send `{"client":{"id":...,"name":...}}`)
 - `chat.send` — params `sessionKey` (required), `prompt`, optional `agentId`, `queueMode`
-- `agent` — params `prompt` (required), `engine_id`, `session_key`, `model`, `idempotency_key`; returns `run_id`
+- `agent` — params `prompt` (required), `session_key`, `model`, `idempotency_key`; returns `run_id`
 - `agent.wait` — params `runId`, `timeoutMs`; blocks until the run completes
 - `events.subscribe` — params `topics` (allowed: `all`, `system`, `cron`, `nodes`, `presence`, `exec_approvals`, `channels`, `goals`, plus `run:<id>` / `runId`)
 - `sessions.list` — params `limit`, `offset`, `agentId`
@@ -108,15 +108,15 @@ async def main():
         await req("c1", "connect", {"client": {"id": "verify", "name": "Verify"}})
         await recv_until(lambda f: f.get("type") == "hello-ok")
 
-        await req("a1", "agent", {"prompt": "ping", "engine_id": "echo",
+        await req("a1", "agent", {"prompt": "ping",
                                   "session_key": "agent:verify:main"})
         run = await recv_until(lambda f: f.get("type") == "res" and f.get("id") == "a1")
         run_id = run["payload"]["run_id"]
 
         await req("w1", "agent.wait", {"runId": run_id, "timeoutMs": 10000})
         done = await recv_until(lambda f: f.get("type") == "res" and f.get("id") == "w1")
-        assert done["payload"]["answer"] == "Echo: ping", done
-        print("echo run ok:", run_id)
+        assert isinstance(done["payload"]["answer"], str), done
+        print("native run ok:", run_id)
 
 asyncio.run(main())
 PY
@@ -185,7 +185,9 @@ LemonChannels.Runtime.submit_inbound(%LemonCore.InboundMessage{
 
 ### Deterministic agents-under-test
 
-- **Echo engine** — `LemonGateway.Engines.Echo`, engine id `"echo"`; any run answers `"Echo: <prompt>"` with no model, no credentials. Select via `engine_id: "echo"` on `agent` / run submission.
+- **Local provider fixture** — `scripts/product_smoke_local` boots a disposable
+  native executor against a deterministic Responses API fixture with no live
+  provider credentials.
 - **`LemonPlatformTest.FakeLLM`** — scripted stream function for `LemonAgent` loops in ExUnit: `FakeLLM.script([{:tool_call, "name", %{...}}, {:text, "answer"}])` yields a conforming provider stream, letting you assert tool-call handling without a network.
 
 ### Spinning a disposable instance

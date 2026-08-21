@@ -20,22 +20,13 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
   intent kind, bounded text preview, result, timings). See
   `docs/platform/bus-events.md` §10.
 - `LemonCore.SubagentRunner` and `LemonCore.SubagentRegistry` — the extension
-  point behind the agent's `task` tool. An executor (a vendor CLI wrapper, the
-  in-process agent, anything else) implements the behaviour and registers when
-  its own application starts; the agent reads the registry for its engine list,
-  its per-engine tool-description prose, and each engine's default tool policy,
-  so no vendor is named in the agent. Runners that declare themselves routable
-  publish their id to `:lemon_core, :registered_engines`, which
-  `LemonCore.EngineCatalog` unions with its built-in defaults. Registration
-  never writes `:known_engines`: that key is the operator's own list, and when
-  it is set it is the whole answer, so narrowing it still disables an engine the
-  build happens to ship.
+  point behind the native agent's delegated `task` tool. A vendor CLI wrapper
+  implements the behaviour and registers when its own application starts; the
+  task layer reads the registry for runner identity, tool-description prose,
+  and default tool policy, so no vendor is named in CodingAgent.
 - `LemonCore.ResumeFormat` and `LemonCore.ResumeFormats` — the extension point
-  behind `LemonCore.ResumeToken`. An engine registers how it spells "resume"
-  (a pattern to find its token in text, a renderer to print one) when its own
-  application starts, so core no longer carries a table of per-vendor regexes.
-  `lemon` is built in; engines with no registered format read and print the
-  generic `<engine> resume <value>`.
+  behind delegated-runner resume metadata. Top-level execution accepts only
+  native `lemon` resume tokens; vendor formats never select Gateway execution.
 - `LemonCore.Config.CliResolvers` — the extension point behind the config
   loader's `[runtime.cli.<engine>]` sections. A vendor package registers a
   resolver for its own section when its application starts (the shape runners

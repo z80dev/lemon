@@ -18,7 +18,7 @@ import {
 	themeCommand,
 } from "./core.ts";
 import { costCommand, logsCommand, statusCommand, usageCommand } from "./diagnostics.ts";
-import { engineCommand, modelCommand, thinkCommand, toolPolicyCommand } from "./model.ts";
+import { modelCommand, thinkCommand, toolPolicyCommand } from "./model.ts";
 import { CommandRegistry } from "./registry.ts";
 import { abortCommand, goalCommand, queueCommand, runsCommand } from "./run.ts";
 import { historyCommand, resumeCommand, sessionCommand, sessionsCommand } from "./session.ts";
@@ -47,7 +47,6 @@ export function createCommandRegistry(options: RegistryOptions = {}): CommandReg
 
 		modelCommand,
 		thinkCommand,
-		engineCommand,
 		toolPolicyCommand,
 
 		abortCommand,

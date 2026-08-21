@@ -4,15 +4,12 @@ defmodule LemonPlatformTest.SubagentRunnerCase do
 
   ## What a subagent runner is
 
-  A runner executes a delegated subtask for the agent's `task` tool. It is the
-  smaller sibling of `LemonGateway.Engine`: an engine answers a run the gateway
-  scheduled and streams events to a sink process, while a runner is started
+  A runner executes a delegated subtask for the agent's `task` tool. It starts
   inside an already-running agent turn and hands back a lazy event stream the
-  tool folds into a tool result. The two behaviours stay separate on purpose;
-  they share only the `LemonCore.RunEvents` vocabulary.
+  tool folds into a tool result.
 
   Runners register themselves from their own application's `start/2`, and
-  `LemonCore.SubagentRegistry` is what the agent reads — which engine ids exist,
+  `LemonCore.SubagentRegistry` is what the agent reads — which runner ids exist,
   what to say about each in the tool description the model sees, and which
   module to call. That is why the registry round-trip below is on by default:
   "works standalone, invisible to the tool" is the failure this suite exists to
@@ -34,17 +31,18 @@ defmodule LemonPlatformTest.SubagentRunnerCase do
       *terminates*, because a tool call is blocked on it.
     * `cancel/1` (optional) — total and idempotent, including for a session it
       never produced.
-    * `resume_format/0` (optional) — the engine's resume-command syntax, as a
+    * `resume_format/0` (optional) — the runner's resume-command syntax, as a
       `LemonCore.ResumeFormat`, registered under `id/0` and able to read back
       the command it printed. Omitting it means the platform reads and prints
-      the generic `<engine> resume <value>` for this engine.
-    * `resolve_cli_settings/1` (optional) — resolves the engine's raw
+      the generic `<engine> resume <value>` for this runner.
+    * `resolve_cli_settings/1` (optional) — resolves the runner's raw
       `[runtime.cli.<id>]` config section into the settled map runners read,
       materializing the vendor's defaults when called with `%{}`. Registered
       under `id/0` with `LemonCore.Config.CliResolvers`. Omitting it means the
       raw section passes through config resolution untouched.
     * `default_policy/0` (optional) — the tool policy profile children get.
-    * `routable?/0` (optional) — whether `id/0` is also a router-visible engine.
+    * `routable?/0` (optional) — whether the runner supplies router-visible
+      provenance metadata. When present, it must return a stable boolean.
 
   ## Running the suite
 

@@ -8,30 +8,17 @@ defmodule LemonCore.SubagentRegistry do
 
       LemonCore.SubagentRegistry.register(LemonCliRunners.CodexSubagent)
 
-  The agent's `task` tool then asks this registry which engines exist, what to
+  The agent's `task` tool then asks this registry which runners exist, what to
   say about each in its tool description, and which module to run. Nothing in
   the agent names a vendor.
 
-  This is `LemonGateway.EngineRegistry`'s idiom, one layer down: registration
-  validates the id, is idempotent, replaces an id whose module changed, and is
-  persisted to `:lemon_core, :subagent_runners` so a registry restart rebuilds
-  the same set.
+  Registration validates the id, is idempotent, replaces an id whose module
+  changed, and is persisted to `:lemon_core, :subagent_runners` so a registry
+  restart rebuilds the same set.
 
   A runner is third-party code called from inside this process, so `id/0`,
-  `describe/0`, `default_policy/0` and `routable?/0` are all called defensively:
-  a runner that raises is logged and skipped, not fatal to the registry.
-
-  ## Relationship to `LemonCore.EngineCatalog`
-
-  Registering a runner whose `c:LemonCore.SubagentRunner.routable?/0` is true
-  publishes its id to `:lemon_core, :registered_engines`, which the catalog
-  unions with its built-in defaults, so router-level engine validation reflects
-  what is actually installed.
-
-  It deliberately does *not* touch `:lemon_core, :known_engines`: that key is
-  the operator's own list, and an operator who narrows it to disable an engine
-  must not have it widened again by whichever package happens to be in the
-  release. When it is set, the catalog ignores registrations entirely.
+  `describe/0`, and `default_policy/0` are all called defensively: a runner
+  that raises is logged and skipped, not fatal to the registry.
   """
   use GenServer
 
@@ -47,8 +34,7 @@ defmodule LemonCore.SubagentRegistry do
           module: module(),
           summary: String.t(),
           caveats: [String.t()],
-          policy: atom(),
-          routable?: boolean()
+          policy: atom()
         }
 
   @reserved_ids ~w(default help)
@@ -133,7 +119,6 @@ defmodule LemonCore.SubagentRegistry do
   def init(_opts) do
     configured = configured_modules()
     entries = build_entries(configured)
-    sync_engine_catalog(entries)
 
     {:ok, %{entries: entries, configured: configured}}
   end
@@ -146,7 +131,6 @@ defmodule LemonCore.SubagentRegistry do
         configured = Enum.map(entries, & &1.module)
 
         persist(configured)
-        sync_engine_catalog(entries)
 
         {:reply, :ok, %{state | entries: entries, configured: configured}}
 
@@ -223,8 +207,7 @@ defmodule LemonCore.SubagentRegistry do
          module: module,
          summary: description.summary,
          caveats: description.caveats,
-         policy: safe(module, :default_policy, [], SubagentRunner.default_policy()),
-         routable?: safe(module, :routable?, [], true) == true
+         policy: safe(module, :default_policy, [], SubagentRunner.default_policy())
        }}
     end
   end
@@ -286,17 +269,5 @@ defmodule LemonCore.SubagentRegistry do
       nil -> entries ++ [entry]
       index -> List.replace_at(entries, index, entry)
     end
-  end
-
-  defp sync_engine_catalog(entries) do
-    routable = entries |> Enum.filter(& &1.routable?) |> Enum.map(& &1.id)
-    published = Application.get_env(:lemon_core, :registered_engines, [])
-    merged = Enum.uniq(List.wrap(published) ++ routable)
-
-    if merged != published do
-      Application.put_env(:lemon_core, :registered_engines, merged)
-    end
-
-    :ok
   end
 end

@@ -50,7 +50,6 @@ defmodule LemonCore.Config.GatewayTest do
       # Clear test env vars
       [
         "LEMON_GATEWAY_MAX_CONCURRENT_RUNS",
-        "LEMON_GATEWAY_DEFAULT_ENGINE",
         "LEMON_GATEWAY_DEFAULT_CWD",
         "LEMON_GATEWAY_AUTO_RESUME",
         "LEMON_GATEWAY_REQUIRE_ENGINE_LOCK",
@@ -73,7 +72,6 @@ defmodule LemonCore.Config.GatewayTest do
       config = Gateway.resolve(%{})
 
       assert config.max_concurrent_runs == 2
-      assert config.default_engine == "lemon"
       assert config.default_cwd == nil
       assert config.auto_resume == false
       assert config.enabled_channels[:stub] == false
@@ -83,14 +81,14 @@ defmodule LemonCore.Config.GatewayTest do
       assert config.projects == %{}
       assert config.bindings == []
       assert config.sms == %{}
-      assert config.engines == %{}
+      refute Map.has_key?(config, :default_engine)
+      refute Map.has_key?(config, :engines)
     end
 
     test "uses settings from config map" do
       settings = %{
         "gateway" => %{
           "max_concurrent_runs" => 5,
-          "default_engine" => "custom",
           "default_cwd" => "~/projects",
           "auto_resume" => true,
           "enable_stub" => true
@@ -100,7 +98,6 @@ defmodule LemonCore.Config.GatewayTest do
       config = Gateway.resolve(settings)
 
       assert config.max_concurrent_runs == 5
-      assert config.default_engine == "custom"
       assert config.default_cwd == "~/projects"
       assert config.auto_resume == true
       assert config.enabled_channels[:stub] == true
@@ -108,7 +105,6 @@ defmodule LemonCore.Config.GatewayTest do
 
     test "environment variables override settings" do
       System.put_env("LEMON_GATEWAY_MAX_CONCURRENT_RUNS", "10")
-      System.put_env("LEMON_GATEWAY_DEFAULT_ENGINE", "custom")
       System.put_env("LEMON_GATEWAY_DEFAULT_CWD", "/workspace")
       System.put_env("LEMON_GATEWAY_AUTO_RESUME", "true")
       System.put_env("LEMON_GATEWAY_REQUIRE_ENGINE_LOCK", "false")
@@ -117,7 +113,6 @@ defmodule LemonCore.Config.GatewayTest do
       settings = %{
         "gateway" => %{
           "max_concurrent_runs" => 2,
-          "default_engine" => "lemon",
           "default_cwd" => "~/home",
           "auto_resume" => false,
           "enable_stub" => false,
@@ -129,7 +124,6 @@ defmodule LemonCore.Config.GatewayTest do
       config = Gateway.resolve(settings)
 
       assert config.max_concurrent_runs == 10
-      assert config.default_engine == "custom"
       assert config.default_cwd == "/workspace"
       assert config.auto_resume == true
       assert config.enabled_channels[:stub] == false
@@ -303,35 +297,11 @@ defmodule LemonCore.Config.GatewayTest do
     end
   end
 
-  describe "engines configuration" do
-    test "uses engines from config" do
-      settings = %{
-        "gateway" => %{
-          "engines" => %{
-            "lemon" => %{"enabled" => true},
-            "custom" => %{"enabled" => false}
-          }
-        }
-      }
-
-      config = Gateway.resolve(settings)
-
-      assert config.engines["lemon"]["enabled"] == true
-      assert config.engines["custom"]["enabled"] == false
-    end
-
-    test "returns empty map when no engines config" do
-      config = Gateway.resolve(%{})
-      assert config.engines == %{}
-    end
-  end
-
   describe "defaults/0" do
     test "returns the default gateway configuration" do
       defaults = Gateway.defaults()
 
       assert defaults["max_concurrent_runs"] == 2
-      assert defaults["default_engine"] == "lemon"
       assert defaults["default_cwd"] == nil
       assert defaults["auto_resume"] == false
       assert defaults["enable_stub"] == false
@@ -341,7 +311,8 @@ defmodule LemonCore.Config.GatewayTest do
       assert defaults["projects"] == %{}
       assert defaults["bindings"] == []
       assert defaults["sms"] == %{}
-      assert defaults["engines"] == %{}
+      refute Map.has_key?(defaults, "default_engine")
+      refute Map.has_key?(defaults, "engines")
     end
 
     test "contains no platform keys when no channel is registered" do
@@ -364,7 +335,6 @@ defmodule LemonCore.Config.GatewayTest do
 
       assert %Gateway{} = config
       assert is_integer(config.max_concurrent_runs)
-      assert is_binary(config.default_engine)
       assert is_boolean(config.auto_resume)
       assert is_map(config.enabled_channels)
       assert is_boolean(config.require_engine_lock)
@@ -374,7 +344,8 @@ defmodule LemonCore.Config.GatewayTest do
       assert is_map(config.sms)
       assert is_map(config.queue)
       assert is_map(config.channels)
-      assert is_map(config.engines)
+      refute Map.has_key?(config, :default_engine)
+      refute Map.has_key?(config, :engines)
     end
   end
 end

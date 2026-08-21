@@ -24,6 +24,13 @@ of which are live bugs.
 > starts from scratch. `docs/platform/lemon_core.md` names the Bus in one sentence and documents
 > nothing about it.
 
+> **Top-level execution end state.** `engine` remains in run events, completion
+> records, and `ResumeToken` as provenance, with the fixed value `"lemon"` for
+> every top-level run. It is not a request field or a runtime selector. CLI
+> runner identities are task-only provenance owned by `LemonCore.SubagentRegistry`.
+> Top-level resume accepts only native tokens; non-native historical state is
+> retained but quarantined from resumption.
+
 ## 1. Headline recommendations
 
 **R1 — Type the payload, keep the envelope.** `LemonCore.Event` stays exactly as it is; what
@@ -69,16 +76,16 @@ The busiest topic and the only one whose subscriber set spans the whole umbrella
 
 | Event type | Publisher | Payload (actual keys) | Env |
 |---|---|---|---|
-| `:run_started` | `lemon_gateway/run.ex:244` | `%{run_id, session_key, engine}` | E |
+| `:run_started` | native executor | `%{run_id, session_key, engine: "lemon"}` | E |
 | `:delta` | `lemon_gateway/run.ex:443` | `%{run_id, ts_ms, seq, text, meta}` | E |
-| `:run_completed` | `lemon_gateway/run.ex:136` (lock timeout), `:618` (normal) | `%{completed: %{engine, resume, ok, answer, error, usage, meta, run_id, session_key}, duration_ms}` | E |
+| `:run_completed` | native executor | `%{completed: %{engine: "lemon", resume, ok, answer, error, usage, meta, run_id, session_key}, duration_ms}` | E |
 | `:run_completed` (synthetic) | `lemon_router/run_process.ex:498,538,609`; `run_process/watchdog.ex:239` | same, `meta.synthetic == true` | E |
 | `:run_failed` | `lemon_router/run_process.ex:691` (`terminate/2`) | `%{type: :run_failed, run_id, session_key, reason}` | **raw** |
 | `:run_phase_changed` | `lemon_gateway/run.ex:773`; `lemon_router/phase_publisher.ex:86` | `LemonCore.RunPhaseEvent.build/1` → `%{type, run_id, session_key, conversation_key, phase, previous_phase, source, at}` | E |
-| `:engine_started` | `lemon_gateway/run.ex:815` | `%{engine, resume, title, meta, run_id, session_key}` | E |
-| `:engine_completed` | `lemon_gateway/run.ex:815` | same keys as `completed` above | E |
-| `:engine_action` | `lemon_gateway/run.ex:815`; `LemonCore.Event.engine_reasoning/1` | `%{engine, phase, ok, message, level, action: %{id, kind, title, detail}}` | E |
-| `:engine_event` | `lemon_gateway/run.ex:815` (fallback) | arbitrary engine map | E |
+| `:engine_started` | native executor | `%{engine: "lemon", resume, title, meta, run_id, session_key}` | E |
+| `:engine_completed` | native executor | same fixed-provenance keys as `completed` above | E |
+| `:engine_action` | native executor; `LemonCore.Event.engine_reasoning/1` | `%{engine: "lemon", phase, ok, message, level, action: %{id, kind, title, detail}}` | E |
+| `:engine_event` | native executor (fallback) | arbitrary native-executor event map | E |
 | `:checkpoint_created` / `_restored` / `_deleted` | `lemon_core/checkpoint.ex:321` | varies by kind; meta = checkpoint context | E |
 | `:acp_client_request` *(removed)* | was `coding_agent/tools/acp_file_bridge.ex` | `%{method, params, reply_to: pid(), ref: reference()}` — converted to a direct call via `LemonCore.ACPClientBridge`; no longer on the bus (§6.7, §8) | E |
 | `:run_graph_changed` | `coding_agent/run_graph_server.ex:421,426` | `%{run_id, parent_run_id, session_key, status, event, timestamp_ms}` | E |
@@ -247,7 +254,7 @@ unknown keys), and `from_map/1` (lenient, for legacy maps arriving over the wire
 defmodule LemonCore.Events.RunStarted do
   @enforce_keys [:run_id]
   defstruct [:run_id, :session_key, :engine]
-  # run_id: String.t(); session_key: String.t() | nil; engine: String.t() | nil
+  # run_id: String.t(); session_key: String.t() | nil; engine: "lemon"
 end
 
 defmodule LemonCore.Events.Delta do
@@ -266,7 +273,8 @@ defmodule LemonCore.Events.Completion do
   @enforce_keys [:ok]
   defstruct [:ok, :answer, :error, :engine, :resume, :usage, :run_id, :session_key, meta: %{}]
   # ok: boolean(); answer: String.t() | nil; error: term() | nil
-  # resume: LemonCore.ResumeToken.t() | %{engine: String.t(), value: term()} | nil
+  # resume: LemonCore.ResumeToken.t() | %{engine: String.t(), value: term()} | nil;
+  # top-level resumption accepts only `engine: "lemon"`
   # usage: map() | nil  ← left as map; LemonAi.Tokens owns its shape
 end
 
@@ -278,7 +286,7 @@ end
 defmodule LemonCore.Events.EngineAction do
   @enforce_keys [:action]
   defstruct [:action, :engine, :phase, :ok, :message, :level]
-  # action: LemonCore.Events.Action.t()
+  # engine: "lemon"; action: LemonCore.Events.Action.t()
   # phase: :started | :updated | :completed
   # ok: boolean() | nil; level: atom() | nil
 end
@@ -356,8 +364,9 @@ LemonCore.Events.RoutingFeedback     # fingerprint_key, outcome, duration_ms
 
 **Deliberately not typed:** `:acp_client_request` (§6.7 — it was an RPC carrying a live pid and a
 ref, and a value type would have legitimised that; it has since been removed from the bus entirely
-and is now a direct call), `:engine_event` (an explicit "unrecognised engine output" escape hatch),
-`:custom_event` (user-defined by construction), and everything on the app-internal topics in §3.
+and is now a direct call), `:engine_event` (an explicit native-executor output
+escape hatch), `:custom_event` (user-defined by construction), and everything
+on the app-internal topics in §3.
 
 ### 4.3 Versioning and the compatibility cycle
 
@@ -494,11 +503,11 @@ their own events):
    class that would have caught §6.6, and it costs one `for backend <- [:pubsub, :registry]`.
 6. **Deprecation hygiene** — any module implementing `Access` carries a `@deprecated` with a
    removal note (guards R2's one-cycle promise against becoming permanent).
-7. **Engine lifecycle ordering** — extend the existing `LemonPlatformTest.EngineCase` (which today
-   asserts only the in-process `{:engine_event, run_ref, …}` protocol at
-   `engine_case.ex:332,351`) with a bus-level assertion: a conforming engine's run produces
-   `:run_started` → `:delta`\* → `:run_completed` on `run:<id>`, with typed payloads, in that
-   order. That is the first time the *bus* contract is machine-checked for third-party engines.
+7. **Native lifecycle ordering** — assert the fixed executor's in-process
+   `{:engine_event, run_ref, …}` protocol and its bus projection:
+   `:run_started` → `:delta`\* → `:run_completed` on `run:<id>`, with typed
+   payloads in that order. Every lifecycle payload records `engine: "lemon"`;
+   the bus contract has no pluggable top-level executor surface.
 
 ## 6. Risks and the undocumented consumer assumptions
 
@@ -701,8 +710,9 @@ platform's own registry at
    feeds each payload a fully flattened map, which does catch it.
 2. **`false` collapsed to `nil`.** The `get_field/2` helper in `Action` and `EngineAction` used
    `Map.get(attrs, :key) || Map.get(attrs, "key")`, which reads atom-or-string keys correctly
-   for everything except `false` — so an engine action's `ok: false`, the flag that says the
-   action *failed*, silently became `nil`. Caught by `LemonGateway.RunTest`. Fixed with
+   for everything except `false` — so a native action's `ok: false`, the flag
+   that says the action *failed*, silently became `nil`. Caught by
+   `LemonGateway.RunTest`. Fixed with
    `Map.fetch/2`, plus a kit assertion that round-trips every payload with its booleans
    falsified.
 

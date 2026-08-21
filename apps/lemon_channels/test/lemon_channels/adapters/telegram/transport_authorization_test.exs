@@ -234,7 +234,6 @@ defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest do
       topic_id: nil,
       project: nil,
       agent_id: nil,
-      default_engine: nil,
       queue_mode: nil
     }
   end

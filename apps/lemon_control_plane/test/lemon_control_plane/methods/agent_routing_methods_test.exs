@@ -2,6 +2,7 @@ defmodule LemonControlPlane.Methods.AgentRoutingMethodsTest do
   use ExUnit.Case, async: false
 
   alias LemonControlPlane.Methods.{
+    Agent,
     AgentDirectoryList,
     AgentEndpointsDelete,
     AgentEndpointsList,
@@ -105,6 +106,37 @@ defmodule LemonControlPlane.Methods.AgentRoutingMethodsTest do
     assert request.queue_mode == :collect
     assert request.meta[:agent_inbox_followup] == false
     assert request.meta[:agent_inbox][:queue_mode] == :collect
+  end
+
+  test "agent submission methods reject legacy engine selectors with migration guidance" do
+    methods = [
+      {Agent, %{"prompt" => "do native work"}},
+      {AgentInboxSend,
+       %{"agentId" => "cp_inbox_#{System.unique_integer()}", "prompt" => "do native work"}}
+    ]
+
+    legacy_fields = ~w(
+      engine
+      engine_id
+      engineId
+      default_engine
+      defaultEngine
+      engine_preference
+      enginePreference
+      preferred_engine
+      preferredEngine
+    )
+
+    for {method, base_params} <- methods, field <- legacy_fields do
+      params = Map.put(base_params, field, "codex")
+
+      assert {:error, {:invalid_params, message, %{fields: [^field]}}} =
+               method.handle(params, %{})
+
+      assert message =~ "Top-level engine selection is no longer supported"
+      assert message =~ "remove #{field}"
+      assert message =~ "Lemon now runs natively; use model to choose a model"
+    end
   end
 
   test "agent.endpoints.set/list/delete manages alias lifecycle" do

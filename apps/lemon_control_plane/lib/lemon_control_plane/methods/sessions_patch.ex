@@ -5,6 +5,18 @@ defmodule LemonControlPlane.Methods.SessionsPatch do
   Updates session properties (like tool policy overrides).
   """
 
+  @legacy_selector_fields ~w(
+    engine
+    engine_id
+    engineId
+    default_engine
+    defaultEngine
+    engine_preference
+    enginePreference
+    preferred_engine
+    preferredEngine
+  )
+
   @behaviour LemonControlPlane.Method
 
   @impl true
@@ -15,41 +27,42 @@ defmodule LemonControlPlane.Methods.SessionsPatch do
 
   @impl true
   def handle(params, _ctx) do
-    session_key = params["sessionKey"]
+    with :ok <- reject_legacy_selector(params) do
+      session_key = params["sessionKey"]
 
-    if is_nil(session_key) do
-      {:error, {:invalid_request, "sessionKey is required", nil}}
-    else
-      patch =
-        %{
-          tool_policy: params["toolPolicy"],
-          model: params["model"],
-          thinking_level: params["thinkingLevel"],
-          preferred_engine: params["preferredEngine"]
-        }
-        |> Enum.reject(fn {_k, v} -> is_nil(v) end)
-        |> Map.new()
+      if is_nil(session_key) do
+        {:error, {:invalid_request, "sessionKey is required", nil}}
+      else
+        patch =
+          %{
+            tool_policy: params["toolPolicy"],
+            model: params["model"],
+            thinking_level: params["thinkingLevel"]
+          }
+          |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+          |> Map.new()
 
-      case apply_session_patch(session_key, patch) do
-        :ok ->
-          {:ok,
-           %{
-             "success" => true,
-             "sessionKey" => session_key,
-             "summary" => %{
+        case apply_session_patch(session_key, patch) do
+          :ok ->
+            {:ok,
+             %{
+               "success" => true,
                "sessionKey" => session_key,
-               "patchedKeys" => patch_keys(patch),
-               "patchedCount" => map_size(patch),
-               "cleanup" => %{
-                 "includesToolPolicy" => false,
-                 "includesModel" => false,
-                 "includesSecretValues" => false
+               "summary" => %{
+                 "sessionKey" => session_key,
+                 "patchedKeys" => patch_keys(patch),
+                 "patchedCount" => map_size(patch),
+                 "cleanup" => %{
+                   "includesToolPolicy" => false,
+                   "includesModel" => false,
+                   "includesSecretValues" => false
+                 }
                }
-             }
-           }}
+             }}
 
-        {:error, reason} ->
-          {:error, {:internal_error, "Failed to patch session", reason}}
+          {:error, reason} ->
+            {:error, {:internal_error, "Failed to patch session", reason}}
+        end
       end
     end
   end
@@ -70,4 +83,19 @@ defmodule LemonControlPlane.Methods.SessionsPatch do
     |> Enum.map(&Atom.to_string/1)
     |> Enum.sort()
   end
+
+  defp reject_legacy_selector(params) when is_map(params) do
+    case Enum.filter(@legacy_selector_fields, &Map.has_key?(params, &1)) do
+      [] ->
+        :ok
+
+      fields ->
+        {:error,
+         {:invalid_params,
+          "Top-level engine selection is no longer supported; remove #{Enum.join(fields, ", ")}. Lemon now runs natively; use model to choose a model.",
+          %{fields: fields}}}
+    end
+  end
+
+  defp reject_legacy_selector(_), do: :ok
 end

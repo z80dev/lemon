@@ -2,7 +2,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MemoryReflection do
   @moduledoc false
 
   alias LemonChannels.Adapters.Telegram.ModelPolicyAdapter
-  alias LemonChannels.Adapters.Telegram.Transport.PerChatState
   alias LemonCore.{ChatScope, RouterBridge, RunRequest, RunStore}
 
   @type callbacks :: %{
@@ -42,7 +41,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MemoryReflection do
     if transcript == "" do
       :skip
     else
-      engine_id = PerChatState.last_engine_hint(session_key) || (inbound.meta || %{})[:engine_id]
       agent_id = (inbound.meta || %{})[:agent_id] || "default"
 
       {thinking_hint, _source} =
@@ -52,6 +50,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MemoryReflection do
 
       meta =
         (inbound.meta || %{})
+        |> Map.drop([:engine_id, "engine_id"])
         |> Map.put(:progress_msg_id, nil)
         |> Map.put(:status_msg_id, nil)
         |> Map.put(:topic_id, thread_id)
@@ -75,7 +74,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MemoryReflection do
           agent_id: agent_id,
           prompt: memory_reflection_prompt(transcript),
           queue_mode: :collect,
-          engine_id: engine_id,
           meta: meta
         })
 

@@ -1,94 +1,124 @@
 defmodule LemonRouter.ResumeResolver do
   @moduledoc """
-  Router-owned resume resolution.
+  Router-owned native resume resolution.
 
-  This module resolves the effective resume token before runtime submission,
-  keeping auto-resume semantics out of gateway scheduler mutation.
+  Explicit resume tokens must belong to Lemon. Persisted tokens from retired
+  engines are left in chat state for rollback/history, but never resumed.
   """
+
+  require Logger
 
   alias LemonCore.ResumeToken
 
-  @type resolved :: {ResumeToken.t() | nil, binary() | nil}
+  @native_engine "lemon"
 
-  @spec resolve(ResumeToken.t() | map() | nil, binary() | nil, binary() | nil, map()) ::
-          resolved()
-  def resolve(explicit_resume, session_key, selected_engine_id, meta \\ %{}) do
-    cond do
-      (resume = normalize_resume(explicit_resume)) != nil ->
-        {resume, selected_engine_id || resume.engine}
+  @type source :: :explicit | :auto | nil
+  @type resolved ::
+          {:ok, ResumeToken.t() | nil, source()}
+          | {:error, {:unsupported_resume_engine, binary(), String.t()}}
 
-      disable_auto_resume?(meta) ->
-        {nil, selected_engine_id}
+  @spec resolve(ResumeToken.t() | map() | nil, binary() | nil, map()) :: resolved()
+  def resolve(explicit_resume, session_key, meta \\ %{}) do
+    case normalize_explicit_resume(explicit_resume) do
+      {:ok, resume} ->
+        {:ok, resume, :explicit}
 
-      true ->
-        resolve_auto_resume(session_key, selected_engine_id)
+      {:error, engine} ->
+        {:error,
+         {:unsupported_resume_engine, engine,
+          "Top-level router resumes support only the native \"lemon\" engine. " <>
+            "Use `lemon resume <id>` or omit the resume token."}}
+
+      :none ->
+        if disable_auto_resume?(meta) do
+          {:ok, nil, nil}
+        else
+          resolve_auto_resume(session_key)
+        end
     end
   end
 
-  defp resolve_auto_resume(session_key, selected_engine_id) when is_binary(session_key) do
-    case LemonCore.ChatStateStore.get(session_key) do
-      %LemonCore.ChatState{last_engine: engine, last_resume_token: token}
-      when is_binary(engine) and is_binary(token) ->
-        apply_auto_resume_if_compatible(engine, token, selected_engine_id)
+  defp resolve_auto_resume(session_key) when is_binary(session_key) do
+    case persisted_resume(LemonCore.ChatStateStore.get(session_key)) do
+      {:native, resume} ->
+        {:ok, resume, :auto}
 
-      %{} = state ->
-        engine = fetch(state, :last_engine)
-        token = fetch(state, :last_resume_token)
+      {:non_native, engine} ->
+        Logger.warning(
+          "Router ignored persisted non-native resume state session=#{inspect(session_key)} " <>
+            "engine=#{inspect(engine)}"
+        )
 
-        if is_binary(engine) and is_binary(token) do
-          apply_auto_resume_if_compatible(engine, token, selected_engine_id)
-        else
-          {nil, selected_engine_id}
+        {:ok, nil, nil}
+
+      :none ->
+        {:ok, nil, nil}
+    end
+  rescue
+    _ -> {:ok, nil, nil}
+  end
+
+  defp resolve_auto_resume(_session_key), do: {:ok, nil, nil}
+
+  defp persisted_resume(state) when is_map(state) do
+    case {fetch(state, :last_engine), fetch(state, :last_resume_token)} do
+      {engine, token} when is_binary(engine) and is_binary(token) ->
+        case normalize_engine(engine) do
+          @native_engine -> {:native, %ResumeToken{engine: @native_engine, value: token}}
+          nil -> :none
+          other -> {:non_native, other}
         end
 
       _ ->
-        {nil, selected_engine_id}
-    end
-  rescue
-    _ -> {nil, selected_engine_id}
-  end
-
-  defp resolve_auto_resume(_session_key, selected_engine_id), do: {nil, selected_engine_id}
-
-  defp apply_auto_resume_if_compatible(engine, token, selected_engine_id) do
-    if compatible_engine?(selected_engine_id, engine) do
-      resume = %ResumeToken{engine: engine, value: token}
-      {resume, selected_engine_id || engine}
-    else
-      {nil, selected_engine_id}
+        :none
     end
   end
 
-  defp compatible_engine?(nil, _engine), do: true
-  defp compatible_engine?(engine, engine), do: true
+  defp persisted_resume(_), do: :none
 
-  defp compatible_engine?(selected_engine, engine)
-       when is_binary(selected_engine) and is_binary(engine) do
-    selected_engine == engine ||
-      String.split(selected_engine, ":", parts: 2) |> List.first() == engine
+  defp normalize_explicit_resume(%ResumeToken{engine: engine, value: value}),
+    do: normalize_explicit_token(engine, value)
+
+  defp normalize_explicit_resume(%{engine: engine, value: value}),
+    do: normalize_explicit_token(engine, value)
+
+  defp normalize_explicit_resume(%{"engine" => engine, "value" => value}),
+    do: normalize_explicit_token(engine, value)
+
+  defp normalize_explicit_resume(_), do: :none
+
+  defp normalize_explicit_token(engine, value) when is_binary(engine) do
+    case normalize_engine(engine) do
+      @native_engine when is_binary(value) ->
+        {:ok, %ResumeToken{engine: @native_engine, value: value}}
+
+      @native_engine ->
+        :none
+
+      nil ->
+        :none
+
+      other ->
+        {:error, other}
+    end
   end
 
-  defp compatible_engine?(_selected_engine, _engine), do: false
+  defp normalize_explicit_token(_engine, _value), do: :none
+
+  defp normalize_engine(engine) when is_binary(engine) do
+    case String.trim(engine) do
+      "" -> nil
+      normalized -> normalized
+    end
+  end
+
+  defp normalize_engine(_), do: nil
 
   defp disable_auto_resume?(meta) when is_map(meta) do
     fetch(meta, :disable_auto_resume) == true
   end
 
   defp disable_auto_resume?(_), do: false
-
-  defp normalize_resume(%ResumeToken{} = resume), do: resume
-
-  defp normalize_resume(%{engine: engine, value: value})
-       when is_binary(engine) and is_binary(value) do
-    %ResumeToken{engine: engine, value: value}
-  end
-
-  defp normalize_resume(%{"engine" => engine, "value" => value})
-       when is_binary(engine) and is_binary(value) do
-    %ResumeToken{engine: engine, value: value}
-  end
-
-  defp normalize_resume(_), do: nil
 
   defp fetch(map, key) when is_map(map) and is_atom(key) do
     Map.get(map, key) || Map.get(map, Atom.to_string(key))

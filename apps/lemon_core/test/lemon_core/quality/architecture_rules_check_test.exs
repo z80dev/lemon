@@ -107,6 +107,27 @@ defmodule LemonCore.Quality.ArchitectureRulesCheckTest do
     end
   end
 
+  test "flags engine_id selectors in top-level execution contracts" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      write_file!(
+        tmp_dir,
+        "apps/lemon_core/lib/lemon_core/run_request.ex",
+        """
+        defmodule LemonCore.RunRequest do
+          defstruct [:prompt, :engine_id]
+        end
+        """
+      )
+
+      assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+      assert Enum.any?(report.issues, &(&1.code == :top_level_engine_selector))
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
   test "flags legacy gateway runtime submit wrappers" do
     tmp_dir = tmp_repo!()
 
@@ -181,7 +202,7 @@ defmodule LemonCore.Quality.ArchitectureRulesCheckTest do
     end
   end
 
-  test "flags router use of gateway cwd and engine registry" do
+  test "flags router use of gateway cwd" do
     tmp_dir = tmp_repo!()
 
     try do
@@ -190,46 +211,13 @@ defmodule LemonCore.Quality.ArchitectureRulesCheckTest do
         "apps/lemon_router/lib/lemon_router/bad_boundary.ex",
         """
         defmodule LemonRouter.BadBoundary do
-          def bad(engine_id) do
-            LemonGateway.Cwd.default_cwd()
-            LemonGateway.EngineRegistry.get_engine(engine_id)
-          end
+          def bad, do: LemonGateway.Cwd.default_cwd()
         end
         """
       )
 
       assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
-
       assert Enum.any?(report.issues, &(&1.code == :router_gateway_cwd_dependency))
-      assert Enum.any?(report.issues, &(&1.code == :router_gateway_engine_registry_dependency))
-    after
-      File.rm_rf!(tmp_dir)
-    end
-  end
-
-  test "flags channels validation or formatting via EngineRegistry" do
-    tmp_dir = tmp_repo!()
-
-    try do
-      write_file!(
-        tmp_dir,
-        "apps/lemon_channels/lib/lemon_channels/bad_engine_usage.ex",
-        """
-        defmodule LemonChannels.BadEngineUsage do
-          def bad(token) do
-            LemonChannels.EngineRegistry.get_engine("claude")
-            LemonChannels.EngineRegistry.format_resume(token)
-          end
-        end
-        """
-      )
-
-      assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
-
-      assert Enum.any?(report.issues, fn issue ->
-               issue.code == :channels_engine_registry_format_validation and
-                 issue.path == "apps/lemon_channels/lib/lemon_channels/bad_engine_usage.ex"
-             end)
     after
       File.rm_rf!(tmp_dir)
     end
@@ -1063,6 +1051,83 @@ defmodule LemonCore.Quality.ArchitectureRulesCheckTest do
 
       assert {:ok, report} = ArchitectureRulesCheck.run(root: tmp_dir)
       assert report.issue_count == 0
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
+  test "flags LemonGateway references from CLI task runners" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      write_file!(
+        tmp_dir,
+        "apps/lemon_cli_runners/lib/lemon_cli_runners/bad_gateway_reference.ex",
+        """
+        defmodule LemonCliRunners.BadGatewayReference do
+          def bad(request), do: LemonGateway.Executor.execute(request)
+        end
+        """
+      )
+
+      assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+
+      assert Enum.any?(report.issues, fn issue ->
+               issue.code == :cli_runners_gateway_boundary and
+                 issue.path ==
+                   "apps/lemon_cli_runners/lib/lemon_cli_runners/bad_gateway_reference.ex"
+             end)
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
+  test "flags CodingAgent references from the gateway" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      write_file!(
+        tmp_dir,
+        "apps/lemon_gateway/lib/lemon_gateway/bad_coding_agent_reference.ex",
+        """
+        defmodule LemonGateway.BadCodingAgentReference do
+          def bad(pid), do: CodingAgent.Session.compact(pid, [])
+        end
+        """
+      )
+
+      assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+
+      assert Enum.any?(report.issues, fn issue ->
+               issue.code == :gateway_coding_agent_boundary and
+                 issue.path ==
+                   "apps/lemon_gateway/lib/lemon_gateway/bad_coding_agent_reference.ex"
+             end)
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
+  test "flags EngineCatalog references from runtime apps" do
+    tmp_dir = tmp_repo!()
+
+    try do
+      write_file!(
+        tmp_dir,
+        "apps/lemon_channels/lib/lemon_channels/bad_engine_catalog.ex",
+        """
+        defmodule LemonChannels.BadEngineCatalog do
+          def known?(id), do: LemonCore.EngineCatalog.known?(id)
+        end
+        """
+      )
+
+      assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+
+      assert Enum.any?(report.issues, fn issue ->
+               issue.code == :engine_catalog_boundary and
+                 issue.path == "apps/lemon_channels/lib/lemon_channels/bad_engine_catalog.ex"
+             end)
     after
       File.rm_rf!(tmp_dir)
     end

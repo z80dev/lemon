@@ -1,28 +1,25 @@
 defmodule LemonGateway.ExecutionRequest do
   @moduledoc """
-  Gateway-private execution request adapter.
+  Gateway-private execution request.
 
   Router-owned callers hand `%LemonCore.ExecutionCommand{}` values to the
-  configured `LemonCore.EngineRuntime`. Gateway keeps this shape internally for
-  the transition period and converts it into `%LemonGateway.Types.Job{}` before
-  invoking engines.
+  configured `LemonCore.EngineRuntime`. Gateway passes this request directly to
+  its configured native executor.
   """
 
   alias LemonCore.ExecutionCommand
-  alias LemonGateway.Types.Job
 
-  @enforce_keys [:run_id, :session_key, :prompt, :engine_id]
+  @enforce_keys [:run_id, :session_key, :prompt]
   defstruct [
     :run_id,
     :session_key,
     :prompt,
-    :engine_id,
-    :images,
     :cwd,
     :resume,
     :lane,
     :tool_policy,
     :conversation_key,
+    images: [],
     meta: %{}
   ]
 
@@ -32,7 +29,6 @@ defmodule LemonGateway.ExecutionRequest do
           run_id: String.t() | nil,
           session_key: String.t() | nil,
           prompt: String.t() | nil,
-          engine_id: String.t() | nil,
           images: [map()],
           cwd: String.t() | nil,
           resume: LemonCore.ResumeToken.t() | nil,
@@ -51,7 +47,6 @@ defmodule LemonGateway.ExecutionRequest do
       run_id: command.run_id,
       session_key: command.session_key,
       prompt: command.prompt,
-      engine_id: command.engine_id,
       images: command.images || [],
       cwd: command.cwd,
       resume: command.resume,
@@ -71,53 +66,12 @@ defmodule LemonGateway.ExecutionRequest do
       run_id: request.run_id,
       session_key: request.session_key,
       prompt: request.prompt,
-      engine_id: request.engine_id,
       images: request.images || [],
       cwd: request.cwd,
       resume: request.resume,
       lane: request.lane,
       tool_policy: request.tool_policy,
       conversation_key: request.conversation_key,
-      meta: normalize_meta(request.meta)
-    }
-  end
-
-  @doc """
-  Compatibility/migration helper for gateway tests and legacy internals.
-  """
-  @spec from_job(Job.t(), keyword()) :: t()
-  def from_job(%Job{} = job, opts \\ []) do
-    %__MODULE__{
-      run_id: job.run_id,
-      session_key: job.session_key,
-      prompt: job.prompt,
-      engine_id: job.engine_id,
-      images: job.images || [],
-      cwd: job.cwd,
-      resume: job.resume,
-      lane: job.lane,
-      tool_policy: job.tool_policy,
-      conversation_key: Keyword.get(opts, :conversation_key),
-      meta: normalize_meta(job.meta)
-    }
-  end
-
-  @doc """
-  Converts the public execution contract into the internal engine-facing job
-  shape used inside gateway run execution.
-  """
-  @spec to_job(t()) :: Job.t()
-  def to_job(%__MODULE__{} = request) do
-    %Job{
-      run_id: request.run_id,
-      session_key: request.session_key,
-      prompt: request.prompt,
-      engine_id: request.engine_id,
-      images: request.images || [],
-      cwd: request.cwd,
-      resume: request.resume,
-      lane: request.lane,
-      tool_policy: request.tool_policy,
       meta: normalize_meta(request.meta)
     }
   end

@@ -120,10 +120,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
   defp bind_project!(chat_id, root) do
     scope = %LemonCore.ChatScope{transport: :telegram, chat_id: chat_id, topic_id: nil}
 
-    ProjectBindingStore.put_dynamic("testproj", %{
-      root: root,
-      default_engine: nil
-    })
+    ProjectBindingStore.put_dynamic("testproj", %{root: root})
 
     ProjectBindingStore.put_override(scope, "testproj")
   end

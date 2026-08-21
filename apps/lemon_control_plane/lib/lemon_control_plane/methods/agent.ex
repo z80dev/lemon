@@ -13,7 +13,6 @@ defmodule LemonControlPlane.Methods.Agent do
         "prompt" => "What is the weather?",           # Required: the prompt text
         "agent_id" => "default",                      # Optional: agent ID (default: "default")
         "session_key" => "agent:default:main",        # Optional: session key (auto-generated if not provided)
-        "engine_id" => "claude",                      # Optional: engine override
         "model" => "openai:gpt-4.1",                 # Optional: model override
         "queue_mode" => "collect",                    # Optional: queue mode (collect, followup, steer, interrupt)
         "cwd" => "/path/to/project",                  # Optional: working directory
@@ -43,6 +42,17 @@ defmodule LemonControlPlane.Methods.Agent do
 
   alias LemonControlPlane.Protocol.Errors
   alias LemonCore.RunRequest
+  @legacy_selector_fields ~w(
+    engine
+    engine_id
+    engineId
+    default_engine
+    defaultEngine
+    engine_preference
+    enginePreference
+    preferred_engine
+    preferredEngine
+  )
 
   @impl true
   def name, do: "agent"
@@ -52,7 +62,8 @@ defmodule LemonControlPlane.Methods.Agent do
 
   @impl true
   def handle(params, ctx) do
-    with {:ok, validated} <- validate_params(params),
+    with :ok <- reject_legacy_selector(params),
+         {:ok, validated} <- validate_params(params),
          {:ok, result} <- submit_run(validated, ctx) do
       {:ok, Map.put(result, "summary", summary(validated, result))}
     end
@@ -66,7 +77,6 @@ defmodule LemonControlPlane.Methods.Agent do
       "queueMode" => to_string(params.queue_mode),
       "promptBytes" => byte_size(params.prompt),
       "hasCwd" => present?(params.cwd),
-      "hasEngineOverride" => present?(params.engine_id),
       "hasModelOverride" => present?(params.model),
       "hasToolPolicy" => is_map(params.tool_policy) and map_size(params.tool_policy) > 0,
       "hasIdempotencyKey" => present?(params.idempotency_key),
@@ -83,6 +93,22 @@ defmodule LemonControlPlane.Methods.Agent do
   defp present?(nil), do: false
   defp present?(_value), do: true
 
+  defp reject_legacy_selector(params) when is_map(params) do
+    case Enum.filter(@legacy_selector_fields, &Map.has_key?(params, &1)) do
+      [] ->
+        :ok
+
+      fields ->
+        {:error,
+         Errors.invalid_params(
+           "Top-level engine selection is no longer supported; remove #{Enum.join(fields, ", ")}. Lemon now runs natively; use model to choose a model.",
+           %{fields: fields}
+         )}
+    end
+  end
+
+  defp reject_legacy_selector(_), do: :ok
+
   defp validate_params(nil) do
     {:error, Errors.invalid_params("params is required")}
   end
@@ -98,7 +124,6 @@ defmodule LemonControlPlane.Methods.Agent do
            prompt: prompt,
            agent_id: Map.get(params, "agent_id", "default"),
            session_key: Map.get(params, "session_key"),
-           engine_id: Map.get(params, "engine_id"),
            model: Map.get(params, "model"),
            queue_mode: parse_queue_mode(Map.get(params, "queue_mode")),
            cwd: Map.get(params, "cwd"),
@@ -166,7 +191,6 @@ defmodule LemonControlPlane.Methods.Agent do
         agent_id: params.agent_id,
         prompt: params.prompt,
         queue_mode: params.queue_mode,
-        engine_id: params.engine_id,
         model: params.model,
         cwd: params.cwd,
         tool_policy: params.tool_policy,

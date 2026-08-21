@@ -4,47 +4,34 @@ defmodule LemonGateway.SchedulerTest do
 
   alias Elixir.LemonGateway.ExecutionRequest
   alias Elixir.LemonGateway.Scheduler
-  alias Elixir.LemonGateway.Types.Job
   alias LemonCore.ChatScope
   alias LemonCore.ResumeToken
 
-  defmodule Elixir.LemonGateway.SchedulerTest.SlowEngine do
-    @behaviour Elixir.LemonGateway.Engine
+  defmodule Elixir.LemonGateway.SchedulerTest.SlowExecutor do
+    @behaviour Elixir.LemonGateway.Executor
 
     alias Elixir.LemonGateway.Event
-    alias Elixir.LemonGateway.Types.Job
-    alias LemonCore.ResumeToken
+    alias Elixir.LemonGateway.ExecutionRequest
 
     @impl true
-    def id, do: "slow"
-
-    @impl true
-    def format_resume(%ResumeToken{value: v}), do: "slow resume #{v}"
-
-    @impl true
-    def extract_resume(_text), do: nil
-
-    @impl true
-    def is_resume_line(_line), do: false
-
-    @impl true
-    def supports_steer?, do: false
-
-    @impl true
-    def start_run(%Job{} = job, _opts, sink_pid) do
+    def start_run(%ExecutionRequest{} = request, _opts, sink_pid) do
       run_ref = make_ref()
-      resume = job.resume || %ResumeToken{engine: id(), value: unique_id()}
-      delay_ms = (job.meta || %{})[:delay_ms] || 100
+      resume = request.resume || %ResumeToken{engine: "lemon", value: unique_id()}
+      delay_ms = Map.get(request.meta || %{}, :delay_ms, 100)
 
       {:ok, task_pid} =
         Task.start(fn ->
-          send(sink_pid, {:engine_event, run_ref, Event.started(%{engine: id(), resume: resume})})
+          send(
+            sink_pid,
+            {:engine_event, run_ref, Event.started(%{engine: "lemon", resume: resume})}
+          )
+
           Process.sleep(delay_ms)
 
           send(
             sink_pid,
             {:engine_event, run_ref,
-             Event.completed(%{engine: id(), resume: resume, ok: true, answer: "ok"})}
+             Event.completed(%{engine: "lemon", resume: resume, ok: true, answer: "ok"})}
           )
         end)
 
@@ -56,6 +43,14 @@ defmodule LemonGateway.SchedulerTest do
       Process.exit(pid, :kill)
       :ok
     end
+
+    def cancel(_context), do: :ok
+
+    @impl true
+    def steer(_context, _text), do: {:error, :unsupported}
+
+    @impl true
+    def redirect(_context, _text), do: {:error, :unsupported}
 
     defp unique_id, do: Integer.to_string(System.unique_integer([:positive]))
   end
@@ -82,14 +77,24 @@ defmodule LemonGateway.SchedulerTest do
     @impl true
     def handle_cast({:enqueue, %ExecutionRequest{} = request}, state) do
       Process.sleep(state.delay_ms)
-      send(state.notify_pid, {:blocking_worker_enqueue_cast, request})
+
+      send(
+        state.notify_pid,
+        {:blocking_worker_enqueue_cast, request.run_id, request.prompt}
+      )
+
       {:noreply, state}
     end
 
     @impl true
     def handle_call({:enqueue, %ExecutionRequest{} = request}, _from, state) do
       Process.sleep(state.delay_ms)
-      send(state.notify_pid, {:blocking_worker_enqueue_call, request})
+
+      send(
+        state.notify_pid,
+        {:blocking_worker_enqueue_call, request.run_id, request.prompt}
+      )
+
       {:reply, :ok, state}
     end
   end
@@ -114,7 +119,6 @@ defmodule LemonGateway.SchedulerTest do
           :conversation_key,
           if(resume, do: {:resume, resume.engine, resume.value}, else: {:session, session_key})
         ),
-      engine_id: Keyword.get(opts, :engine_hint, Keyword.get(opts, :engine_id, "echo")),
       meta: meta
     }
   end
@@ -240,6 +244,8 @@ defmodule LemonGateway.SchedulerTest do
       }
 
       request = make_request(session_key: session_key)
+      run_id = request.run_id
+      prompt = request.prompt
 
       {elapsed_us, {:noreply, new_state}} =
         :timer.tc(fn ->
@@ -248,8 +254,8 @@ defmodule LemonGateway.SchedulerTest do
 
       assert new_state == state
       assert elapsed_us < 100_000
-      assert_receive {:blocking_worker_enqueue_cast, %ExecutionRequest{}}, 1_000
-      refute_receive {:blocking_worker_enqueue_call, _}
+      assert_receive {:blocking_worker_enqueue_cast, ^run_id, ^prompt}, 1_000
+      refute_receive {:blocking_worker_enqueue_call, _, _}
     end
 
     test "release_slot removes slot from in_flight and grants to waiting" do
@@ -678,15 +684,14 @@ defmodule LemonGateway.SchedulerTest do
 
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
         max_concurrent_runs: 2,
-        default_engine: "echo",
-        enable_telegram: false,
-        require_engine_lock: false
+        enable_telegram: false
       })
 
-      Application.put_env(:lemon_gateway, :engines, [
-        Elixir.LemonGateway.SchedulerTest.SlowEngine,
-        Elixir.LemonGateway.Engines.Echo
-      ])
+      Application.put_env(
+        :lemon_gateway,
+        :executor,
+        Elixir.LemonGateway.SchedulerTest.SlowExecutor
+      )
 
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
@@ -713,8 +718,8 @@ defmodule LemonGateway.SchedulerTest do
       assert time_us < 10_000
     end
 
-    test "submit with resume token uses engine/value as thread_key" do
-      resume = %ResumeToken{engine: "test_engine", value: "session_123"}
+    test "submit with resume token uses provenance/value as thread_key" do
+      resume = %ResumeToken{engine: "lemon", value: "session_123"}
       request = make_request(resume: resume, text: "resumed message")
 
       assert :ok == Scheduler.submit_execution(request)
@@ -994,15 +999,14 @@ defmodule LemonGateway.SchedulerTest do
 
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
         max_concurrent_runs: 10,
-        default_engine: "echo",
-        enable_telegram: false,
-        require_engine_lock: false
+        enable_telegram: false
       })
 
-      Application.put_env(:lemon_gateway, :engines, [
-        Elixir.LemonGateway.SchedulerTest.SlowEngine,
-        Elixir.LemonGateway.Engines.Echo
-      ])
+      Application.put_env(
+        :lemon_gateway,
+        :executor,
+        Elixir.LemonGateway.SchedulerTest.SlowExecutor
+      )
 
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
@@ -1014,7 +1018,7 @@ defmodule LemonGateway.SchedulerTest do
     end
 
     test "request uses router-supplied resume conversation key" do
-      resume = %ResumeToken{engine: "claude", value: "session-abc"}
+      resume = %ResumeToken{engine: "lemon", value: "session-abc"}
 
       request = %ExecutionRequest{
         run_id: "run_#{System.unique_integer([:positive])}",
@@ -1022,7 +1026,6 @@ defmodule LemonGateway.SchedulerTest do
         prompt: "test",
         resume: resume,
         conversation_key: {:resume, resume.engine, resume.value},
-        engine_id: "echo",
         meta: %{user_msg_id: 1}
       }
 
@@ -1034,7 +1037,7 @@ defmodule LemonGateway.SchedulerTest do
       session_key = "session_#{System.unique_integer([:positive])}"
 
       resume = %ResumeToken{
-        engine: Elixir.LemonGateway.SchedulerTest.SlowEngine.id(),
+        engine: "lemon",
         value: "resume_#{System.unique_integer([:positive])}"
       }
 
@@ -1044,7 +1047,6 @@ defmodule LemonGateway.SchedulerTest do
         prompt: "test",
         resume: resume,
         conversation_key: {:session, session_key},
-        engine_id: Elixir.LemonGateway.SchedulerTest.SlowEngine.id(),
         meta: %{delay_ms: 200}
       }
 
@@ -1066,7 +1068,6 @@ defmodule LemonGateway.SchedulerTest do
         prompt: "test",
         resume: nil,
         conversation_key: {:session, session_key},
-        engine_id: "echo",
         meta: %{user_msg_id: 1}
       }
 

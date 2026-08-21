@@ -333,22 +333,22 @@ compiled on demand if `auto_build = true` is set in config.
 
 ## CLI Runners
 
-For the CLI-based gateway engines (claude, codex, kimi, opencode, pi),
-agent_core provides **CLI Runners** — a three-layer architecture for wrapping
-external CLI tools:
+For delegated vendor tasks (claude, codex, kimi, opencode, pi),
+`lemon_cli_runners` provides a three-layer architecture for wrapping external
+CLI tools:
 
 1. **`JsonlRunner`** — generic GenServer that spawns a subprocess, reads its
    stdout line by line, handles graceful shutdown (SIGTERM → grace → SIGKILL),
    session locking, and owner process monitoring
-2. **Engine-specific Runner** — implements `build_command/3` (CLI binary and
-   flags), `stdin_payload/3`, and `translate_event/2` (parses the engine's JSON
+2. **Vendor-specific Runner** — implements `build_command/3` (CLI binary and
+   flags), `stdin_payload/3`, and `translate_event/2` (parses the CLI's JSON
    into unified event structs)
-3. **Engine-specific Subagent** — high-level API with `start/1`, `events/1`,
-   `continue/2`, `resume/2`
+3. **Vendor-specific Subagent** — high-level task API with `start/1`,
+   `events/1`, `continue/2`, and `resume/2`
 
-All CLI runners produce the same event types: `StartedEvent`, `ActionEvent`,
-`CompletedEvent`. This uniformity is what lets the gateway treat all engines
-identically.
+All CLI runners produce the same normalized event types. The native agent's
+`task` tool consumes those events; vendor runners never replace the top-level
+native conversation executor.
 
 ---
 

@@ -13,10 +13,7 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
   @current_allowed_direct_deps %{
     lemon_agent: [:lemon_ai, :lemon_core],
     lemon_ai: [],
-    # lemon_gateway: the vendor engine shells implement LemonGateway.Engine and
-    # register with the gateway's EngineRegistry at boot (the edge points from
-    # the vendor package to the platform, never back).
-    lemon_cli_runners: [:lemon_agent, :lemon_ai, :lemon_core, :lemon_gateway],
+    lemon_cli_runners: [:lemon_agent, :lemon_ai, :lemon_core],
     coding_agent: [
       :lemon_agent,
       :lemon_ai,
@@ -24,7 +21,7 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
       :lemon_core,
       :lemon_gateway,
       :lemon_memory,
-      # test-only: runs CodingAgent.GatewayEngine through the Engine contract kit
+      # test-only: shared platform compliance cases
       :lemon_platform_test,
       :lemon_skills
     ],

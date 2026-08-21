@@ -5,7 +5,7 @@
 [![Simulation Bench](https://github.com/z80dev/lemon/actions/workflows/sim-bench.yml/badge.svg?branch=main)](https://github.com/z80dev/lemon/actions/workflows/sim-bench.yml)
 [![OSV Scanner](https://github.com/z80dev/lemon/actions/workflows/osv-scanner.yml/badge.svg?branch=main)](https://github.com/z80dev/lemon/actions/workflows/osv-scanner.yml)
 
-**Lemon is a resilient, BEAM-native personal AI assistant and agent platform.** Built on Elixir/OTP, it provides supervised per-run agent processes, multi-channel messaging, pluggable execution engines, persistent memory, and deterministic simulation arenas.
+**Lemon is a resilient, BEAM-native personal AI assistant and agent platform.** Built on Elixir/OTP, it provides supervised per-run agent processes, multi-channel messaging, a configured execution runtime, persistent memory, and deterministic simulation arenas.
 
 ---
 
@@ -13,7 +13,7 @@
 
 - **Multi-channel and always on** — Chat with your agent across **Telegram**, **Discord**, **WhatsApp**, **XMTP**, the terminal **TUI**, or the **Web UI**.
 - **Model-agnostic** — Connect to 27 configured LLM providers, including Anthropic, OpenAI, Google Gemini, Bedrock, Azure, and OpenAI-compatible services. Lemon provides unified streaming, automatic retries, rate limiting, and cost accounting (`lemon_ai`); compatible local endpoints can be configured separately.
-- **Coding agent and MCP** — Native tool execution, MCP (Model Context Protocol) client/server bridge, subagent orchestration, browser automation, LSP integration, and CLI engines for Claude Code, Codex, Kimi, OpenCode, and Pi.
+- **Coding agent and MCP** — Native tool execution, MCP (Model Context Protocol) client/server bridge, subagent orchestration, browser automation, LSP integration, and vendor CLI runners for Claude Code, Codex, Kimi, OpenCode, and Pi.
 - **Durable memory** — SQLite-backed full-text recall, document ingestion, and a provider interface for optional semantic backends, including Honcho long-term memory integration (`lemon_memory`).
 - **LemonSim and benchmark arenas** — Event-sourced simulation worlds (Werewolf, Space Station, Stock Market, Survivor, Poker) and reproducible offline benchmark scoring without provider API keys.
 - **Supervised on the BEAM** — Each agent run is an isolated OTP process. Separate conversations execute concurrently, crashed workers are supervised, and durable session state survives individual requests.
@@ -154,9 +154,9 @@ Lemon is organized as an Elixir umbrella split into 9 modular core packages, a r
 | [`lemon_memory`](apps/lemon_memory/README.md) | SQLite full-text search, memory provider registry, document ingestion pipeline, session search |
 | [`lemon_media`](apps/lemon_media/README.md) | Redacted-by-construction media job records, hashing, and audio/image processing |
 | [`lemon_router`](apps/lemon_router/README.md) | Message routing, run lifecycle (single-flight execution, queue/steer/coalesce), session orchestration |
-| [`lemon_gateway`](apps/lemon_gateway/README.md) | Engine execution runtime, scheduler, locks, and ingress transports |
+| [`lemon_gateway`](apps/lemon_gateway/README.md) | Run execution runtime, scheduler, locks, and ingress transports |
 | [`lemon_channels`](apps/lemon_channels/README.md) | Channel core, `Plugin` behaviour, Telegram/Discord/WhatsApp/XMTP adapters, outbox & presentation |
-| [`lemon_platform_test`](apps/lemon_platform_test/README.md) | Contract-test kit (`BackendCase`, `PluginCase`, `EngineCase`, `ProviderCase`) for platform extensions |
+| [`lemon_platform_test`](apps/lemon_platform_test/README.md) | Contract-test kit (`BackendCase`, `PluginCase`, `SubagentRunnerCase`, `ProviderCase`) for platform extensions |
 
 ### Reference Runtime & Products
 
@@ -248,7 +248,7 @@ graph TD
 ## Engineering Guarantees
 
 - **Compiler-Enforced Boundaries** — AST-level architecture verification ([`architecture_rules_check.ex`](apps/lemon_core/lib/lemon_core/quality/architecture_rules_check.ex)) ensures no layer violations or circular dependencies exist.
-- **Contract Testing for Extensions** — [`lemon_platform_test`](apps/lemon_platform_test/README.md) ships compliance case templates so third-party channel adapters, memory backends, and engines can verify their implementations safely.
+- **Contract Testing for Extensions** — [`lemon_platform_test`](apps/lemon_platform_test/README.md) ships compliance case templates so third-party channel adapters, memory backends, and delegated runners can verify their implementations safely.
 - **Typed, Reader-Owned Configuration** — Over 260 environment variable declarations are defined directly by their consumer modules ([`config/config.exs`](config/config.exs)).
 - **Deterministic Test Suites** — Fast, isolated ExUnit test execution with network scrubbing and temp dir sandboxing (`scripts/test`).
 - **Continuous Security Audits** — OSV-Scanner checks the listed Elixir and JavaScript lockfiles when dependency manifests change and on a weekly schedule ([`osv-scanner.yml`](.github/workflows/osv-scanner.yml)).

@@ -11,6 +11,11 @@ defmodule LemonCore.Update.ConfigMigrator do
   | `[agent.tools.*]` | `[runtime.tools.*]` |
   | `[tools.*]` | `[runtime.tools.*]` |
 
+  Engine selection and custom engine configuration are not migrated automatically.
+  The preflight reports their exact paths because top-level execution now uses native
+  Lemon. CLI vendors under `[runtime.cli.<vendor>]` remain available through task
+  delegation.
+
   ## Usage
 
       # Check what would be migrated (dry run):
@@ -21,6 +26,27 @@ defmodule LemonCore.Update.ConfigMigrator do
   """
 
   @type issue :: String.t()
+
+  @removed_engine_keys MapSet.new([
+                         "engine",
+                         "default_engine",
+                         "engine_preference",
+                         "preferred_engine",
+                         "preferred_engines",
+                         "preferred-engine",
+                         "preferred-engines",
+                         "preferredEngine",
+                         "preferredEngines",
+                         "known_engines",
+                         "known_engine",
+                         "custom_engines",
+                         "custom_engine",
+                         "engine_registry",
+                         "engine_module",
+                         "engine_modules",
+                         "engines",
+                         "gateway_engines"
+                       ])
 
   @doc """
   Checks the config at `path` for deprecated sections.
@@ -87,24 +113,97 @@ defmodule LemonCore.Update.ConfigMigrator do
   end
 
   defp detect_deprecated(settings) do
-    []
-    |> maybe_add_issue(
-      is_map(settings["agent"]),
-      "[agent] is deprecated. Move fields to [defaults] (provider, model, thinking_level) and [runtime]."
-    )
-    |> maybe_add_issue(
-      is_map(settings["agents"]),
-      "[agents.<id>] is deprecated. Use [profiles.<id>] instead."
-    )
-    |> maybe_add_issue(
-      is_map(settings["agent"]) and is_map(get_in(settings, ["agent", "tools"])),
-      "[agent.tools.*] is deprecated. Use [runtime.tools.*] instead."
-    )
-    |> maybe_add_issue(
-      is_map(settings["tools"]),
-      "[tools.*] is deprecated. Use [runtime.tools.*] instead."
-    )
-    |> Enum.reverse()
+    deprecated_section_issues =
+      []
+      |> maybe_add_issue(
+        is_map(settings["agent"]),
+        "[agent] is deprecated. Move fields to [defaults] (provider, model, thinking_level) and [runtime]."
+      )
+      |> maybe_add_issue(
+        is_map(settings["agents"]),
+        "[agents.<id>] is deprecated. Use [profiles.<id>] instead."
+      )
+      |> maybe_add_issue(
+        is_map(settings["agent"]) and is_map(get_in(settings, ["agent", "tools"])),
+        "[agent.tools.*] is deprecated. Use [runtime.tools.*] instead."
+      )
+      |> maybe_add_issue(
+        is_map(settings["tools"]),
+        "[tools.*] is deprecated. Use [runtime.tools.*] instead."
+      )
+      |> Enum.reverse()
+
+    deprecated_section_issues ++ deprecated_engine_issues(settings)
+  end
+
+  defp deprecated_engine_issues(settings) do
+    settings
+    |> find_engine_issues([], [])
+    |> Enum.sort_by(&issue_path/1)
+    |> Enum.map(&engine_issue/1)
+  end
+
+  defp find_engine_issues(_value, ["runtime", "cli" | _rest], issues), do: issues
+
+  defp find_engine_issues(value, path, issues) when is_map(value) do
+    value
+    |> Enum.sort_by(fn {key, _value} -> to_string(key) end)
+    |> Enum.reduce(issues, fn {key, child}, acc ->
+      key = to_string(key)
+      child_path = path ++ [key]
+
+      acc =
+        if MapSet.member?(@removed_engine_keys, key) do
+          [child_path | acc]
+        else
+          acc
+        end
+
+      find_engine_issues(child, child_path, acc)
+    end)
+  end
+
+  defp find_engine_issues(value, path, issues) when is_list(value) do
+    value
+    |> Enum.with_index()
+    |> Enum.reduce(issues, fn {child, index}, acc ->
+      find_engine_issues(child, path ++ [index], acc)
+    end)
+  end
+
+  defp find_engine_issues(_value, _path, issues), do: issues
+
+  defp issue_path(path), do: format_config_path(path)
+
+  defp engine_issue(path) do
+    key = List.last(path)
+    path = format_config_path(path)
+
+    if key in [
+         "engines",
+         "gateway_engines",
+         "known_engines",
+         "known_engine",
+         "custom_engines",
+         "custom_engine",
+         "engine_registry",
+         "engine_module",
+         "engine_modules"
+       ] do
+      "#{path} config is no longer supported: custom LemonGateway.Engine support and external top-level engines have been removed. " <>
+        "Top-level execution now uses native Lemon; CLI vendors configured under [runtime.cli.<vendor>] remain available through task delegation."
+    else
+      "#{path} is no longer supported: external top-level engine selection has been removed. " <>
+        "Top-level execution now uses native Lemon; CLI vendors configured under [runtime.cli.<vendor>] remain available through task delegation."
+    end
+  end
+
+  defp format_config_path(path) do
+    Enum.reduce(path, "", fn
+      index, acc when is_integer(index) -> "#{acc}[#{index}]"
+      key, "" -> key
+      key, acc -> "#{acc}.#{key}"
+    end)
   end
 
   defp maybe_add_issue(acc, false, _), do: acc
@@ -153,6 +252,7 @@ defmodule LemonCore.Update.ConfigMigrator do
   # without relying on a full TOML parser (preserving comments and order).
   defp migrate_agent_section(content) do
     lines = String.split(content, "\n")
+
     {result, pending_defaults, pending_runtime, _in_agent} =
       Enum.reduce(lines, {[], [], [], false}, fn line, {acc, defaults, runtime, in_agent} ->
         trimmed = String.trim(line)

@@ -919,7 +919,7 @@ the same model id in `LemonAi.Models`, `CodingAgent.Session.ModelResolver` selec
 the fallback before starting the supervised `LemonAgent.Agent`. Explicit user
 model specs are never rewritten at resolution time. All session streams —
 default and explicit `--model` alike, including sessions started through
-`CodingAgent.GatewayEngine.SessionRunner` — are wrapped by
+`CodingAgent.Executor.SessionRunner` — are wrapped by
 `CodingAgent.Session.ProviderFallback`: if the selected provider fails before
 visible assistant content or tool calls are emitted, the same turn is retried
 against the next credential-ready fallback provider with the same model id.

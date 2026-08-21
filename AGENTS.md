@@ -158,11 +158,11 @@ apps/
 ├── lemon_browser/       # Browser capability driver and artifact store
 ├── lemon_channels/      # Channel adapters and delivery outbox (Telegram, Discord, WhatsApp, XMTP, email)
 ├── lemon_cli/           # User-facing setup, onboarding, and Hermes migration Mix tasks
-├── lemon_cli_runners/   # Vendor AI CLIs (Claude Code, Codex, Kimi, OpenCode, Pi) wrapped as streaming subagents and gateway engines
+├── lemon_cli_runners/   # Vendor AI CLIs (Claude Code, Codex, Kimi, OpenCode, Pi) wrapped as streaming task subagents
 ├── lemon_control_plane/ # HTTP/WebSocket API server with 150+ JSON-RPC methods
 ├── lemon_core/          # Shared primitives: config, store (ETS/JSONL/SQLite), secrets, PubSub bus
 ├── lemon_evals/         # Deterministic eval harness and mix lemon.eval task
-├── lemon_gateway/       # Engine behaviour, engine registry/scheduler, launch locks; SMS/voice/email/webhook ingress
+├── lemon_gateway/       # Singleton-executor scheduler, run lifecycle, launch locks; SMS/voice/email/webhook ingress
 ├── lemon_honcho/        # Honcho-backed long-term memory: registers a LemonMemory provider and agent tools
 ├── lemon_lsp/           # LSP server registry and supervised JSON-RPC sessions
 ├── lemon_mcp/           # MCP (Model Context Protocol) server/client bridge for CodingAgent tools
@@ -217,6 +217,20 @@ scripts/test path apps/lemon_ai/test --seed 1
 # Format code
 mix format
 ```
+
+### Product Release
+
+Keep user-visible notes under `CHANGELOG.md`'s `Unreleased` section, then start
+the serialized one-click release workflow from `main`:
+
+```bash
+gh workflow run release.yml --ref main -f channel=stable -f draft=false
+```
+
+With no version input, the workflow derives the next CalVer, updates and
+commits product version metadata, creates the annotated tag, builds and verifies
+all native artifacts, publishes the GitHub Release, and then promotes mutable
+GHCR channel tags. See `docs/release/versioning_and_channels.md`.
 
 ### TUI Client (Bun)
 
@@ -379,12 +393,15 @@ Gateway-native transports remain in `apps/lemon_gateway/` (SMS/Twilio, voice, em
 2. Implement appropriate behaviour (see existing transports for patterns)
 3. Wire up in `LemonGateway.Application`
 
-### Adding a Gateway Engine
+### Adding a Delegated CLI Runner
 
-The gateway itself ships only `echo.ex` (plus the shared `cli_adapter.ex`) in `apps/lemon_gateway/lib/lemon_gateway/engines/`. Vendor CLI engines (`claude.ex`, `codex.ex`, `kimi.ex`, `opencode.ex`, `pi.ex`) live in `apps/lemon_cli_runners/lib/lemon_cli_runners/engines/`, and the `lemon` engine is `CodingAgent.GatewayEngine` in `apps/coding_agent/`.
+Top-level conversations always run through the configured native `CodingAgent.Executor`;
+the gateway does not support selectable or custom engines. Vendor CLIs are task-level
+subagents owned by `lemon_cli_runners`.
 
-1. Create engine module implementing `LemonGateway.Engine` behaviour (for a vendor CLI, in `lemon_cli_runners`)
-2. Register at boot from the owning package's application callback via `LemonGateway.EngineRegistry.register_default/1` (respects an operator-configured `:lemon_gateway, :engines` ceiling)
+1. Create a runner implementing `LemonCore.SubagentRunner` in `lemon_cli_runners`.
+2. Register it with `LemonCore.SubagentRegistry` from the owning application.
+3. Keep runner configuration under `[runtime.cli.<vendor>]`; it must not affect top-level routing.
 
 ---
 

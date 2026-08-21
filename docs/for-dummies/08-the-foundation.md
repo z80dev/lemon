@@ -269,7 +269,6 @@ The formal "please run the AI" request:
   session_key: "agent:default:telegram:default:dm:123456789",
   prompt: "What files are in my home directory?",
   agent_id: "default",
-  engine_id: "lemon",
   queue_mode: :collect
 }
 ```

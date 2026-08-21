@@ -250,8 +250,7 @@ defmodule LemonCore.Config do
     %{
       "provider" => normalize_optional_string(map["provider"]),
       "model" => normalize_optional_string(map["model"]),
-      "thinking_level" => normalize_optional_string(map["thinking_level"]),
-      "engine" => normalize_optional_string(map["engine"])
+      "thinking_level" => normalize_optional_string(map["thinking_level"])
     }
     |> reject_nil_values()
   end
@@ -271,15 +270,12 @@ defmodule LemonCore.Config do
 
     base = default_agent_profile(id, cfg, defaults)
 
-    default_engine = cfg["default_engine"] || cfg["engine"] || base.default_engine
-
     tool_policy = parse_tool_policy(cfg["tool_policy"])
 
     base
     |> Map.put(:name, cfg["name"] || base.name || id)
     |> Map.put(:description, cfg["description"])
     |> Map.put(:avatar, cfg["avatar"])
-    |> Map.put(:default_engine, default_engine)
     |> Map.put(:model, cfg["model"] || base.model)
     |> Map.put(:system_prompt, cfg["system_prompt"])
     |> Map.put(:tool_policy, tool_policy)
@@ -296,14 +292,12 @@ defmodule LemonCore.Config do
       end
 
     default_model = if id == "default", do: defaults["model"], else: nil
-    default_engine = if id == "default", do: defaults["engine"], else: nil
 
     %{
       id: id,
       name: name,
       description: nil,
       avatar: nil,
-      default_engine: default_engine,
       model: default_model,
       system_prompt: nil,
       tool_policy: nil,

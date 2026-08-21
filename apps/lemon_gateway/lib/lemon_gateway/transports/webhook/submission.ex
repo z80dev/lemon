@@ -29,7 +29,6 @@ defmodule LemonGateway.Transports.Webhook.Submission do
     webhook_config = Keyword.get(opts, :webhook_config, %{})
     validate_callback_url = Keyword.fetch!(opts, :validate_callback_url)
     request_metadata_fun = Keyword.fetch!(opts, :request_metadata_fun)
-    default_engine = Keyword.get(opts, :default_engine, "lemon")
     default_callback_wait_timeout_ms = Keyword.fetch!(opts, :default_callback_wait_timeout_ms)
     run_id = Keyword.fetch!(opts, :run_id)
 
@@ -74,7 +73,6 @@ defmodule LemonGateway.Transports.Webhook.Submission do
           agent_id: Request.normalize_blank(Request.fetch(integration, :agent_id)),
           prompt: normalized.prompt,
           queue_mode: resolve_queue_mode(integration),
-          engine_id: resolve_engine(integration, default_engine),
           cwd: Request.normalize_blank(Request.fetch(integration, :cwd)),
           meta: %{
             webhook: %{
@@ -82,7 +80,7 @@ defmodule LemonGateway.Transports.Webhook.Submission do
               metadata: normalized.metadata,
               attachments: normalized.attachments,
               request: request_metadata_fun.(conn),
-              integration: integration_metadata(integration, webhook_config, default_engine)
+              integration: integration_metadata(integration, webhook_config)
             }
           }
         })
@@ -96,14 +94,13 @@ defmodule LemonGateway.Transports.Webhook.Submission do
     Request.resolve_callback_wait_timeout_ms(integration, webhook_config, default_timeout_ms)
   end
 
-  defp integration_metadata(integration, webhook_config, default_engine) do
+  defp integration_metadata(integration, webhook_config) do
     callback_retry = callback_retry_config(integration, webhook_config)
 
     %{
       session_key: Request.fetch(integration, :session_key),
       agent_id: Request.fetch(integration, :agent_id),
       queue_mode: resolve_queue_mode(integration),
-      default_engine: resolve_engine(integration, default_engine),
       cwd: Request.normalize_blank(Request.fetch(integration, :cwd)),
       callback_url_configured:
         is_binary(Request.normalize_blank(Request.fetch(integration, :callback_url))),
@@ -132,10 +129,6 @@ defmodule LemonGateway.Transports.Webhook.Submission do
           Request.normalize_blank(Request.fetch(integration, :agent_id)) || "default"
         )
     end
-  end
-
-  defp resolve_engine(integration, default_engine) do
-    Request.normalize_blank(Request.fetch(integration, :default_engine)) || default_engine
   end
 
   defp resolve_queue_mode(integration) do

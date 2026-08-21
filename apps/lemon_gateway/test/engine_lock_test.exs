@@ -3,7 +3,6 @@ defmodule LemonGateway.EngineLockTest do
   use ExUnit.Case, async: false
 
   alias Elixir.LemonGateway.ExecutionRequest
-  alias Elixir.LemonGateway.Types.Job
   alias LemonCore.ResumeToken
 
   # ============================================================================
@@ -893,90 +892,62 @@ defmodule LemonGateway.EngineLockTest do
   # Integration Tests (existing tests using full application)
   # ============================================================================
 
-  defmodule SlowEngine do
-    @behaviour Elixir.LemonGateway.Engine
+  defmodule EngineLockFixtureExecutor do
+    @behaviour LemonGateway.Executor
 
-    alias Elixir.LemonGateway.Types.Job
     alias LemonCore.ResumeToken
-    alias Elixir.LemonGateway.Event
+    alias LemonGateway.Event
+    alias LemonGateway.ExecutionRequest
 
     @impl true
-    def id, do: "slow"
-
-    @impl true
-    def format_resume(%ResumeToken{value: sid}), do: "slow resume #{sid}"
-
-    @impl true
-    def extract_resume(_text), do: nil
-
-    @impl true
-    def is_resume_line(_line), do: false
-
-    @impl true
-    def supports_steer?, do: false
-
-    @impl true
-    def start_run(%Job{} = job, _opts, sink_pid) do
+    def start_run(%ExecutionRequest{} = request, _opts, sink_pid) do
       run_ref = make_ref()
-      resume = job.resume || %ResumeToken{engine: id(), value: "slow-session"}
-      delay = job.meta[:delay_ms] || 100
+      meta = request.meta || %{}
+      resume = request.resume || %ResumeToken{engine: "lemon", value: unique_id()}
 
-      Task.start(fn ->
-        send(sink_pid, {:engine_event, run_ref, Event.started(%{engine: id(), resume: resume})})
-        Process.sleep(delay)
+      {:ok, task_pid} =
+        Task.start(fn ->
+          send(
+            sink_pid,
+            {:engine_event, run_ref, Event.started(%{engine: "lemon", resume: resume})}
+          )
 
-        send(
-          sink_pid,
-          {:engine_event, run_ref,
-           Event.completed(%{engine: id(), ok: true, answer: "slow done"})}
-        )
-      end)
+          if Map.get(meta, :crash_run, false) do
+            Process.exit(sink_pid, :kill)
+          else
+            Process.sleep(Map.get(meta, :delay_ms, 0))
 
-      {:ok, run_ref, %{pid: self()}}
+            send(
+              sink_pid,
+              {:engine_event, run_ref,
+               Event.completed(%{
+                 engine: "lemon",
+                 resume: resume,
+                 ok: true,
+                 answer: "fixture done"
+               })}
+            )
+          end
+        end)
+
+      {:ok, run_ref, %{task_pid: task_pid}}
     end
 
     @impl true
-    def cancel(_ctx), do: :ok
-  end
-
-  defmodule CrashEngine do
-    @behaviour Elixir.LemonGateway.Engine
-
-    alias Elixir.LemonGateway.Types.Job
-    alias LemonCore.ResumeToken
-    alias Elixir.LemonGateway.Event
-
-    @impl true
-    def id, do: "crash"
-
-    @impl true
-    def format_resume(%ResumeToken{value: sid}), do: "crash resume #{sid}"
-
-    @impl true
-    def extract_resume(_text), do: nil
-
-    @impl true
-    def is_resume_line(_line), do: false
-
-    @impl true
-    def supports_steer?, do: false
-
-    @impl true
-    def start_run(%Job{} = job, _opts, sink_pid) do
-      run_ref = make_ref()
-      resume = job.resume || %ResumeToken{engine: id(), value: "crash"}
-
-      Task.start(fn ->
-        send(sink_pid, {:engine_event, run_ref, Event.started(%{engine: id(), resume: resume})})
-        # Kill the Run process to simulate a crash
-        Process.exit(sink_pid, :kill)
-      end)
-
-      {:ok, run_ref, %{pid: self()}}
+    def cancel(%{task_pid: pid}) when is_pid(pid) do
+      Process.exit(pid, :kill)
+      :ok
     end
 
-    @impl true
     def cancel(_ctx), do: :ok
+
+    @impl true
+    def steer(_ctx, _text), do: {:error, :unsupported}
+
+    @impl true
+    def redirect(_ctx, _text), do: {:error, :unsupported}
+
+    defp unique_id, do: "fixture-#{System.unique_integer([:positive])}"
   end
 
   setup do
@@ -984,16 +955,12 @@ defmodule LemonGateway.EngineLockTest do
 
     Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
       max_concurrent_runs: 10,
-      default_engine: "echo",
       enable_telegram: false,
       require_engine_lock: true,
       engine_lock_timeout_ms: 60_000
     })
 
-    Application.put_env(:lemon_gateway, :engines, [
-      Elixir.LemonGateway.Engines.Echo,
-      __MODULE__.SlowEngine
-    ])
+    Application.put_env(:lemon_gateway, :executor, EngineLockFixtureExecutor)
 
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
     :ok
@@ -1002,93 +969,61 @@ defmodule LemonGateway.EngineLockTest do
   test "lock is acquired and released during normal run" do
     session_key = "test:100"
 
-    job = %Job{
-      session_key: session_key,
-      prompt: "test",
-      resume: nil,
-      engine_id: "echo",
-      meta: %{notify_pid: self(), user_msg_id: 1}
-    }
+    request = request(session_key, "test", nil, %{notify_pid: self(), user_msg_id: 1})
 
-    submit_job(job)
-    assert_receive {:lemon_gateway_run_completed, ^job, %{__event__: :completed, ok: true}}, 1_000
+    submit_request(request)
+
+    assert_receive {:lemon_gateway_run_completed, ^request, %{__event__: :completed, ok: true}},
+                   1_000
 
     # Wait a bit for lock release to propagate (cast is async)
     Process.sleep(50)
 
-    # Lock should be released - another job for same scope should proceed immediately
-    job2 = %Job{
-      session_key: session_key,
-      prompt: "test2",
-      resume: nil,
-      engine_id: "echo",
-      meta: %{notify_pid: self(), user_msg_id: 2}
-    }
+    # Lock should be released - another request for the same scope should proceed immediately
+    request2 = request(session_key, "test2", nil, %{notify_pid: self(), user_msg_id: 2})
 
-    submit_job(job2)
+    submit_request(request2)
 
-    assert_receive {:lemon_gateway_run_completed, ^job2, %{__event__: :completed, ok: true}},
+    assert_receive {:lemon_gateway_run_completed, ^request2, %{__event__: :completed, ok: true}},
                    1_000
   end
 
   test "concurrent runs for same scope are serialized by lock" do
     session_key = "test:101"
 
-    job1 = %Job{
-      session_key: session_key,
-      prompt: "first",
-      resume: nil,
-      engine_id: "slow",
-      meta: %{notify_pid: self(), delay_ms: 100, user_msg_id: 1}
-    }
+    request1 =
+      request(session_key, "first", nil, %{notify_pid: self(), delay_ms: 100, user_msg_id: 1})
 
-    job2 = %Job{
-      session_key: session_key,
-      prompt: "second",
-      resume: nil,
-      engine_id: "slow",
-      meta: %{notify_pid: self(), delay_ms: 50, user_msg_id: 2}
-    }
+    request2 =
+      request(session_key, "second", nil, %{notify_pid: self(), delay_ms: 50, user_msg_id: 2})
 
     # Submit both concurrently
-    Task.async(fn -> submit_job(job1) end)
+    Task.async(fn -> submit_request(request1) end)
     Process.sleep(10)
-    Task.async(fn -> submit_job(job2) end)
-
-    # Jobs should complete in order due to locking
+    Task.async(fn -> submit_request(request2) end)
     completions = collect_completions(2, 2_000)
 
     assert length(completions) == 2
-    # First job submitted should complete first due to lock serialization
-    [{first_job, _}, {second_job, _}] = completions
-    assert first_job.prompt == "first"
-    assert second_job.prompt == "second"
+    # First request submitted should complete first due to lock serialization
+    [{first_request, _}, {second_request, _}] = completions
+    assert first_request.prompt == "first"
+    assert second_request.prompt == "second"
   end
 
   test "concurrent runs for different scopes proceed in parallel" do
     session_key1 = "test:102"
     session_key2 = "test:103"
 
-    job1 = %Job{
-      session_key: session_key1,
-      prompt: "scope1",
-      resume: nil,
-      engine_id: "slow",
-      meta: %{notify_pid: self(), delay_ms: 100, user_msg_id: 1}
-    }
+    request1 =
+      request(session_key1, "scope1", nil, %{notify_pid: self(), delay_ms: 100, user_msg_id: 1})
 
-    job2 = %Job{
-      session_key: session_key2,
-      prompt: "scope2",
-      resume: nil,
-      engine_id: "slow",
-      meta: %{notify_pid: self(), delay_ms: 100, user_msg_id: 2}
-    }
+    request2 =
+      request(session_key2, "scope2", nil, %{notify_pid: self(), delay_ms: 100, user_msg_id: 2})
 
     t_start = System.monotonic_time(:millisecond)
 
-    Task.async(fn -> submit_job(job1) end)
-    Task.async(fn -> submit_job(job2) end)
+    Task.async(fn -> submit_request(request1) end)
+    Task.async(fn -> submit_request(request2) end)
 
     completions = collect_completions(2, 2_000)
     t_end = System.monotonic_time(:millisecond)
@@ -1103,30 +1038,24 @@ defmodule LemonGateway.EngineLockTest do
   test "lock uses resume token value as key when present" do
     session_key1 = "test:104"
     session_key2 = "test:105"
-    resume = %ResumeToken{engine: "slow", value: "shared-session-123"}
+    resume = %ResumeToken{engine: "lemon", value: "shared-session-123"}
 
-    # Two jobs with different scopes but same resume token should be serialized
-    job1 = %Job{
-      session_key: session_key1,
-      prompt: "resume1",
-      resume: resume,
-      engine_id: "slow",
-      meta: %{notify_pid: self(), delay_ms: 100, user_msg_id: 1}
-    }
+    # Two requests with different scopes but the same resume token should be serialized
+    request1 =
+      request(session_key1, "resume1", resume, %{
+        notify_pid: self(),
+        delay_ms: 100,
+        user_msg_id: 1
+      })
 
-    job2 = %Job{
-      session_key: session_key2,
-      prompt: "resume2",
-      resume: resume,
-      engine_id: "slow",
-      meta: %{notify_pid: self(), delay_ms: 50, user_msg_id: 2}
-    }
+    request2 =
+      request(session_key2, "resume2", resume, %{notify_pid: self(), delay_ms: 50, user_msg_id: 2})
 
     t_start = System.monotonic_time(:millisecond)
 
-    Task.async(fn -> submit_job(job1) end)
+    Task.async(fn -> submit_request(request1) end)
     Process.sleep(10)
-    Task.async(fn -> submit_job(job2) end)
+    Task.async(fn -> submit_request(request2) end)
 
     completions = collect_completions(2, 2_000)
     t_end = System.monotonic_time(:millisecond)
@@ -1140,51 +1069,22 @@ defmodule LemonGateway.EngineLockTest do
   end
 
   test "lock is released when run process crashes" do
-    # Restart app with crash engine included
-    _ = Application.stop(:lemon_gateway)
-
-    Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
-      max_concurrent_runs: 10,
-      default_engine: "echo",
-      enable_telegram: false,
-      require_engine_lock: true,
-      engine_lock_timeout_ms: 60_000
-    })
-
-    Application.put_env(:lemon_gateway, :engines, [
-      Elixir.LemonGateway.Engines.Echo,
-      __MODULE__.SlowEngine,
-      __MODULE__.CrashEngine
-    ])
-
-    {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
     session_key = "test:106"
 
-    crash_job = %Job{
-      session_key: session_key,
-      prompt: "crash",
-      resume: nil,
-      engine_id: "crash",
-      meta: %{notify_pid: self(), user_msg_id: 1}
-    }
+    crash_request =
+      request(session_key, "crash", nil, %{notify_pid: self(), crash_run: true, user_msg_id: 1})
 
-    ok_job = %Job{
-      session_key: session_key,
-      prompt: "ok",
-      resume: nil,
-      engine_id: "echo",
-      meta: %{notify_pid: self(), user_msg_id: 2}
-    }
+    ok_request = request(session_key, "ok", nil, %{notify_pid: self(), user_msg_id: 2})
 
-    # Submit crash job first, then ok job
-    submit_job(crash_job)
+    # Submit the crashing request first, then the successful request.
+    submit_request(crash_request)
     Process.sleep(50)
-    submit_job(ok_job)
+    submit_request(ok_request)
 
-    # The ok_job should complete even after crash_job's process dies
+    # The successful request should complete even after the crashing process dies
     # because EngineLock monitors the process and releases on :DOWN
-    assert_receive {:lemon_gateway_run_completed, ^ok_job, %{__event__: :completed, ok: true}},
+    assert_receive {:lemon_gateway_run_completed, ^ok_request,
+                    %{__event__: :completed, ok: true}},
                    2_000
   end
 
@@ -1193,41 +1093,27 @@ defmodule LemonGateway.EngineLockTest do
 
     Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
       max_concurrent_runs: 10,
-      default_engine: "echo",
       enable_telegram: false,
       require_engine_lock: false
     })
 
-    Application.put_env(:lemon_gateway, :engines, [
-      Elixir.LemonGateway.Engines.Echo,
-      __MODULE__.SlowEngine
-    ])
+    Application.put_env(:lemon_gateway, :executor, EngineLockFixtureExecutor)
 
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
     session_key = "test:107"
 
-    # With locking disabled, two jobs for same scope should run in parallel
-    job1 = %Job{
-      session_key: session_key,
-      prompt: "no-lock-1",
-      resume: nil,
-      engine_id: "slow",
-      meta: %{notify_pid: self(), delay_ms: 100, user_msg_id: 1}
-    }
+    # With locking disabled, two requests for the same scope should run in parallel
+    request1 =
+      request(session_key, "no-lock-1", nil, %{notify_pid: self(), delay_ms: 100, user_msg_id: 1})
 
-    job2 = %Job{
-      session_key: session_key,
-      prompt: "no-lock-2",
-      resume: nil,
-      engine_id: "slow",
-      meta: %{notify_pid: self(), delay_ms: 100, user_msg_id: 2}
-    }
+    request2 =
+      request(session_key, "no-lock-2", nil, %{notify_pid: self(), delay_ms: 100, user_msg_id: 2})
 
     t_start = System.monotonic_time(:millisecond)
 
-    Task.async(fn -> submit_job(job1) end)
-    Task.async(fn -> submit_job(job2) end)
+    Task.async(fn -> submit_request(request1) end)
+    Task.async(fn -> submit_request(request2) end)
 
     completions = collect_completions(2, 2_000)
     t_end = System.monotonic_time(:millisecond)
@@ -1246,29 +1132,34 @@ defmodule LemonGateway.EngineLockTest do
 
   defp collect_completions(count, timeout, acc) do
     receive do
-      {:lemon_gateway_run_completed, job, completed} ->
-        collect_completions(count - 1, timeout, [{job, completed} | acc])
+      {:lemon_gateway_run_completed, request, completed} ->
+        collect_completions(count - 1, timeout, [{request, completed} | acc])
     after
       timeout -> Enum.reverse(acc)
     end
   end
 
-  defp submit_job(%Job{} = job) do
-    job
-    |> command_from_job()
+  defp request(session_key, prompt, resume, meta) do
+    %ExecutionRequest{
+      run_id: "run_#{System.unique_integer([:positive])}",
+      session_key: session_key,
+      prompt: prompt,
+      resume: resume,
+      conversation_key: test_conversation_key(session_key, resume),
+      meta: meta
+    }
+  end
+
+  defp submit_request(%ExecutionRequest{} = request) do
+    request
+    |> ExecutionRequest.to_command()
     |> LemonGateway.submit()
   end
 
-  defp command_from_job(%Job{} = job) do
-    job
-    |> ExecutionRequest.from_job(conversation_key: test_conversation_key(job))
-    |> ExecutionRequest.to_command()
-  end
-
-  defp test_conversation_key(%Job{resume: %LemonCore.ResumeToken{engine: engine, value: value}})
+  defp test_conversation_key(_session_key, %ResumeToken{engine: engine, value: value})
        when is_binary(engine) and is_binary(value),
        do: {:resume, engine, value}
 
-  defp test_conversation_key(%Job{session_key: session_key}) when is_binary(session_key),
+  defp test_conversation_key(session_key, _resume) when is_binary(session_key),
     do: {:session, session_key}
 end

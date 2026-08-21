@@ -7,20 +7,13 @@ defmodule LemonCliRunners.Application do
   name vendors, so each vendor package announces itself at boot instead of
   appearing in a list somewhere in `coding_agent` or in `config/config.exs`.
 
-  Four things are announced per vendor: the subagent runner the `task` tool
+  Three things are announced per vendor: the subagent runner the `task` tool
   may delegate to, the resume syntax that vendor's CLI speaks
-  (`LemonCore.ResumeFormats`), the resolver for that vendor's
-  `[runtime.cli.<engine>]` config section (`LemonCore.Config.CliResolvers`),
-  and the gateway engine shell (`LemonGateway.EngineRegistry`), so neither
-  core nor the gateway has to carry a table of per-vendor regexes, defaults,
-  or engine modules.
+  (`LemonCore.ResumeFormats`), and the resolver for that vendor's
+  `[runtime.cli.<engine>]` config section (`LemonCore.Config.CliResolvers`), so
+  core does not have to carry a table of per-vendor regexes or defaults.
 
-  Engines register through `LemonGateway.EngineRegistry.register_default/1`,
-  which is a no-op when the operator explicitly configured
-  `:lemon_gateway, :engines` — a narrowed engine list is a ceiling, and boot
-  registration must not re-enable an engine the operator disabled.
-
-  Registration order is the order engines appear in the `task` tool's
+  Registration order is the order vendors appear in the `task` tool's
   description, so it is the order a reader should meet them in — and, for
   resume formats, the order text is searched in.
 
@@ -41,21 +34,9 @@ defmodule LemonCliRunners.Application do
     LemonCliRunners.PiSubagent
   ]
 
-  @engines [
-    LemonCliRunners.Engines.Codex,
-    LemonCliRunners.Engines.Claude,
-    LemonCliRunners.Engines.Kimi,
-    LemonCliRunners.Engines.Opencode,
-    LemonCliRunners.Engines.Pi
-  ]
-
   @doc "The subagent runners this package registers at boot."
   @spec subagents() :: [module()]
   def subagents, do: @subagents
-
-  @doc "The gateway engine shells this package registers at boot."
-  @spec engines() :: [module()]
-  def engines, do: @engines
 
   @impl true
   def start(_type, _args) do
@@ -64,7 +45,6 @@ defmodule LemonCliRunners.Application do
         register_subagents()
         register_resume_formats()
         register_cli_resolvers()
-        register_engines()
         ok
 
       other ->
@@ -121,21 +101,5 @@ defmodule LemonCliRunners.Application do
       Logger.error(
         "cli resolver for #{inspect(module)} not registered: " <> Exception.message(error)
       )
-  end
-
-  # register_default/1 respects an operator-configured :lemon_gateway, :engines
-  # list (it answers :ok without registering), and a registry that is not
-  # running answers {:error, :unavailable}; neither may take boot down.
-  defp register_engines do
-    Enum.each(@engines, fn module ->
-      case LemonGateway.EngineRegistry.register_default(module) do
-        :ok ->
-          :ok
-
-        {:error, reason} ->
-          Logger.debug("engine #{inspect(module)} not registered: #{inspect(reason)}")
-          :ok
-      end
-    end)
   end
 end

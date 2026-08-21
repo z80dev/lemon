@@ -118,7 +118,6 @@ defmodule LemonRouter.Router do
         agent_id: agent_id,
         prompt: control_param(params, :prompt),
         queue_mode: control_param(params, :queue_mode),
-        engine_id: control_param(params, :engine_id),
         model: control_param(params, :model),
         cwd: control_param(params, :cwd),
         tool_policy: control_param(params, :tool_policy),
@@ -199,7 +198,6 @@ defmodule LemonRouter.Router do
       agent_id: agent_id,
       prompt: msg.message.text,
       queue_mode: meta[:queue_mode] || meta["queue_mode"],
-      engine_id: meta[:engine_id] || meta["engine_id"],
       resume: normalize_resume_token(meta[:resume] || meta["resume"]),
       meta:
         Map.merge(meta, %{

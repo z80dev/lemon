@@ -23,9 +23,9 @@ Reshape Lemon from a 22-app umbrella (~415k LOC) into a **platform for building 
 | `lemon_memory` | Durable agent memory: document schema, store, provider behaviour + fan-out registry, ingest pipeline, search, task fingerprints | 8 modules from lemon_core (~1.9k LOC) | 4 |
 | `lemon_media` | Media job tracking: redacted job/artifact metadata store, supervised job workers, lifecycle broadcasts, retention cleanup | `apps/lemon_media` (~1.1k LOC, lemon_core only) | 5 (before router/channels, which depend on it — D13) |
 | `lemon_router` | Run lifecycle + session orchestration: single-flight, queue/steer, coalescing, policy, watchdog, delivery routing | `apps/lemon_router`, facade hardened | 5 |
-| `lemon_gateway` | Engine execution runtime only: `Engine` behaviour, engine registry/scheduler/locks, `EngineRuntime` impl | `apps/lemon_gateway` minus transports/sms/voice | 5 |
+| `lemon_gateway` | Native run execution runtime: singleton executor contract, scheduler, lifecycle, and locks | `apps/lemon_gateway` minus transports/sms/voice | 5 |
 | `lemon_channels` | Channel core (Registry, Outbox, Dispatcher, PresentationState) + `Plugin` behaviour + built-in adapters (telegram, discord, whatsapp, xmtp, email, webhook) | `apps/lemon_channels` + gateway's transports | 5 |
-| `lemon_platform_test` | Contract-test kit: behaviour compliance suites for Plugin/Engine/StoreBackend/MemoryProvider authors | new | 6 |
+| `lemon_platform_test` | Contract-test kit: behaviour compliance suites for Plugin/SubagentRunner/StoreBackend/MemoryProvider authors | new | 6 |
 | `lemon_browser` | Browser capability driver + artifact store | `apps/lemon_browser` (818 LOC, lemon_core only) | 7 (D14, approved 2026-08-13) |
 | `lemon_skills` | Skill registry, discovery, installation, assistant-platform tools | `apps/lemon_skills` (minus X tools, gone with D7) | 7, gated on the API-stabilization pass (D14) |
 
@@ -48,7 +48,7 @@ Satellite (separate small repos/packages, the model for all vendor integrations)
 
 ```
 lemon_ai ← lemon_agent ← {router, gateway, channels, skills, products}
-lemon_agent ← lemon_cli_runners ← {gateway, products}
+lemon_agent ← lemon_cli_runners ← products
 lemon_core ← everything
 lemon_memory ← {router (ingest hook), skills, products}
 router ⇄ gateway: ONLY via LemonCore.EngineRuntime behaviour (config-injected)

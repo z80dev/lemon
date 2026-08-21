@@ -4,7 +4,7 @@ Channel adapter application for external messaging platforms (Telegram, Discord,
 
 ## Quick Orientation
 
-LemonChannels sits between external messaging platforms and the Lemon session engine. It has three jobs:
+LemonChannels sits between external messaging platforms and Lemon's native execution pipeline. It has three jobs:
 
 1. **Inbound**: Receive messages from platforms, normalize them locally, and submit only canonical `LemonCore.RunRequest` structs to `LemonRouter` via `LemonCore.RouterBridge.submit_run/1`.
 2. **Semantic outbound rendering**: Accept router-owned `LemonCore.DeliveryIntent` values, render channel-specific UX, and keep platform presentation state inside `lemon_channels`.
@@ -70,8 +70,7 @@ share a group and are never delivered concurrently to prevent reordering.
 | `lib/lemon_channels/model_policy.ex` | `LemonChannels.ModelPolicy` | Channels-owned route-based model and thinking policy resolution for adapters. Persists through `LemonCore.Store` via `ModelPolicyStore` using the unchanged `:model_policies` table. |
 | `lib/lemon_channels/model_policy_store.ex` | `LemonChannels.ModelPolicyStore` | Typed wrapper for persisted route-based model policies. |
 | `lib/lemon_channels/discord/known_target_store.ex` | `LemonChannels.Discord.KnownTargetStore` | Store-backed Discord channel/thread directory used by script-send list mode. |
-| `lib/lemon_channels/binding_resolver.ex` | `LemonChannels.BindingResolver` | Maps ChatScope to project/engine/agent/cwd/queue_mode. Delegates to `LemonCore.BindingResolver`. |
-| `lib/lemon_channels/engine_registry.ex` | `LemonChannels.EngineRegistry` | Temporary parser-only compatibility shim for resume lines when gateway/custom engine modules expose custom syntax. Validation and formatting should use `LemonCore.EngineCatalog` / `LemonCore.ResumeToken`. |
+| `lib/lemon_channels/binding_resolver.ex` | `LemonChannels.BindingResolver` | Maps ChatScope to project/agent/cwd/queue_mode. Delegates to `LemonCore.BindingResolver`; bindings never select the fixed native top-level executor. |
 | `lib/lemon_channels/gateway_config.ex` | `LemonChannels.GatewayConfig` | Channels-local config facade. Prefers `:lemon_gateway` full-replacement runtime config when present, then delegates to `LemonCore.GatewayConfig`. |
 | `lib/lemon_channels/checkpoint_status_message.ex` | `LemonChannels.CheckpointStatusMessage` | Shared redacted `/checkpoint` and `/rollback` formatter/action handler for Telegram and Discord. Calls `LemonCore.Checkpoint` for diff/restore and projects redacted lifecycle event counts, browsable event history, and pushed active-run event notices while keeping chat output free of raw paths, file contents, and session ids. |
 | `lib/lemon_channels/kanban_status_message.ex` | `LemonChannels.KanbanStatusMessage` | Shared redacted `/kanban` command formatter for Telegram and Discord. Uses `LemonAgent.Workspace.KanbanStore` directly for board/task state and calls the automation dispatcher by configured module atom at runtime to keep compile-time boundaries clean. |
@@ -112,11 +111,11 @@ share a group and are never delivered concurrently to prevent reordering.
 | `adapters/telegram/transport/memory_reflection.ex` | Pure helpers for `/new` memory-reflection transcript assembly and prompt generation. |
 | `adapters/telegram/transport/message_buffer.ex` | Debounce buffering for rapid-fire user messages before routing, including timer replacement and merge semantics. |
 | `adapters/telegram/transport/model_picker.ex` | `/model` picker flow, provider/model pagination, and selection-state transitions. |
-| `adapters/telegram/transport/per_chat_state.ex` | Telegram per-thread chat state, resume index, and generation bookkeeping helpers. |
-| `adapters/telegram/transport/resume_selection.ex` | Explicit resume parsing, recent-session lookup, and resume formatting helpers. |
+| `adapters/telegram/transport/per_chat_state.ex` | Telegram per-thread chat state, native resume index, and generation bookkeeping helpers. Historical vendor entries remain readable but are quarantined from top-level selection. |
+| `adapters/telegram/transport/resume_selection.ex` | Native-only explicit resume parsing, recent native-session lookup, and resume formatting helpers. |
 | `adapters/telegram/transport/session_routing.ex` | Session-key derivation, message-id reply routing, and parallel-session bookkeeping. |
 | `adapters/telegram/transport/topic_command.ex` | `/topic` command handling extracted from the transport shell. |
-| `adapters/telegram/transport/update_processor.ex` | Authorization, dedup, routing pipeline, known-target indexing via `LemonChannels.Telegram.KnownTargetStore` with 30s throttle, engine directive parsing. |
+| `adapters/telegram/transport/update_processor.ex` | Authorization, deduplication, routing pipeline, known-target indexing via `LemonChannels.Telegram.KnownTargetStore` with 30s throttle, and native-only resume parsing. |
 | `adapters/telegram/transport/voice_handler.ex` | Voice-download and transcription orchestration before normal inbound routing. |
 | `adapters/telegram/renderer.ex` | Telegram semantic renderer for send-vs-edit behavior, truncation, presentation-state-aware delivery, and file-sensitive final idempotency. Same-text final replays are suppressed unless auto-send file metadata changes. |
 | `adapters/telegram/status_renderer.ex` | Telegram tool-status rendering and controls presentation. |
@@ -135,9 +134,9 @@ share a group and are never delivered concurrently to prevent reordering.
 | `telegram/formatter.ex` | Markdown to plain text + Telegram entities. Avoids MarkdownV2 escaping entirely. |
 | `telegram/known_target_store.ex` | Typed wrapper for Telegram known-target chat/topic metadata. |
 | `telegram/markdown.ex` | EarmarkParser AST renderer. Produces `{text, [entity]}` with correct UTF-16 offsets and renders markdown tables as pipe-delimited rows. |
-| `telegram/resume_index_store.ex` | Typed wrapper for Telegram message-id resume/session index tables. |
+| `telegram/resume_index_store.ex` | Typed wrapper for Telegram message-id session and resume index tables; legacy vendor values remain readable but cannot resume a top-level run. |
 | `telegram/state_store.ex` | Typed wrapper for Telegram session/topic preference and generation state. |
-| `telegram/truncate.ex` | Truncates to 4096 chars preserving resume lines at the end. |
+| `telegram/truncate.ex` | Truncates to 4096 chars while preserving native resume lines. |
 | `telegram/trigger_mode.ex` | Per-chat/topic `:all` vs `:mentions` trigger mode stored in ETS. |
 | `telegram/offset_store.ex` | Persists getUpdates offset via `LemonCore.Store`. |
 | `telegram/poller_lock.ex` | Global + file-based lock preventing duplicate pollers for the same account/token. |
@@ -249,7 +248,7 @@ Defined in `LemonChannels.Capabilities`:
 
 - Plain text + entities: `telegram/formatter.ex` -- converts markdown to `{text, opts}` where opts may contain `%{entities: [...]}`
 - Markdown AST rendering: `telegram/markdown.ex` -- EarmarkParser-based, produces UTF-16 offset entities and preserves markdown table column boundaries
-- Truncation: `telegram/truncate.ex` -- preserves resume lines at end
+- Truncation: `telegram/truncate.ex` -- preserves native resume lines at the end
 
 ### Ownership boundary to preserve
 
@@ -275,11 +274,11 @@ Defined in `LemonChannels.Capabilities`:
 2. Create or update the handler module (e.g., `XAPI.GatewayMethods`)
 3. Methods have a name, scope list (e.g., `[:agent]`), and handler module
 
-### Changing binding/engine resolution
+### Changing bindings and native resume handling
 
-- `binding_resolver.ex` delegates to `LemonCore.BindingResolver` -- most logic lives in `lemon_core`
-- `engine_registry.ex` for adding/removing known engines or changing resume token format
-- Resolution priority: resume token > engine hint > binding default > project default > global default
+- `binding_resolver.ex` delegates project, agent, cwd, and queue-mode lookup to `LemonCore.BindingResolver`; it does not resolve an executor.
+- Channel resume parsing is native-only. Historical vendor tokens stay readable in persisted state and indexes but are quarantined from automatic and explicit top-level resume selection.
+- Vendor CLIs remain delegated task subagents in `lemon_cli_runners`; their runner identity and resume metadata never select a channel or gateway top-level run.
 
 ### Modifying the `/model` picker (Telegram)
 
@@ -365,7 +364,7 @@ Outbox.stats()
 | Command | Description |
 |---------|-------------|
 | `/new` | Start new session (immediate ack, async cleanup, generation increment) |
-| `/resume` | Resume previous session |
+| `/resume` | Resume a previous native session; historical vendor entries remain visible for history but cannot be resumed |
 | `/model` | Interactive provider/model picker via reply keyboard |
 | `/goal` | Preview durable goal status/set with optional max-continuation budget/pause/resume/continue/loop controls, opt-in auto loop scheduling, and clear for the current session |
 | `/kanban` | Preview durable kanban board/task/archive/dispatcher controls with redacted board/task output |
@@ -380,9 +379,9 @@ Outbox.stats()
 
 ### Generation-Scoped Indexing
 
-Session/resume indices use generation-scoped keys:
+Session/native-resume indices use generation-scoped keys:
 - `:telegram_msg_session` keys: `{account_id, chat_id, thread_id, generation, msg_id}`
-- `:telegram_msg_resume` keys: `{account_id, chat_id, thread_id, generation, msg_id}`
+- `:telegram_msg_resume` keys: `{account_id, chat_id, thread_id, generation, msg_id}`; vendor values remain readable but are quarantined from top-level selection
 
 `/new` increments `:telegram_thread_generation` for `{account_id, chat_id, thread_id}` to invalidate stale mappings without full-table scans.
 
@@ -519,25 +518,16 @@ its variables here — never editing `LemonCore.Config.Gateway`.
 scope = %LemonCore.ChatScope{transport: :telegram, chat_id: 123, topic_id: 456}
 
 binding = LemonChannels.BindingResolver.resolve_binding(scope)
-engine  = LemonChannels.BindingResolver.resolve_engine(scope, engine_hint, resume)
 agent   = LemonChannels.BindingResolver.resolve_agent_id(scope)
 cwd     = LemonChannels.BindingResolver.resolve_cwd(scope)
 mode    = LemonChannels.BindingResolver.resolve_queue_mode(scope)
 ```
 
-Bindings from `GatewayConfig.get(:bindings)`. Projects from `GatewayConfig.get(:projects)`.
+Bindings from `GatewayConfig.get(:bindings)` retain project, agent, cwd, and queue-mode scope. They never select a top-level executor: channels always submit to the native executor. Projects come from `GatewayConfig.get(:projects)`.
 
-## Engine Registry
+## Native Resume Handling
 
-```elixir
-LemonCore.EngineCatalog.known?("claude")  # true
-LemonCore.EngineCatalog.normalize(" Claude ") # "claude"
-
-{:ok, %ResumeToken{engine: "claude", value: "abc123"}} =
-  LemonChannels.EngineRegistry.extract_resume("claude --resume abc123")
-```
-
-Default engines: `lemon echo codex claude opencode pi kimi`. Override via `config :lemon_core, :known_engines`.
+Top-level channel resume parsing and selection accept only native `lemon` tokens. Historical vendor tokens in chat state or message indexes remain readable for history and rollback, but are quarantined from explicit and automatic top-level selection. Vendor CLIs remain `lemon_cli_runners` task subagents, where their runner identity and resume metadata are retained without becoming a channel selector.
 
 ## Runtime Bridge
 
@@ -595,7 +585,6 @@ In test mode (`config_test_mode`), a full-replacement app env layer is supported
 
 ```elixir
 LemonChannels.GatewayConfig.get(:bindings, [])
-LemonChannels.GatewayConfig.get(:default_engine)
 LemonChannels.GatewayConfig.get(:projects, %{})
 ```
 
@@ -691,8 +680,8 @@ end
 |-----|-------------|
 | `lemon_core` | Shared types (`InboundMessage`, `ChatScope`, `Binding`), `Store`, `Secrets`, `RouterBridge`, `Dedupe.Ets`, `Telemetry`, `GatewayConfig`, `BindingResolver` |
 | `lemon_router` | Inbound messages are routed via `LemonCore.RouterBridge`. `LemonChannels.Runtime` bridges cancel/busy operations at runtime (no compile dep). |
-| `agent_core` | Provides CLI runner infrastructure used indirectly by engines; channels never hand it `OutboundPayload` structs directly. |
-| `coding_agent` | Session engine that interacts through the router; channels deliver its output. |
+| `agent_core` | Provides task infrastructure used by delegated vendor CLI subagents; channels never hand it `OutboundPayload` structs directly. |
+| `coding_agent` | Provides the native top-level executor through the router; channels deliver its output. |
 | `lemon_control_plane` | Gateway methods from adapters (e.g., `x_api.post_tweet`) are exposed through the control plane. |
 
 ## Dependencies

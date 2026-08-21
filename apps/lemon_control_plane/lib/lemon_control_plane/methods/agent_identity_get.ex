@@ -48,7 +48,6 @@ defmodule LemonControlPlane.Methods.AgentIdentityGet do
     %{
       "agentId" => identity["agentId"],
       "name" => identity["name"],
-      "defaultEngine" => identity["defaultEngine"],
       "hasDescription" => is_binary(identity["description"]) and identity["description"] != "",
       "hasAvatar" => is_binary(identity["avatar"]) and identity["avatar"] != "",
       "capabilityCount" => map_size(capabilities),
@@ -70,7 +69,6 @@ defmodule LemonControlPlane.Methods.AgentIdentityGet do
       "name" => agent_id,
       "description" => nil,
       "avatar" => nil,
-      "defaultEngine" => "lemon",
       "capabilities" => %{
         "streaming" => true,
         "tools" => true,
@@ -86,7 +84,6 @@ defmodule LemonControlPlane.Methods.AgentIdentityGet do
       "name" => profile[:name] || profile[:id],
       "description" => profile[:description],
       "avatar" => profile[:avatar],
-      "defaultEngine" => profile[:default_engine] || "lemon",
       "capabilities" => %{
         "streaming" => profile[:streaming] != false,
         "tools" => profile[:tools] != false,
@@ -102,7 +99,6 @@ defmodule LemonControlPlane.Methods.AgentIdentityGet do
       "name" => agent[:name] || agent["name"] || agent[:id],
       "description" => agent[:description] || agent["description"],
       "avatar" => agent[:avatar] || agent["avatar"],
-      "defaultEngine" => agent[:default_engine] || agent["defaultEngine"] || "lemon",
       "capabilities" => agent[:capabilities] || agent["capabilities"] || %{}
     }
   end

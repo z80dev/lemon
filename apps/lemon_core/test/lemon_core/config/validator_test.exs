@@ -164,6 +164,115 @@ defmodule LemonCore.Config.ValidatorTest do
     end
   end
 
+  describe "validate_deprecated_sections/1" do
+    test "rejects removed engine routing settings at every configuration level" do
+      settings = %{
+        "engine" => "codex",
+        "defaults" => %{"engine" => "codex"},
+        "runtime" => %{"default_engine" => "claude"},
+        "gateway" => %{
+          "default_engine" => "codex",
+          "engines" => %{"custom" => %{"command" => "custom-cli"}},
+          "projects" => %{"workspace" => %{"default_engine" => "claude"}},
+          "bindings" => [%{"default_engine" => "opencode"}],
+          "webhook" => %{"engine" => "pi"},
+          "require_engine_lock" => true,
+          "engine_lock_timeout_ms" => 30_000
+        },
+        "profiles" => %{
+          "default" => %{"engine" => "claude"},
+          "reviewer" => %{"default_engine" => "codex"}
+        },
+        "custom_engine" => %{"command" => "lemon"},
+        "custom_engines" => %{"local" => %{"command" => "lemon"}},
+        "preferred_engine" => "claude",
+        "engine_preference" => "claude",
+        "preferred_engines" => ["claude", "codex"],
+        "preferred-engine" => "claude",
+        "preferred-engines" => ["claude", "codex"],
+        "preferredEngine" => "claude",
+        "preferredEngines" => ["claude", "codex"],
+        "known_engine" => "claude",
+        "known_engines" => ["claude", "codex"],
+        "engine_registry" => %{"custom" => "Custom.Engine"},
+        "engine_module" => "Custom.Engine",
+        "engine_modules" => ["Custom.Engine"],
+        "gateway_engines" => ["lemon"]
+      }
+
+      assert {:error, errors} = Validator.validate_deprecated_sections(settings)
+
+      for path <- [
+            "defaults.engine",
+            "engine",
+            "runtime.default_engine",
+            "gateway.default_engine",
+            "gateway.engines",
+            "gateway.projects.workspace.default_engine",
+            "gateway.bindings[0].default_engine",
+            "gateway.webhook.engine",
+            "profiles.default.engine",
+            "profiles.reviewer.default_engine",
+            "custom_engine",
+            "custom_engines",
+            "engine_preference",
+            "preferred_engine",
+            "preferred_engines",
+            "preferred-engine",
+            "preferred-engines",
+            "preferredEngine",
+            "preferredEngines",
+            "known_engine",
+            "known_engines",
+            "engine_registry",
+            "engine_module",
+            "engine_modules",
+            "gateway_engines"
+          ] do
+        assert Enum.any?(errors, &String.contains?(&1, path))
+      end
+
+      assert Enum.all?(errors, &String.contains?(&1, "Lemon runs natively"))
+      assert Enum.all?(errors, &String.contains?(&1, "[runtime.cli.<vendor>]"))
+      refute Enum.any?(errors, &String.contains?(&1, "engine_lock"))
+    end
+
+    test "allows all vendor task CLI settings under runtime.cli" do
+      settings = %{
+        "runtime" => %{
+          "cli" => %{
+            "codex" => %{
+              "engine" => "vendor-internal",
+              "default_engine" => "vendor-default",
+              "engines" => %{"nested" => %{"command" => "codex"}},
+              "custom_engine" => %{"command" => "codex --custom"},
+              "custom_engines" => %{"local" => %{"command" => "codex"}},
+              "preferred_engine" => "vendor-preferred",
+              "engine_preference" => "vendor-preferred",
+              "preferred_engines" => ["vendor-preferred"],
+              "preferred-engine" => "vendor-preferred",
+              "preferred-engines" => ["vendor-preferred"],
+              "preferredEngine" => "vendor-preferred",
+              "preferredEngines" => ["vendor-preferred"],
+              "known_engine" => "vendor-known",
+              "known_engines" => ["vendor-known"],
+              "engine_registry" => %{"vendor" => "Vendor.Engine"},
+              "engine_module" => "Vendor.Engine",
+              "engine_modules" => ["Vendor.Engine"],
+              "gateway_engines" => ["vendor"]
+            }
+          }
+        },
+        "gateway" => %{
+          "require_engine_lock" => true,
+          "engine_lock_timeout_ms" => 30_000
+        }
+      }
+
+      assert :ok = Validator.validate_deprecated_sections(settings)
+    end
+  end
+
   describe "validate_agent/2" do
     test "validates default_model" do
       errors = Validator.validate_agent(%{default_model: ""}, [])

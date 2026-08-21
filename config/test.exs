@@ -106,7 +106,6 @@ config :lemon_automation, :synthesis_runner, enabled: false
 config :lemon_gateway, LemonGateway.Config,
   enable_telegram: false,
   max_concurrent_runs: 1,
-  default_engine: "lemon",
   bindings: [],
   projects: %{}
 
@@ -120,21 +119,11 @@ config :lemon_core, :test_credential_env_vars, ~w(
   XMTP_WALLET_KEY
 )
 
-# Pin the engine set for tests. Setting the key also marks it as
-# operator-configured, so boot auto-registration (LemonCliRunners.Application's
-# vendor engines, CodingAgent.Application's lemon engine) is a no-op and suites
-# see the same list whether or not those applications are started. The modules
-# resolve from the umbrella code path even in test runs that never start their
-# application.
-config :lemon_gateway, :engines, [
-  LemonGateway.Engines.Echo,
-  CodingAgent.GatewayEngine,
-  LemonCliRunners.Engines.Codex,
-  LemonCliRunners.Engines.Claude,
-  LemonCliRunners.Engines.Opencode,
-  LemonCliRunners.Engines.Pi,
-  LemonCliRunners.Engines.Kimi
-]
+# Keep executor validation deterministic without introducing a test-only
+# operator-selectable implementation. CodingAgent.Executor is loaded from the
+# umbrella code path and is structurally valid even when coding_agent is not
+# started by a particular suite.
+config :lemon_gateway, :executor, CodingAgent.Executor
 
 config :lemon_gateway, :telegram, nil
 

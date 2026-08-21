@@ -1,4 +1,4 @@
-defmodule CodingAgent.GatewayEngineTest do
+defmodule CodingAgent.ExecutorTest do
   use ExUnit.Case
 
   alias LemonAi.Types.{
@@ -12,107 +12,30 @@ defmodule CodingAgent.GatewayEngineTest do
     Usage
   }
 
-  alias CodingAgent.GatewayEngine, as: Lemon
-  alias LemonGateway.Types.Job
+  alias CodingAgent.Executor
+  alias CodingAgent.Executor.SessionRunner, as: ExecutorSessionRunner
   alias LemonCore.ResumeToken
-
-  describe "id/0" do
-    test "returns lemon" do
-      assert Lemon.id() == "lemon"
-    end
-  end
-
-  describe "format_resume/1" do
-    test "formats resume token" do
-      token = %ResumeToken{engine: "lemon", value: "session_abc123"}
-      assert Lemon.format_resume(token) == "lemon resume session_abc123"
-    end
-  end
-
-  describe "extract_resume/1" do
-    test "extracts token from plain text" do
-      text = "lemon resume abc123"
-      assert %ResumeToken{engine: "lemon", value: "abc123"} = Lemon.extract_resume(text)
-    end
-
-    test "extracts token from backticks" do
-      text = "`lemon resume session_xyz`"
-      assert %ResumeToken{engine: "lemon", value: "session_xyz"} = Lemon.extract_resume(text)
-    end
-
-    test "extracts token case-insensitively" do
-      text = "LEMON RESUME MySession123"
-      assert %ResumeToken{engine: "lemon", value: "MySession123"} = Lemon.extract_resume(text)
-    end
-
-    test "returns nil for non-matching text" do
-      assert Lemon.extract_resume("no resume here") == nil
-    end
-
-    test "returns nil for other engine tokens" do
-      assert Lemon.extract_resume("codex resume abc") == nil
-      assert Lemon.extract_resume("claude --resume xyz") == nil
-    end
-  end
-
-  describe "is_resume_line/1" do
-    test "returns true for exact resume line" do
-      assert Lemon.is_resume_line("lemon resume abc123")
-    end
-
-    test "returns true for backtick-wrapped line" do
-      assert Lemon.is_resume_line("`lemon resume abc123`")
-    end
-
-    test "returns true for line with whitespace" do
-      assert Lemon.is_resume_line("  lemon resume abc123  ")
-    end
-
-    test "returns false for line with extra text" do
-      refute Lemon.is_resume_line("Please run lemon resume abc123")
-    end
-
-    test "returns false for other engines" do
-      refute Lemon.is_resume_line("codex resume abc123")
-    end
-  end
-
-  describe "supports_steer?/0" do
-    test "returns true" do
-      assert Lemon.supports_steer?() == true
-    end
-  end
-
-  describe "steer/2" do
-    test "returns error for nil runner" do
-      ctx = %{runner_pid: nil}
-      assert Lemon.steer(ctx, "test") == {:error, :no_runner}
-    end
-
-    test "returns error for missing runner_pid" do
-      ctx = %{}
-      assert Lemon.steer(ctx, "test") == {:error, :no_runner}
-    end
-  end
+  alias LemonGateway.ExecutionRequest
 
   describe "start_run/3 direct session runner" do
     @tag :tmp_dir
     test "emits started, delta, tool action, and completed events", %{tmp_dir: tmp_dir} do
       tool_response =
         assistant_message_with_tool_calls([
-          tool_call("bash", %{"command" => "printf gateway-tool"}, id: "call_gateway")
+          tool_call("bash", %{"command" => "printf executor-tool"}, id: "call_executor")
         ])
 
-      final_response = assistant_message("gateway done")
+      final_response = assistant_message("executor done")
 
-      job =
-        job(tmp_dir,
-          prompt: "run the gateway tool",
+      request =
+        request(tmp_dir,
+          prompt: "run the native executor tool",
           run_id: "run-native-lemon",
           stream_fn: mock_stream_fn([tool_response, final_response])
         )
 
-      {:ok, run_ref, ctx} = Lemon.start_run(job, %{stream_fn: job.meta[:stream_fn]}, self())
+      {:ok, run_ref, ctx} =
+        Executor.start_run(request, %{stream_fn: request.meta[:stream_fn]}, self())
 
       assert is_pid(ctx.runner_pid)
 
@@ -129,17 +52,17 @@ defmodule CodingAgent.GatewayEngineTest do
 
       assert is_binary(session_id) and session_id != ""
 
-      assert Enum.any?(messages, &match?({:engine_delta, ^run_ref, "gateway done"}, &1))
+      assert Enum.any?(messages, &match?({:engine_delta, ^run_ref, "executor done"}, &1))
 
       assert {:engine_event, ^run_ref,
               %{
                 __event__: :action_event,
                 phase: :started,
                 action: %{
-                  id: "tool_call_gateway",
+                  id: "tool_call_executor",
                   kind: "command",
-                  title: "`printf gateway-tool`",
-                  detail: %{name: "bash", args: %{"command" => "printf gateway-tool"}}
+                  title: "`printf executor-tool`",
+                  detail: %{name: "bash", args: %{"command" => "printf executor-tool"}}
                 }
               }} =
                Enum.find(
@@ -155,7 +78,7 @@ defmodule CodingAgent.GatewayEngineTest do
                 __event__: :action_event,
                 phase: :completed,
                 ok: true,
-                action: %{id: "tool_call_gateway", kind: "command"}
+                action: %{id: "tool_call_executor", kind: "command"}
               }} =
                Enum.find(
                  messages,
@@ -170,35 +93,35 @@ defmodule CodingAgent.GatewayEngineTest do
                 __event__: :completed,
                 engine: "lemon",
                 ok: true,
-                answer: "gateway done",
+                answer: "executor done",
                 resume: %ResumeToken{engine: "lemon", value: ^session_id}
               }} = List.last(messages)
     end
 
     @tag :tmp_dir
     test "emits approval action events while a gated tool waits", %{tmp_dir: tmp_dir} do
-      command = "printf approval-gateway-#{System.unique_integer([:positive])}"
+      command = "printf approval-executor-#{System.unique_integer([:positive])}"
 
       tool_response =
         assistant_message_with_tool_calls([
-          tool_call("bash", %{"command" => command}, id: "call_gateway_approval")
+          tool_call("bash", %{"command" => command}, id: "call_executor_approval")
         ])
 
       final_response = assistant_message("approval timeout handled")
 
-      job =
-        job(tmp_dir,
-          prompt: "run the gated gateway tool",
+      request =
+        request(tmp_dir,
+          prompt: "run the gated native executor tool",
           run_id: "run-native-approval",
           stream_fn: mock_stream_fn([tool_response, final_response])
         )
 
-      job = %{job | tool_policy: %{approvals: %{"bash" => "always"}}}
+      request = %{request | tool_policy: %{approvals: %{"bash" => "always"}}}
 
       {:ok, run_ref, _ctx} =
-        Lemon.start_run(
-          job,
-          %{stream_fn: job.meta[:stream_fn], approval_timeout_ms: 20},
+        Executor.start_run(
+          request,
+          %{stream_fn: request.meta[:stream_fn], approval_timeout_ms: 20},
           self()
         )
 
@@ -254,14 +177,15 @@ defmodule CodingAgent.GatewayEngineTest do
           %TextContent{type: :text, text: "answer only"}
         ])
 
-      job =
-        job(tmp_dir,
+      request =
+        request(tmp_dir,
           prompt: "think then answer",
           run_id: "run-native-reasoning",
           stream_fn: mock_stream_fn([response])
         )
 
-      {:ok, run_ref, _ctx} = Lemon.start_run(job, %{stream_fn: job.meta[:stream_fn]}, self())
+      {:ok, run_ref, _ctx} =
+        Executor.start_run(request, %{stream_fn: request.meta[:stream_fn]}, self())
 
       messages = collect_until_completed(run_ref)
 
@@ -334,14 +258,15 @@ defmodule CodingAgent.GatewayEngineTest do
           %TextContent{type: :text, text: "done"}
         ])
 
-      job =
-        job(tmp_dir,
+      request =
+        request(tmp_dir,
           prompt: "think then answer",
           run_id: "run-native-reasoning-update",
           stream_fn: mock_stream_fn([response])
         )
 
-      {:ok, run_ref, _ctx} = Lemon.start_run(job, %{stream_fn: job.meta[:stream_fn]}, self())
+      {:ok, run_ref, _ctx} =
+        Executor.start_run(request, %{stream_fn: request.meta[:stream_fn]}, self())
 
       messages = collect_until_completed(run_ref)
 
@@ -371,14 +296,15 @@ defmodule CodingAgent.GatewayEngineTest do
           tool_call("missing_tool_for_cancel_usage", %{}, id: "call_cancel_usage")
         ])
 
-      job =
-        job(tmp_dir,
+      request =
+        request(tmp_dir,
           prompt: "start then cancel",
           run_id: "run-native-cancel-usage",
           stream_fn: mock_stream_fn([tool_response, :slow])
         )
 
-      {:ok, run_ref, ctx} = Lemon.start_run(job, %{stream_fn: job.meta[:stream_fn]}, self())
+      {:ok, run_ref, ctx} =
+        Executor.start_run(request, %{stream_fn: request.meta[:stream_fn]}, self())
 
       assert_receive {:engine_event, ^run_ref, %{__event__: :started}}, 2_000
 
@@ -390,7 +316,7 @@ defmodule CodingAgent.GatewayEngineTest do
                       }},
                      2_000
 
-      assert Lemon.cancel(ctx) == :ok
+      assert Executor.cancel(ctx) == :ok
 
       assert_receive {:engine_event, ^run_ref,
                       %{
@@ -407,19 +333,20 @@ defmodule CodingAgent.GatewayEngineTest do
     end
 
     @tag :tmp_dir
-    test "supports steer and cancel on direct session runner", %{tmp_dir: tmp_dir} do
-      job =
-        job(tmp_dir,
+    test "supports steer and still cancels on direct session runner", %{tmp_dir: tmp_dir} do
+      request =
+        request(tmp_dir,
           prompt: "wait",
           run_id: "run-native-cancel",
           stream_fn: slow_stream_fn()
         )
 
-      {:ok, run_ref, ctx} = Lemon.start_run(job, %{stream_fn: job.meta[:stream_fn]}, self())
+      {:ok, run_ref, ctx} =
+        Executor.start_run(request, %{stream_fn: request.meta[:stream_fn]}, self())
 
       assert_receive {:engine_event, ^run_ref, %{__event__: :started}}, 2_000
-      assert Lemon.steer(ctx, "change course") == :ok
-      assert Lemon.cancel(ctx) == :ok
+      assert Executor.steer(ctx, "change course") == :ok
+      assert Executor.cancel(ctx) == :ok
 
       assert_receive {:engine_event, ^run_ref,
                       %{
@@ -429,16 +356,102 @@ defmodule CodingAgent.GatewayEngineTest do
                       }},
                      2_000
     end
+
+    test "cancel is total and idempotent for stale control contexts" do
+      assert Executor.cancel(nil) == :ok
+      assert Executor.cancel(%{}) == :ok
+      assert Executor.cancel(%{runner_pid: nil}) == :ok
+    end
   end
 
-  defp job(tmp_dir, opts) do
-    %Job{
+  describe "executor session runner resume source" do
+    @tag :tmp_dir
+    test "falls back to a fresh session for a stale string-key auto resume source", %{
+      tmp_dir: tmp_dir
+    } do
+      stale_session_id = "missing-auto-#{System.unique_integer([:positive])}"
+
+      request =
+        request(tmp_dir,
+          prompt: "start fresh",
+          run_id: "run-native-auto-resume",
+          resume: ResumeToken.new("lemon", stale_session_id),
+          meta: %{"resume_source" => :auto},
+          stream_fn: mock_stream_fn([assistant_message("fresh after stale auto resume")])
+        )
+
+      run_ref = make_ref()
+
+      {:ok, _runner} =
+        ExecutorSessionRunner.start_link(
+          request: request,
+          opts: %{stream_fn: request.meta[:stream_fn]},
+          sink_pid: self(),
+          run_ref: run_ref
+        )
+
+      messages = collect_until_completed(run_ref)
+
+      assert {:engine_event, ^run_ref,
+              %{
+                __event__: :started,
+                resume: %ResumeToken{engine: "lemon", value: resumed_session_id}
+              }} =
+               Enum.find(messages, &match?({:engine_event, ^run_ref, %{__event__: :started}}, &1))
+
+      refute resumed_session_id == stale_session_id
+
+      assert {:engine_event, ^run_ref,
+              %{__event__: :completed, ok: true, answer: "fresh after stale auto resume"}} =
+               List.last(messages)
+    end
+
+    @tag :tmp_dir
+    test "rejects a stale atom-key explicit resume source", %{tmp_dir: tmp_dir} do
+      stale_session_id = "missing-explicit-#{System.unique_integer([:positive])}"
+
+      request =
+        request(tmp_dir,
+          prompt: "resume explicitly",
+          run_id: "run-native-explicit-resume",
+          resume: ResumeToken.new("lemon", stale_session_id),
+          meta: %{resume_source: :explicit},
+          stream_fn: mock_stream_fn([assistant_message("should not run")])
+        )
+
+      previous_trap_exit = Process.flag(:trap_exit, true)
+
+      try do
+        assert {:error, {:resume_session_missing, ^stale_session_id}} =
+                 ExecutorSessionRunner.start_link(
+                   request: request,
+                   opts: %{stream_fn: request.meta[:stream_fn]},
+                   sink_pid: self(),
+                   run_ref: make_ref()
+                 )
+
+        receive do
+          {:EXIT, _pid, {:resume_session_missing, ^stale_session_id}} -> :ok
+        after
+          50 -> :ok
+        end
+      after
+        Process.flag(:trap_exit, previous_trap_exit)
+      end
+    end
+  end
+
+  defp request(tmp_dir, opts) do
+    %ExecutionRequest{
       run_id: Keyword.fetch!(opts, :run_id),
       session_key: "test:lemon:#{System.unique_integer([:positive])}",
       prompt: Keyword.fetch!(opts, :prompt),
-      engine_id: "lemon",
+      images: [],
       cwd: tmp_dir,
-      meta: %{model: mock_model(), stream_fn: Keyword.fetch!(opts, :stream_fn)}
+      resume: Keyword.get(opts, :resume),
+      meta:
+        %{model: mock_model(), stream_fn: Keyword.fetch!(opts, :stream_fn)}
+        |> Map.merge(Keyword.get(opts, :meta, %{}))
     }
   end
 

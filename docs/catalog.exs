@@ -444,6 +444,12 @@
     max_age_days: 60
   },
   %{
+    path: "docs/plans/2026-08-19-single-native-executor-plan.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-08-20],
+    max_age_days: 60
+  },
+  %{
     path: "docs/plans/lemon-1.0-mainstream-readiness.md",
     owner: "@z80",
     last_reviewed: ~D[2026-08-09],

@@ -34,47 +34,43 @@ defmodule LemonControlPlane.SessionModel do
   def override(_), do: nil
 
   @doc """
-  The whole session policy, normalized: model, thinking level, preferred engine.
+  The whole session policy, normalized: model and thinking level.
 
   Values are returned exactly as stored (no resolution, no defaults), so a caller can tell
   "the user pinned this" apart from "this is what it would run".
   """
   @spec overrides(String.t() | nil) :: %{
           model: String.t() | nil,
-          thinking_level: String.t() | nil,
-          preferred_engine: String.t() | nil
+          thinking_level: String.t() | nil
         }
   def overrides(session_key) do
     policy = session_policy(session_key)
 
     %{
       model: policy |> get_field(:model) |> normalize_string(),
-      thinking_level: policy |> get_field(:thinking_level) |> normalize_string(),
-      preferred_engine: policy |> get_field(:preferred_engine) |> normalize_string()
+      thinking_level: policy |> get_field(:thinking_level) |> normalize_string()
     }
   end
 
   @doc """
   Resolve the model a session's next run would use, string-keyed for a JSON payload.
 
-  Returns `model`, `provider`, `contextWindow`, `maxOutput`, `thinkingLevel`, `preferredEngine`
-  and `modelSource` (`"session"` | `"profile"` | `"default"` | nil) — the last one so a client
-  can tell a pinned model from an inherited one. Every key may be nil; nothing here raises.
+  Returns `model`, `provider`, `contextWindow`, `maxOutput`, `thinkingLevel`, `engine`
+  (always `"lemon"`) and `modelSource` (`"session"` | `"profile"` | `"default"` | nil) — the
+  last one so a client can tell a pinned model from an inherited one. Every key may be nil;
+  nothing here raises.
   """
   @spec resolve(String.t() | nil, String.t() | nil) :: t()
   def resolve(session_key, agent_id \\ nil) do
     overrides = overrides(session_key)
     profile_model = profile_field(agent_id, :model)
-    profile_engine = profile_field(agent_id, :default_engine)
     default_model = default_model()
 
     selection =
       ModelSelection.resolve(%{
         session_model: overrides.model,
         profile_model: profile_model,
-        default_model: default_model,
-        explicit_engine_id: overrides.preferred_engine,
-        profile_default_engine: profile_engine
+        default_model: default_model
       })
 
     described = describe(selection.model)
@@ -82,8 +78,7 @@ defmodule LemonControlPlane.SessionModel do
     Map.merge(described, %{
       "modelSource" => model_source(overrides.model, profile_model, default_model),
       "thinkingLevel" => overrides.thinking_level,
-      "preferredEngine" => overrides.preferred_engine,
-      "engine" => selection.engine_id
+      "engine" => "lemon"
     })
   end
 
@@ -226,8 +221,9 @@ defmodule LemonControlPlane.SessionModel do
     end
   end
 
-  defp normalize_string(value) when is_atom(value) and not is_nil(value) and not is_boolean(value),
-    do: Atom.to_string(value)
+  defp normalize_string(value)
+       when is_atom(value) and not is_nil(value) and not is_boolean(value),
+       do: Atom.to_string(value)
 
   defp normalize_string(_), do: nil
 

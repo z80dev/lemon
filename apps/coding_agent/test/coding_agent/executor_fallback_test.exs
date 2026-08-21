@@ -1,17 +1,17 @@
-defmodule CodingAgent.GatewayEngineFallbackTest do
+defmodule CodingAgent.ExecutorFallbackTest do
   use ExUnit.Case
 
+  alias CodingAgent.Executor
   alias LemonAi.Types.{AssistantMessage, TextContent, Usage}
-  alias CodingAgent.GatewayEngine, as: Lemon
-  alias LemonGateway.Types.Job
+  alias LemonGateway.ExecutionRequest
 
   @moduletag :tmp_dir
 
-  # Runs through the gateway engine path (SessionRunner -> Session -> Lifecycle)
-  # with an explicit model in job.meta and provider routing configured via the
-  # project config. The stream must fall back to the routed provider when the
+  # Runs through the native executor path (SessionRunner -> Session -> Lifecycle)
+  # with an explicit model in request metadata and provider routing configured via
+  # the project config. The stream must fall back to the routed provider when the
   # primary errors before emitting content.
-  test "gateway engine sessions with an explicit model fall back to routed providers", %{
+  test "native executor sessions with an explicit model fall back to routed providers", %{
     tmp_dir: tmp_dir
   } do
     write_project_config(tmp_dir)
@@ -28,16 +28,16 @@ defmodule CodingAgent.GatewayEngineFallbackTest do
       end
     end
 
-    job = %Job{
+    request = %ExecutionRequest{
       run_id: "run_fallback_#{System.unique_integer([:positive])}",
       session_key: "test:lemon:#{System.unique_integer([:positive])}",
       prompt: "hello",
-      engine_id: "lemon",
+      images: [],
       cwd: tmp_dir,
       meta: %{model: primary, stream_fn: stream_fn}
     }
 
-    {:ok, run_ref, _ctx} = Lemon.start_run(job, %{stream_fn: stream_fn}, self())
+    {:ok, run_ref, _ctx} = Executor.start_run(request, %{stream_fn: stream_fn}, self())
 
     assert_receive {:attempt, :openai}, 5_000
     assert_receive {:attempt, :azure_openai_responses}, 5_000

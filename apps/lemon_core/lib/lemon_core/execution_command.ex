@@ -3,16 +3,15 @@ defmodule LemonCore.ExecutionCommand do
   Queue-semantic-free execution command shared across router/runtime boundaries.
 
   Router-owned callers build this core contract after resolving conversation,
-  engine, model, cwd, resume, and metadata. Runtime implementations translate it
-  into their private execution shape before scheduling work.
+  model, cwd, resume, and metadata. Runtime implementations translate it into
+  their private execution shape before scheduling work.
   """
 
-  @enforce_keys [:run_id, :session_key, :prompt, :engine_id]
+  @enforce_keys [:run_id, :session_key, :prompt]
   defstruct [
     :run_id,
     :session_key,
     :prompt,
-    :engine_id,
     :images,
     :cwd,
     :resume,
@@ -28,7 +27,6 @@ defmodule LemonCore.ExecutionCommand do
           run_id: String.t() | nil,
           session_key: String.t() | nil,
           prompt: String.t() | nil,
-          engine_id: String.t() | nil,
           images: [map()],
           cwd: String.t() | nil,
           resume: LemonCore.ResumeToken.t() | nil,

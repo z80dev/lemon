@@ -1,11 +1,10 @@
 defmodule LemonCore.Config.Gateway do
   @moduledoc """
-  Gateway configuration: engine management, bindings, queueing and the
-  per-platform channel sections.
+  Gateway configuration: bindings, queueing, and per-platform channel sections.
 
   Inspired by Ironclaw's modular config pattern, this module handles
-  gateway-specific configuration including engine bindings, SMS and voice
-  settings, and queue management.
+  gateway-specific configuration including bindings, SMS and voice settings,
+  and queue management.
 
   Anything named after a specific chat platform is resolved by the application
   that implements it: the modules registered under
@@ -21,7 +20,6 @@ defmodule LemonCore.Config.Gateway do
 
       [gateway]
       max_concurrent_runs = 2
-      default_engine = "lemon"
       default_cwd = "~/workspace"
       auto_resume = false
       enable_webhook = false
@@ -35,7 +33,6 @@ defmodule LemonCore.Config.Gateway do
 
   Environment variables override file configuration:
   - `LEMON_GATEWAY_MAX_CONCURRENT_RUNS`
-  - `LEMON_GATEWAY_DEFAULT_ENGINE`
   - `LEMON_GATEWAY_DEFAULT_CWD`
   - `LEMON_GATEWAY_REQUIRE_ENGINE_LOCK`
   - `LEMON_GATEWAY_ENGINE_LOCK_TIMEOUT_MS`
@@ -49,7 +46,6 @@ defmodule LemonCore.Config.Gateway do
 
   defstruct [
     :max_concurrent_runs,
-    :default_engine,
     :default_cwd,
     :auto_resume,
     :enable_webhook,
@@ -63,14 +59,16 @@ defmodule LemonCore.Config.Gateway do
     :channels,
     :email,
     :webhook,
-    :voice,
-    :engines
+    :voice
   ]
 
   @type binding :: %{
           transport: String.t(),
           chat_id: integer() | nil,
-          agent_id: String.t() | nil
+          topic_id: integer() | nil,
+          project: String.t() | nil,
+          agent_id: String.t() | nil,
+          queue_mode: String.t() | nil
         }
 
   @type queue_config :: %{
@@ -102,7 +100,6 @@ defmodule LemonCore.Config.Gateway do
 
   @type t :: %__MODULE__{
           max_concurrent_runs: integer(),
-          default_engine: String.t(),
           default_cwd: String.t() | nil,
           auto_resume: boolean(),
           enable_webhook: boolean(),
@@ -116,8 +113,7 @@ defmodule LemonCore.Config.Gateway do
           channels: %{optional(atom()) => map()},
           email: map(),
           webhook: map(),
-          voice: voice_config(),
-          engines: map()
+          voice: voice_config()
         }
 
   @doc """
@@ -132,7 +128,6 @@ defmodule LemonCore.Config.Gateway do
 
     %__MODULE__{
       max_concurrent_runs: resolve_max_concurrent_runs(gateway_settings),
-      default_engine: resolve_default_engine(gateway_settings),
       default_cwd: resolve_default_cwd(gateway_settings),
       auto_resume: resolve_auto_resume(gateway_settings),
       enable_webhook:
@@ -147,8 +142,7 @@ defmodule LemonCore.Config.Gateway do
       channels: resolve_channels(gateway_settings, channels),
       email: resolve_passthrough(gateway_settings, "email"),
       webhook: resolve_passthrough(gateway_settings, "webhook"),
-      voice: resolve_voice(gateway_settings),
-      engines: resolve_engines(gateway_settings)
+      voice: resolve_voice(gateway_settings)
     }
   end
 
@@ -156,10 +150,6 @@ defmodule LemonCore.Config.Gateway do
 
   defp resolve_max_concurrent_runs(settings) do
     Env.get(:lemon_gateway_max_concurrent_runs, default: settings["max_concurrent_runs"] || 2)
-  end
-
-  defp resolve_default_engine(settings) do
-    Env.get(:lemon_gateway_default_engine, default: settings["default_engine"] || "lemon")
   end
 
   defp resolve_default_cwd(settings) do
@@ -227,7 +217,6 @@ defmodule LemonCore.Config.Gateway do
         topic_id: binding["topic_id"],
         project: binding["project"],
         agent_id: binding["agent_id"],
-        default_engine: binding["default_engine"],
         queue_mode: binding["queue_mode"]
       }
     end)
@@ -295,10 +284,6 @@ defmodule LemonCore.Config.Gateway do
     end)
   end
 
-  defp resolve_engines(settings) do
-    settings["engines"] || %{}
-  end
-
   defp resolve_bool_field(nil, default), do: default
   defp resolve_bool_field(val, _default) when is_boolean(val), do: val
   defp resolve_bool_field("true", _default), do: true
@@ -338,7 +323,6 @@ defmodule LemonCore.Config.Gateway do
   def defaults do
     base = %{
       "max_concurrent_runs" => 2,
-      "default_engine" => "lemon",
       "default_cwd" => nil,
       "auto_resume" => false,
       "enable_webhook" => false,
@@ -354,8 +338,7 @@ defmodule LemonCore.Config.Gateway do
       },
       "email" => %{},
       "webhook" => %{},
-      "voice" => %{},
-      "engines" => %{}
+      "voice" => %{}
     }
 
     Enum.reduce(Channel.ids(), base, fn id, acc ->

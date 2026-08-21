@@ -381,7 +381,6 @@ defmodule LemonScripts.LiveCronRuntimeRestartSmoke do
       "LEMON_SIM_UI_PORT" => Integer.to_string(values.sim_port),
       "LEMON_GATEWAY_HEALTH_PORT" => Integer.to_string(values.gateway_health_port),
       "LEMON_ROUTER_HEALTH_PORT" => Integer.to_string(values.router_health_port),
-      "LEMON_GATEWAY_DEFAULT_ENGINE" => "echo",
       "LEMON_GATEWAY_ENABLE_TELEGRAM" => "false",
       "LEMON_GATEWAY_ENABLE_DISCORD" => "false",
       "LEMON_GATEWAY_ENABLE_XMTP" => "false",
@@ -394,7 +393,6 @@ defmodule LemonScripts.LiveCronRuntimeRestartSmoke do
   defp config_toml do
     """
     [gateway]
-    default_engine = "echo"
     enable_telegram = false
     enable_discord = false
     enable_webhook = false
@@ -406,7 +404,6 @@ defmodule LemonScripts.LiveCronRuntimeRestartSmoke do
 
     [profiles.default]
     name = "Runtime Restart Smoke"
-    default_engine = "echo"
 
     [lemon_automation.skill_curator]
     enabled = false

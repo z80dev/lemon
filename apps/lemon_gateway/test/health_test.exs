@@ -27,11 +27,9 @@ defmodule LemonGateway.HealthTest do
 
     Application.put_env(:lemon_gateway, LemonGateway.Config, %{
       max_concurrent_runs: 1,
-      default_engine: "echo",
       enable_telegram: false
     })
 
-    Application.put_env(:lemon_gateway, :engines, [LemonGateway.Engines.Echo])
     Application.put_env(:lemon_gateway, :transports, [])
     Application.put_env(:lemon_gateway, :commands, [])
 
@@ -78,7 +76,6 @@ defmodule LemonGateway.HealthTest do
 
     Application.put_env(:lemon_gateway, LemonGateway.Config, %{
       max_concurrent_runs: 1,
-      default_engine: "echo",
       enable_telegram: false,
       enable_xmtp: true,
       xmtp: %{
@@ -148,7 +145,6 @@ defmodule LemonGateway.HealthTest do
 
     Application.put_env(:lemon_gateway, LemonGateway.Config, %{
       max_concurrent_runs: 1,
-      default_engine: "echo",
       enable_telegram: false,
       enable_xmtp: true
     })

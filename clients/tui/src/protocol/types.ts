@@ -378,7 +378,7 @@ export interface SessionRouting {
 	modelSource?: Nullable<"session" | "profile" | "default">;
 	modelOverride?: Nullable<string>;
 	thinkingLevel?: Nullable<string>;
-	preferredEngine?: Nullable<string>;
+	/** Read-only provenance for the runtime that will execute the next run. */
 	engine?: Nullable<string>;
 	[key: string]: unknown;
 }

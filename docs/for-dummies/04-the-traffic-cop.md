@@ -11,10 +11,9 @@ conversations.
 
 ## What lemon_router Does
 
-1. **Resolves configuration** — which agent, engine, model, and tools to use
-2. **Manages sessions** — tracks conversation state, resume tokens, queue order
-3. **Orchestrates runs** — decides when an AI job starts, monitors it,
-   handles failure
+1. **Resolves configuration** — which agent, model, tools, project, and working directory to use
+2. **Manages sessions** — tracks conversation state, native resume tokens, and queue order
+3. **Orchestrates native runs** — starts and monitors the one top-level executor
 4. **Coalesces output** — buffers streaming text into deliverable chunks
 5. **Routes delivery** — sends semantic intents to the right channel
 
@@ -42,7 +41,7 @@ agent:default:telegram:default:dm:123456789
 
 Sessions persist across messages. When you send multiple messages to the same
 Telegram chat, they all belong to the same session. The AI can build on previous
-context because the session maintains a resume token.
+context because the session maintains a native resume token.
 
 ### Run
 
@@ -55,10 +54,10 @@ Each run has a unique `run_id` and is managed by its own `RunProcess`.
 ### Conversation Key
 
 A **conversation key** groups runs that should be serialized (processed one at a
-time). Usually it matches the session key, but if a resume token is active, the
-conversation key is derived from `{engine, resume_token}` — this ensures that
-all runs continuing the same AI thread go through the same queue even if they
-come from different routes.
+time). Usually it matches the session key. When a native resume token is active,
+the conversation key incorporates that native session identity so all runs
+continuing the same conversation go through the same queue even if they come
+from different routes.
 
 ---
 
@@ -85,8 +84,8 @@ The orchestrator resolves all the configuration:
 | **Agent profile** | Looks up the agent ID (usually "default") in `AgentProfiles` |
 | **Tool policy** | Layers: base policy → agent profile overrides → operator overrides |
 | **Model** | Layers: request explicit → session preference → agent profile → system default |
-| **Engine** | Layers: resume token engine → explicit directive → model-implied → profile default |
-| **Resume token** | Auto-loaded from ChatStateStore (the last engine + conversation token) |
+| **Top-level execution** | Always uses Lemon's native executor; no request, binding, or profile selects another executor |
+| **Resume token** | Auto-loads only the native token from `ChatStateStore`; historical vendor tokens remain readable but are quarantined from selection |
 | **Working directory** | From the job, or a config default |
 
 The result is a fully-resolved `ExecutionRequest` — everything the gateway needs
@@ -102,7 +101,7 @@ while the AI is busy:
 |------------|--------------|
 | `:collect` | The message is held in a backlog. When the current run finishes, all collected messages are merged into a single follow-up prompt. |
 | `:followup` | The message waits as a follow-up. When the current run finishes, it starts as the next run. A brief debounce window (500ms) merges rapid follow-ups. |
-| `:steer` | The message is injected into the running conversation mid-stream (if the engine supports it). If steering isn't supported, falls back to `:followup`. |
+| `:steer` | The native executor receives the message in the running conversation mid-stream. |
 | `:interrupt` | The current run is cancelled, and the new message starts immediately. |
 
 The default mode is `:collect` — if you send messages while the AI is busy,
@@ -162,19 +161,17 @@ session Y") that the channels layer knows how to render for each platform.
 ## Agent Profiles
 
 Lemon supports multiple **agent profiles**, each with its own personality,
-tools, and defaults. Profiles are defined in your `config.toml`:
+tools, and model preferences. Profiles are defined in your `config.toml`:
 
 ```toml
 [agents.default]
 name = "Lemon"
 description = "General-purpose assistant"
-default_engine = "lemon"
 
 [agents.researcher]
 name = "Research Bot"
 description = "Focused on web research"
-default_engine = "claude"
-model = "claude-sonnet-4-20250514"
+model = "gpt-5.4"
 ```
 
 When a message arrives, the router looks up the agent ID (from the session key
@@ -214,41 +211,29 @@ remembering `telegram:default:dm:-100123456:thread:42`, you can name it
 
 ---
 
-## Model and Engine Selection
+## Model Selection and Native Execution
 
-The router has a multi-layered selection process for both models and engines:
-
-### Engine Selection Priority
-
-```
-1. Resume token engine (if resuming, use the same engine)
-2. Explicit directive in message (e.g., "/claude fix this")
-3. Session preference (previously set via /model or sticky engine)
-4. Agent profile default
-5. System default ("lemon")
-```
-
-### Model Selection Priority
+The router has a multi-layered model-selection process:
 
 ```
 1. Explicit in the request
 2. Session/meta preference
-3. Agent profile default
+3. Agent profile preference
 4. System default
 ```
 
-### Smart Routing (Optional)
+Every supported top-level route uses the native Lemon executor. Messages,
+bindings, agent profiles, and persisted session preferences cannot select a
+vendor CLI or another executor.
 
-If configured, the router can classify prompt complexity (simple/moderate/complex)
-and route simple prompts to a cheaper, faster model while sending complex
-prompts to the more capable one.
+Native resume tokens can continue native sessions. Historical vendor tokens
+remain readable in session history and persisted state for rollback and
+diagnostics, but the router quarantines them from explicit and automatic
+top-level resume selection rather than treating them as native sessions.
 
-### Sticky Engine
-
-If you type something like "/claude explain this codebase," the router detects
-the engine-switching directive and saves it as a **sticky preference** for the
-session. Subsequent messages in that session continue using Claude without
-needing the `/claude` prefix each time.
+Vendor CLIs remain available as delegated task subagents. A task result can
+retain its runner identity and vendor resume metadata, but that metadata never
+routes or resumes a top-level conversation.
 
 ---
 
@@ -259,7 +244,7 @@ The router handles several failure scenarios:
 | Scenario | What Happens |
 |----------|--------------|
 | **AI goes silent** | Watchdog timer fires after configurable idle period, prompts user to continue or cancel |
-| **Context overflow** | CompactionTrigger detects the error, clears the resume token so the next run starts fresh, marks pending compaction |
+| **Context overflow** | CompactionTrigger detects the error, clears the native resume token so the next run starts fresh, marks pending compaction |
 | **Zero-answer failure** | RetryHandler automatically retries the run once |
 | **Gateway process dies** | RunProcess detects the `:DOWN` signal and synthesizes a failure event so the session doesn't get stuck |
 | **RunProcess itself dies** | SessionCoordinator detects the `:DOWN`, releases the queue, starts the next pending run |
@@ -271,10 +256,9 @@ wrong, clean up and make the session available for the next message.
 
 ## Key Takeaways
 
-1. **The router is the orchestration layer** — it doesn't do AI work, but it
-   decides everything about how AI work gets done.
+1. **The router is the orchestration layer** — it resolves route scope and coordinates native AI work.
 2. **Sessions are the unit of conversation** — they persist across messages
-   and maintain continuity via resume tokens.
+   and maintain continuity via native resume tokens; historical vendor tokens remain quarantined from top-level use.
 3. **Only one run per conversation at a time** — the SessionCoordinator
    serializes runs and manages the queue.
 4. **Stream coalescing makes streaming smooth** — raw token events are buffered

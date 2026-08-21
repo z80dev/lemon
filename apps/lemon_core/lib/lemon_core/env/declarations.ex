@@ -1437,18 +1437,6 @@ defmodule LemonCore.Env.Declarations do
       apps: [:lemon_core, :lemon_gateway]
     },
     %{
-      name: :lemon_gateway_default_engine,
-      env_var: "LEMON_GATEWAY_DEFAULT_ENGINE",
-      aliases: [],
-      type: :string,
-      default: "lemon",
-      doc: "Default coding-agent engine used for gateway-initiated runs.",
-      secret?: false,
-      required?: false,
-      area: :gateway,
-      apps: [:lemon_core, :lemon_gateway]
-    },
-    %{
       name: :lemon_gateway_enable_webhook,
       env_var: "LEMON_GATEWAY_ENABLE_WEBHOOK",
       aliases: [],

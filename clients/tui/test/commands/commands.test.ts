@@ -69,12 +69,17 @@ describe("routing commands", () => {
 		expect(harness.host.last?.text).toContain("unknown level");
 	});
 
-	test("/engine sets the preferred engine", async () => {
+	test("does not register /engine while retaining native model controls", async () => {
+		expect(harness.registry.has("engine")).toBe(false);
+		expect(harness.registry.has("model")).toBe(true);
+		expect(harness.registry.has("sessions")).toBe(true);
+		expect(harness.registry.has("session")).toBe(true);
+		expect(harness.registry.has("resume")).toBe(true);
+
 		await harness.run("/engine codex");
-		expect(harness.server.requestsFor("sessions.patch")[0].params).toEqual({
-			sessionKey: "tui-session",
-			preferredEngine: "codex",
-		});
+		expect(harness.server.requestsFor("sessions.patch")).toHaveLength(0);
+		expect(harness.host.last?.level).toBe("error");
+		expect(harness.host.last?.text).toContain("unknown command /engine");
 	});
 
 	test("/toolpolicy sends the profile the daemon parses", async () => {
@@ -332,10 +337,13 @@ describe("sessions and history", () => {
 		});
 	});
 
-	test("/session info reads from the local store only", async () => {
+	test("/session info reports native runtime provenance without selecting it", async () => {
 		harness.store.focused.model = "gpt-4o";
+		harness.store.focused.engine = "lemon";
 		await harness.run("/session info");
 		expect(harness.host.text).toContain("gpt-4o");
+		expect(harness.host.text).toContain("native runtime: lemon");
+		expect(harness.host.text).not.toContain("engine:");
 		expect(harness.server.requestsFor("session.detail")).toHaveLength(0);
 	});
 });

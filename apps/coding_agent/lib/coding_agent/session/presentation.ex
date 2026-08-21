@@ -2,6 +2,7 @@ defmodule CodingAgent.Session.Presentation do
   @moduledoc false
 
   alias LemonAi.Types.StreamOptions
+  alias CodingAgent.SessionManager
   alias LemonCore.ResumeToken
 
   require Logger
@@ -60,6 +61,7 @@ defmodule CodingAgent.Session.Presentation do
         agent_id
       )
     )
+    |> maybe_add_opt(:resume_source, Keyword.get(opts, :resume_source))
     |> maybe_add_opt(:extra_tools, normalize_extra_tools_opt(Keyword.get(opts, :extra_tools)))
   end
 
@@ -79,27 +81,82 @@ defmodule CodingAgent.Session.Presentation do
         session_opts,
         state
       ) do
-    session_file = session_file_path(session_id, state.cwd)
-
-    session_opts =
-      if File.exists?(session_file) do
-        Keyword.put(session_opts, :session_file, session_file)
-      else
-        Keyword.put(session_opts, :session_id, session_id)
-      end
-
-    case CodingAgent.Session.start_link(session_opts) do
-      {:ok, session} ->
-        {:ok, session, session_id, state}
+    case resume_session_file(session_id, state.cwd) do
+      {:ok, session_file} ->
+        start_existing_session(session_id, session_file, session_opts, state)
 
       {:error, reason} ->
-        {:error, reason}
+        if resume_source(session_opts) == :auto do
+          Logger.warning(
+            "LemonRunner auto-resume unavailable for session #{inspect(session_id)}: " <>
+              "#{inspect(reason)}; starting a fresh session"
+          )
+
+          start_fresh_session(
+            session_opts,
+            state,
+            %{resume: %{source: :auto, session_id: session_id, fallback: :fresh, reason: reason}}
+          )
+        else
+          {:error, explicit_resume_error(session_id, reason)}
+        end
     end
   end
 
   def start_or_resume_session(%ResumeToken{engine: other}, _session_opts, _state) do
     {:error, {:wrong_engine, other, @engine}}
   end
+
+  defp resume_session_file(session_id, cwd) when is_binary(session_id) and session_id != "" do
+    session_file = session_file_path(session_id, cwd)
+
+    if File.regular?(session_file) do
+      case SessionManager.load_from_file(session_file) do
+        {:ok, _session} -> {:ok, session_file}
+        {:error, reason} -> {:error, {:corrupt, reason}}
+      end
+    else
+      {:error, :missing}
+    end
+  end
+
+  defp resume_session_file(_session_id, _cwd), do: {:error, :invalid}
+
+  defp start_existing_session(session_id, session_file, session_opts, state) do
+    session_opts =
+      session_opts |> Keyword.delete(:session_id) |> Keyword.put(:session_file, session_file)
+
+    case CodingAgent.Session.start_link(session_opts) do
+      {:ok, session} -> {:ok, session, session_id, state}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp start_fresh_session(session_opts, state, diagnostic) do
+    session_opts = Keyword.drop(session_opts, [:session_file, :session_id])
+
+    case CodingAgent.Session.start_link(session_opts) do
+      {:ok, session} ->
+        {:ok, session, get_session_id(session), Map.put(state, :resume_diagnostic, diagnostic)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp resume_source(session_opts) do
+    case Keyword.get(session_opts, :resume_source) do
+      :auto -> :auto
+      :explicit -> :explicit
+      _ -> :explicit
+    end
+  end
+
+  defp explicit_resume_error(session_id, :missing), do: {:resume_session_missing, session_id}
+  defp explicit_resume_error(session_id, :invalid), do: {:resume_session_invalid, session_id}
+
+  defp explicit_resume_error(session_id, {:corrupt, reason}),
+    do: {:resume_session_corrupt, session_id, reason}
 
   def get_session_id(session) do
     state = CodingAgent.Session.get_state(session)

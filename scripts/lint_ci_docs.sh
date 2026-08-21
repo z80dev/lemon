@@ -308,8 +308,9 @@ if not separator:
     sys.exit(1)
 
 tokens = [
-    "Generate manifest.json with release metadata and per-artifact SHA-256 checksums",
-    "Verify the manifest and every assembled artifact before publishing",
+    "manual dispatch from main is the one-click path",
+    "Every artifact is verified before the GitHub",
+    "mutable container channel tags move only afterward",
 ]
 missing = [token for token in tokens if token not in summary]
 if missing:
@@ -322,12 +323,11 @@ else
   fail "J24: release.yml summary is stale for artifact verification behavior"
 fi
 
-if grep -q 'Builds, tags, and publishes' "$ROOT/.github/workflows/release.yml" 2>/dev/null; then
-  fail "J24: release.yml summary claims the workflow creates tags"
-elif grep -q 'manually dispatch with an existing tag input' "$ROOT/.github/workflows/release.yml" 2>/dev/null; then
-  pass "J24: release.yml summary documents manual dispatch truthfully"
+if grep -q 'scripts/prepare_product_release' "$ROOT/.github/workflows/release.yml" 2>/dev/null &&
+  grep -q 'CalVer to publish; leave blank to derive the next version' "$ROOT/.github/workflows/release.yml" 2>/dev/null; then
+  pass "J24: release.yml summary documents one-click manual dispatch truthfully"
 else
-  fail "J24: release.yml summary does not document manual dispatch"
+  fail "J24: release.yml summary does not document one-click manual dispatch"
 fi
 
 # ── J25: first-party version metadata must match the umbrella version ────────
@@ -512,6 +512,7 @@ fi
 READINESS_SCRIPTS=(
   scripts/audit_1_0_readiness
   scripts/prepare_release_notes
+  scripts/prepare_product_release
   scripts/verify_docs_site
   scripts/verify_release_artifacts
   scripts/verify_release_runtime_boot
@@ -1156,15 +1157,12 @@ contracts = [
         ],
     ),
     (
-        "J27: release handoff docs avoid duplicate workflow runs",
+        "J27: release handoff docs define one-click and recovery flows",
         [
-            ("release_docs", "Do not use both paths"),
-            ("release_docs", "-f channel=stable"),
-            ("release_docs", "refusing to publish with a dirty tree"),
-            ("release_docs", "git log -1 --oneline"),
-            ("release_docs", "git rev-list --count origin/main..HEAD"),
-            ("release_docs", "git log --oneline origin/main..HEAD"),
-            ("release_docs", "git push origin main"),
+            ("release_docs", "gh workflow run release.yml --ref main"),
+            ("release_docs", "Re-run failed jobs"),
+            ("release_docs", "Mutable container channel tags do not move"),
+            ("release_docs", "Do not combine a `main` dispatch"),
         ],
     ),
     (
@@ -1773,13 +1771,14 @@ else
   fail "J34: script-send command scope or documentation is missing"
 fi
 
-# ── manual-dispatch: release.yml must use input tag, not ref_name, for dispatch ─
-# When event_name is workflow_dispatch, github.ref_name is the branch, not the tag.
-# The parse step and the gh-release tag_name must prioritize event.inputs.tag.
-if grep -qE 'github\.ref_name\s*\|\|.*github\.event\.inputs\.tag' "$ROOT/.github/workflows/release.yml" 2>/dev/null; then
-  fail "extra: release.yml uses 'ref_name || event.inputs.tag' order — manual dispatch will use branch name instead of requested tag"
+# ── manual-dispatch: main prepares a tag; tag refs rebuild exact cuts ─────────
+if grep -q 'github.event.inputs.tag' "$ROOT/.github/workflows/release.yml" 2>/dev/null; then
+  fail "extra: release.yml still relies on the removed manual tag input"
+elif grep -q 'needs.prepare.outputs.tag || github.ref_name' "$ROOT/.github/workflows/release.yml" 2>/dev/null &&
+  grep -q 'ref: \${{ needs.validate.outputs.tag }}' "$ROOT/.github/workflows/release.yml" 2>/dev/null; then
+  pass "extra: release.yml resolves prepared and existing tags consistently"
 else
-  pass "extra: release.yml tag resolution order is correct for manual dispatch"
+  fail "extra: release.yml does not resolve prepared and existing tags consistently"
 fi
 
 if python3 - "$ROOT/.github/workflows/release.yml" <<'PYEOF'
@@ -1790,16 +1789,28 @@ checkout_blocks = re.findall(r'- name: Checkout\n(?: {2,}.*\n)+', content)
 if not checkout_blocks:
     sys.exit(1)
 
+unversioned = 0
 for block in checkout_blocks:
     if "uses: actions/checkout@v4" not in block:
         continue
-    if "ref: ${{ github.event.inputs.tag || github.ref_name }}" not in block:
-        sys.exit(1)
+    if "ref: ${{ needs.validate.outputs.tag }}" in block:
+        continue
+    if "ref: ${{ needs.prepare.outputs.tag || github.ref_name }}" in block:
+        continue
+    if "ref:" not in block:
+        unversioned += 1
+        continue
+    sys.exit(1)
+
+# Exactly the preparation checkout follows the selected default branch. Every
+# build and publication checkout is pinned to the resolved release tag.
+if unversioned != 1:
+    sys.exit(1)
 PYEOF
 then
-  pass "extra: release.yml pins each checkout step to the requested tag ref"
+  pass "extra: release.yml pins post-preparation checkouts to the release tag"
 else
-  fail "extra: release.yml has a checkout step that does not pin ref to the requested tag"
+  fail "extra: release.yml has an unexpected unpinned release checkout"
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────

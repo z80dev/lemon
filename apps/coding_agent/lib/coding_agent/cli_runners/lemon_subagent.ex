@@ -102,13 +102,10 @@ defmodule CodingAgent.CliRunners.LemonSubagent do
   @behaviour LemonCore.SubagentRunner
 
   @doc """
-  The `task` tool's name for this engine.
+  The `task` tool's name for the in-process runner.
 
-  Deliberately not `"lemon"`: `"internal"` is the tool-level alias for "run it
-  in this VM", while `"lemon"` is the id the *gateway* engine and its resume
-  tokens use. `routable?/0` answers `false` for the same reason — the router
-  must not start treating `"internal"` as an engine a conversation can switch
-  to.
+  `"internal"` is the tool-level alias for running delegated work inside the
+  current VM; it is unrelated to the fixed top-level Lemon executor.
   """
   @impl true
   def id, do: "internal"
@@ -123,9 +120,6 @@ defmodule CodingAgent.CliRunners.LemonSubagent do
       ]
     }
   end
-
-  @impl true
-  def routable?, do: false
 
   @doc """
   Children of the in-process engine keep full tool access.

@@ -1,4 +1,4 @@
-defmodule CodingAgent.GatewayEngine.SessionRunner do
+defmodule CodingAgent.Executor.SessionRunner do
   @moduledoc false
 
   use GenServer
@@ -6,7 +6,7 @@ defmodule CodingAgent.GatewayEngine.SessionRunner do
   alias CodingAgent.Session.Presentation
   alias CodingAgent.Session.RunTranslator
   alias LemonCore.ResumeToken
-  alias LemonGateway.Types.Job
+  alias LemonGateway.ExecutionRequest
 
   require Logger
 
@@ -118,19 +118,19 @@ defmodule CodingAgent.GatewayEngine.SessionRunner do
   end
 
   defp init_session(opts) do
-    job = Keyword.fetch!(opts, :job)
+    request = Keyword.fetch!(opts, :request)
     run_opts = Keyword.get(opts, :opts, %{})
     sink_pid = Keyword.fetch!(opts, :sink_pid)
     run_ref = Keyword.fetch!(opts, :run_ref)
 
-    prompt = job.prompt
-    cwd = job.cwd || get_opt(run_opts, :cwd) || File.cwd!()
-    resume = normalize_resume(job.resume)
-    run_id = job.run_id || get_opt(run_opts, :run_id)
-    session_key = job.session_key
-    agent_id = job_agent_id(job)
-    async_followups = async_followups(job)
-    extra_tools = gateway_extra_tools(job, run_opts)
+    prompt = request.prompt
+    cwd = request.cwd || get_opt(run_opts, :cwd) || File.cwd!()
+    resume = normalize_resume(request.resume)
+    run_id = request.run_id || get_opt(run_opts, :run_id)
+    session_key = request.session_key
+    agent_id = request_agent_id(request)
+    async_followups = async_followups(request)
+    extra_tools = extra_tools(request, run_opts)
 
     # Passed through to CodingAgent.Session, whose Lifecycle.initialize applies
     # CodingAgent.Session.ProviderFallback.maybe_wrap (a no-op when no runtime
@@ -162,18 +162,21 @@ defmodule CodingAgent.GatewayEngine.SessionRunner do
       translator: translator
     }
 
+    meta = request.meta || %{}
+
     session_opts =
       [
-        model: get_in(job.meta || %{}, [:model]),
-        thinking_level: get_in(job.meta || %{}, [:thinking_level]),
-        system_prompt: get_in(job.meta || %{}, [:system_prompt]),
+        model: get_in(meta, [:model]),
+        thinking_level: get_in(meta, [:thinking_level]),
+        system_prompt: get_in(meta, [:system_prompt]),
         stream_fn: stream_fn,
-        tool_policy: job.tool_policy,
+        tool_policy: request.tool_policy,
         approval_timeout_ms: get_opt(run_opts, :approval_timeout_ms),
-        acp_session_id: get_in(job.meta || %{}, [:acp_session_id]),
-        acp_client_fs_read_text_file: get_in(job.meta || %{}, [:acp_client_fs_read_text_file]),
-        acp_client_fs_write_text_file: get_in(job.meta || %{}, [:acp_client_fs_write_text_file]),
+        acp_session_id: get_in(meta, [:acp_session_id]),
+        acp_client_fs_read_text_file: get_in(meta, [:acp_client_fs_read_text_file]),
+        acp_client_fs_write_text_file: get_in(meta, [:acp_client_fs_write_text_file]),
         stream_options: get_opt(run_opts, :stream_options),
+        resume_source: get_in(meta, [:resume_source]) || get_in(meta, ["resume_source"]),
         extra_tools: extra_tools
       ]
       |> Presentation.build_session_opts(cwd, run_id, session_key, agent_id)
@@ -192,7 +195,7 @@ defmodule CodingAgent.GatewayEngine.SessionRunner do
               })
 
           _ ->
-            :ok = CodingAgent.Session.prompt(session, prompt, images: job.images)
+            :ok = CodingAgent.Session.prompt(session, prompt, images: request.images)
         end
 
         session_ref = Process.monitor(session)
@@ -270,42 +273,42 @@ defmodule CodingAgent.GatewayEngine.SessionRunner do
 
   defp normalize_resume(_), do: nil
 
-  defp gateway_extra_tools(%Job{} = job, opts) do
-    cwd = job.cwd || get_opt(opts, :cwd) || File.cwd!()
+  defp extra_tools(%ExecutionRequest{} = request, opts) do
+    cwd = request.cwd || get_opt(opts, :cwd) || File.cwd!()
 
     cron_tool =
       LemonGateway.Tools.Cron.tool(
         cwd,
-        session_key: job.session_key,
-        agent_id: job_agent_id(job)
+        session_key: request.session_key,
+        agent_id: request_agent_id(request)
       )
 
     sms_tools = [
       cron_tool,
       LemonGateway.Tools.SmsGetInboxNumber.tool(cwd),
-      LemonGateway.Tools.SmsWaitForCode.tool(cwd, session_key: job.session_key),
-      LemonGateway.Tools.SmsListMessages.tool(cwd, session_key: job.session_key),
-      LemonGateway.Tools.SmsClaimMessage.tool(cwd, session_key: job.session_key)
+      LemonGateway.Tools.SmsWaitForCode.tool(cwd, session_key: request.session_key),
+      LemonGateway.Tools.SmsListMessages.tool(cwd, session_key: request.session_key),
+      LemonGateway.Tools.SmsClaimMessage.tool(cwd, session_key: request.session_key)
     ]
 
     workspace_dir = CodingAgent.Config.workspace_dir()
 
     cond do
-      telegram_session?(job) ->
+      telegram_session?(request) ->
         [
           LemonGateway.Tools.TelegramSendImage.tool(
             cwd,
-            session_key: job.session_key,
+            session_key: request.session_key,
             workspace_dir: workspace_dir
           )
           | sms_tools
         ]
 
-      discord_session?(job) ->
+      discord_session?(request) ->
         [
           LemonGateway.Tools.DiscordSendFile.tool(
             cwd,
-            session_key: job.session_key,
+            session_key: request.session_key,
             workspace_dir: workspace_dir
           )
           | sms_tools
@@ -316,8 +319,8 @@ defmodule CodingAgent.GatewayEngine.SessionRunner do
     end
   end
 
-  defp telegram_session?(job) do
-    case LemonCore.SessionKey.parse(job.session_key || "") do
+  defp telegram_session?(request) do
+    case LemonCore.SessionKey.parse(request.session_key || "") do
       %{kind: :channel_peer, channel_id: "telegram"} -> true
       _ -> false
     end
@@ -325,8 +328,8 @@ defmodule CodingAgent.GatewayEngine.SessionRunner do
     _ -> false
   end
 
-  defp discord_session?(job) do
-    case LemonCore.SessionKey.parse(job.session_key || "") do
+  defp discord_session?(request) do
+    case LemonCore.SessionKey.parse(request.session_key || "") do
       %{kind: :channel_peer, channel_id: "discord"} -> true
       _ -> false
     end
@@ -334,13 +337,13 @@ defmodule CodingAgent.GatewayEngine.SessionRunner do
     _ -> false
   end
 
-  defp job_agent_id(job) do
-    meta = job.meta || %{}
+  defp request_agent_id(request) do
+    meta = request.meta || %{}
 
     agent_id =
       meta[:agent_id] ||
         meta["agent_id"] ||
-        LemonCore.SessionKey.agent_id(job.session_key || "")
+        LemonCore.SessionKey.agent_id(request.session_key || "")
 
     case agent_id do
       id when is_binary(id) ->
@@ -352,8 +355,8 @@ defmodule CodingAgent.GatewayEngine.SessionRunner do
     end
   end
 
-  defp async_followups(job) do
-    meta = job.meta || %{}
+  defp async_followups(request) do
+    meta = request.meta || %{}
     meta[:async_followups] || meta["async_followups"]
   end
 

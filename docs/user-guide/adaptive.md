@@ -12,7 +12,7 @@ There are three adaptive subsystems:
 
 | Subsystem | Feature flag | What it does |
 |---|---|---|
-| Routing feedback | `routing_feedback` | Records run outcomes to inform future model/engine selection |
+| Routing feedback | `routing_feedback` | Records run outcomes to inform future model selection |
 | History-aware routing | `routing_feedback` | Uses past success/failure signals to break ties in model selection |
 | Skill synthesis | `skill_synthesis_drafts` | Auto-generates draft skills from successful runs |
 

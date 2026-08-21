@@ -1,571 +1,182 @@
 # LemonGateway AGENTS.md
 
-Gateway execution layer for the Lemon AI system. Handles engine lifecycle, execution-slot scheduling, and real-time run events on the bus. Gateway-owned transport, SMS, voice, and command startup is off by default and only starts when `:gateway_ingress_enabled` is set for `:lemon_gateway`. These surfaces are gateway-owned by design, not pending migration — see `docs/platform/transport-unification.md`.
+LemonGateway is Lemon's execution runtime. It handles concurrency-slot scheduling,
+per-conversation launch isolation, run lifecycle, streaming bus events, cancellation,
+and session resumption. Gateway-owned transport, SMS, voice, and command startup is
+off by default and starts only when `:gateway_ingress_enabled` is set for
+`:lemon_gateway`. Those ingress surfaces are gateway-owned by design; see
+`docs/platform/transport-unification.md`.
+
+## Executor Contract
+
+Gateway has one configured singleton executor: `CodingAgent.Executor`. It is selected
+through `:lemon_gateway, :executor`; `LemonGateway.Executor` validates its readiness
+at startup and before runtime submission. Every gateway run uses that executor and has
+the fixed top-level provenance `engine: "lemon"`. Delegated task records retain their
+actual runner ID as `task.engine`; neither provenance field selects Gateway execution.
+
+This is an intentional breaking removal of the old Gateway engine platform:
+
+- Do not add `LemonGateway.Engine`, `EngineRegistry`, `EngineCase`, `Echo`, gateway
+  engine shells, or engine-registration code.
+- Do not add `engine`, `default_engine`, `engine_preference`, or
+  `[gateway.engines.<id>]` configuration. Gateway configuration cannot select a
+  different executor.
+- `EngineInfoBridge` retains only its transport-registry and gateway-config
+  capabilities. It no longer exposes Gateway engine enumeration.
+- `LemonCore.ResumeToken` and `LemonCore.ResumeFormats` remain the shared resume
+  mechanism for the native executor and delegated task runners.
+
+### Migration choices
+
+Choose the extension boundary that matches the work rather than restoring a top-level
+Gateway engine:
+
+| Need | Use |
+| --- | --- |
+| Connect a model/API to an agent | a `LemonAi` provider |
+| Add in-process agent capability | a `CodingAgent` tool |
+| Delegate work to another executable or vendor CLI | `LemonCore.SubagentRunner` |
+
+Claude Code, Codex, Kimi, OpenCode, and Pi are retained vendor **task runners** in
+`lemon_cli_runners`. Their `[runtime.cli.<vendor>]` settings configure delegated task
+subprocesses only; they never select or replace the Gateway executor.
 
 ## Quick Orientation
 
-LemonGateway is the execution backend behind router-owned conversations. It does NOT render output to channels directly and it does NOT own queue semantics anymore. Router-owned `SessionCoordinator` processes decide collect/followup/steer/interrupt behavior and submit queue-semantic-free `LemonCore.ExecutionCommand` values through the configured runtime behavior.
+**Entry point:** `LemonGateway.Runtime.submit_execution(%LemonCore.ExecutionCommand{})`.
+The removed `LemonGateway.Runtime.submit/1` compatibility path must not return.
 
-Gateway-native transports such as email and webhook are ingress shims only. They normalize inbound requests to `LemonCore.RunRequest` and submit through `LemonCore.RouterBridge`; they must not call `LemonRouter.*` modules directly.
-
-**Entry point**: `LemonGateway.Runtime.submit_execution(%LemonCore.ExecutionCommand{})`.
-The old `LemonGateway.Runtime.submit/1` compatibility path is gone; do not reintroduce it.
-
-**Core loop**: Router -> `LemonCore.ExecutionCommand` -> Runtime -> `ExecutionRequest` -> Scheduler -> ThreadWorker -> Run -> Engine -> bus events.
-
-**Key principle**: Gateway owns slot allocation, worker/process lifecycle, and engine safety rails. `ThreadWorker` is now a dumb per-conversation launcher; `EngineLock` remains defense-in-depth, not the source of product semantics.
-
-## Architecture
+**Core loop:**
 
 ```
-+-----------------------------------------------------------------------+
-|                  Channel Adapters / Gateway Ingress                    |
-|  Telegram (lemon_channels)  Discord (lemon_channels)  XMTP (lemon_ch) |
-|  Email / Webhook / SMS / Voice legacy ingress                           |
-|  (explicit `:gateway_ingress_enabled` gateway startup only)             |
-+-------------------------------------+---------------------------------+
-                                      |
-                RunRequest via LemonCore.RouterBridge.submit_run/1
-                                      |
-                          LemonRouter.RunOrchestrator
-                                      |
-                         LemonCore.EngineRuntime.submit_execution/1
-                                      |
-+-------------------------------------+---------------------------------+
-|                          Scheduler                                     |
-|  - Accept already-resolved execution requests                          |
-|  - Derive thread_key from router-provided conversation_key/session     |
-|  - Route to ThreadWorker (create if needed via ThreadWorkerSupervisor) |
-|  - Slot allocation: max_concurrent_runs concurrency limit              |
-+-------------------------------------+---------------------------------+
-                                      |
-                          ThreadWorker (per session)
-|  - Simple FIFO request launcher for one conversation key               |
-|  - Request slot -> on grant -> start Run via RunSupervisor             |
-|  - Terminate when idle (queue empty + no active run)                   |
-+-------------------------------------+---------------------------------+
-                                      |
-                              Run (GenServer)
-|  - Acquire EngineLock                                                  |
-|  - Resolve engine from EngineRegistry                                  |
-|  - Call engine.start_run(job, opts, self())                            |
-|  - Receive {:engine_event, run_ref, event} and {:engine_delta, ...}    |
-|  - Broadcast to LemonCore.Bus("run:<run_id>")                         |
-|  - Store ChatState on completion for auto-resume                       |
-|  - Release lock + slot on finalize                                     |
-+-------------------------------------+---------------------------------+
-                                      |
-                              Engine (behaviour)
-|  Lemon (native CodingAgent) | Claude (CLI) | Codex (CLI)              |
-|  Opencode (CLI) | Pi (CLI) | Echo (test)                              |
-+-----------------------------------------------------------------------+
+Router -> LemonCore.ExecutionCommand -> Runtime -> ExecutionRequest
+       -> Scheduler -> ThreadWorker -> Run -> configured Executor -> bus events
 ```
 
-### Bus Event Flow
+Gateway owns slot allocation, worker/process lifecycle, and safety rails.
+`ThreadWorker` is a dumb per-conversation launcher; `EngineLock` is
+failure-isolation defense in depth, not product queue semantics.
 
-```
-Run -> LemonCore.Bus("run:<run_id>") -> LemonRouter.RunProcess
-                                     -> LemonRouter.StreamCoalescer
-                                     -> LemonChannels.Outbox -> Telegram/Discord/etc.
-```
+### Execution flow
 
-Bus event types: `:run_started`, `:run_completed`, `:delta`, `:engine_started`, `:engine_completed`, `:engine_action`.
+1. Router-owned `SessionCoordinator` decides collect/followup/steer/interrupt
+   semantics and submits queue-semantic-free execution commands.
+2. `Runtime` creates a gateway-private `ExecutionRequest`.
+3. `Scheduler` routes the request by the router-supplied conversation key and grants
+   a concurrency slot.
+4. `ThreadWorker` starts a `Run` through `RunSupervisor`.
+5. `Run` acquires `EngineLock`, invokes the configured `LemonGateway.Executor`, and
+   broadcasts native-executor events and deltas on `LemonCore.Bus("run:<run_id>")`.
+6. On completion, `Run` stores resume state, releases the lock and slot, and notifies
+   the router-facing observers.
 
-## Key Files and Purposes
+## Key Files
 
-### Core Pipeline (read these first)
+### Execution pipeline
 
-| File | Module | What It Does |
-|------|--------|-------------|
-| `lib/lemon_gateway.ex` | `LemonGateway` | Public API facade for execution submission and health helpers. |
-| `lib/lemon_gateway/runtime.ex` | `Runtime` | Implements `LemonCore.EngineRuntime`; converts core commands to gateway-private requests and exposes cancellation/run lookup. |
-| `lib/lemon_gateway/execution_request.ex` | `ExecutionRequest` | Gateway-private adapter shape with no queue-mode semantics. |
-| `lib/lemon_gateway/scheduler.ex` | `Scheduler` | GenServer: thread routing plus slot-based concurrency (`max_concurrent_runs`). |
-| `lib/lemon_gateway/thread_worker.ex` | `ThreadWorker` | GenServer: per-conversation launcher/slot waiter, no collect/followup/interrupt policy. |
-| `lib/lemon_gateway/run.ex` | `Run` | GenServer: engine lifecycle, bus event emission, steer/cancel, lock management |
-| `lib/lemon_gateway/engine.ex` | `Engine` | Behaviour: `id/0`, `start_run/3`, `cancel/1`, `supports_steer?/0`, `steer/2`, resume callbacks |
-| `lib/lemon_gateway/types.ex` | `Types`, `Types.Job` | Legacy compatibility types. Do not add new queue semantics here. |
-| `lib/lemon_gateway/event.ex` | `Event`, `Event.Delta` | Event constructors (`:started`, `:action_event`, `:completed`) and `Delta` struct |
+| File | Module | Responsibility |
+| --- | --- | --- |
+| `lib/lemon_gateway.ex` | `LemonGateway` | Public execution submission and health facade |
+| `lib/lemon_gateway/runtime.ex` | `Runtime` | Implements `LemonCore.EngineRuntime`; submission, cancellation, and lookup |
+| `lib/lemon_gateway/executor.ex` | `Executor` | Singleton executor boundary and readiness validation |
+| `lib/lemon_gateway/execution_request.ex` | `ExecutionRequest` | Gateway-private request with no queue-mode semantics |
+| `lib/lemon_gateway/scheduler.ex` | `Scheduler` | Slot allocator and thread routing |
+| `lib/lemon_gateway/thread_worker.ex` | `ThreadWorker` | Per-conversation slot waiter and launcher |
+| `lib/lemon_gateway/run.ex` | `Run` | Executor lifecycle, bus events, steering, cancellation, and locks |
+| `lib/lemon_gateway/engine_lock.ex` | `EngineLock` | Per-session mutex with FIFO wait queue and stale-lock reaping |
+| `lib/lemon_gateway/event.ex` | `Event`, `Event.Delta` | Lifecycle-event constructors and streamed delta struct |
 
-### Engine Implementations
+### Configuration and ingress
 
-| File | Module | Notes |
-|------|--------|-------|
-| `lib/lemon_gateway/engines/cli_adapter.ex` | `Engines.CliAdapter` | **Read this first for CLI engines.** Shared logic for subprocess start, event stream consumption, resume formatting, and cancellation. Vendor-free: it takes the runner module as an argument. |
-| _(moved)_ | `CodingAgent.GatewayEngine` | The `lemon` engine now lives in coding_agent and registers itself via `EngineRegistry.register/1`; this app no longer depends on the agent. |
-| _(moved)_ | `LemonCliRunners.Engines.{Claude,Codex,Kimi,Opencode,Pi}` | The vendor CLI engines now live in lemon_cli_runners and register themselves via `EngineRegistry.register_default/1`; this app no longer depends on the vendor package or names any vendor. |
-| `lib/lemon_gateway/engines/echo.ex` | `Engines.Echo` | Test engine: echoes prompt back, no subprocess, useful for integration tests |
+Gateway config comes from the canonical TOML `[gateway]` section through
+`LemonCore.GatewayConfig`; transport config is read only from that path. The
+`LemonGateway.Config` application override is test-only. The executor module belongs
+to application configuration, not TOML engine selection.
 
-### Configuration and Resolution
+| File | Module | Responsibility |
+| --- | --- | --- |
+| `lib/lemon_gateway/config.ex` | `Config` | Typed runtime configuration access |
+| `lib/lemon_gateway/config_loader.ex` | `ConfigLoader` | Canonical TOML loading and parsing |
+| `lib/lemon_gateway/binding_resolver.ex` | `BindingResolver` | Resolves cwd and agent metadata for gateway ingress |
+| `lib/lemon_gateway/transport_registry.ex` | `TransportRegistry` | Gateway-ingress transport registration and enablement |
+| `lib/lemon_gateway/transport_supervisor.ex` | `TransportSupervisor` | Starts enabled gateway-native transports |
+| `lib/lemon_gateway/ingress_supervisor.ex` | `IngressSupervisor` | Gateway-owned transport, command, SMS, and voice startup |
 
-Gateway config comes from the canonical TOML `[gateway]` section only, via `LemonCore.GatewayConfig`. Transport config (Telegram, Discord, XMTP) is read exclusively from the canonical gateway config path -- not from `Application.get_env` overlays. Test-only override via `Application.get_env(:lemon_gateway, LemonGateway.Config)` is allowed only in test env.
+Gateway-native transports normalize requests to `LemonCore.RunRequest` and submit
+through `LemonCore.RouterBridge`; they must not invoke router internals directly.
+New user-facing channels belong in `lemon_channels` unless they need a synchronous or
+live gateway ingress surface.
 
-| File | Module | Notes |
-|------|--------|-------|
-| `lib/lemon_gateway/config.ex` | `Config` | GenServer holding all runtime config. Access via `Config.get/0` or `Config.get(:key)`. |
-| `lib/lemon_gateway/config_loader.ex` | `ConfigLoader` | Loads from `LemonCore.GatewayConfig.load/0` and parses into typed structs (Project, Binding, queue, SMS, email, etc.); in test env only, honors `Application.get_env(:lemon_gateway, LemonGateway.Config)` as a full replacement override. |
-| `lib/lemon_gateway/binding_resolver.ex` | `BindingResolver` | Resolves engine/cwd/agent metadata for gateway-owned transports. Delegates to `LemonCore.BindingResolver`. |
-| `lib/lemon_gateway/engine_registry.ex` | `EngineRegistry` | GenServer: engine ID -> module mapping. Also does cross-engine resume token extraction. |
-| `lib/lemon_gateway/engine_lock.ex` | `EngineLock` | GenServer: per-session mutex with FIFO wait queue, configurable timeout, process monitoring, stale lock sweeping |
+## Adding Extensions
 
-### Registries and Supervisors
+### Add a model provider
 
-| File | Module | Notes |
-|------|--------|-------|
-| `lib/lemon_gateway/application.ex` | `Application` | OTP supervision tree: execution runtime by default, optional health server, explicit legacy ingress children |
-| `lib/lemon_gateway/ingress_supervisor.ex` | `IngressSupervisor` | Supervisor for gateway-owned transport, command, SMS, and voice startup |
-| `lib/lemon_gateway/run_supervisor.ex` | `RunSupervisor` | DynamicSupervisor for Run processes (temporary restart strategy) |
-| `lib/lemon_gateway/thread_registry.ex` | `ThreadRegistry` | Unique-key Registry wrapper for ThreadWorker lookup by thread_key |
-| `lib/lemon_gateway/thread_worker_supervisor.ex` | `ThreadWorkerSupervisor` | DynamicSupervisor for ThreadWorker processes |
-| `lib/lemon_gateway/transport_registry.ex` | `TransportRegistry` | Legacy ingress GenServer: transport ID -> module mapping with enable/disable awareness |
-| `lib/lemon_gateway/transport_supervisor.ex` | `TransportSupervisor` | Legacy ingress supervisor starting all enabled gateway-native transports |
+Implement the appropriate `LemonAi` provider contract when a new model/API needs to
+serve agent turns. Provider selection stays in the agent/model layer; it does not
+change Gateway execution or its singleton executor.
 
-### Voice System
+### Add a CodingAgent tool
 
-| File | Module | Notes |
-|------|--------|-------|
-| `lib/lemon_gateway/voice/call_session.ex` | `Voice.CallSession` | Per-call GenServer: manages Deepgram STT, ElevenLabs TTS, LLM pipeline |
-| `lib/lemon_gateway/voice/twilio_websocket.ex` | `Voice.TwilioWebSocket` | WebSocket handler for Twilio Media Streams (mulaw audio) |
-| `lib/lemon_gateway/voice/deepgram_client.ex` | `Voice.DeepgramClient` | WebSocket client for Deepgram real-time STT |
-| `lib/lemon_gateway/voice/recording_manager.ex` | `Voice.RecordingManager` | Starts dual-channel recording via Twilio REST API |
-| `lib/lemon_gateway/voice/recording_downloader.ex` | `Voice.RecordingDownloader` | Downloads recordings as WAV to `~/.lemon/recordings/<date>/` |
-| `lib/lemon_gateway/voice/webhook_router.ex` | `Voice.WebhookRouter` | Plug router for voice webhooks (TwiML response, WebSocket upgrade) |
-| `lib/lemon_gateway/voice/audio_conversion.ex` | `Voice.AudioConversion` | PCM-to-mulaw transcoding and MP3/ID3 detection |
-| `lib/lemon_gateway/voice/config.ex` | `Voice.Config` | Voice credential resolution (Twilio, Deepgram, ElevenLabs) |
+Add an in-process capability as a `CodingAgent` tool. Gateway-specific tools are
+assembled by the native executor's session runner; they are not a Gateway plugin
+mechanism. Keep tool action details lossless, including safe failure metadata such as
+`error_type`, `timeout_ms`, and `exit_code`.
 
-### SMS System
+### Add a delegated task runner
 
-| File | Module | Notes |
-|------|--------|-------|
-| `lib/lemon_gateway/sms/inbox.ex` | `Sms.Inbox` | GenServer: stores inbound SMS, extracts verification codes, supports wait/claim |
-| `lib/lemon_gateway/sms/webhook_server.ex` | `Sms.WebhookServer` | Bandit HTTP server for Twilio SMS webhooks |
-| `lib/lemon_gateway/sms/webhook_router.ex` | `Sms.WebhookRouter` | Plug router handling inbound SMS |
-| `lib/lemon_gateway/sms/twilio_signature.ex` | `Sms.TwilioSignature` | HMAC-SHA1 signature validation for Twilio webhooks |
+Implement `LemonCore.SubagentRunner` for external/delegated work. Register it with
+`LemonCore.SubagentRegistry` from its own application and provide `resume_format/0`
+when it has vendor-specific resume syntax. `LemonCore.ResumeFormats` owns parsing and
+printing those tokens.
 
-### Gateway-Injected Tools
+Use this path for vendor CLIs. `lemon_cli_runners` already supplies Claude Code,
+Codex, Kimi, OpenCode, and Pi task runners; do not wrap them as Gateway executors.
 
-These tools are added to `lemon` engine runs only (not CLI engines) via `CodingAgent.GatewayEngine.SessionRunner`, which lives in coding_agent:
+### Add a transport
 
-| File | Module | Notes |
-|------|--------|-------|
-| `lib/lemon_gateway/tools/cron.ex` | `Tools.Cron` | Manage cron jobs (status, list, add, update, pause, resume, abort, remove, run, runs) |
-| `lib/lemon_gateway/tools/sms_get_inbox_number.ex` | `Tools.SmsGetInboxNumber` | Get the Twilio inbox phone number |
-| `lib/lemon_gateway/tools/sms_wait_for_code.ex` | `Tools.SmsWaitForCode` | Block until matching SMS code arrives |
-| `lib/lemon_gateway/tools/sms_list_messages.ex` | `Tools.SmsListMessages` | List recent SMS messages |
-| `lib/lemon_gateway/tools/sms_claim_message.ex` | `Tools.SmsClaimMessage` | Mark a message as claimed by session |
-| `lib/lemon_gateway/tools/telegram_send_image.ex` | `Tools.TelegramSendImage` | Queue image for Telegram delivery (Telegram sessions only) |
-| `lib/lemon_gateway/tools/discord_send_file.ex` | `Tools.DiscordSendFile` | Queue a file for Discord delivery (Discord sessions only) |
+Prefer `lemon_channels` for a new messaging channel. Use gateway-native ingress only
+for a non-channel surface that needs the Gateway runtime.
 
-## How to Add a New Engine
+- Submit `%LemonCore.RunRequest{}` through `LemonCore.RouterBridge.submit_run/1`.
+- Build stable, unique session keys.
+- Return `:ignore` from `start_link/1` when disabled.
+- Resolve binding cwd and agent metadata through `BindingResolver`.
 
-### Step 1: Create the Engine Module
+## Operations and Debugging
 
-Create `lib/lemon_gateway/engines/my_engine.ex`:
+Useful runtime inspection:
 
 ```elixir
-defmodule LemonGateway.Engines.MyEngine do
-  @behaviour LemonGateway.Engine
-
-  alias LemonCore.ResumeToken
-  alias LemonGateway.Types.Job
-  alias LemonGateway.Event
-
-  @impl true
-  def id, do: "myengine"
-
-  @impl true
-  def format_resume(%ResumeToken{value: v}), do: "myengine --resume #{v}"
-
-  @impl true
-  def extract_resume(text) do
-    case Regex.run(~r/myengine\s+--resume\s+(\S+)/i, text) do
-      [_, value] -> %ResumeToken{engine: id(), value: value}
-      _ -> nil
-    end
-  end
-
-  @impl true
-  def is_resume_line(line) do
-    Regex.match?(~r/^\s*`?myengine\s+--resume\s+\S+`?\s*$/i, line)
-  end
-
-  @impl true
-  def supports_steer?, do: false
-
-  @impl true
-  def start_run(%Job{} = job, opts, sink_pid) do
-    run_ref = make_ref()
-    resume = job.resume || %ResumeToken{engine: id(), value: UUID.uuid4()}
-
-    # Option A: Use CliAdapter for CLI-based engines
-    # LemonGateway.Engines.CliAdapter.start_run(MyRunner, id(), job, opts, sink_pid)
-
-    # Option B: Custom implementation
-    {:ok, task_pid} = Task.start(fn ->
-      send(sink_pid, {:engine_event, run_ref, Event.started(%{engine: id(), resume: resume})})
-      # ... do AI work, optionally send deltas ...
-      send(sink_pid, {:engine_delta, run_ref, "partial output"})
-      send(sink_pid, {:engine_event, run_ref, Event.completed(%{
-        engine: id(), ok: true, answer: "full answer", resume: resume
-      })})
-    end)
-
-    {:ok, run_ref, %{task_pid: task_pid}}
-  end
-
-  @impl true
-  def cancel(%{task_pid: pid}) when is_pid(pid) do
-    Process.exit(pid, :kill)
-    :ok
-  end
-end
-```
-
-### Step 2: Register the Engine
-
-Register from your application's `start/2` callback (this is how coding_agent
-contributes `lemon` and lemon_cli_runners the vendor CLI engines):
-
-```elixir
-LemonGateway.EngineRegistry.register_default(MyApp.MyEngine)
-```
-
-`register_default/1` respects an operator-configured `:lemon_gateway, :engines`
-list (the configured list is a ceiling; registration is then a no-op), while
-`register/1` always registers. Alternatively, an operator can name the engine
-explicitly:
-
-```elixir
-config :lemon_gateway, :engines, [
-  LemonGateway.Engines.Echo,
-  LemonGateway.Engines.MyEngine  # the full list to serve — a ceiling
-]
-```
-
-Registrations persist to `:lemon_gateway, :registered_engines`; the operator's
-`:engines` key is never written by the registry.
-
-### Event Protocol
-
-Engines MUST send to `sink_pid`:
-
-1. `{:engine_event, run_ref, Event.started(%{engine: id, resume: token})}` -- at start
-2. `{:engine_delta, run_ref, "text"}` -- for streaming (optional, zero or more)
-3. `{:engine_event, run_ref, Event.completed(%{engine: id, ok: bool, answer: text, ...})}` -- at end (exactly once)
-
-Optional: `{:engine_event, run_ref, Event.action_event(%{...})}` for tool/action progress.
-Action detail metadata must stay nested and lossless; in particular,
-`action.detail.result_meta` may carry safe failure fields such as `error_type`,
-`timeout_ms`, and `exit_code` for router/control-plane/operator surfaces.
-
-### If Using CliAdapter
-
-For CLI-based engines wrapping an external CLI runner module, the implementation is minimal. See `LemonCliRunners.Engines.Claude` (in lemon_cli_runners) as a template -- it is ~35 lines, delegating everything to `CliAdapter`.
-
-## How to Add a New Transport
-
-Prefer adding new user-facing messaging channels in `lemon_channels`. Use this gateway-native path only for non-channel ingress shims that still belong with gateway runtime services.
-
-### Step 1: Create the Transport Module
-
-```elixir
-defmodule LemonGateway.Transports.MyTransport do
-  use GenServer
-  use LemonGateway.Transport
-
-  alias LemonGateway.BindingResolver
-  alias LemonCore.ChatScope
-  alias LemonCore.{RouterBridge, RunRequest}
-
-  @impl LemonGateway.Transport
-  def id, do: "mytransport"
-
-  @impl LemonGateway.Transport
-  def start_link(opts) do
-    if LemonGateway.Config.get(:enable_mytransport) == true do
-      GenServer.start_link(__MODULE__, opts, name: __MODULE__)
-    else
-      :ignore
-    end
-  end
-
-  @impl true
-  def init(_opts), do: {:ok, %{}}
-
-  def handle_info({:incoming_message, data}, state) do
-    scope = %ChatScope{transport: :mytransport, chat_id: data.chat_id}
-
-    request = RunRequest.new(%{
-      origin: :mytransport,
-      session_key: "mytransport:#{data.chat_id}:#{data.user_id}",
-      agent_id: BindingResolver.resolve_agent_id(scope),
-      prompt: data.text,
-      engine_id: BindingResolver.resolve_engine(scope, nil, nil),
-      cwd: BindingResolver.resolve_cwd(scope),
-      meta: %{origin: :mytransport, notify_pid: self()}
-    })
-
-    RouterBridge.submit_run(request)
-    {:noreply, state}
-  end
-end
-```
-
-### Step 2: Register
-
-Add to `:transports` in application config, or modify `TransportRegistry.init/1`.
-
-### Best Practices
-
-- Prefer `RouterBridge.submit_run/1` with `%LemonCore.RunRequest{}` (never call Scheduler directly)
-- Build stable, unique `session_key` strings
-- Return `:ignore` from `start_link/1` when disabled
-- Use `BindingResolver` to respect config bindings for engine/cwd/agent metadata
-
-## How to Add Gateway Tools
-
-Gateway tools are injected into Lemon engine runs only (not CLI engines).
-
-### Step 1: Create the Tool Module
-
-```elixir
-defmodule LemonGateway.Tools.MyTool do
-  alias LemonAgent.Types.{AgentTool, AgentToolResult}
-  alias LemonAi.Types.TextContent
-
-  def tool(_cwd, opts \\ []) do
-    %AgentTool{
-      name: "my_tool",
-      description: "Does something useful",
-      parameters: %{
-        "type" => "object",
-        "properties" => %{
-          "param" => %{"type" => "string", "description" => "A parameter"}
-        },
-        "required" => ["param"]
-      },
-      execute: fn _id, params, _signal, _on_update ->
-        result = do_work(params["param"])
-        %AgentToolResult{
-          content: [%TextContent{text: result}],
-          details: %{param: params["param"]}
-        }
-      end
-    }
-  end
-end
-```
-
-### Step 2: Register for Lemon Runs
-
-Add to `gateway_extra_tools/2` in `apps/coding_agent/lib/coding_agent/gateway_engine/session_runner.ex`:
-
-```elixir
-defp gateway_extra_tools(job, opts) do
-  cwd = job.cwd || Map.get(opts, :cwd) || File.cwd!()
-  [
-    LemonGateway.Tools.MyTool.tool(cwd, session_key: job.session_key),
-    # ... existing tools ...
-  ]
-end
-```
-
-## Testing Guidance
-
-### Running Tests
-
-```bash
-# All gateway tests
-mix test apps/lemon_gateway
-
-# Specific file
-mix test apps/lemon_gateway/test/run_test.exs
-
-# Specific test by line number
-mix test apps/lemon_gateway/test/scheduler_test.exs:42
-
-# With tracing
-mix test apps/lemon_gateway --trace
-```
-
-### Test Structure
-
-Tests are in `apps/lemon_gateway/test/`. Key test files:
-
-| Test File | What It Tests |
-|-----------|---------------|
-| `run_test.exs` | Run GenServer: init, events, steering, cancellation, lock handling |
-| `scheduler_test.exs` | Scheduler: slot allocation and thread routing |
-| `thread_worker_test.exs` | ThreadWorker: launch/slot lifecycle and crash handling |
-| `engine_registry_test.exs` | Engine registration, lookup, resume extraction |
-| `engine_lock_test.exs` | EngineLock: acquire/release, FIFO queueing, timeouts |
-| `config_loader_test.exs` | TOML config parsing into typed structs |
-| `binding_resolver_test.exs` | Binding resolution for engine, cwd, agent_id |
-| `apps/lemon_core/test/lemon_core/chat_state_test.exs` | ChatState struct operations owned by `lemon_core` |
-| `command_registry_test.exs` | Command registration and validation |
-| `cancel_flow_test.exs` | End-to-end cancel flow |
-
-`LemonGateway.Run` must convert `engine.start_run/3` crashes into normal error completions so slots, locks, and router observers are always released. Do not let engine startup exceptions kill the run process before `:run_completed` is emitted.
-| `queue_mode_test.exs` | Router/gateway boundary coverage for queue-semantic-free commands and private `ExecutionRequest` adapters |
-| `run_transport_agnostic_test.exs` | Run process transport-agnostic behavior |
-| `cli_adapter_test.exs` | CliAdapter shared logic |
-| `cli_adapter_claude_test.exs` | Claude-shaped CliAdapter event mapping (engine tests moved to lemon_cli_runners with the engines) |
-| `lemon_engine_test.exs` | Lemon engine unit tests |
-| `renderers/basic_test.exs` | Basic renderer event-to-text |
-| `health_test.exs` | Health check system |
-| `sms/inbox_test.exs` | SMS inbox store and query |
-| `sms/webhook_router_test.exs` | SMS webhook handling |
-| `sms/twilio_signature_test.exs` | Twilio signature validation |
-| `lemon_gateway/voice/*_test.exs` | Voice subsystem tests |
-| `integration/*_test.exs` | Integration tests for engine pipelines |
-
-### Writing Tests
-
-Most tests use `async: false` because they interact with shared GenServers (Config, Scheduler, EngineRegistry). The test helper (`test/test_helper.exs`) sets up:
-- Port 0 for web server (random free port)
-- Isolated lock directory to avoid collisions with running dev instances
-
-For engine tests, define a test engine module implementing the `Engine` behaviour (see `RunTest.TestEngine` in `run_test.exs` as a template).
-
-For Run tests, you need to set up: `EngineRegistry` (or mock it), `EngineLock`, `RunSupervisor`, `Scheduler`, and `ThreadWorkerSupervisor`. Many tests start the full `LemonGateway.Application` supervision tree.
-
-### Common Test Patterns
-
-```elixir
-# Create a test execution command
-command = %LemonCore.ExecutionCommand{
-  run_id: LemonCore.Id.run_id(),
-  session_key: "test:#{System.unique_integer([:positive])}",
-  prompt: "test prompt",
-  engine_id: "echo",
-  conversation_key: {:session, "test:conversation"},
-  meta: %{notify_pid: self()}
-}
-
-# Submit and wait for completion
-LemonGateway.Runtime.submit_execution(command)
-assert_receive {:lemon_gateway_run_completed, _job, completed}, 5000
-assert completed.ok == true
-```
-
-## Connections to Other Apps
-
-### Dependencies (this app depends on)
-
-| App | What LemonGateway Uses |
-|-----|----------------------|
-| `agent_core` | `LemonCliRunners.*` (ClaudeRunner, CodexRunner, etc.), `LemonAgent.EventStream`, `LemonAgent.Types.*` |
-| `coding_agent` | `CodingAgent.Session` and `CodingAgent.Session.Presentation` for the native Lemon engine; `CodingAgent.CliRunners.LemonRunner` remains for CodingAgent subagent orchestration |
-| `lemon_core` | `LemonCore.Store` (chat state, runs, progress), `LemonCore.Bus` (event broadcast), `LemonCore.Telemetry`, `LemonCore.ResumeToken`, `LemonCore.ChatScope`, `LemonCore.Binding`, `LemonCore.BindingResolver`, `LemonCore.Secrets`, `LemonCore.GatewayConfig`, `LemonCore.Introspection`, `LemonCore.Event` |
-
-### Dependents (apps that depend on this)
-
-| App | How It Uses LemonGateway |
-|-----|-------------------------|
-| `lemon_router` | Configures a `LemonCore.EngineRuntime`, submits `LemonCore.ExecutionCommand` values, and tracks bus events through router-owned run/session processes |
-| `lemon_channels` | Subscribes to bus events for channel-specific rendering and delivery |
-| `lemon_control_plane` | May submit jobs or cancel runs via `Runtime` API |
-| `lemon_automation` | Submits jobs for scheduled/cron runs |
-
-### Key Integration Points
-
-1. **Execution submission**: Prefer `LemonGateway.Runtime.submit_execution(%LemonCore.ExecutionCommand{})` to trigger an AI run.
-2. **Completion notification**: Set `meta.notify_pid` to receive `{:lemon_gateway_run_completed, job, completed}` when a run finishes.
-3. **Bus events**: Subscribe to `LemonCore.Bus` topic `"run:<run_id>"` to receive real-time run events.
-4. **Run cancellation**: Call `LemonGateway.Runtime.cancel_by_run_id/2` with the run_id.
-5. **Chat state**: `LemonCore.ChatStateStore` manages auto-resume tokens per session.
-
-## Common Debugging
-
-### Inspect Runtime State
-
-```elixir
-# Scheduler (in_flight, waitq, max slots)
 :sys.get_state(LemonGateway.Scheduler)
-
-# Engine locks (active locks, waiters)
 :sys.get_state(LemonGateway.EngineLock)
-
-# Active thread workers
 DynamicSupervisor.which_children(LemonGateway.ThreadWorkerSupervisor)
-
-# Active runs
 DynamicSupervisor.which_children(LemonGateway.RunSupervisor)
-
-# Look up a specific run
 Registry.lookup(LemonGateway.RunRegistry, "run_uuid")
-
-# List registered engines
-LemonGateway.EngineRegistry.list_engines()
-
-# Check config value
+LemonGateway.Executor.validate_configured()
 LemonGateway.Config.get(:max_concurrent_runs)
-LemonGateway.Config.get(:auto_resume)
 ```
 
-### Common Issues
+For stuck runs, inspect scheduler in-flight slots and `EngineLock` waiters. For an
+unready runtime, inspect `LemonGateway.Executor.validate_configured/0` and the
+configured `:executor` module; do not look for a registry entry or a selected engine.
+For auto-resume, inspect `LemonCore.ChatStateStore` and the native executor's resume
+state. For transport startup, inspect `TransportRegistry`; Telegram, Discord, XMTP,
+and email remain channel-owned.
 
-**Stuck runs / slots not releasing**:
-- Check `Scheduler` state: `map_size(state.in_flight)` vs `state.max`
-- Check `EngineLock` for stale locks (auto-reaped every 30s by default)
-- Stale slot requests cleaned up after 30s timeout
+## Integration Points
 
-**Engine not found**:
-- Verify registration: `LemonGateway.EngineRegistry.list_engines()`
-- Check composite ID resolution: `"claude:model"` resolves to `"claude"` prefix
-
-**Auto-resume not working**:
-- Verify `auto_resume = true` in config
-- Check `LemonCore.ChatStateStore.get(session_key)` for stored resume token
-- Resume only applies if engine matches (or no engine_id set on job)
-
-**Context overflow**:
-- Run auto-clears `ChatState` on context-length errors (multiple languages detected)
-- Next run starts fresh without resume token
-
-**Transport not starting**:
-- Discord is channels-owned; check `LemonChannels.Application` / adapter boot, not gateway transport startup
-- Check `TransportRegistry.enabled_transports()`
-- Gateway transport startup here applies only to gateway-native transports
-
-## Introspection Events
-
-ThreadWorker and Scheduler emit introspection events via `LemonCore.Introspection.record/3`:
-
-| Event Type | When | Key Fields |
-|---|---|---|
-| `:thread_started` | ThreadWorker init | `thread_key` |
-| `:thread_message_dispatched` | Request enqueued to worker | `thread_key`, `queue_len` |
-| `:thread_terminated` | ThreadWorker terminate | `thread_key`, `queue_len` |
-| `:scheduled_job_triggered` | Scheduler receives submit | `engine_id`, `thread_key` |
-| `:scheduled_job_completed` | Scheduler releases slot | `in_flight`, `max` |
-
-## Telemetry Events
-
-Emitted via `LemonCore.Telemetry`:
-
-| Event | When | Measurements |
-|---|---|---|
-| `[:lemon, :gateway, :scheduler, :slot_granted]` | Slot allocated to worker | `in_flight`, `max`, `waitq`, `wait_ms` |
-| `[:lemon, :gateway, :scheduler, :slot_queued]` | Worker queued for slot | `in_flight`, `max`, `waitq` |
-| `[:lemon, :gateway, :scheduler, :slot_released]` | Slot freed | `in_flight`, `max`, `waitq` |
-| `run_start` | Run begins | `session_key`, `engine`, `origin` |
-| `run_first_token` | First delta received | `run_id`, `latency_ms` |
-| `run_stop` | Run completes | `run_id`, `duration_ms`, `ok?` |
+1. Submit execution through `LemonGateway.Runtime.submit_execution/1`.
+2. Set `meta.notify_pid` to receive `{:lemon_gateway_run_completed, execution_request, completed}`.
+3. Subscribe to `LemonCore.Bus` topic `"run:<run_id>"` for real-time run events.
+4. Cancel through `LemonGateway.Runtime.cancel_by_run_id/2`.
+5. Let `LemonCore.ChatStateStore` retain native and task resume state.
 
 ## Dependencies
 
-### Umbrella Apps
-- `agent_core` -- CLI runner infrastructure, tool types, event stream
-- `coding_agent` -- Native Lemon engine runner, session management
-- `lemon_channels` -- Telegram/Discord/XMTP adapters live there and consume gateway bus events; LemonGateway must not depend on it directly. Optional health checks that inspect channel-owned processes must use runtime lookup/custom checks rather than compile-time references.
-- `lemon_core` -- Store, Bus, Telemetry, types, secrets, config loading
-
-### External Libraries
-- `jason` -- JSON encoding/decoding
-- `uuid` -- UUID generation for run IDs
-- `toml` -- TOML config parsing
-- `plug` + `bandit` -- HTTP servers (health :4042, SMS webhooks, voice webhooks)
-- `gen_smtp` + `mail` -- SMTP email handling
-- `earmark_parser` -- Markdown to Telegram entity rendering
-- `websockex` + `websock_adapter` -- WebSocket clients (Deepgram STT, Twilio Media Streams)
+- `coding_agent` provides the configured native executor and its in-process tools.
+- `lemon_core` provides execution contracts, Store, Bus, Telemetry, resume formats,
+  bindings, secrets, and canonical gateway configuration.
+- `lemon_channels` owns Telegram/Discord/XMTP channel adapters and consumes gateway
+  bus events; LemonGateway does not depend on it directly.
+- `lemon_cli_runners` provides optional vendor task runners only.

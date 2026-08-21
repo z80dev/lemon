@@ -65,17 +65,6 @@ defmodule LemonGateway.Transports.Webhook.Config do
     Request.int_value(Request.fetch(cfg, :port), @default_port)
   end
 
-  @spec default_engine() :: binary()
-  def default_engine do
-    if is_pid(Process.whereis(LemonGateway.Config)) do
-      LemonGateway.Config.get(:default_engine) || "lemon"
-    else
-      resolve_from_app_config(:default_engine) || "lemon"
-    end
-  rescue
-    _ -> "lemon"
-  end
-
   defp parse_ip(value) when is_binary(value) do
     value
     |> String.to_charlist()

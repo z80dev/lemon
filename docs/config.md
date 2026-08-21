@@ -40,7 +40,6 @@ api_key_secret = "OPENCODE_API_KEY"
 provider = "anthropic"
 model = "anthropic:claude-sonnet-4-20250514"
 thinking_level = "medium"
-engine = "lemon"
 
 [runtime.compaction]
 enabled = true
@@ -52,6 +51,8 @@ enabled = true
 max_retries = 3
 base_delay_ms = 1000
 
+# Delegated task-runner configuration. These tables configure vendor CLIs only
+# when a Lemon task invokes them; they never select Lemon's native executor.
 [runtime.cli.codex]
 extra_args = ["-c", "notify=[]"]
 auto_approve = false
@@ -66,6 +67,10 @@ extra_args = []
 # Optional provider/model overrides passed to `pi --provider/--model`.
 provider = "openai"
 model = "gpt-4.1"
+
+[runtime.cli.kimi]
+# Optional extra flags passed to the Kimi task runner.
+extra_args = []
 
 [runtime.cli.claude]
 # dangerously_skip_permissions = false  # opt-in only — set true only when you fully trust the model and task
@@ -133,7 +138,6 @@ level = "debug"
 
 [gateway]
 max_concurrent_runs = 2
-default_engine = "lemon"
 auto_resume = false
 enable_telegram = false
 enable_discord = false
@@ -197,6 +201,32 @@ transport = "telegram"
 chat_id = 12345678
 agent_id = "default"
 ```
+
+## Native Execution and Delegated Task Runners
+
+Lemon uses its native executor for every top-level TUI and gateway run. Configure
+its provider, model, and thinking defaults in `[defaults]`; no engine selection
+key is supported.
+
+`[runtime.cli.codex]`, `[runtime.cli.claude]`, `[runtime.cli.kimi]`,
+`[runtime.cli.opencode]`, and `[runtime.cli.pi]` configure their respective
+vendor CLIs only when the `task` tool delegates work to a subagent. They do not
+select a gateway executor, alter the native executor, or provide a fallback for
+top-level runs. Keep these tables when you use those delegated task runners.
+
+### Removed Top-Level Engine Configuration
+
+Remove these legacy keys and tables from global and project configuration:
+
+| Removed configuration | Migration |
+|---|---|
+| `engine`, `[defaults].engine`, `default_engine`, and `engine_preference` | Remove the key. Keep `[defaults]` provider, model, and thinking settings for native execution. |
+| `[gateway].default_engine`, `[gateway.projects.<id>].default_engine`, and `[[gateway.bindings]].default_engine` | Remove the key. Retain project `root`, binding `project`/`agent_id`, and queue settings as needed. |
+| `[gateway.engines.<id>]` | Remove the entire table. Custom and external gateway executors are not supported. |
+
+Use a named vendor only in a delegated `task` request, with optional
+`[runtime.cli.<vendor>]` settings for that task runner. There is no TOML
+replacement for selecting a top-level external or custom engine.
 
 ## Environment Overrides
 
@@ -348,7 +378,6 @@ base_url = "http://127.0.0.1:11434/v1"
 [defaults]
 provider = "openai"
 model = "openai:local-model-name"
-engine = "lemon"
 ```
 
 Then store the endpoint key:
@@ -677,7 +706,7 @@ details.
 ## Sections
 
 - `providers.<name>`: API keys and base URLs per provider.
-- `defaults`: global default model/provider/thinking/engine.
+- `defaults`: global default provider, model, and thinking level for native execution.
 - `runtime`: runtime behavior and tool settings.
 - `runtime.tools.web`: `websearch` / `webfetch` providers, guardrails, cache, and Firecrawl fallback.
 - `runtime.tools.wasm`: WASM sidecar runtime controls and discovery paths.
@@ -685,19 +714,20 @@ details.
 - `profiles.<agent_id>`: assistant profiles (identity + defaults) used by gateway/control-plane.
 - `runtime.compaction`: context compaction settings.
 - `runtime.retry`: retry settings.
-- `runtime.cli`: CLI runner settings (`codex`, `claude`, `kimi`, `opencode`, `pi`).
+- `runtime.cli`: vendor CLI task-runner settings (`codex`, `claude`, `kimi`, `opencode`, `pi`); these do not configure top-level execution.
 - `tui`: terminal UI settings.
-- `gateway`: Lemon gateway settings, including `queue`, `telegram`, `discord`, `sms`, `voice`, `xmtp`, `projects`, `bindings`, and `engines`.
+- `gateway`: Lemon gateway settings, including `queue`, `telegram`, `discord`, `sms`, `voice`, `xmtp`, `projects`, and `bindings`.
 - `logging`: optional file logging configuration.
 
 ## Gateway Projects and Bindings
 
 When LemonGateway handles a Telegram message, it can optionally map that chat (or topic/thread) to a named
-**project**. A project is just a **working directory root** (repo path) plus optional defaults.
+**project**. A project is a **working directory root** plus optional agent and
+queue defaults.
 
 Why it matters:
-- The gateway will run engines with `cwd` set to the project root (so file edits/commands happen in the right repo).
-- The gateway will load per-project config from `<project_root>/.lemon/config.toml` (which can override agent profiles,
+- The native executor runs with `cwd` set to the project root (so file edits/commands happen in the right repo).
+- The gateway loads per-project config from `<project_root>/.lemon/config.toml` (which can override agent profiles,
   models, tool policy, etc. compared to your global `~/.lemon/config.toml`).
 - If a chat has no bound project, gateway falls back to `gateway.default_cwd` (or `~/` by default).
 
@@ -708,13 +738,11 @@ Define projects under `[gateway.projects.<project_id>]`:
 ```toml
 [gateway.projects.myrepo]
 root = "/path/to/myrepo"
-# Optional: project-level default engine if a binding doesn't set one.
-default_engine = "lemon"
 ```
 
 ### Bindings
 
-Bindings connect an incoming chat scope to a project/agent/defaults:
+Bindings connect an incoming chat scope to a project, agent profile, and queue defaults:
 
 ```toml
 [[gateway.bindings]]
@@ -727,8 +755,6 @@ project = "myrepo"
 # Optional: choose which agent profile to use (defaults to "default")
 agent_id = "default"
 
-# Optional: per-chat default engine/queue overrides
-default_engine = "claude"
 queue_mode = "steer"
 ```
 
@@ -936,7 +962,7 @@ next user message is automatically rewritten with a compact transcript and sent 
 ```toml
 [gateway.telegram.compaction]
 enabled = true
-context_window_tokens = 400000  # optional override; if unset Lemon infers from model/engine
+context_window_tokens = 400000  # optional override; if unset Lemon infers from the model and native executor
 reserve_tokens = 16384          # optional safety margin before limit
 trigger_ratio = 0.9             # optional; 0.9 means trigger at 90% of context window
 ```

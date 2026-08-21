@@ -340,17 +340,12 @@ defmodule LemonChannels.Telegram.Truncate do
     end
   end
 
-  # Which vendor spells resume how is not this module's business: registered
-  # resume formats answer for their own engine, and the generic shape below
-  # catches engines with no registered format. It is anchored on purpose —
-  # an unanchored prefix classifies prose like "please resume the migration
-  # tomorrow" as a resume command and pins it to the tail of a split message.
-  @generic_resume_line ~r/^`?[a-z0-9_-]+\s+(?:resume|--resume|--session)\s+[^\s`]+`?$/i
-
+  # Top-level channel resumes are native-only. Delegated vendor resume metadata
+  # must not be pinned into outbound conversation text.
   defp resume_line?(line) when is_binary(line) do
-    trimmed = String.trim(line)
-
-    ResumeToken.is_resume_line(trimmed) || Regex.match?(@generic_resume_line, trimmed)
+    line
+    |> String.trim()
+    |> ResumeToken.is_resume_line("lemon")
   end
 
   # `resume_line` is the *trimmed* last line, so the text has to lose its

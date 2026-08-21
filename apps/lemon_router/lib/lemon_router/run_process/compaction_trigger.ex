@@ -2,19 +2,18 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
   @moduledoc """
   Context-window overflow detection and preemptive compaction triggering.
 
-  Handles extraction of completion event fields (answer, error, usage, resume,
-  engine), context-overflow detection, and marking sessions for compaction when
-  usage approaches the model's context window limit.
+  Handles extraction of completion event fields (answer, error, usage, resume),
+  context-overflow detection, and marking sessions for compaction when usage
+  approaches the model's context window limit.
   """
 
   require Logger
 
   alias LemonAi.Tokens
-  alias LemonCore.ResumeToken
+  alias LemonCore.{ExecutionCommand, ResumeToken}
   alias LemonRouter.ChannelContext
 
   @default_compaction_reserve_tokens 16_384
-  @default_codex_context_window_tokens 400_000
   @default_preemptive_compaction_trigger_ratio 0.9
   @context_overflow_error_markers [
     "context_length_exceeded",
@@ -81,16 +80,6 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
     end
   end
 
-  @spec extract_completed_engine(LemonCore.Event.t() | term()) :: binary() | nil
-  def extract_completed_engine(event) do
-    case extract_from_completed_or_payload(event, :engine) do
-      engine when is_binary(engine) and engine != "" -> engine
-      _ -> nil
-    end
-  rescue
-    _ -> nil
-  end
-
   @spec extract_completed_usage(LemonCore.Event.t() | term()) :: map() | nil
   def extract_completed_usage(event) do
     case extract_from_completed_or_payload(event, :usage) do
@@ -128,7 +117,7 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
   def estimate_input_tokens_from_prompt(state) do
     prompt =
       case Map.get(state, :execution_request) do
-        %LemonCore.ExecutionCommand{prompt: p} when is_binary(p) -> p
+        %ExecutionCommand{prompt: prompt} when is_binary(prompt) -> prompt
         _ -> nil
       end
 
@@ -239,7 +228,7 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
          cfg <- preemptive_compaction_config(state.session_key),
          true <- cfg.enabled,
          context_window when is_integer(context_window) and context_window > 0 <-
-           resolve_preemptive_compaction_context_window(state, event, cfg),
+           resolve_preemptive_compaction_context_window(state, cfg),
          threshold when is_integer(threshold) and threshold > 0 <-
            preemptive_compaction_threshold(
              context_window,
@@ -458,22 +447,17 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
     _ -> @default_compaction_reserve_tokens
   end
 
-  defp resolve_preemptive_compaction_context_window(state, event, cfg) when is_map(cfg) do
-    cfg.context_window_tokens ||
-      resolve_context_window_from_model(state) ||
-      resolve_context_window_from_engine(state, event)
+  defp resolve_preemptive_compaction_context_window(state, cfg) when is_map(cfg) do
+    cfg.context_window_tokens || resolve_context_window_from_model(state)
   end
 
-  defp resolve_preemptive_compaction_context_window(_state, _event, _cfg), do: nil
+  defp resolve_preemptive_compaction_context_window(_state, _cfg), do: nil
 
   defp resolve_context_window_from_model(state) when is_map(state) do
     model =
       case Map.get(state, :execution_request) do
-        %LemonCore.ExecutionCommand{meta: meta} when is_map(meta) ->
-          fetch(meta, :model)
-
-        _ ->
-          nil
+        %ExecutionCommand{meta: meta} when is_map(meta) -> fetch(meta, :model)
+        _ -> nil
       end
 
     model_context_window(model)
@@ -487,7 +471,8 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
     model
     |> model_lookup_candidates()
     |> Enum.find_value(fn candidate ->
-      if Code.ensure_loaded?(LemonAi.Models) and function_exported?(LemonAi.Models, :find_by_id, 1) do
+      if Code.ensure_loaded?(LemonAi.Models) and
+           function_exported?(LemonAi.Models, :find_by_id, 1) do
         case LemonAi.Models.find_by_id(candidate) do
           %{context_window: cw} when is_integer(cw) and cw > 0 -> cw
           _ -> nil
@@ -535,23 +520,6 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
   end
 
   defp model_lookup_candidates(_), do: []
-
-  defp resolve_context_window_from_engine(state, event) do
-    engine =
-      extract_completed_engine(event) ||
-        case Map.get(state, :execution_request) do
-          %LemonCore.ExecutionCommand{} = request ->
-            request.engine_id
-
-          _ ->
-            nil
-        end
-
-    engine_text = String.downcase(to_string(engine || ""))
-    if String.contains?(engine_text, "codex"), do: @default_codex_context_window_tokens, else: nil
-  rescue
-    _ -> nil
-  end
 
   defp preemptive_compaction_threshold(context_window, reserve_tokens, trigger_ratio)
        when is_integer(context_window) and context_window > 0 and is_integer(reserve_tokens) and

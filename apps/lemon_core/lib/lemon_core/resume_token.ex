@@ -121,13 +121,13 @@ defmodule LemonCore.ResumeToken do
 
   """
   @spec is_resume_line(String.t()) :: boolean()
-  # Resume-line detection keeps the LemonGateway.Engine callback name.
+  # Public predicate name retained for resume-format consumers.
   # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
   def is_resume_line(line) when is_binary(line) do
     Enum.any?(ResumeFormats.all(), &ResumeFormat.resume_line?(&1, line))
   end
 
-  # Resume-line detection keeps the LemonGateway.Engine callback name.
+  # Public predicate name retained for resume-format consumers.
   # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
   def is_resume_line(_), do: false
 
@@ -135,7 +135,7 @@ defmodule LemonCore.ResumeToken do
   Check if a line is a resume line for a specific engine.
   """
   @spec is_resume_line(String.t(), String.t()) :: boolean()
-  # Resume-line detection keeps the LemonGateway.Engine callback name.
+  # Public predicate name retained for resume-format consumers.
   # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
   def is_resume_line(line, engine) when is_binary(line) and is_binary(engine) do
     case ResumeFormats.fetch(engine) do

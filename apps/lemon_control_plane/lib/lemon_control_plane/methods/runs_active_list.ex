@@ -86,7 +86,7 @@ defmodule LemonControlPlane.Methods.RunsActiveList do
       "runId" => run.run_id,
       "sessionKey" => run.session_key,
       "agentId" => run.agent_id,
-      "engine" => run.engine,
+      "engine" => "lemon",
       "startedAtMs" => run.started_at_ms,
       "status" => "active"
     }

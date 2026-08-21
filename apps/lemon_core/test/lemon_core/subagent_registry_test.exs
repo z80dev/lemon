@@ -1,7 +1,6 @@
 defmodule LemonCore.SubagentRegistryTest do
   use ExUnit.Case, async: false
 
-  alias LemonCore.EngineCatalog
   alias LemonCore.SubagentRegistry
   alias LemonCore.SubagentRunner
 
@@ -15,9 +14,6 @@ defmodule LemonCore.SubagentRegistryTest do
 
     @impl true
     def describe, do: %{summary: "A test runner", caveats: ["ignores everything"]}
-
-    @impl true
-    def routable?, do: false
 
     @impl true
     def start(_opts), do: {:ok, %{}}
@@ -36,9 +32,6 @@ defmodule LemonCore.SubagentRegistryTest do
     def describe, do: %{summary: "The replacement", caveats: []}
 
     @impl true
-    def routable?, do: false
-
-    @impl true
     def start(_opts), do: {:ok, %{}}
 
     @impl true
@@ -53,9 +46,6 @@ defmodule LemonCore.SubagentRegistryTest do
 
     @impl true
     def describe, do: %{summary: "Runs elsewhere"}
-
-    @impl true
-    def routable?, do: false
 
     @impl true
     def start(_opts), do: {:ok, %{}}
@@ -75,25 +65,6 @@ defmodule LemonCore.SubagentRegistryTest do
 
     @impl true
     def default_policy, do: :full_access
-
-    @impl true
-    def routable?, do: false
-
-    @impl true
-    def start(_opts), do: {:ok, %{}}
-
-    @impl true
-    def events(_session), do: []
-  end
-
-  defmodule Routable do
-    @behaviour SubagentRunner
-
-    @impl true
-    def id, do: "test-routable"
-
-    @impl true
-    def describe, do: %{summary: "Also a gateway engine"}
 
     @impl true
     def start(_opts), do: {:ok, %{}}
@@ -152,8 +123,6 @@ defmodule LemonCore.SubagentRegistryTest do
 
   setup do
     original = Application.fetch_env(:lemon_core, :subagent_runners)
-    original_engines = Application.fetch_env(:lemon_core, :known_engines)
-    original_registered = Application.fetch_env(:lemon_core, :registered_engines)
     registered_before = MapSet.new(SubagentRegistry.list_ids())
 
     on_exit(fn ->
@@ -162,8 +131,6 @@ defmodule LemonCore.SubagentRegistryTest do
       end)
 
       restore(:subagent_runners, original)
-      restore(:known_engines, original_engines)
-      restore(:registered_engines, original_registered)
     end)
 
     :ok
@@ -251,39 +218,6 @@ defmodule LemonCore.SubagentRegistryTest do
 
     test "is nil for an unregistered id" do
       assert SubagentRegistry.policy("nope") == nil
-    end
-  end
-
-  describe "engine catalog sync" do
-    test "a routable runner's id becomes a known engine" do
-      refute EngineCatalog.known?("test-routable")
-
-      assert SubagentRegistry.register(Routable) == :ok
-
-      assert EngineCatalog.known?("test-routable")
-    end
-
-    test "a non-routable runner's id stays out of the catalog" do
-      assert SubagentRegistry.register(Restricted) == :ok
-
-      refute EngineCatalog.known?("test-restricted")
-    end
-
-    test "the static catalog stays the floor" do
-      assert SubagentRegistry.register(Routable) == :ok
-
-      assert EngineCatalog.known?("lemon")
-      assert EngineCatalog.known?("codex")
-    end
-
-    test "an operator's configured engine list is a ceiling registration cannot widen" do
-      Application.put_env(:lemon_core, :known_engines, ["lemon"])
-
-      assert SubagentRegistry.register(Routable) == :ok
-
-      assert EngineCatalog.list_ids() == ["lemon"]
-      refute EngineCatalog.known?("test-routable")
-      refute EngineCatalog.known?("codex")
     end
   end
 

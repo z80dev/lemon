@@ -21,7 +21,6 @@ defmodule LemonCore.RunRequest do
           agent_id: term(),
           prompt: term(),
           queue_mode: queue_mode(),
-          engine_id: term(),
           model: term(),
           images: [map()],
           resume: ResumeToken.t() | nil,
@@ -36,7 +35,6 @@ defmodule LemonCore.RunRequest do
             agent_id: "default",
             prompt: nil,
             queue_mode: :collect,
-            engine_id: nil,
             model: nil,
             images: [],
             resume: nil,
@@ -73,7 +71,6 @@ defmodule LemonCore.RunRequest do
       agent_id: normalize_agent_id(field(params, :agent_id), session_key),
       prompt: normalize_prompt(field(params, :prompt)),
       queue_mode: normalize_queue_mode(field(params, :queue_mode)),
-      engine_id: normalize_engine_id(field(params, :engine_id)),
       model: normalize_model(field(params, :model)),
       images: normalize_images(field(params, :images)),
       resume: normalize_resume(field(params, :resume)),
@@ -107,10 +104,6 @@ defmodule LemonCore.RunRequest do
   @spec normalize_queue_mode(term()) :: queue_mode()
   def normalize_queue_mode(queue_mode) when queue_mode in [nil, false], do: :collect
   def normalize_queue_mode(queue_mode), do: queue_mode
-
-  @spec normalize_engine_id(term()) :: term()
-  def normalize_engine_id(engine_id) when engine_id in [nil, false], do: nil
-  def normalize_engine_id(engine_id), do: engine_id
 
   @spec normalize_model(term()) :: term()
   def normalize_model(model) when model in [nil, false], do: nil

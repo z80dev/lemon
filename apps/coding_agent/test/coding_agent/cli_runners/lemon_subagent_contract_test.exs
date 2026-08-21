@@ -10,9 +10,8 @@ defmodule CodingAgent.CliRunners.LemonSubagentContractTest do
     async: false,
     runner: CodingAgent.CliRunners.LemonSubagent
 
-  test "declares itself the tool-level alias, not a router-visible engine" do
+  test "declares its tool-level identity" do
     assert CodingAgent.CliRunners.LemonSubagent.id() == "internal"
-    refute CodingAgent.CliRunners.LemonSubagent.routable?()
   end
 
   test "children of the in-process engine keep full tool access" do

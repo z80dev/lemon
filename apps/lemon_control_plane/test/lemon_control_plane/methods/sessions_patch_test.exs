@@ -134,87 +134,51 @@ defmodule LemonControlPlane.Methods.SessionsPatchTest do
       params = %{
         "sessionKey" => session_key,
         "model" => "secret-model-name",
-        "thinkingLevel" => "extended",
-        "preferredEngine" => "codex"
+        "thinkingLevel" => "extended"
       }
 
       {:ok, result} = SessionsPatch.handle(params, %{auth: %{role: :operator}})
 
       assert result["summary"]["patchedKeys"] == [
                "model",
-               "preferred_engine",
                "thinking_level"
              ]
 
-      assert result["summary"]["patchedCount"] == 3
+      assert result["summary"]["patchedCount"] == 2
       refute inspect(result) =~ "secret-model-name"
 
       LemonCore.Store.delete_session_policy(session_key)
     end
   end
 
-  describe "preferred_engine" do
-    test "stores preferred_engine override" do
-      session_key = "session_#{System.unique_integer()}"
+  describe "legacy engine selectors" do
+    test "rejects them with actionable native-routing guidance" do
+      legacy_fields = ~w(
+        engine
+        engine_id
+        engineId
+        default_engine
+        defaultEngine
+        engine_preference
+        enginePreference
+        preferred_engine
+        preferredEngine
+      )
 
-      params = %{
-        "sessionKey" => session_key,
-        "preferredEngine" => "codex"
-      }
+      params =
+        Map.new(legacy_fields, fn field -> {field, "codex"} end)
+        |> Map.put("sessionKey", "session_#{System.unique_integer()}")
 
-      ctx = %{auth: %{role: :operator}}
+      assert {:error, {:invalid_params, message, %{fields: fields}}} =
+               SessionsPatch.handle(params, %{auth: %{role: :operator}})
 
-      {:ok, _result} = SessionsPatch.handle(params, ctx)
+      assert fields == legacy_fields
+      assert message =~ "Top-level engine selection is no longer supported"
 
-      stored = LemonCore.Store.get_session_policy(session_key)
-      assert stored[:preferred_engine] == "codex"
+      assert message =~
+               "remove engine, engine_id, engineId, default_engine, defaultEngine, engine_preference, enginePreference, preferred_engine, preferredEngine"
 
-      # Cleanup
-      LemonCore.Store.delete_session_policy(session_key)
-    end
-
-    test "nil preferredEngine is not stored" do
-      session_key = "session_#{System.unique_integer()}"
-
-      params = %{
-        "sessionKey" => session_key,
-        "preferredEngine" => nil,
-        "model" => "test-model"
-      }
-
-      ctx = %{auth: %{role: :operator}}
-
-      {:ok, _result} = SessionsPatch.handle(params, ctx)
-
-      stored = LemonCore.Store.get_session_policy(session_key)
-      assert stored[:model] == "test-model"
-      assert not Map.has_key?(stored, :preferred_engine)
-
-      # Cleanup
-      LemonCore.Store.delete_session_policy(session_key)
-    end
-
-    test "preferred_engine merges with existing session policy" do
-      session_key = "session_#{System.unique_integer()}"
-
-      # Pre-populate
-      LemonCore.Store.put_session_policy(session_key, %{model: "existing-model"})
-
-      params = %{
-        "sessionKey" => session_key,
-        "preferredEngine" => "claude"
-      }
-
-      ctx = %{auth: %{role: :operator}}
-
-      {:ok, _result} = SessionsPatch.handle(params, ctx)
-
-      stored = LemonCore.Store.get_session_policy(session_key)
-      assert stored[:preferred_engine] == "claude"
-      assert stored[:model] == "existing-model"
-
-      # Cleanup
-      LemonCore.Store.delete_session_policy(session_key)
+      assert message =~ "Lemon now runs natively; use model to choose a model"
     end
   end
 

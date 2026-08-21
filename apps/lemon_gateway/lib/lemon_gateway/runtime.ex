@@ -62,8 +62,10 @@ defmodule LemonGateway.Runtime do
   @impl true
   @spec available?() :: boolean()
   def available? do
-    case GenServer.whereis(LemonGateway.Scheduler) do
-      pid when is_pid(pid) -> true
+    with pid when is_pid(pid) <- GenServer.whereis(LemonGateway.Scheduler),
+         :ok <- LemonGateway.Executor.validate_configured() do
+      true
+    else
       _ -> false
     end
   rescue

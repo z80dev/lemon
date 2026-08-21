@@ -35,8 +35,6 @@ defmodule CodingAgent.MixProject do
       {:lemon_gateway, in_umbrella: true},
       {:lemon_memory, in_umbrella: true},
       {:lemon_browser, in_umbrella: true},
-      # Test-only: CodingAgent.GatewayEngine is an out-of-app LemonGateway.Engine,
-      # so it is held to the same contract kit third-party engines use.
       {:lemon_platform_test, in_umbrella: true, only: :test, runtime: false},
       {:jason, "~> 1.4"},
       {:req, "~> 0.5"},

@@ -151,7 +151,6 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "sessionKey" => :string,
         "agentId" => :string,
         "queueMode" => :string,
-        "engineId" => :string,
         "model" => :string
       }
     },
@@ -187,7 +186,6 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "sessionKey" => :string,
         "sessionTag" => :string,
         "queueMode" => :string,
-        "engineId" => :string,
         "model" => :string,
         "cwd" => :string,
         "toolPolicy" => :map,
@@ -487,8 +485,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
       optional: %{
         "toolPolicy" => :map,
         "model" => :string,
-        "thinkingLevel" => :string,
-        "preferredEngine" => :string
+        "thinkingLevel" => :string
       }
     },
     "sessions.reset" => %{
