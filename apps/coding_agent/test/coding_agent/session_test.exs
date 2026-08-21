@@ -1,5 +1,5 @@
 defmodule CodingAgent.SessionTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias CodingAgent.Config
   alias CodingAgent.BashExecutor
