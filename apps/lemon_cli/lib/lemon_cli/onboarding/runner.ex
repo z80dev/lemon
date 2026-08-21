@@ -5,7 +5,7 @@ defmodule LemonCli.Onboarding.Runner do
   alias LemonCli.Onboarding.LogSilencer
   alias LemonCore.OAuth.LocalCallbackListener
   alias LemonCli.Onboarding.Provider
-  alias LemonCli.Onboarding.TerminalUI
+  alias LemonCli.Onboarding.PromptUI
   alias LemonCore.Config
   alias LemonCore.Config.TomlPatch
   alias LemonCore.Secrets
@@ -36,7 +36,7 @@ defmodule LemonCli.Onboarding.Runner do
       error: fn message -> IO.puts(:stderr, message) end,
       prompt: fn prompt -> IO.gets(prompt) end,
       secret: &read_secret/1,
-      select: &TerminalUI.select/1
+      select: &PromptUI.select/1
     }
   end
 
@@ -44,7 +44,7 @@ defmodule LemonCli.Onboarding.Runner do
   def run(args, %Provider{} = spec, opts \\ []) when is_list(args) do
     io = Keyword.get(opts, :io, default_io())
 
-    LogSilencer.with_quiet_logs(interactive_tui_session?(io), fn ->
+    LogSilencer.with_quiet_logs(interactive_prompt_session?(io), fn ->
       do_run(args, spec, io)
     end)
   end
@@ -128,8 +128,8 @@ defmodule LemonCli.Onboarding.Runner do
     if Code.ensure_loaded?(Mix.Error), do: Mix.Error, else: CLI.Error
   end
 
-  defp interactive_tui_session?(io) when is_map(io) do
-    is_function(Map.get(io, :select), 1) and TerminalUI.available?()
+  defp interactive_prompt_session?(io) when is_map(io) do
+    is_function(Map.get(io, :select), 1) and PromptUI.available?()
   end
 
   defp ensure_secrets_ready! do
@@ -191,20 +191,15 @@ defmodule LemonCli.Onboarding.Runner do
     default_index = Enum.find_index(spec.auth_modes, &(&1 == default_mode)) || 0
 
     options =
-      spec.auth_modes
-      |> Enum.with_index()
-      |> Enum.map(fn {mode, idx} ->
-        label =
-          auth_mode_choice_label(spec, mode) <>
-            if(idx == default_index, do: "   [default]", else: "")
-
-        %{label: label, value: mode}
+      Enum.map(spec.auth_modes, fn mode ->
+        %{label: auth_mode_choice_label(spec, mode), value: mode}
       end)
 
     case select_value(io, %{
            title: "Choose #{spec.display_name} Authentication",
            subtitle: "Pick how Lemon should store and use these credentials.",
-           options: options
+           options: options,
+           default_index: default_index
          }) do
       {:ok, mode} ->
         mode
@@ -454,17 +449,14 @@ defmodule LemonCli.Onboarding.Runner do
     default_model =
       Enum.find(spec.preferred_models, fn model -> model in available end) || hd(available)
 
-    options =
-      available
-      |> Enum.map(fn model ->
-        label = model <> if(model == default_model, do: "   [default]", else: "")
-        %{label: label, value: model}
-      end)
+    default_index = Enum.find_index(available, &(&1 == default_model)) || 0
+    options = Enum.map(available, &%{label: &1, value: &1})
 
     case select_value(io, %{
            title: "Choose #{spec.display_name} Model",
            subtitle: "This sets defaults.provider and defaults.model in config.toml.",
-           options: options
+           options: options,
+           default_index: default_index
          }) do
       {:ok, model} ->
         model
@@ -647,23 +639,18 @@ defmodule LemonCli.Onboarding.Runner do
   end
 
   defp prompt_yes_no?(message, default, io) do
-    options =
-      if default do
-        [
-          %{label: "Yes   [default]", value: true},
-          %{label: "No", value: false}
-        ]
-      else
-        [
-          %{label: "Yes", value: true},
-          %{label: "No   [default]", value: false}
-        ]
-      end
+    options = [
+      %{label: "Yes", value: true},
+      %{label: "No", value: false}
+    ]
+
+    default_index = if default, do: 0, else: 1
 
     case select_value(io, %{
            title: message,
            subtitle: "Use Enter to confirm.",
-           options: options
+           options: options,
+           default_index: default_index
          }) do
       {:ok, value} ->
         value

@@ -18,7 +18,7 @@ defmodule LemonCli.Setup.Provider do
   it never reports setup as complete.
   """
 
-  alias LemonCli.Onboarding.{LogSilencer, Providers, Runner, TerminalUI}
+  alias LemonCli.Onboarding.{LogSilencer, PromptUI, Providers, Runner}
   alias LemonCli.Onboarding.Provider, as: ProviderSpec
   alias LemonCli.Setup.Verification
   alias LemonCore.Secrets
@@ -68,7 +68,7 @@ defmodule LemonCli.Setup.Provider do
   end
 
   defp onboard(args, io) do
-    LogSilencer.with_quiet_logs(interactive_tui_session?(io), fn ->
+    LogSilencer.with_quiet_logs(interactive_prompt_session?(io), fn ->
       {provider_name, remaining_args} = extract_provider_arg(args)
 
       provider =
@@ -202,17 +202,11 @@ defmodule LemonCli.Setup.Provider do
     default_index = default_provider_index(providers, config_path)
 
     options =
-      providers
-      |> Enum.with_index()
-      |> Enum.map(fn {provider, idx} ->
-        default_marker = if idx == default_index, do: "   [default]", else: ""
-        auth = Providers.auth_summary(provider)
-        status = Providers.menu_status(provider, config_path)
-
+      Enum.map(providers, fn provider ->
         %{
           label:
-            String.pad_trailing(provider.display_name, 24) <>
-              String.pad_trailing(auth, 14) <> status <> default_marker,
+            "#{provider.display_name} — #{Providers.auth_summary(provider)} — " <>
+              Providers.menu_status(provider, config_path),
           value: provider
         }
       end)
@@ -220,7 +214,8 @@ defmodule LemonCli.Setup.Provider do
     case select_value(io, %{
            title: "Choose Lemon Provider",
            subtitle: "Config: #{config_path}",
-           options: options
+           options: options,
+           default_index: default_index
          }) do
       {:ok, %ProviderSpec{} = provider} ->
         provider
@@ -240,14 +235,11 @@ defmodule LemonCli.Setup.Provider do
         |> Enum.each(fn {provider, idx} ->
           default_marker = if idx == default_index + 1, do: " (default)", else: ""
 
-          left =
-            "#{idx}. #{provider.display_name}"
-            |> String.pad_trailing(26)
+          label =
+            "#{provider.display_name} — #{Providers.auth_summary(provider)} — " <>
+              Providers.menu_status(provider, config_path)
 
-          auth = Providers.auth_summary(provider) |> String.pad_trailing(14)
-          status = Providers.menu_status(provider, config_path)
-
-          io.info.("  #{left}#{auth}#{status}#{default_marker}")
+          io.info.("  #{idx}. #{label}#{default_marker}")
         end)
 
         choice = io.prompt.("Choose provider [default: #{default_index + 1}]: ")
@@ -390,8 +382,8 @@ defmodule LemonCli.Setup.Provider do
     end
   end
 
-  defp interactive_tui_session?(io) when is_map(io) do
-    is_function(Map.get(io, :select), 1) and TerminalUI.available?()
+  defp interactive_prompt_session?(io) when is_map(io) do
+    is_function(Map.get(io, :select), 1) and PromptUI.available?()
   end
 
   defp format_selector_error(:not_available), do: "no interactive terminal detected"

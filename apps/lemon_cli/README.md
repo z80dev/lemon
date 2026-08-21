@@ -100,14 +100,12 @@ the Discord API identity check cannot be reached.
 
 ## Onboarding providers
 
-Guided provider setup picks a provider from a menu or accepts one directly,
-runs OAuth when supported, prompts for API keys otherwise, stores credentials in
-encrypted secrets, writes `providers.<provider>` config keys, and can update
-`defaults.provider` / `defaults.model`.
-
-The onboarding selector uses `LemonCli.Onboarding.TerminalUI` rather than
-`TermUI.Widget.PickList` because the stock pick-list widget can emit range
-warnings that corrupt the TUI display.
+Guided provider setup uses a plain numbered prompt that works consistently
+across packaged releases, source checkouts, SSH sessions, and narrow terminals.
+Press Enter to accept the displayed default, enter a number or exact label to
+choose another option, or enter `q` to cancel. The same selector is used for
+providers, authentication methods, models, and confirmation prompts, so setup
+does not switch the terminal between cooked and raw modes.
 
 Anthropic provider auth supports API keys or Claude subscription OAuth. Raw API
 keys live in `llm_anthropic_api_key_raw` and should be referenced by

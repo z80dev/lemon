@@ -150,7 +150,7 @@ defmodule LemonCli.Setup.WizardTest do
       config_path: config_path,
       key_file: key_file
     } do
-      original_config = "[runtime]\n  default_engine = \"lemon\"\n"
+      original_config = "# existing user config\n"
       File.write!(config_path, original_config)
       set_master_key_env()
 
