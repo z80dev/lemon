@@ -26,35 +26,19 @@ local artifact proof, and support-bundle verification for each target.
 
 ## Release Candidate Checklist
 
-Before cutting a stable release:
+The Release workflow automates the repeatable candidate gates against the exact
+tagged commit. It validates version/changelog consistency and release notes,
+runs `scripts/lint_ci_docs.sh`, `scripts/verify_source_install`,
+`scripts/verify_install_script`, `scripts/test fast`, `scripts/test quality`,
+`scripts/test clients`, and `scripts/test eval-fast`, then builds and
+boot-verifies the published artifacts. Do not repeat these manually for an
+ordinary release.
 
-- [ ] Confirm `mix.exs` version matches the intended tag.
-- [ ] Confirm `CHANGELOG.md` has a section for the release.
-- [ ] Run `scripts/prepare_release_notes {version}` and confirm the output is
-      useful for release notes.
-- [ ] Run `scripts/lint_ci_docs.sh` and confirm the first-party version metadata
-      and BEAM toolchain pin checks pass.
-- [ ] Run `scripts/verify_source_install` on a clean source checkout to prove the
-      supported source path still checks toolchain availability, locked
-      dependency resolution, source-wrapper help discoverability,
-      warning-free compile, source-wrapper non-interactive setup dispatch,
-      source-wrapper promoted channel readiness,
-      source-wrapper config validation, source-wrapper model catalog listing,
-      source-wrapper provider readiness listing, source-wrapper model policy
-      listing, source-wrapper proof artifact listing, source-wrapper media
-      diagnostics, source-wrapper readiness summary, source-wrapper secrets
-      status, source-wrapper skill listing, source-wrapper usage diagnostics,
-      source-wrapper stage-1 local update dry-run dispatch, source-wrapper
-      doctor JSON diagnostics, and redacted support-bundle generation.
-- [ ] Run `scripts/verify_install_script` to prove the one-line installer
-      against a fixture release: install layout, checksum rejection,
-      idempotency, `--force`, `--verify` boot, pinned-version resolution,
-      version retention, and the `versions/current` flip.
-- [ ] Run `scripts/test fast`.
-- [ ] Run `scripts/test quality`.
-- [ ] Run `scripts/test clients` so the Bun TUI checks and the Node client
-      checks match CI before release.
-- [ ] Run `scripts/test eval-fast`.
+The remaining checks in this section are credentialed or human-observed
+promotion evidence. Run only the checks relevant to a surface whose support
+status is being promoted by that release; they are not routine publication
+steps.
+
 - [ ] Run `scripts/test live-eval` with release-candidate eval credentials, or
       dispatch `.github/workflows/live-eval.yml` with `LEMON_EVAL_API_KEY`
       configured as a repository secret. Local runs may use
@@ -652,63 +636,64 @@ advisories in the VitePress dependency chain:
 for that chain. These findings do not block the runtime release while the docs
 site is served as static output only.
 
-## Optional Publish Checklist
+## Publish Checklist
 
-Publishing a tag and hosted release is distribution work. It is not part of the
-1.0 readiness gate.
+Publishing is one manually triggered workflow after the release-readiness
+gates above pass. Before starting it, ensure the intended release notes are
+under `## [Unreleased]` in `CHANGELOG.md` and the readiness changes are already
+on `main`.
 
-- [ ] Commit and push the release-readiness changes to the default branch before
-      creating or dispatching the release tag. The release workflow,
-      live-eval workflow, verifier scripts, and support docs must exist on
-      GitHub before the tag is pushed or manually dispatched.
-- [ ] Review the full unpushed local range before pushing `main`; on the current
-      launch branch, `main` may be ahead of `origin/main` by more than the
-      final release-readiness commit.
-- [ ] Create or verify the CalVer tag, for example `v2026.05.0`.
-- [ ] Trigger `.github/workflows/release.yml` from the tag push, or manually
-      dispatch it with explicit inputs. Do not use both paths unless
-      intentionally rerunning the release workflow:
+```bash
+gh workflow run release.yml --ref main -f channel=stable -f draft=false
+gh run list --workflow release.yml --limit 5
+gh run watch {run-id} --exit-status
+```
 
-      ```bash
-      # First publish the release-readiness changes to the default branch.
-      git status --short --branch
-      git rev-list --count origin/main..HEAD
-      git log --oneline origin/main..HEAD
-      test -z "$(git status --short)" || { echo "refusing to publish with a dirty tree" >&2; exit 1; }
-      git log -1 --oneline
-      git push origin main
+The `version` input is optional. Blank derives the next CalVer from the current
+UTC month and `mix.exs`; `-f version=2026.08.2` requests an explicit,
+strictly-increasing version. The workflow then:
 
-      # Option A: push the tag and let the tag-push workflow create the release.
-      git tag v2026.05.0
-      git push origin v2026.05.0
+1. consumes and validates the Unreleased changelog notes
+2. updates every first-party product version
+3. commits the release cut to `main` and creates its annotated tag
+4. runs the canonical fast, quality, deterministic eval, and client lanes
+   against the exact tagged commit
+5. builds and verifies all native artifacts and the multi-arch container
+6. publishes the GitHub Release, `manifest.json`, `install.sh`, and all 11
+   tarballs
+7. promotes the selected container channel; stable also promotes `latest`
 
-      # Option B: if the tag already exists or the tag-push workflow did not run.
-      gh workflow run release.yml \
-        --ref v2026.05.0 \
-        -f tag=v2026.05.0 \
-        -f channel=stable
-      ```
+Release runs are serialized. A failed preparation creates neither a commit nor
+a tag. If a later job fails, use **Re-run failed jobs** on the same workflow
+run; the successful preparation job and its exact tag are retained. If a new
+workflow run is required, dispatch from the existing tag:
 
-- [ ] Watch the intended release workflow run and require a successful exit:
+```bash
+gh workflow run release.yml --ref v2026.08.2 -f channel=stable -f draft=false
+```
 
-      ```bash
-      gh run list --workflow release.yml --limit 5
-      gh run watch {run-id} --exit-status
-      ```
+Tag-ref dispatches skip release preparation and rebuild the existing release
+cut. Mutable container channel tags do not move until the complete GitHub
+Release exists.
 
-- [ ] Confirm the workflow used the version-specific `CHANGELOG.md` section for
-      release notes.
-- [ ] Confirm the workflow uploads:
-  - `lemon-{version}-{channel}-{platform}-lemon_runtime_min.tar.gz` for
-    `linux-x86_64`, `linux-arm64`, and `darwin-arm64`
-  - `lemon-{version}-{channel}-{platform}-lemon_runtime_full.tar.gz` for the
-    same three platform tags
-  - `lemon-{version}-{channel}-linux-{x86_64,arm64}-sim_broadcast_platform.tar.gz`
-  - `lemon-{version}-{channel}-{platform}-lemon_tui.tar.gz` for
-    `linux-x86_64`, `linux-arm64`, and `darwin-arm64`
-  - 11 release tarballs total
-  - `manifest.json` (schema 2)
-  - `install.sh`
+The expected assets are:
+
+- three `lemon_runtime_min` tarballs
+- three `lemon_runtime_full` tarballs
+- two Linux `sim_broadcast_platform` tarballs
+- three `lemon_tui` tarballs
+- `manifest.json` schema 2
+- `install.sh`
+
+For an intentionally prepared new external tag, direct tag push remains
+supported:
+
+```bash
+git push origin v2026.08.2
+```
+
+Do not combine a `main` dispatch with a separate tag push for the same version.
+
 
 ## Rollback Checklist
 
@@ -822,6 +807,7 @@ Keep these files current during the 1.0 launch process:
 - `scripts/lint_ci_docs.sh`
 - `scripts/audit_1_0_readiness`
 - `scripts/prepare_release_notes`
+- `scripts/prepare_product_release`
 - `scripts/verify_release_artifacts`
 - `scripts/verify_release_runtime_boot`
 - `install.sh`

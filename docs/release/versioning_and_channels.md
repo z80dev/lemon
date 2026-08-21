@@ -18,13 +18,53 @@ hotfixes and out-of-cycle releases within the same month.
 
 ## Release channels
 
-| Channel | Audience | Cadence | Stability |
+| Channel | Audience | Trigger | Stability |
 |---|---|---|---|
-| `stable` | General users | Monthly | Fully tested |
-| `preview` | Early adopters | Weekly | Feature-complete, light testing |
-| `nightly` | Contributors | Daily | Automated build, may be broken |
+| `stable` | General users | On demand | Fully tested |
+| `preview` | Early adopters | On demand | Feature-complete, light testing |
+| `nightly` | Contributors | On demand | May be broken |
 
-The channel is expressed in the artifact name and the release manifest.
+The channel is expressed in the artifact name and release manifest. Channels
+do not run on a schedule; an operator starts every release explicitly.
+
+## One-click product releases
+
+Keep the intended user-visible notes under `## [Unreleased]` in
+`CHANGELOG.md`, then run the **Release** workflow from the `main` branch in
+GitHub Actions. Leave `version` blank for the next CalVer, choose the channel,
+and leave `draft` off for immediate publication. The same operation is
+available through the CLI:
+
+```bash
+gh workflow run release.yml --ref main -f channel=stable -f draft=false
+```
+
+The workflow serializes release cuts and performs the complete operation:
+
+1. `scripts/prepare_product_release --auto` validates the Unreleased notes,
+   chooses the version, updates all product version metadata, and moves the
+   notes into the new version section.
+2. GitHub Actions commits that cut to `main`, creates an annotated CalVer tag,
+   and checks out the exact tag for every build.
+3. The canonical fast, quality, deterministic eval, and client lanes run
+   against the exact tag.
+4. Native runners build and verify all 11 artifacts. The container builds are
+   smoke-tested and merged under the version-specific tag.
+5. The workflow verifies the assembled manifest and artifacts, publishes the
+   GitHub Release, then promotes the selected mutable container channel tag.
+   `latest` moves with `stable` only.
+
+The workflow refuses an empty Unreleased section, a non-increasing explicit
+version, a non-default-branch dispatch, or a concurrent release cut. A draft
+publishes the GitHub draft and version-specific container image, but
+deliberately does not move mutable container channel tags.
+
+If a later job fails, use **Re-run failed jobs** on that workflow run. A new
+workflow can also be dispatched with the existing tag as `--ref`; tag-ref
+dispatches skip preparation and rebuild the existing cut. Direct tag pushes
+remain supported for externally prepared releases. Ordinary releases should
+use the `main` dispatch so version metadata, changelog, commit, tag, artifacts,
+and container promotion stay one operation.
 
 ## Platform tags
 

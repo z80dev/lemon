@@ -98,6 +98,22 @@ Environment knobs, the uninstall procedure, and the platform support table live
 in `docs/install.md`. `scripts/verify_install_script` proves this flow against a
 fixture release served from localhost, with no published release required.
 
+### Publish
+
+Product publication is a single on-demand GitHub Actions operation. Put the
+release notes under `CHANGELOG.md`'s Unreleased section, then dispatch from
+`main`:
+
+```bash
+gh workflow run release.yml --ref main -f channel=stable -f draft=false
+```
+
+The workflow derives and commits the next CalVer, tags the exact commit,
+builds and native-verifies every runtime and TUI artifact, publishes the
+multi-arch container and GitHub Release, and finally promotes the mutable
+container channel tags. See `docs/release/versioning_and_channels.md` for the
+full contract and explicit-version/draft inputs.
+
 ### Build
 
 ```bash

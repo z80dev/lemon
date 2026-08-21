@@ -1,24 +1,22 @@
 name: Release
 
-# Builds and publishes a versioned Lemon release from an existing CalVer tag.
+# Builds, verifies, and publishes a versioned Lemon product release.
 #
-# Triggers:
-#   - push a tag matching `v*.*.*` (e.g. v2026.03.0)
-#   - manually dispatch with an existing tag input (defaults to a draft release,
-#     the dry-run mechanism ahead of a first real publish)
+# A manual dispatch from main is the one-click path: it validates and consumes
+# CHANGELOG.md's Unreleased notes, derives the next CalVer (or uses an explicit
+# version), bumps first-party version metadata, commits and tags that cut, then
+# builds and publishes it. A directly pushed `v*.*.*` tag remains supported for
+# recovery and externally prepared releases.
 #
-# Steps:
-#   1. Verify the tag matches CalVer (YYYY.MM.PATCH).
-#   2. Confirm mix.exs version matches the tag.
-#   3. Build release tarballs for each profile x platform matrix (11 artifacts:
-#      lemon_runtime_min/lemon_runtime_full on linux-x86_64/linux-arm64/darwin-arm64,
-#      sim_broadcast_platform on the two Linux platforms only, and the lemon_tui
-#      terminal client on all three) and boot-verify each on its native runner
-#      before upload. lemon_tui is a compiled Bun binary rather than a BEAM
-#      release, so it is built and verified by its own jobs.
-#   4. Generate manifest.json with release metadata and per-artifact SHA-256 checksums.
-#   5. Verify the manifest and every assembled artifact before publishing.
-#   6. Create a GitHub Release and upload artifacts (+ install.sh once Phase B lands).
+# The GITHUB_TOKEN push from the preparation job does not recursively start a
+# second tag-push workflow. Release runs are serialized so two automatic cuts
+# cannot derive the same version.
+#
+# The build publishes 11 native artifacts: lemon_runtime_min and
+# lemon_runtime_full on linux-x86_64/linux-arm64/darwin-arm64,
+# sim_broadcast_platform on both Linux platforms, and the compiled Bun
+# lemon_tui client on all three. Every artifact is verified before the GitHub
+# Release is created; mutable container channel tags move only afterward.
 #
 # See docs/release/versioning_and_channels.md for the versioning model.
 
@@ -28,57 +26,128 @@ on:
       - "v*.*.*"
   workflow_dispatch:
     inputs:
-      tag:
-        description: "Tag to release (e.g. v2026.03.0). Must already exist."
-        required: true
+      version:
+        description: "CalVer to publish; leave blank to derive the next version"
+        required: false
+        default: ""
       channel:
-        description: "Release channel (stable, preview, nightly)"
-        required: false
-        default: "preview"
+        description: "Release channel"
+        type: choice
+        required: true
+        default: "stable"
+        options:
+          - stable
+          - preview
+          - nightly
       draft:
-        description: "Create a draft GitHub release (dry-run mechanism)"
-        required: false
-        default: "true"
+        description: "Create a draft instead of publishing immediately"
+        type: boolean
+        required: true
+        default: false
+
+concurrency:
+  group: product-release
+  cancel-in-progress: false
 
 env:
   OTP_VERSION: "28.5"
   ELIXIR_VERSION: "1.19.5"
 
 jobs:
+  # ── Prepare a manual release commit and tag ──────────────────────────────────
+  prepare:
+    name: Prepare release
+    if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+
+    steps:
+      - name: Require the default branch
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/${{ github.event.repository.default_branch }}" ]; then
+            echo "::error::Run the release workflow from the default branch."
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prepare version and changelog
+        id: release
+        env:
+          REQUESTED_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          if [ -n "$REQUESTED_VERSION" ]; then
+            scripts/prepare_product_release "$REQUESTED_VERSION"
+          else
+            scripts/prepare_product_release --auto
+          fi
+
+          VERSION=$(sed -n 's/^ *version: "\([0-9.]*\)",$/\1/p' mix.exs | head -1)
+          test -n "$VERSION"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Commit and tag
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md mix.exs \
+            clients/tui/package.json \
+            clients/lemon-browser-node/package.json \
+            clients/lemon-browser-node/package-lock.json \
+            clients/lemon-web/package.json \
+            clients/lemon-web/package-lock.json \
+            clients/lemon-web/shared/package.json \
+            clients/lemon-web/server/package.json \
+            clients/lemon-web/web/package.json
+          git diff --cached --check
+          git commit -m "release: bump version to ${TAG#v}"
+          git tag -a "$TAG" -m "Lemon ${TAG#v}"
+          git push --atomic origin "HEAD:${GITHUB_REF_NAME}" "$TAG"
+
   # ── Validate tag and version consistency ────────────────────────────────────
   validate:
     name: Validate version
+    if: always() && (github.event_name == 'push' || needs.prepare.result == 'success' || startsWith(github.ref, 'refs/tags/'))
+    needs: prepare
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.parse.outputs.version }}
       channel: ${{ steps.parse.outputs.channel }}
-
+      tag: ${{ steps.parse.outputs.tag }}
+      release_sha: ${{ steps.parse.outputs.release_sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event.inputs.tag || github.ref_name }}
+          ref: ${{ needs.prepare.outputs.tag || github.ref_name }}
 
       - name: Parse tag and determine channel
         id: parse
         run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
-          # Strip leading 'v'
+          TAG="${{ needs.prepare.outputs.tag || github.ref_name }}"
           VERSION="${TAG#v}"
 
-          # Validate CalVer: YYYY.MM.PATCH
           if ! echo "$VERSION" | grep -qE '^[0-9]{4}\.[0-9]{1,2}\.[0-9]+$'; then
             echo "::error::Tag '$TAG' does not match CalVer YYYY.MM.PATCH"
             exit 1
           fi
 
-          # Determine channel from workflow input or default to stable for
-          # manually pushed tags; nightly tags contain a date suffix.
           CHANNEL="${{ github.event.inputs.channel || 'stable' }}"
+          RELEASE_SHA=$(git rev-parse HEAD)
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
-          echo "Version: $VERSION  Channel: $CHANNEL"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION  Channel: $CHANNEL  Commit: $RELEASE_SHA"
 
       # Read the version straight from mix.exs rather than booting Mix:
       # `mix run` compiles the umbrella and (as of the first live run of this
@@ -100,12 +169,92 @@ jobs:
           fi
           echo "mix.exs version matches tag: $MIX_VERSION"
 
+  # ── Deterministic release gates for the exact release commit ─────────────────
+  preflight-beam:
+    name: Preflight BEAM
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+
+      - name: Setup BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+
+      - name: Cache Mix deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-release-preflight-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-release-preflight-
+            ${{ runner.os }}-mix-quality-
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Run deterministic BEAM release gates
+        run: |
+          scripts/test fast
+          scripts/test quality
+          scripts/test eval-fast
+
+      - name: Verify supported source and installer flows
+        run: |
+          scripts/verify_source_install
+          scripts/verify_install_script
+
+  preflight-clients:
+    name: Preflight clients
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            clients/lemon-web/package-lock.json
+            clients/lemon-browser-node/package-lock.json
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: clients/tui/.bun-version
+
+      - name: Cache Bun install cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('clients/tui/bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Run client release gates
+        run: scripts/test clients
+
   # ── Build release artifacts ──────────────────────────────────────────────────
   build:
     name: Build ${{ matrix.profile }} (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
-    needs: validate
-    timeout-minutes: 30
+    needs: [validate, preflight-beam, preflight-clients]
 
     strategy:
       fail-fast: false
@@ -138,14 +287,14 @@ jobs:
 
     env:
       MIX_ENV: prod
-      LEMON_GIT_SHA: ${{ github.sha }}
-      LEMON_GIT_BRANCH: ${{ github.ref_name }}
+      LEMON_GIT_SHA: ${{ needs.validate.outputs.release_sha }}
+      LEMON_GIT_BRANCH: ${{ needs.validate.outputs.tag }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref_name }}
+          ref: ${{ needs.validate.outputs.tag }}
 
       # erlef/setup-beam publishes precompiled OTP/Elixir for macOS runners
       # (in addition to Linux/Windows) as of the versions pinned here, so one
@@ -261,19 +410,18 @@ jobs:
   build-tui:
     name: Build lemon_tui
     runs-on: ubuntu-24.04
-    needs: validate
-    timeout-minutes: 30
+    needs: [validate, preflight-beam, preflight-clients]
 
     env:
       LEMON_VERSION: ${{ needs.validate.outputs.version }}
-      LEMON_GIT_SHA: ${{ github.sha }}
+      LEMON_GIT_SHA: ${{ needs.validate.outputs.release_sha }}
       CHANNEL: ${{ needs.validate.outputs.channel }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref_name }}
+          ref: ${{ needs.validate.outputs.tag }}
 
       # clients/tui/.bun-version is the single source of truth for the Bun
       # toolchain; quality.yml and release-smoke.yml read the same file.
@@ -403,14 +551,13 @@ jobs:
           fi
 
   # ── Multi-arch container image ───────────────────────────────────────────────
-  # Each architecture is built natively on its own runner and pushed by digest;
-  # docker-merge assembles the manifest list and is the only step that creates
-  # tags, so a failed smoke test leaves the previous `latest`/`<channel>` intact.
+  # Each architecture is built natively and smoke-tested before its untagged
+  # digest is merged into a version-specific tag. Mutable channel tags move
+  # only after the complete GitHub Release has published successfully.
   docker-build:
     name: Docker ${{ matrix.platform }}
     runs-on: ${{ matrix.runner }}
-    needs: validate
-    timeout-minutes: 60
+    needs: [validate, preflight-beam, preflight-clients]
 
     permissions:
       contents: read
@@ -434,7 +581,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref_name }}
+          ref: ${{ needs.validate.outputs.tag }}
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
@@ -456,7 +603,7 @@ jobs:
           provenance: false
           sbom: false
           build-args: |
-            LEMON_GIT_SHA=${{ github.sha }}
+            LEMON_GIT_SHA=${{ needs.validate.outputs.release_sha }}
           cache-from: type=gha,scope=docker-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=docker-${{ matrix.arch }}
           outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
@@ -512,7 +659,8 @@ jobs:
           # The release carries the commit it was built from, same assertion the
           # tarball jobs make via scripts/verify_release_runtime_boot.
           docker exec lemon-smoke /app/bin/lemon_runtime_full eval \
-            'IO.puts(LemonCore.BuildInfo.current().git.commit)' | grep -q "${GITHUB_SHA}"
+            'IO.puts(LemonCore.BuildInfo.current().git.commit)' |
+            grep -q "${{ needs.validate.outputs.release_sha }}"
 
           # Digested assets: the release must not ship without them.
           docker exec lemon-smoke sh -c \
@@ -548,7 +696,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # ── Merge per-arch digests into one tagged manifest list ─────────────────────
+  # ── Merge per-arch digests into a version-specific tag ───────────────────────
   docker-merge:
     name: Docker manifest
     runs-on: ubuntu-24.04
@@ -584,14 +732,10 @@ jobs:
         working-directory: /tmp/digests
         env:
           VERSION: ${{ needs.validate.outputs.version }}
-          CHANNEL: ${{ needs.validate.outputs.channel }}
         run: |
           set -euo pipefail
 
-          tags="-t ${IMAGE_NAME}:${VERSION} -t ${IMAGE_NAME}:${CHANNEL}"
-          if [ "$CHANNEL" = "stable" ]; then
-            tags="$tags -t ${IMAGE_NAME}:latest"
-          fi
+          tags="-t ${IMAGE_NAME}:${VERSION}"
 
           sources=""
           for digest in *; do
@@ -623,7 +767,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref_name }}
+          ref: ${{ needs.validate.outputs.tag }}
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -702,7 +846,7 @@ jobs:
         env:
           VERSION: ${{ needs.validate.outputs.version }}
           CHANNEL: ${{ needs.validate.outputs.channel }}
-          COMMIT: ${{ github.sha }}
+          COMMIT: ${{ needs.validate.outputs.release_sha }}
           OTP_VERSION: ${{ env.OTP_VERSION }}
           ELIXIR_VERSION: ${{ env.ELIXIR_VERSION }}
 
@@ -732,7 +876,7 @@ jobs:
           if [ "${{ github.event_name }}" = "push" ]; then
             echo "value=false" >> "$GITHUB_OUTPUT"
           else
-            echo "value=${{ github.event.inputs.draft || 'true' }}" >> "$GITHUB_OUTPUT"
+            echo "value=${{ github.event.inputs.draft || 'false' }}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Determine release file list
@@ -757,10 +901,56 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          tag_name: ${{ needs.validate.outputs.tag }}
           name: "Lemon ${{ needs.validate.outputs.version }} (${{ needs.validate.outputs.channel }})"
           body: ${{ steps.changelog.outputs.notes }}
           prerelease: ${{ needs.validate.outputs.channel != 'stable' }}
           draft: ${{ steps.draft.outputs.value == 'true' }}
           files: ${{ steps.files.outputs.list }}
           fail_on_unmatched_files: true
+
+  # ── Promote mutable container channel tags after complete publication ───────
+  promote-container:
+    name: Promote container channel
+    needs: [validate, publish]
+    if: needs.publish.result == 'success' && (github.event_name == 'push' || github.event.inputs.draft != 'true')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE_NAME: ghcr.io/z80dev/lemon
+
+    steps:
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Promote verified image
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          CHANNEL: ${{ needs.validate.outputs.channel }}
+        run: |
+          set -euo pipefail
+          tags="-t ${IMAGE_NAME}:${CHANNEL}"
+          if [ "$CHANNEL" = "stable" ]; then
+            tags="$tags -t ${IMAGE_NAME}:latest"
+          fi
+
+          # shellcheck disable=SC2086
+          docker buildx imagetools create $tags "${IMAGE_NAME}:${VERSION}"
+
+      - name: Inspect promoted channel
+        env:
+          CHANNEL: ${{ needs.validate.outputs.channel }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect "${IMAGE_NAME}:${CHANNEL}" | tee /tmp/manifest.txt
+          grep -q "linux/amd64" /tmp/manifest.txt
+          grep -q "linux/arm64" /tmp/manifest.txt

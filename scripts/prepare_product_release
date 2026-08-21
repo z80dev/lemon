@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# Prepare one product release commit from CHANGELOG.md's Unreleased section.
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: scripts/prepare_product_release [--auto | <version>]
+
+Validates the Unreleased changelog notes, chooses a CalVer version, updates all
+first-party product version metadata, and moves the notes into that version's
+section. The default is --auto: increment the current month's patch, or use
+patch zero when the month changes.
+EOF
+  exit 64
+}
+
+if [ "$#" -gt 1 ]; then
+  usage
+fi
+
+REQUESTED_VERSION="${1:---auto}"
+case "$REQUESTED_VERSION" in
+  -h|--help) usage ;;
+  --auto) ;;
+  -* ) usage ;;
+esac
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+CURRENT_VERSION="$(sed -n 's/^ *version: "\([0-9.]*\)",$/\1/p' mix.exs | head -1)"
+if [ -z "$CURRENT_VERSION" ]; then
+  echo "ERROR: could not read the product version from mix.exs" >&2
+  exit 65
+fi
+
+if [ "$REQUESTED_VERSION" = "--auto" ]; then
+  YEAR_MONTH="$(date -u +%Y.%m)"
+  CURRENT_YEAR_MONTH="${CURRENT_VERSION%.*}"
+  if [ "$CURRENT_YEAR_MONTH" = "$YEAR_MONTH" ]; then
+    VERSION="${YEAR_MONTH}.$((${CURRENT_VERSION##*.} + 1))"
+  else
+    VERSION="${YEAR_MONTH}.0"
+  fi
+else
+  VERSION="$REQUESTED_VERSION"
+fi
+
+if ! printf '%s\n' "$VERSION" | grep -qE '^[0-9]{4}\.[0-9]{1,2}\.[0-9]+$'; then
+  echo "ERROR: '$VERSION' is not a valid CalVer version (YYYY.MM.PATCH)" >&2
+  exit 64
+fi
+
+python3 - "$CURRENT_VERSION" "$VERSION" CHANGELOG.md <<'PYEOF'
+import re
+import sys
+
+current, version, path = sys.argv[1:]
+
+def calver(value):
+    year, month, patch = (int(part) for part in value.split("."))
+    if month < 1 or month > 12:
+        raise ValueError(value)
+    return year, month, patch
+
+try:
+    if calver(version) <= calver(current):
+        raise SystemExit(
+            f"ERROR: release version {version} must be newer than current version {current}"
+        )
+except ValueError as error:
+    raise SystemExit(f"ERROR: invalid CalVer version: {error.args[0]}") from error
+
+with open(path, encoding="utf-8") as changelog:
+    text = changelog.read()
+
+match = re.search(
+    r"^## \[Unreleased\]\s*$\n(?P<body>.*?)(?=^## \[|^## [^\[]|\Z)",
+    text,
+    re.MULTILINE | re.DOTALL,
+)
+if not match:
+    raise SystemExit("ERROR: CHANGELOG.md is missing its Unreleased section")
+
+body = match.group("body").strip()
+body = re.sub(r"\n?---\s*$", "", body).strip()
+if not body or body == "No unreleased changes yet.":
+    raise SystemExit("ERROR: CHANGELOG.md has no unreleased changes to publish")
+if not re.search(
+    r"^### (Added|Changed|Deprecated|Removed|Fixed|Security)\s*$",
+    body,
+    re.MULTILINE,
+):
+    raise SystemExit("ERROR: Unreleased must include a Keep a Changelog subsection")
+if not re.search(r"^- .+", body, re.MULTILINE):
+    raise SystemExit("ERROR: Unreleased must include at least one bullet item")
+if re.search(rf"^## \[{re.escape(version)}\]\s*$", text, re.MULTILINE):
+    raise SystemExit(f"ERROR: CHANGELOG.md already contains version {version}")
+
+replacement = (
+    "## [Unreleased]\n\n"
+    "No unreleased changes yet.\n\n"
+    "---\n\n"
+    f"## [{version}]\n\n"
+    f"{body}\n\n"
+    "---\n\n"
+)
+updated = text[: match.start()] + replacement + text[match.end() :]
+with open(path, "w", encoding="utf-8") as changelog:
+    changelog.write(updated)
+PYEOF
+
+scripts/bump_version.sh "$VERSION"
+scripts/prepare_release_notes "$VERSION" >/dev/null
+
+printf 'Prepared product release %s\n' "$VERSION"
