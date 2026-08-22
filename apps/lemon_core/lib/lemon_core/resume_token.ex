@@ -1,25 +1,10 @@
 defmodule LemonCore.ResumeToken do
   @moduledoc """
-  Session identifier for resuming an interrupted session.
+  Session identifier for resuming an interrupted native Lemon session.
 
-  A token pairs the engine with the value that engine understands. Printing and
-  parsing go through `LemonCore.ResumeFormats`: each engine registers its own
-  syntax at boot, so nothing here knows how any particular CLI spells "resume".
-
-  Engines with no registered format fall back to `<engine> resume <value>`,
-  which is also what the platform prints for an engine it has never seen.
-
-  ## Examples
-
-      # Codex session
-      %LemonCore.ResumeToken{engine: "codex", value: "thread_abc123"}
-
-      # Claude session
-      %LemonCore.ResumeToken{engine: "claude", value: "session_xyz"}
-
+  Tokens retain their original `engine` field for persisted-history compatibility,
+  but only native `lemon resume <id>` commands are parsed from text.
   """
-  alias LemonCore.ResumeFormat
-  alias LemonCore.ResumeFormats
 
   @type t :: %__MODULE__{
           engine: String.t(),
@@ -32,12 +17,17 @@ defmodule LemonCore.ResumeToken do
   @derive {Jason.Encoder, only: [:engine, :value]}
   defstruct [:engine, :value]
 
-  @doc "Create a new resume token"
+  @resume_pattern ~r/`?lemon\s+resume\s+([a-zA-Z0-9_-]+)`?/i
+  @strict_resume_pattern ~r/^`?lemon\s+resume\s+[a-zA-Z0-9_-]+`?$/i
+
+  @doc "Create a new resume token."
+  @spec new(String.t(), String.t()) :: t()
   def new(engine, value) when is_binary(engine) and is_binary(value) do
     %__MODULE__{engine: engine, value: value}
   end
 
-  @doc "Format token for display to user"
+  @doc "Format token for display to a user."
+  @spec format(t()) :: String.t()
   def format(%__MODULE__{} = token), do: "`" <> format_plain(token) <> "`"
 
   @doc """
@@ -45,127 +35,54 @@ defmodule LemonCore.ResumeToken do
 
       iex> LemonCore.ResumeToken.format_plain(%LemonCore.ResumeToken{engine: "lemon", value: "abc"})
       "lemon resume abc"
-
-      iex> LemonCore.ResumeToken.format_plain(%LemonCore.ResumeToken{engine: "custom", value: "abc"})
-      "custom resume abc"
   """
   @spec format_plain(t()) :: String.t()
-  def format_plain(%__MODULE__{engine: engine, value: value}) do
-    case ResumeFormats.fetch(engine) do
-      {:ok, format} -> ResumeFormat.render(format, value)
-      :error -> generic_line(engine, value)
-    end
-  end
+  def format_plain(%__MODULE__{engine: engine, value: value}), do: "#{engine} resume #{value}"
 
   @doc """
-  Extract a resume token from text.
+  Extract a native Lemon resume token from text.
 
-  Tries every registered format in registration order and returns the first
-  token found, or `nil`. Formats match anywhere in the text, so backticks and
-  surrounding prose are fine.
-
-  ## Examples
-
-      iex> LemonCore.ResumeToken.extract_resume("Continue with `lemon resume abc12345`")
-      %LemonCore.ResumeToken{engine: "lemon", value: "abc12345"}
-
-      iex> LemonCore.ResumeToken.extract_resume("No resume token here")
-      nil
-
+  The command may be backticked or surrounded by prose. Non-native resume
+  commands are not recognized.
   """
   @spec extract_resume(String.t()) :: t() | nil
   def extract_resume(text) when is_binary(text) do
-    Enum.find_value(ResumeFormats.all(), fn format ->
-      case ResumeFormat.capture(format, text) do
-        value when is_binary(value) -> new(format.engine, value)
-        _ -> nil
-      end
-    end)
-  end
-
-  def extract_resume(_), do: nil
-
-  @doc """
-  Extract a resume token for a specific engine from text.
-
-  ## Examples
-
-      iex> LemonCore.ResumeToken.extract_resume("custom resume abc", "custom")
-      %LemonCore.ResumeToken{engine: "custom", value: "abc"}
-
-      iex> LemonCore.ResumeToken.extract_resume("custom resume abc", "other")
-      nil
-
-  """
-  @spec extract_resume(String.t(), String.t()) :: t() | nil
-  def extract_resume(text, engine) when is_binary(text) and is_binary(engine) do
-    case Regex.run(pattern_for(engine), text) do
-      [_, value] -> new(engine, normalize_for(engine, value))
+    case Regex.run(@resume_pattern, text) do
+      [_, value] -> new("lemon", value)
       _ -> nil
     end
   end
 
+  def extract_resume(_), do: nil
+
+  @doc "Extract a native Lemon resume token only when `engine` is `\"lemon\"`."
+  @spec extract_resume(String.t(), String.t()) :: t() | nil
+  def extract_resume(text, "lemon") when is_binary(text), do: extract_resume(text)
+  def extract_resume(_text, _engine), do: nil
+
   @doc """
-  Check if a line is exactly a resume line (for truncation preservation).
-
-  This is a strict check - the line should be primarily a resume command,
-  not just contain one among other text.
-
-  ## Examples
+  Check whether a line is exactly a native Lemon resume command.
 
       iex> LemonCore.ResumeToken.is_resume_line("`lemon resume abc12345`")
       true
 
       iex> LemonCore.ResumeToken.is_resume_line("Please run lemon resume abc")
       false
-
   """
   @spec is_resume_line(String.t()) :: boolean()
-  # Public predicate name retained for resume-format consumers.
   # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
   def is_resume_line(line) when is_binary(line) do
-    Enum.any?(ResumeFormats.all(), &ResumeFormat.resume_line?(&1, line))
+    Regex.match?(@strict_resume_pattern, String.trim(line))
   end
 
-  # Public predicate name retained for resume-format consumers.
   # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
   def is_resume_line(_), do: false
 
-  @doc """
-  Check if a line is a resume line for a specific engine.
-  """
+  @doc "Check whether a line is exactly a native Lemon resume command for `engine`."
   @spec is_resume_line(String.t(), String.t()) :: boolean()
-  # Public predicate name retained for resume-format consumers.
   # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
-  def is_resume_line(line, engine) when is_binary(line) and is_binary(engine) do
-    case ResumeFormats.fetch(engine) do
-      {:ok, format} -> ResumeFormat.resume_line?(format, line)
-      :error -> Regex.match?(generic_strict_pattern(engine), String.trim(line))
-    end
-  end
+  def is_resume_line(line, "lemon") when is_binary(line), do: is_resume_line(line)
 
-  defp pattern_for(engine) do
-    case ResumeFormats.fetch(engine) do
-      {:ok, format} -> format.pattern
-      :error -> generic_pattern(engine)
-    end
-  end
-
-  defp normalize_for(engine, value) do
-    case ResumeFormats.fetch(engine) do
-      {:ok, %ResumeFormat{normalize: normalize}} when is_function(normalize, 1) ->
-        normalize.(value)
-
-      _ ->
-        value
-    end
-  end
-
-  defp generic_line(engine, value), do: "#{engine} resume #{value}"
-
-  defp generic_pattern(engine),
-    do: ~r/`?#{Regex.escape(engine)}\s+resume\s+([a-zA-Z0-9_-]+)`?/i
-
-  defp generic_strict_pattern(engine),
-    do: ~r/^`?#{Regex.escape(engine)}\s+resume\s+[a-zA-Z0-9_-]+`?$/i
+  # credo:disable-for-next-line Credo.Check.Readability.PredicateFunctionNames
+  def is_resume_line(_line, _engine), do: false
 end

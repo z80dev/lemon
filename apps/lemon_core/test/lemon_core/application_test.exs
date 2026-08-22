@@ -90,17 +90,16 @@ defmodule LemonCore.ApplicationTest do
       assert LemonCore.ACPClientBridge in child_ids
       assert LemonCore.ConfigCache in child_ids
       assert LemonCore.Store in child_ids
-      assert LemonCore.SubagentRegistry in child_ids
       assert LemonCore.RunHistoryStore in child_ids
       assert LemonCore.ConfigReloader in child_ids
       assert LemonCore.ConfigReloader.Watcher in child_ids
     end
 
-    test "supervisor has exactly 8 children" do
+    test "supervisor has exactly 7 children" do
       supervisor_pid = Process.whereis(LemonCore.Supervisor)
       children = Supervisor.which_children(supervisor_pid)
 
-      assert length(children) == 8
+      assert length(children) == 7
     end
 
     test "children include both workers and supervisors" do

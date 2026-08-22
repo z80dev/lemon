@@ -61,7 +61,6 @@ defmodule LemonCore.Config.Agent do
     :extension_paths,
     :theme,
     :budget_defaults,
-    :cli,
     :provider_routing
   ]
 
@@ -90,7 +89,6 @@ defmodule LemonCore.Config.Agent do
           extension_paths: [String.t()],
           theme: String.t(),
           budget_defaults: %{max_children: integer()},
-          cli: map(),
           provider_routing: map()
         }
 
@@ -114,7 +112,6 @@ defmodule LemonCore.Config.Agent do
       extension_paths: resolve_extension_paths(agent_settings),
       theme: resolve_theme(agent_settings),
       budget_defaults: resolve_budget_defaults(agent_settings),
-      cli: resolve_cli(agent_settings),
       provider_routing: resolve_provider_routing(agent_settings)
     }
   end
@@ -270,12 +267,6 @@ defmodule LemonCore.Config.Agent do
     }
   end
 
-  # Vendor CLI sections are resolved by whoever wraps the vendor CLI: each
-  # vendor package registers a resolver at boot (see
-  # `LemonCore.Config.CliResolvers`), so no vendor is named here.
-  defp resolve_cli(settings) do
-    LemonCore.Config.CliResolvers.resolve_all(settings["cli"] || %{})
-  end
 
   defp normalize_string_list(nil), do: []
 

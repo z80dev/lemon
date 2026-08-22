@@ -227,7 +227,7 @@ defmodule LemonCore.Config.ModularTest do
       assert Enum.any?(error.errors, &String.contains?(&1, "Lemon runs natively"))
     end
 
-    test "load/1 preserves vendor task CLI settings" do
+    test "load/1 rejects removed runtime CLI settings" do
       project_dir =
         Path.join(
           System.tmp_dir!(),
@@ -239,21 +239,16 @@ defmodule LemonCore.Config.ModularTest do
       File.write!(Path.join(project_dir, ".lemon/config.toml"), """
       [runtime.cli.isolated_vendor]
       engine = "vendor-internal"
-      default_engine = "vendor-default"
-
-      [runtime.cli.isolated_vendor.engines.local]
-      command = "isolated-vendor --run"
       """)
 
       on_exit(fn -> File.rm_rf!(project_dir) end)
 
-      config = Modular.load(project_dir: project_dir)
+      error =
+        assert_raise ValidationError, fn ->
+          Modular.load(project_dir: project_dir)
+        end
 
-      assert config.agent.cli["isolated_vendor"]["engine"] == "vendor-internal"
-      assert config.agent.cli["isolated_vendor"]["default_engine"] == "vendor-default"
-
-      assert config.agent.cli["isolated_vendor"]["engines"]["local"]["command"] ==
-               "isolated-vendor --run"
+      assert "The [runtime.cli] section has been removed; all subagent tasks run natively." in error.errors
     end
   end
 end

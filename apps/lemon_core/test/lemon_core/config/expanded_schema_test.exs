@@ -71,24 +71,6 @@ defmodule LemonCore.Config.ExpandedSchemaTest do
     end
   end
 
-  # Vendor CLI sections (`[runtime.cli.<engine>]`) are resolved by whatever
-  # `LemonCore.Config.CliResolvers` holds at the time; vendor packages register
-  # theirs at boot. The generic mechanism is tested with a stub resolver in
-  # `LemonCore.Config.CliResolversTest`; the per-vendor defaults now live with
-  # their vendors in lemon_cli_runners' CliResolversTest.
-  describe "Agent cli configuration" do
-    test "carries unclaimed cli sections through unresolved" do
-      settings = %{
-        "runtime" => %{
-          "cli" => %{"unclaimed_vendor" => %{"anything" => 1}}
-        }
-      }
-
-      config = Agent.resolve(settings)
-
-      assert config.cli["unclaimed_vendor"] == %{"anything" => 1}
-    end
-  end
 
   describe "Providers - Google Vertex fields" do
     test "parses project_secret and location_secret" do

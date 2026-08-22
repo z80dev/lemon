@@ -233,43 +233,22 @@ defmodule LemonCore.Config.ValidatorTest do
       end
 
       assert Enum.all?(errors, &String.contains?(&1, "Lemon runs natively"))
-      assert Enum.all?(errors, &String.contains?(&1, "[runtime.cli.<vendor>]"))
       refute Enum.any?(errors, &String.contains?(&1, "engine_lock"))
     end
 
-    test "allows all vendor task CLI settings under runtime.cli" do
+    test "rejects runtime CLI settings because subagent tasks run natively" do
       settings = %{
         "runtime" => %{
           "cli" => %{
-            "codex" => %{
-              "engine" => "vendor-internal",
-              "default_engine" => "vendor-default",
-              "engines" => %{"nested" => %{"command" => "codex"}},
-              "custom_engine" => %{"command" => "codex --custom"},
-              "custom_engines" => %{"local" => %{"command" => "codex"}},
-              "preferred_engine" => "vendor-preferred",
-              "engine_preference" => "vendor-preferred",
-              "preferred_engines" => ["vendor-preferred"],
-              "preferred-engine" => "vendor-preferred",
-              "preferred-engines" => ["vendor-preferred"],
-              "preferredEngine" => "vendor-preferred",
-              "preferredEngines" => ["vendor-preferred"],
-              "known_engine" => "vendor-known",
-              "known_engines" => ["vendor-known"],
-              "engine_registry" => %{"vendor" => "Vendor.Engine"},
-              "engine_module" => "Vendor.Engine",
-              "engine_modules" => ["Vendor.Engine"],
-              "gateway_engines" => ["vendor"]
-            }
+            "codex" => %{"engine" => "vendor-internal"}
           }
-        },
-        "gateway" => %{
-          "require_engine_lock" => true,
-          "engine_lock_timeout_ms" => 30_000
         }
       }
 
-      assert :ok = Validator.validate_deprecated_sections(settings)
+      assert {:error, errors} = Validator.validate_deprecated_sections(settings)
+
+      assert "The [runtime.cli] section has been removed; all subagent tasks run natively." in errors
+      assert Enum.any?(errors, &String.contains?(&1, "runtime.cli.codex.engine"))
     end
   end
 
