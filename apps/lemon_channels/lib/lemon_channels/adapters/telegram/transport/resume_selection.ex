@@ -7,6 +7,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
   alias LemonChannels.Telegram.ResumeIndexStore
   alias LemonCore.{ResumeToken, RunStore}
 
+  @retired_resume_engines ~w(codex claude kimi opencode pi echo)
+
   @type callbacks :: %{
           required(:extract_chat_ids) => (map() -> {integer() | nil, integer() | nil}),
           required(:extract_message_ids) => (map() ->
@@ -128,19 +130,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
               {:unsupported, engine} ->
                 {{:unsupported, engine}, ""}
 
-              {:candidate_non_native_engine, engine} ->
-                {selector, selector_prompt} =
-                  case String.split(args, ~r/\s+/, parts: 2) do
-                    [a] -> {a, ""}
-                    [a, rest] -> {a, String.trim(rest || "")}
-                    _ -> {args, ""}
-                  end
-
-                case resolve_resume_selector(selector, sessions) do
-                  %ResumeToken{} = resume -> {resume, selector_prompt}
-                  nil -> {{:unsupported, engine}, ""}
-                end
-
               {%ResumeToken{} = inline_resume, inline_prompt} ->
                 {inline_resume, inline_prompt}
 
@@ -217,26 +206,26 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
         {:unsupported, engine}
 
       nil ->
-        case ResumeToken.extract_resume(trimmed, "lemon") do
-          %ResumeToken{} = token ->
-            {token, resume_prompt_suffix(trimmed, token.value)}
+        case parse_retired_engine_resume_args(trimmed) do
+          {:unsupported, engine} ->
+            {:unsupported, engine}
 
           nil ->
-            case String.split(trimmed, ~r/\s+/, parts: 3) do
-              ["lemon", token] when token != "" ->
-                {%ResumeToken{engine: "lemon", value: token}, ""}
+            case ResumeToken.extract_resume(trimmed, "lemon") do
+              %ResumeToken{} = token ->
+                {token, resume_prompt_suffix(trimmed, token.value)}
 
-              ["lemon", token, prompt_part] when token != "" ->
-                {%ResumeToken{engine: "lemon", value: token}, String.trim(prompt_part || "")}
+              nil ->
+                case String.split(trimmed, ~r/\s+/, parts: 3) do
+                  ["lemon", token] when token != "" ->
+                    {%ResumeToken{engine: "lemon", value: token}, ""}
 
-              [engine_id, _token] ->
-                {:candidate_non_native_engine, String.downcase(String.trim(engine_id))}
+                  ["lemon", token, prompt_part] when token != "" ->
+                    {%ResumeToken{engine: "lemon", value: token}, String.trim(prompt_part || "")}
 
-              [engine_id, _token, _prompt_part] ->
-                {:candidate_non_native_engine, String.downcase(String.trim(engine_id))}
-
-              _ ->
-                nil
+                  _ ->
+                    nil
+                end
             end
         end
     end
@@ -508,12 +497,17 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
 
   defp explicit_non_native_resume_engine(text) when is_binary(text) do
     case Regex.run(
-           ~r/(?:^|\n)\s*`?([a-z][a-z0-9_-]*)\s+(?:resume|--resume|--session|-s|run\s+(?:--session|-s))(?:\s|$)/i,
+           ~r/(?:^|\n)\s*`?([a-z][a-z0-9_-]*)\s+(?:resume|--resume|--session|-s|run\s+(?:--session|-s))\s+(\S+)/i,
            text
          ) do
-      [_, engine] ->
+      [_, engine, _token] ->
         engine = String.downcase(engine)
-        if engine == "lemon", do: nil, else: engine
+
+        cond do
+          engine == "lemon" -> nil
+          engine in @retired_resume_engines -> engine
+          true -> nil
+        end
 
       _ ->
         nil
@@ -523,6 +517,24 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
   end
 
   defp explicit_non_native_resume_engine(_), do: nil
+
+  defp parse_retired_engine_resume_args(text) when is_binary(text) do
+    case String.split(text, ~r/\s+/, parts: 2) do
+      [engine, token] when token != "" ->
+        engine = String.downcase(String.trim(engine))
+
+        if engine in @retired_resume_engines do
+          {:unsupported, engine}
+        else
+          nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp parse_retired_engine_resume_args(_), do: nil
 
   defp resume_prompt_suffix(text, token) do
     case Regex.run(

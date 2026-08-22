@@ -15,6 +15,48 @@ defmodule LemonChannels.Adapters.Telegram.TransportResumeSelectionTest do
     assert stripped == "Continue with the fix."
   end
 
+  test "extract_explicit_resume_and_strip ignores ordinary prose containing resume" do
+    text = "please resume the migration tomorrow"
+
+    assert {nil, ^text} = ResumeSelection.extract_explicit_resume_and_strip(text)
+  end
+
+  test "handle_resume_command reports session-not-found for unknown numeric selectors" do
+    state = %{account_id: "default"}
+    chat_id = 125
+    thread_id = 458
+    user_msg_id = 791
+    parent = self()
+
+    inbound = %{
+      message: %{text: "/resume 9 keep going"},
+      meta: %{chat_id: chat_id, thread_id: thread_id}
+    }
+
+    callbacks = %{
+      extract_chat_ids: fn _ -> {chat_id, thread_id} end,
+      extract_message_ids: fn _ -> {chat_id, thread_id, user_msg_id} end,
+      build_session_key: fn _state, _inbound, _scope ->
+        "agent:default:telegram:default:dm:125"
+      end,
+      normalize_msg_id: fn id -> id end,
+      send_system_message: fn _state, _chat_id, _thread_id, _reply_to_id, text ->
+        send(parent, {:system_message, text})
+        :ok
+      end,
+      submit_inbound_now: fn _state, submitted_inbound ->
+        send(parent, {:submitted_inbound, submitted_inbound})
+        state
+      end
+    }
+
+    assert state == ResumeSelection.handle_resume_command(state, inbound, callbacks)
+    assert_receive {:system_message, message}
+    assert message =~ "Couldn't find that session"
+    refute message =~ "unsupported"
+    refute_receive {:submitted_inbound, _}
+  end
+
   test "handle_resume_command rejects vendor resumes with native guidance" do
     state = %{account_id: "default"}
     chat_id = 124

@@ -24,8 +24,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   exist.
 - The `engine_id`, `default_engine`, `preferred_engine`, and
   `[gateway.engines.*]` configuration/API selectors are rejected with migration
-  guidance. Codex, Claude, Kimi, OpenCode, and Pi remain available through the
-  native agent's delegated `task` runners.
+  guidance. Delegated `task` runs use the native in-process `internal` engine
+  only; vendor CLI task runners and `[runtime.cli.*]` configuration were removed.
 
 ---
 

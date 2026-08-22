@@ -29,14 +29,7 @@ defmodule LemonRouter.SubmissionBuilder do
     Submission
   }
 
-  @thinking_levels %{
-    "off" => :off,
-    "minimal" => :minimal,
-    "low" => :low,
-    "medium" => :medium,
-    "high" => :high,
-    "xhigh" => :xhigh
-  }
+  alias LemonRouter.ThinkingLevel
 
   @pending_compaction_ttl_ms 12 * 60 * 60 * 1000
 
@@ -388,7 +381,7 @@ defmodule LemonRouter.SubmissionBuilder do
 
   defp normalize_thinking_level(nil), do: nil
   defp normalize_thinking_level(level) when is_atom(level), do: level
-  defp normalize_thinking_level(level) when is_binary(level), do: Map.get(@thinking_levels, level)
+  defp normalize_thinking_level(level) when is_binary(level), do: ThinkingLevel.normalize(level)
   defp normalize_thinking_level(_), do: nil
 
   defp resolve_history_model(prompt, cwd, explicit_model, _meta)

@@ -172,6 +172,48 @@ defmodule LemonCore.Update.ConfigMigratorTest do
       end
     end
 
+    test "migrate! refuses success when removed runner settings remain" do
+      content = """
+      [agent]
+      provider = "anthropic"
+
+      [runtime.cli.codex]
+      model = "gpt-4"
+      """
+
+      path = tmp_config(content)
+
+      try do
+        assert {:error, {:manual_steps_required, errors}} = ConfigMigrator.migrate!(path)
+
+        assert "The [runtime.cli] section has been removed; all subagent tasks run natively." in errors
+      after
+        File.rm_rf(path)
+        File.rm_rf(ConfigMigrator.backup_path(path))
+      end
+    end
+
+    test "skips [agent] migration when canonical tables already exist" do
+      content = """
+      [agent]
+      provider = "anthropic"
+
+      [defaults]
+      model = "claude-opus"
+      """
+
+      path = tmp_config(content)
+
+      try do
+        assert {:error, {:manual_steps_required, errors}} = ConfigMigrator.migrate!(path)
+        assert Enum.any?(errors, &String.contains?(&1, "[agent]"))
+        assert File.read!(path) == content
+      after
+        File.rm_rf(path)
+        File.rm_rf(ConfigMigrator.backup_path(path))
+      end
+    end
+
     test "returns error for non-existent file" do
       assert {:error, {:read_failed, _}} = ConfigMigrator.check("/nonexistent/path.toml")
     end

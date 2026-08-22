@@ -5,6 +5,8 @@ defmodule LemonControlPlane.Methods.SessionsPatch do
   Updates session properties (like tool policy overrides).
   """
 
+  alias LemonRouter.ThinkingLevel
+
   @legacy_selector_fields ~w(
     engine
     engine_id
@@ -27,7 +29,8 @@ defmodule LemonControlPlane.Methods.SessionsPatch do
 
   @impl true
   def handle(params, _ctx) do
-    with :ok <- reject_legacy_selector(params) do
+    with :ok <- reject_legacy_selector(params),
+         :ok <- validate_thinking_level(params) do
       session_key = params["sessionKey"]
 
       if is_nil(session_key) do
@@ -98,4 +101,17 @@ defmodule LemonControlPlane.Methods.SessionsPatch do
   end
 
   defp reject_legacy_selector(_), do: :ok
+
+  defp validate_thinking_level(%{"thinkingLevel" => level}) when is_binary(level) do
+    if ThinkingLevel.valid_string?(level) do
+      :ok
+    else
+      {:error,
+       {:invalid_params,
+        "thinkingLevel must be one of: #{Enum.join(ThinkingLevel.allowed_strings(), ", ")}",
+        %{field: "thinkingLevel", value: level}}}
+    end
+  end
+
+  defp validate_thinking_level(_), do: :ok
 end

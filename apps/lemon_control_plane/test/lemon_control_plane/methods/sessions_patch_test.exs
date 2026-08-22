@@ -60,7 +60,7 @@ defmodule LemonControlPlane.Methods.SessionsPatchTest do
       LemonCore.Store.delete_session_policy(session_key)
     end
 
-    test "stores thinking_level override" do
+    test "rejects unknown thinking_level values" do
       session_key = "session_#{System.unique_integer()}"
 
       params = %{
@@ -70,10 +70,27 @@ defmodule LemonControlPlane.Methods.SessionsPatchTest do
 
       ctx = %{auth: %{role: :operator}}
 
+      assert {:error, {:invalid_params, message, %{field: "thinkingLevel", value: "extended"}}} =
+               SessionsPatch.handle(params, ctx)
+
+      assert message =~ "thinkingLevel must be one of"
+      refute LemonCore.Store.get_session_policy(session_key)
+    end
+
+    test "stores thinking_level override" do
+      session_key = "session_#{System.unique_integer()}"
+
+      params = %{
+        "sessionKey" => session_key,
+        "thinkingLevel" => "high"
+      }
+
+      ctx = %{auth: %{role: :operator}}
+
       {:ok, _result} = SessionsPatch.handle(params, ctx)
 
       stored = LemonCore.Store.get_session_policy(session_key)
-      assert stored[:thinking_level] == "extended"
+      assert stored[:thinking_level] == "high"
 
       # Cleanup
       LemonCore.Store.delete_session_policy(session_key)
@@ -134,7 +151,7 @@ defmodule LemonControlPlane.Methods.SessionsPatchTest do
       params = %{
         "sessionKey" => session_key,
         "model" => "secret-model-name",
-        "thinkingLevel" => "extended"
+        "thinkingLevel" => "medium"
       }
 
       {:ok, result} = SessionsPatch.handle(params, %{auth: %{role: :operator}})
