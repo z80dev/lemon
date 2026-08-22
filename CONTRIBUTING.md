@@ -95,7 +95,6 @@ green run is most of what a reviewer needs.
 | You want to add | Implement | Compliance suite | Guide |
 |-----------------|-----------|------------------|-------|
 | A channel (Slack, SMS, chat bridge) | [`LemonChannels.Plugin`](apps/lemon_channels/lib/lemon_channels/plugin.ex) | `LemonPlatformTest.PluginCase` | [Add a channel](docs/getting-started/add-a-channel.md) |
-| A delegated task runner | [`LemonCore.SubagentRunner`](apps/lemon_core/lib/lemon_core/subagent_runner.ex) | `LemonPlatformTest.SubagentRunnerCase` | — |
 | A storage backend | [`LemonCore.Store.Backend`](apps/lemon_core/lib/lemon_core/store/backend.ex) | `LemonPlatformTest.BackendCase` | — |
 | A memory provider | [`LemonMemory.Provider`](apps/lemon_memory/lib/lemon_memory/provider.ex) | `LemonPlatformTest.ProviderCase` | [Persist memory](docs/getting-started/persist-memory.md) |
 
@@ -134,7 +133,6 @@ mix test test/my_agent/slack_channel_test.exs
 The other suites follow the same shape:
 
 ```elixir
-use LemonPlatformTest.SubagentRunnerCase, async: true, runner: MyApp.MyRunner
 use LemonPlatformTest.BackendCase,        async: true, backend: MyApp.MyBackend
 use LemonPlatformTest.ProviderCase,       async: false, provider: MyApp.MyProvider
 ```

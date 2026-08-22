@@ -154,7 +154,11 @@ defmodule LemonCore.Config.Validator do
 
       cond do
         current_path == @runtime_cli_path ->
-          errors
+          if Enum.any?(errors, &(&1 == "[runtime.cli]")) do
+            errors
+          else
+            [removed_runtime_cli_message() | errors]
+          end
 
         key in @removed_engine_keys ->
           [removed_engine_config_message(format_config_path(current_path)) | errors]
@@ -185,8 +189,11 @@ defmodule LemonCore.Config.Validator do
   end
 
   defp removed_engine_config_message(path) do
-    "#{path} is no longer supported. Lemon runs natively; remove this engine-routing setting. " <>
-      "Configure vendor CLI options only under [runtime.cli.<vendor>] and delegate to them with the task tool's engine option."
+    "#{path} is no longer supported. Lemon runs natively; remove this engine-routing setting."
+  end
+
+  defp removed_runtime_cli_message do
+    "[runtime.cli] is no longer supported. Vendor delegated task runners were removed; delete this section."
   end
 
   defp check_deprecated(errors, true, message), do: [message | errors]

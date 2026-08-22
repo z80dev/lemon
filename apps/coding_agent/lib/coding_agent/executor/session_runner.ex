@@ -216,8 +216,21 @@ defmodule CodingAgent.Executor.SessionRunner do
          }}
 
       {:error, reason} ->
-        {:stop, reason}
+        emit_resume_failure(state, reason)
+        {:stop, :normal}
     end
+  end
+
+  defp emit_resume_failure(state, reason) do
+    completed =
+      LemonGateway.Event.completed(%{
+        engine: @engine,
+        ok: false,
+        error: reason,
+        answer: ""
+      })
+
+    send(state.sink_pid, {:engine_event, state.run_ref, completed})
   end
 
   @impl true

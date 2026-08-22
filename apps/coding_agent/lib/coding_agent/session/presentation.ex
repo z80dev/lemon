@@ -65,6 +65,39 @@ defmodule CodingAgent.Session.Presentation do
     |> maybe_add_opt(:extra_tools, normalize_extra_tools_opt(Keyword.get(opts, :extra_tools)))
   end
 
+  @doc """
+  Validates an explicit resume before starting a linked session runner.
+
+  Auto-resume (`resume_source: :auto`) may fall back to a fresh session when the
+  file is missing, so this returns `:ok`. Explicit resumes must reference a
+  loadable native session file.
+  """
+  @spec validate_resume_for_start(ResumeToken.t() | nil, keyword(), binary()) ::
+          :ok | {:error, term()}
+  def validate_resume_for_start(nil, _session_opts, _cwd), do: :ok
+
+  def validate_resume_for_start(
+        %ResumeToken{engine: @engine, value: session_id},
+        session_opts,
+        cwd
+      ) do
+    case resume_session_file(session_id, cwd) do
+      {:ok, _} ->
+        :ok
+
+      {:error, reason} ->
+        if resume_source(session_opts) == :auto do
+          :ok
+        else
+          {:error, explicit_resume_error(session_id, reason)}
+        end
+    end
+  end
+
+  def validate_resume_for_start(%ResumeToken{engine: other}, _session_opts, _cwd) do
+    {:error, {:wrong_engine, other, @engine}}
+  end
+
   def start_or_resume_session(nil, session_opts, state) do
     case CodingAgent.Session.start_link(session_opts) do
       {:ok, session} ->

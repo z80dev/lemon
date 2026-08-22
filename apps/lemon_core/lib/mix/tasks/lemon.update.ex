@@ -162,6 +162,15 @@ defmodule Mix.Tasks.Lemon.Update do
                 shell.info("  Migration complete. Backup: #{bak}")
                 :ok
 
+              {:error, {:manual_steps_required, errors}} ->
+                shell.error(
+                  "  Migration applied automatic section renames but removed runner settings remain:"
+                )
+
+                Enum.each(errors, &shell.error("    • #{&1}"))
+                shell.error("  Remove the settings above manually, then rerun lemon.update.")
+                :error
+
               {:error, reason} ->
                 shell.error("  Migration failed: #{inspect(reason)}")
                 :error

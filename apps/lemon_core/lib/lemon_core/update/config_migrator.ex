@@ -13,8 +13,7 @@ defmodule LemonCore.Update.ConfigMigrator do
 
   Engine selection and custom engine configuration are not migrated automatically.
   The preflight reports their exact paths because top-level execution now uses native
-  Lemon. CLI vendors under `[runtime.cli.<vendor>]` remain available through task
-  delegation.
+  Lemon only. `[runtime.cli.*]` vendor runner settings must be removed manually.
 
   ## Usage
 
@@ -82,9 +81,21 @@ defmodule LemonCore.Update.ConfigMigrator do
          :ok <- backup!(expanded, content) do
       migrated = apply_migrations(content)
 
-      case File.write(expanded, migrated) do
-        :ok -> :ok
-        {:error, reason} -> {:error, {:write_failed, reason}}
+      case Toml.decode(migrated) do
+        {:ok, settings} ->
+          case LemonCore.Config.Validator.validate_deprecated_sections(settings) do
+            :ok ->
+              case File.write(expanded, migrated) do
+                :ok -> :ok
+                {:error, reason} -> {:error, {:write_failed, reason}}
+              end
+
+            {:error, errors} ->
+              {:error, {:manual_steps_required, errors}}
+          end
+
+        {:error, reason} ->
+          {:error, {:invalid_toml, reason}}
       end
     end
   end
@@ -143,6 +154,14 @@ defmodule LemonCore.Update.ConfigMigrator do
     |> Enum.map(&engine_issue/1)
   end
 
+  defp find_engine_issues(_value, ["runtime", "cli"], issues) do
+    if Enum.any?(issues, &(&1 == ["runtime", "cli"])) do
+      issues
+    else
+      [["runtime", "cli"] | issues]
+    end
+  end
+
   defp find_engine_issues(_value, ["runtime", "cli" | _rest], issues), do: issues
 
   defp find_engine_issues(value, path, issues) when is_map(value) do
@@ -175,6 +194,11 @@ defmodule LemonCore.Update.ConfigMigrator do
 
   defp issue_path(path), do: format_config_path(path)
 
+  defp engine_issue(["runtime", "cli"]) do
+    "[runtime.cli] is no longer supported: vendor delegated task runners were removed. " <>
+      "Delete this section and any nested vendor tables."
+  end
+
   defp engine_issue(path) do
     key = List.last(path)
     path = format_config_path(path)
@@ -191,10 +215,10 @@ defmodule LemonCore.Update.ConfigMigrator do
          "engine_modules"
        ] do
       "#{path} config is no longer supported: custom LemonGateway.Engine support and external top-level engines have been removed. " <>
-        "Top-level execution now uses native Lemon; CLI vendors configured under [runtime.cli.<vendor>] remain available through task delegation."
+        "Top-level execution now uses native Lemon only."
     else
       "#{path} is no longer supported: external top-level engine selection has been removed. " <>
-        "Top-level execution now uses native Lemon; CLI vendors configured under [runtime.cli.<vendor>] remain available through task delegation."
+        "Top-level execution now uses native Lemon only."
     end
   end
 
@@ -235,12 +259,20 @@ defmodule LemonCore.Update.ConfigMigrator do
 
   # Renames [tools.x] → [runtime.tools.x] (standalone [tools] section)
   defp migrate_tools_section(content) do
-    String.replace(content, ~r/^\[tools\b/m, "[runtime.tools")
+    if Regex.match?(~r/^\[runtime\.tools/m, content) do
+      content
+    else
+      String.replace(content, ~r/^\[tools\b/m, "[runtime.tools")
+    end
   end
 
   # Renames [agent.tools.x] → [runtime.tools.x]
   defp migrate_agent_tools_section(content) do
-    String.replace(content, ~r/^\[agent\.tools\b/m, "[runtime.tools")
+    if Regex.match?(~r/^\[runtime\.tools/m, content) do
+      content
+    else
+      String.replace(content, ~r/^\[agent\.tools\b/m, "[runtime.tools")
+    end
   end
 
   # Rewrites the standalone [agent] section:
@@ -251,6 +283,18 @@ defmodule LemonCore.Update.ConfigMigrator do
   # We do a line-by-line scan so we can route each key to the right section
   # without relying on a full TOML parser (preserving comments and order).
   defp migrate_agent_section(content) do
+    has_agent? = Regex.match?(~r/^\[agent\]/m, content)
+    has_defaults? = Regex.match?(~r/^\[defaults\]/m, content)
+    has_runtime? = Regex.match?(~r/^\[runtime\]/m, content)
+
+    if has_agent? and (has_defaults? or has_runtime?) do
+      content
+    else
+      migrate_agent_section_lines(content)
+    end
+  end
+
+  defp migrate_agent_section_lines(content) do
     lines = String.split(content, "\n")
 
     {result, pending_defaults, pending_runtime, _in_agent} =

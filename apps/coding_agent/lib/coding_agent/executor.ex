@@ -8,6 +8,8 @@ defmodule CodingAgent.Executor do
   @behaviour LemonGateway.Executor
 
   alias CodingAgent.Executor.SessionRunner
+  alias CodingAgent.Session.Presentation
+  alias LemonCore.ResumeToken
   alias LemonGateway.Event
   alias LemonGateway.ExecutionRequest
 
@@ -56,22 +58,51 @@ defmodule CodingAgent.Executor do
 
   defp start_session_runner(request, opts, sink_pid) do
     run_ref = make_ref()
+    cwd = request.cwd || get_opt(opts, :cwd) || File.cwd!()
+    resume = normalize_resume(request.resume)
+    resume_source = get_resume_source(request)
 
-    case SessionRunner.start_link(
-           request: request,
-           opts: opts,
-           sink_pid: sink_pid,
-           run_ref: run_ref
-         ) do
-      {:ok, runner_pid} ->
-        {:ok, run_ref, %{runner_pid: runner_pid}}
+    session_opts = [
+      resume_source: resume_source
+    ]
 
+    with :ok <- Presentation.validate_resume_for_start(resume, session_opts, cwd),
+         {:ok, runner_pid} <-
+           SessionRunner.start_link(
+             request: request,
+             opts: opts,
+             sink_pid: sink_pid,
+             run_ref: run_ref
+           ) do
+      {:ok, run_ref, %{runner_pid: runner_pid}}
+    else
       {:error, reason} ->
         completed = Event.completed(%{engine: @engine, ok: false, error: reason, answer: ""})
         send(sink_pid, {:engine_event, run_ref, completed})
-        {:ok, run_ref, %{runner_pid: nil}}
+        {:error, reason}
     end
   end
+
+  defp normalize_resume(%ResumeToken{engine: @engine} = token), do: token
+
+  defp normalize_resume(%{engine: @engine, value: value}) when is_binary(value),
+    do: ResumeToken.new(@engine, value)
+
+  defp normalize_resume(_), do: nil
+
+  defp get_resume_source(request) do
+    meta = request.meta || %{}
+
+    case meta[:resume_source] || meta["resume_source"] do
+      :auto -> :auto
+      "auto" -> :auto
+      _ -> :explicit
+    end
+  end
+
+  defp get_opt(opts, key) when is_map(opts), do: Map.get(opts, key)
+  defp get_opt(opts, key) when is_list(opts), do: Keyword.get(opts, key)
+  defp get_opt(_opts, _key), do: nil
 
   defp ensure_session_available do
     case Code.ensure_loaded(@session_module) do

@@ -3,7 +3,7 @@
 diag - Diagnostic utility for Lemon
 
 Usage:
-  diag ping <count>             Send ping messages via Codex CLI
+  diag ping <count>             Send health-check requests to the control plane
   diag status                   Check system status
   diag services                 List running BEAM nodes and ports
   diag health                   Run comprehensive health check
@@ -22,6 +22,7 @@ Examples:
 
 import argparse
 import asyncio
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -67,8 +68,6 @@ LOG_GLOB_PATTERNS = {
 REQUIRED_CONFIG_KEYS = [
     "agent.default_provider",
     "agent.default_model",
-    "gateway.default_engine",
-    "agents.default.default_engine",
     "agents.default.model",
 ]
 
@@ -78,58 +77,55 @@ def get_repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
-async def ping_via_codex(count: int) -> bool:
+async def ping_via_control_plane(count: int) -> bool:
     """
-    Send ping messages using Codex CLI.
-    
+    Send health-check requests to the Lemon control plane.
+
     Args:
-        count: Number of ping messages to send
-        
+        count: Number of ping requests to send
+
     Returns:
         True if all pings succeeded, False otherwise
     """
-    print(f"Sending {count} ping(s) via Codex...")
+    port = os.environ.get("LEMON_CONTROL_PLANE_PORT", "4040")
+    url = f"http://127.0.0.1:{port}/healthz"
+
+    print(f"Sending {count} control-plane health check(s) to {url} ...")
     print("-" * 40)
-    
+
     for i in range(1, count + 1):
         print(f"Ping {i}/{count}: ", end="", flush=True)
-        
-        # Try to run codex exec with a simple prompt
+
         try:
             result = subprocess.run(
-                ["codex", "exec", "--full-auto", f"Run echo 'pong {i}' and report success"],
+                ["curl", "--fail", "--silent", "--show-error", url],
                 capture_output=True,
                 text=True,
-                timeout=60,
-                cwd=str(get_repo_root())
+                timeout=10,
+                cwd=str(get_repo_root()),
             )
-            
+
             if result.returncode == 0:
-                output = result.stdout.strip()
-                # Codex exec outputs a lot of text, just check it ran
-                if output:
-                    print("OK")
-                else:
-                    print("OK (empty output)")
+                print("OK")
             else:
                 print(f"FAILED (exit {result.returncode})")
                 if result.stderr:
                     print(f"  Error: {result.stderr[:200]}")
                 return False
-                
+
         except subprocess.TimeoutExpired:
             print("TIMEOUT")
             return False
         except FileNotFoundError:
-            print("NOT FOUND (codex CLI not installed)")
+            print("NOT FOUND (curl not installed)")
             return False
         except Exception as e:
             print(f"ERROR: {e}")
             return False
-        
+
         if i < count:
             await asyncio.sleep(0.5)
-    
+
     print("-" * 40)
     print(f"All {count} ping(s) completed successfully!")
     return True
@@ -151,9 +147,9 @@ def check_status():
         status = "✓" if path.exists() else "✗"
         print(f"  {status} {dir_name}/")
     
-    # Check for codex CLI
-    print("\nCLI Tools:")
-    tools = ["codex", "claude", "kimi"]
+    # Check runtime tooling
+    print("\nRuntime Tools:")
+    tools = ["mix", "curl"]
     for tool in tools:
         try:
             result = subprocess.run([tool, "--version"], capture_output=True, timeout=5)
@@ -254,7 +250,7 @@ def cmd_health() -> int:
     Comprehensive health check for the Lemon environment.
 
     Checks:
-    - CLI tools (claude, codex, kimi)
+    - Control plane health endpoint
     - BEAM services reachable via epmd
     - Config files exist and are non-empty
 
@@ -267,32 +263,31 @@ def cmd_health() -> int:
     all_healthy = True
     results: list[tuple[str, bool, str]] = []  # (label, ok, detail)
 
-    # --- CLI tools ---
-    print("\nCLI Tools:")
-    cli_tools = ["claude", "codex", "kimi"]
-    for tool in cli_tools:
-        try:
-            res = subprocess.run(
-                [tool, "--version"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            ok = res.returncode == 0
-            version = (res.stdout.strip() or res.stderr.strip())[:60]
-            detail = version if ok else f"exit {res.returncode}"
-        except FileNotFoundError:
-            ok = False
-            detail = "not installed"
-        except subprocess.TimeoutExpired:
-            ok = False
-            detail = "timed out"
+    # --- Control plane health ---
+    print("\nControl Plane:")
+    port = os.environ.get("LEMON_CONTROL_PLANE_PORT", "4040")
+    url = f"http://127.0.0.1:{port}/healthz"
+    try:
+        res = subprocess.run(
+            ["curl", "--fail", "--silent", "--show-error", url],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        ok = res.returncode == 0
+        detail = "healthy" if ok else f"exit {res.returncode}"
+    except FileNotFoundError:
+        ok = False
+        detail = "curl not installed"
+    except subprocess.TimeoutExpired:
+        ok = False
+        detail = "timed out"
 
-        mark = "✓" if ok else "✗"
-        print(f"  {mark} {tool:<10} {detail}")
-        results.append((f"CLI: {tool}", ok, detail))
-        if not ok:
-            all_healthy = False
+    mark = "✓" if ok else "✗"
+    print(f"  {mark} healthz     {detail}")
+    results.append(("Control plane", ok, detail))
+    if not ok:
+        all_healthy = False
 
     # --- BEAM services ---
     print("\nBEAM Services:")
@@ -618,7 +613,7 @@ Examples:
     subparsers = parser.add_subparsers(dest="command", help="Commands")
     
     # ping command
-    ping_parser = subparsers.add_parser("ping", help="Send ping messages via Codex")
+    ping_parser = subparsers.add_parser("ping", help="Send control-plane health checks")
     ping_parser.add_argument("count", type=int, nargs="?", default=3, 
                             help="Number of pings to send (default: 3)")
     
@@ -658,7 +653,7 @@ Examples:
     args = parser.parse_args()
     
     if args.command == "ping":
-        result = asyncio.run(ping_via_codex(args.count))
+        result = asyncio.run(ping_via_control_plane(args.count))
         return 0 if result else 1
     elif args.command == "status":
         check_status()

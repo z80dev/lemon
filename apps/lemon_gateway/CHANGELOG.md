@@ -33,9 +33,9 @@ scheduler and lifecycle owner rather than a selectable engine host.
 - The public `LemonGateway.Engine` extension contract, `EngineRegistry`, Echo,
   custom engine configuration, engine selection, and engine-specific resume
   parsing.
-- Vendor top-level engine shells and `Engines.CliAdapter`. Codex, Claude, Kimi,
-  OpenCode, and Pi remain available only as delegated task runners in
-  `lemon_cli_runners`.
+- Vendor top-level engine shells and `Engines.CliAdapter`. Delegated task runs
+  now use the native in-process `internal` engine only; `lemon_cli_runners`
+  vendor subprocess runners were removed.
 - The `droid` integration and `FACTORY_API_KEY`.
 - The Farcaster transport and its configuration.
 - The email transport, replaced by `LemonChannels.Adapters.Email`.

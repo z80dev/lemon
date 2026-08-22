@@ -10,7 +10,6 @@ assignees: z80
 Which extension point does this integration implement?
 
 - [ ] Channel adapter (`LemonChannels.Plugin`)
-- [ ] Delegated task runner (`LemonCore.SubagentRunner`)
 - [ ] Storage backend (`LemonCore.Store.Backend`)
 - [ ] Memory provider (`LemonMemory.Provider`)
 - [ ] Other: ___

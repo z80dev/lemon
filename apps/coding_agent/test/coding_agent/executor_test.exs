@@ -407,6 +407,25 @@ defmodule CodingAgent.ExecutorTest do
     end
 
     @tag :tmp_dir
+    test "returns an error to non-trapping callers when explicit resume is missing", %{tmp_dir: tmp_dir} do
+      stale_session_id = "missing-explicit-#{System.unique_integer([:positive])}"
+
+      request =
+        request(tmp_dir,
+          prompt: "resume explicitly",
+          run_id: "run-native-explicit-resume-executor",
+          resume: ResumeToken.new("lemon", stale_session_id),
+          meta: %{resume_source: :explicit},
+          stream_fn: mock_stream_fn([assistant_message("should not run")])
+        )
+
+      assert {:error, {:resume_session_missing, ^stale_session_id}} =
+               Executor.start_run(request, %{stream_fn: request.meta[:stream_fn]}, self())
+
+      refute_receive {:EXIT, _, _}, 50
+    end
+
+    @tag :tmp_dir
     test "rejects a stale atom-key explicit resume source", %{tmp_dir: tmp_dir} do
       stale_session_id = "missing-explicit-#{System.unique_integer([:positive])}"
 

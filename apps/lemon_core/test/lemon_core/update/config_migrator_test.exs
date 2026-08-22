@@ -143,7 +143,7 @@ defmodule LemonCore.Update.ConfigMigratorTest do
         end
 
         assert Enum.all?(issues, &String.contains?(&1, "native Lemon"))
-        assert Enum.all?(issues, &String.contains?(&1, "task delegation"))
+        refute Enum.any?(issues, &String.contains?(&1, "task delegation"))
 
         assert Enum.any?(issues, fn issue ->
                  String.contains?(issue, "gateway.engines") and
@@ -154,7 +154,7 @@ defmodule LemonCore.Update.ConfigMigratorTest do
       end
     end
 
-    test "keeps runtime CLI vendor configuration out of engine removal diagnostics" do
+    test "keeps runtime CLI vendor configuration in engine removal diagnostics" do
       content = """
       [runtime.cli.codex]
       engine = "codex"
@@ -170,9 +170,52 @@ defmodule LemonCore.Update.ConfigMigratorTest do
       path = tmp_config(content)
 
       try do
-        assert :ok = ConfigMigrator.check(path)
+        assert {:needs_migration, issues} = ConfigMigrator.check(path)
+        assert Enum.any?(issues, &String.contains?(&1, "[runtime.cli]"))
+        assert Enum.all?(issues, &String.contains?(&1, "vendor delegated task runners"))
       after
         File.rm(path)
+      end
+    end
+
+    test "migrate! refuses success when removed runner settings remain" do
+      content = """
+      [agent]
+      provider = "anthropic"
+
+      [runtime.cli.codex]
+      model = "gpt-4"
+      """
+
+      path = tmp_config(content)
+
+      try do
+        assert {:error, {:manual_steps_required, errors}} = ConfigMigrator.migrate!(path)
+        assert Enum.any?(errors, &String.contains?(&1, "[runtime.cli]"))
+      after
+        File.rm_rf(path)
+        File.rm_rf(ConfigMigrator.backup_path(path))
+      end
+    end
+
+    test "skips [agent] migration when canonical tables already exist" do
+      content = """
+      [agent]
+      provider = "anthropic"
+
+      [defaults]
+      model = "claude-opus"
+      """
+
+      path = tmp_config(content)
+
+      try do
+        assert {:error, {:manual_steps_required, errors}} = ConfigMigrator.migrate!(path)
+        assert Enum.any?(errors, &String.contains?(&1, "[agent]"))
+        assert File.read!(path) == content
+      after
+        File.rm_rf(path)
+        File.rm_rf(ConfigMigrator.backup_path(path))
       end
     end
 

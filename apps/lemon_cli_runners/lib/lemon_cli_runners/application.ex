@@ -1,38 +1,17 @@
 defmodule LemonCliRunners.Application do
   @moduledoc """
-  Contributes this package's vendor CLIs to the platform's registries.
+  Retained package shell for historical `lemon_cli_runners` releases.
 
-  There is no supervision tree here — the runners are started per run by their
-  caller. The application callback exists for one reason: the platform must not
-  name vendors, so each vendor package announces itself at boot instead of
-  appearing in a list somewhere in `coding_agent` or in `config/config.exs`.
-
-  Three things are announced per vendor: the subagent runner the `task` tool
-  may delegate to, the resume syntax that vendor's CLI speaks
-  (`LemonCore.ResumeFormats`), and the resolver for that vendor's
-  `[runtime.cli.<engine>]` config section (`LemonCore.Config.CliResolvers`), so
-  core does not have to carry a table of per-vendor regexes or defaults.
-
-  Registration order is the order vendors appear in the `task` tool's
-  description, so it is the order a reader should meet them in — and, for
-  resume formats, the order text is searched in.
-
-  A runtime without `:lemon_core` — or one where its registry has not started —
-  simply has no CLI subagents; `register/1` answers `{:error, :unavailable}`
-  and boot continues.
+  Vendor delegated task runners were removed from the product execution stack.
+  The application starts an empty supervisor so older release profiles that still
+  list `:lemon_cli_runners` continue to boot without registering external runners.
   """
 
   use Application
 
   require Logger
 
-  @subagents [
-    LemonCliRunners.CodexSubagent,
-    LemonCliRunners.ClaudeSubagent,
-    LemonCliRunners.KimiSubagent,
-    LemonCliRunners.OpencodeSubagent,
-    LemonCliRunners.PiSubagent
-  ]
+  @subagents []
 
   @doc "The subagent runners this package registers at boot."
   @spec subagents() :: [module()]
