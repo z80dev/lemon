@@ -9,24 +9,23 @@ Lemon enforces direct umbrella dependencies by app. This keeps the harness modul
 | --- | --- |
 
 | `coding_agent` | `lemon_agent`, `lemon_ai`, `lemon_browser`, `lemon_core`, `lemon_gateway`, `lemon_memory`, `lemon_platform_test`, `lemon_skills` |
-| `coding_agent_ui` | `coding_agent`, `lemon_cli_runners`, `lemon_core` |
+| `coding_agent_ui` | `coding_agent`, `lemon_core` |
 | `lemon_agent` | `lemon_ai`, `lemon_core` |
 | `lemon_ai` | *(none)* |
 | `lemon_automation` | `lemon_agent`, `lemon_core`, `lemon_router`, `lemon_skills` |
 | `lemon_browser` | `lemon_core` |
 | `lemon_channels` | `lemon_agent`, `lemon_core`, `lemon_media` |
 | `lemon_cli` | `lemon_ai`, `lemon_core`, `lemon_memory` |
-| `lemon_cli_runners` | `lemon_agent`, `lemon_ai`, `lemon_core` |
 | `lemon_control_plane` | `lemon_agent`, `lemon_ai`, `lemon_automation`, `lemon_browser`, `lemon_channels`, `lemon_core`, `lemon_lsp`, `lemon_media`, `lemon_memory`, `lemon_router`, `lemon_skills` |
 | `lemon_core` | *(none)* |
-| `lemon_evals` | `coding_agent`, `lemon_agent`, `lemon_ai`, `lemon_cli_runners`, `lemon_core`, `lemon_skills` |
+| `lemon_evals` | `coding_agent`, `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_skills` |
 | `lemon_gateway` | `lemon_agent`, `lemon_ai`, `lemon_automation`, `lemon_core` |
 | `lemon_honcho` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory`, `lemon_platform_test` |
 | `lemon_lsp` | `lemon_core` |
-| `lemon_mcp` | `coding_agent`, `lemon_agent`, `lemon_cli_runners`, `lemon_core`, `lemon_skills` |
+| `lemon_mcp` | `coding_agent`, `lemon_agent`, `lemon_core`, `lemon_skills` |
 | `lemon_media` | `lemon_core` |
 | `lemon_memory` | `lemon_core` |
-| `lemon_platform_test` | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_cli_runners`, `lemon_core`, `lemon_gateway`, `lemon_memory` |
+| `lemon_platform_test` | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_gateway`, `lemon_memory` |
 | `lemon_router` | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_media`, `lemon_memory` |
 | `lemon_sim` | `lemon_agent`, `lemon_ai`, `lemon_core` |
 | `lemon_sim_ui` | `lemon_ai`, `lemon_core`, `lemon_sim` |
@@ -61,7 +60,7 @@ The refactor quality rules also enforce a few concrete ownership boundaries:
 - `lemon_gateway` owns execution slots and the native execution lifecycle. Router-owned queue semantics, chat-state readback for automatic-resume request mutation, and conversation-key selection must not move back into gateway. Router hands pre-resolved, engine-less `LemonCore.ExecutionCommand` values to `LemonCore.EngineRuntime`; gateway adapts them to its private `LemonGateway.ExecutionRequest` and invokes the fixed native executor. `LemonGateway.Runtime.submit/1` must not be reintroduced as a compatibility path. Default gateway startup is execution-only; gateway-native transport, command, SMS, and voice children require explicit `:gateway_ingress_enabled` configuration. Those surfaces are gateway-owned by design rather than pending migration — SMS, webhook, and voice do not fit `LemonChannels.Plugin`.
 - Gateway-owned transports submit through `LemonCore.RouterBridge` when they need router normalization. They must not take a compile-time dependency on `LemonRouter.RunOrchestrator`.
 - Router-owned active session state is only exposed through `LemonRouter.Router` and `LemonCore.RouterBridge`. External apps must not reference `LemonRouter.SessionRegistry` or `LemonRouter.SessionReadModel` directly.
-- Top-level requests and execution commands never validate or carry a runner identity. `engine: "lemon"` remains fixed run provenance in events and stores. `ResumeToken.engine` and historical `ChatState.last_engine` remain persisted discriminators; only native tokens may resume a top-level run, while non-native historical values are retained and quarantined from resume. CLI runner identity is confined to `LemonCore.SubagentRegistry` and task APIs. Router should use `LemonCore.Cwd` for default cwd resolution instead of `LemonGateway.Cwd`.
+- Top-level requests and execution commands never validate or carry a runner identity. `engine: "lemon"` remains fixed run provenance in events and stores. `ResumeToken.engine` and historical `ChatState.last_engine` remain persisted discriminators; only native tokens may resume a top-level run, while non-native historical values are retained and quarantined from resume. Subagents execute natively in-process (`CodingAgent.Session` via `CodingAgent.Coordinator`); there is no external CLI runner registry. Router should use `LemonCore.Cwd` for default cwd resolution instead of `LemonGateway.Cwd`.
 - Shared domains in `lemon_core` / `lemon_control_plane` must use typed wrappers such as `RunStore`, `ChatStateStore`, `PolicyStore`, and `ProjectBindingStore` instead of bypassing them with raw store helpers.
 
 Run `mix lemon.quality` after boundary changes. It now checks both dependency policy and these architecture guardrails.

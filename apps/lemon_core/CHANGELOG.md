@@ -10,6 +10,11 @@ First release as a standalone package. `lemon_core` used to be the umbrella's
 catch-all shared app; this release turns it into a library you can embed. The
 theme of every change below is the same: nothing in `lemon_core` knows about
 Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
+### Removed
+
+- Vendor CLI wrapper extension points. Subagent tasks now execute natively, and
+  `[runtime.cli]` is rejected.
+
 
 ### Added
 
@@ -19,26 +24,6 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
   dispatcher broadcasts one after every outbound dispatch (route/peer info,
   intent kind, bounded text preview, result, timings). See
   `docs/platform/bus-events.md` §10.
-- `LemonCore.SubagentRunner` and `LemonCore.SubagentRegistry` — the extension
-  point behind the native agent's delegated `task` tool. A vendor CLI wrapper
-  implements the behaviour and registers when its own application starts; the
-  task layer reads the registry for runner identity, tool-description prose,
-  and default tool policy, so no vendor is named in CodingAgent.
-- `LemonCore.ResumeFormat` and `LemonCore.ResumeFormats` — the extension point
-  behind delegated-runner resume metadata. Top-level execution accepts only
-  native `lemon` resume tokens; vendor formats never select Gateway execution.
-- `LemonCore.Config.CliResolvers` — the extension point behind the config
-  loader's `[runtime.cli.<engine>]` sections. A vendor package registers a
-  resolver for its own section when its application starts (the shape runners
-  read stays exactly as before: atom-keyed vendor maps with the vendor's
-  defaults, materialized even when the section is unconfigured); sections no
-  resolver claims pass through as raw maps rather than being dropped. Core no
-  longer names `codex`/`kimi`/`opencode`/`pi`/`claude` in
-  `LemonCore.Config.Agent`. Registering clears the default
-  `LemonCore.ConfigCache` instance (new `clear/0`/`clear/1`) so config cached
-  before a vendor package boots is not served without its defaults, and
-  `LemonCore.SubagentRunner` gains the optional `resolve_cli_settings/1`
-  callback vendors implement.
 - `LemonCore.Store` can run as many named instances as you like. Configuration
   comes from `start_link/1` options first and application environment second,
   so an embedding application no longer has to write into `:lemon_core`'s app

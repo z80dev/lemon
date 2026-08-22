@@ -49,9 +49,9 @@ discriminator; the router accepts only `"lemon"` tokens for top-level resume.
 Older `ChatState.last_engine` values remain stored as historical/native
 discriminators and are quarantined from resumption when they are not native.
 
-CLI runner identities are retained in `LemonCore.SubagentRegistry` for task
-APIs. Delegated tasks can choose an installed runner and record task provenance,
-but cannot affect a product run's executor.
+Delegated tasks run as native in-process subagent sessions (`CodingAgent.Session`
+via `CodingAgent.Coordinator`) and record their own task provenance, but cannot
+affect a product run's executor.
 
 ### 4) API/tool surface updates
 
@@ -119,8 +119,8 @@ delegate to `ModelCatalog`.
 - `apps/lemon_router/lib/lemon_router/model_selection.ex` is intentionally
   separate from provider/credential lookup: it applies top-level model
   precedence and returns the resolved model. It no longer maps model strings
-  to runner identities or consults an engine catalog. Task-runner selection
-  belongs to `LemonCore.SubagentRegistry` and task APIs, so there is no
+  to runner identities or consults an engine catalog. Subagent delegation is
+  native and in-process through the task APIs, so there is no
   provider-facade migration here.
 
 ### Remaining phases (not started)

@@ -31,7 +31,6 @@ defmodule CodingAgent.Tools.Task.RunnerTest do
                nil,
                nil,
                nil,
-               "internal",
                task_session_timeout_ms: 100,
                task_session_poll_ms: 10
              )
@@ -71,7 +70,6 @@ defmodule CodingAgent.Tools.Task.RunnerTest do
           signal,
           nil,
           nil,
-          "internal",
           task_session_poll_ms: 10
         )
       end)

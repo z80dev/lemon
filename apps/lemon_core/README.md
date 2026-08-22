@@ -177,7 +177,6 @@ it only through the `LemonCore.Store` finalize-run hook the runtime configures.
 | `LemonCore.BindingResolver` | Binding resolution logic |
 | `LemonCore.ChatScope` | Chat scope struct |
 | `LemonCore.ResumeToken` | Resume token for session continuity |
-| `LemonCore.ResumeFormat` / `LemonCore.ResumeFormats` | Per-engine resume syntax, registered at boot |
 
 ### Operations
 
@@ -308,9 +307,6 @@ LemonCore.ConfigReloader.reload/1
 | `LEMON_THEME` | `tui.theme` |
 | `LEMON_LOG_FILE` | `logging.file` |
 | `LEMON_LOG_LEVEL` | `logging.level` |
-| `LEMON_CODEX_EXTRA_ARGS` | `runtime.cli.codex.extra_args` |
-| `LEMON_CODEX_AUTO_APPROVE` | `runtime.cli.codex.auto_approve` |
-| `LEMON_CLAUDE_YOLO` | `runtime.cli.claude.dangerously_skip_permissions` |
 | `LEMON_WASM_ENABLED` | `runtime.tools.wasm.enabled` |
 | `LEMON_WASM_RUNTIME_PATH` | `runtime.tools.wasm.runtime_path` |
 | `LEMON_WASM_TOOL_PATHS` | `runtime.tools.wasm.tool_paths` |

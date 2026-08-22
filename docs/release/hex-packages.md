@@ -27,7 +27,6 @@ scripts/release_package --list
   lemon_core             lemon_core             0.1.0
   lemon_media            lemon_media            0.1.0
   lemon_agent            lemon_agent            0.1.0
-  lemon_cli_runners      lemon_cli_runners      0.1.0
   lemon_memory           lemon_memory           0.1.0
   lemon_channels         lemon_channels         0.1.0
   lemon_router           lemon_router           0.1.0
@@ -41,7 +40,9 @@ scripts/release_package --list
 it (decision D13). It was not in the original list of eight, and leaving it out
 would have blocked both of them — see the second failure mode below.
 `lemon_cli_runners` joined with D15 (vendor CLI wrappers extracted from
-`lemon_agent`).
+`lemon_agent`) and was removed again on 2026-08-21 (D16 in
+`docs/platform-split.md`), when vendor CLI task runners were deleted in favor of
+native-only in-process subagents; its `0.1.0` on hex.pm is abandoned in place.
 `lemon_browser` and `lemon_skills` joined as packages 11 and 12 when D14 was
 approved (2026-08-13): both are shared platform infrastructure that the
 coding-agent product group depends on, and unpublished they blocked its
@@ -65,7 +66,7 @@ exist on hex.pm at the moment it is published, so the first publish walks the
 dependency graph bottom-up:
 
 ```
-lemon_ai → lemon_core → lemon_media → lemon_agent → lemon_cli_runners → lemon_memory → lemon_channels → lemon_router → lemon_gateway → lemon_platform_test → lemon_browser → lemon_skills
+lemon_ai → lemon_core → lemon_media → lemon_agent → lemon_memory → lemon_channels → lemon_router → lemon_gateway → lemon_platform_test → lemon_browser → lemon_skills
 ```
 
 `lemon_channels` precedes `lemon_router` because the router depends on it.

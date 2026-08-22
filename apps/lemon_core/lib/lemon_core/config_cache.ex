@@ -179,9 +179,8 @@ defmodule LemonCore.ConfigCache do
   @doc """
   Drop every cached entry in the default cache instance.
 
-  A no-op when the cache is not running. Used when the meaning of resolved
-  config changes at runtime — e.g. `LemonCore.Config.CliResolvers.register/2`
-  at a vendor package's boot — so entries resolved under the old rules are not
+  A no-op when the cache is not running. Used when config files or environment
+  variables change at runtime, so entries resolved under the old rules are not
   served.
   """
   @spec clear() :: :ok

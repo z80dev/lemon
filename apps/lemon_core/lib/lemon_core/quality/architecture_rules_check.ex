@@ -575,23 +575,14 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
       ]
     },
     %{
-      code: :cli_runners_gateway_boundary,
-      message:
-        "CLI task runners must not depend on LemonGateway.*; executor dispatches registered task runners",
-      prefixes: ["LemonGateway"],
-      files: ["apps/lemon_cli_runners/lib/**/*.ex"]
-    },
-    %{
       code: :gateway_coding_agent_boundary,
-      message:
-        "Gateway must not depend on CodingAgent.*; task execution goes through registered runners",
+      message: "Gateway must not depend on CodingAgent.*; task execution is in-process",
       prefixes: ["CodingAgent"],
       files: ["apps/lemon_gateway/lib/**/*.ex"]
     },
     %{
       code: :engine_catalog_boundary,
-      message:
-        "Top-level execution must not use LemonCore.EngineCatalog; task runner identities belong to SubagentRegistry",
+      message: "Top-level execution must not use LemonCore.EngineCatalog; execution is native Lemon",
       prefixes: ["LemonCore.EngineCatalog"],
       files: ["apps/*/lib/**/*.ex"]
     },

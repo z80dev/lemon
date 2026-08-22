@@ -2,14 +2,13 @@
 
 Contract-test kit for Lemon's extension behaviours.
 
-Four ExUnit case templates run the platform's compliance suites against *your*
+Three ExUnit case templates run the platform's compliance suites against *your*
 implementation of a Lemon behaviour:
 
 | Behaviour | Case template |
 | --- | --- |
 | `LemonCore.Store.Backend` | `LemonPlatformTest.BackendCase` |
 | `LemonChannels.Plugin` | `LemonPlatformTest.PluginCase` |
-| `LemonCore.SubagentRunner` | `LemonPlatformTest.SubagentRunnerCase` |
 | `LemonMemory.Provider` | `LemonPlatformTest.ProviderCase` |
 
 ```elixir
@@ -43,15 +42,13 @@ Use the boundary that matches the desired integration:
 | --- | --- |
 | Integrate a model/API | a `LemonAi.Provider` |
 | Add in-process agent capability | a `CodingAgent` tool |
-| Delegate external or vendor CLI work | `LemonCore.SubagentRunner` |
+| Delegate bounded work to a subagent | the native `task`/`agent` tools (in-process `CodingAgent.Session`) |
 
-Claude Code, Codex, Kimi, OpenCode, and Pi remain optional delegated task runners in
-`lemon_cli_runners`. `LemonCore.ResumeToken` and `LemonCore.ResumeFormats` retain
-native and task-runner resume support. Top-level `engine: "lemon"` is fixed
-compatibility provenance, while a delegated task retains its actual `task.engine`
-runner ID; neither is a Gateway routing choice. Vendor runner configuration under
-`[runtime.cli.<vendor>]` only configures a delegated task subprocess; it never
-selects a top-level Gateway executor.
+Delegated tasks run as native in-process subagents; the vendor CLI task runners
+(Claude Code, Codex, Kimi, OpenCode, and Pi) were removed. `LemonCore.ResumeToken`
+retains native and delegated-task resume support. Top-level `engine: "lemon"` is
+fixed compatibility provenance, while a delegated task retains its own task
+identity; neither is a Gateway routing choice.
 
 ## Optional dependencies
 
@@ -61,7 +58,7 @@ and a Telegram client. Add the app your case targets alongside the kit:
 
 | Case / tool | Add |
 | --- | --- |
-| `BackendCase`, `EventsCase`, `SubagentRunnerCase` | `{:lemon_core, "~> 0.1", only: :test}` |
+| `BackendCase`, `EventsCase` | `{:lemon_core, "~> 0.1", only: :test}` |
 | `PluginCase` | `{:lemon_channels, "~> 0.1", only: :test}` |
 | `ProviderCase` | `{:lemon_memory, "~> 0.1", only: :test}` |
 | `FakeLLM` | `{:lemon_ai, "~> 0.1", only: :test}` and `{:lemon_agent, "~> 0.1", only: :test}` |
@@ -93,8 +90,7 @@ error. See the `LemonPlatformTest.FakeLLM` moduledoc for the full worked example
 `test/compliance/` runs the kit against the platform's own implementations — three
 store backends, two channel adapters, and the local memory provider. Additional
 compliance suites live with their implementations where dependency direction requires
-it, including `XApi.ChannelAdapter` in `apps/x_api` and vendor
-`LemonCore.SubagentRunner` implementations in `apps/lemon_cli_runners`.
+it, including `XApi.ChannelAdapter` in `apps/x_api`.
 
 ```bash
 mix test apps/lemon_platform_test

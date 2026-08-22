@@ -13,7 +13,6 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
   @current_allowed_direct_deps %{
     lemon_agent: [:lemon_ai, :lemon_core],
     lemon_ai: [],
-    lemon_cli_runners: [:lemon_agent, :lemon_ai, :lemon_core],
     coding_agent: [
       :lemon_agent,
       :lemon_ai,
@@ -25,9 +24,7 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
       :lemon_platform_test,
       :lemon_skills
     ],
-    # lemon_cli_runners: products that ship the vendor CLIs pull the vendor
-    # package explicitly; coding_agent itself stays vendor-free.
-    coding_agent_ui: [:coding_agent, :lemon_cli_runners, :lemon_core],
+    coding_agent_ui: [:coding_agent, :lemon_core],
     lemon_automation: [:lemon_agent, :lemon_core, :lemon_router, :lemon_skills],
     lemon_channels: [:lemon_agent, :lemon_core, :lemon_media],
     lemon_control_plane: [
@@ -51,7 +48,6 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
       :lemon_agent,
       :lemon_ai,
       :coding_agent,
-      :lemon_cli_runners,
       :lemon_core,
       :lemon_skills
     ],
@@ -68,7 +64,7 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
     lemon_honcho: [:lemon_agent, :lemon_ai, :lemon_core, :lemon_memory, :lemon_platform_test],
     lemon_lsp: [:lemon_core],
     lemon_media: [:lemon_core],
-    lemon_mcp: [:lemon_agent, :coding_agent, :lemon_cli_runners, :lemon_core, :lemon_skills],
+    lemon_mcp: [:lemon_agent, :coding_agent, :lemon_core, :lemon_skills],
     # The contract-test kit is a leaf: one (optional) dep per behaviour it
     # tests, and nothing in the platform depends on it outside test code. ai +
     # agent_core back the FakeLLM double, which drives a real agent loop.
@@ -76,7 +72,6 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
       :lemon_agent,
       :lemon_ai,
       :lemon_channels,
-      :lemon_cli_runners,
       :lemon_core,
       :lemon_gateway,
       :lemon_memory

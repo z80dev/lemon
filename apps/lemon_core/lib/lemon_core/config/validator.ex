@@ -111,6 +111,10 @@ defmodule LemonCore.Config.Validator do
         is_map(settings["tools"]),
         "[tools.*] is deprecated. Use [runtime.tools.*] instead."
       )
+      |> check_deprecated(
+        runtime_cli_present?(settings),
+        "The [runtime.cli] section has been removed; all subagent tasks run natively."
+      )
       |> Enum.reverse()
 
     (deprecated_errors ++ removed_engine_config_errors(settings))
@@ -137,7 +141,6 @@ defmodule LemonCore.Config.Validator do
     engines
     gateway_engines
   )
-  @runtime_cli_path ["runtime", "cli"]
 
   defp removed_engine_config_errors(settings) do
     settings
@@ -153,13 +156,6 @@ defmodule LemonCore.Config.Validator do
       current_path = path ++ [key]
 
       cond do
-        current_path == @runtime_cli_path ->
-          if Enum.any?(errors, &(&1 == "[runtime.cli]")) do
-            errors
-          else
-            [removed_runtime_cli_message() | errors]
-          end
-
         key in @removed_engine_keys ->
           [removed_engine_config_message(format_config_path(current_path)) | errors]
 
@@ -192,9 +188,10 @@ defmodule LemonCore.Config.Validator do
     "#{path} is no longer supported. Lemon runs natively; remove this engine-routing setting."
   end
 
-  defp removed_runtime_cli_message do
-    "[runtime.cli] is no longer supported. Vendor delegated task runners were removed; delete this section."
-  end
+  defp runtime_cli_present?(%{"runtime" => runtime}) when is_map(runtime),
+    do: Map.has_key?(runtime, "cli")
+
+  defp runtime_cli_present?(_settings), do: false
 
   defp check_deprecated(errors, true, message), do: [message | errors]
   defp check_deprecated(errors, false, _message), do: errors

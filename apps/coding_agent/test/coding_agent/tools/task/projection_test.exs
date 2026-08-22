@@ -9,7 +9,6 @@ defmodule CodingAgent.Tools.Task.ProjectionTest do
     test "creates canonical reasoning engine action events" do
       result = %AgentToolResult{
         details: %{
-          engine: "codex",
           reasoning: %{text: "checking the router path", source: "assistant_thinking"}
         }
       }
@@ -30,7 +29,6 @@ defmodule CodingAgent.Tools.Task.ProjectionTest do
       assert event.meta.parent_run_id == "run_parent_reasoning_1"
       assert event.meta.session_key == "agent:default:web:default:dm:1"
       assert event.meta.visibility == :operator
-      assert event.payload.engine == "codex"
       assert event.payload.action.kind == "reasoning"
       assert event.payload.action.title == "checking the router path"
 

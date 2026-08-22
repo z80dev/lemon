@@ -289,12 +289,10 @@ Internal task runs infer a restrictive `tool_policy` and verification guardrail 
 | `CodingAgent.TaskStore` / `TaskStoreServer` | ETS+DETS store for async task tool runs |
 | `CodingAgent.ParentQuestions` / `ParentQuestionStoreServer` | ETS+DETS store for child-to-parent clarification requests |
 
-The task tool defaults omitted `async` to `true`.
-Delegated runs use the native in-process `internal` engine via
-`CodingAgent.CliRunners.LemonSubagent`; vendor CLI task runners were removed.
-When a provider omits the task `description` field but sends a valid `prompt`, Lemon now derives a short description from that prompt instead of rejecting the task call outright.
-When an internal task omits `model`, the child session now inherits the live parent session model at execution time instead of relying only on the captured tool opts, so Telegram/session-scoped model overrides also apply to async subtasks.
-Internal task child sessions also have a bounded wait for terminal session events. If a child provider stream wedges or the child session exits without emitting `agent_end` / `error`, the task returns a timeout or session-exit error instead of leaving `join` blocked forever.
+The task tool runs all work in a native in-process `CodingAgent.Session`.
+When a provider omits the task `description` field but sends a valid `prompt`, Lemon derives a short description from that prompt instead of rejecting the task call outright.
+When a native task omits `model`, the child session inherits the live parent session model at execution time instead of relying only on the captured tool opts, so Telegram/session-scoped model overrides also apply to async subtasks.
+Native task child sessions also have a bounded wait for terminal session events. If a child provider stream wedges or the child session exits without emitting `agent_end` / `error`, the task returns a timeout or session-exit error instead of leaving `join` blocked forever.
 
 For coordination workflows that must produce one final same-turn answer, queued task results should be treated as launch receipts, not completion. Keep the returned `task_id`s and call `action=join` before responding; auto-followup is for later delivery, not guaranteed same-turn aggregation. `action=join` now suppresses the later async auto-followup for those task ids so the parent session does not get a redundant completion prompt after it already waited. Task result surfaces (`poll`, `join`, `get`, and async auto-followup) expose only visible assistant output plus task metadata, not stored event streams, tool-call internals, or thinking deltas. For non-terminal tasks, `poll` and `get` behave as status queries: user-visible text shows task status, while the latest structured `current_action` stays in `details` instead of leaking raw command/tool event text into answer content. Async followup delivery also backfills terminal task/run state before posting the completion message, which prevents delivered completions from leaving task records stranded in `queued` or `running`. Auto-followup now preserves the full visible task answer instead of pre-truncating it in the followup builder, and router-delivered task followups use the `echo` engine so the raw completion text is delivered without asking the parent model to re-summarize or truncate it. When `:coding_agent, :async_followups` is set to `:steer_backlog`, live streaming parent sessions now attempt an in-session steer first before falling back to router backlog semantics.
 
@@ -381,12 +379,9 @@ The eval harness is intentionally lightweight and deterministic. It should catch
 | `Mix.Tasks.Lemon.Eval` | Run eval harness from the command line |
 | `Mix.Tasks.Lemon.Workspace` | Manage workspace bootstrap files |
 
-### CLI Runners
+### Native Task Execution
 
-| Module | Description |
-|--------|-------------|
-| `CodingAgent.CliRunners.LemonRunner` | CLI runner for Lemon sessions |
-| `CodingAgent.CliRunners.LemonSubagent` | CLI runner for Lemon subagent sessions |
+`CodingAgent.Tools.Task.Runner` starts and monitors native task sessions directly.
 
 ## Key Concepts
 

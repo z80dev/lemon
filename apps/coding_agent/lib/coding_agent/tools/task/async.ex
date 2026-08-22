@@ -253,7 +253,6 @@ defmodule CodingAgent.Tools.Task.Async do
       session_key: lifecycle_context[:session_key],
       agent_id: lifecycle_context[:agent_id],
       description: lifecycle_context[:description],
-      engine: lifecycle_context[:engine],
       role: lifecycle_context[:role],
       queue_mode: lifecycle_context[:queue_mode],
       meta: lifecycle_context[:meta]
@@ -316,7 +315,6 @@ defmodule CodingAgent.Tools.Task.Async do
       parent_run_id: parent_run_id,
       session_key: session_key,
       agent_id: agent_id,
-      engine: lifecycle_context[:engine],
       provenance: :direct
     )
 

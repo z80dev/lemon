@@ -11,9 +11,9 @@ defmodule LemonCore.Update.ConfigMigrator do
   | `[agent.tools.*]` | `[runtime.tools.*]` |
   | `[tools.*]` | `[runtime.tools.*]` |
 
-  Engine selection and custom engine configuration are not migrated automatically.
-  The preflight reports their exact paths because top-level execution now uses native
-  Lemon only. `[runtime.cli.*]` vendor runner settings must be removed manually.
+  Engine selection, custom engine configuration, and `[runtime.cli]` are not
+  migrated automatically. The preflight reports their exact paths because all
+  subagent tasks now run natively.
 
   ## Usage
 
@@ -142,6 +142,10 @@ defmodule LemonCore.Update.ConfigMigrator do
         is_map(settings["tools"]),
         "[tools.*] is deprecated. Use [runtime.tools.*] instead."
       )
+      |> maybe_add_issue(
+        runtime_cli_present?(settings),
+        "The [runtime.cli] section has been removed; all subagent tasks run natively."
+      )
       |> Enum.reverse()
 
     deprecated_section_issues ++ deprecated_engine_issues(settings)
@@ -153,16 +157,6 @@ defmodule LemonCore.Update.ConfigMigrator do
     |> Enum.sort_by(&issue_path/1)
     |> Enum.map(&engine_issue/1)
   end
-
-  defp find_engine_issues(_value, ["runtime", "cli"], issues) do
-    if Enum.any?(issues, &(&1 == ["runtime", "cli"])) do
-      issues
-    else
-      [["runtime", "cli"] | issues]
-    end
-  end
-
-  defp find_engine_issues(_value, ["runtime", "cli" | _rest], issues), do: issues
 
   defp find_engine_issues(value, path, issues) when is_map(value) do
     value
@@ -194,11 +188,6 @@ defmodule LemonCore.Update.ConfigMigrator do
 
   defp issue_path(path), do: format_config_path(path)
 
-  defp engine_issue(["runtime", "cli"]) do
-    "[runtime.cli] is no longer supported: vendor delegated task runners were removed. " <>
-      "Delete this section and any nested vendor tables."
-  end
-
   defp engine_issue(path) do
     key = List.last(path)
     path = format_config_path(path)
@@ -215,12 +204,17 @@ defmodule LemonCore.Update.ConfigMigrator do
          "engine_modules"
        ] do
       "#{path} config is no longer supported: custom LemonGateway.Engine support and external top-level engines have been removed. " <>
-        "Top-level execution now uses native Lemon only."
+        "Top-level execution now uses native Lemon."
     else
       "#{path} is no longer supported: external top-level engine selection has been removed. " <>
-        "Top-level execution now uses native Lemon only."
+        "Top-level execution now uses native Lemon."
     end
   end
+
+  defp runtime_cli_present?(%{"runtime" => runtime}) when is_map(runtime),
+    do: Map.has_key?(runtime, "cli")
+
+  defp runtime_cli_present?(_settings), do: false
 
   defp format_config_path(path) do
     Enum.reduce(path, "", fn

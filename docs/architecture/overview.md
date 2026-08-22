@@ -28,7 +28,8 @@ For system diagrams see `docs/diagrams/`. For per-app details see each `apps/*/R
    automatic model configuration and cost tracking.
 
 6. **Native Top-Level Execution** — every product run uses Lemon's in-process
-   executor. CLI runners remain available only to delegated task APIs.
+   executor. Subagents also run natively in-process; there are no external CLI
+   runners.
 
 ---
 
@@ -83,7 +84,7 @@ See `docs/diagrams/architecture.svg` for the full visual diagram.
 
 ## Application Map
 
-The project is an Elixir umbrella with 24 applications:
+The project is an Elixir umbrella with 25 applications:
 
 **Stack (bottom-up):**
 
@@ -112,6 +113,7 @@ The project is an Elixir umbrella with 24 applications:
 | `lemon_web` | React web frontend bridge |
 | `x_api` | X/Twitter HTTP client (leaf) |
 | `lemon_evals` | Eval harness for assistant behavior |
+| `lemon_honcho` | Honcho-backed long-term memory: registers a `LemonMemory` provider and agent tools |
 
 **Capability apps (extracted from lemon_core):**
 
@@ -277,8 +279,9 @@ accepts only native (`"lemon"`) tokens for explicit or automatic top-level
 resume. It retains older `ChatState.last_engine` and token values for history and
 rollback, but quarantines non-native values from resumption.
 
-CLI runner identities belong to `LemonCore.SubagentRegistry` and the task APIs.
-They can run delegated subagents and retain their own task provenance; they
+Subagents execute natively in-process through the `task`/`agent` tools — each
+delegated task is a child `CodingAgent.Session` coordinated by
+`CodingAgent.Coordinator`. A subagent retains its own task provenance; it
 cannot alter the executor used for a product run.
 
 ### Lane scheduling

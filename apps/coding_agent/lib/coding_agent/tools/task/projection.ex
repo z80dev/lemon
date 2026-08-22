@@ -57,7 +57,6 @@ defmodule CodingAgent.Tools.Task.Projection do
       case normalize_current_action(current_action) do
         %{title: title, kind: kind, phase: phase} ->
           payload = %{
-            engine: details[:engine] || details["engine"] || lifecycle_context[:engine],
             phase: normalize_phase(phase),
             ok: normalize_ok(phase),
             message: nil,
@@ -136,7 +135,7 @@ defmodule CodingAgent.Tools.Task.Projection do
   defp normalize_kind(kind) when is_atom(kind), do: Atom.to_string(kind)
   defp normalize_kind(_), do: "tool"
 
-  defp build_reasoning_event(details, lifecycle_context, text, source, phase) do
+  defp build_reasoning_event(_details, lifecycle_context, text, source, phase) do
     session_key = lifecycle_context[:session_key]
     run_id = lifecycle_context[:run_id]
 
@@ -144,7 +143,6 @@ defmodule CodingAgent.Tools.Task.Projection do
       attrs =
         event_meta(lifecycle_context)
         |> Map.merge(%{
-          engine: details[:engine] || details["engine"] || lifecycle_context[:engine],
           text: text,
           source: source,
           phase: phase,

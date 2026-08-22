@@ -143,7 +143,6 @@ defmodule LemonCore.Update.ConfigMigratorTest do
         end
 
         assert Enum.all?(issues, &String.contains?(&1, "native Lemon"))
-        refute Enum.any?(issues, &String.contains?(&1, "task delegation"))
 
         assert Enum.any?(issues, fn issue ->
                  String.contains?(issue, "gateway.engines") and
@@ -154,25 +153,20 @@ defmodule LemonCore.Update.ConfigMigratorTest do
       end
     end
 
-    test "keeps runtime CLI vendor configuration in engine removal diagnostics" do
+    test "reports removed runtime CLI configuration" do
       content = """
       [runtime.cli.codex]
       engine = "codex"
       default_engine = "codex"
-      preferred_engine = "codex"
-      known_engines = ["codex"]
-      custom_engines = ["acme"]
-
-      [runtime.cli.claude.engines.acme]
-      module = "Acme.Engine"
       """
 
       path = tmp_config(content)
 
       try do
         assert {:needs_migration, issues} = ConfigMigrator.check(path)
-        assert Enum.any?(issues, &String.contains?(&1, "[runtime.cli]"))
-        assert Enum.all?(issues, &String.contains?(&1, "vendor delegated task runners"))
+
+        assert "The [runtime.cli] section has been removed; all subagent tasks run natively." in issues
+        assert Enum.any?(issues, &String.contains?(&1, "runtime.cli.codex.engine"))
       after
         File.rm(path)
       end
@@ -191,7 +185,8 @@ defmodule LemonCore.Update.ConfigMigratorTest do
 
       try do
         assert {:error, {:manual_steps_required, errors}} = ConfigMigrator.migrate!(path)
-        assert Enum.any?(errors, &String.contains?(&1, "[runtime.cli]"))
+
+        assert "The [runtime.cli] section has been removed; all subagent tasks run natively." in errors
       after
         File.rm_rf(path)
         File.rm_rf(ConfigMigrator.backup_path(path))

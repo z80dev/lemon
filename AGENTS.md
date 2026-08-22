@@ -23,7 +23,7 @@
 | Work on media job capability driver | `apps/lemon_media/` |
 | Work on LSP capability driver | `apps/lemon_lsp/` |
 | Build reusable simulation harnesses | `apps/lemon_sim/` |
-| Work with CLI runners/subagent spawning | `apps/lemon_cli_runners/` *(extracted from `lemon_agent`, D15)* |
+| Work on native in-process subagent spawning | `apps/coding_agent/` (`task`/`agent` tools, `CodingAgent.Coordinator`) |
 | Create or modify skills and assistant-platform tools | `apps/lemon_skills/` |
 | Work on Honcho memory integration | `apps/lemon_honcho/` |
 | Work on deterministic eval harnesses | `apps/lemon_evals/` |
@@ -158,7 +158,6 @@ apps/
 ├── lemon_browser/       # Browser capability driver and artifact store
 ├── lemon_channels/      # Channel adapters and delivery outbox (Telegram, Discord, WhatsApp, XMTP, email)
 ├── lemon_cli/           # User-facing setup, onboarding, and Hermes migration Mix tasks
-├── lemon_cli_runners/   # Vendor AI CLIs (Claude Code, Codex, Kimi, OpenCode, Pi) wrapped as streaming task subagents
 ├── lemon_control_plane/ # HTTP/WebSocket API server with 150+ JSON-RPC methods
 ├── lemon_core/          # Shared primitives: config, store (ETS/JSONL/SQLite), secrets, PubSub bus
 ├── lemon_evals/         # Deterministic eval harness and mix lemon.eval task
@@ -296,10 +295,10 @@ On Linux and other non-keychain environments, keep `~/.lemon/secrets_master_key`
 [lemon_ai] - LLM provider calls (Anthropic, OpenAI, Google, Azure, Bedrock)
 ```
 
-Vendor CLI engines take a parallel path out of `lemon_gateway`: `lemon_cli_runners` owns the
-`claude`/`codex`/`kimi`/`opencode`/`pi` engines and runs each vendor CLI as a streaming JSONL
-subprocess (extracted from `lemon_agent` in D15), instead of the in-process
-`coding_agent` → `lemon_agent` → `lemon_ai` chain.
+Subagents take an in-process path off the same chain: CodingAgent's `task`/`agent` tools spawn
+native subagent sessions (`CodingAgent.Session`) coordinated by `CodingAgent.Coordinator`, reusing
+the in-process `coding_agent` → `lemon_agent` → `lemon_ai` chain rather than an external process.
+There are no vendor CLI subprocess runners — all subagent execution is native.
 
 Outbound message delivery goes through `lemon_channels` (Telegram, Discord, WhatsApp, XMTP, email adapters).
 The control plane (`lemon_control_plane`) provides the JSON-RPC API used by TUI/web clients.
@@ -316,11 +315,10 @@ lemon_automation ─────→ lemon_agent, lemon_core, lemon_router, lemon
 lemon_channels ───────→ lemon_core, lemon_media, lemon_agent
 lemon_cli ────────────→ lemon_core, lemon_memory, lemon_ai
 coding_agent ─────────→ lemon_agent, lemon_ai, lemon_skills, lemon_core, lemon_gateway, lemon_memory, lemon_browser, lemon_platform_test*
-coding_agent_ui ──────→ coding_agent, lemon_cli_runners, lemon_core
-lemon_cli_runners ────→ lemon_agent, lemon_ai, lemon_core, lemon_gateway
+coding_agent_ui ──────→ coding_agent, lemon_core
 lemon_agent ──────────→ lemon_ai, lemon_core
-lemon_evals ──────────→ lemon_agent, lemon_ai, coding_agent, lemon_cli_runners, lemon_core, lemon_skills
-lemon_mcp ────────────→ coding_agent, lemon_cli_runners, lemon_core, lemon_skills, lemon_agent
+lemon_evals ──────────→ lemon_agent, lemon_ai, coding_agent, lemon_core, lemon_skills
+lemon_mcp ────────────→ coding_agent, lemon_core, lemon_skills, lemon_agent
 lemon_honcho ─────────→ lemon_core, lemon_memory, lemon_agent, lemon_ai, lemon_platform_test*
 lemon_sim ────────────→ lemon_core, lemon_agent, lemon_ai
 lemon_sim_ui ─────────→ lemon_ai, lemon_core, lemon_sim
@@ -330,7 +328,7 @@ lemon_memory ─────────→ lemon_core
 lemon_browser ────────→ lemon_core
 lemon_lsp ────────────→ lemon_core
 lemon_media ──────────→ lemon_core
-lemon_platform_test ──→ lemon_core, lemon_channels, lemon_cli_runners, lemon_gateway, lemon_memory, lemon_ai, lemon_agent (all optional: true)
+lemon_platform_test ──→ lemon_core, lemon_channels, lemon_memory, lemon_ai, lemon_agent (all optional: true)
 lemon_web ────────────→ lemon_core, lemon_router
 x_api ────────────────→ lemon_core, lemon_channels, lemon_agent, lemon_ai, lemon_platform_test*
 lemon_ai ─────────────→ (no umbrella deps - standalone LLM client library)
@@ -393,15 +391,19 @@ Gateway-native transports remain in `apps/lemon_gateway/` (SMS/Twilio, voice, em
 2. Implement appropriate behaviour (see existing transports for patterns)
 3. Wire up in `LemonGateway.Application`
 
-### Adding a Delegated CLI Runner
+### Adding a Native Subagent
 
 Top-level conversations always run through the configured native `CodingAgent.Executor`;
-the gateway does not support selectable or custom engines. Vendor CLIs are task-level
-subagents owned by `lemon_cli_runners`.
+the gateway does not support selectable or custom engines. Subagents are native
+in-process executions: the `task`/`agent` tools spawn a `CodingAgent.Session`
+coordinated by `CodingAgent.Coordinator`, not an external process.
 
-1. Create a runner implementing `LemonCore.SubagentRunner` in `lemon_cli_runners`.
-2. Register it with `LemonCore.SubagentRegistry` from the owning application.
-3. Keep runner configuration under `[runtime.cli.<vendor>]`; it must not affect top-level routing.
+1. Add a subagent persona (`id`, `description`, `prompt`) to `.lemon/subagents.json` or
+   `~/.lemon/agent/subagents.json`; built-ins live in `CodingAgent.Subagents`.
+2. Invoke it through the `task` or `agent` tool (or `@name` mentions); execution stays
+   inside the BEAM on the `coding_agent` → `lemon_agent` → `lemon_ai` chain.
+3. There are no vendor CLI subprocess runners (Claude Code, Codex, Kimi, OpenCode, Pi
+   were removed); do not wrap external CLIs as subagents.
 
 ---
 
@@ -526,7 +528,6 @@ Each app has its own `AGENTS.md` with detailed context:
 | lemon_browser | `apps/lemon_browser/README.md` *(no AGENTS.md yet)* |
 | lemon_channels | `apps/lemon_channels/AGENTS.md` |
 | lemon_cli | `apps/lemon_cli/README.md` *(no AGENTS.md yet)* |
-| lemon_cli_runners | `apps/lemon_cli_runners/README.md` *(no AGENTS.md yet)* |
 | lemon_control_plane | `apps/lemon_control_plane/AGENTS.md` |
 | lemon_core | `apps/lemon_core/AGENTS.md` |
 | lemon_evals | `apps/lemon_evals/README.md` *(no AGENTS.md yet)* |
@@ -547,4 +548,4 @@ Each app has its own `AGENTS.md` with detailed context:
 
 ---
 
-*Last updated: 2026-08-13* (reconciled with the `ai`→`lemon_ai` / `agent_core`→`lemon_agent` renames and the D15 `lemon_cli_runners` extraction: full 26-app structure tree, dependency graph regenerated from mix.exs, message flow, doc index, and app guide table)
+*Last updated: 2026-08-21* (`lemon_cli_runners` removed — vendor CLI task runners are gone and all subagents are native in-process `CodingAgent.Session` executions coordinated by `CodingAgent.Coordinator`: 25-app structure tree, dependency graph regenerated from mix.exs, message flow, doc index, and app guide table)

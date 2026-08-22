@@ -204,8 +204,8 @@ defmodule LemonCore.Config.Modular do
   Checks for removed TOML sections and engine-routing settings, raising
   `ValidationError` when found.
 
-  Removed settings include legacy agent/tool sections and every engine-routing
-  key outside `[runtime.cli.*]`.
+  Removed settings include legacy agent/tool sections and engine-routing
+  configuration, including `[runtime.cli]`.
   """
   @spec check_deprecated_sections!(map()) :: :ok
   def check_deprecated_sections!(settings) when is_map(settings) do

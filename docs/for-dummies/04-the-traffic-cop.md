@@ -231,8 +231,8 @@ remain readable in session history and persisted state for rollback and
 diagnostics, but the router quarantines them from explicit and automatic
 top-level resume selection rather than treating them as native sessions.
 
-Vendor CLIs remain available as delegated task subagents. A task result can
-retain its runner identity and vendor resume metadata, but that metadata never
+Delegated tasks run as native in-process subagent sessions. A task result can
+retain its subagent identity and resume metadata, but that metadata never
 routes or resumes a top-level conversation.
 
 ---

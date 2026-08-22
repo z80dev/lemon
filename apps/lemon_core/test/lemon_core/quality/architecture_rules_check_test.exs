@@ -1056,31 +1056,6 @@ defmodule LemonCore.Quality.ArchitectureRulesCheckTest do
     end
   end
 
-  test "flags LemonGateway references from CLI task runners" do
-    tmp_dir = tmp_repo!()
-
-    try do
-      write_file!(
-        tmp_dir,
-        "apps/lemon_cli_runners/lib/lemon_cli_runners/bad_gateway_reference.ex",
-        """
-        defmodule LemonCliRunners.BadGatewayReference do
-          def bad(request), do: LemonGateway.Executor.execute(request)
-        end
-        """
-      )
-
-      assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
-
-      assert Enum.any?(report.issues, fn issue ->
-               issue.code == :cli_runners_gateway_boundary and
-                 issue.path ==
-                   "apps/lemon_cli_runners/lib/lemon_cli_runners/bad_gateway_reference.ex"
-             end)
-    after
-      File.rm_rf!(tmp_dir)
-    end
-  end
 
   test "flags CodingAgent references from the gateway" do
     tmp_dir = tmp_repo!()

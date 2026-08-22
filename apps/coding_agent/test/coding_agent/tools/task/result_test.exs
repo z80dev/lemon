@@ -100,9 +100,8 @@ defmodule CodingAgent.Tools.Task.ResultTest do
   test "get returns final visible output for completed tasks" do
     task_id =
       TaskStore.new_task(%{
-        description: "Telegram files overview (claude)",
-        engine: "claude",
-        run_id: "run_claude_1"
+        description: "Telegram files overview",
+        run_id: "run_task_1"
       })
 
     TaskStore.mark_running(task_id)
@@ -117,6 +116,5 @@ defmodule CodingAgent.Tools.Task.ResultTest do
 
     assert text == "Final answer"
     assert details.status == "completed"
-    assert details.engine == "claude"
   end
 end

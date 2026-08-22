@@ -153,46 +153,6 @@ defmodule LemonCore.ConfigTest do
     System.delete_env("LEMON_TUI_DEBUG")
   end
 
-  # Vendor CLI sections are resolved by registered `LemonCore.Config.CliResolvers`
-  # (vendor packages register theirs at boot). With none registered, the raw
-  # sections pass through untouched — nothing is dropped, and nothing in core
-  # knows a vendor. The vendor-shaped round-trip lives in lemon_cli_runners'
-  # CliResolversTest. Other suites in this VM may have booted vendor packages,
-  # so run against an emptied registry and restore it after.
-  test "carries unresolved CLI sections from the runtime section", %{home: home} do
-    original = Application.fetch_env(:lemon_core, :cli_resolvers)
-    Application.put_env(:lemon_core, :cli_resolvers, [])
-
-    on_exit(fn ->
-      case original do
-        {:ok, resolvers} -> Application.put_env(:lemon_core, :cli_resolvers, resolvers)
-        :error -> Application.delete_env(:lemon_core, :cli_resolvers)
-      end
-
-      LemonCore.ConfigCache.clear()
-    end)
-
-    global_dir = Path.join(home, ".lemon")
-    File.mkdir_p!(global_dir)
-
-    File.write!(Path.join(global_dir, "config.toml"), """
-    [runtime.cli.codex]
-    extra_args = ["-c", "notify=[]"]
-    auto_approve = false
-
-    [runtime.cli.claude]
-    dangerously_skip_permissions = true
-    """)
-
-    config = Config.load()
-
-    assert config.agent.cli["codex"] == %{
-             "extra_args" => ["-c", "notify=[]"],
-             "auto_approve" => false
-           }
-
-    assert config.agent.cli["claude"] == %{"dangerously_skip_permissions" => true}
-  end
 
   test "env overrides provider base_url", %{home: home} do
     global_dir = Path.join(home, ".lemon")

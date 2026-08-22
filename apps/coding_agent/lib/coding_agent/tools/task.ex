@@ -8,7 +8,7 @@ defmodule CodingAgent.Tools.Task do
 
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
-  alias CodingAgent.Tools.Task.{Execution, Params, Result, Runner}
+  alias CodingAgent.Tools.Task.{Execution, Params, Result}
 
   @doc """
   Returns the Task tool definition.
@@ -52,18 +52,13 @@ defmodule CodingAgent.Tools.Task do
             "enum" => ["wait_all", "wait_any"],
             "description" => "Join mode for action=join (default: wait_all)"
           },
-          "engine" => %{
-            "type" => "string",
-            "enum" => Params.valid_engines(),
-            "description" => Params.engine_param_description()
-          },
           "model" => %{
             "type" => "string",
-            "description" => "Optional model override (especially for internal engine)"
+            "description" => "Optional model override for the native task session"
           },
           "thinking_level" => %{
             "type" => "string",
-            "description" => "Optional thinking level override for the internal engine"
+            "description" => "Optional thinking level override for the native task session"
           },
           "role" => %{
             "type" => "string",
@@ -146,15 +141,5 @@ defmodule CodingAgent.Tools.Task do
          :ok <- Params.check_budget_and_policy(validated, opts) do
       Execution.run(tool_call_id, validated, signal, on_update, cwd, opts)
     end
-  end
-
-  @doc false
-  def reduce_cli_events(events, description, engine_label, on_update) do
-    Runner.reduce_cli_events(events, description, engine_label, on_update)
-  end
-
-  @doc false
-  def reduce_cli_events(events, description, engine_label, on_update, signal) do
-    Runner.reduce_cli_events(events, description, engine_label, on_update, signal)
   end
 end
