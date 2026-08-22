@@ -104,6 +104,7 @@ describe("queue mode", () => {
 
 		complete(server, "run-1");
 		await waitFor(() => sends(server).length === 2, { what: "the queued prompt to be sent" });
+		await waitFor(() => app.store.focused.busy, { what: "the drained prompt to start a run" });
 
 		expect(sends(server)[1]).toEqual({ sessionKey: SESSION, prompt: "second" });
 		// One per completion: "third" waits for the run "second" just started.

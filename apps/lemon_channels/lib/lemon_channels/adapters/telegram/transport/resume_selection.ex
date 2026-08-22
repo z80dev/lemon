@@ -502,7 +502,12 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
          ) do
       [_, engine, _token] ->
         engine = String.downcase(engine)
-        if engine == "lemon", do: nil, else: engine
+
+        cond do
+          engine == "lemon" -> nil
+          engine in @retired_resume_engines -> engine
+          true -> nil
+        end
 
       _ ->
         nil

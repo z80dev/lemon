@@ -407,7 +407,9 @@ defmodule CodingAgent.ExecutorTest do
     end
 
     @tag :tmp_dir
-    test "returns an error to non-trapping callers when explicit resume is missing", %{tmp_dir: tmp_dir} do
+    test "returns an error to non-trapping callers when explicit resume is missing", %{
+      tmp_dir: tmp_dir
+    } do
       stale_session_id = "missing-explicit-#{System.unique_integer([:positive])}"
 
       request =
