@@ -45,7 +45,6 @@ defmodule CodingAgent.Tools.Task.Execution do
     description = validated.description
     prompt = validated.prompt
     role_id = validated.role_id
-    engine = validated.engine
     async? = validated.async
     effective_cwd = validated.cwd || cwd
     parent_session_key = validated.session_key || Keyword.get(opts, :session_key)
@@ -71,7 +70,6 @@ defmodule CodingAgent.Tools.Task.Execution do
           parent_run_id: parent_run_id,
           session_key: parent_session_key,
           agent_id: parent_agent_id,
-          engine: validated.engine || "internal",
           role: role_id,
           queue_mode: validated.queue_mode,
           meta: validated.meta
@@ -87,7 +85,6 @@ defmodule CodingAgent.Tools.Task.Execution do
       root_action_id: root_action_id,
       surface: surface,
       description: description,
-      engine: validated.engine || "internal",
       role: role_id,
       queue_mode: validated.resolved_queue_mode,
       meta: validated.meta
@@ -112,7 +109,6 @@ defmodule CodingAgent.Tools.Task.Execution do
       parent_agent_id: parent_agent_id,
       queue_mode: validated.resolved_queue_mode,
       meta: validated.meta,
-      engine: validated.engine || "internal",
       role: role_id,
       model: validated.model,
       session_pid: Keyword.get(opts, :session_pid),
@@ -124,7 +120,6 @@ defmodule CodingAgent.Tools.Task.Execution do
       description: description,
       prompt: prompt,
       role_id: role_id,
-      engine: engine,
       async?: async?,
       effective_cwd: effective_cwd,
       coordinator: coordinator,
@@ -147,24 +142,6 @@ defmodule CodingAgent.Tools.Task.Execution do
       cond do
         is_function(run_override, 2) ->
           run_override.(on_update_safe, signal)
-
-        # The in-process engine has a registered runner too, but it runs
-        # through the session branch below, which is the only one that inherits
-        # tool policy, session key and parent session. `validate_run_params/2`
-        # normalises its id to nil; this guard keeps that an invariant rather
-        # than an accident.
-        external_engine?(execution.engine) ->
-          Runner.execute_via_cli_engine(
-            execution.engine,
-            execution.prompt,
-            execution.effective_cwd,
-            execution.description,
-            execution.role_id,
-            execution.validated.model,
-            execution.validated.thinking_level,
-            on_update_safe,
-            signal
-          )
 
         coordinator_alive?(execution.coordinator) and execution.role_id ->
           Runner.execute_via_coordinator(
@@ -195,17 +172,11 @@ defmodule CodingAgent.Tools.Task.Execution do
                 signal,
                 on_update_safe,
                 execution.role_id,
-                execution.engine || "internal",
                 Keyword.take(opts, [:task_session_timeout_ms, :task_session_poll_ms])
               )
           end
       end
     end
-  end
-
-  defp external_engine?(engine) do
-    is_binary(engine) and engine != CodingAgent.Tools.Task.Params.default_engine() and
-      Runner.subagent_engine?(engine)
   end
 
   defp coordinator_alive?(coordinator) when is_pid(coordinator), do: Process.alive?(coordinator)

@@ -446,64 +446,6 @@ defmodule CodingAgent.ToolPolicy do
   end
 
   # ============================================================================
-  # Engine-Specific Policies
-  # ============================================================================
-
-  @doc """
-  Get the default policy for an engine.
-
-  The profile comes from the engine's own registration
-  (`c:LemonCore.SubagentRunner.default_policy/0`), which defaults to
-  `:subagent_restricted` — the right answer for anything running outside this
-  VM. The in-process runner overrides it to `:full_access`.
-
-  A *named* engine the registry does not know gets `:subagent_restricted`, not
-  `:full_access`: being asked about an engine id at all means a child is about
-  to run under it, and the registry missing it means the package that owns it is
-  not loaded — a reason to withhold permission, not to grant it. Only the
-  no-engine case (`nil`, a non-id) means "this VM's own agent" and keeps full
-  access.
-  """
-  @spec engine_policy(atom() | String.t()) :: policy()
-  def engine_policy(engine) when is_atom(engine) and not is_nil(engine) do
-    engine |> Atom.to_string() |> engine_policy()
-  end
-
-  def engine_policy(engine) when is_binary(engine) do
-    case LemonCore.SubagentRegistry.policy(engine) do
-      nil -> from_profile(:subagent_restricted)
-      profile -> from_profile(profile)
-    end
-  end
-
-  def engine_policy(_), do: from_profile(:full_access)
-
-  @doc """
-  Create a policy for a subagent based on engine type.
-  """
-  @spec subagent_policy(atom() | String.t(), keyword()) :: policy()
-  def subagent_policy(engine, opts \\ []) do
-    base_policy = engine_policy(engine)
-
-    custom_allow = Keyword.get(opts, :allow)
-    custom_deny = Keyword.get(opts, :deny, [])
-    custom_blocked = Keyword.get(opts, :blocked_tools, [])
-    custom_approval = Keyword.get(opts, :require_approval, [])
-    custom_approvals = normalize_approvals(Keyword.get(opts, :approvals, %{}))
-    no_reply = Keyword.get(opts, :no_reply, false)
-
-    %{
-      base_policy
-      | allow: custom_allow || base_policy.allow,
-        deny: base_policy.deny ++ custom_deny,
-        blocked_tools: base_policy.blocked_tools ++ custom_blocked,
-        require_approval: base_policy.require_approval ++ custom_approval,
-        approvals: Map.merge(base_policy.approvals, custom_approvals),
-        no_reply: no_reply || base_policy.no_reply
-    }
-  end
-
-  # ============================================================================
   # Policy Serialization
   # ============================================================================
 

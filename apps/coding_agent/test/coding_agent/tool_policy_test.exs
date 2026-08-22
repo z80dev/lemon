@@ -290,44 +290,13 @@ defmodule CodingAgent.ToolPolicyTest do
     end
   end
 
-  describe "engine_policy/1" do
-    test "internal has full access" do
-      policy = ToolPolicy.engine_policy(:internal)
-
-      assert policy.allow == :all
-      assert policy.deny == []
-    end
-
-    # Which vendor engines exist is `lemon_cli_runners`' business, and each
-    # runner's own compliance suite covers the profile it registers. What this
-    # app owns is the answer for an id the registry cannot resolve.
-    test "an engine no runner registered is restricted, not granted" do
-      policy = ToolPolicy.engine_policy(:no_such_engine)
+  describe ":subagent_restricted profile" do
+    test "remains available for restricted execution contexts" do
+      policy = ToolPolicy.from_profile(:subagent_restricted)
 
       refute ToolPolicy.allowed?(policy, "bash")
       refute ToolPolicy.allowed?(policy, "write")
-    end
-  end
-
-  describe "subagent_policy/2" do
-    test "inherits engine restrictions" do
-      policy = ToolPolicy.subagent_policy(:no_such_engine, [])
-
-      refute ToolPolicy.allowed?(policy, "bash")
       refute ToolPolicy.allowed?(policy, "agent")
-    end
-
-    test "applies additional restrictions from opts" do
-      policy = ToolPolicy.subagent_policy(:internal, deny: ["webfetch"])
-
-      assert ToolPolicy.allowed?(policy, "bash")
-      refute ToolPolicy.allowed?(policy, "webfetch")
-    end
-
-    test "enables NO_REPLY when specified" do
-      policy = ToolPolicy.subagent_policy(:internal, no_reply: true)
-
-      assert ToolPolicy.no_reply?(policy)
     end
   end
 

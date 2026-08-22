@@ -1220,7 +1220,7 @@ defmodule CodingAgent.Tools.Agent do
 
     **When to use `agent` vs `task`:**
     - `agent`: Route work through Lemon's run pipeline using agent profiles, queue modes, and delegated session continuity.
-    - `task`: Run local/internal or CLI-engine subtasks directly from the current coding session.
+    - `task`: Run a native focused subtask directly from the current coding session.
 
     **Default behavior (recommended):** async=true means the delegated run executes in background and notifies you when done. This keeps the user conversation flowing smoothly without blocking.
 

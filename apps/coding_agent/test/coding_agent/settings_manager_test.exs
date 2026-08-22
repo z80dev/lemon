@@ -62,9 +62,6 @@ defmodule CodingAgent.SettingsManagerTest do
       assert settings.extension_paths == []
       assert settings.extension_auto_load_default_paths == false
       assert settings.theme == "default"
-      # Every registered runner gets an entry, all of them empty.
-      assert Enum.all?(settings.cli, fn {_id, value} -> value == %{} end)
-      assert SettingsManager.cli_settings(settings, "codex") == %{}
     end
 
     test "converts config with default provider and model" do
@@ -492,64 +489,6 @@ defmodule CodingAgent.SettingsManagerTest do
       settings = SettingsManager.from_config(config)
 
       assert settings.theme == "dark"
-    end
-
-    test "extracts CLI settings from agent config" do
-      config = %LemonConfig{
-        providers: %{},
-        agent: %{
-          cli: %{
-            codex: %{auto_approve: true, extra_args: ["-v"]},
-            kimi: %{extra_args: ["--debug"]},
-            claude: %{dangerously_skip_permissions: false},
-            opencode: %{model: "gpt-4"},
-            pi: %{model: "custom-model", provider: "custom-provider"}
-          }
-        },
-        tui: %{},
-        logging: %{},
-        gateway: %{},
-        agents: %{}
-      }
-
-      settings = SettingsManager.from_config(config)
-
-      assert SettingsManager.cli_settings(settings, "codex") == %{
-               auto_approve: true,
-               extra_args: ["-v"]
-             }
-
-      assert SettingsManager.cli_settings(settings, :kimi) == %{extra_args: ["--debug"]}
-
-      assert SettingsManager.cli_settings(settings, "claude") == %{
-               dangerously_skip_permissions: false
-             }
-
-      assert SettingsManager.cli_settings(settings, "opencode") == %{model: "gpt-4"}
-
-      assert SettingsManager.cli_settings(settings, "pi") == %{
-               model: "custom-model",
-               provider: "custom-provider"
-             }
-    end
-
-    test "keys CLI settings by engine id, including engines with no entry" do
-      config = %LemonConfig{
-        providers: %{},
-        agent: %{cli: %{codex: %{auto_approve: true}}},
-        tui: %{},
-        logging: %{},
-        gateway: %{},
-        agents: %{}
-      }
-
-      settings = SettingsManager.from_config(config)
-
-      for id <- LemonCore.SubagentRegistry.list_ids() do
-        assert Map.has_key?(settings.cli, id)
-      end
-
-      assert SettingsManager.cli_settings(settings, "not-an-engine") == %{}
     end
   end
 
