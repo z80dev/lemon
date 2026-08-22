@@ -75,7 +75,6 @@ jobs:
           - lemon_ai
           - lemon_core
           - lemon_agent
-          - lemon_cli_runners
           - lemon_memory
           - lemon_media
           - lemon_router
