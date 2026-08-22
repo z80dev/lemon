@@ -31,8 +31,8 @@ defmodule LemonPlatformTest.MixProject do
 
   defp description do
     "Contract-test kit for the Lemon platform's extension behaviours: ExUnit " <>
-      "case templates that hold your Plugin, Store backend, SubagentRunner or " <>
-      "memory Provider implementation to the documented contract."
+      "case templates that hold your Plugin, Store backend, or memory Provider " <>
+      "implementation to the documented contract."
   end
 
   defp package do
@@ -58,7 +58,6 @@ defmodule LemonPlatformTest.MixProject do
         "Case templates": [
           LemonPlatformTest.BackendCase,
           LemonPlatformTest.PluginCase,
-          LemonPlatformTest.SubagentRunnerCase,
           LemonPlatformTest.ProviderCase,
           LemonPlatformTest.EventsCase
         ],
@@ -83,8 +82,7 @@ defmodule LemonPlatformTest.MixProject do
       # error if the app is absent (see below).
       #
       #   BackendCase        -> lemon_core     ProviderCase -> lemon_memory
-      #   EventsCase         -> lemon_core     SubagentRunnerCase -> lemon_core
-      #   FakeLLM            -> ai + agent_core
+      #   EventsCase         -> lemon_core     FakeLLM      -> ai + agent_core
       #   PluginCase         -> lemon_channels
       #
       # The kit is a leaf: nothing in the platform depends on it, so these edges
@@ -92,10 +90,6 @@ defmodule LemonPlatformTest.MixProject do
       # self-validation suites in test/compliance still compile and pass.
       {:lemon_core, in_umbrella: true, optional: true},
       {:lemon_channels, in_umbrella: true, optional: true},
-      # Not a behaviour host: SubagentRunnerCase targets lemon_core. This edge
-      # exists so the self-validation suite can run a *real* vendor CLI wrapper
-      # through the case, not just the in-repo stub.
-      {:lemon_cli_runners, in_umbrella: true, optional: true},
       {:lemon_memory, in_umbrella: true, optional: true},
       {:lemon_ai, in_umbrella: true, optional: true},
       {:lemon_agent, in_umbrella: true, optional: true},

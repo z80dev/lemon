@@ -25,11 +25,6 @@ defmodule LemonPlatformTest.HelpersTest do
              )
 
       assert LemonPlatformTest.declares_behaviour?(
-               LemonCliRunners.ClaudeSubagent,
-               LemonCore.SubagentRunner
-             )
-
-      assert LemonPlatformTest.declares_behaviour?(
                LemonMemory.Providers.Local,
                LemonMemory.Provider
              )

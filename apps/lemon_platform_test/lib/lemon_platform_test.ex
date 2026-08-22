@@ -3,8 +3,8 @@ defmodule LemonPlatformTest do
   Contract-test kit for Lemon's extension behaviours.
 
   Lemon is extended by implementing behaviours: a storage backend, a channel
-  adapter, a delegated subagent runner, or a memory provider. Each behaviour
-  has rules that the `@callback` declarations cannot express — what a callback
+  adapter, or a memory provider. Each behaviour has rules that the `@callback`
+  declarations cannot express — what a callback
   may return when the thing it talks to is unavailable, which callbacks must be
   pure, what must happen instead of raising on hostile input, and what the
   platform's registries expect when your module registers itself at runtime.
@@ -23,13 +23,12 @@ defmodule LemonPlatformTest do
   That is the whole integration. The suite contributes its own tests; you can
   add your own tests to the same module alongside them.
 
-  ## The four suites
+  ## The three suites
 
   | Behaviour | Case template | What you are building |
   |---|---|---|
   | `LemonCore.Store.Backend` | `LemonPlatformTest.BackendCase` | storage for the platform's key/value store |
   | `LemonChannels.Plugin` | `LemonPlatformTest.PluginCase` | a chat/messaging channel (Telegram, Discord, …) |
-  | `LemonCore.SubagentRunner` | `LemonPlatformTest.SubagentRunnerCase` | an executor the agent's `task` tool delegates to |
   | `LemonMemory.Provider` | `LemonPlatformTest.ProviderCase` | a searchable long-term memory source |
 
   Each case template's moduledoc is the reference guide for its behaviour: the
@@ -51,7 +50,7 @@ defmodule LemonPlatformTest do
   suites that accidentally post to your production Telegram bot are worse than
   no suite.
 
-  ## Options common to all four
+  ## Options common to all three
 
     * `:async` — forwarded to `use ExUnit.Case`. Suites that exercise a global
       platform registry (`:registry` option) must run with `async: false`.
