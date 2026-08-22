@@ -36,18 +36,19 @@ The native executor provides:
 - **Full integration:** The executor has direct access to Lemon's tool ecosystem
   and the gateway's event lifecycle.
 
-### Delegated Vendor Tasks
+### Delegated Native Subagent Tasks
 
-Vendor CLIs are still useful, but only as task subagents from
-`lemon_cli_runners`. A native top-level conversation can delegate a bounded
-task to one; the runner manages its own subprocess, progress, and result.
-Vendor runners do not become gateway executors, do not consume gateway
-top-level slots, and cannot be selected by a message, binding, profile, or
-configuration default.
+A native top-level conversation can delegate a bounded task to a subagent
+through its `task` tool. Subagents run natively in-process: each delegated task
+is a child `CodingAgent.Session` coordinated by `CodingAgent.Coordinator`,
+managing its own progress and result. Subagents do not become gateway
+executors, do not consume gateway top-level slots, and cannot be selected by a
+message, binding, profile, or configuration default. There are no vendor CLI
+subprocess runners.
 
-A delegated task result may retain the runner's identity and its vendor resume
-token as metadata. That metadata belongs to the task record: it never resumes
-or routes a top-level conversation.
+A delegated task result may retain the subagent's identity and resume metadata.
+That metadata belongs to the task record: it never resumes or routes a
+top-level conversation.
 
 ### Native Resume and Historical Data
 
@@ -228,8 +229,9 @@ to specific module definitions.
 
 1. **One native executor owns every top-level run** — channel and gateway
    requests cannot select a vendor CLI or another executor.
-2. **Vendor CLIs are delegated task subagents** — their identity and resume
-   metadata stay with task results, outside top-level routing.
+2. **Subagents are native in-process sessions** — delegated tasks run as child
+   `CodingAgent.Session` executions; their identity and resume metadata stay
+   with task results, outside top-level routing.
 3. **Historical vendor resume data is preserved but quarantined** — it remains
    readable without becoming a supported top-level resume path.
 4. **The Scheduler + ThreadWorker pattern** manages global concurrency while

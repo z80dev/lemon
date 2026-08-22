@@ -49,31 +49,6 @@ enabled = true
 max_retries = 3
 base_delay_ms = 1000
 
-# Delegated task-runner configuration. These vendor CLI settings apply only when
-# Lemon delegates a task to that runner; they never select the gateway executor.
-[runtime.cli.codex]
-extra_args = ["-c", "notify=[]"]
-auto_approve = false
-
-[runtime.cli.claude]
-# dangerously_skip_permissions = false  # opt-in only — set true only when you fully trust the model and task
-# yolo = false
-# allowed_tools = []
-# scrub_env = false
-# env_allowlist = []
-# env_allow_prefixes = []
-
-[runtime.cli.opencode]
-# model = ""
-
-[runtime.cli.pi]
-# extra_args = []
-# model = ""
-# provider = ""
-
-[runtime.cli.kimi]
-extra_args = []
-
 # Programmatic tool calling: the model submits a python3 script that can call a fixed
 # allowlist of agent tools (read, grep, find, ls, webfetch); only what the script prints
 # comes back. The script runs as HOST CODE with bash-equivalent permissions — this is not

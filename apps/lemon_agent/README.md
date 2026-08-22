@@ -1,6 +1,6 @@
 # LemonAgent
 
-Core agent runtime for the Lemon umbrella project. LemonAgent provides OTP-native building blocks for AI agents: a supervised GenServer for stateful agent lifecycle management, a stateless agentic loop with streaming events, bounded event streams with backpressure, cooperative abort signaling, context window management, and a subagent supervision/registry infrastructure. (CLI subprocess runners for external AI engines live in the sibling `lemon_cli_runners` package.)
+Core agent runtime for the Lemon umbrella project. LemonAgent provides OTP-native building blocks for AI agents: a supervised GenServer for stateful agent lifecycle management, a stateless agentic loop with streaming events, bounded event streams with backpressure, cooperative abort signaling, context window management, and a subagent supervision/registry infrastructure.
 
 ## Architecture Overview
 
@@ -93,13 +93,6 @@ The supervisor uses a `:one_for_one` strategy. Each child is independent:
 | `LemonAgent.Types.AgentState` | (nested in types.ex) | Runtime state: `system_prompt`, `model`, `thinking_level`, `tools`, `messages`, `is_streaming`, `stream_message`, `pending_tool_calls`, `error`. |
 | `LemonAgent.Types.AgentLoopConfig` | (nested in types.ex) | Loop config: `model`, `convert_to_llm`, `transform_context`, `get_api_key`, `get_steering_messages`, `get_follow_up_messages`, `max_tool_concurrency`, `stream_options`, `stream_fn`. |
 
-### CLI Runners
-
-The vendor CLI wrappers (Claude Code, Codex, Kimi, OpenCode, Pi) live in
-the `lemon_cli_runners` package (`apps/lemon_cli_runners`) as
-`LemonCliRunners.*`. They build on this app's `EventStream` and `Types`; see
-that package's README for architecture and usage.
-
 ## Key Concepts and Design Patterns
 
 ### Separation of Concerns: Loop vs. Agent
@@ -179,7 +172,7 @@ Application environment keys under `:lemon_agent`:
 | `:queue_call_timeout_ms` | `pos_integer() \| :infinity` | `1_800_000` (30 min) | GenServer call timeout for loop queue polling |
 | `:event_stream_cancel_grace_ms` | `pos_integer()` | `100` | Grace period before force-killing an EventStream's attached task |
 
-The `:cli_timeout_ms`, `:cli_session_lock_max_age_ms`, and `:cli_cancel_grace_ms` keys moved to `:lemon_cli_runners` with the CLI runners.
+The `:cli_timeout_ms`, `:cli_session_lock_max_age_ms`, and `:cli_cancel_grace_ms` keys were removed with the vendor CLI runners; subagent tasks now run natively in-process.
 
 ## Usage Examples
 
@@ -407,4 +400,4 @@ apps/lemon_agent/test/
 |   +-- loop_additional_edge_cases_test.exs
 ```
 
-Integration tests that require external services are tagged with `@tag :integration` and excluded from the default test run. CLI runner tests live in `apps/lemon_cli_runners`.
+Integration tests that require external services are tagged with `@tag :integration` and excluded from the default test run.

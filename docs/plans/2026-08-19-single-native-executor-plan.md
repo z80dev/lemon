@@ -1,5 +1,16 @@
 # Single Native Top-Level Executor Plan
 
+> **⚠ SUPERSEDED (2026-08-21):** The vendor CLI task-subagent layer this plan
+> deliberately *retained* was subsequently removed in full. `lemon_cli_runners`
+> (the Claude Code, Codex, Kimi, OpenCode, and Pi runners), the
+> `LemonCore.SubagentRunner`/`LemonCore.SubagentRegistry` contracts, and the
+> `[runtime.cli.*]` configuration sections no longer exist — `[runtime.cli]` is
+> rejected by config validation. **All subagents now run natively in-process**
+> as `CodingAgent.Session` executions coordinated by `CodingAgent.Coordinator`.
+> This document remains as the historical record of the top-level executor
+> cutover; read every "retained vendor task runner" statement below as
+> since-deleted.
+
 **Date:** 2026-08-19  
 **Status:** Proposed replacement  
 **Scope:** Remove external CLIs and custom gateway engines as top-level conversation runtimes while retaining vendor CLIs as task-level subagent runners.

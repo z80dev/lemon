@@ -26,8 +26,9 @@ of which are live bugs.
 
 > **Top-level execution end state.** `engine` remains in run events, completion
 > records, and `ResumeToken` as provenance, with the fixed value `"lemon"` for
-> every top-level run. It is not a request field or a runtime selector. CLI
-> runner identities are task-only provenance owned by `LemonCore.SubagentRegistry`.
+> every top-level run. It is not a request field or a runtime selector. Subagent
+> identities are task-only provenance on delegated task records; subagents run
+> natively in-process.
 > Top-level resume accepts only native tokens; non-native historical state is
 > retained but quarantined from resumption.
 

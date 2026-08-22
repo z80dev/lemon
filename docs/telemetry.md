@@ -573,8 +573,6 @@ Every atom below appears in a live `LemonCore.Introspection.record/3` call.
 | `CodingAgent.Session` | `:session_started`, `:session_ended`, `:compaction_triggered` |
 | `CodingAgent.Session.EventHandler` | `:tool_call_dispatched`, `:engine_event_ignored` |
 | `LemonAgent.Agent` | `:agent_loop_started`, `:agent_turn_observed` (inferred), `:agent_loop_ended`, `:agent_progress_snapshot` |
-| `LemonCliRunners.JsonlRunner` | `:jsonl_stream_started`, `:tool_use_observed` (inferred), `:assistant_turn_observed` (inferred), `:jsonl_stream_ended` |
-| CLI runner engines (codex, claude, kimi, opencode, pi) | `:engine_subprocess_started`, `:engine_output_observed`, `:engine_subprocess_exited` — all inferred |
 | Skills bridge / session-end audit | `:skill_load_observed`, `:skill_write_observed`, `:skill_prompt_render_observed`, `:missed_skill_observed`, `:missed_learning_observed` |
 
 ### Querying

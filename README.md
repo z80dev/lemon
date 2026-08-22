@@ -13,7 +13,7 @@
 
 - **Multi-channel and always on** — Chat with your agent across **Telegram**, **Discord**, **WhatsApp**, **XMTP**, the terminal **TUI**, or the **Web UI**.
 - **Model-agnostic** — Connect to 27 configured LLM providers, including Anthropic, OpenAI, Google Gemini, Bedrock, Azure, and OpenAI-compatible services. Lemon provides unified streaming, automatic retries, rate limiting, and cost accounting (`lemon_ai`); compatible local endpoints can be configured separately.
-- **Coding agent and MCP** — Native tool execution, MCP (Model Context Protocol) client/server bridge, subagent orchestration, browser automation, LSP integration, and vendor CLI runners for Claude Code, Codex, Kimi, OpenCode, and Pi.
+- **Coding agent and MCP** — Native tool execution, MCP (Model Context Protocol) client/server bridge, native in-process subagent orchestration, browser automation, and LSP integration.
 - **Durable memory** — SQLite-backed full-text recall, document ingestion, and a provider interface for optional semantic backends, including Honcho long-term memory integration (`lemon_memory`).
 - **LemonSim and benchmark arenas** — Event-sourced simulation worlds (Werewolf, Space Station, Stock Market, Survivor, Poker) and reproducible offline benchmark scoring without provider API keys.
 - **Supervised on the BEAM** — Each agent run is an isolated OTP process. Separate conversations execute concurrently, crashed workers are supervised, and durable session state survives individual requests.
@@ -156,11 +156,11 @@ Lemon is organized as an Elixir umbrella split into 9 modular core packages, a r
 | [`lemon_router`](apps/lemon_router/README.md) | Message routing, run lifecycle (single-flight execution, queue/steer/coalesce), session orchestration |
 | [`lemon_gateway`](apps/lemon_gateway/README.md) | Run execution runtime, scheduler, locks, and ingress transports |
 | [`lemon_channels`](apps/lemon_channels/README.md) | Channel core, `Plugin` behaviour, Telegram/Discord/WhatsApp/XMTP adapters, outbox & presentation |
-| [`lemon_platform_test`](apps/lemon_platform_test/README.md) | Contract-test kit (`BackendCase`, `PluginCase`, `SubagentRunnerCase`, `ProviderCase`) for platform extensions |
+| [`lemon_platform_test`](apps/lemon_platform_test/README.md) | Contract-test kit (`BackendCase`, `PluginCase`, `ProviderCase`) for platform extensions |
 
 ### Reference Runtime & Products
 
-- **Reference Runtime** (in-repo): [`lemon_control_plane`](apps/lemon_control_plane/README.md) (JSON-RPC API), [`lemon_cli`](apps/lemon_cli/README.md), [`lemon_cli_runners`](apps/lemon_cli_runners/README.md) (vendor CLI engines), [`lemon_web`](apps/lemon_web/README.md), [`lemon_automation`](apps/lemon_automation/README.md), [`lemon_skills`](apps/lemon_skills/README.md), [`lemon_browser`](apps/lemon_browser/README.md), [`lemon_lsp`](apps/lemon_lsp/README.md).
+- **Reference Runtime** (in-repo): [`lemon_control_plane`](apps/lemon_control_plane/README.md) (JSON-RPC API), [`lemon_cli`](apps/lemon_cli/README.md), [`lemon_web`](apps/lemon_web/README.md), [`lemon_automation`](apps/lemon_automation/README.md), [`lemon_skills`](apps/lemon_skills/README.md), [`lemon_browser`](apps/lemon_browser/README.md), [`lemon_lsp`](apps/lemon_lsp/README.md).
 - **Products**: [`coding_agent`](apps/coding_agent/README.md), [`coding_agent_ui`](apps/coding_agent_ui/README.md), [`lemon_mcp`](apps/lemon_mcp/README.md), [`lemon_sim`](apps/lemon_sim/README.md), [`lemon_sim_ui`](apps/lemon_sim_ui/README.md), [`lemon_tcg`](apps/lemon_tcg/README.md), [`lemon_evals`](apps/lemon_evals/README.md).
 - **Satellites**: [`x_api`](apps/x_api/README.md) (self-registering X / Twitter integration).
 

@@ -13,7 +13,7 @@ Gateway has one configured singleton executor: `CodingAgent.Executor`. It is sel
 through `:lemon_gateway, :executor`; `LemonGateway.Executor` validates its readiness
 at startup and before runtime submission. Every gateway run uses that executor and has
 the fixed top-level provenance `engine: "lemon"`. Delegated task records retain their
-actual runner ID as `task.engine`; neither provenance field selects Gateway execution.
+own subagent identity; neither provenance field selects Gateway execution.
 
 This is an intentional breaking removal of the old Gateway engine platform:
 
@@ -24,8 +24,8 @@ This is an intentional breaking removal of the old Gateway engine platform:
   different executor.
 - `EngineInfoBridge` retains only its transport-registry and gateway-config
   capabilities. It no longer exposes Gateway engine enumeration.
-- `LemonCore.ResumeToken` and `LemonCore.ResumeFormats` remain the shared resume
-  mechanism for the native executor and delegated task runners.
+- `LemonCore.ResumeToken` remains the shared resume-token
+  mechanism for the native executor and delegated tasks.
 
 ### Migration choices
 
@@ -36,11 +36,11 @@ Gateway engine:
 | --- | --- |
 | Connect a model/API to an agent | a `LemonAi` provider |
 | Add in-process agent capability | a `CodingAgent` tool |
-| Delegate work to another executable or vendor CLI | `LemonCore.SubagentRunner` |
+| Delegate bounded work to a subagent | the native `task`/`agent` tools (in-process `CodingAgent.Session`) |
 
-Claude Code, Codex, Kimi, OpenCode, and Pi are retained vendor **task runners** in
-`lemon_cli_runners`. Their `[runtime.cli.<vendor>]` settings configure delegated task
-subprocesses only; they never select or replace the Gateway executor.
+Subagents are native in-process `CodingAgent.Session` executions coordinated by
+`CodingAgent.Coordinator`; they never select or replace the Gateway executor.
+There are no vendor CLI task runners.
 
 ## Quick Orientation
 
@@ -123,15 +123,14 @@ assembled by the native executor's session runner; they are not a Gateway plugin
 mechanism. Keep tool action details lossless, including safe failure metadata such as
 `error_type`, `timeout_ms`, and `exit_code`.
 
-### Add a delegated task runner
+### Add a delegated subagent
 
-Implement `LemonCore.SubagentRunner` for external/delegated work. Register it with
-`LemonCore.SubagentRegistry` from its own application and provide `resume_format/0`
-when it has vendor-specific resume syntax. `LemonCore.ResumeFormats` owns parsing and
-printing those tokens.
-
-Use this path for vendor CLIs. `lemon_cli_runners` already supplies Claude Code,
-Codex, Kimi, OpenCode, and Pi task runners; do not wrap them as Gateway executors.
+Delegated work runs natively in-process. Add a subagent persona through
+`CodingAgent.Subagents` (`.lemon/subagents.json` or `~/.lemon/agent/subagents.json`)
+and invoke it through the `task`/`agent` tools; the child run is a
+`CodingAgent.Session` coordinated by `CodingAgent.Coordinator`. Do not wrap
+external CLIs as Gateway executors or as task runners — vendor CLI subprocess
+runners (Claude Code, Codex, Kimi, OpenCode, Pi) were removed.
 
 ### Add a transport
 
@@ -179,4 +178,3 @@ and email remain channel-owned.
   bindings, secrets, and canonical gateway configuration.
 - `lemon_channels` owns Telegram/Discord/XMTP channel adapters and consumes gateway
   bus events; LemonGateway does not depend on it directly.
-- `lemon_cli_runners` provides optional vendor task runners only.

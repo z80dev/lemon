@@ -10,10 +10,10 @@ Every top-level conversation is dispatched to one configured
 The executor binding is a product-wiring and test-injection seam, not a public
 runtime plugin registry; custom and selectable top-level engines are unsupported.
 
-Vendor CLI integrations belong in `lemon_cli_runners` as delegated task
-subagents implementing `LemonCore.SubagentRunner`. They run only when the native
-agent invokes the `task` tool and do not consume Gateway top-level execution
-slots.
+Subagents run natively in-process: when the native agent invokes its `task`
+tool, the delegated work executes as another `CodingAgent.Session` coordinated
+by `CodingAgent.Coordinator`. Subagents do not consume Gateway top-level
+execution slots, and there are no vendor CLI subprocess runners.
 
 Gateway-native email, webhook, SMS, and voice transport glue remains alongside
 the scheduler. External channel adapters such as Telegram and Discord live in

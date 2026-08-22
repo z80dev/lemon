@@ -51,30 +51,6 @@ enabled = true
 max_retries = 3
 base_delay_ms = 1000
 
-# Delegated task-runner configuration. These tables configure vendor CLIs only
-# when a Lemon task invokes them; they never select Lemon's native executor.
-[runtime.cli.codex]
-extra_args = ["-c", "notify=[]"]
-auto_approve = false
-
-[runtime.cli.opencode]
-# Optional model override passed to `opencode run --model`.
-model = "gpt-4.1"
-
-[runtime.cli.pi]
-# Optional extra flags prepended to the `pi` command.
-extra_args = []
-# Optional provider/model overrides passed to `pi --provider/--model`.
-provider = "openai"
-model = "gpt-4.1"
-
-[runtime.cli.kimi]
-# Optional extra flags passed to the Kimi task runner.
-extra_args = []
-
-[runtime.cli.claude]
-# dangerously_skip_permissions = false  # opt-in only — set true only when you fully trust the model and task
-
 [runtime]
 # Explicitly trusted extension directories. Files here can be compiled and executed.
 extension_paths = []
@@ -202,17 +178,15 @@ chat_id = 12345678
 agent_id = "default"
 ```
 
-## Native Execution and Delegated Task Runners
+## Native Execution and Subagents
 
 Lemon uses its native executor for every top-level TUI and gateway run. Configure
 its provider, model, and thinking defaults in `[defaults]`; no engine selection
 key is supported.
 
-`[runtime.cli.codex]`, `[runtime.cli.claude]`, `[runtime.cli.kimi]`,
-`[runtime.cli.opencode]`, and `[runtime.cli.pi]` configure their respective
-vendor CLIs only when the `task` tool delegates work to a subagent. They do not
-select a gateway executor, alter the native executor, or provide a fallback for
-top-level runs. Keep these tables when you use those delegated task runners.
+Delegated tasks run as native in-process subagents (child `CodingAgent.Session`
+executions) when the agent invokes its `task` tool. There are no vendor CLI task
+runners and no `[runtime.cli.*]` configuration.
 
 ### Removed Top-Level Engine Configuration
 
@@ -223,10 +197,11 @@ Remove these legacy keys and tables from global and project configuration:
 | `engine`, `[defaults].engine`, `default_engine`, and `engine_preference` | Remove the key. Keep `[defaults]` provider, model, and thinking settings for native execution. |
 | `[gateway].default_engine`, `[gateway.projects.<id>].default_engine`, and `[[gateway.bindings]].default_engine` | Remove the key. Retain project `root`, binding `project`/`agent_id`, and queue settings as needed. |
 | `[gateway.engines.<id>]` | Remove the entire table. Custom and external gateway executors are not supported. |
+| `[runtime.cli.<vendor>]` | Remove the entire table. Vendor CLI task runners were removed; delegated tasks run as native in-process subagents. Config validation rejects `[runtime.cli]`. |
 
-Use a named vendor only in a delegated `task` request, with optional
-`[runtime.cli.<vendor>]` settings for that task runner. There is no TOML
-replacement for selecting a top-level external or custom engine.
+There is no TOML replacement for selecting a top-level external or custom
+engine, and no TOML knob for delegated subagents beyond the native `task` tool's
+own parameters.
 
 ## Environment Overrides
 
@@ -714,7 +689,6 @@ details.
 - `profiles.<agent_id>`: assistant profiles (identity + defaults) used by gateway/control-plane.
 - `runtime.compaction`: context compaction settings.
 - `runtime.retry`: retry settings.
-- `runtime.cli`: vendor CLI task-runner settings (`codex`, `claude`, `kimi`, `opencode`, `pi`); these do not configure top-level execution.
 - `tui`: terminal UI settings.
 - `gateway`: Lemon gateway settings, including `queue`, `telegram`, `discord`, `sms`, `voice`, `xmtp`, `projects`, and `bindings`.
 - `logging`: optional file logging configuration.

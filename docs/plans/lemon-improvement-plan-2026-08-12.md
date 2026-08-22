@@ -283,6 +283,8 @@ Decide and record in `docs/compare.md`; no implementation until chosen:
 
 - The 12 architecture-policy violations from the vendor-engine move
   (bless-vs-invert) — separate standing decision, deliberately unfixed.
-- Publishing `lemon_cli_runners` to Hex — user-gated.
+- Publishing `lemon_cli_runners` to Hex — user-gated. **Moot since 2026-08-21:**
+  the package was removed (D16 in `docs/platform-split.md`); subagents are
+  native-only.
 - Re-pinning the Hermes baseline — superseded by adopting the 2026-08-11
   audit as the live ledger (Phase 4.5).

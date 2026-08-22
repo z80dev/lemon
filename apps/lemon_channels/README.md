@@ -593,7 +593,7 @@ mode  = LemonChannels.BindingResolver.resolve_queue_mode(scope)
 
 Channels parse and select only native `lemon` resume tokens for top-level runs. A persisted or indexed vendor token remains readable as historical data, but it is quarantined from automatic and explicit top-level resume selection and is never rewritten as a native token.
 
-Vendor CLIs remain available exclusively as delegated task subagents through `lemon_cli_runners`. Their runner identity and resume-token metadata can be retained in task results, but neither is a channel directive, a binding setting, nor a top-level executor selector.
+Delegated tasks run exclusively as native in-process subagents. A subagent's identity and resume-token metadata can be retained in task results, but neither is a channel directive, a binding setting, nor a top-level executor selector.
 
 ### Runtime Bridge
 

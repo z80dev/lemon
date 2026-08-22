@@ -93,15 +93,15 @@ Choose an extension boundary instead:
 | --- | --- |
 | Integrate a model/API | a `LemonAi` provider |
 | Add in-process agent capability | a `CodingAgent` tool |
-| Delegate work to another executable | `LemonCore.SubagentRunner` |
+| Delegate bounded work to a subagent | the native `task`/`agent` tools (in-process `CodingAgent.Session`) |
 
-`LemonCore.ResumeToken` and `LemonCore.ResumeFormats` continue to support both
-native-executor and delegated-task resume tokens. Top-level run provenance remains
-`engine: "lemon"` while delegated task records retain their actual `task.engine`
-runner ID; neither field routes Gateway execution. Claude Code, Codex, Kimi,
-OpenCode, and Pi remain optional vendor task runners in `lemon_cli_runners`. Their
-`[runtime.cli.<vendor>]` settings configure the subprocess for delegated tasks only;
-they never select or replace the Gateway executor.
+`LemonCore.ResumeToken` continues to support both native-executor and
+delegated-task resume tokens. Top-level run provenance remains
+`engine: "lemon"` while delegated task records retain their own task identity;
+neither field routes Gateway execution. Delegated tasks run as native
+in-process subagents; there are no vendor CLI task runners (Claude Code, Codex,
+Kimi, OpenCode, and Pi were removed), and no external
+runner ever selects or replaces the Gateway executor.
 
 ## Transports
 
@@ -169,8 +169,8 @@ failures without parsing rendered command output.
 The public engine plugin, registration, enumeration, and test-compliance
 surfaces are removed. `EngineInfoBridge` retains transport-registry and
 gateway-config capabilities only. Operators must not register Gateway engines or
-use vendor CLI runners as Gateway executors; vendor CLIs remain delegated task
-runners in `lemon_cli_runners`.
+use external CLI runners as Gateway executors; delegated tasks run as native
+in-process subagents.
 
 ### Transport Layer
 
@@ -444,7 +444,7 @@ Custom health checks can be registered via the `:health_checks` application envi
 | App | Purpose |
 |-----|---------|
 | `coding_agent` | Configured singleton native executor and in-process tools |
-| `lemon_core` | Shared primitives: `Store`, `Bus`, `Telemetry`, `ResumeToken`, `ResumeFormats`, `ChatScope`, `Binding`, `Secrets`, `GatewayConfig` |
+| `lemon_core` | Shared primitives: `Store`, `Bus`, `Telemetry`, `ResumeToken`, `ChatScope`, `Binding`, `Secrets`, `GatewayConfig` |
 
 ### External Libraries
 

@@ -188,9 +188,9 @@ The `Run` process:
 2. Calls the single configured `CodingAgent.Executor`
 3. Starts or resumes a native `CodingAgent.Session` inside the Elixir VM
 
-Vendor CLIs such as Claude Code or Codex are not alternative top-level runtimes.
-They can run as delegated task subagents only when the native agent invokes its
-`task` tool.
+Vendor CLIs such as Claude Code or Codex are not alternative top-level runtimes,
+and Lemon no longer wraps them as subagents either. Delegated tasks run as
+native in-process subagent sessions when the agent invokes its `task` tool.
 
 ```
 lemon_gateway (Run)  ---->  coding_agent  ---->  lemon_agent
