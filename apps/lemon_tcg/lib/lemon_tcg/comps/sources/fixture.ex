@@ -55,19 +55,19 @@ defmodule LemonTcg.Comps.Sources.Fixture do
   end
 
   def put_comp(query, %Comp{} = comp) do
-    ensure_table()
+    _ = ensure_table()
     :ets.insert(@table, {query, comp})
     :ok
   end
 
   def clear_overrides do
-    ensure_table()
+    _ = ensure_table()
     :ets.delete_all_objects(@table)
     :ok
   end
 
   defp override(query) do
-    ensure_table()
+    _ = ensure_table()
 
     case :ets.lookup(@table, query) do
       [{^query, comp}] -> comp

@@ -11,6 +11,7 @@ defmodule LemonCli.Setup.Gateway do
 
       mix lemon.setup gateway                    # interactive picker
       mix lemon.setup gateway telegram           # directly run Telegram adapter
+      mix lemon.setup gateway discord            # directly run Discord adapter
       mix lemon.setup gateway --transport telegram  # equivalent flag form
       mix lemon.setup gateway telegram --non-interactive
 
@@ -20,9 +21,9 @@ defmodule LemonCli.Setup.Gateway do
   `@adapters` in this file.  No other wiring is required.
   """
 
-  alias LemonCli.Setup.Gateway.Telegram
+  alias LemonCli.Setup.Gateway.{Discord, Telegram}
 
-  @adapters [Telegram]
+  @adapters [Telegram, Discord]
 
   @doc """
   Dispatch gateway setup to a transport-specific adapter.

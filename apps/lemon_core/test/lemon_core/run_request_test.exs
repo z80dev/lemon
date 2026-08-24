@@ -17,7 +17,6 @@ defmodule LemonCore.RunRequestTest do
       assert request.agent_id == "test-agent"
       assert request.prompt == "hello"
       assert request.queue_mode == :collect
-      assert request.engine_id == nil
       assert request.model == nil
       assert request.resume == nil
       assert request.meta == %{}
@@ -33,7 +32,6 @@ defmodule LemonCore.RunRequestTest do
           "agent_id" => "alpha",
           "prompt" => "go",
           "queue_mode" => :interrupt,
-          "engine_id" => "openai:gpt-4o",
           "model" => "openai:gpt-4.1",
           "meta" => %{"foo" => "bar"},
           "cwd" => "/tmp",
@@ -45,7 +43,6 @@ defmodule LemonCore.RunRequestTest do
       assert request.agent_id == "alpha"
       assert request.prompt == "go"
       assert request.queue_mode == :interrupt
-      assert request.engine_id == "openai:gpt-4o"
       assert request.model == "openai:gpt-4.1"
       assert request.resume == nil
       assert request.meta == %{"foo" => "bar"}

@@ -66,14 +66,21 @@ Use `session_search` when a prompt or imported workflow explicitly asks for
 Hermes-style session search. Use `search_memory` when Lemon-native scope control
 is more important.
 
-Enable it in your config:
+Session search is enabled by default (the `session_search` feature flag
+defaults to `"default-on"`). To turn it off, use the kill switch:
+
+```bash
+export LEMON_FEATURE_SESSION_SEARCH=off
+```
+
+or in config:
 
 ```toml
 [features]
-session_search = "default-on"
+session_search = "off"
 ```
 
-Once enabled, your agent can answer questions like:
+Your agent can answer questions like:
 
 > "What did I use to deploy that k8s app last week?"
 > "Remind me how I configured the nginx reverse proxy."
@@ -139,8 +146,8 @@ mix lemon.memory erase --scope <session|agent|workspace> --key <value>
 ### Retention and pruning
 
 Memory documents older than the retention window are pruned automatically.
-Default retention: **30 days** (configurable through the `LemonMemory.Store`
-application environment).
+Default retention: **30 days**, with at most **500 documents per scope**
+(both configurable through the `LemonMemory.Store` application environment).
 
 ```toml
 # config/runtime.exs or application env
@@ -177,11 +184,11 @@ Each completed run also records a **routing feedback entry** that tracks:
 This feedback powers the adaptive routing system. See
 [`docs/user-guide/adaptive.md`](adaptive.md) for how it's used.
 
-Enable routing feedback:
+Routing feedback is on by default; to disable it:
 
 ```toml
 [features]
-routing_feedback = "default-on"
+routing_feedback = "off"
 ```
 
 ---
@@ -214,16 +221,18 @@ error payloads.
 
 ## Privacy and Secrets
 
-Before a run is stored as a memory document, Lemon's candidate selector scans
-`prompt_summary` and `answer_summary` for common secret patterns:
+Before a run is stored as a memory document, `LemonMemory.Safety` scans
+`prompt_summary` and `answer_summary` for five classes of secret patterns:
 
-- `password=` key-value pairs
-- API key patterns (`sk-...`, `AKIA...`)
-- PEM headers (`-----BEGIN ... KEY-----`)
+- credential key-value pairs (`password=`, `secret:`, `api_key=`, ...)
+- API key patterns (`sk-...`)
+- AWS access keys (`AKIA...`)
+- PEM private key headers (`-----BEGIN ... PRIVATE KEY-----`)
 - JWT-like tokens (`eyJ...`)
 
-If any pattern matches, the run is **not** recorded. You can also manually delete
-a document if you need to remove a past entry.
+The policy is **drop, not redact**: if any pattern matches, the entire run is
+never recorded — no attempt is made to strip the secret and keep the rest. You
+can also manually delete a document if you need to remove a past entry.
 
 ---
 
@@ -231,9 +240,13 @@ a document if you need to remove a past entry.
 
 ```toml
 [features]
-session_search       = "off"        # full-text search across past runs
-routing_feedback     = "off"        # record outcome signals for adaptive routing
-skill_synthesis_drafts = "off"      # auto-generate skill drafts from memory
+session_search         = "default-on" # full-text search across past runs (default; "off" is the kill switch)
+routing_feedback       = "default-on" # record outcome signals for adaptive routing (default)
+skill_synthesis_drafts = "default-on" # auto-generate skill drafts from memory (default)
 ```
 
-*Last reviewed: 2026-05-16*
+`session_search` can also be disabled per-process with
+`LEMON_FEATURE_SESSION_SEARCH=off`. Run `mix lemon.doctor` to see the resolved
+feature state and memory store health (`memory.session_search` check).
+
+*Last reviewed: 2026-08-12*

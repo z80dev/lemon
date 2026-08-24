@@ -5,17 +5,26 @@ defmodule Mix.Tasks.Lemon.Update do
   @skills_migrator :"Elixir.LemonSkills.Migrator"
 
   alias LemonCore.Config.Modular
-  alias LemonCore.Update.{ConfigMigrator, Version}
+  alias LemonCore.Update.{ConfigMigrator, Remote, Version}
 
   @shortdoc "Update Lemon: config migration and bundled-skill sync"
 
   @moduledoc """
-  Stage-1 Lemon update: config migration and bundled-skill sync.
+  Stage-1 Lemon update: config migration and bundled-skill sync, for source
+  checkouts.
+
+  On an installed release, `lemon update` (the overlay shim, backed by
+  `LemonCore.Update.CLI`/`LemonCore.Update.Remote`) performs the actual
+  self-update: check the published manifest, download, verify, and stage a
+  new version. This task never downloads or applies anything — a source
+  checkout updates via `git pull`. `--check` does query `Remote.check/1` to
+  report whether a newer version has been published, purely as a courtesy;
+  network failures there are reported, not fatal.
 
   Runs three idempotent stages:
 
-  1. **Version check** — reports the current version.
-     (Remote update download arrives in a later milestone.)
+  1. **Version check** — reports the current version and, in `--check` mode,
+     the latest published version.
   2. **Config migration** — detects and migrates deprecated TOML sections.
   3. **Bundled-skill sync** — ensures all repository-bundled skills are present.
 
@@ -65,9 +74,9 @@ defmodule Mix.Tasks.Lemon.Update do
         [run_config_migration(config_path, check_only?, verbose?)]
       else
         [
-          run_version_check(verbose?),
+          run_version_check(check_only?, verbose?),
           run_config_migration(config_path, check_only?, verbose?),
-          (unless opts[:no_skill_sync], do: run_skill_sync(check_only?, verbose?))
+          unless(opts[:no_skill_sync], do: run_skill_sync(check_only?, verbose?))
         ]
         |> Enum.reject(&is_nil/1)
       end
@@ -85,7 +94,7 @@ defmodule Mix.Tasks.Lemon.Update do
   # Stage runners
   # ──────────────────────────────────────────────────────────────────────────
 
-  defp run_version_check(verbose?) do
+  defp run_version_check(check_only?, verbose?) do
     version = Version.current()
     shell = Mix.shell()
 
@@ -97,11 +106,31 @@ defmodule Mix.Tasks.Lemon.Update do
       else
         shell.info("  Format: non-CalVer (running from source checkout)")
       end
-
-      shell.info("  Remote update check: not yet available (see docs/release/versioning_and_channels.md)")
     end
 
+    if check_only?, do: report_remote_check(shell, version)
+
     :ok
+  end
+
+  defp report_remote_check(shell, current) do
+    shell.info(
+      "  Source checkout: this task does not download or apply updates (use `git pull`)."
+    )
+
+    case Remote.check() do
+      {:ok, %{latest: nil}} ->
+        shell.info("  Remote: no published version found for the configured channel.")
+
+      {:ok, %{latest: latest, update_available?: true}} ->
+        shell.info("  Remote: #{latest} is published (currently on #{current}).")
+
+      {:ok, %{latest: latest}} ->
+        shell.info("  Remote: up to date (latest published is #{latest}).")
+
+      {:error, reason} ->
+        shell.info("  Remote: could not check for updates (#{inspect(reason)}).")
+    end
   end
 
   defp run_config_migration(config_path, check_only?, verbose?) do
@@ -132,6 +161,15 @@ defmodule Mix.Tasks.Lemon.Update do
               :ok ->
                 shell.info("  Migration complete. Backup: #{bak}")
                 :ok
+
+              {:error, {:manual_steps_required, errors}} ->
+                shell.error(
+                  "  Migration applied automatic section renames but removed runner settings remain:"
+                )
+
+                Enum.each(errors, &shell.error("    • #{&1}"))
+                shell.error("  Remove the settings above manually, then rerun lemon.update.")
+                :error
 
               {:error, reason} ->
                 shell.error("  Migration failed: #{inspect(reason)}")

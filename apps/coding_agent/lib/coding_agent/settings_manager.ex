@@ -59,14 +59,7 @@ defmodule CodingAgent.SettingsManager do
           extension_auto_load_default_paths: boolean(),
 
           # Display settings
-          theme: String.t(),
-
-          # CLI settings
-          codex: map(),
-          kimi: map(),
-          claude: map(),
-          opencode: map(),
-          pi: map()
+          theme: String.t()
         }
 
   defstruct [
@@ -101,14 +94,7 @@ defmodule CodingAgent.SettingsManager do
     extension_auto_load_default_paths: false,
 
     # Display settings
-    theme: "default",
-
-    # CLI settings
-    codex: %{},
-    kimi: %{},
-    claude: %{},
-    opencode: %{},
-    pi: %{}
+    theme: "default"
   ]
 
   @doc """
@@ -138,7 +124,6 @@ defmodule CodingAgent.SettingsManager do
     shell = Map.get(agent, :shell, %{})
     extensions = Map.get(agent, :extensions, %{})
     tools = Map.get(agent, :tools, %{})
-    cli = Map.get(agent, :cli, %{})
 
     %__MODULE__{
       default_model: default_model,
@@ -161,12 +146,7 @@ defmodule CodingAgent.SettingsManager do
       tools: tools,
       extension_paths: Map.get(agent, :extension_paths, []),
       extension_auto_load_default_paths: Map.get(extensions, :auto_load_default_paths, false),
-      theme: Map.get(agent, :theme, "default"),
-      codex: Map.get(cli, :codex, %{}),
-      kimi: Map.get(cli, :kimi, %{}),
-      claude: Map.get(cli, :claude, %{}),
-      opencode: Map.get(cli, :opencode, %{}),
-      pi: Map.get(cli, :pi, %{})
+      theme: Map.get(agent, :theme, "default")
     }
   end
 

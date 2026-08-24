@@ -352,6 +352,170 @@ defmodule LemonAgent.ModelRuntime.CredentialsTest do
     assert "zai" in names
   end
 
+  describe "credential pools" do
+    setup do
+      LemonAgent.ModelRuntime.CredentialHealth.reset()
+
+      Enum.each(~w(POOL_KEY_TWO RAW_REF_KEY), &System.delete_env/1)
+
+      on_exit(fn ->
+        LemonAgent.ModelRuntime.CredentialHealth.reset()
+        Enum.each(~w(POOL_KEY_TWO RAW_REF_KEY), &System.delete_env/1)
+      end)
+
+      :ok
+    end
+
+    test "list_provider_api_keys returns pool credentials first, then the default resolution" do
+      assert {:ok, _} = Secrets.set("pool_key_one", "key-one")
+      System.put_env("POOL_KEY_TWO", "key-two")
+
+      config = pool_config(%{"openai" => %{api_key: "default-key"}})
+
+      assert LemonAgent.ModelRuntime.Credentials.list_provider_api_keys(config, :openai) == [
+               %{ref: "secret:pool_key_one", api_key: "key-one"},
+               %{ref: "env:POOL_KEY_TWO", api_key: "key-two"},
+               %{ref: "default", api_key: "default-key"}
+             ]
+    end
+
+    test "list_provider_api_keys skips refs that fail to resolve" do
+      # pool_key_one secret intentionally missing; POOL_KEY_TWO env unset.
+      config = pool_config(%{"openai" => %{api_key: "default-key"}})
+
+      assert LemonAgent.ModelRuntime.Credentials.list_provider_api_keys(config, :openai) == [
+               %{ref: "default", api_key: "default-key"}
+             ]
+    end
+
+    test "list_provider_api_keys selects the pool through the default profile" do
+      System.put_env("POOL_KEY_TWO", "key-two")
+
+      config = %{
+        providers: %{},
+        provider_routing: %{
+          default_profile: "ops",
+          profiles: %{"ops" => %{credential_pool: "burst"}},
+          credential_pools: %{
+            "burst" => %{
+              providers: ["openai"],
+              strategy: "priority",
+              credentials: %{"openai" => [%{source: :env, name: "POOL_KEY_TWO"}]}
+            }
+          }
+        }
+      }
+
+      assert LemonAgent.ModelRuntime.Credentials.list_provider_api_keys(config, :openai) == [
+               %{ref: "env:POOL_KEY_TWO", api_key: "key-two"}
+             ]
+    end
+
+    test "list_provider_api_keys accepts raw string refs from hand-built settings" do
+      assert {:ok, _} = Secrets.set("bare_secret_name", "bare-secret-key")
+      System.put_env("RAW_REF_KEY", "raw-env-key")
+
+      config = %{
+        providers: %{},
+        provider_routing: %{
+          default_pool: "burst",
+          credential_pools: %{
+            "burst" => %{
+              providers: ["openai"],
+              strategy: "priority",
+              credentials: %{"openai" => ["env:RAW_REF_KEY", "bare_secret_name"]}
+            }
+          }
+        }
+      }
+
+      assert LemonAgent.ModelRuntime.Credentials.list_provider_api_keys(config, :openai) == [
+               %{ref: "env:RAW_REF_KEY", api_key: "raw-env-key"},
+               %{ref: "secret:bare_secret_name", api_key: "bare-secret-key"}
+             ]
+    end
+
+    test "build_get_api_key skips credentials in cooldown" do
+      assert {:ok, _} = Secrets.set("pool_key_one", "key-one")
+      System.put_env("POOL_KEY_TWO", "key-two")
+
+      config = pool_config(%{"openai" => %{api_key: "default-key"}})
+      get_api_key = LemonAgent.ModelRuntime.Credentials.build_get_api_key(config)
+
+      assert get_api_key.(:openai) == "key-one"
+
+      LemonAgent.ModelRuntime.CredentialHealth.record_failure(
+        :openai,
+        "secret:pool_key_one",
+        :auth
+      )
+
+      assert get_api_key.(:openai) == "key-two"
+
+      LemonAgent.ModelRuntime.CredentialHealth.record_failure(:openai, "env:POOL_KEY_TWO", :auth)
+      assert get_api_key.(:openai) == "default-key"
+    end
+
+    test "build_get_api_key falls back to the first credential when all are cooling down" do
+      assert {:ok, _} = Secrets.set("pool_key_one", "key-one")
+
+      config = pool_config(%{})
+      get_api_key = LemonAgent.ModelRuntime.Credentials.build_get_api_key(config)
+
+      LemonAgent.ModelRuntime.CredentialHealth.record_failure(
+        :openai,
+        "secret:pool_key_one",
+        :auth
+      )
+
+      assert get_api_key.(:openai) == "key-one"
+    end
+
+    test "build_get_api_key with a bare providers map matches single-credential resolution" do
+      providers = %{"openai" => %{api_key: "plain-key"}}
+      get_api_key = LemonAgent.ModelRuntime.Credentials.build_get_api_key(providers)
+
+      assert get_api_key.(:openai) ==
+               LemonAgent.ModelRuntime.Credentials.resolve_provider_api_key(:openai, providers)
+
+      assert get_api_key.(:openai) == "plain-key"
+    end
+
+    test "provider_has_credentials? counts resolvable pool credentials" do
+      System.put_env("POOL_KEY_TWO", "key-two")
+      routing = pool_config(%{}).provider_routing
+
+      assert LemonAgent.ModelRuntime.Credentials.provider_has_credentials?(:openai, %{},
+               provider_routing: routing
+             )
+
+      refute LemonAgent.ModelRuntime.Credentials.provider_has_credentials?(:zai, %{},
+               provider_routing: routing
+             )
+    end
+
+    defp pool_config(providers) do
+      %{
+        providers: providers,
+        provider_routing: %{
+          default_pool: "burst",
+          credential_pools: %{
+            "burst" => %{
+              providers: ["openai"],
+              strategy: "priority",
+              credentials: %{
+                "openai" => [
+                  %{source: :secret, name: "pool_key_one"},
+                  %{source: :env, name: "POOL_KEY_TWO"}
+                ]
+              }
+            }
+          }
+        }
+      }
+    end
+  end
+
   defp clear_secrets_table do
     Secrets.table()
     |> LemonCore.Store.list()

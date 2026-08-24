@@ -9,8 +9,7 @@ on:
       - "apps/*/mix.exs"
       - "clients/*/package.json"
       - "clients/*/package-lock.json"
-      - "clients/lemon-cli/pyproject.toml"
-      - "clients/lemon-cli/uv.lock"
+      - "clients/tui/bun.lock"
       - "apps/lemon_gateway/priv/package.json"
       - "apps/lemon_gateway/priv/package-lock.json"
       - "docs/package.json"
@@ -26,8 +25,7 @@ on:
       - "apps/*/mix.exs"
       - "clients/*/package.json"
       - "clients/*/package-lock.json"
-      - "clients/lemon-cli/pyproject.toml"
-      - "clients/lemon-cli/uv.lock"
+      - "clients/tui/bun.lock"
       - "apps/lemon_gateway/priv/package.json"
       - "apps/lemon_gateway/priv/package-lock.json"
       - "docs/package.json"
@@ -50,9 +48,8 @@ jobs:
       scan-args: |-
         --lockfile=mix.lock
         --lockfile=clients/lemon-web/package-lock.json
-        --lockfile=clients/lemon-tui/package-lock.json
+        --lockfile=clients/tui/bun.lock
         --lockfile=clients/lemon-browser-node/package-lock.json
-        --lockfile=clients/lemon-cli/uv.lock
         --lockfile=apps/lemon_gateway/priv/package-lock.json
         --lockfile=docs/package-lock.json
         --lockfile=tools/diagrams/package-lock.json

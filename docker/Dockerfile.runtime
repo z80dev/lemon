@@ -1,0 +1,130 @@
+# Multi-arch runtime image for the full Lemon platform (release profile
+# `lemon_runtime_full`).
+#
+#   docker build -f docker/Dockerfile.runtime \
+#     --build-arg LEMON_GIT_SHA="$(git rev-parse HEAD)" -t lemon:dev .
+#
+# The build context is the repository root (see .dockerignore). The release is
+# assembled inside the image rather than unpacked from a prebuilt tarball:
+# exqlite ships a NIF that must match the image's libc and architecture, so each
+# architecture is built natively on its own runner and the two are merged into
+# one manifest list afterwards.
+
+ARG LEMON_GIT_SHA=unknown
+
+FROM hexpm/elixir:1.19.5-erlang-28.5-debian-bookworm-20260505 AS build
+
+ARG LEMON_GIT_SHA
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends build-essential git nodejs npm && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+ENV MIX_ENV=prod
+ENV LEMON_GIT_SHA=$LEMON_GIT_SHA
+
+RUN mix local.hex --force && mix local.rebar --force
+
+# The whole umbrella is copied, not just the apps named in the release: Mix
+# compiles every child under apps/, and rel/overlays supplies the `bin/lemon`
+# launcher shim that lands in the assembled release. hex_package.exs must come
+# along too — every publishable app's mix.exs requires it, so without it Mix
+# cannot even read the project.
+COPY mix.exs mix.lock hex_package.exs ./
+COPY config config
+COPY rel rel
+COPY apps apps
+
+RUN mix deps.get --only prod
+
+# lemon_web has no npm pipeline — its static files are committed and only need a
+# digest pass, without which the endpoint boots on "Could not warm up static
+# assets" and serves undigested paths.
+#
+# `mix do --app lemon_web phx.digest` and not `mix phx.digest <path>`: at an
+# umbrella root Mix re-runs the task once per child app with that app as the cwd,
+# so a relative path resolves against every app in turn, prints "The input path
+# does not exist" 26 times, and still exits 0 — a silent no-op.
+RUN mix sim_ui.assets.deploy
+RUN mix do --app lemon_web phx.digest
+
+# Both digests are silent about failure; the release must not be assembled
+# without them (config/prod.exs sets cache_static_manifest for both endpoints).
+RUN test -f apps/lemon_web/priv/static/cache_manifest.json && \
+    test -f apps/lemon_sim_ui/priv/static/cache_manifest.json
+
+RUN mix compile
+RUN mix release lemon_runtime_full --overwrite
+
+FROM debian:bookworm-slim AS runtime
+
+ARG LEMON_GIT_SHA
+
+LABEL org.opencontainers.image.title="lemon" \
+      org.opencontainers.image.description="Lemon platform runtime (lemon_runtime_full release)" \
+      org.opencontainers.image.source="https://github.com/z80dev/lemon" \
+      org.opencontainers.image.url="https://github.com/z80dev/lemon" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.revision=$LEMON_GIT_SHA
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      libstdc++6 \
+      openssl \
+      ca-certificates \
+      curl \
+      gosu \
+      inotify-tools \
+      libncurses6 \
+      libtinfo6 \
+      sqlite3 && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# HOME is the volume so that everything the runtime writes by convention under
+# ~/.lemon (config.toml, generated env, run state) lands on persistent storage.
+ENV HOME=/data
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+ENV ERL_CRASH_DUMP=/tmp/erl_crash.dump
+ENV RELEASE_TMP=/tmp/lemon-release
+ENV RELEASE_NAME=lemon_runtime_full
+ENV PHX_SERVER=true
+ENV LEMON_GIT_SHA=$LEMON_GIT_SHA
+ENV LEMON_STORE_PATH=/data/store
+
+RUN groupadd --system --gid 10001 lemon && \
+    useradd --uid 10001 --gid lemon --home-dir /data --shell /usr/sbin/nologin lemon && \
+    mkdir -p /data/store /tmp/lemon-release && \
+    chown -R lemon:lemon /data /tmp/lemon-release
+
+COPY --from=build --chown=root:lemon /app/_build/prod/rel/lemon_runtime_full ./
+COPY --chown=root:root docker/docker-entrypoint.sh /usr/local/bin/lemon-entrypoint
+
+# The release runs as `lemon` but owns nothing under /app; `mix release` writes
+# releases/COOKIE mode 0400, which the group bit here makes readable.
+RUN chmod -R g+rX /app && chmod 0755 /usr/local/bin/lemon-entrypoint
+
+VOLUME ["/data"]
+
+# control plane / lemon_web / sim UI. The sim UI endpoint only starts when
+# LEMON_SIM_UI_SECRET_KEY_BASE and its companion vars are supplied (see
+# config/runtime.exs); 4090 is declared so that deployment is a matter of env.
+EXPOSE 4040 4080 4090
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD curl --fail --silent --show-error "http://127.0.0.1:${LEMON_CONTROL_PLANE_PORT:-4040}/healthz" >/dev/null || exit 1
+
+STOPSIGNAL SIGTERM
+ENTRYPOINT ["/usr/local/bin/lemon-entrypoint"]
+
+# The release binary is invoked directly rather than through the `bin/lemon`
+# shim: the shim's job is the ~/.lemon user-install layout, which the entrypoint
+# already establishes here. The shim is still present at /app/bin/lemon and is
+# the right way in for `docker exec` (it sources the same /data/.lemon/env and
+# cookie the entrypoint wrote, so `lemon rpc` reaches the running node while
+# calling the release binary bare does not).
+CMD ["/app/bin/lemon_runtime_full", "start"]

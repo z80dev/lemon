@@ -1,71 +1,87 @@
 # Decoupling Model Selection from Profile Binding
 
 ## Problem
-Profiles currently provide useful defaults (engine, tool policy, system prompt), but users need to choose model independently at runtime (task/agent/session) without being locked to profile model defaults.
+
+Profiles provide useful defaults (tool policy and system prompt), but callers
+must be able to choose a model at runtime (task, agent, or session) without
+being locked to a profile model default.
 
 ## Goals
+
 - Preserve profile-level behavior and policy defaults.
-- Let callers specify model independently from profile.
-- Keep explicit engine selection possible.
-- Support clear precedence and mismatch visibility.
+- Let callers specify a model independently from a profile.
+- Keep the top-level execution path native and independent of model selection.
+- Support clear precedence and resolution diagnostics.
 
 ## Final Design
 
-### 1) Canonical run contract now has top-level `model`
-`LemonCore.RunRequest` now includes `:model` so model overrides can be passed explicitly (not only via `meta`).
+### 1) Canonical run contract has top-level `model`
+
+`LemonCore.RunRequest` includes `:model` so model overrides can be passed
+explicitly rather than only through `meta`. The complete top-level path is
+`RunRequest` → `ExecutionCommand` → `ExecutionRequest` →
+`CodingAgent.Executor`; none of those request shapes carries a runner selector
+or passes through a `Job` adapter.
 
 ### 2) Dedicated resolver module
-Added `LemonRouter.ModelSelection` to centralize resolution:
+
+`LemonRouter.ModelSelection` centralizes model resolution:
 
 - **Model precedence**:
   1. request-level explicit model
-  2. meta model (back-compat)
+  2. meta model (backward-compatible input)
   3. session policy model
   4. profile model
-  5. config default model (`LemonCore.Config.cached().agent.default_model`, backed by `[defaults]`)
+  5. config default model (`LemonCore.Config.cached().agent.default_model`,
+     backed by `[defaults]`)
 
 `SubmissionBuilder` also stores the resolved `history_model` in submission
 metadata for routing-feedback history when that feature is enabled. Runtime
-modules should not read `Application.get_env(:lemon_router, :default_model)`;
+modules do not read `Application.get_env(:lemon_router, :default_model)`;
 model defaults come from Lemon config or policy stores.
 
-- **Engine precedence**:
-  1. resume token engine
-  2. explicit `engine_id`
-  3. model-implied engine (`codex:*`, `claude:*`, etc.)
-  4. profile default engine
+### 3) Fixed execution provenance
 
-### 3) Mismatch warnings (non-blocking)
-If explicit engine conflicts with model-implied engine, the system:
-- keeps explicit engine (caller intent wins),
-- records warning in `job.meta[:model_resolution_warning]`,
-- logs warning in orchestrator.
+The native executor stamps top-level lifecycle events and persisted outcomes
+with `engine: "lemon"`. This is run provenance, not a caller choice and not a
+model-resolution result. `ResumeToken.engine` remains the persisted token
+discriminator; the router accepts only `"lemon"` tokens for top-level resume.
+Older `ChatState.last_engine` values remain stored as historical/native
+discriminators and are quarantined from resumption when they are not native.
+
+Delegated tasks run as native in-process subagent sessions (`CodingAgent.Session`
+via `CodingAgent.Coordinator`) and record their own task provenance, but cannot
+affect a product run's executor.
 
 ### 4) API/tool surface updates
+
 - `agent` control-plane method accepts `model`.
 - `agent.inbox.send` accepts `model`.
-- `CodingAgent.Tools.Agent` accepts `model` and forwards it through `RunRequest.model`.
-- `CodingAgent.Tools.Task` accepts `model` and `thinking_level` for internal-session subtasks.
+- `CodingAgent.Tools.Agent` accepts `model` and forwards it through
+  `RunRequest.model`.
+- `CodingAgent.Tools.Task` accepts `model` and `thinking_level` for
+  internal-session subtasks.
 
 ## Why this works
-Profiles continue to supply persona/tool defaults, while model selection is independently controlled by request/session/runtime layers.
 
-## Validation policy
-No hard failures for engine/model mismatches yet; warnings only. This avoids breaking existing flows while making conflicts visible.
+Profiles continue to supply persona and tool defaults, while model selection is
+controlled independently by request, session, and policy layers. The executor
+does not vary.
 
 ## Future extensions
-- Add strict mode to reject incompatible engine/model combinations.
-- Add capability checks (e.g., tool-calling requirements vs selected model).
+
+- Add capability checks (for example, tool-calling requirements versus a
+  selected model).
 - Expose model-resolution diagnostics in run inspection APIs.
 
 ## Provider/Credential Resolution Facade
 
-Model *selection* (above) picks an engine and a model string. A separate,
-related problem is provider/credential resolution: given a model or provider
-name, what are its aliases, is it configured, does it have usable
-credentials, and what can a caller actually pick from right now? That logic
-used to be reimplemented at each call site. This section tracks the
-consolidation of that logic onto one facade, phase by phase.
+Model *selection* (above) picks a model string. A separate, related problem is
+provider and credential resolution: given a model or provider name, what are
+its aliases, is it configured, does it have usable credentials, and what can a
+caller actually pick from right now? That logic used to be reimplemented at
+each call site. This section tracks the consolidation of that logic onto one
+facade, phase by phase.
 
 ### Phase 1 (done, commit `74b0f20f`): model-catalog facade
 
@@ -100,13 +116,12 @@ delegate to `ModelCatalog`.
   and resolves *policy* (which model/thinking-level a route prefers) by
   channel/account/peer/thread precedence, and never reimplements
   provider/credential lookups. No migration needed.
-- `apps/lemon_router/lib/lemon_router/model_selection.ex` is an
-  intentionally separate concern: it maps a model string to one of the six
-  CLI *engines* (claude/codex/droid/kimi/opencode/pi) via
-  `LemonCore.EngineCatalog.known?/1`, not to an LLM API provider
-  (anthropic/openai/google/etc.). It already delegates to `EngineCatalog`
-  and does not duplicate anything the provider/credential facade owns. Left
-  untouched.
+- `apps/lemon_router/lib/lemon_router/model_selection.ex` is intentionally
+  separate from provider/credential lookup: it applies top-level model
+  precedence and returns the resolved model. It no longer maps model strings
+  to runner identities or consults an engine catalog. Subagent delegation is
+  native and in-process through the task APIs, so there is no
+  provider-facade migration here.
 
 ### Remaining phases (not started)
 

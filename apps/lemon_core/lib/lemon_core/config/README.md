@@ -11,7 +11,7 @@ The configuration system has been refactored from a monolithic 1253-line module 
 | `Helpers` | Environment variable utilities | 66 |
 | `Agent` | Agent behavior settings | 17 |
 | `Tools` | Web tools and WASM configuration | 25 |
-| `Gateway` | Telegram, SMS, engine bindings | 22 |
+| `Gateway` | Engine bindings, queueing, channel sections | 22 |
 | `Logging` | Log file and rotation settings | 20 |
 | `TUI` | Terminal UI theme and debug | 12 |
 | `Providers` | LLM provider configurations | 18 |
@@ -94,10 +94,11 @@ reserve_tokens = 16384
 api_key = "sk-ant-..."
 
 [gateway]
-enable_telegram = true
+max_concurrent_runs = 5
+enable_webhook = true
 
 [[gateway.bindings]]
-transport = "telegram"
+transport = "webhook"
 chat_id = 123456789
 agent_id = "default"
 
@@ -170,18 +171,20 @@ Environment variables:
 Gateway configuration:
 
 - `max_concurrent_runs` - Concurrent run limit
-- `default_engine` - Default execution engine
 - `default_cwd` - Default working directory
-- `enable_telegram` - Enable Telegram bot
+- `enable_webhook` - Enable the generic webhook transport
 - `bindings` - Transport bindings
-- `telegram` - Telegram bot settings
 - `queue` - Queue management
+- `enabled_channels` / `channels` - Per-platform flags and sections, resolved
+  by the modules registered under `config :lemon_core, :gateway_channels`.
+  `LemonCore.Config` flattens both onto the legacy map as `gateway[:enable_<id>]`
+  and `gateway[<id>]`. See `LemonCore.Config.Gateway.Channel`; a platform's own
+  keys, environment variables and validation live with the app that implements
+  it.
 
 Environment variables:
 - `LEMON_GATEWAY_MAX_CONCURRENT_RUNS`
-- `LEMON_GATEWAY_DEFAULT_ENGINE`
-- `LEMON_GATEWAY_ENABLE_TELEGRAM`
-- `TELEGRAM_BOT_TOKEN` (via `${TELEGRAM_BOT_TOKEN}` interpolation)
+- `LEMON_GATEWAY_ENABLE_WEBHOOK`
 
 ### Config.Logging
 

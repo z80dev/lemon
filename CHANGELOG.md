@@ -8,7 +8,122 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Changed
+
+- Product releases can now be cut and published from one manual Release
+  workflow dispatch; the workflow derives CalVer, consumes the Unreleased
+  notes, commits and tags the release, verifies every artifact, publishes the
+  GitHub Release, and only then promotes mutable container channel tags
+
+### Removed
+
+- Breaking: top-level engine selection and custom Gateway engine extensions
+  were removed. Every conversation now uses the native `CodingAgent.Executor`;
+  `LemonGateway.Engine`, `EngineRegistry`, Echo, vendor gateway adapters,
+  `LemonCore.EngineCatalog`, and `LemonPlatformTest.EngineCase` no longer
+  exist.
+- The `engine_id`, `default_engine`, `preferred_engine`, and
+  `[gateway.engines.*]` configuration/API selectors are rejected with migration
+  guidance. Delegated `task` runs use the native in-process `internal` engine
+  only; vendor CLI task runners and `[runtime.cli.*]` configuration were removed.
+
+---
+
+## [2026.08.1]
+
+### Added
+
+- First-run onboarding in packaged `lemon_runtime_min` and
+  `lemon_runtime_full` releases, including interactive provider/model setup,
+  setup-readiness gating before TUI startup, and installer handoff to the
+  setup wizard
+- Packaged runtime CLI parity for setup, model, gateway, configuration,
+  secrets, channels, and diagnostics commands
+- Telegram and Discord gateway setup flows with encrypted credential storage
+  and verification
+- New Bun/`pi-tui` terminal client with streaming transcripts, tool cards,
+  approvals, queue/steer/interrupt controls, multiple sessions, themes, mouse
+  support, resolved-model display, and per-run usage
+- Persistent supervised Python kernels for `execute_code`, with authenticated
+  RPC, bounded requests and execution, cancellation, lifecycle cleanup, and
+  redacted telemetry
+
+### Changed
+
+- Installation and onboarding documentation now describes the packaged
+  first-run flow and distinguishes installed-runtime commands from source
+  wrappers
+- Release verification now proves packaged onboarding, source setup
+  dispatch, readiness isolation, credential scrubbing, and release artifact
+  summaries
+
+### Fixed
+
+- Closed an argument-injection path in packaged doctor dispatch
+- Hardened persistent Python kernel ownership, teardown, timeout, spill
+  cleanup, and late-frame handling
+- Preserved installer `--modify-path` behavior while adding setup handoff
+- Corrected provider routing circuit-breaker iteration and hermetic channel
+  credential handling
+- Made stream-result subscription synchronous so user cancellation cannot be
+  miscounted as a provider circuit-breaker failure
+- Made the live coding-repair release eval specify the patch tool contract
+  explicitly, preventing model-dependent shell-edit detours
+- Cleaned cached release assembly directories before packaging so artifacts
+  cannot retain stale application or dependency versions
+- Corrected secret error type specifications and unreachable CLI config
+  branches so the allowlisted `lemon_cli` Dialyzer gate remains clean
+
+---
+
+## [2026.08.0]
+
+### Added
+
+**Distribution — prebuilt install story**
+- Prebuilt release tarballs for `linux-x86_64`, `linux-arm64`, and
+  `darwin-arm64` (`lemon_runtime_min`/`lemon_runtime_full` everywhere,
+  `sim_broadcast_platform` on Linux), each boot-verified on its native
+  runner before publication, described by a schema-2 `manifest.json`
+- One-line installer (`install.sh`): checksum-verified install into
+  `~/.lemon/versions/<version>` with an atomic `current` symlink, plus an
+  offline CI verification harness (`scripts/verify_install_script`)
+- `bin/lemon` launcher shim shipped inside every release
+  (start/daemon/stop/status/version/update/doctor and friends)
+- Stage-2 self-update: `lemon update` checks the published manifest,
+  stream-downloads with mandatory sha256, stages, flips atomically, and
+  supports `--rollback`; the control-plane `update.run` method now rides
+  the same code path
+- Multi-arch container image `ghcr.io/z80dev/lemon` (amd64 + arm64),
+  smoke-tested in CI before tagging; a failed image blocks the release
+
+**Platform (since 2026.05.0)**
+- Platform split: 12 packages published to Hex, one native top-level executor,
+  delegated CLI runners, and standalone `lemon_browser`/`lemon_skills`
+  packages
+- Always-on model arenas (werewolf, space station, stock market, survivor,
+  poker) with leagues, ratings, and spectator UI
+- Provider resilience: failover classifier, unified routing fallback,
+  multi-key credential pools with health/cooldown
+- Redirect-style interruption end to end, including Telegram/Discord
+  `/redirect`
+- Learning loop on by default: session search (scoped), routing feedback,
+  scheduled skill synthesis
+- Tool-search tiered disclosure, programmatic tool calling
+  (`execute_code`), cron monitor mode/chaining/drift guard/preflight
+- Channel delivery observability, hermetic Telegram test API, and the
+  three-tier product verification stack
+
+### Changed
+- `lemon_runtime_full` releases now ship digested static assets for both
+  web endpoints (previously booted with a static-manifest warning)
+- Release artifact naming switched to runner-agnostic platform tags
+
+### Fixed
+- Control-plane `update.run` no longer buffers downloads in memory or
+  skips checksum verification on unrecognized prefixes
+- Sim UI Dockerfile references the post-rename app paths and the shared
+  `hex_package.exs`
 
 ---
 

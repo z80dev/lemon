@@ -216,6 +216,12 @@
     max_age_days: 90
   },
   %{
+    path: "docs/tools/execute-code.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-08-17],
+    max_age_days: 90
+  },
+  %{
     path: "docs/tools/firecrawl.md",
     owner: "@z80",
     last_reviewed: ~D[2026-06-17],
@@ -366,6 +372,12 @@
     max_age_days: 60
   },
   %{
+    path: "docs/user-guide/honcho.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-08-12],
+    max_age_days: 60
+  },
+  %{
     path: "docs/plans/lemon-hermes-parity-expansion-goal-2026-05-24.md",
     owner: "@z80",
     last_reviewed: ~D[2026-08-09],
@@ -390,6 +402,18 @@
     max_age_days: 365
   },
   %{
+    path: "docs/plans/lemon-hermes-gap-audit-2026-08-11.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-08-11],
+    max_age_days: 60
+  },
+  %{
+    path: "docs/plans/lemon-improvement-plan-2026-08-12.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-08-12],
+    max_age_days: 60
+  },
+  %{
     path: "docs/architecture/overview.md",
     owner: "@z80",
     last_reviewed: ~D[2026-08-10],
@@ -410,7 +434,19 @@
   %{
     path: "docs/plans/2026-04-12-subagent-reasoning-surfacing-plan.md",
     owner: "@z80",
-    last_reviewed: ~D[2026-06-17],
+    last_reviewed: ~D[2026-08-18],
+    max_age_days: 60
+  },
+  %{
+    path: "docs/plans/2026-08-17-persistent-python-repl-plan.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-08-18],
+    max_age_days: 60
+  },
+  %{
+    path: "docs/plans/2026-08-19-single-native-executor-plan.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-08-20],
     max_age_days: 60
   },
   %{

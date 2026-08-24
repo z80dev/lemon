@@ -1,0 +1,6 @@
+# lemon-tui bunfig — intentionally minimal.
+# The compiled binary is built with autoloadBunfig=false; this file only
+# affects dev-mode `bun run` / `bun test` launched from this directory.
+
+[test]
+coverage = false

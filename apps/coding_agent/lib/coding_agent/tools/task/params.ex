@@ -13,7 +13,7 @@ defmodule CodingAgent.Tools.Task.Params do
   alias LemonCore.SessionKey
 
   @valid_queue_modes ["collect", "followup", "steer", "steer_backlog", "interrupt"]
-  @valid_engines ["internal", "codex", "claude", "droid", "kimi", "opencode", "pi"]
+
   @tool_only_guardrail_known_tools [
     "bash",
     "read",
@@ -79,7 +79,7 @@ defmodule CodingAgent.Tools.Task.Params do
     prompt = Map.get(params, "prompt")
     description = normalize_task_description(Map.get(params, "description"), prompt)
     role_id = normalize_optional_string(Map.get(params, "role"))
-    engine = Map.get(params, "engine")
+    removed_engine = Map.get(params, "engine")
     model = normalize_optional_string(Map.get(params, "model"))
     thinking_level = normalize_optional_string(Map.get(params, "thinking_level"))
     async? = Map.get(params, "async", true)
@@ -96,6 +96,9 @@ defmodule CodingAgent.Tools.Task.Params do
       not is_binary(description) or String.trim(description) == "" ->
         {:error, "Description or prompt must be a non-empty string"}
 
+      not is_nil(removed_engine) ->
+        {:error, "The 'engine' parameter has been removed; all subagent tasks run natively."}
+
       not Map.has_key?(params, "prompt") ->
         {:error, "Prompt is required"}
 
@@ -107,12 +110,6 @@ defmodule CodingAgent.Tools.Task.Params do
 
       not is_nil(role_id) and not is_binary(role_id) ->
         {:error, "Role must be a string"}
-
-      not is_nil(engine) and not is_binary(engine) ->
-        {:error, "Engine must be a string"}
-
-      not is_nil(engine) and engine not in @valid_engines ->
-        {:error, "Engine must be one of: #{Enum.join(@valid_engines, ", ")}"}
 
       not is_nil(model) and not is_binary(model) ->
         {:error, "Model must be a string"}
@@ -151,13 +148,11 @@ defmodule CodingAgent.Tools.Task.Params do
         {:error, "auto_followup must be a boolean"}
 
       true ->
-        normalized_engine = if engine == "internal", do: nil, else: engine
-
         {effective_prompt, guarded_tool_policy} =
-          apply_prompt_tool_guardrails(prompt, normalized_engine, tool_policy)
+          apply_prompt_tool_guardrails(prompt, tool_policy)
 
         effective_tool_policy =
-          guarded_tool_policy || default_task_tool_policy(normalized_engine)
+          guarded_tool_policy || default_task_tool_policy()
 
         followup_queue_mode =
           if is_nil(queue_mode), do: nil, else: normalize_queue_mode(queue_mode)
@@ -167,7 +162,6 @@ defmodule CodingAgent.Tools.Task.Params do
            description: description,
            prompt: effective_prompt,
            role_id: role_id,
-           engine: normalized_engine,
            model: model,
            thinking_level: thinking_level,
            async: async?,
@@ -187,7 +181,6 @@ defmodule CodingAgent.Tools.Task.Params do
   @spec check_budget_and_policy(map(), keyword()) :: :ok | {:error, String.t()}
   def check_budget_and_policy(validated, opts) do
     parent_run_id = Keyword.get(opts, :parent_run_id)
-    engine = validated.engine || "internal"
     effective_opts = maybe_put_kw(opts, :tool_policy, validated.tool_policy)
 
     budget_check =
@@ -205,10 +198,8 @@ defmodule CodingAgent.Tools.Task.Params do
         {:error, message}
 
       _ ->
-        policy = ToolPolicy.subagent_policy(String.to_atom(engine), effective_opts)
-
-        if ToolPolicy.no_reply?(policy) do
-          Logger.debug("Subagent #{engine} running in NO_REPLY mode")
+        if ToolPolicy.no_reply?(validated.tool_policy) do
+          Logger.debug("Native task running in NO_REPLY mode")
         end
 
         :ok
@@ -237,28 +228,19 @@ defmodule CodingAgent.Tools.Task.Params do
         "- task_id: required when action=poll or action=get\n" <>
         "- task_ids: required when action=join\n" <>
         "- mode: join mode for action=join (wait_all or wait_any)\n" <>
-        "- engine: Which executor runs the task\n" <>
-        "  - \"internal\" (default): Lemon's built-in agent\n" <>
-        "  - \"codex\": OpenAI Codex CLI\n" <>
-        "  - \"claude\": Claude Code CLI\n" <>
-        "  - \"droid\": Factory Droid CLI\n" <>
-        "  - \"kimi\": Kimi CLI\n" <>
-        "  - \"opencode\": Opencode CLI\n" <>
-        "  - \"pi\": Pi (pi-coding-agent) CLI\n" <>
-        "- model: Optional model override (e.g., \"gemini-2.5-pro\" for complex tasks)\n" <>
-        "- thinking_level: Optional thinking level override for internal engine or Droid reasoning effort\n" <>
-        "- role: Optional specialization that applies to ANY engine\n" <>
+        "- model: Optional model override (e.g., \"gpt-5.2-codex\" for complex tasks)\n" <>
+        "- thinking_level: Optional thinking level override\n" <>
+        "- role: Optional specialization for the task\n" <>
         "- cwd: Optional working directory override\n" <>
-        "- tool_policy: Optional task-specific tool policy override\n" <>
-        "  - Internal task children default to leaf_worker policy, so they cannot recursively use task/agent unless this is explicitly overridden\n" <>
+        "- tool_policy: Optional tool policy override for the task session\n" <>
+        "  - Task children default to leaf_worker policy, so they cannot recursively use task/agent unless this is explicitly overridden\n" <>
         "- session_key/agent_id: Optional async followup routing overrides\n" <>
         "- queue_mode: Optional async followup delivery override (default: app config, fallback followup)\n" <>
         "- meta: Optional metadata attached to task lifecycle/followups\n\n" <>
         "**Boundary with agent tool:**\n" <>
-        "- task supports local/CLI execution controls plus followup routing overrides\n" <>
+        "- task runs a focused native session with followup routing overrides\n" <>
         "- agent remains the tool for router-level delegation continuity semantics\n\n" <>
-        "The role prepends a system prompt to focus the executor on a specific type of work. " <>
-        "You can combine any engine with any role."
+        "The role prepends a system prompt to focus the task on a specific type of work."
 
     roles = Subagents.format_for_description(cwd)
 
@@ -362,8 +344,8 @@ defmodule CodingAgent.Tools.Task.Params do
   def normalize_queue_mode(:interrupt), do: :interrupt
   def normalize_queue_mode(_), do: :followup
 
-  defp apply_prompt_tool_guardrails(prompt, normalized_engine, tool_policy) do
-    if is_nil(normalized_engine) and is_nil(tool_policy) do
+  defp apply_prompt_tool_guardrails(prompt, tool_policy) do
+    if is_nil(tool_policy) do
       case infer_tool_only_policy(prompt) do
         nil ->
           {prompt, nil}
@@ -376,8 +358,7 @@ defmodule CodingAgent.Tools.Task.Params do
     end
   end
 
-  defp default_task_tool_policy(nil), do: ToolPolicy.from_profile(:leaf_worker)
-  defp default_task_tool_policy(_engine), do: nil
+  defp default_task_tool_policy, do: ToolPolicy.from_profile(:leaf_worker)
 
   defp infer_tool_only_policy(prompt) when is_binary(prompt) do
     case Regex.run(@tool_only_guardrail_regex, prompt) do

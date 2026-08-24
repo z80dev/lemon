@@ -151,7 +151,6 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "sessionKey" => :string,
         "agentId" => :string,
         "queueMode" => :string,
-        "engineId" => :string,
         "model" => :string
       }
     },
@@ -187,7 +186,6 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "sessionKey" => :string,
         "sessionTag" => :string,
         "queueMode" => :string,
-        "engineId" => :string,
         "model" => :string,
         "cwd" => :string,
         "toolPolicy" => :map,
@@ -1180,7 +1178,10 @@ defmodule LemonControlPlane.Protocol.Schemas do
     # Optional capability-gated methods
     "update.run" => %{
       optional: %{
-        "force" => :boolean
+        "force" => :boolean,
+        "checkOnly" => :boolean,
+        "channel" => :string,
+        "version" => :string
       }
     },
     "connect.challenge" => %{

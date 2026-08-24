@@ -5,7 +5,7 @@ defmodule LemonCore.Store.ReadCacheTest do
 
   describe "init/2" do
     test "creates ETS tables for cached domains" do
-      ReadCache.init(LemonCore.Store, [:sessions_index, :telegram_known_targets])
+      ReadCache.init(LemonCore.Store, [:sessions_index, :demo_targets])
 
       for domain <- ReadCache.cached_domains() do
         table = ReadCache.table_for(domain)
@@ -20,17 +20,17 @@ defmodule LemonCore.Store.ReadCacheTest do
     end
 
     test "is additive: re-initializing with fewer tables keeps live ones" do
-      ReadCache.init(LemonCore.Store, [:sessions_index, :telegram_known_targets])
+      ReadCache.init(LemonCore.Store, [:sessions_index, :demo_targets])
       tables = ReadCache.init(LemonCore.Store, [])
 
       assert Map.has_key?(tables, :sessions_index)
-      assert Map.has_key?(tables, :telegram_known_targets)
+      assert Map.has_key?(tables, :demo_targets)
     end
   end
 
   describe "cached?/2" do
     setup do
-      ReadCache.init(LemonCore.Store, [:sessions_index, :telegram_known_targets])
+      ReadCache.init(LemonCore.Store, [:sessions_index, :demo_targets])
       :ok
     end
 
@@ -39,7 +39,7 @@ defmodule LemonCore.Store.ReadCacheTest do
       assert ReadCache.cached?(:runs)
       assert ReadCache.cached?(:progress)
       assert ReadCache.cached?(:sessions_index)
-      assert ReadCache.cached?(:telegram_known_targets)
+      assert ReadCache.cached?(:demo_targets)
     end
 
     test "returns false for domains it does not" do
@@ -50,7 +50,7 @@ defmodule LemonCore.Store.ReadCacheTest do
 
   describe "put/get/delete" do
     setup do
-      ReadCache.init(LemonCore.Store, [:sessions_index, :telegram_known_targets])
+      ReadCache.init(LemonCore.Store, [:sessions_index, :demo_targets])
       :ok
     end
 
@@ -74,7 +74,7 @@ defmodule LemonCore.Store.ReadCacheTest do
       assert ReadCache.get(:runs, "nonexistent") == nil
       assert ReadCache.get(:progress, {:scope, 0}) == nil
       assert ReadCache.get(:sessions_index, "agent:missing") == nil
-      assert ReadCache.get(:telegram_known_targets, {"default", -1, nil}) == nil
+      assert ReadCache.get(:demo_targets, {"default", -1, nil}) == nil
     end
 
     test "overwrites existing values" do
@@ -98,19 +98,19 @@ defmodule LemonCore.Store.ReadCacheTest do
 
     test "lists cached entries for cached domains" do
       ReadCache.put(:sessions_index, "agent:test:main", %{agent_id: "test"})
-      ReadCache.put(:telegram_known_targets, {"default", -1001, nil}, %{peer_kind: :group})
+      ReadCache.put(:demo_targets, {"default", -1001, nil}, %{peer_kind: :group})
 
       assert {"agent:test:main", %{agent_id: "test"}} in ReadCache.list(:sessions_index)
 
       assert {{"default", -1001, nil}, %{peer_kind: :group}} in ReadCache.list(
-               :telegram_known_targets
+               :demo_targets
              )
     end
   end
 
   describe "concurrent access" do
     setup do
-      ReadCache.init(LemonCore.Store, [:sessions_index, :telegram_known_targets])
+      ReadCache.init(LemonCore.Store, [:sessions_index, :demo_targets])
       :ok
     end
 

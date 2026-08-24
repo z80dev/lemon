@@ -5,7 +5,7 @@ The umbrella ships two different things on two different clocks:
 | | Artifact | Version scheme | Tag | Tooling |
 |---|---|---|---|---|
 | **Product** | Release tarballs of the whole umbrella | CalVer `YYYY.MM.PATCH` | `v2026.08.0` | `scripts/bump_version.sh` → `.github/workflows/release.yml` |
-| **Platform** | Individual apps on hex.pm | semver, per package | `ai-v0.1.0` | `scripts/release_package` → `.github/workflows/publish.yml` |
+| **Platform** | Individual apps on hex.pm | semver, per package | `lemon_ai-v0.1.0` | `scripts/release_package` / `scripts/publish_train` → `.github/workflows/publish.yml` |
 
 This page covers the second. Each published package starts at `0.1.0` and moves
 independently (decision D10 in `docs/platform-split.md`); `1.0.0` waits until
@@ -14,8 +14,8 @@ the Phase 5 extraction has proven the APIs.
 ## The packages
 
 `hex_package.exs` is the source of truth for which apps publish and under what
-name. Two names differ from their app name because they predate the `lemon_`
-prefix:
+name. Since the 2026-08-10 rename (`ai`→`lemon_ai`, `agent_core`→`lemon_agent`)
+every app name matches its hex name:
 
 ```
 scripts/release_package --list
@@ -23,23 +23,41 @@ scripts/release_package --list
 
 ```
   APP                    HEX NAME               VERSION
-  ai                     lemon_ai               0.1.0
+  lemon_ai               lemon_ai               0.1.0
   lemon_core             lemon_core             0.1.0
   lemon_media            lemon_media            0.1.0
-  agent_core             lemon_agent            0.1.0
+  lemon_agent            lemon_agent            0.1.0
   lemon_memory           lemon_memory           0.1.0
   lemon_channels         lemon_channels         0.1.0
   lemon_router           lemon_router           0.1.0
   lemon_gateway          lemon_gateway          0.1.0
   lemon_platform_test    lemon_platform_test    0.1.0
+  lemon_browser          lemon_browser          0.1.0
+  lemon_skills           lemon_skills           0.1.0
 ```
 
 `lemon_media` is a package because `lemon_channels` and `lemon_router` depend on
 it (decision D13). It was not in the original list of eight, and leaving it out
 would have blocked both of them — see the second failure mode below.
+`lemon_cli_runners` joined with D15 (vendor CLI wrappers extracted from
+`lemon_agent`) and was removed again on 2026-08-21 (D16 in
+`docs/platform-split.md`), when vendor CLI task runners were deleted in favor of
+native-only in-process subagents; its `0.1.0` on hex.pm is abandoned in place.
+`lemon_browser` and `lemon_skills` joined as packages 11 and 12 when D14 was
+approved (2026-08-13): both are shared platform infrastructure that the
+coding-agent product group depends on, and unpublished they blocked its
+extraction. `lemon_skills` went through an API-stabilization pass first
+(externally-consumed modules documented, internals `@moduledoc false`).
 
-Tags use the **app** name (`agent_core-v0.1.0`), not the hex name: the tag has
-to name a directory the workflow can `cd` into, and app names never change.
+
+Tags use the **app** name (`lemon_agent-v0.2.0`): the tag has to name a
+directory the workflow can `cd` into.
+
+> **0.1.0 provenance:** every package's first release was published to hex.pm
+> on 2026-08-11 *without* going through the tag flow — a first publish needs no
+> version bump, so a bare `mix hex.publish` leaves no release commit and no
+> tag. There are no `*-v0.1.0` tags; the exact build commit is unrecorded.
+> From `0.1.1` on, use the tooling below so every release is tagged.
 
 ## Publish order
 
@@ -48,7 +66,7 @@ exist on hex.pm at the moment it is published, so the first publish walks the
 dependency graph bottom-up:
 
 ```
-ai → lemon_core → lemon_media → agent_core → lemon_memory → lemon_channels → lemon_router → lemon_gateway → lemon_platform_test
+lemon_ai → lemon_core → lemon_media → lemon_agent → lemon_memory → lemon_channels → lemon_router → lemon_gateway → lemon_platform_test → lemon_browser → lemon_skills
 ```
 
 `lemon_channels` precedes `lemon_router` because the router depends on it.
@@ -68,6 +86,38 @@ Two failure modes are worth recognising:
   compile for anyone outside this repo. Publish X too, make the dependency
   optional, or invert it. This is exactly what happened to `lemon_media`, and
   why D13 promoted it to a package rather than forcing past it.
+
+## Releasing the whole train
+
+`scripts/publish_train` drives `release_package` across every package in
+dependency order — for lockstep version bumps (D10: the packages "move
+together for now"):
+
+```bash
+# Preflight: dry-run every package in order. Changes nothing, exits non-zero
+# if any package would fail a real release.
+scripts/publish_train 0.2.0
+
+# Release + publish the train.
+HEX_API_KEY=... scripts/publish_train 0.2.0 --publish [--push]
+```
+
+Properties worth knowing:
+
+- **Sequential by design.** `--publish` requires a local `HEX_API_KEY` because
+  pushing all tags and letting CI publish cannot work for a full train: the
+  tag-triggered workflows run concurrently and the publish-order gate fails
+  every package whose deps have not landed yet. CI publishing is for single
+  releases.
+- **Idempotent resume.** A package already on hex.pm at the target version is
+  skipped; a package tagged locally but missing from hex.pm (a run that died
+  between tag and publish) is finished with a bare `mix hex.publish`. Re-run
+  the same command after a failure and the train continues where it stopped.
+- **Quality runs once** for the whole train, not per package
+  (`--skip-quality` skips it).
+- Preflight passes `--force` to the per-package dry runs: before the train has
+  run, in-train deps are necessarily absent from hex.pm. The real run keeps
+  the order gate armed — by publish time each dep must actually be there.
 
 ## Releasing a package
 

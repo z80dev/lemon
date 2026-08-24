@@ -4,7 +4,7 @@ defmodule LemonCore.Events do
 
   Each entry maps a `LemonCore.Event` type atom to the module describing its payload.
   Publishing a registered type with a payload that is neither the right struct nor a map
-  is a bug; `LemonCore.Bus.broadcast_event/3` catches it in `:dev` and `:test`.
+  is a bug; `LemonCore.Bus.broadcast_event/4` catches it in `:dev` and `:test`.
 
   Full catalog, migration order and the versioning rules live in
   `docs/platform/bus-events.md` in the Lemon repository.
@@ -13,7 +13,7 @@ defmodule LemonCore.Events do
 
   Only *platform contract* topics are registered — those whose payload crosses an app
   boundary or reaches the control plane and its clients: `run:<id>`, `session:<key>`,
-  `exec_approvals`, `cron`, `system`, `goals`, `routing_feedback`.
+  `exec_approvals`, `cron`, `system`, `goals`, `routing_feedback`, `channels`.
 
   Topics whose publisher and every subscriber live in one app (`nodes`, `presence`,
   `run_graph:*`, `parent_question:*`, and the sim/arena family) are deliberately absent.
@@ -22,8 +22,20 @@ defmodule LemonCore.Events do
 
   ## Compatibility
 
-  Every payload module accepts a legacy free-form map through `from_map/1`, and implements
-  `Access` so consumers written against maps keep working for one deprecation cycle.
+  Payload structs do **not** implement `Access`: `payload[:key]` raises, and a consumer reads
+  a field or pattern-matches the struct. A consumer that may still be handed a legacy map —
+  one relaying events from another node, or reading an event injected through the control
+  plane's `events.ingest` — coerces once at its entry point with `coerce/2`, rather than
+  carrying key-probing downstream into the code that reads the payload:
+
+      def handle_info(%LemonCore.Event{type: :run_completed, payload: payload}, state) do
+        %Events.RunCompleted{completed: completed} = coerce(:run_completed, payload)
+        ...
+      end
+
+  `from_map/1` on every payload module is what makes that safe: it accepts string keys, drops
+  unknown ones, and coerces nested payloads. `cast/2` is the strict counterpart for trust
+  boundaries, where a malformed payload should be refused with a reason rather than relayed.
   """
 
   alias LemonCore.Events
@@ -69,7 +81,10 @@ defmodule LemonCore.Events do
     goal_loop_status: Events.GoalChanged,
 
     # routing_feedback
-    routing_feedback: Events.RoutingFeedback
+    routing_feedback: Events.RoutingFeedback,
+
+    # channels
+    channel_delivery: Events.ChannelDelivery
   }
 
   @nested [Events.Completion, Events.Action, Events.ApprovalPending]

@@ -176,6 +176,38 @@ defmodule LemonCore.ConfigCache do
     :ok
   end
 
+  @doc """
+  Drop every cached entry in the default cache instance.
+
+  A no-op when the cache is not running. Used when config files or environment
+  variables change at runtime, so entries resolved under the old rules are not
+  served.
+  """
+  @spec clear() :: :ok
+  def clear, do: clear(__MODULE__)
+
+  @doc """
+  Drop every cached entry in a specific cache instance.
+
+  Routed through the cache server rather than deleting from the caller's
+  process, so a clear queues behind in-flight loads: a load that read the
+  world (e.g. the resolver set) before the clear cannot insert its stale row
+  after the table was wiped and have it served for the node's lifetime.
+  """
+  @spec clear(server()) :: :ok
+  def clear(server) do
+    if available?(server) do
+      _ = GenServer.call(server, :clear, call_timeout(server, []))
+    end
+
+    :ok
+  catch
+    # The server stopped between the availability check and the call; its ETS
+    # table died with it, so there is nothing stale left to serve.
+    :exit, {:noproc, _} -> :ok
+    :exit, {:normal, _} -> :ok
+  end
+
   @impl true
   def init(opts) do
     name = Keyword.get(opts, :name, __MODULE__)
@@ -243,6 +275,11 @@ defmodule LemonCore.ConfigCache do
             {:reply, {:error, exception, stacktrace}, state}
         end
     end
+  end
+
+  def handle_call(:clear, _from, state) do
+    _ = :ets.delete_all_objects(state.table)
+    {:reply, :ok, state}
   end
 
   def handle_call({:reload, cwd}, from, state) do

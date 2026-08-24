@@ -168,7 +168,6 @@ defmodule LemonRouter.RouterTest do
       meta: %{
         "agent_id" => "agent-x",
         "queue_mode" => :interrupt,
-        "engine_id" => "codex:gpt-test",
         "custom" => "value"
       }
     }
@@ -181,7 +180,6 @@ defmodule LemonRouter.RouterTest do
     assert request.session_key == "agent:agent-x:telegram:default:dm:42:thread:99"
     assert request.prompt == "run this"
     assert request.queue_mode == :interrupt
-    assert request.engine_id == "codex:gpt-test"
     assert request.meta["custom"] == "value"
     assert request.meta[:channel_id] == "telegram"
     assert request.meta[:account_id] == "default"
@@ -211,7 +209,6 @@ defmodule LemonRouter.RouterTest do
       "agent_id" => "control-agent",
       "prompt" => "continue",
       "queue_mode" => :collect,
-      "engine_id" => "claude:test",
       "cwd" => "/tmp/project",
       "meta" => %{"source" => "ws"}
     }
@@ -227,7 +224,6 @@ defmodule LemonRouter.RouterTest do
     assert request.agent_id == "control-agent"
     assert request.prompt == "continue"
     assert request.queue_mode == :collect
-    assert request.engine_id == "claude:test"
     assert request.cwd == "/tmp/project"
     assert request.meta["source"] == "ws"
     assert request.meta[:control_plane_ctx] == ctx

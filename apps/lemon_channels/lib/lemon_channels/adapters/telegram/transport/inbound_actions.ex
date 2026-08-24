@@ -13,10 +13,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport.InboundActions do
   alias LemonCore.ChatScope
   alias LemonCore.ResumeToken
 
-  @model_default_engine "lemon"
-
   @type callbacks :: %{
-          extract_explicit_resume_and_strip: (binary() -> {ResumeToken.t() | nil, binary()}),
+          extract_explicit_resume_and_strip: (binary() ->
+                                                {ResumeToken.t() | nil, binary()}
+                                                | {:unsupported, binary()}),
           extract_message_ids: (map() -> {integer() | nil, integer() | nil, integer() | nil}),
           current_thread_generation: (map(), integer() | nil, integer() | nil ->
                                         integer() | nil),
@@ -34,7 +34,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.InboundActions do
                                   {binary() | nil, boolean()}),
           resolve_thinking_hint: (map(), integer() | nil, integer() | nil ->
                                     {binary() | nil, atom() | nil}),
-          update_chat_state_last_engine: (binary(), binary() -> any())
+          send_system_message: (map(), integer(), integer() | nil, integer() | nil, binary() ->
+                                  any())
         }
 
   @spec submit_buffer(map(), map(), callbacks()) :: map()
@@ -49,6 +50,32 @@ defmodule LemonChannels.Adapters.Telegram.Transport.InboundActions do
   @spec execute_inbound_message(map(), map(), callbacks()) :: map()
   def execute_inbound_message(state, inbound, callbacks)
       when is_map(inbound) and is_map(state) and is_map(callbacks) do
+    case callbacks.extract_explicit_resume_and_strip.(inbound.message.text || "") do
+      {:unsupported, engine} ->
+        reject_unsupported_resume(state, inbound, callbacks, engine)
+
+      {explicit_resume, stripped_prompt} ->
+        execute_native_inbound_message(
+          state,
+          inbound,
+          callbacks,
+          explicit_resume,
+          stripped_prompt
+        )
+    end
+  end
+
+  def execute_inbound_message(state, _inbound, _callbacks), do: state
+
+  @spec execute_native_inbound_message(
+          map(),
+          map(),
+          callbacks(),
+          ResumeToken.t() | nil,
+          binary()
+        ) :: map()
+  defp execute_native_inbound_message(state, inbound, callbacks, explicit_resume, stripped_prompt)
+       when is_map(inbound) and is_map(state) and is_map(callbacks) do
     {chat_id, thread_id, user_msg_id} = callbacks.extract_message_ids.(inbound)
 
     progress_msg_id =
@@ -65,6 +92,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.InboundActions do
 
     meta0 =
       (inbound.meta || %{})
+      |> drop_non_native_resume()
       |> Map.put(:progress_msg_id, progress_msg_id)
       |> Map.put(:user_msg_id, user_msg_id)
       |> Map.put(:status_msg_id, nil)
@@ -82,12 +110,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.InboundActions do
         "forked=#{inspect(forked?)} progress_msg_id=#{inspect(progress_msg_id)}"
     )
 
-    directive_engine = meta0[:directive_engine]
-
-    if is_binary(directive_engine) and directive_engine != "" and is_binary(session_key) do
-      callbacks.update_chat_state_last_engine.(session_key, directive_engine)
-    end
-
     {model_hint, model_scope} =
       callbacks.resolve_model_hint.(state, session_key, chat_id, thread_id)
 
@@ -101,13 +123,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.InboundActions do
       |> maybe_put(:model_scope, model_scope)
       |> maybe_put(:thinking_level, thinking_hint)
       |> maybe_put(:thinking_scope, thinking_scope)
-
-    meta =
-      if is_binary(model_hint) and model_hint != "" and not is_binary(meta[:engine_id]) do
-        Map.put(meta, :engine_id, @model_default_engine)
-      else
-        meta
-      end
 
     _ =
       callbacks.maybe_index_telegram_msg_session.(state, scope, session_key, [
@@ -131,9 +146,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.InboundActions do
         state
       end
 
-    prompt = inbound.message.text || ""
-    {explicit_resume, stripped_prompt} = callbacks.extract_explicit_resume_and_strip.(prompt)
-
     meta =
       if is_nil(meta[:resume]) and is_nil(meta["resume"]) and
            match?(%ResumeToken{}, explicit_resume) do
@@ -152,7 +164,24 @@ defmodule LemonChannels.Adapters.Telegram.Transport.InboundActions do
     state
   end
 
-  def execute_inbound_message(state, _inbound, _callbacks), do: state
+  defp reject_unsupported_resume(state, inbound, callbacks, engine) do
+    {chat_id, thread_id, user_msg_id} = callbacks.extract_message_ids.(inbound)
+
+    if is_integer(chat_id) do
+      _ =
+        callbacks.send_system_message.(
+          state,
+          chat_id,
+          thread_id,
+          user_msg_id,
+          "Top-level resume only supports Lemon sessions. Use `lemon resume <session-id>` or /resume to choose a native session; #{engine} resumes are unsupported here."
+        )
+    end
+
+    state
+  rescue
+    _ -> state
+  end
 
   defp send_progress(state, chat_id, reply_to_message_id) do
     if is_integer(reply_to_message_id) do
@@ -191,4 +220,14 @@ defmodule LemonChannels.Adapters.Telegram.Transport.InboundActions do
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp drop_non_native_resume(meta) do
+    Enum.reduce([:resume, "resume"], meta, fn key, acc ->
+      case Map.get(acc, key) do
+        %ResumeToken{engine: "lemon"} -> acc
+        nil -> acc
+        _ -> Map.delete(acc, key)
+      end
+    end)
+  end
 end

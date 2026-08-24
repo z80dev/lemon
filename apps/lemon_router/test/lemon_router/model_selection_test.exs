@@ -3,114 +3,62 @@ defmodule LemonRouter.ModelSelectionTest do
 
   alias LemonRouter.ModelSelection
 
-  test "model precedence: explicit > meta > session > profile > history > default" do
-    resolved =
-      ModelSelection.resolve(%{
-        explicit_model: "explicit-model",
-        meta_model: "meta-model",
-        session_model: "session-model",
-        profile_model: "profile-model",
-        history_model: "history-model",
-        default_model: "default-model"
-      })
-
-    assert resolved.model == "explicit-model"
-
-    resolved_2 =
-      ModelSelection.resolve(%{
-        explicit_model: nil,
-        meta_model: nil,
-        session_model: "session-model",
-        profile_model: "profile-model",
-        history_model: "history-model",
-        default_model: "default-model"
-      })
-
-    assert resolved_2.model == "session-model"
-  end
-
-  test "history_model is used when higher-precedence slots are empty" do
-    resolved =
-      ModelSelection.resolve(%{
-        explicit_model: nil,
-        meta_model: nil,
-        session_model: nil,
-        profile_model: nil,
-        history_model: "history-model",
-        default_model: "default-model"
-      })
-
-    assert resolved.model == "history-model"
-  end
-
-  test "history_model does not override profile_model" do
-    resolved =
-      ModelSelection.resolve(%{
-        profile_model: "profile-model",
-        history_model: "history-model",
-        default_model: "default-model"
-      })
-
-    assert resolved.model == "profile-model"
-  end
-
-  test "history_model is ignored when nil; falls through to default" do
-    resolved =
-      ModelSelection.resolve(%{
-        history_model: nil,
-        default_model: "default-model"
-      })
-
-    assert resolved.model == "default-model"
-  end
-
-  test "engine precedence: resume > explicit > model > profile" do
-    assert "codex" ==
+  test "resolves the highest-precedence model and returns model-only output" do
+    assert %{model: "explicit-model"} ==
              ModelSelection.resolve(%{
-               resume_engine: "codex",
-               explicit_engine_id: "claude",
-               explicit_model: "opencode:latest",
-               profile_default_engine: "lemon"
-             }).engine_id
+               explicit_model: "explicit-model",
+               meta_model: "meta-model",
+               session_model: "session-model",
+               profile_model: "profile-model",
+               history_model: "history-model",
+               default_model: "default-model"
+             })
 
-    assert "claude" ==
+    assert %{model: "session-model"} ==
              ModelSelection.resolve(%{
-               explicit_engine_id: "claude",
-               explicit_model: "codex:latest",
-               profile_default_engine: "lemon"
-             }).engine_id
-
-    assert "codex:gpt-test" ==
-             ModelSelection.resolve(%{
-               explicit_model: "codex:gpt-test",
-               profile_default_engine: "lemon"
-             }).engine_id
-
-    assert "lemon" ==
-             ModelSelection.resolve(%{
-               explicit_model: "openai:gpt-4.1",
-               profile_default_engine: "lemon"
-             }).engine_id
+               explicit_model: nil,
+               meta_model: nil,
+               session_model: "session-model",
+               profile_model: "profile-model",
+               history_model: "history-model",
+               default_model: "default-model"
+             })
   end
 
-  test "warns when explicit engine conflicts with model-implied engine" do
-    resolved =
-      ModelSelection.resolve(%{
-        explicit_engine_id: "claude",
-        explicit_model: "codex:gpt-5"
-      })
-
-    assert is_binary(resolved.warning)
-    assert resolved.warning =~ "implies engine"
+  test "uses history_model when higher-precedence slots are empty" do
+    assert %{model: "history-model"} ==
+             ModelSelection.resolve(%{
+               explicit_model: nil,
+               meta_model: nil,
+               session_model: nil,
+               profile_model: nil,
+               history_model: "history-model",
+               default_model: "default-model"
+             })
   end
 
-  test "does not warn when explicit and model engine prefixes align" do
-    resolved =
-      ModelSelection.resolve(%{
-        explicit_engine_id: "codex",
-        explicit_model: "codex:gpt-5"
-      })
+  test "does not let history_model override profile_model" do
+    assert %{model: "profile-model"} ==
+             ModelSelection.resolve(%{
+               profile_model: "profile-model",
+               history_model: "history-model",
+               default_model: "default-model"
+             })
+  end
 
-    assert resolved.warning == nil
+  test "falls through to default_model when history_model is nil" do
+    assert %{model: "default-model"} ==
+             ModelSelection.resolve(%{
+               history_model: nil,
+               default_model: "default-model"
+             })
+  end
+
+  test "normalizes a selected model without introducing routing fields" do
+    assert %{model: "model-name"} ==
+             ModelSelection.resolve(%{
+               explicit_model: "  model-name  ",
+               default_model: "default-model"
+             })
   end
 end

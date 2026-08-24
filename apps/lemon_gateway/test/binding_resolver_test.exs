@@ -1,7 +1,7 @@
 defmodule LemonGateway.BindingResolverTest do
   use ExUnit.Case, async: false
 
-  alias LemonCore.{ChatScope, ResumeToken}
+  alias LemonCore.ChatScope
   alias LemonGateway.{Binding, BindingResolver, Config}
 
   setup do
@@ -64,7 +64,7 @@ defmodule LemonGateway.BindingResolverTest do
     test "finds chat-level binding" do
       setup_config(
         bindings: [
-          %{transport: :telegram, chat_id: 12_345, project: "myapp", default_engine: "codex"}
+          %{transport: :telegram, chat_id: 12_345, project: "myapp"}
         ]
       )
 
@@ -73,7 +73,6 @@ defmodule LemonGateway.BindingResolverTest do
 
       assert %Binding{transport: :telegram, chat_id: 12_345} = binding
       assert binding.project == "myapp"
-      assert binding.default_engine == "codex"
     end
 
     test "topic binding takes precedence over chat binding" do
@@ -103,7 +102,6 @@ defmodule LemonGateway.BindingResolverTest do
             chat_id: 12_345,
             topic_id: 777,
             project: "topic_proj",
-            default_engine: "topic_engine",
             queue_mode: :steer
           }
         ]
@@ -116,7 +114,6 @@ defmodule LemonGateway.BindingResolverTest do
       assert binding.chat_id == 12_345
       assert binding.topic_id == 777
       assert binding.project == "topic_proj"
-      assert binding.default_engine == "topic_engine"
       assert binding.queue_mode == :steer
     end
 
@@ -165,7 +162,6 @@ defmodule LemonGateway.BindingResolverTest do
             transport: :telegram,
             chat_id: 12_345,
             project: "full_proj",
-            default_engine: "full_engine",
             queue_mode: :collect
           }
         ]
@@ -176,7 +172,6 @@ defmodule LemonGateway.BindingResolverTest do
 
       assert %Binding{} = binding
       assert binding.project == "full_proj"
-      assert binding.default_engine == "full_engine"
       assert binding.queue_mode == :collect
     end
 
@@ -285,284 +280,6 @@ defmodule LemonGateway.BindingResolverTest do
     end
   end
 
-  describe "resolve_engine/3" do
-    test "resume token engine takes highest precedence" do
-      setup_config(
-        default_engine: "global_default",
-        bindings: [
-          %{transport: :telegram, chat_id: 12_345, default_engine: "binding_engine"}
-        ]
-      )
-
-      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
-      resume = %ResumeToken{engine: "resume_engine", value: "abc123"}
-
-      # Resume token wins over everything
-      assert BindingResolver.resolve_engine(scope, "hint_engine", resume) == "resume_engine"
-    end
-
-    test "resume token with nil engine falls back to hint" do
-      setup_config(
-        default_engine: "global_default",
-        bindings: [
-          %{transport: :telegram, chat_id: 12_345, default_engine: "binding_engine"}
-        ]
-      )
-
-      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
-      # Create a map that mimics a resume token with nil engine
-      resume = %{engine: nil, value: "abc123"}
-
-      # Falls back to hint since resume.engine is nil
-      assert BindingResolver.resolve_engine(scope, "hint_engine", resume) == "hint_engine"
-    end
-
-    test "engine hint takes precedence over binding" do
-      setup_config(
-        default_engine: "global_default",
-        bindings: [
-          %{transport: :telegram, chat_id: 12_345, default_engine: "binding_engine"}
-        ]
-      )
-
-      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
-
-      # Hint wins over binding
-      assert BindingResolver.resolve_engine(scope, "hint_engine", nil) == "hint_engine"
-    end
-
-    test "topic binding engine takes precedence over chat binding" do
-      setup_config(
-        default_engine: "global_default",
-        bindings: [
-          %{transport: :telegram, chat_id: 12_345, default_engine: "chat_engine"},
-          %{transport: :telegram, chat_id: 12_345, topic_id: 999, default_engine: "topic_engine"}
-        ]
-      )
-
-      topic_scope = %ChatScope{transport: :telegram, chat_id: 12_345, topic_id: 999}
-
-      # Topic binding engine wins
-      assert BindingResolver.resolve_engine(topic_scope, nil, nil) == "topic_engine"
-    end
-
-    test "chat binding engine takes precedence over project default" do
-      File.mkdir_p!("/tmp/test_project")
-
-      setup_config(
-        default_engine: "global_default",
-        projects: %{
-          "test_proj" => %{root: "/tmp/test_project", default_engine: "project_engine"}
-        },
-        bindings: [
-          %{
-            transport: :telegram,
-            chat_id: 12_345,
-            project: "test_proj",
-            default_engine: "chat_engine"
-          }
-        ]
-      )
-
-      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
-
-      # Chat binding engine wins over project
-      assert BindingResolver.resolve_engine(scope, nil, nil) == "chat_engine"
-    end
-
-    test "project default engine takes precedence over global" do
-      File.mkdir_p!("/tmp/test_project2")
-
-      setup_config(
-        default_engine: "global_default",
-        projects: %{
-          "test_proj" => %{root: "/tmp/test_project2", default_engine: "project_engine"}
-        },
-        bindings: [
-          %{transport: :telegram, chat_id: 12_345, project: "test_proj"}
-        ]
-      )
-
-      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
-
-      # Project engine wins over global
-      assert BindingResolver.resolve_engine(scope, nil, nil) == "project_engine"
-    end
-
-    test "falls back to global default when no other engine specified" do
-      setup_config(default_engine: "global_default")
-
-      scope = %ChatScope{transport: :telegram, chat_id: 99_999}
-
-      assert BindingResolver.resolve_engine(scope, nil, nil) == "global_default"
-    end
-
-    test "returns Config default_engine when no engine configured in binding/project" do
-      # Config module has a default_engine of "lemon" when not explicitly set
-      setup_config([])
-
-      scope = %ChatScope{transport: :telegram, chat_id: 99_999}
-
-      # Falls back to Config's default value
-      assert BindingResolver.resolve_engine(scope, nil, nil) == "lemon"
-    end
-
-    test "uses ConfigLoader default_engine when Config process is not running" do
-      assert Process.whereis(Config) == nil
-      Application.put_env(:lemon_gateway, Config, default_engine: "loader_default")
-
-      scope = %ChatScope{transport: :telegram, chat_id: 99_999}
-
-      assert BindingResolver.resolve_engine(scope, nil, nil) == "loader_default"
-    end
-
-    test "falls back to lemon when Config process is not running and loader has no default" do
-      assert Process.whereis(Config) == nil
-
-      scope = %ChatScope{transport: :telegram, chat_id: 99_999}
-
-      assert BindingResolver.resolve_engine(scope, nil, nil) == "lemon"
-    end
-
-    test "binding with project but no project engine falls back to global" do
-      File.mkdir_p!("/tmp/test_project_no_engine")
-
-      setup_config(
-        default_engine: "global_default",
-        projects: %{
-          "test_proj" => %{root: "/tmp/test_project_no_engine"}
-        },
-        bindings: [
-          %{transport: :telegram, chat_id: 12_345, project: "test_proj"}
-        ]
-      )
-
-      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
-
-      # Falls back to global since project has no default_engine
-      assert BindingResolver.resolve_engine(scope, nil, nil) == "global_default"
-    end
-
-    test "binding with non-existent project falls back to global" do
-      setup_config(
-        default_engine: "global_default",
-        projects: %{},
-        bindings: [
-          %{transport: :telegram, chat_id: 12_345, project: "nonexistent_proj"}
-        ]
-      )
-
-      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
-
-      # Falls back to global since project doesn't exist
-      assert BindingResolver.resolve_engine(scope, nil, nil) == "global_default"
-    end
-
-    test "binding with nil default_engine and project uses project engine" do
-      File.mkdir_p!("/tmp/test_project_for_nil")
-
-      setup_config(
-        default_engine: "global_default",
-        projects: %{
-          "proj" => %{root: "/tmp/test_project_for_nil", default_engine: "proj_engine"}
-        },
-        bindings: [
-          %{transport: :telegram, chat_id: 12_345, project: "proj", default_engine: nil}
-        ]
-      )
-
-      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
-
-      # binding.default_engine is nil, so falls through to project engine
-      assert BindingResolver.resolve_engine(scope, nil, nil) == "proj_engine"
-    end
-
-    test "empty hint string falls back to binding/global resolution" do
-      setup_config(
-        default_engine: "global_default",
-        bindings: [
-          %{transport: :telegram, chat_id: 12_345, default_engine: "binding_engine"}
-        ]
-      )
-
-      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
-
-      # Empty hint is treated as absent and falls through to binding/global resolution.
-      assert BindingResolver.resolve_engine(scope, "", nil) == "binding_engine"
-    end
-
-    test "projects config being empty is handled" do
-      setup_config(
-        default_engine: "global_default",
-        projects: %{},
-        bindings: [
-          %{transport: :telegram, chat_id: 12_345, project: "some_proj"}
-        ]
-      )
-
-      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
-
-      # Falls back to global since project doesn't exist
-      assert BindingResolver.resolve_engine(scope, nil, nil) == "global_default"
-    end
-
-    test "project with non-string default_engine is ignored" do
-      File.mkdir_p!("/tmp/test_project_int_engine")
-
-      setup_config(
-        default_engine: "global_default",
-        projects: %{
-          "proj" => %{root: "/tmp/test_project_int_engine", default_engine: 123}
-        },
-        bindings: [
-          %{transport: :telegram, chat_id: 12_345, project: "proj"}
-        ]
-      )
-
-      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
-
-      # Falls back to global since project engine is not a string
-      assert BindingResolver.resolve_engine(scope, nil, nil) == "global_default"
-    end
-
-    test "full priority chain: resume > hint > topic > chat > project > global" do
-      File.mkdir_p!("/tmp/test_full_chain")
-
-      setup_config(
-        default_engine: "global_default",
-        projects: %{
-          "chain_proj" => %{root: "/tmp/test_full_chain", default_engine: "project_engine"}
-        },
-        bindings: [
-          %{
-            transport: :telegram,
-            chat_id: 12_345,
-            project: "chain_proj",
-            default_engine: "chat_engine"
-          },
-          %{transport: :telegram, chat_id: 12_345, topic_id: 999, default_engine: "topic_engine"}
-        ]
-      )
-
-      scope = %ChatScope{transport: :telegram, chat_id: 12_345, topic_id: 999}
-      resume = %ResumeToken{engine: "resume_engine", value: "abc"}
-
-      # Test each level of priority by removing higher priority items
-      # 1. Resume wins
-      assert BindingResolver.resolve_engine(scope, "hint", resume) == "resume_engine"
-
-      # 2. Hint wins (no resume)
-      assert BindingResolver.resolve_engine(scope, "hint", nil) == "hint"
-
-      # 3. Topic binding wins (no hint)
-      assert BindingResolver.resolve_engine(scope, nil, nil) == "topic_engine"
-
-      # 4. Chat binding wins (chat scope, no hint)
-      chat_scope = %ChatScope{transport: :telegram, chat_id: 12_345}
-      assert BindingResolver.resolve_engine(chat_scope, nil, nil) == "chat_engine"
-    end
-  end
-
   describe "resolve_cwd/1" do
     test "returns nil when no binding exists" do
       setup_config([])
@@ -575,7 +292,7 @@ defmodule LemonGateway.BindingResolverTest do
     test "returns nil when binding has no project" do
       setup_config(
         bindings: [
-          %{transport: :telegram, chat_id: 12_345, default_engine: "codex"}
+          %{transport: :telegram, chat_id: 12_345}
         ]
       )
 
@@ -629,7 +346,7 @@ defmodule LemonGateway.BindingResolverTest do
     test "returns nil when project has no root field" do
       setup_config(
         projects: %{
-          "myapp" => %{default_engine: "codex"}
+          "myapp" => %{}
         },
         bindings: [
           %{transport: :telegram, chat_id: 12_345, project: "myapp"}
@@ -891,7 +608,6 @@ defmodule LemonGateway.BindingResolverTest do
             chat_id: 12_345,
             topic_id: 999,
             project: "myproj",
-            default_engine: "myengine",
             queue_mode: "collect"
           }
         ]
@@ -905,7 +621,6 @@ defmodule LemonGateway.BindingResolverTest do
       assert binding.chat_id == 12_345
       assert binding.topic_id == 999
       assert binding.project == "myproj"
-      assert binding.default_engine == "myengine"
       assert binding.queue_mode == :collect
     end
 
@@ -941,7 +656,6 @@ defmodule LemonGateway.BindingResolverTest do
       assert binding.chat_id == 12_345
       assert binding.topic_id == nil
       assert binding.project == nil
-      assert binding.default_engine == nil
       assert binding.queue_mode == nil
     end
   end
@@ -985,14 +699,11 @@ defmodule LemonGateway.BindingResolverTest do
       assert BindingResolver.resolve_cwd(scope) == "/tmp/config_test_proj"
     end
 
-    test "uses Config.get(:default_engine) as fallback" do
-      setup_config(default_engine: "config_default_engine")
+    test "resolved config has no top-level engine fields" do
+      setup_config(max_concurrent_runs: 2)
 
-      # Verify Config.get returns expected default_engine
-      assert Config.get(:default_engine) == "config_default_engine"
-
-      scope = %ChatScope{transport: :telegram, chat_id: 99_999}
-      assert BindingResolver.resolve_engine(scope, nil, nil) == "config_default_engine"
+      refute Map.has_key?(Config.get(), :default_engine)
+      refute Map.has_key?(Config.get(), :engines)
     end
 
     test "handles Config.get returning nil for bindings" do
@@ -1009,55 +720,6 @@ defmodule LemonGateway.BindingResolverTest do
   end
 
   describe "fallback chains" do
-    test "engine fallback: no binding -> global default" do
-      setup_config(default_engine: "global_engine")
-
-      scope = %ChatScope{transport: :telegram, chat_id: 99_999}
-      assert BindingResolver.resolve_engine(scope, nil, nil) == "global_engine"
-    end
-
-    test "engine fallback: binding without engine or project -> global default" do
-      setup_config(
-        default_engine: "global_engine",
-        bindings: [
-          %{transport: :telegram, chat_id: 12_345}
-        ]
-      )
-
-      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
-      assert BindingResolver.resolve_engine(scope, nil, nil) == "global_engine"
-    end
-
-    test "engine fallback: binding with project but project missing -> global default" do
-      setup_config(
-        default_engine: "global_engine",
-        projects: %{},
-        bindings: [
-          %{transport: :telegram, chat_id: 12_345, project: "nonexistent"}
-        ]
-      )
-
-      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
-      assert BindingResolver.resolve_engine(scope, nil, nil) == "global_engine"
-    end
-
-    test "engine fallback: binding with project but project has no engine -> global default" do
-      File.mkdir_p!("/tmp/no_engine_proj")
-
-      setup_config(
-        default_engine: "global_engine",
-        projects: %{
-          "no_engine" => %{root: "/tmp/no_engine_proj"}
-        },
-        bindings: [
-          %{transport: :telegram, chat_id: 12_345, project: "no_engine"}
-        ]
-      )
-
-      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
-      assert BindingResolver.resolve_engine(scope, nil, nil) == "global_engine"
-    end
-
     test "cwd fallback: no binding -> nil" do
       setup_config([])
 
@@ -1068,7 +730,7 @@ defmodule LemonGateway.BindingResolverTest do
     test "cwd fallback: binding without project -> nil" do
       setup_config(
         bindings: [
-          %{transport: :telegram, chat_id: 12_345, default_engine: "engine"}
+          %{transport: :telegram, chat_id: 12_345}
         ]
       )
 
@@ -1091,7 +753,7 @@ defmodule LemonGateway.BindingResolverTest do
     test "cwd fallback: binding with project but project has no root -> nil" do
       setup_config(
         projects: %{
-          "no_root" => %{default_engine: "engine"}
+          "no_root" => %{}
         },
         bindings: [
           %{transport: :telegram, chat_id: 12_345, project: "no_root"}

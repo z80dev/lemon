@@ -9,3 +9,4 @@ ExUnit.start(exclude: exclude_tags)
 
 # Compile and load support files
 Code.require_file("support/http_stub.ex", __DIR__)
+Code.require_file("support/update_fixture_server.ex", __DIR__)

@@ -4,7 +4,7 @@ Channel adapter application for external messaging platforms (Telegram, Discord,
 
 ## Quick Orientation
 
-LemonChannels sits between external messaging platforms and the Lemon session engine. It has three jobs:
+LemonChannels sits between external messaging platforms and Lemon's native execution pipeline. It has three jobs:
 
 1. **Inbound**: Receive messages from platforms, normalize them locally, and submit only canonical `LemonCore.RunRequest` structs to `LemonRouter` via `LemonCore.RouterBridge.submit_run/1`.
 2. **Semantic outbound rendering**: Accept router-owned `LemonCore.DeliveryIntent` values, render channel-specific UX, and keep platform presentation state inside `lemon_channels`.
@@ -58,7 +58,7 @@ share a group and are never delivered concurrently to prevent reordering.
 |------|--------|-------------|
 | `lib/lemon_channels.ex` | `LemonChannels` | Public API facade, delegates to Registry and Outbox |
 | `lib/lemon_channels/application.ex` | `LemonChannels.Application` | Supervision tree, adapter lifecycle (`register_and_start_adapter/2`, `start_adapter/2`, `stop_adapter/1`) |
-| `lib/lemon_channels/dispatcher.ex` | `LemonChannels.Dispatcher` | Router-facing semantic delivery entrypoint. Picks a channel renderer from `DeliveryIntent.route.channel_id`. |
+| `lib/lemon_channels/dispatcher.ex` | `LemonChannels.Dispatcher` | Router-facing semantic delivery entrypoint. Picks a channel renderer from `DeliveryIntent.route.channel_id`. After every dispatch (success or failure) it emits `[:lemon, :channels, :dispatch]` telemetry and broadcasts a typed `LemonCore.Events.ChannelDelivery` on the `"channels"` bus topic — the hook for tests and the control plane to observe exactly what lemon sent to a channel. Emission is post-result and rescue-wrapped, so it can never break a real send. |
 | `lib/lemon_channels/presentation_state.ex` | `LemonChannels.PresentationState` | Channels-owned presentation state: message ids, pending creates, pending edits, deferred/coalesced edits, deferred chunk sets for long Telegram/Discord replies, post-edit follow-up chunks, and surface tracking. Telegram and Discord overflow follow-up chunks should preserve the original reply target so long answers stay attached to the triggering prompt instead of jumping to the topic root, and final long-answer tails for an already-live message must wait for the winning edit ack before they are enqueued. If that ack wins the race before the tails or deferred final edit finish staging, `PresentationState` must flush those late-staged follow-ups or deferred chunks immediately instead of waiting for another ack that will never arrive. Supports moving a live message from one semantic surface to another so router coalescers can keep editing the same Telegram message across answer/status handoffs, including task-specific status surfaces such as `{:status_task, task_id}`. |
 | `lib/lemon_channels/plugin.ex` | `LemonChannels.Plugin` | Behaviour definition: `id/0`, `meta/0`, `child_spec/1`, `normalize_inbound/1`, `deliver/1`, `gateway_methods/0` |
 | `lib/lemon_channels/registry.ex` | `LemonChannels.Registry` | GenServer plugin registry, status tracking (running/stopped/connected) from DynamicSupervisor children |
@@ -70,8 +70,7 @@ share a group and are never delivered concurrently to prevent reordering.
 | `lib/lemon_channels/model_policy.ex` | `LemonChannels.ModelPolicy` | Channels-owned route-based model and thinking policy resolution for adapters. Persists through `LemonCore.Store` via `ModelPolicyStore` using the unchanged `:model_policies` table. |
 | `lib/lemon_channels/model_policy_store.ex` | `LemonChannels.ModelPolicyStore` | Typed wrapper for persisted route-based model policies. |
 | `lib/lemon_channels/discord/known_target_store.ex` | `LemonChannels.Discord.KnownTargetStore` | Store-backed Discord channel/thread directory used by script-send list mode. |
-| `lib/lemon_channels/binding_resolver.ex` | `LemonChannels.BindingResolver` | Maps ChatScope to project/engine/agent/cwd/queue_mode. Delegates to `LemonCore.BindingResolver`. |
-| `lib/lemon_channels/engine_registry.ex` | `LemonChannels.EngineRegistry` | Temporary parser-only compatibility shim for resume lines when gateway/custom engine modules expose custom syntax. Validation and formatting should use `LemonCore.EngineCatalog` / `LemonCore.ResumeToken`. |
+| `lib/lemon_channels/binding_resolver.ex` | `LemonChannels.BindingResolver` | Maps ChatScope to project/agent/cwd/queue_mode. Delegates to `LemonCore.BindingResolver`; bindings never select the fixed native top-level executor. |
 | `lib/lemon_channels/gateway_config.ex` | `LemonChannels.GatewayConfig` | Channels-local config facade. Prefers `:lemon_gateway` full-replacement runtime config when present, then delegates to `LemonCore.GatewayConfig`. |
 | `lib/lemon_channels/checkpoint_status_message.ex` | `LemonChannels.CheckpointStatusMessage` | Shared redacted `/checkpoint` and `/rollback` formatter/action handler for Telegram and Discord. Calls `LemonCore.Checkpoint` for diff/restore and projects redacted lifecycle event counts, browsable event history, and pushed active-run event notices while keeping chat output free of raw paths, file contents, and session ids. |
 | `lib/lemon_channels/kanban_status_message.ex` | `LemonChannels.KanbanStatusMessage` | Shared redacted `/kanban` command formatter for Telegram and Discord. Uses `LemonAgent.Workspace.KanbanStore` directly for board/task state and calls the automation dispatcher by configured module atom at runtime to keep compile-time boundaries clean. |
@@ -112,11 +111,11 @@ share a group and are never delivered concurrently to prevent reordering.
 | `adapters/telegram/transport/memory_reflection.ex` | Pure helpers for `/new` memory-reflection transcript assembly and prompt generation. |
 | `adapters/telegram/transport/message_buffer.ex` | Debounce buffering for rapid-fire user messages before routing, including timer replacement and merge semantics. |
 | `adapters/telegram/transport/model_picker.ex` | `/model` picker flow, provider/model pagination, and selection-state transitions. |
-| `adapters/telegram/transport/per_chat_state.ex` | Telegram per-thread chat state, resume index, and generation bookkeeping helpers. |
-| `adapters/telegram/transport/resume_selection.ex` | Explicit resume parsing, recent-session lookup, and resume formatting helpers. |
+| `adapters/telegram/transport/per_chat_state.ex` | Telegram per-thread chat state, native resume index, and generation bookkeeping helpers. Historical vendor entries remain readable but are quarantined from top-level selection. |
+| `adapters/telegram/transport/resume_selection.ex` | Native-only explicit resume parsing, recent native-session lookup, and resume formatting helpers. |
 | `adapters/telegram/transport/session_routing.ex` | Session-key derivation, message-id reply routing, and parallel-session bookkeeping. |
 | `adapters/telegram/transport/topic_command.ex` | `/topic` command handling extracted from the transport shell. |
-| `adapters/telegram/transport/update_processor.ex` | Authorization, dedup, routing pipeline, known-target indexing via `LemonChannels.Telegram.KnownTargetStore` with 30s throttle, engine directive parsing. |
+| `adapters/telegram/transport/update_processor.ex` | Authorization, deduplication, routing pipeline, known-target indexing via `LemonChannels.Telegram.KnownTargetStore` with 30s throttle, and native-only resume parsing. |
 | `adapters/telegram/transport/voice_handler.ex` | Voice-download and transcription orchestration before normal inbound routing. |
 | `adapters/telegram/renderer.ex` | Telegram semantic renderer for send-vs-edit behavior, truncation, presentation-state-aware delivery, and file-sensitive final idempotency. Same-text final replays are suppressed unless auto-send file metadata changes. |
 | `adapters/telegram/status_renderer.ex` | Telegram tool-status rendering and controls presentation. |
@@ -131,12 +130,13 @@ share a group and are never delivered concurrently to prevent reordering.
 |------|-------------|
 | `telegram/api.ex` | Raw Bot API calls: send_message, edit_message_text, get_updates, send_document, send_photo, send_media_group, etc. |
 | `telegram/delivery.ex` | High-level enqueue helpers (`enqueue_send/3`, `enqueue_edit/3`) backed by Outbox. |
+| `telegram/fake_api.ex` | In-process fake of `telegram/api.ex` for hermetic transport tests: update queue with real getUpdates offset semantics, `simulate_message`/`simulate_callback_query` builders, outbound-call capture with `sent/0`/`await_send/2`. Select via `[gateway.telegram] api_mod = "LemonChannels.Telegram.FakeAPI"`. |
 | `telegram/formatter.ex` | Markdown to plain text + Telegram entities. Avoids MarkdownV2 escaping entirely. |
 | `telegram/known_target_store.ex` | Typed wrapper for Telegram known-target chat/topic metadata. |
 | `telegram/markdown.ex` | EarmarkParser AST renderer. Produces `{text, [entity]}` with correct UTF-16 offsets and renders markdown tables as pipe-delimited rows. |
-| `telegram/resume_index_store.ex` | Typed wrapper for Telegram message-id resume/session index tables. |
+| `telegram/resume_index_store.ex` | Typed wrapper for Telegram message-id session and resume index tables; legacy vendor values remain readable but cannot resume a top-level run. |
 | `telegram/state_store.ex` | Typed wrapper for Telegram session/topic preference and generation state. |
-| `telegram/truncate.ex` | Truncates to 4096 chars preserving resume lines at the end. |
+| `telegram/truncate.ex` | Truncates to 4096 chars while preserving native resume lines. |
 | `telegram/trigger_mode.ex` | Per-chat/topic `:all` vs `:mentions` trigger mode stored in ETS. |
 | `telegram/offset_store.ex` | Persists getUpdates offset via `LemonCore.Store`. |
 | `telegram/poller_lock.ex` | Global + file-based lock preventing duplicate pollers for the same account/token. |
@@ -248,7 +248,7 @@ Defined in `LemonChannels.Capabilities`:
 
 - Plain text + entities: `telegram/formatter.ex` -- converts markdown to `{text, opts}` where opts may contain `%{entities: [...]}`
 - Markdown AST rendering: `telegram/markdown.ex` -- EarmarkParser-based, produces UTF-16 offset entities and preserves markdown table column boundaries
-- Truncation: `telegram/truncate.ex` -- preserves resume lines at end
+- Truncation: `telegram/truncate.ex` -- preserves native resume lines at the end
 
 ### Ownership boundary to preserve
 
@@ -274,11 +274,11 @@ Defined in `LemonChannels.Capabilities`:
 2. Create or update the handler module (e.g., `XAPI.GatewayMethods`)
 3. Methods have a name, scope list (e.g., `[:agent]`), and handler module
 
-### Changing binding/engine resolution
+### Changing bindings and native resume handling
 
-- `binding_resolver.ex` delegates to `LemonCore.BindingResolver` -- most logic lives in `lemon_core`
-- `engine_registry.ex` for adding/removing known engines or changing resume token format
-- Resolution priority: resume token > engine hint > binding default > project default > global default
+- `binding_resolver.ex` delegates project, agent, cwd, and queue-mode lookup to `LemonCore.BindingResolver`; it does not resolve an executor.
+- Channel resume parsing is native-only. Historical vendor tokens stay readable in persisted state and indexes but are quarantined from automatic and explicit top-level resume selection.
+- Delegated tasks run as native in-process subagents; a task's subagent identity and resume metadata never select a channel or gateway top-level run.
 
 ### Modifying the `/model` picker (Telegram)
 
@@ -364,7 +364,7 @@ Outbox.stats()
 | Command | Description |
 |---------|-------------|
 | `/new` | Start new session (immediate ack, async cleanup, generation increment) |
-| `/resume` | Resume previous session |
+| `/resume` | Resume a previous native session; historical vendor entries remain visible for history but cannot be resumed |
 | `/model` | Interactive provider/model picker via reply keyboard |
 | `/goal` | Preview durable goal status/set with optional max-continuation budget/pause/resume/continue/loop controls, opt-in auto loop scheduling, and clear for the current session |
 | `/kanban` | Preview durable kanban board/task/archive/dispatcher controls with redacted board/task output |
@@ -379,9 +379,9 @@ Outbox.stats()
 
 ### Generation-Scoped Indexing
 
-Session/resume indices use generation-scoped keys:
+Session/native-resume indices use generation-scoped keys:
 - `:telegram_msg_session` keys: `{account_id, chat_id, thread_id, generation, msg_id}`
-- `:telegram_msg_resume` keys: `{account_id, chat_id, thread_id, generation, msg_id}`
+- `:telegram_msg_resume` keys: `{account_id, chat_id, thread_id, generation, msg_id}`; vendor values remain readable but are quarantined from top-level selection
 
 `/new` increments `:telegram_thread_generation` for `{account_id, chat_id, thread_id}` to invalidate stale mappings without full-table scans.
 
@@ -471,31 +471,63 @@ Auto-refresh is owned by the `XApi.TokenManager` GenServer in `apps/x_api`; the 
 - Preview `/rollback` slash commands alias the same redacted checkpoint rollback flow for Hermes-style command parity.
 - Add `LemonChannels.Adapters.Discord` to `config :lemon_channels, :adapters`
 
+## Doctor Diagnostics
+
+`LemonChannels.Doctor.Diagnostics` (config diagnostics), `Doctor.Readiness`
+(launch-gate summary), `Doctor.Checks.Channels` (the doctor check) and
+`Doctor.ProofSpec` (the per-channel smoke-proof vocabulary) live here rather
+than in `lemon_core`, which must not name a chat platform. They reach the
+doctor framework through the reference runtime's registrations in
+`config/config.exs`: `:doctor_runtime` keys `channel_diagnostics:`,
+`channel_readiness:` and `channel_proofs:`, plus the `:doctor_checks` list.
+`ProofSpec` implements `LemonCore.Doctor.ChannelProofs`; adding a platform gate
+or proof check name means editing `ProofSpec`, not core.
+
+All of it must stay redacted. Discord DM, free-response, reconnect, slash
+registration, deterministic slash and real client-click gates use
+`Doctor.Diagnostics` plus sanitized `LemonCore.Doctor.ProofDiagnostics`
+status/reason kinds, never raw Discord IDs, message bodies, bot tokens or
+secret names. Free-response checks distinguish a missing local Message Content
+Intent declaration from proof artifacts that still report Message Content
+Intent or unmentioned-message delivery drift after declaration. Slash
+client-click checks preserve stable reason kinds for missing, invalid,
+non-promotable and stale proof artifacts, so doctor and support bundles can
+point operators at the exact wait-mode proof step.
+
+`mix lemon.channels` prints the same redacted readiness summary from the CLI.
+
+## Gateway Config Sections
+
+`LemonChannels.Adapters.{Telegram,Discord,Xmtp}.Config` each implement
+`LemonCore.Config.Gateway.Channel` and are registered under
+`config :lemon_core, :gateway_channels`. A module owns one `[gateway.<id>]`
+section and everything named after it: `resolve/1` for the sub-table,
+`enabled?/1` for the `enable_<id>` flag (including its `LEMON_GATEWAY_ENABLE_*`
+override), `validate/2` for the section's rules, and the matching declarations
+in `LemonChannels.Env`. `LemonCore.Config` flattens the results back onto the
+legacy gateway map, so readers keep using `gateway[:telegram]` and
+`gateway[:enable_telegram]`. Shared TOML coercions live in
+`LemonChannels.Adapters.ConfigHelpers`.
+
+Adding a platform means adding a `Config` module, registering it, and declaring
+its variables here — never editing `LemonCore.Config.Gateway`.
+
 ## Binding Resolution
 
 ```elixir
 scope = %LemonCore.ChatScope{transport: :telegram, chat_id: 123, topic_id: 456}
 
 binding = LemonChannels.BindingResolver.resolve_binding(scope)
-engine  = LemonChannels.BindingResolver.resolve_engine(scope, engine_hint, resume)
 agent   = LemonChannels.BindingResolver.resolve_agent_id(scope)
 cwd     = LemonChannels.BindingResolver.resolve_cwd(scope)
 mode    = LemonChannels.BindingResolver.resolve_queue_mode(scope)
 ```
 
-Bindings from `GatewayConfig.get(:bindings)`. Projects from `GatewayConfig.get(:projects)`.
+Bindings from `GatewayConfig.get(:bindings)` retain project, agent, cwd, and queue-mode scope. They never select a top-level executor: channels always submit to the native executor. Projects come from `GatewayConfig.get(:projects)`.
 
-## Engine Registry
+## Native Resume Handling
 
-```elixir
-LemonCore.EngineCatalog.known?("claude")  # true
-LemonCore.EngineCatalog.normalize(" Claude ") # "claude"
-
-{:ok, %ResumeToken{engine: "claude", value: "abc123"}} =
-  LemonChannels.EngineRegistry.extract_resume("claude --resume abc123")
-```
-
-Default engines: `lemon echo codex claude droid opencode pi kimi`. Override via `config :lemon_core, :known_engines`.
+Top-level channel resume parsing and selection accept only native `lemon` tokens. Historical vendor tokens in chat state or message indexes remain readable for history and rollback, but are quarantined from explicit and automatic top-level selection. Delegated tasks execute as native in-process subagents, whose identity and resume metadata are retained in task results without becoming a channel selector.
 
 ## Runtime Bridge
 
@@ -553,7 +585,6 @@ In test mode (`config_test_mode`), a full-replacement app env layer is supported
 
 ```elixir
 LemonChannels.GatewayConfig.get(:bindings, [])
-LemonChannels.GatewayConfig.get(:default_engine)
 LemonChannels.GatewayConfig.get(:projects, %{})
 ```
 
@@ -649,8 +680,8 @@ end
 |-----|-------------|
 | `lemon_core` | Shared types (`InboundMessage`, `ChatScope`, `Binding`), `Store`, `Secrets`, `RouterBridge`, `Dedupe.Ets`, `Telemetry`, `GatewayConfig`, `BindingResolver` |
 | `lemon_router` | Inbound messages are routed via `LemonCore.RouterBridge`. `LemonChannels.Runtime` bridges cancel/busy operations at runtime (no compile dep). |
-| `agent_core` | Provides CLI runner infrastructure used indirectly by engines; channels never hand it `OutboundPayload` structs directly. |
-| `coding_agent` | Session engine that interacts through the router; channels deliver its output. |
+| `agent_core` | Provides task infrastructure used by native in-process subagents; channels never hand it `OutboundPayload` structs directly. |
+| `coding_agent` | Provides the native top-level executor through the router; channels deliver its output. |
 | `lemon_control_plane` | Gateway methods from adapters (e.g., `x_api.post_tweet`) are exposed through the control plane. |
 
 ## Dependencies

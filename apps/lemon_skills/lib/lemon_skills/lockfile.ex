@@ -1,52 +1,52 @@
 defmodule LemonSkills.Lockfile do
-  @moduledoc """
-  Reads and writes skill lockfiles that record exact provenance.
+  @moduledoc false
 
-  Two lockfiles are maintained:
-
-  - **Global**: `~/.lemon/agent/skills.lock.json` — provenance for globally
-    installed skills.
-  - **Project**: `<cwd>/.lemon/skills.lock.json` — provenance for
-    project-specific installs.
-
-  Each lockfile is a JSON object with a `"version"` integer and a `"skills"`
-  map from skill key to a provenance record (see
-  `LemonSkills.Entry.to_lockfile_record/1`).
-
-  ## Usage
-
-      # Read the full global lockfile
-      {:ok, skills_map} = LemonSkills.Lockfile.read(:global)
-
-      # Fetch a single record
-      {:ok, record} = LemonSkills.Lockfile.get(:global, "k8s-rollout")
-
-      # Persist a record
-      :ok = LemonSkills.Lockfile.put(:global, Entry.to_lockfile_record(entry))
-
-      # Remove a record
-      :ok = LemonSkills.Lockfile.delete(:global, "k8s-rollout")
-
-  ## Lockfile format
-
-      {
-        "version": 1,
-        "skills": {
-          "k8s-rollout": {
-            "key": "k8s-rollout",
-            "source_kind": "git",
-            "source_id": "https://github.com/acme/k8s-rollout",
-            "trust_level": "community",
-            "content_hash": "abc123...",
-            "upstream_hash": "def456...",
-            "installed_at": "2026-01-01T00:00:00Z",
-            "updated_at": "2026-01-01T00:00:00Z",
-            "audit_status": "pass",
-            "audit_findings": []
-          }
-        }
-      }
-  """
+  # Reads and writes skill lockfiles that record exact provenance.
+  #
+  # Two lockfiles are maintained:
+  #
+  # - **Global**: `~/.lemon/agent/skills.lock.json` — provenance for globally
+  #   installed skills.
+  # - **Project**: `<cwd>/.lemon/skills.lock.json` — provenance for
+  #   project-specific installs.
+  #
+  # Each lockfile is a JSON object with a `"version"` integer and a `"skills"`
+  # map from skill key to a provenance record (see
+  # `LemonSkills.Entry.to_lockfile_record/1`).
+  #
+  # Usage
+  #
+  #     # Read the full global lockfile
+  #     {:ok, skills_map} = LemonSkills.Lockfile.read(:global)
+  #
+  #     # Fetch a single record
+  #     {:ok, record} = LemonSkills.Lockfile.get(:global, "k8s-rollout")
+  #
+  #     # Persist a record
+  #     :ok = LemonSkills.Lockfile.put(:global, Entry.to_lockfile_record(entry))
+  #
+  #     # Remove a record
+  #     :ok = LemonSkills.Lockfile.delete(:global, "k8s-rollout")
+  #
+  # Lockfile format
+  #
+  #     {
+  #       "version": 1,
+  #       "skills": {
+  #         "k8s-rollout": {
+  #           "key": "k8s-rollout",
+  #           "source_kind": "git",
+  #           "source_id": "https://github.com/acme/k8s-rollout",
+  #           "trust_level": "community",
+  #           "content_hash": "abc123...",
+  #           "upstream_hash": "def456...",
+  #           "installed_at": "2026-01-01T00:00:00Z",
+  #           "updated_at": "2026-01-01T00:00:00Z",
+  #           "audit_status": "pass",
+  #           "audit_findings": []
+  #         }
+  #       }
+  #     }
 
   alias LemonSkills.Config
 

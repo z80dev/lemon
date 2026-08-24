@@ -22,6 +22,8 @@ defmodule LemonChannels.Telegram.Truncate do
   `split_messages/1`.
   """
 
+  alias LemonCore.ResumeToken
+
   @telegram_max_length 4096
 
   # Split thresholds as percentages of max_length
@@ -81,9 +83,7 @@ defmodule LemonChannels.Telegram.Truncate do
             {text, []}
 
           resume_line ->
-            content = text |> String.replace_suffix(resume_line, "") |> String.trim_trailing("\n")
-
-            {content, [resume_line]}
+            {strip_trailing_line(text, resume_line), [resume_line]}
         end
 
       _ ->
@@ -261,10 +261,7 @@ defmodule LemonChannels.Telegram.Truncate do
               {content_lines, resume_lines}
 
             resume_line ->
-              content_text =
-                text
-                |> String.replace_suffix(resume_line, "")
-                |> String.trim_trailing("\n")
+              content_text = strip_trailing_line(text, resume_line)
 
               content_lines =
                 case content_text do
@@ -343,22 +340,32 @@ defmodule LemonChannels.Telegram.Truncate do
     end
   end
 
+  # Top-level channel resumes are native-only. Delegated vendor resume metadata
+  # must not be pinned into outbound conversation text.
   defp resume_line?(line) when is_binary(line) do
-    line = String.trim(String.downcase(line))
+    line
+    |> String.trim()
+    |> ResumeToken.is_resume_line("lemon")
+  end
 
-    String.starts_with?(line, "codex resume ") ||
-      String.starts_with?(line, "lemon resume ") ||
-      String.starts_with?(line, "claude --resume ") ||
-      Regex.match?(~r/^[a-z0-9_-]+\s+resume\s+/i, line)
+  # `resume_line` is the *trimmed* last line, so the text has to lose its
+  # trailing whitespace before the suffix matches — otherwise the line stays in
+  # the content and is re-appended, and the reader sees it twice.
+  defp strip_trailing_line(text, resume_line) do
+    text
+    |> String.trim_trailing()
+    |> String.replace_suffix(resume_line, "")
+    |> String.trim_trailing("\n")
   end
 
   defp extract_trailing_resume_line(text) when is_binary(text) do
-    regex =
-      ~r/(?:^|\n)(`?(?:codex|lemon)\s+resume\s+[a-zA-Z0-9_-]+`?|`?claude\s+--resume\s+[a-zA-Z0-9_-]+`?)\s*$/i
-
-    case Regex.run(regex, text) do
-      [_, line] -> line
-      _ -> nil
+    text
+    |> String.split("\n")
+    |> Enum.reverse()
+    |> Enum.drop_while(&(String.trim(&1) == ""))
+    |> case do
+      [last | _] -> if resume_line?(last), do: String.trim(last), else: nil
+      [] -> nil
     end
   end
 

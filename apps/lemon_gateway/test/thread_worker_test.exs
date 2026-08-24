@@ -3,50 +3,37 @@ defmodule LemonGateway.ThreadWorkerTest do
 
   alias LemonGateway.ExecutionRequest
   alias LemonGateway.ThreadWorker
-  alias LemonGateway.Types.Job
   alias LemonCore.ResumeToken
 
-  defmodule ThreadWorkerSlowEngine do
-    @behaviour LemonGateway.Engine
+  defmodule ThreadWorkerSlowExecutor do
+    @behaviour LemonGateway.Executor
 
     alias LemonGateway.Event
-    alias LemonGateway.Types.Job
-    alias LemonCore.ResumeToken
+    alias LemonGateway.ExecutionRequest
 
     @impl true
-    def id, do: "slow"
-
-    @impl true
-    def format_resume(%ResumeToken{value: sid}), do: "slow resume #{sid}"
-
-    @impl true
-    def extract_resume(_text), do: nil
-
-    @impl true
-    def is_resume_line(_line), do: false
-
-    @impl true
-    def supports_steer?, do: false
-
-    @impl true
-    def start_run(%Job{} = job, _opts, sink_pid) do
+    def start_run(%ExecutionRequest{} = request, _opts, sink_pid) do
       run_ref = make_ref()
-      resume = job.resume || %ResumeToken{engine: id(), value: unique_id()}
-      delay_ms = (job.meta || %{})[:delay_ms] || 50
+      resume = request.resume || %ResumeToken{engine: "lemon", value: unique_id()}
+      delay_ms = Map.get(request.meta || %{}, :delay_ms, 50)
 
       {:ok, task_pid} =
         Task.start(fn ->
-          send(sink_pid, {:engine_event, run_ref, Event.started(%{engine: id(), resume: resume})})
+          send(
+            sink_pid,
+            {:engine_event, run_ref, Event.started(%{engine: "lemon", resume: resume})}
+          )
+
           Process.sleep(delay_ms)
 
           send(
             sink_pid,
             {:engine_event, run_ref,
              Event.completed(%{
-               engine: id(),
+               engine: "lemon",
                resume: resume,
                ok: true,
-               answer: "Slow: #{job.prompt}"
+               answer: "Slow: #{request.prompt}"
              })}
           )
         end)
@@ -60,6 +47,14 @@ defmodule LemonGateway.ThreadWorkerTest do
       :ok
     end
 
+    def cancel(_context), do: :ok
+
+    @impl true
+    def steer(_context, _text), do: {:error, :unsupported}
+
+    @impl true
+    def redirect(_context, _text), do: {:error, :unsupported}
+
     defp unique_id, do: Integer.to_string(System.unique_integer([:positive]))
   end
 
@@ -68,15 +63,10 @@ defmodule LemonGateway.ThreadWorkerTest do
 
     Application.put_env(:lemon_gateway, LemonGateway.Config, %{
       max_concurrent_runs: 1,
-      default_engine: "slow",
-      enable_telegram: false,
-      require_engine_lock: false
+      enable_telegram: false
     })
 
-    Application.put_env(:lemon_gateway, :engines, [
-      ThreadWorkerSlowEngine,
-      LemonGateway.Engines.Echo
-    ])
+    Application.put_env(:lemon_gateway, :executor, ThreadWorkerSlowExecutor)
 
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
@@ -91,22 +81,26 @@ defmodule LemonGateway.ThreadWorkerTest do
     session_key = "thread-worker:#{System.unique_integer([:positive])}"
     worker = start_supervised!({ThreadWorker, thread_key: {:session, session_key}})
 
-    Enum.each(["first", "second", "third"], fn prompt ->
-      GenServer.cast(worker, {:enqueue, request(session_key, prompt, self())})
+    requests =
+      Enum.map(["first", "second", "third"], fn prompt ->
+        request(session_key, prompt, self())
+      end)
+
+    Enum.each(requests, fn request ->
+      GenServer.cast(worker, {:enqueue, request})
     end)
 
-    assert_completed_prompt("first")
-    assert_completed_prompt("second")
-    assert_completed_prompt("third")
+    Enum.each(requests, &assert_completed_request/1)
   end
 
   test "stops after the queue drains" do
     session_key = "thread-worker:#{System.unique_integer([:positive])}"
     worker = start_supervised!({ThreadWorker, thread_key: {:session, session_key}})
 
-    GenServer.cast(worker, {:enqueue, request(session_key, "done", self())})
+    request = request(session_key, "done", self())
+    GenServer.cast(worker, {:enqueue, request})
 
-    assert_completed_prompt("done")
+    assert_completed_request(request)
 
     assert eventually(fn -> not Process.alive?(worker) end)
   end
@@ -117,16 +111,14 @@ defmodule LemonGateway.ThreadWorkerTest do
       session_key: session_key,
       prompt: prompt,
       conversation_key: {:session, session_key},
-      engine_id: "slow",
       meta: %{notify_pid: notify_pid, delay_ms: 25}
     }
   end
 
-  defp assert_completed_prompt(expected_prompt) do
-    assert_receive {:lemon_gateway_run_completed, %Job{prompt: ^expected_prompt}, completed},
-                   2_000
+  defp assert_completed_request(%ExecutionRequest{} = request) do
+    assert_receive {:lemon_gateway_run_completed, ^request, completed}, 2_000
 
-    assert completed.answer == "Slow: #{expected_prompt}"
+    assert completed.answer == "Slow: #{request.prompt}"
   end
 
   defp eventually(fun, attempts \\ 20)

@@ -35,7 +35,14 @@ where durable memory had been eight modules with no boundary of their own.
   `LemonMemory.Document.max_summary_bytes/0` exposes the cap.
 - `LemonMemory.Ingest` writes finished runs into memory by registering itself
   as a `LemonCore.Store` finalize-run hook, rather than being called by name
-  from the store's hot path.
+  from the store's hot path. It takes `:name` (default `LemonMemory.Ingest`)
+  and reads `:memory_store`, `:config_loader` and `:config_ttl_ms` from
+  `start_link/1` opts before `config :lemon_memory, LemonMemory.Ingest`, so an
+  embedding application can run several isolated pipelines in one node: every
+  public function takes the server as an optional first argument, and a
+  non-default instance registers its hook as
+  `{LemonMemory.Ingest, :handle_finalize_run, [name]}`. `:memory_store` accepts
+  a registered store name as well as a pid or a module exporting `put/1`.
 - `mix lemon.memory` for inspecting and searching the store from the shell.
 - `LemonPlatformTest.ProviderCase` (in the `lemon_platform_test` package)
   verifies a provider against this contract.
@@ -61,7 +68,3 @@ where durable memory had been eight modules with no boundary of their own.
 - `Provider.search/2` has no error channel, so "no results" and "my backend is
   unreachable" are indistinguishable to the platform. Widening it is a
   behaviour change and is deliberately deferred.
-- `LemonMemory.Ingest` always registers under its own module name; a `:name`
-  option is planned before this API is considered stable.
-- `LemonMemory.SessionSearch` has no direct test coverage — its callers cover
-  it indirectly.

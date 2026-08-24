@@ -6,6 +6,58 @@ defmodule LemonMemory.Providers do
   register at runtime and are queried through this module, which gives the agent
   one stable memory-search surface while keeping external providers isolated by
   timeout and exception handling.
+
+  ## Isolation
+
+  Memory is an accessory to a turn, never the point of one, so a provider must
+  not be able to slow a turn past its own declared budget or take the turn with
+  it when it fails. Each enabled provider therefore runs in its own process —
+  spawned with a monitor and deliberately *without* a link — and is awaited
+  against its own `:timeout_ms`:
+
+    * **Slowness is per provider.** A provider is dropped when *it* passes its
+      own deadline. Registering a provider that declares a generous budget does
+      not extend anybody else's: the local SQLite provider stays on its 2s bound
+      no matter what else is registered.
+
+    * **Failure is per provider.** A provider that raises, throws or exits is
+      converted into a logged failure by the call wrapper. A provider process
+      that dies for a reason the wrapper never sees — killed by a third party,
+      or killed by an abnormal exit from something the provider itself linked to
+      — is observed through the monitor and logged the same way. Either way the
+      caller keeps every other provider's results.
+
+  The missing link is the load-bearing part. `Task.async_stream/3` links its
+  tasks to the caller, so a provider process killed from outside would deliver
+  an exit signal to whoever ran the fan-out: an agent turn on the `search/2`
+  path, and this GenServer on the `put/2` path — where a restart would reset
+  `state.providers` and silently drop every runtime registration until the
+  owning application registered again. A monitor carries the same information
+  without that back-propagation.
+
+  ## Known gaps
+
+    * **Total search latency is still bounded by the slowest *enabled*
+      provider.** Fan-out is synchronous: `search/2` returns once every provider
+      has answered or hit its own deadline, so a provider that declares — and
+      uses — 5s makes that one search 5s even though it no longer changes any
+      other provider's deadline. Providers are expected to keep budgets small.
+
+    * **A provider that misses its deadline is killed, not asked to stop.** The
+      kill is untrappable, so a provider must be safe to abandon mid-call:
+      anything that has to finish belongs behind the provider's own supervised
+      process, not in the search path.
+
+    * **`put/2` fan-out runs inside this GenServer.** Registration calls queue
+      behind it for as long as the slowest enabled provider's timeout. That is a
+      bounded stall rather than a failure, but it is why `put/2` budgets matter.
+
+    * **The caller enforces the deadline, so a caller that dies first orphans
+      its providers.** Abandon a turn mid-search — an abort, a crash — and the
+      provider processes it started keep running until they return on their own.
+      No link means they cannot take anything with them, and nothing waits on
+      them; a provider that never returns is the only way this leaks, which is
+      the same thing that would make its own deadline useless.
   """
 
   use GenServer
@@ -93,7 +145,8 @@ defmodule LemonMemory.Providers do
 
     specs
     |> Enum.filter(&provider_enabled_for_scope?(&1, scope))
-    |> run_provider_searches(query, opts)
+    |> run_providers(&call_provider(&1, query, opts))
+    |> Enum.flat_map(&search_docs/1)
     |> merge_results(limit)
   end
 
@@ -125,25 +178,10 @@ defmodule LemonMemory.Providers do
 
   @impl true
   def handle_cast({:put, %Document{} = doc, opts}, state) do
-    specs =
-      (default_specs() ++ Map.values(state.providers))
-      |> Enum.filter(&provider_enabled_for_scope?(&1, doc.scope))
-
-    Task.async_stream(
-      specs,
-      fn spec ->
-        case call_provider_put(spec, doc, opts) do
-          :ok ->
-            :ok
-
-          {:error, reason} ->
-            Logger.warning("[Providers] provider #{spec.id} put failed: #{inspect(reason)}")
-        end
-      end,
-      timeout: max_timeout(specs),
-      on_timeout: :kill_task
-    )
-    |> Stream.run()
+    (default_specs() ++ Map.values(state.providers))
+    |> Enum.filter(&provider_enabled_for_scope?(&1, doc.scope))
+    |> run_providers(&call_provider_put(&1, doc, opts))
+    |> Enum.each(&log_put_outcome/1)
 
     {:noreply, state}
   end
@@ -168,28 +206,104 @@ defmodule LemonMemory.Providers do
     ]
   end
 
-  defp run_provider_searches(specs, query, opts) do
+  defp search_docs({_spec, {:ok, {:ok, docs}}}), do: docs
+
+  defp search_docs({spec, {:ok, {:error, reason}}}) do
+    Logger.warning("[Providers] provider #{spec.id} failed: #{inspect(reason)}")
+    []
+  end
+
+  defp search_docs({spec, {:exit, reason}}) do
+    Logger.warning("[Providers] provider #{spec.id} task failed: #{inspect(reason)}")
+    []
+  end
+
+  defp log_put_outcome({_spec, {:ok, :ok}}), do: :ok
+
+  defp log_put_outcome({spec, {:ok, {:error, reason}}}) do
+    Logger.warning("[Providers] provider #{spec.id} put failed: #{inspect(reason)}")
+  end
+
+  defp log_put_outcome({spec, {:exit, reason}}) do
+    Logger.warning("[Providers] provider #{spec.id} put task failed: #{inspect(reason)}")
+  end
+
+  # Runs `fun` for every spec concurrently and returns `[{spec, outcome}]` in the
+  # order the specs were given, where outcome is `{:ok, fun_result}` or
+  # `{:exit, reason}`.
+  #
+  # Each provider gets its own monitored, *unlinked* process. The monitor
+  # reports a death the same way a link would but does not send the exit signal
+  # onwards, which is what keeps a provider process killed from outside from
+  # taking down the agent turn (search) or this registry (put). Owning the wait
+  # here is also what makes `:timeout_ms` a real per-provider bound:
+  # `Task.async_stream/3` takes a single timeout for the whole stream, so the
+  # most generous registered provider quietly became everybody else's deadline.
+  defp run_providers(specs, fun) when is_function(fun, 1) do
+    started_at_ms = System.monotonic_time(:millisecond)
+
     specs
-    |> Task.async_stream(
-      fn spec ->
-        {spec, call_provider(spec, query, opts)}
-      end,
-      timeout: max_timeout(specs),
-      on_timeout: :kill_task,
-      ordered: true
-    )
-    |> Enum.flat_map(fn
-      {:ok, {_spec, {:ok, docs}}} ->
-        docs
+    |> Enum.map(fn spec -> {spec, start_provider(fn -> fun.(spec) end)} end)
+    |> await_providers(started_at_ms)
+  end
 
-      {:ok, {spec, {:error, reason}}} ->
-        Logger.warning("[Providers] provider #{spec.id} failed: #{inspect(reason)}")
-        []
-
-      {:exit, reason} ->
-        Logger.warning("[Providers] provider task failed: #{inspect(reason)}")
-        []
+  # Deadlines are absolute — measured from the instant the workers were spawned,
+  # not from when we get around to each one — and are awaited tightest-first, so
+  # the wait we are already inside is never longer than the next provider's
+  # remaining budget. That is what drops each provider at its own bound. The
+  # caller's order is restored afterwards to keep merging deterministic.
+  defp await_providers(workers, started_at_ms) do
+    workers
+    |> Enum.with_index()
+    |> Enum.sort_by(fn {{spec, _worker}, index} -> {timeout_ms(spec), index} end)
+    |> Enum.map(fn {{spec, worker}, index} ->
+      elapsed_ms = System.monotonic_time(:millisecond) - started_at_ms
+      {index, {spec, await_provider(worker, timeout_ms(spec) - elapsed_ms)}}
     end)
+    |> Enum.sort_by(fn {index, _outcome} -> index end)
+    |> Enum.map(fn {_index, outcome} -> outcome end)
+  end
+
+  defp start_provider(fun) do
+    owner = self()
+    ref = make_ref()
+
+    {pid, monitor_ref} = spawn_monitor(fn -> send(owner, {ref, fun.()}) end)
+
+    %{pid: pid, ref: ref, monitor_ref: monitor_ref}
+  end
+
+  defp await_provider(%{pid: pid, ref: ref, monitor_ref: monitor_ref} = worker, remaining_ms) do
+    receive do
+      {^ref, result} ->
+        Process.demonitor(monitor_ref, [:flush])
+        {:ok, result}
+
+      {:DOWN, ^monitor_ref, :process, ^pid, reason} ->
+        {:exit, reason}
+    after
+      max(remaining_ms, 0) -> kill_provider(worker)
+    end
+  end
+
+  # A provider past its deadline is killed rather than asked to stop: it is
+  # blocked in its own code and cannot be reasoned with. The reply may have been
+  # sent in the window between the deadline firing and the kill landing, so
+  # prefer an answer we already hold over discarding work. Otherwise the monitor
+  # is guaranteed to fire — we just killed the process — so this receive always
+  # terminates, and because a reply is always sent before the process exits,
+  # either branch leaves the caller's mailbox clean.
+  defp kill_provider(%{pid: pid, ref: ref, monitor_ref: monitor_ref}) do
+    Process.exit(pid, :kill)
+
+    receive do
+      {^ref, result} ->
+        Process.demonitor(monitor_ref, [:flush])
+        {:ok, result}
+
+      {:DOWN, ^monitor_ref, :process, ^pid, _reason} ->
+        {:exit, :timeout}
+    end
   end
 
   defp call_provider(spec, query, opts) do
@@ -237,12 +351,11 @@ defmodule LemonMemory.Providers do
       scope in Map.get(spec, :scopes, [:session, :agent, :workspace, :all])
   end
 
-  defp max_timeout([]), do: @default_timeout_ms
-
-  defp max_timeout(specs) do
-    specs
-    |> Enum.map(&Map.get(&1, :timeout_ms, @default_timeout_ms))
-    |> Enum.max()
+  defp timeout_ms(spec) do
+    case Map.get(spec, :timeout_ms) do
+      ms when is_integer(ms) and ms > 0 -> ms
+      _ -> @default_timeout_ms
+    end
   end
 
   defp status_from_specs(specs) do

@@ -1,9 +1,15 @@
 # Phase 3.1 — Typed Bus Events: Catalog and Design
 
-Status: **partially implemented.** Catalog and design written 2026-08-10 against `2805c5b5`;
-pre-work and stages S1–S11 landed the same day. See §8 for exactly what is done and what
-remains. The catalog in §2 describes the tree *before* typing — it is the record of what was
-found, and the migration table in §8 says which rows have since changed.
+Status: **implemented.** Catalog and design written 2026-08-10 against `2805c5b5`; pre-work and
+stages S1–S12 landed the same day, and **S13 — removing the `Access` shim — landed 2026-08-13**
+together with the `EventBridge` conversion it was waiting on. See §8 for the record of what each
+stage did and §9 for S13. The catalog in §2 describes the tree *before* typing — it is the record
+of what was found, and the migration tables in §8–§9 say which rows have since changed.
+
+> **R2 is spent.** The headline recommendation below to implement `Access` for one deprecation
+> cycle was taken, served its purpose, and has been reversed. Read §4.3 and §6.3 as history:
+> payload structs no longer implement `Access`, and a consumer that may still receive a legacy
+> map coerces it once at its entry point with `LemonCore.Events.coerce/2`. §9 is the end state.
 
 Scope: every `LemonCore.Bus.broadcast/2` call site in the umbrella (78 in `lib/`, 144 more in
 `test/`), the topics they publish to, and every process that subscribes. The plan of record is
@@ -17,6 +23,14 @@ of which are live bugs.
 > but no document has ever catalogued the topics or proposed payload types. Unlike 2.4, this phase
 > starts from scratch. `docs/platform/lemon_core.md` names the Bus in one sentence and documents
 > nothing about it.
+
+> **Top-level execution end state.** `engine` remains in run events, completion
+> records, and `ResumeToken` as provenance, with the fixed value `"lemon"` for
+> every top-level run. It is not a request field or a runtime selector. Subagent
+> identities are task-only provenance on delegated task records; subagents run
+> natively in-process.
+> Top-level resume accepts only native tokens; non-native historical state is
+> retained but quarantined from resumption.
 
 ## 1. Headline recommendations
 
@@ -63,16 +77,16 @@ The busiest topic and the only one whose subscriber set spans the whole umbrella
 
 | Event type | Publisher | Payload (actual keys) | Env |
 |---|---|---|---|
-| `:run_started` | `lemon_gateway/run.ex:244` | `%{run_id, session_key, engine}` | E |
+| `:run_started` | native executor | `%{run_id, session_key, engine: "lemon"}` | E |
 | `:delta` | `lemon_gateway/run.ex:443` | `%{run_id, ts_ms, seq, text, meta}` | E |
-| `:run_completed` | `lemon_gateway/run.ex:136` (lock timeout), `:618` (normal) | `%{completed: %{engine, resume, ok, answer, error, usage, meta, run_id, session_key}, duration_ms}` | E |
+| `:run_completed` | native executor | `%{completed: %{engine: "lemon", resume, ok, answer, error, usage, meta, run_id, session_key}, duration_ms}` | E |
 | `:run_completed` (synthetic) | `lemon_router/run_process.ex:498,538,609`; `run_process/watchdog.ex:239` | same, `meta.synthetic == true` | E |
 | `:run_failed` | `lemon_router/run_process.ex:691` (`terminate/2`) | `%{type: :run_failed, run_id, session_key, reason}` | **raw** |
 | `:run_phase_changed` | `lemon_gateway/run.ex:773`; `lemon_router/phase_publisher.ex:86` | `LemonCore.RunPhaseEvent.build/1` → `%{type, run_id, session_key, conversation_key, phase, previous_phase, source, at}` | E |
-| `:engine_started` | `lemon_gateway/run.ex:815` | `%{engine, resume, title, meta, run_id, session_key}` | E |
-| `:engine_completed` | `lemon_gateway/run.ex:815` | same keys as `completed` above | E |
-| `:engine_action` | `lemon_gateway/run.ex:815`; `LemonCore.Event.engine_reasoning/1` | `%{engine, phase, ok, message, level, action: %{id, kind, title, detail}}` | E |
-| `:engine_event` | `lemon_gateway/run.ex:815` (fallback) | arbitrary engine map | E |
+| `:engine_started` | native executor | `%{engine: "lemon", resume, title, meta, run_id, session_key}` | E |
+| `:engine_completed` | native executor | same fixed-provenance keys as `completed` above | E |
+| `:engine_action` | native executor; `LemonCore.Event.engine_reasoning/1` | `%{engine: "lemon", phase, ok, message, level, action: %{id, kind, title, detail}}` | E |
+| `:engine_event` | native executor (fallback) | arbitrary native-executor event map | E |
 | `:checkpoint_created` / `_restored` / `_deleted` | `lemon_core/checkpoint.ex:321` | varies by kind; meta = checkpoint context | E |
 | `:acp_client_request` *(removed)* | was `coding_agent/tools/acp_file_bridge.ex` | `%{method, params, reply_to: pid(), ref: reference()}` — converted to a direct call via `LemonCore.ACPClientBridge`; no longer on the bus (§6.7, §8) | E |
 | `:run_graph_changed` | `coding_agent/run_graph_server.ex:421,426` | `%{run_id, parent_run_id, session_key, status, event, timestamp_ms}` | E |
@@ -170,7 +184,7 @@ the only listener silently discards them.
 | `arena:<domain>:league` | `lemon_sim_ui/arena.ex:752` | `arena_leaderboard_live.ex:21` | `%{game_id}` |
 | hosted-game topic | `hosted_game/room_server.ex:1676` | `hosted_werewolf_live.ex` (4 sites) | `%{room_id}` |
 | philosopher-chat topic | `philosopher_chat/thread_server.ex:844` | `philosopher_chat_api_controller.ex:172` | `%{type, event_seq, …}` |
-| `channels` | **none in `lib/`** | `EventBridge` | documented in the Bus contract; reachable only via the control-plane injectors (§6.8) |
+| `channels` | *(was none in `lib/`; since 2026-08-16 `lemon_channels/dispatcher.ex` publishes `:channel_delivery` — §10)* | `EventBridge` | now a typed contract topic |
 | `logs` | **none** | **none** | documented in the Bus contract; dead |
 
 ### 2.7 Envelope discipline, summarised
@@ -241,7 +255,7 @@ unknown keys), and `from_map/1` (lenient, for legacy maps arriving over the wire
 defmodule LemonCore.Events.RunStarted do
   @enforce_keys [:run_id]
   defstruct [:run_id, :session_key, :engine]
-  # run_id: String.t(); session_key: String.t() | nil; engine: String.t() | nil
+  # run_id: String.t(); session_key: String.t() | nil; engine: "lemon"
 end
 
 defmodule LemonCore.Events.Delta do
@@ -260,7 +274,8 @@ defmodule LemonCore.Events.Completion do
   @enforce_keys [:ok]
   defstruct [:ok, :answer, :error, :engine, :resume, :usage, :run_id, :session_key, meta: %{}]
   # ok: boolean(); answer: String.t() | nil; error: term() | nil
-  # resume: LemonCore.ResumeToken.t() | %{engine: String.t(), value: term()} | nil
+  # resume: LemonCore.ResumeToken.t() | %{engine: String.t(), value: term()} | nil;
+  # top-level resumption accepts only `engine: "lemon"`
   # usage: map() | nil  ← left as map; LemonAi.Tokens owns its shape
 end
 
@@ -272,7 +287,7 @@ end
 defmodule LemonCore.Events.EngineAction do
   @enforce_keys [:action]
   defstruct [:action, :engine, :phase, :ok, :message, :level]
-  # action: LemonCore.Events.Action.t()
+  # engine: "lemon"; action: LemonCore.Events.Action.t()
   # phase: :started | :updated | :completed
   # ok: boolean() | nil; level: atom() | nil
 end
@@ -350,8 +365,9 @@ LemonCore.Events.RoutingFeedback     # fingerprint_key, outcome, duration_ms
 
 **Deliberately not typed:** `:acp_client_request` (§6.7 — it was an RPC carrying a live pid and a
 ref, and a value type would have legitimised that; it has since been removed from the bus entirely
-and is now a direct call), `:engine_event` (an explicit "unrecognised engine output" escape hatch),
-`:custom_event` (user-defined by construction), and everything on the app-internal topics in §3.
+and is now a direct call), `:engine_event` (an explicit native-executor output
+escape hatch), `:custom_event` (user-defined by construction), and everything
+on the app-internal topics in §3.
 
 ### 4.3 Versioning and the compatibility cycle
 
@@ -380,6 +396,9 @@ Compatibility for one release cycle rests on two mechanisms:
    the struct or use Map.get/2; Access on Events structs is removed in the next major."` A
    contract-kit assertion (§5.3) fails if an Events module ships without a removal note.
 
+   *(History: the shim was removed in S13 on 2026-08-13, before 0.2 — §9. The contract-kit
+   assertion now checks the opposite, that no payload module implements `Access`.)*
+
 Semver rule once a struct is published, to go in `docs/platform/lemon_core.md`:
 
 | Change | Bump |
@@ -389,7 +408,7 @@ Semver rule once a struct is published, to go in `docs/platform/lemon_core.md`:
 | Make an optional field required, or remove a field | **major** |
 | Change a field's type or an enum's members | **major** |
 | Rename an event type atom | **major** |
-| Remove the `Access` shim | **major** |
+| Remove the `Access` shim | ~~**major**~~ — done pre-0.2 instead, while every consumer was still in-repo (§9) |
 
 ### 4.4 Interaction with the bridges
 
@@ -457,7 +476,7 @@ Ordered by blast radius ascending, so the mechanism is proven on cheap topics be
 | S10 | `run:*` — `:engine_action` + `Action` | 5 | Also covers `Event.engine_reasoning/1`, which already validates this payload by hand — replace that validation with the struct |
 | S11 | `run:*` — `:run_completed` + `Completion` + `:run_failed` | **12** | The big one; do it last, alone, and expect to touch `RunCompletionWaiter`'s seven receive clauses (§6.2) |
 | S12 | `session:*` | 4 | Mostly falls out of S8–S11, since `run_process` forwards the same events. `:coalesced_output` gets an envelope here |
-| S13 | Remove the `Access` shim; `Bus.broadcast_event/3` enforcement moves from warn to raise in `:test` | — | Next major |
+| S13 | Remove the `Access` shim; `Bus.broadcast_event/4` enforcement raises in `:dev`/`:test` and coerces in `:prod` | — | **Done 2026-08-13 — see §9.** Landed pre-0.2, not at the next major: the shim's whole cost is a semver-major promise, and while every consumer is still in this repo it is a mechanical change rather than a break anyone downstream has to absorb |
 
 Test-side blast radius is larger than lib-side and is the real cost driver: **144
 `Bus.broadcast` call sites in `test/`** hand-construct payloads —
@@ -485,11 +504,11 @@ their own events):
    class that would have caught §6.6, and it costs one `for backend <- [:pubsub, :registry]`.
 6. **Deprecation hygiene** — any module implementing `Access` carries a `@deprecated` with a
    removal note (guards R2's one-cycle promise against becoming permanent).
-7. **Engine lifecycle ordering** — extend the existing `LemonPlatformTest.EngineCase` (which today
-   asserts only the in-process `{:engine_event, run_ref, …}` protocol at
-   `engine_case.ex:332,351`) with a bus-level assertion: a conforming engine's run produces
-   `:run_started` → `:delta`\* → `:run_completed` on `run:<id>`, with typed payloads, in that
-   order. That is the first time the *bus* contract is machine-checked for third-party engines.
+7. **Native lifecycle ordering** — assert the fixed executor's in-process
+   `{:engine_event, run_ref, …}` protocol and its bus projection:
+   `:run_started` → `:delta`\* → `:run_completed` on `run:<id>`, with typed
+   payloads in that order. Every lifecycle payload records `engine: "lemon"`;
+   the bus contract has no pluggable top-level executor surface.
 
 ## 6. Risks and the undocumented consumer assumptions
 
@@ -646,12 +665,12 @@ Landed 2026-08-10, after the design above was reviewed.
 | S7 | `:run_phase_changed` | done — `LemonCore.RunPhaseEvent` now delegates to `Events.RunPhaseChanged` and is deprecated |
 | S8–S11 | `run:*` — `:run_started`, `:delta`, `:engine_action`, `:run_completed`, `:run_failed` | done |
 | S12 | `session:*` | follows from S8–S11 (the router forwards the same events). `:coalesced_output` is still an unenveloped raw map |
-| S13 | Remove the `Access` shim | next major |
+| S13 | Remove the `Access` shim | **done 2026-08-13 — §9** |
 
 **Contract kit:** `LemonPlatformTest.EventsCase` asserts registry completeness, `from_map/1`
 round-trip and string-key acceptance, strict `new/1`, Introspection parity between struct and
 map payloads, JSON encodability, `broadcast_event/4` envelope discipline **under both bus
-backends**, and that the `Access` shim carries a deprecation note. It runs against the
+backends**, and that no payload module implements `Access`. It runs against the
 platform's own registry at
 `apps/lemon_platform_test/test/compliance/core_events_test.exs`.
 
@@ -692,8 +711,9 @@ platform's own registry at
    feeds each payload a fully flattened map, which does catch it.
 2. **`false` collapsed to `nil`.** The `get_field/2` helper in `Action` and `EngineAction` used
    `Map.get(attrs, :key) || Map.get(attrs, "key")`, which reads atom-or-string keys correctly
-   for everything except `false` — so an engine action's `ok: false`, the flag that says the
-   action *failed*, silently became `nil`. Caught by `LemonGateway.RunTest`. Fixed with
+   for everything except `false` — so a native action's `ok: false`, the flag
+   that says the action *failed*, silently became `nil`. Caught by
+   `LemonGateway.RunTest`. Fixed with
    `Map.fetch/2`, plus a kit assertion that round-trips every payload with its booleans
    falsified.
 
@@ -702,14 +722,13 @@ Bug 3's fix gained the regression test the design asked for:
 than `LemonCore.PubSub`, and that a typed struct payload survives `broadcast_event/4` intact
 under the Registry fallback.
 
-**Still open:**
+**Still open as of §8 (2026-08-10) — §9 closes the second item:**
 
-- **Test-side fixtures.** The 144 `Bus.broadcast` sites in `test/` still build raw maps. They
-  all pass, because consumers accept both, but `LemonPlatformTest.EventsFixtures` was not
-  written and tests were not converted.
-- **`EventBridge`'s 26 `Access`-reading clauses.** Still map-based; the shim carries them. The
-  conversion to struct patterns — which is what turns a field rename into a compile error — is
-  the last substantive piece before the shim can be removed in S13.
+- **Test-side fixtures.** `LemonPlatformTest.EventsFixtures` has since been written (builders
+  with defaults and overrides for every registered payload, including nested-field lifting), but
+  the `Bus.broadcast` sites in `test/` still hand-build raw maps. They keep working: consumers
+  coerce at their entry points, so a hand-built map is turned into its struct on arrival.
+- ~~**`EventBridge`'s 26 `Access`-reading clauses.**~~ Converted in S13 — see §9.
 - **`:coalesced_output`** is still published as an unenveloped raw map on `session:<key>`.
 
 **Known in-flight at time of writing:** the Farcaster transport deletion (task #29) has landed —
@@ -720,3 +739,121 @@ call sites). The email port (task #27) is therefore not expected to change any r
 row that would move is webhook's `run:<id>` subscription (`transports/webhook/response.ex`), if
 webhook is ever relocated — per `transport-unification.md` §1 it stays in the gateway, so it
 should not be.
+
+## 9. S13 — removing the `Access` shim
+
+Landed 2026-08-13, pre-0.2. The shim was scheduled for "the next major" because removing it is a
+breaking change (§4.3's semver table). Doing it now inverts that cost: while every consumer is
+still inside this repo, it is a mechanical change with a compiler to check it; after 0.2 it is a
+promise to strangers. Nothing downstream depends on `Access` on a payload yet, so there is nothing
+to break.
+
+### 9.1 What the shim is replaced by
+
+One rule, applied everywhere: **a consumer pattern-matches the payload struct or reads a field,
+and any consumer that might receive something else coerces once at its entry point** with
+`LemonCore.Events.coerce/2`. Bracket tolerance is never carried downstream into the mapping code.
+
+`coerce/2`, `cast/2`, `new/1` and `from_map/1` are unchanged. The producer-side leniency they
+provide is the mechanism this change relies on, not a casualty of it: `from_map/1` still accepts
+string keys, drops unknown ones and coerces nested payloads, which is exactly what makes a legacy
+map safe to convert on arrival.
+
+### 9.2 Consumers converted
+
+| App | Site | Was | Now |
+|---|---|---|---|
+| `lemon_control_plane` | `event_bridge.ex` — 18 `map_event_type/3` clauses covering 25 registered types, plus `map_cron_job_event/2` | `payload[:key]`, `run[:id]`, `job[:name]` | each clause heads on its struct (`%Events.RunCompleted{} = payload`) and reads fields; `map_event/1` coerces once |
+| `lemon_control_plane` | `methods/agent_wait.ex` | `payload[:completed] \|\| payload` in two receive clauses | one `completed_result/2` that coerces, then matches `%Events.RunCompleted{completed: completed}` |
+| `lemon_automation` | `run_completion_waiter.ex` | `payload[:reason]`; `result[:output]`/`result["output"]` on a possibly-struct | coerces both terminal types; struct clauses first, and the free-form-map clause is now guarded `not is_struct/1`. The two envelope-less-map receive clauses are gone — no publisher has emitted one since P1 |
+| `lemon_automation` | `heartbeat_manager.ex` | `event.payload[:run]`/`[:output]`; `payload[:reason] \|\| payload["reason"] \|\| …` | matches `%Events.CronRunCompleted{run:, output:}`; `heartbeat_failure_reason/1` matches `%Events.RunFailed{reason:}` |
+| `coding_agent` | `tools/agent.ex` | `payload[:completed] \|\| payload["completed"] \|\| payload` | `normalize_completion/2` heads on `%Events.RunCompleted{}`; the shared `build_completion/3` reads the nested completion with `map_get/2` because the run store hands it the same shape as a plain map |
+| `lemon_channels` | `adapters/discord/transport.ex`, `adapters/telegram/transport/approval_request.ex` | `payload[:approval_id] \|\| payload["approval_id"]`, `pending[:tool] \|\| pending["tool"]`, … | the `with` chain heads on `%Events.ApprovalRequested{}` then `%Events.ApprovalPending{}`, binding `tool` and `action` in the pattern. Both functions wrap themselves in `rescue`, so key probing here would have failed **silently**: the approval prompt would simply stop arriving |
+
+`lemon_core`'s own `exec_approvals.ex` wait loop, `lemon_web`'s `session_live.ex`, the router's
+`run_process.ex`/`surface_manager.ex`/`tool_status_coalescer.ex`, `control_plane/acp.ex`, the SSE
+route and `webhook/response.ex` needed no change: they already read payloads through
+`Map.get`/`Map.fetch`/`MapHelpers` or pure pattern matching, which work on a struct.
+
+### 9.3 Nested payloads: why some reads stay `get_field/2`
+
+`Completion`, `Action` and `ApprovalPending` are always structs when they arrive through
+`from_map/1` or from any in-repo publisher, but `new/1` is strict about *keys*, not about nested
+*types* — `RunCompleted.new(%{completed: %{ok: true}})` builds a valid `RunCompleted` whose
+`completed` is a plain map. So a nested read uses the struct-and-map-safe `get_field/2` (a
+`Map.get/2` wrapper) rather than a field access that would crash on that shape. Top-level reads
+are plain field accesses, which is where the compile-error guarantee matters: they are what names
+the JSON keys sent to WS clients.
+
+`meta` is still deliberately a free map (§4.1) and is still read with `Access`. That is not a
+leftover: typing `meta` is a separate change with no consumer benefit.
+
+### 9.4 What the removal made visible
+
+A registered type whose payload is *not* its struct no longer produces a half-empty frame; it
+misses its typed clause and reaches `EventBridge`'s catch-all. That catch-all now distinguishes
+the two reasons it can be hit — "registered type with no client mapping" (§6.5, unchanged) and
+"payload is not its struct and could not be coerced" — because the fix differs. Both warn once
+per type.
+
+Two bare-map publishers of registered types were fixed rather than tolerated, so the invariant
+holds at the source:
+
+- `lemon_router/run_process.ex` — the synthetic `:run_completed` for a started run with no gateway
+  pid now builds `Events.RunCompleted`/`Events.Completion`, like the other synthetic completions
+  beside it.
+- `lemon_automation/cron_manager.ex` — the cron summary forwarded onto the base session topic now
+  carries `Events.RunCompleted`. Its run-store summary deliberately keeps `completed` as a plain
+  map, because that is the shape the store's readers (`chat_history`, `sessions_preview`,
+  `resume_selection`) expect.
+
+One remains, and is left alone on purpose: `CodingAgent.Tools.Task.Projection` publishes
+`:engine_action` as a bare map through `LemonCore.Event.engine_action/2`. Typing it means coercing
+inside `engine_action/2`, which would normalise `action.kind` from a string to an atom for every
+publisher — the gateway already emits atoms through `Events.EngineAction.from_map/1`, so consumers
+cope with both, but flipping the rest is a behaviour change that belongs with the deletion of
+`Event.validate_action_payload!/1` (S10's unfinished half), not with this one.
+
+### 9.5 The guard against regression
+
+`LemonPlatformTest.EventsCase` assertion 8 was "any module implementing `Access` carries a
+`@deprecated` removal note". It is now the opposite: `implements_access?/1` must be false for
+every payload module. The shim cannot come back without failing the contract suite.
+
+`Bus.broadcast_event/4` also stopped relaying a mismatch untouched in `:prod`. It coerces there
+instead — with consumers pattern-matching structs, passing a legacy map through would drop the
+event at every subscriber rather than degrade it. `:dev`/`:test` still raise, which is what keeps
+publishers honest.
+## 10. Addendum (2026-08-16) — `:channel_delivery` gives `channels` its first publisher
+
+The `channels` topic spent its whole life as a subscriber with no publisher (§6.11):
+`EventBridge` subscribed at startup, and the only way to put an event on the topic was the
+control-plane injectors of §6.8. That is no longer true. The final outbound funnel —
+`LemonChannels.Dispatcher.dispatch/1`, the router-facing semantic delivery entrypoint — was
+the one hop in the message flow invisible on the bus: tests wanting to assert "lemon would
+have sent exactly this to Telegram" had nothing to hook.
+
+**Event.** `:channel_delivery`, payload `LemonCore.Events.ChannelDelivery`, registered in
+`LemonCore.Events.registry/0` under a new `channels` section — which makes `channels` the
+eighth typed contract topic (amending R3's seven).
+
+| Field | Meaning |
+|---|---|
+| `intent_id`, `run_id`, `session_key` | copied from the `LemonCore.DeliveryIntent` |
+| `channel_id`, `account_id`, `peer_kind`, `peer_id`, `thread_id` | the `DeliveryRoute` |
+| `kind` | the intent kind (`:final_text`, `:stream_snapshot`, …) |
+| `text_preview` | bounded excerpt of the outbound text (≤ 200 chars + ellipsis), never the full body |
+| `ok` / `error` | dispatch result; `error` is a bounded `inspect/2` of the reason |
+| `duration_ms`, `ts_ms` | dispatch duration and wall-clock emit time |
+
+**Emission discipline.** The dispatcher emits *after* the renderer's result is known, from a
+helper that rescues and logs — a crashed bus backend or serialization issue can never break a
+real send. It gates on `Bus.running?/0` per §6.6, and emits a
+`[:lemon, :channels, :dispatch]` telemetry twin (see `docs/telemetry.md`).
+
+**Fanout.** `EventBridge` maps `:channel_delivery` → `channel.delivery`
+(`topic_for_event("channel.delivery") → ["channels"]`), `Frames.supported_events/0` lists the
+name, and `events.subscribe` already allowed the `channels` topic.
+
+**Kit.** `LemonPlatformTest.EventsFixtures.channel_delivery/1` builds the payload; the
+compliance suite covers the module through the registry as with every other typed payload.

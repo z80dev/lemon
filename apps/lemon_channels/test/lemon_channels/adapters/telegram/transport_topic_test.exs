@@ -229,11 +229,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
 
     scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: topic_id}
 
-    _ =
-      ProjectBindingStore.put_dynamic(project_id, %{
-        root: cwd,
-        default_engine: nil
-      })
+    _ = ProjectBindingStore.put_dynamic(project_id, %{root: cwd})
 
     _ = ProjectBindingStore.put_override(scope, project_id)
     _ = ProjectBindingStore.put_override(scope, project_id)

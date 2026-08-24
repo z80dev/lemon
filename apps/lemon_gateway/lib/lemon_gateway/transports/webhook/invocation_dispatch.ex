@@ -19,7 +19,6 @@ defmodule LemonGateway.Transports.Webhook.InvocationDispatch do
              payload,
              normalized,
              webhook_config: Keyword.fetch!(opts, :webhook_config),
-             default_engine: Keyword.fetch!(opts, :default_engine),
              default_timeout_ms: Keyword.fetch!(opts, :default_timeout_ms),
              default_callback_wait_timeout_ms:
                Keyword.fetch!(opts, :default_callback_wait_timeout_ms),

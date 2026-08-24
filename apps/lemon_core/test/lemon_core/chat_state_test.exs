@@ -531,7 +531,7 @@ defmodule LemonCore.ChatStateTest do
 
   describe "Store ChatState round-trip" do
     test "stores and retrieves ChatState" do
-      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
+      scope = %ChatScope{transport: :demo, chat_id: 12_345}
 
       original = %ChatState{
         last_engine: "codex",
@@ -563,13 +563,13 @@ defmodule LemonCore.ChatStateTest do
     end
 
     test "returns nil for missing chat state" do
-      scope = %ChatScope{transport: :telegram, chat_id: 99_999}
+      scope = %ChatScope{transport: :demo, chat_id: 99_999}
 
       assert Store.get_chat_state(scope) == nil
     end
 
     test "overwrites existing chat state" do
-      scope = %ChatScope{transport: :telegram, chat_id: 12_345}
+      scope = %ChatScope{transport: :demo, chat_id: 12_345}
 
       first = %ChatState{last_engine: "first", last_resume_token: "token1", updated_at: 1000}
       second = %ChatState{last_engine: "second", last_resume_token: "token2", updated_at: 2000}
@@ -593,8 +593,8 @@ defmodule LemonCore.ChatStateTest do
     end
 
     test "different scopes have separate chat states" do
-      scope1 = %ChatScope{transport: :telegram, chat_id: 11_111}
-      scope2 = %ChatScope{transport: :telegram, chat_id: 22_222}
+      scope1 = %ChatScope{transport: :demo, chat_id: 11_111}
+      scope2 = %ChatScope{transport: :demo, chat_id: 22_222}
 
       state1 = %ChatState{last_engine: "engine1", last_resume_token: "t1", updated_at: 1000}
       state2 = %ChatState{last_engine: "engine2", last_resume_token: "t2", updated_at: 2000}

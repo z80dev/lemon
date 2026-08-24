@@ -10,7 +10,45 @@ defmodule LemonGateway.ThreadRegistryTest do
   """
   use ExUnit.Case, async: false
 
+  alias LemonGateway.ExecutionRequest
   alias LemonGateway.ThreadRegistry
+
+  defmodule ThreadRegistryFixtureExecutor do
+    @behaviour LemonGateway.Executor
+
+    alias LemonCore.ResumeToken
+    alias LemonGateway.{Event, ExecutionRequest}
+
+    @impl true
+    def start_run(%ExecutionRequest{} = request, _opts, sink_pid) do
+      run_ref = make_ref()
+      resume = request.resume || %ResumeToken{engine: "lemon", value: request.run_id}
+
+      send(sink_pid, {:engine_event, run_ref, Event.started(%{engine: "lemon", resume: resume})})
+
+      send(
+        sink_pid,
+        {:engine_event, run_ref,
+         Event.completed(%{
+           engine: "lemon",
+           resume: resume,
+           ok: true,
+           answer: "Test: #{request.prompt}"
+         })}
+      )
+
+      {:ok, run_ref, %{}}
+    end
+
+    @impl true
+    def cancel(_context), do: :ok
+
+    @impl true
+    def steer(_context, _text), do: {:error, :unsupported}
+
+    @impl true
+    def redirect(_context, _text), do: {:error, :unsupported}
+  end
 
   # ============================================================================
   # Setup and helpers
@@ -22,11 +60,11 @@ defmodule LemonGateway.ThreadRegistryTest do
 
     Application.put_env(:lemon_gateway, LemonGateway.Config, %{
       max_concurrent_runs: 10,
-      default_engine: "echo",
       enable_telegram: false
     })
 
-    Application.put_env(:lemon_gateway, :engines, [LemonGateway.Engines.Echo])
+    Application.put_env(:lemon_gateway, :executor, ThreadRegistryFixtureExecutor)
+
     Application.put_env(:lemon_gateway, :transports, [])
     Application.put_env(:lemon_gateway, :commands, [])
 
@@ -37,6 +75,20 @@ defmodule LemonGateway.ThreadRegistryTest do
 
   defp unique_key do
     {:thread, System.unique_integer([:positive])}
+  end
+
+  defp execution_request(session_key, prompt, meta) do
+    %ExecutionRequest{
+      run_id: "thread-registry-#{System.unique_integer([:positive, :monotonic])}",
+      session_key: session_key,
+      prompt: prompt,
+      conversation_key: {:session, session_key},
+      meta: meta
+    }
+  end
+
+  defp submit_request(%ExecutionRequest{} = request) do
+    LemonGateway.Scheduler.submit_execution(request)
   end
 
   defp spawn_registering_process(key) do
@@ -729,20 +781,13 @@ defmodule LemonGateway.ThreadRegistryTest do
       # This tests that ThreadWorker properly integrates with ThreadRegistry
       # by checking that we can look up thread workers through the registry
 
-      alias LemonGateway.Types.Job
-
       session_key = "test:#{System.unique_integer([:positive])}"
-
       thread_key = {:session, session_key}
 
-      # Submit a job to create a thread worker
-      job = %Job{
-        session_key: session_key,
-        prompt: "test",
-        meta: %{notify_pid: self(), user_msg_id: 1}
-      }
+      request =
+        execution_request(session_key, "test", %{notify_pid: self(), user_msg_id: 1})
 
-      LemonGateway.submit(command_from_job(job))
+      submit_request(request)
 
       # The worker should be registered
       Process.sleep(50)
@@ -750,7 +795,7 @@ defmodule LemonGateway.ThreadRegistryTest do
       assert is_pid(worker_pid)
 
       # Wait for completion and worker cleanup
-      assert_receive {:lemon_gateway_run_completed, ^job, _}, 2000
+      assert_receive {:lemon_gateway_run_completed, ^request, _}, 2000
       Process.sleep(100)
 
       # Worker should be unregistered after idle
@@ -759,26 +804,21 @@ defmodule LemonGateway.ThreadRegistryTest do
     end
 
     test "multiple thread workers register independently" do
-      alias LemonGateway.Types.Job
-
       # Create multiple scopes
       session_keys =
         for i <- 1..3 do
           "test:#{10000 + i}"
         end
 
-      # Submit jobs to each scope
-      jobs =
+      # Submit requests to each scope
+      requests =
         for session_key <- session_keys do
-          job = %Job{
-            session_key: session_key,
-            prompt: "test",
-            meta: %{notify_pid: self(), user_msg_id: 1}
-          }
+          request =
+            execution_request(session_key, "test", %{notify_pid: self(), user_msg_id: 1})
 
-          LemonGateway.submit(command_from_job(job))
+          submit_request(request)
 
-          job
+          request
         end
 
       Process.sleep(100)
@@ -797,46 +837,38 @@ defmodule LemonGateway.ThreadRegistryTest do
       assert length(Enum.uniq(pids)) == length(pids)
 
       # Wait for completions
-      for job <- jobs do
-        assert_receive {:lemon_gateway_run_completed, ^job, _}, 2000
+      for request <- requests do
+        assert_receive {:lemon_gateway_run_completed, ^request, _}, 2000
       end
     end
 
     test "new worker can register after previous worker dies" do
-      alias LemonGateway.Types.Job
-
       session_key = "test:#{System.unique_integer([:positive])}"
 
       thread_key = {:session, session_key}
 
-      # First job
-      job1 = %Job{
-        session_key: session_key,
-        prompt: "first",
-        meta: %{notify_pid: self(), user_msg_id: 1}
-      }
+      # First request
+      request1 =
+        execution_request(session_key, "first", %{notify_pid: self(), user_msg_id: 1})
 
-      LemonGateway.submit(command_from_job(job1))
+      submit_request(request1)
 
-      assert_receive {:lemon_gateway_run_completed, ^job1, _}, 2000
+      assert_receive {:lemon_gateway_run_completed, ^request1, _}, 2000
 
       # Wait for worker to die
       wait_for_unregistration(thread_key, 500)
 
-      # Second job should create new worker
-      job2 = %Job{
-        session_key: session_key,
-        prompt: "second",
-        meta: %{notify_pid: self(), user_msg_id: 2}
-      }
+      # Second request should create new worker
+      request2 =
+        execution_request(session_key, "second", %{notify_pid: self(), user_msg_id: 2})
 
-      LemonGateway.submit(command_from_job(job2))
+      submit_request(request2)
 
       Process.sleep(50)
       worker_pid = ThreadRegistry.whereis(thread_key)
       assert is_pid(worker_pid)
 
-      assert_receive {:lemon_gateway_run_completed, ^job2, _}, 2000
+      assert_receive {:lemon_gateway_run_completed, ^request2, _}, 2000
     end
   end
 
@@ -1014,11 +1046,5 @@ defmodule LemonGateway.ThreadRegistryTest do
           do_wait_for_unregistration(key, deadline)
         end
     end
-  end
-
-  defp command_from_job(%LemonGateway.Types.Job{} = job) do
-    job
-    |> LemonGateway.ExecutionRequest.from_job(conversation_key: {:session, job.session_key})
-    |> LemonGateway.ExecutionRequest.to_command()
   end
 end

@@ -57,6 +57,7 @@ defmodule LemonPlatformTest.EventsFixtures do
     ApprovalPending,
     ApprovalRequested,
     ApprovalResolved,
+    ChannelDelivery,
     Completion,
     CronJobChanged,
     CronRunCompleted,
@@ -229,6 +230,23 @@ defmodule LemonPlatformTest.EventsFixtures do
   @spec cron_job_changed(overrides) :: CronJobChanged.t()
   def cron_job_changed(overrides \\ []) do
     build(CronJobChanged, %{action: :created, job_id: "job_1"}, overrides)
+  end
+
+  # --- channels payloads -----------------------------------------------------
+
+  @doc """
+  A `LemonCore.Events.ChannelDelivery` — an outbound dispatch observation.
+
+  Enforced: `:intent_id` (default `"intent_1"`), `:channel_id` (default `"telegram"`),
+  `:kind` (default `:final_text`), `:ok` (default `true`).
+  """
+  @spec channel_delivery(overrides) :: ChannelDelivery.t()
+  def channel_delivery(overrides \\ []) do
+    build(
+      ChannelDelivery,
+      %{intent_id: "intent_1", channel_id: "telegram", kind: :final_text, ok: true},
+      overrides
+    )
   end
 
   # --- nested payloads -------------------------------------------------------

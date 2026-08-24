@@ -164,7 +164,7 @@ coding_agent gives the AI a rich toolkit. Here are the main categories:
 
 | Tool | What It Does |
 |------|-------------|
-| `task` | Spawn a subtask session (can use any engine: lemon, claude, codex, kimi) |
+| `task` | Spawn a native in-process subtask session |
 | `agent` | Delegate work to another named Lemon agent |
 | `await` | Wait for async background jobs to complete |
 
@@ -331,24 +331,25 @@ compiled on demand if `auto_build = true` is set in config.
 
 ---
 
-## CLI Runners
+## Native Subagents
 
-For the CLI-based gateway engines (claude, codex, kimi, opencode, pi),
-agent_core provides **CLI Runners** — a three-layer architecture for wrapping
-external CLI tools:
+Subagents are native in-process executions — there are no external CLI runners.
+When the agent delegates a bounded task through the `task` tool (or an `@name`
+mention), Lemon runs the child work as another `CodingAgent.Session` inside the
+same BEAM node:
 
-1. **`JsonlRunner`** — generic GenServer that spawns a subprocess, reads its
-   stdout line by line, handles graceful shutdown (SIGTERM → grace → SIGKILL),
-   session locking, and owner process monitoring
-2. **Engine-specific Runner** — implements `build_command/3` (CLI binary and
-   flags), `stdin_payload/3`, and `translate_event/2` (parses the engine's JSON
-   into unified event structs)
-3. **Engine-specific Subagent** — high-level API with `start/1`, `events/1`,
-   `continue/2`, `resume/2`
+1. **`CodingAgent.Coordinator`** — a GenServer that starts, monitors, and
+   collects results from concurrent subagent sessions, with configurable
+   timeouts and automatic cleanup
+2. **`CodingAgent.Session`** — each subagent is a full native session with its
+   own event stream, tool policy, and budget inherited from the parent
+3. **`CodingAgent.Subagents`** — lightweight personas (`research`, `implement`,
+   `review`, `test`, or custom entries from `.lemon/subagents.json`) whose role
+   prompts are prepended to the delegated prompt
 
-All CLI runners produce the same event types: `StartedEvent`, `ActionEvent`,
-`CompletedEvent`. This uniformity is what lets the gateway treat all engines
-identically.
+All subagents produce the same native event types as a top-level run. The
+parent agent's `task` tool consumes those events; a subagent never replaces the
+top-level native conversation executor.
 
 ---
 

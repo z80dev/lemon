@@ -60,14 +60,21 @@ defmodule LemonControlPlane.Methods.SessionsList do
     Enum.filter(sessions, fn s -> s[:agent_id] == agent_id end)
   end
 
+  # `model` here is the session's own override and nothing more — one session-policy read per
+  # row. Full resolution (profile model, config default, provider, context window) costs an
+  # `AgentProfiles` call per row and lives in `session.detail` instead; a null `model` on a row
+  # means "inherits", not "no model".
   defp format_session(session) do
+    session_key = session[:session_key]
+
     %{
-      "sessionKey" => session[:session_key],
+      "sessionKey" => session_key,
       "agentId" => session[:agent_id],
       "origin" => to_string(session[:origin] || :unknown),
       "createdAtMs" => session[:created_at_ms],
       "updatedAtMs" => session[:updated_at_ms],
-      "runCount" => session[:run_count] || 0
+      "runCount" => session[:run_count] || 0,
+      "model" => LemonControlPlane.SessionModel.override(session_key)
     }
   end
 

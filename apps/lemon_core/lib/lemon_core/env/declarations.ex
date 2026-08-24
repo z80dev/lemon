@@ -873,6 +873,132 @@ defmodule LemonCore.Env.Declarations do
       apps: [:lemon_core]
     },
     %{
+      name: :lemon_tool_disclosure_budget_tokens,
+      env_var: "LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS",
+      aliases: [],
+      type: :integer,
+      default: 40_000,
+      doc:
+        "Estimated tool-schema token total above which long-tail tools are hidden behind tool_search/tool_invoke.",
+      secret?: false,
+      required?: false,
+      area: :tools_disclosure,
+      apps: [:lemon_core]
+    },
+    %{
+      name: :lemon_tool_disclosure_catalog_tokens,
+      env_var: "LEMON_TOOL_DISCLOSURE_CATALOG_TOKENS",
+      aliases: [],
+      type: :integer,
+      default: 2_000,
+      doc:
+        "Token budget for the hidden-tool catalog digest embedded in the tool_search description.",
+      secret?: false,
+      required?: false,
+      area: :tools_disclosure,
+      apps: [:lemon_core]
+    },
+    %{
+      name: :lemon_tool_disclosure_enabled,
+      env_var: "LEMON_TOOL_DISCLOSURE_ENABLED",
+      aliases: [],
+      type: :boolean,
+      default: true,
+      doc:
+        "Whether tool-schema progressive disclosure may activate when the tool catalog exceeds the token budget.",
+      secret?: false,
+      required?: false,
+      area: :tools_disclosure,
+      apps: [:lemon_core]
+    },
+    %{
+      name: :lemon_execute_code_enabled,
+      env_var: "LEMON_EXECUTE_CODE_ENABLED",
+      aliases: [],
+      type: :boolean,
+      default: false,
+      doc: "Whether the execute_code programmatic tool-calling tool is enabled.",
+      secret?: false,
+      required?: false,
+      area: :tools_execute_code,
+      apps: [:lemon_core]
+    },
+    %{
+      name: :lemon_execute_code_max_output_bytes,
+      env_var: "LEMON_EXECUTE_CODE_MAX_OUTPUT_BYTES",
+      aliases: [],
+      type: :integer,
+      default: 50_000,
+      doc:
+        "Maximum script stdout bytes returned to the model (larger output is spilled to a file).",
+      secret?: false,
+      required?: false,
+      area: :tools_execute_code,
+      apps: [:lemon_core]
+    },
+    %{
+      name: :lemon_execute_code_max_rpc_calls,
+      env_var: "LEMON_EXECUTE_CODE_MAX_RPC_CALLS",
+      aliases: [],
+      type: :integer,
+      default: 100,
+      doc: "Maximum tool RPC calls one execute_code script may make.",
+      secret?: false,
+      required?: false,
+      area: :tools_execute_code,
+      apps: [:lemon_core]
+    },
+    %{
+      name: :lemon_execute_code_max_rpc_result_bytes,
+      env_var: "LEMON_EXECUTE_CODE_MAX_RPC_RESULT_BYTES",
+      aliases: [],
+      type: :integer,
+      default: 5_242_880,
+      doc: "Total byte budget for tool RPC results returned to one execute_code script.",
+      secret?: false,
+      required?: false,
+      area: :tools_execute_code,
+      apps: [:lemon_core]
+    },
+    %{
+      name: :lemon_execute_code_python_path,
+      env_var: "LEMON_EXECUTE_CODE_PYTHON_PATH",
+      aliases: [],
+      type: :string,
+      default: "",
+      doc:
+        "Explicit python3 interpreter path for execute_code scripts (empty = find python3 on PATH).",
+      secret?: false,
+      required?: false,
+      area: :tools_execute_code,
+      apps: [:lemon_core]
+    },
+    %{
+      name: :lemon_execute_code_timeout_ms,
+      env_var: "LEMON_EXECUTE_CODE_TIMEOUT_MS",
+      aliases: [],
+      type: :integer,
+      default: 120_000,
+      doc: "Wall-clock cap for one execute_code script run, in milliseconds.",
+      secret?: false,
+      required?: false,
+      area: :tools_execute_code,
+      apps: [:lemon_core]
+    },
+    %{
+      name: :lemon_execute_code_tools,
+      env_var: "LEMON_EXECUTE_CODE_TOOLS",
+      aliases: [],
+      type: :list,
+      default: [],
+      doc:
+        "Comma-separated subset of the execute_code RPC allowlist (read, grep, find, ls, webfetch) to expose; empty = full allowlist.",
+      secret?: false,
+      required?: false,
+      area: :tools_execute_code,
+      apps: [:lemon_core]
+    },
+    %{
       name: :lemon_wasm_auto_build,
       env_var: "LEMON_WASM_AUTO_BUILD",
       aliases: [],
@@ -1311,18 +1437,6 @@ defmodule LemonCore.Env.Declarations do
       apps: [:lemon_core, :lemon_gateway]
     },
     %{
-      name: :lemon_gateway_default_engine,
-      env_var: "LEMON_GATEWAY_DEFAULT_ENGINE",
-      aliases: [],
-      type: :string,
-      default: "lemon",
-      doc: "Default coding-agent engine used for gateway-initiated runs.",
-      secret?: false,
-      required?: false,
-      area: :gateway,
-      apps: [:lemon_core, :lemon_gateway]
-    },
-    %{
       name: :lemon_gateway_enable_webhook,
       env_var: "LEMON_GATEWAY_ENABLE_WEBHOOK",
       aliases: [],
@@ -1369,90 +1483,6 @@ defmodule LemonCore.Env.Declarations do
       required?: false,
       area: :gateway,
       apps: [:lemon_core, :lemon_gateway]
-    },
-    %{
-      name: :lemon_gateway_enable_discord,
-      env_var: "LEMON_GATEWAY_ENABLE_DISCORD",
-      aliases: [],
-      type: :boolean,
-      default: false,
-      doc: "Whether the Discord transport is enabled.",
-      secret?: false,
-      required?: false,
-      area: :gateway,
-      apps: [:lemon_core, :lemon_channels]
-    },
-    %{
-      name: :lemon_gateway_enable_telegram,
-      env_var: "LEMON_GATEWAY_ENABLE_TELEGRAM",
-      aliases: [],
-      type: :boolean,
-      default: false,
-      doc: "Whether the Telegram transport is enabled.",
-      secret?: false,
-      required?: false,
-      area: :gateway,
-      apps: [:lemon_core, :lemon_channels]
-    },
-    %{
-      name: :lemon_gateway_enable_xmtp,
-      env_var: "LEMON_GATEWAY_ENABLE_XMTP",
-      aliases: [],
-      type: :boolean,
-      default: false,
-      doc: "Whether the XMTP transport is enabled.",
-      secret?: false,
-      required?: false,
-      area: :gateway,
-      apps: [:lemon_core, :lemon_channels]
-    },
-    %{
-      name: :lemon_telegram_compaction_context_window,
-      env_var: "LEMON_TELEGRAM_COMPACTION_CONTEXT_WINDOW",
-      aliases: [],
-      type: :integer,
-      default: 400_000,
-      doc: "Context window size (tokens) used for Telegram compaction triggers.",
-      secret?: false,
-      required?: false,
-      area: :gateway,
-      apps: [:lemon_core, :lemon_channels]
-    },
-    %{
-      name: :lemon_telegram_compaction_enabled,
-      env_var: "LEMON_TELEGRAM_COMPACTION_ENABLED",
-      aliases: [],
-      type: :boolean,
-      default: true,
-      doc: "Whether Telegram session transcripts are auto-compacted.",
-      secret?: false,
-      required?: false,
-      area: :gateway,
-      apps: [:lemon_core, :lemon_channels]
-    },
-    %{
-      name: :lemon_telegram_compaction_reserve_tokens,
-      env_var: "LEMON_TELEGRAM_COMPACTION_RESERVE_TOKENS",
-      aliases: [],
-      type: :integer,
-      default: 16_384,
-      doc: "Token budget reserved during Telegram session compaction.",
-      secret?: false,
-      required?: false,
-      area: :gateway,
-      apps: [:lemon_core, :lemon_channels]
-    },
-    %{
-      name: :lemon_telegram_compaction_trigger_ratio,
-      env_var: "LEMON_TELEGRAM_COMPACTION_TRIGGER_RATIO",
-      aliases: [],
-      type: :float,
-      default: 0.9,
-      doc: "Context-window fill ratio that triggers Telegram compaction.",
-      secret?: false,
-      required?: false,
-      area: :gateway,
-      apps: [:lemon_core, :lemon_channels]
     },
     %{
       name: :lemon_web_cache_max_entries,

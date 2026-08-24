@@ -95,6 +95,17 @@ jobs:
       - name: Lint CI/docs policy
         run: bash scripts/lint_ci_docs.sh
 
+      # --shell=sh on install.sh is load-bearing: the curl one-liner runs under
+      # whatever /bin/sh the user has, so the script must stay POSIX.
+      - name: Shellcheck installer and shim scripts
+        run: |
+          command -v shellcheck >/dev/null 2>&1 || {
+            sudo apt-get update && sudo apt-get install -y shellcheck
+          }
+          shellcheck --shell=sh install.sh
+          shellcheck scripts/verify_install_script
+          shellcheck rel/overlays/bin/lemon
+
       - name: Check canonical test runner contract
         run: bash scripts/test_contract.sh
 
@@ -264,7 +275,6 @@ jobs:
           cache: npm
           cache-dependency-path: |
             clients/lemon-web/package-lock.json
-            clients/lemon-tui/package-lock.json
             clients/lemon-browser-node/package-lock.json
 
       # --- lemon-web ---
@@ -300,30 +310,35 @@ jobs:
         working-directory: clients/lemon-web
         run: npm audit --omit=dev --audit-level=high
 
-      # --- lemon-tui ---
-      - name: Install lemon-tui deps
-        working-directory: clients/lemon-tui
-        run: npm ci
+      # --- tui ---
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: clients/tui/.bun-version
 
-      - name: lemon-tui typecheck
-        working-directory: clients/lemon-tui
-        run: npm run typecheck
+      - name: Cache Bun install cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('clients/tui/bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
 
-      - name: lemon-tui lint
-        working-directory: clients/lemon-tui
-        run: npm run lint
+      - name: Install tui deps
+        working-directory: clients/tui
+        run: bun install --frozen-lockfile
 
-      - name: lemon-tui build
-        working-directory: clients/lemon-tui
-        run: npm run build
+      - name: tui typecheck
+        working-directory: clients/tui
+        run: bun run check
 
-      - name: lemon-tui tests
-        working-directory: clients/lemon-tui
-        run: npm run test:coverage
+      - name: tui lint
+        working-directory: clients/tui
+        run: bun run lint
 
-      - name: lemon-tui audit
-        working-directory: clients/lemon-tui
-        run: npm audit --omit=dev --audit-level=high
+      - name: tui tests
+        working-directory: clients/tui
+        run: bun test
 
       # --- lemon-browser-node ---
       - name: Install lemon-browser-node deps

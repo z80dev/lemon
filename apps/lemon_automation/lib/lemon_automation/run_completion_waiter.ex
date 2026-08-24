@@ -1,6 +1,8 @@
 defmodule LemonAutomation.RunCompletionWaiter do
   @moduledoc false
 
+  alias LemonCore.Events
+
   @default_timeout_ms 300_000
   @max_output_chars 1_000
 
@@ -41,30 +43,49 @@ defmodule LemonAutomation.RunCompletionWaiter do
 
   # Shared wait logic.
   #
-  # Both terminal events arrive as `LemonCore.Event` envelopes. The bare-map clauses accept a
-  # payload published without an envelope, which Phase 3.1 kept for one deprecation cycle;
-  # the tuple and envelope-less `%{completed: ...}` clauses that used to live here matched
-  # shapes no publisher in the umbrella could produce and are gone.
+  # Both terminal events arrive as `LemonCore.Event` envelopes: since P1 (see
+  # docs/platform/bus-events.md §8) no publisher in the umbrella emits either type without
+  # one, so the envelope-less-map clauses that used to stand in for the pre-P1 `:run_failed`
+  # are gone along with the `Access` shim they leaned on. The payload is coerced to its
+  # `LemonCore.Events` struct on arrival, so a legacy map — the cron summary the automation
+  # app forwards, or an injected event — is still read by field rather than by key.
   defp do_wait(timeout_ms) do
     receive do
       %LemonCore.Event{type: :run_completed, payload: payload} ->
-        extract_output_from_completion(payload)
+        extract_output_from_completion(Events.coerce(:run_completed, payload))
 
       %LemonCore.Event{type: :run_failed, payload: payload} ->
-        {:error, inspect(payload[:reason] || payload)}
-
-      %{type: :run_completed, payload: payload} ->
-        extract_output_from_completion(payload)
-
-      %{type: :run_failed, payload: payload} ->
-        {:error, inspect(payload[:reason] || payload)}
+        failure_reason(Events.coerce(:run_failed, payload))
     after
       timeout_ms ->
         :timeout
     end
   end
 
+  defp failure_reason(%Events.RunFailed{reason: reason}), do: {:error, inspect(reason)}
+  defp failure_reason(payload), do: {:error, inspect(payload)}
+
   @doc false
+  @spec extract_output_from_completion(term()) :: {:ok, binary()} | {:error, binary()}
+  def extract_output_from_completion(%Events.RunCompleted{completed: completed})
+      when not is_nil(completed) do
+    extract_output_from_completion(completed)
+  end
+
+  def extract_output_from_completion(%Events.Completion{ok: true, answer: answer}) do
+    {:ok, truncate_output(answer)}
+  end
+
+  def extract_output_from_completion(%Events.Completion{ok: false, error: error}) do
+    {:error, inspect(error)}
+  end
+
+  def extract_output_from_completion(%Events.Completion{answer: answer} = completion) do
+    if is_binary(answer),
+      do: {:ok, truncate_output(answer)},
+      else: {:ok, truncate_output(inspect(completion))}
+  end
+
   def extract_output_from_completion(%{completed: %{answer: answer, ok: true}}) do
     {:ok, truncate_output(answer)}
   end
@@ -81,7 +102,9 @@ defmodule LemonAutomation.RunCompletionWaiter do
     {:error, inspect(error)}
   end
 
-  def extract_output_from_completion(result) when is_map(result) do
+  # Free-form legacy payloads only. Every payload struct has matched above, so the key reads
+  # below are `Access` on a plain map — never on a `LemonCore.Events` struct.
+  def extract_output_from_completion(result) when is_map(result) and not is_struct(result) do
     cond do
       is_binary(result[:output]) -> {:ok, truncate_output(result[:output])}
       is_binary(result["output"]) -> {:ok, truncate_output(result["output"])}

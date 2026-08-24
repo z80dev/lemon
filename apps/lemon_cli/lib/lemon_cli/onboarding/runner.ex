@@ -1,11 +1,13 @@
 defmodule LemonCli.Onboarding.Runner do
   @moduledoc false
 
+  alias LemonCli.CLI
+  alias LemonCli.Onboarding.LogSilencer
+  alias LemonCore.OAuth.LocalCallbackListener
+  alias LemonCli.Onboarding.Provider
+  alias LemonCli.Onboarding.PromptUI
   alias LemonCore.Config
   alias LemonCore.Config.TomlPatch
-  alias LemonCli.Onboarding.LogSilencer
-  alias LemonCli.Onboarding.Provider
-  alias LemonCli.Onboarding.TerminalUI
   alias LemonCore.Secrets
 
   @common_switches [
@@ -27,14 +29,14 @@ defmodule LemonCli.Onboarding.Runner do
 
   @spec default_io() :: io_callbacks()
   def default_io do
-    shell = Mix.shell()
-
+    # Plain device IO, not Mix.shell(): this module also runs from packaged
+    # releases where Mix does not exist. Behavior matches Mix.Shell.IO.
     %{
-      info: fn message -> shell.info(message) end,
-      error: fn message -> shell.error(message) end,
-      prompt: fn prompt -> shell.prompt(prompt) end,
+      info: fn message -> IO.puts(message) end,
+      error: fn message -> IO.puts(:stderr, message) end,
+      prompt: fn prompt -> IO.gets(prompt) end,
       secret: &read_secret/1,
-      select: &TerminalUI.select/1
+      select: &PromptUI.select/1
     }
   end
 
@@ -42,14 +44,13 @@ defmodule LemonCli.Onboarding.Runner do
   def run(args, %Provider{} = spec, opts \\ []) when is_list(args) do
     io = Keyword.get(opts, :io, default_io())
 
-    LogSilencer.with_quiet_logs(interactive_tui_session?(io), fn ->
+    LogSilencer.with_quiet_logs(interactive_prompt_session?(io), fn ->
       do_run(args, spec, io)
     end)
   end
 
   defp do_run(args, %Provider{} = spec, io) do
-    Mix.Task.run("loadpaths")
-    ensure_required_apps_started!()
+    ensure_required_apps!()
 
     {cli_opts, _positional, _invalid} =
       OptionParser.parse(args, switches: @common_switches ++ spec.switches)
@@ -92,7 +93,13 @@ defmodule LemonCli.Onboarding.Runner do
     :ok
   end
 
-  defp ensure_required_apps_started! do
+  @doc """
+  Starts the apps onboarding depends on. Raises a user-readable error (a
+  `Mix.Error` under Mix, a `LemonCli.CLI.Error` in packaged releases) when an
+  app fails to start.
+  """
+  @spec ensure_required_apps!() :: :ok
+  def ensure_required_apps! do
     [:lemon_core, :lemon_ai]
     |> Enum.each(fn app ->
       case Application.ensure_all_started(app) do
@@ -100,22 +107,36 @@ defmodule LemonCli.Onboarding.Runner do
           :ok
 
         {:error, reason} ->
-          Mix.raise("Failed to start required app #{inspect(app)}: #{inspect(reason)}")
+          fail!("Failed to start required app #{inspect(app)}: #{inspect(reason)}")
       end
     end)
+
+    :ok
   end
 
-  defp interactive_tui_session?(io) when is_map(io) do
-    is_function(Map.get(io, :select), 1) and TerminalUI.available?()
+  @doc """
+  Raises the environment's CLI error with a user-readable message: Mix's own
+  error type where Mix is loaded (so Mix tasks format it natively), otherwise
+  `LemonCli.CLI.Error` for the packaged runtime.
+  """
+  @spec fail!(String.t()) :: no_return()
+  def fail!(message) do
+    raise error_module(), message: message
+  end
+
+  defp error_module do
+    if Code.ensure_loaded?(Mix.Error), do: Mix.Error, else: CLI.Error
+  end
+
+  defp interactive_prompt_session?(io) when is_map(io) do
+    is_function(Map.get(io, :select), 1) and PromptUI.available?()
   end
 
   defp ensure_secrets_ready! do
     status = Secrets.status()
 
     unless status.configured do
-      Mix.raise(
-        "Encrypted secrets are not configured. Run mix lemon.secrets.init first, then retry."
-      )
+      fail!("Encrypted secrets are not configured. Run mix lemon.secrets.init first, then retry.")
     end
   end
 
@@ -125,7 +146,7 @@ defmodule LemonCli.Onboarding.Runner do
 
     cond do
       token && explicit_auth == "oauth" ->
-        Mix.raise("Cannot combine --token with --auth oauth.")
+        fail!("Cannot combine --token with --auth oauth.")
 
       token ->
         :api_key
@@ -150,7 +171,7 @@ defmodule LemonCli.Onboarding.Runner do
         "oauth" -> :oauth
         "api_key" -> :api_key
         "api-key" -> :api_key
-        other -> Mix.raise("Unknown auth mode #{inspect(other)} for #{spec.id}.")
+        other -> fail!("Unknown auth mode #{inspect(other)} for #{spec.id}.")
       end
 
     if mode in spec.auth_modes do
@@ -161,9 +182,7 @@ defmodule LemonCli.Onboarding.Runner do
         |> Enum.map(&Atom.to_string/1)
         |> Enum.join(", ")
 
-      Mix.raise(
-        "#{spec.display_name} does not support #{mode}. Supported auth modes: #{supported}"
-      )
+      fail!("#{spec.display_name} does not support #{mode}. Supported auth modes: #{supported}")
     end
   end
 
@@ -172,26 +191,21 @@ defmodule LemonCli.Onboarding.Runner do
     default_index = Enum.find_index(spec.auth_modes, &(&1 == default_mode)) || 0
 
     options =
-      spec.auth_modes
-      |> Enum.with_index()
-      |> Enum.map(fn {mode, idx} ->
-        label =
-          auth_mode_choice_label(spec, mode) <>
-            if(idx == default_index, do: "   [default]", else: "")
-
-        %{label: label, value: mode}
+      Enum.map(spec.auth_modes, fn mode ->
+        %{label: auth_mode_choice_label(spec, mode), value: mode}
       end)
 
     case select_value(io, %{
            title: "Choose #{spec.display_name} Authentication",
            subtitle: "Pick how Lemon should store and use these credentials.",
-           options: options
+           options: options,
+           default_index: default_index
          }) do
       {:ok, mode} ->
         mode
 
       :cancel ->
-        Mix.raise("Onboarding cancelled.")
+        fail!("Onboarding cancelled.")
 
       :fallback ->
         io.info.("")
@@ -240,7 +254,7 @@ defmodule LemonCli.Onboarding.Runner do
         try do
           parse_auth_mode!(trimmed, spec)
         rescue
-          e in Mix.Error ->
+          e in [Mix.Error, CLI.Error] ->
             io.error.(Exception.message(e))
 
             parse_auth_mode_choice(
@@ -282,7 +296,7 @@ defmodule LemonCli.Onboarding.Runner do
 
   defp run_oauth_flow!(opts, %Provider{oauth_module: oauth_module} = spec, io) do
     unless oauth_module && Code.ensure_loaded?(oauth_module) do
-      Mix.raise(
+      fail!(
         spec.oauth_missing_hint ||
           "#{spec.display_name} OAuth module is unavailable. Make sure the :lemon_ai app is compiled."
       )
@@ -304,6 +318,7 @@ defmodule LemonCli.Onboarding.Runner do
 
           io.info.("")
         end,
+        local_callback_listener: LocalCallbackListener,
         on_progress: fn message ->
           io.info.(message)
         end,
@@ -343,7 +358,7 @@ defmodule LemonCli.Onboarding.Runner do
           apply(oauth_module, :resolve_access_token, [])
 
         true ->
-          Mix.raise(
+          fail!(
             "#{inspect(oauth_module)} does not expose a supported OAuth entrypoint. Expected login_device_flow/1 or resolve_access_token/0."
           )
       end
@@ -357,14 +372,14 @@ defmodule LemonCli.Onboarding.Runner do
 
   defp normalize_oauth_result!({:error, reason}, _oauth_module, spec) do
     label = spec.oauth_failure_label || "#{spec.display_name} OAuth login failed"
-    Mix.raise("#{label}: #{inspect(reason)}")
+    fail!("#{label}: #{inspect(reason)}")
   end
 
   defp normalize_oauth_result!(payload, oauth_module, spec) do
     payload = encode_oauth_payload!(payload, oauth_module)
 
     if payload == "" do
-      Mix.raise(
+      fail!(
         spec.token_resolution_hint ||
           "#{spec.display_name} OAuth flow did not return credentials."
       )
@@ -386,7 +401,7 @@ defmodule LemonCli.Onboarding.Runner do
   end
 
   defp encode_oauth_payload!(payload, _oauth_module) do
-    Mix.raise("OAuth flow returned unsupported payload: #{inspect(payload)}")
+    fail!("OAuth flow returned unsupported payload: #{inspect(payload)}")
   end
 
   defp store_secret!(secret_name, secret_value, secret_provider, spec) do
@@ -395,14 +410,12 @@ defmodule LemonCli.Onboarding.Runner do
         metadata
 
       {:error, :missing_master_key} ->
-        Mix.raise(
+        fail!(
           "Missing secrets master key. Run mix lemon.secrets.init or set LEMON_SECRETS_MASTER_KEY."
         )
 
       {:error, reason} ->
-        Mix.raise(
-          "Failed to store #{spec.display_name} credentials in secrets: #{inspect(reason)}"
-        )
+        fail!("Failed to store #{spec.display_name} credentials in secrets: #{inspect(reason)}")
     end
   end
 
@@ -420,7 +433,7 @@ defmodule LemonCli.Onboarding.Runner do
     if requested_model in available do
       requested_model
     else
-      Mix.raise(
+      fail!(
         "Unknown model #{inspect(requested_model)} for #{spec.id}. Available: #{Enum.join(available, ", ")}"
       )
     end
@@ -430,29 +443,26 @@ defmodule LemonCli.Onboarding.Runner do
     available = available_model_ids(spec)
 
     if available == [] do
-      Mix.raise("No models found for #{spec.id} in LemonAi.Models registry.")
+      fail!("No models found for #{spec.id} in LemonAi.Models registry.")
     end
 
     default_model =
       Enum.find(spec.preferred_models, fn model -> model in available end) || hd(available)
 
-    options =
-      available
-      |> Enum.map(fn model ->
-        label = model <> if(model == default_model, do: "   [default]", else: "")
-        %{label: label, value: model}
-      end)
+    default_index = Enum.find_index(available, &(&1 == default_model)) || 0
+    options = Enum.map(available, &%{label: &1, value: &1})
 
     case select_value(io, %{
            title: "Choose #{spec.display_name} Model",
            subtitle: "This sets defaults.provider and defaults.model in config.toml.",
-           options: options
+           options: options,
+           default_index: default_index
          }) do
       {:ok, model} ->
         model
 
       :cancel ->
-        Mix.raise("Onboarding cancelled.")
+        fail!("Onboarding cancelled.")
 
       :fallback ->
         io.info.("")
@@ -602,7 +612,7 @@ defmodule LemonCli.Onboarding.Runner do
         ""
 
       {:error, reason} ->
-        Mix.raise("Failed to read config file #{expanded}: #{inspect(reason)}")
+        fail!("Failed to read config file #{expanded}: #{inspect(reason)}")
     end
   end
 
@@ -612,7 +622,7 @@ defmodule LemonCli.Onboarding.Runner do
 
     case File.write(expanded, content) do
       :ok -> :ok
-      {:error, reason} -> Mix.raise("Failed to write config file #{expanded}: #{inspect(reason)}")
+      {:error, reason} -> fail!("Failed to write config file #{expanded}: #{inspect(reason)}")
     end
   end
 
@@ -624,28 +634,23 @@ defmodule LemonCli.Onboarding.Runner do
         :ok
 
       {:error, reason} ->
-        Mix.raise("Config file #{path} is not valid TOML: #{inspect(reason)}")
+        fail!("Config file #{path} is not valid TOML: #{inspect(reason)}")
     end
   end
 
   defp prompt_yes_no?(message, default, io) do
-    options =
-      if default do
-        [
-          %{label: "Yes   [default]", value: true},
-          %{label: "No", value: false}
-        ]
-      else
-        [
-          %{label: "Yes", value: true},
-          %{label: "No   [default]", value: false}
-        ]
-      end
+    options = [
+      %{label: "Yes", value: true},
+      %{label: "No", value: false}
+    ]
+
+    default_index = if default, do: 0, else: 1
 
     case select_value(io, %{
            title: message,
            subtitle: "Use Enter to confirm.",
-           options: options
+           options: options,
+           default_index: default_index
          }) do
       {:ok, value} ->
         value
@@ -694,9 +699,6 @@ defmodule LemonCli.Onboarding.Runner do
 
       {:unix, _} ->
         run_system_cmd("xdg-open", [url])
-
-      _ ->
-        {:error, :unsupported_os}
     end
   end
 
@@ -709,7 +711,6 @@ defmodule LemonCli.Onboarding.Runner do
       opts =
         case input do
           nil -> [stderr_to_stdout: true]
-          _ -> [input: input, stderr_to_stdout: true]
         end
 
       case System.cmd(command, args, opts) do
@@ -728,7 +729,7 @@ defmodule LemonCli.Onboarding.Runner do
   end
 
   defp read_secret(prompt) do
-    Mix.shell().prompt(prompt)
+    IO.gets(prompt)
   end
 
   defp select_value(io, params) do
@@ -775,7 +776,7 @@ defmodule LemonCli.Onboarding.Runner do
 
   defp require_non_empty!(value, error_message) when is_binary(value) do
     trimmed = String.trim(value)
-    if trimmed == "", do: Mix.raise(error_message), else: trimmed
+    if trimmed == "", do: fail!(error_message), else: trimmed
   end
 
   defp normalize_optional_string(value) when is_binary(value) do

@@ -58,12 +58,6 @@ LemonAgent.Supervisor (:one_for_one)
 | `lib/agent_core/subagent_supervisor.ex` | `DynamicSupervisor` for subagent processes. Children are `:temporary`. `start_subagent/1` accepts `registry_key:` option. |
 | `lib/agent_core/application.ex` | OTP app. Starts the supervision tree. |
 
-### CLI Runners
-
-The vendor CLI wrappers (Claude Code, Codex, Droid, Kimi, OpenCode, Pi) moved to
-`apps/lemon_cli_runners` as `LemonCliRunners.*`; see that app's AGENTS/README.
-They still consume this app's `EventStream` and `Types`.
-
 ### Adding a new tool
 
 Define a tool struct and pass it to `LemonAgent.new_agent/1`:
@@ -248,7 +242,7 @@ end
 
 6. **Follow-up long-poll.** The Agent long-polls for 50ms (`@follow_up_poll_timeout_ms`) when checking for follow-up messages. This closes a race where a follow-up is enqueued just as the loop finishes. Do not remove this without understanding the timing implications.
 
-7. **EventStream owner death.** If the EventStream's owner process dies, the stream cancels and shuts down its attached task. Consumers that outlive a producer (as the CLI runners in `lemon_cli_runners` do) should set the owner to the caller, not the producer.
+7. **EventStream owner death.** If the EventStream's owner process dies, the stream cancels and shuts down its attached task. Consumers that outlive a producer should set the owner to the caller, not the producer.
 
 8. **Tool execution runs under `ToolTaskSupervisor`.** If a tool task crashes, it is caught and reported as an error result. It does not crash the loop.
 
@@ -274,13 +268,6 @@ LemonAgent emits introspection events via `LemonCore.Introspection.record/3`. Pa
 | `:agent_loop_started` | `:direct` | `LemonAgent.Agent` | Agent loop begins (`start_loop`) |
 | `:agent_turn_observed` | `:inferred` | `LemonAgent.Agent` | Each turn completes (`{:turn_end, ...}`) |
 | `:agent_loop_ended` | `:direct` | `LemonAgent.Agent` | Agent loop finishes (`handle_task_completion`) |
-
-### CLI Runner Events
-
-Recorded by the runners in `apps/lemon_cli_runners` (see that app's docs):
-`:jsonl_stream_started` / `:jsonl_stream_ended`, `:tool_use_observed`,
-`:assistant_turn_observed`, and the `:engine_subprocess_*` /
-`:engine_output_observed` events.
 
 ## Subagent Spawning Patterns
 

@@ -31,6 +31,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   alias LemonCore.{
     ChatStateStore,
     Event,
+    Events,
     InboundMessage,
     ProjectBindingStore,
     ResumeToken,
@@ -47,7 +48,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   @idle_keepalive_continue_prefix "lemon:idle:c:"
   @idle_keepalive_stop_prefix "lemon:idle:k:"
 
-  @model_default_engine "lemon"
   @thinking_levels ~w(off minimal low medium high xhigh)
   @debounce_ms 1_000
   @default_dedupe_ttl 600_000
@@ -58,6 +58,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   # Slash-command schemas live in SlashCommands; re-export the public surface the
   # adapter registration and tests depend on.
   defdelegate slash_commands, to: SlashCommands
+  defdelegate redirect_command_schema, to: SlashCommands
   defdelegate kanban_command_schema, to: SlashCommands
   defdelegate checkpoint_command_schema, to: SlashCommands
   defdelegate rollback_command_schema, to: SlashCommands
@@ -454,6 +455,8 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   defp submit_inbound_now(state, inbound) do
+    {redirect_override, inbound} = apply_redirect_prefix(inbound)
+
     channel_id = inbound.meta[:channel_id]
     thread_id = inbound.meta[:thread_id]
     user_msg_id = inbound.meta[:user_msg_id]
@@ -490,13 +493,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       |> maybe_put(:model_scope, model_scope)
       |> maybe_put(:thinking_level, thinking_hint)
       |> maybe_put(:thinking_scope, thinking_scope)
-
-    meta =
-      if is_binary(model_hint) and model_hint != "" and not is_binary(meta[:engine_id]) do
-        Map.put(meta, :engine_id, @model_default_engine)
-      else
-        meta
-      end
+      |> maybe_put(:queue_mode, redirect_override)
 
     # Track for reaction updates
     state =
@@ -515,13 +512,20 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         state
       end
 
-    # Check for stored resume from /resume command
+    meta =
+      case meta[:resume] do
+        %ResumeToken{engine: "lemon"} = resume -> Map.put(meta, :resume, resume)
+        _ -> Map.delete(meta, :resume)
+      end
+
+    # Apply a native resume selected by /resume. Stale vendor selections remain
+    # stored for rollback, but never affect a native channel run.
     meta =
       if is_nil(meta[:resume]) do
         stored_resume_key = {state.account_id, channel_id, thread_id}
 
         case LemonCore.Store.get(:discord_selected_resume, stored_resume_key) do
-          %ResumeToken{} = resume ->
+          %ResumeToken{engine: "lemon"} = resume ->
             _ = LemonCore.Store.delete(:discord_selected_resume, stored_resume_key)
             Map.put(meta, :resume, resume)
 
@@ -532,26 +536,72 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         meta
       end
 
-    # Extract inline resume token
-    {explicit_resume, stripped_prompt} =
-      ResumeSelection.extract_explicit_resume_and_strip(inbound.message.text)
+    case ResumeSelection.extract_explicit_resume_and_strip(inbound.message.text) do
+      {:unsupported, engine} ->
+        _ = send_channel_message(channel_id, unsupported_resume_message(engine))
+        state
 
-    meta =
-      if is_nil(meta[:resume]) and match?(%ResumeToken{}, explicit_resume) do
-        Map.put(meta, :resume, explicit_resume)
-      else
-        meta
-      end
+      {%ResumeToken{engine: "lemon"} = explicit_resume, stripped_prompt} ->
+        inbound =
+          %{
+            inbound
+            | meta:
+                if(is_nil(meta[:resume]), do: Map.put(meta, :resume, explicit_resume), else: meta),
+              message: Map.put(inbound.message || %{}, :text, stripped_prompt)
+          }
 
-    inbound = %{
-      inbound
-      | meta: meta,
-        message: Map.put(inbound.message || %{}, :text, stripped_prompt)
-    }
+        _ = route_to_router(inbound)
+        state
 
-    _ = route_to_router(inbound)
-    state
+      {%ResumeToken{engine: engine}, _stripped_prompt} ->
+        _ = send_channel_message(channel_id, unsupported_resume_message(engine))
+        state
+
+      {_explicit_resume, stripped_prompt} ->
+        inbound = %{
+          inbound
+          | meta: meta,
+            message: Map.put(inbound.message || %{}, :text, stripped_prompt)
+        }
+
+        _ = route_to_router(inbound)
+        state
+    end
   end
+
+  defp unsupported_resume_message(engine) do
+    "Resume engine #{inspect(engine)} is not supported here. Use a Lemon resume token instead."
+  end
+
+  # Text-prefix form of the /redirect slash command: `!redirect <correction>`
+  # or `/redirect <correction>`. A bare prefix carries no correction and is
+  # left alone. Ungated — Discord has no `allow_queue_override` equivalent.
+  defp apply_redirect_prefix(inbound) do
+    case parse_redirect_prefix(inbound.message && Map.get(inbound.message, :text)) do
+      {:redirect, rest} ->
+        {:redirect, %{inbound | message: Map.put(inbound.message, :text, rest)}}
+
+      :none ->
+        {nil, inbound}
+    end
+  end
+
+  defp parse_redirect_prefix(text) when is_binary(text) do
+    trimmed = String.trim_leading(text)
+
+    case Regex.run(~r/^[!\/]redirect(?:\s+(.*))?$/is, trimmed) do
+      [_, rest] ->
+        case String.trim_leading(rest) do
+          "" -> :none
+          correction -> {:redirect, correction}
+        end
+
+      _ ->
+        :none
+    end
+  end
+
+  defp parse_redirect_prefix(_text), do: :none
 
   # ============================================================================
   # Interaction Handling (Slash Commands + Component Interactions)
@@ -591,6 +641,9 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
       "resume" ->
         handle_resume_interaction(interaction, state)
+
+      "redirect" ->
+        handle_redirect_interaction(interaction, state)
 
       "cancel" ->
         handle_cancel_interaction(interaction, state)
@@ -665,12 +718,11 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
   defp handle_lemon_interaction(interaction, state) do
     prompt = option_value(interaction, "prompt")
-    engine = option_value(interaction, "engine")
 
     if is_binary(prompt) and String.trim(prompt) != "" do
       respond_ephemeral(interaction, "Queued")
 
-      inbound = interaction_to_inbound(interaction, prompt, engine, state)
+      inbound = interaction_to_inbound(interaction, prompt, state)
 
       if allowed_inbound?(inbound, state) and binding_allowed?(inbound, state) do
         submit_inbound_now(state, inbound)
@@ -679,6 +731,30 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       end
     else
       respond_ephemeral(interaction, "Prompt cannot be empty.")
+      state
+    end
+  end
+
+  # ============================================================================
+  # /redirect Command
+  # ============================================================================
+
+  defp handle_redirect_interaction(interaction, state) do
+    correction = option_value(interaction, "correction")
+
+    if is_binary(correction) and String.trim(correction) != "" do
+      respond_ephemeral(interaction, "Redirecting…")
+
+      inbound = interaction_to_inbound(interaction, correction, state)
+      inbound = %{inbound | meta: Map.put(inbound.meta || %{}, :queue_mode, :redirect)}
+
+      if allowed_inbound?(inbound, state) and binding_allowed?(inbound, state) do
+        submit_inbound_now(state, inbound)
+      else
+        state
+      end
+    else
+      respond_ephemeral(interaction, "Correction cannot be empty.")
       state
     end
   end
@@ -822,7 +898,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       meta: %{
         session_key: session_key,
         agent_id: agent_id,
-        engine_id: nil,
         channel_id: channel_id,
         thread_id: thread_id
       }
@@ -1078,43 +1153,25 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       # Try to select a session
       case Integer.parse(String.trim(selector)) do
         {n, _} when n >= 1 and n <= length(sessions) ->
-          session = Enum.at(sessions, n - 1)
-          resume = session.resume
+          case Enum.at(sessions, n - 1).resume do
+            %ResumeToken{engine: "lemon"} = resume ->
+              scope = %ChatScope{transport: :discord, chat_id: channel_id, topic_id: thread_id}
+              agent_id = BindingResolver.resolve_agent_id(scope)
+              user_id = interaction_user_id(interaction)
+              guild_id = interaction |> map_get(:guild_id) |> parse_id()
+              peer_kind = if is_integer(guild_id), do: :group, else: :dm
 
-          # Apply the resume to next inbound
-          scope = %ChatScope{transport: :discord, chat_id: channel_id, topic_id: thread_id}
-          agent_id = BindingResolver.resolve_agent_id(scope)
-          user_id = interaction_user_id(interaction)
-          guild_id = interaction |> map_get(:guild_id) |> parse_id()
-          peer_kind = if is_integer(guild_id), do: :group, else: :dm
+              _sk =
+                session_key_for(
+                  agent_id,
+                  state.account_id,
+                  peer_kind,
+                  channel_id,
+                  user_id,
+                  thread_id,
+                  guild_id
+                )
 
-          _sk =
-            session_key_for(
-              agent_id,
-              state.account_id,
-              peer_kind,
-              channel_id,
-              user_id,
-              thread_id,
-              guild_id
-            )
-
-          # Store the resume selection
-          LemonCore.Store.put(
-            :discord_selected_resume,
-            {state.account_id, channel_id, thread_id},
-            resume
-          )
-
-          respond_ephemeral(
-            interaction,
-            "Switched to session: #{ResumeSelection.format_session_ref(resume)}\nNext message will resume this session."
-          )
-
-        _ ->
-          # Try as a direct resume spec
-          case ResumeSelection.resolve_resume_selector(selector, sessions) do
-            %ResumeToken{} = resume ->
               LemonCore.Store.put(
                 :discord_selected_resume,
                 {state.account_id, channel_id, thread_id},
@@ -1123,14 +1180,44 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
               respond_ephemeral(
                 interaction,
-                "Switched to session: #{ResumeSelection.format_session_ref(resume)}"
+                "Switched to session: #{ResumeSelection.format_session_ref(resume)}\nNext message will resume this session."
               )
+
+            %ResumeToken{engine: engine} ->
+              respond_ephemeral(interaction, unsupported_resume_message(engine))
 
             _ ->
               respond_ephemeral(
                 interaction,
                 "Invalid selector. Use a number (1-#{length(sessions)})."
               )
+          end
+
+        _ ->
+          case ResumeSelection.extract_explicit_resume_and_strip(selector) do
+            {:unsupported, engine} ->
+              respond_ephemeral(interaction, unsupported_resume_message(engine))
+
+            _ ->
+              case ResumeSelection.resolve_resume_selector(selector, sessions) do
+                %ResumeToken{engine: "lemon"} = resume ->
+                  LemonCore.Store.put(
+                    :discord_selected_resume,
+                    {state.account_id, channel_id, thread_id},
+                    resume
+                  )
+
+                  respond_ephemeral(
+                    interaction,
+                    "Switched to session: #{ResumeSelection.format_session_ref(resume)}"
+                  )
+
+                _ ->
+                  respond_ephemeral(
+                    interaction,
+                    "Invalid selector. Use a number (1-#{length(sessions)})."
+                  )
+              end
           end
       end
     end
@@ -1794,12 +1881,15 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   # Approval Handling
   # ============================================================================
 
+  # `:approval_requested` payloads are `Events.ApprovalRequested` structs carrying an
+  # `Events.ApprovalPending`; a legacy map is coerced into that pair so the whole record is
+  # read by field. A payload that will not coerce drops out of the `with` as a no-op.
   defp maybe_send_approval_request(state, payload) when is_map(payload) do
-    approval_id = payload[:approval_id] || payload["approval_id"]
-    pending = payload[:pending] || payload["pending"] || %{}
-    session_key = pending[:session_key] || pending["session_key"]
-
-    with true <- is_binary(approval_id) and is_binary(session_key),
+    with %Events.ApprovalRequested{approval_id: approval_id, pending: pending} <-
+           Events.coerce(:approval_requested, payload),
+         %Events.ApprovalPending{session_key: session_key, tool: tool, action: action} <-
+           pending,
+         true <- is_binary(approval_id) and is_binary(session_key),
          %{
            kind: :channel_peer,
            channel_id: "discord",
@@ -1810,9 +1900,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
            SessionKey.parse(session_key),
          true <- is_nil(account_id) or account_id == state.account_id,
          channel_id when is_integer(channel_id) <- parse_id(peer_id) do
-      tool = pending[:tool] || pending["tool"]
-      action = pending[:action] || pending["action"]
-
       text = "**Approval requested:** #{tool}\n**Action:** #{format_action(action)}"
 
       components = [
@@ -2112,7 +2199,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
         if File.dir?(expanded) do
           id = Path.basename(expanded)
-          ProjectBindingStore.put_dynamic(id, %{root: expanded, default_engine: nil})
+          ProjectBindingStore.put_dynamic(id, %{root: expanded})
           ProjectBindingStore.put_override(scope, id)
           {:ok, %{id: id, root: expanded}}
         else
@@ -2387,7 +2474,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   # Session & Routing Helpers
   # ============================================================================
 
-  defp interaction_to_inbound(interaction, prompt, engine, state) do
+  defp interaction_to_inbound(interaction, prompt, state) do
     channel_id = interaction |> map_get(:channel_id) |> parse_id()
     guild_id = interaction |> map_get(:guild_id) |> parse_id()
     interaction_id = interaction |> map_get(:id) |> parse_id()
@@ -2433,7 +2520,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       meta: %{
         session_key: session_key,
         agent_id: agent_id,
-        engine_id: normalize_blank(engine),
         user_msg_id: nil,
         channel_id: channel_id,
         guild_id: guild_id,

@@ -1,33 +1,31 @@
 defmodule LemonCore.EngineInfoBridge do
   @moduledoc """
-  Optional bridge to the engine runtime, without compile-time coupling.
+  Optional bridge to the gateway runtime, without compile-time coupling.
 
-  Channels and the control plane need three things that only the engine runtime
-  (`:lemon_gateway` in the reference runtime) can answer: the resume syntax its
-  custom engines accept, its transport registry for ops introspection, and any
-  full-replacement gateway config it holds. Before this bridge each caller
-  reached back with a hardcoded `:"Elixir.LemonGateway.*"` atom; now the engine
-  runtime configures itself here at boot and callers ask core.
+  Channels and the control plane use the gateway runtime
+  (`:lemon_gateway` in the reference runtime) for transport-registry ops
+  introspection and any full-replacement gateway config it holds. Before this
+  bridge each caller reached back with a hardcoded `:"Elixir.LemonGateway.*"`
+  atom; now the gateway configures itself here at boot and callers ask core.
 
   This is `LemonCore.RouterBridge`'s pattern pointed the other way: a
   configured implementation module per capability, runtime dispatch, and a
   documented degraded answer when nothing is configured.
 
       LemonCore.EngineInfoBridge.configure(
-        engine_registry: LemonGateway.EngineRegistry,
         transport_registry: LemonGateway.TransportRegistry,
         gateway_config: LemonGateway.Config
       )
 
   Every function answers `{:error, :unavailable}` (or the documented empty
   value) when its capability is unconfigured, unloadable, or not running, so a
-  runtime without an engine still serves channel messages and ops queries.
+  runtime without a gateway still serves channel messages and ops queries.
   """
 
   @bridge_key :engine_info_bridge
-  @config_keys [:engine_registry, :transport_registry, :gateway_config]
+  @config_keys [:transport_registry, :gateway_config]
 
-  @type capability :: :engine_registry | :transport_registry | :gateway_config
+  @type capability :: :transport_registry | :gateway_config
   @type config :: %{optional(capability()) => module()}
 
   @doc """
@@ -58,9 +56,7 @@ defmodule LemonCore.EngineInfoBridge do
     end
   end
 
-  @doc """
-  Whether a capability is configured, loadable, and (for registries) running.
-  """
+  @doc "Whether a capability is configured and loadable."
   @spec available?(capability()) :: boolean()
   def available?(capability) do
     case impl(capability) do
@@ -69,7 +65,7 @@ defmodule LemonCore.EngineInfoBridge do
     end
   end
 
-  @doc "Whether the registry process behind `capability` is alive."
+  @doc "Whether the process behind `capability` is alive."
   @spec running?(capability()) :: boolean()
   def running?(capability) do
     case impl(capability) do
@@ -78,40 +74,7 @@ defmodule LemonCore.EngineInfoBridge do
     end
   end
 
-  @doc """
-  Extracts a resume token using the engine runtime's own resume syntax.
-
-  `:none` when no engine runtime is configured — callers fall back to the
-  canonical `LemonCore.ResumeToken` syntax.
-  """
-  @spec extract_resume(String.t()) :: {:ok, LemonCore.ResumeToken.t()} | :none
-  def extract_resume(text) when is_binary(text) do
-    if running?(:engine_registry) do
-      case call(:engine_registry, :extract_resume, [text], :none) do
-        {:ok, %LemonCore.ResumeToken{}} = ok -> ok
-        _ -> :none
-      end
-    else
-      :none
-    end
-  end
-
-  def extract_resume(_text), do: :none
-
-  @doc "Engine ids known to the engine runtime."
-  @spec list_engines() :: [String.t()]
-  def list_engines do
-    if running?(:engine_registry) do
-      case call(:engine_registry, :list_engines, [], []) do
-        ids when is_list(ids) -> ids
-        _ -> []
-      end
-    else
-      []
-    end
-  end
-
-  @doc "Transport ids the engine runtime has configured."
+  @doc "Transport ids the gateway runtime has configured."
   @spec list_transports() :: {:ok, [term()]} | {:error, :unavailable}
   def list_transports, do: registry_call(:list_transports, [])
 
@@ -126,8 +89,8 @@ defmodule LemonCore.EngineInfoBridge do
   @doc """
   A full-replacement gateway config map, or `:none`.
 
-  The engine runtime may hold a config that replaces the canonical one wholesale
-  (used by tests and by embedders that drive the gateway directly).
+  The gateway runtime may hold a config that replaces the canonical one
+  wholesale (used by tests and by embedders that drive the gateway directly).
   """
   @spec gateway_config() :: {:ok, map()} | :none
   def gateway_config do
@@ -188,7 +151,7 @@ defmodule LemonCore.EngineInfoBridge do
 
   defp current_config do
     case Application.get_env(:lemon_core, @bridge_key, %{}) do
-      config when is_map(config) -> config
+      config when is_map(config) -> Map.take(config, @config_keys)
       _ -> %{}
     end
   end

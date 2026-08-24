@@ -166,7 +166,6 @@ defmodule LemonRouter.SurfaceManagerTest do
         run_id: "run-fanout",
         session_key: session_key,
         prompt: "fanout",
-        engine_id: "echo",
         meta: %{
           fanout_routes: [
             %{channel_id: "telegram", account_id: "default", peer_kind: :dm, peer_id: "primary"},
@@ -233,7 +232,6 @@ defmodule LemonRouter.SurfaceManagerTest do
         run_id: "run-fallback",
         session_key: session_key,
         prompt: "fallback",
-        engine_id: "echo",
         meta: %{user_msg_id: 42}
       }
     }
@@ -276,7 +274,6 @@ defmodule LemonRouter.SurfaceManagerTest do
         run_id: "run-streamed-final",
         session_key: session_key,
         prompt: "streamed final",
-        engine_id: "echo",
         meta: %{user_msg_id: 42}
       }
     }
@@ -327,7 +324,6 @@ defmodule LemonRouter.SurfaceManagerTest do
         run_id: "run-streamed-fallback",
         session_key: session_key,
         prompt: "streamed fallback",
-        engine_id: "echo",
         meta: %{user_msg_id: 42}
       }
     }
@@ -359,7 +355,6 @@ defmodule LemonRouter.SurfaceManagerTest do
         run_id: "run-1",
         session_key: SessionKey.main("surface-manager"),
         prompt: "test",
-        engine_id: "echo",
         meta: %{}
       },
       task_status_surfaces: %{},

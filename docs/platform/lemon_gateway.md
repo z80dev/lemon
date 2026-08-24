@@ -1,11 +1,20 @@
 # lemon_gateway
 
-**Status:** stub — package not yet carved out. Plan of record: [../platform-split.md](../platform-split.md).
+`lemon_gateway` owns top-level run scheduling and lifecycle: global execution
+slots, per-conversation serialization, launch locks, active-run lookup,
+cancellation, persistence, telemetry, and normalized run events.
 
-`lemon_gateway` is the engine execution runtime and nothing else: the `Engine`
-behaviour, the engine registry, scheduler and locks, and the `LemonCore.EngineRuntime`
-implementation the router binds to. Its email/webhook/sms/voice transports
-move to `lemon_channels` as `Plugin` implementations (decision D2), leaving one
-transport concept in the platform, and its `CodingAgent` dependency inverts in Phase 2.1
-so engines self-register at boot. This page will become the package README: writing an
-`Engine`, registering it, and the scheduling/locking guarantees callers can rely on.
+Every top-level conversation is dispatched to one configured
+`LemonGateway.Executor` implementation. Product configuration binds
+`CodingAgent.Executor`, which starts or resumes the native `CodingAgent.Session`.
+The executor binding is a product-wiring and test-injection seam, not a public
+runtime plugin registry; custom and selectable top-level engines are unsupported.
+
+Subagents run natively in-process: when the native agent invokes its `task`
+tool, the delegated work executes as another `CodingAgent.Session` coordinated
+by `CodingAgent.Coordinator`. Subagents do not consume Gateway top-level
+execution slots, and there are no vendor CLI subprocess runners.
+
+Gateway-native email, webhook, SMS, and voice transport glue remains alongside
+the scheduler. External channel adapters such as Telegram and Discord live in
+`lemon_channels`.

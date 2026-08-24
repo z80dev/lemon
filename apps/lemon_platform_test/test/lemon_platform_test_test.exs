@@ -24,8 +24,6 @@ defmodule LemonPlatformTest.HelpersTest do
                LemonChannels.Plugin
              )
 
-      assert LemonPlatformTest.declares_behaviour?(LemonGateway.Engines.Echo, LemonGateway.Engine)
-
       assert LemonPlatformTest.declares_behaviour?(
                LemonMemory.Providers.Local,
                LemonMemory.Provider

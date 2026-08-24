@@ -28,6 +28,33 @@ config :lemon_channels, adapters: []
 # Tests start X API token managers explicitly when required.
 config :x_api, start_token_manager: false
 
+# The Honcho satellite reads the vendor's own `HONCHO_API_KEY` when no Lemon-side
+# key is configured, which is a deliberate convenience in dev and prod — and a
+# hazard here: a developer who exported that variable for some other Honcho
+# client would otherwise have `mix test` register the memory provider and the
+# context contributor and ship every prompt, answer and memory search of the
+# suite into their real workspace. `enabled: false` wins over the exported key
+# (the key only fills `:api_key`), so `configured?/1` stays false and nothing
+# registers; `start_session_manager` keeps the supervised session manager out of
+# the tree as well. Suites that exercise Honcho set these explicitly and restart
+# the app.
+config :lemon_honcho, enabled: false
+config :lemon_honcho, start_session_manager: false
+
+# ...and the switch above is not, by itself, enough. `LemonHoncho.Config`
+# resolves OS environment *ahead of* application env, so `LEMON_HONCHO_ENABLED=true`
+# exported in a developer's shell rc overrides `enabled: false` and switches the
+# suite back on — measured: provider registered, contributor registered, and with
+# `:client` unset every umbrella memory search fanning out to the live service.
+# Configuration cannot close that hole with a flag the shell can win.
+#
+# Pinning the transport does close it. `:client` has no environment fallback, so
+# whatever activates the integration, the module it reaches for is one that
+# raises instead of opening a socket. See `LemonHoncho.Client.Tripwire`, which
+# also explains why it lives in `lib/` rather than in a `test/support` file only
+# one app's suite could load.
+config :lemon_honcho, client: LemonHoncho.Client.Tripwire
+
 # Tests mutate HOME/config files frequently; always re-stat config paths on each call.
 config :lemon_core, LemonCore.ConfigCache, mtime_check_interval_ms: 0
 
@@ -69,30 +96,41 @@ config :lemon_skills, :http_client, LemonSkills.HttpClient.Mock
 # from submitting real agent runs during unrelated test suites.
 config :lemon_automation, :skill_curator, enabled: false
 
+# Scheduled skill synthesis is tested explicitly; keep the runtime scheduler
+# from generating drafts (and touching the memory store) during unrelated suites.
+config :lemon_automation, :synthesis_runner, enabled: false
+
 # Prevent unit tests from starting real/interactive transports based on a developer's
 # local TOML config. Individual test suites can override these as needed and restart
 # the application under test.
 config :lemon_gateway, LemonGateway.Config,
   enable_telegram: false,
   max_concurrent_runs: 1,
-  default_engine: "lemon",
   bindings: [],
   projects: %{}
 
-config :lemon_gateway, :engines, [
-  LemonGateway.Engines.Echo,
-  LemonGateway.Engines.Codex,
-  LemonGateway.Engines.Claude,
-  LemonGateway.Engines.Opencode,
-  LemonGateway.Engines.Pi,
-  LemonGateway.Engines.Kimi
-]
+# Credentials the umbrella's transports read, scrubbed from the unit lane on
+# top of LemonCore.Testing.HermeticEnv's built-in provider list. They live here
+# rather than in the library: the platform an adapter talks to is the adapter's
+# business, not lemon_core's.
+config :lemon_core, :test_credential_env_vars, ~w(
+  DISCORD_BOT_TOKEN
+  TELEGRAM_BOT_TOKEN
+  XMTP_WALLET_KEY
+)
+
+# Keep executor validation deterministic without introducing a test-only
+# operator-selectable implementation. CodingAgent.Executor is loaded from the
+# umbrella code path and is structurally valid even when coding_agent is not
+# started by a particular suite.
+config :lemon_gateway, :executor, CodingAgent.Executor
 
 config :lemon_gateway, :telegram, nil
 
 # Keep browser.request parity tests node-only; don't try to auto-fallback to the local driver in tests.
 config :lemon_control_plane, :browser_local_fallback, false
 
+# ── lemon-sim product block — moves to the lemon-sim repo (docs/platform-split.md Phase 5) ──
 config :lemon_sim_ui, LemonSimUi.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4092],
   secret_key_base:
@@ -101,6 +139,7 @@ config :lemon_sim_ui, LemonSimUi.Endpoint,
 
 config :lemon_sim_ui, :hosted_rooms_enabled, true
 config :lemon_sim_ui, :allow_insecure_admin, true
+# ── end lemon-sim product block ──
 
 config :lemon_web, LemonWeb.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4082],

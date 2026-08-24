@@ -43,14 +43,14 @@ defmodule LemonCore.Config.ReadmeTest do
       settings = %{
         "gateway" => %{
           "max_concurrent_runs" => 5,
-          "enable_telegram" => true
+          "enable_webhook" => true
         }
       }
 
       config = Config.Gateway.resolve(settings)
 
       assert config.max_concurrent_runs == 5
-      assert config.enable_telegram == true
+      assert config.enable_webhook == true
     end
 
     test "Config.Logging.resolve/1 works as documented" do

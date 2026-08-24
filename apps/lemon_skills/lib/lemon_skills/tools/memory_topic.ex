@@ -1,6 +1,12 @@
 defmodule LemonSkills.Tools.MemoryTopic do
   @moduledoc """
   Scaffold topic memory files from `memory/topics/TEMPLATE.md`.
+
+  Agents create durable per-topic memory notes under the assistant-home
+  `memory/topics/` directory, slugged from the requested topic name and seeded
+  from the local `TEMPLATE.md` (or a built-in default template). Requires no
+  external service. Registered as a builtin tool in `CodingAgent.ToolRegistry`
+  and exposed through the `CodingAgent.Tools` factories.
   """
 
   alias LemonAgent.AbortSignal
@@ -74,6 +80,23 @@ defmodule LemonSkills.Tools.MemoryTopic do
     }
   end
 
+  @doc """
+  Tool callback invoked by the agent loop: `execute(tool_call_id, params, signal,
+  on_update, workspace_dir)`.
+
+  Reads from `params`:
+
+  - `"topic"` (required) - topic name or slug; trimmed and must be non-empty, then
+    normalized to `memory/topics/<slug>.md` (slug `"template"` is reserved)
+  - `"overwrite"` (optional, default `false`) - regenerate an existing topic file
+    from the template when `true`
+
+  Returns `%LemonAgent.Types.AgentToolResult{}` with `content` describing the
+  created or already-existing file and `details` holding `created`, `overwritten`,
+  `slug`, `path`, and (when created) `template`. Validation and file errors
+  surface as `{:error, String.t()}` tuples, including rescued `File.Error` and
+  unexpected exceptions; an aborted signal returns `{:error, "Operation aborted"}`.
+  """
   @spec execute(
           String.t(),
           map(),

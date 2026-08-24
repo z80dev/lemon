@@ -1,3 +1,21 @@
+defmodule LemonCore.ConfigTest.StubChannel do
+  @behaviour LemonCore.Config.Gateway.Channel
+
+  @impl true
+  def id, do: :stub
+
+  @impl true
+  def resolve(section), do: %{resolved: true, raw: section}
+
+  @impl true
+  def enabled?(configured), do: configured
+
+  @impl true
+  def validate(section, errors) do
+    if Map.get(section, :resolved), do: errors, else: ["gateway.stub: invalid" | errors]
+  end
+end
+
 defmodule LemonCore.ConfigTest do
   use ExUnit.Case, async: false
 
@@ -15,6 +33,25 @@ defmodule LemonCore.ConfigTest do
     end)
 
     %{home: tmp_dir}
+  end
+
+  # The legacy map flattens whatever `:gateway_channels` holds. Run against a
+  # stub so the flattening is proven without naming a platform (real channel
+  # modules may be registered by other suites in this VM), and clear the shared
+  # ConfigCache so the stub-shaped resolution is not served to later tests.
+  setup do
+    previous = Application.get_env(:lemon_core, :gateway_channels)
+    Application.put_env(:lemon_core, :gateway_channels, [__MODULE__.StubChannel])
+
+    on_exit(fn ->
+      if is_nil(previous),
+        do: Application.delete_env(:lemon_core, :gateway_channels),
+        else: Application.put_env(:lemon_core, :gateway_channels, previous)
+
+      LemonCore.ConfigCache.clear()
+    end)
+
+    :ok
   end
 
   test "merges global and project config with overrides", %{home: home} do
@@ -116,35 +153,6 @@ defmodule LemonCore.ConfigTest do
     System.delete_env("LEMON_TUI_DEBUG")
   end
 
-  test "parses CLI settings from runtime section", %{home: home} do
-    global_dir = Path.join(home, ".lemon")
-    File.mkdir_p!(global_dir)
-
-    File.write!(Path.join(global_dir, "config.toml"), """
-    [runtime.cli.codex]
-    extra_args = ["-c", "notify=[]"]
-    auto_approve = false
-
-    [runtime.cli.claude]
-    dangerously_skip_permissions = true
-
-    [runtime.cli.droid]
-    model = "builder-v1"
-    reasoning_effort = "medium"
-    enabled_tools = ["grep"]
-    use_spec = true
-    """)
-
-    config = Config.load()
-
-    assert config.agent.cli.codex.extra_args == ["-c", "notify=[]"]
-    assert config.agent.cli.codex.auto_approve == false
-    assert config.agent.cli.claude.dangerously_skip_permissions == true
-    assert config.agent.cli.droid.model == "builder-v1"
-    assert config.agent.cli.droid.reasoning_effort == "medium"
-    assert config.agent.cli.droid.enabled_tools == ["grep"]
-    assert config.agent.cli.droid.use_spec == true
-  end
 
   test "env overrides provider base_url", %{home: home} do
     global_dir = Path.join(home, ".lemon")
@@ -185,7 +193,6 @@ defmodule LemonCore.ConfigTest do
     File.write!(Path.join(global_dir, "config.toml"), """
     [profiles.default]
     name = "Daily Assistant"
-    default_engine = "lemon"
     system_prompt = "You are my daily assistant."
     model = "anthropic:claude-sonnet-4-20250514"
 
@@ -199,7 +206,6 @@ defmodule LemonCore.ConfigTest do
     config = Config.load()
 
     assert config.agents["default"].name == "Daily Assistant"
-    assert config.agents["default"].default_engine == "lemon"
     assert config.agents["default"].system_prompt == "You are my daily assistant."
     assert config.agents["default"].model == "anthropic:claude-sonnet-4-20250514"
     assert config.agents["default"].tool_policy.allow == :all
@@ -233,7 +239,6 @@ defmodule LemonCore.ConfigTest do
     provider = "openai"
     model = "openai:gpt-5"
     thinking_level = "high"
-    engine = "codex"
 
     [runtime]
     theme = "default"
@@ -257,17 +262,15 @@ defmodule LemonCore.ConfigTest do
     assert config.agents["default"].name == "Default Profile"
     assert config.agents["default"].system_prompt == "You are concise."
     assert config.agents["default"].model == "openai:gpt-5"
-    assert config.agents["default"].default_engine == "codex"
   end
 
-  test "defaults model and engine are applied only to the default profile", %{home: home} do
+  test "defaults model is applied only to the default profile", %{home: home} do
     global_dir = Path.join(home, ".lemon")
     File.mkdir_p!(global_dir)
 
     File.write!(Path.join(global_dir, "config.toml"), """
     [defaults]
     model = "openai:gpt-5"
-    engine = "codex"
 
     [profiles.worker]
     name = "Worker"
@@ -276,9 +279,7 @@ defmodule LemonCore.ConfigTest do
     config = Config.load()
 
     assert config.agents["default"].model == "openai:gpt-5"
-    assert config.agents["default"].default_engine == "codex"
     assert config.agents["worker"].model == nil
-    assert config.agents["worker"].default_engine == nil
   end
 
   test "runtime and profiles are the canonical config sections", %{home: home} do
@@ -339,10 +340,10 @@ defmodule LemonCore.ConfigTest do
 
     File.write!(Path.join(global_dir, "config.toml"), """
     [gateway]
-    enable_telegram = true
+    enable_stub = true
 
     [[gateway.bindings]]
-    transport = "telegram"
+    transport = "demo"
     chat_id = 123
     agent_id = "daily"
     """)
@@ -350,7 +351,7 @@ defmodule LemonCore.ConfigTest do
     config = Config.load()
 
     [binding] = config.gateway.bindings
-    assert binding.transport == :telegram
+    assert binding.transport == :demo
     assert binding.chat_id == 123
     assert binding.agent_id == "daily"
   end
@@ -542,84 +543,217 @@ defmodule LemonCore.ConfigTest do
     System.delete_env("LEMON_WASM_AUTO_BUILD")
   end
 
-  test "parses gateway telegram compaction settings", %{home: home} do
+  test "exposes tool disclosure defaults on agent.tools with no config" do
+    config = Config.load()
+
+    assert config.agent.tools.disclosure == %{
+             enabled: true,
+             budget_tokens: 40_000,
+             catalog_tokens: 2_000,
+             max_results: 5
+           }
+  end
+
+  test "parses tool disclosure configuration under runtime.tools", %{home: home} do
+    global_dir = Path.join(home, ".lemon")
+    File.mkdir_p!(global_dir)
+
+    File.write!(Path.join(global_dir, "config.toml"), """
+    [runtime.tools.disclosure]
+    enabled = false
+    budget_tokens = 12000
+    catalog_tokens = 500
+    max_results = 3
+    """)
+
+    config = Config.load()
+
+    assert config.agent.tools.disclosure == %{
+             enabled: false,
+             budget_tokens: 12_000,
+             catalog_tokens: 500,
+             max_results: 3
+           }
+  end
+
+  test "env overrides tool disclosure configuration", %{home: home} do
+    global_dir = Path.join(home, ".lemon")
+    File.mkdir_p!(global_dir)
+
+    File.write!(Path.join(global_dir, "config.toml"), """
+    [runtime.tools.disclosure]
+    enabled = true
+    budget_tokens = 12000
+    """)
+
+    System.put_env("LEMON_TOOL_DISCLOSURE_ENABLED", "false")
+    System.put_env("LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS", "9999")
+
+    config = Config.load()
+
+    assert config.agent.tools.disclosure.enabled == false
+    assert config.agent.tools.disclosure.budget_tokens == 9_999
+  after
+    System.delete_env("LEMON_TOOL_DISCLOSURE_ENABLED")
+    System.delete_env("LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS")
+  end
+
+  test "tool disclosure env declarations are registered with their defaults" do
+    # The switch defaults ON: the token budget is the real gate, and a catalog
+    # under it is left untouched, so default-on costs nothing.
+    assert LemonCore.Env.get(:lemon_tool_disclosure_enabled) == true
+    assert LemonCore.Env.get(:lemon_tool_disclosure_budget_tokens) == 40_000
+    assert LemonCore.Env.get(:lemon_tool_disclosure_catalog_tokens) == 2_000
+
+    System.put_env("LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS", "123")
+    System.put_env("LEMON_TOOL_DISCLOSURE_CATALOG_TOKENS", "45")
+    System.put_env("LEMON_TOOL_DISCLOSURE_ENABLED", "false")
+
+    assert LemonCore.Env.get(:lemon_tool_disclosure_budget_tokens) == 123
+    assert LemonCore.Env.get(:lemon_tool_disclosure_catalog_tokens) == 45
+    assert LemonCore.Env.get(:lemon_tool_disclosure_enabled) == false
+  after
+    System.delete_env("LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS")
+    System.delete_env("LEMON_TOOL_DISCLOSURE_CATALOG_TOKENS")
+    System.delete_env("LEMON_TOOL_DISCLOSURE_ENABLED")
+  end
+
+  test "project config deep-merges onto global for tool disclosure", %{home: home} do
+    global_dir = Path.join(home, ".lemon")
+    File.mkdir_p!(global_dir)
+
+    File.write!(Path.join(global_dir, "config.toml"), """
+    [runtime.tools.disclosure]
+    budget_tokens = 12000
+    catalog_tokens = 500
+    """)
+
+    project_dir = Path.join(home, "project")
+    File.mkdir_p!(Path.join(project_dir, ".lemon"))
+
+    File.write!(Path.join([project_dir, ".lemon", "config.toml"]), """
+    [runtime.tools.disclosure]
+    catalog_tokens = 750
+    max_results = 2
+    """)
+
+    config = Config.load(project_dir)
+
+    # The project file must not blow away the sibling keys the global file set.
+    assert config.agent.tools.disclosure == %{
+             enabled: true,
+             budget_tokens: 12_000,
+             catalog_tokens: 750,
+             max_results: 2
+           }
+  end
+
+  test "the deprecated tool disclosure spellings hard-fail", %{home: home} do
+    global_dir = Path.join(home, ".lemon")
+    File.mkdir_p!(global_dir)
+    config_path = Path.join(global_dir, "config.toml")
+
+    for section <- ["agent.tools.disclosure", "tools.disclosure"] do
+      File.write!(config_path, """
+      [#{section}]
+      budget_tokens = 12000
+      """)
+
+      assert_raise LemonCore.Config.ValidationError, fn -> Config.load() end
+    end
+  end
+
+  test "tool disclosure declarations are shaped like the rest of the registry" do
+    declarations = LemonCore.Env.by_area(:tools_disclosure)
+
+    assert Enum.map(declarations, & &1.env_var) == [
+             "LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS",
+             "LEMON_TOOL_DISCLOSURE_CATALOG_TOKENS",
+             "LEMON_TOOL_DISCLOSURE_ENABLED"
+           ]
+
+    for declaration <- declarations do
+      assert declaration.aliases == []
+      assert declaration.secret? == false
+      assert declaration.required? == false
+      assert declaration.apps == [:lemon_core]
+      assert declaration.doc != ""
+      assert String.starts_with?(declaration.env_var, "LEMON_")
+    end
+
+    assert LemonCore.Env.describe(:lemon_tool_disclosure_budget_tokens).type == :integer
+    assert LemonCore.Env.describe(:lemon_tool_disclosure_catalog_tokens).type == :integer
+    assert LemonCore.Env.describe(:lemon_tool_disclosure_enabled).type == :boolean
+  end
+
+  test "tool disclosure env vars are documented in the config registry reference" do
+    # `LemonCore.Env.Declarations` renders docs/config-registry.md, so a new
+    # declaration that never reaches the table is an undocumented knob.
+    case find_upwards("docs/config-registry.md") do
+      nil ->
+        # Running outside the umbrella checkout (e.g. a packaged build).
+        :ok
+
+      path ->
+        doc = File.read!(path)
+
+        for declaration <- LemonCore.Env.by_area(:tools_disclosure) do
+          assert doc =~ "`#{declaration.env_var}`",
+                 "#{declaration.env_var} is declared but missing from docs/config-registry.md"
+
+          assert doc =~ declaration.doc,
+                 "#{declaration.env_var}'s description in docs/config-registry.md has drifted"
+        end
+    end
+  end
+
+  test "tool disclosure defaults agree between the registry and the config resolver" do
+    resolved = Config.load().agent.tools.disclosure
+
+    assert LemonCore.Env.describe(:lemon_tool_disclosure_enabled).default == resolved.enabled
+
+    assert LemonCore.Env.describe(:lemon_tool_disclosure_budget_tokens).default ==
+             resolved.budget_tokens
+
+    assert LemonCore.Env.describe(:lemon_tool_disclosure_catalog_tokens).default ==
+             resolved.catalog_tokens
+  end
+
+  test "flattens registered channel sections onto the legacy gateway map", %{home: home} do
     global_dir = Path.join(home, ".lemon")
     File.mkdir_p!(global_dir)
 
     File.write!(Path.join(global_dir, "config.toml"), """
     [gateway]
-    enable_telegram = true
+    enable_stub = true
 
-    [gateway.telegram]
-    default_account_id = "tg-work"
+    [gateway.stub]
+    default_account_id = "demo-work"
     default_chat_id = -100123
-    default_thread_id = 77
-    default_topic_id = 88
-
-    [gateway.telegram.compaction]
-    enabled = true
-    context_window_tokens = 400000
-    reserve_tokens = 16384
-    trigger_ratio = 0.9
     """)
 
     config = Config.load()
 
-    assert config.gateway.telegram.compaction.enabled == true
-    assert config.gateway.telegram.compaction.context_window_tokens == 400_000
-    assert config.gateway.telegram.compaction.reserve_tokens == 16_384
-    assert config.gateway.telegram.compaction.trigger_ratio == 0.9
-    assert config.gateway.telegram.default_chat_id == -100_123
-    assert config.gateway.telegram.default_account_id == "tg-work"
-    assert config.gateway.telegram.default_thread_id == 77
-    assert config.gateway.telegram.default_topic_id == 88
+    assert config.gateway[:enable_stub] == true
+
+    assert config.gateway[:stub] == %{
+             resolved: true,
+             raw: %{"default_account_id" => "demo-work", "default_chat_id" => -100_123}
+           }
   end
 
-  test "parses gateway discord settings", %{home: home} do
-    global_dir = Path.join(home, ".lemon")
-    File.mkdir_p!(global_dir)
-
-    File.write!(Path.join(global_dir, "config.toml"), """
-    [gateway]
-    enable_discord = true
-
-    [gateway.discord]
-    bot_token = "discord-token"
-    default_account_id = "dc-work"
-    default_channel_id = "123456"
-    default_thread_id = "789"
-    allowed_guild_ids = [1475727416549969980]
-    deny_unbound_channels = false
-    message_content_intent_enabled = true
-    """)
-
-    config = Config.load()
-
-    assert config.gateway.enable_discord == true
-    assert config.gateway.discord.bot_token == "discord-token"
-    assert config.gateway.discord.default_account_id == "dc-work"
-    assert config.gateway.discord.default_channel_id == "123456"
-    assert config.gateway.discord.default_thread_id == "789"
-    assert config.gateway.discord.allowed_guild_ids == [1_475_727_416_549_969_980]
-    assert config.gateway.discord.deny_unbound_channels == false
-    assert config.gateway.discord.message_content_intent_enabled == true
-  end
-
-  test "preserves gateway discord file settings", %{home: home} do
-    global_dir = Path.join(home, ".lemon")
-    File.mkdir_p!(global_dir)
-
-    File.write!(Path.join(global_dir, "config.toml"), """
-    [gateway.discord.files]
-    enabled = true
-    auto_send_generated_files = true
-    auto_send_generated_max_files = 2
-    """)
-
-    config = Config.load()
-
-    assert config.gateway.discord.files["enabled"] == true
-    assert config.gateway.discord.files["auto_send_generated_files"] == true
-    assert config.gateway.discord.files["auto_send_generated_max_files"] == 2
+  # Tests may run from the umbrella root or from apps/lemon_core, so locate
+  # repo-relative documentation by walking up from the current directory.
+  defp find_upwards(relative_path) do
+    File.cwd!()
+    |> Path.expand()
+    |> Stream.unfold(fn
+      "/" -> nil
+      dir -> {dir, Path.dirname(dir)}
+    end)
+    |> Enum.find_value(fn dir ->
+      candidate = Path.join(dir, relative_path)
+      if File.regular?(candidate), do: candidate
+    end)
   end
 end

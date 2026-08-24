@@ -16,180 +16,187 @@ defmodule LemonGateway.RunSupervisorTest do
 
   alias LemonGateway.RunSupervisor
   alias LemonGateway.ExecutionRequest
-  alias LemonGateway.Types.Job
-  alias LemonGateway.Event
+  alias LemonCore.ResumeToken
 
   # ============================================================================
-  # Test Engines
+  # Configured executor fixture
   # ============================================================================
 
-  defmodule QuickEngine do
-    @behaviour LemonGateway.Engine
+  # The configured executor models distinct external-process lifecycles while
+  # every test still dispatches its ExecutionRequest through one native boundary.
+  # Modes come from request metadata (or executor options when directly invoked).
+  defmodule RunSupervisorFixtureExecutor do
+    @behaviour LemonGateway.Executor
 
-    alias LemonGateway.Types.Job
     alias LemonCore.ResumeToken
-    alias LemonGateway.Event
+    alias LemonGateway.{Event, ExecutionRequest}
 
     @impl true
-    def id, do: "quick"
-
-    @impl true
-    def format_resume(%ResumeToken{value: sid}), do: "quick resume #{sid}"
-
-    @impl true
-    def extract_resume(_text), do: nil
-
-    @impl true
-    def is_resume_line(_line), do: false
-
-    @impl true
-    def supports_steer?, do: false
-
-    @impl true
-    def start_run(%Job{} = job, _opts, sink_pid) do
-      run_ref = make_ref()
-      resume = job.resume || %ResumeToken{engine: id(), value: unique_id()}
-
-      {:ok, task_pid} =
-        Task.start(fn ->
-          send(sink_pid, {:engine_event, run_ref, Event.started(%{engine: id(), resume: resume})})
-          answer = "Quick: #{job.prompt}"
-
-          send(
-            sink_pid,
-            {:engine_event, run_ref,
-             Event.completed(%{engine: id(), resume: resume, ok: true, answer: answer})}
-          )
-        end)
-
-      {:ok, run_ref, %{task_pid: task_pid}}
+    def start_run(%ExecutionRequest{} = request, opts, sink_pid) do
+      case fixture_mode(request, opts) do
+        :quick -> start_completed(request, sink_pid, "Quick: #{request.prompt}")
+        :slow -> start_slow(request, sink_pid)
+        :controlled -> start_controlled(request, sink_pid)
+        :crash -> start_crashing(request, sink_pid)
+        :cancel -> start_cancelable(request, sink_pid)
+        mode -> {:error, {:unknown_fixture_mode, mode}}
+      end
     end
 
     @impl true
-    def cancel(%{task_pid: pid}) when is_pid(pid) do
-      Process.exit(pid, :kill)
+    def cancel(%{task_pid: task_pid} = context) when is_pid(task_pid) do
+      notify_control(context, :cancelled, nil)
+      Process.exit(task_pid, :kill)
       :ok
     end
 
-    defp unique_id, do: Integer.to_string(System.unique_integer([:positive]))
-  end
-
-  defmodule SlowTestEngine do
-    @behaviour LemonGateway.Engine
-
-    alias LemonGateway.Types.Job
-    alias LemonCore.ResumeToken
-    alias LemonGateway.Event
+    def cancel(_context), do: :ok
 
     @impl true
-    def id, do: "slow_test"
-
-    @impl true
-    def format_resume(%ResumeToken{value: sid}), do: "slow_test resume #{sid}"
-
-    @impl true
-    def extract_resume(_text), do: nil
-
-    @impl true
-    def is_resume_line(_line), do: false
-
-    @impl true
-    def supports_steer?, do: false
-
-    @impl true
-    def start_run(%Job{} = job, _opts, sink_pid) do
-      run_ref = make_ref()
-      resume = job.resume || %ResumeToken{engine: id(), value: unique_id()}
-      delay_ms = (job.meta || %{})[:delay_ms] || 500
-
-      {:ok, task_pid} =
-        Task.start(fn ->
-          send(sink_pid, {:engine_event, run_ref, Event.started(%{engine: id(), resume: resume})})
-          Process.sleep(delay_ms)
-          answer = "Slow: #{job.prompt}"
-
-          send(
-            sink_pid,
-            {:engine_event, run_ref,
-             Event.completed(%{engine: id(), resume: resume, ok: true, answer: answer})}
-          )
-        end)
-
-      {:ok, run_ref, %{task_pid: task_pid}}
-    end
-
-    @impl true
-    def cancel(%{task_pid: pid}) when is_pid(pid) do
-      Process.exit(pid, :kill)
+    def steer(context, text) when is_binary(text) do
+      notify_control(context, :steered, text)
+      send_control(context, {:steer, text})
       :ok
     end
 
-    defp unique_id, do: Integer.to_string(System.unique_integer([:positive]))
-  end
-
-  defmodule ControllableTestEngine do
-    @behaviour LemonGateway.Engine
-
-    alias LemonGateway.Types.Job
-    alias LemonCore.ResumeToken
-    alias LemonGateway.Event
-
     @impl true
-    def id, do: "controllable_test"
+    def redirect(context, text) when is_binary(text) do
+      notify_control(context, :redirected, text)
+      send_control(context, {:redirect, text})
+      :ok
+    end
 
-    @impl true
-    def format_resume(%ResumeToken{value: sid}), do: "controllable_test resume #{sid}"
+    defp start_completed(request, sink_pid, answer) do
+      start_task(request, sink_pid, fn run_ref, resume, _meta ->
+        send(
+          sink_pid,
+          {:engine_event, run_ref,
+           Event.completed(%{engine: "lemon", resume: resume, ok: true, answer: answer})}
+        )
+      end)
+    end
 
-    @impl true
-    def extract_resume(_text), do: nil
+    defp start_slow(request, sink_pid) do
+      start_task(request, sink_pid, fn run_ref, resume, meta ->
+        Process.sleep(Map.get(meta, :delay_ms, 500))
 
-    @impl true
-    def is_resume_line(_line), do: false
+        send(
+          sink_pid,
+          {:engine_event, run_ref,
+           Event.completed(%{
+             engine: "lemon",
+             resume: resume,
+             ok: true,
+             answer: "Slow: #{request.prompt}"
+           })}
+        )
+      end)
+    end
 
-    @impl true
-    def supports_steer?, do: false
+    defp start_controlled(request, sink_pid) do
+      start_task(request, sink_pid, fn run_ref, resume, meta ->
+        controlled_loop(run_ref, resume, sink_pid, meta)
+      end)
+    end
 
-    @impl true
-    def start_run(%Job{} = job, _opts, sink_pid) do
+    defp start_crashing(request, sink_pid) do
+      start_task(request, sink_pid, fn _run_ref, _resume, _meta ->
+        exit(:fixture_crash)
+      end)
+    end
+
+    defp start_cancelable(request, sink_pid) do
+      start_task(request, sink_pid, fn _run_ref, _resume, _meta ->
+        receive do
+          {:complete, _answer} -> :ok
+        after
+          30_000 -> :ok
+        end
+      end)
+    end
+
+    defp start_task(request, sink_pid, action) do
       run_ref = make_ref()
-      resume = job.resume || %ResumeToken{engine: id(), value: unique_id()}
-      controller_pid = (job.meta || %{})[:controller_pid]
+      meta = request.meta || %{}
+      resume = request.resume || %ResumeToken{engine: "lemon", value: unique_id()}
 
       {:ok, task_pid} =
         Task.start(fn ->
-          send(sink_pid, {:engine_event, run_ref, Event.started(%{engine: id(), resume: resume})})
-          if controller_pid, do: send(controller_pid, {:engine_started, run_ref, self()})
+          send(
+            sink_pid,
+            {:engine_event, run_ref, Event.started(%{engine: "lemon", resume: resume})}
+          )
 
-          receive do
-            {:complete, answer} ->
-              send(
-                sink_pid,
-                {:engine_event, run_ref,
-                 %{__event__: :completed, engine: id(), resume: resume, ok: true, answer: answer}}
-              )
-          after
-            30_000 ->
-              send(
-                sink_pid,
-                {:engine_event, run_ref,
-                 %{
-                   __event__: :completed,
-                   engine: id(),
-                   resume: resume,
-                   ok: false,
-                   error: :timeout
-                 }}
-              )
+          if controller_pid = Map.get(meta, :controller_pid) do
+            send(
+              controller_pid,
+              {:executor_started, request.run_id, request.prompt, run_ref, self()}
+            )
           end
+
+          action.(run_ref, resume, meta)
         end)
 
-      {:ok, run_ref, %{task_pid: task_pid}}
+      {:ok, run_ref,
+       %{
+         task_pid: task_pid,
+         control_pid: Map.get(meta, :control_pid) || Map.get(meta, :controller_pid)
+       }}
     end
 
-    @impl true
-    def cancel(%{task_pid: pid}) when is_pid(pid) do
-      Process.exit(pid, :kill)
-      :ok
+    defp controlled_loop(run_ref, resume, sink_pid, meta) do
+      receive do
+        {:complete, answer} ->
+          send(
+            sink_pid,
+            {:engine_event, run_ref,
+             Event.completed(%{engine: "lemon", resume: resume, ok: true, answer: answer})}
+          )
+
+        {:error, reason} ->
+          send(
+            sink_pid,
+            {:engine_event, run_ref,
+             Event.completed(%{engine: "lemon", resume: resume, ok: false, error: reason})}
+          )
+
+        {:steer, text} ->
+          notify(meta, :steered, text)
+          controlled_loop(run_ref, resume, sink_pid, meta)
+
+        {:redirect, text} ->
+          notify(meta, :redirected, text)
+          controlled_loop(run_ref, resume, sink_pid, meta)
+      after
+        30_000 ->
+          send(
+            sink_pid,
+            {:engine_event, run_ref,
+             Event.completed(%{engine: "lemon", resume: resume, ok: false, error: :timeout})}
+          )
+      end
+    end
+
+    defp fixture_mode(request, opts) do
+      meta = request.meta || %{}
+      Map.get(meta, :fixture_mode, Keyword.get(opts, :fixture_mode, :quick))
+    end
+
+    defp send_control(%{task_pid: task_pid}, message) when is_pid(task_pid),
+      do: send(task_pid, message)
+
+    defp send_control(_context, _message), do: :ok
+
+    defp notify_control(%{control_pid: control_pid}, action, value) when is_pid(control_pid),
+      do: send(control_pid, {:executor_control, action, value})
+
+    defp notify_control(_context, _action, _value), do: :ok
+
+    defp notify(meta, action, value) do
+      case Map.get(meta, :control_pid) || Map.get(meta, :controller_pid) do
+        nil -> :ok
+        control_pid -> send(control_pid, {:executor_control, action, value})
+      end
     end
 
     defp unique_id, do: Integer.to_string(System.unique_integer([:positive]))
@@ -204,17 +211,11 @@ defmodule LemonGateway.RunSupervisorTest do
 
     Application.put_env(:lemon_gateway, LemonGateway.Config, %{
       max_concurrent_runs: 10,
-      default_engine: "quick",
       enable_telegram: false,
       require_engine_lock: false
     })
 
-    Application.put_env(:lemon_gateway, :engines, [
-      QuickEngine,
-      SlowTestEngine,
-      ControllableTestEngine,
-      LemonGateway.Engines.Echo
-    ])
+    Application.put_env(:lemon_gateway, :executor, RunSupervisorFixtureExecutor)
 
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
@@ -225,43 +226,54 @@ defmodule LemonGateway.RunSupervisorTest do
     "test:#{chat_id}"
   end
 
-  defp make_job(session_key, opts \\ []) do
+  defp make_execution_request(session_key, opts \\ []) do
     user_msg_id = Keyword.get(opts, :user_msg_id, 1)
     base_meta = %{notify_pid: self(), user_msg_id: user_msg_id}
     meta_opt = Keyword.get(opts, :meta, %{})
 
     meta =
       cond do
-        is_nil(meta_opt) -> nil
-        is_map(meta_opt) -> Map.merge(base_meta, meta_opt)
-        true -> meta_opt
+        is_nil(meta_opt) ->
+          nil
+
+        is_map(meta_opt) ->
+          fixture_mode =
+            Keyword.get(opts, :fixture_mode, Map.get(meta_opt, :fixture_mode, :quick))
+
+          Map.merge(base_meta, Map.put(meta_opt, :fixture_mode, fixture_mode))
+
+        true ->
+          meta_opt
       end
 
-    %Job{
+    resume = Keyword.get(opts, :resume)
+
+    %ExecutionRequest{
+      run_id: Keyword.get(opts, :run_id, "run_#{System.unique_integer([:positive])}"),
       session_key: session_key,
       prompt: Keyword.get(opts, :prompt, Keyword.get(opts, :text, "test message")),
-      engine_id: Keyword.get(opts, :engine_id, Keyword.get(opts, :engine_hint, "quick")),
+      resume: resume,
+      conversation_key: test_conversation_key(session_key, resume),
       meta: meta
     }
   end
 
-  defp make_request(job, opts \\ []) do
+  defp make_request(%ExecutionRequest{} = execution_request, opts \\ []) do
     slot_ref = Keyword.get(opts, :slot_ref, make_ref())
     worker_pid = Keyword.get(opts, :worker_pid, self())
 
     %{
-      execution_request:
-        ExecutionRequest.from_job(job, conversation_key: conversation_key_for(job)),
+      execution_request: execution_request,
       slot_ref: slot_ref,
       worker_pid: worker_pid
     }
   end
 
-  defp conversation_key_for(%Job{resume: %LemonCore.ResumeToken{engine: engine, value: value}})
+  defp test_conversation_key(_session_key, %ResumeToken{engine: engine, value: value})
        when is_binary(engine) and is_binary(value),
        do: {:resume, engine, value}
 
-  defp conversation_key_for(%Job{session_key: session_key}) when is_binary(session_key),
+  defp test_conversation_key(session_key, _resume) when is_binary(session_key),
     do: {:session, session_key}
 
   # ============================================================================
@@ -305,27 +317,27 @@ defmodule LemonGateway.RunSupervisorTest do
       scope1 = make_scope()
       scope2 = make_scope()
 
-      job1 =
-        make_job(scope1,
-          engine_hint: "controllable_test",
+      execution_request1 =
+        make_execution_request(scope1,
+          fixture_mode: :controlled,
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      job2 =
-        make_job(scope2,
-          engine_hint: "controllable_test",
+      execution_request2 =
+        make_execution_request(scope2,
+          fixture_mode: :controlled,
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
       {:ok, _pid1} =
-        RunSupervisor.start_run(make_request(job1))
+        RunSupervisor.start_run(make_request(execution_request1))
 
       {:ok, _pid2} =
-        RunSupervisor.start_run(make_request(job2))
+        RunSupervisor.start_run(make_request(execution_request2))
 
       # Both should start
-      assert_receive {:engine_started, _, task_pid1}, 2000
-      assert_receive {:engine_started, _, task_pid2}, 2000
+      assert_receive {:executor_started, _, _, _, task_pid1}, 2000
+      assert_receive {:executor_started, _, _, _, task_pid2}, 2000
 
       # Complete both
       send(task_pid1, {:complete, "done1"})
@@ -343,9 +355,9 @@ defmodule LemonGateway.RunSupervisorTest do
   describe "child process startup via start_run/1" do
     test "start_run starts a Run process" do
       scope = make_scope()
-      job = make_job(scope)
+      execution_request = make_execution_request(scope)
 
-      {:ok, pid} = RunSupervisor.start_run(make_request(job))
+      {:ok, pid} = RunSupervisor.start_run(make_request(execution_request))
 
       assert is_pid(pid)
       assert Process.alive?(pid)
@@ -356,9 +368,9 @@ defmodule LemonGateway.RunSupervisorTest do
 
     test "start_run returns {:ok, pid}" do
       scope = make_scope()
-      job = make_job(scope)
+      execution_request = make_execution_request(scope)
 
-      result = RunSupervisor.start_run(make_request(job))
+      result = RunSupervisor.start_run(make_request(execution_request))
 
       assert {:ok, pid} = result
       assert is_pid(pid)
@@ -368,9 +380,14 @@ defmodule LemonGateway.RunSupervisorTest do
 
     test "started process is supervised" do
       scope = make_scope()
-      job = make_job(scope, engine_hint: "slow_test", meta: %{notify_pid: self(), delay_ms: 500})
 
-      {:ok, pid} = RunSupervisor.start_run(make_request(job))
+      execution_request =
+        make_execution_request(scope,
+          fixture_mode: :slow,
+          meta: %{notify_pid: self(), delay_ms: 500}
+        )
+
+      {:ok, pid} = RunSupervisor.start_run(make_request(execution_request))
 
       # Check that the process is a child of the supervisor
       children = DynamicSupervisor.which_children(RunSupervisor)
@@ -385,10 +402,10 @@ defmodule LemonGateway.RunSupervisorTest do
       runs =
         for i <- 1..5 do
           scope = make_scope()
-          job = make_job(scope, text: "run #{i}")
+          execution_request = make_execution_request(scope, text: "run #{i}")
 
           {:ok, pid} =
-            RunSupervisor.start_run(make_request(job))
+            RunSupervisor.start_run(make_request(execution_request))
 
           {i, pid}
         end
@@ -400,11 +417,13 @@ defmodule LemonGateway.RunSupervisorTest do
       end
     end
 
-    test "started run processes correct job" do
+    test "started run processes correct execution request" do
       scope = make_scope()
-      job = make_job(scope, text: "unique test text #{System.unique_integer()}")
 
-      {:ok, pid} = RunSupervisor.start_run(make_request(job))
+      execution_request =
+        make_execution_request(scope, text: "unique test text #{System.unique_integer()}")
+
+      {:ok, pid} = RunSupervisor.start_run(make_request(execution_request))
 
       assert_receive {:run_complete, ^pid,
                       %{__event__: :completed, ok: true, answer: "Quick: " <> answer_text}},
@@ -421,9 +440,9 @@ defmodule LemonGateway.RunSupervisorTest do
   describe "temporary restart strategy behavior" do
     test "child is not restarted on normal exit" do
       scope = make_scope()
-      job = make_job(scope)
+      execution_request = make_execution_request(scope)
 
-      {:ok, pid} = RunSupervisor.start_run(make_request(job))
+      {:ok, pid} = RunSupervisor.start_run(make_request(execution_request))
 
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
 
@@ -440,18 +459,18 @@ defmodule LemonGateway.RunSupervisorTest do
     test "child is not restarted on crash" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable_test",
+      execution_request =
+        make_execution_request(scope,
+          fixture_mode: :controlled,
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid} = RunSupervisor.start_run(make_request(job))
+      {:ok, pid} = RunSupervisor.start_run(make_request(execution_request))
       ref = Process.monitor(pid)
 
-      assert_receive {:engine_started, _, task_pid}, 2000
+      assert_receive {:executor_started, _, _, _, task_pid}, 2000
 
-      # Kill the engine task abruptly
+      # Kill the executor task abruptly
       Process.exit(task_pid, :kill)
 
       # Wait for the Run process to notice and potentially stop
@@ -478,9 +497,9 @@ defmodule LemonGateway.RunSupervisorTest do
 
     test "temporary restart means process is removed from supervisor after exit" do
       scope = make_scope()
-      job = make_job(scope)
+      execution_request = make_execution_request(scope)
 
-      {:ok, pid} = RunSupervisor.start_run(make_request(job))
+      {:ok, pid} = RunSupervisor.start_run(make_request(execution_request))
 
       assert_receive {:run_complete, ^pid, _}, 2000
 
@@ -507,39 +526,44 @@ defmodule LemonGateway.RunSupervisorTest do
       controller1 =
         spawn(fn ->
           receive do
-            {:engine_started, run_ref, task_pid} ->
-              send(parent, {:engine_started, :job1, run_ref, task_pid})
+            {:executor_started, run_id, prompt, run_ref, task_pid} ->
+              send(parent, {:executor_started, run_id, prompt, run_ref, task_pid})
           end
         end)
 
       controller2 =
         spawn(fn ->
           receive do
-            {:engine_started, run_ref, task_pid} ->
-              send(parent, {:engine_started, :job2, run_ref, task_pid})
+            {:executor_started, run_id, prompt, run_ref, task_pid} ->
+              send(parent, {:executor_started, run_id, prompt, run_ref, task_pid})
           end
         end)
 
-      job1 =
-        make_job(scope1,
-          engine_hint: "controllable_test",
+      execution_request1 =
+        make_execution_request(scope1,
+          fixture_mode: :controlled,
           meta: %{notify_pid: self(), controller_pid: controller1}
         )
 
-      job2 =
-        make_job(scope2,
-          engine_hint: "controllable_test",
+      execution_request2 =
+        make_execution_request(scope2,
+          fixture_mode: :controlled,
           meta: %{notify_pid: self(), controller_pid: controller2}
         )
 
       {:ok, _pid1} =
-        RunSupervisor.start_run(make_request(job1))
+        RunSupervisor.start_run(make_request(execution_request1))
 
       {:ok, pid2} =
-        RunSupervisor.start_run(make_request(job2))
+        RunSupervisor.start_run(make_request(execution_request2))
 
-      assert_receive {:engine_started, :job1, _run_ref1, task_pid1}, 2000
-      assert_receive {:engine_started, :job2, _run_ref2, task_pid2}, 2000
+      run_id1 = execution_request1.run_id
+      prompt1 = execution_request1.prompt
+      run_id2 = execution_request2.run_id
+      prompt2 = execution_request2.prompt
+
+      assert_receive {:executor_started, ^run_id1, ^prompt1, _run_ref1, task_pid1}, 2000
+      assert_receive {:executor_started, ^run_id2, ^prompt2, _run_ref2, task_pid2}, 2000
 
       # Kill the first one's task
       Process.exit(task_pid1, :kill)
@@ -560,15 +584,15 @@ defmodule LemonGateway.RunSupervisorTest do
         for i <- 1..3 do
           scope = make_scope()
 
-          job =
-            make_job(scope,
-              engine_hint: "slow_test",
+          execution_request =
+            make_execution_request(scope,
+              fixture_mode: :slow,
               text: "run #{i}",
               meta: %{notify_pid: self(), delay_ms: 50 * i}
             )
 
           {:ok, pid} =
-            RunSupervisor.start_run(make_request(job))
+            RunSupervisor.start_run(make_request(execution_request))
 
           {i, pid}
         end
@@ -582,16 +606,16 @@ defmodule LemonGateway.RunSupervisorTest do
     test "supervisor continues functioning after child crashes" do
       scope1 = make_scope()
 
-      job1 =
-        make_job(scope1,
-          engine_hint: "controllable_test",
+      execution_request1 =
+        make_execution_request(scope1,
+          fixture_mode: :controlled,
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
       {:ok, pid1} =
-        RunSupervisor.start_run(make_request(job1))
+        RunSupervisor.start_run(make_request(execution_request1))
 
-      assert_receive {:engine_started, _, _task_pid1}, 2000
+      assert_receive {:executor_started, _, _, _, _task_pid1}, 2000
 
       # Kill the child abruptly
       Process.exit(pid1, :kill)
@@ -602,10 +626,10 @@ defmodule LemonGateway.RunSupervisorTest do
 
       # Can start new children
       scope2 = make_scope()
-      job2 = make_job(scope2)
+      execution_request2 = make_execution_request(scope2)
 
       {:ok, pid2} =
-        RunSupervisor.start_run(make_request(job2))
+        RunSupervisor.start_run(make_request(execution_request2))
 
       assert_receive {:run_complete, ^pid2, %{__event__: :completed, ok: true}}, 2000
     end
@@ -618,9 +642,14 @@ defmodule LemonGateway.RunSupervisorTest do
   describe "dynamic child management" do
     test "DynamicSupervisor.which_children returns current children" do
       scope = make_scope()
-      job = make_job(scope, engine_hint: "slow_test", meta: %{notify_pid: self(), delay_ms: 500})
 
-      {:ok, pid} = RunSupervisor.start_run(make_request(job))
+      execution_request =
+        make_execution_request(scope,
+          fixture_mode: :slow,
+          meta: %{notify_pid: self(), delay_ms: 500}
+        )
+
+      {:ok, pid} = RunSupervisor.start_run(make_request(execution_request))
 
       children = DynamicSupervisor.which_children(RunSupervisor)
       child_pids = Enum.map(children, fn {_, child_pid, _, _} -> child_pid end)
@@ -635,15 +664,15 @@ defmodule LemonGateway.RunSupervisorTest do
 
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable_test",
+      execution_request =
+        make_execution_request(scope,
+          fixture_mode: :controlled,
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, _pid} = RunSupervisor.start_run(make_request(job))
+      {:ok, _pid} = RunSupervisor.start_run(make_request(execution_request))
 
-      assert_receive {:engine_started, _, task_pid}, 2000
+      assert_receive {:executor_started, _, _, _, task_pid}, 2000
 
       active_count = DynamicSupervisor.count_children(RunSupervisor).active
       assert active_count >= initial_count + 1
@@ -660,16 +689,16 @@ defmodule LemonGateway.RunSupervisorTest do
     test "DynamicSupervisor.terminate_child terminates a running child" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable_test",
+      execution_request =
+        make_execution_request(scope,
+          fixture_mode: :controlled,
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid} = RunSupervisor.start_run(make_request(job))
+      {:ok, pid} = RunSupervisor.start_run(make_request(execution_request))
       ref = Process.monitor(pid)
 
-      assert_receive {:engine_started, _, _task_pid}, 2000
+      assert_receive {:executor_started, _, _, _, _task_pid}, 2000
 
       # Terminate the child via DynamicSupervisor
       :ok = DynamicSupervisor.terminate_child(RunSupervisor, pid)
@@ -682,27 +711,27 @@ defmodule LemonGateway.RunSupervisorTest do
       scope1 = make_scope()
       scope2 = make_scope()
 
-      job1 =
-        make_job(scope1,
-          engine_hint: "controllable_test",
+      execution_request1 =
+        make_execution_request(scope1,
+          fixture_mode: :controlled,
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      job2 =
-        make_job(scope2,
-          engine_hint: "controllable_test",
+      execution_request2 =
+        make_execution_request(scope2,
+          fixture_mode: :controlled,
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
       {:ok, pid1} =
-        RunSupervisor.start_run(make_request(job1))
+        RunSupervisor.start_run(make_request(execution_request1))
 
       {:ok, pid2} =
-        RunSupervisor.start_run(make_request(job2))
+        RunSupervisor.start_run(make_request(execution_request2))
 
-      # Engine start notifications are asynchronous and can arrive in either order.
-      assert_receive {:engine_started, _, task_pid_a}, 2000
-      assert_receive {:engine_started, _, task_pid_b}, 2000
+      # Executor start notifications are asynchronous and can arrive in either order.
+      assert_receive {:executor_started, _, _, _, task_pid_a}, 2000
+      assert_receive {:executor_started, _, _, _, task_pid_b}, 2000
       task_pids = [task_pid_a, task_pid_b]
 
       # Terminate first child
@@ -735,10 +764,10 @@ defmodule LemonGateway.RunSupervisorTest do
       runs =
         for i <- 1..10 do
           scope = make_scope()
-          job = make_job(scope, text: "parallel #{i}")
+          execution_request = make_execution_request(scope, text: "parallel #{i}")
 
           {:ok, pid} =
-            RunSupervisor.start_run(make_request(job))
+            RunSupervisor.start_run(make_request(execution_request))
 
           {i, pid}
         end
@@ -760,10 +789,15 @@ defmodule LemonGateway.RunSupervisorTest do
         for i <- 1..5 do
           Task.async(fn ->
             scope = make_scope()
-            job = make_job(scope, text: "concurrent #{i}", meta: %{notify_pid: test_pid})
+
+            execution_request =
+              make_execution_request(scope,
+                text: "concurrent #{i}",
+                meta: %{notify_pid: test_pid}
+              )
 
             {:ok, pid} =
-              RunSupervisor.start_run(make_request(job, worker_pid: test_pid))
+              RunSupervisor.start_run(make_request(execution_request, worker_pid: test_pid))
 
             pid
           end)
@@ -780,10 +814,10 @@ defmodule LemonGateway.RunSupervisorTest do
     test "supervisor handles rapid start/stop cycles" do
       for _ <- 1..20 do
         scope = make_scope()
-        job = make_job(scope)
+        execution_request = make_execution_request(scope)
 
         {:ok, pid} =
-          RunSupervisor.start_run(make_request(job))
+          RunSupervisor.start_run(make_request(execution_request))
 
         assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
       end
@@ -798,22 +832,22 @@ defmodule LemonGateway.RunSupervisorTest do
           scope = make_scope()
 
           if rem(i, 2) == 0 do
-            job =
-              make_job(scope,
+            execution_request =
+              make_execution_request(scope,
                 text: "slow #{i}",
-                engine_hint: "slow_test",
+                fixture_mode: :slow,
                 meta: %{notify_pid: self(), delay_ms: 100}
               )
 
             {:ok, pid} =
-              RunSupervisor.start_run(make_request(job))
+              RunSupervisor.start_run(make_request(execution_request))
 
             {:slow, pid}
           else
-            job = make_job(scope, text: "fast #{i}")
+            execution_request = make_execution_request(scope, text: "fast #{i}")
 
             {:ok, pid} =
-              RunSupervisor.start_run(make_request(job))
+              RunSupervisor.start_run(make_request(execution_request))
 
             {:fast, pid}
           end
@@ -832,18 +866,18 @@ defmodule LemonGateway.RunSupervisorTest do
   describe "worker notification" do
     test "worker_pid receives run_complete on completion" do
       scope = make_scope()
-      job = make_job(scope)
+      execution_request = make_execution_request(scope)
 
-      {:ok, pid} = RunSupervisor.start_run(make_request(job))
+      {:ok, pid} = RunSupervisor.start_run(make_request(execution_request))
 
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
     end
 
     test "worker_pid receives notification with correct completed event" do
       scope = make_scope()
-      job = make_job(scope, text: "notification test")
+      execution_request = make_execution_request(scope, text: "notification test")
 
-      {:ok, pid} = RunSupervisor.start_run(make_request(job))
+      {:ok, pid} = RunSupervisor.start_run(make_request(execution_request))
 
       assert_receive {:run_complete, ^pid,
                       %{__event__: :completed, ok: true, answer: "Quick: notification test"}},
@@ -855,16 +889,16 @@ defmodule LemonGateway.RunSupervisorTest do
 
       # Start runs with self as worker
       scope1 = make_scope()
-      job1 = make_job(scope1, text: "job1")
+      execution_request1 = make_execution_request(scope1, text: "job1")
 
       {:ok, pid1} =
-        RunSupervisor.start_run(make_request(job1, worker_pid: test_pid))
+        RunSupervisor.start_run(make_request(execution_request1, worker_pid: test_pid))
 
       scope2 = make_scope()
-      job2 = make_job(scope2, text: "job2")
+      execution_request2 = make_execution_request(scope2, text: "job2")
 
       {:ok, pid2} =
-        RunSupervisor.start_run(make_request(job2, worker_pid: test_pid))
+        RunSupervisor.start_run(make_request(execution_request2, worker_pid: test_pid))
 
       # Both should complete with correct answers
       completions =
@@ -892,10 +926,10 @@ defmodule LemonGateway.RunSupervisorTest do
   describe "slot reference handling" do
     test "slot_ref is passed through to Run process" do
       scope = make_scope()
-      job = make_job(scope)
+      execution_request = make_execution_request(scope)
       slot_ref = make_ref()
 
-      {:ok, pid} = RunSupervisor.start_run(make_request(job, slot_ref: slot_ref))
+      {:ok, pid} = RunSupervisor.start_run(make_request(execution_request, slot_ref: slot_ref))
 
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
     end
@@ -904,11 +938,11 @@ defmodule LemonGateway.RunSupervisorTest do
       runs =
         for i <- 1..3 do
           scope = make_scope()
-          job = make_job(scope, text: "slot test #{i}")
+          execution_request = make_execution_request(scope, text: "slot test #{i}")
           slot_ref = make_ref()
 
           {:ok, pid} =
-            RunSupervisor.start_run(make_request(job, slot_ref: slot_ref))
+            RunSupervisor.start_run(make_request(execution_request, slot_ref: slot_ref))
 
           {slot_ref, pid}
         end
@@ -929,16 +963,16 @@ defmodule LemonGateway.RunSupervisorTest do
       # We verify the supervisor behavior indirectly
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable_test",
+      execution_request =
+        make_execution_request(scope,
+          fixture_mode: :controlled,
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid} = RunSupervisor.start_run(make_request(job))
+      {:ok, pid} = RunSupervisor.start_run(make_request(execution_request))
       ref = Process.monitor(pid)
 
-      assert_receive {:engine_started, _, _task_pid}, 2000
+      assert_receive {:executor_started, _, _, _, _task_pid}, 2000
 
       # Terminate the child
       :ok = DynamicSupervisor.terminate_child(RunSupervisor, pid)
@@ -951,9 +985,9 @@ defmodule LemonGateway.RunSupervisorTest do
       initial_count = length(initial_children)
 
       scope = make_scope()
-      job = make_job(scope)
+      execution_request = make_execution_request(scope)
 
-      {:ok, pid} = RunSupervisor.start_run(make_request(job))
+      {:ok, pid} = RunSupervisor.start_run(make_request(execution_request))
 
       assert_receive {:run_complete, ^pid, _}, 2000
 
@@ -973,31 +1007,33 @@ defmodule LemonGateway.RunSupervisorTest do
   # ============================================================================
 
   describe "edge cases" do
-    test "handles job with empty text" do
+    test "handles execution request with empty text" do
       scope = make_scope()
-      job = make_job(scope, text: "")
+      execution_request = make_execution_request(scope, text: "")
 
-      {:ok, pid} = RunSupervisor.start_run(make_request(job))
+      {:ok, pid} = RunSupervisor.start_run(make_request(execution_request))
 
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true, answer: "Quick: "}},
                      2000
     end
 
-    test "handles job with long text" do
+    test "handles execution request with long text" do
       scope = make_scope()
       long_text = String.duplicate("a", 10_000)
-      job = make_job(scope, text: long_text)
+      execution_request = make_execution_request(scope, text: long_text)
 
-      {:ok, pid} = RunSupervisor.start_run(make_request(job))
+      {:ok, pid} = RunSupervisor.start_run(make_request(execution_request))
 
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
     end
 
-    test "handles job with special characters" do
+    test "handles execution request with special characters" do
       scope = make_scope()
-      job = make_job(scope, text: "Special chars: \n\t\r unicode: \u{1F600}")
 
-      {:ok, pid} = RunSupervisor.start_run(make_request(job))
+      execution_request =
+        make_execution_request(scope, text: "Special chars: \n\t\r unicode: \u{1F600}")
+
+      {:ok, pid} = RunSupervisor.start_run(make_request(execution_request))
 
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
     end
@@ -1007,10 +1043,10 @@ defmodule LemonGateway.RunSupervisorTest do
 
       pids =
         for i <- 1..5 do
-          job = make_job(scope, text: "rapid #{i}")
+          execution_request = make_execution_request(scope, text: "rapid #{i}")
 
           {:ok, pid} =
-            RunSupervisor.start_run(make_request(job))
+            RunSupervisor.start_run(make_request(execution_request))
 
           pid
         end
@@ -1023,9 +1059,9 @@ defmodule LemonGateway.RunSupervisorTest do
 
     test "handles nil meta gracefully" do
       scope = make_scope()
-      job = make_job(scope, meta: nil)
+      execution_request = make_execution_request(scope, meta: nil)
 
-      {:ok, pid} = RunSupervisor.start_run(make_request(job))
+      {:ok, pid} = RunSupervisor.start_run(make_request(execution_request))
 
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
     end
@@ -1038,15 +1074,16 @@ defmodule LemonGateway.RunSupervisorTest do
   describe "integration with scheduler" do
     test "runs started via supervisor complete and notify correctly" do
       scope = make_scope()
-      job = make_job(scope, meta: %{notify_pid: self()})
+      execution_request = make_execution_request(scope, meta: %{notify_pid: self()})
 
-      {:ok, pid} = RunSupervisor.start_run(make_request(job))
+      {:ok, pid} = RunSupervisor.start_run(make_request(execution_request))
 
       # Worker receives run_complete
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
 
       # notify_pid receives lemon_gateway_run_completed
-      assert_receive {:lemon_gateway_run_completed, ^job, %{__event__: :completed, ok: true}},
+      assert_receive {:lemon_gateway_run_completed, ^execution_request,
+                      %{__event__: :completed, ok: true}},
                      2000
     end
   end
@@ -1058,9 +1095,9 @@ defmodule LemonGateway.RunSupervisorTest do
   describe "process monitoring" do
     test "can monitor started Run processes" do
       scope = make_scope()
-      job = make_job(scope)
+      execution_request = make_execution_request(scope)
 
-      {:ok, pid} = RunSupervisor.start_run(make_request(job))
+      {:ok, pid} = RunSupervisor.start_run(make_request(execution_request))
       ref = Process.monitor(pid)
 
       assert_receive {:run_complete, ^pid, _}, 2000
@@ -1070,9 +1107,9 @@ defmodule LemonGateway.RunSupervisorTest do
 
     test "monitor receives :normal reason on successful completion" do
       scope = make_scope()
-      job = make_job(scope)
+      execution_request = make_execution_request(scope)
 
-      {:ok, pid} = RunSupervisor.start_run(make_request(job))
+      {:ok, pid} = RunSupervisor.start_run(make_request(execution_request))
       ref = Process.monitor(pid)
 
       assert_receive {:DOWN, ^ref, :process, ^pid, reason}, 2000
@@ -1083,10 +1120,10 @@ defmodule LemonGateway.RunSupervisorTest do
       monitors =
         for i <- 1..5 do
           scope = make_scope()
-          job = make_job(scope, text: "monitor test #{i}")
+          execution_request = make_execution_request(scope, text: "monitor test #{i}")
 
           {:ok, pid} =
-            RunSupervisor.start_run(make_request(job))
+            RunSupervisor.start_run(make_request(execution_request))
 
           ref = Process.monitor(pid)
           {ref, pid}
@@ -1108,16 +1145,16 @@ defmodule LemonGateway.RunSupervisorTest do
       # Verify by checking that crashed children are not restarted
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable_test",
+      execution_request =
+        make_execution_request(scope,
+          fixture_mode: :controlled,
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid} = RunSupervisor.start_run(make_request(job))
+      {:ok, pid} = RunSupervisor.start_run(make_request(execution_request))
       ref = Process.monitor(pid)
 
-      assert_receive {:engine_started, _, _task_pid}, 2000
+      assert_receive {:executor_started, _, _, _, _task_pid}, 2000
 
       # Force kill the process
       Process.exit(pid, :kill)
@@ -1136,9 +1173,9 @@ defmodule LemonGateway.RunSupervisorTest do
     test "child_spec uses LemonGateway.Run module" do
       # This is verified implicitly by the fact that Run processes behave correctly
       scope = make_scope()
-      job = make_job(scope)
+      execution_request = make_execution_request(scope)
 
-      {:ok, pid} = RunSupervisor.start_run(make_request(job))
+      {:ok, pid} = RunSupervisor.start_run(make_request(execution_request))
 
       # Verify it's a GenServer (Run is a GenServer)
       assert Process.alive?(pid)
@@ -1158,10 +1195,10 @@ defmodule LemonGateway.RunSupervisorTest do
       pids =
         for i <- 1..50 do
           scope = make_scope()
-          job = make_job(scope, text: "burst #{i}")
+          execution_request = make_execution_request(scope, text: "burst #{i}")
 
           {:ok, pid} =
-            RunSupervisor.start_run(make_request(job))
+            RunSupervisor.start_run(make_request(execution_request))
 
           pid
         end
@@ -1180,10 +1217,12 @@ defmodule LemonGateway.RunSupervisorTest do
       for batch <- 1..5 do
         for i <- 1..10 do
           scope = make_scope()
-          job = make_job(scope, text: "stability test batch #{batch} run #{i}")
+
+          execution_request =
+            make_execution_request(scope, text: "stability test batch #{batch} run #{i}")
 
           {:ok, pid} =
-            RunSupervisor.start_run(make_request(job))
+            RunSupervisor.start_run(make_request(execution_request))
 
           assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
         end
@@ -1194,8 +1233,8 @@ defmodule LemonGateway.RunSupervisorTest do
 
       # Can still start new runs
       scope = make_scope()
-      job = make_job(scope, text: "final test")
-      {:ok, pid} = RunSupervisor.start_run(make_request(job))
+      execution_request = make_execution_request(scope, text: "final test")
+      {:ok, pid} = RunSupervisor.start_run(make_request(execution_request))
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
     end
   end
@@ -1210,18 +1249,22 @@ defmodule LemonGateway.RunSupervisorTest do
       assert function_exported?(RunSupervisor, :start_run, 1)
 
       scope = make_scope()
-      job = make_job(scope)
+      execution_request = make_execution_request(scope)
 
-      result = RunSupervisor.start_run(make_request(job))
+      result = RunSupervisor.start_run(make_request(execution_request))
       assert {:ok, _pid} = result
     end
 
-    test "start_run/1 rejects legacy %{job: ...} input" do
+    test "start_run/1 rejects input missing execution_request" do
       scope = make_scope()
-      job = make_job(scope)
+      execution_request = make_execution_request(scope)
 
       assert {:error, :invalid_execution_request} =
-               RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
+               RunSupervisor.start_run(%{
+                 request: execution_request,
+                 slot_ref: make_ref(),
+                 worker_pid: self()
+               })
     end
 
     test "start_link/1 starts the supervisor" do

@@ -23,7 +23,7 @@ defmodule LemonCore.Retry do
   @doc """
   Exponential backoff with a configurable multiplier (factor).
 
-  Useful when the growth factor is not 2 (e.g. WhatsApp reconnect uses 1.8).
+  Useful when the growth factor is not 2 (e.g. a reconnect loop using 1.8).
 
   ## Examples
 
@@ -86,7 +86,7 @@ defmodule LemonCore.Retry do
   Parses a retry-after value from an HTTP response body.
 
   Supports:
-  - JSON body with `parameters.retry_after` (Telegram-style)
+  - JSON body with `parameters.retry_after` (chat-platform style)
   - Plain text with "retry after N" pattern
 
   Returns milliseconds, or 0 if not found.

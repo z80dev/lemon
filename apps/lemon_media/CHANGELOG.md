@@ -40,3 +40,10 @@ it is published because two published packages depend on it (see D13 in
   not tied to Lemon's filesystem layout.
 - `cleanup/1` prunes by age and count, defaulting to 30 days, 500 jobs and 250
   artifacts; `summary/1` reports the policy in force alongside the counts.
+
+### Changed
+
+- `mix lemon.media` dropped its unreachable non-map `safe_worker_status/1`
+  clause (`MediaJobSupervisor.status/0` answers a map on every path, including
+  its own `rescue`), keeping the app Dialyzer-clean for
+  `scripts/dialyzer_gate.sh`.

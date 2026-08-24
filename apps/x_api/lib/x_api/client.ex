@@ -595,8 +595,6 @@ defmodule XApi.Client do
     end
   end
 
-  defp get_retry_after(_headers), do: nil
-
   defp fetch_header(headers, name) do
     downcased_name = String.downcase(name)
 

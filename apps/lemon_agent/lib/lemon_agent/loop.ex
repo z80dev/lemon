@@ -376,7 +376,14 @@ defmodule LemonAgent.Loop do
   # ============================================================================
 
   defp run_loop(context, new_messages, config, signal, stream_fn, stream) do
-    # Check for steering messages at start (user may have typed while waiting)
+    # Check for steering messages at start (user may have typed while waiting).
+    # Clear the redirect flag BEFORE draining: a redirect cast processed before
+    # the drain has its correction included here (a set flag is then cleared
+    # harmlessly, worst case one immediate cancel/retry with the correction
+    # already in context); one processed after the drain keeps its flag, so
+    # the model call is canceled mid-stream and retried with the correction.
+    # Clearing after the drain would swallow that second case silently.
+    AbortSignal.clear_redirect(signal)
     pending_messages = get_steering_messages(config, signal) || []
 
     Logger.debug("LemonAgent.Loop run_loop pending_steering=#{length(pending_messages)}")
@@ -531,6 +538,38 @@ defmodule LemonAgent.Loop do
             EventStream.cancel(stream, :assistant_aborted)
             {context, new_messages, [], false}
 
+          :redirected ->
+            # The in-flight model request was canceled by a redirect. Drop the
+            # partial assistant message from the loop context (prior completed
+            # messages/tool results are preserved), clear the redirect flag,
+            # drain the queued correction, and retry the model call.
+            Logger.info("LemonAgent.Loop turn redirected")
+            context = drop_trailing_message(context, message)
+            EventStream.push(stream, {:turn_end, message, []})
+            AbortSignal.clear_redirect(signal)
+
+            pending_messages = get_steering_messages(config, signal) || []
+
+            if aborted?(signal) do
+              transition_loop_state(stream, :aborted, %{reason: :assistant_aborted})
+              EventStream.cancel(stream, :assistant_aborted)
+              {context, new_messages, [], false}
+            else
+              do_inner_loop(
+                context,
+                new_messages,
+                config,
+                signal,
+                stream_fn,
+                stream,
+                pending_messages,
+                false,
+                false,
+                nil,
+                tool_turn_count
+              )
+            end
+
           :error ->
             transition_loop_state(stream, :recovering_provider_error, %{reason: :assistant_error})
             EventStream.push(stream, {:turn_end, message, []})
@@ -593,11 +632,14 @@ defmodule LemonAgent.Loop do
             if max_tool_turns_exhausted?(config, has_more_tool_calls, tool_turn_count) do
               complete_tool_loop_budget(context, new_messages, config, stream, tool_turn_count)
             else
-              # Get steering messages after turn completes
+              # Get steering messages after turn completes. Flag-clear-before-
+              # drain, same reasoning as in run_loop/6: when steering_after_tools
+              # is non-empty the clear already happened before ToolCalls' drain.
               pending_messages =
                 if steering_after_tools && steering_after_tools != [] do
                   steering_after_tools
                 else
+                  AbortSignal.clear_redirect(signal)
                   get_steering_messages(config, signal) || []
                 end
 
@@ -785,6 +827,16 @@ defmodule LemonAgent.Loop do
   defp assistant_message?(%AssistantMessage{}), do: true
   defp assistant_message?(%{role: :assistant}), do: true
   defp assistant_message?(_), do: false
+
+  # Remove `message` from the end of the context, where the streaming pass
+  # finalized it. Used by the redirect path to discard the canceled partial.
+  defp drop_trailing_message(context, message) do
+    if List.last(context.messages) == message do
+      %{context | messages: List.delete_at(context.messages, -1)}
+    else
+      context
+    end
+  end
 
   defp get_tool_calls(%AssistantMessage{content: content}) do
     Enum.filter(content, fn

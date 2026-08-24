@@ -124,7 +124,7 @@ defmodule LemonCore.RouterBridgeTest do
           agent_id: "bridge",
           prompt: "hello",
           queue_mode: :interrupt,
-          meta: %{channel_id: "telegram"}
+          meta: %{channel_id: "demo"}
         }
 
       assert {:ok, "run_test"} = RouterBridge.submit_run(request)

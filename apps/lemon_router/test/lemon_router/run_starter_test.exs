@@ -158,7 +158,6 @@ defmodule LemonRouter.RunStarterTest do
       run_id: run_id,
       session_key: session_key,
       prompt: "prompt for #{run_id}",
-      engine_id: "codex",
       conversation_key: {:session, session_key},
       meta: %{}
     }

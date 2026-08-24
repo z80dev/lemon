@@ -20,7 +20,8 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
              :tool_status_snapshot,
              :tool_status_finalize,
              :final_text,
-             :watchdog_prompt
+             :watchdog_prompt,
+             :notice
            ] ->
         dispatch_text(intent)
 
@@ -410,14 +411,19 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
       thread_id = parse_int(route.thread_id)
       msg_id = parse_int(message_id)
 
-      if is_integer(chat_id) and is_integer(msg_id) and resume_token_like?(resume) do
-        ResumeIndexStore.put_resume(
-          route.account_id || "default",
-          chat_id,
-          thread_id,
-          msg_id,
-          resume
-        )
+      case normalize_resume(resume) do
+        %ResumeToken{engine: "lemon"} = native_resume
+        when is_integer(chat_id) and is_integer(msg_id) ->
+          ResumeIndexStore.put_resume(
+            route.account_id || "default",
+            chat_id,
+            thread_id,
+            msg_id,
+            native_resume
+          )
+
+        _ ->
+          :ok
       end
     end
 
@@ -537,16 +543,6 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
   rescue
     _ -> "#{resume.engine} resume #{resume.value}"
   end
-
-  defp resume_token_like?(%ResumeToken{engine: e, value: v}) when is_binary(e) and is_binary(v),
-    do: true
-
-  defp resume_token_like?(%{engine: e, value: v}) when is_binary(e) and is_binary(v), do: true
-
-  defp resume_token_like?(%{"engine" => e, "value" => v}) when is_binary(e) and is_binary(v),
-    do: true
-
-  defp resume_token_like?(_), do: false
 
   defp duplicate?(state, kind, seq, text_hash) do
     (state.last_seq == seq and state.last_text_hash == text_hash) or

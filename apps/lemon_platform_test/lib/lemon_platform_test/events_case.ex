@@ -34,8 +34,9 @@ defmodule LemonPlatformTest.EventsCase do
      intact, asserted under **both** bus backends. Publishers that check for a specific
      backend process rather than using the Bus API are inert under the Registry fallback;
      running every delivery assertion twice is what catches that.
-  8. **Deprecation hygiene** — payload modules implement `Access` only as a temporary shim,
-     so each must carry a deprecation note pointing at its removal.
+  8. **No `Access`** — payload modules must not implement `Access`. The shim that let
+     publishers migrate ahead of their consumers is gone; reading a payload by key hides the
+     field rename that pattern matching catches at compile time.
 
   ## Example values
 
@@ -176,11 +177,12 @@ defmodule LemonPlatformTest.EventsCase do
         end
       end
 
-      test "payload modules document the Access shim as deprecated" do
+      test "payload modules do not implement Access" do
         for module <- @events_modules do
-          assert LemonPlatformTest.EventsCase.deprecated_functions(module) != [],
-                 "#{inspect(module)} implements Access as a compatibility shim and must " <>
-                   "carry a @deprecated note saying when it is removed"
+          refute LemonPlatformTest.EventsCase.implements_access?(module),
+                 "#{inspect(module)} implements Access. Event payloads are pattern-matched or " <>
+                   "read by field; a consumer holding a payload that may still be a legacy " <>
+                   "map coerces it once with LemonCore.Events.coerce/2"
         end
       end
 
@@ -299,23 +301,19 @@ defmodule LemonPlatformTest.EventsCase do
   end
 
   @doc """
-  The functions a module marks `@deprecated`, read from its docs chunk.
+  Whether a module implements the `Access` callbacks.
 
-  `@deprecated` is recorded as doc metadata rather than a module attribute, so it is only
-  visible here — and only when the module was compiled with docs.
+  Payloads carried an `Access` shim for one release cycle so that each publisher could migrate
+  independently of its consumers. It is gone: reading a payload by key silently tolerates the
+  field rename that a struct pattern turns into a compile error, and it is why
+  `LemonControlPlane.EventBridge` could map events it no longer understood.
   """
-  @spec deprecated_functions(module()) :: [{atom(), arity()}]
-  def deprecated_functions(module) do
-    case Code.fetch_docs(module) do
-      {:docs_v1, _, _, _, _, _, docs} ->
-        for {{kind, name, arity}, _, _, _, meta} <- docs,
-            kind in [:function, :macro],
-            Map.has_key?(meta, :deprecated),
-            do: {name, arity}
-
-      _ ->
-        []
-    end
+  @spec implements_access?(module()) :: boolean()
+  def implements_access?(module) do
+    Code.ensure_loaded?(module) and
+      (function_exported?(module, :fetch, 2) or
+         function_exported?(module, :get_and_update, 3) or
+         function_exported?(module, :pop, 2))
   end
 
   defp default_attrs(module) do
@@ -331,6 +329,7 @@ defmodule LemonPlatformTest.EventsCase do
   end
 
   defp sample_value(LemonCore.Events.Action, :kind), do: :tool
+  defp sample_value(LemonCore.Events.ChannelDelivery, :kind), do: :final_text
   defp sample_value(LemonCore.Events.ApprovalResolved, :decision), do: :deny
   defp sample_value(LemonCore.Events.CronJobChanged, :action), do: :created
   defp sample_value(LemonCore.Events.RunPhaseChanged, :phase), do: :running

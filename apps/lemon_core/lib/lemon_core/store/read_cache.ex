@@ -13,9 +13,10 @@ defmodule LemonCore.Store.ReadCache do
 
   This module maintains a set of public ETS tables that mirror the backing
   store for domains that receive heavy read traffic (chat state, runs,
-  progress mappings, session index, Telegram target index). Reads are served directly from ETS without going
-  through the Store GenServer, eliminating mailbox contention on the
-  read path.
+  progress mappings, session index, and whatever tables collaborators register
+  through `register_cached_table/1`). Reads are served directly from ETS
+  without going through the Store GenServer, eliminating mailbox contention on
+  the read path.
 
   Writes still go through the Store GenServer, which updates both the
   backend and this cache atomically within its process.

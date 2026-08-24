@@ -9,6 +9,9 @@ defmodule LemonAutomation.CronStore do
 
   - `:cron_jobs` - CronJob definitions keyed by job ID
   - `:cron_runs` - CronRun history keyed by run ID
+  - `:cron_audit_events` - Durable lifecycle audit events
+  - `:cron_monitor_state` - Monitor-mode output fingerprints keyed by job ID
+  - `:cron_preflight_notice_state` - Preflight-failure fingerprints keyed by job ID
 
   ## Examples
 
@@ -27,6 +30,8 @@ defmodule LemonAutomation.CronStore do
   @jobs_table :cron_jobs
   @runs_table :cron_runs
   @audit_table :cron_audit_events
+  @monitor_table :cron_monitor_state
+  @preflight_notice_table :cron_preflight_notice_state
 
   # ============================================================================
   # Job Operations
@@ -285,8 +290,107 @@ defmodule LemonAutomation.CronStore do
   end
 
   # ============================================================================
+  # Monitor State Operations
+  # ============================================================================
+
+  @doc """
+  Store the monitor-mode fingerprint state for a job.
+
+  Monitor state lives in the durable cron store (not the prompt-facing cron
+  memory file), so output suppression survives restarts.
+  """
+  @spec put_monitor_state(binary(), map()) :: :ok
+  def put_monitor_state(job_id, state) when is_binary(job_id) and is_map(state) do
+    LemonCore.Store.put(@monitor_table, job_id, normalize_monitor_state(state))
+  end
+
+  @doc """
+  Get the monitor-mode fingerprint state for a job, or `nil` when absent.
+  """
+  @spec get_monitor_state(binary()) :: map() | nil
+  def get_monitor_state(job_id) when is_binary(job_id) do
+    case LemonCore.Store.get(@monitor_table, job_id) do
+      nil -> nil
+      map when is_map(map) -> normalize_monitor_state(map)
+      _ -> nil
+    end
+  end
+
+  @doc """
+  Delete the monitor-mode fingerprint state for a job.
+  """
+  @spec delete_monitor_state(binary()) :: :ok
+  def delete_monitor_state(job_id) when is_binary(job_id) do
+    LemonCore.Store.delete(@monitor_table, job_id)
+  end
+
+  # ============================================================================
+  # Preflight Notice State Operations
+  # ============================================================================
+
+  @doc """
+  Store the preflight-failure notice fingerprint for a job.
+
+  Kept in its own table rather than sharing `:cron_monitor_state`: an output
+  fingerprint and a failure fingerprint must never occupy the same slot, or a
+  recovery run would be compared against a failure hash.
+  """
+  @spec put_preflight_notice_state(binary(), map()) :: :ok
+  def put_preflight_notice_state(job_id, state) when is_binary(job_id) and is_map(state) do
+    LemonCore.Store.put(@preflight_notice_table, job_id, normalize_preflight_notice_state(state))
+  end
+
+  @doc """
+  Get the preflight-failure notice fingerprint for a job, or `nil` when absent.
+  """
+  @spec get_preflight_notice_state(binary()) :: map() | nil
+  def get_preflight_notice_state(job_id) when is_binary(job_id) do
+    case LemonCore.Store.get(@preflight_notice_table, job_id) do
+      nil -> nil
+      map when is_map(map) -> normalize_preflight_notice_state(map)
+      _ -> nil
+    end
+  end
+
+  @doc """
+  Delete the preflight-failure notice fingerprint for a job.
+  """
+  @spec delete_preflight_notice_state(binary()) :: :ok
+  def delete_preflight_notice_state(job_id) when is_binary(job_id) do
+    LemonCore.Store.delete(@preflight_notice_table, job_id)
+  end
+
+  # ============================================================================
   # Private Helpers
   # ============================================================================
+
+  defp normalize_preflight_notice_state(state) when is_map(state) do
+    %{
+      class: monitor_get(state, :class),
+      detail_hash: monitor_get(state, :detail_hash),
+      first_seen_at_ms: monitor_get(state, :first_seen_at_ms),
+      last_notified_at_ms: monitor_get(state, :last_notified_at_ms),
+      occurrences: monitor_get(state, :occurrences) || 0,
+      notifications: monitor_get(state, :notifications) || 0
+    }
+  end
+
+  defp normalize_monitor_state(state) when is_map(state) do
+    %{
+      last_hash: monitor_get(state, :last_hash),
+      last_run_id: monitor_get(state, :last_run_id),
+      last_changed_at_ms: monitor_get(state, :last_changed_at_ms),
+      updated_at_ms: monitor_get(state, :updated_at_ms),
+      runs_since_change: monitor_get(state, :runs_since_change) || 0
+    }
+  end
+
+  defp monitor_get(map, key) do
+    case Map.get(map, key) do
+      nil -> Map.get(map, Atom.to_string(key))
+      value -> value
+    end
+  end
 
   defp query_runs(opts, extra_filter \\ nil) do
     limit = Keyword.get(opts, :limit, 100)

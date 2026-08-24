@@ -7,6 +7,20 @@ defmodule LemonControlPlane.Methods.AgentInboxSend do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.Protocol.Errors
+
+  @legacy_selector_fields ~w(
+    engine
+    engine_id
+    engineId
+    default_engine
+    defaultEngine
+    engine_preference
+    enginePreference
+    preferred_engine
+    preferredEngine
+  )
+
   @impl true
   def name, do: "agent.inbox.send"
 
@@ -15,33 +29,51 @@ defmodule LemonControlPlane.Methods.AgentInboxSend do
 
   @impl true
   def handle(params, _ctx) do
-    prompt = get_param(params, "prompt")
-    agent_id = get_param(params, "agentId") || "default"
+    with :ok <- reject_legacy_selector(params) do
+      prompt = get_param(params, "prompt")
+      agent_id = get_param(params, "agentId") || "default"
 
-    cond do
-      not (is_binary(prompt) and String.trim(prompt) != "") ->
-        {:error, {:invalid_request, "prompt is required", nil}}
+      cond do
+        not (is_binary(prompt) and String.trim(prompt) != "") ->
+          {:error, {:invalid_request, "prompt is required", nil}}
 
-      not (is_binary(agent_id) and String.trim(agent_id) != "") ->
-        {:error, {:invalid_request, "agentId must be a non-empty string", nil}}
+        not (is_binary(agent_id) and String.trim(agent_id) != "") ->
+          {:error, {:invalid_request, "agentId must be a non-empty string", nil}}
 
-      true ->
-        case LemonRouter.send_to_agent(agent_id, prompt, build_send_opts(params)) do
-          {:ok, result} ->
-            {:ok,
-             %{
-               "runId" => result.run_id,
-               "sessionKey" => result.session_key,
-               "selector" => selector_label(result.selector),
-               "fanoutCount" => result.fanout_count || 0,
-               "summary" => summary(agent_id, prompt, params, result)
-             }}
+        true ->
+          case LemonRouter.send_to_agent(agent_id, prompt, build_send_opts(params)) do
+            {:ok, result} ->
+              {:ok,
+               %{
+                 "runId" => result.run_id,
+                 "sessionKey" => result.session_key,
+                 "selector" => selector_label(result.selector),
+                 "fanoutCount" => result.fanout_count || 0,
+                 "summary" => summary(agent_id, prompt, params, result)
+               }}
 
-          {:error, reason} ->
-            {:error, {:internal_error, "Failed to send inbox message", inspect(reason)}}
-        end
+            {:error, reason} ->
+              {:error, {:internal_error, "Failed to send inbox message", inspect(reason)}}
+          end
+      end
     end
   end
+
+  defp reject_legacy_selector(params) when is_map(params) do
+    case Enum.filter(@legacy_selector_fields, &Map.has_key?(params, &1)) do
+      [] ->
+        :ok
+
+      fields ->
+        {:error,
+         Errors.invalid_params(
+           "Top-level engine selection is no longer supported; remove #{Enum.join(fields, ", ")}. Lemon now runs natively; use model to choose a model.",
+           %{fields: fields}
+         )}
+    end
+  end
+
+  defp reject_legacy_selector(_), do: :ok
 
   defp build_send_opts(params) do
     session_selector = parse_session_selector(params)
@@ -49,7 +81,6 @@ defmodule LemonControlPlane.Methods.AgentInboxSend do
     [
       session: session_selector,
       queue_mode: parse_queue_mode(get_param(params, "queueMode")),
-      engine_id: get_param(params, "engineId"),
       model: get_param(params, "model"),
       cwd: get_param(params, "cwd"),
       tool_policy: get_param(params, "toolPolicy"),

@@ -35,8 +35,8 @@ defmodule LemonRouter.RunOrchestrator do
   - `:session_key` - Session key for routing
   - `:agent_id` - Agent identifier
   - `:prompt` - User prompt text
-  - `:queue_mode` - Queue mode (:collect, :followup, :steer, :steer_backlog, :interrupt)
-  - `:engine_id` - Optional engine override
+  - `:queue_mode` - Queue mode (:collect, :followup, :steer, :steer_backlog, :redirect,
+    :interrupt)
   - `:model` - Optional model override (independent of profile binding)
   - `:meta` - Additional metadata
   - `:cwd` - Optional cwd override
@@ -163,7 +163,6 @@ defmodule LemonRouter.RunOrchestrator do
     session_key = params.session_key
     agent_id = params.agent_id || SessionKey.agent_id(session_key) || "default"
     queue_mode = params.queue_mode || :collect
-    engine_id = params.engine_id
 
     # Generate run_id (honor caller-provided run_id for cron jobs to avoid race conditions)
     run_id = params.run_id || LemonCore.Id.run_id()
@@ -175,8 +174,7 @@ defmodule LemonRouter.RunOrchestrator do
       %{
         origin: origin,
         agent_id: agent_id,
-        queue_mode: queue_mode,
-        engine_id: engine_id
+        queue_mode: queue_mode
       },
       run_id: run_id,
       session_key: session_key,
@@ -197,7 +195,6 @@ defmodule LemonRouter.RunOrchestrator do
             Introspection.record(
               :orchestration_resolved,
               %{
-                engine_id: execution_request.engine_id,
                 model: meta[:model],
                 conversation_key: inspect(execution_request.conversation_key)
               },
@@ -211,7 +208,7 @@ defmodule LemonRouter.RunOrchestrator do
             LemonCore.Telemetry.run_submit(
               submission.session_key,
               origin,
-              execution_request.engine_id || "default"
+              "lemon"
             )
 
             {:ok, run_id}

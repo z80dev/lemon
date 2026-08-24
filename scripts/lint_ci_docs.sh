@@ -302,11 +302,17 @@ import sys
 root = Path(sys.argv[1])
 path = root / ".github/workflows/release.yml"
 content = path.read_text(encoding="utf-8")
+summary, separator, _ = content.partition("\non:")
+if not separator:
+    print(f"{path.relative_to(root)} missing workflow summary", file=sys.stderr)
+    sys.exit(1)
+
 tokens = [
-    "Verify the assembled artifact directory before publishing",
-    "Generate a manifest.json with version, channel, and SHA-256 checksums",
+    "manual dispatch from main is the one-click path",
+    "Every artifact is verified before the GitHub",
+    "mutable container channel tags move only afterward",
 ]
-missing = [token for token in tokens if token not in content]
+missing = [token for token in tokens if token not in summary]
 if missing:
     print("\n".join(f"{path.relative_to(root)} missing {token!r}" for token in missing), file=sys.stderr)
     sys.exit(1)
@@ -317,12 +323,11 @@ else
   fail "J24: release.yml summary is stale for artifact verification behavior"
 fi
 
-if grep -q 'Builds, tags, and publishes' "$ROOT/.github/workflows/release.yml" 2>/dev/null; then
-  fail "J24: release.yml summary claims the workflow creates tags"
-elif grep -q 'manually dispatch with an existing tag input' "$ROOT/.github/workflows/release.yml" 2>/dev/null; then
-  pass "J24: release.yml summary documents manual dispatch truthfully"
+if grep -q 'scripts/prepare_product_release' "$ROOT/.github/workflows/release.yml" 2>/dev/null &&
+  grep -q 'CalVer to publish; leave blank to derive the next version' "$ROOT/.github/workflows/release.yml" 2>/dev/null; then
+  pass "J24: release.yml summary documents one-click manual dispatch truthfully"
 else
-  fail "J24: release.yml summary does not document manual dispatch"
+  fail "J24: release.yml summary does not document one-click manual dispatch"
 fi
 
 # ── J25: first-party version metadata must match the umbrella version ────────
@@ -342,6 +347,13 @@ def expect(label, value, expected):
     if value != expected:
         errors.append(f"{label}: {value!r} != {expected!r}")
 
+def normalize_calver(value):
+    match = re.fullmatch(r"(\d{4})\.(\d{1,2})\.(\d+)", value or "")
+    if not match:
+        return value
+    year, month, patch = match.groups()
+    return f"{year}.{int(month):02d}.{patch}"
+
 mix_text = read_text("mix.exs")
 mix_match = re.search(r'version:\s*"([^"]+)"', mix_text)
 if not mix_match:
@@ -353,7 +365,7 @@ else:
         errors.append(f"mix.exs: {mix_version!r} is not CalVer YYYY.MM.PATCH")
 
 package_json_paths = [
-    "clients/lemon-tui/package.json",
+    "clients/tui/package.json",
     "clients/lemon-browser-node/package.json",
     "clients/lemon-web/package.json",
     "clients/lemon-web/server/package.json",
@@ -364,11 +376,17 @@ package_json_paths = [
 for path in package_json_paths:
     with (root / path).open(encoding="utf-8") as f:
         data = json.load(f)
-    expect(path, data.get("version"), mix_version)
-    expect(f"{path}:engines.node", data.get("engines", {}).get("node"), ">=24.0.0")
+    version = data.get("version")
+    if path == "clients/tui/package.json":
+        expect(path, normalize_calver(version), normalize_calver(mix_version))
+    else:
+        expect(path, version, mix_version)
+    if path == "clients/tui/package.json":
+        expect(f"{path}:engines.bun", data.get("engines", {}).get("bun"), ">=1.3.14")
+    else:
+        expect(f"{path}:engines.node", data.get("engines", {}).get("node"), ">=24.0.0")
 
 package_lock_roots = [
-    "clients/lemon-tui/package-lock.json",
     "clients/lemon-browser-node/package-lock.json",
 ]
 
@@ -386,17 +404,8 @@ for package in ("server", "shared", "web"):
         mix_version,
     )
 
-pyproject = read_text("clients/lemon-cli/pyproject.toml")
-pyproject_match = re.search(r'(?m)^version = "([^"]+)"', pyproject)
-expect("clients/lemon-cli/pyproject.toml", pyproject_match.group(1) if pyproject_match else None, mix_version)
-
-uv_lock = read_text("clients/lemon-cli/uv.lock")
-uv_match = re.search(r'(?ms)\[\[package\]\]\nname = "lemon-cli"\nversion = "([^"]+)"', uv_lock)
-expect("clients/lemon-cli/uv.lock:[[package]] lemon-cli", uv_match.group(1) if uv_match else None, mix_version)
-
-banner = read_text("clients/lemon-cli/src/lemon_cli/tui/banner.py")
-banner_match = re.search(r"lemon-cli v(\d{4}\.\d{1,2}\.\d+)", banner)
-expect("clients/lemon-cli/src/lemon_cli/tui/banner.py", banner_match.group(1) if banner_match else None, mix_version)
+bun_version = read_text("clients/tui/.bun-version").strip()
+expect("clients/tui/.bun-version", bun_version, "1.3.14")
 
 if errors:
     print("\n".join(errors), file=sys.stderr)
@@ -503,6 +512,7 @@ fi
 READINESS_SCRIPTS=(
   scripts/audit_1_0_readiness
   scripts/prepare_release_notes
+  scripts/prepare_product_release
   scripts/verify_docs_site
   scripts/verify_release_artifacts
   scripts/verify_release_runtime_boot
@@ -975,7 +985,8 @@ files = {
     "channel_matrix": root / "docs/plans/lemon-channel-command-parity-matrix-2026-05-12.md",
     "terminal_status": root / "apps/lemon_control_plane/lib/lemon_control_plane/methods/terminal_backends_status.ex",
     "proofs_status": root / "apps/lemon_control_plane/lib/lemon_control_plane/methods/proofs_status.ex",
-    "proof_launch_gates": root / "apps/lemon_core/lib/lemon_core/doctor/proof_launch_gates.ex",
+    "core_launch_gates": root / "apps/lemon_core/lib/lemon_core/doctor/proof_launch_gates.ex",
+    "channel_proof_spec": root / "apps/lemon_channels/lib/lemon_channels/doctor/proof_spec.ex",
     "channels_status": root / "apps/lemon_control_plane/lib/lemon_control_plane/methods/channels_status.ex",
     "cron_status": root / "apps/lemon_control_plane/lib/lemon_control_plane/methods/cron_status.ex",
     "control_plane_readme": root / "apps/lemon_control_plane/README.md",
@@ -1005,9 +1016,9 @@ contracts = [
         [
             ("proofs_status", '"launchGates"'),
             ("proofs_status", "ProofLaunchGates.status"),
-            ("proof_launch_gates", '"discordDm"'),
-            ("proof_launch_gates", '"discordSlashRegistration"'),
-            ("proof_launch_gates", '"providerMedia"'),
+            ("channel_proof_spec", '"discordDm"'),
+            ("channel_proof_spec", '"discordSlashRegistration"'),
+            ("core_launch_gates", '"providerMedia"'),
             ("control_plane_readme", "Discord slash registration"),
             ("control_plane_readme", "launch-gate summaries"),
             ("support", "Discord slash registration"),
@@ -1105,7 +1116,7 @@ files = {
     "discord_matrix": root / "scripts/live_discord_matrix.py",
     "proof_diagnostics": root / "apps/lemon_core/lib/lemon_core/doctor/proof_diagnostics.ex",
     "proofs_status": root / "apps/lemon_control_plane/lib/lemon_control_plane/methods/proofs_status.ex",
-    "channel_diagnostics": root / "apps/lemon_core/lib/lemon_core/doctor/channel_diagnostics.ex",
+    "channel_diagnostics": root / "apps/lemon_channels/lib/lemon_channels/doctor/diagnostics.ex",
     "channel_matrix": root / "docs/plans/lemon-channel-command-parity-matrix-2026-05-12.md",
     "support": root / "docs/support.md",
     "release_docs": root / "docs/release/release_checklist_and_support_policy.md",
@@ -1146,15 +1157,12 @@ contracts = [
         ],
     ),
     (
-        "J27: release handoff docs avoid duplicate workflow runs",
+        "J27: release handoff docs define one-click and recovery flows",
         [
-            ("release_docs", "Do not use both paths"),
-            ("release_docs", "-f channel=stable"),
-            ("release_docs", "refusing to publish with a dirty tree"),
-            ("release_docs", "git log -1 --oneline"),
-            ("release_docs", "git rev-list --count origin/main..HEAD"),
-            ("release_docs", "git log --oneline origin/main..HEAD"),
-            ("release_docs", "git push origin main"),
+            ("release_docs", "gh workflow run release.yml --ref main"),
+            ("release_docs", "Re-run failed jobs"),
+            ("release_docs", "Mutable container channel tags do not move"),
+            ("release_docs", "Do not combine a `main` dispatch"),
         ],
     ),
     (
@@ -1206,6 +1214,67 @@ import sys
 
 root = pathlib.Path(sys.argv[1])
 errors = []
+expected_pins = {"otp-version": "28.5", "elixir-version": "1.19.5"}
+
+# .tool-versions is the development-toolchain source of truth. Keep its OTP
+# qualifier aligned with the released OTP family as well as checking the
+# version that erlef/setup-beam receives.
+tool_versions = {}
+for line in (root / ".tool-versions").read_text(encoding="utf-8").splitlines():
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        continue
+    tool, _, version = stripped.partition(" ")
+    tool_versions[tool] = version.strip()
+
+if tool_versions.get("erlang") != expected_pins["otp-version"]:
+    errors.append(
+        ".tool-versions: expected erlang 28.5, "
+        f"found {tool_versions.get('erlang', '<missing>')}"
+    )
+if tool_versions.get("elixir") != "1.19.5-otp-28":
+    errors.append(
+        ".tool-versions: expected elixir 1.19.5-otp-28, "
+        f"found {tool_versions.get('elixir', '<missing>')}"
+    )
+
+def yaml_scalar(value):
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+        return value[1:-1]
+    return value
+
+def root_env(content):
+    """Return literal constants declared in a workflow's top-level env mapping."""
+    constants = {}
+    in_env = False
+
+    for line in content.splitlines():
+        stripped = line.strip()
+        indent = len(line) - len(line.lstrip())
+        if not in_env:
+            if indent == 0 and stripped == "env:":
+                in_env = True
+            continue
+        if stripped and indent == 0:
+            break
+        match = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*?)\s*(?:#.*)?$", line)
+        if match:
+            constants[match.group(1)] = yaml_scalar(match.group(2))
+
+    return constants
+
+def resolve_version(value, constants):
+    value = yaml_scalar(value)
+    reference = re.fullmatch(r"\$\{\{\s*env\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}", value)
+    if not reference:
+        return value, None
+
+    name = reference.group(1)
+    resolved = constants.get(name)
+    if resolved is None:
+        return None, f"references top-level env.{name}, which is not defined"
+    return resolved, None
 
 # floor-check.yml deliberately pins the *declared floor* (Elixir 1.15 / OTP
 # 26), not the current first-party toolchain — that is the whole point of the
@@ -1224,10 +1293,18 @@ for workflow in sorted((root / ".github" / "workflows").glob("*.yml")):
                 if not pattern.match(value):
                     errors.append(f"{workflow.relative_to(root)}: {field}: {value} is not on the declared floor")
         continue
-    for field, expected in (("otp-version", "28.5"), ("elixir-version", "1.19.5")):
-        for match in re.finditer(rf"{field}:\s*['\"]?([^'\"\s]+)", content):
-            if match.group(1) != expected:
-                errors.append(f"{workflow.relative_to(root)}: expected {field}: {expected}, found {match.group(1)}")
+
+    constants = root_env(content)
+    for match in re.finditer(r"^\s*(otp-version|elixir-version):\s*(.*?)\s*(?:#.*)?$", content, re.MULTILINE):
+        field, value = match.groups()
+        resolved, resolution_error = resolve_version(value, constants)
+        if resolution_error:
+            errors.append(f"{workflow.relative_to(root)}: {field}: {resolution_error}")
+        elif resolved != expected_pins[field]:
+            errors.append(
+                f"{workflow.relative_to(root)}: expected {field}: {expected_pins[field]}, "
+                f"found {value.strip()} (resolved to {resolved})"
+            )
 
 sim_ui_dockerfile = root / "apps" / "lemon_sim_ui" / "Dockerfile"
 sim_ui = sim_ui_dockerfile.read_text(encoding="utf-8")
@@ -1338,9 +1415,8 @@ requirements = [
             (".github/workflows/osv-scanner.yml", "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@c51854704019a247608d928f370c98740469d4b5"),
             (".github/workflows/osv-scanner.yml", "security-events: write"),
             (".github/workflows/osv-scanner.yml", "--lockfile=mix.lock"),
-            (".github/workflows/osv-scanner.yml", "--lockfile=clients/lemon-cli/uv.lock"),
             (".github/workflows/osv-scanner.yml", "--lockfile=clients/lemon-web/package-lock.json"),
-            (".github/workflows/osv-scanner.yml", "--lockfile=clients/lemon-tui/package-lock.json"),
+            (".github/workflows/osv-scanner.yml", "--lockfile=clients/tui/bun.lock"),
             (".github/workflows/osv-scanner.yml", "--lockfile=clients/lemon-browser-node/package-lock.json"),
             (".github/workflows/osv-scanner.yml", "--lockfile=apps/lemon_gateway/priv/package-lock.json"),
             (".github/workflows/osv-scanner.yml", "--lockfile=tools/diagrams/package-lock.json"),
@@ -1408,26 +1484,23 @@ else
   fail "J32: PR history integrity check is missing or undocumented"
 fi
 
-# ── J33: Python CLI package checks must stay wired and documented ────────────
+# ── J33: Bun TUI checks must stay wired and documented ───────────────────────
 if python3 - "$ROOT" <<'PYEOF'
 from pathlib import Path
 import sys
 
 root = Path(sys.argv[1])
 requirements = [
-    (".github/workflows/python-cli.yml", "name: Python CLI"),
-    (".github/workflows/python-cli.yml", 'python-version: "3.13"'),
-    (".github/workflows/python-cli.yml", "astral-sh/setup-uv@v6"),
-    (".github/workflows/python-cli.yml", "uv sync --locked --dev"),
-    (".github/workflows/python-cli.yml", "uv run ruff check src tests"),
-    (".github/workflows/python-cli.yml", "uv run pytest"),
-    (".github/workflows/python-cli.yml", "uv build --sdist --wheel"),
-    (".github/workflows/python-cli.yml", "lemon-cli-distributions"),
-    ("scripts/test", "uv run ruff check src tests"),
-    ("scripts/test", "uv build --sdist --wheel"),
-    ("docs/testing.md", "lemon-cli"),
-    ("docs/release/release_checklist_and_support_policy.md", "Python CLI package workflow"),
-    ("docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md", "PyPI-style CLI package"),
+    (".github/workflows/quality.yml", "oven-sh/setup-bun@v2"),
+    (".github/workflows/quality.yml", "bun-version-file: clients/tui/.bun-version"),
+    (".github/workflows/quality.yml", "hashFiles('clients/tui/bun.lock')"),
+    (".github/workflows/quality.yml", "bun install --frozen-lockfile"),
+    (".github/workflows/quality.yml", "bun run check"),
+    (".github/workflows/quality.yml", "bun run lint"),
+    (".github/workflows/quality.yml", "bun test"),
+    ("scripts/test", "(cd clients/tui && bun run check && bun test)"),
+    ("docs/testing.md", "Bun TUI in `clients/tui`"),
+    ("docs/release/release_checklist_and_support_policy.md", "## Bun TUI Package Check"),
 ]
 contents = {}
 missing = []
@@ -1444,9 +1517,9 @@ if missing:
     sys.exit(1)
 PYEOF
 then
-  pass "J33: Python CLI package check workflow is wired and documented"
+  pass "J33: Bun TUI checks are wired and documented"
 else
-  fail "J33: Python CLI package check workflow is missing or undocumented"
+  fail "J33: Bun TUI checks are missing or undocumented"
 fi
 
 # ── J34: Script-send CLI must stay scoped to Telegram/Discord and documented ─
@@ -1459,10 +1532,9 @@ fi
 #    a newline fails the check even though the prose is unchanged. Prefer short
 #    tokens (a flag, a module name, a config key) over sentence fragments; if a
 #    phrase must be pinned, keep it short enough to survive a rewrap.
-# 2. The canonical home of the script-send reference is
-#    apps/lemon_channels/README.md, next to the code. The root README only has
-#    to point at it — the reference used to be pinned in both, which made the
-#    root README un-editable without tripping this check.
+# 2. The canonical script-send reference is
+#    apps/lemon_channels/README.md, next to the code. The root README carries
+#    one canonical Telegram send example and links to the full reference.
 if python3 - "$ROOT" <<'PYEOF'
 from pathlib import Path
 import sys
@@ -1483,7 +1555,7 @@ files = {
     "channels_agents": root / "apps/lemon_channels/AGENTS.md",
     "config_docs": root / "docs/config.md",
     "config_example": root / "examples/config.example.toml",
-    "gateway_config": root / "apps/lemon_core/lib/lemon_core/config/gateway.ex",
+    "discord_config": root / "apps/lemon_channels/lib/lemon_channels/adapters/discord/config.ex",
     "parity_matrix": root / "docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md",
     "scorecard": root / "docs/plans/lemon-hermes-agent-harness-parity-scorecard.md",
 }
@@ -1569,7 +1641,7 @@ contracts = [
         ],
     ),
     (
-        "root README points at the script-send reference",
+        "root README script-send entry point",
         [
             ("root_readme", "./bin/lemon send --to telegram:<chat_id>"),
             ("root_readme", "apps/lemon_channels/README.md"),
@@ -1649,7 +1721,7 @@ contracts = [
             ("config_example", "default_chat_id"),
             ("config_example", "default_account_id"),
             ("config_example", "default_channel_id"),
-            ("gateway_config", "default_channel_id"),
+            ("discord_config", "default_channel_id"),
         ],
     ),
     (
@@ -1699,13 +1771,14 @@ else
   fail "J34: script-send command scope or documentation is missing"
 fi
 
-# ── manual-dispatch: release.yml must use input tag, not ref_name, for dispatch ─
-# When event_name is workflow_dispatch, github.ref_name is the branch, not the tag.
-# The parse step and the gh-release tag_name must prioritize event.inputs.tag.
-if grep -qE 'github\.ref_name\s*\|\|.*github\.event\.inputs\.tag' "$ROOT/.github/workflows/release.yml" 2>/dev/null; then
-  fail "extra: release.yml uses 'ref_name || event.inputs.tag' order — manual dispatch will use branch name instead of requested tag"
+# ── manual-dispatch: main prepares a tag; tag refs rebuild exact cuts ─────────
+if grep -q 'github.event.inputs.tag' "$ROOT/.github/workflows/release.yml" 2>/dev/null; then
+  fail "extra: release.yml still relies on the removed manual tag input"
+elif grep -q 'needs.prepare.outputs.tag || github.ref_name' "$ROOT/.github/workflows/release.yml" 2>/dev/null &&
+  grep -q 'ref: \${{ needs.validate.outputs.tag }}' "$ROOT/.github/workflows/release.yml" 2>/dev/null; then
+  pass "extra: release.yml resolves prepared and existing tags consistently"
 else
-  pass "extra: release.yml tag resolution order is correct for manual dispatch"
+  fail "extra: release.yml does not resolve prepared and existing tags consistently"
 fi
 
 if python3 - "$ROOT/.github/workflows/release.yml" <<'PYEOF'
@@ -1716,16 +1789,28 @@ checkout_blocks = re.findall(r'- name: Checkout\n(?: {2,}.*\n)+', content)
 if not checkout_blocks:
     sys.exit(1)
 
+unversioned = 0
 for block in checkout_blocks:
     if "uses: actions/checkout@v4" not in block:
         continue
-    if "ref: ${{ github.event.inputs.tag || github.ref_name }}" not in block:
-        sys.exit(1)
+    if "ref: ${{ needs.validate.outputs.tag }}" in block:
+        continue
+    if "ref: ${{ needs.prepare.outputs.tag || github.ref_name }}" in block:
+        continue
+    if "ref:" not in block:
+        unversioned += 1
+        continue
+    sys.exit(1)
+
+# Exactly the preparation checkout follows the selected default branch. Every
+# build and publication checkout is pinned to the resolved release tag.
+if unversioned != 1:
+    sys.exit(1)
 PYEOF
 then
-  pass "extra: release.yml pins each checkout step to the requested tag ref"
+  pass "extra: release.yml pins post-preparation checkouts to the release tag"
 else
-  fail "extra: release.yml has a checkout step that does not pin ref to the requested tag"
+  fail "extra: release.yml has an unexpected unpinned release checkout"
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────

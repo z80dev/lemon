@@ -8,7 +8,7 @@ defmodule LemonCore.TaskSurface.ProjectionTest do
       task_id: "task-projection-1",
       child_run_id: "run-child-projection-1",
       parent_run_id: "run-parent-projection-1",
-      parent_session_key: "agent:default:telegram:default:dm:12345",
+      parent_session_key: "agent:default:demo:default:dm:12345",
       parent_agent_id: "default",
       root_action_id: "tool-call-projection-1",
       surface: {:status_task, "tool-call-projection-1"}

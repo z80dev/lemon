@@ -32,14 +32,15 @@ defmodule Lemon.HexPackage do
   @packages %{
     lemon_ai: :lemon_ai,
     lemon_agent: :lemon_agent,
-    lemon_cli_runners: :lemon_cli_runners,
     lemon_core: :lemon_core,
     lemon_media: :lemon_media,
     lemon_memory: :lemon_memory,
     lemon_router: :lemon_router,
     lemon_gateway: :lemon_gateway,
     lemon_channels: :lemon_channels,
-    lemon_platform_test: :lemon_platform_test
+    lemon_platform_test: :lemon_platform_test,
+    lemon_browser: :lemon_browser,
+    lemon_skills: :lemon_skills
   }
 
   @doc "The hex package name for a publishable umbrella app."

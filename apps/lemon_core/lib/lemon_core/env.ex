@@ -188,9 +188,18 @@ defmodule LemonCore.Env do
 
   @doc """
   Gets an optional raw (undeclared) string environment variable.
+
+  The two arities delegate to the two `LemonCore.Config.Helpers.get_env`
+  clauses rather than to `get_env/2` with a `nil` default: `get_env/2`'s
+  contract is `(binary(), binary()) :: binary()`, so passing `nil` through it
+  is a contract violation that makes this function unanalyzable (Dialyzer
+  reports "will never return", cascading into every caller).
   """
-  @spec string(String.t(), String.t() | nil) :: String.t() | nil
-  def string(env_var, default \\ nil), do: Helpers.get_env(env_var, default)
+  @spec string(String.t()) :: String.t() | nil
+  def string(env_var), do: Helpers.get_env(env_var)
+
+  @spec string(String.t(), String.t()) :: String.t()
+  def string(env_var, default), do: Helpers.get_env(env_var, default)
 
   @doc """
   Gets a raw (undeclared) integer environment variable.

@@ -31,7 +31,7 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
   @router_session_read_model "LemonRouter." <> "SessionReadModel"
   @router_registry_lookup "Registry.lookup(" <> @router_session_registry
 
-  # Telegram-owned store tables, shared by the router and core leak rules.
+  # Telegram-owned store tables, shared by the router and channels leak rules.
   # This module is excluded from its own scanning, so naming them is safe.
   @telegram_table_atoms [
     ":telegram_known_targets",
@@ -39,6 +39,27 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
     ":telegram_msg_session",
     ":telegram_pending_compaction"
   ]
+
+  # Chat platforms the umbrella ships adapters for. `:core_vendor_channel_reference`
+  # scans raw source, so every casing that appears in code, docs and comments is
+  # listed: the rule enforces the literal "zero matches in lemon_core" criterion,
+  # not just "no vendor atoms". This file is the one place that must name what it
+  # forbids, and `rule_issues/2` excludes it from its own scan.
+  @vendor_channel_names [
+    "telegram",
+    "Telegram",
+    "TELEGRAM",
+    "discord",
+    "Discord",
+    "DISCORD",
+    "xmtp",
+    "Xmtp",
+    "XMTP",
+    "whatsapp",
+    "WhatsApp",
+    "WHATSAPP"
+  ]
+
   @ignored_source_dirs MapSet.new([
                          ".elixir_ls",
                          ".expert",
@@ -68,14 +89,7 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
       code: :router_channels_runtime_dependency,
       message: "Router must not depend on LemonChannels runtime/config helpers directly",
       files: ["apps/lemon_router/lib/**/*.ex"],
-      patterns: ["LemonChannels.GatewayConfig", "LemonChannels.EngineRegistry"]
-    },
-    %{
-      code: :router_gateway_engine_registry_dependency,
-      message:
-        "Router must validate engines through LemonCore.EngineCatalog, not gateway registry",
-      files: ["apps/lemon_router/lib/**/*.ex"],
-      patterns: ["LemonGateway.EngineRegistry"]
+      patterns: ["LemonChannels.GatewayConfig"]
     },
     %{
       code: :router_gateway_cwd_dependency,
@@ -102,7 +116,7 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
       code: :router_resume_parser_leak,
       message: "Router must not parse free-form channel resume syntax",
       files: ["apps/lemon_router/lib/**/*.ex"],
-      patterns: ["extract_resume_and_strip_prompt", "EngineRegistry.extract_resume"]
+      patterns: ["extract_resume_and_strip_prompt"]
     },
     %{
       code: :router_telegram_store_leak,
@@ -111,11 +125,20 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
       patterns: @telegram_table_atoms ++ ["KnownTargetStore"]
     },
     %{
-      code: :core_telegram_store_leak,
+      code: :core_known_target_store_leak,
       message:
-        "lemon_core must not name Telegram-owned store tables; channels owns them (plan 1.3)",
+        "lemon_core must not name the channel-owned known-target store; channels owns it (plan 1.3)",
       files: ["apps/lemon_core/lib/**/*.ex"],
-      patterns: @telegram_table_atoms ++ ["KnownTargetStore"]
+      patterns: ["KnownTargetStore"]
+    },
+    %{
+      code: :core_vendor_channel_reference,
+      message:
+        "lemon_core must not reference a chat platform by name; the platform's config section, " <>
+          "diagnostics, proof vocabulary and environment variables belong to the app that " <>
+          "implements it (plan Phase 1 'done when')",
+      files: ["apps/lemon_core/lib/**/*.ex"],
+      patterns: @vendor_channel_names
     },
     %{
       code: :gateway_execution_queue_mode,
@@ -141,27 +164,6 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
         "auto_compacted",
         "build_pending_compaction_prompt"
       ]
-    },
-    %{
-      code: :channels_engine_registry_format_validation,
-      message:
-        "Channels must use LemonCore.EngineCatalog and LemonCore.ResumeToken for validation/formatting; EngineRegistry is parsing-only",
-      files: ["apps/lemon_channels/lib/**/*.ex"],
-      exclude: ["apps/lemon_channels/lib/lemon_channels/engine_registry.ex"],
-      patterns: [
-        "EngineRegistry.get_engine(",
-        "EngineRegistry.engine_known?(",
-        "EngineRegistry.format_resume(",
-        "LemonChannels.EngineRegistry.get_engine(",
-        "LemonChannels.EngineRegistry.engine_known?(",
-        "LemonChannels.EngineRegistry.format_resume("
-      ]
-    },
-    %{
-      code: :core_telegram_resume_index_leak,
-      message: "LemonCore must not own Telegram message-id resume/session tables",
-      files: ["apps/lemon_core/lib/lemon_core/**/*.ex"],
-      patterns: [":telegram_msg_resume", ":telegram_msg_session"]
     },
     %{
       code: :wrapper_bypass,
@@ -297,6 +299,18 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
       message: "Gateway run handling must not keep legacy Job compatibility branches",
       files: ["apps/lemon_gateway/lib/lemon_gateway/run.ex"],
       patterns: ["def handle_cast({:steer, %Job", "def handle_cast({:steer_backlog, %Job"]
+    },
+    %{
+      code: :top_level_engine_selector,
+      message:
+        "Top-level run/execution contracts must not expose an engine_id selector; task runner IDs belong only to task APIs",
+      files: [
+        "apps/lemon_core/lib/lemon_core/run_request.ex",
+        "apps/lemon_core/lib/lemon_core/execution_command.ex",
+        "apps/lemon_gateway/lib/lemon_gateway/execution_request.ex",
+        "apps/lemon_gateway/lib/lemon_gateway/executor.ex"
+      ],
+      patterns: ["engine_id"]
     },
     %{
       code: :heartbeat_store_wrapper_bypass,
@@ -559,6 +573,18 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
         "apps/lemon_channels/lib/**/*.ex",
         "apps/lemon_control_plane/lib/**/*.ex"
       ]
+    },
+    %{
+      code: :gateway_coding_agent_boundary,
+      message: "Gateway must not depend on CodingAgent.*; task execution is in-process",
+      prefixes: ["CodingAgent"],
+      files: ["apps/lemon_gateway/lib/**/*.ex"]
+    },
+    %{
+      code: :engine_catalog_boundary,
+      message: "Top-level execution must not use LemonCore.EngineCatalog; execution is native Lemon",
+      prefixes: ["LemonCore.EngineCatalog"],
+      files: ["apps/*/lib/**/*.ex"]
     },
     %{
       code: :router_internals_boundary,

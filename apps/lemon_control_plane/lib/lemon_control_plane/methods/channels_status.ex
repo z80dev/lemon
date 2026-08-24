@@ -71,7 +71,7 @@ defmodule LemonControlPlane.Methods.ChannelsStatus do
       []
       |> maybe_put(:project_dir, get_param(params, "projectDir"))
 
-    LemonCore.Doctor.ChannelDiagnostics.status(opts)
+    LemonChannels.Doctor.Diagnostics.status(opts)
   rescue
     _ ->
       %{
@@ -136,7 +136,7 @@ defmodule LemonControlPlane.Methods.ChannelsStatus do
       []
       |> maybe_put(:project_dir, get_param(params, "projectDir"))
 
-    LemonCore.Doctor.ChannelReadiness.status(opts)
+    LemonChannels.Doctor.Readiness.status(opts)
   rescue
     error ->
       %{

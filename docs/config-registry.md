@@ -84,6 +84,32 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `LEMON_WEB_SEARCH_PROVIDER` | string | `brave` |  | `lemon_core` | Web search provider id (e.g. brave, perplexity). |
 | `LEMON_WEB_SEARCH_TIMEOUT` | integer | `30` |  | `lemon_core` | Web search request timeout, in seconds. |
 
+### Tool disclosure (progressive tool-schema disclosure)
+
+When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS` in estimated schema tokens, `CodingAgent.ToolDisclosure` replaces the MCP/extension/WASM long tail with two bridge tools — `tool_search` (find a deferred tool and read its schema) and `tool_invoke` (call it, with the same policy and approval pipeline a direct call would use). Built-in tools always stay fully disclosed, and a catalog under the budget is left byte-for-byte unchanged. Disclosure is computed once at session start and at extension reload, never per turn, so the tool array stays prompt-cache stable.
+
+| Env Var | Type | Default | Secret | Apps | Description |
+|---|---|---|---|---|---|
+| `LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS` | integer | `40000` |  | `lemon_core` | Estimated tool-schema token total above which long-tail tools are hidden behind tool_search/tool_invoke. |
+| `LEMON_TOOL_DISCLOSURE_CATALOG_TOKENS` | integer | `2000` |  | `lemon_core` | Token budget for the hidden-tool catalog digest embedded in the tool_search description. |
+| `LEMON_TOOL_DISCLOSURE_ENABLED` | boolean | `true` |  | `lemon_core` | Whether tool-schema progressive disclosure may activate when the tool catalog exceeds the token budget. |
+
+### Programmatic tool calling (`execute_code`)
+
+| Env Var | Type | Default | Secret | Apps | Description |
+|---|---|---|---|---|---|
+| `LEMON_EXECUTE_CODE_ENABLED` | boolean | `false` |  | `lemon_core` | Whether the execute_code programmatic tool-calling tool is enabled. |
+| `LEMON_EXECUTE_CODE_KERNEL_IDLE_TIMEOUT_MS` | integer | `1800000` |  | `lemon_core` | Idle time after which a persistent execute_code kernel is reaped, in milliseconds. |
+| `LEMON_EXECUTE_CODE_KERNEL_MODE` | string | `per_call` |  | `lemon_core` | execute_code kernel mode (`per_call` or `session`); any other value resolves to `per_call` and never enables persistence. |
+| `LEMON_EXECUTE_CODE_MAX_LIVE_KERNELS` | integer | `16` |  | `lemon_core` | Strict cap on simultaneous persistent execute_code kernels (idle-only LRU eviction). |
+| `LEMON_EXECUTE_CODE_MAX_OUTPUT_BYTES` | integer | `50000` |  | `lemon_core` | Maximum script stdout bytes returned to the model (larger output is spilled to a file). |
+| `LEMON_EXECUTE_CODE_MAX_QUEUED_CELLS_PER_KERNEL` | integer | `8` |  | `lemon_core` | Maximum queued cells waiting behind the one active cell per persistent execute_code kernel. |
+| `LEMON_EXECUTE_CODE_MAX_RPC_CALLS` | integer | `100` |  | `lemon_core` | Maximum tool RPC calls one execute_code script may make. |
+| `LEMON_EXECUTE_CODE_MAX_RPC_RESULT_BYTES` | integer | `5242880` |  | `lemon_core` | Total byte budget for tool RPC results returned to one execute_code script. |
+| `LEMON_EXECUTE_CODE_PYTHON_PATH` | string | `` |  | `lemon_core` | Explicit python3 interpreter path for execute_code scripts (empty = find python3 on PATH). |
+| `LEMON_EXECUTE_CODE_TIMEOUT_MS` | integer | `120000` |  | `lemon_core` | End-to-end wall-clock cap for one execute_code run, including session queue wait, in milliseconds. |
+| `LEMON_EXECUTE_CODE_TOOLS` | list (comma-separated) | `[]` |  | `lemon_core` | Comma-separated subset of the execute_code RPC allowlist (read, grep, find, ls, webfetch) to expose; empty = full allowlist. |
+
 ### WASM tool runtime
 
 | Env Var | Type | Default | Secret | Apps | Description |
@@ -99,14 +125,13 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `LEMON_WASM_RUNTIME_PATH` | string | `` |  | `lemon_core` | Path to the WASM runtime executable/library. |
 | `LEMON_WASM_TOOL_PATHS` | list (comma-separated) | `[]` |  | `lemon_core` | Comma-separated extra directories to search for WASM tools. |
 
-### Gateway (transports, engine scheduling)
+### Gateway (transports and execution scheduling)
 
 | Env Var | Type | Default | Secret | Apps | Description |
 |---|---|---|---|---|---|
 | `DISCORD_BOT_TOKEN` | string | _(none)_ | yes | `lemon_channels` | Discord bot token (ecosystem-standard name). |
 | `LEMON_GATEWAY_AUTO_RESUME` | boolean | `false` |  | `lemon_core`, `lemon_gateway` | Whether the gateway auto-resumes interrupted runs on boot. |
 | `LEMON_GATEWAY_DEFAULT_CWD` | string | _(none)_ |  | `lemon_core`, `lemon_gateway` | Default working directory for gateway-initiated runs. |
-| `LEMON_GATEWAY_DEFAULT_ENGINE` | string | `lemon` |  | `lemon_core`, `lemon_gateway` | Default coding-agent engine used for gateway-initiated runs. |
 | `LEMON_GATEWAY_ENABLE_DISCORD` | boolean | `false` |  | `lemon_core`, `lemon_channels` | Whether the Discord transport is enabled. |
 | `LEMON_GATEWAY_ENABLE_TELEGRAM` | boolean | `false` |  | `lemon_core`, `lemon_channels` | Whether the Telegram transport is enabled. |
 | `LEMON_GATEWAY_ENABLE_WEBHOOK` | boolean | `false` |  | `lemon_core`, `lemon_gateway` | Whether the generic webhook transport is enabled. |
@@ -272,7 +297,6 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 
 | Env Var | Type | Default | Secret | Apps | Description |
 |---|---|---|---|---|---|
-| `FACTORY_API_KEY` | string | _(none)_ | yes | `agent_core` | Factory (Droid CLI) API key. |
 | `LEMON_CLAUDE_YOLO` | boolean | `false` |  | `agent_core` | Whether the Claude CLI runner skips permission prompts (`--dangerously-skip-permissions`-style). |
 | `LEMON_CODEX_AUTO_APPROVE` | boolean | `false` |  | `agent_core` | Whether the Codex CLI runner auto-approves tool calls. |
 | `LEMON_CODEX_EXTRA_ARGS` | list (comma-separated) | `[]` |  | `agent_core` | Extra whitespace-separated CLI args appended to Codex invocations. |
@@ -408,6 +432,13 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `LEMON_GOAL_JUDGE_MODEL` | string | _(none)_ |  | `lemon_automation` | Model id used to judge automation goal completion. |
 | `LEMON_SIM_AUTO_LOOP` | boolean | `false` |  | `lemon_sim_ui` | Whether the werewolf auto-loop starts automatically on boot. |
 | `LEMON_SIM_WEREWOLF_PLAYERS` | integer | `6` |  | `lemon_sim_ui` | Player count for the werewolf auto-loop. |
+
+### Automation (cron)
+
+| Env Var | Type | Default | Secret | Apps | Description |
+|---|---|---|---|---|---|
+| `LEMON_CRON_PREFLIGHT_ENABLED` | boolean | _(none)_ |  | `lemon_automation` | Override the cron pre-dispatch preflight (provider/target readiness) toggle. |
+| `LEMON_CRON_DRIFT_GUARD_ENABLED` | boolean | _(none)_ |  | `lemon_automation` | Override the cron model drift guard (fail closed when the global default model changed under an unpinned job). |
 
 ### Platform / BEAM release (standard names)
 

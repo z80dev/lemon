@@ -1,44 +1,111 @@
 # Lemon CLI
 
-`lemon_cli` owns user-facing Mix tasks and interactive setup flows that sit
-above the core foundation:
+`lemon_cli` is the user-facing command boundary for packaged Lemon releases.
+`LemonCli.CLI.main/1` is the one process-halting boundary: it receives the
+forwarded argument vector from the release launcher and turns dispatch results
+into exit codes. Its non-halting `run/1` and command handlers are shared by
+tests and source-checkout Mix adapters, so release commands do not depend on
+Mix at runtime.
 
-- provider onboarding through `mix lemon.onboard`
-- first-time setup through `mix lemon.setup`
-- Hermes import audit and migration through `mix lemon.hermes.*`
+The runtime CLI is included in `lemon_runtime_min` and `lemon_runtime_full`
+artifacts. The `sim_broadcast_platform` artifact intentionally does not bundle
+`lemon_cli`; it supports only its release-specific `doctor --bundle` path.
 
-The app depends on `lemon_core` for config, secrets, store, and shared runtime
-primitives, and on `ai` for provider model and OAuth integration. It does not
-start a supervision tree; tasks run the flows on demand.
+## Release CLI contract
 
-## Onboarding Providers
+The packaged launcher sends runtime CLI arguments through `LemonCli.CLI` as
+data, not dynamically constructed Elixir source. The boundary has these
+user-visible rules:
 
-1. Add a provider spec to `lib/lemon_cli/onboarding/providers.ex`.
-2. Reuse `LemonCli.Onboarding.Runner` for auth flow, secrets persistence, and config updates.
-3. If you want a dedicated alias task, create `lib/mix/tasks/lemon.onboard.<provider>.ex` that delegates to the shared runner.
-4. Update config via `LemonCore.Config.TomlPatch`.
-5. Add focused tests in `test/mix/tasks/` and `test/lemon_cli/onboarding/`.
+- success exits `0`;
+- a command failure exits `1`;
+- an unknown command, unknown setup/gateway subcommand, or invalid command
+  arguments exits `2`;
+- `--help`, `-h`, or `help` prints the relevant command usage and exits `0`
+  without starting a wizard, provider flow, or gateway adapter.
 
-## Tasks
+## Packaged and source commands
+
+Use the same command nouns in an installed release and a source checkout.
+Installed releases use `lemon`; a checkout uses the matching `./bin/lemon`
+wrapper. Direct Mix tasks remain contributor-level alternatives, not the
+recommended commands for users of a packaged release.
+
+| Purpose | Installed release | Source checkout | Contributor Mix adapter |
+| --- | --- | --- | --- |
+| First-time setup | `lemon setup` | `./bin/lemon setup` | `mix lemon.setup` |
+| Configure a model provider | `lemon model --provider anthropic` | `./bin/lemon model --provider anthropic` | `mix lemon.onboard anthropic` |
+| Configure Telegram or Discord | `lemon gateway setup` | `./bin/lemon gateway setup` | `mix lemon.setup gateway` |
+| Diagnostics | `lemon doctor` | `./bin/lemon doctor` | `mix lemon.doctor` |
+| Validate/show config | `lemon config validate` | `./bin/lemon config validate` | `mix lemon.config validate` |
+| Manage encrypted secrets | `lemon secrets status` | `./bin/lemon secrets status` | `mix lemon.secrets.status` |
+| Inspect channel readiness | `lemon channels` | `./bin/lemon channels` | `mix lemon.channels` |
+
+## First-run setup and readiness
+
+`lemon setup` is an idempotent state machine over the global config, encrypted
+secrets, and default provider. Each run derives which steps are complete,
+creates a minimal config only when it is absent, initializes the secrets master
+key only when it is absent, skips a provider that is already usable, and
+re-derives state before reporting the final result. It never replaces an
+existing config or secrets master key.
+
+When setup onboards a provider, it always performs offline configuration checks
+and performs the provider's live credential check by default. Use
+`lemon setup --skip-verify` or `lemon setup provider --skip-verify` only to
+defer that live check when offline; a failed verification is not reported as a
+completed setup.
+
+The one-line installer starts `lemon setup` by default when it has a controlling
+terminal. `--skip-setup`, an unavailable terminal, and the simulation profile
+defer that interaction. The first interactive TUI launch consults the same
+readiness predicate and runs setup before starting an unconfigured agent; if
+setup remains incomplete, it directs the user to `lemon setup`.
+
+`lemon model` is the focused provider onboarding command. It stores the
+credential in encrypted secrets, updates the provider configuration, and can
+set the default provider/model. Use the full `lemon setup` journey when config
+and secrets may not exist yet or when live provider verification is required.
+
+## Gateway setup
+
+`lemon gateway setup` provides interactive and non-interactive adapters for
+both supported messaging gateways:
+
+- `telegram` stores a Telegram bot token in encrypted secrets and verifies it
+  with the Telegram Bot API.
+- `discord` stores a Discord bot token in encrypted secrets, enables Discord,
+  writes its secret reference and a default/allowed channel scope to
+  `[gateway.discord]`, and verifies the token with Discord's bot identity API.
 
 ```bash
-mix lemon.onboard
-mix lemon.onboard anthropic
-mix lemon.onboard codex
-mix lemon.onboard gemini
-mix lemon.setup
-mix lemon.hermes.audit
-mix lemon.hermes.migrate --dry-run
+# Installed release: choose Telegram or Discord interactively.
+lemon gateway setup
+
+# Configure a specific adapter.
+lemon gateway setup telegram
+lemon gateway setup discord
+
+# Source checkout: use the matching wrapper.
+./bin/lemon gateway setup discord --non-interactive \
+  --token "$DISCORD_BOT_TOKEN" \
+  --default-channel-id 123456789012345678 \
+  --allowed-channel-id 234567890123456789
 ```
 
-Guided provider setup picks a provider from a menu or accepts one directly,
-runs OAuth when supported, prompts for API keys otherwise, stores credentials in
-encrypted secrets, writes `providers.<provider>` config keys, and can update
-`defaults.provider` / `defaults.model`.
+The Discord token is persisted as `discord_bot_token` by default and only its
+secret key is written to TOML. Pass `--secret-key <name>` to use another key,
+`--allowed-guild-id <id>` to restrict by guild as well, or `--skip-smoke` when
+the Discord API identity check cannot be reached.
 
-The onboarding selector uses `LemonCli.Onboarding.TerminalUI` rather than
-`TermUI.Widget.PickList` because the stock pick-list widget can emit range
-warnings that corrupt the TUI display.
+## Onboarding providers
+
+Guided provider setup uses a plain numbered prompt that works consistently
+across packaged releases, source checkouts, SSH sessions, and narrow terminals.
+Press Enter to accept the displayed default, enter a number or exact label to
+choose another option, or enter `q` to cancel. The same selector is used for
+providers, authentication methods, models, and confirmation prompts, so setup
+does not switch the terminal between cooked and raw modes.
 
 Anthropic provider auth supports API keys or Claude subscription OAuth. Raw API
 keys live in `llm_anthropic_api_key_raw` and should be referenced by
@@ -48,17 +115,26 @@ keys live in `llm_anthropic_api_key_raw` and should be referenced by
 credentials from `~/.claude/.credentials.json` over a stale static
 `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_TOKEN`.
 
+OpenAI Codex browser sign-in starts a temporary loopback HTTP listener before
+opening the authorization URL. The listener binds the redirect URI's port
+(`http://localhost:1455/auth/callback` by default), captures the authorization
+code, returns a completion page to the browser, and then shuts down. If the
+port cannot be bound or no callback arrives within two minutes, onboarding
+falls back to accepting the callback URL or authorization code manually.
+
 ```bash
-mix lemon.onboard.antigravity --token <token> --set-default --model gemini-3-pro-high
-mix lemon.onboard.gemini --project-id your-gcp-project
-mix lemon.onboard.gemini --token <token> --set-default --model gemini-2.5-pro
-mix lemon.onboard.codex --token <token> --set-default --model gpt-5.2
-mix lemon.onboard.codex --token <token> --config-path /path/to/config.toml
-mix lemon.onboard zai --token <token> --set-default --model glm-5
-mix lemon.onboard minimax --token <token> --set-default --model MiniMax-M2.7
-mix lemon.onboard.copilot --enterprise-domain company.ghe.com
-mix lemon.onboard.copilot --skip-enable-models
-mix lemon.onboard.copilot --token <token>
-mix lemon.onboard.copilot --token <token> --set-default --model gpt-5
-mix lemon.onboard.copilot --token <token> --config-path /path/to/config.toml
+# Installed release
+lemon model --provider antigravity --token <token> --set-default --model gemini-3-pro-high
+lemon model --provider gemini --project-id your-gcp-project
+lemon model --provider openai-codex --token <token> --set-default --model gpt-5.2
+lemon model --provider github-copilot --enterprise-domain company.ghe.com
+
+# Source checkout
+./bin/lemon model --provider antigravity --token <token> --set-default --model gemini-3-pro-high
+./bin/lemon model --provider gemini --project-id your-gcp-project
+./bin/lemon model --provider openai-codex --token <token> --set-default --model gpt-5.2
+./bin/lemon model --provider github-copilot --enterprise-domain company.ghe.com
+
+# Contributors can invoke the underlying Mix task directly.
+mix lemon.onboard codex --token <token> --set-default --model gpt-5.2
 ```

@@ -182,14 +182,52 @@ defmodule LemonCore.Doctor.SupportBundle do
   end
 
   defp channel_diagnostics(opts) do
-    LemonCore.Doctor.ChannelDiagnostics.status(
-      project_dir: Keyword.get(opts, :project_dir, File.cwd!())
+    probe(
+      runtime_module(:channel_diagnostics),
+      :status,
+      [[project_dir: Keyword.get(opts, :project_dir, File.cwd!())]],
+      %{
+        transports: [],
+        registered_transports: [],
+        binding_count: 0,
+        unsupported_binding_count: 0,
+        cleanup: %{
+          includes_raw_bot_tokens: false,
+          includes_secret_names: false,
+          includes_chat_ids: false,
+          includes_channel_ids: false,
+          includes_guild_ids: false,
+          includes_message_bodies: false
+        }
+      }
     )
   end
 
   defp channel_readiness(opts) do
-    LemonCore.Doctor.ChannelReadiness.status(
-      project_dir: Keyword.get(opts, :project_dir, File.cwd!())
+    probe(
+      runtime_module(:channel_readiness),
+      :status,
+      [[project_dir: Keyword.get(opts, :project_dir, File.cwd!())]],
+      %{
+        status: "unknown",
+        promoted_platforms: [],
+        gates: [],
+        gate_count: 0,
+        passed_count: 0,
+        blocked_count: 0,
+        warning_count: 0,
+        skipped_count: 0,
+        cleanup: %{
+          includes_raw_bot_tokens: false,
+          includes_secret_names: false,
+          includes_chat_ids: false,
+          includes_channel_ids: false,
+          includes_guild_ids: false,
+          includes_message_bodies: false,
+          includes_raw_proof_paths: false,
+          includes_raw_proof_details: false
+        }
+      }
     )
   end
 

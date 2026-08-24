@@ -3,6 +3,8 @@ defmodule LemonCore.Doctor.ProofDiagnostics do
   Redacted diagnostics for local live-proof artifacts.
   """
 
+  alias LemonCore.Doctor.ChannelProofs
+
   @default_limit 20
 
   @spec status(keyword()) :: map()
@@ -305,19 +307,13 @@ defmodule LemonCore.Doctor.ProofDiagnostics do
   end
 
   defp generated_media_delivery_checks?(checks) when is_list(checks) do
+    names = ChannelProofs.call(:media_delivery_check_names, [], [])
+
     Enum.any?(checks, fn check ->
       check
       |> value("name")
       |> safe_scope()
-      |> case do
-        "telegram_forum_topic_generated_media_delivery" -> true
-        "telegram_forum_topic_generated_audio_delivery" -> true
-        "telegram_forum_topic_media_directive_delivery" -> true
-        "discord_generated_media_delivery" -> true
-        "discord_generated_audio_delivery" -> true
-        "discord_media_directive_delivery" -> true
-        _ -> false
-      end
+      |> then(&(&1 in names))
     end)
   end
 
@@ -588,60 +584,7 @@ defmodule LemonCore.Doctor.ProofDiagnostics do
   end
 
   defp channel_media_delivery_proof(checks) when is_list(checks) do
-    checks
-    |> Enum.filter(&is_map/1)
-    |> Enum.reduce(%{}, fn check, acc ->
-      case safe_scope(value(check, "name")) do
-        name
-        when name in [
-               "telegram_forum_topic_generated_media_delivery",
-               "telegram_forum_topic_generated_audio_delivery",
-               "telegram_forum_topic_media_directive_delivery"
-             ] ->
-          document = value(check, "document")
-
-          acc
-          |> Map.put(:channel_delivery, true)
-          |> Map.put(:telegram_delivery, check_status_value(check) == "completed")
-          |> maybe_put_atom(
-            :telegram_has_document,
-            first_non_nil([
-              bool_or_nil(value(document, "has_document")),
-              bool_or_nil(value(check, "telegram_has_document"))
-            ])
-          )
-          |> maybe_put_atom(:marker_seen, bool_or_nil(value(check, "marker_seen")))
-          |> put_media_directive_delivery(name == "telegram_forum_topic_media_directive_delivery")
-          |> put_directive_leaked(bool_or_nil(value(check, "directive_leaked")))
-
-        name
-        when name in [
-               "discord_generated_media_delivery",
-               "discord_generated_audio_delivery",
-               "discord_media_directive_delivery"
-             ] ->
-          bot_reply = value(check, "bot_reply")
-
-          acc
-          |> Map.put(:channel_delivery, true)
-          |> Map.put(:discord_delivery, check_status_value(check) == "completed")
-          |> maybe_put_atom(
-            :discord_attachment_count,
-            int_or_nil(value(bot_reply, "attachment_count")) ||
-              int_or_nil(value(check, "attachment_count"))
-          )
-          |> put_media_directive_delivery(name == "discord_media_directive_delivery")
-          |> put_directive_leaked(
-            first_non_nil([
-              bool_or_nil(value(bot_reply, "directive_leaked")),
-              bool_or_nil(value(check, "directive_leaked"))
-            ])
-          )
-
-        _ ->
-          acc
-      end
-    end)
+    ChannelProofs.call(:media_delivery_proof, [checks], %{})
   end
 
   defp channel_media_delivery_proof(_), do: %{}
@@ -715,15 +658,6 @@ defmodule LemonCore.Doctor.ProofDiagnostics do
         []
     end
   end
-
-  defp put_media_directive_delivery(map, true), do: Map.put(map, :media_directive_delivery, true)
-  defp put_media_directive_delivery(map, false), do: map
-
-  defp put_directive_leaked(map, nil), do: map
-  defp put_directive_leaked(map, true), do: Map.put(map, :directive_leaked, true)
-  defp put_directive_leaked(map, false), do: Map.put_new(map, :directive_leaked, false)
-
-  defp first_non_nil(values), do: Enum.find(values, &(not is_nil(&1)))
 
   defp terminal_hardening(decoded) do
     case docker_hardening_result(value(decoded, "results")) do
@@ -826,24 +760,7 @@ defmodule LemonCore.Doctor.ProofDiagnostics do
   defp classify_failure_hint(hint) do
     normalized = String.downcase(hint)
 
-    cond do
-      String.contains?(normalized, "50007") or
-          String.contains?(normalized, "cannot send messages to this user") ->
-        "discord_dm_setup_refused"
-
-      String.contains?(normalized, "message_content_intent_declared=false") ->
-        "discord_message_content_intent_or_delivery"
-
-      String.contains?(normalized, "no lemon reply") and
-          String.contains?(normalized, "unmentioned") ->
-        "discord_no_reply_for_unmentioned_message"
-
-      String.contains?(normalized, "message content intent") ->
-        "discord_message_content_intent_or_delivery"
-
-      true ->
-        "proof_failure"
-    end
+    ChannelProofs.call(:failure_hint, [normalized], nil) || "proof_failure"
   end
 
   defp classify_setup_error(nil), do: nil
@@ -851,14 +768,7 @@ defmodule LemonCore.Doctor.ProofDiagnostics do
   defp classify_setup_error(error) do
     normalized = String.downcase(error)
 
-    cond do
-      String.contains?(normalized, "50007") or
-          String.contains?(normalized, "cannot send messages to this user") ->
-        "discord_dm_setup_refused"
-
-      true ->
-        "proof_setup_failure"
-    end
+    ChannelProofs.call(:setup_error_hint, [normalized], nil) || "proof_setup_failure"
   end
 
   defp cleanup_flags(cleanup) when is_map(cleanup) do
@@ -1007,9 +917,6 @@ defmodule LemonCore.Doctor.ProofDiagnostics do
 
   defp bool_or_nil(value) when is_boolean(value), do: value
   defp bool_or_nil(_), do: nil
-
-  defp maybe_put_atom(map, _key, nil), do: map
-  defp maybe_put_atom(map, key, value), do: Map.put(map, key, value)
 
   defp nullable_string(nil), do: nil
   defp nullable_string(value), do: safe_string(value, nil)

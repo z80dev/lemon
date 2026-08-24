@@ -12,8 +12,8 @@ introspection to make those capabilities more operable.
 
 | Category | What users usually get | Where Lemon is aiming |
 | --- | --- | --- |
-| Hosted assistants | Fast onboarding, managed infrastructure, limited local control | Local runtime ownership, local files and secrets, configurable engines, supportable self-hosting |
-| Single-engine coding CLIs | Strong terminal workflows tied to one engine | Multi-engine execution through Lemon, Codex, Claude, OpenCode, Pi, Kimi, and native Lemon engines |
+| Hosted assistants | Fast onboarding, managed infrastructure, limited local control | Local runtime ownership, local files and secrets, configurable providers/models, supportable self-hosting |
+| Single-engine coding CLIs | Strong terminal workflows tied to one vendor CLI | One native supervised conversation runtime with native in-process subagent orchestration |
 | Agent harnesses | Repeatable tool loops, transcripts, and eval focus | Hermes-class harness behavior combined with BEAM-supervised memory, skills, channels, browser/media workers, terminal backends, and operator interfaces |
 | Chat bridges | Messaging access to an assistant | Channel adapters connected to the same runtime, runs, approvals, sessions, and diagnostics |
 | Internal automation scripts | Local control but limited product surface | Supervised BEAM runtime, JSON-RPC control plane, Web/TUI/Telegram surfaces, doctor checks, release profiles |
@@ -23,7 +23,7 @@ introspection to make those capabilities more operable.
 | Area | Lemon direction | Current launch evidence |
 | --- | --- | --- |
 | Runtime model | Supervised local-first runtime with explicit control-plane APIs | [Architecture Overview](architecture/overview.md), [BEAM Agents](beam_agents.md) |
-| Engine model | Multi-engine architecture rather than one model-provider path | [Model Selection](model-selection-decoupling.md), [Configuration](config.md) |
+| Execution model | One native executor with provider/model routing and native in-process subagents | [Model Selection](model-selection-decoupling.md), [Configuration](config.md) |
 | Harness behavior | Tool execution, approval, transcript, eval, and long-running run support | [Hermes Feature Matrix](plans/lemon-hermes-feature-parity-matrix-2026-05-12.md), [Hermes Parity Scorecard](plans/lemon-hermes-agent-harness-parity-scorecard.md), [Testing](testing.md) |
 | Memory and skills | Durable context plus reusable task packs | [Memory Guide](user-guide/memory.md), [Skills Overview](skills.md) |
 | Interfaces | Terminal, Web, control plane, stable Telegram and Discord text-first support, and preview gateway adapters | [Interface Supportability Audit](plans/lemon-1.0-interface-supportability-audit-2026-05-11.md) |
@@ -40,7 +40,7 @@ What is ready enough to evaluate:
 
 - source install on a developer machine
 - provider configuration through setup docs and secrets commands
-- local runtime startup through `./bin/lemon-dev` or `./bin/lemon`
+- local runtime startup through `./bin/lemon-tui` or `./bin/lemon`
 - doctor diagnostics and redacted support bundles
 - Hermes-class parity tracking through the launch scorecard
 - first-party text web search/fetch behavior in supported agent runs
@@ -97,7 +97,7 @@ Do not pick Lemon yet if you need:
 
 1. Install from [Install Lemon](install.md).
 2. Run `mix lemon.doctor`.
-3. Start the runtime with `./bin/lemon-dev /path/to/project`.
+3. Start the TUI with `./bin/lemon-tui`.
 4. Exercise a deterministic flow from [Demo Lemon](demo.md).
 5. Check current gaps in the [Mainstream Readiness Plan](plans/lemon-1.0-mainstream-readiness.md).
 6. Use [Support](support.md) if you hit setup or runtime issues.

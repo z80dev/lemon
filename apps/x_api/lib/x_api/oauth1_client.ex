@@ -42,7 +42,7 @@ defmodule XApi.OAuth1Client do
         }
 
   @type tweet_result :: %{tweet_id: String.t(), text: String.t()}
-  @type api_error :: {:api_error, integer(), map()} | atom()
+  @type api_error :: {:api_error, integer(), map()} | atom() | Exception.t()
 
   @doc """
   Post a simple text tweet.
@@ -241,7 +241,7 @@ defmodule XApi.OAuth1Client do
         req_opts
       end
 
-    Req.request(req_opts)
+    Req.request(req_opts, [])
   end
 
   @spec do_get_mentions(String.t(), credentials(), keyword()) ::

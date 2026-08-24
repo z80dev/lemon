@@ -6,15 +6,18 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ApprovalRequest do
   callback orchestration branches.
   """
 
-  alias LemonCore.SessionKey
+  alias LemonCore.{Events, SessionKey}
   require Logger
 
+  # `:approval_requested` payloads are `Events.ApprovalRequested` structs carrying an
+  # `Events.ApprovalPending`; a legacy map is coerced into that pair so the whole record is
+  # read by field. A payload that will not coerce is reported by the `else` branch below.
   def send(state, payload) when is_map(state) and is_map(payload) do
-    approval_id = payload[:approval_id] || payload["approval_id"]
-    pending = payload[:pending] || payload["pending"] || %{}
-    session_key = pending[:session_key] || pending["session_key"]
-
-    with true <- is_binary(approval_id) and is_binary(session_key),
+    with %Events.ApprovalRequested{approval_id: approval_id, pending: pending} <-
+           Events.coerce(:approval_requested, payload),
+         %Events.ApprovalPending{session_key: session_key, tool: tool, action: action} <-
+           pending,
+         true <- is_binary(approval_id) and is_binary(session_key),
          %{
            kind: :channel_peer,
            channel_id: "telegram",
@@ -25,9 +28,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ApprovalRequest do
            SessionKey.parse(session_key),
          true <- is_nil(account_id) or account_id == state.account_id,
          chat_id when is_integer(chat_id) <- parse_int(peer_id) do
-      tool = pending[:tool] || pending["tool"]
-      action = pending[:action] || pending["action"]
-
       text =
         "Approval requested: #{tool}\n\n" <>
           "Action: #{format_action(action)}\n\n" <>

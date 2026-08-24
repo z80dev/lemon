@@ -194,7 +194,9 @@ defmodule LemonCore.Config do
     %{
       auto_resize_images: tools.auto_resize_images,
       web: tools.web,
-      wasm: tools.wasm
+      wasm: tools.wasm,
+      execute_code: tools.execute_code,
+      disclosure: tools.disclosure
     }
   end
 
@@ -208,22 +210,19 @@ defmodule LemonCore.Config do
     |> reject_nil_values()
   end
 
+  # The modular Gateway keeps the per-platform sections in `channels` and their
+  # flags in `enabled_channels` so the library never names a chat platform. The
+  # legacy map keeps the flat shape every reader expects: `gateway[:foo]` and
+  # `gateway[:enable_foo]`.
   defp convert_gateway(gateway) do
-    gateway
-    |> Map.from_struct()
-    |> Map.update(:telegram, %{}, &convert_gateway_telegram/1)
-  end
+    map = Map.from_struct(gateway)
+    {channels, map} = Map.pop(map, :channels, %{})
+    {enabled, map} = Map.pop(map, :enabled_channels, %{})
 
-  # The modular Gateway resolves telegram as %{token:, bot_token_secret:, compaction:}.
-  # The legacy config exposes `bot_token` instead of `token`.
-  defp convert_gateway_telegram(telegram) when is_map(telegram) do
-    telegram
-    |> Map.put(:bot_token, telegram[:token])
-    |> Map.delete(:token)
-    |> reject_nil_values()
+    map
+    |> Map.merge(channels)
+    |> Map.merge(Map.new(enabled, fn {id, value} -> {:"enable_#{id}", value} end))
   end
-
-  defp convert_gateway_telegram(telegram), do: telegram
 
   defp convert_agents(profiles, defaults) when is_map(profiles) do
     defaults = parse_defaults(defaults)
@@ -251,8 +250,7 @@ defmodule LemonCore.Config do
     %{
       "provider" => normalize_optional_string(map["provider"]),
       "model" => normalize_optional_string(map["model"]),
-      "thinking_level" => normalize_optional_string(map["thinking_level"]),
-      "engine" => normalize_optional_string(map["engine"])
+      "thinking_level" => normalize_optional_string(map["thinking_level"])
     }
     |> reject_nil_values()
   end
@@ -272,15 +270,12 @@ defmodule LemonCore.Config do
 
     base = default_agent_profile(id, cfg, defaults)
 
-    default_engine = cfg["default_engine"] || cfg["engine"] || base.default_engine
-
     tool_policy = parse_tool_policy(cfg["tool_policy"])
 
     base
     |> Map.put(:name, cfg["name"] || base.name || id)
     |> Map.put(:description, cfg["description"])
     |> Map.put(:avatar, cfg["avatar"])
-    |> Map.put(:default_engine, default_engine)
     |> Map.put(:model, cfg["model"] || base.model)
     |> Map.put(:system_prompt, cfg["system_prompt"])
     |> Map.put(:tool_policy, tool_policy)
@@ -297,14 +292,12 @@ defmodule LemonCore.Config do
       end
 
     default_model = if id == "default", do: defaults["model"], else: nil
-    default_engine = if id == "default", do: defaults["engine"], else: nil
 
     %{
       id: id,
       name: name,
       description: nil,
       avatar: nil,
-      default_engine: default_engine,
       model: default_model,
       system_prompt: nil,
       tool_policy: nil,

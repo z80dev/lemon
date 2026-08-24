@@ -72,6 +72,29 @@ defmodule LemonSkills.Tools.SearchMemory do
     }
   end
 
+  @doc """
+  Tool callback invoked by the agent loop: `execute(tool_call_id, params, signal,
+  on_update, context)`.
+
+  Reads from `params`:
+
+  - `"query"` (required by the tool schema; coerced to a trimmed string, must be
+    non-empty) - free-text search query
+  - `"scope"` (default `"current"`) - `"session"`, `"agent"`, `"project"`,
+    `"home"`, `"current"`, `"workspace"` (alias for `"current"`), or `"all"`;
+    unknown values fall back to `"current"`
+  - `"limit"` (default `5`) - result count; only integers 1-20 are honored,
+    anything else falls back to `5`
+  - `"scope_key"` (optional) - explicit scope key override for `"session"`,
+    `"agent"`, `"project"`, or `"home"` scopes
+
+  Always returns `%LemonAgent.Types.AgentToolResult{}` with `content` holding the
+  formatted result text and `details` a map that always includes `query` and
+  `scope`, plus `count` and `resolved_scopes` on success or the resolution error
+  message otherwise. Empty queries and errors are surfaced as result text, not
+  error tuples; unhandled exceptions are caught and reported as
+  `"search_memory error: ..."`.
+  """
   @spec execute(
           String.t(),
           map(),

@@ -52,6 +52,12 @@ defmodule LemonAgent.Loop.ToolCalls do
     {results, context, new_messages} =
       execute_tool_calls_parallel(context, new_messages, tool_calls, config, signal, stream)
 
+    # Clear the redirect flag BEFORE draining (see LemonAgent.Loop.run_loop/6):
+    # a redirect that arrived during tool execution has its correction picked
+    # up here, so its flag must not survive to spuriously cancel the next
+    # model call; one that arrives after this drain keeps its flag and cancels
+    # the next call, which then retries with the correction.
+    AbortSignal.clear_redirect(signal)
     steering_messages = get_steering_messages(config)
 
     {results, steering_messages, context, new_messages}

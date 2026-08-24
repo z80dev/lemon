@@ -97,7 +97,7 @@ defmodule LemonAutomation.GoalLoopTest do
           LemonCore.Bus.run_topic(run_id),
           LemonCore.Event.new(
             :run_started,
-            %{run_id: run_id, engine: command.engine_id},
+            %{run_id: run_id, engine: "lemon"},
             %{run_id: run_id, session_key: session_key}
           )
         )

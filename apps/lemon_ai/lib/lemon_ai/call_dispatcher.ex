@@ -297,8 +297,19 @@ defmodule LemonAi.CallDispatcher do
     case Task.Supervisor.start_child(LemonAi.StreamTaskSupervisor, fn ->
            track_stream_result(provider, slot_ref, stream_pid)
          end) do
-      {:ok, _pid} -> :ok
-      {:error, reason} -> {:error, reason}
+      {:ok, tracker_pid} ->
+        case LemonAi.EventStream.subscribe_result(stream_pid, tracker_pid) do
+          {:ok, result_ref} ->
+            send(tracker_pid, {:track_stream_result, result_ref})
+            :ok
+
+          {:error, reason} ->
+            Process.exit(tracker_pid, :shutdown)
+            {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
     end
   catch
     :exit, reason -> {:error, reason}
@@ -319,6 +330,19 @@ defmodule LemonAi.CallDispatcher do
           {:stream_tracking_exception, Exception.message(error)}
         )
     catch
+      # A :shutdown exit of the tracked stream is a deliberate teardown — a
+      # consumer cancel propagated through a link cascade (e.g. the fallback
+      # wrapper's relay task being shut down), not a provider failure. Record
+      # neither success nor failure.
+      :exit, :shutdown ->
+        :ok
+
+      :exit, {:shutdown, _} ->
+        :ok
+
+      :exit, {{:shutdown, _}, _} ->
+        :ok
+
       :exit, reason ->
         Logger.warning(
           "CallDispatcher stream tracking exited for #{inspect(provider)}: #{inspect(reason)}"
@@ -333,17 +357,28 @@ defmodule LemonAi.CallDispatcher do
   defp await_stream_terminal_result(stream_pid) do
     timeout_ms = stream_result_timeout_ms()
 
-    case LemonAi.EventStream.result(stream_pid, timeout_ms) do
-      {:error, :timeout} = timeout_error ->
-        Logger.warning(
-          "CallDispatcher stream tracking timeout after #{timeout_ms}ms stream=#{inspect(stream_pid)}"
-        )
+    receive do
+      {:track_stream_result, result_ref} ->
+        stream_ref = Process.monitor(stream_pid)
 
-        _ = LemonAi.EventStream.cancel(stream_pid, @default_stream_cancel_reason)
-        timeout_error
+        receive do
+          {:event_stream_result, ^result_ref, terminal_result} ->
+            Process.demonitor(stream_ref, [:flush])
+            terminal_result
 
-      other ->
-        other
+          {:DOWN, ^stream_ref, :process, ^stream_pid, reason} ->
+            {:error, {:stream_exit, reason}}
+        after
+          timeout_ms ->
+            Process.demonitor(stream_ref, [:flush])
+
+            Logger.warning(
+              "CallDispatcher stream tracking timeout after #{timeout_ms}ms stream=#{inspect(stream_pid)}"
+            )
+
+            _ = LemonAi.EventStream.cancel(stream_pid, @default_stream_cancel_reason)
+            {:error, :timeout}
+        end
     end
   end
 
@@ -360,10 +395,16 @@ defmodule LemonAi.CallDispatcher do
   end
 
   defp record_stream_terminal_result(provider, {:error, reason}) do
-    # Stream-level errors are always service failures — the connection broke,
-    # the stream timed out, or the provider returned an error mid-stream.
-    # Unlike request-level errors, these can't be client errors (400/429/etc).
-    LemonAi.CircuitBreaker.record_failure(provider, reason)
+    # Stream-terminal errors are NOT automatically service failures: a
+    # 401/429/400 can surface after the connection is established — the
+    # provider rejects the request mid-stream, or the HTTP error body arrives
+    # as the stream's terminal event. Classify first so one bad credential or
+    # malformed request cannot trip the whole provider's circuit breaker.
+    if LemonAi.Error.stream_terminal_breaker_failure?(reason) do
+      LemonAi.CircuitBreaker.record_failure(provider, reason)
+    else
+      :ok
+    end
   end
 
   defp record_stream_terminal_result(provider, unexpected_result) do
@@ -401,11 +442,13 @@ defmodule LemonAi.CallDispatcher do
         LemonAi.CircuitBreaker.record_success(provider)
 
       {:error, reason} ->
-        if circuit_breaker_failure?(reason) do
+        # Only count errors that indicate the SERVICE is unhealthy, not errors
+        # caused by the request itself: client errors (400, 413), rate limits
+        # (429), and auth errors (401/403) must not trip the circuit breaker.
+        # The decision is owned by LemonAi.Error so all callers share one set.
+        if LemonAi.Error.circuit_breaker_failure?(reason) do
           LemonAi.CircuitBreaker.record_failure(provider, reason)
         else
-          # Client errors (400, 413), rate limits (429), and auth errors (401/403)
-          # are not service-level failures — don't trip the circuit breaker.
           :ok
         end
 
@@ -414,23 +457,4 @@ defmodule LemonAi.CallDispatcher do
         LemonAi.CircuitBreaker.record_success(provider)
     end
   end
-
-  # Only count errors that indicate the SERVICE is unhealthy,
-  # not errors caused by the request itself (client errors, rate limits, auth).
-  defp circuit_breaker_failure?({:http_error, status, _body}) do
-    status >= 500
-  end
-
-  defp circuit_breaker_failure?(:timeout), do: true
-  defp circuit_breaker_failure?(:closed), do: true
-  defp circuit_breaker_failure?(:econnrefused), do: true
-  defp circuit_breaker_failure?(:econnreset), do: true
-  defp circuit_breaker_failure?(:nxdomain), do: true
-
-  defp circuit_breaker_failure?(reason) when is_binary(reason) do
-    downcased = String.downcase(reason)
-    String.contains?(downcased, "timeout") or String.contains?(downcased, "econnrefused")
-  end
-
-  defp circuit_breaker_failure?(_), do: false
 end

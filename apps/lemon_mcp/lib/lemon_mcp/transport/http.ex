@@ -307,9 +307,6 @@ defmodule LemonMCP.Transport.HTTP do
           "id" => response.id,
           "result" => response.result
         }
-
-      {:ok, error_response} when is_map(error_response) ->
-        error_response
     end
   end
 
@@ -317,9 +314,7 @@ defmodule LemonMCP.Transport.HTTP do
     "#{a}.#{b}.#{c}.#{d}"
   end
 
-  defp format_ip(ip) when is_list(ip) do
-    ip |> :inet.ntoa() |> to_string()
-  end
+  defp format_ip(ip) when is_binary(ip), do: ip
 
   defp format_ip(ip), do: inspect(ip)
 end

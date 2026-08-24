@@ -40,7 +40,7 @@ defmodule LemonRouter.AgentInbox do
   - `:session` - `:latest | :new | session_key` (default: `:latest`)
   - `:to` / `:endpoint` / `:route` - primary destination
   - `:deliver_to` - optional fanout destinations (endpoint aliases, shorthand, or route maps)
-  - `:queue_mode`, `:engine_id`, `:model`, `:cwd`, `:tool_policy`, `:meta`, `:source`
+  - `:queue_mode`, `:model`, `:cwd`, `:tool_policy`, `:meta`, `:source`
   """
   @spec send(binary(), binary(), keyword()) ::
           {:ok,
@@ -359,7 +359,6 @@ defmodule LemonRouter.AgentInbox do
         agent_id: agent_id,
         prompt: prompt,
         queue_mode: normalize_queue_mode(opts[:queue_mode]),
-        engine_id: opts[:engine_id],
         model: opts[:model],
         cwd: opts[:cwd],
         tool_policy: opts[:tool_policy],
@@ -581,6 +580,7 @@ defmodule LemonRouter.AgentInbox do
   defp normalize_queue_mode(:followup), do: :followup
   defp normalize_queue_mode(:steer), do: :steer
   defp normalize_queue_mode(:steer_backlog), do: :steer_backlog
+  defp normalize_queue_mode(:redirect), do: :redirect
   defp normalize_queue_mode(:interrupt), do: :interrupt
 
   defp normalize_queue_mode(mode) when is_binary(mode) do
@@ -589,6 +589,7 @@ defmodule LemonRouter.AgentInbox do
       "followup" -> :followup
       "steer" -> :steer
       "steer_backlog" -> :steer_backlog
+      "redirect" -> :redirect
       "interrupt" -> :interrupt
       _ -> :followup
     end

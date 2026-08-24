@@ -171,7 +171,7 @@ defmodule XApi.TokenManager do
     new_state = build_state_from_attrs(attrs, state)
     new_state = schedule_refresh(new_state)
 
-    case persist_runtime_tokens(new_state) do
+    _ = case persist_runtime_tokens(new_state) do
       :ok ->
         :ok
 
@@ -224,7 +224,7 @@ defmodule XApi.TokenManager do
         end
 
         # Cancel existing timer before scheduling retry (Bug #1 fix)
-        if state.timer_ref, do: Process.cancel_timer(state.timer_ref)
+        _ = if state.timer_ref, do: Process.cancel_timer(state.timer_ref)
         ref = Process.send_after(self(), :refresh_token, retry_ms)
         {:noreply, %{state | timer_ref: ref}}
     end
@@ -298,7 +298,7 @@ defmodule XApi.TokenManager do
           new_state = parse_token_response(response, state)
           new_state = schedule_refresh(new_state)
 
-          case persist_runtime_tokens(new_state) do
+          _ = case persist_runtime_tokens(new_state) do
             :ok ->
               :ok
 
@@ -337,7 +337,7 @@ defmodule XApi.TokenManager do
 
   defp schedule_refresh(%__MODULE__{} = state) do
     # Cancel any existing timer
-    if state.timer_ref, do: Process.cancel_timer(state.timer_ref)
+    _ = if state.timer_ref, do: Process.cancel_timer(state.timer_ref)
 
     delay =
       case state.expires_at do

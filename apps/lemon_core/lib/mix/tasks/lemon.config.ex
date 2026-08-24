@@ -133,7 +133,7 @@ defmodule Mix.Tasks.Lemon.Config do
     Mix.shell().info("Gateway:")
     Mix.shell().info("  Max concurrent runs: #{config.gateway.max_concurrent_runs || "(not set)"}")
     Mix.shell().info("  Auto resume: #{config.gateway.auto_resume || "(not set)"}")
-    Mix.shell().info("  Telegram enabled: #{config.gateway.enable_telegram || "(not set)"}")
+    Mix.shell().info("  Channels enabled: #{enabled_channels(config.gateway)}")
 
     Mix.shell().info("")
     Mix.shell().info("Logging:")
@@ -155,6 +155,18 @@ defmodule Mix.Tasks.Lemon.Config do
       end)
     else
       Mix.shell().info("  (none configured)")
+    end
+  end
+
+  defp enabled_channels(gateway) do
+    gateway
+    |> Map.get(:enabled_channels, %{})
+    |> Enum.filter(fn {_id, enabled?} -> enabled? end)
+    |> Enum.map(fn {id, _enabled?} -> to_string(id) end)
+    |> Enum.sort()
+    |> case do
+      [] -> "(none)"
+      ids -> Enum.join(ids, ", ")
     end
   end
 end

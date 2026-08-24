@@ -32,6 +32,88 @@ mix run --no-halt
 
 A self-contained Erlang/OTP release with the BEAM bundled — no Elixir or Mix required on the target machine.
 
+### Installer flow (workstations and single-machine hosts)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh
+```
+
+`install.sh` resolves the platform from `uname`, downloads the matching artifact
+named in the release `manifest.json`, verifies its SHA-256, and installs it
+under `~/.lemon`:
+
+```
+~/.lemon/versions/<version>/   extracted release
+~/.lemon/versions/<version>/tui/bin/lemon-tui  compiled TUI when installed
+~/.lemon/versions/current      symlink to the active version
+~/.lemon/bin/lemon             -> ../versions/current/bin/lemon
+~/.lemon/{cookie,env}          generated once by the launcher, mode 600 from creation
+~/.lemon/run/                  pid and runtime-root records, mode 700
+~/.lemon/store                 default store path for user installs
+```
+
+`bin/lemon` inside every release is a launcher shim that picks the bundled
+profile and applies user-install defaults before delegating to
+`bin/<profile>`. It accepts `start`, `daemon`, `stop`, `restart`, `status`,
+`remote`, `eval`, `rpc`, `version`, `update`, and `tui`. The full and minimal
+runtime profiles additionally accept `setup`, `model`, `gateway`, `config`,
+`secrets`, `channels`, and `doctor`; `doctor --bundle [path]` generates a
+redacted support bundle. The sim profile does not bundle the runtime CLI, but
+does support `doctor --bundle`. With no arguments the launcher starts the TUI
+in an interactive terminal, auto-starting the daemon; non-interactive
+invocation prints usage.
+
+The launcher never builds Elixir source from user input. `doctor` argv is
+forwarded verbatim to `LemonCli.CLI.main/1`, so option order is preserved and
+`#{...}` in a bundle path stays literal; the sim profile's `doctor --bundle`
+path reaches the release through the `LEMON_DOCTOR_BUNDLE_PATH` environment
+variable instead of eval source. Launcher-created state — `~/.lemon` itself,
+`run/`, the cookie, and `env` — is written under `umask 077`, so secrets are
+private from their first byte (directories 0700, files 0600).
+
+```bash
+lemon daemon    # background start, recording pid and version root in ~/.lemon/run
+lemon status    # pidfile plus a control-plane /healthz probe
+lemon stop      # stops through the recorded root, so it works across a flip
+lemon update    # stage runtime + TUI atomically, then flip current
+lemon stop && lemon daemon   # restart to apply a staged version
+```
+
+```bash
+lemon setup                         # first-time configuration in a full/min release
+lemon model                         # configure a model provider
+lemon gateway setup                 # configure a gateway adapter
+lemon doctor --json                 # ordinary runtime diagnostics
+lemon doctor --bundle               # redacted support bundle
+```
+
+Updating stages the runtime and matching TUI artifacts together for full/min
+profiles, then flips the symlink; the sim profile has no TUI artifact. There
+are no hot upgrades. Roll back
+with `lemon update --rollback`, which flips `versions/current` back to the
+previously installed version (the two most recent are retained) and again needs
+a restart to take effect.
+
+Environment knobs, the uninstall procedure, and the platform support table live
+in `docs/install.md`. `scripts/verify_install_script` proves this flow against a
+fixture release served from localhost, with no published release required.
+
+### Publish
+
+Product publication is a single on-demand GitHub Actions operation. Put the
+release notes under `CHANGELOG.md`'s Unreleased section, then dispatch from
+`main`:
+
+```bash
+gh workflow run release.yml --ref main -f channel=stable -f draft=false
+```
+
+The workflow derives and commits the next CalVer, tags the exact commit,
+builds and native-verifies every runtime and TUI artifact, publishes the
+multi-arch container and GitHub Release, and finally promotes the mutable
+container channel tags. See `docs/release/versioning_and_channels.md` for the
+full contract and explicit-version/draft inputs.
+
 ### Build
 
 ```bash
@@ -39,6 +121,8 @@ A self-contained Erlang/OTP release with the BEAM bundled — no Elixir or Mix r
 MIX_ENV=prod mix release lemon_runtime_min
 
 # Full local runtime (+ automation, skills, web UI, sim UI)
+MIX_ENV=prod mix sim_ui.assets.deploy
+MIX_ENV=prod mix phx.digest apps/lemon_web/priv/static -o apps/lemon_web/priv/static
 MIX_ENV=prod mix release lemon_runtime_full
 
 # Public sim broadcast site (dashboard + spectator UI)
@@ -46,23 +130,45 @@ MIX_ENV=prod mix sim_ui.assets.deploy
 MIX_ENV=prod mix release sim_broadcast_platform
 ```
 
-Releases are written to `_build/prod/rel/<profile>/`.
+The full profile bundles both web surfaces. `lemon_sim_ui` has an esbuild/
+tailwind pipeline, so it needs `sim_ui.assets.deploy`; `lemon_web` ships static
+files with no pipeline, so it needs the digest step only. Skipping either one
+makes the release log "Could not warm up static assets" at boot and serve
+undigested assets.
+
+Releases are written to `_build/prod/rel/<profile>/`. Release automation also
+builds the `lemon_tui` pseudo-profile as a Bun binary, producing 11 published
+artifacts total: three min, three full, two sim, and three TUI artifacts.
 
 Release automation packages the assembled release directory as a `.tar.gz`:
 
 ```bash
-tar -czf lemon-<version>-<channel>-ubuntu-24.04-x86_64-<profile>.tar.gz \
+tar -czf lemon-<version>-<channel>-<platform>-<profile>.tar.gz \
   -C ./_build/prod/rel/<profile> .
 ```
 
+Platform tags are `linux-x86_64`, `linux-arm64`, and `darwin-arm64`; see
+`docs/release/versioning_and_channels.md`.
+
+### Manual tarball install (servers)
+
+Servers that manage their own directory layout, service unit, and rollback
+should keep installing tarballs directly rather than through `install.sh`.
 Install an artifact by verifying its SHA-256 from `manifest.json`, extracting it
 into the target directory, setting the required runtime environment variables,
-and running `bin/<profile>` from the extracted directory.
+and running `bin/<profile>` from the extracted directory. `bin/lemon` is present
+too, but the explicit `bin/<profile>` entry point is the one to script against
+when the layout is not `~/.lemon`.
 
 ```bash
 scripts/verify_release_artifacts /path/to/downloaded-artifacts
 scripts/verify_release_runtime_boot /path/to/downloaded-artifacts
 ```
+
+`lemon update` refuses to run against this layout: it only manages the
+`~/.lemon/versions` shape, so a manual install is never mutated underneath its
+operator. Roll back with the operator procedure in
+`docs/release/release_checklist_and_support_policy.md`.
 
 ### Run
 
@@ -172,15 +278,11 @@ anonymous `/rooms/:id/watch` request.
 # Wait for the control-plane to become ready
 curl -sS http://localhost:4040/healthz
 
-# Or use the doctor command from the source tree
-mix lemon.doctor --json
+# Run diagnostics from a full or minimal release
+./_build/prod/rel/lemon_runtime_full/bin/lemon doctor --json
 
-# Generate a redacted support bundle from the source tree
-mix lemon.doctor --bundle
-
-# Generate a redacted support bundle from a release artifact
-./_build/prod/rel/lemon_runtime_full/bin/lemon_runtime_full eval \
-  'LemonCore.Doctor.CLI.bundle!()'
+# Generate a redacted support bundle from any release profile
+./_build/prod/rel/lemon_runtime_full/bin/lemon doctor --bundle
 ```
 
 For `lemon_runtime_full`, include `LEMON_WEB_SECRET_KEY_BASE` in release `eval`
@@ -191,9 +293,10 @@ endpoint during release boot before the eval expression is executed.
 
 | Profile | Apps | Use case |
 |---|---|---|
-| `lemon_runtime_min` | gateway, router, channels, control-plane | Headless / API-only server |
+| `lemon_runtime_min` | gateway, CLI, router, channels, control-plane | Headless / API-only server |
 | `lemon_runtime_full` | + automation, skills, web, sim-ui | Full local runtime with UI |
 | `sim_broadcast_platform` | lemon_core, lemon_sim, lemon_sim_ui | Public sim broadcast deployment |
+| `lemon_tui` | `tui/bin/lemon-tui` | Bun-compiled client pseudo-profile, not a BEAM release |
 
 ---
 
@@ -201,11 +304,19 @@ endpoint during release boot before the eval expression is executed.
 
 Connect a client to an already-running Lemon runtime — either the source-dev instance or a release.
 
-### TUI client (`lemon-tui`)
+### TUI client
+
+For an installed full/min release, use the plain command from an interactive
+terminal; it starts the daemon when needed. The explicit form is:
 
 ```bash
-cd clients/lemon-tui
-npm start
+lemon tui
+```
+
+For source development, the launcher runs `bun src/main.ts` from `clients/tui`:
+
+```bash
+./bin/lemon-tui
 ```
 
 The TUI connects to the control-plane at `http://localhost:4040` by default.
@@ -227,11 +338,6 @@ npm start
 
 Connects to `http://localhost:4080` (the web Phoenix endpoint).
 
-### Python TUI (CLI wrapper)
-
-```bash
-python apps/lemon_tui/lemon_tui/main.py
-```
 
 ---
 
@@ -261,8 +367,10 @@ reconnect, completion, export, rematch, and the supported responsive viewports.
 
 ## See also
 
+- `docs/install.md` — one-line installer, `~/.lemon` layout, env knobs, uninstall
+- `install.sh` / `scripts/verify_install_script` — installer and its fixture-server verifier
 - `docs/release/versioning_and_channels.md` — CalVer scheme and channel model
 - `docs/release/release_checklist_and_support_policy.md` — release-candidate checklist, rollback checklist, and public support boundaries
 - `apps/lemon_core/lib/lemon_core/runtime/` — Boot, Profile, Health, Env modules
-- `mix lemon.doctor` / `LemonCore.Doctor.CLI.bundle!()` — diagnostic check suite and redacted support bundles
-- `mix lemon.setup` — first-time configuration wizard
+- `lemon doctor` / `mix lemon.doctor` — diagnostics in a release / source checkout; append `--bundle` for a redacted support bundle
+- `lemon setup` / `mix lemon.setup` — first-time configuration wizard in a release / source checkout

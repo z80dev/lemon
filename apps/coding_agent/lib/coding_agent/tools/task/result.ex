@@ -358,7 +358,6 @@ defmodule CodingAgent.Tools.Task.Result do
       task_id: task_id,
       run_id: Map.get(record, :run_id) || run[:id],
       description: Map.get(record, :description) || run[:description],
-      engine: Map.get(record, :engine),
       status: to_string(status),
       output: join_output_for_status(status, run),
       error: join_error_for_status(status, run)
@@ -385,7 +384,6 @@ defmodule CodingAgent.Tools.Task.Result do
         {"description", Map.get(task, :description) || "task"},
         {"task_id", Map.get(task, :task_id)},
         {"run_id", Map.get(task, :run_id)},
-        {"engine", Map.get(task, :engine)},
         {"status", Map.get(task, :status)}
       ]
       |> Enum.reject(fn {_key, value} -> is_nil(value) or value == "" end)
@@ -414,7 +412,7 @@ defmodule CodingAgent.Tools.Task.Result do
   defp join_task_details(tasks) do
     Enum.map(tasks, fn task ->
       task
-      |> Map.take([:task_id, :run_id, :description, :engine, :status])
+      |> Map.take([:task_id, :run_id, :description, :status])
       |> Enum.reject(fn {_key, value} -> is_nil(value) or value == "" end)
       |> Map.new()
     end)
@@ -457,7 +455,6 @@ defmodule CodingAgent.Tools.Task.Result do
       task_id: task_id,
       status: Map.get(record, :status, :unknown) |> to_string(),
       description: Map.get(record, :description),
-      engine: Map.get(record, :engine),
       run_id: Map.get(record, :run_id)
     }
     |> Enum.reject(fn {_key, value} -> is_nil(value) or value == "" end)

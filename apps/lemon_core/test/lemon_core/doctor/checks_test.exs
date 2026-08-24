@@ -1,18 +1,18 @@
 defmodule LemonCore.Doctor.ChecksTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias LemonCore.Doctor.Check
 
   alias LemonCore.Doctor.Checks.{
     ACP,
     Browser,
-    Channels,
     Config,
     Cron,
     Extensions,
     LSP,
     MCP,
     Media,
+    Memory,
     NodeTools,
     OpenAICompat,
     Providers,
@@ -21,6 +21,125 @@ defmodule LemonCore.Doctor.ChecksTest do
     TerminalBackends,
     Usage
   }
+
+  defmodule StubChannelProofs do
+    @moduledoc """
+    Generic stand-in for the channels-owned proof spec, so core tests prove the
+    registration contract without naming a vendor channel.
+    """
+
+    @behaviour LemonCore.Doctor.ChannelProofs
+
+    alias LemonCore.Doctor.Check
+
+    @origin_checks ["channel_origin_cron_delivery_a", "channel_origin_cron_delivery_b"]
+    @delivery_checks ["sample_generated_media_delivery", "sample_generated_audio_delivery"]
+
+    @impl true
+    def origin_cron_checks, do: @origin_checks
+
+    @impl true
+    def media_delivery_check_names, do: @delivery_checks
+
+    @impl true
+    def media_delivery_proof(checks) when is_list(checks) do
+      Enum.reduce(checks, %{}, fn check, acc ->
+        case Map.get(check, "name") do
+          "sample_generated_media_delivery" ->
+            acc
+            |> Map.put(:channel_delivery, true)
+            |> Map.put(:sample_a_delivery, Map.get(check, "status") == "completed")
+
+          "sample_generated_audio_delivery" ->
+            acc
+            |> Map.put(:channel_delivery, true)
+            |> Map.put(:sample_b_delivery, Map.get(check, "status") == "completed")
+
+          _ ->
+            acc
+        end
+      end)
+    end
+
+    def media_delivery_proof(_), do: %{}
+
+    @impl true
+    def media_delivery_check(proofs) do
+      a? = completed_delivery?(proofs, :sample_a_delivery)
+      b? = completed_delivery?(proofs, :sample_b_delivery)
+
+      cond do
+        a? and b? ->
+          Check.pass(
+            "media.channel_delivery",
+            "Sample channel delivery proof is completed for Channel A and Channel B."
+          )
+
+        a? or b? ->
+          Check.warn(
+            "media.channel_delivery",
+            "Sample channel delivery proof is only complete for #{delivery_label(a?, b?)}.",
+            "Run the sample channel delivery matrix for both channels."
+          )
+
+        true ->
+          Check.warn(
+            "media.channel_delivery",
+            "Sample channel delivery proof is missing for Channel A and Channel B.",
+            "Run the sample channel delivery matrix proofs."
+          )
+      end
+    end
+
+    defp completed_delivery?(proofs, key) do
+      proofs
+      |> Map.get(:recent_proofs, [])
+      |> Enum.any?(fn proof ->
+        Map.get(proof, :status) == "completed" and get_in(proof, [:media_proof, key]) == true
+      end)
+    end
+
+    defp delivery_label(true, false), do: "Channel A"
+    defp delivery_label(false, true), do: "Channel B"
+    defp delivery_label(_, _), do: "neither channel"
+
+    @impl true
+    def failure_hint(_hint), do: nil
+    def setup_error_hint(_error), do: nil
+    def launch_gates(_proof_status), do: %{}
+  end
+
+  setup do
+    original = Application.get_env(:lemon_core, :doctor_runtime, [])
+
+    on_exit(fn -> Application.put_env(:lemon_core, :doctor_runtime, original) end)
+
+    :ok
+  end
+
+  defp put_channel_proofs(module) do
+    original = Application.get_env(:lemon_core, :doctor_runtime, [])
+
+    Application.put_env(
+      :lemon_core,
+      :doctor_runtime,
+      Keyword.put(original, :channel_proofs, module)
+    )
+
+    on_exit(fn -> Application.put_env(:lemon_core, :doctor_runtime, original) end)
+  end
+
+  defp clear_channel_proofs do
+    original = Application.get_env(:lemon_core, :doctor_runtime, [])
+
+    Application.put_env(
+      :lemon_core,
+      :doctor_runtime,
+      Keyword.delete(original, :channel_proofs)
+    )
+
+    on_exit(fn -> Application.put_env(:lemon_core, :doctor_runtime, original) end)
+  end
 
   describe "Config.run/1" do
     test "returns a list of Check structs" do
@@ -139,355 +258,6 @@ defmodule LemonCore.Doctor.ChecksTest do
     end
   end
 
-  describe "Channels.run/1" do
-    test "returns a list of Check structs" do
-      checks = Channels.run()
-      assert is_list(checks)
-      assert Enum.all?(checks, &match?(%Check{}, &1))
-    end
-
-    test "reports Discord live parity gates from redacted proofs" do
-      tmp_dir = tmp_dir("channels_checks")
-
-      File.mkdir_p!(Path.join(tmp_dir, ".lemon"))
-      File.mkdir_p!(Path.join([tmp_dir, ".lemon", "proofs"]))
-
-      File.write!(
-        Path.join([tmp_dir, ".lemon", "config.toml"]),
-        """
-        [gateway]
-        enable_discord = true
-
-        [gateway.discord]
-        bot_token_secret = "discord_bot_token_secret_name"
-        message_content_intent_enabled = false
-        """
-      )
-
-      write_proof!(tmp_dir, "discord-dm-proof.json", %{
-        ok: false,
-        checks: [
-          %{
-            name: "discord_dm_prompt_round_trip",
-            ok: false,
-            proof_scope: "discord direct message channel setup",
-            setup_error:
-              "Discord API POST /users/@me/channels failed: 400 {\"message\":\"Cannot send messages to this user\",\"code\":50007}"
-          }
-        ]
-      })
-
-      write_proof!(tmp_dir, "discord-slash-proof.json", %{
-        status: "completed",
-        proof_object: "lemon.discord_slash_interaction",
-        proof_scope: "discord_slash_interaction_deterministic",
-        coverage: %{
-          registered_command_count: 16,
-          local_response_command_count: 13,
-          real_client_click_proof: false
-        },
-        checks: [
-          %{name: "discord_slash_interaction_inventory", status: "completed"}
-        ]
-      })
-
-      write_proof!(tmp_dir, "discord-slash-client-click-proof.json", %{
-        ok: true,
-        checks: [
-          %{
-            name: "discord_slash_client_click_proof_artifact",
-            status: "completed",
-            proof_object: "lemon.discord_slash_client_click"
-          }
-        ]
-      })
-
-      write_proof!(tmp_dir, "discord-all-slash-registration-latest.json", %{
-        status: "completed",
-        proof_object: "lemon.discord_live_matrix",
-        proof_scope: "discord_live_matrix",
-        coverage: %{
-          contains_slash_registration: true,
-          contains_all_slash_registration: true
-        },
-        checks: [
-          %{name: "discord_all_slash_registration", status: "completed"}
-        ],
-        cleanup: %{
-          includes_raw_bot_tokens: false,
-          includes_raw_interaction_tokens: false,
-          includes_raw_application_ids: false,
-          includes_raw_channel_ids: false,
-          includes_raw_user_ids: false,
-          includes_raw_message_bodies: false,
-          includes_secret_names: false
-        }
-      })
-
-      on_exit(fn -> File.rm_rf!(tmp_dir) end)
-
-      checks = Channels.run(project_dir: tmp_dir)
-
-      readiness = Enum.find(checks, &(&1.name == "channels.readiness"))
-      assert readiness.status == :warn
-      assert readiness.message =~ "Telegram/Discord launch gates:"
-      assert readiness.message =~ "gate(s)"
-      assert is_binary(readiness.remediation)
-      refute inspect(readiness) =~ "discord_bot_token_secret_name"
-
-      assert check_status(checks, "channels.discord.config") == :pass
-      assert check_status(checks, "channels.discord.dm") == :warn
-      assert check_status(checks, "channels.discord.free_response") == :warn
-      assert check_status(checks, "channels.discord.slash_deterministic") == :pass
-      assert check_status(checks, "channels.discord.slash_registration") == :pass
-      assert check_status(checks, "channels.discord.slash_client_click") == :pass
-
-      assert Enum.find(checks, &(&1.name == "channels.discord.dm")).message =~
-               "setup refusal"
-
-      free_response = Enum.find(checks, &(&1.name == "channels.discord.free_response"))
-      assert free_response.remediation =~ "message_content gateway intent"
-      refute inspect(free_response) =~ "discord_bot_token_secret_name"
-    end
-
-    test "reports Discord free-response Message Content Intent proof drift" do
-      tmp_dir = tmp_dir("channels_message_content_intent")
-
-      File.mkdir_p!(Path.join(tmp_dir, ".lemon"))
-      File.mkdir_p!(Path.join([tmp_dir, ".lemon", "proofs"]))
-
-      File.write!(
-        Path.join([tmp_dir, ".lemon", "config.toml"]),
-        """
-        [gateway]
-        enable_discord = true
-
-        [gateway.discord]
-        bot_token_secret = "discord_bot_token_secret_name"
-        message_content_intent_enabled = true
-        """
-      )
-
-      write_proof!(tmp_dir, "discord-free-response-latest.json", %{
-        status: "failed",
-        proof_object: "lemon.discord_live_matrix",
-        proof_scope: "discord_live_matrix",
-        reason_kind: "discord_no_reply_for_unmentioned_message",
-        checks: [
-          %{
-            name: "discord_free_response_trigger_round_trip",
-            status: "failed",
-            reason_kind: "discord_message_content_intent_or_delivery"
-          }
-        ],
-        cleanup: %{
-          includes_raw_bot_tokens: false,
-          includes_raw_channel_ids: false,
-          includes_raw_user_ids: false,
-          includes_raw_message_bodies: false,
-          includes_secret_names: false
-        }
-      })
-
-      on_exit(fn -> File.rm_rf!(tmp_dir) end)
-
-      checks = Channels.run(project_dir: tmp_dir)
-      check = Enum.find(checks, &(&1.name == "channels.discord.free_response"))
-
-      assert check.status == :warn
-      assert check.message =~ "Message Content Intent"
-      assert check.message =~ "despite the local declaration"
-      assert check.remediation =~ "message_content gateway intent"
-      assert check.remediation =~ "Discord Developer Portal"
-      refute inspect(checks) =~ "discord_bot_token_secret_name"
-    end
-
-    test "reports Discord slash client-click missing artifact reason" do
-      tmp_dir = tmp_dir("channels_slash_client_click_missing")
-
-      File.mkdir_p!(Path.join(tmp_dir, ".lemon"))
-      File.mkdir_p!(Path.join([tmp_dir, ".lemon", "proofs"]))
-
-      File.write!(
-        Path.join([tmp_dir, ".lemon", "config.toml"]),
-        """
-        [gateway]
-        enable_discord = true
-
-        [gateway.discord]
-        bot_token_secret = "discord_bot_token_secret_name"
-        """
-      )
-
-      write_proof!(tmp_dir, "discord-slash-client-click-check-latest.json", %{
-        status: "failed",
-        proof_object: "lemon.discord_live_matrix",
-        proof_scope: "discord_live_matrix",
-        checks: [
-          %{
-            name: "discord_slash_client_click_proof_artifact",
-            status: "failed",
-            proof_object: "lemon.discord_slash_client_click",
-            reason_kind: "discord_slash_client_click_missing"
-          }
-        ],
-        cleanup: %{
-          includes_raw_bot_tokens: false,
-          includes_raw_channel_ids: false,
-          includes_raw_user_ids: false,
-          includes_raw_message_bodies: false,
-          includes_secret_names: false
-        }
-      })
-
-      on_exit(fn -> File.rm_rf!(tmp_dir) end)
-
-      checks = Channels.run(project_dir: tmp_dir)
-      check = Enum.find(checks, &(&1.name == "channels.discord.slash_client_click"))
-
-      assert check.status == :warn
-      assert check.message =~ "has not been captured yet"
-      assert check.remediation =~ "--wait-slash-client-click-proof"
-      assert check.remediation =~ "--proof-path"
-      refute inspect(checks) =~ "discord_bot_token_secret_name"
-    end
-
-    test "classifies explicit Message Content Intent proof hints before generic no-reply hints" do
-      tmp_dir = tmp_dir("channels_message_content_reason")
-
-      File.mkdir_p!(Path.join([tmp_dir, ".lemon", "proofs"]))
-
-      write_proof!(tmp_dir, "discord-free-response-latest.json", %{
-        ok: false,
-        checks: [
-          %{
-            name: "discord_free_response_trigger_round_trip",
-            ok: false,
-            failure_hint:
-              "No Lemon reply was observed for an unmentioned guild/thread message. Local channel diagnostics currently report message_content_intent_declared=false."
-          }
-        ]
-      })
-
-      on_exit(fn -> File.rm_rf!(tmp_dir) end)
-
-      proofs = LemonCore.Doctor.ProofDiagnostics.status(project_dir: tmp_dir, limit: 10)
-
-      assert proofs.reason_kind_counts["discord_message_content_intent_or_delivery"] == 1
-      refute Map.has_key?(proofs.reason_kind_counts, "discord_no_reply_for_unmentioned_message")
-
-      assert Enum.any?(
-               proofs.latest_checks,
-               &(&1.name == "discord_free_response_trigger_round_trip" and
-                   &1.reason_kind == "discord_message_content_intent_or_delivery")
-             )
-    end
-
-    test "reports Telegram local voice transcription proof from redacted artifact" do
-      tmp_dir = tmp_dir("channels_telegram_voice")
-
-      File.mkdir_p!(Path.join(tmp_dir, ".lemon"))
-      File.mkdir_p!(Path.join([tmp_dir, ".lemon", "proofs"]))
-
-      File.write!(
-        Path.join([tmp_dir, ".lemon", "config.toml"]),
-        """
-        [gateway]
-        enable_telegram = true
-
-        [gateway.telegram]
-        bot_token_secret = "telegram_bot_token_secret_name"
-        voice_transcription = true
-        voice_transcription_provider = "local_transcript"
-        """
-      )
-
-      write_proof!(tmp_dir, "telegram-voice-local-latest.json", %{
-        status: "completed",
-        proof_object: "lemon.telegram_voice_local_smoke",
-        proof_scope: "telegram_voice_local_transcript",
-        completed_count: 3,
-        failed_count: 0,
-        skipped_count: 0,
-        coverage: %{check_count: 3},
-        checks: [
-          %{name: "telegram_voice_local_transcript_provider", status: "completed"},
-          %{name: "telegram_voice_local_no_api_key", status: "completed"},
-          %{name: "telegram_voice_local_inbound_metadata", status: "completed"}
-        ],
-        cleanup: %{
-          includes_raw_bot_token: false,
-          includes_raw_chat_ids: false,
-          includes_raw_sender_ids: false,
-          includes_raw_audio_bytes: false,
-          includes_raw_transcript: false,
-          includes_raw_message_body: false
-        }
-      })
-
-      on_exit(fn -> File.rm_rf!(tmp_dir) end)
-
-      checks = Channels.run(project_dir: tmp_dir)
-
-      assert check_status(checks, "channels.telegram.config") == :pass
-      assert check_status(checks, "channels.telegram.voice_transcription") == :pass
-
-      assert Enum.find(checks, &(&1.name == "channels.telegram.voice_transcription")).message =~
-               "without provider credentials"
-
-      refute inspect(checks) =~ "telegram_bot_token_secret_name"
-    end
-
-    test "warns when only Discord media slash registration proof is present" do
-      tmp_dir = tmp_dir("channels_media_registration_only")
-
-      File.mkdir_p!(Path.join(tmp_dir, ".lemon"))
-      File.mkdir_p!(Path.join([tmp_dir, ".lemon", "proofs"]))
-
-      File.write!(
-        Path.join([tmp_dir, ".lemon", "config.toml"]),
-        """
-        [gateway]
-        enable_discord = true
-
-        [gateway.discord]
-        bot_token_secret = "discord_bot_token_secret_name"
-        """
-      )
-
-      write_proof!(tmp_dir, "discord-media-slash-registration-latest.json", %{
-        status: "completed",
-        proof_object: "lemon.discord_live_matrix",
-        proof_scope: "discord_live_matrix",
-        coverage: %{
-          contains_slash_registration: true,
-          contains_media_slash_registration: true,
-          contains_all_slash_registration: false
-        },
-        checks: [
-          %{name: "discord_media_slash_registration", status: "completed"}
-        ],
-        cleanup: %{
-          includes_raw_bot_tokens: false,
-          includes_raw_interaction_tokens: false,
-          includes_raw_application_ids: false,
-          includes_raw_channel_ids: false,
-          includes_raw_user_ids: false,
-          includes_raw_message_bodies: false,
-          includes_secret_names: false
-        }
-      })
-
-      on_exit(fn -> File.rm_rf!(tmp_dir) end)
-
-      checks = Channels.run(project_dir: tmp_dir)
-      check = Enum.find(checks, &(&1.name == "channels.discord.slash_registration"))
-
-      assert check.status == :warn
-      assert check.message =~ "/media slash registration proof is completed"
-    end
-  end
-
   describe "Media.run/1" do
     test "returns a list of Check structs" do
       checks = Media.run()
@@ -496,17 +266,19 @@ defmodule LemonCore.Doctor.ChecksTest do
     end
 
     test "reports channel delivery separately from incomplete provider proofs" do
+      put_channel_proofs(StubChannelProofs)
+
       tmp_dir = tmp_dir("media_checks")
 
       File.mkdir_p!(Path.join([tmp_dir, ".lemon", "proofs"]))
 
-      write_proof!(tmp_dir, "telegram-generated-audio-latest.json", %{
+      write_proof!(tmp_dir, "sample-generated-a-latest.json", %{
         status: "completed",
-        proof_object: "lemon.telegram_live_matrix",
-        proof_scope: "telegram_live_matrix",
+        proof_object: "lemon.sample_channel_matrix",
+        proof_scope: "sample_channel_matrix",
         checks: [
           %{
-            name: "telegram_forum_topic_generated_audio_delivery",
+            name: "sample_generated_media_delivery",
             status: "completed",
             document: %{has_document: true},
             marker_seen: true
@@ -514,13 +286,13 @@ defmodule LemonCore.Doctor.ChecksTest do
         ]
       })
 
-      write_proof!(tmp_dir, "discord-generated-audio-latest.json", %{
+      write_proof!(tmp_dir, "sample-generated-b-latest.json", %{
         status: "completed",
-        proof_object: "lemon.discord_live_matrix",
-        proof_scope: "discord_live_matrix",
+        proof_object: "lemon.sample_channel_matrix",
+        proof_scope: "sample_channel_matrix",
         checks: [
           %{
-            name: "discord_generated_audio_delivery",
+            name: "sample_generated_audio_delivery",
             status: "completed",
             bot_reply: %{attachment_count: 1}
           }
@@ -579,7 +351,7 @@ defmodule LemonCore.Doctor.ChecksTest do
       provider = Enum.find(checks, &(&1.name == "media.provider_live"))
 
       assert channel.status == :pass
-      assert channel.message =~ "Telegram and Discord"
+      assert channel.message =~ "completed for Channel A and Channel B"
       assert provider.status == :warn
       assert provider.message =~ "completed vision"
       assert provider.message =~ "failed image"
@@ -662,49 +434,28 @@ defmodule LemonCore.Doctor.ChecksTest do
       assert provider.remediation =~ "video reached the provider but hit a billing or quota limit"
     end
 
-    test "accepts MEDIA directive channel delivery proofs" do
-      tmp_dir = tmp_dir("media_directive_checks")
+    test "omits the channel delivery check when no proof spec is registered" do
+      clear_channel_proofs()
+
+      tmp_dir = tmp_dir("media_no_spec")
 
       File.mkdir_p!(Path.join([tmp_dir, ".lemon", "proofs"]))
 
-      write_proof!(tmp_dir, "telegram-media-directive-latest.json", %{
+      write_proof!(tmp_dir, "sample-generated-a-latest.json", %{
         status: "completed",
-        proof_object: "lemon.telegram_live_matrix",
-        proof_scope: "telegram_live_matrix",
-        coverage: %{contains_media_directive: true},
+        proof_object: "lemon.sample_channel_matrix",
+        proof_scope: "sample_channel_matrix",
         checks: [
-          %{
-            name: "telegram_forum_topic_media_directive_delivery",
-            status: "completed",
-            telegram_has_document: true,
-            marker_seen: true,
-            directive_leaked: false
-          }
-        ]
-      })
-
-      write_proof!(tmp_dir, "discord-media-directive-latest.json", %{
-        status: "completed",
-        proof_object: "lemon.discord_live_matrix",
-        proof_scope: "discord_live_matrix",
-        coverage: %{contains_media_directive: true},
-        checks: [
-          %{
-            name: "discord_media_directive_delivery",
-            status: "completed",
-            attachment_count: 1,
-            directive_leaked: false
-          }
+          %{name: "sample_generated_media_delivery", status: "completed"}
         ]
       })
 
       on_exit(fn -> File.rm_rf!(tmp_dir) end)
 
       checks = Media.run(project_dir: tmp_dir)
-      channel = Enum.find(checks, &(&1.name == "media.channel_delivery"))
 
-      assert channel.status == :pass
-      assert channel.message =~ "Media attachment delivery proof"
+      refute Enum.any?(checks, &(&1.name == "media.channel_delivery"))
+      assert Enum.find(checks, &(&1.name == "media.provider_live")) != nil
     end
 
     test "passes provider live check when all provider proof artifacts are completed" do
@@ -1137,6 +888,8 @@ defmodule LemonCore.Doctor.ChecksTest do
     end
 
     test "passes when cron diagnostics, restart, and channel-origin proofs are completed" do
+      put_channel_proofs(StubChannelProofs)
+
       tmp_dir = tmp_dir("cron_completed")
 
       File.mkdir_p!(Path.join([tmp_dir, ".lemon", "proofs"]))
@@ -1153,6 +906,8 @@ defmodule LemonCore.Doctor.ChecksTest do
     end
 
     test "warns when cron proof artifacts are failed or missing" do
+      put_channel_proofs(StubChannelProofs)
+
       tmp_dir = tmp_dir("cron_failed")
 
       File.mkdir_p!(Path.join([tmp_dir, ".lemon", "proofs"]))
@@ -1176,6 +931,79 @@ defmodule LemonCore.Doctor.ChecksTest do
       assert check.message =~ "channel origin"
       assert check.remediation =~ "scripts/live_cron_diagnostics_smoke.exs"
       refute inspect(checks) =~ tmp_dir
+    end
+
+    test "omits the channel-origin group when no proof spec is registered" do
+      clear_channel_proofs()
+
+      tmp_dir = tmp_dir("cron_no_spec")
+
+      File.mkdir_p!(Path.join([tmp_dir, ".lemon", "proofs"]))
+      write_cron_diagnostics_proof!(tmp_dir, cron_diagnostics_checks())
+      write_cron_runtime_restart_proof!(tmp_dir, cron_runtime_restart_checks())
+
+      on_exit(fn -> File.rm_rf!(tmp_dir) end)
+
+      checks = Cron.run(project_dir: tmp_dir)
+      check = Enum.find(checks, &(&1.name == "cron.preview"))
+
+      assert check.status == :pass
+      assert check.message =~ "diagnostics, runtime restart"
+      refute check.message =~ "channel origin"
+    end
+  end
+
+  describe "ProofDiagnostics.status/1" do
+    test "classifies unrecognized failure hints generically when no proof spec is registered" do
+      clear_channel_proofs()
+
+      tmp_dir = tmp_dir("proof_diag_generic_hint")
+
+      File.mkdir_p!(Path.join([tmp_dir, ".lemon", "proofs"]))
+
+      write_proof!(tmp_dir, "sample-failure-latest.json", %{
+        ok: false,
+        checks: [
+          %{
+            name: "sample_failed_check",
+            ok: false,
+            failure_hint: "some unrecognized provider failure"
+          }
+        ]
+      })
+
+      on_exit(fn -> File.rm_rf!(tmp_dir) end)
+
+      proofs = LemonCore.Doctor.ProofDiagnostics.status(project_dir: tmp_dir, limit: 10)
+
+      assert proofs.reason_kind_counts["proof_failure"] == 1
+      assert proofs.status_counts["failed"] == 1
+    end
+
+    test "classifies unrecognized setup errors generically when no proof spec is registered" do
+      clear_channel_proofs()
+
+      tmp_dir = tmp_dir("proof_diag_generic_setup")
+
+      File.mkdir_p!(Path.join([tmp_dir, ".lemon", "proofs"]))
+
+      write_proof!(tmp_dir, "sample-setup-failure-latest.json", %{
+        ok: false,
+        checks: [
+          %{
+            name: "sample_failed_check",
+            ok: false,
+            setup_error: "some unrecognized setup problem"
+          }
+        ]
+      })
+
+      on_exit(fn -> File.rm_rf!(tmp_dir) end)
+
+      proofs = LemonCore.Doctor.ProofDiagnostics.status(project_dir: tmp_dir, limit: 10)
+
+      assert proofs.reason_kind_counts["proof_setup_failure"] == 1
+      assert proofs.status_counts["failed"] == 1
     end
   end
 
@@ -1472,6 +1300,109 @@ defmodule LemonCore.Doctor.ChecksTest do
     test "skills directory check has expected name" do
       checks = Skills.run()
       assert Enum.any?(checks, &(&1.name == "skills.directory"))
+    end
+  end
+
+  defmodule StubMemoryStore do
+    def stats do
+      %{total: 3, oldest_ms: 1, newest_ms: System.system_time(:millisecond) - 120_000}
+    end
+  end
+
+  describe "Memory.run/1" do
+    alias LemonCore.Config.Features
+
+    test "returns a list of Check structs" do
+      checks = Memory.run(features: %Features{session_search: :off})
+      assert is_list(checks)
+      assert Enum.all?(checks, &match?(%Check{}, &1))
+    end
+
+    test "reports inactive memory when session_search is off" do
+      checks = Memory.run(features: %Features{session_search: :off})
+      check = Enum.find(checks, &(&1.name == "memory.session_search"))
+
+      assert check.status == :pass
+      assert check.message =~ "session_search is off"
+      assert check.message =~ "inactive"
+    end
+
+    test "reports inactive memory when session_search is opt-in" do
+      checks = Memory.run(features: %Features{session_search: :"opt-in"})
+      check = Enum.find(checks, &(&1.name == "memory.session_search"))
+
+      assert check.status == :pass
+      assert check.message =~ "session_search is opt-in"
+    end
+
+    test "warns with the kill switch when default-on but exqlite is unavailable" do
+      checks =
+        Memory.run(
+          features: %Features{session_search: :"default-on"},
+          exqlite_loaded: false
+        )
+
+      check = Enum.find(checks, &(&1.name == "memory.session_search"))
+
+      assert check.status == :warn
+      assert check.message =~ "exqlite SQLite NIF is not loaded"
+      assert check.remediation =~ "LEMON_FEATURE_SESSION_SEARCH=off"
+    end
+
+    test "warns when default-on but the store module is missing" do
+      checks =
+        Memory.run(
+          features: %Features{session_search: :"default-on"},
+          exqlite_loaded: true,
+          store_module: LemonCore.Doctor.ChecksTest.NoSuchStore
+        )
+
+      check = Enum.find(checks, &(&1.name == "memory.session_search"))
+
+      assert check.status == :warn
+      assert check.message =~ "store module is not loaded"
+      assert check.remediation =~ "LEMON_FEATURE_SESSION_SEARCH=off"
+    end
+
+    test "warns when default-on but the store process is not running" do
+      checks =
+        Memory.run(
+          features: %Features{session_search: :"default-on"},
+          exqlite_loaded: true,
+          store_module: StubMemoryStore
+        )
+
+      check = Enum.find(checks, &(&1.name == "memory.session_search"))
+
+      assert check.status == :warn
+      assert check.message =~ "store process is not running"
+      assert check.remediation =~ "LEMON_FEATURE_SESSION_SEARCH=off"
+    end
+
+    test "passes with document count, db size, and ingest recency when the store is up" do
+      {:ok, agent} = Agent.start_link(fn -> :ok end, name: StubMemoryStore)
+      on_exit(fn -> if Process.alive?(agent), do: Agent.stop(agent) end)
+
+      db_path = Path.join(tmp_dir("memory_check_db"), "memory.sqlite3")
+      File.mkdir_p!(Path.dirname(db_path))
+      File.write!(db_path, String.duplicate("x", 2048))
+      on_exit(fn -> File.rm_rf!(Path.dirname(db_path)) end)
+
+      checks =
+        Memory.run(
+          features: %Features{session_search: :"default-on"},
+          exqlite_loaded: true,
+          store_module: StubMemoryStore,
+          store_path: db_path
+        )
+
+      check = Enum.find(checks, &(&1.name == "memory.session_search"))
+
+      assert check.status == :pass
+      assert check.message =~ "session_search is default-on"
+      assert check.message =~ "3 document(s)"
+      assert check.message =~ "db 2.0 KB"
+      assert check.message =~ "last ingest 2m ago"
     end
   end
 
@@ -1953,10 +1884,7 @@ defmodule LemonCore.Doctor.ChecksTest do
   end
 
   defp cron_channel_origin_checks do
-    [
-      "telegram_channel_origin_cron_delivery",
-      "discord_channel_origin_cron_delivery"
-    ]
+    StubChannelProofs.origin_cron_checks()
     |> completed_checks()
   end
 

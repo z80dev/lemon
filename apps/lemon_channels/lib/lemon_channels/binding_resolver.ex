@@ -1,10 +1,10 @@
 defmodule LemonChannels.Binding do
   @moduledoc """
   Resolved routing binding for a chat scope: the transport, chat/topic ids and
-  the project, agent, engine and queue-mode a message routes to. Produced by
+  the project, agent, and queue mode a message routes to. Produced by
   `LemonChannels.BindingResolver.resolve_binding/1`.
   """
-  defstruct [:transport, :chat_id, :topic_id, :project, :agent_id, :default_engine, :queue_mode]
+  defstruct [:transport, :chat_id, :topic_id, :project, :agent_id, :queue_mode]
 
   @type t :: %__MODULE__{
           transport: atom(),
@@ -12,7 +12,6 @@ defmodule LemonChannels.Binding do
           topic_id: integer() | nil,
           project: String.t() | nil,
           agent_id: String.t() | nil,
-          default_engine: String.t() | nil,
           queue_mode: atom() | nil
         }
 end
@@ -39,26 +38,6 @@ defmodule LemonChannels.BindingResolver do
     |> to_core_scope()
     |> CoreResolver.resolve_binding(resolver_opts())
     |> from_core_binding()
-  end
-
-  @spec resolve_engine(ChatScope.t(), String.t() | nil, map() | nil) :: String.t() | nil
-  def resolve_engine(%ChatScope{} = scope, engine_hint, resume) do
-    scope
-    |> to_core_scope()
-    |> CoreResolver.resolve_engine(engine_hint, resume, resolver_opts())
-  end
-
-  def resolve_engine(_scope, engine_hint, resume) do
-    cond do
-      is_map(resume) and is_binary(resume[:engine] || resume["engine"]) ->
-        resume[:engine] || resume["engine"]
-
-      is_binary(engine_hint) ->
-        engine_hint
-
-      true ->
-        GatewayConfig.get(:default_engine)
-    end
   end
 
   @spec resolve_agent_id(ChatScope.t()) :: String.t()
@@ -105,8 +84,7 @@ defmodule LemonChannels.BindingResolver do
   defp resolver_opts do
     [
       bindings: bindings(),
-      config_provider: &config_projects/0,
-      default_engine: GatewayConfig.get(:default_engine) || "lemon"
+      config_provider: &config_projects/0
     ]
   end
 
@@ -123,7 +101,6 @@ defmodule LemonChannels.BindingResolver do
       topic_id: b.topic_id,
       project: b.project,
       agent_id: b.agent_id,
-      default_engine: b.default_engine,
       queue_mode: b.queue_mode
     }
   end

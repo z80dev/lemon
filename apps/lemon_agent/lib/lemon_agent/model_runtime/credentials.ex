@@ -5,20 +5,81 @@ defmodule LemonAgent.ModelRuntime.Credentials do
   This module owns resolved provider API-key lookup for Lemon callers. It
   centralizes provider alias handling, secret resolution, OAuth payload decoding,
   and provider availability checks before `LemonAi` receives runtime options.
+
+  ## Credential pools
+
+  On top of the single-credential resolution, providers may carry extra
+  credentials through `provider_routing.credential_pools.<pool>.credentials`
+  (see `LemonCore.Config.Agent`). `list_provider_api_keys/3` returns the
+  ordered pool credentials for a provider followed by the single-credential
+  resolution as a final `"default"` entry, and `build_get_api_key/1` picks the
+  first credential not in cooldown (`CredentialHealth`). With no pools
+  configured, behavior is identical to plain single-credential resolution.
   """
 
   require Logger
 
   alias LemonAi.Auth.OAuthSecretResolver
+  alias LemonAgent.ModelRuntime.CredentialHealth
   alias LemonAgent.ModelRuntime.ProviderNames
   alias LemonAgent.ProviderConfigResolver
   alias LemonCore.Secrets
 
   @raw_anthropic_secret "llm_anthropic_api_key_raw"
 
+  @type credential_entry :: %{ref: String.t(), api_key: String.t()}
+
   @spec build_get_api_key(map() | nil) :: (atom() | String.t() -> String.t() | nil)
   def build_get_api_key(providers_map) do
-    fn provider -> resolve_provider_api_key(provider, providers_map) end
+    fn provider -> resolve_pooled_api_key(provider, providers_map) end
+  end
+
+  @doc """
+  Ordered API-key candidates for a provider.
+
+  Pool credentials come first (pool selection follows the same
+  default_pool/profile precedence as the routing plan: `opts[:pool]` >
+  profile `credential_pool` > routing `default_pool`), then the existing
+  single-credential resolution as a final `%{ref: "default"}` entry. Entries
+  whose secret/env fails to resolve are skipped. `config` may be a bare
+  providers map or any map carrying `:providers` and `:provider_routing`
+  (e.g. a settings struct or `LemonCore.Config`).
+  """
+  @spec list_provider_api_keys(map() | nil, atom() | String.t(), keyword()) :: [
+          credential_entry()
+        ]
+  def list_provider_api_keys(config, provider, opts \\ []) do
+    default_entry =
+      case resolve_provider_api_key(provider, config, opts) do
+        api_key when is_binary(api_key) ->
+          if present_value?(api_key), do: [%{ref: "default", api_key: api_key}], else: []
+
+        _ ->
+          []
+      end
+
+    pool_credential_entries(config, provider, opts) ++ default_entry
+  end
+
+  # `build_get_api_key/1` contract: first non-cooldown credential's key; when
+  # every credential is cooling down, fall back to the first one rather than
+  # returning nil - a cooled key beats no key. With no pool credentials the
+  # list is just the default resolution, so this is byte-identical to plain
+  # `resolve_provider_api_key/2` (including the openai_codex "" sentinel).
+  defp resolve_pooled_api_key(provider, config) do
+    case list_provider_api_keys(config, provider) do
+      [] ->
+        resolve_provider_api_key(provider, config)
+
+      entries ->
+        entry =
+          Enum.find(entries, fn entry ->
+            not CredentialHealth.in_cooldown?(provider, entry.ref)
+          end) ||
+            hd(entries)
+
+        entry.api_key
+    end
   end
 
   @spec resolve_provider_api_key(atom() | String.t(), map() | nil, keyword()) :: String.t() | nil
@@ -62,8 +123,30 @@ defmodule LemonAgent.ModelRuntime.Credentials do
 
   def resolve_secret_api_key(_, _), do: nil
 
+  @doc """
+  Whether a provider has any usable credential.
+
+  Pool credentials count: pass the normalized routing config as
+  `opts[:provider_routing]` and any resolvable pool credential for the
+  provider makes it ready, before the per-provider special paths run.
+  """
   @spec provider_has_credentials?(atom() | String.t(), map() | nil, keyword()) :: boolean()
   def provider_has_credentials?(provider, providers_map_or_cfg, opts \\ []) do
+    pool_credentials_available?(provider, opts) or
+      single_provider_has_credentials?(provider, providers_map_or_cfg, opts)
+  end
+
+  defp pool_credentials_available?(provider, opts) do
+    case Keyword.get(opts, :provider_routing) do
+      routing when is_map(routing) ->
+        pool_credential_entries(%{provider_routing: routing}, provider, opts) != []
+
+      _ ->
+        false
+    end
+  end
+
+  defp single_provider_has_credentials?(provider, providers_map_or_cfg, opts) do
     provider_cfg = provider_config(providers_map_or_cfg, provider, opts)
 
     case ProviderNames.canonical_name(provider) do
@@ -88,6 +171,166 @@ defmodule LemonAgent.ModelRuntime.Credentials do
         present_value?(resolve_provider_api_key(provider, provider_cfg, provider_cfg: true))
     end
   end
+
+  # ---- Credential pools ----
+
+  # Resolved pool credential entries for a provider, in configured order.
+  # Entries that fail to resolve (missing secret/env) are skipped.
+  defp pool_credential_entries(config, provider, opts) do
+    config
+    |> routing_config_map()
+    |> selected_pool(opts)
+    |> pool_refs_for_provider(provider)
+    |> Enum.flat_map(fn ref ->
+      case resolve_credential_ref(ref) do
+        api_key when is_binary(api_key) ->
+          if present_value?(api_key) do
+            [%{ref: credential_ref_string(ref), api_key: api_key}]
+          else
+            []
+          end
+
+        _ ->
+          []
+      end
+    end)
+  end
+
+  defp routing_config_map(%{provider_routing: routing}) when is_map(routing), do: routing
+
+  defp routing_config_map(%{"provider_routing" => routing}) when is_map(routing), do: routing
+
+  defp routing_config_map(%{agent: agent}) when is_map(agent),
+    do: map_value(agent, :provider_routing) || %{}
+
+  defp routing_config_map(_), do: %{}
+
+  # Mirrors the routing plan's pool precedence: explicit opt > profile
+  # credential_pool > routing default_pool.
+  defp selected_pool(routing, opts) when is_map(routing) do
+    profile =
+      routing
+      |> map_value(:profiles)
+      |> named_config(Keyword.get(opts, :profile) || map_value(routing, :default_profile))
+
+    pool_name =
+      first_non_empty_binary([
+        Keyword.get(opts, :pool),
+        map_value(profile, :credential_pool),
+        map_value(routing, :default_pool)
+      ])
+
+    routing
+    |> map_value(:credential_pools)
+    |> named_config(pool_name)
+  end
+
+  defp selected_pool(_, _), do: nil
+
+  defp named_config(configs, name) when is_map(configs) and is_binary(name) do
+    map_value(configs, name)
+  end
+
+  defp named_config(_, _), do: nil
+
+  defp pool_refs_for_provider(pool, provider) when is_map(pool) do
+    credentials = map_value(pool, :credentials)
+
+    if is_map(credentials) do
+      provider_keys = provider_match_keys(provider)
+
+      Enum.find_value(credentials, [], fn {key, refs} ->
+        if normalize_provider_key(key) in provider_keys, do: List.wrap(refs), else: nil
+      end)
+    else
+      []
+    end
+  end
+
+  defp pool_refs_for_provider(_, _), do: []
+
+  defp provider_match_keys(provider) do
+    case ProviderNames.all_names(provider) do
+      [] -> [normalize_provider_key(provider)] |> Enum.reject(&is_nil/1)
+      names -> names
+    end
+  end
+
+  defp normalize_provider_key(key) when is_atom(key),
+    do: key |> Atom.to_string() |> normalize_provider_key()
+
+  defp normalize_provider_key(key) when is_binary(key) do
+    key
+    |> String.trim()
+    |> String.downcase()
+    |> String.replace("-", "_")
+    |> case do
+      "" -> nil
+      normalized -> normalized
+    end
+  end
+
+  defp normalize_provider_key(_), do: nil
+
+  # Refs arrive normalized (`%{source: :secret | :env, name: name}`) from
+  # `LemonCore.Config.Agent`, but hand-built settings may still carry the raw
+  # string forms ("secret:NAME", "env:VAR", bare secret name).
+  defp resolve_credential_ref(%{source: :env, name: name}) when is_binary(name),
+    do: System.get_env(name)
+
+  defp resolve_credential_ref(%{source: :secret, name: name}) when is_binary(name),
+    do: resolve_secret_api_key(name, env_fallback: false)
+
+  defp resolve_credential_ref(%{"source" => source, "name" => name}) when is_binary(name),
+    do: resolve_credential_ref(%{source: ref_source(source), name: name})
+
+  defp resolve_credential_ref(ref) when is_binary(ref) do
+    case parse_credential_ref(ref) do
+      nil -> nil
+      parsed -> resolve_credential_ref(parsed)
+    end
+  end
+
+  defp resolve_credential_ref(_), do: nil
+
+  defp ref_source(:env), do: :env
+  defp ref_source("env"), do: :env
+  defp ref_source(_), do: :secret
+
+  defp parse_credential_ref(ref) when is_binary(ref) do
+    case String.trim(ref) do
+      "" -> nil
+      "secret:" <> name -> parsed_credential_ref(:secret, name)
+      "env:" <> name -> parsed_credential_ref(:env, name)
+      name -> %{source: :secret, name: name}
+    end
+  end
+
+  defp parsed_credential_ref(source, name) do
+    case String.trim(name) do
+      "" -> nil
+      name -> %{source: source, name: name}
+    end
+  end
+
+  defp credential_ref_string(%{source: source, name: name}), do: "#{source}:#{name}"
+
+  defp credential_ref_string(%{"source" => source, "name" => name}),
+    do: credential_ref_string(%{source: ref_source(source), name: name})
+
+  defp credential_ref_string(ref) when is_binary(ref) do
+    case parse_credential_ref(ref) do
+      nil -> ref
+      parsed -> credential_ref_string(parsed)
+    end
+  end
+
+  defp map_value(nil, _key), do: nil
+
+  defp map_value(map, key) when is_map(map),
+    do: Map.get(map, key) || Map.get(map, to_string(key))
+
+  defp map_value(_, _), do: nil
 
   defp resolve_generic_api_key(provider, provider_cfg) do
     env_key =

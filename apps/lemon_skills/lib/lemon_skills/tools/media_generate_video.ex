@@ -1,6 +1,11 @@
 defmodule LemonSkills.Tools.MediaGenerateVideo do
   @moduledoc """
   Supervised video-generation preview tool backed by LemonMedia.MediaJobSupervisor.
+
+  Wired into CodingAgent.ToolRegistry's builtin tool list and the
+  CodingAgent.Tools factories. Supports deterministic local MP4 previews,
+  OpenAI video jobs (OpenAI credentials) and Vertex AI Veo long-running
+  prediction (Google service-account credentials).
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
@@ -26,6 +31,21 @@ defmodule LemonSkills.Tools.MediaGenerateVideo do
   @formats %{"mp4" => "video/mp4"}
   @local_mp4_preview <<0, 0, 0, 24, "ftypmp42", 0, 0, 0, 0, "mp42isom", 0, 0, 0, 8, "free">>
 
+  @doc """
+  Returns the `LemonAgent.Types.AgentTool.t()` definition for the
+  `"media_generate_video"` tool, wired to `execute/6`.
+
+  `cwd` is the project directory; it seeds the default artifacts directory
+  and is used to load config for provider credentials. The `opts` keyword is
+  read for: `:media_artifacts_dir` (defaults to
+  `MediaJobs.default_artifacts_dir(cwd)`), `:media_jobs_dir`,
+  `:media_video_config` (lazily `Config.load(cwd)`), `:openai_video_api_key`,
+  `:openai_video_base_url`, `:media_video_http_post` (defaults to
+  `&Req.post/2`), `:media_video_http_get` (defaults to `&Req.get/2`),
+  `:vertex_veo_access_token`, `:vertex_veo_project`, `:vertex_veo_location`,
+  `:vertex_veo_service_account_json`, and `:vertex_token_http_post` (defaults
+  to `&Req.post/2`).
+  """
   @spec tool(String.t(), keyword()) :: AgentTool.t()
   def tool(cwd, opts \\ []) do
     %AgentTool{
@@ -98,6 +118,30 @@ defmodule LemonSkills.Tools.MediaGenerateVideo do
     }
   end
 
+  @doc """
+  Tool callback invoked by the agent loop with, in order: `tool_call_id`,
+  `params` map, `signal`, `on_update` callback, `cwd`, and `opts`.
+
+  Reads `"prompt"` (required, non-empty after trimming), `"provider"`
+  (defaults to `"local_mp4"`; the other accepted values are `"openai_video"`
+  and `"vertex_veo"`), `"model"` (defaults to `"local_mp4_preview"`,
+  `"sora-2"`, or `"veo-3.1-fast-generate-001"` per provider), `"filename"`,
+  `"size"` (for Vertex, `"1280x720"`/`"720x1280"` map to `"16:9"`/`"9:16"`),
+  `"seconds"` (for Vertex, clamped 1-60), `"storageUri"`/`"storage_uri"`
+  (Vertex GCS output URI; when omitted the tool expects inline bytes),
+  `"maxRetries"` (defaults to `1`, clamped 0-3), `"maxPolls"` (defaults to
+  `30`, clamped 1-120), `"pollIntervalMs"` (defaults to `2_000`, clamped
+  0-30_000), `"sendToChannel"` (defaults to `false`), and `"timeoutMs"`
+  (defaults to `20_000`, clamped 100-300_000).
+
+  On success returns a `%LemonAgent.Types.AgentToolResult{}` with `content`
+  the pretty-printed JSON payload and `details` the payload map (`job_id`,
+  `status`, `type`, `provider`, `model`, `prompt_hash`, `prompt_chars`,
+  `artifact`, `media_job`, and — when `"sendToChannel"` is true —
+  `auto_send_files`). Failures return `{:error, message}` with a string
+  message, e.g. a missing prompt, unsupported provider, an aborted operation,
+  or a failed or timed-out media job.
+  """
   @spec execute(String.t(), map(), reference() | nil, function() | nil, String.t(), keyword()) ::
           AgentToolResult.t() | {:error, String.t()}
   def execute(_tool_call_id, params, signal, _on_update, cwd, opts) do

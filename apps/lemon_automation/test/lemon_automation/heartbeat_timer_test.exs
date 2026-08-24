@@ -15,16 +15,20 @@ defmodule LemonAutomation.HeartbeatTimerTest do
     # Clean up stores after each test
     on_exit(fn ->
       try do
-        LemonCore.Store.list(:heartbeat_config) |> Enum.each(fn {k, _} ->
+        LemonCore.Store.list(:heartbeat_config)
+        |> Enum.each(fn {k, _} ->
           LemonCore.Store.delete(:heartbeat_config, k)
         end)
-        LemonCore.Store.list(:heartbeat_last) |> Enum.each(fn {k, _} ->
+
+        LemonCore.Store.list(:heartbeat_last)
+        |> Enum.each(fn {k, _} ->
           LemonCore.Store.delete(:heartbeat_last, k)
         end)
       rescue
         _ -> :ok
       end
     end)
+
     :ok
   end
 
@@ -34,7 +38,8 @@ defmodule LemonAutomation.HeartbeatTimerTest do
 
       config = %{
         enabled: true,
-        interval_ms: 30_000,  # 30 seconds - sub-minute
+        # 30 seconds - sub-minute
+        interval_ms: 30_000,
         prompt: "HEARTBEAT"
       }
 

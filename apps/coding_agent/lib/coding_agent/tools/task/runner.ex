@@ -1,18 +1,7 @@
 defmodule CodingAgent.Tools.Task.Runner do
   @moduledoc false
 
-  require Logger
-
   alias LemonAgent.AbortSignal
-
-  alias LemonCliRunners.{
-    ClaudeSubagent,
-    CodexSubagent,
-    DroidSubagent,
-    KimiSubagent,
-    OpencodeSubagent,
-    PiSubagent
-  }
 
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
@@ -55,204 +44,12 @@ defmodule CodingAgent.Tools.Task.Runner do
     end
   end
 
-  @spec execute_via_cli_engine(
-          String.t(),
-          String.t(),
-          String.t(),
-          String.t(),
-          String.t() | nil,
-          String.t() | nil,
-          String.t() | nil,
-          (AgentToolResult.t() -> :ok) | nil,
-          reference() | nil
-        ) :: AgentToolResult.t() | {:error, term()}
-  def execute_via_cli_engine(
-        engine,
-        prompt,
-        cwd,
-        description,
-        role_id,
-        model,
-        thinking_level,
-        on_update,
-        signal
-      ) do
-    {module, engine_label} =
-      case engine do
-        "codex" -> {CodexSubagent, "codex"}
-        "claude" -> {ClaudeSubagent, "claude"}
-        "droid" -> {DroidSubagent, "droid"}
-        "kimi" -> {KimiSubagent, "kimi"}
-        "opencode" -> {OpencodeSubagent, "opencode"}
-        "pi" -> {PiSubagent, "pi"}
-      end
-
-    role_prompt = if role_id, do: get_role_prompt(cwd, role_id), else: nil
-
-    Logger.info(
-      "Task tool cli engine start engine=#{engine_label} description=#{inspect(description)} role=#{inspect(role_id)} model=#{inspect(model)} thinking_level=#{inspect(thinking_level)} cwd=#{inspect(cwd)}"
-    )
-
-    with {:ok, session} <-
-           module.start(
-             prompt: prompt,
-             cwd: cwd,
-             role_prompt: role_prompt,
-             model: model,
-             thinking_level: thinking_level
-           ) do
-      abort_monitor = maybe_start_abort_monitor(signal, session.pid)
-
-      result =
-        reduce_cli_events(module.events(session), description, engine_label, on_update, signal)
-
-      maybe_stop_abort_monitor(abort_monitor)
-
-      details = %{
-        description: description,
-        status: if(result.error, do: "error", else: "completed"),
-        engine: engine_label,
-        role: role_id,
-        model: model,
-        thinking_level: thinking_level,
-        resume_token: result.resume_token,
-        error: result.error,
-        stderr: result[:stderr]
-      }
-
-      tool_result = %AgentToolResult{
-        content: [%TextContent{text: result.answer || ""}],
-        details: details
-      }
-
-      if result.error do
-        Logger.warning(
-          "Task tool cli engine error engine=#{engine_label} description=#{inspect(description)} error=#{inspect(result.error)}"
-        )
-
-        error_msg =
-          if result[:stderr] && result[:stderr] != "" && result[:stderr] != result.error do
-            "#{format_cli_error(result.error)}\nstderr: #{result[:stderr]}"
-          else
-            format_cli_error(result.error)
-          end
-
-        {:error, %{message: error_msg, details: details, answer: result.answer || ""}}
-      else
-        Logger.info(
-          "Task tool cli engine completed engine=#{engine_label} description=#{inspect(description)} answer_bytes=#{byte_size(result.answer || "")}"
-        )
-
-        tool_result
-      end
-    end
-  end
-
-  @doc false
-  def reduce_cli_events(events, description, engine_label, on_update) do
-    reduce_cli_events(events, description, engine_label, on_update, nil)
-  end
-
-  @doc false
-  def reduce_cli_events(events, description, engine_label, on_update, signal) do
-    Enum.reduce_while(events, %{answer: nil, resume_token: nil, error: nil, stderr: nil}, fn
-      {:started, token}, acc ->
-        maybe_emit_cli_update(on_update, description, engine_label, "started", token.value)
-        {:cont, %{acc | resume_token: token}}
-
-      {:action, %{title: title, kind: kind} = action, :started, _opts}, acc ->
-        detail = Map.get(action, :detail)
-
-        maybe_emit_cli_action_update(
-          on_update,
-          description,
-          engine_label,
-          title,
-          kind,
-          "started",
-          detail
-        )
-
-        {:cont, acc}
-
-      {:action, %{title: title, kind: kind} = action, :updated, _opts}, acc ->
-        detail = Map.get(action, :detail)
-        text = extract_action_detail_text(detail) || title
-
-        maybe_emit_cli_action_update(
-          on_update,
-          description,
-          engine_label,
-          text,
-          kind,
-          "updated",
-          detail
-        )
-
-        {:cont, acc}
-
-      {:action, %{title: title, kind: kind} = action, :completed, _opts}, acc ->
-        detail = Map.get(action, :detail)
-
-        maybe_emit_cli_action_update(
-          on_update,
-          description,
-          engine_label,
-          "Completed: #{title}",
-          kind,
-          "completed",
-          detail
-        )
-
-        acc =
-          if kind == :warning and is_map(detail) do
-            cond do
-              Map.has_key?(detail, :stderr) ->
-                stderr = detail[:stderr] || detail.stderr
-                updated = %{acc | stderr: stderr}
-                if updated.error == nil, do: %{updated | error: stderr}, else: updated
-
-              Map.has_key?(detail, :decode_error) ->
-                if acc.error == nil, do: %{acc | error: detail.decode_error}, else: acc
-
-              true ->
-                acc
-            end
-          else
-            acc
-          end
-
-        {:cont, acc}
-
-      {:completed, answer, opts}, acc ->
-        resume = opts[:resume] || acc.resume_token
-        error = acc.error || opts[:error]
-        {:cont, %{acc | answer: answer, resume_token: resume, error: error}}
-
-      {:error, reason}, acc ->
-        maybe_emit_cli_update(
-          on_update,
-          description,
-          engine_label,
-          "error",
-          format_cli_error(reason)
-        )
-
-        {:cont, %{acc | error: acc.error || reason}}
-
-      _, acc ->
-        {:cont, acc}
-    end)
-    |> maybe_apply_abort(signal)
-  end
-
   @spec start_session_with_prompt(
           keyword(),
           String.t(),
           String.t(),
           reference() | nil,
           (AgentToolResult.t() -> :ok) | nil,
-          String.t() | nil,
           String.t() | nil,
           keyword()
         ) :: AgentToolResult.t() | {:error, String.t()}
@@ -263,7 +60,6 @@ defmodule CodingAgent.Tools.Task.Runner do
         signal,
         on_update,
         role_id,
-        engine \\ "internal",
         opts \\ []
       ) do
     case CodingAgent.start_session(start_opts) do
@@ -290,7 +86,6 @@ defmodule CodingAgent.Tools.Task.Runner do
                      "",
                      nil,
                      role_id,
-                     engine,
                      timeout_ms,
                      deadline_ms,
                      task_session_poll_ms(opts)
@@ -301,8 +96,7 @@ defmodule CodingAgent.Tools.Task.Runner do
                       session_id: session_id,
                       description: description,
                       status: "completed",
-                      role: role_id,
-                      engine: engine
+                      role: role_id
                     }
                     |> maybe_put_reasoning(
                       Result.reasoning_details(thinking, "assistant_thinking", "completed")
@@ -347,144 +141,6 @@ defmodule CodingAgent.Tools.Task.Runner do
     end
   end
 
-  defp get_role_prompt(cwd, role_id) do
-    case Subagents.get(cwd, role_id) do
-      nil -> nil
-      role -> role.prompt
-    end
-  end
-
-  defp maybe_start_abort_monitor(nil, _pid), do: nil
-
-  defp maybe_start_abort_monitor(signal, pid) when is_reference(signal) and is_pid(pid) do
-    spawn(fn -> abort_monitor_loop(signal, pid) end)
-  end
-
-  defp maybe_start_abort_monitor(_signal, _pid), do: nil
-
-  defp maybe_stop_abort_monitor(nil), do: :ok
-
-  defp maybe_stop_abort_monitor(pid) when is_pid(pid) do
-    send(pid, :stop)
-    :ok
-  end
-
-  defp maybe_emit_cli_update(on_update, description, engine, status, text, extra_details \\ %{})
-  defp maybe_emit_cli_update(nil, _description, _engine, _status, _text, _extra_details), do: :ok
-
-  defp maybe_emit_cli_update(on_update, description, engine, status, text, extra_details) do
-    on_update.(%AgentToolResult{
-      content: [%TextContent{text: text}],
-      details:
-        %{
-          description: description,
-          status: status,
-          engine: engine
-        }
-        |> Map.merge(extra_details)
-    })
-  end
-
-  defp maybe_emit_cli_action_update(
-         on_update,
-         description,
-         engine,
-         text,
-         kind,
-         phase,
-         detail
-       ) do
-    extra_details =
-      case normalize_cli_reasoning(kind, text, detail, phase) do
-        nil ->
-          %{current_action: %{title: text, kind: to_string(kind), phase: phase}}
-          |> maybe_add_action_detail(detail)
-
-        reasoning ->
-          %{reasoning: reasoning}
-      end
-
-    maybe_emit_cli_update(on_update, description, engine, "running", text, extra_details)
-  end
-
-  defp normalize_cli_reasoning(kind, text, detail, phase) when kind in [:note, "note"] do
-    detail_reasoning =
-      if is_map(detail) do
-        Map.get(detail, :reasoning) || Map.get(detail, "reasoning")
-      end
-
-    reasoning_text =
-      cond do
-        is_map(detail_reasoning) and is_binary(detail_reasoning[:text]) ->
-          detail_reasoning[:text]
-
-        is_map(detail_reasoning) and is_binary(detail_reasoning["text"]) ->
-          detail_reasoning["text"]
-
-        is_map(detail) and is_binary(Map.get(detail, :text)) ->
-          Map.get(detail, :text)
-
-        is_map(detail) and is_binary(Map.get(detail, "text")) ->
-          Map.get(detail, "text")
-
-        is_binary(text) ->
-          text
-
-        true ->
-          ""
-      end
-
-    Result.reasoning_details(reasoning_text, "runner_note", phase)
-  end
-
-  defp normalize_cli_reasoning(_kind, _text, _detail, _phase), do: nil
-
-  defp maybe_apply_abort(result, signal) do
-    if AbortSignal.aborted?(signal) do
-      %{result | error: result.error || "Task aborted"}
-    else
-      result
-    end
-  end
-
-  defp extract_action_detail_text(detail) when is_map(detail) do
-    cond do
-      is_binary(Map.get(detail, :message)) -> Map.get(detail, :message)
-      is_binary(Map.get(detail, "message")) -> Map.get(detail, "message")
-      is_binary(Map.get(detail, :output)) -> Map.get(detail, :output)
-      is_binary(Map.get(detail, "output")) -> Map.get(detail, "output")
-      is_binary(Map.get(detail, :stdout)) -> Map.get(detail, :stdout)
-      is_binary(Map.get(detail, "stdout")) -> Map.get(detail, "stdout")
-      is_binary(Map.get(detail, :stderr)) -> Map.get(detail, :stderr)
-      is_binary(Map.get(detail, "stderr")) -> Map.get(detail, "stderr")
-      is_binary(Map.get(detail, :result)) -> Map.get(detail, :result)
-      is_binary(Map.get(detail, "result")) -> Map.get(detail, "result")
-      true -> nil
-    end
-  end
-
-  defp extract_action_detail_text(_detail), do: nil
-
-  defp maybe_add_action_detail(details, detail) when is_map(detail) and map_size(detail) > 0 do
-    Map.put(details, :action_detail, detail)
-  end
-
-  defp maybe_add_action_detail(details, _detail), do: details
-
-  defp abort_monitor_loop(signal, pid) do
-    receive do
-      :stop -> :ok
-    after
-      200 ->
-        if AbortSignal.aborted?(signal) do
-          Process.exit(pid, :kill)
-          :ok
-        else
-          abort_monitor_loop(signal, pid)
-        end
-    end
-  end
-
   defp await_result(
          session,
          session_ref,
@@ -496,7 +152,6 @@ defmodule CodingAgent.Tools.Task.Runner do
          last_thinking,
          last_tool_text,
          role_id,
-         engine,
          timeout_ms,
          deadline_ms,
          poll_ms
@@ -512,15 +167,11 @@ defmodule CodingAgent.Tools.Task.Runner do
         )
 
       {:session_event, ^session_id, {:tool_execution_start, _id, name, args}} ->
-        kind = internal_tool_kind(name)
-        title = internal_tool_title(name, args)
-
         maybe_emit_action_update(
           on_update,
           description,
-          engine,
-          title,
-          kind,
+          internal_tool_title(name, args),
+          internal_tool_kind(name),
           "started",
           args
         )
@@ -536,22 +187,17 @@ defmodule CodingAgent.Tools.Task.Runner do
           last_thinking,
           last_tool_text,
           role_id,
-          engine,
           timeout_ms,
           deadline_ms,
           poll_ms
         )
 
       {:session_event, ^session_id, {:tool_execution_update, _id, name, args, _partial_result}} ->
-        kind = internal_tool_kind(name)
-        title = internal_tool_title(name, args)
-
         maybe_emit_action_update(
           on_update,
           description,
-          engine,
-          title,
-          kind,
+          internal_tool_title(name, args),
+          internal_tool_kind(name),
           "updated",
           args
         )
@@ -567,23 +213,19 @@ defmodule CodingAgent.Tools.Task.Runner do
           last_thinking,
           last_tool_text,
           role_id,
-          engine,
           timeout_ms,
           deadline_ms,
           poll_ms
         )
 
       {:session_event, ^session_id, {:tool_execution_end, _id, name, result, _is_error}} ->
-        kind = internal_tool_kind(name)
-        title = internal_tool_title(name, %{})
         last_tool_text = extract_tool_result_text(result) || last_tool_text
 
         maybe_emit_action_update(
           on_update,
           description,
-          engine,
-          "Completed: #{title}",
-          kind,
+          "Completed: #{internal_tool_title(name, %{})}",
+          internal_tool_kind(name),
           "completed",
           %{name: name, result: result}
         )
@@ -599,7 +241,6 @@ defmodule CodingAgent.Tools.Task.Runner do
           last_thinking,
           last_tool_text,
           role_id,
-          engine,
           timeout_ms,
           deadline_ms,
           poll_ms
@@ -633,7 +274,6 @@ defmodule CodingAgent.Tools.Task.Runner do
           last_thinking,
           last_tool_text,
           role_id,
-          engine,
           timeout_ms,
           deadline_ms,
           poll_ms
@@ -666,7 +306,6 @@ defmodule CodingAgent.Tools.Task.Runner do
           last_thinking,
           last_tool_text,
           role_id,
-          engine,
           timeout_ms,
           deadline_ms,
           poll_ms
@@ -696,7 +335,6 @@ defmodule CodingAgent.Tools.Task.Runner do
           last_thinking,
           last_tool_text,
           role_id,
-          engine,
           timeout_ms,
           deadline_ms,
           poll_ms
@@ -735,7 +373,6 @@ defmodule CodingAgent.Tools.Task.Runner do
                 last_thinking,
                 last_tool_text,
                 role_id,
-                engine,
                 timeout_ms,
                 deadline_ms,
                 poll_ms
@@ -894,11 +531,9 @@ defmodule CodingAgent.Tools.Task.Runner do
     "Task session crashed before completion: #{inspect(reason)}"
   end
 
-  defp maybe_emit_action_update(nil, _description, _engine, _text, _kind, _phase, _detail) do
-    :ok
-  end
+  defp maybe_emit_action_update(nil, _description, _text, _kind, _phase, _detail), do: :ok
 
-  defp maybe_emit_action_update(on_update, description, engine, text, kind, phase, detail) do
+  defp maybe_emit_action_update(on_update, description, text, kind, phase, detail) do
     extra_details = %{
       current_action: %{title: text, kind: to_string(kind), phase: phase}
     }
@@ -910,18 +545,15 @@ defmodule CodingAgent.Tools.Task.Runner do
         extra_details
       end
 
-    result = %AgentToolResult{
+    on_update.(%AgentToolResult{
       content: [%TextContent{text: text}],
       details:
         %{
           description: description,
-          status: "running",
-          engine: engine
+          status: "running"
         }
         |> Map.merge(extra_details)
-    }
-
-    on_update.(result)
+    })
   end
 
   defp maybe_emit_update(
@@ -1106,13 +738,7 @@ defmodule CodingAgent.Tools.Task.Runner do
         "browser screenshot"
 
       "task" ->
-        engine_suffix =
-          case a["engine"] do
-            engine when is_binary(engine) and engine not in ["", "internal"] -> "(#{engine})"
-            _ -> ""
-          end
-
-        "task#{engine_suffix}: #{String.slice(a["description"] || a["prompt"] || "", 0, 50)}"
+        "task: #{String.slice(a["description"] || a["prompt"] || "", 0, 50)}"
 
       "agent" ->
         "agent: #{String.slice(a["prompt"] || a["description"] || "", 0, 50)}"
@@ -1144,9 +770,6 @@ defmodule CodingAgent.Tools.Task.Runner do
   end
 
   defp stringify_keys(_), do: %{}
-
-  defp format_cli_error(reason) when is_binary(reason), do: reason
-  defp format_cli_error(reason), do: inspect(reason)
 
   defp generate_task_run_id do
     :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)

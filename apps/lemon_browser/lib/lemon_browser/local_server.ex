@@ -179,10 +179,11 @@ defmodule LemonBrowser.LocalServer do
   end
 
   defp signal_os_process(pid) when is_integer(pid) do
-    case System.find_executable("kill") do
-      nil -> :ok
-      _ -> System.cmd("kill", ["-TERM", Integer.to_string(pid)], stderr_to_stdout: true)
-    end
+    _ =
+      case System.find_executable("kill") do
+        nil -> :ok
+        _ -> System.cmd("kill", ["-TERM", Integer.to_string(pid)], stderr_to_stdout: true)
+      end
 
     :ok
   catch

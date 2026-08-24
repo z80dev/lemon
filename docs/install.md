@@ -1,22 +1,150 @@
 # Install Lemon
 
-Last reviewed: 2026-05-12
+Last reviewed: 2026-08-18
 
-This page is the short install landing page for the public docs site. For the
-full setup walkthrough, including provider details and Telegram configuration,
-use the [Setup Guide](user-guide/setup.md).
+## Install and start your first chat
 
-## Supported Path Today
+From an interactive terminal, install Lemon with one command:
 
-The verified path today is a source install on a developer machine with Elixir,
-Erlang/OTP, and a model provider key.
+```bash
+curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh
+```
 
-Requirements:
+The installer downloads the release for your platform, verifies its SHA-256
+against the release manifest, and installs it under `~/.lemon`. For the `full`
+and `min` profiles, it then opens `lemon setup` on `/dev/tty`; piping the
+installer through `sh` does not prevent the wizard from being interactive.
+
+The setup wizard is safe to rerun. It creates a config scaffold only when one
+is missing, initializes encrypted secrets when needed, and guides provider,
+authentication, and default-model configuration. It verifies the resulting
+provider configuration; it does **not** install development dependencies,
+configure a messaging gateway, or run the general doctor command for you.
+
+When setup completes, start the interactive TUI and send your first message:
+
+```bash
+$HOME/.lemon/bin/lemon
+```
+
+The installer prints the PATH entry for its launcher. Once `~/.lemon/bin` is
+on your `PATH`, use `lemon` for this and the commands below. `lemon` starts the
+daemon when needed. If provider readiness is incomplete at a first interactive
+launch, it opens setup before starting the daemon. If it cannot open a
+terminal, it leaves the daemon stopped and tells you to run `lemon setup` from
+an interactive terminal.
+
+## Installer handoff and non-interactive installs
+
+The default installer starts setup only for `full` and `min` profiles and only
+when it can open `/dev/tty`.
+
+- Pass `--skip-setup` to install without opening the wizard:
+
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh -s -- --skip-setup
+  ```
+
+- With no TTY, the install succeeds without blocking and prints the exact
+  command to run later: `$HOME/.lemon/bin/lemon setup`.
+- The `sim` profile has no provider setup wizard.
+
+For an automated or headless provider configuration, first create the local
+setup state, then supply the provider credential and default model explicitly:
+
+```bash
+lemon setup --non-interactive
+lemon model --provider anthropic --token "$ANTHROPIC_API_KEY" \
+  --model anthropic:claude-sonnet-4-20250514 --set-default
+lemon doctor
+```
+
+`lemon model` performs the offline-strong configuration checks but does not
+make a provider network request. Where a live provider credential check is
+wanted, use the setup-provider flow instead:
+
+```bash
+lemon setup provider --provider anthropic --token "$ANTHROPIC_API_KEY" \
+  --model anthropic:claude-sonnet-4-20250514 --set-default
+```
+
+That flow verifies the provider configuration and performs its live check when
+the provider supports one. When deliberately offline, append `--skip-verify`;
+the configuration, model, and stored credential are still checked, while the
+live request is deferred.
+
+Useful recovery and inspection commands are:
+
+```bash
+lemon setup
+lemon config validate
+lemon secrets status
+lemon doctor
+```
+
+## Optional Telegram or Discord
+
+Messaging channels are optional; configure a provider and use the TUI first if
+that is all you need. To add a bot later, choose an adapter interactively or
+name one directly:
+
+```bash
+lemon gateway setup
+lemon gateway setup telegram
+lemon gateway setup discord
+lemon channels
+```
+
+The Telegram and Discord setup adapters store their bot tokens in encrypted
+secrets, write their configuration, and verify the adapter inputs. Follow the
+prompt for the allowed Telegram chat or Discord channel scope.
+
+## Installer details
+
+Prerequisites for the prebuilt installer are `curl`, `tar`, and `python3`.
+`python3` reads the release manifest and performs the atomic symlink flip; no
+`jq` is required. On macOS, `xcode-select --install` provides it.
+
+Linux releases target glibc 2.39 or newer. The installer warns and continues on
+older or non-glibc systems; set `LEMON_INSTALL_IGNORE_GLIBC=1` to silence that
+warning.
+
+| Flag | Effect |
+| --- | --- |
+| `--force` | Reinstall a version already present. |
+| `--verify` | Boot the installed runtime on ephemeral ports and poll `/healthz` before finishing. |
+| `--modify-path` | Add the printed PATH entry to the appropriate shell rc file. |
+| `--skip-setup` | Do not start the post-install setup wizard. |
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `LEMON_VERSION` | *(latest stable)* | Pin an exact release version. Required for non-stable channels. |
+| `LEMON_CHANNEL` | `stable` | Release channel. `preview` and `nightly` also require `LEMON_VERSION`. |
+| `LEMON_PROFILE` | `lemon_runtime_full` | `full`, `min`, or `sim`, or the full profile name. |
+| `LEMON_NO_TUI` | *(unset)* | Set to `1` to omit the TUI artifact. `sim` is runtime-only. |
+| `LEMON_INSTALL_IGNORE_GLIBC` | *(unset)* | Silence the Linux glibc baseline warning. |
+
+The installed launcher is `~/.lemon/bin/lemon`; updates atomically move only
+`~/.lemon/versions/current`. Your configuration, encrypted secrets, and store
+remain in place. Add the launcher to your PATH if needed:
+
+```bash
+export PATH="$HOME/.lemon/bin:$PATH"
+```
+
+For lifecycle commands and release verification, see `lemon --help` and
+[Versioning and Channels](release/versioning_and_channels.md).
+
+## Source development
+
+Use a source checkout for Lemon development, unsupported platforms, or building
+release artifacts yourself. These are source-only requirements; the prebuilt
+installer does not require them:
 
 - Elixir 1.19.5+
 - Erlang/OTP 28.5+
-- Node.js 24 LTS+ if you want TUI or web client work
-- An Anthropic, OpenAI, or compatible provider credential
+- Bun 1.3.14+ for TUI client development
+- Node.js 24 LTS+ for web client development
 
 ```bash
 git clone https://github.com/z80dev/lemon.git
@@ -25,144 +153,23 @@ mix local.hex --force
 mix deps.get
 mix compile
 ./bin/lemon setup
-./bin/lemon channels
+./bin/lemon doctor
+./bin/lemon-tui
+```
+
+For a source checkout, use the `./bin/lemon` wrapper for Lemon commands:
+
+```bash
+./bin/lemon model --provider anthropic --token "$ANTHROPIC_API_KEY" \
+  --model anthropic:claude-sonnet-4-20250514 --set-default
+./bin/lemon gateway setup telegram
+./bin/lemon gateway setup discord
 ./bin/lemon config validate
-./bin/lemon doctor
-./bin/lemon media --limit 5
-./bin/lemon models --provider anthropic
-./bin/lemon providers --provider openai
-./bin/lemon policy list
-./bin/lemon proofs --limit 5
-./bin/lemon readiness --limit 5
 ./bin/lemon secrets status
-./bin/lemon skill list
-./bin/lemon usage
-```
-
-Start Lemon locally:
-
-```bash
-./bin/lemon-dev /path/to/your/project
-```
-
-If you want a repeatable local proof of the source path after building, run:
-
-```bash
-scripts/verify_source_install --skip-compile
-```
-
-Without `--skip-compile`, the verifier also runs `MIX_ENV=test mix compile --warnings-as-errors`.
-It checks the BEAM toolchain, locked dependency resolution, non-interactive
-setup dispatch, promoted Telegram/Discord channel readiness, stage-1 local
-update dry-run dispatch, doctor JSON diagnostics, model catalog listing,
-provider readiness listing, model policy listing, redacted proof artifact
-listing, media diagnostics, readiness summary, secrets status, skill listing,
-usage diagnostics, plus redacted support-bundle generation.
-
-For source-checkout maintenance outside the verifier:
-
-```bash
-./bin/lemon update --check
-```
-
-This delegates to `mix lemon.update --check`. It is a local maintenance check,
-not a remote binary updater.
-
-For route-specific model defaults, use the source wrapper:
-
-```bash
-./bin/lemon models --provider anthropic
-./bin/lemon providers --provider openai
-./bin/lemon policy list
-./bin/lemon proofs --limit 5
-./bin/lemon media --limit 5
-./bin/lemon readiness --limit 5
 ./bin/lemon channels
-./bin/lemon secrets status
-./bin/lemon skill list
-./bin/lemon usage
-./bin/lemon policy set telegram --account default --model anthropic:claude-sonnet-4-20250514
-```
-
-Use `./bin/lemon readiness --strict` when a script should fail unless all compact
-launch-readiness gates are ready.
-
-## Configure One Provider
-
-Use the setup wizard when possible:
-
-```bash
-./bin/lemon setup provider
-```
-
-For manual setup, create `~/.lemon/config.toml` and reference secrets by name:
-
-```toml
-[providers.anthropic]
-api_key_secret = "llm_anthropic_api_key_raw"
-
-[defaults]
-provider = "anthropic"
-model    = "anthropic:claude-sonnet-4-20250514"
-engine   = "lemon"
-```
-
-Store the secret:
-
-```bash
-./bin/lemon secrets set llm_anthropic_api_key_raw "sk-ant-..."
-```
-
-## Verify the Install
-
-Run doctor after setup:
-
-```bash
 ./bin/lemon doctor
 ```
 
-Generate a redacted support bundle if you need help:
-
-```bash
-./bin/lemon doctor --bundle
-```
-
-The bundle is designed to exclude provider keys, tokens, passwords, private
-prompts, memory contents, and tool outputs. Review it before sharing.
-
-For release-candidate source installs, use the full source verifier:
-
-```bash
-scripts/verify_source_install
-```
-
-## Release Artifacts
-
-Linux release profiles exist in the repository build system, but source install
-remains the primary supported path today. The product ledger tracks artifact and
-setup proof under [Hermes-on-BEAM Readiness](plans/lemon-1.0-mainstream-readiness.md).
-
-Stable 1.0 is scoped to source install plus Linux `x86_64` release tarballs. A
-one-line remote install script is not part of the initial support promise; add
-one only after it has the same artifact verification, rollback, and support
-bundle coverage as the tarball path.
-
-Current release profiles:
-
-- `lemon_runtime_min`
-- `lemon_runtime_full`
-
-Build locally:
-
-```bash
-MIX_ENV=prod mix release lemon_runtime_full
-```
-
-## Next Pages
-
-| Next step | Page |
-| --- | --- |
-| Full setup details | [Setup Guide](user-guide/setup.md) |
-| Configuration reference | [Config Reference](config.md) |
-| Runtime and release behavior | [Versioning and Channels](release/versioning_and_channels.md) |
-| Troubleshooting and quality gates | [Testing](testing.md) |
+The source wrapper follows the same setup and provider behavior described
+above. `./bin/lemon-tui` is the development TUI entry point after the source
+runtime is configured.

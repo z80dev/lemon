@@ -14,10 +14,10 @@ defmodule LemonGateway.ApplicationTest do
   # wholesale-replacing it leaks into every later test in the suite, which then
   # silently stops recording run history. Snapshot the real config and restore.
   @store_config Application.compile_env(:lemon_core, LemonCore.Store, [])
+  @executor_config Application.compile_env(:lemon_gateway, :executor)
 
   @base_expected_children [
     Elixir.LemonGateway.Config,
-    Elixir.LemonGateway.EngineRegistry,
     Elixir.LemonGateway.EngineLock,
     Elixir.LemonGateway.RunRegistry,
     Elixir.LemonGateway.ThreadRegistry,
@@ -49,6 +49,23 @@ defmodule LemonGateway.ApplicationTest do
     def start_link(_opts), do: :ignore
   end
 
+  defmodule ApplicationValidExecutor do
+    @behaviour Elixir.LemonGateway.Executor
+
+    @impl true
+    def start_run(%Elixir.LemonGateway.ExecutionRequest{}, _opts, _sink_pid),
+      do: {:ok, make_ref(), :application_test_context}
+
+    @impl true
+    def cancel(_ctx), do: :ok
+
+    @impl true
+    def steer(_ctx, _text), do: {:error, :unsupported}
+
+    @impl true
+    def redirect(_ctx, _text), do: {:error, :unsupported}
+  end
+
   # ---------------------------------------------------------------------
   # Test setup helpers
   # ---------------------------------------------------------------------
@@ -60,23 +77,31 @@ defmodule LemonGateway.ApplicationTest do
   defp configure_minimal_app do
     Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
       max_concurrent_runs: 2,
-      default_engine: "echo",
       enable_telegram: false
     })
 
-    Application.put_env(:lemon_gateway, :engines, [Elixir.LemonGateway.Engines.Echo])
     Application.put_env(:lemon_gateway, :transports, [])
     Application.put_env(:lemon_gateway, :commands, [])
+    Application.put_env(:lemon_gateway, :executor, ApplicationValidExecutor)
   end
 
   defp cleanup_config do
     Application.delete_env(:lemon_gateway, Elixir.LemonGateway.Config)
-    Application.delete_env(:lemon_gateway, :engines)
     Application.delete_env(:lemon_gateway, :transports)
     Application.delete_env(:lemon_gateway, :commands)
     Application.delete_env(:lemon_gateway, :config_path)
     Application.delete_env(:lemon_gateway, :gateway_ingress_enabled)
+    restore_executor_config()
+
     Application.put_env(:lemon_core, LemonCore.Store, @store_config)
+  end
+
+  defp restore_executor_config do
+    if is_nil(@executor_config) do
+      Application.delete_env(:lemon_gateway, :executor)
+    else
+      Application.put_env(:lemon_gateway, :executor, @executor_config)
+    end
   end
 
   defp expected_children do
@@ -185,11 +210,14 @@ defmodule LemonGateway.ApplicationTest do
       end
     end
 
-    test "supervision tree has expected child count" do
+    test "supervision tree has expected child count and no EngineRegistry child" do
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
       children = Supervisor.which_children(Elixir.LemonGateway.Supervisor)
+      child_ids = Enum.map(children, fn {id, _pid, _type, _modules} -> id end)
+
       assert length(children) == length(expected_children())
+      refute Elixir.LemonGateway.EngineRegistry in child_ids
     end
 
     test "all child processes are running" do
@@ -313,12 +341,10 @@ defmodule LemonGateway.ApplicationTest do
       assert is_map(config)
     end
 
-    test "EngineRegistry is available after startup" do
+    test "configured executor is ready after startup" do
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
-      assert is_pid(Process.whereis(Elixir.LemonGateway.EngineRegistry))
-      engines = Elixir.LemonGateway.EngineRegistry.list_engines()
-      assert is_list(engines)
+      assert Elixir.LemonGateway.Executor.validate_configured() == :ok
     end
 
     test "TransportRegistry is available when legacy ingress is enabled" do
@@ -344,7 +370,6 @@ defmodule LemonGateway.ApplicationTest do
     test "Scheduler depends on Config for max_concurrent_runs" do
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
         max_concurrent_runs: 5,
-        default_engine: "echo",
         enable_telegram: false
       })
 
@@ -399,23 +424,18 @@ defmodule LemonGateway.ApplicationTest do
     test "loads configuration from Application env" do
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
         max_concurrent_runs: 10,
-        default_engine: "test_engine",
         enable_telegram: false
       })
-
-      Application.put_env(:lemon_gateway, :engines, [Elixir.LemonGateway.Engines.Echo])
 
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
       config = Elixir.LemonGateway.Config.get()
       assert config.max_concurrent_runs == 10
-      assert config.default_engine == "test_engine"
     end
 
     test "uses default values when config is not set" do
       # Set minimal config (config will use defaults for unspecified keys)
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{})
-      Application.put_env(:lemon_gateway, :engines, [Elixir.LemonGateway.Engines.Echo])
       Application.put_env(:lemon_gateway, :transports, [])
       Application.put_env(:lemon_gateway, :commands, [])
 
@@ -424,41 +444,34 @@ defmodule LemonGateway.ApplicationTest do
       config = Elixir.LemonGateway.Config.get()
       # Default values from Config module
       assert config.max_concurrent_runs == 2
-      assert config.default_engine == "lemon"
       assert config.auto_resume == false
     end
 
-    test "Config.get/1 returns specific configuration keys" do
+    test "Config.get/1 returns configuration keys" do
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
         max_concurrent_runs: 7,
-        default_engine: "echo",
         enable_telegram: true
       })
 
-      Application.put_env(:lemon_gateway, :engines, [Elixir.LemonGateway.Engines.Echo])
       Application.put_env(:lemon_gateway, :transports, [])
 
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
       assert Elixir.LemonGateway.Config.get(:max_concurrent_runs) == 7
-      assert Elixir.LemonGateway.Config.get(:default_engine) == "echo"
       assert Elixir.LemonGateway.Config.get(:enable_telegram) == true
     end
 
     test "configuration supports projects" do
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
         max_concurrent_runs: 1,
-        default_engine: "echo",
         enable_telegram: false,
         projects: %{
           "test_project" => %{
-            root: "/tmp/test_project",
-            default_engine: "echo"
+            root: "/tmp/test_project"
           }
         }
       })
 
-      Application.put_env(:lemon_gateway, :engines, [Elixir.LemonGateway.Engines.Echo])
       Application.put_env(:lemon_gateway, :transports, [])
       Application.put_env(:lemon_gateway, :commands, [])
 
@@ -471,14 +484,12 @@ defmodule LemonGateway.ApplicationTest do
     test "configuration supports bindings" do
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
         max_concurrent_runs: 1,
-        default_engine: "echo",
         enable_telegram: false,
         bindings: [
           %{transport: :telegram, chat_id: 123, project: "test"}
         ]
       })
 
-      Application.put_env(:lemon_gateway, :engines, [Elixir.LemonGateway.Engines.Echo])
       Application.put_env(:lemon_gateway, :transports, [])
       Application.put_env(:lemon_gateway, :commands, [])
 
@@ -491,12 +502,10 @@ defmodule LemonGateway.ApplicationTest do
     test "configuration supports queue settings" do
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
         max_concurrent_runs: 1,
-        default_engine: "echo",
         enable_telegram: false,
         queue: %{cap: 10, drop: :oldest, mode: :collect}
       })
 
-      Application.put_env(:lemon_gateway, :engines, [Elixir.LemonGateway.Engines.Echo])
       Application.put_env(:lemon_gateway, :transports, [])
       Application.put_env(:lemon_gateway, :commands, [])
 
@@ -528,11 +537,9 @@ defmodule LemonGateway.ApplicationTest do
 
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
         max_concurrent_runs: 1,
-        default_engine: "echo",
         enable_telegram: false
       })
 
-      Application.put_env(:lemon_gateway, :engines, [Elixir.LemonGateway.Engines.Echo])
       Application.put_env(:lemon_gateway, :transports, [__MODULE__.MockTelegramTransportApp])
 
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
@@ -543,48 +550,14 @@ defmodule LemonGateway.ApplicationTest do
       refute "telegram" in enabled_ids
     end
 
-    test "custom engines list is loaded from config" do
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
-        max_concurrent_runs: 1,
-        default_engine: "echo",
-        enable_telegram: false
-      })
-
-      Application.put_env(:lemon_gateway, :engines, [Elixir.LemonGateway.Engines.Echo])
-
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-      engines = Elixir.LemonGateway.EngineRegistry.list_engines()
-      assert "echo" in engines
-    end
-
-    test "empty engines list is handled" do
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
-        max_concurrent_runs: 1,
-        default_engine: "echo",
-        enable_telegram: false
-      })
-
-      Application.put_env(:lemon_gateway, :engines, [])
-      Application.put_env(:lemon_gateway, :transports, [])
-      Application.put_env(:lemon_gateway, :commands, [])
-
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-      engines = Elixir.LemonGateway.EngineRegistry.list_engines()
-      assert engines == []
-    end
-
     test "empty commands list is handled" do
       Application.put_env(:lemon_gateway, :gateway_ingress_enabled, true)
 
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
         max_concurrent_runs: 1,
-        default_engine: "echo",
         enable_telegram: false
       })
 
-      Application.put_env(:lemon_gateway, :engines, [Elixir.LemonGateway.Engines.Echo])
       Application.put_env(:lemon_gateway, :transports, [])
       Application.put_env(:lemon_gateway, :commands, [])
 
@@ -597,11 +570,9 @@ defmodule LemonGateway.ApplicationTest do
     test "Store backend configuration is respected" do
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
         max_concurrent_runs: 1,
-        default_engine: "echo",
         enable_telegram: false
       })
 
-      Application.put_env(:lemon_gateway, :engines, [Elixir.LemonGateway.Engines.Echo])
       Application.put_env(:lemon_gateway, :transports, [])
       Application.put_env(:lemon_gateway, :commands, [])
 
@@ -730,6 +701,7 @@ defmodule LemonGateway.ApplicationTest do
   describe "error handling during startup" do
     setup do
       stop_application()
+      Application.put_env(:lemon_gateway, :executor, ApplicationValidExecutor)
 
       on_exit(fn ->
         stop_application()
@@ -739,112 +711,13 @@ defmodule LemonGateway.ApplicationTest do
       :ok
     end
 
-    test "startup fails with invalid engine ID (reserved 'default')" do
-      defmodule InvalidDefaultEngine do
-        @behaviour Elixir.LemonGateway.Engine
-
-        alias LemonCore.ResumeToken
-        alias LemonGateway.Types.Job
-
-        @impl true
-        def id, do: "default"
-        @impl true
-        def format_resume(%ResumeToken{value: sid}), do: "default resume #{sid}"
-        @impl true
-        def extract_resume(_text), do: nil
-        @impl true
-        def is_resume_line(_line), do: false
-        @impl true
-        def supports_steer?, do: false
-        @impl true
-        def start_run(%Job{}, _opts, _sink_pid), do: {:ok, make_ref(), %{}}
-        @impl true
-        def cancel(_ctx), do: :ok
-      end
-
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
-        max_concurrent_runs: 1,
-        default_engine: "echo",
-        enable_telegram: false
-      })
-
-      Application.put_env(:lemon_gateway, :engines, [InvalidDefaultEngine])
-      Application.put_env(:lemon_gateway, :transports, [])
-      Application.put_env(:lemon_gateway, :commands, [])
+    test "startup rejects a configured executor that cannot be loaded" do
+      configure_minimal_app()
+      executor = LemonGateway.ApplicationTest.UnloadableExecutor
+      Application.put_env(:lemon_gateway, :executor, executor)
 
       assert {:error, _} = Application.ensure_all_started(:lemon_gateway)
-    end
-
-    test "startup fails with invalid engine ID (reserved 'help')" do
-      defmodule InvalidHelpEngine do
-        @behaviour Elixir.LemonGateway.Engine
-
-        alias LemonCore.ResumeToken
-        alias LemonGateway.Types.Job
-
-        @impl true
-        def id, do: "help"
-        @impl true
-        def format_resume(%ResumeToken{value: sid}), do: "help resume #{sid}"
-        @impl true
-        def extract_resume(_text), do: nil
-        @impl true
-        def is_resume_line(_line), do: false
-        @impl true
-        def supports_steer?, do: false
-        @impl true
-        def start_run(%Job{}, _opts, _sink_pid), do: {:ok, make_ref(), %{}}
-        @impl true
-        def cancel(_ctx), do: :ok
-      end
-
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
-        max_concurrent_runs: 1,
-        default_engine: "echo",
-        enable_telegram: false
-      })
-
-      Application.put_env(:lemon_gateway, :engines, [InvalidHelpEngine])
-      Application.put_env(:lemon_gateway, :transports, [])
-      Application.put_env(:lemon_gateway, :commands, [])
-
-      assert {:error, _} = Application.ensure_all_started(:lemon_gateway)
-    end
-
-    test "startup fails with invalid engine ID format (uppercase)" do
-      defmodule UppercaseEngine do
-        @behaviour Elixir.LemonGateway.Engine
-
-        alias LemonCore.ResumeToken
-        alias LemonGateway.Types.Job
-
-        @impl true
-        def id, do: "InvalidUppercase"
-        @impl true
-        def format_resume(%ResumeToken{value: sid}), do: "upper resume #{sid}"
-        @impl true
-        def extract_resume(_text), do: nil
-        @impl true
-        def is_resume_line(_line), do: false
-        @impl true
-        def supports_steer?, do: false
-        @impl true
-        def start_run(%Job{}, _opts, _sink_pid), do: {:ok, make_ref(), %{}}
-        @impl true
-        def cancel(_ctx), do: :ok
-      end
-
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
-        max_concurrent_runs: 1,
-        default_engine: "echo",
-        enable_telegram: false
-      })
-
-      Application.put_env(:lemon_gateway, :engines, [UppercaseEngine])
-      Application.put_env(:lemon_gateway, :transports, [])
-      Application.put_env(:lemon_gateway, :commands, [])
-
-      assert {:error, _} = Application.ensure_all_started(:lemon_gateway)
+      refute Process.whereis(Elixir.LemonGateway.Supervisor)
     end
 
     test "startup fails with reserved command name" do
@@ -861,61 +734,13 @@ defmodule LemonGateway.ApplicationTest do
 
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
         max_concurrent_runs: 1,
-        default_engine: "echo",
         enable_telegram: false
       })
 
-      Application.put_env(:lemon_gateway, :engines, [Elixir.LemonGateway.Engines.Echo])
       Application.put_env(:lemon_gateway, :transports, [])
       Application.put_env(:lemon_gateway, :commands, [InvalidCommand])
 
       assert {:error, _} = Application.ensure_all_started(:lemon_gateway)
-    end
-
-    test "recovers after failed startup and can start with valid config" do
-      # First try with invalid config
-      defmodule BadEngine do
-        @behaviour Elixir.LemonGateway.Engine
-
-        alias LemonCore.ResumeToken
-        alias LemonGateway.Types.Job
-
-        @impl true
-        def id, do: "default"
-        @impl true
-        def format_resume(%ResumeToken{value: sid}), do: "bad resume #{sid}"
-        @impl true
-        def extract_resume(_text), do: nil
-        @impl true
-        def is_resume_line(_line), do: false
-        @impl true
-        def supports_steer?, do: false
-        @impl true
-        def start_run(%Job{}, _opts, _sink_pid), do: {:ok, make_ref(), %{}}
-        @impl true
-        def cancel(_ctx), do: :ok
-      end
-
-      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
-        max_concurrent_runs: 1,
-        default_engine: "echo",
-        enable_telegram: false
-      })
-
-      Application.put_env(:lemon_gateway, :engines, [BadEngine])
-      Application.put_env(:lemon_gateway, :transports, [])
-      Application.put_env(:lemon_gateway, :commands, [])
-
-      # Should fail
-      {:error, _} = Application.ensure_all_started(:lemon_gateway)
-      stop_application()
-
-      # Now configure valid settings
-      configure_minimal_app()
-
-      # Should succeed
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-      assert is_pid(Process.whereis(Elixir.LemonGateway.Supervisor))
     end
   end
 
@@ -947,15 +772,10 @@ defmodule LemonGateway.ApplicationTest do
       assert is_map(config)
     end
 
-    test "EngineRegistry process is registered and responding" do
+    test "configured executor is valid" do
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
-      pid = Process.whereis(Elixir.LemonGateway.EngineRegistry)
-      assert is_pid(pid)
-
-      # Should respond to calls
-      engines = Elixir.LemonGateway.EngineRegistry.list_engines()
-      assert is_list(engines)
+      assert Elixir.LemonGateway.Executor.validate_configured() == :ok
     end
 
     test "TransportRegistry process is registered and responding when legacy ingress is enabled" do
@@ -1077,26 +897,22 @@ defmodule LemonGateway.ApplicationTest do
       :ok
     end
 
-    test "can submit a job after startup" do
+    test "can submit an execution request after startup" do
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-      alias Elixir.LemonGateway.Types.Job
 
       session_key = "test:1"
 
-      job = %Job{
+      request = %ExecutionRequest{
+        run_id: nil,
         session_key: session_key,
         prompt: "test message",
         resume: nil,
-        engine_id: "echo",
+        conversation_key: {:session, session_key},
         meta: %{notify_pid: self(), user_msg_id: 1}
       }
 
       # Submit should succeed
-      assert :ok =
-               job
-               |> ExecutionRequest.from_job(conversation_key: {:session, session_key})
-               |> Elixir.LemonGateway.Scheduler.submit_execution()
+      assert :ok = Elixir.LemonGateway.Scheduler.submit_execution(request)
     end
 
     test "Store persists data across operations" do
@@ -1150,20 +966,16 @@ defmodule LemonGateway.ApplicationTest do
       release2.()
     end
 
-    test "Config values are accessible by all components" do
+    test "configuration values are accessible by all components" do
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
         max_concurrent_runs: 42,
-        default_engine: "test_engine",
         enable_telegram: false
       })
-
-      Application.put_env(:lemon_gateway, :engines, [Elixir.LemonGateway.Engines.Echo])
 
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
       # Config should be accessible
       assert Elixir.LemonGateway.Config.get(:max_concurrent_runs) == 42
-      assert Elixir.LemonGateway.Config.get(:default_engine) == "test_engine"
     end
   end
 
@@ -1244,28 +1056,6 @@ defmodule LemonGateway.ApplicationTest do
       # Should still be functional
       result = LemonCore.Store.get_chat_state({:test, 1})
       assert result == nil
-    end
-
-    test "EngineRegistry process is restarted if it crashes" do
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-      original_pid = Process.whereis(Elixir.LemonGateway.EngineRegistry)
-      assert is_pid(original_pid)
-
-      # Kill the process
-      Process.exit(original_pid, :kill)
-
-      # Wait for restart
-      Process.sleep(100)
-
-      # Should have a new pid
-      new_pid = Process.whereis(Elixir.LemonGateway.EngineRegistry)
-      assert is_pid(new_pid)
-      assert new_pid != original_pid
-
-      # Should still be functional
-      engines = Elixir.LemonGateway.EngineRegistry.list_engines()
-      assert is_list(engines)
     end
 
     test "EngineLock process is restarted if it crashes" do

@@ -1,0 +1,557 @@
+#!/usr/bin/env bash
+# product_smoke_local — local, isolated equivalent of the CI product smoke
+# (.github/workflows/product-smoke.yml), runnable on a dev machine while a
+# real Lemon instance is up on the same host.
+#
+# Usage:
+#   scripts/product_smoke_local             # dev boot via bin/lemon (fast)
+#   scripts/product_smoke_local --release   # build + boot the prod release like CI
+#   scripts/product_smoke_local --help
+#
+# What it does (mirrors the CI probe sequence):
+#   1. writes a fixture ~/.lemon/config.toml (telegram disabled) into a temp HOME
+#   2. boots a throwaway runtime (dev: bin/lemon; --release: mix release + daemon)
+#   3. polls control-plane /healthz until healthy
+#   4. WebSocket probe: connect -> hello-ok -> health -> native agent
+#      -> agent.wait asserting a deterministic local-provider reply
+#   5. checks web /healthz (full runtime profile serves "ok")
+#   6. writes a redacted proof artifact to .lemon/proofs/product-smoke-local-latest.json
+#
+# Isolation guarantees — safe to run next to a production node:
+#   - HOME is a temp dir, so the runtime reads the fixture ~/.lemon/config.toml
+#     and never touches the operator's real ~/.lemon (MIX_HOME/HEX_HOME are
+#     pinned to the real cache dirs first, so builds stay warm)
+#   - unique node name product_smoke_$$ + random cookie: cannot join or attach
+#     to any other Erlang node
+#   - control-plane / web / sim-UI ports are free ports chosen at runtime
+#   - LEMON_GATEWAY_HEALTH_PORT=0 / LEMON_ROUTER_HEALTH_PORT=0: the fixed-port
+#     health listeners (4042/…) bind an ephemeral port instead of colliding
+#     with a running instance (documented port-collision override)
+#   - store + dotenv dirs live in the temp workdir; ambient provider/channel
+#     credentials are scrubbed from the environment before boot
+#   - cleanup kills only the pid started here, then removes the temp workdir
+#
+# Env knobs:
+#   PRODUCT_SMOKE_BOOT_TIMEOUT   seconds to wait for control-plane health
+#                                (default 420 — first dev boot compiles)
+#   PRODUCT_SMOKE_KEEP_WORKDIR=1 keep the temp workdir for debugging
+#
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_ROOT"
+
+MODE="dev"
+case "${1:-}" in
+  --release) MODE="release" ;;
+  --help | -h)
+    sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'
+    exit 0
+    ;;
+  "") ;;
+  *)
+    echo "ERROR: unknown argument: $1 (try --help)" >&2
+    exit 64
+    ;;
+esac
+
+for cmd in mix curl python3; do
+  command -v "$cmd" > /dev/null 2>&1 || {
+    echo "ERROR: required command not found: $cmd" >&2
+    exit 69
+  }
+done
+
+BOOT_TIMEOUT="${PRODUCT_SMOKE_BOOT_TIMEOUT:-420}"
+RELEASE_PROFILE="lemon_runtime_full"
+
+# ── Temp workdir + scoped HOME ───────────────────────────────────────────────
+
+REAL_HOME="$HOME"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/lemon-product-smoke.XXXXXX")"
+# Minimal early trap so a failure before the full cleanup trap is installed
+# (port selection, fixture writes, ...) still removes the temp workdir.
+trap 'rm -rf "$WORK"' EXIT
+
+# Keep mix/hex caches warm before HOME moves to the temp dir.
+export MIX_HOME="${MIX_HOME:-$REAL_HOME/.mix}"
+export HEX_HOME="${HEX_HOME:-$REAL_HOME/.hex}"
+export ASDF_DATA_DIR="${ASDF_DATA_DIR:-$REAL_HOME/.asdf}"
+
+export HOME="$WORK/home"
+mkdir -p "$HOME/.lemon" "$WORK/dotenv" "$WORK/store"
+
+# ── Scrub ambient live credentials (same list as scripts/test) ───────────────
+
+SCRUB_CREDENTIAL_ENV_VARS=(
+  AI21_API_KEY ANTHROPIC_API_KEY ANTHROPIC_TOKEN
+  AWS_ACCESS_KEY_ID AWS_PROFILE AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+  AZURE_OPENAI_API_KEY BRAVE_API_KEY CHATGPT_TOKEN CLAUDE_CODE_OAUTH_TOKEN
+  DEEPGRAM_API_KEY DINGTALK_BOT_TOKEN DISCORD_BOT_TOKEN ELEVENLABS_API_KEY
+  FEISHU_APP_SECRET FEISHU_BOT_TOKEN FIREWORKS_API_KEY GEMINI_API_KEY
+  GH_TOKEN GITHUB_COPILOT_API_KEY GITHUB_TOKEN GOOGLE_API_KEY
+  GOOGLE_APPLICATION_CREDENTIALS GOOGLE_APPLICATION_CREDENTIALS_JSON
+  GOOGLE_CLOUD_PROJECT GOOGLE_CLOUD_PROJECT_ID GOOGLE_GENERATIVE_AI_API_KEY
+  GOOGLE_GEMINI_CLI_API_KEY GROQ_API_KEY KIMI_API_KEY
+  LEMON_EVAL_API_KEY LEMON_EVAL_API_KEY_SECRET LEMON_SECRETS_MASTER_KEY
+  MINIMAX_API_KEY MISTRAL_API_KEY MOONSHOT_API_KEY NOUS_API_KEY
+  OPENAI_API_KEY OPENAI_CODEX_API_KEY OPENCODE_API_KEY OPENROUTER_API_KEY
+  INTEGRATION_API_KEY INTEGRATION_API_KEY_SECRET
+  SLACK_APP_TOKEN SLACK_BOT_TOKEN TELEGRAM_BOT_TOKEN TWILIO_AUTH_TOKEN
+  XAI_API_KEY X_API_ACCESS_TOKEN X_API_ACCESS_TOKEN_SECRET X_API_BEARER_TOKEN
+  X_API_CLIENT_ID X_API_CLIENT_SECRET X_API_CONSUMER_KEY X_API_CONSUMER_SECRET
+  X_API_REFRESH_TOKEN X_BEARER_TOKEN XMTP_WALLET_KEY ZAI_API_KEY
+)
+for key in "${SCRUB_CREDENTIAL_ENV_VARS[@]}"; do
+  unset "$key" || true
+done
+
+# ── Isolated runtime identity, ports, env ────────────────────────────────────
+
+SNAME="product_smoke_$$"
+COOKIE="$(python3 -c 'import secrets; print("product_smoke_" + secrets.token_hex(16))')"
+
+# Four distinct free ports, held simultaneously while chosen.
+read -r CONTROL_PORT WEB_PORT SIM_PORT PROVIDER_PORT < <(python3 - <<'PY'
+import socket
+
+socks = []
+for _ in range(4):
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    socks.append(s)
+
+print(" ".join(str(s.getsockname()[1]) for s in socks))
+
+for s in socks:
+    s.close()
+PY
+)
+
+export LEMON_CONTROL_PLANE_PORT="$CONTROL_PORT"
+export LEMON_WEB_PORT="$WEB_PORT"
+export LEMON_SIM_UI_PORT="$SIM_PORT"
+# Documented port-collision override: the gateway/router health listeners
+# default to fixed ports; 0 = bind an ephemeral port so a running instance's
+# listeners are never contended.
+export LEMON_GATEWAY_HEALTH_PORT=0
+export LEMON_ROUTER_HEALTH_PORT=0
+export LEMON_STORE_PATH="$WORK/store"
+export LEMON_DOTENV_DIR="$WORK/dotenv"
+export LEMON_GATEWAY_NODE_NAME="$SNAME"
+export LEMON_GATEWAY_NODE_COOKIE="$COOKIE"
+# Same non-secret dummy values the CI workflow uses.
+export LEMON_SECRETS_MASTER_KEY="smoke-test-dummy-key-32-chars-!!"
+export LEMON_WEB_SECRET_KEY_BASE="product_smoke_secret_key_base_product_smoke_secret_key_base_product_smoke"
+export OPENAI_API_KEY="product-smoke-local-provider-key"
+export PHX_SERVER=1
+
+# ── Fixture config (identical to the CI fixture) ─────────────────────────────
+
+cat > "$HOME/.lemon/config.toml" <<EOF
+[defaults]
+provider = "openai"
+model = "gpt-4o-mini"
+
+[providers.openai]
+base_url = "http://127.0.0.1:$PROVIDER_PORT/v1"
+
+[gateway]
+max_concurrent_runs = 1
+auto_resume = false
+enable_telegram = false
+
+[features]
+routing_feedback       = "opt-in"
+skill_synthesis_drafts = "opt-in"
+EOF
+
+# ── Cleanup ──────────────────────────────────────────────────────────────────
+
+RUNTIME_PID=""
+PROVIDER_PID=""
+RELEASE_BIN=""
+PASSED=0
+
+cleanup() {
+  local status=$?
+  trap - EXIT
+
+  set +e
+
+  if [ "$MODE" = "release" ] && [ -n "$RELEASE_BIN" ] && [ -x "$RELEASE_BIN" ]; then
+    "$RELEASE_BIN" stop > /dev/null 2>&1
+  fi
+
+  if [ -n "$PROVIDER_PID" ] && kill -0 "$PROVIDER_PID" 2> /dev/null; then
+    kill -TERM "$PROVIDER_PID" 2> /dev/null
+  fi
+  if [ -n "$RUNTIME_PID" ] && kill -0 "$RUNTIME_PID" 2> /dev/null; then
+    # Kill only the runtime this script started (plus any still-running
+    # direct child, e.g. an in-flight `mix compile` during early abort).
+    pkill -TERM -P "$RUNTIME_PID" 2> /dev/null
+    kill -TERM "$RUNTIME_PID" 2> /dev/null
+    for _ in $(seq 1 20); do
+      kill -0 "$RUNTIME_PID" 2> /dev/null || break
+      sleep 0.5
+    done
+    if kill -0 "$RUNTIME_PID" 2> /dev/null; then
+      kill -KILL "$RUNTIME_PID" 2> /dev/null
+    fi
+  fi
+
+  if [ "$PASSED" -ne 1 ] && [ -f "$WORK/runtime.log" ]; then
+    echo "── runtime.log (last 60 lines) ─────────────────────────────" >&2
+    tail -n 60 "$WORK/runtime.log" >&2
+    echo "────────────────────────────────────────────────────────────" >&2
+  fi
+
+  if [ "${PRODUCT_SMOKE_KEEP_WORKDIR:-0}" = "1" ]; then
+    echo "[smoke] Workdir kept: $WORK"
+  else
+    rm -rf "$WORK"
+  fi
+
+  if [ "$PASSED" -eq 1 ]; then
+    echo "[smoke] PASS — product smoke ($MODE mode) green."
+    exit 0
+  else
+    echo "[smoke] FAIL — product smoke ($MODE mode) failed (exit $status)." >&2
+    exit "${status:-1}"
+  fi
+}
+trap cleanup EXIT
+
+# ── Deterministic local provider ─────────────────────────────────────────────
+
+cat > "$WORK/native_provider_fixture.py" <<'PY'
+import json
+import os
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, _format, *_args):
+        pass
+
+    def do_GET(self):
+        if self.path == "/healthz":
+            body = b"ok"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        self.send_error(404)
+
+    def do_POST(self):
+        if self.path != "/v1/responses":
+            self.send_error(404)
+            return
+        length = int(self.headers.get("Content-Length", "0"))
+        json.loads(self.rfile.read(length))
+        events = [
+            {
+                "type": "response.output_item.added",
+                "item": {"type": "message"}
+            },
+            {
+                "type": "response.output_text.delta",
+                "delta": "Native product smoke fixture response"
+            },
+            {
+                "type": "response.completed",
+                "response": {
+                    "status": "completed",
+                    "usage": {
+                        "input_tokens": 1,
+                        "output_tokens": 1,
+                        "total_tokens": 2
+                    }
+                }
+            }
+        ]
+        body = "".join(
+            f"data: {json.dumps(event, separators=(',', ':'))}\n\n"
+            for event in events
+        ) + "data: [DONE]\n\n"
+        encoded = body.encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
+
+
+ThreadingHTTPServer(
+    ("127.0.0.1", int(os.environ["PROVIDER_PORT"])), Handler
+).serve_forever()
+PY
+
+PROVIDER_PORT="$PROVIDER_PORT" python3 "$WORK/native_provider_fixture.py" \
+  > "$WORK/native_provider_fixture.log" 2>&1 &
+PROVIDER_PID=$!
+
+for _ in $(seq 1 20); do
+  curl -fsS --max-time 1 "http://127.0.0.1:$PROVIDER_PORT/healthz" > /dev/null && break
+  sleep 0.25
+done
+curl -fsS --max-time 1 "http://127.0.0.1:$PROVIDER_PORT/healthz" > /dev/null
+
+# ── Boot ─────────────────────────────────────────────────────────────────────
+
+echo "[smoke] Mode:          $MODE"
+echo "[smoke] Workdir:       $WORK"
+echo "[smoke] Node:          $SNAME (random cookie)"
+echo "[smoke] Control plane: 127.0.0.1:$CONTROL_PORT"
+echo "[smoke] Web:           127.0.0.1:$WEB_PORT"
+echo "[smoke] Sim UI:        127.0.0.1:$SIM_PORT"
+
+START_EPOCH="$(date +%s)"
+
+if [ "$MODE" = "release" ]; then
+  export MIX_ENV=prod
+  export RELEASE_DISTRIBUTION=sname
+  export RELEASE_NODE="$SNAME"
+  export RELEASE_COOKIE="$COOKIE"
+
+  echo "[smoke] Building release $RELEASE_PROFILE (MIX_ENV=prod)..."
+  mix deps.get --only prod
+  mix compile
+  mix release "$RELEASE_PROFILE" --overwrite
+
+  RELEASE_BIN="$REPO_ROOT/_build/prod/rel/$RELEASE_PROFILE/bin/$RELEASE_PROFILE"
+  echo "[smoke] Starting release daemon..."
+  "$RELEASE_BIN" daemon
+else
+  echo "[smoke] Booting dev runtime via bin/lemon (log: $WORK/runtime.log)..."
+  ./bin/lemon \
+    --sname "$SNAME" \
+    --cookie "$COOKIE" \
+    --port "$CONTROL_PORT" \
+    --web-port "$WEB_PORT" \
+    --sim-port "$SIM_PORT" \
+    > "$WORK/runtime.log" 2>&1 &
+  RUNTIME_PID=$!
+fi
+
+# ── Wait for control-plane health ────────────────────────────────────────────
+
+echo "[smoke] Waiting for control-plane /healthz (timeout ${BOOT_TIMEOUT}s)..."
+HEALTH_URL="http://127.0.0.1:$CONTROL_PORT/healthz"
+DEADLINE=$(($(date +%s) + BOOT_TIMEOUT))
+until curl -sS --max-time 2 "$HEALTH_URL" > /dev/null 2>&1; do
+  # Release mode detaches: pick up the daemon pid as soon as it is known so
+  # the early-death check below is not inert for the whole boot timeout.
+  if [ "$MODE" = "release" ] && [ -z "$RUNTIME_PID" ]; then
+    RUNTIME_PID="$("$RELEASE_BIN" pid 2> /dev/null | tr -d '[:space:]')" || RUNTIME_PID=""
+  fi
+  if [ -n "$RUNTIME_PID" ] && ! kill -0 "$RUNTIME_PID" 2> /dev/null; then
+    echo "ERROR: runtime process $RUNTIME_PID exited before becoming healthy." >&2
+    exit 1
+  fi
+  if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+    echo "ERROR: control plane not healthy within ${BOOT_TIMEOUT}s." >&2
+    exit 1
+  fi
+  sleep 2
+done
+
+# In release mode the daemon detached; resolve its pid for targeted cleanup.
+if [ "$MODE" = "release" ]; then
+  RUNTIME_PID="$("$RELEASE_BIN" pid | tr -d '[:space:]')" || RUNTIME_PID=""
+fi
+BOOT_SECONDS=$(($(date +%s) - START_EPOCH))
+echo "[smoke] Control plane healthy after ${BOOT_SECONDS}s (runtime pid: ${RUNTIME_PID:-unknown})."
+
+# ── Control-plane healthz payload (same assertion as CI) ─────────────────────
+
+HEALTHZ_RESPONSE="$(curl -sS --max-time 5 "$HEALTH_URL")"
+echo "[smoke] healthz: $HEALTHZ_RESPONSE"
+echo "$HEALTHZ_RESPONSE" | python3 -c '
+import json, sys
+
+d = json.load(sys.stdin)
+if d.get("ok") is True:
+    print("[smoke] Healthz ok")
+    sys.exit(0)
+status = d.get("status", "")
+if status not in ("ok", "degraded"):
+    print(f"ERROR: healthz returned unexpected status: {status}", file=sys.stderr)
+    sys.exit(1)
+print(f"[smoke] Healthz status: {status}")
+'
+
+# ── WebSocket probe: connect -> hello-ok -> health -> echo agent ─────────────
+# Same inline WebSockex probe the CI workflow runs.
+
+cat > "$WORK/ws_probe.exs" <<'EOF'
+defmodule LemonProductSmoke.WSProbe do
+  use WebSockex
+
+  def handle_frame({:text, frame}, parent) do
+    send(parent, {:ws_frame, frame})
+    {:ok, parent}
+  end
+
+  def handle_frame(_frame, parent), do: {:ok, parent}
+end
+
+url = System.fetch_env!("LEMON_CONTROL_PLANE_WS_URL")
+parent = self()
+
+{:ok, pid} = WebSockex.start_link(url, LemonProductSmoke.WSProbe, parent)
+
+send_req = fn id, method, params ->
+  frame = Jason.encode!(%{
+    "type" => "req",
+    "id" => id,
+    "method" => method,
+    "params" => params
+  })
+
+  :ok = WebSockex.send_frame(pid, {:text, frame})
+end
+
+receive_matching = fn match, timeout_ms ->
+  deadline = System.monotonic_time(:millisecond) + timeout_ms
+
+  receive_loop = fn receive_loop ->
+    remaining = max(deadline - System.monotonic_time(:millisecond), 0)
+
+    receive do
+      {:ws_frame, frame} ->
+        decoded = Jason.decode!(frame)
+
+        if match.(decoded) do
+          decoded
+        else
+          receive_loop.(receive_loop)
+        end
+    after
+      remaining -> raise "timed out waiting for websocket response"
+    end
+  end
+
+  receive_loop.(receive_loop)
+end
+
+receive_response = fn id, timeout_ms ->
+  receive_matching.(fn frame -> frame["type"] == "res" and frame["id"] == id end, timeout_ms)
+end
+
+send_req.("connect-1", "connect", %{
+  "client" => %{
+    "id" => "product-smoke-local",
+    "name" => "Product Smoke Local"
+  }
+})
+
+hello = receive_matching.(fn frame -> frame["type"] == "hello-ok" end, 5_000)
+
+unless hello["type"] == "hello-ok" and is_list(hello["features"]["methods"]) and
+         "health" in hello["features"]["methods"] do
+  raise "unexpected hello-ok frame: #{inspect(hello)}"
+end
+
+send_req.("health-1", "health", %{})
+health = receive_response.("health-1", 5_000)
+
+unless health["type"] == "res" and health["id"] == "health-1" and
+         health["ok"] == true and health["payload"]["ok"] == true do
+  raise "unexpected health response: #{inspect(health)}"
+end
+
+prompt = "product-smoke-native-#{System.unique_integer([:positive])}"
+
+send_req.("agent-1", "agent", %{
+  "prompt" => prompt,
+  "session_key" => "agent:product-smoke:main",
+  "idempotency_key" => "product-smoke-#{System.system_time(:millisecond)}"
+})
+
+agent = receive_response.("agent-1", 5_000)
+
+unless agent["ok"] == true and is_binary(agent["payload"]["run_id"]) do
+  raise "unexpected agent response: #{inspect(agent)}"
+end
+
+send_req.("agent-wait-1", "agent.wait", %{
+  "runId" => agent["payload"]["run_id"],
+  "timeoutMs" => 10_000
+})
+
+completed = receive_response.("agent-wait-1", 15_000)
+
+unless completed["ok"] == true and completed["payload"]["ok"] == true and
+         completed["payload"]["answer"] == "Native product smoke fixture response" do
+  raise "unexpected agent.wait response: #{inspect(completed)}"
+end
+
+IO.puts("control-plane websocket health and native agent run ok")
+EOF
+
+echo "[smoke] Running WebSocket probe (connect -> health -> native agent)..."
+PROBE_MIX_ENV="dev"
+[ "$MODE" = "release" ] && PROBE_MIX_ENV="prod"
+LEMON_CONTROL_PLANE_WS_URL="ws://127.0.0.1:$CONTROL_PORT/ws" \
+  MIX_ENV="$PROBE_MIX_ENV" mix run --no-start "$WORK/ws_probe.exs"
+
+# ── Web healthz (full runtime profile) ───────────────────────────────────────
+
+echo "[smoke] Checking web /healthz..."
+WEB_RESPONSE="$(curl -sS --max-time 5 "http://127.0.0.1:$WEB_PORT/healthz")"
+echo "[smoke] web healthz: $WEB_RESPONSE"
+if [ "$WEB_RESPONSE" != "ok" ]; then
+  echo "ERROR: web healthz expected \"ok\", got: $WEB_RESPONSE" >&2
+  exit 1
+fi
+
+# ── Redacted proof artifact (house smoke-script pattern) ─────────────────────
+
+PROOF_DIR="$REPO_ROOT/.lemon/proofs"
+mkdir -p "$PROOF_DIR"
+python3 - "$PROOF_DIR/product-smoke-local-latest.json" <<PY
+import json
+import sys
+import time
+
+proof = {
+    "script": "scripts/product_smoke_local",
+    "mode": "$MODE",
+    "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+    "boot_seconds": $BOOT_SECONDS,
+    "node": "$SNAME",
+    "ports": {
+        "control_plane": $CONTROL_PORT,
+        "web": $WEB_PORT,
+        "sim_ui": $SIM_PORT,
+        "gateway_health": "ephemeral (LEMON_GATEWAY_HEALTH_PORT=0)",
+        "router_health": "ephemeral (LEMON_ROUTER_HEALTH_PORT=0)",
+    },
+    "checks": {
+        "control_plane_healthz": "ok",
+        "ws_connect_hello_ok": "ok",
+        "ws_health": "ok",
+        "ws_echo_agent_run": "ok",
+        "web_healthz": "ok",
+    },
+    "isolation": {
+        "temp_home": True,
+        "telegram_enabled": False,
+        "unique_sname_random_cookie": True,
+        "isolated_store_and_dotenv": True,
+    },
+}
+
+with open(sys.argv[1], "w") as f:
+    json.dump(proof, f, indent=2)
+    f.write("\n")
+print(f"[smoke] Proof written: {sys.argv[1]}")
+PY
+
+PASSED=1

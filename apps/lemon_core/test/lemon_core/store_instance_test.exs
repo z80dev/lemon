@@ -134,8 +134,8 @@ defmodule LemonCore.StoreInstanceTest do
       assert ReadCache.table_for(:progress) == :lemon_store_cache_progress
       assert ReadCache.table_for(:sessions_index) == :lemon_store_cache_sessions_index
 
-      assert ReadCache.table_for(:telegram_known_targets) ==
-               :lemon_store_cache_telegram_known_targets
+      assert ReadCache.table_for(:demo_targets) ==
+               :lemon_store_cache_demo_targets
 
       assert ReadCache.table_for(LemonCore.Store, :chat) == :lemon_store_cache_chat
 

@@ -166,7 +166,6 @@ defmodule LemonRouter.RunProcess do
 
       Logger.debug(
         "RunProcess init run_id=#{inspect(run_id)} session_key=#{inspect(session_key)} " <>
-          "engine=#{inspect(execution_request && execution_request.engine_id)} " <>
           "queue_mode=#{inspect(queue_mode)} " <>
           "submit_to_gateway?=#{inspect(submit_to_gateway?)}"
       )
@@ -175,7 +174,6 @@ defmodule LemonRouter.RunProcess do
       Introspection.record(
         :run_started,
         %{
-          engine_id: execution_request && execution_request.engine_id,
           queue_mode: queue_mode
         },
         run_id: run_id,
@@ -593,14 +591,15 @@ defmodule LemonRouter.RunProcess do
         event =
           LemonCore.Event.new(
             :run_completed,
-            %{
-              completed: %{
-                ok: false,
-                error: :gateway_run_missing_after_start,
-                answer: ""
-              },
+            Events.RunCompleted.new(%{
+              completed:
+                Events.Completion.new(%{
+                  ok: false,
+                  error: :gateway_run_missing_after_start,
+                  answer: ""
+                }),
               duration_ms: nil
-            },
+            }),
             %{
               run_id: state.run_id,
               session_key: state.session_key,

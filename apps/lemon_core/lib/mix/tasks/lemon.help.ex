@@ -38,6 +38,9 @@ defmodule Mix.Tasks.Lemon.Help do
      ~w(lemon.store.migrate_jsonl_to_sqlite lemon.memory lemon.policy lemon.send)},
     {"Skills", ~w(lemon.skill lemon.skill.lint)},
     {"Benchmarks (platform)", ~w(lemon.bench)},
+    # ── lemon-sim product block: these three groups and the lemon.sim.* entries
+    # in @fallback leave with the lemon-sim repo (docs/platform-split.md Phase 5).
+    # Task names only — no compile-time reference to any sim module. ──
     {"Sim: scenario runners",
      ~w(lemon.sim.auction lemon.sim.courtroom lemon.sim.diplomacy lemon.sim.dungeon_crawl
         lemon.sim.intel_network lemon.sim.legislature lemon.sim.murder_mystery lemon.sim.pandemic
@@ -47,18 +50,20 @@ defmodule Mix.Tasks.Lemon.Help do
     {"Sim: replay renderers", ~w(lemon.sim.replay lemon.sim.vending_bench_replay)},
     {"Sim: scoring, suites & ratings",
      ~w(lemon.sim.score lemon.sim.verify lemon.sim.suite lemon.sim.leaderboard lemon.sim.ratings)}
+    # ── end lemon-sim product block ──
   ]
 
   @fallback %{
     "lemon.new" => "Scaffold a new Lemon agent project (installer archive)",
     "lemon.policy" => "Manage per-route model policies (channel/account/peer/thread)",
-    "lemon.channels" => "Show redacted Telegram and Discord launch readiness",
+    "lemon.channels" => "Show redacted channel launch readiness",
     "lemon.config" => "Validate and inspect Lemon configuration",
     "lemon.proofs" => "Show redacted local proof artifact status",
     "lemon.readiness" => "Show a compact redacted launch-readiness summary",
     "lemon.usage" => "Show redacted usage, cost, token, and quota diagnostics",
     "lemon.media" => "Show redacted generated-media and provider-proof readiness",
     "lemon.skill" => "Manage Lemon skills (discover/install/update/remove)",
+    # ── lemon-sim product block — leaves with the lemon-sim repo ──
     "lemon.sim.leaderboard" => "Print and rewrite a suite leaderboard",
     "lemon.sim.ratings" => "Aggregate suite leaderboards into cross-suite model ratings",
     "lemon.sim.score" => "Print the scorecard for a run artifact bundle",

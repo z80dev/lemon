@@ -7,6 +7,8 @@ defmodule LemonGateway.Renderers.Basic do
   """
   @behaviour LemonGateway.Renderer
 
+  alias LemonCore.ResumeToken
+
   @impl true
   def init(meta) do
     %{
@@ -145,7 +147,7 @@ defmodule LemonGateway.Renderers.Basic do
   end
 
   defp format_resume(nil, _resume), do: nil
-  defp format_resume(engine, resume), do: engine.format_resume(resume)
+  defp format_resume(_engine, %ResumeToken{} = resume), do: ResumeToken.format_plain(resume)
 
   defp maybe_apply_resume_from_completed(state, completed) do
     resume = Map.get(completed, :resume)

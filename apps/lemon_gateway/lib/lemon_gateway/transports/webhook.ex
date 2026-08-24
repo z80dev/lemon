@@ -81,7 +81,6 @@ defmodule LemonGateway.Transports.Webhook do
              normalized,
              idempotency_ctx,
              webhook_config: Config.config(),
-             default_engine: Config.default_engine(),
              default_timeout_ms: @default_timeout_ms,
              default_callback_wait_timeout_ms: @default_callback_wait_timeout_ms,
              callback_waiter_ready_timeout_ms: @callback_waiter_ready_timeout_ms,

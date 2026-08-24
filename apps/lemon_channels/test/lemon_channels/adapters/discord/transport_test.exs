@@ -227,6 +227,42 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
     assert "rollback" in Enum.map(Transport.slash_commands(), & &1.name)
   end
 
+  test "!redirect message prefix submits a redirect queue mode with the correction as prompt" do
+    assert %{queue_mode: :redirect, prompt: "use the staging db"} =
+             submit_discord_text("!redirect use the staging db")
+  end
+
+  test "/redirect message prefix behaves identically" do
+    assert %{queue_mode: :redirect, prompt: "use the staging db"} =
+             submit_discord_text("/redirect use the staging db")
+  end
+
+  test "plain messages mentioning redirect keep the default queue mode" do
+    run_request = submit_discord_text("please redirect the build output")
+
+    refute run_request.queue_mode == :redirect
+    assert run_request.prompt == "please redirect the build output"
+  end
+
+  test "bare !redirect keeps the message untouched" do
+    run_request = submit_discord_text("!redirect")
+
+    refute run_request.queue_mode == :redirect
+    assert run_request.prompt == "!redirect"
+  end
+
+  test "exports redirect slash command schema" do
+    command = Transport.redirect_command_schema()
+    options = Map.new(command.options, &{&1.name, &1})
+
+    assert command.name == "redirect"
+    assert command.description == "Redirect the active run with a correction"
+    assert command.type == 1
+    assert options["correction"].type == 3
+    assert options["correction"].required
+    assert "redirect" in Enum.map(Transport.slash_commands(), & &1.name)
+  end
+
   test "exports media slash command schema" do
     command = Transport.media_command_schema()
     subcommands = Map.new(command.options, &{&1.name, &1})
@@ -362,7 +398,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
       assert proof["proof_object"] == "lemon.discord_slash_client_click"
       assert proof["proof_scope"] == "discord_slash_client_click_observed"
       assert proof["status"] == "completed"
-      assert proof["coverage"]["registered_command_count"] == 16
+      assert proof["coverage"]["registered_command_count"] == 17
       assert proof["coverage"]["client_click_command_count"] == 1
       assert proof["coverage"]["real_client_click_proof"] == true
       assert proof["details"]["command"] == "media"
@@ -782,6 +818,56 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
       data: %{custom_id: custom_id},
       member: %{user: %{id: "1476753643834183691"}}
     }
+  end
+
+  # Routes one plain (unmentioned) Discord message through buffer + debounce
+  # flush and returns the run request the router bridge received.
+  defp submit_discord_text(text) do
+    :ok = LemonCore.Dedupe.Ets.init(:lemon_channels_discord_dedupe)
+
+    with_discord_api(fn ->
+      with_router_bridge(fn ->
+        thread_id = 1_505_676_123_466_502_334 + System.unique_integer([:positive])
+
+        scope = %LemonCore.ChatScope{
+          transport: :discord,
+          chat_id: thread_id,
+          topic_id: thread_id
+        }
+
+        :ok = LemonChannels.Adapters.Discord.TriggerMode.set(scope, "default", :all)
+
+        try do
+          message_id = 1_503_803_470_493_300_000 + System.unique_integer([:positive])
+
+          message = discord_message(Integer.to_string(message_id), text, thread_id)
+
+          assert {:noreply, routed_state} =
+                   Transport.handle_info(
+                     {:discord_event, {:MESSAGE_CREATE, message, nil}},
+                     discord_message_state()
+                   )
+
+          assert [{scope_key, buffer}] = Map.to_list(routed_state.buffers)
+
+          assert {:noreply, _flushed_state} =
+                   Transport.handle_info(
+                     {:debounce_flush, scope_key, buffer.debounce_ref},
+                     routed_state
+                   )
+
+          assert_receive {:submit_run, run_request}
+          run_request
+        after
+          :ok =
+            LemonChannels.Adapters.Discord.TriggerMode.clear_topic(
+              "default",
+              thread_id,
+              thread_id
+            )
+        end
+      end)
+    end)
   end
 
   defp discord_message_state do

@@ -1,6 +1,11 @@
 defmodule LemonSkills.Tools.MediaGenerateSpeech do
   @moduledoc """
   Supervised speech-generation preview tool backed by LemonMedia.MediaJobSupervisor.
+
+  Wired into CodingAgent.ToolRegistry's builtin tool list and the
+  CodingAgent.Tools factories. Supports deterministic local WAV previews,
+  OpenAI TTS, ElevenLabs TTS, and Google Cloud Text-to-Speech; the cloud
+  providers require their respective credentials.
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
@@ -38,6 +43,20 @@ defmodule LemonSkills.Tools.MediaGenerateSpeech do
     "pcm" => "application/octet-stream"
   }
 
+  @doc """
+  Returns the `LemonAgent.Types.AgentTool.t()` definition for the
+  `"media_generate_speech"` tool, wired to `execute/6`.
+
+  `cwd` is the project directory; it seeds the default artifacts directory
+  and is used to load config for provider credentials. The `opts` keyword is
+  read for: `:media_artifacts_dir` (defaults to
+  `MediaJobs.default_artifacts_dir(cwd)`), `:media_jobs_dir`,
+  `:media_speech_config` (lazily `Config.load(cwd)`), `:openai_tts_api_key`,
+  `:openai_tts_base_url`, `:elevenlabs_tts_api_key`, `:elevenlabs_tts_base_url`,
+  `:google_tts_access_token`, `:google_tts_service_account_json`,
+  `:google_tts_base_url`, `:media_speech_http_post` (defaults to
+  `&Req.post/2`), and `:google_token_http_post` (defaults to `&Req.post/2`).
+  """
   @spec tool(String.t(), keyword()) :: AgentTool.t()
   def tool(cwd, opts \\ []) do
     %AgentTool{
@@ -110,6 +129,32 @@ defmodule LemonSkills.Tools.MediaGenerateSpeech do
     }
   end
 
+  @doc """
+  Tool callback invoked by the agent loop with, in order: `tool_call_id`,
+  `params` map, `signal`, `on_update` callback, `cwd`, and `opts`.
+
+  Reads `"text"` (required, non-empty after trimming, at most 4096
+  characters), `"provider"` (defaults to `"local_wav"`; the other accepted
+  values are `"openai_tts"`, `"elevenlabs_tts"`, and `"google_tts"`),
+  `"model"` (defaults to `"local_wav_preview"`, `"gpt-4o-mini-tts"`,
+  `"eleven_turbo_v2_5"`, or `"cloud_tts_v1"` per provider), `"voice"`
+  (defaults to `"alloy"` for OpenAI, the configured ElevenLabs voice id, or
+  `"en-US-Neural2-C"` for Google), `"languageCode"`/`"language_code"`
+  (defaults to `"en-US"`, Google only), `"instructions"` (OpenAI only),
+  `"filename"`, `"responseFormat"`/`"response_format"` (defaults to `"mp3"`;
+  `google_tts` only supports `"mp3"`), `"speed"` (OpenAI only, clamped
+  0.25-4.0), `"maxRetries"` (defaults to `1`, clamped 0-3),
+  `"sendToChannel"` (defaults to `false`), and `"timeoutMs"` (defaults to
+  `10_000`, clamped 100-120_000).
+
+  On success returns a `%LemonAgent.Types.AgentToolResult{}` with `content`
+  the pretty-printed JSON payload and `details` the payload map (`job_id`,
+  `status`, `type`, `provider`, `model`, `prompt_hash`, `prompt_chars`,
+  `artifact`, `media_job`, and — when `"sendToChannel"` is true —
+  `auto_send_files`). Failures return `{:error, message}` with a string
+  message, e.g. missing/oversized text, unsupported provider/format, an
+  aborted operation, or a failed or timed-out media job.
+  """
   @spec execute(String.t(), map(), reference() | nil, function() | nil, String.t(), keyword()) ::
           AgentToolResult.t() | {:error, String.t()}
   def execute(_tool_call_id, params, signal, _on_update, cwd, opts) do

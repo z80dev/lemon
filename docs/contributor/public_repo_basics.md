@@ -6,7 +6,8 @@ working in this repository.
 ## Prerequisites
 
 - Elixir 1.19.5+ and Erlang/OTP 28.5+
-- Node.js 24 LTS+ (for `clients/lemon-tui` and `clients/lemon-web`)
+- Node.js 24 LTS+ (for `clients/lemon-web`)
+- Bun 1.3.14+ (for `clients/tui`)
 - A configured `~/.lemon/config.toml` with at least one provider API key
 
 ## Development setup
@@ -15,8 +16,10 @@ working in this repository.
 # Install Elixir dependencies
 mix deps.get
 
-# Install Node dependencies
-cd clients/lemon-tui && npm install
+# Install TUI dependencies
+cd clients/tui && bun install
+
+# Install web dependencies
 cd clients/lemon-web && npm install
 ```
 
@@ -24,10 +27,10 @@ cd clients/lemon-web && npm install
 
 ```bash
 # Start the Lemon runtime in dev mode
-./bin/lemon-dev
+./bin/lemon daemon
 
-# Start the TUI client
-cd clients/lemon-tui && npm start
+# Start the dev-mode TUI
+./bin/lemon-tui
 
 # Start the gateway
 ./bin/lemon-gateway
@@ -42,8 +45,8 @@ mix test
 # A specific app
 mix test apps/lemon_core
 
-# Node/TUI tests
-cd clients/lemon-tui && npm test
+# TUI checks and tests
+cd clients/tui && bun run check && bun test
 ```
 
 ## Code ownership

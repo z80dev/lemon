@@ -61,6 +61,9 @@ CodingAgent.Supervisor (one_for_one)
   +-- SessionSupervisor (DynamicSupervisor for Session processes)
   +-- Wasm.SidecarSupervisor
   +-- TaskSupervisor (Task.Supervisor for async ops)
+  +-- PythonRepl.Supervisor (one_for_all: PythonRepl.Registry + PythonRepl.SessionSupervisor;
+  |   supervised temporary workers for persistent execute_code kernels; starts after
+  |   TaskSupervisor because per-cell RPC servers depend on it)
   +-- TaskStoreServer (DETS-backed async task tracking)
   +-- ParentQuestionStoreServer (DETS-backed child-to-parent question tracking)
   +-- RunGraphServer (ETS+DETS persistent run graph)
@@ -115,11 +118,20 @@ CodingAgent.Supervisor (one_for_one)
 |----------|-------|
 | File I/O / Skills | `read`, `read_skill`, `skill_manage`, `memory_topic`, `memory`, `search_memory`, `session_search`, `checkpoint`, `write`, `edit`, `hashline_edit`, `patch`, `lsp_diagnostics`, `ls` |
 | Search | `grep`, `find` |
-| Execution | `bash` |
+| Execution | `bash` (`execute_code` is a config-gated builtin appended last: default-off via `[runtime.tools.execute_code] enabled`, bash-equivalent, and absent from the disclosed set unless enabled) |
 | Web / Browser / Media | `websearch`, `webfetch`, `browser_navigate`, `browser_snapshot`, `browser_get_content`, `browser_click`, `browser_type`, `browser_hover`, `browser_select_option`, `browser_upload_file`, `browser_download`, `browser_press`, `browser_scroll`, `browser_back`, `browser_wait_for_selector`, `browser_evaluate`, `browser_events`, `browser_get_cookies`, `browser_set_cookies`, `browser_clear_state`, `browser_screenshot`, `browser_analyze`, `media_status`, `media_generate_image`, `media_generate_speech`, `media_transcribe_audio`, `media_analyze_image`, `media_generate_video` |
 | Task / Agent | `task`, `agent`, `parent_question`, `todo`, `kanban` |
 | Social | `x_search`, `post_to_x`, `get_x_mentions` |
 | System | `tool_auth`, `extensions_status` |
+
+`execute_code` is programmatic tool calling: the model submits a python3 script that can
+call a fixed compile-time allowlist of agent tools (`read`, `grep`, `find`, `ls`,
+`webfetch`) through policy- and approval-gated helpers, and only what the script prints
+comes back. It is bash-equivalent host code, not a sandbox. The default `kernel_mode =
+"per_call"` runs every script in a fresh process; the opt-in `"session"` mode reuses one
+supervised persistent interpreter per session/cwd/interpreter/helper identity whose state
+is live process memory only (never durable) and is discarded on reset, close, idle reap,
+or cancellation. See `docs/tools/execute-code.md` for the full contract.
 
 `browser_screenshot` writes screenshot bytes to local artifacts by default
 instead of returning base64 to the model. Pass `includeImage: true` only when a
@@ -214,23 +226,15 @@ that should outlive one session. Kanban-dispatched worker runs block the
 
 | Tool | Module | Notes |
 |------|--------|-------|
-| `multiedit` | `Tools.MultiEdit` | Multiple sequential edits to one file |
-| `exec` | `Tools.Exec` | Long-running background processes with poll/kill |
-| `process` | `Tools.Process` | Control interface for `exec` processes, including manual restart of finished runs |
-| `await` | `Tools.Await` | Block until background jobs complete |
-| `webdownload` | `Tools.WebDownload` | Download binary content to disk |
 | `truncate` | `Tools.Truncate` | Truncate long text with configurable strategies |
 | `skill_manage` | `Tools.SkillManage` | Create, patch, delete, and maintain audited Lemon skills |
-| `todoread` / `todowrite` | `Tools.TodoRead` / `Tools.TodoWrite` | Low-level todo primitives |
-| `restart` | `Tools.Restart` | Restart the Lemon BEAM process (dev) |
 | `memory_topic` | `LemonSkills.Tools.MemoryTopic` | Persistent memory topics for cross-session knowledge |
-| `glob` | `Tools.Glob` | File pattern matching |
 | `lsp_formatter` | `Tools.LspFormatter` | Format supported files with local formatters |
 | `ask_parent` | `Tools.AskParent` | Child-only extra tool injected into eligible task-spawned sessions |
 
-**Internal helpers (not exposed as tools):** `Tools.Fuzzy`, `Tools.Hashline`, `Tools.WebCache`, `Tools.WebGuard`, `Tools.TodoStore`, `Tools.TodoStoreOwner`.
+**Internal helpers (not exposed as tools):** `Tools.Hashline`, `Tools.WebCache`, `Tools.WebGuard`, `Tools.TodoStore`, `Tools.TodoStoreOwner`.
 
-Pure text-only external `codex`/`claude` tasks with no explicit `cwd` and no role may skip the CLI entirely and call the provider directly instead. Tasks that explicitly ask to use tools such as `bash`, `read`, or `grep` stay on the normal runner path so they cannot silently bypass tool execution. Internal task runs also infer a restrictive `tool_policy` and verification guardrail when the prompt says `use ... tools only`, so tool-constrained subtasks have to verify against tool output instead of guessing. The fast path also keeps compatible model hints such as `haiku`, `sonnet`, and direct provider model specs off the slow CLI startup path. For internal bash-only tasks, the fast path now accepts both backticked commands and plain phrasings like `Run this exact command and return the output: ...`, which keeps provider-generated shell subtasks off the slower child-session path.
+Internal task runs infer a restrictive `tool_policy` and verification guardrail when the prompt says `use ... tools only`, so tool-constrained subtasks have to verify against tool output instead of guessing. For internal bash-only tasks, the runner accepts both backticked commands and plain phrasings like `Run this exact command and return the output: ...`, which keeps provider-generated shell subtasks on the normal child-session path.
 
 ### Budget and Resource Management
 
@@ -276,17 +280,19 @@ Pure text-only external `codex`/`claude` tasks with no explicit `cwd` and no rol
 | `CodingAgent.Coordinator` | GenServer orchestrating concurrent subagent sessions with timeout management |
 | `CodingAgent.Parallel` | Semaphore-based concurrency control and `map_with_concurrency_limit` |
 | `CodingAgent.ProcessManager` | DynamicSupervisor for background `exec` processes |
+| `CodingAgent.PythonRepl` | Facade for persistent `execute_code` kernels -- `execute/1`, `reset/3`, `detach_owner/2`, aggregate-only `snapshot/1` |
+| `CodingAgent.PythonRepl.Registry` | Serialized ownership/lifetime authority: key/owner mappings, generations, strict `max_live_kernels` admission with idle-only LRU eviction, idle reaping, owner monitors and co-owner forks |
+| `CodingAgent.PythonRepl.SessionSupervisor` | DynamicSupervisor for temporary `PythonRepl.Session` kernel workers (one python3 process each; serialized cells, bounded queue, live in-memory state only) |
 | `CodingAgent.ProcessSession` | GenServer for a single background process |
 | `CodingAgent.ProcessStore` / `ProcessStoreServer` | ETS store for background process state |
 | `LemonCore.TerminalBackend` / `TerminalBackends` | Shared backend contract and registry for supervised terminal/process execution |
 | `CodingAgent.TaskStore` / `TaskStoreServer` | ETS+DETS store for async task tool runs |
 | `CodingAgent.ParentQuestions` / `ParentQuestionStoreServer` | ETS+DETS store for child-to-parent clarification requests |
 
-The task tool defaults omitted `async` to `true`.
-Its supported external CLI engines now include `droid` in addition to `codex`, `claude`, `kimi`, `opencode`, and `pi`, and task-level `thinking_level` is forwarded to Droid as reasoning effort.
-When a provider omits the task `description` field but sends a valid `prompt`, Lemon now derives a short description from that prompt instead of rejecting the task call outright.
-When an internal task omits `model`, the child session now inherits the live parent session model at execution time instead of relying only on the captured tool opts, so Telegram/session-scoped model overrides also apply to async subtasks.
-Internal task child sessions also have a bounded wait for terminal session events. If a child provider stream wedges or the child session exits without emitting `agent_end` / `error`, the task returns a timeout or session-exit error instead of leaving `join` blocked forever.
+The task tool runs all work in a native in-process `CodingAgent.Session`.
+When a provider omits the task `description` field but sends a valid `prompt`, Lemon derives a short description from that prompt instead of rejecting the task call outright.
+When a native task omits `model`, the child session inherits the live parent session model at execution time instead of relying only on the captured tool opts, so Telegram/session-scoped model overrides also apply to async subtasks.
+Native task child sessions also have a bounded wait for terminal session events. If a child provider stream wedges or the child session exits without emitting `agent_end` / `error`, the task returns a timeout or session-exit error instead of leaving `join` blocked forever.
 
 For coordination workflows that must produce one final same-turn answer, queued task results should be treated as launch receipts, not completion. Keep the returned `task_id`s and call `action=join` before responding; auto-followup is for later delivery, not guaranteed same-turn aggregation. `action=join` now suppresses the later async auto-followup for those task ids so the parent session does not get a redundant completion prompt after it already waited. Task result surfaces (`poll`, `join`, `get`, and async auto-followup) expose only visible assistant output plus task metadata, not stored event streams, tool-call internals, or thinking deltas. For non-terminal tasks, `poll` and `get` behave as status queries: user-visible text shows task status, while the latest structured `current_action` stays in `details` instead of leaking raw command/tool event text into answer content. Async followup delivery also backfills terminal task/run state before posting the completion message, which prevents delivered completions from leaving task records stranded in `queued` or `running`. Auto-followup now preserves the full visible task answer instead of pre-truncating it in the followup builder, and router-delivered task followups use the `echo` engine so the raw completion text is delivered without asking the parent model to re-summarize or truncate it. When `:coding_agent, :async_followups` is set to `:steer_backlog`, live streaming parent sessions now attempt an in-session steer first before falling back to router backlog semantics.
 
@@ -373,12 +379,9 @@ The eval harness is intentionally lightweight and deterministic. It should catch
 | `Mix.Tasks.Lemon.Eval` | Run eval harness from the command line |
 | `Mix.Tasks.Lemon.Workspace` | Manage workspace bootstrap files |
 
-### CLI Runners
+### Native Task Execution
 
-| Module | Description |
-|--------|-------------|
-| `CodingAgent.CliRunners.LemonRunner` | CLI runner for Lemon sessions |
-| `CodingAgent.CliRunners.LemonSubagent` | CLI runner for Lemon subagent sessions |
+`CodingAgent.Tools.Task.Runner` starts and monitors native task sessions directly.
 
 ## Key Concepts
 

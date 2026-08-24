@@ -109,6 +109,31 @@ defmodule LemonSkills.Tools.ReadSkill do
     execute(tool_call_id, params, nil, nil, cwd, %{})
   end
 
+  @doc """
+  Full tool callback form invoked by the agent loop, wired by `tool/1`:
+  `execute(tool_call_id, params, signal, on_update, cwd, telemetry_context)`.
+  The five-argument `execute/5` delegates here with an empty telemetry context.
+
+  Reads from `params`:
+
+  - `"key"` (required by the tool schema; defaults to `""`) - skill key to look up
+  - `"view"` (default `"full"`) - `"full"`, `"summary"`, `"section"`, or `"file"`;
+    unknown values fall back to `"full"`
+  - `"section"` (optional) - heading name for `view: "section"`
+  - `"path"` (optional) - relative file path for `view: "file"`; must resolve
+    within the skill directory
+  - `"include_status"` (default `false`) - append a requirements-check section
+  - `"include_manifest"` (default `false`) - append parsed manifest fields
+  - `"max_chars"` (optional) - truncate body content to at most this many chars
+
+  Resolves the skill via `LemonSkills.Registry.get/2` and always returns
+  `%LemonAgent.Types.AgentToolResult{}`: `content` holds the rendered text
+  (header, optional status/manifest sections, requested body view) and `details`
+  holds `key`, `name`, `path`, or `%{error: "not_found", key: key}` plus
+  available-skill suggestions when the key is unknown. Errors surface in the
+  result text, not as error tuples. Emits `LemonSkills.Telemetry.skill_load/1`
+  for hits and misses.
+  """
   @spec execute(
           tool_call_id :: String.t(),
           params :: map(),

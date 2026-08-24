@@ -2,10 +2,10 @@ defmodule LemonGateway.Binding do
   @moduledoc """
   Struct representing a binding between a transport chat/topic and a project configuration.
 
-  Maps a transport, chat, and optional topic to a project, agent, default engine,
-  and queue mode used by `LemonGateway.BindingResolver` for scope resolution.
+  Maps a transport, chat, and optional topic to a project, agent, and queue mode
+  used by `LemonGateway.BindingResolver` for scope resolution.
   """
-  defstruct [:transport, :chat_id, :topic_id, :project, :agent_id, :default_engine, :queue_mode]
+  defstruct [:transport, :chat_id, :topic_id, :project, :agent_id, :queue_mode]
 
   @type t :: %__MODULE__{
           transport: atom(),
@@ -13,7 +13,6 @@ defmodule LemonGateway.Binding do
           topic_id: integer() | nil,
           project: String.t() | nil,
           agent_id: String.t() | nil,
-          default_engine: String.t() | nil,
           queue_mode: atom() | nil
         }
 end
@@ -41,22 +40,6 @@ defmodule LemonGateway.BindingResolver do
     |> to_core_scope()
     |> CoreResolver.resolve_binding(resolver_opts())
     |> from_core_binding()
-  end
-
-  @spec resolve_engine(ChatScope.t(), String.t() | nil, map() | nil) :: String.t() | nil
-  def resolve_engine(%ChatScope{} = scope, engine_hint, resume) do
-    scope
-    |> to_core_scope()
-    |> CoreResolver.resolve_engine(engine_hint, resume, resolver_opts())
-  end
-
-  # Defensive fallback for non-ChatScope callers.
-  def resolve_engine(_scope, engine_hint, resume) do
-    cond do
-      resume && resume.engine -> resume.engine
-      is_binary(engine_hint) -> engine_hint
-      true -> default_engine()
-    end
   end
 
   @spec resolve_agent_id(ChatScope.t()) :: String.t()
@@ -104,8 +87,7 @@ defmodule LemonGateway.BindingResolver do
   defp resolver_opts do
     [
       bindings: bindings(),
-      config_provider: &config_projects/0,
-      default_engine: default_engine()
+      config_provider: &config_projects/0
     ]
   end
 
@@ -122,7 +104,6 @@ defmodule LemonGateway.BindingResolver do
       topic_id: b.topic_id,
       project: b.project,
       agent_id: b.agent_id,
-      default_engine: b.default_engine,
       queue_mode: b.queue_mode
     }
   end
@@ -148,17 +129,5 @@ defmodule LemonGateway.BindingResolver do
     end
   rescue
     _ -> %{}
-  end
-
-  defp default_engine do
-    if is_pid(Process.whereis(Config)) do
-      Config.get(:default_engine) || "lemon"
-    else
-      ConfigLoader.load()
-      |> Map.get(:default_engine, "lemon")
-      |> Kernel.||("lemon")
-    end
-  rescue
-    _ -> "lemon"
   end
 end

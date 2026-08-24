@@ -2,8 +2,8 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
   @moduledoc """
   OpenAI Codex OAuth helpers.
 
-  Supports PKCE authorization URL generation, manual code parsing,
-  code/token exchange, refresh, and encrypted secret resolution.
+  Supports PKCE authorization URL generation, automatic localhost callback capture
+  with manual code fallback, code/token exchange, refresh, and encrypted secret resolution.
   """
 
   require Logger

@@ -57,7 +57,6 @@ defmodule LemonChannels.Adapters.Xmtp.TransportTest do
 
     Application.put_env(:lemon_gateway, @gateway_config_key, %{
       enable_xmtp: true,
-      default_engine: "echo",
       xmtp: %{
         require_live: false,
         poll_interval_ms: 30_000,
@@ -108,8 +107,8 @@ defmodule LemonChannels.Adapters.Xmtp.TransportTest do
     assert inbound.channel_id == "xmtp"
     assert inbound.peer.id == sender
     assert inbound.peer.thread_id == "conv-e2e-1"
-    assert inbound.message.text == "do the thing"
-    assert fetch(inbound.meta, :engine_id) == "codex"
+    assert inbound.message.text == "/codex do the thing"
+    refute Map.has_key?(inbound.meta, :engine_id)
     assert LemonCore.SessionKey.valid?(fetch(inbound.meta, :session_key))
   end
 

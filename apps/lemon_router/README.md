@@ -71,7 +71,7 @@ attachment policy.
 ## Important Contracts
 
 - Inbound callers should provide structured resume data through `LemonCore.RunRequest.resume` when they already know it.
-- Engine ID validation and normalization should use `LemonCore.EngineCatalog`; default cwd resolution should use `LemonCore.Cwd`.
+- Top-level runs always use the native executor; model validation belongs to `LemonAi`, and default cwd resolution should use `LemonCore.Cwd`.
 - Router emits `LemonCore.DeliveryIntent`, not `LemonChannels.OutboundPayload`.
 - Tool-status failure summaries preserve safe structured fields from
   `action.detail.result_meta`, including `error_type`, tool name, timeout,

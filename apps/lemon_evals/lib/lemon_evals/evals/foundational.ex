@@ -79,7 +79,7 @@ defmodule LemonEvals.Evals.Foundational do
            }),
          {:ok, second_read} <- run_tool(cwd, "read", %{"path" => file_path}),
          :ok <- assert_contains(second_read, "beta-updated") do
-      File.rm_rf(tmp_dir)
+      _ = File.rm_rf(tmp_dir)
 
       %{
         name: "read_edit_workflow",

@@ -7,7 +7,58 @@ defmodule LemonGateway.IntrospectionTest do
   use ExUnit.Case, async: false
 
   alias LemonCore.Introspection
-  alias LemonGateway.Types.Job
+  alias LemonGateway.ExecutionRequest
+
+  defmodule IntrospectionFixtureExecutor do
+    @behaviour LemonGateway.Executor
+
+    alias LemonCore.ResumeToken
+    alias LemonGateway.Event
+    alias LemonGateway.ExecutionRequest
+
+    @impl true
+    def start_run(%ExecutionRequest{} = request, _opts, sink_pid) do
+      run_ref = make_ref()
+      resume = request.resume || %ResumeToken{engine: "lemon", value: unique_id()}
+
+      {:ok, task_pid} =
+        Task.start(fn ->
+          send(
+            sink_pid,
+            {:engine_event, run_ref, Event.started(%{engine: "lemon", resume: resume})}
+          )
+
+          send(
+            sink_pid,
+            {:engine_event, run_ref,
+             Event.completed(%{
+               engine: "lemon",
+               resume: resume,
+               ok: true,
+               answer: "Test: #{request.prompt}"
+             })}
+          )
+        end)
+
+      {:ok, run_ref, %{task_pid: task_pid}}
+    end
+
+    @impl true
+    def cancel(%{task_pid: pid}) when is_pid(pid) do
+      Process.exit(pid, :kill)
+      :ok
+    end
+
+    def cancel(_context), do: :ok
+
+    @impl true
+    def steer(_context, _text), do: {:error, :unsupported}
+
+    @impl true
+    def redirect(_context, _text), do: {:error, :unsupported}
+
+    defp unique_id, do: Integer.to_string(System.unique_integer([:positive]))
+  end
 
   @run_timeout 20_000
   @poll_interval 100
@@ -15,7 +66,7 @@ defmodule LemonGateway.IntrospectionTest do
   setup do
     original = Application.get_env(:lemon_core, :introspection, [])
     original_config = Application.get_env(:lemon_gateway, LemonGateway.Config)
-    original_engines = Application.get_env(:lemon_gateway, :engines)
+    original_executor = Application.get_env(:lemon_gateway, :executor)
     original_transports = Application.get_env(:lemon_gateway, :transports)
     original_commands = Application.get_env(:lemon_gateway, :commands)
 
@@ -24,13 +75,10 @@ defmodule LemonGateway.IntrospectionTest do
     _ = Application.stop(:lemon_gateway)
 
     Application.put_env(:lemon_gateway, LemonGateway.Config, %{
-      max_concurrent_runs: 1,
-      default_engine: "echo",
-      enable_telegram: false,
-      require_engine_lock: false
+      max_concurrent_runs: 1
     })
 
-    Application.put_env(:lemon_gateway, :engines, [LemonGateway.Engines.Echo])
+    Application.put_env(:lemon_gateway, :executor, IntrospectionFixtureExecutor)
     Application.put_env(:lemon_gateway, :transports, [])
     Application.put_env(:lemon_gateway, :commands, [])
 
@@ -40,7 +88,7 @@ defmodule LemonGateway.IntrospectionTest do
       Application.stop(:lemon_gateway)
       Application.put_env(:lemon_core, :introspection, original)
       restore_env(LemonGateway.Config, original_config)
-      restore_env(:engines, original_engines)
+      restore_env(:executor, original_executor)
       restore_env(:transports, original_transports)
       restore_env(:commands, original_commands)
       Application.ensure_all_started(:lemon_gateway)
@@ -83,19 +131,17 @@ defmodule LemonGateway.IntrospectionTest do
       run_id = "introspect_tw_#{token}"
       session_key = "agent:gw_introspection_tw:#{token}:main"
 
-      job = %Job{
+      request = %ExecutionRequest{
         run_id: run_id,
         session_key: session_key,
         prompt: "introspection thread worker test",
-        engine_id: "echo",
+        conversation_key: {:session, session_key},
         meta: %{origin: :test, notify_pid: self()}
       }
 
       # Submit through the real Scheduler, which creates a ThreadWorker and
-      # enqueues the job. The Echo engine will complete quickly.
-      LemonGateway.Scheduler.submit_execution(
-        LemonGateway.ExecutionRequest.from_job(job, conversation_key: {:session, job.session_key})
-      )
+      # enqueues the request. The configured executor completes quickly.
+      LemonGateway.Scheduler.submit_execution(request)
 
       # Wait until the dispatcher event for this run is persisted.
       wait_for(fn ->
@@ -134,17 +180,15 @@ defmodule LemonGateway.IntrospectionTest do
       token = unique_token()
       session_key = "agent:gw_introspection_term:#{token}:main"
 
-      job = %Job{
+      request = %ExecutionRequest{
         run_id: "introspect_term_#{token}",
         session_key: session_key,
         prompt: "introspection terminate test",
-        engine_id: "echo",
+        conversation_key: {:session, session_key},
         meta: %{origin: :test, notify_pid: self()}
       }
 
-      LemonGateway.Scheduler.submit_execution(
-        LemonGateway.ExecutionRequest.from_job(job, conversation_key: {:session, job.session_key})
-      )
+      LemonGateway.Scheduler.submit_execution(request)
 
       # Wait for thread termination event for this worker key.
       wait_for(fn ->
@@ -182,17 +226,15 @@ defmodule LemonGateway.IntrospectionTest do
       run_id = "introspect_sched_#{token}"
       session_key = "agent:gw_introspection_sched:#{token}:main"
 
-      job = %Job{
+      request = %ExecutionRequest{
         run_id: run_id,
         session_key: session_key,
         prompt: "introspection scheduler test",
-        engine_id: "echo",
+        conversation_key: {:session, session_key},
         meta: %{origin: :test, notify_pid: self()}
       }
 
-      LemonGateway.Scheduler.submit_execution(
-        LemonGateway.ExecutionRequest.from_job(job, conversation_key: {:session, job.session_key})
-      )
+      LemonGateway.Scheduler.submit_execution(request)
 
       wait_for(fn ->
         Introspection.list(run_id: run_id, limit: 20)
@@ -205,7 +247,6 @@ defmodule LemonGateway.IntrospectionTest do
       assert triggered != []
       [evt | _] = triggered
       assert evt.engine == "lemon"
-      assert evt.payload.engine_id == "echo"
       assert is_binary(evt.payload.thread_key)
     end
 
@@ -215,17 +256,15 @@ defmodule LemonGateway.IntrospectionTest do
       session_key = "agent:gw_introspection_done:#{token}:main"
       expected_thread_key = "{:session, #{inspect(session_key)}}"
 
-      job = %Job{
+      request = %ExecutionRequest{
         run_id: run_id,
         session_key: session_key,
         prompt: "introspection scheduler complete test",
-        engine_id: "echo",
+        conversation_key: {:session, session_key},
         meta: %{origin: :test, notify_pid: self()}
       }
 
-      LemonGateway.Scheduler.submit_execution(
-        LemonGateway.ExecutionRequest.from_job(job, conversation_key: {:session, job.session_key})
-      )
+      LemonGateway.Scheduler.submit_execution(request)
 
       wait_for(fn ->
         Introspection.list(limit: 200)

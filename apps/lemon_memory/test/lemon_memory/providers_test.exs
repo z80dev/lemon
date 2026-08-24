@@ -1,6 +1,8 @@
 defmodule LemonMemory.ProvidersTest do
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureLog
+
   alias LemonMemory.Document
   alias LemonMemory.Providers
 
@@ -45,6 +47,53 @@ defmodule LemonMemory.ProvidersTest do
 
     @impl true
     def search(_query, _opts), do: raise("private-provider-secret")
+  end
+
+  # Blocks far longer than any deadline under test, so the only thing that can
+  # end the call is the registry enforcing this provider's own :timeout_ms.
+  defmodule HangingProvider do
+    @behaviour LemonMemory.Provider
+
+    @hang_ms :timer.seconds(30)
+
+    @impl true
+    def put(_doc, _opts) do
+      Process.sleep(@hang_ms)
+      :ok
+    end
+
+    @impl true
+    def search(_query, _opts) do
+      Process.sleep(@hang_ms)
+      []
+    end
+  end
+
+  # Has an unrelated process kill the one it is running in. `:kill` is
+  # untrappable and cannot be rescued or caught by the registry's call wrapper,
+  # so this is the failure mode a link would propagate to whoever ran the
+  # fan-out: the agent turn on the search path, the registry on the put path.
+  # The blocking sleep means the kill always lands first.
+  defmodule KilledProvider do
+    @behaviour LemonMemory.Provider
+
+    @impl true
+    def put(_doc, _opts) do
+      kill_self()
+      :ok
+    end
+
+    @impl true
+    def search(_query, _opts) do
+      kill_self()
+      []
+    end
+
+    defp kill_self do
+      target = self()
+      spawn(fn -> Process.exit(target, :kill) end)
+      Process.sleep(:timer.seconds(30))
+    end
   end
 
   test "search fans out to enabled providers and deduplicates results" do
@@ -114,6 +163,128 @@ defmodule LemonMemory.ProvidersTest do
     assert_receive {:fake_put, "fake", "put-doc"}
   end
 
+  test "each provider is dropped at its own :timeout_ms, not the slowest provider's" do
+    specs = [
+      # A generous budget on one provider must not become the budget of the
+      # provider next to it: this is the local SQLite provider's 2s bound versus
+      # a registered extension that asked for more.
+      %{
+        id: "generous",
+        module: FakeProvider,
+        enabled: true,
+        scopes: [:session],
+        timeout_ms: 5_000
+      },
+      %{id: "hangs", module: HangingProvider, enabled: true, scopes: [:session], timeout_ms: 200}
+    ]
+
+    {elapsed_us, results} =
+      capture_search(fn ->
+        Providers.search("deploy",
+          provider_specs: specs,
+          owner: self(),
+          scope: :session,
+          scope_key: "session-1",
+          limit: 5
+        )
+      end)
+
+    elapsed_ms = div(elapsed_us, 1_000)
+
+    assert Enum.map(results, & &1.doc_id) == ["external-doc"]
+    assert elapsed_ms >= 150, "the 200ms provider was dropped early (#{elapsed_ms}ms)"
+    assert elapsed_ms < 1_000, "the 200ms provider waited on the 5s provider (#{elapsed_ms}ms)"
+  end
+
+  test "a fast provider still returns while a slow one is being dropped" do
+    specs = [
+      %{id: "hangs", module: HangingProvider, enabled: true, scopes: [:session], timeout_ms: 200},
+      %{id: "fake", module: FakeProvider, enabled: true, scopes: [:session], timeout_ms: 5_000}
+    ]
+
+    {_elapsed_us, results} =
+      capture_search(fn ->
+        Providers.search("deploy",
+          provider_specs: specs,
+          owner: self(),
+          scope: :session,
+          scope_key: "session-1",
+          limit: 5
+        )
+      end)
+
+    assert_received {:fake_search, "fake", "deploy", :session, "session-1"}
+    assert Enum.map(results, & &1.doc_id) == ["external-doc"]
+  end
+
+  test "a provider killed mid-search is logged and the caller survives" do
+    caller = self()
+
+    specs = [
+      %{
+        id: "killed",
+        module: KilledProvider,
+        enabled: true,
+        scopes: [:session],
+        timeout_ms: 5_000
+      },
+      %{id: "fake", module: FakeProvider, enabled: true, scopes: [:session], timeout_ms: 5_000}
+    ]
+
+    log =
+      capture_log(fn ->
+        results =
+          Providers.search("deploy",
+            provider_specs: specs,
+            owner: self(),
+            scope: :session,
+            scope_key: "session-1",
+            limit: 5
+          )
+
+        send(self(), {:results, results})
+      end)
+
+    assert Process.alive?(caller)
+    assert self() == caller
+    assert_received {:results, results}
+    assert Enum.map(results, & &1.doc_id) == ["external-doc"]
+    assert log =~ "provider killed task failed"
+  end
+
+  test "a provider killed mid-put leaves the registry and its registrations intact" do
+    name = :"memory_providers_kill_test_#{System.unique_integer([:positive])}"
+    {:ok, pid} = start_supervised({Providers, name: name})
+
+    for {id, module} <- [{"fake", FakeProvider}, {"killed", KilledProvider}] do
+      assert :ok =
+               Providers.register_provider(pid,
+                 id: id,
+                 module: module,
+                 scopes: [:workspace],
+                 source: "test",
+                 timeout_ms: 5_000
+               )
+    end
+
+    log =
+      capture_log(fn ->
+        assert :ok =
+                 Providers.put(doc("kill-doc", 10, scope: :workspace), server: pid, owner: self())
+
+        # Synchronising on the registry is itself the assertion: a call only
+        # returns if the GenServer outlived the provider process that died.
+        :sys.get_state(pid)
+      end)
+
+    assert Process.alive?(pid)
+    assert_received {:fake_put, "fake", "kill-doc"}
+    assert log =~ "provider killed put task failed"
+
+    status = Providers.status(provider_specs: GenServer.call(pid, :provider_specs))
+    assert Enum.sort(Enum.map(status.providers, & &1.id)) == ["fake", "killed", "local"]
+  end
+
   test "status redacts provider implementation details" do
     status =
       Providers.status(
@@ -150,6 +321,15 @@ defmodule LemonMemory.ProvidersTest do
     def search(_query, _opts) do
       :persistent_term.get({__MODULE__, :docs}, [])
     end
+  end
+
+  # Times the fan-out while swallowing the warnings a dropped provider logs, so
+  # the wall-clock assertions read against a quiet suite.
+  defp capture_search(fun) do
+    ref = make_ref()
+    capture_log(fn -> send(self(), {ref, :timer.tc(fun)}) end)
+    assert_received {^ref, timed}
+    timed
   end
 
   defp doc(id, ingested_at_ms, opts \\ []) do

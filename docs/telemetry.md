@@ -52,7 +52,7 @@ event you are attaching to:
 |---|---|
 | `duration` in **native** units | `[:lemon, :channels, :deliver, :stop]`, `[:lemon_agent, :loop, :end]`, `[:lemon_ai, :dispatcher, :rejected]` |
 | `duration_us` | `[:coding_agent, :extension, :tool, ...]`, `[:coding_agent, :wasm, :tool, ...]`, `[:lemon, :memory, :ingest, ...]` |
-| `duration_ms` | `[:lemon, :reload, ...]`, `[:lemon, :run, :stop]`, `[:lemon, :wasm, :*, :stop]` |
+| `duration_ms` | `[:lemon, :reload, ...]`, `[:lemon, :run, :stop]`, `[:lemon, :wasm, :*, :stop]`, `[:coding_agent, :python_repl, ...]` |
 | both `duration` (native) and `duration_ms` | `[:lemon, :config, :reload, :stop]` and `:exception` — `duration` is a real monotonic native reading and `duration_ms` is derived from it via `System.convert_time_unit/3` |
 
 `LemonCore.Telemetry`'s moduledoc records the intended convention for **new** emitters:
@@ -135,6 +135,7 @@ remain available as a persisted, queryable alternative.
 | Event | Measurements | Metadata | Emitter |
 |---|---|---|---|
 | `[:lemon, :channels, :inbound]` | `count: 1` | `channel_id`, `account_id`, `peer_kind`, `agent_id` | [`channels/runtime.ex:113`](../apps/lemon_channels/lib/lemon_channels/runtime.ex) and [`router.ex:92`](../apps/lemon_router/lib/lemon_router/router.ex), on each normalized inbound message |
+| `[:lemon, :channels, :dispatch]` | `count: 1`, `duration` (native) | `channel_id`, `account_id`, `kind`, `intent_id`, `run_id`, `session_key`, `ok` (boolean) | [`dispatcher.ex`](../apps/lemon_channels/lib/lemon_channels/dispatcher.ex), after every `LemonChannels.Dispatcher.dispatch/1` — fires for both success and `{:error, _}`, check `ok`. Its bus twin is the `:channel_delivery` event on the `channels` topic (see `docs/platform/bus-events.md` §10) |
 | `[:lemon, :channels, :outbox, :queue]` | `depth`, `max_queue_size`, `count: 1` | caller map plus `event` (`:enqueued`, and other queue transitions) | [`outbox.ex:742`](../apps/lemon_channels/lib/lemon_channels/outbox.ex) |
 | `[:lemon, :channels, :outbox, :rejected]` | `count: 1`, `queue_depth`, `max_queue_size` | `reason: :queue_full`, `channel_id`, `account_id`, `chunk_count` | [`outbox.ex:97`](../apps/lemon_channels/lib/lemon_channels/outbox.ex), when the bounded queue refuses work |
 | `[:lemon, :channels, :deliver, :start]` | `system_time` | `channel_id`, `account_id`, `chunk_index` | [`outbox.ex:574`](../apps/lemon_channels/lib/lemon_channels/outbox.ex) |
@@ -238,6 +239,42 @@ for an engine slot. The empty metadata means they cannot be correlated to a run 
 | `[:lemon, :wasm, :invoke, :stop]` | `duration_ms`, `ok` | `host: :wasm`, `session_hash`, `cwd_hash`, `tool_hash` | [`wasm/sidecar_session.ex:408`](../apps/coding_agent/lib/coding_agent/wasm/sidecar_session.ex) |
 
 Session and cwd identifiers in the WASM events are hashed, not raw.
+
+### Execute code and persistent Python kernels — `[:coding_agent, :execute_code | :python_repl, ...]`
+
+The `execute_code` per-call path emits one event from
+[`execute_code.ex`](../apps/coding_agent/lib/coding_agent/tools/execute_code.ex)
+(`LemonCore.Telemetry.emit/3`):
+
+| Event | Measurements | Metadata |
+|---|---|---|
+| `[:coding_agent, :execute_code, :stop]` | `count: 1`, `duration_us` | `rpc_calls`, `rpc_denied`, `exit_code` (integer or `nil`) |
+
+The persistent-kernel subsystem (`kernel_mode = "session"`; see
+[`docs/tools/execute-code.md`](tools/execute-code.md)) emits the
+`[:coding_agent, :python_repl, ...]` families below. Measurements carry only bounded
+counts, capacities, and durations; metadata is a strict allowlist of categorical atoms.
+These events **never** include code, output, traceback text, bridge tokens, bridge or
+workspace paths, cwd, interpreter paths, PIDs, key digests, or raw errors.
+
+| Event | Measurements | Metadata |
+|---|---|---|
+| `[:coding_agent, :python_repl, :session, :start]` | `count: 1`, `live_kernels`, `capacity` | `%{}` |
+| `[:coding_agent, :python_repl, :session, :stop]` | `count: 1`, `duration_ms`, `live_kernels`, `capacity` | `reason` |
+| `[:coding_agent, :python_repl, :session, :crash]` | `count: 1`, `duration_ms`, `live_kernels`, `capacity` | `reason` |
+| `[:coding_agent, :python_repl, :session, :reap]` | `count: 1`, `idle_ms`, `live_kernels`, `capacity` | `reason` |
+| `[:coding_agent, :python_repl, :cell, :start]` | `count: 1`, `queue_depth`, `queue_capacity` | `%{}` |
+| `[:coding_agent, :python_repl, :cell, :stop]` | `count: 1`, `duration_ms` | `outcome` |
+| `[:coding_agent, :python_repl, :cell, :cancel]` | `count: 1`, `duration_ms` | `cause` |
+| `[:coding_agent, :python_repl, :fallback]` | `count: 1` | `reason` (`:missing_session_scope` \| `:registry_unavailable` \| `:capacity_exhausted` \| `:startup_failed` \| `:stop_failed`) |
+| `[:coding_agent, :python_repl, :bridge, :deny]` | `count: 1` | `reason: :authentication` |
+
+Each of these is also recorded best-effort through `LemonCore.Introspection` as a redacted
+`:python_repl_lifecycle_observed` summary containing only the event atom plus the same
+bounded measurements and categorical metadata — no run/session/key identity or payload.
+`CodingAgent.PythonRepl.snapshot/0` exposes only aggregate state (live/capacity counts,
+per-phase counts, owner and fork counts, reap settings). There is no control-plane API
+for kernel management.
 
 ### Session recovery and rate limiting — `[:coding_agent, ...]`
 
@@ -536,8 +573,6 @@ Every atom below appears in a live `LemonCore.Introspection.record/3` call.
 | `CodingAgent.Session` | `:session_started`, `:session_ended`, `:compaction_triggered` |
 | `CodingAgent.Session.EventHandler` | `:tool_call_dispatched`, `:engine_event_ignored` |
 | `LemonAgent.Agent` | `:agent_loop_started`, `:agent_turn_observed` (inferred), `:agent_loop_ended`, `:agent_progress_snapshot` |
-| `LemonCliRunners.JsonlRunner` | `:jsonl_stream_started`, `:tool_use_observed` (inferred), `:assistant_turn_observed` (inferred), `:jsonl_stream_ended` |
-| CLI runner engines (codex, claude, kimi, opencode, pi) | `:engine_subprocess_started`, `:engine_output_observed`, `:engine_subprocess_exited` — all inferred |
 | Skills bridge / session-end audit | `:skill_load_observed`, `:skill_write_observed`, `:skill_prompt_render_observed`, `:missed_skill_observed`, `:missed_learning_observed` |
 
 ### Querying

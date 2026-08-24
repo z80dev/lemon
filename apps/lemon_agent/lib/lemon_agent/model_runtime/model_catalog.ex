@@ -98,6 +98,19 @@ defmodule LemonAgent.ModelRuntime.ModelCatalog do
   def model_label(%{id: id}) when is_binary(id), do: id
   def model_label(other), do: inspect(other)
 
+  @doc false
+  # Test seam: the same enabled-provider decision `available_catalog/0` makes,
+  # evaluated against an explicit config instead of `Config.cached()`. Counts
+  # pool-only credentials via `provider_routing`.
+  @spec provider_enabled_for_config?(String.t() | atom(), map()) :: boolean()
+  def provider_enabled_for_config?(provider, cfg) do
+    provider_enabled?(
+      normalize_provider_name(provider),
+      configured_provider_index(cfg),
+      provider_routing_config(cfg)
+    )
+  end
+
   # ============================================================================
   # Private helpers
   # ============================================================================
@@ -222,13 +235,14 @@ defmodule LemonAgent.ModelRuntime.ModelCatalog do
   defp enabled_model_provider_names(model_maps) when is_list(model_maps) do
     cfg = Config.cached()
     configured = configured_provider_index(cfg)
+    routing = provider_routing_config(cfg)
 
     model_maps
     |> Enum.map(&normalize_provider_name(&1.provider))
     |> Enum.reject(&(&1 == ""))
     |> Enum.uniq()
     |> Enum.filter(fn provider ->
-      provider_enabled?(provider, configured)
+      provider_enabled?(provider, configured, routing)
     end)
   rescue
     _ -> []
@@ -244,19 +258,31 @@ defmodule LemonAgent.ModelRuntime.ModelCatalog do
     _ -> %{}
   end
 
-  defp provider_enabled?(provider, configured)
+  # Normalized routing config so pool-only credentials
+  # (`provider_routing.credential_pools.<pool>.credentials`) count toward
+  # provider availability in the picker catalog.
+  defp provider_routing_config(cfg) do
+    agent = Map.get(cfg, :agent) || Map.get(cfg, "agent") || %{}
+    Map.get(agent, :provider_routing) || Map.get(agent, "provider_routing") || %{}
+  rescue
+    _ -> %{}
+  end
+
+  defp provider_enabled?(provider, configured, routing)
        when is_binary(provider) and is_map(configured) do
     aliases = provider_aliases(provider)
 
-    provider_has_credentials?(provider, aliases, configured) or
+    provider_has_credentials?(provider, aliases, configured, routing) or
       provider_special_enabled?(provider)
   end
 
-  defp provider_enabled?(_provider, _configured), do: false
+  defp provider_enabled?(_provider, _configured, _routing), do: false
 
-  defp provider_has_credentials?(provider, aliases, configured) do
-    Credentials.provider_has_credentials?(provider, configured) or
-      Enum.any?(aliases, &Credentials.provider_has_credentials?(&1, configured))
+  defp provider_has_credentials?(provider, aliases, configured, routing) do
+    opts = [provider_routing: routing]
+
+    Credentials.provider_has_credentials?(provider, configured, opts) or
+      Enum.any?(aliases, &Credentials.provider_has_credentials?(&1, configured, opts))
   end
 
   defp provider_special_enabled?("openai-codex"), do: openai_codex_auth_available?()

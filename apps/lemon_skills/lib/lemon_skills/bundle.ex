@@ -1,19 +1,19 @@
 defmodule LemonSkills.Bundle do
-  @moduledoc """
-  Enumerates auditable skill bundle files and computes deterministic bundle hashes.
+  @moduledoc false
 
-  Bundle hashing is path-sensitive and content-sensitive. Only the agent-facing
-  skill payload is included:
-
-  - `SKILL.md`
-  - files under `references/`
-  - files under `templates/`
-  - files under `scripts/`
-  - files under `assets/`
-
-  Hidden files, editor artefacts, and metadata files such as `.draft_meta.json`
-  are excluded.
-  """
+  # Enumerates auditable skill bundle files and computes deterministic bundle hashes.
+  #
+  # Bundle hashing is path-sensitive and content-sensitive. Only the agent-facing
+  # skill payload is included:
+  #
+  # - `SKILL.md`
+  # - files under `references/`
+  # - files under `templates/`
+  # - files under `scripts/`
+  # - files under `assets/`
+  #
+  # Hidden files, editor artefacts, and metadata files such as `.draft_meta.json`
+  # are excluded.
 
   @allowed_dirs ~w(references templates scripts assets)
   @ignored_suffixes ~w(~ .swp .swo .tmp .temp .bak)

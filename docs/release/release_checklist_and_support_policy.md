@@ -1,6 +1,6 @@
 # Release Checklist and Support Policy
 
-Last reviewed: 2026-05-12
+Last reviewed: 2026-08-16
 
 This document defines the operational checklist for Lemon 1.0 release
 candidates, rollback handling, and public support boundaries.
@@ -11,45 +11,34 @@ The initial stable 1.0 release artifact support target is:
 
 | Area | Supported for 1.0 | Notes |
 | --- | --- | --- |
-| Release artifacts | Ubuntu 24.04 `x86_64` tarballs | Built by `.github/workflows/release.yml` on pinned `ubuntu-24.04` runners |
-| Release profiles | `lemon_runtime_min`, `lemon_runtime_full`, `sim_broadcast_platform` | All must boot from extracted tarballs before stable 1.0; the sim profile also verifies local assets, access control, and persistent spectator state |
+| Release artifacts | `linux-x86_64`, `linux-arm64`, `darwin-arm64` tarballs | Built by `.github/workflows/release.yml` on pinned `ubuntu-24.04`, `ubuntu-24.04-arm`, and `macos-15` runners; Linux artifacts carry a glibc 2.39 baseline |
+| Release profiles | `lemon_runtime_min`, `lemon_runtime_full`, and `lemon_tui` on all platforms; `sim_broadcast_platform` on Linux | All BEAM runtime artifacts must boot from extracted tarballs; the three `lemon_tui` artifacts are Bun binaries verified on native runners; the sim profile also verifies local assets, access control, and persistent spectator state |
 | Source install | Linux and macOS, best effort | Requires Elixir 1.19.5+ and Erlang/OTP 28.5+ |
-| Windows | Not supported for 1.0 | Use WSL or source-level experimentation |
-| Auto-update | Not supported for 1.0 | `mix lemon.update` remains a local maintenance task |
-| Install script | Not supported for 1.0 | Source install and verified tarballs are the supported paths |
+| Windows and macOS `x86_64` | Not supported for 1.0 | Use WSL, the container image, or source-level experimentation |
+| Install script | Supported with scope | `install.sh` on the `stable` channel for the three platform tags; `preview`/`nightly` require a pinned `LEMON_VERSION` |
+| Update | Supported with scope | `lemon update` stages runtime plus TUI artifacts atomically for full/min installs, then flips the symlink plus operator restart, with `--rollback`. No hot upgrades, no background auto-update |
+| Container image | `ghcr.io/z80dev/lemon` multi-arch | `amd64` and `arm64` under one tag |
 | Hosted Lemon service | Not supported for 1.0 | Lemon is local-first/self-hosted |
 | Stable remote channel | Telegram | Text-first support boundary; other channel adapters are preview unless promoted |
 
-Expanding release artifacts to macOS or other platforms requires release-matrix
-work, local artifact proof, and support-bundle verification for each target.
+Expanding release artifacts to further platforms requires release-matrix work,
+local artifact proof, and support-bundle verification for each target.
 
 ## Release Candidate Checklist
 
-Before cutting a stable release:
+The Release workflow automates the repeatable candidate gates against the exact
+tagged commit. It validates version/changelog consistency and release notes,
+runs `scripts/lint_ci_docs.sh`, `scripts/verify_source_install`,
+`scripts/verify_install_script`, `scripts/test fast`, `scripts/test quality`,
+`scripts/test clients`, and `scripts/test eval-fast`, then builds and
+boot-verifies the published artifacts. Do not repeat these manually for an
+ordinary release.
 
-- [ ] Confirm `mix.exs` version matches the intended tag.
-- [ ] Confirm `CHANGELOG.md` has a section for the release.
-- [ ] Run `scripts/prepare_release_notes {version}` and confirm the output is
-      useful for release notes.
-- [ ] Run `scripts/lint_ci_docs.sh` and confirm the first-party version metadata
-      and BEAM toolchain pin checks pass.
-- [ ] Run `scripts/verify_source_install` on a clean source checkout to prove the
-      supported source path still checks toolchain availability, locked
-      dependency resolution, source-wrapper help discoverability,
-      warning-free compile, source-wrapper non-interactive setup dispatch,
-      source-wrapper promoted channel readiness,
-      source-wrapper config validation, source-wrapper model catalog listing,
-      source-wrapper provider readiness listing, source-wrapper model policy
-      listing, source-wrapper proof artifact listing, source-wrapper media
-      diagnostics, source-wrapper readiness summary, source-wrapper secrets
-      status, source-wrapper skill listing, source-wrapper usage diagnostics,
-      source-wrapper stage-1 local update dry-run dispatch, source-wrapper
-      doctor JSON diagnostics, and redacted support-bundle generation.
-- [ ] Run `scripts/test fast`.
-- [ ] Run `scripts/test quality`.
-- [ ] Run `scripts/test clients` so the Python CLI lint/test/package build and
-      the Node client checks match CI before release.
-- [ ] Run `scripts/test eval-fast`.
+The remaining checks in this section are credentialed or human-observed
+promotion evidence. Run only the checks relevant to a surface whose support
+status is being promoted by that release; they are not routine publication
+steps.
+
 - [ ] Run `scripts/test live-eval` with release-candidate eval credentials, or
       dispatch `.github/workflows/live-eval.yml` with `LEMON_EVAL_API_KEY`
       configured as a repository secret. Local runs may use
@@ -505,16 +494,17 @@ Before cutting a stable release:
 - [ ] Build local Sim UI assets and `sim_broadcast_platform` with
       `MIX_ENV=prod mix sim_ui.assets.deploy` and
       `MIX_ENV=prod mix release sim_broadcast_platform --overwrite`.
-- [ ] Package all three release directories as Linux `x86_64` tarballs.
-- [ ] Verify SHA-256 for each tarball and include all three in `manifest.json`.
+- [ ] Build and package the `clients/tui` Bun binary for
+      `linux-x86_64`, `linux-arm64`, and `darwin-arm64` as the `lemon_tui`
+      artifacts.
+- [ ] Verify SHA-256 for all 11 tarballs and include all 11 in `manifest.json`.
 - [ ] Run `scripts/verify_release_artifacts {artifact-directory}` against the
       assembled artifact directory. The verifier must see
-      `lemon_runtime_min`, `lemon_runtime_full`, and `sim_broadcast_platform`
-      Linux `x86_64` tarballs.
+      the BEAM runtime tarballs plus the three `lemon_tui` tarballs (11 total).
 - [ ] Run `scripts/verify_release_runtime_boot {artifact-directory}` against
-      the assembled artifact directory. The verifier must extract all three
-      tarballs. Min/full check `/healthz` and generate support bundles through
-      release `eval`; the sim profile checks `/readyz`, digested assets, admin
+      the assembled artifact directory. The verifier extracts the eight BEAM
+      tarballs and skips the `lemon_tui` pseudo-profile. Min/full check
+      `/healthz` and generate support bundles through release `eval`; the sim profile checks `/readyz`, digested assets, admin
       denial, a persisted Werewolf spectator fixture, and restart recovery.
       When hosted rooms are enabled, also run
       `npm --prefix apps/lemon_sim_ui/assets run smoke:hosted-werewolf` against
@@ -533,11 +523,12 @@ Before cutting a stable release:
 - [ ] Confirm issue templates and support-bundle docs reference the current artifact names.
 - [ ] Confirm known dependency audit findings are recorded and accepted or fixed.
 - [ ] Confirm the OSV Scanner workflow is present and scoped to the first-party
-      Mix, npm, and uv lockfiles before publishing a release candidate.
+      Mix, npm, and Bun lockfiles before publishing a release candidate.
 - [ ] Confirm the History Check workflow is present and blocks
       unrelated-history PRs before merge.
-- [ ] Confirm the Python CLI package workflow is present and building both the
-      `lemon-cli` wheel and source distribution without publishing them.
+- [ ] Confirm the Bun TUI package and release lanes validate `clients/tui` and
+      publish all three `lemon_tui` platform artifacts without publishing a
+      separate package.
 - [ ] Run `LEMON_DISCORD_LIVE_PROOF_JSON=tmp/discord-live-proof.json
       LEMON_DISCORD_LIVE_REDACTED_PROOF_JSON=.lemon/proofs/discord-live-matrix-latest.json
       LEMON_DISCORD_MEDIA_SLASH_PROOF_JSON=tmp/discord-media-slash-proof-check.json
@@ -590,8 +581,8 @@ maintainer decision recorded in the launch ledger.
 requests and pushes that touch dependency manifests, on a weekly `main`
 schedule, and through manual dispatch. It uses Google's pinned reusable OSV
 scanner workflow, grants `security-events: write` for SARIF upload, and scans
-`mix.lock`, the Lemon web/TUI/browser npm lockfiles, the Python CLI `uv.lock`,
-the gateway private npm lockfile, and the diagrams npm lockfile. The workflow is
+      `mix.lock`, the Lemon web/browser npm lockfiles, `clients/tui/bun.lock`,
+      the gateway private npm lockfile, and the diagrams npm lockfile. The workflow is
 configured with `fail-on-vuln: false` so findings are detection signals, not
 automatic release decisions; release candidates still require maintainer triage
 for high or critical runtime findings.
@@ -609,18 +600,13 @@ history and collapsing blame across a large umbrella snapshot. Failed PRs
 should be recreated from the current target branch, then the intended changes
 should be cherry-picked or re-applied.
 
-## Python CLI Package Check
+## Bun TUI Package Check
 
-`.github/workflows/python-cli.yml` is the non-publishing package-quality lane
-for `clients/lemon-cli`. It runs on Python CLI changes, manual dispatch, and
-`main` pushes touching the package. The workflow installs with `uv sync
---locked --dev`, runs ruff and pytest, builds both the wheel and source
-distribution, verifies the wheel metadata, and uploads the built distributions
-as short-lived CI artifacts.
-
-This is intentionally not a PyPI publish workflow. Lemon's supported release
-artifacts remain the BEAM runtime tarballs until maintainers decide to promote a
-published Python CLI package.
+The client-quality lane validates `clients/tui` with the pinned Bun toolchain,
+`bun install --frozen-lockfile`, `bun run check`, `bun run lint`, and `bun test`.
+The release lane additionally compiles the `lemon_tui` pseudo-profile for each
+supported platform. It is a client binary packaged alongside the BEAM runtime,
+not a separately published package.
 
 The docs site is static output. VitePress, Vite, esbuild, and
 `markdown-link-check` are development/build-time tooling for `docs/`; they are
@@ -650,63 +636,80 @@ advisories in the VitePress dependency chain:
 for that chain. These findings do not block the runtime release while the docs
 site is served as static output only.
 
-## Optional Publish Checklist
+## Publish Checklist
 
-Publishing a tag and hosted release is distribution work. It is not part of the
-1.0 readiness gate.
+Publishing is one manually triggered workflow after the release-readiness
+gates above pass. Before starting it, ensure the intended release notes are
+under `## [Unreleased]` in `CHANGELOG.md` and the readiness changes are already
+on `main`.
 
-- [ ] Commit and push the release-readiness changes to the default branch before
-      creating or dispatching the release tag. The release workflow,
-      live-eval workflow, verifier scripts, and support docs must exist on
-      GitHub before the tag is pushed or manually dispatched.
-- [ ] Review the full unpushed local range before pushing `main`; on the current
-      launch branch, `main` may be ahead of `origin/main` by more than the
-      final release-readiness commit.
-- [ ] Create or verify the CalVer tag, for example `v2026.05.0`.
-- [ ] Trigger `.github/workflows/release.yml` from the tag push, or manually
-      dispatch it with explicit inputs. Do not use both paths unless
-      intentionally rerunning the release workflow:
+```bash
+gh workflow run release.yml --ref main -f channel=stable -f draft=false
+gh run list --workflow release.yml --limit 5
+gh run watch {run-id} --exit-status
+```
 
-      ```bash
-      # First publish the release-readiness changes to the default branch.
-      git status --short --branch
-      git rev-list --count origin/main..HEAD
-      git log --oneline origin/main..HEAD
-      test -z "$(git status --short)" || { echo "refusing to publish with a dirty tree" >&2; exit 1; }
-      git log -1 --oneline
-      git push origin main
+The `version` input is optional. Blank derives the next CalVer from the current
+UTC month and `mix.exs`; `-f version=2026.08.2` requests an explicit,
+strictly-increasing version. The workflow then:
 
-      # Option A: push the tag and let the tag-push workflow create the release.
-      git tag v2026.05.0
-      git push origin v2026.05.0
+1. consumes and validates the Unreleased changelog notes
+2. updates every first-party product version
+3. commits the release cut to `main` and creates its annotated tag
+4. runs the canonical fast, quality, deterministic eval, and client lanes
+   against the exact tagged commit
+5. builds and verifies all native artifacts and the multi-arch container
+6. publishes the GitHub Release, `manifest.json`, `install.sh`, and all 11
+   tarballs
+7. promotes the selected container channel; stable also promotes `latest`
 
-      # Option B: if the tag already exists or the tag-push workflow did not run.
-      gh workflow run release.yml \
-        --ref v2026.05.0 \
-        -f tag=v2026.05.0 \
-        -f channel=stable
-      ```
+Release runs are serialized. A failed preparation creates neither a commit nor
+a tag. If a later job fails, use **Re-run failed jobs** on the same workflow
+run; the successful preparation job and its exact tag are retained. If a new
+workflow run is required, dispatch from the existing tag:
 
-- [ ] Watch the intended release workflow run and require a successful exit:
+```bash
+gh workflow run release.yml --ref v2026.08.2 -f channel=stable -f draft=false
+```
 
-      ```bash
-      gh run list --workflow release.yml --limit 5
-      gh run watch {run-id} --exit-status
-      ```
+Tag-ref dispatches skip release preparation and rebuild the existing release
+cut. Mutable container channel tags do not move until the complete GitHub
+Release exists.
 
-- [ ] Confirm the workflow used the version-specific `CHANGELOG.md` section for
-      release notes.
-- [ ] Confirm the workflow uploads:
-  - `lemon-{version}-{channel}-ubuntu-24.04-x86_64-lemon_runtime_min.tar.gz`
-  - `lemon-{version}-{channel}-ubuntu-24.04-x86_64-lemon_runtime_full.tar.gz`
-  - `lemon-{version}-{channel}-ubuntu-24.04-x86_64-sim_broadcast_platform.tar.gz`
-  - `manifest.json`
+The expected assets are:
+
+- three `lemon_runtime_min` tarballs
+- three `lemon_runtime_full` tarballs
+- two Linux `sim_broadcast_platform` tarballs
+- three `lemon_tui` tarballs
+- `manifest.json` schema 2
+- `install.sh`
+
+For an intentionally prepared new external tag, direct tag push remains
+supported:
+
+```bash
+git push origin v2026.08.2
+```
+
+Do not combine a `main` dispatch with a separate tag push for the same version.
+
 
 ## Rollback Checklist
 
 Rollback means recommending or restoring a previous known-good release artifact.
-Lemon 1.0 does not have a remote binary auto-updater, so rollback is an operator
-procedure.
+Rollback is always an operator action; nothing rolls back on its own.
+
+For runtimes installed by `install.sh` into `~/.lemon`, the two most recent
+previous versions are retained on disk:
+
+```bash
+lemon update --rollback   # flips ~/.lemon/versions/current back
+lemon stop && lemon daemon
+lemon status
+```
+
+For manual tarball and container installs, use the full procedure:
 
 - [ ] Identify the previous known-good artifact profile.
 - [ ] Download the previous artifact and `manifest.json`.
@@ -736,12 +739,29 @@ Supported for stable 1.0:
   failures are reproducible through first-party runtime or Web operations paths.
 - Bugs accompanied by a redacted support bundle when diagnostics are needed.
 
+Supported with scope:
+
+- The one-line install script (`install.sh`) on the `stable` channel for
+  `linux-x86_64`, `linux-arm64`, and `darwin-arm64`. It requires `curl`, `tar`,
+  and `python3`, verifies every artifact's SHA-256 against the release manifest,
+  and installs into the `~/.lemon` layout. Installing a `preview` or `nightly`
+  release requires an explicit `LEMON_VERSION` pin.
+- Remote update through `lemon update` for runtimes installed in that layout.
+  Update is a symlink flip plus an operator restart, with `--rollback` to the
+  previous retained version. Manual tarball and container installs are not
+  managed by the updater.
+- Multi-arch container images on `ghcr.io/z80dev/lemon` (`amd64`, `arm64`).
+
 Not supported for stable 1.0:
 
 - Windows-native release artifacts.
-- Unverified platform-specific packaging.
-- Remote auto-update.
-- Remote one-line install scripts.
+- macOS `x86_64` release artifacts.
+- Unverified platform-specific packaging, including OS package managers
+  (Homebrew, apt, AUR) and desktop bundles.
+- Hot code upgrades. Applying an update always requires a restart.
+- Background or unattended auto-update. `[runtime] auto_update` is read and
+  reported only; there is no update timer.
+- Signed or notarized macOS binaries.
 - Hosted multi-tenant operation.
 - Stable support guarantees for preview channel adapters.
 - Production-grade scheduling guarantees, external scheduler integrations, or
@@ -782,10 +802,13 @@ Keep these files current during the 1.0 launch process:
 - `.github/workflows/live-eval.yml`
 - `.github/workflows/history-check.yml`
 - `.github/workflows/osv-scanner.yml`
-- `.github/workflows/python-cli.yml`
+- `.github/workflows/release-smoke.yml`
 - `scripts/bump_version.sh`
 - `scripts/lint_ci_docs.sh`
 - `scripts/audit_1_0_readiness`
 - `scripts/prepare_release_notes`
+- `scripts/prepare_product_release`
 - `scripts/verify_release_artifacts`
 - `scripts/verify_release_runtime_boot`
+- `install.sh`
+- `scripts/verify_install_script`

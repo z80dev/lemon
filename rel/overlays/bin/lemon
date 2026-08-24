@@ -1,0 +1,465 @@
+#!/usr/bin/env bash
+#
+# lemon - Launcher shim for a packaged Lemon release.
+#
+# This file lives at rel/overlays/bin/lemon and is copied verbatim into
+# every release profile by Mix's `rel/overlays/` convention (mix.exs needs
+# no changes for that to happen). It never touches RELEASE_NAME: the
+# profile-named release script under bin/<profile> already defaults that
+# correctly, and config/runtime.exs branches on it to decide which
+# Phoenix endpoints to configure.
+#
+# Usage:
+#   bin/lemon                 # interactive terminal: launches the TUI (daemon auto-start)
+#
+#   bin/lemon tui|start|daemon|stop|restart|status|remote|eval|rpc|version|update
+#   bin/lemon setup|model|gateway|config|secrets|channels|doctor
+#   bin/lemon --help
+
+set -euo pipefail
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m'
+
+info() { echo -e "${GREEN}[lemon]${NC} $1"; }
+warn() { echo -e "${YELLOW}[lemon]${NC} $1"; }
+error() { echo -e "${RED}[lemon]${NC} $1" >&2; }
+
+usage() {
+  cat <<'EOF'
+Usage: bin/lemon <command> [args]
+
+Running with no command in an interactive terminal launches the TUI,
+starting the daemon first if it is not already running.
+
+Commands:
+  tui [args]            Launch the terminal UI (auto-starts the daemon)
+  start                 Run the release in the foreground
+  daemon                Run the release in the background; records pid + root
+  stop                  Stop a running daemon (works after a version flip)
+  restart               Restart a running node in place
+  status                Report pid liveness and control-plane health
+  remote                Attach a remote IEx shell to the running node
+  eval "EXPR"           Evaluate EXPR in a fresh, non-booted system
+  rpc "EXPR"            Evaluate EXPR on the running node
+  version               Print the installed Lemon version
+  update [args]         Run the stage-2 self-updater (see LemonCore.Update.CLI)
+  setup [args]          Run first-time Lemon setup
+  model [args]          Configure a model provider
+  gateway [args]        Configure a gateway adapter
+  config [args]         Inspect or update configuration
+  secrets [args]        Manage secrets
+  channels [args]       Configure channel adapters
+  doctor [args]         Run runtime diagnostics
+  doctor --bundle [path] Generate a support bundle (default: ~/.lemon/support-bundle-<ts>.zip)
+  --help, -h            Show this help
+
+Runtime CLI commands are available in lemon_runtime_min and lemon_runtime_full.
+The sim_broadcast_platform profile supports only `doctor --bundle`.
+EOF
+}
+
+# ── Resolve the release root: the parent of this script's real directory,
+# following symlinks (mirrors bin/lemon in the source tree). ──
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [ -L "$SCRIPT_PATH" ]; do
+  SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+  SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+  [[ "$SCRIPT_PATH" != /* ]] && SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_PATH"
+done
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+LEMON_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# ── Autodetect the release profile: first executable bin/<profile> wins. ──
+PROFILE=""
+for candidate in lemon_runtime_full lemon_runtime_min sim_broadcast_platform; do
+  if [ -x "$LEMON_ROOT/bin/$candidate" ]; then
+    PROFILE="$candidate"
+    break
+  fi
+done
+
+if [ -z "$PROFILE" ]; then
+  error "no runtime profile found under $LEMON_ROOT/bin"
+  error "expected one of: lemon_runtime_full, lemon_runtime_min, sim_broadcast_platform"
+  exit 1
+fi
+
+RELEASE_BIN="$LEMON_ROOT/bin/$PROFILE"
+TUI_BIN="$LEMON_ROOT/tui/bin/lemon-tui"
+
+LEMON_HOME_DIR="$HOME/.lemon"
+COOKIE_FILE="$LEMON_HOME_DIR/cookie"
+ENV_FILE="$LEMON_HOME_DIR/env"
+STATE_DIR="$LEMON_HOME_DIR/run"
+PIDFILE="$STATE_DIR/lemon.pid"
+ROOTFILE="$STATE_DIR/lemon.root"
+
+# ── stop/restart must keep working after `versions/current` is flipped to a
+# newer release, so they prefer the root recorded at `daemon` time over the
+# root this invocation of the shim happens to live under. ──
+resolve_running_release_bin() {
+  RELEASE_BIN="$LEMON_ROOT/bin/$PROFILE"
+
+  if [ -f "$ROOTFILE" ]; then
+    recorded_root="$(cat "$ROOTFILE" 2>/dev/null || true)"
+
+    if [ -n "$recorded_root" ] && [ -x "$recorded_root/bin/$PROFILE" ]; then
+      RELEASE_BIN="$recorded_root/bin/$PROFILE"
+    fi
+  fi
+}
+
+require_cmd() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    error "required command not found: $1"
+    exit 1
+  fi
+}
+
+# ── User-install defaults, applied only when unset so server/tarball
+# installs that already export these keep full control. ──
+setup_environment() {
+  # ~/.lemon holds per-user state, including the distribution cookie and a
+  # generated web secret. Apply a restrictive umask before anything is
+  # created so every directory and file is private from its first byte --
+  # never transiently group- or world-readable -- and tighten anything an
+  # earlier install may have left broader.
+  umask 077
+
+  mkdir -p "$LEMON_HOME_DIR" "$STATE_DIR"
+  chmod 700 "$LEMON_HOME_DIR" "$STATE_DIR"
+
+  if [ -z "${LEMON_STORE_PATH:-}" ]; then
+    export LEMON_STORE_PATH="$LEMON_HOME_DIR/store"
+  fi
+
+  if [ -z "${RELEASE_COOKIE:-}" ]; then
+    require_cmd openssl
+
+    if [ ! -s "$COOKIE_FILE" ]; then
+      openssl rand -hex 32 > "$COOKIE_FILE"
+      # umask already makes a fresh file 600; this also tightens a legacy
+      # file being regenerated with a broader mode.
+      chmod 600 "$COOKIE_FILE"
+    fi
+
+    RELEASE_COOKIE="$(cat "$COOKIE_FILE")"
+    export RELEASE_COOKIE
+  fi
+
+  if [ -f "$ENV_FILE" ]; then
+    # shellcheck disable=SC1090
+    source "$ENV_FILE"
+  fi
+
+  if [ -z "${LEMON_WEB_SECRET_KEY_BASE:-}" ]; then
+    require_cmd openssl
+    generated_secret="$(openssl rand -hex 64)"
+    printf 'export LEMON_WEB_SECRET_KEY_BASE=%q\n' "$generated_secret" >> "$ENV_FILE"
+    # Same belt-and-braces tightening as the cookie for a pre-existing env.
+    chmod 600 "$ENV_FILE"
+    export LEMON_WEB_SECRET_KEY_BASE="$generated_secret"
+  fi
+
+  export PHX_SERVER="${PHX_SERVER:-true}"
+}
+
+# ── Runtime CLI commands need lemon_cli, which the sim-only release does not
+# bundle. The profile check turns a missing-module crash into a useful command
+# error. The release script owns the single eval argument boundary, so pass the
+# command argv directly after the expression. ──
+run_runtime_cli() {
+  if [ "$PROFILE" = "sim_broadcast_platform" ]; then
+    error "'$1' is unavailable in the sim_broadcast_platform release"
+    error "use lemon_runtime_min or lemon_runtime_full for runtime CLI commands"
+    exit 1
+  fi
+
+  exec "$RELEASE_BIN" eval 'LemonCli.CLI.main(System.argv())' "$@"
+}
+
+# ── The first interactive TUI launch must not start an unconfigured daemon.
+# This calls the public Mix-free predicate directly in the release, rather
+# than parsing configuration or secrets in the shell. ──
+setup_required() {
+  if [ "$PROFILE" = "sim_broadcast_platform" ]; then
+    return 1
+  fi
+
+  "$RELEASE_BIN" eval 'if LemonCli.CLI.setup_required?(), do: System.halt(0), else: System.halt(1)'
+}
+
+complete_interactive_setup() {
+  if ! setup_required; then
+    return 0
+  fi
+
+  if ! exec 3</dev/tty; then
+    error "Setup is required, but the terminal could not be opened."
+    error "Run \`lemon setup\` to finish configuration."
+    return 1
+  fi
+
+  info "Setup is required; launching lemon setup"
+
+  # Invoke the release CLI directly so setup cannot recurse through this
+  # launcher's TUI path. Its prompt reads the controlling terminal even when
+  # this shim's stdin was redirected by a caller.
+  if "$RELEASE_BIN" eval 'LemonCli.CLI.main(["setup"])' <&3; then
+    :
+  fi
+
+  exec 3<&-
+
+  if setup_required; then
+    error "Setup is incomplete."
+    error "Run \`lemon setup\` to finish configuration."
+    return 1
+  fi
+}
+
+# ── A 200 from /healthz is not proof that *lemon* answered it: any service
+# that happens to hold the port would satisfy `curl -f`, and the TUI would
+# then be pointed at a stranger's /ws. Require the documented body,
+# {"ok":true}, before treating the daemon as already running. ──
+control_plane_healthy() {
+  local body
+
+  body="$(curl -fsS --max-time 2 "http://127.0.0.1:$1/healthz" 2>/dev/null || true)"
+
+  if [ -z "$body" ]; then
+    return 1
+  fi
+
+  printf '%s' "$body" | grep -q '"ok"[[:space:]]*:[[:space:]]*true'
+}
+
+# ── Start the daemon and record pid + root. Shared by `daemon` and `tui`. ──
+start_daemon() {
+  "$RELEASE_BIN" daemon "$@"
+
+  pid=""
+  for ((attempt = 1; attempt <= 15; attempt++)); do
+    pid="$("$RELEASE_BIN" pid 2>/dev/null || true)"
+    [ -n "$pid" ] && break
+    sleep 1
+  done
+
+  if [ -z "$pid" ]; then
+    error "daemon started but its pid could not be determined"
+    exit 1
+  fi
+
+  printf '%s\n' "$pid" > "$PIDFILE"
+  printf '%s\n' "$LEMON_ROOT" > "$ROOTFILE"
+  info "started (pid $pid)"
+}
+
+COMMAND="${1:-}"
+
+case "$COMMAND" in
+  --help|-h)
+    usage
+    exit 0
+    ;;
+  "")
+    # No command: interactive terminals get the TUI; scripts keep the
+    # historical usage-and-exit-2 contract.
+    if [ -t 0 ] && [ -t 1 ]; then
+      COMMAND="tui"
+      set -- tui
+    else
+      usage >&2
+      exit 2
+    fi
+    ;;
+esac
+
+setup_environment
+
+case "$COMMAND" in
+  tui)
+    shift
+
+    if [ ! -x "$TUI_BIN" ]; then
+      error "TUI not installed at $TUI_BIN"
+      error "this install may predate the TUI artifact, or was installed with LEMON_NO_TUI=1;"
+      error "re-run the installer, or use 'lemon --help' for daemon commands"
+      exit 1
+    fi
+
+    if [ -t 0 ] && [ -t 1 ] && ! complete_interactive_setup; then
+      exit 1
+    fi
+
+    control_port="${LEMON_CONTROL_PLANE_PORT:-4040}"
+
+    if ! control_plane_healthy "$control_port"; then
+      info "daemon not running; starting it"
+      start_daemon
+
+      healthy=""
+      for ((attempt = 1; attempt <= 30; attempt++)); do
+        if control_plane_healthy "$control_port"; then
+          healthy=1
+          break
+        fi
+        sleep 1
+      done
+
+      if [ -z "$healthy" ]; then
+        error "daemon did not become healthy on port $control_port within 30s"
+        error "check 'lemon status' and the logs, then retry"
+        exit 1
+      fi
+    fi
+
+    exec "$TUI_BIN" --ws-url "ws://127.0.0.1:$control_port/ws" "$@"
+    ;;
+
+  start)
+    shift
+    exec "$RELEASE_BIN" start "$@"
+    ;;
+
+  daemon)
+    shift
+    start_daemon "$@"
+    ;;
+
+  stop)
+    shift
+    resolve_running_release_bin
+
+    if [ ! -x "$RELEASE_BIN" ]; then
+      error "no release binary found to stop (looked for $RELEASE_BIN)"
+      exit 1
+    fi
+
+    stop_status=0
+    "$RELEASE_BIN" stop || stop_status=$?
+    rm -f "$PIDFILE" "$ROOTFILE"
+
+    if [ "$stop_status" -ne 0 ]; then
+      error "stop command exited with status $stop_status"
+      exit "$stop_status"
+    fi
+
+    info "stopped"
+    ;;
+
+  restart)
+    shift
+    resolve_running_release_bin
+
+    if [ ! -x "$RELEASE_BIN" ]; then
+      error "no release binary found to restart (looked for $RELEASE_BIN)"
+      exit 1
+    fi
+
+    exec "$RELEASE_BIN" restart
+    ;;
+
+  status)
+    if [ ! -f "$PIDFILE" ]; then
+      echo "lemon: not running (no pidfile)"
+      exit 1
+    fi
+
+    pid="$(cat "$PIDFILE" 2>/dev/null || true)"
+
+    if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+      echo "lemon: not running (stale pidfile: ${pid:-empty})"
+      exit 1
+    fi
+
+    control_port="${LEMON_CONTROL_PLANE_PORT:-4040}"
+
+    if curl -fsS "http://127.0.0.1:$control_port/healthz" >/dev/null 2>&1; then
+      echo "lemon: running (pid $pid), control-plane healthy on port $control_port"
+    else
+      echo "lemon: running (pid $pid), control-plane not reachable on port $control_port"
+    fi
+    ;;
+
+  remote)
+    shift
+    exec "$RELEASE_BIN" remote "$@"
+    ;;
+
+  eval)
+    shift
+    exec "$RELEASE_BIN" eval "$@"
+    ;;
+
+  rpc)
+    shift
+    exec "$RELEASE_BIN" rpc "$@"
+    ;;
+
+  version)
+    exec "$RELEASE_BIN" eval 'IO.puts(LemonCore.Update.Version.current())'
+    ;;
+
+  update)
+    shift
+    export LEMON_UPDATE_ARGS="$*"
+    # The release script's own `eval` handler already appends `-- "$@"`
+    # before invoking elixir; adding another `--` here would leave a stray
+    # leading "--" in System.argv() (elixir only strips one CLI boundary
+    # marker), silently breaking LemonCore.Update.CLI's OptionParser.parse.
+    exec "$RELEASE_BIN" eval 'LemonCore.Update.CLI.main(System.argv())' "$@"
+    ;;
+
+  setup|model|gateway|config|secrets|channels)
+    run_runtime_cli "$@"
+    ;;
+
+  doctor)
+    shift
+
+    # Full and minimal releases bundle lemon_cli, whose doctor parser owns
+    # --bundle/--bundle-path handling. Forward the argv untouched: the eval
+    # expression stays a fixed constant, so no user string can become
+    # Elixir source, option order is preserved, and `#{...}` in a path
+    # stays literal.
+    if [ "$PROFILE" != "sim_broadcast_platform" ]; then
+      run_runtime_cli doctor "$@"
+    fi
+
+    # Sim-only `doctor --bundle [path]`: this release has no lemon_cli, so
+    # the shim drives LemonCore.Doctor.CLI.bundle!/1 itself. The path
+    # crosses the eval boundary through the environment, never as source
+    # text.
+    if [ "${1:-}" != "--bundle" ]; then
+      run_runtime_cli doctor "$@"
+    fi
+
+    shift
+
+    if [ "$#" -gt 1 ]; then
+      error "doctor --bundle accepts at most one output path"
+      exit 2
+    fi
+
+    bundle_path="${1:-}"
+
+    if [ -z "$bundle_path" ]; then
+      timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+      bundle_path="$LEMON_HOME_DIR/support-bundle-$timestamp.zip"
+    fi
+
+    mkdir -p "$(dirname "$bundle_path")"
+    export LEMON_DOCTOR_BUNDLE_PATH="$bundle_path"
+    exec "$RELEASE_BIN" eval 'LemonCore.Doctor.CLI.bundle!(bundle_path: System.fetch_env!("LEMON_DOCTOR_BUNDLE_PATH"))'
+    ;;
+
+  *)
+    error "Unknown command: $COMMAND"
+    usage >&2
+    exit 2
+    ;;
+esac

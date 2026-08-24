@@ -16,7 +16,8 @@ defmodule LemonChannels.Adapters.Generic.Renderer do
              :tool_status_snapshot,
              :tool_status_finalize,
              :final_text,
-             :watchdog_prompt
+             :watchdog_prompt,
+             :notice
            ] ->
         dispatch_text(intent)
 

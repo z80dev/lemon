@@ -289,7 +289,6 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert_receive {:router_submit, %RunRequest{queue_mode: :followup} = followup, 1}, 1_000
       assert followup.session_key == "agent:main:main"
       assert followup.agent_id == "main"
-      assert followup.engine_id == "echo"
       assert followup.cwd == parent_cwd
       assert followup.prompt =~ "router output"
       refute followup.prompt =~ "Router followup task"
@@ -343,7 +342,6 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert %LemonAgent.Types.AgentToolResult{} = result
 
       assert_receive {:router_submit, %RunRequest{queue_mode: :followup} = followup, 1}, 1_000
-      assert followup.engine_id == "echo"
       assert followup.prompt == long_output
       assert String.length(followup.prompt) > 2_000
     end
@@ -841,7 +839,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
   describe "execute/6 - get action" do
     test "get returns only final output text plus metadata" do
       task_id =
-        TaskStore.new_task(%{description: "Get task", engine: "internal", run_id: "run_get"})
+        TaskStore.new_task(%{description: "Get task", run_id: "run_get"})
 
       TaskStore.finish(
         task_id,
@@ -868,7 +866,6 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert [%LemonAi.Types.TextContent{text: "final answer"}] = result.content
       assert result.details.task_id == task_id
       assert result.details.run_id == "run_get"
-      assert result.details.engine == "internal"
       refute Map.has_key?(result.details, :events)
       refute Map.has_key?(result.details, :result)
     end

@@ -1,0 +1,223 @@
+#!/usr/bin/env bash
+# publish_train — release EVERY publishable package in dependency order
+# (docs/platform-split.md 4.3) by driving scripts/release_package once per
+# package. This script owns sequencing, idempotent resume, and one-time
+# preflight; all per-package release logic (version bump, changelog roll,
+# commit, tag, publish, publish-order gate) stays in release_package.
+#
+# Usage:
+#   scripts/publish_train [version]            # preflight: dry-run every package
+#   scripts/publish_train [version] --publish  # release + publish the train
+#
+# Options:
+#   --publish        Actually release. Requires HEX_API_KEY: the train must
+#                    publish sequentially so each package's deps exist on
+#                    hex.pm before it is published. (Pushing all tags and
+#                    letting CI publish does NOT work for a full train — the
+#                    tag-triggered workflows run concurrently and the
+#                    publish-order gate fails every package whose deps have
+#                    not landed yet. CI publishing is for single releases.)
+#   --push           After a successful --publish run, push the branch and
+#                    the created tags to origin.
+#   --skip-quality   Skip the one-time `mix lemon.quality` gate.
+#   -h, --help       Show this help.
+#
+# Version defaults to 0.1.0 — the first-publish line from D10, where every
+# package starts at 0.1.0 and mix.exs already carries it (no bump needed).
+#
+# Idempotent resume: a package whose hex release already exists at the target
+# version is skipped, so re-running the same command after a mid-train failure
+# continues where it stopped. A package that is tagged locally but missing on
+# hex.pm (publish failed after tagging) is finished with a bare
+# `mix hex.publish` instead of a re-release.
+#
+# Publishing 0.1.0 directly also supersedes plan item 0.1 (0.0.1 placeholder
+# releases): the real release reserves the name.
+#
+# See also: scripts/release_package, docs/release/hex-packages.md
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+RELEASE="$REPO_ROOT/scripts/release_package"
+
+VERSION="0.1.0"
+PUBLISH=0
+PUSH=0
+SKIP_QUALITY=0
+
+die() {
+  echo "ERROR: $*" >&2
+  exit 1
+}
+
+usage() {
+  sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'
+  exit "${1:-64}"
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h | --help) usage 0 ;;
+    --publish) PUBLISH=1 ;;
+    --push) PUSH=1 ;;
+    --skip-quality) SKIP_QUALITY=1 ;;
+    -*) die "unknown option: $1 (try --help)" ;;
+    *)
+      echo "$1" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' ||
+        die "'$1' is not a version (or an unknown argument)"
+      VERSION="$1"
+      ;;
+  esac
+  shift
+done
+
+[ -x "$RELEASE" ] || die "$RELEASE is missing or not executable"
+cd "$REPO_ROOT"
+
+# ── Package train ────────────────────────────────────────────────────────────
+# release_package --list is the single source of truth for membership, hex
+# names, and dependency order (PUBLISH_ORDER + hex_package.exs live there).
+# Output shape:  "  <app>  <hex name>  <version>" after two header lines.
+
+APPS=()
+declare -A HEX_OF=()
+while read -r app hex _; do
+  case "$app" in Publishable | APP | "") continue ;; esac
+  [ "$hex" = "(unpublished)" ] &&
+    die "release_package --list shows '$app' without a hex name — fix hex_package.exs/PUBLISH_ORDER drift first"
+  APPS+=("$app")
+  HEX_OF["$app"]="$hex"
+done < <("$RELEASE" --list)
+
+[ "${#APPS[@]}" -gt 0 ] || die "release_package --list returned no packages"
+
+# Same endpoint release_package's own order gate uses.
+# Prints: a version, "unpublished", or "unknown" (hex.pm unreachable).
+hex_latest_version() {
+  local code tmp
+  tmp="$(mktemp)"
+  code="$(curl -sS -o "$tmp" -w '%{http_code}' --max-time 10 \
+    "https://hex.pm/api/packages/$1" 2>/dev/null)" || code=""
+  case "$code" in
+    200) python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("latest_stable_version") or d.get("latest_version") or "unknown")' "$tmp" 2>/dev/null || echo "unknown" ;;
+    404) echo "unpublished" ;;
+    *) echo "unknown" ;;
+  esac
+  rm -f "$tmp"
+}
+
+# ── Preflight ────────────────────────────────────────────────────────────────
+
+MODE="PREFLIGHT (dry run)"
+[ "$PUBLISH" -eq 1 ] && MODE="PUBLISH"
+echo "── publish_train: ${#APPS[@]} packages @ $VERSION [$MODE] ──"
+printf '   order: %s\n' "${APPS[*]}"
+echo
+
+if [ "$PUBLISH" -eq 1 ]; then
+  [ -n "${HEX_API_KEY:-}" ] ||
+    die "--publish requires HEX_API_KEY (see header for why tags-then-CI cannot publish a full train)"
+  [ -z "$(git status --porcelain)" ] ||
+    die "working tree is dirty — commit or stash before releasing"
+  [ "$(git rev-parse --abbrev-ref HEAD)" = "main" ] ||
+    die "publish from main (currently on '$(git rev-parse --abbrev-ref HEAD)')"
+  [ "$(hex_latest_version "${HEX_OF[${APPS[0]}]}")" != "unknown" ] ||
+    die "hex.pm is unreachable — the order gate cannot verify anything"
+fi
+
+# Quality runs once for the train, not once per package.
+if [ "$SKIP_QUALITY" -eq 1 ]; then
+  echo "skip: mix lemon.quality (--skip-quality)"
+elif mix lemon.quality >/dev/null 2>&1; then
+  echo "ok:   mix lemon.quality passed (once for the whole train)"
+else
+  die "mix lemon.quality failed — run it directly to see the issues"
+fi
+echo
+
+# ── The train ────────────────────────────────────────────────────────────────
+
+PUBLISHED=()
+SKIPPED=()
+FAILURES=0
+CREATED_TAGS=()
+
+for app in "${APPS[@]}"; do
+  hex_name="${HEX_OF[$app]}"
+  tag="${app}-v${VERSION}"
+  echo "── $app → $hex_name $VERSION ──"
+
+  on_hex="$(hex_latest_version "$hex_name")"
+  if [ "$on_hex" = "$VERSION" ]; then
+    echo "skip: $hex_name $VERSION is already on hex.pm"
+    SKIPPED+=("$app")
+    echo
+    continue
+  fi
+
+  if git rev-parse -q --verify "refs/tags/$tag" >/dev/null 2>&1; then
+    # Tagged but not on hex: a previous run died between tag and publish.
+    # Finish the publish; do not re-release.
+    if [ "$PUBLISH" -eq 1 ]; then
+      echo "resume: tag $tag exists but $hex_name is not on hex.pm — publishing the existing release"
+      if (cd "apps/$app" && LEMON_HEX_PUBLISH=1 mix hex.publish --yes); then
+        PUBLISHED+=("$app")
+      else
+        FAILURES=1
+        break
+      fi
+    else
+      echo "note: tag $tag already exists but $hex_name is not on hex.pm — a --publish run would finish it"
+      SKIPPED+=("$app")
+    fi
+    echo
+    continue
+  fi
+
+  if [ "$PUBLISH" -eq 1 ]; then
+    if "$RELEASE" "$app" "$VERSION" --yes --skip-quality; then
+      PUBLISHED+=("$app")
+      CREATED_TAGS+=("$tag")
+    else
+      FAILURES=1
+      break
+    fi
+  else
+    # --strict so a would-fail check fails the preflight, like CI's --verify.
+    # --force: before the train has run, in-train deps are necessarily absent
+    # from hex.pm — the order gate would flag every package but the first.
+    # The real run keeps the gate: deps are on hex by the time each package
+    # publishes, so a failure there is a genuine ordering bug.
+    "$RELEASE" "$app" "$VERSION" --dry-run --strict --skip-quality --force || FAILURES=1
+  fi
+  echo
+done
+
+# ── Summary ──────────────────────────────────────────────────────────────────
+
+echo "── train summary ──"
+[ "${#PUBLISHED[@]}" -gt 0 ] && echo "released: ${PUBLISHED[*]}"
+[ "${#SKIPPED[@]}" -gt 0 ] && echo "skipped (already done): ${SKIPPED[*]}"
+
+if [ "$FAILURES" -ne 0 ]; then
+  echo
+  die "train stopped. Fix the failure above and re-run the same command — completed packages are skipped automatically."
+fi
+
+if [ "$PUBLISH" -eq 1 ]; then
+  if [ "$PUSH" -eq 1 ]; then
+    git push origin main
+    [ "${#CREATED_TAGS[@]}" -gt 0 ] && git push origin "${CREATED_TAGS[@]}"
+    echo "pushed: main + ${#CREATED_TAGS[@]} tags"
+  elif [ "${#CREATED_TAGS[@]}" -gt 0 ]; then
+    echo
+    echo "Push the release commits and tags with:"
+    echo "  git push origin main ${CREATED_TAGS[*]}"
+  fi
+  echo "All packages are on hex.pm at $VERSION."
+else
+  echo
+  echo "Preflight only — nothing changed. Release for real with:"
+  echo "  HEX_API_KEY=... scripts/publish_train $VERSION --publish"
+fi

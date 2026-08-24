@@ -16,7 +16,6 @@ Application.put_env(:lemon_gateway, gateway_config_key, %{
   enable_discord: false,
   enable_xmtp: false,
   max_concurrent_runs: 1,
-  default_engine: "lemon",
   # Neutralize TOML-derived Telegram defaults from local developer config.
   telegram: %{
     bot_token: nil,

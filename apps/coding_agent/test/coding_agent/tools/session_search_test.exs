@@ -39,7 +39,7 @@ defmodule CodingAgent.Tools.SessionSearchTest do
     assert String.downcase(tool.description) =~ "no-llm"
   end
 
-  test "discovery searches all stored memory and returns scroll anchors" do
+  test "discovery searches the calling agent's own sessions and returns scroll anchors" do
     tool =
       SessionSearch.tool("/tmp/project",
         session_key: "agent:test:current",
@@ -66,7 +66,7 @@ defmodule CodingAgent.Tools.SessionSearchTest do
     payload =
       tool.execute.("call-1", %{"query" => "modpack", "limit" => 999}, nil, nil) |> decode()
 
-    assert_receive {:search, "modpack", [scope: :all, scope_key: nil, limit: 10]}
+    assert_receive {:search, "modpack", [scope: :agent, scope_key: "test", limit: 10]}
 
     assert payload["success"] == true
     assert payload["mode"] == "discover"
@@ -74,6 +74,22 @@ defmodule CodingAgent.Tools.SessionSearchTest do
 
     assert [%{"session_id" => "agent:test:older", "matchMessageId" => 10_001}] =
              payload["results"]
+  end
+
+  test "discovery searches the whole store only with the explicit :all opt-in" do
+    tool =
+      SessionSearch.tool("/tmp/project",
+        session_key: "agent:test:current",
+        session_search_scope: :all,
+        session_search_fn: fn query, opts ->
+          send(self(), {:search, query, opts})
+          []
+        end
+      )
+
+    tool.execute.("call-all", %{"query" => "modpack"}, nil, nil)
+
+    assert_receive {:search, "modpack", [scope: :all, scope_key: nil, limit: 3]}
   end
 
   test "discovery supports newest and oldest sorting" do
@@ -195,6 +211,7 @@ defmodule CodingAgent.Tools.SessionSearchTest do
 
     missing =
       SessionSearch.tool("/tmp/project",
+        session_key: "agent:test:current",
         session_history_fn: fn _session, _opts -> [] end
       )
 
@@ -211,5 +228,105 @@ defmodule CodingAgent.Tools.SessionSearchTest do
     assert current_payload["error"] =~ "current session"
     assert missing_payload["success"] == false
     assert missing_payload["error"] =~ "not in session"
+  end
+
+  test "scroll refuses sessions belonging to a different agent without the :all opt-in" do
+    tool =
+      SessionSearch.tool("/tmp/project",
+        session_key: "agent:test:current",
+        session_history_fn: fn _session, _opts ->
+          flunk("history must not be read for a cross-agent session")
+        end
+      )
+
+    payload =
+      tool.execute.(
+        "call-cross",
+        %{"session_id" => "agent:other:main", "around_message_id" => 1},
+        nil,
+        nil
+      )
+      |> decode()
+
+    assert payload["success"] == false
+    assert payload["error"] =~ "outside this agent's scope"
+  end
+
+  test "scroll allows cross-agent sessions with the :all opt-in" do
+    tool =
+      SessionSearch.tool("/tmp/project",
+        session_key: "agent:test:current",
+        session_search_scope: :all,
+        session_history_fn: fn "agent:other:main", _opts ->
+          [
+            {"run_1",
+             %{started_at: 1_000, summary: %{prompt: "one", completed: %{answer: "done one"}}}}
+          ]
+        end
+      )
+
+    payload =
+      tool.execute.(
+        "call-cross-ok",
+        %{"session_id" => "agent:other:main", "around_message_id" => 10_001},
+        nil,
+        nil
+      )
+      |> decode()
+
+    assert payload["success"] == true
+    assert payload["mode"] == "scroll"
+  end
+
+  test "scroll and browse redact run-history content that matches secret patterns" do
+    history_fn = fn _session, _opts ->
+      [
+        {"run_1",
+         %{
+           started_at: 1_000,
+           summary: %{
+             prompt: "please use api_key: sk-abcdefghijklmnopqrstu123456 for the deploy",
+             completed: %{answer: "done, no secrets here"}
+           }
+         }}
+      ]
+    end
+
+    browse_tool =
+      SessionSearch.tool("/tmp/project",
+        session_key: "agent:test:current",
+        session_history_fn: history_fn
+      )
+
+    browse_payload = browse_tool.execute.("call-redact-1", %{}, nil, nil) |> decode()
+
+    browse_contents =
+      browse_payload["results"]
+      |> List.first()
+      |> Map.get("messages")
+      |> Enum.map(& &1["content"])
+
+    assert Enum.any?(browse_contents, &(&1 =~ "redacted"))
+    refute Enum.any?(browse_contents, &(&1 =~ "sk-abcdefghijklmnop"))
+    assert "done, no secrets here" in browse_contents
+
+    scroll_tool =
+      SessionSearch.tool("/tmp/project",
+        session_key: "agent:test:current",
+        session_history_fn: history_fn
+      )
+
+    scroll_payload =
+      scroll_tool.execute.(
+        "call-redact-2",
+        %{"session_id" => "agent:test:old", "around_message_id" => 10_001},
+        nil,
+        nil
+      )
+      |> decode()
+
+    scroll_contents = Enum.map(scroll_payload["messages"], & &1["content"])
+    assert Enum.any?(scroll_contents, &(&1 =~ "redacted"))
+    refute Enum.any?(scroll_contents, &(&1 =~ "sk-abcdefghijklmnop"))
   end
 end

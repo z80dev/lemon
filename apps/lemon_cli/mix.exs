@@ -27,7 +27,6 @@ defmodule LemonCli.MixProject do
     [
       {:jason, "~> 1.4"},
       {:toml, "~> 0.7"},
-      {:term_ui, "~> 0.2.0"},
       {:exqlite, "~> 0.34.0"},
       {:yaml_elixir, "~> 2.9"},
       {:lemon_core, in_umbrella: true},

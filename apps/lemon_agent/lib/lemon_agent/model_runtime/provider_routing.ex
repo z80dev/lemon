@@ -1,56 +1,81 @@
 defmodule LemonAgent.ModelRuntime.ProviderRouting do
   @moduledoc """
-  Redacted provider route-plan preview.
+  Provider route planning and redacted route-plan preview.
 
-  This module defines Lemon's stable provider routing shape without executing a
-  model call. Runtime dispatch can consume the same candidate ordering once the
-  fallback execution path is wired.
+  `plan/3` builds the ordered candidate list runtime dispatch consumes: the
+  requested primary provider first, then fallbacks by precedence (explicit
+  params fallbacks, else profile fallback_providers -> profile distribution ->
+  credential-pool providers -> global routing fallback_providers). Candidates
+  whose LemonAi circuit breaker is open are demoted to the end of the plan —
+  never dropped. `preview/3` renders the same plan as the stable string-keyed
+  report used by provider diagnostics, without executing a model call.
   """
 
   alias LemonAgent.ModelRuntime.ProviderNames
+  alias LemonAgent.ModelRuntime.ProviderPoolRotator
   alias LemonCore.Config
+
+  @type candidate :: %{
+          provider: String.t(),
+          role: :primary | :fallback,
+          pool: String.t() | nil,
+          strategy: String.t() | nil,
+          known: boolean(),
+          configured: boolean(),
+          credential_ready: boolean(),
+          selectable: boolean(),
+          demotions: [atom()]
+        }
+
+  @doc """
+  Build the ordered provider candidate plan.
+
+  Options:
+
+    * `:statuses` - provider status maps (as built by `ProviderStatus`) used
+      to fill `known`/`configured`/`credential_ready`; defaults to `[]`.
+    * `:check_breakers?` - demote candidates whose circuit breaker is open to
+      the end of the plan, tagging them with `:circuit_open` (default `true`).
+    * `:rotate?` - apply round-robin credential-pool rotation (default
+      `false`; rotation advances shared state, so previews leave it off).
+    * `:rotation_key` - stable session scope for pool rotation; a caller that
+      passes the same value keeps the same rotation slot. Defaults to
+      `:global`, which advances the rotation on every planned resolution.
+  """
+  @spec plan(map() | nil, Config.t(), keyword()) :: [candidate()]
+  def plan(params, config, opts \\ [])
+
+  def plan(params, %Config{} = config, opts) do
+    build_plan(params, config, opts).candidates
+  end
+
+  def plan(params, _config, opts), do: plan(params, %Config{}, opts)
 
   @spec preview(map() | nil, Config.t(), [map()]) :: map()
   def preview(params, %Config{} = config, provider_statuses) do
-    params = params || %{}
-    routing = routing_config(config)
-    requested_provider = requested_provider(params, config)
-    requested_model = requested_model(params, config)
-    requested_profile = requested_profile(params, routing)
-    selected_profile = profile_config(routing, requested_profile)
-    requested_pool = requested_pool(params, routing, selected_profile)
-    selected_pool = pool_config(routing, requested_pool)
-    fallback_providers = fallback_providers(params, routing, selected_profile, selected_pool)
-
-    candidates =
-      [
-        candidate(requested_provider, "primary", provider_statuses)
-        | fallback_candidates(fallback_providers, provider_statuses)
-      ]
-      |> Enum.reject(&is_nil/1)
-      |> Enum.uniq_by(& &1["provider"])
+    ctx = build_plan(params, config, statuses: provider_statuses)
+    routing = ctx.routing
 
     selected =
       if routing.enabled do
-        Enum.find(candidates, &candidate_selectable?(&1, routing))
+        Enum.find(ctx.candidates, & &1.selectable)
       else
         nil
       end
 
     %{
       "enabled" => routing.enabled,
-      "requestedProvider" => requested_provider,
-      "requestedModel" => requested_model,
-      "selectedProvider" => selected && selected["provider"],
-      "selectedModel" => if(selected, do: requested_model),
+      "requestedProvider" => ctx.requested_provider,
+      "requestedModel" => ctx.requested_model,
+      "selectedProvider" => selected && selected.provider,
+      "selectedModel" => if(selected, do: ctx.requested_model),
       "decision" => decision(selected, routing),
-      "selectedProfile" => requested_profile,
-      "selectedCredentialPool" => requested_pool,
-      "fallbackProviders" =>
-        Enum.map(fallback_candidates(fallback_providers, provider_statuses), & &1["provider"]),
-      "candidateProviders" => Enum.map(candidates, &mark_selected(&1, selected)),
-      "profileDistribution" => profile_distribution(selected_profile),
-      "credentialPool" => credential_pool(provider_statuses, requested_pool, selected_pool),
+      "selectedProfile" => ctx.profile_name,
+      "selectedCredentialPool" => ctx.pool_name,
+      "fallbackProviders" => ctx.fallback_providers,
+      "candidateProviders" => Enum.map(ctx.candidates, &render_candidate(&1, selected)),
+      "profileDistribution" => profile_distribution(ctx.profile),
+      "credentialPool" => credential_pool(provider_statuses, ctx.pool_name, ctx.pool),
       "cleanup" => %{
         "includesRawApiKeys" => false,
         "includesSecretNames" => false,
@@ -66,18 +91,70 @@ defmodule LemonAgent.ModelRuntime.ProviderRouting do
 
   @spec candidate_provider_ids(map() | nil, Config.t()) :: [String.t()]
   def candidate_provider_ids(params, %Config{} = config) do
-    params = params || %{}
-    routing = routing_config(config)
-    selected_profile = profile_config(routing, requested_profile(params, routing))
-    selected_pool = pool_config(routing, requested_pool(params, routing, selected_profile))
+    params
+    |> build_plan(config, check_breakers?: false)
+    |> Map.fetch!(:candidates)
+    |> Enum.map(& &1.provider)
+  end
 
-    [
-      requested_provider(params, config)
-      | fallback_providers(params, routing, selected_profile, selected_pool)
-    ]
-    |> Enum.filter(&present?/1)
-    |> Enum.map(&normalize_provider/1)
-    |> Enum.uniq()
+  defp build_plan(params, %Config{} = config, opts) do
+    params = params || %{}
+    statuses = Keyword.get(opts, :statuses, [])
+    routing = routing_config(config)
+    requested_provider = requested_provider(params, config)
+    requested_model = requested_model(params, config)
+    profile_name = requested_profile(params, routing)
+    profile = profile_config(routing, profile_name)
+    pool_name = requested_pool(params, routing, profile)
+    pool = pool_config(routing, pool_name)
+    pool_strategy = map_value(pool, :strategy) || "priority"
+
+    {fallback_providers, pool_providers} =
+      fallback_providers(params, routing, profile, pool, profile_name, pool_name,
+        model_id: requested_model,
+        rotate?: Keyword.get(opts, :rotate?, false),
+        rotation_key: Keyword.get(opts, :rotation_key, :global)
+      )
+
+    candidates =
+      [
+        plan_candidate(
+          requested_provider,
+          :primary,
+          statuses,
+          routing,
+          pool_name,
+          pool_strategy,
+          pool_providers
+        )
+        | Enum.map(
+            fallback_providers,
+            &plan_candidate(
+              &1,
+              :fallback,
+              statuses,
+              routing,
+              pool_name,
+              pool_strategy,
+              pool_providers
+            )
+          )
+      ]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq_by(& &1.provider)
+      |> apply_breaker_demotions(Keyword.get(opts, :check_breakers?, true))
+
+    %{
+      routing: routing,
+      requested_provider: requested_provider,
+      requested_model: requested_model,
+      profile_name: profile_name,
+      profile: profile,
+      pool_name: pool_name,
+      pool: pool,
+      fallback_providers: fallback_providers,
+      candidates: candidates
+    }
   end
 
   defp routing_config(%Config{agent: agent}) when is_map(agent) do
@@ -142,7 +219,10 @@ defmodule LemonAgent.ModelRuntime.ProviderRouting do
     |> normalize_optional_name()
   end
 
-  defp fallback_providers(params, routing, profile, pool) do
+  # Returns {ordered fallback providers, ordered pool providers}. Pool
+  # providers are only ordered (and pool rotation only advanced) when explicit
+  # params fallbacks do not override the configured precedence.
+  defp fallback_providers(params, routing, profile, pool, profile_name, pool_name, rotation) do
     params_fallbacks =
       get_param(params, "fallbackProviders") ||
         get_param(params, "fallback_providers")
@@ -152,40 +232,89 @@ defmodule LemonAgent.ModelRuntime.ProviderRouting do
     |> normalize_list()
     |> case do
       [] ->
-        [
-          profile |> map_value(:fallback_providers) |> normalize_list(),
-          distribution_providers(profile),
-          pool |> map_value(:providers) |> normalize_list(),
-          normalize_list(routing.fallback_providers)
-        ]
-        |> List.flatten()
-        |> Enum.uniq()
+        pool_providers = ordered_pool_providers(pool, profile_name, pool_name, rotation)
+
+        fallbacks =
+          [
+            profile |> map_value(:fallback_providers) |> normalize_list(),
+            distribution_providers(profile),
+            pool_providers,
+            normalize_list(routing.fallback_providers)
+          ]
+          |> List.flatten()
+          |> Enum.uniq()
+
+        {fallbacks, pool_providers}
 
       providers ->
-        providers
+        {providers, []}
     end
   end
 
-  defp fallback_candidates(fallback_providers, provider_statuses) do
-    fallback_providers
-    |> Enum.map(&candidate(&1, "fallback", provider_statuses))
-    |> Enum.reject(&is_nil/1)
+  defp ordered_pool_providers(pool, profile_name, pool_name, rotation) do
+    providers = pool |> map_value(:providers) |> normalize_list()
+
+    if Keyword.get(rotation, :rotate?, false) do
+      ProviderPoolRotator.ordered_providers(
+        {:provider_pool, profile_name, pool_name, Keyword.get(rotation, :model_id)},
+        providers,
+        map_value(pool, :strategy) || "priority",
+        session_scope: Keyword.get(rotation, :rotation_key, :global)
+      )
+    else
+      providers
+    end
   end
 
-  defp candidate(nil, _role, _provider_statuses), do: nil
+  defp plan_candidate(nil, _role, _statuses, _routing, _pool_name, _strategy, _pool_providers),
+    do: nil
 
-  defp candidate(provider, role, provider_statuses) do
+  defp plan_candidate(provider, role, statuses, routing, pool_name, pool_strategy, pool_providers) do
     normalized = normalize_provider(provider)
-    status = find_status(provider_statuses, normalized)
+    status = find_status(statuses, normalized)
+    known = Map.get(status, "known", ProviderNames.canonical_name(normalized) != nil)
+    credential_ready = Map.get(status, "credentialReady", false)
+    in_pool? = normalized in pool_providers
 
     %{
-      "provider" => normalized,
-      "role" => role,
-      "known" => Map.get(status, "known", ProviderNames.canonical_name(normalized) != nil),
-      "configured" => Map.get(status, "configured", false),
-      "credentialReady" => Map.get(status, "credentialReady", false),
-      "selected" => false
+      provider: normalized,
+      role: role,
+      pool: if(in_pool?, do: pool_name),
+      strategy: if(in_pool?, do: pool_strategy),
+      known: known,
+      configured: Map.get(status, "configured", false),
+      credential_ready: credential_ready,
+      selectable: selectable?(known, credential_ready, routing),
+      demotions: []
     }
+  end
+
+  defp selectable?(known, _credential_ready, %{require_credentials: false}), do: known == true
+
+  defp selectable?(known, credential_ready, _routing),
+    do: known == true and credential_ready == true
+
+  defp apply_breaker_demotions(candidates, false), do: candidates
+
+  defp apply_breaker_demotions(candidates, _check) do
+    {open, closed} = Enum.split_with(candidates, &circuit_open?(&1.provider))
+    closed ++ Enum.map(open, &%{&1 | demotions: &1.demotions ++ [:circuit_open]})
+  end
+
+  defp circuit_open?(provider) do
+    case ProviderNames.provider_atom(provider) do
+      nil -> false
+      provider_atom -> breaker_open?(provider_atom)
+    end
+  end
+
+  # A missing or crashed breaker process must never break planning.
+  defp breaker_open?(provider_atom) do
+    LemonAi.CircuitBreaker.open?(provider_atom) == true
+  rescue
+    _ -> false
+  catch
+    :exit, _ -> false
   end
 
   defp find_status(provider_statuses, provider) do
@@ -195,21 +324,21 @@ defmodule LemonAgent.ModelRuntime.ProviderRouting do
     end)
   end
 
-  defp candidate_selectable?(candidate, %{require_credentials: false}),
-    do: candidate["known"] == true
-
-  defp candidate_selectable?(candidate, _routing),
-    do: candidate["known"] == true and candidate["credentialReady"] == true
-
   defp decision(_selected, %{enabled: false}), do: "routing_disabled"
-  defp decision(%{"role" => "primary"}, _routing), do: "selected_primary"
-  defp decision(%{"role" => "fallback"}, _routing), do: "selected_fallback"
+  defp decision(%{role: :primary}, _routing), do: "selected_primary"
+  defp decision(%{role: :fallback}, _routing), do: "selected_fallback"
   defp decision(_selected, _routing), do: "no_ready_provider"
 
-  defp mark_selected(candidate, nil), do: candidate
-
-  defp mark_selected(candidate, selected) do
-    Map.put(candidate, "selected", candidate["provider"] == selected["provider"])
+  defp render_candidate(candidate, selected) do
+    %{
+      "provider" => candidate.provider,
+      "role" => Atom.to_string(candidate.role),
+      "known" => candidate.known,
+      "configured" => candidate.configured,
+      "credentialReady" => candidate.credential_ready,
+      "selected" => selected != nil and candidate.provider == selected.provider,
+      "demotions" => Enum.map(candidate.demotions, &Atom.to_string/1)
+    }
   end
 
   defp credential_pool(provider_statuses, selected_pool_name, selected_pool) do
@@ -217,6 +346,8 @@ defmodule LemonAgent.ModelRuntime.ProviderRouting do
       "selectedPool" => selected_pool_name,
       "strategy" => map_value(selected_pool, :strategy) || "priority",
       "configuredProviders" => normalize_list(map_value(selected_pool, :providers)),
+      # Counts only - credential ref names/values never enter the preview.
+      "credentialCounts" => pool_credential_counts(selected_pool),
       "providers" =>
         Enum.map(provider_statuses, fn status ->
           config = Map.get(status, "config", %{})
@@ -237,6 +368,20 @@ defmodule LemonAgent.ModelRuntime.ProviderRouting do
           }
         end)
     }
+  end
+
+  defp pool_credential_counts(pool) do
+    pool
+    |> map_value(:credentials)
+    |> case do
+      credentials when is_map(credentials) ->
+        Map.new(credentials, fn {provider, refs} ->
+          {normalize_provider(provider), refs |> List.wrap() |> length()}
+        end)
+
+      _ ->
+        %{}
+    end
   end
 
   defp profile_distribution(profile) do
@@ -325,7 +470,7 @@ defmodule LemonAgent.ModelRuntime.ProviderRouting do
   defp normalize_list(value) when is_binary(value), do: normalize_list(String.split(value, ","))
   defp normalize_list(_), do: []
 
-  defp normalize_provider(value) when is_atom(value),
+  defp normalize_provider(value) when is_atom(value) and not is_nil(value),
     do: value |> Atom.to_string() |> normalize_provider()
 
   defp normalize_provider(value) when is_binary(value) do

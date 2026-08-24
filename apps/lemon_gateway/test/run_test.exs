@@ -2,14 +2,14 @@ defmodule LemonGateway.RunTest do
   alias Elixir.LemonGateway, as: LemonGateway
 
   @moduledoc """
-  Comprehensive tests for Elixir.LemonGateway.Run GenServer.
+  Comprehensive tests for the `LemonGateway.Run` GenServer.
 
   Tests cover:
-  - Run initialization and state setup
+  - Configured executor dispatch and request preservation
   - State transitions during execution
-  - Event handling (engine events)
-  - Steering behavior
-  - Cancellation handling
+  - Executor sink event handling
+  - Steering and redirect behavior
+  - Cancellation and exactly-once finalization
   - Error scenarios
   - Process lifecycle
   - Lock acquisition/release
@@ -18,55 +18,56 @@ defmodule LemonGateway.RunTest do
 
   alias Elixir.LemonGateway.Run
   alias LemonGateway.ExecutionRequest
-  alias Elixir.LemonGateway.Types.Job
   alias LemonCore.ResumeToken
   alias Elixir.LemonGateway.Event
 
   # ============================================================================
-  # Test Engines
+  # Configured executor fixture
   # ============================================================================
 
-  # A basic engine for simple tests
-  defmodule Elixir.LemonGateway.RunTest.TestEngine do
-    @behaviour Elixir.LemonGateway.Engine
+  # The run owns lifecycle and event handling. This executor only models the
+  # external process, selecting a deterministic scenario from the request so
+  # every run still crosses the configured singleton executor boundary.
+  defmodule RunFixtureExecutor do
+    @behaviour LemonGateway.Executor
 
-    alias Elixir.LemonGateway.Types.Job
     alias LemonCore.ResumeToken
-    alias Elixir.LemonGateway.Event
+    alias LemonGateway.Event
+    alias LemonGateway.ExecutionRequest
 
     @impl true
-    def id, do: "test"
+    def start_run(%ExecutionRequest{} = request, opts, sink_pid) do
+      scenario = Map.get(request.meta || %{}, :scenario, "test")
+      meta = request.meta || %{}
+      notify_start(meta, request, opts)
 
-    @impl true
-    def format_resume(%ResumeToken{value: sid}), do: "test resume #{sid}"
+      case scenario do
+        "failing" ->
+          {:error, Map.get(meta, :error, :start_failed)}
 
-    @impl true
-    def extract_resume(_text), do: nil
+        "raising" ->
+          raise "boom during start_run"
 
-    @impl true
-    def is_resume_line(_line), do: false
+        "exiting" ->
+          exit(:boom_during_start_run)
 
-    @impl true
-    def supports_steer?, do: false
-
-    @impl true
-    def start_run(%Job{} = job, _opts, sink_pid) do
-      run_ref = make_ref()
-      resume = job.resume || %ResumeToken{engine: id(), value: unique_id()}
-
-      {:ok, task_pid} =
-        Task.start(fn ->
-          send(sink_pid, {:engine_event, run_ref, Event.started(%{engine: id(), resume: resume})})
-          answer = "Test: #{job.prompt}"
-
-          send(
+        "structured_error" ->
+          start_completed(
+            request,
             sink_pid,
-            {:engine_event, run_ref,
-             Event.completed(%{engine: id(), resume: resume, ok: true, answer: answer})}
+            false,
+            Map.get(meta, :error, {:structured, :error})
           )
-        end)
 
-      {:ok, run_ref, %{task_pid: task_pid}}
+        "streaming" ->
+          start_streaming(request, sink_pid)
+
+        "test" ->
+          start_completed(request, sink_pid, true, nil)
+
+        _ ->
+          start_controlled(request, sink_pid, scenario)
+      end
     end
 
     @impl true
@@ -75,298 +76,64 @@ defmodule LemonGateway.RunTest do
       :ok
     end
 
-    defp unique_id, do: Integer.to_string(System.unique_integer([:positive]))
-  end
-
-  # An engine that allows control over when it completes
-  defmodule ControllableEngine do
-    @behaviour Elixir.LemonGateway.Engine
-
-    alias Elixir.LemonGateway.Types.Job
-    alias LemonCore.ResumeToken
-    alias Elixir.LemonGateway.Event
-
-    @impl true
-    def id, do: "controllable"
-
-    @impl true
-    def format_resume(%ResumeToken{value: sid}), do: "controllable resume #{sid}"
-
-    @impl true
-    def extract_resume(_text), do: nil
-
-    @impl true
-    def is_resume_line(_line), do: false
-
-    @impl true
-    def supports_steer?, do: false
-
-    @impl true
-    def start_run(%Job{} = job, _opts, sink_pid) do
-      run_ref = make_ref()
-      resume = job.resume || %ResumeToken{engine: id(), value: unique_id()}
-      controller_pid = (job.meta || %{})[:controller_pid]
-
-      {:ok, task_pid} =
-        Task.start(fn ->
-          send(sink_pid, {:engine_event, run_ref, Event.started(%{engine: id(), resume: resume})})
-          if controller_pid, do: send(controller_pid, {:engine_started, run_ref})
-
-          receive do
-            {:complete, answer} ->
-              send(
-                sink_pid,
-                {:engine_event, run_ref,
-                 Event.completed(%{engine: id(), resume: resume, ok: true, answer: answer})}
-              )
-
-            {:error, reason} ->
-              send(
-                sink_pid,
-                {:engine_event, run_ref,
-                 Event.completed(%{engine: id(), resume: resume, ok: false, error: reason})}
-              )
-          after
-            30_000 ->
-              send(
-                sink_pid,
-                {:engine_event, run_ref,
-                 Event.completed(%{engine: id(), resume: resume, ok: false, error: :timeout})}
-              )
-          end
-        end)
-
-      {:ok, run_ref, %{task_pid: task_pid}}
-    end
-
-    @impl true
-    def cancel(%{task_pid: pid}) when is_pid(pid) do
-      Process.exit(pid, :kill)
-      :ok
-    end
-
-    defp unique_id, do: Integer.to_string(System.unique_integer([:positive]))
-  end
-
-  defmodule StructuredErrorEngine do
-    @behaviour Elixir.LemonGateway.Engine
-
-    alias Elixir.LemonGateway.Event
-    alias Elixir.LemonGateway.Types.Job
-    alias LemonCore.ResumeToken
-
-    @impl true
-    def id, do: "structured_error"
-
-    @impl true
-    def format_resume(%ResumeToken{value: sid}), do: "structured_error resume #{sid}"
-
-    @impl true
-    def extract_resume(_text), do: nil
-
-    @impl true
-    def is_resume_line(_line), do: false
-
-    @impl true
-    def supports_steer?, do: false
-
-    @impl true
-    def start_run(%Job{} = job, _opts, sink_pid) do
-      run_ref = make_ref()
-      resume = job.resume || %ResumeToken{engine: id(), value: unique_id()}
-      error = get_in(job.meta || %{}, [:error]) || {:structured, :error}
-
-      {:ok, task_pid} =
-        Task.start(fn ->
-          send(sink_pid, {:engine_event, run_ref, Event.started(%{engine: id(), resume: resume})})
-
-          send(
-            sink_pid,
-            {:engine_event, run_ref,
-             Event.completed(%{engine: id(), resume: resume, ok: false, error: error})}
-          )
-        end)
-
-      {:ok, run_ref, %{task_pid: task_pid}}
-    end
-
-    @impl true
-    def cancel(%{task_pid: pid}) when is_pid(pid) do
-      Process.exit(pid, :kill)
-      :ok
-    end
-
-    defp unique_id, do: Integer.to_string(System.unique_integer([:positive]))
-  end
-
-  # An engine that fails on start_run
-  defmodule FailingEngine do
-    @behaviour Elixir.LemonGateway.Engine
-
-    alias Elixir.LemonGateway.Types.Job
-    alias LemonCore.ResumeToken
-
-    @impl true
-    def id, do: "failing"
-
-    @impl true
-    def format_resume(%ResumeToken{value: sid}), do: "failing resume #{sid}"
-
-    @impl true
-    def extract_resume(_text), do: nil
-
-    @impl true
-    def is_resume_line(_line), do: false
-
-    @impl true
-    def supports_steer?, do: false
-
-    @impl true
-    def start_run(%Job{} = job, _opts, _sink_pid) do
-      error = (job.meta || %{})[:error] || :start_failed
-      {:error, error}
-    end
-
-    @impl true
     def cancel(_ctx), do: :ok
-  end
-
-  defmodule RaisingEngine do
-    @behaviour Elixir.LemonGateway.Engine
-
-    alias Elixir.LemonGateway.Types.Job
-    alias LemonCore.ResumeToken
 
     @impl true
-    def id, do: "raising"
-
-    @impl true
-    def format_resume(%ResumeToken{value: sid}), do: "raising resume #{sid}"
-
-    @impl true
-    def extract_resume(_text), do: nil
-
-    @impl true
-    def is_resume_line(_line), do: false
-
-    @impl true
-    def supports_steer?, do: false
-
-    @impl true
-    def start_run(%Job{}, _opts, _sink_pid) do
-      raise "boom during start_run"
-    end
-
-    @impl true
-    def cancel(_ctx), do: :ok
-  end
-
-  # An engine that supports steering
-  defmodule SteerableTestEngine do
-    @behaviour Elixir.LemonGateway.Engine
-
-    alias Elixir.LemonGateway.Types.Job
-    alias LemonCore.ResumeToken
-    alias Elixir.LemonGateway.Event
-
-    @impl true
-    def id, do: "steerable_test"
-
-    @impl true
-    def format_resume(%ResumeToken{value: sid}), do: "steerable_test resume #{sid}"
-
-    @impl true
-    def extract_resume(_text), do: nil
-
-    @impl true
-    def is_resume_line(_line), do: false
-
-    @impl true
-    def supports_steer?, do: true
-
-    @impl true
-    def start_run(%Job{} = job, _opts, sink_pid) do
-      run_ref = make_ref()
-      resume = job.resume || %ResumeToken{engine: id(), value: unique_id()}
-      steer_notify_pid = (job.meta || %{})[:steer_notify_pid]
-      controller_pid = (job.meta || %{})[:controller_pid]
-
-      {:ok, task_pid} =
-        Task.start(fn ->
-          send(sink_pid, {:engine_event, run_ref, Event.started(%{engine: id(), resume: resume})})
-          if controller_pid, do: send(controller_pid, {:engine_started, run_ref})
-
-          receive do
-            {:complete, answer} ->
-              send(
-                sink_pid,
-                {:engine_event, run_ref,
-                 Event.completed(%{engine: id(), resume: resume, ok: true, answer: answer})}
-              )
-          after
-            30_000 ->
-              send(
-                sink_pid,
-                {:engine_event, run_ref,
-                 Event.completed(%{engine: id(), resume: resume, ok: false, error: :timeout})}
-              )
-          end
-        end)
-
-      {:ok, run_ref, %{task_pid: task_pid, steer_notify_pid: steer_notify_pid}}
-    end
-
-    @impl true
-    def cancel(%{task_pid: pid}) when is_pid(pid) do
-      Process.exit(pid, :kill)
-      :ok
-    end
-
-    @impl true
-    def steer(%{steer_notify_pid: notify_pid}, text) when is_pid(notify_pid) do
+    def steer(%{scenario: "steerable_test", steer_notify_pid: notify_pid}, text)
+        when is_pid(notify_pid) do
       send(notify_pid, {:steered, text})
       :ok
     end
 
-    def steer(_ctx, _text), do: :ok
-
-    defp unique_id, do: Integer.to_string(System.unique_integer([:positive]))
-  end
-
-  # An engine that emits deltas for streaming tests
-  defmodule Elixir.LemonGateway.RunTest.StreamingEngine do
-    @behaviour Elixir.LemonGateway.Engine
-
-    alias Elixir.LemonGateway.Types.Job
-    alias LemonCore.ResumeToken
-    alias Elixir.LemonGateway.Event
+    def steer(%{scenario: "steer_fail"}, _text), do: {:error, :steer_failed}
+    def steer(_ctx, _text), do: {:error, :unsupported}
 
     @impl true
-    def id, do: "streaming"
+    def redirect(_ctx, _text), do: {:error, :unsupported}
 
-    @impl true
-    def format_resume(%ResumeToken{value: sid}), do: "streaming resume #{sid}"
-
-    @impl true
-    def extract_resume(_text), do: nil
-
-    @impl true
-    def is_resume_line(_line), do: false
-
-    @impl true
-    def supports_steer?, do: false
-
-    @impl true
-    def start_run(%Job{} = job, _opts, sink_pid) do
+    defp start_completed(request, sink_pid, ok, error) do
       run_ref = make_ref()
-      resume = job.resume || %ResumeToken{engine: id(), value: unique_id()}
-      delay_ms = (job.meta || %{})[:delta_delay_ms] || 10
+      engine = "lemon"
+      resume = request.resume || %ResumeToken{engine: engine, value: unique_id()}
 
       {:ok, task_pid} =
         Task.start(fn ->
-          send(sink_pid, {:engine_event, run_ref, Event.started(%{engine: id(), resume: resume})})
+          send(
+            sink_pid,
+            {:engine_event, run_ref, Event.started(%{engine: engine, resume: resume})}
+          )
 
-          # Emit some deltas with a small delay
+          completed =
+            if ok do
+              Event.completed(%{
+                engine: engine,
+                resume: resume,
+                ok: true,
+                answer: "Test: #{request.prompt}"
+              })
+            else
+              Event.completed(%{engine: engine, resume: resume, ok: false, error: error})
+            end
+
+          send(sink_pid, {:engine_event, run_ref, completed})
+        end)
+
+      {:ok, run_ref, %{task_pid: task_pid, scenario: engine}}
+    end
+
+    defp start_streaming(request, sink_pid) do
+      run_ref = make_ref()
+      engine = "lemon"
+      resume = request.resume || %ResumeToken{engine: engine, value: unique_id()}
+      delay_ms = Map.get(request.meta || %{}, :delta_delay_ms, 10)
+
+      {:ok, task_pid} =
+        Task.start(fn ->
+          send(
+            sink_pid,
+            {:engine_event, run_ref, Event.started(%{engine: engine, resume: resume})}
+          )
+
           Process.sleep(delay_ms)
           send(sink_pid, {:engine_delta, run_ref, "Hello"})
           Process.sleep(delay_ms)
@@ -377,84 +144,66 @@ defmodule LemonGateway.RunTest do
           send(
             sink_pid,
             {:engine_event, run_ref,
-             Event.completed(%{engine: id(), resume: resume, ok: true, answer: ""})}
+             Event.completed(%{engine: engine, resume: resume, ok: true, answer: ""})}
           )
         end)
 
-      {:ok, run_ref, %{task_pid: task_pid}}
+      {:ok, run_ref, %{task_pid: task_pid, scenario: engine}}
     end
 
-    @impl true
-    def cancel(%{task_pid: pid}) when is_pid(pid) do
-      Process.exit(pid, :kill)
-      :ok
-    end
-
-    defp unique_id, do: Integer.to_string(System.unique_integer([:positive]))
-  end
-
-  # An engine that fails on steer
-  defmodule SteerFailEngine do
-    @behaviour Elixir.LemonGateway.Engine
-
-    alias Elixir.LemonGateway.Types.Job
-    alias LemonCore.ResumeToken
-    alias Elixir.LemonGateway.Event
-
-    @impl true
-    def id, do: "steer_fail"
-
-    @impl true
-    def format_resume(%ResumeToken{value: sid}), do: "steer_fail resume #{sid}"
-
-    @impl true
-    def extract_resume(_text), do: nil
-
-    @impl true
-    def is_resume_line(_line), do: false
-
-    @impl true
-    def supports_steer?, do: true
-
-    @impl true
-    def start_run(%Job{} = job, _opts, sink_pid) do
+    defp start_controlled(request, sink_pid, scenario) do
       run_ref = make_ref()
-      resume = job.resume || %ResumeToken{engine: id(), value: unique_id()}
-      controller_pid = (job.meta || %{})[:controller_pid]
+      meta = request.meta || %{}
+      resume = request.resume || %ResumeToken{engine: "lemon", value: unique_id()}
 
       {:ok, task_pid} =
         Task.start(fn ->
-          send(sink_pid, {:engine_event, run_ref, Event.started(%{engine: id(), resume: resume})})
-          if controller_pid, do: send(controller_pid, {:engine_started, run_ref})
+          send(
+            sink_pid,
+            {:engine_event, run_ref, Event.started(%{engine: "lemon", resume: resume})}
+          )
+
+          if controller_pid = Map.get(meta, :controller_pid) do
+            send(controller_pid, {:engine_started, run_ref})
+          end
 
           receive do
             {:complete, answer} ->
               send(
                 sink_pid,
                 {:engine_event, run_ref,
-                 Event.completed(%{engine: id(), resume: resume, ok: true, answer: answer})}
+                 Event.completed(%{engine: "lemon", resume: resume, ok: true, answer: answer})}
+              )
+
+            {:error, reason} ->
+              send(
+                sink_pid,
+                {:engine_event, run_ref,
+                 Event.completed(%{engine: "lemon", resume: resume, ok: false, error: reason})}
               )
           after
             30_000 ->
               send(
                 sink_pid,
                 {:engine_event, run_ref,
-                 Event.completed(%{engine: id(), resume: resume, ok: false, error: :timeout})}
+                 Event.completed(%{engine: "lemon", resume: resume, ok: false, error: :timeout})}
               )
           end
         end)
 
-      {:ok, run_ref, %{task_pid: task_pid}}
+      {:ok, run_ref,
+       %{
+         task_pid: task_pid,
+         scenario: scenario,
+         steer_notify_pid: Map.get(meta, :steer_notify_pid)
+       }}
     end
 
-    @impl true
-    def cancel(%{task_pid: pid}) when is_pid(pid) do
-      Process.exit(pid, :kill)
-      :ok
+    defp notify_start(meta, request, opts) do
+      if observer = Map.get(meta, :executor_observer) do
+        send(observer, {:executor_started, request, opts})
+      end
     end
-
-    @impl true
-    def steer(_ctx, _text), do: {:error, :steer_failed}
 
     defp unique_id, do: Integer.to_string(System.unique_integer([:positive]))
   end
@@ -464,27 +213,16 @@ defmodule LemonGateway.RunTest do
   # ============================================================================
 
   setup do
-    # Stop and restart the application with our test engines
+    # Stop and restart the application with the configured executor fixture.
     _ = Application.stop(:lemon_gateway)
 
     Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
       max_concurrent_runs: 10,
-      default_engine: "test",
       enable_telegram: false,
       require_engine_lock: false
     })
 
-    Application.put_env(:lemon_gateway, :engines, [
-      Elixir.LemonGateway.RunTest.TestEngine,
-      ControllableEngine,
-      StructuredErrorEngine,
-      FailingEngine,
-      RaisingEngine,
-      SteerableTestEngine,
-      SteerFailEngine,
-      Elixir.LemonGateway.RunTest.StreamingEngine,
-      Elixir.LemonGateway.Engines.Echo
-    ])
+    Application.put_env(:lemon_gateway, :executor, RunFixtureExecutor)
 
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
@@ -495,9 +233,11 @@ defmodule LemonGateway.RunTest do
     "test:#{chat_id}"
   end
 
-  defp make_job(session_key, opts \\ []) do
+  defp make_request(session_key, opts \\ []) do
     user_msg_id = Keyword.get(opts, :user_msg_id, 1)
-    base_meta = %{notify_pid: self(), user_msg_id: user_msg_id}
+    resume = Keyword.get(opts, :resume)
+    scenario = Keyword.get(opts, :scenario) || "test"
+    base_meta = %{notify_pid: self(), user_msg_id: user_msg_id, scenario: scenario}
     meta_opt = Keyword.get(opts, :meta, %{})
 
     meta =
@@ -507,31 +247,29 @@ defmodule LemonGateway.RunTest do
         true -> meta_opt
       end
 
-    %Job{
+    %ExecutionRequest{
+      run_id: Keyword.get(opts, :run_id, "submission_#{System.unique_integer([:positive])}"),
       session_key: session_key,
       prompt: Keyword.get(opts, :prompt, Keyword.get(opts, :text, "test message")),
-      engine_id: Keyword.get(opts, :engine_id, Keyword.get(opts, :engine_hint, "test")),
-      resume: Keyword.get(opts, :resume),
+      cwd: Keyword.get(opts, :cwd),
+      resume: resume,
+      lane: Keyword.get(opts, :lane),
+      tool_policy: Keyword.get(opts, :tool_policy),
+      conversation_key: test_conversation_key(session_key, resume),
       meta: meta
     }
   end
 
-  defp make_request(session_key, opts) do
-    job = make_job(session_key, opts)
-    ExecutionRequest.from_job(job, conversation_key: test_conversation_key(job))
-  end
-
-  defp test_conversation_key(%Job{resume: %ResumeToken{engine: engine, value: value}})
+  defp test_conversation_key(_session_key, %ResumeToken{engine: engine, value: value})
        when is_binary(engine) and is_binary(value),
        do: {:resume, engine, value}
 
-  defp test_conversation_key(%Job{session_key: session_key}) when is_binary(session_key),
+  defp test_conversation_key(session_key, _resume) when is_binary(session_key),
     do: {:session, session_key}
 
-  defp start_run_direct(job, slot_ref \\ make_ref()) do
+  defp start_run_direct(%ExecutionRequest{} = request, slot_ref \\ make_ref()) do
     args = %{
-      execution_request:
-        ExecutionRequest.from_job(job, conversation_key: test_conversation_key(job)),
+      execution_request: request,
       slot_ref: slot_ref,
       worker_pid: self()
     }
@@ -574,73 +312,87 @@ defmodule LemonGateway.RunTest do
   # ============================================================================
 
   describe "initialization" do
-    test "starts successfully with valid job" do
+    test "starts successfully with a valid execution request" do
       scope = make_scope()
-      job = make_job(scope)
+      request = make_request(scope)
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
       assert Process.alive?(pid)
 
       # Wait for completion
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
     end
 
-    test "initializes state with correct fields" do
+    test "retains an active run when the executor emits no completion" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable",
+      request =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
-      # Engine should start
+      # The executor has supplied a control context and deliberately does not
+      # emit a terminal sink event. Run stays active until it is cancelled.
       assert_receive {:engine_started, _run_ref}, 2000
-
-      # Process should be alive and running
       assert Process.alive?(pid)
 
-      # Clean up by completing the engine
-      # The engine task needs the complete message
-    end
+      GenServer.cast(pid, {:cancel, :user_requested})
 
-    test "uses default engine when engine_hint is nil" do
-      scope = make_scope()
-
-      job = %Job{
-        session_key: scope,
-        prompt: "test",
-        engine_id: nil,
-        meta: %{notify_pid: self(), user_msg_id: 1}
-      }
-
-      {:ok, pid} = start_run_direct(job)
-
-      # Should complete using default engine (test)
-      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true, engine: "test"}},
+      assert_receive {:run_complete, ^pid,
+                      %{__event__: :completed, ok: false, engine: "lemon", error: :user_requested}},
                      2000
     end
 
-    test "explicit engine_id takes precedence over resume token engine" do
+    test "passes an execution request to the executor with fixed lemon provenance" do
+      scope = make_scope()
+
+      request =
+        make_request(scope,
+          meta: %{notify_pid: self(), user_msg_id: 1, executor_observer: self()}
+        )
+
+      {:ok, pid} = start_run_direct(request)
+
+      assert_receive {:executor_started, %ExecutionRequest{prompt: "test message"}, _opts}, 2000
+
+      assert_receive {:run_complete, ^pid,
+                      %{
+                        __event__: :completed,
+                        ok: true,
+                        engine: "lemon",
+                        answer: "Test: test message"
+                      }},
+                     2000
+    end
+
+    test "preserves a resume token on the execution request" do
       scope = make_scope()
       resume = %ResumeToken{engine: "echo", value: "abc123"}
-      job = make_job(scope, resume: resume, engine_hint: "test")
 
-      {:ok, pid} = start_run_direct(job)
+      request =
+        make_request(scope, resume: resume, scenario: "test", meta: %{executor_observer: self()})
 
-      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true, engine: "test"}},
+      {:ok, pid} = start_run_direct(request)
+
+      assert_receive {:executor_started, %ExecutionRequest{resume: ^resume}, _opts}, 2000
+
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true, engine: "lemon"}},
                      2000
     end
 
-    test "handles engine start_run failure" do
+    test "handles executor start_run failure" do
       scope = make_scope()
 
-      job =
-        make_job(scope, engine_hint: "failing", meta: %{notify_pid: self(), error: :custom_error})
+      request =
+        make_request(scope,
+          scenario: "failing",
+          meta: %{notify_pid: self(), error: :custom_error}
+        )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       # Should receive completion with error
       assert_receive {:run_complete, ^pid,
@@ -651,33 +403,52 @@ defmodule LemonGateway.RunTest do
       Elixir.LemonGateway.AsyncHelpers.assert_process_dead(pid)
     end
 
-    test "handles engine start_run exception" do
+    test "handles executor start_run exception" do
       scope = make_scope()
-      job = make_job(scope, engine_hint: "raising", meta: %{notify_pid: self()})
+      request = make_request(scope, scenario: "raising", meta: %{notify_pid: self()})
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:run_complete, ^pid,
                       %{
                         __event__: :completed,
                         ok: false,
-                        error: "engine_start_exception: boom during start_run"
+                        error: "executor_start_exception: boom during start_run"
                       }},
                      2000
 
       Elixir.LemonGateway.AsyncHelpers.assert_process_dead(pid)
     end
 
-    test "sends notification to notify_pid on completion" do
+    test "handles executor start_run exit" do
       scope = make_scope()
-      job = make_job(scope)
+      request = make_request(scope, scenario: "exiting", meta: %{notify_pid: self()})
 
-      {:ok, _pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
-      # Should receive both run_complete (to worker) and notification (to notify_pid)
-      assert_receive {:run_complete, _, %{__event__: :completed, ok: true}}, 2000
+      assert_receive {:run_complete, ^pid,
+                      %{
+                        __event__: :completed,
+                        ok: false,
+                        error: "executor_start_exit: :boom_during_start_run"
+                      }},
+                     2000
 
-      assert_receive {:lemon_gateway_run_completed, ^job, %{__event__: :completed, ok: true}},
+      Elixir.LemonGateway.AsyncHelpers.assert_process_dead(pid)
+    end
+
+    test "sends completion notification with the original submitted request" do
+      scope = make_scope()
+      request = make_request(scope, run_id: nil)
+
+      {:ok, _pid} = start_run_direct(request)
+
+      # Run normalizes its internal request, but completion must identify the
+      # original request submitted by the caller.
+      assert_receive {:run_complete, _, %{__event__: :completed, ok: true} = completed}, 2000
+      assert is_binary(completed.run_id)
+
+      assert_receive {:lemon_gateway_run_completed, ^request, %{__event__: :completed, ok: true}},
                      2000
     end
   end
@@ -690,15 +461,15 @@ defmodule LemonGateway.RunTest do
     test "processes Started event and continues" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable",
+      request =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
       slot_ref = make_ref()
 
-      {:ok, pid} = start_run_direct(job, slot_ref)
+      {:ok, pid} = start_run_direct(request, slot_ref)
 
       # Wait for engine to start
       assert_receive {:engine_started, _run_ref}, 2000
@@ -711,15 +482,15 @@ defmodule LemonGateway.RunTest do
       scope = make_scope()
       run_id = "run_#{System.unique_integer([:positive])}"
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable",
+      request =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
         |> Map.put(:run_id, run_id)
 
       LemonCore.Bus.subscribe("run:#{run_id}")
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:engine_started, run_ref}, 2000
 
@@ -760,9 +531,9 @@ defmodule LemonGateway.RunTest do
 
     test "processes Completed event and stops" do
       scope = make_scope()
-      job = make_job(scope)
+      request = make_request(scope)
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       # Should complete and stop
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
@@ -774,13 +545,13 @@ defmodule LemonGateway.RunTest do
     test "ignores events with wrong run_ref" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable",
+      request =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:engine_started, _run_ref}, 2000
 
@@ -801,9 +572,9 @@ defmodule LemonGateway.RunTest do
   describe "event handling" do
     test "stores events in Store" do
       scope = make_scope()
-      job = make_job(scope)
+      request = make_request(scope)
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
 
@@ -812,9 +583,9 @@ defmodule LemonGateway.RunTest do
 
     test "handles successful completion" do
       scope = make_scope()
-      job = make_job(scope, text: "hello world")
+      request = make_request(scope, text: "hello world")
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:run_complete, ^pid,
                       %{__event__: :completed, ok: true, answer: "Test: hello world"}},
@@ -824,10 +595,10 @@ defmodule LemonGateway.RunTest do
     test "handles error completion" do
       scope = make_scope()
 
-      job =
-        make_job(scope, engine_hint: "failing", meta: %{notify_pid: self(), error: :test_error})
+      request =
+        make_request(scope, scenario: "failing", meta: %{notify_pid: self(), error: :test_error})
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:run_complete, ^pid,
                       %{__event__: :completed, ok: false, error: :test_error}},
@@ -837,13 +608,13 @@ defmodule LemonGateway.RunTest do
     test "handles unknown messages gracefully" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable",
+      request =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:engine_started, _run_ref}, 2000
 
@@ -863,19 +634,24 @@ defmodule LemonGateway.RunTest do
     test "accepts steer when engine supports it" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_hint: "steerable_test",
+      request =
+        make_request(scope,
+          scenario: "steerable_test",
           meta: %{notify_pid: self(), controller_pid: self(), steer_notify_pid: self()}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:engine_started, _run_ref}, 2000
 
       # Send steer cast
-      steer_request = make_request(scope, text: "steering message")
-      GenServer.cast(pid, {:steer, steer_request, self()})
+      %{run_id: submission_run_id, prompt: prompt} =
+        make_request(scope, text: "steering message")
+
+      GenServer.cast(pid, {:steer, submission_run_id, prompt, self()})
+
+      # The control submission is acknowledged by its stable run ID.
+      assert_receive {:steer_accepted, ^submission_run_id}, 2000
 
       # Should receive steer notification
       assert_receive {:steered, "steering message"}, 2000
@@ -886,16 +662,16 @@ defmodule LemonGateway.RunTest do
 
     test "rejects steer when run is completed" do
       scope = make_scope()
-      job = make_job(scope)
+      request = make_request(scope)
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       # Wait for completion
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
 
       # Try to steer after completion
-      steer_request = make_request(scope, text: "late steer")
-      GenServer.cast(pid, {:steer, steer_request, self()})
+      %{run_id: submission_run_id, prompt: prompt} = make_request(scope, text: "late steer")
+      GenServer.cast(pid, {:steer, submission_run_id, prompt, self()})
 
       # Should receive rejection (though process may be dead)
       # Note: This test may be flaky since the process stops after completion
@@ -904,22 +680,23 @@ defmodule LemonGateway.RunTest do
     test "rejects steer when engine does not support it" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable",
+      request =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:engine_started, _run_ref}, 2000
 
       # Try to steer (engine doesn't support it)
-      steer_request = make_request(scope, text: "steer attempt")
-      GenServer.cast(pid, {:steer, steer_request, self()})
+      %{run_id: submission_run_id, prompt: prompt} = make_request(scope, text: "steer attempt")
 
-      # Should receive rejection
-      assert_receive {:steer_rejected, ^steer_request}, 2000
+      GenServer.cast(pid, {:steer, submission_run_id, prompt, self()})
+
+      # Should receive rejection for the submitted run ID.
+      assert_receive {:steer_rejected, ^submission_run_id}, 2000
     end
 
     test "rejects steer when engine is not yet initialized" do
@@ -930,22 +707,24 @@ defmodule LemonGateway.RunTest do
     test "rejects steer when engine steer call fails" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_hint: "steer_fail",
+      request =
+        make_request(scope,
+          scenario: "steer_fail",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:engine_started, _run_ref}, 2000
 
       # Try to steer (engine will fail)
-      steer_request = make_request(scope, text: "steer that fails")
-      GenServer.cast(pid, {:steer, steer_request, self()})
+      %{run_id: submission_run_id, prompt: prompt} =
+        make_request(scope, text: "steer that fails")
 
-      # Should receive rejection due to steer error
-      assert_receive {:steer_rejected, ^steer_request}, 2000
+      GenServer.cast(pid, {:steer, submission_run_id, prompt, self()})
+
+      # Should receive rejection due to steer error.
+      assert_receive {:steer_rejected, ^submission_run_id}, 2000
     end
   end
 
@@ -957,13 +736,13 @@ defmodule LemonGateway.RunTest do
     test "cancels run when cancel cast is received" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable",
+      request =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:engine_started, _run_ref}, 2000
 
@@ -979,36 +758,45 @@ defmodule LemonGateway.RunTest do
       Elixir.LemonGateway.AsyncHelpers.assert_process_dead(pid)
     end
 
-    test "cancel is idempotent when already completed" do
+    test "cancel is idempotent and emits one terminal completion" do
       scope = make_scope()
-      job = make_job(scope)
 
-      {:ok, pid} = start_run_direct(job)
+      request =
+        make_request(scope,
+          scenario: "controllable",
+          meta: %{notify_pid: self(), controller_pid: self()}
+        )
 
-      # Wait for natural completion
-      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
+      {:ok, pid} = start_run_direct(request)
+      assert_receive {:engine_started, _run_ref}, 2000
 
-      # Try to cancel after completion (should be ignored)
-      # Process may already be dead, which is fine
+      GenServer.cast(pid, {:cancel, :user_requested})
+      GenServer.cast(pid, {:cancel, :user_requested})
+
+      assert_receive {:run_complete, ^pid,
+                      %{__event__: :completed, ok: false, error: :user_requested}},
+                     2000
+
+      refute_receive {:run_complete, ^pid, _}, 500
     end
 
     test "cancel sends notification to notify_pid" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable",
+      request =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:engine_started, _run_ref}, 2000
 
       GenServer.cast(pid, {:cancel, :test_reason})
 
       # Should receive notification
-      assert_receive {:lemon_gateway_run_completed, ^job,
+      assert_receive {:lemon_gateway_run_completed, ^request,
                       %{__event__: :completed, ok: false, error: :test_reason}},
                      2000
     end
@@ -1017,13 +805,13 @@ defmodule LemonGateway.RunTest do
       scope = make_scope()
       slot_ref = make_ref()
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable",
+      request =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid} = start_run_direct(job, slot_ref)
+      {:ok, pid} = start_run_direct(request, slot_ref)
 
       assert_receive {:engine_started, _run_ref}, 2000
 
@@ -1037,13 +825,13 @@ defmodule LemonGateway.RunTest do
     test "cancel calls engine.cancel" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable",
+      request =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:engine_started, _run_ref}, 2000
 
@@ -1059,45 +847,60 @@ defmodule LemonGateway.RunTest do
   # ============================================================================
 
   describe "error scenarios" do
-    test "handles engine start_run returning error" do
+    test "handles executor start_run returning error" do
       scope = make_scope()
 
-      job =
-        make_job(scope, engine_hint: "failing", meta: %{notify_pid: self(), error: :engine_error})
+      request =
+        make_request(scope,
+          scenario: "failing",
+          meta: %{notify_pid: self(), error: :engine_error}
+        )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:run_complete, ^pid,
                       %{__event__: :completed, ok: false, error: :engine_error}},
                      2000
 
-      assert_receive {:lemon_gateway_run_completed, ^job,
+      assert_receive {:lemon_gateway_run_completed, ^request,
                       %{__event__: :completed, ok: false, error: :engine_error}},
                      2000
 
       Elixir.LemonGateway.AsyncHelpers.assert_process_dead(pid)
     end
 
-    test "handles unknown engine gracefully" do
+    test "passes executor test scenarios through request metadata" do
       scope = make_scope()
-      job = make_job(scope, engine_hint: "nonexistent")
 
-      {:ok, pid} = start_run_direct(job)
+      request =
+        make_request(scope,
+          scenario: "controllable",
+          meta: %{notify_pid: self(), controller_pid: self(), executor_observer: self()}
+        )
 
-      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: false, error: error}},
+      {:ok, pid} = start_run_direct(request)
+
+      assert_receive {:executor_started,
+                      %ExecutionRequest{
+                        session_key: ^scope,
+                        conversation_key: {:session, ^scope},
+                        meta: %{scenario: "controllable"}
+                      }, _opts},
                      2000
 
-      assert is_binary(error)
-      assert error =~ "unknown engine id"
+      assert_receive {:engine_started, _run_ref}, 2000
+      GenServer.cast(pid, {:cancel, :user_requested})
 
-      Elixir.LemonGateway.AsyncHelpers.assert_process_dead(pid)
+      assert_receive {:run_complete, ^pid,
+                      %{__event__: :completed, ok: false, engine: "lemon", error: :user_requested}},
+                     2000
     end
 
     test "handles nil notify_pid gracefully" do
       scope = make_scope()
-      job = make_job(scope, meta: nil)
+      request = make_request(scope, meta: nil)
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       # Should still complete (no notification sent)
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
@@ -1115,9 +918,9 @@ defmodule LemonGateway.RunTest do
   describe "process lifecycle" do
     test "process stops normally after successful completion" do
       scope = make_scope()
-      job = make_job(scope)
+      request = make_request(scope)
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
       ref = Process.monitor(pid)
 
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
@@ -1126,9 +929,9 @@ defmodule LemonGateway.RunTest do
 
     test "process stops normally after error completion" do
       scope = make_scope()
-      job = make_job(scope, engine_hint: "failing")
+      request = make_request(scope, scenario: "failing")
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
       ref = Process.monitor(pid)
 
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: false}}, 2000
@@ -1138,13 +941,13 @@ defmodule LemonGateway.RunTest do
     test "process stops normally after cancellation" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable",
+      request =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
       ref = Process.monitor(pid)
 
       assert_receive {:engine_started, _run_ref}, 2000
@@ -1157,9 +960,9 @@ defmodule LemonGateway.RunTest do
     test "releases slot on completion" do
       scope = make_scope()
       slot_ref = make_ref()
-      job = make_job(scope)
+      request = make_request(scope)
 
-      {:ok, pid} = start_run_direct(job, slot_ref)
+      {:ok, pid} = start_run_direct(request, slot_ref)
 
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
 
@@ -1168,9 +971,9 @@ defmodule LemonGateway.RunTest do
 
     test "notifies worker_pid on completion" do
       scope = make_scope()
-      job = make_job(scope)
+      request = make_request(scope)
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       # Worker (self) should receive completion
       assert_receive {:run_complete, ^pid,
@@ -1190,22 +993,12 @@ defmodule LemonGateway.RunTest do
 
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
         max_concurrent_runs: 10,
-        default_engine: "test",
         enable_telegram: false,
         require_engine_lock: true,
         engine_lock_timeout_ms: 5000
       })
 
-      Application.put_env(:lemon_gateway, :engines, [
-        Elixir.LemonGateway.RunTest.TestEngine,
-        ControllableEngine,
-        StructuredErrorEngine,
-        FailingEngine,
-        SteerableTestEngine,
-        SteerFailEngine,
-        Elixir.LemonGateway.RunTest.StreamingEngine,
-        Elixir.LemonGateway.Engines.Echo
-      ])
+      Application.put_env(:lemon_gateway, :executor, RunFixtureExecutor)
 
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
@@ -1214,39 +1007,39 @@ defmodule LemonGateway.RunTest do
 
     test "acquires lock on start when require_engine_lock is true" do
       scope = make_scope()
-      job = make_job(scope)
+      request = make_request(scope)
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 5000
     end
 
     test "releases lock on successful completion" do
       scope = make_scope()
-      job = make_job(scope)
+      request = make_request(scope)
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 5000
 
       # Start another run with same scope - should succeed if lock was released
-      job2 = make_job(scope, text: "second run")
-      {:ok, pid2} = start_run_direct(job2)
+      request2 = make_request(scope, text: "second run")
+      {:ok, pid2} = start_run_direct(request2)
 
       assert_receive {:run_complete, ^pid2, %{__event__: :completed, ok: true}}, 5000
     end
 
     test "releases lock on error completion" do
       scope = make_scope()
-      job = make_job(scope, engine_hint: "failing")
+      request = make_request(scope, scenario: "failing")
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: false}}, 5000
 
       # Start another run with same scope
-      job2 = make_job(scope, text: "after error")
-      {:ok, pid2} = start_run_direct(job2)
+      request2 = make_request(scope, text: "after error")
+      {:ok, pid2} = start_run_direct(request2)
 
       assert_receive {:run_complete, ^pid2, %{__event__: :completed, ok: true}}, 5000
     end
@@ -1254,13 +1047,13 @@ defmodule LemonGateway.RunTest do
     test "releases lock on cancellation" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable",
+      request =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:engine_started, _run_ref}, 5000
 
@@ -1269,8 +1062,8 @@ defmodule LemonGateway.RunTest do
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: false}}, 5000
 
       # Start another run with same scope
-      job2 = make_job(scope, text: "after cancel")
-      {:ok, pid2} = start_run_direct(job2)
+      request2 = make_request(scope, text: "after cancel")
+      {:ok, pid2} = start_run_direct(request2)
 
       assert_receive {:run_complete, ^pid2, %{__event__: :completed, ok: true}}, 5000
     end
@@ -1284,19 +1077,19 @@ defmodule LemonGateway.RunTest do
         value: "shared_session_#{System.unique_integer([:positive])}"
       }
 
-      # Both jobs share the same resume value; first run uses controllable engine to hold the lock.
-      job1 =
-        make_job(scope1,
+      # Both requests share the same resume value; the first holds the lock.
+      request1 =
+        make_request(scope1,
           resume: resume,
-          engine_id: "controllable",
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid1} = start_run_direct(job1)
+      {:ok, pid1} = start_run_direct(request1)
 
       assert_receive {:engine_started, _run_ref}, 5000
 
-      # Second job with same resume should wait for lock
+      # A second request with the same resume token should wait for the lock.
       # We can't easily test the blocking behavior in unit tests
       # but we verify the lock key derivation works
 
@@ -1305,8 +1098,8 @@ defmodule LemonGateway.RunTest do
       assert_receive {:run_complete, ^pid1, _}, 5000
 
       # Now second should succeed - use test engine for quick completion
-      job2 = make_job(scope2, resume: %ResumeToken{engine: "test", value: resume.value})
-      {:ok, pid2} = start_run_direct(job2)
+      request2 = make_request(scope2, resume: %ResumeToken{engine: "test", value: resume.value})
+      {:ok, pid2} = start_run_direct(request2)
       assert_receive {:run_complete, ^pid2, %{__event__: :completed}}, 5000
     end
   end
@@ -1322,23 +1115,13 @@ defmodule LemonGateway.RunTest do
 
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
         max_concurrent_runs: 10,
-        default_engine: "test",
         enable_telegram: false,
         require_engine_lock: true,
         # Very short timeout
         engine_lock_timeout_ms: 100
       })
 
-      Application.put_env(:lemon_gateway, :engines, [
-        Elixir.LemonGateway.RunTest.TestEngine,
-        ControllableEngine,
-        StructuredErrorEngine,
-        FailingEngine,
-        SteerableTestEngine,
-        SteerFailEngine,
-        Elixir.LemonGateway.RunTest.StreamingEngine,
-        Elixir.LemonGateway.Engines.Echo
-      ])
+      Application.put_env(:lemon_gateway, :executor, RunFixtureExecutor)
 
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
@@ -1348,20 +1131,20 @@ defmodule LemonGateway.RunTest do
     test "fails fast when lock acquisition times out" do
       scope = make_scope()
 
-      # Start a long-running job to hold the lock
-      job1 =
-        make_job(scope,
-          engine_hint: "controllable",
+      # Start a long-running request to hold the lock.
+      request1 =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, _pid1} = start_run_direct(job1)
+      {:ok, _pid1} = start_run_direct(request1)
 
       assert_receive {:engine_started, _run_ref}, 5000
 
-      # Try to start second job - should timeout waiting for lock
-      job2 = make_job(scope, text: "should timeout")
-      result = start_run_direct(job2)
+      # Try to start a second request; it should time out waiting for the lock.
+      request2 = make_request(scope, text: "should timeout")
+      result = start_run_direct(request2)
 
       # The init returns {:stop, :normal} on lock timeout, which means
       # start_link may return {:ok, pid} before the process stops, or
@@ -1389,7 +1172,7 @@ defmodule LemonGateway.RunTest do
       end
 
       # Should receive lock timeout completion notification for job2
-      assert_receive {:lemon_gateway_run_completed, ^job2,
+      assert_receive {:lemon_gateway_run_completed, ^request2,
                       %{__event__: :completed, ok: false, error: :lock_timeout}},
                      5000
     end
@@ -1397,29 +1180,29 @@ defmodule LemonGateway.RunTest do
     test "sends lock_timeout error on timeout" do
       scope = make_scope()
 
-      # Hold lock with first job
-      job1 =
-        make_job(scope,
-          engine_hint: "controllable",
+      # Hold the lock with the first request.
+      request1 =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, _pid1} = start_run_direct(job1)
+      {:ok, _pid1} = start_run_direct(request1)
 
       assert_receive {:engine_started, _run_ref}, 5000
 
-      # Second job should fail with lock timeout
-      job2 = make_job(scope, text: "timeout test")
+      # The second request should fail with a lock timeout.
+      request2 = make_request(scope, text: "timeout test")
 
       # The init returns {:stop, :normal} on lock timeout
       # which means start_link returns {:ok, pid} then the process immediately stops
       # OR the init could complete before returning
 
       # We check for the notification instead
-      _result = start_run_direct(job2)
+      _result = start_run_direct(request2)
 
       # Should receive lock timeout notification
-      assert_receive {:lemon_gateway_run_completed, ^job2,
+      assert_receive {:lemon_gateway_run_completed, ^request2,
                       %{__event__: :completed, ok: false, error: :lock_timeout}},
                      5000
     end
@@ -1434,13 +1217,13 @@ defmodule LemonGateway.RunTest do
       scope = make_scope()
       progress_msg_id = System.unique_integer([:positive])
       # Use controllable engine so we can check the mapping before completion
-      job =
-        make_job(scope,
-          engine_hint: "controllable",
+      request =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), progress_msg_id: progress_msg_id, controller_pid: self()}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       # Wait for engine to start (which means registration should be done)
       assert_receive {:engine_started, _run_ref}, 2000
@@ -1470,9 +1253,9 @@ defmodule LemonGateway.RunTest do
 
     test "does not register mapping when progress_msg_id is nil" do
       scope = make_scope()
-      job = make_job(scope, meta: %{notify_pid: self()})
+      request = make_request(scope, meta: %{notify_pid: self()})
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:run_complete, ^pid, _}, 2000
 
@@ -1483,9 +1266,9 @@ defmodule LemonGateway.RunTest do
     test "unregisters progress mapping on completion" do
       scope = make_scope()
       progress_msg_id = System.unique_integer([:positive])
-      job = make_job(scope, meta: %{notify_pid: self(), progress_msg_id: progress_msg_id})
+      request = make_request(scope, meta: %{notify_pid: self(), progress_msg_id: progress_msg_id})
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       # Wait for completion
       assert_receive {:run_complete, ^pid, _}, 2000
@@ -1501,13 +1284,13 @@ defmodule LemonGateway.RunTest do
       scope = make_scope()
       progress_msg_id = System.unique_integer([:positive])
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable",
+      request =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self(), progress_msg_id: progress_msg_id}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:engine_started, _run_ref}, 2000
 
@@ -1543,9 +1326,9 @@ defmodule LemonGateway.RunTest do
   describe "renderer integration" do
     test "initializes renderer state" do
       scope = make_scope()
-      job = make_job(scope)
+      request = make_request(scope)
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
     end
@@ -1553,13 +1336,13 @@ defmodule LemonGateway.RunTest do
     test "applies events through renderer" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable",
+      request =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, _pid} = start_run_direct(job)
+      {:ok, _pid} = start_run_direct(request)
 
       assert_receive {:engine_started, _run_ref}, 2000
 
@@ -1570,9 +1353,9 @@ defmodule LemonGateway.RunTest do
       scope = make_scope()
       # Without chat_id, no rendering to Outbox occurs
       # But the renderer still processes the event
-      job = make_job(scope)
+      request = make_request(scope)
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
     end
@@ -1586,13 +1369,13 @@ defmodule LemonGateway.RunTest do
     test "handles Started -> ActionEvent -> Completed sequence" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable",
+      request =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:engine_started, run_ref}, 2000
 
@@ -1633,13 +1416,13 @@ defmodule LemonGateway.RunTest do
     test "processes many events without issues" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable",
+      request =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:engine_started, run_ref}, 2000
 
@@ -1668,22 +1451,24 @@ defmodule LemonGateway.RunTest do
     test "steer is accepted when engine supports it and run is active" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_hint: "steerable_test",
+      request =
+        make_request(scope,
+          scenario: "steerable_test",
           meta: %{notify_pid: self(), controller_pid: self(), steer_notify_pid: self()}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:engine_started, _run_ref}, 2000
 
       # Steer should succeed
-      steer_request = make_request(scope, text: "steering text")
-      GenServer.cast(pid, {:steer, steer_request, self()})
+      %{run_id: submission_run_id, prompt: prompt} = make_request(scope, text: "steering text")
 
-      # Engine receives the steer
+      GenServer.cast(pid, {:steer, submission_run_id, prompt, self()})
+
+      # Engine receives the steer and the submission receives its ID acknowledgement.
       assert_receive {:steered, "steering text"}, 2000
+      assert_receive {:steer_accepted, ^submission_run_id}, 2000
 
       # No rejection should be sent
       refute_receive {:steer_rejected, _}, 100
@@ -1692,21 +1477,24 @@ defmodule LemonGateway.RunTest do
     test "multiple steers in sequence are all accepted" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_hint: "steerable_test",
+      request =
+        make_request(scope,
+          scenario: "steerable_test",
           meta: %{notify_pid: self(), controller_pid: self(), steer_notify_pid: self()}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:engine_started, _run_ref}, 2000
 
-      # Send multiple steers
-      for i <- 1..5 do
-        steer_request = make_request(scope, text: "steer #{i}")
-        GenServer.cast(pid, {:steer, steer_request, self()})
-      end
+      submission_run_ids =
+        for i <- 1..5 do
+          %{run_id: submission_run_id, prompt: prompt} = make_request(scope, text: "steer #{i}")
+
+          GenServer.cast(pid, {:steer, submission_run_id, prompt, self()})
+
+          submission_run_id
+        end
 
       # All should be received by engine - collect all messages
       received_steers =
@@ -1722,6 +1510,14 @@ defmodule LemonGateway.RunTest do
       assert "steer 1" in received_steers
       assert "steer 5" in received_steers
 
+      accepted_run_ids =
+        Enum.map(1..5, fn _ ->
+          assert_receive {:steer_accepted, submission_run_id}, 2000
+          submission_run_id
+        end)
+
+      assert Enum.sort(accepted_run_ids) == Enum.sort(submission_run_ids)
+
       # No rejections
       refute_receive {:steer_rejected, _}, 100
     end
@@ -1731,24 +1527,24 @@ defmodule LemonGateway.RunTest do
     test "steer is rejected when run is already completed" do
       scope = make_scope()
       # Use test engine that completes quickly
-      job = make_job(scope, meta: %{notify_pid: self()})
+      request = make_request(scope, meta: %{notify_pid: self()})
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       # Wait for completion
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
 
       # Process should be stopping/stopped, but if we can still message it...
-      steer_request = make_request(scope, text: "late steer")
+      %{run_id: submission_run_id, prompt: prompt} = make_request(scope, text: "late steer")
       ref = Process.monitor(pid)
 
       # After completion, a late steer is either explicitly rejected (if the
       # process is still alive) or the process exits before handling it.
       if Process.alive?(pid) do
-        GenServer.cast(pid, {:steer, steer_request, self()})
+        GenServer.cast(pid, {:steer, submission_run_id, prompt, self()})
 
         receive do
-          {:steer_rejected, ^steer_request} -> :ok
+          {:steer_rejected, ^submission_run_id} -> :ok
           {:DOWN, ^ref, :process, ^pid, _} -> :ok
         after
           2000 ->
@@ -1770,55 +1566,58 @@ defmodule LemonGateway.RunTest do
     test "steer is rejected when engine does not support steering" do
       scope = make_scope()
       # Use controllable engine which does NOT support steering
-      job =
-        make_job(scope,
-          engine_hint: "controllable",
+      request =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:engine_started, _run_ref}, 2000
 
       # Try to steer
-      steer_request = make_request(scope, text: "steer attempt")
-      GenServer.cast(pid, {:steer, steer_request, self()})
+      %{run_id: submission_run_id, prompt: prompt} = make_request(scope, text: "steer attempt")
 
-      # Should be rejected because engine doesn't support steering
-      assert_receive {:steer_rejected, ^steer_request}, 2000
+      GenServer.cast(pid, {:steer, submission_run_id, prompt, self()})
+
+      # Should be rejected because engine doesn't support steering.
+      assert_receive {:steer_rejected, ^submission_run_id}, 2000
     end
 
     test "steer is rejected when engine.steer returns error" do
       scope = make_scope()
       # Use steer_fail engine that supports steering but always fails
-      job =
-        make_job(scope,
-          engine_hint: "steer_fail",
+      request =
+        make_request(scope,
+          scenario: "steer_fail",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:engine_started, _run_ref}, 2000
 
       # Try to steer
-      steer_request = make_request(scope, text: "steer that fails")
-      GenServer.cast(pid, {:steer, steer_request, self()})
+      %{run_id: submission_run_id, prompt: prompt} =
+        make_request(scope, text: "steer that fails")
 
-      # Should be rejected because engine.steer returned error
-      assert_receive {:steer_rejected, ^steer_request}, 2000
+      GenServer.cast(pid, {:steer, submission_run_id, prompt, self()})
+
+      # Should be rejected because engine.steer returned an error.
+      assert_receive {:steer_rejected, ^submission_run_id}, 2000
     end
 
     test "steer rejection sends message to correct worker_pid" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable",
+      request =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:engine_started, _run_ref}, 2000
 
@@ -1828,18 +1627,20 @@ defmodule LemonGateway.RunTest do
       worker =
         spawn(fn ->
           receive do
-            {:steer_rejected, request} -> send(test_pid, {:worker_got_rejection, request})
+            {:steer_rejected, submission_run_id} ->
+              send(test_pid, {:worker_got_rejection, submission_run_id})
           after
             5000 -> send(test_pid, :worker_timeout)
           end
         end)
 
-      steer_request = make_request(scope, text: "steer attempt")
-      GenServer.cast(pid, {:steer, steer_request, worker})
+      %{run_id: submission_run_id, prompt: prompt} = make_request(scope, text: "steer attempt")
 
-      # The worker should receive the rejection, not us
+      GenServer.cast(pid, {:steer, submission_run_id, prompt, worker})
+
+      # The worker should receive the rejection, not us.
       refute_receive {:steer_rejected, _}, 100
-      assert_receive {:worker_got_rejection, ^steer_request}, 2000
+      assert_receive {:worker_got_rejection, ^submission_run_id}, 2000
     end
   end
 
@@ -1853,23 +1654,13 @@ defmodule LemonGateway.RunTest do
 
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
         max_concurrent_runs: 10,
-        default_engine: "test",
         enable_telegram: false,
         require_engine_lock: true,
         # Very short timeout for faster tests
         engine_lock_timeout_ms: 50
       })
 
-      Application.put_env(:lemon_gateway, :engines, [
-        Elixir.LemonGateway.RunTest.TestEngine,
-        ControllableEngine,
-        StructuredErrorEngine,
-        FailingEngine,
-        SteerableTestEngine,
-        SteerFailEngine,
-        Elixir.LemonGateway.RunTest.StreamingEngine,
-        Elixir.LemonGateway.Engines.Echo
-      ])
+      Application.put_env(:lemon_gateway, :executor, RunFixtureExecutor)
 
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
@@ -1879,23 +1670,23 @@ defmodule LemonGateway.RunTest do
     test "lock timeout returns :lock_timeout error in completed event" do
       scope = make_scope()
 
-      # Start first job to hold the lock
-      job1 =
-        make_job(scope,
-          engine_hint: "controllable",
+      # Start the first request to hold the lock.
+      request1 =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, _pid1} = start_run_direct(job1)
+      {:ok, _pid1} = start_run_direct(request1)
 
       assert_receive {:engine_started, _run_ref}, 5000
 
-      # Second job should timeout
-      job2 = make_job(scope, text: "will timeout")
-      _result = start_run_direct(job2)
+      # The second request should time out.
+      request2 = make_request(scope, text: "will timeout")
+      _result = start_run_direct(request2)
 
       # Should receive completion with :lock_timeout error
-      assert_receive {:lemon_gateway_run_completed, ^job2, completed}, 5000
+      assert_receive {:lemon_gateway_run_completed, ^request2, completed}, 5000
       assert completed.ok == false
       assert completed.error == :lock_timeout
     end
@@ -1903,73 +1694,73 @@ defmodule LemonGateway.RunTest do
     test "lock timeout releases scheduler slot" do
       scope = make_scope()
 
-      # Start first job to hold the lock
-      job1 =
-        make_job(scope,
-          engine_hint: "controllable",
+      # Start the first request to hold the lock.
+      request1 =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, _pid1} = start_run_direct(job1)
+      {:ok, _pid1} = start_run_direct(request1)
 
       assert_receive {:engine_started, _run_ref}, 5000
 
-      # Second job should timeout but still release its slot
-      job2 = make_job(scope, text: "will timeout")
+      # The second request should time out but still release its slot.
+      request2 = make_request(scope, text: "will timeout")
       slot_ref = make_ref()
-      _result = start_run_direct(job2, slot_ref)
+      _result = start_run_direct(request2, slot_ref)
 
       # Should receive completion notification
-      assert_receive {:lemon_gateway_run_completed, ^job2, _completed}, 5000
+      assert_receive {:lemon_gateway_run_completed, ^request2, _completed}, 5000
 
       # Worker should receive run_complete message
       assert_receive {:run_complete, _pid, %{__event__: :completed, error: :lock_timeout}}, 5000
     end
 
-    test "lock timeout uses correct engine_id in completed event" do
+    test "lock timeout uses fixed lemon provenance in completed event" do
       scope = make_scope()
 
-      # Start first job to hold the lock
-      job1 =
-        make_job(scope,
-          engine_hint: "controllable",
+      # Start the first request to hold the lock.
+      request1 =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, _pid1} = start_run_direct(job1)
+      {:ok, _pid1} = start_run_direct(request1)
 
       assert_receive {:engine_started, _run_ref}, 5000
 
-      # Second job with different engine hint
-      job2 = make_job(scope, text: "will timeout", engine_hint: "echo")
-      _result = start_run_direct(job2)
+      # The second request uses a different fixture scenario.
+      request2 = make_request(scope, text: "will timeout", scenario: "echo")
+      _result = start_run_direct(request2)
 
-      # Should receive completion with correct engine id
-      assert_receive {:lemon_gateway_run_completed, ^job2, completed}, 5000
-      assert completed.engine == "echo"
+      # Run-generated terminal events have fixed gateway provenance.
+      assert_receive {:lemon_gateway_run_completed, ^request2, completed}, 5000
+      assert completed.engine == "lemon"
     end
 
     test "lock timeout notifies notify_pid even when init fails" do
       scope = make_scope()
 
-      # Start first job to hold the lock
-      job1 =
-        make_job(scope,
-          engine_hint: "controllable",
+      # Start the first request to hold the lock.
+      request1 =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, _pid1} = start_run_direct(job1)
+      {:ok, _pid1} = start_run_direct(request1)
 
       assert_receive {:engine_started, _run_ref}, 5000
 
-      # Second job with notify_pid
+      # The second request supplies a notify_pid.
       notify_receiver = self()
-      job2 = make_job(scope, text: "will timeout", meta: %{notify_pid: notify_receiver})
-      _result = start_run_direct(job2)
+      request2 = make_request(scope, text: "will timeout", meta: %{notify_pid: notify_receiver})
+      _result = start_run_direct(request2)
 
       # notify_pid should receive the notification
-      assert_receive {:lemon_gateway_run_completed, ^job2,
+      assert_receive {:lemon_gateway_run_completed, ^request2,
                       %{__event__: :completed, error: :lock_timeout}},
                      5000
     end
@@ -1977,20 +1768,20 @@ defmodule LemonGateway.RunTest do
     test "lock timeout does not notify when notify_pid is nil" do
       scope = make_scope()
 
-      # Start first job to hold the lock
-      job1 =
-        make_job(scope,
-          engine_hint: "controllable",
+      # Start the first request to hold the lock.
+      request1 =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, _pid1} = start_run_direct(job1)
+      {:ok, _pid1} = start_run_direct(request1)
 
       assert_receive {:engine_started, _run_ref}, 5000
 
-      # Second job without notify_pid
-      job2 = make_job(scope, text: "will timeout", meta: nil)
-      _result = start_run_direct(job2)
+      # The second request omits notify_pid.
+      request2 = make_request(scope, text: "will timeout", meta: nil)
+      _result = start_run_direct(request2)
 
       # Should still receive run_complete to worker
       assert_receive {:run_complete, _pid, %{__event__: :completed, error: :lock_timeout}}, 5000
@@ -2010,9 +1801,9 @@ defmodule LemonGateway.RunTest do
       chat_id = System.unique_integer([:positive])
       progress_msg_id = System.unique_integer([:positive])
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable",
+      request =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{
             notify_pid: self(),
             controller_pid: self(),
@@ -2021,7 +1812,7 @@ defmodule LemonGateway.RunTest do
           }
         )
 
-      {:ok, _pid} = start_run_direct(job)
+      {:ok, _pid} = start_run_direct(request)
 
       # Engine should start, which triggers :running render
       assert_receive {:engine_started, _run_ref}, 2000
@@ -2035,8 +1826,8 @@ defmodule LemonGateway.RunTest do
       chat_id = System.unique_integer([:positive])
       progress_msg_id = System.unique_integer([:positive])
 
-      job =
-        make_job(scope,
+      request =
+        make_request(scope,
           meta: %{
             notify_pid: self(),
             chat_id: chat_id,
@@ -2044,7 +1835,7 @@ defmodule LemonGateway.RunTest do
           }
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       # Should complete with ok: true
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
@@ -2057,9 +1848,9 @@ defmodule LemonGateway.RunTest do
       chat_id = System.unique_integer([:positive])
       progress_msg_id = System.unique_integer([:positive])
 
-      job =
-        make_job(scope,
-          engine_hint: "failing",
+      request =
+        make_request(scope,
+          scenario: "failing",
           meta: %{
             notify_pid: self(),
             chat_id: chat_id,
@@ -2068,7 +1859,7 @@ defmodule LemonGateway.RunTest do
           }
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       # Should complete with error
       assert_receive {:run_complete, ^pid,
@@ -2083,9 +1874,9 @@ defmodule LemonGateway.RunTest do
       chat_id = System.unique_integer([:positive])
       progress_msg_id = System.unique_integer([:positive])
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable",
+      request =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{
             notify_pid: self(),
             controller_pid: self(),
@@ -2094,7 +1885,7 @@ defmodule LemonGateway.RunTest do
           }
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:engine_started, run_ref}, 2000
 
@@ -2123,9 +1914,9 @@ defmodule LemonGateway.RunTest do
     test "renders with fallback when renderer_state is nil during finalize" do
       # This tests the fallback path in maybe_render_from_finalize
       scope = make_scope()
-      job = make_job(scope, engine_hint: "failing", meta: %{notify_pid: self()})
+      request = make_request(scope, scenario: "failing", meta: %{notify_pid: self()})
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       # Engine fails immediately, renderer may not have been fully initialized
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: false}}, 2000
@@ -2133,43 +1924,62 @@ defmodule LemonGateway.RunTest do
   end
 
   # ============================================================================
-  # 16. Engine Interaction Patterns
+  # 16. Executor Interaction Patterns
   # ============================================================================
 
-  describe "engine interaction patterns" do
-    test "engine receives correct job during start_run" do
+  describe "configured executor interaction patterns" do
+    test "passes new and resumed ExecutionRequests directly to the configured executor" do
       scope = make_scope()
       text = "specific text for #{System.unique_integer([:positive])}"
-      job = make_job(scope, text: text, meta: %{notify_pid: self()})
 
-      {:ok, pid} = start_run_direct(job)
+      resume = %ResumeToken{
+        engine: "prior-backend",
+        value: "resume-#{System.unique_integer([:positive])}"
+      }
 
-      # Test engine echoes back the text
+      request =
+        make_request(scope,
+          text: text,
+          resume: resume,
+          meta: %{notify_pid: self(), executor_observer: self()}
+        )
+
+      {:ok, pid} = start_run_direct(request)
+
+      assert_receive {:executor_started,
+                      %ExecutionRequest{
+                        prompt: ^text,
+                        resume: ^resume,
+                        session_key: ^scope,
+                        conversation_key: {:resume, "prior-backend", _}
+                      }, _opts},
+                     2000
+
       assert_receive {:run_complete, ^pid,
                       %{__event__: :completed, ok: true, answer: "Test: " <> ^text}},
                      2000
     end
 
-    test "engine receives opts with cwd when binding has project" do
+    test "executor receives opts with cwd when binding has project" do
       # This would require setting up a binding with a project
       # For now, verify the code path exists
       scope = make_scope()
-      job = make_job(scope, meta: %{notify_pid: self()})
+      request = make_request(scope, meta: %{notify_pid: self()})
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
     end
 
-    test "engine cancel is called with correct cancel_ctx" do
+    test "executor cancel is called with the returned control context" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable",
+      request =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:engine_started, _run_ref}, 2000
 
@@ -2185,13 +1995,13 @@ defmodule LemonGateway.RunTest do
     test "engine events are stored in run event log" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable",
+      request =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:engine_started, run_ref}, 2000
 
@@ -2222,9 +2032,9 @@ defmodule LemonGateway.RunTest do
 
     test "engine start_run error triggers immediate finalize" do
       scope = make_scope()
-      job = make_job(scope, engine_hint: "failing", meta: %{notify_pid: self()})
+      request = make_request(scope, scenario: "failing", meta: %{notify_pid: self()})
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
       ref = Process.monitor(pid)
 
       # Should complete quickly with error
@@ -2243,13 +2053,13 @@ defmodule LemonGateway.RunTest do
     test "cancel with :user_requested reason" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable",
+      request =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:engine_started, _run_ref}, 2000
 
@@ -2263,13 +2073,13 @@ defmodule LemonGateway.RunTest do
     test "cancel with :timeout reason" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable",
+      request =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:engine_started, _run_ref}, 2000
 
@@ -2282,13 +2092,13 @@ defmodule LemonGateway.RunTest do
     test "cancel with custom reason" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable",
+      request =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:engine_started, _run_ref}, 2000
 
@@ -2302,16 +2112,16 @@ defmodule LemonGateway.RunTest do
     test "engine completed event with structured error does not crash the run" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_hint: "structured_error",
+      request =
+        make_request(scope,
+          scenario: "structured_error",
           meta: %{
             notify_pid: self(),
             error: {:session_mismatch, %{expected: "review prompt", got: "019d0cef"}}
           }
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       error = {:session_mismatch, %{expected: "review prompt", got: "019d0cef"}}
 
@@ -2324,13 +2134,13 @@ defmodule LemonGateway.RunTest do
     test "cancel is idempotent - second cancel is ignored" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable",
+      request =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:engine_started, _run_ref}, 2000
 
@@ -2363,34 +2173,24 @@ defmodule LemonGateway.RunTest do
 
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
         max_concurrent_runs: 10,
-        default_engine: "test",
         enable_telegram: false,
         require_engine_lock: true,
         engine_lock_timeout_ms: 5000
       })
 
-      Application.put_env(:lemon_gateway, :engines, [
-        Elixir.LemonGateway.RunTest.TestEngine,
-        ControllableEngine,
-        StructuredErrorEngine,
-        FailingEngine,
-        SteerableTestEngine,
-        SteerFailEngine,
-        Elixir.LemonGateway.RunTest.StreamingEngine,
-        Elixir.LemonGateway.Engines.Echo
-      ])
+      Application.put_env(:lemon_gateway, :executor, RunFixtureExecutor)
 
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
       scope = make_scope()
 
-      job1 =
-        make_job(scope,
-          engine_hint: "controllable",
+      request1 =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid1} = start_run_direct(job1)
+      {:ok, pid1} = start_run_direct(request1)
 
       assert_receive {:engine_started, _run_ref}, 5000
 
@@ -2399,8 +2199,8 @@ defmodule LemonGateway.RunTest do
       assert_receive {:run_complete, ^pid1, _}, 5000
 
       # Second run should succeed (lock released)
-      job2 = make_job(scope, text: "after cancel")
-      {:ok, pid2} = start_run_direct(job2)
+      request2 = make_request(scope, text: "after cancel")
+      {:ok, pid2} = start_run_direct(request2)
 
       assert_receive {:run_complete, ^pid2, %{__event__: :completed, ok: true}}, 5000
     end
@@ -2409,13 +2209,13 @@ defmodule LemonGateway.RunTest do
       scope = make_scope()
       progress_msg_id = System.unique_integer([:positive])
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable",
+      request =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self(), progress_msg_id: progress_msg_id}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:engine_started, _run_ref}, 2000
 
@@ -2453,27 +2253,27 @@ defmodule LemonGateway.RunTest do
     # event the router consumes. These tests assert that event payload.
     test "resume token from Started event is propagated into the completion event" do
       scope = make_scope()
-      job = make_job(scope, meta: %{notify_pid: self()})
+      request = make_request(scope, meta: %{notify_pid: self()})
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true} = completed}, 2000
 
       assert %ResumeToken{} = completed.resume
-      assert completed.resume.engine == "test"
+      assert completed.resume.engine == "lemon"
       assert is_binary(completed.resume.value)
     end
 
     test "resume token from Completed event is propagated into the completion event" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable",
+      request =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:engine_started, run_ref}, 2000
 
@@ -2504,13 +2304,13 @@ defmodule LemonGateway.RunTest do
     test "context overflow completion forwards the error and resume unmodified" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable",
+      request =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
       assert_receive {:engine_started, run_ref}, 2000
 
       resume = %ResumeToken{
@@ -2539,13 +2339,13 @@ defmodule LemonGateway.RunTest do
     test "Chinese context overflow marker is forwarded in the completion event" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable",
+      request =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
       assert_receive {:engine_started, run_ref}, 2000
 
       resume = %ResumeToken{
@@ -2573,11 +2373,11 @@ defmodule LemonGateway.RunTest do
     test "resume token does not override explicit engine selection" do
       scope = make_scope()
       resume = %ResumeToken{engine: "echo", value: "existing_session"}
-      job = make_job(scope, resume: resume, engine_hint: "test", meta: %{notify_pid: self()})
+      request = make_request(scope, resume: resume, scenario: "test", meta: %{notify_pid: self()})
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
-      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true, engine: "test"}},
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true, engine: "lemon"}},
                      2000
     end
 
@@ -2588,22 +2388,12 @@ defmodule LemonGateway.RunTest do
 
       Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
         max_concurrent_runs: 10,
-        default_engine: "test",
         enable_telegram: false,
         require_engine_lock: true,
         engine_lock_timeout_ms: 100
       })
 
-      Application.put_env(:lemon_gateway, :engines, [
-        Elixir.LemonGateway.RunTest.TestEngine,
-        ControllableEngine,
-        StructuredErrorEngine,
-        FailingEngine,
-        SteerableTestEngine,
-        SteerFailEngine,
-        Elixir.LemonGateway.RunTest.StreamingEngine,
-        Elixir.LemonGateway.Engines.Echo
-      ])
+      Application.put_env(:lemon_gateway, :executor, RunFixtureExecutor)
 
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
@@ -2613,25 +2403,25 @@ defmodule LemonGateway.RunTest do
       resume_value = "shared_session_#{System.unique_integer([:positive])}"
       resume = %ResumeToken{engine: "controllable", value: resume_value}
 
-      # First job holds the lock via resume token
-      job1 =
-        make_job(scope1,
+      # The first request holds the lock via its resume token.
+      request1 =
+        make_request(scope1,
           resume: resume,
-          engine_id: "controllable",
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, _pid1} = start_run_direct(job1)
+      {:ok, _pid1} = start_run_direct(request1)
 
       assert_receive {:engine_started, _run_ref}, 5000
 
-      # Second job with same resume token should timeout (different scope, same lock key)
+      # The second request with the same resume token should time out (different scope, same lock key).
       resume2 = %ResumeToken{engine: "test", value: resume_value}
-      job2 = make_job(scope2, resume: resume2, text: "will timeout")
-      _result = start_run_direct(job2)
+      request2 = make_request(scope2, resume: resume2, text: "will timeout")
+      _result = start_run_direct(request2)
 
-      # Should get lock timeout because first job holds the lock
-      assert_receive {:lemon_gateway_run_completed, ^job2,
+      # The first request holds the lock, so the second gets a lock timeout.
+      assert_receive {:lemon_gateway_run_completed, ^request2,
                       %{__event__: :completed, error: :lock_timeout}},
                      5000
     end
@@ -2639,13 +2429,13 @@ defmodule LemonGateway.RunTest do
     test "completion event carries a resume token when cancelled after start" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable",
+      request =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:engine_started, _run_ref}, 2000
 
@@ -2659,26 +2449,25 @@ defmodule LemonGateway.RunTest do
       scope = make_scope()
 
       # Use failing engine which doesn't send resume tokens
-      job =
-        make_job(scope, engine_hint: "failing", meta: %{notify_pid: self(), error: :no_resume})
+      request =
+        make_request(scope, scenario: "failing", meta: %{notify_pid: self(), error: :no_resume})
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: false} = completed}, 2000
 
       assert Map.get(completed, :resume) == nil
     end
 
-    test "resume token engine overrides scope binding default" do
+    test "resumed request without an engine ID keeps fixed lemon provenance" do
       scope = make_scope()
-      # Resume says echo, but default would be test
+      # A resumed request is still dispatched to the configured executor.
       resume = %ResumeToken{engine: "echo", value: "session123"}
-      job = make_job(scope, resume: resume, engine_hint: nil, meta: %{notify_pid: self()})
+      request = make_request(scope, resume: resume, scenario: nil, meta: %{notify_pid: self()})
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
-      # Should use echo engine from resume
-      assert_receive {:run_complete, ^pid, %{__event__: :completed, engine: "echo"}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, engine: "lemon"}}, 2000
     end
   end
 
@@ -2689,9 +2478,9 @@ defmodule LemonGateway.RunTest do
   describe "run finalization details" do
     test "finalize stores run summary with scope" do
       scope = make_scope()
-      job = make_job(scope, meta: %{notify_pid: self()})
+      request = make_request(scope, meta: %{notify_pid: self()})
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
 
@@ -2709,34 +2498,34 @@ defmodule LemonGateway.RunTest do
     test "finalize sets completed flag to prevent double finalization" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable",
+      request =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:engine_started, run_ref}, 2000
 
-      # Send two completed events (shouldn't happen normally, but tests guard)
-      completed1 = Event.completed(%{engine: "controllable", ok: true, answer: "first"})
+      # Two terminal sink events can arrive back-to-back. Run must finalize once.
+      completed1 = Event.completed(%{engine: "lemon", ok: true, answer: "first"})
+      completed2 = Event.completed(%{engine: "lemon", ok: true, answer: "second"})
       send(pid, {:engine_event, run_ref, completed1})
+      send(pid, {:engine_event, run_ref, completed2})
 
-      # Only first should be processed
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true, answer: "first"}},
                      2000
 
-      # Second completion is ignored because process stops
       refute_receive {:run_complete, ^pid, _}, 500
     end
 
     test "finalize handles nil run_ref gracefully" do
       # This happens when engine start_run fails immediately
       scope = make_scope()
-      job = make_job(scope, engine_hint: "failing", meta: %{notify_pid: self()})
+      request = make_request(scope, scenario: "failing", meta: %{notify_pid: self()})
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: false}}, 2000
 
@@ -2752,7 +2541,7 @@ defmodule LemonGateway.RunTest do
   describe "telemetry events" do
     test "emits run_start telemetry on run initialization" do
       scope = make_scope()
-      job = make_job(scope, meta: %{notify_pid: self()})
+      request = make_request(scope, meta: %{notify_pid: self()})
 
       # Attach telemetry handler
       test_pid = self()
@@ -2767,12 +2556,12 @@ defmodule LemonGateway.RunTest do
         nil
       )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       # Should receive telemetry event
       assert_receive {:telemetry_start, measurements, metadata}, 2000
       assert is_integer(measurements.ts_ms)
-      assert metadata.engine == "test"
+      assert metadata.engine == "lemon"
       assert is_binary(metadata.run_id)
 
       # Wait for completion
@@ -2783,7 +2572,7 @@ defmodule LemonGateway.RunTest do
 
     test "emits run_stop telemetry on completion" do
       scope = make_scope()
-      job = make_job(scope, meta: %{notify_pid: self()})
+      request = make_request(scope, meta: %{notify_pid: self()})
 
       # Attach telemetry handler
       test_pid = self()
@@ -2798,7 +2587,7 @@ defmodule LemonGateway.RunTest do
         nil
       )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
 
@@ -2815,8 +2604,8 @@ defmodule LemonGateway.RunTest do
     test "emits run_stop with ok: false on error completion" do
       scope = make_scope()
 
-      job =
-        make_job(scope, engine_hint: "failing", meta: %{notify_pid: self(), error: :test_error})
+      request =
+        make_request(scope, scenario: "failing", meta: %{notify_pid: self(), error: :test_error})
 
       # Attach telemetry handler
       test_pid = self()
@@ -2831,7 +2620,7 @@ defmodule LemonGateway.RunTest do
         nil
       )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: false}}, 2000
 
@@ -2845,9 +2634,9 @@ defmodule LemonGateway.RunTest do
     test "run_stop duration_ms reflects actual execution time" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable",
+      request =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
@@ -2864,7 +2653,7 @@ defmodule LemonGateway.RunTest do
         nil
       )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:engine_started, run_ref}, 2000
 
@@ -2886,8 +2675,11 @@ defmodule LemonGateway.RunTest do
     test "emits first_token telemetry on first delta" do
       scope = make_scope()
 
-      job =
-        make_job(scope, engine_hint: "streaming", meta: %{notify_pid: self(), delta_delay_ms: 50})
+      request =
+        make_request(scope,
+          scenario: "streaming",
+          meta: %{notify_pid: self(), delta_delay_ms: 50}
+        )
 
       # Attach telemetry handler
       test_pid = self()
@@ -2902,7 +2694,7 @@ defmodule LemonGateway.RunTest do
         nil
       )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 5000
 
@@ -2918,8 +2710,11 @@ defmodule LemonGateway.RunTest do
     test "first_token telemetry is only emitted once" do
       scope = make_scope()
 
-      job =
-        make_job(scope, engine_hint: "streaming", meta: %{notify_pid: self(), delta_delay_ms: 10})
+      request =
+        make_request(scope,
+          scenario: "streaming",
+          meta: %{notify_pid: self(), delta_delay_ms: 10}
+        )
 
       # Attach telemetry handler that counts calls
       test_pid = self()
@@ -2934,7 +2729,7 @@ defmodule LemonGateway.RunTest do
         nil
       )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 5000
 
@@ -2948,10 +2743,13 @@ defmodule LemonGateway.RunTest do
     test "accumulated text from deltas appears in final answer" do
       scope = make_scope()
 
-      job =
-        make_job(scope, engine_hint: "streaming", meta: %{notify_pid: self(), delta_delay_ms: 10})
+      request =
+        make_request(scope,
+          scenario: "streaming",
+          meta: %{notify_pid: self(), delta_delay_ms: 10}
+        )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true, answer: answer}},
                      5000
@@ -2966,22 +2764,22 @@ defmodule LemonGateway.RunTest do
   # ============================================================================
 
   describe "edge cases and boundary conditions" do
-    test "handles job with empty text" do
+    test "handles an execution request with empty text" do
       scope = make_scope()
-      job = make_job(scope, text: "", meta: %{notify_pid: self()})
+      request = make_request(scope, text: "", meta: %{notify_pid: self()})
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true, answer: "Test: "}},
                      2000
     end
 
-    test "handles job with very long text" do
+    test "handles an execution request with very long text" do
       scope = make_scope()
       long_text = String.duplicate("a", 10_000)
-      job = make_job(scope, text: long_text, meta: %{notify_pid: self()})
+      request = make_request(scope, text: long_text, meta: %{notify_pid: self()})
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
     end
@@ -2989,13 +2787,13 @@ defmodule LemonGateway.RunTest do
     test "handles rapid successive events" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable",
+      request =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:engine_started, run_ref}, 2000
 
@@ -3019,8 +2817,8 @@ defmodule LemonGateway.RunTest do
     test "handles meta with extra keys" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
+      request =
+        make_request(scope,
           meta: %{
             notify_pid: self(),
             extra_key: "value",
@@ -3029,7 +2827,7 @@ defmodule LemonGateway.RunTest do
           }
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
 
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
     end
@@ -3039,8 +2837,8 @@ defmodule LemonGateway.RunTest do
       runs =
         for i <- 1..5 do
           scope = make_scope()
-          job = make_job(scope, text: "run #{i}", meta: %{notify_pid: self()})
-          {:ok, pid} = start_run_direct(job)
+          request = make_request(scope, text: "run #{i}", meta: %{notify_pid: self()})
+          {:ok, pid} = start_run_direct(request)
           {i, pid}
         end
 
@@ -3053,13 +2851,13 @@ defmodule LemonGateway.RunTest do
     test "handles events after process monitor but before completion" do
       scope = make_scope()
 
-      job =
-        make_job(scope,
-          engine_hint: "controllable",
+      request =
+        make_request(scope,
+          scenario: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid} = start_run_direct(job)
+      {:ok, pid} = start_run_direct(request)
       ref = Process.monitor(pid)
 
       assert_receive {:engine_started, run_ref}, 2000

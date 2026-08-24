@@ -1,6 +1,28 @@
 defmodule LemonSkills.Audit.BundleAudit do
   @moduledoc """
-  Runs bundle-aware skill audits with persisted fingerprinted state.
+  Bundle-aware skill audit with a fingerprinted, persisted verdict cache.
+
+  A *bundle* is a skill directory: `SKILL.md` plus every file it ships. This
+  module is the audit entry point the installer and the synthesis pipeline call
+  before a skill is kept. One audit combines three passes:
+
+  1. `LemonSkills.Audit.SkillLint` — manifest and layout lint.
+  2. `LemonSkills.Audit.Engine` — deterministic content scan of the whole bundle.
+  3. `LemonSkills.Audit.LlmReviewer` — optional model review, off unless
+     `config :lemon_skills, :audit_llm, enabled: true, model: "..."` (or the
+     per-call `:llm` option) turns it on.
+
+  The worst of the three verdicts wins: `:block` beats `:warn` beats `:pass`.
+
+  ## Caching
+
+  Re-auditing an unchanged skill on every start would be slow and, with the LLM
+  pass on, expensive. A verdict is therefore stored by
+  `LemonSkills.Audit.State` under an *audit fingerprint* covering both the
+  bundle content hash and the audit configuration (engine, lint and LLM policy
+  versions, whether the LLM pass ran, and which model). Any change to the skill
+  *or* to the audit itself invalidates the cache, so a cached `:pass` always
+  means "this exact content passed this exact audit".
   """
 
   require Logger
@@ -11,6 +33,33 @@ defmodule LemonSkills.Audit.BundleAudit do
   @type scope :: State.scope()
   @type entity_kind :: State.entity_kind()
 
+  @doc """
+  Audits the skill bundle at `bundle_path` and records the verdict for `key`.
+
+  `scope` is the audit state scope (see `LemonSkills.Audit.State`) and `key` is
+  the skill key the verdict is filed under.
+
+  ## Options
+
+  - `:kind` — entity kind for the state record (default: `:skill`)
+  - `:force` — re-run even when a matching fingerprint is cached (default: `false`)
+  - `:llm` — keyword overrides for the optional LLM pass (`:enabled`, `:model`,
+    `:reviewer`, `:runner`, `:max_bundle_bytes`), taking precedence over the
+    `:audit_llm` application environment
+
+  Returns `{:ok, record}`, where `record` is a string-keyed map holding
+  `"key"`, `"kind"`, `"bundle_hash"`, `"audit_fingerprint"`, `"scanned_at"`,
+  `"lint_valid"`, `"lint_issues"`, `"static_verdict"`, `"static_findings"`,
+  `"llm_verdict"`, `"llm_findings"`, `"llm_model"`, `"llm_review_complete"`,
+  `"llm_policy_version"`, `"final_verdict"`, `"approval_required"`,
+  `"combined_findings"`, and `"cached"` — `true` when the verdict was served
+  from state rather than recomputed.
+
+  Returns `{:error, reason}` when the bundle hash cannot be computed (missing or
+  unreadable directory) or the verdict cannot be persisted. An LLM pass that
+  fails is *not* an error: it is logged and the audit falls back to the lint and
+  deterministic verdicts with `"llm_review_complete" => false`.
+  """
   @spec audit(String.t(), scope(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def audit(bundle_path, scope, key, opts \\ [])
       when is_binary(bundle_path) and is_binary(key) and is_list(opts) do
@@ -30,6 +79,15 @@ defmodule LemonSkills.Audit.BundleAudit do
     end
   end
 
+  @doc """
+  Returns the cache key for an audit of a bundle with hash `bundle_hash`.
+
+  The fingerprint is a SHA-256 hex digest over the bundle hash plus the audit
+  configuration: `LemonSkills.Audit.Engine` version, lint version, LLM policy
+  version, whether the LLM pass is enabled, and the model name. Two audits share
+  a fingerprint only when both the content and the audit that judged it are
+  identical. Takes the same `:llm` option as `audit/4`.
+  """
   @spec audit_fingerprint(String.t(), keyword()) :: String.t()
   def audit_fingerprint(bundle_hash, opts \\ []) when is_binary(bundle_hash) and is_list(opts) do
     llm = llm_config(opts)
@@ -46,10 +104,24 @@ defmodule LemonSkills.Audit.BundleAudit do
     |> sha256_hex()
   end
 
+  @doc """
+  Reads the final verdict out of an audit record from `audit/4`.
+
+  Accepts either the string-keyed record as persisted or an atom-keyed map, and
+  returns `:pass`, `:warn` or `:block`. A map carrying neither `"final_verdict"`
+  nor `:final_verdict` raises `FunctionClauseError` — this function is for
+  reading records, not for probing arbitrary maps.
+  """
   @spec audit_status(map()) :: :pass | :warn | :block
   def audit_status(%{"final_verdict" => verdict}), do: verdict_to_atom(verdict)
   def audit_status(%{final_verdict: verdict}), do: verdict_to_atom(verdict)
 
+  @doc """
+  Returns the combined human-readable findings of an audit record from `audit/4`.
+
+  Accepts either key style, and answers `[]` for a record with no findings list
+  — including a map that is not an audit record at all.
+  """
   @spec audit_findings(map()) :: [String.t()]
   def audit_findings(%{"combined_findings" => findings}) when is_list(findings), do: findings
   def audit_findings(%{combined_findings: findings}) when is_list(findings), do: findings

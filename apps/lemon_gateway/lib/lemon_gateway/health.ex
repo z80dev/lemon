@@ -2,8 +2,9 @@ defmodule LemonGateway.Health do
   @moduledoc """
   Health check system for the gateway.
 
-  Runs built-in checks (supervisor, scheduler, run_supervisor, engine_lock)
-  and optional custom checks configured via `:health_checks` application env.
+  Runs built-in checks (supervisor, scheduler, executor, run_supervisor,
+  engine_lock) and optional custom checks configured via `:health_checks`
+  application env.
   Returns a structured health status map consumed by `Health.Router`.
   """
 
@@ -35,6 +36,7 @@ defmodule LemonGateway.Health do
     checks = [
       {"supervisor", fn -> process_alive_check(LemonGateway.Supervisor) end},
       {"scheduler", fn -> scheduler_check() end},
+      {"executor", fn -> executor_check() end},
       {"run_supervisor", fn -> dynamic_supervisor_check(LemonGateway.RunSupervisor) end},
       {"engine_lock", fn -> process_alive_check(LemonGateway.EngineLock) end}
     ]
@@ -140,6 +142,22 @@ defmodule LemonGateway.Health do
 
       _ ->
         {:error, :not_running}
+    end
+  rescue
+    error ->
+      {:error, error}
+  end
+
+  defp executor_check do
+    case LemonGateway.Executor.validate_configured() do
+      :ok ->
+        {:ok, %{module: inspect(Application.get_env(:lemon_gateway, :executor))}}
+
+      {:error, reason} ->
+        {:error, reason}
+
+      other ->
+        {:error, {:unexpected_executor_validation, other}}
     end
   rescue
     error ->

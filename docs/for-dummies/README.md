@@ -19,7 +19,7 @@ order for the full picture, or jump to whichever part interests you.
 | [2](02-message-journey.md) | Your Message's Journey | End-to-end trace of a Telegram message through every layer and back |
 | [3](03-the-front-door.md) | The Front Door (lemon_channels) | How Telegram messages arrive, get normalized, and how responses get delivered |
 | [4](04-the-traffic-cop.md) | The Traffic Cop (lemon_router) | How messages get routed to the right agent, sessions, and run orchestration |
-| [5](05-the-engine-room.md) | The Engine Room (lemon_gateway) | How AI engines are selected and managed, the scheduling system |
+| [5](05-the-engine-room.md) | The Engine Room (lemon_gateway) | How the native executor is scheduled and how run lifecycle is managed |
 | [6](06-the-agent.md) | The Agent (coding_agent + agent_core) | What Lemon can actually do: tools, the agent loop, sessions, and memory |
 | [7](07-talking-to-llms.md) | Talking to LLMs (ai) | How Lemon communicates with Claude, GPT, Gemini, and other AI models |
 | [8](08-the-foundation.md) | The Foundation (lemon_core) | Config, storage, the event bus, and the glue that holds everything together |

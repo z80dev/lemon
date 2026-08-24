@@ -186,3 +186,38 @@ Expected warnings/skips for the minimal container:
   unavailable.
 - The container does not include `inotify-tools`, so config watching falls back
   to polling.
+
+## Addendum — Packaged installer and onboarding proof (2026-08-18)
+
+This is later evidence for the packaged release journey. It does not alter the
+2026-05-11 source-tree and container observations above.
+
+The later release verification established the following behavior:
+
+- The one-line installer installs a packaged Lemon release and, when it can
+  open `/dev/tty`, invokes the installed `lemon setup` once by default.
+- `--skip-setup` leaves onboarding for a later explicit `lemon setup`; a
+  missing controlling terminal also does not run setup and prints the absolute
+  installed setup command instead. The `sim_broadcast_platform` profile has no
+  interactive setup journey.
+- The packaged `lemon setup` wizard is idempotent. It derives config, secrets,
+  and provider readiness on each pass; creates only missing config and secrets
+  state; retains existing state; skips a provider that is already usable; and
+  verifies a newly configured provider. `--skip-verify` explicitly defers the
+  live provider check rather than treating it as a pass.
+- The first interactive TUI launch evaluates the same provider-readiness state.
+  It enters setup for an incomplete install and proceeds only after the setup
+  gate is satisfied; a ready install does not repeat setup.
+- Packaged minimal and full releases include the Mix-free `LemonCli.CLI`
+  commands for setup, provider onboarding, gateway setup, diagnostics,
+  configuration, secrets, and channel readiness. The source checkout exposes
+  matching `./bin/lemon` wrappers. Telegram and Discord setup adapters are
+  available through gateway setup.
+- The release CLI returns `0` for success, `1` for command failure, and `2`
+  for usage errors. Command-specific help returns `0` and does not execute
+  setup, provider onboarding, or gateway configuration.
+
+This addendum is intentionally limited to the verified packaged onboarding
+surface. It is not evidence of Windows support, a broad remote-updater
+contract, automatic setup without a controlling terminal, or a completed live
+provider check when `--skip-verify` was selected.

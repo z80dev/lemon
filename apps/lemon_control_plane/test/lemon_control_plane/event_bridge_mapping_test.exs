@@ -51,6 +51,9 @@ defmodule LemonControlPlane.EventBridgeMappingTest do
       # Approval events
       assert "exec.approval.requested" in events
       assert "exec.approval.resolved" in events
+
+      # Channel delivery events
+      assert "channel.delivery" in events
     end
 
     test "no duplicate events in supported_events" do
@@ -309,6 +312,8 @@ defmodule LemonControlPlane.EventBridgeMappingTest do
         "exec.approval.requested",
         # :approval_resolved
         "exec.approval.resolved",
+        # :channel_delivery
+        "channel.delivery",
         # :custom_event
         "custom"
       ]

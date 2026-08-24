@@ -78,14 +78,8 @@ defmodule LemonGateway.ConfigLoader do
       |> fetch(:webhook)
       |> parse_webhook()
 
-    engines =
-      gateway
-      |> fetch(:engines)
-      |> parse_engines()
-
     %{
       max_concurrent_runs: fetch(gateway, :max_concurrent_runs),
-      default_engine: fetch(gateway, :default_engine),
       default_cwd: fetch(gateway, :default_cwd),
       auto_resume: fetch(gateway, :auto_resume),
       enable_telegram: fetch(gateway, :enable_telegram),
@@ -106,7 +100,6 @@ defmodule LemonGateway.ConfigLoader do
     |> Map.put(:email, email)
     |> Map.put(:xmtp, xmtp)
     |> Map.put(:webhook, webhook)
-    |> Map.put(:engines, engines)
   end
 
   defp parse_gateway(_), do: %{}
@@ -115,8 +108,7 @@ defmodule LemonGateway.ConfigLoader do
     for {name, config} <- projects, into: %{} do
       project = %Project{
         id: to_string(name),
-        root: fetch(config, :root),
-        default_engine: fetch(config, :default_engine)
+        root: fetch(config, :root)
       }
 
       validate_project_root(project)
@@ -134,7 +126,6 @@ defmodule LemonGateway.ConfigLoader do
         topic_id: fetch(b, :topic_id),
         project: fetch(b, :project),
         agent_id: fetch(b, :agent_id),
-        default_engine: fetch(b, :default_engine),
         queue_mode: parse_queue_mode(fetch(b, :queue_mode))
       }
     end)
@@ -340,7 +331,6 @@ defmodule LemonGateway.ConfigLoader do
       session_key: fetch(integration, :session_key),
       agent_id: fetch(integration, :agent_id),
       queue_mode: parse_webhook_queue_mode(fetch(integration, :queue_mode)),
-      default_engine: fetch(integration, :default_engine),
       cwd: fetch(integration, :cwd),
       callback_url: fetch(integration, :callback_url),
       allow_callback_override: fetch(integration, :allow_callback_override),
@@ -395,19 +385,6 @@ defmodule LemonGateway.ConfigLoader do
   end
 
   defp parse_telegram_files(_), do: %{}
-
-  defp parse_engines(engines) when is_map(engines) do
-    for {name, config} <- engines, into: %{} do
-      engine = %{
-        cli_path: fetch(config, :cli_path),
-        enabled: fetch(config, :enabled)
-      }
-
-      {String.to_atom(to_string(name)), engine}
-    end
-  end
-
-  defp parse_engines(_), do: %{}
 
   defp parse_transport(nil), do: nil
   defp parse_transport("telegram"), do: :telegram

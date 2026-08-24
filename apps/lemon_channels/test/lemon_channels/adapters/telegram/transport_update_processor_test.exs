@@ -175,13 +175,79 @@ defmodule LemonChannels.Adapters.Telegram.TransportUpdateProcessorTest do
     assert refreshed[:last_message_id] == 88
   end
 
-  defp transport_state do
+  test "/redirect with the queue override gate on becomes a redirect submission" do
+    assert {:ok, accepted} = route_text("/redirect focus on tests", allow_queue_override: true)
+
+    assert accepted.meta[:queue_mode] == :redirect
+    assert accepted.message.text == "focus on tests"
+  end
+
+  test "!redirect behaves identically to the slash form" do
+    assert {:ok, accepted} = route_text("!redirect focus on tests", allow_queue_override: true)
+
+    assert accepted.meta[:queue_mode] == :redirect
+    assert accepted.message.text == "focus on tests"
+  end
+
+  test "redirect override is ignored when the queue override gate is off" do
+    assert {:ok, accepted} = route_text("/redirect focus on tests", allow_queue_override: false)
+
+    refute accepted.meta[:queue_mode] == :redirect
+    assert accepted.message.text == "/redirect focus on tests"
+  end
+
+  test "bare /redirect carries no correction and is not treated as an override" do
+    assert {:ok, accepted} = route_text("/redirect", allow_queue_override: true)
+
+    refute accepted.meta[:queue_mode] == :redirect
+    assert accepted.message.text == "/redirect"
+  end
+
+  test "bare !redirect with trailing whitespace is not treated as an override" do
+    assert {:ok, accepted} = route_text("!redirect   ", allow_queue_override: true)
+
+    refute accepted.meta[:queue_mode] == :redirect
+    assert accepted.message.text == "!redirect   "
+  end
+
+  test "/steer still parses after the redirect branch was added" do
+    assert {:ok, accepted} = route_text("/steer look at the logs", allow_queue_override: true)
+
+    assert accepted.meta[:queue_mode] == :steer
+    assert accepted.message.text == "look at the logs"
+  end
+
+  test "text merely mentioning redirect is not an override" do
+    assert {:ok, accepted} =
+             route_text("please redirect the build output", allow_queue_override: true)
+
+    refute accepted.meta[:queue_mode] == :redirect
+    assert accepted.message.text == "please redirect the build output"
+  end
+
+  defp route_text(text, opts) do
+    state = transport_state(opts)
+    chat_id = System.unique_integer([:positive])
+    message_id = System.unique_integer([:positive])
+
+    inbound =
+      UpdateProcessor.prepare_inbound(
+        base_inbound(chat_id: chat_id, message_id: message_id, text: text),
+        state,
+        update_for_message(chat_id, text, message_id),
+        System.unique_integer([:positive])
+      )
+
+    UpdateProcessor.route_authorized_inbound_action(state, inbound)
+  end
+
+  defp transport_state(opts \\ []) do
     %{
       account_id: "default",
       dedupe_ttl_ms: 60_000,
       allowed_chat_ids: nil,
       deny_unbound_chats: false,
-      allow_queue_override: false,
+      allow_queue_override: Keyword.get(opts, :allow_queue_override, false),
       debug_inbound: false,
       log_drops: false
     }

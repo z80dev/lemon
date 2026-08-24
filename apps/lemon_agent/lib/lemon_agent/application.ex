@@ -8,6 +8,9 @@ defmodule LemonAgent.Application do
   - `LemonAgent.SubagentSupervisor` - DynamicSupervisor for subagent processes
   - `LemonAgent.LoopTaskSupervisor` - Task.Supervisor for agent loop tasks
   - `LemonAgent.ToolTaskSupervisor` - Task.Supervisor for tool execution tasks
+  - `LemonAgent.ModelRuntime.ProviderPoolRotator` - Round-robin state for provider credential pools
+  - `LemonAgent.ModelRuntime.CredentialHealth` - Cooldown state for individual provider credentials
+  - `LemonAgent.ModelRuntime.SessionPins` - Per-session pinning of committed fallback candidates
 
   ## Supervision Tree
 
@@ -16,7 +19,10 @@ defmodule LemonAgent.Application do
   ├── LemonAgent.AgentRegistry (Registry)
   ├── LemonAgent.SubagentSupervisor (DynamicSupervisor)
   ├── LemonAgent.LoopTaskSupervisor (Task.Supervisor)
-  └── LemonAgent.ToolTaskSupervisor (Task.Supervisor)
+  ├── LemonAgent.ToolTaskSupervisor (Task.Supervisor)
+  ├── LemonAgent.ModelRuntime.ProviderPoolRotator (GenServer)
+  ├── LemonAgent.ModelRuntime.CredentialHealth (GenServer, owns ETS table)
+  └── LemonAgent.ModelRuntime.SessionPins (GenServer, owns ETS table)
   ```
   """
 
@@ -34,7 +40,13 @@ defmodule LemonAgent.Application do
       # Task.Supervisor for agent loop tasks
       {Task.Supervisor, name: LemonAgent.LoopTaskSupervisor},
       # Task.Supervisor for tool execution tasks
-      {Task.Supervisor, name: LemonAgent.ToolTaskSupervisor}
+      {Task.Supervisor, name: LemonAgent.ToolTaskSupervisor},
+      # Round-robin rotation state for provider credential pools
+      LemonAgent.ModelRuntime.ProviderPoolRotator,
+      # Owns the credential cooldown ETS table
+      LemonAgent.ModelRuntime.CredentialHealth,
+      # Owns the per-session fallback pin ETS table
+      LemonAgent.ModelRuntime.SessionPins
     ]
 
     opts = [strategy: :one_for_one, name: LemonAgent.Supervisor]

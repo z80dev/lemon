@@ -8,7 +8,7 @@ Lemon runs in one of three mutually exclusive execution modes. Later milestones 
 
 | Mode | Description |
 | --- | --- |
-| `source_dev` | Running directly from source via `bin/lemon-dev` or `iex -S mix`. Used for local development. Configuration is read from `config/dev.exs` and Mix runtime. |
+| `source_dev` | Running directly from source via `bin/lemon-tui` or `iex -S mix`. Used for local development. Configuration is read from `config/dev.exs` and Mix runtime. |
 | `release_runtime` | Running from a compiled Elixir release (`lemon_runtime_min` or `lemon_runtime_full`). Configuration is read from `config/runtime.exs` and environment variables only. No Mix tooling available. |
 | `attached_client` | A lightweight client (TUI or web) attached to a running release via the channel/gateway layer. The client does not execute agent logic directly; it submits requests and streams responses. |
 

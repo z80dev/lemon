@@ -2,7 +2,7 @@ defmodule LemonGateway.M6IntegrationTest do
   use ExUnit.Case, async: false
 
   alias LemonGateway.{BindingResolver, Config}
-  alias LemonCore.{ChatScope, ChatState, ResumeToken, Store}
+  alias LemonCore.{ChatScope, ChatState, Store}
 
   setup do
     test_toml_dir =
@@ -42,17 +42,14 @@ defmodule LemonGateway.M6IntegrationTest do
       toml_content = """
       [gateway]
       max_concurrent_runs = 8
-      default_engine = "claude"
 
       [gateway.projects.myproject]
       root = "#{project_root}"
-      default_engine = "codex"
 
       [[gateway.bindings]]
       transport = "telegram"
       chat_id = 123456
       project = "myproject"
-      default_engine = "lemon"
       queue_mode = "followup"
       """
 
@@ -66,13 +63,13 @@ defmodule LemonGateway.M6IntegrationTest do
 
       # Verify gateway config
       assert Config.get(:max_concurrent_runs) == 8
-      assert Config.get(:default_engine) == "claude"
+      refute Map.has_key?(Config.get(), :default_engine)
+      refute Map.has_key?(Config.get(), :engines)
 
       # Verify projects loaded
       projects = Config.get_projects()
       assert map_size(projects) == 1
       assert projects["myproject"].root == project_root
-      assert projects["myproject"].default_engine == "codex"
 
       # Verify bindings loaded
       bindings = Config.get_bindings()
@@ -81,7 +78,6 @@ defmodule LemonGateway.M6IntegrationTest do
       assert binding.transport == :telegram
       assert binding.chat_id == 123_456
       assert binding.project == "myproject"
-      assert binding.default_engine == "lemon"
       assert binding.queue_mode == :followup
     end
 
@@ -95,17 +91,14 @@ defmodule LemonGateway.M6IntegrationTest do
 
       File.write!(toml_path, """
       [gateway]
-      default_engine = "global_default"
 
       [gateway.projects.myapp]
       root = "#{project_root}"
-      default_engine = "project_engine"
 
       [[gateway.bindings]]
       transport = "telegram"
       chat_id = 555
       project = "myapp"
-      default_engine = "binding_engine"
       queue_mode = "collect"
       """)
 
@@ -117,11 +110,6 @@ defmodule LemonGateway.M6IntegrationTest do
       # Check binding resolution
       binding = BindingResolver.resolve_binding(scope)
       assert binding.project == "myapp"
-      assert binding.default_engine == "binding_engine"
-
-      # Check engine resolution (binding takes precedence)
-      engine = BindingResolver.resolve_engine(scope, nil, nil)
-      assert engine == "binding_engine"
 
       # Check cwd resolution
       cwd = BindingResolver.resolve_cwd(scope)
@@ -133,24 +121,34 @@ defmodule LemonGateway.M6IntegrationTest do
     end
 
     test "topic binding overrides chat binding", %{test_toml_dir: test_toml_dir} do
+      chat_root = Path.join(test_toml_dir, "chat-project")
+      topic_root = Path.join(test_toml_dir, "topic-project")
+      File.mkdir_p!(chat_root)
+      File.mkdir_p!(topic_root)
+
       config_dir = Path.join(test_toml_dir, ".lemon")
       File.mkdir_p!(config_dir)
       toml_path = Path.join(config_dir, "config.toml")
 
       File.write!(toml_path, """
-      [gateway]
-      default_engine = "global_default"
+      [gateway.projects.chat]
+      root = "#{chat_root}"
+
+      [gateway.projects.topic]
+      root = "#{topic_root}"
 
       [[gateway.bindings]]
       transport = "telegram"
       chat_id = 777
-      default_engine = "chat_engine"
+      project = "chat"
+      queue_mode = "collect"
 
       [[gateway.bindings]]
       transport = "telegram"
       chat_id = 777
       topic_id = 123
-      default_engine = "topic_engine"
+      project = "topic"
+      queue_mode = "interrupt"
       """)
 
       Application.put_env(:lemon_gateway, :config_path, toml_path)
@@ -159,49 +157,10 @@ defmodule LemonGateway.M6IntegrationTest do
       chat_scope = %ChatScope{transport: :telegram, chat_id: 777}
       topic_scope = %ChatScope{transport: :telegram, chat_id: 777, topic_id: 123}
 
-      # Chat scope uses chat binding engine
-      assert BindingResolver.resolve_engine(chat_scope, nil, nil) == "chat_engine"
-
-      # Topic scope uses topic binding engine
-      assert BindingResolver.resolve_engine(topic_scope, nil, nil) == "topic_engine"
-    end
-
-    test "engine precedence cascade works correctly", %{test_toml_dir: test_toml_dir} do
-      project_root = Path.join(test_toml_dir, "project3")
-      File.mkdir_p!(project_root)
-
-      config_dir = Path.join(test_toml_dir, ".lemon")
-      File.mkdir_p!(config_dir)
-      toml_path = Path.join(config_dir, "config.toml")
-
-      File.write!(toml_path, """
-      [gateway]
-      default_engine = "global"
-
-      [gateway.projects.proj]
-      root = "#{project_root}"
-      default_engine = "project"
-
-      [[gateway.bindings]]
-      transport = "telegram"
-      chat_id = 888
-      project = "proj"
-      """)
-
-      Application.put_env(:lemon_gateway, :config_path, toml_path)
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-
-      scope = %ChatScope{transport: :telegram, chat_id: 888}
-
-      # No hint, no resume: project default wins
-      assert BindingResolver.resolve_engine(scope, nil, nil) == "project"
-
-      # With hint: hint wins
-      assert BindingResolver.resolve_engine(scope, "hint", nil) == "hint"
-
-      # With resume: resume wins
-      resume = %ResumeToken{engine: "resume", value: "token"}
-      assert BindingResolver.resolve_engine(scope, "hint", resume) == "resume"
+      assert BindingResolver.resolve_binding(chat_scope).project == "chat"
+      assert BindingResolver.resolve_binding(topic_scope).project == "topic"
+      assert BindingResolver.resolve_cwd(topic_scope) == topic_root
+      assert BindingResolver.resolve_queue_mode(topic_scope) == :interrupt
     end
 
     test "chat state persistence works", %{test_toml_dir: _test_toml_dir} do

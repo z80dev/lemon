@@ -19,6 +19,24 @@ defmodule LemonSkills.BuiltinSeeder do
 
   @priv_subdir "builtin_skills"
 
+  @doc """
+  Copies every bundled skill that is missing from the global skills directory.
+
+  Called once at boot by `LemonSkills.Application`, and again by `mix lemon.update`
+  after an upgrade so a new release's built-in skills reach an existing install.
+
+  ## Options
+
+  - `:enabled` — run the seed (default: the `:seed_builtin_skills` application
+    environment of `:lemon_skills`, itself defaulting to `true`; the test
+    environment sets it to `false`)
+
+  Always returns `:ok`. Despite the bang, this function does not raise: a missing
+  `priv/builtin_skills` directory is a silent no-op, and an unreadable or
+  unwritable path is logged as a warning and skipped, because failing to seed an
+  optional skill must never stop the application from starting. Existing skill
+  directories are left untouched — the user owns anything already on disk.
+  """
   @spec seed!(keyword()) :: :ok
   def seed!(opts \\ []) do
     enabled? =

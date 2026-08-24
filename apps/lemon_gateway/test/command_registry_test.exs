@@ -61,12 +61,10 @@ defmodule LemonGateway.CommandRegistryTest do
 
     Application.put_env(:lemon_gateway, LemonGateway.Config, %{
       max_concurrent_runs: 1,
-      default_engine: "echo",
       enable_telegram: false
     })
 
     Application.put_env(:lemon_gateway, :gateway_ingress_enabled, true)
-    Application.put_env(:lemon_gateway, :engines, [LemonGateway.Engines.Echo])
     Application.put_env(:lemon_gateway, :transports, [])
 
     on_exit(fn ->

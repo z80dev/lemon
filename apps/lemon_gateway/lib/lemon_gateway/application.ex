@@ -2,7 +2,7 @@ defmodule LemonGateway.Application do
   @moduledoc """
   OTP application for LemonGateway.
 
-  Starts the execution supervision tree: configuration, engine registries,
+  Starts the execution supervision tree: configuration, the singleton executor,
   schedulers, run supervisors, and the health check server.
 
   Gateway-owned ingress (transport, command, SMS, voice) is off by default and
@@ -14,35 +14,37 @@ defmodule LemonGateway.Application do
 
   @impl true
   def start(_type, _args) do
-    children =
-      [
-        LemonGateway.Config,
-        LemonGateway.EngineRegistry,
-        LemonGateway.EngineLock,
-        {Registry, keys: :unique, name: LemonGateway.RunRegistry},
-        LemonGateway.ThreadRegistry,
-        LemonGateway.RunSupervisor,
-        LemonGateway.ThreadWorkerSupervisor,
-        {Task.Supervisor, name: LemonGateway.TaskSupervisor},
-        LemonGateway.Scheduler
-        # lemon_channels is started explicitly by the top-level runtime app (or by
-        # starting :lemon_control_plane / lemon_channels directly). LemonGateway
-        # does not attempt to orchestrate startup of sibling applications.
-      ] ++ maybe_health_server_child() ++ maybe_gateway_ingress_children()
+    with :ok <- validate_configured_executor() do
+      children =
+        [
+          LemonGateway.Config,
+          LemonGateway.EngineLock,
+          {Registry, keys: :unique, name: LemonGateway.RunRegistry},
+          LemonGateway.ThreadRegistry,
+          LemonGateway.RunSupervisor,
+          LemonGateway.ThreadWorkerSupervisor,
+          {Task.Supervisor, name: LemonGateway.TaskSupervisor},
+          LemonGateway.Scheduler
+          # lemon_channels is started explicitly by the top-level runtime app (or by
+          # starting :lemon_control_plane / lemon_channels directly). LemonGateway
+          # does not attempt to orchestrate startup of sibling applications.
+        ] ++ maybe_health_server_child() ++ maybe_gateway_ingress_children()
 
-    # Channels and the control plane ask core for engine/transport facts rather
-    # than reaching into this app; register ourselves as the implementation.
-    LemonCore.EngineInfoBridge.configure(
-      engine_registry: LemonGateway.EngineRegistry,
-      transport_registry: LemonGateway.TransportRegistry,
-      gateway_config: LemonGateway.Config
-    )
+      # Channels and the control plane ask core for transport/config facts rather
+      # than reaching into this app; register ourselves as the implementation.
+      LemonCore.EngineInfoBridge.configure(
+        transport_registry: LemonGateway.TransportRegistry,
+        gateway_config: LemonGateway.Config
+      )
 
-    # See https://hexdocs.pm/elixir/Supervisor.html
-    # for other strategies and supported options
-    opts = [strategy: :one_for_one, name: LemonGateway.Supervisor]
-    Supervisor.start_link(children, opts)
+      # See https://hexdocs.pm/elixir/Supervisor.html
+      # for other strategies and supported options
+      opts = [strategy: :one_for_one, name: LemonGateway.Supervisor]
+      Supervisor.start_link(children, opts)
+    end
   end
+
+  defp validate_configured_executor, do: LemonGateway.Executor.validate_configured()
 
   defp maybe_health_server_child do
     if health_enabled?() do

@@ -5,6 +5,7 @@ defmodule LemonCore.Config.ModularTest do
   use LemonCore.Testing.Case, async: false
 
   alias LemonCore.Config.Modular
+  alias LemonCore.Config.ValidationError
 
   setup do
     # Store original env vars to restore later
@@ -14,7 +15,7 @@ defmodule LemonCore.Config.ModularTest do
       # Clear test env vars
       [
         "LEMON_DEFAULT_MODEL",
-        "LEMON_GATEWAY_ENABLE_TELEGRAM",
+        "LEMON_GATEWAY_ENABLE_WEBHOOK",
         "LEMON_LOG_LEVEL",
         "LEMON_TUI_THEME",
         "ANTHROPIC_API_KEY"
@@ -54,8 +55,10 @@ defmodule LemonCore.Config.ModularTest do
 
       # Gateway defaults
       assert is_integer(config.gateway.max_concurrent_runs)
-      assert is_binary(config.gateway.default_engine)
-      assert is_boolean(config.gateway.enable_telegram)
+      refute Map.has_key?(config.gateway, :default_engine)
+      refute Map.has_key?(config.gateway, :engines)
+      assert is_map(config.gateway.enabled_channels)
+      assert is_map(config.gateway.channels)
 
       # TUI defaults
       assert is_binary(config.tui.theme)
@@ -67,14 +70,14 @@ defmodule LemonCore.Config.ModularTest do
 
     test "environment variables override defaults" do
       System.put_env("LEMON_DEFAULT_MODEL", "gpt-4o")
-      System.put_env("LEMON_GATEWAY_ENABLE_TELEGRAM", "true")
+      System.put_env("LEMON_GATEWAY_ENABLE_WEBHOOK", "true")
       System.put_env("LEMON_LOG_LEVEL", "debug")
       System.put_env("LEMON_TUI_THEME", "dark")
 
       config = Modular.load()
 
       assert config.agent.default_model == "gpt-4o"
-      assert config.gateway.enable_telegram == true
+      assert config.gateway.enable_webhook == true
       assert config.logging.level == :debug
       assert config.tui.theme == "dark"
     end
@@ -138,9 +141,11 @@ defmodule LemonCore.Config.ModularTest do
       config = Modular.load()
 
       assert is_integer(config.gateway.max_concurrent_runs)
-      assert is_binary(config.gateway.default_engine)
+      refute Map.has_key?(config.gateway, :default_engine)
+      refute Map.has_key?(config.gateway, :engines)
       assert is_list(config.gateway.bindings)
-      assert is_map(config.gateway.telegram)
+      assert is_map(config.gateway.enabled_channels)
+      assert is_map(config.gateway.channels)
     end
 
     test "providers config is resolved correctly" do
@@ -166,6 +171,84 @@ defmodule LemonCore.Config.ModularTest do
 
       # Just verify we get a valid config struct
       assert %Modular{} = config
+    end
+  end
+
+  describe "removed engine routing settings" do
+    test "load/1 hard rejects a legacy gateway engine selection" do
+      project_dir =
+        Path.join(
+          System.tmp_dir!(),
+          "modular_removed_engine_#{System.unique_integer([:positive])}"
+        )
+
+      File.mkdir_p!(Path.join(project_dir, ".lemon"))
+
+      File.write!(Path.join(project_dir, ".lemon/config.toml"), """
+      [gateway]
+      default_engine = "codex"
+      """)
+
+      on_exit(fn -> File.rm_rf!(project_dir) end)
+
+      error =
+        assert_raise ValidationError, fn ->
+          Modular.load(project_dir: project_dir)
+        end
+
+      assert error.message =~ "Configuration uses removed settings"
+      assert Enum.any?(error.errors, &String.contains?(&1, "gateway.default_engine"))
+      assert Enum.any?(error.errors, &String.contains?(&1, "Lemon runs natively"))
+    end
+
+    test "load/1 hard rejects a legacy gateway engine registry" do
+      project_dir =
+        Path.join(
+          System.tmp_dir!(),
+          "modular_removed_engine_registry_#{System.unique_integer([:positive])}"
+        )
+
+      File.mkdir_p!(Path.join(project_dir, ".lemon"))
+
+      File.write!(Path.join(project_dir, ".lemon/config.toml"), """
+      [gateway.engines.codex]
+      module = "Legacy.CodexEngine"
+      """)
+
+      on_exit(fn -> File.rm_rf!(project_dir) end)
+
+      error =
+        assert_raise ValidationError, fn ->
+          Modular.load(project_dir: project_dir)
+        end
+
+      assert error.message =~ "Configuration uses removed settings"
+      assert Enum.any?(error.errors, &String.contains?(&1, "gateway.engines"))
+      assert Enum.any?(error.errors, &String.contains?(&1, "Lemon runs natively"))
+    end
+
+    test "load/1 rejects removed runtime CLI settings" do
+      project_dir =
+        Path.join(
+          System.tmp_dir!(),
+          "modular_runtime_cli_#{System.unique_integer([:positive])}"
+        )
+
+      File.mkdir_p!(Path.join(project_dir, ".lemon"))
+
+      File.write!(Path.join(project_dir, ".lemon/config.toml"), """
+      [runtime.cli.isolated_vendor]
+      engine = "vendor-internal"
+      """)
+
+      on_exit(fn -> File.rm_rf!(project_dir) end)
+
+      error =
+        assert_raise ValidationError, fn ->
+          Modular.load(project_dir: project_dir)
+        end
+
+      assert "The [runtime.cli] section has been removed; all subagent tasks run natively." in error.errors
     end
   end
 end

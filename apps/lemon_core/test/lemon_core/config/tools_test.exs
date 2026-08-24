@@ -49,7 +49,22 @@ defmodule LemonCore.Config.ToolsTest do
         "LEMON_WASM_DEFAULT_FUEL_LIMIT",
         "LEMON_WASM_CACHE_COMPILED",
         "LEMON_WASM_CACHE_DIR",
-        "LEMON_WASM_MAX_TOOL_INVOKE_DEPTH"
+        "LEMON_WASM_MAX_TOOL_INVOKE_DEPTH",
+        "LEMON_EXECUTE_CODE_ENABLED",
+        "LEMON_EXECUTE_CODE_PYTHON_PATH",
+        "LEMON_EXECUTE_CODE_TIMEOUT_MS",
+        "LEMON_EXECUTE_CODE_MAX_RPC_CALLS",
+        "LEMON_EXECUTE_CODE_MAX_RPC_RESULT_BYTES",
+        "LEMON_EXECUTE_CODE_MAX_OUTPUT_BYTES",
+        "LEMON_EXECUTE_CODE_TOOLS",
+        "LEMON_EXECUTE_CODE_KERNEL_MODE",
+        "LEMON_EXECUTE_CODE_KERNEL_IDLE_TIMEOUT_MS",
+        "LEMON_EXECUTE_CODE_MAX_LIVE_KERNELS",
+        "LEMON_EXECUTE_CODE_MAX_QUEUED_CELLS_PER_KERNEL",
+        "LEMON_TOOL_DISCLOSURE_ENABLED",
+        "LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS",
+        "LEMON_TOOL_DISCLOSURE_CATALOG_TOKENS",
+        "LEMON_TOOL_DISCLOSURE_MAX_RESULTS"
       ]
       |> Enum.each(&System.delete_env/1)
 
@@ -437,6 +452,421 @@ defmodule LemonCore.Config.ToolsTest do
     end
   end
 
+  describe "execute_code configuration" do
+    test "uses default execute_code settings" do
+      config = Tools.resolve(%{})
+
+      assert config.execute_code.enabled == false
+      assert config.execute_code.python_path == ""
+      assert config.execute_code.timeout_ms == 120_000
+      assert config.execute_code.max_rpc_calls == 100
+      assert config.execute_code.max_rpc_result_bytes == 5_242_880
+      assert config.execute_code.max_output_bytes == 50_000
+      assert config.execute_code.tools == []
+      assert config.execute_code.kernel_mode == "per_call"
+      assert config.execute_code.kernel_idle_timeout_ms == 1_800_000
+      assert config.execute_code.max_live_kernels == 16
+      assert config.execute_code.max_queued_cells_per_kernel == 8
+    end
+
+    test "uses execute_code settings from config" do
+      settings = %{
+        "tools" => %{
+          "execute_code" => %{
+            "enabled" => true,
+            "python_path" => "/usr/local/bin/python3",
+            "timeout_ms" => 5_000,
+            "max_rpc_calls" => 12,
+            "max_rpc_result_bytes" => 1_024,
+            "max_output_bytes" => 2_048,
+            "tools" => ["read", "grep"],
+            "kernel_mode" => "session",
+            "kernel_idle_timeout_ms" => 600_000,
+            "max_live_kernels" => 3,
+            "max_queued_cells_per_kernel" => 2
+          }
+        }
+      }
+
+      config = Tools.resolve(settings)
+
+      assert config.execute_code.enabled == true
+      assert config.execute_code.python_path == "/usr/local/bin/python3"
+      assert config.execute_code.timeout_ms == 5_000
+      assert config.execute_code.max_rpc_calls == 12
+      assert config.execute_code.max_rpc_result_bytes == 1_024
+      assert config.execute_code.max_output_bytes == 2_048
+      assert config.execute_code.tools == ["read", "grep"]
+      assert config.execute_code.kernel_mode == "session"
+      assert config.execute_code.kernel_idle_timeout_ms == 600_000
+      assert config.execute_code.max_live_kernels == 3
+      assert config.execute_code.max_queued_cells_per_kernel == 2
+    end
+
+    test "environment variables override execute_code settings" do
+      System.put_env("LEMON_EXECUTE_CODE_ENABLED", "true")
+      System.put_env("LEMON_EXECUTE_CODE_MAX_RPC_CALLS", "7")
+      System.put_env("LEMON_EXECUTE_CODE_TIMEOUT_MS", "3000")
+      System.put_env("LEMON_EXECUTE_CODE_TOOLS", "read,ls")
+      System.put_env("LEMON_EXECUTE_CODE_KERNEL_MODE", "session")
+      System.put_env("LEMON_EXECUTE_CODE_KERNEL_IDLE_TIMEOUT_MS", "240000")
+      System.put_env("LEMON_EXECUTE_CODE_MAX_LIVE_KERNELS", "5")
+      System.put_env("LEMON_EXECUTE_CODE_MAX_QUEUED_CELLS_PER_KERNEL", "4")
+
+      settings = %{
+        "tools" => %{
+          "execute_code" => %{
+            "enabled" => false,
+            "timeout_ms" => 5_000,
+            "max_rpc_calls" => 12,
+            "tools" => ["grep"],
+            "kernel_mode" => "per_call",
+            "kernel_idle_timeout_ms" => 1_800_000,
+            "max_live_kernels" => 16,
+            "max_queued_cells_per_kernel" => 8
+          }
+        }
+      }
+
+      config = Tools.resolve(settings)
+
+      assert config.execute_code.enabled == true
+      assert config.execute_code.max_rpc_calls == 7
+      assert config.execute_code.timeout_ms == 3_000
+      assert config.execute_code.tools == ["read", "ls"]
+      assert config.execute_code.kernel_mode == "session"
+      assert config.execute_code.kernel_idle_timeout_ms == 240_000
+      assert config.execute_code.max_live_kernels == 5
+      assert config.execute_code.max_queued_cells_per_kernel == 4
+
+      System.delete_env("LEMON_EXECUTE_CODE_KERNEL_MODE")
+      System.delete_env("LEMON_EXECUTE_CODE_KERNEL_IDLE_TIMEOUT_MS")
+      System.delete_env("LEMON_EXECUTE_CODE_MAX_LIVE_KERNELS")
+      System.delete_env("LEMON_EXECUTE_CODE_MAX_QUEUED_CELLS_PER_KERNEL")
+    end
+
+    test "defaults/0 documents the execute_code section" do
+      assert Tools.defaults()["execute_code"] == %{
+               "enabled" => false,
+               "python_path" => "",
+               "timeout_ms" => 120_000,
+               "max_rpc_calls" => 100,
+               "max_rpc_result_bytes" => 5_242_880,
+               "max_output_bytes" => 50_000,
+               "tools" => [],
+               "kernel_mode" => "per_call",
+               "kernel_idle_timeout_ms" => 1_800_000,
+               "max_live_kernels" => 16,
+               "max_queued_cells_per_kernel" => 8
+             }
+    end
+
+    test "kernel_mode accepts only per_call or session and trims whitespace" do
+      System.put_env("LEMON_EXECUTE_CODE_KERNEL_MODE", "  session\n")
+      assert Tools.resolve(%{}).execute_code.kernel_mode == "session"
+
+      System.put_env("LEMON_EXECUTE_CODE_KERNEL_MODE", "per_call")
+
+      assert Tools.resolve(%{"tools" => %{"execute_code" => %{"kernel_mode" => "session"}}}).execute_code.kernel_mode ==
+               "per_call"
+
+      System.delete_env("LEMON_EXECUTE_CODE_KERNEL_MODE")
+    end
+
+    test "invalid kernel_mode values fail closed to per_call" do
+      # Fail-closed contract: no malformed spelling (TOML or env) can select
+      # session mode; persistence requires the exact string "session".
+      for bad_mode <- ["Session", "SESSION", "persistent", "per-call", "percall", 42, true] do
+        settings = %{"tools" => %{"execute_code" => %{"kernel_mode" => bad_mode}}}
+
+        assert Tools.resolve(settings).execute_code.kernel_mode == "per_call"
+      end
+
+      # A malformed env override never defers to a valid TOML "session".
+      System.put_env("LEMON_EXECUTE_CODE_KERNEL_MODE", "sessions")
+
+      assert Tools.resolve(%{"tools" => %{"execute_code" => %{"kernel_mode" => "session"}}}).execute_code.kernel_mode ==
+               "per_call"
+
+      System.delete_env("LEMON_EXECUTE_CODE_KERNEL_MODE")
+    end
+
+    test "kernel bounds resolve only positive integers" do
+      # Zero, negative, or non-integer TOML bounds fall back to the hardcoded
+      # default rather than reading downstream as "unlimited" or "reap
+      # immediately".
+      for bad_bound <- [0, -1, -1_800_000, "eight", 2.5, true] do
+        settings = %{"tools" => %{"execute_code" => %{"max_live_kernels" => bad_bound}}}
+
+        assert Tools.resolve(settings).execute_code.max_live_kernels == 16
+      end
+
+      assert Tools.resolve(%{
+               "tools" => %{"execute_code" => %{"kernel_idle_timeout_ms" => 0}}
+             }).execute_code.kernel_idle_timeout_ms == 1_800_000
+
+      assert Tools.resolve(%{
+               "tools" => %{"execute_code" => %{"max_queued_cells_per_kernel" => -8}}
+             }).execute_code.max_queued_cells_per_kernel == 8
+    end
+
+    test "invalid kernel bound env overrides defer to TOML, never to zero or unlimited" do
+      settings = %{
+        "tools" => %{
+          "execute_code" => %{
+            "max_live_kernels" => 4,
+            "kernel_idle_timeout_ms" => 300_000,
+            "max_queued_cells_per_kernel" => 6
+          }
+        }
+      }
+
+      for bad_env <- ["abc", "0", "-2", ""] do
+        System.put_env("LEMON_EXECUTE_CODE_MAX_LIVE_KERNELS", bad_env)
+        assert Tools.resolve(settings).execute_code.max_live_kernels == 4
+      end
+
+      System.delete_env("LEMON_EXECUTE_CODE_MAX_LIVE_KERNELS")
+
+      System.put_env("LEMON_EXECUTE_CODE_KERNEL_IDLE_TIMEOUT_MS", "soon")
+      assert Tools.resolve(settings).execute_code.kernel_idle_timeout_ms == 300_000
+      System.delete_env("LEMON_EXECUTE_CODE_KERNEL_IDLE_TIMEOUT_MS")
+
+      System.put_env("LEMON_EXECUTE_CODE_MAX_QUEUED_CELLS_PER_KERNEL", "0")
+      assert Tools.resolve(settings).execute_code.max_queued_cells_per_kernel == 6
+      System.delete_env("LEMON_EXECUTE_CODE_MAX_QUEUED_CELLS_PER_KERNEL")
+
+      # With nothing valid anywhere, the hardcoded defaults win.
+      System.put_env("LEMON_EXECUTE_CODE_MAX_LIVE_KERNELS", "junk")
+
+      config = Tools.resolve(%{})
+
+      assert config.execute_code.max_live_kernels == 16
+      assert config.execute_code.kernel_idle_timeout_ms == 1_800_000
+      assert config.execute_code.max_queued_cells_per_kernel == 8
+
+      System.delete_env("LEMON_EXECUTE_CODE_MAX_LIVE_KERNELS")
+    end
+
+    test "defaults/0 round-trips through resolve/1 unchanged for execute_code" do
+      # Guards against key-name drift between the `defaults/0` advertisement
+      # (string keys, what `lemon config init` writes) and the resolver
+      # (which reads those same string keys back out of a TOML file).
+      assert Tools.resolve(%{"tools" => Tools.defaults()}).execute_code ==
+               Tools.resolve(%{}).execute_code
+    end
+  end
+
+  describe "tool disclosure configuration" do
+    test "uses default disclosure settings" do
+      config = Tools.resolve(%{})
+
+      assert config.disclosure == %{
+               enabled: true,
+               budget_tokens: 40_000,
+               catalog_tokens: 2_000,
+               max_results: 5
+             }
+    end
+
+    test "uses disclosure settings from config" do
+      settings = %{
+        "tools" => %{
+          "disclosure" => %{
+            "enabled" => false,
+            "budget_tokens" => 12_000,
+            "catalog_tokens" => 500,
+            "max_results" => 3
+          }
+        }
+      }
+
+      config = Tools.resolve(settings)
+
+      assert config.disclosure == %{
+               enabled: false,
+               budget_tokens: 12_000,
+               catalog_tokens: 500,
+               max_results: 3
+             }
+    end
+
+    test "environment variables override disclosure settings" do
+      System.put_env("LEMON_TOOL_DISCLOSURE_ENABLED", "false")
+      System.put_env("LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS", "9999")
+      System.put_env("LEMON_TOOL_DISCLOSURE_CATALOG_TOKENS", "77")
+
+      settings = %{
+        "tools" => %{
+          "disclosure" => %{
+            "enabled" => true,
+            "budget_tokens" => 12_000,
+            "catalog_tokens" => 500
+          }
+        }
+      }
+
+      config = Tools.resolve(settings)
+
+      assert config.disclosure.enabled == false
+      assert config.disclosure.budget_tokens == 9_999
+      assert config.disclosure.catalog_tokens == 77
+    end
+  end
+
+  describe "tool disclosure configuration (adversarial)" do
+    test "defaults/0 round-trips through resolve/1 unchanged" do
+      # Guards against key-name drift between the `defaults/0` advertisement
+      # (string keys, what `lemon config init` writes) and the resolver
+      # (which reads those same string keys back out of a TOML file).
+      assert Tools.resolve(%{"tools" => Tools.defaults()}).disclosure ==
+               Tools.resolve(%{}).disclosure
+    end
+
+    test "defaults/0 and resolve/1 agree key-for-key" do
+      resolved = Tools.resolve(%{}).disclosure
+      advertised = Tools.defaults()["disclosure"]
+
+      assert Enum.sort(Map.keys(advertised)) ==
+               resolved |> Map.keys() |> Enum.map(&Atom.to_string/1) |> Enum.sort()
+
+      for {key, value} <- advertised do
+        assert resolved[String.to_existing_atom(key)] == value
+      end
+    end
+
+    test "each disclosure key defaults independently of the others" do
+      for {key, atom_key, value} <- [
+            {"enabled", :enabled, false},
+            {"enabled", :enabled, true},
+            {"budget_tokens", :budget_tokens, 111},
+            {"catalog_tokens", :catalog_tokens, 222},
+            {"max_results", :max_results, 3}
+          ] do
+        resolved = Tools.resolve(%{"tools" => %{"disclosure" => %{key => value}}}).disclosure
+
+        assert Map.get(resolved, atom_key) == value
+
+        assert Map.drop(resolved, [atom_key]) ==
+                 Map.drop(Tools.resolve(%{}).disclosure, [atom_key])
+      end
+    end
+
+    test "env wins over config in both directions for the boolean" do
+      settings = %{"tools" => %{"disclosure" => %{"enabled" => false}}}
+
+      System.put_env("LEMON_TOOL_DISCLOSURE_ENABLED", "true")
+      assert Tools.resolve(settings).disclosure.enabled == true
+
+      # Truthy spellings other than "true" are honored by the shared caster.
+      System.put_env("LEMON_TOOL_DISCLOSURE_ENABLED", "yes")
+      assert Tools.resolve(settings).disclosure.enabled == true
+
+      System.put_env("LEMON_TOOL_DISCLOSURE_ENABLED", "off")
+
+      assert Tools.resolve(%{"tools" => %{"disclosure" => %{"enabled" => true}}}).disclosure.enabled ==
+               false
+    end
+
+    test "unparseable env falls back to the configured value, not the hardcoded default" do
+      settings = %{
+        "tools" => %{
+          "disclosure" => %{"enabled" => false, "budget_tokens" => 12_000}
+        }
+      }
+
+      System.put_env("LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS", "not-a-number")
+      System.put_env("LEMON_TOOL_DISCLOSURE_ENABLED", "maybe")
+
+      config = Tools.resolve(settings)
+
+      assert config.disclosure.budget_tokens == 12_000
+      assert config.disclosure.enabled == false
+    end
+
+    test "empty env values are treated as unset" do
+      settings = %{"tools" => %{"disclosure" => %{"budget_tokens" => 12_000}}}
+
+      System.put_env("LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS", "")
+      System.put_env("LEMON_TOOL_DISCLOSURE_CATALOG_TOKENS", "   ")
+
+      config = Tools.resolve(settings)
+
+      assert config.disclosure.budget_tokens == 12_000
+      assert config.disclosure.catalog_tokens == 2_000
+    end
+
+    test "max_results has no env override" do
+      # Documented decision: `max_results` is a per-call default the model
+      # overrides with the search tool's `limit` parameter, not an operator
+      # knob. This pins that no half-wired env var appears later.
+      System.put_env("LEMON_TOOL_DISCLOSURE_MAX_RESULTS", "99")
+
+      assert Tools.resolve(%{}).disclosure.max_results == 5
+
+      assert Tools.resolve(%{"tools" => %{"disclosure" => %{"max_results" => 3}}}).disclosure.max_results ==
+               3
+
+      assert LemonCore.Env.describe(:lemon_tool_disclosure_max_results) == nil
+    end
+
+    test "out-of-contract token budgets pass through unsanitized" do
+      # NOTE: this pins today's behavior, which does NOT match the declared
+      # `disclosure_config` type (`pos_integer()`). Zero/negative budgets mean
+      # "always over budget" and a string budget will crash any numeric
+      # comparison, so the consumer of `config.agent.tools.disclosure` must
+      # sanitize before use.
+      assert Tools.resolve(%{"tools" => %{"disclosure" => %{"budget_tokens" => 0}}}).disclosure.budget_tokens ==
+               0
+
+      assert Tools.resolve(%{"tools" => %{"disclosure" => %{"budget_tokens" => -5}}}).disclosure.budget_tokens ==
+               -5
+
+      assert Tools.resolve(%{"tools" => %{"disclosure" => %{"catalog_tokens" => 0}}}).disclosure.catalog_tokens ==
+               0
+
+      assert Tools.resolve(%{"tools" => %{"disclosure" => %{"budget_tokens" => "lots"}}}).disclosure.budget_tokens ==
+               "lots"
+
+      System.put_env("LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS", "0")
+      assert Tools.resolve(%{}).disclosure.budget_tokens == 0
+
+      System.put_env("LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS", "-3")
+      assert Tools.resolve(%{}).disclosure.budget_tokens == -3
+    end
+
+    test "a non-boolean enabled value passes through as-is" do
+      # Same caveat as the budgets: a TOML `enabled = "false"` is a truthy
+      # binary downstream, so consumers must not branch on it directly.
+      assert Tools.resolve(%{"tools" => %{"disclosure" => %{"enabled" => "false"}}}).disclosure.enabled ==
+               "false"
+    end
+
+    test "an explicit nil disclosure table resolves to the defaults" do
+      assert Tools.resolve(%{"tools" => %{"disclosure" => nil}}).disclosure ==
+               Tools.resolve(%{}).disclosure
+    end
+
+    test "a non-map disclosure value raises, matching the other tool sections" do
+      # TOML settings are always string-keyed maps; a scalar here means a
+      # malformed config file. Pinned so the failure mode stays uniform with
+      # `[runtime.tools.wasm]`/`[runtime.tools.web]` rather than silently
+      # disclosing every tool.
+      assert_raise FunctionClauseError, fn ->
+        Tools.resolve(%{"tools" => %{"disclosure" => 5}})
+      end
+
+      assert_raise FunctionClauseError, fn ->
+        Tools.resolve(%{"tools" => %{"wasm" => 5}})
+      end
+    end
+
+    test "atom-keyed settings are ignored (TOML settings are string-keyed)" do
+      assert Tools.resolve(%{"tools" => %{disclosure: %{budget_tokens: 7}}}).disclosure ==
+               Tools.resolve(%{}).disclosure
+    end
+  end
+
   describe "defaults/0" do
     test "returns the default tools configuration" do
       defaults = Tools.defaults()
@@ -447,6 +877,13 @@ defmodule LemonCore.Config.ToolsTest do
       assert defaults["web"]["fetch"]["max_chars"] == 50_000
       assert defaults["wasm"]["enabled"] == false
       assert defaults["wasm"]["auto_build"] == true
+
+      assert defaults["disclosure"] == %{
+               "enabled" => true,
+               "budget_tokens" => 40_000,
+               "catalog_tokens" => 2_000,
+               "max_results" => 5
+             }
     end
   end
 
@@ -461,6 +898,7 @@ defmodule LemonCore.Config.ToolsTest do
       assert is_map(config.web.fetch)
       assert is_map(config.web.cache)
       assert is_map(config.wasm)
+      assert is_map(config.disclosure)
     end
   end
 end

@@ -27,8 +27,9 @@ For system diagrams see `docs/diagrams/`. For per-app details see each `apps/*/R
 5. **Multi-Provider Abstraction** — unified interface for 26 LLM providers with
    automatic model configuration and cost tracking.
 
-6. **Multi-Engine Architecture** — pluggable execution engines: native Lemon plus
-   Codex CLI, Claude CLI, OpenCode CLI, and Pi CLI backends.
+6. **Native Top-Level Execution** — every product run uses Lemon's in-process
+   executor. Subagents also run natively in-process; there are no external CLI
+   runners.
 
 ---
 
@@ -52,7 +53,7 @@ For system diagrams see `docs/diagrams/`. For per-app details see each `apps/*/R
          │                      │
 ┌────────▼───────┐   ┌──────────▼──────────┐
 │ LemonGateway   │   │ LemonChannels        │
-│  (engines)     │   │  Telegram, Discord,  │
+│ native executor│   │  Telegram, Discord, │
 └────────┬───────┘   │  X/Twitter           │
          │           └─────────────────────-┘
 ┌────────▼───────────────────────────────────┐
@@ -83,7 +84,7 @@ See `docs/diagrams/architecture.svg` for the full visual diagram.
 
 ## Application Map
 
-The project is an Elixir umbrella with 24 applications:
+The project is an Elixir umbrella with 25 applications:
 
 **Stack (bottom-up):**
 
@@ -93,7 +94,7 @@ The project is an Elixir umbrella with 24 applications:
 | `lemon_core` | EventBus, TaskFingerprint, config, secrets (standalone; no umbrella deps) |
 | `lemon_memory` | Durable memory for agents: document schema, SQLite-backed full-text store, provider behaviour with isolated fan-out search, run ingest (published; extracted from `lemon_core`) |
 | `agent_core` | Core agent loop, tool execution, model runtime credential glue, abort/subagent semantics |
-| `lemon_platform_test` | Contract-test kit for the platform's extension behaviours: ExUnit case templates that validate Plugin, Engine, Store backend, and memory-provider implementations (published) |
+| `lemon_platform_test` | Contract-test kit for the platform's extension behaviours: ExUnit case templates that validate Plugin, Executor, Store backend, and memory-provider implementations (published) |
 
 **Assistant product:**
 
@@ -102,7 +103,7 @@ The project is an Elixir umbrella with 24 applications:
 | `coding_agent` | Session management, compaction, JSONL persistence, tools |
 | `coding_agent_ui` | Debug RPC interface, TUI/Web bridge |
 | `lemon_router` | RunOrchestrator, ModelSelection, RoutingFeedbackStore, lane queues, policy engine |
-| `lemon_gateway` | Engine dispatch (native + CLI backends), execution lifecycle |
+| `lemon_gateway` | Native execution lifecycle, slots, and request adaptation |
 | `lemon_channels` | Transport adapters (Telegram, Discord, X/Twitter, WhatsApp), model policy |
 | `lemon_automation` | CronManager, HeartbeatManager, scheduled jobs |
 | `lemon_control_plane` | HTTP/WebSocket server, 112+ RPC methods |
@@ -112,6 +113,7 @@ The project is an Elixir umbrella with 24 applications:
 | `lemon_web` | React web frontend bridge |
 | `x_api` | X/Twitter HTTP client (leaf) |
 | `lemon_evals` | Eval harness for assistant behavior |
+| `lemon_honcho` | Honcho-backed long-term memory: registers a `LemonMemory` provider and agent tools |
 
 **Capability apps (extracted from lemon_core):**
 
@@ -211,7 +213,7 @@ graph TD
 
     %% Runtime-only seams: no compile edge exists in either direction
     chan -.->|"LemonCore.RouterBridge"| router
-    router -.->|"LemonCore.EngineRuntime behaviour · config-injected"| gw
+    router -.->|"LemonCore.EngineRuntime behaviour · fixed native executor"| gw
 
     %% One-way consumption into the platform (representative real edges)
     cp --> router
@@ -232,7 +234,7 @@ Four main paths through the system:
 
 1. **Direct (TUI/Web)**: JSON-RPC → `debug_agent_rpc` → `coding_agent_ui` → Session → LemonAgent → Tools/LemonAi
 
-2. **Control Plane**: WebSocket → ControlPlane → Router → Orchestrator → Gateway → Engine
+2. **Control Plane**: WebSocket → ControlPlane → Router → Orchestrator → Gateway → Native executor
 
 3. **Channel (Telegram etc.)**: Message → LemonChannels → Router → StreamCoalescer → Outbox
 
@@ -250,12 +252,37 @@ User message
     → RunOrchestrator.start_run/1
       → ModelSelection.resolve/1  (explicit → meta → session → profile → history → default)
       → Lane selection (main/subagent/background)
-      → Engine dispatch
+      → Native execution (`ExecutionCommand` → `ExecutionRequest` → `CodingAgent.Executor`)
         → Tool execution (isolated Task processes)
         → LLM streaming (event stream per response)
       → Outcome recording (RunOutcome → MemoryDocument)
       → Routing feedback entry
 ```
+
+### Execution contracts and provenance
+
+Top-level execution is a single native path:
+
+```
+RunRequest → ExecutionCommand → ExecutionRequest → CodingAgent.Executor
+```
+
+Those request shapes contain no execution-runner selector, `Job` adapter, or
+execution catalog. `LemonCore.EngineRuntime` remains the name of the runtime
+boundary, but it resolves only the fixed native executor. Run events and durable
+results retain `engine: "lemon"` as provenance:
+it records how a run was executed; it does not select how a future top-level run
+will execute.
+
+`ResumeToken.engine` remains part of the persisted token format. The router
+accepts only native (`"lemon"`) tokens for explicit or automatic top-level
+resume. It retains older `ChatState.last_engine` and token values for history and
+rollback, but quarantines non-native values from resumption.
+
+Subagents execute natively in-process through the `task`/`agent` tools — each
+delegated task is a child `CodingAgent.Session` coordinated by
+`CodingAgent.Coordinator`. A subagent retains its own task provenance; it
+cannot alter the executor used for a product run.
 
 ### Lane scheduling
 
@@ -308,9 +335,10 @@ provider, model, outcome, meta
 All non-trivial features are gated behind flags in `[features]` TOML section.
 Code reads flags via `LemonCore.Config.Features.enabled?(features, :flag_name)`.
 
-Current flags: `product_runtime`, `skills_hub_v2`, `skill_manifest_v2`,
-`progressive_skill_loading_v2`, `session_search`, `routing_feedback`,
-`skill_synthesis_drafts`.
+Current flags: `session_search` (default `"default-on"`; disable with
+`LEMON_FEATURE_SESSION_SEARCH=off`), `routing_feedback`, and
+`skill_synthesis_drafts` (both default `"default-on"`; disable with
+`LEMON_FEATURE_ROUTING_FEEDBACK=off` / `LEMON_FEATURE_SKILL_SYNTHESIS_DRAFTS=off`).
 
 ---
 

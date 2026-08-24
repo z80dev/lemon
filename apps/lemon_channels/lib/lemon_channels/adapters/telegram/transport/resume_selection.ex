@@ -5,9 +5,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
 
   alias LemonChannels.Adapters.Telegram.Transport.PerChatState
   alias LemonChannels.Telegram.ResumeIndexStore
-  alias LemonChannels.EngineRegistry
-  alias LemonCore.{EngineCatalog, ResumeToken}
-  alias LemonCore.RunStore
+  alias LemonCore.{ResumeToken, RunStore}
+
+  @retired_resume_engines ~w(codex claude kimi opencode pi echo)
 
   @type callbacks :: %{
           required(:extract_chat_ids) => (map() -> {integer() | nil, integer() | nil}),
@@ -57,7 +57,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
           {resume, source} =
             resume_from_reply(state.account_id, inbound, chat_id, thread_id, reply_to_id)
 
-          if match?(%ResumeToken{}, resume) and
+          if native_resume?(resume) and
                switching_session?(PerChatState.safe_get_chat_state(session_key), resume) do
             Logger.debug(
               "Telegram switching session from reply chat_id=#{inspect(chat_id)} thread_id=#{inspect(thread_id)} " <>
@@ -127,6 +127,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
 
           {resume, prompt_part} =
             case parse_inline_resume_args(args) do
+              {:unsupported, engine} ->
+                {{:unsupported, engine}, ""}
+
               {%ResumeToken{} = inline_resume, inline_prompt} ->
                 {inline_resume, inline_prompt}
 
@@ -141,39 +144,53 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
                 {resolve_resume_selector(selector, sessions), selector_prompt}
             end
 
-          if match?(%ResumeToken{}, resume) do
-            PerChatState.set_chat_resume(scope, session_key, resume)
+          case resume do
+            %ResumeToken{engine: "lemon"} ->
+              PerChatState.set_chat_resume(scope, session_key, resume)
 
-            _ =
-              callbacks.send_system_message.(
-                state,
-                chat_id,
-                thread_id,
-                user_msg_id,
-                "Resuming session: #{format_session_ref(resume)}"
-              )
+              _ =
+                callbacks.send_system_message.(
+                  state,
+                  chat_id,
+                  thread_id,
+                  user_msg_id,
+                  "Resuming session: #{format_session_ref(resume)}"
+                )
 
-            if prompt_part != "" do
-              inbound =
-                inbound
-                |> put_in([Access.key!(:message), :text], prompt_part)
-                |> maybe_prefix_resume_to_prompt(resume)
+              if prompt_part != "" do
+                inbound =
+                  inbound
+                  |> put_in([Access.key!(:message), :text], prompt_part)
+                  |> maybe_prefix_resume_to_prompt(resume)
 
-              callbacks.submit_inbound_now.(state, inbound)
-            else
+                callbacks.submit_inbound_now.(state, inbound)
+              else
+                state
+              end
+
+            {:unsupported, engine} ->
+              _ =
+                callbacks.send_system_message.(
+                  state,
+                  chat_id,
+                  thread_id,
+                  user_msg_id,
+                  unsupported_resume_message(engine)
+                )
+
               state
-            end
-          else
-            _ =
-              callbacks.send_system_message.(
-                state,
-                chat_id,
-                thread_id,
-                user_msg_id,
-                "Couldn't find that session. Try /resume to list sessions."
-              )
 
-            state
+            _ ->
+              _ =
+                callbacks.send_system_message.(
+                  state,
+                  chat_id,
+                  thread_id,
+                  user_msg_id,
+                  "Couldn't find that session. Try /resume to list sessions."
+                )
+
+              state
           end
       end
     end
@@ -182,15 +199,35 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
   end
 
   defp parse_inline_resume_args(args) when is_binary(args) do
-    case String.split(String.trim(args), ~r/\s+/, parts: 3) do
-      [engine_id, token] ->
-        build_inline_resume(engine_id, token, "")
+    trimmed = String.trim(args)
 
-      [engine_id, token, prompt_part] ->
-        build_inline_resume(engine_id, token, String.trim(prompt_part || ""))
+    case explicit_non_native_resume_engine(trimmed) do
+      engine when is_binary(engine) ->
+        {:unsupported, engine}
 
-      _ ->
-        nil
+      nil ->
+        case parse_retired_engine_resume_args(trimmed) do
+          {:unsupported, engine} ->
+            {:unsupported, engine}
+
+          nil ->
+            case ResumeToken.extract_resume(trimmed, "lemon") do
+              %ResumeToken{} = token ->
+                {token, resume_prompt_suffix(trimmed, token.value)}
+
+              nil ->
+                case String.split(trimmed, ~r/\s+/, parts: 3) do
+                  ["lemon", token] when token != "" ->
+                    {%ResumeToken{engine: "lemon", value: token}, ""}
+
+                  ["lemon", token, prompt_part] when token != "" ->
+                    {%ResumeToken{engine: "lemon", value: token}, String.trim(prompt_part || "")}
+
+                  _ ->
+                    nil
+                end
+            end
+        end
     end
   rescue
     _ -> nil
@@ -198,20 +235,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
 
   defp parse_inline_resume_args(_), do: nil
 
-  defp build_inline_resume(engine_id, token, prompt_part) do
-    normalized_engine_id = String.downcase(String.trim(engine_id || ""))
-    normalized_token = String.trim(token || "")
-
-    case EngineCatalog.normalize(normalized_engine_id) do
-      normalized_engine when is_binary(normalized_engine) and normalized_token != "" ->
-        {%ResumeToken{engine: normalized_engine, value: normalized_token}, prompt_part}
-
-      _ ->
-        nil
-    end
-  end
-
-  @spec resolve_resume_selector(binary(), list()) :: ResumeToken.t() | nil
   def resolve_resume_selector(selector, sessions) when is_binary(selector) do
     selector = String.trim(selector)
 
@@ -247,7 +270,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
     |> Enum.map(fn {_run_id, data} ->
       %{resume: extract_resume_from_history(data), started_at: data[:started_at] || 0}
     end)
-    |> Enum.filter(fn %{resume: resume} -> match?(%ResumeToken{}, resume) end)
+    |> Enum.filter(fn %{resume: resume} -> native_resume?(resume) end)
     |> Enum.sort_by(& &1.started_at, :desc)
     |> Enum.reduce({[], MapSet.new()}, fn %{resume: resume, started_at: ts}, {acc, seen} ->
       key = {resume.engine, resume.value}
@@ -268,21 +291,27 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
   def list_recent_sessions(_session_key, _opts), do: []
 
   @spec extract_explicit_resume_and_strip(String.t() | term()) ::
-          {ResumeToken.t() | nil, String.t() | term()}
+          {ResumeToken.t() | nil, String.t() | term()} | {:unsupported, binary()}
   def extract_explicit_resume_and_strip(text) when is_binary(text) do
-    case parse_explicit_resume(text) do
-      %ResumeToken{} = token ->
-        stripped =
-          text
-          |> String.split("\n")
-          |> Enum.reject(&match?(%ResumeToken{}, parse_explicit_resume(&1)))
-          |> Enum.join("\n")
-          |> String.trim()
-
-        {token, if(stripped == "", do: "Continue.", else: stripped)}
+    case explicit_non_native_resume_engine(text) do
+      engine when is_binary(engine) ->
+        {:unsupported, engine}
 
       nil ->
-        {nil, text}
+        case parse_explicit_resume(text) do
+          %ResumeToken{} = token ->
+            stripped =
+              text
+              |> String.split("\n")
+              |> Enum.reject(&match?(%ResumeToken{}, parse_explicit_resume(&1)))
+              |> Enum.join("\n")
+              |> String.trim()
+
+            {token, if(stripped == "", do: "Continue.", else: stripped)}
+
+          nil ->
+            {nil, text}
+        end
     end
   rescue
     _ -> {nil, text}
@@ -315,7 +344,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
           case LemonChannels.Telegram.StateStore.get_selected_resume(
                  {account_id || "default", chat_id, thread_id}
                ) do
-            %ResumeToken{} = token ->
+            %ResumeToken{engine: "lemon"} = token ->
               Logger.debug(
                 "Telegram applying selected resume chat_id=#{inspect(chat_id)} thread_id=#{inspect(thread_id)} " <>
                   "resume=#{inspect(token)}"
@@ -376,7 +405,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
     cond do
       is_binary(reply_text) and reply_text != "" ->
         case parse_explicit_resume(reply_text) do
-          %ResumeToken{} = token -> {token, :reply_text}
+          %ResumeToken{engine: "lemon"} = token -> {token, :reply_text}
           _ -> {nil, nil}
         end
 
@@ -389,7 +418,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
           )
 
         case token do
-          %ResumeToken{} = token -> {token, :msg_index}
+          %ResumeToken{engine: "lemon"} = token -> {token, :msg_index}
           _ -> {nil, nil}
         end
     end
@@ -411,15 +440,19 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
 
   def switching_session?(_chat_state, _resume), do: true
 
-  defp chat_state_value(%{} = state, key), do: Map.get(state, key) || Map.get(state, Atom.to_string(key))
+  defp chat_state_value(%{} = state, key),
+    do: Map.get(state, key) || Map.get(state, Atom.to_string(key))
+
   defp chat_state_value(_state, _key), do: nil
 
   @spec maybe_prefix_resume_to_prompt(map(), ResumeToken.t()) :: map()
-  def maybe_prefix_resume_to_prompt(inbound, %ResumeToken{} = resume) do
+  def maybe_prefix_resume_to_prompt(inbound, %ResumeToken{engine: "lemon"} = resume) do
     %{inbound | meta: (inbound.meta || %{}) |> Map.put(:resume, resume)}
   rescue
     _ -> inbound
   end
+
+  def maybe_prefix_resume_to_prompt(inbound, _resume), do: inbound
 
   defp find_by_token_value(value, sessions) do
     trimmed = String.trim(value || "")
@@ -431,24 +464,18 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
   end
 
   defp parse_resume_selector(selector) when is_binary(selector) do
-    case EngineRegistry.extract_resume(selector) do
-      {:ok, %ResumeToken{} = token} ->
+    case ResumeToken.extract_resume(selector, "lemon") do
+      %ResumeToken{} = token ->
         token
 
-      _ ->
+      nil ->
         case String.split(selector, ~r/\s+/, parts: 2) do
-          [engine_id, token_value] ->
-            case EngineCatalog.normalize(engine_id) do
-              normalized_engine when is_binary(normalized_engine) and is_binary(token_value) ->
-                trimmed_token = String.trim(token_value)
+          ["lemon", token_value] ->
+            trimmed_token = String.trim(token_value)
 
-                if trimmed_token == "",
-                  do: nil,
-                  else: %ResumeToken{engine: normalized_engine, value: trimmed_token}
-
-              _ ->
-                nil
-            end
+            if trimmed_token == "",
+              do: nil,
+              else: %ResumeToken{engine: "lemon", value: trimmed_token}
 
           _ ->
             nil
@@ -460,16 +487,70 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
 
   defp parse_resume_selector(_), do: nil
 
-  defp parse_explicit_resume(text) when is_binary(text) do
-    case EngineRegistry.extract_resume(text) do
-      {:ok, %ResumeToken{} = token} -> token
-      _ -> nil
+  defp parse_explicit_resume(text) when is_binary(text),
+    do: ResumeToken.extract_resume(text, "lemon")
+
+  defp parse_explicit_resume(_), do: nil
+
+  defp native_resume?(%ResumeToken{engine: "lemon"}), do: true
+  defp native_resume?(_), do: false
+
+  defp explicit_non_native_resume_engine(text) when is_binary(text) do
+    case Regex.run(
+           ~r/(?:^|\n)\s*`?([a-z][a-z0-9_-]*)\s+(?:resume|--resume|--session|-s|run\s+(?:--session|-s))\s+(\S+)/i,
+           text
+         ) do
+      [_, engine, _token] ->
+        engine = String.downcase(engine)
+
+        cond do
+          engine == "lemon" -> nil
+          engine in @retired_resume_engines -> engine
+          true -> nil
+        end
+
+      _ ->
+        nil
     end
   rescue
     _ -> nil
   end
 
-  defp parse_explicit_resume(_), do: nil
+  defp explicit_non_native_resume_engine(_), do: nil
+
+  defp parse_retired_engine_resume_args(text) when is_binary(text) do
+    case String.split(text, ~r/\s+/, parts: 2) do
+      [engine, token] when token != "" ->
+        engine = String.downcase(String.trim(engine))
+
+        if engine in @retired_resume_engines do
+          {:unsupported, engine}
+        else
+          nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp parse_retired_engine_resume_args(_), do: nil
+
+  defp resume_prompt_suffix(text, token) do
+    case Regex.run(
+           ~r/^\s*`?lemon\s+resume\s+#{Regex.escape(token)}`?\s*(.*)$/i,
+           text
+         ) do
+      [_, prompt] -> String.trim(prompt)
+      _ -> ""
+    end
+  rescue
+    _ -> ""
+  end
+
+  defp unsupported_resume_message(engine) do
+    "Top-level resume only supports Lemon sessions. Use `lemon resume <session-id>` or /resume to choose a native session; #{engine} resumes are unsupported here."
+  end
 
   @spec format_session_ref(ResumeToken.t()) :: String.t()
   def format_session_ref(%ResumeToken{} = resume) do

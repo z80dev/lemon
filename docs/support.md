@@ -13,7 +13,7 @@ Initial stable 1.0 support targets:
 - source installs on machines with supported Elixir and Erlang/OTP versions
 - Linux `x86_64` release tarballs published by the Lemon release workflow
 - provider setup through documented configuration and secrets commands
-- runtime startup through `./bin/lemon`, `./bin/lemon-dev`, and release scripts
+- runtime startup through `./bin/lemon`, `./bin/lemon-tui`, and release scripts
 - Web health and session pages
 - first-party text web tools such as web search/fetch when used from supported
   agent runs

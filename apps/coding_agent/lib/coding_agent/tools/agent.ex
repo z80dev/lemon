@@ -17,7 +17,7 @@ defmodule CodingAgent.Tools.Agent do
   alias LemonAi.Types.TextContent
   alias CodingAgent.AsyncFollowups
   alias CodingAgent.{RunGraph, Subagents, TaskStore}
-  alias LemonCore.{Bus, RouterBridge, RunRequest, SessionKey, Store}
+  alias LemonCore.{Bus, Events, RouterBridge, RunRequest, SessionKey, Store}
 
   @valid_actions ["run", "poll", "join"]
   @valid_queue_modes ["collect", "followup", "steer", "steer_backlog", "interrupt"]
@@ -86,10 +86,6 @@ defmodule CodingAgent.Tools.Agent do
             "enum" => @valid_queue_modes,
             "description" =>
               "Optional queue mode for delegated completion followup (default: app config, fallback: followup)"
-          },
-          "engine_id" => %{
-            "type" => "string",
-            "description" => "Optional engine override for delegated run"
           },
           "model" => %{
             "type" => "string",
@@ -163,7 +159,8 @@ defmodule CodingAgent.Tools.Agent do
          {:ok, request} <- build_run_request(validated, delegated_session_key, cwd, opts),
          {:ok, run_id} <- submit_run(request, opts) do
       if validated.async do
-        handle_async_submission(run_id, validated, delegated_session_key, request, opts)
+        followup_opts = Keyword.put_new(opts, :cwd, cwd)
+        handle_async_submission(run_id, validated, delegated_session_key, request, followup_opts)
       else
         wait_sync_completion(run_id, validated, delegated_session_key)
       end
@@ -413,7 +410,6 @@ defmodule CodingAgent.Tools.Agent do
           agent_id: validated.agent_id,
           prompt: prompt,
           queue_mode: validated.queue_mode,
-          engine_id: validated.engine_id,
           model: validated.model,
           cwd: validated.cwd || cwd,
           tool_policy: validated.tool_policy,
@@ -635,6 +631,7 @@ defmodule CodingAgent.Tools.Agent do
           agent_id: parent_agent_id,
           prompt: text,
           queue_mode: queue_mode,
+          cwd: Keyword.get(opts, :cwd),
           meta: %{
             :delegated_auto_followup => true,
             :delegated_run_id => run_id,
@@ -733,7 +730,7 @@ defmodule CodingAgent.Tools.Agent do
           await_completion_loop(run_id, deadline_ms, acc_answer <> delta)
 
         %LemonCore.Event{type: :run_completed, payload: payload} ->
-          {:ok, normalize_completion(payload, acc_answer)}
+          {:ok, normalize_completion(Events.coerce(:run_completed, payload), acc_answer)}
 
         _ ->
           await_completion_loop(run_id, deadline_ms, acc_answer)
@@ -778,27 +775,37 @@ defmodule CodingAgent.Tools.Agent do
 
   defp merge_completion_answer(completion, _acc_answer), do: completion
 
+  defp normalize_completion(
+         %Events.RunCompleted{completed: completed, duration_ms: duration_ms},
+         acc_answer
+       ) do
+    build_completion(completed, duration_ms, acc_answer)
+  end
+
   defp normalize_completion(payload, acc_answer) when is_map(payload) do
-    completed =
-      payload[:completed] ||
-        payload["completed"] ||
-        payload
-
-    ok = map_get_default(completed, :ok, true)
-    answer = map_get_default(completed, :answer, acc_answer || "")
-    error = map_get(completed, :error)
-    duration_ms = payload[:duration_ms] || payload["duration_ms"]
-
-    %{
-      ok: ok != false,
-      answer: normalize_answer(answer, acc_answer),
-      error: error,
-      duration_ms: duration_ms
-    }
+    build_completion(
+      map_get(payload, :completed) || payload,
+      map_get(payload, :duration_ms),
+      acc_answer
+    )
   end
 
   defp normalize_completion(_payload, acc_answer) do
     %{ok: true, answer: acc_answer || "", error: nil, duration_ms: nil}
+  end
+
+  # `completed` is a `LemonCore.Events.Completion` off the bus and a plain map when it comes
+  # from the run store; `map_get/2` reads both without needing `Access` on the struct.
+  defp build_completion(completed, duration_ms, acc_answer) do
+    ok = map_get_default(completed, :ok, true)
+    answer = map_get_default(completed, :answer, acc_answer || "")
+
+    %{
+      ok: ok != false,
+      answer: normalize_answer(answer, acc_answer),
+      error: map_get(completed, :error),
+      duration_ms: duration_ms
+    }
   end
 
   defp completion_from_summary(summary) when is_map(summary) do
@@ -847,7 +854,6 @@ defmodule CodingAgent.Tools.Agent do
   defp auto_followup_text(completion, run_id, validated) do
     agent_id = validated.agent_id
     description = normalize_optional_string(validated[:description])
-    engine_id = normalize_optional_string(validated[:engine_id])
     model = normalize_optional_string(validated[:model])
     role = normalize_optional_string(validated[:role_id])
 
@@ -856,25 +862,17 @@ defmodule CodingAgent.Tools.Agent do
 
     base = "[agent #{agent_id}] #{summary}"
 
-    engine_label =
-      cond do
-        is_binary(engine_id) and engine_id != "" -> engine_id
-        true -> nil
-      end
-
-    model_label = if is_binary(model) and model != "", do: model, else: nil
-
-    parts = [engine_label, model_label] |> Enum.filter(&(&1 != nil))
-    engine_str = Enum.join(parts, "/")
-
-    role_str = if is_binary(role) and role != "", do: " | role: #{role}", else: ""
+    labels =
+      [
+        if(is_binary(model) and model != "", do: model, else: nil),
+        if(is_binary(role) and role != "", do: "role: #{role}", else: nil)
+      ]
+      |> Enum.reject(&is_nil/1)
 
     paren_content =
-      if engine_str != "" or role_str != "" do
-        inner = String.trim(String.trim(engine_str) <> " " <> String.trim(role_str))
-        " (#{inner})"
-      else
-        ""
+      case labels do
+        [] -> ""
+        _ -> " (#{Enum.join(labels, " | ")})"
       end
 
     base = base <> paren_content <> " run=#{short_id(run_id)}"
@@ -959,7 +957,6 @@ defmodule CodingAgent.Tools.Agent do
     tool_policy = Map.get(params, "tool_policy")
     meta = Map.get(params, "meta")
     delegated_cwd = Map.get(params, "cwd")
-    engine_id = Map.get(params, "engine_id")
     model = Map.get(params, "model")
     role_cwd = delegated_cwd || cwd
 
@@ -1003,9 +1000,6 @@ defmodule CodingAgent.Tools.Agent do
       not is_nil(delegated_cwd) and not is_binary(delegated_cwd) ->
         {:error, "cwd must be a string"}
 
-      not is_nil(engine_id) and not is_binary(engine_id) ->
-        {:error, "engine_id must be a string"}
-
       not is_nil(model) and not is_binary(model) ->
         {:error, "model must be a string"}
 
@@ -1030,7 +1024,6 @@ defmodule CodingAgent.Tools.Agent do
            tool_policy: tool_policy,
            meta: meta || %{},
            cwd: delegated_cwd,
-           engine_id: engine_id,
            model: normalize_optional_string(model)
          }}
     end
@@ -1227,7 +1220,7 @@ defmodule CodingAgent.Tools.Agent do
 
     **When to use `agent` vs `task`:**
     - `agent`: Route work through Lemon's run pipeline using agent profiles, queue modes, and delegated session continuity.
-    - `task`: Run local/internal or CLI-engine subtasks directly from the current coding session.
+    - `task`: Run a native focused subtask directly from the current coding session.
 
     **Default behavior (recommended):** async=true means the delegated run executes in background and notifies you when done. This keeps the user conversation flowing smoothly without blocking.
 

@@ -262,7 +262,6 @@ mix test apps/lemon_skills/test/lemon_skills/tools/media_status_test.exs \
   apps/coding_agent/test/coding_agent/tool_registry_test.exs \
   apps/coding_agent/test/coding_agent/tool_policy_test.exs \
   apps/coding_agent/test/coding_agent_test.exs \
-  apps/coding_agent/test/coding_agent/cli_runners/lemon_runner_test.exs \
   apps/lemon_channels/test/lemon_channels/adapters/discord/renderer_test.exs \
   apps/lemon_channels/test/lemon_channels/adapters/telegram/renderer_test.exs --seed 1
 ```

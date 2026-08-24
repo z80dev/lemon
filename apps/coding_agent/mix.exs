@@ -29,15 +29,12 @@ defmodule CodingAgent.MixProject do
   defp deps do
     [
       {:lemon_agent, in_umbrella: true},
-      {:lemon_cli_runners, in_umbrella: true},
       {:lemon_ai, in_umbrella: true},
       {:lemon_skills, in_umbrella: true},
       {:lemon_core, in_umbrella: true},
       {:lemon_gateway, in_umbrella: true},
       {:lemon_memory, in_umbrella: true},
       {:lemon_browser, in_umbrella: true},
-      # Test-only: CodingAgent.GatewayEngine is an out-of-app LemonGateway.Engine,
-      # so it is held to the same contract kit third-party engines use.
       {:lemon_platform_test, in_umbrella: true, only: :test, runtime: false},
       {:jason, "~> 1.4"},
       {:req, "~> 0.5"},

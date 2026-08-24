@@ -357,9 +357,10 @@ defmodule LemonCli.HermesMigration do
     |> Enum.map(fn {name, source} ->
       dest = Path.join(ctx.archive_dir, name)
 
-      if ctx.execute? do
-        copy_path!(source, dest, overwrite: true)
-      end
+      _ =
+        if ctx.execute? do
+          copy_path!(source, dest, overwrite: true)
+        end
 
       item(
         "archive",
@@ -557,7 +558,7 @@ defmodule LemonCli.HermesMigration do
 
       true ->
         if ctx.execute? do
-          backup_existing(ctx, dest)
+          _ = backup_existing(ctx, dest)
           File.mkdir_p!(Path.dirname(dest))
           File.cp!(source, dest)
         end
@@ -575,7 +576,7 @@ defmodule LemonCli.HermesMigration do
       {merged, details, overflow} = merge_entries(existing, incoming, limit)
 
       if ctx.execute? do
-        backup_existing(ctx, target)
+        _ = backup_existing(ctx, target)
         File.mkdir_p!(Path.dirname(target))
         File.write!(target, Enum.join(merged, @entry_delimiter))
 
@@ -620,9 +621,10 @@ defmodule LemonCli.HermesMigration do
       File.exists?(target) and ctx.skill_conflict == "rename" ->
         renamed = unique_path(Path.join(ctx.skill_dir, "#{base}-hermes-import"))
 
-        if ctx.execute? do
-          copy_path!(source, renamed, overwrite: false)
-        end
+        _ =
+          if ctx.execute? do
+            copy_path!(source, renamed, overwrite: false)
+          end
 
         item(
           "skill",
@@ -634,10 +636,11 @@ defmodule LemonCli.HermesMigration do
         )
 
       true ->
-        if ctx.execute? do
-          backup_existing(ctx, target)
-          copy_path!(source, target, overwrite: true)
-        end
+        _ =
+          if ctx.execute? do
+            _ = backup_existing(ctx, target)
+            copy_path!(source, target, overwrite: true)
+          end
 
         item(
           "skill",
@@ -668,7 +671,7 @@ defmodule LemonCli.HermesMigration do
       item("config", source, target, "skipped", "No compatible Hermes config values found")
     else
       if ctx.execute? do
-        backup_existing(ctx, target)
+        _ = backup_existing(ctx, target)
         File.mkdir_p!(Path.dirname(target))
         File.write!(target, patched)
       end
@@ -885,7 +888,6 @@ defmodule LemonCli.HermesMigration do
       rows
     else
       {:error, reason} -> raise inspect(reason)
-      error -> raise inspect(error)
     end
   end
 
@@ -1064,13 +1066,13 @@ defmodule LemonCli.HermesMigration do
     if File.exists?(path) do
       rel = Path.relative_to(path, ctx.target_root)
       dest = Path.join(ctx.backup_dir, rel)
-      copy_path!(path, dest, overwrite: true)
+      _ = copy_path!(path, dest, overwrite: true)
       dest
     end
   end
 
   defp copy_path!(source, dest, opts) do
-    if File.exists?(dest) and Keyword.get(opts, :overwrite, false), do: File.rm_rf!(dest)
+    _ = if File.exists?(dest) and Keyword.get(opts, :overwrite, false), do: File.rm_rf!(dest)
     File.mkdir_p!(Path.dirname(dest))
 
     if File.dir?(source) do

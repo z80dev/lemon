@@ -4,82 +4,65 @@
 
 ---
 
-`lemon_gateway` is where the AI actually runs. It manages a pool of execution
-slots, selects the right AI engine, and runs the work. Think of it as a machine
-shop with multiple types of machines (engines), a foreman who assigns work
-(Scheduler), and workers who operate the machines one job at a time
-(ThreadWorkers).
+`lemon_gateway` is where top-level AI work actually runs. It manages a pool of
+execution slots and runs Lemon's native executor. Think of it as a machine shop
+with one production machine, a foreman who assigns work (the Scheduler), and
+workers who operate that machine one job at a time (ThreadWorkers).
 
 ## What lemon_gateway Does
 
-1. **Manages concurrency** — limits how many AI jobs run simultaneously
+1. **Manages concurrency** — limits how many top-level AI jobs run simultaneously
 2. **Serializes per-conversation** — ensures messages in one conversation are
    processed in order
-3. **Selects and starts engines** — picks the right AI backend and kicks it off
+3. **Starts native execution** — runs the fixed Lemon executor for every
+   supported top-level request
 4. **Broadcasts events** — streams run events to the Bus for the router to pick up
 
 ---
 
-## The Six Engines
+## Native Top-Level Execution
 
-An **engine** is a pluggable AI backend. Every engine implements the same
-interface (the `Engine` behaviour), so the rest of the system doesn't care which
-one is running underneath.
+Every supported gateway and channel route runs Lemon's native executor inside
+the Elixir VM using `CodingAgent`. There is no top-level executor selection:
+messages, bindings, profiles, configuration defaults, and resume metadata do
+not choose a vendor CLI or an alternate backend.
 
-| Engine | What It Is | How It Works |
-|--------|-----------|--------------|
-| **lemon** | Native Lemon engine | Runs entirely inside the Elixir VM using CodingAgent |
-| **claude** | Claude Code CLI | Spawns the `claude` CLI as a subprocess |
-| **codex** | OpenAI Codex CLI | Spawns the `codex` CLI as a subprocess |
-| **opencode** | OpenCode CLI | Spawns the `opencode` CLI as a subprocess |
-| **pi** | Pi CLI | Spawns the `pi` CLI as a subprocess |
-| **echo** | Test engine | Echoes the prompt back (for testing only) |
+The native executor provides:
 
-### Native Lemon vs. CLI Engines
+- **Steering:** A queued message can be injected into the running native
+  conversation mid-stream.
+- **Gateway tools:** The gateway can inject tools that only work in this runtime,
+  such as cron management, SMS inbox access, and Telegram image sending.
+- **Full integration:** The executor has direct access to Lemon's tool ecosystem
+  and the gateway's event lifecycle.
 
-The **native Lemon engine** is special. It runs Lemon's own `CodingAgent`
-inside the Elixir VM — no subprocess, no external tool. This gives it
-superpowers:
+### Delegated Native Subagent Tasks
 
-- **Steering:** You can inject messages into a running conversation mid-stream
-  (the only engine that supports this)
-- **Gateway tools:** Extra tools are injected that only work in the gateway
-  context (cron management, SMS inbox, Telegram image sending)
-- **Full integration:** Direct access to Lemon's tool ecosystem (30+ tools)
+A native top-level conversation can delegate a bounded task to a subagent
+through its `task` tool. Subagents run natively in-process: each delegated task
+is a child `CodingAgent.Session` coordinated by `CodingAgent.Coordinator`,
+managing its own progress and result. Subagents do not become gateway
+executors, do not consume gateway top-level slots, and cannot be selected by a
+message, binding, profile, or configuration default. There are no vendor CLI
+subprocess runners.
 
-The **CLI engines** are thin wrappers around external command-line AI tools.
-Each one:
-1. Spawns the CLI binary as an OS subprocess
-2. Consumes its stdout (JSON lines format)
-3. Translates the CLI's events into Lemon's standard event format
-4. Sends those events back to the gateway
+A delegated task result may retain the subagent's identity and resume metadata.
+That metadata belongs to the task record: it never resumes or routes a
+top-level conversation.
 
-The advantage of CLI engines is that you can use any AI tool that has a CLI
-without Lemon needing to implement it natively. The disadvantage is less
-integration — they can't be steered, and they don't get gateway tools.
+### Native Resume and Historical Data
 
-### Engine Selection
-
-Engine selection follows a priority chain:
-
-```
-Resume token engine (continue with same engine)
-    ↓ if none
-Explicit directive ("/claude fix this")
-    ↓ if none
-Chat binding (this chat always uses Claude)
-    ↓ if none
-Config default (defaults to "lemon")
-```
-
-Composite IDs like `"claude:claude-3-opus"` are split — the prefix `"claude"`
-identifies the engine, and the rest identifies the model within that engine.
+Only native `lemon` resume tokens can continue a top-level session. Historical
+vendor tokens in chat state, message indexes, or run records remain readable so
+operators can inspect history and roll back the migration. The routing path
+quarantines them from explicit and automatic top-level resume selection and
+never reinterprets them as native tokens.
 
 ---
 
 ## The Scheduling System
 
-The gateway needs to manage two constraints:
+The gateway manages two constraints:
 1. **Global concurrency:** Don't run too many AI jobs at once (default limit: 10)
 2. **Per-conversation ordering:** Messages in one conversation must be processed
    sequentially
@@ -134,78 +117,56 @@ growth under heavy load.
 
 ## The Run Process
 
-The `Run` GenServer is where execution actually happens. One Run exists per
+The `Run` GenServer is where one native execution happens. One Run exists per
 active AI job. Here's what it does:
 
 ### Startup
 
-1. Look up the engine module from the `EngineRegistry`
-2. Acquire an **engine lock** for this session (a FIFO mutex that prevents two
-   runs from operating on the same session simultaneously — defense in depth)
-3. Resolve the working directory
-4. Emit a `run_started` event to the Bus
-5. Call `engine.start_run(job, opts, self())` — this kicks off the engine
+1. Acquire a per-session FIFO lock as defense in depth against concurrent
+   access to the same native session
+2. Resolve the working directory
+3. Emit a `run_started` event to the Bus
+4. Start the fixed native executor with the resolved request
 
 ### During Execution
 
-The engine sends events to the Run process:
-- `{:engine_event, ref, Event.started(...)}` — engine has started
+The native executor sends events to the Run process:
+- `{:engine_event, ref, Event.started(...)}` — execution has started
 - `{:engine_delta, ref, "text chunk"}` — streaming text output
-- `{:engine_event, ref, Event.action_event(...)}` — tool use notification
-- `{:engine_event, ref, Event.completed(...)}` — engine is done
+- `{:engine_event, ref, Event.action_event(...)}` — tool-use notification
+- `{:engine_event, ref, Event.completed(...)}` — execution is done
 
 The Run process broadcasts each event to the Bus on the topic `"run:<run_id>"`:
 
 ```
-Engine  ──events──>  Run process  ──broadcasts──>  Bus ("run:<run_id>")
-                                                      │
-                                                      ├── RunProcess (router)
-                                                      ├── WebSocket clients
-                                                      └── Anyone else subscribed
+Native executor ──events──> Run process ──broadcasts──> Bus ("run:<run_id>")
+                                                          │
+                                                          ├── RunProcess (router)
+                                                          ├── WebSocket clients
+                                                          └── Anyone else subscribed
 ```
 
 ### Completion
 
-When the engine finishes:
-1. The Run saves the **resume token** (if any) to `ChatStateStore` — this lets
-   the next message continue the AI conversation
+When execution finishes:
+1. The Run saves the native resume token, if any, to `ChatStateStore`
 2. Emits `run_completed` to the Bus
 3. Notifies the ThreadWorker so it can release the slot
 4. Stops itself
 
 ### Context Overflow
 
-If the AI reports that the conversation is too long (context window exceeded),
-the Run clears the saved resume token. This means the next message will start
-a fresh conversation. The router's CompactionTrigger will save a summary of the
-old conversation so context isn't completely lost.
-
----
-
-## The Engine Interface
-
-Every engine must implement these callbacks:
-
-| Callback | Purpose |
-|----------|---------|
-| `id/0` | Returns the engine name (e.g., `"claude"`) |
-| `start_run/3` | Starts an AI run, returns `{:ok, ref, cancel_ctx}` |
-| `cancel/1` | Kills a running job |
-| `supports_steer?/0` | Can this engine accept mid-run messages? |
-| `steer/2` | Inject a message into a running conversation |
-| `format_resume/1` | Convert a resume token to CLI flags |
-| `extract_resume/1` | Parse engine output for a resume token |
-
-The important insight is that **engines are event producers**. They don't return
-a final answer — they stream events to a sink process (the Run). This is what
-enables real-time streaming all the way to Telegram.
+If the native executor reports that the conversation is too long (context
+window exceeded), the Run clears the saved native resume token. The next
+message starts a fresh native session, while the router's `CompactionTrigger`
+saves a summary so context is not completely lost.
 
 ---
 
 ## Gateway-Injected Tools
 
-When the native Lemon engine starts, the gateway injects extra tools that are
-only available in the gateway context:
+When the native executor starts, the gateway injects extra tools that are only
+available in the gateway context:
 
 | Tool | What It Does |
 |------|-------------|
@@ -235,7 +196,7 @@ other inbound transports:
 | **Webhook** | Generic HTTP endpoint for integrations (Zapier, n8n, Make.com) |
 
 All transports follow the same pattern: normalize the inbound to a `RunRequest`,
-submit via `RouterBridge`, and let the normal pipeline handle the rest.
+submit via `RouterBridge`, and let the normal native pipeline handle the rest.
 Each transport returns `:ignore` from its start function if not configured,
 so missing credentials simply disable the transport rather than crashing.
 
@@ -247,11 +208,11 @@ Here's the complete lifecycle of events for a single run:
 
 ```
 1. run_started ──── Run is initializing
-2. engine_started ── Engine has been created
+2. engine_started ── Native executor has been created
 3. delta ──────── Text chunk (many of these, with seq numbers)
 3. engine_action ── Tool use (optional, can have phases: started/output/completed)
 3. ... (more deltas and actions as AI works)
-4. engine_completed ── Engine is done
+4. engine_completed ── Native execution is done
 5. run_completed ── Run is finalizing, includes full answer + status
 ```
 
@@ -266,15 +227,18 @@ to specific module definitions.
 
 ## Key Takeaways
 
-1. **Engines are pluggable backends** — the native Lemon engine runs in-process,
-   CLI engines spawn subprocesses, but they all produce the same event stream.
-2. **The Scheduler + ThreadWorker pattern** manages global concurrency while
+1. **One native executor owns every top-level run** — channel and gateway
+   requests cannot select a vendor CLI or another executor.
+2. **Subagents are native in-process sessions** — delegated tasks run as child
+   `CodingAgent.Session` executions; their identity and resume metadata stay
+   with task results, outside top-level routing.
+3. **Historical vendor resume data is preserved but quarantined** — it remains
+   readable without becoming a supported top-level resume path.
+4. **The Scheduler + ThreadWorker pattern** manages global concurrency while
    keeping per-conversation ordering.
-3. **The Run process is the execution unit** — it starts the engine, relays
-   events to the Bus, saves resume tokens, and cleans up.
-4. **Events, not return values** — engines stream events to a sink rather than
-   returning a final result. This is what enables end-to-end streaming.
-5. **Gateway tools extend the native engine** — the gateway injects extra tools
+5. **The Run process is the execution unit** — it starts native work, relays
+   events to the Bus, saves native resume tokens, and cleans up.
+6. **Gateway tools extend the native executor** — the gateway injects tools
    (cron, SMS, Telegram image sending) that only make sense in its context.
 
 ---

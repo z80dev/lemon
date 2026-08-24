@@ -1,7 +1,7 @@
 defmodule LemonSkills.Audit.State do
-  @moduledoc """
-  Persists bundle-audit results separately from install provenance lockfiles.
-  """
+  @moduledoc false
+
+  # Persists bundle-audit results separately from install provenance lockfiles.
 
   alias LemonSkills.Config
 

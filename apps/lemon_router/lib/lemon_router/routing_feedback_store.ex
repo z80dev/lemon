@@ -33,7 +33,11 @@ defmodule LemonRouter.RoutingFeedbackStore do
       config :lemon_router, LemonRouter.RoutingFeedbackStore,
         path: "~/.lemon/store",          # directory — routing_feedback.sqlite3 created inside
         min_sample_size: 5,              # minimum samples before returning aggregate
-        retention_ms: 30 * 24 * 3600_000 # 30 days (default)
+        retention_ms: 30 * 24 * 3600_000,# 30 days (default)
+        subscribe?: true                 # consume routing_feedback Bus events
+
+  Independently named stores can pass `subscribe?: false` to accept only
+  explicit calls and avoid duplicating the process-wide Bus subscription.
   """
 
   use GenServer
@@ -215,9 +219,12 @@ defmodule LemonRouter.RoutingFeedbackStore do
 
   @impl true
   def init(opts) do
-    Bus.subscribe("routing_feedback")
-
     config = Keyword.merge(Application.get_env(:lemon_router, __MODULE__, []), opts)
+
+    if Keyword.get(config, :subscribe?, true) do
+      Bus.subscribe("routing_feedback")
+    end
+
     path = resolve_path(config)
     retention_ms = Keyword.get(config, :retention_ms, @default_retention_ms)
     min_samples = Keyword.get(config, :min_sample_size, @default_min_sample_size)

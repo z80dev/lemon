@@ -31,8 +31,8 @@ defmodule LemonPlatformTest.MixProject do
 
   defp description do
     "Contract-test kit for the Lemon platform's extension behaviours: ExUnit " <>
-      "case templates that hold your Plugin, Engine, Store backend or memory " <>
-      "Provider implementation to the documented contract."
+      "case templates that hold your Plugin, Store backend, or memory Provider " <>
+      "implementation to the documented contract."
   end
 
   defp package do
@@ -58,7 +58,6 @@ defmodule LemonPlatformTest.MixProject do
         "Case templates": [
           LemonPlatformTest.BackendCase,
           LemonPlatformTest.PluginCase,
-          LemonPlatformTest.EngineCase,
           LemonPlatformTest.ProviderCase,
           LemonPlatformTest.EventsCase
         ],
@@ -78,20 +77,19 @@ defmodule LemonPlatformTest.MixProject do
       # One dep per behaviour/tool the kit provides, and every one is
       # `optional: true`. A third party pulls in only the platform apps whose
       # case they actually use — someone testing a Plugin should not also
-      # compile lemon_gateway, exqlite and nostrum as test deps. Each case
-      # template guards on `Code.ensure_loaded?` of its target and raises a
-      # pointed "add this dep" error if the app is absent (see below).
+      # compile exqlite and nostrum as test deps. Each case template guards on
+      # `Code.ensure_loaded?` of its target and raises a pointed "add this dep"
+      # error if the app is absent (see below).
       #
-      #   BackendCase  -> lemon_core           EngineCase   -> lemon_gateway
-      #   EventsCase   -> lemon_core           ProviderCase -> lemon_memory
-      #   PluginCase   -> lemon_channels       FakeLLM      -> ai + agent_core
+      #   BackendCase        -> lemon_core     ProviderCase -> lemon_memory
+      #   EventsCase         -> lemon_core     FakeLLM      -> ai + agent_core
+      #   PluginCase         -> lemon_channels
       #
       # The kit is a leaf: nothing in the platform depends on it, so these edges
       # cannot create a cycle. In the umbrella all siblings are present, so the
       # self-validation suites in test/compliance still compile and pass.
       {:lemon_core, in_umbrella: true, optional: true},
       {:lemon_channels, in_umbrella: true, optional: true},
-      {:lemon_gateway, in_umbrella: true, optional: true},
       {:lemon_memory, in_umbrella: true, optional: true},
       {:lemon_ai, in_umbrella: true, optional: true},
       {:lemon_agent, in_umbrella: true, optional: true},

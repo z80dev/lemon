@@ -363,6 +363,22 @@ defmodule LemonAgent.Agent do
   end
 
   @doc """
+  Queues a redirect message: the in-flight model request is canceled (keeping
+  completed tool results), and the loop retries with this correction appended.
+
+  Unlike `abort/1`, a redirect never stops the run. While tools are executing
+  it degrades to steering semantics — the tools finish, and the correction is
+  delivered before the next model call without canceling anything. When no run
+  is active it degrades to `follow_up/3` semantics. Pass `system_prompt:
+  prompt` to apply a per-turn prompt refresh when the queued message is
+  consumed.
+  """
+  @spec redirect(GenServer.server(), Types.agent_message(), keyword()) :: :ok
+  def redirect(agent, message, opts \\ []) do
+    GenServer.cast(agent, {:redirect, queued_message(message, opts)})
+  end
+
+  @doc """
   Queues a follow-up message to be processed after the agent finishes.
 
   Follow-up messages are delivered only when the agent has no more tool calls
@@ -729,6 +745,25 @@ defmodule LemonAgent.Agent do
 
   def handle_cast({:steer, message}, state) do
     {:noreply, %{state | steering_queue: state.steering_queue ++ [message]}}
+  end
+
+  def handle_cast({:redirect, message}, state) do
+    case {state.running_task, state.abort_ref} do
+      {task, abort_ref} when not is_nil(task) and is_reference(abort_ref) ->
+        # Enqueue the correction before raising the redirect flag so it is
+        # already in the steering queue when the loop observes the flag and
+        # drains steering. The abort_ref stays a plain reference: a redirect
+        # must never flip it to the {:aborted, ref} sentinel, or was_aborted
+        # bookkeeping would misreport.
+        state = %{state | steering_queue: state.steering_queue ++ [message]}
+        AbortSignal.request_redirect(abort_ref)
+        {:noreply, state}
+
+      _ ->
+        # No live run (idle, or the current run is already aborting):
+        # degrade to follow-up semantics.
+        handle_cast({:follow_up, message}, state)
+    end
   end
 
   def handle_cast({:follow_up, message}, state) do

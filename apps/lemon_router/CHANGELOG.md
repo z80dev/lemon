@@ -38,6 +38,11 @@ internals other applications reached into.
   extraction out of `lemon_core`.
 - `:exqlite` is a direct dependency because `RoutingFeedbackStore` talks to
   SQLite; `lemon_core` only carries it optionally.
+- The synthetic `:run_completed` the run process publishes when a started run has
+  no gateway pid now carries a `LemonCore.Events.RunCompleted` struct, like every
+  other completion it emits. It was the last bare-map publisher of a registered
+  event type on `run:<run_id>`, and `lemon_core` has removed the `Access` shim
+  that let consumers read a bare map as though it were the struct.
 
 ### Known gaps
 

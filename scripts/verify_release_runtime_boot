@@ -3,45 +3,133 @@ set -euo pipefail
 
 usage() {
   cat >&2 <<'EOF'
-usage: scripts/verify_release_runtime_boot <artifact-directory>
+usage: scripts/verify_release_runtime_boot [--platform <tag>] <artifact-directory>
+       scripts/verify_release_runtime_boot --single <tarball> --profile <profile>
 
-Verifies Lemon Linux x86_64 release artifacts beyond checksums:
-  - validates manifest and artifact checksums
-  - extracts all supported runtime profiles into clean temp dirs
+Verifies Lemon release artifacts beyond checksums:
+  - validates manifest and artifact checksums (manifest mode)
+  - extracts release profile(s) into clean temp dirs
   - starts each release daemon without Mix
   - checks control-plane /healthz or sim broadcast /readyz
   - checks Web /healthz for lemon_runtime_full
+  - checks lemon_runtime_full asset-digest artifacts and daemon log
   - stops the daemon
-  - generates a release-runtime support bundle with release eval
+  - generates a release-runtime support bundle with release eval (non-sim profiles)
+
+Manifest mode boots every artifact for the target platform (default:
+detected from `uname`); --single mode boots exactly one given tarball
+without a manifest, for pre-upload verification in CI build jobs.
+
+Platform tags: linux-x86_64, linux-arm64, darwin-arm64.
 EOF
   exit 2
 }
 
-if [ "$#" -ne 1 ]; then
-  usage
+MODE="manifest"
+ARTIFACT_DIR=""
+SINGLE_TARBALL=""
+SINGLE_PROFILE=""
+PLATFORM_FILTER=""
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --single)
+      [ "$#" -ge 2 ] || usage
+      MODE="single"
+      SINGLE_TARBALL="$2"
+      shift 2
+      ;;
+    --profile)
+      [ "$#" -ge 2 ] || usage
+      SINGLE_PROFILE="$2"
+      shift 2
+      ;;
+    --platform)
+      [ "$#" -ge 2 ] || usage
+      PLATFORM_FILTER="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      ;;
+    --*)
+      usage
+      ;;
+    *)
+      if [ -n "$ARTIFACT_DIR" ]; then
+        usage
+      fi
+      ARTIFACT_DIR="$1"
+      shift
+      ;;
+  esac
+done
+
+if [ "$MODE" = "single" ]; then
+  case "$SINGLE_PROFILE" in
+    lemon_runtime_min|lemon_runtime_full|sim_broadcast_platform) ;;
+    *)
+      echo "error: --single requires --profile <lemon_runtime_min|lemon_runtime_full|sim_broadcast_platform>" >&2
+      exit 2
+      ;;
+  esac
+
+  if [ -n "$ARTIFACT_DIR" ]; then
+    echo "error: --single does not take a directory argument" >&2
+    exit 2
+  fi
+
+  if [ ! -f "$SINGLE_TARBALL" ]; then
+    echo "artifact not found: $SINGLE_TARBALL" >&2
+    exit 2
+  fi
+else
+  [ -n "$ARTIFACT_DIR" ] || usage
+
+  if [ ! -d "$ARTIFACT_DIR" ]; then
+    echo "artifact directory not found: $ARTIFACT_DIR" >&2
+    exit 2
+  fi
 fi
 
-ARTIFACT_DIR="$1"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-if [ ! -d "$ARTIFACT_DIR" ]; then
-  echo "artifact directory not found: $ARTIFACT_DIR" >&2
-  exit 2
-fi
-
-"$ROOT/scripts/verify_release_artifacts" "$ARTIFACT_DIR"
-
-work_dir="$(mktemp -d "${TMPDIR:-/tmp}/lemon-release-boot.XXXXXX")"
-cleanup() {
-  for bin in "$work_dir"/*/extract/bin/*; do
-    if [ -x "$bin" ]; then
-      "$bin" stop >/dev/null 2>&1 || true
-    fi
-  done
-
-  rm -rf "$work_dir"
+detect_platform() {
+  case "$(uname -s)" in
+    Linux)
+      case "$(uname -m)" in
+        x86_64) echo "linux-x86_64" ;;
+        aarch64|arm64) echo "linux-arm64" ;;
+        *) echo "unknown-linux-$(uname -m)" ;;
+      esac
+      ;;
+    Darwin)
+      case "$(uname -m)" in
+        arm64) echo "darwin-arm64" ;;
+        *) echo "unknown-darwin-$(uname -m)" ;;
+      esac
+      ;;
+    *)
+      echo "unknown-$(uname -s)"
+      ;;
+  esac
 }
-trap cleanup EXIT
+
+# Platform -> expected BEAM profile count, duplicated (with this cross-reference)
+# from the EXPECTED table in scripts/verify_release_artifacts: min+full on
+# every platform, sim_broadcast_platform is Linux-only. The Bun-compiled
+# lemon_tui pseudo-profile is deliberately excluded from boot verification.
+expected_profile_count() {
+  case "$1" in
+    linux-x86_64|linux-arm64) echo 3 ;;
+    darwin-arm64) echo 2 ;;
+    *) echo 0 ;;
+  esac
+}
+
+if [ -z "$PLATFORM_FILTER" ]; then
+  PLATFORM_FILTER="$(detect_platform)"
+fi
 
 free_port() {
   python3 - <<'PY'
@@ -55,21 +143,33 @@ PY
 }
 
 manifest_entries() {
-  ARTIFACT_DIR="$ARTIFACT_DIR" python3 - <<'PY'
+  ARTIFACT_DIR="$ARTIFACT_DIR" PLATFORM_FILTER="$PLATFORM_FILTER" python3 - <<'PY'
 import json
 import os
 import re
 
 manifest_path = os.path.join(os.environ["ARTIFACT_DIR"], "manifest.json")
+platform_filter = os.environ["PLATFORM_FILTER"]
+
 with open(manifest_path, "r", encoding="utf-8") as handle:
     manifest = json.load(handle)
 
 entries = []
 for artifact in manifest["artifacts"]:
     filename = artifact["file"]
-    match = re.search(r"-(lemon_runtime_min|lemon_runtime_full|sim_broadcast_platform)\.tar\.gz$", filename)
-    if match:
-        entries.append((match.group(1), filename))
+    match = re.search(
+        r"-(linux-x86_64|linux-arm64|darwin-arm64)-"
+        r"(lemon_runtime_min|lemon_runtime_full|sim_broadcast_platform)\.tar\.gz$",
+        filename,
+    )
+    if not match:
+        continue
+
+    platform, profile = match.group(1), match.group(2)
+    if platform != platform_filter:
+        continue
+
+    entries.append((profile, filename))
 
 for profile, filename in sorted(entries):
     print(f"{profile}\t{filename}")
@@ -128,6 +228,34 @@ wait_for_health() {
 
   echo "health check failed for $label at $url" >&2
   return 1
+}
+
+# lemon_runtime_full bundles both lemon_web (digest-only, no asset pipeline)
+# and lemon_sim_ui (npm build + digest); both must have produced a
+# cache_manifest.json or the release serves undigested/missing assets.
+assert_full_profile_static_files() {
+  local profile="$1"
+  local extract_dir="$2"
+
+  if ! compgen -G "$extract_dir/lib/lemon_web-*/priv/static/cache_manifest.json" > /dev/null; then
+    echo "$profile: missing lemon_web cache_manifest.json (asset digest step likely skipped)" >&2
+    exit 1
+  fi
+
+  if ! compgen -G "$extract_dir/lib/lemon_sim_ui-*/priv/static/cache_manifest.json" > /dev/null; then
+    echo "$profile: missing lemon_sim_ui cache_manifest.json (asset digest step likely skipped)" >&2
+    exit 1
+  fi
+}
+
+assert_no_asset_warmup_failure() {
+  local profile="$1"
+  local extract_dir="$2"
+
+  if grep -rq "Could not warm up static assets" "$extract_dir/tmp/log" 2>/dev/null; then
+    echo "$profile: daemon log reports failure warming up static assets" >&2
+    exit 1
+  fi
 }
 
 verify_support_bundle() {
@@ -220,17 +348,33 @@ if missing_status_ids:
 PY
 }
 
-verified_profiles=0
-expected_commit="$(manifest_commit)"
+cleanup_work_dir() {
+  local work_dir="$1"
+  local bin
 
-while IFS=$'\t' read -r profile filename; do
-  [ -n "$profile" ] || continue
+  for bin in "$work_dir"/*/extract/bin/*; do
+    if [ -x "$bin" ]; then
+      "$bin" stop >/dev/null 2>&1 || true
+    fi
+  done
 
-  profile_dir="$work_dir/$profile"
-  extract_dir="$profile_dir/extract"
-  home_dir="$profile_dir/home"
-  store_dir="$profile_dir/store"
-  bundle_path="$profile_dir/support-bundle.zip"
+  rm -rf "$work_dir"
+}
+
+# Boots one release tarball end to end. `expected_commit` may be empty
+# (single mode has no manifest to compare an embedded commit against).
+boot_one_profile() {
+  local profile="$1"
+  local tarball_path="$2"
+  local work_dir="$3"
+  local expected_commit="$4"
+
+  local profile_dir="$work_dir/$profile"
+  local extract_dir="$profile_dir/extract"
+  local home_dir="$profile_dir/home"
+  local store_dir="$profile_dir/store"
+  local bundle_path="$profile_dir/support-bundle.zip"
+  local control_port web_port sim_port
   control_port="$(free_port)"
   web_port="$(free_port)"
   sim_port="$(free_port)"
@@ -238,15 +382,19 @@ while IFS=$'\t' read -r profile filename; do
   mkdir -p "$extract_dir" "$store_dir"
   write_fixture_config "$home_dir"
 
-  tar -xzf "$ARTIFACT_DIR/$filename" -C "$extract_dir"
+  tar -xzf "$tarball_path" -C "$extract_dir"
 
-  release_bin="$extract_dir/bin/$profile"
+  local release_bin="$extract_dir/bin/$profile"
   if [ ! -x "$release_bin" ]; then
     echo "$profile: release bin missing or not executable: $release_bin" >&2
     exit 1
   fi
 
-  env_vars=(
+  if [ "$profile" = "lemon_runtime_full" ]; then
+    assert_full_profile_static_files "$profile" "$extract_dir"
+  fi
+
+  local env_vars=(
     "HOME=$home_dir"
     "LEMON_STORE_PATH=$store_dir"
     "LEMON_SECRETS_MASTER_KEY=runtime-boot-dummy-key-32-chars"
@@ -283,12 +431,15 @@ while IFS=$'\t' read -r profile filename; do
     )
   }
 
-  build_info_output="$(run_release eval 'IO.puts("BUILD_COMMIT=" <> (LemonCore.BuildInfo.current().git.commit || ""))')"
-  reported_commit="$(printf '%s\n' "$build_info_output" | sed -n 's/^BUILD_COMMIT=//p' | tail -1)"
+  if [ -n "$expected_commit" ]; then
+    local build_info_output reported_commit
+    build_info_output="$(run_release eval 'IO.puts("BUILD_COMMIT=" <> (LemonCore.BuildInfo.current().git.commit || ""))')"
+    reported_commit="$(printf '%s\n' "$build_info_output" | sed -n 's/^BUILD_COMMIT=//p' | tail -1)"
 
-  if [ "$reported_commit" != "$expected_commit" ]; then
-    echo "$profile: embedded commit mismatch expected $expected_commit got ${reported_commit:-missing}" >&2
-    exit 1
+    if [ "$reported_commit" != "$expected_commit" ]; then
+      echo "$profile: embedded commit mismatch expected $expected_commit got ${reported_commit:-missing}" >&2
+      exit 1
+    fi
   fi
 
   run_release daemon
@@ -296,13 +447,47 @@ while IFS=$'\t' read -r profile filename; do
   if [ "$profile" = "sim_broadcast_platform" ]; then
     wait_for_health "http://127.0.0.1:$sim_port/readyz" "$profile sim-ui"
     curl -fsS "http://127.0.0.1:$sim_port/" | grep -q '/assets/app-'
-    [ "$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$sim_port/admin")" = "401" ]
+
+    # Unauthenticated operator surfaces: the browser route bounces to the
+    # admin login form (RequireAccessToken on_failure: redirect), while the
+    # JSON API rejects outright with 401.
+    admin_headers=$(curl -sS -o /dev/null -D - "http://127.0.0.1:$sim_port/admin")
+    admin_status=$(printf '%s' "$admin_headers" | head -1 | awk '{print $2}')
+    case "$admin_status" in
+      30[123578]) ;;
+      *)
+        echo "$profile: unauthenticated /admin returned $admin_status, expected a redirect to the login form" >&2
+        exit 1
+        ;;
+    esac
+    if ! printf '%s' "$admin_headers" | grep -qi '^location:.*/admin/login'; then
+      echo "$profile: unauthenticated /admin did not redirect to /admin/login" >&2
+      exit 1
+    fi
+    api_status=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$sim_port/api/admin/metrics")
+    if [ "$api_status" != "401" ]; then
+      echo "$profile: unauthenticated /api/admin/metrics returned $api_status, expected 401" >&2
+      exit 1
+    fi
 
     run_release rpc \
       'state = LemonSim.Examples.Werewolf.initial_state(sim_id: "artifact_werewolf", player_count: 5, seed: 7); state = LemonSim.Kernel.State.put_world(state, %{phase: "game_over", status: "game_over", winner: "villagers"}); LemonSim.Kernel.Store.put_state(state)'
     curl -fsS "http://127.0.0.1:$sim_port/watch/artifact_werewolf" | grep -q 'VILLAGERS WIN'
 
     run_release stop
+    # `stop` returns as soon as the shutdown rpc is accepted, but the node
+    # needs a moment to exit and release its epmd name registration; starting
+    # the next daemon before that kills it with "name … seems to be in use".
+    for _ in $(seq 1 30); do
+      if ! run_release pid >/dev/null 2>&1; then
+        break
+      fi
+      sleep 1
+    done
+    if run_release pid >/dev/null 2>&1; then
+      echo "$profile: node did not exit within 30s of stop" >&2
+      exit 1
+    fi
     run_release daemon
     wait_for_health "http://127.0.0.1:$sim_port/readyz" "$profile restarted sim-ui"
     curl -fsS "http://127.0.0.1:$sim_port/watch/artifact_werewolf" | grep -q 'VILLAGERS WIN'
@@ -314,6 +499,7 @@ while IFS=$'\t' read -r profile filename; do
 
     if [ "$profile" = "lemon_runtime_full" ]; then
       wait_for_health "http://127.0.0.1:$web_port/healthz" "$profile web"
+      assert_no_asset_warmup_failure "$profile" "$extract_dir"
     fi
 
     run_release stop
@@ -328,13 +514,36 @@ while IFS=$'\t' read -r profile filename; do
 
     echo "ok $profile booted, health checked, and generated support bundle"
   fi
+}
 
+if [ "$MODE" = "single" ]; then
+  work_dir="$(mktemp -d "${TMPDIR:-/tmp}/lemon-release-boot.XXXXXX")"
+  trap 'cleanup_work_dir "$work_dir"' EXIT
+
+  boot_one_profile "$SINGLE_PROFILE" "$SINGLE_TARBALL" "$work_dir" ""
+
+  echo "verified release runtime boot for 1 profile (single mode: $SINGLE_PROFILE)"
+  exit 0
+fi
+
+"$ROOT/scripts/verify_release_artifacts" --platform "$PLATFORM_FILTER" "$ARTIFACT_DIR"
+
+work_dir="$(mktemp -d "${TMPDIR:-/tmp}/lemon-release-boot.XXXXXX")"
+trap 'cleanup_work_dir "$work_dir"' EXIT
+
+verified_profiles=0
+expected_commit="$(manifest_commit)"
+
+while IFS=$'\t' read -r profile filename; do
+  [ -n "$profile" ] || continue
+  boot_one_profile "$profile" "$ARTIFACT_DIR/$filename" "$work_dir" "$expected_commit"
   verified_profiles=$((verified_profiles + 1))
 done < <(manifest_entries)
 
-if [ "$verified_profiles" -ne 3 ]; then
-  echo "expected to boot 3 release profiles, verified $verified_profiles" >&2
+expected_count="$(expected_profile_count "$PLATFORM_FILTER")"
+if [ "$verified_profiles" -ne "$expected_count" ]; then
+  echo "expected to boot $expected_count release profile(s) for $PLATFORM_FILTER, verified $verified_profiles" >&2
   exit 1
 fi
 
-echo "verified release runtime boot for $verified_profiles profile(s)"
+echo "verified release runtime boot for $verified_profiles profile(s) on $PLATFORM_FILTER"

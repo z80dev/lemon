@@ -61,7 +61,6 @@ defmodule LemonCore.Config.Agent do
     :extension_paths,
     :theme,
     :budget_defaults,
-    :cli,
     :provider_routing
   ]
 
@@ -90,7 +89,6 @@ defmodule LemonCore.Config.Agent do
           extension_paths: [String.t()],
           theme: String.t(),
           budget_defaults: %{max_children: integer()},
-          cli: map(),
           provider_routing: map()
         }
 
@@ -114,7 +112,6 @@ defmodule LemonCore.Config.Agent do
       extension_paths: resolve_extension_paths(agent_settings),
       theme: resolve_theme(agent_settings),
       budget_defaults: resolve_budget_defaults(agent_settings),
-      cli: resolve_cli(agent_settings),
       provider_routing: resolve_provider_routing(agent_settings)
     }
   end
@@ -270,18 +267,6 @@ defmodule LemonCore.Config.Agent do
     }
   end
 
-  defp resolve_cli(settings) do
-    cli = settings["cli"] || %{}
-
-    %{
-      codex: resolve_codex_cli(cli["codex"] || %{}),
-      kimi: resolve_kimi_cli(cli["kimi"] || %{}),
-      opencode: resolve_opencode_cli(cli["opencode"] || %{}),
-      pi: resolve_pi_cli(cli["pi"] || %{}),
-      droid: resolve_droid_cli(cli["droid"] || %{}),
-      claude: resolve_claude_cli(cli["claude"] || %{})
-    }
-  end
 
   defp normalize_string_list(nil), do: []
 
@@ -301,24 +286,88 @@ defmodule LemonCore.Config.Agent do
 
   defp normalize_string_list(_), do: []
 
+  # Credential pools carry a provider list plus optional per-provider
+  # credential refs:
+  #
+  #     [runtime.provider_routing.credential_pools.burst]
+  #     providers = ["openai", "zai"]
+  #     strategy = "round_robin"
+  #
+  #     [runtime.provider_routing.credential_pools.burst.credentials]
+  #     openai = ["secret:llm_openai_api_key_alt", "env:OPENAI_API_KEY_2"]
+  #     zai = ["llm_zai_api_key"]
+  #
+  # A ref is "secret:NAME" (resolved via LemonCore.Secrets), "env:VAR", or an
+  # unprefixed secret name (matching the llm_<provider>_api_key convention).
+  # Refs normalize to `%{source: :secret | :env, name: binary}`. A pool with
+  # credentials but no providers derives its provider list from the credential
+  # keys; a pool with neither is dropped.
   defp normalize_credential_pools(pools) when is_map(pools) do
     pools
     |> Enum.reduce(%{}, fn {name, cfg}, acc ->
       cfg = ensure_map(cfg)
       providers = normalize_string_list(cfg["providers"])
+      credentials = normalize_pool_credentials(cfg["credentials"])
+
+      providers =
+        if providers == [] do
+          credentials |> Map.keys() |> Enum.sort()
+        else
+          providers
+        end
 
       if providers == [] do
         acc
       else
         Map.put(acc, to_string(name), %{
           providers: providers,
-          strategy: normalize_routing_strategy(cfg["strategy"])
+          strategy: normalize_routing_strategy(cfg["strategy"]),
+          credentials: credentials
         })
       end
     end)
   end
 
   defp normalize_credential_pools(_), do: %{}
+
+  defp normalize_pool_credentials(credentials) when is_map(credentials) do
+    credentials
+    |> Enum.reduce(%{}, fn {provider, refs}, acc ->
+      refs =
+        refs
+        |> List.wrap()
+        |> Enum.map(&normalize_credential_ref/1)
+        |> Enum.reject(&is_nil/1)
+
+      provider = provider |> to_string() |> String.trim()
+
+      if refs == [] or provider == "" do
+        acc
+      else
+        Map.put(acc, provider, refs)
+      end
+    end)
+  end
+
+  defp normalize_pool_credentials(_), do: %{}
+
+  defp normalize_credential_ref(ref) when is_binary(ref) do
+    case String.trim(ref) do
+      "" -> nil
+      "secret:" <> name -> credential_ref(:secret, name)
+      "env:" <> name -> credential_ref(:env, name)
+      name -> credential_ref(:secret, name)
+    end
+  end
+
+  defp normalize_credential_ref(_), do: nil
+
+  defp credential_ref(source, name) do
+    case String.trim(name) do
+      "" -> nil
+      name -> %{source: source, name: name}
+    end
+  end
 
   defp normalize_provider_routing_profiles(profiles) when is_map(profiles) do
     profiles
@@ -364,80 +413,10 @@ defmodule LemonCore.Config.Agent do
 
   defp normalize_routing_strategy(_), do: "priority"
 
-  defp resolve_codex_cli(codex) do
-    %{
-      extra_args: parse_string_list(codex["extra_args"]),
-      auto_approve: codex["auto_approve"] || false
-    }
-  end
-
-  defp resolve_kimi_cli(kimi) do
-    %{
-      extra_args: parse_string_list(kimi["extra_args"])
-    }
-  end
-
-  defp resolve_opencode_cli(opencode) do
-    %{
-      model: normalize_optional_string(opencode["model"])
-    }
-  end
-
-  defp resolve_pi_cli(pi) do
-    %{
-      extra_args: parse_string_list(pi["extra_args"]),
-      model: normalize_optional_string(pi["model"]),
-      provider: normalize_optional_string(pi["provider"])
-    }
-  end
-
-  defp resolve_droid_cli(droid) do
-    %{
-      extra_args: parse_string_list(droid["extra_args"]),
-      model: normalize_optional_string(droid["model"]),
-      reasoning_effort: normalize_optional_string(droid["reasoning_effort"]),
-      enabled_tools: parse_string_list(droid["enabled_tools"]),
-      disabled_tools: parse_string_list(droid["disabled_tools"]),
-      use_spec: if(is_nil(droid["use_spec"]), do: false, else: droid["use_spec"]),
-      spec_model: normalize_optional_string(droid["spec_model"])
-    }
-  end
-
-  defp resolve_claude_cli(claude) do
-    %{
-      dangerously_skip_permissions:
-        if(is_nil(claude["dangerously_skip_permissions"]),
-          do: true,
-          else: claude["dangerously_skip_permissions"]
-        ),
-      allowed_tools: parse_string_list(claude["allowed_tools"]),
-      scrub_env: normalize_scrub_env(claude["scrub_env"]),
-      env_allowlist: parse_string_list(claude["env_allowlist"]),
-      env_allow_prefixes: parse_string_list(claude["env_allow_prefixes"]),
-      env_overrides: normalize_env_overrides(claude["env_overrides"])
-    }
-  end
-
-  defp parse_string_list(nil), do: []
-  defp parse_string_list(list) when is_list(list), do: list
-  defp parse_string_list(_), do: []
-
   defp normalize_optional_string(nil), do: nil
   defp normalize_optional_string(""), do: nil
   defp normalize_optional_string(str) when is_binary(str), do: str
   defp normalize_optional_string(_), do: nil
-
-  defp normalize_scrub_env(nil), do: :auto
-  defp normalize_scrub_env("auto"), do: :auto
-  defp normalize_scrub_env("true"), do: true
-  defp normalize_scrub_env("false"), do: false
-  defp normalize_scrub_env(true), do: true
-  defp normalize_scrub_env(false), do: false
-  defp normalize_scrub_env(_), do: :auto
-
-  defp normalize_env_overrides(nil), do: %{}
-  defp normalize_env_overrides(map) when is_map(map), do: map
-  defp normalize_env_overrides(_), do: %{}
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)

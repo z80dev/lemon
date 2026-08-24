@@ -1,30 +1,21 @@
 defmodule LemonControlPlane.Methods.UpdateRun do
   @moduledoc """
-  Handler for the update.run control plane method.
+  Handler for the `update.run` control plane method.
 
-  Triggers a system update check and optionally applies updates.
+  Built on `LemonCore.Update.Remote`: `checkOnly` (the default) reports what
+  is published without downloading anything; `force` stages a new version if
+  one is available (never restarts the node — the caller is responsible for
+  triggering a restart once `restartRequired` comes back `true`).
 
   ## Configuration
 
-  Configure update checking via `LemonControlPlane.UpdateStore`:
+  `LemonControlPlane.UpdateStore`'s `update_url` becomes a `base_url`
+  override for `LemonCore.Update.Remote` (test/self-hosted-mirror seam); the
+  key name is unchanged for backward compatibility. Without it, `Remote` uses
+  its own default (the public GitHub releases host):
+
   ```elixir
-  LemonControlPlane.UpdateStore.put_config(%{
-    update_url: "https://api.example.com/releases/latest",
-    auto_restart: false
-  })
-  ```
-
-  ## Update Manifest Format
-
-  The update URL should return JSON:
-  ```json
-  {
-    "version": "1.2.3",
-    "releaseDate": "2025-01-15",
-    "downloadUrl": "https://...",
-    "changelog": "...",
-    "checksum": "sha256:..."
-  }
+  LemonControlPlane.UpdateStore.put_config(%{update_url: "https://example.test"})
   ```
   """
 
@@ -32,8 +23,7 @@ defmodule LemonControlPlane.Methods.UpdateRun do
 
   alias LemonControlPlane.UpdateStore
   alias LemonControlPlane.Protocol.Errors
-
-  require Logger
+  alias LemonCore.Update.Remote
 
   @impl true
   def name, do: "update.run"
@@ -43,93 +33,88 @@ defmodule LemonControlPlane.Methods.UpdateRun do
 
   @impl true
   def handle(params, _ctx) do
-    force = params["force"] || false
-    check_only = params["checkOnly"] || params["check_only"] || false
+    force = params["force"] == true
+    check_only = params["checkOnly"] == true or params["check_only"] == true
+    apply? = force and not check_only
 
-    # Get current version info
-    current_version = get_current_version()
+    remote_opts = remote_opts(params)
 
-    # Check if update checking is configured
-    update_config = UpdateStore.get_config() || %{}
-    update_url = get_field(update_config, :update_url)
+    result = if apply?, do: Remote.apply(remote_opts), else: Remote.check(remote_opts)
 
-    if is_nil(update_url) or update_url == "" do
-      # No update URL configured - return current version info
-      result = %{
-        "currentVersion" => current_version,
-        "updateAvailable" => false,
-        "latestVersion" => current_version,
-        "message" => "Update checking not configured. Set update_url in update_config."
-      }
+    case result do
+      {:ok, info} ->
+        response = response(info, apply?)
+        {:ok, Map.put(response, "summary", summary(response, force, check_only))}
 
-      {:ok, Map.put(result, "summary", summary(result, force, check_only, false))}
-    else
-      # Fetch latest version info from update URL
-      case fetch_update_manifest(update_url) do
-        {:ok, manifest} ->
-          latest_version = manifest["version"] || manifest[:version] || current_version
-          update_available = version_newer?(latest_version, current_version)
-
-          result = %{
-            "currentVersion" => current_version,
-            "updateAvailable" => update_available,
-            "latestVersion" => latest_version,
-            "releaseDate" => manifest["releaseDate"] || manifest[:release_date],
-            "changelog" => manifest["changelog"] || manifest[:changelog]
-          }
-
-          if update_available and force and not check_only do
-            # Attempt to apply update
-            case apply_update(manifest, update_config) do
-              {:ok, message} ->
-                result =
-                  Map.merge(result, %{
-                    "updateApplied" => true,
-                    "message" => message
-                  })
-
-                {:ok, Map.put(result, "summary", summary(result, force, check_only, true))}
-
-              {:error, reason} ->
-                result =
-                  Map.merge(result, %{
-                    "updateApplied" => false,
-                    "message" => "Update available but failed to apply: #{reason}"
-                  })
-
-                {:ok, Map.put(result, "summary", summary(result, force, check_only, true))}
-            end
-          else
-            message =
-              cond do
-                not update_available -> "Already running latest version"
-                check_only -> "Update available. Use force=true to apply."
-                true -> "Update available. Use force=true to apply."
-              end
-
-            result = Map.put(result, "message", message)
-            {:ok, Map.put(result, "summary", summary(result, force, check_only, true))}
-          end
-
-        {:error, reason} ->
-          {:error, Errors.internal_error("Failed to check for updates: #{reason}")}
-      end
+      {:error, reason} ->
+        {:error, Errors.internal_error("Failed to check for updates: #{redact(reason)}")}
     end
   end
 
-  defp summary(result, force, check_only, configured?) do
+  defp remote_opts(params) do
+    []
+    |> maybe_put(:base_url, base_url_override())
+    |> maybe_put(:channel, params["channel"])
+    |> maybe_put(:version, params["version"])
+  end
+
+  defp maybe_put(opts, _key, nil), do: opts
+  defp maybe_put(opts, _key, ""), do: opts
+  defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp base_url_override do
+    config = UpdateStore.get_config() || %{}
+    get_field(config, :update_url)
+  end
+
+  defp configured? do
+    case base_url_override() do
+      value when is_binary(value) and value != "" -> true
+      _ -> false
+    end
+  end
+
+  defp response(%{staged: staged} = info, true) do
+    %{
+      "currentVersion" => info.current,
+      "latestVersion" => info.latest || info.current,
+      "updateAvailable" => not is_nil(staged),
+      "updateApplied" => not is_nil(staged),
+      "staged" => not is_nil(staged),
+      "restartRequired" => info.restart_required == true,
+      "message" => apply_message(staged)
+    }
+  end
+
+  defp response(info, false) do
+    %{
+      "currentVersion" => info.current,
+      "latestVersion" => info.latest || info.current,
+      "updateAvailable" => info.update_available? == true,
+      "updateApplied" => false,
+      "staged" => false,
+      "restartRequired" => false,
+      "message" => check_message(info.update_available? == true)
+    }
+  end
+
+  defp apply_message(nil), do: "Already running the latest version."
+  defp apply_message(version), do: "Update staged to #{version}. Restart to apply."
+
+  defp check_message(true), do: "Update available. Use force=true to apply."
+  defp check_message(false), do: "Already running the latest version."
+
+  defp summary(response, force, check_only) do
     %{
       "action" => name(),
-      "configured" => configured?,
-      "force" => force == true,
-      "checkOnly" => check_only == true,
-      "currentVersion" => Map.get(result, "currentVersion"),
-      "latestVersion" => Map.get(result, "latestVersion"),
-      "updateAvailable" => Map.get(result, "updateAvailable") == true,
-      "updateApplied" => Map.get(result, "updateApplied") == true,
-      "releaseDateReturned" => not is_nil(Map.get(result, "releaseDate")),
-      "changelogReturned" => not is_nil(Map.get(result, "changelog")),
-      "messageReturned" => not is_nil(Map.get(result, "message")),
+      "configured" => configured?(),
+      "force" => force,
+      "checkOnly" => check_only,
+      "currentVersion" => Map.get(response, "currentVersion"),
+      "latestVersion" => Map.get(response, "latestVersion"),
+      "updateAvailable" => Map.get(response, "updateAvailable") == true,
+      "updateApplied" => Map.get(response, "updateApplied") == true,
+      "messageReturned" => not is_nil(Map.get(response, "message")),
       "cleanup" => %{
         "includesDownloadUrl" => false,
         "includesChecksum" => false,
@@ -140,159 +125,8 @@ defmodule LemonControlPlane.Methods.UpdateRun do
     }
   end
 
-  defp get_current_version do
-    case Application.spec(:lemon_control_plane, :vsn) do
-      nil -> "0.0.0"
-      vsn when is_list(vsn) -> to_string(vsn)
-      vsn -> to_string(vsn)
-    end
-  end
-
-  defp fetch_update_manifest(url) do
-    request = {String.to_charlist(url), []}
-
-    case LemonCore.Httpc.request(:get, request, [timeout: 10_000], body_format: :binary) do
-      {:ok, {{_, 200, _}, _headers, body}} ->
-        case Jason.decode(body) do
-          {:ok, manifest} -> {:ok, manifest}
-          {:error, _} -> {:error, "Invalid JSON response"}
-        end
-
-      {:ok, {{_, status, _}, _, body}} ->
-        {:error, "HTTP #{status}: #{String.slice(to_string(body), 0, 100)}"}
-
-      {:error, reason} ->
-        {:error, inspect(reason)}
-    end
-  end
-
-  defp version_newer?(latest, current) do
-    case {Version.parse(normalize_version(latest)), Version.parse(normalize_version(current))} do
-      {{:ok, latest_v}, {:ok, current_v}} ->
-        Version.compare(latest_v, current_v) == :gt
-
-      _ ->
-        # If parsing fails, do string comparison
-        latest != current and latest > current
-    end
-  end
-
-  defp normalize_version(v) do
-    # Remove 'v' prefix if present and ensure 3-part version
-    v = String.trim_leading(to_string(v), "v")
-
-    case String.split(v, ".") do
-      [major] -> "#{major}.0.0"
-      [major, minor] -> "#{major}.#{minor}.0"
-      _ -> v
-    end
-  end
-
-  defp apply_update(manifest, config) do
-    download_url = manifest["downloadUrl"] || manifest[:download_url]
-    checksum = manifest["checksum"] || manifest[:checksum]
-    auto_restart = get_field(config, :auto_restart) || false
-
-    cond do
-      is_nil(download_url) ->
-        {:error, "No download URL in manifest"}
-
-      true ->
-        # Download update
-        case download_update(download_url, checksum) do
-          {:ok, update_path} ->
-            # Store update info for restart
-            update_info = %{
-              version: manifest["version"],
-              path: update_path,
-              downloaded_at: System.system_time(:millisecond)
-            }
-
-            UpdateStore.put_pending(update_info)
-
-            if auto_restart do
-              # Schedule restart
-              spawn(fn ->
-                Process.sleep(1000)
-                Logger.info("Restarting for update to version #{manifest["version"]}")
-                System.stop(0)
-              end)
-
-              {:ok, "Update downloaded. Restarting..."}
-            else
-              {:ok, "Update downloaded to #{update_path}. Restart to apply."}
-            end
-
-          {:error, reason} ->
-            {:error, reason}
-        end
-    end
-  end
-
-  defp download_update(url, expected_checksum) do
-    request = {String.to_charlist(url), []}
-
-    case LemonCore.Httpc.request(:get, request, [timeout: 300_000], body_format: :binary) do
-      {:ok, {{_, 200, _}, _headers, body}} ->
-        # Verify checksum if provided
-        if expected_checksum do
-          case verify_checksum(body, expected_checksum) do
-            :ok ->
-              save_update(body)
-
-            {:error, reason} ->
-              {:error, reason}
-          end
-        else
-          save_update(body)
-        end
-
-      {:ok, {{_, status, _}, _, _}} ->
-        {:error, "Download failed with HTTP #{status}"}
-
-      {:error, reason} ->
-        {:error, "Download failed: #{inspect(reason)}"}
-    end
-  end
-
-  defp verify_checksum(data, expected) do
-    case String.split(expected, ":", parts: 2) do
-      ["sha256", hash] ->
-        actual = :crypto.hash(:sha256, data) |> Base.encode16(case: :lower)
-
-        if actual == String.downcase(hash) do
-          :ok
-        else
-          {:error, "Checksum mismatch"}
-        end
-
-      ["md5", hash] ->
-        actual = :crypto.hash(:md5, data) |> Base.encode16(case: :lower)
-
-        if actual == String.downcase(hash) do
-          :ok
-        else
-          {:error, "Checksum mismatch"}
-        end
-
-      _ ->
-        # Unknown checksum format, skip verification
-        :ok
-    end
-  end
-
-  defp save_update(data) do
-    update_dir = Path.join(System.tmp_dir!(), "lemon_updates")
-    File.mkdir_p!(update_dir)
-
-    filename = "update_#{System.unique_integer([:positive])}.bin"
-    path = Path.join(update_dir, filename)
-
-    case File.write(path, data) do
-      :ok -> {:ok, path}
-      {:error, reason} -> {:error, "Failed to save update: #{inspect(reason)}"}
-    end
-  end
+  defp redact({:checksum_mismatch, _}), do: "checksum verification failed"
+  defp redact(reason), do: inspect(reason)
 
   # Safe map access supporting both atom and string keys
   defp get_field(map, key) when is_atom(key) do

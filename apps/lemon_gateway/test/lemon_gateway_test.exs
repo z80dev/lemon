@@ -4,7 +4,6 @@ defmodule LemonGatewayTest do
 
   alias Elixir.LemonGateway.ExecutionRequest
   alias Elixir.LemonGateway.Event
-  alias Elixir.LemonGateway.Types.Job
 
   setup do
     # Isolate Telegram poller file locks from any locally running gateway process (and from other tests).
@@ -21,266 +20,129 @@ defmodule LemonGatewayTest do
     :ok
   end
 
-  defp submit_job(%Job{} = job) do
-    job
-    |> command_from_job()
-    |> LemonGateway.submit()
+  defp submit_request(%ExecutionRequest{} = request) do
+    Elixir.LemonGateway.Scheduler.submit_execution(request)
   end
 
-  defp command_from_job(%Job{} = job) do
-    job
-    |> ExecutionRequest.from_job(conversation_key: test_conversation_key(job))
-    |> ExecutionRequest.to_command()
+  defp request(session_key, prompt, scenario, meta \\ %{}) do
+    %ExecutionRequest{
+      run_id: nil,
+      session_key: session_key,
+      prompt: prompt,
+      resume: nil,
+      conversation_key: {:session, session_key},
+      meta: Map.put(meta, :scenario, scenario)
+    }
   end
-
-  defp test_conversation_key(%Job{resume: %LemonCore.ResumeToken{engine: engine, value: value}})
-       when is_binary(engine) and is_binary(value),
-       do: {:resume, engine, value}
-
-  defp test_conversation_key(%Job{session_key: session_key}) when is_binary(session_key),
-    do: {:session, session_key}
 
   describe "ExecutionRequest adapter" do
-    test "from_job/1 preserves execution fields while omitting queue_mode" do
-      job = %Job{
+    test "to_command/1 preserves execution fields without queue semantics" do
+      request = %ExecutionRequest{
         run_id: "run-1",
         session_key: "agent:default:main",
         prompt: "hello",
-        engine_id: "lemon",
         cwd: "/tmp",
         resume: %LemonCore.ResumeToken{engine: "lemon", value: "resume-1"},
         lane: :main,
         tool_policy: %{approvals: %{"bash" => "always"}},
+        conversation_key: {:session, "agent:default:main"},
         meta: %{origin: :test}
       }
 
-      request = ExecutionRequest.from_job(job)
+      command = ExecutionRequest.to_command(request)
       request_map = Map.from_struct(request)
 
-      assert request.run_id == job.run_id
-      assert request.session_key == job.session_key
-      assert request.prompt == job.prompt
-      assert request.engine_id == job.engine_id
-      assert request.cwd == job.cwd
-      assert request.resume == job.resume
-      assert request.lane == job.lane
-      assert request.tool_policy == job.tool_policy
-      assert request.meta.origin == :test
+      assert command.run_id == request.run_id
+      assert command.session_key == request.session_key
+      assert command.prompt == request.prompt
+      assert command.cwd == request.cwd
+      assert command.resume == request.resume
+      assert command.lane == request.lane
+      assert command.tool_policy == request.tool_policy
+      assert command.conversation_key == request.conversation_key
+      assert command.meta.origin == :test
       refute Map.has_key?(request_map, :queue_mode)
     end
 
     test "LemonGateway.submit/1 accepts only core execution commands" do
-      job = %Job{
+      request = %ExecutionRequest{
         run_id: "run-1",
         session_key: "agent:default:main",
         prompt: "hello",
-        engine_id: "lemon"
+        conversation_key: {:session, "agent:default:main"}
       }
-
-      request = ExecutionRequest.from_job(job, conversation_key: test_conversation_key(job))
 
       assert_raise FunctionClauseError, fn -> apply(LemonGateway, :submit, [request]) end
     end
   end
 
-  defmodule LemonGatewayTest.CrashEngine do
-    @behaviour Elixir.LemonGateway.Engine
+  defmodule GatewayFixtureExecutor do
+    @behaviour LemonGateway.Executor
 
-    alias Elixir.LemonGateway.Types.Job
     alias LemonCore.ResumeToken
-    alias Elixir.LemonGateway.Event
+    alias LemonGateway.Event
+    alias LemonGateway.ExecutionRequest
 
     @impl true
-    def id, do: "crash"
+    def start_run(%ExecutionRequest{meta: %{scenario: "error"}}, _opts, _sink_pid),
+      do: {:error, :boom}
 
-    @impl true
-    def format_resume(%ResumeToken{value: sid}), do: "crash resume #{sid}"
-
-    @impl true
-    def extract_resume(_text), do: nil
-
-    @impl true
-    def is_resume_line(_line), do: false
-
-    @impl true
-    def supports_steer?, do: false
-
-    @impl true
-    def start_run(%Job{} = job, _opts, sink_pid) do
+    def start_run(%ExecutionRequest{meta: %{scenario: "crash"}} = request, _opts, sink_pid) do
       run_ref = make_ref()
-      resume = job.resume || %ResumeToken{engine: id(), value: "crash"}
+      resume = request.resume || %ResumeToken{engine: "lemon", value: "crash"}
 
-      Task.start(fn ->
-        send(sink_pid, {:engine_event, run_ref, Event.started(%{engine: id(), resume: resume})})
-        Process.exit(sink_pid, :kill)
-      end)
+      {:ok, task_pid} =
+        Task.start(fn ->
+          send(
+            sink_pid,
+            {:engine_event, run_ref, Event.started(%{engine: "lemon", resume: resume})}
+          )
 
-      {:ok, run_ref, %{pid: self()}}
+          Process.exit(sink_pid, :kill)
+        end)
+
+      {:ok, run_ref, %{task_pid: task_pid}}
     end
 
-    @impl true
-    def cancel(_ctx), do: :ok
-  end
-
-  defmodule ErrorEngine do
-    @behaviour Elixir.LemonGateway.Engine
-
-    alias Elixir.LemonGateway.Types.Job
-    alias LemonCore.ResumeToken
-    alias Elixir.LemonGateway.Event
-
-    @impl true
-    def id, do: "error"
-
-    @impl true
-    def format_resume(%ResumeToken{value: sid}), do: "error resume #{sid}"
-
-    @impl true
-    def extract_resume(_text), do: nil
-
-    @impl true
-    def is_resume_line(_line), do: false
-
-    @impl true
-    def supports_steer?, do: false
-
-    @impl true
-    def start_run(%Job{}, _opts, _sink_pid) do
-      {:error, :boom}
-    end
-
-    @impl true
-    def cancel(_ctx), do: :ok
-  end
-
-  defmodule ActionEngine do
-    @behaviour Elixir.LemonGateway.Engine
-
-    alias Elixir.LemonGateway.Types.Job
-    alias LemonCore.ResumeToken
-    alias Elixir.LemonGateway.Event
-
-    @impl true
-    def id, do: "action"
-
-    @impl true
-    def format_resume(%ResumeToken{value: sid}), do: "action resume #{sid}"
-
-    @impl true
-    def extract_resume(_text), do: nil
-
-    @impl true
-    def is_resume_line(_line), do: false
-
-    @impl true
-    def supports_steer?, do: false
-
-    @impl true
-    def start_run(%Job{} = job, _opts, sink_pid) do
+    def start_run(%ExecutionRequest{} = request, _opts, sink_pid) do
       run_ref = make_ref()
-      resume = job.resume || %ResumeToken{engine: id(), value: "action"}
-      action = Event.action(%{id: "step-1", kind: "work", title: "Step 1"})
+      resume = request.resume || %ResumeToken{engine: "lemon", value: "fixture"}
 
-      Task.start(fn ->
-        send(sink_pid, {:engine_event, run_ref, Event.started(%{engine: id(), resume: resume})})
+      {:ok, task_pid} =
+        Task.start(fn ->
+          send(
+            sink_pid,
+            {:engine_event, run_ref, Event.started(%{engine: "lemon", resume: resume})}
+          )
 
-        send(
-          sink_pid,
-          {:engine_event, run_ref,
-           Event.action_event(%{engine: id(), action: action, phase: :started})}
-        )
+          send(
+            sink_pid,
+            {:engine_event, run_ref,
+             Event.completed(%{
+               engine: "lemon",
+               resume: resume,
+               ok: true,
+               answer: "Echo: #{request.prompt}"
+             })}
+          )
+        end)
 
-        send(
-          sink_pid,
-          {:engine_event, run_ref, Event.completed(%{engine: id(), ok: true, answer: "result"})}
-        )
-      end)
-
-      {:ok, run_ref, %{pid: self()}}
+      {:ok, run_ref, %{task_pid: task_pid}}
     end
 
     @impl true
-    def cancel(_ctx), do: :ok
-  end
-
-  defmodule LemonGatewayTest.StreamingEngine do
-    @moduledoc "Test engine that emits multiple action events to test streaming edits"
-    @behaviour Elixir.LemonGateway.Engine
-
-    alias Elixir.LemonGateway.Types.Job
-    alias LemonCore.ResumeToken
-    alias Elixir.LemonGateway.Event
-
-    @impl true
-    def id, do: "streaming"
-
-    @impl true
-    def format_resume(%ResumeToken{value: sid}), do: "streaming resume #{sid}"
-
-    @impl true
-    def extract_resume(_text), do: nil
-
-    @impl true
-    def is_resume_line(_line), do: false
-
-    @impl true
-    def supports_steer?, do: false
-
-    @impl true
-    def start_run(%Job{} = job, _opts, sink_pid) do
-      run_ref = make_ref()
-      resume = job.resume || %ResumeToken{engine: id(), value: "streaming"}
-      action1 = Event.action(%{id: "step-1", kind: "work", title: "Step 1"})
-      action2 = Event.action(%{id: "step-2", kind: "work", title: "Step 2"})
-
-      Task.start(fn ->
-        send(sink_pid, {:engine_event, run_ref, Event.started(%{engine: id(), resume: resume})})
-        Process.sleep(10)
-
-        send(
-          sink_pid,
-          {:engine_event, run_ref,
-           Event.action_event(%{engine: id(), action: action1, phase: :started})}
-        )
-
-        Process.sleep(10)
-
-        send(
-          sink_pid,
-          {:engine_event, run_ref,
-           Event.action_event(%{engine: id(), action: action1, phase: :completed})}
-        )
-
-        Process.sleep(10)
-
-        send(
-          sink_pid,
-          {:engine_event, run_ref,
-           Event.action_event(%{engine: id(), action: action2, phase: :started})}
-        )
-
-        Process.sleep(10)
-
-        send(
-          sink_pid,
-          {:engine_event, run_ref,
-           Event.action_event(%{engine: id(), action: action2, phase: :completed})}
-        )
-
-        Process.sleep(10)
-
-        send(
-          sink_pid,
-          {:engine_event, run_ref,
-           Event.completed(%{engine: id(), ok: true, answer: "done streaming"})}
-        )
-      end)
-
-      {:ok, run_ref, %{pid: self()}}
+    def cancel(%{task_pid: pid}) when is_pid(pid) do
+      Process.exit(pid, :kill)
+      :ok
     end
 
-    @impl true
     def cancel(_ctx), do: :ok
+
+    @impl true
+    def steer(_ctx, _text), do: {:error, :unsupported}
+
+    @impl true
+    def redirect(_ctx, _text), do: {:error, :unsupported}
   end
 
   defmodule TestTelegramAPI do
@@ -429,17 +291,10 @@ defmodule LemonGatewayTest do
 
     Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
       max_concurrent_runs: 1,
-      default_engine: "echo",
       enable_telegram: false
     })
 
-    Application.put_env(:lemon_gateway, :engines, [
-      Elixir.LemonGateway.Engines.Echo,
-      LemonGatewayTest.CrashEngine,
-      ErrorEngine,
-      ActionEngine,
-      LemonGatewayTest.StreamingEngine
-    ])
+    Application.put_env(:lemon_gateway, :executor, GatewayFixtureExecutor)
 
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
     :ok
@@ -450,20 +305,13 @@ defmodule LemonGatewayTest do
     :ok
   end
 
-  test "submits a job and receives completion" do
+  test "submits an execution request and receives completion" do
     session_key = "test:1"
+    request = request(session_key, "hello", "echo", %{notify_pid: self(), user_msg_id: 1})
 
-    job = %Job{
-      session_key: session_key,
-      prompt: "hello",
-      resume: nil,
-      engine_id: nil,
-      meta: %{notify_pid: self(), user_msg_id: 1}
-    }
+    submit_request(request)
 
-    submit_job(job)
-
-    assert_receive {:lemon_gateway_run_completed, ^job,
+    assert_receive {:lemon_gateway_run_completed, ^request,
                     %{__event__: :completed, ok: true, answer: "Echo: hello"}},
                    1_000
   end
@@ -498,113 +346,67 @@ defmodule LemonGatewayTest do
     Process.exit(worker_b, :kill)
   end
 
-  test "thread worker frees slot when run crashes" do
+  test "thread worker frees slot when a run crashes" do
     session_key = "test:2"
 
-    crash_job = %Job{
-      session_key: session_key,
-      prompt: "boom",
-      resume: nil,
-      engine_id: "crash",
-      meta: %{notify_pid: self(), user_msg_id: 10}
-    }
+    crash_request =
+      request(session_key, "boom", "crash", %{notify_pid: self(), user_msg_id: 10})
 
-    ok_job = %Job{
-      session_key: session_key,
-      prompt: "ok",
-      resume: nil,
-      engine_id: "echo",
-      meta: %{notify_pid: self(), user_msg_id: 11}
-    }
+    ok_request = request(session_key, "ok", "echo", %{notify_pid: self(), user_msg_id: 11})
 
-    submit_job(crash_job)
-    submit_job(ok_job)
+    submit_request(crash_request)
+    submit_request(ok_request)
 
-    assert_receive {:lemon_gateway_run_completed, ^ok_job,
+    assert_receive {:lemon_gateway_run_completed, ^ok_request,
                     %{__event__: :completed, ok: true, answer: "Echo: ok"}},
                    2_000
   end
 
-  test "scheduler handles back-to-back submits for same thread" do
+  test "scheduler handles back-to-back submissions for the same thread" do
     session_key = "test:3"
+    request1 = request(session_key, "first", "echo", %{notify_pid: self(), user_msg_id: 20})
+    request2 = request(session_key, "second", "echo", %{notify_pid: self(), user_msg_id: 21})
 
-    job1 = %Job{
-      session_key: session_key,
-      prompt: "first",
-      resume: nil,
-      engine_id: "echo",
-      meta: %{notify_pid: self(), user_msg_id: 20}
-    }
+    Task.async(fn -> submit_request(request1) end)
+    Task.async(fn -> submit_request(request2) end)
 
-    job2 = %Job{
-      session_key: session_key,
-      prompt: "second",
-      resume: nil,
-      engine_id: "echo",
-      meta: %{notify_pid: self(), user_msg_id: 21}
-    }
-
-    Task.async(fn -> submit_job(job1) end)
-    Task.async(fn -> submit_job(job2) end)
-
-    assert_receive {:lemon_gateway_run_completed, ^job1,
+    assert_receive {:lemon_gateway_run_completed, ^request1,
                     %{__event__: :completed, ok: true, answer: "Echo: first"}},
                    2_000
 
-    assert_receive {:lemon_gateway_run_completed, ^job2,
+    assert_receive {:lemon_gateway_run_completed, ^request2,
                     %{__event__: :completed, ok: true, answer: "Echo: second"}},
                    2_000
   end
 
   test "scheduler re-creates worker after idle stop" do
     session_key = "test:4"
+    request1 = request(session_key, "one", "echo", %{notify_pid: self(), user_msg_id: 30})
+    request2 = request(session_key, "two", "echo", %{notify_pid: self(), user_msg_id: 31})
 
-    job1 = %Job{
-      session_key: session_key,
-      prompt: "one",
-      resume: nil,
-      engine_id: "echo",
-      meta: %{notify_pid: self(), user_msg_id: 30}
-    }
+    submit_request(request1)
 
-    job2 = %Job{
-      session_key: session_key,
-      prompt: "two",
-      resume: nil,
-      engine_id: "echo",
-      meta: %{notify_pid: self(), user_msg_id: 31}
-    }
-
-    submit_job(job1)
-
-    assert_receive {:lemon_gateway_run_completed, ^job1,
+    assert_receive {:lemon_gateway_run_completed, ^request1,
                     %{__event__: :completed, ok: true, answer: "Echo: one"}},
                    2_000
 
     # Allow worker to stop when idle.
     Process.sleep(50)
 
-    submit_job(job2)
+    submit_request(request2)
 
-    assert_receive {:lemon_gateway_run_completed, ^job2,
+    assert_receive {:lemon_gateway_run_completed, ^request2,
                     %{__event__: :completed, ok: true, answer: "Echo: two"}},
                    2_000
   end
 
-  test "engine start error still notifies completion" do
+  test "executor start error still notifies completion" do
     session_key = "test:5"
+    request = request(session_key, "fail", "error", %{notify_pid: self(), user_msg_id: 40})
 
-    job = %Job{
-      session_key: session_key,
-      prompt: "fail",
-      resume: nil,
-      engine_id: "error",
-      meta: %{notify_pid: self(), user_msg_id: 40}
-    }
+    submit_request(request)
 
-    submit_job(job)
-
-    assert_receive {:lemon_gateway_run_completed, ^job, %{__event__: :completed, ok: false}},
+    assert_receive {:lemon_gateway_run_completed, ^request, %{__event__: :completed, ok: false}},
                    1_000
   end
 

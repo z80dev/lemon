@@ -182,9 +182,27 @@ defmodule LemonControlPlane.Methods.SessionDetail do
         "updatedAtMs" => sess[:updated_at_ms],
         "origin" => to_string_safe(sess[:origin] || :unknown)
       }
+      |> Map.merge(routing_meta(session_key, sess[:agent_id]))
     else
-      %{}
+      %{"sessionKey" => session_key}
+      |> Map.merge(routing_meta(session_key, nil))
     end
+  rescue
+    _ -> %{}
+  catch
+    :exit, _ -> %{}
+  end
+
+  # `model`/`provider`/`contextWindow`/`thinkingLevel` — what this session's next run resolves
+  # to, not what the last one used. `modelSource` says which layer supplied it, so a client can
+  # tell a pinned model from an inherited default; `modelOverride` is the session's own pin, or
+  # nil.
+  defp routing_meta(session_key, agent_id) do
+    resolved = LemonControlPlane.SessionModel.resolve(session_key, agent_id)
+
+    resolved
+    |> Map.drop(["defaultEngine", "preferredEngine"])
+    |> Map.put("modelOverride", LemonControlPlane.SessionModel.override(session_key))
   rescue
     _ -> %{}
   catch

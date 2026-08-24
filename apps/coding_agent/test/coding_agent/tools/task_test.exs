@@ -1,569 +1,63 @@
 defmodule CodingAgent.Tools.TaskTest do
   use ExUnit.Case, async: true
 
-  alias CodingAgent.Tools.Task.Params
+  alias CodingAgent.ToolPolicy
   alias CodingAgent.Tools.Task
-  alias LemonAgent.AbortSignal
-  alias LemonCore.ResumeToken
+  alias CodingAgent.Tools.Task.Params
 
   describe "tool/2" do
-    test "returns an AgentTool struct with correct properties" do
+    test "exposes only native task execution controls" do
       tool = Task.tool("/tmp")
+      properties = tool.parameters["properties"]
 
       assert tool.name == "task"
       assert tool.label == "Run Task"
-      assert tool.description =~ "subtask"
-      assert tool.description =~ "Do not rely on auto_followup alone"
-      assert tool.parameters["type"] == "object"
-      assert tool.parameters["required"] == []
-      assert is_function(tool.execute, 4)
-    end
-
-    test "includes all expected parameters" do
-      tool = Task.tool("/tmp")
-      props = tool.parameters["properties"]
-
-      assert Map.has_key?(props, "action")
-      assert Map.has_key?(props, "description")
-      assert Map.has_key?(props, "prompt")
-      assert Map.has_key?(props, "task_id")
-      assert Map.has_key?(props, "engine")
-      assert Map.has_key?(props, "model")
-      assert Map.has_key?(props, "thinking_level")
-      assert Map.has_key?(props, "role")
-      assert Map.has_key?(props, "async")
-      assert Map.has_key?(props, "auto_followup")
-      assert Map.has_key?(props, "cwd")
-      assert Map.has_key?(props, "tool_policy")
-      assert Map.has_key?(props, "meta")
-      assert Map.has_key?(props, "session_key")
-      assert Map.has_key?(props, "agent_id")
-      assert Map.has_key?(props, "queue_mode")
-      assert props["description"]["description"] =~ "3-5 words"
+      assert tool.description =~ "focused native session"
+      refute Map.has_key?(properties, "engine")
+      assert Map.has_key?(properties, "model")
+      assert Map.has_key?(properties, "thinking_level")
+      assert Map.has_key?(properties, "role")
     end
   end
 
-  describe "execute/6 - parameter validation" do
-    test "derives description from prompt when description is missing" do
-      result =
-        Task.execute("call_1", %{"prompt" => "do something"}, nil, nil, "/tmp", [])
-
-      assert %LemonAgent.Types.AgentToolResult{details: %{description: "do something"}} = result
-    end
-
-    test "derives description from prompt when description is empty" do
-      result =
-        Task.execute(
-          "call_1",
-          %{"description" => "   ", "prompt" => "do something"},
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      assert %LemonAgent.Types.AgentToolResult{details: %{description: "do something"}} = result
-    end
-
-    test "derives description from prompt when description is not a string" do
-      result =
-        Task.execute(
-          "call_1",
-          %{"description" => 123, "prompt" => "do something"},
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      assert %LemonAgent.Types.AgentToolResult{details: %{description: "do something"}} = result
-    end
-
-    test "returns error when prompt is empty" do
-      result =
-        Task.execute(
-          "call_1",
-          %{
-            "description" => "Test task",
-            "prompt" => ""
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      assert {:error, "Prompt must be a non-empty string"} = result
-    end
-
-    test "returns error when prompt is missing" do
-      result =
-        Task.execute(
-          "call_1",
-          %{
-            "description" => "Test task"
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      assert {:error, "Prompt is required"} = result
-    end
-
-    test "returns error when prompt is nil" do
-      result =
-        Task.execute(
-          "call_1",
-          %{
-            "description" => "Test task",
-            "prompt" => nil
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      assert {:error, "Prompt must be a non-empty string"} = result
-    end
-
-    test "returns error when prompt is not a string" do
-      result =
-        Task.execute(
-          "call_1",
-          %{
-            "description" => "Test task",
-            "prompt" => 123
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      assert {:error, "Prompt must be a non-empty string"} = result
-    end
-
-    test "returns error when role is not a string" do
-      result =
-        Task.execute(
-          "call_1",
-          %{
-            "description" => "Test task",
-            "prompt" => "do something",
-            "role" => 42
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      assert {:error, "Role must be a string"} = result
-    end
-
-    test "treats empty role as nil" do
-      result =
-        Task.execute(
-          "call_1",
-          %{
-            "description" => "Test task",
-            "prompt" => "do something",
-            "role" => "   ",
-            "engine" => "unknown"
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      assert {:error, "Engine must be one of: internal, codex, claude, droid, kimi, opencode, pi"} =
-               result
-    end
-
-    test "returns error when engine is not a string" do
-      result =
-        Task.execute(
-          "call_1",
-          %{
-            "description" => "Test task",
-            "prompt" => "do something",
-            "engine" => 123
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      assert {:error, "Engine must be a string"} = result
-    end
-
-    test "returns error when engine is unknown" do
-      result =
-        Task.execute(
-          "call_1",
-          %{
-            "description" => "Test task",
-            "prompt" => "do something",
-            "engine" => "unknown"
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      assert {:error, "Engine must be one of: internal, codex, claude, droid, kimi, opencode, pi"} =
-               result
-    end
-
-    test "returns error when model is not a string" do
-      result =
-        Task.execute(
-          "call_1",
-          %{
-            "description" => "Test task",
-            "prompt" => "do something",
-            "model" => 123
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      assert {:error, "Model must be a string"} = result
-    end
-
-    test "returns error when thinking_level is not a string" do
-      result =
-        Task.execute(
-          "call_1",
-          %{
-            "description" => "Test task",
-            "prompt" => "do something",
-            "thinking_level" => 42
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      assert {:error, "thinking_level must be a string"} = result
-    end
-
-    test "returns error when auto_followup is not a boolean" do
-      result =
-        Task.execute(
-          "call_1",
-          %{
-            "description" => "Test task",
-            "prompt" => "do something",
-            "auto_followup" => "yes"
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      assert {:error, "auto_followup must be a boolean"} = result
-    end
-
-    test "returns error when cwd is not a string" do
-      result =
-        Task.execute(
-          "call_1",
-          %{
-            "description" => "Test task",
-            "prompt" => "do something",
-            "cwd" => 42
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      assert {:error, "cwd must be a string"} = result
-    end
-
-    test "returns error when tool_policy is not an object" do
-      result =
-        Task.execute(
-          "call_1",
-          %{
-            "description" => "Test task",
-            "prompt" => "do something",
-            "tool_policy" => "deny_all"
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      assert {:error, "tool_policy must be an object"} = result
-    end
-
-    test "returns error when meta is not an object" do
-      result =
-        Task.execute(
-          "call_1",
-          %{
-            "description" => "Test task",
-            "prompt" => "do something",
-            "meta" => "not_a_map"
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      assert {:error, "meta must be an object"} = result
-    end
-
-    test "returns error when session_key is invalid" do
-      result =
-        Task.execute(
-          "call_1",
-          %{
-            "description" => "Test task",
-            "prompt" => "do something",
-            "session_key" => "invalid"
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      assert {:error, "session_key must be a valid Lemon session key"} = result
-    end
-
-    test "returns error when agent_id is not a string" do
-      result =
-        Task.execute(
-          "call_1",
-          %{
-            "description" => "Test task",
-            "prompt" => "do something",
-            "agent_id" => 123
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      assert {:error, "agent_id must be a string"} = result
-    end
-
-    test "returns error when queue_mode is invalid" do
-      result =
-        Task.execute(
-          "call_1",
-          %{
-            "description" => "Test task",
-            "prompt" => "do something",
-            "queue_mode" => "invalid_mode"
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      assert {:error,
-              "queue_mode must be one of: collect, followup, steer, steer_backlog, interrupt"} =
-               result
-    end
-  end
-
-  describe "prompt tool-only guardrails" do
-    test "defaults internal task child sessions to leaf_worker policy" do
+  describe "validate_run_params/2" do
+    test "builds a native execution context" do
       assert {:ok, validated} =
                Params.validate_run_params(
-                 %{
-                   "description" => "Inspect repo",
-                   "prompt" => "Check whether foo exists."
-                 },
+                 %{"description" => "inspect files", "prompt" => "Inspect the files."},
                  "/tmp"
                )
 
-      assert validated.engine == nil
+      refute Map.has_key?(validated, :engine)
       assert validated.tool_policy.profile == :leaf_worker
-      refute CodingAgent.ToolPolicy.allowed?(validated.tool_policy, "task")
-      refute CodingAgent.ToolPolicy.allowed?(validated.tool_policy, "agent")
-      assert CodingAgent.ToolPolicy.allowed?(validated.tool_policy, "read")
+      refute ToolPolicy.allowed?(validated.tool_policy, "task")
+      refute ToolPolicy.allowed?(validated.tool_policy, "agent")
     end
 
-    test "infers an internal tool policy from tool-only prompt wording" do
-      assert {:ok, validated} =
+    test "rejects the removed engine parameter" do
+      assert {:error, "The 'engine' parameter has been removed; all subagent tasks run natively."} =
                Params.validate_run_params(
                  %{
-                   "description" => "Inspect repo",
-                   "prompt" => "Use bash/read/grep tools only. Check whether foo exists."
-                 },
-                 "/tmp"
-               )
-
-      assert validated.tool_policy.allow == ["bash", "read", "grep"]
-      assert validated.tool_policy.profile == :custom
-      assert validated.prompt =~ "Use only these tools: bash, read, grep"
-      assert validated.prompt =~ "Do not rely on prior knowledge or guess"
-      assert validated.prompt =~ "Use bash/read/grep tools only. Check whether foo exists."
-    end
-
-    test "does not infer policy when prompt names unknown tools" do
-      assert {:ok, validated} =
-               Params.validate_run_params(
-                 %{
-                   "description" => "Inspect repo",
-                   "prompt" => "Use bash/read/curl tools only."
-                 },
-                 "/tmp"
-               )
-
-      assert validated.tool_policy.profile == :leaf_worker
-      assert validated.prompt == "Use bash/read/curl tools only."
-    end
-
-    test "does not override explicit task tool_policy" do
-      explicit_policy = %{"allow" => ["find"], "deny" => ["bash"]}
-
-      assert {:ok, validated} =
-               Params.validate_run_params(
-                 %{
-                   "description" => "Inspect repo",
-                   "prompt" => "Use bash/read/grep tools only.",
-                   "tool_policy" => explicit_policy
-                 },
-                 "/tmp"
-               )
-
-      assert validated.tool_policy == explicit_policy
-      assert validated.prompt == "Use bash/read/grep tools only."
-    end
-
-    test "does not infer internal tool policy for external engines" do
-      assert {:ok, validated} =
-               Params.validate_run_params(
-                 %{
-                   "description" => "Inspect repo",
-                   "prompt" => "Use bash/read/grep tools only.",
+                   "description" => "inspect files",
+                   "prompt" => "Inspect the files.",
                    "engine" => "codex"
                  },
                  "/tmp"
                )
-
-      assert validated.engine == "codex"
-      assert validated.tool_policy == nil
-      assert validated.prompt == "Use bash/read/grep tools only."
-    end
-  end
-
-  describe "execute/6 - abort signal handling" do
-    test "returns error when signal is aborted before execution" do
-      signal = AbortSignal.new()
-      AbortSignal.abort(signal)
-
-      result =
-        Task.execute(
-          "call_1",
-          %{
-            "description" => "Test",
-            "prompt" => "do something"
-          },
-          signal,
-          nil,
-          "/tmp",
-          []
-        )
-
-      assert {:error, "Operation aborted"} = result
-    end
-  end
-
-  describe "execute/6 - unknown role" do
-    test "returns error for unknown role" do
-      result =
-        Task.execute(
-          "call_1",
-          %{
-            "description" => "Test",
-            "prompt" => "do something",
-            "role" => "nonexistent_role_xyz"
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      assert {:error, msg} = result
-      assert msg =~ "Unknown role" or msg =~ "Failed to start"
-    end
-  end
-
-  describe "execute/6 - poll action" do
-    test "returns error when task_id is missing" do
-      result = Task.execute("call_1", %{"action" => "poll"}, nil, nil, "/tmp", [])
-      assert {:error, "task_id is required for action=poll"} = result
-    end
-  end
-
-  describe "tool options" do
-    test "tool accepts model option" do
-      tool = Task.tool("/tmp", model: "test-model")
-      # Tool should be created without error
-      assert tool.name == "task"
     end
 
-    test "tool accepts thinking_level option" do
-      tool = Task.tool("/tmp", thinking_level: :high)
-      assert tool.name == "task"
-    end
+    test "still permits an explicitly null historical engine field" do
+      assert {:ok, validated} =
+               Params.validate_run_params(
+                 %{
+                   "description" => "inspect files",
+                   "prompt" => "Inspect the files.",
+                   "engine" => nil
+                 },
+                 "/tmp"
+               )
 
-    test "tool accepts parent_session option" do
-      tool = Task.tool("/tmp", parent_session: "parent-123")
-      assert tool.name == "task"
-    end
-  end
-
-  describe "reduce_cli_events/4" do
-    test "captures error from completed opts and preserves resume token" do
-      token = ResumeToken.new("codex", "thread_123")
-
-      events = [
-        {:started, token},
-        {:completed, "answer", [error: "cli failed", resume: token]}
-      ]
-
-      result = Task.reduce_cli_events(events, "desc", "codex", nil)
-
-      assert result.answer == "answer"
-      assert result.resume_token == token
-      assert result.error == "cli failed"
-    end
-
-    test "captures stderr warning action as error" do
-      events = [
-        {:action, %{title: "CLI stderr output", kind: :warning, detail: %{stderr: "oops"}},
-         :completed, []},
-        {:completed, "answer", []}
-      ]
-
-      result = Task.reduce_cli_events(events, "desc", "claude", nil)
-
-      assert result.answer == "answer"
-      assert result.error == "oops"
+      refute Map.has_key?(validated, :engine)
     end
   end
 end

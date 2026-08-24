@@ -224,7 +224,6 @@ defmodule CodingAgent.Tools.Task.Followup do
           origin: :node,
           session_key: parent_session_key,
           agent_id: parent_agent_id,
-          engine_id: "echo",
           prompt: text,
           queue_mode: queue_mode,
           cwd: cwd,

@@ -3,7 +3,6 @@ defmodule LemonRouter.AgentProfiles do
   Agent profile configuration management.
 
   Loads and manages agent configurations including:
-  - Default engine
   - Tool policies
   - System prompts
   - Rate limits
@@ -117,7 +116,6 @@ defmodule LemonRouter.AgentProfiles do
       name: "Default Agent",
       description: nil,
       avatar: nil,
-      default_engine: "lemon",
       tool_policy: nil,
       system_prompt: nil,
       model: nil,
@@ -131,9 +129,6 @@ defmodule LemonRouter.AgentProfiles do
       name: profile[:name] || profile["name"] || to_string(id),
       description: profile[:description] || profile["description"],
       avatar: profile[:avatar] || profile["avatar"],
-      default_engine:
-        profile[:default_engine] || profile["default_engine"] ||
-          profile[:engine] || profile["engine"] || "lemon",
       tool_policy: profile[:tool_policy] || profile["tool_policy"],
       system_prompt: profile[:system_prompt] || profile["system_prompt"],
       model: profile[:model] || profile["model"],

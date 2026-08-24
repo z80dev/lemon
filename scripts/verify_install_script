@@ -1,0 +1,1178 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+usage: scripts/verify_install_script
+
+Verifies install.sh against a fixture release served from localhost. No network
+access and no published release are required: the script builds a stub release
+tarball, writes a schema-2 manifest for it, and serves both through
+`python3 -m http.server` using the same URL shapes GitHub Releases exposes.
+
+Checks:
+  - unpinned stable install lays out ~/.lemon/versions/<version>, versions/current,
+    the relative bin/lemon launcher symlink, and tui/bin/lemon-tui
+  - a manifest without a lemon_tui artifact still installs the runtime, warning
+    that the release ships no TUI
+  - LEMON_NO_TUI=1 installs the runtime only even when a TUI is published
+  - a TUI checksum mismatch aborts the whole install, leaving no version directory
+  - fault injection: a failing TUI download, and a staged tree that cannot be
+    moved into place, both leave the live version usable with no .partial,
+    .previous.*, or tarball residue
+  - the downloaded tarballs are removed from ~/.lemon/tmp
+  - re-running is an idempotent no-op and --force re-extracts
+  - --verify boots the installed launcher and polls /healthz
+  - a manifest checksum mismatch aborts without leaving a version directory or
+    flipping versions/current
+  - a pinned version resolves through releases/download/v<version>/
+  - an update round-trip flips versions/current and retains the old version
+  - a profile with no published artifact, a non-stable channel without a pin,
+    and an unsupported platform are all refused
+  - bin/lemon doctor forwards the complete argv to the runtime CLI entrypoint
+    as arguments: the eval expression stays a fixed constant, option order is
+    preserved, and a --bundle path containing literal Elixir interpolation
+    syntax survives verbatim
+  - first-run setup is invoked once through an allocated fixture terminal,
+    while --skip-setup, the sim profile, and an unavailable terminal do not
+    invoke it; unavailable terminals print the exact absolute setup command
+  - the fixture TUI gates an incomplete installation through setup once, then
+    does not repeat setup once its config and credential source are ready
+EOF
+  exit 2
+}
+
+if [ "$#" -ne 0 ]; then
+  usage
+fi
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+INSTALL_SH="$ROOT/install.sh"
+
+if [ ! -f "$INSTALL_SH" ]; then
+  echo "error install.sh not found at $INSTALL_SH" >&2
+  exit 2
+fi
+
+work_dir="$(mktemp -d "${TMPDIR:-/tmp}/lemon-install-verify.XXXXXX")"
+server_pid=""
+
+cleanup() {
+  if [ -n "$server_pid" ]; then
+    kill "$server_pid" >/dev/null 2>&1 || true
+  fi
+
+  # Stub daemons started by --verify record their pid under the fixture home.
+  for pidfile in "$work_dir"/home*/.lemon/run/lemon.pid; do
+    if [ -f "$pidfile" ]; then
+      kill "$(cat "$pidfile")" >/dev/null 2>&1 || true
+    fi
+  done
+
+  rm -rf "$work_dir"
+}
+trap cleanup EXIT
+
+failures=0
+checks=0
+
+ok() {
+  checks=$((checks + 1))
+  echo "ok $*"
+}
+
+fail() {
+  checks=$((checks + 1))
+  failures=$((failures + 1))
+  echo "error $*" >&2
+}
+
+free_port() {
+  python3 - <<'PY'
+import socket
+
+sock = socket.socket()
+sock.bind(("127.0.0.1", 0))
+print(sock.getsockname()[1])
+sock.close()
+PY
+}
+
+detect_platform() {
+  local os arch
+
+  case "$(uname -s)" in
+    Linux) os="linux" ;;
+    Darwin) os="darwin" ;;
+    *)
+      echo "error unsupported host for this verifier: $(uname -s)" >&2
+      exit 2
+      ;;
+  esac
+
+  case "$(uname -m)" in
+    x86_64 | amd64) arch="x86_64" ;;
+    arm64 | aarch64) arch="arm64" ;;
+    *)
+      echo "error unsupported host architecture for this verifier: $(uname -m)" >&2
+      exit 2
+      ;;
+  esac
+
+  echo "$os-$arch"
+}
+
+PLATFORM="$(detect_platform)"
+PLATFORM_OS="${PLATFORM%%-*}"
+PLATFORM_ARCH="${PLATFORM##*-}"
+PROFILE="lemon_runtime_full"
+TUI_PROFILE="lemon_tui"
+
+# Builds a stub release tarball for <version> and optional <profile>, returning
+# its path. The stub bin/lemon answers the subcommands install.sh uses: version,
+# setup (which creates a fixture default and credential source), tui, daemon
+# (serves a static /healthz), stop, and status.
+build_fixture_tarball() {
+  local version="$1"
+  local profile="${2:-$PROFILE}"
+  local build_dir="$work_dir/build/$version-$profile"
+
+  mkdir -p "$build_dir/bin"
+
+  cat > "$build_dir/bin/lemon" <<EOF
+#!/bin/sh
+set -eu
+
+VERSION="$version"
+PROFILE="$profile"
+EOF
+
+  cat >> "$build_dir/bin/lemon" <<'EOF'
+# Resolve the release root through the bin/lemon symlink the way the
+# packaged launcher does, so doctor can delegate to bin/<profile>.
+script_path=$0
+while [ -L "$script_path" ]; do
+  link_target="$(readlink "$script_path")"
+  case $link_target in
+    /*) script_path=$link_target ;;
+    *) script_path="$(dirname "$script_path")/$link_target" ;;
+  esac
+done
+script_dir="$(CDPATH= cd "$(dirname "$script_path")" && pwd)"
+release_root="$(CDPATH= cd "$script_dir/.." && pwd)"
+release_bin="$release_root/bin/$PROFILE"
+
+# First-run state, mirroring rel/overlays/bin/lemon: the restrictive umask
+# is applied before anything is created, so ~/.lemon, run/, cookie, and env
+# are private from their first byte; explicit chmod tightens whatever the
+# installer's ambient umask left broader.
+home_dir="$HOME/.lemon"
+run_dir="$home_dir/run"
+cookie_file="$home_dir/cookie"
+env_file="$home_dir/env"
+
+umask 077
+mkdir -p "$run_dir"
+chmod 700 "$home_dir" "$run_dir"
+
+if [ ! -s "$cookie_file" ]; then
+  od -An -N32 -t x1 /dev/urandom | tr -d ' \n' > "$cookie_file"
+fi
+
+if [ ! -s "$env_file" ]; then
+  printf 'export LEMON_WEB_SECRET_KEY_BASE=%s\n' \
+    "$(od -An -N32 -t x1 /dev/urandom | tr -d ' \n')" >> "$env_file"
+fi
+
+# The fixture setup flow creates the same two readiness inputs the production
+# predicate requires: a default provider/model and a usable credential source.
+# A line is appended for every setup invocation so the install and TUI proofs
+# can detect accidental repetition without reading any user state.
+fixture_config="$home_dir/config.toml"
+fixture_credential="$home_dir/fixture-provider-token"
+
+case "${1:-}" in
+  version)
+    echo "lemon $VERSION"
+    ;;
+  daemon|start)
+    health_dir="$run_dir/health"
+    mkdir -p "$health_dir"
+    printf 'ok' > "$health_dir/healthz"
+    (
+      cd "$health_dir"
+      exec python3 -m http.server "${LEMON_CONTROL_PLANE_PORT:-4040}" --bind 127.0.0.1
+    ) >/dev/null 2>&1 &
+    echo "$!" > "$run_dir/lemon.pid"
+    ;;
+  stop)
+    if [ -f "$run_dir/lemon.pid" ]; then
+      kill "$(cat "$run_dir/lemon.pid")" 2>/dev/null || true
+      rm -f "$run_dir/lemon.pid"
+    fi
+    ;;
+  status)
+    if [ -f "$run_dir/lemon.pid" ]; then echo running; else echo stopped; fi
+    ;;
+  setup)
+    printf 'setup\n' >> "$home_dir/setup-invocations"
+    cat > "$fixture_config" <<'CONFIG'
+[defaults]
+provider = "fixture"
+model = "fixture:model"
+
+[providers.fixture]
+api_key_secret = "fixture-provider-token"
+CONFIG
+    printf 'fixture-token\n' > "$fixture_credential"
+    ;;
+  ""|tui)
+    if ! grep -q '^provider = "fixture"$' "$fixture_config" 2>/dev/null ||
+      ! grep -q '^model = "fixture:model"$' "$fixture_config" 2>/dev/null ||
+      [ ! -s "$fixture_credential" ]; then
+      exec "$0" setup
+    fi
+
+    echo "fixture TUI launched"
+    ;;
+  doctor)
+    # Mirror of the packaged launcher: the complete doctor argv crosses to
+    # the runtime CLI entrypoint as arguments, never as source text.
+    shift
+    exec "$release_bin" eval 'LemonCli.CLI.main(System.argv())' doctor "$@"
+    ;;
+  *)
+    echo "stub launcher: unsupported subcommand ${1:-}" >&2
+    exit 2
+    ;;
+esac
+EOF
+
+  # The profile stub records its argv so the launcher checks below can prove
+  # exactly what crossed the exec boundary, in order.
+  cat > "$build_dir/bin/$profile" <<EOF
+#!/bin/sh
+echo "stub release binary $version"
+if [ "\$#" -gt 0 ]; then
+  for arg in "\$@"; do
+    printf 'arg:%s\\n' "\$arg"
+  done
+fi
+EOF
+  chmod +x "$build_dir/bin/lemon" "$build_dir/bin/$profile"
+
+  local tarball="$work_dir/build/lemon-$version-stable-$PLATFORM-$profile.tar.gz"
+  tar -czf "$tarball" -C "$build_dir" .
+  echo "$tarball"
+}
+
+# Builds the stub TUI tarball for <version>. Shaped like the real one: a single
+# top-level tui/ directory holding the binary and its native modules, so it can
+# be unpacked over the runtime's staging directory without colliding.
+build_fixture_tui_tarball() {
+  local version="$1"
+  local build_dir="$work_dir/build-tui/$version"
+
+  mkdir -p "$build_dir/tui/bin"
+
+  cat > "$build_dir/tui/bin/lemon-tui" <<EOF
+#!/bin/sh
+echo "lemon-tui $version"
+EOF
+  chmod +x "$build_dir/tui/bin/lemon-tui"
+  printf 'stub native module\n' > "$build_dir/tui/bin/pi_natives.stub.node"
+
+  local tarball="$work_dir/build-tui/lemon-$version-stable-$PLATFORM-$TUI_PROFILE.tar.gz"
+  tar -czf "$tarball" -C "$build_dir" tui
+  echo "$tarball"
+}
+
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+
+# Portable mode reporting: GNU stat and BSD stat disagree on flags.
+mode_of() {
+  if stat -c '%a' "$1" >/dev/null 2>&1; then
+    stat -c '%a' "$1"
+  else
+    stat -f '%Lp' "$1"
+  fi
+}
+
+# Publishes <tarball> for <version> under a served directory, writing a
+# schema-2 manifest. <sha-override> forges the runtime checksum when non-empty.
+# <tui-tarball> adds the lemon_tui artifact (empty publishes a TUI-less release,
+# the shape pre-TUI versions have) and <tui-sha-override> forges its checksum.
+# <profile> selects the runtime profile advertised in the manifest.
+publish() {
+  local dest_dir="$1"
+  local version="$2"
+  local tarball="$3"
+  local sha_override="${4:-}"
+  local tui_tarball="${5:-}"
+  local tui_sha_override="${6:-}"
+  local profile="${7:-$PROFILE}"
+
+  mkdir -p "$dest_dir"
+  cp "$tarball" "$dest_dir/"
+
+  local sha size
+  sha="$(sha256_of "$tarball")"
+  size="$(python3 -c 'import os,sys; print(os.path.getsize(sys.argv[1]))' "$tarball")"
+
+  if [ -n "$sha_override" ]; then
+    sha="$sha_override"
+  fi
+
+  local tui_file="" tui_sha="" tui_size=""
+  if [ -n "$tui_tarball" ]; then
+    cp "$tui_tarball" "$dest_dir/"
+    tui_file="$(basename "$tui_tarball")"
+    tui_sha="$(sha256_of "$tui_tarball")"
+    tui_size="$(python3 -c 'import os,sys; print(os.path.getsize(sys.argv[1]))' "$tui_tarball")"
+
+    if [ -n "$tui_sha_override" ]; then
+      tui_sha="$tui_sha_override"
+    fi
+  fi
+
+  MANIFEST_DEST="$dest_dir/manifest.json" \
+  MANIFEST_VERSION="$version" \
+  MANIFEST_FILE="$(basename "$tarball")" \
+  MANIFEST_SHA="$sha" \
+  MANIFEST_SIZE="$size" \
+  MANIFEST_PLATFORM="$PLATFORM" \
+  MANIFEST_OS="$PLATFORM_OS" \
+  MANIFEST_ARCH="$PLATFORM_ARCH" \
+  MANIFEST_PROFILE="$profile" \
+  MANIFEST_TUI_PROFILE="$TUI_PROFILE" \
+  MANIFEST_TUI_FILE="$tui_file" \
+  MANIFEST_TUI_SHA="$tui_sha" \
+  MANIFEST_TUI_SIZE="$tui_size" \
+    python3 - <<'PY'
+import json
+import os
+
+
+def entry(profile, filename, sha, size):
+    artifact = {
+        "file": filename,
+        "profile": profile,
+        "platform": os.environ["MANIFEST_PLATFORM"],
+        "os": os.environ["MANIFEST_OS"],
+        "arch": os.environ["MANIFEST_ARCH"],
+        "sha256": sha,
+        "size": int(size),
+    }
+
+    if artifact["os"] == "linux":
+        artifact["glibc_min"] = "2.39"
+
+    return artifact
+
+
+artifacts = [
+    entry(
+        os.environ["MANIFEST_PROFILE"],
+        os.environ["MANIFEST_FILE"],
+        os.environ["MANIFEST_SHA"],
+        os.environ["MANIFEST_SIZE"],
+    )
+]
+
+if os.environ["MANIFEST_TUI_FILE"]:
+    artifacts.append(
+        entry(
+            os.environ["MANIFEST_TUI_PROFILE"],
+            os.environ["MANIFEST_TUI_FILE"],
+            os.environ["MANIFEST_TUI_SHA"],
+            os.environ["MANIFEST_TUI_SIZE"],
+        )
+    )
+
+manifest = {
+    "schema": 2,
+    "version": os.environ["MANIFEST_VERSION"],
+    "channel": "stable",
+    "commit": "0123456789abcdef0123456789abcdef01234567",
+    "built_at": "2026-08-16T00:00:00Z",
+    "otp": "28.5",
+    "elixir": "1.19.5",
+    "artifacts": artifacts,
+}
+
+with open(os.environ["MANIFEST_DEST"], "w", encoding="utf-8") as handle:
+    json.dump(manifest, handle, indent=2)
+    handle.write("\n")
+PY
+}
+
+# ------------------------------------------------------------ fixture server -
+
+serve_root="$work_dir/serve"
+mkdir -p "$serve_root"
+
+tarball_v1="$(build_fixture_tarball 9999.1.0)"
+tarball_v2="$(build_fixture_tarball 9999.2.0)"
+tarball_v3="$(build_fixture_tarball 9999.3.0)"
+tarball_v4="$(build_fixture_tarball 9999.4.0)"
+tarball_v5="$(build_fixture_tarball 9999.5.0)"
+
+tui_v1="$(build_fixture_tui_tarball 9999.1.0)"
+tui_v2="$(build_fixture_tui_tarball 9999.2.0)"
+tui_v5="$(build_fixture_tui_tarball 9999.5.0)"
+sim_v1="$(build_fixture_tarball 9999.1.0 sim_broadcast_platform)"
+
+forged_sha="$(python3 -c 'print("f" * 64)')"
+
+# `releases/latest/download/` is the unpinned stable entry point and
+# `releases/download/v<version>/` is the pinned one, exactly as GitHub serves
+# them. 9999.2.0 is deliberately published only under the pinned shape so the
+# pinned-URL assertion cannot pass by accident.
+publish "$serve_root/releases/latest/download" 9999.1.0 "$tarball_v1" "" "$tui_v1"
+publish "$serve_root/releases/download/v9999.1.0" 9999.1.0 "$tarball_v1" "" "$tui_v1"
+publish "$serve_root/releases/download/v9999.2.0" 9999.2.0 "$tarball_v2" "" "$tui_v2"
+publish "$serve_root/sim/releases/latest/download" 9999.1.0 "$sim_v1" "" "" "" \
+  sim_broadcast_platform
+
+# A parallel tree whose manifest advertises a checksum the tarball does not have.
+publish "$serve_root/corrupt/releases/latest/download" 9999.3.0 "$tarball_v3" "$forged_sha"
+
+# A release published before the TUI existed: runtime artifact only.
+publish "$serve_root/notui/releases/latest/download" 9999.4.0 "$tarball_v4"
+
+# A release whose runtime checksum is honest but whose TUI checksum is forged.
+publish "$serve_root/tui-corrupt/releases/latest/download" 9999.5.0 "$tarball_v5" "" \
+  "$tui_v5" "$forged_sha"
+
+port="$(free_port)"
+python3 -m http.server "$port" --bind 127.0.0.1 --directory "$serve_root" >"$work_dir/http.log" 2>&1 &
+server_pid=$!
+
+base_url="http://127.0.0.1:$port"
+for _attempt in $(seq 1 40); do
+  if curl -fsS --max-time 2 -o /dev/null "$base_url/releases/latest/download/manifest.json" 2>/dev/null; then
+    break
+  fi
+  sleep 0.25
+done
+
+if ! curl -fsS --max-time 2 -o /dev/null "$base_url/releases/latest/download/manifest.json"; then
+  echo "error fixture release server never became ready on port $port" >&2
+  exit 1
+fi
+
+ok "fixture release server serving $serve_root on $base_url"
+
+# --------------------------------------------------------------- assertions -
+
+home_dir="$work_dir/home"
+mkdir -p "$home_dir"
+
+# run_install <log-file> <home> <base-url> [VAR=value ...] [-- install-args ...]
+#
+# install.sh runs under `env -i` so the verifier's own environment cannot
+# influence the result. The seeded first element keeps the array non-empty:
+# expanding an empty array under `set -u` is an error in bash 3.2, which is
+# still what /bin/bash is on macOS.
+run_install() {
+  local log="$1" home="$2" base="$3"
+  shift 3
+
+  local envs=(LEMON_INSTALL_IGNORE_GLIBC=0)
+  while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do
+    envs+=("$1")
+    shift
+  done
+  if [ "${1:-}" = "--" ]; then
+    shift
+  fi
+
+  # The verifier may itself be launched from a terminal. Start a fresh session
+  # so these ordinary fixture installs exercise the real no-controlling-TTY
+  # branch instead of depending on the caller's terminal.
+  env -i \
+    HOME="$home" \
+    PATH="$PATH" \
+    SHELL=/bin/sh \
+    TMPDIR="${TMPDIR:-/tmp}" \
+    LEMON_INSTALL_BASE_URL="$base" \
+    "${envs[@]}" \
+    python3 -c 'import os, sys; os.setsid(); os.execvpe("sh", ["sh", *sys.argv[1:]], os.environ)' \
+    "$INSTALL_SH" "$@" >"$log" 2>&1
+}
+
+# run_install_with_tty has the same hermetic environment as run_install, but
+# allocates a local pseudo-terminal. `install.sh` probes /dev/tty itself, so
+# this is a controllable terminal fixture rather than an installer-only hook.
+run_install_with_tty() {
+  local log="$1" home="$2" base="$3"
+  shift 3
+
+  local envs=(LEMON_INSTALL_IGNORE_GLIBC=0)
+  while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do
+    envs+=("$1")
+    shift
+  done
+  if [ "${1:-}" = "--" ]; then
+    shift
+  fi
+
+  local command
+  printf -v command '%q ' env -i \
+    "HOME=$home" \
+    "PATH=$PATH" \
+    SHELL=/bin/sh \
+    "TMPDIR=${TMPDIR:-/tmp}" \
+    "LEMON_INSTALL_BASE_URL=$base" \
+    "${envs[@]}" \
+    sh "$INSTALL_SH" "$@"
+
+  script -q -e -c "$command" /dev/null >"$log" 2>&1
+}
+
+run_launcher_with_tty() {
+  local log="$1" home="$2"
+  shift 2
+
+  local command
+  printf -v command '%q ' env -i \
+    "HOME=$home" \
+    "PATH=$PATH" \
+    SHELL=/bin/sh \
+    "$home/.lemon/bin/lemon" "$@"
+
+  script -q -e -c "$command" /dev/null >"$log" 2>&1
+}
+
+setup_count() {
+  local home="$1"
+
+  if [ -f "$home/.lemon/setup-invocations" ]; then
+    wc -l < "$home/.lemon/setup-invocations" | tr -d ' '
+  else
+    echo 0
+  fi
+}
+
+# ------------------------------------------------------- first-run assertions -
+
+# The default packaged path is interactive when /dev/tty opens. The stub setup
+# persists an explicit default and credential source, then records the call.
+setup_home="$work_dir/home-setup"
+mkdir -p "$setup_home"
+
+if run_install_with_tty "$work_dir/install-setup.log" "$setup_home" "$base_url"; then
+  if [ "$(setup_count "$setup_home")" = "1" ]; then
+    ok "interactive install invokes absolute lemon setup exactly once"
+  else
+    fail "interactive install did not invoke setup exactly once"
+    cat "$work_dir/install-setup.log" >&2
+  fi
+else
+  fail "interactive install exited non-zero"
+  cat "$work_dir/install-setup.log" >&2
+fi
+
+# A configured TUI must not reopen the wizard on later launches.
+if run_launcher_with_tty "$work_dir/tui-ready.log" "$setup_home" tui &&
+  [ "$(setup_count "$setup_home")" = "1" ]; then
+  ok "a ready TUI launch does not repeat setup"
+else
+  fail "a ready TUI launch repeated setup or failed"
+  cat "$work_dir/tui-ready.log" >&2
+fi
+
+# --skip-setup is still an interactive install but must leave readiness alone.
+skip_home="$work_dir/home-skip-setup"
+mkdir -p "$skip_home"
+
+if run_install_with_tty "$work_dir/install-skip-setup.log" "$skip_home" "$base_url" -- --skip-setup; then
+  if [ "$(setup_count "$skip_home")" = "0" ]; then
+    ok "--skip-setup does not invoke setup"
+  else
+    fail "--skip-setup invoked setup"
+    cat "$work_dir/install-skip-setup.log" >&2
+  fi
+else
+  fail "--skip-setup install exited non-zero"
+  cat "$work_dir/install-skip-setup.log" >&2
+fi
+
+# An incomplete first TUI launch enters setup once, and the derived fixture
+# readiness inputs prevent the next launch from entering it again.
+if run_launcher_with_tty "$work_dir/tui-incomplete.log" "$skip_home" tui &&
+  [ "$(setup_count "$skip_home")" = "1" ] &&
+  run_launcher_with_tty "$work_dir/tui-rerun.log" "$skip_home" tui &&
+  [ "$(setup_count "$skip_home")" = "1" ]; then
+  ok "an incomplete TUI gates through setup once and remains ready on rerun"
+else
+  fail "the incomplete TUI did not gate through setup exactly once"
+  cat "$work_dir/tui-incomplete.log" "$work_dir/tui-rerun.log" >&2
+fi
+
+# No TTY is deliberately forced by run_install. It remains successful and
+# prints the one exact command a user can run later.
+no_tty_home="$work_dir/home-no-tty"
+mkdir -p "$no_tty_home"
+no_tty_setup_line="    $no_tty_home/.lemon/bin/lemon setup"
+
+if run_install "$work_dir/install-no-tty.log" "$no_tty_home" "$base_url"; then
+  if [ "$(setup_count "$no_tty_home")" = "0" ] &&
+    grep -Fqx "No interactive terminal is available. Run this when you are ready to configure Lemon:" \
+      "$work_dir/install-no-tty.log" &&
+    grep -Fqx "$no_tty_setup_line" "$work_dir/install-no-tty.log"; then
+    ok "a non-TTY install succeeds and prints the exact setup next step"
+  else
+    fail "a non-TTY install did not preserve the exact setup handoff"
+    cat "$work_dir/install-no-tty.log" >&2
+  fi
+else
+  fail "a non-TTY install exited non-zero"
+  cat "$work_dir/install-no-tty.log" >&2
+fi
+
+# The sim profile never has an interactive setup journey, even when a terminal
+# is available.
+sim_home="$work_dir/home-sim"
+mkdir -p "$sim_home"
+
+if run_install_with_tty "$work_dir/install-sim.log" "$sim_home" "$base_url/sim" LEMON_PROFILE=sim; then
+  if [ "$(setup_count "$sim_home")" = "0" ] &&
+    ! grep -Fq "$sim_home/.lemon/bin/lemon setup" "$work_dir/install-sim.log"; then
+    ok "the sim profile skips setup even with an interactive terminal"
+  else
+    fail "the sim profile attempted or advertised setup"
+    cat "$work_dir/install-sim.log" >&2
+  fi
+else
+  fail "the sim profile install exited non-zero"
+  cat "$work_dir/install-sim.log" >&2
+fi
+
+# --------------------------------------------------------------- assertions -
+
+# 1. Unpinned stable install.
+if run_install "$work_dir/install-1.log" "$home_dir" "$base_url"; then
+  ok "unpinned stable install exited 0"
+else
+  fail "unpinned stable install failed (see below)"
+  cat "$work_dir/install-1.log" >&2
+fi
+
+if [ -d "$home_dir/.lemon/versions/9999.1.0" ]; then
+  ok "versions/9999.1.0 extracted"
+else
+  fail "versions/9999.1.0 was not extracted"
+fi
+
+current_target="$(readlink "$home_dir/.lemon/versions/current" 2>/dev/null || echo "")"
+if [ "$current_target" = "9999.1.0" ]; then
+  ok "versions/current points at 9999.1.0"
+else
+  fail "versions/current points at '${current_target:-missing}', expected 9999.1.0"
+fi
+
+launcher_target="$(readlink "$home_dir/.lemon/bin/lemon" 2>/dev/null || echo "")"
+if [ "$launcher_target" = "../versions/current/bin/lemon" ]; then
+  ok "bin/lemon is a relative symlink into versions/current"
+else
+  fail "bin/lemon points at '${launcher_target:-missing}'"
+fi
+
+if version_output="$(HOME="$home_dir" "$home_dir/.lemon/bin/lemon" version 2>&1)" &&
+  [ "$version_output" = "lemon 9999.1.0" ]; then
+  ok "bin/lemon resolves and runs: $version_output"
+else
+  fail "bin/lemon did not report the installed version: ${version_output:-no output}"
+fi
+
+tui_bin="$home_dir/.lemon/versions/9999.1.0/tui/bin/lemon-tui"
+if [ -x "$tui_bin" ]; then
+  ok "tui/bin/lemon-tui installed next to the runtime and executable"
+else
+  fail "tui/bin/lemon-tui is missing or not executable"
+fi
+
+if [ -f "$home_dir/.lemon/versions/9999.1.0/tui/bin/pi_natives.stub.node" ]; then
+  ok "the TUI's native modules landed beside the binary"
+else
+  fail "the TUI tarball's native modules were not extracted"
+fi
+
+if tui_output="$("$tui_bin" 2>&1)" && [ "$tui_output" = "lemon-tui 9999.1.0" ]; then
+  ok "the installed TUI runs: $tui_output"
+else
+  fail "the installed TUI did not run: ${tui_output:-no output}"
+fi
+
+leftover="$(find "$home_dir/.lemon/tmp" -mindepth 1 2>/dev/null | wc -l | tr -d ' ')"
+if [ "$leftover" = "0" ]; then
+  ok "download directory .lemon/tmp is empty after install"
+else
+  fail ".lemon/tmp still holds $leftover file(s) after install"
+fi
+
+if [ -z "$(find "$home_dir/.lemon/versions" -maxdepth 1 -name '*.partial' 2>/dev/null)" ]; then
+  ok "no .partial extraction directory left behind"
+else
+  fail ".partial extraction directory left behind"
+fi
+
+# 2. Idempotency: a second unpinned run must not re-extract.
+sentinel="$home_dir/.lemon/versions/9999.1.0/SENTINEL"
+touch "$sentinel"
+
+if run_install "$work_dir/install-2.log" "$home_dir" "$base_url"; then
+  if grep -q "already installed" "$work_dir/install-2.log" && [ -f "$sentinel" ]; then
+    ok "re-running is an idempotent no-op"
+  else
+    fail "re-run did not report an already-installed no-op"
+    cat "$work_dir/install-2.log" >&2
+  fi
+else
+  fail "re-running install.sh exited non-zero"
+  cat "$work_dir/install-2.log" >&2
+fi
+
+# 3. --force re-extracts over the existing version directory.
+if run_install "$work_dir/install-3.log" "$home_dir" "$base_url" -- --force; then
+  if [ ! -f "$sentinel" ] && [ -x "$home_dir/.lemon/versions/9999.1.0/bin/lemon" ]; then
+    ok "--force re-extracted the release"
+  else
+    fail "--force did not replace the version directory"
+  fi
+else
+  fail "--force install exited non-zero"
+  cat "$work_dir/install-3.log" >&2
+fi
+
+# 4. --verify boots the launcher and polls /healthz.
+if run_install "$work_dir/install-4.log" "$home_dir" "$base_url" -- --verify; then
+  if grep -q "answered /healthz" "$work_dir/install-4.log"; then
+    ok "--verify booted the installed launcher and reached /healthz"
+  else
+    fail "--verify did not report a successful health check"
+    cat "$work_dir/install-4.log" >&2
+  fi
+else
+  fail "--verify install exited non-zero"
+  cat "$work_dir/install-4.log" >&2
+fi
+
+# 5. Checksum mismatch aborts cleanly.
+if run_install "$work_dir/install-5.log" "$home_dir" "$base_url/corrupt"; then
+  fail "install.sh accepted a tarball whose checksum did not match the manifest"
+else
+  current_target="$(readlink "$home_dir/.lemon/versions/current" 2>/dev/null || echo "")"
+  if grep -q "checksum mismatch" "$work_dir/install-5.log" &&
+    [ ! -d "$home_dir/.lemon/versions/9999.3.0" ] &&
+    [ "$current_target" = "9999.1.0" ]; then
+    ok "checksum mismatch rejected without installing or flipping versions/current"
+  else
+    fail "checksum mismatch was rejected but left inconsistent state"
+    cat "$work_dir/install-5.log" >&2
+  fi
+fi
+
+# 6. Pinned install resolves through releases/download/v<version>/ and flips.
+if run_install "$work_dir/install-6.log" "$home_dir" "$base_url" LEMON_VERSION=9999.2.0; then
+  ok "pinned install of 9999.2.0 exited 0"
+else
+  fail "pinned install of 9999.2.0 failed"
+  cat "$work_dir/install-6.log" >&2
+fi
+
+if grep -q "releases/download/v9999.2.0" "$work_dir/http.log"; then
+  ok "pinned install requested the releases/download/v9999.2.0 URL shape"
+else
+  fail "pinned install did not use the pinned release URL shape"
+fi
+
+current_target="$(readlink "$home_dir/.lemon/versions/current" 2>/dev/null || echo "")"
+if [ "$current_target" = "9999.2.0" ]; then
+  ok "update round-trip flipped versions/current to 9999.2.0"
+else
+  fail "versions/current is '${current_target:-missing}' after the update round-trip"
+fi
+
+if [ -d "$home_dir/.lemon/versions/9999.1.0" ] && [ -d "$home_dir/.lemon/versions/9999.2.0" ]; then
+  ok "the previous version is retained alongside the new one"
+else
+  fail "the previous version was not retained"
+fi
+
+if version_output="$(HOME="$home_dir" "$home_dir/.lemon/bin/lemon" version 2>&1)" &&
+  [ "$version_output" = "lemon 9999.2.0" ]; then
+  ok "bin/lemon follows the flip: $version_output"
+else
+  fail "bin/lemon did not follow the flip: ${version_output:-no output}"
+fi
+
+if [ -x "$home_dir/.lemon/versions/9999.2.0/tui/bin/lemon-tui" ]; then
+  ok "the update round-trip installed the new version's TUI too"
+else
+  fail "the update round-trip left 9999.2.0 without a TUI"
+fi
+
+# 7. A profile with no published artifact is refused.
+reject_home="$work_dir/home-reject"
+mkdir -p "$reject_home"
+
+if run_install "$work_dir/install-7.log" "$reject_home" "$base_url" LEMON_PROFILE=min; then
+  fail "install.sh installed a profile that is not published"
+else
+  if grep -q "no lemon_runtime_min artifact" "$work_dir/install-7.log"; then
+    ok "unpublished profile refused with the published set listed"
+  else
+    fail "unpublished profile refusal did not explain the published set"
+    cat "$work_dir/install-7.log" >&2
+  fi
+fi
+
+# 8. Non-stable channels require an explicit pin.
+if run_install "$work_dir/install-8.log" "$reject_home" "$base_url" LEMON_CHANNEL=preview; then
+  fail "install.sh accepted a non-stable channel without a pinned version"
+else
+  if grep -q "LEMON_VERSION" "$work_dir/install-8.log"; then
+    ok "non-stable channel without a pin refused with LEMON_VERSION guidance"
+  else
+    fail "non-stable channel refusal did not mention LEMON_VERSION"
+    cat "$work_dir/install-8.log" >&2
+  fi
+fi
+
+# 9. Unsupported platforms are refused. install.sh resolves `uname` through
+#    PATH, so a stub in front of PATH exercises the real detection branch.
+fake_bin="$work_dir/fakebin"
+mkdir -p "$fake_bin"
+cat > "$fake_bin/uname" <<'EOF'
+#!/bin/sh
+case "${1:-}" in
+  -m) echo sparc64 ;;
+  *) echo Plan9 ;;
+esac
+EOF
+chmod +x "$fake_bin/uname"
+
+if env -i \
+  HOME="$reject_home" \
+  PATH="$fake_bin:$PATH" \
+  SHELL=/bin/sh \
+  TMPDIR="${TMPDIR:-/tmp}" \
+  LEMON_INSTALL_BASE_URL="$base_url" \
+  sh "$INSTALL_SH" >"$work_dir/install-9.log" 2>&1; then
+  fail "install.sh installed on an unsupported platform"
+else
+  if grep -q "no prebuilt Lemon release" "$work_dir/install-9.log" &&
+    grep -q "docs/install.md" "$work_dir/install-9.log"; then
+    ok "unsupported platform refused with a pointer to the source install"
+  else
+    fail "unsupported platform refusal was not actionable"
+    cat "$work_dir/install-9.log" >&2
+  fi
+fi
+
+if [ ! -d "$reject_home/.lemon/versions/9999.1.0" ]; then
+  ok "refused installs left no release on disk"
+else
+  fail "a refused install extracted a release anyway"
+fi
+
+# 10. The documented entry point pipes the script into sh, so the shell reads
+#     install.sh from stdin. Prove the piped form installs too.
+piped_home="$work_dir/home-piped"
+mkdir -p "$piped_home"
+
+# shellcheck disable=SC2016  # $1 belongs to the inner shell, not this one
+if env -i \
+  HOME="$piped_home" \
+  PATH="$PATH" \
+  SHELL=/bin/sh \
+  TMPDIR="${TMPDIR:-/tmp}" \
+  LEMON_INSTALL_BASE_URL="$base_url" \
+  sh -c 'cat "$1" | sh' sh "$INSTALL_SH" >"$work_dir/install-10.log" 2>&1 &&
+  [ -d "$piped_home/.lemon/versions/9999.1.0" ]; then
+  ok "curl-to-sh form installs when the script is read from stdin"
+else
+  fail "the piped 'curl ... | sh' form did not install"
+  cat "$work_dir/install-10.log" >&2
+fi
+
+# 11. PATH handling: the rc file is only touched with --modify-path, and the
+#     edit is idempotent. `env -i` sets SHELL first, so a later SHELL= wins.
+path_home="$work_dir/home-path"
+mkdir -p "$path_home"
+
+if run_install "$work_dir/install-11.log" "$path_home" "$base_url" SHELL=/bin/zsh; then
+  if [ ! -e "$path_home/.zshrc" ] && grep -q 'export PATH=' "$work_dir/install-11.log"; then
+    ok "PATH line is printed without touching the shell rc file"
+  else
+    fail "install.sh edited the rc file without --modify-path, or printed no PATH line"
+    cat "$work_dir/install-11.log" >&2
+  fi
+else
+  fail "install into a fresh home for the PATH check failed"
+  cat "$work_dir/install-11.log" >&2
+fi
+
+if run_install "$work_dir/install-12.log" "$path_home" "$base_url" SHELL=/bin/zsh -- --modify-path &&
+  run_install "$work_dir/install-13.log" "$path_home" "$base_url" SHELL=/bin/zsh -- --modify-path; then
+  marker_count="$(grep -c 'added by the lemon installer' "$path_home/.zshrc" || true)"
+  if [ "$marker_count" = "1" ] && grep -q "$path_home/.lemon/bin" "$path_home/.zshrc"; then
+    ok "--modify-path appends the PATH line to ~/.zshrc exactly once"
+  else
+    fail "--modify-path wrote the marker $marker_count time(s) or the wrong path"
+  fi
+else
+  fail "--modify-path install exited non-zero"
+  cat "$work_dir/install-12.log" "$work_dir/install-13.log" >&2
+fi
+
+fish_home="$work_dir/home-fish"
+mkdir -p "$fish_home"
+
+if run_install "$work_dir/install-14.log" "$fish_home" "$base_url" SHELL=/usr/bin/fish; then
+  if grep -q "fish_add_path $fish_home/.lemon/bin" "$work_dir/install-14.log"; then
+    ok "fish shells are given fish_add_path guidance"
+  else
+    fail "fish PATH guidance did not use fish syntax"
+    cat "$work_dir/install-14.log" >&2
+  fi
+else
+  fail "install into a fresh home for the fish PATH check failed"
+  cat "$work_dir/install-14.log" >&2
+fi
+
+# 12. Releases published before the TUI existed still install the runtime, with
+#     a warning instead of a hard failure.
+notui_home="$work_dir/home-notui"
+mkdir -p "$notui_home"
+
+if run_install "$work_dir/install-15.log" "$notui_home" "$base_url/notui"; then
+  if [ -d "$notui_home/.lemon/versions/9999.4.0" ] &&
+    [ ! -e "$notui_home/.lemon/versions/9999.4.0/tui" ] &&
+    grep -q "no TUI artifact" "$work_dir/install-15.log"; then
+    ok "a TUI-less release installs the runtime and warns about the missing TUI"
+  else
+    fail "a TUI-less release did not install runtime-only with a warning"
+    cat "$work_dir/install-15.log" >&2
+  fi
+else
+  fail "a TUI-less release failed to install at all"
+  cat "$work_dir/install-15.log" >&2
+fi
+
+# 13. LEMON_NO_TUI=1 opts out even when the manifest advertises a TUI.
+no_tui_home="$work_dir/home-no-tui-env"
+mkdir -p "$no_tui_home"
+
+if run_install "$work_dir/install-16.log" "$no_tui_home" "$base_url" LEMON_NO_TUI=1; then
+  if [ -x "$no_tui_home/.lemon/versions/9999.1.0/bin/lemon" ] &&
+    [ ! -e "$no_tui_home/.lemon/versions/9999.1.0/tui" ]; then
+    ok "LEMON_NO_TUI=1 installs the runtime without the published TUI"
+  else
+    fail "LEMON_NO_TUI=1 installed the TUI anyway, or skipped the runtime"
+  fi
+else
+  fail "LEMON_NO_TUI=1 install exited non-zero"
+  cat "$work_dir/install-16.log" >&2
+fi
+
+# Re-running without the opt-out hits the already-installed fast path, which
+# must point out that the version on disk is missing the published TUI.
+if run_install "$work_dir/install-18.log" "$no_tui_home" "$base_url"; then
+  if grep -q "already installed" "$work_dir/install-18.log" &&
+    grep -q "publishes one" "$work_dir/install-18.log" &&
+    grep -q -- "--force" "$work_dir/install-18.log"; then
+    ok "the already-installed path flags a runtime-only install and suggests --force"
+  else
+    fail "the already-installed path did not flag the missing TUI"
+    cat "$work_dir/install-18.log" >&2
+  fi
+else
+  fail "re-running over a runtime-only install exited non-zero"
+  cat "$work_dir/install-18.log" >&2
+fi
+
+# 14. A forged TUI checksum aborts the whole install: both-or-neither.
+tui_corrupt_home="$work_dir/home-tui-corrupt"
+mkdir -p "$tui_corrupt_home"
+
+if run_install "$work_dir/install-17.log" "$tui_corrupt_home" "$base_url/tui-corrupt"; then
+  fail "install.sh accepted a TUI tarball whose checksum did not match the manifest"
+else
+  if grep -q "checksum mismatch for lemon-9999.5.0-stable-$PLATFORM-$TUI_PROFILE" "$work_dir/install-17.log" &&
+    [ ! -d "$tui_corrupt_home/.lemon/versions/9999.5.0" ] &&
+    [ ! -e "$tui_corrupt_home/.lemon/versions/current" ] &&
+    [ -z "$(find "$tui_corrupt_home/.lemon/versions" -maxdepth 1 -name '*.partial' 2>/dev/null)" ] &&
+    [ "$(find "$tui_corrupt_home/.lemon/tmp" -mindepth 1 2>/dev/null | wc -l | tr -d ' ')" = "0" ]; then
+    ok "a TUI checksum mismatch aborts the install with nothing left on disk"
+  else
+    fail "a TUI checksum mismatch left state behind"
+    cat "$work_dir/install-17.log" >&2
+  fi
+fi
+
+# 15. Fault injection: the TUI download fails after the runtime download has
+#     already succeeded. The half-finished upgrade must not disturb the
+#     version that is currently live.
+#
+#     install.sh resolves curl through PATH, and `env -i` in run_install sets
+#     PATH before the caller-supplied variables, so a later PATH= wins — the
+#     same trick the SHELL checks above rely on.
+fault_bin="$work_dir/fakebin-curl"
+mkdir -p "$fault_bin"
+real_curl="$(command -v curl)"
+
+cat > "$fault_bin/curl" <<EOF
+#!/bin/sh
+for arg in "\$@"; do
+  case "\$arg" in
+    *-$TUI_PROFILE.tar.gz)
+      echo "curl: (22) simulated transport failure" >&2
+      exit 22
+      ;;
+  esac
+done
+exec $real_curl "\$@"
+EOF
+chmod +x "$fault_bin/curl"
+
+fault_home="$work_dir/home-fault"
+mkdir -p "$fault_home"
+
+if ! run_install "$work_dir/install-19.log" "$fault_home" "$base_url"; then
+  fail "seeding the fault-injection home failed"
+  cat "$work_dir/install-19.log" >&2
+elif run_install "$work_dir/install-20.log" "$fault_home" "$base_url" \
+  LEMON_VERSION=9999.2.0 "PATH=$fault_bin:$PATH"; then
+  fail "install.sh reported success when the TUI download failed"
+else
+  current_target="$(readlink "$fault_home/.lemon/versions/current" 2>/dev/null || echo "")"
+  version_output="$(HOME="$fault_home" "$fault_home/.lemon/bin/lemon" version 2>&1 || echo "")"
+
+  if [ "$current_target" = "9999.1.0" ] &&
+    [ "$version_output" = "lemon 9999.1.0" ] &&
+    [ ! -d "$fault_home/.lemon/versions/9999.2.0" ] &&
+    [ -z "$(find "$fault_home/.lemon/versions" -maxdepth 1 \( -name '*.partial' -o -name '*.previous.*' \) 2>/dev/null)" ] &&
+    [ "$(find "$fault_home/.lemon/tmp" -mindepth 1 2>/dev/null | wc -l | tr -d ' ')" = "0" ]; then
+    ok "a failed TUI download leaves the live version untouched and no residue"
+  else
+    fail "a failed TUI download left inconsistent state"
+    cat "$work_dir/install-20.log" >&2
+  fi
+fi
+
+# 16. Fault injection: the staged tree cannot be moved into place. The old
+#     version has already been moved aside at that point, so install.sh must
+#     put it back rather than leave versions/current dangling.
+promote_bin="$work_dir/fakebin-mv"
+mkdir -p "$promote_bin"
+real_mv="$(command -v mv)"
+
+cat > "$promote_bin/mv" <<EOF
+#!/bin/sh
+case "\$1" in
+  *.partial)
+    echo "mv: simulated failure moving the staged install into place" >&2
+    exit 1
+    ;;
+esac
+exec $real_mv "\$@"
+EOF
+chmod +x "$promote_bin/mv"
+
+promote_home="$work_dir/home-promote"
+mkdir -p "$promote_home"
+
+if ! run_install "$work_dir/install-21.log" "$promote_home" "$base_url"; then
+  fail "seeding the interrupted-promotion home failed"
+  cat "$work_dir/install-21.log" >&2
+else
+  promote_sentinel="$promote_home/.lemon/versions/9999.1.0/SENTINEL"
+  touch "$promote_sentinel"
+
+  if run_install "$work_dir/install-22.log" "$promote_home" "$base_url" \
+    "PATH=$promote_bin:$PATH" -- --force; then
+    fail "install.sh reported success when the staged tree could not be moved into place"
+  else
+    current_target="$(readlink "$promote_home/.lemon/versions/current" 2>/dev/null || echo "")"
+    version_output="$(HOME="$promote_home" "$promote_home/.lemon/bin/lemon" version 2>&1 || echo "")"
+
+    if [ "$current_target" = "9999.1.0" ] &&
+      [ -f "$promote_sentinel" ] &&
+      [ "$version_output" = "lemon 9999.1.0" ] &&
+      grep -q "previous version was restored" "$work_dir/install-22.log" &&
+      [ -z "$(find "$promote_home/.lemon/versions" -maxdepth 1 \( -name '*.partial' -o -name '*.previous.*' \) 2>/dev/null)" ] &&
+      [ "$(find "$promote_home/.lemon/tmp" -mindepth 1 2>/dev/null | wc -l | tr -d ' ')" = "0" ]; then
+      ok "a failed promotion restores the previous version and leaves no residue"
+    else
+      fail "a failed promotion left inconsistent state"
+      cat "$work_dir/install-22.log" >&2
+    fi
+  fi
+fi
+
+# 17. Launcher security contract: doctor argv forwarding and first-run
+#     privacy. The fixture launcher mirrors rel/overlays/bin/lemon -- the
+#     doctor argv crosses to the runtime CLI entrypoint as arguments behind
+#     a fixed eval expression, and first-run state is created under umask
+#     077 -- and the profile stub records what crossed the boundary.
+doctor_home="$work_dir/home-doctor"
+mkdir -p "$doctor_home"
+
+if ! run_install "$work_dir/install-23.log" "$doctor_home" "$base_url"; then
+  fail "seeding the launcher-contract home failed"
+  cat "$work_dir/install-23.log" >&2
+else
+  launcher="$doctor_home/.lemon/bin/lemon"
+
+  # The first launcher execution creates cookie/env/run and tightens
+  # ~/.lemon itself, which install.sh laid out under the ambient umask.
+  if first_run="$(HOME="$doctor_home" "$launcher" version 2>&1)" &&
+    [ "$first_run" = "lemon 9999.1.0" ] &&
+    [ "$(mode_of "$doctor_home/.lemon")" = "700" ] &&
+    [ "$(mode_of "$doctor_home/.lemon/run")" = "700" ] &&
+    [ "$(mode_of "$doctor_home/.lemon/cookie")" = "600" ] &&
+    [ "$(mode_of "$doctor_home/.lemon/env")" = "600" ]; then
+    ok "first-run launcher state is private: ~/.lemon and run/ 0700, cookie and env 0600"
+  else
+    fail "first-run launcher state is not private (.lemon=$(mode_of "$doctor_home/.lemon" 2>/dev/null || echo missing) run=$(mode_of "$doctor_home/.lemon/run" 2>/dev/null || echo missing) cookie=$(mode_of "$doctor_home/.lemon/cookie" 2>/dev/null || echo missing) env=$(mode_of "$doctor_home/.lemon/env" 2>/dev/null || echo missing))"
+  fi
+
+  # A bundle path holding literal Elixir interpolation syntax -- the payload
+  # that would execute if spliced into a double-quoted Elixir string --
+  # combined with doctor options on both sides of it. Expected boundary
+  # traffic: the fixed eval expression, then the untouched argv in order.
+  bundle_path="$doctor_home/.lemon/pwn #{System.cmd('touch',['/tmp/lemon-doctor-pwned'])} \"dq\" b\\s.zip"
+  doctor_out="$(HOME="$doctor_home" "$launcher" doctor --json --bundle "$bundle_path" --verbose 2>&1)"
+  expected_doctor_out="stub release binary 9999.1.0
+arg:eval
+arg:LemonCli.CLI.main(System.argv())
+arg:doctor
+arg:--json
+arg:--bundle
+arg:$bundle_path
+arg:--verbose"
+
+  if [ "$doctor_out" = "$expected_doctor_out" ]; then
+    ok "doctor forwards argv verbatim: fixed eval source, option order kept, interpolation syntax literal"
+  else
+    fail "doctor argv did not cross the exec boundary verbatim"
+    printf 'expected:\n%s\n\ngot:\n%s\n' "$expected_doctor_out" "$doctor_out" >&2
+  fi
+fi
+
+echo
+if [ "$failures" -ne 0 ]; then
+  echo "verify_install_script: $failures of $checks check(s) failed" >&2
+  exit 1
+fi
+
+echo "verified install.sh across $checks check(s)"

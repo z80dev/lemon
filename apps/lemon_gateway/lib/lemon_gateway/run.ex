@@ -3,7 +3,7 @@ defmodule LemonGateway.Run do
   Transport-agnostic run execution.
 
   Run is responsible for:
-  - Executing engine runs
+  - Executing runs
   - Emitting events to the LemonCore.Bus
   - Storing run events to the Store
   - Managing run lifecycle (start, steer, cancel, complete)
@@ -37,12 +37,12 @@ defmodule LemonGateway.Run do
   }
 
   alias LemonCore.Events
-  alias LemonGateway.{Cwd, Event, ExecutionRequest}
+  alias LemonGateway.{Cwd, Event, ExecutionRequest, Executor}
   alias LemonCore.ResumeToken
-  alias LemonGateway.Types.Job
 
+  @engine_provenance "lemon"
   @max_logged_error_bytes 4_096
-  @engine_start_error_banner_bytes 1_024
+  @executor_start_error_banner_bytes 1_024
 
   def start_link(args) do
     # Allow cancel-by-run-id (used by router/control-plane) by registering the run
@@ -63,296 +63,283 @@ defmodule LemonGateway.Run do
 
   @impl true
   def init(args) when is_map(args) do
-    normalized_args = normalize_init_args(args)
+    %{
+      execution_request: %ExecutionRequest{} = request,
+      slot_ref: slot_ref,
+      worker_pid: worker_pid
+    } =
+      args
 
-    %{job: job, execution_request: request, slot_ref: slot_ref, worker_pid: worker_pid} =
-      normalized_args
+    submitted_request = request
+    run_id = request.run_id || generate_run_id()
+    session_key = request.session_key || "default"
+    request = %{request | run_id: run_id, session_key: session_key}
+    executor_result = resolve_configured_executor()
 
-    # Acquire engine lock based on thread_key (derived from resume/session_key)
-    lock_result = maybe_acquire_lock(job)
+    {lock_release_fn, continuation} =
+      case maybe_acquire_lock(request) do
+        {:ok, release_fn} ->
+          Logger.debug(
+            "Gateway run init lock acquired run_id=#{inspect(run_id)} session_key=#{inspect(session_key)}"
+          )
 
-    case lock_result do
-      {:ok, release_fn} ->
-        Logger.debug(
-          "Gateway run init lock acquired run_id=#{inspect(job.run_id)} session_key=#{inspect(job.session_key)} " <>
-            "engine=#{inspect(engine_id_for(job))}"
-        )
+          {release_fn, {:start_run, executor_result}}
 
-        # Generate run_id if not provided
-        run_id = job.run_id || generate_run_id()
-        session_key = job.session_key || session_key_from_job(job)
+        {:error, :timeout} ->
+          Logger.warning(
+            "Gateway run lock timeout run_id=#{inspect(run_id)} session_key=#{inspect(session_key)}"
+          )
 
-        state = %{
-          submitted_job: job,
-          submitted_execution_request: request,
-          job: %{job | run_id: run_id, session_key: session_key},
-          run_id: run_id,
-          session_key: session_key,
-          slot_ref: slot_ref,
-          worker_pid: worker_pid,
-          engine: nil,
-          run_ref: nil,
-          cancel_ctx: nil,
-          renderer: LemonGateway.Renderers.Basic,
-          renderer_state: nil,
-          completed: false,
-          lock_release_fn: release_fn,
-          last_resume: job.resume,
-          current_phase: nil,
-          cancelled: false,
-          delta_seq: 0,
-          start_ts_ms: System.system_time(:millisecond),
-          # Accumulated answer text for final event
-          accumulated_text: "",
-          # Track whether first token telemetry has been emitted
-          first_token_emitted: false
-        }
+          {fn -> :ok end, :lock_timeout}
+      end
 
-        {:ok, state, {:continue, {:start_run, normalized_args}}}
+    state = %{
+      submitted_execution_request: submitted_request,
+      execution_request: request,
+      run_id: run_id,
+      session_key: session_key,
+      slot_ref: slot_ref,
+      worker_pid: worker_pid,
+      executor: nil,
+      run_ref: nil,
+      control_ctx: nil,
+      renderer: LemonGateway.Renderers.Basic,
+      renderer_state: nil,
+      completed: false,
+      lock_release_fn: lock_release_fn,
+      last_resume: request.resume,
+      current_phase: nil,
+      cancelled: false,
+      delta_seq: 0,
+      start_ts_ms: System.system_time(:millisecond),
+      accumulated_text: "",
+      first_token_emitted: false,
+      progress_mapping_registered?: false
+    }
 
-      {:error, :timeout} ->
-        # Lock acquisition timed out - fail fast
-        Logger.warning(
-          "Gateway run lock timeout run_id=#{inspect(job.run_id)} session_key=#{inspect(job.session_key)} " <>
-            "engine=#{inspect(engine_id_for(job))}"
-        )
-
-        run_id = job.run_id || generate_run_id()
-
-        completed =
-          Event.completed(%{
-            engine: engine_id_for(job),
-            ok: false,
-            error: :lock_timeout,
-            answer: "",
-            run_id: run_id,
-            session_key: job.session_key
-          })
-
-        # Emit completion event to bus (include session_key and origin in meta)
-        meta = %{session_key: job.session_key, origin: job.meta && job.meta[:origin]}
-
-        # Bus payloads must be plain maps; event constructors already produce them.
-        emit_to_bus(
-          run_id,
-          :run_completed,
-          Events.RunCompleted.new(%{
-            completed: completed_to_bus_map(completed),
-            duration_ms: nil
-          }),
-          meta
-        )
-
-        # Notify worker and release slot synchronously before stopping
-        LemonGateway.Scheduler.release_slot(slot_ref)
-        send(worker_pid, {:run_complete, self(), completed})
-
-        notify_pid = job.meta && job.meta[:notify_pid]
-
-        if is_pid(notify_pid) do
-          send(notify_pid, {:lemon_gateway_run_completed, job, completed})
-        end
-
-        {:stop, :normal}
-    end
-  end
-
-  defp normalize_init_args(%{execution_request: %ExecutionRequest{} = request} = args) do
-    job = ExecutionRequest.to_job(request)
-
-    args
-    |> Map.put(:execution_request, request)
-    |> Map.put(:job, job)
+    {:ok, state, {:continue, continuation}}
   end
 
   defp generate_run_id do
     "run_#{LemonCore.Id.uuid()}"
   end
 
-  defp session_key_from_job(%Job{session_key: key}) when is_binary(key), do: key
-
-  defp session_key_from_job(_), do: "default"
-
-  defp maybe_acquire_lock(job) do
+  defp maybe_acquire_lock(request) do
     require_lock = LemonGateway.Config.get(:require_engine_lock)
     timeout_ms = LemonGateway.Config.get(:engine_lock_timeout_ms) || 60_000
 
     if require_lock do
-      thread_key = lock_key_for(job)
-      LemonGateway.EngineLock.acquire(thread_key, timeout_ms)
+      LemonGateway.EngineLock.acquire(lock_key_for(request), timeout_ms)
     else
-      # No lock required - return a no-op release function
       {:ok, fn -> :ok end}
     end
   end
 
-  # Derive lock key from job - use resume token value if present, otherwise session_key.
-  defp lock_key_for(%Job{resume: %ResumeToken{value: value}}) when is_binary(value) do
+  defp lock_key_for(%ExecutionRequest{resume: %ResumeToken{value: value}})
+       when is_binary(value) do
     {:resume, value}
   end
 
-  defp lock_key_for(%Job{session_key: session_key}) when is_binary(session_key) do
+  defp lock_key_for(%ExecutionRequest{session_key: session_key}) when is_binary(session_key) do
     {:session, session_key}
   end
 
   defp lock_key_for(_), do: {:default, :global}
 
-  @impl true
-  def handle_continue({:start_run, %{job: job}}, state) do
-    state = maybe_track_phase(state, :dispatched_to_gateway)
-    engine_id = engine_id_for(job)
-    engine = resolve_engine(engine_id)
-
-    Logger.debug(
-      "Gateway run start run_id=#{inspect(state.run_id)} session_key=#{inspect(state.session_key)} " <>
-        "engine=#{inspect(engine_id)} resume=#{inspect(job.resume)} cwd=#{inspect(job.cwd)}"
-    )
-
-    if is_nil(engine) do
-      completed =
-        Event.completed(%{
-          engine: engine_id,
-          ok: false,
-          # Keep this stringy: the Basic renderer calls to_string/1 on error.
-          error: "unknown engine id: #{engine_id}",
-          answer: "",
-          run_id: state.run_id,
-          session_key: state.session_key
-        })
-
-      renderer_state = state.renderer.init(%{engine: nil})
-      {renderer_state, render_action} = state.renderer.apply_event(renderer_state, completed)
-      maybe_update_progress(state, render_action)
-      state = %{state | renderer_state: renderer_state}
-
-      finalize(state, completed)
-      {:stop, :normal, state}
-    else
-      state = maybe_track_phase(state, :starting_engine)
-      renderer_state = state.renderer.init(%{engine: engine})
-
-      # Resolve cwd from explicit job value; otherwise use gateway default/home.
-      cwd =
-        cond do
-          is_binary(job.cwd) and String.trim(job.cwd) != "" ->
-            Path.expand(job.cwd)
-
-          true ->
-            Cwd.default_cwd()
-        end
-
-      opts = %{cwd: cwd, run_id: state.run_id}
-
-      # Emit run started event to bus
-      emit_to_bus(
-        state.run_id,
-        :run_started,
-        Events.RunStarted.new(%{
-          run_id: state.run_id,
-          session_key: state.session_key,
-          engine: engine_id
-        }),
-        build_event_meta(state)
-      )
-
-      # Emit run_start telemetry
-      emit_telemetry_start(state.run_id, %{
-        session_key: state.session_key,
-        engine: engine_id,
-        origin: get_in(state.job.meta || %{}, [:origin])
-      })
-
-      case safe_start_engine_run(engine, state.job, opts, self()) do
-        {:ok, run_ref, cancel_ctx} ->
-          Logger.debug(
-            "Gateway run engine started run_id=#{inspect(state.run_id)} run_ref=#{inspect(run_ref)} " <>
-              "engine=#{inspect(engine_id)}"
-          )
-
-          register_progress_mapping(job, state.run_id)
-
-          {:noreply,
-           %{
-             state
-             | engine: engine,
-               run_ref: run_ref,
-               cancel_ctx: cancel_ctx,
-               renderer_state: renderer_state
-           }}
-
-        {:error, reason} ->
-          Logger.warning(
-            "Gateway run engine start failed run_id=#{inspect(state.run_id)} engine=#{inspect(engine_id)} " <>
-              "reason=#{inspect(reason)}"
-          )
-
-          completed =
-            Event.completed(%{
-              engine: engine_id,
-              ok: false,
-              error: reason,
-              answer: "",
-              run_id: state.run_id,
-              session_key: state.session_key
-            })
-
-          {renderer_state, render_action} = state.renderer.apply_event(renderer_state, completed)
-          maybe_update_progress(state, render_action)
-          state = %{state | engine: engine, renderer_state: renderer_state}
-
-          finalize(state, completed)
-          {:stop, :normal, state}
-      end
+  # Request meta is atom-keyed on the normal router path, but replayed events
+  # and hand-built tests can use string keys.
+  defp meta_field(%ExecutionRequest{meta: meta}, key) when is_map(meta) do
+    case Map.get(meta, key) do
+      nil -> Map.get(meta, Atom.to_string(key))
+      value -> value
     end
   end
 
-  defp safe_start_engine_run(engine, %Job{} = job, opts, sink_pid) do
-    engine.start_run(job, opts, sink_pid)
+  defp meta_field(_request, _key), do: nil
+
+  defp resolve_configured_executor do
+    with {:ok, executor} <- Executor.configured_module(),
+         :ok <- Executor.validate(executor) do
+      {:ok, executor}
+    end
   rescue
     error ->
       Logger.error(
-        "Gateway run engine start raised engine=#{inspect(engine && engine.id())} " <>
-          "session_key=#{inspect(job.session_key)} error=" <>
+        "Gateway run executor resolution raised error=" <>
           truncate_for_log(
             Exception.format_banner(:error, error),
-            @engine_start_error_banner_bytes
+            @executor_start_error_banner_bytes
           )
       )
 
-      {:error, "engine_start_exception: " <> Exception.message(error)}
+      {:error, "executor_resolution_exception: " <> Exception.message(error)}
   catch
     :exit, reason ->
-      Logger.error(
-        "Gateway run engine start exited engine=#{inspect(engine && engine.id())} " <>
-          "session_key=#{inspect(job.session_key)} reason=#{inspect(reason)}"
-      )
-
-      {:error, "engine_start_exit: " <> inspect(reason)}
+      Logger.error("Gateway run executor resolution exited reason=#{inspect(reason)}")
+      {:error, "executor_resolution_exit: " <> inspect(reason)}
 
     kind, reason ->
       Logger.error(
-        "Gateway run engine start threw engine=#{inspect(engine && engine.id())} " <>
-          "session_key=#{inspect(job.session_key)} kind=#{inspect(kind)} reason=#{inspect(reason)}"
+        "Gateway run executor resolution threw kind=#{inspect(kind)} reason=#{inspect(reason)}"
       )
 
-      {:error, "engine_start_throw: " <> inspect({kind, reason})}
+      {:error, "executor_resolution_throw: " <> inspect({kind, reason})}
   end
 
-  defp resolve_engine(engine_id) when is_binary(engine_id) do
-    LemonGateway.EngineRegistry.get_engine(engine_id) || resolve_engine_by_prefix(engine_id)
+  @impl true
+  def handle_continue(:lock_timeout, state) do
+    completed =
+      Event.completed(%{
+        engine: @engine_provenance,
+        ok: false,
+        error: :lock_timeout,
+        answer: "",
+        run_id: state.run_id,
+        session_key: state.session_key
+      })
+
+    renderer_state = state.renderer.init(%{engine: @engine_provenance})
+    {renderer_state, render_action} = state.renderer.apply_event(renderer_state, completed)
+    maybe_update_progress(state, render_action)
+    state = %{state | renderer_state: renderer_state}
+
+    finalize(state, completed)
+    {:stop, :normal, %{state | completed: true}}
   end
 
-  defp resolve_engine(_), do: nil
+  def handle_continue({:start_run, {:error, reason}}, state) do
+    finalize_start_failure(state, reason)
+  end
 
-  # Accept composite IDs like "claude:claude-3-opus" by falling back to "claude".
-  defp resolve_engine_by_prefix(engine_id) do
-    case String.split(engine_id, ":", parts: 2) do
-      [prefix, _rest] when is_binary(prefix) and byte_size(prefix) > 0 ->
-        LemonGateway.EngineRegistry.get_engine(prefix)
+  def handle_continue({:start_run, {:ok, executor}}, state) do
+    state = maybe_track_phase(state, :dispatched_to_gateway)
+    request = state.execution_request
 
-      _ ->
-        nil
+    Logger.debug(
+      "Gateway run start run_id=#{inspect(state.run_id)} session_key=#{inspect(state.session_key)} " <>
+        "resume=#{inspect(request.resume)} cwd=#{inspect(request.cwd)}"
+    )
+
+    state = maybe_track_phase(state, :starting_engine)
+    renderer_state = state.renderer.init(%{engine: @engine_provenance})
+
+    cwd =
+      cond do
+        is_binary(request.cwd) and String.trim(request.cwd) != "" ->
+          Path.expand(request.cwd)
+
+        true ->
+          Cwd.default_cwd()
+      end
+
+    opts = [cwd: cwd, run_id: state.run_id]
+
+    emit_to_bus(
+      state.run_id,
+      :run_started,
+      Events.RunStarted.new(%{
+        run_id: state.run_id,
+        session_key: state.session_key,
+        engine: @engine_provenance,
+        model: meta_field(request, :model),
+        thinking_level: meta_field(request, :thinking_level)
+      }),
+      build_event_meta(state)
+    )
+
+    emit_telemetry_start(state.run_id, %{
+      session_key: state.session_key,
+      engine: @engine_provenance,
+      origin: meta_field(request, :origin)
+    })
+
+    case safe_start_executor_run(executor, request, opts, self()) do
+      {:ok, run_ref, control_ctx} ->
+        Logger.debug(
+          "Gateway run executor started run_id=#{inspect(state.run_id)} run_ref=#{inspect(run_ref)}"
+        )
+
+        register_progress_mapping(request, state.run_id)
+
+        {:noreply,
+         %{
+           state
+           | executor: executor,
+             run_ref: run_ref,
+             control_ctx: control_ctx,
+             renderer_state: renderer_state,
+             progress_mapping_registered?: true
+         }}
+
+      {:error, reason} ->
+        finalize_start_failure(
+          %{state | executor: executor, renderer_state: renderer_state},
+          reason
+        )
+
+      other ->
+        finalize_start_failure(
+          %{state | executor: executor, renderer_state: renderer_state},
+          {:invalid_executor_start_result, other}
+        )
     end
+  end
+
+  defp finalize_start_failure(state, reason) do
+    Logger.warning(
+      "Gateway run executor start failed run_id=#{inspect(state.run_id)} reason=#{inspect(reason)}"
+    )
+
+    renderer_state = state.renderer_state || state.renderer.init(%{engine: @engine_provenance})
+
+    completed =
+      Event.completed(%{
+        engine: @engine_provenance,
+        ok: false,
+        error: reason,
+        answer: "",
+        run_id: state.run_id,
+        session_key: state.session_key
+      })
+
+    {renderer_state, render_action} = state.renderer.apply_event(renderer_state, completed)
+    maybe_update_progress(state, render_action)
+    state = %{state | renderer_state: renderer_state}
+
+    finalize(state, completed)
+    {:stop, :normal, %{state | completed: true}}
+  end
+
+  defp safe_start_executor_run(executor, %ExecutionRequest{} = request, opts, sink_pid) do
+    executor.start_run(request, opts, sink_pid)
+  rescue
+    error ->
+      Logger.error(
+        "Gateway run executor start raised executor=#{inspect(executor)} " <>
+          "session_key=#{inspect(request.session_key)} error=" <>
+          truncate_for_log(
+            Exception.format_banner(:error, error),
+            @executor_start_error_banner_bytes
+          )
+      )
+
+      {:error, "executor_start_exception: " <> Exception.message(error)}
+  catch
+    :exit, reason ->
+      Logger.error(
+        "Gateway run executor start exited executor=#{inspect(executor)} " <>
+          "session_key=#{inspect(request.session_key)} reason=#{inspect(reason)}"
+      )
+
+      {:error, "executor_start_exit: " <> inspect(reason)}
+
+    kind, reason ->
+      Logger.error(
+        "Gateway run executor start threw executor=#{inspect(executor)} " <>
+          "session_key=#{inspect(request.session_key)} kind=#{inspect(kind)} reason=#{inspect(reason)}"
+      )
+
+      {:error, "executor_start_throw: " <> inspect({kind, reason})}
   end
 
   @impl true
@@ -429,7 +416,7 @@ defmodule LemonGateway.Run do
           state.run_id,
           %{
             session_key: state.session_key,
-            engine: state.engine && state.engine.id()
+            engine: @engine_provenance
           },
           latency_ms
         )
@@ -463,14 +450,19 @@ defmodule LemonGateway.Run do
   def handle_info(_msg, state), do: {:noreply, state}
 
   @impl true
-  def handle_cast({:steer, request_or_job, worker_pid}, state) do
-    {request, reply_request} = normalize_steer_request(request_or_job)
-    {:noreply, handle_steer(:steer, request, reply_request, worker_pid, state)}
+  def handle_cast({:steer, submission_run_id, prompt, worker_pid}, state)
+      when is_binary(submission_run_id) and is_binary(prompt) do
+    {:noreply, handle_steer(:steer, submission_run_id, prompt, worker_pid, state)}
   end
 
-  def handle_cast({:steer_backlog, request_or_job, worker_pid}, state) do
-    {request, reply_request} = normalize_steer_request(request_or_job)
-    {:noreply, handle_steer(:steer_backlog, request, reply_request, worker_pid, state)}
+  def handle_cast({:steer_backlog, submission_run_id, prompt, worker_pid}, state)
+      when is_binary(submission_run_id) and is_binary(prompt) do
+    {:noreply, handle_steer(:steer_backlog, submission_run_id, prompt, worker_pid, state)}
+  end
+
+  def handle_cast({:redirect, submission_run_id, prompt, worker_pid}, state)
+      when is_binary(submission_run_id) and is_binary(prompt) do
+    {:noreply, handle_redirect(submission_run_id, prompt, worker_pid, state)}
   end
 
   @impl true
@@ -482,15 +474,15 @@ defmodule LemonGateway.Run do
         "Gateway run cancel run_id=#{inspect(state.run_id)} session_key=#{inspect(state.session_key)} reason=#{inspect(reason)}"
       )
 
-      if state.engine && state.cancel_ctx do
-        _ = state.engine.cancel(state.cancel_ctx)
+      if state.executor do
+        _ = safe_executor_control(state.executor, :cancel, state.control_ctx)
       end
 
-      resume = state.last_resume || state.job.resume
+      resume = state.last_resume || state.execution_request.resume
 
       completed =
         Event.completed(%{
-          engine: engine_id_for(state.job),
+          engine: @engine_provenance,
           resume: resume,
           ok: false,
           error: reason,
@@ -505,41 +497,77 @@ defmodule LemonGateway.Run do
     end
   end
 
-  defp handle_steer(kind, %ExecutionRequest{} = request, reply_request, worker_pid, state) do
-    steer_text = request.prompt || ""
-
+  defp handle_steer(kind, submission_run_id, prompt, worker_pid, state) do
     cond do
-      state.completed ->
-        notify_steer_result(kind, :rejected, worker_pid, reply_request)
+      state.completed or is_nil(state.executor) ->
+        notify_steer_result(kind, :rejected, worker_pid, submission_run_id)
         state
 
-      is_nil(state.engine) or is_nil(state.cancel_ctx) ->
-        notify_steer_result(kind, :rejected, worker_pid, reply_request)
-        state
-
-      not state.engine.supports_steer?() ->
-        notify_steer_result(kind, :rejected, worker_pid, reply_request)
+      safe_executor_control(state.executor, :steer, state.control_ctx, prompt) == :ok ->
+        notify_steer_result(kind, :accepted, worker_pid, submission_run_id)
         state
 
       true ->
-        case state.engine.steer(state.cancel_ctx, steer_text) do
+        notify_steer_result(kind, :rejected, worker_pid, submission_run_id)
+        state
+    end
+  end
+
+  defp handle_redirect(submission_run_id, prompt, worker_pid, state) do
+    cond do
+      state.completed or is_nil(state.executor) ->
+        notify_steer_result(:redirect, :rejected, worker_pid, submission_run_id)
+        state
+
+      true ->
+        case safe_executor_control(state.executor, :redirect, state.control_ctx, prompt) do
           :ok ->
-            notify_steer_result(kind, :accepted, worker_pid, reply_request)
+            notify_steer_result(:redirect, :accepted, worker_pid, submission_run_id)
             state
 
-          {:error, _reason} ->
-            notify_steer_result(kind, :rejected, worker_pid, reply_request)
+          {:error, :unsupported} ->
+            handle_steer(:redirect, submission_run_id, prompt, worker_pid, state)
+
+          _ ->
+            notify_steer_result(:redirect, :rejected, worker_pid, submission_run_id)
             state
         end
     end
   end
 
-  defp normalize_steer_request(%ExecutionRequest{} = request) do
-    {request, request}
-  end
+  defp safe_executor_control(executor, callback, control_ctx, text \\ nil) do
+    if is_nil(text) do
+      apply(executor, callback, [control_ctx])
+    else
+      apply(executor, callback, [control_ctx, text])
+    end
+  rescue
+    error ->
+      Logger.error(
+        "Gateway run executor #{callback} raised executor=#{inspect(executor)} " <>
+          "error=" <>
+          truncate_for_log(
+            Exception.format_banner(:error, error),
+            @executor_start_error_banner_bytes
+          )
+      )
 
-  defp normalize_steer_request(%LemonCore.ExecutionCommand{} = command) do
-    {ExecutionRequest.from_command(command), command}
+      {:error, :executor_control_exception}
+  catch
+    :exit, reason ->
+      Logger.error(
+        "Gateway run executor #{callback} exited executor=#{inspect(executor)} reason=#{inspect(reason)}"
+      )
+
+      {:error, :executor_control_exit}
+
+    kind, reason ->
+      Logger.error(
+        "Gateway run executor #{callback} threw executor=#{inspect(executor)} " <>
+          "kind=#{inspect(kind)} reason=#{inspect(reason)}"
+      )
+
+      {:error, :executor_control_throw}
   end
 
   defp notify_steer_result(:steer, :accepted, worker_pid, request),
@@ -554,18 +582,11 @@ defmodule LemonGateway.Run do
   defp notify_steer_result(:steer_backlog, :rejected, worker_pid, request),
     do: send(worker_pid, {:steer_backlog_rejected, request})
 
-  defp engine_id_for(%Job{} = job) do
-    cond do
-      is_binary(job.engine_id) ->
-        job.engine_id
+  defp notify_steer_result(:redirect, :accepted, worker_pid, request),
+    do: send(worker_pid, {:redirect_accepted, request})
 
-      not is_nil(job.resume) ->
-        job.resume.engine
-
-      true ->
-        LemonGateway.Config.get(:default_engine) || "lemon"
-    end
-  end
+  defp notify_steer_result(:redirect, :rejected, worker_pid, request),
+    do: send(worker_pid, {:redirect_rejected, request})
 
   defp action_event_ok_fragment(ok?) when is_boolean(ok?), do: "ok=#{inspect(ok?)}"
   defp action_event_ok_fragment(_), do: "ok=unknown"
@@ -596,8 +617,8 @@ defmodule LemonGateway.Run do
 
     Logger.info(
       "Gateway run finalize run_id=#{inspect(state.run_id)} session_key=#{inspect(state.session_key)} " <>
-        "engine=#{inspect(engine_id_for(state.job))} ok=#{inspect(Map.get(completed, :ok))} " <>
-        "error=#{inspect(Map.get(completed, :error))} answer_bytes=#{byte_size(Map.get(completed, :answer) || "")}"
+        "ok=#{inspect(Map.get(completed, :ok))} error=#{inspect(Map.get(completed, :error))} " <>
+        "answer_bytes=#{byte_size(Map.get(completed, :answer) || "")}"
     )
 
     if Map.get(completed, :ok) != true do
@@ -612,7 +633,7 @@ defmodule LemonGateway.Run do
       state.run_id,
       %{
         session_key: state.session_key,
-        engine: engine_id_for(state.job)
+        engine: @engine_provenance
       },
       duration_ms,
       Map.get(completed, :ok)
@@ -629,7 +650,7 @@ defmodule LemonGateway.Run do
     )
 
     if state.run_id do
-      prompt = state.job.prompt
+      prompt = state.execution_request.prompt
 
       RunStore.finalize(state.run_id, %{
         completed: completed,
@@ -638,30 +659,33 @@ defmodule LemonGateway.Run do
         run_ref: state.run_ref,
         prompt: prompt,
         duration_ms: duration_ms,
-        engine: engine_id_for(state.job),
-        meta: state.job.meta
+        engine: @engine_provenance,
+        meta: state.execution_request.meta
       })
     end
 
     LemonGateway.Scheduler.release_slot(state.slot_ref)
     send(state.worker_pid, {:run_complete, self(), completed})
 
-    notify_pid = state.job.meta && state.job.meta[:notify_pid]
+    notify_pid = meta_field(state.execution_request, :notify_pid)
 
     if is_pid(notify_pid) do
-      notify_job = Map.get(state, :submitted_job, state.job)
-      send(notify_pid, {:lemon_gateway_run_completed, notify_job, completed})
+      send(
+        notify_pid,
+        {:lemon_gateway_run_completed, state.submitted_execution_request, completed}
+      )
     end
 
-    unregister_progress_mapping(state.job)
+    if state.progress_mapping_registered? do
+      unregister_progress_mapping(state.execution_request)
+    end
 
     maybe_track_phase(state, terminal_phase)
     :ok
   end
 
-  defp log_run_failure(state, %{__event__: :completed} = completed) do
+  defp log_run_failure(_state, %{__event__: :completed} = completed) do
     error_text = format_error_for_log(Map.get(completed, :error))
-    engine_id = engine_id_for(state.job)
 
     level =
       if Map.get(completed, :error) in [:user_requested, :interrupted, :new_session],
@@ -672,7 +696,6 @@ defmodule LemonGateway.Run do
       "Gateway run failed " <>
         "run_id=#{inspect(Map.get(completed, :run_id))} " <>
         "session_key=#{inspect(Map.get(completed, :session_key))} " <>
-        "engine=#{inspect(engine_id)} " <>
         "error=#{error_text} " <>
         "answer_bytes=#{byte_size(Map.get(completed, :answer) || "")}"
 
@@ -787,11 +810,13 @@ defmodule LemonGateway.Run do
 
     meta = if state.session_key, do: Map.put(meta, :session_key, state.session_key), else: meta
 
-    # Extract origin from job meta
-    origin = get_in(state.job.meta || %{}, [:origin])
+    origin = meta_field(state.execution_request, :origin)
     meta = if origin, do: Map.put(meta, :origin, origin), else: meta
 
-    meta
+    # Carry the router's resolved model on every event of the run, not just `run_started`:
+    # a client that attached mid-run still learns what it is talking to at `run_completed`.
+    model = meta_field(state.execution_request, :model)
+    if model, do: Map.put(meta, :model, model), else: meta
   end
 
   defp emit_engine_event_to_bus(state, event) do
@@ -873,9 +898,9 @@ defmodule LemonGateway.Run do
     })
   end
 
-  defp register_progress_mapping(%Job{} = job, run_id) do
-    meta = job.meta
-    keys = progress_mapping_keys(job)
+  defp register_progress_mapping(%ExecutionRequest{} = request, run_id) do
+    meta = request.meta
+    keys = progress_mapping_keys(request)
     progress_msg_id = meta && meta[:progress_msg_id]
     status_msg_id = meta && meta[:status_msg_id]
 
@@ -886,9 +911,9 @@ defmodule LemonGateway.Run do
     end)
   end
 
-  defp unregister_progress_mapping(%Job{} = job) do
-    meta = job.meta
-    keys = progress_mapping_keys(job)
+  defp unregister_progress_mapping(%ExecutionRequest{} = request) do
+    meta = request.meta
+    keys = progress_mapping_keys(request)
     progress_msg_id = meta && meta[:progress_msg_id]
     status_msg_id = meta && meta[:status_msg_id]
 
@@ -898,9 +923,9 @@ defmodule LemonGateway.Run do
     end)
   end
 
-  defp progress_mapping_keys(%Job{} = job) do
-    if is_binary(job.session_key) and job.session_key != "" do
-      [job.session_key]
+  defp progress_mapping_keys(%ExecutionRequest{} = request) do
+    if is_binary(request.session_key) and request.session_key != "" do
+      [request.session_key]
     else
       []
     end

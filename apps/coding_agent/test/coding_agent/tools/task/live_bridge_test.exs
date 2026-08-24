@@ -69,7 +69,6 @@ defmodule CodingAgent.Tools.Task.LiveBridgeTest do
       Bus.broadcast(
         Bus.run_topic(child_run_id),
         Event.new(:engine_action, %{
-          engine: "codex",
           action: %{
             id: "child_action_1",
             kind: :tool,
@@ -86,7 +85,6 @@ defmodule CodingAgent.Tools.Task.LiveBridgeTest do
     assert_receive %Event{type: :task_projected_child_action, payload: projected, meta: meta},
                    1_000
 
-    assert projected.engine == "codex"
     assert projected.phase == :started
     assert projected.action.id == "taskproj:" <> child_run_id <> ":child_action_1"
     assert projected.action.detail.parent_tool_use_id == "tool_call_bridge_1"

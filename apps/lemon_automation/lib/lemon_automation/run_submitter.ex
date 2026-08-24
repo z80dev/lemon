@@ -1,7 +1,7 @@
 defmodule LemonAutomation.RunSubmitter do
   @moduledoc false
 
-  alias LemonAutomation.{CronJob, CronMemory, CronRun, RunCompletionWaiter}
+  alias LemonAutomation.{CronContext, CronJob, CronMemory, CronRun, RunCompletionWaiter}
   alias LemonCore.{Bus, SessionKey}
 
   @default_timeout_ms 300_000
@@ -62,9 +62,11 @@ defmodule LemonAutomation.RunSubmitter do
   @spec build_params(CronJob.t(), CronRun.t(), binary() | nil, keyword()) :: map()
   def build_params(%CronJob{} = job, %CronRun{} = run, run_id \\ nil, opts \\ []) do
     memory_mod = Keyword.get(opts, :memory_mod, CronMemory)
+    context_mod = Keyword.get(opts, :context_mod, CronContext)
     session_key = fork_session_key(job.session_key, job.agent_id)
     {memory_file, memory_context} = read_memory(memory_mod, job)
-    prompt = build_prompt(memory_mod, job.prompt, memory_file, memory_context)
+    base_prompt = context_mod.augment_prompt(job, job.prompt)
+    prompt = build_prompt(memory_mod, base_prompt, memory_file, memory_context)
 
     params = %{
       origin: :cron,
@@ -84,6 +86,8 @@ defmodule LemonAutomation.RunSubmitter do
       }
     }
 
+    params = maybe_pin_model(params, job)
+
     # Include run_id if provided so router uses it instead of generating new one
     if run_id do
       Map.put(params, :run_id, run_id)
@@ -91,6 +95,21 @@ defmodule LemonAutomation.RunSubmitter do
       params
     end
   end
+
+  # An explicit job model pin overrides the global default for this run;
+  # `LemonCore.RunRequest.normalize/1` carries `:model` through to the engine.
+  defp maybe_pin_model(params, %CronJob{model: model})
+       when is_binary(model) do
+    if String.trim(model) == "" do
+      params
+    else
+      params
+      |> Map.put(:model, model)
+      |> Map.update!(:meta, &Map.put(&1, :cron_model_pin, model))
+    end
+  end
+
+  defp maybe_pin_model(params, _job), do: params
 
   defp fork_session_key(session_key, agent_id) when is_binary(agent_id) do
     sub_id = new_sub_id()

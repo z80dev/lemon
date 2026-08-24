@@ -2,8 +2,8 @@ defmodule LemonRouter.SubmissionBuilder do
   @moduledoc """
   Builds the router-owned submission handed from orchestration to coordination.
 
-  This module resolves profile/session defaults, sticky engine state, resume
-  behavior, and conversation selection before constructing the canonical
+  This module resolves profile/session defaults, resume behavior, and
+  conversation selection before constructing the canonical
   `%LemonCore.ExecutionCommand{}` and wrapping it in `%LemonRouter.Submission{}`.
   """
 
@@ -26,18 +26,10 @@ defmodule LemonRouter.SubmissionBuilder do
     Policy,
     ResumeResolver,
     RoutingFeedbackStore,
-    StickyEngine,
     Submission
   }
 
-  @thinking_levels %{
-    "off" => :off,
-    "minimal" => :minimal,
-    "low" => :low,
-    "medium" => :medium,
-    "high" => :high,
-    "xhigh" => :xhigh
-  }
+  alias LemonRouter.ThinkingLevel
 
   @pending_compaction_ttl_ms 12 * 60 * 60 * 1000
 
@@ -49,7 +41,6 @@ defmodule LemonRouter.SubmissionBuilder do
     prompt = params.prompt
     images = params.images || []
     queue_mode = params.queue_mode || :collect
-    engine_id = params.engine_id
     request_model = params.model
     meta = params.meta || %{}
     cwd_override = params.cwd
@@ -58,7 +49,9 @@ defmodule LemonRouter.SubmissionBuilder do
 
     session_config = get_session_config(session_key)
 
-    with {:ok, agent_profile} <- get_agent_profile(agent_id) do
+    with {:ok, resolved_resume, resume_source} <-
+           ResumeResolver.resolve(params.resume, session_key, meta),
+         {:ok, agent_profile} <- get_agent_profile(agent_id) do
       base_tool_policy =
         Policy.resolve_for_run(%{
           agent_id: agent_id,
@@ -96,26 +89,13 @@ defmodule LemonRouter.SubmissionBuilder do
       session_model = MapHelpers.get_key(session_config, :model)
       session_thinking_level = MapHelpers.get_key(session_config, :thinking_level)
       request_thinking_level = MapHelpers.get_key(meta, :thinking_level)
-      session_preferred_engine = MapHelpers.get_key(session_config, :preferred_engine)
-
       profile_model = MapHelpers.get_key(agent_profile, :model)
-      profile_default_engine = MapHelpers.get_key(agent_profile, :default_engine)
       profile_system_prompt = MapHelpers.get_key(agent_profile, :system_prompt)
       default_model = default_model_from_config()
 
       explicit_model = request_model || MapHelpers.get_key(meta, :model)
       explicit_system_prompt = MapHelpers.get_key(meta, :system_prompt)
 
-      {sticky_engine_id, sticky_session_updates} =
-        StickyEngine.resolve(%{
-          explicit_engine_id: engine_id,
-          prompt: prompt,
-          session_preferred_engine: session_preferred_engine
-        })
-
-      persist_sticky_engine(session_key, sticky_session_updates)
-
-      effective_engine_id = engine_id || sticky_engine_id
       history_model = resolve_history_model(prompt, cwd, explicit_model, meta)
 
       selection =
@@ -125,10 +105,7 @@ defmodule LemonRouter.SubmissionBuilder do
           session_model: session_model,
           profile_model: profile_model,
           history_model: history_model,
-          default_model: default_model,
-          explicit_engine_id: effective_engine_id,
-          profile_default_engine: profile_default_engine,
-          resume_engine: params.resume && params.resume.engine
+          default_model: default_model
         })
 
       resolved_model = selection.model
@@ -138,15 +115,6 @@ defmodule LemonRouter.SubmissionBuilder do
 
       resolved_system_prompt = explicit_system_prompt || profile_system_prompt
 
-      if is_binary(selection.warning) do
-        Logger.warning(
-          "Model/engine mismatch for run_id=#{inspect(run_id)}: #{selection.warning}"
-        )
-      end
-
-      {resolved_resume, resolved_engine_id} =
-        ResumeResolver.resolve(params.resume, session_key, selection.engine_id, meta)
-
       conversation_key = ConversationKey.resolve(session_key, resolved_resume)
 
       enriched_meta =
@@ -155,9 +123,9 @@ defmodule LemonRouter.SubmissionBuilder do
           origin: origin,
           agent_id: agent_id,
           thinking_level: resolved_thinking_level,
-          model: resolved_model
+          model: resolved_model,
+          resume_source: resume_source
         })
-        |> maybe_put(:model_resolution_warning, selection.warning)
         |> maybe_put(:system_prompt, resolved_system_prompt)
         |> maybe_put(:routing_feedback_model, history_model)
 
@@ -165,7 +133,6 @@ defmodule LemonRouter.SubmissionBuilder do
         run_id: run_id,
         session_key: session_key,
         prompt: prompt,
-        engine_id: resolved_engine_id,
         images: images,
         cwd: cwd,
         resume: resolved_resume,
@@ -191,20 +158,6 @@ defmodule LemonRouter.SubmissionBuilder do
   end
 
   def build(_request, _opts), do: {:error, :invalid_run_request}
-
-  defp persist_sticky_engine(nil, _updates), do: :ok
-  defp persist_sticky_engine(_session_key, updates) when map_size(updates) == 0, do: :ok
-
-  defp persist_sticky_engine(session_key, updates) do
-    existing = LemonCore.PolicyStore.get_session(session_key) || %{}
-    updated = Map.merge(existing, updates)
-    LemonCore.PolicyStore.put_session(session_key, updated)
-  rescue
-    error ->
-      Logger.warning(
-        "Failed to persist sticky engine for session=#{inspect(session_key)}: #{Exception.message(error)}"
-      )
-  end
 
   defp get_session_config(nil), do: %{}
 
@@ -428,7 +381,7 @@ defmodule LemonRouter.SubmissionBuilder do
 
   defp normalize_thinking_level(nil), do: nil
   defp normalize_thinking_level(level) when is_atom(level), do: level
-  defp normalize_thinking_level(level) when is_binary(level), do: Map.get(@thinking_levels, level)
+  defp normalize_thinking_level(level) when is_binary(level), do: ThinkingLevel.normalize(level)
   defp normalize_thinking_level(_), do: nil
 
   defp resolve_history_model(prompt, cwd, explicit_model, _meta)

@@ -1,71 +1,160 @@
-# Setup Guide
+# Set up Lemon
 
-Full walkthrough for getting Lemon running on your machine.
-
----
-
-## Prerequisites
-
-| Requirement | Version | Notes |
-|---|---|---|
-| Elixir | 1.19.5+ | See below for install |
-| Erlang/OTP | 28.5+ | Bundled with asdf/Elixir install |
-| Node.js | 24 LTS+ | TUI and Web clients only |
-| Python | 3.10+ | Debug CLI only (optional) |
-| Rust/Cargo | stable | WASM tool auto-build (optional) |
-
-### Installing Elixir
-
-**macOS (Homebrew):**
+For a prebuilt Lemon install, the shortest path is one command followed by the
+interactive setup handoff:
 
 ```bash
-brew install elixir
-elixir -v
+curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh
 ```
 
-**Linux (recommended — asdf for consistent versions):**
+The installer verifies and installs the release, then starts `lemon setup` for
+`full` and `min` profiles when it can read `/dev/tty`. Complete the provider,
+authentication, and default-model prompts, then start the TUI:
 
 ```bash
-# Install asdf, then:
-asdf plugin add erlang
-asdf plugin add elixir
-asdf install erlang 28.5
-asdf install elixir 1.19.5-otp-28
-asdf global erlang 28.5
-asdf global elixir 1.19.5-otp-28
-elixir -v
+$HOME/.lemon/bin/lemon
 ```
 
-<details>
-<summary>Linux OS packages (faster, version varies)</summary>
+The installer prints the PATH entry; after adding `~/.lemon/bin`, use `lemon`.
+That is your first chat. The TUI starts the daemon when needed. Full installer
+behavior, including platform support and updates, is in the
+[Install guide](../install.md).
 
-**Arch Linux:**
+## What setup does—and does not do
+
+`lemon setup` is an idempotent first-time configuration wizard. On each run it
+re-checks the state and performs only pending work:
+
+1. creates a minimal config scaffold if no config exists;
+2. initializes encrypted secrets if they are not configured, without replacing
+   an existing key;
+3. onboards a provider, auth credential, and default provider/model;
+4. checks the resulting configuration and credential, including a live provider
+   check when supported; and
+5. offers optional runtime-profile configuration.
+
+It does not install source dependencies, configure Telegram or Discord, start
+a gateway, or run `lemon doctor` automatically. Rerun it whenever setup is
+incomplete:
+
 ```bash
-sudo pacman -S elixir erlang
+lemon setup
 ```
 
-**Ubuntu/Debian:**
+If the first interactive `lemon` launch detects that a usable provider is not
+ready, it opens this setup flow before starting the daemon. If no controlling
+terminal is available, it does not start an unconfigured daemon; run `lemon
+setup` later from an interactive terminal.
+
+### Provider, auth, and model
+
+The wizard presents the supported providers and their available authentication
+flows. It stores credentials in encrypted secrets and writes secret references,
+not a plaintext provider key, to configuration. Select a default provider and
+model during the flow so Lemon has a model for your first chat.
+
+To configure or change a provider directly:
+
 ```bash
-sudo apt-get install -y elixir erlang
+lemon model --provider anthropic
 ```
 
-**Fedora:**
+For a provider setup that includes the live credential check, use:
+
 ```bash
-sudo dnf install -y elixir erlang
+lemon setup provider
 ```
-</details>
 
-**Node.js (TUI/Web clients only):**
+The live check is deferred with `--skip-verify`, which is useful when you are
+deliberately offline. Local checks of the config, selected provider/model, and
+stored credential still run:
+
 ```bash
-# macOS
-brew install node@24
-# Linux (nvm)
-nvm install 24
+lemon setup provider --skip-verify
 ```
 
----
+If a provider verification fails, setup remains incomplete. Correct the
+credential or model and rerun `lemon setup provider`; do not expect a failed
+verification to be treated as a working setup.
 
-## Clone and Build
+### Automated or headless configuration
+
+The installer does not run setup when there is no TTY. It succeeds and prints
+`$HOME/.lemon/bin/lemon setup` for a later interactive handoff. To suppress the
+wizard even with a TTY, use:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh -s -- --skip-setup
+```
+
+The `sim` profile does not offer a provider setup wizard. For a non-interactive
+provider setup, use explicit values:
+
+```bash
+lemon setup --non-interactive
+lemon model --provider anthropic --token "$ANTHROPIC_API_KEY" \
+  --model anthropic:claude-sonnet-4-20250514 --set-default
+lemon doctor
+```
+
+`lemon model` uses the local configuration checks and does not make a provider
+network request. When network access is available and you need the live check,
+use the corresponding provider setup command instead:
+
+```bash
+lemon setup provider --provider anthropic --token "$ANTHROPIC_API_KEY" \
+  --model anthropic:claude-sonnet-4-20250514 --set-default
+```
+
+Append `--skip-verify` to that command to defer only the live check.
+
+## Verify and recover
+
+After setup, inspect the persisted configuration and secret state, then run
+local diagnostics:
+
+```bash
+lemon config validate
+lemon secrets status
+lemon doctor
+```
+
+`lemon doctor` reports diagnostics; it is not a replacement for provider
+onboarding. To retry first-time state, use `lemon setup`. To correct a provider
+or model, use `lemon setup provider` or `lemon model`.
+
+## Optional Telegram or Discord
+
+A messaging channel is optional. Add one only after the provider path is ready:
+
+```bash
+lemon gateway setup
+```
+
+The picker includes Telegram and Discord. You can choose either directly:
+
+```bash
+lemon gateway setup telegram
+lemon gateway setup discord
+```
+
+Each adapter guides its required bot token and allowed conversation scope,
+stores the token in encrypted secrets, and verifies the adapter configuration.
+See the configured channel state with:
+
+```bash
+lemon channels
+```
+
+## Source development
+
+A source checkout is for development, unsupported platforms, and release work.
+Only this path needs the development toolchain:
+
+- Elixir 1.19.5+
+- Erlang/OTP 28.5+
+- Bun 1.3.14+ for TUI client development
+- Node.js 24 LTS+ for web client development
 
 ```bash
 git clone https://github.com/z80dev/lemon.git
@@ -73,260 +162,31 @@ cd lemon
 mix local.hex --force
 mix deps.get
 mix compile
+./bin/lemon setup
+./bin/lemon doctor
+./bin/lemon-tui
 ```
 
-**Optional — build the TUI client:**
-```bash
-cd clients/lemon-tui
-npm install
-npm run build
-cd ../..
-```
-
----
-
-## Automated Setup
-
-`mix lemon.setup` walks through the full setup interactively:
+Use the source wrapper for Lemon commands, rather than installed `lemon`
+commands:
 
 ```bash
-mix lemon.setup
+./bin/lemon model --provider anthropic
+./bin/lemon gateway setup telegram
+./bin/lemon gateway setup discord
+./bin/lemon config validate
+./bin/lemon secrets status
+./bin/lemon channels
+./bin/lemon doctor
 ```
 
-Runs: dependency check → config scaffolding → secrets setup → gateway config → health check.
-
-Individual sub-commands:
+For non-interactive source configuration, use the same wrapper forms:
 
 ```bash
-mix lemon.setup provider    # Configure an AI provider
-mix lemon.setup runtime     # Configure runtime profile and port bindings
-mix lemon.setup gateway     # Configure Telegram/Discord gateway adapters
-mix lemon.setup doctor      # Run diagnostics
+./bin/lemon setup --non-interactive
+./bin/lemon model --provider anthropic --token "$ANTHROPIC_API_KEY" \
+  --model anthropic:claude-sonnet-4-20250514 --set-default
 ```
 
----
-
-## Configuration
-
-Create `~/.lemon/config.toml` manually or run `mix lemon.setup` for the full
-interactive wizard:
-
-```toml
-# Provider keys (pick one or more)
-[providers.anthropic]
-api_key_secret = "llm_anthropic_api_key_raw"
-
-# Or, for Claude Max / Claude Code subscription auth:
-# auth_source = "oauth"
-# oauth_secret = "llm_anthropic_api_key" # optional if this secret stores an Anthropic OAuth payload
-# Lemon also detects ambient Claude Code credentials from ~/.claude/.credentials.json
-# and CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_TOKEN when auth_source = "oauth".
-# Refreshable Claude Code credentials win over a static env setup token.
-
-[providers.openai]
-api_key_secret = "llm_openai_api_key"
-
-# OpenAI-compatible local or hosted endpoint:
-# [providers.openai]
-# api_key_secret = "llm_local_openai_api_key"
-# base_url = "http://127.0.0.1:11434/v1"
-#
-# [defaults]
-# provider = "openai"
-# model = "openai:local-model-name"
-
-# Other API-key onboarding targets include:
-# [providers.zai]
-# api_key_secret = "llm_zai_api_key"
-#
-# [providers.minimax]
-# api_key_secret = "llm_minimax_api_key"
-
-# Runtime defaults
-[defaults]
-provider = "anthropic"
-model    = "anthropic:claude-sonnet-4-20250514"
-engine   = "lemon"
-
-# Telegram gateway
-[gateway]
-enable_telegram = true
-auto_resume     = true
-default_engine  = "lemon"
-default_cwd     = "~/"
-
-[gateway.telegram]
-bot_token        = "123456:your-bot-token"
-allowed_chat_ids = [123456789]
-deny_unbound_chats = true
-
-[[gateway.bindings]]
-transport = "telegram"
-chat_id   = 123456789
-agent_id  = "default"
-
-# Default assistant profile
-[profiles.default]
-name          = "Lemon"
-system_prompt = "You are my general assistant."
-
-[profiles.default.tool_policy]
-allow            = "all"
-deny             = []
-require_approval = ["bash", "write", "edit"]
-```
-
-See [`docs/config.md`](../config.md) for the full configuration reference.
-
-### OpenAI-Compatible Endpoints
-
-Lemon can point the `openai` provider at any endpoint that implements the
-OpenAI-compatible chat/completions surface used by the configured model.
-
-```toml
-[providers.openai]
-api_key_secret = "llm_local_openai_api_key"
-base_url = "http://127.0.0.1:11434/v1"
-
-[defaults]
-provider = "openai"
-model = "openai:local-model-name"
-engine = "lemon"
-```
-
-Store the key expected by the endpoint. For local servers that ignore the key,
-store a harmless placeholder:
-
-```bash
-mix lemon.secrets.set llm_local_openai_api_key "local"
-```
-
-Provider-specific compatibility still matters: the endpoint must support the
-request and streaming shape Lemon sends for the selected model.
-
----
-
-## Telegram Setup
-
-### 1. Create a bot token
-
-1. Message `@BotFather` in Telegram
-2. Run `/newbot` and follow the prompts
-3. Copy the bot token
-
-### 2. Find your chat ID
-
-Send any message to your bot, then fetch updates:
-
-```bash
-export TOKEN="123456:your-bot-token"
-curl -s "https://api.telegram.org/bot${TOKEN}/getUpdates" | python3 -m json.tool
-```
-
-Look for `message.chat.id`.
-
-### 3. Update config
-
-Set `gateway.telegram.bot_token` and `allowed_chat_ids` in `~/.lemon/config.toml`.
-
----
-
-## Running Lemon
-
-### Telegram gateway
-
-```bash
-./bin/lemon-gateway
-```
-
-Prints the distributed node name on boot. Use it to attach a remote shell:
-
-```bash
-./bin/lemon-gateway-remsh
-```
-
-### Development / TUI
-
-```bash
-# Starts Elixir backend + TUI
-./bin/lemon-dev /path/to/your/project
-
-# Custom model
-./bin/lemon-dev /path/to/project --model anthropic:claude-sonnet-4-20250514
-
-# Local model via OpenAI-compat API
-./bin/lemon-dev /path --model openai:llama3.1:8b --base-url http://localhost:11434/v1
-```
-
-### Web UI
-
-The full runtime profile includes the Phoenix web interface. Start the runtime,
-then open the web port shown in the logs:
-
-```bash
-./bin/lemon
-```
-
-Default local routes:
-
-- `/` - session console
-- `/healthz` - web health check
-
----
-
-## Health Check
-
-After setup, verify everything is working:
-
-```bash
-mix lemon.doctor
-```
-
-Checks: config files, secrets, provider configuration, runtime dependencies, system tools, and skills storage.
-
-Generate a redacted support bundle when filing a bug or asking for help:
-
-```bash
-mix lemon.doctor --bundle
-```
-
-The bundle is written under `tmp/lemon-support-bundles/` by default. It contains the doctor report, runtime metadata, selected environment shape, redacted Lemon config files, provider setup diagnostics, extension directory diagnostics, and browser automation diagnostics when available. Review it before sharing; it is designed to exclude provider keys, secret names, base URLs, environment variable names, tokens, passwords, private prompts, memory contents, page contents, source file contents, screenshot bytes, and tool outputs.
-
-For release-runtime installs, run the same bundle writer through the release `eval` command:
-
-```bash
-./bin/lemon_runtime_full eval 'LemonCore.Doctor.CLI.bundle!()'
-```
-
----
-
-## Secrets Store
-
-API keys are stored in an encrypted keychain, not in `config.toml` in plaintext.
-
-```bash
-# Write a secret
-mix lemon.secrets.set llm_anthropic_api_key_raw "sk-ant-..."
-
-# List stored secrets
-mix lemon.secrets.list
-```
-
-Config references secrets by name via `api_key_secret = "key_name"`.
-Anthropic raw API keys should live in `llm_anthropic_api_key_raw`.
-Anthropic OAuth-backed plans use `auth_source = "oauth"` and optionally `oauth_secret = "llm_anthropic_api_key"`.
-`mix lemon.onboard anthropic --auth oauth` now runs the Claude Code login flow and writes the matching `oauth_secret` config for you.
-
----
-
-## Next Steps
-
-| Topic | Where to look |
-|---|---|
-| Using skills | [`docs/user-guide/skills.md`](skills.md) |
-| Memory & search | [`docs/user-guide/memory.md`](memory.md) |
-| Adaptive routing | [`docs/user-guide/adaptive.md`](adaptive.md) |
-| Full config reference | [`docs/config.md`](../config.md) |
-| Architecture | [`docs/architecture/overview.md`](../architecture/overview.md) |
-
-*Last reviewed: 2026-03-16*
+`./bin/lemon-tui` is the source-development TUI entry point once the source
+runtime is configured.

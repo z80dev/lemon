@@ -110,6 +110,11 @@ defmodule LemonSkills.Tools.SkillManage do
     }
   end
 
+  @doc """
+  Tool callback entry: `execute(tool_call_id, params, signal, on_update, cwd)`.
+
+  Delegates to `execute/6` with an empty telemetry context (`%{}`).
+  """
   @spec execute(
           String.t(),
           map(),
@@ -121,6 +126,41 @@ defmodule LemonSkills.Tools.SkillManage do
     execute(tool_call_id, params, signal, nil, cwd, %{})
   end
 
+  @doc """
+  Full tool callback form invoked by the agent loop, wired by `tool/1`:
+  `execute(tool_call_id, params, signal, on_update, cwd, telemetry_context)`.
+
+  Reads from `params`:
+
+  - `"action"` (required) - `"create"`, `"edit"`, `"patch"`, `"delete"`,
+    `"write_file"`, `"remove_file"`, `"pin"`, `"unpin"`, `"archive"`, `"restore"`,
+    or `"report"`
+  - `"scope"` (default `"project"`) - `"project"` or `"global"`
+  - `"name"` (required for all actions except `"report"`) - skill key/directory
+    name matching `^[a-z0-9][a-z0-9._-]*$`, at most 64 characters
+  - `"content"` (create/edit) - full `SKILL.md` content including frontmatter, at
+    most 100_000 characters and validated as a manifest with a body
+  - `"old_string"` (patch) - exact text to replace; must match at least once
+  - `"new_string"` (patch) - replacement text (empty string deletes)
+  - `"replace_all"` (patch, default `false`) - replace every occurrence; required
+    when `old_string` matches more than once
+  - `"file_path"` (patch/write_file/remove_file) - target file; omitted means
+    `SKILL.md`; supporting files must sit under `references/`, `templates/`,
+    `scripts/`, or `assets/`
+  - `"file_content"` (write_file) - supporting file content, at most 1 MiB and
+    100_000 characters
+  - `"stale_after_days"` (report, default `30`) / `"archive_after_days"` (report,
+    default `90`) - positive integers (or integer strings)
+
+  Writes are audited via `LemonSkills.Audit.BundleAudit` with rollback on a
+  blocking finding, and the registry is refreshed afterwards. Returns
+  `%LemonAgent.Types.AgentToolResult{}` on success with `content` holding a
+  status message and `details` an action-specific map (`path`, `file_path`,
+  `replacements`, `audit`, `lifecycle_state`, `skills`, ...). Errors surface as
+  `{:error, String.t()}` tuples; an aborted signal returns
+  `{:error, "Operation aborted"}`. Emits `LemonSkills.Telemetry.skill_write/1`
+  for every result.
+  """
   @spec execute(
           String.t(),
           map(),

@@ -6,7 +6,7 @@
 # If not, it boots ./bin/lemon in daemon mode, waits for readiness, then starts TUI.
 #
 # Usage:
-#   ./bin/lemon-tui [all lemon-tui CLI args]
+#   ./bin/lemon-tui [all TUI args]
 #
 
 set -euo pipefail
@@ -39,45 +39,20 @@ error() {
   echo -e "${RED}[lemon-tui]${NC} $1" >&2
 }
 
-CP_PORT="${LEMON_CONTROL_PLANE_PORT:-4040}"
-DEFAULT_WS_URL="ws://localhost:${CP_PORT}/ws"
-WS_URL="${LEMON_WS_URL:-$DEFAULT_WS_URL}"
+PORT="${LEMON_CONTROL_PLANE_PORT:-4040}"
 
-has_ws_url_arg=0
-show_help=0
-pass_args=()
-
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --ws-url)
-      has_ws_url_arg=1
-      pass_args+=("$1")
-      if [[ -n "${2:-}" ]]; then
-        WS_URL="$2"
-        pass_args+=("$2")
-        shift 2
-      else
-        error "Missing value for --ws-url"
-        exit 1
-      fi
-      ;;
-    *)
-      if [[ "$1" == "--help" || "$1" == "-h" ]]; then
-        show_help=1
-      fi
-      pass_args+=("$1")
-      shift
-      ;;
-  esac
-done
+if ! command -v bun >/dev/null 2>&1; then
+  error "Bun is required to run the TUI. Install Bun and ensure 'bun' is on PATH."
+  exit 1
+fi
 
 runtime_healthy() {
-  curl -sS -m 2 "http://localhost:${CP_PORT}/healthz" >/dev/null 2>&1
+  curl -sS -m 2 "http://127.0.0.1:${PORT}/healthz" >/dev/null 2>&1
 }
 
-if [[ "$show_help" == "0" ]] && ! runtime_healthy; then
-  warn "No control-plane runtime detected on :${CP_PORT}; starting ./bin/lemon --daemon"
-  "$LEMON_ROOT/bin/lemon" --daemon --port "$CP_PORT"
+if ! runtime_healthy; then
+  warn "No control-plane runtime detected on :${PORT}; starting ./bin/lemon --daemon"
+  "$LEMON_ROOT/bin/lemon" --daemon --port "$PORT"
 
   ready=0
   for _ in $(seq 1 40); do
@@ -89,19 +64,17 @@ if [[ "$show_help" == "0" ]] && ! runtime_healthy; then
   done
 
   if [[ "$ready" != "1" ]]; then
-    error "Runtime did not become healthy on :${CP_PORT}"
+    error "Runtime did not become healthy on :${PORT}"
     error "Check logs: /tmp/lemon-runtime.log"
     exit 1
   fi
 
   info "Runtime is healthy."
 else
-  if [[ "$show_help" == "0" ]]; then
-    info "Using existing runtime on :${CP_PORT}"
-  fi
+  info "Using existing runtime on :${PORT}"
 fi
 
-TUI_DIR="$LEMON_ROOT/clients/lemon-tui"
+TUI_DIR="$LEMON_ROOT/clients/tui"
 if [[ ! -d "$TUI_DIR" ]]; then
   error "TUI directory not found: $TUI_DIR"
   exit 1
@@ -111,19 +84,8 @@ cd "$TUI_DIR"
 
 if [[ ! -d "node_modules" ]]; then
   info "Installing TUI dependencies..."
-  npm install
+  bun install --frozen-lockfile
 fi
 
-if [[ ! -f "dist/cli.js" ]]; then
-  info "Building TUI..."
-  npm run build
-fi
-
-if [[ "$show_help" == "0" ]] && [[ "$has_ws_url_arg" == "0" ]] && [[ -z "${LEMON_WS_URL:-}" ]]; then
-  pass_args+=(--ws-url "$WS_URL")
-fi
-
-if [[ "$show_help" == "0" ]]; then
-  info "Launching TUI (ws: ${WS_URL})"
-fi
-exec node dist/cli.js "${pass_args[@]}"
+info "Launching TUI (ws: ws://127.0.0.1:${PORT}/ws)"
+exec bun src/main.ts --ws-url "ws://127.0.0.1:$PORT/ws" "$@"

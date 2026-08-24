@@ -443,19 +443,16 @@ defmodule LemonAutomation.HeartbeatManager do
   end
 
   @impl true
-  def handle_info(%LemonCore.Event{type: :cron_run_completed} = event, state) do
-    run = event.payload[:run]
-    response = event.payload[:output]
+  def handle_info(%LemonCore.Event{type: :cron_run_completed, payload: payload}, state) do
+    case LemonCore.Events.coerce(:cron_run_completed, payload) do
+      %LemonCore.Events.CronRunCompleted{run: run, output: response} when not is_nil(run) ->
+        # Auto-process completed runs
+        _ = start_background_task(fn -> process_response(run, response) end)
+        {:noreply, state}
 
-    if run do
-      # Auto-process completed runs
-      _ =
-        start_background_task(fn ->
-          process_response(run, response)
-        end)
+      _ ->
+        {:noreply, state}
     end
-
-    {:noreply, state}
   end
 
   # Handle timer-based heartbeat execution
@@ -598,11 +595,7 @@ defmodule LemonAutomation.HeartbeatManager do
           extract_heartbeat_output(payload)
 
         %LemonCore.Event{type: :run_failed, payload: payload} ->
-          error =
-            payload[:reason] || payload["reason"] || payload[:error] || payload["error"] ||
-              "unknown"
-
-          {:error, error}
+          {:error, heartbeat_failure_reason(LemonCore.Events.coerce(:run_failed, payload))}
       after
         timeout_ms ->
           {:error, :timeout}
@@ -611,6 +604,16 @@ defmodule LemonAutomation.HeartbeatManager do
       LemonCore.Bus.unsubscribe(topic)
     end
   end
+
+  defp heartbeat_failure_reason(%LemonCore.Events.RunFailed{reason: reason})
+       when not is_nil(reason),
+       do: reason
+
+  defp heartbeat_failure_reason(payload) when is_map(payload) do
+    heartbeat_value(payload, :reason) || heartbeat_value(payload, :error) || "unknown"
+  end
+
+  defp heartbeat_failure_reason(_payload), do: "unknown"
 
   # Timer heartbeats have no CronStore-backed job or run, but they publish on the same
   # "cron" topic as scheduled jobs. Building the same structs the scheduled path uses keeps

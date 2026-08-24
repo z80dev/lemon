@@ -28,11 +28,10 @@ defmodule CodingAgent.TaskStoreTest do
     end
 
     test "creates a task with custom attributes" do
-      task_id = TaskStore.new_task(%{description: "Custom", engine: "codex", role: "research"})
+      task_id = TaskStore.new_task(%{description: "Custom", role: "research"})
 
       assert {:ok, record, _} = TaskStore.get(task_id)
       assert record.description == "Custom"
-      assert record.engine == "codex"
       assert record.role == "research"
     end
 

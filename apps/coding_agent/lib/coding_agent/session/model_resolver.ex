@@ -151,14 +151,20 @@ defmodule CodingAgent.Session.ModelResolver do
     end
   end
 
-  @spec runtime_fallback_models(LemonAi.Types.Model.t(), CodingAgent.SettingsManager.t()) :: [
-          LemonAi.Types.Model.t()
-        ]
+  @spec runtime_fallback_models(
+          LemonAi.Types.Model.t(),
+          CodingAgent.SettingsManager.t(),
+          keyword()
+        ) :: [LemonAi.Types.Model.t()]
+  def runtime_fallback_models(model, settings, opts \\ [])
+
   def runtime_fallback_models(
         %LemonAi.Types.Model{} = model,
-        %CodingAgent.SettingsManager{} = settings
+        %CodingAgent.SettingsManager{} = settings,
+        opts
       ) do
     routing = settings.provider_routing || %{}
+    session_scope = Keyword.get(opts, :session_scope) || :global
 
     cond do
       Map.get(routing, :enabled, true) == false ->
@@ -169,7 +175,8 @@ defmodule CodingAgent.Session.ModelResolver do
 
       true ->
         routing
-        |> routing_fallback_providers(model.id)
+        |> routing_candidate_providers(model.id, session_scope)
+        |> lead_with_pinned_provider(session_scope)
         |> Enum.map(&fallback_model(&1, model.id, settings, routing))
         |> Enum.reject(&is_nil/1)
         |> Enum.reject(
@@ -179,7 +186,7 @@ defmodule CodingAgent.Session.ModelResolver do
     end
   end
 
-  def runtime_fallback_models(_model, _settings), do: []
+  def runtime_fallback_models(_model, _settings, _opts), do: []
 
   # ============================================================================
   # Provider Configuration
@@ -206,8 +213,11 @@ defmodule CodingAgent.Session.ModelResolver do
   end
 
   @spec build_get_api_key(CodingAgent.SettingsManager.t()) :: (atom() -> String.t() | nil)
-  def build_get_api_key(%CodingAgent.SettingsManager{providers: providers}) do
-    LemonAgent.ModelRuntime.Credentials.build_get_api_key(providers)
+  def build_get_api_key(%CodingAgent.SettingsManager{} = settings) do
+    # Pass the whole settings (not just providers) so pool credentials from
+    # provider_routing participate in resolution; with no pools configured the
+    # lookup is identical to a bare providers map.
+    LemonAgent.ModelRuntime.Credentials.build_get_api_key(settings)
   end
 
   @spec build_stream_options(
@@ -323,7 +333,7 @@ defmodule CodingAgent.Session.ModelResolver do
 
       true ->
         routing
-        |> routing_fallback_providers(model_id)
+        |> routing_candidate_providers(model_id, :global)
         |> Enum.find_value(provider, fn fallback_provider ->
           if fallback_model_available?(fallback_provider, model_id) and
                provider_credentials_ready?(fallback_provider, settings, routing) do
@@ -335,8 +345,10 @@ defmodule CodingAgent.Session.ModelResolver do
 
   defp provider_credentials_ready?(_provider, _settings, %{require_credentials: false}), do: true
 
-  defp provider_credentials_ready?(provider, %CodingAgent.SettingsManager{} = settings, _routing) do
-    LemonAgent.ModelRuntime.Credentials.provider_has_credentials?(provider, settings.providers)
+  defp provider_credentials_ready?(provider, %CodingAgent.SettingsManager{} = settings, routing) do
+    LemonAgent.ModelRuntime.Credentials.provider_has_credentials?(provider, settings.providers,
+      provider_routing: routing
+    )
   end
 
   defp fallback_model_available?(provider, model_id) do
@@ -356,81 +368,51 @@ defmodule CodingAgent.Session.ModelResolver do
     end
   end
 
-  defp routing_fallback_providers(routing, model_id) when is_map(routing) do
-    profile_name = routing_value(routing, :default_profile)
+  # Ordered fallback provider candidates from the shared routing plan.
+  # LemonAgent.ModelRuntime.ProviderRouting owns the precedence (profile
+  # fallback_providers -> profile distribution -> credential pool -> global
+  # fallback_providers), pool rotation, and circuit-breaker demotion; this
+  # maps the plan's canonical provider ids back to config names so model and
+  # credential lookups keep resolving dashed provider names (e.g.
+  # "openai-codex").
+  #
+  # Callers with a stable session identity pass it as the rotation scope so a
+  # session keeps its claimed pool slot across resolutions (provider prompt
+  # caches are per provider+credential); the :global default advances the
+  # rotation once per resolution.
+  defp routing_candidate_providers(routing, model_id, session_scope) when is_map(routing) do
+    config = %LemonCore.Config{agent: %{provider_routing: routing}}
 
-    profile =
-      named_routing_config(
-        routing_value(routing, :profiles, %{}),
-        profile_name
-      )
-
-    pool_name =
-      routing_value(profile || %{}, :credential_pool) || routing_value(routing, :default_pool)
-
-    pool = named_routing_config(routing_value(routing, :credential_pools, %{}), pool_name)
-    pool_providers = routing_value(pool || %{}, :providers, [])
-
-    [
-      routing_value(profile || %{}, :fallback_providers, []),
-      distribution_providers(profile),
-      CodingAgent.ProviderPoolRotator.ordered_providers(
-        {:provider_pool, profile_name, pool_name, model_id},
-        pool_providers,
-        routing_value(pool || %{}, :strategy, "priority")
-      ),
-      routing_value(routing, :fallback_providers, [])
-    ]
-    |> List.flatten()
-    |> Enum.map(&to_string/1)
-    |> Enum.map(&String.trim/1)
-    |> Enum.reject(&(&1 == ""))
+    %{"model" => model_id}
+    |> LemonAgent.ModelRuntime.ProviderRouting.plan(config,
+      rotate?: true,
+      rotation_key: session_scope
+    )
+    |> Enum.map(fn %{provider: provider} ->
+      LemonAgent.ModelRuntime.ProviderNames.config_name(provider) || provider
+    end)
     |> Enum.uniq()
   end
 
-  defp routing_fallback_providers(_, _), do: []
+  defp routing_candidate_providers(_, _, _), do: []
 
-  defp distribution_providers(profile) when is_map(profile) do
-    profile
-    |> routing_value(:distribution, %{})
-    |> case do
-      distribution when is_map(distribution) ->
-        distribution
-        |> Enum.sort_by(fn {provider, weight} ->
-          {-numeric_weight(weight), to_string(provider)}
-        end)
-        |> Enum.map(fn {provider, _weight} -> provider end)
+  # A committed fallback pin (see LemonAgent.ModelRuntime.SessionPins) leads
+  # the candidate order on later resolutions for the same session. Best-effort:
+  # no pin (or no session identity) leaves the plan order untouched.
+  defp lead_with_pinned_provider(providers, session_scope) do
+    case LemonAgent.ModelRuntime.SessionPins.get(session_scope) do
+      %{provider: pinned} when is_binary(pinned) ->
+        pinned_id = normalize_provider_id(pinned)
+
+        case Enum.split_with(providers, &(normalize_provider_id(&1) == pinned_id)) do
+          {[], _} -> providers
+          {pinned_matches, others} -> pinned_matches ++ others
+        end
 
       _ ->
-        []
+        providers
     end
   end
-
-  defp distribution_providers(_), do: []
-
-  defp named_routing_config(configs, name) when is_map(configs) and is_binary(name) do
-    Map.get(configs, name) || existing_atom_routing_config(configs, name)
-  end
-
-  defp named_routing_config(_, _), do: nil
-
-  defp existing_atom_routing_config(configs, name) do
-    Map.get(configs, String.to_existing_atom(name))
-  rescue
-    ArgumentError -> nil
-  end
-
-  defp routing_value(map, key, default \\ nil)
-
-  defp routing_value(map, key, default) when is_map(map) do
-    Map.get(map, key) || Map.get(map, to_string(key)) || default
-  end
-
-  defp routing_value(_, _, default), do: default
-
-  defp numeric_weight(weight) when is_integer(weight), do: weight
-  defp numeric_weight(weight) when is_float(weight), do: weight
-  defp numeric_weight(_), do: 0
 
   defp has_api_key_config?(cfg) do
     Map.has_key?(cfg, :api_key) or Map.has_key?(cfg, :api_key_secret) or

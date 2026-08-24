@@ -21,50 +21,41 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
   alias Elixir.LemonGateway.ExecutionRequest
   alias Elixir.LemonGateway.ThreadWorkerSupervisor
   alias Elixir.LemonGateway.ThreadWorker
-  alias Elixir.LemonGateway.Types.Job
-
   # ============================================================================
-  # Test Engine
+  # Configured executor fixture
   # ============================================================================
 
-  defmodule ThreadWorkerSupervisorTestEngine do
-    @behaviour Elixir.LemonGateway.Engine
+  defmodule ThreadWorkerSupervisorFixtureExecutor do
+    @behaviour LemonGateway.Executor
 
-    alias Elixir.LemonGateway.Types.Job
     alias LemonCore.ResumeToken
-    alias Elixir.LemonGateway.Event
+    alias LemonGateway.Event
+    alias LemonGateway.ExecutionRequest
 
     @impl true
-    def id, do: "test_engine"
-
-    @impl true
-    def format_resume(%ResumeToken{value: sid}), do: "test resume #{sid}"
-
-    @impl true
-    def extract_resume(_text), do: nil
-
-    @impl true
-    def is_resume_line(_line), do: false
-
-    @impl true
-    def supports_steer?, do: false
-
-    @impl true
-    def start_run(%Job{} = job, _opts, sink_pid) do
+    def start_run(%ExecutionRequest{} = request, _opts, sink_pid) do
       run_ref = make_ref()
-      resume = job.resume || %ResumeToken{engine: id(), value: unique_id()}
-      delay_ms = (job.meta || %{})[:delay_ms] || 10
+      resume = request.resume || %ResumeToken{engine: "lemon", value: unique_id()}
+      delay_ms = Map.get(request.meta || %{}, :delay_ms, 10)
 
       {:ok, task_pid} =
         Task.start(fn ->
-          send(sink_pid, {:engine_event, run_ref, Event.started(%{engine: id(), resume: resume})})
+          send(
+            sink_pid,
+            {:engine_event, run_ref, Event.started(%{engine: "lemon", resume: resume})}
+          )
+
           Process.sleep(delay_ms)
-          answer = "Test: #{job.prompt}"
 
           send(
             sink_pid,
             {:engine_event, run_ref,
-             Event.completed(%{engine: id(), resume: resume, ok: true, answer: answer})}
+             Event.completed(%{
+               engine: "lemon",
+               resume: resume,
+               ok: true,
+               answer: "Test: #{request.prompt}"
+             })}
           )
         end)
 
@@ -76,6 +67,14 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       Process.exit(pid, :kill)
       :ok
     end
+
+    def cancel(_context), do: :ok
+
+    @impl true
+    def steer(_context, _text), do: {:error, :unsupported}
+
+    @impl true
+    def redirect(_context, _text), do: {:error, :unsupported}
 
     defp unique_id, do: Integer.to_string(System.unique_integer([:positive]))
   end
@@ -89,15 +88,14 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
 
     Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
       max_concurrent_runs: 10,
-      default_engine: "test_engine",
-      enable_telegram: false,
-      require_engine_lock: false
+      enable_telegram: false
     })
 
-    Application.put_env(:lemon_gateway, :engines, [
-      __MODULE__.ThreadWorkerSupervisorTestEngine,
-      Elixir.LemonGateway.Engines.Echo
-    ])
+    Application.put_env(
+      :lemon_gateway,
+      :executor,
+      __MODULE__.ThreadWorkerSupervisorFixtureExecutor
+    )
 
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
@@ -108,15 +106,16 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
     "test:#{chat_id}"
   end
 
-  defp make_job(session_key, opts \\ []) do
+  defp make_request(session_key, opts \\ []) do
     user_msg_id = Keyword.get(opts, :user_msg_id, 1)
     base_meta = %{notify_pid: self(), user_msg_id: user_msg_id}
     meta = Map.merge(base_meta, Keyword.get(opts, :meta, %{}))
 
-    %Job{
+    %ExecutionRequest{
+      run_id: "run_#{System.unique_integer([:positive])}",
       session_key: session_key,
       prompt: Keyword.get(opts, :text, Keyword.get(opts, :prompt, "test message")),
-      engine_id: Keyword.get(opts, :engine_hint, Keyword.get(opts, :engine_id, "test_engine")),
+      conversation_key: {:session, session_key},
       meta: meta
     }
   end
@@ -125,31 +124,20 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
     {:session, session_key}
   end
 
-  defp submit_job(%Job{} = job) do
-    job
-    |> command_from_job()
+  defp submit_request(%ExecutionRequest{} = request) do
+    request
+    |> ExecutionRequest.to_command()
     |> LemonGateway.submit()
   end
 
-  defp enqueue_job(pid, %Job{} = job) when is_pid(pid) do
-    GenServer.cast(
-      pid,
-      {:enqueue, ExecutionRequest.from_job(job, conversation_key: test_conversation_key(job))}
-    )
+  defp enqueue_request(pid, %ExecutionRequest{} = request) when is_pid(pid) do
+    GenServer.cast(pid, {:enqueue, request})
   end
 
-  defp command_from_job(%Job{} = job) do
-    job
-    |> ExecutionRequest.from_job(conversation_key: test_conversation_key(job))
-    |> ExecutionRequest.to_command()
+  defp assert_completed_request(%ExecutionRequest{} = request, timeout \\ 2_000) do
+    assert_receive {:lemon_gateway_run_completed, ^request, %{__event__: :completed, ok: true}},
+                   timeout
   end
-
-  defp test_conversation_key(%Job{resume: %LemonCore.ResumeToken{engine: engine, value: value}})
-       when is_binary(engine) and is_binary(value),
-       do: {:resume, engine, value}
-
-  defp test_conversation_key(%Job{session_key: session_key}) when is_binary(session_key),
-    do: {:session, session_key}
 
   # ============================================================================
   # 1. Supervisor Startup and Initialization
@@ -181,17 +169,14 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       scope1 = make_scope()
       scope2 = make_scope()
 
-      job1 = make_job(scope1, text: "worker1")
-      job2 = make_job(scope2, text: "worker2")
+      request1 = make_request(scope1, text: "worker1")
+      request2 = make_request(scope2, text: "worker2")
 
-      submit_job(job1)
-      submit_job(job2)
+      submit_request(request1)
+      submit_request(request2)
 
-      assert_receive {:lemon_gateway_run_completed, ^job1, %{__event__: :completed, ok: true}},
-                     2000
-
-      assert_receive {:lemon_gateway_run_completed, ^job2, %{__event__: :completed, ok: true}},
-                     2000
+      assert_completed_request(request1)
+      assert_completed_request(request2)
     end
   end
 
@@ -260,9 +245,9 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
 
     test "worker started via submit is supervised" do
       scope = make_scope()
-      job = make_job(scope)
+      request = make_request(scope)
 
-      submit_job(job)
+      submit_request(request)
 
       # Give time for worker to start
       Process.sleep(50)
@@ -276,8 +261,7 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
         assert worker_pid in child_pids
       end
 
-      assert_receive {:lemon_gateway_run_completed, ^job, %{__event__: :completed, ok: true}},
-                     2000
+      assert_completed_request(request)
     end
   end
 
@@ -539,25 +523,24 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       end
     end
 
-    test "concurrent job submissions create workers correctly" do
+    test "concurrent request submissions create workers correctly" do
       test_pid = self()
 
       tasks =
         for i <- 1..10 do
           Task.async(fn ->
             scope = make_scope()
-            job = make_job(scope, text: "concurrent #{i}", meta: %{notify_pid: test_pid})
-            submit_job(job)
-            job
+            request = make_request(scope, text: "concurrent #{i}", meta: %{notify_pid: test_pid})
+            submit_request(request)
+            request
           end)
         end
 
-      jobs = Task.await_many(tasks, 5000)
+      requests = Task.await_many(tasks, 5000)
 
-      # All jobs should complete
-      for job <- jobs do
-        assert_receive {:lemon_gateway_run_completed, ^job, %{__event__: :completed, ok: true}},
-                       5000
+      # All requests should complete
+      for request <- requests do
+        assert_completed_request(request, 5_000)
       end
     end
 
@@ -579,19 +562,18 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
   end
 
   # ============================================================================
-  # 7. Worker Lifecycle with Jobs
+  # 7. Worker Lifecycle with Requests
   # ============================================================================
 
-  describe "worker lifecycle with jobs" do
-    test "worker stops after completing all jobs" do
+  describe "worker lifecycle with requests" do
+    test "worker stops after completing all requests" do
       scope = make_scope()
       key = thread_key(scope)
 
-      job = make_job(scope)
-      submit_job(job)
+      request = make_request(scope)
+      submit_request(request)
 
-      assert_receive {:lemon_gateway_run_completed, ^job, %{__event__: :completed, ok: true}},
-                     2000
+      assert_completed_request(request)
 
       # Wait for worker to stop - may take a bit longer
       wait_for_worker_stop(key, 500)
@@ -601,41 +583,37 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       scope = make_scope()
       key = thread_key(scope)
 
-      job1 = make_job(scope, text: "first")
-      submit_job(job1)
+      request1 = make_request(scope, text: "first")
+      submit_request(request1)
 
-      assert_receive {:lemon_gateway_run_completed, ^job1, %{__event__: :completed, ok: true}},
-                     2000
+      assert_completed_request(request1)
 
       # Wait for worker to stop
       wait_for_worker_stop(key, 500)
 
-      # Submit another job - should create new worker (or reuse existing)
-      job2 = make_job(scope, text: "second")
-      submit_job(job2)
+      # Submit another request - should create new worker (or reuse existing)
+      request2 = make_request(scope, text: "second")
+      submit_request(request2)
 
-      assert_receive {:lemon_gateway_run_completed, ^job2, %{__event__: :completed, ok: true}},
-                     2000
+      assert_completed_request(request2)
     end
 
-    test "worker processes multiple jobs sequentially" do
+    test "worker processes multiple requests sequentially" do
       scope = make_scope()
 
-      # Submit first job and wait for completion before next
-      job1 = make_job(scope, text: "job 1")
-      submit_job(job1)
+      # Submit first request and wait for completion before next
+      request1 = make_request(scope, text: "request 1")
+      submit_request(request1)
 
-      assert_receive {:lemon_gateway_run_completed, ^job1, %{__event__: :completed, ok: true}},
-                     2000
+      assert_completed_request(request1)
 
-      # Wait a moment then submit next job
+      # Wait a moment then submit the next request
       Process.sleep(50)
 
-      job2 = make_job(scope, text: "job 2")
-      submit_job(job2)
+      request2 = make_request(scope, text: "request 2")
+      submit_request(request2)
 
-      assert_receive {:lemon_gateway_run_completed, ^job2, %{__event__: :completed, ok: true}},
-                     2000
+      assert_completed_request(request2)
     end
   end
 
@@ -723,41 +701,39 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
   # ============================================================================
 
   describe "edge cases" do
-    test "handles empty job queue gracefully" do
+    test "handles empty request queue gracefully" do
       scope = make_scope()
       key = thread_key(scope)
 
       {:ok, pid} =
         DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
 
-      # Worker is alive but has no jobs
+      # Worker is alive but has no requests
       assert Process.alive?(pid)
 
-      # Submit a job to make it do something then stop
-      job = make_job(scope)
-      enqueue_job(pid, job)
+      # Submit a request to make it do something then stop
+      request = make_request(scope)
+      enqueue_request(pid, request)
 
-      assert_receive {:lemon_gateway_run_completed, ^job, %{__event__: :completed, ok: true}},
-                     2000
+      assert_completed_request(request)
     end
 
-    test "handles rapid sequential job submissions" do
-      # Jobs submitted to the same scope may be coalesced, so we use different scopes
-      jobs =
+    test "handles rapid sequential request submissions" do
+      # Requests submitted to the same scope may be coalesced, so we use different scopes
+      requests =
         for i <- 1..10 do
           scope = make_scope()
-          job = make_job(scope, text: "rapid #{i}")
-          submit_job(job)
-          job
+          request = make_request(scope, text: "rapid #{i}")
+          submit_request(request)
+          request
         end
 
-      for job <- jobs do
-        assert_receive {:lemon_gateway_run_completed, ^job, %{__event__: :completed, ok: true}},
-                       5000
+      for request <- requests do
+        assert_completed_request(request, 5_000)
       end
     end
 
-    test "handles job submission to terminated worker" do
+    test "handles request submission to terminated worker" do
       # This tests that the router creates a new worker when needed
       scope = make_scope()
       key = thread_key(scope)
@@ -769,12 +745,11 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
 
       Process.sleep(50)
 
-      # Submit job - should create new worker
-      job = make_job(scope)
-      submit_job(job)
+      # Submit request - should create new worker
+      request = make_request(scope)
+      submit_request(request)
 
-      assert_receive {:lemon_gateway_run_completed, ^job, %{__event__: :completed, ok: true}},
-                     2000
+      assert_completed_request(request)
     end
   end
 
@@ -884,11 +859,11 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
   describe "integration with Elixir.LemonGateway.submit" do
     test "submit creates supervised worker" do
       scope = make_scope()
-      job = make_job(scope)
+      request = make_request(scope)
 
-      submit_job(job)
+      submit_request(request)
 
-      # Wait for job to start processing
+      # Wait for request to start processing
       Process.sleep(50)
 
       key = thread_key(scope)
@@ -900,35 +875,32 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
         assert worker_pid in child_pids
       end
 
-      assert_receive {:lemon_gateway_run_completed, ^job, %{__event__: :completed, ok: true}},
-                     2000
+      assert_completed_request(request)
     end
 
     test "submit reuses existing worker for same scope" do
       scope = make_scope()
       key = thread_key(scope)
 
-      # Submit first job to create worker
-      job1 = make_job(scope, text: "first", meta: %{notify_pid: self(), delay_ms: 200})
-      submit_job(job1)
+      # Submit first request to create worker
+      request1 = make_request(scope, text: "first", meta: %{notify_pid: self(), delay_ms: 200})
+      submit_request(request1)
 
       Process.sleep(50)
       worker_pid1 = Elixir.LemonGateway.ThreadRegistry.whereis(key)
       assert is_pid(worker_pid1)
 
-      # Submit second job while first is running
-      job2 = make_job(scope, text: "second")
-      submit_job(job2)
+      # Submit second request while first is running
+      request2 = make_request(scope, text: "second")
+      submit_request(request2)
 
       # Should still be same worker
       worker_pid2 = Elixir.LemonGateway.ThreadRegistry.whereis(key)
       assert worker_pid1 == worker_pid2
 
-      assert_receive {:lemon_gateway_run_completed, ^job1, %{__event__: :completed, ok: true}},
-                     2000
+      assert_completed_request(request1)
 
-      assert_receive {:lemon_gateway_run_completed, ^job2, %{__event__: :completed, ok: true}},
-                     2000
+      assert_completed_request(request2)
     end
 
     test "different scopes get different workers" do
@@ -938,11 +910,11 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       key1 = thread_key(scope1)
       key2 = thread_key(scope2)
 
-      job1 = make_job(scope1, text: "scope1", meta: %{notify_pid: self(), delay_ms: 200})
-      job2 = make_job(scope2, text: "scope2", meta: %{notify_pid: self(), delay_ms: 200})
+      request1 = make_request(scope1, text: "scope1", meta: %{notify_pid: self(), delay_ms: 200})
+      request2 = make_request(scope2, text: "scope2", meta: %{notify_pid: self(), delay_ms: 200})
 
-      submit_job(job1)
-      submit_job(job2)
+      submit_request(request1)
+      submit_request(request2)
 
       Process.sleep(50)
 
@@ -953,11 +925,9 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       assert is_pid(worker_pid2)
       assert worker_pid1 != worker_pid2
 
-      assert_receive {:lemon_gateway_run_completed, ^job1, %{__event__: :completed, ok: true}},
-                     2000
+      assert_completed_request(request1)
 
-      assert_receive {:lemon_gateway_run_completed, ^job2, %{__event__: :completed, ok: true}},
-                     2000
+      assert_completed_request(request2)
     end
   end
 

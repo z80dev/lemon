@@ -44,21 +44,24 @@ defmodule LemonCore.Quality.ArchitectureCheck do
     lemon_channels: ["LemonChannels"],
     lemon_control_plane: ["LemonControlPlane"],
     lemon_cli: ["LemonCli"],
-    lemon_cli_runners: ["LemonCliRunners"],
     lemon_core: ["LemonCore"],
     lemon_evals: ["LemonEvals"],
     lemon_gateway: ["LemonGateway"],
+    lemon_honcho: ["LemonHoncho"],
     lemon_lsp: ["LemonLsp"],
     lemon_media: ["LemonMedia"],
     lemon_mcp: ["LemonMCP"],
     lemon_platform_test: ["LemonPlatformTest"],
     lemon_router: ["LemonRouter"],
+    lemon_skills: ["LemonSkills"],
+    lemon_web: ["LemonWeb"],
+    x_api: ["XApi"],
+    # lemon-sim product block — delete with the lemon-sim repo extraction
+    # (docs/platform-split.md Phase 5). Namespace strings only: this table is a
+    # lint inventory of the apps in *this* repo, not a dependency.
     lemon_sim: ["LemonSim"],
     lemon_sim_ui: ["LemonSimUi"],
-    lemon_skills: ["LemonSkills"],
-    lemon_tcg: ["LemonTcg"],
-    lemon_web: ["LemonWeb"],
-    x_api: ["XApi"]
+    lemon_tcg: ["LemonTcg"]
   }
 
   @exact_module_owners %{

@@ -1,22 +1,43 @@
 defmodule CodingAgent.Tools.SessionSearch do
   @moduledoc """
   Hermes-compatible session search over Lemon's durable memory and run history.
+
+  ## Scope
+
+  Discovery and scroll are restricted to the calling agent's own sessions by
+  default (the agent id parsed from the current session key, e.g.
+  `"agent:main:..."` -> `"main"`). Cross-agent recall over the whole
+  per-machine store — which can expose other workspaces' prompts and answers
+  to any agent on the box, including channel-facing ones — requires an
+  explicit opt-in: pass `session_search_scope: :all` in the tool opts, or set
+  `LEMON_SESSION_SEARCH_SCOPE=all`.
+
+  Run-history content returned by scroll/browse is screened with
+  `LemonMemory.Safety.contains_secret?/1`: raw run history retains material
+  that memory ingest dropped, so secret-looking prompt/answer texts are
+  replaced with a redaction marker instead of being relayed.
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
   alias LemonCore.Store
+  alias LemonMemory.Safety
   alias LemonMemory.SessionSearch
 
   @default_discover_limit 3
   @max_discover_limit 10
   @default_window 5
   @max_window 20
+  @redaction_marker "[redacted: content matches secret pattern]"
 
   @spec tool(String.t(), keyword()) :: AgentTool.t()
   def tool(_cwd, opts \\ []) do
+    session_key = Keyword.get(opts, :session_key)
+
     context = %{
-      current_session_id: Keyword.get(opts, :session_key),
+      current_session_id: session_key,
+      scope: resolve_scope(opts),
+      agent_id: parse_agent_id(session_key),
       search_fn: Keyword.get(opts, :session_search_fn, &SessionSearch.search/2),
       history_fn: Keyword.get(opts, :session_history_fn, &Store.get_run_history/2)
     }
@@ -33,6 +54,8 @@ defmodule CodingAgent.Tools.SessionSearch do
       3. BROWSE: pass no args to list recent runs in the current session.
 
       Scroll wins when both query and scroll args are present.
+      Discovery and scroll cover this agent's own past sessions (store-wide \
+      search requires an explicit operator opt-in).
       """,
       label: "Session Search",
       parameters: %{
@@ -121,8 +144,16 @@ defmodule CodingAgent.Tools.SessionSearch do
     limit = clamp_int(Map.get(params, "limit"), @default_discover_limit, 1, @max_discover_limit)
     role_filter = parse_roles(Map.get(params, "role_filter"))
 
+    # Discovery is scoped to the calling agent's own sessions unless the
+    # store-wide scope was explicitly opted into (see moduledoc).
+    {scope, scope_key} =
+      case context.scope do
+        :all -> {:all, nil}
+        :agent -> {:agent, context.agent_id}
+      end
+
     docs =
-      context.search_fn.(query, scope: :all, scope_key: nil, limit: limit)
+      context.search_fn.(query, scope: scope, scope_key: scope_key, limit: limit)
       |> reject_current_session(context.current_session_id)
       |> sort_docs(Map.get(params, "sort"))
       |> Enum.take(limit)
@@ -173,6 +204,15 @@ defmodule CodingAgent.Tools.SessionSearch do
 
       session_id == normalize_string(context.current_session_id) ->
         %{success: false, mode: "scroll", error: "Refusing to scroll the current session"}
+
+      not scope_allows_session?(context, session_id) ->
+        %{
+          success: false,
+          mode: "scroll",
+          error:
+            "Refusing to scroll a session outside this agent's scope " <>
+              "(cross-agent scroll requires the session_search :all scope opt-in)"
+        }
 
       true ->
         messages =
@@ -232,7 +272,7 @@ defmodule CodingAgent.Tools.SessionSearch do
     %{
       session_id: session_id,
       run_id: to_string(run_id),
-      title: data |> run_prompt() |> title(run_answer(data)),
+      title: data |> run_prompt() |> redact_secrets() |> title(redact_secrets(run_answer(data))),
       when: format_timestamp(Map.get(data, :started_at) || Map.get(data, "started_at")),
       messages: mark_anchor(messages, anchor),
       matchMessageId: anchor,
@@ -253,8 +293,10 @@ defmodule CodingAgent.Tools.SessionSearch do
 
   defp run_messages(run_id, data) do
     base = run_anchor_base(data, run_id)
-    prompt = run_prompt(data)
-    answer = run_answer(data)
+    # Raw run history is never screened at write time (unlike memory ingest,
+    # which drops unsafe documents), so screen it at read time.
+    prompt = data |> run_prompt() |> redact_secrets()
+    answer = data |> run_answer() |> redact_secrets()
 
     [
       %{"id" => base, "role" => "user", "content" => prompt, "run_id" => to_string(run_id)},
@@ -294,6 +336,38 @@ defmodule CodingAgent.Tools.SessionSearch do
     value = Map.get(data, :started_at) || Map.get(data, "started_at") || :erlang.phash2(run_id)
     (parse_int(value) || :erlang.phash2(run_id)) * 10 + 1
   end
+
+  # ── Scope resolution ─────────────────────────────────────────────────────────
+
+  defp resolve_scope(opts) do
+    case Keyword.get(opts, :session_search_scope) do
+      :all -> :all
+      "all" -> :all
+      nil -> if System.get_env("LEMON_SESSION_SEARCH_SCOPE") == "all", do: :all, else: :agent
+      _ -> :agent
+    end
+  end
+
+  defp scope_allows_session?(%{scope: :all}, _session_id), do: true
+
+  defp scope_allows_session?(%{scope: :agent, agent_id: agent_id}, session_id),
+    do: parse_agent_id(session_id) == agent_id
+
+  # Mirrors LemonMemory.Document's agent-id derivation from a session key.
+  defp parse_agent_id(session_key) when is_binary(session_key) do
+    case String.split(session_key, ":") do
+      ["agent", agent_id | _] when agent_id != "" -> agent_id
+      _ -> "default"
+    end
+  end
+
+  defp parse_agent_id(_), do: "default"
+
+  defp redact_secrets(text) when is_binary(text) do
+    if Safety.contains_secret?(text), do: @redaction_marker, else: text
+  end
+
+  defp redact_secrets(text), do: text
 
   defp reject_current_session(docs, nil), do: docs
 

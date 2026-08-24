@@ -428,6 +428,42 @@ defmodule LemonAi.EventStreamOverflowTest do
       send(task1_pid, :stop)
     end
 
+    test "parent shutdown still tears down the attached task (trap_exit teardown)" do
+      test_pid = self()
+
+      # The stream's parent is an intermediate process (like a fallback relay
+      # task); killing the parent with :shutdown must still shut down the
+      # attached streaming task instead of orphaning it (the pre-trap_exit
+      # link cascade skipped both do_cancel and terminate).
+      parent =
+        spawn(fn ->
+          {:ok, stream} = EventStream.start_link()
+
+          {:ok, task_pid} =
+            Task.start(fn ->
+              send(test_pid, {:task_started, self()})
+              Process.sleep(:infinity)
+            end)
+
+          EventStream.attach_task(stream, task_pid)
+          # Sync call to flush the attach_task cast before signalling ready.
+          _ = EventStream.stats(stream)
+          send(test_pid, {:ready, stream})
+          Process.sleep(:infinity)
+        end)
+
+      assert_receive {:task_started, task_pid}, 1000
+      assert_receive {:ready, stream}, 1000
+
+      stream_ref = Process.monitor(stream)
+      task_ref = Process.monitor(task_pid)
+
+      Process.exit(parent, :shutdown)
+
+      assert_receive {:DOWN, ^stream_ref, :process, _, _}, 1000
+      assert_receive {:DOWN, ^task_ref, :process, _, _}, 1000
+    end
+
     test "task crash before stream completion triggers error" do
       {:ok, stream} = EventStream.start_link()
 

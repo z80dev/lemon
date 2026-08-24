@@ -464,6 +464,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
         %{
           approval_id: approval_id,
           pending: %{
+            id: approval_id,
             session_key: session_key,
             tool: "shell",
             action: %{"cmd" => "pwd"}

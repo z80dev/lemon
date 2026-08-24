@@ -29,24 +29,51 @@ grep -q "scripts/test live-eval" "$DOC" || fail "docs/testing.md must document l
 grep -q "LemonCore.Testing.HermeticEnv" "$DOC" || fail "docs/testing.md must mention shared hermetic env helper"
 grep -q "OPENAI_API_KEY" "$RUNNER" || fail "runner must scrub common provider credentials"
 grep -q "TELEGRAM_BOT_TOKEN" "$RUNNER" || fail "runner must scrub common platform credentials"
-python3 - "$RUNNER" "$ROOT/apps/lemon_core/lib/lemon_core/testing/hermetic_env.ex" <<'PY' || fail "runner and HermeticEnv scrub lists must match"
+# Keep the runner in lockstep with LemonCore's generic built-ins and the
+# channel-owned test credential extensions registered in config/test.exs.
+if ! python3 - "$RUNNER" "$ROOT/apps/lemon_core/lib/lemon_core/testing/hermetic_env.ex" "$ROOT/config/test.exs" <<'PY'
 import re
 import sys
 
 runner = open(sys.argv[1], encoding="utf-8").read()
 elixir = open(sys.argv[2], encoding="utf-8").read()
+test_config = open(sys.argv[3], encoding="utf-8").read()
 
-runner_match = re.search(r"SCRUB_CREDENTIAL_ENV_VARS=\((.*?)\n\)", runner, re.S)
-elixir_match = re.search(r"@credential_env_vars ~w\((.*?)\n  \)", elixir, re.S)
-if not runner_match or not elixir_match:
-    raise SystemExit(1)
+def declaration_block(source, pattern):
+    matches = list(re.finditer(pattern, source, re.MULTILINE | re.DOTALL))
+    if len(matches) != 1:
+        raise SystemExit(1)
+    return matches[0].group("vars")
 
-def vars(block):
-    return sorted(word for line in block.splitlines() if not line.strip().startswith("#") for word in line.split())
+def env_vars(block):
+    result = []
+    for line in block.splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        for value in line.split():
+            if not re.fullmatch(r"[A-Z][A-Z0-9_]*", value):
+                raise SystemExit(1)
+            result.append(value)
+    return result
 
-if vars(runner_match.group(1)) != vars(elixir_match.group(1)):
+runner_vars = env_vars(declaration_block(
+    runner, r"^SCRUB_CREDENTIAL_ENV_VARS=\(\n(?P<vars>.*?)^\)"
+))
+built_in_vars = env_vars(declaration_block(
+    elixir, r"^[ \t]*@credential_env_vars[ \t]+~w\(\n(?P<vars>.*?)^[ \t]*\)"
+))
+extension_vars = env_vars(declaration_block(
+    test_config,
+    r"^config[ \t]+:lemon_core,[ \t]*:test_credential_env_vars,[ \t]*~w\(\n(?P<vars>.*?)^[ \t]*\)",
+))
+
+if sorted(runner_vars) != sorted(set(built_in_vars) | set(extension_vars)):
     raise SystemExit(1)
 PY
+then
+  fail "runner scrub list must match LemonCore built-ins plus registered channel credential extensions"
+fi
 
 contract_tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/lemon-contract-root.XXXXXX")"
 contract_path_out="$contract_tmp_root/path.out"
@@ -78,38 +105,62 @@ grep -q "requires a live model credential" "$live_eval_out" ||
 rm -rf "$live_tmp_root"
 
 artifact_tmp="$(mktemp -d "${TMPDIR:-/tmp}/lemon-artifact-contract.XXXXXX")"
-printf 'min-runtime' > "$artifact_tmp/lemon-2026.05.0-stable-ubuntu-24.04-x86_64-lemon_runtime_min.tar.gz"
-printf 'full-runtime' > "$artifact_tmp/lemon-2026.05.0-stable-ubuntu-24.04-x86_64-lemon_runtime_full.tar.gz"
-printf 'sim-runtime' > "$artifact_tmp/lemon-2026.05.0-stable-ubuntu-24.04-x86_64-sim_broadcast_platform.tar.gz"
+printf 'min-runtime' > "$artifact_tmp/lemon-2026.05.0-stable-linux-x86_64-lemon_runtime_min.tar.gz"
+printf 'full-runtime' > "$artifact_tmp/lemon-2026.05.0-stable-linux-x86_64-lemon_runtime_full.tar.gz"
+printf 'sim-runtime' > "$artifact_tmp/lemon-2026.05.0-stable-linux-x86_64-sim_broadcast_platform.tar.gz"
+printf 'tui-binary' > "$artifact_tmp/lemon-2026.05.0-stable-linux-x86_64-lemon_tui.tar.gz"
 python3 - "$artifact_tmp" <<'PY'
 import hashlib
 import json
 import pathlib
+import re
 import sys
 
 root = pathlib.Path(sys.argv[1])
 artifacts = []
 
 for path in sorted(root.glob("*.tar.gz")):
+    match = re.fullmatch(
+        r"lemon-2026\.05\.0-stable-(linux-x86_64)-(lemon_runtime_min|lemon_runtime_full|sim_broadcast_platform|lemon_tui)\.tar\.gz",
+        path.name,
+    )
+    platform, profile = match.groups()
     artifacts.append(
         {
             "file": path.name,
+            "profile": profile,
+            "platform": platform,
+            "os": "linux",
+            "arch": "x86_64",
+            "glibc_min": "2.39",
             "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
             "size": path.stat().st_size,
         }
     )
 
 (root / "manifest.json").write_text(
-    json.dumps({"version": "2026.05.0", "channel": "stable", "commit": "abcdef123456", "artifacts": artifacts}, indent=2),
+    json.dumps(
+        {
+            "schema": 2,
+            "version": "2026.05.0",
+            "channel": "stable",
+            "commit": "abcdef123456",
+            "built_at": "2026-05-01T12:00:00Z",
+            "otp": "28.0",
+            "elixir": "1.18.4",
+            "artifacts": artifacts,
+        },
+        indent=2,
+    ),
     encoding="utf-8",
 )
 PY
 artifact_valid_out="$artifact_tmp/valid.out"
-"$ROOT/scripts/verify_release_artifacts" "$artifact_tmp" >"$artifact_valid_out" 2>&1 ||
-  fail "release artifact verifier should accept complete min/full/sim Linux manifest"
+"$ROOT/scripts/verify_release_artifacts" --platform linux-x86_64 "$artifact_tmp" >"$artifact_valid_out" 2>&1 ||
+  fail "release artifact verifier should accept complete min/full/sim/TUI Linux manifest"
 
 incomplete_artifact_tmp="$(mktemp -d "${TMPDIR:-/tmp}/lemon-artifact-contract-incomplete.XXXXXX")"
-cp "$artifact_tmp/lemon-2026.05.0-stable-ubuntu-24.04-x86_64-lemon_runtime_min.tar.gz" "$incomplete_artifact_tmp/"
+cp "$artifact_tmp/lemon-2026.05.0-stable-linux-x86_64-lemon_runtime_min.tar.gz" "$incomplete_artifact_tmp/"
 python3 - "$incomplete_artifact_tmp" <<'PY'
 import hashlib
 import json
@@ -117,16 +168,25 @@ import pathlib
 import sys
 
 root = pathlib.Path(sys.argv[1])
-path = root / "lemon-2026.05.0-stable-ubuntu-24.04-x86_64-lemon_runtime_min.tar.gz"
+path = root / "lemon-2026.05.0-stable-linux-x86_64-lemon_runtime_min.tar.gz"
 (root / "manifest.json").write_text(
     json.dumps(
         {
+            "schema": 2,
             "version": "2026.05.0",
             "channel": "stable",
             "commit": "abcdef123456",
+            "built_at": "2026-05-01T12:00:00Z",
+            "otp": "28.0",
+            "elixir": "1.18.4",
             "artifacts": [
                 {
                     "file": path.name,
+                    "profile": "lemon_runtime_min",
+                    "platform": "linux-x86_64",
+                    "os": "linux",
+                    "arch": "x86_64",
+                    "glibc_min": "2.39",
                     "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                     "size": path.stat().st_size,
                 }
@@ -138,43 +198,45 @@ path = root / "lemon-2026.05.0-stable-ubuntu-24.04-x86_64-lemon_runtime_min.tar.
 )
 PY
 artifact_incomplete_out="$incomplete_artifact_tmp/incomplete.out"
-"$ROOT/scripts/verify_release_artifacts" "$incomplete_artifact_tmp" >"$artifact_incomplete_out" 2>&1 &&
-  fail "release artifact verifier should reject manifests missing full and sim profiles"
-grep -q "missing required release artifact profile" "$artifact_incomplete_out" ||
-  fail "release artifact verifier should explain missing required profiles"
+"$ROOT/scripts/verify_release_artifacts" --platform linux-x86_64 "$incomplete_artifact_tmp" >"$artifact_incomplete_out" 2>&1 &&
+  fail "release artifact verifier should reject manifests missing full, sim, and TUI profiles"
+grep -q "missing required release artifact(s)" "$artifact_incomplete_out" ||
+  fail "release artifact verifier should explain missing required artifacts"
 
 rm -rf "$artifact_tmp" "$incomplete_artifact_tmp"
 
 [ -x "$ROOT/scripts/verify_source_install" ] || fail "source install verifier must be executable"
 bash -n "$ROOT/scripts/verify_source_install"
-grep -q './bin/lemon setup runtime --profile runtime_min --non-interactive' "$ROOT/scripts/verify_source_install" ||
-  fail "source install verifier must exercise the ./bin/lemon setup wrapper"
-grep -q './bin/lemon channels --project-dir' "$ROOT/scripts/verify_source_install" ||
-  fail "source install verifier must exercise the ./bin/lemon channels wrapper"
-grep -q './bin/lemon config validate --project-dir' "$ROOT/scripts/verify_source_install" ||
-  fail "source install verifier must exercise the ./bin/lemon config wrapper"
-grep -q './bin/lemon doctor --json' "$ROOT/scripts/verify_source_install" ||
-  fail "source install verifier must exercise the ./bin/lemon doctor wrapper"
-grep -q './bin/lemon media --project-dir' "$ROOT/scripts/verify_source_install" ||
-  fail "source install verifier must exercise the ./bin/lemon media wrapper"
-grep -q './bin/lemon models --provider anthropic --limit 1' "$ROOT/scripts/verify_source_install" ||
-  fail "source install verifier must exercise the ./bin/lemon models wrapper"
-grep -q './bin/lemon providers --provider anthropic --project-dir' "$ROOT/scripts/verify_source_install" ||
-  fail "source install verifier must exercise the ./bin/lemon providers wrapper"
-grep -q './bin/lemon policy list' "$ROOT/scripts/verify_source_install" ||
-  fail "source install verifier must exercise the ./bin/lemon policy wrapper"
-grep -q './bin/lemon proofs --project-dir' "$ROOT/scripts/verify_source_install" ||
-  fail "source install verifier must exercise the ./bin/lemon proofs wrapper"
-grep -q './bin/lemon readiness --project-dir' "$ROOT/scripts/verify_source_install" ||
-  fail "source install verifier must exercise the ./bin/lemon readiness wrapper"
-grep -q './bin/lemon secrets status' "$ROOT/scripts/verify_source_install" ||
-  fail "source install verifier must exercise the ./bin/lemon secrets wrapper"
-grep -q './bin/lemon skill list' "$ROOT/scripts/verify_source_install" ||
-  fail "source install verifier must exercise the ./bin/lemon skill wrapper"
-grep -q './bin/lemon usage' "$ROOT/scripts/verify_source_install" ||
-  fail "source install verifier must exercise the ./bin/lemon usage wrapper"
-grep -q './bin/lemon update --check --no-skill-sync --verbose' "$ROOT/scripts/verify_source_install" ||
-  fail "source install verifier must exercise the ./bin/lemon update wrapper"
+grep -Fq '"$ROOT/bin/lemon" "$@"' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier helpers must invoke the ./bin/lemon wrapper"
+grep -Fq 'run_onboarding "$setup_output" setup runtime --profile runtime_min --non-interactive' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise setup through the wrapper helper"
+grep -Fq 'run_onboarding "$channels_output" channels --project-dir "$PROJECT_DIR"' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise channels through the wrapper helper"
+grep -Fq 'run_onboarding "$config_output" config validate --project-dir "$PROJECT_DIR"' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise config through the wrapper helper"
+grep -Fq 'run_onboarding_split_output "$doctor_json" "$doctor_err" doctor --json --project-dir "$PROJECT_DIR"' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise doctor through the wrapper helper"
+grep -Fq 'run_onboarding "$media_output" media --project-dir "$PROJECT_DIR" --limit 1' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise media through the wrapper helper"
+grep -Fq 'run_onboarding "$models_output" models --provider anthropic --limit 1' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise models through the wrapper helper"
+grep -Fq 'run_onboarding "$providers_output" providers --provider anthropic --project-dir "$PROJECT_DIR"' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise providers through the wrapper helper"
+grep -Fq 'run_onboarding "$policy_output" policy list' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise policy through the wrapper helper"
+grep -Fq 'run_onboarding "$proofs_output" proofs --project-dir "$PROJECT_DIR" --limit 1' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise proofs through the wrapper helper"
+grep -Fq 'run_onboarding "$readiness_output" readiness --project-dir "$PROJECT_DIR" --limit 1' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise readiness through the wrapper helper"
+grep -Fq 'run_onboarding "$secrets_output" secrets status' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise secrets through the wrapper helper"
+grep -Fq 'run_onboarding "$skill_output" skill list' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise skills through the wrapper helper"
+grep -Fq 'run_onboarding "$usage_output" usage' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise usage through the wrapper helper"
+grep -Fq 'run_onboarding "$update_output" update --check --no-skill-sync --verbose' "$ROOT/scripts/verify_source_install" ||
+  fail "source install verifier must exercise update through the wrapper helper"
 source_install_tmp="$(mktemp -d "${TMPDIR:-/tmp}/lemon-source-install-help.XXXXXX")"
 source_install_help_out="$source_install_tmp/help.out"
 "$ROOT/scripts/verify_source_install" --help >"$source_install_help_out" 2>&1 &&

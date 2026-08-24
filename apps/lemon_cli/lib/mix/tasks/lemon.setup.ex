@@ -2,7 +2,7 @@ defmodule Mix.Tasks.Lemon.Setup do
   use Mix.Task
 
   alias LemonCli.Onboarding.Runner
-  alias LemonCli.Setup.{Gateway, Provider, Wizard}
+  alias LemonCli.Setup.Wizard
 
   @shortdoc "First-time setup and configuration"
 
@@ -52,57 +52,9 @@ defmodule Mix.Tasks.Lemon.Setup do
 
   @doc false
   def run_with_io(args, io) when is_list(args) and is_map(io) do
-    # parse_head stops at the first non-flag argument (the subcommand name),
-    # leaving subcommand-specific flags untouched so subcommand parsers get them.
-    {opts, rest, _invalid} =
-      OptionParser.parse_head(args,
-        switches: [non_interactive: :boolean, config_path: :string],
-        aliases: [n: :non_interactive]
-      )
-
-    case rest do
-      ["provider" | provider_args] ->
-        ensure_apps_started!()
-        Provider.run(provider_args, io)
-
-      ["runtime" | runtime_args] ->
-        Wizard.run_runtime(runtime_args, io, opts)
-
-      ["gateway" | gateway_args] ->
-        Gateway.run(gateway_args, io)
-
-      ["doctor" | _doctor_args] ->
-        run_doctor(io)
-
-      [] ->
-        ensure_apps_started!()
-        Wizard.run_full([], io, opts)
-
-      [subcommand | _] ->
-        io.error.("Unknown subcommand: #{inspect(subcommand)}")
-        io.info.("")
-        io.info.("Usage: mix lemon.setup [provider|runtime|gateway|doctor] [options]")
-        io.info.("Run `mix help lemon.setup` for full documentation.")
-    end
-  end
-
-  # ──────────────────────────────────────────────────────────────────────────
-  # Private helpers
-  # ──────────────────────────────────────────────────────────────────────────
-
-  defp ensure_apps_started! do
-    Mix.Task.run("loadpaths")
-
-    [:lemon_core, :lemon_ai]
-    |> Enum.each(fn app ->
-      case Application.ensure_all_started(app) do
-        {:ok, _} -> :ok
-        {:error, reason} -> Mix.raise("Failed to start #{app}: #{inspect(reason)}")
-      end
-    end)
-  end
-
-  defp run_doctor(_io) do
-    Mix.Task.run("lemon.doctor", [])
+    # Thin source-checkout adapter: the runtime dispatch lives in
+    # LemonCli.Setup.Wizard so packaged releases run the same code without Mix.
+    Mix.Task.run("loadpaths", [])
+    Wizard.run(args, io)
   end
 end

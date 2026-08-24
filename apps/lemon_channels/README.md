@@ -36,7 +36,7 @@ This app depends only on `lemon_core` (in-umbrella), plus `jason`, `earmark_pars
               +--------------------------------------+
 ```
 
-**Inbound**: Each adapter's transport receives raw events from the external platform, normalizes them into `LemonCore.InboundMessage` structs locally, converts them with the internal LemonChannels.RunRequestBuilder, and submits only `LemonCore.RunRequest` structs to the session engine through `LemonCore.RouterBridge.submit_run/1`.
+**Inbound**: Each adapter's transport receives raw events from the external platform, normalizes them into `LemonCore.InboundMessage` structs locally, converts them with the internal LemonChannels.RunRequestBuilder, and submits only `LemonCore.RunRequest` structs to the native top-level executor through `LemonCore.RouterBridge.submit_run/1`.
 
 Channel adapters also use `LemonCore.RouterBridge` for busy-session and active-run queries. They must not read router-internal session registries or read models directly.
 
@@ -325,12 +325,12 @@ The most mature adapter. Supports edit, delete, voice, images, files, reactions,
 | `Telegram.Transport.MessageBuffer` | Debounce buffering for rapid-fire user messages |
 | `Telegram.Transport.ModelPicker` | `/model` picker flow, provider/model pagination, and selection-state transitions |
 | `Telegram.Transport.Normalize` | Raw update/timer normalization into Telegram-local inbound context |
-| `Telegram.Transport.PerChatState` | Telegram per-thread state, generation bookkeeping, and last-engine helpers |
+| `Telegram.Transport.PerChatState` | Telegram per-thread state, generation bookkeeping, and native resume helpers |
 | `Telegram.Transport.Pipeline` | Telegram-local ingress coordinator for normalized events and emitted actions |
 | `Telegram.Transport.RuntimeState` | Helper for adapter-owned runtime state without a dedicated struct migration |
 | `Telegram.Transport.SessionRouting` | Session-key derivation, reply routing, and parallel-session bookkeeping |
 | `Telegram.Transport.TopicCommand` | `/topic` command handler extracted from the transport shell |
-| `Telegram.Transport.UpdateProcessor` | Authorization, dedup, routing pipeline, known-target indexing, engine directive parsing |
+| `Telegram.Transport.UpdateProcessor` | Authorization, deduplication, routing pipeline, known-target indexing, and native-only resume parsing |
 | `Telegram.Transport.VoiceHandler` | Voice-download and transcription orchestration before normal inbound routing |
 | `Telegram.Renderer` | Telegram semantic renderer for stream snapshots, finals, edits, and presentation-state-aware delivery |
 | `Telegram.StatusRenderer` | Telegram-specific tool-status formatting and controls rendering |
@@ -347,9 +347,9 @@ The most mature adapter. Supports edit, delete, voice, images, files, reactions,
 | `Telegram.Delivery` | High-level enqueue helpers: `enqueue_send/3`, `enqueue_edit/3` backed by Outbox |
 | `Telegram.Formatter` | Converts markdown to plain text + Telegram entities (avoids fragile MarkdownV2 escaping) |
 | `Telegram.Markdown` | EarmarkParser-based AST renderer producing Telegram entity format with UTF-16 offsets |
-| `Telegram.ResumeIndexStore` | Typed wrapper for Telegram message-id resume/session indices |
+| `Telegram.ResumeIndexStore` | Typed wrapper for Telegram message-id session and resume indices; legacy vendor entries remain readable but are never selected for a top-level run |
 | `Telegram.StateStore` | Typed wrapper for Telegram per-session/per-topic preference state |
-| `Telegram.Truncate` | Truncates messages to 4096 chars preserving resume lines |
+| `Telegram.Truncate` | Truncates messages to 4096 chars while preserving native resume lines |
 | `Telegram.TriggerMode` | Per-chat/topic `:all` vs `:mentions` mode (ETS-backed) |
 | `Telegram.OffsetStore` | Persists `getUpdates` offset via `LemonCore.Store` |
 | `Telegram.PollerLock` | Global + file-based lock to prevent duplicate pollers for the same account/token |
@@ -360,7 +360,7 @@ The most mature adapter. Supports edit, delete, voice, images, files, reactions,
 | Command | Description |
 |---------|-------------|
 | `/new` | Start a new session (acknowledges immediately, cleans up async) |
-| `/resume` | Resume a previous session |
+| `/resume` | Resume a previous native session; legacy vendor entries remain visible for history but cannot be resumed |
 | `/model` | Interactive provider/model picker via reply keyboard |
 | `/goal` | Preview durable goal status/set with optional max-continuation budget/pause/resume/continue/loop controls, opt-in auto loop scheduling, and clear for the current session |
 | `/kanban` | Preview durable kanban board/task/archive/dispatcher controls with redacted board/task output |
@@ -381,7 +381,7 @@ Google preview variants over dead or weaker direct IDs.
 
 #### Generation-Scoped Indexing
 
-Session and resume indices are scoped by a generation counter. `/new` increments the generation for `{account_id, chat_id, thread_id}`, instantly invalidating stale reply mappings without full-table scans.
+Session and native-resume indices are scoped by a generation counter. `/new` increments the generation for `{account_id, chat_id, thread_id}`, instantly invalidating stale reply mappings without full-table scans. Historical vendor resume entries remain readable for history and are quarantined from top-level selection.
 
 #### `/model` Picker Behavior
 
@@ -571,45 +571,29 @@ Common gateway config keys:
 | Key | Type | Description |
 |-----|------|-------------|
 | `enable_xmtp` | boolean | Enable/disable the XMTP bridge after the adapter is configured |
-| `default_engine` | string | Default session engine |
-| `bindings` | list | Chat scope to project/engine/agent bindings |
+| `bindings` | list | Chat scope to project/agent/cwd/queue bindings |
 | `projects` | map | Project definitions |
 
 ### Binding Resolution
 
-`LemonChannels.BindingResolver` maps chat scopes to projects, engines, agents, and working directories. It delegates to `LemonCore.BindingResolver` after converting channels-local structs to core types.
+`LemonChannels.BindingResolver` maps chat scopes to projects, agents, working directories, and queue modes. It delegates to `LemonCore.BindingResolver` after converting channels-local structs to core types. Bindings do not choose a top-level executor: every channel-originated run uses the native executor.
 
 ```elixir
 scope = %LemonCore.ChatScope{transport: :telegram, chat_id: 123, topic_id: 456}
 
 binding = LemonChannels.BindingResolver.resolve_binding(scope)
-# %Binding{project: "my_project", agent_id: "coder", default_engine: "claude", ...}
+# %Binding{project: "my_project", agent_id: "coder", queue_mode: :collect, ...}
 
-engine  = LemonChannels.BindingResolver.resolve_engine(scope, engine_hint, resume)
-agent   = LemonChannels.BindingResolver.resolve_agent_id(scope)
-cwd     = LemonChannels.BindingResolver.resolve_cwd(scope)
-mode    = LemonChannels.BindingResolver.resolve_queue_mode(scope)
+agent = LemonChannels.BindingResolver.resolve_agent_id(scope)
+cwd   = LemonChannels.BindingResolver.resolve_cwd(scope)
+mode  = LemonChannels.BindingResolver.resolve_queue_mode(scope)
 ```
 
-Engine resolution priority: resume token > engine hint > binding default > project default > global default.
+### Native Resume Handling
 
-### Engine Registry
+Channels parse and select only native `lemon` resume tokens for top-level runs. A persisted or indexed vendor token remains readable as historical data, but it is quarantined from automatic and explicit top-level resume selection and is never rewritten as a native token.
 
-`LemonCore.EngineCatalog` is the shared validation/normalization boundary for known engine IDs.
-`LemonChannels.EngineRegistry` remains only as a compatibility shim for resume parsing that may defer to `LemonGateway.EngineRegistry` when custom engine modules are present.
-
-```elixir
-LemonCore.EngineCatalog.known?("claude")  # true
-LemonCore.EngineCatalog.normalize(" Claude ") # "claude"
-
-{:ok, %ResumeToken{engine: "claude", value: "abc123"}} =
-  LemonChannels.EngineRegistry.extract_resume("claude --resume abc123")
-
-LemonCore.ResumeToken.format_plain(%ResumeToken{engine: "claude", value: "abc123"})
-# "claude --resume abc123"
-```
-
-Default known engines: `lemon`, `echo`, `codex`, `claude`, `droid`, `opencode`, `pi`, `kimi`. Override the shared list via `config :lemon_core, :known_engines`.
+Delegated tasks run exclusively as native in-process subagents. A subagent's identity and resume-token metadata can be retained in task results, but neither is a channel directive, a binding setting, nor a top-level executor selector.
 
 ### Runtime Bridge
 
@@ -662,8 +646,7 @@ Adapters run under `LemonChannels.AdapterSupervisor` (DynamicSupervisor).
 | `LemonChannels.Capabilities` | Capability type definitions and defaults |
 | `LemonChannels.PresentationState` | Channels-owned message-id/send-vs-edit state per `{route, run, surface}` |
 | `LemonChannels.OutboundPayload` | Core delivery struct with constructors |
-| `LemonChannels.BindingResolver` | Chat scope to binding resolution (delegates to LemonCore) |
-| `LemonChannels.EngineRegistry` | Compatibility resume-token parsing shim for custom gateway engines |
+| `LemonChannels.BindingResolver` | Chat scope to project/agent/cwd/queue binding resolution (delegates to LemonCore) |
 | `LemonChannels.GatewayConfig` | Thin delegation to `LemonCore.GatewayConfig` |
 | LemonChannels.Runtime (internal) | Runtime bridge for session/run cancel, keepalive, and busy checks via `LemonCore.RouterBridge` |
 | LemonChannels.Cwd (internal) | Working directory resolution |

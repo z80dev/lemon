@@ -126,17 +126,17 @@ the formal "please run the AI" request. It attaches:
 ## Step 8: Run Orchestration
 
 The `RunOrchestrator` takes your `RunRequest` and resolves all the configuration
-needed to actually run the AI:
+needed to run the native AI session:
 
 1. **Agent profile** — looks up "default" agent's config (system prompt,
    tools, etc.)
-2. **Engine selection** — which AI engine to use (e.g., "lemon" native engine)
-3. **Model selection** — which specific LLM model (e.g., claude-sonnet-4)
-4. **Resume token** — checks if there's a previous conversation to continue
-5. **Tool policy** — which tools the AI is allowed to use
-6. **Working directory** — where file operations are rooted
+2. **Model selection** — which specific LLM model to call (e.g., claude-sonnet-4)
+3. **Resume token** — checks if there's a previous native conversation to continue
+4. **Tool policy** — which tools the AI is allowed to use
+5. **Working directory** — where file operations are rooted
 
-All of this gets packaged into an `ExecutionRequest`.
+All of this gets packaged into an `ExecutionCommand`. Top-level runtime selection
+is intentionally absent: every conversation uses Lemon's native executor.
 
 **Where we are:** `lemon_router`, `RunOrchestrator.submit/1`.
 
@@ -181,19 +181,19 @@ when granted, starts a **Run** process.
 
 ---
 
-## Step 11: Engine Start
+## Step 11: Native Executor Start
 
 The `Run` process:
-1. Looks up the engine module (e.g., `Engines.Lemon` for the native engine)
-2. Acquires an engine lock for your session (prevents double-runs)
-3. Calls `engine.start_run(job, opts, self())` — this kicks off the actual AI
+1. Acquires the launch lock for your session (prevents double-runs)
+2. Calls the single configured `CodingAgent.Executor`
+3. Starts or resumes a native `CodingAgent.Session` inside the Elixir VM
 
-For the native Lemon engine, this starts a `CodingAgent` session inside the
-Elixir VM. For CLI engines like Claude or Codex, this would spawn an external
-subprocess.
+Vendor CLIs such as Claude Code or Codex are not alternative top-level runtimes,
+and Lemon no longer wraps them as subagents either. Delegated tasks run as
+native in-process subagent sessions when the agent invokes its `task` tool.
 
 ```
-lemon_gateway (Run)  ---->  coding_agent + agent_core
+lemon_gateway (Run)  ---->  coding_agent  ---->  lemon_agent
 ```
 
 **Where we are:** `lemon_gateway`, `Run` GenServer.

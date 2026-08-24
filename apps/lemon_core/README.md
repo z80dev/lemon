@@ -57,8 +57,9 @@ This app has **zero dependencies on other umbrella apps** and must remain that w
 | 6 | `LemonCore.ConfigReloader.Watcher` | FileSystem watcher for `config.toml` and `.env` |
 
 Durable memory moved to `lemon_memory`, the workspace stores to `agent_core`,
-and provider credential-pool rotation to `coding_agent`
-(`CodingAgent.ProviderPoolRotator`); each supervises its own processes.
+and provider credential-pool rotation to `lemon_agent`
+(`LemonAgent.ModelRuntime.ProviderPoolRotator`); each supervises its own
+processes.
 
 Browser, media-job, and LSP drivers live in `lemon_browser`, `lemon_media`,
 and `lemon_lsp`. Core doctor diagnostics may probe them at runtime, but
@@ -97,9 +98,9 @@ and `lemon_lsp`. Core doctor diagnostics may probe them at runtime, but
 |--------|---------|
 | `LemonCore.Doctor.SupportBundle` | Redacted doctor report, runtime metadata, config, and diagnostics ZIP writer |
 | `LemonCore.Doctor.ProviderDiagnostics` | Provider setup/routing diagnostics for support bundles without raw API keys, secret names, base URLs, env var names, prompts, or provider responses |
-| `LemonCore.Doctor.ChannelReadiness` | Redacted Telegram/Discord launch-gate readiness summary shared by support bundles and `channels.status`, including Discord DM, free-response, reconnect, slash registration, deterministic slash, and real slash client-click gates |
-| `LemonCore.Doctor.Checks.Channels` | Telegram/Discord readiness checks using redacted channel diagnostics, shared launch-gate readiness, and proof reason kinds, including Discord Message Content Intent drift and slash client-click missing/non-promotable/stale proof reasons with wait-mode remediation |
-| `LemonCore.Doctor.Checks.Media` | Media readiness checks for generated Telegram/Discord delivery and provider-backed image/TTS/STT/vision/video proof, including OpenAI or Vertex image evidence, OpenAI/ElevenLabs/Google TTS evidence, and OpenAI or Vertex Veo video evidence, with copy-ready live proof commands, target-provider `--provider` reruns for failed/skipped multi-provider lanes, default `.lemon/proofs/media-*-smoke-latest.json` paths, and bounded permission/quota/payment remediation hints |
+| `LemonChannels.Doctor.Readiness` | Redacted channel launch-gate readiness summary shared by support bundles and `channels.status` (lives in `lemon_channels`; reached through `config :lemon_core, :doctor_runtime`) |
+| `LemonChannels.Doctor.Checks.Channels` | Channel readiness checks built from redacted channel diagnostics, shared launch-gate readiness and proof reason kinds (lives in `lemon_channels`; registers through `config :lemon_core, :doctor_checks`) |
+| `LemonCore.Doctor.Checks.Media` | Media readiness checks for provider-backed image/TTS/STT/vision/video proof, including OpenAI or Vertex image evidence, OpenAI/ElevenLabs/Google TTS evidence, and OpenAI or Vertex Veo video evidence, with copy-ready live proof commands, target-provider `--provider` reruns for failed/skipped multi-provider lanes, default `.lemon/proofs/media-*-smoke-latest.json` paths, and bounded permission/quota/payment remediation hints |
 | `LemonCore.Doctor.Checks.Usage` | Usage aggregate and quota-pressure check backed by redacted shared usage diagnostics |
 | LemonCore.LoggerSetup (internal) | Logger configuration helpers |
 
@@ -114,10 +115,10 @@ provider rows, today totals, configured quota limits, and cleanup flags. It
 must not include raw prompts, responses, channel message bodies, credentials,
 or secret values.
 
-`channel_readiness.json` in support bundles mirrors the shared Telegram/Discord
+`channel_readiness.json` in support bundles mirrors the shared channel
 launch-gate summary used by `channels.status`: promoted platform list, gate
 counts, redacted gate evidence, safe reason kinds, and copy-ready next actions
-for live proof gates such as Discord slash client-click wait mode. It must not
+for live proof gates such as slash client-click wait mode. It must not
 include bot tokens, secret names, chat/channel/guild ids, message bodies, raw
 proof paths, or raw proof details.
 
@@ -126,7 +127,7 @@ aggregate usage diagnostics and warns when configured run, token, or cost
 limits are exceeded.
 
 `mix lemon.doctor` includes `channels.readiness`, which summarizes the shared
-Telegram/Discord launch-gate counts from `LemonCore.Doctor.ChannelReadiness`
+Channel launch-gate counts from `LemonChannels.Doctor.Readiness`
 and points remediation at the first unresolved gate without exposing channel
 ids, message bodies, proof details, credentials, or secret names.
 
@@ -258,7 +259,7 @@ default suggestions just because the upstream provider documents them.
 - `agents` -- Legacy alias for profile settings (still supported)
 - `tui` -- Theme, debug mode
 - `logging` -- File logging, level, rotation
-- `gateway` -- Max concurrent runs, engine bindings, Telegram/Discord/SMS/email settings
+- `gateway` -- Max concurrent runs, engine bindings, SMS/email/webhook settings, plus per-platform `[gateway.<id>]` sections resolved by their own app (see `LemonCore.Config.Gateway.Channel`)
 
 ### Access Patterns
 
@@ -306,9 +307,6 @@ LemonCore.ConfigReloader.reload/1
 | `LEMON_THEME` | `tui.theme` |
 | `LEMON_LOG_FILE` | `logging.file` |
 | `LEMON_LOG_LEVEL` | `logging.level` |
-| `LEMON_CODEX_EXTRA_ARGS` | `runtime.cli.codex.extra_args` |
-| `LEMON_CODEX_AUTO_APPROVE` | `runtime.cli.codex.auto_approve` |
-| `LEMON_CLAUDE_YOLO` | `runtime.cli.claude.dangerously_skip_permissions` |
 | `LEMON_WASM_ENABLED` | `runtime.tools.wasm.enabled` |
 | `LEMON_WASM_RUNTIME_PATH` | `runtime.tools.wasm.runtime_path` |
 | `LEMON_WASM_TOOL_PATHS` | `runtime.tools.wasm.tool_paths` |
@@ -426,7 +424,7 @@ Agent workspace coordination — goals, kanban boards, and heartbeats — is bui
 
 ### ReadCache
 
-`LemonCore.Store.ReadCache` maintains public ETS tables for hot domains (`:chat`, `:runs`, `:progress`, `:sessions_index`, `:telegram_known_targets`). Reads bypass the GenServer entirely for O(1) ETS lookup, while writes go through the GenServer which updates both the backend and cache atomically.
+`LemonCore.Store.ReadCache` maintains public ETS tables for hot domains (`:chat`, `:runs`, `:progress`, `:sessions_index`, plus tables collaborators add with `register_cached_table/1`). Reads bypass the GenServer entirely for O(1) ETS lookup, while writes go through the GenServer which updates both the backend and cache atomically.
 
 ### Backend Behaviour
 
@@ -498,7 +496,7 @@ key = LemonCore.SessionKey.main("my_agent")
 # => "agent:my_agent:main"
 
 key = LemonCore.SessionKey.channel_peer(%{
-  agent_id: "my_agent", channel_id: "telegram",
+  agent_id: "my_agent", channel_id: "demo",
   account_id: "bot123", peer_kind: :dm, peer_id: "user456"
 })
 

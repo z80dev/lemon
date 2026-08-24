@@ -2129,9 +2129,9 @@ Latest slice: support-bundle `readiness_summary.json` tests now assert provider-
 
 ### Slice 169: Exit-code metadata boundary contracts
 
-1. `LemonGateway.Engines.CliAdapter` and `LemonGateway.Run` regressions now
-   explicitly carry `result_meta.exit_code` through LemonAgent action events and
-   gateway bus `:engine_action` payloads.
+1. `CodingAgent.Executor` and `LemonGateway.Run` regressions now explicitly
+   carry `result_meta.exit_code` through LemonAgent action events and gateway
+   bus action payloads.
 2. `LemonControlPlane.EventBridge` regressions now explicitly preserve
    `result_meta.exit_code` inside WebSocket `agent` `tool_use` events.
 3. This locks the cross-layer contract for both synthesized command-exit

@@ -13,16 +13,14 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
   @current_allowed_direct_deps %{
     lemon_agent: [:lemon_ai, :lemon_core],
     lemon_ai: [],
-    lemon_cli_runners: [:lemon_agent, :lemon_ai, :lemon_core],
     coding_agent: [
       :lemon_agent,
       :lemon_ai,
       :lemon_browser,
-      :lemon_cli_runners,
       :lemon_core,
       :lemon_gateway,
       :lemon_memory,
-      # test-only: runs CodingAgent.GatewayEngine through the Engine contract kit
+      # test-only: shared platform compliance cases
       :lemon_platform_test,
       :lemon_skills
     ],
@@ -46,14 +44,24 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
     lemon_browser: [:lemon_core],
     lemon_core: [],
     lemon_memory: [:lemon_core],
-    lemon_evals: [:lemon_agent, :lemon_ai, :coding_agent, :lemon_core, :lemon_skills],
+    lemon_evals: [
+      :lemon_agent,
+      :lemon_ai,
+      :coding_agent,
+      :lemon_core,
+      :lemon_skills
+    ],
     lemon_gateway: [
       :lemon_agent,
       :lemon_ai,
       :lemon_automation,
-      :lemon_cli_runners,
       :lemon_core
     ],
+    # A satellite: it implements platform contracts (a memory provider, a
+    # context contributor, agent tools) and registers itself on the way up, so
+    # it depends on the platform while nothing in the platform names it.
+    # test-only: proves its provider against the published contract kit.
+    lemon_honcho: [:lemon_agent, :lemon_ai, :lemon_core, :lemon_memory, :lemon_platform_test],
     lemon_lsp: [:lemon_core],
     lemon_media: [:lemon_core],
     lemon_mcp: [:lemon_agent, :coding_agent, :lemon_core, :lemon_skills],
@@ -68,7 +76,14 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
       :lemon_gateway,
       :lemon_memory
     ],
-    lemon_router: [:lemon_agent, :lemon_ai, :lemon_channels, :lemon_core, :lemon_media, :lemon_memory],
+    lemon_router: [
+      :lemon_agent,
+      :lemon_ai,
+      :lemon_channels,
+      :lemon_core,
+      :lemon_media,
+      :lemon_memory
+    ],
     lemon_sim: [:lemon_agent, :lemon_ai, :lemon_core],
     lemon_sim_ui: [:lemon_ai, :lemon_core, :lemon_sim],
     lemon_skills: [:lemon_agent, :lemon_ai, :lemon_core, :lemon_media, :lemon_memory],

@@ -19,5 +19,5 @@
   "devDependencies": {
     "concurrently": "^9.1.2"
   },
-  "version": "2026.05.0"
+  "version": "2026.08.1"
 }

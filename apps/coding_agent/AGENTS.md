@@ -67,11 +67,23 @@ Tools are divided into two sets. `coding_tools/2` is the default set passed to s
 |----------|-------|
 | **File Operations / Skills** | `read`, `read_skill`, `skill_manage`, `memory_topic`, `memory`, `search_memory`, `session_search`, `checkpoint`, `write`, `edit`, `patch`, `hashline_edit`, `lsp_diagnostics`, `ls` |
 | **Search** | `grep`, `find` |
-| **Execution** | `bash` |
+| **Execution** | `bash` (`execute_code` is a config-gated builtin appended last in `@builtin_tools`: default-off via `[runtime.tools.execute_code] enabled`, bash-equivalent, and filtered out of the disclosed set unless enabled) |
 | **Web / Browser / Media** | `websearch`, `webfetch`, `browser_navigate`, `browser_snapshot`, `browser_get_content`, `browser_click`, `browser_type`, `browser_hover`, `browser_select_option`, `browser_upload_file`, `browser_download`, `browser_press`, `browser_scroll`, `browser_back`, `browser_wait_for_selector`, `browser_evaluate`, `browser_events`, `browser_get_cookies`, `browser_set_cookies`, `browser_clear_state`, `browser_screenshot`, `browser_analyze`, `media_status`, `media_generate_image`, `media_generate_speech`, `media_transcribe_audio`, `media_analyze_image`, `media_generate_video` |
 | **Task/Agent** | `task`, `agent`, `parent_question`, `todo`, `kanban` |
 | **Social** | `x_search`, `post_to_x`, `get_x_mentions` |
 | **System** | `tool_auth`, `extensions_status` |
+
+`execute_code` is programmatic tool calling: the model submits a python3 script that
+invokes a fixed compile-time helper allowlist (`read`, `grep`, `find`, `ls`, `webfetch`)
+through the same policy/approval path as direct tool calls, and only printed output
+returns. It runs as host code with bash-equivalent authority -- never a sandbox. The
+default `kernel_mode = "per_call"` gives every run a fresh process; the opt-in `"session"`
+mode dispatches serialized cells to a persistent supervised interpreter keyed by persisted
+session id + agent id + canonical cwd/interpreter + helper set + protocol version (see
+`CodingAgent.PythonRepl`). Kernel state is live process memory only -- never durable or
+transcript-restored -- and is discarded on reset, session close/reset, idle reap,
+capacity eviction, timeout/cancellation, or crash. The canonical operator contract is
+`docs/tools/execute-code.md`.
 
 `browser_screenshot` writes screenshot bytes to local artifacts by default
 instead of returning base64 to the model. Pass `includeImage: true` only when a
@@ -158,19 +170,11 @@ the `kanban` tool through tool policy to avoid recursive board management.
 
 | Tool | Module | Notes |
 |------|--------|-------|
-| `multiedit` | `Tools.MultiEdit` | Multiple sequential edits to one file |
-| `exec` | `Tools.Exec` | Long-running background processes with poll/kill |
-| `process` | `Tools.Process` | Control interface for `exec` processes, including manual restart of finished runs |
-| `await` | `Tools.Await` | Block until background jobs complete |
-| `webdownload` | `Tools.WebDownload` | Download binary content (images, PDFs) to disk |
 | `truncate` | `Tools.Truncate` | Truncate long text with configurable strategies |
-| `todoread` | `Tools.TodoRead` | Low-level todo read (used internally by `todo`) |
-| `todowrite` | `Tools.TodoWrite` | Low-level todo write (used internally by `todo`) |
-| `restart` | `Tools.Restart` | Restart the Lemon BEAM process (dev only) |
 | `lsp_formatter` | `Tools.LspFormatter` | Format supported files with local formatters |
 | `ask_parent` | `Tools.AskParent` | Child-only extra tool injected into eligible task-spawned sessions |
 
-**Internal helpers** (not exposed as tools): `Tools.Fuzzy` (fuzzy match used by `edit`), `Tools.Hashline` (used by `hashline_edit`), `Tools.WebCache`, `Tools.WebGuard`, `Tools.TodoStore`, `Tools.TodoStoreOwner`.
+**Internal helpers** (not exposed as tools): `Tools.Hashline` (used by `hashline_edit`), `Tools.WebCache`, `Tools.WebGuard`, `Tools.TodoStore`, `Tools.TodoStoreOwner`.
 
 ### Tool Infrastructure
 
@@ -251,7 +255,7 @@ Its public entry module stays `CodingAgent.Tools.Task`, but the internals are no
 - `CodingAgent.Tools.Task.Followup` for async followup routing
 - `CodingAgent.Tools.Task.Result` for poll/join/result shaping
 
-`CodingAgent.Tools.Task` now defaults omitted `async` to `true`, matching the tool contract. The task engine list includes `droid` alongside the other CLI runners, and Droid task runs forward `thinking_level` as Droid reasoning effort so delegated agents can use the live Droid CLI path through the normal task tool. Internal task runs also infer a restrictive `tool_policy` plus a verification-prefixed prompt when the request explicitly says `use ... tools only`, so tool-constrained subtasks do not answer from model priors with the default full toolset.
+`CodingAgent.Tools.Task` now defaults omitted `async` to `true`, matching the tool contract. Internal task runs also infer a restrictive `tool_policy` plus a verification-prefixed prompt when the request explicitly says `use ... tools only`, so tool-constrained subtasks do not answer from model priors with the default full toolset.
 When an internal task omits `model`, `Task.Params` resolves the inherited model from the live parent session before falling back to captured tool opts, so Telegram/session-scoped `/model` overrides still propagate into async child sessions.
 Internal task child sessions now poll for aborts/session exit in `Task.Runner`, with an optional explicit `task_session_timeout_ms` guard when callers want a bounded wait. If a provider stream wedges or the child session dies without a terminal event, the task still fails with a timeout/session-exit error instead of leaving `task action=join` and the parent Telegram thread stuck indefinitely.
 Queued async task results should be treated as launch receipts. When a workflow needs one final answer in the same turn, the model/tooling should keep the returned `task_id`s and call `task action=join` before responding instead of relying on later auto-followup delivery to stitch the workflow back together. `task action=join` now suppresses the later async completion followup for those task ids so the parent session does not receive a second completion prompt after it already waited. Task result surfaces (`poll`, `join`, `get`, and auto-followup) are intentionally sanitized to visible assistant output plus task metadata, without leaking stored events, tool-call internals, or thinking deltas back into the parent session. Structured child reasoning is preserved in `details.reasoning` and projected as a reasoning action for operator surfaces, but it is not embedded as `[thinking]` text in parent-visible task answers. For non-terminal tasks, `poll` and `get` behave as status queries: they return the task status in user-visible text and keep the latest structured `current_action`/`reasoning` metadata in `details` instead of surfacing raw command/tool event text as answer content. Async followup delivery also idempotently backfills terminal task/run state, so a delivered completion message cannot leave the task store stranded in `queued` or `running`. Auto-followup now forwards the full visible task answer into the followup path instead of slicing it to a fixed prefix before routing, and router-delivered task followups use the `echo` engine so the raw completion text reaches the user without going back through the parent model. Any transport-specific chunking happens later at the channel layer.
@@ -291,13 +295,7 @@ boundary: it runs a fixed command through every available registered backend,
 records hashed proof JSON, skips unavailable backends, and fails the smoke on
 backend errors or missing expected output.
 
-Child sessions launched through `CodingAgent.Tools.Task` can now receive a child-only `ask_parent` extra tool when they have a live parent session plus run lineage. The parent answers through the default `parent_question` tool, and `CodingAgent.ParentQuestions` persists request state plus broadcasts lifecycle events (`:parent_question_requested`, `:parent_question_answered`, `:parent_question_timed_out`, `:parent_question_cancelled`, `:parent_question_error`).
-`CodingAgent.CliRunners.LemonRunner` also preserves task-tool result metadata such as async
-`task_id`, task status, engine, latest `current_action`, tool-reported
-`exit_code`, and synthesized nonzero `bash` command-exit metadata inside action
-`detail.result_meta` so router/channel layers can keep later `task action=poll`
-updates and failed command summaries attached to the original external task
-status surface.
+Child sessions launched through `CodingAgent.Tools.Task` can receive a child-only `ask_parent` extra tool when they have a live parent session plus run lineage. The parent answers through the default `parent_question` tool, and `CodingAgent.ParentQuestions` persists request state plus broadcasts lifecycle events (`:parent_question_requested`, `:parent_question_answered`, `:parent_question_timed_out`, `:parent_question_cancelled`, `:parent_question_error`). Native task sessions preserve async `task_id`, status, latest `current_action`, and tool-reported metadata so router/channel layers can keep later `task action=poll` updates and failed command summaries attached to the original task status surface.
 When compacted history is restored, `SessionManager` preserves older async followup entries as
 custom `async_followup` messages with provenance metadata so the next LLM projection still knows
 which system-delivered completions came from task/delegated runs.
@@ -913,10 +911,14 @@ when the configured default provider has no ready credentials, routing is
 enabled, and a configured fallback/profile/pool provider has credentials plus
 the same model id in `LemonAi.Models`, `CodingAgent.Session.ModelResolver` selects
 the fallback before starting the supervised `LemonAgent.Agent`. Explicit user
-model specs are not rewritten. Default-model streams are also wrapped by
+model specs are never rewritten at resolution time. All session streams —
+default and explicit `--model` alike, including sessions started through
+`CodingAgent.Executor.SessionRunner` — are wrapped by
 `CodingAgent.Session.ProviderFallback`: if the selected provider fails before
 visible assistant content or tool calls are emitted, the same turn is retried
 against the next credential-ready fallback provider with the same model id.
+The wrapper is a no-op (the stream fn is returned untouched) when
+`ModelResolver.runtime_fallback_models/2` yields no candidates.
 
 Key config paths (via `CodingAgent.Config`):
 

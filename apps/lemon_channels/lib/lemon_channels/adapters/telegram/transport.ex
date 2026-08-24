@@ -45,7 +45,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   @default_poll_interval 1_000
   @default_dedupe_ttl 600_000
   @default_debounce_ms 1_000
-  @model_default_engine "lemon"
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -384,7 +383,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       resolve_model_hint: &resolve_model_hint/4,
       resolve_session_key: &resolve_session_key/4,
       resolve_thinking_hint: &resolve_thinking_hint/3,
-      update_chat_state_last_engine: &update_chat_state_last_engine/2
+      send_system_message: &send_system_message/5
     }
   end
 
@@ -541,7 +540,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
           id = Path.basename(expanded)
           root = expanded
 
-          ProjectBindingStore.put_dynamic(id, %{root: root, default_engine: nil})
+          ProjectBindingStore.put_dynamic(id, %{root: root})
           ProjectBindingStore.put_override(scope, id)
 
           {:ok, %{id: id, root: root}}
@@ -765,7 +764,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
         "#{default_prov} (default)"
       end
 
-    engine_line = resolve_new_session_engine(session_key, model_hint)
     cwd_line = resolve_new_session_cwd(scope)
     account_line = state.account_id || "default"
 
@@ -777,7 +775,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       "Model: #{model_line}",
       "Thinking: #{thinking_line}",
       "Provider: #{provider_line}",
-      "Engine: #{engine_line}",
       "CWD: #{cwd_line}",
       "Account: #{account_line}",
       "Session key: #{session_line}"
@@ -818,31 +815,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     agent = map_get(cfg, :agent) || %{}
     default = map_get(agent, :default_model) || "claude-sonnet-4-20250514"
     "#{default} (default)"
-  end
-
-  defp resolve_new_session_engine(session_key, model_hint) do
-    cond do
-      is_binary(model_hint) and model_hint != "" ->
-        "#{@model_default_engine} (from model selection)"
-
-      true ->
-        case last_engine_hint(session_key) do
-          engine when is_binary(engine) and engine != "" ->
-            engine
-
-          _ ->
-            cfg = Config.cached()
-            gw = map_get(cfg, :gateway) || %{}
-            default_eng = map_get(gw, :default_engine) || "lemon"
-            "#{default_eng} (default)"
-        end
-    end
-  rescue
-    _ ->
-      cfg = Config.cached()
-      gw = map_get(cfg, :gateway) || %{}
-      default_eng = map_get(gw, :default_engine) || "lemon"
-      "#{default_eng} (default)"
   end
 
   defp resolve_new_session_cwd(%ChatScope{} = scope) do
@@ -911,8 +883,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
        ),
        do: :skip
 
-  defp last_engine_hint(session_key), do: PerChatState.last_engine_hint(session_key)
-
   defp safe_delete_chat_state(key), do: PerChatState.safe_delete_chat_state(key)
 
   defp safe_delete_session_model(session_key),
@@ -963,10 +933,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   defp format_thinking_line(level, source),
     do: ModelPolicyAdapter.format_thinking_line(level, source)
-
-  # Update only last_engine in chat state, preserving last_resume_token and other fields.
-  defp update_chat_state_last_engine(session_key, engine),
-    do: PerChatState.update_chat_state_last_engine(session_key, engine)
 
   defp build_session_key(state, inbound, %ChatScope{} = scope),
     do: SessionRouting.build_session_key(state.account_id || "default", inbound, scope)
@@ -1434,7 +1400,13 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
       module
     rescue
-      _ -> LemonChannels.Telegram.API
+      _ ->
+        Logger.warning(
+          "telegram api_mod #{inspect(mod)} does not resolve to a loaded module; " <>
+            "falling back to the real Telegram API"
+        )
+
+        LemonChannels.Telegram.API
     end
   end
 

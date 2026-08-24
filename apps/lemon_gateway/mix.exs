@@ -26,9 +26,9 @@ defmodule LemonGateway.MixProject do
   end
 
   defp description do
-    "Engine execution runtime for Lemon agents: the Engine behaviour, engine " <>
-      "registry and scheduler, per-conversation launch locks and session " <>
-      "resumption, plus the HTTP and SMS ingress surfaces that are not channels."
+    "Native run execution runtime for Lemon agents: singleton executor scheduling, " <>
+      "per-conversation launch locks, lifecycle and session resumption, plus the " <>
+      "HTTP and SMS ingress surfaces that are not channels."
   end
 
   defp package do
@@ -79,7 +79,6 @@ defmodule LemonGateway.MixProject do
       {:websockex, "~> 0.4"},
       {:websock_adapter, "~> 0.5"},
       {:lemon_agent, in_umbrella: true},
-      {:lemon_cli_runners, in_umbrella: true},
       {:lemon_core, in_umbrella: true},
       # API documentation
       {:ex_doc, "~> 0.34", only: :dev, runtime: false}

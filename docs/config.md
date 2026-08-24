@@ -40,7 +40,6 @@ api_key_secret = "OPENCODE_API_KEY"
 provider = "anthropic"
 model = "anthropic:claude-sonnet-4-20250514"
 thinking_level = "medium"
-engine = "lemon"
 
 [runtime.compaction]
 enabled = true
@@ -51,39 +50,6 @@ keep_recent_tokens = 20000
 enabled = true
 max_retries = 3
 base_delay_ms = 1000
-
-[runtime.cli.codex]
-extra_args = ["-c", "notify=[]"]
-auto_approve = false
-
-[runtime.cli.opencode]
-# Optional model override passed to `opencode run --model`.
-model = "gpt-4.1"
-
-[runtime.cli.droid]
-# Optional model override passed to `droid exec -m`. When omitted, Lemon defaults Droid to `glm-5.1`.
-model = "glm-5.1"
-# Optional reasoning effort passed to `--reasoning-effort`.
-reasoning_effort = "medium"
-# Optional tool allow/deny lists passed to `--enabled-tools` / `--disabled-tools`.
-enabled_tools = ["grep", "read_file"]
-disabled_tools = ["write"]
-# Optional planning/spec mode.
-use_spec = false
-spec_model = "planner-v1"
-# Optional extra flags appended before the prompt.
-extra_args = []
-# Authentication is provided via FACTORY_API_KEY.
-
-[runtime.cli.pi]
-# Optional extra flags prepended to the `pi` command.
-extra_args = []
-# Optional provider/model overrides passed to `pi --provider/--model`.
-provider = "openai"
-model = "gpt-4.1"
-
-[runtime.cli.claude]
-# dangerously_skip_permissions = false  # opt-in only — set true only when you fully trust the model and task
 
 [runtime]
 # Explicitly trusted extension directories. Files here can be compiled and executed.
@@ -122,13 +88,22 @@ cache_compiled = true
 cache_dir = ""
 max_tool_invoke_depth = 4
 
+[runtime.tools.execute_code]
+enabled = false
+python_path = ""
+timeout_ms = 120000
+max_rpc_calls = 100
+max_rpc_result_bytes = 5242880
+max_output_bytes = 50000
+tools = []
+kernel_mode = "per_call"
+kernel_idle_timeout_ms = 1800000
+max_live_kernels = 16
+max_queued_cells_per_kernel = 8
+
 [tui]
 theme = "lemon"
 debug = false
-compact = false
-timestamps = false
-bell = true
-thinking = false
 
 [logging]
 # Optional: write logs to a file for later analysis.
@@ -139,9 +114,9 @@ level = "debug"
 
 [gateway]
 max_concurrent_runs = 2
-default_engine = "lemon"
 auto_resume = false
 enable_telegram = false
+enable_discord = false
 enable_xmtp = false
 
 [gateway.telegram]
@@ -150,6 +125,15 @@ allowed_chat_ids = [12345678]
 default_account_id = "default"   # optional account for ./bin/lemon send account-scoped lookups
 default_chat_id = 12345678       # optional default for ./bin/lemon send --to telegram
 default_thread_id = 35           # optional forum topic/thread
+
+[gateway.discord]
+# `lemon gateway setup discord` stores the token in encrypted secrets and
+# writes this secret reference plus the restricted channel scope.
+bot_token_secret = "discord_bot_token"
+default_channel_id = 123456789012345678
+allowed_channel_ids = [123456789012345678]
+deny_unbound_channels = true
+# allowed_guild_ids = [123456789012345678] # optional additional restriction
 
 [gateway.xmtp]
 env = "production"                  # production | dev | local
@@ -194,6 +178,31 @@ chat_id = 12345678
 agent_id = "default"
 ```
 
+## Native Execution and Subagents
+
+Lemon uses its native executor for every top-level TUI and gateway run. Configure
+its provider, model, and thinking defaults in `[defaults]`; no engine selection
+key is supported.
+
+Delegated tasks run as native in-process subagents (child `CodingAgent.Session`
+executions) when the agent invokes its `task` tool. There are no vendor CLI task
+runners and no `[runtime.cli.*]` configuration.
+
+### Removed Top-Level Engine Configuration
+
+Remove these legacy keys and tables from global and project configuration:
+
+| Removed configuration | Migration |
+|---|---|
+| `engine`, `[defaults].engine`, `default_engine`, and `engine_preference` | Remove the key. Keep `[defaults]` provider, model, and thinking settings for native execution. |
+| `[gateway].default_engine`, `[gateway.projects.<id>].default_engine`, and `[[gateway.bindings]].default_engine` | Remove the key. Retain project `root`, binding `project`/`agent_id`, and queue settings as needed. |
+| `[gateway.engines.<id>]` | Remove the entire table. Custom and external gateway executors are not supported. |
+| `[runtime.cli.<vendor>]` | Remove the entire table. Vendor CLI task runners were removed; delegated tasks run as native in-process subagents. Config validation rejects `[runtime.cli]`. |
+
+There is no TOML replacement for selecting a top-level external or custom
+engine, and no TOML knob for delegated subagents beyond the native `task` tool's
+own parameters.
+
 ## Environment Overrides
 
 Environment variables override file values. Common overrides:
@@ -205,6 +214,8 @@ Environment variables override file values. Common overrides:
 - `LEMON_CODEX_EXTRA_ARGS`, `LEMON_CODEX_AUTO_APPROVE`
 - `LEMON_CLAUDE_YOLO`
 - `LEMON_WASM_ENABLED`, `LEMON_WASM_RUNTIME_PATH`, `LEMON_WASM_TOOL_PATHS`, `LEMON_WASM_AUTO_BUILD`
+- `LEMON_EXECUTE_CODE_ENABLED`, `LEMON_EXECUTE_CODE_PYTHON_PATH`, `LEMON_EXECUTE_CODE_TIMEOUT_MS`, `LEMON_EXECUTE_CODE_MAX_RPC_CALLS`, `LEMON_EXECUTE_CODE_MAX_RPC_RESULT_BYTES`, `LEMON_EXECUTE_CODE_MAX_OUTPUT_BYTES`, `LEMON_EXECUTE_CODE_TOOLS`
+- `LEMON_EXECUTE_CODE_KERNEL_MODE`, `LEMON_EXECUTE_CODE_KERNEL_IDLE_TIMEOUT_MS`, `LEMON_EXECUTE_CODE_MAX_LIVE_KERNELS`, `LEMON_EXECUTE_CODE_MAX_QUEUED_CELLS_PER_KERNEL`
 - `LEMON_TERMINAL_BACKENDS_ALLOW`, `LEMON_TERMINAL_BACKENDS_DENY`, `LEMON_TERMINAL_BACKENDS_REQUIRE_APPROVAL`
 - `LEMON_DOCKER_TERMINAL_IMAGE`, `LEMON_DOCKER_TERMINAL_MEMORY`, `LEMON_DOCKER_TERMINAL_CPUS`, `LEMON_DOCKER_TERMINAL_PIDS_LIMIT`, `LEMON_DOCKER_TERMINAL_NETWORK`
 - `LEMON_DOCKER_TERMINAL_READ_ONLY_ROOTFS`, `LEMON_DOCKER_TERMINAL_TMPFS_SIZE`, `LEMON_DOCKER_TERMINAL_ALLOWED_IMAGES`
@@ -219,9 +230,8 @@ Docker limits, invalid Docker image/network names, invalid SSH ports, invalid
 SSH connect timeouts, and unsupported strict-host-key values fail closed at the
 policy boundary instead of reaching Docker or OpenSSH.
 
-`[tui].thinking` controls whether assistant reasoning/thinking blocks are shown in the
-Python CLI. It is loaded at startup and can be toggled for the current process with
-`/thinking`.
+The Bun TUI uses the runtime's model and thinking defaults from `[defaults]`.
+The `[tui]` section controls terminal presentation settings loaded at startup.
 
 Async followup queue defaults for background `task` completions and delegated `agent`
 completions are currently umbrella app config, not TOML. The default lives in
@@ -231,33 +241,35 @@ Per-call tool inputs still override it: `task.queue_mode` and `agent.followup_qu
 ## Feature Flags
 
 Feature flags gate in-progress behaviour changes so they can be shipped incrementally
-without ad-hoc environment variables.  All flags default to `"off"`.
+without ad-hoc environment variables.
 
 ```toml
 [features]
-product_runtime              = "off"   # M1 runtime boot/profile/health/setup/update
-skills_hub_v2                = "off"   # M2/M3 manifest v2 + progressive skill loading
-skill_manifest_v2            = "off"   # M2-01 manifest v2 parser/validator
-progressive_skill_loading_v2 = "off"   # M3-02/M3-03 partial skill body loading
-session_search               = "off"   # M5-02 SessionSearch API + search_memory tool
-routing_feedback             = "off"   # M6-02 task fingerprinting + routing feedback
-skill_synthesis_drafts       = "off"   # M7-02 skill synthesis draft pipeline
+session_search               = "default-on" # SessionSearch API + search_memory tool (default)
+routing_feedback             = "default-on" # task fingerprinting + routing feedback (default)
+skill_synthesis_drafts       = "default-on" # skill synthesis draft pipeline (default)
 ```
+
+`session_search` defaults to `"default-on"`: durable memory ingest and search
+are active on a stock install (retention 30 days, max 500 documents per scope;
+runs whose summaries look like they contain a secret are dropped entirely, not
+redacted). Set it to `"off"` to disable. The learning-loop flags
+(`routing_feedback`, `skill_synthesis_drafts`) also default to `"default-on"`.
 
 Valid rollout states:
 
 | State | Meaning |
 |---|---|
 | `"off"` | Feature fully disabled (kill-switch). |
-| `"opt-in"` | Available but disabled by default; must be explicitly opted in. |
+| `"opt-in"` | Legacy pre-promotion state; behaves like `"off"` unless the caller explicitly opts in. |
 | `"default-on"` | Enabled unless explicitly disabled. |
 
 Each flag can be overridden via an environment variable using the pattern
 `LEMON_FEATURE_<FLAG_NAME>` (SCREAMING_SNAKE_CASE):
 
 ```bash
-LEMON_FEATURE_SESSION_SEARCH=opt-in
-LEMON_FEATURE_PRODUCT_RUNTIME=default-on
+LEMON_FEATURE_SESSION_SEARCH=off       # kill switch for durable memory
+LEMON_FEATURE_ROUTING_FEEDBACK=default-on
 ```
 
 Config validation fails cleanly if a flag is set to an unrecognised state.
@@ -286,7 +298,7 @@ Deprecated sections now fail validation and runtime loading:
 
 Lemon can auto-load a `.env` file at startup:
 
-- `./bin/lemon-dev` / `lemon-tui`: loads `<cwd>/.env` where `<cwd>` is the agent working directory (`--cwd`, or current directory).
+- `./bin/lemon-tui`: loads `<cwd>/.env` where `<cwd>` is the agent working directory (`--cwd`, or current directory).
 - `clients/lemon-web/server` bridge: loads `<cwd>/.env` from `--cwd` (or current directory).
 - `./bin/lemon-gateway`: loads `.env` from the directory where you launch the script.
 
@@ -297,10 +309,20 @@ By default, existing environment variables are preserved. `.env` values only fil
 Lemon supports the **Codex subscription** provider as `openai-codex` (it uses the ChatGPT OAuth JWT, not `OPENAI_API_KEY`).
 The canonical config key is `providers.openai-codex`; `providers.openai_codex` is also accepted for backward compatibility by native Lemon/CodingAgent runs.
 
-Primary setup paths:
+Primary setup paths use the installed `lemon` command, or the matching source
+wrapper from a checkout:
 
 ```bash
-mix lemon.onboard
+# Installed release
+lemon setup
+lemon model --provider openai-codex
+
+# Source checkout
+./bin/lemon setup
+./bin/lemon model --provider openai-codex
+
+# Contributor-level Mix alternatives
+mix lemon.setup
 mix lemon.onboard.codex
 ```
 
@@ -331,12 +353,16 @@ base_url = "http://127.0.0.1:11434/v1"
 [defaults]
 provider = "openai"
 model = "openai:local-model-name"
-engine = "lemon"
 ```
 
 Then store the endpoint key:
 
 ```bash
+# Installed release / source checkout
+lemon secrets set llm_local_openai_api_key "local"
+./bin/lemon secrets set llm_local_openai_api_key "local"
+
+# Contributor-level Mix alternative
 mix lemon.secrets.set llm_local_openai_api_key "local"
 ```
 
@@ -348,25 +374,50 @@ providers. Each provider gets its own `[providers.<id>]` table with
 
 ## Provider Onboarding (CLI)
 
-Lemon includes a top-level onboarding picker for provider credentials:
+For an installed release, start provider onboarding with `lemon model`. From a
+source checkout, use the matching `./bin/lemon model` wrapper. The direct Mix
+tasks below remain the contributor interface.
 
 ```bash
+# Installed release
+lemon model
+lemon model --provider anthropic
+lemon model --provider openai-codex
+lemon model --provider gemini
+lemon model --provider zai
+lemon model --provider minimax
+
+# Source checkout
+./bin/lemon model
+./bin/lemon model --provider anthropic
+./bin/lemon model --provider openai-codex
+./bin/lemon model --provider gemini
+./bin/lemon model --provider zai
+./bin/lemon model --provider minimax
+
+# Contributor-level Mix alternatives
 mix lemon.onboard
 mix lemon.onboard anthropic
 mix lemon.onboard codex
 mix lemon.onboard gemini
 mix lemon.onboard zai
 mix lemon.onboard minimax
-
-# Provider-specific aliases still work
 mix lemon.onboard.antigravity
-mix lemon.onboard.gemini
-mix lemon.onboard.codex
 mix lemon.onboard.copilot
 ```
 
-All onboarding flows:
-- Verify encrypted secrets are configured
+`lemon setup` is the idempotent first-run journey: it derives config, secrets,
+and provider readiness; creates missing config and a secrets master key without
+replacing existing state; skips a provider that is already usable; and checks a
+new provider configuration before it reports setup complete. Setup always runs
+offline checks and normally runs a live provider check. Use
+`lemon setup --skip-verify` only to defer that live check when offline.
+
+The focused `lemon model` command onboards one provider. It requires a usable
+encrypted secrets store; use `lemon setup` when a fresh machine still needs the
+config/secrets bootstrap and readiness verification.
+
+Provider onboarding flows:
 - Let you choose a provider when none is passed
 - Use an interactive arrow-key TUI for provider/auth/model selection when a TTY is available
 - Run provider OAuth flow by default when supported, or prompt for an API key/token otherwise
@@ -430,17 +481,30 @@ conservatively: if the default provider is not credential-ready and a configured
 fallback/profile/pool provider is credential-ready with the same model id in
 `LemonAi.Models`, Lemon selects that fallback before starting the supervised agent
 loop. Pools default to priority order; `strategy = "round_robin"` rotates the
-pool's starting provider through `CodingAgent.ProviderPoolRotator`, a supervised
-BEAM process. Explicit user model specs are not rewritten.
+pool's starting provider through `LemonAgent.ModelRuntime.ProviderPoolRotator`,
+a supervised BEAM process. Explicit user model specs are never rewritten at
+resolution time.
 
-The supervised coding-agent loop also wraps default-model streams with the same
-fallback ordering. If a provider returns a terminal stream error before useful
+The supervised coding-agent loop also wraps streams — default-model and
+explicit-model sessions alike — with the same fallback ordering (for an
+explicit model, candidates are other credential-ready providers hosting the
+same model id; the wrapper is a no-op when there are none). If a provider returns a terminal stream error before useful
 assistant content or tool calls are emitted, Lemon retries the same turn against
 the next credential-ready fallback provider with the same model id. Once visible
 content or a tool call has started, the error is surfaced instead of replayed so
 the transcript cannot duplicate partial output.
 
-Google Gemini CLI onboarding (`mix lemon.onboard gemini`) resolves OAuth credentials via `LemonAi.Auth.GoogleGeminiCliOAuth`, stores the encrypted payload in `providers.google_gemini_cli.api_key_secret`, writes `providers.google_gemini_cli.auth_source = "oauth"`, and can take `--project-id <gcp-project-id>` to force a specific Code Assist project. At runtime, Lemon re-resolves the active Gemini project from `providers.google_gemini_cli.project_id`, `providers.google_gemini_cli.project_secret`, `LEMON_GEMINI_PROJECT_ID`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_PROJECT_ID`, or `GCLOUD_PROJECT`, with those values overriding the `projectId` stored inside the OAuth payload.
+Google Gemini CLI onboarding (`lemon model --provider gemini`, or
+`./bin/lemon model --provider gemini` from a checkout) resolves OAuth
+credentials via `LemonAi.Auth.GoogleGeminiCliOAuth`, stores the encrypted payload
+in `providers.google_gemini_cli.api_key_secret`, writes
+`providers.google_gemini_cli.auth_source = "oauth"`, and can take
+`--project-id <gcp-project-id>` to force a specific Code Assist project. The
+contributor task is `mix lemon.onboard gemini`. At runtime, Lemon re-resolves
+the active Gemini project from `providers.google_gemini_cli.project_id`,
+`providers.google_gemini_cli.project_secret`, `LEMON_GEMINI_PROJECT_ID`,
+`GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_PROJECT_ID`, or `GCLOUD_PROJECT`, with
+those values overriding the `projectId` stored inside the OAuth payload.
 
 The onboarding alias `gemini` maps to the runtime provider `google_gemini_cli`. This is distinct from the AI Studio provider `google`, which expects a separate API key such as `GOOGLE_GENERATIVE_AI_API_KEY`.
 
@@ -455,26 +519,34 @@ Environment variables are supported as fallback:
 Common non-interactive usage:
 
 ```bash
-# Google Antigravity
+# Installed release
+lemon model --provider antigravity --token <token> --set-default --model gemini-3-pro-high
+lemon model --provider gemini --project-id your-gcp-project
+lemon model --provider gemini --token <token> --set-default --model gemini-2.5-pro
+lemon model --provider openai-codex --token <token> --set-default --model gpt-5.2
+lemon model --provider github-copilot --enterprise-domain company.ghe.com
+lemon model --provider github-copilot --skip-enable-models
+lemon model --provider github-copilot --token <token> --set-default --model gpt-5
+lemon model --provider zai --token <token> --set-default --model glm-5
+lemon model --provider minimax --token <token> --set-default --model MiniMax-M2.7
+
+# Source checkout
+./bin/lemon model --provider antigravity --token <token> --set-default --model gemini-3-pro-high
+./bin/lemon model --provider gemini --project-id your-gcp-project
+./bin/lemon model --provider gemini --token <token> --set-default --model gemini-2.5-pro
+./bin/lemon model --provider openai-codex --token <token> --set-default --model gpt-5.2
+./bin/lemon model --provider github-copilot --enterprise-domain company.ghe.com
+./bin/lemon model --provider github-copilot --skip-enable-models
+./bin/lemon model --provider github-copilot --token <token> --set-default --model gpt-5
+./bin/lemon model --provider zai --token <token> --set-default --model glm-5
+./bin/lemon model --provider minimax --token <token> --set-default --model MiniMax-M2.7
+
+# Contributor-level Mix alternatives
 mix lemon.onboard.antigravity --token <token> --set-default --model gemini-3-pro-high
-
-# Google Gemini CLI / Code Assist
 mix lemon.onboard.gemini --project-id your-gcp-project
-mix lemon.onboard.gemini --token <token> --set-default --model gemini-2.5-pro
-
-# OpenAI Codex
 mix lemon.onboard.codex --token <token> --set-default --model gpt-5.2
-
-# GitHub Copilot (enterprise + optional model enablement toggle)
 mix lemon.onboard.copilot --enterprise-domain company.ghe.com
-mix lemon.onboard.copilot --skip-enable-models
-mix lemon.onboard.copilot --token <token> --set-default --model gpt-5
-mix lemon.onboard.copilot --token <token> --config-path /path/to/config.toml
-
-# Z.AI
 mix lemon.onboard zai --token <token> --set-default --model glm-5
-
-# MiniMax
 mix lemon.onboard minimax --token <token> --set-default --model MiniMax-M2.7
 ```
 
@@ -568,29 +640,68 @@ cache_dir = ""
 max_tool_invoke_depth = 4
 ```
 
+## Execute Code (`execute_code`)
+
+`execute_code` is programmatic tool calling: the model submits a python3 script that can
+call a fixed allowlist of agent tools (`read`, `grep`, `find`, `ls`, `webfetch`), and only
+what the script prints comes back. It is disabled by default and **bash-equivalent** — the
+script runs as host code with the user's permissions, not in a sandbox. For the full
+behavior, security, and lifecycle contract see
+[`docs/tools/execute-code.md`](tools/execute-code.md).
+
+```toml
+[runtime.tools.execute_code]
+enabled = false
+python_path = ""              # empty = find python3 on PATH
+timeout_ms = 120000           # end-to-end wall-time cap per run, including session queue wait
+max_rpc_calls = 100           # helper calls per run
+max_rpc_result_bytes = 5242880
+max_output_bytes = 50000
+tools = []                    # helper subset; empty = full fixed allowlist
+
+# Persistent-kernel opt-in:
+kernel_mode = "per_call"      # "per_call" (default) | "session"
+kernel_idle_timeout_ms = 1800000
+max_live_kernels = 16
+max_queued_cells_per_kernel = 8
+```
+
+`kernel_mode = "session"` keeps one supervised python3 interpreter per session/cwd/
+interpreter/helper identity so imports, globals, and objects survive across calls
+(`reset = true` discards them). Kernel state is live process memory only — never durable,
+never in the transcript — and is lost on session close/reset, idle reap
+(`kernel_idle_timeout_ms`), eviction (`max_live_kernels`, idle-only LRU), or node restart.
+Only the literal value `"session"` enables persistence; any other value resolves to
+`"per_call"`. Cells are serialized one at a time per kernel with a bounded queue
+(`max_queued_cells_per_kernel`); a full queue is an error, not a fallback. Session mode
+falls back to an isolated per-call run only before code starts (missing session identity,
+unavailable registry, exhausted capacity, or startup failure) and reports it in result
+details.
+
 ## Sections
 
 - `providers.<name>`: API keys and base URLs per provider.
-- `defaults`: global default model/provider/thinking/engine.
+- `defaults`: global default provider, model, and thinking level for native execution.
 - `runtime`: runtime behavior and tool settings.
 - `runtime.tools.web`: `websearch` / `webfetch` providers, guardrails, cache, and Firecrawl fallback.
 - `runtime.tools.wasm`: WASM sidecar runtime controls and discovery paths.
+- `runtime.tools.execute_code`: programmatic tool calling (python3 scripts, helper allowlist, optional persistent kernels).
 - `profiles.<agent_id>`: assistant profiles (identity + defaults) used by gateway/control-plane.
 - `runtime.compaction`: context compaction settings.
 - `runtime.retry`: retry settings.
-- `runtime.cli`: CLI runner settings (`codex`, `claude`, `droid`, `kimi`, `opencode`, `pi`).
 - `tui`: terminal UI settings.
-- `gateway`: Lemon gateway settings, including `queue`, `telegram`, `discord`, `sms`, `voice`, `xmtp`, `projects`, `bindings`, and `engines`.
+- `gateway`: Lemon gateway settings, including `queue`, `telegram`, `discord`, `sms`, `voice`, `xmtp`, `projects`, and `bindings`.
 - `logging`: optional file logging configuration.
 
 ## Gateway Projects and Bindings
 
 When LemonGateway handles a Telegram message, it can optionally map that chat (or topic/thread) to a named
-**project**. A project is just a **working directory root** (repo path) plus optional defaults.
+**project**. A project is a **working directory root** plus optional agent and
+queue defaults.
 
 Why it matters:
-- The gateway will run engines with `cwd` set to the project root (so file edits/commands happen in the right repo).
-- The gateway will load per-project config from `<project_root>/.lemon/config.toml` (which can override agent profiles,
+- The native executor runs with `cwd` set to the project root (so file edits/commands happen in the right repo).
+- The gateway loads per-project config from `<project_root>/.lemon/config.toml` (which can override agent profiles,
   models, tool policy, etc. compared to your global `~/.lemon/config.toml`).
 - If a chat has no bound project, gateway falls back to `gateway.default_cwd` (or `~/` by default).
 
@@ -601,13 +712,11 @@ Define projects under `[gateway.projects.<project_id>]`:
 ```toml
 [gateway.projects.myrepo]
 root = "/path/to/myrepo"
-# Optional: project-level default engine if a binding doesn't set one.
-default_engine = "lemon"
 ```
 
 ### Bindings
 
-Bindings connect an incoming chat scope to a project/agent/defaults:
+Bindings connect an incoming chat scope to a project, agent profile, and queue defaults:
 
 ```toml
 [[gateway.bindings]]
@@ -620,8 +729,6 @@ project = "myrepo"
 # Optional: choose which agent profile to use (defaults to "default")
 agent_id = "default"
 
-# Optional: per-chat default engine/queue overrides
-default_engine = "claude"
 queue_mode = "steer"
 ```
 
@@ -829,7 +936,7 @@ next user message is automatically rewritten with a compact transcript and sent 
 ```toml
 [gateway.telegram.compaction]
 enabled = true
-context_window_tokens = 400000  # optional override; if unset Lemon infers from model/engine
+context_window_tokens = 400000  # optional override; if unset Lemon infers from the model and native executor
 reserve_tokens = 16384          # optional safety margin before limit
 trigger_ratio = 0.9             # optional; 0.9 means trigger at 90% of context window
 ```

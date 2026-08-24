@@ -1,10 +1,11 @@
 # Dialyzer Warning Burn-down Plan
 
-Status: Phase 1 done (68192db0); Phase 4 green gate LIVE as of 2026-08-10 —
-see "Phase 4 update" at the bottom. The CI lane is no longer purely advisory:
+Status: Phase 1 done (68192db0); Phase 4 green gate LIVE as of 2026-08-10 and
+**ratcheted from 6 to 12 apps on 2026-08-13** — see "Phase 4 update" and
+"Phase 4 ratchet #2" at the bottom. The CI lane is no longer purely advisory:
 an allowlist of Dialyzer-clean apps is now a hard gate (`scripts/dialyzer_gate.sh`).
 
-Last reviewed: 2026-08-10
+Last reviewed: 2026-08-13
 
 ## Summary
 
@@ -488,3 +489,223 @@ dynamic-dispatch false positives), and the spec/guard/pattern cluster. Graduate
 apps onto the allowlist as each is burned down — start with the near-zero
 non-gated apps and the remaining published packages (`ai` ~40, `lemon_gateway`
 ~42, then `agent_core`/`lemon_core`/`lemon_router`/`lemon_channels`).
+
+## Phase 4 ratchet #2 — allowlist 6 → 12 apps (2026-08-13)
+
+Second ratchet of the green gate, run inside the D14 platform-split batch. The
+allowlist doubled (6 → 12 apps, 4 of them published), the umbrella total fell
+**1,604 → 1,229** findings, and two gate-integrity holes that made the gate
+unreliable were closed.
+
+### Snapshot (2026-08-13, warm PLT, `mix dialyzer --format dialyzer`)
+
+"Before" is this session's own baseline run (`Total errors: 1644, Skipped: 40`
+→ 1,604 emitted); "after" is the final run (`Total errors: 1270, Skipped: 41`
+→ 1,229 emitted). Findings are attributed to an app by **which app owns the
+file** Dialyzer names, not by a `lib/<app>/` prefix (see "Gate integrity"
+below), so these counts include each app's `lib/mix/tasks/*.ex`.
+
+| App | Before | After | |
+|---|---:|---:|---|
+| coding_agent | 281 | 281 | |
+| lemon_channels | 179 | 177 | in flight |
+| lemon_sim | 341 | 130 | |
+| lemon_router | 107 | 107 | in flight |
+| lemon_control_plane | 104 | 104 | in flight |
+| lemon_sim_ui | 90 | 69 | |
+| lemon_agent | 84 | 84 | |
+| lemon_core | 115 | 58 | in flight |
+| lemon_automation | 58 | 58 | in flight |
+| lemon_skills | 43 | 43 | in flight |
+| lemon_ai | 41 | 41 | |
+| lemon_gateway | 41 | 41 | |
+| lemon_cli_runners | 30 | 30 | |
+| coding_agent_ui | 6 | 6 | |
+| **lemon_mcp** | 20 | **0** | GATED (new) |
+| **lemon_cli** | 13 | **0** | GATED (new) |
+| **lemon_honcho** | 13 | **0** | GATED (new) |
+| **lemon_tcg** | 12 | **0** | GATED (new) |
+| **x_api** | 11 | **0** | GATED (new) |
+| **lemon_evals** | 9 | **0** | GATED (new) |
+| **lemon_browser** | 4 | **0** | gated, was RED |
+| **lemon_media** | 1 | **0** | gated, was RED |
+| **lemon_memory** | 1 | **0** | gated, was RED |
+| **lemon_lsp** | 0 | **0** | gated |
+| **lemon_platform_test** | 0 | **0** | gated |
+| **lemon_web** | 0 | **0** | gated |
+
+By category, umbrella-wide (same two runs):
+
+| Category | Before | After |
+|---|---:|---:|
+| `unmatched_return` | 465 | 451 |
+| `pattern_covered_by_prior_clauses` | 304 | 305 |
+| `function_will_never_be_called` | 283 | 85 |
+| `pattern_cant_match_type` | 146 | 136 |
+| `guard_never_succeed` | 141 | 146 |
+| `no_local_return` | 138 | 23 |
+| `invalid_contract` | 53 | 14 |
+| `call_breaks_contract` | 40 | 38 |
+| `call_will_never_return` | 6 | 5 |
+| `unknown_function` | 3 | 1 |
+| other | 25 | 25 |
+
+### Allowlist delta
+
+Added (verified at 0 on the final run): `lemon_cli`, `lemon_evals`,
+`lemon_honcho`, `lemon_mcp`, `lemon_tcg`, `x_api`. Nothing was removed — the
+list only ratchets forward. `lemon_browser` is now marked published (D14 makes
+it package #10).
+
+**Three already-gated apps were RED and are now green again** — the gate had
+been reporting them clean for two reasons, both fixed below: `lemon_media`'s
+finding was in `lib/mix/tasks/`, which the old prefix match never looked at,
+and the full-report blanking bug hid `lemon_memory`'s and `lemon_browser`'s.
+
+### The one fix that did most of the work
+
+`LemonCore.Env.string/1` (published `lemon_core`) was a single clause with a
+`nil` default delegating to `LemonCore.Config.Helpers.get_env/2`, whose
+contract is `(binary(), binary()) :: binary()`. Passing `nil` violates that
+contract, so Dialyzer concluded `Env.string/1` **never returns** — and that
+verdict propagated: `Config.Tools.resolve_web/1` and
+`Config.Logging.resolve_compress_on_rotate/1` call it, which poisoned
+`Modular.resolve_settings/1` → `Modular.load/0,1` → `load!`,
+`load_with_validation`, `Config.load_base_from_disk`, `ConfigCache.load_base`,
+and from there every caller that loads config anywhere in the umbrella. Split
+into `string/1` (delegating to `Helpers.get_env/1`, `String.t() | nil`) and
+`string/2` (`String.t()`), both with their own specs; runtime behaviour is
+unchanged.
+
+That one edit is most of the `no_local_return` (138 → 23),
+`function_will_never_be_called` (283 → 85) and `invalid_contract` (53 → 14)
+collapse: a poisoned root makes every caller "never called" and every caller's
+spec "invalid". It also cleared, with no app-local edit at all,
+`lemon_memory/ingest.ex:141` and `lemon_tcg/agent/session.ex:145,151` (both
+`fn -> Modular.load() end`), and 211 of `lemon_sim`'s findings.
+
+Note the honest side of that collapse: functions that stop being "dead" get
+analysed for the first time, so `lemon_sim`'s `unmatched_return` went 27 → 42
+and its pattern findings 37 → 61. Un-masking is progress, but it means the
+remaining backlog for the big apps is *better measured* now, not smaller by as
+much as the total suggests.
+
+### Gate integrity — two holes closed in `scripts/dialyzer_gate.sh`
+
+1. **A stale `.dialyzer_ignore.exs` entry silently blanked the entire report.**
+   With `list_unused_filters: true` (root `mix.exs`), dialyxir treats an unused
+   filter as an error, and on that path `Dialyxir.Dialyzer.Runner.run`
+   **discards the whole formatted warning list** and prints only "unused
+   filters present" (`deps/dialyxir/lib/dialyxir/dialyzer.ex:63-64`). The
+   `IEx.Helpers.recompile/0` filter for `discord/transport.ex` was pinned at
+   `:2106` while the call had moved to `:1687`, so **every** app looked clean —
+   CI's captured `dialyzer.out` contained zero findings and the gate passed
+   vacuously. Fixed three ways: the two `recompile` entries became one
+   line-independent regex (still scoped to those two files and that one
+   message); the gate's own run passes `--ignore-exit-status`; and the gate now
+   **refuses** an output file whose `Total errors:` line disagrees with the
+   findings it lists (exit 2, "refusing to report a green gate"), so this class
+   of blanking can never read as green again.
+2. **Findings outside `lib/<app>/` were invisible.** The old gate counted
+   `^lib/<app>/…` lines only, so `lib/mix/tasks/*.ex` and `lib/<app>.ex` were
+   unguarded (this is exactly where `lemon_media`'s finding sat), and
+   `coding_agent_ui`'s `lib/coding_agent/` subtree would have been miscounted
+   as `coding_agent`. The gate now attributes each finding by asking which app
+   owns the file (`[[ -f apps/<app>/<path> ]]`), and fails with exit 2 if an
+   allowlisted app directory does not exist.
+
+The advisory CI step (`.github/workflows/dialyzer.yml`) still runs
+`mix dialyzer --format dialyzer` without `--ignore-exit-status`. That is now
+safe because no filter is stale, and the gate's sanity check turns a future
+stale filter into a hard failure instead of a false green — but adding
+`--ignore-exit-status` to that step would make the capture robust by
+construction.
+
+### Source fixes made to reach zero (no suppressions added anywhere)
+
+- **`x_api/oauth1_client.ex` (6 findings) — real bug.** Every caller's
+  `{:error, reason}` branch was unreachable because the shared `request/4`
+  helper called `Req.request/1`, the auto-generated default-argument arity,
+  whose inferred typing is `{:ok, %Req.Response{}}` only. Switched to
+  `Req.request/2` (which carries the spec'd
+  `{:ok, Req.Response.t()} | {:error, Exception.t()}`) and widened
+  `@type api_error` to include `Exception.t()`, keeping the transport-error
+  branches instead of deleting six of them — deleting would have made the
+  OAuth1 client structurally unable to report a transport failure.
+- **`lemon_evals/support.ex` (2 findings) — same real bug class as
+  `fake_llm.ex` in the last pass.** The eval harness's fake stream pushed
+  `{:text_end, idx, msg}` (missing the `text` element) and
+  `{:tool_call_start, idx, call, msg}` (one element too many) against
+  `LemonAi.EventStream.event()`. Now identical to the published test double's
+  shapes, so evals and prod adapters emit the same sequence.
+- **`lemon_mcp/client.ex:671`, `lemon_mcp/sampling.ex`** — two always-true
+  conditions (`is_map(response)` where the value is provably a map;
+  `is_integer(max_tokens)` where the `nil` case is consumed by an earlier
+  clause) whose false branches Dialyzer proved dead, including one of the
+  "line 1" attribution artifacts this doc flagged as un-diagnosed: it is a
+  compiler-generated `case` for an `and`/`is_*` guard whose one branch is
+  unreachable, and it is fixable at the source condition.
+- **`lemon_honcho/client/tripwire.ex` (9 findings)** — the module is a
+  deliberate always-raising tripwire and its full arities already said
+  `no_return()`; the compiler-generated default-argument arities carried no
+  spec. Added per-arity `no_return()` specs.
+- **`lemon_honcho/session_manager.ex:989`, `tools/reasoning.ex:231`** — both
+  observation modes hardcode `ai.observe_others: true`, so the `else` branches
+  and the `if`-generated `=:= nil` guards were dead; branches collapsed and the
+  surrounding comments/moduledoc corrected to match.
+- **Dead clauses removed** (prior clauses provably cover the full input type):
+  `x_api/client.ex:598`, `lemon_cli/hermes_migration.ex:888`,
+  `lemon_cli/onboarding/runner.ex:698,712`, `lemon_mcp/client/http.ex:424`,
+  `lemon_mcp/client/sse.ex:354,482`, `lemon_mcp/sampling.ex:161`,
+  `lemon_mcp/transport/http.ex:311`, `lemon_mcp/transport/stdio.ex:150,222`,
+  `lemon_tcg/evm/secp256k1.ex:150,167` (point-at-infinity only ever flows
+  through `add/2`'s *first* argument), `lemon_honcho/context_contributor.ex:309`,
+  `mix/tasks/lemon.media.ex:247` (`MediaJobSupervisor.status/0` answers a map on
+  every path, including its own `rescue`).
+- **Specs corrected to match reality** rather than deleting the branch that
+  contradicted them: `lemon_mcp/server/handler.ex`'s `handle_json_request/2`
+  drops `{:error, term()}` (parse failures are *returned* as JSON-RPC error
+  responses, so it always succeeds), and `LemonMCP.Server.call_tool/3` admits
+  the plain error map that path produces alongside `ToolCallResult.t()`.
+- **`unmatched_return` noise in the newly-gated apps**, bound with `_ =` per the
+  Phase 4 convention: `lemon_cli/hermes_migration.ex` (9),
+  `lemon_cli/onboarding/terminal_ui.ex`, `lemon_evals` (7),
+  `lemon_mcp/client.ex` (9), `lemon_tcg` (8 `:ets` calls),
+  `x_api/token_manager.ex` (4), `lemon_honcho/session_manager.ex:1073`,
+  `lemon_browser/local_server.ex:182`.
+- **`lemon_mcp/transport/http.ex:321`** — a `format_ip(ip) when is_list(ip)`
+  clause piped a charlist through `:inet.ntoa/1`, whose contract takes an
+  `:inet.ip_address()` tuple, so that clause could only ever have crashed the
+  startup log line. Removed; the `:ip` option Bandit is handed is a tuple, a
+  string now passes through verbatim, and anything else still falls to
+  `inspect/1` as before.
+
+### Apps excluded from this ratchet as in-flight
+
+Six sibling agents were editing the umbrella during this pass, so their apps
+were snapshotted but deliberately **not** considered for graduation, and their
+deltas above mix this pass's leaf fix with their own work: `lemon_core`,
+`lemon_channels`, `lemon_control_plane`, `lemon_automation`, `lemon_router`,
+`coding_agent`, `lemon_skills`. Two already-gated apps were also being touched
+(`lemon_browser`: packaging metadata only, no `lib/` change; and
+`lemon_platform_test`: `events_case.ex`) — they stay gated and were verified at
+0 on the final run, but re-check both after the batch's own validation pass.
+
+### Follow-ups this pass deliberately did not take
+
+- **`mix lemon.media`'s `worker_status` projection is wrong** (cosmetic, but
+  real): it reports `running`/`queued`/`max_concurrency`, while
+  `MediaJobSupervisor.status/0` only ever produces
+  `supervised`/`running`/`active_jobs`/`workers`/`supervisors` — so `queued` is
+  always `0` and `max_concurrency` always absent, and `running` is a boolean
+  where the key name implies a count. Every other consumer
+  (`LemonCore.Doctor` support bundle, the `lemon_skills` media tool) passes the
+  supervisor's map through unchanged. Aligning the task's output is a CLI
+  output-shape decision, so it is left for the app owner.
+- **`lemon_core`'s remaining 58** are now a much better-measured backlog after
+  the `Env.string` fix: `unmatched_return` 11, `pattern_covered` 19,
+  `pattern_cant_match_type` 12, `guard_never_succeed` 11, plus one stray
+  `unknown_function`. `lemon_core` is the next published package to gate.
+- `lemon_sim`'s 130 and `coding_agent`'s 281 remain the two big blocks; both are
+  still dominated by the dynamic-dispatch and spec-tightening work described in
+  Phase 2.

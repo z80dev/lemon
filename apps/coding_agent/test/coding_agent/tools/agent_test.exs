@@ -2,11 +2,13 @@ defmodule CodingAgent.Tools.AgentTest do
   alias Elixir.CodingAgent, as: CodingAgent
   use ExUnit.Case, async: false
 
+  alias CodingAgent.Session.Presentation
+  alias LemonAgent.Test.Mocks
   alias Elixir.CodingAgent.{RunGraph, Subagents, TaskStore}
   alias Elixir.CodingAgent.Tools.Agent, as: AgentTool
   alias CodingAgent.Messages
   alias CodingAgent.Messages.CustomMessage
-  alias LemonCore.{Bus, Event, RunRequest, Store}
+  alias LemonCore.{Bus, Event, ResumeToken, RunRequest, Store}
   alias LemonPlatformTest.EventsFixtures
 
   defmodule AgentTestStubRunOrchestrator do
@@ -113,7 +115,71 @@ defmodule CodingAgent.Tools.AgentTest do
     assert Map.has_key?(tool.parameters["properties"], "task_ids")
     assert Map.has_key?(tool.parameters["properties"], "mode")
     assert Map.has_key?(tool.parameters["properties"], "followup_queue_mode")
+    refute Map.has_key?(tool.parameters["properties"], "engine_id")
     assert tool.parameters["properties"]["agent_id"]["enum"] == ["coder", "default", "oracle"]
+  end
+
+  test "resume rejects non-native and unavailable explicit native sessions" do
+    state = %{cwd: System.tmp_dir!()}
+    session_id = "missing-#{System.unique_integer([:positive])}"
+
+    assert {:error, {:wrong_engine, "echo", "lemon"}} =
+             Presentation.start_or_resume_session(
+               %ResumeToken{engine: "echo", value: "legacy"},
+               [resume_source: :explicit],
+               state
+             )
+
+    assert {:error, {:resume_session_missing, ^session_id}} =
+             Presentation.start_or_resume_session(
+               %ResumeToken{engine: "lemon", value: session_id},
+               [resume_source: :explicit],
+               state
+             )
+
+    corrupt_session_id = "corrupt-#{System.unique_integer([:positive])}"
+    corrupt_session_file = Presentation.session_file_path(corrupt_session_id, state.cwd)
+    :ok = File.mkdir_p(Path.dirname(corrupt_session_file))
+    :ok = File.write(corrupt_session_file, "{not-json}\n")
+
+    on_exit(fn -> File.rm(corrupt_session_file) end)
+
+    assert {:error, {:resume_session_corrupt, ^corrupt_session_id, _reason}} =
+             Presentation.start_or_resume_session(
+               %ResumeToken{engine: "lemon", value: corrupt_session_id},
+               [resume_source: :explicit],
+               state
+             )
+  end
+
+  test "stale automatic native resume starts fresh with diagnostic metadata" do
+    state = %{cwd: System.tmp_dir!()}
+    session_id = "missing-#{System.unique_integer([:positive])}"
+
+    assert {:ok, session, fresh_session_id,
+            %{
+              resume_diagnostic: %{
+                resume: %{
+                  source: :auto,
+                  session_id: ^session_id,
+                  fallback: :fresh,
+                  reason: :missing
+                }
+              }
+            }} =
+             Presentation.start_or_resume_session(
+               %ResumeToken{engine: "lemon", value: session_id},
+               [
+                 cwd: state.cwd,
+                 model: Mocks.mock_model(),
+                 stream_fn: Mocks.mock_stream_fn_single(Mocks.assistant_message("ack")),
+                 resume_source: :auto
+               ],
+               state
+             )
+
+    assert fresh_session_id != session_id
+    :ok = GenServer.stop(session)
   end
 
   test "execute run async queues delegated run and poll returns completion" do
@@ -386,6 +452,7 @@ defmodule CodingAgent.Tools.AgentTest do
     refute_receive {:session_async_followup, _message}, 150
     assert_receive {:router_submit, %RunRequest{queue_mode: :followup} = followup, 2}, 500
     assert followup.prompt =~ "oracle update"
+    assert followup.cwd == "/tmp"
 
     assert followup.meta["async_followups"] == [
              %{
@@ -437,6 +504,7 @@ defmodule CodingAgent.Tools.AgentTest do
     assert followup.session_key == "agent:main:main"
     assert followup.agent_id == "main"
     assert followup.prompt =~ "oracle update"
+    assert followup.cwd == "/tmp"
 
     assert followup.meta["async_followups"] == [
              %{

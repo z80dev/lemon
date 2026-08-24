@@ -1,12 +1,48 @@
+defmodule LemonCore.Config.GatewayTest.StubChannel do
+  @behaviour LemonCore.Config.Gateway.Channel
+
+  @impl true
+  def id, do: :stub
+
+  @impl true
+  def resolve(section), do: %{resolved: true, raw: section}
+
+  @impl true
+  def enabled?(configured), do: configured
+
+  @impl true
+  def validate(section, errors) do
+    if Map.get(section, :resolved), do: errors, else: ["gateway.stub: invalid" | errors]
+  end
+end
+
 defmodule LemonCore.Config.GatewayTest do
   @moduledoc """
   Tests for the Config.Gateway module.
+
+  Per-platform sections are owned by the modules registered under
+  `config :lemon_core, :gateway_channels`; what any platform's section means
+  lives with that platform (in lemon_channels' adapter config tests). These
+  tests prove the generic routing mechanism with a stub channel only.
   """
   use LemonCore.Testing.Case, async: false
 
   alias LemonCore.Config.Gateway
 
   setup do
+    # Register a stub channel so the per-platform routing mechanism is
+    # exercised without naming a real platform. Other suites may have booted
+    # real channel modules, so the registry is replaced for each test and
+    # restored afterwards.
+    previous = Application.get_env(:lemon_core, :gateway_channels)
+    Application.put_env(:lemon_core, :gateway_channels, [__MODULE__.StubChannel])
+
+    on_exit(fn ->
+      if is_nil(previous),
+        do: Application.delete_env(:lemon_core, :gateway_channels),
+        else: Application.put_env(:lemon_core, :gateway_channels, previous)
+    end)
+
     # Store original env vars to restore later
     original_env = System.get_env()
 
@@ -14,17 +50,10 @@ defmodule LemonCore.Config.GatewayTest do
       # Clear test env vars
       [
         "LEMON_GATEWAY_MAX_CONCURRENT_RUNS",
-        "LEMON_GATEWAY_DEFAULT_ENGINE",
         "LEMON_GATEWAY_DEFAULT_CWD",
         "LEMON_GATEWAY_AUTO_RESUME",
-        "LEMON_GATEWAY_ENABLE_TELEGRAM",
         "LEMON_GATEWAY_REQUIRE_ENGINE_LOCK",
-        "LEMON_GATEWAY_ENGINE_LOCK_TIMEOUT_MS",
-        "LEMON_TELEGRAM_COMPACTION_ENABLED",
-        "LEMON_TELEGRAM_COMPACTION_CONTEXT_WINDOW",
-        "LEMON_TELEGRAM_COMPACTION_RESERVE_TOKENS",
-        "LEMON_TELEGRAM_COMPACTION_TRIGGER_RATIO",
-        "TELEGRAM_BOT_TOKEN"
+        "LEMON_GATEWAY_ENGINE_LOCK_TIMEOUT_MS"
       ]
       |> Enum.each(&System.delete_env/1)
 
@@ -43,54 +72,50 @@ defmodule LemonCore.Config.GatewayTest do
       config = Gateway.resolve(%{})
 
       assert config.max_concurrent_runs == 2
-      assert config.default_engine == "lemon"
       assert config.default_cwd == nil
       assert config.auto_resume == false
-      assert config.enable_telegram == false
+      assert config.enabled_channels[:stub] == false
+      assert config.channels[:stub] == %{resolved: true, raw: %{}}
       assert config.require_engine_lock == true
       assert config.engine_lock_timeout_ms == 60_000
       assert config.projects == %{}
       assert config.bindings == []
       assert config.sms == %{}
-      assert config.engines == %{}
+      refute Map.has_key?(config, :default_engine)
+      refute Map.has_key?(config, :engines)
     end
 
     test "uses settings from config map" do
       settings = %{
         "gateway" => %{
           "max_concurrent_runs" => 5,
-          "default_engine" => "custom",
           "default_cwd" => "~/projects",
           "auto_resume" => true,
-          "enable_telegram" => true
+          "enable_stub" => true
         }
       }
 
       config = Gateway.resolve(settings)
 
       assert config.max_concurrent_runs == 5
-      assert config.default_engine == "custom"
       assert config.default_cwd == "~/projects"
       assert config.auto_resume == true
-      assert config.enable_telegram == true
+      assert config.enabled_channels[:stub] == true
     end
 
     test "environment variables override settings" do
       System.put_env("LEMON_GATEWAY_MAX_CONCURRENT_RUNS", "10")
-      System.put_env("LEMON_GATEWAY_DEFAULT_ENGINE", "custom")
       System.put_env("LEMON_GATEWAY_DEFAULT_CWD", "/workspace")
       System.put_env("LEMON_GATEWAY_AUTO_RESUME", "true")
-      System.put_env("LEMON_GATEWAY_ENABLE_TELEGRAM", "true")
       System.put_env("LEMON_GATEWAY_REQUIRE_ENGINE_LOCK", "false")
       System.put_env("LEMON_GATEWAY_ENGINE_LOCK_TIMEOUT_MS", "120000")
 
       settings = %{
         "gateway" => %{
           "max_concurrent_runs" => 2,
-          "default_engine" => "lemon",
           "default_cwd" => "~/home",
           "auto_resume" => false,
-          "enable_telegram" => false,
+          "enable_stub" => false,
           "require_engine_lock" => true,
           "engine_lock_timeout_ms" => 60_000
         }
@@ -99,10 +124,9 @@ defmodule LemonCore.Config.GatewayTest do
       config = Gateway.resolve(settings)
 
       assert config.max_concurrent_runs == 10
-      assert config.default_engine == "custom"
       assert config.default_cwd == "/workspace"
       assert config.auto_resume == true
-      assert config.enable_telegram == true
+      assert config.enabled_channels[:stub] == false
       assert config.require_engine_lock == false
       assert config.engine_lock_timeout_ms == 120_000
     end
@@ -128,12 +152,12 @@ defmodule LemonCore.Config.GatewayTest do
         "gateway" => %{
           "bindings" => [
             %{
-              "transport" => "telegram",
+              "transport" => "demo",
               "chat_id" => 123_456_789,
               "agent_id" => "default"
             },
             %{
-              "transport" => "telegram",
+              "transport" => "demo",
               "chat_id" => 987_654_321,
               "agent_id" => "assistant"
             }
@@ -146,11 +170,11 @@ defmodule LemonCore.Config.GatewayTest do
       assert length(config.bindings) == 2
 
       [first, second] = config.bindings
-      assert first.transport == :telegram
+      assert first.transport == :demo
       assert first.chat_id == 123_456_789
       assert first.agent_id == "default"
 
-      assert second.transport == :telegram
+      assert second.transport == :demo
       assert second.chat_id == 987_654_321
       assert second.agent_id == "assistant"
     end
@@ -189,97 +213,41 @@ defmodule LemonCore.Config.GatewayTest do
     end
   end
 
-  describe "telegram configuration" do
-    test "uses default telegram settings" do
-      config = Gateway.resolve(%{})
-
-      assert config.telegram.token == nil
-      assert config.telegram.compaction.enabled == true
-      assert config.telegram.compaction.context_window_tokens == 400_000
-      assert config.telegram.compaction.reserve_tokens == 16_384
-      assert config.telegram.compaction.trigger_ratio == 0.9
-    end
-
-    test "uses telegram token from config" do
+  describe "channel configuration" do
+    test "a registered channel's resolve/1 output lands in config.channels" do
       settings = %{
         "gateway" => %{
-          "telegram" => %{
-            "token" => "bot123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
-          }
+          "stub" => %{"foo" => "bar"}
         }
       }
 
       config = Gateway.resolve(settings)
 
-      assert config.telegram.token == "bot123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
+      assert config.channels[:stub] == %{resolved: true, raw: %{"foo" => "bar"}}
     end
 
-    test "resolves telegram token from env var reference" do
-      System.put_env("TELEGRAM_BOT_TOKEN", "bot987654:XYZ-ABC5678")
+    test "enabled?/1 receives the enable_stub TOML value and its result lands in enabled_channels" do
+      config = Gateway.resolve(%{"gateway" => %{"enable_stub" => true}})
+      assert config.enabled_channels[:stub] == true
 
-      settings = %{
-        "gateway" => %{
-          "telegram" => %{
-            "token" => "${TELEGRAM_BOT_TOKEN}"
-          }
-        }
-      }
-
-      config = Gateway.resolve(settings)
-
-      assert config.telegram.token == "bot987654:XYZ-ABC5678"
-    end
-
-    test "returns nil when env var not set for token reference" do
-      System.delete_env("TELEGRAM_BOT_TOKEN")
-
-      settings = %{
-        "gateway" => %{
-          "telegram" => %{
-            "token" => "${TELEGRAM_BOT_TOKEN}"
-          }
-        }
-      }
-
-      config = Gateway.resolve(settings)
-
-      assert config.telegram.token == nil
-    end
-
-    test "uses telegram compaction settings from config" do
-      settings = %{
-        "gateway" => %{
-          "telegram" => %{
-            "compaction" => %{
-              "enabled" => false,
-              "context_window_tokens" => 200_000,
-              "reserve_tokens" => 8192,
-              "trigger_ratio" => 0.8
-            }
-          }
-        }
-      }
-
-      config = Gateway.resolve(settings)
-
-      assert config.telegram.compaction.enabled == false
-      assert config.telegram.compaction.context_window_tokens == 200_000
-      assert config.telegram.compaction.reserve_tokens == 8192
-      assert config.telegram.compaction.trigger_ratio == 0.8
-    end
-
-    test "environment variables override telegram compaction settings" do
-      System.put_env("LEMON_TELEGRAM_COMPACTION_ENABLED", "false")
-      System.put_env("LEMON_TELEGRAM_COMPACTION_CONTEXT_WINDOW", "200000")
-      System.put_env("LEMON_TELEGRAM_COMPACTION_RESERVE_TOKENS", "8192")
-      System.put_env("LEMON_TELEGRAM_COMPACTION_TRIGGER_RATIO", "0.8")
+      config = Gateway.resolve(%{"gateway" => %{"enable_stub" => false}})
+      assert config.enabled_channels[:stub] == false
 
       config = Gateway.resolve(%{})
+      assert config.enabled_channels[:stub] == false
+    end
 
-      assert config.telegram.compaction.enabled == false
-      assert config.telegram.compaction.context_window_tokens == 200_000
-      assert config.telegram.compaction.reserve_tokens == 8192
-      assert config.telegram.compaction.trigger_ratio == 0.8
+    test "an unregistered build yields empty channels and enabled_channels" do
+      Application.put_env(:lemon_core, :gateway_channels, [])
+
+      on_exit(fn ->
+        Application.put_env(:lemon_core, :gateway_channels, [__MODULE__.StubChannel])
+      end)
+
+      config = Gateway.resolve(%{"gateway" => %{"stub" => %{"foo" => "bar"}}})
+
+      assert config.channels == %{}
+      assert config.enabled_channels == %{}
     end
   end
 
@@ -329,44 +297,35 @@ defmodule LemonCore.Config.GatewayTest do
     end
   end
 
-  describe "engines configuration" do
-    test "uses engines from config" do
-      settings = %{
-        "gateway" => %{
-          "engines" => %{
-            "lemon" => %{"enabled" => true},
-            "custom" => %{"enabled" => false}
-          }
-        }
-      }
-
-      config = Gateway.resolve(settings)
-
-      assert config.engines["lemon"]["enabled"] == true
-      assert config.engines["custom"]["enabled"] == false
-    end
-
-    test "returns empty map when no engines config" do
-      config = Gateway.resolve(%{})
-      assert config.engines == %{}
-    end
-  end
-
   describe "defaults/0" do
     test "returns the default gateway configuration" do
       defaults = Gateway.defaults()
 
       assert defaults["max_concurrent_runs"] == 2
-      assert defaults["default_engine"] == "lemon"
       assert defaults["default_cwd"] == nil
       assert defaults["auto_resume"] == false
-      assert defaults["enable_telegram"] == false
+      assert defaults["enable_stub"] == false
+      assert defaults["stub"] == %{}
       assert defaults["require_engine_lock"] == true
       assert defaults["engine_lock_timeout_ms"] == 60_000
       assert defaults["projects"] == %{}
       assert defaults["bindings"] == []
       assert defaults["sms"] == %{}
-      assert defaults["engines"] == %{}
+      refute Map.has_key?(defaults, "default_engine")
+      refute Map.has_key?(defaults, "engines")
+    end
+
+    test "contains no platform keys when no channel is registered" do
+      Application.put_env(:lemon_core, :gateway_channels, [])
+
+      on_exit(fn ->
+        Application.put_env(:lemon_core, :gateway_channels, [__MODULE__.StubChannel])
+      end)
+
+      defaults = Gateway.defaults()
+
+      refute Map.has_key?(defaults, "enable_stub")
+      refute Map.has_key?(defaults, "stub")
     end
   end
 
@@ -376,17 +335,17 @@ defmodule LemonCore.Config.GatewayTest do
 
       assert %Gateway{} = config
       assert is_integer(config.max_concurrent_runs)
-      assert is_binary(config.default_engine)
       assert is_boolean(config.auto_resume)
-      assert is_boolean(config.enable_telegram)
+      assert is_map(config.enabled_channels)
       assert is_boolean(config.require_engine_lock)
       assert is_integer(config.engine_lock_timeout_ms)
       assert is_map(config.projects)
       assert is_list(config.bindings)
       assert is_map(config.sms)
       assert is_map(config.queue)
-      assert is_map(config.telegram)
-      assert is_map(config.engines)
+      assert is_map(config.channels)
+      refute Map.has_key?(config, :default_engine)
+      refute Map.has_key?(config, :engines)
     end
   end
 end

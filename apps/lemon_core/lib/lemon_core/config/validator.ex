@@ -17,18 +17,23 @@ defmodule LemonCore.Config.Validator do
 
   - Agent: valid model names, provider names
   - Gateway: valid port numbers, boolean flags
-  - Telegram: token format, compaction settings
-  - Discord: token format, guild/channel IDs
+  - Channels: each registered `LemonCore.Config.Gateway.Channel` validates its
+    own `[gateway.<id>]` section, so platform-specific rules (token formats,
+    id lists, per-platform limits) live with the app that implements them
   - Web Dashboard: port, host, secret key base, access token
-  - XMTP: wallet key, environment, API URL, max connections
   - Email: SMTP relay, inbound webhook, TLS/auth settings
   - Logging: valid log levels, writable paths
   - Providers: valid API key formats
   - Tools: valid timeout values
   - TUI: valid theme names
+
+  The generic scalar checks (`validate_boolean/3`, `validate_positive_integer/3`,
+  `validate_ratio/3`, `env_var_reference?/1`, ...) are public so channel
+  implementations produce messages in the same shape.
   """
 
   alias LemonCore.Config.{Features, Modular}
+  alias LemonCore.Config.Gateway.Channel
 
   @valid_log_levels [:debug, :info, :notice, :warning, :error, :critical, :alert, :emergency]
   @valid_themes [:default, :dark, :light, :high_contrast, :lemon]
@@ -81,37 +86,118 @@ defmodule LemonCore.Config.Validator do
   end
 
   @doc """
-  Validates settings for deprecated sections, returning an ok/error tuple.
+  Validates settings for removed configuration sections and engine-routing keys,
+  returning an ok/error tuple.
 
-  Returns `:ok` if no deprecated sections are found, or `{:error, errors}`.
+  Returns `:ok` if no removed settings are found, or `{:error, errors}`.
   """
   @spec validate_deprecated_sections(map()) :: :ok | {:error, [String.t()]}
   def validate_deprecated_sections(settings) when is_map(settings) do
-    []
-    |> check_deprecated(
-      is_map(settings["agent"]),
-      "[agent] is deprecated. Move fields to [defaults] (provider, model, thinking_level) and [runtime] (other settings)."
-    )
-    |> check_deprecated(
-      is_map(settings["agents"]),
-      "[agents.<id>] is deprecated. Use [profiles.<id>] instead."
-    )
-    |> check_deprecated(
-      is_map(settings["agent"]) and is_map(settings["agent"]["tools"]),
-      "[agent.tools.*] is deprecated. Use [runtime.tools.*] instead."
-    )
-    |> check_deprecated(
-      is_map(settings["tools"]),
-      "[tools.*] is deprecated. Use [runtime.tools.*] instead."
-    )
+    deprecated_errors =
+      []
+      |> check_deprecated(
+        is_map(settings["agent"]),
+        "[agent] is deprecated. Move fields to [defaults] (provider, model, thinking_level) and [runtime] (other settings)."
+      )
+      |> check_deprecated(
+        is_map(settings["agents"]),
+        "[agents.<id>] is deprecated. Use [profiles.<id>] instead."
+      )
+      |> check_deprecated(
+        is_map(settings["agent"]) and is_map(settings["agent"]["tools"]),
+        "[agent.tools.*] is deprecated. Use [runtime.tools.*] instead."
+      )
+      |> check_deprecated(
+        is_map(settings["tools"]),
+        "[tools.*] is deprecated. Use [runtime.tools.*] instead."
+      )
+      |> check_deprecated(
+        runtime_cli_present?(settings),
+        "The [runtime.cli] section has been removed; all subagent tasks run natively."
+      )
+      |> Enum.reverse()
+
+    (deprecated_errors ++ removed_engine_config_errors(settings))
     |> errors_to_result()
   end
+
+  @removed_engine_keys ~w(
+    engine
+    default_engine
+    engine_preference
+    preferred_engine
+    preferred_engines
+    preferred-engine
+    preferred-engines
+    preferredEngine
+    preferredEngines
+    known_engine
+    known_engines
+    custom_engine
+    custom_engines
+    engine_registry
+    engine_module
+    engine_modules
+    engines
+    gateway_engines
+  )
+
+  defp removed_engine_config_errors(settings) do
+    settings
+    |> collect_removed_engine_config_errors([], [])
+    |> Enum.reverse()
+  end
+
+  defp collect_removed_engine_config_errors(settings, path, errors) when is_map(settings) do
+    settings
+    |> Enum.sort_by(fn {key, _value} -> to_string(key) end)
+    |> Enum.reduce(errors, fn {key, value}, errors ->
+      key = to_string(key)
+      current_path = path ++ [key]
+
+      cond do
+        key in @removed_engine_keys ->
+          [removed_engine_config_message(format_config_path(current_path)) | errors]
+
+        true ->
+          collect_removed_engine_config_errors(value, current_path, errors)
+      end
+    end)
+  end
+
+  defp collect_removed_engine_config_errors(settings, path, errors) when is_list(settings) do
+    settings
+    |> Enum.with_index()
+    |> Enum.reduce(errors, fn {value, index}, errors ->
+      collect_removed_engine_config_errors(value, path ++ [index], errors)
+    end)
+  end
+
+  defp collect_removed_engine_config_errors(_settings, _path, errors), do: errors
+
+  defp format_config_path(path) do
+    Enum.reduce(path, "", fn
+      index, "" when is_integer(index) -> "[#{index}]"
+      index, path when is_integer(index) -> "#{path}[#{index}]"
+      key, "" -> key
+      key, path -> "#{path}.#{key}"
+    end)
+  end
+
+  defp removed_engine_config_message(path) do
+    "#{path} is no longer supported. Lemon runs natively; remove this engine-routing setting."
+  end
+
+  defp runtime_cli_present?(%{"runtime" => runtime}) when is_map(runtime),
+    do: Map.has_key?(runtime, "cli")
+
+  defp runtime_cli_present?(_settings), do: false
 
   defp check_deprecated(errors, true, message), do: [message | errors]
   defp check_deprecated(errors, false, _message), do: errors
 
   defp errors_to_result([]), do: :ok
-  defp errors_to_result(errors), do: {:error, Enum.reverse(errors)}
+  defp errors_to_result(errors), do: {:error, errors}
 
   @doc """
   Validates agent configuration.
@@ -129,6 +215,10 @@ defmodule LemonCore.Config.Validator do
 
   @doc """
   Validates gateway configuration.
+
+  Per-platform sections are validated by the modules registered under
+  `config :lemon_core, :gateway_channels`; see
+  `LemonCore.Config.Gateway.Channel`.
   """
   @spec validate_gateway(map(), [String.t()]) :: [String.t()]
   def validate_gateway(gateway, errors) do
@@ -138,146 +228,52 @@ defmodule LemonCore.Config.Validator do
       "gateway.max_concurrent_runs"
     )
     |> validate_boolean(Map.get(gateway, :auto_resume), "gateway.auto_resume")
-    |> validate_boolean(Map.get(gateway, :enable_telegram), "gateway.enable_telegram")
-    |> validate_boolean(Map.get(gateway, :enable_discord), "gateway.enable_discord")
     |> validate_boolean(Map.get(gateway, :enable_web_dashboard), "gateway.enable_web_dashboard")
-    |> validate_boolean(Map.get(gateway, :enable_xmtp), "gateway.enable_xmtp")
+    |> validate_boolean(Map.get(gateway, :enable_webhook), "gateway.enable_webhook")
     |> validate_boolean(Map.get(gateway, :require_engine_lock), "gateway.require_engine_lock")
     |> validate_non_negative_integer(
       Map.get(gateway, :engine_lock_timeout_ms),
       "gateway.engine_lock_timeout_ms"
     )
-    |> validate_telegram_config(Map.get(gateway, :telegram))
-    |> validate_discord_config(Map.get(gateway, :discord))
+    |> validate_channel_flags(gateway)
+    |> validate_channel_sections(gateway)
     |> validate_web_dashboard_config(Map.get(gateway, :web_dashboard))
-    |> validate_xmtp_config(Map.get(gateway, :xmtp))
     |> validate_email_config(Map.get(gateway, :email))
     |> validate_queue_config(Map.get(gateway, :queue))
   end
 
-  @doc """
-  Validates Telegram configuration.
-  """
-  @spec validate_telegram_config([String.t()], map() | nil) :: [String.t()]
-  def validate_telegram_config(errors, nil), do: errors
+  # `Modular` keeps the flags in `enabled_channels`; the legacy map flattens
+  # them to `enable_<id>`. Both shapes are validated by asking the registered
+  # channels for their ids rather than by naming a platform here.
+  defp validate_channel_flags(errors, gateway) do
+    enabled = Map.get(gateway, :enabled_channels)
 
-  def validate_telegram_config(errors, telegram) when is_map(telegram) do
-    errors
-    |> validate_telegram_token(Map.get(telegram, :token))
-    |> validate_telegram_compaction(Map.get(telegram, :compaction))
+    Enum.reduce(Channel.ids(), errors, fn id, acc ->
+      value =
+        if is_map(enabled),
+          do: Map.get(enabled, id),
+          else: Map.get(gateway, :"enable_#{id}")
+
+      validate_boolean(acc, value, "gateway.enable_#{id}")
+    end)
   end
 
-  def validate_telegram_config(errors, _),
-    do: ["gateway.telegram: must be a map" | errors]
+  defp validate_channel_sections(errors, gateway) do
+    sections = Map.get(gateway, :channels)
 
-  defp validate_telegram_token(errors, nil), do: errors
+    Enum.reduce(Channel.registered(), errors, fn module, acc ->
+      id = module.id()
 
-  defp validate_telegram_token(errors, token) when is_binary(token) do
-    cond do
-      env_var_reference?(token) -> errors
-      Regex.match?(~r/^\d+:[A-Za-z0-9_-]+$/, token) -> errors
-      true -> ["gateway.telegram.token: invalid format (expected '123456789:ABCdef...')" | errors]
-    end
+      case section_value(sections, gateway, id) do
+        nil -> acc
+        section when is_map(section) -> module.validate(section, acc)
+        _ -> ["gateway.#{id}: must be a map" | acc]
+      end
+    end)
   end
 
-  defp validate_telegram_token(errors, _),
-    do: ["gateway.telegram.token: must be a string" | errors]
-
-  defp validate_telegram_compaction(errors, nil), do: errors
-
-  defp validate_telegram_compaction(errors, compaction) when is_map(compaction) do
-    errors
-    |> validate_boolean(Map.get(compaction, :enabled), "gateway.telegram.compaction.enabled")
-    |> validate_positive_integer(
-      Map.get(compaction, :context_window_tokens),
-      "gateway.telegram.compaction.context_window_tokens"
-    )
-    |> validate_positive_integer(
-      Map.get(compaction, :reserve_tokens),
-      "gateway.telegram.compaction.reserve_tokens"
-    )
-    |> validate_ratio(
-      Map.get(compaction, :trigger_ratio),
-      "gateway.telegram.compaction.trigger_ratio"
-    )
-  end
-
-  defp validate_telegram_compaction(errors, _),
-    do: ["gateway.telegram.compaction: must be a map" | errors]
-
-  @doc """
-  Validates Discord configuration.
-  """
-  @spec validate_discord_config([String.t()], map() | nil) :: [String.t()]
-  def validate_discord_config(errors, nil), do: errors
-
-  def validate_discord_config(errors, discord) when is_map(discord) do
-    errors
-    |> validate_discord_token(Map.get(discord, :bot_token))
-    |> validate_discord_id_list(
-      Map.get(discord, :allowed_guild_ids),
-      "gateway.discord.allowed_guild_ids"
-    )
-    |> validate_discord_id_list(
-      Map.get(discord, :allowed_channel_ids),
-      "gateway.discord.allowed_channel_ids"
-    )
-    |> validate_boolean(
-      Map.get(discord, :deny_unbound_channels),
-      "gateway.discord.deny_unbound_channels"
-    )
-    |> validate_boolean(
-      Map.get(discord, :message_content_intent_enabled),
-      "gateway.discord.message_content_intent_enabled"
-    )
-  end
-
-  def validate_discord_config(errors, _),
-    do: ["gateway.discord: must be a map" | errors]
-
-  defp validate_discord_token(errors, nil), do: errors
-
-  defp validate_discord_token(errors, token) when is_binary(token) do
-    cond do
-      env_var_reference?(token) ->
-        errors
-
-      valid_discord_token_format?(token) ->
-        errors
-
-      true ->
-        ["gateway.discord.bot_token: invalid format (expected Discord bot token format)" | errors]
-    end
-  end
-
-  defp validate_discord_token(errors, _),
-    do: ["gateway.discord.bot_token: must be a string" | errors]
-
-  defp valid_discord_token_format?(token) do
-    case String.split(token, ".") do
-      [user_id, timestamp, signature] ->
-        String.length(user_id) >= 10 and
-          String.length(timestamp) >= 5 and
-          String.length(signature) >= 5
-
-      _ ->
-        false
-    end
-  end
-
-  defp validate_discord_id_list(errors, nil, _path), do: errors
-
-  defp validate_discord_id_list(errors, ids, path) when is_list(ids) do
-    if Enum.all?(ids, &is_integer/1) do
-      errors
-    else
-      ["#{path}: must be a list of integers (Discord snowflake IDs)" | errors]
-    end
-  end
-
-  defp validate_discord_id_list(errors, _ids, path) do
-    ["#{path}: must be a list of integers" | errors]
-  end
+  defp section_value(sections, _gateway, id) when is_map(sections), do: Map.get(sections, id)
+  defp section_value(_sections, gateway, id), do: Map.get(gateway, id)
 
   @doc """
   Validates Web Dashboard configuration.
@@ -363,113 +359,6 @@ defmodule LemonCore.Config.Validator do
 
   defp validate_web_dashboard_access_token(errors, _),
     do: ["gateway.web_dashboard.access_token: must be a string" | errors]
-
-  @doc """
-  Validates XMTP configuration.
-  """
-  @spec validate_xmtp_config([String.t()], map() | nil) :: [String.t()]
-  def validate_xmtp_config(errors, nil), do: errors
-
-  def validate_xmtp_config(errors, xmtp) when is_map(xmtp) do
-    environment = Map.get(xmtp, :env) || Map.get(xmtp, :environment)
-
-    errors
-    |> validate_xmtp_wallet_key(Map.get(xmtp, :wallet_key))
-    |> validate_xmtp_wallet_address(Map.get(xmtp, :wallet_address))
-    |> validate_xmtp_environment(environment)
-    |> validate_xmtp_api_url(Map.get(xmtp, :api_url))
-    |> validate_positive_integer(
-      Map.get(xmtp, :poll_interval_ms),
-      "gateway.xmtp.poll_interval_ms"
-    )
-    |> validate_positive_integer(
-      Map.get(xmtp, :connect_timeout_ms),
-      "gateway.xmtp.connect_timeout_ms"
-    )
-    |> validate_boolean(Map.get(xmtp, :mock_mode), "gateway.xmtp.mock_mode")
-    |> validate_boolean(Map.get(xmtp, :require_live), "gateway.xmtp.require_live")
-    |> validate_positive_integer(Map.get(xmtp, :max_connections), "gateway.xmtp.max_connections")
-    |> validate_boolean(Map.get(xmtp, :enable_relay), "gateway.xmtp.enable_relay")
-  end
-
-  def validate_xmtp_config(errors, _),
-    do: ["gateway.xmtp: must be a map" | errors]
-
-  defp validate_xmtp_wallet_key(errors, nil), do: errors
-
-  defp validate_xmtp_wallet_key(errors, key) when is_binary(key) do
-    cond do
-      env_var_reference?(key) ->
-        errors
-
-      key |> String.replace_prefix("0x", "") |> then(&Regex.match?(~r/^[0-9a-fA-F]{64}$/, &1)) ->
-        errors
-
-      true ->
-        [
-          "gateway.xmtp.wallet_key: invalid format (expected 64-character hex string, optionally with 0x prefix)"
-          | errors
-        ]
-    end
-  end
-
-  defp validate_xmtp_wallet_key(errors, _),
-    do: ["gateway.xmtp.wallet_key: must be a string" | errors]
-
-  defp validate_xmtp_wallet_address(errors, nil), do: errors
-
-  defp validate_xmtp_wallet_address(errors, address) when is_binary(address) do
-    cond do
-      env_var_reference?(address) ->
-        errors
-
-      address
-      |> String.trim()
-      |> String.downcase()
-      |> String.trim_leading("0x")
-      |> then(&Regex.match?(~r/^[0-9a-f]{40}$/, &1)) ->
-        errors
-
-      true ->
-        [
-          "gateway.xmtp.wallet_address: invalid format (expected 40-character hex Ethereum address)"
-          | errors
-        ]
-    end
-  end
-
-  defp validate_xmtp_wallet_address(errors, _),
-    do: ["gateway.xmtp.wallet_address: must be a string" | errors]
-
-  defp validate_xmtp_environment(errors, nil), do: errors
-
-  defp validate_xmtp_environment(errors, env) when is_binary(env) do
-    valid_envs = ["production", "dev", "local"]
-
-    if env in valid_envs do
-      errors
-    else
-      [
-        "gateway.xmtp.environment: invalid environment '#{env}'. Valid: #{Enum.join(valid_envs, ", ")}"
-        | errors
-      ]
-    end
-  end
-
-  defp validate_xmtp_environment(errors, _),
-    do: ["gateway.xmtp.environment: must be a string" | errors]
-
-  defp validate_xmtp_api_url(errors, nil), do: errors
-
-  defp validate_xmtp_api_url(errors, url) when is_binary(url) do
-    if String.starts_with?(url, ["http://", "https://"]) do
-      errors
-    else
-      ["gateway.xmtp.api_url: must start with http:// or https://" | errors]
-    end
-  end
-
-  defp validate_xmtp_api_url(errors, _), do: ["gateway.xmtp.api_url: must be a string" | errors]
 
   @doc """
   Validates Email configuration.
@@ -685,7 +574,9 @@ defmodule LemonCore.Config.Validator do
     |> validate_boolean(Map.get(tui, :debug), "tui.debug")
   end
 
-  # Private validation helpers
+  # Generic validation helpers. The scalar checks below are public so
+  # `LemonCore.Config.Gateway.Channel` implementations, which validate their own
+  # section from another application, emit messages in the same shape.
 
   defp validate_non_empty_string(errors, nil, _path) do
     errors
@@ -712,9 +603,11 @@ defmodule LemonCore.Config.Validator do
     ["#{path}: must be a string" | errors]
   end
 
-  defp validate_positive_integer(errors, nil, _path), do: errors
+  @doc "Prepends an error unless `value` is `nil` or a positive integer."
+  @spec validate_positive_integer([String.t()], term(), String.t()) :: [String.t()]
+  def validate_positive_integer(errors, nil, _path), do: errors
 
-  defp validate_positive_integer(errors, value, path) when is_integer(value) do
+  def validate_positive_integer(errors, value, path) when is_integer(value) do
     if value > 0 do
       errors
     else
@@ -722,13 +615,15 @@ defmodule LemonCore.Config.Validator do
     end
   end
 
-  defp validate_positive_integer(errors, _value, path) do
+  def validate_positive_integer(errors, _value, path) do
     ["#{path}: must be a positive integer" | errors]
   end
 
-  defp validate_non_negative_integer(errors, nil, _path), do: errors
+  @doc "Prepends an error unless `value` is `nil` or a non-negative integer."
+  @spec validate_non_negative_integer([String.t()], term(), String.t()) :: [String.t()]
+  def validate_non_negative_integer(errors, nil, _path), do: errors
 
-  defp validate_non_negative_integer(errors, value, path) when is_integer(value) do
+  def validate_non_negative_integer(errors, value, path) when is_integer(value) do
     if value >= 0 do
       errors
     else
@@ -736,7 +631,7 @@ defmodule LemonCore.Config.Validator do
     end
   end
 
-  defp validate_non_negative_integer(errors, _value, path) do
+  def validate_non_negative_integer(errors, _value, path) do
     ["#{path}: must be a non-negative integer" | errors]
   end
 
@@ -754,9 +649,11 @@ defmodule LemonCore.Config.Validator do
     ["#{path}: must be a positive integer" | errors]
   end
 
-  defp validate_ratio(errors, nil, _path), do: errors
+  @doc "Prepends an error unless `value` is `nil` or a number in `0.0..1.0`."
+  @spec validate_ratio([String.t()], term(), String.t()) :: [String.t()]
+  def validate_ratio(errors, nil, _path), do: errors
 
-  defp validate_ratio(errors, value, path) when is_float(value) or is_integer(value) do
+  def validate_ratio(errors, value, path) when is_float(value) or is_integer(value) do
     if value >= 0.0 and value <= 1.0 do
       errors
     else
@@ -764,15 +661,17 @@ defmodule LemonCore.Config.Validator do
     end
   end
 
-  defp validate_ratio(errors, _value, path) do
+  def validate_ratio(errors, _value, path) do
     ["#{path}: must be a number between 0.0 and 1.0" | errors]
   end
 
-  defp validate_boolean(errors, nil, _path), do: errors
+  @doc "Prepends an error unless `value` is `nil` or a boolean."
+  @spec validate_boolean([String.t()], term(), String.t()) :: [String.t()]
+  def validate_boolean(errors, nil, _path), do: errors
 
-  defp validate_boolean(errors, value, _path) when is_boolean(value), do: errors
+  def validate_boolean(errors, value, _path) when is_boolean(value), do: errors
 
-  defp validate_boolean(errors, _value, path) do
+  def validate_boolean(errors, _value, path) do
     ["#{path}: must be a boolean" | errors]
   end
 
@@ -932,12 +831,18 @@ defmodule LemonCore.Config.Validator do
     ["providers.providers.#{name}: must be a map" | errors]
   end
 
-  # Checks if a string references an environment variable (e.g. "${MY_VAR}")
-  defp env_var_reference?(str) when is_binary(str) do
+  @doc """
+  Returns true when the string references an environment variable, e.g. `"${MY_VAR}"`.
+
+  Secret-bearing fields skip format validation for these, because the value is
+  only known at runtime.
+  """
+  @spec env_var_reference?(term()) :: boolean()
+  def env_var_reference?(str) when is_binary(str) do
     String.starts_with?(str, "${") and String.ends_with?(str, "}")
   end
 
-  defp env_var_reference?(_), do: false
+  def env_var_reference?(_), do: false
 
   defp validate_provider_secret_refs(errors, name, config, path_prefix) do
     [

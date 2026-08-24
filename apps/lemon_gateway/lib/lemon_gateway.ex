@@ -2,16 +2,15 @@ defmodule LemonGateway do
   @moduledoc """
   Public API for submitting execution commands to the Lemon Gateway.
 
-  The gateway orchestrates AI agent runs across multiple transport channels
-  (Telegram, Discord, Email, XMTP, Webhooks) and engine backends
-  (Lemon, Claude, Codex, Opencode, Pi).
+  The gateway schedules native AI agent runs across transport channels
+  (Telegram, Discord, Email, XMTP, and Webhooks) through one configured
+  executor.
 
   ## Usage
 
       command = %LemonCore.ExecutionCommand{
         run_id: "run_123",
         prompt: "Fix the failing test",
-        engine_id: "lemon",
         session_key: "telegram:12345",
         conversation_key: {:session, "telegram:12345"}
       }

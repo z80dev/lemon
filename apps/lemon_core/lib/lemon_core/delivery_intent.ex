@@ -14,6 +14,7 @@ defmodule LemonCore.DeliveryIntent do
           | :file_batch
           | :reaction
           | :watchdog_prompt
+          | :notice
 
   @enforce_keys [:intent_id, :run_id, :session_key, :route, :kind]
   defstruct [

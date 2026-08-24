@@ -292,9 +292,10 @@ defmodule LemonMCP.Server.Handler do
   Handles a raw JSON-RPC request (decoded JSON map).
 
   This is a convenience function for the HTTP transport layer.
+  Parse failures are returned as JSON-RPC error responses, so the function
+  always succeeds with a response struct.
   """
-  @spec handle_json_request(map(), GenServer.server()) ::
-          {:ok, Protocol.JSONRPCResponse.t()} | {:error, term()}
+  @spec handle_json_request(map(), GenServer.server()) :: {:ok, Protocol.JSONRPCResponse.t()}
   def handle_json_request(json_payload, server) do
     case Protocol.parse_request(json_payload) do
       {:ok, request} ->

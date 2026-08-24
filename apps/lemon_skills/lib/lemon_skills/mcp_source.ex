@@ -1,9 +1,37 @@
 defmodule LemonSkills.McpSource do
   @moduledoc """
-  MCP (Model Context Protocol) source for discovering and caching tools from MCP servers.
+  MCP (Model Context Protocol) tool source: connects to configured MCP servers,
+  caches the tools they advertise, and invokes them on behalf of an agent.
 
-  This module manages connections to external MCP servers, caches discovered tools,
-  and provides a unified interface for tool discovery and invocation.
+  This is a supervised `GenServer` started by `LemonSkills.Application` under the
+  fixed name `LemonSkills.McpSource`, so the client functions below are called
+  without a pid. Unlike the modules under `LemonSkills.Tools`, which are wired
+  into an agent's tool list at compile time, MCP tools are discovered at runtime:
+  a host asks `discover_tools/1` for the current list and merges it into its own.
+
+  ## Configuration
+
+  Servers come from `LemonSkills.Config.mcp_servers/0`, which reads the
+  `LEMON_MCP_SERVERS` environment variable (a JSON array) and falls back to
+  `config :lemon_skills, :mcp_servers`. Each entry is a `t:server_config/0`
+  tuple: `:stdio` (command plus args), `:http`, or `:sse` (URL). Validate one
+  with `validate_config/1` before installing it.
+
+  ## Disabled mode
+
+  MCP is off when `config :lemon_skills, :mcp_disabled` is true, when
+  `LEMON_MCP_DISABLED` is set to a truthy value, or when no MCP client library
+  is available in the release. The GenServer still starts — it is part of the
+  supervision tree either way — but answers as an empty source: `[]` from
+  `discover_tools/1`, `:error` from `get_tool/1`, and
+  `{:error, :mcp_disabled}` from `call_tool/3`. Check with `mcp_enabled?/0`.
+
+  ## Caching
+
+  Tools are cached for five minutes and refreshed in the background every
+  minute; a configuration change reloads the servers on the next call. Pass
+  `force_refresh: true` to `discover_tools/1`, or call `refresh/0`, to re-ask
+  every connected server immediately.
   """
 
   use GenServer
@@ -44,7 +72,20 @@ defmodule LemonSkills.McpSource do
   end
 
   @doc """
-  Discover all tools from configured MCP servers.
+  Returns the tools advertised by every configured MCP server.
+
+  Each tool is a `LemonAgent.Types.AgentTool` whose `execute` closure routes back
+  through `call_tool/3`, so the caller can merge them straight into an agent's
+  tool list.
+
+  ## Options
+
+  - `:force_refresh` — re-query every connected server instead of answering from
+    the cache (default: `false`)
+
+  Returns `[]` when MCP is disabled, and also when it is enabled but no server is
+  configured or reachable — a caller cannot distinguish those cases from the
+  return value alone; use `status/0` or `mcp_enabled?/0` for that.
   """
   @spec discover_tools(keyword()) :: [AgentTool.t()]
   def discover_tools(opts \\ []) do
@@ -52,7 +93,11 @@ defmodule LemonSkills.McpSource do
   end
 
   @doc """
-  Get a specific tool by name from MCP sources.
+  Looks up a single discovered tool by its namespaced name.
+
+  Returns `{:ok, tool}` when the name is in the current cache, and `:error` when
+  it is not — including when MCP is disabled, or when the tool exists on a server
+  that has not been discovered yet (call `discover_tools/1` first).
   """
   @spec get_tool(String.t()) :: {:ok, AgentTool.t()} | :error
   def get_tool(name) when is_binary(name) do
@@ -60,7 +105,17 @@ defmodule LemonSkills.McpSource do
   end
 
   @doc """
-  Call a tool from an MCP server.
+  Invokes a discovered MCP tool and returns its result.
+
+  `tool_name` is the namespaced name from `discover_tools/1` and `params` is the
+  argument map matching that tool's schema. `opts` is passed through to the MCP
+  client for the request.
+
+  Returns `{:ok, %LemonAgent.Types.AgentToolResult{}}` on success, or
+  `{:error, reason}`: `:mcp_disabled` when MCP is off, `:not_found` when the name
+  is not in the tool cache, `:not_connected` when the owning server is configured
+  but its client is down, or the error term the MCP client reported. The call has
+  no timeout — a hung server blocks the caller until its own client times out.
   """
   @spec call_tool(String.t(), map(), keyword()) ::
           {:ok, AgentToolResult.t()} | {:error, term()}
@@ -69,7 +124,9 @@ defmodule LemonSkills.McpSource do
   end
 
   @doc """
-  Refresh the tool cache from all MCP servers.
+  Re-queries every configured MCP server and replaces the tool cache.
+
+  Always returns `:ok`, including in disabled mode, where it is a no-op.
   """
   @spec refresh() :: :ok
   def refresh do
@@ -77,7 +134,9 @@ defmodule LemonSkills.McpSource do
   end
 
   @doc """
-  Get the status of all configured MCP servers.
+  Returns a map describing every configured MCP server: its connection state and
+  the tools it contributed. Intended for diagnostics (`mix lemon.doctor`, the
+  control plane status method), not for control flow.
   """
   @spec status() :: map()
   def status do
@@ -85,7 +144,13 @@ defmodule LemonSkills.McpSource do
   end
 
   @doc """
-  Validate an MCP server configuration.
+  Checks one server configuration without installing it.
+
+  Returns `:ok`, or `{:error, message}` with a human-readable reason: an empty
+  stdio command, a URL that is not valid HTTP(S), or a tuple that is not a
+  recognised `t:server_config/0` shape at all. `LemonSkills.Config.mcp_servers/0`
+  entries are checked with the same rules by
+  `LemonSkills.Config.validate_mcp_servers/1`.
   """
   @spec validate_config(server_config()) :: :ok | {:error, String.t()}
   def validate_config({:stdio, command, args})
@@ -132,7 +197,13 @@ defmodule LemonSkills.McpSource do
   end
 
   @doc """
-  Check if MCP support is available and enabled.
+  True when MCP tools can be used in this runtime.
+
+  False when `config :lemon_skills, :mcp_disabled` is true, when
+  `LEMON_MCP_DISABLED` is `1`/`true`/`yes` (any case), or when no MCP stdio
+  client module is loaded. Read at boot to decide how the GenServer starts, and
+  safe to call from anywhere afterwards — it consults configuration, not the
+  server's state.
   """
   @spec mcp_enabled?() :: boolean()
   def mcp_enabled? do

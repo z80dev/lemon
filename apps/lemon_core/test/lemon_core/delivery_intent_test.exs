@@ -12,7 +12,7 @@ defmodule LemonCore.DeliveryIntentTest do
   test "builds with semantic defaults" do
     route =
       struct!(DeliveryRoute,
-        channel_id: "telegram",
+        channel_id: "demo",
         account_id: "default",
         peer_kind: :dm,
         peer_id: "123"

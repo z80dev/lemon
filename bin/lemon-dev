@@ -65,7 +65,7 @@ Options:
   --provider <provider>      Override provider (e.g., kimi, openai)
   --base-url <url>           Override API base URL
   --debug                    Enable debug mode
-  --rebuild                  Force rebuild of TUI
+  --rebuild                  Reinstall TUI dependencies
   --help                     Show this help
 
 Arguments:
@@ -144,7 +144,7 @@ if [[ ! -f "$LEMON_ROOT/mix.exs" ]] || [[ ! -d "$LEMON_ROOT/apps" ]]; then
     exit 1
 fi
 
-TUI_DIR="$LEMON_ROOT/clients/lemon-tui"
+TUI_DIR="$LEMON_ROOT/clients/tui"
 
 # Check if TUI exists
 if [[ ! -d "$TUI_DIR" ]]; then
@@ -166,17 +166,17 @@ mix compile --no-warnings 2>/dev/null || {
     mix compile
 }
 
-# Ensure TUI is built
+# Ensure TUI dependencies are installed
 cd "$TUI_DIR"
 
-if [[ ! -d "node_modules" ]]; then
-    info "Installing TUI dependencies..."
-    npm install
+if ! command -v bun >/dev/null 2>&1; then
+    error "Bun is required to run the TUI. Install Bun and ensure 'bun' is on PATH."
+    exit 1
 fi
 
-if [[ ! -f "dist/index.js" ]] || [[ "$REBUILD" == "1" ]]; then
-    info "Building TUI..."
-    npm run build
+if [[ ! -d "node_modules" ]] || [[ "$REBUILD" == "1" ]]; then
+    info "Installing TUI dependencies..."
+    bun install --frozen-lockfile
 fi
 
 # Build TUI arguments
@@ -202,4 +202,4 @@ TUI_ARGS+=("--cwd" "$CWD")
 # Run the TUI
 info "Starting Lemon TUI..."
 info "Working directory: $CWD"
-exec node dist/cli.js "${TUI_ARGS[@]}"
+exec bun src/main.ts "${TUI_ARGS[@]}"

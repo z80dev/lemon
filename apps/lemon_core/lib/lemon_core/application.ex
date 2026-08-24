@@ -62,7 +62,7 @@ defmodule LemonCore.Application do
         LemonCore.Bus.child_spec_for_backend(),
         LemonCore.ACPClientBridge,
         {LemonCore.ConfigCache, config_cache_opts},
-        LemonCore.Store
+        LemonCore.Store,
       ] ++
         sqlite_children() ++
         [

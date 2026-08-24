@@ -9,31 +9,8 @@ defmodule CodingAgent.Session.PersistenceTest do
   alias CodingAgent.Session.Persistence
   alias CodingAgent.Session.State
   alias CodingAgent.SessionManager
-  alias LemonGateway.Engines.CliAdapter
-  alias LemonGateway.Types.Job
-
-  defmodule RouterPersistenceRunnerProxy do
-    alias LemonAgent.Test.Mocks
-    alias CodingAgent.CliRunners.LemonRunner
-
-    def start_link(opts) do
-      if owner = Keyword.get(opts, :owner) do
-        send(owner, {:runner_start_opts, opts})
-      end
-
-      LemonRunner.start_link(
-        Keyword.put_new(
-          opts,
-          :stream_fn,
-          Mocks.mock_stream_fn_single(Mocks.assistant_message("ack"))
-        )
-      )
-    end
-
-    def stream(pid), do: LemonRunner.stream(pid)
-    def cancel(pid), do: LemonRunner.cancel(pid)
-    def cancel(pid, reason), do: LemonRunner.cancel(pid, reason)
-  end
+  alias CodingAgent.Executor
+  alias LemonGateway.ExecutionRequest
 
   test "persist_message appends supported message types" do
     session_manager = SessionManager.new("/tmp")
@@ -210,26 +187,21 @@ defmodule CodingAgent.Session.PersistenceTest do
       }
     ]
 
-    job = %Job{
+    request = %ExecutionRequest{
       run_id: "run-123",
       session_key: "agent:test:main",
       prompt: "[task task-123] delegated work completed",
       images: [%{data: "ZmFrZQ==", mime_type: "image/png"}],
+      cwd: tmp_dir,
       meta: %{model: Mocks.mock_model(), async_followups: async_followups}
     }
 
     assert {:ok, run_ref, %{runner_pid: runner_pid}} =
-             CliAdapter.start_run(
-               RouterPersistenceRunnerProxy,
-               "lemon",
-               job,
-               %{cwd: tmp_dir},
+             Executor.start_run(
+               request,
+               %{stream_fn: Mocks.mock_stream_fn_single(Mocks.assistant_message("ack"))},
                self()
              )
-
-    assert_receive {:runner_start_opts, start_opts}, 1_000
-    assert start_opts[:async_followups] == async_followups
-    assert start_opts[:images] == [%{data: "ZmFrZQ==", mime_type: "image/png"}]
 
     assert_receive {:engine_event, ^run_ref,
                     %{__event__: :started, resume: %{value: session_id}}},
