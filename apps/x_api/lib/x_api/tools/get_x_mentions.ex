@@ -86,39 +86,14 @@ defmodule XApi.Tools.GetXMentions do
   # Private Functions
   # ============================================================================
 
-  defp format_mentions_result(%{"data" => mentions, "includes" => includes})
-       when is_list(mentions) do
+  defp format_mentions_result(%{"data" => mentions} = response) when is_list(mentions) do
     users =
-      Map.get(includes, "users", [])
-      |> Map.new(fn u -> {u["id"], u} end)
+      case get_in(response, ["includes", "users"]) do
+        users when is_list(users) -> Map.new(users, fn user -> {user["id"], user} end)
+        _ -> %{}
+      end
 
-    formatted_mentions =
-      Enum.map(mentions, fn m ->
-        author = Map.get(users, m["author_id"], %{})
-
-        %{
-          id: m["id"],
-          text: m["text"],
-          author_username: author["username"],
-          author_name: author["name"],
-          created_at: m["created_at"]
-        }
-      end)
-
-    build_result(formatted_mentions, length(mentions))
-  end
-
-  defp format_mentions_result(%{"data" => mentions}) when is_list(mentions) do
-    formatted_mentions =
-      Enum.map(mentions, fn m ->
-        %{
-          id: m["id"],
-          text: m["text"],
-          author_id: m["author_id"],
-          created_at: m["created_at"]
-        }
-      end)
-
+    formatted_mentions = Enum.map(mentions, &format_mention(&1, users))
     build_result(formatted_mentions, length(mentions))
   end
 
@@ -135,6 +110,19 @@ defmodule XApi.Tools.GetXMentions do
 
   defp format_mentions_result(other) do
     return_error("Unexpected response from X API: #{inspect(other)}")
+  end
+
+  defp format_mention(mention, users) do
+    author = Map.get(users, mention["author_id"], %{})
+
+    %{
+      id: mention["id"],
+      text: mention["text"],
+      author_id: mention["author_id"],
+      author_username: author["username"],
+      author_name: author["name"],
+      created_at: mention["created_at"]
+    }
   end
 
   defp ensure_configured do
