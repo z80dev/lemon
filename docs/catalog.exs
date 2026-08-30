@@ -47,6 +47,7 @@
     %{path: "docs/tools/firecrawl.md", last_reviewed: ~D[2026-06-17]},
     %{path: "docs/tools/lsp.md", last_reviewed: ~D[2026-08-09]},
     %{path: "docs/tools/media.md", last_reviewed: ~D[2026-08-09]},
+    %{path: "docs/tools/omp-tooling-audit.md", last_reviewed: ~D[2026-08-30]},
     %{path: "docs/tools/openai-compatible-api.md", last_reviewed: ~D[2026-08-09]},
     %{path: "docs/tools/web.md", last_reviewed: ~D[2026-08-09]},
     %{path: "docs/tools/wasm.md", last_reviewed: ~D[2026-06-17]},
