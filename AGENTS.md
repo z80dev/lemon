@@ -17,6 +17,7 @@
 | Modify SMS/voice transports | `apps/lemon_gateway/` |
 | Add new messaging channel adapters (X, XMTP, etc.) | `apps/lemon_channels/` |
 | Modify setup, onboarding, or Hermes migration CLI flows | `apps/lemon_cli/` |
+| Work on packaged/source command help, completion, or session lifecycle CLI | `apps/lemon_cli/` (`CommandRegistry`, `CompletionCommand`, `SessionsCommand`) |
 | Work on agent routing or message flow | `apps/lemon_router/` |
 | Build HTTP/WebSocket API features | `apps/lemon_control_plane/` |
 | Manage configuration, secrets, or storage | `apps/lemon_core/` |
@@ -279,6 +280,8 @@ npm run dev      # Watch mode
 ./bin/lemon send --dry-run --to discord:#ops --attach report.txt "done"  # Validate without delivery
 ./bin/lemon backup create --json  # Atomic, verified durable-user-state backup
 ./bin/lemon backup verify ~/.lemon/backups/<bundle>.lemonbackup --json
+./bin/lemon sessions list --limit 20 --json  # Bounded durable session inventory
+./bin/lemon completion zsh  # Generate source-launcher-aware completion
 ./bin/lemon node join --name worker-1 --controller wss://controller.example/ws --pair --cwd /path/to/project
 ./bin/lemon-tui    # Dev TUI; securely token-pairs with a launcher-owned runtime
 ```
@@ -306,6 +309,14 @@ environment, master-key, and execution-node credentials require the explicit
 `--include-credentials` flag. Restore must verify the entire bundle before
 mutation; overwrite authorization is bound to the manifest digest and expanded
 target root.
+
+`lemon sessions` and `./bin/lemon sessions` reuse
+`LemonCore.SessionLifecycle`: history and exports remain redacted, reads are
+bounded, single deletion is verified and exact-key confirmed, and prune must
+preview before using the exact candidate-bound token with the preview's
+millisecond cutoff. `LemonCli.CommandRegistry` is the runtime-family source for
+dispatch, help, and Bash/Zsh/Fish completion; keep source-only and
+release-only launcher commands in their separate registry sets.
 
 ---
 
@@ -554,6 +565,7 @@ This repository includes an optional pre-push hook that uses **kimi** to review 
 - `docs/platform/` - Per-package platform guides (lemon_core, lemon_agent, lemon_ai, lemon_channels, lemon_gateway, lemon_memory, lemon_router, lemon_platform_test)
 - `docs/config.md` - Runtime configuration reference
 - `docs/user-guide/backups.md` - Versioned user-state backup and guarded restore contract
+- `docs/user-guide/cli.md` - Runtime CLI families, durable sessions, exit codes, JSON, and shell completion
 - `docs/mix-tasks.md` - Grouped reference for every `mix lemon.*` task, including the quality/cleanup harness (`mix lemon.quality`, `mix lemon.cleanup`)
 - `docs/skills.md` - Skill system documentation
 - `docs/testing.md` - Canonical repo-level test lanes and CI parity guidance
@@ -619,7 +631,9 @@ Each app has its own `AGENTS.md` with detailed context:
 
 ---
 
-*Last updated: 2026-08-30* (architecture reporting now parses complete `deps/0`
+*Last updated: 2026-08-30* (the Mix-free command registry now drives runtime
+dispatch/help/completion and the packaged/source sessions CLI reuses the shared
+redacted lifecycle; architecture reporting parses complete `deps/0`
 bodies and distinguishes direct dependencies from reference-only exceptions;
 `lemon_mcp` is assembled as a library-only `:load` application with no empty
 application supervisor; one-shot media jobs use `Task.Supervisor` rather than a

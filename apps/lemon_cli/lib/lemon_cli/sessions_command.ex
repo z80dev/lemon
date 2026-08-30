@@ -277,9 +277,7 @@ defmodule LemonCli.SessionsCommand do
     modes = if exclusive?, do: [:write, :binary, :exclusive], else: [:write, :binary]
 
     with :ok <- File.mkdir_p(Path.dirname(path)),
-         {:ok, file} <- File.open(path, modes),
-         :ok <- IO.binwrite(file, content),
-         :ok <- File.close(file),
+         {:ok, :ok} <- File.open(path, modes, &IO.binwrite(&1, content)),
          :ok <- File.chmod(path, 0o600) do
       :ok
     else
@@ -524,9 +522,16 @@ defmodule LemonCli.SessionsCommand do
   end
 
   defp ensure_started do
-    case Application.ensure_all_started(:lemon_core) do
-      {:ok, _apps} -> :ok
-      {:error, _reason} -> {:error, "The Lemon session store is unavailable."}
+    previous_level = Logger.level()
+    Logger.configure(level: :warning)
+
+    try do
+      case Application.ensure_all_started(:lemon_core) do
+        {:ok, _apps} -> :ok
+        {:error, _reason} -> {:error, "The Lemon session store is unavailable."}
+      end
+    after
+      Logger.configure(level: previous_level)
     end
   end
 

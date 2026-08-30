@@ -18,6 +18,9 @@
 - **User-managed profiles** — Create durable specialist agents with stable chats,
   separate bootstrap/memory/skill workspaces, optional model/node assignment,
   node-aware roster status, safe clone/export, and guarded deletion.
+- **Durable session operations** — Search and inspect bounded redacted history,
+  title/pin/archive sessions, create redacted exports, and preview-confirm
+  verified pruning from the packaged or source CLI.
 - **LemonSim and benchmark arenas** — Event-sourced simulation worlds (Werewolf, Space Station, Stock Market, Survivor, Poker) and reproducible offline benchmark scoring without provider API keys.
 - **Supervised on the BEAM** — Each agent run is an isolated OTP process. Separate conversations execute concurrently, crashed workers are supervised, and durable session state survives individual requests.
 
@@ -89,6 +92,19 @@ lemon profile roster
 
 See [User-managed profiles](docs/user-guide/profiles.md) for lifecycle,
 filesystem isolation, named-node routing, and export safeguards.
+
+Inspect or safely manage durable sessions, and install completion generated
+from the same registry as CLI help and dispatch:
+
+```bash
+lemon sessions list --limit 20
+lemon sessions search "deployment follow-up"
+lemon sessions export agent:research:main --format markdown
+lemon completion zsh > "$HOME/.zfunc/_lemon"
+```
+
+See the [Lemon command-line reference](docs/user-guide/cli.md) for the complete
+session lifecycle, guarded prune, exit-code, JSON, and shell setup contracts.
 
 ---
 
@@ -299,6 +315,7 @@ graph TD
 | [Documentation Index](docs/README.md) | Complete documentation catalog |
 | [Installation Guide](docs/install.md) | Prebuilt releases, platform support, and headless setup |
 | [Configuration Reference](docs/config.md) | Runtime configuration and environment variables |
+| [Command-line Reference](docs/user-guide/cli.md) | Runtime commands, durable sessions, exit codes, and shell completion |
 | [Backup and Restore](docs/user-guide/backups.md) | `~/.lemon` data contract, verification, guarded restore, and rollback |
 | [Testing Guide](docs/testing.md) | Test suites, quality gates, and CI parity |
 | [Mix Tasks Reference](docs/mix-tasks.md) | Grouped reference for all `mix lemon.*` commands |

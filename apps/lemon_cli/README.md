@@ -48,6 +48,38 @@ release and source-checkout behavior aligned.
 | Back up or restore durable user state | `lemon backup create` | `./bin/lemon backup create` | Call `LemonCli.CLI.run/1` from contributor tooling |
 | Manage specialist profiles | `lemon profile list` | `./bin/lemon profile list` | Use the same packaged command boundary |
 | Preview/resolve bounded context | `lemon context preview|resolve ...` | `./bin/lemon context preview|resolve ...` | Call `LemonCore.Context` from IEx/tests |
+| Manage durable sessions | `lemon sessions list` | `./bin/lemon sessions list` | Call `LemonCore.SessionLifecycle` from IEx/tests |
+| Generate shell completion | `lemon completion zsh` | `./bin/lemon completion zsh` | Call `LemonCli.CompletionCommand.render/2` from IEx/tests |
+
+## Command registry and completion
+
+`LemonCli.CommandRegistry` is the single source for Mix-free runtime-family
+dispatch, top-level help, command help, and shell completion metadata. It
+contains setup, model, gateway, doctor, config, secrets, channels, profile,
+backup, context, sessions, and completion. Launcher-only metadata is separated
+into source and release sets so generated scripts never advertise commands the
+current launcher cannot run.
+
+`lemon completion bash|zsh|fish` emits only the completion program to stdout.
+The source wrapper compiles quietly before generation; packaged runtimes use
+the fixed release eval expression and pass the requested shell as argument
+data. See the [command-line reference](../../docs/user-guide/cli.md) for
+installation examples.
+
+## Durable session management
+
+`lemon sessions` adapts `LemonCore.SessionLifecycle` without reimplementing
+store queries. List/search/show/history reads are bounded, history is always
+redacted, title/pin/archive updates require an existing session, exports are
+selected-field and always redacted, and delete reports success only after the
+shared service verifies canonical history and ancillary state are gone.
+
+Prune previews archived, unpinned sessions by default. Execution requires the
+token from the exact cutoff, flags, candidates, and lifecycle metadata shown by
+the preview; a relative age must be replaced with the preview's exact
+`older_than_ms` for confirmation. `--all` and `--include-pinned` are explicit
+scope wideners. Human and JSON errors contain stable safe messages rather than
+store paths, raw runtime terms, credentials, or secret values.
 
 ## Backup and restore
 

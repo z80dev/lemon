@@ -48,6 +48,7 @@ failures.
 | [user-guide/backups.md](user-guide/backups.md) | Versioned `~/.lemon` data contract, atomic backup verification, and guarded restore |
 | [user-guide/web.md](user-guide/web.md) | Launch the local browser, complete readiness, stop runs, configure access, and recover errors |
 | [user-guide/profiles.md](user-guide/profiles.md) | Create isolated specialist profiles, use canonical chats/roster, clone/export safely, and delete recoverably |
+| [user-guide/cli.md](user-guide/cli.md) | Runtime command families, durable session lifecycle, stable exit codes, JSON, and shell completion |
 | [user-guide/migrate-from-hermes.md](user-guide/migrate-from-hermes.md) | Preview-first migration path for Hermes memories, skills, config, secrets, and session recall |
 | [user-guide/skills.md](user-guide/skills.md) | Skills: listing, installing, inspecting, synthesizing drafts |
 | [user-guide/memory.md](user-guide/memory.md) | Memory documents, session search, retention management |

@@ -19958,7 +19958,7 @@ must not be copied into new plans.
 | --- | --- | --- |
 | No programmatic tool calling | [`execute_code.ex`](../../apps/coding_agent/lib/coding_agent/tools/execute_code.ex) provides bounded Python RPC over an allowlist; [usage docs](../tools/execute-code.md) cover per-call and persistent kernels. | Disabled by default and its allowlist is smaller than the whole tool catalog, but the mechanism exists end to end. |
 | No progressive tool disclosure | [`tool_disclosure.ex`](../../apps/coding_agent/lib/coding_agent/tool_disclosure.ex) freezes a session catalog and substitutes `tool_search`/`tool_invoke` when schema cost crosses the configured budget. | Built-ins stay visible; deferred MCP/extension/WASM tools still pass the normal policy and approval path. |
-| No redirect interruption | [`AbortSignal`](../../apps/lemon_agent/lib/lemon_agent/abort_signal.ex), the [streaming loop](../../apps/lemon_agent/lib/lemon_agent/loop/streaming.ex), and [`CodingAgent.Session`](../../apps/coding_agent/lib/coding_agent/session.ex) implement redirect while preserving completed tool results and degrading to steer during tool execution. | Local native runs support it. Remote named-node steering/redirect remains an explicit boundary. |
+| No redirect interruption | [`AbortSignal`](../../apps/lemon_agent/lib/lemon_agent/abort_signal.ex), the [streaming loop](../../apps/lemon_agent/lib/lemon_agent/loop/streaming.ex), and [`CodingAgent.Session`](../../apps/coding_agent/lib/coding_agent/session.ex) implement redirect while preserving completed tool results and degrading to steer during tool execution. | Local and named-node native runs support invocation-bound steer/redirect with authenticated destination acknowledgement and fail-closed terminal races. Cross-client redirect UX remains to be completed. |
 | Provider fallback was only a preview ordering | [`ProviderRouting`](../../apps/lemon_agent/lib/lemon_agent/model_runtime/provider_routing.ex) builds route candidates; [`ProviderFallback`](../../apps/coding_agent/lib/coding_agent/session/provider_fallback.ex) executes per-turn provider and credential failover with cooldowns and session pinning. | Runtime resilience is implemented; self-service pool/fallback administration is still weak. |
 | No same-provider credential rotation | [`ProviderPoolRotator`](../../apps/lemon_agent/lib/lemon_agent/model_runtime/provider_pool_rotator.ex) and session fallback implement pool rotation; [live test guidance](../testing.md) covers invalid-to-valid credential proof. | No Hermes-like `auth`/pool management UX in the packaged CLI or Web. |
 | Cron lacked monitor mode, command jobs, chaining, drift guard, and preflight | [`CronManager`](../../apps/lemon_automation/lib/lemon_automation/cron_manager.ex), [`CronMonitor`](../../apps/lemon_automation/lib/lemon_automation/cron_monitor.ex), [`CronContext`](../../apps/lemon_automation/lib/lemon_automation/cron_context.ex), [`CronPreflight`](../../apps/lemon_automation/lib/lemon_automation/cron_preflight.ex), and [`CronCommandRunner`](../../apps/lemon_automation/lib/lemon_automation/cron_command_runner.ex) implement all five. | Automation blueprints/suggestions and a simple recurring `/loop` UX remain gaps. |
@@ -19983,7 +19983,7 @@ must not be copied into new plans.
 | User job | Hermes at pinned upstream | Lemon at pinned baseline | Status | Priority | Concrete next closure |
 | --- | --- | --- | --- | --- | --- |
 | Configure models, auth pools, fallback, and per-task routing | Hermes has interactive provider/model setup, OAuth credentials, credential pools, ordered fallbacks, auxiliary task models, provider routing, custom endpoints, and selectable [Mixture of Agents](https://hermes-agent.nousresearch.com/docs/user-guide/features/mixture-of-agents) presets. The [provider catalog](https://hermes-agent.nousresearch.com/docs/integrations/providers) is user-facing. | Lemon supports a broad provider set, custom endpoints, model catalogs, per-session resolution, live provider fallback, credential pools, cooldowns, and route preview. Setup can configure a provider and default model. Pool/fallback editing is not a cohesive end-user workflow; MoA reference fan-out/presets are absent. | Near at runtime; partial in UX | **High** | Ship `lemon auth`, `lemon fallback`, and pool commands plus equivalent Web forms and health proof. Treat MoA as a separate opt-in orchestration feature with cost/budget visibility. |
-| Interrupt, steer, or redirect a running agent | Hermes distinguishes hard interrupt, non-canceling steer, and model-request redirect. | Lemon implements the same local-native semantics through router queue modes, `CodingAgent.Session`, and `LemonAgent.Loop`. | Near | Medium | Expose all three consistently in every client and carry steer/redirect over named-node invocation rather than falling back at the remote boundary. |
+| Interrupt, steer, or redirect a running agent | Hermes distinguishes hard interrupt, non-canceling steer, and model-request redirect. | Lemon implements the same semantics through router queue modes, `CodingAgent.Session`, and `LemonAgent.Loop`; named-node runs carry bounded steer/redirect controls to the actual destination session and wait for authenticated acceptance. | Near | Medium | Expose redirect consistently in the remaining clients; TUI `queueMode: steer` and `queueMode: redirect` must remain distinct user choices. |
 | Avoid context bloat from large tool catalogs and intermediate data | Hermes documents [Tool Search](https://hermes-agent.nousresearch.com/docs/user-guide/features/tool-search), [`execute_code`](https://hermes-agent.nousresearch.com/docs/user-guide/features/code-execution), result offloading, and multiple compaction paths. | Lemon has frozen progressive disclosure, `execute_code`, output truncation/blob offload, context guardrails, summarization/hybrid compaction, overflow recovery, and cache-stable tool catalogs. | Near | Medium | Enable and explain safe defaults, widen the execute-code allowlist based on policy, and add live compaction/cost observability rather than another mechanism. |
 | Browse and operate the Web or desktop | Hermes exposes local/cloud browser providers, browser profiles, computer use, screenshots, and document/deliverable workflows in its [tools overview](https://hermes-agent.nousresearch.com/docs/user-guide/features/tools). | Lemon has a deep supervised browser driver, CDP/Playwright client, route policy, downloads/uploads, events/cookies/state, screenshots, image analysis, artifacts, and a `computer_use` tool. | **Parity+** for browser automation; partial for integrated desktop use | Medium | Promote one stable browser setup path and surface live driver/session/artifact state in the product UI. Keep computer use separately approval-gated. |
 | Attach files and reference repository context naturally | Hermes supports `@file`, `@folder`, `@git-diff`, `@url`, session references, PDF/Office/notebook extraction, and deliverable attachments; see [context references](https://hermes-agent.nousresearch.com/docs/user-guide/features/context-references) and [document extraction](https://hermes-agent.nousresearch.com/docs/user-guide/features/document-extraction). | Lemon agents can read/search files, inspect git through tools, accept Web uploads, and create media artifacts. There is no consistent composer-level reference syntax or general PDF/Office/notebook extraction pipeline. | Partial | Medium | Add a client-independent context-reference resolver with explicit previews/budgets, then safe extractors for PDF, DOCX, XLSX, PPTX, and notebooks. |
@@ -31727,6 +31727,298 @@ This command backs up local durable user state. It does not:
 Keep offline copies according to your own retention policy, verify them after
 transport, and test restore into an isolated `--target` before relying on a
 backup for recovery.
+
+---
+
+Source: https://z80dev.github.io/lemon/user-guide/cli
+
+# Lemon command-line reference
+
+Lemon exposes the same Mix-free command families from an installed
+`lemon_runtime_min` or `lemon_runtime_full` release and from a source checkout.
+Use `lemon ...` after installation and `./bin/lemon ...` in the repository.
+
+The runtime command boundary has stable exit codes:
+
+- `0` means the command completed successfully;
+- `1` means a safe operational or verification failure;
+- `2` means the command or its arguments are invalid.
+
+`--help`, `-h`, and `help` print command help without running the command body.
+Commands that support `--json` write one JSON document to stdout on success
+and one redacted JSON error document to stderr on operational failure. Invalid
+arguments remain human-readable usage errors with exit code `2`.
+
+## Runtime command families
+
+| Family | Purpose |
+| --- | --- |
+| `setup` | Complete first-run configuration |
+| `model` | Configure a model provider |
+| `gateway` | Configure Telegram or Discord |
+| `doctor` | Run diagnostics or create a support bundle |
+| `config` | Validate or show resolved configuration |
+| `secrets` | Manage encrypted credentials |
+| `channels` | Inspect channel launch readiness |
+| `profile` | Manage isolated specialist profiles |
+| `backup` | Create, verify, list, or restore user-state backups |
+| `context` | Preview or resolve bounded context references |
+| `sessions` | Inspect and manage durable sessions |
+| `completion` | Generate shell completion scripts |
+
+The source and packaged launchers also expose commands specific to their own
+runtime lifecycle. Run `lemon --help` or `./bin/lemon --help` for that exact
+launcher. Completion generation detects the launcher, so it does not advertise
+packaged daemon commands in a source checkout or source-only commands in an
+installed release.
+
+## Durable sessions
+
+`lemon sessions` is the operator boundary over Lemon's canonical run history,
+chat state, policy, and session metadata stores. It does not create another
+conversation database. All list and history reads are bounded; history and
+exports are always redacted.
+
+### List, search, show, and history
+
+```bash
+lemon sessions list --limit 20
+lemon sessions list --archived --pinned --agent-id research --json
+lemon sessions search "deployment follow-up" --limit 10
+lemon sessions show agent:research:main
+lemon sessions history agent:research:main --limit 25 --json
+```
+
+List and search accept `--limit` from 1 to 500 and `--offset` from 0 to
+1,000,000. History accepts `--limit` from 1 to 200. Lifecycle filters are
+explicit pairs: `--pinned` or `--unpinned`, and `--archived` or `--active`.
+Contradictory filters are usage errors rather than silently selecting one.
+
+Search checks session identifiers, agent identifiers, titles, and a bounded
+redacted history selection. Human output avoids store paths and secret values;
+JSON output contains normalized session and run fields only.
+
+### Title, pin, and archive state
+
+```bash
+lemon sessions title agent:research:main "Literature review"
+lemon sessions title agent:research:main --clear
+lemon sessions pin agent:research:main
+lemon sessions unpin agent:research:main
+lemon sessions archive agent:research:main
+lemon sessions restore agent:research:main
+```
+
+Titles are trimmed and limited to 160 characters. These commands update the
+shared lifecycle metadata and verify the session still exists before reporting
+success.
+
+### Redacted export
+
+Print an always-redacted JSON or Markdown export:
+
+```bash
+lemon sessions export agent:research:main --format json
+lemon sessions export agent:research:main --format markdown
+```
+
+Write the selected export to an owner-only file:
+
+```bash
+lemon sessions export agent:research:main \
+  --format json \
+  --output research-session.json \
+  --json
+```
+
+Existing files are refused unless `--force` is explicit. Symlinks and special
+files are always refused. With `--output --json`, stdout contains safe export
+metadata and only the output basename; the exported content stays in the file.
+Without `--output`, `--json` returns the redacted content in its JSON envelope.
+Exports contain selected session/run/tool fields, SHA-256 integrity metadata,
+and omission counts. They never contain raw run records or raw event payloads.
+
+### Preview-confirm prune
+
+Prune is dry-run by default. It selects only archived sessions older than the
+cutoff and excludes pinned sessions:
+
+```bash
+lemon sessions prune --older-than 30d
+```
+
+`--older-than` accepts a positive age with `s`, `m`, `h`, `d`, or `w`, an
+ISO-8601 date/time, or epoch milliseconds. The preview prints the exact
+`older_than_ms`, candidate keys, and confirmation token. Review the candidates,
+then execute with the exact millisecond cutoff and token printed by the
+preview:
+
+```bash
+lemon sessions prune \
+  --older-than 1788062400000 \
+  --confirm <preview-token>
+```
+
+Do not repeat a relative value such as `30d` for execution: time has advanced,
+so the derived cutoff and token will differ. If any candidate or lifecycle
+metadata changes after preview, execution fails and requires a new preview.
+
+`--all` also considers non-archived sessions. `--include-pinned` also considers
+pinned sessions. Both widen deletion scope and are included in the token, so
+they must be identical at preview and execution. Deletion removes core-owned
+chat, policy, metadata, index, and history state and verifies each session is
+gone before reporting success.
+
+### Verified single-session delete
+
+Single-session deletion requires the exact session key twice:
+
+```bash
+lemon sessions delete agent:research:main \
+  --confirm agent:research:main
+```
+
+A mismatch is a usage error and does not mutate state. The lifecycle service
+deletes canonical run history last, verifies all core-owned state is gone, and
+restores recoverable ancillary metadata if final deletion or verification
+fails.
+
+## Shell completion
+
+Completion scripts are generated from the same registry used by CLI dispatch
+and help, so new runtime families cannot be added to one surface while being
+omitted from the others.
+
+### Bash
+
+```bash
+mkdir -p "$HOME/.local/share/bash-completion/completions"
+lemon completion bash > "$HOME/.local/share/bash-completion/completions/lemon"
+```
+
+### Zsh
+
+```zsh
+mkdir -p "$HOME/.zfunc"
+lemon completion zsh > "$HOME/.zfunc/_lemon"
+fpath=("$HOME/.zfunc" $fpath)
+autoload -Uz compinit && compinit
+```
+
+Persist the `fpath` line in `.zshrc` if `$HOME/.zfunc` is not already in the
+completion path.
+
+### Fish
+
+```fish
+mkdir -p "$HOME/.config/fish/completions"
+lemon completion fish > "$HOME/.config/fish/completions/lemon.fish"
+```
+
+Regenerate the script after upgrading Lemon so it reflects the installed
+command registry.
+
+---
+
+Source: https://z80dev.github.io/lemon/user-guide/context-references
+
+# Context references and document extraction
+
+Lemon has one client-independent context service for inspecting and selecting
+repository, URL, document, diff, and prior-session material before it is handed
+to another workflow. The source and packaged launchers expose that service as
+`lemon context`; both commands return the same versioned, redacted contract.
+
+## Preview before resolving
+
+Use preview to run the real selection and safety checks without returning the
+selected text:
+
+```bash
+./bin/lemon context preview \
+  '@file:docs/brief.docx' \
+  '@folder:notes' \
+  '@git-diff' \
+  --root "$PWD" \
+  --max-bytes 120000 \
+  --json
+```
+
+Resolve uses the same budget and returns the selected text:
+
+```bash
+./bin/lemon context resolve '@file:analysis.ipynb' --root "$PWD"
+```
+
+Installed releases use `lemon context ...` with the same arguments. Quote
+references in a shell so characters such as `?`, `*`, and `~` are not expanded
+before Lemon receives them.
+
+## Reference forms
+
+| Form | Selection |
+| --- | --- |
+| `@file:<path>` | One regular file below `--root`. PDF, Office, notebook, and text formats are sniffed from bytes. |
+| `@folder:<path>` | Deterministic recursive selection of regular files below `--root`. |
+| `@git-diff` | Unstaged working-tree diff for `--root`. |
+| `@git-diff:staged` | Staged diff. |
+| `@git-diff:<revision>` | Diff from a validated revision. Git is invoked directly, never through a shell. |
+| `@url:<http(s)-url>` | Public URL fetched through DNS/IP SSRF checks and redirect revalidation. |
+| `@session:<session-key>` | Existing canonical, always-redacted Markdown session export. |
+
+Local paths are expanded beneath the selected root. Absolute paths outside the
+root, `..` traversal, symlinks at any selected component, special files, and
+symlinked folder entries are rejected or recorded as omissions. Folder walks
+never follow symlinks.
+
+## Budget and output contract
+
+Every response is version `1` and contains:
+
+- the exact effective input, output, item, depth, page, archive, ratio, and
+  operation-time limits;
+- selected source metadata and, for resolve, selected redacted text;
+- selected byte/item/source counts and a redaction count;
+- structured omissions for unsupported, unsafe, over-budget, truncated, or
+  unavailable material.
+
+The useful CLI bounds are `--max-bytes`, `--max-input-bytes`, `--max-items`,
+`--max-pages`, `--max-depth`, and `--timeout-ms`. The operation timeout is
+hard-capped at 60 seconds. Limits are per invocation by design: a shared config
+file cannot silently raise a caller's review budget.
+
+Sensitive-looking assignments, bearer credentials, and private-key blocks are
+redacted from selected text. URL output strips credentials, query strings, and
+fragments from returned metadata; session keys are represented by a short
+SHA-256 label. The selected text remains untrusted source material and should
+not be treated as instructions.
+
+## Document formats and safety
+
+Lemon recognizes content rather than trusting extensions:
+
+- PDF files start with the PDF signature. Literal text operators are selected;
+  page count is bounded before selection.
+- DOCX, XLSX, and PPTX are identified from ZIP members. Only the minimum text
+  members are inflated.
+- ipynb files must be JSON notebooks with a supported notebook structure. Cell
+  source is selected; rich outputs are omitted.
+- valid UTF-8 otherwise falls back to plain text.
+
+Office containers are rejected before extraction when they exceed member,
+expanded-byte, or compression-ratio limits, or contain absolute/traversal
+member names. Macros, embedded objects, external relationships, notebook
+outputs, and non-text payloads are never executed or selected.
+
+The built-in PDF reader is deliberately conservative. Scanned, encrypted, and
+many font-encoded or compressed-content PDFs return `pdf_text_unavailable`
+instead of invoking an external program or guessing. Convert such a document
+to trusted text with an operator-reviewed tool, then reference that text.
+
+URL requests accept only HTTP(S), reject URL credentials, `.local`, loopback,
+private, link-local, multicast, and metadata targets, connect to the validated
+IP while retaining the original TLS SNI/Host identity, revalidate every
+redirect, and cap request body and wall-clock time.
 
 ---
 

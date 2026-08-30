@@ -127,7 +127,9 @@ run_source_runtime_cli() {
   # Completion and JSON session output must remain machine-clean on stdout.
   # Compile quietly first, then use the same fixed-expression, argv-as-data
   # boundary as packaged releases.
-  mix deps.get >/dev/null
+  if ! mix deps.check >/dev/null 2>&1; then
+    mix deps.get >/dev/null
+  fi
   mix compile >/dev/null
   export LEMON_CLI_LAUNCHER=source
   exec mix run --no-start --no-compile --no-deps-check \
