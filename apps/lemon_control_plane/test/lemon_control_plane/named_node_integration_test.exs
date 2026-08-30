@@ -72,6 +72,31 @@ defmodule LemonControlPlane.NamedNodeIntegrationTest do
     Process.exit(other_pid, :kill)
   end
 
+  test "a coding-agent registry invocation completes without a durable control-plane record" do
+    node_id = unique("registry-only")
+    node_name = "Registry Only #{System.unique_integer([:positive])}"
+    :ok = LemonCore.NodeRegistry.register(node_id, node_name, self())
+
+    assert {:ok, invoke_id} =
+             LemonCore.NodeRegistry.invoke(
+               node_name,
+               "coding_agent.run",
+               %{"prompt" => "work"},
+               recipient: self()
+             )
+
+    assert_receive {:node_event, "node.invoke.request", %{"invokeId" => ^invoke_id}}
+    assert NodeStore.get_invocation(invoke_id) == nil
+
+    assert {:ok, %{"received" => true, "summary" => %{"nodeId" => ^node_id}}} =
+             NodeInvokeResult.handle(
+               %{"invokeId" => invoke_id, "result" => %{"ok" => true}},
+               %{auth: %{role: :node, client_id: node_id}}
+             )
+
+    assert_receive {:lemon_node_result, ^invoke_id, {:ok, %{"ok" => true}}}
+  end
+
   test "authenticated node websocket owns live registration and targeted frames" do
     node_id = unique("ws-node")
     node_name = "WS Node #{System.unique_integer([:positive])}"
@@ -195,7 +220,7 @@ defmodule LemonControlPlane.NamedNodeIntegrationTest do
   defp clear_live_nodes do
     Enum.each(LemonCore.NodeRegistry.list(), fn node ->
       if Enum.any?(
-           ["target-", "other-", "ws-node-", "rename-live-"],
+           ["target-", "other-", "ws-node-", "rename-live-", "registry-only-"],
            &String.starts_with?(node.id, &1)
          ) do
         LemonCore.NodeRegistry.unregister(node.id, node.pid)
