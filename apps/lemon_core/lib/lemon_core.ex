@@ -13,6 +13,7 @@ defmodule LemonCore do
   - `LemonCore.JSONPayload` - Bounded JSON protocol validation and summaries
   - `LemonCore.UsageStore` - Shared usage records, summaries, and quota counters
   - `LemonCore.UsageDiagnostics` - Redacted usage aggregate diagnostics
+  - `LemonCore.SessionLifecycle` - Shared session search, metadata, export, and guarded prune service
   - `LemonCore.Telemetry` - Telemetry event helpers
   - `LemonCore.Clock` - Time utilities
   - `LemonCore.Config` - Configuration access
