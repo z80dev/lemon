@@ -51,6 +51,7 @@ LemonAgent.Supervisor (:one_for_one)
 |------|-------------|
 | `lib/agent_core/event_stream.ex` | GenServer-based bounded event queue. Producer pushes with backpressure, consumer reads via `events/1` (lazy `Stream.resource`). Handles owner death, task death, timeout. |
 | `lib/agent_core/context.ex` | Context window management. `estimate_size/2` counts chars (~4 chars/token). `truncate/2` preserves retained order, applies both message/character limits to bookends, and keeps assistant tool-call/result transcript groups atomic. `make_transform/1` creates a function for `AgentLoopConfig.transform_context`. |
+| `lib/lemon_agent/security/tool_result_trust.ex` | Central policy for marking data-bearing `AgentToolResult`s untrusted and preserving only explicitly audited builtin skill semantics as trusted. |
 | `lib/agent_core/abort_signal.ex` | ETS-based abort flag. `new/0` creates a ref, `abort/1` sets it, `aborted?/1` checks it. Fast reads via `read_concurrency: true`. |
 | `lib/agent_core/proxy.ex` | SSE proxy for routing LLM calls through an HTTP server. Reconstructs partial `AssistantMessage` from stripped delta events. |
 | `lib/agent_core/text_generation.ex` | Simple `complete_text/4` bridge so callers don't import `LemonAi` directly. |
@@ -76,6 +77,8 @@ my_tool = LemonAgent.new_tool(
 ```
 
 The execute function signature is `(String.t(), map(), reference() | nil, (AgentToolResult.t() -> :ok) | nil) -> AgentToolResult.t() | {:ok, AgentToolResult.t()} | {:error, term()}`.
+
+`AgentToolResult.trust` is a security contract, not a statement about whether Lemon intentionally called the tool. Ordinary file contents, search matches, shell output, remote/API data, and community/project skill content must be passed through `LemonAgent.Security.ToolResultTrust` as untrusted data. Platform-authored errors/control messages may remain trusted. Intentional bootstrap instruction loading and audited bundled skill semantics are the narrow trusted instruction paths.
 
 ### Adding a new agent event type
 
@@ -249,6 +252,8 @@ end
 9. **The AbortSignal ETS table** is created by `AbortSignal.TableOwner` at app startup. The `AbortSignal` module has a fallback `ensure_table` that creates it if needed (for test environments where the app may not be started). The table uses `{:heir, TableOwner, :ok}` so it survives process restarts.
 
 10. **Context truncation preserves transcript structure.** Sliding-window output stays in original chronological order. Both strategies retain an assistant tool-call message and its contiguous tool results as one unit, dropping the whole unit when it cannot fit; bookends treats both `max_messages` and `max_chars` as hard limits.
+
+11. **Tool invocation does not confer trust.** Tool authors must label data-bearing results with `ToolResultTrust`; downstream coding-agent transforms fence `:untrusted` text before model calls while leaving persisted/operator-facing output unchanged.
 
 
 ## How This App Connects to Other Umbrella Apps

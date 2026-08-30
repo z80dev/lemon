@@ -213,7 +213,7 @@ Internal `task` children default to the `:leaf_worker` policy. They keep normal 
 | `CodingAgent.PromptBuilder` | Higher-level prompt builder adding skills, commands, @mentions sections |
 | `CodingAgent.ResourceLoader` | Loads CLAUDE.md/AGENTS.md from cwd up to filesystem root, then home dir |
 
-`CodingAgent.Session` now composes `ContextGuardrails -> UntrustedToolBoundary -> custom transform_context` at the pre-LLM boundary. Oversized tool results are truncated with stable spill references under `~/.lemon/agent/sessions/<encoded-cwd>/spill/<session-id>/...` so the model can fetch full payloads via file tools when needed.
+`CodingAgent.Session` composes `ContextGuardrails -> UntrustedToolBoundary -> custom transform_context` at the pre-LLM boundary. Oversized tool results are truncated with stable spill references under `~/.lemon/agent/sessions/<encoded-cwd>/spill/<session-id>/...` so the model can fetch full payloads via file tools when needed. The untrusted boundary fences ordinary `read`, `grep`, `find`, `bash`, and community/project `read_skill` output using source-aware labels; already-fenced web results are detected from authenticated tool metadata and are not wrapped twice. Intentional AGENTS/bootstrap loading and audited builtin skills remain explicit trusted instruction paths.
 Its public GenServer shell stays `CodingAgent.Session`, but the larger internal concern clusters are now split into helper modules under `lib/coding_agent/session/`:
 - `Lifecycle` for startup, extension reload, and reset orchestration
 - `State` for state-building, prompt/reset shaping, diagnostics, and guardrail transform composition
@@ -519,6 +519,8 @@ The final system prompt is built in this order (later parts are appended):
 4. `CodingAgent.ResourceLoader.load_instructions/1` -- CLAUDE.md/AGENTS.md from cwd hierarchy
 
 The composed prompt is refreshed before each user prompt to pick up edits to workspace/memory files.
+
+The available-skills listing is part of the cacheable system prefix, but turn-specific relevance results are not. `CodingAgent.Session` keeps the selected keys in turn-local state for missed-skill introspection, without persisting or presenting a synthetic relevance message. This keeps the system prompt byte-stable across unrelated turns while retaining telemetry about skills the model could have loaded.
 
 ## Budget Tracking
 

@@ -271,19 +271,7 @@ defmodule CodingAgent.Session.EventHandlerTest do
         event_streams: %{},
         session_key: session_key,
         agent_id: "agent-1",
-        system_prompt: """
-        <relevant-skills>
-          <skill>
-            <name>GitHub PR Workflow</name>
-            <key>github-pr-workflow</key>
-          </skill>
-          <skill>
-            <name>CI Debugging</name>
-            <key>ci-debugging</key>
-          </skill>
-          Use `read_skill` with <key> to load the full content of any relevant skill.
-        </relevant-skills>
-        """
+        relevant_skill_keys: ["github-pr-workflow", "ci-debugging"]
       }
 
       EventHandler.handle({:agent_end, []}, state, callbacks)
@@ -314,14 +302,7 @@ defmodule CodingAgent.Session.EventHandlerTest do
         steering_queue: :queue.new(),
         event_streams: %{},
         session_key: session_key,
-        system_prompt: """
-        <relevant-skills>
-          <skill>
-            <name>GitHub PR Workflow</name>
-            <key>github-pr-workflow</key>
-          </skill>
-        </relevant-skills>
-        """
+        relevant_skill_keys: ["github-pr-workflow"]
       }
 
       messages = [

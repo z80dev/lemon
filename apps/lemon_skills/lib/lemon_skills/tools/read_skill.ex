@@ -23,6 +23,7 @@ defmodule LemonSkills.Tools.ReadSkill do
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Security.ToolResultTrust
   alias LemonAi.Types.TextContent
   alias LemonSkills.{Registry, Entry, Manifest, PathBoundary, SkillView}
 
@@ -164,12 +165,12 @@ defmodule LemonSkills.Tools.ReadSkill do
 
     case Registry.get(key, opts) do
       {:ok, entry} ->
-        result = build_result(entry, view_opts, opts)
+        result = entry |> build_result(view_opts, opts) |> ToolResultTrust.skill(entry)
         emit_skill_load(entry, view_opts, tool_call_id, cwd, telemetry_context, :ok)
         result
 
       :error ->
-        result = build_not_found_result(key, opts)
+        result = build_not_found_result(key, opts) |> ToolResultTrust.untrusted(:skill)
         emit_skill_load_miss(key, view_opts, tool_call_id, cwd, telemetry_context)
         result
     end
