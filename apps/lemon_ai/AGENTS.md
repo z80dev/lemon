@@ -554,6 +554,11 @@ end
 
 ### Test Helpers
 
+Circuit-breaker tests should rely on cast-then-call mailbox ordering instead of
+sleeping. Tests that cross a recovery boundary may pass a zero-arity
+`:monotonic_time` function to `CircuitBreaker.start_link/1` and advance that
+test-owned clock explicitly.
+
 ```elixir
 # Reset circuit breaker state between tests
 setup do

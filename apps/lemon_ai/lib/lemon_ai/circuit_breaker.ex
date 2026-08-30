@@ -53,6 +53,7 @@ defmodule LemonAi.CircuitBreaker do
           failure_count: non_neg_integer(),
           failure_threshold: pos_integer(),
           recovery_timeout: pos_integer(),
+          monotonic_time: (-> integer()),
           last_failure_time: integer() | nil,
           last_failure_reason: term() | nil,
           success_count_in_half_open: non_neg_integer()
@@ -76,6 +77,7 @@ defmodule LemonAi.CircuitBreaker do
   - `:provider` - Provider identifier (required)
   - `:failure_threshold` - Failures before opening (default: 5)
   - `:recovery_timeout` - Recovery wait time in ms (default: 30000)
+  - `:monotonic_time` - Zero-arity millisecond clock used by deterministic tests
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
@@ -186,12 +188,16 @@ defmodule LemonAi.CircuitBreaker do
     failure_threshold = Keyword.get(opts, :failure_threshold, 5)
     recovery_timeout = Keyword.get(opts, :recovery_timeout, 30_000)
 
+    monotonic_time =
+      Keyword.get(opts, :monotonic_time, fn -> System.monotonic_time(:millisecond) end)
+
     state = %{
       provider: provider,
       circuit_state: :closed,
       failure_count: 0,
       failure_threshold: failure_threshold,
       recovery_timeout: recovery_timeout,
+      monotonic_time: monotonic_time,
       last_failure_time: nil,
       last_failure_reason: nil,
       success_count_in_half_open: 0
@@ -213,7 +219,7 @@ defmodule LemonAi.CircuitBreaker do
 
   @impl true
   def handle_call(:time_until_recovery, _from, %{circuit_state: :open} = state) do
-    now = System.monotonic_time(:millisecond)
+    now = monotonic_time(state)
     elapsed = now - (state.last_failure_time || now)
     remaining = max(0, state.recovery_timeout - elapsed)
     {:reply, remaining, state}
@@ -303,7 +309,7 @@ defmodule LemonAi.CircuitBreaker do
               state
               | circuit_state: :open,
                 failure_count: new_count,
-                last_failure_time: System.monotonic_time(:millisecond),
+                last_failure_time: monotonic_time(state),
                 last_failure_reason: reason
             }
           else
@@ -323,7 +329,7 @@ defmodule LemonAi.CircuitBreaker do
           %{
             state
             | circuit_state: :open,
-              last_failure_time: System.monotonic_time(:millisecond),
+              last_failure_time: monotonic_time(state),
               last_failure_reason: reason,
               success_count_in_half_open: 0
           }
@@ -332,7 +338,7 @@ defmodule LemonAi.CircuitBreaker do
           # Update failure time to extend recovery timeout
           %{
             state
-            | last_failure_time: System.monotonic_time(:millisecond),
+            | last_failure_time: monotonic_time(state),
               last_failure_reason: reason
           }
       end
@@ -361,7 +367,7 @@ defmodule LemonAi.CircuitBreaker do
   # ============================================================================
 
   defp maybe_transition_to_half_open(%{circuit_state: :open} = state) do
-    now = System.monotonic_time(:millisecond)
+    now = monotonic_time(state)
     elapsed = now - (state.last_failure_time || now)
 
     if elapsed >= state.recovery_timeout do
@@ -380,6 +386,8 @@ defmodule LemonAi.CircuitBreaker do
   end
 
   defp maybe_transition_to_half_open(state), do: state
+
+  defp monotonic_time(state), do: state.monotonic_time.()
 
   defp via_tuple(provider) do
     {:via, Registry, {LemonAi.CircuitBreakerRegistry, provider}}
