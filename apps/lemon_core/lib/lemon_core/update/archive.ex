@@ -10,6 +10,7 @@ defmodule LemonCore.Update.Archive do
 
   @default_max_entries 200_000
   @default_max_expanded_bytes 4_294_967_296
+  @default_table_timeout_ms 60_000
 
   @spec preflight({String.t(), String.t() | nil}, keyword()) :: :ok | {:error, term()}
   def preflight({runtime, tui}, opts \\ []) do
@@ -28,18 +29,17 @@ defmodule LemonCore.Update.Archive do
   @spec validate(String.t(), keyword()) :: :ok | {:error, term()}
   def validate(tarball, opts \\ []) do
     max_entries = Keyword.get(opts, :max_archive_entries, @default_max_entries)
+    max_bytes = Keyword.get(opts, :max_expanded_bytes, @default_max_expanded_bytes)
 
-    with {names_output, 0} <- System.cmd("tar", ["-tzf", tarball], stderr_to_stdout: true),
-         names <- String.split(names_output, "\n", trim: true),
-         true <- length(names) <= max_entries || {:error, :archive_entry_limit},
-         :ok <- validate_names(names),
-         {types_output, 0} <- System.cmd("tar", ["-tvzf", tarball], stderr_to_stdout: true),
-         :ok <- validate_types(types_output, length(names)) do
-      :ok
-    else
-      {:error, reason} -> {:error, reason}
-      {_output, code} when is_integer(code) -> {:error, {:archive_list_failed, code}}
-      false -> {:error, :invalid_archive}
+    with {:ok, entries} <- table(tarball, opts) do
+      entries
+      |> Enum.reduce_while({:ok, 0, 0}, fn entry, {:ok, count, bytes} ->
+        validate_entry(entry, count, bytes, max_entries, max_bytes)
+      end)
+      |> case do
+        {:ok, _count, _bytes} -> :ok
+        {:error, reason} -> {:error, reason}
+      end
     end
   end
 
@@ -73,9 +73,51 @@ defmodule LemonCore.Update.Archive do
     end
   end
 
-  defp validate_names(names) do
-    if Enum.all?(names, &safe_name?/1), do: :ok, else: {:error, :archive_path_escape}
+  defp table(tarball, opts) do
+    task =
+      Task.async(fn ->
+        :erl_tar.table(String.to_charlist(tarball), [:compressed, :verbose])
+      end)
+
+    case Task.yield(task, Keyword.get(opts, :archive_timeout_ms, @default_table_timeout_ms)) ||
+           Task.shutdown(task, :brutal_kill) do
+      {:ok, {:ok, entries}} when is_list(entries) -> {:ok, entries}
+      {:ok, {:error, _reason}} -> {:error, :invalid_archive}
+      {:exit, _reason} -> {:error, :invalid_archive}
+      nil -> {:error, :archive_list_timeout}
+    end
   end
+
+  defp validate_entry(
+         {name, type, size, _mtime, _mode, _uid, _gid},
+         count,
+         bytes,
+         max_entries,
+         max_bytes
+       )
+       when is_list(name) and is_integer(size) and size >= 0 do
+    name = List.to_string(name)
+
+    cond do
+      count + 1 > max_entries ->
+        {:halt, {:error, :archive_entry_limit}}
+
+      not safe_name?(name) ->
+        {:halt, {:error, :archive_path_escape}}
+
+      type not in [:regular, :directory] ->
+        {:halt, {:error, :archive_unsafe_entry_type}}
+
+      bytes + size > max_bytes ->
+        {:halt, {:error, :archive_expanded_size_limit}}
+
+      true ->
+        {:cont, {:ok, count + 1, bytes + size}}
+    end
+  end
+
+  defp validate_entry(_entry, _count, _bytes, _max_entries, _max_bytes),
+    do: {:halt, {:error, :invalid_archive_entry}}
 
   defp safe_name?(name) do
     if name in [".", "./"] do
@@ -92,14 +134,4 @@ defmodule LemonCore.Update.Archive do
 
   defp strip_dot_prefix("./" <> rest), do: strip_dot_prefix(rest)
   defp strip_dot_prefix(name), do: name
-
-  defp validate_types(output, expected_count) do
-    lines = String.split(output, "\n", trim: true)
-
-    cond do
-      length(lines) != expected_count -> {:error, :archive_listing_mismatch}
-      Enum.all?(lines, fn <<type, _rest::binary>> -> type in [?-, ?d] end) -> :ok
-      true -> {:error, :archive_unsafe_entry_type}
-    end
-  end
 end

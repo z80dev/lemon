@@ -15,6 +15,17 @@ defmodule LemonCore.Update.ArchiveTest do
     assert :ok = Archive.validate(tarball)
   end
 
+  test "rejects declared expanded bytes before extraction", %{tmp_dir: tmp_dir} do
+    source = Path.join(tmp_dir, "bounded-source")
+    File.mkdir_p!(source)
+    File.write!(Path.join(source, "payload"), "12345")
+    tarball = Path.join(tmp_dir, "expanded.tar.gz")
+    {_, 0} = System.cmd("tar", ["-czf", tarball, "-C", source, "."])
+
+    assert {:error, :archive_expanded_size_limit} =
+             Archive.validate(tarball, max_expanded_bytes: 4)
+  end
+
   test "rejects parent traversal before extraction", %{tmp_dir: tmp_dir} do
     tarball = Path.join(tmp_dir, "traversal.tar.gz")
     :ok = :erl_tar.create(String.to_charlist(tarball), [{~c"../escape", "bad"}], [:compressed])

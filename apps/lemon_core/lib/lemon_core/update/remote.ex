@@ -561,7 +561,7 @@ defmodule LemonCore.Update.Remote do
     try do
       with {:ok, tarballs} <- download_verified(artifact, tui_artifact, version, opts),
            :ok <- Archive.preflight(tarballs, opts),
-           :ok <- unpack(tarballs, partial),
+           :ok <- unpack(tarballs, partial, opts),
            :ok <- Archive.validate_tree(partial, opts),
            :ok <- verify_staged(partial, tui_artifact, version, opts) do
         ManagedInstall.promote(partial, version, opts)
@@ -702,11 +702,11 @@ defmodule LemonCore.Update.Remote do
 
   # The runtime owns bin/ and lib/, the TUI owns tui/, so both unpack into one
   # staging directory and ride the same rename into place.
-  defp unpack({tarball, tui_tarball}, partial) do
+  defp unpack({tarball, tui_tarball}, partial, opts) do
     File.rm_rf(partial)
 
     case File.mkdir_p(partial) do
-      :ok -> extract_all(partial, [tarball, tui_tarball])
+      :ok -> extract_all(partial, [tarball, tui_tarball], opts)
       {:error, reason} -> {:error, {:staging_failed, reason}}
     end
   end
@@ -734,21 +734,29 @@ defmodule LemonCore.Update.Remote do
     end
   end
 
-  defp extract_all(partial, tarballs) do
+  defp extract_all(partial, tarballs, opts) do
     Enum.reduce_while(tarballs, :ok, fn tarball, :ok ->
-      case extract_into(partial, tarball) do
+      case extract_into(partial, tarball, opts) do
         :ok -> {:cont, :ok}
         {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
   end
 
-  defp extract_into(_partial, nil), do: :ok
+  defp extract_into(_partial, nil, _opts), do: :ok
 
-  defp extract_into(partial, tarball) do
-    case System.cmd("tar", ["-xzf", tarball, "-C", partial], stderr_to_stdout: true) do
-      {_output, 0} -> :ok
-      {output, code} -> {:error, {:extract_failed, code, output}}
+  defp extract_into(partial, tarball, opts) do
+    task =
+      Task.async(fn ->
+        System.cmd("tar", ["-xzf", tarball, "-C", partial], stderr_to_stdout: true)
+      end)
+
+    case Task.yield(task, Keyword.get(opts, :extract_timeout_ms, 120_000)) ||
+           Task.shutdown(task, :brutal_kill) do
+      {:ok, {_output, 0}} -> :ok
+      {:ok, {_output, code}} -> {:error, {:extract_failed, code}}
+      {:exit, _reason} -> {:error, :extract_failed}
+      nil -> {:error, :extract_timeout}
     end
   end
 
