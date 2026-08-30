@@ -216,6 +216,7 @@ defmodule LemonCore.NodeRegistry do
             invocation = %{
               id: invoke_id,
               node_id: node.id,
+              node_pid: node.pid,
               recipient: recipient,
               recipient_ref: recipient_ref,
               timer_ref: timer_ref,
@@ -249,19 +250,7 @@ defmodule LemonCore.NodeRegistry do
 
       {invocation, invocations} ->
         cancel_invocation_monitors(invocation)
-
-        case Map.get(state.nodes, invocation.node_id) do
-          %{pid: pid} ->
-            send(pid, {
-              :node_event,
-              "node.invoke.cancel",
-              %{"invokeId" => invoke_id, "reason" => inspect(reason)}
-            })
-
-          _ ->
-            :ok
-        end
-
+        cancel_remote_invocation(state, invoke_id, invocation, reason)
         notify(invocation, {:error, reason})
         {:reply, :ok, %{state | invocations: invocations}}
     end
@@ -292,6 +281,7 @@ defmodule LemonCore.NodeRegistry do
 
       {invocation, invocations} ->
         Process.demonitor(invocation.recipient_ref, [:flush])
+        cancel_remote_invocation(state, invoke_id, invocation, :timeout)
         notify(invocation, {:error, :timeout})
         {:noreply, %{state | invocations: invocations}}
     end
@@ -307,6 +297,7 @@ defmodule LemonCore.NodeRegistry do
           Enum.reduce(state.invocations, state.invocations, fn {invoke_id, invocation}, acc ->
             if invocation.recipient_ref == ref do
               Process.cancel_timer(invocation.timer_ref)
+              cancel_remote_invocation(state, invoke_id, invocation, :recipient_down)
               Map.delete(acc, invoke_id)
             else
               acc
@@ -343,8 +334,9 @@ defmodule LemonCore.NodeRegistry do
             invocation.node_id == node_id
           end)
 
-        Enum.each(removed, fn {_invoke_id, invocation} ->
+        Enum.each(removed, fn {invoke_id, invocation} ->
           cancel_invocation_monitors(invocation)
+          cancel_remote_invocation(state, invoke_id, invocation, {:node_disconnected, reason})
           notify(invocation, {:error, {:node_disconnected, reason}})
         end)
 
@@ -365,5 +357,22 @@ defmodule LemonCore.NodeRegistry do
 
   defp notify(invocation, result) do
     send(invocation.recipient, {:lemon_node_result, invocation.id, result})
+  end
+
+  # Bind cancellation to the same live connection that received the request.
+  # A reconnect replaces the registered pid and must not receive cancellation
+  # for work that belonged to the superseded socket.
+  defp cancel_remote_invocation(state, invoke_id, invocation, reason) do
+    case Map.get(state.nodes, invocation.node_id) do
+      %{pid: pid} when pid == invocation.node_pid ->
+        send(pid, {
+          :node_event,
+          "node.invoke.cancel",
+          %{"invokeId" => invoke_id, "reason" => inspect(reason)}
+        })
+
+      _ ->
+        :ok
+    end
   end
 end

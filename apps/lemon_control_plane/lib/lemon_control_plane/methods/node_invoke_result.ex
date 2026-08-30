@@ -34,8 +34,8 @@ defmodule LemonControlPlane.Methods.NodeInvokeResult do
       not is_binary(authenticated_node_id) or authenticated_node_id == "" ->
         {:error, Errors.forbidden("Authenticated node identity is required")}
 
-      is_nil(invoke_id) or invoke_id == "" ->
-        {:error, Errors.invalid_request("invokeId is required")}
+      not is_binary(invoke_id) or String.trim(invoke_id) == "" ->
+        {:error, Errors.invalid_request("invokeId must be a non-empty string")}
 
       true ->
         complete_invocation(authenticated_node_id, invoke_id, result, error)
@@ -59,33 +59,36 @@ defmodule LemonControlPlane.Methods.NodeInvokeResult do
   defp complete_invocation(authenticated_node_id, invoke_id, result, error) do
     case LemonCore.NodeRegistry.complete(authenticated_node_id, invoke_id, result, error) do
       :ok ->
-        case NodeStore.get_invocation(invoke_id) do
-          invocation when is_map(invocation) ->
-            settle_and_reply(invocation, invoke_id, result, error)
-
-          nil ->
-            {:ok, receipt(authenticated_node_id, invoke_id, result, error)}
-        end
+        settle_live_result(authenticated_node_id, invoke_id, result, error)
 
       {:error, :wrong_node} ->
         {:error, Errors.forbidden("Invocation belongs to a different node")}
 
       {:error, :not_found} ->
-        complete_durable_invocation(
-          authenticated_node_id,
-          invoke_id,
-          result,
-          error
-        )
+        complete_legacy_invocation(authenticated_node_id, invoke_id, result, error)
     end
   end
 
-  defp complete_durable_invocation(
-         authenticated_node_id,
-         invoke_id,
-         result,
-         error
-       ) do
+  # The node can answer immediately after the registry dispatches the request,
+  # before NodeInvoke has persisted its durable status record. Registry
+  # ownership is therefore checked first; the source connection will settle
+  # the durable record from the registry notification once its dispatch call
+  # returns.
+  defp settle_live_result(authenticated_node_id, invoke_id, result, error) do
+    case NodeStore.get_invocation(invoke_id) do
+      invocation when is_map(invocation) ->
+        if get_field(invocation, :node_id) == authenticated_node_id and pending?(invocation) do
+          settle_and_reply(invocation, invoke_id, result, error)
+        else
+          accepted_reply(authenticated_node_id, invoke_id, result, error)
+        end
+
+      _ ->
+        accepted_reply(authenticated_node_id, invoke_id, result, error)
+    end
+  end
+
+  defp complete_legacy_invocation(authenticated_node_id, invoke_id, result, error) do
     case NodeStore.get_invocation(invoke_id) do
       nil ->
         {:error, Errors.not_found("Invocation not found")}
@@ -114,29 +117,30 @@ defmodule LemonControlPlane.Methods.NodeInvokeResult do
   defp settle_and_reply(invocation, invoke_id, result, error) do
     :ok = settle(invocation, invoke_id, result, error)
 
-    {:ok, receipt(get_field(invocation, :node_id), invoke_id, result, error)}
+    accepted_reply(get_field(invocation, :node_id), invoke_id, result, error)
   end
 
-  defp receipt(node_id, invoke_id, result, error) do
-    %{
-      "invokeId" => invoke_id,
-      "received" => true,
-      "summary" => %{
-        "invokeId" => invoke_id,
-        "nodeId" => node_id,
-        "status" => if(error, do: "error", else: "completed"),
-        "ok" => is_nil(error),
-        "hasResult" => not is_nil(result),
-        "hasError" => not is_nil(error),
-        "cleanup" => %{
-          "includesResult" => false,
-          "includesError" => false,
-          "includesArgs" => false,
-          "includesCredentials" => false,
-          "includesSecretValues" => false
-        }
-      }
-    }
+  defp accepted_reply(node_id, invoke_id, result, error) do
+    {:ok,
+     %{
+       "invokeId" => invoke_id,
+       "received" => true,
+       "summary" => %{
+         "invokeId" => invoke_id,
+         "nodeId" => node_id,
+         "status" => if(error, do: "error", else: "completed"),
+         "ok" => is_nil(error),
+         "hasResult" => not is_nil(result),
+         "hasError" => not is_nil(error),
+         "cleanup" => %{
+           "includesResult" => false,
+           "includesError" => false,
+           "includesArgs" => false,
+           "includesCredentials" => false,
+           "includesSecretValues" => false
+         }
+       }
+     }}
   end
 
   defp settle_pending(invoke_id, result, error) do

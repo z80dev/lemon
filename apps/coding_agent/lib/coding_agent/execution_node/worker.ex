@@ -34,6 +34,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
     :token_store_opts,
     :notify_pid,
     :node_id,
+    :expected_node_id,
     :pairing_stage,
     invocations: %{},
     run_refs: %{}
@@ -78,8 +79,8 @@ defmodule CodingAgent.ExecutionNode.Worker do
     if Keyword.get(opts, :pair, false) do
       connect_pairing(state, Keyword.get(opts, :operator_token))
     else
-      with {:ok, token} <- resolve_token(state, Keyword.get(opts, :token)) do
-        connect_authenticated(state, token)
+      with {:ok, token, expected_node_id} <- resolve_token(state, Keyword.get(opts, :token)) do
+        connect_authenticated(state, token, expected_node_id)
       end
     end
   end
@@ -95,13 +96,15 @@ defmodule CodingAgent.ExecutionNode.Worker do
     start_socket(state, :pairing, connect_params)
   end
 
-  defp connect_authenticated(state, token) do
+  defp connect_authenticated(state, token, expected_node_id) do
     connect_params = %{
       "auth" => %{"token" => token},
       "client" => %{"id" => "lemon-execution-node:#{state.name}"}
     }
 
-    start_socket(state, :node, connect_params)
+    with {:ok, state} <- start_socket(state, :node, connect_params) do
+      {:ok, %{state | expected_node_id: expected_node_id}}
+    end
   end
 
   defp start_socket(state, mode, connect_params) do
@@ -138,11 +141,18 @@ defmodule CodingAgent.ExecutionNode.Worker do
       :node ->
         node_id = get_in(hello, ["auth", "clientId"])
 
-        if is_binary(node_id) and node_id != "" do
-          notify(state, {:status, :online, node_id})
-          {:noreply, %{state | node_id: node_id}}
-        else
-          {:stop, :missing_authenticated_node_id, state}
+        cond do
+          not is_binary(node_id) or node_id == "" ->
+            {:stop, :missing_authenticated_node_id, state}
+
+          is_binary(state.expected_node_id) and state.expected_node_id != node_id ->
+            {:stop,
+             {:authenticated_node_id_mismatch,
+              %{expected: state.expected_node_id, actual: node_id}}, state}
+
+          true ->
+            notify(state, {:status, :online, node_id})
+            {:noreply, %{state | node_id: node_id}}
         end
     end
   end
@@ -165,6 +175,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
         {:execution_node_socket, socket, {:disconnected, reason}},
         %{socket: socket} = state
       ) do
+    state = cancel_all_invocations(state)
     notify(state, {:status, :reconnecting})
     Logger.warning("Execution node connection lost; reconnecting: #{safe_reason(reason)}")
     {:noreply, %{state | node_id: nil}}
@@ -249,6 +260,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
     node_id = get_in(payload, ["identity", "nodeId"]) || approved_node_id
 
     with true <- is_binary(token) and token != "",
+         true <- is_binary(node_id) and node_id != "",
          :ok <-
            state.token_store_module.save(
              state.name,
@@ -262,7 +274,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
       old_socket = state.socket
       :ok = state.socket_module.stop(old_socket)
 
-      case connect_authenticated(%{state | socket: nil, pairing_stage: nil}, token) do
+      case connect_authenticated(%{state | socket: nil, pairing_stage: nil}, token, node_id) do
         {:ok, new_state} ->
           notify(new_state, {:status, :paired, node_id})
           {:noreply, new_state}
@@ -448,16 +460,13 @@ defmodule CodingAgent.ExecutionNode.Worker do
     state.socket_module.request(state.socket, method, params, tag, 30_000)
   end
 
-  defp resolve_token(_state, token) when is_binary(token) and token != "", do: {:ok, token}
+  defp resolve_token(_state, token) when is_binary(token) and token != "",
+    do: {:ok, token, nil}
 
   defp resolve_token(state, _token) do
     case state.token_store_module.load(state.name, state.token_store_opts) do
-      {:ok, %{"token" => token, "controller" => controller}}
-      when is_binary(token) and token != "" and controller == state.controller ->
-        {:ok, token}
-
-      {:ok, %{"controller" => _controller}} ->
-        {:error, :stored_token_controller_mismatch}
+      {:ok, record} ->
+        stored_token(record, state.controller)
 
       {:error, :not_found} ->
         {:error, :missing_node_token}
@@ -467,6 +476,18 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
       _ ->
         {:error, :missing_node_token}
+    end
+  end
+
+  defp stored_token(record, controller) do
+    token = record["token"]
+    node_id = record["nodeId"]
+
+    cond do
+      record["controller"] != controller -> {:error, :stored_token_controller_mismatch}
+      not is_binary(node_id) or node_id == "" -> {:error, :stored_token_missing_node_id}
+      not is_binary(token) or token == "" -> {:error, :missing_node_token}
+      true -> {:ok, token, node_id}
     end
   end
 
@@ -486,7 +507,18 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   defp invocation_cwd(nil, default_cwd), do: existing_directory(default_cwd)
   defp invocation_cwd("", _default_cwd), do: {:error, :invalid_cwd}
-  defp invocation_cwd(cwd, _default_cwd), do: existing_directory(cwd)
+
+  defp invocation_cwd(cwd, default_cwd) when is_binary(cwd) do
+    cwd =
+      case Path.type(cwd) do
+        :absolute -> cwd
+        _ -> Path.expand(cwd, default_cwd)
+      end
+
+    existing_directory(cwd)
+  end
+
+  defp invocation_cwd(_cwd, _default_cwd), do: {:error, :invalid_cwd}
 
   defp existing_directory(cwd) when is_binary(cwd) do
     expanded = Path.expand(cwd)
@@ -622,6 +654,18 @@ defmodule CodingAgent.ExecutionNode.Worker do
   end
 
   defp notify(_state, _message), do: :ok
+
+  defp cancel_all_invocations(state) do
+    Enum.each(state.invocations, fn {_invoke_id, invocation} ->
+      _ = state.executor_module.cancel(invocation.context)
+
+      if invocation.monitor_ref do
+        Process.demonitor(invocation.monitor_ref, [:flush])
+      end
+    end)
+
+    %{state | invocations: %{}, run_refs: %{}}
+  end
 
   defp safe_reason(reason) do
     reason

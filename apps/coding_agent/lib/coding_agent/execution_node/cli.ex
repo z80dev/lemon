@@ -41,7 +41,7 @@ defmodule CodingAgent.ExecutionNode.CLI do
              pair: opts[:pair] == true,
              operator_token: opts[:operator_token] || System.get_env("LEMON_NODE_OPERATOR_TOKEN"),
              token: opts[:token] || System.get_env("LEMON_NODE_TOKEN"),
-             cwd: opts[:cwd] || File.cwd!(),
+             cwd: default_cwd(opts),
              notify_pid: self(),
              socket_module: Keyword.get(deps, :socket_module, CodingAgent.ExecutionNode.Socket),
              executor_module: Keyword.get(deps, :executor_module, CodingAgent.Executor),
@@ -106,6 +106,15 @@ defmodule CodingAgent.ExecutionNode.CLI do
       {:EXIT, ^worker, _reason} ->
         await_worker(worker, monitor)
     end
+  end
+
+  @doc false
+  def default_cwd(
+        opts,
+        launch_cwd \\ System.get_env("LEMON_NODE_LAUNCH_CWD"),
+        process_cwd \\ File.cwd!()
+      ) do
+    opts[:cwd] || launch_cwd || process_cwd
   end
 
   @spec help() :: String.t()

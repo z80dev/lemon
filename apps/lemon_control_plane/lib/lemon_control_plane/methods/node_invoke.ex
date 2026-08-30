@@ -24,11 +24,14 @@ defmodule LemonControlPlane.Methods.NodeInvoke do
     timeout_ms = params["timeoutMs"] || params["timeout_ms"] || 30_000
 
     cond do
-      is_nil(node_id) or node_id == "" ->
-        {:error, Errors.invalid_request("nodeId is required")}
+      not is_binary(node_id) or String.trim(node_id) == "" ->
+        {:error, Errors.invalid_request("nodeId must be a non-empty string")}
 
-      is_nil(method) or method == "" ->
-        {:error, Errors.invalid_request("method is required")}
+      not is_binary(method) or String.trim(method) == "" ->
+        {:error, Errors.invalid_request("method must be a non-empty string")}
+
+      not is_map(args) ->
+        {:error, Errors.invalid_request("args must be an object")}
 
       true ->
         case NodeStore.get_node(node_id) do
@@ -54,29 +57,34 @@ defmodule LemonControlPlane.Methods.NodeInvoke do
                   registry_managed: true
                 }
 
-                NodeStore.put_invocation(invoke_id, invocation)
+                case NodeStore.put_invocation(invoke_id, invocation) do
+                  :ok ->
+                    {:ok,
+                     %{
+                       "invokeId" => invoke_id,
+                       "nodeId" => node_id,
+                       "method" => method,
+                       "status" => "pending",
+                       "summary" => %{
+                         "nodeId" => node_id,
+                         "method" => method,
+                         "status" => "pending",
+                         "timeoutMs" => timeout_ms,
+                         "argKeyCount" => arg_key_count(args),
+                         "cleanup" => %{
+                           "includesArgs" => false,
+                           "includesResult" => false,
+                           "includesError" => false,
+                           "includesCredentials" => false,
+                           "includesSecretValues" => false
+                         }
+                       }
+                     }}
 
-                {:ok,
-                 %{
-                   "invokeId" => invoke_id,
-                   "nodeId" => node_id,
-                   "method" => method,
-                   "status" => "pending",
-                   "summary" => %{
-                     "nodeId" => node_id,
-                     "method" => method,
-                     "status" => "pending",
-                     "timeoutMs" => timeout_ms,
-                     "argKeyCount" => arg_key_count(args),
-                     "cleanup" => %{
-                       "includesArgs" => false,
-                       "includesResult" => false,
-                       "includesError" => false,
-                       "includesCredentials" => false,
-                       "includesSecretValues" => false
-                     }
-                   }
-                 }}
+                  {:error, reason} ->
+                    LemonCore.NodeRegistry.cancel(invoke_id, {:invocation_store_failed, reason})
+                    {:error, Errors.internal_error("Failed to persist node invocation", reason)}
+                end
 
               {:error, {:node_offline, _node}} ->
                 {:error, Errors.unavailable("Node is not online")}

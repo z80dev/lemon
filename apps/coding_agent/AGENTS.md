@@ -710,7 +710,13 @@ Subsequent starts reuse the private node-name-keyed token. Prefer
 `LEMON_NODE_OPERATOR_TOKEN` and `LEMON_NODE_TOKEN` to the corresponding CLI
 flags so credentials do not enter shell history. The worker accepts only the
 versioned `coding_agent.run` protocol, strips `meta.node` before local execution,
-validates the selected local working directory, and handles targeted cancellation.
+validates the selected local working directory, resolves relative invocation paths
+from the node's configured default cwd, and handles targeted cancellation. Losing
+the controller connection cancels active local invocations so a retry cannot leave
+an unobserved first run continuing in the background. When `--cwd` is omitted, the
+default is the shell directory from which `./bin/lemon node join` was launched.
+Stored credentials are also bound to the paired node ID, so a swapped token file
+cannot silently turn one named host into another host's executor.
 
 ### Running Tests
 
