@@ -41,8 +41,9 @@ legacy client-side alias; it does not configure the daemon.
   merging of consecutive completed tools, and collapsible reasoning sections.
 - Exec approval panel (allow once / session / always / deny, number
   quick-pick, wrapped command preview, expiry countdown).
-- Three submission modes while the agent is busy: `queue` (client-side,
-  editable), `steer`, `interrupt` — with graceful fallbacks. Interrupted
+- Four submission modes while the agent is busy: `queue` (client-side,
+  editable), `steer`, `redirect`, `interrupt` — with graceful fallbacks. Redirect
+  replaces pending model direction while preserving completed tool work. Interrupted
   replies keep their partial text.
 - Multi-session: Ctrl+X switcher (live + recent, fuzzy filter, new-with-
   prompt, close), per-session drafts, unread badges, history hydration.
@@ -66,6 +67,7 @@ and control plane authoritative:
 | --- | --- |
 | `/queue [prompt]`, `/q [prompt]` | With a prompt, use queue mode for that submission; without one, inspect and edit the pending queue. `/q` is intentionally queue, not quit. |
 | `/steer <prompt>` | Send one steering submission without changing the default submission mode. |
+| `/redirect <prompt>` | Replace the active run's pending model direction without changing the default submission mode. |
 | `/reset` | Reset the current session through `sessions.reset` and clear its local transcript. |
 | `/reasoning [level]` | Alias for Lemon's `/think` reasoning-effort control. |
 | `/stop` | Alias for `/abort`; partial output remains visible and is marked interrupted. |

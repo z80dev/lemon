@@ -16,7 +16,7 @@
  *   Alt+↵    cycle the submission mode for the next submission only.
  *
  * Submission funnels through one callback, {@link CustomEditorOptions.onSubmit}.
- * That single seam is where the shell layers queue / steer / interrupt; nothing
+ * That single seam is where the shell layers queue / steer / redirect / interrupt; nothing
  * else in the client sends a prompt.
  */
 

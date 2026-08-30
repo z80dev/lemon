@@ -83,6 +83,7 @@ defmodule LemonControlPlane.Methods.ProfilesSupport do
   def queue_mode("collect"), do: :collect
   def queue_mode("followup"), do: :followup
   def queue_mode("steer"), do: :steer
+  def queue_mode("redirect"), do: :redirect
   def queue_mode("interrupt"), do: :interrupt
   def queue_mode(_), do: :collect
 

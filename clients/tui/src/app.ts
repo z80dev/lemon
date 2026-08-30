@@ -633,12 +633,13 @@ export class AppShell {
 	 *   idle                     -> `chat.send` (the daemon's default, collect)
 	 *   busy + queue             -> held in the {@link QueueStore}, never sent
 	 *   busy + steer             -> `chat.send queueMode: steer`
+	 *   busy + redirect          -> `chat.send queueMode: redirect`
 	 *   busy + interrupt         -> `chat.send queueMode: interrupt`, and the
 	 *                               partial answer is sealed as interrupted
 	 *
 	 * Both degradations are visible rather than silent. Steering a run that just
 	 * ended is a lost race, not a mistake, so the prompt still goes out as a new
-	 * turn and says so; a daemon that refuses `steer` or `interrupt` outright
+	 * turn and says so; a daemon that refuses `steer`, `redirect`, or `interrupt` outright
 	 * leaves the prompt in the queue, where the user can still get at it, instead
 	 * of dropping it on the floor.
 	 */
@@ -684,7 +685,7 @@ export class AppShell {
 	}
 
 	/**
-	 * Steer or interrupt a run in flight.
+	 * Steer, redirect, or interrupt a run in flight.
 	 *
 	 * The send is awaited *before* anything is drawn: an interrupt that the
 	 * daemon refuses must not leave a run marked as stopped when it is still
@@ -944,11 +945,11 @@ function describeError(error: unknown): string {
 	return String(error);
 }
 
-/** How long after a run ends a `steer` still counts as having lost a race. */
+/** How long after a run ends a live correction still counts as having lost a race. */
 export const STEER_GRACE_MS = 2000;
 
 /**
- * True when the session's run ended moments ago. A `steer` submitted in that
+ * True when the session's run ended moments ago. A steer or redirect submitted in that
  * window was aimed at a run that was still going when the user pressed Enter,
  * so it earns an explanation; one typed into a long-idle session is just a
  * prompt and gets none.

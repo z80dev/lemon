@@ -74,7 +74,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   run native delegated `CodingAgent.Session` work selected by the `agent`
   tool's `node` parameter. Pairing persists a private, controller-bound token
   on the destination machine; remote runs keep credentials and default working
-  directories destination-local and support targeted cancellation.
+  directories destination-local and support targeted cancellation plus
+  invocation-bound steer/redirect with authenticated destination
+  acknowledgement and fail-closed terminal races.
+- The control-plane chat surfaces and TUI now preserve redirect as a distinct
+  active-run mode. The TUI exposes `/redirect` and cycles queue, steer,
+  redirect, and interrupt without conflating redirect with non-canceling steer.
 
 ### Changed
 

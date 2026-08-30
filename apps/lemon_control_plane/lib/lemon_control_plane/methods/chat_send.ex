@@ -58,6 +58,7 @@ defmodule LemonControlPlane.Methods.ChatSend do
   defp parse_queue_mode("collect"), do: :collect
   defp parse_queue_mode("followup"), do: :followup
   defp parse_queue_mode("steer"), do: :steer
+  defp parse_queue_mode("redirect"), do: :redirect
   defp parse_queue_mode("interrupt"), do: :interrupt
   defp parse_queue_mode(_), do: :collect
 

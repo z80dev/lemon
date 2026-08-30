@@ -299,7 +299,7 @@ export interface ConnectParams {
 	[key: string]: unknown;
 }
 
-export type QueueMode = "collect" | "followup" | "steer" | "interrupt";
+export type QueueMode = "collect" | "followup" | "steer" | "redirect" | "interrupt";
 
 export interface ChatSendParams {
 	sessionKey: string;

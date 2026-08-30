@@ -36,11 +36,13 @@ export interface AppStoreEventMap {
  *                ends — it never reaches the daemon before then, which is what
  *                keeps it editable;
  *   `steer`      send it into the running turn (`chat.send queueMode: steer`);
+ *   `redirect`   replace the model's pending direction while preserving
+ *                completed tool work (`queueMode: redirect`);
  *   `interrupt`  stop the run and send it (`queueMode: interrupt`).
  *
  * The setting is the default; Alt+Enter overrides it for one submission.
  */
-export type SubmissionMode = "queue" | "steer" | "interrupt";
+export type SubmissionMode = "queue" | "steer" | "redirect" | "interrupt";
 
 export interface PendingApproval {
 	event: ApprovalRequestedEvent;

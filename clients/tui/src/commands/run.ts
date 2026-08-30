@@ -86,6 +86,24 @@ export const steerCommand: SlashCommand = {
 	},
 };
 
+export const redirectCommand: SlashCommand = {
+	name: "redirect",
+	summary: "replace the active run's pending direction",
+	usage: "<prompt>",
+	group: "runs",
+	async run(ctx) {
+		if (!ctx.rest) {
+			ctx.ui.notice("usage: /redirect <prompt>", "error");
+			return;
+		}
+		if (!ctx.ui.deliverPrompt) {
+			ctx.ui.notice("this build cannot submit redirect guidance", "warning");
+			return;
+		}
+		await ctx.ui.deliverPrompt(ctx.rest, "redirect");
+	},
+};
+
 export const runsCommand: SlashCommand = {
 	name: "runs",
 	summary: "list active and recent runs",
