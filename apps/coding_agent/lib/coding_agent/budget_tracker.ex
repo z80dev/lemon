@@ -264,11 +264,23 @@ defmodule CodingAgent.BudgetTracker do
            if child_id in budget.completed_child_ids do
              {:ok, record, :already_completed}
            else
+             tracked_child? = child_id in budget.active_child_ids
+
+             legacy_untracked_child? =
+               budget.active_child_ids == [] and budget.active_children > 0
+
              active_ids = List.delete(budget.active_child_ids, child_id)
+
+             active_children =
+               if tracked_child? or legacy_untracked_child? do
+                 max(budget.active_children - 1, 0)
+               else
+                 budget.active_children
+               end
 
              budget = %{
                budget
-               | active_children: max(budget.active_children - 1, 0),
+               | active_children: active_children,
                  active_child_ids: active_ids,
                  completed_child_ids: [child_id | budget.completed_child_ids]
              }

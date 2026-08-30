@@ -172,8 +172,8 @@ defmodule CodingAgent.RunGraphServer do
       before_dets_load: Keyword.get(opts, :before_dets_load)
     }
 
-    # Readiness includes the persisted snapshot. GenServer does not publish its
-    # name or accept calls until init returns.
+    # Readiness includes the persisted snapshot. The process does not handle
+    # queued calls and start_link does not return until init completes.
     state = initialize_ets(state)
     state = initialize_dets(state)
     state = maybe_load_from_dets(state)

@@ -28,6 +28,29 @@ Regression coverage exercises failed supervised launches, production-path
 agent joins, followup suppression, exit containment, and successful lane
 monitor cleanup.
 
+## Follow-up state-consistency pass
+
+The task-state stores now enforce the single-writer boundaries assumed by the
+tool lifecycle:
+
+- `TaskStoreServer` serializes record updates, bounded event appends, explicit
+  join suppression, and lifecycle transitions. Terminal status and payload are
+  first-writer-wins, repeated completion is idempotent, and late running
+  updates cannot revive a terminal task.
+- `RunGraphServer` loads DETS synchronously during `init/1` and serializes
+  initial inserts and deletes. No caller can observe readiness or enqueue a
+  live write that a later startup fold overwrites.
+- `BudgetTracker` performs token/cost increments inside one serialized
+  RunGraph mutation. Child ids reserve `max_children` capacity atomically, and
+  completion releases/aggregates each child once even when callbacks race.
+- Native task execution treats a failed child reservation as a launch failure;
+  the preflight capacity check remains advisory, while the reservation is the
+  admission authority.
+
+Barrier-based regressions cover exact event retention, finish/fail/suppression
+interleavings, exact high-concurrency token and cost sums, `max_children: 1`,
+idempotent completion aggregation, and DETS-load/live-write ordering.
+
 ## Next high-value improvements
 
 ### 1. Make async lifecycle ownership reusable
@@ -37,11 +60,11 @@ task record, run-graph record, supervised worker or watcher, terminal result,
 and optional parent followup. Their implementations have already drifted in
 launch-error handling, join registration, suppression, and exit containment.
 
-Extract a narrow internal lifecycle helper rather than merging the two tools.
-The helper should own monotonic `queued -> running -> terminal` transitions,
-idempotent terminalization, launch receipts, followup suppression, and
-supervised-start normalization. Task execution and router-delegated execution
-can remain separate adapters.
+The store now owns monotonic transitions, idempotent terminalization, and
+followup suppression. A remaining extraction could centralize launch receipts
+and supervised-start normalization without moving the serialized state rules
+back into either tool. Task execution and router-delegated execution can remain
+separate adapters.
 
 ### 2. Reconcile persisted work after a node restart
 
