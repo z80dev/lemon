@@ -128,6 +128,23 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "cwd" => :string
       }
     },
+    "providers.configure" => %{
+      required: %{"action" => :string},
+      optional: %{
+        "provider" => :string,
+        "providers" => :list,
+        "pool" => :string,
+        "strategy" => :string,
+        "credentialRef" => :string,
+        "apply" => :boolean,
+        "activate" => :boolean,
+        "confirm" => :string,
+        "scope" => :string,
+        "projectDir" => :string,
+        "project_dir" => :string,
+        "cwd" => :string
+      }
+    },
     "extensions.status" => %{
       optional: %{
         "cwd" => :string,

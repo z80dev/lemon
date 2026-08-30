@@ -76,6 +76,7 @@ defmodule LemonControlPlane.Methods.Registry do
     # Models
     LemonControlPlane.Methods.ModelsList,
     LemonControlPlane.Methods.ProvidersStatus,
+    LemonControlPlane.Methods.ProvidersConfigure,
     LemonControlPlane.Methods.MemoryStatus,
     # User-managed profiles
     LemonControlPlane.Methods.ProfilesList,

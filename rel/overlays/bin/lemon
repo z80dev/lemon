@@ -557,7 +557,7 @@ EOF
     run_runtime_cli "$@"
     ;;
 
-  setup|model|gateway|config|context|secrets|channels|backup|sessions|completion)
+  setup|model|gateway|config|context|secrets|channels|providers|backup|sessions|completion)
     run_runtime_cli "$@"
     ;;
 

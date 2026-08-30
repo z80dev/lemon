@@ -24,6 +24,7 @@ defmodule LemonAgent.ModelRuntime.ProviderStatus do
       "readyCount" => Enum.count(statuses, & &1["credentialReady"]),
       "defaultProvider" => default_agent_value(config, :default_provider),
       "defaultModel" => default_agent_value(config, :default_model),
+      "routingConfig" => LemonAgent.ModelRuntime.ProviderConfiguration.snapshot(config),
       "routing" => LemonAgent.ModelRuntime.ProviderRouting.preview(params, config, statuses),
       "liveProofs" => live_proofs(cwd),
       "cleanup" => %{

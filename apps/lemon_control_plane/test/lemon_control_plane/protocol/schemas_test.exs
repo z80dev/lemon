@@ -293,6 +293,32 @@ defmodule LemonControlPlane.Protocol.SchemasTest do
       assert msg =~ "expected list"
     end
 
+    test "validates providers.configure schema" do
+      assert :ok =
+               Schemas.validate("providers.configure", %{
+                 "action" => "pool.upsert",
+                 "pool" => "burst",
+                 "providers" => ["openai", "zai"],
+                 "strategy" => "round_robin",
+                 "apply" => true,
+                 "activate" => true,
+                 "confirm" => "burst",
+                 "scope" => "project",
+                 "projectDir" => "/tmp/project"
+               })
+
+      assert {:error, message} = Schemas.validate("providers.configure", %{})
+      assert message =~ "action"
+
+      assert {:error, message} =
+               Schemas.validate("providers.configure", %{
+                 "action" => "fallback.add",
+                 "providers" => "openai"
+               })
+
+      assert message =~ "providers"
+    end
+
     test "validates extensions.status schema" do
       assert :ok = Schemas.validate("extensions.status", %{})
       assert :ok = Schemas.validate("extensions.status", %{"cwd" => "/tmp/lemon"})

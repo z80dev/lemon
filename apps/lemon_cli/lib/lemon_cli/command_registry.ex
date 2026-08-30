@@ -147,6 +147,29 @@ defmodule LemonCli.CommandRegistry do
       ]
     },
     %{
+      name: "providers",
+      summary: "Inspect provider readiness and manage routing",
+      usage: "lemon providers [status|fallback|pool] [options]",
+      subcommands: subcommands(~w(status fallback pool)),
+      options: [
+        option("--provider NAME, -p NAME", ["--provider", "-p"], "Filter or add a provider"),
+        option("--include-catalog", ["--include-catalog"], "Include every known provider"),
+        option("--project-dir PATH", ["--project-dir"], "Resolve project configuration"),
+        option("--scope global|project", ["--scope"], "Configuration target"),
+        option("--config-path PATH", ["--config-path"], "Explicit configuration path"),
+        option("--dry-run", ["--dry-run"], "Preview without writing"),
+        option("--confirm VALUE", ["--confirm"], "Exact destructive-change confirmation"),
+        option("--strategy priority|round_robin", ["--strategy"], "Credential-pool strategy"),
+        option("--activate", ["--activate"], "Make the selected pool the default"),
+        option("--json", ["--json"], "Emit one redacted JSON document")
+      ],
+      details: [
+        "Fallback commands: list, add PROVIDER, remove PROVIDER, clear.",
+        "Pool commands: list, set POOL, delete POOL, and credential add/remove/clear. Credential references remain in the existing encrypted store or environment; values are never copied into TOML or status output.",
+        "Mutations preserve comments, preview safely, and require the exact confirmation value when removing configured routing state."
+      ]
+    },
+    %{
       name: "profile",
       summary: "Manage isolated agent profiles",
       usage: "lemon profile <command> [options]",
@@ -244,7 +267,6 @@ defmodule LemonCli.CommandRegistry do
     launcher("node", "Manage named execution nodes", ["join"]),
     launcher("media", "Inspect media capabilities"),
     launcher("models", "List available models"),
-    launcher("providers", "Inspect provider readiness"),
     launcher("policy", "Manage model policy"),
     launcher("proofs", "Inspect proof artifacts"),
     launcher("readiness", "Inspect launch readiness"),

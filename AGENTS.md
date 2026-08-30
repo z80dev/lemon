@@ -384,7 +384,7 @@ lemon_router ─────────→ lemon_ai, lemon_core, lemon_memory, 
 lemon_gateway ────────→ lemon_agent, lemon_core
 lemon_automation ─────→ lemon_agent, lemon_core, lemon_router, lemon_skills
 lemon_channels ───────→ lemon_core, lemon_media, lemon_agent
-lemon_cli ────────────→ lemon_core, lemon_memory, lemon_ai
+lemon_cli ────────────→ lemon_agent, lemon_ai, lemon_core, lemon_memory
 coding_agent ─────────→ lemon_agent, lemon_ai, lemon_skills, lemon_core, lemon_gateway, lemon_memory, lemon_browser, lemon_platform_test*
 coding_agent_ui ──────→ coding_agent, lemon_core
 lemon_agent ──────────→ lemon_ai, lemon_core

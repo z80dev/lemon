@@ -55,6 +55,27 @@ thinking_level = "medium"
 theme = "default"
 extension_paths = []
 
+# Provider routing can be managed without exposing credentials:
+#   lemon providers status
+#   lemon providers fallback add zai
+#   lemon providers pool set burst --provider openai --provider zai --activate
+#   lemon providers pool credential add burst openai secret:openai_backup
+# Values stay in the encrypted secret store or environment; only explicit
+# secret:NAME / env:NAME references belong in this file.
+#
+# [runtime.provider_routing]
+# enabled = true
+# fallback_providers = ["zai"]
+# default_pool = "burst"
+# require_credentials = true
+#
+# [runtime.provider_routing.credential_pools.burst]
+# providers = ["openai", "zai"]
+# strategy = "round_robin" # priority | round_robin
+#
+# [runtime.provider_routing.credential_pools.burst.credentials]
+# openai = ["secret:openai_backup", "env:OPENAI_API_KEY_BACKUP"]
+
 [runtime.compaction]
 enabled = true
 reserve_tokens = 16384
