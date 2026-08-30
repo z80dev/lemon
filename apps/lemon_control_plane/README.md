@@ -412,6 +412,7 @@ Each method declares required scopes. A connection must have at least one matchi
 | `session.detail` | read | Deep session/run internals with summary, sensitive preview/run-internal redaction, and explicit opt-ins for full text, raw run events, and run records |
 | `sessions.patch` | admin | Modify session policy/model/thinking overrides plus patch summary and cleanup flags |
 | `sessions.reset` | admin | Clear session history plus cleanup summary |
+| `sessions.heartbeat` | admin | Inspect or set/pause/resume/clear one live durable session's idle-only recurring prompt; accepts the logical client session key and fails closed on ambiguity |
 | `sessions.delete` | admin | Delete a session plus cleanup summary |
 | `sessions.compact` | admin | Compact session storage plus no-text cleanup summary |
 | `session.btw` | write | Ask a bounded no-tools question against a frozen live session or durable session-key history without mutating the parent conversation |

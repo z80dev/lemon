@@ -57,11 +57,25 @@ defmodule CodingAgent.Session.Persistence do
   end
 
   @spec maybe_register_session(Session.t(), String.t(), boolean(), atom()) :: :ok
-  def maybe_register_session(_session_manager, _cwd, false, _registry), do: :ok
+  def maybe_register_session(session_manager, cwd, register_session, registry) do
+    maybe_register_session(
+      session_manager,
+      cwd,
+      register_session,
+      registry,
+      session_manager.header.id
+    )
+  end
 
-  def maybe_register_session(session_manager, cwd, true, registry) do
+  @spec maybe_register_session(Session.t(), String.t(), boolean(), atom(), String.t()) :: :ok
+  def maybe_register_session(_session_manager, _cwd, false, _registry, _session_key), do: :ok
+
+  def maybe_register_session(session_manager, cwd, true, registry, session_key) do
     if Process.whereis(registry) do
-      case Registry.register(registry, session_manager.header.id, %{cwd: cwd}) do
+      case Registry.register(registry, session_manager.header.id, %{
+             cwd: cwd,
+             session_key: session_key
+           }) do
         {:ok, _} ->
           :ok
 

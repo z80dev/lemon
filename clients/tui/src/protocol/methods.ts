@@ -45,6 +45,7 @@ export const METHOD = {
 	sessionsReset: "sessions.reset",
 	sessionsDelete: "sessions.delete",
 	sessionsCompact: "sessions.compact",
+	sessionHeartbeat: "sessions.heartbeat",
 	sessionDetail: "session.detail",
 	commandsCatalog: "commands.catalog",
 	agentsList: "agents.list",
@@ -160,6 +161,18 @@ export class ControlPlaneMethods {
 		options?: RequestOptions,
 	): Promise<Record<string, unknown>> {
 		return this.#call<Record<string, unknown>>(METHOD.sessionsCompact, params, options);
+	}
+
+	sessionHeartbeat(
+		params: {
+			sessionKey: string;
+			action?: "status" | "set" | "pause" | "resume" | "clear";
+			prompt?: string;
+			intervalSeconds?: number;
+		},
+		options?: RequestOptions,
+	): Promise<Record<string, unknown>> {
+		return this.#call<Record<string, unknown>>(METHOD.sessionHeartbeat, params, options);
 	}
 
 	sessionDetail(

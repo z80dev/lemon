@@ -96,6 +96,7 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.SessionsPatch,
     LemonControlPlane.Methods.SessionsReset,
     LemonControlPlane.Methods.SessionsCompact,
+    LemonControlPlane.Methods.SessionHeartbeat,
     LemonControlPlane.Methods.SessionsActive,
     LemonControlPlane.Methods.SessionsActiveList,
     LemonControlPlane.Methods.SessionDetail,

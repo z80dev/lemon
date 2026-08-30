@@ -46,6 +46,42 @@ defmodule CodingAgent.SessionRegistry do
     end
   end
 
+  @doc """
+  Resolve either a persisted session id or the logical runtime session key.
+
+  Logical keys are metadata rather than Registry keys because more than one
+  process can temporarily claim the same routing key during handoff/recovery.
+  Such ambiguity fails closed instead of selecting an arbitrary session.
+  """
+  @spec lookup_session_key(String.t()) :: {:ok, pid()} | :error | {:error, :ambiguous}
+  def lookup_session_key(session_key) when is_binary(session_key) do
+    if Process.whereis(@registry) do
+      matches =
+        @registry
+        |> Registry.select([
+          {{:"$1", :"$2", :"$3"}, [], [{{:"$1", :"$2", :"$3"}}]}
+        ])
+        |> Enum.reduce(MapSet.new(), fn {session_id, pid, metadata}, acc ->
+          logical_key = if is_map(metadata), do: Map.get(metadata, :session_key)
+
+          if session_id == session_key or logical_key == session_key do
+            MapSet.put(acc, pid)
+          else
+            acc
+          end
+        end)
+        |> MapSet.to_list()
+
+      case matches do
+        [pid] -> {:ok, pid}
+        [] -> :error
+        [_first, _second | _rest] -> {:error, :ambiguous}
+      end
+    else
+      :error
+    end
+  end
+
   @spec list_ids() :: [String.t()]
   def list_ids do
     if Process.whereis(@registry) do

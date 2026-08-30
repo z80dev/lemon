@@ -41,6 +41,14 @@ defmodule CodingAgent.ControlPlaneProvider do
     end
   end
 
+  def session_heartbeat(session_key, action, params) do
+    case CodingAgent.SessionRegistry.lookup_session_key(session_key) do
+      {:ok, pid} -> dispatch_session_heartbeat(pid, action, params)
+      :error -> {:error, :session_not_found}
+      {:error, :ambiguous} -> {:error, :session_ambiguous}
+    end
+  end
+
   def background_start(prompt, opts), do: CodingAgent.BackgroundRun.start(prompt, opts)
 
   def background_list(opts) do
@@ -102,4 +110,22 @@ defmodule CodingAgent.ControlPlaneProvider do
         Keyword.delete(opts, :status)
     end
   end
+
+  defp dispatch_session_heartbeat(pid, :status, _params),
+    do: CodingAgent.Session.heartbeat_status(pid)
+
+  defp dispatch_session_heartbeat(pid, :set, params) do
+    CodingAgent.Session.heartbeat_set(pid, params[:prompt], params[:interval_seconds])
+  end
+
+  defp dispatch_session_heartbeat(pid, :pause, _params),
+    do: CodingAgent.Session.heartbeat_pause(pid)
+
+  defp dispatch_session_heartbeat(pid, :resume, _params),
+    do: CodingAgent.Session.heartbeat_resume(pid)
+
+  defp dispatch_session_heartbeat(pid, :clear, _params),
+    do: CodingAgent.Session.heartbeat_clear(pid)
+
+  defp dispatch_session_heartbeat(_pid, _action, _params), do: {:error, :invalid_action}
 end

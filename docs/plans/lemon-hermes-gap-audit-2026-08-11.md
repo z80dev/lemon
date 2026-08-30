@@ -2,6 +2,13 @@
 
 Status: point-in-time audit (refreshes the 2026-05-12 parity matrix)
 
+> **Current audit:** This document is retained as historical evidence and its
+> gap list is not current. See the source-pinned
+> [2026-08-30 runtime/functionality audit](../reviews/hermes-runtime-functionality-audit-2026-08-30.md).
+> Since this snapshot, Lemon added provider credential pools/fallback,
+> progressive tool disclosure, persistent Python kernels, browser/computer-use,
+> richer cron lifecycle controls, and durable same-session heartbeats.
+
 ## Method and baseline drift
 
 - Hermes source: `/home/z80/dev/hermes-agent`, working tree at `0713fb2ab`

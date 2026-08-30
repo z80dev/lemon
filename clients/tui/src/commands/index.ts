@@ -24,6 +24,7 @@ import {
 	btwCommand,
 	commandsCommand,
 	compressCommand,
+	heartbeatCommand,
 	tasksCommand,
 } from "./hermes.ts";
 import { modelCommand, thinkCommand, toolPolicyCommand } from "./model.ts";
@@ -62,6 +63,7 @@ export function createCommandRegistry(options: RegistryOptions = {}): CommandReg
 		resumeCommand,
 		historyCommand,
 		compressCommand,
+		heartbeatCommand,
 
 		modelCommand,
 		thinkCommand,

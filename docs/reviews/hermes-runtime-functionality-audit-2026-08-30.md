@@ -1,0 +1,157 @@
+# Hermes runtime/functionality audit — 2026-08-30
+
+Status: current, source-pinned audit of non-transport agent behavior
+
+## Baselines and scope
+
+- Hermes Agent: [`NousResearch/hermes-agent`](https://github.com/NousResearch/hermes-agent)
+  at `4f22543509d1b91dc45bcb369447126c5eb14fb7`.
+- Lemon: `64092542f523c24b032a0789516a5366a943ac8a` before the changes documented
+  below.
+- Primary Hermes references: the official
+  [tools reference](https://hermes-agent.nousresearch.com/docs/reference/tools-reference/),
+  [tool search guide](https://hermes-agent.nousresearch.com/docs/user-guide/features/tool-search),
+  [checkpoints and rollback guide](https://hermes-agent.nousresearch.com/docs/user-guide/checkpoints-and-rollback/),
+  [cron guide](https://hermes-agent.nousresearch.com/docs/user-guide/features/cron),
+  and [session heartbeat guide](https://hermes-agent.nousresearch.com/docs/user-guide/features/heartbeat).
+- Transport count and platform breadth are intentionally out of scope for this
+  pass. The comparison asks whether the same work can be performed, not whether
+  every Hermes channel has a Lemon adapter yet.
+
+The older 2026-08-11 audit was directionally useful, but several of its Lemon
+gaps are no longer current. In particular, Lemon now has provider credential
+pools and fallback, progressive tool disclosure, persistent Python kernels,
+browser/computer-use/LSP/MCP drivers, checkpoint restore, and a substantially
+richer cron runtime. Those capabilities must not remain listed as absent.
+
+## Executive result
+
+Lemon now covers the core non-transport Hermes work loop: local coding tools,
+web/browser work, Python execution, MCP and LSP, durable sessions, checkpoints,
+memory and skills, native subagents, recurring automation, provider routing,
+context compaction, approvals, and operational telemetry. Lemon is already
+stronger in native OTP supervision, deterministic simulation/evaluation,
+named-node execution, durable multi-agent lineage, and cron lifecycle controls.
+
+The clearest current user-facing runtime hole was Hermes's same-session
+heartbeat. Lemon had cron jobs and a separate automation health manager, but it
+could not persist one recurring instruction inside the current conversation and
+re-enter that conversation only when idle. This pass closes that gap end to end.
+
+The remaining gaps are no longer one missing agent loop. They cluster around
+document ingestion, proactive automation templates, managed secret/egress
+integrations, micro-compaction, session housekeeping commands, and a few
+restart/ergonomic edges in asynchronous delegation.
+
+## Detailed parity matrix
+
+Legend: **covered** means the task is available without an architectural gap;
+**lead** means Lemon exposes materially stronger lifecycle or control; **gap**
+means Hermes has a current user-facing behavior with no equivalent Lemon path.
+
+| Area | Hermes current behavior | Lemon current behavior | Result / remaining work |
+| --- | --- | --- | --- |
+| Shell and process work | Shell execution, background processes, process inspection, terminal backends | Approval-gated shell, process manager, background-process state, persistent execution lanes, policy profiles | **Covered**. Hermes has more terminal-backend packaging; no core work-loop blocker. |
+| Files and source search | Read/write/patch, grep/find, repo inspection | Read/write/patch, safe local mutation preflight, grep/find, git and repository tools, spill references | **Covered/lead** on mutation safety. |
+| Web search and extraction | Search, page fetch, browser and managed tool gateway | Provider-neutral search/extraction with fallback plus multi-tab browser and computer use | **Covered**. Rich PDF/Office/notebook extraction through `read_file` remains a **gap**. |
+| Python/code execution | Python execution and programmatic tool calling | `execute_code`, persistent Python kernels, tool calls and structured results | **Covered**. |
+| MCP and LSP | MCP tools and progressive disclosure | MCP client/server bridge, LSP driver, capability-aware progressive disclosure | **Covered**. Hermes's single catalog UX is somewhat simpler; Lemon has stronger backend separation. |
+| Session durability | Persistent sessions, resume, search, export/prune/stats commands | JSONL tree sessions, branch navigation, durable history, search, runtime diagnostics | **Covered** for core work. Friendly export/prune/stats commands remain a **gap**. |
+| Checkpoints and rollback | Automatic file checkpoints, list/inspect/restore | Checkpoint/diff/restore tools plus tree-structured session history | **Covered**. Lemon should still consolidate the user guide and make rollback discoverable in every client. |
+| Same-session heartbeat | One persisted recurring prompt, idle-only firing, pause/resume/clear, missed-tick coalescing | Added in this pass: durable JSONL heartbeat, same transcript/provider path, user-message priority, pause/resume/clear, restart restore, reset tombstone | **Covered** after this pass. |
+| Cron and scheduling | Cron jobs, isolated scheduled turns, schedule management | Cron manager with agent and command jobs, pause/resume/abort, retries/jitter, monitor recovery, preflight, model-drift guard, chained context | **Lead** on lifecycle controls. Blueprints/forms and consent-first suggestions remain a **gap**. |
+| Memory | Session search plus long-term memories and learning flows | SQLite full-text durable memory, provider fan-out, session ingest, Honcho provider, scoped tools | **Covered** for retrieval/storage. Hermes `/learn` and journey/learning-graph UX remain a **gap**. |
+| Skills | Install/list/remove skills and official catalog | Registry, discovery, linting, install/import/manage tools, official Hermes catalog browser, curator flows | **Covered**. Ecosystem breadth and single-command import polish still vary. |
+| Subagents/delegation | Native subagents, background work, parent interaction | Native `task`, routed `agent`, budgets, run graph, parent questions, isolated `/bg`, named remote nodes | **Lead**. Restart reconciliation for persisted nonterminal asynchronous records and caller-selected join timeouts remain reliability gaps. |
+| Provider/model choice | Multiple providers, credential pools, fallback, selectable presets and MoA | Provider registry, credential pools, fallback, session pins, routing policy, live model selection | **Covered** for normal models. Named mixture-of-agents presets and the Portal subscription proxy remain **gaps**. |
+| Context management | Auto/lean compaction, micro-compaction, tool search | Auto-compaction, overflow recovery, tool-result spill, guardrails, progressive disclosure | **Covered** for context survival. Per-result micro-compaction and provider-native compaction are **gaps**. |
+| Approvals and trust | Tool policy, managed scope, sandbox/egress options | Central exec approvals, tool policy profiles, untrusted-result fencing, capability boundaries, node authentication | **Covered/lead** in local policy. Host-side egress credential injection and managed secret-source adapters are **gaps**. |
+| Reliability | Persistent sessions, cron recovery, background processes | OTP supervision, durable stores, retries, run ownership, terminalization, named-node cancellation | **Lead**, with the asynchronous boot reconciler noted above still missing. |
+| Observability | CLI diagnostics, telemetry and session inspection | structured introspection, run graph, usage/cost diagnostics, proof artifacts, health/readiness, support bundles | **Lead**. |
+| Updates and scripting | update command, config/model/session/cron CLIs | release channels, updater, setup/doctor/config/secrets/model/provider/usage/proof commands, script send | **Covered**. Session export/prune/stats and some install-plugin ergonomics remain gaps. |
+
+## Same-session heartbeat delivered in this pass
+
+The new behavior deliberately matches the important Hermes semantics while
+using Lemon's session ownership model:
+
+1. A heartbeat is stored as an append-only `session_heartbeat` custom entry in
+   the same JSONL session file.
+2. A due heartbeat enters `CodingAgent.Session` as an ordinary user turn, so it
+   uses the same transcript, provider, tools, approvals, compaction, and prompt
+   cache path as a user prompt.
+3. It fires only while the session is idle. A queued prompt, steer, redirect,
+   follow-up, parent answer, or asynchronous follow-up wins; missed ticks
+   coalesce into one due turn.
+4. A fire claim is persisted before provider dispatch. Restarts therefore do
+   not replay an already-claimed tick.
+5. Pause preserves the instruction. Resume re-anchors the next tick instead of
+   immediately replaying stale elapsed time. Clear writes a tombstone so an
+   older active record cannot reappear.
+6. Reset persists that clear tombstone before rotating the session identity. If
+   persistence fails, reset fails without rotation. Cancelled/stale timer tokens
+   cannot revive the old heartbeat.
+7. Control-plane lookup accepts the logical TUI session key as well as the
+   persisted JSONL header ID. Multiple live owners of one logical key fail
+   closed with a conflict instead of selecting one arbitrarily.
+8. `/heartbeat` and `/hb` expose status, set, pause, resume, and clear in the
+   TUI. `sessions.heartbeat` is admin-scoped and validates the runtime response
+   before returning it.
+
+See [Session heartbeats](../user-guide/session-heartbeats.md) for usage and the
+focused live-runtime proof.
+
+## Prioritized remaining runtime work
+
+### P0 — reliability and safety closure
+
+- Reconcile persisted nonterminal background/subagent records at runtime boot so
+  accepted work cannot remain permanently ambiguous after a host crash.
+- Add explicit caller-selected join timeout/cancellation ergonomics for every
+  delegation surface, while retaining server-side hard bounds.
+- Build the host-side egress credential-injection boundary before treating
+  remote/sandbox execution as safe for arbitrary third-party secrets.
+
+### P1 — high-value user parity
+
+- Add one document-ingestion path for PDF, Office, and notebook text extraction
+  with bounded output and provenance.
+- Add automation blueprints plus an opt-in suggestion workflow; keep suggestions
+  advisory until a user confirms the schedule and destination.
+- Add managed 1Password, Bitwarden Secrets Manager, and bounded command-backed
+  secret sources without exposing values to session history or child nodes.
+- Add named mixture-of-agents presets through Lemon's existing model-routing
+  boundary rather than a parallel agent engine.
+- Add session export, prune, and stats commands to the unified CLI/control plane.
+
+### P2 — refinement
+
+- Add micro-compaction for individually large tool results and evaluate
+  provider-native compaction behind the existing context boundary.
+- Add `/learn` and a usable memory/skill lineage view over Lemon's existing
+  durable stores.
+- Consolidate checkpoints, rollback, memory, scheduling, and model fallback into
+  one task-oriented user guide and first-run command discovery path.
+
+## Verification contract
+
+Heartbeat changes should keep these lanes green:
+
+```bash
+MIX_ENV=test mix compile --warnings-as-errors
+MIX_ENV=test mix test \
+  apps/coding_agent/test/coding_agent/session_heartbeat_test.exs \
+  apps/coding_agent/test/coding_agent/session_registry_test.exs --seed 1
+MIX_ENV=test mix test \
+  apps/lemon_control_plane/test/lemon_control_plane/methods/session_heartbeat_test.exs \
+  apps/lemon_control_plane/test/lemon_control_plane/protocol/schemas_test.exs \
+  apps/lemon_control_plane/test/lemon_control_plane/auth/authorize_test.exs --seed 1
+cd clients/tui && bun test test/commands/commands.test.ts && bun run check
+MIX_ENV=test mix run scripts/live_session_heartbeat_smoke.exs
+```
+
+The live smoke starts the real control-plane and coding-agent applications,
+restores an overdue JSONL session, resolves a logical key that is deliberately
+different from its persisted header ID, dispatches the recurring turn through
+the normal provider stream, exercises pause/resume/clear through
+`sessions.heartbeat`, reloads the file, and verifies the clear tombstone.
