@@ -314,6 +314,95 @@ export interface ChatSendResult {
 	summary?: Record<string, unknown>;
 }
 
+// ---------------------------------------------------------------------------
+// profiles
+// ---------------------------------------------------------------------------
+
+/** Canonical user-managed profile projection from `LemonCore.ProfileStore`. */
+export interface LemonProfile {
+	id: string;
+	name: string;
+	description?: Nullable<string>;
+	avatar?: Nullable<string>;
+	model?: Nullable<string>;
+	node?: Nullable<string>;
+	canonicalSessionKey: string;
+	/** Present on lifecycle reads; clients must not use it as caller-controlled routing. */
+	paths?: Record<string, unknown>;
+}
+
+/** Roster adds live named-node availability to the canonical profile record. */
+export interface ProfileRosterEntry extends LemonProfile {
+	availability: "local" | "online" | "offline" | string;
+}
+
+export interface ProfilesListResult {
+	profiles: LemonProfile[];
+	count: number;
+}
+
+export interface ProfilesRosterResult {
+	profiles: ProfileRosterEntry[];
+	count: number;
+	availabilityCounts?: Record<string, number>;
+}
+
+export interface ProfileResult {
+	profile: LemonProfile;
+	summary?: Record<string, unknown>;
+}
+
+export interface ProfileCreateParams {
+	id: string;
+	name?: string;
+	description?: string;
+	avatar?: string;
+	model?: string;
+	systemPrompt?: string;
+	node?: string;
+}
+
+export interface ProfileCloneParams extends Omit<ProfileCreateParams, "id"> {
+	sourceId: string;
+	id: string;
+}
+
+export interface ProfileExportResult {
+	export: {
+		profileId: string;
+		path: string;
+		fileCount: number;
+		omittedCount: number;
+		redactionCount: number;
+	};
+	summary?: Record<string, unknown>;
+}
+
+export interface ProfileDeleteResult {
+	deleted: {
+		id: string;
+		canonicalSessionKey: string;
+		homeMoved: boolean;
+		trashPath?: Nullable<string>;
+	};
+	summary?: Record<string, unknown>;
+}
+
+export interface ProfileChatParams {
+	id: string;
+	prompt: string;
+	model?: string;
+	queueMode?: QueueMode;
+}
+
+export interface ProfileChatResult {
+	runId: string;
+	profileId: string;
+	sessionKey: string;
+	node?: Nullable<string>;
+	summary?: Record<string, unknown>;
+}
+
 export interface ChatAbortParams {
 	runId?: string;
 	sessionKey?: string;

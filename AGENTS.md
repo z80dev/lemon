@@ -17,6 +17,7 @@
 | Modify SMS/voice transports | `apps/lemon_gateway/` |
 | Add new messaging channel adapters (X, XMTP, etc.) | `apps/lemon_channels/` |
 | Modify setup, onboarding, or Hermes migration CLI flows | `apps/lemon_cli/` |
+| Modify terminal profile/session UX | `clients/tui/` (commands/pickers), `apps/lemon_control_plane/` (authoritative RPCs) |
 | Work on packaged/source command help, completion, or session lifecycle CLI | `apps/lemon_cli/` (`CommandRegistry`, `CompletionCommand`, `SessionsCommand`) |
 | Work on agent routing or message flow | `apps/lemon_router/` |
 | Build HTTP/WebSocket API features | `apps/lemon_control_plane/` |
@@ -371,6 +372,14 @@ validated `meta.profile_id`. Keep lifecycle storage in `lemon_core` free of
 coding-agent/skill dependencies, and never export profile sessions, memory, or
 unredacted credential-like content.
 
+The Bun TUI discovers profiles through `profiles.roster` and opens only the
+returned canonical session key. It uses `profile.chat` for ordinary prompts in
+a confirmed profile session, including steer/redirect/interrupt modes, so
+selecting a profile never degrades to generic `chat.send` and lose the derived
+workspace or named-node route. TUI lifecycle commands call the existing
+`profiles.*` methods; they do not persist a client-side profile store or accept
+caller-controlled profile workspace paths.
+
 ### Key Dependencies Between Apps
 
 Derived from complete `deps/0` bodies in the `mix.exs` files and enforced by
@@ -631,7 +640,8 @@ Each app has its own `AGENTS.md` with detailed context:
 
 ---
 
-*Last updated: 2026-08-30* (the Mix-free command registry now drives runtime
+*Last updated: 2026-08-30* (the TUI now discovers and manages server-owned
+profiles and preserves canonical `profile.chat` routing; the Mix-free command registry now drives runtime
 dispatch/help/completion and the packaged/source sessions CLI reuses the shared
 redacted lifecycle; architecture reporting parses complete `deps/0`
 bodies and distinguishes direct dependencies from reference-only exceptions;

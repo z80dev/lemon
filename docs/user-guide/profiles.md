@@ -31,6 +31,24 @@ lemon profile chat research "Map the unresolved questions"
 lemon profile roster
 ```
 
+The terminal UI exposes the same server-owned records. Run `/profiles` for a
+filterable node-aware roster; selecting an entry opens its stable
+`agent:<id>:main` conversation. `/profile current`, `/profile show <id>`, and
+`/profile open <id>` inspect or select a profile. After selection, ordinary
+prompt submissions use `profile.chat` rather than generic `chat.send`, so the
+daemon still derives the profile workspace and named-node route:
+
+```text
+/profiles
+/profile create research --name "Research" --model openai:gpt-5 --node newphy
+/profile chat research Map the unresolved questions
+```
+
+The TUI also supports `clone`, `rename`, credential-safe `export`, and guarded
+`delete` subcommands. Use `/profile help` for exact syntax. Delete requires the
+same profile ID again through `--confirm`; the TUI never accepts a profile home
+or workspace path. Export's destination is the sole lifecycle output path.
+
 In an installed release, `profile chat` uses the authenticated local control
 plane and starts the packaged daemon when it is not already healthy. In a
 source checkout, start `./bin/lemon --daemon` first; the one-shot
@@ -109,5 +127,8 @@ credential-free by construction.
 
 This first-class vertical covers durable local records, isolated assistant
 workspaces, lifecycle, canonical one-to-one chat, node routing, and a roster.
-Group rooms, profile-scoped cron management, import/restore, a TUI/Web profile
-editor, and merged multi-controller rosters remain separate product work.
+Group rooms, profile-scoped cron management, import/restore, a Web form editor,
+free-form TUI field editing, and merged multi-controller rosters remain
+separate product work. The TUI command/picker lifecycle is complete for the
+existing control-plane API; it intentionally does not invent APIs for those
+remaining surfaces.

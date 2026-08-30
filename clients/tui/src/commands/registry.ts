@@ -82,6 +82,10 @@ export interface CommandHost {
 	openSessionSwitcher?(): void;
 	/** Focus another session, hydrating it if cold. */
 	switchSession?(sessionKey: string): void | Promise<void>;
+	/** Remember one server-confirmed profile route and open its canonical chat. */
+	openProfile?(profileId: string, sessionKey: string): void | Promise<void>;
+	/** Forget a route after the server deletes that profile. */
+	forgetProfile?(profileId: string, sessionKey: string): void;
 	/** Mint a session (optionally keyed, optionally with a first prompt). */
 	createSession?(sessionKey?: string, prompt?: string): void | Promise<void>;
 	/** Drop a session locally and server-side, after confirming. */

@@ -27,6 +27,15 @@ import type {
 	HealthResult,
 	LogsTailParams,
 	ModelsListResult,
+	ProfileChatParams,
+	ProfileChatResult,
+	ProfileCloneParams,
+	ProfileCreateParams,
+	ProfileDeleteResult,
+	ProfileExportResult,
+	ProfileResult,
+	ProfilesListResult,
+	ProfilesRosterResult,
 	SessionDetailResult,
 	SessionSummary,
 	SessionsListResult,
@@ -38,6 +47,15 @@ export const METHOD = {
 	chatSend: "chat.send",
 	chatAbort: "chat.abort",
 	chatHistory: "chat.history",
+	profilesList: "profiles.list",
+	profilesGet: "profiles.get",
+	profilesCreate: "profiles.create",
+	profilesClone: "profiles.clone",
+	profilesRename: "profiles.rename",
+	profilesExport: "profiles.export",
+	profilesDelete: "profiles.delete",
+	profilesRoster: "profiles.roster",
+	profileChat: "profile.chat",
 	sessionsList: "sessions.list",
 	sessionsActive: "sessions.active",
 	sessionsActiveList: "sessions.active.list",
@@ -119,6 +137,53 @@ export class ControlPlaneMethods {
 			{ includeFullText: true, ...params },
 			options,
 		);
+	}
+
+	// -- profiles -----------------------------------------------------------
+
+	profilesList(options?: RequestOptions): Promise<ProfilesListResult> {
+		return this.#call<ProfilesListResult>(METHOD.profilesList, {}, options);
+	}
+
+	profilesGet(params: { id: string }, options?: RequestOptions): Promise<ProfileResult> {
+		return this.#call<ProfileResult>(METHOD.profilesGet, params, options);
+	}
+
+	profilesCreate(params: ProfileCreateParams, options?: RequestOptions): Promise<ProfileResult> {
+		return this.#call<ProfileResult>(METHOD.profilesCreate, params, options);
+	}
+
+	profilesClone(params: ProfileCloneParams, options?: RequestOptions): Promise<ProfileResult> {
+		return this.#call<ProfileResult>(METHOD.profilesClone, params, options);
+	}
+
+	profilesRename(
+		params: { id: string; name: string },
+		options?: RequestOptions,
+	): Promise<ProfileResult> {
+		return this.#call<ProfileResult>(METHOD.profilesRename, params, options);
+	}
+
+	profilesExport(
+		params: { id: string; path: string; force?: boolean },
+		options?: RequestOptions,
+	): Promise<ProfileExportResult> {
+		return this.#call<ProfileExportResult>(METHOD.profilesExport, params, options);
+	}
+
+	profilesDelete(
+		params: { id: string; confirm: string },
+		options?: RequestOptions,
+	): Promise<ProfileDeleteResult> {
+		return this.#call<ProfileDeleteResult>(METHOD.profilesDelete, params, options);
+	}
+
+	profilesRoster(options?: RequestOptions): Promise<ProfilesRosterResult> {
+		return this.#call<ProfilesRosterResult>(METHOD.profilesRoster, {}, options);
+	}
+
+	profileChat(params: ProfileChatParams, options?: RequestOptions): Promise<ProfileChatResult> {
+		return this.#call<ProfileChatResult>(METHOD.profileChat, params, options);
 	}
 
 	// -- sessions -----------------------------------------------------------

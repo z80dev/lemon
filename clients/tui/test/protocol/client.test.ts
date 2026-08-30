@@ -306,6 +306,21 @@ describe("method gating", () => {
 		expect(client.queued.map((entry) => entry.method)).toEqual(["chat.send"]);
 	});
 
+	test("profile.chat can be queued offline without losing its canonical route", async () => {
+		const client = makeClient("ws://127.0.0.1:1/ws");
+		const methods = new ControlPlaneMethods(client);
+		void methods
+			.profileChat({ id: "research", prompt: "keep going", queueMode: "steer" })
+			.catch(() => {});
+		await Bun.sleep(5);
+
+		expect(client.queued).toHaveLength(1);
+		expect(client.queued[0]).toMatchObject({
+			method: "profile.chat",
+			params: { id: "research", prompt: "keep going", queueMode: "steer" },
+		});
+	});
+
 	test("chatHistory defaults includeFullText to true", async () => {
 		const server = await withServer();
 		server.respondWith("chat.history", { sessionKey: "s1", messages: [] });

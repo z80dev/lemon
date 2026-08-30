@@ -16,7 +16,7 @@ document that workflow, and prove it against a running Lemon instance.
 | Initiative | Branch | Primary ownership | Required proof |
 |---|---|---|---|
 | Management Web and sessions | `feat/parity-web-admin` | `lemon_web`, shared session lifecycle API, related control-plane methods | Authenticated real-browser workflow against a running source runtime; session mutation and redacted export/prune tests |
-| Profiles and provider orchestration | `feat/parity-profiles-models` | First-class user profiles, roster/canonical chat, packaged CLI/control plane, provider pool/fallback UX | Isolated profile lifecycle plus provider-routing proof through a real control plane or packaged CLI |
+| Profiles and provider orchestration | `feat/parity-profiles-models` + TUI client follow-up | First-class user profiles, roster/canonical chat, packaged CLI/control plane/TUI, provider pool/fallback UX | Isolated profile lifecycle plus provider-routing proof through a real control plane or packaged CLI; authenticated real-WebSocket TUI profile proof |
 | Operations and secret sources | `feat/parity-ops-lifecycle` | `~/.lemon` data contract, backup/verify/restore, update receipts/rollback where safe, external secret-source boundary | Adversarial tests and isolated-HOME source/package backup/restore and secret-resolution proof |
 
 ## Wave 2

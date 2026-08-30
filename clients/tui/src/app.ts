@@ -34,6 +34,7 @@ import { SUBMISSION_MODES } from "./commands/registry.ts";
 import { editInExternalEditor } from "./external-editor.ts";
 import { getGitModeline } from "./git-utils.ts";
 import { ControlPlaneClient } from "./protocol/client.ts";
+import { ControlPlaneError } from "./protocol/errors.ts";
 import { ControlPlaneMethods, METHOD } from "./protocol/methods.ts";
 import type {
 	AgentCompletedEvent,
@@ -142,6 +143,12 @@ export class AppShell {
 	#queueFocused = false;
 	/** Set by Alt+Enter; consumed by the very next submission and then forgotten. */
 	#modeOverride: SubmissionMode | undefined;
+	/**
+	 * Ephemeral routing hints for profile chats opened in this process. The
+	 * daemon remains authoritative: entries come from profile RPC responses,
+	 * are never persisted, and `profile.chat` revalidates the id on every send.
+	 */
+	readonly #profileSessions = new Map<string, string>();
 
 	constructor(options: AppShellOptions) {
 		this.#version = options.version ?? "dev";
@@ -630,11 +637,11 @@ export class AppShell {
 	/**
 	 * The prompt sink, and the whole submission state machine.
 	 *
-	 *   idle                     -> `chat.send` (the daemon's default, collect)
+	 *   idle                     -> `chat.send`, or `profile.chat` for a canonical profile session
 	 *   busy + queue             -> held in the {@link QueueStore}, never sent
-	 *   busy + steer             -> `chat.send queueMode: steer`
-	 *   busy + redirect          -> `chat.send queueMode: redirect`
-	 *   busy + interrupt         -> `chat.send queueMode: interrupt`, and the
+	 *   busy + steer             -> authoritative route with `queueMode: steer`
+	 *   busy + redirect          -> authoritative route with `queueMode: redirect`
+	 *   busy + interrupt         -> authoritative route with `queueMode: interrupt`, and the
 	 *                               partial answer is sealed as interrupted
 	 *
 	 * Both degradations are visible rather than silent. Steering a run that just
@@ -669,15 +676,11 @@ export class AppShell {
 		await this.#sendWhileBusy(prompt, session, mode);
 	}
 
-	/** A plain send: echo, dispatch, remember the run. */
+	/** A plain send: echo, dispatch through the session's authoritative route, remember the run. */
 	async #send(prompt: string, session: SessionStore, queueMode?: QueueMode): Promise<void> {
 		this.events.addUserBlock(prompt, session);
 		try {
-			const result = await this.methods.chatSend({
-				sessionKey: session.key,
-				prompt,
-				...(queueMode ? { queueMode } : {}),
-			});
+			const result = await this.#dispatchPrompt(session.key, prompt, queueMode);
 			if (result?.runId) this.events.noteRunStarted(result.runId, session);
 		} catch (error) {
 			this.events.notice(`send failed: ${describeError(error)}`, "error", session);
@@ -699,11 +702,7 @@ export class AppShell {
 	): Promise<void> {
 		const runId = session.activeRunId;
 		try {
-			const result = await this.methods.chatSend({
-				sessionKey: session.key,
-				prompt,
-				queueMode: mode,
-			});
+			const result = await this.#dispatchPrompt(session.key, prompt, mode);
 			if (mode === "interrupt" && runId) this.events.markInterrupted(runId, session);
 			this.events.addUserBlock(prompt, session);
 			if (result?.runId) this.events.noteRunStarted(result.runId, session);
@@ -714,6 +713,80 @@ export class AppShell {
 				"warning",
 				session,
 			);
+		}
+	}
+
+	/**
+	 * Resolve canonical `agent:<id>:main` sessions through the profile API.
+	 *
+	 * A remembered route can be queued while disconnected. An unremembered
+	 * canonical key is probed with `profiles.get` while online. Only that initial
+	 * probe may prove the key belongs to a legacy non-profile session and fall
+	 * back to `chat.send`. Once a profile route is confirmed, `profile.chat`
+	 * failures never bypass the profile boundary (including deletion races).
+	 */
+	async #dispatchPrompt(sessionKey: string, prompt: string, queueMode?: QueueMode) {
+		const remembered = this.#profileSessions.get(sessionKey);
+		if (remembered) {
+			return await this.methods.profileChat({
+				id: remembered,
+				prompt,
+				...(queueMode ? { queueMode } : {}),
+			});
+		}
+
+		const candidate = canonicalProfileId(sessionKey);
+		if (
+			!candidate ||
+			!this.methods.supports(METHOD.profilesGet) ||
+			!this.methods.supports(METHOD.profileChat)
+		) {
+			return await this.methods.chatSend({
+				sessionKey,
+				prompt,
+				...(queueMode ? { queueMode } : {}),
+			});
+		}
+
+		if (this.client.online) {
+			try {
+				const result = await this.methods.profilesGet({ id: candidate });
+				if (!result.profile || result.profile.canonicalSessionKey !== sessionKey) {
+					throw new Error(`profile ${candidate} returned a non-canonical session`);
+				}
+			} catch (error) {
+				if (
+					!ControlPlaneError.is(error, "NOT_FOUND") &&
+					!ControlPlaneError.is(error, "METHOD_NOT_FOUND")
+				) {
+					throw error;
+				}
+				return await this.methods.chatSend({
+					sessionKey,
+					prompt,
+					...(queueMode ? { queueMode } : {}),
+				});
+			}
+		}
+
+		try {
+			const result = await this.methods.profileChat({
+				id: candidate,
+				prompt,
+				...(queueMode ? { queueMode } : {}),
+			});
+			if (result.sessionKey !== sessionKey) {
+				throw new Error(`profile ${candidate} routed to an unexpected session`);
+			}
+			this.#profileSessions.set(sessionKey, candidate);
+			return result;
+		} catch (error) {
+			if (!ControlPlaneError.is(error, "METHOD_NOT_FOUND")) throw error;
+			return await this.methods.chatSend({
+				sessionKey,
+				prompt,
+				...(queueMode ? { queueMode } : {}),
+			});
 		}
 	}
 
@@ -804,6 +877,15 @@ export class AppShell {
 			closeOverlay: () => this.selectors.close(),
 			openSessionSwitcher: () => void this.#switcher.open(),
 			switchSession: (sessionKey: string) => this.sessions.switch(sessionKey),
+			openProfile: async (profileId: string, sessionKey: string) => {
+				this.#profileSessions.set(sessionKey, profileId);
+				await this.sessions.switch(sessionKey);
+			},
+			forgetProfile: (profileId: string, sessionKey: string) => {
+				if (this.#profileSessions.get(sessionKey) === profileId) {
+					this.#profileSessions.delete(sessionKey);
+				}
+			},
 			createSession: async (sessionKey?: string, prompt?: string) => {
 				await this.sessions.create(sessionKey, prompt);
 			},
@@ -943,6 +1025,12 @@ export function contextWindowFor(store: AppStore, model: string | undefined): nu
 function describeError(error: unknown): string {
 	if (error instanceof Error) return error.message;
 	return String(error);
+}
+
+/** Extract only the stable profile main-session shape; no arbitrary keys qualify. */
+export function canonicalProfileId(sessionKey: string): string | undefined {
+	const match = sessionKey.match(/^agent:([a-z0-9][a-z0-9_-]{0,63}):main$/);
+	return match?.[1];
 }
 
 /** How long after a run ends a live correction still counts as having lost a race. */
