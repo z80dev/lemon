@@ -14,7 +14,7 @@ defmodule CodingAgent.ExecutorTest do
 
   alias CodingAgent.Executor
   alias CodingAgent.Executor.SessionRunner, as: ExecutorSessionRunner
-  alias LemonCore.ResumeToken
+  alias LemonCore.{NodeRegistry, ResumeToken}
   alias LemonGateway.ExecutionRequest
 
   describe "start_run/3 direct session runner" do
@@ -96,6 +96,35 @@ defmodule CodingAgent.ExecutorTest do
                 answer: "executor done",
                 resume: %ResumeToken{engine: "lemon", value: ^session_id}
               }} = List.last(messages)
+    end
+
+    @tag :tmp_dir
+    test "explicit local execution keeps the local runner with a named node online", %{
+      tmp_dir: tmp_dir
+    } do
+      assert :ok = NodeRegistry.register("node-local-proof", "newphy", self())
+
+      on_exit(fn -> NodeRegistry.unregister("node-local-proof", self()) end)
+
+      request =
+        request(tmp_dir,
+          prompt: "stay local",
+          run_id: "run-explicit-local",
+          stream_fn: mock_stream_fn([assistant_message("local answer")]),
+          meta: %{node: "local"}
+        )
+
+      assert {:ok, run_ref, %{runner_pid: runner_pid} = ctx} =
+               Executor.start_run(request, %{stream_fn: request.meta[:stream_fn]}, self())
+
+      assert is_pid(runner_pid)
+      refute Map.has_key?(ctx, :runner_module)
+      refute_receive {:node_event, "node.invoke.request", _}, 50
+
+      messages = collect_until_completed(run_ref)
+
+      assert {:engine_event, ^run_ref, %{__event__: :completed, answer: "local answer"}} =
+               List.last(messages)
     end
 
     @tag :tmp_dir
