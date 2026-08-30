@@ -85,17 +85,23 @@ defmodule LemonCore.OAuth.LocalCallbackListener do
   def stop(%__MODULE__{
         listen_sockets: listen_sockets,
         pid: pid,
+        ref: ref,
         monitor_ref: monitor_ref
       }) do
+    stop_ref = if is_pid(pid), do: Process.monitor(pid)
+
     if is_pid(pid) and Process.alive?(pid) do
       Process.exit(pid, :shutdown)
     end
+
+    await_stopped(pid, stop_ref)
 
     if is_reference(monitor_ref) do
       Process.demonitor(monitor_ref, [:flush])
     end
 
     close_sockets(listen_sockets)
+    flush_result(ref)
     :ok
   end
 
@@ -105,6 +111,24 @@ defmodule LemonCore.OAuth.LocalCallbackListener do
   end
 
   def local_redirect_uri?(_), do: false
+
+  defp await_stopped(pid, monitor_ref) when is_pid(pid) and is_reference(monitor_ref) do
+    receive do
+      {:DOWN, ^monitor_ref, :process, ^pid, _reason} -> :ok
+    after
+      1_000 -> Process.demonitor(monitor_ref, [:flush])
+    end
+  end
+
+  defp await_stopped(_pid, _monitor_ref), do: :ok
+
+  defp flush_result(ref) do
+    receive do
+      {^ref, _result} -> flush_result(ref)
+    after
+      0 -> :ok
+    end
+  end
 
   defp parse_local_redirect_uri(redirect_uri) do
     case URI.parse(redirect_uri) do

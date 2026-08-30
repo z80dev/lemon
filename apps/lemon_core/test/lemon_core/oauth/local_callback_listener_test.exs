@@ -57,6 +57,26 @@ defmodule LemonCore.OAuth.LocalCallbackListenerTest do
     refute_receive {:DOWN, ^monitor_ref, :process, _pid, _reason}
   end
 
+  test "stop flushes a callback result that completed before cancellation" do
+    port = free_port()
+    assert {:ok, listener} = LocalCallbackListener.start("http://127.0.0.1:#{port}/callback")
+    assert {:ok, socket} = :gen_tcp.connect(~c"127.0.0.1", port, [:binary, active: false])
+
+    assert :ok =
+             :gen_tcp.send(socket, "GET /callback?code=late HTTP/1.1\r\nhost: localhost\r\n\r\n")
+
+    assert {:ok, response} = :gen_tcp.recv(socket, 0, 1_000)
+    assert response =~ "HTTP/1.1 200 OK"
+    :ok = :gen_tcp.close(socket)
+
+    listener_ref = listener.ref
+    pid_ref = Process.monitor(listener.pid)
+    assert_receive {:DOWN, ^pid_ref, :process, _pid, :normal}, 1_000
+
+    assert :ok = LocalCallbackListener.stop(listener)
+    refute_receive {^listener_ref, _result}
+  end
+
   test "returns the request error for an unexpected callback path" do
     port = free_port()
     assert {:ok, listener} = LocalCallbackListener.start("http://127.0.0.1:#{port}/callback")
