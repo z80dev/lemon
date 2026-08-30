@@ -4081,7 +4081,14 @@ Expected result:
 
 ## Demo 2: Web Session UI
 
-With `./bin/lemon` running, open:
+Start the Web UI directly; the command reuses a healthy runtime or starts one,
+waits for the exact Web health response, and prints the address:
+
+```bash
+./bin/lemon web --no-open
+```
+
+Then open:
 
 - `http://127.0.0.1:4080/` — the session index (`LemonWeb.SessionLive`)
 - `http://127.0.0.1:4080/sessions/<session_key>` — a specific session
@@ -4090,8 +4097,9 @@ Current launch proof screenshot:
 
 ![Web session proof](assets/launch/web-session-proof-2026-05-11.png)
 
-The web surface is intentionally minimal: it lists sessions and streams a single
-session's activity. The standalone `/ops` dashboard was removed
+The Web surface shows the shared setup-readiness state before accepting a
+prompt, streams one session's activity, accepts bounded file uploads, and
+exposes **Stop** while a run is active. The standalone `/ops` dashboard was removed
 (`refactor(lemon_web): remove ops dashboard`); operations introspection now lives
 in the control plane and the doctor, not in the web UI.
 
@@ -9057,6 +9065,7 @@ interface polish for non-contributors to use Lemon without repo expertise.
 | Run a deterministic local demo | [Demo Lemon](demo.md) |
 | Compare Lemon to adjacent tools | [Compare Lemon](compare.md) |
 | Configure providers, secrets, and Telegram | [Setup Guide](user-guide/setup.md) |
+| Chat in the local browser | [Use Lemon in a Browser](user-guide/web.md) |
 | Understand why Lemon runs on the BEAM | [Agents Are a Concurrency Problem](why-beam-for-agents.md) |
 | Understand the runtime architecture | [Architecture Overview](architecture/overview.md) |
 | Track the Hermes-on-BEAM product goal | [Hermes-on-BEAM Readiness Plan](plans/lemon-1.0-mainstream-readiness.md) |
@@ -9265,6 +9274,26 @@ high-entropy `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` used to start that runtime.
 Start persistent runtimes separately with `./bin/lemon --daemon`; every runtime
 started by `./bin/lemon-tui` is stopped with the TUI, even when a token was
 preconfigured.
+
+## Browser interface
+
+The full release profile also includes a local browser interface. The launcher
+starts the daemon if necessary, waits for the Web health check, prints the URL,
+and opens the default browser:
+
+```bash
+lemon web
+```
+
+Use `lemon web --no-open` on SSH/headless systems. A source checkout uses
+`./bin/lemon web`. The browser checks the same config, secrets, provider,
+credential, and model readiness as setup. If anything is missing it lists the
+pending items, disables prompt/file submission, and points back to `lemon
+setup`; it never waits for a failed agent request to explain first-run setup.
+
+The Web UI is not bundled in `lemon_runtime_min`. Reinstall with
+`LEMON_PROFILE=full` when browser access is wanted. See
+[Use Lemon in a Browser](user-guide/web.md) for access control and recovery.
 
 ---
 
@@ -19828,6 +19857,10 @@ as historical evidence, not current upstream truth.
 
 ## Source baseline and reproducibility
 
+The focused [runtime functionality audit](../reviews/hermes-runtime-functionality-audit-2026-08-30.md)
+records the implementation evidence for durable same-session heartbeats and
+the remaining harness-level gaps found during this refresh.
+
 This refresh uses official upstream source and documentation, not a local
 Hermes checkout:
 
@@ -27281,12 +27314,13 @@ scripts/test path apps/lemon_core/test/lemon_core/quality --seed 1
 - `quality`: runs Lemon's lightweight policy/quality gates: `scripts/lint_ci_docs.sh`, `scripts/test_contract.sh`, the hermetic `scripts/test_lemon_tui_auth.sh` source-launcher credential/lifecycle contract, `mix lemon.skill.lint`, `mix lemon.quality`, and the focused quality/eval contract tests used by CI. `mix lemon.quality` already runs the duplicate test module guard internally and keeps its default docs/architecture checks static; use `mix lemon.quality --validate-config` when runtime config validation is needed.
 - `clients`: covers the Bun TUI in `clients/tui` plus the web and browser clients. The TUI path uses `bun install --frozen-lockfile`, `bun run check`, `bun run lint`, and `bun test`; the web and browser clients continue to use their Node package checks. Set `LEMON_TEST_REUSE_NODE_MODULES=1` only for fast local loops that intentionally reuse existing installs.
 - Source-install changes should keep `scripts/verify_source_install --skip-compile` green after a local compile. For release-candidate source installs, run `scripts/verify_source_install` without skips so it checks the BEAM toolchain, source-wrapper help discoverability for setup/channels/config/doctor/send/media/models/providers/policy/proofs/readiness/secrets/skill/usage/update, locked dependency resolution, warning-free test compile, source-wrapper non-interactive setup dispatch through `./bin/lemon setup runtime --profile runtime_min --non-interactive`, source-wrapper promoted channel readiness through `./bin/lemon channels --project-dir`, source-wrapper config validation through `./bin/lemon config validate --project-dir`, source-wrapper media diagnostics through `./bin/lemon media --project-dir --limit 1`, source-wrapper model catalog listing through `./bin/lemon models --provider anthropic --limit 1`, source-wrapper provider readiness listing through `./bin/lemon providers --provider anthropic --project-dir`, source-wrapper model policy listing through `./bin/lemon policy list`, source-wrapper proof artifact listing through `./bin/lemon proofs --project-dir --limit 1`, source-wrapper readiness summary through `./bin/lemon readiness --project-dir --limit 1`, source-wrapper secrets status through `./bin/lemon secrets status`, source-wrapper skill listing through `./bin/lemon skill list`, source-wrapper usage diagnostics through `./bin/lemon usage`, source-wrapper stage-1 local update dry-run dispatch through `./bin/lemon update --check --no-skill-sync --verbose`, source-wrapper doctor JSON diagnostics through `./bin/lemon doctor --json`, and redacted support-bundle generation with compact launch readiness plus proof-gate status/counts in `readiness_summary.json`.
-- Packaged first-run onboarding changes should keep `scripts/verify_install_script` green. Its hermetic localhost release fixture allocates a pseudo-terminal to prove the default installer invokes the absolute installed `lemon setup` once; it separately proves `--skip-setup`, sim, and forced-no-TTY installs never invoke it, with the no-TTY path printing the exact absolute setup handoff. The same fixture launches an incomplete TUI through setup once and verifies a ready rerun does not reopen it. `scripts/verify_source_install --skip-compile --skip-doctor` proves the shared `LemonCli.CLI.setup_required?/0` predicate transitions from required to ready using an isolated HOME, fixture config/default model, and local encrypted test secret—never a live provider credential.
+- Packaged first-run onboarding changes should keep `scripts/verify_install_script` green. Its hermetic localhost release fixture allocates a pseudo-terminal with either util-linux or BSD/macOS `script` to prove the default installer invokes the absolute installed `lemon setup` once; it separately proves `--skip-setup`, sim, and forced-no-TTY installs never invoke it, with the no-TTY path printing the exact absolute setup handoff. Linux exercises the sim install; macOS verifies its documented Linux-only refusal without entering setup. The same fixture launches an incomplete TUI through setup once and verifies a ready rerun does not reopen it. `scripts/verify_source_install --skip-compile --skip-doctor` proves the shared `LemonCli.CLI.setup_required?/0` predicate transitions from required to ready using an isolated HOME, fixture config/default model, and local encrypted test secret—never a live provider credential. The fixture preserves the invoking `MIX_HOME` so replacing HOME isolates Lemon state without hiding the already-verified Hex/Mix toolchain.
 - `eval-fast`: runs a small deterministic eval harness invocation with `mix lemon.eval --iterations ${LEMON_EVAL_ITERATIONS:-3}`. The harness includes memory scope/topic contracts, relevant-skill prompt disclosure, scripted skill-curator behavior, async delegation joins, and child artifact verification contracts. Increase `LEMON_EVAL_ITERATIONS` locally when you need more confidence.
 - `live-eval`: runs the opt-in provider-backed eval lane with `mix lemon.eval --live-model --iterations ${LEMON_EVAL_ITERATIONS:-3}`. It fails before app startup unless `LEMON_EVAL_API_KEY`, `LEMON_EVAL_API_KEY_SECRET`, `INTEGRATION_API_KEY`, `INTEGRATION_API_KEY_SECRET`, or legacy `ANTHROPIC_API_KEY` is set. Secret variables hold the name of a Lemon secret and resolve with env fallback, so local release-candidate runs can use the normal encrypted secret store without printing credentials. Configure the model with `LEMON_EVAL_PROVIDER`, `LEMON_EVAL_MODEL`, `LEMON_EVAL_BASE_URL`, and `LEMON_EVAL_API_TYPE`; matching generic `INTEGRATION_*` variables are also accepted. The current live lane checks that an independent model calls `search_memory` for prior-work recall, chooses `read_skill`/`skill_manage` for reusable skill capture, performs a curator-style umbrella consolidation, respects the scheduled-run blocked cron surface, delegates parallel child work before answering, handles untrusted external content, preserves leaf-worker tool restrictions, verifies child side effects before finalizing, and completes a tiny Elixir coding repair by reading source, patching code, running `elixir test/lemon_release_report_test.exs`, and answering only after the test passes.
 - Script notification changes should keep `MIX_ENV=test mix test apps/lemon_channels/test/lemon_channels/script_send_test.exs --seed 1` green. That focused lane covers `mix lemon.send` parsing, `./bin/lemon send` target formats, default Telegram/Discord target env vars, config-backed default targets, env-over-config precedence, account-scoped delivery and known-target resolution, config-backed default account ids, standalone thread/topic target overrides, reply-to payload routing, Telegram known-target discovery from `LemonChannels.Telegram.KnownTargetStore`, Discord known-target discovery from `LemonChannels.Discord.KnownTargetStore`, list-mode alias metadata, unique Telegram known-name resolution, unique Discord known-name resolution, positional/file/stdin body resolution, `--file -`, repeated `--attach` payload construction up to 10 files, attachment caption handling, attachment filename/count/byte metadata, attachment input errors, dry-run validation without delivery, subject formatting, help text, filtered JSON/list mode, bounded `message_id` extraction, batch delivery `extra_message_ids` extraction, and injected Telegram/Discord direct-delivery payloads without real platform credentials. Attachment changes should also keep the adapter file-delivery lanes green with `MIX_ENV=test mix test apps/lemon_channels/test/lemon_channels/adapters/telegram/outbound_test.exs apps/lemon_channels/test/lemon_channels/adapters/discord/outbound_test.exs --seed 1`. Discord transport changes that affect target indexing should also run `MIX_ENV=test mix test apps/lemon_channels/test/lemon_channels/adapters/discord/transport_test.exs apps/lemon_channels/test/lemon_channels/discord/known_target_store_test.exs --seed 1`. The source wrapper should also be smoke-checked for Unix exit codes: success/list/help/dry-run returns `0`, usage/config/input failures return `2`, attachment usage/input failures return `2`, and platform delivery failures return `1`.
 - Cron lifecycle changes should keep `apps/lemon_automation/test/lemon_automation/cron_schedule_test.exs`, `cron_manager_retry_test.exs`, `cron_manager_worker_lifecycle_test.exs`, `cron_manager_update_test.exs`, `cron_store_test.exs`, `apps/lemon_core/test/lemon_core/doctor/cron_diagnostics_test.exs`, `apps/lemon_core/test/lemon_core/doctor/checks_test.exs`, `apps/lemon_control_plane/test/lemon_control_plane/methods/cron_methods_test.exs`, `apps/lemon_control_plane/test/lemon_control_plane/protocol/schemas_test.exs`, `apps/lemon_control_plane/test/lemon_control_plane/event_bridge_mapping_test.exs`, `apps/lemon_web/test/lemon_web_test.exs`, and `apps/lemon_gateway/test/tools/cron_test.exs` green. That focused lane covers immutable job fields, schedule shorthand normalization, operator-owned no-agent command cron, pause/resume, active-run abort, terminal `aborted` status persistence, monitored supervisor/start/`DOWN` failure terminalization, stale-recovery policy parity, durable retry reconstruction and deterministic attempt uniqueness, durable lifecycle audit events, redacted support-bundle audit diagnostics, `cron.audit` schema/method/event exposure audit visibility, the model-facing cron tool lifecycle actions, and `cron.preview` doctor readiness over the redacted diagnostics, runtime-restart, and channel-origin proof artifacts. TUI cron abort changes should also keep `cd clients/tui && bun run check && bun test` green for the command and protocol coverage. Channel-origin cron promotion should also run `MIX_ENV=test mix run scripts/live_cron_channel_origin_smoke.exs`, which proves Telegram- and Discord-shaped channel-peer cron completions through `CronManager`, forwarded run history, `LemonRouter.ChannelsDelivery`, and the LemonChannels outbox using proof-only plugins.
 - Heartbeat and synchronous automation-submission changes should keep `heartbeat_manager_test.exs`, `heartbeat_scheduling_test.exs`, `heartbeat_timer_test.exs`, `run_completion_waiter_test.exs`, `run_submitter_test.exs`, `goal_continuation_test.exs`, `goal_loop_test.exs`, `kanban_dispatcher_test.exs`, and `kanban_run_worker_test.exs` green from the umbrella root. Goal-loop ownership changes should also run `apps/lemon_router/test/lemon_router/run_orchestrator_test.exs`. These tests use unique heartbeat agents, barriers, and deterministic router doubles to assert cron/timer transition cleanup, exact fallback for nonrepresentable intervals, timer terminal persistence and overlap skips, pre-submit subscription and ownership-claim ordering, synchronous completion delivery, accepted-before-callback hard-stop aborts, repeated submit/abort races, tombstone rejection, goal no-next-tick behavior, Kanban hard-stop lease reclaim and stale-result rejection, restart lease reconciliation, and subscription cleanup without implementation sleeps.
+- Same-session recurring-prompt changes should keep `apps/coding_agent/test/coding_agent/session_heartbeat_test.exs`, `apps/coding_agent/test/coding_agent/session_registry_test.exs`, `apps/lemon_control_plane/test/lemon_control_plane/methods/session_heartbeat_test.exs`, the control-plane schema/auth tests, and the TUI command tests green. Also run `MIX_ENV=test mix run scripts/live_session_heartbeat_smoke.exs`; it starts the real coding-agent/control-plane applications, proves that a logical TUI key resolves a distinct persisted session ID, dispatches an overdue heartbeat through the normal provider stream, exercises pause/resume/clear, and reloads the JSONL clear tombstone.
 - Router/gateway launch-lifecycle changes should keep `run_process_test.exs`,
   `session_coordinator_test.exs`, `thread_worker_test.exs`, `scheduler_test.exs`,
   `engine_lock_test.exs`, and `cwd_test.exs` green from the umbrella root. This
@@ -32550,6 +32584,105 @@ loop is actually doing:
 
 ---
 
+Source: https://z80dev.github.io/lemon/user-guide/session-heartbeats
+
+# Session heartbeats
+
+A session heartbeat runs one recurring instruction inside an existing Lemon
+conversation. Use it for work that should retain the current transcript and run
+only when that session is otherwise idle—for example, "review the build queue
+and report meaningful changes every ten minutes."
+
+This is not cron. Cron owns independently scheduled jobs and normally launches
+an isolated run. A session heartbeat belongs to one live, durable coding session
+and uses that session's current provider, model, tools, approvals, transcript,
+compaction policy, and provider prompt-cache path.
+
+## TUI commands
+
+```text
+/heartbeat every 10m review CI and open pull requests
+/heartbeat 2h summarize meaningful project changes
+/heartbeat status
+/heartbeat pause
+/heartbeat resume
+/heartbeat clear
+```
+
+`/hb` is an alias. `off` and `stop` are aliases for `clear`. Supported interval
+units are seconds, minutes, hours, and days; the minimum interval is 60 seconds.
+Setting a heartbeat replaces the previous instruction and resets its fire
+count.
+
+## Runtime behavior
+
+- The heartbeat is persisted in the session JSONL file and restored when that
+  exact session is reopened.
+- A due tick waits for the agent to become idle. Real queued user input wins.
+- Multiple elapsed ticks coalesce into one turn rather than flooding the queue.
+- Lemon persists the fire count and timestamp before provider dispatch.
+- Pausing keeps the prompt. Resuming starts a fresh interval from the resume
+  time, so old elapsed time does not fire immediately.
+- Clearing writes a durable tombstone. Reset clears the old heartbeat before
+  rotating to a new session identity, and refuses to rotate if that tombstone
+  cannot be saved.
+- The injected turn explicitly tells the agent not to invent work when nothing
+  meaningful changed.
+
+Heartbeat prompts are ordinary user turns and therefore appear in the session
+history once fired. The admin status API also returns the configured prompt;
+do not put credentials or secret values in it.
+
+## Control-plane API
+
+`sessions.heartbeat` requires the `admin` scope. It accepts the logical session
+key used by the TUI; the runtime also accepts a persisted session ID. If more
+than one live session claims a logical key during handoff or recovery, the call
+fails with a conflict.
+
+```json
+{
+  "sessionKey": "agent:default:project",
+  "action": "set",
+  "intervalSeconds": 600,
+  "prompt": "review CI and report meaningful changes"
+}
+```
+
+Actions are `status`, `set`, `pause`, `resume`, and `clear`. `status` is the
+default. The response includes `configured`, `status`, `prompt`, interval and
+fire-count fields, plus the next scheduled time for an active heartbeat.
+
+## Elixir API
+
+```elixir
+{:ok, status} = CodingAgent.Session.heartbeat_set(session, "review CI", 600)
+{:ok, status} = CodingAgent.Session.heartbeat_status(session)
+{:ok, status} = CodingAgent.Session.heartbeat_pause(session)
+{:ok, status} = CodingAgent.Session.heartbeat_resume(session)
+{:ok, status} = CodingAgent.Session.heartbeat_clear(session)
+```
+
+Frozen/ephemeral context sessions reject heartbeat mutations because they have
+no durable session file to restore.
+
+## Verification
+
+Run the deterministic live path from the umbrella root:
+
+```bash
+MIX_ENV=test mix run scripts/live_session_heartbeat_smoke.exs
+```
+
+The smoke starts real Lemon OTP applications, restores an overdue session,
+proves that the logical TUI key resolves a different persisted ID, dispatches
+one recurring user turn through the normal agent/provider stream, exercises the
+control-plane lifecycle, and reloads the JSONL file to prove the clear
+tombstone. Its proof is written under `.lemon/proofs/` and contains hashes and
+status metadata rather than prompts, provider responses, or credentials.
+
+---
+
 Source: https://z80dev.github.io/lemon/user-guide/setup
 
 # Set up Lemon
@@ -32570,7 +32703,10 @@ $HOME/.lemon/bin/lemon
 ```
 
 The installer prints the PATH entry; after adding `~/.lemon/bin`, use `lemon`.
-That is your first chat. The TUI starts the daemon when needed. Full installer
+That is your first chat. The TUI starts the daemon when needed. To use a local
+browser instead, run `lemon web`; it starts the full runtime when needed,
+checks the same readiness state, and opens the page only after Web health is
+confirmed. Full installer
 behavior, including platform support and updates, is in the
 [Install guide](../install.md).
 
@@ -32599,6 +32735,12 @@ If the first interactive `lemon` launch detects that a usable provider is not
 ready, it opens this setup flow before starting the daemon. If no controlling
 terminal is available, it does not start an unconfigured daemon; run `lemon
 setup` later from an interactive terminal.
+
+The browser is also fail-closed. `lemon web` may start before setup is complete
+so the page can explain what is missing, but the page disables prompts and
+uploads until config, secure secrets, and a usable provider/model are all
+ready. After setup changes, choose **Check again**; a running Web client also
+refreshes on config and secret change events. See the [browser guide](web.md).
 
 ### Provider, auth, and model
 
@@ -33049,6 +33191,100 @@ skill_synthesis_drafts       = "off"          # auto-generate drafts from memory
 ```
 
 *Last reviewed: 2026-05-16*
+
+---
+
+Source: https://z80dev.github.io/lemon/user-guide/web
+
+# Use Lemon in a Browser
+
+Last reviewed: 2026-08-30
+
+The full Lemon runtime includes a local browser interface. The launcher starts
+the daemon when needed, waits for the Web UI to become healthy, and opens the
+page:
+
+```bash
+lemon web
+```
+
+For scripts, SSH sessions, or when you only want the address:
+
+```bash
+lemon web --no-open
+```
+
+The default address is `http://127.0.0.1:4080/`. Set `LEMON_WEB_PORT` before
+launch to choose another port. A source checkout uses the same command with the
+repository wrapper:
+
+```bash
+./bin/lemon web
+```
+
+`lemon web` requires the `lemon_runtime_full` release profile. If the launcher
+reports that the Web UI is unavailable in the minimal profile, reinstall with
+`LEMON_PROFILE=full`.
+
+## First run
+
+The page uses the same setup-readiness contract as `lemon setup` and the TUI.
+It checks for:
+
+1. a Lemon config;
+2. secure secret storage; and
+3. a matching default provider/model with a usable credential.
+
+When any item is missing, the page explains exactly what is pending and keeps
+the prompt and file-upload controls disabled. It does not persist uploads or
+start a doomed agent run. In a terminal, run:
+
+```bash
+lemon setup
+```
+
+Then choose **Check again** in the browser. Config and secret changes made by a
+running Lemon process also refresh the check automatically. If setup still does
+not become ready, run `lemon doctor` and follow its recovery guidance.
+
+## Chat and active runs
+
+Once the page shows **Ready**, enter a prompt or attach up to five files (20 MB
+each). Responses and tool activity stream into the page. While a run is active,
+choose **Stop** to request cancellation. Session identifiers are available
+under **Session details** when debugging, but are hidden during ordinary use.
+
+Each browser tab gets its own stable session in `sessionStorage`. Use
+`/sessions/<session-key>` only when deliberately attaching to a known Lemon
+session.
+
+## Access control
+
+The Web UI binds to localhost in the supported local launch path. To require a
+token as well, set a high-entropy `LEMON_WEB_ACCESS_TOKEN` before starting
+Lemon. `lemon web` passes URL-safe configured tokens to the browser for the
+one-time login; the client removes the query parameter after the authenticated
+session cookie is established.
+
+For a remote deployment, terminate TLS in front of Lemon and require the token.
+Do not expose an unauthenticated HTTP listener to an untrusted network.
+
+## Recovery
+
+| Symptom | What to do |
+| --- | --- |
+| `Setup needed` | Run `lemon setup`, then choose **Check again**. |
+| Provider or model remains pending | Run `lemon setup provider`; use `--skip-verify` only when deliberately offline. |
+| Web UI does not become healthy | Run `lemon status`, inspect the launcher log, then run `lemon doctor`. |
+| Port 4080 is occupied | Set `LEMON_WEB_PORT` to an unused port and rerun `lemon web`. |
+| Minimal-profile error | Reinstall with `LEMON_PROFILE=full`. |
+| Browser did not open | Use `lemon web --no-open` and open the printed URL manually. |
+| HTTP 401 | Launch through `lemon web` with the same `LEMON_WEB_ACCESS_TOKEN`, or supply the token once as `?token=...`. |
+
+The UI ships its CSS and Phoenix client assets inside the Lemon release. It
+does not require a JavaScript or CSS CDN at runtime. The page includes a skip
+link, labeled status regions, keyboard focus states, responsive layouts, and
+live announcements for streamed activity and errors.
 
 ---
 

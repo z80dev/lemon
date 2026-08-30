@@ -12,15 +12,15 @@ defmodule CodingAgent.Session.Lifecycle do
     ModelResolver,
     Notifier,
     Persistence,
-    ProviderFallback,
     PromptComposer,
+    ProviderFallback,
     State,
     WasmBridge
   }
 
   alias CodingAgent.SessionManager
-  alias CodingAgent.Workspace
   alias CodingAgent.Tools.ExecuteCode.Config, as: ExecuteCodeConfig
+  alias CodingAgent.Workspace
 
   @spec initialize(keyword(), pid()) ::
           {:ok, Session.t(), Extensions.extension_status_report() | nil}
@@ -384,31 +384,36 @@ defmodule CodingAgent.Session.Lifecycle do
                 state
               end
 
-            with {:ok, state} <- clear_heartbeat_for_rotation(state) do
-              :ok = LemonAgent.Agent.reset(state.agent)
+            case clear_heartbeat_for_rotation(state) do
+              {:ok, state} ->
+                :ok = LemonAgent.Agent.reset(state.agent)
 
-              previous_session_id = state.session_manager.header.id
-              new_session_manager = SessionManager.new(state.cwd)
+                previous_session_id = state.session_manager.header.id
+                new_session_manager = SessionManager.new(state.cwd)
 
-              Persistence.maybe_unregister_session(
-                previous_session_id,
-                state.register_session,
-                state.session_registry
-              )
+                Persistence.maybe_unregister_session(
+                  previous_session_id,
+                  state.register_session,
+                  state.session_registry
+                )
 
-              Persistence.maybe_register_session(
-                new_session_manager,
-                state.cwd,
-                state.register_session,
-                state.session_registry,
-                state.session_key
-              )
+                Persistence.maybe_register_session(
+                  new_session_manager,
+                  state.cwd,
+                  state.register_session,
+                  state.session_registry,
+                  state.session_key
+                )
 
-              Notifier.ui_set_working_message(state, nil)
+                Notifier.ui_set_working_message(state, nil)
 
-              {:ok,
-               State.reset_runtime(state, new_session_manager, System.system_time(:millisecond))}
-            else
+                {:ok,
+                 State.reset_runtime(
+                   state,
+                   new_session_manager,
+                   System.system_time(:millisecond)
+                 )}
+
               {:error, reason, state} ->
                 {:error, {:heartbeat_persistence_failed, reason}, state}
             end
