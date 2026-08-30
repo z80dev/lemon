@@ -51,6 +51,19 @@ defmodule LemonAutomation.CronStore do
   end
 
   @doc """
+  Atomically store a cron job only when its stable ID is unused.
+
+  Blueprint activation uses this create-once boundary so a concurrent or
+  restarted activator cannot replace an unrelated job after its collision
+  preview. Normal operator updates continue to use `put_job/1` through
+  `CronManager.update/2`.
+  """
+  @spec claim_job(CronJob.t()) :: :ok | {:error, :exists} | {:error, term()}
+  def claim_job(%CronJob{} = job) do
+    LemonCore.Store.put_new(@jobs_table, job.id, CronJob.to_map(job))
+  end
+
+  @doc """
   Get a cron job by ID.
   """
   @spec get_job(binary()) :: CronJob.t() | nil
