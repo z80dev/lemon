@@ -510,6 +510,33 @@ run_install() {
 # run_install_with_tty has the same hermetic environment as run_install, but
 # allocates a local pseudo-terminal. `install.sh` probes /dev/tty itself, so
 # this is a controllable terminal fixture rather than an installer-only hook.
+run_with_tty_command() {
+  local log="$1" command="$2"
+
+  if script --version 2>/dev/null | grep -qi 'util-linux'; then
+    script -q -e -c "$command" /dev/null >"$log" 2>&1
+    return
+  fi
+
+  # BSD/macOS script takes the transcript path before the command and has no
+  # util-linux -e flag. Record the nested shell status explicitly so failures
+  # still propagate through the verifier instead of being masked by script.
+  local status_file wrapped status
+  status_file="$(mktemp "$work_dir/tty-status.XXXXXX")"
+  wrapped="${command}; status=\$?; printf '%s\\n' \"\$status\" > $(printf '%q' "$status_file"); exit \"\$status\""
+
+  script -q /dev/null /bin/sh -c "$wrapped" >"$log" 2>&1 || true
+
+  if [ ! -s "$status_file" ]; then
+    rm -f "$status_file"
+    return 125
+  fi
+
+  status="$(cat "$status_file")"
+  rm -f "$status_file"
+  return "$status"
+}
+
 run_install_with_tty() {
   local log="$1" home="$2" base="$3"
   shift 3
@@ -533,7 +560,7 @@ run_install_with_tty() {
     "${envs[@]}" \
     sh "$INSTALL_SH" "$@"
 
-  script -q -e -c "$command" /dev/null >"$log" 2>&1
+  run_with_tty_command "$log" "$command"
 }
 
 run_launcher_with_tty() {
@@ -547,7 +574,7 @@ run_launcher_with_tty() {
     SHELL=/bin/sh \
     "$home/.lemon/bin/lemon" "$@"
 
-  script -q -e -c "$command" /dev/null >"$log" 2>&1
+  run_with_tty_command "$log" "$command"
 }
 
 setup_count() {
@@ -638,21 +665,34 @@ else
 fi
 
 # The sim profile never has an interactive setup journey, even when a terminal
-# is available.
+# is available. Its published runtime is Linux-only, so macOS verifies the
+# actionable platform refusal and that setup was never entered.
 sim_home="$work_dir/home-sim"
 mkdir -p "$sim_home"
 
-if run_install_with_tty "$work_dir/install-sim.log" "$sim_home" "$base_url/sim" LEMON_PROFILE=sim; then
-  if [ "$(setup_count "$sim_home")" = "0" ] &&
-    ! grep -Fq "$sim_home/.lemon/bin/lemon setup" "$work_dir/install-sim.log"; then
-    ok "the sim profile skips setup even with an interactive terminal"
+if [ "$PLATFORM_OS" = "linux" ]; then
+  if run_install_with_tty "$work_dir/install-sim.log" "$sim_home" "$base_url/sim" LEMON_PROFILE=sim; then
+    if [ "$(setup_count "$sim_home")" = "0" ] &&
+      ! grep -Fq "$sim_home/.lemon/bin/lemon setup" "$work_dir/install-sim.log"; then
+      ok "the sim profile skips setup even with an interactive terminal"
+    else
+      fail "the sim profile attempted or advertised setup"
+      cat "$work_dir/install-sim.log" >&2
+    fi
   else
-    fail "the sim profile attempted or advertised setup"
+    fail "the sim profile install exited non-zero"
     cat "$work_dir/install-sim.log" >&2
   fi
 else
-  fail "the sim profile install exited non-zero"
-  cat "$work_dir/install-sim.log" >&2
+  if run_install_with_tty "$work_dir/install-sim.log" "$sim_home" "$base_url/sim" LEMON_PROFILE=sim; then
+    fail "the sim profile installed on an unsupported macOS host"
+  elif [ "$(setup_count "$sim_home")" = "0" ] &&
+    grep -Fq "built for Linux only" "$work_dir/install-sim.log"; then
+    ok "the sim profile refuses macOS without entering setup"
+  else
+    fail "the sim profile macOS refusal was not actionable or entered setup"
+    cat "$work_dir/install-sim.log" >&2
+  fi
 fi
 
 # --------------------------------------------------------------- assertions -
