@@ -7,9 +7,12 @@
     "shared"
   ],
   "scripts": {
+    "predev": "npm --workspace shared run build",
     "dev": "concurrently -n shared,server,web -c yellow,green,blue \"npm --workspace shared run dev\" \"npm --workspace server run dev\" \"npm --workspace web run dev\"",
     "build": "npm --workspace shared run build && npm --workspace server run build && npm --workspace web run build",
-    "start": "npm --workspace server run start",
+    "prestart": "npm --workspace shared run build && npm --workspace server run build",
+    "start": "npm --workspace server run start --",
+    "test:startup-contract": "node scripts/clean-start-contract.mjs",
     "typecheck": "npm --workspace shared run typecheck && npm --workspace shared run build && npm --workspace server run typecheck && npm --workspace web run typecheck",
     "test:coverage": "npm --workspace shared run test:coverage && npm --workspace server run test:coverage && npm --workspace web run test:coverage"
   },

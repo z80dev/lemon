@@ -536,9 +536,9 @@ Web3 messaging adapter. Supports threads only (no edit, delete, voice, images, f
 | `XMTP` (plugin) | Plugin behaviour implementation |
 | `XMTP.Transport` | GenServer for message send/receive, `normalize_inbound_message/1`, `deliver/1` |
 | `XMTP.Bridge` | Communication with the Node.js bridge (connect, poll, send_message) |
-| `XMTP.PortServer` | XMTP-specific public wrapper around the shared Node.js port lifecycle |
+| `XMTP.PortServer` | XMTP-specific public GenServer identity around the shared Node.js port lifecycle |
 
-XMTP uses a Node.js bridge process managed via an Erlang Port. The bridge handles the XMTP protocol specifics while the Elixir side manages lifecycle, message normalization, and delivery through the standard plugin interface. `XMTP.PortServer` supplies the XMTP script name, event tag, and log label to the internal `LemonChannels.PortBridge` GenServer.
+XMTP uses a Node.js bridge process managed via an Erlang Port. The bridge handles the XMTP protocol specifics while the Elixir side manages lifecycle, message normalization, and delivery through the standard plugin interface. `XMTP.PortServer` remains the public GenServer callback/process and warning-log module while supplying the XMTP script name, event tag, and log label to the shared `LemonChannels.PortBridge` callback implementation.
 
 #### Configuration
 
@@ -558,7 +558,7 @@ The WhatsApp adapter uses its own Node.js bridge script and event tag behind the
 | `WhatsApp.Supervisor` | Starts the async supervisor and transport when credentials are configured |
 | `WhatsApp.Transport` | GenServer for message send/receive and bridge event handling |
 | `WhatsApp.Bridge` | Communication with the Node.js bridge |
-| `WhatsApp.PortServer` | WhatsApp-specific public wrapper around `LemonChannels.PortBridge` |
+| `WhatsApp.PortServer` | WhatsApp-specific public GenServer identity around `LemonChannels.PortBridge` |
 
 ## Adding a New Channel Adapter
 

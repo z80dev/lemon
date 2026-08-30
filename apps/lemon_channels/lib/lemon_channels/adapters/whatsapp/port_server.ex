@@ -1,13 +1,18 @@
 defmodule LemonChannels.Adapters.WhatsApp.PortServer do
   @moduledoc false
 
+  @behaviour GenServer
+
   alias LemonChannels.PortBridge
+
+  require Logger
 
   @bridge_spec %{
     label: "whatsapp",
     event_tag: :whatsapp_bridge_event,
     script_filename: "whatsapp_bridge.mjs",
-    adapter_dir: __DIR__
+    adapter_dir: __DIR__,
+    log_module: __MODULE__
   }
 
   @type state :: %{
@@ -16,7 +21,8 @@ defmodule LemonChannels.Adapters.WhatsApp.PortServer do
           notify_pid: pid() | nil,
           unavailable_reason: term() | nil,
           script_path: String.t(),
-          connect_command: map() | nil
+          connect_command: map() | nil,
+          bridge: PortBridge.bridge_spec()
         }
 
   @spec child_spec(keyword()) :: Supervisor.child_spec()
@@ -26,7 +32,7 @@ defmodule LemonChannels.Adapters.WhatsApp.PortServer do
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
-    PortBridge.start_link(@bridge_spec, opts)
+    GenServer.start_link(__MODULE__, opts)
   end
 
   @spec command(pid(), map()) :: :ok
@@ -35,11 +41,17 @@ defmodule LemonChannels.Adapters.WhatsApp.PortServer do
   end
 
   @doc false
+  @impl true
   def init(opts), do: PortBridge.init({@bridge_spec, opts})
 
   @doc false
+  @impl true
   def handle_cast(message, state), do: PortBridge.handle_cast(message, state)
 
   @doc false
+  @impl true
   def handle_info(message, state), do: PortBridge.handle_info(message, state)
+
+  @doc false
+  def log_warning(message) when is_binary(message), do: Logger.warning(message)
 end

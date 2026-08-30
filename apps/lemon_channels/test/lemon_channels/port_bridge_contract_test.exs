@@ -39,6 +39,8 @@ defmodule LemonChannels.PortBridgeContractTest do
       missing_script = Path.join(tmp_dir, "missing_#{bridge.script_filename}")
 
       with_bridge(bridge, missing_script, fn pid ->
+        assert :proc_lib.translate_initial_call(pid) == {bridge.module, :init, 1}
+
         assert_receive {event_tag,
                         %{
                           "type" => "error",

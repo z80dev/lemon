@@ -336,7 +336,12 @@ cd clients/lemon-web
 npm start
 ```
 
-Connects to `http://localhost:4080` (the web Phoenix endpoint).
+`npm start` runs the root `prestart` hook first, rebuilding the ignored shared
+and server entrypoints so this works from a clean checkout after dependencies
+are installed.
+
+This source command starts the Node debug bridge on `http://localhost:3939` by
+default. The packaged Phoenix Web endpoint remains `http://localhost:4080`.
 
 
 ---

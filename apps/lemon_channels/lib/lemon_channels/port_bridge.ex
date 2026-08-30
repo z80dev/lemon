@@ -1,7 +1,7 @@
 defmodule LemonChannels.PortBridge do
   @moduledoc false
 
-  use GenServer
+  @behaviour GenServer
 
   require Logger
 
@@ -11,7 +11,8 @@ defmodule LemonChannels.PortBridge do
           required(:label) => String.t(),
           required(:event_tag) => atom(),
           required(:script_filename) => String.t(),
-          required(:adapter_dir) => String.t()
+          required(:adapter_dir) => String.t(),
+          optional(:log_module) => module()
         }
 
   @type state :: %{
@@ -23,11 +24,6 @@ defmodule LemonChannels.PortBridge do
           connect_command: map() | nil,
           bridge: bridge_spec()
         }
-
-  @spec start_link(bridge_spec(), keyword()) :: GenServer.on_start()
-  def start_link(%{} = bridge, opts) when is_list(opts) do
-    GenServer.start_link(__MODULE__, {bridge, opts})
-  end
 
   @spec command(pid(), map()) :: :ok
   def command(server, command) when is_pid(server) and is_map(command) do
@@ -91,7 +87,7 @@ defmodule LemonChannels.PortBridge do
   end
 
   def handle_info({port, {:exit_status, status}}, %{port: port} = state) do
-    Logger.warning("#{bridge_label(state)} bridge exited (status=#{status})")
+    log_warning(state, "#{bridge_label(state)} bridge exited (status=#{status})")
 
     emit_error(state, "#{bridge_label(state)} bridge exited", %{status: status})
 
@@ -274,6 +270,17 @@ defmodule LemonChannels.PortBridge do
   end
 
   defp bridge_label(%{bridge: %{label: label}}), do: label
+
+  defp log_warning(%{bridge: %{log_module: module}}, message)
+       when is_atom(module) and is_binary(message) do
+    if function_exported?(module, :log_warning, 1) do
+      apply(module, :log_warning, [message])
+    else
+      Logger.warning(message)
+    end
+  end
+
+  defp log_warning(_state, message), do: Logger.warning(message)
 
   defp stringify_keys(value), do: LemonCore.MapHelpers.stringify_keys(value)
 
