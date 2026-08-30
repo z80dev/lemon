@@ -50,7 +50,7 @@ LemonAgent.Supervisor (:one_for_one)
 | File | What It Does |
 |------|-------------|
 | `lib/agent_core/event_stream.ex` | GenServer-based bounded event queue. Producer pushes with backpressure, consumer reads via `events/1` (lazy `Stream.resource`). Handles owner death, task death, timeout. |
-| `lib/agent_core/context.ex` | Context window management. `estimate_size/2` counts chars (~4 chars/token). `truncate/2` with sliding window or bookends strategy. `make_transform/1` creates a function for `AgentLoopConfig.transform_context`. |
+| `lib/agent_core/context.ex` | Context window management. `estimate_size/2` counts chars (~4 chars/token). `truncate/2` preserves retained order, applies both message/character limits to bookends, and keeps assistant tool-call/result transcript groups atomic. `make_transform/1` creates a function for `AgentLoopConfig.transform_context`. |
 | `lib/agent_core/abort_signal.ex` | ETS-based abort flag. `new/0` creates a ref, `abort/1` sets it, `aborted?/1` checks it. Fast reads via `read_concurrency: true`. |
 | `lib/agent_core/proxy.ex` | SSE proxy for routing LLM calls through an HTTP server. Reconstructs partial `AssistantMessage` from stripped delta events. |
 | `lib/agent_core/text_generation.ex` | Simple `complete_text/4` bridge so callers don't import `LemonAi` directly. |
@@ -247,6 +247,8 @@ end
 8. **Tool execution runs under `ToolTaskSupervisor`.** If a tool task crashes, it is caught and reported as an error result. It does not crash the loop.
 
 9. **The AbortSignal ETS table** is created by `AbortSignal.TableOwner` at app startup. The `AbortSignal` module has a fallback `ensure_table` that creates it if needed (for test environments where the app may not be started). The table uses `{:heir, TableOwner, :ok}` so it survives process restarts.
+
+10. **Context truncation preserves transcript structure.** Sliding-window output stays in original chronological order. Both strategies retain an assistant tool-call message and its contiguous tool results as one unit, dropping the whole unit when it cannot fit; bookends treats both `max_messages` and `max_chars` as hard limits.
 
 
 ## How This App Connects to Other Umbrella Apps

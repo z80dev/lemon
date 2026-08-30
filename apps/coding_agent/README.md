@@ -90,8 +90,8 @@ CodingAgent.Supervisor (one_for_one)
 | Module | Description |
 |--------|-------------|
 | `CodingAgent.Session` | Main GenServer orchestrating the agent loop, event dispatch, steering, follow-ups, compaction, and persistence |
-| `CodingAgent.Session.EventHandler` | Translates `LemonAgent` events into session state updates, triggers compaction, and fires extension hooks |
-| `CodingAgent.Session.CompactionManager` | Auto-compaction scheduling, overflow recovery state machine, and compaction result application |
+| `CodingAgent.Session.EventHandler` | Translates `LemonAgent` events into session state updates, clears diagnostic queue mirrors on every terminal path, triggers compaction, and fires extension hooks |
+| `CodingAgent.Session.CompactionManager` | Auto-compaction scheduling, tracked worker cleanup, overflow recovery state machine, and compaction result application |
 | `CodingAgent.Session.MessageSerialization` | Serializes/deserializes messages between session and agent core formats |
 | `CodingAgent.Session.ModelResolver` | Resolves model structs from string specs, maps, or settings; handles API key lookup via env vars and secrets with OAuth refresh |
 | `CodingAgent.Session.PromptComposer` | Composes the final system prompt by layering base prompt, prompt templates, explicit system prompt, current-prompt relevant skill hints, and resource loader instructions |
@@ -401,6 +401,10 @@ A session is a `GenServer` process that wraps an `LemonAgent.Agent` loop. Each s
 - Steering (mid-run interrupts) and follow-up (post-run) queues
 - Auto-compaction and overflow recovery
 
+The Session queue fields are diagnostic mirrors; `LemonAgent.Agent` owns actual
+delivery and consumption. Terminal, cancel, error, abort, and agent-exit paths
+clear the mirrors so `diagnostics/1` cannot report stale follow-ups.
+
 Sessions are started under `SessionSupervisor` (dynamic) and registered in `SessionRegistry` by their UUID.
 
 ### Tool Execution
@@ -427,6 +431,12 @@ When conversations grow large, auto-compaction kicks in:
 3. An LLM summary of compacted messages is generated
 4. A compaction entry is appended to the session tree
 5. Overflow recovery handles cases where the context window is exhausted mid-run
+
+Auto-compaction runs in a tracked background worker after a completed turn. If
+a new prompt arrives before that worker finishes, Session cancels and demonitors
+the stale snapshot immediately, clears its timeout, and starts the prompt
+without waiting. Any already-sent late result is ignored by signature/state
+checks and cannot append a compaction entry to the new turn.
 
 Settings: `compaction_enabled` (default: true), `reserve_tokens` (default: 16,384), `keep_recent_tokens` (default: 20,000).
 

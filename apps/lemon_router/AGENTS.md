@@ -60,6 +60,9 @@ Inbound transport
 - Router may emit `LemonCore.DeliveryIntent`, but channel renderers decide payload shape.
 - Router builds `%LemonCore.ExecutionCommand{}` and calls the configured `LemonCore.EngineRuntime`; it must not construct `%LemonGateway.ExecutionRequest{}` or call `LemonGateway.Runtime` directly.
 - Router owns pending-compaction prompt mutation.
+- Fresh pending-compaction markers are prepared before submission but consumed
+  only after `SessionCoordinator.submit/2` accepts the run; submission errors
+  preserve the marker for retry, while stale/empty markers may clear eagerly.
 - Router uses `PendingCompactionStore`; it must not touch Telegram message-index tables directly.
 - Router uses `LemonChannels.TargetDirectory` for human-friendly channel target discovery; it must not read Telegram or Discord known-target stores directly.
 - Queue semantics belong in `SessionCoordinator`, not in gateway workers.
@@ -216,6 +219,8 @@ the gateway or user explicitly ends them.
 Update:
 
 - `router.ex` for inbound prompt rewriting
+- `pending_compaction.ex` for shared preparation, secure history envelopes,
+  whole-entry truncation, and post-submit consumption
 - `run_process/compaction_trigger.ex` for marker creation and overflow handling
 - `pending_compaction_store.ex` for storage access if needed
 

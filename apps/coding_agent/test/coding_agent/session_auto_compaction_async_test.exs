@@ -155,4 +155,76 @@ defmodule CodingAgent.SessionAutoCompactionAsyncTest do
     assert state_after.auto_compaction_task_pid == nil
     assert state_after.auto_compaction_task_monitor_ref == nil
   end
+
+  test "a new prompt cancels stale auto compaction without accepting its late result" do
+    slow_stream = fn _model, _context, _options ->
+      Process.sleep(250)
+      Mocks.mock_stream_fn_single(Mocks.assistant_message("new answer")).(nil, nil, nil)
+    end
+
+    session = start_session(stream_fn: slow_stream)
+    send(session, {:agent_event, {:message_end, Mocks.user_message("old turn")}})
+
+    before = Session.get_state(session)
+    signature = current_signature(before)
+
+    compactions_before =
+      Enum.count(SessionManager.entries(before.session_manager), &(&1.type == :compaction))
+
+    task_pid = spawn(fn -> Process.sleep(:infinity) end)
+
+    :sys.replace_state(session, fn current ->
+      monitor_ref = Process.monitor(task_pid)
+
+      timeout_ref =
+        Process.send_after(self(), {:auto_compaction_task_timeout, monitor_ref}, 60_000)
+
+      current
+      |> Map.put(:auto_compaction_signature, signature)
+      |> Map.put(:auto_compaction_in_progress, true)
+      |> Map.put(:auto_compaction_task_pid, task_pid)
+      |> Map.put(:auto_compaction_task_monitor_ref, monitor_ref)
+      |> Map.put(:auto_compaction_task_timeout_ref, timeout_ref)
+    end)
+
+    assert :ok = Session.prompt(session, "new turn")
+
+    state_after_prompt = Session.get_state(session)
+    refute state_after_prompt.auto_compaction_in_progress
+    assert state_after_prompt.auto_compaction_signature == nil
+    assert state_after_prompt.auto_compaction_task_pid == nil
+    assert state_after_prompt.auto_compaction_task_monitor_ref == nil
+    assert state_after_prompt.auto_compaction_task_timeout_ref == nil
+    assert state_after_prompt.is_streaming
+
+    assert eventually(fn -> not Process.alive?(task_pid) end)
+
+    stale_result = %{
+      summary: "must not apply",
+      first_kept_entry_id: before.session_manager.leaf_id,
+      tokens_before: 999,
+      details: %{source: "stale"}
+    }
+
+    trigger_auto_compaction_result(session, signature, stale_result)
+    state_after_result = Session.get_state(session)
+
+    assert Enum.count(
+             SessionManager.entries(state_after_result.session_manager),
+             &(&1.type == :compaction)
+           ) ==
+             compactions_before
+  end
+
+  defp eventually(fun, attempts \\ 20)
+  defp eventually(fun, 0), do: fun.()
+
+  defp eventually(fun, attempts) do
+    if fun.() do
+      true
+    else
+      Process.sleep(10)
+      eventually(fun, attempts - 1)
+    end
+  end
 end
