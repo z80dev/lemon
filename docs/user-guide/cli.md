@@ -26,6 +26,8 @@ arguments remain human-readable usage errors with exit code `2`.
 | `config` | Validate or show resolved configuration |
 | `secrets` | Manage encrypted credentials |
 | `channels` | Inspect channel launch readiness |
+| `providers` | Inspect provider readiness and manage routing |
+| `blueprints` | Review and exactly confirm cataloged skill automation bundles |
 | `profile` | Manage isolated specialist profiles |
 | `backup` | Create, verify, list, or restore user-state backups |
 | `context` | Preview or resolve bounded context references |
@@ -37,6 +39,43 @@ runtime lifecycle. Run `lemon --help` or `./bin/lemon --help` for that exact
 launcher. Completion generation detects the launcher, so it does not advertise
 packaged daemon commands in a source checkout or source-only commands in an
 installed release.
+
+## Portable blueprints
+
+`lemon blueprints` talks only to the authenticated local control plane. It
+never accepts a filesystem root or path and never starts a scheduler in the
+one-shot CLI VM. Installed releases start the daemon when needed; from a source
+checkout, start `./bin/lemon --daemon` first.
+
+```bash
+lemon blueprints
+lemon blueprints inspect daily-note
+lemon blueprints validate daily-note --json
+lemon blueprints daily-note --profile operator
+lemon blueprints preview daily-note --profile operator --json
+```
+
+The bundle-ID shorthand is preview, not activation. These reads return only
+the control plane's sanitized projections: IDs/names, content hashes and byte
+counts, profile/session target, cron schedule/state, provenance, collision
+actions, and cleanup flags. They omit absolute paths, skill bodies, prompt or
+command text, and secret values.
+
+Activation requires the exact 64-character `confirmationDigest` from a fresh
+preview:
+
+```bash
+lemon blueprints activate daily-note --profile operator \
+  --confirm <exact-confirmation-digest>
+```
+
+The long-running runtime re-plans under the existing blueprint lock before any
+write. Content, profile destination, enabled-skill state, or cron collision
+changes invalidate the digest. Successful replay reports `unchanged` and keeps
+one stable cron job. JSON success is one sanitized document on stdout;
+operational failures are one redacted error document on stderr with exit `1`;
+invalid CLI arguments use exit `2`. See the
+[bundle manifest and safety guide](skills.md#portable-skill-and-automation-bundles).
 
 ## Durable sessions
 

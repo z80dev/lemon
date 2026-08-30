@@ -622,6 +622,9 @@ bodies, prompt text, commands, or secret values. Activation targets a derived
 profile workspace and creates the disabled or enabled agent cron definition
 only through the create-once `CronManager` API. See the
 [skills user guide](../../docs/user-guide/skills.md#portable-skill-and-automation-bundles).
+Source and packaged `lemon blueprints` commands are thin authenticated clients
+of these methods; a bundle ID previews by default, and activation requires the
+fresh plan's exact confirmation digest.
 
 ### Events and Subscriptions
 

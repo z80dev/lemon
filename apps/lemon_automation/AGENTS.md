@@ -167,6 +167,10 @@ symlinks, environment/cwd overrides, secret-like values, and non-UTC schedules.
   control-plane boundary. Keep arbitrary paths local-only; RPC resolves a safe
   `bundleId` below `~/.lemon/bundles`, returns no prompt/skill/path/secret text,
   and requires the exact fresh `confirmationDigest` for mutation.
+- Source and packaged `lemon blueprints` are thin clients of that RPC boundary.
+  Do not move bundle loading or scheduler startup into the one-shot CLI VM;
+  preview remains the bundle-ID shorthand and activation remains an explicit
+  exact-digest request handled by the long-running `CronManager` runtime.
 
 ## Top-Level Facade
 
@@ -707,6 +711,10 @@ mix test apps/lemon_automation/test/lemon_automation/blueprint_test.exs --seed 1
 
 # Booted control-plane activation proof (disabled job; cleans up after itself)
 MIX_ENV=dev mix run --no-start scripts/live_skill_automation_blueprint_smoke.exs
+
+# Source and assembled minimal-runtime CLI proof uses an isolated catalog,
+# profile, control-plane port, and store, then replays activation once.
+scripts/live_blueprint_cli_smoke
 ```
 
 ### Key Testing Patterns

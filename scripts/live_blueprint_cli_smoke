@@ -1,0 +1,294 @@
+#!/usr/bin/env bash
+# Proves the source and assembled lemon_runtime_min blueprint CLI against real,
+# isolated control-plane and CronManager instances. No provider credentials or
+# network-backed model calls are required; the example automation is disabled.
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/lemon-blueprint-cli.XXXXXX")"
+PROOF_PATH="${LEMON_BLUEPRINT_CLI_PROOF_PATH:-$ROOT/.lemon/proofs/blueprint-cli-latest.json}"
+HOST_MIX_HOME="${MIX_HOME:-$HOME/.mix}"
+HOST_HEX_HOME="${HEX_HOME:-$HOME/.hex}"
+SOURCE_PID_FILE="$WORK_DIR/source.pid"
+RELEASE_PID_FILE=""
+
+cleanup() {
+  if [ -s "$SOURCE_PID_FILE" ]; then
+    source_pid="$(cat "$SOURCE_PID_FILE")"
+    if [[ "$source_pid" =~ ^[0-9]+$ ]] && kill -0 "$source_pid" 2>/dev/null; then
+      kill "$source_pid" 2>/dev/null || true
+      for _attempt in {1..20}; do
+        kill -0 "$source_pid" 2>/dev/null || break
+        sleep 0.1
+      done
+    fi
+  fi
+
+  if [ -n "$RELEASE_PID_FILE" ] && [ -s "$RELEASE_PID_FILE" ]; then
+    release_pid="$(cat "$RELEASE_PID_FILE")"
+    if [[ "$release_pid" =~ ^[0-9]+$ ]] && kill -0 "$release_pid" 2>/dev/null; then
+      kill "$release_pid" 2>/dev/null || true
+      for _attempt in {1..20}; do
+        kill -0 "$release_pid" 2>/dev/null || break
+        sleep 0.1
+      done
+    fi
+  fi
+
+  if [[ "$WORK_DIR" == "${TMPDIR:-/tmp}"/lemon-blueprint-cli.* ]]; then
+    rm -rf -- "$WORK_DIR"
+  fi
+}
+
+trap cleanup EXIT
+
+free_port() {
+  python3 - <<'PY'
+import socket
+with socket.socket() as sock:
+    sock.bind(("127.0.0.1", 0))
+    print(sock.getsockname()[1])
+PY
+}
+
+runtime_env() {
+  local runtime_home="$1"
+  local control_port="$2"
+  local gateway_health_port_file="$runtime_home/gateway-health.port"
+  local router_health_port_file="$runtime_home/router-health.port"
+  shift 2
+
+  if [ ! -s "$gateway_health_port_file" ]; then
+    free_port >"$gateway_health_port_file"
+  fi
+
+  if [ ! -s "$router_health_port_file" ]; then
+    free_port >"$router_health_port_file"
+  fi
+
+  env \
+    HOME="$runtime_home" \
+    MIX_HOME="$HOST_MIX_HOME" \
+    HEX_HOME="$HOST_HEX_HOME" \
+    LEMON_STORE_PATH="$runtime_home/.lemon/store" \
+    LEMON_CONTROL_PLANE_PORT="$control_port" \
+    LEMON_GATEWAY_HEALTH_PORT="$(cat "$gateway_health_port_file")" \
+    LEMON_ROUTER_HEALTH_PORT="$(cat "$router_health_port_file")" \
+    LEMON_CONTROL_PLANE_OPERATOR_TOKEN="blueprint-cli-proof-operator" \
+    LEMON_SECRETS_MASTER_KEY="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" \
+    LEMON_WEB_SECRET_KEY_BASE="$(printf 'b%.0s' {1..128})" \
+    LEMON_DOTENV_DIR="$WORK_DIR/empty-dotenv" \
+    LEMON_LOG_LEVEL=warning \
+    "$@"
+}
+
+wait_for_control_plane() {
+  local port="$1"
+
+  for _attempt in {1..120}; do
+    body="$(curl -fsS --max-time 1 "http://127.0.0.1:$port/healthz" 2>/dev/null || true)"
+    if printf '%s' "$body" | grep -q '"ok"[[:space:]]*:[[:space:]]*true'; then
+      return 0
+    fi
+    sleep 0.25
+  done
+
+  echo "control plane did not become healthy on port $port" >&2
+  return 1
+}
+
+prepare_fixture() {
+  local runtime_home="$1"
+  local launcher="$2"
+  local control_port="$3"
+
+  mkdir -p "$runtime_home/.lemon/bundles" "$WORK_DIR/empty-dotenv"
+  cp -R \
+    "$ROOT/examples/skill-automation-bundles/daily-note" \
+    "$runtime_home/.lemon/bundles/daily-note"
+
+  runtime_env "$runtime_home" "$control_port" \
+    "$launcher" profile create operator --name "Blueprint CLI Proof" --json \
+    >"$runtime_home/profile.json"
+}
+
+run_roundtrip() {
+  local label="$1"
+  local runtime_home="$2"
+  local launcher="$3"
+  local control_port="$4"
+  local output_dir="$runtime_home/results"
+
+  mkdir -p "$output_dir"
+
+  runtime_env "$runtime_home" "$control_port" \
+    "$launcher" blueprints --json >"$output_dir/list.json"
+  runtime_env "$runtime_home" "$control_port" \
+    "$launcher" blueprints inspect daily-note --json >"$output_dir/inspect.json"
+  runtime_env "$runtime_home" "$control_port" \
+    "$launcher" blueprints validate daily-note --json >"$output_dir/validate.json"
+  runtime_env "$runtime_home" "$control_port" \
+    "$launcher" blueprints daily-note --profile operator --json >"$output_dir/preview.json"
+
+  confirmation_digest="$(python3 - "$output_dir/preview.json" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle)["confirmationDigest"]
+assert len(value) == 64
+print(value)
+PY
+)"
+
+  runtime_env "$runtime_home" "$control_port" \
+    "$launcher" blueprints activate daily-note --profile operator \
+    --confirm "$confirmation_digest" --json >"$output_dir/activate.json"
+  runtime_env "$runtime_home" "$control_port" \
+    "$launcher" blueprints preview daily-note --profile operator --json \
+    >"$output_dir/replay-preview.json"
+
+  replay_digest="$(python3 - "$output_dir/replay-preview.json" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle)["confirmationDigest"]
+assert len(value) == 64
+print(value)
+PY
+)"
+
+  runtime_env "$runtime_home" "$control_port" \
+    "$launcher" blueprints activate daily-note --profile operator \
+    --confirm "$replay_digest" --json >"$output_dir/replay-activate.json"
+
+  python3 - "$label" "$runtime_home" "$output_dir" <<'PY'
+import json, pathlib, sys
+
+label, runtime_home, output_dir = sys.argv[1:]
+root = pathlib.Path(output_dir)
+
+def load(name):
+    with (root / name).open(encoding="utf-8") as handle:
+        return json.load(handle)
+
+def strings(value):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from strings(item)
+
+listed = load("list.json")
+inspected = load("inspect.json")
+validated = load("validate.json")
+preview = load("preview.json")
+activated = load("activate.json")
+replay_preview = load("replay-preview.json")
+replayed = load("replay-activate.json")
+
+assert any(bundle["id"] == "daily-note" for bundle in listed["bundles"])
+assert inspected["validation"]["valid"] is True
+assert validated["validation"]["valid"] is True
+assert preview["canActivate"] is True
+assert activated["automation"]["status"] == "created"
+assert replay_preview["automation"]["action"] == "unchanged"
+assert replayed["automation"]["status"] == "unchanged"
+assert activated["automation"]["id"] == replayed["automation"]["id"]
+assert replayed["summary"]["duplicateSafe"] is True
+
+wire = "\n".join(path.read_text(encoding="utf-8") for path in root.glob("*.json"))
+for forbidden in (
+    runtime_home,
+    "Use the daily-note skill to summarize completed work from the current conversation.",
+    "blueprint-cli-proof-operator",
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+):
+    assert forbidden not in wire
+
+for document in (listed, inspected, validated, preview, activated, replay_preview, replayed):
+    assert all(not value.startswith(("/", "~/")) for value in strings(document))
+
+print(json.dumps({
+    "runtime": label,
+    "catalog_count": listed["summary"]["bundleCount"],
+    "created_status": activated["automation"]["status"],
+    "replay_status": replayed["automation"]["status"],
+    "duplicate_safe": replayed["summary"]["duplicateSafe"],
+    "content_free": True,
+}, sort_keys=True))
+PY
+}
+
+cd "$ROOT"
+
+SOURCE_HOME="$WORK_DIR/source-home"
+SOURCE_PORT="$(free_port)"
+SOURCE_WEB_PORT="$(free_port)"
+SOURCE_SIM_PORT="$(free_port)"
+mkdir -p "$SOURCE_HOME"
+prepare_fixture "$SOURCE_HOME" "$ROOT/bin/lemon" "$SOURCE_PORT"
+
+runtime_env "$SOURCE_HOME" "$SOURCE_PORT" \
+  LEMON_RUNTIME_PID_FILE="$SOURCE_PID_FILE" \
+  LEMON_WEB_PORT="$SOURCE_WEB_PORT" \
+  LEMON_SIM_UI_PORT="$SOURCE_SIM_PORT" \
+  "$ROOT/bin/lemon" --daemon --no-distribution --port "$SOURCE_PORT" \
+  --web-port "$SOURCE_WEB_PORT" --sim-port "$SOURCE_SIM_PORT" \
+  >"$WORK_DIR/source-launch.log" 2>&1
+wait_for_control_plane "$SOURCE_PORT"
+run_roundtrip "source-runtime-full" "$SOURCE_HOME" "$ROOT/bin/lemon" "$SOURCE_PORT" \
+  >"$WORK_DIR/source-result.json"
+
+source_pid="$(cat "$SOURCE_PID_FILE")"
+if [[ "$source_pid" =~ ^[0-9]+$ ]] && kill -0 "$source_pid" 2>/dev/null; then
+  kill "$source_pid"
+fi
+rm -f "$SOURCE_PID_FILE"
+
+MIX_ENV=prod mix deps.get >"$WORK_DIR/release-deps.log"
+MIX_ENV=prod mix release lemon_runtime_min --overwrite >"$WORK_DIR/release-build.log"
+RELEASE_ROOT="$ROOT/_build/prod/rel/lemon_runtime_min"
+RELEASE_HOME="$WORK_DIR/release-home"
+RELEASE_PORT="$(free_port)"
+mkdir -p "$RELEASE_HOME"
+RELEASE_PID_FILE="$RELEASE_HOME/.lemon/run/lemon.pid"
+prepare_fixture "$RELEASE_HOME" "$RELEASE_ROOT/bin/lemon" "$RELEASE_PORT"
+
+# The first JSON blueprint command deliberately exercises packaged daemon
+# auto-start. Launcher notices are redirected to stderr so stdout stays one
+# parseable JSON document.
+run_roundtrip "assembled-lemon-runtime-min" "$RELEASE_HOME" \
+  "$RELEASE_ROOT/bin/lemon" "$RELEASE_PORT" >"$WORK_DIR/release-result.json"
+
+mkdir -p "$(dirname "$PROOF_PATH")"
+python3 - "$WORK_DIR/source-result.json" "$WORK_DIR/release-result.json" "$PROOF_PATH" <<'PY'
+import datetime, json, pathlib, sys
+
+source_path, release_path, proof_path = sys.argv[1:]
+with open(source_path, encoding="utf-8") as handle:
+    source = json.load(handle)
+with open(release_path, encoding="utf-8") as handle:
+    release = json.load(handle)
+
+proof = {
+    "proof_object": "lemon.blueprint_cli_smoke",
+    "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    "status": "completed",
+    "completed_count": 2,
+    "failed_count": 0,
+    "checks": [source, release],
+    "cleanup": {
+        "isolated_homes": True,
+        "provider_credentials_used": False,
+        "prompt_text_returned": False,
+        "absolute_paths_returned": False,
+        "secret_values_returned": False,
+    },
+}
+
+path = pathlib.Path(proof_path)
+path.write_text(json.dumps(proof, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+print(json.dumps(proof, indent=2, sort_keys=True))
+PY

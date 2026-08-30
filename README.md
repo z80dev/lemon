@@ -106,6 +106,18 @@ lemon completion zsh > "$HOME/.zfunc/_lemon"
 See the [Lemon command-line reference](docs/user-guide/cli.md) for the complete
 session lifecycle, guarded prune, exit-code, JSON, and shell setup contracts.
 
+Review a local portable skill + automation bundle without revealing its skill
+body or cron prompt, then activate only the exact reviewed plan:
+
+```bash
+lemon blueprints daily-note --profile operator
+lemon blueprints activate daily-note --profile operator \
+  --confirm <exact-confirmation-digest>
+```
+
+See [Portable skill and automation bundles](docs/user-guide/skills.md#portable-skill-and-automation-bundles)
+for the catalog, safety, provenance, and duplicate-safe activation contract.
+
 ---
 
 ## Connect Messaging Channels
@@ -315,7 +327,7 @@ graph TD
 | [Documentation Index](docs/README.md) | Complete documentation catalog |
 | [Installation Guide](docs/install.md) | Prebuilt releases, platform support, and headless setup |
 | [Configuration Reference](docs/config.md) | Runtime configuration and environment variables |
-| [Command-line Reference](docs/user-guide/cli.md) | Runtime commands, durable sessions, exit codes, and shell completion |
+| [Command-line Reference](docs/user-guide/cli.md) | Runtime commands, blueprint activation, durable sessions, exit codes, and shell completion |
 | [Backup and Restore](docs/user-guide/backups.md) | `~/.lemon` data contract, verification, guarded restore, and rollback |
 | [Testing Guide](docs/testing.md) | Test suites, quality gates, and CI parity |
 | [Mix Tasks Reference](docs/mix-tasks.md) | Grouped reference for all `mix lemon.*` commands |

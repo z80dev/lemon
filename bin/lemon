@@ -15,6 +15,7 @@
 #   ./bin/lemon config validate
 #   ./bin/lemon context preview '@file:README.md' --root "$PWD"
 #   ./bin/lemon sessions list --limit 20
+#   ./bin/lemon blueprints daily-note --profile operator
 #   ./bin/lemon completion zsh
 #   ./bin/lemon doctor --json
 #   ./bin/lemon backup create --json
@@ -60,6 +61,7 @@ Usage: ./bin/lemon [options]
        ./bin/lemon config validate
        ./bin/lemon context preview '@file:README.md' --root "$PWD"
        ./bin/lemon sessions <list|search|show|history|title|pin|unpin|archive|restore|export|prune|delete>
+       ./bin/lemon blueprints [list|inspect|validate|preview|activate]
        ./bin/lemon completion <bash|zsh|fish>
        ./bin/lemon doctor --json
        ./bin/lemon backup create --json
@@ -368,6 +370,10 @@ if [[ "${1:-}" == "context" ]]; then
 fi
 
 if [[ "${1:-}" == "sessions" ]]; then
+  run_source_runtime_cli "$@"
+fi
+
+if [[ "${1:-}" == "blueprints" ]]; then
   run_source_runtime_cli "$@"
 fi
 

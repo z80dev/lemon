@@ -17,7 +17,7 @@
 | Modify SMS/voice transports | `apps/lemon_gateway/` |
 | Add new messaging channel adapters (X, XMTP, etc.) | `apps/lemon_channels/` |
 | Modify setup, onboarding, or Hermes migration CLI flows | `apps/lemon_cli/` |
-| Work on packaged/source command help, completion, or session lifecycle CLI | `apps/lemon_cli/` (`CommandRegistry`, `CompletionCommand`, `SessionsCommand`) |
+| Work on packaged/source command help, completion, sessions, or blueprint UX | `apps/lemon_cli/` (`CommandRegistry`, `CompletionCommand`, `SessionsCommand`, `BlueprintsCommand`) |
 | Work on agent routing or message flow | `apps/lemon_router/` |
 | Build HTTP/WebSocket API features | `apps/lemon_control_plane/` |
 | Manage configuration, secrets, or storage | `apps/lemon_core/` |
@@ -281,6 +281,7 @@ npm run dev      # Watch mode
 ./bin/lemon backup create --json  # Atomic, verified durable-user-state backup
 ./bin/lemon backup verify ~/.lemon/backups/<bundle>.lemonbackup --json
 ./bin/lemon sessions list --limit 20 --json  # Bounded durable session inventory
+./bin/lemon blueprints daily-note --profile operator --json  # Preview a catalog bundle without mutation
 ./bin/lemon completion zsh  # Generate source-launcher-aware completion
 ./bin/lemon node join --name worker-1 --controller wss://controller.example/ws --pair --cwd /path/to/project
 ./bin/lemon-tui    # Dev TUI; securely token-pairs with a launcher-owned runtime
@@ -317,6 +318,13 @@ preview before using the exact candidate-bound token with the preview's
 millisecond cutoff. `LemonCli.CommandRegistry` is the runtime-family source for
 dispatch, help, and Bash/Zsh/Fish completion; keep source-only and
 release-only launcher commands in their separate registry sets.
+
+`lemon blueprints` and `./bin/lemon blueprints` are thin authenticated clients
+for the existing catalog-scoped control-plane methods. The one-shot CLI never
+accepts a bundle path or starts automation locally: list/inspect/validate and
+preview are non-mutating, while activation requires the exact fresh preview
+digest and is performed by the long-running runtime through
+`LemonAutomation.Blueprint` and `CronManager.add_new/1`.
 
 ---
 
@@ -632,7 +640,8 @@ Each app has its own `AGENTS.md` with detailed context:
 ---
 
 *Last updated: 2026-08-30* (the Mix-free command registry now drives runtime
-dispatch/help/completion and the packaged/source sessions CLI reuses the shared
+dispatch/help/completion; the packaged/source blueprint CLI reuses the safe
+control-plane plan/activation path; the sessions CLI reuses the shared
 redacted lifecycle; architecture reporting parses complete `deps/0`
 bodies and distinguishes direct dependencies from reference-only exceptions;
 `lemon_mcp` is assembled as a library-only `:load` application with no empty

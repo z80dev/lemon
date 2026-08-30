@@ -20,6 +20,7 @@ defmodule LemonCli.CLI do
       secrets <status|init|set|list|delete|check|import-env>
       channels [--project-dir PATH] [--json]
       providers [status|fallback|pool] [options]
+      blueprints [list|inspect|validate|preview|activate] [options]
       profile <list|show|create|clone|rename|export|delete|roster|chat>
       backup <contract|create|list|verify|restore> [options]
       context <preview|resolve> <reference>... [bounded options]
@@ -157,6 +158,7 @@ defmodule LemonCli.CLI do
   defp run_command("secrets", args), do: run_secrets(args)
   defp run_command("channels", args), do: run_channels(args)
   defp run_command("providers", args), do: LemonCli.ProvidersCommand.run(args)
+  defp run_command("blueprints", args), do: LemonCli.BlueprintsCommand.run(args)
   defp run_command("profile", args), do: LemonCli.ProfileCommand.run(args)
   defp run_command("backup", args), do: run_backup(args)
   defp run_command("context", args), do: LemonCli.ContextCommand.run(args)

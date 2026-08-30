@@ -46,6 +46,7 @@ release and source-checkout behavior aligned.
 | Manage encrypted secrets | `lemon secrets status` | `./bin/lemon secrets status` | `mix lemon.secrets.status` |
 | Inspect channel readiness | `lemon channels` | `./bin/lemon channels` | `mix lemon.channels` |
 | Inspect/edit provider routing | `lemon providers status|fallback|pool` | `./bin/lemon providers status|fallback|pool` | `mix lemon.providers` (read-only) |
+| Review/activate cataloged blueprints | `lemon blueprints daily-note --profile operator` | `./bin/lemon blueprints daily-note --profile operator` | Use the same control-plane command boundary |
 | Back up or restore durable user state | `lemon backup create` | `./bin/lemon backup create` | Call `LemonCli.CLI.run/1` from contributor tooling |
 | Manage specialist profiles | `lemon profile list` | `./bin/lemon profile list` | Use the same packaged command boundary |
 | Preview/resolve bounded context | `lemon context preview|resolve ...` | `./bin/lemon context preview|resolve ...` | Call `LemonCore.Context` from IEx/tests |
@@ -56,16 +57,45 @@ release and source-checkout behavior aligned.
 
 `LemonCli.CommandRegistry` is the single source for Mix-free runtime-family
 dispatch, top-level help, command help, and shell completion metadata. It
-contains setup, model, gateway, doctor, config, secrets, channels, profile,
-backup, context, sessions, and completion. Launcher-only metadata is separated
-into source and release sets so generated scripts never advertise commands the
-current launcher cannot run.
+contains setup, model, gateway, doctor, config, secrets, channels, providers,
+blueprints, profile, backup, context, sessions, and completion. Launcher-only
+metadata is separated into source and release sets so generated scripts never
+advertise commands the current launcher cannot run.
 
 `lemon completion bash|zsh|fish` emits only the completion program to stdout.
 The source wrapper compiles quietly before generation; packaged runtimes use
 the fixed release eval expression and pass the requested shell as argument
 data. See the [command-line reference](../../docs/user-guide/cli.md) for
 installation examples.
+
+## Portable blueprint management
+
+`lemon blueprints` is a Mix-free client for the authenticated local control
+plane. It accepts only catalog IDs below the canonical `~/.lemon/bundles`
+boundary; arbitrary roots, paths, archives, scripts, command jobs, environment
+overrides, and secret values are not CLI inputs. A source checkout needs its
+unified runtime running first (`./bin/lemon --daemon`); the packaged launcher
+starts its daemon when necessary.
+
+```bash
+lemon blueprints                         # bounded catalog list
+lemon blueprints inspect daily-note      # sanitized manifest projection
+lemon blueprints validate daily-note --json
+lemon blueprints daily-note --profile operator  # shorthand for preview
+lemon blueprints preview daily-note --profile operator --json
+lemon blueprints activate daily-note --profile operator \
+  --confirm <exact-confirmation-digest>
+```
+
+List, inspect, validate, and preview never mutate state. Preview returns the
+profile target, skill hashes/actions, cron projection, prompt byte/hash
+metadata, provenance, and exact confirmation digest without skill bodies,
+prompt text, paths, or secret values. Activation delegates to the existing
+control-plane/service path, re-plans under its lock, and succeeds only when the
+fresh digest matches. Repeating preview plus activation reports unchanged
+skills/job state instead of creating another cron job. JSON success is one
+sanitized document on stdout; operational errors are one fixed redacted JSON
+document on stderr and use exit `1`; invalid arguments use exit `2`.
 
 ## Durable session management
 

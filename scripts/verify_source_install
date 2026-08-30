@@ -101,13 +101,13 @@ require_command mix
 
 help_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-help.XXXXXX")"
 ./bin/lemon --help >"$help_output"
-for subcommand in setup model gateway channels config doctor web send media models providers policy proofs readiness secrets skill usage update; do
+for subcommand in setup model gateway channels config doctor web send media models providers blueprints policy proofs readiness secrets skill usage update; do
   if ! grep -q "./bin/lemon $subcommand" "$help_output"; then
     fail "source wrapper help did not advertise ./bin/lemon $subcommand"
   fi
 done
 rm -f "$help_output"
-ok "source-wrapper help advertises setup/model/gateway/channels/config/doctor/web/send/media/models/providers/policy/proofs/readiness/secrets/skill/usage/update"
+ok "source-wrapper help advertises setup/model/gateway/channels/config/doctor/web/send/media/models/providers/blueprints/policy/proofs/readiness/secrets/skill/usage/update"
 
 web_help_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-web-help.XXXXXX")"
 ./bin/lemon web --help >"$web_help_output"
