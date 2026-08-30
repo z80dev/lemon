@@ -61,7 +61,8 @@ defmodule CodingAgent.Search.Result do
 
   def truncate(nil, _max_chars), do: nil
 
-  def truncate(value, max_chars) when is_binary(value) and is_integer(max_chars) and max_chars > 0 do
+  def truncate(value, max_chars)
+      when is_binary(value) and is_integer(max_chars) and max_chars > 0 do
     if String.length(value) <= max_chars do
       value
     else

@@ -18,6 +18,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   attached-browser lifecycle semantics, authenticated single-use controller
   tickets, and a bundled token-gated Manifest V3 relay for existing signed-in
   Chrome tabs
+- Redaction-safe live leadership acceptance harnesses covering real
+  `gpt-5.6-luna`/`xhigh` search fallback, multi-source synthesis, multi-tab and
+  stale-target browser control, screenshot analysis, extension relay ownership,
+  and fail-closed controller consent boundaries
 
 ### Changed
 

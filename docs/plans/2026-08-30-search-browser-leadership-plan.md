@@ -1,7 +1,7 @@
 ---
 owner: codex
 reviewer: codex
-status: active
+status: completed
 ---
 
 # Search and Browser Leadership Plan
@@ -155,3 +155,60 @@ than the selected browser profile and explicitly attached tab.
 - Treating a successful mocked provider response as live-provider proof.
 - Adding provider breadth without deterministic selection and safety contracts.
 - Replacing Lemon's browser route policy with provider-specific trust.
+
+## Completion Evidence
+
+Completed on 2026-08-30.
+
+- Search/extraction now uses public provider contracts, deterministic registry
+  precedence, capability-aware fallback, single-flight coalescing, normalized
+  results, extension registration, and guarded untrusted-content boundaries.
+- Browser control now has stable multi-tab target IDs, explicit target routing,
+  managed-versus-attached ownership, HTTP/direct-WebSocket CDP support, a
+  backend registry, exact controller/profile/session binding, and a supervised
+  authenticated controller broker with ticket, capability, heartbeat, timeout,
+  cancellation, and disconnect controls.
+- The bundled Manifest V3 extension and authenticated loopback relay passed a
+  real disposable-Chrome smoke. The persisted proof confirms extension load,
+  explicit existing-tab opt-in, agent-created tab scope, Playwright title/DOM
+  reads, and attached-browser preservation without retaining the token, port,
+  raw target ID, URL, or page content.
+- The final real-agent proof ran three unrestricted model decisions through
+  actual `CodingAgent.Session` processes on
+  `openai-codex:gpt-5.6-luna` at `xhigh`. It forced
+  SearXNG-to-DuckDuckGo fallback, returned five results from four source sites,
+  used two stable target-specific reads across multiple tabs, analyzed a
+  screenshot, observed and recovered from a stale target, and refused an
+  incompletely bound controller without evaluate or local-backend fallback.
+- Focused BEAM verification passed with 37 `lemon_browser`, 60 search/browser
+  `coding_agent`, and 3 controller control-plane tests. The browser Node client
+  passed typecheck, lint, build, and 46 tests, including real service-worker
+  code under mocked Chrome APIs. `scripts/test quality`,
+  `scripts/test clients`, warnings-as-errors compilation, and
+  `git diff --check` passed.
+
+The broad `scripts/test fast` diagnostic was also exercised. It reached the
+full `coding_agent` suite but was stopped after repeated unrelated baseline
+failures: macOS `/var` versus `/private/var` canonicalization caused private
+temporary-directory and kanban worktree assertions to fail, and the host
+keychain command timed out in Lemon Core/CLI setup tests. Isolated reruns
+confirmed the keychain timeout; no search, browser, controller, relay, or
+extension test failed in that lane. These host-sensitive baseline defects are
+outside this plan's implementation scope and remain visible rather than being
+masked.
+
+## Final Gap Audit
+
+For the compared local-first search and browser-control scope, Lemon now
+combines Hermes-style provider/controller contracts and fail-closed identity
+with OMP-style stable multi-tab CDP control and an opt-in Chrome extension,
+while retaining Lemon's OTP supervision, route policy, artifact lifecycle, and
+redaction boundaries.
+
+Two intentionally bounded follow-ups do not block this scope:
+
+- Browserbase/Camofox-style hosted browser adapters can be added through the
+  backend registry if product demand justifies the external dependency.
+- Automation uses disposable Chrome. A user's real signed-in tab still
+  requires their explicit extension-toolbar click; that consent boundary is
+  deliberately not bypassed by an automated proof.

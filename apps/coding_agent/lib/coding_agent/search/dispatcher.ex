@@ -64,8 +64,7 @@ defmodule CodingAgent.Search.Dispatcher do
                   terminal = failure(spec.id, reason)
 
                   {:error,
-                   {:provider_terminal, spec.id, reason,
-                    Enum.reverse([terminal | attempts])}}
+                   {:provider_terminal, spec.id, reason, Enum.reverse([terminal | attempts])}}
 
                 {:error, reason} ->
                   failure = failure(spec.id, reason)

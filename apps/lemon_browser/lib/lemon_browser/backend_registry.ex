@@ -43,10 +43,9 @@ defmodule LemonBrowser.BackendRegistry do
 
   @spec fetch(atom() | String.t()) :: {:ok, module()} | :error
   def fetch(id) do
-    with {:ok, id} <- normalize_id(id) do
-      Map.fetch(all(), id)
-    else
-      _ -> :error
+    case normalize_id(id) do
+      {:ok, id} -> Map.fetch(all(), id)
+      _error -> :error
     end
   end
 

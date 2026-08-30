@@ -33,7 +33,9 @@ defmodule CodingAgent.Search.SingleFlight do
   end
 
   def handle_call({:run, key, fun, timeout_ms}, from, state) do
-    task = Task.Supervisor.async_nolink(CodingAgent.Search.TaskSupervisor, fn -> safe_run(fun) end)
+    task =
+      Task.Supervisor.async_nolink(CodingAgent.Search.TaskSupervisor, fn -> safe_run(fun) end)
+
     timer = Process.send_after(self(), {:flight_timeout, task.ref}, timeout_ms)
     flight = %{key: key, task: task, timer: timer, callers: [from]}
 

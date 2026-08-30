@@ -48,7 +48,10 @@ defmodule CodingAgent.Search.Providers.Perplexity do
     case context.http_post.(endpoint, opts) do
       {:ok, %Req.Response{status: status} = response} when status in 200..299 ->
         body = Result.decode_json(response.body)
-        raw_content = get_in(body, ["choices", Access.at(0), "message", "content"]) || "No response"
+
+        raw_content =
+          get_in(body, ["choices", Access.at(0), "message", "content"]) || "No response"
+
         content = raw_content |> to_string() |> Result.truncate(request.max_chars)
 
         citations =
@@ -65,9 +68,7 @@ defmodule CodingAgent.Search.Providers.Perplexity do
            "content" => ExternalContent.wrap_web_content(content, :web_search),
            "citations" => citations,
            "trust_metadata" =>
-             ExternalContent.web_trust_metadata(:web_search, ["content"],
-               warning_included: false
-             )
+             ExternalContent.web_trust_metadata(:web_search, ["content"], warning_included: false)
          }}
 
       {:ok, %Req.Response{status: status} = response} ->

@@ -34,17 +34,19 @@ defmodule CodingAgent.Search.Providers.DuckDuckGo do
 
     case context.http_get.(url, opts) do
       {:ok, %Req.Response{status: status, body: body}} when status in 200..299 ->
-        with {:ok, document} <- Floki.parse_document(Result.to_string_safe(body)) do
-          results =
-            document
-            |> Floki.find(".result")
-            |> Enum.map(&map_result(&1, request))
-            |> Enum.reject(&is_nil/1)
-            |> Enum.take(request.count)
+        case Floki.parse_document(Result.to_string_safe(body)) do
+          {:ok, document} ->
+            results =
+              document
+              |> Floki.find(".result")
+              |> Enum.map(&map_result(&1, request))
+              |> Enum.reject(&is_nil/1)
+              |> Enum.take(request.count)
 
-          {:ok, Result.search_results(request.query, id(), results, started_ms)}
-        else
-          {:error, reason} -> {:error, "DuckDuckGo response parse failed: #{inspect(reason)}"}
+            {:ok, Result.search_results(request.query, id(), results, started_ms)}
+
+          {:error, reason} ->
+            {:error, "DuckDuckGo response parse failed: #{inspect(reason)}"}
         end
 
       {:ok, %Req.Response{status: status}} ->

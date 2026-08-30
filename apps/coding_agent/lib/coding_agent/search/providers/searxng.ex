@@ -22,7 +22,10 @@ defmodule CodingAgent.Search.Providers.Searxng do
     started_ms = System.monotonic_time(:millisecond)
 
     query = %{"q" => request.query, "format" => "json"}
-    query = if request.search_lang, do: Map.put(query, "language", request.search_lang), else: query
+
+    query =
+      if request.search_lang, do: Map.put(query, "language", request.search_lang), else: query
+
     url = String.trim_trailing(context.base_url, "/") <> "/search?" <> URI.encode_query(query)
 
     headers =

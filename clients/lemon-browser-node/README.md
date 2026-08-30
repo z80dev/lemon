@@ -31,7 +31,10 @@ Run `./bin/lemon-browser-relay install` to copy the extension into a stable,
 versioned user-data path, or `./bin/lemon-browser-relay path` to use the source
 directory. In `chrome://extensions`, enable Developer mode, choose **Load
 unpacked**, and select that directory. Open the extension settings and enter
-the same token and port.
+the same token and port. On every existing tab Lemon may control, click the
+extension toolbar icon once; the visible `L` badge means that tab is opted in.
+Click it again to detach immediately. Tabs opened by Lemon through an already
+opted-in relay session are scoped automatically.
 
 Point Lemon at the token-gated direct CDP WebSocket:
 

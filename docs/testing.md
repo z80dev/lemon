@@ -1266,7 +1266,26 @@ npm run smoke:extension
 
 The smoke loads the unpacked extension, configures a random loopback token,
 connects through the CDP relay, lists tabs, opens a tab, reads DOM content, and
-proves detaching does not close the externally owned browser.
+proves detaching does not close the externally owned browser. It writes a
+redacted `.lemon/proofs/browser-extension-smoke-latest.json` artifact. The
+Vitest suite also evaluates the MV3 service worker against mocked Chrome APIs
+to prove existing tabs are hidden until a toolbar click opts them in, debugger
+commands and events stay tab-scoped, agent-created tabs are auto-scoped, and a
+second click detaches immediately.
+
+Run the opt-in end-to-end real-agent matrix only when live
+`openai-codex:gpt-5.6-luna` credentials are available:
+
+```bash
+mix run --no-start scripts/live_search_browser_leadership_smoke.exs
+```
+
+The harness verifies the resolved model and `:xhigh` thinking level inside
+each actual `CodingAgent.Session`, then forces live keyless search fallback and
+multi-source synthesis, multi-tab stable-target control, stale-target recovery,
+local screenshot analysis, and fail-closed refusal of an unsafe controller
+escalation. It uses an isolated SQLite store and persists only redacted proof
+metadata under `.lemon/proofs/`.
 
 ## Hermetic Telegram Transport Smoke
 

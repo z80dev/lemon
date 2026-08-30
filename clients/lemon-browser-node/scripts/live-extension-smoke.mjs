@@ -9,6 +9,7 @@ import { WebSocket } from 'ws';
 import { ChromeSession, startRelayServer } from '../dist/index.js';
 
 const clientDir = path.resolve(import.meta.dirname, '..');
+const repoDir = path.resolve(clientDir, '..', '..');
 const extensionDir = path.join(clientDir, 'extension');
 const extensionId = extensionIdFromManifest(path.join(extensionDir, 'manifest.json'));
 const chromePath = findChrome();
@@ -95,6 +96,28 @@ try {
   if (title !== 'Lemon Relay Proof' || button !== 'ready' || !bootstrapStillAlive) {
     throw new Error('extension relay smoke assertions failed');
   }
+
+  const proof = {
+    generated_at: new Date().toISOString(),
+    status: 'completed',
+    result: 'passed',
+    proof: 'browser_extension_relay_smoke',
+    proof_scope: 'browser_extension_relay',
+    extension_id: extensionId,
+    manifest_v3_extension_loaded: true,
+    existing_tab_explicitly_opted_in: before.tabs.length === 1,
+    stable_existing_target_observed: before.tabs.length === 1,
+    agent_created_tab_auto_scoped: true,
+    playwright_title_read_completed: title === 'Lemon Relay Proof',
+    playwright_dom_read_completed: button === 'ready',
+    attached_browser_preserved: bootstrapStillAlive,
+    loopback_relay_authenticated: true,
+    relay_token_persisted: false,
+    relay_port_persisted: false,
+    raw_target_id_persisted: false,
+    opened_target_id_hash: sha256(opened.targetId),
+  };
+  writeProof(proof);
 
   process.stdout.write(
     `${JSON.stringify({
@@ -301,6 +324,19 @@ async function waitForRelay(port, relayToken) {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function writeProof(proof) {
+  const proofDir = path.join(repoDir, '.lemon', 'proofs');
+  const archiveStamp = new Date().toISOString().replace(/[^0-9A-Za-z]/g, '');
+  const payload = `${JSON.stringify(proof, null, 2)}\n`;
+  fs.mkdirSync(proofDir, { recursive: true });
+  fs.writeFileSync(path.join(proofDir, 'browser-extension-smoke-latest.json'), payload);
+  fs.writeFileSync(path.join(proofDir, `browser-extension-smoke-${archiveStamp}.json`), payload);
+}
+
+function sha256(value) {
+  return crypto.createHash('sha256').update(String(value)).digest('hex');
 }
 
 async function smokeStep(label, promise, timeoutMs = 15_000) {

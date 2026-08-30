@@ -18,6 +18,7 @@ apps/*/doc/
 .lemon/skill/
 .lemon/browser-artifacts/
 .lemon/browser-smoke/
+.lemon/live-agent-smoke/
 .lemon/media-artifacts/
 .lemon/media-jobs/
 .lemon/proofs/

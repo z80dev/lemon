@@ -414,6 +414,12 @@
     max_age_days: 60
   },
   %{
+    path: "docs/plans/2026-08-30-search-browser-leadership-plan.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-08-30],
+    max_age_days: 30
+  },
+  %{
     path: "docs/architecture/overview.md",
     owner: "@z80",
     last_reviewed: ~D[2026-08-10],

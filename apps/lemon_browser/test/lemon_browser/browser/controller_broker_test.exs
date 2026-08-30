@@ -84,6 +84,32 @@ defmodule LemonBrowser.ControllerBrokerTest do
              )
   end
 
+  test "controller backend refuses incomplete bindings before broker selection", %{server: server} do
+    register_controller(server, self(), capabilities: ["tabs"])
+
+    assert {:error, {:missing_browser_controller_binding, :controller_id}} =
+             LemonBrowser.Backends.Controller.request(
+               "browser.tabs",
+               %{},
+               50,
+               server: server,
+               browser_profile_id: "chrome-default",
+               session_id: "session-1"
+             )
+
+    assert {:error, {:missing_browser_controller_binding, :browser_profile_id}} =
+             LemonBrowser.Backends.Controller.request(
+               "browser.tabs",
+               %{},
+               50,
+               server: server,
+               controller_id: "controller-1",
+               session_id: "session-1"
+             )
+
+    refute_received {:browser_controller_command, _command}
+  end
+
   test "a different process cannot spoof a result or heartbeat", %{server: server} do
     register_controller(server, self(), capabilities: ["tabs"])
 
