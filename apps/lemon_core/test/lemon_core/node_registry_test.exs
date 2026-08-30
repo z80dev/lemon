@@ -56,6 +56,7 @@ defmodule LemonCore.NodeRegistryTest do
 
     assert {:ok, %{pid: ^new}} = NodeRegistry.resolve("ophy")
 
+    Process.exit(old, :kill)
     Process.exit(new, :kill)
   end
 
