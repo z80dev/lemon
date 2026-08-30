@@ -209,8 +209,10 @@ The HTTP transport starts an unnamed internal `:one_for_all` supervisor that
 owns its `LemonMCP.Server` and Bandit listener. If either child fails, both are
 replaced together, so the listener never retains a dead server and a restarted
 listener never leaves the old server behind. `get_server_pid/0` follows the
-most recently started transport supervisor to its current server child rather
-than caching a child PID.
+most recently started live transport supervisor to its current server child,
+falling back to older live instances rather than caching a child PID. Use
+`get_server_pid/1` with the supervisor returned by `start_link/1` when multiple
+transports are running.
 
 **Configuration alternative** (app config):
 
@@ -481,7 +483,7 @@ end
 
 - **ToolAdapter `new/2` options use `include_tools`/`exclude_tools` but the `__using__` macro does not pass `include_tools`.** If you need to restrict tools via the macro, pass `:exclude_tools` explicitly.
 
-- **HTTP transport port defaults to `0` in test env.** `@default_port` is set at compile time via `Mix.env()`. In test, a random available port is assigned, which avoids conflicts. The PID returned by `start_link/1` is the unnamed transport supervisor, not the Bandit listener. Use `get_server_pid/0` for the current protocol server child.
+- **HTTP transport port defaults to `0` in test env.** `@default_port` is set at compile time via `Mix.env()`. In test, a random available port is assigned, which avoids conflicts. The PID returned by `start_link/1` is the unnamed transport supervisor, not the Bandit listener. Use `get_server_pid/1` for a specific transport or the compatibility `get_server_pid/0` lookup for the newest live instance.
 
 - **There is no `LemonMCP.Application` callback.** All client, server, and
   transport processes must be started and supervised by the consuming app.

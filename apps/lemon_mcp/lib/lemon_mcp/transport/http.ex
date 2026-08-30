@@ -59,7 +59,7 @@ defmodule LemonMCP.Transport.HTTP do
 
   @default_port if(Code.ensure_loaded?(Mix) and Mix.env() == :test, do: 0, else: 4048)
   @default_ip {127, 0, 0, 1}
-  @supervisor_key {__MODULE__, :transport_supervisor}
+  @supervisors_key {__MODULE__, :transport_supervisors}
 
   plug(Plug.Logger, log: :debug)
 
@@ -164,7 +164,7 @@ defmodule LemonMCP.Transport.HTTP do
 
       case TransportSupervisor.start_link(opts) do
         {:ok, supervisor} = started ->
-          :persistent_term.put(@supervisor_key, supervisor)
+          register_supervisor(supervisor)
           started
 
         other ->
@@ -177,21 +177,26 @@ defmodule LemonMCP.Transport.HTTP do
   end
 
   @doc """
-  Returns the MCP server PID if the transport is running.
+  Returns an MCP server PID if a transport is running.
 
-  The lookup follows the most recently started transport supervisor to its
-  current server child, so a child restart never returns the dead prior PID.
+  The zero-arity compatibility lookup prefers the most recently started live
+  transport and falls back to an older live instance when that transport stops.
+  Use `get_server_pid/1` when more than one HTTP transport is running.
   """
   @spec get_server_pid() :: pid() | nil
   def get_server_pid do
-    case :persistent_term.get(@supervisor_key, nil) do
-      supervisor when is_pid(supervisor) ->
-        if Process.alive?(supervisor), do: TransportSupervisor.server_pid(supervisor)
-
-      _ ->
-        nil
-    end
+    @supervisors_key
+    |> :persistent_term.get([])
+    |> Enum.find_value(&get_server_pid/1)
   end
+
+  @doc "Returns the current MCP server child for one HTTP transport supervisor."
+  @spec get_server_pid(Supervisor.supervisor()) :: pid() | nil
+  def get_server_pid(supervisor) when is_pid(supervisor) do
+    if Process.alive?(supervisor), do: TransportSupervisor.server_pid(supervisor)
+  end
+
+  def get_server_pid(_supervisor), do: nil
 
   @doc """
   Returns whether the HTTP transport is enabled.
@@ -242,6 +247,11 @@ defmodule LemonMCP.Transport.HTTP do
       {:ok, server} -> server
       :error -> opts |> Keyword.get(:mcp_supervisor) |> TransportSupervisor.server_pid()
     end
+  end
+
+  defp register_supervisor(supervisor) do
+    supervisors = :persistent_term.get(@supervisors_key, [])
+    :persistent_term.put(@supervisors_key, [supervisor | List.delete(supervisors, supervisor)])
   end
 
   defp get_request_body(conn) do

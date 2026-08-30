@@ -95,6 +95,23 @@ defmodule LemonMCP.Transport.HTTPTest do
     assert HTTP.get_server_pid() == nil
   end
 
+  test "instance lookup keeps older transports reachable after the latest stops", %{
+    transport: first
+  } do
+    second_spec = Supervisor.child_spec({HTTP, port: 0, tools: []}, id: :second_http_transport)
+    second = start_supervised!(second_spec)
+    first_server = TransportSupervisor.server_pid(first)
+    second_server = TransportSupervisor.server_pid(second)
+
+    assert HTTP.get_server_pid(first) == first_server
+    assert HTTP.get_server_pid(second) == second_server
+    assert HTTP.get_server_pid() == second_server
+
+    assert :ok = stop_supervised(:second_http_transport)
+    assert HTTP.get_server_pid(second) == nil
+    assert HTTP.get_server_pid() == first_server
+  end
+
   defp eventually(fun, attempts \\ 50)
 
   defp eventually(fun, 0), do: fun.()
