@@ -39,6 +39,7 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.Event` | Canonical event struct for Bus and persistence |
 | `LemonCore.EventBridge` | Cross-app event translation |
 | `LemonCore.NodeRegistry` | Live named-node registry and targeted invocation broker; binds results/cancellation to the selected node connection |
+| `LemonCore.JSONPayload` | Shared byte/depth/item validation for JSON protocol boundaries; defaults to the control-plane 1 MiB payload policy |
 | `LemonCore.InboundMessage` | Normalized inbound message from any channel; adapters build the struct directly |
 | `LemonCore.RunRequest` | Canonical run submission struct used by router-facing callers |
 | `LemonCore.ExecutionCommand` | Canonical execution command handed from router to a configured engine runtime |

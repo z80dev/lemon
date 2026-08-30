@@ -66,6 +66,15 @@ defmodule LemonControlPlane do
   @spec protocol_version() :: pos_integer()
   def protocol_version, do: 1
 
+  @doc "Returns the enforced and advertised WebSocket JSON payload limit."
+  @spec max_payload() :: pos_integer()
+  def max_payload do
+    case Application.get_env(:lemon_control_plane, :max_payload) do
+      value when is_integer(value) and value > 0 -> value
+      _ -> LemonCore.JSONPayload.default_max_bytes()
+    end
+  end
+
   @doc """
   Returns the server version string.
   """

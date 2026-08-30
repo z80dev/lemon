@@ -33,7 +33,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Named execution nodes now cancel destination work when callers time out,
   disappear, reconnect, or lose their controller socket; bind stored tokens to
   the paired node identity; persist fast results without racing dispatch; and
-  resolve relative/default working directories from the joining shell.
+  resolve relative/default working directories from the joining shell. Node
+  sockets now send idle keepalives, pairing resumes safely after approval or a
+  lost challenge response, bounded JSON request/result limits prevent
+  unbounded worker output, and durable status/events retain only redacted
+  result summaries while private source delivery remains intact.
 - Async subagent launches now fail and terminalize their bookkeeping when the
   supervised worker cannot start, completed task/agent followup delivery
   contains router exits, and lane-scheduled jobs no longer process a duplicate

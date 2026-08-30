@@ -13,6 +13,8 @@ defmodule LemonCore.NodeRegistry do
 
   use GenServer
 
+  alias LemonCore.JSONPayload
+
   @default_timeout_ms 30 * 60 * 1_000
 
   @type node_info :: %{
@@ -72,9 +74,12 @@ defmodule LemonCore.NodeRegistry do
     recipient = Keyword.get(opts, :recipient, self())
     timeout_ms = Keyword.get(opts, :timeout_ms, @default_timeout_ms)
 
+    max_payload_bytes =
+      Keyword.get(opts, :max_payload_bytes, JSONPayload.default_max_bytes())
+
     GenServer.call(
       __MODULE__,
-      {:invoke, String.trim(name_or_id), method, args, recipient, timeout_ms}
+      {:invoke, String.trim(name_or_id), method, args, recipient, timeout_ms, max_payload_bytes}
     )
   end
 
@@ -184,18 +189,18 @@ defmodule LemonCore.NodeRegistry do
   end
 
   def handle_call({:push, name_or_id, event_name, payload}, _from, state) do
-    case resolve_node(state, name_or_id) do
-      {:ok, node} ->
-        send(node.pid, {:node_event, event_name, payload})
-        {:reply, :ok, state}
-
-      {:error, :not_found} = error ->
-        {:reply, error, state}
+    with {:ok, _stats} <- JSONPayload.validate(payload),
+         {:ok, node} <- resolve_node(state, name_or_id) do
+      send(node.pid, {:node_event, event_name, payload})
+      {:reply, :ok, state}
+    else
+      {:error, :not_found} = error -> {:reply, error, state}
+      {:error, reason} -> {:reply, {:error, {:invalid_payload, reason}}, state}
     end
   end
 
   def handle_call(
-        {:invoke, name_or_id, method, args, recipient, timeout_ms},
+        {:invoke, name_or_id, method, args, recipient, timeout_ms, max_payload_bytes},
         _from,
         state
       ) do
@@ -205,6 +210,13 @@ defmodule LemonCore.NodeRegistry do
 
       not is_integer(timeout_ms) or timeout_ms <= 0 ->
         {:reply, {:error, :invalid_timeout}, state}
+
+      not is_integer(max_payload_bytes) or max_payload_bytes <= 0 ->
+        {:reply, {:error, :invalid_payload_limit}, state}
+
+      match?({:error, _reason}, JSONPayload.validate(args, max_bytes: max_payload_bytes)) ->
+        {:error, reason} = JSONPayload.validate(args, max_bytes: max_payload_bytes)
+        {:reply, {:error, {:invalid_payload, reason}}, state}
 
       true ->
         case resolve_node(state, name_or_id) do
@@ -220,7 +232,8 @@ defmodule LemonCore.NodeRegistry do
               recipient: recipient,
               recipient_ref: recipient_ref,
               timer_ref: timer_ref,
-              method: method
+              method: method,
+              max_payload_bytes: max_payload_bytes
             }
 
             payload = %{
@@ -232,10 +245,17 @@ defmodule LemonCore.NodeRegistry do
               "timeoutMs" => timeout_ms
             }
 
-            send(node.pid, {:node_event, "node.invoke.request", payload})
+            case JSONPayload.validate(payload, max_bytes: max_payload_bytes) do
+              {:ok, _stats} ->
+                send(node.pid, {:node_event, "node.invoke.request", payload})
 
-            {:reply, {:ok, invoke_id},
-             %{state | invocations: Map.put(state.invocations, invoke_id, invocation)}}
+                {:reply, {:ok, invoke_id},
+                 %{state | invocations: Map.put(state.invocations, invoke_id, invocation)}}
+
+              {:error, reason} ->
+                cancel_invocation_monitors(invocation)
+                {:reply, {:error, {:invalid_payload, reason}}, state}
+            end
 
           {:error, :not_found} ->
             {:reply, {:error, {:node_offline, name_or_id}}, state}
@@ -265,11 +285,24 @@ defmodule LemonCore.NodeRegistry do
         {:reply, {:error, :wrong_node}, state}
 
       invocation ->
-        cancel_invocation_monitors(invocation)
-        reply = if is_nil(error), do: {:ok, result}, else: {:error, {:remote, error}}
-        notify(invocation, reply)
+        case JSONPayload.validate(%{"result" => result, "error" => error},
+               max_bytes: invocation.max_payload_bytes
+             ) do
+          {:ok, _stats} ->
+            cancel_invocation_monitors(invocation)
+            reply = if is_nil(error), do: {:ok, result}, else: {:error, {:remote, error}}
+            notify(invocation, reply)
 
-        {:reply, :ok, %{state | invocations: Map.delete(state.invocations, invoke_id)}}
+            {:reply, :ok, %{state | invocations: Map.delete(state.invocations, invoke_id)}}
+
+          {:error, reason} ->
+            cancel_invocation_monitors(invocation)
+            cancel_remote_invocation(state, invoke_id, invocation, {:invalid_payload, reason})
+            notify(invocation, {:error, {:invalid_remote_payload, payload_error_kind(reason)}})
+
+            {:reply, {:error, {:invalid_payload, reason}},
+             %{state | invocations: Map.delete(state.invocations, invoke_id)}}
+        end
     end
   end
 
@@ -375,4 +408,10 @@ defmodule LemonCore.NodeRegistry do
         :ok
     end
   end
+
+  defp payload_error_kind({kind, _detail})
+       when kind in [:max_bytes, :max_depth, :max_items, :not_json_safe],
+       do: kind
+
+  defp payload_error_kind(_reason), do: :invalid
 end

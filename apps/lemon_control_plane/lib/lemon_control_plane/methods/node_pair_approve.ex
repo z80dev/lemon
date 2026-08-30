@@ -44,20 +44,21 @@ defmodule LemonControlPlane.Methods.NodePairApprove do
             # Safe access supporting both atom and string keys (for JSONL reload)
             status = get_field(request, :status)
             expires_at_ms = get_field(request, :expires_at_ms)
-            node_name = get_field(request, :node_name)
+            node_name = normalize_name(get_field(request, :node_name))
             node_type = get_field(request, :node_type)
             capabilities = get_field(request, :capabilities)
 
             cond do
-              status != :pending and status != "pending" ->
+              status in [:approved, "approved"] ->
+                recover_approved_pairing(pairing_id, request, node_name, node_type, now)
+
+              status not in [:pending, "pending"] ->
                 {:error, Errors.invalid_request("Pairing request is not pending")}
 
               expires_at_ms && expires_at_ms < now ->
                 {:error, Errors.invalid_request("Pairing request has expired")}
 
               true ->
-                node_name = if(is_binary(node_name), do: String.trim(node_name), else: "")
-
                 approve_pairing(
                   pairing_id,
                   request,
@@ -76,21 +77,9 @@ defmodule LemonControlPlane.Methods.NodePairApprove do
 
     case NodeStore.reserve_node_name(node_name, node_id) do
       :ok ->
-        # Generate node ID, token, and challenge token
+        # Generate node ID and the compatibility token recorded on the durable
+        # node. Authentication itself is issued by connect.challenge.
         node_token = generate_node_token()
-        challenge_token = generate_challenge_token()
-        # Challenge valid for 1 minute
-        challenge_expires_at = now + 60_000
-
-        # Update pairing request
-        updated_request =
-          Map.merge(request, %{
-            status: :approved,
-            node_id: node_id,
-            challenge_token: challenge_token
-          })
-
-        NodeStore.put_pairing(pairing_id, updated_request)
 
         # Register node
         node = %{
@@ -106,15 +95,6 @@ defmodule LemonControlPlane.Methods.NodePairApprove do
 
         NodeStore.put_node(node_id, node)
 
-        # Store challenge for connect.challenge verification
-        NodeStore.put_challenge(challenge_token, %{
-          node_id: node_id,
-          node_name: node_name,
-          node_type: node_type,
-          pairing_id: pairing_id,
-          expires_at_ms: challenge_expires_at
-        })
-
         # Broadcast event
         event =
           LemonCore.Event.new(:node_pair_resolved, %{
@@ -125,30 +105,17 @@ defmodule LemonControlPlane.Methods.NodePairApprove do
 
         LemonCore.Bus.broadcast("nodes", event)
 
-        {:ok,
-         %{
-           "nodeId" => node_id,
-           "token" => node_token,
-           "challengeToken" => challenge_token,
-           "approved" => true,
-           "summary" => %{
-             "pairingId" => pairing_id,
-             "nodeId" => node_id,
-             "approved" => true,
-             "nodeType" => node_type,
-             "challengeExpiresAtMs" => challenge_expires_at,
-             "capabilityCount" => capability_count(capabilities),
-             "credentialDelivery" => %{
-               "includesNodeToken" => true,
-               "includesChallengeToken" => true
-             },
-             "cleanup" => %{
-               "includesCapabilities" => false,
-               "includesMetadata" => false,
-               "includesStoredTokenHash" => false
-             }
-           }
-         }}
+        issue_challenge(
+          pairing_id,
+          request,
+          node_id,
+          node_name,
+          node_type,
+          capabilities,
+          node_token,
+          now,
+          false
+        )
 
       {:error, :invalid_name} ->
         {:error, Errors.invalid_request("Node name is required")}
@@ -161,8 +128,117 @@ defmodule LemonControlPlane.Methods.NodePairApprove do
     end
   end
 
+  # Approval is intentionally recoverable. If the socket drops after approval,
+  # or after connect.challenge consumed the prior one-time challenge but before
+  # its response arrived, the authorized pairing client can request a fresh
+  # challenge for the same durable node identity and name reservation.
+  defp recover_approved_pairing(pairing_id, request, node_name, node_type, now) do
+    node_id = get_field(request, :node_id)
+
+    case is_binary(node_id) && NodeStore.get_node(node_id) do
+      node when is_map(node) ->
+        stored_name = get_field(node, :name)
+
+        if stored_name == node_name do
+          node_token = generate_node_token()
+          updated_node = Map.put(node, :token_hash, hash_token(node_token))
+
+          with :ok <- NodeStore.reserve_node_name(node_name, node_id),
+               :ok <- NodeStore.put_node(node_id, updated_node) do
+            issue_challenge(
+              pairing_id,
+              request,
+              node_id,
+              node_name,
+              node_type,
+              get_field(node, :capabilities) || %{},
+              node_token,
+              now,
+              true
+            )
+          else
+            {:error, reason} ->
+              {:error, Errors.internal_error("Failed to recover node pairing", reason)}
+          end
+        else
+          {:error, Errors.conflict("Approved pairing no longer matches its node name")}
+        end
+
+      _ ->
+        {:error, Errors.conflict("Approved pairing node is no longer available")}
+    end
+  end
+
+  defp issue_challenge(
+         pairing_id,
+         request,
+         node_id,
+         node_name,
+         node_type,
+         capabilities,
+         node_token,
+         now,
+         recovered
+       ) do
+    old_challenge = get_field(request, :challenge_token)
+    if is_binary(old_challenge), do: NodeStore.delete_challenge(old_challenge)
+
+    challenge_token = generate_challenge_token()
+    challenge_expires_at = now + 60_000
+
+    updated_request =
+      Map.merge(request, %{
+        status: :approved,
+        node_id: node_id,
+        challenge_token: challenge_token,
+        challenge_expires_at_ms: challenge_expires_at
+      })
+
+    with :ok <- NodeStore.put_pairing(pairing_id, updated_request),
+         :ok <-
+           NodeStore.put_challenge(challenge_token, %{
+             node_id: node_id,
+             node_name: node_name,
+             node_type: node_type,
+             pairing_id: pairing_id,
+             expires_at_ms: challenge_expires_at
+           }) do
+      {:ok,
+       %{
+         "nodeId" => node_id,
+         "token" => node_token,
+         "challengeToken" => challenge_token,
+         "approved" => true,
+         "summary" => %{
+           "pairingId" => pairing_id,
+           "nodeId" => node_id,
+           "approved" => true,
+           "recovered" => recovered,
+           "nodeType" => node_type,
+           "challengeExpiresAtMs" => challenge_expires_at,
+           "capabilityCount" => capability_count(capabilities),
+           "credentialDelivery" => %{
+             "includesNodeToken" => true,
+             "includesChallengeToken" => true
+           },
+           "cleanup" => %{
+             "includesCapabilities" => false,
+             "includesMetadata" => false,
+             "includesStoredTokenHash" => false
+           }
+         }
+       }}
+    else
+      {:error, reason} ->
+        {:error, Errors.internal_error("Failed to issue node pairing challenge", reason)}
+    end
+  end
+
   defp capability_count(capabilities) when is_map(capabilities), do: map_size(capabilities)
   defp capability_count(_), do: 0
+
+  defp normalize_name(name) when is_binary(name), do: String.trim(name)
+  defp normalize_name(_name), do: ""
 
   defp generate_node_token do
     :crypto.strong_rand_bytes(32) |> Base.url_encode64(padding: false)

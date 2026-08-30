@@ -2,7 +2,15 @@ defmodule LemonControlPlane.NamedNodeIntegrationTest do
   use ExUnit.Case, async: false
 
   alias LemonControlPlane.Auth.TokenStore
-  alias LemonControlPlane.Methods.{NodeInvoke, NodeInvokeResult, NodePairApprove, NodeRename}
+
+  alias LemonControlPlane.Methods.{
+    ConnectChallenge,
+    NodeInvoke,
+    NodeInvokeResult,
+    NodePairApprove,
+    NodeRename
+  }
+
   alias LemonControlPlane.NodeStore
   alias LemonControlPlane.WS.Connection
 
@@ -187,6 +195,71 @@ defmodule LemonControlPlane.NamedNodeIntegrationTest do
                %{"nodeId" => rename_id, "name" => "  #{existing_name}  "},
                @operator_ctx
              )
+  end
+
+  test "approved pairing reissues a challenge for the same node after response loss" do
+    pairing_id = unique("recover-pairing")
+    node_name = "Recover Node #{System.unique_integer([:positive])}"
+
+    :ok =
+      NodeStore.put_pairing(pairing_id, %{
+        status: :pending,
+        node_name: node_name,
+        node_type: "coding_agent",
+        capabilities: %{"coding_agent.run" => %{"version" => 1}},
+        expires_at_ms: System.system_time(:millisecond) + 60_000
+      })
+
+    assert {:ok, first} = NodePairApprove.handle(%{"pairingId" => pairing_id}, @operator_ctx)
+
+    assert {:ok, issued_but_lost} =
+             ConnectChallenge.handle(
+               %{"challenge" => first["challengeToken"]},
+               %{conn_id: "lost-response"}
+             )
+
+    assert is_binary(issued_but_lost["token"])
+
+    assert {:ok, recovered} =
+             NodePairApprove.handle(%{"pairingId" => pairing_id}, @operator_ctx)
+
+    assert recovered["nodeId"] == first["nodeId"]
+    assert recovered["challengeToken"] != first["challengeToken"]
+    assert recovered["summary"]["recovered"] == true
+
+    assert {:ok, verified} =
+             ConnectChallenge.handle(
+               %{"challenge" => recovered["challengeToken"]},
+               %{conn_id: "recovered-response"}
+             )
+
+    assert verified["identity"]["nodeId"] == first["nodeId"]
+  end
+
+  test "oversized remote results fail privately and are never persisted raw" do
+    node_id = unique("bounded-result")
+    put_node(node_id, "Bounded Result Node")
+    :ok = LemonCore.NodeRegistry.register(node_id, "Bounded Result Node", self())
+
+    assert {:ok, invoke_id} =
+             LemonCore.NodeRegistry.invoke(node_id, "work.run", %{},
+               recipient: self(),
+               max_payload_bytes: 512
+             )
+
+    assert_receive {:node_event, "node.invoke.request", %{"invokeId" => ^invoke_id}}
+
+    assert {:error, {:invalid_payload, {:max_bytes, 512}}} =
+             LemonCore.NodeRegistry.complete(
+               node_id,
+               invoke_id,
+               %{"answer" => String.duplicate("x", 1_024)}
+             )
+
+    assert_receive {:lemon_node_result, ^invoke_id,
+                    {:error, {:invalid_remote_payload, :max_bytes}}}
+
+    assert_receive {:node_event, "node.invoke.cancel", %{"invokeId" => ^invoke_id}}
   end
 
   test "renaming an online node updates live name without dropping invocations" do

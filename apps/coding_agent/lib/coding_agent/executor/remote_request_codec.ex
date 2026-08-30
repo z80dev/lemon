@@ -14,8 +14,10 @@ defmodule CodingAgent.Executor.RemoteRequestCodec do
 
   @version 1
 
-  @spec encode(ExecutionRequest.t()) :: {:ok, map()} | {:error, term()}
-  def encode(%ExecutionRequest{} = request) do
+  @spec encode(ExecutionRequest.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def encode(request, opts \\ [])
+
+  def encode(%ExecutionRequest{} = request, opts) do
     payload = %{
       "version" => @version,
       "runId" => request.run_id,
@@ -29,10 +31,10 @@ defmodule CodingAgent.Executor.RemoteRequestCodec do
       "meta" => request.meta || %{}
     }
 
-    json_round_trip(payload)
+    json_round_trip(payload, opts)
   end
 
-  def encode(_), do: {:error, :invalid_execution_request}
+  def encode(_, _opts), do: {:error, :invalid_execution_request}
 
   @spec decode_result(term()) :: {:ok, map()} | {:error, term()}
   def decode_result(result) when is_map(result) do
@@ -101,10 +103,10 @@ defmodule CodingAgent.Executor.RemoteRequestCodec do
     ArgumentError -> nil
   end
 
-  defp json_round_trip(payload) do
-    case Jason.encode(payload) do
-      {:ok, encoded} -> Jason.decode(encoded)
-      {:error, reason} -> {:error, {:request_not_json_safe, reason}}
+  defp json_round_trip(payload, opts) do
+    case LemonCore.JSONPayload.round_trip(payload, opts) do
+      {:ok, decoded} -> {:ok, decoded}
+      {:error, reason} -> {:error, {:invalid_request_payload, reason}}
     end
   end
 end

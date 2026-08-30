@@ -324,6 +324,11 @@ server-side expiry or refresh automatically; restoring an expired node needs
 operator pairing action. A new identity cannot reuse the old name until that
 durable identity is renamed.
 
+Pairing approval is retry-safe for the same pairing ID: an authorized retry
+reissues a one-time challenge for the existing durable node identity. This lets
+the joining worker recover if its WebSocket drops after approval or if a
+challenge response is lost after the controller consumed the challenge.
+
 ### Method Scopes
 
 Each method declares required scopes. A connection must have at least one matching scope. Methods with an empty scope list are public (no auth required).
@@ -533,6 +538,13 @@ For coding delegation the supported worker method is versioned
 data, not resolved model credentials, callbacks, source process state, or
 executor options. The destination selects its own credentials and validates
 its own cwd. This is native Lemon execution, not a vendor CLI runner.
+
+Request and result payloads are enforced against the hello policy's
+`maxPayload` byte limit (1 MiB by default) and shared depth/item-count bounds.
+Raw results still travel privately to the invocation's source recipient, but
+durable invocation status and `node.invoke.completed` events retain only
+content-free byte/type/depth/item summaries. They never persist or broadcast
+the raw remote result or error.
 
 ### Channels and Transports
 

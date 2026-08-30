@@ -49,11 +49,14 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
 
   @impl true
   def handle_continue(:invoke, state) do
-    with {:ok, payload} <- RemoteRequestCodec.encode(state.request),
+    max_payload = protocol_max_payload()
+
+    with {:ok, payload} <- RemoteRequestCodec.encode(state.request, max_bytes: max_payload),
          {:ok, invoke_id} <-
            NodeRegistry.invoke(state.node, @method, payload,
              recipient: self(),
-             timeout_ms: state.timeout_ms
+             timeout_ms: state.timeout_ms,
+             max_payload_bytes: max_payload
            ) do
       started =
         Event.started(%{
@@ -132,4 +135,11 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
   defp get_opt(opts, key) when is_map(opts), do: Map.get(opts, key)
   defp get_opt(opts, key) when is_list(opts), do: Keyword.get(opts, key)
   defp get_opt(_opts, _key), do: nil
+
+  defp protocol_max_payload do
+    case Application.get_env(:lemon_control_plane, :max_payload) do
+      value when is_integer(value) and value > 0 -> value
+      _ -> LemonCore.JSONPayload.default_max_bytes()
+    end
+  end
 end

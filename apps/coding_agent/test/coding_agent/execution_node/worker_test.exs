@@ -300,6 +300,66 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
   end
 
   @tag :tmp_dir
+  test "resumes the approved pairing id after a socket drop", %{tmp_dir: tmp_dir} do
+    {:ok, worker} = start_worker(tmp_dir, pair: true)
+    assert_receive {:socket_started, socket, _opts}
+
+    send(worker, {:execution_node_socket, socket, {:connected, %{}}})
+    assert_receive {:socket_request, ^socket, "node.pair.request", _, :pair_request, 30_000}
+
+    send(worker, {
+      :execution_node_socket,
+      socket,
+      {:response, :pair_request, {:ok, %{"pairingId" => "pair-recover"}}}
+    })
+
+    assert_receive {:socket_request, ^socket, "node.pair.approve",
+                    %{"pairingId" => "pair-recover"}, :pair_approve, 30_000}
+
+    send(worker, {:execution_node_socket, socket, {:disconnected, :closed}})
+    send(worker, {:execution_node_socket, socket, {:connected, %{}}})
+
+    assert_receive {:socket_request, ^socket, "node.pair.approve",
+                    %{"pairingId" => "pair-recover"}, :pair_approve, 30_000}
+
+    GenServer.stop(worker)
+  end
+
+  @tag :tmp_dir
+  test "cancels execution before streamed result accumulation exceeds maxPayload", %{
+    tmp_dir: tmp_dir
+  } do
+    {:ok, worker} = start_worker(tmp_dir, token: "node-token")
+    assert_receive {:socket_started, socket, _opts}
+
+    send(worker, {
+      :execution_node_socket,
+      socket,
+      {:connected, %{"auth" => %{"clientId" => "node-1"}, "policy" => %{"maxPayload" => 8_500}}}
+    })
+
+    invoke(
+      worker,
+      socket,
+      "invoke-bounded",
+      "node-1",
+      %{"version" => 1, "prompt" => "stream", "meta" => %{}}
+    )
+
+    assert_receive {:executor_started, _request, _opts, ^worker, run_ref, context}
+    send(worker, {:engine_delta, run_ref, String.duplicate("x", 400)})
+
+    assert_receive {:executor_cancelled, ^context}
+
+    assert_receive {:socket_request, ^socket, "node.invoke.result",
+                    %{"invokeId" => "invoke-bounded", "error" => "result_payload_limit_exceeded"},
+                    {:invoke_result, "invoke-bounded"}, 30_000}
+
+    Process.exit(context.runner_pid, :kill)
+    GenServer.stop(worker)
+  end
+
+  @tag :tmp_dir
   test "rejects a stored token that authenticates as a different node", %{tmp_dir: tmp_dir} do
     token_root = Path.join(tmp_dir, "tokens")
 

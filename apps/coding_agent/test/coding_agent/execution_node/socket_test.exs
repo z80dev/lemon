@@ -75,6 +75,23 @@ defmodule CodingAgent.ExecutionNode.SocketTest do
     assert Jason.decode!(frame)["params"]["auth"]["token"] == "secret"
   end
 
+  test "sends protocol pings below the controller idle timeout" do
+    state = %Socket{
+      owner: self(),
+      connect_params: %{},
+      reconnect_delay_ms: 0,
+      ping_interval_ms: 1,
+      max_payload_bytes: 1_048_576
+    }
+
+    assert {:ok, connected_state} = Socket.handle_connect(:ignored, state)
+    token = connected_state.ping_token
+    assert_receive {:execution_node_ping, ^token}, 100
+
+    assert {:reply, {:ping, ""}, ^connected_state} =
+             Socket.handle_info({:execution_node_ping, token}, connected_state)
+  end
+
   test "redacts authentication material from status output" do
     state = %Socket{
       connect_params: %{"auth" => %{"token" => "secret"}},

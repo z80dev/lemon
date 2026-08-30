@@ -74,7 +74,23 @@ defmodule LemonControlPlane.WS.Connection do
 
   @impl WebSock
   def handle_in({text, [opcode: :text]}, state) do
-    case Frames.parse(text) do
+    max_payload = LemonControlPlane.max_payload()
+
+    if byte_size(text) > max_payload do
+      error = Errors.invalid_request("Payload exceeds maxPayload policy")
+      {:push, {:text, Frames.encode_response("unknown", {:error, error})}, state}
+    else
+      parse_text_frame(text, state, max_payload)
+    end
+  end
+
+  def handle_in({_data, [opcode: :binary]}, state) do
+    error = Errors.invalid_request("Binary frames not supported")
+    {:push, {:text, Frames.encode_response("unknown", {:error, error})}, state}
+  end
+
+  defp parse_text_frame(text, state, max_payload) do
+    case Frames.parse(text, max_payload: max_payload) do
       {:ok, frame} ->
         handle_frame(frame, state)
 
@@ -85,12 +101,12 @@ defmodule LemonControlPlane.WS.Connection do
       {:error, {:invalid_frame, reason}} ->
         error = Errors.invalid_request(reason)
         {:push, {:text, Frames.encode_response("unknown", {:error, error})}, state}
-    end
-  end
 
-  def handle_in({_data, [opcode: :binary]}, state) do
-    error = Errors.invalid_request("Binary frames not supported")
-    {:push, {:text, Frames.encode_response("unknown", {:error, error})}, state}
+      {:error, {limit, _value}}
+      when limit in [:max_bytes, :max_depth, :max_items, :not_json_safe] ->
+        error = Errors.invalid_request("Payload violates JSON boundary policy")
+        {:push, {:text, Frames.encode_response("unknown", {:error, error})}, state}
+    end
   end
 
   @impl WebSock
@@ -235,7 +251,8 @@ defmodule LemonControlPlane.WS.Connection do
         methods: Registry.list_methods(),
         events: Frames.supported_events(),
         snapshot: build_snapshot(state),
-        auth: build_auth_response(auth)
+        auth: build_auth_response(auth),
+        max_payload: LemonControlPlane.max_payload()
       })
 
     Logger.info("WebSocket connection established: #{state.conn_id}, role: #{auth.role}")

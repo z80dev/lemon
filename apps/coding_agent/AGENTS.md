@@ -751,6 +751,13 @@ swapped token file cannot silently turn one named host into another host's
 executor. Remote steer/redirect are unsupported. No vendor CLI runner is used
 anywhere in this path.
 
+The socket sends a 25-second protocol ping to remain below the controller's
+idle timeout. Pairing reconnects resume the same pairing ID, and an approved
+pairing can reissue a one-time challenge for the same durable node if the prior
+challenge response was lost. Requests/results obey the advertised `maxPayload`
+(1 MiB by default) plus shared depth/item limits; streaming output is cancelled
+before unbounded accumulation.
+
 ### Running Tests
 
 ```bash

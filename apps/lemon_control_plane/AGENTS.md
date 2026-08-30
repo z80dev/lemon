@@ -348,6 +348,15 @@ node ID, fail when the node disconnects, and accept explicit targeted
 cancellation. Registry timeouts fail the source recipient but do not by
 themselves claim that destination execution was cancelled.
 
+An approved pairing ID may reissue a fresh one-time challenge for its existing
+durable node identity, allowing the joining worker to recover from socket loss
+after approval or challenge consumption without orphaning the reserved name.
+Named-node requests/results enforce the advertised `maxPayload` (1 MiB by
+default) plus shared depth/item-count limits. The raw terminal result is sent
+only to the source recipient; durable invocation status and
+`node.invoke.completed` events contain content-free summaries, never raw remote
+result/error values.
+
 The source-checkout coding worker advertises `coding_agent.run` version 1 and
 targeted cancellation. Its payload is a JSON-safe execution request/result
 contract; provider credentials, callbacks, executor options, and source BEAM
