@@ -31,6 +31,10 @@ Installed releases use `lemon`; a checkout uses the matching `./bin/lemon`
 wrapper. Direct Mix tasks remain contributor-level alternatives, not the
 recommended commands for users of a packaged release.
 
+Packaged and Mix `secrets check` / `secrets import-env` commands read the same
+ordered environment-secret names from `LemonCore.Secrets.EnvCatalog`, keeping
+release and source-checkout behavior aligned.
+
 | Purpose | Installed release | Source checkout | Contributor Mix adapter |
 | --- | --- | --- | --- |
 | First-time setup | `lemon setup` | `./bin/lemon setup` | `mix lemon.setup` |

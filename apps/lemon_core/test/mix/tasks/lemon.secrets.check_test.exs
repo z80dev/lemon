@@ -8,6 +8,7 @@ defmodule Mix.Tasks.Lemon.Secrets.CheckTest do
 
   alias Mix.Tasks.Lemon.Secrets.Check
   alias LemonCore.Secrets
+  alias LemonCore.Secrets.EnvCatalog
   alias LemonCore.Store
 
   setup do
@@ -106,6 +107,7 @@ defmodule Mix.Tasks.Lemon.Secrets.CheckTest do
     end
 
     test "known_secrets list is non-empty" do
+      assert Check.known_secrets() == EnvCatalog.names()
       assert match?([_ | _], Check.known_secrets())
     end
   end

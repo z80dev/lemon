@@ -28,6 +28,7 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.ConfigReloader.Watcher` | FileSystem watcher that targets `config.toml`/`.env` paths (file-first, parent-dir fallback) and triggers reload only for those files |
 | `LemonCore.Secrets` | Encrypted secrets API (get/set/list/delete) |
 | `LemonCore.Secrets.Crypto` | AES-256-GCM encryption with HKDF key derivation |
+| `LemonCore.Secrets.EnvCatalog` | Ordered environment-secret catalog shared by packaged and Mix check/import commands |
 | `LemonCore.Secrets.Keychain` | macOS keychain integration for master key storage |
 | `LemonCore.Secrets.MasterKey` | Master key resolution (keychain first, then env var) |
 | `LemonCore.Store` | Storage GenServer with pluggable backends and `put_new/3` insert-if-absent claims |
@@ -247,6 +248,12 @@ exists? = LemonCore.Secrets.exists?("api_key")
 ### Env Fallback
 
 Secrets automatically fallback to environment variables (same name). Use `env_fallback: false` to disable.
+
+`LemonCore.Secrets.EnvCatalog` owns the ordered set of environment-backed
+credentials shown by `secrets check` and considered by `secrets import-env` in
+both packaged releases and Mix tasks. Add operator-facing default import/check
+names there. Do not derive this list from `LemonCore.Env`: that registry owns
+runtime declarations and varies with the release profile.
 
 ## Storage Backends
 
@@ -508,6 +515,10 @@ mix lemon.secrets.set API_KEY abc123 --provider manual --expires-at 173568960000
 
 # Delete a secret
 mix lemon.secrets.delete API_KEY
+
+# Check/import the shared environment-secret catalog
+mix lemon.secrets.check
+mix lemon.secrets.import_env --dry-run
 ```
 
 ### Onboarding Tasks
