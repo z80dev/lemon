@@ -15,6 +15,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   setup errors and provider aliases remain intact
 - XMTP and WhatsApp now share one supervised Node bridge port lifecycle behind
   their existing adapter-specific `PortServer` APIs, scripts, and event tags
+- Documentation quality checks now use a compact catalog with shared defaults,
+  explicit lifecycle/visibility metadata, and Git-index-based coverage that
+  ignores untracked local drafts
 - Product releases can now be cut and published from one manual Release
   workflow dispatch; the workflow derives CalVer, consumes the Unreleased
   notes, commits and tags the release, verifies every artifact, publishes the

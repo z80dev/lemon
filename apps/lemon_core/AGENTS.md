@@ -540,6 +540,14 @@ mix lemon.quality --validate-config
 mix lemon.quality --root /path/to/repo
 ```
 
+The docs catalog uses a data-only `%{defaults: ..., entries: ...}` structure.
+Keep shared ownership and age policy in `defaults`; entry overrides should only
+describe exceptions. `DocsCatalog` deliberately decodes a bounded AST instead
+of evaluating the file. `DocsCheck` treats the Git index (`git ls-files`) as
+the source of truth for repository coverage and uses a filesystem fallback only
+for synthetic non-Git test roots. Catalog `last_reviewed` is the canonical
+freshness date; do not introduce a second document-footer review date.
+
 ### Store Tasks
 
 ```bash

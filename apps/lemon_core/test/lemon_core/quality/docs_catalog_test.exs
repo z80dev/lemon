@@ -69,9 +69,57 @@ defmodule LemonCore.Quality.DocsCatalogTest do
       assert first.owner == "@team-docs"
       assert first.last_reviewed == ~D[2026-01-15]
       assert first.max_age_days == 90
+      assert first.kind == :reference
+      assert first.status == :current
+      refute first.public
 
       assert second.path == "docs/api_reference.md"
       assert second.owner == "@team-api"
+    end
+
+    test "merges compact catalog defaults and entry overrides", %{harness: harness} do
+      root = harness.tmp_dir
+      catalog_dir = Path.join(root, "docs")
+      File.mkdir_p!(catalog_dir)
+
+      File.write!(Path.join(catalog_dir, "catalog.exs"), """
+      %{
+        defaults: %{
+          owner: "@team-docs",
+          max_age_days: 90,
+          kind: :reference,
+          status: :current,
+          public: false
+        },
+        entries: [
+          %{path: "docs/guide.md", last_reviewed: ~D[2026-01-15], kind: :guide},
+          %{
+            path: "docs/retired.md",
+            last_reviewed: ~D[2026-02-01],
+            max_age_days: 365,
+            status: :superseded
+          }
+        ]
+      }
+      """)
+
+      assert {:ok, [guide, retired]} = DocsCatalog.load(root: root)
+
+      assert guide == %{
+               path: "docs/guide.md",
+               owner: "@team-docs",
+               last_reviewed: ~D[2026-01-15],
+               max_age_days: 90,
+               kind: :guide,
+               status: :current,
+               public: false
+             }
+
+      assert retired.owner == "@team-docs"
+      assert retired.max_age_days == 365
+      assert retired.kind == :reference
+      assert retired.status == :superseded
+      refute retired.public
     end
 
     test "returns empty list for empty catalog file", %{harness: harness} do
@@ -85,7 +133,7 @@ defmodule LemonCore.Quality.DocsCatalogTest do
       assert {:ok, []} = DocsCatalog.load(root: root)
     end
 
-    test "returns error when catalog evaluates to non-list", %{harness: harness} do
+    test "returns error when catalog map has unknown top-level keys", %{harness: harness} do
       root = harness.tmp_dir
       catalog_dir = Path.join(root, "docs")
       File.mkdir_p!(catalog_dir)
@@ -95,9 +143,9 @@ defmodule LemonCore.Quality.DocsCatalogTest do
       File.write!(catalog_file, "%{foo: :bar}")
 
       assert {:error, message} = DocsCatalog.load(root: root)
-      assert message =~ "Expected"
-      assert message =~ "to evaluate to a list"
-      assert message =~ "%{foo: :bar}"
+      assert message =~ "Invalid catalog"
+      assert message =~ "unknown top-level keys"
+      assert message =~ ":foo"
     end
 
     test "returns error when catalog evaluates to atom", %{harness: harness} do
@@ -109,9 +157,28 @@ defmodule LemonCore.Quality.DocsCatalogTest do
       File.write!(catalog_file, ":not_a_list")
 
       assert {:error, message} = DocsCatalog.load(root: root)
-      assert message =~ "Expected"
-      assert message =~ "to evaluate to a list"
+      assert message =~ "Invalid catalog"
+      assert message =~ "expected a list"
       assert message =~ ":not_a_list"
+    end
+
+    test "returns error for invalid defaults and entries containers", %{harness: harness} do
+      root = harness.tmp_dir
+      catalog_dir = Path.join(root, "docs")
+      File.mkdir_p!(catalog_dir)
+      catalog_file = Path.join(catalog_dir, "catalog.exs")
+
+      File.write!(catalog_file, "%{defaults: :invalid, entries: []}")
+      assert {:error, message} = DocsCatalog.load(root: root)
+      assert message =~ "expected :defaults to be a map"
+
+      File.write!(catalog_file, "%{entries: %{not: :a_list}}")
+      assert {:error, message} = DocsCatalog.load(root: root)
+      assert message =~ "expected :entries to be a list"
+
+      File.write!(catalog_file, "%{entries: [:not_a_map]}")
+      assert {:error, message} = DocsCatalog.load(root: root)
+      assert message =~ "expected every entry to be a map"
     end
 
     test "returns error when catalog has syntax errors", %{harness: harness} do

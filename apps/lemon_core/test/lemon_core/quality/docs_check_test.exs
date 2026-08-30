@@ -89,6 +89,31 @@ defmodule LemonCore.Quality.DocsCheckTest do
         File.rm_rf!(tmp_dir)
       end
     end
+
+    test "uses the Git index and ignores untracked markdown in repositories" do
+      tmp_dir = create_tmp_dir()
+
+      try do
+        File.write!(Path.join(tmp_dir, "docs/tracked.md"), "# Tracked")
+        File.write!(Path.join(tmp_dir, "docs/untracked.md"), "# Untracked")
+
+        File.write!(Path.join(tmp_dir, "docs/catalog.exs"), """
+        [
+          %{path: "docs/tracked.md", owner: "test", last_reviewed: ~D[2026-06-01], max_age_days: 365}
+        ]
+        """)
+
+        assert {_, 0} = System.cmd("git", ["init", "--quiet", tmp_dir])
+
+        assert {_, 0} =
+                 System.cmd("git", ["-C", tmp_dir, "add", "docs/catalog.exs", "docs/tracked.md"])
+
+        assert {:ok, report} = DocsCheck.run(root: tmp_dir, today: ~D[2026-06-17])
+        assert report.issue_count == 0
+      after
+        File.rm_rf!(tmp_dir)
+      end
+    end
   end
 
   describe "entry shape validation" do
@@ -175,6 +200,73 @@ defmodule LemonCore.Quality.DocsCheckTest do
         assert invalid_entry_issues != []
       after
         File.rm_rf!(tmp_dir)
+      end
+    end
+
+    test "detects invalid lifecycle and visibility metadata" do
+      tmp_dir = create_tmp_dir()
+      File.write!(Path.join(tmp_dir, "docs/page.md"), "content")
+
+      File.write!(Path.join(tmp_dir, "docs/catalog.exs"), """
+      %{
+        defaults: %{owner: "test", max_age_days: 365},
+        entries: [
+          %{
+            path: "docs/page.md",
+            last_reviewed: ~D[2026-06-01],
+            kind: :unknown,
+            status: :retired,
+            public: "yes"
+          }
+        ]
+      }
+      """)
+
+      try do
+        assert {:error, report} = DocsCheck.run(root: tmp_dir, today: ~D[2026-06-17])
+
+        messages =
+          report.issues
+          |> Enum.filter(&(&1.code == :invalid_catalog_entry))
+          |> Enum.map(& &1.message)
+
+        assert Enum.any?(messages, &String.contains?(&1, ":kind"))
+        assert Enum.any?(messages, &String.contains?(&1, ":status"))
+        assert Enum.any?(messages, &String.contains?(&1, ":public"))
+      after
+        File.rm_rf!(tmp_dir)
+      end
+    end
+
+    test "rejects public historical and superseded documents" do
+      for status <- [:historical, :superseded] do
+        tmp_dir = create_tmp_dir()
+        File.write!(Path.join(tmp_dir, "docs/page.md"), "content")
+
+        File.write!(Path.join(tmp_dir, "docs/catalog.exs"), """
+        [
+          %{
+            path: "docs/page.md",
+            owner: "test",
+            last_reviewed: ~D[2026-06-01],
+            max_age_days: 365,
+            status: #{inspect(status)},
+            public: true
+          }
+        ]
+        """)
+
+        try do
+          assert {:error, report} = DocsCheck.run(root: tmp_dir, today: ~D[2026-06-17])
+
+          assert Enum.any?(
+                   report.issues,
+                   &(&1.code == :invalid_catalog_entry and
+                       &1.message == "historical or superseded documents cannot be public")
+                 )
+        after
+          File.rm_rf!(tmp_dir)
+        end
       end
     end
   end
