@@ -48,11 +48,11 @@ defmodule LemonCore.Quality.DocsCatalog do
   defp parse_catalog(path) do
     case File.read(path) do
       {:ok, source} -> parse_catalog_source(path, source)
-      {:error, reason} -> {:error, "Failed to evaluate #{path}: #{inspect(reason)}"}
+      {:error, reason} -> {:error, "Failed to read #{path}: #{inspect(reason)}"}
     end
   rescue
     exception ->
-      {:error, "Failed to evaluate #{path}: #{Exception.message(exception)}"}
+      {:error, "Failed to read #{path}: #{Exception.message(exception)}"}
   end
 
   defp parse_catalog_source(path, source) do
@@ -65,11 +65,11 @@ defmodule LemonCore.Quality.DocsCatalog do
         {:error, "Invalid catalog #{path}: #{message}"}
 
       {:error, reason} ->
-        {:error, "Failed to evaluate #{path}: #{inspect(reason)}"}
+        {:error, "Failed to parse #{path}: #{inspect(reason)}"}
     end
   rescue
     exception ->
-      {:error, "Failed to evaluate #{path}: #{Exception.message(exception)}"}
+      {:error, "Failed to parse #{path}: #{Exception.message(exception)}"}
   end
 
   defp normalize_catalog(entries) when is_list(entries) do

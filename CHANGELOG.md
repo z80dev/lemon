@@ -24,6 +24,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Documentation quality checks now use a compact catalog with shared defaults,
   explicit lifecycle/visibility metadata, and Git-index-based coverage that
   ignores untracked local drafts
+- Pull-request client quality now exercises Lemon Web startup from clean
+  generated artifacts, and release smoke evaluates the MCP library contract
+  inside both packaged runtime profiles and their release tarballs
 - Product releases can now be cut and published from one manual Release
   workflow dispatch; the workflow derives CalVer, consumes the Unreleased
   notes, commits and tags the release, verifies every artifact, publishes the

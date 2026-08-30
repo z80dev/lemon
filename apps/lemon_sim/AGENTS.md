@@ -193,8 +193,9 @@ Boundary namespaces:
 - Keep CLI-wrapper-only mechanics in ordinary functions under
   `Mix.Tasks.Lemon.Sim.Common`; do not add a `use` macro or copy startup,
   model parsing, provider normalization, or `maybe_put/3` into individual tasks.
-  Provider strings must resolve against the bounded `LemonAi.Models` registry,
-  never through input-driven atom creation.
+  `Common` delegates provider normalization to
+  `LemonSim.LLM.GameHelpers.Config`; provider strings must resolve against the
+  bounded `LemonAi.Models` registry, never through input-driven atom creation.
 - Prefer direct top-level `"event"` / `"events"` on decision maps when a decider can produce them; use `DecisionAdapter` for shape translation or legacy paths rather than as mandatory ceremony.
 - If a decision includes `"executed_calls"` and a non-default adapter is configured, `Runner.step/3` adapts through that adapter before direct terminal events so support-tool events are preserved.
 - VendingBench uses the generic `SingleTerminal` policy with `ExecutedCallEvents`; do not reintroduce benchmark-local copies of generic tool-loop policy or executed-call event extraction.

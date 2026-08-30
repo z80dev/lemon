@@ -1,11 +1,7 @@
 defmodule Mix.Tasks.Lemon.Sim.Common do
   @moduledoc false
 
-  @provider_aliases %{
-    "gemini" => :google_gemini_cli,
-    "gemini_cli" => :google_gemini_cli,
-    "openai_codex" => :"openai-codex"
-  }
+  alias LemonSim.LLM.GameHelpers.Config
 
   @doc false
   @spec ensure_runtime_started!() :: :ok
@@ -50,26 +46,12 @@ defmodule Mix.Tasks.Lemon.Sim.Common do
 
   @doc false
   @spec resolve_provider(String.t()) :: atom() | nil
-  def resolve_provider(provider) when is_binary(provider) do
-    normalized = normalize_provider_name(provider)
-
-    Map.get(@provider_aliases, normalized) ||
-      Enum.find(LemonAi.Models.get_providers(), fn known_provider ->
-        normalize_provider_name(Atom.to_string(known_provider)) == normalized
-      end)
-  end
+  def resolve_provider(provider) when is_binary(provider), do: Config.normalize_provider(provider)
 
   @doc false
   @spec maybe_put(keyword(), atom(), term()) :: keyword()
   def maybe_put(opts, _key, nil), do: opts
   def maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
-
-  defp normalize_provider_name(provider) do
-    provider
-    |> String.trim()
-    |> String.downcase()
-    |> String.replace("-", "_")
-  end
 
   defp unknown_model!(provider, model_id) do
     Mix.raise("unknown model #{inspect(model_id)} for provider #{inspect(provider)}")

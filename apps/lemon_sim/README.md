@@ -87,6 +87,9 @@ new BEAM atoms; accepted names are bounded by `LemonAi.Models.get_providers/0`.
 
 The `mix lemon.sim.*` wrappers share their runtime startup, optional keyword,
 and simple provider/model parsing through `Mix.Tasks.Lemon.Sim.Common`.
+The task helper delegates provider normalization to the same
+`LemonSim.LLM.GameHelpers.Config` owner used by scenario facades while keeping
+Mix-specific unknown-model errors.
 Provider-qualified model specs accept registered provider names plus the
 existing `gemini`, `gemini-cli`, `gemini_cli`, and `openai_codex` aliases;
 unknown provider strings are rejected without creating atoms.
