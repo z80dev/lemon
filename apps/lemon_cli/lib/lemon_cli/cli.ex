@@ -20,6 +20,7 @@ defmodule LemonCli.CLI do
       secrets <status|init|set|list|delete|check|import-env>
       channels [--project-dir PATH] [--json]
       profile <list|show|create|clone|rename|export|delete|roster|chat>
+      context <preview|resolve> <reference>... [bounded options]
 
   `model` delegates to provider onboarding; `gateway setup` delegates to the
   gateway setup adapters.
@@ -46,7 +47,7 @@ defmodule LemonCli.CLI do
     defexception [:message, exit_code: 1]
   end
 
-  @commands ~w(setup model gateway doctor config secrets channels profile)
+  @commands ~w(setup model gateway doctor config secrets channels profile context)
 
   @exit_ok 0
   @exit_error 1
@@ -148,6 +149,7 @@ defmodule LemonCli.CLI do
   defp run_command("secrets", args), do: run_secrets(args)
   defp run_command("channels", args), do: run_channels(args)
   defp run_command("profile", args), do: LemonCli.ProfileCommand.run(args)
+  defp run_command("context", args), do: LemonCli.ContextCommand.run(args)
 
   # ──────────────────────────────────────────────────────────────────────────
   # setup / model / gateway
@@ -928,6 +930,7 @@ defmodule LemonCli.CLI do
       secrets <status|init|set|list|delete|check|import-env>
       channels [--project-dir PATH] [--json]    Channel launch readiness
       profile <subcommand> [options]             Manage isolated agent profiles
+      context <preview|resolve> <refs> [options] Preview or resolve bounded context
 
     Run `lemon <command> --help` for command options.
     """)
@@ -1014,6 +1017,8 @@ defmodule LemonCli.CLI do
     selected-file snapshots and never include sessions or memory.
     """)
   end
+
+  defp print_command_usage("context"), do: LemonCli.ContextCommand.print_usage()
 
   defp print_doctor_usage(device \\ :stdio) do
     IO.puts(device, """

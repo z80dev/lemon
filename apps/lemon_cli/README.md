@@ -45,6 +45,18 @@ release and source-checkout behavior aligned.
 | Validate/show config | `lemon config validate` | `./bin/lemon config validate` | `mix lemon.config validate` |
 | Manage encrypted secrets | `lemon secrets status` | `./bin/lemon secrets status` | `mix lemon.secrets.status` |
 | Inspect channel readiness | `lemon channels` | `./bin/lemon channels` | `mix lemon.channels` |
+| Preview/resolve bounded context | `lemon context preview|resolve ...` | `./bin/lemon context preview|resolve ...` | Call `LemonCore.Context` from IEx/tests |
+
+## Context references
+
+`lemon context preview` and `lemon context resolve` are packaged adapters over
+the shared `LemonCore.Context` service. They accept root-confined
+`@file:`/`@folder:`, shell-free `@git-diff`, SSRF-guarded `@url:`, and redacted
+`@session:` references. PDF, DOCX, XLSX, PPTX, and ipynb content is sniffed
+from bytes and selected under explicit byte/page/item/depth/time/archive
+limits. Preview performs the exact selection but omits selected text; resolve
+returns selected redacted text plus omission metadata. See
+[`docs/user-guide/context-references.md`](../../docs/user-guide/context-references.md).
 
 ## First-run setup and readiness
 

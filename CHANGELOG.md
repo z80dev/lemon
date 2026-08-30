@@ -10,6 +10,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- A client-independent `LemonCore.Context` preview/resolve contract and
+  packaged `lemon context` command for bounded `@file`, `@folder`, `@git-diff`,
+  `@url`, and redacted `@session` references. PDF, DOCX, XLSX, PPTX, notebook,
+  and text content is format-sniffed with explicit byte/page/item/depth/time
+  limits, archive-bomb/traversal and symlink defenses, SSRF-safe pinned URL
+  fetching, sensitive-value redaction, and structured omission metadata.
+
 - An authenticated Lemon Web session-management shell with runtime and live-node
   status, durable search/resume, title/pin/archive controls, redacted structured
   run/tool inspection, bounded JSON/Markdown export, and exact-candidate guarded

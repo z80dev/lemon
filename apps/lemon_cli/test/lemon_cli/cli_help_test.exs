@@ -20,7 +20,8 @@ defmodule LemonCli.CLIHelpTest do
     {["doctor", "--help"], "Usage: lemon doctor", "Lemon Doctor"},
     {["config", "--help"], "Usage: lemon config", "Validating Lemon configuration"},
     {["secrets", "--help"], "Usage: lemon secrets", "No secrets configured"},
-    {["channels", "--help"], "Usage: lemon channels", "Lemon Channels"}
+    {["channels", "--help"], "Usage: lemon channels", "Lemon Channels"},
+    {["context", "--help"], "Usage: lemon context", "Context preview:"}
   ]
 
   setup do

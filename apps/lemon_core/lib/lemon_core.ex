@@ -14,6 +14,7 @@ defmodule LemonCore do
   - `LemonCore.UsageStore` - Shared usage records, summaries, and quota counters
   - `LemonCore.UsageDiagnostics` - Redacted usage aggregate diagnostics
   - `LemonCore.SessionLifecycle` - Shared session search, metadata, export, and guarded prune service
+  - `LemonCore.Context` - Bounded context-reference and document-extraction service
   - `LemonCore.Telemetry` - Telemetry event helpers
   - `LemonCore.Clock` - Time utilities
   - `LemonCore.Config` - Configuration access

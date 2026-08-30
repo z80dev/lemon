@@ -20,6 +20,7 @@
 | Work on agent routing or message flow | `apps/lemon_router/` |
 | Build HTTP/WebSocket API features | `apps/lemon_control_plane/` |
 | Manage configuration, secrets, or storage | `apps/lemon_core/` |
+| Resolve bounded files, folders, diffs, URLs, sessions, or documents | `apps/lemon_core/` (`LemonCore.Context`), `apps/lemon_cli/` (`lemon context`) |
 | Work on browser capability driver | `apps/lemon_browser/` |
 | Work on media job capability driver | `apps/lemon_media/` |
 | Work on LSP capability driver | `apps/lemon_lsp/` |
@@ -534,6 +535,7 @@ This repository includes an optional pre-push hook that uses **kimi** to review 
 - `docs/context.md` - Context management
 - `docs/long-running-agent-harnesses.md` - Long-running harness primitives that keep coding sessions structured across multi-step work
 - `docs/user-guide/web.md` - Browser chat/resume plus authenticated session management, redacted export, and guarded prune
+- `docs/user-guide/context-references.md` - Bounded context preview/resolve, document formats, budgets, and safety contract
 - `docs/plans/2026-03-19-ai-boundary-extraction-plan.md` - Plan for moving auth/config/storage ownership out of `apps/lemon_ai` before extracting it into its own repo
 - `docs/subagent-parent-questions.md` - Design for subagent-to-parent clarification requests via a narrow `ask_parent` path
 - `docs/telemetry.md` - Telemetry and observability
