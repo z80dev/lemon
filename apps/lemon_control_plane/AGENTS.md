@@ -417,6 +417,24 @@ metadata, or credentials.
 | `skills.install` | admin | Install a skill plus install-source return-state and approval-context cleanup summary |
 | `skills.update` | admin | Update/configure a skill plus env-key/update-mode summary with sensitive env response redaction |
 
+### Portable Blueprints
+
+| Method | Scope | Description |
+|--------|-------|-------------|
+| `blueprints.list` | read | List valid bundles from the canonical local catalog without paths or content |
+| `blueprints.inspect` | read | Inspect one catalog `bundleId` through the activation validation path |
+| `blueprints.validate` | read | Re-run manifest, policy, lint, and deterministic skill audit checks |
+| `blueprints.preview` | read | Return a content-free exact plan plus confirmation digest for one profile |
+| `blueprints.activate` | admin | Re-plan and apply only an exact fresh confirmation digest |
+
+Keep this surface catalog-scoped: never add caller-provided `root` or `path`
+parameters. `bundleId` must resolve directly below `~/.lemon/bundles` with
+containment, symlink, and manifest-ID checks. Responses must remain free of
+absolute paths, skill bodies, prompt/command text, and secret values. The admin
+mutation delegates to `LemonAutomation.Blueprint`, which binds the target
+profile and current destination state and creates cron jobs only through
+`CronManager.add_new/1`.
+
 ### Voice / TTS (capability-gated)
 
 | Method | Scope | Description |
@@ -849,6 +867,7 @@ payloads.
 | `methods/node_methods_test.exs` | Node management and invocation |
 | `methods/secrets_methods_test.exs` | Secrets CRUD |
 | `methods/skills_methods_test.exs` | Skills status, install, update |
+| `methods/blueprints_test.exs` | Catalog containment, content-free review, exact confirmation, profile activation, and duplicate-safe replay |
 | `methods/system_methods_test.exs` | System event, presence |
 | `methods/config_reload_test.exs` | Config reload lifecycle summaries |
 | `methods/system_reload_test.exs` | System reload scopes |
@@ -877,7 +896,7 @@ payloads.
 | `lemon_router` | `LemonRouter.submit/1` and `LemonRouter.RunOrchestrator.submit/1` for agent run submission; `LemonRouter.RunRegistry` for active run queries |
 | `lemon_channels` | `LemonChannels.Outbox` for `send` method; channel status queries |
 | `lemon_skills` | Skill status, installation, and binary path queries |
-| `lemon_automation` | `LemonAutomation.CronManager` for cron CRUD; heartbeat management |
+| `lemon_automation` | `LemonAutomation.CronManager` for cron CRUD and heartbeat management; `LemonAutomation.Blueprint` for safe catalog-scoped skill + cron activation |
 | _(none)_ | The agent is reached through `LemonControlPlane.AgentRuntime`; an agent registers a provider at boot. No compile-time dependency. |
 | `ai` | AI model listing and configuration |
 

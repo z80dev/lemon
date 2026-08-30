@@ -1,0 +1,24 @@
+{
+  "format": "lemon-skill-automation-bundle",
+  "version": 1,
+  "id": "daily-note",
+  "name": "Daily Note",
+  "description": "A disabled example that installs one summarization skill and one agent cron job",
+  "skills": [
+    {
+      "key": "daily-note",
+      "path": "skills/daily-note"
+    }
+  ],
+  "automations": [
+    {
+      "id": "daily-note-reminder",
+      "kind": "cron",
+      "name": "Daily note reminder",
+      "schedule": "0 0 1 1 *",
+      "prompt": "Use the daily-note skill to summarize completed work from the current conversation.",
+      "enabled": false,
+      "timezone": "UTC"
+    }
+  ]
+}

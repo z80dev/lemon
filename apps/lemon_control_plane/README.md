@@ -600,6 +600,24 @@ are never copied into the JSON-RPC response.
 | `skills.install` | admin | Install a skill plus install-source return-state and approval-context cleanup summary |
 | `skills.update` | admin | Update/configure a skill plus env-key/update-mode summary with sensitive env response redaction |
 
+### Portable Blueprints
+
+| Method | Scope | Description |
+|--------|-------|-------------|
+| `blueprints.list` | read | List valid versioned bundles in the canonical local catalog without returning paths or content |
+| `blueprints.inspect` | read | Inspect one `bundleId` with normalized manifest, provenance, and cleanup summaries |
+| `blueprints.validate` | read | Re-run manifest, lint, policy, and deterministic skill audit for one `bundleId` |
+| `blueprints.preview` | read | Return the exact profile skill + cron plan and fresh `confirmationDigest` |
+| `blueprints.activate` | admin | Re-plan and activate only when the exact confirmation digest still matches |
+
+Blueprint RPC never accepts `root` or `path`. It resolves a safe `bundleId`
+directly below `~/.lemon/bundles`, rejects traversal, symlinked catalog entries,
+and manifest/directory ID mismatches, and returns no absolute paths, skill
+bodies, prompt text, commands, or secret values. Activation targets a derived
+profile workspace and creates the disabled or enabled agent cron definition
+only through the create-once `CronManager` API. See the
+[skills user guide](../../docs/user-guide/skills.md#portable-skill-and-automation-bundles).
+
 ### Events and Subscriptions
 
 | Method | Scope | Description |
@@ -829,6 +847,9 @@ mix test apps/lemon_control_plane
 
 # Run a specific test file
 mix test apps/lemon_control_plane/test/lemon_control_plane/methods/control_plane_methods_test.exs
+
+# Safe catalog resolution, exact confirmation, and duplicate-safe activation
+mix test apps/lemon_control_plane/test/lemon_control_plane/methods/blueprints_test.exs --seed 1
 ```
 
 The server starts automatically via the OTP application supervision tree. Connect with any WebSocket client to `ws://localhost:4040/ws` and send a `connect` request to begin.
