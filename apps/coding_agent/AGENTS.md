@@ -33,8 +33,10 @@ The main coding agent implementation for the Lemon AI assistant platform. This a
 |  +-- CodingAgent.SessionSupervisor (dynamic, one_for_one)                   |
 |  |   +-- CodingAgent.Session processes (temporary restart)                  |
 |  +-- CodingAgent.SessionRegistry (via Registry)                             |
+|  +-- CodingAgent.BackgroundRun.Registry (via Registry)                     |
 |  +-- CodingAgent.RunGraphServer (ETS + DETS persistence)                    |
 |  +-- CodingAgent.TaskSupervisor (for async operations)                      |
+|  +-- CodingAgent.BackgroundRun.Supervisor (isolated `/bg` workers)          |
 |  +-- CodingAgent.ProcessStoreServer (background process tracking)           |
 |  +-- CodingAgent.TaskStoreServer (async task tracking with DETS)            |
 |  +-- CodingAgent.ParentQuestionStoreServer (parent-question tracking)       |
@@ -286,6 +288,8 @@ Its public GenServer shell stays `CodingAgent.Session`, but the larger internal 
 | Module | Purpose |
 |--------|---------|
 | `CodingAgent.LaneQueue` | Lane-aware FIFO queue with per-lane concurrency caps |
+| `CodingAgent.BackgroundRun` | Durable lifecycle facade for isolated full-tool `/bg` sessions |
+| `CodingAgent.SideQuery` | Bounded no-tools `/btw` facade over a live snapshot, durable session key, or explicit transcript snapshot |
 | `CodingAgent.Coordinator` | Orchestrates concurrent subagent executions |
 | `CodingAgent.ProcessManager` | DynamicSupervisor for background exec processes |
 | `CodingAgent.ProcessSession` | GenServer for a single background process |
@@ -309,6 +313,17 @@ When an internal task omits `model`, `Task.Params` resolves the inherited model 
 Internal task child sessions now poll for aborts/session exit in `Task.Runner`, with an optional explicit `task_session_timeout_ms` guard when callers want a bounded wait. If a provider stream wedges or the child session dies without a terminal event, the task still fails with a timeout/session-exit error instead of leaving `task action=join` and the parent Telegram thread stuck indefinitely.
 Async task launch is fail-fast: if `CodingAgent.TaskSupervisor` cannot accept the worker, `Task.Execution` returns an error and terminalizes the `TaskStore`, `RunGraph`, budget, lifecycle event, and progress-binding state instead of returning a permanently queued receipt. Once an async task has terminalized, auto-followup routing is best-effort and contains router exits so delivery outages do not crash the completed worker. `LaneQueue` consumes the task monitor when it receives a result, monitors queued callers so abandoned work is removed, and contains `Task.Supervisor` admission/start exits per job so one failure does not terminate the queue. `ProcessManager` treats LaneQueue `GenServer.call` exits as an unavailable-queue fallback, not only raised exceptions.
 Task lifecycle writes are serialized by `TaskStoreServer`. Event appends and followup suppression cannot overwrite each other, terminal status/payload is first-writer-wins across finish/fail races, and late `mark_running` calls cannot revive terminal tasks. Transient join reservations are owned and monitored by `TaskStoreServer`: a crashed joiner releases its reservations, and stale persisted reservations are discarded on store restart instead of suppressing completion forever. `RunGraphServer` synchronously loads DETS before startup readiness and serializes initial inserts/deletes as well as lifecycle updates, so a live write cannot be overwritten by a late startup fold.
+
+Hermes-compatible `/bg` work enters through `CodingAgent.BackgroundRun`. It
+returns a durable `TaskStore` id immediately, owns a separately supervised
+full-tool session on the `:subagent` lane, and exposes list/status/result/cancel
+without appending to a parent. A supplied channel `session_key` is lineage only;
+queued or running background records become `:lost` after restart because the
+in-memory session cannot be resumed implicitly. `/btw` uses
+`CodingAgent.SideQuery.ask/3`: a new session receives either one atomic frozen
+live-session snapshot or bounded durable `RunStore` history, always with
+`tools: []` and a distinct ephemeral session key. Neither path mutates or
+steers the source conversation.
 Async delegated-agent runs mirror the router run id into `RunGraph`; the completion watcher advances both `RunGraph` and `TaskStore`, which makes `agent action=join` wait on the production lifecycle rather than treating an unknown graph entry as already terminal. Explicit joins use transient followup reservations: `wait_all` suppresses completed joined tasks, while `wait_any` permanently suppresses only its completed winner and releases losers or failed/aborted joins. If the watcher cannot start, the agent tool returns a `tracking_error` receipt with task/run ids and terminalizes its local tracking records; watcher and followup exits are contained. A watcher timeout does not authoritatively fail a still-running router run: the task enters `:tracking_lost`, the run graph stays running, and a bounded reconciliation wait can still record a late terminal result.
 Queued async task results should be treated as launch receipts. When a workflow needs one final answer in the same turn, the model/tooling should keep the returned `task_id`s and call `task action=join` before responding instead of relying on later auto-followup delivery to stitch the workflow back together. `task action=join` now suppresses the later async completion followup for those task ids so the parent session does not receive a second completion prompt after it already waited. Task result surfaces (`poll`, `join`, `get`, and auto-followup) are intentionally sanitized to visible assistant output plus task metadata, without leaking stored events, tool-call internals, or thinking deltas back into the parent session. Structured child reasoning is preserved in `details.reasoning` and projected as a reasoning action for operator surfaces, but it is not embedded as `[thinking]` text in parent-visible task answers. For non-terminal tasks, `poll` and `get` behave as status queries: they return the task status in user-visible text and keep the latest structured `current_action`/`reasoning` metadata in `details` instead of surfacing raw command/tool event text as answer content. Async followup delivery also idempotently backfills terminal task/run state, so a delivered completion message cannot leave the task store stranded in `queued` or `running`. Auto-followup forwards the full visible task answer into the followup path instead of slicing it to a fixed prefix before routing, and router fallbacks are native followup runs. Any transport-specific chunking happens later at the channel layer.
 Sessions with an approval context subscribe to the shared `exec_approvals` topic and rebroadcast matching request/resolution records as status-only approval action events. These events use the same RunTranslator path as tool and reasoning events for native gateway and LemonRunner parity, and they must not enter the delta channel.

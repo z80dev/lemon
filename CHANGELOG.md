@@ -20,6 +20,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   control plane. Background runs are isolated full-tool sessions; side
   questions use bounded no-tools transcript snapshots without changing parent
   history.
+- Hermes-compatible `/bg` backend sessions with durable lifecycle ids,
+  isolated full-tool execution, status/result/list/cancel APIs, and
+  restart-safe lost-run reporting; plus bounded `/btw` no-tools queries over
+  immutable live snapshots or durable channel session-key history without
+  mutating the parent conversation.
 - Extensible capability-aware web search/extraction providers with deterministic
   fallback, provider isolation, request-level selection, extension registration,
   keyless DuckDuckGo, configurable SearXNG, Exa search/highlights and batch

@@ -64,9 +64,11 @@ or subprocess agent runner is involved.
 ```
 CodingAgent.Supervisor (one_for_one)
   +-- Registry (SessionRegistry)
+  +-- Registry (BackgroundRun.Registry)
   +-- Registry (ProcessRegistry)
   +-- TodoStoreOwner
   +-- SessionSupervisor (DynamicSupervisor for Session processes)
+  +-- BackgroundRun.Supervisor (DynamicSupervisor for isolated `/bg` workers)
   +-- Wasm.SidecarSupervisor
   +-- TaskSupervisor (Task.Supervisor for async ops)
   +-- PythonRepl.Supervisor (one_for_all: PythonRepl.Registry + PythonRepl.SessionSupervisor;
@@ -88,7 +90,9 @@ CodingAgent.Supervisor (one_for_one)
 
 | Module | Description |
 |--------|-------------|
-| `CodingAgent` | Top-level facade -- `start_session/1`, `start_supervised_session/1`, `lookup_session/1`, `coding_tools/2`, `read_only_tools/2`, `load_settings/1` |
+| `CodingAgent` | Top-level facade -- session/tool/settings APIs plus `start_background/2` and `ask_btw/3` |
+| `CodingAgent.BackgroundRun` | Durable isolated full-tool background-run lifecycle API |
+| `CodingAgent.SideQuery` | Bounded no-tools side-query API for live or durable parent context |
 | `CodingAgent.Application` | OTP application callback; starts the full supervision tree and optionally a primary session |
 | `CodingAgent.ParentQuestions` | DETS-backed store and lifecycle helpers for child-to-parent clarification requests |
 | `CodingAgent.ParentQuestionStoreServer` | Owns the parent-question ETS/DETS tables and TTL cleanup |
@@ -317,6 +321,8 @@ Internal task runs infer a restrictive `tool_policy` and verification guardrail 
 | Module | Description |
 |--------|-------------|
 | `CodingAgent.LaneQueue` | Lane-aware FIFO queue with per-lane concurrency caps (default: main=4, subagent=8, background_exec=2) |
+| `CodingAgent.BackgroundRun` | Durable `/bg` lifecycle facade (`start`, `list`, `status`, `result`, `cancel`) for isolated full-tool sessions |
+| `CodingAgent.SideQuery` | Bounded `/btw` query facade using an immutable live snapshot or durable session-key history with tools disabled |
 | `CodingAgent.Coordinator` | GenServer orchestrating concurrent subagent sessions with timeout management |
 | `CodingAgent.Parallel` | Semaphore-based concurrency control and `map_with_concurrency_limit` |
 | `CodingAgent.ProcessManager` | DynamicSupervisor for background `exec` processes |
@@ -343,6 +349,21 @@ The delegated `agent` tool mirrors each accepted async router run into `RunGraph
 Eligible native child sessions receive `ask_parent`. Its request is delivered through `Session.deliver_parent_question/2`: idle parents start processing immediately, and a parent currently inside `task` or `agent` join yields that join with `needs_parent_answer` before processing the visible question. Parent-question creation and terminal transitions are serialized, one child scope may have only one waiting request, resolver credentials must exactly match both parent session and agent, and only the winning answer/timeout/cancel/error transition emits a terminal event.
 
 `LaneQueue` monitors callers while jobs wait, removes abandoned queued jobs, and turns a missing or failing task supervisor into a per-job `task_start_failed` result while continuing to drain. Background process execution catches LaneQueue GenServer exits and uses the documented direct fallback rather than hanging the caller.
+
+Hermes-compatible background commands use the same native runtime. Call
+`CodingAgent.BackgroundRun.start/2` to receive a durable id immediately, then
+use `list/1`, `status/1`, `result/1`, or `cancel/2`. Each run owns a fresh
+full-tool session on the subagent lane; `:session_key` is retained only as
+lineage metadata, and neither the prompt nor result is appended to that parent.
+Queued/running background records recover as `:lost` after a VM restart rather
+than pretending an in-memory worker survived.
+
+`CodingAgent.SideQuery.ask/3` implements `/btw` as a synchronous, bounded,
+no-tools session. Its source may be a live session pid/id, a durable channel
+session key, or an explicit `%{messages: ..., system_prompt: ...}` snapshot.
+Live context is captured atomically and frozen for the child; durable keys use
+bounded `LemonCore.RunStore` history plus session policy. Side queries use a
+separate ephemeral session key and never mutate parent history.
 
 `exec` and `process` now expose terminal backend metadata. Registered backends
 include `:local`, backed by the supervised `ProcessSession` Erlang Port runner,

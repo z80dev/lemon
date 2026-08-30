@@ -97,6 +97,7 @@ defmodule CodingAgent.Session do
     :extra_tools,
     :tool_disclosure,
     :session_scope,
+    :context_frozen,
     :is_streaming,
     :pending_prompt_timer_ref,
     :event_listeners,
@@ -161,6 +162,7 @@ defmodule CodingAgent.Session do
           extra_tools: [AgentTool.t()],
           tool_disclosure: keyword() | map() | nil,
           session_scope: :main | :subagent,
+          context_frozen: boolean(),
           is_streaming: boolean(),
           pending_prompt_timer_ref: reference() | nil,
           event_listeners: [{pid(), reference()}],
@@ -234,6 +236,8 @@ defmodule CodingAgent.Session do
     * `:tools` - List of `AgentTool` structs (default: read, write, edit, bash)
     * `:extra_tools` - Additional `AgentTool` structs appended to the default toolset
     * `:session_file` - Path to existing session file to load
+    * `:initial_messages` - Ephemeral initial transcript for a new isolated session
+    * `:context_snapshot` - Frozen `%{messages:, system_prompt:}` snapshot for a one-shot side run
     * `:session_id` - Explicit session ID for new sessions (ignored when loading from file)
     * `:run_id` - Optional native Lemon run identifier used for introspection and tool provenance
     * `:session_key` - Optional logical session key used for introspection and tool provenance
@@ -579,6 +583,18 @@ defmodule CodingAgent.Session do
   @spec get_messages(GenServer.server()) :: [map()]
   def get_messages(session) do
     GenServer.call(session, :get_messages)
+  end
+
+  @doc """
+  Take one atomic, read-only snapshot of the transcript and model context.
+
+  The returned value is suitable for `:context_snapshot` when starting an
+  isolated one-shot session. It never exposes the parent agent pid and taking
+  the snapshot does not append, steer, or otherwise mutate the source session.
+  """
+  @spec context_snapshot(GenServer.server()) :: map()
+  def context_snapshot(session) do
+    GenServer.call(session, :context_snapshot, 5_000)
   end
 
   @doc """
@@ -953,6 +969,25 @@ defmodule CodingAgent.Session do
   def handle_call(:get_messages, _from, state) do
     agent_state = LemonAgent.Agent.get_state(state.agent)
     {:reply, Enum.map(agent_state.messages, &strip_recalled_context/1), state}
+  end
+
+  def handle_call(:context_snapshot, _from, state) do
+    agent_state = LemonAgent.Agent.get_state(state.agent)
+
+    snapshot = %{
+      messages: Enum.map(agent_state.messages, &strip_recalled_context/1),
+      system_prompt: state.system_prompt,
+      cwd: state.cwd,
+      model: state.model,
+      thinking_level: state.thinking_level,
+      settings_manager: state.settings_manager,
+      workspace_dir: state.workspace_dir,
+      source_session_id: state.session_manager.header.id,
+      source_session_key: state.session_key,
+      source_agent_id: state.agent_id
+    }
+
+    {:reply, snapshot, state}
   end
 
   def handle_call(:save, _from, state) do
@@ -1486,6 +1521,8 @@ defmodule CodingAgent.Session do
   # twice and, for a contributor whose text changes per turn, producing two
   # different answers for one turn.
   @spec refresh_turn_context(t(), String.t()) :: {t(), [ContextRegistry.section()]}
+  defp refresh_turn_context(%{context_frozen: true} = state, _skill_context), do: {state, []}
+
   defp refresh_turn_context(state, skill_context) do
     relevant_skill_keys = relevant_skill_keys(state, skill_context)
 
