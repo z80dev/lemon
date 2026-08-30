@@ -3,13 +3,16 @@ defmodule LemonCore.Quality.DocsCheck do
   Lints documentation metadata and link integrity.
 
   Checks include:
-  - catalog entries include ownership and freshness metadata
+  - catalog entries include ownership, freshness, lifecycle, and visibility metadata
   - catalog entries point to existing files
   - tracked docs files are registered in the catalog
   - local markdown links resolve to existing files
   """
 
   alias LemonCore.Quality.DocsCatalog
+
+  @valid_kinds [:guide, :plan, :proof, :reference, :review]
+  @valid_statuses [:current, :historical, :superseded]
 
   @type issue :: %{
           code: atom(),
@@ -82,36 +85,81 @@ defmodule LemonCore.Quality.DocsCheck do
 
   @spec check_catalog_coverage(String.t(), [map()], [issue()]) :: [issue()]
   defp check_catalog_coverage(root, entries, issues) do
-    tracked_docs = discover_tracked_docs(root)
+    case discover_tracked_docs(root) do
+      {:ok, tracked_docs} ->
+        catalog_paths =
+          entries
+          |> Enum.map(&Map.get(&1, :path))
+          |> Enum.filter(&is_binary/1)
+          |> MapSet.new()
 
-    catalog_paths =
-      entries
-      |> Enum.map(&Map.get(&1, :path))
-      |> Enum.filter(&is_binary/1)
-      |> MapSet.new()
+        Enum.reduce(tracked_docs, issues, fn path, acc ->
+          if MapSet.member?(catalog_paths, path) do
+            acc
+          else
+            [
+              %{
+                code: :missing_catalog_entry,
+                message: "Tracked docs file is missing from docs/catalog.exs: #{path}",
+                path: path
+              }
+              | acc
+            ]
+          end
+        end)
 
-    Enum.reduce(tracked_docs, issues, fn path, acc ->
-      if MapSet.member?(catalog_paths, path) do
-        acc
-      else
+      {:error, message} ->
         [
           %{
-            code: :missing_catalog_entry,
-            message: "Tracked docs file is missing from docs/catalog.exs: #{path}",
-            path: path
+            code: :tracked_docs_discovery_failed,
+            message: message,
+            path: "docs"
           }
-          | acc
+          | issues
         ]
-      end
-    end)
+    end
   end
 
-  @spec discover_tracked_docs(String.t()) :: [String.t()]
+  @spec discover_tracked_docs(String.t()) :: {:ok, [String.t()]} | {:error, String.t()}
   defp discover_tracked_docs(root) do
+    if File.exists?(Path.join(root, ".git")) do
+      discover_git_tracked_docs(root)
+    else
+      {:ok, discover_filesystem_docs(root)}
+    end
+  end
+
+  defp discover_git_tracked_docs(root) do
+    case System.cmd("git", ["-C", root, "ls-files", "-z", "--", "docs"],
+           stderr_to_stdout: true
+         ) do
+      {output, 0} ->
+        docs =
+          output
+          |> String.split(<<0>>, trim: true)
+          |> filter_docs_paths()
+
+        {:ok, docs}
+
+      {output, status} ->
+        {:error,
+         "Failed to discover tracked docs with git ls-files (exit #{status}): #{String.trim(output)}"}
+    end
+  end
+
+  # Quality-check unit tests use isolated, synthetic repositories. Their
+  # filesystem is the deterministic source of truth because no Git index exists.
+  defp discover_filesystem_docs(root) do
     root
     |> Path.join("docs/**/*.md")
     |> Path.wildcard()
     |> Enum.map(&Path.relative_to(&1, root))
+    |> filter_docs_paths()
+  end
+
+  defp filter_docs_paths(paths) do
+    paths
+    |> Enum.filter(&String.ends_with?(&1, ".md"))
     |> Enum.reject(&String.contains?(&1, "/runs/"))
     |> Enum.reject(&String.contains?(&1, "node_modules/"))
     |> Enum.sort()
@@ -127,11 +175,29 @@ defmodule LemonCore.Quality.DocsCheck do
       |> require(entry, :owner, &valid_owner?/1, "expected non-empty :owner", path)
       |> require(entry, :last_reviewed, &match?(%Date{}, &1), "expected :last_reviewed to be a Date", path)
       |> require(entry, :max_age_days, &valid_max_age?/1, "expected :max_age_days to be a positive integer", path)
+      |> require(entry, :kind, &(&1 in @valid_kinds), "expected :kind to be one of #{inspect(@valid_kinds)}", path)
+      |> require(entry, :status, &(&1 in @valid_statuses), "expected :status to be one of #{inspect(@valid_statuses)}", path)
+      |> require(entry, :public, &is_boolean/1, "expected :public to be a boolean", path)
+      |> validate_visibility(entry, path)
     end)
   end
 
   defp valid_owner?(owner), do: is_binary(owner) and String.trim(owner) != ""
   defp valid_max_age?(days), do: is_integer(days) and days > 0
+
+  defp validate_visibility(issues, %{public: true, status: status}, path)
+       when status != :current do
+    [
+      %{
+        code: :invalid_catalog_entry,
+        message: "historical or superseded documents cannot be public",
+        path: path
+      }
+      | issues
+    ]
+  end
+
+  defp validate_visibility(issues, _entry, _path), do: issues
 
   defp require(issues, entry, key, predicate, message, path) do
     case Map.fetch(entry, key) do
