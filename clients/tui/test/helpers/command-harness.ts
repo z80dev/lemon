@@ -41,6 +41,7 @@ export class RecordingHost implements CommandHost {
 	readonly profileOpens: Array<{ profileId: string; sessionKey: string }> = [];
 	readonly forgottenProfiles: Array<{ profileId: string; sessionKey: string }> = [];
 	readonly createdSessions: Array<{ sessionKey?: string; prompt?: string }> = [];
+	readonly forgottenSessions: string[] = [];
 
 	notice(text: string, level: NoticeLevel = "info"): void {
 		this.notices.push({ text, level });
@@ -110,6 +111,10 @@ export class RecordingHost implements CommandHost {
 
 	createSession(sessionKey?: string, prompt?: string): void {
 		this.createdSessions.push({ sessionKey, prompt });
+	}
+
+	forgetDeletedSession(sessionKey: string): void {
+		this.forgottenSessions.push(sessionKey);
 	}
 
 	/** Every notice body joined, for `toContain` assertions. */

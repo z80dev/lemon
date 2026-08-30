@@ -110,6 +110,13 @@ selected canonical chat. `/profile create|clone|rename|export|delete` uses the
 authenticated control plane for lifecycle actions, while normal prompts from
 an opened profile retain its derived workspace and named-node routing.
 
+The TUI also exposes the shared durable-session lifecycle directly. Use
+`/sessions deployment --pinned --active` for a live searchable picker,
+`/session resume <key>` to hydrate exact durable history, and `/session help`
+for guarded title/pin/archive, redacted export, prune, and delete workflows.
+Session metadata stays server-owned, and destructive operations are never
+queued while disconnected.
+
 See [User-managed profiles](docs/user-guide/profiles.md) for lifecycle,
 filesystem isolation, named-node routing, and export safeguards.
 
@@ -124,7 +131,9 @@ lemon completion zsh > "$HOME/.zfunc/_lemon"
 ```
 
 See the [Lemon command-line reference](docs/user-guide/cli.md) for the complete
-session lifecycle, guarded prune, exit-code, JSON, and shell setup contracts.
+packaged-CLI session lifecycle, guarded prune, exit-code, JSON, and shell setup
+contracts, and the [TUI reference](clients/tui/README.md) for interactive
+picker and lifecycle commands.
 
 Review a local portable skill + automation bundle without revealing its skill
 body or cron prompt, then activate only the exact reviewed plan:

@@ -263,6 +263,21 @@ describe("SessionController.close", () => {
 	});
 });
 
+describe("SessionController.forgetDeleted", () => {
+	test("moves focus, clears the deleted draft, and does not issue a duplicate delete", async () => {
+		const { app, server } = await bootApp("tui-a");
+		await app.sessions.create("scratch");
+		app.editor.setText("draft that belongs to deleted scratch");
+
+		await app.sessions.forgetDeleted("scratch");
+
+		expect(app.sessionKey).toBe("tui-a");
+		expect(app.store.sessions.has("scratch")).toBe(false);
+		expect(app.store.drafts.has("scratch")).toBe(false);
+		expect(server.requestsFor("sessions.delete")).toHaveLength(0);
+	});
+});
+
 describe("SessionController.resync", () => {
 	test("appends only messages newer than what is already on screen", async () => {
 		const { app, server } = await bootApp("tui-a");

@@ -441,6 +441,14 @@ export interface ChatHistoryResult {
 export interface SessionSummary {
 	sessionKey?: string;
 	agentId?: string;
+	origin?: Nullable<string>;
+	createdAtMs?: Nullable<number>;
+	updatedAtMs?: Nullable<number>;
+	runCount?: Nullable<number>;
+	title?: Nullable<string>;
+	pinned?: Nullable<boolean>;
+	archived?: Nullable<boolean>;
+	metadataUpdatedAtMs?: Nullable<number>;
 	/**
 	 * `sessions.list` only reports the session's *override* here — the model the
 	 * user pinned, and null when the session inherits one. Full resolution costs a
@@ -480,7 +488,107 @@ export interface SessionDetailResult {
 
 export interface SessionsListResult {
 	sessions?: SessionSummary[];
+	total?: number;
+	filters?: Record<string, unknown>;
+	summary?: Record<string, unknown>;
 	[key: string]: unknown;
+}
+
+export interface SessionsListParams {
+	limit?: number;
+	offset?: number;
+	agentId?: string;
+	query?: string;
+	pinned?: boolean;
+	archived?: boolean;
+}
+
+export interface SessionPreviewEntry {
+	runId?: string;
+	prompt?: Nullable<string>;
+	answer?: Nullable<string>;
+	ok?: Nullable<boolean>;
+	timestampMs?: Nullable<number>;
+	truncated?: boolean;
+}
+
+export interface SessionsPreviewResult {
+	sessionKey: string;
+	preview: SessionPreviewEntry[];
+	summary?: Record<string, unknown>;
+}
+
+export interface SessionsMetadataPatchParams {
+	sessionKey: string;
+	title?: string | null;
+	pinned?: boolean;
+	archived?: boolean;
+}
+
+export interface SessionsMetadataPatchResult {
+	success: boolean;
+	sessionKey: string;
+	metadata: {
+		titlePresent: boolean;
+		titleBytes: number;
+		pinned: boolean;
+		archived: boolean;
+		updatedAtMs?: Nullable<number>;
+	};
+	summary?: Record<string, unknown>;
+}
+
+export type SessionExportFormat = "json" | "markdown";
+
+export interface SessionsExportResult {
+	sessionKey: string;
+	format: SessionExportFormat;
+	filename: string;
+	content: string;
+	sha256: string;
+	bytes: number;
+	redacted: true;
+	summary?: {
+		runCount?: number;
+		availableRunCount?: number;
+		omittedRunCount?: number;
+		exportedAtMs?: number;
+		cleanup?: Record<string, unknown>;
+	};
+}
+
+export interface SessionsPruneParams {
+	olderThanMs: number;
+	archivedOnly?: boolean;
+	includePinned?: boolean;
+	dryRun?: boolean;
+	confirmToken?: string;
+}
+
+export interface SessionsPruneResult {
+	dryRun: boolean;
+	olderThanMs: number;
+	archivedOnly: boolean;
+	includePinned: boolean;
+	confirmToken: string;
+	candidateSessionKeys: string[];
+	candidateCount: number;
+	deletedSessionKeys: string[];
+	deletedCount: number;
+	verified: boolean;
+	summary?: Record<string, unknown>;
+}
+
+export interface SessionsDeleteResult {
+	deleted: boolean;
+	sessionKey: string;
+	summary?: {
+		sessionKey?: string;
+		deleted?: boolean;
+		existed?: boolean;
+		verified?: boolean;
+		cleanup?: Record<string, unknown>;
+	};
 }
 
 export interface SessionsPatchParams {

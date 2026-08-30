@@ -890,6 +890,7 @@ export class AppShell {
 				await this.sessions.create(sessionKey, prompt);
 			},
 			closeSession: (sessionKey: string) => this.sessions.requestClose(sessionKey),
+			forgetDeletedSession: (sessionKey: string) => this.sessions.forgetDeleted(sessionKey),
 			resetSession: (sessionKey: string) => this.sessions.resetLocal(sessionKey),
 			focusQueue: () => this.focusQueue(),
 			deliverPrompt: (text: string, mode: SubmissionMode) => this.sendPrompt(text, { mode }),

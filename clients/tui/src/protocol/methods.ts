@@ -37,9 +37,18 @@ import type {
 	ProfilesListResult,
 	ProfilesRosterResult,
 	SessionDetailResult,
+	SessionExportFormat,
 	SessionSummary,
+	SessionsDeleteResult,
+	SessionsExportResult,
+	SessionsListParams,
 	SessionsListResult,
+	SessionsMetadataPatchParams,
+	SessionsMetadataPatchResult,
 	SessionsPatchParams,
+	SessionsPreviewResult,
+	SessionsPruneParams,
+	SessionsPruneResult,
 	UsageStatusResult,
 } from "./types.ts";
 
@@ -57,9 +66,13 @@ export const METHOD = {
 	profilesRoster: "profiles.roster",
 	profileChat: "profile.chat",
 	sessionsList: "sessions.list",
+	sessionsPreview: "sessions.preview",
 	sessionsActive: "sessions.active",
 	sessionsActiveList: "sessions.active.list",
 	sessionsPatch: "sessions.patch",
+	sessionsMetadataPatch: "sessions.metadata.patch",
+	sessionsExport: "sessions.export",
+	sessionsPrune: "sessions.prune",
 	sessionsReset: "sessions.reset",
 	sessionsDelete: "sessions.delete",
 	sessionsCompact: "sessions.compact",
@@ -188,11 +201,15 @@ export class ControlPlaneMethods {
 
 	// -- sessions -----------------------------------------------------------
 
-	sessionsList(
-		params?: Record<string, unknown>,
-		options?: RequestOptions,
-	): Promise<SessionsListResult> {
+	sessionsList(params?: SessionsListParams, options?: RequestOptions): Promise<SessionsListResult> {
 		return this.#call<SessionsListResult>(METHOD.sessionsList, params, options);
+	}
+
+	sessionsPreview(
+		params: { sessionKey: string; limit?: number },
+		options?: RequestOptions,
+	): Promise<SessionsPreviewResult> {
+		return this.#call<SessionsPreviewResult>(METHOD.sessionsPreview, params, options);
 	}
 
 	sessionsActive(
@@ -213,12 +230,45 @@ export class ControlPlaneMethods {
 		return this.#call(METHOD.sessionsPatch, params, options);
 	}
 
+	sessionsMetadataPatch(
+		params: SessionsMetadataPatchParams,
+		options?: RequestOptions,
+	): Promise<SessionsMetadataPatchResult> {
+		return this.#call<SessionsMetadataPatchResult>(METHOD.sessionsMetadataPatch, params, {
+			...options,
+			queueIfOffline: false,
+		});
+	}
+
+	sessionsExport(
+		params: { sessionKey: string; format?: SessionExportFormat },
+		options?: RequestOptions,
+	): Promise<SessionsExportResult> {
+		return this.#call<SessionsExportResult>(METHOD.sessionsExport, params, options);
+	}
+
+	sessionsPrune(
+		params: SessionsPruneParams,
+		options?: RequestOptions,
+	): Promise<SessionsPruneResult> {
+		return this.#call<SessionsPruneResult>(METHOD.sessionsPrune, params, {
+			...options,
+			queueIfOffline: false,
+		});
+	}
+
 	sessionsReset(params: { sessionKey: string }, options?: RequestOptions): Promise<unknown> {
 		return this.#call(METHOD.sessionsReset, params, options);
 	}
 
-	sessionsDelete(params: { sessionKey: string }, options?: RequestOptions): Promise<unknown> {
-		return this.#call(METHOD.sessionsDelete, params, options);
+	sessionsDelete(
+		params: { sessionKey: string },
+		options?: RequestOptions,
+	): Promise<SessionsDeleteResult> {
+		return this.#call<SessionsDeleteResult>(METHOD.sessionsDelete, params, {
+			...options,
+			queueIfOffline: false,
+		});
 	}
 
 	sessionsCompact(
