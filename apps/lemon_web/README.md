@@ -4,7 +4,7 @@ Phoenix web interface for the Lemon platform. Provides a real-time dashboard for
 
 ## Architecture Overview
 
-LemonWeb is a Phoenix 1.7 application inside an Elixir umbrella project. It uses Phoenix LiveView for interactive pages, Bandit as the HTTP server, vendored Phoenix JavaScript from umbrella dependencies, and Tailwind CSS loaded from CDN for styling.
+LemonWeb is a Phoenix 1.7 application inside an Elixir umbrella project. It uses Phoenix LiveView for interactive pages, Bandit as the HTTP server, and checked-in release assets for both Phoenix JavaScript and compiled Tailwind CSS. The page has no runtime CDN dependency.
 
 ### OTP Supervision Tree
 
@@ -69,10 +69,12 @@ Includes `RequireAccessToken` plug. When `LEMON_WEB_ACCESS_TOKEN` is set, reques
 The primary dashboard page. Provides a chat-style interface for sending prompts to Lemon agents and receiving streaming responses.
 
 **Features:**
+- Shared first-run readiness through `LemonCore.Setup.Readiness`; incomplete setup is explained before prompt or file persistence
 - Real-time streaming of assistant responses via PubSub deltas
 - Multi-file upload (up to 5 files, 20 MB each) with progress tracking and cancellation
 - Tool call visualization in collapsible detail panels
 - System notifications for run lifecycle events (started, completed, failed)
+- Active-run stop control through `LemonRouter.abort_run/2`
 - Message history capped at 250 messages
 
 **Session key resolution:**
@@ -85,12 +87,14 @@ The primary dashboard page. Provides a chat-style interface for sending prompts 
 - `:delta` -- Streams text into the current assistant message bubble
 - `:engine_action` -- Renders a tool call detail panel
 - `:run_completed` -- Finalizes the assistant message; shows error if the run failed
+- `:config_reloaded` / `:secret_changed` on the `"system"` topic -- Re-derives browser setup readiness
 
 **Submission flow:**
-1. User enters prompt and/or uploads files
-2. Files are persisted to the uploads directory with timestamped names
-3. Prompt is enriched with file paths and submitted via `LemonRouter.submit/1`
-4. Response streams back through PubSub events
+1. The shared readiness contract confirms config, secrets, provider, credential, and model are usable
+2. User enters a prompt and/or uploads files
+3. Files are persisted to the uploads directory with timestamped names
+4. Prompt is enriched with file paths and submitted via `LemonRouter.submit/1`
+5. Response streams back through PubSub events; **Stop** calls `LemonRouter.abort_run/2`
 
 ## Components
 
@@ -114,19 +118,21 @@ Shared function components auto-imported into all LiveViews:
 
 ### Layouts (`lib/lemon_web/components/layouts/`)
 
-- `root.html.heex` -- HTML shell with `<head>` (meta, CSRF token, Tailwind CDN, `app.js`), renders `@inner_content`
+- `root.html.heex` -- HTML shell with `<head>` (meta, CSRF token, bundled `app.css` and `app.js`) plus the skip-navigation link
 - `app.html.heex` -- Passthrough layout, renders `@inner_content` directly
 
 ## Static Assets and Frontend
 
-LemonWeb uses a small static frontend strategy with no local build tools (no esbuild, no Node.js):
+LemonWeb uses a small checked-in static frontend strategy with no runtime build tools:
 
-- **Tailwind CSS**: Loaded from `https://cdn.tailwindcss.com` in the root layout
+- **Tailwind CSS**: Precompiled and minified into `priv/static/assets/app.css`; release digests include it and runtime startup never contacts a CSS CDN
 - **Phoenix JS**: Vendored from `deps/phoenix/priv/static/phoenix.mjs` into `priv/static/assets/vendor/phoenix.mjs`
 - **Phoenix LiveView JS**: Vendored from `deps/phoenix_live_view/priv/static/phoenix_live_view.esm.js` into `priv/static/assets/vendor/phoenix_live_view.esm.js`
 - **app.js** (`priv/static/assets/app.js`): Client-side entry point that initializes the LiveSocket, generates stable per-tab session keys via `sessionStorage`, normalizes agent IDs, and strips token params from the URL after authentication
 
-Static files are served by `Plug.Static` at `/` for paths matching `~w(assets favicon.ico robots.txt)`.
+Static files are served by `Plug.Static` at `/` for paths matching
+`~w(assets favicon.ico favicon.svg robots.txt)`. The root layout declares the
+bundled SVG favicon explicitly, avoiding a first-load missing-favicon request.
 
 ## Authentication
 
@@ -222,17 +228,20 @@ config :lemon_web, :uploads_dir, Path.join(System.tmp_dir!(), "lemon_web_uploads
 ## Running
 
 ```bash
-# Start the entire umbrella (includes lemon_web)
-mix phx.server
+# Installed full release: start if needed, wait for Web health, and open browser
+lemon web
 
-# Or start with an interactive shell
-iex -S mix phx.server
+# Source checkout: same behavior
+./bin/lemon web
+
+# Print the address without opening a browser
+lemon web --no-open
 
 # Run lemon_web tests only
 mix test apps/lemon_web
 
-# Access the dashboard
-open http://localhost:4080
+# Contributor-only direct Phoenix path
+mix phx.server
 ```
 
 ## File Organization
@@ -271,6 +280,7 @@ apps/lemon_web/
 |-- priv/
 |   |-- static/
 |   |   |-- assets/
+|   |       |-- app.css                            # Precompiled Tailwind stylesheet
 |   |       |-- app.js                             # Client-side JS (LiveSocket init, session keys)
 |   |-- gettext/
 |       |-- .keep

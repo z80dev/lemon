@@ -10,6 +10,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- `lemon web [--no-open]` in source and full packaged launchers, with daemon
+  auto-start, exact Web health polling, browser opening, and actionable profile
+  or startup errors.
+- A shared `LemonCore.Setup.Readiness` contract plus a fail-closed Web first-run
+  guide, live config/secret refresh, active-run stop control, and accessible
+  responsive status/composer states.
+- Durable same-session heartbeats with idle-only recurring turns, queued-user
+  priority, missed-tick coalescing, pause/resume/clear lifecycle, restart-safe
+  fire claims, reset tombstones, logical session-key resolution, an admin
+  `sessions.heartbeat` API, and TUI `/heartbeat`/`/hb` commands.
 - Portable Hermes-compatible slash-command discovery metadata for channel and
   interactive clients, exposed through the read-only `commands.catalog`
   control-plane method while preserving Lemon's router/session ownership and
@@ -59,6 +69,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Lemon Web now ships compiled CSS inside the release instead of loading
+  Tailwind from a runtime CDN, so the local chat shell works offline.
+- Vendored Phoenix and LiveView browser clients now match the locked server
+  dependencies, removing the live asset-version mismatch warning.
+- Lemon Web declares and serves a bundled favicon instead of logging a missing
+  route on each new browser session.
 - Background and side-query public APIs now use stable content-free failure
   classifications; their control-plane RPCs allowlist lifecycle fields and
   return fixed bounded error codes/messages without provider terms, persisted

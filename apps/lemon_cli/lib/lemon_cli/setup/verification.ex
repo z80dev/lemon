@@ -28,9 +28,9 @@ defmodule LemonCli.Setup.Verification do
   """
 
   alias LemonAi.Models
-  alias LemonCore.Config.Modular
   alias LemonCore.Httpc
   alias LemonCore.Secrets
+  alias LemonCore.Setup.Readiness
 
   @live_timeout_ms 5_000
 
@@ -38,29 +38,9 @@ defmodule LemonCli.Setup.Verification do
   # `GET {base_url}/models` endpoint suitable for a setup smoke test.
   @live_check_apis [:openai_completions, :openai_responses]
 
-  @type step :: :config | :secrets | :provider
-
-  @type provider_state :: %{
-          required(:complete) => boolean(),
-          required(:provider) => String.t() | nil,
-          required(:model) => String.t() | nil,
-          required(:credential_ready) => boolean(),
-          required(:reason) =>
-            nil
-            | :missing_default_provider
-            | :missing_default_model
-            | :model_provider_mismatch
-            | :credential_not_usable
-        }
-
-  @type setup_state :: %{
-          required(:config) => %{required(:complete) => boolean(), required(:path) => String.t()},
-          required(:secrets) => %{
-            required(:complete) => boolean(),
-            required(:source) => atom() | nil
-          },
-          required(:provider) => provider_state()
-        }
+  @type step :: Readiness.step()
+  @type provider_state :: Readiness.provider_state()
+  @type setup_state :: Readiness.setup_state()
 
   @type verify_ok :: %{
           required(:provider) => String.t(),
@@ -87,103 +67,13 @@ defmodule LemonCli.Setup.Verification do
     * `:config_path` - config file to inspect (default: the global config)
   """
   @spec setup_state(keyword()) :: setup_state()
-  def setup_state(opts \\ []) do
-    config_path = Keyword.get(opts, :config_path) || Modular.global_path()
-    expanded = Path.expand(config_path)
-    settings = read_settings(expanded)
-
-    secrets_status = Secrets.status()
-
-    %{
-      config: %{complete: File.exists?(expanded), path: expanded},
-      secrets: %{
-        complete: secrets_status.configured == true,
-        source: secrets_status.source
-      },
-      provider: derive_provider(settings)
-    }
-  end
+  def setup_state(opts \\ []), do: Readiness.status(opts)
 
   @doc """
   Returns the steps of `state` that are not complete yet.
   """
   @spec pending_steps(setup_state()) :: [step()]
-  def pending_steps(state) do
-    Enum.reject([:config, :secrets, :provider], &Map.fetch!(state, &1).complete)
-  end
-
-  defp derive_provider(settings) do
-    defaults = settings["defaults"] || %{}
-    legacy_agent = settings["agent"] || %{}
-
-    provider = normalize_optional_string(defaults["provider"] || legacy_agent["provider"])
-    model = normalize_optional_string(defaults["model"] || legacy_agent["model"])
-
-    provider_cfg =
-      provider &&
-        get_in(settings, ["providers", provider])
-
-    provider_cfg = if is_map(provider_cfg), do: provider_cfg, else: %{}
-
-    {credential_ready?, credential_reason} = credential_state(provider, provider_cfg)
-
-    reason =
-      cond do
-        is_nil(provider) -> :missing_default_provider
-        is_nil(model) -> :missing_default_model
-        not credential_ready? -> credential_reason || :credential_not_usable
-        model_provider_mismatch?(provider, model) -> :model_provider_mismatch
-        true -> nil
-      end
-
-    %{
-      complete: is_nil(reason),
-      provider: provider,
-      model: model,
-      credential_ready: credential_ready?,
-      reason: reason
-    }
-  end
-
-  defp credential_state(nil, _provider_cfg), do: {false, :missing_default_provider}
-
-  defp credential_state(_provider, provider_cfg) do
-    refs =
-      provider_cfg
-      |> Map.take(["oauth_secret", "api_key_secret"])
-      |> Map.values()
-
-    inline_key = normalize_optional_string(provider_cfg["api_key"])
-
-    cond do
-      inline_key != nil ->
-        {true, nil}
-
-      Enum.any?(refs, &secret_usable?/1) ->
-        {true, nil}
-
-      true ->
-        {false, :credential_not_usable}
-    end
-  end
-
-  # A referenced credential is usable when the encrypted store can actually
-  # decrypt it (a present-but-undecryptable entry is not usable), or when a
-  # same-named environment variable carries it — the same resolution order
-  # `LemonCore.Secrets.resolve/2` uses at runtime.
-  defp secret_usable?(name) when is_binary(name) and name != "" do
-    match?({:ok, _}, Secrets.get(name, prefer_env: false, env_fallback: false)) or
-      match?({:ok, _, _}, Secrets.resolve(name, prefer_env: false))
-  end
-
-  defp secret_usable?(_), do: false
-
-  defp model_provider_mismatch?(provider, model) do
-    case String.split(model, ":", parts: 2) do
-      [prefix, _model_id] -> normalize_provider_name(prefix) != normalize_provider_name(provider)
-      [_only] -> false
-    end
-  end
+  def pending_steps(state), do: Readiness.pending_steps(state)
 
   # ──────────────────────────────────────────────────────────────────────────
   # Provider verification
@@ -433,7 +323,8 @@ defmodule LemonCli.Setup.Verification do
   # Shared helpers
   # ──────────────────────────────────────────────────────────────────────────
 
-  defp config_path(opts), do: Keyword.get(opts, :config_path) || Modular.global_path()
+  defp config_path(opts),
+    do: Keyword.get(opts, :config_path) || LemonCore.Config.Modular.global_path()
 
   defp read_settings(path) do
     with {:ok, content} <- File.read(path),

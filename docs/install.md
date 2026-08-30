@@ -179,3 +179,23 @@ high-entropy `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` used to start that runtime.
 Start persistent runtimes separately with `./bin/lemon --daemon`; every runtime
 started by `./bin/lemon-tui` is stopped with the TUI, even when a token was
 preconfigured.
+
+## Browser interface
+
+The full release profile also includes a local browser interface. The launcher
+starts the daemon if necessary, waits for the Web health check, prints the URL,
+and opens the default browser:
+
+```bash
+lemon web
+```
+
+Use `lemon web --no-open` on SSH/headless systems. A source checkout uses
+`./bin/lemon web`. The browser checks the same config, secrets, provider,
+credential, and model readiness as setup. If anything is missing it lists the
+pending items, disables prompt/file submission, and points back to `lemon
+setup`; it never waits for a failed agent request to explain first-run setup.
+
+The Web UI is not bundled in `lemon_runtime_min`. Reinstall with
+`LEMON_PROFILE=full` when browser access is wanted. See
+[Use Lemon in a Browser](user-guide/web.md) for access control and recovery.

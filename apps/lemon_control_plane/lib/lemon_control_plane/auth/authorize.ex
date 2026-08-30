@@ -304,6 +304,7 @@ defmodule LemonControlPlane.Auth.Authorize do
         "sessions.reset",
         "sessions.delete",
         "sessions.compact",
+        "sessions.heartbeat",
         "update.run"
       ]
   end

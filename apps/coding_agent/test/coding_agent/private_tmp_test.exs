@@ -18,7 +18,7 @@ defmodule CodingAgent.PrivateTmpTest do
     test "is a cached 0700 directory directly beneath the system temp dir" do
       {:ok, root} = PrivateTmp.root()
 
-      assert Path.dirname(root) == System.tmp_dir!()
+      assert Path.dirname(root) == Path.expand(System.tmp_dir!())
       assert String.starts_with?(Path.basename(root), "lemon-private-")
 
       stat = File.lstat!(root)
@@ -252,6 +252,15 @@ defmodule CodingAgent.PrivateTmpTest do
   end
 
   describe "reserve_dir/3" do
+    test "accepts an equivalent parent with a trailing separator", %{tmp_dir: tmp_dir} do
+      parent = tmp_dir <> "/"
+      {:ok, dir} = PrivateTmp.reserve_dir(parent, "test-trailing-separator")
+      on_exit(fn -> File.rm_rf(dir) end)
+
+      assert Path.dirname(dir) == Path.expand(parent)
+      assert band(File.lstat!(dir).mode, 0o777) == 0o700
+    end
+
     test "reserves an exactly-0700 directory beneath the given parent" do
       {:ok, root} = PrivateTmp.root()
       {:ok, dir} = PrivateTmp.reserve_dir(root, "test-dir")

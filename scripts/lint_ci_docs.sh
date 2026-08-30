@@ -1402,6 +1402,19 @@ else
   fail "J30: release checklist does not document all canonical local test lanes"
 fi
 
+# ── J30a: current Hermes source pin and machine-readable docs ────────────────
+if "$ROOT/scripts/verify_hermes_parity_sources"; then
+  pass "J30a: Hermes parity audit pins a reproducible official source"
+else
+  fail "J30a: Hermes parity source pin or current-audit navigation is stale"
+fi
+
+if "$ROOT/scripts/generate_docs_llms.py" --check; then
+  pass "J30b: machine-readable docs assets match their Markdown sources"
+else
+  fail "J30b: machine-readable docs assets are stale"
+fi
+
 # ── J31: OSV supply-chain scan parity must stay wired and documented ────────
 if python3 - "$ROOT" <<'PYEOF'
 from pathlib import Path
@@ -1422,7 +1435,6 @@ requirements = [
             (".github/workflows/osv-scanner.yml", "--lockfile=tools/diagrams/package-lock.json"),
             (".github/workflows/osv-scanner.yml", "fail-on-vuln: false"),
             ("docs/release/release_checklist_and_support_policy.md", "OSV Scanner workflow"),
-            ("docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md", "94c523f0c"),
         ],
     ),
 ]
@@ -1462,7 +1474,6 @@ requirements = [
     ("docs/release/release_checklist_and_support_policy.md", "History Check workflow"),
     ("docs/release/release_checklist_and_support_policy.md", "unrelated-history PRs"),
     ("docs/testing.md", "history-check.yml"),
-    ("docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md", "94c523f0c"),
 ]
 contents = {}
 missing = []

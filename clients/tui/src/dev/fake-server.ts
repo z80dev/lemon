@@ -72,6 +72,7 @@ const DEFAULT_METHODS = [
 	"sessions.reset",
 	"sessions.delete",
 	"sessions.compact",
+	"sessions.heartbeat",
 	"session.detail",
 	"commands.catalog",
 	"agents.list",

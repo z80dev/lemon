@@ -72,6 +72,7 @@ and control plane authoritative:
 | `/status`, `/usage` | Show control-plane health/runtime and usage/quota summaries. |
 | `/agents`, `/tasks` | Show the Lemon agent directory and active/recent subagent tasks. |
 | `/compress` | Compact the current session through `sessions.compact`. |
+| `/heartbeat every 10m <prompt>`, `/hb ...` | Persist one recurring prompt in the current conversation; `/heartbeat status`, `pause`, `resume`, and `clear` manage it through `sessions.heartbeat`. Due ticks wait for idle and queued user input wins. |
 | `/bg <prompt>` or `/bg start <prompt>` | Start background work through `background.start`, inheriting the TUI's durable session key, cwd, model, and reasoning level. The full returned id is displayed intact for lifecycle commands. |
 | `/bg list [status]` | List durable background runs, optionally filtered by lifecycle status. |
 | `/bg status <id>` | Inspect one background run without truncating its id. |

@@ -57,6 +57,7 @@ defmodule CodingAgent.Session do
   alias CodingAgent.Session.CompactionLifecycle
   alias CodingAgent.Session.CompactionManager
   alias CodingAgent.Session.EventHandler
+  alias CodingAgent.Session.Heartbeat
   alias CodingAgent.Session.Lifecycle
   alias CodingAgent.Session.Notifier
   alias CodingAgent.Session.OverflowRecovery
@@ -100,6 +101,12 @@ defmodule CodingAgent.Session do
     :context_frozen,
     :is_streaming,
     :pending_prompt_timer_ref,
+    :heartbeat,
+    :heartbeat_due,
+    :heartbeat_timer_ref,
+    :heartbeat_timer_token,
+    :heartbeat_idle_timer_ref,
+    :heartbeat_idle_token,
     :event_listeners,
     :event_streams,
     :abort_signal,
@@ -165,6 +172,12 @@ defmodule CodingAgent.Session do
           context_frozen: boolean(),
           is_streaming: boolean(),
           pending_prompt_timer_ref: reference() | nil,
+          heartbeat: Heartbeat.t() | nil,
+          heartbeat_due: boolean(),
+          heartbeat_timer_ref: reference() | nil,
+          heartbeat_timer_token: reference() | nil,
+          heartbeat_idle_timer_ref: reference() | nil,
+          heartbeat_idle_token: reference() | nil,
           event_listeners: [{pid(), reference()}],
           event_streams: %{reference() => %{pid: pid(), stream: pid()}},
           abort_signal: reference() | nil,
@@ -528,7 +541,8 @@ defmodule CodingAgent.Session do
   @doc """
   Reset the session, clearing all messages and restarting.
   """
-  @spec reset(GenServer.server()) :: :ok | {:error, :busy}
+  @spec reset(GenServer.server()) ::
+          :ok | {:error, :busy | {:heartbeat_persistence_failed, term()}}
   def reset(session) do
     GenServer.call(session, :reset)
   end
@@ -605,6 +619,37 @@ defmodule CodingAgent.Session do
     GenServer.call(session, :save)
   end
 
+  @doc "Return the current same-session recurring heartbeat configuration."
+  @spec heartbeat_status(GenServer.server()) :: {:ok, map()}
+  def heartbeat_status(session) do
+    GenServer.call(session, :heartbeat_status)
+  end
+
+  @doc "Set or replace the same-session recurring heartbeat."
+  @spec heartbeat_set(GenServer.server(), String.t(), pos_integer()) ::
+          {:ok, map()} | {:error, term()}
+  def heartbeat_set(session, prompt, interval_seconds) do
+    GenServer.call(session, {:heartbeat_set, prompt, interval_seconds})
+  end
+
+  @doc "Pause the current heartbeat without clearing its prompt."
+  @spec heartbeat_pause(GenServer.server()) :: {:ok, map()} | {:error, term()}
+  def heartbeat_pause(session) do
+    GenServer.call(session, :heartbeat_pause)
+  end
+
+  @doc "Resume and re-anchor a paused heartbeat."
+  @spec heartbeat_resume(GenServer.server()) :: {:ok, map()} | {:error, term()}
+  def heartbeat_resume(session) do
+    GenServer.call(session, :heartbeat_resume)
+  end
+
+  @doc "Clear the current heartbeat."
+  @spec heartbeat_clear(GenServer.server()) :: {:ok, map()} | {:error, term()}
+  def heartbeat_clear(session) do
+    GenServer.call(session, :heartbeat_clear)
+  end
+
   @doc """
   Create a summary for the current branch.
 
@@ -640,7 +685,8 @@ defmodule CodingAgent.Session do
       state.session_manager,
       state.cwd,
       state.register_session,
-      state.session_registry
+      state.session_registry,
+      state.session_key
     )
 
     # Emit introspection event for session start
@@ -666,7 +712,7 @@ defmodule CodingAgent.Session do
     maybe_subscribe_exec_approvals(state)
     subscribe_config_reload()
 
-    {:ok, state}
+    {:ok, Heartbeat.restore(state)}
   end
 
   @spec handle_call(term(), GenServer.from(), t()) :: {:reply, term(), t()}
@@ -871,8 +917,8 @@ defmodule CodingAgent.Session do
 
   def handle_call(:reset, _from, state) do
     case Lifecycle.reset(state, @reset_abort_wait_ms) do
-      {:ok, new_state} -> {:reply, :ok, new_state}
-      {:error, :busy, new_state} -> {:reply, {:error, :busy}, new_state}
+      {:ok, new_state} -> {:reply, :ok, Heartbeat.clear_runtime(new_state)}
+      {:error, reason, new_state} -> {:reply, {:error, reason}, new_state}
     end
   end
 
@@ -997,6 +1043,26 @@ defmodule CodingAgent.Session do
     end
   end
 
+  def handle_call(:heartbeat_status, _from, state) do
+    {:reply, {:ok, Heartbeat.status(state.heartbeat)}, state}
+  end
+
+  def handle_call({:heartbeat_set, prompt, interval_seconds}, _from, state) do
+    mutate_heartbeat(state, :set, fn -> Heartbeat.set(state, prompt, interval_seconds) end)
+  end
+
+  def handle_call(:heartbeat_pause, _from, state) do
+    mutate_heartbeat(state, :pause, fn -> Heartbeat.pause(state) end)
+  end
+
+  def handle_call(:heartbeat_resume, _from, state) do
+    mutate_heartbeat(state, :resume, fn -> Heartbeat.resume(state) end)
+  end
+
+  def handle_call(:heartbeat_clear, _from, state) do
+    mutate_heartbeat(state, :clear, fn -> Heartbeat.clear(state) end)
+  end
+
   def handle_call({:summarize_branch, opts}, _from, state) do
     case BackgroundTasks.summarize_branch(state, opts, branch_summary_callbacks()) do
       {:ok, new_state} -> {:reply, :ok, new_state}
@@ -1076,9 +1142,13 @@ defmodule CodingAgent.Session do
       Notifier.complete_event_streams(state, {:canceled, :assistant_aborted})
 
       {:noreply,
-       %{state | steering_queue: :queue.new(), follow_up_queue: :queue.new(), event_streams: %{}}}
+       state
+       |> Map.put(:steering_queue, :queue.new())
+       |> Map.put(:follow_up_queue, :queue.new())
+       |> Map.put(:event_streams, %{})
+       |> maybe_schedule_due_heartbeat()}
     else
-      {:noreply, state}
+      {:noreply, maybe_schedule_due_heartbeat(state)}
     end
   end
 
@@ -1107,7 +1177,11 @@ defmodule CodingAgent.Session do
 
         # Process the event and update state
         new_state = handle_agent_event(event, state)
-        {:noreply, CompactionManager.clear_overflow_recovery_state_on_terminal(event, new_state)}
+
+        {:noreply,
+         event
+         |> CompactionManager.clear_overflow_recovery_state_on_terminal(new_state)
+         |> maybe_schedule_due_heartbeat()}
     end
   end
 
@@ -1125,7 +1199,10 @@ defmodule CodingAgent.Session do
     # Process the event and update state
     new_state = handle_agent_event(event, state)
 
-    {:noreply, CompactionManager.clear_overflow_recovery_state_on_terminal(event, new_state)}
+    {:noreply,
+     event
+     |> CompactionManager.clear_overflow_recovery_state_on_terminal(new_state)
+     |> maybe_schedule_due_heartbeat()}
   end
 
   def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
@@ -1152,7 +1229,7 @@ defmodule CodingAgent.Session do
       |> Map.put(:steering_queue, :queue.new())
       |> Map.put(:follow_up_queue, :queue.new())
 
-    {:noreply, state}
+    {:noreply, maybe_schedule_due_heartbeat(state)}
   end
 
   def handle_info({:store_branch_summary, from_id, summary}, state) do
@@ -1167,24 +1244,45 @@ defmodule CodingAgent.Session do
   end
 
   def handle_info({:auto_compaction_result, signature, result}, state) do
-    {:noreply, CompactionLifecycle.handle_result(state, signature, result, session_callbacks())}
+    {:noreply,
+     state
+     |> CompactionLifecycle.handle_result(signature, result, session_callbacks())
+     |> maybe_schedule_due_heartbeat()}
   end
 
   def handle_info({:overflow_recovery_result, signature, result}, state) do
-    {:noreply, OverflowRecovery.handle_result(state, signature, result, session_callbacks())}
+    {:noreply,
+     state
+     |> OverflowRecovery.handle_result(signature, result, session_callbacks())
+     |> maybe_schedule_due_heartbeat()}
   end
 
   def handle_info({:auto_compaction_task_timeout, monitor_ref}, state) do
     case CompactionLifecycle.handle_timeout(state, monitor_ref, session_callbacks()) do
-      {:handled, new_state} -> {:noreply, new_state}
+      {:handled, new_state} -> {:noreply, maybe_schedule_due_heartbeat(new_state)}
       :stale -> {:noreply, state}
     end
   end
 
   def handle_info({:overflow_recovery_task_timeout, monitor_ref}, state) do
     case OverflowRecovery.handle_timeout(state, monitor_ref, session_callbacks()) do
-      {:handled, new_state} -> {:noreply, new_state}
+      {:handled, new_state} -> {:noreply, maybe_schedule_due_heartbeat(new_state)}
       :stale -> {:noreply, state}
+    end
+  end
+
+  def handle_info({:session_heartbeat_due, token}, state) do
+    state = state |> Heartbeat.mark_due(token) |> maybe_schedule_due_heartbeat()
+    {:noreply, state}
+  end
+
+  def handle_info({:session_heartbeat_idle, token}, state) do
+    case Heartbeat.consume_idle_check(state, token) do
+      {:stale, state} ->
+        {:noreply, state}
+
+      {:current, state} ->
+        {:noreply, maybe_dispatch_heartbeat(state)}
     end
   end
 
@@ -1260,6 +1358,8 @@ defmodule CodingAgent.Session do
   @spec terminate(term(), t()) :: :ok
   @impl true
   def terminate(_reason, state) do
+    _ = Heartbeat.clear_runtime(state)
+
     _ =
       CompactionManager.maybe_kill_background_task(
         state,
@@ -1837,6 +1937,92 @@ defmodule CodingAgent.Session do
     EventHandler.handle(event, state, event_handler_callbacks())
   end
 
+  defp mutate_heartbeat(%{context_frozen: true} = state, _action, _fun) do
+    {:reply, {:error, :ephemeral_session}, state}
+  end
+
+  defp mutate_heartbeat(_state, action, fun) do
+    case fun.() do
+      {:ok, new_state} ->
+        heartbeat_status = Heartbeat.status(new_state.heartbeat)
+        emit_heartbeat_event(new_state, action, heartbeat_status)
+        {:reply, {:ok, heartbeat_status}, new_state}
+
+      {:error, reason, unchanged_state} ->
+        {:reply, {:error, reason}, unchanged_state}
+    end
+  end
+
+  defp maybe_schedule_due_heartbeat(%{heartbeat_due: true} = state),
+    do: Heartbeat.schedule_idle_check(state)
+
+  defp maybe_schedule_due_heartbeat(state), do: state
+
+  defp maybe_dispatch_heartbeat(%{heartbeat_due: false} = state), do: state
+  defp maybe_dispatch_heartbeat(%{heartbeat: nil} = state), do: state
+
+  defp maybe_dispatch_heartbeat(state) do
+    cond do
+      state.is_streaming or not is_nil(state.pending_prompt_timer_ref) or
+        state.auto_compaction_in_progress or state.overflow_recovery_in_progress ->
+        state
+
+      Heartbeat.queued_user_input?() ->
+        Heartbeat.schedule_idle_check(state)
+
+      true ->
+        dispatch_heartbeat(state)
+    end
+  end
+
+  defp dispatch_heartbeat(state) do
+    case Heartbeat.claim_fire(state) do
+      {:ok, prompt, claimed_state} ->
+        {claimed_state, recalled} = refresh_turn_context(claimed_state, prompt)
+
+        message =
+          prompt
+          |> State.build_prompt_message()
+          |> attach_recalled_context(recalled)
+
+        timer_ref =
+          Process.send_after(
+            self(),
+            {:do_prompt, message, claimed_state.system_prompt},
+            @prompt_defer_ms
+          )
+
+        heartbeat_status = Heartbeat.status(claimed_state.heartbeat)
+        emit_heartbeat_event(claimed_state, :fired, heartbeat_status)
+        State.begin_prompt(claimed_state, timer_ref)
+
+      {:error, _reason, retry_state} ->
+        retry_state
+    end
+  end
+
+  defp emit_heartbeat_event(state, action, heartbeat_status) do
+    event = {:session_heartbeat, %{action: action, heartbeat: heartbeat_status}}
+    Notifier.broadcast_event(state, event)
+
+    Introspection.record(
+      :session_heartbeat,
+      %{
+        action: action,
+        status: heartbeat_status.status,
+        interval_seconds: heartbeat_status.interval_seconds,
+        fire_count: heartbeat_status.fire_count,
+        prompt_bytes:
+          if(is_binary(heartbeat_status.prompt), do: byte_size(heartbeat_status.prompt), else: 0)
+      },
+      run_id: state.run_id,
+      session_key: state.session_key,
+      agent_id: state.agent_id,
+      engine: "lemon",
+      provenance: :direct
+    )
+  end
+
   @spec event_handler_callbacks() :: event_handler_callbacks()
   defp event_handler_callbacks do
     %{
@@ -1862,8 +2048,15 @@ defmodule CodingAgent.Session do
   defp restore_messages_from_session(session),
     do: Persistence.restore_messages_from_session(session)
 
-  defp maybe_register_session(session_manager, cwd, register_session, registry),
-    do: Persistence.maybe_register_session(session_manager, cwd, register_session, registry)
+  defp maybe_register_session(session_manager, cwd, register_session, registry, session_key),
+    do:
+      Persistence.maybe_register_session(
+        session_manager,
+        cwd,
+        register_session,
+        registry,
+        session_key
+      )
 
   defp cancel_pending_prompt(state), do: State.cancel_pending_prompt(state)
 

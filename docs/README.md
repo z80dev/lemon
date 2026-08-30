@@ -39,11 +39,13 @@ failures.
 | Doc | What it covers |
 |-----|---------------|
 | [index.md](index.md) | Public docs-site homepage: positioning, entry points, current launch stage |
-| [install.md](install.md) | Short install landing page for source install and release-artifact status |
+| [getting-started/quickstart.md](getting-started/quickstart.md) | Task-first release install, provider-backed chat proof, session continuity, next features, and recovery |
+| [install.md](install.md) | Verified release install, source install, first-run setup, platforms, updates, and uninstall |
 | [compare.md](compare.md) | Product comparison against adjacent assistant, CLI, harness, and self-hosted runtime categories |
-| [demo.md](demo.md) | Deterministic local demo paths for runtime health, Web ops, TUI, support bundles, and docs quality |
+| [demo.md](demo.md) | Deterministic local demo paths for runtime health, session Web UI, TUI, support bundles, and docs quality |
 | [support.md](support.md) | Public support boundaries, issue data requirements, support-bundle commands, and security-reporting path |
 | [user-guide/setup.md](user-guide/setup.md) | Full setup walkthrough: install, configure, run, Telegram setup |
+| [user-guide/web.md](user-guide/web.md) | Launch the local browser, complete readiness, stop runs, configure access, and recover errors |
 | [user-guide/migrate-from-hermes.md](user-guide/migrate-from-hermes.md) | Preview-first migration path for Hermes memories, skills, config, secrets, and session recall |
 | [user-guide/skills.md](user-guide/skills.md) | Skills: listing, installing, inspecting, synthesizing drafts |
 | [user-guide/memory.md](user-guide/memory.md) | Memory documents, session search, retention management |
@@ -79,6 +81,7 @@ failures.
 | [context.md](context.md) | Context management, compaction, branch summarization, token budgets |
 | [subagent-parent-questions.md](subagent-parent-questions.md) | Design for the `ask_parent` clarification path from child subagents back to their parent session |
 | [reviews/assistant-runtime-polish-audit-2026-08-30.md](reviews/assistant-runtime-polish-audit-2026-08-30.md) | Assistant-focused audit of tasks, delegated agents, async lifecycle, joins, skills, and background work |
+| [reviews/hermes-web-setup-audit-2026-08-30.md](reviews/hermes-web-setup-audit-2026-08-30.md) | Source-grounded Hermes comparison for installation, setup, Web/desktop UX, lifecycle, migration, docs, and accessibility |
 | [runtime-hot-reload.md](runtime-hot-reload.md) | Hot code reload system for live-patching without restarts |
 | [telemetry.md](telemetry.md) | Telemetry events, observability, correlation IDs, monitoring |
 
@@ -86,7 +89,7 @@ failures.
 
 - [`docs/skills.md`](skills.md)
 - [`docs/compare.md`](compare.md) - Lemon positioning against hosted assistants, single-engine CLIs, agent harnesses, and self-hosted automation
-- [`docs/demo.md`](demo.md) - Local deterministic demo flows for runtime, Web operations, TUI, support bundles, and docs quality
+- [`docs/demo.md`](demo.md) - Local deterministic demo flows for runtime, session Web UI, TUI, support bundles, and docs quality
 - [`docs/support.md`](support.md) - Public support policy landing page and issue-prep checklist
 - [`docs/plans/lemon-1.0-mainstream-readiness.md`](plans/lemon-1.0-mainstream-readiness.md) - Hermes-on-BEAM product goal, readiness plan, and parity execution ledger
 - [`docs/plans/lemon-1.0-fresh-install-proof-2026-05-11.md`](plans/lemon-1.0-fresh-install-proof-2026-05-11.md) - Source-dev fresh install proof for the Lemon 1.0 launch goal
@@ -94,7 +97,8 @@ failures.
 - [`docs/plans/lemon-1.0-interface-supportability-audit-2026-05-11.md`](plans/lemon-1.0-interface-supportability-audit-2026-05-11.md) - Interface supportability audit for Web, TUI, Telegram, Discord, and the control plane
 - [`docs/plans/lemon-1.0-interface-proof-pack-2026-05-11.md`](plans/lemon-1.0-interface-proof-pack-2026-05-11.md) - Release-candidate proof pack for automated TUI, Web, and Telegram-adjacent interface coverage
 - [`docs/plans/lemon-1.0-completion-audit-2026-05-12.md`](plans/lemon-1.0-completion-audit-2026-05-12.md) - Prompt-to-artifact completion audit and product proof blockers
-- [`docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md`](plans/lemon-hermes-feature-parity-matrix-2026-05-12.md) - Source-grounded Lemon-vs-Hermes feature parity matrix and launch gap ledger
+- [`docs/plans/lemon-hermes-gap-audit-2026-08-11.md`](plans/lemon-hermes-gap-audit-2026-08-11.md) - Current source-pinned Lemon-vs-Hermes functionality, setup, Web, CLI, and documentation audit
+- [`docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md`](plans/lemon-hermes-feature-parity-matrix-2026-05-12.md) - Historical May Lemon-vs-Hermes feature matrix
 - [`docs/plans/lemon-channel-command-parity-matrix-2026-05-12.md`](plans/lemon-channel-command-parity-matrix-2026-05-12.md) - Telegram and Discord command-surface comparison against Hermes messaging slash commands
 - [`docs/plans/lemon-sim-platform-mission-2026-05-12.md`](plans/lemon-sim-platform-mission-2026-05-12.md) - LemonSim mission for watchable Werewolf and Vending Bench 2.0
 - [`docs/plans/lemon-hermes-agent-harness-parity-scorecard.md`](plans/lemon-hermes-agent-harness-parity-scorecard.md) - Hermes-class agent harness parity scorecard
@@ -144,3 +148,4 @@ All diagrams are in `docs/diagrams/` as both Excalidraw source and exported SVG:
 3. **Keep `AGENTS.md` short and operational** — place durable implementation details in `docs/` files.
 4. **Update diagrams** when architecture changes — edit the `.excalidraw` source, export to `.svg`.
 5. **Review cycle**: docs are checked for staleness based on the catalog's canonical `last_reviewed` and `max_age_days` values.
+6. **Regenerate machine-readable docs** with `scripts/generate_docs_llms.py`; `scripts/generate_docs_llms.py --check` verifies `docs/public/llms.txt` and `llms-full.txt` are current.

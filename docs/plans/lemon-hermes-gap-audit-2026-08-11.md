@@ -1,316 +1,252 @@
-# Lemon ↔ Hermes Deep Gap Audit — 2026-08-11
+# Lemon ↔ Hermes Functionality and UX Gap Audit
 
-Status: point-in-time audit (refreshes the 2026-05-12 parity matrix)
+Status: current rolling audit; refreshed 2026-08-30. This supersedes the
+findings in the original 2026-08-11 revision of this file. The May
+[feature matrix](lemon-hermes-feature-parity-matrix-2026-05-12.md) is retained
+as historical evidence, not current upstream truth.
 
-## Method and baseline drift
+## Source baseline and reproducibility
 
-- Hermes source: `/home/z80/dev/hermes-agent`, working tree at `0713fb2ab`
-  (2026-08-11, ~82 commits behind `origin/main` — effectively current).
-- Lemon source: this repo at `0810fc0b` (post platform-split rename, D15).
-- The prior ledger (`lemon-hermes-feature-parity-matrix-2026-05-12.md`) was
-  pinned to Hermes `94c523f0c`. **Hermes has landed ~13,000 commits since that
-  baseline.** This audit does not restate the old matrix row-by-row; it
-  identifies (a) new Hermes surfaces the matrix has never seen, (b) the
-  largest standing gaps, (c) Lemon-only advantages, and (d) recommended
-  priorities.
-- Evidence: five parallel code-inventory passes (Hermes runtime; Hermes
-  learning loop/automation; Hermes channels/UX; Lemon runtime/channels; Lemon
-  memory/automation/sim), plus docs diffs `94c523f0c..origin/main`.
+The focused [runtime functionality audit](../reviews/hermes-runtime-functionality-audit-2026-08-30.md)
+records the implementation evidence for durable same-session heartbeats and
+the remaining harness-level gaps found during this refresh.
 
-## Headline verdict
+This refresh uses official upstream source and documentation, not a local
+Hermes checkout:
 
-Lemon has genuinely closed or exceeded several May-era gaps (cron engine,
-goal loops, kanban dispatch, skills self-improvement pipeline, MCP
-client/server, multi-engine execution, deterministic eval arenas, contract
-test kits). But Hermes is compounding fast on **surface area** (34 messaging
-platforms, desktop app, egress proxy, secrets managers, voice stack) and on
-**agent-loop refinement** (three-way interruption, tiered tool disclosure,
-programmatic tool calling, credential pools, cache-aware background
-learning). The "Hermes, but better, on the BEAM" claim currently holds for
-runtime operability, benchmarking, and multi-agent simulation; it does not
-yet hold for channel breadth, desktop/voice UX, provider resilience
-plumbing, ecosystem distribution, or install friction.
+- Hermes repository: [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent)
+- Hermes `main`: [`4f22543509d1b91dc45bcb369447126c5eb14fb7`](https://github.com/NousResearch/hermes-agent/commit/4f22543509d1b91dc45bcb369447126c5eb14fb7),
+  committed `2026-08-30T09:03:57-07:00`
+- Hermes product version: `v0.20.6`, from the pinned
+  [`pyproject.toml`](https://github.com/NousResearch/hermes-agent/blob/4f22543509d1b91dc45bcb369447126c5eb14fb7/pyproject.toml)
+- Official docs: [documentation home](https://hermes-agent.nousresearch.com/docs/),
+  [curated machine index](https://hermes-agent.nousresearch.com/docs/llms.txt),
+  and the pinned
+  [`website/docs`](https://github.com/NousResearch/hermes-agent/tree/4f22543509d1b91dc45bcb369447126c5eb14fb7/website/docs)
+- Lemon source: `64092542f523c24b032a0789516a5366a943ac8a`
+- Observation date: `2026-08-30`
 
----
+The upstream snapshot contains 436 tracked files under `website/docs`.
+[`hermes-upstream-baseline.json`](hermes-upstream-baseline.json) records these
+values in machine-readable form. Run
+`scripts/verify_hermes_parity_sources` for the deterministic repository check,
+or `scripts/verify_hermes_parity_sources --remote` when intentionally refreshing
+the audit. Remote mode fails when official `main` has moved so a changing target
+cannot silently become a supposedly current comparison.
 
-## 1. New Hermes surfaces since the May baseline (not tracked in the old matrix)
+The older local checkouts observed during this refresh were stale and were not
+used as authority. Hermes changes quickly; every upstream source link below is
+therefore either an official live documentation URL or a permalink at the exact
+commit above.
 
-These are net-new or newly documented upstream; each needs an explicit
-in-scope / out-of-scope decision rather than silent omission from the ledger:
+## Scope and status vocabulary
 
-| Surface | What it is | Hermes evidence |
+This audit asks a user-centered question: “What non-transport work can a Hermes
+user do, and can a Lemon user complete the same job with comparable setup,
+discoverability, safety, and lifecycle support?” Messaging-platform count is
+deliberately excluded for now. Features incidental to a channel, such as voice
+mode or session handoff, remain in scope when they are general product
+functionality.
+
+Statuses mean:
+
+- **Parity+** — Lemon covers the job and has a meaningful additional advantage.
+- **Near** — core behavior exists; remaining differences are bounded UX or edge
+  cases.
+- **Partial** — useful primitives exist, but a normal user cannot complete the
+  whole Hermes workflow through a coherent supported surface.
+- **Missing** — no supported end-to-end Lemon workflow was found.
+- **Different** — both products solve the problem, with materially different
+  strengths; neither is a drop-in substitute.
+
+Priority is the Lemon product gap, not a judgment about upstream quality:
+**High** blocks the “anything I can do in Hermes” goal for common daily use;
+**Medium** is important but can follow the product spine; **Low** is specialized
+or intentionally deferrable.
+
+## Executive verdict
+
+Lemon is no longer missing the central harness mechanics highlighted on
+2026-08-11. It now has programmatic tool calling, progressive tool disclosure,
+three-way interruption, live provider and credential failover, and the cron
+quality features that audit proposed. Those are real closures, not roadmap
+claims.
+
+The remaining difference is chiefly **product integration**. Hermes packages a
+broad runtime behind one installer, one extensive CLI, a native desktop, a
+machine-management dashboard, profiles presented as durable specialist bots,
+rich session lifecycle commands, and unusually thorough user documentation.
+Lemon exposes a strong BEAM runtime, TUI, control plane, automation, memory,
+skills, browser, media, and node execution, but many capabilities are source-only,
+preview-only, split across Mix tasks and JSON-RPC, or absent from the Web and
+packaged CLI. Matching a Python module is no longer the main task; making the
+whole system legible and operable by a new user is.
+
+## Corrections to the 2026-08-11 audit
+
+These old gaps are closed or materially changed at the Lemon baseline. They
+must not be copied into new plans.
+
+| Old finding | Current Lemon evidence | Current boundary |
 | --- | --- | --- |
-| Hermes Desktop | Electron app (macOS/Win/Linux), onboarding, chat, HUD, command palette, starmap, plugin SDK; Tauri bootstrap installer | `apps/desktop/` (1,561 files), `apps/bootstrap-installer/`, `docs/user-guide/desktop.md` |
-| Egress proxy ("iron proxy") | Outbound credential-injection firewall for remote sandboxes; sandbox only holds opaque proxy tokens, real keys never leave host | `website/docs/user-guide/egress/`, `agent/proxy_sources/iron_proxy.py` |
-| Secrets managers | 1Password, Bitwarden SM, arbitrary-command secret sources; managed scope (admin-pinned, user-immutable config) | `agent/secret_sources/`, `user-guide/secrets/`, `user-guide/managed-scope.md` |
-| New messaging platforms | IRC, ntfy, Photon (iMessage sidecar), Raft, Relay, Buzz (Nostr), A2A (agent-to-agent), WhatsApp Cloud API — total now ~34 | `plugins/platforms/`, `gateway/platforms/` |
-| Relay connector protocol | Gateway dials out over one authenticated WS to a connector holding bot tokens; per-connector capability negotiation; works behind NAT | `gateway/relay/`, `docs/relay-connector-contract.md` |
-| Multi-profile gateways | Many isolated profiles (own tokens/sessions/memory) as managed services on one machine; profile routing per guild/channel/thread | `gateway/profile_routing.py`, `user-guide/multi-profile-gateways.md` |
-| Session heartbeats | `/heartbeat every 10m <prompt>` — recurring prompt re-entering the *same session* when idle (distinct from cron) | `user-guide/features/heartbeat.md` |
-| Mixture of Agents | Named MoA presets that appear as selectable models; reference-model fan-out per turn, Hermes loop keeps tool control | `agent/moa_loop.py` (2,384 lines) |
-| Tool search | Tiered progressive tool disclosure: 3 bridge tools replace MCP/plugin tool schemas when catalogs blow the context budget | `tools/tool_search.py` |
-| Deliverable mode | Generated charts/PDFs/spreadsheets shipped as native attachments per platform | `user-guide/features/deliverable-mode.md` |
-| Computer use | Background desktop control (cua-driver) that doesn't steal cursor/focus | `tools/computer_use_tool.py` |
-| Wake word + voice mode | "Hey Hermes" on CLI/TUI/desktop; CLI push-to-talk/VAD; Discord voice channels (listen + speak); streaming TTS | `tools/wake_word.py`, `tools/voice_mode.py`, discord `voice_mixer.py` |
-| Import from other agents | One-command import of `~/.claude` / `~/.codex` (instructions, allowlists, MCP servers, skills, memories) | `hermes import-agent` |
-| Automation blueprints + suggestions | Parameterized automations rendered as forms/slash-commands; consent-first suggestion engine with latched dismissals; blueprint-as-skill distribution | `cron/blueprint_catalog.py`, `cron/suggestions.py` |
-| Subscription proxy / tool gateway | Nous Portal subscription as OpenAI-compatible endpoint; managed tool routing (search/imagegen/TTS/cloud browser) without per-service keys | `user-guide/features/subscription-proxy.md`, `tool-gateway.md` |
-| Journey / learning graph | Timeline + constellation visualization of learned skills/memories with pruning UI | `agent/learning_graph.py`, `hermes_cli/journey.py` |
-| Pets / skins / personality | Petdex mascots (CLI/TUI/desktop), skins/themes, SOUL.md personas | `ui-tui/src/components/petSprite.tsx`, `hermes_cli/skin_engine.py` |
-| Document extraction | `read_file` converts PDF/Office/notebooks to text | `user-guide/features/document-extraction.md` |
+| No programmatic tool calling | [`execute_code.ex`](../../apps/coding_agent/lib/coding_agent/tools/execute_code.ex) provides bounded Python RPC over an allowlist; [usage docs](../tools/execute-code.md) cover per-call and persistent kernels. | Disabled by default and its allowlist is smaller than the whole tool catalog, but the mechanism exists end to end. |
+| No progressive tool disclosure | [`tool_disclosure.ex`](../../apps/coding_agent/lib/coding_agent/tool_disclosure.ex) freezes a session catalog and substitutes `tool_search`/`tool_invoke` when schema cost crosses the configured budget. | Built-ins stay visible; deferred MCP/extension/WASM tools still pass the normal policy and approval path. |
+| No redirect interruption | [`AbortSignal`](../../apps/lemon_agent/lib/lemon_agent/abort_signal.ex), the [streaming loop](../../apps/lemon_agent/lib/lemon_agent/loop/streaming.ex), and [`CodingAgent.Session`](../../apps/coding_agent/lib/coding_agent/session.ex) implement redirect while preserving completed tool results and degrading to steer during tool execution. | Local native runs support it. Remote named-node steering/redirect remains an explicit boundary. |
+| Provider fallback was only a preview ordering | [`ProviderRouting`](../../apps/lemon_agent/lib/lemon_agent/model_runtime/provider_routing.ex) builds route candidates; [`ProviderFallback`](../../apps/coding_agent/lib/coding_agent/session/provider_fallback.ex) executes per-turn provider and credential failover with cooldowns and session pinning. | Runtime resilience is implemented; self-service pool/fallback administration is still weak. |
+| No same-provider credential rotation | [`ProviderPoolRotator`](../../apps/lemon_agent/lib/lemon_agent/model_runtime/provider_pool_rotator.ex) and session fallback implement pool rotation; [live test guidance](../testing.md) covers invalid-to-valid credential proof. | No Hermes-like `auth`/pool management UX in the packaged CLI or Web. |
+| Cron lacked monitor mode, command jobs, chaining, drift guard, and preflight | [`CronManager`](../../apps/lemon_automation/lib/lemon_automation/cron_manager.ex), [`CronMonitor`](../../apps/lemon_automation/lib/lemon_automation/cron_monitor.ex), [`CronContext`](../../apps/lemon_automation/lib/lemon_automation/cron_context.ex), [`CronPreflight`](../../apps/lemon_automation/lib/lemon_automation/cron_preflight.ex), and [`CronCommandRunner`](../../apps/lemon_automation/lib/lemon_automation/cron_command_runner.ex) implement all five. | Automation blueprints/suggestions and a simple recurring `/loop` UX remain gaps. |
+| Multi-engine execution was a Lemon advantage | Lemon deliberately removed vendor-CLI engines and now has one native supervised executor with provider/model routing and in-process subagents. | This is a simplification and reliability choice, not a current multi-engine differentiator. |
 
-Lemon has partial counterparts for a few (heartbeats exist in
-`lemon_automation` as *cron health checks*, not same-session recurring
-prompts; `HEARTBEAT.md` exists in the assistant workspace contract; Hermes
-import exists as `mix lemon.hermes.migrate`). The rest are absent.
+## Functionality and product gap matrix
 
----
+### Product spine: installation, CLI, desktop, Web, and sessions
 
-## 2. Largest standing gaps (Hermes has, Lemon lacks or is preview)
+| User job | Hermes at pinned upstream | Lemon at pinned baseline | Status | Priority | Concrete next closure |
+| --- | --- | --- | --- | --- | --- |
+| Install on a supported computer and reach first chat | The [installer](https://hermes-agent.nousresearch.com/docs/getting-started/installation) covers one-line shell, PowerShell/native Windows, desktop installers, WSL, Nix/NixOS, Termux, Docker, and setup entry. Quick Portal setup can authorize model plus hosted search/image/TTS/browser services through one account; see pinned [quickstart](https://github.com/NousResearch/hermes-agent/blob/4f22543509d1b91dc45bcb369447126c5eb14fb7/website/docs/getting-started/quickstart.md). | [Install Lemon](../install.md) now provides verified one-line release installation, idempotent setup, and a first-TUI readiness gate for macOS and Linux artifacts. Provider credentials are configured individually; Linux requires the documented glibc baseline. No native Windows, Nix, Android, or desktop installer. | Partial | **High** | Add a platform-aware launcher UX, native Windows or an explicit supported WSL path, broader Linux compatibility, and an optional bundled account/OAuth path for a useful no-key first run. |
+| Discover and administer the product from one CLI | Hermes documents roughly sixty top-level families in its pinned [CLI reference](https://github.com/NousResearch/hermes-agent/blob/4f22543509d1b91dc45bcb369447126c5eb14fb7/website/docs/reference/cli-commands.md): chat, models/fallback/MoA, sessions, cron, profiles, skills, memory, approvals, backups, updates, logs, plugins, MCP, completions, and more. | Packaged [`LemonCli.CLI`](../../apps/lemon_cli/lib/lemon_cli/cli.ex) has seven families: setup, model, gateway, doctor, config, secrets, channels. Source `bin/lemon` adds node, send, media, model/provider inspection, policy, proofs, readiness, skill, usage, and update through Mix tasks. TUI commands cover additional runtime functions, but there is no single stable command map. | Partial | **High** | Promote the supported runtime surfaces into the packaged CLI, with consistent help, JSON output, exit codes, shell completions, and a generated reference. |
+| Use a polished native daily-agent interface | The pinned [Desktop guide](https://github.com/NousResearch/hermes-agent/blob/4f22543509d1b91dc45bcb369447126c5eb14fb7/website/docs/user-guide/desktop.md) covers onboarding, tabs/panes, chat, artifacts, files, terminal, git/worktrees, reviews, memory, voice, settings, plugins, multi-profile concurrency, and remote connections. | Lemon has a capable Bun TUI, a session LiveView, JSON-RPC clients, and LemonSim UI. It has no native desktop product or a single interface that composes files, terminal, artifacts, git review, memory, settings, and remote connections. | Missing | **High** | Choose and ship a desktop/product-shell strategy. A wrapper is useful only if it owns onboarding, connection management, updates, file/artifact UX, and settings—not merely a WebView around chat. |
+| Create durable specialist agents and collaborate among them | [Bot Mode](https://hermes-agent.nousresearch.com/docs/user-guide/bot-mode) presents profiles as bots with independent config/model/memory/skills/SOUL, canonical chats, cron routines, DMs, groups, cross-machine roster, and remote creation. Profiles also have full [CLI lifecycle](https://hermes-agent.nousresearch.com/docs/reference/profile-commands). | Lemon has named agents/personas, native child sessions, router delegation, kanban, agent inboxes, and authenticated named execution nodes. It does not offer isolated user-managed agent homes, profile create/clone/export/delete, canonical bot chats, a roster, or group-room UX. | Partial | **High** | Define a first-class profile record over existing agent/node primitives, including isolated config/memory/skills, create/clone/export lifecycle, canonical chat, and TUI/Web roster before attempting group rooms. |
+| Manage several local or remote runtimes from one client | Hermes Desktop registers local, URL, SSH, Docker, and cloud connections and merges their agent rosters; see [multi-connection Desktop](https://hermes-agent.nousresearch.com/docs/user-guide/multi-connection-desktop). | Lemon's authenticated named nodes are stronger as native remote execution workers and have real name-based routing, cancellation, pairing, and presence. The TUI/Web do not provide a multi-controller connection registry or merged agent/session roster. | Different | **High** | Preserve Lemon's execution-node advantage, then add connection profiles, health/re-auth UX, and a merged node/agent/session picker. |
+| Administer a machine in the browser | Hermes's [Web Dashboard](https://hermes-agent.nousresearch.com/docs/user-guide/features/web-dashboard) manages profiles, real TUI chat, status/resources, a large config surface, credentials, sessions, models, skills, MCP, pairing, webhooks, gateways, memory, cron, plugins, logs, and analytics. | [`LemonWeb.Router`](../../apps/lemon_web/lib/lemon_web/router.ex) exposes only chat at `/` and `/sessions/:session_key`, plus `/healthz`. It supports streaming, tool cards, and multi-file upload. Rich operator methods exist in the control plane, but the old `/ops` dashboard no longer exists. | Partial | **High** | Build an authenticated management shell over the existing control-plane methods, starting with runtime health, sessions, providers/credentials, approvals, cron, skills/MCP, memory, nodes, logs, and config. Delete stale `/ops` claims from old ledgers. |
+| Browse, search, resume, export, archive, and safely prune sessions | Hermes [sessions](https://hermes-agent.nousresearch.com/docs/user-guide/sessions) support workspace-aware resume, rename/pin/archive/read state, FTS search, rich filtering, lineage, redacted JSONL/HTML/Markdown/QMD/trace exports, verified delete-after-export, prune, handoff, recovery, and recap. | The TUI [`session.ts`](../../clients/tui/src/commands/session.ts) provides merged active/stored listing, switch/new/reset/delete/info/resume/history and unread state. Lemon stores durable run/session history and exposes control-plane reads, but lacks supported search/export/archive/pin/rename/prune/backup workflows and Web session management. | Partial | **High** | Add a shared session-service lifecycle API, then expose it identically in TUI, packaged CLI, and Web. Start with search, title/pin/archive, redacted export, and guarded prune. |
 
-### 2.1 Provider resilience plumbing (highest runtime leverage)
+### Agent runtime, models, tools, context, and media
 
-- **Live fallback chains**: Hermes has an ordered fallback-provider chain
-  driven by a structured `FailoverReason` classifier (1,842-line
-  `agent/error_classifier.py`), with prompt-cache breakpoints re-laid on
-  failover. Lemon's `ProviderRouting` is explicitly preview — its moduledoc
-  says dispatch can consume the ordering "once the fallback execution path
-  is wired" (`apps/lemon_agent/lib/lemon_agent/model_runtime/provider_routing.ex`).
-  Session-layer fallback (`coding_agent/session/provider_fallback.ex`) and a
-  pool rotator exist but aren't the unified path.
-- **Credential pools**: Hermes rotates multiple same-provider credentials
-  (env/OAuth/CLI-borrowed) on 429/auth failure with cooldowns and lease
-  semantics for subagents (`agent/credential_pool.py`, 3,178 lines). Lemon
-  has single-credential resolution per provider.
-- **Turn retry state**: Hermes collapses ~16 recovery paths (OAuth refresh,
-  long-context restart, thinking-signature strip, image shrink, …) into one
-  `TurnRetryState`. Lemon has strong error *normalization* (`LemonAi.Error`)
-  and circuit breaker/rate limiter/dispatcher, but fewer automated recovery
-  behaviors on top.
+| User job | Hermes at pinned upstream | Lemon at pinned baseline | Status | Priority | Concrete next closure |
+| --- | --- | --- | --- | --- | --- |
+| Configure models, auth pools, fallback, and per-task routing | Hermes has interactive provider/model setup, OAuth credentials, credential pools, ordered fallbacks, auxiliary task models, provider routing, custom endpoints, and selectable [Mixture of Agents](https://hermes-agent.nousresearch.com/docs/user-guide/features/mixture-of-agents) presets. The [provider catalog](https://hermes-agent.nousresearch.com/docs/integrations/providers) is user-facing. | Lemon supports a broad provider set, custom endpoints, model catalogs, per-session resolution, live provider fallback, credential pools, cooldowns, and route preview. Setup can configure a provider and default model. Pool/fallback editing is not a cohesive end-user workflow; MoA reference fan-out/presets are absent. | Near at runtime; partial in UX | **High** | Ship `lemon auth`, `lemon fallback`, and pool commands plus equivalent Web forms and health proof. Treat MoA as a separate opt-in orchestration feature with cost/budget visibility. |
+| Interrupt, steer, or redirect a running agent | Hermes distinguishes hard interrupt, non-canceling steer, and model-request redirect. | Lemon implements the same local-native semantics through router queue modes, `CodingAgent.Session`, and `LemonAgent.Loop`. | Near | Medium | Expose all three consistently in every client and carry steer/redirect over named-node invocation rather than falling back at the remote boundary. |
+| Avoid context bloat from large tool catalogs and intermediate data | Hermes documents [Tool Search](https://hermes-agent.nousresearch.com/docs/user-guide/features/tool-search), [`execute_code`](https://hermes-agent.nousresearch.com/docs/user-guide/features/code-execution), result offloading, and multiple compaction paths. | Lemon has frozen progressive disclosure, `execute_code`, output truncation/blob offload, context guardrails, summarization/hybrid compaction, overflow recovery, and cache-stable tool catalogs. | Near | Medium | Enable and explain safe defaults, widen the execute-code allowlist based on policy, and add live compaction/cost observability rather than another mechanism. |
+| Browse and operate the Web or desktop | Hermes exposes local/cloud browser providers, browser profiles, computer use, screenshots, and document/deliverable workflows in its [tools overview](https://hermes-agent.nousresearch.com/docs/user-guide/features/tools). | Lemon has a deep supervised browser driver, CDP/Playwright client, route policy, downloads/uploads, events/cookies/state, screenshots, image analysis, artifacts, and a `computer_use` tool. | **Parity+** for browser automation; partial for integrated desktop use | Medium | Promote one stable browser setup path and surface live driver/session/artifact state in the product UI. Keep computer use separately approval-gated. |
+| Attach files and reference repository context naturally | Hermes supports `@file`, `@folder`, `@git-diff`, `@url`, session references, PDF/Office/notebook extraction, and deliverable attachments; see [context references](https://hermes-agent.nousresearch.com/docs/user-guide/features/context-references) and [document extraction](https://hermes-agent.nousresearch.com/docs/user-guide/features/document-extraction). | Lemon agents can read/search files, inspect git through tools, accept Web uploads, and create media artifacts. There is no consistent composer-level reference syntax or general PDF/Office/notebook extraction pipeline. | Partial | Medium | Add a client-independent context-reference resolver with explicit previews/budgets, then safe extractors for PDF, DOCX, XLSX, PPTX, and notebooks. |
+| Use voice and multimodal interaction | Hermes provides voice mode, wake word, streaming TTS, voice input, vision, and desktop/gateway integration; see [voice mode](https://hermes-agent.nousresearch.com/docs/user-guide/features/voice-mode). | Lemon has Deepgram STT, TTS/media generation, image analysis, Twilio voice, and media artifacts, but no cohesive push-to-talk/realtime TUI or desktop voice experience and no wake word. | Partial | Medium | Prove one polished voice loop in the primary interface: record, transcribe, editable preview, submit, streaming playback, cancel, and artifact retention. Wake word can remain low priority. |
+| Run code in alternate environments | Hermes supports local, Docker, SSH, Singularity, Modal, Daytona, and Vercel-style sandboxes, plus a [terminal-environment plugin API](https://github.com/NousResearch/hermes-agent/blob/4f22543509d1b91dc45bcb369447126c5eb14fb7/website/docs/developer-guide/terminal-environment-plugin.md). | Lemon has local, local PTY, SSH, and Docker terminal backends with policy, plus named execution nodes that run the whole native agent remotely. | Partial | Medium | Stabilize/document existing backends and named-node selection first; add serverless/hibernating environments only behind the existing backend behavior and contract tests. |
 
-### 2.2 Interruption semantics
+### Memory, skills, automation, security, extensions, and operations
 
-Hermes distinguishes **interrupt** (hard stop), **steer** (inject into last
-tool result, nothing stops), and **redirect** (cancel only the in-flight
-model request, keep completed tool results, append correction, retry —
-degrades to steer during tool execution). Lemon has abort (cooperative ETS
-signal) and steering/follow-up queues, but no redirect equivalent — a
-mid-stream correction today either waits or kills the run.
+| User job | Hermes at pinned upstream | Lemon at pinned baseline | Status | Priority | Concrete next closure |
+| --- | --- | --- | --- | --- | --- |
+| Keep durable personal and project memory | Hermes combines local USER/MEMORY files, session search, background review/curation, a learning journey, and a broad set of [memory providers](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory-providers). | Lemon has SQLite FTS memory, redaction-aware ingest, provider fan-out, session search, project context, memory tools, scheduled skill synthesis/curation, and a production Honcho integration. Local and Honcho are the implemented providers; adaptive features remain intentionally opt-in. | Near for durable recall; partial for ecosystem/UX | Medium | Add a memory browser with provenance/edit/delete, measure whether safe defaults should enable recall, and prioritize provider conformance over provider count. |
+| Teach the agent from a URL, directory, or corpus and inspect what it learned | Hermes exposes `/learn`, curator flows, and the Journey learning graph/timeline. | Lemon synthesizes candidates from finalized runs and can curate/install skills, but has no direct “learn this source” job or learning-graph UI. | Missing | Medium | Build an auditable ingestion job that shows sources, proposed memories/skills, conflicts, and approval before write; visualize the same records rather than inventing a second learning store. |
+| Find, audit, install, update, bundle, and distribute skills | Hermes's [skills system](https://hermes-agent.nousresearch.com/docs/user-guide/features/skills) includes a Hub, taps, bundles, a large catalog, publishing, audit, curator, and profile distributions. | Lemon has agentskills-compatible discovery, local/project/builtin precedence, official Hermes catalog import, risk audit, trust metadata, atomic install/update, curator, model-facing management, and MCP-based discovery. It lacks a credible public registry, taps/bundles UX, publishing, and profile distribution. | Near in engine; partial in ecosystem | Medium | Ship a real signed registry/index, bundle/export format, profile-scoped enablement, and TUI/Web browse/review/install UX. |
+| Schedule recurring agent and script work safely | Hermes provides cron, heartbeats, recurring [loops](https://hermes-agent.nousresearch.com/docs/user-guide/features/loops), monitor jobs, no-agent scripts, chaining, blueprints, suggestions, preflight, and multiple delivery modes. | Lemon has durable cron, exact timers, jitter/retries/lineage, overlap locks, pause/resume/abort/run-now, heartbeat suppression, monitor mode, command jobs, chaining, preflight, default-model drift guard, goal continuation/auto loops, and kanban dispatch. | Near in engine; partial in UX | Medium | Add natural-language recurring-loop commands, templates/blueprints with explicit consent, and first-class TUI/Web/packaged CLI management. Avoid duplicating the existing cron and goal stores. |
+| Review dangerous actions and constrain agent execution | Hermes documents smart/manual/off [approvals and security](https://hermes-agent.nousresearch.com/docs/user-guide/security), deny rules, circuit breakers, container isolation, checkpoints, and managed scope. | Lemon has centralized execution approvals, per-node policies, tool policy profiles, structured approval events across interfaces, file/checkpoint guards, URL/SSRF policy, extension capability approvals, redaction, support-bundle cleanup, and proof artifacts. | **Parity+** in auditable policy; partial in enterprise scope | Medium | Add admin-pinned managed settings and a human-readable policy editor. Preserve Lemon's proof/redaction advantages. |
+| Keep credentials out of config and remote sandboxes | Hermes resolves credentials from 1Password, Bitwarden, or an arbitrary command and can inject them through an [egress proxy](https://hermes-agent.nousresearch.com/docs/user-guide/egress/iron-proxy) so a remote sandbox never receives the real secret. | Lemon encrypts a local secret store, uses platform key storage or a protected master-key file, supports OAuth token persistence, redacts outputs, and avoids sending resolved provider credentials to named nodes. It has no external secret-source interface or general credential-injecting egress proxy for arbitrary tools. | Partial | **High** | Add a supervised secret-source behavior (1Password/Bitwarden/command implementations) and design an explicit outbound credential-broker boundary for remote/browser/tool workloads. |
+| Install extensions and hooks without patching core | Hermes supports typed plugins across providers, memory, browsers, media, cron, observability, platforms, dashboard, and terminal environments, plus hooks and package lifecycle UI/CLI; see [plugins](https://hermes-agent.nousresearch.com/docs/user-guide/features/plugins). | Lemon has MCP clients/server bridge, native extension manifests, WASM tools, OAuth-aware remote MCP, capability approvals, conflict rules, supervised hosts, registry metadata, and platform contract tests. Third-party distribution and end-user lifecycle remain preview. | Different | Medium | Finish one signed package/install/update/remove flow with compatibility and capability review, then expose host health in Web/TUI. Do not create a second plugin format for every subsystem. |
+| Update, back up, migrate, recover, and uninstall the product | Hermes has update check/plan/backup, receipts, multi-profile restart/version verification, full backup/import, profile distributions, checkpoints, doctor/dump/debug/logs/status/insights, completions, and uninstall commands; see [updating](https://hermes-agent.nousresearch.com/docs/getting-started/updating). | Lemon has release channels and signed checksums, source `lemon update --check`, config/skill migration, a release installer/uninstaller, doctor and redacted support bundles, readiness/proofs, hot reload, and deployment-specific backup guidance. It lacks a coherent data backup/restore/export command, update plan/receipt/rollback, fleet/profile restart, and shell completion. | Partial | **High** | Define the entire `~/.lemon` data contract, then ship atomic backup/verify/restore and update plan/apply/rollback with receipts before adding more updater intelligence. |
+| Read task-oriented and machine-readable documentation | Hermes offers structured learning paths, user/task guides, full references, FAQs, edit links, and both curated/full machine indexes. | Lemon's VitePress site builds and has deep architecture/test plans, but navigation favors internal launch artifacts, several user features lack task guides, CLI reference is incomplete, and stale claims persisted in prominent pages. This refresh adds a task-first quickstart plus generated `llms.txt` and `llms-full.txt`. | Partial | **High** | Continue the install → first task → daily use → administration → troubleshooting information architecture, generate CLI/config/tool references, and demote historical plans from the primary navigation. |
+| Run deterministic simulations and evaluation arenas | Hermes has batch processing, trajectory export, evaluation skills, and training-oriented Atropos/RL workflows. | LemonSim provides event-sourced worlds, deterministic replay verification, leagues/ratings, hosted observation, benchmark domains, usage persistence, and tamper-evident artifacts. | **Parity+** for simulation/benchmark products; partial for generic trajectory pipelines | Low | Keep LemonSim as the differentiated surface; add standard trajectory export only when a concrete training/eval consumer requires it. |
 
-### 2.3 Context-cost engineering
+## Website and documentation audit
 
-- **Programmatic tool calling**: Hermes `execute_code` gives the model a
-  Python RPC stub over 7 allowlisted tools; intermediate results never
-  enter context, and a file-based RPC transport makes it work inside
-  Docker/SSH/Modal backends. Lemon has no equivalent (bash + tools only).
-- **Tool search / progressive disclosure**: with many MCP servers, Hermes
-  swaps tool schemas for 3 bridge tools with a tiered catalog (including a
-  names-alone-too-big tier). Lemon sends registered tool schemas directly.
-- **Tool-result offloading**: Hermes persists oversized tool output *into
-  the sandbox filesystem* with a preview + path so the model can grep it.
-  Lemon's `context_guardrails.ex` blob-spills to disk with stable
-  references — partial parity; worth verifying the model-facing retrieval
-  ergonomics match.
-- **Micro-compaction / native compaction**: incremental post-turn
-  absorption and OpenAI server-side compaction (gpt-5.6-gated). Lemon has
-  truncation/summarization/hybrid compaction and overflow recovery, no
-  incremental variant.
+Hermes's current docs are not merely larger. They make product capability
+discoverable through a stable hierarchy: install and quickstart, learning path,
+user guide, feature guides, task recipes, integrations, command/reference
+material, FAQ, developer extension guides, and machine-readable indexes. Most
+major capabilities link in both directions between concept, task, CLI, and
+configuration reference.
 
-### 2.4 Learning loop mechanics
+At the Lemon baseline:
 
-Lemon's loop (memory ingest → skill synthesis → curator → routing feedback,
-all rollout-gated) is real but conservative; Hermes's is aggressive and
-per-turn:
+1. The VitePress site is real and build-checked, but prominent navigation mixes
+   current user docs with dated launch plans and a historical May matrix.
+2. The home page still described removed vendor-CLI “multi-engine” execution
+   and still characterized binary installation as future work.
+3. `compare.md` listed shipped provider fallback, cron, goal, kanban, LSP,
+   browser, media, checkpoint, API, and ACP capabilities as future targets.
+4. The old feature matrix still claims a Web `/ops` surface that does not exist
+   in the current `lemon_web` router.
+5. Lemon has strong implementation documents for many tools but lacks a complete
+   user-facing CLI reference, session guide, automation guide, Web guide,
+   provider/auth guide, node guide, extension install guide, and task-recipe
+   layer.
+6. Lemon exposed no concise task-first quickstart and no `llms.txt` or
+   `llms-full.txt`. This refresh adds the quickstart, generated site assets, and
+   a stale-output check; run `scripts/generate_docs_llms.py` after changing
+   included documentation.
 
-- **Background review fork**: after turns (10-turn / 10-iteration nudge
-  counters, hydrated across resume), a daemon fork replays the conversation
-  against the same prefix cache and writes memory/skills, routable to a
-  cheaper aux model with digest replay. Lemon's synthesis mines *finalized
-  run documents* on a schedule — slower feedback, and `session_search` /
-  durable recall ships **off by default** (`lemon_core/config/features.ex`),
-  so the loop is inert until opted in.
-- **Anti-capture policy**: Hermes's review prompt forbids learning negative
-  tool claims and unresolved failures ("these harden into refusals").
-  Lemon's synthesis selector filters on outcome/quality but has no
-  equivalent explicit anti-capture policy.
-- **`/learn`**: open-ended skill acquisition from URLs/dirs/books with
-  knowledge-base distillation. No Lemon counterpart.
-- **Memory providers**: 9 pluggable providers (Honcho dialectic with
-  two-layer injection, Mem0, Supermemory, …) vs Lemon's behaviour with
-  exactly one implementation (`providers/local.ex`) and no auto-injection
-  (tool-mediated recall only).
-- **Journey**: visualization + pruning surface for what the agent learned.
-  No Lemon counterpart.
+The right response is not to copy 436 files. It is to make every promoted Lemon
+workflow have four connected pieces: a task guide, stable interface reference,
+configuration/security notes, and a troubleshooting path. Internal proof plans
+remain valuable evidence but should not be the first page a new user sees.
 
-### 2.5 Channels and gateway
+## Prioritized implementation bundles
 
-- **Breadth**: ~34 platforms vs 6 (Telegram, Discord, WhatsApp, XMTP,
-  Email, X) + 3 transports (webhook, SMS, Twilio voice). Missing entirely:
-  Slack, Signal, Matrix, iMessage (×2 paths), Teams, Google Chat,
-  Mattermost, Feishu/DingTalk/WeCom/QQ (CN market), LINE, SimpleX, IRC,
-  ntfy, Nostr, A2A.
-- **Access control**: Hermes has DM pairing codes (rate-limited, lockout,
-  0600 storage), per-platform allowlists, DM/group policies, slash-command
-  access tiers, relay per-tenant keys. Lemon has `allowed_chat_ids` on
-  Telegram, one WhatsApp access module, and control-plane device/node
-  pairing — no unified channel ACL/pairing subsystem.
-- **Voice**: 11 TTS + 8 STT providers, streaming TTS, voice memos on 5
-  platforms, Discord VC duplex, wake word. Lemon: Twilio call transport +
-  Deepgram STT + TTS control-plane methods + `media_generate_speech` —
-  much narrower, no voice mode on any chat channel.
-- **Cross-platform continuity**: Hermes `/handoff`, delivery mirroring,
-  shared session store across CLI/TUI/desktop/gateway. Lemon's agent
-  directory/endpoints/bindings cover addressing, but there's no live
-  session handoff between surfaces.
+These are intentionally vertical bundles rather than isolated modules.
 
-### 2.6 Cron/automation deltas
+### High: product shell and daily operation
 
-Lemon's cron core is competitive (durable store, atomic slot claim, jitter,
-retries with lineage, cron memory ≈ Hermes notepad, heartbeat suppression,
-goal loops, kanban dispatch). Hermes extras Lemon lacks: **monitor mode**
-(hash-suppressed change detection), **wakeAgent $0 pre-run gates**,
-**no-agent script jobs**, **job chaining** (`context_from`), **model drift
-guard** (fails closed when the global default model changed under an
-unpinned job), **pre-dispatch preflight** (no LLM call on misconfig),
-**blueprints + suggestions**, ~20 delivery targets vs Lemon's
-Telegram/Discord outbox, and a pluggable scheduler provider (Chronos
-managed cron).
+1. **Management Web vertical** — authenticated shell; runtime health; sessions;
+   providers/credentials/fallback pools; approvals; cron; skills/MCP; memory;
+   nodes; logs; config. Reuse JSON-RPC and do real browser tests against a running
+   Lemon instance.
+2. **Packaged CLI convergence** — promote supported source-only and TUI-only
+   operations into `LemonCli.CLI`; consistent help/JSON/errors; generate the
+   reference and completions from the command registry.
+3. **Profile/bot primitive** — isolated homes and capability config; create,
+   clone, rename, export, delete; canonical chat; agent/node roster. Add group
+   rooms only after this lifecycle is boring and reliable.
+4. **Session lifecycle** — shared search/title/pin/archive/export/prune service,
+   surfaced in TUI, CLI, and Web with redaction and verified-before-delete.
+5. **Install/update/backup** — widen supported installation, add update
+   plan/apply/rollback receipts, and make backup/restore cover the documented
+   data contract.
+6. **Secret sources and outbound credential boundary** — external secret
+   providers plus credential brokerage for arbitrary remote/browser/tool
+   execution.
 
-### 2.7 Ecosystem and distribution
+### Medium: capability completion and polish
 
-- **Skills**: 78 bundled + ~120 optional skills, an 8-source hub
-  (skills-sh, well-known, GitHub taps incl. openai/anthropics/huggingface,
-  clawhub, lobehub, browse-sh), security-scanned installs, publishing.
-  Lemon: solid installer/trust/audit machinery, agentskills-style format
-  compat, but a placeholder official registry (`https://skills.lemon.agent`)
-  and a small builtin set.
-- **Plugins**: typed plugin families for providers/memory/web/browser/
-  image/video/cron/observability/platforms with per-user override dirs.
-  Lemon's extension points exist (engine, channel plugin, store backend,
-  memory provider + contract kits) but the third-party story is gated
-  "not yet supported" in `docs/compare.md`.
-- **Install**: one-line installer, native Windows, Termux, Docker s6, Nix
-  flake + NixOS modules, signed desktop installers, `hermes update`.
-  Lemon: source install on Linux (honest, but a major adoption gap).
-- **Docs**: ~401-page Docusaurus site + zh-Hans mirror vs Lemon's VitePress
-  docs (good architecture/reference coverage, far fewer task guides).
+7. Provider/auth/pool/fallback management UI and an opt-in cost-bounded MoA
+   design.
+8. Auditable learn-from-source ingestion and a memory/learning inspection UI.
+9. Skill registry, bundles, profile enablement, and signed distribution.
+10. Natural-language loops plus automation templates/blueprints and management
+    surfaces over the existing scheduler.
+11. Composer context references and document extraction with preview and budget
+    controls.
+12. One polished voice workflow in the primary interface.
+13. Extension package lifecycle and host-health UX.
+14. Remote steer/redirect plus multi-controller connection management.
 
-### 2.8 Terminal backends
+## Lemon advantages to preserve
 
-Hermes: local, Docker, SSH, Singularity, Modal (direct or managed), Daytona,
-Vercel Sandbox, with `EnvironmentConnectionError` degraded-mode semantics
-and file sync. Lemon: local, local_pty, SSH, Docker behind
-`LemonCore.TerminalBackends` + policy. Missing: serverless backends
-(Modal/Daytona — the "hibernates when idle" story), Singularity, and remote
-live proof.
+Parity work should not flatten the areas where Lemon is already a stronger
+substrate:
 
-### 2.9 State/session layer details worth copying
+- OTP supervision, isolated processes, restart recovery, typed events, hot
+  reload, and runtime introspection.
+- Authenticated named execution nodes that route the native agent itself—not
+  merely SSH or terminal commands—to destination-local files and credentials.
+- Deterministic LemonSim arenas, replay verification, ratings, benchmark worlds,
+  and tamper-evident artifacts.
+- Central approvals, policy-aware extension execution, redacted observability,
+  support bundles, and proof artifacts.
+- Native in-process subagents with budget inheritance and parent/child run
+  lineage.
+- Contract-test kits and architecture-boundary checks for platform packages.
+- Current harness closures: execute-code RPC, progressive tool disclosure,
+  redirect, provider/credential failover, browser automation, and high-quality
+  cron internals.
 
-Schema-derived read probes and export column lists (anti-drift by
-construction), compression-triggered session splitting with lineage chains,
-three FTS5 tables incl. CJK bigram tokenizer (C extension), per-(model,
-provider, mode, task) usage rollups with typed cost provenance
-(`CostStatus`/`CostSource`), archived/pinned/read-unread session lifecycle.
-Lemon's stores are cleaner architecturally (pluggable backends, separate
-purpose DBs) but thinner on these ergonomics; cost accounting uses a rough
-4-chars-per-token estimator where Hermes carries provider-actual costs.
+The standard for new parity work is therefore “Hermes-level user completion,
+with Lemon-level supervision and proof,” not surface-count imitation.
 
----
+## Official Hermes source map
 
-## 3. Lemon advantages (Hermes has no equivalent)
-
-- **Supervision/operability as substrate**: OTP trees with restart
-  recovery everywhere (cron manager reload + orphan recovery, arena
-  reconciliation, checkpointed sim resume, hosted-game epochs), explicit
-  loop state machine, hot config reload, `LEMON_FEATURE_*` kill switches,
-  architecture-rules CI check, typed env registry (~262 vars), 3 TODOs in
-  the whole tree. Hermes is a decomposing monolith with 27k/878k-line god
-  files and thread-based concurrency.
-- **Multi-engine execution**: first-class `Engine` behaviour running
-  Claude Code, Codex, Droid, Kimi, OpenCode, Pi CLIs *and* the native
-  engine through one run graph, with per-CLI subagents. Hermes has the
-  codex app-server runtime and skills that shell out to other agents, but
-  no engine abstraction.
-- **Simulation/benchmark arena**: `lemon_sim` (~118k LOC): event-sourced
-  kernel, 19+ scenarios, leagues, Bradley-Terry ratings, tamper-evident
-  recomputable artifacts, external-agent JSONL protocol, always-on arenas,
-  hosted human multiplayer, replay→video. Hermes's evals (readtool A/B,
-  toolperf traps) are sharp but narrow; its batch trajectory tooling
-  targets training data, not benchmarking.
-- **Distributed control plane**: ~170 JSON-RPC methods, node pairing/
-  presence/invoke, device pairing, agent inboxes — a real multi-node
-  story. Hermes multi-gateway coordination is kanban-board-scoped.
-- **WASM tool sandbox** (`coding_agent/wasm/`): sandboxed tool execution
-  tier Hermes lacks (its sandboxing is per-backend).
-- **Contract-test kits**: published compliance suites for all four
-  extension points. Hermes plugins have no equivalent conformance kit.
-- **Budget inheritance**: token+cost budgets propagated parent→child
-  through the run graph with enforcement, vs Hermes's iteration counting.
-- **Deterministic-by-construction benchmarking + usage/cost persistence
-  across restarts** — Hermes has nothing comparable.
-- **lemon_tcg**: live on-chain trading desk with pure-Elixir signing —
-  out of Hermes's scope entirely.
-
----
-
-## 4. Hygiene findings inside Lemon (from this audit)
-
-1. **11 orphaned tool modules** in `apps/coding_agent/lib/coding_agent/tools/`
-   (`exec`, `await`, `ask_parent`, `restart`, `multiedit`, `glob`,
-   `todoread`, `todowrite`, `webdownload`, `fuzzy`, likely `process`) —
-   registered nowhere; delete or wire.
-2. **`session_search`/durable recall off by default** — the entire memory→
-   synthesis loop is inert on a fresh install.
-3. **Scorecard drift**: `lemon-hermes-agent-harness-parity-scorecard.md`
-   still narrates Web `/ops` slices that no longer map to `lemon_web`
-   (dashboard removed; monitoring moved to `clients/lemon-web`).
-4. **`lemon_web` has 1 test file for 20 modules**; `lemon_lsp` is metadata
-   only; email inbound off by default mid-port.
-5. **Observability**: bare `:telemetry` with no metrics/poller/dashboard
-   layer; Sentry wiring near-zero (known, being made optional in split
-   item 1.4).
-6. **Placeholder skills registry URL** (`https://skills.lemon.agent`).
-7. The May matrix baseline is 13k commits stale — either re-pin it or mark
-   it historical and adopt this audit as the live ledger.
-
----
-
-## 5. Recommended priority order
-
-P0 — runtime leverage, small surface:
-1. Wire live provider fallback through `ProviderRouting` ordering; add
-   credential-pool rotation (Hermes `credential_pool.py` semantics).
-2. Add `redirect` interruption (cancel in-flight model call, preserve
-   completed tool results, append correction).
-3. Turn on `session_search` + memory ingest by default (with the existing
-   redaction gate); consider a Hermes-style anti-capture policy in the
-   synthesis selector.
-
-P1 — context-cost + loop quality:
-4. Tool-search-style progressive disclosure for MCP-heavy sessions.
-5. Programmatic tool calling (script-over-RPC; BEAM port or WASM sidecar
-   could make this cleaner than Hermes's file-RPC).
-6. Cron: monitor mode, job chaining, model drift guard, preflight — all
-   small, all high-perceived-quality.
-
-P2 — surface area (pick deliberately, don't chase all 34 platforms):
-7. Slack + Signal or Matrix as next promoted channels; unified pairing/
-   allowlist subsystem in `lemon_channels` (Hermes pairing-code UX).
-8. One-line installer + binary release; Modal/Daytona-class serverless
-   terminal backend for the "cheap when idle" story.
-9. Voice: one chat channel with voice-memo STT round-trip (Telegram
-   already has inbound transcription — close the TTS reply loop).
-
-Explicit non-goals (recommend declaring in `docs/compare.md`): desktop app,
-pets/skins, CN-market platforms, wake word, subscription proxy — unless the
-product direction changes.
-
-## Sources
-
-- Prior ledger: `docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md`
-  (statuses as of 2026-05-18), harness scorecard, channel command matrix.
-- Hermes: `README.md`, `website/docs/**` (user-guide features/messaging,
-  developer-guide), `agent/*.py`, `tools/*.py`, `gateway/**`, `cron/**`,
-  `plugins/**`, `hermes_state*.py`, `acp_adapter/`, `apps/desktop/`.
-- Lemon: `apps/**` moduledocs and registries, `docs/compare.md`,
-  `docs/platform-split.md`, `bin/lemon`.
+- [Docs home](https://hermes-agent.nousresearch.com/docs/)
+- [Machine-readable docs index](https://hermes-agent.nousresearch.com/docs/llms.txt)
+- [Installation](https://hermes-agent.nousresearch.com/docs/getting-started/installation)
+- [CLI reference](https://hermes-agent.nousresearch.com/docs/reference/cli-commands)
+- [Desktop](https://hermes-agent.nousresearch.com/docs/user-guide/desktop)
+- [Bot Mode](https://hermes-agent.nousresearch.com/docs/user-guide/bot-mode)
+- [Web Dashboard](https://hermes-agent.nousresearch.com/docs/user-guide/features/web-dashboard)
+- [Sessions](https://hermes-agent.nousresearch.com/docs/user-guide/sessions)
+- [Tools](https://hermes-agent.nousresearch.com/docs/user-guide/features/tools)
+- [Memory](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory)
+- [Skills](https://hermes-agent.nousresearch.com/docs/user-guide/features/skills)
+- [Cron](https://hermes-agent.nousresearch.com/docs/user-guide/features/cron)
+- [Security](https://hermes-agent.nousresearch.com/docs/user-guide/security)
+- [Plugins](https://hermes-agent.nousresearch.com/docs/user-guide/features/plugins)
+- [Updating](https://hermes-agent.nousresearch.com/docs/getting-started/updating)

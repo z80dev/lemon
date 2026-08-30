@@ -52,8 +52,9 @@ The main coding agent implementation for the Lemon AI assistant platform. This a
 |--------|---------|
 | `CodingAgent.Session` | Main GenServer orchestrating the agent loop |
 | `CodingAgent.SessionManager` | JSONL persistence with tree structure |
+| `CodingAgent.Session.Heartbeat` | Durable same-session recurring prompt state, idle scheduling, fire claims, and clear tombstones |
 | `CodingAgent.SessionSupervisor` | DynamicSupervisor for session processes |
-| `CodingAgent.SessionRegistry` | Registry for session lookup by ID |
+| `CodingAgent.SessionRegistry` | Registry for persisted-ID lookup plus ambiguity-safe logical session-key lookup from registration metadata |
 | `CodingAgent.SessionRootSupervisor` | Top-level supervisor for all session infra |
 | `CodingAgent.ExecutionNode.Worker` | Authenticated named-node worker that maintains application-level health keepalives and executes targeted `coding_agent.run` requests through the native executor |
 | `CodingAgent.ExecutionNode.Socket` | Reconnecting control-plane WebSocket client with authenticated handshakes and redacted status |
@@ -267,6 +268,7 @@ Its public GenServer shell stays `CodingAgent.Session`, but the larger internal 
 - `State` for state-building, prompt/reset shaping, diagnostics, and guardrail transform composition
 - `Notifier` for UI notifications plus subscriber/event-stream lifecycle and fanout
 - `Persistence` for message/session persistence helpers and session-file saving
+- `Heartbeat` for validation, append-only persistence, timer-token bookkeeping, idle-only recurring turns, and reset-safe tombstones
 - `BackgroundTasks` for deferred branch-summary/background work and branch navigation helpers
 - `CompactionLifecycle` for auto-compaction triggering/result handling
 - `OverflowRecovery` for context-window recovery and retry flow
@@ -547,10 +549,19 @@ Sessions are persisted as JSONL files via `CodingAgent.SessionManager`:
 - Format: Each line is a JSON entry
 - First entry: `SessionHeader` with version, id, cwd
 - Subsequent: `SessionEntry` with tree structure (id, parent_id)
-- Entry types: `:message`, `:compaction`, `:branch_summary`, `:label`, etc.
+- Entry types: `:message`, `:compaction`, `:branch_summary`, `:label`, and custom
+  entries such as the latest-wins `session_heartbeat` state/tombstone.
 
 Location: `~/.lemon/agent/sessions/{encoded-cwd}/{session_id}.jsonl`
 (cwd is encoded with path separators replaced by `--`, e.g. `--home-user-project--`)
+
+Same-session heartbeats must remain append-only and persistence-first: persist a
+fire claim before provider dispatch, and persist a clear tombstone before reset
+rotates the session identity. A reset persistence failure must leave the old
+identity intact. Real queued prompts/steers/follow-ups win over a due heartbeat;
+elapsed ticks coalesce and resume re-anchors the interval. Client-facing lookup
+uses `SessionRegistry.lookup_session_key/1` because the TUI's logical key is not
+necessarily the JSONL header ID; ambiguous live claims fail closed.
 
 ## Workspace Management
 
@@ -730,6 +741,7 @@ Session and EventHandler emit introspection events via `LemonCore.Introspection.
 | `:session_started` | `init/1` after state is built | `session_id`, `cwd`, `model`, `session_scope` |
 | `:session_ended` | `terminate/2` | `session_id`, `turn_count` |
 | `:compaction_triggered` | `apply_compaction_result/3` on success | `tokens_before`, `first_kept_entry_id` |
+| `:session_heartbeat` | Heartbeat set/pause/resume/clear/fire | `action`, `status`, `interval_seconds`, `fire_count`, `prompt_bytes` (never prompt text) |
 
 ### EventHandler Events
 
@@ -917,6 +929,7 @@ apps/coding_agent/
 |   |   +-- session/
 |   |   |   +-- compaction_manager.ex        # Auto-compaction state machine
 |   |   |   +-- event_handler.ex             # Agent event -> session state
+|   |   |   +-- heartbeat.ex                 # Durable idle-only recurring turns
 |   |   |   +-- message_serialization.ex     # Message format conversion
 |   |   |   +-- model_resolver.ex            # Model + API key resolution
 |   |   |   +-- prompt_composer.ex           # System prompt layering

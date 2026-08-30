@@ -103,6 +103,7 @@ CodingAgent.Supervisor (one_for_one)
 |--------|-------------|
 | `CodingAgent.Session` | Main GenServer orchestrating the agent loop, event dispatch, steering, follow-ups, compaction, and persistence |
 | `CodingAgent.Session.EventHandler` | Translates `LemonAgent` events into session state updates, clears diagnostic queue mirrors on every terminal path, triggers compaction, and fires extension hooks |
+| `CodingAgent.Session.Heartbeat` | Persists and schedules one idle-only recurring prompt inside the current session, including pause/resume/clear and reset tombstones |
 | `CodingAgent.Session.CompactionManager` | Auto-compaction scheduling, tracked worker cleanup, overflow recovery state machine, and compaction result application |
 | `CodingAgent.Session.MessageSerialization` | Serializes/deserializes messages between session and agent core formats |
 | `CodingAgent.Session.ModelResolver` | Resolves model structs from string specs, maps, or settings; handles API key lookup via env vars and secrets with OAuth refresh |
@@ -484,13 +485,17 @@ A session is a `GenServer` process that wraps an `LemonAgent.Agent` loop. Each s
 - JSONL persistence with tree-structured entries
 - Event subscription (direct send or backpressure-aware streams)
 - Steering (mid-run interrupts) and follow-up (post-run) queues
+- One optional durable same-session heartbeat that fires only while idle
 - Auto-compaction and overflow recovery
 
 The Session queue fields are diagnostic mirrors; `LemonAgent.Agent` owns actual
 delivery and consumption. Terminal, cancel, error, abort, and agent-exit paths
 clear the mirrors so `diagnostics/1` cannot report stale follow-ups.
 
-Sessions are started under `SessionSupervisor` (dynamic) and registered in `SessionRegistry` by their UUID.
+Sessions are started under `SessionSupervisor` (dynamic) and registered in
+`SessionRegistry` by their persisted UUID. Registry metadata also retains the
+logical runtime session key used by clients; logical-key lookup fails closed if
+more than one live process claims it.
 
 ### Tool Execution
 
@@ -631,7 +636,21 @@ Loaded from `~/.lemon/agent/workspace/` (initialized from `priv/templates/worksp
 
 # Abort current operation
 :ok = CodingAgent.Session.abort(session)
+
+# Recur inside this same durable conversation every ten minutes
+{:ok, heartbeat} =
+  CodingAgent.Session.heartbeat_set(session, "review CI and report changes", 600)
+
+{:ok, heartbeat} = CodingAgent.Session.heartbeat_pause(session)
+{:ok, heartbeat} = CodingAgent.Session.heartbeat_resume(session)
+{:ok, heartbeat} = CodingAgent.Session.heartbeat_clear(session)
 ```
+
+Session heartbeats use the ordinary prompt/agent/provider path after the
+session becomes idle; queued user input takes priority and missed ticks
+coalesce. See
+[`docs/user-guide/session-heartbeats.md`](../../docs/user-guide/session-heartbeats.md)
+for TUI, control-plane, persistence, and live-smoke details.
 
 ### Subscribing to Events
 

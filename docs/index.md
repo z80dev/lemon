@@ -4,14 +4,14 @@ layout: home
 hero:
   name: Lemon
   text: Local-first AI agent runtime
-  tagline: Durable memory, reusable skills, multi-engine execution, and channel access for serious developer workflows.
+  tagline: Durable sessions, memory, skills, supervised tools, provider routing, and native multi-agent execution for serious workflows.
   image:
     src: /diagrams/architecture.svg
     alt: Lemon architecture diagram
   actions:
     - theme: brand
-      text: Install Lemon
-      link: /install
+      text: Quickstart
+      link: /getting-started/quickstart
     - theme: alt
       text: See Demo
       link: /demo
@@ -21,7 +21,7 @@ hero:
 
 features:
   - title: Run agents where your work lives
-    details: Start sessions from a repo, route work through Lemon, Codex, Claude, OpenCode, Pi, or Kimi engines, and keep local control of files, tools, and secrets.
+    details: Start native Lemon sessions from a repository, select providers and models, delegate to in-process subagents or named execution nodes, and keep local control of files, tools, and secrets.
   - title: Keep useful context
     details: Persist sessions, search memory, promote reusable skills, and carry project conventions forward without handing everything to a hosted assistant.
   - title: Reach it from real interfaces
@@ -45,15 +45,18 @@ interface polish for non-contributors to use Lemon without repo expertise.
 
 | Need | Page |
 | --- | --- |
+| Install, verify a real chat, and resume it | [Lemon Quickstart](getting-started/quickstart.md) |
 | Build an agent on the platform | [Build Your First Agent](getting-started/build-your-first-agent.md) |
-| Install from source today | [Install Lemon](install.md) |
+| Install and start a first chat | [Install Lemon](install.md) |
 | Run a deterministic local demo | [Demo Lemon](demo.md) |
 | Compare Lemon to adjacent tools | [Compare Lemon](compare.md) |
 | Configure providers, secrets, and Telegram | [Setup Guide](user-guide/setup.md) |
+| Chat in the local browser | [Use Lemon in a Browser](user-guide/web.md) |
 | Understand why Lemon runs on the BEAM | [Agents Are a Concurrency Problem](why-beam-for-agents.md) |
 | Understand the runtime architecture | [Architecture Overview](architecture/overview.md) |
 | Track the Hermes-on-BEAM product goal | [Hermes-on-BEAM Readiness Plan](plans/lemon-1.0-mainstream-readiness.md) |
-| Check Hermes feature parity | [Feature Parity Matrix](plans/lemon-hermes-feature-parity-matrix-2026-05-12.md) |
+| Check current Hermes functionality and UX gaps | [Current Hermes Gap Audit](plans/lemon-hermes-gap-audit-2026-08-11.md) |
+| Inspect the historical May Hermes baseline | [Historical Feature Parity Matrix](plans/lemon-hermes-feature-parity-matrix-2026-05-12.md) |
 | Check channel command parity | [Command Parity Matrix](plans/lemon-channel-command-parity-matrix-2026-05-12.md) |
 | Check harness contract parity | [Harness Parity Scorecard](plans/lemon-hermes-agent-harness-parity-scorecard.md) |
 | Configure LSP diagnostics | [LSP Diagnostics](tools/lsp.md) |
@@ -61,10 +64,13 @@ interface polish for non-contributors to use Lemon without repo expertise.
 | Use OpenAI-compatible HTTP clients | [OpenAI-Compatible API Preview](tools/openai-compatible-api.md) |
 | Try ACP-shaped editor/client integration | [ACP Preview](tools/acp.md) |
 | Debug a local install | [Support](support.md) |
+| Give an agent the docs index | [Machine-readable docs](https://z80dev.github.io/lemon/llms.txt) |
 
 ## Current Launch Stage
 
-Lemon is still pre-1.0. The source install path, release profiles, product smoke,
-doctor support bundle, and launch ledger are actively being hardened. Public
-binary release support, the final support matrix, the polished website, and some
-UI supportability checks remain in progress.
+Lemon is still pre-1.0. Verified release artifacts and a one-line installer now
+exist for the documented macOS and Linux targets. Platform breadth, packaged CLI
+coverage, management Web UI, native desktop/profile UX, complete session
+lifecycle, and install/update/backup polish remain active work. See the
+[current Hermes gap audit](plans/lemon-hermes-gap-audit-2026-08-11.md) for the
+source-pinned comparison.

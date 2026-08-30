@@ -30,10 +30,10 @@ defmodule CodingAgent.PrivateTmp do
   open-permission fallback, because the inability to reserve exact modes is a
   setup error, not permission to expose content.
 
-  This boundary is explicitly local GNU/Linux: it requires an absolute
-  `mktemp` (resolved once from PATH and retained), a trusted local filesystem
-  beneath `System.tmp_dir!()` (NFS is not supported), and it fails closed on
-  any other platform.
+  This boundary requires a compatible absolute `mktemp` (resolved once from
+  PATH and retained) and a trusted local filesystem beneath
+  `System.tmp_dir!()` (NFS is not supported). It fails closed when those
+  guarantees cannot be established.
   """
 
   import Bitwise
@@ -527,6 +527,11 @@ defmodule CodingAgent.PrivateTmp do
   # directly inside the parent we named, carrying the prefix we asked for.
   # Until then nothing may be deleted on its behalf.
   defp validate_shape(path, parent, prefix) do
+    # `System.tmp_dir!/0` includes a trailing separator on macOS, while
+    # `Path.dirname/1` returns the same directory without it. Compare expanded
+    # lexical paths so the containment check remains exact on both shapes.
+    parent = Path.expand(parent)
+
     if is_binary(path) and Path.type(path) == :absolute and
          Path.dirname(path) == parent and String.starts_with?(Path.basename(path), prefix) do
       :ok

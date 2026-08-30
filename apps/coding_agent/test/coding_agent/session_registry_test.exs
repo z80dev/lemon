@@ -73,6 +73,27 @@ defmodule CodingAgent.SessionRegistryTest do
     end
   end
 
+  describe "lookup_session_key/1" do
+    test "resolves logical runtime keys stored as registration metadata" do
+      logical_key = "agent:default:#{System.unique_integer([:positive])}"
+      pid = register_with_metadata("persisted-#{logical_key}", logical_key)
+
+      assert {:ok, ^pid} = SessionRegistry.lookup_session_key(logical_key)
+      send(pid, :stop)
+    end
+
+    test "fails closed when two live sessions claim the same logical key" do
+      logical_key = "agent:ambiguous:#{System.unique_integer([:positive])}"
+      first = register_with_metadata("persisted-a-#{logical_key}", logical_key)
+      second = register_with_metadata("persisted-b-#{logical_key}", logical_key)
+
+      assert {:error, :ambiguous} = SessionRegistry.lookup_session_key(logical_key)
+
+      send(first, :stop)
+      send(second, :stop)
+    end
+  end
+
   describe "list_ids/0" do
     test "returns a list and includes registered session ids" do
       # Create a unique session and verify it appears
@@ -229,6 +250,25 @@ defmodule CodingAgent.SessionRegistryTest do
   defp wait_until(fun, timeout_ms) when is_function(fun, 0) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
     do_wait_until(fun, deadline)
+  end
+
+  defp register_with_metadata(session_id, logical_key) do
+    owner = self()
+
+    spawn_link(fn ->
+      {:ok, _} =
+        Registry.register(SessionRegistry, session_id, %{
+          cwd: "/tmp",
+          session_key: logical_key
+        })
+
+      send(owner, {:registered, self()})
+
+      receive do
+        :stop -> :ok
+      end
+    end)
+    |> tap(fn pid -> assert_receive {:registered, ^pid}, 1_000 end)
   end
 
   defp do_wait_until(fun, deadline_ms) do

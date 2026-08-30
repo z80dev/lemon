@@ -7,7 +7,7 @@ usage: scripts/verify_source_install [--project-dir PATH] [--skip-compile] [--sk
 
 Verifies the supported source-install path:
   - checks Elixir and Erlang/OTP toolchain availability
-  - checks source-wrapper help advertises setup/model/gateway/channels/config/doctor/send/media/models/providers/policy/proofs/readiness/secrets/skill/usage/update
+  - checks source-wrapper help advertises setup/model/gateway/channels/config/doctor/web/send/media/models/providers/policy/proofs/readiness/secrets/skill/usage/update
   - checks locked dependency resolution
   - checks source-wrapper setup readiness is required before fixture onboarding,
     then satisfied by a locally stored fixture credential and default model
@@ -39,6 +39,16 @@ SKIP_COMPILE=false
 toolchain_asdf_data_dir="${ASDF_DATA_DIR:-}"
 if [ -z "$toolchain_asdf_data_dir" ] && [ -n "${HOME:-}" ] && [ -d "$HOME/.asdf" ]; then
   toolchain_asdf_data_dir="$HOME/.asdf"
+fi
+
+# Fixture commands replace HOME to isolate Lemon state. Keep Mix/Hex tooling
+# discoverable without copying or initializing package-manager state inside the
+# fixture home.
+toolchain_mix_home="${MIX_HOME:-}"
+toolchain_hex_home="${HEX_HOME:-}"
+if [ -n "${HOME:-}" ]; then
+  [ -n "$toolchain_mix_home" ] || toolchain_mix_home="$HOME/.mix"
+  [ -n "$toolchain_hex_home" ] || toolchain_hex_home="$HOME/.hex"
 fi
 
 SKIP_DOCTOR=false
@@ -91,13 +101,20 @@ require_command mix
 
 help_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-help.XXXXXX")"
 ./bin/lemon --help >"$help_output"
-for subcommand in setup model gateway channels config doctor send media models providers policy proofs readiness secrets skill usage update; do
+for subcommand in setup model gateway channels config doctor web send media models providers policy proofs readiness secrets skill usage update; do
   if ! grep -q "./bin/lemon $subcommand" "$help_output"; then
     fail "source wrapper help did not advertise ./bin/lemon $subcommand"
   fi
 done
 rm -f "$help_output"
-ok "source-wrapper help advertises setup/model/gateway/channels/config/doctor/send/media/models/providers/policy/proofs/readiness/secrets/skill/usage/update"
+ok "source-wrapper help advertises setup/model/gateway/channels/config/doctor/web/send/media/models/providers/policy/proofs/readiness/secrets/skill/usage/update"
+
+web_help_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-web-help.XXXXXX")"
+./bin/lemon web --help >"$web_help_output"
+grep -q 'Usage: ./bin/lemon web \[--no-open\]' "$web_help_output" ||
+  fail "source wrapper web help did not document --no-open"
+rm -f "$web_help_output"
+ok "source-wrapper web command documents browser and no-open launch modes"
 
 elixir -e '
 required = Version.parse!("1.19.5")
@@ -171,6 +188,12 @@ cleanup_setup_output() {
 preserve_toolchain() {
   if [ -n "$toolchain_asdf_data_dir" ]; then
     export ASDF_DATA_DIR="$toolchain_asdf_data_dir"
+  fi
+  if [ -n "$toolchain_mix_home" ]; then
+    export MIX_HOME="$toolchain_mix_home"
+  fi
+  if [ -n "$toolchain_hex_home" ]; then
+    export HEX_HOME="$toolchain_hex_home"
   fi
 }
 
