@@ -8,6 +8,9 @@ defmodule CodingAgent.Tools.WebFetch do
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias CodingAgent.Security.ExternalContent
+  alias CodingAgent.Search.Dispatcher, as: SearchDispatcher
+  alias CodingAgent.Search.Registry, as: SearchRegistry
+  alias CodingAgent.Search.SingleFlight
   alias CodingAgent.Tools.WebCache
   alias CodingAgent.Tools.WebGuard
   alias CodingAgent.Utils.Http
@@ -44,6 +47,16 @@ defmodule CodingAgent.Tools.WebFetch do
           "url" => %{
             "type" => "string",
             "description" => "HTTP or HTTPS URL to fetch."
+          },
+          "provider" => %{
+            "type" => "string",
+            "description" =>
+              "Optional registered extraction provider id. Omit to try guarded direct extraction then configured fallbacks."
+          },
+          "fallbackProviders" => %{
+            "type" => "array",
+            "items" => %{"type" => "string"},
+            "description" => "Optional ordered extraction provider fallback ids."
           },
           "extractMode" => %{
             "type" => "string",
@@ -91,38 +104,91 @@ defmodule CodingAgent.Tools.WebFetch do
           read_integer(params, ["maxChars", "max_chars"], nil)
           |> normalize_max_chars(runtime.max_chars)
 
-        run_fetch(url, extract_mode, max_chars, runtime)
+        run_fetch(url, extract_mode, max_chars, runtime, params)
       end
     else
       {:error, "webfetch is disabled by configuration"}
     end
   end
 
-  defp run_fetch(url, extract_mode, max_chars, runtime) do
+  defp run_fetch(url, extract_mode, max_chars, runtime, params) do
+    with {:ok, providers} <- extraction_providers(runtime, params) do
+      run_cached_fetch(url, extract_mode, max_chars, runtime, providers)
+    end
+  end
+
+  defp run_cached_fetch(url, extract_mode, max_chars, runtime, providers) do
     cache_key =
-      WebCache.normalize_cache_key("fetch:#{url}:#{Atom.to_string(extract_mode)}:#{max_chars}")
+      WebCache.normalize_cache_key(
+        "fetch:#{Enum.join(providers, ",")}:#{url}:#{Atom.to_string(extract_mode)}:#{max_chars}"
+      )
 
     case WebCache.read_cache(@fetch_cache_table, cache_key, runtime.cache_opts) do
       {:hit, payload} ->
         json_result(Map.put(payload, "cached", true))
 
       :miss ->
-        with {:ok, payload} <- perform_fetch(url, extract_mode, max_chars, runtime) do
-          WebCache.write_cache(
-            @fetch_cache_table,
-            cache_key,
-            payload,
-            runtime.cache_ttl_ms,
-            runtime.cache_max_entries,
-            runtime.cache_opts
-          )
+        SingleFlight.run(
+          cache_key,
+          fn ->
+            case WebCache.read_cache(@fetch_cache_table, cache_key, runtime.cache_opts) do
+              {:hit, payload} ->
+                json_result(Map.put(payload, "cached", true))
 
-          json_result(payload)
-        end
+              :miss ->
+                with {:ok, payload} <-
+                       perform_fetch(url, extract_mode, max_chars, runtime, providers) do
+                  WebCache.write_cache(
+                    @fetch_cache_table,
+                    cache_key,
+                    payload,
+                    runtime.cache_ttl_ms,
+                    runtime.cache_max_entries,
+                    runtime.cache_opts
+                  )
+
+                  json_result(payload)
+                end
+            end
+          end,
+          runtime.timeout_ms + 1_000
+        )
     end
   end
 
-  defp perform_fetch(url, extract_mode, max_chars, runtime) do
+  defp perform_fetch(url, extract_mode, max_chars, runtime, providers) do
+    request = %{url: url, extract_mode: extract_mode, max_chars: max_chars}
+
+    contexts = %{
+      "direct" => %{
+        extract: fn _request -> perform_direct_fetch(url, extract_mode, max_chars, runtime) end
+      },
+      "firecrawl" => %{
+        extract: fn _request -> perform_firecrawl_fetch(url, extract_mode, max_chars, runtime) end
+      }
+    }
+
+    case SearchDispatcher.run(:extract, request,
+           providers: providers,
+           provider_contexts: contexts,
+           timeout_ms: runtime.timeout_ms
+         ) do
+      {:ok, payload, metadata} ->
+        {:ok,
+         payload
+         |> Map.put("providerRequested", metadata.requested_provider)
+         |> Map.put("providerUsed", metadata.provider_used)
+         |> Map.put("providerAttempts", safe_provider_attempts(metadata.attempts))}
+
+      {:error, {:provider_terminal, _provider, reason, _attempts}} ->
+        {:error, to_string(reason)}
+
+      {:error, {:all_providers_failed, attempts}} ->
+        {:error, format_extract_failures(attempts)}
+    end
+  end
+
+  defp perform_direct_fetch(url, extract_mode, max_chars, runtime) do
     started_ms = System.monotonic_time(:millisecond)
 
     guard_opts = [
@@ -152,9 +218,9 @@ defmodule CodingAgent.Tools.WebFetch do
 
       {:error, reason} ->
         if WebGuard.ssrf_blocked?(reason) or direct_guard_error?(reason) do
-          {:error, format_guard_error(reason)}
+          {:error, {:terminal, format_guard_error(reason)}}
         else
-          maybe_fallback_to_firecrawl(url, extract_mode, max_chars, runtime, started_ms, reason)
+          {:error, format_primary_error(reason)}
         end
     end
   end
@@ -181,14 +247,7 @@ defmodule CodingAgent.Tools.WebFetch do
         started_ms
       )
     else
-      maybe_fallback_to_firecrawl(
-        original_url,
-        extract_mode,
-        max_chars,
-        runtime,
-        started_ms,
-        {:http_error, status, response}
-      )
+      {:error, format_primary_error({:http_error, status, response})}
     end
   end
 
@@ -230,25 +289,13 @@ defmodule CodingAgent.Tools.WebFetch do
          }}
 
       {:error, reason} ->
-        maybe_fallback_to_firecrawl(
-          final_url,
-          extract_mode,
-          max_chars,
-          runtime,
-          started_ms,
-          {:extract_error, reason}
-        )
+        {:error, format_primary_error({:extract_error, reason})}
     end
   end
 
-  defp maybe_fallback_to_firecrawl(
-         url,
-         extract_mode,
-         max_chars,
-         runtime,
-         started_ms,
-         primary_error
-       ) do
+  defp perform_firecrawl_fetch(url, extract_mode, max_chars, runtime) do
+    started_ms = System.monotonic_time(:millisecond)
+
     if firecrawl_enabled?(runtime.firecrawl) do
       case fetch_firecrawl_content(url, extract_mode, runtime) do
         {:ok, firecrawl} ->
@@ -278,11 +325,71 @@ defmodule CodingAgent.Tools.WebFetch do
            }}
 
         {:error, firecrawl_reason} ->
-          {:error,
-           "Web fetch failed: #{format_primary_error(primary_error)} (Firecrawl fallback failed: #{firecrawl_reason})"}
+          {:error, firecrawl_reason}
       end
     else
-      {:error, "Web fetch failed: #{format_primary_error(primary_error)}"}
+      {:error, "Firecrawl is not configured"}
+    end
+  end
+
+  defp extraction_providers(runtime, params) do
+    requested = normalize_optional_string(Map.get(params, "provider"))
+    explicit_fallbacks = Map.get(params, "fallbackProviders")
+
+    defaults =
+      if firecrawl_enabled?(runtime.firecrawl), do: ["direct", "firecrawl"], else: ["direct"]
+
+    values =
+      if requested, do: [requested | normalize_provider_list(explicit_fallbacks)], else: defaults
+
+    values
+    |> Enum.map(&String.downcase/1)
+    |> Enum.uniq()
+    |> Enum.reduce_while({:ok, []}, fn provider, {:ok, acc} ->
+      case SearchRegistry.fetch(provider) do
+        {:ok, %{capabilities: capabilities}} ->
+          if :extract in capabilities,
+            do: {:cont, {:ok, acc ++ [provider]}},
+            else: {:halt, {:error, "Provider #{provider} does not support extraction"}}
+
+        {:error, :not_found} ->
+          {:halt, {:error, "Unknown webfetch provider: #{provider}"}}
+      end
+    end)
+  end
+
+  defp normalize_provider_list(nil), do: []
+
+  defp normalize_provider_list(values) when is_list(values) do
+    values |> Enum.map(&normalize_optional_string/1) |> Enum.reject(&is_nil/1)
+  end
+
+  defp normalize_provider_list(_), do: []
+
+  defp safe_provider_attempts(attempts) do
+    Enum.map(attempts, fn attempt ->
+      %{
+        "provider" => attempt.provider,
+        "status" => to_string(attempt.status),
+        "reason" =>
+          if(Map.has_key?(attempt, :reason), do: format_reason(attempt.reason), else: nil)
+      }
+    end)
+  end
+
+  defp format_extract_failures(attempts) do
+    reasons = Enum.map(attempts, &{&1.provider, format_reason(&1.reason)})
+
+    case reasons do
+      [{_provider, reason}] ->
+        "Web fetch failed: #{reason}"
+
+      [{_primary, primary_reason}, {"firecrawl", firecrawl_reason} | _] ->
+        "Web fetch failed: #{primary_reason} (Firecrawl fallback failed: #{firecrawl_reason})"
+
+      _ ->
+        "Web fetch failed: " <>
+          Enum.map_join(reasons, "; ", fn {provider, reason} -> "#{provider}: #{reason}" end)
     end
   end
 

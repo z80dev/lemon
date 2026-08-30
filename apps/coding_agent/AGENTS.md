@@ -119,6 +119,15 @@ limits, and screens writes for common secrets, prompt-injection phrases, NUL
 bytes, and invisible/bidirectional controls. Use `memory_topic` for longer
 structured notes under `memory/topics/`.
 
+`websearch` and `webfetch` resolve their backends through
+`CodingAgent.Search.Registry`. Bundled providers include Brave, Perplexity,
+keyless DuckDuckGo, SearXNG, guarded direct extraction, and Firecrawl.
+Providers implement `CodingAgent.Search.Provider`, declare `:search` and/or
+`:extract`, run behind bounded isolation and deterministic fallback, and may be
+registered by trusted extensions with provider type `:search`. Concurrent
+identical requests are coalesced by `CodingAgent.Search.SingleFlight` before
+successful results enter the existing bounded/persistent web cache.
+
 `session_search` is the Hermes-compatible no-LLM recall tool. It infers
 discovery, scroll, or browse mode from the argument shape and reads from Lemon's
 durable memory/run-history stores; `search_memory` remains the native scoped

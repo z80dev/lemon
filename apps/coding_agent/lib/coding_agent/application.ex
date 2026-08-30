@@ -24,6 +24,8 @@ defmodule CodingAgent.Application do
       {Registry, keys: :unique, name: CodingAgent.SessionRegistry},
       {Registry, keys: :unique, name: CodingAgent.ProcessRegistry},
       {Registry, keys: :unique, name: CodingAgent.RateLimitHealerRegistry},
+      {Task.Supervisor, name: CodingAgent.Search.TaskSupervisor},
+      CodingAgent.Search.SingleFlight,
       CodingAgent.Tools.TodoStoreOwner,
       CodingAgent.SessionSupervisor,
       CodingAgent.Wasm.SidecarSupervisor,
@@ -50,6 +52,7 @@ defmodule CodingAgent.Application do
 
     case Supervisor.start_link(children, opts) do
       {:ok, _supervisor} = ok ->
+        CodingAgent.Search.Registry.init()
         register_control_plane_provider()
         maybe_start_primary_session()
         ok

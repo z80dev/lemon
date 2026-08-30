@@ -581,7 +581,7 @@ Lemon includes web tools under `runtime.tools.web`. For full setup and troublesh
 ```toml
 [runtime.tools.web.search]
 enabled = true
-provider = "brave"   # "brave" | "perplexity"
+provider = "brave"   # brave | perplexity | duckduckgo | searxng | extension id
 max_results = 5
 timeout_seconds = 30
 cache_ttl_minutes = 15
@@ -595,6 +595,12 @@ provider = "perplexity"
 api_key = "<perplexity-api-key>"
 base_url = "https://api.perplexity.ai"
 model = "perplexity/sonar-pro"
+
+[runtime.tools.web.search.providers.searxng]
+# Required only when selecting the SearXNG provider.
+base_url = "https://search.example.com"
+# Optional bearer token or Lemon secret name.
+api_key_secret = "SEARXNG_API_KEY"
 
 [runtime.tools.web.fetch]
 enabled = true

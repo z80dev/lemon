@@ -161,7 +161,7 @@ queue_mode = "collect"
 
 # [runtime.tools.web.search]
 # enabled = true
-# provider = "brave"      # "brave" | "perplexity"
+# provider = "brave"      # brave | perplexity | duckduckgo | searxng | extension id
 # max_results = 5
 # timeout_seconds = 30
 # cache_ttl_minutes = 15
@@ -169,6 +169,10 @@ queue_mode = "collect"
 # [runtime.tools.web.search.perplexity]
 # api_key = "<perplexity-api-key>"
 # model = "perplexity/sonar-pro"
+#
+# [runtime.tools.web.search.providers.searxng]
+# base_url = "https://search.example.com"
+# api_key_secret = "SEARXNG_API_KEY" # optional
 
 # [runtime.tools.web.fetch]
 # enabled = true

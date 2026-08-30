@@ -186,7 +186,7 @@ defmodule CodingAgent.Extensions.Extension do
 
   ## Fields
 
-    * `:type` - The provider type atom (e.g., `:model`, `:tool_executor`, `:storage`)
+    * `:type` - The provider type atom (for example `:model`, `:memory`, or `:search`)
     * `:name` - A unique name for this provider instance
     * `:module` - The module implementing the provider behaviour
     * `:config` - Optional configuration map for the provider
@@ -206,8 +206,9 @@ defmodule CodingAgent.Extensions.Extension do
   system. Common provider types include:
 
     * `:model` - AI model providers
-    * `:tool_executor` - Custom tool execution backends
-    * `:storage` - Storage backends for sessions, etc.
+    * `:memory` - Long-term memory providers
+    * `:search` - Web search and extraction providers implementing
+      `CodingAgent.Search.Provider`
 
   The session will automatically register these providers during startup.
 

@@ -205,7 +205,9 @@ The schema follows JSON Schema conventions with optional extensions:
 Extensions can register custom providers that integrate with the core system.
 Model providers add AI model backends. Memory providers implement
 `LemonMemory.Provider` and can participate in safety-screened memory ingest
-and scoped `search_memory` fan-out through `LemonMemory.Providers`.
+and scoped `search_memory` fan-out through `LemonMemory.Providers`. Search
+providers implement `CodingAgent.Search.Provider` and declare web `search`
+and/or `extract` capabilities.
 
 ```elixir
 @impl true
@@ -221,6 +223,12 @@ def providers do
       type: :memory,
       name: :team_memory,
       module: MyExtension.TeamMemoryProvider
+    },
+    %{
+      type: :search,
+      name: :team_search,
+      module: MyExtension.TeamSearchProvider,
+      config: %{priority: 50}
     }
   ]
 end
@@ -230,14 +238,14 @@ end
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `type` | atom or string | The provider type (`:model` / `"model"` or `:memory` / `"memory"`) |
+| `type` | atom or string | The provider type (`:model`, `:memory`, or `:search`) |
 | `name` | atom or string | Unique identifier for the provider |
 | `module` | module | The module implementing the provider behaviour |
 | `config` | map | Optional configuration passed to the provider |
 
 ### Provider Registration Process
 
-1. **At session startup**: Model providers are collected and registered into `LemonAi.ProviderRegistry`; memory providers are collected and registered into `LemonMemory.Providers`
+1. **At session startup**: Model providers are registered into `LemonAi.ProviderRegistry`, memory providers into `LemonMemory.Providers`, and search providers into `CodingAgent.Search.Registry`
 2. **On extension reload**: Old providers are unregistered, extensions are reloaded, and new providers are registered
 3. **Conflict detection**: When multiple extensions register the same provider name, the first (alphabetically by module name) wins
 

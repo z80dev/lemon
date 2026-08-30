@@ -8,6 +8,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Added
+
+- Extensible capability-aware web search/extraction providers with deterministic
+  fallback, provider isolation, request-level selection, extension registration,
+  keyless DuckDuckGo and configurable SearXNG search, and concurrent
+  single-flight request coalescing
+
 ### Changed
 
 - Product releases can now be cut and published from one manual Release

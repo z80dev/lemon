@@ -3,8 +3,10 @@
 `websearch`, `webfetch`, and the `browser_*` tools are built-in
 external-content tools:
 
-- `websearch`: query the web with Brave (default) or Perplexity Sonar.
-- `webfetch`: fetch a URL, extract readable content, and optionally fall back to Firecrawl.
+- `websearch`: query registered providers. Bundled providers are Brave
+  (default), Perplexity Sonar, keyless DuckDuckGo, and user-hosted SearXNG.
+- `webfetch`: extract readable content through registered providers. Guarded
+  direct extraction is the default and optionally falls back to Firecrawl.
 - `browser_navigate`: navigate the supervised local browser session.
 - `browser_snapshot`: inspect the current page as a compact DOM snapshot.
 - `browser_get_content`: return text and optionally sanitized HTML from the current page.
@@ -23,6 +25,35 @@ external-content tools:
   final Telegram/Discord answer path.
 - `browser_analyze`: capture a managed screenshot and pass it through
   `media_analyze_image` in one supervised BEAM-owned operation.
+
+## Search and extraction providers
+
+Both web tools use `CodingAgent.Search.Provider` and the shared
+capability-aware registry. Providers declare `search`, `extract`, or both.
+Selection is ordered and deterministic: an explicit request provider is
+attempted first, followed by the request's `fallbackProviders`; otherwise the
+configured provider and fallback are used. Each result includes the
+requested/used provider and a safe attempt summary.
+
+Identical concurrent requests are single-flight. One supervised operation calls
+the provider while other callers await the same result; successful results then
+enter the existing bounded ETS and optional persistent cache. Providers run in
+isolated, timeout-bounded processes, so an exception, exit, or slow provider can
+fall through without crashing the agent turn. URL-policy failures from guarded
+direct extraction are terminal and never fall back through a remote extractor.
+
+| Provider | Capability | Setup |
+|---|---|---|
+| `brave` | search | `BRAVE_API_KEY` or `runtime.tools.web.search.api_key` |
+| `perplexity` | search/answer | `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or configured key |
+| `duckduckgo` | keyless search | none |
+| `searxng` | search | `runtime.tools.web.search.providers.searxng.base_url` |
+| `direct` | extract | built in; guarded HTTP plus readability |
+| `firecrawl` | extract | `FIRECRAWL_API_KEY` or configured key |
+
+Extensions may register additional providers with `type: :search`; the module
+must implement `CodingAgent.Search.Provider`. Built-ins win identifier
+conflicts, and extension providers are removed during extension reload.
 
 Browser tools use `LemonBrowser.LocalServer`, an OTP-supervised
 Node/Playwright helper. They require the browser node client to be built:
