@@ -71,6 +71,26 @@ defmodule LemonControlPlane.Protocol.Schemas do
 
     # Channel methods
     "commands.catalog" => %{optional: %{}},
+    "background.start" => %{
+      required: %{"prompt" => :string},
+      optional: %{
+        "sessionId" => :string,
+        "sessionKey" => :string,
+        "cwd" => :string,
+        "model" => :string,
+        "thinkingLevel" => :string,
+        "timeoutMs" => :integer
+      }
+    },
+    "background.list" => %{optional: %{"status" => :string}},
+    "background.status" => %{required: %{"id" => :string}, optional: %{}},
+    "background.result" => %{required: %{"id" => :string}, optional: %{}},
+    "background.cancel" => %{required: %{"id" => :string}, optional: %{}},
+    "session.btw" => %{
+      required: %{"question" => :string},
+      required_any: [["sessionId", "sessionKey"]],
+      optional: %{"sessionId" => :string, "sessionKey" => :string, "timeoutMs" => :integer}
+    },
     "channels.status" => %{
       optional: %{
         "projectDir" => :string,

@@ -10,8 +10,6 @@ defmodule LemonChannels.PortableCommand do
   alias LemonChannels.CommandCatalog
   alias LemonCore.{RouterBridge, Store, UsageDiagnostics}
 
-  @background_run :"Elixir.CodingAgent.BackgroundRun"
-  @side_query :"Elixir.CodingAgent.SideQuery"
   @default_limit 10
 
   @type context :: %{
@@ -195,7 +193,7 @@ defmodule LemonChannels.PortableCommand do
       |> maybe_put(:model, context[:model])
       |> maybe_put(:thinking_level, context[:thinking_level])
 
-    case module_call(@background_run, :start, [prompt, opts], {:error, :unavailable}) do
+    case runtime_call(:background_start, [prompt, opts], {:error, :unavailable}) do
       {:ok, %{id: id}} -> {:ok, "Background run started: #{short_id(id)}"}
       {:ok, %{"id" => id}} -> {:ok, "Background run started: #{short_id(id)}"}
       {:error, :unavailable} -> {:error, "Background runs are unavailable in this Lemon runtime."}
@@ -210,7 +208,7 @@ defmodule LemonChannels.PortableCommand do
     with session_key when is_binary(session_key) and session_key != "" <- context[:session_key] do
       opts = maybe_put([], :timeout_ms, context[:timeout_ms])
 
-      case module_call(@side_query, :ask, [session_key, question, opts], {:error, :unavailable}) do
+      case runtime_call(:side_query, [session_key, question, opts], {:error, :unavailable}) do
         {:ok, answer} when is_binary(answer) ->
           {:ok, answer}
 

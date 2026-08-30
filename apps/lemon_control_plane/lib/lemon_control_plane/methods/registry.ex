@@ -64,6 +64,12 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.LogsTail,
     # Channels
     LemonControlPlane.Methods.CommandsCatalog,
+    LemonControlPlane.Methods.BackgroundStart,
+    LemonControlPlane.Methods.BackgroundList,
+    LemonControlPlane.Methods.BackgroundStatus,
+    LemonControlPlane.Methods.BackgroundResult,
+    LemonControlPlane.Methods.BackgroundCancel,
+    LemonControlPlane.Methods.SessionBtw,
     LemonControlPlane.Methods.ChannelsStatus,
     LemonControlPlane.Methods.TransportsStatus,
     LemonControlPlane.Methods.ChannelsLogout,

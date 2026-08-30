@@ -414,6 +414,7 @@ Each method declares required scopes. A connection must have at least one matchi
 | `sessions.reset` | admin | Clear session history plus cleanup summary |
 | `sessions.delete` | admin | Delete a session plus cleanup summary |
 | `sessions.compact` | admin | Compact session storage plus no-text cleanup summary |
+| `session.btw` | write | Ask a bounded no-tools question against a frozen live session or durable session-key history without mutating the parent conversation |
 
 ### Monitoring and Introspection
 
@@ -569,6 +570,11 @@ remote result, or error.
 | Method | Scope | Description |
 |--------|-------|-------------|
 | `commands.catalog` | read | Return the portable, JSON-safe command catalog with aliases, descriptions, argument and busy-state metadata, semantic capability ids, category counts, and a versioned summary; this method never executes a command |
+| `background.start` | write | Start an isolated full-tool native agent session and return its durable lifecycle id immediately |
+| `background.list` | read | List sanitized durable background-run lifecycle summaries, optionally filtered by status |
+| `background.status` | read | Read one sanitized background-run lifecycle summary |
+| `background.result` | read | Read the visible answer after completion, or report that the run is not ready |
+| `background.cancel` | write | Cancel a queued or running background session by durable id |
 | `channels.status` | read | Status of configured channel adapters plus Telegram/Discord diagnostics, proof, shared launch-gate readiness, compact gate status/reason maps, and cleanup summaries |
 | `transports.status` | read | Status of configured legacy gateway transports plus registry/module health summary |
 | `channels.logout` | admin | Logout from a channel plus credential/state cleanup summary |

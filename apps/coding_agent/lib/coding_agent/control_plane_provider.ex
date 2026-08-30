@@ -41,6 +41,22 @@ defmodule CodingAgent.ControlPlaneProvider do
     end
   end
 
+  def background_start(prompt, opts), do: CodingAgent.BackgroundRun.start(prompt, opts)
+
+  def background_list(opts) do
+    opts
+    |> normalize_background_list_opts()
+    |> CodingAgent.BackgroundRun.list()
+  end
+
+  def background_status(id), do: CodingAgent.BackgroundRun.status(id)
+
+  def background_result(id), do: CodingAgent.BackgroundRun.result(id)
+
+  def background_cancel(id), do: CodingAgent.BackgroundRun.cancel(id)
+
+  def side_query(source, question, opts), do: CodingAgent.SideQuery.ask(source, question, opts)
+
   def run_graph(run_id), do: CodingAgent.RunGraph.get(run_id)
 
   def progress_snapshot(session_id, cwd), do: CodingAgent.Progress.snapshot(session_id, cwd)
@@ -59,5 +75,16 @@ defmodule CodingAgent.ControlPlaneProvider do
 
   def wasm_sidecar_running? do
     is_pid(Process.whereis(CodingAgent.Wasm.SidecarSupervisor))
+  end
+
+  defp normalize_background_list_opts(opts) do
+    case Keyword.get(opts, :status) do
+      status
+      when status in ~w(queued running completed error lost killed cancelled tracking_lost) ->
+        Keyword.put(opts, :status, String.to_existing_atom(status))
+
+      _ ->
+        Keyword.delete(opts, :status)
+    end
   end
 end

@@ -14,6 +14,16 @@ defmodule LemonChannels.PortableCommandTest do
 
     def compact_session("session-ok", []), do: :ok
     def compact_session(_, []), do: {:error, :session_not_found}
+
+    def background_start("index the repository", opts) do
+      send(self(), {:background_start, opts})
+      {:ok, %{id: "bg_1234567890abcdef", status: :queued}}
+    end
+
+    def side_query("session-ok", "what changed?", opts) do
+      send(self(), {:side_query, opts})
+      {:ok, "Only the portable command boundary changed."}
+    end
   end
 
   setup do
@@ -56,5 +66,29 @@ defmodule LemonChannels.PortableCommandTest do
   test "rejects missing side-run prompts without invoking a runtime" do
     assert PortableCommand.handle("bg", "", %{}) == {:error, "Usage: /bg <prompt>"}
     assert PortableCommand.handle("btw", "", %{}) == {:error, "Usage: /btw <question>"}
+  end
+
+  test "starts background work through the registered runtime provider" do
+    assert PortableCommand.handle("bg", "index the repository", %{
+             session_key: "session-ok",
+             cwd: "/tmp/project",
+             model: "test-model",
+             thinking_level: "high"
+           }) == {:ok, "Background run started: bg_123456789"}
+
+    assert_received {:background_start, opts}
+    assert opts[:session_key] == "session-ok"
+    assert opts[:cwd] == "/tmp/project"
+    assert opts[:model] == "test-model"
+    assert opts[:thinking_level] == "high"
+  end
+
+  test "answers side questions through the registered runtime provider" do
+    assert PortableCommand.handle("btw", "what changed?", %{
+             session_key: "session-ok",
+             timeout_ms: 5_000
+           }) == {:ok, "Only the portable command boundary changed."}
+
+    assert_received {:side_query, [timeout_ms: 5_000]}
   end
 end

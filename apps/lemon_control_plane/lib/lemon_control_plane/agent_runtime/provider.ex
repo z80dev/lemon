@@ -37,6 +37,25 @@ defmodule LemonControlPlane.AgentRuntime.Provider do
   @doc "Compacts a live session. `{:error, :session_not_found}` when it is not running."
   @callback compact_session(session_key(), keyword()) :: :ok | {:error, term()}
 
+  @doc "Starts an isolated durable background agent session."
+  @callback background_start(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+
+  @doc "Lists durable background sessions, optionally filtered by status."
+  @callback background_list(keyword()) :: [map()] | {:error, term()}
+
+  @doc "Returns one background session's sanitized lifecycle summary."
+  @callback background_status(String.t()) :: {:ok, map()} | {:error, term()}
+
+  @doc "Returns one completed background session's visible answer."
+  @callback background_result(String.t()) :: {:ok, String.t()} | {:error, term()}
+
+  @doc "Cancels one queued or running background session."
+  @callback background_cancel(String.t()) :: :ok | {:error, term()}
+
+  @doc "Answers a bounded no-tools question against a frozen session context."
+  @callback side_query(pid() | session_key() | map(), String.t(), keyword()) ::
+              {:ok, String.t()} | {:error, term()}
+
   @doc "Run-graph record for a run id."
   @callback run_graph(String.t()) :: {:ok, map()} | term()
 
@@ -66,6 +85,12 @@ defmodule LemonControlPlane.AgentRuntime.Provider do
                       todo_progress: 1,
                       feature_progress: 1,
                       compact_session: 2,
+                      background_start: 2,
+                      background_list: 1,
+                      background_status: 1,
+                      background_result: 1,
+                      background_cancel: 1,
+                      side_query: 3,
                       run_graph: 1,
                       progress_snapshot: 2,
                       load_extensions: 1,
