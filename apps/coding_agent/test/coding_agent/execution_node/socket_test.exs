@@ -75,7 +75,7 @@ defmodule CodingAgent.ExecutionNode.SocketTest do
     assert Jason.decode!(frame)["params"]["auth"]["token"] == "secret"
   end
 
-  test "sends protocol pings below the controller idle timeout" do
+  test "sends application health keepalives below the controller idle timeout" do
     state = %Socket{
       owner: self(),
       connect_params: %{},
@@ -88,8 +88,13 @@ defmodule CodingAgent.ExecutionNode.SocketTest do
     token = connected_state.ping_token
     assert_receive {:execution_node_ping, ^token}, 100
 
-    assert {:reply, {:ping, ""}, ^connected_state} =
+    assert {:reply, {:text, frame}, keepalive_state} =
              Socket.handle_info({:execution_node_ping, token}, connected_state)
+
+    decoded = Jason.decode!(frame)
+    assert decoded["method"] == "health"
+    assert decoded["params"] == %{}
+    assert Map.has_key?(keepalive_state.pending, decoded["id"])
   end
 
   test "redacts authentication material from status output" do

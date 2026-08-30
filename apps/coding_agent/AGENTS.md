@@ -53,7 +53,7 @@ The main coding agent implementation for the Lemon AI assistant platform. This a
 | `CodingAgent.SessionSupervisor` | DynamicSupervisor for session processes |
 | `CodingAgent.SessionRegistry` | Registry for session lookup by ID |
 | `CodingAgent.SessionRootSupervisor` | Top-level supervisor for all session infra |
-| `CodingAgent.ExecutionNode.Worker` | Authenticated named-node worker that executes targeted `coding_agent.run` requests through the native executor |
+| `CodingAgent.ExecutionNode.Worker` | Authenticated named-node worker that maintains application-level health keepalives and executes targeted `coding_agent.run` requests through the native executor |
 | `CodingAgent.ExecutionNode.Socket` | Reconnecting control-plane WebSocket client with authenticated handshakes and redacted status |
 | `CodingAgent.ExecutionNode.TokenStore` | Mode-0600, node-name-keyed local session-token storage |
 | `CodingAgent.Executor.RemoteSessionRunner` | Source-side bridge from one native gateway execution to one live named node |

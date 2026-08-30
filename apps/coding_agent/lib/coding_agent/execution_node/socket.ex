@@ -3,8 +3,10 @@ defmodule CodingAgent.ExecutionNode.Socket do
   Reconnecting WebSocket client for a Lemon execution node.
 
   Every successful TCP/WebSocket connection performs a fresh authenticated
-  control-plane `connect` handshake. Request parameters are never logged, and
-  status formatting redacts the stored authentication material.
+  control-plane `connect` handshake. An application-level `health` request is
+  sent below the controller idle timeout because WebSocket control pings do not
+  count as client data for every server adapter. Request parameters are never
+  logged, and status formatting redacts the stored authentication material.
   """
 
   use WebSockex
@@ -154,7 +156,11 @@ defmodule CodingAgent.ExecutionNode.Socket do
 
   def handle_info({:execution_node_ping, token}, %{ping_token: token, stopping: false} = state) do
     schedule_ping(state.ping_interval_ms, token)
-    {:reply, {:ping, ""}, state}
+    id = LemonCore.Id.uuid()
+    timer = Process.send_after(self(), {:request_timeout, id}, 10_000)
+    pending = Map.put(state.pending, id, %{tag: :keepalive, timer: timer})
+    frame = Codec.encode_request(id, "health", %{})
+    {:reply, {:text, frame}, %{state | pending: pending}}
   end
 
   def handle_info({:execution_node_ping, _token}, state), do: {:ok, state}

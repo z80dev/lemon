@@ -116,7 +116,7 @@ CodingAgent.Supervisor (one_for_one)
 | Module | Description |
 |--------|-------------|
 | `CodingAgent.ExecutionNode.CLI` | Implements `./bin/lemon node join` for a source checkout |
-| `CodingAgent.ExecutionNode.Worker` | Authenticates to a controller and executes targeted, versioned `coding_agent.run` requests through `CodingAgent.Executor` |
+| `CodingAgent.ExecutionNode.Worker` | Authenticates to a controller, maintains the connection with application-level health keepalives, and executes targeted, versioned `coding_agent.run` requests through `CodingAgent.Executor` |
 | `CodingAgent.ExecutionNode.Socket` | Reconnecting WebSocket client for control-plane handshakes, requests, responses, and node events |
 | `CodingAgent.ExecutionNode.TokenStore` | Stores node-name-keyed session-token records under `~/.lemon/nodes/execution/` with a mode-0700 directory and mode-0600 files |
 | `CodingAgent.Executor.RemoteRequestCodec` | Restricts the cross-node boundary to JSON-safe execution request/result fields and destination-cwd intent |
