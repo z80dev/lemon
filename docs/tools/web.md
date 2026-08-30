@@ -8,11 +8,14 @@ external-content tools:
 - `webfetch`: extract readable content through registered providers. Guarded
   direct extraction is the default and optionally falls back to Firecrawl.
 - `browser_navigate`: navigate the supervised local browser session.
+- `browser_tabs`, `browser_tab_open`, `browser_tab_activate`,
+  `browser_tab_close`: enumerate and manage tabs through stable Chrome target
+  IDs.
 - `browser_snapshot`: inspect the current page as a compact DOM snapshot.
 - `browser_get_content`: return text and optionally sanitized HTML from the current page.
 - `browser_click`, `browser_type`, `browser_hover`, `browser_select_option`,
   `browser_upload_file`, `browser_download`, `browser_press`, `browser_scroll`, `browser_back`:
-  interact with the current page.
+  interact with the current page, or an explicit `targetId`.
 - `browser_wait_for_selector`: wait until a selector appears.
 - `browser_evaluate`: evaluate a JavaScript expression in the current page and
   return untrusted JSON-serializable output.
@@ -55,8 +58,12 @@ Extensions may register additional providers with `type: :search`; the module
 must implement `CodingAgent.Search.Provider`. Built-ins win identifier
 conflicts, and extension providers are removed during extension reload.
 
-Browser tools use `LemonBrowser.LocalServer`, an OTP-supervised
-Node/Playwright helper. They require the browser node client to be built:
+Browser tools use the backend-neutral `LemonBrowser` facade. The default
+`:local` backend dispatches to `LemonBrowser.LocalServer`, an OTP-supervised
+Node/Playwright helper; `:controller` dispatches only to an exactly bound,
+authenticated controller. Unknown, unavailable, offline, or mismatched
+backends fail closed and never switch browser identity or profile implicitly.
+The local backend requires the browser node client to be built:
 
 ```bash
 cd clients/lemon-browser-node
@@ -70,6 +77,43 @@ local driver to attach to an already-running local or managed CDP endpoint
 instead. Endpoint attach mode is attach-only: Lemon will not try to launch a
 replacement browser if that endpoint is unreachable, and connection errors
 redact endpoint credentials before surfacing to operators.
+
+Every page-scoped browser tool accepts optional `targetId`. When omitted it
+uses the session's active target; `browser_tab_activate` changes that active
+target. `browser_tabs` returns stable real Chrome target IDs. Lemon separately
+tracks browsers it launched and browsers it merely attached to; stopping an
+attached session never sends `Browser.close` and never terminates the user's
+browser.
+
+### Existing signed-in Chrome via MV3
+
+The opt-in extension relay exposes existing signed-in tabs without launching a
+debugging profile:
+
+```bash
+export LEMON_BROWSER_RELAY_TOKEN="$(openssl rand -hex 32)"
+./bin/lemon-browser-relay start
+./bin/lemon-browser-relay install
+
+export LEMON_BROWSER_CDP_ENDPOINT="ws://127.0.0.1:9224/cdp?token=$LEMON_BROWSER_RELAY_TOKEN"
+export LEMON_BROWSER_ATTACH_ONLY=true
+```
+
+Load the directory printed by `install` through Chrome's **Load unpacked** UI,
+then enter the same token and port in the extension settings. The relay binds
+only to loopback, requires constant-time token authentication on discovery and
+both WebSocket paths, hides restricted Chrome pages, and acknowledges rather
+than forwards `Browser.close`. The extension displays connection state in its
+badge and reconnects with bounded backoff. See
+[`clients/lemon-browser-node/README.md`](../../clients/lemon-browser-node/README.md).
+
+Remote controllers use `browser.controller.ticket`, `register`, `heartbeat`,
+`result`, and `status`. Tickets are strong, short-lived, hashed at rest, and
+single-use. Registration binds the authenticated principal, exact controller,
+browser profile, Lemon session/run, and allowlisted capabilities. Each command
+has bounded completion, and results are accepted only from the exact registered
+WebSocket process. Offline, expired, replayed, mismatched, or under-capability
+requests fail closed.
 
 Screenshots default to `.lemon/browser-artifacts/` under the active working
 directory unless a `path` is provided.
@@ -192,6 +236,18 @@ assertions. Pass
 `LEMON_BROWSER_EXECUTABLE` when Chrome/Chromium is not on `PATH`. Use
 `LEMON_BROWSER_CDP_ENDPOINT` when the browser is already managed by another
 local service, a container, or a remote CDP provider.
+
+The real MV3/Chrome relay proof is:
+
+```bash
+cd clients/lemon-browser-node
+npm run smoke:extension
+```
+
+It launches a disposable Chrome-for-Testing profile, loads the unpacked
+extension, authenticates the loopback relay, enumerates existing tabs, opens a
+new tab, reads title and DOM content through Playwright, detaches, and verifies
+that the attached Chrome process remains alive.
 
 ## API Key Setup
 

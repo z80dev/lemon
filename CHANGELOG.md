@@ -14,6 +14,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   fallback, provider isolation, request-level selection, extension registration,
   keyless DuckDuckGo and configurable SearXNG search, and concurrent
   single-flight request coalescing
+- Backend-neutral multi-tab browser control with stable target IDs, safe
+  attached-browser lifecycle semantics, authenticated single-use controller
+  tickets, and a bundled token-gated Manifest V3 relay for existing signed-in
+  Chrome tabs
 
 ### Changed
 

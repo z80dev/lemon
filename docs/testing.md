@@ -1227,12 +1227,13 @@ and records redacted proof JSON:
 mix test apps/coding_agent/test/coding_agent/tools/browser_test.exs --seed 1
 ```
 
-The focused browser tool lane covers metadata-only screenshot artifacts,
+The focused browser tool lane covers multi-tab list/open/activate/close,
+target-specific operations, metadata-only screenshot artifacts,
 `includeImage` model-visible screenshot content, and `sendToChannel` final
 Telegram/Discord attachment metadata. It also covers cookie inspection, cookie
 seeding, clear-state reset controls, and channel-safe progress update redaction
 for URL, selector, and failure paths. It passed locally on 2026-05-17 with
-`16 tests, 0 failures`.
+`30 tests, 0 failures`.
 
 ```bash
 MIX_ENV=test mix run scripts/live_browser_smoke.exs
@@ -1252,6 +1253,20 @@ the final readiness audit validates it by default or
 
 Use `--executable /path/to/chrome` or `LEMON_BROWSER_EXECUTABLE=/path/to/chrome`
 when Chrome/Chromium is not on `PATH`.
+
+The MV3 relay has deterministic protocol/auth tests plus a real disposable
+Chrome-for-Testing smoke:
+
+```bash
+cd clients/lemon-browser-node
+npm test
+npm run typecheck
+npm run smoke:extension
+```
+
+The smoke loads the unpacked extension, configures a random loopback token,
+connects through the CDP relay, lists tabs, opens a tab, reads DOM content, and
+proves detaching does not close the externally owned browser.
 
 ## Hermetic Telegram Transport Smoke
 

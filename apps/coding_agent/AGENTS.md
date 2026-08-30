@@ -61,14 +61,14 @@ When downstream store or agent processes time out, callers should log and contin
 
 Tools are divided into two sets. `coding_tools/2` is the default set passed to sessions; `all_tools/2` includes extras not in the default set.
 
-**Default `coding_tools/2`** (55 tools registered in `CodingAgent.Tools.coding_tools/2` and `@builtin_tools` in `ToolRegistry`):
+**Default `coding_tools/2`** (59 tools registered in `CodingAgent.Tools.coding_tools/2` and `@builtin_tools` in `ToolRegistry`):
 
 | Category | Tools |
 |----------|-------|
 | **File Operations / Skills** | `read`, `read_skill`, `skill_manage`, `memory_topic`, `memory`, `search_memory`, `session_search`, `checkpoint`, `write`, `edit`, `patch`, `hashline_edit`, `lsp_diagnostics`, `ls` |
 | **Search** | `grep`, `find` |
 | **Execution** | `bash` (`execute_code` is a config-gated builtin appended last in `@builtin_tools`: default-off via `[runtime.tools.execute_code] enabled`, bash-equivalent, and filtered out of the disclosed set unless enabled) |
-| **Web / Browser / Media** | `websearch`, `webfetch`, `browser_navigate`, `browser_snapshot`, `browser_get_content`, `browser_click`, `browser_type`, `browser_hover`, `browser_select_option`, `browser_upload_file`, `browser_download`, `browser_press`, `browser_scroll`, `browser_back`, `browser_wait_for_selector`, `browser_evaluate`, `browser_events`, `browser_get_cookies`, `browser_set_cookies`, `browser_clear_state`, `browser_screenshot`, `browser_analyze`, `media_status`, `media_generate_image`, `media_generate_speech`, `media_transcribe_audio`, `media_analyze_image`, `media_generate_video` |
+| **Web / Browser / Media** | `websearch`, `webfetch`, `browser_tabs`, `browser_tab_open`, `browser_tab_activate`, `browser_tab_close`, `browser_navigate`, `browser_snapshot`, `browser_get_content`, `browser_click`, `browser_type`, `browser_hover`, `browser_select_option`, `browser_upload_file`, `browser_download`, `browser_press`, `browser_scroll`, `browser_back`, `browser_wait_for_selector`, `browser_evaluate`, `browser_events`, `browser_get_cookies`, `browser_set_cookies`, `browser_clear_state`, `browser_screenshot`, `browser_analyze`, `media_status`, `media_generate_image`, `media_generate_speech`, `media_transcribe_audio`, `media_analyze_image`, `media_generate_video` |
 | **Task/Agent** | `task`, `agent`, `parent_question`, `todo`, `kanban` |
 | **Social** | `x_search`, `post_to_x`, `get_x_mentions` |
 | **System** | `tool_auth`, `extensions_status` |
@@ -104,6 +104,16 @@ The default `route: "auto"` preserves local-first use while reporting public,
 private, or local-document target kind; `route: "public"` rejects local/private
 targets, `route: "local"` rejects public web targets, and metadata endpoints
 are always blocked before the browser worker.
+
+Browser tools dispatch through the backend-neutral `LemonBrowser` facade.
+Page-scoped tools accept optional `targetId`; the tab tools list, open,
+activate, and close stable real Chrome targets. The default managed local
+backend remains isolated. The controller backend binds exact principal,
+controller, profile, session, run, and capabilities through short-lived
+single-use tickets and fails closed when the binding is offline or mismatched.
+The optional MV3 extension/local relay exposes existing signed-in Chrome tabs
+over token-authenticated loopback CDP, while attached-session shutdown never
+closes the user's browser.
 
 `browser_get_cookies`, `browser_set_cookies`, and `browser_clear_state` expose
 session-state controls over the supervised browser boundary. Cookie values are

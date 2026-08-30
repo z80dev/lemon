@@ -12,6 +12,7 @@ import { resolveOpenClawUserDataDir } from './openclaw-profile.js';
 export type BrowserNodeCliConfig = {
   wsUrl: string;
   cdpPort: number;
+  cdpEndpoint: string | null;
   headless: boolean;
   noSandbox: boolean;
   attachOnly: boolean;
@@ -35,9 +36,11 @@ export function resolveCliConfig(params: {
 
   const wsUrl = asString(params.args['ws-url']) ?? 'ws://localhost:4040/ws';
   const cdpPort = asInt(params.args['cdp-port'], 18800);
+  const cdpEndpoint =
+    asString(params.args['cdp-endpoint']) ?? asString(env.LEMON_BROWSER_CDP_ENDPOINT);
   const headless = asBool(params.args['headless']);
   const noSandbox = asBool(params.args['no-sandbox']);
-  const attachOnly = asBool(params.args['attach-only']);
+  const attachOnly = asBool(params.args['attach-only']) || !!cdpEndpoint;
   const executablePath = asString(params.args['executable-path']) ?? asString(env.LEMON_CHROME_EXECUTABLE);
 
   const openclawProfile = asString(params.args['openclaw-profile']) ?? 'openclaw';
@@ -64,6 +67,7 @@ export function resolveCliConfig(params: {
   return {
     wsUrl,
     cdpPort,
+    cdpEndpoint,
     headless,
     noSandbox,
     attachOnly,
@@ -174,6 +178,7 @@ async function main() {
       'lemon-browser-node',
       `wsUrl=${config.wsUrl}`,
       `cdpPort=${config.cdpPort}`,
+      `cdpEndpoint=${config.cdpEndpoint ? '[configured]' : '[managed]'}`,
       `userDataDir=${config.userDataDir}`,
       `headless=${config.headless}`,
       `attachOnly=${config.attachOnly}`,
@@ -184,6 +189,7 @@ async function main() {
     wsUrl: config.wsUrl,
     token,
     cdpPort: config.cdpPort,
+    cdpEndpoint: config.cdpEndpoint ?? undefined,
     userDataDir: config.userDataDir,
     executablePath: config.executablePath ?? undefined,
     headless: config.headless,

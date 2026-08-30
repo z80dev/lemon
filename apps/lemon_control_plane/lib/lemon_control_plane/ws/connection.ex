@@ -99,6 +99,10 @@ defmodule LemonControlPlane.WS.Connection do
     end
   end
 
+  def handle_info({:browser_controller_command, payload}, state) do
+    handle_info({:event, "browser.controller.command", payload}, state)
+  end
+
   def handle_info({:event, event_name, payload, new_state_version}, state)
       when is_map(new_state_version) do
     if subscribed_to_event?(state, event_name, payload) do

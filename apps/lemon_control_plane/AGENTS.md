@@ -387,6 +387,11 @@ when to render the full payload.
 | `talk.mode` | write | Get or set talk mode for a session plus audio/transcript cleanup summary |
 | `browser.status` | read | Inspect local browser driver status, artifacts, browser nodes, and live browser proof state |
 | `browser.request` | write | Send a browser request with route-policy and result cleanup summaries |
+| `browser.controller.ticket` | write | Mint a short-lived single-use ticket bound to the authenticated principal, controller, profile, session/run, and capabilities |
+| `browser.controller.register` | write | Consume a ticket and bind the exact WebSocket process as a browser controller |
+| `browser.controller.heartbeat` | write | Refresh liveness for the exact registered controller process |
+| `browser.controller.result` | write | Return one command result from the exact registered controller process |
+| `browser.controller.status` | read | Inspect redacted controller/binding status without tickets, credentials, or page content |
 | `checkpoint.status` | read | Inspect redacted checkpoint-store metadata plus filtered lifecycle event counts/history |
 | `checkpoint.diff` | read | Preview filesystem changes for a checkpoint with path/diff cleanup summary |
 | `checkpoint.restore` | write | Restore all or selected checkpoint paths with restore cleanup summary |

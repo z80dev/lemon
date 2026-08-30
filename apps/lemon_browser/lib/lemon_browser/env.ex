@@ -62,6 +62,30 @@ defmodule LemonBrowser.Env do
       required?: false,
       area: :browser,
       apps: [:lemon_browser]
+    },
+    %{
+      name: :lemon_browser_relay_port,
+      env_var: "LEMON_BROWSER_RELAY_PORT",
+      aliases: [],
+      type: :integer,
+      default: 9_224,
+      doc: "Loopback port for the Manifest V3 existing-Chrome relay.",
+      secret?: false,
+      required?: false,
+      area: :browser,
+      apps: [:lemon_browser]
+    },
+    %{
+      name: :lemon_browser_relay_token,
+      env_var: "LEMON_BROWSER_RELAY_TOKEN",
+      aliases: [],
+      type: :string,
+      default: nil,
+      doc: "Required shared secret for the loopback extension and CDP relay.",
+      secret?: true,
+      required?: false,
+      area: :browser,
+      apps: [:lemon_browser]
     }
   ]
 end

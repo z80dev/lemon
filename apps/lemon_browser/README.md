@@ -11,7 +11,11 @@ agent platform. Its only Lemon dependency is `lemon_core`.
 
 | Module | Purpose |
 |---|---|
+| `LemonBrowser` | Backend-neutral request/status facade |
+| `LemonBrowser.Backend` | Contract for local, paired-node, and controller backends |
+| `LemonBrowser.BackendRegistry` | Built-in-safe runtime backend registry |
 | `LemonBrowser.LocalServer` | Supervised driver process: `request/3`, `status/0`, `stop/1` |
+| `LemonBrowser.ControllerBroker` | Single-use controller tickets, exact identity binding, capability checks, timeouts |
 | `LemonBrowser.RoutePolicy` | Navigation classification and guardrails: `validate_navigation/2`, `safe/1` |
 | `LemonBrowser.Artifacts` | Metadata over saved artifacts: `recent/1`, `summary/1`, `cleanup/1` |
 | `LemonBrowser.Env` | The app's environment-variable registry, aggregated by `LemonCore.Env` |
@@ -30,7 +34,7 @@ Starting the application starts `LemonBrowser.LocalServer` under
 ## Driving a browser
 
 ```elixir
-{:ok, result} = LemonBrowser.LocalServer.request("browser.navigate", %{"url" => "https://hex.pm"})
+{:ok, result} = LemonBrowser.request("browser.navigate", %{"url" => "https://hex.pm"})
 ```
 
 `request/3` takes a method name, a map of arguments and an optional timeout in
@@ -42,6 +46,13 @@ carries an id, and a request that outlives its timeout answers
 `LemonBrowser.LocalServer.status/0` reports whether the driver is available and
 running, the pending/completed/failed counts, the last error, and the resolved
 driver configuration.
+
+`LemonBrowser.request/4` is the public, backend-neutral entrypoint. It uses the
+configured `:lemon_browser, :backend` (default `:local`) or an explicit
+`backend:` option. Unknown and unavailable backends fail closed instead of
+silently switching to another browser identity or profile. Runtime packages can
+implement `LemonBrowser.Backend` and register it with
+`LemonBrowser.BackendRegistry`; built-in backend IDs cannot be replaced.
 
 ## Vetting a URL first
 
@@ -95,6 +106,17 @@ the requests in flight fail; the next request starts a fresh one.
 | `LEMON_BROWSER_CDP_ENDPOINT` | — | CDP websocket endpoint to attach to instead of launching a browser |
 | `LEMON_BROWSER_ATTACH_ONLY` | `false` | Only attach to an existing browser, never launch one |
 | `LEMON_BROWSER_CDP_PORT` | `18800` | Local CDP port for a managed browser (positive integers only) |
+| `LEMON_BROWSER_RELAY_TOKEN` | — | Required shared secret for the loopback MV3 extension/CDP relay |
+| `LEMON_BROWSER_RELAY_PORT` | `9224` | Loopback MV3 relay port |
+
+### Existing signed-in Chrome
+
+The bundled Manifest V3 extension and relay are documented in
+[`clients/lemon-browser-node/README.md`](../../clients/lemon-browser-node/README.md).
+The relay lets Lemon use opted-in existing Chrome tabs and authenticated
+sessions without launching Chrome with a debugging profile. It is token-gated
+by default and ignores `Browser.close` so an attached agent cannot terminate
+the user's browser.
 
 ## Artifacts
 

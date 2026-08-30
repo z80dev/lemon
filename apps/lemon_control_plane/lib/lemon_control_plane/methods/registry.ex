@@ -133,6 +133,11 @@ defmodule LemonControlPlane.Methods.Registry do
     # Browser
     LemonControlPlane.Methods.BrowserStatus,
     LemonControlPlane.Methods.BrowserRequest,
+    LemonControlPlane.Methods.BrowserControllerTicket,
+    LemonControlPlane.Methods.BrowserControllerRegister,
+    LemonControlPlane.Methods.BrowserControllerHeartbeat,
+    LemonControlPlane.Methods.BrowserControllerResult,
+    LemonControlPlane.Methods.BrowserControllerStatus,
     LemonControlPlane.Methods.MediaStatus,
     LemonControlPlane.Methods.ReadinessStatus,
     LemonControlPlane.Methods.ProofsStatus,
