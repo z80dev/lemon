@@ -11,6 +11,7 @@ defmodule CodingAgent.Tools.Write do
   alias LemonAi.Types.TextContent
   alias CodingAgent.Tools.ACPFileBridge
   alias CodingAgent.Tools.CheckpointGuard
+  alias CodingAgent.Tools.FileValidation
   alias CodingAgent.Tools.LspDiagnostics
   alias CodingAgent.Tools.LspFormatter
   alias CodingAgent.Tools.PathHelpers
@@ -76,7 +77,7 @@ defmodule CodingAgent.Tools.Write do
     * `signal` - Abort signal reference for cancellation (can be nil)
     * `on_update` - Callback for streaming partial results (unused for write)
     * `cwd` - Current working directory for resolving relative paths
-    * `opts` - Additional options (currently unused)
+    * `opts` - Checkpoint, diagnostics, formatting, ACP, and trusted-symlink options
 
   ## Returns
 
@@ -175,8 +176,12 @@ defmodule CodingAgent.Tools.Write do
   end
 
   defp write_file_local(path, content, signal, format?, diagnostics?, cwd, opts) do
+    path = Path.expand(path)
+
     try do
-      with {:ok, checkpoint} <-
+      with :ok <-
+             FileValidation.check_mutation_target(path, Keyword.put(opts, :mutation_root, cwd)),
+           {:ok, checkpoint} <-
              CheckpointGuard.before_mutation([path], cwd, opts, %{
                tool: "write",
                action: "overwrite",
@@ -208,7 +213,7 @@ defmodule CodingAgent.Tools.Write do
   defp do_write_file(
          path,
          content,
-         _signal,
+         signal,
          format?,
          diagnostics?,
          baseline,
@@ -216,38 +221,42 @@ defmodule CodingAgent.Tools.Write do
          opts,
          checkpoint
        ) do
-    # Create parent directories
-    dir = Path.dirname(path)
-    File.mkdir_p!(dir)
+    if AbortSignal.aborted?(signal) do
+      {:error, :aborted}
+    else
+      # Create parent directories
+      dir = Path.dirname(path)
+      File.mkdir_p!(dir)
 
-    # Write the file
-    File.write!(path, content)
+      # Write the file
+      File.write!(path, content)
 
-    byte_count = byte_size(content)
-    {formatted, format_error} = maybe_format_file(path, format?, cwd, opts)
+      byte_count = byte_size(content)
+      {formatted, format_error} = maybe_format_file(path, format?, cwd, opts)
 
-    {diagnostics, diagnostics_text} =
-      LspDiagnostics.post_edit(path, cwd, baseline, diagnostics?, opts)
+      {diagnostics, diagnostics_text} =
+        LspDiagnostics.post_edit(path, cwd, baseline, diagnostics?, opts)
 
-    success_text = success_message(path, byte_count, formatted) <> diagnostics_text
+      success_text = success_message(path, byte_count, formatted) <> diagnostics_text
 
-    %AgentToolResult{
-      content: [
-        %TextContent{
-          type: :text,
-          text: success_text
-        }
-      ],
-      details:
-        %{
-          path: path,
-          bytes_written: byte_count,
-          formatted: formatted
-        }
-        |> CheckpointGuard.put_details(checkpoint)
-        |> maybe_put_format_error(format_error)
-        |> maybe_put_diagnostics(diagnostics)
-    }
+      %AgentToolResult{
+        content: [
+          %TextContent{
+            type: :text,
+            text: success_text
+          }
+        ],
+        details:
+          %{
+            path: path,
+            bytes_written: byte_count,
+            formatted: formatted
+          }
+          |> CheckpointGuard.put_details(checkpoint)
+          |> maybe_put_format_error(format_error)
+          |> maybe_put_diagnostics(diagnostics)
+      }
+    end
   end
 
   defp maybe_format_file(_path, false, _cwd, _opts), do: {false, nil}

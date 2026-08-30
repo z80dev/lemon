@@ -153,6 +153,15 @@ requirement state for resume flows.
 pass `checkpoint_paths` and a session id, and commands such as `rm`, `mv`,
 `sed -i`, `find ... -delete`, `git reset`, or `git clean` will create a
 filesystem checkpoint before backend launch.
+Local `patch` calls prepare all hunks before the first mutation, reject duplicate
+paths and existing move destinations, revalidate each operation immediately
+before commit, and exclusively create new targets. Commits remain sequential: a
+later I/O failure reports the already-committed prefix and any possibly changed
+current paths instead of attempting a destructive rollback. Local `write` calls
+canonicalize the path used for validation and mutation, then reject symlinks,
+caller-controlled symlinked parent components, directories, and special files by default;
+`allow_symlinks: true` is an internal trusted-caller override. Keep ACP-backed
+mutation semantics separate from these local filesystem claims.
 
 `lsp_diagnostics` is the model-facing diagnostics tool. It runs workspace-aware
 file diagnostics with graceful fallback when a checker is unavailable, and

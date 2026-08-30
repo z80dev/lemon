@@ -204,6 +204,19 @@ metadata and synthesize nonzero `bash` exits as structured `result_meta` with
 `error_type`, `tool_name`, `exit_code`, and a safe message so router and channel
 status surfaces do not need to parse terminal text.
 
+Local `patch` calls preflight every hunk in memory, reject duplicate paths and
+destructive move overwrites, revalidate each operation immediately before
+commit, and exclusively create new targets. Commits remain sequential, so a
+later I/O failure reports the already-committed prefix and any possibly changed
+current paths without risking rollback over concurrent filesystem changes.
+Local `write` calls canonicalize the path used for validation and mutation,
+then reject symlinks, caller-controlled symlinked parent components,
+directories, devices, and other special-file targets by default; trusted
+internal callers can opt into legacy symlink following with
+`allow_symlinks: true`. See
+[`docs/tools/omp-tooling-audit.md`](../../docs/tools/omp-tooling-audit.md) for
+the source-backed OMP comparison and follow-on tool roadmap.
+
 `lsp_diagnostics` runs workspace-aware language diagnostics for a single file.
 `write`, `edit`, and `patch` can opt into post-edit diagnostics with
 baseline/delta reporting so newly introduced issues are surfaced without

@@ -10,6 +10,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Local coding-agent patches now preflight every hunk before mutation, reject
+  duplicate paths and destructive move overwrites, revalidate each operation,
+  exclusively create new targets, and report any committed prefix or partial
+  current operation when a later mutation fails. Local writes canonicalize the
+  path used for both validation and mutation, then reject symlink redirection
+  and special-file targets by default.
 - Skill manifests now reject unsafe or oversized prompt metadata, relevance
   searches use cached excerpts/status views outside the Registry server, and
   prompt listings expose bounded source/trust provenance with deterministic

@@ -342,7 +342,7 @@ defmodule CodingAgent.Tools.WriteTest do
           Write.execute("call_1", %{"path" => path, "content" => "new"}, nil, nil, tmp_dir, [])
 
         assert {:error, msg} = result
-        assert msg =~ "Failed to write file"
+        assert msg =~ "Permission denied"
       end)
     end
   end
@@ -367,7 +367,178 @@ defmodule CodingAgent.Tools.WriteTest do
         )
 
       assert {:error, msg} = result
-      assert msg =~ "Failed to write file" or msg =~ "is a directory"
+      assert msg =~ "directory"
+    end
+  end
+
+  describe "execute/6 - target safety" do
+    test "refuses to overwrite through a symlink by default", %{tmp_dir: tmp_dir} do
+      target = Path.join(tmp_dir, "target.txt")
+      link = Path.join(tmp_dir, "link.txt")
+      File.write!(target, "original")
+
+      with_symlink(target, link, fn ->
+        result =
+          Write.execute(
+            "call_1",
+            %{"path" => link, "content" => "changed"},
+            nil,
+            nil,
+            tmp_dir,
+            []
+          )
+
+        assert {:error, message} = result
+        assert message =~ "Cannot write through symlink"
+        assert File.read!(target) == "original"
+      end)
+    end
+
+    test "refuses to create a file below a symlinked parent", %{tmp_dir: tmp_dir} do
+      real_dir = Path.join([tmp_dir, "real", "nested"])
+      linked_dir = Path.join(tmp_dir, "linked")
+      File.mkdir_p!(real_dir)
+
+      with_symlink(Path.dirname(real_dir), linked_dir, fn ->
+        result =
+          Write.execute(
+            "call_1",
+            %{"path" => Path.join([linked_dir, "nested", "new.txt"]), "content" => "changed"},
+            nil,
+            nil,
+            tmp_dir,
+            []
+          )
+
+        assert {:error, message} = result
+        assert message =~ "Parent directory is a symlink"
+        refute File.exists?(Path.join(real_dir, "new.txt"))
+      end)
+    end
+
+    test "refuses an existing file below a symlinked parent", %{tmp_dir: tmp_dir} do
+      real_dir = Path.join(tmp_dir, "real-existing")
+      linked_dir = Path.join(tmp_dir, "linked-existing")
+      target = Path.join(real_dir, "target.txt")
+      File.mkdir_p!(real_dir)
+      File.write!(target, "original")
+
+      with_symlink(real_dir, linked_dir, fn ->
+        result =
+          Write.execute(
+            "call_1",
+            %{"path" => Path.join(linked_dir, "target.txt"), "content" => "changed"},
+            nil,
+            nil,
+            tmp_dir,
+            []
+          )
+
+        assert {:error, message} = result
+        assert message =~ "Parent directory is a symlink"
+        assert File.read!(target) == "original"
+      end)
+    end
+
+    test "checks caller-controlled parents for absolute paths outside cwd", %{tmp_dir: tmp_dir} do
+      base =
+        Path.join(
+          System.tmp_dir!(),
+          "lemon-write-parent-#{System.unique_integer([:positive, :monotonic])}"
+        )
+
+      real_dir = Path.join(base, "real")
+      linked_dir = Path.join(base, "linked")
+      target = Path.join(real_dir, "target.txt")
+      File.mkdir_p!(real_dir)
+      File.write!(target, "original")
+      on_exit(fn -> File.rm_rf(base) end)
+
+      with_symlink(real_dir, linked_dir, fn ->
+        result =
+          Write.execute(
+            "call_1",
+            %{"path" => Path.join(linked_dir, "target.txt"), "content" => "changed"},
+            nil,
+            nil,
+            tmp_dir,
+            []
+          )
+
+        assert {:error, message} = result
+        assert message =~ "Parent directory is a symlink"
+        assert File.read!(target) == "original"
+      end)
+    end
+
+    test "normalizes parent segments before validation and mutation", %{tmp_dir: tmp_dir} do
+      outside =
+        Path.join(
+          Path.dirname(tmp_dir),
+          "write-path-outside-#{System.unique_integer([:positive])}"
+        )
+
+      linked = Path.join(tmp_dir, "linked-parent-segment")
+      File.mkdir_p!(Path.join(outside, "nested"))
+      on_exit(fn -> File.rm_rf(outside) end)
+
+      with_symlink(Path.join(outside, "nested"), linked, fn ->
+        result =
+          Write.execute(
+            "call_1",
+            %{"path" => Path.join([linked, "..", "victim.txt"]), "content" => "safe"},
+            nil,
+            nil,
+            tmp_dir,
+            []
+          )
+
+        assert %AgentToolResult{} = result
+        assert File.read!(Path.join(tmp_dir, "victim.txt")) == "safe"
+        refute File.exists?(Path.join(outside, "victim.txt"))
+      end)
+    end
+
+    test "allows explicitly trusted symlink writes", %{tmp_dir: tmp_dir} do
+      target = Path.join(tmp_dir, "target.txt")
+      link = Path.join(tmp_dir, "link.txt")
+      File.write!(target, "original")
+
+      with_symlink(target, link, fn ->
+        result =
+          Write.execute(
+            "call_1",
+            %{"path" => link, "content" => "changed"},
+            nil,
+            nil,
+            tmp_dir,
+            allow_symlinks: true
+          )
+
+        assert %AgentToolResult{} = result
+        assert File.read!(target) == "changed"
+      end)
+    end
+
+    test "rejects null bytes before touching the filesystem", %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "bad\0name.txt")
+
+      result =
+        Write.execute("call_1", %{"path" => path, "content" => "content"}, nil, nil, tmp_dir, [])
+
+      assert {:error, message} = result
+      assert message =~ "null bytes"
+    end
+
+    test "allows an absolute temp path whose system parent may be a symlink", %{tmp_dir: tmp_dir} do
+      path = Path.join(System.tmp_dir!(), "lemon-write-#{System.unique_integer([:positive])}.txt")
+      on_exit(fn -> File.rm(path) end)
+
+      result =
+        Write.execute("call_1", %{"path" => path, "content" => "content"}, nil, nil, tmp_dir, [])
+
+      assert %AgentToolResult{} = result
+      assert File.read!(path) == "content"
     end
   end
 
@@ -747,6 +918,14 @@ defmodule CodingAgent.Tools.WriteTest do
     test "format parameter can be overridden via opts", %{tmp_dir: tmp_dir} do
       tool = Write.tool(tmp_dir, format: true)
       assert tool.parameters["properties"]["format"]["default"] == true
+    end
+  end
+
+  defp with_symlink(target, link, fun) do
+    case File.ln_s(target, link) do
+      :ok -> fun.()
+      {:error, reason} when reason in [:enotsup, :eperm, :eacces] -> :ok
+      {:error, reason} -> flunk("could not create symlink: #{inspect(reason)}")
     end
   end
 end
