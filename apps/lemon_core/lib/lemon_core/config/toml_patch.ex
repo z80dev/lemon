@@ -58,6 +58,35 @@ defmodule LemonCore.Config.TomlPatch do
     end
   end
 
+  @doc """
+  Delete a TOML table and every nested table below it.
+
+  The edit is intentionally textual: content outside the selected table tree is
+  returned byte-for-byte apart from newline normalization. This makes it safe
+  for lifecycle commands to remove one managed object without re-encoding the
+  rest of a user-owned config file or dropping unknown keys and comments.
+  """
+  @spec delete_table_tree(String.t(), String.t()) :: String.t()
+  def delete_table_tree(content, table)
+      when is_binary(content) and is_binary(table) do
+    content
+    |> normalize_newlines()
+    |> String.split("\n", trim: false)
+    |> Enum.reduce({[], false}, fn line, {kept, dropping?} ->
+      case table_header(line) do
+        {:ok, name} ->
+          dropping? = name == table or String.starts_with?(name, table <> ".")
+          if dropping?, do: {kept, true}, else: {[line | kept], false}
+
+        :error ->
+          if dropping?, do: {kept, true}, else: {[line | kept], false}
+      end
+    end)
+    |> elem(0)
+    |> Enum.reverse()
+    |> Enum.join("\n")
+  end
+
   defp upsert_line_in_section(section, key, line) do
     key_regex = ~r/^\s*#{Regex.escape(key)}\s*=.*$/m
 
@@ -108,6 +137,13 @@ defmodule LemonCore.Config.TomlPatch do
 
   defp normalize_newlines(content) do
     String.replace(content, "\r\n", "\n")
+  end
+
+  defp table_header(line) do
+    case Regex.run(~r/^\s*\[([^\]]+)\]\s*(?:#.*)?$/, line, capture: :all_but_first) do
+      [name] -> {:ok, String.trim(name)}
+      _ -> :error
+    end
   end
 
   defp ensure_trailing_newline(""), do: ""

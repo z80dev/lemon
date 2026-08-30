@@ -73,4 +73,29 @@ defmodule LemonCore.Config.TomlPatchTest do
     assert patched =~ ~s(oauth_secret = "llm_openai_codex_api_key")
     refute patched =~ ~s(api_key_secret = "legacy_secret")
   end
+
+  test "deletes only the selected table tree and preserves surrounding content" do
+    content = """
+    # keep this comment
+    [profiles.alpha]
+    name = "Alpha"
+
+    [unrelated]
+    unknown = "preserved"
+
+    [profiles.alpha.runtime]
+    token = "remove"
+
+    [profiles.alphabet]
+    name = "Alphabet"
+    """
+
+    patched = TomlPatch.delete_table_tree(content, "profiles.alpha")
+
+    assert patched =~ "# keep this comment"
+    assert patched =~ ~s([unrelated]\nunknown = "preserved")
+    assert patched =~ ~s([profiles.alphabet]\nname = "Alphabet")
+    refute patched =~ "[profiles.alpha]"
+    refute patched =~ "[profiles.alpha.runtime]"
+  end
 end

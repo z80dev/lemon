@@ -62,6 +62,7 @@ defmodule CodingAgent.Session.Presentation do
       )
     )
     |> maybe_add_opt(:resume_source, Keyword.get(opts, :resume_source))
+    |> maybe_add_opt(:workspace_dir, Keyword.get(opts, :workspace_dir))
     |> maybe_add_opt(:extra_tools, normalize_extra_tools_opt(Keyword.get(opts, :extra_tools)))
   end
 
