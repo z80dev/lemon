@@ -10,6 +10,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Bun TUI portable-blueprint management over the authenticated shared catalog:
+  content-free `/blueprints` browsing and `/blueprint` inspect/validate/preview,
+  exact fresh-digest activation, stale/refused-plan clearing with preserved
+  profile drafts, nonqueueable offline mutation, and duplicate-safe replay.
+  The terminal retains and renders only bounded IDs, counts, actions, booleans,
+  and digests; real Bandit/Bun proof verifies planted manifest prose, prompts,
+  skill bodies, commands, environment values, paths, tokens, and secrets stay
+  out of terminal state and proof output.
 - Source and packaged `lemon learn` plus authenticated `learn.review` /
   `learn.confirm` control-plane methods for auditable learning from existing
   bounded file, folder, URL, diff, document, and redacted-session references.

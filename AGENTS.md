@@ -18,7 +18,7 @@
 | Add new messaging channel adapters (X, XMTP, etc.) | `apps/lemon_channels/` |
 | Modify setup, onboarding, or Hermes migration CLI flows | `apps/lemon_cli/` |
 | Modify managed release planning, apply, receipts, or rollback | `apps/lemon_core/lib/lemon_core/update/`, `apps/lemon_cli/` |
-| Modify terminal profile/session UX | `clients/tui/` (commands/pickers), `apps/lemon_control_plane/` (authoritative RPCs) |
+| Modify terminal profile/session/blueprint UX | `clients/tui/` (commands/pickers), `apps/lemon_control_plane/` (authoritative RPCs) |
 | Work on packaged/source command help, completion, sessions, or blueprint UX | `apps/lemon_cli/` (`CommandRegistry`, `CompletionCommand`, `SessionsCommand`, `BlueprintsCommand`) |
 | Work on agent routing or message flow | `apps/lemon_router/` |
 | Build HTTP/WebSocket API features | `apps/lemon_control_plane/` |
@@ -399,6 +399,15 @@ forget local UI state only after a verified server receipt. Session lists,
 status, picker details, errors, and proof output must never expose prompts,
 responses, credentials, raw local paths, or arbitrary server error details.
 
+The Bun TUI consumes `blueprints.*` through a separate content-free projection,
+not a second catalog or scheduler. `/blueprints` and `/blueprint` retain only
+bounded IDs, counts, actions, booleans, and digests. Preview is non-mutating;
+activation always obtains a fresh preview, compares the exact digest, and sends
+the admin mutation with offline queuing disabled. Refusal or drift clears the
+pending plan while preserving the bounded profile draft. Never place manifest
+names/descriptions, prompt or skill text, schedules, commands, environment
+values, paths, URLs, tokens, secrets, or raw server errors in TUI state.
+
 ### Key Dependencies Between Apps
 
 Derived from complete `deps/0` bodies in the `mix.exs` files and enforced by
@@ -659,8 +668,10 @@ Each app has its own `AGENTS.md` with detailed context:
 
 ---
 
-*Last updated: 2026-08-30* (external 1Password, Bitwarden, and argv-only command
-secret sources now share one supervised, bounded, fail-closed resolver and
+*Last updated: 2026-08-30* (the TUI now projects the shared portable-blueprint
+catalog through bounded content-free browsing, validation, fresh-digest
+activation, and duplicate-safe replay; external 1Password, Bitwarden, and
+argv-only command secret sources now share one supervised, bounded, fail-closed resolver and
 redacted source/packaged diagnostics; the TUI discovers and manages server-owned
 profiles while preserving canonical `profile.chat` routing and consumes the
 shared redacted, exact-confirm session lifecycle without client persistence;

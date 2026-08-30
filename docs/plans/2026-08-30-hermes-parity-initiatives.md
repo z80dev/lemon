@@ -56,13 +56,16 @@ are covered by focused adversarial tests. Learn-from-source review and exact
 confirmation now compose those sources with canonical memory and audited skill
 drafts; a learning-graph UI remains a later presentation layer.
 
-The second initiative now has source/package CLI and authenticated Web
-verticals over one `LemonAutomation.Blueprint.Catalog` boundary. The Web path
+The second initiative now has source/package CLI, authenticated Web, and Bun
+TUI verticals over one `LemonAutomation.Blueprint.Catalog` boundary. The Web path
 is `/manage/blueprints`: it keeps manifest prose and executable/source content
 out of LiveView state, previews without mutation, requires the exact fresh
 digest, fails closed on drift, and reports duplicate-safe replay through the
-existing profile and cron services. Suggestions, richer blueprint shapes, and
-a TUI catalog remain follow-ons.
+existing profile and cron services. The TUI adds bounded-ID picker/commands,
+fresh-preview-before-activation, nonqueueable mutation, preserved profile
+drafts after refusal, and duplicate-safe replay while retaining no free-form
+manifest or executable/source content. Suggestions and richer blueprint shapes
+remain follow-ons.
 
 ## Integration gates
 
@@ -75,6 +78,9 @@ a TUI catalog remain follow-ons.
 - TUI session mutations are never queued while offline. Exact-key operations
   must verify their target; prune/delete remain preview-confirm workflows, and
   refused or stale mutations preserve local drafts and do not claim success.
+- TUI blueprint activation is never queued while offline, always refreshes the
+  preview first, and keeps only bounded IDs/counts/actions/booleans/digests in
+  state. Refused/stale plans clear their digest but preserve the profile draft.
 - Focused tests run in each lane. After integration, authoritative umbrella and
   client suites run serially to avoid shared build and environment pollution.
 - Source and assembled release launchers must both be exercised. Browser work

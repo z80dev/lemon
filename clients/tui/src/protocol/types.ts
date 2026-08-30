@@ -403,6 +403,65 @@ export interface ProfileChatResult {
 	summary?: Record<string, unknown>;
 }
 
+// ---------------------------------------------------------------------------
+// portable automation blueprints
+// ---------------------------------------------------------------------------
+
+/**
+ * Blueprint replies are intentionally typed only to the content-free fields
+ * the terminal client is allowed to retain. The daemon may include additional
+ * manifest presentation fields; TUI callers must normalize and discard them.
+ */
+export interface BlueprintCatalogEntry {
+	id: string;
+	skills?: Array<{ key?: string; [key: string]: unknown }>;
+	automations?: Array<{ id?: string; enabled?: boolean; [key: string]: unknown }>;
+	summary?: Record<string, unknown>;
+	[key: string]: unknown;
+}
+
+export interface BlueprintsListResult {
+	bundles?: BlueprintCatalogEntry[];
+	summary?: Record<string, unknown>;
+	[key: string]: unknown;
+}
+
+export interface BlueprintInspectResult extends BlueprintCatalogEntry {
+	validation?: Record<string, unknown>;
+}
+
+export interface BlueprintPreviewResult {
+	bundleId: string;
+	profile: { id: string; [key: string]: unknown };
+	confirmationDigest: string;
+	canActivate?: boolean;
+	skills?: Array<{
+		key?: string;
+		action?: string;
+		fileCount?: number;
+		bytes?: number;
+		[key: string]: unknown;
+	}>;
+	automation?: {
+		id?: string;
+		action?: string;
+		enabled?: boolean;
+		[key: string]: unknown;
+	};
+	[key: string]: unknown;
+}
+
+export interface BlueprintActivationResult {
+	activated?: boolean;
+	bundleId: string;
+	profileId: string;
+	confirmationDigest?: string;
+	skills?: Array<{ key?: string; status?: string; [key: string]: unknown }>;
+	automation?: { id?: string; status?: string; [key: string]: unknown };
+	summary?: Record<string, unknown>;
+	[key: string]: unknown;
+}
+
 export interface ChatAbortParams {
 	runId?: string;
 	sessionKey?: string;

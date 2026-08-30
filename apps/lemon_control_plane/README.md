@@ -636,6 +636,10 @@ only through the create-once `CronManager` API. See the
 Source and packaged `lemon blueprints` commands are thin authenticated clients
 of these methods; a bundle ID previews by default, and activation requires the
 fresh plan's exact confirmation digest.
+The Bun TUI exposes the same boundary through `/blueprints` and `/blueprint`.
+It renders only bounded IDs, counts, actions, booleans, and digests; re-previews
+immediately before activation; never queues the admin mutation offline; and
+preserves the profile draft when a plan is refused or stale.
 
 ### Events and Subscriptions
 

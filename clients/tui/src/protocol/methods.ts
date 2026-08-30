@@ -15,6 +15,10 @@ import type { ControlPlaneClient, RequestOptions } from "./client.ts";
 import { MethodUnavailableError } from "./errors.ts";
 import type {
 	ApprovalResolveParams,
+	BlueprintActivationResult,
+	BlueprintInspectResult,
+	BlueprintPreviewResult,
+	BlueprintsListResult,
 	ChatAbortParams,
 	ChatAbortResult,
 	ChatHistoryParams,
@@ -107,6 +111,11 @@ export const METHOD = {
 	configSet: "config.set",
 	skillsHermesCatalog: "skills.hermes.catalog",
 	skillsInstall: "skills.install",
+	blueprintsList: "blueprints.list",
+	blueprintsInspect: "blueprints.inspect",
+	blueprintsValidate: "blueprints.validate",
+	blueprintsPreview: "blueprints.preview",
+	blueprintsActivate: "blueprints.activate",
 } as const;
 
 export type MethodName = (typeof METHOD)[keyof typeof METHOD];
@@ -476,5 +485,42 @@ export class ControlPlaneMethods {
 		options?: RequestOptions,
 	): Promise<Record<string, unknown>> {
 		return this.#call<Record<string, unknown>>(METHOD.skillsInstall, params, options);
+	}
+
+	// -- portable blueprints ------------------------------------------------
+
+	blueprintsList(options?: RequestOptions): Promise<BlueprintsListResult> {
+		return this.#call<BlueprintsListResult>(METHOD.blueprintsList, {}, options);
+	}
+
+	blueprintsInspect(
+		params: { bundleId: string },
+		options?: RequestOptions,
+	): Promise<BlueprintInspectResult> {
+		return this.#call<BlueprintInspectResult>(METHOD.blueprintsInspect, params, options);
+	}
+
+	blueprintsValidate(
+		params: { bundleId: string },
+		options?: RequestOptions,
+	): Promise<BlueprintInspectResult> {
+		return this.#call<BlueprintInspectResult>(METHOD.blueprintsValidate, params, options);
+	}
+
+	blueprintsPreview(
+		params: { bundleId: string; profileId: string },
+		options?: RequestOptions,
+	): Promise<BlueprintPreviewResult> {
+		return this.#call<BlueprintPreviewResult>(METHOD.blueprintsPreview, params, options);
+	}
+
+	blueprintsActivate(
+		params: { bundleId: string; profileId: string; confirmationDigest: string },
+		options?: RequestOptions,
+	): Promise<BlueprintActivationResult> {
+		return this.#call<BlueprintActivationResult>(METHOD.blueprintsActivate, params, {
+			...options,
+			queueIfOffline: false,
+		});
 	}
 }
