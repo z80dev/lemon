@@ -20,6 +20,19 @@ document that workflow, and prove it against a running Lemon instance.
 | TUI session lifecycle | `feat/parity-tui-sessions` | Bun TUI over the shared session lifecycle; no client persistence | Authenticated real-Bandit plus production typed Bun client proof for search/resume/metadata/redacted export/exact prune/delete over isolated session rows |
 | Operations and secret sources | `feat/parity-ops-lifecycle` | `~/.lemon` data contract, backup/verify/restore, update receipts/rollback where safe, external secret-source boundary | Adversarial tests and isolated-HOME source/package backup/restore and secret-resolution proof |
 
+The update-receipt follow-on is implemented independently on
+`feat/parity-update-receipts`: managed releases now share registry/help/
+completion for `check|plan|apply|history|rollback`; plan is non-mutating and
+binds current/running/manifest/artifact identity; apply is exact-confirmed,
+locked, checksum/size verified, archive-confined, version-proven, and
+atomic-with-recovery; rollback is exact receipt/digest/checkpoint-bound and
+cannot select user paths or restore user state. Source binary mutation remains
+fail-closed. Acceptance includes wrong/stale digest no-mutation, adversarial
+absolute/traversal/link/device/FIFO archives, injected post-flip recovery,
+private content-free history, exact rollback, and secret/path absence. The
+known residuals are publisher signing for schema 2 and exact in-flight byte
+cancellation in the dependency-free `:httpc` core boundary.
+
 ## Wave 2
 
 Wave 2 begins after Wave 1 settles shared APIs, so it can build on those

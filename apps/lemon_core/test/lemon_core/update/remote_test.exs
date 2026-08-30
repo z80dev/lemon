@@ -31,10 +31,21 @@ defmodule LemonCore.Update.RemoteTest do
     }
   end
 
-  defp build_fixture_tarball(tmp_dir) do
+  defp build_fixture_tarball(tmp_dir, version \\ "2099.01.0", extra_files \\ %{}) do
     src = Path.join(tmp_dir, "src")
     File.mkdir_p!(Path.join(src, "bin"))
-    write_executable!(Path.join(src, "bin/lemon"), "#!/bin/sh\necho hi\n")
+
+    write_executable!(
+      Path.join(src, "bin/lemon"),
+      "#!/bin/sh\nif [ \"$1\" = version ]; then echo #{version}; else echo hi; fi\n"
+    )
+
+    Enum.each(extra_files, fn {relative, contents} ->
+      path = Path.join(src, relative)
+      File.mkdir_p!(Path.dirname(path))
+      File.write!(path, contents)
+    end)
+
     tarball = Path.join(tmp_dir, "artifact.tar.gz")
     {_output, 0} = System.cmd("tar", ["-czf", tarball, "-C", src, "."])
 
@@ -124,7 +135,14 @@ defmodule LemonCore.Update.RemoteTest do
     home = Path.join(tmp_dir, "home")
     state = Path.join(home, ".lemon")
     release_root = Path.join([state, "versions", release_version])
-    File.mkdir_p!(release_root)
+    File.mkdir_p!(Path.join(release_root, "bin"))
+
+    write_executable!(
+      Path.join(release_root, "bin/lemon"),
+      "#!/bin/sh\nif [ \"$1\" = version ]; then echo #{release_version}; else echo old; fi\n"
+    )
+
+    File.ln_s!(release_version, Path.join([state, "versions", "current"]))
     {home, state, release_root}
   end
 
@@ -135,9 +153,60 @@ defmodule LemonCore.Update.RemoteTest do
       platform: "test-platform",
       profile: "test_profile",
       paths_opts: [home_dir: home],
-      release_root: release_root
+      release_root: release_root,
+      current_version: Path.basename(release_root)
     ]
   end
+
+  defp apply_confirmed(opts) do
+    opts = Keyword.put_new(opts, :current_version, Path.basename(opts[:release_root]))
+
+    with {:ok, plan} <- Remote.plan(opts) do
+      Remote.apply(Keyword.put(opts, :confirm, plan.digest))
+    end
+  end
+
+  defp tree_fingerprint(root) do
+    case File.lstat(root) do
+      {:ok, %File.Stat{type: :directory, mode: mode}} ->
+        children =
+          root
+          |> File.ls!()
+          |> Enum.sort()
+          |> Enum.flat_map(&tree_fingerprint_entry(Path.join(root, &1), &1))
+
+        [{".", :directory, Bitwise.band(mode, 0o777)} | children]
+
+      {:error, :enoent} ->
+        :missing
+    end
+  end
+
+  defp tree_fingerprint_entry(path, relative) do
+    case File.lstat!(path) do
+      %File.Stat{type: :directory, mode: mode} ->
+        children =
+          path
+          |> File.ls!()
+          |> Enum.sort()
+          |> Enum.flat_map(fn child ->
+            tree_fingerprint_entry(Path.join(path, child), Path.join(relative, child))
+          end)
+
+        [{relative, :directory, Bitwise.band(mode, 0o777)} | children]
+
+      %File.Stat{type: :regular, mode: mode} ->
+        [{relative, :regular, Bitwise.band(mode, 0o777), digest_bytes(File.read!(path))}]
+
+      %File.Stat{type: :symlink} ->
+        [{relative, :symlink, File.read_link!(path)}]
+
+      %File.Stat{type: type} ->
+        [{relative, type}]
+    end
+  end
+
+  defp digest_bytes(bytes), do: :sha256 |> :crypto.hash(bytes) |> Base.encode16(case: :lower)
 
   describe "check/1" do
     test "rejects a manifest that does not declare schema 2" do
@@ -288,7 +357,7 @@ defmodule LemonCore.Update.RemoteTest do
         release_root: "/opt/lemon/current"
       ]
 
-      assert {:error, {:unsupported_layout, _message}} = Remote.apply(opts)
+      assert {:error, :unsupported_layout} = apply_confirmed(opts)
     end
   end
 
@@ -316,7 +385,7 @@ defmodule LemonCore.Update.RemoteTest do
         release_root: release_root
       ]
 
-      assert {:error, {:checksum_mismatch, _}} = Remote.apply(opts)
+      assert {:error, {:checksum_mismatch, _}} = apply_confirmed(opts)
       refute File.exists?(Path.join([state, "tmp", "pkg.tar.gz"]))
       refute File.dir?(Path.join([state, "versions", "2099.01.0"]))
     end
@@ -348,12 +417,12 @@ defmodule LemonCore.Update.RemoteTest do
         release_root: release_root
       ]
 
-      assert {:error, {:checksum_mismatch, _}} = Remote.apply(opts)
+      assert {:error, {:checksum_mismatch, _}} = apply_confirmed(opts)
 
       versions_dir = Path.join(state, "versions")
       refute File.dir?(Path.join(versions_dir, "2099.01.0"))
       refute File.exists?(Path.join(versions_dir, "2099.01.0.partial"))
-      refute File.exists?(Path.join(versions_dir, "current"))
+      assert {:ok, "2020.01.0"} = File.read_link(Path.join(versions_dir, "current"))
 
       # The verified runtime tarball is discarded too — nothing is left staged.
       refute File.exists?(Path.join([state, "tmp", "pkg.tar.gz"]))
@@ -377,12 +446,12 @@ defmodule LemonCore.Update.RemoteTest do
       {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
 
       assert {:error, {:incomplete_release, "bin/lemon"}} =
-               Remote.apply(remote_opts(base_url, home, release_root))
+               apply_confirmed(remote_opts(base_url, home, release_root))
 
       versions_dir = Path.join(state, "versions")
       refute File.exists?(Path.join(versions_dir, "2099.01.0"))
       refute File.exists?(Path.join(versions_dir, "2099.01.0.partial"))
-      refute File.exists?(Path.join(versions_dir, "current"))
+      assert {:ok, "2020.01.0"} = File.read_link(Path.join(versions_dir, "current"))
       assert File.ls!(Path.join(state, "tmp")) == []
     end
 
@@ -405,7 +474,7 @@ defmodule LemonCore.Update.RemoteTest do
       {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
 
       assert {:error, {:incomplete_release, "tui/bin/lemon-tui"}} =
-               Remote.apply(remote_opts(base_url, home, release_root))
+               apply_confirmed(remote_opts(base_url, home, release_root))
 
       versions_dir = Path.join(state, "versions")
       refute File.exists?(Path.join(versions_dir, "2099.01.0"))
@@ -435,12 +504,17 @@ defmodule LemonCore.Update.RemoteTest do
       versions_dir = Path.join(state, "versions")
       existing = Path.join(versions_dir, "2099.01.0")
       File.mkdir_p!(Path.join(existing, "bin"))
-      write_executable!(Path.join(existing, "bin/lemon"), "#!/bin/sh\necho existing\n")
+
+      write_executable!(
+        Path.join(existing, "bin/lemon"),
+        "#!/bin/sh\nif [ \"$1\" = version ]; then echo 2099.01.0; else echo existing; fi\n"
+      )
+
       sentinel = Path.join(existing, "SENTINEL")
       File.write!(sentinel, "keep me")
 
       assert {:ok, %{staged: "2099.01.0"}} =
-               Remote.apply(remote_opts(base_url, home, release_root))
+               apply_confirmed(remote_opts(base_url, home, release_root))
 
       assert File.exists?(sentinel)
       assert {:ok, "2099.01.0"} = File.read_link(Path.join(versions_dir, "current"))
@@ -467,7 +541,7 @@ defmodule LemonCore.Update.RemoteTest do
       File.write!(Path.join(broken, "TRUNCATED"), "no launcher here")
 
       assert {:ok, %{staged: "2099.01.0"}} =
-               Remote.apply(remote_opts(base_url, home, release_root))
+               apply_confirmed(remote_opts(base_url, home, release_root))
 
       assert File.exists?(Path.join([versions_dir, "2099.01.0", "bin", "lemon"]))
       refute File.exists?(Path.join([versions_dir, "2099.01.0", "TRUNCATED"]))
@@ -477,7 +551,9 @@ defmodule LemonCore.Update.RemoteTest do
       assert versions_dir |> File.ls!() |> Enum.filter(&String.contains?(&1, ".broken.")) == []
     end
 
-    test "an exception during staging leaves no partial directory behind", %{tmp_dir: tmp_dir} do
+    test "an exception during staging returns a stable error and leaves no partial directory", %{
+      tmp_dir: tmp_dir
+    } do
       {bytes, sha256, size} = build_fixture_tarball(tmp_dir)
       artifacts = [artifact("pkg.tar.gz", "test_profile", "test-platform", sha256, size)]
 
@@ -497,13 +573,12 @@ defmodule LemonCore.Update.RemoteTest do
       File.mkdir_p!(state)
       File.write!(Path.join(state, "tmp"), "not a directory")
 
-      assert_raise File.Error, fn ->
-        Remote.apply(remote_opts(base_url, home, release_root))
-      end
+      assert {:error, :staging_failed} =
+               apply_confirmed(remote_opts(base_url, home, release_root))
 
       versions_dir = Path.join(state, "versions")
       refute File.exists?(Path.join(versions_dir, "2099.01.0.partial"))
-      refute File.exists?(Path.join(versions_dir, "current"))
+      assert {:ok, "2020.01.0"} = File.read_link(Path.join(versions_dir, "current"))
       assert File.dir?(Path.join(versions_dir, "2020.01.0"))
     end
   end
@@ -528,7 +603,7 @@ defmodule LemonCore.Update.RemoteTest do
         release_root: release_root
       ]
 
-      assert {:ok, %{staged: "2099.01.0", restart_required: true}} = Remote.apply(opts)
+      assert {:ok, %{staged: "2099.01.0", restart_required: true}} = apply_confirmed(opts)
 
       versions_dir = Path.join(state, "versions")
       assert File.dir?(Path.join(versions_dir, "2099.01.0"))
@@ -564,7 +639,7 @@ defmodule LemonCore.Update.RemoteTest do
         release_root: release_root
       ]
 
-      assert {:ok, %{staged: "2099.01.0", restart_required: true}} = Remote.apply(opts)
+      assert {:ok, %{staged: "2099.01.0", restart_required: true}} = apply_confirmed(opts)
 
       versions_dir = Path.join(state, "versions")
       assert File.exists?(Path.join([versions_dir, "2099.01.0", "bin", "lemon"]))
@@ -597,7 +672,7 @@ defmodule LemonCore.Update.RemoteTest do
         release_root: release_root
       ]
 
-      assert {:ok, %{staged: "2099.01.0"}} = Remote.apply(opts)
+      assert {:ok, %{staged: "2099.01.0"}} = apply_confirmed(opts)
 
       versions_dir = Path.join(state, "versions")
       assert File.exists?(Path.join([versions_dir, "2099.01.0", "bin", "lemon"]))
@@ -634,7 +709,7 @@ defmodule LemonCore.Update.RemoteTest do
         release_root: release_root
       ]
 
-      assert {:ok, %{staged: "2099.01.0"}} = Remote.apply(opts)
+      assert {:ok, %{staged: "2099.01.0"}} = apply_confirmed(opts)
 
       versions_dir = Path.join(state, "versions")
       assert File.exists?(Path.join([versions_dir, "2099.01.0", "bin", "lemon"]))
@@ -667,18 +742,22 @@ defmodule LemonCore.Update.RemoteTest do
         release_root: release_root
       ]
 
-      assert {:ok, %{staged: "2099.01.0"}} = Remote.apply(opts)
+      assert {:ok, %{staged: "2099.01.0"}} = apply_confirmed(opts)
 
       assert File.dir?(Path.join(versions_dir, "2099.01.0"))
       assert File.dir?(Path.join(versions_dir, "2018.01.0"))
       assert File.dir?(Path.join(versions_dir, "2017.01.0"))
-      refute File.dir?(Path.join(versions_dir, "2016.01.0"))
+      assert File.dir?(Path.join(versions_dir, "2016.01.0"))
       refute File.dir?(Path.join(versions_dir, "2015.01.0"))
     end
 
     test "is a no-op when already up to date", %{tmp_dir: tmp_dir} do
-      current = LemonCore.Update.Version.current()
-      artifacts = [artifact("pkg.tar.gz", "test_profile", "test-platform", "aa", 1)]
+      current = "2018.01.0"
+
+      artifacts = [
+        artifact("pkg.tar.gz", "test_profile", "test-platform", String.duplicate("a", 64), 1)
+      ]
+
       body = manifest(current, artifacts)
       base_url = start_server(manifest_router(body))
 
@@ -693,7 +772,142 @@ defmodule LemonCore.Update.RemoteTest do
         release_root: release_root
       ]
 
-      assert {:ok, %{staged: nil, restart_required: false}} = Remote.apply(opts)
+      assert {:ok, %{staged: nil, restart_required: false}} = apply_confirmed(opts)
+    end
+  end
+
+  describe "plan/apply/rollback transaction receipts" do
+    test "plan and wrong or stale digests leave the managed tree byte-for-byte unchanged", %{
+      tmp_dir: tmp_dir
+    } do
+      {bytes, sha256, size} = build_fixture_tarball(tmp_dir)
+      artifacts = [artifact("pkg.tar.gz", "test_profile", "test-platform", sha256, size)]
+      {:ok, manifest_state} = Agent.start_link(fn -> manifest("2099.01.0", artifacts) end)
+
+      router = fn
+        "/releases/latest/download/manifest.json" -> {:redirect, "/manifest-body.json"}
+        "/manifest-body.json" -> {200, "application/json", Agent.get(manifest_state, & &1)}
+        "/releases/download/v2099.01.0/pkg.tar.gz" -> {200, "application/gzip", bytes}
+        _ -> {404, "text/plain", "not found"}
+      end
+
+      base_url = start_server(router)
+      {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
+      opts = remote_opts(base_url, home, release_root)
+      before = tree_fingerprint(state)
+
+      assert {:ok, plan} = Remote.plan(opts)
+      assert before == tree_fingerprint(state)
+      refute File.exists?(Path.join(state, "updates"))
+
+      assert {:error, :confirmation_mismatch} =
+               Remote.apply(Keyword.put(opts, :confirm, String.duplicate("0", 64)))
+
+      assert before == tree_fingerprint(state)
+
+      changed =
+        manifest("2099.01.0", artifacts)
+        |> Jason.decode!()
+        |> Map.put("commit", "cafebabe")
+        |> Jason.encode!()
+
+      Agent.update(manifest_state, fn _ -> changed end)
+
+      assert {:error, :confirmation_mismatch} =
+               Remote.apply(Keyword.put(opts, :confirm, plan.digest))
+
+      assert before == tree_fingerprint(state)
+      refute File.exists?(Path.join(state, "updates"))
+    end
+
+    test "exact apply writes private content-free history, is replay-safe, and exact rollback works",
+         %{
+           tmp_dir: tmp_dir
+         } do
+      planted = "PLANTED_UPDATE_TOKEN_8e9d3a"
+
+      {bytes, sha256, size} =
+        build_fixture_tarball(tmp_dir, "2099.01.0", %{"lib/planted.txt" => planted})
+
+      artifacts = [artifact("pkg.tar.gz", "test_profile", "test-platform", sha256, size)]
+      body = manifest("2099.01.0", artifacts)
+      router = artifact_router(body, "/releases/download/v2099.01.0/pkg.tar.gz", bytes)
+      base_url = start_server(router)
+      {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
+      opts = remote_opts(base_url, home, release_root)
+
+      assert {:ok, plan} = Remote.plan(opts)
+
+      assert {:ok, %{staged: "2099.01.0", receipt: receipt}} =
+               Remote.apply(Keyword.put(opts, :confirm, plan.digest))
+
+      assert {:ok, [history]} = Remote.history(Keyword.put(opts, :limit, 1))
+      assert history == receipt
+      assert history["status"] == "applied"
+      assert history["checkpoint_id"]
+      assert history["rollback_digest"]
+
+      updates_root = Path.join(state, "updates")
+
+      for path <- Path.wildcard(Path.join(updates_root, "**/*.json")) do
+        assert {:ok, %File.Stat{mode: mode, type: :regular}} = File.stat(path)
+        assert Bitwise.band(mode, 0o777) == 0o600
+        recorded = File.read!(path)
+        refute recorded =~ planted
+        refute recorded =~ tmp_dir
+        refute recorded =~ base_url
+      end
+
+      after_apply = tree_fingerprint(state)
+
+      assert {:error, :stale_running_release} =
+               Remote.apply(Keyword.put(opts, :confirm, plan.digest))
+
+      assert after_apply == tree_fingerprint(state)
+
+      rollback_opts = [
+        paths_opts: [home_dir: home],
+        release_root: Path.join([state, "versions", "2099.01.0"]),
+        current_version: "2099.01.0",
+        receipt: receipt["id"],
+        confirm: receipt["rollback_digest"]
+      ]
+
+      assert {:ok, %{active: "2020.01.0", receipt: rollback_receipt}} =
+               Remote.rollback(rollback_opts)
+
+      assert rollback_receipt["rolled_back_receipt_id"] == receipt["id"]
+      assert {:ok, "2020.01.0"} = File.read_link(Path.join([state, "versions", "current"]))
+      assert {:ok, [latest, original]} = Remote.history(Keyword.put(rollback_opts, :limit, 2))
+      assert latest["action"] == "rollback"
+      assert original["id"] == receipt["id"]
+    end
+
+    test "post-promotion verification failure restores the exact old pointer", %{tmp_dir: tmp_dir} do
+      {bytes, sha256, size} = build_fixture_tarball(tmp_dir)
+      artifacts = [artifact("pkg.tar.gz", "test_profile", "test-platform", sha256, size)]
+      body = manifest("2099.01.0", artifacts)
+      router = artifact_router(body, "/releases/download/v2099.01.0/pkg.tar.gz", bytes)
+      base_url = start_server(router)
+      {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
+
+      opts =
+        remote_opts(base_url, home, release_root)
+        |> Keyword.put(:active_verify_fun, fn
+          "2099.01.0" -> {:error, :injected_active_failure}
+          _version -> :ok
+        end)
+
+      assert {:ok, plan} = Remote.plan(opts)
+
+      assert {:error, :injected_active_failure} =
+               Remote.apply(Keyword.put(opts, :confirm, plan.digest))
+
+      versions = Path.join(state, "versions")
+      assert {:ok, "2020.01.0"} = File.read_link(Path.join(versions, "current"))
+      assert File.dir?(Path.join(versions, "2099.01.0"))
+      assert {:ok, [failed]} = Remote.history(Keyword.put(opts, :limit, 1))
+      assert failed["status"] == "failed_injected_active_failure"
     end
   end
 
@@ -701,7 +915,7 @@ defmodule LemonCore.Update.RemoteTest do
     test "refuses to run outside the versions/ layout", %{tmp_dir: tmp_dir} do
       home = Path.join(tmp_dir, "home")
 
-      assert {:error, {:unsupported_layout, _}} =
+      assert {:error, :unsupported_layout} =
                Remote.rollback(paths_opts: [home_dir: home], release_root: "/opt/lemon/current")
     end
 
@@ -725,28 +939,38 @@ defmodule LemonCore.Update.RemoteTest do
         release_root: release_root
       ]
 
-      assert {:ok, %{staged: "2099.01.0"}} = Remote.apply(opts)
+      assert {:ok, %{staged: "2099.01.0", receipt: receipt}} = apply_confirmed(opts)
 
       rollback_opts = [
         paths_opts: [home_dir: home],
-        release_root: Path.join(versions_dir, "2099.01.0")
+        release_root: Path.join(versions_dir, "2099.01.0"),
+        current_version: "2099.01.0",
+        receipt: receipt["id"],
+        confirm: receipt["rollback_digest"]
       ]
 
       assert {:ok, %{active: "2018.01.0"}} = Remote.rollback(rollback_opts)
       assert {:ok, "2018.01.0"} = File.read_link(Path.join(versions_dir, "current"))
     end
 
-    test "errors when there is no other retained version", %{tmp_dir: tmp_dir} do
+    test "requires an exact update receipt instead of choosing a retained version", %{
+      tmp_dir: tmp_dir
+    } do
       home = Path.join(tmp_dir, "home")
       state = Path.join(home, ".lemon")
       versions_dir = Path.join(state, "versions")
       only = Path.join(versions_dir, "2099.01.0")
-      File.mkdir_p!(only)
+      File.mkdir_p!(Path.join(only, "bin"))
+      write_executable!(Path.join(only, "bin/lemon"), "#!/bin/sh\necho 2099.01.0\n")
       File.rm(Path.join(versions_dir, "current"))
       :ok = File.ln_s("2099.01.0", Path.join(versions_dir, "current"))
 
-      assert {:error, :no_rollback_candidate} =
-               Remote.rollback(paths_opts: [home_dir: home], release_root: only)
+      assert {:error, :invalid_receipt_id} =
+               Remote.rollback(
+                 paths_opts: [home_dir: home],
+                 release_root: only,
+                 current_version: "2099.01.0"
+               )
     end
   end
 end

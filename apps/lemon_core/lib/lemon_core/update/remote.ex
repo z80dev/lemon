@@ -52,13 +52,15 @@ defmodule LemonCore.Update.Remote do
   """
 
   alias LemonCore.Paths
-  alias LemonCore.Update.Version
+  alias LemonCore.Update.{Archive, ManagedInstall, Plan, ReceiptStore, Version}
 
   @default_base_url "https://github.com/z80dev/lemon"
   @default_channel "stable"
   @keep_versions 2
   @tui_profile "lemon_tui"
   @sim_profile "sim_broadcast_platform"
+  @manifest_max_bytes 1_048_576
+  @artifact_max_bytes 2_147_483_648
 
   @type opts :: keyword()
   @type artifact :: %{optional(String.t()) => term()}
@@ -86,8 +88,8 @@ defmodule LemonCore.Update.Remote do
 
     with :ok <- validate_channel(channel, pin),
          url <- manifest_url(base_url(opts), pin),
-         {:ok, manifest} <- fetch_manifest(url) do
-      current = Version.current()
+         {:ok, manifest, manifest_sha256} <- fetch_manifest(url) do
+      current = running_version(opts)
       latest = manifest["version"]
 
       {:ok,
@@ -98,8 +100,33 @@ defmodule LemonCore.Update.Remote do
          artifact: select_artifact(manifest, opts),
          tui_artifact: select_tui_artifact(manifest, opts),
          channel: channel,
-         auto_update: auto_update?(opts)
+         auto_update: auto_update?(opts),
+         manifest_commit: manifest["commit"],
+         manifest_sha256: manifest_sha256
        }}
+    end
+  end
+
+  @doc """
+  Builds a non-mutating, time-bounded update plan for a managed installation.
+
+  The opaque digest binds the exact active/running version, channel, raw
+  manifest hash and commit, target, platform/profile, and every selected
+  artifact's filename, size, and SHA-256. Planning performs no filesystem
+  writes and never downloads an artifact.
+  """
+  @spec plan(opts()) :: {:ok, map()} | {:error, term()}
+  def plan(opts \\ []) do
+    with {:ok, current} <- ManagedInstall.current(opts),
+         {:ok, info} <- check(opts) do
+      Plan.build(info,
+        current: current,
+        running: running_version(opts),
+        profile: profile(opts),
+        platform: platform(opts),
+        now_ms: now_ms(opts),
+        max_artifact_bytes: Keyword.get(opts, :max_artifact_bytes, @artifact_max_bytes)
+      )
     end
   end
 
@@ -124,34 +151,29 @@ defmodule LemonCore.Update.Remote do
   """
   @spec apply(opts()) :: {:ok, map()} | {:error, term()}
   def apply(opts \\ []) do
-    with :ok <- guard_layout(opts),
-         {:ok, info} <- check(opts) do
-      do_apply(info, opts)
+    confirm = Keyword.get(opts, :confirm)
+
+    with {:ok, preview} <- plan(opts),
+         :ok <- require_confirmation(confirm, preview.digest) do
+      ReceiptStore.with_lock(opts, fn -> apply_locked(opts, preview.digest) end)
     end
   end
 
   @doc """
-  Flips `versions/current` to the newest retained version other than the
-  active one.
+  Restores the exact checkpoint named by a successful update receipt.
+
+  Both `:receipt` and its exact `:confirm` rollback digest are required. The
+  current pointer and checkpoint launcher checksum must still match the
+  receipt; rollback never selects an arbitrary directory by recency.
   """
-  @spec rollback(opts()) :: {:ok, %{active: String.t()}} | {:error, term()}
+  @spec rollback(opts()) :: {:ok, map()} | {:error, term()}
   def rollback(opts \\ []) do
-    with :ok <- guard_layout(opts) do
-      dir = versions_dir(opts)
-      active = active_version(dir)
-
-      case candidates(dir, active) do
-        [newest | _] ->
-          case flip_current(newest, opts) do
-            :ok -> {:ok, %{active: newest}}
-            {:error, reason} -> {:error, reason}
-          end
-
-        [] ->
-          {:error, :no_rollback_candidate}
-      end
-    end
+    ReceiptStore.with_lock(opts, fn -> rollback_locked(opts) end)
   end
+
+  @doc "Returns bounded, content-free update receipts newest first."
+  @spec history(opts()) :: {:ok, [map()]} | {:error, term()}
+  def history(opts \\ []), do: ReceiptStore.history(opts)
 
   # ──────────────────────────────────────────────────────────────────────────
   # check/1
@@ -178,9 +200,19 @@ defmodule LemonCore.Update.Remote do
     case LemonCore.Httpc.request(:get, request, [timeout: 10_000, autoredirect: true],
            body_format: :binary
          ) do
-      {:ok, {{_, 200, _}, _headers, body}} -> decode_manifest(body)
-      {:ok, {{_, status, _}, _headers, _body}} -> {:error, {:manifest_http_status, status}}
-      {:error, reason} -> {:error, {:manifest_request_failed, reason}}
+      {:ok, {{_, 200, _}, _headers, body}} when byte_size(body) <= @manifest_max_bytes ->
+        with {:ok, manifest} <- decode_manifest(body) do
+          {:ok, manifest, sha256_bytes(body)}
+        end
+
+      {:ok, {{_, 200, _}, _headers, _body}} ->
+        {:error, :manifest_too_large}
+
+      {:ok, {{_, status, _}, _headers, _body}} ->
+        {:error, {:manifest_http_status, status}}
+
+      {:error, reason} ->
+        {:error, {:manifest_request_failed, reason}}
     end
   end
 
@@ -285,27 +317,233 @@ defmodule LemonCore.Update.Remote do
   # apply/1
   # ──────────────────────────────────────────────────────────────────────────
 
-  defp do_apply(%{update_available?: false, current: current, latest: latest}, _opts) do
-    {:ok, %{staged: nil, restart_required: false, current: current, latest: latest}}
+  defp apply_locked(opts, expected_digest) do
+    with {:ok, plan} <- plan(opts),
+         :ok <- require_confirmation(expected_digest, plan.digest),
+         true <- now_ms(opts) < plan.expires_at_ms || {:error, :plan_expired} do
+      if plan.action == "none" do
+        {:ok,
+         %{
+           staged: nil,
+           restart_required: false,
+           current: plan.current,
+           latest: plan.latest
+         }}
+      else
+        with {:ok, checkpoint} <- create_checkpoint(plan, opts) do
+          apply_plan(plan, checkpoint, opts)
+        end
+      end
+    end
   end
 
-  defp do_apply(%{artifact: nil}, _opts), do: {:error, :no_matching_artifact}
+  defp require_confirmation(confirm, digest) when is_binary(confirm) do
+    if Plan.secure_equal?(confirm, digest), do: :ok, else: {:error, :confirmation_mismatch}
+  end
 
-  defp do_apply(%{artifact: artifact, latest: version, current: current} = info, opts) do
-    tui_artifact = Map.get(info, :tui_artifact)
+  defp require_confirmation(_confirm, digest), do: {:error, {:confirmation_required, digest}}
 
-    with {:ok, final_dir} <- stage(artifact, tui_artifact, version, opts),
-         :ok <- flip_current(version, opts) do
-      prune(opts, version)
+  defp create_checkpoint(plan, opts) do
+    with {:ok, digest} <- ManagedInstall.launcher_sha256(plan.current, opts),
+         {:ok, checkpoint} <-
+           ReceiptStore.put_checkpoint(
+             %{
+               "action" => "update_checkpoint",
+               "created_at_ms" => now_ms(opts),
+               "from_version" => plan.current,
+               "launcher_sha256" => digest,
+               "plan_digest" => plan.digest,
+               "platform" => plan.platform,
+               "profile" => plan.profile,
+               "status" => "verified"
+             },
+             opts
+           ),
+         {:ok, reread} <- ReceiptStore.fetch_checkpoint(checkpoint["id"], opts),
+         true <- Plan.secure_equal?(reread["launcher_sha256"], digest) do
+      {:ok, checkpoint}
+    else
+      false -> {:error, :checkpoint_verification_failed}
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
+  defp apply_plan(plan, checkpoint, opts) do
+    artifact = plan.artifact
+    tui_artifact = plan.tui_artifact
+
+    case stage(artifact, tui_artifact, plan.target, opts) do
+      {:ok, final_dir} ->
+        case flip_and_record(plan, checkpoint, final_dir, opts) do
+          {:ok, result} ->
+            ManagedInstall.prune([plan.target, plan.current], opts)
+            {:ok, result}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      {:error, reason} ->
+        _ = failed_receipt(plan, checkpoint, reason, opts)
+        {:error, reason}
+    end
+  end
+
+  defp flip_and_record(plan, checkpoint, final_dir, opts) do
+    with :ok <- ManagedInstall.flip(plan.target, opts),
+         :ok <- ManagedInstall.verify_active(plan.target, opts),
+         rollback_digest <- Plan.rollback_digest(plan, checkpoint),
+         {:ok, receipt} <-
+           ReceiptStore.put_receipt(
+             %{
+               "action" => "apply",
+               "channel" => plan.channel,
+               "checkpoint_id" => checkpoint["id"],
+               "created_at_ms" => now_ms(opts),
+               "from_version" => plan.current,
+               "manifest_commit" => plan.manifest_commit,
+               "plan_digest" => plan.digest,
+               "platform" => plan.platform,
+               "profile" => plan.profile,
+               "rollback_digest" => rollback_digest,
+               "status" => "applied",
+               "to_version" => plan.target
+             },
+             opts
+           ) do
       {:ok,
        %{
-         staged: version,
+         staged: plan.target,
          restart_required: true,
-         current: current,
-         latest: version,
-         path: final_dir
+         current: plan.current,
+         latest: plan.target,
+         path: final_dir,
+         receipt: receipt
        }}
+    else
+      {:error, reason} ->
+        ManagedInstall.restore_after_failed_flip(plan.current, plan.target, opts)
+        _ = failed_receipt(plan, checkpoint, reason, opts)
+        {:error, reason}
+    end
+  end
+
+  defp failed_receipt(plan, checkpoint, reason, opts) do
+    ReceiptStore.put_receipt(
+      %{
+        "action" => "apply",
+        "channel" => plan.channel,
+        "checkpoint_id" => checkpoint["id"],
+        "created_at_ms" => now_ms(opts),
+        "from_version" => plan.current,
+        "manifest_commit" => plan.manifest_commit,
+        "plan_digest" => plan.digest,
+        "platform" => plan.platform,
+        "profile" => plan.profile,
+        "status" => "failed_#{reason_kind(reason)}",
+        "to_version" => plan.target
+      },
+      opts
+    )
+  end
+
+  defp rollback_locked(opts) do
+    receipt_id = Keyword.get(opts, :receipt)
+    confirm = Keyword.get(opts, :confirm)
+
+    with {:ok, _active} <- ManagedInstall.current(opts),
+         {:ok, receipt} <- ReceiptStore.fetch_receipt(receipt_id, opts),
+         :ok <- validate_rollback_receipt(receipt, confirm, opts),
+         {:ok, checkpoint} <- ReceiptStore.fetch_checkpoint(receipt["checkpoint_id"], opts),
+         :ok <- verify_checkpoint(receipt, checkpoint, opts),
+         :ok <- ManagedInstall.flip(receipt["from_version"], opts),
+         :ok <- ManagedInstall.verify_active(receipt["from_version"], opts),
+         {:ok, rollback_receipt} <- put_rollback_receipt(receipt, opts) do
+      {:ok,
+       %{
+         active: receipt["from_version"],
+         restart_required: true,
+         receipt: rollback_receipt
+       }}
+    else
+      {:error, reason} ->
+        maybe_restore_rollback_source(receipt_id, opts)
+        {:error, reason}
+    end
+  end
+
+  defp validate_rollback_receipt(receipt, confirm, opts) do
+    active = ManagedInstall.active(opts)
+
+    cond do
+      receipt["action"] != "apply" or receipt["status"] != "applied" ->
+        {:error, :receipt_not_rollbackable}
+
+      not is_binary(confirm) ->
+        {:error, {:confirmation_required, receipt["rollback_digest"]}}
+
+      not Plan.secure_equal?(confirm, receipt["rollback_digest"]) ->
+        {:error, :confirmation_mismatch}
+
+      active != receipt["to_version"] ->
+        {:error, :stale_current_version}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp verify_checkpoint(receipt, checkpoint, opts) do
+    cond do
+      checkpoint["status"] != "verified" ->
+        {:error, :checkpoint_not_verified}
+
+      checkpoint["from_version"] != receipt["from_version"] ->
+        {:error, :checkpoint_version_mismatch}
+
+      checkpoint["plan_digest"] != receipt["plan_digest"] ->
+        {:error, :checkpoint_plan_mismatch}
+
+      true ->
+        with {:ok, actual} <- ManagedInstall.launcher_sha256(receipt["from_version"], opts),
+             true <- Plan.secure_equal?(actual, checkpoint["launcher_sha256"]) do
+          :ok
+        else
+          false -> {:error, :checkpoint_checksum_mismatch}
+          {:error, reason} -> {:error, reason}
+        end
+    end
+  end
+
+  defp put_rollback_receipt(receipt, opts) do
+    ReceiptStore.put_receipt(
+      %{
+        "action" => "rollback",
+        "channel" => receipt["channel"],
+        "checkpoint_id" => receipt["checkpoint_id"],
+        "created_at_ms" => now_ms(opts),
+        "from_version" => receipt["to_version"],
+        "plan_digest" => receipt["plan_digest"],
+        "platform" => receipt["platform"],
+        "profile" => receipt["profile"],
+        "rolled_back_receipt_id" => receipt["id"],
+        "status" => "rolled_back",
+        "to_version" => receipt["from_version"]
+      },
+      opts
+    )
+  end
+
+  # If the pointer was flipped but writing/verifying the rollback receipt
+  # failed, return it to the update receipt's source version. Fetching is
+  # bounded and receipt-derived; no caller-controlled path is used.
+  defp maybe_restore_rollback_source(receipt_id, opts) do
+    case ReceiptStore.fetch_receipt(receipt_id, opts) do
+      {:ok, %{"action" => "apply", "to_version" => version}} ->
+        if ManagedInstall.active(opts) != version, do: ManagedInstall.flip(version, opts)
+
+      _ ->
+        :ok
     end
   end
 
@@ -322,10 +560,16 @@ defmodule LemonCore.Update.Remote do
 
     try do
       with {:ok, tarballs} <- download_verified(artifact, tui_artifact, version, opts),
+           :ok <- Archive.preflight(tarballs, opts),
            :ok <- unpack(tarballs, partial),
-           :ok <- verify_staged(partial, tui_artifact) do
-        promote(partial, Path.join(dir, version))
+           :ok <- Archive.validate_tree(partial, opts),
+           :ok <- verify_staged(partial, tui_artifact, version, opts) do
+        ManagedInstall.promote(partial, version, opts)
       end
+    rescue
+      _error -> {:error, :staging_failed}
+    catch
+      _kind, _reason -> {:error, :staging_failed}
     after
       File.rm_rf(partial)
 
@@ -356,6 +600,7 @@ defmodule LemonCore.Update.Remote do
 
   defp download_one(artifact, version, opts) do
     with {:ok, tarball} <- download_artifact(artifact, version, opts),
+         :ok <- verify_download_size(tarball, artifact, opts),
          :ok <- verify_checksum(tarball, artifact) do
       {:ok, tarball}
     end
@@ -426,6 +671,27 @@ defmodule LemonCore.Update.Remote do
     end
   end
 
+  defp verify_download_size(path, artifact, opts) do
+    expected = artifact["size"]
+    max_bytes = Keyword.get(opts, :max_artifact_bytes, @artifact_max_bytes)
+
+    case File.stat(path) do
+      {:ok, %File.Stat{type: :regular, size: ^expected}} when expected <= max_bytes ->
+        :ok
+
+      {:ok, %File.Stat{type: :regular, size: actual}} ->
+        File.rm(path)
+        {:error, {:artifact_size_mismatch, expected, actual}}
+
+      {:ok, _stat} ->
+        File.rm(path)
+        {:error, :invalid_download_file}
+
+      {:error, reason} ->
+        {:error, {:download_stat_failed, reason}}
+    end
+  end
+
   defp sha256_file(path) do
     path
     |> File.stream!(2 * 1024 * 1024)
@@ -448,7 +714,7 @@ defmodule LemonCore.Update.Remote do
   # Nothing is promoted until the staged tree actually holds the launchers it
   # is supposed to, mirroring the same assertions install.sh makes. A tarball
   # that unpacked into the wrong shape must not become `versions/current`.
-  defp verify_staged(partial, tui_artifact) do
+  defp verify_staged(partial, tui_artifact, version, opts) do
     cond do
       not executable?(Path.join(partial, "bin/lemon")) ->
         {:error, {:incomplete_release, "bin/lemon"}}
@@ -457,7 +723,7 @@ defmodule LemonCore.Update.Remote do
         {:error, {:incomplete_release, "tui/bin/lemon-tui"}}
 
       true ->
-        :ok
+        ManagedInstall.verify_launcher_version(Path.join(partial, "bin/lemon"), version, opts)
     end
   end
 
@@ -486,139 +752,19 @@ defmodule LemonCore.Update.Remote do
     end
   end
 
-  # Never clear the destination to make room. Re-staging a version that is
-  # already installed would otherwise delete the very directory `current`
-  # points at, and an interruption mid-delete leaves a dangling `current` with
-  # nothing to fall back to. A usable install is kept as-is; only a broken one
-  # is replaced, and it is moved aside rather than deleted so the swap can be
-  # undone if the rename fails.
-  defp promote(partial, final) do
-    cond do
-      usable_install?(final) -> {:ok, final}
-      File.exists?(final) -> replace(partial, final)
-      true -> rename_into_place(partial, final)
-    end
+  defp running_version(opts),
+    do: Keyword.get(opts, :current_version) || Version.current()
+
+  defp now_ms(opts), do: Keyword.get(opts, :now_ms, System.system_time(:millisecond))
+
+  defp sha256_bytes(bytes) do
+    :sha256 |> :crypto.hash(bytes) |> Base.encode16(case: :lower)
   end
 
-  defp replace(partial, final) do
-    aside = "#{final}.broken.#{os_pid()}"
-    File.rm_rf(aside)
-
-    case File.rename(final, aside) do
-      :ok -> swap_in(partial, final, aside)
-      {:error, reason} -> {:error, {:rename_failed, reason}}
-    end
-  end
-
-  defp swap_in(partial, final, aside) do
-    case rename_into_place(partial, final) do
-      {:ok, dir} ->
-        File.rm_rf(aside)
-        {:ok, dir}
-
-      {:error, reason} ->
-        File.rename(aside, final)
-        {:error, reason}
-    end
-  end
-
-  defp rename_into_place(partial, final) do
-    case File.rename(partial, final) do
-      :ok -> {:ok, final}
-      {:error, reason} -> {:error, {:rename_failed, reason}}
-    end
-  end
-
-  defp usable_install?(dir), do: executable?(Path.join(dir, "bin/lemon"))
-
-  defp os_pid, do: List.to_string(:os.getpid())
-
-  # A fixed temp name races a concurrent updater and, if the rename fails,
-  # leaves a stray symlink sitting in versions/ forever.
-  defp flip_current(version, opts) do
-    dir = versions_dir(opts)
-    current = Path.join(dir, "current")
-    tmp = Path.join(dir, ".current.tmp.#{os_pid()}")
-
-    try do
-      File.rm(tmp)
-
-      with :ok <- File.ln_s(version, tmp),
-           :ok <- File.rename(tmp, current) do
-        :ok
-      else
-        {:error, reason} -> {:error, {:symlink_failed, reason}}
-      end
-    after
-      File.rm(tmp)
-    end
-  end
-
-  defp prune(opts, current_version) do
-    dir = versions_dir(opts)
-
-    dir
-    |> version_dirs()
-    |> Enum.reject(&(&1 == current_version))
-    |> newest_first()
-    |> Enum.drop(@keep_versions)
-    |> Enum.each(&File.rm_rf(Path.join(dir, &1)))
-
-    :ok
-  end
-
-  defp candidates(dir, active) do
-    dir
-    |> version_dirs()
-    |> Enum.reject(&(&1 == active))
-    |> newest_first()
-  end
-
-  defp newest_first(versions), do: Enum.sort(versions, &(Version.compare(&1, &2) != :lt))
-
-  defp version_dirs(dir) do
-    case File.ls(dir) do
-      {:ok, entries} ->
-        entries
-        |> Enum.reject(&(&1 == "current"))
-        |> Enum.reject(&String.starts_with?(&1, "."))
-        |> Enum.reject(&(String.ends_with?(&1, ".partial") or String.contains?(&1, ".broken.")))
-        |> Enum.filter(&File.dir?(Path.join(dir, &1)))
-
-      {:error, _reason} ->
-        []
-    end
-  end
-
-  defp active_version(dir) do
-    case File.read_link(Path.join(dir, "current")) do
-      {:ok, target} -> Path.basename(target)
-      {:error, _reason} -> nil
-    end
-  end
-
-  # ──────────────────────────────────────────────────────────────────────────
-  # Layout guard
-  # ──────────────────────────────────────────────────────────────────────────
-
-  defp guard_layout(opts) do
-    root = Path.expand(release_root(opts))
-    versions = Path.expand(versions_dir(opts))
-
-    if String.starts_with?(root, versions <> "/") do
-      :ok
-    else
-      {:error,
-       {:unsupported_layout,
-        "not running from #{versions}/<version> — this looks like a manual tarball or " <>
-          "server install; use the tarball/docker upgrade flow instead of `lemon update`"}}
-    end
-  end
-
-  defp release_root(opts) do
-    Keyword.get(opts, :release_root) || System.get_env("RELEASE_ROOT") ||
-      List.to_string(:code.root_dir())
-  end
+  defp reason_kind({kind, _rest}) when is_atom(kind), do: kind
+  defp reason_kind({kind, _a, _b}) when is_atom(kind), do: kind
+  defp reason_kind(kind) when is_atom(kind), do: kind
+  defp reason_kind(_reason), do: :update_failed
 
   # ──────────────────────────────────────────────────────────────────────────
   # Shared config
@@ -632,6 +778,6 @@ defmodule LemonCore.Update.Remote do
 
   defp paths_opts(opts), do: Keyword.get(opts, :paths_opts, [])
   defp state_home(opts), do: Paths.home_state_dir(paths_opts(opts))
-  defp versions_dir(opts), do: Path.join(state_home(opts), "versions")
+  defp versions_dir(opts), do: ManagedInstall.versions_dir(opts)
   defp tmp_dir(opts), do: Path.join(state_home(opts), "tmp")
 end

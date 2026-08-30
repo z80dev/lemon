@@ -1,56 +1,40 @@
-defmodule LemonCore.Update.CLI do
+defmodule LemonCli.UpdateCommand do
   @moduledoc """
-  Core-only update CLI used by packaged profiles that do not assemble
-  `lemon_cli` (currently the simulation release).
+  Shared registry-driven update command for source and packaged launchers.
 
-  Managed releases expose the same safe update lifecycle as the shared CLI:
-  `check`, `plan`, `apply`, `history`, and `rollback`. Planning never mutates
-  the installation. Applying and rolling back require exact, fresh digests.
-
-  `eval` boots the VM without the ordinary supervision tree, so `run/1`
-  starts only the OTP applications required by `LemonCore.Update.Remote`.
+  Managed releases support `check`, `plan`, `apply`, `history`, and `rollback`.
+  Source checkouts support the read-only `check` and `history` surfaces; binary
+  plan/apply/rollback operations fail closed with `git pull` guidance because
+  a checkout is not an installer-managed target.
   """
 
+  alias LemonCli.CommandRegistry
   alias LemonCore.Update.Remote
 
-  @apps [:crypto, :ssl, :inets, :jason]
-  @commands ~w(check plan apply history rollback)
-
-  @doc "Halting entry point."
-  @spec main([String.t()]) :: no_return()
-  def main(argv), do: System.halt(run(argv))
-
-  @doc "Runs an update command and returns 0, 1, or 2 instead of halting."
   @spec run([String.t()]) :: 0 | 1 | 2
-  def run(argv) do
-    ensure_started()
-
-    case parse(effective_argv(argv)) do
-      {:ok, command, opts} -> execute(command, opts)
+  def run(args) do
+    with {:ok, command, opts} <- parse(args),
+         :ok <- validate_mode(command) do
+      ensure_started()
+      execute(command, opts)
+    else
       {:error, :usage} -> usage_error()
+      {:error, :source_managed_only} -> source_managed_only()
     end
   end
 
-  defp ensure_started, do: Enum.each(@apps, &Application.ensure_all_started/1)
-
-  defp effective_argv([]) do
-    String.split(System.get_env("LEMON_UPDATE_ARGS") || "", " ", trim: true)
-  end
-
-  defp effective_argv(argv), do: argv
-
-  defp parse(argv) do
+  defp parse(args) do
     {opts, positional, invalid} =
-      OptionParser.parse(argv,
+      OptionParser.parse(args,
         strict: [
-          check: :boolean,
-          rollback: :boolean,
+          json: :boolean,
           channel: :string,
           version: :string,
           confirm: :string,
           receipt: :string,
           limit: :integer,
-          json: :boolean
+          check: :boolean,
+          rollback: :boolean
         ]
       )
 
@@ -68,7 +52,8 @@ defmodule LemonCore.Update.CLI do
         positional == [] and not check? and not rollback? ->
           "plan"
 
-        length(positional) == 1 and not check? and not rollback? and hd(positional) in @commands ->
+        length(positional) == 1 and not check? and not rollback? and
+            hd(positional) in ~w(check plan apply history rollback) ->
           hd(positional)
 
         true ->
@@ -78,27 +63,26 @@ defmodule LemonCore.Update.CLI do
     if invalid == [] and command, do: {:ok, command, opts}, else: {:error, :usage}
   end
 
-  defp execute("check", opts), do: call(:check, fn -> Remote.check(remote_opts(opts)) end, opts)
-  defp execute("plan", opts), do: call(:plan, fn -> Remote.plan(remote_opts(opts)) end, opts)
-  defp execute("apply", opts), do: call(:apply, fn -> Remote.apply(remote_opts(opts)) end, opts)
-
-  defp execute("history", opts),
-    do: call(:history, fn -> Remote.history(remote_opts(opts)) end, opts)
-
-  defp execute("rollback", opts),
-    do: call(:rollback, fn -> Remote.rollback(remote_opts(opts)) end, opts)
-
-  defp remote_opts(opts) do
-    []
-    |> maybe_put(:channel, opts[:channel])
-    |> maybe_put(:version, opts[:version])
-    |> maybe_put(:confirm, opts[:confirm])
-    |> maybe_put(:receipt, opts[:receipt])
-    |> maybe_put(:limit, opts[:limit])
+  defp validate_mode(command) do
+    if launcher() == :source and command in ~w(plan apply rollback),
+      do: {:error, :source_managed_only},
+      else: :ok
   end
 
-  defp maybe_put(opts, _key, nil), do: opts
-  defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
+  defp execute("check", opts), do: call(:check, fn -> Remote.check(remote_opts(opts)) end, opts)
+  defp execute("plan", opts), do: call(:plan, fn -> Remote.plan(remote_opts(opts)) end, opts)
+
+  defp execute("apply", opts) do
+    call(:apply, fn -> Remote.apply(remote_opts(opts)) end, opts)
+  end
+
+  defp execute("history", opts) do
+    call(:history, fn -> Remote.history(remote_opts(opts)) end, opts)
+  end
+
+  defp execute("rollback", opts) do
+    call(:rollback, fn -> Remote.rollback(remote_opts(opts)) end, opts)
+  end
 
   defp call(action, fun, opts) do
     case fun.() do
@@ -111,6 +95,18 @@ defmodule LemonCore.Update.CLI do
         1
     end
   end
+
+  defp remote_opts(opts) do
+    []
+    |> maybe_put(:channel, opts[:channel])
+    |> maybe_put(:version, opts[:version])
+    |> maybe_put(:confirm, opts[:confirm])
+    |> maybe_put(:receipt, opts[:receipt])
+    |> maybe_put(:limit, opts[:limit])
+  end
+
+  defp maybe_put(opts, _key, nil), do: opts
+  defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
 
   defp report(action, result, true) do
     result
@@ -218,9 +214,7 @@ defmodule LemonCore.Update.CLI do
     do: "The release archive contains an unsafe entry type."
 
   defp safe_message(:checksum_mismatch), do: "The downloaded artifact checksum did not match."
-
-  defp safe_message(:artifact_size_mismatch),
-    do: "The downloaded artifact size did not match."
+  defp safe_message(:artifact_size_mismatch), do: "The downloaded artifact size did not match."
 
   defp safe_message(:staged_version_mismatch),
     do: "The staged launcher reported the wrong version."
@@ -228,7 +222,28 @@ defmodule LemonCore.Update.CLI do
   defp safe_message(_kind), do: "The update operation was refused safely."
 
   defp usage_error do
-    IO.puts(:stderr, "Usage: lemon update <check|plan|apply|history|rollback> [options]")
+    IO.write(:stderr, CommandRegistry.help("update"))
     2
+  end
+
+  defp source_managed_only do
+    IO.puts(
+      :stderr,
+      "Source checkouts cannot plan, apply, or roll back release artifacts. " <>
+        "Update the checkout with your reviewed git pull workflow; use `lemon update check` for published-version visibility."
+    )
+
+    1
+  end
+
+  defp launcher do
+    case System.get_env("LEMON_CLI_LAUNCHER") do
+      "source" -> :source
+      _ -> :release
+    end
+  end
+
+  defp ensure_started do
+    Enum.each([:crypto, :ssl, :inets, :jason, :lemon_core], &Application.ensure_all_started/1)
   end
 end

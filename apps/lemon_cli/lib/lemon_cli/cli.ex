@@ -26,6 +26,7 @@ defmodule LemonCli.CLI do
       context <preview|resolve> <reference>... [bounded options]
       sessions <list|search|show|history|title|pin|unpin|archive|restore|export|prune|delete>
       learn [review|confirm] <reference>... [options]
+      update <check|plan|apply|history|rollback> [options]
       completion <bash|zsh|fish>
 
   `model` delegates to provider onboarding; `gateway setup` delegates to the
@@ -165,6 +166,7 @@ defmodule LemonCli.CLI do
   defp run_command("context", args), do: LemonCli.ContextCommand.run(args)
   defp run_command("sessions", args), do: LemonCli.SessionsCommand.run(args)
   defp run_command("learn", args), do: LemonCli.LearnCommand.run(args)
+  defp run_command("update", args), do: LemonCli.UpdateCommand.run(args)
   defp run_command("completion", args), do: LemonCli.CompletionCommand.run(args)
 
   # ──────────────────────────────────────────────────────────────────────────
