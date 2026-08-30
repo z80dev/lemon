@@ -273,7 +273,10 @@ Environment variables override file values. Common overrides:
   joining host. The source `./bin/lemon-tui` launcher generates an ephemeral
   value when it owns a fresh local runtime; persistent or existing runtimes
   require the operator to provide the same high-entropy value to both runtime
-  and client.
+  and client. Token origin does not control process lifetime: every runtime
+  started by `./bin/lemon-tui` is stopped with the TUI. Start persistent
+  runtimes separately with `./bin/lemon --daemon`, then attach with the same
+  token.
 - `LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK` — explicit legacy
   compatibility opt-in (`true`/`false` or `1`/`0`) for tokenless operator
   connections from direct loopback peers. Defaults to `false`; never enable it
