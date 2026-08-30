@@ -269,6 +269,24 @@ defmodule LemonCli.CommandRegistry do
       ]
     },
     %{
+      name: "update",
+      summary: "Safely plan, apply, inspect, or roll back Lemon releases",
+      usage: "lemon update <check|plan|apply|history|rollback> [options]",
+      subcommands: subcommands(~w(check plan apply history rollback)),
+      options: [
+        option("--channel CHANNEL", ["--channel"], "Override the release channel"),
+        option("--version VERSION", ["--version"], "Use an exact published version"),
+        option("--confirm DIGEST", ["--confirm"], "Exact fresh plan or rollback digest"),
+        option("--receipt ID", ["--receipt"], "Exact update receipt for rollback"),
+        option("--limit N", ["--limit"], "Bound history receipts"),
+        option("--json", ["--json"], "Emit one redacted JSON document")
+      ],
+      details: [
+        "Planning is non-mutating. Managed-release apply requires the exact digest from a fresh plan; rollback requires both the exact apply receipt and its rollback digest.",
+        "Source checkouts support read-only check/history. Plan, apply, and rollback fail closed because source updates belong to the operator's reviewed git workflow."
+      ]
+    },
+    %{
       name: "completion",
       summary: "Generate shell completion scripts",
       usage: "lemon completion <bash|zsh|fish>",
@@ -290,8 +308,7 @@ defmodule LemonCli.CommandRegistry do
     launcher("proofs", "Inspect proof artifacts"),
     launcher("readiness", "Inspect launch readiness"),
     launcher("skill", "Manage skills"),
-    launcher("usage", "Inspect usage diagnostics"),
-    launcher("update", "Check for or apply updates")
+    launcher("usage", "Inspect usage diagnostics")
   ]
 
   @release_launcher_commands [
@@ -305,8 +322,7 @@ defmodule LemonCli.CommandRegistry do
     launcher("remote", "Attach a remote IEx shell"),
     launcher("eval", "Evaluate code in a fresh release VM"),
     launcher("rpc", "Evaluate code on the running node"),
-    launcher("version", "Print the installed Lemon version"),
-    launcher("update", "Check for or apply updates")
+    launcher("version", "Print the installed Lemon version")
   ]
 
   @spec commands() :: [map()]

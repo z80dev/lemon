@@ -3371,6 +3371,7 @@ the mutation if any config content changed after preview. `/manage/providers`
 uses this contract for all Web mutations, then adds exact confirmation for
 destructive actions and requires credential-reference values to be re-entered
 instead of retaining them in LiveView state.
+
 Memory-provider readiness is visible through read-only `memory.status` and
 support-bundle `memory_diagnostics.json`. These surfaces expose
 provider ids, enabled state, source labels, scopes, timeout shape, and module
@@ -9415,6 +9416,36 @@ export PATH="$HOME/.lemon/bin:$PATH"
 
 For lifecycle commands and release verification, see `lemon --help` and
 [Versioning and Channels](release/versioning_and_channels.md).
+
+## Updating an installed release
+
+Installer-managed releases use a preview-confirm lifecycle:
+
+```bash
+lemon update check
+lemon update plan
+lemon update apply --confirm <exact-plan-digest>
+lemon stop && lemon daemon
+```
+
+Plan does not write or download anything. Apply revalidates the exact active
+release and manifest under an exclusive lock, creates a verified private
+checkpoint, checks artifact size/SHA-256, rejects unsafe archive entries,
+verifies the staged launcher's version, and atomically moves only
+`versions/current`. Inspect private content-free receipts and roll back the
+exact recorded checkpoint with:
+
+```bash
+lemon update history
+lemon update rollback --receipt <apply-receipt-id> \
+  --confirm <rollback-digest>
+lemon stop && lemon daemon
+```
+
+Update rollback does not restore config, credentials, sessions, memory, or
+stores. Schema-2 manifests provide mandatory checksums/sizes but do not yet have
+a publisher signature. See [Safely update and roll back Lemon](user-guide/updates.md)
+for the full safety and residual contract.
 
 ## Source development
 
@@ -22232,7 +22263,8 @@ private from their first byte (directories 0700, files 0600).
 lemon daemon    # background start, recording pid and version root in ~/.lemon/run
 lemon status    # pidfile plus a control-plane /healthz probe
 lemon stop      # stops through the recorded root, so it works across a flip
-lemon update    # stage runtime + TUI atomically, then flip current
+lemon update plan
+lemon update apply --confirm <exact-plan-digest>
 lemon stop && lemon daemon   # restart to apply a staged version
 ```
 
@@ -22244,12 +22276,19 @@ lemon doctor --json                 # ordinary runtime diagnostics
 lemon doctor --bundle               # redacted support bundle
 ```
 
-Updating stages the runtime and matching TUI artifacts together for full/min
-profiles, then flips the symlink; the sim profile has no TUI artifact. There
-are no hot upgrades. Roll back
-with `lemon update --rollback`, which flips `versions/current` back to the
-previously installed version (the two most recent are retained) and again needs
-a restart to take effect.
+Updating stages the checksum/size-authenticated runtime and matching TUI
+artifacts together for full/min profiles, then flips the symlink; the sim
+profile has no TUI artifact. Planning is non-mutating and apply needs its exact
+fresh digest. There are no hot upgrades. Inspect the successful apply receipt
+with `lemon update history`, then roll back only that receipt-bound checkpoint:
+
+```bash
+lemon update rollback --receipt <apply-receipt-id> \
+  --confirm <rollback-digest>
+```
+
+Rollback never chooses a retained version by recency and again needs a restart
+to take effect. See [the update safety contract](../user-guide/updates.md).
 
 Environment knobs, the uninstall procedure, and the platform support table live
 in `docs/install.md`. `scripts/verify_install_script` proves this flow against a
@@ -23485,7 +23524,8 @@ For runtimes installed by `install.sh` into `~/.lemon`, the two most recent
 previous versions are retained on disk:
 
 ```bash
-lemon update --rollback   # flips ~/.lemon/versions/current back
+lemon update history
+lemon update rollback --receipt <apply-receipt-id> --confirm <rollback-digest>
 lemon stop && lemon daemon
 lemon status
 ```
@@ -23528,9 +23568,12 @@ Supported with scope:
   and installs into the `~/.lemon` layout. Installing a `preview` or `nightly`
   release requires an explicit `LEMON_VERSION` pin.
 - Remote update through `lemon update` for runtimes installed in that layout.
-  Update is a symlink flip plus an operator restart, with `--rollback` to the
-  previous retained version. Manual tarball and container installs are not
-  managed by the updater.
+  Update is a non-mutating plan followed by exact-confirm, checksum/size
+  verification, archive confinement, atomic symlink flip, private content-free
+  receipt, and operator restart. Rollback requires the exact apply
+  receipt/digest and verified retained checkpoint. Manual tarball and container
+  installs are not managed by the updater. Schema-2 manifests are
+  checksum-authenticated but not publisher-signed.
 - Multi-arch container images on `ghcr.io/z80dev/lemon` (`amd64`, `arm64`).
 
 Not supported for stable 1.0:
@@ -23765,18 +23808,42 @@ are not the "latest" release and therefore require an explicit version.
 There are two update paths, and they do different jobs.
 
 **Installed runtimes** (`~/.lemon`, from `install.sh` or a previous
-`lemon update`) use the launcher's `lemon update`. It fetches the manifest for
-the configured channel, compares versions with `LemonCore.Update.Version`,
-downloads and SHA-256 verifies the matching runtime and, unless
-`LEMON_NO_TUI=1` or the profile is `sim_broadcast_platform`, the matching
-`lemon_tui` artifact. It stages both into the new version before flipping
-`~/.lemon/versions/current`. Applying the new version requires a restart: Lemon
-does not hot-upgrade a running node. The two previous versions are retained for
-`lemon update --rollback`.
+`lemon update`) use the launcher's preview-confirm lifecycle:
 
-**Source checkouts** use `mix lemon.update` (or the source wrapper
+```bash
+lemon update check
+lemon update plan
+lemon update apply --confirm <exact-plan-digest>
+lemon update history
+lemon update rollback --receipt <exact-apply-receipt> \
+  --confirm <exact-rollback-digest>
+```
+
+The non-mutating plan binds the exact running/current versions, raw manifest
+SHA-256 and commit, channel/target/profile/platform, artifact names, declared
+sizes, and checksums. Apply re-plans under an exclusive lock, records a verified
+private checkpoint first, downloads and exact-size/SHA-256 verifies the runtime
+and optional TUI, rejects unconfined or special archive entries before
+extraction, validates the staged launcher version, then atomically flips
+`~/.lemon/versions/current`. A post-flip failure restores the prior pointer.
+Successful apply writes a content-free receipt; rollback accepts no path and
+requires that exact receipt/digest plus an unchanged current pointer and
+checkpoint checksum. Both operations require a restart; Lemon does not
+hot-upgrade a running node.
+
+Schema 2 authenticates the artifact against the manifest's checksum and size.
+It is **not publisher-signed**: no detached manifest proof or trusted publisher
+key is currently published. Artifact requests are time-bounded and
+streamed to disk with a declared/post-download hard size check; the current
+`:httpc` boundary cannot cancel at the exact in-flight byte where an overlong
+body crosses its declaration, so the refused file is deleted after the bounded
+response completes. See [the update guide](../user-guide/updates.md).
+
+**Source checkouts** use `mix lemon.update` (or the no-subcommand source wrapper
 `./bin/lemon update`), which remains a stage-1 local maintenance task and never
-replaces binaries. The same source
+replaces binaries. `./bin/lemon update check|history` expose read-only release
+visibility and receipts; packaged `plan`, `apply`, and `rollback` fail closed
+with Git workflow guidance. The same source
 wrapper family exposes `./bin/lemon setup ...` and `./bin/lemon doctor ...` as
 delegates for the setup and diagnostics Mix tasks, plus
 `./bin/lemon channels ...` for redacted Telegram/Discord launch readiness,
@@ -27542,6 +27609,27 @@ scripts/test path apps/lemon_core/test/lemon_core/quality --seed 1
 - `quality`: runs Lemon's lightweight policy/quality gates: `scripts/lint_ci_docs.sh`, `scripts/test_contract.sh`, the hermetic `scripts/test_lemon_tui_auth.sh` source-launcher credential/lifecycle contract, `mix lemon.skill.lint`, `mix lemon.quality`, and the focused quality/eval contract tests used by CI. `mix lemon.quality` already runs the duplicate test module guard internally and keeps its default docs/architecture checks static; use `mix lemon.quality --validate-config` when runtime config validation is needed.
 - `clients`: covers the Bun TUI in `clients/tui` plus the web and browser clients. The TUI path uses `bun install --frozen-lockfile`, `bun run check`, `bun run lint`, and `bun test`; the web and browser clients continue to use their Node package checks. Set `LEMON_TEST_REUSE_NODE_MODULES=1` only for fast local loops that intentionally reuse existing installs.
 - Source-install changes should keep `scripts/verify_source_install --skip-compile` green after a local compile. For release-candidate source installs, run `scripts/verify_source_install` without skips so it checks the BEAM toolchain, source-wrapper help discoverability for setup/channels/config/doctor/send/media/models/providers/policy/proofs/readiness/secrets/skill/usage/update, locked dependency resolution, warning-free test compile, source-wrapper non-interactive setup dispatch through `./bin/lemon setup runtime --profile runtime_min --non-interactive`, source-wrapper promoted channel readiness through `./bin/lemon channels --project-dir`, source-wrapper config validation through `./bin/lemon config validate --project-dir`, source-wrapper media diagnostics through `./bin/lemon media --project-dir --limit 1`, source-wrapper model catalog listing through `./bin/lemon models --provider anthropic --limit 1`, source-wrapper provider readiness listing through `./bin/lemon providers --provider anthropic --project-dir`, source-wrapper model policy listing through `./bin/lemon policy list`, source-wrapper proof artifact listing through `./bin/lemon proofs --project-dir --limit 1`, source-wrapper readiness summary through `./bin/lemon readiness --project-dir --limit 1`, source-wrapper secrets status through `./bin/lemon secrets status`, source-wrapper skill listing through `./bin/lemon skill list`, source-wrapper usage diagnostics through `./bin/lemon usage`, source-wrapper stage-1 local update dry-run dispatch through `./bin/lemon update --check --no-skill-sync --verbose`, source-wrapper doctor JSON diagnostics through `./bin/lemon doctor --json`, and redacted support-bundle generation with compact launch readiness plus proof-gate status/counts in `readiness_summary.json`.
+
+Managed release-update changes must additionally run the focused update and
+registry lanes:
+
+```bash
+mix test apps/lemon_core/test/lemon_core/update --seed 1
+mix test \
+  apps/lemon_cli/test/lemon_cli/command_registry_test.exs \
+  apps/lemon_cli/test/lemon_cli/update_command_test.exs --seed 1
+bash -n bin/lemon rel/overlays/bin/lemon
+```
+
+The fixture-server proof uses only temporary homes/install layouts. It must
+show that plan, incorrect confirmation, and a manifest-stale confirmation do
+not change the managed tree; exact apply verifies the staged launcher's target
+version and writes private content-free history; exact receipt/digest rollback
+restores the checkpoint; injected post-promotion verification failure restores
+the old pointer; and replays do not create another successful receipt. Archive
+coverage must reject absolute/parent paths, symlinks, hard links, devices, and
+FIFOs before extraction and enforce post-extraction entry/expanded-byte bounds.
+Never point this proof at a developer checkout or real `~/.lemon` install.
 - Packaged first-run onboarding changes should keep `scripts/verify_install_script` green. Its hermetic localhost release fixture allocates a pseudo-terminal with either util-linux or BSD/macOS `script` to prove the default installer invokes the absolute installed `lemon setup` once; it separately proves `--skip-setup`, sim, and forced-no-TTY installs never invoke it, with the no-TTY path printing the exact absolute setup handoff. Linux exercises the sim install; macOS verifies its documented Linux-only refusal without entering setup. The same fixture launches an incomplete TUI through setup once and verifies a ready rerun does not reopen it. `scripts/verify_source_install --skip-compile --skip-doctor` proves the shared `LemonCli.CLI.setup_required?/0` predicate transitions from required to ready using an isolated HOME, fixture config/default model, and local encrypted test secret—never a live provider credential. The fixture preserves the invoking `MIX_HOME` so replacing HOME isolates Lemon state without hiding the already-verified Hex/Mix toolchain.
 - `eval-fast`: runs a small deterministic eval harness invocation with `mix lemon.eval --iterations ${LEMON_EVAL_ITERATIONS:-3}`. The harness includes memory scope/topic contracts, relevant-skill prompt disclosure, scripted skill-curator behavior, async delegation joins, and child artifact verification contracts. Increase `LEMON_EVAL_ITERATIONS` locally when you need more confidence.
 - `live-eval`: runs the opt-in provider-backed eval lane with `mix lemon.eval --live-model --iterations ${LEMON_EVAL_ITERATIONS:-3}`. It fails before app startup unless `LEMON_EVAL_API_KEY`, `LEMON_EVAL_API_KEY_SECRET`, `INTEGRATION_API_KEY`, `INTEGRATION_API_KEY_SECRET`, or legacy `ANTHROPIC_API_KEY` is set. Secret variables hold the name of a Lemon secret and resolve with env fallback, so local release-candidate runs can use the normal encrypted secret store without printing credentials. Configure the model with `LEMON_EVAL_PROVIDER`, `LEMON_EVAL_MODEL`, `LEMON_EVAL_BASE_URL`, and `LEMON_EVAL_API_TYPE`; matching generic `INTEGRATION_*` variables are also accepted. The current live lane checks that an independent model calls `search_memory` for prior-work recall, chooses `read_skill`/`skill_manage` for reusable skill capture, performs a curator-style umbrella consolidation, respects the scheduled-run blocked cron surface, delegates parallel child work before answering, handles untrusted external content, preserves leaf-worker tool restrictions, verifies child side effects before finalizing, and completes a tiny Elixir coding repair by reading source, patching code, running `elixir test/lemon_release_report_test.exs`, and answering only after the test passes.
@@ -31976,6 +32064,7 @@ arguments remain human-readable usage errors with exit code `2`.
 | `backup` | Create, verify, list, or restore user-state backups |
 | `context` | Preview or resolve bounded context references |
 | `sessions` | Inspect and manage durable sessions |
+| `update` | Check, non-mutating plan, exact-confirm apply/history/rollback |
 | `completion` | Generate shell completion scripts |
 
 The source and packaged launchers also expose commands specific to their own
@@ -31983,6 +32072,57 @@ runtime lifecycle. Run `lemon --help` or `./bin/lemon --help` for that exact
 launcher. Completion generation detects the launcher, so it does not advertise
 packaged daemon commands in a source checkout or source-only commands in an
 installed release.
+
+## Update lifecycle
+
+Managed releases use an explicit preview-confirm flow:
+
+```bash
+lemon update check
+lemon update plan
+lemon update apply --confirm <exact-plan-digest>
+lemon update history
+lemon update rollback --receipt <exact-apply-receipt> \
+  --confirm <exact-rollback-digest>
+```
+
+Planning does not mutate disk. Apply re-plans under an exclusive lock, verifies
+the schema-2 manifest's exact size/SHA-256 metadata, rejects unsafe archives,
+checks the staged launcher's reported version, and writes a private content-free
+receipt only after the atomic pointer flip verifies. Rollback is receipt-bound;
+it accepts no path and restores no config, credentials, sessions, or stores.
+Source checkouts expose check/history but fail packaged plan/apply/rollback
+closed. See [Safely update and roll back Lemon](updates.md) for the complete
+safety contract and current publisher-signing/network-cap residuals.
+
+## External secret sources
+
+External source diagnostics are available through the same packaged and source
+command boundary:
+
+```bash
+lemon secrets sources status
+lemon secrets sources status --json
+lemon secrets sources test
+lemon secrets sources test vault --json
+
+# Source checkout
+./bin/lemon secrets sources test --source-id vault
+```
+
+`status` validates configuration plus executable/bootstrap readiness without
+executing the source. `test` runs all enabled sources, or one named source,
+under the configured timeout and output bound. Human and JSON responses expose
+only source id/type, readiness, provenance, counts, byte counts, duration, and
+stable error kinds; they never include secret values. Operational test failure
+exits `1`, invalid options exit `2`, and an empty/not-configured selection is an
+operational failure.
+
+`lemon secrets check` likewise reports only `present` for resolved entries; it
+does not print prefixes or suffixes. External sources remain read-only
+fallbacks behind the encrypted Lemon store. See
+[External secret sources](../config.md#external-secret-sources) for the exact
+configuration and fail-closed resolution contract.
 
 ## Portable blueprints
 
@@ -32020,35 +32160,6 @@ one stable cron job. JSON success is one sanitized document on stdout;
 operational failures are one redacted error document on stderr with exit `1`;
 invalid CLI arguments use exit `2`. See the
 [bundle manifest and safety guide](skills.md#portable-skill-and-automation-bundles).
-
-## External secret sources
-
-External source diagnostics are available through the same packaged and source
-command boundary:
-
-```bash
-lemon secrets sources status
-lemon secrets sources status --json
-lemon secrets sources test
-lemon secrets sources test vault --json
-
-# Source checkout
-./bin/lemon secrets sources test --source-id vault
-```
-
-`status` validates configuration plus executable/bootstrap readiness without
-executing the source. `test` runs all enabled sources, or one named source,
-under the configured timeout and output bound. Human and JSON responses expose
-only source id/type, readiness, provenance, counts, byte counts, duration, and
-stable error kinds; they never include secret values. Operational test failure
-exits `1`, invalid options exit `2`, and an empty/not-configured selection is an
-operational failure.
-
-`lemon secrets check` likewise reports only `present` for resolved entries; it
-does not print prefixes or suffixes. External sources remain read-only
-fallbacks behind the encrypted Lemon store. See
-[External secret sources](../config.md#external-secret-sources) for the exact
-configuration and fail-closed resolution contract.
 
 ## Durable sessions
 
@@ -34230,6 +34341,129 @@ skill_synthesis_drafts       = "off"          # auto-generate drafts from memory
 ```
 
 *Last reviewed: 2026-08-30*
+
+---
+
+Source: https://z80dev.github.io/lemon/user-guide/updates
+
+# Safely update and roll back Lemon
+
+Installer-managed `lemon_runtime_min`, `lemon_runtime_full`, and simulation
+releases expose a preview-confirm update lifecycle. Lemon never replaces the
+running process in place: it stages a verified version, atomically moves the
+`~/.lemon/versions/current` pointer, and asks you to restart.
+
+## Check and plan
+
+```bash
+lemon update check
+lemon update plan
+```
+
+`check` compares the running release with the published schema-2 manifest.
+`plan` is non-mutating: it creates no update directory, receipt, checkpoint,
+download, or staged version. Its opaque digest binds all of the following:
+
+- the exact running version and `versions/current` target;
+- channel, target version, release profile, and platform;
+- the SHA-256 of the raw manifest plus its source commit;
+- each selected runtime/TUI artifact filename, declared size, and SHA-256;
+- a short expiry window.
+
+The digest is authorization for one exact plan, not a general `--yes` switch.
+Changing the manifest, active version, artifact, or time window makes it stale.
+
+## Apply the exact plan
+
+```bash
+lemon update apply --confirm <plan-digest>
+lemon stop && lemon daemon
+lemon status
+```
+
+Apply re-plans once before taking the update lock and again under the exclusive
+lock. It refuses a missing, stale, or incorrect digest before downloading or
+writing update state. Before staging, it records a private verified checkpoint
+of the exact current launcher. It then:
+
+1. downloads only the manifest-selected artifacts with bounded time and a hard
+   declared-size ceiling;
+2. verifies each downloaded byte count and SHA-256;
+3. rejects unsafe archives before extraction: absolute or parent-traversing
+   names, symlinks, hard links, devices, FIFOs, and excessive entry/expanded
+   sizes all fail closed;
+4. extracts into a partial directory, verifies the resulting tree and the
+   staged `bin/lemon version`, then promotes it with a same-filesystem rename;
+5. atomically flips `versions/current`, verifies the active launcher, and only
+   then writes the successful receipt.
+
+If validation fails after the pointer moves, Lemon restores the exact prior
+pointer. Downloads and partial directories are removed on every outcome.
+
+The current schema-2 release manifest provides **checksum authentication**, not
+publisher signing: the artifact SHA-256 and declared size are mandatory, but
+Lemon releases do not currently publish a detached signature or trusted signing
+key for the manifest. Do not describe this flow as cryptographically signed.
+
+Erlang `:httpc` streams artifacts directly to a file and Lemon enforces the
+manifest's declared maximum plus the exact post-download size. The current
+client boundary cannot cancel an in-progress response at the exact byte that it
+crosses the declared size; an overlong response is deleted and refused after
+the bounded request returns. This is a known residual, not an unlimited install
+or an integrity bypass.
+
+## Inspect receipts and roll back
+
+```bash
+lemon update history
+lemon update history --limit 5 --json
+lemon update rollback --receipt <apply-receipt-id> \
+  --confirm <rollback-digest>
+lemon stop && lemon daemon
+```
+
+History is newest first and bounded. Receipts live under
+`~/.lemon/updates/receipts`; verified checkpoints live beside them under
+`checkpoints`. Directories are owner-only (`0700`) and files are owner-only
+(`0600`). Records contain only version/profile/platform identity, timestamps,
+receipt/checkpoint IDs, manifest/plan integrity metadata, and status. They do
+not contain artifact contents, command output, environment values, credentials,
+secret names, or absolute paths.
+
+Rollback never picks a directory by recency and never accepts a filesystem
+path. It requires the exact successful apply receipt and that receipt's exact
+rollback digest. Lemon verifies that the current pointer still names the
+receipt's target and that the retained checkpoint launcher still matches its
+recorded SHA-256 before flipping to the receipt-bound prior version. A failed
+rollback receipt write restores the update target instead of leaving an
+unrecorded state.
+
+User configuration, encrypted credentials, sessions, memory, and stores are
+outside the managed `versions/` target and are never restored by update
+rollback. Use [`lemon backup`](backups.md) for user-state recovery.
+
+## Source checkouts and other layouts
+
+Source checkouts are not binary installations. They support the read-only
+published-version visibility and receipt history surfaces:
+
+```bash
+./bin/lemon update check
+./bin/lemon update history
+```
+
+`plan`, `apply`, and `rollback` fail closed with source-update guidance. Use
+your reviewed Git workflow to update a checkout. The legacy no-subcommand
+`./bin/lemon update` and its contributor flags remain the local stage-1
+maintenance task; it does not download or replace release artifacts.
+
+Manual tarball directories and container images also fail the managed-layout
+guard. Replace or roll those deployments back through their service/container
+orchestrator instead of pointing Lemon at an arbitrary path.
+
+All update commands use exit `0` for success, `1` for an operational or
+verification refusal, and `2` for invalid arguments. `--json` emits one stable
+success document on stdout or one redacted error document on stderr.
 
 ---
 

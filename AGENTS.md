@@ -17,6 +17,7 @@
 | Modify SMS/voice transports | `apps/lemon_gateway/` |
 | Add new messaging channel adapters (X, XMTP, etc.) | `apps/lemon_channels/` |
 | Modify setup, onboarding, or Hermes migration CLI flows | `apps/lemon_cli/` |
+| Modify managed release planning, apply, receipts, or rollback | `apps/lemon_core/lib/lemon_core/update/`, `apps/lemon_cli/` |
 | Modify terminal profile/session UX | `clients/tui/` (commands/pickers), `apps/lemon_control_plane/` (authoritative RPCs) |
 | Work on packaged/source command help, completion, sessions, or blueprint UX | `apps/lemon_cli/` (`CommandRegistry`, `CompletionCommand`, `SessionsCommand`, `BlueprintsCommand`) |
 | Work on agent routing or message flow | `apps/lemon_router/` |

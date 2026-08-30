@@ -57,6 +57,7 @@ only readiness, stable provenance, counts, byte counts, and error kinds.
 | Manage specialist profiles | `lemon profile list` | `./bin/lemon profile list` | Use the same packaged command boundary |
 | Preview/resolve bounded context | `lemon context preview|resolve ...` | `./bin/lemon context preview|resolve ...` | Call `LemonCore.Context` from IEx/tests |
 | Manage durable sessions | `lemon sessions list` | `./bin/lemon sessions list` | Call `LemonCore.SessionLifecycle` from IEx/tests |
+| Safely update a managed release | `lemon update plan|apply|history|rollback` | `./bin/lemon update check|history` (binary mutation fails closed) | `mix lemon.update` remains source maintenance |
 | Generate shell completion | `lemon completion zsh` | `./bin/lemon completion zsh` | Call `LemonCli.CompletionCommand.render/2` from IEx/tests |
 
 ## Command registry and completion
@@ -65,9 +66,23 @@ only readiness, stable provenance, counts, byte counts, and error kinds.
 dispatch, top-level help, command help, and shell completion metadata. It
 contains setup, model, gateway, doctor, config, secrets (including external
 source diagnostics), channels, providers, blueprints, profile, backup, context,
-sessions, and completion. Launcher-only
+sessions, update, and completion. Launcher-only
 metadata is separated into source and release sets so generated scripts never
 advertise commands the current launcher cannot run.
+
+## Safe managed-release updates
+
+`lemon update` is registry-driven and uses one handler for full/min packaged
+releases. `plan` is non-mutating; `apply` requires its exact fresh digest;
+`history` reads private content-free receipts; and `rollback` requires the exact
+apply receipt plus its receipt-bound rollback digest. JSON results omit managed
+filesystem paths and errors expose stable safe kinds/messages rather than raw
+runtime terms. The sim profile uses `LemonCore.Update.CLI` because it does not
+assemble this app, but preserves the same command and confirmation contract.
+
+Source launchers support check/history and refuse binary plan/apply/rollback.
+See [the update guide](../../docs/user-guide/updates.md) for archive confinement,
+checksum semantics, restart behavior, and the documented residuals.
 
 `lemon completion bash|zsh|fish` emits only the completion program to stdout.
 The source wrapper compiles quietly before generation; packaged runtimes use

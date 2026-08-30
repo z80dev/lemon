@@ -75,7 +75,8 @@ private from their first byte (directories 0700, files 0600).
 lemon daemon    # background start, recording pid and version root in ~/.lemon/run
 lemon status    # pidfile plus a control-plane /healthz probe
 lemon stop      # stops through the recorded root, so it works across a flip
-lemon update    # stage runtime + TUI atomically, then flip current
+lemon update plan
+lemon update apply --confirm <exact-plan-digest>
 lemon stop && lemon daemon   # restart to apply a staged version
 ```
 
@@ -87,12 +88,19 @@ lemon doctor --json                 # ordinary runtime diagnostics
 lemon doctor --bundle               # redacted support bundle
 ```
 
-Updating stages the runtime and matching TUI artifacts together for full/min
-profiles, then flips the symlink; the sim profile has no TUI artifact. There
-are no hot upgrades. Roll back
-with `lemon update --rollback`, which flips `versions/current` back to the
-previously installed version (the two most recent are retained) and again needs
-a restart to take effect.
+Updating stages the checksum/size-authenticated runtime and matching TUI
+artifacts together for full/min profiles, then flips the symlink; the sim
+profile has no TUI artifact. Planning is non-mutating and apply needs its exact
+fresh digest. There are no hot upgrades. Inspect the successful apply receipt
+with `lemon update history`, then roll back only that receipt-bound checkpoint:
+
+```bash
+lemon update rollback --receipt <apply-receipt-id> \
+  --confirm <rollback-digest>
+```
+
+Rollback never chooses a retained version by recency and again needs a restart
+to take effect. See [the update safety contract](../user-guide/updates.md).
 
 Environment knobs, the uninstall procedure, and the platform support table live
 in `docs/install.md`. `scripts/verify_install_script` proves this flow against a

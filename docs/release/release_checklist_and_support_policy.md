@@ -710,7 +710,8 @@ For runtimes installed by `install.sh` into `~/.lemon`, the two most recent
 previous versions are retained on disk:
 
 ```bash
-lemon update --rollback   # flips ~/.lemon/versions/current back
+lemon update history
+lemon update rollback --receipt <apply-receipt-id> --confirm <rollback-digest>
 lemon stop && lemon daemon
 lemon status
 ```
@@ -753,9 +754,12 @@ Supported with scope:
   and installs into the `~/.lemon` layout. Installing a `preview` or `nightly`
   release requires an explicit `LEMON_VERSION` pin.
 - Remote update through `lemon update` for runtimes installed in that layout.
-  Update is a symlink flip plus an operator restart, with `--rollback` to the
-  previous retained version. Manual tarball and container installs are not
-  managed by the updater.
+  Update is a non-mutating plan followed by exact-confirm, checksum/size
+  verification, archive confinement, atomic symlink flip, private content-free
+  receipt, and operator restart. Rollback requires the exact apply
+  receipt/digest and verified retained checkpoint. Manual tarball and container
+  installs are not managed by the updater. Schema-2 manifests are
+  checksum-authenticated but not publisher-signed.
 - Multi-arch container images on `ghcr.io/z80dev/lemon` (`amd64`, `arm64`).
 
 Not supported for stable 1.0:

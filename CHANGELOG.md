@@ -10,6 +10,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Registry-driven source/packaged `lemon update check|plan|apply|history|rollback`
+  with non-mutating manifest/current-bound plans, exact fresh-digest apply,
+  serialized checksum/size-authenticated staging, pre-extraction archive
+  confinement, verified private checkpoints, atomic pointer recovery,
+  content-free receipts, and exact receipt/digest rollback. Source checkouts
+  keep binary mutation fail-closed; schema-2 publisher-signing and exact
+  in-flight `:httpc` byte cancellation remain explicitly documented residuals.
 - Explicitly enabled, read-only 1Password, Bitwarden Secrets Manager, and
   argv-only command secret sources integrated behind the encrypted Lemon store,
   with exact schema validation, supervised time/output bounds, minimal child

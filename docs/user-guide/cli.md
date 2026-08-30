@@ -32,6 +32,7 @@ arguments remain human-readable usage errors with exit code `2`.
 | `backup` | Create, verify, list, or restore user-state backups |
 | `context` | Preview or resolve bounded context references |
 | `sessions` | Inspect and manage durable sessions |
+| `update` | Check, non-mutating plan, exact-confirm apply/history/rollback |
 | `completion` | Generate shell completion scripts |
 
 The source and packaged launchers also expose commands specific to their own
@@ -39,6 +40,28 @@ runtime lifecycle. Run `lemon --help` or `./bin/lemon --help` for that exact
 launcher. Completion generation detects the launcher, so it does not advertise
 packaged daemon commands in a source checkout or source-only commands in an
 installed release.
+
+## Update lifecycle
+
+Managed releases use an explicit preview-confirm flow:
+
+```bash
+lemon update check
+lemon update plan
+lemon update apply --confirm <exact-plan-digest>
+lemon update history
+lemon update rollback --receipt <exact-apply-receipt> \
+  --confirm <exact-rollback-digest>
+```
+
+Planning does not mutate disk. Apply re-plans under an exclusive lock, verifies
+the schema-2 manifest's exact size/SHA-256 metadata, rejects unsafe archives,
+checks the staged launcher's reported version, and writes a private content-free
+receipt only after the atomic pointer flip verifies. Rollback is receipt-bound;
+it accepts no path and restores no config, credentials, sessions, or stores.
+Source checkouts expose check/history but fail packaged plan/apply/rollback
+closed. See [Safely update and roll back Lemon](updates.md) for the complete
+safety contract and current publisher-signing/network-cap residuals.
 
 ## External secret sources
 

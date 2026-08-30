@@ -517,12 +517,12 @@ EOF
 
   update)
     shift
-    export LEMON_UPDATE_ARGS="$*"
-    # The release script's own `eval` handler already appends `-- "$@"`
-    # before invoking elixir; adding another `--` here would leave a stray
-    # leading "--" in System.argv() (elixir only strips one CLI boundary
-    # marker), silently breaking LemonCore.Update.CLI's OptionParser.parse.
-    exec "$RELEASE_BIN" eval 'LemonCore.Update.CLI.main(System.argv())' "$@"
+    if [ "$PROFILE" = "sim_broadcast_platform" ]; then
+      export LEMON_UPDATE_ARGS="$*"
+      exec "$RELEASE_BIN" eval 'LemonCore.Update.CLI.main(System.argv())' "$@"
+    else
+      run_runtime_cli update "$@"
+    fi
     ;;
 
   profile)

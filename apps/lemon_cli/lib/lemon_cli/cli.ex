@@ -25,6 +25,7 @@ defmodule LemonCli.CLI do
       backup <contract|create|list|verify|restore> [options]
       context <preview|resolve> <reference>... [bounded options]
       sessions <list|search|show|history|title|pin|unpin|archive|restore|export|prune|delete>
+      update <check|plan|apply|history|rollback> [options]
       completion <bash|zsh|fish>
 
   `model` delegates to provider onboarding; `gateway setup` delegates to the
@@ -163,6 +164,7 @@ defmodule LemonCli.CLI do
   defp run_command("backup", args), do: run_backup(args)
   defp run_command("context", args), do: LemonCli.ContextCommand.run(args)
   defp run_command("sessions", args), do: LemonCli.SessionsCommand.run(args)
+  defp run_command("update", args), do: LemonCli.UpdateCommand.run(args)
   defp run_command("completion", args), do: LemonCli.CompletionCommand.run(args)
 
   # ──────────────────────────────────────────────────────────────────────────

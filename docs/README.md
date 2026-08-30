@@ -72,6 +72,7 @@ failures.
 | [testing.md](testing.md) | Canonical local test lanes and CI parity guidance |
 | [config.md](config.md) | TOML configuration reference (providers, runtime, gateway, profiles, tools) |
 | [user-guide/backups.md](user-guide/backups.md) | Local user-state backup, verification, restore, and rollback safety model |
+| [user-guide/updates.md](user-guide/updates.md) | Non-mutating update plans, exact-confirm apply, receipts, and receipt-bound rollback |
 | [extensions.md](extensions.md) | Extension/plugin API, tool hooks, conflict resolution |
 | [release/release_checklist_and_support_policy.md](release/release_checklist_and_support_policy.md) | 1.0 release-candidate checklist, rollback checklist, and support boundaries |
 | [security/safety.md](security/safety.md) | Plain-language Lemon safety model, recommended defaults, and support-bundle guidance |

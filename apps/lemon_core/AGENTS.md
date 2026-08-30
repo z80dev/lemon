@@ -14,6 +14,7 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 - **Execution approvals** - Tool execution gating with scope-based persistence
 - **Checkpoints and rollback** - Shared checkpoint store, filesystem diff/restore, and lifecycle events
 - **User-state backup and restore** - Atomic, versioned, checksum-verified `~/.lemon` bundles with guarded overwrite
+- **Managed release updates** - Non-mutating exact plans, confined artifact staging, private receipts, and receipt-bound rollback
 - **Quality checks** - Docs catalog and architecture boundary validation
 - **Telemetry** - Consistent event emission across the umbrella
 - **HTTP client** - Thin wrapper around Erlang's `:httpc`
@@ -74,6 +75,11 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.Introspection` | Canonical introspection envelope builder and persistence API |
 | `LemonCore.Checkpoint` | Shared checkpoint store plus filesystem diff/restore and lifecycle events |
 | `LemonCore.Backup` | Versioned `~/.lemon` data contract plus atomic create/list/verify and verified-before-mutation restore |
+| `LemonCore.Update.Plan` | Pure exact-plan validation and digest binding over current/running release plus raw manifest/artifact identity |
+| `LemonCore.Update.Archive` | Pre-extraction archive path/type confinement and post-extraction entry/expanded-byte bounds |
+| `LemonCore.Update.ManagedInstall` | Installer-layout validation, launcher proof, atomic promotion/pointer flips, and confined retention |
+| `LemonCore.Update.ReceiptStore` | Serialized owner-only content-free checkpoints and update/rollback receipts |
+| `LemonCore.Update.Remote` | Network/update orchestration over the focused plan/archive/install/receipt boundaries |
 | `Lemon.Reload` | Runtime BEAM/extension reload orchestration with global lock and telemetry |
 | `LemonCore.Httpc` | `:httpc` wrapper ensuring `:inets`/`:ssl` started |
 | `LemonCore.Clock` | Time utilities (monotonic timestamps) |
@@ -95,6 +101,17 @@ permissions, and per-file checksums must all pass before restore stages data.
 Overwrite authorization must remain derived from both the verified manifest
 digest and expanded target root. Restore modes are exact manifest owner modes
 from the explicit allowlist; group/world widening is a verification failure.
+
+Managed update invariants are similarly fail-closed. Never mutate a source
+checkout, accept a caller path as a rollback target, weaken schema-2 exact
+size/SHA-256 verification, extract before `Update.Archive` accepts every entry,
+or flip `versions/current` before the staged launcher reports the target
+version. Plan must remain non-mutating and bind the raw manifest hash plus exact
+running/current pointer. Apply and rollback share `Update.ReceiptStore`'s lock;
+receipts remain content-free and owner-only. The published schema authenticates
+checksums but has no publisher signature, and `:httpc` currently enforces an
+exact post-download rather than exact in-flight byte cutoff; keep both residuals
+explicit in user/release documentation.
 
 Media doctor remediation should keep provider-backed image/TTS/STT/vision/video
 proof commands copy-ready and include the default redacted

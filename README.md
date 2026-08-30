@@ -357,6 +357,7 @@ graph TD
 | [Installation Guide](docs/install.md) | Prebuilt releases, platform support, and headless setup |
 | [Configuration Reference](docs/config.md) | Runtime configuration and environment variables |
 | [Command-line Reference](docs/user-guide/cli.md) | Runtime commands, blueprint activation, durable sessions, exit codes, and shell completion |
+| [Safe Updates](docs/user-guide/updates.md) | Non-mutating plans, exact-confirm apply, private receipts, and receipt-bound rollback |
 | [Backup and Restore](docs/user-guide/backups.md) | `~/.lemon` data contract, verification, guarded restore, and rollback |
 | [Testing Guide](docs/testing.md) | Test suites, quality gates, and CI parity |
 | [Mix Tasks Reference](docs/mix-tasks.md) | Grouped reference for all `mix lemon.*` commands |

@@ -31,7 +31,7 @@
 #   ./bin/lemon secrets status
 #   ./bin/lemon skill list
 #   ./bin/lemon usage
-#   ./bin/lemon update --check
+#   ./bin/lemon update check
 #
 
 set -euo pipefail
@@ -76,7 +76,7 @@ Usage: ./bin/lemon [options]
        ./bin/lemon secrets status
        ./bin/lemon skill list
        ./bin/lemon usage
-       ./bin/lemon update --check
+       ./bin/lemon update <check|plan|apply|history|rollback>
 
 Options:
   --daemon                Run in background and print PID
@@ -484,8 +484,16 @@ fi
 
 if [[ "${1:-}" == "update" ]]; then
   shift
-  cd "$LEMON_ROOT"
-  exec mix lemon.update "$@"
+
+  case "${1:-}" in
+    check|plan|apply|history|rollback|help|--help|-h)
+      run_source_runtime_cli "update" "$@"
+      ;;
+    *)
+      cd "$LEMON_ROOT"
+      exec mix lemon.update "$@"
+      ;;
+  esac
 fi
 
 DEBUG=""
