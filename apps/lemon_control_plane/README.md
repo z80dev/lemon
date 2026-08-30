@@ -405,15 +405,18 @@ Each method declares required scopes. A connection must have at least one matchi
 
 | Method | Scope | Description |
 |--------|-------|-------------|
-| `sessions.list` | read | List all sessions with pagination plus summary and cleanup flags |
+| `sessions.list` | read | List/search sessions with lifecycle metadata and pin/archive filters; raw search text is not echoed |
 | `sessions.active` | read | Get currently active session plus active-run cleanup summary |
 | `sessions.active.list` | read | List all active sessions with harness progress plus summary and cleanup flags |
 | `sessions.preview` | read | Preview truncated session messages plus sensitive-preview redaction, truncation summary, and cleanup flags |
 | `session.detail` | read | Deep session/run internals with summary, sensitive preview/run-internal redaction, and explicit opt-ins for full text, raw run events, and run records |
 | `sessions.patch` | admin | Modify session policy/model/thinking overrides plus patch summary and cleanup flags |
+| `sessions.metadata.patch` | admin | Set/clear title and update pin/archive state without echoing title text in the mutation response |
+| `sessions.export` | read | Return bounded, always-redacted JSON or Markdown with selected tool fields, digest, and omission summary |
+| `sessions.prune` | admin | Preview or execute stale-session pruning with archived-only/unpinned defaults and an exact-candidate confirmation token |
 | `sessions.reset` | admin | Clear session history plus cleanup summary |
 | `sessions.heartbeat` | admin | Inspect or set/pause/resume/clear one live durable session's idle-only recurring prompt; accepts the logical client session key and fails closed on ambiguity |
-| `sessions.delete` | admin | Delete a session plus cleanup summary |
+| `sessions.delete` | admin | Delete and verify run history, chat state, policy, and lifecycle metadata |
 | `sessions.compact` | admin | Compact session storage plus no-text cleanup summary |
 | `session.btw` | write | Ask a bounded no-tools question against a frozen live session or durable session-key history without mutating the parent conversation |
 

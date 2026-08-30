@@ -497,7 +497,10 @@ defmodule LemonControlPlane.Protocol.Schemas do
       optional: %{
         "limit" => :integer,
         "offset" => :integer,
-        "agentId" => :string
+        "agentId" => :string,
+        "query" => :string,
+        "pinned" => :boolean,
+        "archived" => :boolean
       }
     },
     "sessions.preview" => %{
@@ -516,6 +519,35 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "toolPolicy" => :map,
         "model" => :string,
         "thinkingLevel" => :string
+      }
+    },
+    "sessions.metadata.patch" => %{
+      required: %{
+        "sessionKey" => :string
+      },
+      optional: %{
+        "title" => :any,
+        "pinned" => :boolean,
+        "archived" => :boolean
+      }
+    },
+    "sessions.export" => %{
+      required: %{
+        "sessionKey" => :string
+      },
+      optional: %{
+        "format" => :string
+      }
+    },
+    "sessions.prune" => %{
+      required: %{
+        "olderThanMs" => :integer
+      },
+      optional: %{
+        "archivedOnly" => :boolean,
+        "includePinned" => :boolean,
+        "dryRun" => :boolean,
+        "confirmToken" => :string
       }
     },
     "sessions.reset" => %{
