@@ -332,4 +332,9 @@ export function describeError(error: unknown): string {
 }
 
 /** Submission modes `/mode` sets and Alt+Enter cycles. */
-export const SUBMISSION_MODES: readonly SubmissionMode[] = ["queue", "steer", "interrupt"];
+export const SUBMISSION_MODES: readonly SubmissionMode[] = [
+	"queue",
+	"steer",
+	"redirect",
+	"interrupt",
+];

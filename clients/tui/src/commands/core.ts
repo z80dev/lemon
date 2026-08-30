@@ -91,7 +91,7 @@ export const debugCommand: SlashCommand = {
 export const modeCommand: SlashCommand = {
 	name: "mode",
 	summary: "how a prompt submitted during a run is handled",
-	usage: "[queue|steer|interrupt]",
+	usage: "[queue|steer|redirect|interrupt]",
 	group: "general",
 	run(ctx, argv) {
 		const requested = argv[0]?.toLowerCase();
@@ -100,6 +100,7 @@ export const modeCommand: SlashCommand = {
 				`submission mode: ${ctx.store.submissionMode}`,
 				"queue — hold the prompt until the run finishes, then send it",
 				"steer — send it into the running turn",
+				"redirect — replace pending model direction, preserving completed tool work",
 				"interrupt — stop the run and send it",
 				"alt+enter picks a mode for the next prompt only",
 			]);

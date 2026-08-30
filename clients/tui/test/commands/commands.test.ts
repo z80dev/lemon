@@ -310,6 +310,13 @@ describe("runs and goals", () => {
 		expect(harness.host.deliveries).toEqual([{ text: "focus on the failing test", mode: "steer" }]);
 	});
 
+	test("/redirect submits replacement guidance through forced redirect mode", async () => {
+		await harness.run("/redirect replace the pending direction");
+		expect(harness.host.deliveries).toEqual([
+			{ text: "replace the pending direction", mode: "redirect" },
+		]);
+	});
+
 	test("/agents renders the Lemon agent directory", async () => {
 		harness.server.respondWith("agents.list", {
 			agents: [
@@ -560,10 +567,10 @@ describe("sessions and history", () => {
 
 describe("client-local commands", () => {
 	test("/mode sets the submission mode", async () => {
-		await harness.run("/mode steer");
-		expect(harness.store.submissionMode).toBe("steer");
+		await harness.run("/mode redirect");
+		expect(harness.store.submissionMode).toBe("redirect");
 		await harness.run("/mode nope");
-		expect(harness.store.submissionMode).toBe("steer");
+		expect(harness.store.submissionMode).toBe("redirect");
 		expect(harness.host.last?.level).toBe("error");
 	});
 

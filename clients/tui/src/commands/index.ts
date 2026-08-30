@@ -29,7 +29,14 @@ import {
 } from "./hermes.ts";
 import { modelCommand, thinkCommand, toolPolicyCommand } from "./model.ts";
 import { CommandRegistry } from "./registry.ts";
-import { abortCommand, goalCommand, queueCommand, runsCommand, steerCommand } from "./run.ts";
+import {
+	abortCommand,
+	goalCommand,
+	queueCommand,
+	redirectCommand,
+	runsCommand,
+	steerCommand,
+} from "./run.ts";
 import {
 	historyCommand,
 	resetCommand,
@@ -73,6 +80,7 @@ export function createCommandRegistry(options: RegistryOptions = {}): CommandReg
 		abortCommand,
 		queueCommand,
 		steerCommand,
+		redirectCommand,
 		backgroundCommand,
 		btwCommand,
 		runsCommand,

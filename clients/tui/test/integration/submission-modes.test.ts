@@ -1,5 +1,6 @@
 /**
- * The three things a prompt submitted during a run can do — hold, steer, stop —
+ * The four things a prompt submitted during a run can do — hold, steer,
+ * redirect, stop —
  * driven end to end through the real protocol client against the fake daemon.
  */
 
@@ -236,6 +237,53 @@ describe("steer mode", () => {
 	});
 });
 
+describe("redirect mode", () => {
+	test("/redirect forces one redirect without changing the default mode", async () => {
+		const { app, server } = await boot();
+		await app.submit("first");
+		await app.submit("/redirect replace the pending approach");
+
+		expect(sends(server)[1]).toEqual({
+			sessionKey: SESSION,
+			prompt: "replace the pending approach",
+			queueMode: "redirect",
+		});
+		expect(app.store.submissionMode).toBe("queue");
+	});
+
+	test("redirect remains distinct from steer and interrupt", async () => {
+		const { app, server } = await boot();
+		app.store.setSubmissionMode("redirect");
+		await app.submit("first");
+		await app.submit("discard pending model output and do this");
+
+		expect(sends(server)[1]).toEqual({
+			sessionKey: SESSION,
+			prompt: "discard pending model output and do this",
+			queueMode: "redirect",
+		});
+		expect(app.store.focused.assistantFor("run-1")?.status).toBe("streaming");
+	});
+
+	test("a refused redirect leaves the prompt editable in the queue", async () => {
+		const { app } = await boot({
+			onSend: (params) => {
+				if (params.queueMode === "redirect") {
+					return errorResult("CONFLICT", "the run already became terminal");
+				}
+				return { runId: "run-1", sessionKey: params.sessionKey };
+			},
+		});
+		app.store.setSubmissionMode("redirect");
+		await app.submit("first");
+		await app.submit("redirect me");
+
+		expect(app.store.queue.items(SESSION).map((item) => item.text)).toEqual(["redirect me"]);
+		expect(transcript(app)).toContain("redirect refused");
+		expect(renderPlain(app.queueContainer.render(80))).toContain("redirect me");
+	});
+});
+
 describe("interrupt mode", () => {
 	test("the partial answer is kept, marked, and the new prompt lands under it", async () => {
 		const { app, server } = await boot();
@@ -339,6 +387,7 @@ describe("alt+enter", () => {
 	test("cycling walks every mode and comes back round", async () => {
 		const { app } = await boot();
 		expect(app.cycleSubmissionMode()).toBe("steer");
+		expect(app.cycleSubmissionMode()).toBe("redirect");
 		expect(app.cycleSubmissionMode()).toBe("interrupt");
 		expect(app.cycleSubmissionMode()).toBe("queue");
 	});

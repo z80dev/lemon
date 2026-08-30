@@ -74,7 +74,7 @@ export class SessionStore {
 	unread = 0;
 	/**
 	 * When the last run ended, or 0 while none ever has. Read by the submission
-	 * modes: a `steer` that arrives moments after a run finished lost a race
+	 * modes: a live correction that arrives moments after a run finished lost a race
 	 * rather than being nonsense, and says so instead of failing silently.
 	 */
 	lastRunEndedAtMs = 0;
