@@ -26,6 +26,7 @@ SECTIONS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("install.md", "Release installer, source install, first-run setup, and supported platforms."),
             ("demo.md", "A deterministic local walkthrough for the runtime and interfaces."),
             ("user-guide/setup.md", "Configure providers, secrets, runtime settings, and channels."),
+            ("user-guide/profiles.md", "Create, route, clone, export, and delete isolated specialist profiles."),
             ("support.md", "Diagnose startup, provider, runtime, and release problems."),
             ("compare.md", "Current product positioning and honest support boundaries."),
         ),

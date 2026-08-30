@@ -19,6 +19,7 @@
 #   ./bin/lemon media
 #   ./bin/lemon models --provider anthropic
 #   ./bin/lemon providers --provider openai
+#   ./bin/lemon profile create research --name "Research"
 #   ./bin/lemon policy list
 #   ./bin/lemon proofs --limit 5
 #   ./bin/lemon readiness
@@ -51,6 +52,7 @@ Usage: ./bin/lemon [options]
        ./bin/lemon gateway setup [transport] --non-interactive
        ./bin/lemon node join --name NAME --controller wss://HOST/ws
        ./bin/lemon channels
+       ./bin/lemon profile <list|show|create|clone|rename|export|delete|roster|chat>
        ./bin/lemon config validate
        ./bin/lemon doctor --json
        ./bin/lemon web [--no-open]
@@ -319,6 +321,12 @@ if [[ "${1:-}" == "channels" ]]; then
   shift
   cd "$LEMON_ROOT"
   exec mix lemon.channels "$@"
+fi
+
+if [[ "${1:-}" == "profile" ]]; then
+  shift
+  cd "$LEMON_ROOT"
+  exec mix run --no-start -e 'System.halt(LemonCli.CLI.run(["profile" | System.argv()]))' -- "$@"
 fi
 
 if [[ "${1:-}" == "config" ]]; then

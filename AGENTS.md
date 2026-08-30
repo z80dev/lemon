@@ -334,6 +334,17 @@ destination run, while disconnects fail its pending invocations.
 Outbound message delivery goes through `lemon_channels` (Telegram, Discord, WhatsApp, XMTP, email adapters).
 The control plane (`lemon_control_plane`) provides the JSON-RPC API used by TUI/web clients.
 
+User-managed profiles reuse the canonical `[profiles.<id>]` router plane rather
+than introducing another agent engine. `LemonCore.ProfileStore` owns atomic
+lifecycle edits and derives `~/.lemon/profiles/<id>/` boundaries;
+`profile.chat` and `lemon profile chat` always submit `agent:<id>:main` through
+the existing router. Packaged one-shot chat connects to the authenticated local
+control plane so the run outlives its CLI VM; it never starts a second router.
+`CodingAgent.Executor.SessionRunner` selects the profile workspace only from
+validated `meta.profile_id`. Keep lifecycle storage in `lemon_core` free of
+coding-agent/skill dependencies, and never export profile sessions, memory, or
+unredacted credential-like content.
+
 ### Key Dependencies Between Apps
 
 Derived from complete `deps/0` bodies in the `mix.exs` files and enforced by

@@ -89,6 +89,7 @@ The control plane provides the external interface for clients (TUI, web, mobile,
 | `LemonControlPlane.Methods.CommandsCatalog` | `lib/lemon_control_plane/methods/commands_catalog.ex` | Read-only `commands.catalog` discovery projection over `LemonChannels.CommandCatalog`; execution remains with consuming surfaces and runtime owners. |
 | `LemonControlPlane.Methods.Background*` / `SessionBtw` | `lib/lemon_control_plane/methods/background_commands.ex` | Provider-backed lifecycle RPCs for isolated `/bg` sessions and bounded no-tools `/btw` questions; the control plane owns only validation and wire projection. |
 | `LemonControlPlane.Methods.SessionHeartbeat` | `lib/lemon_control_plane/methods/session_heartbeat.ex` | Admin projection for status/set/pause/resume/clear of a live durable coding-session heartbeat; validates provider state before returning it. |
+| `LemonControlPlane.Methods.Profiles*` / `ProfileChat` | `lib/lemon_control_plane/methods/profiles.ex` | Lifecycle, node-aware roster, credential-safe export, and stable canonical chat projection over `LemonCore.ProfileStore` and the existing router. |
 | `LemonControlPlane.Protocol.Frames` | `lib/lemon_control_plane/protocol/frames.ex` | Protocol frame encoding/decoding; `parse/1`, `encode_response/2`, `encode_event/4`, `encode_hello_ok/1` |
 | `LemonControlPlane.Protocol.Errors` | `lib/lemon_control_plane/protocol/errors.ex` | Standard error constructors; `invalid_request/1`, `not_found/1`, `forbidden/1`, etc. |
 | `LemonControlPlane.Protocol.Schemas` | `lib/lemon_control_plane/protocol/schemas.ex` | Param and event payload schema validation; `validate/2`, `validate_event/2` |
@@ -254,6 +255,15 @@ The run/task list methods also include compact summaries for status, engine, age
 | `agents.files.set` | admin | Set file content plus content-cleanup summary |
 
 ### Chat
+
+Profile RPCs are `profiles.list`, `profiles.get`, `profiles.create`,
+`profiles.clone`, `profiles.rename`, `profiles.export`, `profiles.delete`,
+`profiles.roster`, and `profile.chat`. Reads require `read`, chat requires
+`write`, and lifecycle mutations/exports require `admin`. `profile.chat`
+refreshes the router profile cache, submits the stable `agent:<id>:main`
+session through `LemonCore.RouterBridge`, and never echoes prompt text in its
+summary. Export summaries report selected/omitted/redacted counts and never
+claim to include sessions, memory, credentials, or secret values.
 
 | Method | Scope | Description |
 |--------|-------|-------------|

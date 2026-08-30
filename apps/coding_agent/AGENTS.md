@@ -257,7 +257,14 @@ validated on that destination. `task` stays in-process on the current host.
 | `CodingAgent.Compaction` | Context compaction when conversations grow large |
 | `CodingAgent.CompactionHooks` | Hooks for compaction events |
 | `CodingAgent.ContextGuardrails` | Pre-LLM hard caps for large tool outputs/args with optional spill-to-disk references |
-| `CodingAgent.Workspace` | Bootstrap file loading (AGENTS.md, SOUL.md, etc.) from the assistant home at `~/.lemon/agent/workspace/` |
+| `CodingAgent.Workspace` | Bootstrap file loading (AGENTS.md, SOUL.md, etc.) from the default assistant home at `~/.lemon/agent/workspace/` or a validated profile workspace at `~/.lemon/profiles/<id>/workspace/` |
+
+`CodingAgent.Executor.SessionRunner` accepts `meta.profile_id` from canonical
+profile chat submission and derives the assistant workspace through
+`LemonCore.ProfileStore.paths/1`. The derived workspace feeds lifecycle,
+bootstrap prompt composition, memory-path resolution, and extra tool loading;
+invalid/missing profile IDs fall back to the default workspace. Never accept a
+workspace path from profile metadata or config—only the validated stable ID.
 | `CodingAgent.SystemPrompt` | Builds the Lemon base system prompt (assistant-home bootstrap files + skills) |
 | `CodingAgent.PromptBuilder` | Higher-level prompt builder adding skills, commands, @mentions sections |
 | `CodingAgent.ResourceLoader` | Loads CLAUDE.md/AGENTS.md from cwd up to filesystem root, then home dir |

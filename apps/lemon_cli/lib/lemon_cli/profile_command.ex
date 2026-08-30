@@ -161,15 +161,7 @@ defmodule LemonCli.ProfileCommand do
              queue_mode: queue_mode(opts[:queue_mode]),
              meta: %{profile_cli: true}
            ),
-         {:ok, run_id} <- RouterBridge.submit_run(request) do
-      result = %{
-        "runId" => run_id,
-        "profileId" => id,
-        "sessionKey" => request.session_key,
-        "node" => profile["node"],
-        "workspace" => profile["paths"]["workspace"]
-      }
-
+         {:ok, result} <- submit_chat(request, profile, opts) do
       output(result, opts, fn result ->
         IO.puts("Submitted #{result["profileId"]} chat as run #{result["runId"]}")
         IO.puts("Session: #{result["sessionKey"]}")
@@ -180,6 +172,50 @@ defmodule LemonCli.ProfileCommand do
       {:ok, _opts, _rest} -> usage_error("Usage: lemon profile chat <id> <message> [options]")
       {:error, reason} -> operation_error(reason)
     end
+  end
+
+  defp submit_chat(request, profile, opts) do
+    case RouterBridge.submit_run(request) do
+      {:ok, run_id} ->
+        {:ok, chat_result(run_id, request, profile)}
+
+      {:error, :unavailable} ->
+        params = %{
+          "id" => profile["id"],
+          "prompt" => request.prompt,
+          "queueMode" => to_string(request.queue_mode)
+        }
+
+        params = if opts[:model], do: Map.put(params, "model", opts[:model]), else: params
+
+        case control_plane_client().request("profile.chat", params) do
+          {:ok, %{"runId" => run_id} = result} ->
+            {:ok,
+             Map.merge(chat_result(run_id, request, profile), %{
+               "sessionKey" => result["sessionKey"] || request.session_key,
+               "node" => result["node"] || profile["node"]
+             })}
+
+          {:ok, other} ->
+            {:error, {:invalid_control_plane_response, other}}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp chat_result(run_id, request, profile) do
+    %{
+      "runId" => run_id,
+      "profileId" => profile["id"],
+      "sessionKey" => request.session_key,
+      "node" => profile["node"],
+      "workspace" => profile["paths"]["workspace"]
+    }
   end
 
   defp parse(args, strict) do
@@ -288,6 +324,10 @@ defmodule LemonCli.ProfileCommand do
   end
 
   defp agent_profiles_module, do: Module.concat(["LemonRouter", "AgentProfiles"])
+
+  defp control_plane_client do
+    Application.get_env(:lemon_cli, :control_plane_client, LemonCli.ControlPlaneClient)
+  end
 
   defp queue_mode(nil), do: :collect
   defp queue_mode("collect"), do: :collect
