@@ -568,6 +568,7 @@ remote result, or error.
 
 | Method | Scope | Description |
 |--------|-------|-------------|
+| `commands.catalog` | read | Return the portable, JSON-safe command catalog with aliases, descriptions, argument and busy-state metadata, semantic capability ids, category counts, and a versioned summary; this method never executes a command |
 | `channels.status` | read | Status of configured channel adapters plus Telegram/Discord diagnostics, proof, shared launch-gate readiness, compact gate status/reason maps, and cleanup summaries |
 | `transports.status` | read | Status of configured legacy gateway transports plus registry/module health summary |
 | `channels.logout` | admin | Logout from a channel plus credential/state cleanup summary |

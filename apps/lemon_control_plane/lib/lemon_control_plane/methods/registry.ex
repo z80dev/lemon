@@ -63,6 +63,7 @@ defmodule LemonControlPlane.Methods.Registry do
     # Logs
     LemonControlPlane.Methods.LogsTail,
     # Channels
+    LemonControlPlane.Methods.CommandsCatalog,
     LemonControlPlane.Methods.ChannelsStatus,
     LemonControlPlane.Methods.TransportsStatus,
     LemonControlPlane.Methods.ChannelsLogout,

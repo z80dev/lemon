@@ -46,6 +46,25 @@ Channel adapters also use `LemonCore.RouterBridge` for busy-session and active-r
 
 **Script send**: `LemonChannels.ScriptSend` gives shell scripts, cron jobs, and CI a Hermes-style notification path for the promoted Telegram and Discord platforms. It builds direct text or file `OutboundPayload` structs and calls the platform outbound adapter directly without starting inbound transports.
 
+**Command discovery**: `LemonChannels.CommandCatalog` is the portable,
+JSON-safe source of command names, aliases, descriptions, argument hints,
+busy-state presentation policy, and semantic capability ids shared by channel
+and interactive clients. It covers the Hermes-compatible `/queue`/`/q`,
+`/steer`, `/reset`, `/reasoning`, `/stop`, `/status`, `/usage`,
+`/agents`/`/tasks`, `/compress`, `/commands`, `/help`, `/bg`, and `/btw`
+surface while retaining native Lemon aliases such as `/new`, `/thinking`, and
+`/cancel`. The catalog is metadata only: adapters and clients dispatch through
+the existing router, session, task, and control-plane owners. In particular,
+Lemon `/stop` means cancelling the active conversation run, not killing every
+runtime process.
+
+```elixir
+LemonChannels.CommandCatalog.catalog()
+LemonChannels.CommandCatalog.find("/q")
+LemonChannels.CommandCatalog.categories()
+LemonChannels.CommandCatalog.summary()
+```
+
 ### Delivery Groups
 
 The Outbox preserves FIFO ordering within each "delivery group" while allowing full concurrency across independent groups. A delivery group is identified by the tuple `{channel_id, account_id, peer.kind, peer.id, peer.thread_id}`. When a long message is chunked into multiple parts, all chunks share the same group and are delivered sequentially to prevent reordering.

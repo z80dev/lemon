@@ -70,6 +70,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
     },
 
     # Channel methods
+    "commands.catalog" => %{optional: %{}},
     "channels.status" => %{
       optional: %{
         "projectDir" => :string,
