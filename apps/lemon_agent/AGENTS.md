@@ -248,6 +248,13 @@ end
 
 9. **The AbortSignal ETS table** is created by `AbortSignal.TableOwner` at app startup. The `AbortSignal` module has a fallback `ensure_table` that creates it if needed (for test environments where the app may not be started). The table uses `{:heir, TableOwner, :ok}` so it survives process restarts.
 
+10. **Kanban terminal writes are lease-guarded.** Automation dispatchers must
+    retain the leased task's `kanbanLease.id` and use
+    `KanbanStore.complete_leased_task/3`, `fail_leased_task/4`, or
+    `reclaim_task_lease/3`. A stale lease returns `{:error, :stale_lease}` and
+    must not mutate a newer worker's task. Dispatcher restart paths use
+    `reclaim_worker_leases/3` before leasing new work for the same worker ID.
+
 
 ## How This App Connects to Other Umbrella Apps
 

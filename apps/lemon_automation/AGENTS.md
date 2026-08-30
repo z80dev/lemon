@@ -48,7 +48,7 @@ CronManager (GenServer, ticks every 60s)
                          +- calls LemonRouter.submit(params)
                          +- calls RunCompletionWaiter.wait_already_subscribed/3
                                 |
-                                +- sends {:run_complete, run_id, result} to CronManager
+                                +- returns its result through the monitored Task ref
                                            |
                                            +- CronManager updates CronStore, emits :cron_run_completed
                                            +- For `agent:*:main` base sessions, CronManager forwards a synthetic
@@ -76,6 +76,12 @@ and stops at `max_ticks`, failure, timeout, or a terminal judge verdict. Passing
 manager scheduler scans active goals and re-starts only persisted auto loops
 when no loop for that session is already running. Focused tests cover that
 persisted-auto path through the real goal loop and router judge runner.
+The manager captures the authoritative router run id after each accepted judge
+or continuation submission. `stop_loop/2` defaults to hard stop: it disables
+auto restart, aborts that active router run once, kills the loop task, and
+prevents another tick. `mode: :graceful` disables auto restart but lets the
+already bounded loop finish. The outer `run_once/2` call timeout encloses the
+configured judge/continuation wait deadlines.
 
 `GoalJudge` supports explicit verdicts, a pluggable `judge_runner` with
 `judge_model` metadata, and deterministic fallback. `GoalJudge.RouterRunner`
@@ -109,6 +115,10 @@ through `LemonRouter` with `origin: :kanban`, board/task metadata, a blocked
 is a git repository. Worktrees are created under
 `<repo>/.worktrees/kanban-<task_id>` on `lemon-kanban/<task_id>` branches, so
 concurrent board workers do not edit the same checkout.
+`stop_board/2` is a hard stop: owned worker pids are killed and their exact
+lease IDs are reclaimed before return. Completion/failure writes are guarded by
+lease ID, so late results cannot mutate a re-leased task. Starting a board also
+reclaims unexpired leases left by the same dispatcher worker id after restart.
 
 **HeartbeatManager** subscribes to the "cron" bus and auto-processes every `:cron_run_completed` event for suppression checks.
 
@@ -125,15 +135,15 @@ and submits the review prompt to `LemonRouter` only when review is required.
 - `RunSubmitter` executes each cron run in a forked `:sub:<id>` session for isolation; the originating base session is preserved in run metadata
 - `RunSubmitter` adds a cron-run tool policy with `blocked_tools: ["cron"]`; scheduled runs may do the task work, but they cannot recursively manage cron jobs through a cron tool
 - `RunSubmitter` reads `CronMemory` for the job and injects memory context into the prompt, then appends run results back to the memory file
-- If the router returns a different `run_id`, `RunSubmitter` falls back to `RunCompletionWaiter.wait/3`
+- If the router returns a different `run_id`, submission fails explicitly; no late replacement-id subscription is attempted
 - Output is truncated to 1000 chars before storage
-- Jobs execute in supervised tasks; fallback to `Task.start/1` if supervisor is unavailable
+- Jobs execute in monitored `TaskSupervisor.async_nolink/2` tasks owned by `CronManager`; task-start failure and `:DOWN` terminalize the run immediately. Unsupervised fallback exists only when the manager is started with explicit `standalone_mode: true`.
 - For cron jobs created from `agent:*:main`, completion summaries are mirrored back into the base main session as synthetic `run_completed` entries (`meta.cron_forwarded_summary = true`)
-- Scheduled ticks and `CronManager` restarts consult persisted active runs before launching; active runs older than the job timeout recover as `:timeout`.
+- Scheduled ticks and `CronManager` restarts consult persisted active runs before launching; active runs older than the job timeout recover through the same monitor/delivery/retry terminalizer as normal completions.
 - Scheduled runs use deterministic slot ids and `CronStore.claim_scheduled_run/3`, backed by `LemonCore.Store.put_new/3`, so competing dispatchers preserve the first claimant instead of overwriting a run.
 - `scripts/live_cron_runtime_restart_smoke.exs` boots `:runtime_full` twice against one isolated durable store, then proves a scheduled run before restart, persisted job/run history after restart, and a fresh scheduled run after restart.
 - `scripts/live_cron_channel_origin_smoke.exs` registers proof-only Telegram and Discord plugins, completes channel-peer cron runs through `CronManager`, and proves forwarded run history plus `LemonRouter.ChannelsDelivery` -> `LemonChannels` outbox delivery with redacted proof metadata.
-- Scheduled failures/timeouts can retry as separate `:retry` runs when `max_retries` is set. Manual and wake runs stay single-shot by default.
+- Scheduled failures/timeouts persist retry due time, attempt, source, and root lineage on the terminal source run. Restart reconstructs the timer, while a deterministic `{root, attempt}` retry-run ID and atomic claim prevent duplicate attempts. Manual and wake runs stay single-shot by default.
 - Active cron runs can be aborted by cron run id. `CronManager.abort_run/1` calls the underlying router cancellation when possible, persists terminal `:aborted`, emits the normal completion event, and ignores late submitter completions.
 - Cron lifecycle actions write durable operator audit events to `:cron_audit_events`. The audit stream covers job create/update/pause/resume/delete, manual run requests, run start/abort/retry/stale recovery, and scheduled-run claim/suppression decisions. Audit entries keep operator-useful IDs in the store; support-bundle diagnostics redact those IDs.
 - `cron.status` reads the durable cron run and audit stores directly for operator-facing scheduler-health counters: active run locks, retry runs, suppressed scheduled slots, stale-run recoveries, scheduled retries, and next/last run timestamps.
@@ -346,7 +356,12 @@ CronRun.suppress(run)                => suppressed: true (can combine with any t
 
 Helper predicates: `CronRun.active?/1` (pending or running), `CronRun.finished?/1`.
 
-Scheduled failures and timeouts retry only when `max_retries > 0`. Each retry is a separate run with `triggered_by: :retry` and lineage metadata (`retry_attempt`, `retry_of`, `retry_root_id`). Manual and wake-triggered runs do not retry by default.
+Scheduled failures and timeouts retry only when `max_retries > 0`. The terminal
+source run persists `retry_due_at_ms`, `retry_next_attempt`, `retry_of`, and
+`retry_root_id`; each claimed retry is a separate run with
+`triggered_by: :retry`. Deterministic retry IDs make one root/attempt pair a
+stable uniqueness slot across manager restarts. Manual and wake-triggered runs
+do not retry by default.
 
 ## CronMemory (Persistent Cross-Run Memory)
 
@@ -539,6 +554,9 @@ CronStore.list_due_jobs()       # enabled and due?(job) == true
 CronStore.put_run(run)
 CronStore.claim_run(run)
 CronStore.claim_scheduled_run(job, scheduled_for_ms, router_run_id)
+CronStore.claim_retry_run(job, source_run, router_run_id)
+CronStore.retry_run_id(root_run_id, attempt)
+CronStore.pending_retries()
 CronStore.get_run(run_id)
 CronStore.delete_run(run_id)
 CronStore.list_runs(job_id, opts)    # opts: limit (100), status (atom), since_ms

@@ -128,7 +128,16 @@ remain available as a persisted, queryable alternative.
 
 | Event | Measurements | Metadata | Emitter |
 |---|---|---|---|
-| `[:lemon, :cron, :tick]` | `job_count` | `%{}` (empty) | `LemonCore.Telemetry.cron_tick/1`, called from [`cron_manager.ex:502`](../apps/lemon_automation/lib/lemon_automation/cron_manager.ex) once per scheduler tick as a liveness heartbeat with the count of registered jobs |
+| `[:lemon, :cron, :tick]` | `job_count` | `%{}` (empty) | `LemonCore.Telemetry.cron_tick/1`, called from [`cron_manager.ex`](../apps/lemon_automation/lib/lemon_automation/cron_manager.ex) once per scheduler tick as a liveness heartbeat with the count of registered jobs |
+
+Cron terminalization, retry reconstruction, Kanban hard-stop lease reclaim,
+and goal-loop run abortion do not add telemetry events. Their restart-safe
+evidence is durable state/audit plus Bus lifecycle events: CronManager writes
+terminal runs and retry lineage before emitting `:cron_run_completed`, Kanban
+guards terminal writes by lease ID, and GoalLoopManager stores the authoritative
+router run ID in goal-loop status. Operators should use those persisted records
+for exact lifecycle counts; `[:lemon, :cron, :tick]` remains only a liveness
+signal.
 
 ### Heartbeats — `[:lemon, :heartbeat, ...]`
 

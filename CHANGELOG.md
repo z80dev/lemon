@@ -23,6 +23,17 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   skips overlapping timer runs with telemetry. Automation submit-and-wait paths
   now subscribe before submission through one fixed-run-id lifecycle, closing
   synchronous-completion races in cron, goal, heartbeat, and Kanban runs.
+- Cron retries now persist due time and lineage across manager restarts, claim
+  deterministic attempt IDs, and share one terminal policy path for normal,
+  stale, aborted, start-failed, and crashed-worker outcomes. Cron work is
+  monitored under the automation task supervisor, with unsupervised execution
+  reserved for explicit standalone mode.
+- Kanban board stop now hard-cancels owned workers and reclaims their exact
+  leases immediately; lease-guarded completion rejects late results, and board
+  restart reconciles unexpired leases from the prior dispatcher. Goal-loop hard
+  stop now aborts the authoritative router run once and prevents another tick,
+  while graceful stop lets the bounded loop finish and API deadlines enclose
+  configured judge/continuation waits.
 - Async subagent launches now fail and terminalize their bookkeeping when the
   supervised worker cannot start, completed task/agent followup delivery
   contains router exits, and lane-scheduled jobs no longer process a duplicate
