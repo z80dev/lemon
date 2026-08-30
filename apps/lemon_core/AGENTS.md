@@ -5,6 +5,7 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 ## Purpose and Responsibilities
 
 - **Configuration management** - TOML-based config loading, caching, validation, and hot reloading
+- **First-run readiness** - Shared read-only config/secrets/provider/model readiness for all clients
 - **Secrets management** - Encrypted storage with AES-256-GCM, keychain integration
 - **Storage backends** - Pluggable storage (ETS, SQLite, JSONL) for state persistence
 - **Event bus** - Process-safe PubSub via Phoenix.PubSub for cross-app communication
@@ -26,6 +27,7 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.ConfigCache` | ETS-backed config cache with mtime-based invalidation |
 | `LemonCore.ConfigReloader` | Hot reload orchestrator with diff computation and Bus broadcast |
 | `LemonCore.ConfigReloader.Watcher` | FileSystem watcher that targets `config.toml`/`.env` paths (file-first, parent-dir fallback) and triggers reload only for those files |
+| `LemonCore.Setup.Readiness` | Derives stable `:config`, `:secrets`, and `:provider` first-run steps without mutation or network calls |
 | `LemonCore.Secrets` | Encrypted secrets API (get/set/list/delete) |
 | `LemonCore.Secrets.Crypto` | AES-256-GCM encryption with HKDF key derivation |
 | `LemonCore.Secrets.EnvCatalog` | Ordered environment-secret catalog shared by packaged and Mix check/import commands |
@@ -162,6 +164,11 @@ config = LemonCore.Config.Modular.load!(project_dir: cwd)  # raises on invalid
 ```
 
 **Important**: `LemonCore.Config.Modular` is the canonical config implementation. `LemonCore.Config` is a facade that delegates to modular for parsing/resolution and converts the output into the legacy struct shape. Do not add independent parsing rules to the facade.
+
+`LemonCore.Setup.Readiness` is the canonical cross-client first-run predicate.
+Keep it read-only and network-free. Provider live checks belong in `lemon_cli`;
+browser/TUI/setup callers must not duplicate the config, credential, or
+provider/model-match rules.
 
 ### Config Sections (valid top-level TOML sections)
 

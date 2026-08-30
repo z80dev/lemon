@@ -56,6 +56,16 @@ Launch the interactive Terminal UI (TUI):
 lemon
 ```
 
+Or launch the local browser interface (the full release profile starts the
+daemon automatically and waits for the page):
+
+```bash
+lemon web
+```
+
+See [Use Lemon in a Browser](docs/user-guide/web.md) for setup recovery,
+access-control, and headless launch details.
+
 ---
 
 ## Connect Messaging Channels
@@ -114,6 +124,9 @@ mix compile
 
 # Launch the dev TUI client
 ./bin/lemon-tui
+
+# Or start/open the local Web UI
+./bin/lemon web
 ```
 
 ---

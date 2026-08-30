@@ -12,7 +12,7 @@
 # Usage:
 #   bin/lemon                 # interactive terminal: launches the TUI (daemon auto-start)
 #
-#   bin/lemon tui|start|daemon|stop|restart|status|remote|eval|rpc|version|update
+#   bin/lemon tui|web|start|daemon|stop|restart|status|remote|eval|rpc|version|update
 #   bin/lemon setup|model|gateway|config|secrets|channels|doctor
 #   bin/lemon --help
 
@@ -36,6 +36,7 @@ starting the daemon first if it is not already running.
 
 Commands:
   tui [args]            Launch the terminal UI (auto-starts the daemon)
+  web [--no-open]       Launch the local Web UI (auto-starts the daemon)
   start                 Run the release in the foreground
   daemon                Run the release in the background; records pid + root
   stop                  Stop a running daemon (works after a version flip)
@@ -237,6 +238,27 @@ control_plane_healthy() {
   printf '%s' "$body" | grep -q '"ok"[[:space:]]*:[[:space:]]*true'
 }
 
+web_healthy() {
+  local body
+
+  body="$(curl -fsS --max-time 2 "http://127.0.0.1:$1/healthz" 2>/dev/null || true)"
+  [ "$body" = "ok" ]
+}
+
+open_web_browser() {
+  local url="$1"
+
+  if command -v open >/dev/null 2>&1; then
+    open "$url" >/dev/null 2>&1 &
+  elif command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$url" >/dev/null 2>&1 &
+  elif command -v wslview >/dev/null 2>&1; then
+    wslview "$url" >/dev/null 2>&1 &
+  else
+    warn "No browser opener found; open the URL above manually."
+  fi
+}
+
 # ── Start the daemon and record pid + root. Shared by `daemon` and `tui`. ──
 start_daemon() {
   "$RELEASE_BIN" daemon "$@"
@@ -281,6 +303,87 @@ esac
 setup_environment
 
 case "$COMMAND" in
+  web)
+    shift
+    no_open=0
+
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --no-open)
+          no_open=1
+          shift
+          ;;
+        --help|-h)
+          cat <<'EOF'
+Usage: lemon web [--no-open]
+
+Start Lemon if needed, wait for the local Web UI, and open it in a browser.
+Set LEMON_WEB_PORT to use a port other than 4080.
+
+Options:
+  --no-open   Print the URL without opening a browser
+EOF
+          exit 0
+          ;;
+        *)
+          error "Unknown web option: $1"
+          exit 2
+          ;;
+      esac
+    done
+
+    if [ "$PROFILE" != "lemon_runtime_full" ]; then
+      error "the Web UI is available only in the lemon_runtime_full profile"
+      error "reinstall with LEMON_PROFILE=full, then run 'lemon web' again"
+      exit 1
+    fi
+
+    require_cmd curl
+    web_port="${LEMON_WEB_PORT:-4080}"
+
+    if ! [[ "$web_port" =~ ^[0-9]+$ ]]; then
+      error "Invalid LEMON_WEB_PORT value: $web_port"
+      exit 1
+    fi
+
+    if ! web_healthy "$web_port"; then
+      info "Web UI is not running; starting Lemon"
+      start_daemon
+
+      web_ready=""
+      for ((attempt = 1; attempt <= 30; attempt++)); do
+        if web_healthy "$web_port"; then
+          web_ready=1
+          break
+        fi
+        sleep 1
+      done
+
+      if [ -z "$web_ready" ]; then
+        error "Web UI did not become healthy on port $web_port within 30s"
+        error "check 'lemon status' and 'lemon doctor', then retry"
+        exit 1
+      fi
+    fi
+
+    web_url="http://127.0.0.1:$web_port/"
+    info "Lemon Web: $web_url"
+
+    if [ "$no_open" != "1" ]; then
+      open_url="$web_url"
+
+      if [ -n "${LEMON_WEB_ACCESS_TOKEN:-}" ]; then
+        if [[ "$LEMON_WEB_ACCESS_TOKEN" =~ ^[A-Za-z0-9._~-]+$ ]]; then
+          open_url="${web_url}?token=${LEMON_WEB_ACCESS_TOKEN}"
+        else
+          warn "The access token contains URL-reserved characters; open the URL and provide a URL-encoded ?token= value."
+        fi
+      fi
+
+      open_web_browser "$open_url"
+    fi
+    ;;
+
   tui)
     shift
 

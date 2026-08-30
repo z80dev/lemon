@@ -272,6 +272,7 @@ npm run dev      # Watch mode
 
 ```bash
 ./bin/lemon        # Unified runtime (gateway + control plane + router + channels + web)
+./bin/lemon web   # Start the unified runtime if needed and open the local Web UI
 ./bin/lemon send --to telegram:<chat_id> "done"  # Script notification to Telegram/Discord
 ./bin/lemon send --to discord:#ops --attach report.txt --attach trace.log "done"  # Upload script artifacts
 ./bin/lemon send --dry-run --to discord:#ops --attach report.txt "done"  # Validate without delivery

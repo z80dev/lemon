@@ -44,7 +44,14 @@ Expected result:
 
 ## Demo 2: Web Session UI
 
-With `./bin/lemon` running, open:
+Start the Web UI directly; the command reuses a healthy runtime or starts one,
+waits for the exact Web health response, and prints the address:
+
+```bash
+./bin/lemon web --no-open
+```
+
+Then open:
 
 - `http://127.0.0.1:4080/` — the session index (`LemonWeb.SessionLive`)
 - `http://127.0.0.1:4080/sessions/<session_key>` — a specific session
@@ -53,8 +60,9 @@ Current launch proof screenshot:
 
 ![Web session proof](assets/launch/web-session-proof-2026-05-11.png)
 
-The web surface is intentionally minimal: it lists sessions and streams a single
-session's activity. The standalone `/ops` dashboard was removed
+The Web surface shows the shared setup-readiness state before accepting a
+prompt, streams one session's activity, accepts bounded file uploads, and
+exposes **Stop** while a run is active. The standalone `/ops` dashboard was removed
 (`refactor(lemon_web): remove ops dashboard`); operations introspection now lives
 in the control plane and the doctor, not in the web UI.
 

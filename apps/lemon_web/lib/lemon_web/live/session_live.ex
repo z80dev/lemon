@@ -4,6 +4,7 @@ defmodule LemonWeb.SessionLive do
   use LemonWeb, :live_view
 
   alias LemonCore.{Bus, MapHelpers, SessionKey}
+  alias LemonCore.Setup.Readiness
   alias LemonWeb.Live.Components.{FileUploadComponent, MessageComponent}
 
   @max_messages 250
@@ -15,7 +16,10 @@ defmodule LemonWeb.SessionLive do
 
     if connected?(socket) do
       Bus.subscribe(Bus.session_topic(session_key))
+      Bus.subscribe("system")
     end
+
+    setup_state = setup_readiness()
 
     socket =
       socket
@@ -25,6 +29,9 @@ defmodule LemonWeb.SessionLive do
       |> assign(:prompt, "")
       |> assign(:messages, [])
       |> assign(:last_run_id, nil)
+      |> assign(:run_status, :idle)
+      |> assign(:setup_state, setup_state)
+      |> assign(:setup_ready?, Readiness.ready?(setup_state))
       |> assign(:submit_error, nil)
       |> allow_upload(:files,
         accept: :any,
@@ -50,9 +57,41 @@ defmodule LemonWeb.SessionLive do
     {:noreply, socket}
   end
 
+  def handle_event("refresh-setup", _params, socket) do
+    {:noreply, refresh_setup_readiness(socket)}
+  end
+
+  def handle_event("stop-run", _params, %{assigns: %{last_run_id: run_id}} = socket)
+      when is_binary(run_id) do
+    case abort_run(run_id) do
+      :ok ->
+        socket =
+          socket
+          |> assign(:run_status, :stopping)
+          |> assign(:submit_error, nil)
+          |> maybe_append_system("Stop requested.")
+
+        {:noreply, socket}
+
+      {:error, reason} ->
+        {:noreply,
+         assign(socket, :submit_error, "Could not stop the run: #{format_error(reason)}")}
+    end
+  end
+
+  def handle_event("stop-run", _params, socket), do: {:noreply, socket}
+
   def handle_event("submit", %{"chat" => %{"prompt" => prompt}}, socket) do
     prompt = String.trim(prompt || "")
 
+    if not Map.get(socket.assigns, :setup_ready?, true) do
+      {:noreply, assign(socket, :submit_error, setup_recovery_message())}
+    else
+      submit_prompt(socket, prompt)
+    end
+  end
+
+  defp submit_prompt(socket, prompt) do
     if uploads_in_progress?(socket) do
       {:noreply,
        assign(socket, :submit_error, "Please wait for uploads to finish before submitting.")}
@@ -60,7 +99,8 @@ defmodule LemonWeb.SessionLive do
       case persist_uploads(socket) do
         {:ok, uploads} ->
           if prompt == "" and uploads == [] do
-            {:noreply, assign(socket, :submit_error, "Enter a prompt or upload at least one file.")}
+            {:noreply,
+             assign(socket, :submit_error, "Enter a prompt or upload at least one file.")}
           else
             submission_prompt = build_submission_prompt(prompt, uploads)
             user_text = build_user_message(prompt, uploads)
@@ -83,7 +123,10 @@ defmodule LemonWeb.SessionLive do
                    uploads
                  ) do
               {:ok, run_id} ->
-                {:noreply, assign(socket, :last_run_id, run_id)}
+                {:noreply,
+                 socket
+                 |> assign(:last_run_id, run_id)
+                 |> assign(:run_status, :running)}
 
               {:error, reason} ->
                 socket =
@@ -114,6 +157,7 @@ defmodule LemonWeb.SessionLive do
     socket =
       socket
       |> assign(:last_run_id, run_id || socket.assigns.last_run_id)
+      |> assign(:run_status, :running)
       |> maybe_append_system("Run started#{if is_binary(engine), do: " (#{engine})", else: ""}.")
 
     {:noreply, socket}
@@ -156,8 +200,14 @@ defmodule LemonWeb.SessionLive do
       socket
       |> finalize_assistant_message(run_id, answer)
       |> maybe_append_run_completion(ok?, error)
+      |> assign(:run_status, :idle)
 
     {:noreply, socket}
+  end
+
+  def handle_info(%LemonCore.Event{type: type}, socket)
+      when type in [:config_reloaded, :secret_changed] do
+    {:noreply, refresh_setup_readiness(socket)}
   end
 
   def handle_info(%{type: :coalesced_output}, socket) do
@@ -171,23 +221,76 @@ defmodule LemonWeb.SessionLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <main class="min-h-screen bg-slate-100">
+    <main id="main-content" class="min-h-screen bg-slate-100">
       <div class="mx-auto flex min-h-screen w-full max-w-3xl flex-col px-3 py-4 sm:px-6 sm:py-6">
         <header class="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
-          <p class="text-xs font-medium uppercase tracking-wide text-slate-500">Lemon Web Dashboard</p>
-          <h1 class="mt-1 text-lg font-semibold text-slate-900 sm:text-xl">Session Console</h1>
-          <div class="mt-3 space-y-1 text-xs text-slate-600 sm:flex sm:items-center sm:justify-between sm:space-y-0">
-            <p>session: <code class="rounded bg-slate-100 px-1 py-0.5">{@session_key}</code></p>
-            <p>agent: <code class="rounded bg-slate-100 px-1 py-0.5">{@agent_id}</code></p>
+          <div class="flex items-start justify-between gap-4">
+            <div>
+              <p class="text-xs font-medium uppercase tracking-wide text-slate-500">Lemon</p>
+              <h1 class="mt-1 text-lg font-semibold text-slate-900 sm:text-xl">Chat</h1>
+              <p class="mt-1 text-sm text-slate-600">Your local agent workspace.</p>
+            </div>
+            <span class={setup_badge_class(@setup_ready?)} data-testid="setup-status">
+              <span class="h-2 w-2 rounded-full bg-current" aria-hidden="true"></span>
+              {if @setup_ready?, do: "Ready", else: "Setup needed"}
+            </span>
           </div>
+          <details class="mt-3 text-xs text-slate-500">
+            <summary class="cursor-pointer rounded font-medium focus:outline-none focus:ring">Session details</summary>
+            <div class="mt-2 space-y-1 border-l-2 border-slate-200 pl-3">
+              <p>Session: <code class="break-all rounded bg-slate-100 px-1 py-0.5">{@session_key}</code></p>
+              <p>Agent: <code class="rounded bg-slate-100 px-1 py-0.5">{@agent_id}</code></p>
+            </div>
+          </details>
         </header>
+
+        <%= unless @setup_ready? do %>
+          <section
+            id="setup-readiness"
+            role="alert"
+            aria-labelledby="setup-title"
+            class="mt-4 rounded-2xl border border-amber-300 bg-amber-50 p-4 shadow-sm"
+          >
+            <h2 id="setup-title" class="font-semibold text-amber-950">Finish setup before chatting</h2>
+            <p class="mt-1 text-sm text-amber-900">
+              Lemon is running, but it still needs the items below. Run <code class="rounded bg-amber-100 px-1 py-0.5 font-semibold">lemon setup</code>
+              in a terminal, then refresh this check.
+            </p>
+            <ul class="mt-3 list-disc space-y-2 pl-5 text-sm text-amber-950">
+              <%= for step <- Readiness.pending_steps(@setup_state) do %>
+                <li>
+                  <strong>{setup_step_title(step)}</strong> — {setup_step_help(step, @setup_state)}
+                </li>
+              <% end %>
+            </ul>
+            <div class="mt-4 flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                phx-click="refresh-setup"
+                class="rounded-lg bg-amber-950 px-3 py-2 text-sm font-medium text-white transition hover:bg-amber-800 focus:outline-none focus:ring focus:ring-amber-400"
+              >
+                Check again
+              </button>
+              <p class="text-xs text-amber-800">
+                Still stuck? Run <code class="rounded bg-amber-100 px-1 py-0.5">lemon doctor</code>.
+              </p>
+            </div>
+          </section>
+        <% end %>
 
         <section
           id="messages"
+          aria-label="Conversation"
+          aria-live="polite"
           class="mt-4 flex-1 space-y-3 overflow-y-auto rounded-2xl border border-slate-200 bg-slate-50 p-3 sm:p-4"
         >
           <%= if @messages == [] do %>
-            <p class="text-sm text-slate-500">No messages yet. Send a prompt to start streaming output.</p>
+            <div class="mx-auto max-w-md py-8 text-center">
+              <p class="font-medium text-slate-800">Start with a small task</p>
+              <p class="mt-1 text-sm text-slate-500">
+                Ask a question, explain what you are working on, or attach files for Lemon to inspect.
+              </p>
+            </div>
           <% else %>
             <%= for message <- @messages do %>
               <MessageComponent.message message={message} />
@@ -195,7 +298,11 @@ defmodule LemonWeb.SessionLive do
           <% end %>
         </section>
 
-        <section class="mt-4 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm sm:p-4">
+        <section
+          aria-labelledby="composer-title"
+          class="mt-4 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm sm:p-4"
+        >
+          <h2 id="composer-title" class="sr-only">Message composer</h2>
           <.form
             for={to_form(%{"prompt" => @prompt}, as: :chat)}
             id="chat-form"
@@ -213,20 +320,46 @@ defmodule LemonWeb.SessionLive do
               rows="4"
               value={@prompt}
               placeholder="Ask Lemon to do work..."
-              class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-500 focus:ring"
+              disabled={!@setup_ready?}
+              aria-describedby="composer-help"
+              class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-500 focus:ring disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
             ></textarea>
 
-            <FileUploadComponent.file_upload upload={@uploads.files} />
+            <%= if @setup_ready? do %>
+              <FileUploadComponent.file_upload upload={@uploads.files} />
+            <% else %>
+              <p class="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">
+                Attachments become available after setup is complete.
+              </p>
+            <% end %>
 
             <%= if is_binary(@submit_error) and @submit_error != "" do %>
-              <p class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+              <p role="alert" class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
                 {@submit_error}
               </p>
             <% end %>
 
-            <div class="flex items-center justify-between gap-3">
-              <p class="text-xs text-slate-500">Supports multi-file upload and live streaming updates.</p>
-              <.button type="submit">Send</.button>
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <p id="composer-help" class="text-xs text-slate-500">
+                <%= if @run_status in [:running, :stopping] do %>
+                  {if @run_status == :stopping, do: "Stopping the current run…", else: "Lemon is working…"}
+                <% else %>
+                  Supports up to five files and live streaming updates.
+                <% end %>
+              </p>
+              <div class="flex items-center gap-2">
+                <%= if @run_status in [:running, :stopping] and is_binary(@last_run_id) do %>
+                  <button
+                    type="button"
+                    phx-click="stop-run"
+                    disabled={@run_status == :stopping}
+                    class="rounded-lg border border-rose-300 bg-white px-4 py-2 text-sm font-medium text-rose-700 transition hover:bg-rose-50 focus:outline-none focus:ring disabled:cursor-wait disabled:opacity-50"
+                  >
+                    {if @run_status == :stopping, do: "Stopping…", else: "Stop"}
+                  </button>
+                <% end %>
+                <.button type="submit" disabled={!@setup_ready?}>Send</.button>
+              </div>
             </div>
           </.form>
         </section>
@@ -236,7 +369,7 @@ defmodule LemonWeb.SessionLive do
   end
 
   defp submit_run(session_key, agent_id, prompt, uploads) do
-    LemonRouter.submit(%{
+    request = %{
       origin: :control_plane,
       session_key: session_key,
       agent_id: agent_id,
@@ -246,8 +379,70 @@ defmodule LemonWeb.SessionLive do
         web_dashboard: true,
         uploads: uploads
       }
-    })
+    }
+
+    case Application.get_env(:lemon_web, :submit_run_fun) do
+      fun when is_function(fun, 1) -> fun.(request)
+      _ -> LemonRouter.submit(request)
+    end
   end
+
+  defp abort_run(run_id) do
+    case Application.get_env(:lemon_web, :abort_run_fun) do
+      fun when is_function(fun, 2) -> fun.(run_id, :user_requested)
+      _ -> LemonRouter.abort_run(run_id, :user_requested)
+    end
+  end
+
+  defp setup_readiness do
+    case Application.get_env(:lemon_web, :setup_readiness_fun) do
+      fun when is_function(fun, 0) -> fun.()
+      _ -> Readiness.status()
+    end
+  end
+
+  defp refresh_setup_readiness(socket) do
+    state = setup_readiness()
+
+    socket
+    |> assign(:setup_state, state)
+    |> assign(:setup_ready?, Readiness.ready?(state))
+    |> assign(:submit_error, nil)
+  end
+
+  defp setup_recovery_message do
+    "Finish setup before chatting: run `lemon setup` in a terminal, then check again."
+  end
+
+  defp setup_badge_class(true) do
+    "inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700"
+  end
+
+  defp setup_badge_class(false) do
+    "inline-flex items-center gap-2 rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-800"
+  end
+
+  defp setup_step_title(:config), do: "Configuration"
+  defp setup_step_title(:secrets), do: "Secure secret storage"
+  defp setup_step_title(:provider), do: "Provider and model"
+
+  defp setup_step_help(:config, _state), do: "create the local Lemon config"
+  defp setup_step_help(:secrets, _state), do: "initialize the encrypted credential store"
+
+  defp setup_step_help(:provider, %{provider: %{reason: :missing_default_provider}}),
+    do: "choose an AI provider"
+
+  defp setup_step_help(:provider, %{provider: %{reason: :missing_default_model}}),
+    do: "choose a default model"
+
+  defp setup_step_help(:provider, %{provider: %{reason: :credential_not_usable}}),
+    do: "store a usable provider credential"
+
+  defp setup_step_help(:provider, %{provider: %{reason: :model_provider_mismatch}}),
+    do: "choose a model that matches the provider"
+
+  defp setup_step_help(:provider, _state),
+    do: "configure a usable provider, model, and credential"
 
   defp persist_uploads(socket) do
     if persist_fun = Application.get_env(:lemon_web, :upload_persist_fun) do
@@ -299,6 +494,7 @@ defmodule LemonWeb.SessionLive do
         else
           {:error, failures}
         end
+
       {:error, reason} ->
         {:error, [%{name: upload_root, error: format_error(reason)}]}
     end

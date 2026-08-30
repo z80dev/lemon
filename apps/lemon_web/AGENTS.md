@@ -4,7 +4,7 @@ Phoenix web interface for Lemon with LiveView. Provides a real-time agent dashbo
 
 ## Quick Orientation
 
-This is a Phoenix 1.7 LiveView app inside the Lemon umbrella. The frontend uses Tailwind from CDN and vendored Phoenix/LiveView JS from umbrella dependencies (no Node.js, no esbuild). The HTTP server is Bandit.
+This is a Phoenix 1.7 LiveView app inside the Lemon umbrella. The frontend uses checked-in compiled Tailwind CSS plus vendored Phoenix/LiveView JS from umbrella dependencies; production has no runtime CDN dependency. The HTTP server is Bandit.
 
 Key entry points:
 - **Router**: `lib/lemon_web/router.ex` -- all routes defined here
@@ -20,6 +20,8 @@ Key entry points:
 - **Message Display**: User messages, assistant responses, system notifications, tool calls
 - **Tool Call Visualization**: Collapsible `<details>` elements showing engine actions and results
 - **Authentication**: Optional access token protection via Bearer header, query param, or session
+- **First-run readiness**: Shared `LemonCore.Setup.Readiness` state blocks doomed prompt/upload submissions and gives exact setup recovery
+- **Run control**: Active browser runs expose cancellation through `LemonRouter.abort_run/2`
 
 ## Phoenix Architecture Overview
 
@@ -66,12 +68,19 @@ live "/sessions/:session_key", SessionLive, :show  # Uses the provided session k
 - `:prompt` - Current textarea value
 - `:messages` - List of message maps (max 250, newest kept on overflow)
 - `:last_run_id` - Tracks current run for delta aggregation
+- `:run_status` - `:idle`, `:running`, or `:stopping` for active-run controls
+- `:setup_state` / `:setup_ready?` - Shared config/secrets/provider readiness shown in the browser
 - `:submit_error` - Validation/error string shown above submit button
 
 **PubSub integration:**
-- Subscribes to `LemonCore.Bus.session_topic(session_key)` on mount (only when `connected?/1`)
-- Receives events: `:run_started`, `:delta`, `:engine_action`, `:run_completed`
+- Subscribes to `LemonCore.Bus.session_topic(session_key)` and the global `"system"` topic on mount (only when `connected?/1`)
+- Receives session events `:run_started`, `:delta`, `:engine_action`, `:run_completed` plus system `:config_reloaded` and `:secret_changed` readiness events
 - Unknown `%LemonCore.Event{}` types are silently ignored
+
+The UI must fail closed while `LemonCore.Setup.Readiness.ready?/1` is false:
+do not consume uploads, append a user message, or call `LemonRouter.submit/1`.
+The terminal setup flow owns mutations; the Web surface is a read-only status
+and recovery guide until a future settings journey is designed.
 
 ### Message Structure
 
@@ -378,6 +387,7 @@ When testing routes behind `RequireAccessToken`, either:
 - `LemonCore.SessionKey` -- Session key generation and parsing: `channel_peer/1`, `valid?/1`, `agent_id/1`
 - `LemonCore.MapHelpers` -- `get_key/2` for atom-or-string map key access
 - `LemonCore.PubSub` -- The PubSub server process (configured as endpoint's `pubsub_server`)
+- `LemonCore.Setup.Readiness` -- Single read-only first-run readiness state shared with the CLI/TUI
 
 ### lemon_router
 
@@ -427,6 +437,7 @@ apps/lemon_web/
 |       |-- 404.html.heex             # Not found page
 |       |-- 500.html.heex             # Server error page
 |-- priv/
+|   |-- static/assets/app.css          # Checked-in compiled Tailwind stylesheet
 |   |-- static/assets/app.js           # Client JS (LiveSocket init, session keys)
 |   |-- gettext/.keep                   # i18n placeholder
 |-- test/

@@ -778,6 +778,9 @@ info "Next steps:"
 if [ -n "$TUI_FILE" ]; then
   info "    lemon              # launch the terminal UI (starts the daemon for you)"
 fi
+if [ "$PROFILE" = "lemon_runtime_full" ]; then
+  info "    lemon web          # launch the local browser UI (starts the daemon for you)"
+fi
 info "    lemon --help       # available commands"
 info "    lemon daemon       # start the runtime in the background"
 info "    lemon status       # check it is healthy"
