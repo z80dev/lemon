@@ -244,6 +244,21 @@ defmodule LemonSkills.ManifestTest do
 
       assert reason =~ "too many"
     end
+
+    test "rejects malformed typed requirement and platform metadata without raising" do
+      for manifest <- [
+            %{"platforms" => [42]},
+            %{"requires" => %{"bins" => [true]}},
+            %{"requires" => %{"config" => "API_KEY"}},
+            %{"required_environment_variables" => ["SAFE", nil]},
+            %{"requires_tools" => ["git\nforged"]},
+            %{"metadata" => "not-a-map"},
+            %{"metadata" => %{"lemon" => "not-a-map"}}
+          ] do
+        assert {:error, reason} = Manifest.validate(manifest)
+        assert is_binary(reason)
+      end
+    end
   end
 
   describe "parse_and_validate/1" do
@@ -406,6 +421,24 @@ defmodule LemonSkills.ManifestTest do
     test "returns :v2 when metadata.lemon present" do
       manifest = %{"metadata" => %{"lemon" => %{"category" => "devops"}}}
       assert Manifest.version(manifest) == :v2
+    end
+
+    test "does not crash on malformed typed metadata" do
+      assert Manifest.version(%{"metadata" => "not-a-map"}) == :v1
+      assert Manifest.version(%{"metadata" => %{"lemon" => "not-a-map"}}) == :v2
+      assert Manifest.lemon_category(%{"metadata" => "not-a-map"}) == nil
+      assert Manifest.lemon_category(%{"metadata" => %{"lemon" => "not-a-map"}}) == nil
+    end
+  end
+
+  describe "legacy requirement accessors" do
+    test "do not crash on malformed typed requires metadata" do
+      assert Manifest.required_bins(%{"requires" => "not-a-map"}) == []
+      assert Manifest.required_config(%{"requires" => %{"config" => ["OK", 42]}}) == ["OK"]
+
+      assert Manifest.required_environment_variables(%{
+               "required_environment_variables" => ["OK", 42]
+             }) == ["OK"]
     end
   end
 

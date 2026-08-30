@@ -9,8 +9,21 @@ defmodule CodingAgent.Security.UntrustedToolBoundary do
   alias LemonAi.Types.{TextContent, ToolResultMessage}
   alias CodingAgent.Security.ExternalContent
 
-  @external_start "<<<EXTERNAL_UNTRUSTED_CONTENT>>>"
-  @external_end "<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>"
+  # This opaque marker is attached only to the ephemeral pre-LLM copy. Tool
+  # result details are data and may claim any public trust-metadata shape, so
+  # no value returned by a tool is accepted as proof that this transform ran.
+  @boundary_token :crypto.strong_rand_bytes(32)
+  @boundary_marker :__lemon_untrusted_boundary__
+  @prewrapped_tools MapSet.new(["webfetch", "websearch"])
+  @tool_sources %{
+    "bash" => :shell,
+    "find" => :local_search,
+    "grep" => :local_search,
+    "read" => :local_file,
+    "read_skill" => :skill,
+    "webfetch" => :web_fetch,
+    "websearch" => :web_search
+  }
 
   @doc """
   Wrap untrusted tool result text blocks with external content markers.
@@ -20,85 +33,88 @@ defmodule CodingAgent.Security.UntrustedToolBoundary do
   """
   @spec transform([term()], reference() | nil) :: {:ok, [term()]}
   def transform(messages, _signal \\ nil) when is_list(messages) do
-    {:ok, Enum.map(messages, &wrap_message/1)}
+    transform(messages, nil, [])
   end
 
-  defp wrap_message(%ToolResultMessage{trust: trust} = message)
-       when trust in [:untrusted, "untrusted"] do
-    boundary = trust_boundary(message.details)
-    source = trust_source(boundary)
+  @doc false
+  @spec transform([term()], reference() | nil, keyword() | map()) :: {:ok, [term()]}
+  def transform(messages, _signal, opts) when is_list(messages) do
+    max_bytes = opt_get(opts, :max_tool_result_bytes)
+    {:ok, Enum.map(messages, &wrap_message(&1, max_bytes))}
+  end
 
-    if wrapping_applied?(boundary) do
+  defp wrap_message(%ToolResultMessage{trust: trust} = message, max_bytes)
+       when trust in [:untrusted, "untrusted"] do
+    if boundary_applied?(message.details) do
       message
     else
-      %{message | content: Enum.map(message.content || [], &wrap_content_block(&1, source))}
+      message = %{message | content: message.content || []}
+
+      message =
+        if MapSet.member?(@prewrapped_tools, message.tool_name) do
+          message
+        else
+          source = Map.get(@tool_sources, message.tool_name, :api)
+
+          %{
+            message
+            | content:
+                Enum.map(
+                  message.content || [],
+                  &wrap_content_block(&1, source, max_bytes)
+                )
+          }
+        end
+
+      mark_boundary_applied(message)
     end
   end
 
-  defp wrap_message(other), do: other
+  defp wrap_message(other, _max_bytes), do: other
 
-  defp wrap_content_block(%TextContent{text: text} = block, source) when is_binary(text) do
-    %{block | text: wrap_text(text, source)}
-  end
-
-  defp wrap_content_block(%{type: :text, text: text} = block, source) when is_binary(text) do
-    %{block | text: wrap_text(text, source)}
-  end
-
-  defp wrap_content_block(%{"type" => "text", "text" => text} = block, source)
+  defp wrap_content_block(%TextContent{text: text} = block, source, max_bytes)
        when is_binary(text) do
-    Map.put(block, "text", wrap_text(text, source))
+    %{block | text: wrap_text(text, source, max_bytes)}
   end
 
-  defp wrap_content_block(block, _source), do: block
-
-  defp wrap_text(text, source) do
-    if already_wrapped?(text) do
-      text
-    else
-      ExternalContent.wrap_external_content(text, source: source, include_warning: true)
-    end
+  defp wrap_content_block(%{type: :text, text: text} = block, source, max_bytes)
+       when is_binary(text) do
+    %{block | text: wrap_text(text, source, max_bytes)}
   end
 
-  defp trust_source(boundary) when is_map(boundary) do
-    source = Map.get(boundary, :source) || Map.get(boundary, "source")
-
-    case source do
-      value when is_binary(value) -> String.to_existing_atom(value)
-      value when is_atom(value) -> value
-      _ -> :api
-    end
-  rescue
-    ArgumentError -> :api
+  defp wrap_content_block(%{"type" => "text", "text" => text} = block, source, max_bytes)
+       when is_binary(text) do
+    Map.put(block, "text", wrap_text(text, source, max_bytes))
   end
 
-  defp trust_source(_boundary), do: :api
+  defp wrap_content_block(block, _source, _max_bytes), do: block
 
-  defp trust_boundary(details) when is_map(details) do
-    Map.get(details, :trust_boundary) || Map.get(details, "trust_boundary") ||
-      Map.get(details, :trust_metadata) || Map.get(details, "trust_metadata") ||
-      Map.get(details, :trustMetadata) || Map.get(details, "trustMetadata") || %{}
+  defp wrap_text(text, source, max_bytes) do
+    ExternalContent.wrap_external_content(text,
+      source: source,
+      include_warning: true,
+      max_bytes: max_bytes
+    )
   end
 
-  defp trust_boundary(_details), do: %{}
-
-  defp wrapping_applied?(boundary) when is_map(boundary) do
-    Map.get(boundary, :wrapping_applied) == true or
-      Map.get(boundary, "wrapping_applied") == true or
-      Map.get(boundary, :wrappingApplied) == true or
-      Map.get(boundary, "wrappingApplied") == true
+  defp boundary_applied?(details) when is_map(details) do
+    Map.get(details, @boundary_marker) == @boundary_token
   end
 
-  defp wrapping_applied?(_boundary), do: false
+  defp boundary_applied?(_details), do: false
 
-  defp already_wrapped?(text) when is_binary(text) do
-    trimmed = String.trim(text)
+  defp mark_boundary_applied(%ToolResultMessage{} = message) do
+    details =
+      case message.details do
+        details when is_map(details) -> Map.put(details, @boundary_marker, @boundary_token)
+        nil -> %{@boundary_marker => @boundary_token}
+        details -> %{@boundary_marker => @boundary_token, value: details}
+      end
 
-    String.starts_with?(
-      trimmed,
-      "SECURITY NOTICE: The following content is from an EXTERNAL, UNTRUSTED source."
-    ) and String.contains?(trimmed, @external_start) and String.ends_with?(trimmed, @external_end)
+    %{message | details: details}
   end
 
-  defp already_wrapped?(_), do: false
+  defp opt_get(opts, key) when is_map(opts), do: Map.get(opts, key)
+  defp opt_get(opts, key) when is_list(opts), do: Keyword.get(opts, key)
+  defp opt_get(_opts, _key), do: nil
 end

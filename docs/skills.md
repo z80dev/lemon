@@ -66,7 +66,7 @@ await Bun.write("./output.txt", "Hello, World!");
 | `tags` | No | Up to 32 bounded safe strings |
 | `keywords` | No | Up to 32 bounded relevance terms |
 
-Present names and descriptions must be non-empty, single-line, valid UTF-8 without control or bidirectional formatting characters. Names are limited to 128 bytes, descriptions to 1,024 bytes, and each tag/keyword to 128 bytes. Prompt rendering applies an additional defensive flatten/clamp/XML-escape pass and includes source/trust provenance. Community, project, and local metadata is treated as untrusted relevance data.
+Present names and descriptions must be non-empty, single-line, valid UTF-8 without control or bidirectional formatting characters. Names are limited to 128 bytes, descriptions to 1,024 bytes, and each tag/keyword or requirement item to 128 bytes; list fields accept at most 32 string entries. Prompt rendering applies an additional defensive flatten/clamp/XML-escape pass and includes source/trust provenance. Community, project, and local metadata is treated as untrusted relevance data.
 
 ## API Reference
 
@@ -109,7 +109,7 @@ skills = LemonSkills.find_relevant("I need to read and write files", max_results
 - `:cwd` - Project working directory (optional)
 - `:max_results` - Maximum number of skills to return (default: 3)
 
-Search documents and requirement views are precomputed at refresh/mutation boundaries. Calls score a cached snapshot outside the Registry GenServer and break equal scores by key. Use `refresh: true` or call `LemonSkills.refresh/1` after external skill/config edits or PATH/environment changes.
+Search documents are precomputed and automatically invalidated when a coalesced content-identity check detects skill-file, directory-set, or lockfile changes. Calls score the cached snapshot outside the Registry GenServer and break equal scores by key. Requirement/status views use current PATH, environment, and disabled-skill config rather than cached readiness. The identity check interval is 50 ms; use `refresh: true` or `LemonSkills.refresh/1` when immediate read-after-write visibility is required.
 
 ### status/2
 

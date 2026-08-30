@@ -89,6 +89,13 @@ references:
 | `verification` | map | — | Verification specification. See [Verification](#verification) below. |
 | `references` | list | `[]` | Supplementary files or URLs. See [References](#references) below. |
 
+All prompt- or status-facing list fields (`tags`, `keywords`, `platforms`,
+`requires.bins`, `requires.config`, `requires_tools`, `fallback_for_tools`, and
+`required_environment_variables`) accept at most 32 strings. Each item must be
+non-empty, single-line, valid UTF-8 without control or bidirectional formatting
+characters, and no more than 128 bytes. Wrong YAML/TOML scalar, list, or nested
+map types are rejected during discovery instead of being coerced.
+
 ### Verification
 
 The `verification` map describes how to check that a skill's prerequisites are

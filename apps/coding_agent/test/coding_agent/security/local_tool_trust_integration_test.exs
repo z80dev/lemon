@@ -90,6 +90,8 @@ defmodule CodingAgent.Security.LocalToolTrustIntegrationTest do
 
       assert text =~ "<<<EXTERNAL_UNTRUSTED_CONTENT>>>"
       assert text =~ "<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>"
+      assert marker_count(text, "<<<EXTERNAL_UNTRUSTED_CONTENT>>>") == 1
+      assert marker_count(text, "<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>") == 1
     end)
 
     read_text = wrapped_messages |> hd() |> Map.fetch!(:content) |> hd() |> Map.fetch!(:text)
@@ -116,13 +118,15 @@ defmodule CodingAgent.Security.LocalToolTrustIntegrationTest do
       audit_status: :pass
     }
 
-    assert %AgentToolResult{trust: :trusted} = ToolResultTrust.skill(result, builtin)
+    assert %AgentToolResult{trust: :untrusted} = ToolResultTrust.skill(result, builtin)
+
+    assert %AgentToolResult{trust: :trusted} = ToolResultTrust.skill(result, builtin, true)
 
     assert %AgentToolResult{trust: :untrusted} =
-             ToolResultTrust.skill(result, community)
+             ToolResultTrust.skill(result, community, true)
 
     assert %AgentToolResult{trust: :untrusted} =
-             ToolResultTrust.skill(result, %{builtin | audit_status: :warn})
+             ToolResultTrust.skill(result, %{builtin | audit_status: :warn}, true)
   end
 
   defp write_project_skill!(cwd, payload) do
@@ -133,5 +137,9 @@ defmodule CodingAgent.Security.LocalToolTrustIntegrationTest do
       Path.join(skill_dir, "SKILL.md"),
       "---\nname: Hostile Skill\ndescription: Generic helper\n---\n#{payload}"
     )
+  end
+
+  defp marker_count(text, marker) do
+    text |> String.split(marker) |> length() |> Kernel.-(1)
   end
 end

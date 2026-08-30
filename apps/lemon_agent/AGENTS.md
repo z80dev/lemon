@@ -78,7 +78,7 @@ my_tool = LemonAgent.new_tool(
 
 The execute function signature is `(String.t(), map(), reference() | nil, (AgentToolResult.t() -> :ok) | nil) -> AgentToolResult.t() | {:ok, AgentToolResult.t()} | {:error, term()}`.
 
-`AgentToolResult.trust` is a security contract, not a statement about whether Lemon intentionally called the tool. Ordinary file contents, search matches, shell output, remote/API data, and community/project skill content must be passed through `LemonAgent.Security.ToolResultTrust` as untrusted data. Platform-authored errors/control messages may remain trusted. Intentional bootstrap instruction loading and audited bundled skill semantics are the narrow trusted instruction paths.
+`AgentToolResult.trust` is a security contract, not a statement about whether Lemon intentionally called the tool. Ordinary file contents, search matches, shell output, remote/API data, and community/project skill content must be passed through `LemonAgent.Security.ToolResultTrust` as untrusted data. Platform-authored errors/control messages may remain trusted. Intentional bootstrap instruction loading and audited bundled skill semantics are the narrow trusted instruction paths; lockfile provenance alone is not an attestation, so builtin skill trust also requires a caller-verified match against the release bundle.
 
 ### Adding a new agent event type
 
@@ -263,7 +263,7 @@ end
     so concurrent dispatchers cannot both claim one available task and a lease
     check cannot race a newer lease write.
 
-12. **Tool invocation does not confer trust.** Tool authors must label data-bearing results with `ToolResultTrust`; downstream coding-agent transforms fence `:untrusted` text before model calls while leaving persisted/operator-facing output unchanged.
+12. **Tool invocation does not confer trust.** Tool authors must label data-bearing results with `ToolResultTrust`; downstream coding-agent transforms fence and bound `:untrusted` text before model calls while leaving persisted/operator-facing output unchanged. Tool-returned trust metadata is data, not proof that a boundary transform ran.
 
 
 ## How This App Connects to Other Umbrella Apps

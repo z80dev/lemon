@@ -1487,7 +1487,7 @@ defmodule CodingAgent.Session do
   # different answers for one turn.
   @spec refresh_turn_context(t(), String.t()) :: {t(), [ContextRegistry.section()]}
   defp refresh_turn_context(state, skill_context) do
-    relevant_skill_keys = relevant_skill_keys(state.cwd, skill_context)
+    relevant_skill_keys = relevant_skill_keys(state, skill_context)
 
     {system_sections, user_sections} =
       state
@@ -1498,12 +1498,25 @@ defmodule CodingAgent.Session do
     {refresh_system_prompt(state, skill_context, system_sections), user_sections}
   end
 
-  defp relevant_skill_keys(_cwd, context) when context in [nil, ""], do: []
+  defp relevant_skill_keys(_state, context) when context in [nil, ""], do: []
 
-  defp relevant_skill_keys(cwd, context) when is_binary(context) do
-    context
-    |> LemonSkills.find_relevant(cwd: cwd, max_results: 3, refresh: false)
-    |> Enum.map(& &1.key)
+  defp relevant_skill_keys(state, context) when is_binary(context) do
+    views =
+      context
+      |> LemonSkills.find_relevant(cwd: state.cwd, max_results: 3, refresh: false)
+      |> Enum.map(&LemonSkills.SkillView.from_entry(&1, cwd: state.cwd))
+      |> Enum.filter(&LemonSkills.SkillView.displayable?/1)
+
+    _rendered_for_telemetry =
+      LemonSkills.PromptView.render_relevant_skills(views,
+        cwd: state.cwd,
+        run_id: state.run_id,
+        session_key: state.session_key,
+        session_id: state.session_manager && state.session_manager.header.id,
+        agent_id: state.agent_id
+      )
+
+    Enum.map(views, & &1.key)
   rescue
     _ -> []
   catch

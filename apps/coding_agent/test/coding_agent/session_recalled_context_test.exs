@@ -261,10 +261,29 @@ defmodule CodingAgent.SessionRecalledContextTest do
 
       on_exit(fn -> File.rm_rf(cwd) end)
       LemonSkills.refresh(cwd: cwd)
+
+      handler_id =
+        "session-skill-relevance-#{System.unique_integer([:positive, :monotonic])}"
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:lemon_skills, :skill, :prompt_render],
+          fn event, measurements, metadata, owner ->
+            send(owner, {:skill_relevance, event, measurements, metadata})
+          end,
+          self()
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
       session = start_session(cwd: cwd)
 
       :ok = Session.prompt(session, "quasarprobe")
       {_first_messages, first_system_prompt} = await_sent()
+
+      assert_receive {:skill_relevance, [:lemon_skills, :skill, :prompt_render], %{count: 1},
+                      %{surface: "relevant", skill_keys: ["cache-probe"]}}
+
       eventually_idle(session)
       assert Session.get_state(session).relevant_skill_keys == ["cache-probe"]
 
