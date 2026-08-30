@@ -77,6 +77,16 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.ModelsList,
     LemonControlPlane.Methods.ProvidersStatus,
     LemonControlPlane.Methods.MemoryStatus,
+    # User-managed profiles
+    LemonControlPlane.Methods.ProfilesList,
+    LemonControlPlane.Methods.ProfilesGet,
+    LemonControlPlane.Methods.ProfilesCreate,
+    LemonControlPlane.Methods.ProfilesClone,
+    LemonControlPlane.Methods.ProfilesRename,
+    LemonControlPlane.Methods.ProfilesExport,
+    LemonControlPlane.Methods.ProfilesDelete,
+    LemonControlPlane.Methods.ProfilesRoster,
+    LemonControlPlane.Methods.ProfileChat,
     # Agents
     LemonControlPlane.Methods.AgentsList,
     LemonControlPlane.Methods.AgentsFilesList,

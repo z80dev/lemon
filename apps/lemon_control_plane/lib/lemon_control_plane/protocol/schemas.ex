@@ -139,6 +139,50 @@ defmodule LemonControlPlane.Protocol.Schemas do
     },
     "memory.status" => %{optional: %{}},
 
+    # User-managed profiles
+    "profiles.list" => %{optional: %{}},
+    "profiles.get" => %{required: %{"id" => :string}, optional: %{}},
+    "profiles.create" => %{
+      required: %{"id" => :string},
+      optional: %{
+        "name" => :string,
+        "description" => :string,
+        "avatar" => :string,
+        "model" => :string,
+        "systemPrompt" => :string,
+        "node" => :string
+      }
+    },
+    "profiles.clone" => %{
+      required: %{"sourceId" => :string, "id" => :string},
+      optional: %{
+        "name" => :string,
+        "description" => :string,
+        "avatar" => :string,
+        "model" => :string,
+        "systemPrompt" => :string,
+        "node" => :string
+      }
+    },
+    "profiles.rename" => %{required: %{"id" => :string, "name" => :string}, optional: %{}},
+    "profiles.export" => %{
+      required: %{"id" => :string, "path" => :string},
+      optional: %{"force" => :boolean}
+    },
+    "profiles.delete" => %{
+      required: %{"id" => :string, "confirm" => :string},
+      optional: %{}
+    },
+    "profiles.roster" => %{optional: %{}},
+    "profile.chat" => %{
+      required: %{"id" => :string, "prompt" => :string},
+      optional: %{
+        "model" => :string,
+        "cwd" => :string,
+        "queueMode" => :string
+      }
+    },
+
     # Agent methods
     "agents.list" => %{optional: %{}},
     "agents.files.list" => %{
