@@ -8,22 +8,43 @@ defmodule CodingAgent.Tools.Task.Async do
   alias CodingAgent.LaneQueue
   alias CodingAgent.Parallel
   alias CodingAgent.RunGraph
+  alias CodingAgent.TaskProgressBindingStore
   alias CodingAgent.TaskStore
   alias CodingAgent.Tools.Task.{Followup, LiveBridge, Projection}
   alias CodingAgent.Tools.Task.Result
   alias LemonCore.Introspection
 
-  @spec run_async(String.t() | nil, String.t() | nil, (-> term()), map(), map()) :: :ok
+  @type launch_error :: :task_supervisor_unavailable | :task_capacity_reached | :task_start_failed
+
+  @spec run_async(String.t() | nil, String.t() | nil, (-> term()), map(), map()) ::
+          :ok | {:error, launch_error()}
   def run_async(task_id, run_id, run_fun, followup_context, lifecycle_context) do
     _ = maybe_start_live_bridge(run_id)
 
-    Task.Supervisor.start_child(CodingAgent.TaskSupervisor, fn ->
-      Logger.debug("Task tool async start task_id=#{inspect(task_id)} run_id=#{inspect(run_id)}")
-      result = safe_run(task_id, run_id, run_fun, lifecycle_context)
-      finalize_async(task_id, run_id, result, followup_context, lifecycle_context)
-    end)
+    supervisor = Map.get(lifecycle_context, :task_supervisor, CodingAgent.TaskSupervisor)
 
-    :ok
+    case start_async_worker(supervisor, fn ->
+           Logger.debug(
+             "Task tool async start task_id=#{inspect(task_id)} run_id=#{inspect(run_id)}"
+           )
+
+           result = safe_run(task_id, run_id, run_fun, lifecycle_context)
+           finalize_async(task_id, run_id, result, followup_context, lifecycle_context)
+         end) do
+      {:ok, _pid} ->
+        :ok
+
+      {:error, reason} ->
+        launch_error = normalize_launch_error(reason)
+
+        Logger.warning(
+          "Task tool async worker failed to start task_id=#{inspect(task_id)} " <>
+            "run_id=#{inspect(run_id)} reason=#{inspect(reason)}"
+        )
+
+        finalize_launch_failure(task_id, run_id, launch_error, lifecycle_context)
+        {:error, launch_error}
+    end
   end
 
   @spec run_sync((-> term())) :: term()
@@ -110,36 +131,36 @@ defmodule CodingAgent.Tools.Task.Async do
 
     case result do
       {:ok, %AgentToolResult{} = tool_result} ->
-        TaskStore.finish(task_id, tool_result)
         maybe_finish_run(run_id, tool_result)
+        TaskStore.finish(task_id, tool_result)
         emit_task_terminal_event(task_id, run_id, {:ok, tool_result}, lifecycle_context)
         maybe_record_budget_completion(run_id, tool_result)
         maybe_send_async_followup(followup_context, task_id, run_id, {:ok, tool_result})
 
       {:ok, {:error, reason}} ->
-        TaskStore.fail(task_id, reason)
         maybe_fail_run(run_id, reason)
+        TaskStore.fail(task_id, reason)
         emit_task_terminal_event(task_id, run_id, {:error, reason}, lifecycle_context)
         maybe_record_budget_completion(run_id, %{error: reason})
         maybe_send_async_followup(followup_context, task_id, run_id, {:error, reason})
 
       {:error, reason} ->
-        TaskStore.fail(task_id, reason)
         maybe_fail_run(run_id, reason)
+        TaskStore.fail(task_id, reason)
         emit_task_terminal_event(task_id, run_id, {:error, reason}, lifecycle_context)
         maybe_record_budget_completion(run_id, %{error: reason})
         maybe_send_async_followup(followup_context, task_id, run_id, {:error, reason})
 
       {:ok, other} ->
-        TaskStore.finish(task_id, other)
         maybe_finish_run(run_id, other)
+        TaskStore.finish(task_id, other)
         emit_task_terminal_event(task_id, run_id, {:ok, other}, lifecycle_context)
         maybe_record_budget_completion(run_id, other)
         maybe_send_async_followup(followup_context, task_id, run_id, {:ok, other})
 
       other ->
-        TaskStore.fail(task_id, other)
         maybe_fail_run(run_id, other)
+        TaskStore.fail(task_id, other)
         emit_task_terminal_event(task_id, run_id, {:error, other}, lifecycle_context)
         maybe_record_budget_completion(run_id, %{error: other})
         maybe_send_async_followup(followup_context, task_id, run_id, {:error, other})
@@ -168,6 +189,43 @@ defmodule CodingAgent.Tools.Task.Async do
   rescue
     _ -> :ok
   end
+
+  defp start_async_worker(supervisor, fun) do
+    Task.Supervisor.start_child(supervisor, fun)
+  rescue
+    error -> {:error, {:exception, error}}
+  catch
+    :exit, reason -> {:error, {:exit, reason}}
+  end
+
+  defp normalize_launch_error({:exit, {:noproc, _}}), do: :task_supervisor_unavailable
+  defp normalize_launch_error({:exit, :noproc}), do: :task_supervisor_unavailable
+  defp normalize_launch_error({:noproc, _}), do: :task_supervisor_unavailable
+  defp normalize_launch_error(:noproc), do: :task_supervisor_unavailable
+  defp normalize_launch_error(:max_children), do: :task_capacity_reached
+  defp normalize_launch_error({:max_children, _}), do: :task_capacity_reached
+  defp normalize_launch_error(_), do: :task_start_failed
+
+  defp finalize_launch_failure(task_id, run_id, reason, lifecycle_context) do
+    maybe_fail_run(run_id, reason)
+
+    if is_binary(task_id) and task_id != "" do
+      TaskStore.fail(task_id, reason)
+    end
+
+    emit_task_terminal_event(task_id, run_id, {:error, reason}, lifecycle_context)
+    maybe_record_budget_completion(run_id, %{error: reason})
+    delete_progress_binding(run_id)
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  defp delete_progress_binding(run_id) when is_binary(run_id) and run_id != "" do
+    TaskProgressBindingStore.delete_by_child_run_id(run_id)
+  end
+
+  defp delete_progress_binding(_run_id), do: :ok
 
   defp lane_queue_available? do
     case Process.whereis(CodingAgent.LaneQueue) do

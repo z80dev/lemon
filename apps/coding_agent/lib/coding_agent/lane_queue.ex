@@ -84,11 +84,13 @@ defmodule CodingAgent.LaneQueue do
   @impl true
   def handle_info({ref, {:ok, result}}, st) do
     Logger.debug("LaneQueue job completed successfully ref=#{inspect(ref)}")
+    Process.demonitor(ref, [:flush])
     {:noreply, complete_job(ref, {:ok, result}, st)}
   end
 
   def handle_info({ref, {:error, reason}}, st) do
     Logger.warning("LaneQueue job failed ref=#{inspect(ref)} reason=#{inspect(reason)}")
+    Process.demonitor(ref, [:flush])
     {:noreply, complete_job(ref, {:error, reason}, st)}
   end
 

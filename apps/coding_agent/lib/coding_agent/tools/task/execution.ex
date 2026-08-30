@@ -22,20 +22,23 @@ defmodule CodingAgent.Tools.Task.Execution do
     run_fun = build_run_fun(execution, signal, on_update, opts)
 
     if execution.async? do
-      :ok =
-        Async.run_async(
-          execution.task_id,
-          execution.run_id,
-          run_fun,
-          execution.followup_context,
-          execution.lifecycle_context
-        )
+      case Async.run_async(
+             execution.task_id,
+             execution.run_id,
+             run_fun,
+             execution.followup_context,
+             execution.lifecycle_context
+           ) do
+        :ok ->
+          CodingAgent.Tools.Task.Result.build_async_result(
+            execution.task_id,
+            execution.description,
+            execution.run_id
+          )
 
-      CodingAgent.Tools.Task.Result.build_async_result(
-        execution.task_id,
-        execution.description,
-        execution.run_id
-      )
+        {:error, reason} ->
+          {:error, async_launch_error_message(reason)}
+      end
     else
       Async.run_sync(run_fun)
     end
@@ -87,7 +90,8 @@ defmodule CodingAgent.Tools.Task.Execution do
       description: description,
       role: role_id,
       queue_mode: validated.resolved_queue_mode,
-      meta: validated.meta
+      meta: validated.meta,
+      task_supervisor: Keyword.get(opts, :task_supervisor, CodingAgent.TaskSupervisor)
     }
 
     maybe_create_progress_binding(task_id, run_id, lifecycle_context)
@@ -240,4 +244,12 @@ defmodule CodingAgent.Tools.Task.Execution do
     do: {:status_task, root_action_id}
 
   defp default_surface(_), do: nil
+
+  defp async_launch_error_message(:task_supervisor_unavailable),
+    do: "Background task supervisor is unavailable"
+
+  defp async_launch_error_message(:task_capacity_reached),
+    do: "Background task capacity is exhausted"
+
+  defp async_launch_error_message(_reason), do: "Background task could not be started"
 end

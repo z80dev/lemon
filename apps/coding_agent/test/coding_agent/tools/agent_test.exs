@@ -97,6 +97,7 @@ defmodule CodingAgent.Tools.AgentTest do
 
     try do
       TaskStore.clear()
+      RunGraph.clear()
     catch
       _, _ -> :ok
     end
@@ -207,6 +208,17 @@ defmodule CodingAgent.Tools.AgentTest do
     assert is_binary(result.details.task_id)
     assert is_binary(result.details.run_id)
 
+    assert {:ok,
+            %{
+              id: run_id,
+              task_id: task_id,
+              status: :running,
+              type: :agent
+            }} = RunGraph.get(result.details.run_id)
+
+    assert run_id == result.details.run_id
+    assert task_id == result.details.task_id
+
     assert_receive {:router_submit, %RunRequest{} = req, 1}
     assert req.agent_id == "oracle"
     assert req.prompt == "Answer with hello"
@@ -224,6 +236,32 @@ defmodule CodingAgent.Tools.AgentTest do
     poll = wait_for_completed(result.details.task_id)
     assert poll.details.status == "completed"
     assert LemonAgent.get_text(poll) == "hello from oracle"
+
+    assert {:ok, %{status: :completed}} = RunGraph.get(result.details.run_id)
+  end
+
+  test "async run reports a tracking error when its completion watcher cannot start" do
+    result =
+      AgentTool.execute(
+        "call_1",
+        %{
+          "agent_id" => "oracle",
+          "prompt" => "Answer with hello",
+          "async" => true,
+          "auto_followup" => false
+        },
+        nil,
+        nil,
+        "/tmp",
+        run_orchestrator: __MODULE__.AgentTestStubRunOrchestrator,
+        task_supervisor: :missing_agent_tool_task_supervisor,
+        session_key: "agent:main:main"
+      )
+
+    assert result.details.status == "tracking_error"
+    assert_receive {:router_submit, %RunRequest{}, 1}
+    assert {:ok, %{status: :error}} = TaskStore.get(result.details.task_id) |> strip_events()
+    assert {:ok, %{status: :error}} = RunGraph.get(result.details.run_id)
   end
 
   test "run with role prepends subagent prompt to delegated request prompt" do
@@ -756,29 +794,80 @@ defmodule CodingAgent.Tools.AgentTest do
              )
   end
 
-  test "join waits for all delegated task run_ids" do
-    run_a = RunGraph.new_run(%{type: :agent, description: "join-a"})
-    run_b = RunGraph.new_run(%{type: :agent, description: "join-b"})
-    :ok = RunGraph.finish(run_a, %{ok: true, answer: "a"})
-    :ok = RunGraph.finish(run_b, %{ok: true, answer: "b"})
+  test "join waits for all production-path delegated task run_ids" do
+    task_a = queue_delegated_run("join-a")
+    task_b = queue_delegated_run("join-b")
 
-    task_a = TaskStore.new_task(%{run_id: run_a, status: :completed})
-    task_b = TaskStore.new_task(%{run_id: run_b, status: :completed})
+    joiner =
+      Task.async(fn ->
+        AgentTool.execute(
+          "call_join",
+          %{
+            "action" => "join",
+            "task_ids" => [task_a.details.task_id, task_b.details.task_id],
+            "mode" => "wait_all"
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
+      end)
 
-    result =
-      AgentTool.execute(
-        "call_join",
-        %{"action" => "join", "task_ids" => [task_a, task_b], "mode" => "wait_all"},
-        nil,
-        nil,
-        "/tmp",
-        []
-      )
+    assert Task.yield(joiner, 50) == nil
+
+    complete_delegated_run(task_a.details.run_id, "a")
+    assert Task.yield(joiner, 50) == nil
+
+    complete_delegated_run(task_b.details.run_id, "b")
+    result = Task.await(joiner, 500)
 
     assert %LemonAgent.Types.AgentToolResult{} = result
     assert result.details.status == "completed"
     assert result.details.mode == "wait_all"
-    assert Enum.sort(result.details.task_ids) == Enum.sort([task_a, task_b])
+
+    assert Enum.sort(result.details.task_ids) ==
+             Enum.sort([task_a.details.task_id, task_b.details.task_id])
+  end
+
+  test "join suppresses an async agent completion followup" do
+    task =
+      AgentTool.execute(
+        "call_run",
+        %{
+          "agent_id" => "oracle",
+          "prompt" => "joined result",
+          "async" => true,
+          "auto_followup" => true
+        },
+        nil,
+        nil,
+        "/tmp",
+        run_orchestrator: __MODULE__.AgentTestStubRunOrchestrator,
+        session_module: __MODULE__.AgentTestSessionSpy,
+        session_pid: self(),
+        session_key: "agent:main:main"
+      )
+
+    assert_receive {:router_submit, %RunRequest{}, 1}
+
+    joiner =
+      Task.async(fn ->
+        AgentTool.execute(
+          "call_join",
+          %{"action" => "join", "task_id" => task.details.task_id},
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
+      end)
+
+    wait_for_followup_suppression(task.details.task_id)
+    complete_delegated_run(task.details.run_id, "joined")
+
+    assert %LemonAgent.Types.AgentToolResult{} = Task.await(joiner, 500)
+    refute_receive {:session_async_followup, %CustomMessage{}}, 100
   end
 
   test "join returns error for unknown task id" do
@@ -819,4 +908,51 @@ defmodule CodingAgent.Tools.AgentTest do
         wait_for_completed(task_id, attempts - 1)
     end
   end
+
+  defp queue_delegated_run(description) do
+    result =
+      AgentTool.execute(
+        "call_#{description}",
+        %{
+          "agent_id" => "oracle",
+          "prompt" => description,
+          "description" => description,
+          "async" => true,
+          "auto_followup" => false
+        },
+        nil,
+        nil,
+        "/tmp",
+        run_orchestrator: __MODULE__.AgentTestStubRunOrchestrator,
+        session_key: "agent:main:main"
+      )
+
+    assert_receive {:router_submit, %RunRequest{}, _}
+    result
+  end
+
+  defp complete_delegated_run(run_id, answer) do
+    Bus.broadcast(
+      Bus.run_topic(run_id),
+      Event.new(:run_completed, EventsFixtures.run_completed(answer: answer))
+    )
+  end
+
+  defp wait_for_followup_suppression(task_id, attempts \\ 25)
+
+  defp wait_for_followup_suppression(task_id, attempts) when attempts <= 0 do
+    flunk("timed out waiting for auto-followup suppression for task #{task_id}")
+  end
+
+  defp wait_for_followup_suppression(task_id, attempts) do
+    if TaskStore.auto_followup_suppressed?(task_id) do
+      :ok
+    else
+      Process.sleep(10)
+      wait_for_followup_suppression(task_id, attempts - 1)
+    end
+  end
+
+  defp strip_events({:ok, record, _events}), do: {:ok, record}
+  defp strip_events(other), do: other
 end

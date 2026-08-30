@@ -15,6 +15,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   notes, commits and tags the release, verifies every artifact, publishes the
   GitHub Release, and only then promotes mutable container channel tags
 
+### Fixed
+
+- Async subagent launches now fail and terminalize their bookkeeping when the
+  supervised worker cannot start, completed task/agent followup delivery
+  contains router exits, and lane-scheduled jobs no longer process a duplicate
+  normal monitor event after every result. Delegated agent runs now participate
+  in the run graph used by `agent action=join`, and explicit joins suppress the
+  redundant automatic completion followup.
+
 ### Removed
 
 - Breaking: top-level engine selection and custom Gateway engine extensions

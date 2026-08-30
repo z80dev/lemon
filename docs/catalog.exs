@@ -664,5 +664,11 @@
     owner: "@z80",
     last_reviewed: ~D[2026-08-30],
     max_age_days: 90
+  },
+  %{
+    path: "docs/reviews/assistant-runtime-polish-audit-2026-08-30.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-08-30],
+    max_age_days: 90
   }
 ]

@@ -1,5 +1,5 @@
 defmodule CodingAgent.LaneQueueTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias CodingAgent.LaneQueue
 
@@ -202,6 +202,25 @@ defmodule CodingAgent.LaneQueueTest do
 
     # We can still run a job after doing nothing for a while.
     assert {:ok, :hello} = LaneQueue.run(pid, :main, fn -> :hello end)
+  end
+
+  test "completed task replies consume their monitor without a duplicate DOWN warning", %{
+    task_sup: sup
+  } do
+    {:ok, pid} =
+      LaneQueue.start_link(
+        name: :lane_queue_monitor_cleanup,
+        caps: %{main: 1},
+        task_supervisor: sup
+      )
+
+    log =
+      ExUnit.CaptureLog.capture_log([level: :warning], fn ->
+        assert {:ok, :done} = LaneQueue.run(pid, :main, fn -> :done end)
+        Process.sleep(20)
+      end)
+
+    refute log =~ "complete_job unknown task_ref"
   end
 
   test "sequential execution with cap 1 preserves FIFO order", %{task_sup: sup} do

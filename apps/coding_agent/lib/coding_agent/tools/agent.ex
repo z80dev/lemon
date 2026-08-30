@@ -186,6 +186,7 @@ defmodule CodingAgent.Tools.Agent do
   defp do_join(params) do
     with {:ok, task_ids} <- validate_join_task_ids(params),
          {:ok, mode} <- validate_join_mode(params),
+         :ok <- suppress_auto_followups(task_ids),
          {:ok, run_ids} <- resolve_run_ids(task_ids),
          {:ok, join_result} <- RunGraph.await(run_ids, mode, :infinity) do
       build_join_result(task_ids, join_result)
@@ -243,6 +244,11 @@ defmodule CodingAgent.Tools.Agent do
       {:error, _} = err -> err
       ids -> {:ok, Enum.reverse(ids)}
     end
+  end
+
+  defp suppress_auto_followups(task_ids) do
+    Enum.each(task_ids, &TaskStore.suppress_auto_followup/1)
+    :ok
   end
 
   defp build_join_result(task_ids, %{mode: :wait_all, runs: runs}) do
@@ -325,8 +331,28 @@ defmodule CodingAgent.Tools.Agent do
         role: validated.role_id
       })
 
-    start_completion_watcher(task_id, run_id, validated, delegated_session_key, request, opts)
+    :ok = register_delegated_run(run_id, task_id, validated, delegated_session_key)
 
+    watcher_result =
+      start_completion_watcher(
+        task_id,
+        run_id,
+        validated,
+        delegated_session_key,
+        request,
+        opts
+      )
+
+    build_async_submission_result(
+      watcher_result,
+      task_id,
+      run_id,
+      validated,
+      delegated_session_key
+    )
+  end
+
+  defp build_async_submission_result(:ok, task_id, run_id, validated, delegated_session_key) do
     %AgentToolResult{
       content: [
         %TextContent{
@@ -344,6 +370,67 @@ defmodule CodingAgent.Tools.Agent do
         role: validated.role_id
       }
     }
+  end
+
+  defp build_async_submission_result(
+         {:error, reason},
+         task_id,
+         run_id,
+         validated,
+         delegated_session_key
+       ) do
+    tracking_error = {:completion_watcher_start_failed, reason}
+    mark_delegated_run_failed(run_id, tracking_error)
+    TaskStore.fail(task_id, tracking_error)
+
+    Logger.warning(
+      "Agent tool submitted run but failed to start completion watcher " <>
+        "task_id=#{inspect(task_id)} run_id=#{inspect(run_id)} reason=#{inspect(reason)}"
+    )
+
+    %AgentToolResult{
+      content: [
+        %TextContent{
+          text:
+            "Delegated run #{run_id} was submitted, but local completion tracking failed " <>
+              "(task #{task_id})."
+        }
+      ],
+      details: %{
+        status: "tracking_error",
+        task_id: task_id,
+        run_id: run_id,
+        agent_id: validated.agent_id,
+        session_key: delegated_session_key,
+        auto_followup: false,
+        role: validated.role_id,
+        error: inspect(reason)
+      }
+    }
+  end
+
+  defp register_delegated_run(run_id, task_id, validated, delegated_session_key) do
+    case RunGraph.get(run_id) do
+      {:ok, _record} ->
+        :ok
+
+      {:error, :not_found} ->
+        now = System.system_time(:second)
+
+        RunGraph.insert_record(run_id, %{
+          id: run_id,
+          status: :queued,
+          inserted_at: now,
+          updated_at: now,
+          parent: nil,
+          children: [],
+          type: :agent,
+          task_id: task_id,
+          agent_id: validated.agent_id,
+          delegated_session_key: delegated_session_key,
+          description: validated.description
+        })
+    end
   end
 
   defp wait_sync_completion(run_id, validated, delegated_session_key) do
@@ -461,17 +548,29 @@ defmodule CodingAgent.Tools.Agent do
       opts: opts
     }
 
-    Task.Supervisor.start_child(CodingAgent.TaskSupervisor, fn ->
-      monitor_completion(watcher_opts)
-    end)
+    task_supervisor = Keyword.get(opts, :task_supervisor, CodingAgent.TaskSupervisor)
 
-    receive do
-      {:agent_tool_watcher_ready, ^ready_ref} -> :ok
-    after
-      150 -> :ok
+    case start_watcher(task_supervisor, watcher_opts) do
+      {:ok, _pid} ->
+        receive do
+          {:agent_tool_watcher_ready, ^ready_ref} -> :ok
+        after
+          150 -> :ok
+        end
+
+        :ok
+
+      {:error, reason} ->
+        {:error, reason}
     end
+  end
 
-    :ok
+  defp start_watcher(task_supervisor, watcher_opts) do
+    Task.Supervisor.start_child(task_supervisor, fn -> monitor_completion(watcher_opts) end)
+  rescue
+    error -> {:error, {:exception, error}}
+  catch
+    kind, reason -> {:error, {kind, reason}}
   end
 
   defp monitor_completion(%{
@@ -485,6 +584,7 @@ defmodule CodingAgent.Tools.Agent do
          opts: opts
        }) do
     TaskStore.mark_running(task_id)
+    mark_delegated_run_running(run_id)
 
     on_subscribed =
       if match?({pid, _} when is_pid(pid), subscribe_notify) do
@@ -503,20 +603,31 @@ defmodule CodingAgent.Tools.Agent do
           role: validated.role_id
         })
 
-        if validated.auto_followup do
+        if validated.auto_followup and not TaskStore.auto_followup_suppressed?(task_id) do
           maybe_send_auto_followup(completion, run_id, task_id, validated, request, opts)
         end
 
       {:error, :timeout} ->
+        mark_delegated_run_failed(run_id, :timeout)
         TaskStore.fail(task_id, :timeout)
 
       {:error, reason} ->
+        mark_delegated_run_failed(run_id, reason)
         TaskStore.fail(task_id, reason)
     end
   rescue
     error ->
       Logger.warning("Agent tool watcher crashed for task_id=#{task_id}: #{inspect(error)}")
+      mark_delegated_run_failed(run_id, {:watcher_crash, error})
       TaskStore.fail(task_id, {:watcher_crash, error})
+  catch
+    kind, reason ->
+      Logger.warning(
+        "Agent tool watcher exited for task_id=#{task_id}: #{inspect({kind, reason})}"
+      )
+
+      mark_delegated_run_failed(run_id, {:watcher_crash, {kind, reason}})
+      TaskStore.fail(task_id, {:watcher_crash, {kind, reason}})
   end
 
   defp maybe_send_auto_followup(completion, run_id, task_id, validated, request, opts) do
@@ -568,6 +679,14 @@ defmodule CodingAgent.Tools.Agent do
     error ->
       Logger.warning(
         "Failed to auto-followup delegated run #{run_id} (task #{task_id}): #{inspect(error)}"
+      )
+
+      :ok
+  catch
+    kind, reason ->
+      Logger.warning(
+        "Failed to auto-followup delegated run #{run_id} (task #{task_id}): " <>
+          inspect({kind, reason})
       )
 
       :ok
@@ -840,16 +959,47 @@ defmodule CodingAgent.Tools.Agent do
           |> Map.put(:duration_ms, completion.duration_ms)
       }
 
+      mark_delegated_run_finished(Map.get(details, :run_id), result)
       TaskStore.finish(task_id, result)
     else
-      TaskStore.fail(task_id, %{
+      error = %{
         status: "error",
         error: completion.error,
         answer: completion.answer,
         details: details
-      })
+      }
+
+      mark_delegated_run_failed(Map.get(details, :run_id), error)
+      TaskStore.fail(task_id, error)
     end
   end
+
+  defp mark_delegated_run_running(run_id) when is_binary(run_id) do
+    case RunGraph.mark_running(run_id) do
+      :ok -> :ok
+      {:error, :invalid_transition} -> :ok
+    end
+  end
+
+  defp mark_delegated_run_running(_run_id), do: :ok
+
+  defp mark_delegated_run_finished(run_id, result) when is_binary(run_id) do
+    case RunGraph.finish(run_id, result) do
+      :ok -> :ok
+      {:error, :invalid_transition} -> :ok
+    end
+  end
+
+  defp mark_delegated_run_finished(_run_id, _result), do: :ok
+
+  defp mark_delegated_run_failed(run_id, error) when is_binary(run_id) do
+    case RunGraph.fail(run_id, error) do
+      :ok -> :ok
+      {:error, :invalid_transition} -> :ok
+    end
+  end
+
+  defp mark_delegated_run_failed(_run_id, _error), do: :ok
 
   defp auto_followup_text(completion, run_id, validated) do
     agent_id = validated.agent_id

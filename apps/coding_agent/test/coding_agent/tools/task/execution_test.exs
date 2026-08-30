@@ -87,5 +87,34 @@ defmodule CodingAgent.Tools.Task.ExecutionTest do
       assert {:error, :not_found} =
                TaskProgressBindingStore.get_by_task_id(result.details.task_id)
     end
+
+    test "fails immediately and terminalizes bookkeeping when the worker cannot start" do
+      missing_supervisor = :missing_task_supervisor_for_launch_test
+
+      assert {:error, "Background task supervisor is unavailable"} =
+               Task.execute(
+                 "tool_call_launch_failure",
+                 %{
+                   "description" => "Launch failure task",
+                   "prompt" => "This worker must not run",
+                   "async" => true
+                 },
+                 nil,
+                 nil,
+                 "/tmp",
+                 parent_run_id: "run_parent_launch_failure",
+                 session_key: "agent:default:telegram:default:dm:12345",
+                 agent_id: "default",
+                 task_supervisor: missing_supervisor
+               )
+
+      assert [{task_id, %{status: :error, error: :task_supervisor_unavailable} = record}] =
+               TaskStore.list(:error)
+
+      assert {:ok, %{status: :error, error: :task_supervisor_unavailable}} =
+               RunGraph.get(record.run_id)
+
+      assert {:error, :not_found} = TaskProgressBindingStore.get_by_task_id(task_id)
+    end
   end
 end
