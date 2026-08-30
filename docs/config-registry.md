@@ -56,6 +56,7 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 
 | Env Var | Type | Default | Secret | Apps | Description |
 |---|---|---|---|---|---|
+| `EXA_API_KEY` | string | _(none)_ | yes | `coding_agent` | Exa API key used by the registered Exa search and contents provider. |
 | `LEMON_AUTO_RESIZE_IMAGES` | boolean | `true` |  | `lemon_core` | Whether oversized images are auto-resized before being sent to a model. |
 | `LEMON_FIRECRAWL_API_KEY` | string | _(none)_ | yes | `lemon_core` | Firecrawl API key. |
 | `LEMON_FIRECRAWL_BASE_URL` | string | `https://api.firecrawl.dev` |  | `lemon_core` | Firecrawl API base URL. |
@@ -288,10 +289,19 @@ When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BU
 
 | Env Var | Type | Default | Secret | Apps | Description |
 |---|---|---|---|---|---|
+| `BROWSERBASE_API_KEY` | string | _(none)_ | yes | `lemon_browser` | Browserbase API key for hosted browser sessions. |
+| `BROWSERBASE_PROJECT_ID` | string | _(none)_ |  | `lemon_browser` | Browserbase project id for hosted browser sessions. |
+| `BROWSER_USE_API_KEY` | string | _(none)_ | yes | `lemon_browser` | Browser Use Cloud API key for hosted browser sessions. |
+| `CAMOFOX_API_KEY` | string | _(none)_ | yes | `lemon_browser` | Optional bearer key for the configured Camofox server. |
+| `CAMOFOX_URL` | string | _(none)_ |  | `lemon_browser` | Base URL for a Camofox REST/Firefox browser server. |
 | `LEMON_BROWSER_ATTACH_ONLY` | boolean | `false` |  | `lemon_browser` | Whether the browser tool only attaches to an existing browser instead of launching one. |
+| `LEMON_BROWSER_BACKEND` | string | `local` |  | `lemon_browser` | Browser backend id: local, controller, hybrid, browserbase, browser_use, firecrawl, or camofox. |
 | `LEMON_BROWSER_CDP_ENDPOINT` | string | _(none)_ |  | `lemon_browser` | Chrome DevTools Protocol websocket endpoint to attach to instead of launching a browser. |
 | `LEMON_BROWSER_CDP_PORT` | integer | `18800` |  | `lemon_browser` | Local CDP port used when launching a managed browser instance. |
 | `LEMON_BROWSER_DRIVER_PATH` | string | _(none)_ |  | `lemon_browser` | Path to the browser automation driver binary. |
+| `LEMON_BROWSER_HYBRID_LOCAL_BACKEND` | string | `local` |  | `lemon_browser` | Local/private backend selected by the hybrid browser router. |
+| `LEMON_BROWSER_HYBRID_PUBLIC_BACKEND` | string | _(none)_ |  | `lemon_browser` | Explicit hosted backend selected by the hybrid router for public URLs. |
+| `LEMON_CUA_DRIVER_CMD` | string | _(none)_ |  | `lemon_browser` | Path or executable name for the cua-driver used by computer_use. |
 
 ### Coding-agent CLI runners
 

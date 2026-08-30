@@ -175,7 +175,7 @@ queue_mode = "collect"
 
 # [runtime.tools.web.search]
 # enabled = true
-# provider = "brave"      # "brave" | "perplexity"
+# provider = "brave"      # brave | exa | perplexity | duckduckgo | searxng | extension id
 # max_results = 5
 # timeout_seconds = 30
 # cache_ttl_minutes = 15
@@ -183,6 +183,13 @@ queue_mode = "collect"
 # [runtime.tools.web.search.perplexity]
 # api_key = "<perplexity-api-key>"
 # model = "perplexity/sonar-pro"
+#
+# [runtime.tools.web.search.providers.searxng]
+# base_url = "https://search.example.com"
+# api_key_secret = "SEARXNG_API_KEY" # optional
+
+# [runtime.tools.web.search.providers.exa]
+# api_key = "<exa-api-key>" # optional if EXA_API_KEY is set
 
 # [runtime.tools.web.fetch]
 # enabled = true
@@ -192,6 +199,13 @@ queue_mode = "collect"
 # [runtime.tools.web.fetch.firecrawl]
 # enabled = true
 # api_key = "fc-..."
+
+# Browser backend selection is environment-based so secrets stay out of TOML:
+# LEMON_BROWSER_BACKEND=local|controller|hybrid|browserbase|browser_use|firecrawl|camofox
+# LEMON_BROWSER_HYBRID_PUBLIC_BACKEND=browser_use # required with hybrid
+# BROWSERBASE_API_KEY / BROWSERBASE_PROJECT_ID, BROWSER_USE_API_KEY,
+# FIRECRAWL_API_KEY, or CAMOFOX_URL / CAMOFOX_API_KEY configure hosted backends.
+# LEMON_CUA_DRIVER_CMD optionally selects the cua-driver used by computer_use.
 
 # --- WASM Tool Configuration ---
 

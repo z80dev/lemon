@@ -13,6 +13,19 @@ with the media and LSP drivers; it is published as a clean leaf on
 
 ### Added
 
+- `LemonBrowser` and `LemonBrowser.BackendRegistry` provide backend-neutral,
+  fail-closed execution across managed local Chrome and authenticated remote
+  controllers. Runtime packages can add backends without replacing built-ins.
+- Stable multi-tab target IDs plus list/open/activate/close operations are
+  shared by every page tool. HTTP discovery and direct WebSocket CDP endpoints
+  are both accepted, and disconnecting from attached Chrome never closes it.
+- `LemonBrowser.ControllerBroker` mints short-lived, single-use controller
+  tickets bound to a server-derived principal, controller, browser profile,
+  session, run, and allowlisted capabilities. Exact WebSocket identity,
+  heartbeat, timeout, result, replacement, and disconnect behavior is enforced.
+- A bundled token-required Manifest V3 extension and loopback CDP relay can
+  drive existing signed-in Chrome tabs. The relay rejects browser-originated
+  CDP sockets, hides internal pages, and never forwards `Browser.close`.
 - `LemonBrowser.LocalServer` — a supervised `GenServer` that owns a Node +
   Playwright helper process and speaks a line-delimited JSON protocol over its
   stdin/stdout. `request/3` (or `request/4` against a named server) sends one
@@ -35,10 +48,12 @@ with the media and LSP drivers; it is published as a clean leaf on
   applied.
 - `LemonBrowser.Env` — the app's environment-variable registry, aggregated by
   `LemonCore.Env`: `LEMON_BROWSER_DRIVER_PATH`, `LEMON_BROWSER_CDP_ENDPOINT`,
-  `LEMON_BROWSER_ATTACH_ONLY` and `LEMON_BROWSER_CDP_PORT` (default `18800`).
-- `LemonBrowser.Application` — a one-child supervision tree starting
-  `LemonBrowser.LocalServer`, so adding the dependency is all the wiring an
-  embedding application needs.
+  `LEMON_BROWSER_ATTACH_ONLY`, `LEMON_BROWSER_CDP_PORT` (default `18800`),
+  `LEMON_BROWSER_RELAY_PORT` (default `9224`), and secret
+  `LEMON_BROWSER_RELAY_TOKEN`.
+- `LemonBrowser.Application` — a supervision tree starting
+  `LemonBrowser.LocalServer` and `LemonBrowser.ControllerBroker`, so adding the
+  dependency is all the wiring an embedding application needs.
 
 ### Notes for consumers
 

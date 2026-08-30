@@ -112,7 +112,7 @@ defmodule LemonSkills.Sources.Hermes do
   @doc false
   def parse_id("hermes:" <> ref) do
     case String.split(ref, "/", trim: true) do
-      [collection | rest] when collection in ["bundled", "optional"] and length(rest) >= 1 ->
+      [collection | rest] when collection in ["bundled", "optional"] and rest != [] ->
         if Enum.all?(rest, &safe_segment?/1) do
           root = if collection == "bundled", do: "skills", else: "optional-skills"
           key = List.last(rest)

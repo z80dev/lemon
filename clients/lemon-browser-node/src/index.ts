@@ -1,6 +1,11 @@
 import { LemonSocket } from './lemon-socket.js';
 import { ChromeSession } from './chrome.js';
-import { handleBrowserMethod } from './browser-methods.js';
+import { dispatchBrowserRequest } from './driver-dispatch.js';
+
+export { ChromeSession } from './chrome.js';
+export { dispatchBrowserRequest } from './driver-dispatch.js';
+export { RelayBridge } from './relay/bridge.js';
+export { startRelayServer } from './relay/server.js';
 
 export type BrowserNodeConfig = {
   wsUrl: string;
@@ -11,11 +16,13 @@ export type BrowserNodeConfig = {
   headless: boolean;
   noSandbox: boolean;
   attachOnly: boolean;
+  cdpEndpoint?: string;
 };
 
 export async function runBrowserNode(cfg: BrowserNodeConfig): Promise<void> {
   const chrome = new ChromeSession({
     cdpPort: cfg.cdpPort,
+    cdpEndpoint: cfg.cdpEndpoint,
     userDataDir: cfg.userDataDir,
     executablePath: cfg.executablePath,
     headless: cfg.headless,
@@ -53,7 +60,7 @@ export async function runBrowserNode(cfg: BrowserNodeConfig): Promise<void> {
         }
 
         const result = await withTimeout(
-          () => chrome.withPage((page) => handleBrowserMethod(page, method, args)),
+          () => dispatchBrowserRequest(chrome, method, args),
           typeof timeoutMs === 'number' && timeoutMs > 0 ? timeoutMs : 30_000,
         );
 

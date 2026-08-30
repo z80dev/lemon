@@ -750,6 +750,31 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "local" => :boolean
       }
     },
+    "browser.controller.ticket" => %{
+      required: %{
+        "controllerId" => :string,
+        "browserProfileId" => :string,
+        "sessionId" => :string
+      },
+      optional: %{
+        "runId" => :string,
+        "capabilities" => [:list, :string],
+        "ttlMs" => :integer
+      }
+    },
+    "browser.controller.register" => %{
+      required: %{"ticket" => :string},
+      optional: %{"metadata" => :map}
+    },
+    "browser.controller.heartbeat" => %{
+      required: %{"controllerId" => :string},
+      optional: %{}
+    },
+    "browser.controller.result" => %{
+      required: %{"controllerId" => :string, "requestId" => :string},
+      optional: %{"result" => :any, "error" => :any}
+    },
+    "browser.controller.status" => %{optional: %{}},
     "media.status" => %{
       optional: %{
         "projectDir" => :string,

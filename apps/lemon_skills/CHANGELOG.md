@@ -71,6 +71,9 @@ modules nothing outside the package touches are marked internal.
 
 ### Changed
 
+- Avoid unnecessary full-list traversal when validating official Hermes skill
+  identifiers.
+
 - YAML skill frontmatter now uses `YamlElixir`, enabling nested objects and
   flow lists used by Hermes manifests. Hermes platform and prerequisite aliases
   normalize to Lemon's canonical readiness fields.

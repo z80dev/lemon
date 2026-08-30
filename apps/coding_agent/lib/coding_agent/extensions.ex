@@ -484,7 +484,7 @@ defmodule CodingAgent.Extensions do
         already_registered = provider_registered?(type, name)
 
         cond do
-          type not in [:model, :memory] ->
+          type not in [:model, :memory, :search] ->
             require Logger
 
             Logger.debug(
@@ -584,6 +584,9 @@ defmodule CodingAgent.Extensions do
 
       %{type: :memory, name: name} ->
         LemonMemory.Providers.unregister_provider(provider_id(name))
+
+      %{type: :search, name: name} ->
+        CodingAgent.Search.Registry.unregister(name)
 
       _ ->
         :ok
@@ -1068,12 +1071,17 @@ defmodule CodingAgent.Extensions do
     |> Enum.any?(fn provider -> provider[:id] == id or provider["id"] == id end)
   end
 
+  defp provider_registered?(:search, name) do
+    match?({:ok, _spec}, CodingAgent.Search.Registry.fetch(name))
+  end
+
   defp provider_registered?(_type, _name), do: false
 
   defp normalize_provider_type(type) when is_binary(type) do
     case type do
       "model" -> :model
       "memory" -> :memory
+      "search" -> :search
       other -> other
     end
   end
@@ -1096,6 +1104,16 @@ defmodule CodingAgent.Extensions do
       scopes: Map.get(config, :scopes) || Map.get(config, "scopes"),
       timeout_ms: Map.get(config, :timeout_ms) || Map.get(config, "timeout_ms")
     })
+  end
+
+  defp register_provider(:search, name, spec, ext) do
+    config = provider_config(spec.config)
+
+    CodingAgent.Search.Registry.register(name, spec.module,
+      source: "extension:#{safe_extension_name(ext)}",
+      priority: Map.get(config, :priority, Map.get(config, "priority", 0)),
+      config: config
+    )
   end
 
   defp provider_config(config) when is_map(config), do: config

@@ -119,6 +119,8 @@
     %{path: "docs/getting-started/persist-memory.md", last_reviewed: ~D[2026-08-10]},
     %{path: "docs/ci/self-hosted-runner.md", last_reviewed: ~D[2026-08-30]},
     %{path: "docs/reviews/issue-33-comment.md", last_reviewed: ~D[2026-08-30]},
-    %{path: "docs/reviews/assistant-runtime-polish-audit-2026-08-30.md", last_reviewed: ~D[2026-08-30]}
+    %{path: "docs/reviews/assistant-runtime-polish-audit-2026-08-30.md", last_reviewed: ~D[2026-08-30]},
+    %{path: "docs/plans/2026-08-30-search-browser-leadership-plan.md", last_reviewed: ~D[2026-08-30]},
+    %{path: "docs/tools/omp-tooling-audit.md", last_reviewed: ~D[2026-08-30]}
   ]
 }

@@ -159,7 +159,7 @@ defmodule LemonControlPlane.Methods.BrowserRequest do
   end
 
   defp run_local(method, args, timeout_ms, network_policy) do
-    case LemonBrowser.LocalServer.request(method, args, timeout_ms) do
+    case LemonBrowser.request(method, args, timeout_ms) do
       {:ok, result} ->
         %{
           "mode" => "local",

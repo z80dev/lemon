@@ -38,6 +38,90 @@ defmodule CodingAgent.Tools.WebSearchTest do
     assert Map.has_key?(tool.parameters["properties"], "maxChars")
     assert Map.has_key?(tool.parameters["properties"], "snippetMaxChars")
     assert Map.has_key?(tool.parameters["properties"], "maxCitations")
+    assert Map.has_key?(tool.parameters["properties"], "provider")
+    assert Map.has_key?(tool.parameters["properties"], "fallbackProviders")
+  end
+
+  test "uses a request-selected keyless DuckDuckGo provider" do
+    html = """
+    <div class="result">
+      <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fkeyless">Keyless result</a>
+      <a class="result__snippet">No provider key required</a>
+    </div>
+    """
+
+    http_get = fn _url, _opts -> {:ok, %Req.Response{status: 200, body: html}} end
+    tool = WebSearch.tool("/tmp", http_get: http_get)
+
+    payload =
+      tool.execute.(
+        "id",
+        %{"query" => "keyless lemon", "provider" => "duckduckgo", "fallbackProviders" => []},
+        nil,
+        nil
+      )
+      |> decode_payload()
+
+    assert payload["provider_requested"] == "duckduckgo"
+    assert payload["provider_used"] == "duckduckgo"
+    assert hd(payload["results"])["url"] == "https://example.com/keyless"
+  end
+
+  test "rejects an unknown request-selected provider" do
+    tool = WebSearch.tool("/tmp")
+
+    assert {:error, "Unknown websearch provider: imaginary"} =
+             tool.execute.("id", %{"query" => "hello", "provider" => "imaginary"}, nil, nil)
+  end
+
+  test "coalesces concurrent identical provider requests" do
+    counter = :counters.new(1, [:atomics])
+
+    http_get = fn _url, _opts ->
+      :counters.add(counter, 1, 1)
+      Process.sleep(80)
+
+      {:ok,
+       %Req.Response{
+         status: 200,
+         body: %{
+           "web" => %{
+             "results" => [%{"title" => "One", "url" => "https://one.example"}]
+           }
+         }
+       }}
+    end
+
+    tool =
+      WebSearch.tool("/tmp",
+        http_get: http_get,
+        settings_manager: %{
+          tools: %{
+            web: %{
+              search: %{
+                provider: "brave",
+                api_key: "key",
+                failover: %{enabled: false},
+                cache_ttl_minutes: 60
+              }
+            }
+          }
+        }
+      )
+
+    results =
+      1..5
+      |> Task.async_stream(
+        fn index ->
+          tool.execute.("id-#{index}", %{"query" => "same concurrent query"}, nil, nil)
+        end,
+        max_concurrency: 5,
+        timeout: 2_000
+      )
+      |> Enum.map(fn {:ok, result} -> decode_payload(result) end)
+
+    assert Enum.all?(results, &(&1["provider_used"] == "brave"))
+    assert :counters.get(counter, 1) == 1
   end
 
   test "returns error when query is missing" do
