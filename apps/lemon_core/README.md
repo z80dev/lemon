@@ -91,6 +91,7 @@ and `lemon_lsp`. Core doctor diagnostics may probe them at runtime, but
 | `LemonCore.GatewayConfig` | Unified gateway config access merging TOML, app env, and transport overrides |
 | `LemonCore.Dotenv` | `.env` file loader preserving existing env vars |
 | `LemonCore.Logging` | Runtime log-to-file handler from `[logging]` config |
+| `LemonCore.OAuth.LocalCallbackListener` | One-shot localhost OAuth callback capture with monitored listener failure and bounded wait/cleanup |
 
 ### Doctor and Support
 
