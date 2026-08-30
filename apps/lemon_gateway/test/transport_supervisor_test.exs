@@ -20,7 +20,7 @@ defmodule LemonGateway.TransportSupervisorTest do
   alias Elixir.LemonGateway.TransportRegistry
   alias Elixir.LemonGateway.TransportSupervisor
 
-  @isolated_applications [:lemon_gateway, :lemon_channels, :lemon_control_plane]
+  @isolated_applications [:lemon_gateway, :lemon_channels]
 
   setup_all do
     # `mix test` starts the current application by default. This test suite is a
@@ -514,7 +514,6 @@ defmodule LemonGateway.TransportSupervisorTest do
       # get restarted by the test supervisor (which would re-register children).
       _ = Application.stop(:lemon_gateway)
       _ = Application.stop(:lemon_channels)
-      _ = Application.stop(:lemon_control_plane)
 
       stop_if_running(TransportSupervisor)
       stop_if_running(TransportRegistry)
