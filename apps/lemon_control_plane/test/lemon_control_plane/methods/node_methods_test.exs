@@ -139,6 +139,7 @@ defmodule LemonControlPlane.Methods.NodeMethodsTest do
       invocation = %{
         node_id: "node-1",
         method: "test",
+        args: %{"private" => "legacy durable args"},
         status: :pending,
         created_at_ms: System.system_time(:millisecond)
       }
@@ -164,6 +165,7 @@ defmodule LemonControlPlane.Methods.NodeMethodsTest do
       # Verify invocation was updated
       updated = LemonCore.Store.get(:node_invocations, invoke_id)
       assert updated.status == :completed
+      refute Map.has_key?(updated, :args)
       refute Map.has_key?(updated, :result)
       assert updated.result_summary.present == true
       assert updated.result_summary.kind == :object

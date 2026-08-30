@@ -2,7 +2,9 @@ defmodule LemonControlPlane.Methods.NodeInvoke do
   @moduledoc """
   Handler for the node.invoke control plane method.
 
-  Invokes a method on one authenticated live node connection.
+  Invokes a method on one authenticated live node connection. Raw arguments
+  are used only for the live dispatch; durable invocation records retain a
+  content-free argument summary.
   """
 
   @behaviour LemonControlPlane.Method
@@ -42,8 +44,8 @@ defmodule LemonControlPlane.Methods.NodeInvoke do
     max_payload = LemonControlPlane.max_payload()
 
     case LemonCore.JSONPayload.validate(args, max_bytes: max_payload) do
-      {:ok, _stats} ->
-        invoke_live_node(node_id, method, args, timeout_ms, ctx, max_payload)
+      {:ok, stats} ->
+        invoke_live_node(node_id, method, args, timeout_ms, ctx, max_payload, stats)
 
       {:error, reason} ->
         {:error,
@@ -55,7 +57,7 @@ defmodule LemonControlPlane.Methods.NodeInvoke do
     end
   end
 
-  defp invoke_live_node(node_id, method, args, timeout_ms, ctx, max_payload) do
+  defp invoke_live_node(node_id, method, args, timeout_ms, ctx, max_payload, args_stats) do
     case NodeStore.get_node(node_id) do
       nil ->
         {:error, Errors.not_found("Node not found")}
@@ -73,7 +75,7 @@ defmodule LemonControlPlane.Methods.NodeInvoke do
               id: invoke_id,
               node_id: node_id,
               method: method,
-              args: args,
+              args_summary: payload_summary(args_stats),
               status: :pending,
               created_at_ms: System.system_time(:millisecond),
               timeout_ms: timeout_ms,
@@ -137,4 +139,14 @@ defmodule LemonControlPlane.Methods.NodeInvoke do
 
   defp arg_key_count(args) when is_map(args), do: map_size(args)
   defp arg_key_count(_), do: 0
+
+  defp payload_summary(stats) do
+    %{
+      present: true,
+      kind: :object,
+      bytes: stats.bytes,
+      depth: stats.depth,
+      item_count: stats.item_count
+    }
+  end
 end

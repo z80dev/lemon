@@ -172,7 +172,10 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsExtendedTest do
 
       invocation = NodeStore.get_invocation(result["invokeId"])
       assert invocation.method == "browser.navigate"
-      assert invocation.args == %{"url" => "https://example.com"}
+      assert invocation.args_summary.kind == :object
+      assert invocation.args_summary.present == true
+      refute Map.has_key?(invocation, :args)
+      refute inspect(invocation) =~ "https://example.com"
     end
 
     test "rejects browser navigation to metadata endpoints before dispatch" do

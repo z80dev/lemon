@@ -180,7 +180,7 @@ defmodule LemonControlPlane.Methods.NodeInvokeResult do
 
     updated =
       invocation
-      |> Map.drop([:result, "result", :error, "error"])
+      |> Map.drop([:args, "args", :result, "result", :error, "error"])
       |> Map.merge(%{
         status: if(error, do: :error, else: :completed),
         result_summary: result_summary,

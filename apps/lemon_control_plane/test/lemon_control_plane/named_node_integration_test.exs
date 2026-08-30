@@ -4,6 +4,7 @@ defmodule LemonControlPlane.NamedNodeIntegrationTest do
   alias LemonControlPlane.Auth.TokenStore
 
   alias LemonControlPlane.Methods.{
+    BrowserRequest,
     ConnectChallenge,
     NodeInvoke,
     NodeInvokeResult,
@@ -78,6 +79,127 @@ defmodule LemonControlPlane.NamedNodeIntegrationTest do
 
     Process.exit(target_pid, :kill)
     Process.exit(other_pid, :kill)
+  end
+
+  test "awaited browser request returns its private result without durable raw payloads" do
+    parent = self()
+    node_pid = spawn_node(parent, :await_browser)
+    node_id = unique("await-browser")
+    node_name = "Await Browser #{System.unique_integer([:positive])}"
+
+    :ok =
+      NodeStore.put_node(node_id, %{
+        id: node_id,
+        name: node_name,
+        type: "browser",
+        capabilities: %{},
+        status: :online
+      })
+
+    :ok = LemonCore.NodeRegistry.register(node_id, node_name, node_pid)
+
+    on_exit(fn ->
+      LemonCore.NodeRegistry.unregister(node_id, node_pid)
+      Process.exit(node_pid, :kill)
+    end)
+
+    task =
+      Task.async(fn ->
+        BrowserRequest.handle(
+          %{
+            "nodeId" => node_id,
+            "method" => "navigate",
+            "args" => %{"url" => "https://private-result.example"},
+            "await" => true,
+            "timeoutMs" => 2_000
+          },
+          %{@operator_ctx | conn_pid: self()}
+        )
+      end)
+
+    assert_receive {:await_browser,
+                    {:node_event, "node.invoke.request", %{"invokeId" => invoke_id}}}
+
+    private_result = %{"content" => "private-browser-result", "ok" => true}
+
+    assert {:ok, %{"received" => true}} =
+             NodeInvokeResult.handle(
+               %{"invokeId" => invoke_id, "result" => private_result},
+               %{auth: %{role: :node, client_id: node_id}}
+             )
+
+    assert {:ok, response} = Task.await(task, 3_000)
+    assert response["status"] == "completed"
+    assert response["ok"] == true
+    assert response["result"] == private_result
+
+    invocation = NodeStore.get_invocation(invoke_id)
+    assert invocation.status == :completed
+    assert invocation.args_summary.kind == :object
+    assert invocation.result_summary.kind == :object
+
+    refute Map.has_key?(invocation, :args)
+    refute Map.has_key?(invocation, "args")
+    refute Map.has_key?(invocation, :result)
+    refute Map.has_key?(invocation, "result")
+    refute Map.has_key?(invocation, :error)
+    refute Map.has_key?(invocation, "error")
+    refute inspect(invocation) =~ "private-result.example"
+    refute inspect(invocation) =~ "private-browser-result"
+  end
+
+  test "awaited browser timeout cancels the live invocation and settles its summary" do
+    parent = self()
+    node_pid = spawn_node(parent, :timeout_browser)
+    node_id = unique("timeout-browser")
+    node_name = "Timeout Browser #{System.unique_integer([:positive])}"
+
+    :ok =
+      NodeStore.put_node(node_id, %{
+        id: node_id,
+        name: node_name,
+        type: "browser",
+        capabilities: %{},
+        status: :online
+      })
+
+    :ok = LemonCore.NodeRegistry.register(node_id, node_name, node_pid)
+
+    on_exit(fn ->
+      LemonCore.NodeRegistry.unregister(node_id, node_pid)
+      Process.exit(node_pid, :kill)
+    end)
+
+    task =
+      Task.async(fn ->
+        BrowserRequest.handle(
+          %{
+            "nodeId" => node_id,
+            "method" => "screenshot",
+            "await" => true,
+            "timeoutMs" => 100
+          },
+          %{@operator_ctx | conn_pid: self()}
+        )
+      end)
+
+    assert_receive {:timeout_browser,
+                    {:node_event, "node.invoke.request", %{"invokeId" => invoke_id}}}
+
+    assert_receive {:timeout_browser,
+                    {:node_event, "node.invoke.cancel", %{"invokeId" => ^invoke_id}}},
+                   1_000
+
+    assert {:ok, response} = Task.await(task, 1_000)
+    assert response["status"] == "error"
+    assert response["ok"] == false
+    assert response["error"] == ":timeout"
+
+    invocation = NodeStore.get_invocation(invoke_id)
+    assert invocation.status == :error
+    assert invocation.error_summary.kind == :string
+    refute Map.has_key?(invocation, :error)
+    refute Map.has_key?(invocation, :args)
   end
 
   test "live registry accepts a result before the durable invocation is visible" do
