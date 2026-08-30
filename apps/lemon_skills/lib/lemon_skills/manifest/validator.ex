@@ -35,6 +35,13 @@ defmodule LemonSkills.Manifest.Validator do
   """
   @spec validate(manifest()) :: {:ok, manifest()} | {:error, error()}
   def validate(manifest) when is_map(manifest) do
+    manifest =
+      manifest
+      |> normalize_platform_aliases()
+      |> normalize_hermes_requires_text()
+      |> normalize_hermes_prerequisites()
+      |> normalize_environment_declarations()
+
     with :ok <- validate_legacy_fields(manifest),
          :ok <- validate_v2_fields(manifest) do
       {:ok, apply_defaults(manifest)}
@@ -176,6 +183,73 @@ defmodule LemonSkills.Manifest.Validator do
     )
     |> Map.put_new("references", [])
   end
+
+  defp normalize_platform_aliases(%{"platforms" => platforms} = manifest)
+       when is_list(platforms) do
+    aliases = %{"macos" => "darwin", "windows" => "win32"}
+    Map.put(manifest, "platforms", Enum.map(platforms, &Map.get(aliases, &1, &1)))
+  end
+
+  defp normalize_platform_aliases(manifest), do: manifest
+
+  defp normalize_hermes_prerequisites(manifest) do
+    prerequisites =
+      case manifest do
+        %{"prerequisites" => value} when is_map(value) -> value
+        _ -> get_in(manifest, ["metadata", "hermes", "prerequisites"])
+      end
+
+    normalize_hermes_prerequisites(manifest, prerequisites)
+  end
+
+  defp normalize_hermes_prerequisites(manifest, prerequisites) when is_map(prerequisites) do
+    commands = ensure_list(prerequisites["commands"])
+    env_vars = ensure_list(prerequisites["env_vars"])
+
+    case Map.get(manifest, "requires", %{}) do
+      requires when is_map(requires) ->
+        requires =
+          requires
+          |> Map.put_new("bins", commands)
+          |> Map.put_new("config", env_vars)
+
+        manifest
+        |> Map.put("requires", requires)
+        |> Map.put_new("required_environment_variables", env_vars)
+
+      _invalid_requires ->
+        manifest
+    end
+  end
+
+  defp normalize_hermes_prerequisites(manifest, _), do: manifest
+
+  defp normalize_hermes_requires_text(%{"requires" => text} = manifest) when is_binary(text) do
+    if get_in(manifest, ["metadata", "hermes"]) do
+      manifest |> Map.delete("requires") |> Map.put("hermes_requires", text)
+    else
+      manifest
+    end
+  end
+
+  defp normalize_hermes_requires_text(manifest), do: manifest
+
+  defp normalize_environment_declarations(
+         %{"required_environment_variables" => declarations} = manifest
+       )
+       when is_list(declarations) do
+    normalized =
+      Enum.flat_map(declarations, fn
+        value when is_binary(value) -> [value]
+        %{"name" => name, "optional" => true} when is_binary(name) -> []
+        %{"name" => name} when is_binary(name) -> [name]
+        _ -> [:invalid]
+      end)
+
+    Map.put(manifest, "required_environment_variables", normalized)
+  end
+
+  defp normalize_environment_declarations(manifest), do: manifest
 
   # Promote legacy requires.config into required_environment_variables so
   # callers can always use the v2 field.

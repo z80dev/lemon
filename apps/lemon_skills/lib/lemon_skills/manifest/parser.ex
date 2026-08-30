@@ -6,10 +6,8 @@ defmodule LemonSkills.Manifest.Parser do
   map and the remaining body string. Does not validate field semantics — see
   `LemonSkills.Manifest.Validator` for that.
 
-  The parser is intentionally kept dependency-free: it uses a hand-rolled
-  subset parser that covers the YAML used in practice by skill files. For
-  correctness on exotic YAML syntax, add a proper library and replace this
-  module without changing callers.
+  YAML is parsed through `YamlElixir`, while TOML uses the small flat subset
+  historically supported by Lemon skill manifests.
   """
 
   @type parse_result :: {:ok, map(), String.t()} | :error
@@ -63,13 +61,23 @@ defmodule LemonSkills.Manifest.Parser do
       # Frontmatter with no body (ends with ---)
       String.match?(rest, ~r/\r?\n---\s*$/) ->
         raw = String.replace(rest, ~r/\r?\n---\s*$/, "")
-        {:ok, parse_yaml(raw), ""}
+
+        case parse_yaml(raw) do
+          {:ok, manifest} -> {:ok, manifest, ""}
+          :error -> :error
+        end
 
       # Normal: frontmatter then --- then body
       true ->
         case String.split(rest, ~r/\r?\n---\r?\n/, parts: 2) do
-          [raw, body] -> {:ok, parse_yaml(raw), String.trim(body)}
-          [_no_close] -> :error
+          [raw, body] ->
+            case parse_yaml(raw) do
+              {:ok, manifest} -> {:ok, manifest, String.trim(body)}
+              :error -> :error
+            end
+
+          [_no_close] ->
+            :error
         end
     end
   end
@@ -93,108 +101,15 @@ defmodule LemonSkills.Manifest.Parser do
   end
 
   # ---------------------------------------------------------------------------
-  # YAML subset parser
-  #
-  # Handles:
-  #   - key: value  (string values)
-  #   - key:        (nested map start)
-  #   - - item      (list item under a key)
-  #   - # comments
-  #
-  # Two-level nesting is sufficient for the skill manifest schema.
+  # YAML parser
   # ---------------------------------------------------------------------------
 
   defp parse_yaml(text) do
-    text
-    |> String.split(~r/\r?\n/)
-    |> parse_yaml_lines(%{}, [], 0)
-  end
-
-  defp parse_yaml_lines([], acc, _ctx, _prev_indent), do: acc
-
-  defp parse_yaml_lines([line | rest], acc, ctx, prev_indent) do
-    trimmed = String.trim(line)
-    indent = count_indent(line)
-
-    cond do
-      trimmed == "" or String.starts_with?(trimmed, "#") ->
-        parse_yaml_lines(rest, acc, ctx, prev_indent)
-
-      String.starts_with?(trimmed, "- ") ->
-        value = String.trim_leading(trimmed, "- ")
-        acc = add_list_item(acc, ctx, value)
-        parse_yaml_lines(rest, acc, ctx, indent)
-
-      String.contains?(line, ":") ->
-        [raw_key | rest_parts] = String.split(String.trim(line), ":", parts: 2)
-        key = String.trim(raw_key)
-        value = rest_parts |> List.first("") |> String.trim()
-        ctx = pop_context(ctx, indent)
-
-        if value == "" do
-          ctx = [{key, indent} | ctx]
-          parse_yaml_lines(rest, acc, ctx, indent)
-        else
-          acc = put_nested(acc, ctx, key, parse_yaml_scalar(value))
-          parse_yaml_lines(rest, acc, ctx, indent)
-        end
-
-      true ->
-        parse_yaml_lines(rest, acc, ctx, prev_indent)
+    case YamlElixir.read_from_string(text) do
+      {:ok, manifest} when is_map(manifest) -> {:ok, manifest}
+      _ -> :error
     end
   end
-
-  defp count_indent(line) do
-    line
-    |> String.graphemes()
-    |> Enum.take_while(&(&1 in [" ", "\t"]))
-    |> length()
-  end
-
-  defp pop_context([], _indent), do: []
-
-  defp pop_context([{_k, ci} | rest] = ctx, indent) do
-    if ci >= indent, do: pop_context(rest, indent), else: ctx
-  end
-
-  defp put_nested(acc, [], key, value), do: Map.put(acc, key, value)
-
-  defp put_nested(acc, ctx, key, value) do
-    path = ctx |> Enum.reverse() |> Enum.map(&elem(&1, 0))
-    put_in_path(acc, path, key, value)
-  end
-
-  defp put_in_path(acc, [], key, value), do: Map.put(acc, key, value)
-
-  defp put_in_path(acc, [h | t], key, value) do
-    nested = Map.get(acc, h, %{})
-    Map.put(acc, h, put_in_path(nested, t, key, value))
-  end
-
-  defp add_list_item(acc, [], _value), do: acc
-
-  defp add_list_item(acc, ctx, value) do
-    path = ctx |> Enum.reverse() |> Enum.map(&elem(&1, 0))
-    add_to_list_at_path(acc, path, value)
-  end
-
-  defp add_to_list_at_path(acc, [key], value) do
-    existing = acc |> Map.get(key, []) |> ensure_list()
-    Map.put(acc, key, existing ++ [value])
-  end
-
-  defp add_to_list_at_path(acc, [h | t], value) do
-    nested = Map.get(acc, h, %{})
-    Map.put(acc, h, add_to_list_at_path(nested, t, value))
-  end
-
-  defp ensure_list(v) when is_list(v), do: v
-  defp ensure_list(_), do: []
-
-  # Scalar coercion: booleans stay booleans, the rest become strings.
-  defp parse_yaml_scalar("true"), do: true
-  defp parse_yaml_scalar("false"), do: false
-  defp parse_yaml_scalar(v), do: v
 
   # ---------------------------------------------------------------------------
   # TOML subset parser (flat key = value only)

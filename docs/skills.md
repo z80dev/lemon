@@ -121,12 +121,27 @@ Install a skill from a git repository or local path.
 ```elixir
 {:ok, entry} = LemonSkills.install("https://github.com/user/skill-repo")
 {:ok, entry} = LemonSkills.install("/local/path/to/skill", global: false)
+{:ok, entry} = LemonSkills.install("hermes:optional/research/arxiv")
 ```
 
 **Options:**
 - `:cwd` - Project working directory for local installation
 - `:global` - Install globally (default: true)
 - `:approve` - Pre-approve installation (default: false)
+
+### Official Hermes catalog
+
+`LemonSkills.Sources.Hermes.catalog/1` discovers the official bundled and
+optional skills from the live `NousResearch/hermes-agent` repository. Catalog
+IDs route through the ordinary installer, static audit, and approval gate.
+
+```elixir
+{:ok, skills} = LemonSkills.Sources.Hermes.catalog(category: "research")
+{:ok, detailed} = LemonSkills.Sources.Hermes.catalog(query: "paper", details: true)
+```
+
+Use `mix lemon.skill hermes [query]` in a source checkout, or `/skills` in the
+terminal client for the category browser and multi-select importer.
 
 ### update/2
 

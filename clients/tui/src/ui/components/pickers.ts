@@ -106,6 +106,11 @@ export class PickerOverlay implements Component, MouseRoutable {
 		return (this.#list.getSelectedItem() as PickerItem | null) ?? undefined;
 	}
 
+	setSelectedIndex(index: number): void {
+		this.#list.setSelectedIndex(index);
+		this.#invalidateCache();
+	}
+
 	setFilter(filter: string): void {
 		if (filter === this.#filter) return;
 		this.#filter = filter;

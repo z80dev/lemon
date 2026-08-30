@@ -68,6 +68,27 @@ describe("AppShell", () => {
 		expect(server.requestsFor("chat.send")).toHaveLength(0);
 	});
 
+	test("multi-picker toggles choices with Space and confirms with Enter", async () => {
+		const { app, terminal } = await bootApp();
+		const confirmed: string[][] = [];
+		app.host.openMultiPicker({
+			title: "Choose skills",
+			items: [
+				{ value: "arxiv", label: "arxiv" },
+				{ value: "notes", label: "notes" },
+			],
+			onConfirm: (items) => {
+				confirmed.push(items.map((item) => item.value));
+			},
+		});
+
+		terminal.sendInput(" ");
+		terminal.sendInput("\r");
+		await Bun.sleep(10);
+
+		expect(confirmed).toEqual([["arxiv"]]);
+	});
+
 	test("streams deltas into one block and finalizes on completed", async () => {
 		const { app, server } = await bootApp();
 		await app.submit("hi");

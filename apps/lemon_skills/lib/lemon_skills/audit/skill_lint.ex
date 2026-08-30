@@ -194,9 +194,9 @@ defmodule LemonSkills.Audit.SkillLint do
 
   # Extract the file path from a reference entry.
   #
-  # The hand-rolled YAML parser returns list items like `- path: extra.md` as
-  # plain strings `"path: extra.md"` rather than maps.  This function handles
-  # all three forms:
+  # Older lockfiles created by Lemon's former subset parser may retain list
+  # items like `- path: extra.md` as plain strings. This function handles all
+  # three forms:
   #   - Map:    %{"path" => "extra.md"}
   #   - String: "path: extra.md"  (parsed from `- path: val` list item)
   #   - String: "extra.md"        (bare path)

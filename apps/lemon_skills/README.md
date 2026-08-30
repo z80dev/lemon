@@ -70,7 +70,7 @@ LemonSkills does not execute skills directly. Instead, it serves as a **content 
 2. **Retrieval** -- Agents and tools query the registry for skills by key or by relevance to a context string. The `find_relevant/2` function scores skills using keyword matching across name, description, keywords, and body content.
 3. **Content delivery** -- The `Entry.content/1` function reads the raw `SKILL.md` content, which is then injected into agent system prompts or returned via the `read_skill` tool.
 4. **Status gating** -- Before a skill is used, `Status.check/2` verifies that required binaries and environment variables are present.
-5. **Installation** -- New skills can be installed from Git repositories or local paths, with approval gating via `LemonCore.ExecApprovals`.
+5. **Installation** -- New skills can be installed from Git repositories, local paths, or the live official Hermes catalog, with approval gating via `LemonCore.ExecApprovals`.
 6. **Audit** -- All non-builtin installs and updates run through deterministic audit checks plus an optional LLM reviewer. `:block` verdicts fail the operation, and `:warn` verdicts require explicit approval before the skill is kept.
 
 ### Application Startup
@@ -89,7 +89,7 @@ The OTP application (`LemonSkills.Application`) performs two actions on start:
 | `LemonSkills.Application` | `lib/lemon_skills/application.ex` | OTP application; seeds builtins, starts Registry |
 | `LemonSkills.Registry` | `lib/lemon_skills/registry.ex` | GenServer for in-memory skill cache; list, get, find_relevant, discover, search, counts, register, unregister |
 | `LemonSkills.Entry` | `lib/lemon_skills/entry.ex` | Skill entry struct with metadata, content access, and factory functions |
-| `LemonSkills.Manifest` | `lib/lemon_skills/manifest.ex` | Hand-rolled YAML/TOML frontmatter parser for SKILL.md files |
+| `LemonSkills.Manifest` | `lib/lemon_skills/manifest.ex` | YAML/TOML frontmatter parsing and normalized manifest access |
 | `LemonSkills.Status` | `lib/lemon_skills/status.ex` | Status checking: binary availability, config presence, disabled state |
 | `LemonSkills.Installer` | `lib/lemon_skills/installer.ex` | Install/update/uninstall with approval gating via LemonCore.ExecApprovals |
 | `LemonSkills.Audit.Engine` | `lib/lemon_skills/audit/engine.ex` | Static security audit and verdict aggregation |
@@ -116,6 +116,7 @@ The OTP application (`LemonSkills.Application`) performs two actions on start:
 | `LemonSkills.McpSource` | `lib/lemon_skills/mcp_source.ex` | MCP servers as a runtime tool source (stdio, HTTP, SSE) |
 | `LemonSkills.Source` | `lib/lemon_skills/source.ex` | Behaviour every skill source implements; `Sources.*` are its implementations |
 | `LemonSkills.SourceRouter` | `lib/lemon_skills/source_router.ex` | Resolves a URL or path to the source module that handles it |
+| `LemonSkills.Sources.Hermes` | `lib/lemon_skills/sources/hermes.ex` | Live official Nous Hermes catalog and sparse skill import source |
 | `LemonSkills.TrustPolicy` | `lib/lemon_skills/trust_policy.ex` | Which trust levels require an audit and which auto-approve |
 | `LemonSkills.Audit.BundleAudit` | `lib/lemon_skills/audit/bundle_audit.ex` | Whole-bundle audit with a fingerprinted verdict cache |
 | `LemonSkills.Curator` | `lib/lemon_skills/curator.ex` | Usage-driven curation pass over installed skills |
@@ -199,7 +200,27 @@ Instructions here.
 | `requires.bins` | list | Required binaries, checked via `System.find_executable/1` |
 | `requires.config` | list | Required environment variables, checked via `System.get_env/1` |
 
-The manifest parser is hand-rolled and handles basic YAML/TOML structures. It does not support YAML anchors, references, multi-line strings, or other advanced features.
+YAML frontmatter is parsed with `YamlElixir`; TOML frontmatter supports Lemon's flat scalar/list subset. Hermes platform aliases (`macos`, `windows`) and `prerequisites.commands` / `prerequisites.env_vars` are normalized to Lemon's platform and requirement fields.
+
+## Importing official Hermes skills
+
+The official Nous Research catalog is looked up dynamically from the current
+`NousResearch/hermes-agent` GitHub tree, so newly added official skills appear
+without a Lemon release. Browse it from a source checkout:
+
+```bash
+mix lemon.skill hermes
+mix lemon.skill hermes research --details
+mix lemon.skill hermes --collection=optional --category=research --details
+mix lemon.skill install hermes:optional/research/arxiv
+```
+
+In `lemon-tui`, run `/skills` to choose a category, filter skills, toggle any
+number with Space, and confirm the batch with Enter. `/skills <query>` opens a
+filtered skill list directly. Already installed skills are marked and cannot be
+selected. Imports retain Lemon's official-source audit and approval flow;
+deselecting a row only removes it from the pending batch and never uninstalls an
+existing skill.
 
 ## How Skills Are Registered
 

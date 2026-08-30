@@ -2,7 +2,7 @@ defmodule LemonSkills.SourceRouterTest do
   use ExUnit.Case, async: true
 
   alias LemonSkills.SourceRouter
-  alias LemonSkills.Sources.{Builtin, Git, Github, Local, Registry}
+  alias LemonSkills.Sources.{Builtin, Git, Github, Hermes, Local, Registry}
 
   describe "resolve/1 — builtin" do
     test "routes 'builtin' to Builtin with nil id" do
@@ -39,6 +39,17 @@ defmodule LemonSkills.SourceRouterTest do
   describe "resolve/1 — GitHub shorthand" do
     test "routes gh: prefix to Github" do
       assert {:ok, Github, "acme/k8s-skill"} = SourceRouter.resolve("gh:acme/k8s-skill")
+    end
+  end
+
+  describe "resolve/1 — Hermes catalog" do
+    test "routes a canonical official Hermes skill id" do
+      assert {:ok, Hermes, "hermes:optional/research/arxiv"} =
+               SourceRouter.resolve("hermes:optional/research/arxiv")
+    end
+
+    test "rejects traversal in Hermes ids" do
+      assert {:error, _} = SourceRouter.resolve("hermes:optional/../secrets")
     end
   end
 
@@ -106,6 +117,10 @@ defmodule LemonSkills.SourceRouterTest do
 
     test "Github → :git" do
       assert SourceRouter.source_kind(Github) == :git
+    end
+
+    test "Hermes → :git" do
+      assert SourceRouter.source_kind(Hermes) == :git
     end
 
     test "Registry → :registry" do

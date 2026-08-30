@@ -45,6 +45,59 @@ defmodule LemonSkills.ManifestTest do
       assert Manifest.required_config(manifest) == ["KUBECONFIG"]
     end
 
+    test "parses Hermes flow lists, quoted values, and nested object lists" do
+      content = """
+      ---
+      name: google-workspace
+      description: "Gmail, Calendar, and Drive."
+      platforms: [linux, macos, windows]
+      prerequisites:
+        env_vars: [GOOGLE_TOKEN]
+        commands: [curl, jq]
+      required_credential_files:
+        - path: google_token.json
+          description: OAuth token
+      ---
+
+      body
+      """
+
+      assert {:ok, manifest, "body"} = Manifest.parse_and_validate(content)
+      assert manifest["description"] == "Gmail, Calendar, and Drive."
+      assert manifest["platforms"] == ["linux", "darwin", "win32"]
+      assert Manifest.required_bins(manifest) == ["curl", "jq"]
+      assert Manifest.required_environment_variables(manifest) == ["GOOGLE_TOKEN"]
+
+      assert get_in(manifest, ["required_credential_files", Access.at(0), "path"]) ==
+               "google_token.json"
+    end
+
+    test "normalizes structured Hermes environment declarations and free-text requirements" do
+      content = """
+      ---
+      name: external-tool
+      requires: A separately running desktop service
+      metadata:
+        hermes:
+          tags: [desktop]
+          prerequisites:
+            commands: [curl]
+      required_environment_variables:
+        - name: REQUIRED_TOKEN
+          prompt: Token
+        - name: OPTIONAL_TOKEN
+          optional: true
+      ---
+
+      body
+      """
+
+      assert {:ok, manifest, _body} = Manifest.parse_and_validate(content)
+      assert manifest["hermes_requires"] == "A separately running desktop service"
+      assert Manifest.required_bins(manifest) == ["curl"]
+      assert Manifest.required_environment_variables(manifest) == ["REQUIRED_TOKEN"]
+    end
+
     test "parses content without frontmatter" do
       content = """
       # Just Markdown

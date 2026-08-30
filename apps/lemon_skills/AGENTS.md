@@ -116,16 +116,17 @@ Pattern to follow -- see `lib/lemon_skills/tools/read_skill.ex` for the simplest
 
 ## Important Implementation Details
 
-### Manifest Parser Limitations
+### Manifest Parsing and External Catalogs
 
-The YAML/TOML parser in `manifest.ex` is hand-rolled. It handles:
-- Basic `key: value` pairs
-- Nested maps (up to 2 levels via indent tracking)
-- List items (`- value`)
-- Comments (`#`)
-- CRLF and LF line endings
+YAML frontmatter is parsed with `YamlElixir`; TOML retains Lemon's flat subset
+parser. All manifest keys remain strings. The validator normalizes Hermes'
+`macos`/`windows` platform aliases and `prerequisites` command/environment
+fields into Lemon's canonical schema.
 
-It does NOT handle: YAML anchors/references, multi-line strings, flow sequences/mappings, complex nesting beyond 2 levels. All manifest keys are strings (not atoms).
+`LemonSkills.Sources.Hermes` owns dynamic lookup and sparse import of official
+Nous Research skills. Keep `hermes:` identifiers routed through `Installer` so
+official-source audit and approval remain mandatory; do not copy these bundles
+directly into the registry.
 
 ### Registry State
 

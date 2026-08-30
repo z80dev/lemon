@@ -80,7 +80,7 @@ references:
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `platforms` | list of strings | `["any"]` | Platforms where this skill is applicable. Allowed values: `linux`, `darwin`, `win32`, `any`. Skills are hidden (not `not-ready`) on non-matching platforms. |
+| `platforms` | list of strings | `["any"]` | Platforms where this skill is applicable. Canonical values: `linux`, `darwin`, `win32`, `any`; imported `macos` and `windows` aliases normalize to `darwin` and `win32`. Skills are hidden (not `not-ready`) on non-matching platforms. |
 | `metadata.lemon.category` | string | — | Registry category path, e.g. `devops` or `languages/elixir`. |
 | `requires_tools` | list of strings | `[]` | Semantic tool names required by this skill. Checked against installed tools at activation time. |
 | `fallback_for_tools` | list of strings | `[]` | Tools this skill provides fallback guidance for when the tool is unavailable. |
@@ -129,12 +129,18 @@ references:
 
 ## Validation rules
 
-1. `platforms` values must be one of `linux`, `darwin`, `win32`, `any`. Unknown values are rejected.
+1. `platforms` values must be one of `linux`, `darwin`, `win32`, `any`; `macos` and `windows` are accepted as compatibility aliases. Unknown values are rejected.
 2. `requires_tools`, `fallback_for_tools`, `required_environment_variables` must be lists when present.
 3. `verification` must be a map when present.
 4. `references` entries must be strings or maps with at least a `path` or `url` key.
 5. Legacy `requires.bins` and `requires.config` remain valid and are not deprecated.
 6. `required_environment_variables` and `requires.config` may coexist; both are checked.
+
+For Hermes compatibility, `prerequisites.commands` is normalized to
+`requires.bins` and `prerequisites.env_vars` to both `requires.config` and
+`required_environment_variables` when the corresponding Lemon field is absent.
+Hermes' structured environment declarations are reduced to their `name` values;
+entries explicitly marked `optional: true` do not block Lemon readiness.
 
 ---
 

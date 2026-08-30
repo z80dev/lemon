@@ -62,6 +62,8 @@ export const METHOD = {
 	logsTail: "logs.tail",
 	configGet: "config.get",
 	configSet: "config.set",
+	skillsHermesCatalog: "skills.hermes.catalog",
+	skillsInstall: "skills.install",
 } as const;
 
 export type MethodName = (typeof METHOD)[keyof typeof METHOD];
@@ -239,5 +241,21 @@ export class ControlPlaneMethods {
 
 	configSet(params: ConfigSetParams, options?: RequestOptions): Promise<unknown> {
 		return this.#call(METHOD.configSet, params, options);
+	}
+
+	// -- skills -------------------------------------------------------------
+
+	skillsHermesCatalog(
+		params?: Record<string, unknown>,
+		options?: RequestOptions,
+	): Promise<Record<string, unknown>> {
+		return this.#call<Record<string, unknown>>(METHOD.skillsHermesCatalog, params, options);
+	}
+
+	skillsInstall(
+		params: { skillKey: string; cwd?: string },
+		options?: RequestOptions,
+	): Promise<Record<string, unknown>> {
+		return this.#call<Record<string, unknown>>(METHOD.skillsInstall, params, options);
 	}
 }

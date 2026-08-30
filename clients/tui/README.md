@@ -24,9 +24,12 @@ terminal launches it, auto-starting the daemon first. See `docs/install.md`.
   replies keep their partial text.
 - Multi-session: Ctrl+X switcher (live + recent, fuzzy filter, new-with-
   prompt, close), per-session drafts, unread badges, history hydration.
-- Ctrl+O model picker (two-stage, draft-preserving), 26 slash commands with
+- Ctrl+O model picker (two-stage, draft-preserving), 27 slash commands with
   autocomplete, `!cmd` shell escape, `{!cmd}` inline interpolation,
   Ctrl+G `$EDITOR` handoff.
+- `/skills` live official Hermes catalog browser: category drill-down, fuzzy
+  filtering, descriptions, installed markers, and Space-toggle multi-select
+  import through Lemon's normal audit/approval flow.
 - Progressive-disclosure status bar (model + context gauge pinned), git
   branch, connection state, session counters.
 - Dark/light themes with OSC 11 terminal-background auto-detection; mouse

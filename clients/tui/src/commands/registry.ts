@@ -37,6 +37,16 @@ export interface PickerSpec {
 	onCancel?: () => void;
 }
 
+export interface MultiPickerSpec {
+	title: string;
+	items: PickerChoice[];
+	selectedValues?: string[];
+	disabledValues?: string[];
+	footer?: string;
+	onConfirm: (choices: PickerChoice[]) => void | Promise<void>;
+	onCancel?: () => void;
+}
+
 /**
  * The UI surface commands are allowed to touch.
  *
@@ -60,6 +70,8 @@ export interface CommandHost {
 	setDraft(text: string): void;
 	/** Open a single-stage picker overlay. Draft-preserving. */
 	openPicker(spec: PickerSpec): void;
+	/** Open a filterable checkbox picker. Space toggles; enter confirms. */
+	openMultiPicker(spec: MultiPickerSpec): void;
 	/** Close whatever overlay is open. */
 	closeOverlay(): void;
 	/** Recent protocol frames, newest last (for `/debug`). */

@@ -69,6 +69,7 @@ defmodule LemonSkills.MixProject do
       {:lemon_agent, in_umbrella: true},
       {:lemon_ai, in_umbrella: true},
       {:jason, "~> 1.4"},
+      {:yaml_elixir, "~> 2.9"},
       {:phoenix_pubsub, "~> 2.1"},
       {:req, "~> 0.5"},
       # API documentation
