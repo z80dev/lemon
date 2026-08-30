@@ -45,7 +45,7 @@ defmodule LemonCore.ProfileStoreTest do
 
     export_path = Path.join(root, "research-profile.json")
     assert {:ok, %{"fileCount" => count}} = ProfileStore.export("research-bot", export_path, opts)
-    assert count >= 2
+    assert count >= 1
     assert {:error, :destination_exists} = ProfileStore.export("research-bot", export_path, opts)
 
     assert %{"format" => "lemon-profile", "profile" => %{"id" => "research-bot"}} =
@@ -64,6 +64,51 @@ defmodule LemonCore.ProfileStoreTest do
     assert final_config =~ "# user comment must survive lifecycle edits"
     assert final_config =~ ~s([custom]\nunknown = "keep-me")
     refute final_config =~ "[profiles.research-bot]"
+  end
+
+  @tag :tmp_dir
+  test "export is selected-file and credential-safe by default", %{tmp_dir: root} do
+    opts = opts(root)
+
+    assert {:ok, profile} =
+             ProfileStore.create(
+               %{id: "portable", system_prompt: "authorization = Bearer raw-profile-token"},
+               opts
+             )
+
+    File.write!(
+      profile["paths"]["config"],
+      "api_key = \"sk-profile-config-secret-123456\"\nmode = \"safe\"\n"
+    )
+
+    File.write!(Path.join(profile["paths"]["workspace"], "SOUL.md"), "Bearer soul-token-123")
+    File.write!(Path.join(profile["paths"]["memory"], "MEMORY.md"), "memory-token-leak")
+    File.write!(Path.join(profile["paths"]["sessions"], "run.json"), "session-token-leak")
+    File.write!(Path.join(profile["paths"]["skills"], "private_token.txt"), "skill-token-leak")
+
+    destination = Path.join(root, "portable.json")
+
+    assert {:ok, %{"omittedCount" => omitted, "redactionCount" => redactions}} =
+             ProfileStore.export("portable", destination, opts)
+
+    assert omitted >= 3
+    assert redactions >= 3
+
+    exported = File.read!(destination)
+    refute exported =~ "sk-profile-config-secret-123456"
+    refute exported =~ "raw-profile-token"
+    refute exported =~ "soul-token-123"
+    refute exported =~ "memory-token-leak"
+    refute exported =~ "session-token-leak"
+    refute exported =~ "skill-token-leak"
+
+    decoded = Jason.decode!(exported)
+    assert decoded["exportPolicy"]["includesSessions"] == false
+    assert decoded["exportPolicy"]["includesMemory"] == false
+    assert decoded["exportPolicy"]["includesSecrets"] == false
+    assert decoded["exportPolicy"]["omissionCounts"]["private_boundary"] >= 2
+    assert decoded["files"]["config.toml"]["redacted"]
+    assert decoded["files"]["workspace/SOUL.md"]["redacted"]
   end
 
   @tag :tmp_dir

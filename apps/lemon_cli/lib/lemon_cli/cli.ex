@@ -19,6 +19,7 @@ defmodule LemonCli.CLI do
       config [validate|show] [--verbose] [--project-dir PATH]
       secrets <status|init|set|list|delete|check|import-env>
       channels [--project-dir PATH] [--json]
+      profile <list|show|create|clone|rename|export|delete|roster|chat>
 
   `model` delegates to provider onboarding; `gateway setup` delegates to the
   gateway setup adapters.
@@ -45,7 +46,7 @@ defmodule LemonCli.CLI do
     defexception [:message, exit_code: 1]
   end
 
-  @commands ~w(setup model gateway doctor config secrets channels)
+  @commands ~w(setup model gateway doctor config secrets channels profile)
 
   @exit_ok 0
   @exit_error 1
@@ -146,6 +147,7 @@ defmodule LemonCli.CLI do
   defp run_command("config", args), do: run_config(args)
   defp run_command("secrets", args), do: run_secrets(args)
   defp run_command("channels", args), do: run_channels(args)
+  defp run_command("profile", args), do: LemonCli.ProfileCommand.run(args)
 
   # ──────────────────────────────────────────────────────────────────────────
   # setup / model / gateway
@@ -925,6 +927,7 @@ defmodule LemonCli.CLI do
       config [validate|show]                    Validate or show configuration
       secrets <status|init|set|list|delete|check|import-env>
       channels [--project-dir PATH] [--json]    Channel launch readiness
+      profile <subcommand> [options]             Manage isolated agent profiles
 
     Run `lemon <command> --help` for command options.
     """)
@@ -988,6 +991,27 @@ defmodule LemonCli.CLI do
     Options:
       --project-dir PATH  Project root to scan (defaults to the cwd)
       --json              Emit the raw redacted readiness JSON
+    """)
+  end
+
+  defp print_command_usage("profile") do
+    IO.puts("""
+    Usage: lemon profile <command> [options]
+
+    Commands:
+      list [--json]
+      show <id> [--json]
+      create <id> [--name NAME] [--model MODEL] [--node NODE]
+      clone <source> <new-id> [--name NAME]
+      rename <id> <name>
+      export <id> <path> [--force]
+      delete <id> --confirm <id>
+      roster [--json]
+      chat <id> <message> [--model MODEL] [--queue-mode MODE] [--json]
+
+    Lifecycle commands write the canonical global [profiles.<id>] record and
+    keep each profile under ~/.lemon/profiles/<id>. Exports are credential-safe
+    selected-file snapshots and never include sessions or memory.
     """)
   end
 

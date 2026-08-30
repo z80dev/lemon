@@ -37,6 +37,12 @@ defmodule LemonCore.ProfileStore do
   @max_export_files 256
   @max_export_file_bytes 1_048_576
   @max_export_total_bytes 8_388_608
+  @export_workspace_files ~w(AGENTS.md IDENTITY.md README.md SOUL.md USER.md)
+  @export_text_extensions ~w(.ex .exs .js .json .md .py .sh .toml .ts .txt .yaml .yml)
+  @sensitive_terms ~w(
+    access_key api_key apikey authorization bearer bot_token cookie credential
+    master_key oauth password private_key secret session_token token wallet_key
+  )
 
   @type profile :: map()
 
@@ -165,7 +171,24 @@ defmodule LemonCore.ProfileStore do
     with id when is_binary(id) <- profile["id"],
          :ok <- validate_id(id),
          {:ok, prompt} <- bounded_string(prompt, :prompt, @max_prompt_bytes) do
-      meta = Map.merge(%{profile_id: id}, Keyword.get(opts, :meta, %{}))
+      node = profile["node"] || "local"
+
+      base_meta =
+        if node == "local" do
+          %{profile_id: id}
+        else
+          %{profile_id: id, node: node}
+        end
+
+      meta = Map.merge(base_meta, Keyword.get(opts, :meta, %{}))
+
+      cwd =
+        case Keyword.fetch(opts, :cwd) do
+          {:ok, cwd} when is_binary(cwd) and cwd != "" -> cwd
+          :error when node == "local" -> profile["paths"]["workspace"]
+          _ when node == "local" -> profile["paths"]["workspace"]
+          _ -> nil
+        end
 
       {:ok,
        RunRequest.new(%{
@@ -174,8 +197,8 @@ defmodule LemonCore.ProfileStore do
          agent_id: id,
          prompt: prompt,
          queue_mode: Keyword.get(opts, :queue_mode, :collect),
-         model: Keyword.get(opts, :model, profile["model"]),
-         cwd: Keyword.get(opts, :cwd, profile["paths"]["workspace"]),
+         model: Keyword.get(opts, :model) || profile["model"],
+         cwd: cwd,
          meta: meta
        })}
     else
@@ -184,18 +207,35 @@ defmodule LemonCore.ProfileStore do
     end
   end
 
-  @doc "Export a portable, bounded JSON snapshot of a profile and its regular files."
+  @doc """
+  Export a portable, bounded, credential-safe JSON snapshot.
+
+  Exports are selected-file by default: sessions, memory, artifacts, manifests,
+  binary files, and secret-like paths are omitted. Profile-local config,
+  bootstrap markdown, and skill text are included only after assignment and
+  inline credential redaction. The result reports omission and redaction counts.
+  """
   @spec export(String.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def export(id, destination, opts \\ []) do
     with {:ok, profile} <- get(id, opts),
-         {:ok, files} <- collect_export_files(profile["paths"]["home"]),
+         {:ok, files, report} <- collect_export_files(profile["paths"]["home"]),
          :ok <- ensure_export_destination(destination, opts) do
+      {portable_profile, profile_redactions} = portable_profile(profile)
+      report = Map.update!(report, "redactionCount", &(&1 + profile_redactions))
+
       payload = %{
         "format" => "lemon-profile",
         "version" => @version,
         "exportedAt" => now_ms(),
-        "profile" => Map.drop(profile, ["paths"]),
-        "files" => files
+        "profile" => portable_profile,
+        "files" => files,
+        "exportPolicy" =>
+          Map.merge(report, %{
+            "mode" => "credential-safe-selected-files",
+            "includesSessions" => false,
+            "includesMemory" => false,
+            "includesSecrets" => false
+          })
       }
 
       encoded = Jason.encode_to_iodata!(payload, pretty: true)
@@ -206,6 +246,8 @@ defmodule LemonCore.ProfileStore do
            "path" => Path.expand(destination),
            "profileId" => id,
            "fileCount" => map_size(files),
+           "omittedCount" => report["omittedCount"],
+           "redactionCount" => report["redactionCount"],
            "bytes" => IO.iodata_length(encoded)
          }}
       end
@@ -399,47 +441,54 @@ defmodule LemonCore.ProfileStore do
   end
 
   defp collect_export_files(home) do
-    case collect_files(home, home, %{}, 0) do
-      {:ok, files, _bytes} -> {:ok, files}
-      {:error, _} = error -> error
+    initial = %{
+      files: %{},
+      bytes: 0,
+      omitted_count: 0,
+      omission_counts: %{},
+      redaction_count: 0
+    }
+
+    case collect_files(home, home, initial) do
+      {:ok, state} ->
+        {:ok, state.files,
+         %{
+           "omittedCount" => state.omitted_count,
+           "omissionCounts" => state.omission_counts,
+           "redactionCount" => state.redaction_count
+         }}
+
+      {:error, _} = error ->
+        error
     end
   end
 
-  defp collect_files(root, current, files, total_bytes) do
+  defp collect_files(root, current, state) do
     with {:ok, names} <- File.ls(current) do
-      Enum.reduce_while(Enum.sort(names), {:ok, files, total_bytes}, fn name, {:ok, acc, bytes} ->
+      Enum.reduce_while(Enum.sort(names), {:ok, state}, fn name, {:ok, acc} ->
         path = Path.join(current, name)
         relative = relative_to(path, root)
 
         case File.lstat(path) do
           {:ok, %File.Stat{type: :directory}} ->
-            case collect_files(root, path, acc, bytes) do
-              {:ok, _, _} = ok -> {:cont, ok}
-              {:error, _} = error -> {:halt, error}
+            if private_export_boundary?(relative) do
+              {:cont, {:ok, omit_export(acc, "private_boundary")}}
+            else
+              case collect_files(root, path, acc) do
+                {:ok, _} = ok -> {:cont, ok}
+                {:error, _} = error -> {:halt, error}
+              end
             end
 
           {:ok, %File.Stat{type: :regular, size: size}}
-          when size <= @max_export_file_bytes and map_size(acc) < @max_export_files and
-                 bytes + size <= @max_export_total_bytes ->
-            case File.read(path) do
-              {:ok, content} ->
-                entry = %{
-                  "encoding" => "base64",
-                  "data" => Base.encode64(content),
-                  "bytes" => size
-                }
-
-                {:cont, {:ok, Map.put(acc, relative, entry), bytes + size}}
-
-              {:error, reason} ->
-                {:halt, {:error, {:export_read_failed, relative, reason}}}
-            end
+          when size > @max_export_file_bytes ->
+            {:cont, {:ok, omit_export(acc, "file_too_large")}}
 
           {:ok, %File.Stat{type: :regular}} ->
-            {:halt, {:error, {:export_limit_exceeded, relative}}}
+            collect_export_file(path, relative, acc)
 
           {:ok, _other} ->
-            {:halt, {:error, {:unsafe_profile_entry, relative}}}
+            {:cont, {:ok, omit_export(acc, "unsafe_file_type")}}
 
           {:error, reason} ->
             {:halt, {:error, {:export_stat_failed, relative, reason}}}
@@ -447,6 +496,120 @@ defmodule LemonCore.ProfileStore do
       end)
     end
   end
+
+  defp collect_export_file(path, relative, state) do
+    cond do
+      secret_like_path?(relative) ->
+        {:cont, {:ok, omit_export(state, "secret_like_path")}}
+
+      not selected_export_path?(relative) ->
+        {:cont, {:ok, omit_export(state, "not_selected")}}
+
+      map_size(state.files) >= @max_export_files ->
+        {:halt, {:error, {:export_limit_exceeded, :file_count}}}
+
+      true ->
+        case File.read(path) do
+          {:ok, content} when is_binary(content) ->
+            if String.valid?(content) do
+              {redacted, redactions} = redact_export_text(content)
+              bytes = byte_size(redacted)
+
+              if state.bytes + bytes <= @max_export_total_bytes do
+                entry = %{
+                  "encoding" => "base64",
+                  "data" => Base.encode64(redacted),
+                  "bytes" => bytes,
+                  "redacted" => redactions > 0
+                }
+
+                next = %{
+                  state
+                  | files: Map.put(state.files, relative, entry),
+                    bytes: state.bytes + bytes,
+                    redaction_count: state.redaction_count + redactions
+                }
+
+                {:cont, {:ok, next}}
+              else
+                {:halt, {:error, {:export_limit_exceeded, :total_bytes}}}
+              end
+            else
+              {:cont, {:ok, omit_export(state, "binary_content")}}
+            end
+
+          {:error, reason} ->
+            {:halt, {:error, {:export_read_failed, relative, reason}}}
+        end
+    end
+  end
+
+  defp private_export_boundary?(relative) do
+    relative in ["sessions", "workspace/memory", "workspace/artifacts"] or
+      String.starts_with?(relative, "sessions/") or
+      String.starts_with?(relative, "workspace/memory/") or
+      String.starts_with?(relative, "workspace/artifacts/")
+  end
+
+  defp selected_export_path?("config.toml"), do: true
+
+  defp selected_export_path?("workspace/" <> rest = relative) do
+    rest in @export_workspace_files or
+      (String.starts_with?(relative, "workspace/.lemon/skill/") and
+         Path.extname(relative) in @export_text_extensions)
+  end
+
+  defp selected_export_path?(_), do: false
+
+  defp secret_like_path?(relative) do
+    downcased = String.downcase(relative)
+    basename = Path.basename(downcased)
+
+    basename in [".env", ".env.local", "id_rsa", "id_ed25519"] or
+      Enum.any?(@sensitive_terms, &String.contains?(downcased, &1))
+  end
+
+  defp omit_export(state, reason) do
+    %{
+      state
+      | omitted_count: state.omitted_count + 1,
+        omission_counts: Map.update(state.omission_counts, reason, 1, &(&1 + 1))
+    }
+  end
+
+  defp portable_profile(profile) do
+    profile = Map.drop(profile, ["paths", "managedKeys"])
+
+    Enum.reduce(["name", "description", "systemPrompt"], {profile, 0}, fn key, {acc, count} ->
+      case acc[key] do
+        value when is_binary(value) ->
+          {redacted, redactions} = redact_export_text(value)
+          {Map.put(acc, key, redacted), count + redactions}
+
+        _ ->
+          {acc, count}
+      end
+    end)
+  end
+
+  defp redact_export_text(text) do
+    patterns = [
+      {~r/^(\s*[^#\n=\[]*?(?:#{sensitive_pattern()})[^=\n]*=\s*).+$/imu, "\\1\"[redacted]\""},
+      {~r/sk-[A-Za-z0-9_-]{8,}/, "[redacted]"},
+      {~r/(?i)bearer\s+[A-Za-z0-9._~-]+/, "Bearer [redacted]"},
+      {~r/(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{8,}/i, "[redacted]"},
+      {~r/xox[a-z]-[A-Za-z0-9-]{8,}/i, "[redacted]"},
+      {~r/AKIA[A-Z0-9]{16}/, "[redacted]"},
+      {~r/0x[a-fA-F0-9]{64}/, "[redacted]"}
+    ]
+
+    Enum.reduce(patterns, {text, 0}, fn {regex, replacement}, {content, count} ->
+      matches = length(Regex.scan(regex, content))
+      {Regex.replace(regex, content, replacement), count + matches}
+    end)
+  end
+
+  defp sensitive_pattern, do: Enum.map_join(@sensitive_terms, "|", &Regex.escape/1)
 
   defp move_home_to_trash(profile, opts) do
     home = profile["paths"]["home"]
