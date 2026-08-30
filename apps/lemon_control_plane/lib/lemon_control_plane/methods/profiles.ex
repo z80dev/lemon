@@ -308,7 +308,6 @@ defmodule LemonControlPlane.Methods.ProfileChat do
          {:ok, request} <-
            LemonCore.ProfileStore.chat_request(profile, params["prompt"],
              model: params["model"],
-             cwd: params["cwd"],
              queue_mode: ProfilesSupport.queue_mode(params["queueMode"]),
              meta: %{control_plane: true}
            ),

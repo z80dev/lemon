@@ -93,6 +93,7 @@ defmodule LemonCli.ProfileCommandTest do
     assert request.session_key == "agent:research:main"
     assert request.prompt == "hello profile"
     assert request.meta.profile_id == "research"
+    assert request.meta.node == "local"
     assert request.cwd == Path.join([root, "state", "profiles", "research", "workspace"])
 
     exported = Path.join(root, "research.json")
