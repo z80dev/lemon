@@ -339,7 +339,7 @@ export class ControlPlaneClient {
 			role: this.#role,
 			client: { id: this.#clientId },
 		};
-		if (this.#token) params.token = this.#token;
+		if (this.#token) params.auth = { token: this.#token };
 		const frame = makeReq("connect", params);
 		this.#handshakeId = frame.id;
 		if (!this.#socket.send(encodeFrame(frame))) {

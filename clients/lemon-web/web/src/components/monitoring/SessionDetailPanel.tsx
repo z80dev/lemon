@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useMonitoringStore } from '../../store/monitoringStore';
 import type { MonitoringTask, SessionRunSummary } from '../../../../shared/src/monitoringTypes';
+import { formatDuration } from './formatDuration';
 
 function formatRelativeTime(ms: number | null): string {
   if (ms == null) return '--';
@@ -9,13 +10,6 @@ function formatRelativeTime(ms: number | null): string {
   if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
   if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
   return `${Math.floor(diff / 86_400_000)}d ago`;
-}
-
-function formatDuration(ms: number | null): string {
-  if (ms == null) return '--';
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${Math.floor(ms / 60_000)}m ${Math.floor((ms % 60_000) / 1000)}s`;
 }
 
 function truncate(s: string | null | undefined, max: number): string {

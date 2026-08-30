@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useMonitoringStore } from '../../store/monitoringStore';
 import type { MonitoringRun } from '../../../../shared/src/monitoringTypes';
+import { formatDuration } from './formatDuration';
 
 interface LifecycleEntry {
   id: string;
@@ -13,13 +14,6 @@ interface RunnersInspectorProps {
   request?: <T = unknown>(method: string, params?: Record<string, unknown>) => Promise<T>;
   onSelectRun?: (runId: string) => void;
   onNavigateToTasks?: () => void;
-}
-
-function formatDuration(ms: number | null): string {
-  if (ms == null) return '--';
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${Math.floor(ms / 60_000)}m ${Math.floor((ms % 60_000) / 1000)}s`;
 }
 
 function formatTs(ms: number | null): string {
