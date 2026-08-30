@@ -1297,6 +1297,7 @@ defmodule LemonCli.CLI do
   end
 
   defp print_command_usage("backup"), do: print_backup_usage()
+  defp print_command_usage("context"), do: LemonCli.ContextCommand.print_usage()
 
   defp print_backup_usage(device \\ :stdio) do
     IO.puts(device, """
@@ -1326,8 +1327,6 @@ defmodule LemonCli.CLI do
     Secret values and backed-up file contents are never printed.
     """)
   end
-
-  defp print_command_usage("context"), do: LemonCli.ContextCommand.print_usage()
 
   defp print_doctor_usage(device \\ :stdio) do
     IO.puts(device, """
