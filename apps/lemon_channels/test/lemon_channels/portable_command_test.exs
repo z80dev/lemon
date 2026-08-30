@@ -23,24 +23,37 @@ defmodule LemonChannels.PortableCommandTest do
     def background_start("leak", _opts),
       do: {:error, {:provider_error, "secret-token /private/project"}}
 
-    def background_list([]) do
+    def background_list_scoped("session-ok", []) do
       [
         %{id: "bg_1234567890abcdef", status: :running, result_available: false},
         %{id: "bg_done", status: :completed, result_available: true}
       ]
     end
 
-    def background_status("bg_1234567890abcdef") do
+    def background_list_scoped(_, []), do: []
+
+    def background_status_scoped("bg_1234567890abcdef", "session-ok") do
       {:ok, %{id: "bg_1234567890abcdef", status: :running, result_available: false}}
     end
 
-    def background_result("bg_1234567890abcdef"), do: {:error, :not_ready}
-    def background_result("bg_done"), do: {:ok, "All checks passed."}
+    def background_status_scoped(_, _), do: {:error, :not_found}
 
-    def background_result("bg_secret"),
+    def background_result_scoped("bg_1234567890abcdef", "session-ok"),
+      do: {:error, :not_ready}
+
+    def background_result_scoped("bg_done", "session-ok"), do: {:ok, "All checks passed."}
+
+    def background_result_scoped("bg_secret", "session-ok"),
       do: {:error, {:failed, "secret-token /private/project"}}
 
-    def background_cancel("bg_1234567890abcdef"), do: :ok
+    def background_result_scoped(_, _), do: {:error, :not_found}
+
+    def background_cancel_scoped("bg_1234567890abcdef", "session-ok") do
+      send(self(), :background_cancelled)
+      :ok
+    end
+
+    def background_cancel_scoped(_, _), do: {:error, :not_found}
 
     def side_query("session-ok", "what changed?", opts) do
       send(self(), {:side_query, opts})
@@ -119,27 +132,47 @@ defmodule LemonChannels.PortableCommandTest do
   end
 
   test "exposes the durable background lifecycle with full ids" do
-    assert {:ok, listed} = PortableCommand.handle("bg", "list", %{})
+    context = %{session_key: "session-ok"}
+    assert {:ok, listed} = PortableCommand.handle("bg", "list", context)
     assert listed =~ "bg_1234567890abcdef — running"
     assert listed =~ "bg_done — completed"
 
-    assert PortableCommand.handle("bg", "status bg_1234567890abcdef", %{}) ==
+    assert PortableCommand.handle("bg", "status bg_1234567890abcdef", context) ==
              {:ok, "Background run bg_1234567890abcdef\nStatus: running\nResult: not available"}
 
-    assert PortableCommand.handle("bg", "result bg_1234567890abcdef", %{}) ==
+    assert PortableCommand.handle("bg", "result bg_1234567890abcdef", context) ==
              {:ok, "Background run bg_1234567890abcdef is not finished yet."}
 
-    assert PortableCommand.handle("bg", "result bg_done", %{}) ==
+    assert PortableCommand.handle("bg", "result bg_done", context) ==
              {:ok, "Background result bg_done\nAll checks passed."}
 
-    assert PortableCommand.handle("bg", "cancel bg_1234567890abcdef", %{}) ==
+    assert PortableCommand.handle("bg", "cancel bg_1234567890abcdef", context) ==
              {:ok, "Cancelled background run bg_1234567890abcdef."}
+
+    assert_received :background_cancelled
+  end
+
+  test "background lifecycle is isolated between channel session principals" do
+    foreign_context = %{session_key: "session-other"}
+
+    assert PortableCommand.handle("bg", "list", foreign_context) ==
+             {:ok, "No background runs are recorded."}
+
+    for action <- ["status", "result", "cancel"] do
+      assert PortableCommand.handle(
+               "bg",
+               "#{action} bg_1234567890abcdef",
+               foreign_context
+             ) == {:error, "Background run not found."}
+    end
+
+    refute_received :background_cancelled
   end
 
   test "redacts arbitrary runtime failure terms from channel responses" do
     for response <- [
           PortableCommand.handle("bg", "leak", %{}),
-          PortableCommand.handle("bg", "result bg_secret", %{}),
+          PortableCommand.handle("bg", "result bg_secret", %{session_key: "session-ok"}),
           PortableCommand.handle("btw", "leak", %{session_key: "session-ok"})
         ] do
       assert {:error, message} = response

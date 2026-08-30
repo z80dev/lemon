@@ -637,7 +637,17 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
   defp handle_slash_command(interaction, state) do
     name = interaction |> map_get(:data) |> map_get(:name)
+    inbound = interaction_to_inbound(interaction, "/#{name || "unknown"}", state)
 
+    if allowed_inbound?(inbound, state) and binding_allowed?(inbound, state) do
+      dispatch_slash_command(name, interaction, state)
+    else
+      respond_ephemeral(interaction, "This command is not available in this Discord location.")
+      state
+    end
+  end
+
+  defp dispatch_slash_command(name, interaction, state) do
     case name do
       "lemon" ->
         handle_lemon_interaction(interaction, state)
@@ -2586,11 +2596,12 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
     scope = %ChatScope{transport: :discord, chat_id: channel_id, topic_id: thread_id}
     agent_id = BindingResolver.resolve_agent_id(scope)
+    account_id = Map.get(state, :account_id, "default")
 
     session_key =
       session_key_for(
         agent_id,
-        state.account_id,
+        account_id,
         peer_kind,
         channel_id,
         user_id,
@@ -2600,7 +2611,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
     %InboundMessage{
       channel_id: "discord",
-      account_id: state.account_id,
+      account_id: account_id,
       peer: %{
         kind: peer_kind,
         id: Integer.to_string(channel_id),
@@ -2884,13 +2895,13 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     channel_id = inbound.meta[:channel_id] |> parse_id()
 
     guild_allowed? =
-      case state.allowed_guild_ids do
+      case Map.get(state, :allowed_guild_ids) do
         nil -> true
         set -> is_integer(guild_id) and MapSet.member?(set, guild_id)
       end
 
     channel_allowed? =
-      case state.allowed_channel_ids do
+      case Map.get(state, :allowed_channel_ids) do
         nil -> true
         set -> is_integer(channel_id) and MapSet.member?(set, channel_id)
       end
@@ -2899,7 +2910,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   defp binding_allowed?(%InboundMessage{} = inbound, state) do
-    if state.deny_unbound_channels == true and inbound.peer.kind != :dm do
+    if Map.get(state, :deny_unbound_channels, false) == true and inbound.peer.kind != :dm do
       scope = %ChatScope{
         transport: :discord,
         chat_id: inbound.meta[:channel_id],

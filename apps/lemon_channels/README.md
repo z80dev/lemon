@@ -65,10 +65,12 @@ status and usage read redacted core diagnostics; agent/task inspection and
 compaction call the registered agent-runtime provider. `/bg` starts an isolated
 full-tool session and returns its complete durable id; `/bg list`, `/bg status
 <id>`, `/bg result <id>`, and `/bg cancel <id>` expose the lifecycle from the
-same Telegram or Discord conversation. `/btw` runs asynchronously from a
+same Telegram or Discord conversation. Lifecycle access is enforced by the
+originating channel session key; another user/conversation sees neither the run
+nor whether a supplied id exists. `/btw` runs asynchronously from a
 no-tools transcript snapshot so it does not block the channel transport or
 mutate parent history. Discord applies the configured guild/channel allowlists
-and binding requirement before any portable slash command executes. Channel
+and binding requirement before any application slash command executes. Channel
 responses map runtime failures to stable public messages and leave internal
 error details in runtime logs.
 

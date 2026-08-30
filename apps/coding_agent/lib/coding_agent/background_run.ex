@@ -48,10 +48,32 @@ defmodule CodingAgent.BackgroundRun do
     |> Enum.map(&summary/1)
   end
 
+  @doc "List only background runs owned by the given parent session key."
+  @spec list_scoped(String.t(), keyword()) :: [map()]
+  def list_scoped(session_key, opts \\ []) do
+    case normalize_string(session_key) do
+      nil ->
+        []
+
+      session_key ->
+        list(opts)
+        |> Enum.filter(&(Map.get(&1, :parent_session_key) == session_key))
+    end
+  end
+
   @doc "Return a sanitized lifecycle summary for one background run."
   @spec status(id()) :: {:ok, map()} | {:error, :not_found}
   def status(id) when is_binary(id) do
     case get_record(id) do
+      {:ok, record} -> {:ok, summary(record)}
+      error -> error
+    end
+  end
+
+  @doc "Return a lifecycle summary only when the run belongs to the parent session key."
+  @spec status_scoped(id(), String.t()) :: {:ok, map()} | {:error, :not_found}
+  def status_scoped(id, session_key) when is_binary(id) do
+    case get_scoped_record(id, session_key) do
       {:ok, record} -> {:ok, summary(record)}
       error -> error
     end
@@ -62,7 +84,23 @@ defmodule CodingAgent.BackgroundRun do
           {:ok, String.t()}
           | {:error, :not_found | :not_ready | :cancelled | :lost | :failed}
   def result(id) when is_binary(id) do
-    case get_record(id) do
+    id
+    |> get_record()
+    |> result_from_record()
+  end
+
+  @doc "Return a visible result only when the run belongs to the parent session key."
+  @spec result_scoped(id(), String.t()) ::
+          {:ok, String.t()}
+          | {:error, :not_found | :not_ready | :cancelled | :lost | :failed}
+  def result_scoped(id, session_key) when is_binary(id) do
+    id
+    |> get_scoped_record(session_key)
+    |> result_from_record()
+  end
+
+  defp result_from_record(record_result) do
+    case record_result do
       {:ok, %{status: :completed, result: %{answer: answer}}} when is_binary(answer) ->
         {:ok, answer}
 
@@ -86,11 +124,26 @@ defmodule CodingAgent.BackgroundRun do
   @doc "Cooperatively cancel a queued or running background session."
   @spec cancel(id(), term()) :: :ok | {:error, :not_found | :already_terminal}
   def cancel(id, reason \\ :user_cancelled) when is_binary(id) do
-    case get_record(id) do
+    id
+    |> get_record()
+    |> cancel_record(reason)
+  end
+
+  @doc "Cancel a run only when it belongs to the parent session key."
+  @spec cancel_scoped(id(), String.t(), term()) ::
+          :ok | {:error, :not_found | :already_terminal}
+  def cancel_scoped(id, session_key, reason \\ :user_cancelled) when is_binary(id) do
+    id
+    |> get_scoped_record(session_key)
+    |> cancel_record(reason)
+  end
+
+  defp cancel_record(record_result, reason) do
+    case record_result do
       {:ok, %{status: status}} when status in @terminal_statuses ->
         {:error, :already_terminal}
 
-      {:ok, _record} ->
+      {:ok, %{id: id}} ->
         case Registry.lookup(id) do
           {:ok, worker} -> Worker.cancel(worker, reason)
           :error -> TaskStore.cancel(id, reason)
@@ -203,6 +256,19 @@ defmodule CodingAgent.BackgroundRun do
     case TaskStore.get(id) do
       {:ok, %{kind: @kind} = record, _events} -> {:ok, record}
       _ -> {:error, :not_found}
+    end
+  end
+
+  defp get_scoped_record(id, session_key) do
+    session_key = normalize_string(session_key)
+
+    with session_key when is_binary(session_key) <- session_key,
+         {:ok, record} <- get_record(id),
+         ^session_key <- Map.get(record, :parent_session_key) do
+      {:ok, record}
+    else
+      _ ->
+        {:error, :not_found}
     end
   end
 

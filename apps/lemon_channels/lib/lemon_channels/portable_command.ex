@@ -192,16 +192,16 @@ defmodule LemonChannels.PortableCommand do
   defp background(args, context) do
     case String.split(args, ~r/\s+/, parts: 2) do
       ["list"] ->
-        list_background()
+        list_background(context)
 
       ["status", id] ->
-        with_background_id(id, &background_status/1)
+        with_background_id(id, &background_status(&1, context))
 
       ["result", id] ->
-        with_background_id(id, &background_result/1)
+        with_background_id(id, &background_result(&1, context))
 
       ["cancel", id] ->
-        with_background_id(id, &cancel_background/1)
+        with_background_id(id, &cancel_background(&1, context))
 
       [command] when command in ["status", "result", "cancel"] ->
         {:error, background_usage()}
@@ -237,8 +237,10 @@ defmodule LemonChannels.PortableCommand do
     end
   end
 
-  defp list_background do
-    case runtime_call(:background_list, [[]], {:error, :unavailable}) do
+  defp list_background(context) do
+    case scoped_background_call(:background_list_scoped, context, fn session_key ->
+           [session_key, []]
+         end) do
       runs when is_list(runs) ->
         {:ok, render_background_list(runs)}
 
@@ -253,8 +255,8 @@ defmodule LemonChannels.PortableCommand do
     end
   end
 
-  defp background_status(id) do
-    case runtime_call(:background_status, [id], {:error, :unavailable}) do
+  defp background_status(id, context) do
+    case scoped_background_call(:background_status_scoped, context, &[id, &1]) do
       {:ok, status} when is_map(status) -> {:ok, render_background_status(status, id)}
       {:error, :not_found} -> {:error, "Background run not found."}
       {:error, :unavailable} -> {:error, "Background runs are unavailable in this Lemon runtime."}
@@ -263,8 +265,8 @@ defmodule LemonChannels.PortableCommand do
     end
   end
 
-  defp background_result(id) do
-    case runtime_call(:background_result, [id], {:error, :unavailable}) do
+  defp background_result(id, context) do
+    case scoped_background_call(:background_result_scoped, context, &[id, &1]) do
       {:ok, answer} when is_binary(answer) -> {:ok, "Background result #{id}\n#{answer}"}
       {:error, :not_ready} -> {:ok, "Background run #{id} is not finished yet."}
       {:error, :not_found} -> {:error, "Background run not found."}
@@ -276,8 +278,8 @@ defmodule LemonChannels.PortableCommand do
     end
   end
 
-  defp cancel_background(id) do
-    case runtime_call(:background_cancel, [id], {:error, :unavailable}) do
+  defp cancel_background(id, context) do
+    case scoped_background_call(:background_cancel_scoped, context, &[id, &1]) do
       :ok ->
         {:ok, "Cancelled background run #{id}."}
 
@@ -297,6 +299,25 @@ defmodule LemonChannels.PortableCommand do
         {:error, "Background run could not be cancelled."}
     end
   end
+
+  defp scoped_background_call(function, context, args_fn) do
+    case normalize_session_key(context[:session_key]) do
+      nil ->
+        {:error, :not_found}
+
+      session_key ->
+        runtime_call(function, args_fn.(session_key), {:error, :unavailable})
+    end
+  end
+
+  defp normalize_session_key(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      value -> value
+    end
+  end
+
+  defp normalize_session_key(_value), do: nil
 
   defp render_background_list(runs) do
     rows =
