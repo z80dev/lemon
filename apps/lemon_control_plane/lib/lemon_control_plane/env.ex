@@ -46,6 +46,19 @@ defmodule LemonControlPlane.Env do
       apps: [:lemon_control_plane]
     },
     %{
+      name: :lemon_control_plane_allow_unauthenticated_loopback,
+      env_var: "LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK",
+      aliases: [],
+      type: :boolean,
+      default: false,
+      doc:
+        "Explicitly allow legacy tokenless WebSocket operator access from direct loopback peers.",
+      secret?: false,
+      required?: false,
+      area: :endpoints,
+      apps: [:lemon_control_plane]
+    },
+    %{
       name: :lemon_openai_compat_api_token,
       env_var: "LEMON_OPENAI_COMPAT_API_TOKEN",
       aliases: ["LEMON_OPENAI_COMPAT_TOKEN"],

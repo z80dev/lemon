@@ -5,7 +5,8 @@ defmodule LemonControlPlane.Auth.Authorize do
   Implements role-based access control with the following roles:
 
   - `operator` - Admin/operator clients authenticated by the configured operator
-    token, with a tokenless compatibility path limited to loopback connections
+    token; the WebSocket boundary may explicitly opt direct loopback peers into
+    a legacy tokenless compatibility path
   - `node` - Role for paired nodes (browser extensions, etc.)
   - `device` - Role for paired devices
 
@@ -100,7 +101,7 @@ defmodule LemonControlPlane.Auth.Authorize do
       true ->
         {:error,
          {:unauthorized,
-          "Remote operator access is disabled until LEMON_CONTROL_PLANE_OPERATOR_TOKEN is configured"}}
+          "Operator authentication is required; configure LEMON_CONTROL_PLANE_OPERATOR_TOKEN"}}
     end
   end
 

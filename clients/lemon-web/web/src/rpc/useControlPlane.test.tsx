@@ -90,6 +90,26 @@ describe('useControlPlane', () => {
     unmount();
   });
 
+  it('keeps the operator token out of the WebSocket URL and sends it in connect.auth', () => {
+    const token = 'full-privilege-operator-secret';
+    const { unmount } = renderHook(() => useControlPlane(undefined, { token }));
+
+    const ws = MockWebSocket.instances[0];
+    expect(ws.url).not.toContain(token);
+    expect(ws.url).not.toContain('token=');
+
+    ws.simulateOpen();
+
+    const connectFrame = JSON.parse(ws.sentMessages[0]) as {
+      method: string;
+      params: { auth?: { token?: string } };
+    };
+    expect(connectFrame.method).toBe('connect');
+    expect(connectFrame.params.auth?.token).toBe(token);
+
+    unmount();
+  });
+
   it('does NOT auto-connect when autoConnect is false', () => {
     const { unmount } = renderHook(() =>
       useControlPlane(undefined, { autoConnect: false })

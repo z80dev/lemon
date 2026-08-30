@@ -209,6 +209,28 @@ if is_binary(control_plane_operator_token) do
   config :lemon_control_plane, :operator_token, control_plane_operator_token
 end
 
+control_plane_allow_unauthenticated_loopback =
+  case normalized_env.("LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK") do
+    nil ->
+      false
+
+    value ->
+      case String.downcase(value) do
+        enabled when enabled in ["1", "true"] ->
+          true
+
+        disabled when disabled in ["0", "false"] ->
+          false
+
+        _ ->
+          raise "LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK must be true/false or 1/0"
+      end
+  end
+
+config :lemon_control_plane,
+       :allow_unauthenticated_loopback_operator,
+       control_plane_allow_unauthenticated_loopback
+
 gateway_health_port = normalized_env.("LEMON_GATEWAY_HEALTH_PORT")
 
 if is_binary(gateway_health_port) do

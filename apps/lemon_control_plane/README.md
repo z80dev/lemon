@@ -262,24 +262,25 @@ for HTTP.
 
 | Role | Scopes | How Established |
 |------|--------|-----------------|
-| `operator` | `admin`, `read`, `write`, `approvals`, `pairing` | `LEMON_CONTROL_PLANE_OPERATOR_TOKEN`; tokenless only for a direct loopback peer when no operator token is configured |
+| `operator` | `admin`, `read`, `write`, `approvals`, `pairing` | `LEMON_CONTROL_PLANE_OPERATOR_TOKEN`; legacy tokenless direct-loopback access requires an explicit compatibility opt-in |
 | `node` | `invoke`, `event` | Token from `connect.challenge` after node pairing |
 | `device` | `control` | Token from `connect.challenge` after device pairing |
 
 Scope strings used in `connect` params: `operator.admin`, `operator.read`, `operator.write`, `operator.approvals`, `operator.pairing`, `node.invoke`, `node.event`, `device.control`.
 
-Set `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` to a high-entropy value whenever `/ws`
-is reachable by another host or through a reverse proxy. Operator clients send
-that value as `auth.token` in the `connect` request. Comparison uses fixed-length
+Set `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` to a high-entropy value for normal
+operator access. Operator clients send that value as `auth.token` in the
+`connect` request, never in the WebSocket URL. Comparison uses fixed-length
 SHA-256 digests and `Plug.Crypto.secure_compare/2`; the credential is not retained
 in the connection auth context or returned in status data.
 
-When no operator token is configured, only a direct loopback socket peer keeps
-the legacy tokenless operator behavior. A non-loopback peer fails closed, and a
-reverse proxy must not be treated as a safe loopback exception: configure the
-token on the controller and forward operator credentials through the WebSocket
-handshake. Unknown node/device session identity types are rejected and cannot
-fall back to an operator role.
+Tokenless WebSocket operator access is disabled by default, including for
+loopback peers. Set `LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK=true`
+only to restore legacy compatibility for direct loopback clients. Non-loopback
+peers always fail closed, and this compatibility switch must never be enabled
+for a reverse-proxied control plane because the proxy may itself be the socket's
+loopback peer. Unknown node/device session identity types are rejected and
+cannot fall back to an operator role.
 
 For a named coding execution node, use the same credential only for initial
 pairing:

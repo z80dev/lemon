@@ -29,7 +29,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Closed unauthenticated named-node operator access on the control-plane
   WebSocket: non-loopback operators now fail closed, configured operator tokens
   use constant-time validation, unknown session identities cannot escalate, and
-  node pairing reports credential problems without exposing secrets.
+  node pairing reports credential problems without exposing secrets. Tokenless
+  loopback operator access is now a default-off explicit compatibility opt-in,
+  and browser clients keep operator credentials out of WebSocket URLs.
 - Named execution nodes now cancel destination work when callers time out,
   disappear, reconnect, or lose their controller socket; bind stored tokens to
   the paired node identity; persist fast results without racing dispatch; and

@@ -54,7 +54,14 @@ defmodule LemonControlPlane.WS.Connection do
   @impl WebSock
   def init(opts) do
     conn_id = LemonCore.Id.uuid()
-    local? = opts |> Keyword.get(:peer) |> local_peer?()
+
+    local? =
+      opts |> Keyword.get(:peer) |> local_peer?() and
+        Application.get_env(
+          :lemon_control_plane,
+          :allow_unauthenticated_loopback_operator,
+          false
+        ) == true
 
     state = %__MODULE__{
       conn_id: conn_id,
@@ -439,9 +446,11 @@ defmodule LemonControlPlane.WS.Connection do
 
   defp authenticated_node_identity?(_identity, _node_id), do: false
 
-  # Direct in-process callers do not have a network peer and keep the local
-  # compatibility behavior. The HTTP router always supplies the actual socket
-  # peer, so non-loopback clients cannot inherit an unauthenticated operator.
+  # The HTTP router always supplies the actual socket peer. A loopback peer is
+  # eligible for tokenless compatibility only when the operator explicitly
+  # enables it; merely arriving from a local proxy is never sufficient by
+  # default. Direct callers of Authorize.from_params/1 retain their separate
+  # in-process compatibility behavior.
   defp local_peer?(nil), do: true
   defp local_peer?({127, _b, _c, _d}), do: true
   defp local_peer?({0, 0, 0, 0, 0, 0, 0, 1}), do: true
