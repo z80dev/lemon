@@ -13,7 +13,7 @@
 #   bin/lemon                 # interactive terminal: launches the TUI (daemon auto-start)
 #
 #   bin/lemon tui|web|start|daemon|stop|restart|status|remote|eval|rpc|version|update
-#   bin/lemon setup|model|gateway|config|secrets|channels|profile|backup|doctor
+#   bin/lemon setup|model|gateway|config|context|secrets|channels|profile|backup|doctor
 #   bin/lemon --help
 
 set -euo pipefail
@@ -51,6 +51,7 @@ Commands:
   model [args]          Configure a model provider
   gateway [args]        Configure a gateway adapter
   config [args]         Inspect or update configuration
+  context [args]        Preview or resolve bounded context references
   secrets [args]        Manage secrets
   channels [args]       Configure channel adapters
   backup [args]         Create, verify, list, or restore user-state backups
@@ -553,7 +554,7 @@ EOF
     run_runtime_cli "$@"
     ;;
 
-  setup|model|gateway|config|secrets|channels|backup)
+  setup|model|gateway|config|context|secrets|channels|backup)
     run_runtime_cli "$@"
     ;;
 

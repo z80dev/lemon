@@ -1,7 +1,8 @@
 defmodule LemonCore.ContextTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias LemonCore.Context
+  alias LemonCore.{RunStore, SessionLifecycle}
 
   setup do
     root =
@@ -42,6 +43,14 @@ defmodule LemonCore.ContextTest do
 
     assert {:ok, symlink} = Context.resolve("@file:linked.txt", root: root)
     assert [%{reason: "symlink"}] = symlink.omissions
+  end
+
+  test "rejects a symlink supplied as the root itself", %{root: root} do
+    symlink_root = root <> "-link"
+    File.ln_s!(root, symlink_root)
+    on_exit(fn -> File.rm(symlink_root) end)
+
+    assert {:error, :symlink_root} = Context.resolve("@file:note.txt", root: symlink_root)
   end
 
   test "folder walks are deterministic, depth bounded, and omit symlinks", %{root: root} do
@@ -111,6 +120,30 @@ defmodule LemonCore.ContextTest do
     refute inspect(result) =~ "agent:test:main"
   end
 
+  test "session references use the canonical redacted lifecycle export", %{root: root} do
+    suffix = System.unique_integer([:positive])
+    session_key = "agent:context_session_#{suffix}:main"
+    run_id = "context-session-run-#{suffix}"
+    secret = "context-session-secret-#{suffix}"
+    on_exit(fn -> SessionLifecycle.delete(session_key) end)
+
+    :ok =
+      RunStore.finalize(run_id, %{
+        session_key: session_key,
+        agent_id: "context_session_#{suffix}",
+        origin: :cli,
+        prompt: "api_key=#{secret}",
+        completed: %{ok: true, answer: "Bearer #{secret}"}
+      })
+
+    assert eventually(fn -> SessionLifecycle.get(session_key) != nil end)
+
+    assert {:ok, result} = Context.resolve("@session:#{session_key}", root: root)
+    assert result.selected_text =~ "Redacted export: yes"
+    refute result.selected_text =~ secret
+    refute inspect(result) =~ session_key
+  end
+
   test "global output and operation time are hard bounded", %{root: root} do
     File.write!(Path.join(root, "big.txt"), String.duplicate("x", 1_000))
     assert {:ok, result} = Context.resolve("@file:big.txt", root: root, max_output_bytes: 100)
@@ -127,5 +160,17 @@ defmodule LemonCore.ContextTest do
                  {:error, :late}
                end
              )
+  end
+
+  defp eventually(fun, attempts \\ 100)
+  defp eventually(fun, 0), do: fun.()
+
+  defp eventually(fun, attempts) do
+    if fun.() do
+      true
+    else
+      Process.sleep(10)
+      eventually(fun, attempts - 1)
+    end
   end
 end
