@@ -210,12 +210,16 @@ defmodule LemonWebTest do
 
     app_css = File.read!(Path.join(static_root, "app.css"))
     assert app_css =~ ".min-h-screen"
+    management_css = File.read!(Path.join(static_root, "management.css"))
+    assert management_css =~ ".management-layout"
+    assert management_css =~ "@media (max-width: 640px)"
 
     root_layout =
       Path.expand("../lib/lemon_web/components/layouts/root.html.heex", __DIR__)
       |> File.read!()
 
     assert root_layout =~ ~s|href={~p"/assets/app.css"}|
+    assert root_layout =~ ~s|href={~p"/assets/management.css"}|
     assert root_layout =~ "Skip to main content"
     refute root_layout =~ "cdn.tailwindcss.com"
   end

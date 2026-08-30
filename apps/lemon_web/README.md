@@ -1,6 +1,6 @@
 # LemonWeb
 
-Phoenix web interface for the Lemon platform. Provides a real-time dashboard for interacting with Lemon agents via LiveView and optional token-based access control.
+Phoenix web interface for the Lemon platform. Provides real-time agent chat and a token-required local operations shell over shared Lemon runtime/session services.
 
 ## Architecture Overview
 
@@ -47,7 +47,7 @@ All LiveView pages communicate over this socket. There are no custom Phoenix Cha
 
 ## Route Inventory
 
-### Authenticated Browser Pipeline (`:browser`)
+### Browser Pipeline (`:browser`)
 
 Includes `RequireAccessToken` plug. When `LEMON_WEB_ACCESS_TOKEN` is set, requests must present a valid token.
 
@@ -55,6 +55,19 @@ Includes `RequireAccessToken` plug. When `LEMON_WEB_ACCESS_TOKEN` is set, reques
 |------|----------|--------|-------------|
 | `/` | `SessionLive` | `:index` | Dashboard home; generates an isolated session key per browser tab |
 | `/sessions/:session_key` | `SessionLive` | `:show` | Dashboard bound to a specific session key |
+
+### Required Management Pipeline (`:management_browser`)
+
+The `/manage` surface always requires a configured `LEMON_WEB_ACCESS_TOKEN`.
+It returns HTTP 503 when no token is configured and HTTP 401 for missing or
+invalid credentials; successful authentication stores only a token-derived
+session marker.
+
+| Path | Handler | Description |
+|------|---------|-------------|
+| `/manage` | `ManagementLive` | Runtime/node status and searchable active/archived sessions |
+| `/manage/sessions/:session_key` | `ManagementLive` | Redacted run/tool inspection and lifecycle controls |
+| `/manage/sessions/:session_key/export/:format` | `SessionExportController` | Always-redacted `json` or `markdown` download |
 
 ### Query Parameters
 
@@ -76,6 +89,7 @@ The primary dashboard page. Provides a chat-style interface for sending prompts 
 - System notifications for run lifecycle events (started, completed, failed)
 - Active-run stop control through `LemonRouter.abort_run/2`
 - Message history capped at 250 messages
+- Durable history reconstruction on `/sessions/:session_key`, including ordered prompt, tool, and answer messages for resume
 
 **Session key resolution:**
 1. If `params["session_key"]` is present and valid, use it directly
@@ -95,6 +109,26 @@ The primary dashboard page. Provides a chat-style interface for sending prompts 
 3. Files are persisted to the uploads directory with timestamped names
 4. Prompt is enriched with file paths and submitted via `LemonRouter.submit/1`
 5. Response streams back through PubSub events; **Stop** calls `LemonRouter.abort_run/2`
+
+### ManagementLive (`/manage`)
+
+The management page delegates to `LemonCore.SessionLifecycle` and does not own
+a second session store. It provides bounded list/search, active/archive
+filtering, title/pin/archive mutation, resume links, redacted structured
+run/tool inspection, and redacted JSON/Markdown export. Runtime status comes
+from `LemonCore.Runtime.Health`; live named-node presence comes from
+`LemonCore.NodeRegistry` with node metadata deliberately omitted from the UI.
+
+Guarded prune is preview-first and defaults to archived, unpinned sessions.
+The confirmation token binds the threshold, policy flags, stable session keys,
+index timestamps, and lifecycle metadata. If anything changes, execution fails
+closed and requires a fresh preview. Canonical run history is committed last
+after fallible ancillary cleanup, and deletion is verified.
+
+Management inspection and downloads are always redacted and never expose raw
+run records or event payloads. Chat resume is an internal trusted consumer of
+unredacted history so the user can continue their own conversation; no operator
+JSON-RPC method offers that mode.
 
 ## Components
 
@@ -136,10 +170,12 @@ bundled SVG favicon explicitly, avoiding a first-load missing-favicon request.
 
 ## Authentication
 
-Authentication is handled by the `LemonWeb.Plugs.RequireAccessToken` plug, which is optional and only active when a token is configured.
+Authentication is handled by `LemonWeb.Plugs.RequireAccessToken`. Chat routes
+retain the optional local gate, while management routes pass `required: true`
+and fail closed without a configured token.
 
 **Behavior:**
-1. If `config :lemon_web, :access_token` is `nil` or `""`, all requests pass through (no gate)
+1. If `config :lemon_web, :access_token` is `nil` or `""`, optional chat routes pass through; required management routes return HTTP 503
 2. When a token is configured, it is checked from three sources (in order):
    - `Authorization: Bearer <token>` header
    - `?token=<token>` query parameter
@@ -168,7 +204,7 @@ Configured in `SessionLive.mount/3`:
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `LEMON_WEB_ACCESS_TOKEN` | Dashboard access token | `nil` (no auth) |
+| `LEMON_WEB_ACCESS_TOKEN` | Chat gate and required management credential | `nil` (chat open; management unavailable) |
 | `LEMON_WEB_UPLOADS_DIR` | Directory for uploaded files | `System.tmp_dir!/0 <> "/lemon_web_uploads"` |
 | `LEMON_WEB_HOST` | Production hostname | `"localhost"` |
 | `LEMON_WEB_PORT` | HTTP port for unified runtime and production | `4080` |
@@ -209,7 +245,7 @@ config :lemon_web, :uploads_dir, Path.join(System.tmp_dir!(), "lemon_web_uploads
 
 | App | Purpose |
 |-----|---------|
-| `lemon_core` | PubSub (`LemonCore.Bus`), session keys (`LemonCore.SessionKey`), events (`LemonCore.Event`), map helpers |
+| `lemon_core` | PubSub, session keys/events, shared session lifecycle, runtime health, and live node presence |
 | `lemon_router` | Request routing (`LemonRouter.submit/1`) for submitting prompts to agents |
 
 ### External Dependencies
@@ -258,9 +294,10 @@ apps/lemon_web/
 |       |-- telemetry.ex                           # Telemetry supervisor
 |       |-- gettext.ex                             # i18n backend
 |       |-- plugs/
-|       |   |-- require_access_token.ex            # Optional token authentication plug
+|       |   |-- require_access_token.ex            # Optional/required token authentication plug
 |       |-- live/
 |       |   |-- session_live.ex                    # Main dashboard LiveView
+|       |   |-- management_live.ex                 # Authenticated session operations LiveView
 |       |   |-- components/
 |       |       |-- file_upload_component.ex        # File upload UI
 |       |       |-- message_component.ex            # Chat message bubbles
@@ -272,6 +309,7 @@ apps/lemon_web/
 |       |       |-- root.html.heex                 # HTML document shell
 |       |       |-- app.html.heex                  # App layout (passthrough)
 |       |-- controllers/
+|           |-- session_export_controller.ex       # Redacted session downloads
 |           |-- error_html.ex                      # HTML error renderer
 |           |-- error_json.ex                      # JSON error renderer
 |           |-- error_html/
@@ -281,6 +319,7 @@ apps/lemon_web/
 |   |-- static/
 |   |   |-- assets/
 |   |       |-- app.css                            # Precompiled Tailwind stylesheet
+|   |       |-- management.css                     # Responsive management-shell styles
 |   |       |-- app.js                             # Client-side JS (LiveSocket init, session keys)
 |   |-- gettext/
 |       |-- .keep
