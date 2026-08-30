@@ -16,13 +16,14 @@ defmodule CodingAgent.Tools.Agent do
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
   alias CodingAgent.AsyncFollowups
-  alias CodingAgent.{RunGraph, Subagents, TaskStore}
+  alias CodingAgent.{JoinAwait, RunGraph, Subagents, TaskStore}
   alias LemonCore.{Bus, Events, RouterBridge, RunRequest, SessionKey, Store}
 
   @valid_actions ["run", "poll", "join"]
   @valid_queue_modes ["collect", "followup", "steer", "steer_backlog", "interrupt"]
   @default_sync_timeout_ms 120_000
   @default_watcher_timeout_ms 30 * 60 * 1000
+  @default_reconciliation_timeout_ms 30 * 60 * 1000
   @default_run_orchestrator RouterBridge
   @completion_poll_interval_ms 250
 
@@ -146,7 +147,7 @@ defmodule CodingAgent.Tools.Agent do
     else
       case normalize_action(Map.get(params, "action")) do
         "poll" -> do_poll(params)
-        "join" -> do_join(params)
+        "join" -> do_join(params, signal)
         "run" -> do_run(params, cwd, opts)
         other -> {:error, "Unsupported action: #{inspect(other)}"}
       end
@@ -183,13 +184,35 @@ defmodule CodingAgent.Tools.Agent do
     end
   end
 
-  defp do_join(params) do
+  defp do_join(params, signal) do
     with {:ok, task_ids} <- validate_join_task_ids(params),
          {:ok, mode} <- validate_join_mode(params),
-         :ok <- suppress_auto_followups(task_ids),
-         {:ok, run_ids} <- resolve_run_ids(task_ids),
-         {:ok, join_result} <- RunGraph.await(run_ids, mode, :infinity) do
-      build_join_result(task_ids, join_result)
+         {:ok, run_ids} <- resolve_run_ids(task_ids) do
+      join_token = make_ref()
+      TaskStore.begin_auto_followup_join(task_ids, join_token)
+
+      case JoinAwait.await(run_ids, task_ids, mode, signal) do
+        {:ok, join_result} ->
+          suppressed = joined_completion_task_ids(task_ids, join_result)
+          TaskStore.finish_auto_followup_join(task_ids, suppressed, join_token)
+          build_join_result(task_ids, join_result)
+
+        {:parent_question, request} ->
+          TaskStore.finish_auto_followup_join(task_ids, [], join_token)
+          build_parent_question_join_result(task_ids, mode, request)
+
+        {:error, :aborted} ->
+          TaskStore.finish_auto_followup_join(task_ids, [], join_token)
+          {:error, "Operation aborted"}
+
+        {:error, {:unknown_run, run_id}} ->
+          TaskStore.finish_auto_followup_join(task_ids, [], join_token)
+          {:error, "Unknown run_id: #{run_id}"}
+
+        {:error, reason} ->
+          TaskStore.finish_auto_followup_join(task_ids, [], join_token)
+          {:error, reason}
+      end
     else
       {:error, reason} -> {:error, reason}
     end
@@ -246,9 +269,58 @@ defmodule CodingAgent.Tools.Agent do
     end
   end
 
-  defp suppress_auto_followups(task_ids) do
-    Enum.each(task_ids, &TaskStore.suppress_auto_followup/1)
-    :ok
+  defp joined_completion_task_ids(task_ids, %{mode: :wait_any, run: run}) do
+    if RunGraph.normalize_status(run[:status]) == :completed do
+      task_ids
+      |> Enum.find(fn task_id ->
+        case TaskStore.get(task_id) do
+          {:ok, record, _events} -> Map.get(record, :run_id) == run[:id]
+          _ -> false
+        end
+      end)
+      |> List.wrap()
+    else
+      []
+    end
+  end
+
+  defp joined_completion_task_ids(task_ids, %{mode: :wait_all, runs: runs}) do
+    completed_run_ids =
+      runs
+      |> Enum.filter(&(RunGraph.normalize_status(&1[:status]) == :completed))
+      |> MapSet.new(& &1[:id])
+
+    Enum.filter(task_ids, fn task_id ->
+      case TaskStore.get(task_id) do
+        {:ok, record, _events} ->
+          MapSet.member?(completed_run_ids, Map.get(record, :run_id))
+
+        _ ->
+          false
+      end
+    end)
+  end
+
+  defp build_parent_question_join_result(task_ids, mode, request) do
+    %AgentToolResult{
+      content: [
+        %TextContent{
+          text:
+            "A joined child needs a parent decision before it can continue. " <>
+              "Question: #{request.question}\nBlocked because: #{request.why_blocked}"
+        }
+      ],
+      details: %{
+        status: "needs_parent_answer",
+        mode: Atom.to_string(mode),
+        task_ids: task_ids,
+        request_id: request.id,
+        question: request.question,
+        why_blocked: request.why_blocked,
+        options: request.options,
+        recommended_option: request.recommended_option
+      }
+    }
   end
 
   defp build_join_result(task_ids, %{mode: :wait_all, runs: runs}) do
@@ -291,7 +363,7 @@ defmodule CodingAgent.Tools.Agent do
   end
 
   defp maybe_promote_from_run_store(_task_id, %{status: status})
-       when status not in [:queued, :running],
+       when status not in [:queued, :running, :tracking_lost],
        do: :ok
 
   defp maybe_promote_from_run_store(task_id, record) do
@@ -608,8 +680,16 @@ defmodule CodingAgent.Tools.Agent do
         end
 
       {:error, :timeout} ->
-        mark_delegated_run_failed(run_id, :timeout)
-        TaskStore.fail(task_id, :timeout)
+        TaskStore.mark_tracking_lost(task_id, :watcher_timeout)
+
+        reconcile_late_completion(
+          task_id,
+          run_id,
+          validated,
+          delegated_session_key,
+          request,
+          opts
+        )
 
       {:error, reason} ->
         mark_delegated_run_failed(run_id, reason)
@@ -628,6 +708,46 @@ defmodule CodingAgent.Tools.Agent do
 
       mark_delegated_run_failed(run_id, {:watcher_crash, {kind, reason}})
       TaskStore.fail(task_id, {:watcher_crash, {kind, reason}})
+  end
+
+  defp reconcile_late_completion(
+         task_id,
+         run_id,
+         validated,
+         delegated_session_key,
+         request,
+         opts
+       ) do
+    timeout_ms =
+      Keyword.get(
+        opts,
+        :agent_tool_reconciliation_timeout_ms,
+        @default_reconciliation_timeout_ms
+      )
+
+    case await_run_completion(run_id, timeout_ms) do
+      {:ok, completion} ->
+        finalize_task_from_completion(task_id, completion, %{
+          run_id: run_id,
+          agent_id: validated.agent_id,
+          delegated_session_key: delegated_session_key,
+          role: validated.role_id
+        })
+
+        if validated.auto_followup and not TaskStore.auto_followup_suppressed?(task_id) do
+          maybe_send_auto_followup(completion, run_id, task_id, validated, request, opts)
+        end
+
+      {:error, :timeout} ->
+        Logger.warning(
+          "Agent tool reconciliation still has no terminal result for task_id=#{task_id} run_id=#{run_id}"
+        )
+
+      {:error, reason} ->
+        Logger.warning(
+          "Agent tool reconciliation failed for task_id=#{task_id}: #{inspect(reason)}"
+        )
+    end
   end
 
   defp maybe_send_auto_followup(completion, run_id, task_id, validated, request, opts) do

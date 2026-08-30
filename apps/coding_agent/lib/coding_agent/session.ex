@@ -342,6 +342,23 @@ defmodule CodingAgent.Session do
   end
 
   @doc """
+  Deliver a child clarification question to its parent session.
+
+  Unlike a normal follow-up cast, an idle parent immediately starts a turn.
+  A streaming parent receives the question as a follow-up; join tools also
+  observe the persisted request and return so the follow-up can be processed.
+  """
+  @spec deliver_parent_question(GenServer.server(), String.t()) ::
+          :ok | {:error, :session_unavailable}
+  def deliver_parent_question(session, text) do
+    try do
+      GenServer.call(session, {:deliver_parent_question, text}, 5_000)
+    catch
+      :exit, _reason -> {:error, :session_unavailable}
+    end
+  end
+
+  @doc """
   Add a structured async follow-up message to the session.
   """
   @spec handle_async_followup(GenServer.server(), CustomMessage.t() | String.t() | map()) :: :ok
@@ -684,6 +701,29 @@ defmodule CodingAgent.Session do
           queue = :queue.in(message, state.follow_up_queue)
           {:reply, :ok, %{state | follow_up_queue: queue}}
       end
+    else
+      timer_ref =
+        Process.send_after(self(), {:do_prompt, outgoing, state.system_prompt}, @prompt_defer_ms)
+
+      {:reply, :ok, State.begin_prompt(state, timer_ref)}
+    end
+  end
+
+  def handle_call({:deliver_parent_question, text}, _from, state) do
+    {state, recalled} = refresh_turn_context(state, text)
+
+    message = %LemonAi.Types.UserMessage{
+      role: :user,
+      content: text,
+      timestamp: System.system_time(:millisecond)
+    }
+
+    outgoing = attach_recalled_context(message, recalled)
+
+    if state.is_streaming do
+      LemonAgent.Agent.follow_up(state.agent, outgoing, system_prompt: state.system_prompt)
+      queue = :queue.in(message, state.follow_up_queue)
+      {:reply, :ok, %{state | follow_up_queue: queue}}
     else
       timer_ref =
         Process.send_after(self(), {:do_prompt, outgoing, state.system_prompt}, @prompt_defer_ms)

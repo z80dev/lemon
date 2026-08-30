@@ -322,7 +322,7 @@ defmodule CodingAgent.TaskStoreServer do
       :dets.foldl(
         fn {task_id, record, events}, :ok ->
           record =
-            if Map.get(record, :status) == :running do
+            if Map.get(record, :status) in [:running, :tracking_lost] do
               record
               |> Map.put(:status, :lost)
               |> Map.put(:error, :lost_on_restart)
@@ -359,6 +359,10 @@ defmodule CodingAgent.TaskStoreServer do
 
   defp transition_allowed?(:running, :running), do: false
   defp transition_allowed?(:queued, :running), do: true
+  defp transition_allowed?(status, :tracking_lost) when status in [:queued, :running], do: true
+
+  defp transition_allowed?(:tracking_lost, target_status),
+    do: target_status in @terminal_statuses
 
   defp transition_allowed?(status, target_status) when status in [:queued, :running],
     do: target_status in @terminal_statuses

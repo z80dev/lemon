@@ -5,6 +5,7 @@ defmodule CodingAgent.Tools.Task.Result do
   alias LemonAi.Types.TextContent
   alias CodingAgent.RunGraph
   alias CodingAgent.TaskStore
+  alias CodingAgent.JoinAwait
 
   @max_poll_preview_chars 500
 
@@ -42,14 +43,36 @@ defmodule CodingAgent.Tools.Task.Result do
     end
   end
 
-  @spec do_join(map()) :: AgentToolResult.t() | {:error, String.t()}
-  def do_join(params) do
+  @spec do_join(map(), reference() | nil) :: AgentToolResult.t() | {:error, String.t()}
+  def do_join(params, signal \\ nil) do
     with {:ok, task_ids} <- validate_join_task_ids(params),
          {:ok, mode} <- validate_join_mode(params),
-         :ok <- suppress_auto_followups(task_ids),
-         {:ok, run_ids} <- resolve_run_ids(task_ids),
-         {:ok, join_result} <- RunGraph.await(run_ids, mode, :infinity) do
-      build_join_result(task_ids, join_result)
+         {:ok, run_ids} <- resolve_run_ids(task_ids) do
+      join_token = make_ref()
+      TaskStore.begin_auto_followup_join(task_ids, join_token)
+
+      case JoinAwait.await(run_ids, task_ids, mode, signal) do
+        {:ok, join_result} ->
+          suppressed = joined_completion_task_ids(task_ids, join_result)
+          TaskStore.finish_auto_followup_join(task_ids, suppressed, join_token)
+          build_join_result(task_ids, join_result)
+
+        {:parent_question, request} ->
+          TaskStore.finish_auto_followup_join(task_ids, [], join_token)
+          build_parent_question_result(task_ids, mode, request)
+
+        {:error, :aborted} ->
+          TaskStore.finish_auto_followup_join(task_ids, [], join_token)
+          {:error, "Operation aborted"}
+
+        {:error, {:unknown_run, run_id}} ->
+          TaskStore.finish_auto_followup_join(task_ids, [], join_token)
+          {:error, "Unknown run_id: #{run_id}"}
+
+        {:error, reason} ->
+          TaskStore.finish_auto_followup_join(task_ids, [], join_token)
+          {:error, reason}
+      end
     else
       {:error, reason} -> {:error, reason}
     end
@@ -175,9 +198,58 @@ defmodule CodingAgent.Tools.Task.Result do
     {:ok, Map.get(params, "mode") |> normalize_join_mode()}
   end
 
-  defp suppress_auto_followups(task_ids) do
-    Enum.each(task_ids, &TaskStore.suppress_auto_followup/1)
-    :ok
+  defp joined_completion_task_ids(task_ids, %{mode: :wait_any, run: run}) do
+    if RunGraph.normalize_status(run[:status]) == :completed do
+      task_ids
+      |> Enum.find(fn task_id ->
+        case TaskStore.get(task_id) do
+          {:ok, %{run_id: run_id}, _events} -> run_id == run[:id]
+          _ -> false
+        end
+      end)
+      |> List.wrap()
+    else
+      []
+    end
+  end
+
+  defp joined_completion_task_ids(task_ids, %{mode: :wait_all, runs: runs}) do
+    completed_run_ids =
+      runs
+      |> Enum.filter(&(RunGraph.normalize_status(&1[:status]) == :completed))
+      |> MapSet.new(& &1[:id])
+
+    Enum.filter(task_ids, fn task_id ->
+      case TaskStore.get(task_id) do
+        {:ok, %{run_id: run_id}, _events} ->
+          MapSet.member?(completed_run_ids, run_id)
+
+        _ ->
+          false
+      end
+    end)
+  end
+
+  defp build_parent_question_result(task_ids, mode, request) do
+    %AgentToolResult{
+      content: [
+        %TextContent{
+          text:
+            "A joined child needs a parent decision before it can continue. " <>
+              "Question: #{request.question}\nBlocked because: #{request.why_blocked}"
+        }
+      ],
+      details: %{
+        status: "needs_parent_answer",
+        mode: Atom.to_string(mode),
+        task_ids: task_ids,
+        request_id: request.id,
+        question: request.question,
+        why_blocked: request.why_blocked,
+        options: request.options,
+        recommended_option: request.recommended_option
+      }
+    }
   end
 
   defp build_poll_result(task_id, record, events) do
