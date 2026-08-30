@@ -27,6 +27,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   normal monitor event after every result. Delegated agent runs now participate
   in the run graph used by `agent action=join`, and explicit joins suppress the
   redundant automatic completion followup.
+- Child `ask_parent` requests now wake idle parent sessions and release parents
+  blocked in task/agent joins so clarification cannot deadlock. Parent-question
+  creation and terminal transitions are serialized, resolver authorization is
+  exact to both session and agent, and terminal lifecycle events emit once.
+- Multi-task `wait_any` joins now suppress automatic followup only for the
+  completed winner; failed and aborted joins release transient suppression.
+  Lane queues discard abandoned callers and contain per-job admission failure,
+  while delegated watcher timeouts preserve still-running router authority and
+  reconcile late completion from a `tracking_lost` state.
 
 ### Removed
 
