@@ -22,6 +22,8 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
       assert Map.has_key?(report, :issue_count)
       assert Map.has_key?(report, :issues)
       assert Map.has_key?(report, :actual_dependencies)
+      assert Map.has_key?(report, :allowed_dependencies)
+      assert Map.has_key?(report, :reference_only_namespace_exceptions)
       assert Map.has_key?(report, :target_drift_count)
       assert Map.has_key?(report, :target_dependency_drifts)
     end
@@ -81,22 +83,21 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
              end)
     end
 
-    test "target policy removes transitional direct dependencies" do
+    test "direct policy excludes reference-only exceptions and stale permissions" do
       current = ArchitecturePolicy.current_allowed_direct_deps()
       target = ArchitecturePolicy.target_allowed_direct_deps()
+      exceptions = ArchitecturePolicy.reference_only_namespace_exceptions()
 
       refute :lemon_gateway in target.lemon_router
       refute :lemon_gateway in current.lemon_router
       refute :lemon_gateway in current.lemon_control_plane
 
-      assert :lemon_automation in current.lemon_gateway
-      assert :lemon_ai in current.lemon_gateway
-
-      refute :lemon_channels in target.lemon_gateway
-      refute :lemon_automation in target.lemon_gateway
-      refute :lemon_ai in target.lemon_gateway
+      assert current.lemon_gateway == [:lemon_agent, :lemon_core]
+      assert exceptions.lemon_gateway == [:lemon_ai, :lemon_automation]
+      refute :lemon_gateway in current.lemon_platform_test
 
       assert target.lemon_ai == []
+      assert target == current
     end
   end
 
@@ -108,20 +109,9 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
       assert report.target_drift_count == 0
     end
 
-    test "does not turn target-only drift into current policy issues" do
-      tmp_dir = create_tmp_umbrella()
-
-      ArchitecturePolicy.current_allowed_direct_deps()
-      |> Enum.each(fn {app, deps} -> create_app(tmp_dir, app, deps) end)
-
-      try do
-        assert {:ok, report} = ArchitectureCheck.run(root: tmp_dir)
-        assert report.issue_count == 0
-        assert report.target_drift_count > 0
-        assert Enum.all?(report.target_dependency_drifts, &(&1.code == :target_dependency_drift))
-      after
-        File.rm_rf!(tmp_dir)
-      end
+    test "actual and allowed dependency graphs are identical in the repository" do
+      assert {:ok, report} = ArchitectureCheck.run(root: @repo_root)
+      assert report.actual_dependencies == report.allowed_dependencies
     end
   end
 
@@ -152,6 +142,96 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
                ]
 
         assert Map.get(report.actual_dependencies, :lemon_channels) == [:lemon_core]
+      after
+        File.rm_rf!(tmp_dir)
+      end
+    end
+
+    test "parses umbrella deps wrapped by a package helper" do
+      tmp_dir = create_tmp_umbrella()
+
+      create_app_with_wrapped_deps(tmp_dir, :lemon_core, [])
+      create_app_with_wrapped_deps(tmp_dir, :lemon_gateway, [:lemon_agent, :lemon_core])
+
+      try do
+        {_status, report} = ArchitectureCheck.run(root: tmp_dir)
+
+        assert report.actual_dependencies.lemon_gateway == [:lemon_agent, :lemon_core]
+      after
+        File.rm_rf!(tmp_dir)
+      end
+    end
+
+    test "fails when a direct dependency permission outlives the mix.exs edge" do
+      tmp_dir = create_tmp_umbrella()
+
+      ArchitecturePolicy.allowed_direct_deps()
+      |> Enum.each(fn {app, deps} -> create_app(tmp_dir, app, deps) end)
+
+      create_app(tmp_dir, :lemon_gateway, [:lemon_agent])
+
+      try do
+        assert {:error, report} = ArchitectureCheck.run(root: tmp_dir)
+
+        assert Enum.any?(report.issues, fn issue ->
+                 issue.code == :stale_dependency_permission and issue.app == :lemon_gateway and
+                   issue.path == "apps/lemon_gateway/mix.exs" and
+                   issue.message =~ "lemon_core"
+               end)
+      after
+        File.rm_rf!(tmp_dir)
+      end
+    end
+
+    test "reference-only exceptions permit source use without permitting a mix dependency" do
+      tmp_dir = create_tmp_umbrella()
+
+      ArchitecturePolicy.allowed_direct_deps()
+      |> Enum.each(fn {app, deps} -> create_app(tmp_dir, app, deps) end)
+
+      create_app_with_code(
+        tmp_dir,
+        :lemon_gateway,
+        "LemonGateway",
+        """
+        defmodule LemonGateway.ReferenceExceptionProbe do
+          alias LemonAi.Types.TextContent
+
+          def content(text), do: %TextContent{text: text}
+          def cron_manager, do: Module.concat([LemonAutomation, CronManager])
+        end
+        """,
+        [:lemon_agent, :lemon_core]
+      )
+
+      try do
+        assert {:ok, report} = ArchitectureCheck.run(root: tmp_dir)
+        assert report.actual_dependencies == report.allowed_dependencies
+
+        refute Enum.any?(report.issues, fn issue ->
+                 issue.code == :forbidden_namespace_reference and issue.app == :lemon_gateway
+               end)
+
+        create_app_with_code(
+          tmp_dir,
+          :lemon_gateway,
+          "LemonGateway",
+          """
+          defmodule LemonGateway.ReferenceExceptionProbe do
+            alias LemonAi.Types.TextContent
+
+            def content(text), do: %TextContent{text: text}
+          end
+          """,
+          [:lemon_agent, :lemon_ai, :lemon_core]
+        )
+
+        assert {:error, report} = ArchitectureCheck.run(root: tmp_dir)
+
+        assert Enum.any?(report.issues, fn issue ->
+                 issue.code == :forbidden_dependency and issue.app == :lemon_gateway and
+                   issue.message =~ "lemon_ai"
+               end)
       after
         File.rm_rf!(tmp_dir)
       end
@@ -605,6 +685,34 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
 
     File.write!(Path.join(app_dir, "lib/#{app_name}.ex"), module_content)
 
+    app_dir
+  end
+
+  defp create_app_with_wrapped_deps(root, app_name, deps)
+       when is_atom(app_name) and is_list(deps) do
+    app_dir = create_app(root, app_name, deps)
+    dep_strings = Enum.map(deps, fn dep -> "{:#{dep}, in_umbrella: true}" end)
+    deps_block = if dep_strings == [], do: "[]", else: "[#{Enum.join(dep_strings, ", ")}]"
+
+    mix_exs = """
+    defmodule #{Macro.camelize(to_string(app_name))}.MixProject do
+      use Mix.Project
+
+      def project do
+        [
+          app: :#{app_name},
+          version: "0.1.0",
+          deps: deps()
+        ]
+      end
+
+      defp deps do
+        Lemon.HexPackage.deps(#{deps_block})
+      end
+    end
+    """
+
+    File.write!(Path.join(app_dir, "mix.exs"), mix_exs)
     app_dir
   end
 

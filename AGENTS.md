@@ -305,7 +305,10 @@ The control plane (`lemon_control_plane`) provides the JSON-RPC API used by TUI/
 
 ### Key Dependencies Between Apps
 
-Derived from mix.exs files and enforced by `mix lemon.quality` (architecture boundary check):
+Derived from complete `deps/0` bodies in the `mix.exs` files and enforced by
+`mix lemon.quality` (architecture boundary check). The direct policy must match
+this graph exactly; reference-only namespace exceptions are tracked separately
+and do not permit adding a Mix dependency:
 
 ```
 lemon_control_plane ──→ lemon_core, lemon_memory, lemon_browser, lemon_media, lemon_lsp, lemon_router, lemon_channels, lemon_skills, lemon_automation, lemon_agent, lemon_ai
@@ -548,4 +551,4 @@ Each app has its own `AGENTS.md` with detailed context:
 
 ---
 
-*Last updated: 2026-08-21* (`lemon_cli_runners` removed — vendor CLI task runners are gone and all subagents are native in-process `CodingAgent.Session` executions coordinated by `CodingAgent.Coordinator`: 25-app structure tree, dependency graph regenerated from mix.exs, message flow, doc index, and app guide table)
+*Last updated: 2026-08-30* (architecture reporting now parses complete `deps/0` bodies, requires the direct policy to match the actual graph, and lists reference-only namespace exceptions separately)
