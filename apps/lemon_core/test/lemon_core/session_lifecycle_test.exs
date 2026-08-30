@@ -184,6 +184,29 @@ defmodule LemonCore.SessionLifecycleTest do
     assert SessionLifecycle.get(fresh)
   end
 
+  test "restores ancillary state and preserves runs when the final canonical delete fails" do
+    suffix = unique_suffix()
+    session_key = "agent:delete_failure_#{suffix}:main"
+
+    on_exit(fn -> cleanup_sessions([session_key]) end)
+    seed_session(session_key, "run-delete-failure-#{suffix}", "keep me", "still here")
+    assert {:ok, _} = SessionLifecycle.patch(session_key, %{title: "Keep", pinned: true})
+    assert :ok = ChatStateStore.put(session_key, %{messages: ["keep"]})
+    assert :ok = PolicyStore.put_session(session_key, %{model: "keep-model"})
+
+    assert {:error, :injected_commit_failure} =
+             SessionLifecycle.delete(session_key,
+               run_delete_fun: fn ^session_key -> {:error, :injected_commit_failure} end
+             )
+
+    assert SessionLifecycle.get(session_key)
+    assert RunStore.history(session_key, limit: 1) != []
+    assert ChatStateStore.get(session_key).messages == ["keep"]
+    assert PolicyStore.get_session(session_key) == %{model: "keep-model"}
+    assert SessionMetadataStore.get(session_key).title == "Keep"
+    assert SessionMetadataStore.get(session_key).pinned == true
+  end
+
   defp seed_session(session_key, run_id, prompt, answer, events \\ [], updated_at_ms \\ nil) do
     Enum.each(events, &RunStore.append_event(run_id, &1))
 
