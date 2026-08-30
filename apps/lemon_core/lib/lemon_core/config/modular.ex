@@ -45,6 +45,7 @@ defmodule LemonCore.Config.Modular do
     Gateway,
     Logging,
     Providers,
+    Secrets,
     Tools,
     TUI,
     ValidationError,
@@ -58,6 +59,7 @@ defmodule LemonCore.Config.Modular do
     :logging,
     :tui,
     :providers,
+    :secrets,
     :features
   ]
 
@@ -68,6 +70,7 @@ defmodule LemonCore.Config.Modular do
           logging: Logging.t(),
           tui: TUI.t(),
           providers: Providers.t(),
+          secrets: Secrets.t(),
           features: Features.t()
         }
 
@@ -229,6 +232,7 @@ defmodule LemonCore.Config.Modular do
       logging: Logging.resolve(settings),
       tui: TUI.resolve(settings),
       providers: Providers.resolve(settings),
+      secrets: Secrets.resolve(settings),
       features: Features.resolve(settings)
     }
   end

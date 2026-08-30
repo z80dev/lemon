@@ -414,7 +414,7 @@ lemon_core ───────────→ (no umbrella deps - foundational
 
 - **User config**: `~/.lemon/config.toml`
 - **Project config**: `.lemon/config.toml` (optional, in repo root; not tracked — copy from `examples/config.example.toml`)
-- **Secrets**: Managed via `mix lemon.secrets.*` tasks (`set`, `list`, `delete`, `status`, `init`)
+- **Secrets**: Managed via `mix lemon.secrets.*` tasks; explicitly enabled external sources are inspected/tested with `lemon secrets sources status|test` and remain read-only fallbacks behind the encrypted store
 - **Config inspection**: `mix lemon.config` - show resolved runtime config
 - **Store migration**: `mix lemon.store.migrate_jsonl_to_sqlite`
 
@@ -631,7 +631,9 @@ Each app has its own `AGENTS.md` with detailed context:
 
 ---
 
-*Last updated: 2026-08-30* (the Mix-free command registry now drives runtime
+*Last updated: 2026-08-30* (external 1Password, Bitwarden, and argv-only command
+secret sources now share one supervised, bounded, fail-closed resolver and
+redacted source/packaged diagnostics; the Mix-free command registry drives runtime
 dispatch/help/completion and the packaged/source sessions CLI reuses the shared
 redacted lifecycle; architecture reporting parses complete `deps/0`
 bodies and distinguishes direct dependencies from reference-only exceptions;

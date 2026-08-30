@@ -17,7 +17,7 @@ defmodule LemonCli.CLI do
       gateway setup [transport] [--transport NAME] [--non-interactive]
       doctor [--verbose] [--json] [--bundle [PATH]] [--bundle-path PATH] [--project-dir PATH]
       config [validate|show] [--verbose] [--project-dir PATH]
-      secrets <status|init|set|list|delete|check|import-env>
+      secrets <status|init|set|list|delete|check|import-env|sources>
       channels [--project-dir PATH] [--json]
       profile <list|show|create|clone|rename|export|delete|roster|chat>
       backup <contract|create|list|verify|restore> [options]
@@ -494,6 +494,11 @@ defmodule LemonCli.CLI do
   defp run_secrets(["check" | _rest]), do: secrets_check()
   defp run_secrets(["import-env" | rest]), do: secrets_import_env(rest)
 
+  defp run_secrets(["sources" | rest]) do
+    ensure_apps_started!([:lemon_core])
+    LemonCli.SecretSourcesCommand.run(rest)
+  end
+
   defp run_secrets(_other) do
     print_secrets_usage()
     @exit_usage
@@ -694,20 +699,25 @@ defmodule LemonCli.CLI do
 
     from_store = Enum.count(results, &(&1 == :store))
     from_env = Enum.count(results, &(&1 == :env))
+    from_external = Enum.count(results, &external_source?/1)
     missing = Enum.count(results, &(&1 == :missing))
 
     IO.puts("")
-    IO.puts("#{from_store} from store, #{from_env} from env, #{missing} missing")
+
+    IO.puts(
+      "#{from_store} from store, #{from_external} from external sources, " <>
+        "#{from_env} from env, #{missing} missing"
+    )
 
     @exit_ok
   end
 
   defp check_secret(name, max_name_len) do
     case Secrets.resolve(name) do
-      {:ok, value, source} ->
+      {:ok, _value, source} ->
         padded_name = String.pad_trailing(name, max_name_len)
-        padded_source = String.pad_trailing(to_string(source), 7)
-        IO.puts("#{padded_name}  #{padded_source}  #{mask(value)}")
+        padded_source = String.pad_trailing(format_secret_source(source), 7)
+        IO.puts("#{padded_name}  #{padded_source}  present")
         source
 
       {:error, _reason} ->
@@ -718,13 +728,13 @@ defmodule LemonCli.CLI do
     end
   end
 
-  defp mask(value) when byte_size(value) > 8 do
-    first = String.slice(value, 0, 4)
-    last = String.slice(value, -4, 4)
-    "#{first}...#{last}"
-  end
+  defp format_secret_source(source) when is_binary(source), do: source
+  defp format_secret_source(source), do: to_string(source)
 
-  defp mask(_value), do: "***"
+  defp external_source?(source) when is_binary(source),
+    do: String.starts_with?(source, "external:")
+
+  defp external_source?(_source), do: false
 
   defp secrets_import_env(args) do
     ensure_apps_started!([:lemon_core])

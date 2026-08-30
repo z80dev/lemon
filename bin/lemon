@@ -430,6 +430,9 @@ if [[ "${1:-}" == "secrets" ]]; then
   shift
   subcommand="${1:-}"
   case "$subcommand" in
+    sources)
+      run_source_runtime_cli "secrets" "$@"
+      ;;
     check|delete|import-env|init|list|set|status)
       shift
       cd "$LEMON_ROOT"
@@ -448,6 +451,7 @@ Commands:
   delete <name>
   check <name>
   import-env
+  sources <status|test> [source-id] [--json]
 EOF
       exit 0
       ;;

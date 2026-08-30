@@ -34,18 +34,23 @@ defmodule Mix.Tasks.Lemon.Secrets.Check do
 
     from_store = Enum.count(results, &(&1 == :store))
     from_env = Enum.count(results, &(&1 == :env))
+    from_external = Enum.count(results, &external_source?/1)
     missing = Enum.count(results, &(&1 == :missing))
 
     Mix.shell().info("")
-    Mix.shell().info("#{from_store} from store, #{from_env} from env, #{missing} missing")
+
+    Mix.shell().info(
+      "#{from_store} from store, #{from_external} from external sources, " <>
+        "#{from_env} from env, #{missing} missing"
+    )
   end
 
   defp check_secret(name, max_name_len) do
     case Secrets.resolve(name) do
-      {:ok, value, source} ->
+      {:ok, _value, source} ->
         padded_name = String.pad_trailing(name, max_name_len)
-        padded_source = String.pad_trailing(to_string(source), 7)
-        Mix.shell().info("#{padded_name}  #{padded_source}  #{mask(value)}")
+        padded_source = String.pad_trailing(format_source(source), 7)
+        Mix.shell().info("#{padded_name}  #{padded_source}  present")
         source
 
       {:error, _reason} ->
@@ -56,13 +61,13 @@ defmodule Mix.Tasks.Lemon.Secrets.Check do
     end
   end
 
-  defp mask(value) when byte_size(value) > 8 do
-    first = String.slice(value, 0, 4)
-    last = String.slice(value, -4, 4)
-    "#{first}...#{last}"
-  end
+  defp format_source(source) when is_binary(source), do: source
+  defp format_source(source), do: to_string(source)
 
-  defp mask(_value), do: "***"
+  defp external_source?(source) when is_binary(source),
+    do: String.starts_with?(source, "external:")
+
+  defp external_source?(_source), do: false
 
   defp start_lemon_core! do
     Mix.Task.run("loadpaths")

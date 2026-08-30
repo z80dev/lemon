@@ -10,6 +10,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Explicitly enabled, read-only 1Password, Bitwarden Secrets Manager, and
+  argv-only command secret sources integrated behind the encrypted Lemon store,
+  with exact schema validation, supervised time/output bounds, minimal child
+  environments, fail-closed fallback behavior, optional bounded in-memory
+  caching, and source/packaged `lemon secrets sources status|test` diagnostics
+  that expose readiness/provenance only.
+
 - Source and packaged `lemon sessions` commands for bounded list/search/show
   and redacted history, title/pin/archive lifecycle, always-redacted
   JSON/Markdown export, exact-candidate preview-confirm prune, and verified
@@ -111,6 +118,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Packaged and Mix `secrets check` output now reports only `present` and source
+  category counts; it no longer reveals credential prefixes or suffixes.
 - Lemon Web now ships compiled CSS inside the release instead of loading
   Tailwind from a runtime CDN, so the local chat shell works offline.
 - Vendored Phoenix and LiveView browser clients now match the locked server

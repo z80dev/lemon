@@ -42,9 +42,10 @@ The largest remaining differences are product integration and usability:
 - Hermes exposes an extensive coherent CLI. Lemon's packaged CLI covers setup,
   model, gateway, doctor, config, secrets, and channels; additional operations
   are split across the source wrapper, Mix tasks, TUI, and JSON-RPC.
-- Hermes has richer session search/export/archive/prune, update/backup/profile
-  lifecycle, external secret sources, and an outbound credential-injection
-  proxy.
+- Hermes has richer update/profile lifecycle and an outbound
+  credential-injection proxy. Lemon now has read-only 1Password, Bitwarden, and
+  argv-only command sources behind its encrypted store, but no general egress
+  broker that withholds credentials from arbitrary remote/browser/tool work.
 - Hermes documentation has a more complete install-to-daily-use information
   architecture and many more task guides. Lemon's architecture and proof docs
   are deep, but some user workflows remain under-documented.
@@ -84,8 +85,8 @@ Do not choose Lemon yet if your requirement depends on:
 - isolated user-created profiles/bots with clone/export/delete and group-chat UX
 - complete session search/export/archive/pin/prune workflows
 - an integrated update-plan/rollback and whole-data backup/restore lifecycle
-- 1Password/Bitwarden/command-backed secret sources or a general egress
-  credential broker
+- a general egress credential broker that withholds real credentials from
+  arbitrary remote/browser/tool execution
 - a hosted managed service
 - Discord behavior beyond the live-proven text-first and file-delivery boundary
 

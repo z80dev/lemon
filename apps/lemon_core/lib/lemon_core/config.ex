@@ -17,7 +17,13 @@ defmodule LemonCore.Config do
 
   require Logger
 
-  defstruct providers: %{}, agent: %{}, tui: %{}, logging: %{}, gateway: %{}, agents: %{}
+  defstruct providers: %{},
+            agent: %{},
+            tui: %{},
+            logging: %{},
+            gateway: %{},
+            agents: %{},
+            secrets: %LemonCore.Config.Secrets{}
 
   @type provider_config :: %{
           optional(:api_key) => String.t() | nil,
@@ -35,7 +41,8 @@ defmodule LemonCore.Config do
           tui: map(),
           logging: map(),
           gateway: map(),
-          agents: map()
+          agents: map(),
+          secrets: LemonCore.Config.Secrets.t()
         }
 
   @doc """
@@ -153,7 +160,8 @@ defmodule LemonCore.Config do
       tui: config.tui,
       logging: config.logging,
       gateway: config.gateway,
-      agents: config.agents
+      agents: config.agents,
+      secrets: secrets_to_map(config.secrets)
     }
   end
 
@@ -170,7 +178,8 @@ defmodule LemonCore.Config do
       tui: convert_tui(modular.tui),
       logging: convert_logging(modular.logging),
       gateway: convert_gateway(modular.gateway),
-      agents: convert_agents(profiles, defaults)
+      agents: convert_agents(profiles, defaults),
+      secrets: modular.secrets
     }
   end
 
@@ -418,7 +427,8 @@ defmodule LemonCore.Config do
       tui: deep_merge_values(config.tui, overrides["tui"]),
       logging: deep_merge_values(config.logging, overrides["logging"]),
       gateway: deep_merge_values(config.gateway, overrides["gateway"]),
-      agents: deep_merge_values(config.agents, overrides["agents"])
+      agents: deep_merge_values(config.agents, overrides["agents"]),
+      secrets: config.secrets
     }
   end
 
@@ -444,6 +454,19 @@ defmodule LemonCore.Config do
   # ============================================================================
   # Helpers
   # ============================================================================
+
+  defp secrets_to_map(%LemonCore.Config.Secrets{} = secrets) do
+    secrets
+    |> Map.from_struct()
+    |> Map.update!(:sources, fn sources ->
+      Enum.map(sources, fn
+        %LemonCore.Config.Secrets.Source{} = source -> Map.from_struct(source)
+        source -> source
+      end)
+    end)
+  end
+
+  defp secrets_to_map(secrets), do: secrets
 
   defp parse_thinking_level(nil), do: :medium
   defp parse_thinking_level("off"), do: :off

@@ -6,7 +6,7 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 
 - **Configuration management** - TOML-based config loading, caching, validation, and hot reloading
 - **First-run readiness** - Shared read-only config/secrets/provider/model readiness for all clients
-- **Secrets management** - Encrypted storage with AES-256-GCM, keychain integration
+- **Secrets management** - Encrypted storage with AES-256-GCM, keychain integration, and bounded read-only external sources
 - **Storage backends** - Pluggable storage (ETS, SQLite, JSONL) for state persistence
 - **Event bus** - Process-safe PubSub via Phoenix.PubSub for cross-app communication
 - **Session key management** - Canonical session key formats for routing
@@ -29,9 +29,14 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.ConfigReloader` | Hot reload orchestrator with diff computation and Bus broadcast |
 | `LemonCore.ConfigReloader.Watcher` | FileSystem watcher that targets `config.toml`/`.env` paths (file-first, parent-dir fallback) and triggers reload only for those files |
 | `LemonCore.Setup.Readiness` | Derives stable `:config`, `:secrets`, and `:provider` first-run steps without mutation or network calls |
-| `LemonCore.Secrets` | Encrypted secrets API (get/set/list/delete) |
+| `LemonCore.Secrets` | Encrypted secrets API plus store/external/environment resolution |
+| `LemonCore.Config.Secrets` | Exact `[secrets.sources.<id>]` schema and validation |
 | `LemonCore.Secrets.Crypto` | AES-256-GCM encryption with HKDF key derivation |
 | `LemonCore.Secrets.EnvCatalog` | Ordered environment-secret catalog shared by packaged and Mix check/import commands |
+| `LemonCore.Secrets.External` | Ordered, supervised, fail-closed external-source orchestrator and redacted diagnostics |
+| `LemonCore.Secrets.Source` | Read-only external source behaviour implemented by 1Password, Bitwarden, and command adapters |
+| `LemonCore.Secrets.SourceRunner` | Minimal-environment, argv-only subprocess boundary with time/output limits |
+| `LemonCore.Secrets.SourceCache` | Bounded optional process-local TTL cache; disabled by default |
 | `LemonCore.Secrets.Keychain` | macOS keychain integration for master key storage |
 | `LemonCore.Secrets.MasterKey` | Master key resolution (keychain first, then env var) |
 | `LemonCore.OAuth.LocalCallbackListener` | Caller-owned one-shot localhost OAuth callback listener; monitors its listener manager so early failure returns immediately instead of consuming the authorization timeout |
@@ -286,7 +291,33 @@ exists? = LemonCore.Secrets.exists?("api_key")
 
 ### Env Fallback
 
-Secrets automatically fallback to environment variables (same name). Use `env_fallback: false` to disable.
+Resolution uses the encrypted store first, then explicitly enabled external
+sources in priority/id order, then an environment variable of the same name.
+Use `env_fallback: false` to disable both external and environment fallbacks.
+An enabled external source that fails stops before the environment fallback;
+only a successful source that lacks the requested name continues. Bootstrap
+credentials deliberately use `resolve_local/2` so sources cannot recursively
+invoke themselves.
+
+### External Sources
+
+`[secrets.sources.<id>]` supports `onepassword`, `bitwarden`, and `command`.
+Every source requires exact `enabled = true`, exact known settings, an argv-only
+program boundary, and validated time/output/cache bounds. Source processes run
+under `LemonCore.Secrets.SourceTaskSupervisor`; combined stdout/stderr is
+bounded and never copied into errors, logs, status, or proof output. The
+optional `SourceCache` holds at most 32 process-local entries and defaults off.
+
+Readiness and live source proof are exposed in both source and packaged
+runtimes:
+
+```bash
+lemon secrets sources status --json
+lemon secrets sources test [source-id] --json
+```
+
+These commands report only readiness/provenance/count/byte/duration metadata.
+See `docs/config.md#external-secret-sources` for the exact provider schemas.
 
 `LemonCore.Secrets.EnvCatalog` owns the ordered set of environment-backed
 credentials shown by `secrets check` and considered by `secrets import-env` in
@@ -444,6 +475,7 @@ LemonCore.Bus.broadcast("session:" <> session_key, event)
 1. Secrets are provider-agnostic -- the `provider` field is metadata only
 2. To add a new master key source, implement `LemonCore.Secrets.KeyProvider` and add it to `key_providers`
 3. To add a new keychain backend, implement the same interface as `LemonCore.Secrets.Keychain`
+4. To add an external read-only source, implement `LemonCore.Secrets.Source`, register its type in `Config.Secrets` and `Secrets.External`, and preserve the shared runner, stable error vocabulary, and redacted diagnostic contract
 
 ### Adding a New Onboarding Provider
 
@@ -554,6 +586,10 @@ mix lemon.secrets.set API_KEY abc123 --provider manual --expires-at 173568960000
 
 # Delete a secret
 mix lemon.secrets.delete API_KEY
+
+# Inspect/test external read-only sources without revealing values
+./bin/lemon secrets sources status
+./bin/lemon secrets sources test [source-id] --json
 
 # Check/import the shared environment-secret catalog
 mix lemon.secrets.check
@@ -888,14 +924,18 @@ UUIDs come from the vendored `LemonCore.UUID` (v4 + v7), not the unmaintained `:
 
 ## Supervised Process Tree
 
-The `LemonCore.Application` supervisor starts (`:one_for_one`):
+The `LemonCore.Application` supervisor starts (`:one_for_one`), including:
 
 1. `Phoenix.PubSub` (name: `LemonCore.PubSub`) - PubSub backbone
-2. `LemonCore.ConfigCache` - ETS-backed config cache
-3. `LemonCore.Store` - Storage GenServer
-4. `LemonCore.RunHistoryStore` - Run history persistence (requires the optional `exqlite` dep)
-5. `LemonCore.ConfigReloader` - Reload orchestrator
-6. `LemonCore.ConfigReloader.Watcher` - File-system watcher (optional, requires `file_system` dep)
+2. `LemonCore.ACPClientBridge` - Direct ACP client request/reply registry
+3. `LemonCore.NodeRegistry` - Live named-node registry and invocation broker
+4. `LemonCore.ConfigCache` - ETS-backed config cache
+5. `LemonCore.Store` - Storage GenServer
+6. `LemonCore.Secrets.SourceTaskSupervisor` - Bounded external-source task owner
+7. `LemonCore.Secrets.SourceCache` - Bounded optional process-local source cache
+8. `LemonCore.RunHistoryStore` - Run history persistence (requires the optional `exqlite` dep)
+9. `LemonCore.ConfigReloader` - Reload orchestrator
+10. `LemonCore.ConfigReloader.Watcher` - File-system watcher (optional, requires `file_system` dep)
 
 Durable memory is supervised by the `lemon_memory` app, not here.
 
@@ -905,7 +945,7 @@ Durable memory is supervised by the `lemon_memory` app, not here.
 - Browser, media-job, and LSP drivers live in `lemon_browser`, `lemon_media`, and `lemon_lsp`; core doctor diagnostics may only probe them at runtime.
 - Keep module interfaces stable - other apps depend on them
 - `LemonCore.Config.load/2` uses the cache by default; `LemonCore.Config.reload/2` forces a disk read and updates the cache
-- Secrets values are never logged or returned by list/status APIs
+- Secrets values are never logged or returned by list/status/test/proof APIs
 - Secret reads (`get/2`) update usage metadata (`usage_count`, `last_used_at`) but do not mutate `updated_at`
 - SQLite serializes keys and values with `:erlang.term_to_binary/1`; JSONL uses
   a JSON codec that preserves atoms, tuples, structs, and nested map keys

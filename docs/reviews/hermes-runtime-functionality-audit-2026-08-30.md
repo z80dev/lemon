@@ -39,8 +39,8 @@ could not persist one recurring instruction inside the current conversation and
 re-enter that conversation only when idle. This pass closes that gap end to end.
 
 The remaining gaps are no longer one missing agent loop. They cluster around
-document ingestion, proactive automation templates, managed secret/egress
-integrations, micro-compaction, session housekeeping commands, and a few
+document ingestion, proactive automation templates, host-side egress
+credential injection, micro-compaction, session housekeeping commands, and a few
 restart/ergonomic edges in asynchronous delegation.
 
 ## Detailed parity matrix
@@ -65,7 +65,7 @@ means Hermes has a current user-facing behavior with no equivalent Lemon path.
 | Subagents/delegation | Native subagents, background work, parent interaction | Native `task`, routed `agent`, budgets, run graph, parent questions, isolated `/bg`, named remote nodes | **Lead**. Restart reconciliation for persisted nonterminal asynchronous records and caller-selected join timeouts remain reliability gaps. |
 | Provider/model choice | Multiple providers, credential pools, fallback, selectable presets and MoA | Provider registry, credential pools, fallback, session pins, routing policy, live model selection | **Covered** for normal models. Named mixture-of-agents presets and the Portal subscription proxy remain **gaps**. |
 | Context management | Auto/lean compaction, micro-compaction, tool search | Auto-compaction, overflow recovery, tool-result spill, guardrails, progressive disclosure | **Covered** for context survival. Per-result micro-compaction and provider-native compaction are **gaps**. |
-| Approvals and trust | Tool policy, managed scope, sandbox/egress options | Central exec approvals, tool policy profiles, untrusted-result fencing, capability boundaries, node authentication | **Covered/lead** in local policy. Host-side egress credential injection and managed secret-source adapters are **gaps**. |
+| Approvals and trust | Tool policy, managed scope, sandbox/egress options | Central exec approvals, tool policy profiles, untrusted-result fencing, capability boundaries, node authentication, and explicitly enabled supervised 1Password/Bitwarden/argv-only secret sources behind the encrypted store | **Covered/lead** in local policy and host credential sourcing. Host-side egress credential injection remains a **gap**. |
 | Reliability | Persistent sessions, cron recovery, background processes | OTP supervision, durable stores, retries, run ownership, terminalization, named-node cancellation | **Lead**, with the asynchronous boot reconciler noted above still missing. |
 | Observability | CLI diagnostics, telemetry and session inspection | structured introspection, run graph, usage/cost diagnostics, proof artifacts, health/readiness, support bundles | **Lead**. |
 | Updates and scripting | update command, backup/recovery, config/model/session/cron CLIs | Release channels and updater plus setup/doctor/config/secrets/model/provider/usage/proof commands, script send, and source/packaged atomic backup/verify/restore with a versioned data contract | **Covered** for local user-state backup/recovery. Update plan/apply/rollback receipts, session export/prune/stats, shell completions, and some install-plugin ergonomics remain gaps. |
@@ -119,8 +119,9 @@ focused live-runtime proof.
   separate from activation.
 - Add automation blueprints plus an opt-in suggestion workflow; keep suggestions
   advisory until a user confirms the schedule and destination.
-- Add managed 1Password, Bitwarden Secrets Manager, and bounded command-backed
-  secret sources without exposing values to session history or child nodes.
+- Extend the shipped 1Password, Bitwarden Secrets Manager, and bounded
+  command-backed sources only when a new adapter can preserve the shared
+  argv-only runner, bootstrap non-recursion, and value-free diagnostic contract.
 - Add named mixture-of-agents presets through Lemon's existing model-routing
   boundary rather than a parallel agent engine.
 - Add session export, prune, and stats commands to the unified CLI/control plane.
