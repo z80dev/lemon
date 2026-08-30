@@ -417,7 +417,7 @@ lemon_browser ────────→ lemon_core
 lemon_lsp ────────────→ lemon_core
 lemon_media ──────────→ lemon_core
 lemon_platform_test ──→ lemon_core, lemon_channels, lemon_memory, lemon_ai, lemon_agent (all optional: true)
-lemon_web ────────────→ lemon_core, lemon_router
+lemon_web ────────────→ lemon_agent, lemon_core, lemon_router
 x_api ────────────────→ lemon_core, lemon_channels, lemon_agent, lemon_ai, lemon_platform_test*
 lemon_ai ─────────────→ (no umbrella deps - standalone LLM client library)
 lemon_core ───────────→ (no umbrella deps - foundational shared library)

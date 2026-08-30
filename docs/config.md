@@ -696,6 +696,14 @@ provide an arbitrary config path. Results expose provider and pool names plus
 counts; they never include raw keys, secret names, credential references, base
 URLs, or environment-variable names.
 
+Preview results include an opaque `configRevision`. A caller that passes it
+back as `expectedRevision` on apply gets an atomic stale-write guard: the shared
+service compares the revision while holding its target-config lock and rejects
+the mutation if any config content changed after preview. `/manage/providers`
+uses this contract for all Web mutations, then adds exact confirmation for
+destructive actions and requires credential-reference values to be re-entered
+instead of retaining them in LiveView state.
+
 Memory-provider readiness is visible through read-only `memory.status` and
 support-bundle `memory_diagnostics.json`. These surfaces expose
 provider ids, enabled state, source labels, scopes, timeout shape, and module

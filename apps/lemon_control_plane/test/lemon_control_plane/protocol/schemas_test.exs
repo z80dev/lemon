@@ -301,6 +301,7 @@ defmodule LemonControlPlane.Protocol.SchemasTest do
                  "providers" => ["openai", "zai"],
                  "strategy" => "round_robin",
                  "apply" => true,
+                 "expectedRevision" => "opaque-revision",
                  "activate" => true,
                  "confirm" => "burst",
                  "scope" => "project",

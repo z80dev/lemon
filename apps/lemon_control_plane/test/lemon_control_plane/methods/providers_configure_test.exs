@@ -74,6 +74,32 @@ defmodule LemonControlPlane.Methods.ProvidersConfigureTest do
     assert File.read!(ctx.config_path) =~ "zai"
   end
 
+  test "maps stale preview revisions to a redacted conflict", ctx do
+    File.write!(ctx.config_path, "# initial\n")
+
+    assert {:ok, preview} =
+             ProvidersConfigure.handle(
+               %{"action" => "fallback.add", "provider" => "zai"},
+               @ctx
+             )
+
+    File.write!(ctx.config_path, "# changed elsewhere\n")
+
+    assert {:error, {:conflict, message, %{"code" => "stale_configuration"}}} =
+             ProvidersConfigure.handle(
+               %{
+                 "action" => "fallback.add",
+                 "provider" => "zai",
+                 "apply" => true,
+                 "expectedRevision" => preview["configRevision"]
+               },
+               @ctx
+             )
+
+    assert message == "Provider configuration changed after the preview; preview again"
+    assert File.read!(ctx.config_path) == "# changed elsewhere\n"
+  end
+
   test "never returns credential reference names", _ctx do
     assert {:ok, result} =
              ProvidersConfigure.handle(

@@ -11,6 +11,7 @@ Key entry points:
 - **Endpoint**: `lib/lemon_web/endpoint.ex` -- HTTP pipeline and socket config
 - **Main LiveView**: `lib/lemon_web/live/session_live.ex` -- the dashboard chat UI
 - **Management LiveView**: `lib/lemon_web/live/management_live.ex` -- session/runtime operations
+- **Provider management**: `lib/lemon_web/live/provider_management_live.ex` -- redacted routing mutations
 - **Session export**: `lib/lemon_web/controllers/session_export_controller.ex` -- redacted downloads
 - **Auth plug**: `lib/lemon_web/plugs/require_access_token.ex` -- optional chat or required management token gate
 
@@ -26,6 +27,7 @@ Key entry points:
 - **Run control**: Active browser runs expose cancellation plus explicit
   follow-up/steer/redirect submission through the shared router contracts
 - **Session lifecycle**: Shared `LemonCore.SessionLifecycle` list/search/title/pin/archive/export/prune operations; never duplicate its stores
+- **Provider lifecycle**: Shared `LemonAgent.ModelRuntime.ProviderConfiguration` preview/apply boundary; never edit provider TOML directly from the Web app
 - **Management security**: `/manage` fails closed without a configured access token; inspection/export are always redacted
 - **Resume**: Named chat routes reconstruct durable prompt/tool/answer history using the internal trusted unredacted mode
 
@@ -46,7 +48,7 @@ Key entry points:
 
 - `LemonWeb.Application` - Supervisor with `Telemetry` and `Endpoint` (`:one_for_one`)
 - `LemonWeb.Endpoint` - HTTP/WebSocket endpoint (uses Bandit); session stored in signed cookie `_lemon_web_key`
-- `LemonWeb.Router` - Chat routes plus token-required `/manage` list/detail/export routes
+- `LemonWeb.Router` - Chat routes plus token-required `/manage` session/export and `/manage/providers` routes
 - `LemonWeb.Telemetry` - Phoenix telemetry metrics
 
 ## LiveView Structure
@@ -90,7 +92,9 @@ live "/sessions/:session_key", SessionLive, :show  # Uses the provided session k
 The UI must fail closed while `LemonCore.Setup.Readiness.ready?/1` is false:
 do not consume uploads, append a user message, or call `LemonRouter.submit/1`.
 The terminal setup flow owns mutations; the Web surface is a read-only status
-and recovery guide until a future settings journey is designed.
+and recovery guide. The separately authenticated `/manage/providers` route is
+the only current Web settings journey and delegates every write to the shared
+provider-configuration service.
 
 Named session mounts also call `SessionLifecycle.history/2` with
 `redact: false` to reconstruct the user's private conversation in order. This
@@ -119,6 +123,24 @@ Prune UI rules are security properties: preview first; archived-only and
 unpinned by default; show exact candidate keys; keep the opaque confirmation
 token server-side; and require a new preview after any lifecycle mutation.
 Never add raw event/run dumps to management inspection or exports.
+
+### ProviderManagementLive
+
+`LemonWeb.ProviderManagementLive` renders redacted effective fallback and
+credential-pool state and delegates every preview/apply to
+`LemonAgent.ModelRuntime.ProviderConfiguration`. It may show validated provider
+and pool identifiers plus counts, but never raw credential references, secret
+or environment names, base URLs, config paths, prompts, or service error
+payloads.
+
+All Web writes are preview-first. Keep the opaque config revision server-side
+and pass it as `expectedRevision` on apply so a concurrent config edit fails
+closed. Destructive actions additionally require the exact confirmation from
+the service. Credential-reference values use password fields, are filtered from
+Phoenix logs, are hashed only long enough to match preview with re-entry, and
+must never be copied into socket drafts or rendered HTML. Stale and refused
+mutations keep non-secret drafts; stale previews are cleared so they cannot be
+replayed.
 
 ### Message Structure
 
@@ -440,6 +462,12 @@ When testing routes behind `RequireAccessToken`, either:
 - `LemonCore.NodeRegistry.max_control_text_bytes/0` -- Shared text bound for
   Web steer/redirect guidance
 
+### lemon_agent
+
+- `LemonAgent.ModelRuntime.ProviderConfiguration` -- The sole provider-routing
+  mutation, validation, atomic-write, confirmation, revision, and redaction
+  boundary used by the Web management page
+
 ### lemon_router
 
 - `LemonRouter.submit/1` -- Submits a prompt to be routed to the appropriate agent. Returns `{:ok, run_id}` or `{:error, reason}`.
@@ -474,6 +502,7 @@ apps/lemon_web/
 |-- lib/lemon_web/live/
 |   |-- session_live.ex                 # Main dashboard LiveView
 |   |-- management_live.ex              # Authenticated session operations
+|   |-- provider_management_live.ex     # Authenticated provider-routing operations
 |   |-- components/
 |       |-- file_upload_component.ex    # Upload UI with progress bars
 |       |-- message_component.ex        # Chat message bubbles
@@ -493,6 +522,7 @@ apps/lemon_web/
 |-- priv/
 |   |-- static/assets/app.css          # Checked-in compiled Tailwind stylesheet
 |   |-- static/assets/session.css      # Responsive active-run controls and notices
+|   |-- static/assets/management.css   # Responsive session/provider management UI
 |   |-- static/assets/app.js           # Client JS (LiveSocket init, session keys)
 |   |-- gettext/.keep                   # i18n placeholder
 |-- test/

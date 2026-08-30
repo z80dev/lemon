@@ -21,6 +21,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   existing authenticated control-plane/`CronManager` path, with stable redacted
   JSON/exit codes, registry-driven help/completion, duplicate-safe results, and
   real source plus assembled minimal-runtime proof.
+- Authenticated Web provider-routing management at `/manage/providers`, with
+  redacted effective status, ordered fallback controls, credential-pool and
+  credential-reference lifecycle, preview-first writes, exact confirmation for
+  destructive changes, and stale-preview rejection through opaque config
+  revisions. Credential references are password-masked, filtered from logs,
+  re-entered for apply, and never retained or rendered by the LiveView.
 - Source and packaged `lemon sessions` commands for bounded list/search/show
   and redacted history, title/pin/archive lifecycle, always-redacted
   JSON/Markdown export, exact-candidate preview-confirm prune, and verified

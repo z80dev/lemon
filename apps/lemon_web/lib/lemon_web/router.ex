@@ -34,6 +34,7 @@ defmodule LemonWeb.Router do
     pipe_through(:management_browser)
 
     live("/", ManagementLive, :index)
+    live("/providers", ProviderManagementLive, :index)
     live("/sessions/:session_key", ManagementLive, :show)
     get("/sessions/:session_key/export/:format", SessionExportController, :show)
   end

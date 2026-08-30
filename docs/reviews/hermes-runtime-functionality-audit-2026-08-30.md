@@ -155,6 +155,13 @@ activation, and duplicate-safe replay through the real control-plane and cron
 manager while asserting that catalog paths, prompt text, the operator token,
 and the isolated secrets key never appear in CLI output.
 
+The same boundary now powers the authenticated `/manage/providers` page. Its
+fallback, pool, activation, and credential-reference controls are preview-first,
+bind apply to an opaque target-config revision, require exact confirmation for
+destructive changes, and render only provider/pool identities and counts.
+Credential references are re-entered for apply, filtered from LiveView logs,
+and never retained or rendered.
+
 ## Prioritized remaining runtime work
 
 ### P0 — reliability and safety closure
