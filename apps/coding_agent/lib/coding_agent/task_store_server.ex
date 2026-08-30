@@ -65,6 +65,27 @@ defmodule CodingAgent.TaskStoreServer do
     GenServer.call(server, {:transition, task_id, target_status, update_fn}, 10_000)
   end
 
+  @doc "Atomically reserve task followups for a join owned by the calling process."
+  @spec begin_auto_followup_join([String.t()], reference(), GenServer.server()) :: :ok
+  def begin_auto_followup_join(task_ids, join_token, server \\ __MODULE__) do
+    GenServer.call(server, {:begin_auto_followup_join, task_ids, join_token}, 10_000)
+  end
+
+  @doc "Resolve a join reservation and permanently suppress the selected task followups."
+  @spec finish_auto_followup_join(
+          [String.t()],
+          [String.t()],
+          reference(),
+          GenServer.server()
+        ) :: :ok
+  def finish_auto_followup_join(task_ids, suppressed_task_ids, join_token, server \\ __MODULE__) do
+    GenServer.call(
+      server,
+      {:finish_auto_followup_join, task_ids, suppressed_task_ids, join_token},
+      10_000
+    )
+  end
+
   @doc "Delete a task from ETS and DETS through the serialized owner."
   @spec delete_task(String.t(), GenServer.server()) :: :ok
   def delete_task(task_id, server \\ __MODULE__) do
@@ -111,7 +132,9 @@ defmodule CodingAgent.TaskStoreServer do
       dets_path: dets_path(opts),
       ets_initialized: false,
       dets_initialized: false,
-      loaded_from_dets: false
+      loaded_from_dets: false,
+      join_reservations: %{},
+      join_monitor_refs: %{}
     }
 
     # Initialize tables synchronously during init
@@ -191,6 +214,44 @@ defmodule CodingAgent.TaskStoreServer do
     end
   end
 
+  def handle_call({:begin_auto_followup_join, task_ids, join_token}, {owner, _tag}, state) do
+    state = ensure_tables(state)
+    task_ids = Enum.uniq(task_ids)
+
+    Enum.each(task_ids, fn task_id ->
+      update_task_record(task_id, fn record ->
+        tokens = Map.get(record, :auto_followup_join_tokens, [])
+        Map.put(record, :auto_followup_join_tokens, Enum.uniq([join_token | tokens]))
+      end)
+    end)
+
+    state = track_join_reservation(state, join_token, owner, task_ids)
+    {:reply, :ok, state}
+  end
+
+  def handle_call(
+        {:finish_auto_followup_join, task_ids, suppressed_task_ids, join_token},
+        _from,
+        state
+      ) do
+    state = ensure_tables(state)
+    suppressed = MapSet.new(suppressed_task_ids)
+
+    Enum.each(Enum.uniq(task_ids), fn task_id ->
+      update_task_record(task_id, fn record ->
+        record = remove_join_token(record, join_token)
+
+        if MapSet.member?(suppressed, task_id) do
+          Map.put(record, :auto_followup_suppressed_at, System.system_time(:second))
+        else
+          record
+        end
+      end)
+    end)
+
+    {:reply, :ok, release_join_reservation(state, join_token)}
+  end
+
   def handle_call({:delete_task, task_id}, _from, state) do
     state = ensure_tables(state)
     :ets.delete(@table, task_id)
@@ -210,6 +271,7 @@ defmodule CodingAgent.TaskStoreServer do
 
   def handle_call(:clear, _from, state) do
     state = ensure_tables(state)
+    state = release_all_join_reservations(state)
 
     if state.ets_initialized do
       :ets.delete_all_objects(@table)
@@ -251,6 +313,23 @@ defmodule CodingAgent.TaskStoreServer do
     _deleted_count = do_cleanup(ttl_seconds)
     schedule_cleanup()
     {:noreply, state}
+  end
+
+  def handle_info({:DOWN, monitor_ref, :process, _pid, _reason}, state) do
+    case Map.pop(state.join_monitor_refs, monitor_ref) do
+      {nil, _join_monitor_refs} ->
+        {:noreply, state}
+
+      {join_token, join_monitor_refs} ->
+        {reservation, join_reservations} = Map.pop(state.join_reservations, join_token)
+
+        Enum.each(reservation.task_ids, fn task_id ->
+          update_task_record(task_id, &remove_join_token(&1, join_token))
+        end)
+
+        {:noreply,
+         %{state | join_reservations: join_reservations, join_monitor_refs: join_monitor_refs}}
+    end
   end
 
   def handle_info({:EXIT, _pid, _reason}, state) do
@@ -322,14 +401,18 @@ defmodule CodingAgent.TaskStoreServer do
       :dets.foldl(
         fn {task_id, record, events}, :ok ->
           record =
-            if Map.get(record, :status) in [:running, :tracking_lost] do
-              record
-              |> Map.put(:status, :lost)
-              |> Map.put(:error, :lost_on_restart)
-              |> Map.put(:completed_at, now)
-            else
-              record
-            end
+            record
+            |> Map.delete(:auto_followup_join_tokens)
+            |> then(fn record ->
+              if Map.get(record, :status) in [:running, :tracking_lost] do
+                record
+                |> Map.put(:status, :lost)
+                |> Map.put(:error, :lost_on_restart)
+                |> Map.put(:completed_at, now)
+              else
+                record
+              end
+            end)
 
           :ets.insert(@table, {task_id, record, events})
           :ok
@@ -352,6 +435,73 @@ defmodule CodingAgent.TaskStoreServer do
     end
 
     :ok
+  end
+
+  defp update_task_record(task_id, update_fn) do
+    case :ets.lookup(@table, task_id) do
+      [{^task_id, record, events}] ->
+        updated =
+          record
+          |> update_fn.()
+          |> Map.put(:updated_at, System.system_time(:second))
+
+        do_insert_record(task_id, updated, events)
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp track_join_reservation(state, join_token, owner, task_ids) do
+    case Map.get(state.join_reservations, join_token) do
+      nil ->
+        monitor_ref = Process.monitor(owner)
+
+        reservation = %{
+          owner: owner,
+          monitor_ref: monitor_ref,
+          task_ids: task_ids
+        }
+
+        %{
+          state
+          | join_reservations: Map.put(state.join_reservations, join_token, reservation),
+            join_monitor_refs: Map.put(state.join_monitor_refs, monitor_ref, join_token)
+        }
+
+      _reservation ->
+        state
+    end
+  end
+
+  defp release_join_reservation(state, join_token) do
+    case Map.pop(state.join_reservations, join_token) do
+      {nil, _join_reservations} ->
+        state
+
+      {%{monitor_ref: monitor_ref}, join_reservations} ->
+        Process.demonitor(monitor_ref, [:flush])
+
+        %{
+          state
+          | join_reservations: join_reservations,
+            join_monitor_refs: Map.delete(state.join_monitor_refs, monitor_ref)
+        }
+    end
+  end
+
+  defp release_all_join_reservations(state) do
+    Enum.each(state.join_reservations, fn {_join_token, %{monitor_ref: monitor_ref}} ->
+      Process.demonitor(monitor_ref, [:flush])
+    end)
+
+    %{state | join_reservations: %{}, join_monitor_refs: %{}}
+  end
+
+  defp remove_join_token(record, join_token) do
+    Map.update(record, :auto_followup_join_tokens, [], fn tokens ->
+      Enum.reject(tokens, &(&1 == join_token))
+    end)
   end
 
   defp transition_allowed?(status, _target_status) when status in @terminal_statuses,

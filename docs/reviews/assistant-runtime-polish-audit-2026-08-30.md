@@ -69,6 +69,41 @@ idempotent completion aggregation, and DETS-load/live-write ordering.
   leaves a still-running router run authoritative, and performs bounded
   reconciliation so a late success can still become terminal.
 
+## Independent chaos-review findings
+
+Two additional state races were confirmed and fixed:
+
+- Kanban task leasing and lease-guarded terminal transitions previously used a
+  store read followed by a separate store write. In a 64-contender barrier
+  probe against one task, 10 repeated rounds produced between 1 and 31
+  successful leases for that single task. Board-scoped mutation locks now make
+  lease selection, lease validation, reclaim, completion, failure, comments,
+  and task updates one serialized read-modify-write boundary. A deterministic
+  64-contender regression asserts exactly one lease winner.
+- Explicit task/agent joins previously persisted transient suppression tokens
+  without associating them with the joining process. A crashed joiner, or a
+  store restart that reloaded its token, could suppress the automatic terminal
+  followup forever. `TaskStoreServer` now owns join reservations atomically,
+  monitors their owners, releases them on `:DOWN`, and discards stale
+  reservations during DETS recovery. Both join tools also release reservations
+  in `after` blocks. A process-death regression verifies cleanup.
+
+One cross-owner race remains open because its complete fix belongs at the
+router run-ownership boundary:
+
+- A hard GoalLoop stop can land after the router accepted a run but before
+  `RunCompletionWaiter` invokes `on_submitted`. At that point
+  `GoalLoopManager` still has `active_run: nil`; it kills the loop task and
+  records `stopped` without calling `abort_run/2`, while the accepted router
+  run remains live. A deterministic probe used a loop module that reported
+  router acceptance and paused immediately before `on_submitted`. The observed
+  result was `active_run_id: nil`, `abort_result: :no_abort`, and a successful
+  hard-stop reply. The production sequence has the same window:
+  `router.submit/1` returns `{:ok, run_id}` before `notify(on_submitted, run_id)`
+  records the ID in the manager. Closing it requires an abort tombstone or an
+  atomic submit/ownership handshake in the router lifecycle, so an abort that
+  arrives before ownership publication also cancels a just-accepted run.
+
 ## Next high-value improvements
 
 ### 1. Make async lifecycle ownership reusable
