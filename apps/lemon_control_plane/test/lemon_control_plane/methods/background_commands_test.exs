@@ -132,7 +132,7 @@ defmodule LemonControlPlane.Methods.BackgroundCommandsTest do
     assert opts[:session_key] == "telegram:42"
     assert opts[:cwd] == "/tmp/project"
     assert opts[:model] == "test-model"
-    assert opts[:thinking_level] == "high"
+    assert opts[:thinking_level] == :high
     assert opts[:timeout_ms] == 10_000
 
     assert {:ok, %{"runs" => [run], "total" => 1}} =
@@ -140,6 +140,17 @@ defmodule LemonControlPlane.Methods.BackgroundCommandsTest do
 
     assert run["id"] == "bg_123"
     assert run["status"] == "running"
+  end
+
+  test "normalizes and validates background thinking levels before runtime dispatch" do
+    assert {:error, {:invalid_params, message, %{"field" => "thinkingLevel"}}} =
+             BackgroundStart.handle(
+               %{"prompt" => "run checks", "thinkingLevel" => "turbo"},
+               %{}
+             )
+
+    assert message =~ "thinkingLevel must be one of"
+    refute_received {:background_start, _opts}
   end
 
   test "reports status, readiness, results, and cancellation" do

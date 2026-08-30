@@ -159,7 +159,7 @@ defmodule CodingAgent.BackgroundRunTest do
                history_fn: history_fn,
                active_run_fn: fn ^session_key -> :none end,
                policy_fn: fn ^session_key ->
-                 %{model: Mocks.mock_model(), thinking_level: :low}
+                 %{model: Mocks.mock_model(), thinking_level: "low"}
                end,
                runner: runner,
                timeout_ms: 1_234
@@ -168,6 +168,7 @@ defmodule CodingAgent.BackgroundRunTest do
     assert_receive {:key_side_query, session_opts, "recall both turns", 1_234}
     assert Keyword.fetch!(session_opts, :tools) == []
     assert Keyword.fetch!(session_opts, :session_key) != session_key
+    assert Keyword.fetch!(session_opts, :thinking_level) == :low
 
     assert Enum.map(Keyword.fetch!(session_opts, :initial_messages), &message_text/1) == [
              "first question",

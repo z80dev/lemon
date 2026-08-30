@@ -379,7 +379,7 @@ resolves its own credentials and cwd. This path uses the native
 | Method | Scope | Description |
 |--------|-------|-------------|
 | `commands.catalog` | read | Return the portable command catalog with aliases, descriptions, arguments, busy policies, semantic capability ids, category counts, and versioned summary; discovery only, never command execution |
-| `background.start` | write | Start an isolated full-tool native agent session and return its durable lifecycle id immediately |
+| `background.start` | write | Start an isolated full-tool native agent session, validating and normalizing any `thinkingLevel`, and return its durable lifecycle id immediately |
 | `background.list` | read | List sanitized durable background-run lifecycle summaries, optionally filtered by status |
 | `background.status` | read | Read one sanitized background-run lifecycle summary |
 | `background.result` | read | Read the visible answer after completion, or report that the run is not ready |

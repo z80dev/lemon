@@ -570,7 +570,7 @@ remote result, or error.
 | Method | Scope | Description |
 |--------|-------|-------------|
 | `commands.catalog` | read | Return the portable, JSON-safe command catalog with aliases, descriptions, argument and busy-state metadata, semantic capability ids, category counts, and a versioned summary; this method never executes a command |
-| `background.start` | write | Start an isolated full-tool native agent session and return its durable lifecycle id immediately |
+| `background.start` | write | Start an isolated full-tool native agent session, validating and normalizing any `thinkingLevel`, and return its durable lifecycle id immediately |
 | `background.list` | read | List sanitized durable background-run lifecycle summaries, optionally filtered by status |
 | `background.status` | read | Read one sanitized background-run lifecycle summary |
 | `background.result` | read | Read the visible answer after completion, or report that the run is not ready |

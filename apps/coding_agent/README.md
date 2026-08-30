@@ -366,8 +366,10 @@ the same content-free classifications and do not copy retained error terms.
 no-tools session. Its source may be a live session pid/id, a durable channel
 session key, or an explicit `%{messages: ..., system_prompt: ...}` snapshot.
 Live context is captured atomically and frozen for the child; durable keys use
-bounded `LemonCore.RunStore` history plus session policy. Side queries use a
-separate ephemeral session key and never mutate parent history.
+bounded `LemonCore.RunStore` history plus session policy. Persisted string
+reasoning levels are normalized to the atom-valued native session contract
+before the no-tools child starts. Side queries use a separate ephemeral
+session key and never mutate parent history.
 Runner failures are collapsed to bounded atoms (`:timeout`, `:cancelled`, or
 `:query_failed`) so adapters never receive provider details or local paths.
 

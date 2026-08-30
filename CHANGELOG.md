@@ -60,6 +60,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   classifications; their control-plane RPCs allowlist lifecycle fields and
   return fixed bounded error codes/messages without provider terms, persisted
   errors, filesystem paths, or credential details.
+- Background and durable side-query launches now normalize string-valued
+  reasoning policy to the native atom contract before provider execution.
 - Packaged and Mix secrets check/import commands now share one ordered
   environment-credential catalog instead of maintaining three copies
 - LemonSim scenarios now share one bounded model/provider/credential resolver;

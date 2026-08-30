@@ -323,7 +323,8 @@ in-memory session cannot be resumed implicitly. `/btw` uses
 `CodingAgent.SideQuery.ask/3`: a new session receives either one atomic frozen
 live-session snapshot or bounded durable `RunStore` history, always with
 `tools: []` and a distinct ephemeral session key. Neither path mutates or
-steers the source conversation.
+steers the source conversation. Normalize string-valued reasoning policy from
+durable session state before starting the atom-valued native session.
 Background task records retain raw internal failures for runtime diagnosis,
 but the `BackgroundRun` lifecycle facade and emitted lifecycle events expose
 only stable content-free classifications. `SideQuery` likewise collapses

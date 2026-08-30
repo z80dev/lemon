@@ -21,6 +21,14 @@ defmodule CodingAgent.SideQuery do
   @max_timeout_ms 120_000
   @default_history_runs 20
   @max_history_runs 50
+  @thinking_levels %{
+    "off" => :off,
+    "minimal" => :minimal,
+    "low" => :low,
+    "medium" => :medium,
+    "high" => :high,
+    "xhigh" => :xhigh
+  }
 
   @type source :: pid() | String.t() | %{required(:messages) => list()}
 
@@ -144,7 +152,7 @@ defmodule CodingAgent.SideQuery do
       [
         cwd: context.cwd,
         model: context[:model],
-        thinking_level: context[:thinking_level],
+        thinking_level: normalize_thinking_level(context[:thinking_level]),
         system_prompt: context[:system_prompt],
         settings_manager: context[:settings_manager],
         workspace_dir: context[:workspace_dir],
@@ -262,6 +270,10 @@ defmodule CodingAgent.SideQuery do
 
   defp normalize_timestamp(value) when is_integer(value), do: value
   defp normalize_timestamp(_), do: System.system_time(:millisecond)
+
+  defp normalize_thinking_level(level) when is_atom(level), do: level
+  defp normalize_thinking_level(level) when is_binary(level), do: Map.get(@thinking_levels, level)
+  defp normalize_thinking_level(_level), do: nil
 
   defp history_limit(opts) do
     case Keyword.get(opts, :history_limit, @default_history_runs) do

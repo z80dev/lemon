@@ -2,6 +2,7 @@ defmodule LemonControlPlane.Methods.BackgroundCommandSupport do
   @moduledoc false
 
   alias LemonControlPlane.AgentRuntime
+  alias LemonRouter.ThinkingLevel
 
   @statuses ~w(queued running completed error lost killed cancelled tracking_lost)
   @max_id_bytes 256
@@ -14,9 +15,22 @@ defmodule LemonControlPlane.Methods.BackgroundCommandSupport do
     |> put(:session_key, params["sessionKey"] || params["sessionId"])
     |> put(:cwd, params["cwd"])
     |> put(:model, params["model"])
-    |> put(:thinking_level, params["thinkingLevel"])
+    |> put(:thinking_level, ThinkingLevel.normalize(params["thinkingLevel"]))
     |> put(:timeout_ms, params["timeoutMs"])
   end
+
+  def validate_thinking_level(%{"thinkingLevel" => level}) when is_binary(level) do
+    if ThinkingLevel.valid_string?(level) do
+      :ok
+    else
+      {:error,
+       {:invalid_params,
+        "thinkingLevel must be one of: #{Enum.join(ThinkingLevel.allowed_strings(), ", ")}",
+        %{"field" => "thinkingLevel"}}}
+    end
+  end
+
+  def validate_thinking_level(_params), do: :ok
 
   def project_start(result) when is_map(result) do
     with {:ok, id} <- identifier(fetch(result, :id)),
@@ -190,18 +204,20 @@ defmodule LemonControlPlane.Methods.BackgroundStart do
 
   @impl true
   def handle(%{"prompt" => prompt} = params, _ctx) when is_binary(prompt) do
-    case Support.call(:background_start, [prompt, Support.opts(params)]) do
-      {:ok, result} ->
-        case Support.project_start(result) do
-          {:ok, payload} -> {:ok, payload}
-          {:error, reason} -> Support.error(:start, reason)
-        end
+    with :ok <- Support.validate_thinking_level(params) do
+      case Support.call(:background_start, [prompt, Support.opts(params)]) do
+        {:ok, result} ->
+          case Support.project_start(result) do
+            {:ok, payload} -> {:ok, payload}
+            {:error, reason} -> Support.error(:start, reason)
+          end
 
-      {:error, reason} ->
-        Support.error(:start, reason)
+        {:error, reason} ->
+          Support.error(:start, reason)
 
-      _other ->
-        Support.error(:start, :invalid_runtime_response)
+        _other ->
+          Support.error(:start, :invalid_runtime_response)
+      end
     end
   end
 
