@@ -16,8 +16,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - LemonSim Mix tasks now share ordinary runtime, option, and bounded
   provider/model helpers instead of maintaining two dozen private copies;
   arbitrary provider CLI input no longer creates atoms
-- XMTP and WhatsApp now share one supervised Node bridge port lifecycle behind
-  their existing adapter-specific `PortServer` APIs, scripts, and event tags
+- XMTP and WhatsApp now share one supervised Node bridge port lifecycle while
+  retaining their adapter-specific `PortServer` callback/process identities,
+  scripts, event tags, and module-scoped warning logs
 - Documentation quality checks now use a compact catalog with shared defaults,
   explicit lifecycle/visibility metadata, and Git-index-based coverage that
   ignores untracked local drafts
@@ -30,6 +31,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Lemon Web now builds its ignored shared/server entrypoints before clean-checkout
+  `npm run dev` and `npm start`; the client quality lane exercises that
+  clean-artifact startup contract
 - Authenticated TUI control-plane handshakes now send the token in the server's
   `params.auth.token` envelope
 - Packaged minimal and full runtimes now assemble the MCP client library, so

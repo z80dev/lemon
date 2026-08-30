@@ -251,7 +251,8 @@ bun src/main.ts      # Dev mode
 ```bash
 cd clients/lemon-web
 npm install
-npm run dev      # Start web server + frontend
+npm run dev      # Build shared once, then start shared/server/web watchers
+npm start        # Build generated shared/server entrypoints, then start the server
 npm run build    # Build shared/server/web packages
 npm run test:coverage
 ```

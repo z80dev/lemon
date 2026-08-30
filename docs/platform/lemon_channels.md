@@ -11,6 +11,7 @@ through `LemonCore.RouterBridge`. This page will become the package README: the 
 `Plugin` callbacks with a worked example, runtime adapter registration, and the
 outbound rendering pipeline.
 
-XMTP and WhatsApp retain adapter-specific public `PortServer` APIs, bridge scripts,
-event tags, and logging while sharing line-delimited JSON port lifecycle, restart,
-and reconnect handling in the internal `LemonChannels.PortBridge` GenServer.
+XMTP and WhatsApp retain adapter-specific public `PortServer` callback/process
+identities, bridge scripts, event tags, and module-scoped warning logging while
+sharing line-delimited JSON port lifecycle, restart, and reconnect handling in
+`LemonChannels.PortBridge`.

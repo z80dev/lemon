@@ -51,6 +51,19 @@ npm install
 npm run dev
 ```
 
+The root `predev` hook builds `shared/dist` before the server and workspace
+watchers start, so local development is deterministic from a clean checkout.
+
+## Start the server
+
+```bash
+npm start
+```
+
+The root `prestart` hook rebuilds the ignored shared and server entrypoints
+before launching `server/dist/index.js`; generated `dist` files do not need to
+be present in Git.
+
 ## Build
 
 ```bash
