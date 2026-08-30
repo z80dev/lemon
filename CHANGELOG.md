@@ -189,6 +189,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Redirect acknowledgement now waits until the correction is queued and the
+  active model request is signaled, preventing a fast completion from silently
+  racing ahead of an accepted redirect.
 - Persistent Python kernels now preserve parent/child stdout and stderr ordering
   instead of allowing block-buffered parent output to appear after child-process
   output.
