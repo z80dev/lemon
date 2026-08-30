@@ -1,96 +1,268 @@
 defmodule LemonControlPlane.Methods.NodeInvokeResult do
   @moduledoc """
-  Handler for the node.invoke.result control plane method.
+  Handler for `node.invoke.result` and registry-driven terminal outcomes.
 
-  Called by nodes to report the result of an invocation.
-  Role: node
+  A node may complete only invocations owned by the node ID in its authenticated
+  connection context. The live registry remains the authority for pending
+  invocation ownership; the control-plane store is the durable status view.
   """
 
   @behaviour LemonControlPlane.Method
 
   alias LemonControlPlane.NodeStore
+  alias LemonControlPlane.Auth.TokenStore
   alias LemonControlPlane.Protocol.Errors
 
   @impl true
   def name, do: "node.invoke.result"
 
   @impl true
-  # Node role required
-  def scopes, do: []
+  def scopes, do: [:invoke]
 
   @impl true
   def handle(params, ctx) do
-    # Verify node role - check ctx.auth.role (dispatcher passes ctx.auth in :auth key)
     auth = ctx[:auth] || ctx
-    role = auth[:role] || auth.role
+    role = get_field(auth, :role)
+    authenticated_node_id = get_field(auth, :client_id)
+    connection_pid = ctx[:conn_pid]
+    generation = session_generation(auth)
+    invoke_id = params["invokeId"] || params["invoke_id"]
+    result = params["result"]
+    error = params["error"]
 
-    if role != :node do
-      {:error, Errors.forbidden("This method requires node role")}
-    else
-      invoke_id = params["invokeId"] || params["invoke_id"]
-      result = params["result"]
-      error = params["error"]
+    cond do
+      role != :node ->
+        {:error, Errors.forbidden("This method requires node role")}
 
-      if is_nil(invoke_id) or invoke_id == "" do
-        {:error, Errors.invalid_request("invokeId is required")}
-      else
-        case NodeStore.get_invocation(invoke_id) do
-          nil ->
-            {:error, Errors.not_found("Invocation not found")}
+      not is_binary(authenticated_node_id) or authenticated_node_id == "" ->
+        {:error, Errors.forbidden("Authenticated node identity is required")}
 
-          invocation ->
-            # Update invocation with result (use Map.merge since keys may not exist)
-            updates = %{
-              status: if(error, do: :error, else: :completed),
-              result: result,
-              error: error,
-              completed_at_ms: System.system_time(:millisecond)
-            }
+      not is_binary(invoke_id) or String.trim(invoke_id) == "" ->
+        {:error, Errors.invalid_request("invokeId must be a non-empty string")}
 
-            updated = Map.merge(invocation, updates)
-            NodeStore.put_invocation(invoke_id, updated)
+      not is_pid(connection_pid) ->
+        {:error, Errors.forbidden("Authenticated node connection is required")}
 
-            # Broadcast result event
-            # Safe access supporting both atom and string keys (for JSONL reload)
-            event =
-              LemonCore.Event.new(:node_invoke_completed, %{
-                invoke_id: invoke_id,
-                node_id: get_field(invocation, :node_id),
-                result: result,
-                error: error,
-                ok: is_nil(error)
-              })
+      not current_session?(authenticated_node_id, generation) ->
+        {:error, Errors.forbidden("Node session has been superseded")}
 
-            LemonCore.Bus.broadcast("nodes", event)
-
-            {:ok,
-             %{
-               "invokeId" => invoke_id,
-               "received" => true,
-               "summary" => %{
-                 "invokeId" => invoke_id,
-                 "nodeId" => get_field(invocation, :node_id),
-                 "status" => if(error, do: "error", else: "completed"),
-                 "ok" => is_nil(error),
-                 "hasResult" => not is_nil(result),
-                 "hasError" => not is_nil(error),
-                 "cleanup" => %{
-                   "includesResult" => false,
-                   "includesError" => false,
-                   "includesArgs" => false,
-                   "includesCredentials" => false,
-                   "includesSecretValues" => false
-                 }
-               }
-             }}
-        end
-      end
+      true ->
+        complete_invocation(
+          authenticated_node_id,
+          connection_pid,
+          generation,
+          invoke_id,
+          result,
+          error
+        )
     end
   end
 
-  # Safe map access supporting both atom and string keys
-  # This handles JSONL reload where keys become strings
-  defp get_field(map, key) when is_atom(key) do
+  @doc false
+  def record_registry_result(invoke_id, {:ok, result}) when is_binary(invoke_id) do
+    settle_pending(invoke_id, result, nil)
+  end
+
+  def record_registry_result(invoke_id, {:error, {:remote, error}})
+      when is_binary(invoke_id) do
+    settle_pending(invoke_id, nil, error)
+  end
+
+  def record_registry_result(invoke_id, {:error, reason}) when is_binary(invoke_id) do
+    settle_pending(invoke_id, nil, inspect(reason))
+  end
+
+  defp complete_invocation(
+         authenticated_node_id,
+         connection_pid,
+         generation,
+         invoke_id,
+         result,
+         error
+       ) do
+    case LemonCore.NodeRegistry.complete_session(
+           authenticated_node_id,
+           connection_pid,
+           generation,
+           invoke_id,
+           result,
+           error
+         ) do
+      :ok ->
+        settle_live_result(authenticated_node_id, invoke_id, result, error)
+
+      {:error, :wrong_node} ->
+        {:error, Errors.forbidden("Invocation belongs to a different node")}
+
+      {:error, :not_found} ->
+        complete_legacy_invocation(authenticated_node_id, invoke_id, result, error)
+
+      {:error, :stale_session} ->
+        {:error, Errors.forbidden("Invocation belongs to a superseded node session")}
+
+      {:error, {:invalid_payload, reason}} ->
+        {:error,
+         Errors.error(
+           :invalid_request,
+           "result violates JSON payload policy",
+           payload_error_kind(reason)
+         )}
+    end
+  end
+
+  # The node can answer immediately after the registry dispatches the request,
+  # before NodeInvoke has persisted its durable status record. Registry
+  # ownership is therefore checked first; the source connection will settle
+  # the durable record from the registry notification once its dispatch call
+  # returns.
+  defp settle_live_result(authenticated_node_id, invoke_id, result, error) do
+    case NodeStore.get_invocation(invoke_id) do
+      invocation when is_map(invocation) ->
+        if get_field(invocation, :node_id) == authenticated_node_id and pending?(invocation) do
+          settle_and_reply(invocation, invoke_id, result, error)
+        else
+          accepted_reply(authenticated_node_id, invoke_id, result, error)
+        end
+
+      _ ->
+        accepted_reply(authenticated_node_id, invoke_id, result, error)
+    end
+  end
+
+  defp complete_legacy_invocation(authenticated_node_id, invoke_id, result, error) do
+    case NodeStore.get_invocation(invoke_id) do
+      nil ->
+        {:error, Errors.not_found("Invocation not found")}
+
+      invocation ->
+        expected_node_id = get_field(invocation, :node_id)
+
+        cond do
+          expected_node_id != authenticated_node_id ->
+            {:error, Errors.forbidden("Invocation belongs to a different node")}
+
+          not pending?(invocation) ->
+            {:error, Errors.conflict("Invocation is no longer pending")}
+
+          get_field(invocation, :registry_managed) ->
+            {:error, Errors.conflict("Invocation is no longer pending")}
+
+          true ->
+            # Compatibility for durable invocations created before NodeRegistry
+            # became the live delivery authority.
+            settle_and_reply(invocation, invoke_id, result, error)
+        end
+    end
+  end
+
+  defp settle_and_reply(invocation, invoke_id, result, error) do
+    case LemonCore.JSONPayload.validate(%{"result" => result, "error" => error},
+           max_bytes: LemonControlPlane.max_payload()
+         ) do
+      {:ok, _stats} ->
+        :ok = settle(invocation, invoke_id, result, error)
+        accepted_reply(get_field(invocation, :node_id), invoke_id, result, error)
+
+      {:error, reason} ->
+        {:error,
+         Errors.error(
+           :invalid_request,
+           "result violates JSON payload policy",
+           payload_error_kind(reason)
+         )}
+    end
+  end
+
+  defp accepted_reply(node_id, invoke_id, result, error) do
+    {:ok,
+     %{
+       "invokeId" => invoke_id,
+       "received" => true,
+       "summary" => %{
+         "invokeId" => invoke_id,
+         "nodeId" => node_id,
+         "status" => if(error, do: "error", else: "completed"),
+         "ok" => is_nil(error),
+         "hasResult" => not is_nil(result),
+         "hasError" => not is_nil(error),
+         "cleanup" => %{
+           "includesResult" => false,
+           "includesError" => false,
+           "includesArgs" => false,
+           "includesCredentials" => false,
+           "includesSecretValues" => false
+         }
+       }
+     }}
+  end
+
+  defp settle_pending(invoke_id, result, error) do
+    case NodeStore.get_invocation(invoke_id) do
+      invocation when is_map(invocation) ->
+        if pending?(invocation), do: settle(invocation, invoke_id, result, error), else: :ok
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp settle(invocation, invoke_id, result, error) do
+    summary_opts = [max_bytes: LemonControlPlane.max_payload()]
+    result_summary = LemonCore.JSONPayload.summary(result, summary_opts)
+    error_summary = LemonCore.JSONPayload.summary(error, summary_opts)
+
+    updated =
+      invocation
+      |> Map.drop([:args, "args", :result, "result", :error, "error"])
+      |> Map.merge(%{
+        status: if(error, do: :error, else: :completed),
+        result_summary: result_summary,
+        error_summary: error_summary,
+        completed_at_ms: System.system_time(:millisecond)
+      })
+
+    with :ok <- NodeStore.put_invocation(invoke_id, updated) do
+      event =
+        LemonCore.Event.new(:node_invoke_completed, %{
+          invoke_id: invoke_id,
+          node_id: get_field(invocation, :node_id),
+          result_summary: result_summary,
+          error_summary: error_summary,
+          ok: is_nil(error)
+        })
+
+      LemonCore.Bus.broadcast("nodes", event)
+      :ok
+    end
+  end
+
+  defp pending?(invocation), do: get_field(invocation, :status) in [:pending, "pending"]
+
+  defp session_generation(auth) do
+    auth
+    |> get_field(:identity)
+    |> case do
+      identity when is_map(identity) -> get_field(identity, :sessionGeneration) || 0
+      _ -> 0
+    end
+  end
+
+  defp current_session?(node_id, generation) when is_integer(generation) do
+    case TokenStore.current_node_generation(node_id) do
+      nil -> generation == 0
+      current -> current == generation
+    end
+  end
+
+  defp current_session?(_node_id, _generation), do: false
+
+  defp payload_error_kind({kind, _detail})
+       when kind in [:max_bytes, :max_depth, :max_items, :not_json_safe],
+       do: kind
+
+  defp payload_error_kind(_reason), do: :invalid
+
+  defp get_field(map, key) when is_map(map) and is_atom(key) do
     Map.get(map, key) || Map.get(map, Atom.to_string(key))
   end
 end

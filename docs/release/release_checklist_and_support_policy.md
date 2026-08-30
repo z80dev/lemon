@@ -491,6 +491,12 @@ steps.
 - [ ] Run `scripts/test clients`.
 - [ ] Build `lemon_runtime_min` with `MIX_ENV=prod mix release lemon_runtime_min --overwrite`.
 - [ ] Build `lemon_runtime_full` with `MIX_ENV=prod mix release lemon_runtime_full --overwrite`.
+- [ ] Confirm `release-smoke.yml` builds both runtime profiles and evaluates the
+      packaged releases directly, while `scripts/verify_release_runtime_boot`
+      repeats the same check on each min/full release tarball. Each release must
+      load `LemonMCP.Client`, report `LemonSkills.McpSource.mcp_enabled?/0`, keep
+      `:lemon_mcp` loaded but not started, expose no application callback, and
+      contain no `LemonMCP.Application` module.
 - [ ] Build local Sim UI assets and `sim_broadcast_platform` with
       `MIX_ENV=prod mix sim_ui.assets.deploy` and
       `MIX_ENV=prod mix release sim_broadcast_platform --overwrite`.

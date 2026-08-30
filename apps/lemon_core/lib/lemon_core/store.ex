@@ -277,6 +277,25 @@ defmodule LemonCore.Store do
   end
 
   @doc """
+  Replaces a value only when its current value exactly matches `expected`.
+
+  The read and write are serialized inside the Store process. `nil` matches a
+  missing key (and, like `get/3`, cannot distinguish a stored `nil`).
+  """
+  @spec compare_and_swap(server(), atom(), term(), term(), term()) ::
+          :ok | {:error, :mismatch | term()}
+  def compare_and_swap(server \\ __MODULE__, table, key, expected, replacement) do
+    safe_store_call(
+      server,
+      {:generic_compare_and_swap, table, key, expected, replacement},
+      {:error, :store_unavailable},
+      op: :compare_and_swap,
+      table: table,
+      key: key
+    )
+  end
+
+  @doc """
   Get a value from a named table.
 
   Returns `nil` if the key doesn't exist.
@@ -303,6 +322,21 @@ defmodule LemonCore.Store do
   def delete(server \\ __MODULE__, table, key) do
     safe_store_call(server, {:generic_delete, table, key}, {:error, :store_unavailable},
       op: :delete,
+      table: table,
+      key: key
+    )
+  end
+
+  @doc """
+  Retrieves and deletes a key as one serialized Store operation.
+
+  Returns `nil` when the key is absent. If backend deletion fails, the value is
+  left in place and the backend error is returned.
+  """
+  @spec take(server(), atom(), term()) :: term() | nil | {:error, term()}
+  def take(server \\ __MODULE__, table, key) do
+    safe_store_call(server, {:generic_take, table, key}, {:error, :store_unavailable},
+      op: :take,
       table: table,
       key: key
     )
@@ -1061,6 +1095,41 @@ defmodule LemonCore.Store do
     end
   end
 
+  def handle_call({:generic_compare_and_swap, table, key, expected, replacement}, _from, state) do
+    case state.backend.get(state.backend_state, table, key) do
+      {:ok, current, backend_state} when current === expected ->
+        case state.backend.put(backend_state, table, key, replacement) do
+          {:ok, backend_state} ->
+            if table in state.cached_tables do
+              ReadCache.put(state.read_cache, table, key, replacement)
+            end
+
+            {:reply, :ok, %{state | backend_state: backend_state}}
+
+          {:error, reason} ->
+            log_backend_error(:compare_and_swap, table, key, reason)
+            {:reply, {:error, reason}, %{state | backend_state: backend_state}}
+
+          other ->
+            log_backend_unexpected(:compare_and_swap, table, key, other)
+
+            {:reply, {:error, {:unexpected_backend_response, other}},
+             %{state | backend_state: backend_state}}
+        end
+
+      {:ok, _current, backend_state} ->
+        {:reply, {:error, :mismatch}, %{state | backend_state: backend_state}}
+
+      {:error, reason} ->
+        log_backend_error(:compare_and_swap, table, key, reason)
+        {:reply, {:error, reason}, state}
+
+      other ->
+        log_backend_unexpected(:compare_and_swap, table, key, other)
+        {:reply, {:error, {:unexpected_backend_response, other}}, state}
+    end
+  end
+
   def handle_call({:generic_get, table, key}, _from, state) do
     case state.backend.get(state.backend_state, table, key) do
       {:ok, value, backend_state} ->
@@ -1096,6 +1165,41 @@ defmodule LemonCore.Store do
 
       other ->
         log_backend_unexpected(:delete, table, key, other)
+        {:reply, {:error, {:unexpected_backend_response, other}}, state}
+    end
+  end
+
+  def handle_call({:generic_take, table, key}, _from, state) do
+    case state.backend.get(state.backend_state, table, key) do
+      {:ok, nil, backend_state} ->
+        {:reply, nil, %{state | backend_state: backend_state}}
+
+      {:ok, value, backend_state} ->
+        case state.backend.delete(backend_state, table, key) do
+          {:ok, backend_state} ->
+            if table in state.cached_tables do
+              ReadCache.delete(state.read_cache, table, key)
+            end
+
+            {:reply, value, %{state | backend_state: backend_state}}
+
+          {:error, reason} ->
+            log_backend_error(:take, table, key, reason)
+            {:reply, {:error, reason}, %{state | backend_state: backend_state}}
+
+          other ->
+            log_backend_unexpected(:take, table, key, other)
+
+            {:reply, {:error, {:unexpected_backend_response, other}},
+             %{state | backend_state: backend_state}}
+        end
+
+      {:error, reason} ->
+        log_backend_error(:take, table, key, reason)
+        {:reply, {:error, reason}, state}
+
+      other ->
+        log_backend_unexpected(:take, table, key, other)
         {:reply, {:error, {:unexpected_backend_response, other}}, state}
     end
   end

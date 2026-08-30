@@ -22,6 +22,7 @@ defmodule LemonControlPlane.Auth.TokenStore do
   alias LemonCore.Store
 
   @store_namespace :session_tokens
+  @head_namespace :session_token_heads
 
   # Default token TTL: 24 hours
   @default_ttl_ms 24 * 60 * 60 * 1000
@@ -61,6 +62,30 @@ defmodule LemonControlPlane.Auth.TokenStore do
   end
 
   @doc """
+  Atomically replaces the current session credential for one durable node.
+
+  A token record is prepared first, then a compare-and-swap advances the
+  identity's single current-token head. Validation follows that head, so the
+  switch has no interval in which both the old and new token are accepted.
+  """
+  @spec replace_node_session(String.t(), map(), keyword()) ::
+          {:ok, token_info()} | {:error, term()}
+  def replace_node_session(token, identity, opts \\ [])
+
+  def replace_node_session(token, %{"type" => "node"} = identity, opts)
+      when is_binary(token) and token != "" do
+    case identity_id(identity, "node") do
+      node_id when is_binary(node_id) and node_id != "" ->
+        do_replace_node_session(token, identity, node_id, opts, 64)
+
+      _ ->
+        {:error, :invalid_node_identity}
+    end
+  end
+
+  def replace_node_session(_token, _identity, _opts), do: {:error, :invalid_node_identity}
+
+  @doc """
   Validate a token and return the associated identity.
 
   Returns the identity map if valid, or an error if:
@@ -92,7 +117,7 @@ defmodule LemonControlPlane.Auth.TokenStore do
             {:error, :expired_token}
 
           true ->
-            {:ok, identity}
+            validate_current_identity(token, identity)
         end
 
       # Handle legacy format or malformed data
@@ -117,6 +142,28 @@ defmodule LemonControlPlane.Auth.TokenStore do
   end
 
   def revoke(_), do: :ok
+
+  @doc "Revokes every token for one durable node or device identity."
+  @spec revoke_identity(String.t(), String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def revoke_identity(type, identity_id)
+      when is_binary(type) and is_binary(identity_id) and identity_id != "" do
+    with :ok <- maybe_invalidate_identity_head(type, identity_id) do
+      tokens = Store.list(@store_namespace)
+
+      matching =
+        Enum.filter(tokens, fn {_token, info} ->
+          identity = get_field(info, :identity)
+          identity_type(identity) == type and stored_identity_id(identity, type) == identity_id
+        end)
+
+      Enum.each(matching, fn {token, _info} -> Store.delete(@store_namespace, token) end)
+      {:ok, length(matching)}
+    end
+  rescue
+    error -> {:error, error}
+  end
+
+  def revoke_identity(_type, _identity_id), do: {:ok, 0}
 
   @doc """
   Get token info without validating expiration.
@@ -172,9 +219,9 @@ defmodule LemonControlPlane.Auth.TokenStore do
     case Store.list(@store_namespace) do
       tokens when is_list(tokens) ->
         tokens
-        |> Enum.filter(fn {_token, info} ->
+        |> Enum.filter(fn {token, info} ->
           expires_at = get_field(info, :expires_at_ms)
-          expires_at && expires_at > now
+          expires_at && expires_at > now && current_token_info?(token, info)
         end)
         |> Enum.map(fn {_token, info} -> info end)
 
@@ -182,4 +229,135 @@ defmodule LemonControlPlane.Auth.TokenStore do
         []
     end
   end
+
+  @doc "Returns the currently authorized session generation for a durable node."
+  @spec current_node_generation(String.t()) :: non_neg_integer() | nil
+  def current_node_generation(node_id) when is_binary(node_id) and node_id != "" do
+    @head_namespace
+    |> Store.get(head_key("node", node_id))
+    |> head_generation()
+  end
+
+  def current_node_generation(_node_id), do: nil
+
+  defp do_replace_node_session(_token, _identity, _node_id, _opts, 0),
+    do: {:error, :concurrent_session_rotation}
+
+  defp do_replace_node_session(token, identity, node_id, opts, attempts_left) do
+    key = head_key("node", node_id)
+    current = Store.get(@head_namespace, key)
+    generation = next_generation(current)
+    identity = Map.put(identity, "sessionGeneration", generation)
+    token_info = token_info(token, identity, opts)
+
+    with :ok <- Store.put(@store_namespace, token, token_info) do
+      case Store.compare_and_swap(@head_namespace, key, current, %{
+             token: token,
+             generation: generation
+           }) do
+        :ok ->
+          {:ok, token_info}
+
+        {:error, :mismatch} ->
+          Store.delete(@store_namespace, token)
+          do_replace_node_session(token, identity, node_id, opts, attempts_left - 1)
+
+        {:error, reason} ->
+          Store.delete(@store_namespace, token)
+          {:error, reason}
+      end
+    end
+  end
+
+  defp token_info(token, identity, opts) do
+    ttl_ms = Keyword.get(opts, :ttl_ms, @default_ttl_ms)
+    now = System.system_time(:millisecond)
+
+    %{
+      token: token,
+      identity: identity,
+      issued_at_ms: now,
+      expires_at_ms: now + ttl_ms,
+      conn_id: Keyword.get(opts, :conn_id)
+    }
+  end
+
+  defp validate_current_identity(token, identity) do
+    case identity_type(identity) do
+      "node" -> validate_current_node_token(token, identity)
+      _ -> {:ok, identity}
+    end
+  end
+
+  defp validate_current_node_token(token, identity) do
+    node_id = identity_id(identity, "node")
+    generation = get_field(identity, :sessionGeneration)
+    head = if is_binary(node_id), do: Store.get(@head_namespace, head_key("node", node_id))
+
+    cond do
+      is_nil(head) and is_nil(generation) ->
+        # Compatibility for sessions issued before generation heads existed.
+        {:ok, identity}
+
+      head_token(head) == token and head_generation(head) == generation ->
+        {:ok, identity}
+
+      true ->
+        {:error, :invalid_token}
+    end
+  end
+
+  defp current_token_info?(token, info) do
+    identity = get_field(info, :identity)
+
+    case identity_type(identity) do
+      "node" -> match?({:ok, _identity}, validate_current_node_token(token, identity))
+      _ -> true
+    end
+  end
+
+  defp maybe_invalidate_identity_head("node", node_id), do: invalidate_node_head(node_id, 64)
+  defp maybe_invalidate_identity_head(_type, _identity_id), do: :ok
+
+  defp invalidate_node_head(_node_id, 0), do: {:error, :concurrent_session_rotation}
+
+  defp invalidate_node_head(node_id, attempts_left) do
+    key = head_key("node", node_id)
+    current = Store.get(@head_namespace, key)
+    replacement = %{token: nil, generation: next_generation(current)}
+
+    case Store.compare_and_swap(@head_namespace, key, current, replacement) do
+      :ok -> :ok
+      {:error, :mismatch} -> invalidate_node_head(node_id, attempts_left - 1)
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp head_key(type, identity_id), do: {type, identity_id}
+
+  defp next_generation(head) do
+    case head_generation(head) do
+      generation when is_integer(generation) and generation >= 0 -> generation + 1
+      _ -> 1
+    end
+  end
+
+  defp head_generation(head) when is_map(head), do: get_field(head, :generation)
+  defp head_generation(_head), do: nil
+
+  defp head_token(head) when is_map(head), do: get_field(head, :token)
+  defp head_token(_head), do: nil
+
+  defp identity_type(identity) when is_map(identity), do: get_field(identity, :type)
+  defp identity_type(_identity), do: nil
+
+  defp stored_identity_id(identity, "node") when is_map(identity),
+    do: get_field(identity, :nodeId) || get_field(identity, :node_id)
+
+  defp stored_identity_id(identity, "device") when is_map(identity),
+    do: get_field(identity, :deviceId) || get_field(identity, :device_id)
+
+  defp stored_identity_id(_identity, _type), do: nil
+
+  defp identity_id(identity, type), do: stored_identity_id(identity, type)
 end

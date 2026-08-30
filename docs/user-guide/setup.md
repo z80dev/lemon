@@ -189,4 +189,13 @@ For non-interactive source configuration, use the same wrapper forms:
 ```
 
 `./bin/lemon-tui` is the source-development TUI entry point once the source
-runtime is configured.
+runtime is configured. A fresh launcher-owned runtime receives a generated,
+process-scoped operator token and is stopped when the TUI exits. Attaching to
+an existing or persistent runtime requires exporting its matching
+`LEMON_CONTROL_PLANE_OPERATOR_TOKEN`; the launcher does not read or persist the
+daemon's credential.
+
+Supplying a token does not make a runtime started by `./bin/lemon-tui`
+persistent: the launcher still stops it when the client exits. Start
+`./bin/lemon --daemon` separately, then attach with the same token, when the
+runtime should outlive the TUI.

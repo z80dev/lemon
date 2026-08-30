@@ -20,7 +20,7 @@ The control plane provides the external interface for clients (TUI, web, mobile,
 - **Manage secrets** - Store and retrieve API keys securely
 - **Schedule cron jobs** - Create recurring agent runs
 - **Install skills** - Manage agent capabilities
-- **Pair nodes/devices** - Connect browser extensions and mobile devices
+- **Pair nodes/devices** - Connect restricted clients, including named native coding execution nodes
 - **Stream real-time events** - WebSocket events for runs, chat deltas, approvals
 
 ## Architecture Overview
@@ -78,8 +78,9 @@ The control plane provides the external interface for clients (TUI, web, mobile,
 | `LemonControlPlane.ACP.NDJSON` | `lib/lemon_control_plane/acp/ndjson.ex` | Newline-delimited JSON transport helper used by `scripts/lemon_acp_stdio.exs` for spawned ACP stdio clients, including intermediate `session/update` notification lines and permission/read/write/delete/rename client requests while prompt waits are active |
 | `LemonControlPlane.WS.Connection` | `lib/lemon_control_plane/ws/connection.ex` | WebSocket connection handler (`WebSock` behaviour) |
 | `LemonControlPlane.Presence` | `lib/lemon_control_plane/presence.ex` | Connected client tracking (ETS-backed GenServer) |
+| `LemonControlPlane.NodeStore` | `lib/lemon_control_plane/node_store.ex` | Durable node identities, unique-name reservations, pairing challenges, and invocation status |
 | `LemonControlPlane.EventBridge` | `lib/lemon_control_plane/event_bridge.ex` | Bus events -> WebSocket fanout (GenServer + Task.Supervisor) |
-| `LemonControlPlane.Auth.Authorize` | `lib/lemon_control_plane/auth/authorize.ex` | Role-based access control; `from_params/1`, `authorize/3`, `default_operator/0` |
+| `LemonControlPlane.Auth.Authorize` | `lib/lemon_control_plane/auth/authorize.ex` | Role-based access control; peer-aware `from_params/2`, constant-time operator-token validation, `authorize/3`, `default_operator/0` |
 | `LemonControlPlane.Auth.TokenStore` | `lib/lemon_control_plane/auth/token_store.ex` | Token storage/validation for node/device auth (backed by `LemonCore.Store`) |
 | `LemonControlPlane.AgentIdentityStore` | `lib/lemon_control_plane/agent_identity_store.ex` | Typed wrapper for persisted agent identity records |
 | `LemonControlPlane.UpdateStore` | `lib/lemon_control_plane/update_store.ex` | Typed wrapper for update config and pending-update state |
@@ -88,6 +89,7 @@ The control plane provides the external interface for clients (TUI, web, mobile,
 | `LemonControlPlane.Protocol.Frames` | `lib/lemon_control_plane/protocol/frames.ex` | Protocol frame encoding/decoding; `parse/1`, `encode_response/2`, `encode_event/4`, `encode_hello_ok/1` |
 | `LemonControlPlane.Protocol.Errors` | `lib/lemon_control_plane/protocol/errors.ex` | Standard error constructors; `invalid_request/1`, `not_found/1`, `forbidden/1`, etc. |
 | `LemonControlPlane.Protocol.Schemas` | `lib/lemon_control_plane/protocol/schemas.ex` | Param and event payload schema validation; `validate/2`, `validate_event/2` |
+| `LemonCore.NodeRegistry` | `apps/lemon_core/lib/lemon_core/node_registry.ex` | Live name/ID resolution, targeted delivery, timeout/cancellation, disconnect failure, and invocation ownership |
 
 ## JSON-RPC Method Structure
 
@@ -326,17 +328,48 @@ when to render the full payload.
 
 | Method | Scope | Description |
 |--------|-------|-------------|
-| `node.list` | read | List paired nodes plus summary and cleanup flags |
+| `node.list` | read | List durable paired nodes with live online/offline status plus summary and cleanup flags |
 | `node.describe` | read | Get node details with redacted metadata summary and cleanup flags |
 | `node.rename` | write | Rename a node plus summary and cleanup flags |
-| `node.invoke` | write | Invoke a method on a node plus arg/result cleanup summary |
-| `node.invoke.result` | invoke | Node reports result of an invocation (node-only) plus result/error cleanup summary |
+| `node.invoke` | write | Invoke a method on one authenticated live node plus arg/result cleanup summary |
+| `node.invoke.result` | invoke | Owning node reports an invocation result; another node cannot settle it |
 | `node.event` | event | Node sends an event (node-only) plus payload summary and cleanup flags |
 | `node.pair.request` | pairing | Request to pair a node plus pairing-code delivery summary |
 | `node.pair.list` | pairing | List pending pairing requests plus summary and cleanup flags |
 | `node.pair.approve` | pairing | Approve a pairing request plus token/challenge delivery summary |
 | `node.pair.reject` | pairing | Reject a pairing request plus cleanup flags |
 | `node.pair.verify` | pairing | Verify a pairing code plus status cleanup summary |
+
+Node names are trimmed and reserved durably per controller; a second identity
+cannot pair or rename to a reserved name. `node.list` retains offline durable
+identities but derives status from `LemonCore.NodeRegistry`, so only a currently
+authenticated WebSocket can receive work. Pending invocations are bound to one
+node ID, fail when the node disconnects, and accept explicit targeted
+cancellation. Registry timeouts fail the source recipient but do not by
+themselves claim that destination execution was cancelled.
+
+An approved pairing ID may reissue a fresh one-time challenge for its existing
+durable node identity, allowing the joining worker to recover from socket loss
+after approval or challenge consumption without orphaning the reserved name.
+Challenge exchange is an atomic take: concurrent exchanges can issue at most
+one credential. Node credential replacement is also serialized per durable
+identity. Advancing its session generation immediately invalidates the prior
+token, closes the prior live socket, and prevents that socket from settling
+work dispatched by another generation.
+Named-node requests/results enforce the advertised `maxPayload` (1 MiB by
+default) plus shared depth/item-count limits. Raw request arguments exist only
+in the targeted live dispatch; durable invocation records retain a content-free
+argument summary. The raw terminal result is sent only to the source recipient,
+and awaited `browser.request` calls consume that private registry delivery
+directly. Durable invocation status and `node.invoke.completed` events contain
+content-free summaries, never raw request, result, or error values.
+
+The source-checkout coding worker advertises `coding_agent.run` version 1 and
+targeted cancellation. Its payload is a JSON-safe execution request/result
+contract; provider credentials, callbacks, executor options, and source BEAM
+state remain on the source or destination that owns them. The destination
+resolves its own credentials and cwd. This path uses the native
+`CodingAgent.Executor` and never a vendor CLI runner.
 
 ### Channels and Transports
 
@@ -387,7 +420,7 @@ when to render the full payload.
 | `last-heartbeat` | read | Get last heartbeat for an agent plus response summary and redaction flags |
 | `talk.mode` | write | Get or set talk mode for a session plus audio/transcript cleanup summary |
 | `browser.status` | read | Inspect local browser driver status, artifacts, browser nodes, and live browser proof state |
-| `browser.request` | write | Send a browser request with route-policy and result cleanup summaries |
+| `browser.request` | write | Send a browser request with route-policy summaries and optional private awaited result delivery |
 | `browser.controller.ticket` | write | Mint a short-lived single-use ticket bound to the authenticated principal, controller, profile, session/run, and capabilities |
 | `browser.controller.register` | write | Consume a ticket and bind the exact WebSocket process as a browser controller |
 | `browser.controller.heartbeat` | write | Refresh liveness for the exact registered controller process |
@@ -439,7 +472,7 @@ when to render the full payload.
 
 | Role | Scopes | How established |
 |------|--------|-----------------|
-| `operator` | `admin`, `read`, `write`, `approvals`, `pairing` | Default (no token); scope list in `connect` params |
+| `operator` | `admin`, `read`, `write`, `approvals`, `pairing` | Configured `LEMON_CONTROL_PLANE_OPERATOR_TOKEN`; legacy tokenless direct-loopback access requires an explicit compatibility opt-in |
 | `node` | `invoke`, `event` | Token from `connect.challenge` after node pairing |
 | `device` | `control` | Token from `connect.challenge` after device pairing |
 
@@ -455,7 +488,7 @@ Scope strings in `connect` params: `operator.admin`, `operator.read`, `operator.
      "id": "uuid",
      "method": "connect",
      "params": {
-       "auth": {"token": "optional-token"},
+       "auth": {"token": "configured-operator-token"},
        "role": "operator",
        "scopes": ["operator.read", "operator.write"]
      }
@@ -464,16 +497,36 @@ Scope strings in `connect` params: `operator.admin`, `operator.read`, `operator.
 3. Server responds with `hello-ok` frame (not a `res` frame) containing `features.methods`, `features.events`, `snapshot`, `auth`, and `policy`
 4. All subsequent requests use the established auth context
 
-Without a token, operators receive the scopes listed in `connect` params (or all operator scopes by default). With a valid token, role and scopes are derived from the stored identity.
+The HTTP router passes the actual socket peer into authorization. An operator
+token is required by default for every operator connection and compared in
+constant time. `LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK=true`
+explicitly restores the legacy tokenless path for direct loopback peers only;
+it defaults to `false`, and non-loopback peers always fail closed. Node/device
+session tokens derive role and scopes only from known stored identity types.
 
 ### Token-Based Auth (Nodes/Devices)
 
-1. Node calls `node.pair.request` -> operator approves via `node.pair.approve`
-2. Node calls `node.pair.verify` with the pairing code -> gets a challenge
-3. Node calls `connect.challenge` with the challenge -> receives a session token (TTL: 24 hours)
-4. Node uses `{"auth": {"token": "..."}}` in future `connect` calls
+1. Node calls `node.pair.request` -> operator approves via `node.pair.approve`, which returns a one-time challenge
+2. Node calls `connect.challenge` with that challenge -> receives a session token (TTL: seven days for this pairing flow)
+3. Node uses `{"auth": {"token": "..."}}` in future `connect` calls
+
+`node.pair.verify` is a pairing-code status check; it does not return the
+approval challenge or session token.
 
 Token validation is handled by `LemonControlPlane.Auth.TokenStore` (backed by `LemonCore.Store` under `:session_tokens` namespace).
+
+`./bin/lemon node join --pair` automates this exchange for the named coding
+worker when its operator connection has pairing scope. The worker persists the
+issued session and recovery credentials in a mode-0600 destination file keyed
+by durable node ID and records the exact controller URL; reuse fails closed
+when that controller does not match. ID-based recovery material is not loaded
+unless the caller supplies that exact stored controller URL. After the
+seven-day session expires,
+`--pair` recovers the same durable node and issues a fresh session while
+atomically revoking older sessions and their live sockets. Controller renames remain valid because recovery uses
+the node ID and controller's current name. An explicit operator-authorized
+`--pair --repair --node-id ID` rotates recovery credentials for compatible
+legacy records that lack one.
 
 ## Presence System
 
@@ -610,7 +663,7 @@ config :lemon_control_plane, capabilities: %{tts: true, wizard: false}
 
 ## EventBridge
 
-`LemonControlPlane.EventBridge` subscribes to `LemonCore.Bus` topics (`exec_approvals`, `channels`, `cron`, `goals`, `system`, `nodes`, `presence`) plus dynamic `run:*` and `session:*` topics. It maps bus event types to WS event names and fans out via a `Task.Supervisor`; each WebSocket connection then applies its own topic filter before pushing the event frame. New connections keep legacy all-event delivery until they set explicit subscriptions, while a clear-all unsubscribe suppresses later events for that connection. Subscribe to run events with `EventBridge.subscribe_run(run_id)` or generic dynamic topics with `EventBridge.subscribe_topics/1`.
+`LemonControlPlane.EventBridge` subscribes to `LemonCore.Bus` topics (`exec_approvals`, `channels`, `cron`, `goals`, `system`, `nodes`, `presence`) plus dynamic `run:*` and `session:*` topics. It maps bus event types to WS event names and fans out via a `Task.Supervisor`; each non-node WebSocket connection then applies its own topic filter before pushing the event frame. Authenticated node connections are excluded from this general fanout and receive only targeted `node_event` traffic. New non-node connections keep legacy all-event delivery until they set explicit subscriptions, while a clear-all unsubscribe suppresses later events for that connection. Subscribe to run events with `EventBridge.subscribe_run(run_id)` or generic dynamic topics with `EventBridge.subscribe_topics/1`.
 
 Key bus-event-to-WS-event mappings:
 
@@ -644,6 +697,29 @@ Key bus-event-to-WS-event mappings:
 The fanout uses `Task.Supervisor` for resilience. If the supervisor is temporarily unavailable (crash/restart), it falls back to inline dispatch. Telemetry events are emitted on `[:lemon, :control_plane, :event_bridge, :broadcast]` and `[:lemon, :control_plane, :event_bridge, :dropped]`.
 
 ## Common Tasks
+
+### Join a Named Coding Execution Node
+
+Start the controller normally, then run from the destination source checkout:
+
+```bash
+LEMON_NODE_OPERATOR_TOKEN=... ./bin/lemon node join \
+  --name worker-1 \
+  --controller wss://controller.example/ws \
+  --pair \
+  --cwd /srv/project
+```
+
+Later starts omit `--pair` and reuse the controller-bound token. Re-run with
+`--pair` when that seven-day session expires. Use
+`LEMON_NODE_TOKEN` to supply an existing token without placing it in shell
+history. A name must be unique on the controller, and the destination cwd must
+already exist.
+
+Non-loopback plaintext `ws://` is rejected by default. A Tailscale deployment
+may use `--controller ws://controller:4040/ws --allow-insecure-controller`
+only after verifying that the complete path stays on the authenticated,
+encrypted overlay; otherwise use `wss://`.
 
 ### Run Tests
 
@@ -718,6 +794,14 @@ LemonControlPlane.EventBridge.subscribe_run("some-run-id")
 
 ## Testing Guidelines
 
+Control-plane WebSocket operator authentication uses
+`LEMON_CONTROL_PLANE_OPERATOR_TOKEN`. The HTTP router must pass the actual socket
+peer to `WS.Connection`; tokenless operator compatibility must remain default-off
+and, when explicitly enabled, direct-loopback-only. Do not restore params-only
+node/device roles or map an unknown session-token identity to operator scopes.
+Keep credentials out of URLs, auth contexts, logs, status formatting, and error
+payloads.
+
 - Use `async: true` for method tests that don't depend on shared state
 - Tests requiring the full runtime should be marked `async: false`
 - The `test_helper.exs` stops and restarts `:lemon_channels` (and related apps) to ensure a clean baseline; it also disables Telegram
@@ -761,7 +845,7 @@ LemonControlPlane.EventBridge.subscribe_run("some-run-id")
 
 | Dependency | How Used |
 |------------|----------|
-| `lemon_core` | `LemonCore.Store` (token persistence, idempotency), `LemonCore.Bus` (event pub/sub), `LemonCore.Secrets`, `LemonCore.Event`, `LemonCore.Telemetry` |
+| `lemon_core` | `LemonCore.Store` (token persistence, idempotency), `LemonCore.NodeRegistry` (live named-node delivery), `LemonCore.Bus` (event pub/sub), `LemonCore.Secrets`, `LemonCore.Event`, `LemonCore.Telemetry` |
 | `lemon_router` | `LemonRouter.submit/1` and `LemonRouter.RunOrchestrator.submit/1` for agent run submission; `LemonRouter.RunRegistry` for active run queries |
 | `lemon_channels` | `LemonChannels.Outbox` for `send` method; channel status queries |
 | `lemon_skills` | Skill status, installation, and binary path queries |

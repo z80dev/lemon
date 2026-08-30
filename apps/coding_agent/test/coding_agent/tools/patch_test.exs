@@ -382,6 +382,127 @@ defmodule CodingAgent.Tools.PatchTest do
       assert File.exists?(Path.join(tmp_dir, "new2.txt"))
       assert File.read!(existing) == "modified"
       assert details.additions > 0
+      assert details.preflighted == true
+    end
+
+    test "preflights every hunk before creating any files", %{tmp_dir: tmp_dir} do
+      existing = Path.join(tmp_dir, "existing.txt")
+      File.write!(existing, "original")
+
+      patch_text = """
+      *** Add File: should_not_exist.txt
+      +staged
+      *** Update File: existing.txt
+      @@ missing context
+      -not present
+      +modified
+      """
+
+      result = Patch.execute("call_1", %{"patch_text" => patch_text}, nil, nil, tmp_dir, [])
+
+      assert {:error, message} = result
+      assert message =~ "Context not found"
+      refute File.exists?(Path.join(tmp_dir, "should_not_exist.txt"))
+      assert File.read!(existing) == "original"
+    end
+
+    test "rejects duplicate canonical targets before applying the patch", %{tmp_dir: tmp_dir} do
+      patch_text = """
+      *** Add File: duplicate.txt
+      +first
+      *** Add File: ./duplicate.txt
+      +second
+      """
+
+      result = Patch.execute("call_1", %{"patch_text" => patch_text}, nil, nil, tmp_dir, [])
+
+      assert {:error, message} = result
+      assert message =~ "duplicate target paths"
+      refute File.exists?(Path.join(tmp_dir, "duplicate.txt"))
+    end
+
+    test "reports the committed prefix when a later filesystem write fails", %{tmp_dir: tmp_dir} do
+      import CodingAgent.TestHelpers.PermissionHelpers
+
+      readonly_dir = Path.join(tmp_dir, "readonly")
+      updated = Path.join(tmp_dir, "updated.txt")
+      deleted = Path.join(tmp_dir, "deleted.txt")
+      File.mkdir_p!(readonly_dir)
+      File.write!(updated, "original")
+      File.write!(deleted, "keep me")
+
+      with_unwritable_dir(readonly_dir, fn ->
+        patch_text = """
+        *** Add File: first.txt
+        +first
+        *** Update File: updated.txt
+        @@ update
+        -original
+        +changed
+        *** Delete File: deleted.txt
+        *** Add File: readonly/second.txt
+        +second
+        """
+
+        result = Patch.execute("call_1", %{"patch_text" => patch_text}, nil, nil, tmp_dir, [])
+
+        assert {:error, message} = result
+        assert message =~ "3 earlier operation(s) were already committed"
+        assert File.read!(Path.join(tmp_dir, "first.txt")) == "first"
+        refute File.exists?(Path.join(readonly_dir, "second.txt"))
+        assert File.read!(updated) == "changed"
+        refute File.exists?(deleted)
+      end)
+    end
+
+    test "reports a move target created before source removal fails", %{tmp_dir: tmp_dir} do
+      import CodingAgent.TestHelpers.PermissionHelpers
+
+      source_dir = Path.join(tmp_dir, "locked-source")
+      source = Path.join(source_dir, "source.txt")
+      target = Path.join(tmp_dir, "moved.txt")
+      File.mkdir_p!(source_dir)
+      File.write!(source, "original")
+
+      with_unwritable_dir(source_dir, fn ->
+        patch_text = """
+        *** Update File: locked-source/source.txt
+        *** Move to: moved.txt
+        @@ update
+        -original
+        +changed
+        """
+
+        result = Patch.execute("call_1", %{"patch_text" => patch_text}, nil, nil, tmp_dir, [])
+
+        assert {:error, message} = result
+        assert message =~ "current operation may also have changed"
+        assert message =~ target
+        assert File.read!(source) == "original"
+        assert File.read!(target) == "changed"
+      end)
+    end
+
+    test "refuses to overwrite an existing move destination", %{tmp_dir: tmp_dir} do
+      source = Path.join(tmp_dir, "source.txt")
+      destination = Path.join(tmp_dir, "destination.txt")
+      File.write!(source, "source")
+      File.write!(destination, "destination")
+
+      patch_text = """
+      *** Update File: source.txt
+      *** Move to: destination.txt
+      @@ update
+      -source
+      +changed
+      """
+
+      result = Patch.execute("call_1", %{"patch_text" => patch_text}, nil, nil, tmp_dir, [])
+
+      assert {:error, message} = result
+      assert message =~ "Move destination already exists"
+      assert File.read!(source) == "source"
+      assert File.read!(destination) == "destination"
     end
   end
 

@@ -20,6 +20,11 @@ defmodule LemonAi.CircuitBreakerTest do
     {:ok, provider: provider}
   end
 
+  @doc false
+  def handle_telemetry([:lemon_ai, :circuit_breaker, event], measurements, metadata, test_pid) do
+    send(test_pid, {:circuit_breaker_telemetry, event, measurements, metadata})
+  end
+
   describe "initial state" do
     test "starts in closed state", %{provider: provider} do
       start_supervised!({CircuitBreaker, provider: provider})
@@ -77,9 +82,8 @@ defmodule LemonAi.CircuitBreakerTest do
     end
 
     test "returns false when circuit is half-open", %{provider: provider} do
-      start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 2, recovery_timeout: 30}
-      )
+      advance =
+        start_with_clock(provider, failure_threshold: 2, recovery_timeout: 30)
 
       # Open the circuit
       CircuitBreaker.record_failure(provider)
@@ -87,8 +91,7 @@ defmodule LemonAi.CircuitBreakerTest do
 
       assert CircuitBreaker.open?(provider)
 
-      # Wait for half-open
-      Process.sleep(50)
+      advance.(30)
 
       refute CircuitBreaker.open?(provider)
       {:ok, state} = CircuitBreaker.get_state(provider)
@@ -131,8 +134,6 @@ defmodule LemonAi.CircuitBreakerTest do
       for _ <- 1..4 do
         CircuitBreaker.record_failure(provider)
       end
-
-      Process.sleep(20)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :closed
@@ -200,9 +201,8 @@ defmodule LemonAi.CircuitBreakerTest do
 
   describe "state transition: open -> half-open" do
     test "transitions after recovery timeout expires", %{provider: provider} do
-      start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 50}
-      )
+      advance =
+        start_with_clock(provider, failure_threshold: 1, recovery_timeout: 50)
 
       # Open the circuit
       CircuitBreaker.record_failure(provider)
@@ -210,41 +210,35 @@ defmodule LemonAi.CircuitBreakerTest do
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :open
 
-      # Wait for recovery timeout
-      Process.sleep(60)
+      advance.(50)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :half_open
     end
 
     test "does not transition before recovery timeout", %{provider: provider} do
-      start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 500}
-      )
+      advance =
+        start_with_clock(provider, failure_threshold: 1, recovery_timeout: 500)
 
       CircuitBreaker.record_failure(provider)
-      Process.sleep(20)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :open
 
-      # Check immediately - should still be open
-      Process.sleep(50)
+      advance.(499)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :open
     end
 
     test "resets success_count_in_half_open when transitioning", %{provider: provider} do
-      start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 30}
-      )
+      advance =
+        start_with_clock(provider, failure_threshold: 1, recovery_timeout: 30)
 
       # Open the circuit
       CircuitBreaker.record_failure(provider)
 
-      # Wait for half-open
-      Process.sleep(50)
+      advance.(30)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :half_open
@@ -254,13 +248,12 @@ defmodule LemonAi.CircuitBreakerTest do
 
   describe "state transition: half-open -> closed" do
     test "transitions after 2 consecutive successes", %{provider: provider} do
-      start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 30}
-      )
+      advance =
+        start_with_clock(provider, failure_threshold: 1, recovery_timeout: 30)
 
       # Open -> half-open
       CircuitBreaker.record_failure(provider)
-      Process.sleep(50)
+      advance.(30)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :half_open
@@ -280,13 +273,12 @@ defmodule LemonAi.CircuitBreakerTest do
     end
 
     test "does not transition after single success", %{provider: provider} do
-      start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 30}
-      )
+      advance =
+        start_with_clock(provider, failure_threshold: 1, recovery_timeout: 30)
 
       # Open -> half-open
       CircuitBreaker.record_failure(provider)
-      Process.sleep(50)
+      advance.(30)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :half_open
@@ -303,21 +295,15 @@ defmodule LemonAi.CircuitBreakerTest do
     test "transitions on any failure", %{provider: provider} do
       recovery_timeout = 200
 
-      start_supervised!(
-        {CircuitBreaker,
-         provider: provider, failure_threshold: 1, recovery_timeout: recovery_timeout}
-      )
+      advance =
+        start_with_clock(provider,
+          failure_threshold: 1,
+          recovery_timeout: recovery_timeout
+        )
 
       # Open -> half-open
       CircuitBreaker.record_failure(provider)
-
-      assert wait_until(
-               fn ->
-                 {:ok, state} = CircuitBreaker.get_state(provider)
-                 state.circuit_state == :half_open
-               end,
-               recovery_timeout + 300
-             )
+      advance.(recovery_timeout)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :half_open
@@ -332,21 +318,15 @@ defmodule LemonAi.CircuitBreakerTest do
     test "transitions even after some successes", %{provider: provider} do
       recovery_timeout = 200
 
-      start_supervised!(
-        {CircuitBreaker,
-         provider: provider, failure_threshold: 1, recovery_timeout: recovery_timeout}
-      )
+      advance =
+        start_with_clock(provider,
+          failure_threshold: 1,
+          recovery_timeout: recovery_timeout
+        )
 
       # Open -> half-open
       CircuitBreaker.record_failure(provider)
-
-      assert wait_until(
-               fn ->
-                 {:ok, state} = CircuitBreaker.get_state(provider)
-                 state.circuit_state == :half_open
-               end,
-               recovery_timeout + 300
-             )
+      advance.(recovery_timeout)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :half_open
@@ -365,13 +345,12 @@ defmodule LemonAi.CircuitBreakerTest do
     end
 
     test "resets success count when reopening", %{provider: provider} do
-      start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 30}
-      )
+      advance =
+        start_with_clock(provider, failure_threshold: 1, recovery_timeout: 30)
 
       # Open -> half-open
       CircuitBreaker.record_failure(provider)
-      Process.sleep(50)
+      advance.(30)
 
       # One success
       CircuitBreaker.record_success(provider)
@@ -379,8 +358,7 @@ defmodule LemonAi.CircuitBreakerTest do
       # Failure reopens
       CircuitBreaker.record_failure(provider)
 
-      # Wait for half-open again
-      Process.sleep(50)
+      advance.(30)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :half_open
@@ -417,13 +395,12 @@ defmodule LemonAi.CircuitBreakerTest do
     end
 
     test "resets circuit from half-open to closed", %{provider: provider} do
-      start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 30}
-      )
+      advance =
+        start_with_clock(provider, failure_threshold: 1, recovery_timeout: 30)
 
       # Open -> half-open
       CircuitBreaker.record_failure(provider)
-      Process.sleep(50)
+      advance.(30)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :half_open
@@ -456,45 +433,32 @@ defmodule LemonAi.CircuitBreakerTest do
 
   describe "record_failure/1 - open state" do
     test "extends recovery timeout on additional failures", %{provider: provider} do
-      # Keep timeouts large enough to avoid scheduler jitter making the test flaky.
       recovery_timeout = 1_000
 
-      start_supervised!(
-        {CircuitBreaker,
-         provider: provider, failure_threshold: 1, recovery_timeout: recovery_timeout}
-      )
+      advance =
+        start_with_clock(provider,
+          failure_threshold: 1,
+          recovery_timeout: recovery_timeout
+        )
 
       # Open the circuit
       CircuitBreaker.record_failure(provider)
-
-      assert wait_until(
-               fn ->
-                 {:ok, state} = CircuitBreaker.get_state(provider)
-                 state.circuit_state == :open
-               end,
-               200
-             )
+      assert_state(provider, :open)
 
       # Wait but not long enough for recovery
-      Process.sleep(800)
+      advance.(800)
 
       # Record another failure - this should reset the recovery timer
       CircuitBreaker.record_failure(provider)
 
       # Wait a bit more. If the recovery timer was not extended, the circuit would
       # be half-open by now (800ms + 500ms > 1000ms).
-      Process.sleep(500)
+      advance.(500)
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :open
 
-      # Now wait for full recovery timeout from last failure
-      assert wait_until(
-               fn ->
-                 {:ok, state} = CircuitBreaker.get_state(provider)
-                 state.circuit_state == :half_open
-               end,
-               recovery_timeout + 500
-             )
+      advance.(500)
+      assert_state(provider, :half_open)
     end
   end
 
@@ -561,9 +525,8 @@ defmodule LemonAi.CircuitBreakerTest do
 
   describe "complete state cycle" do
     test "closed -> open -> half-open -> closed -> open", %{provider: provider} do
-      start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 2, recovery_timeout: 30}
-      )
+      advance =
+        start_with_clock(provider, failure_threshold: 2, recovery_timeout: 30)
 
       # Start: closed
       {:ok, state} = CircuitBreaker.get_state(provider)
@@ -576,8 +539,7 @@ defmodule LemonAi.CircuitBreakerTest do
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :open
 
-      # Wait for recovery -> half-open
-      Process.sleep(50)
+      advance.(30)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :half_open
@@ -606,12 +568,9 @@ defmodule LemonAi.CircuitBreakerTest do
     end
 
     test "returns positive value when circuit is open", %{provider: provider} do
-      start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 5_000}
-      )
+      start_with_clock(provider, failure_threshold: 1, recovery_timeout: 5_000)
 
       CircuitBreaker.record_failure(provider)
-      Process.sleep(20)
 
       remaining = CircuitBreaker.time_until_recovery(provider)
       assert remaining > 0
@@ -619,27 +578,24 @@ defmodule LemonAi.CircuitBreakerTest do
     end
 
     test "decreases over time", %{provider: provider} do
-      start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 5_000}
-      )
+      advance =
+        start_with_clock(provider, failure_threshold: 1, recovery_timeout: 5_000)
 
       CircuitBreaker.record_failure(provider)
-      Process.sleep(20)
 
       remaining1 = CircuitBreaker.time_until_recovery(provider)
-      Process.sleep(100)
+      advance.(100)
       remaining2 = CircuitBreaker.time_until_recovery(provider)
 
       assert remaining2 < remaining1
     end
 
     test "returns 0 when circuit is half-open", %{provider: provider} do
-      start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 30}
-      )
+      advance =
+        start_with_clock(provider, failure_threshold: 1, recovery_timeout: 30)
 
       CircuitBreaker.record_failure(provider)
-      Process.sleep(50)
+      advance.(30)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :half_open
@@ -651,124 +607,80 @@ defmodule LemonAi.CircuitBreakerTest do
   describe "telemetry events" do
     test "emits :opened event when circuit opens", %{provider: provider} do
       start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 2})
-
-      ref = make_ref()
-      parent = self()
-
-      :telemetry.attach(
-        "test-opened-#{inspect(ref)}",
-        [:lemon_ai, :circuit_breaker, :opened],
-        fn _event, _measurements, metadata, _config ->
-          send(parent, {:telemetry_opened, metadata})
-        end,
-        nil
-      )
+      attach_telemetry(:opened)
 
       CircuitBreaker.record_failure(provider)
       CircuitBreaker.record_failure(provider)
 
-      assert_receive {:telemetry_opened, metadata}, 1000
+      assert_receive {:circuit_breaker_telemetry, :opened, %{system_time: system_time}, metadata}
+      assert is_integer(system_time)
       assert metadata.provider == provider
       assert metadata.failure_count == 2
       assert metadata.failure_threshold == 2
       assert metadata.reason == :unknown
-
-      :telemetry.detach("test-opened-#{inspect(ref)}")
     end
 
     test "emits :half_opened event when transitioning to half-open", %{provider: provider} do
-      start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 30}
-      )
+      advance =
+        start_with_clock(provider, failure_threshold: 1, recovery_timeout: 30)
 
-      ref = make_ref()
-      parent = self()
-
-      :telemetry.attach(
-        "test-half-opened-#{inspect(ref)}",
-        [:lemon_ai, :circuit_breaker, :half_opened],
-        fn _event, _measurements, metadata, _config ->
-          send(parent, {:telemetry_half_opened, metadata})
-        end,
-        nil
-      )
+      attach_telemetry(:half_opened)
 
       CircuitBreaker.record_failure(provider)
-      Process.sleep(50)
+      advance.(30)
 
       # Trigger the transition by querying state
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :half_open
 
-      assert_receive {:telemetry_half_opened, metadata}, 1000
+      assert_receive {:circuit_breaker_telemetry, :half_opened, %{system_time: system_time},
+                      metadata}
+
+      assert is_integer(system_time)
       assert metadata.provider == provider
       assert metadata.recovery_timeout == 30
-
-      :telemetry.detach("test-half-opened-#{inspect(ref)}")
     end
 
     test "emits :closed event when circuit closes after recovery", %{provider: provider} do
-      start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 30}
-      )
+      advance =
+        start_with_clock(provider, failure_threshold: 1, recovery_timeout: 30)
 
-      ref = make_ref()
-      parent = self()
-
-      :telemetry.attach(
-        "test-closed-#{inspect(ref)}",
-        [:lemon_ai, :circuit_breaker, :closed],
-        fn _event, _measurements, metadata, _config ->
-          send(parent, {:telemetry_closed, metadata})
-        end,
-        nil
-      )
+      attach_telemetry(:closed)
 
       # Open -> half-open
       CircuitBreaker.record_failure(provider)
-      Process.sleep(50)
+      advance.(30)
       {:ok, _} = CircuitBreaker.get_state(provider)
 
       # Close via 2 successes
       CircuitBreaker.record_success(provider)
       CircuitBreaker.record_success(provider)
 
-      assert_receive {:telemetry_closed, metadata}, 1000
+      assert_receive {:circuit_breaker_telemetry, :closed, %{system_time: system_time}, metadata}
+      assert is_integer(system_time)
       assert metadata.provider == provider
-
-      :telemetry.detach("test-closed-#{inspect(ref)}")
     end
 
     test "emits :reopened event when half-open circuit reopens", %{provider: provider} do
-      start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 30}
-      )
+      advance =
+        start_with_clock(provider, failure_threshold: 1, recovery_timeout: 30)
 
-      ref = make_ref()
-      parent = self()
-
-      :telemetry.attach(
-        "test-reopened-#{inspect(ref)}",
-        [:lemon_ai, :circuit_breaker, :reopened],
-        fn _event, _measurements, metadata, _config ->
-          send(parent, {:telemetry_reopened, metadata})
-        end,
-        nil
-      )
+      attach_telemetry(:reopened)
 
       # Open -> half-open
       CircuitBreaker.record_failure(provider)
-      Process.sleep(50)
+      advance.(30)
       {:ok, _} = CircuitBreaker.get_state(provider)
 
       # Failure in half-open reopens
       CircuitBreaker.record_failure(provider, :econnreset)
 
-      assert_receive {:telemetry_reopened, metadata}, 1000
+      assert_receive {:circuit_breaker_telemetry, :reopened, %{system_time: system_time},
+                      metadata}
+
+      assert is_integer(system_time)
       assert metadata.provider == provider
       assert metadata.reason == :econnreset
-
-      :telemetry.detach("test-reopened-#{inspect(ref)}")
     end
   end
 
@@ -802,16 +714,15 @@ defmodule LemonAi.CircuitBreakerTest do
     end
 
     test "very short recovery timeout works correctly", %{provider: provider} do
-      start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 50}
-      )
+      advance =
+        start_with_clock(provider, failure_threshold: 1, recovery_timeout: 50)
 
       CircuitBreaker.record_failure(provider)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :open
 
-      Process.sleep(70)
+      advance.(50)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :half_open
@@ -826,29 +737,46 @@ defmodule LemonAi.CircuitBreakerTest do
         CircuitBreaker.record_success(provider)
       end
 
-      Process.sleep(50)
-
       # Due to success resetting failure count, circuit should stay closed
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :closed
     end
   end
 
-  defp wait_until(fun, timeout_ms) when is_function(fun, 0) do
-    deadline = System.monotonic_time(:millisecond) + timeout_ms
-    do_wait_until(fun, deadline)
+  defp start_with_clock(provider, opts) do
+    clock = :atomics.new(1, signed: true)
+    monotonic_time = fn -> :atomics.get(clock, 1) end
+
+    start_supervised!(
+      {CircuitBreaker,
+       opts
+       |> Keyword.put(:provider, provider)
+       |> Keyword.put(:monotonic_time, monotonic_time)}
+    )
+
+    fn milliseconds ->
+      # A call from the same process observes all earlier casts before time moves.
+      {:ok, _state} = CircuitBreaker.get_state(provider)
+      :atomics.add_get(clock, 1, milliseconds)
+    end
   end
 
-  defp do_wait_until(fun, deadline_ms) do
-    if fun.() do
-      true
-    else
-      if System.monotonic_time(:millisecond) >= deadline_ms do
-        false
-      else
-        Process.sleep(10)
-        do_wait_until(fun, deadline_ms)
-      end
-    end
+  defp assert_state(provider, expected_state) do
+    assert {:ok, %{circuit_state: ^expected_state}} = CircuitBreaker.get_state(provider)
+  end
+
+  defp attach_telemetry(event) do
+    handler_id = "circuit-breaker-#{event}-#{System.unique_integer([:positive])}"
+    test_pid = self()
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:lemon_ai, :circuit_breaker, event],
+        &__MODULE__.handle_telemetry/4,
+        test_pid
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
   end
 end

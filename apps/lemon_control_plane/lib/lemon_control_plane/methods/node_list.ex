@@ -32,11 +32,17 @@ defmodule LemonControlPlane.Methods.NodeList do
       "name" => get_field(node, :name),
       "type" => get_field(node, :type),
       "capabilities" => get_field(node, :capabilities) || %{},
-      "status" => to_string(get_field(node, :status) || :unknown),
+      "status" => live_status(get_field(node, :id)),
       "pairedAtMs" => get_field(node, :paired_at_ms),
       "lastSeenMs" => get_field(node, :last_seen_ms)
     }
   end
+
+  defp live_status(node_id) when is_binary(node_id) do
+    if LemonCore.NodeRegistry.online?(node_id), do: "online", else: "offline"
+  end
+
+  defp live_status(_node_id), do: "offline"
 
   # Safe map access supporting both atom and string keys
   # This handles JSONL reload where keys become strings

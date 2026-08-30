@@ -1,6 +1,7 @@
 import { act, renderHook } from '@testing-library/react';
 import type { ClientCommand } from '@lemon-web/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MockWebSocket } from '../test/MockWebSocket';
 import type { QueuedCommandMeta } from './commandQueue';
 
 const HOISTED = vi.hoisted(() => {
@@ -50,50 +51,6 @@ vi.mock('./commandQueue', () => ({
 }));
 
 import { confirmQueuedCommand, getQueueCount, useLemonSocket } from './useLemonSocket';
-
-class MockWebSocket {
-  static readonly CONNECTING = 0;
-  static readonly OPEN = 1;
-  static readonly CLOSING = 2;
-  static readonly CLOSED = 3;
-  static instances: MockWebSocket[] = [];
-
-  readonly url: string;
-  readyState = MockWebSocket.CONNECTING;
-  onopen: ((event: Event) => void) | null = null;
-  onmessage: ((event: MessageEvent) => void) | null = null;
-  onerror: ((event: Event) => void) | null = null;
-  onclose: ((event: CloseEvent) => void) | null = null;
-  send = vi.fn();
-  close = vi.fn();
-
-  constructor(url: string) {
-    this.url = url;
-    MockWebSocket.instances.push(this);
-  }
-
-  emitOpen(): void {
-    this.readyState = MockWebSocket.OPEN;
-    this.onopen?.(new Event('open'));
-  }
-
-  emitMessage(data: string): void {
-    this.onmessage?.({ data } as MessageEvent);
-  }
-
-  emitError(): void {
-    this.onerror?.(new Event('error'));
-  }
-
-  emitClose(): void {
-    this.readyState = MockWebSocket.CLOSED;
-    this.onclose?.(new CloseEvent('close'));
-  }
-
-  static reset(): void {
-    MockWebSocket.instances = [];
-  }
-}
 
 function createQueuedMeta(overrides: Partial<QueuedCommandMeta> = {}): QueuedCommandMeta {
   return {
@@ -189,7 +146,7 @@ describe('useLemonSocket', () => {
     const socket = MockWebSocket.instances[0];
 
     act(() => {
-      socket.emitOpen();
+      socket.simulateOpen();
     });
 
     expect(HOISTED.storeState.setConnectionState).toHaveBeenCalledWith('connected');
@@ -199,8 +156,8 @@ describe('useLemonSocket', () => {
       expect.any(Function)
     );
     expect(HOISTED.storeState.addPendingConfirmation).toHaveBeenCalledWith(confirmation);
-    expect(socket.send).toHaveBeenCalledWith(ready.payload);
-    expect(socket.send).toHaveBeenCalledWith(JSON.stringify({ type: 'get_config' }));
+    expect(socket.sentMessages).toContain(ready.payload);
+    expect(socket.sentMessages).toContain(JSON.stringify({ type: 'get_config' }));
 
     const messages = HOISTED.storeState.enqueueNotification.mock.calls.map((call) => call[0].message);
     expect(messages).toContain('1 queued command expired while disconnected: reset');
@@ -220,7 +177,7 @@ describe('useLemonSocket', () => {
     const firstSocket = MockWebSocket.instances[0];
 
     act(() => {
-      firstSocket.emitClose();
+      firstSocket.simulateClose();
     });
     expect(HOISTED.storeState.setConnectionState).toHaveBeenCalledWith('disconnected');
     expect(MockWebSocket.instances).toHaveLength(1);
@@ -232,7 +189,7 @@ describe('useLemonSocket', () => {
 
     const secondSocket = MockWebSocket.instances[1];
     act(() => {
-      secondSocket.emitClose();
+      secondSocket.simulateClose();
     });
 
     act(() => {

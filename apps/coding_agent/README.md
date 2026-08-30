@@ -12,6 +12,7 @@ CodingAgent is an umbrella app within the Lemon AI assistant platform. It turns 
 - **Budget enforcement** -- Token and cost tracking per run with parent/child inheritance via a persistent run graph
 - **Extension system** -- Dynamic tool and hook injection from Elixir modules or WASM sidecars
 - **Subagent orchestration** -- Concurrent subagent sessions via a Coordinator with timeout management
+- **Named execution nodes** -- Native delegated sessions can run on an authenticated destination selected by name, with destination-local credentials and working-directory defaults
 - **Workspace and prompt composition** -- Layered system prompt from bootstrap files, skills, commands, @mentions, and project-local CLAUDE.md/AGENTS.md
 - **Provider routing** -- Default model selection can fall back through configured fallback providers, routing profiles, and credential pools before starting the supervised agent loop, and default-model streams retry another ready provider when the first provider fails before useful output starts; explicit model specs stay fixed.
 
@@ -50,6 +51,13 @@ CodingAgent is an umbrella app within the Lemon AI assistant platform. It turns 
                                         | (ETS+DETS)|
                                         +----------+
 ```
+
+`CodingAgent.Executor` keeps normal requests local. When request metadata names
+an execution node, it starts `Executor.RemoteSessionRunner`, which asks
+`LemonCore.NodeRegistry` to deliver a versioned `coding_agent.run` request to
+the authenticated destination WebSocket. The destination starts the same native
+executor/session path and returns one JSON-safe terminal result; no vendor CLI
+or subprocess agent runner is involved.
 
 ### Supervision Tree
 
@@ -100,6 +108,18 @@ CodingAgent.Supervisor (one_for_one)
 | `CodingAgent.SessionSupervisor` | DynamicSupervisor for session processes with health check and list capabilities |
 | `CodingAgent.SessionRegistry` | Registry wrapper for session lookup by ID |
 | `CodingAgent.SessionRootSupervisor` | Top-level supervisor for all session infrastructure (currently delegated into `Application`) |
+| `CodingAgent.Executor` | Selects the normal local runner or a named-node remote runner from execution request metadata |
+| `CodingAgent.Executor.RemoteSessionRunner` | Bridges one local gateway execution to one live named node and propagates completion/cancellation |
+
+### Named Execution Nodes
+
+| Module | Description |
+|--------|-------------|
+| `CodingAgent.ExecutionNode.CLI` | Implements `./bin/lemon node join` for a source checkout |
+| `CodingAgent.ExecutionNode.Worker` | Authenticates to a controller, maintains the connection with application-level health keepalives, and executes targeted, versioned `coding_agent.run` requests through `CodingAgent.Executor` |
+| `CodingAgent.ExecutionNode.Socket` | Reconnecting WebSocket client for control-plane handshakes, requests, responses, and node events |
+| `CodingAgent.ExecutionNode.TokenStore` | Stores durable-node-ID-keyed session and recovery credentials under `~/.lemon/nodes/execution/` with a mode-0700 directory and mode-0600 files; migrates compatible legacy name-keyed records |
+| `CodingAgent.Executor.RemoteRequestCodec` | Restricts the cross-node boundary to JSON-safe execution request/result fields and destination-cwd intent |
 
 ### Tool System
 
@@ -123,6 +143,13 @@ CodingAgent.Supervisor (one_for_one)
 | Task / Agent | `task`, `agent`, `parent_question`, `todo`, `kanban` |
 | Social | `x_search`, `post_to_x`, `get_x_mentions` |
 | System | `tool_auth`, `extensions_status` |
+
+The `agent` tool accepts an optional `node` string for delegated runs. Omit it
+or pass `"local"` to use the controller host. A named value must resolve to a
+currently connected execution node. If `cwd` is omitted, the destination uses
+the default supplied to `node join`; an explicit `cwd` is interpreted and
+validated on the destination. The `task` tool remains an in-process child of
+the current coding session and does not expose named-node routing.
 
 `execute_code` is programmatic tool calling: the model submits a python3 script that can
 call a fixed compile-time allowlist of agent tools (`read`, `grep`, `find`, `ls`,
@@ -203,6 +230,19 @@ created. Native LemonRunner action events preserve tool-reported `exit_code`
 metadata and synthesize nonzero `bash` exits as structured `result_meta` with
 `error_type`, `tool_name`, `exit_code`, and a safe message so router and channel
 status surfaces do not need to parse terminal text.
+
+Local `patch` calls preflight every hunk in memory, reject duplicate paths and
+destructive move overwrites, revalidate each operation immediately before
+commit, and exclusively create new targets. Commits remain sequential, so a
+later I/O failure reports the already-committed prefix and any possibly changed
+current paths without risking rollback over concurrent filesystem changes.
+Local `write` calls canonicalize the path used for validation and mutation,
+then reject symlinks, caller-controlled symlinked parent components,
+directories, devices, and other special-file targets by default; trusted
+internal callers can opt into legacy symlink following with
+`allow_symlinks: true`. See
+[`docs/tools/omp-tooling-audit.md`](../../docs/tools/omp-tooling-audit.md) for
+the source-backed OMP comparison and follow-on tool roadmap.
 
 `lsp_diagnostics` runs workspace-aware language diagnostics for a single file.
 `write`, `edit`, and `patch` can opt into post-edit diagnostics with
@@ -366,6 +406,14 @@ The eval harness is intentionally lightweight and deterministic. It should catch
 | `LemonAgent.Security.ExternalContent` | External content sanitization; `CodingAgent.Security.ExternalContent` remains a compatibility wrapper |
 | `CodingAgent.Security.UntrustedToolBoundary` | Pre-LLM boundary for untrusted tool output; composed with `ContextGuardrails` |
 
+Named-node execution does not serialize source-side provider credentials,
+executor options, callbacks, or BEAM process state. The worker accepts only the
+versioned `coding_agent.run` method, removes `meta.node` before local execution
+to prevent recursive selection, and requires the selected cwd to exist locally.
+Node session tokens are stored only on the destination and are accepted from
+`LEMON_NODE_OPERATOR_TOKEN` / `LEMON_NODE_TOKEN` so they need not appear in
+shell history.
+
 ### Utilities
 
 | Module | Description |
@@ -469,6 +517,27 @@ Settings are loaded from TOML files and merged (global, then project):
 | `extensions_dir/0` | `~/.lemon/agent/extensions/` | -- |
 | `workspace_dir/0` | `~/.lemon/agent/workspace/` | -- |
 | `project_extensions_dir/1` | `<cwd>/.lemon/extensions/` | -- |
+
+Named-node session-token records are separate from TOML settings. They live at
+`~/.lemon/nodes/execution/<sha256-of-durable-node-id>.json`, include the exact
+controller URL, and are reused only when that URL matches. Durable-ID lookup
+requires that exact controller argument before it returns session or recovery
+material. A controller-issued node session token currently expires after seven
+days. The CLI does not refresh it automatically; re-run with `--pair` and
+operator authority to recover the same durable identity and rotate its session.
+The controller invalidates the previous token and live socket immediately.
+
+The worker sends a WebSocket ping every 25 seconds so the controller's idle
+timeout does not interrupt live-node registration. During `--pair`, transient
+socket loss resumes the same pairing ID; approving an already approved pairing
+reissues a one-time challenge for the same durable node, including when the
+previous challenge response was lost after token issuance.
+
+Named-node requests and results use the controller's advertised `maxPayload`
+byte limit (1 MiB by default) plus shared depth and item-count limits. Streaming
+answer accumulation is cancelled before it can exceed that boundary, and the
+worker returns a compact protocol error instead of retaining an unbounded
+result.
 
 ### Application Environment
 
@@ -578,6 +647,56 @@ results = CodingAgent.Coordinator.run_subagents(coordinator, [
   %{prompt: "Review for bugs", subagent: "review"}
 ], timeout: 60_000)
 ```
+
+### Running on a Named Execution Node
+
+Start the controller on one machine, then join from the destination source
+checkout. The first command pairs and stores the controller-issued session
+token; subsequent starts omit `--pair`:
+
+```bash
+# destination machine
+LEMON_NODE_OPERATOR_TOKEN=... ./bin/lemon node join \
+  --name worker-1 \
+  --controller wss://controller.example/ws \
+  --pair \
+  --cwd /srv/project
+
+./bin/lemon node join \
+  --name worker-1 \
+  --controller wss://controller.example/ws \
+  --cwd /srv/project
+```
+
+The private record is keyed by durable node ID, not the launch name. A
+controller rename therefore survives destination restarts. Re-run with
+`--pair` after the seven-day session expires; recovery keeps the existing
+identity and name reservation and revokes older sessions. For a legacy record
+that has a node ID but no recovery credential, use the explicit
+operator-authorized `--pair --repair --node-id ID` migration path.
+
+Non-loopback plaintext controllers are rejected by default. Prefer `wss://`.
+For a development endpoint or a verified encrypted overlay such as Tailscale,
+add `--allow-insecure-controller` (or set
+`LEMON_NODE_ALLOW_INSECURE_CONTROLLER=true`) explicitly; do not use that
+override on an unverified network.
+
+Once `worker-1` is online, a model can route a delegated run through the
+`agent` tool with parameters such as:
+
+```json
+{
+  "action": "run",
+  "agent_id": "default",
+  "prompt": "Run the focused tests and report failures.",
+  "node": "worker-1"
+}
+```
+
+An explicit abort cancels the registry invocation and sends
+`node.invoke.cancel` to the targeted worker. Node disconnects fail pending
+invocations. Steering and redirect operations are not supported across this
+remote boundary.
 
 ## Dependencies
 

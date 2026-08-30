@@ -1,13 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useMonitoringStore } from '../../store/monitoringStore';
 import type { MonitoringTask } from '../../../../shared/src/monitoringTypes';
-
-function formatDuration(ms: number | null): string {
-  if (ms == null) return '--';
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${Math.floor(ms / 60_000)}m ${Math.floor((ms % 60_000) / 1000)}s`;
-}
+import { formatDuration } from './formatDuration';
 
 const STATUS_STYLES: Record<string, { bg: string; color: string }> = {
   queued: { bg: '#1d1d3a', color: '#7f8cff' },

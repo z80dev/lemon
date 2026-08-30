@@ -10,3 +10,8 @@ a new adapter should require no changes to the platform. It talks to the router 
 through `LemonCore.RouterBridge`. This page will become the package README: the six
 `Plugin` callbacks with a worked example, runtime adapter registration, and the
 outbound rendering pipeline.
+
+XMTP and WhatsApp retain adapter-specific public `PortServer` callback/process
+identities, bridge scripts, event tags, and module-scoped warning logging while
+sharing line-delimited JSON port lifecycle, restart, and reconnect handling in
+`LemonChannels.PortBridge`.

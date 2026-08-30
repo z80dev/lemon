@@ -12,6 +12,7 @@
 | Add/modify AI provider support | `apps/lemon_ai/` |
 | Work on model runtime credential glue | `apps/lemon_agent/` |
 | Work on coding tools or session management | `apps/coding_agent/` |
+| Work on named execution nodes | `apps/coding_agent/` (worker/executor), `apps/lemon_control_plane/` (pairing/presence) |
 | Modify Telegram/Discord channel adapters | `apps/lemon_channels/` |
 | Modify SMS/voice transports | `apps/lemon_gateway/` |
 | Add new messaging channel adapters (X, XMTP, etc.) | `apps/lemon_channels/` |
@@ -23,7 +24,7 @@
 | Work on media job capability driver | `apps/lemon_media/` |
 | Work on LSP capability driver | `apps/lemon_lsp/` |
 | Build reusable simulation harnesses | `apps/lemon_sim/` |
-| Work on native in-process subagent spawning | `apps/coding_agent/` (`task`/`agent` tools, `CodingAgent.Coordinator`) |
+| Work on native in-process subagent spawning | `apps/coding_agent/` (`task` tool, `CodingAgent.Coordinator`) |
 | Create or modify skills and assistant-platform tools | `apps/lemon_skills/` |
 | Work on Honcho memory integration | `apps/lemon_honcho/` |
 | Work on deterministic eval harnesses | `apps/lemon_evals/` |
@@ -165,7 +166,7 @@ apps/
 ├── lemon_honcho/        # Honcho-backed long-term memory: registers a LemonMemory provider and agent tools
 ├── lemon_lsp/           # LSP server registry and supervised JSON-RPC sessions
 ├── lemon_mcp/           # MCP (Model Context Protocol) server/client bridge for CodingAgent tools
-├── lemon_media/         # Media job supervisor, metadata store, and mix lemon.media
+├── lemon_media/         # Media Task.Supervisor, metadata store, and mix lemon.media
 ├── lemon_memory/        # Durable agent memory: SQLite full-text store, provider fan-out search, run ingest, redaction
 ├── lemon_platform_test/ # Contract-test kit (ExUnit case templates) for Lemon extension behaviours
 ├── lemon_router/        # Message routing, agent directory, run orchestration, queue semantics
@@ -231,6 +232,11 @@ commits product version metadata, creates the annotated tag, builds and verifies
 all native artifacts, publishes the GitHub Release, and then promotes mutable
 GHCR channel tags. See `docs/release/versioning_and_channels.md`.
 
+Both runtime profiles assemble `lemon_mcp` with the OTP release mode `:load`
+before its dynamic consumers. MCP is a library application with no application
+callback; consuming applications supervise every client, server, or transport
+process they start.
+
 ### TUI Client (Bun)
 
 ```bash
@@ -246,7 +252,8 @@ bun src/main.ts      # Dev mode
 ```bash
 cd clients/lemon-web
 npm install
-npm run dev      # Start web server + frontend
+npm run dev      # Build shared once, then start shared/server/web watchers
+npm start        # Build generated shared/server entrypoints, then start the server
 npm run build    # Build shared/server/web packages
 npm run test:coverage
 ```
@@ -268,8 +275,22 @@ npm run dev      # Watch mode
 ./bin/lemon send --to telegram:<chat_id> "done"  # Script notification to Telegram/Discord
 ./bin/lemon send --to discord:#ops --attach report.txt --attach trace.log "done"  # Upload script artifacts
 ./bin/lemon send --dry-run --to discord:#ops --attach report.txt "done"  # Validate without delivery
-./bin/lemon-tui    # Dev TUI; runs clients/tui/src/main.ts and auto-starts runtime
+./bin/lemon node join --name worker-1 --controller wss://controller.example/ws --pair --cwd /path/to/project
+./bin/lemon-tui    # Dev TUI; securely token-pairs with a launcher-owned runtime
 ```
+
+The named-node command runs a destination-side worker capable of starting
+native coding sessions against an already-running controller. Use `--pair` on
+first connection; later starts reuse the private token stored for that durable
+node ID and exact controller URL. Re-run with `--pair` to rotate an expired
+seven-day session without creating a second identity or colliding with its
+name. Use `--pair --repair --node-id ID` with operator authorization only when
+migrating an older local record that has no recovery credential.
+Prefer `LEMON_NODE_OPERATOR_TOKEN` / `LEMON_NODE_TOKEN` over token flags. The
+`--cwd` directory and provider credentials belong to the destination machine.
+Non-loopback controllers require `wss://` by default. Plaintext `ws://` needs
+`--allow-insecure-controller` and is acceptable only for development or across
+a verified encrypted overlay such as Tailscale.
 
 On Linux and other non-keychain environments, keep `~/.lemon/secrets_master_key` as the canonical local master key file. `./bin/lemon` now normalizes `LEMON_SECRETS_MASTER_KEY` from that file at startup so stale inherited shell env does not break provider or transport secret decryption.
 
@@ -287,25 +308,37 @@ On Linux and other non-keychain environments, keep `~/.lemon/secrets_master_key`
 [lemon_router] - Route to appropriate agent, run orchestration, queue semantics
     ↓
 [lemon_gateway] - Execution slots and engine lifecycle
-    ↓
-[coding_agent] - Execute tools, manage sessions, budget enforcement
-    ↓
+    ├─ local → [coding_agent] ─────────────────────────────┐
+    └─ named → [LemonCore.NodeRegistry → control-plane WebSocket]
+                    → [destination coding_agent] ────────────┤
+                                                        ↓
 [lemon_agent] - Agentic loop, tool registry, subagent orchestration, model routing/credentials
     ↓
 [lemon_ai] - LLM provider calls (Anthropic, OpenAI, Google, Azure, Bedrock)
 ```
 
-Subagents take an in-process path off the same chain: CodingAgent's `task`/`agent` tools spawn
-native subagent sessions (`CodingAgent.Session`) coordinated by `CodingAgent.Coordinator`, reusing
-the in-process `coding_agent` → `lemon_agent` → `lemon_ai` chain rather than an external process.
-There are no vendor CLI subprocess runners — all subagent execution is native.
+The `task` tool and `@name` personas spawn native in-process child sessions
+coordinated by `CodingAgent.Coordinator`. The `agent` tool delegates through
+the router and can select the local executor or a named destination. Both paths
+reuse `coding_agent` → `lemon_agent` → `lemon_ai`; there are no vendor CLI
+subprocess runners.
+
+For named delegation, the `agent` tool's optional `node` parameter selects a
+live, uniquely named execution node. Omit it or use `"local"` for local
+execution. Only JSON-safe execution-request data crosses the WebSocket
+boundary; resolved provider credentials, callbacks, executor options, and
+source process state do not. Explicit cancellation is routed to the targeted
+destination run, while disconnects fail its pending invocations.
 
 Outbound message delivery goes through `lemon_channels` (Telegram, Discord, WhatsApp, XMTP, email adapters).
 The control plane (`lemon_control_plane`) provides the JSON-RPC API used by TUI/web clients.
 
 ### Key Dependencies Between Apps
 
-Derived from mix.exs files and enforced by `mix lemon.quality` (architecture boundary check):
+Derived from complete `deps/0` bodies in the `mix.exs` files and enforced by
+`mix lemon.quality` (architecture boundary check). The direct policy must match
+this graph exactly; reference-only namespace exceptions are tracked separately
+and do not permit adding a Mix dependency:
 
 ```
 lemon_control_plane ──→ lemon_core, lemon_memory, lemon_browser, lemon_media, lemon_lsp, lemon_router, lemon_channels, lemon_skills, lemon_automation, lemon_agent, lemon_ai
@@ -354,12 +387,16 @@ Key env vars:
 - `LEMON_STORE_PATH` - Persistent store path
 - `LEMON_HARNESS_SKILLS_DIR` - Override harness-compatible global skills path (`~/.agents/skills`) for isolated runtimes/tests
 - `LEMON_WEB_ACCESS_TOKEN` - Web UI auth token
+- `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` - Shared WebSocket operator credential required by default and used for named-node pairing against an authenticated controller
+- `LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK` - Explicit, default-off legacy tokenless loopback compatibility
 - `LEMON_WEB_HOST` / `LEMON_WEB_PORT` - Web server binding (prod)
 - `LEMON_WEB_SECRET_KEY_BASE` - Required in prod
 - `LEMON_SIM_UI_MAX_CONCURRENT_RUNNERS` / `LEMON_SIM_UI_MAX_STORED_SIMS` - Bound Sim UI model concurrency and terminal snapshot retention; per-arena `MAX_GAME_RECORDS` bounds league history
 - `LEMON_SIM_UI_ACCESS_TOKEN` / `LEMON_SIM_UI_ADMIN_SESSION_TTL_SECONDS` - Protect the Sim UI control room/API and bound browser admin sessions; browser login is form-based and APIs are bearer-only
 - `LEMON_WEREWOLF_HOSTED_ENABLED` / `LEMON_WEREWOLF_HOST_CREATE_TOKEN` / `LEMON_WEREWOLF_HOSTED_*` - Opt-in HTTPS hosted Werewolf, creation access, room TTL/retention, and bounded AI configuration
 - `LEMON_GATEWAY_HEALTH_PORT` / `LEMON_ROUTER_HEALTH_PORT` - Health server port overrides for local parallel runtimes
+- `LEMON_NODE_OPERATOR_TOKEN` / `LEMON_NODE_TOKEN` - Pairing-only operator token or existing session token for `./bin/lemon node join`; prefer these to CLI token flags
+- `LEMON_NODE_ALLOW_INSECURE_CONTROLLER` - Explicitly permit non-loopback plaintext `ws://` for development or a verified encrypted overlay only; secure `wss://` remains the default
 - `LEMON_TELEGRAM_DEFAULT_CHAT_ID` / `LEMON_DISCORD_DEFAULT_CHANNEL_ID` - Optional env overrides for `./bin/lemon send`; config fallbacks live in `[gateway.telegram] default_chat_id/default_thread_id/default_topic_id` and `[gateway.discord] default_channel_id/default_thread_id`
 - `DEEPGRAM_API_KEY` - Speech-to-text
 - `ELEVENLABS_API_KEY` / `ELEVENLABS_VOICE_ID` - TTS
@@ -396,14 +433,16 @@ Gateway-native transports remain in `apps/lemon_gateway/` (SMS/Twilio, voice, em
 ### Adding a Native Subagent
 
 Top-level conversations always run through the configured native `CodingAgent.Executor`;
-the gateway does not support selectable or custom engines. Subagents are native
-in-process executions: the `task`/`agent` tools spawn a `CodingAgent.Session`
-coordinated by `CodingAgent.Coordinator`, not an external process.
+the gateway does not support selectable or custom engines. The `task` tool and
+`@name` personas spawn native in-process `CodingAgent.Session` children through
+`CodingAgent.Coordinator`. The `agent` tool delegates through the router and
+can place that native run locally or on a named execution node.
 
 1. Add a subagent persona (`id`, `description`, `prompt`) to `.lemon/subagents.json` or
    `~/.lemon/agent/subagents.json`; built-ins live in `CodingAgent.Subagents`.
 2. Invoke it through the `task` or `agent` tool (or `@name` mentions); execution stays
-   inside the BEAM on the `coding_agent` → `lemon_agent` → `lemon_ai` chain.
+   on the native `coding_agent` → `lemon_agent` → `lemon_ai` chain, locally or
+   on the named destination selected by `agent.node`.
 3. There are no vendor CLI subprocess runners (Claude Code, Codex, Kimi, OpenCode, Pi
    were removed); do not wrap external CLIs as subagents.
 
@@ -550,4 +589,10 @@ Each app has its own `AGENTS.md` with detailed context:
 
 ---
 
-*Last updated: 2026-08-21* (`lemon_cli_runners` removed — vendor CLI task runners are gone and all subagents are native in-process `CodingAgent.Session` executions coordinated by `CodingAgent.Coordinator`: 25-app structure tree, dependency graph regenerated from mix.exs, message flow, doc index, and app guide table)
+*Last updated: 2026-08-30* (architecture reporting now parses complete `deps/0`
+bodies and distinguishes direct dependencies from reference-only exceptions;
+`lemon_mcp` is assembled as a library-only `:load` application with no empty
+application supervisor; one-shot media jobs use `Task.Supervisor` rather than a
+bespoke worker GenServer; documented named execution nodes including controller
+pairing, live name-based routing, destination-local cwd/credentials,
+cancellation, and the native-only execution boundary)

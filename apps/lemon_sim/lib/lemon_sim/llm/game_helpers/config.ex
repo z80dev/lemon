@@ -17,10 +17,14 @@ defmodule LemonSim.LLM.GameHelpers.Config do
 
   @doc """
   Resolves the configured default model from Lemon config.
+
+  Pass `:error_label` to retain a scenario's user-facing setup error label.
   """
-  def resolve_configured_model!(config, game_name \\ "game") do
+  @spec resolve_configured_model!(map(), String.t(), keyword()) :: LemonAi.Types.Model.t()
+  def resolve_configured_model!(config, game_name \\ "game", opts \\ []) do
     provider = config.agent.default_provider
     model_spec = config.agent.default_model
+    error_label = Keyword.get(opts, :error_label, "#{game_name} sim")
 
     case resolve_model_spec(provider, model_spec) do
       %LemonAi.Types.Model{} = model ->
@@ -28,7 +32,7 @@ defmodule LemonSim.LLM.GameHelpers.Config do
 
       nil ->
         raise """
-        #{game_name} sim requires a valid default model.
+        #{error_label} requires a valid default model.
         Configure [defaults].provider + [defaults].model (or [agent].default_*) in Lemon config,
         or pass an explicit model via the mix task.
         """
@@ -104,11 +108,12 @@ defmodule LemonSim.LLM.GameHelpers.Config do
   def lookup_model(nil, model_id), do: LemonAi.Models.find_by_id(model_id)
   def lookup_model("", model_id), do: LemonAi.Models.find_by_id(model_id)
 
-  def lookup_model(provider, model_id) when is_binary(provider) and is_binary(model_id) do
-    normalized = normalize_provider(provider)
-
-    LemonAi.Models.get_model(normalized, model_id) ||
-      LemonAi.Models.get_model(String.to_atom(String.trim(provider)), model_id)
+  def lookup_model(provider, model_id)
+      when (is_atom(provider) or is_binary(provider)) and is_binary(model_id) do
+    case normalize_provider(provider) do
+      normalized when is_atom(normalized) -> LemonAi.Models.get_model(normalized, model_id)
+      nil -> nil
+    end
   end
 
   def apply_provider_base_url(%LemonAi.Types.Model{} = model, config) do
@@ -131,14 +136,34 @@ defmodule LemonSim.LLM.GameHelpers.Config do
 
   def provider_name(provider) when is_binary(provider), do: canonical_provider_name(provider)
 
-  def normalize_provider(provider_name) do
-    provider_name
-    |> String.trim()
-    |> String.downcase()
-    |> String.replace("-", "_")
-    |> canonical_provider_name()
-    |> String.to_atom()
+  @doc """
+  Resolves a provider name or alias to an atom already present in the model registry.
+
+  Unknown names return `nil`; provider input is never interned as a new BEAM atom.
+  """
+  @spec normalize_provider(atom() | String.t()) :: atom() | nil
+  def normalize_provider(provider_name) when is_atom(provider_name) do
+    if provider_name in LemonAi.Models.get_providers() do
+      provider_name
+    else
+      provider_name |> Atom.to_string() |> normalize_provider()
+    end
   end
+
+  def normalize_provider(provider_name) when is_binary(provider_name) do
+    canonical_name =
+      provider_name
+      |> String.trim()
+      |> String.downcase()
+      |> String.replace("-", "_")
+      |> canonical_provider_name()
+
+    Enum.find(LemonAi.Models.get_providers(), fn provider ->
+      provider_name(provider) == canonical_name
+    end)
+  end
+
+  def normalize_provider(_provider_name), do: nil
 
   defp canonical_provider_name(provider_name) when is_binary(provider_name) do
     normalized =

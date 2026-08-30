@@ -109,6 +109,7 @@ defmodule CodingAgent.Session.ModelResolver do
     provider = Map.get(config, :provider)
     model_id = Map.get(config, :model_id)
     base_url = Map.get(config, :base_url)
+    provider = canonical_registry_provider(provider)
     provider = route_default_provider(provider, model_id, settings)
 
     model =
@@ -422,15 +423,45 @@ defmodule CodingAgent.Session.ModelResolver do
 
   @spec provider_to_atom(String.t()) :: atom() | nil
   defp provider_to_atom(provider) when is_binary(provider) do
-    normalized = String.downcase(String.trim(provider))
+    normalized = normalize_registry_provider_name(provider)
 
     Enum.find(LemonAi.Models.get_providers(), fn known ->
-      known_str = Atom.to_string(known)
-      known_str == normalized or String.replace(known_str, "_", "-") == normalized
+      known
+      |> Atom.to_string()
+      |> normalize_registry_provider_name()
+      |> Kernel.==(normalized)
     end)
   end
 
   defp provider_to_atom(_), do: nil
+
+  # SettingsManager keeps legacy config compatibility by representing dashed
+  # provider names as underscored atoms (for example :openai_codex). Model
+  # registry keys retain their canonical spelling (for example
+  # :"openai-codex"), so canonicalize only at this registry boundary. Unknown
+  # providers are preserved for the existing custom-provider fallback path.
+  defp canonical_registry_provider(provider) when is_atom(provider) do
+    provider
+    |> Atom.to_string()
+    |> provider_to_atom()
+    |> case do
+      nil -> provider
+      canonical -> canonical
+    end
+  end
+
+  defp canonical_registry_provider(provider) when is_binary(provider) do
+    provider_to_atom(provider) || provider
+  end
+
+  defp canonical_registry_provider(provider), do: provider
+
+  defp normalize_registry_provider_name(provider) do
+    provider
+    |> String.trim()
+    |> String.downcase()
+    |> String.replace("_", "-")
+  end
 
   defp non_empty_string(value) when is_binary(value) do
     trimmed = String.trim(value)

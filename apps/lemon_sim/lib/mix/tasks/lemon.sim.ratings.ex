@@ -10,6 +10,8 @@ defmodule Mix.Tasks.Lemon.Sim.Ratings do
 
   use Mix.Task
 
+  alias Mix.Tasks.Lemon.Sim.Common
+
   @switches [
     suites: :string,
     root: :string,
@@ -38,7 +40,7 @@ defmodule Mix.Tasks.Lemon.Sim.Ratings do
         exit({:shutdown, 1})
 
       true ->
-        ensure_runtime_started!()
+        Common.ensure_runtime_and_core_started()
         run_ratings(opts)
     end
   end
@@ -100,9 +102,4 @@ defmodule Mix.Tasks.Lemon.Sim.Ratings do
   defp format_error({:root_not_found, root}), do: "root not found: #{root}"
   defp format_error(:no_suites), do: "no suite.json files found"
   defp format_error(reason), do: inspect(reason)
-
-  defp ensure_runtime_started! do
-    Application.ensure_all_started(:lemon_sim)
-    Application.ensure_all_started(:lemon_core)
-  end
 end

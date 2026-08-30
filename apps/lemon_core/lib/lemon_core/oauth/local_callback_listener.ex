@@ -5,6 +5,7 @@ defmodule LemonCore.OAuth.LocalCallbackListener do
   defstruct [
     :pid,
     :ref,
+    :monitor_ref,
     :listen_sockets,
     :host,
     :port,
@@ -15,6 +16,7 @@ defmodule LemonCore.OAuth.LocalCallbackListener do
   @type t :: %__MODULE__{
           pid: pid(),
           ref: reference(),
+          monitor_ref: reference(),
           listen_sockets: [port()],
           host: String.t(),
           port: pos_integer(),
@@ -30,8 +32,8 @@ defmodule LemonCore.OAuth.LocalCallbackListener do
          {:ok, listen_sockets} <- listen(info.host, info.port) do
       ref = make_ref()
 
-      pid =
-        spawn(fn ->
+      {pid, monitor_ref} =
+        spawn_monitor(fn ->
           run_listener(owner, ref, listen_sockets, info)
         end)
 
@@ -39,6 +41,7 @@ defmodule LemonCore.OAuth.LocalCallbackListener do
        %__MODULE__{
          pid: pid,
          ref: ref,
+         monitor_ref: monitor_ref,
          listen_sockets: listen_sockets,
          host: info.host,
          port: info.port,
@@ -51,11 +54,19 @@ defmodule LemonCore.OAuth.LocalCallbackListener do
   def start(_), do: {:error, :invalid_redirect_uri}
 
   @spec wait(t(), timeout()) :: {:ok, String.t()} | {:error, term()}
-  def wait(%__MODULE__{ref: ref} = listener, timeout_ms)
+  def wait(
+        %__MODULE__{pid: pid, ref: ref, monitor_ref: monitor_ref} = listener,
+        timeout_ms
+      )
       when is_integer(timeout_ms) and timeout_ms > 0 do
     receive do
       {^ref, result} ->
+        Process.demonitor(monitor_ref, [:flush])
         result
+
+      {:DOWN, ^monitor_ref, :process, ^pid, reason} ->
+        close_sockets(listener.listen_sockets)
+        {:error, {:listener_down, reason}}
     after
       timeout_ms ->
         stop(listener)
@@ -71,12 +82,26 @@ defmodule LemonCore.OAuth.LocalCallbackListener do
   @spec stop(t() | nil) :: :ok
   def stop(nil), do: :ok
 
-  def stop(%__MODULE__{listen_sockets: listen_sockets, pid: pid}) do
+  def stop(%__MODULE__{
+        listen_sockets: listen_sockets,
+        pid: pid,
+        ref: ref,
+        monitor_ref: monitor_ref
+      }) do
+    stop_ref = if is_pid(pid), do: Process.monitor(pid)
+
     if is_pid(pid) and Process.alive?(pid) do
       Process.exit(pid, :shutdown)
     end
 
+    await_stopped(pid, stop_ref)
+
+    if is_reference(monitor_ref) do
+      Process.demonitor(monitor_ref, [:flush])
+    end
+
     close_sockets(listen_sockets)
+    flush_result(ref)
     :ok
   end
 
@@ -86,6 +111,24 @@ defmodule LemonCore.OAuth.LocalCallbackListener do
   end
 
   def local_redirect_uri?(_), do: false
+
+  defp await_stopped(pid, monitor_ref) when is_pid(pid) and is_reference(monitor_ref) do
+    receive do
+      {:DOWN, ^monitor_ref, :process, ^pid, _reason} -> :ok
+    after
+      1_000 -> Process.demonitor(monitor_ref, [:flush])
+    end
+  end
+
+  defp await_stopped(_pid, _monitor_ref), do: :ok
+
+  defp flush_result(ref) do
+    receive do
+      {^ref, _result} -> flush_result(ref)
+    after
+      0 -> :ok
+    end
+  end
 
   defp parse_local_redirect_uri(redirect_uri) do
     case URI.parse(redirect_uri) do

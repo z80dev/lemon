@@ -63,6 +63,8 @@ __pycache__/
 # JavaScript/node artifacts
 node_modules/
 coverage/
+/clients/lemon-web/server/dist/
+/clients/lemon-web/shared/dist/
 
 # Local generated SQLite/SQLite WAL artifacts
 *.db3

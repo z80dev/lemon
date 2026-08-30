@@ -1,15 +1,23 @@
 defmodule LemonCore.Quality.DocsCatalog do
   @moduledoc """
-  Loads and validates docs catalog metadata used by quality checks.
+  Loads docs catalog metadata used by quality checks.
+
+  Catalogs may use the compact `%{defaults: map(), entries: list()}` format or
+  the legacy bare entry list. In both cases callers receive a normalized list
+  with conservative lifecycle metadata filled in.
   """
 
   @catalog_path "docs/catalog.exs"
+  @entry_defaults %{kind: :reference, status: :current, public: false}
 
   @type entry :: %{
           required(:path) => String.t(),
           required(:owner) => String.t(),
           required(:last_reviewed) => Date.t(),
           required(:max_age_days) => pos_integer(),
+          required(:kind) => atom(),
+          required(:status) => atom(),
+          required(:public) => boolean(),
           optional(atom()) => any()
         }
 
@@ -40,31 +48,87 @@ defmodule LemonCore.Quality.DocsCatalog do
   defp parse_catalog(path) do
     case File.read(path) do
       {:ok, source} -> parse_catalog_source(path, source)
-      {:error, reason} -> {:error, "Failed to evaluate #{path}: #{inspect(reason)}"}
+      {:error, reason} -> {:error, "Failed to read #{path}: #{inspect(reason)}"}
     end
   rescue
     exception ->
-      {:error, "Failed to evaluate #{path}: #{Exception.message(exception)}"}
+      {:error, "Failed to read #{path}: #{Exception.message(exception)}"}
   end
 
   defp parse_catalog_source(path, source) do
     with {:ok, ast} <- Code.string_to_quoted(source),
-         {:ok, entries} <- decode_ast(ast) do
-      case entries do
-        entries when is_list(entries) ->
-          {:ok, entries}
-
-        other ->
-          {:error, "Expected #{path} to evaluate to a list, got: #{inspect(other)}"}
-      end
+         {:ok, catalog} <- decode_ast(ast),
+         {:ok, entries} <- normalize_catalog(catalog) do
+      {:ok, entries}
     else
+      {:error, {:invalid_catalog, message}} ->
+        {:error, "Invalid catalog #{path}: #{message}"}
+
       {:error, reason} ->
-        {:error, "Failed to evaluate #{path}: #{inspect(reason)}"}
+        {:error, "Failed to parse #{path}: #{inspect(reason)}"}
     end
   rescue
     exception ->
-      {:error, "Failed to evaluate #{path}: #{Exception.message(exception)}"}
+      {:error, "Failed to parse #{path}: #{Exception.message(exception)}"}
   end
+
+  defp normalize_catalog(entries) when is_list(entries) do
+    normalize_entries(entries, @entry_defaults)
+  end
+
+  defp normalize_catalog(%{} = catalog) do
+    unknown_keys = Map.keys(catalog) -- [:defaults, :entries]
+
+    with :ok <- ensure_known_keys(unknown_keys),
+         {:ok, defaults} <- fetch_defaults(catalog),
+         {:ok, entries} <- fetch_entries(catalog) do
+      normalize_entries(entries, Map.merge(@entry_defaults, defaults))
+    end
+  end
+
+  defp normalize_catalog(other) do
+    invalid_catalog(
+      "expected a list or %{defaults: map(), entries: list()}, got: #{inspect(other)}"
+    )
+  end
+
+  defp fetch_defaults(catalog) do
+    case Map.get(catalog, :defaults, %{}) do
+      defaults when is_map(defaults) -> {:ok, defaults}
+      other -> invalid_catalog("expected :defaults to be a map, got: #{inspect(other)}")
+    end
+  end
+
+  defp ensure_known_keys([]), do: :ok
+
+  defp ensure_known_keys(keys) do
+    invalid_catalog("unknown top-level keys: #{inspect(keys)}")
+  end
+
+  defp fetch_entries(catalog) do
+    case Map.fetch(catalog, :entries) do
+      {:ok, entries} when is_list(entries) -> {:ok, entries}
+      {:ok, other} -> invalid_catalog("expected :entries to be a list, got: #{inspect(other)}")
+      :error -> invalid_catalog("missing required :entries list")
+    end
+  end
+
+  defp normalize_entries(entries, defaults) do
+    entries
+    |> Enum.reduce_while({:ok, []}, fn
+      entry, {:ok, acc} when is_map(entry) ->
+        {:cont, {:ok, [Map.merge(defaults, entry) | acc]}}
+
+      entry, _acc ->
+        {:halt, invalid_catalog("expected every entry to be a map, got: #{inspect(entry)}")}
+    end)
+    |> case do
+      {:ok, normalized} -> {:ok, Enum.reverse(normalized)}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp invalid_catalog(message), do: {:error, {:invalid_catalog, message}}
 
   defp decode_ast({:%{}, _meta, pairs}) do
     pairs

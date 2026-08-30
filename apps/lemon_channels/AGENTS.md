@@ -1,6 +1,6 @@
 # LemonChannels AGENTS.md
 
-Channel adapter application for external messaging platforms (Telegram, Discord, X/Twitter, XMTP).
+Channel adapter application for external messaging platforms (Telegram, Discord, X/Twitter, XMTP, WhatsApp).
 
 ## Quick Orientation
 
@@ -69,6 +69,7 @@ share a group and are never delivered concurrently to prevent reordering.
 | `lib/lemon_channels/target_directory.ex` | `LemonChannels.TargetDirectory` | Channels-owned normalized directory of recently seen Telegram and Discord targets for router/control-plane discovery. |
 | `lib/lemon_channels/model_policy.ex` | `LemonChannels.ModelPolicy` | Channels-owned route-based model and thinking policy resolution for adapters. Persists through `LemonCore.Store` via `ModelPolicyStore` using the unchanged `:model_policies` table. |
 | `lib/lemon_channels/model_policy_store.ex` | `LemonChannels.ModelPolicyStore` | Typed wrapper for persisted route-based model policies. |
+| `lib/lemon_channels/port_bridge.ex` | `LemonChannels.PortBridge` | Shared GenServer callback implementation for line-delimited JSON Node bridge ports. XMTP and WhatsApp keep their public `PortServer` modules as the callback/process and logging identities while sharing lifecycle, parsing, restart, and reconnect behavior here. |
 | `lib/lemon_channels/discord/known_target_store.ex` | `LemonChannels.Discord.KnownTargetStore` | Store-backed Discord channel/thread directory used by script-send list mode. |
 | `lib/lemon_channels/binding_resolver.ex` | `LemonChannels.BindingResolver` | Maps ChatScope to project/agent/cwd/queue_mode. Delegates to `LemonCore.BindingResolver`; bindings never select the fixed native top-level executor. |
 | `lib/lemon_channels/gateway_config.ex` | `LemonChannels.GatewayConfig` | Channels-local config facade. Prefers `:lemon_gateway` full-replacement runtime config when present, then delegates to `LemonCore.GatewayConfig`. |
@@ -171,7 +172,17 @@ Provider availability in the Telegram `/model` picker should match the real prov
 | `adapters/xmtp.ex` | Plugin impl. id: `"xmtp"`, chunk_limit: 2000, thread support only. |
 | `adapters/xmtp/transport.ex` | GenServer. Message send/receive, `normalize_inbound_message/1`, `deliver/1`. |
 | `adapters/xmtp/bridge.ex` | Communication with Node.js bridge (connect, poll, send_message). |
-| `adapters/xmtp/port_server.ex` | Port process management for the Node.js bridge subprocess. |
+| `adapters/xmtp/port_server.ex` | Thin public GenServer wrapper that remains the XMTP process/logging identity and supplies its script name, event tag, and log label to `LemonChannels.PortBridge`. |
+
+### WhatsApp Adapter
+
+| File | What It Does |
+|------|-------------|
+| `adapters/whatsapp.ex` | Plugin impl. id: `"whatsapp"`, chunk_limit: 4096, with voice, image, file, reaction, and thread support. |
+| `adapters/whatsapp/supervisor.ex` | Starts the async supervisor and transport when a credentials path is configured. |
+| `adapters/whatsapp/transport.ex` | GenServer for message send/receive and bridge event handling. |
+| `adapters/whatsapp/bridge.ex` | Communication with the Node.js bridge. |
+| `adapters/whatsapp/port_server.ex` | Thin public GenServer wrapper that remains the WhatsApp process/logging identity and supplies its script name, event tag, and log label to `LemonChannels.PortBridge`. |
 
 ## Adapter Architecture
 
@@ -459,6 +470,7 @@ Auto-refresh is owned by the `XApi.TokenManager` GenServer in `apps/x_api`; the 
 
 - Uses Node.js bridge process managed via Erlang Port
 - Bridge handles XMTP protocol; Elixir side manages lifecycle and normalization
+- XMTP and WhatsApp keep separate public `PortServer` callback/process identities, module-scoped warning logs, scripts, and event tags while delegating the identical port lifecycle to `LemonChannels.PortBridge`
 - Add `LemonChannels.Adapters.Xmtp` to `config :lemon_channels, :adapters`; `enable_xmtp: true` still gates the bridge process
 
 ## Discord Adapter
@@ -647,6 +659,7 @@ mix test apps/lemon_channels/test/lemon_channels/adapters/telegram/inbound_test.
 | `discord/inbound_test.exs` | Discord inbound normalization |
 | `capabilities_test.exs` | Includes X adapter capability lookup |
 | `xmtp/transport_test.exs` | XMTP transport |
+| `port_bridge_contract_test.exs` | Shared XMTP/WhatsApp PortServer API, parser, event-tag, and reconnect contract |
 | `gateway_config_test.exs` | Config merging |
 | `application_test.exs` | App startup |
 

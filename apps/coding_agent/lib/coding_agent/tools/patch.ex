@@ -129,6 +129,7 @@ defmodule CodingAgent.Tools.Patch do
 
   defp execute_local_patch(operations, cwd, diagnostics?, signal, opts) do
     with :ok <- validate_operations(operations, cwd, opts),
+         {:ok, prepared_operations} <- prepare_operations(operations, cwd, signal),
          baselines <- diagnostic_baselines(operations, cwd, diagnostics?, opts),
          {:ok, checkpoint} <-
            CheckpointGuard.before_mutation(operation_paths(operations, cwd), cwd, opts, %{
@@ -136,7 +137,7 @@ defmodule CodingAgent.Tools.Patch do
              action: "apply",
              operation_count: length(operations)
            }),
-         {:ok, summary} <- apply_operations(operations, cwd, signal, opts) do
+         {:ok, summary} <- commit_prepared_operations(prepared_operations, signal) do
       {diagnostics, diagnostics_text} =
         patch_diagnostics(summary.details.changed, cwd, baselines, diagnostics?, opts)
 
@@ -233,13 +234,41 @@ defmodule CodingAgent.Tools.Patch do
   """
   @spec validate_operations([map()], String.t(), keyword()) :: :ok | {:error, String.t()}
   def validate_operations(operations, cwd, opts) do
-    Enum.reduce_while(operations, :ok, fn op, _acc ->
-      case validate_operation(op, cwd, opts) do
-        :ok -> {:cont, :ok}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
+    with :ok <- validate_unique_operation_paths(operations, cwd) do
+      Enum.reduce_while(operations, :ok, fn op, _acc ->
+        case validate_operation(op, cwd, opts) do
+          :ok -> {:cont, :ok}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+      end)
+    end
   end
+
+  defp validate_unique_operation_paths(operations, cwd) do
+    duplicates =
+      operations
+      |> Enum.flat_map(&operation_targets(&1, cwd))
+      |> Enum.frequencies()
+      |> Enum.filter(fn {_path, count} -> count > 1 end)
+      |> Enum.map(&elem(&1, 0))
+      |> Enum.sort()
+
+    case duplicates do
+      [] -> :ok
+      paths -> {:error, "Patch contains duplicate target paths: #{Enum.join(paths, ", ")}"}
+    end
+  end
+
+  defp operation_targets(%{type: :update, path: path, move_to: move_to}, cwd) do
+    source = resolve_path(path, cwd)
+
+    case move_to do
+      nil -> [source]
+      target -> Enum.uniq([source, resolve_path(target, cwd)])
+    end
+  end
+
+  defp operation_targets(%{path: path}, cwd), do: [resolve_path(path, cwd)]
 
   defp validate_operation(%{type: :add, path: path}, cwd, opts) do
     with :ok <- validate_path_security(path),
@@ -266,7 +295,8 @@ defmodule CodingAgent.Tools.Patch do
   defp validate_operation(%{type: :update, path: path, move_to: move_to}, cwd, opts) do
     with :ok <- validate_path_security(path),
          :ok <- validate_move_to_path(move_to, cwd, opts),
-         {:ok, resolved} <- resolve_and_validate_path(path, cwd, opts) do
+         {:ok, resolved} <- resolve_and_validate_path(path, cwd, opts),
+         :ok <- validate_move_destination(resolved, move_to, cwd) do
       case file_exists?(resolved) do
         {:ok, true} -> validate_file_size(resolved)
         {:ok, false} -> {:error, "File not found: #{resolved}"}
@@ -348,6 +378,22 @@ defmodule CodingAgent.Tools.Patch do
     with :ok <- validate_path_security(path),
          {:ok, _resolved} <- resolve_and_validate_path(path, cwd, opts) do
       :ok
+    end
+  end
+
+  defp validate_move_destination(_source, nil, _cwd), do: :ok
+
+  defp validate_move_destination(source, move_to, cwd) do
+    target = resolve_path(move_to, cwd)
+
+    if target == source do
+      :ok
+    else
+      case File.lstat(target) do
+        {:error, :enoent} -> :ok
+        {:ok, _stat} -> {:error, "Move destination already exists: #{target}"}
+        {:error, reason} -> {:error, format_error(reason, target)}
+      end
     end
   end
 
@@ -685,24 +731,130 @@ defmodule CodingAgent.Tools.Patch do
   # Patch Application
   # ============================================================================
 
-  defp apply_operations(operations, cwd, signal, opts) do
-    result =
-      Enum.reduce_while(operations, %{changed: [], additions: 0, removals: 0}, fn op, acc ->
-        if aborted?(signal) do
-          {:halt, {:error, "Operation aborted"}}
-        else
-          case apply_operation(op, cwd, signal, opts) do
-            {:ok, info} ->
-              updated = %{
-                changed: acc.changed ++ info.changed,
-                additions: acc.additions + info.additions,
-                removals: acc.removals + info.removals
-              }
+  defp prepare_operations(operations, cwd, signal) do
+    Enum.reduce_while(operations, {:ok, []}, fn operation, {:ok, prepared} ->
+      if aborted?(signal) do
+        {:halt, {:error, "Operation aborted"}}
+      else
+        case prepare_operation(operation, cwd, signal) do
+          {:ok, entry} -> {:cont, {:ok, [entry | prepared]}}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+      end
+    end)
+    |> case do
+      {:ok, prepared} -> {:ok, Enum.reverse(prepared)}
+      error -> error
+    end
+  end
 
-              {:cont, updated}
+  defp prepare_operation(%{type: :add, path: path, content: content}, cwd, _signal) do
+    target = resolve_path(path, cwd)
+
+    {:ok,
+     %{
+       type: :add,
+       source: nil,
+       target: target,
+       original_content: nil,
+       new_content: content,
+       mode: nil,
+       additions: count_lines(content),
+       removals: 0
+     }}
+  end
+
+  defp prepare_operation(%{type: :delete, path: path}, cwd, _signal) do
+    source = resolve_path(path, cwd)
+
+    with {:ok, content} <- safe_read_file(source),
+         {:ok, stat} <- File.stat(source) do
+      {:ok,
+       %{
+         type: :delete,
+         source: source,
+         target: source,
+         original_content: content,
+         new_content: nil,
+         mode: stat.mode,
+         additions: 0,
+         removals: count_lines(content)
+       }}
+    else
+      {:error, reason} -> {:error, format_error(reason, source)}
+    end
+  end
+
+  defp prepare_operation(
+         %{type: :update, path: path, move_to: move_to, hunks: hunks},
+         cwd,
+         signal
+       ) do
+    source = resolve_path(path, cwd)
+    target = if move_to, do: resolve_path(move_to, cwd), else: source
+
+    with {:ok, content} <- safe_read_file(source),
+         {:ok, stat} <- File.stat(source),
+         {:ok, new_content, additions, removals} <- apply_hunks(content, hunks, signal) do
+      {:ok,
+       %{
+         type: if(target == source, do: :update, else: :move),
+         source: source,
+         target: target,
+         original_content: content,
+         new_content: new_content,
+         mode: stat.mode,
+         additions: additions,
+         removals: removals
+       }}
+    else
+      {:error, reason} -> {:error, format_error(reason, source)}
+    end
+  end
+
+  defp verify_prepared_operation(%{type: :add, target: target}) do
+    verify_path_absent(target)
+  end
+
+  defp verify_prepared_operation(%{type: :move} = prepared) do
+    with :ok <- verify_source_unchanged(prepared),
+         :ok <- verify_path_absent(prepared.target) do
+      :ok
+    end
+  end
+
+  defp verify_prepared_operation(prepared), do: verify_source_unchanged(prepared)
+
+  defp verify_source_unchanged(%{source: source, original_content: expected}) do
+    case File.read(source) do
+      {:ok, ^expected} -> :ok
+      {:ok, _changed} -> {:error, "File changed after patch preflight: #{source}"}
+      {:error, reason} -> {:error, format_error(reason, source)}
+    end
+  end
+
+  defp verify_path_absent(path) do
+    case File.lstat(path) do
+      {:error, :enoent} -> :ok
+      {:ok, _stat} -> {:error, "Patch target appeared after preflight: #{path}"}
+      {:error, reason} -> {:error, format_error(reason, path)}
+    end
+  end
+
+  defp commit_prepared_operations(prepared_operations, signal) do
+    initial = %{changed: [], additions: 0, removals: 0}
+
+    result =
+      Enum.reduce_while(prepared_operations, initial, fn prepared, acc ->
+        if aborted?(signal) do
+          {:halt, {:error, partial_commit_error("Operation aborted", acc.changed)}}
+        else
+          case verify_prepared_operation(prepared) do
+            :ok ->
+              commit_verified_operation(prepared, signal, acc)
 
             {:error, reason} ->
-              {:halt, {:error, reason}}
+              {:halt, {:error, partial_commit_error(reason, acc.changed)}}
           end
         end
       end)
@@ -711,15 +863,127 @@ defmodule CodingAgent.Tools.Patch do
       {:error, reason} ->
         {:error, reason}
 
-      %{changed: changed, additions: adds, removals: removes} ->
+      %{changed: changed, additions: additions, removals: removals} ->
         output =
-          "Patch applied successfully. #{length(changed)} files changed, #{adds} additions, #{removes} removals"
+          "Patch applied successfully. #{length(changed)} files changed, #{additions} additions, #{removals} removals"
 
         {:ok,
          %{
            output: output,
-           details: %{changed: changed, additions: adds, removals: removes}
+           details: %{
+             changed: changed,
+             additions: additions,
+             removals: removals,
+             preflighted: true
+           }
          }}
+    end
+  end
+
+  defp partial_commit_error(reason, []), do: reason
+
+  defp partial_commit_error(reason, changed) do
+    "#{reason}; #{length(changed)} earlier operation(s) were already committed: #{Enum.join(changed, ", ")}"
+  end
+
+  defp partial_commit_error(reason, changed, current) do
+    reason
+    |> partial_commit_error(changed)
+    |> Kernel.<>("; the current operation may also have changed: #{Enum.join(current, ", ")}")
+  end
+
+  defp commit_verified_operation(prepared, signal, acc) do
+    case commit_prepared_operation(prepared, signal) do
+      :ok ->
+        {:cont,
+         %{
+           changed: acc.changed ++ [prepared.target],
+           additions: acc.additions + prepared.additions,
+           removals: acc.removals + prepared.removals
+         }}
+
+      {:error, reason} ->
+        current = current_operation_changes(prepared)
+
+        error =
+          case current do
+            [] -> partial_commit_error(reason, acc.changed)
+            paths -> partial_commit_error(reason, acc.changed, paths)
+          end
+
+        {:halt, {:error, error}}
+    end
+  end
+
+  defp current_operation_changes(%{type: :add, target: target}) do
+    if path_exists?(target), do: [target], else: []
+  end
+
+  defp current_operation_changes(%{type: :delete, source: source}) do
+    if path_exists?(source), do: [], else: [source]
+  end
+
+  defp current_operation_changes(%{type: :update} = prepared) do
+    if file_matches?(prepared.source, prepared.original_content), do: [], else: [prepared.source]
+  end
+
+  defp current_operation_changes(%{type: :move} = prepared) do
+    target_changes = if path_exists?(prepared.target), do: [prepared.target], else: []
+
+    source_changes =
+      if file_matches?(prepared.source, prepared.original_content),
+        do: [],
+        else: [prepared.source]
+
+    target_changes ++ source_changes
+  end
+
+  defp path_exists?(path) do
+    match?({:ok, _}, File.lstat(path))
+  end
+
+  defp file_matches?(path, expected) do
+    match?({:ok, ^expected}, File.read(path))
+  end
+
+  defp commit_prepared_operation(%{type: :add} = prepared, signal) do
+    with :ok <- ensure_parent_dir(prepared.target),
+         :ok <- safe_write_new_file(prepared.target, prepared.new_content, signal) do
+      :ok
+    end
+  end
+
+  defp commit_prepared_operation(%{type: :delete, source: source}, _signal) do
+    case File.rm(source) do
+      :ok -> :ok
+      {:error, reason} -> {:error, format_error(reason, source)}
+    end
+  end
+
+  defp commit_prepared_operation(%{type: :update} = prepared, signal) do
+    safe_write_file(prepared.target, prepared.new_content, signal)
+  end
+
+  defp commit_prepared_operation(%{type: :move} = prepared, signal) do
+    with :ok <- ensure_parent_dir(prepared.target),
+         :ok <- safe_write_new_file(prepared.target, prepared.new_content, signal),
+         :ok <- chmod_moved_target(prepared.target, prepared.mode),
+         :ok <- remove_moved_source(prepared.source, prepared.target) do
+      :ok
+    end
+  end
+
+  defp chmod_moved_target(path, mode) do
+    case File.chmod(path, mode) do
+      :ok -> :ok
+      {:error, reason} -> {:error, "#{format_error(reason, path)} while preserving file mode"}
+    end
+  end
+
+  defp remove_moved_source(source, target) do
+    case File.rm(source) do
+      :ok -> :ok
+      {:error, reason} -> {:error, "#{format_error(reason, source)} after writing #{target}"}
     end
   end
 
@@ -826,58 +1090,6 @@ defmodule CodingAgent.Tools.Patch do
   defp maybe_delete_moved_acp_source(path, _target, opts),
     do: ACPFileBridge.delete_file(path, opts)
 
-  defp apply_operation(%{type: :add, path: path, content: content}, cwd, signal, _opts) do
-    resolved = resolve_path(path, cwd)
-
-    with :ok <- check_abort(signal),
-         :ok <- ensure_parent_dir(resolved),
-         :ok <- safe_write_file(resolved, content, signal) do
-      additions = count_lines(content)
-      {:ok, %{changed: [resolved], additions: additions, removals: 0}}
-    end
-  end
-
-  defp apply_operation(%{type: :delete, path: path}, cwd, signal, _opts) do
-    resolved = resolve_path(path, cwd)
-
-    with :ok <- check_abort(signal),
-         {:ok, content} <- safe_read_file(resolved),
-         :ok <- File.rm(resolved) do
-      removals = count_lines(content)
-      {:ok, %{changed: [resolved], additions: 0, removals: removals}}
-    else
-      {:error, :enoent} -> {:error, "File not found: #{resolved}"}
-      {:error, reason} -> {:error, format_error(reason, resolved)}
-    end
-  end
-
-  defp apply_operation(
-         %{type: :update, path: path, move_to: move_to, hunks: hunks},
-         cwd,
-         signal,
-         _opts
-       ) do
-    resolved = resolve_path(path, cwd)
-    target = if move_to, do: resolve_path(move_to, cwd), else: resolved
-
-    with :ok <- check_abort(signal),
-         {:ok, content} <- safe_read_file(resolved),
-         :ok <- check_abort(signal),
-         {:ok, new_content, adds, removes} <- apply_hunks(content, hunks, signal),
-         :ok <- check_abort(signal),
-         :ok <- ensure_parent_dir(target),
-         :ok <- safe_write_file(target, new_content, signal) do
-      if target != resolved do
-        _ = File.rm(resolved)
-      end
-
-      {:ok, %{changed: [target], additions: adds, removals: removes}}
-    else
-      {:error, :enoent} -> {:error, "File not found: #{resolved}"}
-      {:error, reason} -> {:error, format_error(reason, resolved)}
-    end
-  end
-
   # Safe file operations with better error handling
 
   defp safe_read_file(path) do
@@ -922,6 +1134,35 @@ defmodule CodingAgent.Tools.Patch do
 
         {:error, reason} ->
           {:error, "Failed to write file #{path}: #{inspect(reason)}"}
+      end
+    end
+  end
+
+  defp safe_write_new_file(path, content, signal) do
+    if aborted?(signal) do
+      {:error, "Operation aborted"}
+    else
+      case File.write(path, content, [:exclusive]) do
+        :ok ->
+          :ok
+
+        {:error, :eexist} ->
+          {:error, "Patch target appeared after preflight: #{path}"}
+
+        {:error, :eacces} ->
+          {:error, "Permission denied: #{path}"}
+
+        {:error, :enospc} ->
+          {:error, "No space left on device when writing: #{path}"}
+
+        {:error, :erofs} ->
+          {:error, "Read-only file system: #{path}"}
+
+        {:error, :edquot} ->
+          {:error, "Disk quota exceeded when writing: #{path}"}
+
+        {:error, reason} ->
+          {:error, "Failed to create file #{path}: #{inspect(reason)}"}
       end
     end
   end

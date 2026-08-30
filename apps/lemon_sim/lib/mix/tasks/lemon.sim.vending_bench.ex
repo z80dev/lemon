@@ -33,6 +33,8 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
 
   use Mix.Task
 
+  alias Mix.Tasks.Lemon.Sim.Common
+
   @switches [
     persist: :boolean,
     max_turns: :integer,
@@ -64,7 +66,7 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
     if opts[:help] do
       Mix.shell().info(@moduledoc)
     else
-      ensure_runtime_started!()
+      Common.ensure_runtime_and_core_started()
       run_simulation(opts)
     end
   end
@@ -75,17 +77,17 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
     run_opts =
       []
       |> apply_preset(opts[:preset])
-      |> maybe_put(:preset, opts[:preset])
-      |> maybe_put(:max_days, opts[:max_days])
-      |> maybe_put(:seed, opts[:seed])
-      |> maybe_put(:sim_id, opts[:sim_id])
-      |> maybe_put(:persist?, opts[:persist])
-      |> maybe_put(:driver_max_turns, opts[:max_turns])
-      |> maybe_put(:artifact_dir, opts[:artifact_dir])
-      |> maybe_put(:deterministic_artifacts?, opts[:deterministic_artifacts])
-      |> maybe_put(:live_step_timeout_ms, opts[:live_step_timeout_ms])
-      |> maybe_put(:arena_day_budget_ms, opts[:arena_day_budget_ms])
-      |> maybe_put(:external_cmd, opts[:external_cmd])
+      |> Common.maybe_put(:preset, opts[:preset])
+      |> Common.maybe_put(:max_days, opts[:max_days])
+      |> Common.maybe_put(:seed, opts[:seed])
+      |> Common.maybe_put(:sim_id, opts[:sim_id])
+      |> Common.maybe_put(:persist?, opts[:persist])
+      |> Common.maybe_put(:driver_max_turns, opts[:max_turns])
+      |> Common.maybe_put(:artifact_dir, opts[:artifact_dir])
+      |> Common.maybe_put(:deterministic_artifacts?, opts[:deterministic_artifacts])
+      |> Common.maybe_put(:live_step_timeout_ms, opts[:live_step_timeout_ms])
+      |> Common.maybe_put(:arena_day_budget_ms, opts[:arena_day_budget_ms])
+      |> Common.maybe_put(:external_cmd, opts[:external_cmd])
 
     result = run_mode(opts, run_opts)
 
@@ -121,9 +123,6 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
 
   defp format_error(reason), do: inspect(reason)
 
-  defp maybe_put(opts, _key, nil), do: opts
-  defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
-
   defp print_usage_summary(%{usage: usage_path}) do
     with {:ok, body} <- File.read(usage_path),
          {:ok, usage} <- Jason.decode(body) do
@@ -137,7 +136,7 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
     cond do
       opts[:arena] && opts[:arena_live] ->
         run_opts
-        |> maybe_put(:arena_agents, opts[:arena_agents])
+        |> Common.maybe_put(:arena_agents, opts[:arena_agents])
         |> put_live_arena_agents!(opts)
         |> LemonSim.Examples.VendingBench.Arena.LiveRunner.run()
 
@@ -145,7 +144,7 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
         strategy = opts[:offline_strategy] || "baseline"
 
         run_opts
-        |> maybe_put(:arena_agents, opts[:arena_agents])
+        |> Common.maybe_put(:arena_agents, opts[:arena_agents])
         |> then(&LemonSim.Examples.VendingBench.Arena.run_offline_strategy(strategy, &1))
 
       opts[:offline_strategy] ->
@@ -311,22 +310,20 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
 
     case String.split(model_str, ":", parts: 2) do
       [provider_name, model_id] ->
-        provider = normalize_provider(provider_name)
+        with provider when not is_nil(provider) <- Common.resolve_provider(provider_name),
+             %LemonAi.Types.Model{} = model <- LemonAi.Models.get_model(provider, model_id) do
+          model = LemonSim.LLM.GameHelpers.Config.apply_provider_base_url(model, config)
 
-        case LemonAi.Models.get_model(provider, model_id) do
-          %LemonAi.Types.Model{} = model ->
-            model = LemonSim.LLM.GameHelpers.Config.apply_provider_base_url(model, config)
+          api_key =
+            LemonSim.LLM.GameHelpers.Config.resolve_provider_api_key!(
+              provider,
+              config,
+              "vending_bench"
+            )
 
-            api_key =
-              LemonSim.LLM.GameHelpers.Config.resolve_provider_api_key!(
-                provider,
-                config,
-                "vending_bench"
-              )
-
-            {:ok, model, api_key}
-
-          nil ->
+          {:ok, model, api_key}
+        else
+          _ ->
             {:error, :model_not_found}
         end
 
@@ -348,22 +345,5 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBench do
             {:error, :model_not_found}
         end
     end
-  end
-
-  @provider_aliases %{
-    "gemini" => :google_gemini_cli,
-    "gemini_cli" => :google_gemini_cli,
-    "gemini-cli" => :google_gemini_cli,
-    "openai_codex" => :"openai-codex"
-  }
-
-  defp normalize_provider(name) do
-    normalized = name |> String.trim() |> String.downcase() |> String.replace("-", "_")
-    Map.get(@provider_aliases, normalized, String.to_atom(normalized))
-  end
-
-  defp ensure_runtime_started! do
-    Application.ensure_all_started(:lemon_sim)
-    Application.ensure_all_started(:lemon_core)
   end
 end

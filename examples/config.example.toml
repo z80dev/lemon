@@ -1,6 +1,20 @@
 # Provider credentials — prefer secret refs (api_key_secret) over plaintext api_key.
 # Run `mix lemon.secrets.set <secret_name> <value>` to store keys in the encrypted keychain.
 # Plaintext api_key is supported but discouraged; use it only for quick local testing.
+#
+# Control-plane operator authentication is environment-only so the shared secret
+# is not written to this file. Set LEMON_CONTROL_PLANE_OPERATOR_TOKEN for normal
+# WebSocket operator access. Legacy tokenless loopback access is disabled unless
+# LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK=true is explicitly set.
+# The source ./bin/lemon-tui launcher generates a process-scoped token for a
+# runtime it starts; attaching to an existing runtime requires its matching env
+# value. Every runtime it starts is stopped with the TUI, even with a
+# preconfigured token; start persistent runtimes separately with ./bin/lemon
+# --daemon. Never put the shared token in a browser VITE_* variable or URL.
+# Named node pairing sends the operator token from LEMON_NODE_OPERATOR_TOKEN on
+# the joining host. Named workers require wss:// for non-loopback controllers by
+# default. LEMON_NODE_ALLOW_INSECURE_CONTROLLER=true is an explicit development
+# or verified-encrypted-overlay override and is not safe on an unverified path.
 
 [providers.anthropic]
 api_key_secret = "anthropic_api_key"

@@ -107,7 +107,11 @@ defmodule LemonControlPlane.HTTP.Router do
 
   get "/ws" do
     conn
-    |> WebSockAdapter.upgrade(LemonControlPlane.WS.Connection, [], timeout: 60_000)
+    |> WebSockAdapter.upgrade(
+      LemonControlPlane.WS.Connection,
+      [peer: conn.remote_ip],
+      timeout: 60_000
+    )
     |> halt()
   end
 
@@ -145,7 +149,8 @@ defmodule LemonControlPlane.HTTP.Router do
 
     try do
       with {:ok, conn} <- stream_start(conn, result, kind),
-           {:ok, conn} <- stream_loop(conn, result, kind, stream_deadline_ms(result.stream_timeout_ms)) do
+           {:ok, conn} <-
+             stream_loop(conn, result, kind, stream_deadline_ms(result.stream_timeout_ms)) do
         conn
       else
         {:error, _reason} -> conn

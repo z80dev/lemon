@@ -217,7 +217,7 @@ defmodule CodingAgent.Executor.SessionRunner do
 
       {:error, reason} ->
         emit_resume_failure(state, reason)
-        {:stop, :normal}
+        {:stop, reason}
     end
   end
 
