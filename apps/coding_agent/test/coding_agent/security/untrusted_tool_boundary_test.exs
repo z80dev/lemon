@@ -46,6 +46,24 @@ defmodule CodingAgent.Security.UntrustedToolBoundaryTest do
     assert [%TextContent{text: ^prewrapped}] = after_boundary.content
   end
 
+  test "wraps a raw web result instead of trusting its tool name" do
+    message = %ToolResultMessage{
+      role: :tool_result,
+      tool_call_id: "call_web_raw",
+      tool_name: "webfetch",
+      trust: :untrusted,
+      content: [%TextContent{type: :text, text: "raw web payload"}],
+      is_error: false,
+      timestamp: 1
+    }
+
+    assert {:ok, [after_boundary]} = UntrustedToolBoundary.transform([message], nil)
+    assert [%TextContent{text: text}] = after_boundary.content
+    assert text =~ "SECURITY NOTICE"
+    assert text =~ "<<<EXTERNAL_UNTRUSTED_CONTENT>>>"
+    assert text =~ "raw web payload"
+  end
+
   test "does not accept tool-provided wrapping metadata as boundary proof" do
     message = %ToolResultMessage{
       tool_call_id: "call_spoofed_metadata",

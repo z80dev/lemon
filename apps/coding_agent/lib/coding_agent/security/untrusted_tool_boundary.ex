@@ -48,23 +48,16 @@ defmodule CodingAgent.Security.UntrustedToolBoundary do
     if boundary_applied?(message.details) do
       message
     else
-      message = %{message | content: message.content || []}
+      source = Map.get(@tool_sources, message.tool_name, :api)
 
-      message =
-        if MapSet.member?(@prewrapped_tools, message.tool_name) do
-          message
-        else
-          source = Map.get(@tool_sources, message.tool_name, :api)
-
-          %{
-            message
-            | content:
-                Enum.map(
-                  message.content || [],
-                  &wrap_content_block(&1, source, max_bytes)
-                )
-          }
-        end
+      message = %{
+        message
+        | content:
+            Enum.map(
+              message.content || [],
+              &wrap_content_block(&1, message.tool_name, source, max_bytes)
+            )
+      }
 
       mark_boundary_applied(message)
     end
@@ -72,22 +65,35 @@ defmodule CodingAgent.Security.UntrustedToolBoundary do
 
   defp wrap_message(other, _max_bytes), do: other
 
-  defp wrap_content_block(%TextContent{text: text} = block, source, max_bytes)
+  defp wrap_content_block(%TextContent{text: text} = block, tool_name, source, max_bytes)
        when is_binary(text) do
-    %{block | text: wrap_text(text, source, max_bytes)}
+    %{block | text: maybe_wrap_text(text, tool_name, source, max_bytes)}
   end
 
-  defp wrap_content_block(%{type: :text, text: text} = block, source, max_bytes)
+  defp wrap_content_block(%{type: :text, text: text} = block, tool_name, source, max_bytes)
        when is_binary(text) do
-    %{block | text: wrap_text(text, source, max_bytes)}
+    %{block | text: maybe_wrap_text(text, tool_name, source, max_bytes)}
   end
 
-  defp wrap_content_block(%{"type" => "text", "text" => text} = block, source, max_bytes)
+  defp wrap_content_block(
+         %{"type" => "text", "text" => text} = block,
+         tool_name,
+         source,
+         max_bytes
+       )
        when is_binary(text) do
-    Map.put(block, "text", wrap_text(text, source, max_bytes))
+    Map.put(block, "text", maybe_wrap_text(text, tool_name, source, max_bytes))
   end
 
-  defp wrap_content_block(block, _source, _max_bytes), do: block
+  defp wrap_content_block(block, _tool_name, _source, _max_bytes), do: block
+
+  defp maybe_wrap_text(text, tool_name, source, max_bytes) do
+    if MapSet.member?(@prewrapped_tools, tool_name) and canonical_envelope?(text) do
+      text
+    else
+      wrap_text(text, source, max_bytes)
+    end
+  end
 
   defp wrap_text(text, source, max_bytes) do
     ExternalContent.wrap_external_content(text,
@@ -95,6 +101,13 @@ defmodule CodingAgent.Security.UntrustedToolBoundary do
       include_warning: true,
       max_bytes: max_bytes
     )
+  end
+
+  defp canonical_envelope?(text) do
+    trimmed = String.trim(text)
+
+    String.starts_with?(trimmed, "<<<EXTERNAL_UNTRUSTED_CONTENT>>>") and
+      String.ends_with?(trimmed, "<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>")
   end
 
   defp boundary_applied?(details) when is_map(details) do
