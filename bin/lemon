@@ -14,6 +14,7 @@
 #   ./bin/lemon node join --name worker --controller wss://controller.example/ws
 #   ./bin/lemon config validate
 #   ./bin/lemon doctor --json
+#   ./bin/lemon backup create --json
 #   ./bin/lemon web
 #   ./bin/lemon send --to telegram:<chat_id> "deploy finished"
 #   ./bin/lemon media
@@ -53,6 +54,7 @@ Usage: ./bin/lemon [options]
        ./bin/lemon channels
        ./bin/lemon config validate
        ./bin/lemon doctor --json
+       ./bin/lemon backup create --json
        ./bin/lemon web [--no-open]
        ./bin/lemon send --to telegram:<chat_id> "message"
        ./bin/lemon media
@@ -331,6 +333,15 @@ if [[ "${1:-}" == "doctor" ]]; then
   shift
   cd "$LEMON_ROOT"
   exec mix lemon.doctor "$@"
+fi
+
+if [[ "${1:-}" == "backup" ]]; then
+  shift
+  cd "$LEMON_ROOT"
+  # Keep --json stdout machine-clean after the documented source build step;
+  # dependency checks and compilation can otherwise print before the payload.
+  exec mix run --no-start --no-compile --no-deps-check \
+    -e 'LemonCli.CLI.main(["backup" | System.argv()])' -- "$@"
 fi
 
 if [[ "${1:-}" == "media" ]]; then

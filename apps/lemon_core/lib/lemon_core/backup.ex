@@ -216,7 +216,8 @@ defmodule LemonCore.Backup do
          {:ok, conflicts, identical} <- classify_destination(target, entries),
          :ok <- authorize_conflicts(conflicts, overwrite?),
          {:ok, stage} <- stage_restore(bundle, target, entries, identical),
-         {:ok, result} <- apply_restore(stage, target, manifest, conflicts, identical) do
+         {:ok, result} <-
+           apply_restore(stage, target, manifest, manifest_digest, conflicts, identical) do
       {:ok, result}
     end
   end
@@ -463,6 +464,9 @@ defmodule LemonCore.Backup do
       not String.match?(id, ~r/\Abackup-[A-Za-z0-9_-]{1,128}\z/) ->
         {:error, :invalid_backup_id}
 
+      not valid_created_at?(created_at) ->
+        {:error, :invalid_created_at}
+
       length(files) > @max_files ->
         {:error, :too_many_files}
 
@@ -486,6 +490,15 @@ defmodule LemonCore.Backup do
     do: {:error, {:unsupported_backup_schema, schema}}
 
   defp validate_manifest(_), do: {:error, :invalid_manifest}
+
+  defp valid_created_at?(created_at) when byte_size(created_at) <= 40 do
+    case DateTime.from_iso8601(created_at) do
+      {:ok, _datetime, 0} -> true
+      _ -> false
+    end
+  end
+
+  defp valid_created_at?(_created_at), do: false
 
   defp validate_manifest_entries(files) do
     Enum.reduce_while(files, {:ok, [], MapSet.new(), 0}, fn entry, {:ok, entries, seen, total} ->
@@ -731,7 +744,7 @@ defmodule LemonCore.Backup do
     end)
   end
 
-  defp apply_restore(stage, target, manifest, conflicts, identical) do
+  defp apply_restore(stage, target, manifest, manifest_digest, conflicts, identical) do
     rollback = target <> ".pre-restore.#{manifest["id"]}"
     entries = manifest["files"]
     identical_set = MapSet.new(identical)
@@ -746,6 +759,8 @@ defmodule LemonCore.Backup do
             receipt = %{
               "schema" => 1,
               "backup_id" => manifest["id"],
+              "manifest_sha256" => manifest_digest,
+              "target" => target,
               "restored_at" =>
                 DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601(),
               "overwritten_count" => length(moved),
@@ -909,8 +924,16 @@ defmodule LemonCore.Backup do
     cond do
       output == source -> {:error, :output_is_source}
       String.starts_with?(source, output <> "/") -> {:error, :output_contains_source}
+      output_inside_unexcluded_source?(source, output) -> {:error, :output_inside_source}
       true -> :ok
     end
+  end
+
+  defp output_inside_unexcluded_source?(source, output) do
+    backups_root = Path.join(source, "backups")
+
+    String.starts_with?(output, source <> "/") and output != backups_root and
+      not String.starts_with?(output, backups_root <> "/")
   end
 
   defp verify_bundle_root(bundle) do

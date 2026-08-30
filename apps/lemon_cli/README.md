@@ -45,6 +45,23 @@ release and source-checkout behavior aligned.
 | Validate/show config | `lemon config validate` | `./bin/lemon config validate` | `mix lemon.config validate` |
 | Manage encrypted secrets | `lemon secrets status` | `./bin/lemon secrets status` | `mix lemon.secrets.status` |
 | Inspect channel readiness | `lemon channels` | `./bin/lemon channels` | `mix lemon.channels` |
+| Back up or restore durable user state | `lemon backup create` | `./bin/lemon backup create` | Call `LemonCli.CLI.run/1` from contributor tooling |
+
+## Backup and restore
+
+`lemon backup contract|create|list|verify|restore` is implemented by the same
+Mix-free `LemonCli.CLI` handler in source and packaged runtimes. Every
+subcommand supports `--json`; success writes one document to stdout and exits
+`0`, verification/operational failure writes one redacted document to stderr
+and exits `1`, and invalid options exit `2`.
+
+Restore is additive and verified before mutation. Differing destination files
+require `--overwrite` plus the token emitted by `backup verify --target PATH`;
+that token is bound to the verified manifest digest and expanded target.
+Credential-bearing files are excluded unless `backup create
+--include-credentials` is explicit. See
+[Back up and restore Lemon user state](../../docs/user-guide/backups.md) for the
+complete format, exclusion, permissions, rollback, and compatibility contract.
 
 ## First-run setup and readiness
 

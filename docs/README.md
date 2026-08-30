@@ -45,6 +45,7 @@ failures.
 | [demo.md](demo.md) | Deterministic local demo paths for runtime health, session Web UI, TUI, support bundles, and docs quality |
 | [support.md](support.md) | Public support boundaries, issue data requirements, support-bundle commands, and security-reporting path |
 | [user-guide/setup.md](user-guide/setup.md) | Full setup walkthrough: install, configure, run, Telegram setup |
+| [user-guide/backups.md](user-guide/backups.md) | Versioned `~/.lemon` data contract, atomic backup verification, and guarded restore |
 | [user-guide/web.md](user-guide/web.md) | Launch the local browser, complete readiness, stop runs, configure access, and recover errors |
 | [user-guide/migrate-from-hermes.md](user-guide/migrate-from-hermes.md) | Preview-first migration path for Hermes memories, skills, config, secrets, and session recall |
 | [user-guide/skills.md](user-guide/skills.md) | Skills: listing, installing, inspecting, synthesizing drafts |
@@ -68,6 +69,7 @@ failures.
 | [long-running-agent-harnesses.md](long-running-agent-harnesses.md) | Long-running harness patterns, eval loops, and runtime validation workflows |
 | [testing.md](testing.md) | Canonical local test lanes and CI parity guidance |
 | [config.md](config.md) | TOML configuration reference (providers, runtime, gateway, profiles, tools) |
+| [user-guide/backups.md](user-guide/backups.md) | Local user-state backup, verification, restore, and rollback safety model |
 | [extensions.md](extensions.md) | Extension/plugin API, tool hooks, conflict resolution |
 | [release/release_checklist_and_support_policy.md](release/release_checklist_and_support_policy.md) | 1.0 release-candidate checklist, rollback checklist, and support boundaries |
 | [security/safety.md](security/safety.md) | Plain-language Lemon safety model, recommended defaults, and support-bundle guidance |

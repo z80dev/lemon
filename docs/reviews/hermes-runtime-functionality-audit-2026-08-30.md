@@ -68,7 +68,7 @@ means Hermes has a current user-facing behavior with no equivalent Lemon path.
 | Approvals and trust | Tool policy, managed scope, sandbox/egress options | Central exec approvals, tool policy profiles, untrusted-result fencing, capability boundaries, node authentication | **Covered/lead** in local policy. Host-side egress credential injection and managed secret-source adapters are **gaps**. |
 | Reliability | Persistent sessions, cron recovery, background processes | OTP supervision, durable stores, retries, run ownership, terminalization, named-node cancellation | **Lead**, with the asynchronous boot reconciler noted above still missing. |
 | Observability | CLI diagnostics, telemetry and session inspection | structured introspection, run graph, usage/cost diagnostics, proof artifacts, health/readiness, support bundles | **Lead**. |
-| Updates and scripting | update command, config/model/session/cron CLIs | release channels, updater, setup/doctor/config/secrets/model/provider/usage/proof commands, script send | **Covered**. Session export/prune/stats and some install-plugin ergonomics remain gaps. |
+| Updates and scripting | update command, backup/recovery, config/model/session/cron CLIs | Release channels and updater plus setup/doctor/config/secrets/model/provider/usage/proof commands, script send, and source/packaged atomic backup/verify/restore with a versioned data contract | **Covered** for local user-state backup/recovery. Update plan/apply/rollback receipts, session export/prune/stats, shell completions, and some install-plugin ergonomics remain gaps. |
 
 ## Same-session heartbeat delivered in this pass
 
