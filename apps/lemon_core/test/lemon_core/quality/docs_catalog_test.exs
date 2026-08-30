@@ -148,7 +148,7 @@ defmodule LemonCore.Quality.DocsCatalogTest do
       assert message =~ ":foo"
     end
 
-    test "returns error when catalog evaluates to atom", %{harness: harness} do
+    test "returns error when catalog contains an atom instead of entries", %{harness: harness} do
       root = harness.tmp_dir
       catalog_dir = Path.join(root, "docs")
       File.mkdir_p!(catalog_dir)
@@ -191,7 +191,7 @@ defmodule LemonCore.Quality.DocsCatalogTest do
       File.write!(catalog_file, "[%{path: \"test.md\", invalid syntax here}")
 
       assert {:error, message} = DocsCatalog.load(root: root)
-      assert message =~ "Failed to evaluate"
+      assert message =~ "Failed to parse"
       assert message =~ catalog_file
     end
 
@@ -205,7 +205,7 @@ defmodule LemonCore.Quality.DocsCatalogTest do
       File.write!(catalog_file, "[undefined_variable]")
 
       assert {:error, message} = DocsCatalog.load(root: root)
-      assert message =~ "Failed to evaluate"
+      assert message =~ "Failed to parse"
     end
 
     test "loads catalog from repository root" do

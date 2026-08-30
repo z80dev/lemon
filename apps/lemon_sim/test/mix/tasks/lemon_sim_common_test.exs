@@ -30,6 +30,10 @@ defmodule Mix.Tasks.Lemon.Sim.CommonTest do
     {"lemon.sim.werewolf", Mix.Tasks.Lemon.Sim.Werewolf}
   ]
 
+  @runtime_only_migrated_tasks [
+    {"lemon.sim.verify", Mix.Tasks.Lemon.Sim.Verify}
+  ]
+
   setup do
     original_shell = Mix.shell()
     Mix.shell(Mix.Shell.Process)
@@ -104,6 +108,14 @@ defmodule Mix.Tasks.Lemon.Sim.CommonTest do
     end)
 
     refute function_exported?(Common, :run, 1)
+  end
+
+  test "runtime-only migrated tasks keep their task name and run API" do
+    Enum.each(@runtime_only_migrated_tasks, fn {name, task} ->
+      assert Code.ensure_loaded?(task)
+      assert function_exported?(task, :run, 1)
+      assert Mix.Task.get(name) == task
+    end)
   end
 
   test "representative wrappers preserve help aliases and option/model errors" do

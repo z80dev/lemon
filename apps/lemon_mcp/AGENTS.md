@@ -387,6 +387,11 @@ The `lemon_runtime_min` and `lemon_runtime_full` releases explicitly include
 `lemon_mcp: :load` before `coding_agent` and `lemon_skills`. This assembles and
 loads the client modules so `LemonSkills.McpSource.mcp_enabled?/0` can discover
 them, without pretending the MCP library owns long-lived runtime processes.
+`release-smoke.yml` builds both profiles and evaluates that contract inside
+each packaged release; `scripts/verify_release_runtime_boot` repeats it against
+each min/full release tarball. The client and source modules must load, MCP
+feature detection must be enabled, `:lemon_mcp` must be loaded but not started,
+and no application callback or `LemonMCP.Application` module may exist.
 
 ## Testing Guidance
 

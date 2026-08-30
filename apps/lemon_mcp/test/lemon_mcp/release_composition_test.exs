@@ -4,6 +4,8 @@ defmodule LemonMCP.ReleaseCompositionTest do
   alias LemonSkills.McpSource
 
   @umbrella_mix_exs Path.expand("../../../../mix.exs", __DIR__)
+  @release_smoke Path.expand("../../../../.github/workflows/release-smoke.yml", __DIR__)
+  @runtime_boot_verifier Path.expand("../../../../scripts/verify_release_runtime_boot", __DIR__)
   @runtime_releases [:lemon_runtime_min, :lemon_runtime_full]
 
   test "runtime releases load the MCP library before its dynamic consumers" do
@@ -43,6 +45,31 @@ defmodule LemonMCP.ReleaseCompositionTest do
     refute Code.ensure_loaded?(LemonMCP.Application)
     assert Code.ensure_loaded?(LemonMCP.Client)
     assert McpSource.mcp_enabled?()
+  end
+
+  test "release smoke evaluates the packaged contract in both runtime profiles" do
+    workflow = File.read!(@release_smoke)
+
+    assert workflow =~ ~s(["lemon_runtime_min","lemon_runtime_full"])
+    assert workflow =~ "Verify packaged MCP library contract"
+    assert workflow =~ "Code.ensure_loaded?(LemonMCP.Client)"
+    assert workflow =~ "LemonSkills.McpSource.mcp_enabled?()"
+    assert workflow =~ "Application.loaded_applications()"
+    assert workflow =~ "Application.started_applications()"
+    assert workflow =~ "Application.spec(:lemon_mcp, :mod) == []"
+    assert workflow =~ "not Code.ensure_loaded?(LemonMCP.Application)"
+  end
+
+  test "artifact boot verification repeats the packaged contract without ambient overrides" do
+    verifier = File.read!(@runtime_boot_verifier)
+
+    assert verifier =~ "-u LEMON_MCP_DISABLED"
+    assert verifier =~ "Code.ensure_loaded?(LemonMCP.Client)"
+    assert verifier =~ "LemonSkills.McpSource.mcp_enabled?()"
+    assert verifier =~ "Application.loaded_applications()"
+    assert verifier =~ "Application.started_applications()"
+    assert verifier =~ "Application.spec(:lemon_mcp, :mod) == []"
+    assert verifier =~ "not Code.ensure_loaded?(LemonMCP.Application)"
   end
 
   defp index_of(applications, application) do

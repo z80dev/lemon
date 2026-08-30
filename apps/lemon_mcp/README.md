@@ -47,6 +47,10 @@ no processes by default. Callers start and supervise the client, server, and
 transport processes they use. Lemon's minimal and full OTP releases include the
 library with `:load`, which makes these modules available to dynamic consumers
 such as `LemonSkills.McpSource` without adding a no-op supervisor.
+Release smoke builds both profiles and evaluates this contract inside each
+packaged release. The artifact boot verifier repeats it against each min/full
+release tarball, including loaded-but-not-started application state and the
+absence of an application callback.
 
 ## Usage
 
