@@ -49,7 +49,7 @@ failures.
 | [user-guide/web.md](user-guide/web.md) | Launch the local browser, complete readiness, stop runs, configure access, and recover errors |
 | [user-guide/profiles.md](user-guide/profiles.md) | Create isolated specialist profiles, use canonical chats/roster, clone/export safely, and delete recoverably |
 | [user-guide/migrate-from-hermes.md](user-guide/migrate-from-hermes.md) | Preview-first migration path for Hermes memories, skills, config, secrets, and session recall |
-| [user-guide/skills.md](user-guide/skills.md) | Skills: listing, installing, inspecting, synthesizing drafts |
+| [user-guide/skills.md](user-guide/skills.md) | Skills: listing, installing, inspecting, portable profile automation bundles, and synthesized drafts |
 | [user-guide/memory.md](user-guide/memory.md) | Memory documents, session search, retention management |
 | [user-guide/adaptive.md](user-guide/adaptive.md) | Adaptive routing, routing feedback, skill synthesis pipeline |
 | [user-guide/rollout.md](user-guide/rollout.md) | Feature promotion gates, rollback procedure, promotion checklist |

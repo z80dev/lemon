@@ -185,6 +185,103 @@ Audit state files:
 
 ---
 
+## Portable Skill and Automation Bundles
+
+A versioned bundle can distribute an audited skill together with one
+agent-backed cron blueprint without creating another skill registry or
+scheduler. Put each unpacked bundle directly below the local catalog:
+
+```text
+~/.lemon/bundles/daily-note/
+├── bundle.json
+└── skills/
+    └── daily-note/
+        └── SKILL.md
+```
+
+The repository includes a harmless disabled example. Copy it into the catalog:
+
+```bash
+mkdir -p ~/.lemon/bundles
+cp -R examples/skill-automation-bundles/daily-note ~/.lemon/bundles/daily-note
+```
+
+The directory name, `bundle.json` `id`, skill key, and declared
+`skills/<key>` path use lowercase safe IDs. Version 1 requires this manifest
+header, at least one skill, and exactly one cron automation:
+
+```json
+{
+  "format": "lemon-skill-automation-bundle",
+  "version": 1,
+  "id": "daily-note",
+  "skills": [{"key": "daily-note", "path": "skills/daily-note"}],
+  "automations": [{
+    "id": "daily-note-reminder",
+    "kind": "cron",
+    "name": "Daily note reminder",
+    "schedule": "0 0 1 1 *",
+    "prompt": "Use the daily-note skill to summarize completed work.",
+    "enabled": false,
+    "timezone": "UTC"
+  }]
+}
+```
+
+### Review and activate
+
+Connect to the authenticated control-plane WebSocket as an operator, then use
+the catalog-scoped methods. RPC never accepts an arbitrary filesystem path:
+
+```json
+{"type":"req","id":"1","method":"blueprints.list","params":{}}
+{"type":"req","id":"2","method":"blueprints.inspect","params":{"bundleId":"daily-note"}}
+{"type":"req","id":"3","method":"blueprints.validate","params":{"bundleId":"daily-note"}}
+{"type":"req","id":"4","method":"blueprints.preview","params":{"bundleId":"daily-note","profileId":"operator"}}
+```
+
+`blueprints.preview` does not mutate anything. Review its exact skill and cron
+actions, target profile, content hashes, schedule, enabled state, and cleanup
+flags. The response deliberately contains prompt byte/hash metadata rather than
+prompt text. If the plan is correct, send its exact `confirmationDigest`:
+
+```json
+{"type":"req","id":"5","method":"blueprints.activate","params":{"bundleId":"daily-note","profileId":"operator","confirmationDigest":"<digest from preview>"}}
+```
+
+Activation reloads and re-plans under a lock. Any content change, destination
+change, existing-ID conflict, or stale digest rejects the operation. A
+successful activation copies the skill only into the profile's derived
+`workspace/.lemon/skill/` boundary, enables it in that workspace, and claims a
+stable cron ID through the existing `CronManager`. Previewing and activating
+the same bundle again reports `unchanged` and leaves one job.
+
+### Security boundary
+
+Portable bundles are untrusted input. Version 1 rejects archives, symlinks,
+unknown paths or fields, oversized trees, unsupported file types, control/bidi
+characters, command/shell/script jobs, environment or working-directory
+overrides, memory-file overrides, credential-like keys or values, and non-UTC
+timezones. Skill manifest/lint and deterministic audit checks run on the source
+and again on the staged copy before any rename. Public results omit absolute
+paths, skill bodies, prompt text, command text, and secret values.
+
+This first vertical does not provide archive import, signing, publishing, a
+remote registry, command blueprints, heartbeats, multiple jobs per bundle, or a
+TUI/Web catalog. Use the local `LemonAutomation.Blueprint` service directly
+only for trusted source-checkout administration that genuinely needs a local
+path; remote clients should use the catalog-scoped RPC.
+
+Run the booted-runtime proof to activate the disabled example, verify
+profile-local discovery and persisted provenance, replay it without a
+duplicate, then clean up the isolated profile and job:
+
+```bash
+MIX_ENV=dev mix run --no-start scripts/live_skill_automation_blueprint_smoke.exs
+```
+
+---
+
 ## Skill Drafts (Synthesized Skills)
 
 Lemon can automatically generate draft skills from your past successful runs.
@@ -288,4 +385,4 @@ skills_hub_v2                = "default-on"   # full hub UX
 skill_synthesis_drafts       = "off"          # auto-generate drafts from memory
 ```
 
-*Last reviewed: 2026-05-16*
+*Last reviewed: 2026-08-30*

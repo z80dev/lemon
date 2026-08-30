@@ -128,6 +128,14 @@ Nous Research skills. Keep `hermes:` identifiers routed through `Installer` so
 official-source audit and approval remain mandatory; do not copy these bundles
 directly into the registry.
 
+Portable skill + automation distribution is owned by
+`LemonAutomation.Blueprint`. It deliberately composes `Bundle`, `Manifest`,
+`Audit.Engine`, `Audit.SkillLint`, project `Config`, and `Registry.refresh/1`;
+do not introduce a second registry or a separate profile skill store here.
+Blueprint activation copies only the already audited file set, then hashes,
+lints, and audits the staged copy again before it can enter the derived profile
+workspace.
+
 When present, `name` and `description` must be non-empty, single-line, valid UTF-8 strings without control or bidirectional formatting characters. They are bounded to 128 and 1,024 bytes respectively. `tags` and `keywords` must be lists of at most 32 strings, with each item subject to the same safe-text checks and a 128-byte limit. Missing `name`/`description` remain compatible with legacy manifests and use registry defaults.
 
 ### Registry State

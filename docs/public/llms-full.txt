@@ -19961,7 +19961,7 @@ must not be copied into new plans.
 | No redirect interruption | [`AbortSignal`](../../apps/lemon_agent/lib/lemon_agent/abort_signal.ex), the [streaming loop](../../apps/lemon_agent/lib/lemon_agent/loop/streaming.ex), and [`CodingAgent.Session`](../../apps/coding_agent/lib/coding_agent/session.ex) implement redirect while preserving completed tool results and degrading to steer during tool execution. | Local native runs support it. Remote named-node steering/redirect remains an explicit boundary. |
 | Provider fallback was only a preview ordering | [`ProviderRouting`](../../apps/lemon_agent/lib/lemon_agent/model_runtime/provider_routing.ex) builds route candidates; [`ProviderFallback`](../../apps/coding_agent/lib/coding_agent/session/provider_fallback.ex) executes per-turn provider and credential failover with cooldowns and session pinning. | Runtime resilience is implemented; self-service pool/fallback administration is still weak. |
 | No same-provider credential rotation | [`ProviderPoolRotator`](../../apps/lemon_agent/lib/lemon_agent/model_runtime/provider_pool_rotator.ex) and session fallback implement pool rotation; [live test guidance](../testing.md) covers invalid-to-valid credential proof. | No Hermes-like `auth`/pool management UX in the packaged CLI or Web. |
-| Cron lacked monitor mode, command jobs, chaining, drift guard, and preflight | [`CronManager`](../../apps/lemon_automation/lib/lemon_automation/cron_manager.ex), [`CronMonitor`](../../apps/lemon_automation/lib/lemon_automation/cron_monitor.ex), [`CronContext`](../../apps/lemon_automation/lib/lemon_automation/cron_context.ex), [`CronPreflight`](../../apps/lemon_automation/lib/lemon_automation/cron_preflight.ex), and [`CronCommandRunner`](../../apps/lemon_automation/lib/lemon_automation/cron_command_runner.ex) implement all five. | Automation blueprints/suggestions and a simple recurring `/loop` UX remain gaps. |
+| Cron lacked monitor mode, command jobs, chaining, drift guard, and preflight | [`CronManager`](../../apps/lemon_automation/lib/lemon_automation/cron_manager.ex), [`CronMonitor`](../../apps/lemon_automation/lib/lemon_automation/cron_monitor.ex), [`CronContext`](../../apps/lemon_automation/lib/lemon_automation/cron_context.ex), [`CronPreflight`](../../apps/lemon_automation/lib/lemon_automation/cron_preflight.ex), and [`CronCommandRunner`](../../apps/lemon_automation/lib/lemon_automation/cron_command_runner.ex) implement all five. [`Blueprint`](../../apps/lemon_automation/lib/lemon_automation/blueprint.ex) now adds one exact-confirmed skill + agent-cron template vertical. | Blueprint suggestions/catalog UX, richer template shapes, and a simple recurring `/loop` UX remain gaps. |
 | Multi-engine execution was a Lemon advantage | Lemon deliberately removed vendor-CLI engines and now has one native supervised executor with provider/model routing and in-process subagents. | This is a simplification and reliability choice, not a current multi-engine differentiator. |
 
 ## Functionality and product gap matrix
@@ -19996,8 +19996,8 @@ must not be copied into new plans.
 | --- | --- | --- | --- | --- | --- |
 | Keep durable personal and project memory | Hermes combines local USER/MEMORY files, session search, background review/curation, a learning journey, and a broad set of [memory providers](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory-providers). | Lemon has SQLite FTS memory, redaction-aware ingest, provider fan-out, session search, project context, memory tools, scheduled skill synthesis/curation, and a production Honcho integration. Local and Honcho are the implemented providers; adaptive features remain intentionally opt-in. | Near for durable recall; partial for ecosystem/UX | Medium | Add a memory browser with provenance/edit/delete, measure whether safe defaults should enable recall, and prioritize provider conformance over provider count. |
 | Teach the agent from a URL, directory, or corpus and inspect what it learned | Hermes exposes `/learn`, curator flows, and the Journey learning graph/timeline. | Lemon synthesizes candidates from finalized runs and can curate/install skills, but has no direct “learn this source” job or learning-graph UI. | Missing | Medium | Build an auditable ingestion job that shows sources, proposed memories/skills, conflicts, and approval before write; visualize the same records rather than inventing a second learning store. |
-| Find, audit, install, update, bundle, and distribute skills | Hermes's [skills system](https://hermes-agent.nousresearch.com/docs/user-guide/features/skills) includes a Hub, taps, bundles, a large catalog, publishing, audit, curator, and profile distributions. | Lemon has agentskills-compatible discovery, local/project/builtin precedence, official Hermes catalog import, risk audit, trust metadata, atomic install/update, curator, model-facing management, and MCP-based discovery. It lacks a credible public registry, taps/bundles UX, publishing, and profile distribution. | Near in engine; partial in ecosystem | Medium | Ship a real signed registry/index, bundle/export format, profile-scoped enablement, and TUI/Web browse/review/install UX. |
-| Schedule recurring agent and script work safely | Hermes provides cron, heartbeats, recurring [loops](https://hermes-agent.nousresearch.com/docs/user-guide/features/loops), monitor jobs, no-agent scripts, chaining, blueprints, suggestions, preflight, and multiple delivery modes. | Lemon has durable cron, exact timers, jitter/retries/lineage, overlap locks, pause/resume/abort/run-now, heartbeat suppression, monitor mode, command jobs, chaining, preflight, default-model drift guard, goal continuation/auto loops, and kanban dispatch. | Near in engine; partial in UX | Medium | Add natural-language recurring-loop commands, templates/blueprints with explicit consent, and first-class TUI/Web/packaged CLI management. Avoid duplicating the existing cron and goal stores. |
+| Find, audit, install, update, bundle, and distribute skills | Hermes's [skills system](https://hermes-agent.nousresearch.com/docs/user-guide/features/skills) includes a Hub, taps, bundles, a large catalog, publishing, audit, curator, and profile distributions. | Lemon has agentskills-compatible discovery, local/project/builtin precedence, official Hermes catalog import, risk audit, trust metadata, atomic install/update, curator, model-facing management, and MCP-based discovery. Versioned unpacked bundles now reuse those audits for explicit profile-local enablement, with safe catalog list/inspect/validate/preview RPC. Lemon still lacks a signed public registry/index, taps, publishing/export, archive import, and TUI/Web bundle UX. | Near in engine; first bundle vertical shipped, partial in ecosystem | Medium | Add signed index/distribution and export/publish lifecycle, then TUI/Web browse/review/activate UX over the existing bundle service. Do not weaken the unpacked, path-bounded activation policy for archive convenience. |
+| Schedule recurring agent and script work safely | Hermes provides cron, heartbeats, recurring [loops](https://hermes-agent.nousresearch.com/docs/user-guide/features/loops), monitor jobs, no-agent scripts, chaining, blueprints, suggestions, preflight, and multiple delivery modes. | Lemon has durable cron, exact timers, jitter/retries/lineage, overlap locks, pause/resume/abort/run-now, heartbeat suppression, monitor mode, command jobs, chaining, preflight, default-model drift guard, goal continuation/auto loops, and kanban dispatch. A versioned agent-cron blueprint now requires an exact plan digest, persists bundle/definition provenance, enables skills in the derived profile workspace, and replays without duplicate jobs through the existing scheduler. | Near in engine; first blueprint vertical shipped, partial in UX | Medium | Add natural-language recurring-loop commands, suggestions, and TUI/Web/packaged CLI blueprint management. Expand beyond one agent cron only when a concrete workflow preserves exact confirmation and existing cron/heartbeat stores. |
 | Review dangerous actions and constrain agent execution | Hermes documents smart/manual/off [approvals and security](https://hermes-agent.nousresearch.com/docs/user-guide/security), deny rules, circuit breakers, container isolation, checkpoints, and managed scope. | Lemon has centralized execution approvals, per-node policies, tool policy profiles, structured approval events across interfaces, file/checkpoint guards, URL/SSRF policy, extension capability approvals, redaction, support-bundle cleanup, and proof artifacts. | **Parity+** in auditable policy; partial in enterprise scope | Medium | Add admin-pinned managed settings and a human-readable policy editor. Preserve Lemon's proof/redaction advantages. |
 | Keep credentials out of config and remote sandboxes | Hermes resolves credentials from 1Password, Bitwarden, or an arbitrary command and can inject them through an [egress proxy](https://hermes-agent.nousresearch.com/docs/user-guide/egress/iron-proxy) so a remote sandbox never receives the real secret. | Lemon encrypts a local secret store, uses platform key storage or a protected master-key file, supports OAuth token persistence, redacts outputs, and avoids sending resolved provider credentials to named nodes. It has no external secret-source interface or general credential-injecting egress proxy for arbitrary tools. | Partial | **High** | Add a supervised secret-source behavior (1Password/Bitwarden/command implementations) and design an explicit outbound credential-broker boundary for remote/browser/tool workloads. |
 | Install extensions and hooks without patching core | Hermes supports typed plugins across providers, memory, browsers, media, cron, observability, platforms, dashboard, and terminal environments, plus hooks and package lifecycle UI/CLI; see [plugins](https://hermes-agent.nousresearch.com/docs/user-guide/features/plugins). | Lemon has MCP clients/server bridge, native extension manifests, WASM tools, OAuth-aware remote MCP, capability approvals, conflict rules, supervised hosts, registry metadata, and platform contract tests. Third-party distribution and end-user lifecycle remain preview. | Different | Medium | Finish one signed package/install/update/remove flow with compatibility and capability review, then expose host health in Web/TUI. Do not create a second plugin format for every subsystem. |
@@ -20071,9 +20071,15 @@ These are intentionally vertical bundles rather than isolated modules.
 7. Provider/auth/pool/fallback management UI and an opt-in cost-bounded MoA
    design.
 8. Auditable learn-from-source ingestion and a memory/learning inspection UI.
-9. Skill registry, bundles, profile enablement, and signed distribution.
-10. Natural-language loops plus automation templates/blueprints and management
-    surfaces over the existing scheduler.
+9. **Skill distribution** — the first versioned unpacked bundle and
+   profile-local enablement slice is implemented over the existing skill
+   registry/audit. Continue with signed indexing, export/publish, and TUI/Web
+   review without adding another store.
+10. **Automation templates** — the first exact-confirmed, duplicate-safe
+    skill + agent-cron blueprint is implemented over `CronManager`. Continue
+    with natural-language loops, suggestions, and management surfaces; keep
+    command or multi-job expansion separately justified and explicitly
+    confirmed.
 11. Composer context references and document extraction with preview and budget
     controls.
 12. One polished voice workflow in the primary interface.
@@ -24627,6 +24633,17 @@ Force a reload of all skills from disk.
 ```elixir
 :ok = LemonSkills.refresh()
 ```
+
+### Portable skill and automation bundles
+
+`LemonAutomation.Blueprint` composes the existing bundle hash, manifest lint,
+deterministic audit, project config, registry refresh, profile store, and cron
+manager into one preview-confirm-activate workflow. It does not add a second
+skill registry. Remote operators address only safe IDs below
+`~/.lemon/bundles`; local service callers may validate a trusted unpacked path.
+See the [skills user guide](user-guide/skills.md#portable-skill-and-automation-bundles)
+for the version 1 manifest, exact confirmation flow, policy boundary, and
+disabled example.
 
 ## Creating Skills
 
@@ -33414,6 +33431,103 @@ Audit state files:
 
 ---
 
+## Portable Skill and Automation Bundles
+
+A versioned bundle can distribute an audited skill together with one
+agent-backed cron blueprint without creating another skill registry or
+scheduler. Put each unpacked bundle directly below the local catalog:
+
+```text
+~/.lemon/bundles/daily-note/
+├── bundle.json
+└── skills/
+    └── daily-note/
+        └── SKILL.md
+```
+
+The repository includes a harmless disabled example. Copy it into the catalog:
+
+```bash
+mkdir -p ~/.lemon/bundles
+cp -R examples/skill-automation-bundles/daily-note ~/.lemon/bundles/daily-note
+```
+
+The directory name, `bundle.json` `id`, skill key, and declared
+`skills/<key>` path use lowercase safe IDs. Version 1 requires this manifest
+header, at least one skill, and exactly one cron automation:
+
+```json
+{
+  "format": "lemon-skill-automation-bundle",
+  "version": 1,
+  "id": "daily-note",
+  "skills": [{"key": "daily-note", "path": "skills/daily-note"}],
+  "automations": [{
+    "id": "daily-note-reminder",
+    "kind": "cron",
+    "name": "Daily note reminder",
+    "schedule": "0 0 1 1 *",
+    "prompt": "Use the daily-note skill to summarize completed work.",
+    "enabled": false,
+    "timezone": "UTC"
+  }]
+}
+```
+
+### Review and activate
+
+Connect to the authenticated control-plane WebSocket as an operator, then use
+the catalog-scoped methods. RPC never accepts an arbitrary filesystem path:
+
+```json
+{"type":"req","id":"1","method":"blueprints.list","params":{}}
+{"type":"req","id":"2","method":"blueprints.inspect","params":{"bundleId":"daily-note"}}
+{"type":"req","id":"3","method":"blueprints.validate","params":{"bundleId":"daily-note"}}
+{"type":"req","id":"4","method":"blueprints.preview","params":{"bundleId":"daily-note","profileId":"operator"}}
+```
+
+`blueprints.preview` does not mutate anything. Review its exact skill and cron
+actions, target profile, content hashes, schedule, enabled state, and cleanup
+flags. The response deliberately contains prompt byte/hash metadata rather than
+prompt text. If the plan is correct, send its exact `confirmationDigest`:
+
+```json
+{"type":"req","id":"5","method":"blueprints.activate","params":{"bundleId":"daily-note","profileId":"operator","confirmationDigest":"<digest from preview>"}}
+```
+
+Activation reloads and re-plans under a lock. Any content change, destination
+change, existing-ID conflict, or stale digest rejects the operation. A
+successful activation copies the skill only into the profile's derived
+`workspace/.lemon/skill/` boundary, enables it in that workspace, and claims a
+stable cron ID through the existing `CronManager`. Previewing and activating
+the same bundle again reports `unchanged` and leaves one job.
+
+### Security boundary
+
+Portable bundles are untrusted input. Version 1 rejects archives, symlinks,
+unknown paths or fields, oversized trees, unsupported file types, control/bidi
+characters, command/shell/script jobs, environment or working-directory
+overrides, memory-file overrides, credential-like keys or values, and non-UTC
+timezones. Skill manifest/lint and deterministic audit checks run on the source
+and again on the staged copy before any rename. Public results omit absolute
+paths, skill bodies, prompt text, command text, and secret values.
+
+This first vertical does not provide archive import, signing, publishing, a
+remote registry, command blueprints, heartbeats, multiple jobs per bundle, or a
+TUI/Web catalog. Use the local `LemonAutomation.Blueprint` service directly
+only for trusted source-checkout administration that genuinely needs a local
+path; remote clients should use the catalog-scoped RPC.
+
+Run the booted-runtime proof to activate the disabled example, verify
+profile-local discovery and persisted provenance, replay it without a
+duplicate, then clean up the isolated profile and job:
+
+```bash
+MIX_ENV=dev mix run --no-start scripts/live_skill_automation_blueprint_smoke.exs
+```
+
+---
+
 ## Skill Drafts (Synthesized Skills)
 
 Lemon can automatically generate draft skills from your past successful runs.
@@ -33517,7 +33631,7 @@ skills_hub_v2                = "default-on"   # full hub UX
 skill_synthesis_drafts       = "off"          # auto-generate drafts from memory
 ```
 
-*Last reviewed: 2026-05-16*
+*Last reviewed: 2026-08-30*
 
 ---
 

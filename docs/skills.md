@@ -182,6 +182,17 @@ Force a reload of all skills from disk.
 :ok = LemonSkills.refresh()
 ```
 
+### Portable skill and automation bundles
+
+`LemonAutomation.Blueprint` composes the existing bundle hash, manifest lint,
+deterministic audit, project config, registry refresh, profile store, and cron
+manager into one preview-confirm-activate workflow. It does not add a second
+skill registry. Remote operators address only safe IDs below
+`~/.lemon/bundles`; local service callers may validate a trusted unpacked path.
+See the [skills user guide](user-guide/skills.md#portable-skill-and-automation-bundles)
+for the version 1 manifest, exact confirmation flow, policy boundary, and
+disabled example.
+
 ## Creating Skills
 
 ### 1. Create the skill directory

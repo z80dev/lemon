@@ -16,7 +16,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   and text content is format-sniffed with explicit byte/page/item/depth/time
   limits, archive-bomb/traversal and symlink defenses, SSRF-safe pinned URL
   fetching, sensitive-value redaction, and structured omission metadata.
-
+- Versioned portable skill + automation bundles with bounded manifest and
+  filesystem policy, deterministic source-and-stage audit, profile-local skill
+  enablement, content-free control-plane list/inspect/validate/preview, exact
+  digest confirmation, and create-once idempotent cron activation.
 - An authenticated Lemon Web session-management shell with runtime and live-node
   status, durable search/resume, title/pin/archive controls, redacted structured
   run/tool inspection, bounded JSON/Markdown export, and exact-candidate guarded

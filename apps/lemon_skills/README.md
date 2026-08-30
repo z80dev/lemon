@@ -73,6 +73,14 @@ LemonSkills does not execute skills directly. Instead, it serves as a **content 
 5. **Installation** -- New skills can be installed from Git repositories, local paths, or the live official Hermes catalog, with approval gating via `LemonCore.ExecApprovals`.
 6. **Audit** -- All non-builtin installs and updates run through deterministic audit checks plus an optional LLM reviewer. `:block` verdicts fail the operation, and `:warn` verdicts require explicit approval before the skill is kept.
 
+Portable skill + automation bundles are orchestrated by
+`LemonAutomation.Blueprint`, not by another LemonSkills registry or installer.
+That service reuses this package's deterministic bundle hash, manifest lint,
+audit engine, project config, and registry refresh while placing skills only in
+the target profile's derived project workspace. See the
+[`daily-note` example](../../examples/skill-automation-bundles/daily-note/)
+and [user guide](../../docs/user-guide/skills.md#portable-skill-and-automation-bundles).
+
 ### Application Startup
 
 The OTP application (`LemonSkills.Application`) performs two actions on start:
