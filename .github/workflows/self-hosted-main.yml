@@ -1,0 +1,21 @@
+name: Main branch self-hosted CI
+
+# The public repository keeps fork pull-request code on GitHub-hosted runners.
+# Trusted pushes to main and explicit maintainer dispatches use the repository's
+# isolated `lemon-ci` runner through the reusable Quality workflow.
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Quality on self-hosted runner
+    uses: ./.github/workflows/quality.yml
+    with:
+      runner: lemon-ci
