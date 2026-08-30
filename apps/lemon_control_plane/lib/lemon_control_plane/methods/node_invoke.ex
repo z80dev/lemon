@@ -2,7 +2,7 @@ defmodule LemonControlPlane.Methods.NodeInvoke do
   @moduledoc """
   Handler for the node.invoke control plane method.
 
-  Invokes a method on a remote node.
+  Invokes a method on one authenticated live node connection.
   """
 
   @behaviour LemonControlPlane.Method
@@ -17,7 +17,7 @@ defmodule LemonControlPlane.Methods.NodeInvoke do
   def scopes, do: [:write]
 
   @impl true
-  def handle(params, _ctx) do
+  def handle(params, ctx) do
     node_id = params["nodeId"] || params["node_id"]
     method = params["method"]
     args = params["args"] || %{}
@@ -35,71 +35,60 @@ defmodule LemonControlPlane.Methods.NodeInvoke do
           nil ->
             {:error, Errors.not_found("Node not found")}
 
-          node ->
-            # Safe access supporting both atom and string keys (for JSONL reload)
-            status = get_field(node, :status)
+          _node ->
+            recipient = ctx[:conn_pid] || self()
 
-            if status != :online and status != "online" do
-              {:error, Errors.unavailable("Node is not online")}
-            else
-              # Generate invoke request ID
-              invoke_id = LemonCore.Id.uuid()
-
-              # Store pending invocation
-              invocation = %{
-                id: invoke_id,
-                node_id: node_id,
-                method: method,
-                args: args,
-                status: :pending,
-                created_at_ms: System.system_time(:millisecond),
-                timeout_ms: timeout_ms
-              }
-
-              NodeStore.put_invocation(invoke_id, invocation)
-
-              # Broadcast invoke request to node
-              event =
-                LemonCore.Event.new(:node_invoke_request, %{
-                  invoke_id: invoke_id,
+            case LemonCore.NodeRegistry.invoke(node_id, method, args,
+                   recipient: recipient,
+                   timeout_ms: timeout_ms
+                 ) do
+              {:ok, invoke_id} ->
+                invocation = %{
+                  id: invoke_id,
                   node_id: node_id,
                   method: method,
                   args: args,
-                  timeout_ms: timeout_ms
-                })
+                  status: :pending,
+                  created_at_ms: System.system_time(:millisecond),
+                  timeout_ms: timeout_ms,
+                  registry_managed: true
+                }
 
-              LemonCore.Bus.broadcast("nodes", event)
+                NodeStore.put_invocation(invoke_id, invocation)
 
-              {:ok,
-               %{
-                 "invokeId" => invoke_id,
-                 "nodeId" => node_id,
-                 "method" => method,
-                 "status" => "pending",
-                 "summary" => %{
+                {:ok,
+                 %{
+                   "invokeId" => invoke_id,
                    "nodeId" => node_id,
                    "method" => method,
                    "status" => "pending",
-                   "timeoutMs" => timeout_ms,
-                   "argKeyCount" => arg_key_count(args),
-                   "cleanup" => %{
-                     "includesArgs" => false,
-                     "includesResult" => false,
-                     "includesError" => false,
-                     "includesCredentials" => false,
-                     "includesSecretValues" => false
+                   "summary" => %{
+                     "nodeId" => node_id,
+                     "method" => method,
+                     "status" => "pending",
+                     "timeoutMs" => timeout_ms,
+                     "argKeyCount" => arg_key_count(args),
+                     "cleanup" => %{
+                       "includesArgs" => false,
+                       "includesResult" => false,
+                       "includesError" => false,
+                       "includesCredentials" => false,
+                       "includesSecretValues" => false
+                     }
                    }
-                 }
-               }}
+                 }}
+
+              {:error, {:node_offline, _node}} ->
+                {:error, Errors.unavailable("Node is not online")}
+
+              {:error, :invalid_timeout} ->
+                {:error, Errors.invalid_request("timeoutMs must be a positive integer")}
+
+              {:error, reason} ->
+                {:error, Errors.internal_error("Failed to invoke node", reason)}
             end
         end
     end
-  end
-
-  # Safe map access supporting both atom and string keys
-  # This handles JSONL reload where keys become strings
-  defp get_field(map, key) when is_atom(key) do
-    Map.get(map, key) || Map.get(map, Atom.to_string(key))
   end
 
   defp arg_key_count(args) when is_map(args), do: map_size(args)

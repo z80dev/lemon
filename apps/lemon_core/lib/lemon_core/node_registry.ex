@@ -38,6 +38,12 @@ defmodule LemonCore.NodeRegistry do
     GenServer.call(__MODULE__, {:unregister, node_id, pid})
   end
 
+  @doc "Renames a live node without disturbing its connection or invocations."
+  @spec rename(String.t(), String.t()) :: :ok | {:error, term()}
+  def rename(node_id, name) when is_binary(node_id) and is_binary(name) do
+    GenServer.call(__MODULE__, {:rename, node_id, String.trim(name)})
+  end
+
   @spec list() :: [node_info()]
   def list, do: GenServer.call(__MODULE__, :list)
 
@@ -136,6 +142,31 @@ defmodule LemonCore.NodeRegistry do
       end
 
     {:reply, :ok, state}
+  end
+
+  def handle_call({:rename, _node_id, ""}, _from, state) do
+    {:reply, {:error, :invalid_name}, state}
+  end
+
+  def handle_call({:rename, node_id, name}, _from, state) do
+    case {Map.get(state.nodes, node_id), Map.get(state.names, name)} do
+      {nil, _existing_id} ->
+        {:reply, {:error, :not_found}, state}
+
+      {_node, existing_id} when is_binary(existing_id) and existing_id != node_id ->
+        {:reply, {:error, {:name_taken, name}}, state}
+
+      {node, _existing_id} ->
+        renamed = %{node | name: name}
+
+        state = %{
+          state
+          | nodes: Map.put(state.nodes, node_id, renamed),
+            names: state.names |> Map.delete(node.name) |> Map.put(name, node_id)
+        }
+
+        {:reply, :ok, state}
+    end
   end
 
   def handle_call(:list, _from, state) do

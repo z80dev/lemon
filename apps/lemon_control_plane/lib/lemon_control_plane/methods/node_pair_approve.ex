@@ -56,82 +56,108 @@ defmodule LemonControlPlane.Methods.NodePairApprove do
                 {:error, Errors.invalid_request("Pairing request has expired")}
 
               true ->
-                # Generate node ID, token, and challenge token
-                node_id = LemonCore.Id.uuid()
-                node_token = generate_node_token()
-                challenge_token = generate_challenge_token()
-                # Challenge valid for 1 minute
-                challenge_expires_at = now + 60_000
+                node_name = if(is_binary(node_name), do: String.trim(node_name), else: "")
 
-                # Update pairing request
-                updated_request =
-                  Map.merge(request, %{
-                    status: :approved,
-                    node_id: node_id,
-                    challenge_token: challenge_token
-                  })
-
-                NodeStore.put_pairing(pairing_id, updated_request)
-
-                # Register node
-                node = %{
-                  id: node_id,
-                  name: node_name,
-                  type: node_type,
-                  capabilities: capabilities,
-                  token_hash: hash_token(node_token),
-                  paired_at_ms: now,
-                  last_seen_ms: now,
-                  status: :online
-                }
-
-                NodeStore.put_node(node_id, node)
-
-                # Store challenge for connect.challenge verification
-                NodeStore.put_challenge(challenge_token, %{
-                  node_id: node_id,
-                  node_name: node_name,
-                  node_type: node_type,
-                  pairing_id: pairing_id,
-                  expires_at_ms: challenge_expires_at
-                })
-
-                # Broadcast event
-                event =
-                  LemonCore.Event.new(:node_pair_resolved, %{
-                    pairing_id: pairing_id,
-                    node_id: node_id,
-                    approved: true
-                  })
-
-                LemonCore.Bus.broadcast("nodes", event)
-
-                {:ok,
-                 %{
-                   "nodeId" => node_id,
-                   "token" => node_token,
-                   "challengeToken" => challenge_token,
-                   "approved" => true,
-                   "summary" => %{
-                     "pairingId" => pairing_id,
-                     "nodeId" => node_id,
-                     "approved" => true,
-                     "nodeType" => node_type,
-                     "challengeExpiresAtMs" => challenge_expires_at,
-                     "capabilityCount" => capability_count(capabilities),
-                     "credentialDelivery" => %{
-                       "includesNodeToken" => true,
-                       "includesChallengeToken" => true
-                     },
-                     "cleanup" => %{
-                       "includesCapabilities" => false,
-                       "includesMetadata" => false,
-                       "includesStoredTokenHash" => false
-                     }
-                   }
-                 }}
+                approve_pairing(
+                  pairing_id,
+                  request,
+                  node_name,
+                  node_type,
+                  capabilities,
+                  now
+                )
             end
         end
+    end
+  end
+
+  defp approve_pairing(pairing_id, request, node_name, node_type, capabilities, now) do
+    node_id = LemonCore.Id.uuid()
+
+    case NodeStore.reserve_node_name(node_name, node_id) do
+      :ok ->
+        # Generate node ID, token, and challenge token
+        node_token = generate_node_token()
+        challenge_token = generate_challenge_token()
+        # Challenge valid for 1 minute
+        challenge_expires_at = now + 60_000
+
+        # Update pairing request
+        updated_request =
+          Map.merge(request, %{
+            status: :approved,
+            node_id: node_id,
+            challenge_token: challenge_token
+          })
+
+        NodeStore.put_pairing(pairing_id, updated_request)
+
+        # Register node
+        node = %{
+          id: node_id,
+          name: node_name,
+          type: node_type,
+          capabilities: capabilities,
+          token_hash: hash_token(node_token),
+          paired_at_ms: now,
+          last_seen_ms: now,
+          status: :offline
+        }
+
+        NodeStore.put_node(node_id, node)
+
+        # Store challenge for connect.challenge verification
+        NodeStore.put_challenge(challenge_token, %{
+          node_id: node_id,
+          node_name: node_name,
+          node_type: node_type,
+          pairing_id: pairing_id,
+          expires_at_ms: challenge_expires_at
+        })
+
+        # Broadcast event
+        event =
+          LemonCore.Event.new(:node_pair_resolved, %{
+            pairing_id: pairing_id,
+            node_id: node_id,
+            approved: true
+          })
+
+        LemonCore.Bus.broadcast("nodes", event)
+
+        {:ok,
+         %{
+           "nodeId" => node_id,
+           "token" => node_token,
+           "challengeToken" => challenge_token,
+           "approved" => true,
+           "summary" => %{
+             "pairingId" => pairing_id,
+             "nodeId" => node_id,
+             "approved" => true,
+             "nodeType" => node_type,
+             "challengeExpiresAtMs" => challenge_expires_at,
+             "capabilityCount" => capability_count(capabilities),
+             "credentialDelivery" => %{
+               "includesNodeToken" => true,
+               "includesChallengeToken" => true
+             },
+             "cleanup" => %{
+               "includesCapabilities" => false,
+               "includesMetadata" => false,
+               "includesStoredTokenHash" => false
+             }
+           }
+         }}
+
+      {:error, :invalid_name} ->
+        {:error, Errors.invalid_request("Node name is required")}
+
+      {:error, {:name_taken, _name}} ->
+        {:error, Errors.conflict("Node name is already in use")}
+
+      {:error, reason} ->
+        {:error, Errors.internal_error("Failed to reserve node name", reason)}
     end
   end
 

@@ -62,16 +62,15 @@ defmodule LemonControlPlane.Methods.BrowserRequest do
 
             # Get node ID (handle both atom and string keys)
             actual_node_id = get_field(node, :id) || node_id
-            status = get_field(node, :status)
 
-            if status != :online and status != "online" do
-              {:error, Errors.unavailable("Browser node is not online")}
-            else
+            if LemonCore.NodeRegistry.online?(actual_node_id) do
               with {:ok, args, network_policy} <- prepare_request(method, args),
                    {:ok, invoke} <-
                      invoke_browser_node(actual_node_id, method, args, timeout_ms, ctx) do
                 complete_invoke(invoke, network_policy, await_result, timeout_ms)
               end
+            else
+              {:error, Errors.unavailable("Browser node is not online")}
             end
         end
 
@@ -307,7 +306,11 @@ defmodule LemonControlPlane.Methods.BrowserRequest do
       nodes when is_list(nodes) ->
         Enum.find_value(nodes, fn {_id, node} ->
           node_type = get_field(node, :type)
-          if node_type == "browser" or node_type == :browser, do: node
+          node_id = get_field(node, :id)
+
+          if (node_type == "browser" or node_type == :browser) and
+               is_binary(node_id) and LemonCore.NodeRegistry.online?(node_id),
+             do: node
         end)
 
       _ ->

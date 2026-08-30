@@ -46,6 +46,9 @@ defmodule LemonControlPlane.Methods.NodePairStringKeysTest do
           LemonCore.Store.delete(:nodes_registry, k)
         end)
 
+        LemonCore.Store.list(:nodes_by_name)
+        |> Enum.each(fn {k, _} -> LemonCore.Store.delete(:nodes_by_name, k) end)
+
         LemonCore.Store.list(:node_challenges)
         |> Enum.each(fn {k, _} ->
           LemonCore.Store.delete(:node_challenges, k)
@@ -421,6 +424,8 @@ defmodule LemonControlPlane.Methods.NodePairStringKeysTest do
         "last_seen_ms" => 2_000_000
       })
 
+      register_live_node(node_id, "String Key Node")
+
       {:ok, result} = NodeList.handle(%{}, @admin_ctx)
 
       assert is_list(result["nodes"])
@@ -476,6 +481,8 @@ defmodule LemonControlPlane.Methods.NodePairStringKeysTest do
         "last_seen_ms" => 2_000_000,
         "metadata" => %{"version" => "1.0"}
       })
+
+      register_live_node(node_id, "Describe Node")
 
       {:ok, result} = NodeDescribe.handle(%{"nodeId" => node_id}, @admin_ctx)
 
@@ -535,6 +542,8 @@ defmodule LemonControlPlane.Methods.NodePairStringKeysTest do
         "type" => "agent",
         "status" => "online"
       })
+
+      register_live_node(node_id, "Old Name")
 
       {:ok, result} =
         NodeRename.handle(
@@ -620,6 +629,8 @@ defmodule LemonControlPlane.Methods.NodePairStringKeysTest do
         "status" => "online"
       })
 
+      register_live_node(node_id, "Invoke Node")
+
       {:ok, result} =
         NodeInvoke.handle(
           %{
@@ -641,6 +652,10 @@ defmodule LemonControlPlane.Methods.NodePairStringKeysTest do
       assert result["summary"]["cleanup"]["includesArgs"] == false
       assert result["summary"]["cleanup"]["includesResult"] == false
       assert result["summary"]["cleanup"]["includesSecretValues"] == false
+
+      assert_receive {:node_event, "node.invoke.request", payload}
+      assert payload["invokeId"] == result["invokeId"]
+      assert payload["nodeId"] == node_id
     end
 
     test "returns unavailable for offline node with string keys" do
@@ -740,7 +755,7 @@ defmodule LemonControlPlane.Methods.NodePairStringKeysTest do
 
       # Store invocation with STRING keys (simulates JSONL reload)
       LemonCore.Store.put(:node_invocations, invoke_id, %{
-        "node_id" => "test-node",
+        "node_id" => "test-node-id",
         "method" => "test.method",
         "status" => "pending",
         "created_at_ms" => System.system_time(:millisecond)
@@ -758,7 +773,7 @@ defmodule LemonControlPlane.Methods.NodePairStringKeysTest do
       assert result["invokeId"] == invoke_id
       assert result["received"] == true
       assert result["summary"]["invokeId"] == invoke_id
-      assert result["summary"]["nodeId"] == "test-node"
+      assert result["summary"]["nodeId"] == "test-node-id"
       assert result["summary"]["status"] == "completed"
       assert result["summary"]["ok"] == true
       assert result["summary"]["hasResult"] == true
@@ -767,5 +782,14 @@ defmodule LemonControlPlane.Methods.NodePairStringKeysTest do
       assert result["summary"]["cleanup"]["includesError"] == false
       assert result["summary"]["cleanup"]["includesSecretValues"] == false
     end
+  end
+
+  defp register_live_node(node_id, name) do
+    owner = self()
+    :ok = LemonCore.NodeRegistry.register(node_id, name, owner)
+
+    on_exit(fn ->
+      LemonCore.NodeRegistry.unregister(node_id, owner)
+    end)
   end
 end

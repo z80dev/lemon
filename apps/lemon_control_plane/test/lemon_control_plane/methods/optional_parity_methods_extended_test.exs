@@ -112,6 +112,7 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsExtendedTest do
       }
 
       LemonCore.Store.put(:nodes_registry, "test-browser-node", node)
+      register_live_node("test-browser-node", "Test Browser")
 
       # This will forward to node.invoke which creates a pending invocation
       {:ok, result} =
@@ -146,6 +147,7 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsExtendedTest do
       }
 
       LemonCore.Store.put(:nodes_registry, "test-browser-node", node)
+      register_live_node("test-browser-node", "Test Browser")
 
       {:ok, result} =
         BrowserRequest.handle(
@@ -182,6 +184,7 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsExtendedTest do
       }
 
       LemonCore.Store.put(:nodes_registry, "test-browser-node", node)
+      register_live_node("test-browser-node", "Test Browser")
 
       {:error, error} =
         BrowserRequest.handle(
@@ -205,6 +208,7 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsExtendedTest do
       }
 
       LemonCore.Store.put(:nodes_registry, "test-browser-node", node)
+      register_live_node("test-browser-node", "Test Browser")
 
       assert {:error, {:invalid_request, "browser navigation requires a public http(s) URL"}} =
                BrowserRequest.handle(
@@ -237,6 +241,7 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsExtendedTest do
       }
 
       LemonCore.Store.put(:nodes_registry, "default-browser-node", node)
+      register_live_node("default-browser-node", "Default Browser")
 
       on_exit(fn ->
         LemonCore.Store.delete(:nodes_registry, "default-browser-node")
@@ -3051,4 +3056,13 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsExtendedTest do
   end
 
   defp wait_until(fun, 0), do: fun.()
+
+  defp register_live_node(node_id, name) do
+    owner = self()
+    :ok = LemonCore.NodeRegistry.register(node_id, name, owner)
+
+    on_exit(fn ->
+      LemonCore.NodeRegistry.unregister(node_id, owner)
+    end)
+  end
 end
