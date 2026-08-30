@@ -169,6 +169,16 @@ For auto-resume, inspect `LemonCore.ChatStateStore` and the native executor's re
 state. For transport startup, inspect `TransportRegistry`; Telegram, Discord, XMTP,
 and email remain channel-owned.
 
+### Test application isolation
+
+Umbrella tests share one BEAM and one OTP application controller. A test module that
+stops globally named runtime applications must capture which applications were
+running and restore that exact running set in `setup_all` cleanup. In particular,
+stopping `:lemon_control_plane` deletes its method-registry ETS table; leaving it
+stopped makes later control-plane tests fail for reasons unrelated to their code.
+Use `Application.ensure_all_started/1` for restoration so transitive runtime
+dependencies return through their production supervision trees.
+
 ## Integration Points
 
 1. Submit execution through `LemonGateway.Runtime.submit_execution/1`.
