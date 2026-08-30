@@ -803,6 +803,193 @@
   text-transform: uppercase;
 }
 
+.memory-filter-panel { margin-bottom: 1rem; }
+
+.memory-filter-grid {
+  display: grid;
+  grid-template-columns: minmax(14rem, 2fr) repeat(5, minmax(8rem, 1fr));
+  gap: 0.75rem;
+  padding: 1rem;
+  background: #f8fafc;
+}
+
+.memory-field {
+  display: grid;
+  min-width: 0;
+  gap: 0.3rem;
+  color: #334155;
+  font-size: 0.72rem;
+  font-weight: 650;
+}
+
+.memory-digest-input,
+.memory-row code,
+.memory-detail code,
+.memory-confirmation-digest {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.memory-management-grid {
+  display: grid;
+  grid-template-columns: minmax(20rem, 0.85fr) minmax(0, 1.15fr);
+  align-items: start;
+  gap: 1rem;
+}
+
+.memory-list {
+  max-height: 58rem;
+  overflow: auto;
+}
+
+.memory-row {
+  min-width: 0;
+  padding: 1rem;
+  border-bottom: 1px solid #e2e8f0;
+  background: #fff;
+}
+
+.memory-row:hover { background: #f8fafc; }
+
+.memory-row-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.memory-row-copy { min-width: 0; }
+
+.memory-row-copy strong,
+.memory-row-copy code {
+  display: block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.memory-row-copy code { margin-top: 0.15rem; color: #64748b; font-size: 0.68rem; }
+
+.memory-scope-badge {
+  flex: 0 0 auto;
+  padding: 0.2rem 0.45rem;
+  border-radius: 9999px;
+  background: #e0e7ff;
+  color: #3730a3;
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.memory-excerpt {
+  margin-top: 0.65rem;
+  color: #475569;
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.memory-row-facts,
+.memory-detail-facts {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.memory-row-facts { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.memory-detail-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+.memory-row-facts div,
+.memory-detail-facts div {
+  min-width: 0;
+  padding: 0.5rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.5rem;
+  background: #f8fafc;
+}
+
+.memory-row-facts dt,
+.memory-detail-facts dt {
+  color: #64748b;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+}
+
+.memory-row-facts dd,
+.memory-detail-facts dd {
+  margin-top: 0.15rem;
+  color: #0f172a;
+  font-size: 0.75rem;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.memory-row .management-row-actions { margin-top: 0.75rem; justify-content: flex-start; }
+.memory-detail { display: grid; gap: 1rem; padding: 1rem; }
+
+.memory-preview-block,
+.memory-provenance,
+.memory-delete-preview {
+  min-width: 0;
+  padding: 0.8rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.65rem;
+  background: #f8fafc;
+}
+
+.memory-preview-block h3,
+.memory-provenance h3,
+.memory-delete-preview h3 {
+  color: #334155;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.035em;
+}
+
+.memory-preview-block pre {
+  max-height: 16rem;
+  margin-top: 0.55rem;
+  overflow: auto;
+  color: #334155;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.memory-provenance p,
+.memory-provenance li,
+.memory-delete-preview p {
+  margin-top: 0.45rem;
+  color: #475569;
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.memory-provenance ul { display: grid; gap: 0.5rem; margin-top: 0.65rem; }
+.memory-provenance li { display: grid; gap: 0.15rem; padding: 0.55rem; background: #fff; border-radius: 0.45rem; }
+.memory-delete-button { justify-self: start; }
+
+.memory-delete-preview {
+  margin: 0 1rem 1rem;
+  border-color: #fda4af;
+  background: #fff1f2;
+}
+
+.memory-delete-preview form { display: grid; gap: 0.65rem; margin-top: 0.75rem; }
+.memory-delete-preview .management-primary-button { justify-self: start; background: #9f1239; }
+
+.memory-confirmation-digest {
+  display: block;
+  max-width: 100%;
+  margin-top: 0.5rem;
+  padding: 0.55rem;
+  border: 1px solid #fda4af;
+  border-radius: 0.45rem;
+  background: #fff;
+  color: #881337;
+  font-size: 0.7rem;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
 @media (max-width: 860px) {
   .management-layout { grid-template-columns: minmax(0, 1fr); }
   .management-session-list,
@@ -810,7 +997,10 @@
   .provider-management-grid,
   .provider-preview,
   .blueprint-management-grid,
-  .blueprint-preview { grid-template-columns: minmax(0, 1fr); }
+  .blueprint-preview,
+  .memory-management-grid { grid-template-columns: minmax(0, 1fr); }
+  .memory-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .memory-query-field { grid-column: 1 / -1; }
   .provider-panel-wide { grid-column: auto; }
   .blueprint-catalog-list { max-height: 28rem; }
 }
@@ -839,4 +1029,11 @@
   .blueprint-automation-facts,
   .blueprint-plan-facts { grid-template-columns: minmax(0, 1fr); }
   .blueprint-profile-form .management-primary-button { width: 100%; }
+  .memory-filter-grid,
+  .memory-row-facts,
+  .memory-detail-facts { grid-template-columns: minmax(0, 1fr); }
+  .memory-query-field { grid-column: auto; }
+  .memory-list { max-height: none; }
+  .memory-row-header { flex-direction: column; }
+  .memory-delete-preview .management-primary-button { width: 100%; }
 }

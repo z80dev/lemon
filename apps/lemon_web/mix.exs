@@ -29,6 +29,7 @@ defmodule LemonWeb.MixProject do
       {:lemon_agent, in_umbrella: true},
       {:lemon_automation, in_umbrella: true},
       {:lemon_core, in_umbrella: true},
+      {:lemon_memory, in_umbrella: true},
       {:lemon_router, in_umbrella: true},
       {:phoenix, "~> 1.7.14"},
       {:phoenix_html, "~> 4.1"},

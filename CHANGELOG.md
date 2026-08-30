@@ -18,6 +18,17 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   and digests; real Bandit/Bun proof verifies planted manifest prose, prompts,
   skill bodies, commands, environment values, paths, tokens, and secrets stay
   out of terminal state and proof output.
+- Token-required Web durable-memory management at `/manage/memory`, backed by
+  a shared `LemonMemory.Lifecycle` over the canonical SQLite/FTS store. The
+  responsive browser supports bounded search and safe scope/agent/workspace
+  digest/kind filters, Safety-redacted run and learned-source previews,
+  digest-only provenance, and exact single-record delete preview/confirmation.
+  Deletion binds the document ID to a deterministic revision of every
+  persisted field, compares it in constant time inside the same transaction
+  that removes the document and FTS row, and fails stale/forged/malformed
+  requests without mutation. Memory updates now replace their prior FTS row,
+  preventing duplicate search hits for an updated document ID.
+
 - Source and packaged `lemon learn` plus authenticated `learn.review` /
   `learn.confirm` control-plane methods for auditable learning from existing
   bounded file, folder, URL, diff, document, and redacted-session references.

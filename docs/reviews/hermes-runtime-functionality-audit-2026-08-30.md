@@ -67,7 +67,7 @@ means Hermes has a current user-facing behavior with no equivalent Lemon path.
 | Checkpoints and rollback | Automatic file checkpoints, list/inspect/restore | Checkpoint/diff/restore tools plus tree-structured session history | **Covered**. Lemon should still consolidate the user guide and make rollback discoverable in every client. |
 | Same-session heartbeat | One persisted recurring prompt, idle-only firing, pause/resume/clear, missed-tick coalescing | Added in this pass: durable JSONL heartbeat, same transcript/provider path, user-message priority, pause/resume/clear, restart restore, reset tombstone | **Covered** after this pass. |
 | Cron and scheduling | Cron jobs, isolated scheduled turns, schedule management | Cron manager with agent and command jobs, pause/resume/abort, retries/jitter, monitor recovery, preflight, model-drift guard, chained context, and a source/packaged catalog blueprint CLI over exact-confirmed profile skill + cron activation | **Lead** on lifecycle controls. The first safe blueprint UX is covered; richer forms and consent-first suggestions remain a **gap**. |
-| Memory | Session search plus long-term memories and learning flows | SQLite full-text durable memory, provider fan-out, session ingest, Honcho provider, scoped tools; context references can select an always-redacted canonical session export | **Covered** for retrieval/storage and bounded source selection. Hermes `/learn` and journey/learning-graph UX remain a **gap**. |
+| Memory | Session search plus long-term memories and learning flows | SQLite full-text durable memory, provider fan-out, session ingest, Honcho provider, scoped tools, auditable `lemon learn`, and token-required `/manage/memory` for bounded/redacted run + learned-provenance inspection and exact revision-bound single-record deletion over the canonical Store | **Covered** for retrieval/storage, bounded source learning, and safe browser inspection. A full journey/learning-graph timeline remains a **gap**. |
 | Skills | Install/list/remove skills and official catalog | Registry, discovery, linting, install/import/manage tools, official Hermes catalog browser, curator flows | **Covered**. Ecosystem breadth and single-command import polish still vary. |
 | Subagents/delegation | Native subagents, background work, parent interaction | Native `task`, routed `agent`, budgets, run graph, parent questions, isolated `/bg`, named remote nodes | **Lead**. Restart reconciliation for persisted nonterminal asynchronous records and caller-selected join timeouts remain reliability gaps. |
 | Provider/model choice | Multiple providers, `hermes auth` credential-pool management, `hermes fallback` inspection/editing, selectable presets and MoA | Provider registry, credential pools, fallback, session pins, routing policy, live model selection, and source/packaged `lemon providers` plus admin `providers.configure` inspection/editing | **Covered** for normal models and operational fallback/pool management. Named mixture-of-agents presets and the Portal subscription proxy remain **gaps**. |
@@ -210,8 +210,9 @@ prose, prompt/skill content, paths, and the operator token remain absent.
 
 - Add micro-compaction for individually large tool results and evaluate
   provider-native compaction behind the existing context boundary.
-- Add `/learn` and a usable memory/skill lineage view over Lemon's existing
-  durable stores.
+- Extend the shipped `/learn` plus `/manage/memory` provenance view into a
+  bounded memory/skill lineage timeline only if it remains a projection over
+  Lemon's existing stores.
 - Consolidate checkpoints, rollback, memory, scheduling, and model fallback into
   one task-oriented user guide and first-run command discovery path.
 

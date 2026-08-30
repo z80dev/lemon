@@ -67,6 +67,7 @@ authentication establishes the same marker without redirecting.
 | Path | Handler | Description |
 |------|---------|-------------|
 | `/manage` | `ManagementLive` | Runtime/node status and searchable active/archived sessions |
+| `/manage/memory` | `MemoryManagementLive` | Bounded, redacted durable-memory search, provenance inspection, and exact digest-confirmed deletion |
 | `/manage/blueprints` | `BlueprintManagementLive` | Content-free catalog inspection, validation, exact preview, and digest-confirmed activation |
 | `/manage/providers` | `ProviderManagementLive` | Redacted provider fallback/pool/reference preview and apply |
 | `/manage/sessions/:session_key` | `ManagementLive` | Redacted run/tool inspection and lifecycle controls |
@@ -148,6 +149,23 @@ shown in the preview. Credential-reference values are password-masked, filtered
 from LiveView logs, omitted from socket drafts, and re-entered on apply; the UI
 keeps only a digest long enough to match the exact preview. Service errors are
 mapped to bounded fixed text and never rendered verbatim.
+
+### MemoryManagementLive (`/manage/memory`)
+
+The memory page delegates to `LemonMemory.Lifecycle`, which reads and mutates
+the canonical `LemonMemory.Store`. It provides globally bounded search and
+recent-record listing with scope, kind, agent, and one-way workspace-digest
+filters. Run summaries and reviewed-learning provenance are projected through
+the central memory safety redactor before entering LiveView state; raw source
+bodies, paths, URLs, workspace keys, provider details, and error terms are not
+part of the page contract.
+
+Deletion is single-record and preview-first. The confirmation binds the exact
+document ID to a deterministic revision of every persisted document field.
+The store compares that revision again inside the same SQLite transaction that
+deletes both the full-text row and canonical document, returning only
+`deleted`, `not_found`, or `stale`. Filter drafts survive rejected or stale
+confirmations so operators can refresh without rebuilding their search.
 
 ### BlueprintManagementLive (`/manage/blueprints`)
 

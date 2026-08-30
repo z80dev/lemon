@@ -12,6 +12,7 @@ Key entry points:
 - **Main LiveView**: `lib/lemon_web/live/session_live.ex` -- the dashboard chat UI
 - **Management LiveView**: `lib/lemon_web/live/management_live.ex` -- session/runtime operations
 - **Provider management**: `lib/lemon_web/live/provider_management_live.ex` -- redacted routing mutations
+- **Memory management**: `lib/lemon_web/live/memory_management_live.ex` -- bounded redacted recall/provenance/delete
 - **Session export**: `lib/lemon_web/controllers/session_export_controller.ex` -- redacted downloads
 - **Auth plug**: `lib/lemon_web/plugs/require_access_token.ex` -- optional chat or required management token gate
 
@@ -29,6 +30,7 @@ Key entry points:
 - **Session lifecycle**: Shared `LemonCore.SessionLifecycle` list/search/title/pin/archive/export/prune operations; never duplicate its stores
 - **Provider lifecycle**: Shared `LemonAgent.ModelRuntime.ProviderConfiguration` preview/apply boundary; never edit provider TOML directly from the Web app
 - **Blueprint lifecycle**: Shared `LemonAutomation.Blueprint.Catalog` bounded-ID, validation, digest, and activation boundary; never read bundle paths or create cron/profile records directly
+- **Memory lifecycle**: Shared `LemonMemory.Lifecycle` bounded list/search/provenance/preview/delete boundary; never read memory SQLite or render raw Store rows
 - **Management security**: `/manage` fails closed without a configured access token; inspection/export are always redacted
 - **Resume**: Named chat routes reconstruct durable prompt/tool/answer history using the internal trusted unredacted mode
 
@@ -49,7 +51,7 @@ Key entry points:
 
 - `LemonWeb.Application` - Supervisor with `Telemetry` and `Endpoint` (`:one_for_one`)
 - `LemonWeb.Endpoint` - HTTP/WebSocket endpoint (uses Bandit); session stored in signed cookie `_lemon_web_key`
-- `LemonWeb.Router` - Chat routes plus token-required `/manage` session/export, `/manage/providers`, and `/manage/blueprints` routes
+- `LemonWeb.Router` - Chat routes plus token-required `/manage` session/export, `/manage/providers`, `/manage/blueprints`, and `/manage/memory` routes
 - `LemonWeb.Telemetry` - Phoenix telemetry metrics
 
 ## LiveView Structure
@@ -159,6 +161,24 @@ Preview is read-only. Activation requires retyping the exact 64-character
 digest; a catalog/profile/destination change fails closed, clears the stale
 preview, and keeps the profile draft. A successful replay reports `unchanged`
 and preserves one stable cron job.
+
+### MemoryManagementLive
+
+`LemonWeb.MemoryManagementLive` is a read-mostly view over
+`LemonMemory.Lifecycle`. It supports bounded search and filtering by scope,
+safe agent label, one-way workspace digest, and `run` / `learned_source` kind.
+The LiveView receives only Safety-redacted prompt/answer summaries,
+allowlisted provenance types, counts, and SHA-256 digests. It never receives or
+renders raw source paths/URLs, workspace keys, provider details, store errors,
+secret names/values, prompts outside the bounded summary, or arbitrary
+exception terms.
+
+Single-record deletion always starts as a dry-run preview. The operator must
+retype the exact digest bound to the document ID and a deterministic revision
+over every persisted field. The Store checks that revision in constant time
+inside the transaction that removes both the document and FTS row. Wrong,
+stale, missing, malformed, or ambiguous targets mutate nothing and keep the
+current search/filter draft.
 
 ### Message Structure
 
@@ -486,6 +506,11 @@ When testing routes behind `RequireAccessToken`, either:
   mutation, validation, atomic-write, confirmation, revision, and redaction
   boundary used by the Web management page
 
+### lemon_memory
+
+- `LemonMemory.Lifecycle` -- bounded, redacted list/search/inspect and guarded
+  single-record delete used by `/manage/memory`
+
 ### lemon_router
 
 - `LemonRouter.submit/1` -- Submits a prompt to be routed to the appropriate agent. Returns `{:ok, run_id}` or `{:error, reason}`.
@@ -520,6 +545,7 @@ apps/lemon_web/
 |-- lib/lemon_web/live/
 |   |-- session_live.ex                 # Main dashboard LiveView
 |   |-- management_live.ex              # Authenticated session operations
+|   |-- memory_management_live.ex       # Authenticated durable-memory inspection/delete
 |   |-- blueprint_management_live.ex    # Authenticated exact-confirmed blueprint activation
 |   |-- provider_management_live.ex     # Authenticated provider-routing operations
 |   |-- components/
