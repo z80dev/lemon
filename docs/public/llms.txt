@@ -12,6 +12,7 @@
 - [Install Lemon](https://z80dev.github.io/lemon/install): Release installer, source install, first-run setup, and supported platforms.
 - [Demo Lemon](https://z80dev.github.io/lemon/demo): A deterministic local walkthrough for the runtime and interfaces.
 - [Set up Lemon](https://z80dev.github.io/lemon/user-guide/setup): Configure providers, secrets, runtime settings, and channels.
+- [Back up and restore Lemon user state](https://z80dev.github.io/lemon/user-guide/backups): Create, verify, and safely restore private user-state backups.
 - [Support](https://z80dev.github.io/lemon/support): Diagnose startup, provider, runtime, and release problems.
 - [Compare Lemon](https://z80dev.github.io/lemon/compare): Current product positioning and honest support boundaries.
 

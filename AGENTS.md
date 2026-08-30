@@ -276,6 +276,8 @@ npm run dev      # Watch mode
 ./bin/lemon send --to telegram:<chat_id> "done"  # Script notification to Telegram/Discord
 ./bin/lemon send --to discord:#ops --attach report.txt --attach trace.log "done"  # Upload script artifacts
 ./bin/lemon send --dry-run --to discord:#ops --attach report.txt "done"  # Validate without delivery
+./bin/lemon backup create --json  # Atomic, verified durable-user-state backup
+./bin/lemon backup verify ~/.lemon/backups/<bundle>.lemonbackup --json
 ./bin/lemon node join --name worker-1 --controller wss://controller.example/ws --pair --cwd /path/to/project
 ./bin/lemon-tui    # Dev TUI; securely token-pairs with a launcher-owned runtime
 ```
@@ -294,6 +296,15 @@ Non-loopback controllers require `wss://` by default. Plaintext `ws://` needs
 a verified encrypted overlay such as Tailscale.
 
 On Linux and other non-keychain environments, keep `~/.lemon/secrets_master_key` as the canonical local master key file. `./bin/lemon` now normalizes `LEMON_SECRETS_MASTER_KEY` from that file at startup so stale inherited shell env does not break provider or transport secret decryption.
+
+`lemon backup` and `./bin/lemon backup` share the versioned `~/.lemon` data
+contract in `docs/user-guide/backups.md`. Durable regular files are included;
+installed versions, launchers, runtime state, prior backups, symlinks, special
+files, project-local state, and platform keychains are excluded. Local cookie,
+environment, master-key, and execution-node credentials require the explicit
+`--include-credentials` flag. Restore must verify the entire bundle before
+mutation; overwrite authorization is bound to the manifest digest and expanded
+target root.
 
 ---
 
@@ -527,6 +538,7 @@ This repository includes an optional pre-push hook that uses **kimi** to review 
 - `docs/architecture_boundaries.md` - Dependency boundaries and allowed cross-app references
 - `docs/platform/` - Per-package platform guides (lemon_core, lemon_agent, lemon_ai, lemon_channels, lemon_gateway, lemon_memory, lemon_router, lemon_platform_test)
 - `docs/config.md` - Runtime configuration reference
+- `docs/user-guide/backups.md` - Versioned user-state backup and guarded restore contract
 - `docs/mix-tasks.md` - Grouped reference for every `mix lemon.*` task, including the quality/cleanup harness (`mix lemon.quality`, `mix lemon.cleanup`)
 - `docs/skills.md` - Skill system documentation
 - `docs/testing.md` - Canonical repo-level test lanes and CI parity guidance

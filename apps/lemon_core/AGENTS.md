@@ -13,6 +13,7 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 - **Idempotency** - Deduplication for at-most-once operations
 - **Execution approvals** - Tool execution gating with scope-based persistence
 - **Checkpoints and rollback** - Shared checkpoint store, filesystem diff/restore, and lifecycle events
+- **User-state backup and restore** - Atomic, versioned, checksum-verified `~/.lemon` bundles with guarded overwrite
 - **Quality checks** - Docs catalog and architecture boundary validation
 - **Telemetry** - Consistent event emission across the umbrella
 - **HTTP client** - Thin wrapper around Erlang's `:httpc`
@@ -62,6 +63,7 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.Telemetry` | Telemetry event helpers |
 | `LemonCore.Introspection` | Canonical introspection envelope builder and persistence API |
 | `LemonCore.Checkpoint` | Shared checkpoint store plus filesystem diff/restore and lifecycle events |
+| `LemonCore.Backup` | Versioned `~/.lemon` data contract plus atomic create/list/verify and verified-before-mutation restore |
 | `Lemon.Reload` | Runtime BEAM/extension reload orchestration with global lock and telemetry |
 | `LemonCore.Httpc` | `:httpc` wrapper ensuring `:inets`/`:ssl` started |
 | `LemonCore.Clock` | Time utilities (monotonic timestamps) |
@@ -74,6 +76,15 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.BindingResolver` | Resolves bindings for inbound messages |
 | `LemonCore.TerminalBackend` / `TerminalBackends` / `TerminalBackendPolicy` | Shared terminal/process backend contract, registry, policy, and redacted diagnostics |
 | `LemonCore.Testing` | Test harness builder (`Harness`, `Case`, `Helpers`) for lemon_core tests |
+
+`LemonCore.Backup` owns the user-state backup contract. Never widen its default
+scope silently: local credentials remain opt-in, project-local `.lemon` and
+platform keychains remain out of scope, and symlinks/special files are never
+followed. Manifest compatibility, exact file-set checks, owner-only bundle
+permissions, and per-file checksums must all pass before restore stages data.
+Overwrite authorization must remain derived from both the verified manifest
+digest and expanded target root. Restore modes are exact manifest owner modes
+from the explicit allowlist; group/world widening is a verification failure.
 
 Media doctor remediation should keep provider-backed image/TTS/STT/vision/video
 proof commands copy-ready and include the default redacted

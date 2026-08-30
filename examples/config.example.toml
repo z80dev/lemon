@@ -15,6 +15,8 @@
 # the joining host. Named workers require wss:// for non-loopback controllers by
 # default. LEMON_NODE_ALLOW_INSECURE_CONTROLLER=true is an explicit development
 # or verified-encrypted-overlay override and is not safe on an unverified path.
+# Backups have no TOML settings. Use `lemon backup create`; local credential
+# files remain excluded unless `--include-credentials` is explicit.
 
 [providers.anthropic]
 api_key_secret = "anthropic_api_key"

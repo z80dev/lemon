@@ -19,11 +19,13 @@ defmodule LemonCli.CLI do
       config [validate|show] [--verbose] [--project-dir PATH]
       secrets <status|init|set|list|delete|check|import-env>
       channels [--project-dir PATH] [--json]
+      backup <contract|create|list|verify|restore> [options]
 
   `model` delegates to provider onboarding; `gateway setup` delegates to the
   gateway setup adapters.
   """
 
+  alias LemonCore.Backup
   alias LemonCore.Config.Modular
   alias LemonCli.Onboarding.Runner
   alias LemonCli.Setup.{Gateway, Provider, Verification, Wizard}
@@ -45,7 +47,7 @@ defmodule LemonCli.CLI do
     defexception [:message, exit_code: 1]
   end
 
-  @commands ~w(setup model gateway doctor config secrets channels)
+  @commands ~w(setup model gateway doctor config secrets channels backup)
 
   @exit_ok 0
   @exit_error 1
@@ -146,6 +148,7 @@ defmodule LemonCli.CLI do
   defp run_command("config", args), do: run_config(args)
   defp run_command("secrets", args), do: run_secrets(args)
   defp run_command("channels", args), do: run_channels(args)
+  defp run_command("backup", args), do: run_backup(args)
 
   # ──────────────────────────────────────────────────────────────────────────
   # setup / model / gateway
@@ -880,6 +883,280 @@ defmodule LemonCli.CLI do
   defp truthy?(value), do: if(value, do: "true", else: "false")
 
   # ──────────────────────────────────────────────────────────────────────────
+  # backup
+  # ──────────────────────────────────────────────────────────────────────────
+
+  defp run_backup(["contract" | args]) do
+    with {:ok, opts} <- parse_backup_options(args, include_credentials: :boolean, json: :boolean),
+         :ok <- require_backup_positionals(opts, []) do
+      result = Backup.contract(include_credentials: opts.options[:include_credentials] == true)
+      backup_success("contract", result, opts.options[:json] == true)
+    else
+      {:error, :usage} -> backup_usage_error()
+    end
+  end
+
+  defp run_backup(["create" | args]) do
+    with {:ok, opts} <-
+           parse_backup_options(args,
+             output: :string,
+             include_credentials: :boolean,
+             json: :boolean
+           ),
+         :ok <- require_backup_positionals(opts, []) do
+      backup_opts =
+        []
+        |> maybe_put_backup_opt(:output, opts.options[:output])
+        |> Keyword.put(:include_credentials, opts.options[:include_credentials] == true)
+
+      run_backup_operation("create", opts.options[:json] == true, fn ->
+        Backup.create(backup_opts)
+      end)
+    else
+      {:error, :usage} -> backup_usage_error()
+    end
+  end
+
+  defp run_backup(["list" | args]) do
+    with {:ok, opts} <- parse_backup_options(args, root: :string, json: :boolean),
+         :ok <- require_backup_positionals(opts, []) do
+      backup_opts = maybe_put_backup_opt([], :backup_root, opts.options[:root])
+
+      run_backup_operation("list", opts.options[:json] == true, fn ->
+        Backup.list(backup_opts)
+      end)
+    else
+      {:error, :usage} -> backup_usage_error()
+    end
+  end
+
+  defp run_backup(["verify" | args]) do
+    with {:ok, opts} <- parse_backup_options(args, target: :string, json: :boolean),
+         [bundle] <- opts.positionals do
+      backup_opts = maybe_put_backup_opt([], :target, opts.options[:target])
+
+      run_backup_operation("verify", opts.options[:json] == true, fn ->
+        Backup.verify(bundle, backup_opts)
+      end)
+    else
+      _ -> backup_usage_error()
+    end
+  end
+
+  defp run_backup(["restore" | args]) do
+    with {:ok, opts} <-
+           parse_backup_options(args,
+             target: :string,
+             overwrite: :boolean,
+             confirm: :string,
+             json: :boolean
+           ),
+         [bundle] <- opts.positionals,
+         :ok <- validate_restore_cli_options(opts.options) do
+      backup_opts =
+        []
+        |> maybe_put_backup_opt(:target, opts.options[:target])
+        |> Keyword.put(:overwrite, opts.options[:overwrite] == true)
+        |> maybe_put_backup_opt(:confirmation, opts.options[:confirm])
+
+      run_backup_operation("restore", opts.options[:json] == true, fn ->
+        Backup.restore(bundle, backup_opts)
+      end)
+    else
+      _ -> backup_usage_error()
+    end
+  end
+
+  defp run_backup(_args), do: backup_usage_error()
+
+  defp parse_backup_options(args, strict) do
+    {options, positionals, invalid} = OptionParser.parse(args, strict: strict)
+
+    if invalid == [] do
+      {:ok, %{options: options, positionals: positionals}}
+    else
+      {:error, :usage}
+    end
+  end
+
+  defp require_backup_positionals(%{positionals: expected}, expected), do: :ok
+  defp require_backup_positionals(_parsed, _expected), do: {:error, :usage}
+
+  defp validate_restore_cli_options(options) do
+    if options[:confirm] && options[:overwrite] != true,
+      do: {:error, :usage},
+      else: :ok
+  end
+
+  defp maybe_put_backup_opt(opts, _key, nil), do: opts
+  defp maybe_put_backup_opt(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp run_backup_operation(operation, json?, fun) do
+    result =
+      try do
+        fun.()
+      rescue
+        _error -> {:error, :unexpected_backup_failure}
+      catch
+        _kind, _reason -> {:error, :unexpected_backup_failure}
+      end
+
+    case result do
+      {:ok, value} -> backup_success(operation, value, json?)
+      {:error, reason} -> backup_failure(operation, reason, json?)
+    end
+  end
+
+  defp backup_success(operation, value, true) do
+    IO.puts(Jason.encode!(%{ok: true, operation: operation, result: value}))
+    @exit_ok
+  end
+
+  defp backup_success(operation, value, false) do
+    print_backup_success(operation, value)
+    @exit_ok
+  end
+
+  defp backup_failure(operation, reason, true) do
+    {code, message} = backup_error(reason)
+
+    IO.puts(
+      :stderr,
+      Jason.encode!(%{ok: false, operation: operation, error: %{code: code, message: message}})
+    )
+
+    @exit_error
+  end
+
+  defp backup_failure(_operation, reason, false) do
+    {_code, message} = backup_error(reason)
+    IO.puts(:stderr, "Backup failed: #{message}")
+    @exit_error
+  end
+
+  defp print_backup_success("contract", contract) do
+    IO.puts("Lemon backup contract v#{contract.contract_version}")
+    IO.puts("Scope: #{contract.source} (durable user state only)")
+    IO.puts("Credentials included: #{contract.include_credentials}")
+    IO.puts("Symlinks followed: #{contract.follows_symlinks}")
+    IO.puts("Exclusions:")
+    Enum.each(contract.excludes, &IO.puts("  - #{&1}"))
+  end
+
+  defp print_backup_success("create", result) do
+    IO.puts("Backup created: #{result.path}")
+    IO.puts("ID: #{result.id}")
+    IO.puts("Files: #{result.file_count}; bytes: #{result.total_bytes}")
+    IO.puts("Credentials included: #{result.includes_credentials}")
+    IO.puts("Verified: #{result.verified}")
+  end
+
+  defp print_backup_success("list", []) do
+    IO.puts("No Lemon backups found.")
+  end
+
+  defp print_backup_success("list", backups) do
+    IO.puts("Lemon backups: #{length(backups)}")
+
+    Enum.each(backups, fn backup ->
+      IO.puts(
+        "  #{backup.id}  #{backup.created_at}  files=#{backup.file_count} " <>
+          "bytes=#{backup.total_bytes} credentials=#{backup.includes_credentials} " <>
+          "path=#{backup.path}"
+      )
+    end)
+  end
+
+  defp print_backup_success("verify", result) do
+    IO.puts("Backup verified: #{result.id}")
+    IO.puts("Manifest SHA-256: #{result.manifest_sha256}")
+    IO.puts("Files: #{result.file_count}; bytes: #{result.total_bytes}")
+    IO.puts("Overwrite confirmation: #{result.overwrite_confirmation}")
+  end
+
+  defp print_backup_success("restore", result) do
+    IO.puts("Backup restored: #{result.backup_id}")
+    IO.puts("Target: #{result.target}")
+
+    IO.puts(
+      "Restored: #{result.restored_count}; identical: #{result.identical_count}; " <>
+        "overwritten: #{result.overwritten_count}"
+    )
+
+    if result.rollback_path, do: IO.puts("Rollback directory: #{result.rollback_path}")
+  end
+
+  defp backup_error(:source_not_found),
+    do: {"source_not_found", "The Lemon user-state directory does not exist."}
+
+  defp backup_error(:backup_not_found),
+    do: {"backup_not_found", "The backup bundle does not exist."}
+
+  defp backup_error(:backup_not_directory),
+    do: {"backup_not_directory", "The backup path is not a directory bundle."}
+
+  defp backup_error(:path_exists),
+    do: {"path_exists", "The output or rollback path already exists."}
+
+  defp backup_error(:backup_restore_locked),
+    do: {"operation_locked", "Another backup or restore operation is already running."}
+
+  defp backup_error({:unsupported_backup_schema, _schema}),
+    do: {"unsupported_schema", "This backup schema is not supported by this Lemon version."}
+
+  defp backup_error({:restore_conflicts, count}),
+    do:
+      {"restore_conflicts",
+       "Restore found #{count} differing destination file(s). Verify with the exact target, then retry with --overwrite --confirm TOKEN."}
+
+  defp backup_error(:restore_confirmation_required),
+    do:
+      {"confirmation_required",
+       "Overwrite requires the confirmation emitted by verify for this manifest and target."}
+
+  defp backup_error(:restore_confirmation_mismatch),
+    do:
+      {"confirmation_mismatch",
+       "The overwrite confirmation does not match this verified manifest and target."}
+
+  defp backup_error(:unsafe_bundle_permissions),
+    do:
+      {"unsafe_permissions",
+       "Backup permissions are wider than owner-only; verification refused the bundle."}
+
+  defp backup_error(:unsafe_restore_target),
+    do: {"unsafe_target", "The restore target must be an absent path or a real directory."}
+
+  defp backup_error(:structural_restore_conflict),
+    do:
+      {"structural_conflict",
+       "Restore encountered a symlink, special file, or non-directory parent and refused to continue."}
+
+  defp backup_error(:manifest_checksum_mismatch),
+    do: {"manifest_checksum_mismatch", "The backup manifest checksum does not match."}
+
+  defp backup_error(:file_checksum_mismatch),
+    do: {"file_checksum_mismatch", "A backed-up file failed checksum verification."}
+
+  defp backup_error(:bundle_file_set_mismatch),
+    do: {"file_set_mismatch", "The bundle file set does not exactly match its manifest."}
+
+  defp backup_error({:restore_apply_and_rollback_failed, _reason}),
+    do:
+      {"rollback_incomplete",
+       "Restore failed and automatic rollback was incomplete; rollback material was retained."}
+
+  defp backup_error(_reason),
+    do: {"backup_failed", "The operation failed safely; no secret values were printed."}
+
+  defp backup_usage_error do
+    IO.puts(:stderr, "Invalid backup command or options.")
+    IO.puts(:stderr, "")
+    print_backup_usage(:stderr)
+    @exit_usage
+  end
+
+  # ──────────────────────────────────────────────────────────────────────────
   # Shared helpers
   # ──────────────────────────────────────────────────────────────────────────
 
@@ -925,6 +1202,7 @@ defmodule LemonCli.CLI do
       config [validate|show]                    Validate or show configuration
       secrets <status|init|set|list|delete|check|import-env>
       channels [--project-dir PATH] [--json]    Channel launch readiness
+      backup <contract|create|list|verify|restore>  Back up durable user state
 
     Run `lemon <command> --help` for command options.
     """)
@@ -988,6 +1266,37 @@ defmodule LemonCli.CLI do
     Options:
       --project-dir PATH  Project root to scan (defaults to the cwd)
       --json              Emit the raw redacted readiness JSON
+    """)
+  end
+
+  defp print_command_usage("backup"), do: print_backup_usage()
+
+  defp print_backup_usage(device \\ :stdio) do
+    IO.puts(device, """
+    Usage: lemon backup <command> [options]
+
+    Commands:
+      contract [--include-credentials] [--json]
+          Show the versioned ~/.lemon data and exclusion contract.
+      create [--output PATH] [--include-credentials] [--json]
+          Create and verify an atomic private backup directory bundle.
+      list [--root PATH] [--json]
+          List aggregate manifest metadata without file contents.
+      verify BUNDLE [--target PATH] [--json]
+          Verify schema, permissions, exact file set, sizes, and checksums.
+          Emits the target-bound overwrite confirmation.
+      restore BUNDLE [--target PATH] [--overwrite --confirm TOKEN] [--json]
+          Verify before mutation and restore additively. Differing files are
+          refused unless overwrite uses the exact token from `verify` for the
+          same manifest and normalized target.
+
+    Exit codes:
+      0  success
+      1  verification or operational failure
+      2  invalid command or options
+
+    Credential material is excluded unless --include-credentials is explicit.
+    Secret values and backed-up file contents are never printed.
     """)
   end
 

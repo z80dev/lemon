@@ -10,6 +10,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Source and packaged `lemon backup contract|create|list|verify|restore`
+  commands backed by a versioned `~/.lemon` data contract, atomic private
+  directory bundles, exact file-set and SHA-256 verification, credential
+  exclusions, permission-widening rejection, target-bound overwrite
+  confirmation, staged restore, rollback receipts, stable JSON, and documented
+  exit codes.
 - `lemon web [--no-open]` in source and full packaged launchers, with daemon
   auto-start, exact Web health polling, browser opening, and actionable profile
   or startup errors.

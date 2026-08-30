@@ -11,6 +11,12 @@ Runtime state and policy are separate from config. Per-session or per-route "cur
 model/thinking values override config defaults at runtime, but they are not persisted in
 `config.toml`.
 
+Operational backup policy is also intentionally separate from TOML. Use
+`lemon backup contract|create|list|verify|restore`; there are no implicit
+backup directories or credential-inclusion settings in `config.toml`. See
+[Back up and restore Lemon user state](user-guide/backups.md) for the versioned
+`~/.lemon` data contract.
+
 ## Example
 
 ```toml

@@ -102,6 +102,23 @@ defmodule LemonCore.BackupTest do
              "node-token"
   end
 
+  test "create refuses an output inside an included source path and unsupported owner modes", %{
+    tmp_dir: tmp_dir
+  } do
+    fixture = fixture(tmp_dir)
+    unsafe_output = Path.join(fixture.source, "nested-backup.lemonbackup")
+
+    assert {:error, :output_inside_source} =
+             Backup.create(paths_opts: [home_dir: fixture.home], output: unsafe_output)
+
+    refute File.exists?(unsafe_output)
+
+    File.chmod!(Path.join(fixture.source, "config.toml"), 0o200)
+
+    assert {:error, :unsupported_source_file_mode} =
+             Backup.create(paths_opts: [home_dir: fixture.home], output: fixture.bundle)
+  end
+
   test "verify detects changed bytes, extra files, and permission widening", %{tmp_dir: tmp_dir} do
     fixture = fixture(tmp_dir)
     create!(fixture)
@@ -184,6 +201,15 @@ defmodule LemonCore.BackupTest do
     assert File.read!(Path.join(target, "versions/keep-me/runtime")) == "installed"
     assert File.read!(Path.join(restored.rollback_path, "config.toml")) == "current-config"
 
+    receipt =
+      restored.rollback_path
+      |> Path.join("restore-receipt.json")
+      |> File.read!()
+      |> Jason.decode!()
+
+    assert receipt["manifest_sha256"] == verified.manifest_sha256
+    assert receipt["target"] == Path.expand(target)
+
     assert {:ok, stat} = File.stat(Path.join(target, "config.toml"))
     assert (stat.mode &&& 0o777) == 0o600
   end
@@ -215,6 +241,20 @@ defmodule LemonCore.BackupTest do
     assert listed.contents_returned == false
     assert listed.secret_values_returned == false
     refute Map.has_key?(listed, :files)
+  end
+
+  test "restore refuses a symlink target before staging", %{tmp_dir: tmp_dir} do
+    fixture = fixture(tmp_dir)
+    create!(fixture)
+    real_target = Path.join(tmp_dir, "real-target")
+    symlink_target = Path.join(tmp_dir, "linked-target")
+    File.mkdir_p!(real_target)
+    File.ln_s!(real_target, symlink_target)
+
+    assert {:error, :unsafe_restore_target} =
+             Backup.restore(fixture.bundle, target: symlink_target)
+
+    assert File.ls!(real_target) == []
   end
 
   defp rewrite_manifest!(bundle, fun) do

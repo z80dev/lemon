@@ -52,6 +52,7 @@ export default {
         text: "User Guide",
         items: [
           { text: "Setup", link: "/user-guide/setup" },
+          { text: "Backup and Restore", link: "/user-guide/backups" },
           { text: "Skills", link: "/user-guide/skills" },
           { text: "Memory", link: "/user-guide/memory" },
           { text: "Honcho Memory", link: "/user-guide/honcho" },
@@ -90,6 +91,7 @@ export default {
         text: "Operations",
         items: [
           { text: "Configuration", link: "/config" },
+          { text: "Backup and Restore", link: "/user-guide/backups" },
           { text: "Testing", link: "/testing" },
           { text: "Extensions", link: "/extensions" },
           { text: "Versioning & Channels", link: "/release/versioning_and_channels" },

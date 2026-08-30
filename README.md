@@ -48,6 +48,16 @@ Verify your setup with the diagnostic doctor:
 lemon doctor
 ```
 
+Create a verified private backup of durable `~/.lemon` state before changing
+machines or performing maintenance:
+
+```bash
+lemon backup create
+```
+
+See [Back up and restore Lemon user state](docs/user-guide/backups.md) for the
+versioned data contract, credential exclusions, and guarded overwrite flow.
+
 ### 3. Start Chatting
 
 Launch the interactive Terminal UI (TUI):
@@ -275,6 +285,7 @@ graph TD
 | [Documentation Index](docs/README.md) | Complete documentation catalog |
 | [Installation Guide](docs/install.md) | Prebuilt releases, platform support, and headless setup |
 | [Configuration Reference](docs/config.md) | Runtime configuration and environment variables |
+| [Backup and Restore](docs/user-guide/backups.md) | `~/.lemon` data contract, verification, guarded restore, and rollback |
 | [Testing Guide](docs/testing.md) | Test suites, quality gates, and CI parity |
 | [Mix Tasks Reference](docs/mix-tasks.md) | Grouped reference for all `mix lemon.*` commands |
 | [Skills Documentation](docs/skills.md) | Skill registry, discovery, and custom assistant tools |
