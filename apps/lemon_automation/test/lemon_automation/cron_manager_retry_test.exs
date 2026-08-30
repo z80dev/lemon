@@ -115,10 +115,13 @@ defmodule LemonAutomation.CronManagerRetryTest do
   end
 
   test "pending retry survives manager restart and keeps one deterministic attempt", %{job: job} do
-    assert {:ok, job} = CronManager.update(job.id, %{retry_backoff_ms: 250})
-    replace_job_state(%{job | next_run_at_ms: LemonCore.Clock.now_ms() - 1_000})
+    manager = private_manager_name()
+    start_supervised!({CronManager, name: manager})
 
-    CronManager.tick()
+    job = %{job | retry_backoff_ms: 250}
+    replace_job_state(%{job | next_run_at_ms: LemonCore.Clock.now_ms() - 1_000}, manager)
+
+    GenServer.cast(manager, :tick)
 
     assert_receive {:cron_submit, submitter_pid, _job_id, first_run_id, :schedule, _meta}, 5_000
     send(submitter_pid, {:release_cron_submit, first_run_id})
@@ -128,11 +131,11 @@ defmodule LemonAutomation.CronManagerRetryTest do
              is_integer(run && meta(run, :retry_due_at_ms))
            end)
 
-    old_pid = Process.whereis(CronManager)
-    GenServer.stop(CronManager)
+    old_pid = Process.whereis(manager)
+    Process.exit(old_pid, :kill)
 
     assert await(fn ->
-             pid = Process.whereis(CronManager)
+             pid = Process.whereis(manager)
              is_pid(pid) and pid != old_pid
            end)
 
@@ -151,8 +154,11 @@ defmodule LemonAutomation.CronManagerRetryTest do
   end
 
   test "stale recovery uses normal terminal policy once and reconstructs retry", %{job: job} do
-    assert {:ok, job} =
-             CronManager.update(job.id, %{timeout_ms: 1, retry_backoff_ms: 0, max_retries: 1})
+    manager = private_manager_name()
+    start_supervised!({CronManager, name: manager})
+
+    job = %{job | timeout_ms: 1, retry_backoff_ms: 0, max_retries: 1}
+    replace_job_state(job, manager)
 
     root_id = "cron_stale_retry_#{System.unique_integer([:positive])}"
 
@@ -173,11 +179,11 @@ defmodule LemonAutomation.CronManagerRetryTest do
     CronStore.put_run(stale)
     LemonCore.Bus.subscribe(LemonCore.Bus.session_topic(job.session_key))
 
-    old_pid = Process.whereis(CronManager)
-    GenServer.stop(CronManager)
+    old_pid = Process.whereis(manager)
+    Process.exit(old_pid, :kill)
 
     assert await(fn ->
-             pid = Process.whereis(CronManager)
+             pid = Process.whereis(manager)
              is_pid(pid) and pid != old_pid
            end)
 
@@ -187,7 +193,7 @@ defmodule LemonAutomation.CronManagerRetryTest do
     assert retry_run_id == CronStore.retry_run_id(root_id, 1)
     assert retry_meta.retry_root_id == root_id
 
-    send(CronManager, {:run_complete, root_id, {:ok, "late"}})
+    send(manager, {:run_complete, root_id, {:ok, "late"}})
     Process.sleep(50)
 
     assert CronStore.get_run(root_id).status == :timeout
@@ -197,12 +203,16 @@ defmodule LemonAutomation.CronManagerRetryTest do
     LemonCore.Bus.unsubscribe(LemonCore.Bus.session_topic(job.session_key))
   end
 
-  defp replace_job_state(job) do
+  defp replace_job_state(job, manager \\ CronManager) do
     CronStore.put_job(job)
 
-    :sys.replace_state(CronManager, fn state ->
+    :sys.replace_state(manager, fn state ->
       put_in(state.jobs[job.id], job)
     end)
+  end
+
+  defp private_manager_name do
+    String.to_atom("cron_retry_manager_#{System.unique_integer([:positive, :monotonic])}")
   end
 
   defp meta(run, key) do
