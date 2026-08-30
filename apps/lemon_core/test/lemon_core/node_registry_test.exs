@@ -46,6 +46,19 @@ defmodule LemonCore.NodeRegistryTest do
     Process.exit(new, :kill)
   end
 
+  test "renames a live node without dropping active invocations" do
+    assert :ok = NodeRegistry.register("node-1", "old-name", self())
+    assert {:ok, invoke_id} = NodeRegistry.invoke("old-name", "coding_agent.run", %{})
+    assert_receive {:node_event, "node.invoke.request", %{"invokeId" => ^invoke_id}}
+
+    assert :ok = NodeRegistry.rename("node-1", "new-name")
+    assert {:error, :not_found} = NodeRegistry.resolve("old-name")
+    assert {:ok, %{id: "node-1"}} = NodeRegistry.resolve("new-name")
+
+    assert :ok = NodeRegistry.complete("node-1", invoke_id, %{"answer" => "done"})
+    assert_receive {:lemon_node_result, ^invoke_id, {:ok, %{"answer" => "done"}}}
+  end
+
   test "targets invocation requests and binds completion to the selected node" do
     assert :ok = NodeRegistry.register("node-1", "newphy", self())
     assert {:ok, invoke_id} = NodeRegistry.invoke("newphy", "coding_agent.run", %{"x" => 1})

@@ -6,7 +6,7 @@ defmodule LemonControlPlane.WS.Connection do
 
   - Handshake via `connect` method followed by `hello-ok` frame
   - Request/response frame handling
-  - Event broadcasting
+  - Event broadcasting and targeted execution-node delivery
   - Connection lifecycle management
 
   ## Protocol Flow
@@ -24,7 +24,8 @@ defmodule LemonControlPlane.WS.Connection do
 
   alias LemonControlPlane.Protocol.{Frames, Errors}
   alias LemonControlPlane.Auth.Authorize
-  alias LemonControlPlane.Methods.Registry
+  alias LemonControlPlane.Methods.{NodeInvokeResult, Registry}
+  alias LemonControlPlane.NodeStore
 
   defstruct [
     :conn_id,
@@ -89,6 +90,17 @@ defmodule LemonControlPlane.WS.Connection do
   end
 
   @impl WebSock
+  def handle_info({:node_event, event_name, payload}, state) do
+    state = increment_event_seq(state)
+    frame = Frames.encode_event(event_name, payload, state.event_seq, state.state_version)
+    {:push, {:text, frame}, state}
+  end
+
+  def handle_info({:lemon_node_result, invoke_id, result}, state) do
+    :ok = NodeInvokeResult.record_registry_result(invoke_id, result)
+    {:ok, state}
+  end
+
   def handle_info({:event, event_name, payload}, state) do
     if subscribed_to_event?(state, event_name, payload) do
       state = increment_event_seq(state)
@@ -157,6 +169,7 @@ defmodule LemonControlPlane.WS.Connection do
     # Unregister from presence
     if state.connected do
       unregister_presence(state)
+      unregister_node_connection(state)
     end
 
     :ok
@@ -187,31 +200,41 @@ defmodule LemonControlPlane.WS.Connection do
   defp handle_connect(id, params, state) do
     case Authorize.from_params(params || %{}) do
       {:ok, auth} ->
-        state = %{state | auth: auth, connected: true}
+        case register_node_connection(auth) do
+          :ok ->
+            finish_connect(auth, state)
 
-        # Register with presence
-        register_presence(state)
-
-        # Build hello-ok response - connect uses a dedicated hello-ok handshake frame.
-        hello_ok =
-          Frames.encode_hello_ok(%{
-            conn_id: state.conn_id,
-            methods: Registry.list_methods(),
-            events: Frames.supported_events(),
-            snapshot: build_snapshot(state),
-            auth: build_auth_response(auth)
-          })
-
-        Logger.info("WebSocket connection established: #{state.conn_id}, role: #{auth.role}")
-
-        # Only send hello-ok, NOT an additional res frame.
-        {:push, {:text, hello_ok}, state}
+          {:error, error} ->
+            {:push, {:text, Frames.encode_response(id, {:error, error})}, state}
+        end
 
       {:error, reason} ->
         error = Errors.unauthorized(inspect(reason))
         # For auth errors, we still send a res frame with the error
         {:push, {:text, Frames.encode_response(id, {:error, error})}, state}
     end
+  end
+
+  defp finish_connect(auth, state) do
+    state = %{state | auth: auth, connected: true}
+
+    # Register with presence
+    register_presence(state)
+
+    # Build hello-ok response - connect uses a dedicated hello-ok handshake frame.
+    hello_ok =
+      Frames.encode_hello_ok(%{
+        conn_id: state.conn_id,
+        methods: Registry.list_methods(),
+        events: Frames.supported_events(),
+        snapshot: build_snapshot(state),
+        auth: build_auth_response(auth)
+      })
+
+    Logger.info("WebSocket connection established: #{state.conn_id}, role: #{auth.role}")
+
+    # Only send hello-ok, NOT an additional res frame.
+    {:push, {:text, hello_ok}, state}
   end
 
   ## Method Dispatch
@@ -318,6 +341,99 @@ defmodule LemonControlPlane.WS.Connection do
     else
       base
     end
+  end
+
+  defp register_node_connection(%{role: :node} = auth) do
+    node_id = auth.client_id
+    identity = Map.get(auth, :identity)
+
+    cond do
+      not authenticated_node_identity?(identity, node_id) ->
+        {:error, Errors.unauthorized("A valid node session token is required")}
+
+      not is_binary(node_id) or node_id == "" ->
+        {:error, Errors.unauthorized("Node identity is missing a node ID")}
+
+      true ->
+        case NodeStore.get_node(node_id) do
+          nil ->
+            {:error, Errors.unauthorized("Paired node was not found")}
+
+          node ->
+            register_durable_node(node_id, node)
+        end
+    end
+  end
+
+  defp register_node_connection(_auth), do: :ok
+
+  defp register_durable_node(node_id, node) do
+    name = get_field(node, :name)
+
+    with true <- is_binary(name) and String.trim(name) != "",
+         :ok <- NodeStore.reserve_node_name(name, node_id),
+         :ok <- register_live_node(node_id, name, node) do
+      case mark_node_status(node_id, node, :online) do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          LemonCore.NodeRegistry.unregister(node_id, self())
+          {:error, Errors.internal_error("Failed to persist node connection", reason)}
+      end
+    else
+      false ->
+        {:error, Errors.unauthorized("Paired node has no durable name")}
+
+      {:error, {:name_taken, _name}} ->
+        {:error, Errors.conflict("Node name is already in use")}
+
+      {:error, :invalid_name} ->
+        {:error, Errors.unauthorized("Paired node has no durable name")}
+
+      {:error, reason} ->
+        {:error, Errors.internal_error("Failed to register node connection", reason)}
+    end
+  end
+
+  defp register_live_node(node_id, name, node) do
+    LemonCore.NodeRegistry.register(node_id, name, self(), %{
+      type: get_field(node, :type),
+      capabilities: get_field(node, :capabilities) || %{}
+    })
+  end
+
+  defp unregister_node_connection(%{auth: %{role: :node, client_id: node_id}})
+       when is_binary(node_id) do
+    LemonCore.NodeRegistry.unregister(node_id, self())
+
+    unless LemonCore.NodeRegistry.online?(node_id) do
+      case NodeStore.get_node(node_id) do
+        node when is_map(node) -> mark_node_status(node_id, node, :offline)
+        _ -> :ok
+      end
+    end
+  end
+
+  defp unregister_node_connection(_state), do: :ok
+
+  defp mark_node_status(node_id, node, status) do
+    NodeStore.put_node(
+      node_id,
+      Map.merge(node, %{status: status, last_seen_ms: System.system_time(:millisecond)})
+    )
+  end
+
+  defp authenticated_node_identity?(identity, node_id) when is_map(identity) do
+    type = Map.get(identity, "type") || Map.get(identity, :type)
+    identity_node_id = Map.get(identity, "nodeId") || Map.get(identity, "node_id")
+    type == "node" and identity_node_id == node_id
+  end
+
+  defp authenticated_node_identity?(_identity, _node_id), do: false
+
+  defp get_field(map, key) when is_map(map) and is_atom(key) do
+    Map.get(map, key) || Map.get(map, Atom.to_string(key))
   end
 
   defp register_presence(state) do

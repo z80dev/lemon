@@ -1,6 +1,7 @@
 defmodule LemonControlPlane.NodeStore do
   @moduledoc """
-  Typed wrapper for node pairing, registry, challenges, and invocations.
+  Typed wrapper for node pairing, durable metadata, name reservations,
+  challenges, and invocations.
   """
 
   alias LemonCore.Store
@@ -8,6 +9,7 @@ defmodule LemonControlPlane.NodeStore do
   @pairing_table :nodes_pairing
   @pairing_code_table :nodes_pairing_by_code
   @registry_table :nodes_registry
+  @name_table :nodes_by_name
   @challenge_table :node_challenges
   @invocation_table :node_invocations
 
@@ -39,6 +41,49 @@ defmodule LemonControlPlane.NodeStore do
   @spec list_nodes() :: list()
   def list_nodes, do: Store.list(@registry_table)
 
+  @doc "Reserves a trimmed durable node name for one node ID."
+  @spec reserve_node_name(binary(), binary()) ::
+          :ok | {:error, :invalid_name | {:name_taken, binary()} | term()}
+  def reserve_node_name(name, node_id) when is_binary(name) and is_binary(node_id) do
+    name = String.trim(name)
+
+    cond do
+      name == "" ->
+        {:error, :invalid_name}
+
+      durable_name_taken?(name, node_id) ->
+        {:error, {:name_taken, name}}
+
+      true ->
+        case Store.put_new(@name_table, name, node_id) do
+          :ok ->
+            :ok
+
+          {:error, :exists} ->
+            if Store.get(@name_table, name) == node_id,
+              do: :ok,
+              else: {:error, {:name_taken, name}}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+    end
+  end
+
+  @doc "Releases a durable node-name reservation if it still belongs to the node."
+  @spec release_node_name(binary() | nil, binary()) :: :ok
+  def release_node_name(name, node_id) when is_binary(name) and is_binary(node_id) do
+    name = String.trim(name)
+
+    if name != "" and Store.get(@name_table, name) == node_id do
+      Store.delete(@name_table, name)
+    else
+      :ok
+    end
+  end
+
+  def release_node_name(_name, _node_id), do: :ok
+
   @spec put_challenge(binary(), map()) :: :ok
   def put_challenge(token, value) when is_binary(token) and is_map(value),
     do: Store.put(@challenge_table, token, value)
@@ -56,4 +101,12 @@ defmodule LemonControlPlane.NodeStore do
   @spec get_invocation(binary()) :: map() | nil
   def get_invocation(invoke_id) when is_binary(invoke_id),
     do: Store.get(@invocation_table, invoke_id)
+
+  defp durable_name_taken?(name, node_id) do
+    Enum.any?(list_nodes(), fn {existing_id, node} ->
+      existing_id != node_id and node_name(node) == name
+    end)
+  end
+
+  defp node_name(node) when is_map(node), do: Map.get(node, :name) || Map.get(node, "name")
 end
