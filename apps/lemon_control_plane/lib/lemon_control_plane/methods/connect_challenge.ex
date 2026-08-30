@@ -43,39 +43,55 @@ defmodule LemonControlPlane.Methods.ConnectChallenge do
           # Generate session token
           token = generate_session_token()
 
-          # Store token with identity for later validation
-          {:ok, _token_info} =
-            TokenStore.store(token, identity,
-              ttl_ms: @token_ttl_ms,
-              conn_id: ctx[:conn_id]
-            )
-
-          {:ok,
-           %{
-             "verified" => true,
-             "identity" => identity,
-             "token" => token,
-             "summary" => %{
-               "verified" => true,
-               "identityType" => identity["type"],
-               "identityId" => identity_id(identity),
-               "tokenTtlMs" => @token_ttl_ms,
-               "credentialDelivery" => %{
-                 "includesSessionToken" => true
-               },
-               "cleanup" => %{
-                 "includesChallenge" => false,
-                 "includesChallengeToken" => false,
-                 "includesSecretValues" => false
-               }
-             }
-           }}
+          # A node has one current session credential. Exchanging a fresh
+          # challenge rotates it and revokes every older session for that ID.
+          with :ok <- revoke_previous_node_sessions(identity),
+               {:ok, _token_info} <-
+                 TokenStore.store(token, identity,
+                   ttl_ms: @token_ttl_ms,
+                   conn_id: ctx[:conn_id]
+                 ) do
+            verified_response(identity, token)
+          end
 
         {:error, reason} ->
           {:error, Errors.unauthorized(reason)}
       end
     end
   end
+
+  defp verified_response(identity, token) do
+    {:ok,
+     %{
+       "verified" => true,
+       "identity" => identity,
+       "token" => token,
+       "summary" => %{
+         "verified" => true,
+         "identityType" => identity["type"],
+         "identityId" => identity_id(identity),
+         "tokenTtlMs" => @token_ttl_ms,
+         "credentialDelivery" => %{
+           "includesSessionToken" => true
+         },
+         "cleanup" => %{
+           "includesChallenge" => false,
+           "includesChallengeToken" => false,
+           "includesSecretValues" => false
+         }
+       }
+     }}
+  end
+
+  defp revoke_previous_node_sessions(%{"type" => "node", "nodeId" => node_id})
+       when is_binary(node_id) do
+    case TokenStore.revoke_identity("node", node_id) do
+      {:ok, _count} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp revoke_previous_node_sessions(_identity), do: :ok
 
   defp verify_challenge(challenge, ctx) do
     # Check if this is a device pairing verification

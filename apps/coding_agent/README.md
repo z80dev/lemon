@@ -118,7 +118,7 @@ CodingAgent.Supervisor (one_for_one)
 | `CodingAgent.ExecutionNode.CLI` | Implements `./bin/lemon node join` for a source checkout |
 | `CodingAgent.ExecutionNode.Worker` | Authenticates to a controller and executes targeted, versioned `coding_agent.run` requests through `CodingAgent.Executor` |
 | `CodingAgent.ExecutionNode.Socket` | Reconnecting WebSocket client for control-plane handshakes, requests, responses, and node events |
-| `CodingAgent.ExecutionNode.TokenStore` | Stores node-name-keyed session-token records under `~/.lemon/nodes/execution/` with a mode-0700 directory and mode-0600 files |
+| `CodingAgent.ExecutionNode.TokenStore` | Stores durable-node-ID-keyed session and recovery credentials under `~/.lemon/nodes/execution/` with a mode-0700 directory and mode-0600 files; migrates compatible legacy name-keyed records |
 | `CodingAgent.Executor.RemoteRequestCodec` | Restricts the cross-node boundary to JSON-safe execution request/result fields and destination-cwd intent |
 
 ### Tool System
@@ -628,15 +628,28 @@ token; subsequent starts omit `--pair`:
 # destination machine
 LEMON_NODE_OPERATOR_TOKEN=... ./bin/lemon node join \
   --name worker-1 \
-  --controller ws://controller:4040/ws \
+  --controller wss://controller.example/ws \
   --pair \
   --cwd /srv/project
 
 ./bin/lemon node join \
   --name worker-1 \
-  --controller ws://controller:4040/ws \
+  --controller wss://controller.example/ws \
   --cwd /srv/project
 ```
+
+The private record is keyed by durable node ID, not the launch name. A
+controller rename therefore survives destination restarts. Re-run with
+`--pair` after the seven-day session expires; recovery keeps the existing
+identity and name reservation and revokes older sessions. For a legacy record
+that has a node ID but no recovery credential, use the explicit
+operator-authorized `--pair --repair --node-id ID` migration path.
+
+Non-loopback plaintext controllers are rejected by default. Prefer `wss://`.
+For a development endpoint or a verified encrypted overlay such as Tailscale,
+add `--allow-insecure-controller` (or set
+`LEMON_NODE_ALLOW_INSECURE_CONTROLLER=true`) explicitly; do not use that
+override on an unverified network.
 
 Once `worker-1` is online, a model can route a delegated run through the
 `agent` tool with parameters such as:

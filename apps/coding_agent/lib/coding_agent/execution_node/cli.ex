@@ -9,6 +9,9 @@ defmodule CodingAgent.ExecutionNode.CLI do
     pair: :boolean,
     operator_token: :string,
     token: :string,
+    node_id: :string,
+    repair: :boolean,
+    allow_insecure_controller: :boolean,
     cwd: :string,
     help: :boolean
   ]
@@ -41,6 +44,9 @@ defmodule CodingAgent.ExecutionNode.CLI do
              pair: opts[:pair] == true,
              operator_token: opts[:operator_token] || System.get_env("LEMON_NODE_OPERATOR_TOKEN"),
              token: opts[:token] || System.get_env("LEMON_NODE_TOKEN"),
+             node_id: opts[:node_id],
+             repair: opts[:repair] == true,
+             allow_insecure_controller: allow_insecure_controller?(opts),
              cwd: default_cwd(opts),
              notify_pid: self(),
              socket_module: Keyword.get(deps, :socket_module, CodingAgent.ExecutionNode.Socket),
@@ -117,15 +123,25 @@ defmodule CodingAgent.ExecutionNode.CLI do
     opts[:cwd] || launch_cwd || process_cwd
   end
 
+  @doc false
+  def allow_insecure_controller?(opts) do
+    opts[:allow_insecure_controller] == true or
+      enabled_env?("LEMON_NODE_ALLOW_INSECURE_CONTROLLER")
+  end
+
   @spec help() :: String.t()
   def help do
     """
-    Usage: ./bin/lemon node join --name NAME --controller ws://HOST:4040/ws [options]
+    Usage: ./bin/lemon node join --name NAME --controller wss://HOST/ws [options]
 
     Options:
       --pair                    Pair and store a controller-issued node token
       --operator-token TOKEN    Operator token used only during pairing
       --token TOKEN             Existing node session token (overrides stored token)
+      --node-id ID              Load or repair a credential by durable controller node ID
+      --repair                  Operator-authorized repair for a legacy record without a recovery token
+      --allow-insecure-controller
+                                Allow non-loopback ws:// only on development or a verified encrypted overlay
       --cwd PATH                Default local working directory (default: current directory)
       --help, -h                Show this help
 
@@ -133,7 +149,10 @@ defmodule CodingAgent.ExecutionNode.CLI do
     LEMON_CONTROL_PLANE_OPERATOR_TOKEN when operator authentication is enabled.
     Prefer LEMON_NODE_OPERATOR_TOKEN and LEMON_NODE_TOKEN over command-line token
     flags so credentials do not enter shell history. Stored node tokens live only
-    on this machine in a mode-0600 file keyed by node name.
+    on this machine in a mode-0600 file keyed by durable node ID. Non-loopback
+    controllers require wss:// by default. The insecure override is acceptable
+    only when another verified transport layer, such as Tailscale, encrypts and
+    authenticates the complete path.
     """
   end
 
@@ -156,12 +175,24 @@ defmodule CodingAgent.ExecutionNode.CLI do
   end
 
   defp format_reason(:node_authentication_failed) do
-    "node authentication failed; re-pair the node or provide a valid LEMON_NODE_TOKEN"
+    "node authentication failed; rotate it with --pair or provide a valid LEMON_NODE_TOKEN"
+  end
+
+  defp format_reason(:missing_node_recovery_token) do
+    "the legacy node credential has no recovery token; rerun --pair --repair with operator authorization"
+  end
+
+  defp format_reason(:insecure_controller_url) do
+    "non-loopback ws:// controllers are blocked; use wss:// or explicitly pass --allow-insecure-controller only for development or a verified encrypted overlay"
   end
 
   defp format_reason(reason) do
     reason
     |> inspect(limit: 20, printable_limit: 1_000)
     |> String.slice(0, 2_000)
+  end
+
+  defp enabled_env?(name) do
+    System.get_env(name) in ["1", "true", "TRUE", "yes", "YES", "on", "ON"]
   end
 end

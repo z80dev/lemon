@@ -35,6 +35,10 @@ defmodule CodingAgent.ExecutionNode.Worker do
     :notify_pid,
     :node_id,
     :expected_node_id,
+    :requested_node_id,
+    :recovery_node_id,
+    :recovery_token,
+    :repair,
     :pairing_stage,
     :pairing_id,
     :max_payload_bytes,
@@ -52,7 +56,11 @@ defmodule CodingAgent.ExecutionNode.Worker do
     Process.flag(:trap_exit, true)
 
     with {:ok, name} <- nonempty(Keyword.get(opts, :node_name), :invalid_node_name),
-         {:ok, controller} <- controller_url(Keyword.get(opts, :controller)),
+         {:ok, controller} <-
+           controller_url(
+             Keyword.get(opts, :controller),
+             Keyword.get(opts, :allow_insecure_controller, false)
+           ),
          {:ok, default_cwd} <- existing_directory(Keyword.get(opts, :cwd, File.cwd!())),
          {:ok, state} <- build_state(opts, name, controller, default_cwd),
          {:ok, state} <- connect_initial(state, opts) do
@@ -74,13 +82,17 @@ defmodule CodingAgent.ExecutionNode.Worker do
        token_store_module: Keyword.get(opts, :token_store_module, TokenStore),
        token_store_opts: Keyword.get(opts, :token_store_opts, []),
        notify_pid: Keyword.get(opts, :notify_pid),
+       requested_node_id: Keyword.get(opts, :node_id),
+       repair: Keyword.get(opts, :repair, false),
        max_payload_bytes: LemonCore.JSONPayload.default_max_bytes()
      }}
   end
 
   defp connect_initial(state, opts) do
     if Keyword.get(opts, :pair, false) do
-      connect_pairing(state, Keyword.get(opts, :operator_token))
+      with {:ok, state} <- prepare_pairing_identity(state) do
+        connect_pairing(state, Keyword.get(opts, :operator_token))
+      end
     else
       with {:ok, token, expected_node_id} <- resolve_token(state, Keyword.get(opts, :token)) do
         connect_authenticated(state, token, expected_node_id)
@@ -279,7 +291,9 @@ defmodule CodingAgent.ExecutionNode.Worker do
       challenge when is_binary(challenge) and challenge != "" ->
         tag = {:pair_challenge, payload["nodeId"]}
         request(state, "connect.challenge", %{"challenge" => challenge}, tag)
-        {:noreply, %{state | pairing_stage: :challenging}}
+
+        recovery_token = payload["token"] || state.recovery_token
+        {:noreply, %{state | pairing_stage: :challenging, recovery_token: recovery_token}}
 
       _ ->
         {:stop, {:pairing_failed, :missing_challenge_token}, state}
@@ -299,7 +313,8 @@ defmodule CodingAgent.ExecutionNode.Worker do
              %{
                "token" => token,
                "nodeId" => node_id,
-               "controller" => state.controller
+               "controller" => state.controller,
+               "recoveryToken" => state.recovery_token
              },
              state.token_store_opts
            ) do
@@ -349,11 +364,13 @@ defmodule CodingAgent.ExecutionNode.Worker do
   end
 
   defp resume_pairing(state) do
-    params = %{
-      "nodeType" => "coding_agent",
-      "nodeName" => state.name,
-      "capabilities" => @capabilities
-    }
+    params =
+      %{
+        "nodeType" => "coding_agent",
+        "nodeName" => state.name,
+        "capabilities" => @capabilities
+      }
+      |> maybe_put_recovery(state)
 
     request(state, "node.pair.request", params, :pair_request)
     %{state | pairing_stage: :requesting}
@@ -559,7 +576,12 @@ defmodule CodingAgent.ExecutionNode.Worker do
     do: {:ok, token, nil}
 
   defp resolve_token(state, _token) do
-    case state.token_store_module.load(state.name, state.token_store_opts) do
+    load_opts =
+      state.token_store_opts
+      |> Keyword.put(:controller, state.controller)
+      |> maybe_put_requested_node_id(state.requested_node_id)
+
+    case state.token_store_module.load(state.name, load_opts) do
       {:ok, record} ->
         stored_token(record, state.controller)
 
@@ -585,6 +607,62 @@ defmodule CodingAgent.ExecutionNode.Worker do
       true -> {:ok, token, node_id}
     end
   end
+
+  defp prepare_pairing_identity(state) do
+    load_opts =
+      state.token_store_opts
+      |> Keyword.put(:controller, state.controller)
+      |> maybe_put_requested_node_id(state.requested_node_id)
+
+    case state.token_store_module.load(state.name, load_opts) do
+      {:ok, record} ->
+        node_id = record["nodeId"]
+        recovery_token = record["recoveryToken"]
+
+        cond do
+          not is_binary(node_id) or node_id == "" ->
+            {:error, :stored_token_missing_node_id}
+
+          is_binary(recovery_token) and recovery_token != "" ->
+            {:ok, %{state | recovery_node_id: node_id, recovery_token: recovery_token}}
+
+          state.repair ->
+            {:ok, %{state | recovery_node_id: node_id}}
+
+          true ->
+            {:error, :missing_node_recovery_token}
+        end
+
+      {:error, :not_found} when is_binary(state.requested_node_id) and state.repair ->
+        {:ok, %{state | recovery_node_id: state.requested_node_id}}
+
+      {:error, :not_found} ->
+        {:ok, state}
+
+      {:error, reason} ->
+        {:error, {:token_load_failed, reason}}
+
+      _ ->
+        {:ok, state}
+    end
+  end
+
+  defp maybe_put_requested_node_id(opts, node_id) when is_binary(node_id) and node_id != "",
+    do: Keyword.put(opts, :node_id, node_id)
+
+  defp maybe_put_requested_node_id(opts, _node_id), do: opts
+
+  defp maybe_put_recovery(params, %{recovery_node_id: node_id, recovery_token: token})
+       when is_binary(node_id) and node_id != "" and is_binary(token) and token != "" do
+    Map.merge(params, %{"nodeId" => node_id, "recoveryToken" => token})
+  end
+
+  defp maybe_put_recovery(params, %{recovery_node_id: node_id, repair: true})
+       when is_binary(node_id) and node_id != "" do
+    Map.merge(params, %{"nodeId" => node_id, "repair" => true})
+  end
+
+  defp maybe_put_recovery(params, _state), do: params
 
   defp targeted?(payload, state) do
     node_id = payload["nodeId"]
@@ -622,17 +700,45 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   defp existing_directory(_cwd), do: {:error, :invalid_cwd}
 
-  defp controller_url(url) when is_binary(url) do
+  defp controller_url(url, allow_insecure?) when is_binary(url) do
     uri = URI.parse(String.trim(url))
 
-    if uri.scheme in ["ws", "wss"] and is_binary(uri.host) and uri.host != "" do
-      {:ok, URI.to_string(uri)}
-    else
-      {:error, :invalid_controller_url}
+    cond do
+      uri.scheme == "wss" and is_binary(uri.host) and uri.host != "" ->
+        {:ok, URI.to_string(uri)}
+
+      uri.scheme == "ws" and loopback_host?(uri.host) ->
+        {:ok, URI.to_string(uri)}
+
+      uri.scheme == "ws" and is_binary(uri.host) and uri.host != "" and allow_insecure? == true ->
+        {:ok, URI.to_string(uri)}
+
+      uri.scheme == "ws" and is_binary(uri.host) and uri.host != "" ->
+        {:error, :insecure_controller_url}
+
+      true ->
+        {:error, :invalid_controller_url}
     end
   end
 
-  defp controller_url(_url), do: {:error, :invalid_controller_url}
+  defp controller_url(_url, _allow_insecure?), do: {:error, :invalid_controller_url}
+
+  defp loopback_host?(host) when is_binary(host) do
+    normalized = String.downcase(host)
+
+    normalized == "localhost" or String.ends_with?(normalized, ".localhost") or
+      parsed_loopback?(normalized)
+  end
+
+  defp loopback_host?(_host), do: false
+
+  defp parsed_loopback?(host) do
+    case :inet.parse_address(String.to_charlist(host)) do
+      {:ok, {127, _b, _c, _d}} -> true
+      {:ok, {0, 0, 0, 0, 0, 0, 0, 1}} -> true
+      _ -> false
+    end
+  end
 
   defp nonempty(value, reason) when is_binary(value) do
     case String.trim(value) do
