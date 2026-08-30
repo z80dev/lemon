@@ -4,6 +4,7 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
   import ExUnit.CaptureLog
 
   alias CodingAgent.ExecutionNode.{TokenStore, Worker}
+  alias CodingAgent.Executor.RemoteRequestCodec
   alias LemonCore.ResumeToken
   alias LemonGateway.ExecutionRequest
 
@@ -167,6 +168,60 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
 
     assert_receive {:executor_cancelled, ^context}
     Process.exit(context.runner_pid, :kill)
+    GenServer.stop(worker)
+  end
+
+  @tag :tmp_dir
+  test "preserves auto and explicit resume sources across the remote codec boundary", %{
+    tmp_dir: tmp_dir
+  } do
+    {:ok, worker} = start_worker(tmp_dir, token: "node-token")
+    assert_receive {:socket_started, socket, _opts}
+
+    send(worker, {
+      :execution_node_socket,
+      socket,
+      {:connected, %{"auth" => %{"clientId" => "node-1"}}}
+    })
+
+    for resume_source <- [:auto, :explicit] do
+      request = %ExecutionRequest{
+        run_id: "run-#{resume_source}",
+        session_key: "session-#{resume_source}",
+        prompt: "resume #{resume_source}",
+        cwd: tmp_dir,
+        meta: %{resume_source: resume_source}
+      }
+
+      assert {:ok, args} = RemoteRequestCodec.encode(request)
+      assert args["meta"]["resume_source"] == Atom.to_string(resume_source)
+
+      invoke_id = "invoke-#{resume_source}"
+      invoke(worker, socket, invoke_id, "node-1", args)
+
+      assert_receive {:executor_started, remote_request, _opts, ^worker, run_ref, context}
+      assert remote_request.meta[:resume_source] == resume_source
+
+      send(worker, {
+        :engine_event,
+        run_ref,
+        %{
+          __event__: :completed,
+          ok: true,
+          answer: "done",
+          error: nil,
+          usage: nil,
+          meta: %{},
+          resume: nil
+        }
+      })
+
+      assert_receive {:socket_request, ^socket, "node.invoke.result", %{"invokeId" => ^invoke_id},
+                      {:invoke_result, ^invoke_id}, 30_000}
+
+      Process.exit(context.runner_pid, :kill)
+    end
+
     GenServer.stop(worker)
   end
 

@@ -677,6 +677,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
       :async_followups
     ])
     |> normalize_thinking_level()
+    |> normalize_resume_source()
   end
 
   defp normalize_meta(_), do: %{}
@@ -693,6 +694,14 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
     case meta[:thinking_level] do
       value when is_binary(value) -> Map.put(meta, :thinking_level, Map.get(allowed, value))
+      _ -> meta
+    end
+  end
+
+  defp normalize_resume_source(meta) do
+    case meta[:resume_source] do
+      "auto" -> Map.put(meta, :resume_source, :auto)
+      "explicit" -> Map.put(meta, :resume_source, :explicit)
       _ -> meta
     end
   end

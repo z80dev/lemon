@@ -3,7 +3,9 @@ defmodule LemonControlPlane.EventBridge do
   Bridges events from LemonCore.Bus to WebSocket clients.
 
   This GenServer subscribes to relevant bus topics and forwards events
-  to connected WebSocket clients as event frames.
+  to connected non-node WebSocket clients as event frames. Authenticated nodes
+  receive only traffic sent directly to their connection as targeted
+  `{:node_event, event_name, payload}` messages.
 
   ## Topics Subscribed
 
@@ -222,9 +224,12 @@ defmodule LemonControlPlane.EventBridge do
 
   defp filter_subscribed_clients(clients, event_name, payload) do
     Enum.filter(clients, fn {_conn_id, info} ->
-      subscribed_to_event?(info, event_name, payload)
+      general_event_client?(info) and subscribed_to_event?(info, event_name, payload)
     end)
   end
+
+  defp general_event_client?(%{role: role}) when role in [:node, "node"], do: false
+  defp general_event_client?(_info), do: true
 
   defp subscribed_to_event?(
          %{subscription_mode: :custom, subscriptions: subscriptions},

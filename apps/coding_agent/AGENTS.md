@@ -741,7 +741,9 @@ The cross-node payload includes only JSON-safe execution request data such as
 prompt, images, session/run identity, resume token, tool policy, metadata, and
 explicit cwd intent. Source-side executor options, provider credentials,
 callbacks, and BEAM process state are never serialized. The destination
-resolves its own provider credentials and uses its own default cwd. Explicit
+resolves its own provider credentials, restores `resume_source` to the
+`:auto`/`:explicit` semantics used by the native runner, and uses its own
+default cwd. Explicit
 cancellation sends `node.invoke.cancel`; a source timeout, caller death,
 explicit cancel, node replacement, or WebSocket disconnect also cancels the
 destination work. Relative explicit paths resolve from the worker's configured

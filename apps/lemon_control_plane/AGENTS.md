@@ -649,7 +649,7 @@ config :lemon_control_plane, capabilities: %{tts: true, wizard: false}
 
 ## EventBridge
 
-`LemonControlPlane.EventBridge` subscribes to `LemonCore.Bus` topics (`exec_approvals`, `channels`, `cron`, `goals`, `system`, `nodes`, `presence`) plus dynamic `run:*` and `session:*` topics. It maps bus event types to WS event names and fans out via a `Task.Supervisor`; each WebSocket connection then applies its own topic filter before pushing the event frame. New connections keep legacy all-event delivery until they set explicit subscriptions, while a clear-all unsubscribe suppresses later events for that connection. Subscribe to run events with `EventBridge.subscribe_run(run_id)` or generic dynamic topics with `EventBridge.subscribe_topics/1`.
+`LemonControlPlane.EventBridge` subscribes to `LemonCore.Bus` topics (`exec_approvals`, `channels`, `cron`, `goals`, `system`, `nodes`, `presence`) plus dynamic `run:*` and `session:*` topics. It maps bus event types to WS event names and fans out via a `Task.Supervisor`; each non-node WebSocket connection then applies its own topic filter before pushing the event frame. Authenticated node connections are excluded from this general fanout and receive only targeted `node_event` traffic. New non-node connections keep legacy all-event delivery until they set explicit subscriptions, while a clear-all unsubscribe suppresses later events for that connection. Subscribe to run events with `EventBridge.subscribe_run(run_id)` or generic dynamic topics with `EventBridge.subscribe_topics/1`.
 
 Key bus-event-to-WS-event mappings:
 
