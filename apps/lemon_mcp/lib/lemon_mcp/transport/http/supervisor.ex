@@ -5,9 +5,11 @@ defmodule LemonMCP.Transport.HTTP.Supervisor do
 
   alias LemonMCP.Server
   alias LemonMCP.Transport.HTTP
+  alias LemonMCP.Transport.HTTP.RegistryMember
 
   @server_child_id LemonMCP.Server
   @bandit_child_id {LemonMCP.Transport.HTTP, :bandit}
+  @registry_child_id {LemonMCP.Transport.HTTP, :registry_member}
 
   def start_link(opts) do
     Supervisor.start_link(__MODULE__, opts)
@@ -29,9 +31,18 @@ defmodule LemonMCP.Transport.HTTP.Supervisor do
 
   def bandit_pid(_supervisor), do: nil
 
+  @doc false
+  @spec registry_member_pid(Supervisor.supervisor()) :: pid() | nil
+  def registry_member_pid(supervisor) when is_pid(supervisor) do
+    child_pid(supervisor, @registry_child_id)
+  end
+
+  def registry_member_pid(_supervisor), do: nil
+
   @impl true
   def init(opts) do
     server_opts = build_server_opts(opts)
+    generation = System.unique_integer([:monotonic, :positive])
 
     bandit_opts = [
       plug: {HTTP, mcp_supervisor: self()},
@@ -41,6 +52,10 @@ defmodule LemonMCP.Transport.HTTP.Supervisor do
     ]
 
     children = [
+      Supervisor.child_spec(
+        {RegistryMember, supervisor: self(), generation: generation},
+        id: @registry_child_id
+      ),
       Supervisor.child_spec({Server, server_opts}, id: @server_child_id),
       Supervisor.child_spec({Bandit, bandit_opts}, id: @bandit_child_id)
     ]

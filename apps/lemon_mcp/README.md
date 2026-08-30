@@ -53,11 +53,14 @@ release tarball, including loaded-but-not-started application state and the
 absence of an application callback.
 
 Starting `LemonMCP.Transport.HTTP` returns its unnamed transport supervisor.
-That supervisor owns the protocol `LemonMCP.Server` and Bandit listener with a
-`:one_for_all` strategy, so either child is replaced as a pair and no stale or
-orphaned server survives a transport restart. `get_server_pid/0` resolves the
-current child instead of caching a child PID across restarts and falls back to
-an older live transport when the latest stops. Pass the supervisor returned by
+That supervisor owns a node-local registry member, the protocol
+`LemonMCP.Server`, and Bandit listener with a `:one_for_all` strategy, so all
+children are replaced as a group and no stale or orphaned server survives a
+transport restart. Serialized registry updates retain concurrent starts;
+normal shutdown unregisters immediately, while later reads and registrations
+prune members left by abnormal shutdown. `get_server_pid/0` resolves the current
+node's latest child instead of caching a child PID across restarts and falls
+back to an older live transport when the latest stops. Pass the supervisor returned by
 `start_link/1` to `get_server_pid/1` when multiple transports are running.
 
 ## Usage

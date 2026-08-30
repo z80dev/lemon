@@ -55,7 +55,8 @@ lib/
     transport/
       stdio.ex                     # GenServer wrapping an Erlang Port for subprocess I/O
       http.ex                      # Plug.Router + public HTTP transport facade
-      http/supervisor.ex           # Owns the MCP Server + Bandit as one lifecycle
+      http/supervisor.ex           # Owns the registry member, MCP Server, and Bandit as one lifecycle
+      http/registry_member.ex      # Supervised node-local membership and start ordering
 
 test/
   lemon_mcp/
@@ -206,10 +207,13 @@ Then start the server with `tool_provider: MyApp.MCPProvider`.
 ```
 
 The HTTP transport starts an unnamed internal `:one_for_all` supervisor that
-owns its `LemonMCP.Server` and Bandit listener. If either child fails, both are
-replaced together, so the listener never retains a dead server and a restarted
-listener never leaves the old server behind. `get_server_pid/0` follows the
-most recently started live transport supervisor to its current server child,
+owns a lightweight node-local registry member, its `LemonMCP.Server`, and
+Bandit listener. If any child fails, the whole group is replaced together, so
+the listener never retains a dead server and a restarted listener never leaves
+the old server behind. Registry updates use a node-local serialized critical
+section; reads and registrations prune dead membership as an additional guard
+for abnormal shutdown. `get_server_pid/0` follows the most recently started
+live transport supervisor on the current node to its current server child,
 falling back to older live instances rather than caching a child PID. Use
 `get_server_pid/1` with the supervisor returned by `start_link/1` when multiple
 transports are running.

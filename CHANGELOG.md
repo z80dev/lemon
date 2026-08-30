@@ -51,8 +51,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 ### Fixed
 
 - MCP HTTP transports now supervise the protocol server and Bandit listener as
-  one lifecycle, preventing stale or orphaned server processes across child
-  failures and transport restarts
+  one lifecycle and track live node-local instances through supervised members,
+  preventing stale or orphaned processes across child failures, concurrent
+  starts, and transport shutdowns
 - Lemon Web now builds its ignored shared/server entrypoints before clean-checkout
   `npm run dev` and `npm start`; the client quality lane exercises that
   clean-artifact startup contract

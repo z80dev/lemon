@@ -55,12 +55,11 @@ defmodule LemonMCP.Transport.HTTP do
   alias LemonMCP.Protocol
   alias LemonMCP.Server
   alias LemonMCP.Server.Handler
+  alias LemonMCP.Transport.HTTP.RegistryMember
   alias LemonMCP.Transport.HTTP.Supervisor, as: TransportSupervisor
 
   @default_port if(Code.ensure_loaded?(Mix) and Mix.env() == :test, do: 0, else: 4048)
   @default_ip {127, 0, 0, 1}
-  @supervisors_key {__MODULE__, :transport_supervisors}
-
   plug(Plug.Logger, log: :debug)
 
   plug(Plug.Parsers,
@@ -162,14 +161,7 @@ defmodule LemonMCP.Transport.HTTP do
 
       opts = opts |> Keyword.put(:port, port) |> Keyword.put(:ip, ip)
 
-      case TransportSupervisor.start_link(opts) do
-        {:ok, supervisor} = started ->
-          register_supervisor(supervisor)
-          started
-
-        other ->
-          other
-      end
+      TransportSupervisor.start_link(opts)
     else
       Logger.info("MCP HTTP transport disabled")
       :ignore
@@ -185,8 +177,7 @@ defmodule LemonMCP.Transport.HTTP do
   """
   @spec get_server_pid() :: pid() | nil
   def get_server_pid do
-    @supervisors_key
-    |> :persistent_term.get([])
+    RegistryMember.supervisors()
     |> Enum.find_value(&get_server_pid/1)
   end
 
@@ -247,11 +238,6 @@ defmodule LemonMCP.Transport.HTTP do
       {:ok, server} -> server
       :error -> opts |> Keyword.get(:mcp_supervisor) |> TransportSupervisor.server_pid()
     end
-  end
-
-  defp register_supervisor(supervisor) do
-    supervisors = :persistent_term.get(@supervisors_key, [])
-    :persistent_term.put(@supervisors_key, [supervisor | List.delete(supervisors, supervisor)])
   end
 
   defp get_request_body(conn) do
