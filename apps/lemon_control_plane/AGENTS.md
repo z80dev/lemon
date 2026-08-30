@@ -208,17 +208,27 @@ Supported types: `:string`, `:integer`, `:boolean`, `:map`, `:list`, `:any`.
 
 | Method | Scope | Description |
 |--------|-------|-------------|
-| `sessions.list` | read | List all sessions with pagination plus summary and cleanup flags |
+| `sessions.list` | read | List/search sessions with pagination, agent/title/content query, pin/archive filters, lifecycle metadata, and query-redaction summary |
 | `sessions.active` | read | Get currently active session plus active-run cleanup summary |
 | `sessions.active.list` | read | List all active sessions plus summary/cleanup flags; includes best-effort `harness` progress (todos/checkpoints/requirements) when coding-agent telemetry is available |
 | `sessions.preview` | read | Preview truncated session messages plus sensitive-preview redaction, truncation summary, and cleanup flags |
 | `sessions.patch` | admin | Modify session policy/model/thinking overrides plus patch summary and cleanup flags |
+| `sessions.metadata.patch` | admin | Set/clear a session title and update pin/archive state without echoing title text in the mutation response |
+| `sessions.export` | read | Return bounded JSON or Markdown with selected run/tool fields, mandatory sensitive-value redaction, SHA-256 digest, and explicit raw-internal omissions |
+| `sessions.prune` | admin | Dry-run-first stale-session prune; archived-only/unpinned by default and execution requires a token bound to the exact current candidate set |
 | `sessions.reset` | admin | Clear session history plus cleanup summary |
 | `sessions.heartbeat` | admin | Inspect or set/pause/resume/clear one live session's idle-only recurring prompt by logical session key; ambiguous ownership is a conflict |
-| `sessions.delete` | admin | Delete a session plus cleanup summary |
+| `sessions.delete` | admin | Delete canonical run history plus chat/policy/lifecycle metadata and verify the deletion before reporting success |
 | `sessions.compact` | admin | Compact session storage plus no-text cleanup summary |
 | `session.detail` | read | Deep session/run internals with summary, sensitive preview/run-internal redaction, and explicit opt-ins for full text, raw run events, and run records |
 | `session.btw` | write | Ask a bounded no-tools question against a frozen live session or durable session-key history without mutating the parent conversation |
+
+The session lifecycle methods share `LemonCore.SessionLifecycle`. Conversation
+content remains canonical in `RunStore`/`RunHistoryStore`; the only additional
+table stores title/pin/archive annotations. `sessions.export` never exposes the
+service's trusted internal unredacted-history option. Prune preview tokens bind
+the operation parameters and each candidate's stable key/index/metadata state,
+so any intervening lifecycle change forces a new preview.
 
 ### Monitoring / Introspection
 

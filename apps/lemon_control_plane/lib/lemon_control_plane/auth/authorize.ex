@@ -301,6 +301,8 @@ defmodule LemonControlPlane.Auth.Authorize do
         "cron.remove",
         "cron.run",
         "sessions.patch",
+        "sessions.metadata.patch",
+        "sessions.prune",
         "sessions.reset",
         "sessions.delete",
         "sessions.compact",
