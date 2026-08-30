@@ -13,6 +13,7 @@
 #   ./bin/lemon gateway setup telegram --non-interactive
 #   ./bin/lemon node join --name worker --controller wss://controller.example/ws
 #   ./bin/lemon config validate
+#   ./bin/lemon context preview '@file:README.md' --root "$PWD"
 #   ./bin/lemon doctor --json
 #   ./bin/lemon web
 #   ./bin/lemon send --to telegram:<chat_id> "deploy finished"
@@ -52,6 +53,7 @@ Usage: ./bin/lemon [options]
        ./bin/lemon node join --name NAME --controller wss://HOST/ws
        ./bin/lemon channels
        ./bin/lemon config validate
+       ./bin/lemon context preview '@file:README.md' --root "$PWD"
        ./bin/lemon doctor --json
        ./bin/lemon web [--no-open]
        ./bin/lemon send --to telegram:<chat_id> "message"
@@ -325,6 +327,12 @@ if [[ "${1:-}" == "config" ]]; then
   shift
   cd "$LEMON_ROOT"
   exec mix lemon.config "$@"
+fi
+
+if [[ "${1:-}" == "context" ]]; then
+  shift
+  cd "$LEMON_ROOT"
+  exec mix run --no-start -e 'System.halt(LemonCli.CLI.run(["context" | System.argv()]))' -- "$@"
 fi
 
 if [[ "${1:-}" == "doctor" ]]; then

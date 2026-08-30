@@ -13,7 +13,7 @@
 #   bin/lemon                 # interactive terminal: launches the TUI (daemon auto-start)
 #
 #   bin/lemon tui|web|start|daemon|stop|restart|status|remote|eval|rpc|version|update
-#   bin/lemon setup|model|gateway|config|secrets|channels|doctor
+#   bin/lemon setup|model|gateway|config|context|secrets|channels|doctor
 #   bin/lemon --help
 
 set -euo pipefail
@@ -51,6 +51,7 @@ Commands:
   model [args]          Configure a model provider
   gateway [args]        Configure a gateway adapter
   config [args]         Inspect or update configuration
+  context [args]        Preview or resolve bounded context references
   secrets [args]        Manage secrets
   channels [args]       Configure channel adapters
   doctor [args]         Run runtime diagnostics
@@ -517,7 +518,7 @@ EOF
     exec "$RELEASE_BIN" eval 'LemonCore.Update.CLI.main(System.argv())' "$@"
     ;;
 
-  setup|model|gateway|config|secrets|channels)
+  setup|model|gateway|config|context|secrets|channels)
     run_runtime_cli "$@"
     ;;
 
