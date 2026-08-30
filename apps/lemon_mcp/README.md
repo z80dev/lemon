@@ -38,7 +38,7 @@ end
 - `LemonMCP.Server.Handler` - Server request handler
 - `LemonMCP.ToolAdapter` - Adapter that exposes CodingAgent tools over MCP
 - `LemonMCP.Transport.Stdio` - Stdio transport for MCP servers
-- `LemonMCP.Transport.HTTP` - Streamable HTTP JSON-RPC transport for MCP servers
+- `LemonMCP.Transport.HTTP` - Streamable HTTP JSON-RPC transport whose internal one-for-all supervisor owns the MCP server and Bandit listener as one lifecycle
 - `LemonMCP.Client.HTTP` - Streamable HTTP client for external MCP servers, including JSON responses, per-request SSE responses, session/protocol headers, OAuth protected-resource / authorization-server metadata discovery, optional OAuth client-credentials token acquisition with form-post or HTTP Basic client authentication, refresh-token grant retry when a token response supplies a refresh token, authorization-code PKCE callback/token exchange for public clients, injectable token-cache load/save hooks, and one-shot bearer reacquisition after later 401 challenges
 - `LemonMCP.Client.SSE` - legacy HTTP+SSE client for external MCP servers
 
@@ -51,6 +51,12 @@ Release smoke builds both profiles and evaluates this contract inside each
 packaged release. The artifact boot verifier repeats it against each min/full
 release tarball, including loaded-but-not-started application state and the
 absence of an application callback.
+
+Starting `LemonMCP.Transport.HTTP` returns its unnamed transport supervisor.
+That supervisor owns the protocol `LemonMCP.Server` and Bandit listener with a
+`:one_for_all` strategy, so either child is replaced as a pair and no stale or
+orphaned server survives a transport restart. `get_server_pid/0` resolves the
+current child instead of caching a child PID across restarts.
 
 ## Usage
 

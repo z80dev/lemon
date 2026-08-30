@@ -16,26 +16,22 @@ Protocol version targeted: **"2024-11-05"**
 
 ```
                      CLIENT SIDE                           SERVER SIDE
-                 ___________________               ________________________
-                |                   |             |                        |
-                |  LemonMCP.Client  |             | LemonMCP.Transport.HTTP|
-                | LemonMCP.Client.HTTP            |                        |
-                |    (GenServer)    |             |  (Plug.Router / Bandit)|
-                |___________________|             |________________________|
-                         |                                    |
-                         v                                    v
-              LemonMCP.Transport.Stdio           LemonMCP.Server.Handler
-               (GenServer, Port-based)           (pure request dispatcher)
-                         |                                    |
-                         v                                    v
-               External MCP server              LemonMCP.Server (GenServer)
-               process via stdin/stdout          - holds tool registration
-                                                 - tracks init state
-                                                          |
-                                                          v
-                                               LemonMCP.ToolAdapter
-                                               - bridges to CodingAgent tools
-                                               - converts parameter schemas
+                 ___________________               __________________________
+                |                   |             | LemonMCP.Transport.HTTP  |
+                |  LemonMCP.Client  |             | unnamed :one_for_all sup |
+                | LemonMCP.Client.HTTP            |__________________________|
+                |    (GenServer)    |                    |             |
+                |___________________|                    v             v
+                         |                        Bandit / Plug   LemonMCP.Server
+                         v                              |          (GenServer)
+              LemonMCP.Transport.Stdio                 v             |
+               (GenServer, Port-based)       LemonMCP.Server.Handler <+
+                         |                    (pure request dispatcher)
+                         v                                    |
+               External MCP server                        v
+               process via stdin/stdout          LemonMCP.ToolAdapter
+                                                 - bridges to CodingAgent tools
+                                                 - converts parameter schemas
 ```
 
 Both sides share `LemonMCP.Protocol` for all struct definitions and encode/decode helpers.
@@ -58,7 +54,8 @@ lib/
       handler.ex                   # Pure request router: initialize/initialized/tools/list/tools/call
     transport/
       stdio.ex                     # GenServer wrapping an Erlang Port for subprocess I/O
-      http.ex                      # Plug.Router + Bandit HTTP transport for server side
+      http.ex                      # Plug.Router + public HTTP transport facade
+      http/supervisor.ex           # Owns the MCP Server + Bandit as one lifecycle
 
 test/
   lemon_mcp/
@@ -69,6 +66,7 @@ test/
     server/
       handler_test.exs
     transport/
+      http_test.exs
       stdio_test.exs
 ```
 
@@ -85,7 +83,7 @@ test/
 | `LemonMCP.Transport.Stdio` | GenServer backed by an Erlang `Port`; newline-delimited JSON framing; calls `message_handler` callback for each inbound line |
 | `LemonMCP.Server` | GenServer; holds tool list or `tool_provider` module reference; tracks `initialized` flag; also declares the `@behaviour` for tool provider modules |
 | `LemonMCP.Server.Handler` | Pure functions; routes `JSONRPCRequest` structs to handlers; validates params; calls into `Server` GenServer |
-| `LemonMCP.Transport.HTTP` | `Plug.Router` mounted via Bandit; injects `mcp_server` PID into `conn.assigns`; supports single and batch JSON-RPC; exposes `POST /mcp` and `GET /health` |
+| `LemonMCP.Transport.HTTP` | `Plug.Router` plus transport facade; an unnamed internal `:one_for_all` supervisor owns the MCP Server and Bandit listener, resolves the current server child for each request, supports single and batch JSON-RPC, and exposes `POST /mcp` plus `GET /health` |
 | `LemonMCP.ToolAdapter` | Struct + functions that bridge `CodingAgent.Tools.*` modules to MCP format; also a `__using__` macro that generates a `@behaviour LemonMCP.Server` implementation at compile time |
 
 ## Key Types
@@ -207,7 +205,12 @@ Then start the server with `tool_provider: MyApp.MCPProvider`.
 )
 ```
 
-The HTTP transport automatically starts a `LemonMCP.Server` internally and stores the server PID in `:persistent_term` under `{LemonMCP.Transport.HTTP, :mcp_server}`. Retrieve it via `LemonMCP.Transport.HTTP.get_server_pid/0`.
+The HTTP transport starts an unnamed internal `:one_for_all` supervisor that
+owns its `LemonMCP.Server` and Bandit listener. If either child fails, both are
+replaced together, so the listener never retains a dead server and a restarted
+listener never leaves the old server behind. `get_server_pid/0` follows the
+most recently started transport supervisor to its current server child rather
+than caching a child PID.
 
 **Configuration alternative** (app config):
 
@@ -478,7 +481,7 @@ end
 
 - **ToolAdapter `new/2` options use `include_tools`/`exclude_tools` but the `__using__` macro does not pass `include_tools`.** If you need to restrict tools via the macro, pass `:exclude_tools` explicitly.
 
-- **HTTP transport port defaults to `0` in test env.** `@default_port` is set at compile time via `Mix.env()`. In test, a random available port is assigned, which avoids conflicts. To find the actual port in tests, inspect the Bandit supervisor or use the server PID.
+- **HTTP transport port defaults to `0` in test env.** `@default_port` is set at compile time via `Mix.env()`. In test, a random available port is assigned, which avoids conflicts. The PID returned by `start_link/1` is the unnamed transport supervisor, not the Bandit listener. Use `get_server_pid/0` for the current protocol server child.
 
 - **There is no `LemonMCP.Application` callback.** All client, server, and
   transport processes must be started and supervised by the consuming app.
