@@ -135,6 +135,69 @@ defmodule LemonChannels.Adapters.Discord.SlashCommands do
     ]
   }
 
+  @status_command %{
+    name: "status",
+    description: "Show the current Lemon session and run status",
+    type: 1
+  }
+
+  @usage_command %{
+    name: "usage",
+    description: "Show Lemon token and cost usage",
+    type: 1
+  }
+
+  @agents_command %{
+    name: "agents",
+    description: "Show native Lemon agents and delegated tasks",
+    type: 1
+  }
+
+  @tasks_command %{
+    @agents_command
+    | name: "tasks",
+      description: "Alias for /agents"
+  }
+
+  @compress_command %{
+    name: "compress",
+    description: "Compact the current Lemon session context",
+    type: 1
+  }
+
+  @commands_command %{
+    name: "commands",
+    description: "Browse portable Lemon commands",
+    type: 1
+  }
+
+  @help_command %{
+    name: "help",
+    description: "Show grouped portable Lemon command help",
+    type: 1,
+    options: [
+      %{type: 3, name: "filter", description: "Optional command filter", required: false}
+    ]
+  }
+
+  @bg_command %{
+    name: "bg",
+    description: "Start an isolated background Lemon run",
+    type: 1,
+    options: [
+      %{type: 3, name: "prompt", description: "Background prompt", required: true}
+    ]
+  }
+
+  @btw_command %{
+    name: "btw",
+    description: "Ask a no-tools side question from a conversation snapshot",
+    type: 1,
+    options: [
+      %{type: 3, name: "question", description: "Side question", required: true}
+    ]
+  }
+
   @checkpoint_command %{
     name: "checkpoint",
     description: "Inspect or restore Lemon checkpoints",
@@ -547,6 +610,15 @@ defmodule LemonChannels.Adapters.Discord.SlashCommands do
       @cancel_command,
       @stop_command,
       @reset_command,
+      @status_command,
+      @usage_command,
+      @agents_command,
+      @tasks_command,
+      @compress_command,
+      @commands_command,
+      @help_command,
+      @bg_command,
+      @btw_command,
       @checkpoint_command,
       @rollback_command,
       @goal_command,

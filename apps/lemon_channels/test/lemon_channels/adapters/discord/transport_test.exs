@@ -299,6 +299,18 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
     assert commands["stop"].description == "Alias for /cancel"
   end
 
+  test "exports portable status, task, compaction, help, and side-run commands" do
+    commands = Map.new(Transport.slash_commands(), &{&1.name, &1})
+
+    for name <- ~w(status usage agents tasks compress commands help bg btw) do
+      assert Map.has_key?(commands, name)
+    end
+
+    assert hd(commands["bg"].options).required
+    assert hd(commands["btw"].options).required
+    refute hd(commands["help"].options).required
+  end
+
   test "exports media slash command schema" do
     command = Transport.media_command_schema()
     subcommands = Map.new(command.options, &{&1.name, &1})

@@ -2528,7 +2528,7 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsExtendedTest do
       assert discord["token_configured"] == true
       assert discord["binding_count"] == 1
       assert discord["free_response"]["message_content_intent_declared"] == true
-      assert discord["slash_commands"]["expected_command_count"] == 16
+      assert discord["slash_commands"]["expected_command_count"] == 32
       assert result["proofs"]["proof_count"] == 1
       assert result["proofs"]["check_count"] == 1
       assert result["proofs"]["cleanup"]["includes_raw_paths"] == false

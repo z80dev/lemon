@@ -18,6 +18,10 @@ keeping it small and honest.
   the Hermes-compatible queue/steer/session/reasoning/status/usage/task/help
   and background/side-question vocabulary while keeping execution in the
   existing router, session, task, and control-plane owners.
+- Telegram and Discord now execute the portable queue/steer aliases,
+  reset/reasoning/stop compatibility names, redacted status/usage/task/help
+  commands, session compaction, isolated `/bg`, and no-tools `/btw` through a
+  shared channel renderer while retaining their native transport UX.
 - `LemonChannels.Dispatcher` is now observable: after every dispatch it emits a
   `[:lemon, :channels, :dispatch]` telemetry event (measurements
   `%{count: 1, duration: native}`; metadata `channel_id`, `account_id`, `kind`,

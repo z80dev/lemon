@@ -678,6 +678,9 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       "reset" ->
         handle_new_session(interaction, state, option_value(interaction, "project"))
 
+      command when command in ~w(status usage agents tasks compress commands help bg btw) ->
+        handle_portable_interaction(interaction, state, command)
+
       "checkpoint" ->
         handle_checkpoint_interaction(interaction, state)
 
@@ -809,6 +812,46 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       respond_ephemeral(interaction, "Prompt cannot be empty.")
       state
     end
+  end
+
+  defp handle_portable_interaction(interaction, state, command) do
+    session_key = interaction_session_key(interaction, state)
+    channel_id = interaction |> map_get(:channel_id) |> parse_id()
+    thread_id = interaction_thread_id(interaction)
+    scope = %ChatScope{transport: :discord, chat_id: channel_id, topic_id: thread_id}
+
+    args =
+      case command do
+        "help" -> option_value(interaction, "filter")
+        "bg" -> option_value(interaction, "prompt")
+        "btw" -> option_value(interaction, "question")
+        _ -> ""
+      end
+
+    context = %{
+      session_key: session_key,
+      cwd: BindingResolver.resolve_cwd(scope)
+    }
+
+    run = fn ->
+      case LemonChannels.PortableCommand.handle(command, args, context) do
+        {:ok, result} -> result
+        {:error, message} -> message
+      end
+    end
+
+    if command == "btw" do
+      respond_ephemeral(interaction, "Answering side question…")
+      _ = Task.start(fn -> send_followup(interaction, run.()) end)
+    else
+      respond_ephemeral(interaction, run.())
+    end
+
+    state
+  rescue
+    _ ->
+      respond_ephemeral(interaction, "Command failed safely.")
+      state
   end
 
   # ============================================================================

@@ -58,11 +58,20 @@ the existing router, session, task, and control-plane owners. In particular,
 Lemon `/stop` means cancelling the active conversation run, not killing every
 runtime process.
 
+Telegram and Discord execute the portable information/session commands through
+`LemonChannels.PortableCommand`. Queue and steer remain router-owned submission
+modes; reset/reasoning/stop reuse the native new/thinking/cancel handlers;
+status and usage read redacted core diagnostics; agent/task inspection and
+compaction call the registered agent-runtime provider. `/bg` starts an isolated
+full-tool session, while `/btw` runs asynchronously from a no-tools transcript
+snapshot so neither blocks the channel transport nor mutates parent history.
+
 ```elixir
 LemonChannels.CommandCatalog.catalog()
 LemonChannels.CommandCatalog.find("/q")
 LemonChannels.CommandCatalog.categories()
 LemonChannels.CommandCatalog.summary()
+LemonChannels.PortableCommand.handle("status", "", %{session_key: session_key})
 ```
 
 ### Delivery Groups

@@ -30,6 +30,22 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Commands do
 
   def rollback_command?(text, bot_username), do: telegram_command?(text, "rollback", bot_username)
 
+  @portable_execution_commands ~w(status usage agents tasks compress compact commands help bg btw queue q steer)
+
+  def portable_command?(text, bot_username) do
+    Enum.any?(@portable_execution_commands, &telegram_command?(text, &1, bot_username))
+  end
+
+  def portable_command_parts(text) do
+    trimmed = String.trim_leading(text || "")
+
+    case Regex.run(~r/^\/([a-z][a-z0-9_]*)(?:@[\w_]+)?(?:\s+(.*))?$/is, trimmed) do
+      [_, command, args] -> {String.downcase(command), String.trim(args || "")}
+      [_, command] -> {String.downcase(command), ""}
+      _ -> {"", ""}
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # Message entry / joining helpers
   # ---------------------------------------------------------------------------

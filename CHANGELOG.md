@@ -14,6 +14,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   interactive clients, exposed through the read-only `commands.catalog`
   control-plane method while preserving Lemon's router/session ownership and
   active-run-only `/stop` semantics.
+- End-to-end Hermes-compatible `/queue`/`/q`, `/steer`, `/reset`, `/reasoning`,
+  `/stop`, `/status`, `/usage`, `/agents`/`/tasks`, `/compress`, `/commands`,
+  `/help`, `/bg`, and `/btw` support across Telegram, Discord, the TUI, and the
+  control plane. Background runs are isolated full-tool sessions; side
+  questions use bounded no-tools transcript snapshots without changing parent
+  history.
 - Extensible capability-aware web search/extraction providers with deterministic
   fallback, provider isolation, request-level selection, extension registration,
   keyless DuckDuckGo, configurable SearXNG, Exa search/highlights and batch
