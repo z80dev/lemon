@@ -80,6 +80,11 @@ mix lemon.sim.werewolf --player-count 5 --models anthropic:claude-sonnet-4-20250
 mix run apps/lemon_sim/priv/scripts/werewolf_5model.exs
 ```
 
+All live scenario facades resolve provider aliases, registered models, provider
+base URLs, and API-key/OAuth secrets through
+`LemonSim.LLM.GameHelpers.Config`. Unknown provider names fail without creating
+new BEAM atoms; accepted names are bounded by `LemonAi.Models.get_providers/0`.
+
 A single `mix lemon.sim.replay <scenario> <log>` task renders JSONL transcripts
 for every scenario. For example, a Werewolf transcript produced by
 `mix lemon.sim.werewolf --models ... --transcript-path path.jsonl`:

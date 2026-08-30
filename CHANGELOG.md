@@ -10,6 +10,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- LemonSim scenarios now share one bounded model/provider/credential resolver;
+  unknown provider input no longer creates BEAM atoms, while scenario-specific
+  setup errors and provider aliases remain intact
 - Product releases can now be cut and published from one manual Release
   workflow dispatch; the workflow derives CalVer, consumes the Unreleased
   notes, commits and tags the release, verifies every artifact, publishes the
