@@ -52,6 +52,13 @@ defmodule LemonGateway.CwdTest do
     assert Cwd.default_cwd() == expected_home_fallback()
   end
 
+  test "keyword application config without default_cwd falls back without crashing" do
+    :sys.replace_state(LemonGateway.Config, &Map.put(&1, :default_cwd, nil))
+    Application.put_env(:lemon_gateway, LemonGateway.Config, max_concurrent_runs: 1)
+
+    assert Cwd.default_cwd() == expected_home_fallback()
+  end
+
   defp set_default_cwd!(cwd) do
     if is_pid(Process.whereis(LemonGateway.Config)) do
       :sys.replace_state(LemonGateway.Config, fn state ->

@@ -57,6 +57,12 @@ Router -> LemonCore.ExecutionCommand -> Runtime -> ExecutionRequest
 Gateway owns slot allocation, worker/process lifecycle, and safety rails.
 `ThreadWorker` is a dumb per-conversation launcher; `EngineLock` is
 failure-isolation defense in depth, not product queue semantics.
+Scheduler slot requests from `ThreadWorker` carry a generation token, so timeout
+retries cancel the previous generation before requesting another slot. Run-start
+attempts remain bounded across slot grants; permanently unstartable requests emit
+one structured terminal completion and are removed before the worker advances.
+`EngineLock` may transfer ownership on explicit release or confirmed owner death,
+never merely because a live owner is older than the configured observation threshold.
 
 ### Execution flow
 
@@ -84,7 +90,7 @@ failure-isolation defense in depth, not product queue semantics.
 | `lib/lemon_gateway/scheduler.ex` | `Scheduler` | Slot allocator and thread routing |
 | `lib/lemon_gateway/thread_worker.ex` | `ThreadWorker` | Per-conversation slot waiter and launcher |
 | `lib/lemon_gateway/run.ex` | `Run` | Executor lifecycle, bus events, steering, cancellation, and locks |
-| `lib/lemon_gateway/engine_lock.ex` | `EngineLock` | Per-session mutex with FIFO wait queue and stale-lock reaping |
+| `lib/lemon_gateway/engine_lock.ex` | `EngineLock` | Per-session mutex with FIFO wait queue, owner-death release, and over-age live-owner telemetry |
 | `lib/lemon_gateway/event.ex` | `Event`, `Event.Delta` | Lifecycle-event constructors and streamed delta struct |
 
 ### Configuration and ingress

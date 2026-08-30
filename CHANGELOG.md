@@ -17,6 +17,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Router and gateway launch lifecycle now bounds pre-start runtime submission
+  and run-launch retries, emits one structured terminal failure before queue
+  cleanup, deduplicates tokenized scheduler requests, preserves engine-lock
+  exclusivity for live owners, and observes over-age live locks without stealing
+  them. Gateway cwd fallback also accepts mixed-key proplists without crashing.
 - Async task lifecycle, event retention, and join-followup suppression are now
   serialized and terminal state is first-writer-wins. Run-budget usage and
   child admission are atomic, repeated child completion aggregates once, and

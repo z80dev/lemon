@@ -66,8 +66,8 @@ Part of the `lemon` Elixir umbrella project.
 
 1. Router-owned `SessionCoordinator` decides queue semantics (`collect`, `followup`, `steer`, `interrupt`) and hands queue-semantic-free `%LemonCore.ExecutionCommand{}` values to `LemonGateway.Runtime`.
 2. Gateway-owned transports that still live in this app submit `%LemonCore.RunRequest{}` through `LemonCore.RouterBridge`, not directly into gateway internals.
-3. The **Scheduler** routes each execution request by the router-supplied `conversation_key` and allocates a concurrency slot.
-4. The **ThreadWorker** is only a per-conversation launcher/slot waiter. It does not own product queue semantics.
+3. The **Scheduler** routes each execution request by the router-supplied `conversation_key`, deduplicates tokenized worker generations, and allocates a concurrency slot.
+4. The **ThreadWorker** is only a per-conversation launcher/slot waiter. It does not own product queue semantics. Its run-start attempt budget persists across slot grants; exhausted requests receive one structured terminal completion before later FIFO work advances.
 5. On slot grant, the worker starts a **Run** via `RunSupervisor`. The Run acquires `EngineLock` and starts Lemon's native executor.
 6. The native executor executes the AI request and streams lifecycle events and deltas back to the Run process.
 7. The **Run** broadcasts all events to `LemonCore.Bus` on topic `"run:<run_id>"`. Router and channels consume those events and handle semantic output plus channel rendering.
@@ -146,13 +146,18 @@ Webhook, SMS, and voice are gateway-owned by design, not pending migration: `Lem
 
 | Module | File | Purpose |
 |--------|------|---------|
-| `LemonGateway.Scheduler` | `scheduler.ex` | Concurrency-limited slot allocator keyed by router-supplied conversation keys |
-| `LemonGateway.ThreadWorker` | `thread_worker.ex` | Per-conversation launcher / slot waiter with no queue-mode logic |
+| `LemonGateway.Scheduler` | `scheduler.ex` | Concurrency-limited slot allocator keyed by router-supplied conversation keys, with tokenized request deduplication |
+| `LemonGateway.ThreadWorker` | `thread_worker.ex` | Per-conversation launcher / slot waiter with no queue-mode logic and bounded total start attempts |
 | `LemonGateway.ThreadRegistry` | `thread_registry.ex` | Registry for thread workers (unique key by `thread_key`) |
 | `LemonGateway.ThreadWorkerSupervisor` | `thread_worker_supervisor.ex` | DynamicSupervisor for thread workers |
 | `LemonGateway.Run` | `run.ex` | Individual run GenServer: native execution lifecycle, bus events, steer/cancel |
 | `LemonGateway.RunSupervisor` | `run_supervisor.ex` | DynamicSupervisor for run processes (temporary restart) |
-| `LemonGateway.EngineLock` | `engine_lock.ex` | Per-session mutex with FIFO queueing, timeouts, and stale lock reaping |
+| `LemonGateway.EngineLock` | `engine_lock.ex` | Per-session mutex with FIFO queueing, waiter timeouts, owner-death release, and over-age live-owner observation |
+
+`EngineLock` never transfers an exclusive lock because of age alone. Explicit
+release and confirmed owner-process death are the ownership-transfer paths; a
+live owner beyond the configured age threshold remains exclusive and emits
+`[:lemon, :gateway, :engine_lock, :over_age_live_owner]` telemetry for operators.
 
 Gateway action events preserve nested `action.detail.result_meta` metadata,
 including safe failure fields such as `error_type`, `timeout_ms`, and
