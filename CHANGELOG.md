@@ -18,6 +18,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - LemonSim Mix tasks now share ordinary runtime, option, and bounded
   provider/model helpers instead of maintaining two dozen private copies;
   arbitrary provider CLI input no longer creates atoms
+- Fifteen LemonSim scenario logs now share one JSONL lifecycle and encoding
+  implementation while retaining their existing public APIs and domain fields
 - XMTP and WhatsApp now share one supervised Node bridge port lifecycle while
   retaining their adapter-specific `PortServer` callback/process identities,
   scripts, event tags, and module-scoped warning logs

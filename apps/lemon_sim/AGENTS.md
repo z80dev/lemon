@@ -165,6 +165,7 @@ Boundary namespaces:
 | `lib/lemon_sim/llm/game_helpers/config.ex` | `LemonSim.LLM.GameHelpers.Config` | Shared model and provider credential resolution for sim runners |
 | `lib/lemon_sim/llm/game_helpers/provider_throttle.ex` | `LemonSim.LLM.GameHelpers.ProviderThrottle` | Shared provider request throttling with explicit process stop |
 | `lib/mix/tasks/lemon.sim.common.ex` | `Mix.Tasks.Lemon.Sim.Common` | Ordinary shared functions for Mix-task startup, bounded provider/model lookup, and optional keyword construction |
+| `lib/lemon_sim/examples/game_log.ex` | `LemonSim.Examples.GameLog` | Shared JSONL lifecycle, entry envelopes, event normalization, and JSON-safe encoding for scenario logs |
 | `lib/lemon_sim/llm/deciders/tool_loop_decider.ex` | `LemonSim.LLM.Deciders.ToolLoopDecider` | Concrete LLM/tool loop decider |
 | `lib/lemon_sim/kernel/runner.ex` | `LemonSim.Kernel.Runner` | Ingest-until-decision, decide-once, composed `step/3`, and `run_until_terminal/3` orchestration |
 | `lib/lemon_sim/kernel/store.ex` | `LemonSim.Kernel.Store` | `LemonCore.Store` persistence wrapper |
@@ -190,6 +191,10 @@ Boundary namespaces:
 - Keep memory policy out of the kernel harness; pass memory tools in explicitly as an optional bundle (see `LemonSim.LLM.Memory.Tools`).
 - Put reusable benchmark artifact, manifest, scorecard, and replay-check mechanics under `LemonSim.Bench`.
 - Put reusable model/provider/tool-loop mechanics under `LemonSim.LLM`.
+- Keep scenario-specific game-log modules focused on domain metadata and their
+  existing public APIs. File lifecycle, JSONL reading/writing, timestamps,
+  event normalization, and JSON-safe encoding belong to
+  `LemonSim.Examples.GameLog`; do not copy that plumbing into new scenarios.
 - Keep CLI-wrapper-only mechanics in ordinary functions under
   `Mix.Tasks.Lemon.Sim.Common`; do not add a `use` macro or copy startup,
   model parsing, provider normalization, or `maybe_put/3` into individual tasks.
