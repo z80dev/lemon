@@ -357,6 +357,10 @@ full-tool session on the subagent lane; `:session_key` is retained only as
 lineage metadata, and neither the prompt nor result is appended to that parent.
 Queued/running background records recover as `:lost` after a VM restart rather
 than pretending an in-memory worker survived.
+Internal worker/provider failures remain in the task store for runtime
+diagnostics, while `status/1` and `result/1` expose only stable classifications
+such as `:failed`, `:lost`, and `:cancelled`. Background lifecycle events use
+the same content-free classifications and do not copy retained error terms.
 
 `CodingAgent.SideQuery.ask/3` implements `/btw` as a synchronous, bounded,
 no-tools session. Its source may be a live session pid/id, a durable channel
@@ -364,6 +368,8 @@ session key, or an explicit `%{messages: ..., system_prompt: ...}` snapshot.
 Live context is captured atomically and frozen for the child; durable keys use
 bounded `LemonCore.RunStore` history plus session policy. Side queries use a
 separate ephemeral session key and never mutate parent history.
+Runner failures are collapsed to bounded atoms (`:timeout`, `:cancelled`, or
+`:query_failed`) so adapters never receive provider details or local paths.
 
 `exec` and `process` now expose terminal backend metadata. Registered backends
 include `:local`, backed by the supervised `ProcessSession` Erlang Port runner,

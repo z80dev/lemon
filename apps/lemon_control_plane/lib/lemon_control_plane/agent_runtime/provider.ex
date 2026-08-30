@@ -13,6 +13,11 @@ defmodule LemonControlPlane.AgentRuntime.Provider do
 
   Return shapes mirror what the coding agent already returned, so the wire
   format of the methods is unchanged.
+
+  Implementations may retain detailed failures internally, but callbacks used
+  by background-command and side-query methods should prefer stable reason
+  atoms. The control plane still treats every callback value as untrusted and
+  never projects arbitrary reason terms or map fields onto the public wire.
   """
 
   @type task_id :: String.t()

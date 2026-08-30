@@ -11,7 +11,7 @@ defmodule LemonControlPlane.Methods.BackgroundCommandsTest do
     SessionBtw
   }
 
-  alias LemonControlPlane.Protocol.Schemas
+  alias LemonControlPlane.Protocol.{Errors, Schemas}
 
   defmodule BackgroundCommandsFakeRuntime do
     def background_start("run checks", opts) do
@@ -19,22 +19,63 @@ defmodule LemonControlPlane.Methods.BackgroundCommandsTest do
       {:ok, %{id: "bg_123", status: :queued}}
     end
 
+    def background_start("leak-start", _opts), do: private_failure()
+
     def background_list(status: "running") do
       [%{id: "bg_123", status: :running, result_available: false}]
+    end
+
+    def background_list(status: "leak-error"), do: private_failure()
+
+    def background_list(status: "persisted-error") do
+      [
+        %{
+          id: "bg_private",
+          status: :error,
+          result_available: false,
+          error: private_text(),
+          provider: %{api_key: "sk-private-provider"}
+        }
+      ]
     end
 
     def background_status("bg_123") do
       {:ok, %{id: "bg_123", status: :running, result_available: false}}
     end
 
+    def background_status("bg_private") do
+      {:ok,
+       %{
+         id: "bg_private",
+         status: :error,
+         result_available: false,
+         error: private_text(),
+         provider: %{api_key: "sk-private-provider"}
+       }}
+    end
+
+    def background_status("bg_leak"), do: private_failure()
+
     def background_result("bg_123"), do: {:error, :not_ready}
     def background_result("bg_done"), do: {:ok, "checks passed"}
+    def background_result("bg_leak"), do: private_failure()
     def background_cancel("bg_123"), do: :ok
+    def background_cancel("bg_leak"), do: private_failure()
 
     def side_query("telegram:42", "what is running?", opts) do
       send(self(), {:side_query, opts})
       {:ok, "One background check is running."}
     end
+
+    def side_query("telegram:42", "leak", _opts), do: private_failure()
+
+    defp private_failure do
+      {:error,
+       {:provider_failed, private_text(),
+        %{api_key: "sk-private-provider", provider: "private-provider"}}}
+    end
+
+    defp private_text, do: "/Users/alice/.secrets/private-provider.json"
   end
 
   setup do
@@ -136,5 +177,56 @@ defmodule LemonControlPlane.Methods.BackgroundCommandsTest do
     assert_received {:side_query, opts}
     assert opts[:session_key] == "telegram:42"
     assert opts[:timeout_ms] == 5_000
+  end
+
+  test "redacts internal provider failures for every background and side-query RPC" do
+    cases = [
+      {BackgroundStart, %{"prompt" => "leak-start"}, "BACKGROUND_START_FAILED"},
+      {BackgroundList, %{"status" => "leak-error"}, "BACKGROUND_LIST_FAILED"},
+      {BackgroundStatus, %{"id" => "bg_leak"}, "BACKGROUND_STATUS_FAILED"},
+      {BackgroundResult, %{"id" => "bg_leak"}, "BACKGROUND_RESULT_FAILED"},
+      {BackgroundCancel, %{"id" => "bg_leak"}, "BACKGROUND_CANCEL_FAILED"},
+      {SessionBtw, %{"sessionKey" => "telegram:42", "question" => "leak"}, "SIDE_QUERY_FAILED"}
+    ]
+
+    for {module, params, public_code} <- cases do
+      assert {:error, {rpc_code, message, %{"code" => ^public_code}} = error} =
+               module.handle(params, %{})
+
+      assert rpc_code == :internal_error
+      assert is_binary(message)
+      assert byte_size(message) <= 64
+
+      serialized = inspect(error)
+      refute serialized =~ "/Users/alice"
+      refute serialized =~ "sk-private-provider"
+      refute serialized =~ "private-provider"
+
+      json = error |> Errors.to_payload() |> Jason.encode!()
+      refute json =~ "/Users/alice"
+      refute json =~ "sk-private-provider"
+      refute json =~ "private-provider"
+    end
+  end
+
+  test "allowlists lifecycle summaries and replaces persisted errors with stable codes" do
+    assert {:ok, %{"runs" => [run], "total" => 1}} =
+             BackgroundList.handle(%{"status" => "persisted-error"}, %{})
+
+    assert run == %{
+             "id" => "bg_private",
+             "status" => "error",
+             "result_available" => false,
+             "errorCode" => "BACKGROUND_FAILED"
+           }
+
+    assert {:ok, status} = BackgroundStatus.handle(%{"id" => "bg_private"}, %{})
+    assert status == run
+
+    serialized = inspect([run, status])
+    refute serialized =~ "/Users/alice"
+    refute serialized =~ "sk-private-provider"
+    refute serialized =~ "private-provider"
+    refute serialized =~ "provider"
   end
 end

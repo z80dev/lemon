@@ -92,11 +92,16 @@ defmodule CodingAgent.BackgroundRunTest do
     assert_receive {:runner_started, session_opts}, 1_000
     refute Keyword.has_key?(session_opts, :tools)
 
-    assert :ok = BackgroundRun.cancel(id)
+    private_reason = {:user_cancelled, "/Users/alice/private-cancel-reason"}
+    assert :ok = BackgroundRun.cancel(id, private_reason)
     assert_receive :runner_aborted, 1_000
     assert {:error, :cancelled} = BackgroundRun.result(id)
     assert {:ok, %{status: :cancelled}} = BackgroundRun.status(id)
     assert {:error, :already_terminal} = BackgroundRun.cancel(id)
+
+    assert {:ok, record, events} = TaskStore.get(id)
+    assert record.error == private_reason
+    refute inspect(events) =~ "/Users/alice"
   end
 
   test "side query freezes a live parent snapshot, has no tools, and does not append", %{
@@ -203,6 +208,46 @@ defmodule CodingAgent.BackgroundRunTest do
              "active prompt",
              "active answer"
            ]
+  end
+
+  test "background public lifecycle redacts retained internal failure details" do
+    private_reason =
+      {:provider_failed, "/Users/alice/.secrets/private-provider.json",
+       %{api_key: "sk-private-provider"}}
+
+    runner = fn _session_opts, _prompt, _signal, _timeout_ms ->
+      {:error, private_reason}
+    end
+
+    assert {:ok, %{id: id}} = BackgroundRun.start("fail privately", runner: runner)
+    assert {:error, :failed} = await_result(id)
+    assert {:ok, %{status: :error, error: :failed} = status} = BackgroundRun.status(id)
+
+    public = inspect(status)
+    refute public =~ "/Users/alice"
+    refute public =~ "sk-private-provider"
+
+    assert {:ok, record, events} = TaskStore.get(id)
+    assert record.error == private_reason
+    refute inspect(events) =~ "/Users/alice"
+    refute inspect(events) =~ "sk-private-provider"
+  end
+
+  test "side-query public errors classify provider details without returning them" do
+    private_reason =
+      {:provider_failed, "/Users/alice/.secrets/private-provider.json",
+       %{api_key: "sk-private-provider"}}
+
+    runner = fn _session_opts, _question, _signal, _timeout_ms ->
+      {:error, private_reason}
+    end
+
+    source = %{
+      messages: transcript("remember alpha", "alpha acknowledged"),
+      system_prompt: "safe"
+    }
+
+    assert {:error, :query_failed} = SideQuery.ask(source, "what?", runner: runner)
   end
 
   defp transcript(user_text, assistant_text) do
