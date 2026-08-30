@@ -10,6 +10,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Source and packaged `lemon sessions` commands for bounded list/search/show
+  and redacted history, title/pin/archive lifecycle, always-redacted
+  JSON/Markdown export, exact-candidate preview-confirm prune, and verified
+  exact-key delete; plus registry-generated `lemon completion bash|zsh|fish`
+  scripts that preserve source and release launcher-specific commands.
+
 - A client-independent `LemonCore.Context` preview/resolve contract and
   packaged `lemon context` command for bounded `@file`, `@folder`, `@git-diff`,
   `@url`, and redacted `@session` references. PDF, DOCX, XLSX, PPTX, notebook,
