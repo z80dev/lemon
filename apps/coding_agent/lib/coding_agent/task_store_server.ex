@@ -3,7 +3,9 @@ defmodule CodingAgent.TaskStoreServer do
   GenServer that owns the TaskStore ETS table and manages DETS persistence.
 
   This ensures the ETS table survives process crashes and is properly reloaded
-  from DETS on restart.
+  from DETS on restart. All record, event, lifecycle, and followup-suppression
+  mutations pass through the server mailbox, so a mutation always reads the
+  latest tuple and writes one coherent ETS/DETS snapshot.
   """
 
   use GenServer
@@ -13,6 +15,8 @@ defmodule CodingAgent.TaskStoreServer do
   @dets_table :coding_agent_tasks_dets
   @default_ttl_seconds 86_400
   @cleanup_interval_seconds 300
+  @max_events 100
+  @terminal_statuses [:completed, :error, :lost, :killed, :cancelled]
 
   # Client API
 
@@ -37,6 +41,36 @@ defmodule CodingAgent.TaskStoreServer do
     GenServer.call(server, :ensure_table, 5_000)
   end
 
+  @doc "Insert or replace a complete task tuple through the serialized owner."
+  @spec insert_record(String.t(), map(), [term()], GenServer.server()) :: :ok
+  def insert_record(task_id, record, events, server \\ __MODULE__) do
+    GenServer.call(server, {:insert_record, task_id, record, events}, 10_000)
+  end
+
+  @doc "Atomically update a task record while preserving its current events."
+  @spec update_record(String.t(), (map() -> map()), GenServer.server()) :: :ok
+  def update_record(task_id, update_fn, server \\ __MODULE__) do
+    GenServer.call(server, {:update_record, task_id, update_fn}, 10_000)
+  end
+
+  @doc "Atomically append a bounded event while preserving the current record."
+  @spec append_event(String.t(), term(), GenServer.server()) :: :ok
+  def append_event(task_id, event, server \\ __MODULE__) do
+    GenServer.call(server, {:append_event, task_id, event}, 10_000)
+  end
+
+  @doc "Apply a monotonic, idempotent lifecycle transition."
+  @spec transition(String.t(), atom(), (map() -> map()), GenServer.server()) :: :ok
+  def transition(task_id, target_status, update_fn, server \\ __MODULE__) do
+    GenServer.call(server, {:transition, task_id, target_status, update_fn}, 10_000)
+  end
+
+  @doc "Delete a task from ETS and DETS through the serialized owner."
+  @spec delete_task(String.t(), GenServer.server()) :: :ok
+  def delete_task(task_id, server \\ __MODULE__) do
+    GenServer.call(server, {:delete_task, task_id}, 10_000)
+  end
+
   @doc """
   Trigger a cleanup of expired tasks.
   """
@@ -56,6 +90,12 @@ defmodule CodingAgent.TaskStoreServer do
   """
   def dets_status(server \\ __MODULE__) do
     GenServer.call(server, :dets_status, 5_000)
+  end
+
+  @doc "Return whether the owned DETS table is open."
+  @spec dets_open?(GenServer.server()) :: boolean()
+  def dets_open?(server \\ __MODULE__) do
+    GenServer.call(server, :dets_open?, 5_000)
   end
 
   # Server Callbacks
@@ -88,6 +128,77 @@ defmodule CodingAgent.TaskStoreServer do
   @impl true
   def handle_call(:ensure_table, _from, state) do
     state = ensure_tables(state)
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:insert_record, task_id, record, events}, _from, state) do
+    state = ensure_tables(state)
+    do_insert_record(task_id, record, events)
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:update_record, task_id, update_fn}, _from, state) do
+    state = ensure_tables(state)
+
+    case :ets.lookup(@table, task_id) do
+      [{^task_id, record, events}] ->
+        updated =
+          record
+          |> update_fn.()
+          |> Map.put(:updated_at, System.system_time(:second))
+
+        do_insert_record(task_id, updated, events)
+        {:reply, :ok, state}
+
+      _ ->
+        {:reply, :ok, state}
+    end
+  end
+
+  def handle_call({:append_event, task_id, event}, _from, state) do
+    state = ensure_tables(state)
+
+    case :ets.lookup(@table, task_id) do
+      [{^task_id, record, events}] ->
+        updated_events = [event | events] |> Enum.take(@max_events)
+        updated_record = Map.put(record, :updated_at, System.system_time(:second))
+        do_insert_record(task_id, updated_record, updated_events)
+        {:reply, :ok, state}
+
+      _ ->
+        {:reply, :ok, state}
+    end
+  end
+
+  def handle_call({:transition, task_id, target_status, update_fn}, _from, state) do
+    state = ensure_tables(state)
+
+    case :ets.lookup(@table, task_id) do
+      [{^task_id, record, events}] ->
+        if transition_allowed?(Map.get(record, :status, :queued), target_status) do
+          updated =
+            record
+            |> update_fn.()
+            |> Map.put(:updated_at, System.system_time(:second))
+
+          do_insert_record(task_id, updated, events)
+        end
+
+        {:reply, :ok, state}
+
+      _ ->
+        {:reply, :ok, state}
+    end
+  end
+
+  def handle_call({:delete_task, task_id}, _from, state) do
+    state = ensure_tables(state)
+    :ets.delete(@table, task_id)
+
+    if state.dets_initialized do
+      :dets.delete(@dets_table, task_id)
+    end
+
     {:reply, :ok, state}
   end
 
@@ -124,6 +235,10 @@ defmodule CodingAgent.TaskStoreServer do
       end
 
     {:reply, %{info: info, state: Map.drop(state, [:table, :dets_table])}, state}
+  end
+
+  def handle_call(:dets_open?, _from, state) do
+    {:reply, state.dets_initialized and dets_table_open?(), state}
   end
 
   @impl true
@@ -229,6 +344,27 @@ defmodule CodingAgent.TaskStoreServer do
     end
   end
 
+  defp do_insert_record(task_id, record, events) do
+    :ets.insert(@table, {task_id, record, events})
+
+    if dets_table_open?() do
+      :dets.insert(@dets_table, {task_id, record, events})
+    end
+
+    :ok
+  end
+
+  defp transition_allowed?(status, _target_status) when status in @terminal_statuses,
+    do: false
+
+  defp transition_allowed?(:running, :running), do: false
+  defp transition_allowed?(:queued, :running), do: true
+
+  defp transition_allowed?(status, target_status) when status in [:queued, :running],
+    do: target_status in @terminal_statuses
+
+  defp transition_allowed?(_status, _target_status), do: false
+
   defp do_cleanup(ttl_seconds) do
     now = System.system_time(:second)
 
@@ -248,12 +384,12 @@ defmodule CodingAgent.TaskStoreServer do
     Enum.each(expired_ids, fn task_id ->
       :ets.delete(@table, task_id)
 
-      if dets_open?() do
+      if dets_table_open?() do
         :dets.delete(@dets_table, task_id)
       end
     end)
 
-    if dets_open?() and expired_ids != [] do
+    if dets_table_open?() and expired_ids != [] do
       :dets.sync(@dets_table)
     end
 
@@ -274,7 +410,7 @@ defmodule CodingAgent.TaskStoreServer do
     end
   end
 
-  defp dets_open? do
+  defp dets_table_open? do
     :dets.info(@dets_table) != :undefined
   rescue
     _ -> false

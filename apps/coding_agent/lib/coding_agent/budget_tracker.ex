@@ -10,6 +10,7 @@ defmodule CodingAgent.BudgetTracker do
   - Token usage tracking (input, output, cache)
   - Cost tracking (estimated and actual)
   - Per-parent concurrency limits
+  - Atomic child reservations and idempotent completion aggregation
   - Budget exceeded handling
   - Durable tracking via RunGraph
 
@@ -25,7 +26,7 @@ defmodule CodingAgent.BudgetTracker do
       BudgetTracker.check_budget(run_id)
   """
 
-  alias CodingAgent.RunGraph
+  alias CodingAgent.{RunGraph, RunGraphServer}
 
   @type budget :: %{
           max_tokens: non_neg_integer() | nil,
@@ -34,6 +35,8 @@ defmodule CodingAgent.BudgetTracker do
           used_tokens: non_neg_integer(),
           used_cost: float(),
           active_children: non_neg_integer(),
+          active_child_ids: [String.t()],
+          completed_child_ids: [String.t()],
           created_at: integer()
         }
 
@@ -75,6 +78,8 @@ defmodule CodingAgent.BudgetTracker do
       used_tokens: 0,
       used_cost: 0.0,
       active_children: 0,
+      active_child_ids: [],
+      completed_child_ids: [],
       created_at: System.system_time(:second)
     }
   end
@@ -97,6 +102,8 @@ defmodule CodingAgent.BudgetTracker do
         used_tokens: 0,
         used_cost: 0.0,
         active_children: 0,
+        active_child_ids: [],
+        completed_child_ids: [],
         created_at: System.system_time(:second)
       }
     else
@@ -198,18 +205,48 @@ defmodule CodingAgent.BudgetTracker do
 
   Increments the active_children counter.
   """
-  @spec child_started(String.t(), String.t()) :: :ok | {:error, term()}
-  def child_started(parent_id, child_id) do
-    # Add child to parent's budget tracking
-    update_budget(parent_id, fn budget ->
-      %{budget | active_children: budget.active_children + 1}
-    end)
+  @spec child_started(String.t(), String.t(), keyword()) :: :ok | {:error, term()}
+  def child_started(parent_id, child_id, opts \\ []) do
+    result =
+      RunGraphServer.atomic_modify(parent_id, fn record ->
+        budget = record |> Map.get(:budget, create_budget()) |> normalize_child_tracking()
+        active_ids = budget.active_child_ids
+        completed_ids = budget.completed_child_ids
 
-    # Create budget for child with inherited limits
-    child_budget = create_subagent_budget(parent_id)
-    store_budget(child_id, child_budget)
+        cond do
+          child_id in active_ids or child_id in completed_ids ->
+            {:ok, record, :already_reserved}
 
-    :ok
+          budget.max_children && budget.active_children >= budget.max_children ->
+            {:error, :max_children_exceeded}
+
+          true ->
+            updated_budget = %{
+              budget
+              | active_children: budget.active_children + 1,
+                active_child_ids: [child_id | active_ids]
+            }
+
+            {:ok, Map.put(record, :budget, updated_budget), :reserved}
+        end
+      end)
+
+    case result do
+      :reserved ->
+        child_budget = create_subagent_budget(parent_id, opts)
+        store_budget(child_id, child_budget)
+
+      :already_reserved ->
+        :ok
+
+      {:error, :not_found} ->
+        # Compatibility for callers that use opaque parent ids without a
+        # RunGraph record: there is no persisted budget to reserve against.
+        :ok
+
+      {:error, _reason} = error ->
+        error
+    end
   end
 
   @doc """
@@ -221,23 +258,52 @@ defmodule CodingAgent.BudgetTracker do
   def child_completed(parent_id, child_id) do
     child_usage = get_usage(child_id)
 
-    update_budget(parent_id, fn budget ->
-      budget = %{budget | active_children: max(budget.active_children - 1, 0)}
+    case RunGraphServer.atomic_modify(parent_id, fn record ->
+           budget = record |> Map.get(:budget, create_budget()) |> normalize_child_tracking()
 
-      case child_usage do
-        %{tokens: child_tokens, cost: child_cost} ->
-          %{
-            budget
-            | used_tokens: budget.used_tokens + child_tokens,
-              used_cost: budget.used_cost + child_cost
-          }
+           if child_id in budget.completed_child_ids do
+             {:ok, record, :already_completed}
+           else
+             tracked_child? = child_id in budget.active_child_ids
 
-        _ ->
-          budget
-      end
-    end)
+             legacy_untracked_child? =
+               budget.active_child_ids == [] and budget.active_children > 0
 
-    :ok
+             active_ids = List.delete(budget.active_child_ids, child_id)
+
+             active_children =
+               if tracked_child? or legacy_untracked_child? do
+                 max(budget.active_children - 1, 0)
+               else
+                 budget.active_children
+               end
+
+             budget = %{
+               budget
+               | active_children: active_children,
+                 active_child_ids: active_ids,
+                 completed_child_ids: [child_id | budget.completed_child_ids]
+             }
+
+             updated_budget =
+               case child_usage do
+                 %{tokens: child_tokens, cost: child_cost} ->
+                   %{
+                     budget
+                     | used_tokens: budget.used_tokens + child_tokens,
+                       used_cost: budget.used_cost + child_cost
+                   }
+
+                 _ ->
+                   budget
+               end
+
+             {:ok, Map.put(record, :budget, updated_budget), :completed}
+           end
+         end) do
+      result when result in [:completed, :already_completed] -> :ok
+      {:error, _reason} = error -> error
+    end
   end
 
   # ============================================================================
@@ -251,12 +317,12 @@ defmodule CodingAgent.BudgetTracker do
   """
   @spec store_budget(String.t(), budget()) :: :ok
   def store_budget(run_id, budget) do
-    # Store as run metadata in RunGraph
-    RunGraph.update(run_id, fn record ->
-      Map.put(record, :budget, budget)
-    end)
-
-    :ok
+    case RunGraphServer.atomic_modify(run_id, fn record ->
+           {:ok, Map.put(record, :budget, normalize_child_tracking(budget)), :ok}
+         end) do
+      {:error, :not_found} -> :ok
+      result -> result
+    end
   rescue
     _ -> :ok
   end
@@ -279,14 +345,13 @@ defmodule CodingAgent.BudgetTracker do
   """
   @spec update_budget(String.t(), (budget() -> budget())) :: :ok | {:error, term()}
   def update_budget(run_id, update_fn) do
-    case get_budget(run_id) do
-      nil ->
-        # Create default budget if none exists
-        budget = create_budget()
-        store_budget(run_id, update_fn.(budget))
-
-      budget ->
-        store_budget(run_id, update_fn.(budget))
+    case RunGraphServer.atomic_modify(run_id, fn record ->
+           budget = record |> Map.get(:budget, create_budget()) |> normalize_child_tracking()
+           updated_budget = budget |> update_fn.() |> normalize_child_tracking()
+           {:ok, Map.put(record, :budget, updated_budget), :ok}
+         end) do
+      {:error, :not_found} -> :ok
+      result -> result
     end
   end
 
@@ -355,4 +420,17 @@ defmodule CodingAgent.BudgetTracker do
   defp min_opt(nil, b), do: b
   defp min_opt(a, b) when is_number(a) and is_number(b), do: min(a, b)
   defp min_opt(a, _), do: a
+
+  defp normalize_child_tracking(budget) do
+    active_child_ids = Map.get(budget, :active_child_ids, [])
+    completed_child_ids = Map.get(budget, :completed_child_ids, [])
+
+    budget
+    |> Map.put(:active_child_ids, active_child_ids)
+    |> Map.put(:completed_child_ids, completed_child_ids)
+    |> Map.put(
+      :active_children,
+      max(Map.get(budget, :active_children, 0), length(active_child_ids))
+    )
+  end
 end

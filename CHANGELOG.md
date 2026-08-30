@@ -17,6 +17,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Async task lifecycle, event retention, and join-followup suppression are now
+  serialized and terminal state is first-writer-wins. Run-budget usage and
+  child admission are atomic, repeated child completion aggregates once, and
+  RunGraph finishes DETS recovery before accepting live calls.
 - Async subagent launches now fail and terminalize their bookkeeping when the
   supervised worker cannot start, completed task/agent followup delivery
   contains router exits, and lane-scheduled jobs no longer process a duplicate

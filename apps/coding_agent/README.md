@@ -240,11 +240,11 @@ Internal task runs infer a restrictive `tool_policy` and verification guardrail 
 
 | Module | Description |
 |--------|-------------|
-| `CodingAgent.BudgetTracker` | Token/cost budget tracking per run with parent/child inheritance |
+| `CodingAgent.BudgetTracker` | Atomic token/cost accounting with parent/child inheritance, bounded child reservations, and idempotent completion aggregation |
 | `CodingAgent.BudgetEnforcer` | Raises on exceeded budgets during agent runs |
 | `CodingAgent.ParentQuestions` | ETS+DETS-backed child-to-parent clarification request store with lifecycle events |
 | `CodingAgent.RunGraph` | ETS-backed parent/child run graph with monotonic state machine (`queued -> running -> completed/error/killed/cancelled/lost`); await via PubSub |
-| `CodingAgent.RunGraphServer` | GenServer owning the RunGraph ETS table with DETS persistence, atomic transitions, and TTL-based cleanup |
+| `CodingAgent.RunGraphServer` | GenServer owning RunGraph ETS/DETS state, serialized lifecycle/budget writes, synchronous startup recovery, and TTL cleanup |
 
 ### Memory and Context
 
@@ -286,13 +286,15 @@ Internal task runs infer a restrictive `tool_policy` and verification guardrail 
 | `CodingAgent.ProcessSession` | GenServer for a single background process |
 | `CodingAgent.ProcessStore` / `ProcessStoreServer` | ETS store for background process state |
 | `LemonCore.TerminalBackend` / `TerminalBackends` | Shared backend contract and registry for supervised terminal/process execution |
-| `CodingAgent.TaskStore` / `TaskStoreServer` | ETS+DETS store for async task tool runs |
+| `CodingAgent.TaskStore` / `TaskStoreServer` | ETS+DETS async-task store with direct reads and serialized event, suppression, and monotonic lifecycle writes |
 | `CodingAgent.ParentQuestions` / `ParentQuestionStoreServer` | ETS+DETS store for child-to-parent clarification requests |
 
 The task tool runs all work in a native in-process `CodingAgent.Session`.
 When a provider omits the task `description` field but sends a valid `prompt`, Lemon derives a short description from that prompt instead of rejecting the task call outright.
 When a native task omits `model`, the child session inherits the live parent session model at execution time instead of relying only on the captured tool opts, so Telegram/session-scoped model overrides also apply to async subtasks.
 Native task child sessions also have a bounded wait for terminal session events. If a child provider stream wedges or the child session exits without emitting `agent_end` / `error`, the task returns a timeout or session-exit error instead of leaving `join` blocked forever.
+
+Task state uses a single-writer contract. `TaskStoreServer` serializes record changes, bounded event appends, explicit-join followup suppression, and terminalization. Competing completion/error callbacks are first-writer-wins, repeated terminal callbacks are idempotent, and late running/progress updates preserve the terminal state. `RunGraphServer` completes its DETS recovery before reporting startup readiness, then serializes live inserts, transitions, budget updates, and deletes so recovery cannot overwrite accepted live state.
 
 For coordination workflows that must produce one final same-turn answer, queued task results should be treated as launch receipts, not completion. Keep the returned `task_id`s and call `action=join` before responding; auto-followup is for later delivery, not guaranteed same-turn aggregation. `action=join` suppresses the later async auto-followup for those task ids so the parent session does not get a redundant completion prompt after it already waited. Task result surfaces (`poll`, `join`, `get`, and async auto-followup) expose only visible assistant output plus task metadata, not stored event streams, tool-call internals, or thinking deltas. For non-terminal tasks, `poll` and `get` behave as status queries: user-visible text shows task status, while the latest structured `current_action` stays in `details` instead of leaking raw command/tool event text into answer content. Async followup delivery also backfills terminal task/run state before posting the completion message, which prevents delivered completions from leaving task records stranded in `queued` or `running`. Auto-followup preserves the full visible task answer and submits router fallbacks as native followup runs; delivery failures are contained after task/run state is terminalized. Async launches fail immediately when their supervised worker cannot start, rather than returning a task id that remains queued forever. When `:coding_agent, :async_followups` is set to `:steer_backlog`, live streaming parent sessions attempt an in-session steer first before falling back to router backlog semantics.
 
@@ -430,7 +432,7 @@ Settings: `compaction_enabled` (default: true), `reserve_tokens` (default: 16,38
 
 ### Budget Tracking
 
-Budgets track token and cost usage per run. The `RunGraph` maintains parent/child relationships with DETS persistence. Budgets cascade: subagents inherit (and can further restrict) parent limits. The state machine enforces monotonic transitions (`queued -> running -> completed|error|killed|cancelled|lost`).
+Budgets track token and cost usage per run. The `RunGraph` maintains parent/child relationships with DETS persistence. Budgets cascade: subagents inherit (and can further restrict) parent limits. Token/cost increments are atomic, child ids reserve `max_children` capacity atomically, and repeated child completion notifications aggregate usage exactly once before releasing the slot. The state machine enforces monotonic transitions (`queued -> running -> completed|error|killed|cancelled|lost`).
 
 ### Extensions
 
