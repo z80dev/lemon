@@ -57,6 +57,25 @@ defmodule LemonCli.SessionsCommandTest do
     refute inspect(history) =~ secret
     assert inspect(history) =~ "[redacted]"
 
+    stats =
+      run_json([
+        "sessions",
+        "stats",
+        "lunar launch",
+        "--archived",
+        "--group-limit",
+        "5",
+        "--json"
+      ])
+
+    assert stats["stats"]["redacted"] == true
+    assert stats["stats"]["totals"]["matched_sessions"] == 1
+    assert stats["stats"]["totals"]["archived_sessions"] == 1
+    assert stats["stats"]["totals"]["runs"] >= 1
+    assert stats["stats"]["cleanup"]["includes_session_keys"] == false
+    refute inspect(stats) =~ secret
+    refute inspect(stats) =~ session_key
+
     assert_cli_ok(["sessions", "restore", session_key], "restored")
     assert_cli_ok(["sessions", "unpin", session_key], "unpinned")
     assert_cli_ok(["sessions", "title", session_key, "--clear"], "title updated")
@@ -185,6 +204,9 @@ defmodule LemonCli.SessionsCommandTest do
     for argv <- [
           ["sessions", "list", "--limit", "501"],
           ["sessions", "list", "--pinned", "--unpinned"],
+          ["sessions", "stats", "--group-limit", "51"],
+          ["sessions", "stats", "--active", "--archived"],
+          ["sessions", "stats", String.duplicate("x", 513)],
           ["sessions", "history", "only-a-key", "--limit", "0"],
           ["sessions", "prune", "--older-than", "2999-01-01"]
         ] do

@@ -59,7 +59,7 @@ Commands:
   blueprints [args]     Review or activate cataloged automation blueprints
   backup [args]         Create, verify, list, or restore user-state backups
   profile [args]        Manage profiles and submit canonical profile chats
-  sessions [args]       Inspect, export, or safely prune durable sessions
+  sessions [args]       Inspect statistics, export, or safely prune durable sessions
   completion <shell>    Generate Bash, Zsh, or Fish completion
   doctor [args]         Run runtime diagnostics
   doctor --bundle [path] Generate a support bundle (default: ~/.lemon/support-bundle-<ts>.zip)

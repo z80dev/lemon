@@ -157,6 +157,8 @@ exports are always redacted.
 lemon sessions list --limit 20
 lemon sessions list --archived --pinned --agent-id research --json
 lemon sessions search "deployment follow-up" --limit 10
+lemon sessions stats --active --group-limit 10
+lemon sessions stats "deployment follow-up" --agent-id research --json
 lemon sessions show agent:research:main
 lemon sessions history agent:research:main --limit 25 --json
 ```
@@ -169,6 +171,15 @@ Contradictory filters are usage errors rather than silently selecting one.
 Search checks session identifiers, agent identifiers, titles, and a bounded
 redacted history selection. Human output avoids store paths and secret values;
 JSON output contains normalized session and run fields only.
+
+`sessions stats` applies the same agent, pin, archive, and bounded redacted
+history-search filters. It reports exact valid-store and matched session counts,
+active/archived/pinned/titled counts, the canonical run-count sum, and oldest
+and newest update timestamps. Agent and origin dimensions are deterministically
+ordered and capped from 1 to 50 entries (`--group-limit`, default 10); omitted
+cardinality is reported. The report never contains session keys, titles,
+messages, prompts, answers, paths, URLs, or credentials. Message/turn counts are
+not inferred because no single canonical store exposes them reliably.
 
 ### Title, pin, and archive state
 

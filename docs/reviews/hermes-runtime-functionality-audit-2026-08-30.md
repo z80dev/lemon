@@ -203,8 +203,10 @@ prose, prompt/skill content, paths, and the operator token remain absent.
   keep suggestions advisory until a user confirms the schedule and destination.
 - Add named mixture-of-agents presets through Lemon's existing model-routing
   boundary rather than a parallel agent engine.
-- Add aggregate session statistics without expanding the redacted lifecycle
-  boundary.
+- Aggregate session statistics now ship through the shared lifecycle boundary,
+  source/package CLI, and read-scoped control plane with exact totals and
+  bounded redacted dimensions. Richer lineage/read-state/recovery workflows
+  remain the session-management gap.
 
 ### P2 — refinement
 

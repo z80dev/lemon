@@ -213,6 +213,7 @@ Supported types: `:string`, `:integer`, `:boolean`, `:map`, `:list`, `:any`.
 | `sessions.list` | read | List/search sessions with pagination, agent/title/content query, pin/archive filters, lifecycle metadata, and query-redaction summary |
 | `sessions.active` | read | Get currently active session plus active-run cleanup summary |
 | `sessions.active.list` | read | List all active sessions plus summary/cleanup flags; includes best-effort `harness` progress (todos/checkpoints/requirements) when coding-agent telemetry is available |
+| `sessions.stats` | read | Exact aggregate durable-session totals with list/search-compatible filters and bounded redacted agent/origin dimensions; never includes keys, titles, prompts, paths, URLs, or credentials |
 | `sessions.preview` | read | Preview truncated session messages plus sensitive-preview redaction, truncation summary, and cleanup flags |
 | `sessions.patch` | admin | Modify session policy/model/thinking overrides plus patch summary and cleanup flags |
 | `sessions.metadata.patch` | admin | Set/clear a session title and update pin/archive state without echoing title text in the mutation response |
@@ -225,7 +226,9 @@ Supported types: `:string`, `:integer`, `:boolean`, `:map`, `:list`, `:any`.
 | `session.detail` | read | Deep session/run internals with summary, sensitive preview/run-internal redaction, and explicit opt-ins for full text, raw run events, and run records |
 | `session.btw` | write | Ask a bounded no-tools question against a frozen live session or durable session-key history without mutating the parent conversation |
 
-The session lifecycle methods share `LemonCore.SessionLifecycle`. Conversation
+The session lifecycle methods share `LemonCore.SessionLifecycle`. Aggregate
+statistics use this service rather than paginated `sessions.list` summaries.
+Conversation
 content remains canonical in `RunStore`/`RunHistoryStore`; the only additional
 table stores title/pin/archive annotations. `sessions.export` never exposes the
 service's trusted internal unredacted-history option. Prune preview tokens bind

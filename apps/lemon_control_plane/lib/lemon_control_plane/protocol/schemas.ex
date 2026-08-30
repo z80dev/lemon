@@ -621,6 +621,15 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "archived" => :boolean
       }
     },
+    "sessions.stats" => %{
+      optional: %{
+        "agentId" => :string,
+        "query" => :string,
+        "pinned" => :boolean,
+        "archived" => :boolean,
+        "groupLimit" => :integer
+      }
+    },
     "sessions.preview" => %{
       required: %{
         "sessionKey" => :string

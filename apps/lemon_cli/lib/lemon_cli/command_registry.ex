@@ -246,12 +246,13 @@ defmodule LemonCli.CommandRegistry do
       usage: "lemon sessions <command> [options]",
       subcommands:
         subcommands(
-          ~w(list search show history title pin unpin archive restore export prune delete)
+          ~w(list search stats show history title pin unpin archive restore export prune delete)
         ),
       options: [
         option("--json", ["--json"], "Emit one redacted JSON document"),
         option("--limit N", ["--limit"], "Bound rows or history entries"),
         option("--offset N", ["--offset"], "Skip list/search rows"),
+        option("--group-limit N", ["--group-limit"], "Bound stats dimension entries"),
         option("--agent-id ID", ["--agent-id"], "Filter by agent id"),
         option("--pinned | --unpinned", ["--pinned", "--unpinned"], "Filter pin state"),
         option("--archived | --active", ["--archived", "--active"], "Filter archive state"),
@@ -265,7 +266,7 @@ defmodule LemonCli.CommandRegistry do
         option("--confirm TOKEN", ["--confirm"], "Exact preview or delete confirmation")
       ],
       details: [
-        "History and exports are always redacted. Prune previews by default and executes only with the exact token from an unchanged candidate set. Delete requires the exact session key."
+        "Stats returns exact aggregate counts with bounded, redacted agent and origin dimensions. History and exports are always redacted. Prune previews by default and executes only with the exact token from an unchanged candidate set. Delete requires the exact session key."
       ]
     },
     %{
