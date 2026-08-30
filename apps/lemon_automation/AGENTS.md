@@ -40,13 +40,13 @@ CronManager (GenServer, ticks every 60s)
            +- emits :cron_run_started on "cron" bus
            +- spawns Task via TaskSupervisor
                   |
-                  +- RunSubmitter.submit/2
+                  +- RunCompletionWaiter.submit_and_wait/2
                          |
                          +- reads CronMemory, injects into prompt
                          +- pre-subscribes to Bus.run_topic(run_id)
                          +- forks session_key into sub-session
                          +- calls LemonRouter.submit(params)
-                         +- RunCompletionWaiter.wait_already_subscribed/3
+                         +- calls RunCompletionWaiter.wait_already_subscribed/3
                                 |
                                 +- sends {:run_complete, run_id, result} to CronManager
                                            |
@@ -87,6 +87,14 @@ and `RunCompletionWaiter` using a deterministic runtime. Set
 failures pause goals by default;
 `judge_failure_policy: :continue_once` is the explicit fail-open path for one
 continuation.
+
+All automation paths that submit and then wait use
+`RunCompletionWaiter.submit_and_wait/2`. It assigns a fixed run id and owns the
+subscription from before router submission through terminal wait cleanup.
+Router run-id mismatches are explicit errors; callers never subscribe to a
+replacement id after submission because a synchronous completion could already
+have been lost. Cron, goal judge, autonomous goal continuation, timer heartbeat,
+and Kanban worker paths share this lifecycle.
 
 **KanbanDispatcher** is the first BEAM-native fleet-work supervisor. It scans
 durable `LemonAgent.Workspace.KanbanStore` boards, reclaims expired leases, leases
@@ -407,7 +415,14 @@ LemonAutomation.HeartbeatManager.update_config(agent_id, %{
 
 ### Sub-Minute Heartbeats (Timer-Based)
 
-For `interval_ms < 60_000`, `HeartbeatManager` uses Erlang timers instead of cron jobs. These create synthetic run IDs (`"timer-heartbeat-{agent_id}-{timestamp}"`), submit directly to `LemonRouter`, and broadcast events on the "cron" bus. They do NOT create `CronJob` records in `CronStore`.
+Intervals that cannot be represented exactly by a five-field cron expression
+use Erlang timers instead of cron jobs. This includes sub-minute values and
+longer values such as 90 minutes or 5 hours. Timer heartbeats create synthetic
+run IDs (`"timer-heartbeat-{agent_id}-{timestamp}"`), submit through the shared
+race-free submit-and-wait lifecycle, and broadcast events on the "cron" bus.
+They do NOT create `CronJob` or `CronRun` records in `CronStore`; terminal status,
+router run id, response, and suppression state are persisted in
+`HeartbeatStore`.
 
 ```elixir
 LemonAutomation.HeartbeatManager.update_config("agent_abc", %{
@@ -417,11 +432,19 @@ LemonAutomation.HeartbeatManager.update_config("agent_abc", %{
 })
 ```
 
-### Heartbeat Cron Schedule Conversion
+### Heartbeat Schedule Selection
 
-For `interval_ms >= 60_000`, `HeartbeatManager` auto-generates a cron schedule:
-- `>= 3_600_000` (1 hour): `"0 */N * * *"` (every N hours)
-- `>= 60_000` (1 minute): `"*/N * * * *"` (every N minutes, rounded to nearest minute)
+`HeartbeatManager` chooses cron only when the interval stays exact at UTC day
+boundaries: minute intervals must divide 60, hour intervals must divide 24, and
+24 hours maps to daily midnight UTC. Every other positive interval falls back
+to an exact Erlang timer. Invalid non-positive intervals return
+`{:error, :invalid_interval}`. Cron-to-timer transitions disable the cron job;
+timer-to-cron transitions cancel the timer before enabling or updating the cron
+job with mutable fields only.
+
+Only one timer run may be in flight per agent. A tick that overlaps an active
+run is skipped, increments `stats().skipped_overlap`, logs the skip, and records
+`[:lemon, :heartbeat, :skipped]` telemetry with `reason: :overlap`.
 
 ### Heartbeat Suppression Behavior
 
@@ -730,6 +753,6 @@ LemonAutomation.CronManager.tick()
 | `LemonAutomation.SkillCurator` | Idle/config gates plus background submission for learned-skill curator prompts with a learning-only default tool policy |
 | `LemonAutomation.SkillCuratorManager` | Periodic idle scheduler for `SkillCurator.run_once/1` |
 | `LemonAutomation.Wake` | Manual immediate triggering (fire-and-forget, enabled jobs only) |
-| `LemonAutomation.RunCompletionWaiter` | Waits on Bus for `:run_completed` event; handles multiple payload formats |
+| `LemonAutomation.RunCompletionWaiter` | Owns race-free fixed-id submit/wait subscriptions and parses terminal events |
 | `LemonAutomation.RunSubmitter` | Builds params, pre-subscribes to bus, submits to LemonRouter, manages CronMemory |
 | `LemonAutomation.Events` | Event emission helpers for all automation events |

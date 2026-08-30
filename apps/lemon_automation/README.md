@@ -32,11 +32,13 @@ CronManager (tick every 60s)
             |
             +-- RunSubmitter.submit/2
                     |
-                    +-- pre-subscribes to Bus.run_topic(run_id)
                     +-- forks session key into sub-session for isolation
                     +-- reads/injects CronMemory context into prompt
-                    +-- calls LemonRouter.submit(params)
-                    +-- RunCompletionWaiter.wait_already_subscribed/3
+                    +-- RunCompletionWaiter.submit_and_wait/2
+                            |
+                            +-- assigns fixed run id and pre-subscribes
+                            +-- calls LemonRouter.submit(params)
+                            +-- waits for terminal event and unsubscribes
                             |
                             +-- sends {:run_complete, run_id, result} to CronManager
                                     |
@@ -105,6 +107,13 @@ deterministic runtime. Set `LEMON_GOAL_JUDGE_MODEL` to pin the judge run model.
 Judge failures pause the goal by default, with an explicit `:continue_once`
 policy for fail-open one-shot continuation.
 
+Every automation path that both submits and waits uses
+`RunCompletionWaiter.submit_and_wait/2`. Cron, goal judge, autonomous goal
+continuation, timer heartbeat, and Kanban worker runs subscribe to their fixed
+run id before router submission and always unsubscribe after a terminal result.
+A router run-id mismatch is an explicit error rather than a late subscription
+to a replacement id, because a synchronous completion may already have fired.
+
 **KanbanDispatcher** is the first supervised fleet-work layer for durable boards.
 It scans `LemonAgent.Workspace.KanbanStore` boards, reclaims expired leases, leases
 dependency-unblocked tasks, runs a worker module under `TaskSupervisor`, and
@@ -120,7 +129,16 @@ is a git repository. The worktree layer creates
 `lemon-kanban/<task_id>` branch before submitting the router run, so broad
 multi-agent execution does not share one mutable checkout.
 
-**HeartbeatManager** subscribes to the `"cron"` bus and auto-processes every `:cron_run_completed` event, checking for the exact `"HEARTBEAT_OK"` response to decide suppression.
+**HeartbeatManager** subscribes to the `"cron"` bus and auto-processes every
+`:cron_run_completed` event, checking for the exact `"HEARTBEAT_OK"` response to
+decide suppression. Cron is selected only for intervals that stay exact at UTC
+day boundaries (minute divisors of 60, hour divisors of 24, and daily); every
+other positive interval, including 90 minutes and 5 hours, uses an exact Erlang
+timer. Reconfiguration disables the previous mechanism before enabling the new
+one. Timer runs persist terminal status, router run id, response, and suppression
+state in `HeartbeatStore` and allow only one in-flight run per agent; overlapping
+ticks increment skip stats, log the decision, and emit
+`[:lemon, :heartbeat, :skipped]` telemetry.
 
 **SkillCuratorManager** runs Lemon's learned-skill curator after the runtime has
 been idle long enough and the persisted curator interval gate is due. It asks
@@ -168,7 +186,7 @@ The `CronMemory` module gives each cron job a markdown file that accumulates run
 | `LemonAutomation.KanbanWorktree` | `lib/lemon_automation/kanban_worktree.ex` | Creates per-task git worktrees under `.worktrees/` for isolated kanban worker execution |
 | `LemonAutomation.Wake` | `lib/lemon_automation/wake.ex` | Manual immediate job triggering with batch and pattern-matching support |
 | `LemonAutomation.RunSubmitter` | `lib/lemon_automation/run_submitter.ex` | Builds run params, pre-subscribes to bus, submits to LemonRouter, appends to CronMemory |
-| `LemonAutomation.RunCompletionWaiter` | `lib/lemon_automation/run_completion_waiter.ex` | Waits on Bus for `:run_completed` events; handles multiple payload formats |
+| `LemonAutomation.RunCompletionWaiter` | `lib/lemon_automation/run_completion_waiter.ex` | Owns fixed-id pre-subscribe/submit/wait cleanup and parses terminal events |
 | `LemonAutomation.Events` | `lib/lemon_automation/events.ex` | Event emission helpers for all automation events |
 
 ## Configuration
@@ -349,10 +367,10 @@ LemonAutomation.HeartbeatManager.update_config("agent_abc", %{
   prompt: "HEARTBEAT"
 })
 
-# Sub-minute heartbeats use Erlang timers instead of cron
+# Intervals cron cannot represent exactly use Erlang timers
 LemonAutomation.HeartbeatManager.update_config("agent_abc", %{
   enabled: true,
-  interval_ms: 30_000,
+  interval_ms: 90 * 60_000,
   prompt: "HEARTBEAT"
 })
 
@@ -362,7 +380,12 @@ LemonAutomation.HeartbeatManager.get_last("agent_abc")
 LemonAutomation.HeartbeatManager.stats()
 ```
 
-**Suppression rules**: Only responses that trim to exactly `"HEARTBEAT_OK"` are suppressed. Suppressed responses are not broadcast to channels but are logged in run history and emit `:heartbeat_suppressed` events. Any other response emits `:heartbeat_alert` with `severity: :warning`.
+**Suppression rules**: Only responses that trim to exactly `"HEARTBEAT_OK"` are
+suppressed. Cron heartbeat runs retain suppression in cron history; timer runs
+retain terminal and suppression state in `HeartbeatStore`. Any other response
+emits `:heartbeat_alert` with `severity: :warning`. Overlapping timer ticks are
+skipped rather than submitted concurrently and increment
+`HeartbeatManager.stats().skipped_overlap`.
 
 ### Events
 

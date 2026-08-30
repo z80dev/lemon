@@ -130,6 +130,12 @@ remain available as a persisted, queryable alternative.
 |---|---|---|---|
 | `[:lemon, :cron, :tick]` | `job_count` | `%{}` (empty) | `LemonCore.Telemetry.cron_tick/1`, called from [`cron_manager.ex:502`](../apps/lemon_automation/lib/lemon_automation/cron_manager.ex) once per scheduler tick as a liveness heartbeat with the count of registered jobs |
 
+### Heartbeats — `[:lemon, :heartbeat, ...]`
+
+| Event | Measurements | Metadata | Emitter |
+|---|---|---|---|
+| `[:lemon, :heartbeat, :skipped]` | `count: 1` | `agent_id`, `reason: :overlap` | `LemonAutomation.HeartbeatManager`, when a timer tick arrives while the prior timer heartbeat for that agent is still in flight |
+
 ### Channels — `[:lemon, :channels, ...]`
 
 | Event | Measurements | Metadata | Emitter |
