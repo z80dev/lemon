@@ -41,6 +41,14 @@ root/symlink, URL SSRF/redirect, sensitive-output, and operation-budget cases
 are covered by focused adversarial tests. Learn-from-source review remains a
 separate follow-on over the existing memory/skill stores.
 
+The second initiative now has source/package CLI and authenticated Web
+verticals over one `LemonAutomation.Blueprint.Catalog` boundary. The Web path
+is `/manage/blueprints`: it keeps manifest prose and executable/source content
+out of LiveView state, previews without mutation, requires the exact fresh
+digest, fails closed on drift, and reports duplicate-safe replay through the
+existing profile and cron services. Suggestions, richer blueprint shapes, and
+a TUI catalog remain follow-ons.
+
 ## Integration gates
 
 - Every contributor works in an isolated worktree and commits a self-contained

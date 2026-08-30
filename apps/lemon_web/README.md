@@ -67,6 +67,7 @@ authentication establishes the same marker without redirecting.
 | Path | Handler | Description |
 |------|---------|-------------|
 | `/manage` | `ManagementLive` | Runtime/node status and searchable active/archived sessions |
+| `/manage/blueprints` | `BlueprintManagementLive` | Content-free catalog inspection, validation, exact preview, and digest-confirmed activation |
 | `/manage/providers` | `ProviderManagementLive` | Redacted provider fallback/pool/reference preview and apply |
 | `/manage/sessions/:session_key` | `ManagementLive` | Redacted run/tool inspection and lifecycle controls |
 | `/manage/sessions/:session_key/export/:format` | `SessionExportController` | Always-redacted `json` or `markdown` download |
@@ -147,6 +148,22 @@ shown in the preview. Credential-reference values are password-masked, filtered
 from LiveView logs, omitted from socket drafts, and re-entered on apply; the UI
 keeps only a digest long enough to match the exact preview. Service errors are
 mapped to bounded fixed text and never rendered verbatim.
+
+### BlueprintManagementLive (`/manage/blueprints`)
+
+The blueprint page delegates every operation to
+`LemonAutomation.Blueprint.Catalog`, the same bounded-ID service used by the
+control-plane RPC methods. It lists safe bundle IDs/counts, re-runs validation,
+and previews exact profile skill plus cron actions without mutation. Apply
+requires the displayed fresh 64-character digest; the service re-plans under
+its lock, so catalog, profile, schedule, or destination drift rejects the
+request and forces a new preview. Identical replay reports `unchanged` and
+does not create a duplicate job.
+
+The LiveView allowlists its own state projection. It does not retain or render
+free-form manifest names/descriptions, prompts, skill bodies, commands,
+environment values, tokens, paths, or service error terms. The profile draft
+survives stale/refused operations, while the stale plan digest is cleared.
 
 ## Components
 
@@ -264,6 +281,7 @@ config :lemon_web, :uploads_dir, Path.join(System.tmp_dir!(), "lemon_web_uploads
 | App | Purpose |
 |-----|---------|
 | `lemon_agent` | Shared provider configuration validation, atomic mutation, revision, confirmation, and redaction boundary |
+| `lemon_automation` | Shared bounded blueprint catalog, validation, exact preview, profile activation, and create-once scheduler boundary |
 | `lemon_core` | PubSub, session keys/events, shared session lifecycle, runtime health, and live node presence |
 | `lemon_router` | Request routing (`LemonRouter.submit/1`) for submitting prompts to agents |
 
