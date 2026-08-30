@@ -5,6 +5,7 @@ defmodule LemonCli.CLITest do
 
   alias LemonCli.CLI
   alias LemonCore.Secrets
+  alias LemonCore.Secrets.EnvCatalog
 
   setup do
     tmp_dir =
@@ -154,6 +155,37 @@ defmodule LemonCli.CLITest do
     assert error =~ "Usage: lemon config [validate|show] [options]"
   end
 
+  test "packaged secrets check uses the shared ordered catalog" do
+    with_clean_catalog_env(fn ->
+      output =
+        capture_io(fn ->
+          assert CLI.run(["secrets", "check"]) == 0
+        end)
+
+      assert output =~ "0 from store, 0 from env, #{length(EnvCatalog.names())} missing"
+      assert output =~ "ANTHROPIC_API_KEY"
+      assert output =~ "MARKET_INTEL_ANTHROPIC_KEY"
+    end)
+  end
+
+  test "packaged secrets import-env uses the shared catalog" do
+    with_clean_catalog_env(fn ->
+      System.put_env("GITHUB_TOKEN", "ghp_catalog_test")
+
+      output =
+        capture_io(fn ->
+          assert CLI.run(["secrets", "import-env", "--dry-run"]) == 0
+        end)
+
+      assert output =~ "GITHUB_TOKEN: would import"
+
+      assert output =~
+               "1 imported, 0 already in store, #{length(EnvCatalog.names()) - 1} not in env"
+
+      assert {:error, :not_found} = Secrets.get("GITHUB_TOKEN")
+    end)
+  end
+
   describe "setup_required?/0" do
     test "requires setup when no configuration exists" do
       assert CLI.setup_required?()
@@ -204,6 +236,17 @@ defmodule LemonCli.CLITest do
 
   defp restore_env(name, nil), do: System.delete_env(name)
   defp restore_env(name, value), do: System.put_env(name, value)
+
+  defp with_clean_catalog_env(fun) do
+    snapshot = Map.new(EnvCatalog.names(), &{&1, System.get_env(&1)})
+    Enum.each(EnvCatalog.names(), &System.delete_env/1)
+
+    try do
+      fun.()
+    after
+      Enum.each(snapshot, fn {name, value} -> restore_env(name, value) end)
+    end
+  end
 
   defp clear_secrets_table do
     Secrets.table()

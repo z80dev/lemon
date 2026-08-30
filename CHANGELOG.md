@@ -10,6 +10,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Packaged and Mix secrets check/import commands now share one ordered
+  environment-credential catalog instead of maintaining three copies
 - LemonSim scenarios now share one bounded model/provider/credential resolver;
   unknown provider input no longer creates BEAM atoms, while scenario-specific
   setup errors and provider aliases remain intact
