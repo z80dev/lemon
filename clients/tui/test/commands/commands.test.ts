@@ -69,6 +69,14 @@ describe("routing commands", () => {
 		expect(harness.host.last?.text).toContain("unknown level");
 	});
 
+	test("/reasoning is the Hermes alias for /think", async () => {
+		await harness.run("/reasoning high");
+		expect(harness.server.requestsFor("sessions.patch")[0].params).toEqual({
+			sessionKey: "tui-session",
+			thinkingLevel: "high",
+		});
+	});
+
 	test("does not register /engine while retaining native model controls", async () => {
 		expect(harness.registry.has("engine")).toBe(false);
 		expect(harness.registry.has("model")).toBe(true);
@@ -187,6 +195,16 @@ describe("runs and goals", () => {
 		});
 	});
 
+	test("/stop is the Hermes alias for /abort", async () => {
+		harness.server.respondWith("chat.abort", { aborted: true, runId: "run-stop" });
+		harness.store.focused.activeRunId = "run-stop";
+		await harness.run("/stop");
+		expect(harness.server.requestsFor("chat.abort")[0].params).toEqual({
+			runId: "run-stop",
+			sessionKey: "tui-session",
+		});
+	});
+
 	test("/runs merges the active and recent lists", async () => {
 		harness.server.respondWith("runs.active.list", {
 			runs: [{ runId: "run-1", status: "running", engine: "codex" }],
@@ -221,6 +239,72 @@ describe("runs and goals", () => {
 		await harness.run("/queue");
 		expect(harness.host.text).toContain("queue is empty");
 		expect(harness.host.text).toContain("queue");
+	});
+
+	test("/queue and /q submit prompt text through forced queue mode", async () => {
+		await harness.run("/queue follow this up");
+		await harness.run("/q another thought");
+		expect(harness.host.deliveries).toEqual([
+			{ text: "follow this up", mode: "queue" },
+			{ text: "another thought", mode: "queue" },
+		]);
+	});
+
+	test("/steer submits guidance through forced steer mode", async () => {
+		await harness.run("/steer focus on the failing test");
+		expect(harness.host.deliveries).toEqual([{ text: "focus on the failing test", mode: "steer" }]);
+	});
+
+	test("/agents renders the Lemon agent directory", async () => {
+		harness.server.respondWith("agents.list", {
+			agents: [
+				{
+					agentId: "researcher",
+					name: "Researcher",
+					description: "Finds primary sources",
+					sessionCount: 3,
+					activeSessionCount: 1,
+				},
+			],
+		});
+		await harness.run("/agents");
+		expect(harness.host.text).toContain("Researcher (researcher)");
+		expect(harness.host.text).toContain("1 active");
+	});
+
+	test("/tasks combines active and recent task views", async () => {
+		harness.server.respondWith("tasks.active.list", {
+			tasks: [{ taskId: "task-live", status: "active", agentId: "builder" }],
+		});
+		harness.server.respondWith("tasks.recent.list", {
+			tasks: [{ taskId: "task-done", status: "completed", durationMs: 1200 }],
+		});
+		await harness.run("/tasks 5");
+		expect(harness.server.requestsFor("tasks.active.list")[0].params).toEqual({ limit: 5 });
+		expect(harness.host.text).toContain("task-live");
+		expect(harness.host.text).toContain("task-done");
+	});
+
+	test("/bg and /btw use their capability-advertised backend contracts", async () => {
+		harness.store.focused.model = "gpt-5";
+		harness.store.focused.thinkingLevel = "high";
+		harness.server.respondWith("background.start", { id: "bg-1", status: "running" });
+		harness.server.respondWith("session.btw", { answer: "The quick answer." });
+
+		await harness.run("/bg investigate the flaky test");
+		await harness.run("/btw what changed?");
+
+		expect(harness.server.requestsFor("background.start")[0].params).toEqual({
+			prompt: "investigate the flaky test",
+			sessionId: "tui-session",
+			model: "gpt-5",
+			thinkingLevel: "high",
+		});
+		expect(harness.server.requestsFor("session.btw")[0].params).toEqual({
+			sessionId: "tui-session",
+			question: "what changed?",
+		});
+		expect(harness.host.text).toContain("The quick answer.");
 	});
 });
 
@@ -326,6 +410,28 @@ describe("sessions and history", () => {
 		});
 	});
 
+	test("/reset is the top-level Hermes alias", async () => {
+		harness.server.respondWith("sessions.reset", { ok: true });
+		await harness.run("/reset");
+		expect(harness.server.requestsFor("sessions.reset")[0].params).toEqual({
+			sessionKey: "tui-session",
+		});
+		expect(harness.host.text).toContain("reset tui-session");
+	});
+
+	test("/compress compacts the current session", async () => {
+		harness.server.respondWith("sessions.compact", {
+			success: true,
+			tokensBefore: 12000,
+			tokensAfter: 4000,
+		});
+		await harness.run("/compress");
+		expect(harness.server.requestsFor("sessions.compact")[0].params).toEqual({
+			sessionKey: "tui-session",
+		});
+		expect(harness.host.text).toContain("12000 → 4000 tokens");
+	});
+
 	test("/session delete asks before it deletes", async () => {
 		harness.server.respondWith("sessions.delete", { ok: true });
 		await harness.run("/session delete");
@@ -365,6 +471,22 @@ describe("client-local commands", () => {
 	test("/quit exits", async () => {
 		await harness.run("/quit");
 		expect(harness.host.exits).toEqual([0]);
+	});
+
+	test("/q queues instead of quitting", async () => {
+		await harness.run("/q keep going");
+		expect(harness.host.exits).toEqual([]);
+		expect(harness.host.deliveries).toEqual([{ text: "keep going", mode: "queue" }]);
+	});
+
+	test("/commands prefers the server catalog", async () => {
+		harness.server.respondWith("commands.catalog", {
+			commands: [{ name: "queue", usage: "[prompt]", summary: "queue work", aliases: ["q"] }],
+		});
+		await harness.run("/commands");
+		expect(harness.host.text).toContain("daemon catalog");
+		expect(harness.host.text).toContain("/queue [prompt]");
+		expect(harness.host.text).toContain("aliases: /q");
 	});
 
 	test("/reconnect asks the client to redial", async () => {

@@ -168,3 +168,22 @@ describe("/help", () => {
 		expect(harness.host.text).toContain("no such command");
 	});
 });
+
+describe("/commands", () => {
+	test("falls back to the local registry when commands.catalog is absent", async () => {
+		harness = await createHarness({ methods: ["chat.send"] });
+		await harness.run("/commands queue");
+		expect(harness.host.text).toContain("local fallback");
+		expect(harness.host.text).toContain("/queue [prompt]");
+	});
+
+	test("capability-gates background and btw against older daemons", async () => {
+		harness = await createHarness({ methods: ["chat.send"] });
+		await harness.run("/bg do work");
+		await harness.run("/btw a question");
+		expect(harness.host.text).toContain("background.start");
+		expect(harness.host.text).toContain("session.btw");
+		expect(harness.server.requestsFor("background.start")).toHaveLength(0);
+		expect(harness.server.requestsFor("session.btw")).toHaveLength(0);
+	});
+});

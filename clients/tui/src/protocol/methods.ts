@@ -44,7 +44,12 @@ export const METHOD = {
 	sessionsPatch: "sessions.patch",
 	sessionsReset: "sessions.reset",
 	sessionsDelete: "sessions.delete",
+	sessionsCompact: "sessions.compact",
 	sessionDetail: "session.detail",
+	commandsCatalog: "commands.catalog",
+	agentsList: "agents.list",
+	backgroundStart: "background.start",
+	sessionBtw: "session.btw",
 	modelsList: "models.list",
 	approvalResolve: "exec.approval.resolve",
 	approvalsGet: "exec.approvals.get",
@@ -54,6 +59,8 @@ export const METHOD = {
 	usageCost: "usage.cost",
 	runsActiveList: "runs.active.list",
 	runsRecentList: "runs.recent.list",
+	tasksActiveList: "tasks.active.list",
+	tasksRecentList: "tasks.recent.list",
 	goalSet: "goal.set",
 	goalStatus: "goal.status",
 	goalPause: "goal.pause",
@@ -144,6 +151,13 @@ export class ControlPlaneMethods {
 		return this.#call(METHOD.sessionsDelete, params, options);
 	}
 
+	sessionsCompact(
+		params: { sessionKey: string },
+		options?: RequestOptions,
+	): Promise<Record<string, unknown>> {
+		return this.#call<Record<string, unknown>>(METHOD.sessionsCompact, params, options);
+	}
+
 	sessionDetail(
 		params: { sessionKey: string },
 		options?: RequestOptions,
@@ -158,6 +172,42 @@ export class ControlPlaneMethods {
 		options?: RequestOptions,
 	): Promise<ModelsListResult> {
 		return this.#call<ModelsListResult>(METHOD.modelsList, params, options);
+	}
+
+	// -- command and agent discovery ----------------------------------------
+
+	commandsCatalog(
+		params?: Record<string, unknown>,
+		options?: RequestOptions,
+	): Promise<Record<string, unknown>> {
+		return this.#call<Record<string, unknown>>(METHOD.commandsCatalog, params, options);
+	}
+
+	agentsList(
+		params?: Record<string, unknown>,
+		options?: RequestOptions,
+	): Promise<Record<string, unknown>> {
+		return this.#call<Record<string, unknown>>(METHOD.agentsList, params, options);
+	}
+
+	backgroundStart(
+		params: {
+			prompt: string;
+			sessionId?: string;
+			cwd?: string;
+			model?: string;
+			thinkingLevel?: string;
+		},
+		options?: RequestOptions,
+	): Promise<Record<string, unknown>> {
+		return this.#call<Record<string, unknown>>(METHOD.backgroundStart, params, options);
+	}
+
+	sessionBtw(
+		params: { sessionId: string; question: string; timeoutMs?: number },
+		options?: RequestOptions,
+	): Promise<Record<string, unknown>> {
+		return this.#call<Record<string, unknown>>(METHOD.sessionBtw, params, options);
 	}
 
 	// -- approvals ----------------------------------------------------------
@@ -205,6 +255,14 @@ export class ControlPlaneMethods {
 
 	runsRecentList(params?: Record<string, unknown>, options?: RequestOptions): Promise<unknown> {
 		return this.#call(METHOD.runsRecentList, params, options);
+	}
+
+	tasksActiveList(params?: Record<string, unknown>, options?: RequestOptions): Promise<unknown> {
+		return this.#call(METHOD.tasksActiveList, params, options);
+	}
+
+	tasksRecentList(params?: Record<string, unknown>, options?: RequestOptions): Promise<unknown> {
+		return this.#call(METHOD.tasksRecentList, params, options);
 	}
 
 	// -- goals --------------------------------------------------------------

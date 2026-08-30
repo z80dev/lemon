@@ -16,6 +16,7 @@ import { FakeControlPlane, type FakeControlPlaneOptions } from "../../src/dev/fa
 import { ControlPlaneClient } from "../../src/protocol/client.ts";
 import { ControlPlaneMethods } from "../../src/protocol/methods.ts";
 import type { ChatHistoryMessage } from "../../src/protocol/types.ts";
+import type { SubmissionMode } from "../../src/store/app-store.ts";
 import { AppStore } from "../../src/store/app-store.ts";
 import type { NoticeLevel } from "../../src/store/transcript-model.ts";
 
@@ -36,6 +37,7 @@ export class RecordingHost implements CommandHost {
 	draft = "";
 	frames: string[] = [];
 	modelPickerOpens = 0;
+	readonly deliveries: Array<{ text: string; mode: SubmissionMode }> = [];
 
 	notice(text: string, level: NoticeLevel = "info"): void {
 		this.notices.push({ text, level });
@@ -89,6 +91,10 @@ export class RecordingHost implements CommandHost {
 
 	openModelPicker(): void {
 		this.modelPickerOpens += 1;
+	}
+
+	deliverPrompt(text: string, mode: SubmissionMode): void {
+		this.deliveries.push({ text, mode });
 	}
 
 	/** Every notice body joined, for `toContain` assertions. */

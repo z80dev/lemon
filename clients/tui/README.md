@@ -46,7 +46,7 @@ legacy client-side alias; it does not configure the daemon.
   replies keep their partial text.
 - Multi-session: Ctrl+X switcher (live + recent, fuzzy filter, new-with-
   prompt, close), per-session drafts, unread badges, history hydration.
-- Ctrl+O model picker (two-stage, draft-preserving), 27 slash commands with
+- Ctrl+O model picker (two-stage, draft-preserving), capability-aware slash commands with
   autocomplete, `!cmd` shell escape, `{!cmd}` inline interpolation,
   Ctrl+G `$EDITOR` handoff.
 - `/skills` live official Hermes catalog browser: category drill-down, fuzzy
@@ -56,6 +56,31 @@ legacy client-side alias; it does not configure the daemon.
   branch, connection state, session counters.
 - Dark/light themes with OSC 11 terminal-background auto-detection; mouse
   support in overlays.
+
+## Hermes-compatible commands
+
+The TUI accepts familiar Hermes command names while keeping Lemon's runtime
+and control plane authoritative:
+
+| Command | Lemon behavior |
+| --- | --- |
+| `/queue [prompt]`, `/q [prompt]` | With a prompt, use queue mode for that submission; without one, inspect and edit the pending queue. `/q` is intentionally queue, not quit. |
+| `/steer <prompt>` | Send one steering submission without changing the default submission mode. |
+| `/reset` | Reset the current session through `sessions.reset` and clear its local transcript. |
+| `/reasoning [level]` | Alias for Lemon's `/think` reasoning-effort control. |
+| `/stop` | Alias for `/abort`; partial output remains visible and is marked interrupted. |
+| `/status`, `/usage` | Show control-plane health/runtime and usage/quota summaries. |
+| `/agents`, `/tasks` | Show the Lemon agent directory and active/recent subagent tasks. |
+| `/compress` | Compact the current session through `sessions.compact`. |
+| `/bg <prompt>` | Start background work through `background.start` when the daemon advertises it. |
+| `/btw <question>` | Ask an isolated side question through `session.btw` when advertised. |
+| `/commands [command]` | Prefer the daemon's `commands.catalog`; fall back to the TUI's local registry during rolling upgrades. |
+| `/help [command]` | Show the local TUI command and key reference, including unavailable capability annotations. |
+
+Use `/quit` (or the existing keyboard exit binding) to leave the TUI. `/clear`
+remains visual-only: it clears terminal scrollback and the rendered transcript
+without resetting daemon-side session history. Use `/reset` when history should
+also be forgotten.
 
 ## Development
 

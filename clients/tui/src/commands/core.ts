@@ -41,7 +41,7 @@ export const helpCommand: SlashCommand = {
 
 export const quitCommand: SlashCommand = {
 	name: "quit",
-	aliases: ["exit", "q"],
+	aliases: ["exit"],
 	summary: "leave the client (the daemon keeps running)",
 	group: "general",
 	run(ctx) {
