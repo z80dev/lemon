@@ -869,7 +869,7 @@ defmodule LemonControlPlane.Methods.NodePairStringKeysTest do
             "invokeId" => invoke_id,
             "result" => %{"data" => "success"}
           },
-          @node_ctx
+          Map.put(@node_ctx, :conn_pid, self())
         )
 
       assert result["invokeId"] == invoke_id

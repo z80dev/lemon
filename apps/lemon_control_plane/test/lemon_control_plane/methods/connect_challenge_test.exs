@@ -63,6 +63,9 @@ defmodule LemonControlPlane.Methods.ConnectChallengeTest do
 
         LemonCore.Store.list(:session_tokens)
         |> Enum.each(fn {k, _} -> LemonCore.Store.delete(:session_tokens, k) end)
+
+        LemonCore.Store.list(:session_token_heads)
+        |> Enum.each(fn {k, _} -> LemonCore.Store.delete(:session_token_heads, k) end)
       rescue
         _ -> :ok
       end
@@ -270,6 +273,33 @@ defmodule LemonControlPlane.Methods.ConnectChallengeTest do
       # Second use should fail
       {:error, error} = ConnectChallenge.handle(%{"challenge" => challenge_token}, @challenge_ctx)
       assert {:unauthorized, "Invalid challenge"} = error
+    end
+
+    test "concurrent exchanges atomically consume a node challenge once" do
+      {:ok, request} =
+        NodePairRequest.handle(
+          %{"nodeType" => "coding_agent", "nodeName" => "Concurrent Challenge Node"},
+          @pairing_ctx
+        )
+
+      {:ok, approved} =
+        NodePairApprove.handle(%{"pairingId" => request["pairingId"]}, @pairing_ctx)
+
+      results =
+        1..12
+        |> Enum.map(fn index ->
+          Task.async(fn ->
+            ConnectChallenge.handle(
+              %{"challenge" => approved["challengeToken"]},
+              %{conn_id: "concurrent-#{index}"}
+            )
+          end)
+        end)
+        |> Enum.map(&Task.await(&1, 2_000))
+
+      assert Enum.count(results, &match?({:ok, %{"verified" => true}}, &1)) == 1
+      assert Enum.count(results, &match?({:error, {:unauthorized, "Invalid challenge"}}, &1)) == 11
+      assert NodeStore.get_challenge(approved["challengeToken"]) == nil
     end
 
     test "expired node challenge returns error" do

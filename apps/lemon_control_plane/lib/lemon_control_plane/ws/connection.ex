@@ -154,6 +154,14 @@ defmodule LemonControlPlane.WS.Connection do
     {:push, {:text, frame}, state}
   end
 
+  def handle_info({:node_session_revoked, node_id, generation}, state) do
+    Logger.info(
+      "Closing superseded node session #{state.conn_id} for #{node_id} before generation #{generation}"
+    )
+
+    {:stop, :normal, state}
+  end
+
   def handle_info({:subscribe_topics, topics}, state) do
     subscriptions =
       topics
@@ -391,19 +399,19 @@ defmodule LemonControlPlane.WS.Connection do
             {:error, Errors.unauthorized("Paired node was not found")}
 
           node ->
-            register_durable_node(node_id, node)
+            register_durable_node(node_id, node, auth)
         end
     end
   end
 
   defp register_node_connection(_auth), do: :ok
 
-  defp register_durable_node(node_id, node) do
+  defp register_durable_node(node_id, node, auth) do
     name = get_field(node, :name)
 
     with true <- is_binary(name) and String.trim(name) != "",
          :ok <- NodeStore.reserve_node_name(name, node_id),
-         :ok <- register_live_node(node_id, name, node) do
+         :ok <- register_live_node(node_id, name, node, auth) do
       case mark_node_status(node_id, node, :online) do
         :ok ->
           :ok
@@ -427,8 +435,10 @@ defmodule LemonControlPlane.WS.Connection do
     end
   end
 
-  defp register_live_node(node_id, name, node) do
-    LemonCore.NodeRegistry.register(node_id, name, self(), %{
+  defp register_live_node(node_id, name, node, auth) do
+    generation = get_field(auth.identity || %{}, :sessionGeneration) || 0
+
+    LemonCore.NodeRegistry.register_session(node_id, name, self(), generation, %{
       type: get_field(node, :type),
       capabilities: get_field(node, :capabilities) || %{}
     })

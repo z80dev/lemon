@@ -62,7 +62,7 @@ defmodule LemonControlPlane.Methods.NodeMethodsTest do
     end
 
     test "returns error when eventType is missing" do
-      ctx = %{auth: %{role: :node, client_id: "node-1"}}
+      ctx = %{auth: %{role: :node, client_id: "node-1"}, conn_pid: self()}
       params = %{}
 
       {:error, error} = NodeEvent.handle(params, ctx)
@@ -73,7 +73,7 @@ defmodule LemonControlPlane.Methods.NodeMethodsTest do
     end
 
     test "returns error when eventType is empty string" do
-      ctx = %{auth: %{role: :node, client_id: "node-1"}}
+      ctx = %{auth: %{role: :node, client_id: "node-1"}, conn_pid: self()}
       params = %{"eventType" => ""}
 
       {:error, error} = NodeEvent.handle(params, ctx)
@@ -84,7 +84,7 @@ defmodule LemonControlPlane.Methods.NodeMethodsTest do
     end
 
     test "returns error when payload is not an object" do
-      ctx = %{auth: %{role: :node, client_id: "node-1"}}
+      ctx = %{auth: %{role: :node, client_id: "node-1"}, conn_pid: self()}
       params = %{"eventType" => "status", "payload" => ["not", "an", "object"]}
 
       {:error, error} = NodeEvent.handle(params, ctx)
@@ -110,7 +110,7 @@ defmodule LemonControlPlane.Methods.NodeMethodsTest do
     end
 
     test "returns error when invokeId is missing" do
-      ctx = %{auth: %{role: :node, client_id: "node-1"}}
+      ctx = %{auth: %{role: :node, client_id: "node-1"}, conn_pid: self()}
       params = %{"result" => "success"}
 
       {:error, error} = NodeInvokeResult.handle(params, ctx)
@@ -121,7 +121,7 @@ defmodule LemonControlPlane.Methods.NodeMethodsTest do
     end
 
     test "returns not_found when invocation doesn't exist" do
-      ctx = %{auth: %{role: :node, client_id: "node-1"}}
+      ctx = %{auth: %{role: :node, client_id: "node-1"}, conn_pid: self()}
       params = %{"invokeId" => "nonexistent-#{System.unique_integer()}", "result" => "success"}
 
       {:error, error} = NodeInvokeResult.handle(params, ctx)
@@ -146,7 +146,7 @@ defmodule LemonControlPlane.Methods.NodeMethodsTest do
 
       LemonCore.Store.put(:node_invocations, invoke_id, invocation)
 
-      ctx = %{auth: %{role: :node, client_id: "node-1"}}
+      ctx = %{auth: %{role: :node, client_id: "node-1"}, conn_pid: self()}
       params = %{"invokeId" => invoke_id, "result" => %{"data" => "test"}}
 
       {:ok, result} = NodeInvokeResult.handle(params, ctx)
@@ -191,7 +191,7 @@ defmodule LemonControlPlane.Methods.NodeMethodsTest do
 
       LemonCore.Store.put(:node_invocations, invoke_id, invocation)
 
-      ctx = %{auth: %{role: :node, client_id: "node-1"}}
+      ctx = %{auth: %{role: :node, client_id: "node-1"}, conn_pid: self()}
       params = %{"invokeId" => invoke_id, "error" => "Something went wrong"}
 
       {:ok, result} = NodeInvokeResult.handle(params, ctx)

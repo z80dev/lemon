@@ -219,10 +219,15 @@ On first connection, `--pair` creates the durable controller identity and
 stores its issued seven-day session plus recovery credential in a mode-0600
 file under `~/.lemon/nodes/execution/`; the containing directory is mode 0700.
 Each record is keyed by a hash of the durable node ID and includes the exact
-controller URL, so reuse fails closed for a different controller. Later starts
+controller URL, so reuse fails closed for a different controller. The token
+store requires that exact URL even for direct durable-ID lookup and returns no
+recovery material for a missing or mismatched controller. Later starts
 omit `--pair`. Re-run with `--pair` after session expiry to keep the same
 identity and controller-side name while rotating the session and revoking older
-ones. Controller renames do not change the local key. Compatible legacy records
+tokens and live sockets. Concurrent challenge exchange can mint only one
+credential, and result settlement is accepted only from the connection and
+session generation that received the invocation. Controller renames do not
+change the local key. Compatible legacy records
 without recovery credentials use the explicit operator-authorized
 `--pair --repair --node-id ID` migration path.
 

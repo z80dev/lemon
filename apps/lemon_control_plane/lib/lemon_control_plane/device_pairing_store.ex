@@ -24,6 +24,10 @@ defmodule LemonControlPlane.DevicePairingStore do
   @spec get_challenge(binary()) :: map() | nil
   def get_challenge(token) when is_binary(token), do: Store.get(@challenge_table, token)
 
+  @doc "Atomically retrieves and consumes a one-time device challenge."
+  @spec take_challenge(binary()) :: map() | nil | {:error, term()}
+  def take_challenge(token) when is_binary(token), do: Store.take(@challenge_table, token)
+
   @spec put_challenge(binary(), map()) :: :ok
   def put_challenge(token, value) when is_binary(token) and is_map(value),
     do: Store.put(@challenge_table, token, value)

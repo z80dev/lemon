@@ -490,12 +490,13 @@ Settings are loaded from TOML files and merged (global, then project):
 | `project_extensions_dir/1` | `<cwd>/.lemon/extensions/` | -- |
 
 Named-node session-token records are separate from TOML settings. They live at
-`~/.lemon/nodes/execution/<sha256-of-node-name>.json`, include the exact
-controller URL, and are reused only when that URL matches. A controller-issued
-node session token currently expires after seven days. The CLI does not refresh
-it automatically; restoring an expired node requires operator pairing action,
-and the durable name reservation must be changed first if a new identity needs
-to reuse that name.
+`~/.lemon/nodes/execution/<sha256-of-durable-node-id>.json`, include the exact
+controller URL, and are reused only when that URL matches. Durable-ID lookup
+requires that exact controller argument before it returns session or recovery
+material. A controller-issued node session token currently expires after seven
+days. The CLI does not refresh it automatically; re-run with `--pair` and
+operator authority to recover the same durable identity and rotate its session.
+The controller invalidates the previous token and live socket immediately.
 
 The worker sends a WebSocket ping every 25 seconds so the controller's idle
 timeout does not interrupt live-node registration. During `--pair`, transient

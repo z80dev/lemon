@@ -88,6 +88,45 @@ defmodule LemonCore.NodeRegistryTest do
     assert_receive {:lemon_node_result, ^invoke_id, {:ok, %{"answer" => "done"}}}
   end
 
+  test "strict completion is bound to the receiving connection and generation" do
+    other = spawn(fn -> Process.sleep(:infinity) end)
+    assert :ok = NodeRegistry.register_session("node-1", "newphy", self(), 7)
+    assert {:ok, invoke_id} = NodeRegistry.invoke("newphy", "coding_agent.run", %{})
+    assert_receive {:node_event, "node.invoke.request", %{"invokeId" => ^invoke_id}}
+
+    assert {:error, :stale_session} =
+             NodeRegistry.complete_session("node-1", other, 7, invoke_id, %{"wrong" => true})
+
+    assert {:error, :stale_session} =
+             NodeRegistry.complete_session("node-1", self(), 6, invoke_id, %{"old" => true})
+
+    assert :ok =
+             NodeRegistry.complete_session("node-1", self(), 7, invoke_id, %{"ok" => true})
+
+    assert_receive {:lemon_node_result, ^invoke_id, {:ok, %{"ok" => true}}}
+    Process.exit(other, :kill)
+  end
+
+  test "credential rotation revokes the live stale session immediately" do
+    parent = self()
+    stale = spawn(fn -> relay(parent, :stale_session) end)
+
+    assert :ok = NodeRegistry.register_session("node-1", "newphy", stale, 3)
+    assert {:ok, invoke_id} = NodeRegistry.invoke("newphy", "coding_agent.run", %{})
+
+    assert_receive {:stale_session,
+                    {:node_event, "node.invoke.request", %{"invokeId" => ^invoke_id}}}
+
+    assert :ok = NodeRegistry.revoke_session("node-1", 4)
+    assert_receive {:stale_session, {:node_session_revoked, "node-1", 4}}
+
+    assert_receive {:lemon_node_result, ^invoke_id,
+                    {:error, {:node_disconnected, :credential_rotated}}}
+
+    refute NodeRegistry.online?("node-1")
+    Process.exit(stale, :kill)
+  end
+
   test "rejects an invocation when the full request envelope exceeds maxPayload" do
     assert :ok = NodeRegistry.register("node-1", "newphy", self())
 

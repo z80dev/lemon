@@ -3,6 +3,7 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
 
   alias CodingAgent.ExecutionNode.Worker
   alias LemonControlPlane.Auth.TokenStore
+  alias LemonControlPlane.Methods.ConnectChallenge
   alias LemonControlPlane.NodeStore
   alias LemonGateway.ExecutionRequest
 
@@ -45,6 +46,7 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
 
     on_exit(fn ->
       LemonCore.Store.delete(:session_tokens, token)
+      LemonCore.Store.delete(:session_token_heads, {"node", node_id})
       LemonCore.Store.delete(:nodes_by_name, node_name)
       LemonCore.Store.delete(:nodes_registry, node_id)
     end)
@@ -91,6 +93,7 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
 
     assert is_pid(connection_pid)
     assert connection_pid != worker
+    connection_ref = Process.monitor(connection_pid)
 
     invoke_args = %{
       "version" => 1,
@@ -153,7 +156,29 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
     assert_receive {:fake_executor_cancelled, ^cancel_context}, 3_000
     assert_receive {:lemon_node_result, ^cancel_id, {:error, :test_cancelled}}, 3_000
 
-    assert :ok = stop_supervised(worker_id)
+    rotation_challenge = "wire-rotation-#{suffix}"
+
+    assert :ok =
+             NodeStore.put_challenge(rotation_challenge, %{
+               node_id: node_id,
+               node_name: node_name,
+               node_type: "coding_agent",
+               expires_at_ms: System.system_time(:millisecond) + 60_000
+             })
+
+    assert {:ok, rotated} =
+             ConnectChallenge.handle(
+               %{"challenge" => rotation_challenge},
+               %{conn_id: "wire-rotation-connection"}
+             )
+
+    assert rotated["identity"]["sessionGeneration"] == 1
+    assert {:error, :invalid_token} = TokenStore.validate(token)
+    assert_receive {:DOWN, ^connection_ref, :process, ^connection_pid, close_reason}, 3_000
+    assert close_reason in [:normal, {:shutdown, :peer_closed}]
+    refute LemonCore.NodeRegistry.online?(node_name)
+
+    _ = stop_supervised(worker_id)
     assert_eventually(fn -> not LemonCore.NodeRegistry.online?(node_name) end)
   end
 

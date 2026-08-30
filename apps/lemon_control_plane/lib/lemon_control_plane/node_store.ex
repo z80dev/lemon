@@ -91,6 +91,10 @@ defmodule LemonControlPlane.NodeStore do
   @spec get_challenge(binary()) :: map() | nil
   def get_challenge(token) when is_binary(token), do: Store.get(@challenge_table, token)
 
+  @doc "Atomically retrieves and consumes a one-time node challenge."
+  @spec take_challenge(binary()) :: map() | nil | {:error, term()}
+  def take_challenge(token) when is_binary(token), do: Store.take(@challenge_table, token)
+
   @spec delete_challenge(binary()) :: :ok
   def delete_challenge(token) when is_binary(token), do: Store.delete(@challenge_table, token)
 

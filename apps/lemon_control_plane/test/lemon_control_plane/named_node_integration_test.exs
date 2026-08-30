@@ -64,13 +64,13 @@ defmodule LemonControlPlane.NamedNodeIntegrationTest do
     assert {:error, {:forbidden, _message}} =
              NodeInvokeResult.handle(
                %{"invokeId" => invoke["invokeId"], "result" => %{"wrong" => true}},
-               %{auth: %{role: :node, client_id: other_id}}
+               %{auth: %{role: :node, client_id: other_id}, conn_pid: other_pid}
              )
 
     assert {:ok, %{"received" => true}} =
              NodeInvokeResult.handle(
                %{"invokeId" => invoke["invokeId"], "result" => %{"ok" => true}},
-               %{auth: %{role: :node, client_id: target_id}}
+               %{auth: %{role: :node, client_id: target_id}, conn_pid: target_pid}
              )
 
     assert_receive {:lemon_node_result, invoke_id, {:ok, %{"ok" => true}}}
@@ -125,7 +125,7 @@ defmodule LemonControlPlane.NamedNodeIntegrationTest do
     assert {:ok, %{"received" => true}} =
              NodeInvokeResult.handle(
                %{"invokeId" => invoke_id, "result" => private_result},
-               %{auth: %{role: :node, client_id: node_id}}
+               %{auth: %{role: :node, client_id: node_id}, conn_pid: node_pid}
              )
 
     assert {:ok, response} = Task.await(task, 3_000)
@@ -215,10 +215,54 @@ defmodule LemonControlPlane.NamedNodeIntegrationTest do
     assert {:ok, %{"received" => true}} =
              NodeInvokeResult.handle(
                %{"invokeId" => invoke_id, "result" => %{"ok" => true}},
-               %{auth: %{role: :node, client_id: node_id}}
+               %{auth: %{role: :node, client_id: node_id}, conn_pid: self()}
              )
 
     assert_receive {:lemon_node_result, ^invoke_id, {:ok, %{"ok" => true}}}
+  end
+
+  test "superseded credential generation cannot settle its pending result" do
+    node_id = unique("stale-result")
+    put_node(node_id, "Stale Result Node")
+    identity = %{"type" => "node", "nodeId" => node_id}
+
+    assert {:ok, old_token} =
+             TokenStore.replace_node_session(unique("old-token"), identity, ttl_ms: 60_000)
+
+    old_generation = old_token.identity["sessionGeneration"]
+    assert :ok =
+             LemonCore.NodeRegistry.register_session(
+               node_id,
+               "Stale Result Node",
+               self(),
+               old_generation
+             )
+
+    assert {:ok, invoke_id} =
+             LemonCore.NodeRegistry.invoke(node_id, "work.run", %{}, recipient: self())
+
+    assert_receive {:node_event, "node.invoke.request", %{"invokeId" => ^invoke_id}}
+
+    assert {:ok, current_token} =
+             TokenStore.replace_node_session(unique("new-token"), identity, ttl_ms: 60_000)
+
+    assert current_token.identity["sessionGeneration"] == old_generation + 1
+
+    assert {:error, {:forbidden, "Node session has been superseded"}} =
+             NodeInvokeResult.handle(
+               %{"invokeId" => invoke_id, "result" => %{"stale" => true}},
+               %{
+                 auth: %{
+                   role: :node,
+                   client_id: node_id,
+                   identity: old_token.identity
+                 },
+                 conn_pid: self()
+               }
+             )
+
+    refute_receive {:lemon_node_result, ^invoke_id, {:ok, _result}}
+    assert :ok = LemonCore.NodeRegistry.cancel(invoke_id, :test_cleanup)
   end
 
   test "node invocation rejects malformed JSON boundary values without crashing" do
@@ -283,6 +327,12 @@ defmodule LemonControlPlane.NamedNodeIntegrationTest do
     assert decoded["event"] == "node.config"
     assert decoded["payload"] == %{"enabled" => true}
     assert pushed_state.event_seq == connected_state.event_seq + 1
+
+    assert {:stop, :normal, ^connected_state} =
+             Connection.handle_info(
+               {:node_session_revoked, node_id, 1},
+               connected_state
+             )
 
     assert :ok = Connection.terminate(:normal, connected_state)
     refute LemonCore.NodeRegistry.online?(node_id)
@@ -452,7 +502,8 @@ defmodule LemonControlPlane.NamedNodeIntegrationTest do
         :nodes_by_name,
         :node_challenges,
         :node_invocations,
-        :session_tokens
+        :session_tokens,
+        :session_token_heads
       ],
       fn table ->
         LemonCore.Store.list(table)

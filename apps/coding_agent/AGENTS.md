@@ -719,7 +719,9 @@ one-time challenge for a seven-day session token, and stores the session plus
 recovery credential under a durable-node-ID-keyed file in
 `~/.lemon/nodes/execution/`. The directory is mode 0700 and each record is mode
 0600. Records include the exact controller URL; later starts omit `--pair` and
-reuse a record only when its controller matches. After session expiry, re-run
+reuse a record only when its controller matches. Durable-ID lookup requires the
+controller argument and returns no session or recovery material when it is
+missing or differs from the stored controller. After session expiry, re-run
 with `--pair`: the recovery credential preserves the same ID and current
 controller-side name while the new challenge revokes every older node session.
 Controller renames therefore do not invalidate the local credential. Legacy

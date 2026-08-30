@@ -81,9 +81,40 @@ defmodule CodingAgent.ExecutionNode.TokenStoreTest do
                root: root
              )
 
-    assert {:ok, record} = TokenStore.load_node("renamed-node", root: root)
+    assert {:ok, record} =
+             TokenStore.load_node("renamed-node",
+               root: root,
+               controller: "wss://controller.example/ws"
+             )
+
     assert record["localName"] == "Before Rename"
     assert record["token"] == "session-token"
+  end
+
+  @tag :tmp_dir
+  test "does not expose ID-based recovery material to a different controller", %{tmp_dir: tmp_dir} do
+    root = Path.join(tmp_dir, "tokens")
+
+    assert :ok =
+             TokenStore.save(
+               "worker",
+               %{
+                 "nodeId" => "controller-bound-node",
+                 "token" => "session-token",
+                 "recoveryToken" => "must-not-be-exposed",
+                 "controller" => "wss://controller-a.example/ws"
+               },
+               root: root
+             )
+
+    assert {:error, :controller_required} =
+             TokenStore.load_node("controller-bound-node", root: root)
+
+    assert {:error, :controller_mismatch} =
+             TokenStore.load_node("controller-bound-node",
+               root: root,
+               controller: "wss://controller-b.example/ws"
+             )
   end
 
   @tag :tmp_dir
