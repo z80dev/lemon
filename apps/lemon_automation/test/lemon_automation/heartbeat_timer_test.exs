@@ -5,7 +5,7 @@ defmodule LemonAutomation.HeartbeatTimerTest do
   alias LemonAutomation.{CronManager, CronStore, HeartbeatManager}
   alias LemonCore.{Bus, Event}
 
-  defmodule SynchronousRouter do
+  defmodule HeartbeatCompletionRouter do
     @moduledoc false
 
     def submit(params) do
@@ -58,7 +58,7 @@ defmodule LemonAutomation.HeartbeatTimerTest do
       restore_env(:heartbeat_router_mod, previous_router)
       restore_env(:heartbeat_waiter_mod, previous_waiter)
       restore_env(:heartbeat_bus_mod, previous_bus)
-      :persistent_term.erase({SynchronousRouter, :test_pid})
+      :persistent_term.erase({HeartbeatCompletionRouter, :test_pid})
       :persistent_term.erase({BlockingRouter, :test_pid})
     end)
 
@@ -68,8 +68,8 @@ defmodule LemonAutomation.HeartbeatTimerTest do
   test "records synchronous timer completion and suppression in HeartbeatStore" do
     agent_id = unique_agent()
     stats_before = HeartbeatManager.stats()
-    :persistent_term.put({SynchronousRouter, :test_pid}, self())
-    Application.put_env(:lemon_automation, :heartbeat_router_mod, SynchronousRouter)
+    :persistent_term.put({HeartbeatCompletionRouter, :test_pid}, self())
+    Application.put_env(:lemon_automation, :heartbeat_router_mod, HeartbeatCompletionRouter)
     Bus.subscribe("cron")
 
     try do

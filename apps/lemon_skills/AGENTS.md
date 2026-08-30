@@ -323,7 +323,7 @@ HttpMock.stub("https://skills.lemon.agent/", {:error, :nxdomain})
 
 | App | How it uses LemonSkills |
 |-----|------------------------|
-| `coding_agent` | Calls `LemonSkills.find_relevant/2` to inject skill content into agent system prompts; wraps `LemonSkills.Tools.ReadSkill` and `LemonSkills.Tools.SkillManage` as agent tools; shares `agent_dir` config (fallback: `config :coding_agent, :agent_dir`) |
+| `coding_agent` | Lists bounded skill metadata in the stable system prompt, uses `LemonSkills.find_relevant/2` for turn-local missed-skill introspection, and exposes `LemonSkills.Tools.ReadSkill` / `LemonSkills.Tools.SkillManage` for explicit content loading and management; shares `agent_dir` config (fallback: `config :coding_agent, :agent_dir`) |
 | `lemon_agent` | Provides the common tool structs used by every module under `LemonSkills.Tools` |
 
 ### Shared Configuration

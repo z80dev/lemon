@@ -376,7 +376,10 @@ Each cron job can have a persistent markdown memory file that accumulates contex
 
 ## Heartbeat Management
 
-Heartbeats are special cron jobs for agent health checks. Responses containing exactly `"HEARTBEAT_OK"` (trimmed) are suppressed from channels but still logged.
+Cron-backed heartbeats are special cron jobs for agent health checks; intervals
+that cron cannot represent exactly use the timer path documented below.
+Responses containing exactly `"HEARTBEAT_OK"` (trimmed) are suppressed from
+channels but still logged.
 
 ### Identifying Heartbeat Jobs
 

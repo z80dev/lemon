@@ -23,7 +23,7 @@ defmodule LemonAutomation.RunCompletionWaiterTest do
     end
   end
 
-  defmodule SynchronousRouter do
+  defmodule InlineCompletionRouter do
     @moduledoc false
 
     def submit(params) do
@@ -43,7 +43,7 @@ defmodule LemonAutomation.RunCompletionWaiterTest do
 
     assert {:ok, "run_sync", "completed during submit"} =
              RunCompletionWaiter.submit_and_wait(%{run_id: "run_sync", prompt: "now"},
-               router_mod: SynchronousRouter,
+               router_mod: InlineCompletionRouter,
                bus_mod: TestBus,
                timeout_ms: 10
              )

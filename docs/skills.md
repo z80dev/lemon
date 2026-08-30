@@ -341,7 +341,7 @@ skills = LemonSkills.list(cwd: cwd)
 # Or find relevant skills based on user query
 relevant = LemonSkills.find_relevant(user_query, cwd: cwd, max_results: 3)
 
-# Skills are automatically injected into the system prompt when relevant
+# Relevance is turn-local; call read_skill to load the selected content
 ```
 
 Agent tool usage emits skill-specific telemetry:
