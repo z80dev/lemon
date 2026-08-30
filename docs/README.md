@@ -45,6 +45,7 @@ failures.
 | [demo.md](demo.md) | Deterministic local demo paths for runtime health, session Web UI, TUI, support bundles, and docs quality |
 | [support.md](support.md) | Public support boundaries, issue data requirements, support-bundle commands, and security-reporting path |
 | [user-guide/setup.md](user-guide/setup.md) | Full setup walkthrough: install, configure, run, Telegram setup |
+| [user-guide/web.md](user-guide/web.md) | Launch the local browser, complete readiness, stop runs, configure access, and recover errors |
 | [user-guide/migrate-from-hermes.md](user-guide/migrate-from-hermes.md) | Preview-first migration path for Hermes memories, skills, config, secrets, and session recall |
 | [user-guide/skills.md](user-guide/skills.md) | Skills: listing, installing, inspecting, synthesizing drafts |
 | [user-guide/memory.md](user-guide/memory.md) | Memory documents, session search, retention management |
@@ -80,6 +81,7 @@ failures.
 | [context.md](context.md) | Context management, compaction, branch summarization, token budgets |
 | [subagent-parent-questions.md](subagent-parent-questions.md) | Design for the `ask_parent` clarification path from child subagents back to their parent session |
 | [reviews/assistant-runtime-polish-audit-2026-08-30.md](reviews/assistant-runtime-polish-audit-2026-08-30.md) | Assistant-focused audit of tasks, delegated agents, async lifecycle, joins, skills, and background work |
+| [reviews/hermes-web-setup-audit-2026-08-30.md](reviews/hermes-web-setup-audit-2026-08-30.md) | Source-grounded Hermes comparison for installation, setup, Web/desktop UX, lifecycle, migration, docs, and accessibility |
 | [runtime-hot-reload.md](runtime-hot-reload.md) | Hot code reload system for live-patching without restarts |
 | [telemetry.md](telemetry.md) | Telemetry events, observability, correlation IDs, monitoring |
 

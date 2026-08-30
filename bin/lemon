@@ -14,6 +14,7 @@
 #   ./bin/lemon node join --name worker --controller wss://controller.example/ws
 #   ./bin/lemon config validate
 #   ./bin/lemon doctor --json
+#   ./bin/lemon web
 #   ./bin/lemon send --to telegram:<chat_id> "deploy finished"
 #   ./bin/lemon media
 #   ./bin/lemon models --provider anthropic
@@ -52,6 +53,7 @@ Usage: ./bin/lemon [options]
        ./bin/lemon channels
        ./bin/lemon config validate
        ./bin/lemon doctor --json
+       ./bin/lemon web [--no-open]
        ./bin/lemon send --to telegram:<chat_id> "message"
        ./bin/lemon media
        ./bin/lemon models --provider anthropic
@@ -109,6 +111,102 @@ warn() {
 error() {
   echo -e "${RED}[lemon]${NC} $1" >&2
 }
+
+web_healthy() {
+  local body
+  body="$(curl -fsS --max-time 2 "http://127.0.0.1:$1/healthz" 2>/dev/null || true)"
+  [[ "$body" == "ok" ]]
+}
+
+open_web_browser() {
+  local url="$1"
+
+  if command -v open >/dev/null 2>&1; then
+    open "$url" >/dev/null 2>&1 &
+  elif command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$url" >/dev/null 2>&1 &
+  elif command -v wslview >/dev/null 2>&1; then
+    wslview "$url" >/dev/null 2>&1 &
+  else
+    warn "No browser opener found; open the URL above manually."
+  fi
+}
+
+if [[ "${1:-}" == "web" ]]; then
+  shift
+  NO_OPEN=0
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --no-open)
+        NO_OPEN=1
+        shift
+        ;;
+      --help|-h)
+        cat <<'EOF'
+Usage: ./bin/lemon web [--no-open]
+
+Start the full local Lemon runtime if needed, wait for the Web UI, and open it.
+Set LEMON_WEB_PORT to use a port other than 4080.
+
+Options:
+  --no-open   Print the URL without opening a browser
+EOF
+        exit 0
+        ;;
+      *)
+        error "Unknown web option: $1"
+        exit 2
+        ;;
+    esac
+  done
+
+  WEB_PORT="${LEMON_WEB_PORT:-4080}"
+
+  if ! [[ "$WEB_PORT" =~ ^[0-9]+$ ]]; then
+    error "Invalid LEMON_WEB_PORT value: $WEB_PORT"
+    exit 1
+  fi
+
+  if ! web_healthy "$WEB_PORT"; then
+    info "Web UI is not running; starting Lemon"
+    "$0" --daemon --web-port "$WEB_PORT"
+
+    WEB_READY=0
+    for ((attempt = 1; attempt <= 30; attempt++)); do
+      if web_healthy "$WEB_PORT"; then
+        WEB_READY=1
+        break
+      fi
+      sleep 1
+    done
+
+    if [[ "$WEB_READY" != "1" ]]; then
+      error "Web UI did not become healthy on port $WEB_PORT within 30s"
+      error "Check /tmp/lemon-runtime.log and run ./bin/lemon doctor, then retry."
+      exit 1
+    fi
+  fi
+
+  WEB_URL="http://127.0.0.1:$WEB_PORT/"
+  info "Lemon Web: $WEB_URL"
+
+  if [[ "$NO_OPEN" != "1" ]]; then
+    OPEN_URL="$WEB_URL"
+
+    if [[ -n "${LEMON_WEB_ACCESS_TOKEN:-}" ]]; then
+      if [[ "$LEMON_WEB_ACCESS_TOKEN" =~ ^[A-Za-z0-9._~-]+$ ]]; then
+        OPEN_URL="${WEB_URL}?token=${LEMON_WEB_ACCESS_TOKEN}"
+      else
+        warn "The access token contains URL-reserved characters; open the URL and provide a URL-encoded ?token= value."
+      fi
+    fi
+
+    open_web_browser "$OPEN_URL"
+  fi
+
+  exit 0
+fi
 
 if [[ "${1:-}" == "send" ]]; then
   shift

@@ -41,6 +41,7 @@ release and source-checkout behavior aligned.
 | Configure a model provider | `lemon model --provider anthropic` | `./bin/lemon model --provider anthropic` | `mix lemon.onboard anthropic` |
 | Configure Telegram or Discord | `lemon gateway setup` | `./bin/lemon gateway setup` | `mix lemon.setup gateway` |
 | Diagnostics | `lemon doctor` | `./bin/lemon doctor` | `mix lemon.doctor` |
+| Open the local Web UI | `lemon web` | `./bin/lemon web` | Start the full runtime directly |
 | Validate/show config | `lemon config validate` | `./bin/lemon config validate` | `mix lemon.config validate` |
 | Manage encrypted secrets | `lemon secrets status` | `./bin/lemon secrets status` | `mix lemon.secrets.status` |
 | Inspect channel readiness | `lemon channels` | `./bin/lemon channels` | `mix lemon.channels` |
@@ -59,6 +60,11 @@ and performs the provider's live credential check by default. Use
 `lemon setup --skip-verify` or `lemon setup provider --skip-verify` only to
 defer that live check when offline; a failed verification is not reported as a
 completed setup.
+
+The derived state lives in `LemonCore.Setup.Readiness`, so the setup wizard,
+first-run TUI gate, and Web UI agree on exactly what is missing. The browser is
+read-only during setup: it lists pending items and rejects prompts/uploads until
+the shared state is ready.
 
 The one-line installer starts `lemon setup` by default when it has a controlling
 terminal. `--skip-setup`, an unavailable terminal, and the simulation profile

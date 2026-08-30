@@ -90,6 +90,7 @@ and `lemon_lsp`. Core doctor diagnostics may probe them at runtime, but
 | `LemonCore.ConfigReloader` | Central reload orchestrator with digest diffing and Bus broadcast |
 | `LemonCore.ConfigReloader.Digest` | File/env/secrets digest computation |
 | `LemonCore.ConfigReloader.Watcher` | FileSystem watcher targeting config.toml and .env paths |
+| `LemonCore.Setup.Readiness` | Read-only first-run readiness shared by setup, TUI, Web, and launchers |
 | `LemonCore.GatewayConfig` | Unified gateway config access merging TOML, app env, and transport overrides |
 | `LemonCore.Dotenv` | `.env` file loader preserving existing env vars |
 | `LemonCore.Logging` | Runtime log-to-file handler from `[logging]` config |
@@ -297,6 +298,15 @@ LemonCore.ConfigReloader.reload/1
   |-- Broadcast :config_reloaded on "system" topic
   |-- On failure: keep last good snapshot, emit :config_reload_failed
 ```
+
+### First-run readiness
+
+`LemonCore.Setup.Readiness.status/1` derives one shared readiness state from the
+global config, secrets backend, default provider/model, and credential source.
+It never performs a network request or mutates setup state. Clients use
+`pending_steps/1` and `ready?/1` so a setup wizard, first-run gate, or browser
+cannot silently invent a different definition of “ready.” Live provider
+verification remains in `lemon_cli` and doctor diagnostics.
 
 ### Environment Variable Overrides
 

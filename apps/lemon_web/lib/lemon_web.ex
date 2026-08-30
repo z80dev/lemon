@@ -3,7 +3,7 @@ defmodule LemonWeb do
   Entry point for web interface definitions.
   """
 
-  def static_paths, do: ~w(assets favicon.ico robots.txt)
+  def static_paths, do: ~w(assets favicon.ico favicon.svg robots.txt)
 
   def router do
     quote do

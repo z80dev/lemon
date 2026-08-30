@@ -13,6 +13,7 @@ Verifies Lemon release artifacts beyond checksums:
   - starts each release daemon without Mix
   - checks control-plane /healthz or sim broadcast /readyz
   - checks Web /healthz for lemon_runtime_full
+  - checks `lemon web --no-open` reports the healthy packaged Web URL
   - checks lemon_runtime_full asset-digest artifacts and daemon log
   - stops the daemon
   - generates a release-runtime support bundle with release eval (non-sim profiles)
@@ -240,6 +241,11 @@ assert_full_profile_static_files() {
 
   if ! compgen -G "$extract_dir/lib/lemon_web-*/priv/static/cache_manifest.json" > /dev/null; then
     echo "$profile: missing lemon_web cache_manifest.json (asset digest step likely skipped)" >&2
+    exit 1
+  fi
+
+  if ! compgen -G "$extract_dir/lib/lemon_web-*/priv/static/assets/app*.css" > /dev/null; then
+    echo "$profile: missing bundled lemon_web CSS (runtime CDN fallback is forbidden)" >&2
     exit 1
   fi
 
@@ -529,6 +535,19 @@ boot_one_profile() {
 
     if [ "$profile" = "lemon_runtime_full" ]; then
       wait_for_health "http://127.0.0.1:$web_port/healthz" "$profile web"
+
+      launcher_output="$(
+        (
+          cd "$extract_dir"
+          env "${env_vars[@]}" "$extract_dir/bin/lemon" web --no-open
+        ) 2>&1
+      )"
+      if ! printf '%s\n' "$launcher_output" | grep -q "Lemon Web: http://127.0.0.1:$web_port/"; then
+        echo "$profile: packaged 'lemon web --no-open' did not report the healthy Web URL" >&2
+        printf '%s\n' "$launcher_output" >&2
+        exit 1
+      fi
+
       assert_no_asset_warmup_failure "$profile" "$extract_dir"
     fi
 
