@@ -200,6 +200,7 @@ if [[ "${1:-}" == "node" ]]; then
   case "$node_action" in
     join)
       shift
+      export LEMON_NODE_LAUNCH_CWD="$LAUNCH_CWD"
       cd "$LEMON_ROOT"
       exec mix run --no-start -e 'CodingAgent.ExecutionNode.CLI.main(System.argv())' -- "$@"
       ;;

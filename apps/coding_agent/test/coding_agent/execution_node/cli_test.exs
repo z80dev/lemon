@@ -27,4 +27,11 @@ defmodule CodingAgent.ExecutionNode.CLITest do
     assert CLI.help() =~ "LEMON_NODE_OPERATOR_TOKEN"
     assert CLI.help() =~ "mode-0600"
   end
+
+  test "uses the caller's launch cwd unless --cwd is explicit" do
+    assert CLI.default_cwd([], "/caller/project", "/lemon/source") == "/caller/project"
+
+    assert CLI.default_cwd([cwd: "/explicit/project"], "/caller/project", "/lemon/source") ==
+             "/explicit/project"
+  end
 end

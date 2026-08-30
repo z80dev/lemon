@@ -72,6 +72,51 @@ defmodule LemonControlPlane.NamedNodeIntegrationTest do
     Process.exit(other_pid, :kill)
   end
 
+  test "live registry accepts a result before the durable invocation is visible" do
+    node_id = unique("fast-result")
+    :ok = LemonCore.NodeRegistry.register(node_id, "Fast Result Node", self())
+
+    assert {:ok, invoke_id} =
+             LemonCore.NodeRegistry.invoke(node_id, "work.run", %{}, recipient: self())
+
+    assert_receive {:node_event, "node.invoke.request", %{"invokeId" => ^invoke_id}}
+    assert NodeStore.get_invocation(invoke_id) == nil
+
+    assert {:ok, %{"received" => true}} =
+             NodeInvokeResult.handle(
+               %{"invokeId" => invoke_id, "result" => %{"ok" => true}},
+               %{auth: %{role: :node, client_id: node_id}}
+             )
+
+    assert_receive {:lemon_node_result, ^invoke_id, {:ok, %{"ok" => true}}}
+  end
+
+  test "node invocation rejects malformed JSON boundary values without crashing" do
+    assert {:error, {:invalid_request, "nodeId must be a non-empty string"}} =
+             NodeInvoke.handle(
+               %{"nodeId" => ["not", "an", "id"], "method" => "work.run"},
+               @operator_ctx
+             )
+
+    assert {:error, {:invalid_request, "method must be a non-empty string"}} =
+             NodeInvoke.handle(
+               %{"nodeId" => "node-id", "method" => %{"not" => "a string"}},
+               @operator_ctx
+             )
+
+    assert {:error, {:invalid_request, "args must be an object"}} =
+             NodeInvoke.handle(
+               %{"nodeId" => "node-id", "method" => "work.run", "args" => ["invalid"]},
+               @operator_ctx
+             )
+
+    assert {:error, {:invalid_request, "invokeId must be a non-empty string"}} =
+             NodeInvokeResult.handle(
+               %{"invokeId" => 123, "result" => %{}},
+               %{auth: %{role: :node, client_id: "node-id"}}
+             )
+  end
+
   test "authenticated node websocket owns live registration and targeted frames" do
     node_id = unique("ws-node")
     node_name = "WS Node #{System.unique_integer([:positive])}"
@@ -195,7 +240,7 @@ defmodule LemonControlPlane.NamedNodeIntegrationTest do
   defp clear_live_nodes do
     Enum.each(LemonCore.NodeRegistry.list(), fn node ->
       if Enum.any?(
-           ["target-", "other-", "ws-node-", "rename-live-"],
+           ["target-", "other-", "fast-result-", "ws-node-", "rename-live-"],
            &String.starts_with?(node.id, &1)
          ) do
         LemonCore.NodeRegistry.unregister(node.id, node.pid)

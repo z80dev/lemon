@@ -270,7 +270,7 @@ Without a token, operators receive the scopes listed in `connect` params (or all
 1. Node calls `node.pair.request` with nodeType and nodeName.
 2. Operator approves via `node.pair.approve`.
 3. Node calls `node.pair.verify` with the pairing code and receives a challenge.
-4. Node calls `connect.challenge` with the challenge and receives a session token (default TTL: 24 hours).
+4. Node calls `connect.challenge` with the challenge and receives a session token (default TTL: 7 days).
 5. Node uses `{"auth": {"token": "..."}}` in future `connect` calls.
 
 Token validation is handled by `Auth.TokenStore`, backed by `LemonCore.Store` under the `:session_tokens` namespace. Tokens are validated on each connection attempt and expired tokens are cleaned up lazily.

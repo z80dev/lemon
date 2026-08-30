@@ -35,11 +35,25 @@ defmodule LemonCore.NodeRegistryTest do
   end
 
   test "replaces an earlier connection for the same paired node" do
-    old = spawn(fn -> Process.sleep(:infinity) end)
+    parent = self()
+
+    old = spawn(fn -> relay(parent, :old_connection) end)
+
     new = spawn(fn -> Process.sleep(:infinity) end)
 
     assert :ok = NodeRegistry.register("node-1", "ophy", old)
+    assert {:ok, invoke_id} = NodeRegistry.invoke("ophy", "coding_agent.run", %{})
+
+    assert_receive {:old_connection,
+                    {:node_event, "node.invoke.request", %{"invokeId" => ^invoke_id}}}
+
     assert :ok = NodeRegistry.register("node-1", "ophy", new)
+
+    assert_receive {:old_connection,
+                    {:node_event, "node.invoke.cancel", %{"invokeId" => ^invoke_id}}}
+
+    assert_receive {:lemon_node_result, ^invoke_id, {:error, {:node_disconnected, :reconnected}}}
+
     assert {:ok, %{pid: ^new}} = NodeRegistry.resolve("ophy")
 
     Process.exit(old, :kill)
@@ -92,7 +106,22 @@ defmodule LemonCore.NodeRegistryTest do
     assert {:ok, invoke_id} =
              NodeRegistry.invoke("newphy", "coding_agent.run", %{}, timeout_ms: 10)
 
+    assert_receive {:node_event, "node.invoke.request", %{"invokeId" => ^invoke_id}}
+    assert_receive {:node_event, "node.invoke.cancel", %{"invokeId" => ^invoke_id}}
     assert_receive {:lemon_node_result, ^invoke_id, {:error, :timeout}}, 1_000
+  end
+
+  test "cancels destination work when the result recipient exits" do
+    assert :ok = NodeRegistry.register("node-1", "newphy", self())
+    recipient = spawn(fn -> Process.sleep(:infinity) end)
+
+    assert {:ok, invoke_id} =
+             NodeRegistry.invoke("newphy", "coding_agent.run", %{}, recipient: recipient)
+
+    assert_receive {:node_event, "node.invoke.request", %{"invokeId" => ^invoke_id}}
+    Process.exit(recipient, :kill)
+
+    assert_receive {:node_event, "node.invoke.cancel", %{"invokeId" => ^invoke_id}}, 1_000
   end
 
   test "cancel sends a targeted cancellation event" do
@@ -104,5 +133,13 @@ defmodule LemonCore.NodeRegistryTest do
 
     assert_receive {:node_event, "node.invoke.cancel", %{"invokeId" => ^invoke_id}}
     assert_receive {:lemon_node_result, ^invoke_id, {:error, :user_requested}}
+  end
+
+  defp relay(parent, tag) do
+    receive do
+      message ->
+        send(parent, {tag, message})
+        relay(parent, tag)
+    end
   end
 end

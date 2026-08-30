@@ -169,6 +169,45 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
   end
 
   @tag :tmp_dir
+  test "cancels local work when the controller connection is lost", %{tmp_dir: tmp_dir} do
+    {:ok, worker} = start_worker(tmp_dir, token: "node-token")
+    assert_receive {:socket_started, socket, _opts}
+
+    send(worker, {
+      :execution_node_socket,
+      socket,
+      {:connected, %{"auth" => %{"clientId" => "node-1"}}}
+    })
+
+    args = %{"version" => 1, "prompt" => "long run", "cwd" => nil, "meta" => %{}}
+    invoke(worker, socket, "invoke-disconnect", "node-1", args)
+
+    assert_receive {:executor_started, _request, _opts, ^worker, run_ref, context}
+
+    send(worker, {:execution_node_socket, socket, {:disconnected, :closed}})
+
+    assert_receive {:executor_cancelled, ^context}
+
+    send(worker, {
+      :engine_event,
+      run_ref,
+      %{
+        __event__: :completed,
+        ok: true,
+        answer: "late",
+        error: nil,
+        usage: nil,
+        meta: %{},
+        resume: nil
+      }
+    })
+
+    refute_receive {:socket_request, ^socket, "node.invoke.result", _, _, _}, 50
+    Process.exit(context.runner_pid, :kill)
+    GenServer.stop(worker)
+  end
+
+  @tag :tmp_dir
   test "pairs, stores the challenge-issued token privately, and reconnects as the node", %{
     tmp_dir: tmp_dir
   } do
@@ -228,6 +267,36 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
   end
 
   @tag :tmp_dir
+  test "rejects a stored token that authenticates as a different node", %{tmp_dir: tmp_dir} do
+    token_root = Path.join(tmp_dir, "tokens")
+
+    assert :ok =
+             TokenStore.save(
+               "newphy",
+               %{
+                 "token" => "session-token",
+                 "nodeId" => "expected-node",
+                 "controller" => "ws://controller:4040/ws"
+               },
+               root: token_root
+             )
+
+    Process.flag(:trap_exit, true)
+    {:ok, worker} = start_worker(tmp_dir, [])
+    assert_receive {:socket_started, socket, _opts}
+
+    send(worker, {
+      :execution_node_socket,
+      socket,
+      {:connected, %{"auth" => %{"clientId" => "different-node"}}}
+    })
+
+    assert_receive {:EXIT, ^worker,
+                    {:authenticated_node_id_mismatch,
+                     %{expected: "expected-node", actual: "different-node"}}}
+  end
+
+  @tag :tmp_dir
   test "rejects unsupported versions and nonexistent request cwd", %{tmp_dir: tmp_dir} do
     state = %Worker{name: "newphy", default_cwd: tmp_dir}
 
@@ -240,6 +309,22 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
                state,
                "invoke"
              )
+  end
+
+  @tag :tmp_dir
+  test "resolves relative invocation cwd from the node default", %{tmp_dir: tmp_dir} do
+    nested = Path.join(tmp_dir, "projects/lemon")
+    File.mkdir_p!(nested)
+    state = %Worker{name: "newphy", default_cwd: tmp_dir}
+
+    assert {:ok, request, _opts} =
+             Worker.execution_request(
+               %{"version" => 1, "prompt" => "work", "cwd" => "projects/lemon"},
+               state,
+               "invoke"
+             )
+
+    assert request.cwd == nested
   end
 
   defp start_worker(tmp_dir, extra_opts) do

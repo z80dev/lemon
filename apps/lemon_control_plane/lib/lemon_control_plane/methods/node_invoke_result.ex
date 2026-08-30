@@ -34,8 +34,8 @@ defmodule LemonControlPlane.Methods.NodeInvokeResult do
       not is_binary(authenticated_node_id) or authenticated_node_id == "" ->
         {:error, Errors.forbidden("Authenticated node identity is required")}
 
-      is_nil(invoke_id) or invoke_id == "" ->
-        {:error, Errors.invalid_request("invokeId is required")}
+      not is_binary(invoke_id) or String.trim(invoke_id) == "" ->
+        {:error, Errors.invalid_request("invokeId must be a non-empty string")}
 
       true ->
         complete_invocation(authenticated_node_id, invoke_id, result, error)
@@ -57,6 +57,38 @@ defmodule LemonControlPlane.Methods.NodeInvokeResult do
   end
 
   defp complete_invocation(authenticated_node_id, invoke_id, result, error) do
+    case LemonCore.NodeRegistry.complete(authenticated_node_id, invoke_id, result, error) do
+      :ok ->
+        settle_live_result(authenticated_node_id, invoke_id, result, error)
+
+      {:error, :wrong_node} ->
+        {:error, Errors.forbidden("Invocation belongs to a different node")}
+
+      {:error, :not_found} ->
+        complete_legacy_invocation(authenticated_node_id, invoke_id, result, error)
+    end
+  end
+
+  # The node can answer immediately after the registry dispatches the request,
+  # before NodeInvoke has persisted its durable status record. Registry
+  # ownership is therefore checked first; the source connection will settle
+  # the durable record from the registry notification once its dispatch call
+  # returns.
+  defp settle_live_result(authenticated_node_id, invoke_id, result, error) do
+    case NodeStore.get_invocation(invoke_id) do
+      invocation when is_map(invocation) ->
+        if get_field(invocation, :node_id) == authenticated_node_id and pending?(invocation) do
+          settle_and_reply(invocation, invoke_id, result, error)
+        else
+          accepted_reply(authenticated_node_id, invoke_id, result, error)
+        end
+
+      _ ->
+        accepted_reply(authenticated_node_id, invoke_id, result, error)
+    end
+  end
+
+  defp complete_legacy_invocation(authenticated_node_id, invoke_id, result, error) do
     case NodeStore.get_invocation(invoke_id) do
       nil ->
         {:error, Errors.not_found("Invocation not found")}
@@ -71,39 +103,13 @@ defmodule LemonControlPlane.Methods.NodeInvokeResult do
           not pending?(invocation) ->
             {:error, Errors.conflict("Invocation is no longer pending")}
 
+          get_field(invocation, :registry_managed) ->
+            {:error, Errors.conflict("Invocation is no longer pending")}
+
           true ->
-            complete_live_invocation(
-              invocation,
-              authenticated_node_id,
-              invoke_id,
-              result,
-              error
-            )
-        end
-    end
-  end
-
-  defp complete_live_invocation(
-         invocation,
-         authenticated_node_id,
-         invoke_id,
-         result,
-         error
-       ) do
-    case LemonCore.NodeRegistry.complete(authenticated_node_id, invoke_id, result, error) do
-      :ok ->
-        settle_and_reply(invocation, invoke_id, result, error)
-
-      {:error, :wrong_node} ->
-        {:error, Errors.forbidden("Invocation belongs to a different node")}
-
-      {:error, :not_found} ->
-        if get_field(invocation, :registry_managed) do
-          {:error, Errors.conflict("Invocation is no longer pending")}
-        else
-          # Compatibility for durable invocations created before NodeRegistry
-          # became the live delivery authority.
-          settle_and_reply(invocation, invoke_id, result, error)
+            # Compatibility for durable invocations created before NodeRegistry
+            # became the live delivery authority.
+            settle_and_reply(invocation, invoke_id, result, error)
         end
     end
   end
@@ -111,13 +117,17 @@ defmodule LemonControlPlane.Methods.NodeInvokeResult do
   defp settle_and_reply(invocation, invoke_id, result, error) do
     :ok = settle(invocation, invoke_id, result, error)
 
+    accepted_reply(get_field(invocation, :node_id), invoke_id, result, error)
+  end
+
+  defp accepted_reply(node_id, invoke_id, result, error) do
     {:ok,
      %{
        "invokeId" => invoke_id,
        "received" => true,
        "summary" => %{
          "invokeId" => invoke_id,
-         "nodeId" => get_field(invocation, :node_id),
+         "nodeId" => node_id,
          "status" => if(error, do: "error", else: "completed"),
          "ok" => is_nil(error),
          "hasResult" => not is_nil(result),

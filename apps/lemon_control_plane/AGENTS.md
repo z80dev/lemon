@@ -465,7 +465,7 @@ Without a token, operators receive the scopes listed in `connect` params (or all
 
 1. Node calls `node.pair.request` -> operator approves via `node.pair.approve`
 2. Node calls `node.pair.verify` with the pairing code -> gets a challenge
-3. Node calls `connect.challenge` with the challenge -> receives a session token (TTL: 24 hours)
+3. Node calls `connect.challenge` with the challenge -> receives a session token (TTL: 7 days)
 4. Node uses `{"auth": {"token": "..."}}` in future `connect` calls
 
 Token validation is handled by `LemonControlPlane.Auth.TokenStore` (backed by `LemonCore.Store` under `:session_tokens` namespace).
