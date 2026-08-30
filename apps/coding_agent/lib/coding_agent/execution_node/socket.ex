@@ -65,8 +65,8 @@ defmodule CodingAgent.ExecutionNode.Socket do
   @impl WebSockex
   def handle_connect(_conn, state) do
     id = LemonCore.Id.uuid()
-    frame = Codec.encode_request(id, "connect", state.connect_params)
-    {:reply, {:text, frame}, %{state | connect_id: id, pending: %{}, stopping: false}}
+    send(self(), {:execution_node_send_connect, id})
+    {:ok, %{state | connect_id: id, pending: %{}, stopping: false}}
   end
 
   @impl WebSockex
@@ -115,6 +115,14 @@ defmodule CodingAgent.ExecutionNode.Socket do
   end
 
   @impl WebSockex
+  def handle_info(
+        {:execution_node_send_connect, id},
+        %{connect_id: id} = state
+      ) do
+    frame = Codec.encode_request(id, "connect", state.connect_params)
+    {:reply, {:text, frame}, state}
+  end
+
   def handle_info({:request_timeout, id}, state) do
     {pending, rest} = Map.pop(state.pending, id)
     if pending, do: notify(state, {:response, pending.tag, {:error, :timeout}})

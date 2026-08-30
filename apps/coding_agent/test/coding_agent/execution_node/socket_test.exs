@@ -11,8 +11,12 @@ defmodule CodingAgent.ExecutionNode.SocketTest do
       reconnect_delay_ms: 0
     }
 
-    assert {:reply, {:text, connect_frame}, connected_state} =
-             Socket.handle_connect(:ignored, state)
+    assert {:ok, connected_state} = Socket.handle_connect(:ignored, state)
+    connect_id = connected_state.connect_id
+    assert_receive {:execution_node_send_connect, ^connect_id}
+
+    assert {:reply, {:text, connect_frame}, ^connected_state} =
+             Socket.handle_info({:execution_node_send_connect, connect_id}, connected_state)
 
     decoded_connect = Jason.decode!(connect_frame)
     assert decoded_connect["method"] == "connect"
@@ -61,7 +65,13 @@ defmodule CodingAgent.ExecutionNode.SocketTest do
     assert reconnecting.connect_id == nil
     assert_receive {:execution_node_socket, _pid, {:disconnected, :closed}}
 
-    assert {:reply, {:text, frame}, _state} = Socket.handle_connect(:ignored, reconnecting)
+    assert {:ok, connected_state} = Socket.handle_connect(:ignored, reconnecting)
+    connect_id = connected_state.connect_id
+    assert_receive {:execution_node_send_connect, ^connect_id}
+
+    assert {:reply, {:text, frame}, ^connected_state} =
+             Socket.handle_info({:execution_node_send_connect, connect_id}, connected_state)
+
     assert Jason.decode!(frame)["params"]["auth"]["token"] == "secret"
   end
 
