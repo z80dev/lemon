@@ -38,6 +38,7 @@ lemon doctor
 ./bin/lemon secrets status
 ./bin/lemon channels
 ./bin/lemon doctor
+./bin/lemon node join --name worker-1 --controller ws://controller:4040/ws --pair --cwd /srv/project
 ```
 
 The installed `lemon` runtime CLI is included in the minimal and full release
@@ -206,6 +207,25 @@ mix lemon.sim.score  apps/lemon_sim/priv/game_logs/vending_bench/vb_ci
 `scripts/release_package` is a shell **script**, not a `mix` task — invoke it
 directly (`scripts/release_package <package>`). It is not listed by
 `mix lemon.help`.
+
+`./bin/lemon node join` is also a source wrapper, not a Mix task. It starts a
+long-lived native coding execution worker and therefore has no `mix
+lemon.node.*` entry:
+
+```bash
+LEMON_NODE_OPERATOR_TOKEN=... ./bin/lemon node join \
+  --name worker-1 \
+  --controller ws://controller:4040/ws \
+  --pair \
+  --cwd /srv/project
+```
+
+Use `--pair` when creating the controller identity. Later starts reuse the
+private, controller-bound token stored on the destination; the CLI does not
+automatically refresh it after the controller's seven-day session-token expiry.
+Prefer `LEMON_NODE_OPERATOR_TOKEN` / `LEMON_NODE_TOKEN` over token flags; node
+names must be unique on the controller, and the destination cwd must already
+exist.
 
 ---
 

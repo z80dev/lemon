@@ -188,6 +188,58 @@ Delegated tasks run as native in-process subagents (child `CodingAgent.Session`
 executions) when the agent invokes its `task` tool. There are no vendor CLI task
 runners and no `[runtime.cli.*]` configuration.
 
+### Named Execution Nodes
+
+The `agent` tool can route a delegated run to an authenticated execution node
+with its optional `node` parameter. Omit `node` or use `"local"` for the
+controller host. A named value must be online in the controller's live node
+registry. This placement is a per-run tool parameter, not a TOML engine or
+provider setting:
+
+```json
+{
+  "action": "run",
+  "agent_id": "default",
+  "prompt": "Run the focused checks.",
+  "node": "worker-1"
+}
+```
+
+Join a destination from a source checkout with:
+
+```bash
+LEMON_NODE_OPERATOR_TOKEN=... ./bin/lemon node join \
+  --name worker-1 \
+  --controller ws://controller:4040/ws \
+  --pair \
+  --cwd /srv/project
+```
+
+On first connection, `--pair` creates the durable controller identity and
+stores its issued seven-day session token in a mode-0600 file under
+`~/.lemon/nodes/execution/`; the containing directory is mode 0700. Each record
+is keyed by a hash of the node name and includes the exact controller URL, so
+reuse fails closed for a different controller. The local record persists, but
+does not extend server-side token expiry. Later starts omit `--pair`. The CLI
+does not refresh an expired token automatically; restoring the node requires
+operator pairing action, and a new identity can reuse its name only after the
+old durable identity is renamed.
+
+`LEMON_NODE_OPERATOR_TOKEN` supplies pairing authority and is used only during
+pairing. `LEMON_NODE_TOKEN` supplies an existing session token. Prefer these
+environment variables to `--operator-token` / `--token` so credentials do not
+enter shell history. These values are runtime CLI inputs, not `config.toml`
+keys.
+
+Provider credentials and default cwd are destination-local. If the `agent`
+tool omits `cwd`, the destination uses the directory passed to `node join`; an
+explicit `cwd` is resolved and validated on that machine. Only JSON-safe run
+data crosses the controller WebSocket. Source executor options, resolved
+provider credentials, callbacks, and BEAM state do not. Explicit cancellation
+is delivered to the targeted worker; disconnects fail pending invocations.
+Remote execution still uses the native `CodingAgent.Executor`, never a vendor
+CLI runner.
+
 ### Removed Top-Level Engine Configuration
 
 Remove these legacy keys and tables from global and project configuration:
@@ -221,6 +273,7 @@ Environment variables override file values. Common overrides:
 - `LEMON_DOCKER_TERMINAL_READ_ONLY_ROOTFS`, `LEMON_DOCKER_TERMINAL_TMPFS_SIZE`, `LEMON_DOCKER_TERMINAL_ALLOWED_IMAGES`
 - `LEMON_SSH_TERMINAL_TARGET`, `LEMON_SSH_TERMINAL_WORKDIR`, `LEMON_SSH_TERMINAL_PORT`, `LEMON_SSH_TERMINAL_CONNECT_TIMEOUT`, `LEMON_SSH_TERMINAL_STRICT_HOST_KEY_CHECKING`, `LEMON_SSH_TERMINAL_ALLOWED_TARGETS`
 - `LEMON_GATEWAY_HEALTH_PORT`, `LEMON_ROUTER_HEALTH_PORT`
+- `LEMON_NODE_OPERATOR_TOKEN`, `LEMON_NODE_TOKEN`
 - `LEMON_LOG_FILE`, `LEMON_LOG_LEVEL`
 - `BRAVE_API_KEY`, `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, `FIRECRAWL_API_KEY`
 

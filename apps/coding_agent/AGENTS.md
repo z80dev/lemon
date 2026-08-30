@@ -56,6 +56,8 @@ The main coding agent implementation for the Lemon AI assistant platform. This a
 | `CodingAgent.ExecutionNode.Worker` | Authenticated named-node worker that executes targeted `coding_agent.run` requests through the native executor |
 | `CodingAgent.ExecutionNode.Socket` | Reconnecting control-plane WebSocket client with authenticated handshakes and redacted status |
 | `CodingAgent.ExecutionNode.TokenStore` | Mode-0600, node-name-keyed local session-token storage |
+| `CodingAgent.Executor.RemoteSessionRunner` | Source-side bridge from one native gateway execution to one live named node |
+| `CodingAgent.Executor.RemoteRequestCodec` | JSON-safe request/result boundary with destination-local cwd semantics |
 
 Session lifecycle calls to `save/1` and auto-compaction state reads are treated as best-effort.
 When downstream store or agent processes time out, callers should log and continue instead of crashing the session/runner process.
@@ -189,6 +191,12 @@ the `kanban` tool through tool policy to avoid recursive board management.
 | `CodingAgent.ToolPolicy` | Tool allow/deny/approval policies; predefined profiles (`:full_access`, `:orchestrator`, `:leaf_worker`, `:read_only`, `:safe_mode`, `:subagent_restricted`, `:no_external`, `:minimal_core`) |
 
 Internal `task` children default to the `:leaf_worker` policy. They keep normal work tools such as `read`, `write`, and `bash`, but recursive `task`/`agent` delegation is blocked unless a caller passes an explicit `tool_policy` override.
+
+The `agent` tool's optional `node` parameter selects execution placement for a
+delegated router run. Omit it or use `"local"` for the controller host. Named
+values resolve through the live `LemonCore.NodeRegistry`; omitted `cwd` uses the
+destination worker's default, while an explicit `cwd` is interpreted and
+validated on that destination. `task` stays in-process on the current host.
 
 ### Budget & Resource Management
 
@@ -706,11 +714,32 @@ Run a native worker against a Lemon controller from the source checkout:
 ./bin/lemon node join --name worker-name --controller ws://controller:4040/ws --pair --cwd /path/to/project
 ```
 
-Subsequent starts reuse the private node-name-keyed token. Prefer
-`LEMON_NODE_OPERATOR_TOKEN` and `LEMON_NODE_TOKEN` to the corresponding CLI
-flags so credentials do not enter shell history. The worker accepts only the
-versioned `coding_agent.run` protocol, strips `meta.node` before local execution,
-validates the selected local working directory, and handles targeted cancellation.
+`--pair` creates a controller-owned durable node identity, exchanges its
+one-time challenge for a seven-day session token, and stores that token under
+`~/.lemon/nodes/execution/<sha256-of-node-name>.json`. The directory is mode
+0700 and each record is mode 0600. Records include the exact controller URL;
+later starts omit `--pair` and reuse a record only when its controller matches.
+The CLI does not refresh the server-side token automatically after its
+seven-day expiry; restoring the node requires operator pairing action, and a
+new identity can reuse the name only after the old durable identity is renamed.
+Prefer `LEMON_NODE_OPERATOR_TOKEN` and `LEMON_NODE_TOKEN` to the corresponding
+CLI flags so credentials do not enter shell history.
+
+Node names are trimmed and durably unique per controller. `node.list` reports
+paired identities with online/offline status derived from the live registry;
+only an authenticated live connection is executable. The worker advertises
+`coding_agent.run` version 1 and targeted cancellation, accepts only that run
+method, strips `meta.node` before local execution, and validates the selected
+local working directory.
+
+The cross-node payload includes only JSON-safe execution request data such as
+prompt, images, session/run identity, resume token, tool policy, metadata, and
+explicit cwd intent. Source-side executor options, provider credentials,
+callbacks, and BEAM process state are never serialized. The destination
+resolves its own provider credentials and uses its own default cwd. Explicit
+cancellation sends `node.invoke.cancel`; disconnects fail pending source
+invocations. Remote steer/redirect are unsupported. No vendor CLI runner is
+used anywhere in this path.
 
 ### Running Tests
 
@@ -841,6 +870,9 @@ apps/coding_agent/
 |   |   +-- subagents.ex, mentions.ex         # Subagent definitions and @mention parsing
 |   |   +-- commands.ex                       # Slash command loading
 |   |   +-- coordinator.ex                    # Concurrent subagent orchestration
+|   |   +-- executor.ex                       # Local/named-node native runner selection
+|   |   +-- executor/                         # Local/remote session runners and wire codec
+|   |   +-- execution_node/                   # CLI, worker, WebSocket client, token storage
 |   |   +-- lane_queue.ex                     # Concurrency-capped lane queue
 |   |   +-- parallel.ex                       # Semaphore and bounded parallelism
 |   |   +-- process_manager.ex                # DynamicSupervisor for background processes
@@ -854,7 +886,6 @@ apps/coding_agent/
 |   |   +-- progress.ex                       # Progress reporting
 |   |   +-- ui.ex                             # Pluggable UI abstraction
 |   |   +-- ui/context.ex                     # UI context helpers
-|   |   +-- cli_runners/                      # CLI runner integrations
 |   +-- mix/tasks/                            # Mix tasks
 +-- test/
 |   +-- coding_agent/
@@ -948,6 +979,11 @@ Key config paths (via `CodingAgent.Config`):
 | `extensions_dir/0` | `~/.lemon/agent/extensions/` |
 | `workspace_dir/0` | `~/.lemon/agent/workspace/` (assistant home bootstrap dir, distinct from `cwd`) |
 | `project_extensions_dir/1` | `<cwd>/.lemon/extensions/` |
+
+Execution-node tokens are not config keys. `LEMON_NODE_OPERATOR_TOKEN` is read
+only for `--pair`, and `LEMON_NODE_TOKEN` can supply an existing session token
+without writing it to shell history. An explicit `--token` overrides the stored
+record for that process; pairing still writes the newly issued session token.
 
 Provider API key resolution is handled by `CodingAgent.Session.ModelResolver` with fixed precedence:
 1. Provider env vars (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc.)
