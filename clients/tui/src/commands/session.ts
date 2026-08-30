@@ -233,6 +233,19 @@ export const sessionCommand: SlashCommand = {
 	},
 };
 
+/** Hermes-compatible shorthand for `/session reset`. */
+export const resetCommand: SlashCommand = {
+	name: "reset",
+	summary: "reset the current session and clear its visible transcript",
+	group: "sessions",
+	methods: [METHOD.sessionsReset],
+	async run(ctx) {
+		await ctx.methods.sessionsReset({ sessionKey: ctx.session.key });
+		ctx.ui.resetSession?.(ctx.session.key);
+		ctx.ui.notice(`reset ${ctx.session.key} (history cleared here and on the daemon)`);
+	},
+};
+
 export const resumeCommand: SlashCommand = {
 	name: "resume",
 	summary: "replay a session's stored history into the transcript",

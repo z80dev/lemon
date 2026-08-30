@@ -177,6 +177,7 @@ export function describeModel(entry: ModelEntry): string {
 
 export const thinkCommand: SlashCommand = {
 	name: "think",
+	aliases: ["reasoning"],
 	summary: "set the reasoning effort for this session",
 	usage: `<${THINKING_LEVELS.join("|")}>`,
 	group: "routing",

@@ -81,6 +81,17 @@ function complete(server: FakeControlPlane, runId: string, answer = "") {
 }
 
 describe("queue mode", () => {
+	test("/q forces queue semantics without colliding with quit", async () => {
+		const { app, server } = await boot();
+		await app.submit("first");
+		await app.submit("/q queued from the command");
+
+		expect(sends(server).map((params) => params.prompt)).toEqual(["first"]);
+		expect(app.store.queue.items(SESSION).map((item) => item.text)).toEqual([
+			"queued from the command",
+		]);
+	});
+
 	test("a prompt submitted during a run is held, not sent", async () => {
 		const { app, server } = await boot();
 		await app.submit("first");
@@ -153,6 +164,19 @@ describe("queue mode", () => {
 });
 
 describe("steer mode", () => {
+	test("/steer forces one steering submission without changing the default mode", async () => {
+		const { app, server } = await boot();
+		await app.submit("first");
+		await app.submit("/steer use the smaller patch");
+
+		expect(sends(server)[1]).toEqual({
+			sessionKey: SESSION,
+			prompt: "use the smaller patch",
+			queueMode: "steer",
+		});
+		expect(app.store.submissionMode).toBe("queue");
+	});
+
 	test("steering sends straight into the running turn", async () => {
 		const { app, server } = await boot();
 		app.store.setSubmissionMode("steer");
