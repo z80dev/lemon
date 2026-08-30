@@ -23,7 +23,8 @@ Key entry points:
 - **Tool Call Visualization**: Collapsible `<details>` elements showing engine actions and results
 - **Authentication**: Optional access token protection via Bearer header, query param, or session
 - **First-run readiness**: Shared `LemonCore.Setup.Readiness` state blocks doomed prompt/upload submissions and gives exact setup recovery
-- **Run control**: Active browser runs expose cancellation through `LemonRouter.abort_run/2`
+- **Run control**: Active browser runs expose cancellation plus explicit
+  follow-up/steer/redirect submission through the shared router contracts
 - **Session lifecycle**: Shared `LemonCore.SessionLifecycle` list/search/title/pin/archive/export/prune operations; never duplicate its stores
 - **Management security**: `/manage` fails closed without a configured access token; inspection/export are always redacted
 - **Resume**: Named chat routes reconstruct durable prompt/tool/answer history using the internal trusted unredacted mode
@@ -75,6 +76,9 @@ live "/sessions/:session_key", SessionLive, :show  # Uses the provided session k
 - `:messages` - List of message maps (max 250, newest kept on overflow)
 - `:last_run_id` - Tracks current run for delta aggregation
 - `:run_status` - `:idle`, `:running`, or `:stopping` for active-run controls
+- `:control_mode` - `:followup`, `:steer`, or `:redirect` while a run is active
+- `:control_notice` - Bounded success/refusal feedback; never copy raw runtime
+  error terms into this assign
 - `:setup_state` / `:setup_ready?` - Shared config/secrets/provider readiness shown in the browser
 - `:submit_error` - Validation/error string shown above submit button
 
@@ -92,6 +96,15 @@ Named session mounts also call `SessionLifecycle.history/2` with
 `redact: false` to reconstruct the user's private conversation in order. This
 mode is restricted to the in-process chat resume path. Management inspection,
 downloads, and operator JSON-RPC must remain redacted.
+
+Every mount also reconciles its active run through
+`LemonCore.RouterBridge.active_run/1`. Follow-up, steer, and redirect are shown
+only for an eligible active run and recheck that read model at submit time.
+Active guidance is text-only and bounded by the shared named-node control-text
+limit. A successful router submission keeps `:last_run_id` pointed at the
+original active run (the returned submission ID is not a stop target); a stale
+or refused control keeps the draft and renders a fixed user-facing message.
+Do not expose remote error terms, invocation IDs, credentials, or paths.
 
 ### ManagementLive
 
@@ -422,12 +435,18 @@ When testing routes behind `RequireAccessToken`, either:
 - `LemonCore.MapHelpers` -- `get_key/2` for atom-or-string map key access
 - `LemonCore.PubSub` -- The PubSub server process (configured as endpoint's `pubsub_server`)
 - `LemonCore.Setup.Readiness` -- Single read-only first-run readiness state shared with the CLI/TUI
+- `LemonCore.RouterBridge` -- Fail-safe active-run lookup used to discover and
+  revalidate eligible active-session controls
+- `LemonCore.NodeRegistry.max_control_text_bytes/0` -- Shared text bound for
+  Web steer/redirect guidance
 
 ### lemon_router
 
 - `LemonRouter.submit/1` -- Submits a prompt to be routed to the appropriate agent. Returns `{:ok, run_id}` or `{:error, reason}`.
 - `LemonRouter.abort/1` -- Aborts the active run for a session key.
 - `LemonRouter.abort_run/1` -- Aborts a specific run by ID.
+- Active-run submissions set `queue_mode` to `:followup`, `:steer`, or
+  `:redirect`; do not add a Web-only control protocol.
 
 ## Configuration Reference
 
@@ -473,6 +492,7 @@ apps/lemon_web/
 |       |-- 500.html.heex             # Server error page
 |-- priv/
 |   |-- static/assets/app.css          # Checked-in compiled Tailwind stylesheet
+|   |-- static/assets/session.css      # Responsive active-run controls and notices
 |   |-- static/assets/app.js           # Client JS (LiveSocket init, session keys)
 |   |-- gettext/.keep                   # i18n placeholder
 |-- test/

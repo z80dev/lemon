@@ -1,0 +1,198 @@
+.active-run-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  padding: 0.75rem 0.875rem;
+  border: 1px solid #bae6fd;
+  border-radius: 0.75rem;
+  background: #f0f9ff;
+  color: #0c4a6e;
+}
+
+.active-run-status-dot {
+  width: 0.625rem;
+  height: 0.625rem;
+  flex: 0 0 auto;
+  margin-top: 0.3rem;
+  border-radius: 9999px;
+  background: #0284c7;
+  box-shadow: 0 0 0 0.25rem rgba(14, 165, 233, 0.12);
+}
+
+.active-run-status-title {
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+
+.active-run-status-copy {
+  margin-top: 0.125rem;
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.active-run-controls {
+  min-width: 0;
+}
+
+.active-run-controls-legend {
+  margin-bottom: 0.5rem;
+  color: #475569;
+  font-size: 0.75rem;
+  font-weight: 650;
+  letter-spacing: 0.025em;
+  text-transform: uppercase;
+}
+
+.active-run-control-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.active-run-control-option {
+  min-width: 0;
+  min-height: 5.5rem;
+  padding: 0.7rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.75rem;
+  background: #fff;
+  color: #334155;
+  cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease, box-shadow 120ms ease;
+}
+
+.active-run-control-option:hover {
+  border-color: #7dd3fc;
+  background: #f8fafc;
+}
+
+.active-run-control-option:focus-within {
+  outline: 2px solid #0284c7;
+  outline-offset: 2px;
+}
+
+.active-run-control-option-selected {
+  border-color: #0284c7;
+  background: #f0f9ff;
+  box-shadow: inset 0 0 0 1px #0284c7;
+}
+
+.active-run-control-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.active-run-control-name,
+.active-run-control-description {
+  display: block;
+}
+
+.active-run-control-name {
+  color: #0f172a;
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+
+.active-run-control-description {
+  margin-top: 0.25rem;
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
+.active-run-text-note {
+  padding: 0.7rem 0.8rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.75rem;
+  background: #f8fafc;
+  color: #64748b;
+  font-size: 0.75rem;
+}
+
+.active-run-notice {
+  padding: 0.7rem 0.8rem;
+  border: 1px solid;
+  border-radius: 0.65rem;
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
+.active-run-notice-success {
+  border-color: #a7f3d0;
+  background: #ecfdf5;
+  color: #065f46;
+}
+
+.active-run-notice-info {
+  border-color: #bae6fd;
+  background: #f0f9ff;
+  color: #075985;
+}
+
+.active-run-notice-warning {
+  border-color: #fde68a;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.active-run-notice-error {
+  border-color: #fecdd3;
+  background: #fff1f2;
+  color: #9f1239;
+}
+
+.composer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.active-run-secondary-button {
+  min-height: 2.25rem;
+  padding: 0.45rem 0.7rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.5rem;
+  background: #fff;
+  color: #475569;
+  font-size: 0.8rem;
+  font-weight: 650;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.active-run-secondary-button:hover {
+  border-color: #94a3b8;
+  background: #f8fafc;
+}
+
+.active-run-secondary-button:focus-visible {
+  outline: 2px solid #0284c7;
+  outline-offset: 2px;
+}
+
+@media (max-width: 640px) {
+  .active-run-control-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .active-run-control-option {
+    min-height: 0;
+  }
+
+  .composer-actions {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .composer-actions > * {
+    flex: 1 1 auto;
+  }
+}

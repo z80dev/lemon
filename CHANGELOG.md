@@ -108,6 +108,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - The control-plane chat surfaces and TUI now preserve redirect as a distinct
   active-run mode. The TUI exposes `/redirect` and cycles queue, steer,
   redirect, and interrupt without conflating redirect with non-canceling steer.
+- Lemon Web now discovers an already-active session run and presents explicit,
+  responsive follow-up, steer, and redirect choices. The text-only controls
+  recheck run eligibility at submit time, keep stop bound to the real active
+  run, preserve a refused draft, and report bounded user-facing outcomes
+  without rendering internal node/runtime errors.
 
 ### Changed
 

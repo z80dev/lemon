@@ -53,8 +53,21 @@ not become ready, run `lemon doctor` and follow its recovery guidance.
 
 Once the page shows **Ready**, enter a prompt or attach up to five files (20 MB
 each). Responses and tool activity stream into the page. While a run is active,
-choose **Stop** to request cancellation. Session identifiers are available
-under **Session details** when debugging, but are hidden during ordinary use.
+the composer switches to text-only active-run controls:
+
+- **Follow-up** queues a separate turn after the current run finishes.
+- **Steer** adds guidance to the current run without replacing its direction.
+- **Redirect** replaces the pending direction while preserving tool work that
+  has already completed.
+
+The page discovers active work when a named session is opened, rechecks the
+same shared router state before submitting guidance, and keeps the draft if the
+run ended in the meantime. A successful message confirms what was requested;
+a refused request uses a bounded explanation and never displays node
+credentials, remote paths, or internal runtime terms. Choose **Check status**
+to reconcile the controls manually or **Stop** to request cancellation of the
+actual active run. Session and run identifiers remain hidden during ordinary
+use and are available under **Session details** only when debugging.
 
 Each browser tab gets its own stable session in `sessionStorage`. Use
 `/sessions/<session-key>` only when deliberately attaching to a known Lemon
@@ -120,6 +133,7 @@ Do not expose an unauthenticated HTTP listener to an untrusted network.
 | Browser did not open | Use `lemon web --no-open` and open the printed URL manually. |
 | HTTP 401 | Launch through `lemon web` with the same `LEMON_WEB_ACCESS_TOKEN`, or supply the token once as `?token=...`. |
 | Management HTTP 503 | Set a non-empty `LEMON_WEB_ACCESS_TOKEN`, restart Lemon, and authenticate once. |
+| Active-run choices disappeared | The run finished or is no longer eligible. Send the preserved draft as a new message, or choose **Check status** if the run is still active elsewhere. |
 
 The UI ships its CSS and Phoenix client assets inside the Lemon release. It
 does not require a JavaScript or CSS CDN at runtime. The page includes a skip
