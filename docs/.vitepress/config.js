@@ -10,8 +10,10 @@ export default {
   themeConfig: {
     nav: [
       { text: "Home", link: "/" },
+      { text: "Quickstart", link: "/getting-started/quickstart" },
       { text: "Install", link: "/install" },
       { text: "Compare", link: "/compare" },
+      { text: "Hermes Audit", link: "/plans/lemon-hermes-gap-audit-2026-08-11" },
       { text: "Benchmarks", link: "/benchmarks/quickstart" },
       { text: "Demo", link: "/demo" },
       { text: "Launch Plan", link: "/plans/lemon-1.0-mainstream-readiness" },
@@ -24,6 +26,7 @@ export default {
         text: "Product",
         items: [
           { text: "Home", link: "/" },
+          { text: "Quickstart", link: "/getting-started/quickstart" },
           { text: "Install", link: "/install" },
           { text: "Compare", link: "/compare" },
           { text: "Demo", link: "/demo" },
@@ -38,7 +41,8 @@ export default {
           { text: "Release Artifact Proof", link: "/plans/lemon-1.0-release-artifact-proof-2026-05-11" },
           { text: "Interface Supportability Audit", link: "/plans/lemon-1.0-interface-supportability-audit-2026-05-11" },
           { text: "Interface Proof Pack", link: "/plans/lemon-1.0-interface-proof-pack-2026-05-11" },
-          { text: "Hermes Feature Matrix", link: "/plans/lemon-hermes-feature-parity-matrix-2026-05-12" },
+          { text: "Current Hermes Gap Audit", link: "/plans/lemon-hermes-gap-audit-2026-08-11" },
+          { text: "Hermes Feature Matrix (historical)", link: "/plans/lemon-hermes-feature-parity-matrix-2026-05-12" },
           { text: "Channel Command Matrix", link: "/plans/lemon-channel-command-parity-matrix-2026-05-12" },
           { text: "LemonSim Platform Mission", link: "/plans/lemon-sim-platform-mission-2026-05-12" },
           { text: "Hermes Parity Scorecard", link: "/plans/lemon-hermes-agent-harness-parity-scorecard" },
@@ -50,6 +54,8 @@ export default {
           { text: "Setup", link: "/user-guide/setup" },
           { text: "Skills", link: "/user-guide/skills" },
           { text: "Memory", link: "/user-guide/memory" },
+          { text: "Honcho Memory", link: "/user-guide/honcho" },
+          { text: "Migrate from Hermes", link: "/user-guide/migrate-from-hermes" },
           { text: "Adaptive Features", link: "/user-guide/adaptive" },
           { text: "Feature Rollout", link: "/user-guide/rollout" },
         ],
@@ -103,6 +109,10 @@ export default {
           { text: "Web", link: "/tools/web" },
           { text: "Firecrawl", link: "/tools/firecrawl" },
           { text: "Execute Code", link: "/tools/execute-code" },
+          { text: "Media", link: "/tools/media" },
+          { text: "LSP", link: "/tools/lsp" },
+          { text: "OpenAI-Compatible API", link: "/tools/openai-compatible-api" },
+          { text: "ACP", link: "/tools/acp" },
           { text: "WASM", link: "/tools/wasm" },
         ],
       },
@@ -161,5 +171,5 @@ export default {
   // These links are not unchecked: LemonCore.Quality.DocsCheck (run by
   // `mix lemon.quality`) resolves every local markdown link against the
   // filesystem, which is the correct check for a path outside the site root.
-  ignoreDeadLinks: [/(^|\/)\.\.\/apps\//],
+  ignoreDeadLinks: [/(^|\/)\.\.\/(apps|clients|bin)\//],
 }

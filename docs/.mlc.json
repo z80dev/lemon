@@ -8,6 +8,9 @@
     },
     {
       "pattern": "^https?://grafana\\.internal"
+    },
+    {
+      "pattern": "^https://z80dev\\.github\\.io/lemon/llms(-full)?\\.txt$"
     }
   ],
   "replacementPatterns": [],
