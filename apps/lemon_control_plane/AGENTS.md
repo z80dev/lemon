@@ -86,6 +86,7 @@ The control plane provides the external interface for clients (TUI, web, mobile,
 | `LemonControlPlane.UpdateStore` | `lib/lemon_control_plane/update_store.ex` | Typed wrapper for update config and pending-update state |
 | `LemonControlPlane.SkillsConfigStore` | `lib/lemon_control_plane/skills_config_store.ex` | Typed wrapper for fallback persisted skill config |
 | `LemonControlPlane.Methods.Registry` | `lib/lemon_control_plane/methods/registry.ex` | Method dispatch registry (ETS); `dispatch/3`, `register/1`, `unregister/1`. Also defines `LemonControlPlane.Method` behaviour. |
+| `LemonControlPlane.Methods.CommandsCatalog` | `lib/lemon_control_plane/methods/commands_catalog.ex` | Read-only `commands.catalog` discovery projection over `LemonChannels.CommandCatalog`; execution remains with consuming surfaces and runtime owners. |
 | `LemonControlPlane.Protocol.Frames` | `lib/lemon_control_plane/protocol/frames.ex` | Protocol frame encoding/decoding; `parse/1`, `encode_response/2`, `encode_event/4`, `encode_hello_ok/1` |
 | `LemonControlPlane.Protocol.Errors` | `lib/lemon_control_plane/protocol/errors.ex` | Standard error constructors; `invalid_request/1`, `not_found/1`, `forbidden/1`, etc. |
 | `LemonControlPlane.Protocol.Schemas` | `lib/lemon_control_plane/protocol/schemas.ex` | Param and event payload schema validation; `validate/2`, `validate_event/2` |
@@ -375,6 +376,7 @@ resolves its own credentials and cwd. This path uses the native
 
 | Method | Scope | Description |
 |--------|-------|-------------|
+| `commands.catalog` | read | Return the portable command catalog with aliases, descriptions, arguments, busy policies, semantic capability ids, category counts, and versioned summary; discovery only, never command execution |
 | `channels.status` | read | Status of configured channel adapters plus Telegram/Discord diagnostics, proof, shared launch-gate readiness, compact gate status/reason maps, and cleanup summaries |
 | `transports.status` | read | Status of configured legacy gateway transports plus registry/module health summary |
 | `channels.logout` | admin | Logout from a channel plus credential/state cleanup summary |

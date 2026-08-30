@@ -10,6 +10,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Portable Hermes-compatible slash-command discovery metadata for channel and
+  interactive clients, exposed through the read-only `commands.catalog`
+  control-plane method while preserving Lemon's router/session ownership and
+  active-run-only `/stop` semantics.
 - Extensible capability-aware web search/extraction providers with deterministic
   fallback, provider isolation, request-level selection, extension registration,
   keyless DuckDuckGo, configurable SearXNG, Exa search/highlights and batch
