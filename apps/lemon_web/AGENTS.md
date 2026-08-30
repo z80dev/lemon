@@ -31,6 +31,7 @@ Key entry points:
 - **Provider lifecycle**: Shared `LemonAgent.ModelRuntime.ProviderConfiguration` preview/apply boundary; never edit provider TOML directly from the Web app
 - **Blueprint lifecycle**: Shared `LemonAutomation.Blueprint.Catalog` bounded-ID, validation, digest, and activation boundary; never read bundle paths or create cron/profile records directly
 - **Memory lifecycle**: Shared `LemonMemory.Lifecycle` bounded list/search/provenance/preview/delete boundary; never read memory SQLite or render raw Store rows
+- **Profile lifecycle**: Shared `LemonCore.ProfileStore` create/clone/rename/delete boundary; Web state is limited to bounded metadata and opaque revisions, never profile paths or system prompts
 - **Management security**: `/manage` fails closed without a configured access token; inspection/export are always redacted
 - **Resume**: Named chat routes reconstruct durable prompt/tool/answer history using the internal trusted unredacted mode
 
@@ -51,7 +52,7 @@ Key entry points:
 
 - `LemonWeb.Application` - Supervisor with `Telemetry` and `Endpoint` (`:one_for_one`)
 - `LemonWeb.Endpoint` - HTTP/WebSocket endpoint (uses Bandit); session stored in signed cookie `_lemon_web_key`
-- `LemonWeb.Router` - Chat routes plus token-required `/manage` session/export, `/manage/providers`, `/manage/blueprints`, and `/manage/memory` routes
+- `LemonWeb.Router` - Chat routes plus token-required `/manage` session/export, `/manage/providers`, `/manage/blueprints`, `/manage/memory`, and `/manage/profiles` routes
 - `LemonWeb.Telemetry` - Phoenix telemetry metrics
 
 ## LiveView Structure
@@ -179,6 +180,19 @@ over every persisted field. The Store checks that revision in constant time
 inside the transaction that removes both the document and FTS row. Wrong,
 stale, missing, malformed, or ambiguous targets mutate nothing and keep the
 current search/filter draft.
+
+### ProfileManagementLive
+
+`LemonWeb.ProfileManagementLive` delegates lifecycle writes to
+`LemonCore.ProfileStore` and uses `LemonCore.NodeRegistry` only for current
+named-node availability. It must sanitize each service record before assigning
+it: IDs, names, model/node/status, availability, and canonical session keys are
+allowed; derived paths and system prompts are not. All create/clone/rename/delete
+writes are preview-first. Clone, rename, and delete recheck a server-held opaque
+profile revision in constant time immediately before the service call; delete
+also requires exact-ID confirmation and inherits the store's trash-first
+rollback semantics. Stale/refused writes keep form drafts and expose only fixed
+error text.
 
 ### Message Structure
 
@@ -548,6 +562,7 @@ apps/lemon_web/
 |   |-- memory_management_live.ex       # Authenticated durable-memory inspection/delete
 |   |-- blueprint_management_live.ex    # Authenticated exact-confirmed blueprint activation
 |   |-- provider_management_live.ex     # Authenticated provider-routing operations
+|   |-- profile_management_live.ex      # Authenticated preview-first profile lifecycle
 |   |-- components/
 |       |-- file_upload_component.ex    # Upload UI with progress bars
 |       |-- message_component.ex        # Chat message bubbles

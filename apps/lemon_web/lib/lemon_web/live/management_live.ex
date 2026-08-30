@@ -179,6 +179,7 @@ defmodule LemonWeb.ManagementLive do
           <div class="management-header-actions">
             <.link href={~p"/manage/memory"} class="management-secondary-link">Memory</.link>
             <.link href={~p"/manage/blueprints"} class="management-secondary-link">Blueprints</.link>
+            <.link href={~p"/manage/profiles"} class="management-secondary-link">Profiles</.link>
             <.link href={~p"/manage/providers"} class="management-secondary-link">Providers</.link>
             <.link href={~p"/"} class="management-secondary-link">Open chat</.link>
             <button type="button" phx-click="refresh" class="management-primary-button">

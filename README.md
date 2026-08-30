@@ -110,6 +110,11 @@ selected canonical chat. `/profile create|clone|rename|export|delete` uses the
 authenticated control plane for lifecycle actions, while normal prompts from
 an opened profile retain its derived workspace and named-node routing.
 
+In the browser, `/manage/profiles` provides the token-required roster plus
+preview-first create, clone, rename, and recoverable delete. It links each
+profile to its stable canonical chat while keeping profile paths and system
+prompts out of Web state.
+
 The TUI also exposes the shared durable-session lifecycle directly. Use
 `/sessions deployment --pinned --active` for a live searchable picker,
 `/session resume <key>` to hydrate exact durable history, and `/session help`

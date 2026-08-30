@@ -49,6 +49,15 @@ The TUI also supports `clone`, `rename`, credential-safe `export`, and guarded
 same profile ID again through `--confirm`; the TUI never accepts a profile home
 or workspace path. Export's destination is the sole lifecycle output path.
 
+The token-required browser management shell exposes the same core lifecycle at
+`/manage/profiles`. It provides a bounded filterable roster, local/named-node
+availability, profile detail, create, clone, rename, recoverable delete, and a
+direct link to the stable canonical chat. Every write is preview-first. Clone,
+rename, and delete previews bind an opaque hash of the current profile and fail
+closed if it changes; delete also requires the exact profile ID. The page never
+loads derived paths or system prompts into LiveView state. Credential-safe
+export remains available through the CLI, TUI, and control-plane API.
+
 In an installed release, `profile chat` uses the authenticated local control
 plane and starts the packaged daemon when it is not already healthy. In a
 source checkout, start `./bin/lemon --daemon` first; the one-shot
@@ -127,8 +136,8 @@ credential-free by construction.
 
 This first-class vertical covers durable local records, isolated assistant
 workspaces, lifecycle, canonical one-to-one chat, node routing, and a roster.
-Group rooms, profile-scoped cron management, import/restore, a Web form editor,
-free-form TUI field editing, and merged multi-controller rosters remain
-separate product work. The TUI command/picker lifecycle is complete for the
-existing control-plane API; it intentionally does not invent APIs for those
-remaining surfaces.
+Group rooms, profile-scoped cron management, import/restore, free-form prompt
+editing in browser/TUI surfaces, browser export, and merged multi-controller
+rosters remain separate product work. The TUI and Web lifecycle journeys are
+complete for their documented bounded surfaces; they intentionally do not
+invent APIs for those remaining capabilities.

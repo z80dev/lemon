@@ -69,6 +69,7 @@ authentication establishes the same marker without redirecting.
 | `/manage` | `ManagementLive` | Runtime/node status and searchable active/archived sessions |
 | `/manage/memory` | `MemoryManagementLive` | Bounded, redacted durable-memory search, provenance inspection, and exact digest-confirmed deletion |
 | `/manage/blueprints` | `BlueprintManagementLive` | Content-free catalog inspection, validation, exact preview, and digest-confirmed activation |
+| `/manage/profiles` | `ProfileManagementLive` | Bounded roster plus preview-first create, clone, rename, recoverable delete, and canonical-chat links |
 | `/manage/providers` | `ProviderManagementLive` | Redacted provider fallback/pool/reference preview and apply |
 | `/manage/sessions/:session_key` | `ManagementLive` | Redacted run/tool inspection and lifecycle controls |
 | `/manage/sessions/:session_key/export/:format` | `SessionExportController` | Always-redacted `json` or `markdown` download |
