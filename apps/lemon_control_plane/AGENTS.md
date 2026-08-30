@@ -900,6 +900,7 @@ payloads.
 | `auth/authorize_test.exs` / `authorize_expiration_test.exs` | Authorization logic |
 | `auth/token_store_persistence_test.exs` | Token storage |
 | `ws/connection_test.exs` | WebSocket connection lifecycle |
+| `tui_profiles_wire_e2e_test.exs` | Authenticated real-Bandit profile lifecycle/canonical-chat proof driven by the typed Bun TUI client |
 | `protocol/errors_test.exs` / `frames_test.exs` / `schemas_test.exs` | Protocol layer |
 | `presence_test.exs` | Presence tracking |
 | `event_bridge_test.exs` / `event_bridge_tick_test.exs` / `event_bridge_monitoring_test.exs` / `event_bridge_mapping_test.exs` | EventBridge fanout |

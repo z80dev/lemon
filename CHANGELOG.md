@@ -46,7 +46,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   atomic/comment-preserving create, list, show, clone, rename, credential-safe
   export, and guarded recoverable delete; isolated profile workspaces for
   bootstrap/memory/skills; stable `agent:<id>:main` chats; node-aware rosters;
-  packaged `lemon profile` commands; and matching control-plane methods.
+  packaged `lemon profile` commands; matching control-plane methods; and TUI
+  `/profiles` roster/picker plus `/profile` inspection, canonical-chat, and
+  guarded lifecycle commands. Normal TUI prompts in an opened profile route
+  through `profile.chat`, preserving derived workspaces and named nodes.
 - `lemon web [--no-open]` in source and full packaged launchers, with daemon
   auto-start, exact Web health polling, browser opening, and actionable profile
   or startup errors.

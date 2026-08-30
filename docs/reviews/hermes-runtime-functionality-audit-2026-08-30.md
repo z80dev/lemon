@@ -43,6 +43,13 @@ document ingestion, proactive automation templates, managed secret/egress
 integrations, micro-compaction, session housekeeping commands, and a few
 restart/ergonomic edges in asynchronous delegation.
 
+The first-class profile backend also now reaches the terminal product shell:
+the TUI browses the live node-aware roster, opens stable canonical chats,
+performs the lifecycle actions already supported by the authenticated control
+plane, and routes subsequent ordinary prompts through `profile.chat`. This is
+an ergonomic parity closure over Lemon's existing multi-profile runtime, not a
+new profile engine or persistence layer.
+
 ## Detailed parity matrix
 
 Legend: **covered** means the task is available without an architectural gap;
@@ -64,6 +71,7 @@ means Hermes has a current user-facing behavior with no equivalent Lemon path.
 | Skills | Install/list/remove skills and official catalog | Registry, discovery, linting, install/import/manage tools, official Hermes catalog browser, curator flows | **Covered**. Ecosystem breadth and single-command import polish still vary. |
 | Subagents/delegation | Native subagents, background work, parent interaction | Native `task`, routed `agent`, budgets, run graph, parent questions, isolated `/bg`, named remote nodes | **Lead**. Restart reconciliation for persisted nonterminal asynchronous records and caller-selected join timeouts remain reliability gaps. |
 | Provider/model choice | Multiple providers, credential pools, fallback, selectable presets and MoA | Provider registry, credential pools, fallback, session pins, routing policy, live model selection | **Covered** for normal models. Named mixture-of-agents presets and the Portal subscription proxy remain **gaps**. |
+| Specialist profiles and roster | Hermes exposes selectable agent configuration/profile workflows around its runtime | Lemon has durable user-managed profiles, isolated derived workspaces, node-aware roster, stable canonical chats, packaged CLI, authenticated control-plane lifecycle, and a TUI roster/picker plus guarded lifecycle commands | **Covered** for Lemon's profile workflow. Web form editing, import/restore, profile-scoped cron management, and merged multi-controller rosters remain separate gaps. |
 | Context management | Auto/lean compaction, micro-compaction, tool search | Auto-compaction, overflow recovery, tool-result spill, guardrails, progressive disclosure | **Covered** for context survival. Per-result micro-compaction and provider-native compaction are **gaps**. |
 | Approvals and trust | Tool policy, managed scope, sandbox/egress options | Central exec approvals, tool policy profiles, untrusted-result fencing, capability boundaries, node authentication | **Covered/lead** in local policy. Host-side egress credential injection and managed secret-source adapters are **gaps**. |
 | Reliability | Persistent sessions, cron recovery, background processes | OTP supervision, durable stores, retries, run ownership, terminalization, named-node cancellation | **Lead**, with the asynchronous boot reconciler noted above still missing. |
@@ -150,6 +158,13 @@ MIX_ENV=test mix test \
 cd clients/tui && bun test test/commands/commands.test.ts && bun run check
 MIX_ENV=test mix run scripts/live_session_heartbeat_smoke.exs
 ```
+
+The TUI profile vertical adds focused command and shell integration coverage in
+`test/commands/profiles.test.ts` and `test/integration/profiles-app.test.ts`.
+Its live proof must cross an authenticated real Bandit WebSocket with isolated
+profile state and verify that canonical TUI prompts arrive at `profile.chat`
+with stable `agent:<id>:main` routing; fake-server tests alone are not the live
+acceptance claim.
 
 The live smoke starts the real control-plane and coding-agent applications,
 restores an overdue JSONL session, resolves a logical key that is deliberately

@@ -90,6 +90,11 @@ lemon profile chat research "Summarize the open questions"
 lemon profile roster
 ```
 
+Inside the TUI, `/profiles` opens the same live roster and switches to the
+selected canonical chat. `/profile create|clone|rename|export|delete` uses the
+authenticated control plane for lifecycle actions, while normal prompts from
+an opened profile retain its derived workspace and named-node routing.
+
 See [User-managed profiles](docs/user-guide/profiles.md) for lifecycle,
 filesystem isolation, named-node routing, and export safeguards.
 

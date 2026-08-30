@@ -53,6 +53,11 @@ legacy client-side alias; it does not configure the daemon.
 - `/skills` live official Hermes catalog browser: category drill-down, fuzzy
   filtering, descriptions, installed markers, and Space-toggle multi-select
   import through Lemon's normal audit/approval flow.
+- `/profiles` live profile roster with current-chat, model, named-node, and
+  availability context; `/profile` opens stable canonical chats and exposes
+  guarded create/clone/rename/export/delete lifecycle commands. Ordinary
+  prompts in an opened profile use `profile.chat`, preserving the server-owned
+  derived workspace and named-node route.
 - Progressive-disclosure status bar (model + context gauge pinned), git
   branch, connection state, session counters.
 - Dark/light themes with OSC 11 terminal-background auto-detection; mouse
@@ -83,6 +88,8 @@ and control plane authoritative:
 | `/btw <question>` | Ask an isolated side question through `session.btw` when advertised. |
 | `/commands [command]` | Prefer the daemon's `commands.catalog`; fall back to the TUI's local registry during rolling upgrades. |
 | `/help [command]` | Show the local TUI command and key reference, including unavailable capability annotations. |
+| `/profiles` | Browse the live node-aware profile roster and open the selected `agent:<id>:main` chat. |
+| `/profile [current|show|open|chat|create|clone|rename|export|delete] …` | Inspect or manage profiles through the authenticated `profile.*` / `profiles.*` APIs. Create/clone accept only server-supported profile fields such as `--model` and `--node`; delete requires `--confirm <same-id>`. |
 
 Use `/quit` (or the existing keyboard exit binding) to leave the TUI. `/clear`
 remains visual-only: it clears terminal scrollback and the rendered transcript
@@ -105,7 +112,19 @@ bun run gallery           # headless render of every component/state
 ```
 
 The fake control plane (`src/dev/fake-server.ts`) powers the tests and the
-gallery; no daemon or credentials are needed for either.
+gallery; no daemon or credentials are needed for either. The profile vertical
+also has an authenticated real-Bandit proof that launches the typed Bun client
+against isolated profile state:
+
+```sh
+cd ../..
+MIX_ENV=test mix test apps/lemon_control_plane/test/lemon_control_plane/tui_profiles_wire_e2e_test.exs --seed 1
+```
+
+Profile commands deliberately do not accept a profile home or workspace path.
+The daemon derives that boundary from the validated profile ID. The only path
+accepted by the profile UX is the output destination for the credential-safe
+`/profile export` operation, matching the control-plane export contract.
 
 ### Layout
 

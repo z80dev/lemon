@@ -28,6 +28,7 @@ import {
 	tasksCommand,
 } from "./hermes.ts";
 import { modelCommand, thinkCommand, toolPolicyCommand } from "./model.ts";
+import { profileCommand, profilesCommand } from "./profiles.ts";
 import { CommandRegistry } from "./registry.ts";
 import {
 	abortCommand,
@@ -71,6 +72,8 @@ export function createCommandRegistry(options: RegistryOptions = {}): CommandReg
 		historyCommand,
 		compressCommand,
 		heartbeatCommand,
+		profilesCommand,
+		profileCommand,
 
 		modelCommand,
 		thinkCommand,
