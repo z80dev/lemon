@@ -443,6 +443,8 @@ metadata, or credentials.
 | `blueprints.validate` | read | Re-run manifest, policy, lint, and deterministic skill audit checks |
 | `blueprints.preview` | read | Return a content-free exact plan plus confirmation digest for one profile |
 | `blueprints.activate` | admin | Re-plan and apply only an exact fresh confirmation digest |
+| `learn.review` | read | Resolve bounded references and return content-free memory/skill proposals, audit codes, conflicts, and exact confirmation digest |
+| `learn.confirm` | admin | Re-resolve and write canonical memory plus an audited draft only for the exact fresh digest |
 
 Keep this surface catalog-scoped: never add caller-provided `root` or `path`
 parameters. `bundleId` must resolve directly below `~/.lemon/bundles` with
@@ -457,6 +459,11 @@ methods. Its one-shot VM must not load bundle paths or start automation; the
 packaged launcher starts the existing runtime when necessary, preview is the
 default bundle-ID action, and only `blueprints.activate` carries the exact
 fresh confirmation digest to this long-running service.
+
+Learn methods may accept bounded context references and an explicit root, but
+must never return source text, generated prompts, paths, URLs, secret names, or
+secret values. `learn.confirm` delegates to `LemonSkills.Learn`; do not persist
+review plans or add a second learning store.
 
 ### Voice / TTS (capability-gated)
 

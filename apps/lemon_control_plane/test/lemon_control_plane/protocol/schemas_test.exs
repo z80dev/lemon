@@ -30,6 +30,8 @@ defmodule LemonControlPlane.Protocol.SchemasTest do
       assert Schemas.get("cron.audit") != nil
       assert Schemas.get("chat.send") != nil
       assert Schemas.get("agent") != nil
+      assert Schemas.get("learn.review") != nil
+      assert Schemas.get("learn.confirm") != nil
     end
 
     test "returns schema for contract-backed events" do

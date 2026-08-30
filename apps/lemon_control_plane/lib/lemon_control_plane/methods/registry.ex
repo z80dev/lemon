@@ -106,6 +106,9 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.BlueprintsValidate,
     LemonControlPlane.Methods.BlueprintsPreview,
     LemonControlPlane.Methods.BlueprintsActivate,
+    # Review-first learning from bounded sources
+    LemonControlPlane.Methods.LearnReview,
+    LemonControlPlane.Methods.LearnConfirm,
     # Sessions
     LemonControlPlane.Methods.SessionsList,
     LemonControlPlane.Methods.SessionsPreview,

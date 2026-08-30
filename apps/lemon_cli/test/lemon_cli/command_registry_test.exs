@@ -5,7 +5,7 @@ defmodule LemonCli.CommandRegistryTest do
 
   alias LemonCli.{CLI, CommandRegistry, CompletionCommand}
 
-  @runtime_families ~w(setup model gateway doctor config secrets channels providers blueprints profile backup context sessions completion)
+  @runtime_families ~w(setup model gateway doctor config secrets channels providers blueprints profile backup context sessions learn completion)
 
   test "registry is the complete unique runtime family source for dispatch and help" do
     assert CommandRegistry.names() == @runtime_families
@@ -49,6 +49,7 @@ defmodule LemonCli.CommandRegistryTest do
       assert first == CompletionCommand.render(shell, launcher)
       assert first =~ "sessions"
       assert first =~ "blueprints"
+      assert first =~ "learn"
       assert first =~ "activate"
       assert first =~ "completion"
       assert first =~ "prune"

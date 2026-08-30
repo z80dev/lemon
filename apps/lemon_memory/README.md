@@ -20,6 +20,15 @@ agent platform. It is usable on its own — its only Lemon dependency is
 | `LemonMemory.SessionSearch` | Scoped search across sessions, agents and workspaces |
 | `LemonMemory.TaskFingerprint` | Stable fingerprints for recognising repeated work |
 
+Explicit review/confirm workflows can use `LemonMemory.Store.put_sync/1` when
+they must not report success before SQLite accepts a document, or
+`put_new_sync/1` for an atomic create-if-absent boundary that never overwrites
+an exact document ID. `get_document/1` and `delete_document/1` inspect and
+remove one exact record; deletion removes its FTS row in the same SQLite
+transaction. Ordinary run ingest remains asynchronous.
+`LemonMemory.Safety.redact/1` removes common secret-shaped values before a
+caller builds the bounded document summary.
+
 `mix lemon.memory` inspects and searches the store from the command line.
 
 ## Installation

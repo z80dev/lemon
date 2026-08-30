@@ -96,6 +96,10 @@ Overwrite authorization must remain derived from both the verified manifest
 digest and expanded target root. Restore modes are exact manifest owner modes
 from the explicit allowlist; group/world widening is a verification failure.
 
+`LemonSkills.Learn` is the review/confirm consumer for learn-from-source. Keep
+all filesystem, archive, document, URL/SSRF, session-redaction, and budget
+semantics in `LemonCore.Context`; the learning layer must not fork those rules.
+
 Media doctor remediation should keep provider-backed image/TTS/STT/vision/video
 proof commands copy-ready and include the default redacted
 `.lemon/proofs/media-*-smoke-latest.json` proof paths. Local deterministic

@@ -11,6 +11,13 @@ where durable memory had been eight modules with no boundary of their own.
 
 ### Added
 
+- `LemonMemory.Store.put_sync/1,2` for explicit review/confirm workflows that
+  must know SQLite accepted a document before reporting success;
+  create-if-absent `put_new_sync/1,2`, exact `get_document/1,2`, and exact
+  `delete_document/1,2` prevent stale reviewers from overwriting rows and make
+  their provenance-bearing records inspectable/removable. Also added
+  `LemonMemory.Safety.redact/1` for a shared durable-boundary replacement pass.
+
 - `LemonMemory.Store` — SQLite-backed document store with full-text search over
   an agent's past work. Queries are sanitised before they reach FTS5, so agent-
   and human-authored queries containing quotes, wildcards or boolean operators

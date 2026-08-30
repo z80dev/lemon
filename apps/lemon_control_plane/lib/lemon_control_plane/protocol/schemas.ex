@@ -576,6 +576,39 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "confirmationDigest" => :string
       }
     },
+    "learn.review" => %{
+      required: %{"references" => :list},
+      optional: %{
+        "root" => :string,
+        "agentId" => :string,
+        "sessionKey" => :string,
+        "project" => :boolean,
+        "maxBytes" => :integer,
+        "maxInputBytes" => :integer,
+        "maxItems" => :integer,
+        "maxPages" => :integer,
+        "maxDepth" => :integer,
+        "timeoutMs" => :integer
+      }
+    },
+    "learn.confirm" => %{
+      required: %{
+        "references" => :list,
+        "confirmationDigest" => :string
+      },
+      optional: %{
+        "root" => :string,
+        "agentId" => :string,
+        "sessionKey" => :string,
+        "project" => :boolean,
+        "maxBytes" => :integer,
+        "maxInputBytes" => :integer,
+        "maxItems" => :integer,
+        "maxPages" => :integer,
+        "maxDepth" => :integer,
+        "timeoutMs" => :integer
+      }
+    },
 
     # Session methods
     "sessions.list" => %{

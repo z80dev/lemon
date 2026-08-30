@@ -23,6 +23,7 @@
 | Build HTTP/WebSocket API features | `apps/lemon_control_plane/` |
 | Manage configuration, secrets, or storage | `apps/lemon_core/` |
 | Resolve bounded files, folders, diffs, URLs, sessions, or documents | `apps/lemon_core/` (`LemonCore.Context`), `apps/lemon_cli/` (`lemon context`) |
+| Review/confirm learning from files, folders, or URLs | `apps/lemon_skills/` (`LemonSkills.Learn`), `apps/lemon_cli/` (`lemon learn`) |
 | Work on browser capability driver | `apps/lemon_browser/` |
 | Work on media job capability driver | `apps/lemon_media/` |
 | Work on LSP capability driver | `apps/lemon_lsp/` |
@@ -410,7 +411,7 @@ lemon_router ─────────→ lemon_ai, lemon_core, lemon_memory, 
 lemon_gateway ────────→ lemon_agent, lemon_core
 lemon_automation ─────→ lemon_agent, lemon_core, lemon_router, lemon_skills
 lemon_channels ───────→ lemon_core, lemon_media, lemon_agent
-lemon_cli ────────────→ lemon_agent, lemon_ai, lemon_core, lemon_memory
+lemon_cli ────────────→ lemon_agent, lemon_ai, lemon_core, lemon_memory, lemon_skills
 coding_agent ─────────→ lemon_agent, lemon_ai, lemon_skills, lemon_core, lemon_gateway, lemon_memory, lemon_browser, lemon_platform_test*
 coding_agent_ui ──────→ coding_agent, lemon_core
 lemon_agent ──────────→ lemon_ai, lemon_core

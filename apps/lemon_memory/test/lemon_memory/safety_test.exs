@@ -4,6 +4,16 @@ defmodule LemonMemory.SafetyTest do
   alias LemonMemory.Document
   alias LemonMemory.Safety
 
+  test "redact removes complete secret matches and reports the count" do
+    planted = "sk-abcdefghijklmnopqrstuvwxyz123456"
+    {text, count} = Safety.redact("visible #{planted} password=hunter2")
+
+    assert count == 2
+    assert text == "visible [REDACTED] [REDACTED]"
+    refute text =~ planted
+    refute text =~ "hunter2"
+  end
+
   describe "contains_secret?/1" do
     test "detects documented secret patterns" do
       samples = [

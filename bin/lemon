@@ -369,6 +369,13 @@ if [[ "${1:-}" == "context" ]]; then
   exec mix run --no-start -e 'System.halt(LemonCli.CLI.run(["context" | System.argv()]))' -- "$@"
 fi
 
+if [[ "${1:-}" == "learn" ]]; then
+  shift
+  cd "$LEMON_ROOT"
+  export MIX_QUIET=1
+  exec mix run --no-start -e 'System.halt(LemonCli.CLI.run(["learn" | System.argv()]))' -- "$@"
+fi
+
 if [[ "${1:-}" == "sessions" ]]; then
   run_source_runtime_cli "$@"
 fi

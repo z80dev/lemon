@@ -2,6 +2,16 @@
 
 HTTP and WebSocket control plane API server for the Lemon agent system. Provides a frame-based JSON protocol over WebSocket for real-time bidirectional communication.
 
+## Review-first source learning
+
+`learn.review` (read scope) resolves bounded context references and returns a
+content-free proposal with provenance hashes, memory/draft actions, audit rule
+codes, conflicts, and an exact confirmation digest. `learn.confirm` (admin
+scope) recomputes the source and destination state, then writes through the
+existing durable-memory and synthesis-draft stores only when that digest still
+matches. Neither response includes source text, prompts, paths, URLs, or
+secrets.
+
 ## Overview
 
 LemonControlPlane is the external interface through which clients (terminal UI, web dashboards, mobile apps, browser extensions) interact with the Lemon agent runtime. It exposes 100+ JSON-RPC-style methods over WebSocket for submitting agent runs, managing sessions, configuring the system, scheduling cron jobs, pairing nodes/devices, and streaming real-time events.

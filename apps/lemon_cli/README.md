@@ -57,6 +57,7 @@ only readiness, stable provenance, counts, byte counts, and error kinds.
 | Manage specialist profiles | `lemon profile list` | `./bin/lemon profile list` | Use the same packaged command boundary |
 | Preview/resolve bounded context | `lemon context preview|resolve ...` | `./bin/lemon context preview|resolve ...` | Call `LemonCore.Context` from IEx/tests |
 | Manage durable sessions | `lemon sessions list` | `./bin/lemon sessions list` | Call `LemonCore.SessionLifecycle` from IEx/tests |
+| Review/confirm learning from bounded sources | `lemon learn '@file:guide.md'` | `./bin/lemon learn '@file:guide.md'` | Call `LemonSkills.Learn.review/2` from IEx/tests |
 | Generate shell completion | `lemon completion zsh` | `./bin/lemon completion zsh` | Call `LemonCli.CompletionCommand.render/2` from IEx/tests |
 
 ## Command registry and completion
@@ -229,6 +230,23 @@ from bytes and selected under explicit byte/page/item/depth/time/archive
 limits. Preview performs the exact selection but omits selected text; resolve
 returns selected redacted text plus omission metadata. See
 [`docs/user-guide/context-references.md`](../../docs/user-guide/context-references.md).
+
+## Learn from sources
+
+`lemon learn` composes the bounded context resolver with canonical durable
+memory and synthesized-skill drafts. Review is the default and never mutates:
+
+```bash
+lemon learn '@file:docs/runbook.md' '@url:https://example.com/guide' --json
+lemon learn confirm '@file:docs/runbook.md' '@url:https://example.com/guide' \
+  --confirm <exact-review-digest> --json
+```
+
+Confirmation re-resolves every source and destination conflict. It fails closed
+when content, audit result, memory state, or draft state changed. Output
+contains hashes, counts, audit codes, conflicts, and action state only; source
+text, prompts, paths, URLs, secret names, and secret values are never printed.
+See [`docs/user-guide/learn-from-sources.md`](../../docs/user-guide/learn-from-sources.md).
 
 ## First-run setup and readiness
 

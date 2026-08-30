@@ -32,6 +32,40 @@ defmodule LemonMemory.StoreTest do
     %{store_pid: pid, dir: dir}
   end
 
+  test "put_sync returns only after the document is queryable", %{store_pid: store} do
+    doc =
+      Document.new(
+        session_key: "agent:sync:learn",
+        agent_id: "sync",
+        prompt_summary: "reviewed source",
+        answer_summary: "bounded summary"
+      )
+
+    assert :ok = Store.put_sync(store, doc)
+    assert [persisted] = Store.get_by_session(store, doc.session_key, [])
+    assert persisted.doc_id == doc.doc_id
+    assert {:ok, :deleted} = Store.delete_document(store, doc.doc_id)
+    assert [] = Store.get_by_session(store, doc.session_key, [])
+    assert {:ok, :not_found} = Store.delete_document(store, doc.doc_id)
+  end
+
+  test "put_new_sync atomically preserves the first exact document", %{store_pid: store} do
+    doc =
+      Document.new(
+        session_key: "agent:create-if-absent:learn",
+        agent_id: "create-if-absent",
+        prompt_summary: "reviewed source",
+        answer_summary: "first bounded summary"
+      )
+
+    conflicting = %{doc | answer_summary: "concurrent conflicting summary"}
+
+    assert {:ok, :created} = Store.put_new_sync(store, doc)
+    assert {:ok, :exists} = Store.put_new_sync(store, conflicting)
+    assert {:ok, persisted} = Store.get_document(store, doc.doc_id)
+    assert persisted.answer_summary == "first bounded summary"
+  end
+
   defp make_doc(opts) do
     now = System.system_time(:millisecond)
     session_key = Keyword.get(opts, :session_key, "agent:test_agent_#{:rand.uniform(1000)}:main")

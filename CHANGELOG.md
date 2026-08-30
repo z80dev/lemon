@@ -10,6 +10,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Source and packaged `lemon learn` plus authenticated `learn.review` /
+  `learn.confirm` control-plane methods for auditable learning from existing
+  bounded file, folder, URL, diff, document, and redacted-session references.
+  Review is non-mutating and content-free; confirmation is bound to an exact
+  fresh digest and writes only canonical durable memory plus an audited skill
+  draft, with traversal/SSRF defenses, redaction, collision checks, and
+  idempotent re-review. Exact create-if-absent writes prevent stale destination
+  overwrites, provenance-bearing records remain removable through their
+  existing stores, and selected source content never enters LLM audit.
+
 - Explicitly enabled, read-only 1Password, Bitwarden Secrets Manager, and
   argv-only command secret sources integrated behind the encrypted Lemon store,
   with exact schema validation, supervised time/output bounds, minimal child

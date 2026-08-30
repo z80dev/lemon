@@ -428,7 +428,7 @@ silent permissions.
 | `lemon_automation` | `lemon_agent`, `lemon_core`, `lemon_router`, `lemon_skills` | `lemon_agent`, `lemon_core`, `lemon_router`, `lemon_skills` | *(none)* |
 | `lemon_browser` | `lemon_core` | `lemon_core` | *(none)* |
 | `lemon_channels` | `lemon_agent`, `lemon_core`, `lemon_media` | `lemon_agent`, `lemon_core`, `lemon_media` | *(none)* |
-| `lemon_cli` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory` | *(none)* |
+| `lemon_cli` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory`, `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory`, `lemon_skills` | *(none)* |
 | `lemon_control_plane` | `lemon_agent`, `lemon_ai`, `lemon_automation`, `lemon_browser`, `lemon_channels`, `lemon_core`, `lemon_lsp`, `lemon_media`, `lemon_memory`, `lemon_router`, `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_automation`, `lemon_browser`, `lemon_channels`, `lemon_core`, `lemon_lsp`, `lemon_media`, `lemon_memory`, `lemon_router`, `lemon_skills` | *(none)* |
 | `lemon_core` | *(none)* | *(none)* | *(none)* |
 | `lemon_evals` | `coding_agent`, `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_skills` | `coding_agent`, `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_skills` | *(none)* |
@@ -20166,7 +20166,7 @@ must not be copied into new plans.
 | User job | Hermes at pinned upstream | Lemon at pinned baseline | Status | Priority | Concrete next closure |
 | --- | --- | --- | --- | --- | --- |
 | Keep durable personal and project memory | Hermes combines local USER/MEMORY files, session search, background review/curation, a learning journey, and a broad set of [memory providers](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory-providers). | Lemon has SQLite FTS memory, redaction-aware ingest, provider fan-out, session search, project context, memory tools, scheduled skill synthesis/curation, and a production Honcho integration. Local and Honcho are the implemented providers; adaptive features remain intentionally opt-in. | Near for durable recall; partial for ecosystem/UX | Medium | Add a memory browser with provenance/edit/delete, measure whether safe defaults should enable recall, and prioritize provider conformance over provider count. |
-| Teach the agent from a URL, directory, or corpus and inspect what it learned | Hermes exposes `/learn`, curator flows, and the Journey learning graph/timeline. | Lemon synthesizes candidates from finalized runs and can curate/install skills, but has no direct “learn this source” job or learning-graph UI. | Missing | Medium | Build an auditable ingestion job that shows sources, proposed memories/skills, conflicts, and approval before write; visualize the same records rather than inventing a second learning store. |
+| Teach the agent from a URL, directory, or corpus and inspect what it learned | Hermes exposes `/learn`, curator flows, and the Journey learning graph/timeline. | Lemon now exposes source/packaged `lemon learn` and authenticated `learn.review`/`learn.confirm` over the existing bounded context, durable memory, deterministic skill audit, and synthesis-draft stores. Review is non-mutating and content-free; confirmation re-resolves sources and requires an exact fresh digest. A learning-graph/timeline UI is not implemented. | Near for auditable ingestion; partial for visualization | Medium | Add a memory/learning browser over the same provenance records; do not add a second learning database. |
 | Find, audit, install, update, bundle, and distribute skills | Hermes's [skills system](https://hermes-agent.nousresearch.com/docs/user-guide/features/skills) includes a Hub, taps, bundles, a large catalog, publishing, audit, curator, and profile distributions. | Lemon has agentskills-compatible discovery, local/project/builtin precedence, official Hermes catalog import, risk audit, trust metadata, atomic install/update, curator, model-facing management, and MCP-based discovery. Versioned unpacked bundles now reuse those audits for explicit profile-local enablement, with safe catalog list/inspect/validate/preview RPC. Lemon still lacks a signed public registry/index, taps, publishing/export, archive import, and TUI/Web bundle UX. | Near in engine; first bundle vertical shipped, partial in ecosystem | Medium | Add signed index/distribution and export/publish lifecycle, then TUI/Web browse/review/activate UX over the existing bundle service. Do not weaken the unpacked, path-bounded activation policy for archive convenience. |
 | Schedule recurring agent and script work safely | Hermes provides cron, heartbeats, recurring [loops](https://hermes-agent.nousresearch.com/docs/user-guide/features/loops), monitor jobs, no-agent scripts, chaining, blueprints, suggestions, preflight, and multiple delivery modes. | Lemon has durable cron, exact timers, jitter/retries/lineage, overlap locks, pause/resume/abort/run-now, heartbeat suppression, monitor mode, command jobs, chaining, preflight, default-model drift guard, goal continuation/auto loops, and kanban dispatch. A versioned agent-cron blueprint now requires an exact plan digest, persists bundle/definition provenance, enables skills in the derived profile workspace, and replays without duplicate jobs through the existing scheduler. | Near in engine; first blueprint vertical shipped, partial in UX | Medium | Add natural-language recurring-loop commands, suggestions, and TUI/Web/packaged CLI blueprint management. Expand beyond one agent cron only when a concrete workflow preserves exact confirmation and existing cron/heartbeat stores. |
 | Review dangerous actions and constrain agent execution | Hermes documents smart/manual/off [approvals and security](https://hermes-agent.nousresearch.com/docs/user-guide/security), deny rules, circuit breakers, container isolation, checkpoints, and managed scope. | Lemon has centralized execution approvals, per-node policies, tool policy profiles, structured approval events across interfaces, file/checkpoint guards, URL/SSRF policy, extension capability approvals, redaction, support-bundle cleanup, and proof artifacts. | **Parity+** in auditable policy; partial in enterprise scope | Medium | Add admin-pinned managed settings and a human-readable policy editor. Preserve Lemon's proof/redaction advantages. |
@@ -31948,6 +31948,20 @@ Lemon exposes the same Mix-free command families from an installed
 `lemon_runtime_min` or `lemon_runtime_full` release and from a source checkout.
 Use `lemon ...` after installation and `./bin/lemon ...` in the repository.
 
+## Learn from bounded sources
+
+```bash
+lemon learn '@file:docs/runbook.md' --root "$PWD" --json
+lemon learn confirm '@file:docs/runbook.md' --root "$PWD" \
+  --confirm <exact-review-digest> --json
+```
+
+Review is the default and never writes. Confirmation re-runs the bounded
+context selection and destination checks, then writes one canonical memory row
+and one audited skill draft only when the exact digest still matches. Responses
+omit source text, prompts, paths, URLs, secret names, and secret values. See
+[Learn from files, folders, and URLs](learn-from-sources.md).
+
 The runtime command boundary has stable exit codes:
 
 - `0` means the command completed successfully;
@@ -31975,6 +31989,7 @@ arguments remain human-readable usage errors with exit code `2`.
 | `profile` | Manage isolated specialist profiles |
 | `backup` | Create, verify, list, or restore user-state backups |
 | `context` | Preview or resolve bounded context references |
+| `learn` | Review bounded sources and exactly confirm memory plus a skill draft |
 | `sessions` | Inspect and manage durable sessions |
 | `completion` | Generate shell completion scripts |
 
@@ -31983,6 +31998,35 @@ runtime lifecycle. Run `lemon --help` or `./bin/lemon --help` for that exact
 launcher. Completion generation detects the launcher, so it does not advertise
 packaged daemon commands in a source checkout or source-only commands in an
 installed release.
+
+## External secret sources
+
+External source diagnostics are available through the same packaged and source
+command boundary:
+
+```bash
+lemon secrets sources status
+lemon secrets sources status --json
+lemon secrets sources test
+lemon secrets sources test vault --json
+
+# Source checkout
+./bin/lemon secrets sources test --source-id vault
+```
+
+`status` validates configuration plus executable/bootstrap readiness without
+executing the source. `test` runs all enabled sources, or one named source,
+under the configured timeout and output bound. Human and JSON responses expose
+only source id/type, readiness, provenance, counts, byte counts, duration, and
+stable error kinds; they never include secret values. Operational test failure
+exits `1`, invalid options exit `2`, and an empty/not-configured selection is an
+operational failure.
+
+`lemon secrets check` likewise reports only `present` for resolved entries; it
+does not print prefixes or suffixes. External sources remain read-only
+fallbacks behind the encrypted Lemon store. See
+[External secret sources](../config.md#external-secret-sources) for the exact
+configuration and fail-closed resolution contract.
 
 ## Portable blueprints
 
@@ -32916,6 +32960,97 @@ Worth knowing before you go looking for them:
 - [`apps/lemon_honcho/README.md`](../../apps/lemon_honcho/README.md) — the package, its modules, and its current limits
 
 *Last reviewed: 2026-08-12*
+
+---
+
+Source: https://z80dev.github.io/lemon/user-guide/learn-from-sources
+
+# Learn from files, folders, and URLs
+
+Lemon can turn bounded context sources into durable memory and a reviewable
+skill draft without executing the source or creating another learning
+database. The workflow is always review first: the first command does not write
+anything, and the second command must repeat the exact source selection with
+the confirmation digest from that review.
+
+## Review without writing
+
+```bash
+lemon learn \
+  '@file:docs/operations.md' \
+  '@folder:runbooks' \
+  '@url:https://example.com/public-guide' \
+  --root "$PWD" \
+  --agent-id operator \
+  --json
+```
+
+A source checkout uses `./bin/lemon learn ...` with the same arguments. Review
+returns:
+
+- selected source/item/byte and omission counts;
+- SHA-256 provenance and content digests, never source paths or URLs;
+- the deterministic memory ID, scope, action, summary size, and digest;
+- the synthesis-draft key, action, bundle size/digest, audit verdict, and audit
+  rule identifiers;
+- destination conflicts and `canConfirm`;
+- one exact `confirmationDigest`.
+
+It never returns source text, extracted document text, a generated prompt,
+skill body, local path, URL, secret name, or secret value. Content selected by
+`LemonCore.Context` is redacted again at the durable-memory boundary.
+
+## Confirm the exact fresh plan
+
+Repeat every reference and option from review:
+
+```bash
+lemon learn confirm \
+  '@file:docs/operations.md' \
+  '@folder:runbooks' \
+  '@url:https://example.com/public-guide' \
+  --root "$PWD" \
+  --agent-id operator \
+  --confirm <64-character-review-digest> \
+  --json
+```
+
+Confirmation re-resolves all sources under the same byte, item, page, depth,
+archive, redirect, SSRF, and timeout limits. It also checks the current memory
+row, draft destination, and deterministic skill audit. A changed source,
+changed destination, collision, or blocked audit fails closed before a durable
+write.
+
+On success Lemon writes one deterministic `LemonMemory.Document` through the
+existing SQLite memory store and one audited candidate through the existing
+synthesis `DraftStore`. The skill is not installed or executed; it remains in
+the ordinary draft/promotion flow for inspection and editing. Both records
+carry the source content digest and hashed per-source provenance; the draft
+also carries its exact source memory document ID and audited bundle digest.
+They remain ordinary records: remove the memory by exact document ID through
+`LemonMemory.Store.delete_document/1` and the candidate by exact key through
+`LemonSkills.Synthesis.DraftStore.delete/2`.
+
+Run review again after confirmation to get an idempotent `unchanged` plan. This
+fresh digest can be confirmed without creating a duplicate memory row or skill
+draft.
+
+## Scope and safety
+
+- Local paths remain confined to `--root`; traversal, symlinks, and special
+  files are rejected or omitted.
+- URLs use DNS/IP-pinned public HTTP(S) fetching and revalidate every redirect.
+- PDF, Office, notebook, archive, folder, and text extraction use the same
+  explicit limits documented in [Context references](context-references.md).
+- `--project` writes the candidate draft under the project `.lemon` scope;
+  otherwise it uses the existing global draft scope.
+- `--agent-id` selects the durable memory owner. `--session-key` is available
+  for an explicit canonical learning session.
+- Learning uses only the deterministic skill audit. It never sends selected
+  source content to the optional LLM audit reviewer.
+
+The authenticated control plane exposes the same service as `learn.review`
+(read scope) and `learn.confirm` (admin scope).
 
 ---
 
