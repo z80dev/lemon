@@ -1173,6 +1173,75 @@ defmodule LemonAgent.ContextPropertyTest do
       end
     end
 
+    property "sliding window preserves the exact original relative order" do
+      check all(
+              messages <- list_of(message(), min_length: 5, max_length: 30),
+              max_messages <- integer(1..12),
+              max_chars <- integer(1..2_000)
+            ) do
+        indexed =
+          messages
+          |> Enum.with_index()
+          |> Enum.map(fn {message, index} -> Map.put(message, :_test_index, index) end)
+
+        {truncated, _} =
+          Context.truncate(indexed,
+            max_messages: max_messages,
+            max_chars: max_chars,
+            keep_first_user: false,
+            strategy: :sliding_window
+          )
+
+        indices = Enum.map(truncated, & &1._test_index)
+        assert indices == Enum.sort(indices)
+        assert length(indices) == length(Enum.uniq(indices))
+      end
+    end
+
+    property "bookends always satisfies both hard limits" do
+      check all(
+              messages <- list_of(message(), min_length: 1, max_length: 30),
+              max_messages <- integer(0..12),
+              max_chars <- integer(0..2_000)
+            ) do
+        {truncated, _} =
+          Context.truncate(messages,
+            max_messages: max_messages,
+            max_chars: max_chars,
+            strategy: :keep_bookends
+          )
+
+        assert length(truncated) <= max_messages
+        assert Context.estimate_size(truncated, nil) <= max_chars
+      end
+    end
+
+    property "tool call/result groups are retained atomically" do
+      check all(
+              prefix_count <- integer(0..8),
+              suffix_count <- integer(0..8),
+              max_messages <- integer(0..12),
+              strategy <- truncation_strategy()
+            ) do
+        call = Mocks.tool_call("lookup", %{}, id: "atomic-call")
+        assistant = Mocks.assistant_message_with_tool_calls([call])
+        result = Mocks.tool_result_message("atomic-call", "lookup", "ok")
+
+        prefix = for i <- 1..prefix_count//1, do: Mocks.user_message("before #{i}")
+        suffix = for i <- 1..suffix_count//1, do: Mocks.user_message("after #{i}")
+        messages = prefix ++ [assistant, result] ++ suffix
+
+        {truncated, _} =
+          Context.truncate(messages,
+            max_messages: max_messages,
+            keep_first_user: false,
+            strategy: strategy
+          )
+
+        assert assistant in truncated == result in truncated
+      end
+    end
+
     property "sliding window includes recent messages" do
       check all(
               messages <- list_of(message(), min_length: 10, max_length: 30),

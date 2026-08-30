@@ -25,6 +25,8 @@ Lemon composes a system prompt from:
 
 The composed prompt is refreshed before each user prompt so file edits in workspace context are picked up without restarting the session.
 
+Available skill metadata is part of the stable base prompt. Per-turn relevance matches are held only in authenticated session state for missed-skill introspection and telemetry; they are not appended to the system prompt or persisted/presented as user content. Full community/project skill content is loaded explicitly with `read_skill` and enters the model boundary as untrusted data. Audited bundled skill semantics whose installed bundle matches the release copy, plus intentional `AGENTS.md`/bootstrap instruction loading, are the explicit trusted instruction paths.
+
 ## Workspace Bootstrap Files
 
 Workspace bootstrap lives in `~/.lemon/agent/workspace` (or `:workspace_dir` override) and is auto-initialized on session startup.

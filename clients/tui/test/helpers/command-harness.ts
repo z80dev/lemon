@@ -5,7 +5,12 @@
  * all a command test needs: what did it send, and what did it say.
  */
 
-import type { CommandContext, CommandHost, PickerSpec } from "../../src/commands/index.ts";
+import type {
+	CommandContext,
+	CommandHost,
+	MultiPickerSpec,
+	PickerSpec,
+} from "../../src/commands/index.ts";
 import { createCommandRegistry } from "../../src/commands/index.ts";
 import { FakeControlPlane, type FakeControlPlaneOptions } from "../../src/dev/fake-server.ts";
 import { ControlPlaneClient } from "../../src/protocol/client.ts";
@@ -22,6 +27,7 @@ export interface RecordedNotice {
 export class RecordingHost implements CommandHost {
 	readonly notices: RecordedNotice[] = [];
 	readonly pickers: PickerSpec[] = [];
+	readonly multiPickers: MultiPickerSpec[] = [];
 	readonly exits: number[] = [];
 	readonly replays: ChatHistoryMessage[][] = [];
 	cleared = 0;
@@ -65,6 +71,10 @@ export class RecordingHost implements CommandHost {
 
 	openPicker(spec: PickerSpec): void {
 		this.pickers.push(spec);
+	}
+
+	openMultiPicker(spec: MultiPickerSpec): void {
+		this.multiPickers.push(spec);
 	}
 
 	closeOverlay(): void {}

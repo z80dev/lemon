@@ -1,5 +1,23 @@
 defmodule LemonAutomation.GoalLoopManager do
-  @moduledoc false
+  @moduledoc """
+  Owns supervised goal-loop calls and autonomous loop tasks.
+
+  Stop semantics are explicit:
+
+  * `:hard` (default) disables auto restart, aborts the currently authoritative
+    judge or continuation router run once, kills the loop task, and prevents a
+    later tick.
+  * `:graceful` disables auto restart but lets the already bounded loop finish;
+    status remains `stopping` until its task returns.
+
+  Router run IDs are captured from the shared submit-and-wait primitive only
+  after the primitive fixes the exact ID and before it enters router submission.
+  That synchronous ownership claim, paired with the router's abort tombstone,
+  closes the acceptance window where a hard stop previously could miss a run.
+  The manager API timeout is computed above the judge/continuation wait timeout,
+  avoiding a caller exit while its supervised judge is still within its
+  configured deadline.
+  """
 
   use GenServer
 
@@ -12,9 +30,9 @@ defmodule LemonAutomation.GoalLoopManager do
 
   def run_once(session_key, opts \\ []) do
     GenServer.call(
-      __MODULE__,
+      Keyword.get(opts, :name, __MODULE__),
       {:run_once, session_key, opts},
-      Keyword.get(opts, :timeout, 30_000)
+      call_timeout(opts)
     )
   end
 
@@ -22,12 +40,37 @@ defmodule LemonAutomation.GoalLoopManager do
     GenServer.call(__MODULE__, {:start_loop, session_key, opts})
   end
 
-  def stop_loop(session_key) do
-    GenServer.call(__MODULE__, {:stop_loop, session_key})
+  def stop_loop(session_key, opts \\ []) do
+    GenServer.call(
+      Keyword.get(opts, :name, __MODULE__),
+      {:stop_loop, session_key, Keyword.get(opts, :mode, :hard)}
+    )
   end
 
   def status(session_key) do
     GenServer.call(__MODULE__, {:status, session_key})
+  end
+
+  @doc false
+  def call_timeout(opts) when is_list(opts) do
+    configured = Keyword.get(opts, :call_timeout_ms) || Keyword.get(opts, :timeout)
+
+    if is_integer(configured) and configured > 0 do
+      configured
+    else
+      judge_timeout = positive_timeout(Keyword.get(opts, :judge_wait_timeout_ms), 60_000)
+
+      continuation_timeout =
+        if Keyword.get(opts, :await_completion, false) do
+          positive_timeout(Keyword.get(opts, :wait_timeout_ms), 300_000)
+        else
+          0
+        end
+
+      internal_timeout = max(judge_timeout, continuation_timeout)
+
+      internal_timeout + 5_000
+    end
   end
 
   @impl true
@@ -72,13 +115,20 @@ defmodule LemonAutomation.GoalLoopManager do
     case maybe_configure_auto(session_key, auto?, opts) do
       {:ok, _goal} ->
         start_loop_reply(session_key, opts, auto?, state)
-      error -> {:reply, error, state}
+
+      error ->
+        {:reply, error, state}
     end
   rescue
     error -> {:reply, {:error, error}, state}
   end
 
-  def handle_call({:stop_loop, session_key}, _from, state) do
+  def handle_call({:stop_loop, session_key}, from, state) do
+    handle_call({:stop_loop, session_key, :hard}, from, state)
+  end
+
+  def handle_call({:stop_loop, session_key, mode}, _from, state)
+      when mode in [:hard, :graceful] do
     case Map.get(state.loops, session_key) do
       nil ->
         case disable_auto(session_key) do
@@ -99,19 +149,31 @@ defmodule LemonAutomation.GoalLoopManager do
             {:reply, error, state}
         end
 
-      loop ->
-        Process.demonitor(loop.ref, [:flush])
-        Process.exit(loop.pid, :shutdown)
-
+      loop when mode == :graceful ->
         _ = GoalStore.configure_loop_auto(session_key, false)
-        {:ok, goal} = GoalStore.record_loop_status(session_key, :stopped)
+        loop = %{loop | status: "stopping"}
+        state = put_in(state.loops[session_key], loop)
+
+        {:reply,
+         {:ok, %{loop: public_loop(loop), goal: GoalStore.get(session_key), mode: :graceful}},
+         state}
+
+      loop ->
+        _ = GoalStore.configure_loop_auto(session_key, false)
+        abort_active_run(loop)
+        Process.demonitor(loop.ref, [:flush])
+        Process.exit(loop.pid, :kill)
+
+        {:ok, goal} =
+          GoalStore.record_loop_status(session_key, :stopped, run_id: active_run_id(loop))
 
         state =
           state
           |> update_in([:loops], &Map.delete(&1, session_key))
           |> update_in([:loop_refs], &Map.delete(&1 || %{}, loop.ref))
 
-        {:reply, {:ok, %{loop: public_loop(%{loop | status: "stopped"}), goal: goal}}, state}
+        {:reply,
+         {:ok, %{loop: public_loop(%{loop | status: "stopped"}), goal: goal, mode: :hard}}, state}
     end
   end
 
@@ -126,6 +188,31 @@ defmodule LemonAutomation.GoalLoopManager do
         goal: GoalStore.get(session_key),
         auto: goal_auto(GoalStore.get(session_key))
       }}, state}
+  end
+
+  def handle_call(
+        {:claim_goal_loop_run, session_key, worker_pid, kind, run_id, router_mod},
+        _from,
+        state
+      )
+      when kind in [:judge, :continuation] and is_binary(run_id) do
+    case Map.get(state.loops, session_key) do
+      %{pid: ^worker_pid, status: "running"} = loop ->
+        active_run = %{
+          id: run_id,
+          kind: kind,
+          router_mod: router_mod,
+          phase: :submitting,
+          aborted: false
+        }
+
+        _ = GoalStore.record_loop_status(session_key, :running, run_id: run_id)
+
+        {:reply, :ok, put_in(state.loops[session_key], %{loop | active_run: active_run})}
+
+      _ ->
+        {:reply, {:error, :goal_loop_stopped}, state}
+    end
   end
 
   defp start_loop_reply(session_key, opts, auto?, state) do
@@ -151,6 +238,38 @@ defmodule LemonAutomation.GoalLoopManager do
       |> schedule_auto_tick()
 
     {:noreply, state}
+  end
+
+  def handle_info(
+        {:goal_loop_run_started, session_key, worker_pid, kind, run_id, router_mod},
+        state
+      ) do
+    case Map.get(state.loops, session_key) do
+      %{pid: ^worker_pid} = loop when is_binary(run_id) ->
+        active_run = %{
+          id: run_id,
+          kind: kind,
+          router_mod: router_mod,
+          phase: :accepted,
+          aborted: false
+        }
+
+        _ = GoalStore.record_loop_status(session_key, :running, run_id: run_id)
+        {:noreply, put_in(state.loops[session_key], %{loop | active_run: active_run})}
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
+  def handle_info({:goal_loop_run_terminal, session_key, worker_pid, run_id}, state) do
+    case Map.get(state.loops, session_key) do
+      %{pid: ^worker_pid, active_run: %{id: ^run_id}} = loop ->
+        {:noreply, put_in(state.loops[session_key], %{loop | active_run: nil})}
+
+      _ ->
+        {:noreply, state}
+    end
   end
 
   def handle_info({ref, result}, state) do
@@ -211,6 +330,44 @@ defmodule LemonAutomation.GoalLoopManager do
     with {:ok, _goal} <- ensure_active_goal(session_key),
          {:ok, _goal} <- GoalStore.record_loop_status(session_key, :running, opts) do
       loop_mod = state.loop_mod
+      manager = self()
+      continuation_router = Keyword.get(opts, :router_mod, LemonRouter)
+      judge_router = Keyword.get(opts, :judge_router_mod, LemonRouter)
+
+      opts =
+        opts
+        |> Keyword.put(:on_submitting, fn run_id ->
+          GenServer.call(
+            manager,
+            {:claim_goal_loop_run, session_key, self(), :continuation, run_id,
+             continuation_router}
+          )
+        end)
+        |> Keyword.put(:on_submitted, fn run_id ->
+          send(
+            manager,
+            {:goal_loop_run_started, session_key, self(), :continuation, run_id,
+             continuation_router}
+          )
+        end)
+        |> Keyword.put(:on_terminal, fn run_id ->
+          send(manager, {:goal_loop_run_terminal, session_key, self(), run_id})
+        end)
+        |> Keyword.put(:judge_on_submitting, fn run_id ->
+          GenServer.call(
+            manager,
+            {:claim_goal_loop_run, session_key, self(), :judge, run_id, judge_router}
+          )
+        end)
+        |> Keyword.put(:judge_on_submitted, fn run_id ->
+          send(
+            manager,
+            {:goal_loop_run_started, session_key, self(), :judge, run_id, judge_router}
+          )
+        end)
+        |> Keyword.put(:judge_on_terminal, fn run_id ->
+          send(manager, {:goal_loop_run_terminal, session_key, self(), run_id})
+        end)
 
       task =
         Task.Supervisor.async_nolink(LemonAutomation.TaskSupervisor, fn ->
@@ -222,6 +379,7 @@ defmodule LemonAutomation.GoalLoopManager do
         ref: task.ref,
         pid: task.pid,
         status: "running",
+        active_run: nil,
         started_at_ms: now_ms(),
         max_ticks: Keyword.get(opts, :max_ticks, 3)
       }
@@ -346,9 +504,37 @@ defmodule LemonAutomation.GoalLoopManager do
       session_key: loop.session_key,
       status: loop.status,
       started_at_ms: loop.started_at_ms,
-      max_ticks: loop.max_ticks
+      max_ticks: loop.max_ticks,
+      active_run_id: active_run_id(loop),
+      active_run_kind: get_in(loop, [:active_run, :kind])
     }
   end
+
+  defp abort_active_run(%{active_run: %{id: run_id, router_mod: router_mod}})
+       when is_binary(run_id) do
+    cond do
+      function_exported?(router_mod, :abort_run, 2) ->
+        router_mod.abort_run(run_id, :goal_loop_hard_stop)
+
+      function_exported?(router_mod, :abort_run, 1) ->
+        router_mod.abort_run(run_id)
+
+      true ->
+        LemonCore.RouterBridge.abort_run(run_id, :goal_loop_hard_stop)
+    end
+  rescue
+    _error -> :ok
+  catch
+    :exit, _reason -> :ok
+  end
+
+  defp abort_active_run(_loop), do: :ok
+
+  defp active_run_id(%{active_run: %{id: run_id}}), do: run_id
+  defp active_run_id(_loop), do: nil
+
+  defp positive_timeout(value, _default) when is_integer(value) and value > 0, do: value
+  defp positive_timeout(_value, default), do: default
 
   defp app_env(key, default), do: Application.get_env(:lemon_automation, key, default)
 

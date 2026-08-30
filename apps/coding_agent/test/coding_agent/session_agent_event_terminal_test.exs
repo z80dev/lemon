@@ -32,6 +32,12 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
     end)
   end
 
+  defp queue_diagnostic_follow_up(session) do
+    :ok = Session.follow_up(session, "queued follow-up")
+    _ = Session.get_state(session)
+    :ok
+  end
+
   defp collect_stream_events(stream, timeout \\ 2_000) do
     Task.async(fn -> EventStream.events(stream) |> Enum.to_list() end)
     |> Task.await(timeout)
@@ -40,6 +46,7 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
   test "aborted assistant message_end clears streaming and completes stream subscribers" do
     session = start_session()
     {:ok, stream} = Session.subscribe(session, mode: :stream)
+    queue_diagnostic_follow_up(session)
     force_streaming(session)
 
     aborted_message = Mocks.assistant_message("", stop_reason: :aborted)
@@ -60,6 +67,7 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
     state = Session.get_state(session)
     assert state.is_streaming == false
     assert map_size(state.event_streams) == 0
+    assert Session.diagnostics(session).follow_up_queue_size == 0
   end
 
   test "message_end persists user, assistant, and tool_result messages" do
@@ -89,6 +97,7 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
   test "agent_end terminal semantics stay consistent for stream subscribers" do
     session = start_session()
     {:ok, stream} = Session.subscribe(session, mode: :stream)
+    queue_diagnostic_follow_up(session)
     force_streaming(session)
 
     final_messages = [Mocks.user_message("hi"), Mocks.assistant_message("done")]
@@ -107,11 +116,13 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
     assert state.is_streaming == false
     assert map_size(state.event_streams) == 0
     assert :queue.len(state.steering_queue) == 0
+    assert Session.diagnostics(session).follow_up_queue_size == 0
   end
 
   test "error terminal semantics stay consistent for stream subscribers" do
     session = start_session()
     {:ok, stream} = Session.subscribe(session, mode: :stream)
+    queue_diagnostic_follow_up(session)
     force_streaming(session)
 
     partial_state = %{messages: [Mocks.user_message("partial")]}
@@ -129,12 +140,14 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
     state = Session.get_state(session)
     assert state.is_streaming == false
     assert map_size(state.event_streams) == 0
+    assert Session.diagnostics(session).follow_up_queue_size == 0
   end
 
   test "canceled terminal semantics stay consistent for stream subscribers" do
     session = start_session()
     {:ok, stream} = Session.subscribe(session, mode: :stream)
     :ok = Session.steer(session, "queued steering")
+    queue_diagnostic_follow_up(session)
     force_streaming(session)
 
     send(session, {:agent_event, {:canceled, :reset}})
@@ -152,5 +165,26 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
     assert state.is_streaming == false
     assert map_size(state.event_streams) == 0
     assert :queue.len(state.steering_queue) == 0
+    assert Session.diagnostics(session).follow_up_queue_size == 0
+  end
+
+  test "abort immediately clears the session follow-up diagnostic mirror" do
+    session = start_session()
+    queue_diagnostic_follow_up(session)
+    assert Session.diagnostics(session).follow_up_queue_size == 1
+
+    assert :ok = Session.abort(session)
+    assert Session.diagnostics(session).follow_up_queue_size == 0
+  end
+
+  test "agent exit clears the session follow-up diagnostic mirror" do
+    session = start_session()
+    queue_diagnostic_follow_up(session)
+    state = Session.get_state(session)
+
+    send(session, {:EXIT, state.agent, :provider_crash})
+
+    assert Session.diagnostics(session).follow_up_queue_size == 0
+    assert :queue.len(Session.get_state(session).steering_queue) == 0
   end
 end

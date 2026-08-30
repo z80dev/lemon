@@ -129,7 +129,7 @@ defmodule CodingAgent.Tools.Task do
     else
       case Params.normalize_action(Map.get(params, "action")) do
         "poll" -> Result.do_poll(params)
-        "join" -> Result.do_join(params)
+        "join" -> Result.do_join(params, signal)
         "get" -> Result.do_get(params)
         _ -> do_execute(tool_call_id, params, signal, on_update, cwd, opts)
       end

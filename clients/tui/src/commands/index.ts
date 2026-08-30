@@ -22,6 +22,7 @@ import { modelCommand, thinkCommand, toolPolicyCommand } from "./model.ts";
 import { CommandRegistry } from "./registry.ts";
 import { abortCommand, goalCommand, queueCommand, runsCommand } from "./run.ts";
 import { historyCommand, resumeCommand, sessionCommand, sessionsCommand } from "./session.ts";
+import { skillsCommand } from "./skills.ts";
 
 export interface RegistryOptions {
 	/** Opens $EDITOR on the draft. Defaults to a notice that it is unavailable. */
@@ -48,6 +49,7 @@ export function createCommandRegistry(options: RegistryOptions = {}): CommandReg
 		modelCommand,
 		thinkCommand,
 		toolPolicyCommand,
+		skillsCommand,
 
 		abortCommand,
 		queueCommand,
@@ -71,6 +73,7 @@ export function createCommandRegistry(options: RegistryOptions = {}): CommandReg
 export type {
 	CommandContext,
 	CommandHost,
+	MultiPickerSpec,
 	PickerChoice,
 	PickerSpec,
 	SlashCommand,

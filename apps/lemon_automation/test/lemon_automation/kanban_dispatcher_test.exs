@@ -380,6 +380,100 @@ defmodule LemonAutomation.KanbanDispatcherTest do
              KanbanDispatcher.status(board.id, name: name)
   end
 
+  test "hard stop kills workers, reclaims leases, and ignores late results" do
+    assert {:ok, board} = KanbanStore.create_board("Hard stop")
+    assert {:ok, task} = KanbanStore.create_task(board.id, "Task")
+
+    task_supervisor = :"kanban-task-supervisor-#{System.unique_integer([:positive])}"
+    start_supervised!({Task.Supervisor, name: task_supervisor})
+    name = :"kanban-dispatcher-#{System.unique_integer([:positive])}"
+
+    start_supervised!(
+      {KanbanDispatcher,
+       name: name, worker_mod: KanbanDispatcherBlockingWorker, task_supervisor: task_supervisor}
+    )
+
+    assert {:ok, _dispatcher} =
+             KanbanDispatcher.start_board(board.id,
+               name: name,
+               interval_ms: 10,
+               lease_ms: 60_000,
+               worker_id: "hard-stop-worker"
+             )
+
+    assert_receive {:worker_ready, task_id, worker_pid}, 500
+    assert task_id == task.id
+
+    dispatcher_state = :sys.get_state(name)
+    [{old_ref, old_worker}] = Map.to_list(dispatcher_state.boards[board.id].running)
+    old_lease_id = old_worker.lease_id
+
+    assert {:ok, stopped} = KanbanDispatcher.stop_board(board.id, name: name)
+    assert stopped.status == "stopped"
+    assert stopped.running_count == 0
+
+    eventually(fn -> refute Process.alive?(worker_pid) end)
+
+    reclaimed = KanbanStore.get_task(task.id)
+    assert reclaimed.status == "todo"
+    refute Map.has_key?(reclaimed.meta, "kanbanLease")
+
+    # A result already queued from the killed worker has no ref association.
+    send(name, {old_ref, {:ok, %{run_id: "late-run"}}})
+    Process.sleep(25)
+    assert KanbanStore.get_task(task.id).status == "todo"
+
+    # Restarting the board creates a new lease; the obsolete lease ID cannot
+    # terminalize it even if invoked directly through the store guard.
+    assert {:ok, _dispatcher} =
+             KanbanDispatcher.start_board(board.id,
+               name: name,
+               interval_ms: 10,
+               lease_ms: 60_000,
+               worker_id: "hard-stop-worker"
+             )
+
+    assert_receive {:worker_ready, ^task_id, new_worker_pid}, 500
+    current = KanbanStore.get_task(task.id)
+    current_lease = current.meta["kanbanLease"]["id"]
+    refute current_lease == old_lease_id
+    assert {:error, :stale_lease} = KanbanStore.complete_leased_task(task.id, old_lease_id)
+    assert KanbanStore.get_task(task.id).status == "doing"
+
+    send(new_worker_pid, {:finish, {:ok, %{run_id: "new-run"}}})
+    eventually(fn -> assert KanbanStore.get_task(task.id).status == "done" end)
+  end
+
+  test "starting a board reconciles unexpired leases left by a prior manager" do
+    assert {:ok, board} = KanbanStore.create_board("Restart reconcile")
+    assert {:ok, task} = KanbanStore.create_task(board.id, "Task")
+
+    assert {:ok, orphaned} =
+             KanbanStore.lease_task(board.id, "restart-worker", lease_ms: 60_000)
+
+    old_lease_id = orphaned.meta["kanbanLease"]["id"]
+    name = :"kanban-dispatcher-#{System.unique_integer([:positive])}"
+    start_supervised!({KanbanDispatcher, name: name, worker_mod: KanbanDispatcherBlockingWorker})
+
+    assert {:ok, _dispatcher} =
+             KanbanDispatcher.start_board(board.id,
+               name: name,
+               interval_ms: 10,
+               lease_ms: 60_000,
+               worker_id: "restart-worker"
+             )
+
+    assert_receive {:worker_ready, task_id, worker_pid}, 500
+    assert task_id == task.id
+
+    re_leased = KanbanStore.get_task(task.id)
+    assert re_leased.status == "doing"
+    refute re_leased.meta["kanbanLease"]["id"] == old_lease_id
+
+    send(worker_pid, {:finish, {:ok, %{run_id: "restart-run"}}})
+    eventually(fn -> assert KanbanStore.get_task(task.id).status == "done" end)
+  end
+
   defp receive_worker_ready(count) do
     Enum.map(1..count, fn _ ->
       receive do

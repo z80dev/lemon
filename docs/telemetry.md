@@ -123,12 +123,29 @@ remain available as a persisted, queryable alternative.
 | `[:lemon, :run, :start]` | `ts_ms` | `run_id`, `session_key`, `engine`, `origin` | [`run.ex:259`](../apps/lemon_gateway/lib/lemon_gateway/run.ex) via `DependencyManager.emit_telemetry(:run_start, ...)`, when the gateway starts the engine run |
 | `[:lemon, :run, :first_token]` | `latency_ms` | `run_id` | [`run.ex:428`](../apps/lemon_gateway/lib/lemon_gateway/run.ex), on the first engine delta of the run |
 | `[:lemon, :run, :stop]` | `duration_ms`, `ok` (boolean) | `run_id` | [`run.ex:611`](../apps/lemon_gateway/lib/lemon_gateway/run.ex), at finalize; `ok` distinguishes success from `{:error, _}`. Not emitted if the run process crashes before finalize |
+| `[:lemon, :router, :run_abort_tombstone, :registered]` | `count: 1` | bounded `reason` label | `LemonRouter.RunOrchestrator`, when a fixed run ID is marked aborted at the serialized submission boundary |
+| `[:lemon, :router, :run_abort_tombstone, :submission_rejected]` | `count: 1` | bounded `reason` label | `LemonRouter.RunOrchestrator`, when a later submission is rejected by that tombstone |
 
 ### Cron — `[:lemon, :cron, ...]`
 
 | Event | Measurements | Metadata | Emitter |
 |---|---|---|---|
-| `[:lemon, :cron, :tick]` | `job_count` | `%{}` (empty) | `LemonCore.Telemetry.cron_tick/1`, called from [`cron_manager.ex:502`](../apps/lemon_automation/lib/lemon_automation/cron_manager.ex) once per scheduler tick as a liveness heartbeat with the count of registered jobs |
+| `[:lemon, :cron, :tick]` | `job_count` | `%{}` (empty) | `LemonCore.Telemetry.cron_tick/1`, called from [`cron_manager.ex`](../apps/lemon_automation/lib/lemon_automation/cron_manager.ex) once per scheduler tick as a liveness heartbeat with the count of registered jobs |
+
+Cron terminalization, retry reconstruction, and Kanban hard-stop lease reclaim
+do not add telemetry events. Their restart-safe
+evidence is durable state/audit plus Bus lifecycle events: CronManager writes
+terminal runs and retry lineage before emitting `:cron_run_completed`, Kanban
+guards terminal writes by lease ID, and GoalLoopManager stores the authoritative
+router run ID in goal-loop status. Goal-loop hard stops additionally expose the
+router tombstone counters above, but operators should use persisted goal state
+for exact lifecycle counts; `[:lemon, :cron, :tick]` remains only a liveness signal.
+
+### Heartbeats — `[:lemon, :heartbeat, ...]`
+
+| Event | Measurements | Metadata | Emitter |
+|---|---|---|---|
+| `[:lemon, :heartbeat, :skipped]` | `count: 1` | `agent_id`, `reason: :overlap` | `LemonAutomation.HeartbeatManager`, when a timer tick arrives while the prior timer heartbeat for that agent is still in flight |
 
 ### Channels — `[:lemon, :channels, ...]`
 
@@ -156,6 +173,16 @@ Last segment is built at runtime from an atom argument
 
 These are the clearest saturation signal in the system: `waitq > 0` means runs are waiting
 for an engine slot. The empty metadata means they cannot be correlated to a run or session.
+
+### Engine-lock observation — `[:lemon, :gateway, :engine_lock, ...]`
+
+| Event | Measurements | Metadata |
+|---|---|---|
+| `[:lemon, :gateway, :engine_lock, :over_age_live_owner]` | `count: 1`, `age_ms`, `threshold_ms` | redacted `thread_key` and owner process representations |
+
+This event is observational: it means an exclusive owner is still alive beyond
+the configured age threshold. The sweep does not release or transfer the lock;
+ownership changes only on explicit release or confirmed owner death.
 
 ### Agent loop — `[:lemon_agent, ...]`
 
@@ -303,6 +330,11 @@ included.
 `LemonSkills.Application` attaches an introspection bridge at boot that projects these three
 into persisted `:skill_load_observed`, `:skill_write_observed`, and
 `:skill_prompt_render_observed` records, and updates `LemonSkills.Usage` counters.
+
+At session end, missed-skill introspection compares the exact relevance keys cached in the
+session for that turn with successful `read_skill` load observations. It does not parse
+turn-specific XML from the system prompt; no relevance block is added to that cacheable
+prompt or to the persisted conversation.
 
 ### Hosted sim rooms — `[:lemon_sim_ui, :hosted_werewolf, ...]`
 

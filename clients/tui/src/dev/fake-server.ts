@@ -89,6 +89,8 @@ const DEFAULT_METHODS = [
 	"logs.tail",
 	"config.get",
 	"config.set",
+	"skills.hermes.catalog",
+	"skills.install",
 ];
 
 const DEFAULT_EVENTS = ["agent", "chat", "goal", "tick", "presence", "health", "shutdown"];

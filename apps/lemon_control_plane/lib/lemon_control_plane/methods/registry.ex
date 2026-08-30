@@ -78,6 +78,7 @@ defmodule LemonControlPlane.Methods.Registry do
     # Skills
     LemonControlPlane.Methods.SkillsStatus,
     LemonControlPlane.Methods.SkillsBins,
+    LemonControlPlane.Methods.SkillsHermesCatalog,
     LemonControlPlane.Methods.SkillsInstall,
     LemonControlPlane.Methods.SkillsUpdate,
     LemonControlPlane.Methods.ExtensionsStatus,

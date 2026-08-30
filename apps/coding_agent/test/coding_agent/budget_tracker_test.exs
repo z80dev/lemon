@@ -79,6 +79,29 @@ defmodule CodingAgent.BudgetTrackerTest do
       assert usage.tokens == 150
       assert usage.cost == 0.75
     end
+
+    test "concurrent usage updates preserve the exact sum" do
+      run_id = RunGraph.new_run(%{type: :test})
+      BudgetTracker.store_budget(run_id, BudgetTracker.create_budget([]))
+      parent = self()
+
+      tasks =
+        for _ <- 1..100 do
+          Task.async(fn ->
+            send(parent, {:ready, self()})
+
+            receive do
+              :record -> BudgetTracker.record_usage(run_id, tokens: 7, cost: 0.25)
+            end
+          end)
+        end
+
+      workers = for _ <- tasks, do: assert_receive({:ready, pid}) && pid
+      Enum.each(workers, &send(&1, :record))
+      assert Enum.all?(Task.await_many(tasks), &(&1 == :ok))
+
+      assert BudgetTracker.get_usage(run_id) == %{tokens: 700, cost: 25.0}
+    end
   end
 
   describe "check_budget/1" do
@@ -194,6 +217,55 @@ defmodule CodingAgent.BudgetTrackerTest do
       parent_usage = BudgetTracker.get_usage(parent_id)
       assert parent_usage.tokens == 100
       assert parent_usage.cost == 0.5
+    end
+
+    test "max_children one is reserved atomically and completion aggregates once" do
+      parent_id = RunGraph.new_run(%{type: :parent})
+      BudgetTracker.store_budget(parent_id, BudgetTracker.create_budget(max_children: 1))
+      parent = self()
+
+      child_ids =
+        for index <- 1..20 do
+          RunGraph.new_run(%{type: :child, index: index})
+        end
+
+      tasks =
+        Enum.map(child_ids, fn child_id ->
+          Task.async(fn ->
+            send(parent, {:ready, self()})
+
+            receive do
+              :reserve -> {child_id, BudgetTracker.child_started(parent_id, child_id)}
+            end
+          end)
+        end)
+
+      workers = for _ <- tasks, do: assert_receive({:ready, pid}) && pid
+      Enum.each(workers, &send(&1, :reserve))
+      results = Task.await_many(tasks)
+
+      assert [{winner_id, :ok}] = Enum.filter(results, fn {_id, result} -> result == :ok end)
+
+      assert Enum.count(results, fn {_id, result} ->
+               result == {:error, :max_children_exceeded}
+             end) == 19
+
+      assert %{active_children: 1, active_child_ids: [^winner_id]} =
+               BudgetTracker.get_budget(parent_id)
+
+      assert :ok = BudgetTracker.record_usage(winner_id, tokens: 11, cost: 0.5)
+
+      completion_tasks =
+        for _ <- 1..20 do
+          Task.async(fn -> BudgetTracker.child_completed(parent_id, winner_id) end)
+        end
+
+      assert Enum.all?(Task.await_many(completion_tasks), &(&1 == :ok))
+      assert BudgetTracker.get_usage(parent_id) == %{tokens: 11, cost: 0.5}
+      assert BudgetTracker.get_budget(parent_id).active_children == 0
+
+      next_child = RunGraph.new_run(%{type: :child})
+      assert :ok = BudgetTracker.child_started(parent_id, next_child)
     end
   end
 

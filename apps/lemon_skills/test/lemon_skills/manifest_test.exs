@@ -45,6 +45,59 @@ defmodule LemonSkills.ManifestTest do
       assert Manifest.required_config(manifest) == ["KUBECONFIG"]
     end
 
+    test "parses Hermes flow lists, quoted values, and nested object lists" do
+      content = """
+      ---
+      name: google-workspace
+      description: "Gmail, Calendar, and Drive."
+      platforms: [linux, macos, windows]
+      prerequisites:
+        env_vars: [GOOGLE_TOKEN]
+        commands: [curl, jq]
+      required_credential_files:
+        - path: google_token.json
+          description: OAuth token
+      ---
+
+      body
+      """
+
+      assert {:ok, manifest, "body"} = Manifest.parse_and_validate(content)
+      assert manifest["description"] == "Gmail, Calendar, and Drive."
+      assert manifest["platforms"] == ["linux", "darwin", "win32"]
+      assert Manifest.required_bins(manifest) == ["curl", "jq"]
+      assert Manifest.required_environment_variables(manifest) == ["GOOGLE_TOKEN"]
+
+      assert get_in(manifest, ["required_credential_files", Access.at(0), "path"]) ==
+               "google_token.json"
+    end
+
+    test "normalizes structured Hermes environment declarations and free-text requirements" do
+      content = """
+      ---
+      name: external-tool
+      requires: A separately running desktop service
+      metadata:
+        hermes:
+          tags: [desktop]
+          prerequisites:
+            commands: [curl]
+      required_environment_variables:
+        - name: REQUIRED_TOKEN
+          prompt: Token
+        - name: OPTIONAL_TOKEN
+          optional: true
+      ---
+
+      body
+      """
+
+      assert {:ok, manifest, _body} = Manifest.parse_and_validate(content)
+      assert manifest["hermes_requires"] == "A separately running desktop service"
+      assert Manifest.required_bins(manifest) == ["curl"]
+      assert Manifest.required_environment_variables(manifest) == ["REQUIRED_TOKEN"]
+    end
+
     test "parses content without frontmatter" do
       content = """
       # Just Markdown
@@ -215,6 +268,50 @@ defmodule LemonSkills.ManifestTest do
       manifest = %{"tags" => "not-a-list"}
       assert {:error, _} = Manifest.validate(manifest)
     end
+
+    test "rejects unsafe or unbounded prompt metadata" do
+      assert {:error, reason} = Manifest.validate(%{"name" => "safe\nforged"})
+      assert reason =~ "single line"
+
+      assert {:error, reason} =
+               Manifest.validate(%{"description" => "safe\u202Ehidden"})
+
+      assert reason =~ "bidirectional"
+
+      assert {:error, reason} = Manifest.validate(%{"description" => "   "})
+      assert reason =~ "must not be empty"
+
+      assert {:error, reason} = Manifest.validate(%{"name" => String.duplicate("x", 129)})
+      assert reason =~ "too long"
+    end
+
+    test "validates tags and keywords as bounded safe string lists" do
+      assert {:ok, _} =
+               Manifest.validate(%{"tags" => ["elixir"], "keywords" => ["beam-runtime"]})
+
+      assert {:error, reason} = Manifest.validate(%{"keywords" => ["ok", 42]})
+      assert reason =~ "list of strings"
+
+      assert {:error, reason} =
+               Manifest.validate(%{"tags" => Enum.map(1..33, &"tag-#{&1}")})
+
+      assert reason =~ "too many"
+    end
+
+    test "rejects malformed typed requirement and platform metadata without raising" do
+      for manifest <- [
+            %{"platforms" => [42]},
+            %{"requires" => %{"bins" => [true]}},
+            %{"requires" => %{"config" => "API_KEY"}},
+            %{"required_environment_variables" => ["SAFE", nil]},
+            %{"requires_tools" => ["git\nforged"]},
+            %{"metadata" => "not-a-map"},
+            %{"metadata" => %{"lemon" => "not-a-map"}}
+          ] do
+        assert {:error, reason} = Manifest.validate(manifest)
+        assert is_binary(reason)
+      end
+    end
   end
 
   describe "parse_and_validate/1" do
@@ -377,6 +474,24 @@ defmodule LemonSkills.ManifestTest do
     test "returns :v2 when metadata.lemon present" do
       manifest = %{"metadata" => %{"lemon" => %{"category" => "devops"}}}
       assert Manifest.version(manifest) == :v2
+    end
+
+    test "does not crash on malformed typed metadata" do
+      assert Manifest.version(%{"metadata" => "not-a-map"}) == :v1
+      assert Manifest.version(%{"metadata" => %{"lemon" => "not-a-map"}}) == :v2
+      assert Manifest.lemon_category(%{"metadata" => "not-a-map"}) == nil
+      assert Manifest.lemon_category(%{"metadata" => %{"lemon" => "not-a-map"}}) == nil
+    end
+  end
+
+  describe "legacy requirement accessors" do
+    test "do not crash on malformed typed requires metadata" do
+      assert Manifest.required_bins(%{"requires" => "not-a-map"}) == []
+      assert Manifest.required_config(%{"requires" => %{"config" => ["OK", 42]}}) == ["OK"]
+
+      assert Manifest.required_environment_variables(%{
+               "required_environment_variables" => ["OK", 42]
+             }) == ["OK"]
     end
   end
 

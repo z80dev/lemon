@@ -24,6 +24,7 @@
  *   - nothing here calls `process.exit`; `onExit` hands that to main.ts
  */
 
+import { matchesKey } from "@oh-my-pi/pi-tui/keys";
 import { ProcessTerminal, type Terminal } from "@oh-my-pi/pi-tui/terminal";
 import { Container, TUI } from "@oh-my-pi/pi-tui/tui";
 import { indentBlock, pickNumber, pickString } from "./commands/format.ts";
@@ -748,6 +749,46 @@ export class AppShell {
 					onSelect: (item) => {
 						this.selectors.close();
 						void spec.onSelect(item);
+					},
+					onCancel: () => {
+						this.selectors.close();
+						spec.onCancel?.();
+					},
+				});
+				this.selectors.open(overlay);
+			},
+			openMultiPicker: (spec) => {
+				const selected = new Set(spec.selectedValues ?? []);
+				const disabled = new Set(spec.disabledValues ?? []);
+				const sourceItems = spec.items;
+				const decoratedItems = () =>
+					sourceItems.map((item) => ({
+						...item,
+						label: disabled.has(item.value)
+							? `[installed] ${item.label}`
+							: `${selected.has(item.value) ? "[x]" : "[ ]"} ${item.label}`,
+					}));
+
+				let overlay: PickerOverlay;
+				overlay = new PickerOverlay({
+					title: spec.title,
+					items: decoratedItems(),
+					footer: spec.footer ?? "space toggles · enter imports · esc cancels",
+					detail: () => `${selected.size} selected`,
+					onKey: (data) => {
+						if (!matchesKey(data, "space")) return false;
+						const current = overlay.selected;
+						if (!current || disabled.has(current.value)) return true;
+						if (selected.has(current.value)) selected.delete(current.value);
+						else selected.add(current.value);
+						const index = overlay.items.findIndex((item) => item.value === current.value);
+						overlay.setItems(decoratedItems(), overlay.filter);
+						overlay.setSelectedIndex(Math.max(0, index));
+						return true;
+					},
+					onSelect: () => {
+						this.selectors.close();
+						void spec.onConfirm(sourceItems.filter((item) => selected.has(item.value)));
 					},
 					onCancel: () => {
 						this.selectors.close();

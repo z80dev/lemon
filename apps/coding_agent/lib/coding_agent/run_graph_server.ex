@@ -20,12 +20,11 @@ defmodule CodingAgent.RunGraphServer do
   is broadcast via `LemonCore.Bus` to the topic `"run_graph:<run_id>"`.
   This enables `RunGraph.await/3` to wake up immediately rather than polling.
 
-  ## Async Startup
+  ## Startup Readiness
 
-  DETS loading is performed asynchronously after init to avoid blocking
-  early requests. The server tracks a `loading` flag; callers that need
-  data consistency can check via `ensure_table/1` which waits for load
-  completion if needed.
+  DETS loading completes synchronously in `init/1`. `start_link/1` does not
+  return, and no call can observe or mutate the ETS table, until the persisted
+  snapshot has been loaded and running records have been marked lost.
 
   ## Non-blocking Cleanup
 
@@ -76,6 +75,20 @@ defmodule CodingAgent.RunGraphServer do
   end
 
   @doc """
+  Atomically modify a run and return an operation-specific reply.
+
+  The callback must return `{:ok, updated_record, reply}` to persist a new
+  record, or `{:error, reason}` to leave the record unchanged. This is used by
+  budget accounting when the limit check and counter update must be one
+  indivisible operation.
+  """
+  @spec atomic_modify(RunGraph.run_id(), (map() -> {:ok, map(), term()} | {:error, term()})) ::
+          term() | {:error, term()}
+  def atomic_modify(run_id, modify_fn, server \\ __MODULE__) do
+    GenServer.call(server, {:atomic_modify, run_id, modify_fn}, 10_000)
+  end
+
+  @doc """
   Atomically transition a run to a new status with monotonic enforcement.
 
   Returns `:ok` if the transition was applied, or `:ok` if the run was not
@@ -93,22 +106,16 @@ defmodule CodingAgent.RunGraphServer do
   and server-side operations (DETS load, test setup).
   """
   @spec insert_record(RunGraph.run_id(), map()) :: :ok
-  def insert_record(run_id, record) do
-    do_insert_record(run_id, record)
+  def insert_record(run_id, record, server \\ __MODULE__) do
+    GenServer.call(server, {:insert_record, run_id, record}, 10_000)
   end
 
   @doc """
   Delete a run from both ETS and DETS.
   """
   @spec delete_run(RunGraph.run_id()) :: :ok
-  def delete_run(run_id) do
-    :ets.delete(@table, run_id)
-
-    if dets_open?() do
-      :dets.delete(@dets_table, run_id)
-    end
-
-    :ok
+  def delete_run(run_id, server \\ __MODULE__) do
+    GenServer.call(server, {:delete_run, run_id}, 10_000)
   end
 
   @doc """
@@ -143,10 +150,8 @@ defmodule CodingAgent.RunGraphServer do
   Check if DETS is available.
   """
   @spec dets_open?() :: boolean()
-  def dets_open? do
-    :dets.info(@dets_table) != :undefined
-  rescue
-    _ -> false
+  def dets_open?(server \\ __MODULE__) do
+    GenServer.call(server, :dets_open?, 5_000)
   end
 
   # Server Callbacks
@@ -156,22 +161,22 @@ defmodule CodingAgent.RunGraphServer do
     Process.flag(:trap_exit, true)
 
     state = %{
-      table: @table,
-      dets_table: @dets_table,
+      table: Keyword.get(opts, :table, @table),
+      dets_table: Keyword.get(opts, :dets_table, @dets_table),
       dets_path: dets_path(opts),
       ets_initialized: false,
       dets_initialized: false,
       loaded_from_dets: false,
       loading: false,
-      cleanup_ref: nil
+      cleanup_ref: nil,
+      before_dets_load: Keyword.get(opts, :before_dets_load)
     }
 
-    # Initialize ETS and DETS synchronously (fast operations)
+    # Readiness includes the persisted snapshot. The process does not handle
+    # queued calls and start_link does not return until init completes.
     state = initialize_ets(state)
     state = initialize_dets(state)
-
-    # Load DETS data asynchronously to avoid blocking early requests
-    state = start_async_dets_load(state)
+    state = maybe_load_from_dets(state)
 
     # Schedule periodic cleanup
     schedule_cleanup()
@@ -188,14 +193,14 @@ defmodule CodingAgent.RunGraphServer do
   def handle_call({:atomic_update, run_id, update_fn}, _from, state) do
     state = ensure_tables(state)
 
-    case :ets.lookup(@table, run_id) do
+    case :ets.lookup(state.table, run_id) do
       [{^run_id, record}] ->
         updated =
           record
           |> update_fn.()
           |> Map.put(:updated_at, System.system_time(:second))
 
-        do_insert_record(run_id, updated)
+        do_insert_record(state, run_id, updated)
 
         status_changed? = Map.get(record, :status) != Map.get(updated, :status)
         event = if(status_changed?, do: :status_changed, else: :updated)
@@ -208,10 +213,34 @@ defmodule CodingAgent.RunGraphServer do
     end
   end
 
+  def handle_call({:atomic_modify, run_id, modify_fn}, _from, state) do
+    state = ensure_tables(state)
+
+    case :ets.lookup(state.table, run_id) do
+      [{^run_id, record}] ->
+        case modify_fn.(record) do
+          {:ok, updated_record, reply} ->
+            updated = Map.put(updated_record, :updated_at, System.system_time(:second))
+            do_insert_record(state, run_id, updated)
+
+            status_changed? = Map.get(record, :status) != Map.get(updated, :status)
+            event = if(status_changed?, do: :status_changed, else: :updated)
+            broadcast_state_change(run_id, updated, event)
+            {:reply, reply, state}
+
+          {:error, reason} ->
+            {:reply, {:error, reason}, state}
+        end
+
+      _ ->
+        {:reply, {:error, :not_found}, state}
+    end
+  end
+
   def handle_call({:atomic_transition, run_id, target_status, update_fn}, _from, state) do
     state = ensure_tables(state)
 
-    case :ets.lookup(@table, run_id) do
+    case :ets.lookup(state.table, run_id) do
       [{^run_id, record}] ->
         current_status = Map.get(record, :status, :queued)
 
@@ -221,7 +250,7 @@ defmodule CodingAgent.RunGraphServer do
             |> update_fn.()
             |> Map.put(:updated_at, System.system_time(:second))
 
-          do_insert_record(run_id, updated)
+          do_insert_record(state, run_id, updated)
           broadcast_state_change(run_id, updated, :status_changed)
           {:reply, :ok, state}
         else
@@ -233,6 +262,23 @@ defmodule CodingAgent.RunGraphServer do
     end
   end
 
+  def handle_call({:insert_record, run_id, record}, _from, state) do
+    state = ensure_tables(state)
+    do_insert_record(state, run_id, record)
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:delete_run, run_id}, _from, state) do
+    state = ensure_tables(state)
+    :ets.delete(state.table, run_id)
+
+    if state_dets_open?(state) do
+      :dets.delete(state.dets_table, run_id)
+    end
+
+    {:reply, :ok, state}
+  end
+
   def handle_call(:loading?, _from, state) do
     {:reply, state.loading, state}
   end
@@ -241,12 +287,12 @@ defmodule CodingAgent.RunGraphServer do
     state = ensure_tables(state)
 
     if state.ets_initialized do
-      :ets.delete_all_objects(@table)
+      :ets.delete_all_objects(state.table)
     end
 
     if state.dets_initialized do
-      :dets.delete_all_objects(@dets_table)
-      :dets.sync(@dets_table)
+      :dets.delete_all_objects(state.dets_table)
+      :dets.sync(state.dets_table)
     end
 
     {:reply, :ok, %{state | loaded_from_dets: false}}
@@ -257,7 +303,7 @@ defmodule CodingAgent.RunGraphServer do
 
     stats =
       if state.ets_initialized do
-        info = :ets.info(@table)
+        info = :ets.info(state.table)
 
         %{
           size: info[:size] || 0,
@@ -273,14 +319,14 @@ defmodule CodingAgent.RunGraphServer do
 
   def handle_call({:cleanup, ttl_seconds}, _from, state) do
     state = ensure_tables(state)
-    deleted_count = do_cleanup_chunked(ttl_seconds)
+    deleted_count = do_cleanup_chunked(state, ttl_seconds)
     {:reply, {:ok, deleted_count}, state}
   end
 
   def handle_call(:dets_status, _from, state) do
     info =
       if state.dets_initialized do
-        case :dets.info(@dets_table) do
+        case :dets.info(state.dets_table) do
           :undefined -> %{status: :closed}
           info -> Map.new(info)
         end
@@ -291,16 +337,16 @@ defmodule CodingAgent.RunGraphServer do
     {:reply, %{info: info, state: Map.drop(state, [:table, :dets_table])}, state}
   end
 
+  def handle_call(:dets_open?, _from, state) do
+    {:reply, state_dets_open?(state), state}
+  end
+
   @impl true
   def handle_info(:cleanup, state) do
     state = ensure_tables(state)
     state = start_async_cleanup(state)
     schedule_cleanup()
     {:noreply, state}
-  end
-
-  def handle_info(:dets_load_complete, state) do
-    {:noreply, %{state | loading: false, loaded_from_dets: true}}
   end
 
   def handle_info({:cleanup_complete, ref, _deleted_count}, %{cleanup_ref: ref} = state) do
@@ -319,7 +365,7 @@ defmodule CodingAgent.RunGraphServer do
   @impl true
   def terminate(_reason, state) do
     if state.dets_initialized do
-      :dets.close(@dets_table)
+      :dets.close(state.dets_table)
     end
 
     :ok
@@ -338,9 +384,9 @@ defmodule CodingAgent.RunGraphServer do
     if state.ets_initialized do
       state
     else
-      case :ets.whereis(@table) do
+      case :ets.whereis(state.table) do
         :undefined ->
-          :ets.new(@table, [:named_table, :public, :set, read_concurrency: true])
+          :ets.new(state.table, [:named_table, :public, :set, read_concurrency: true])
           %{state | ets_initialized: true}
 
         _tid ->
@@ -357,7 +403,7 @@ defmodule CodingAgent.RunGraphServer do
 
       dets_file = String.to_charlist(state.dets_path)
 
-      case :dets.open_file(@dets_table, file: dets_file, type: :set) do
+      case :dets.open_file(state.dets_table, file: dets_file, type: :set) do
         {:ok, _} ->
           %{state | dets_initialized: true}
 
@@ -378,18 +424,18 @@ defmodule CodingAgent.RunGraphServer do
     # and someone explicitly calls ensure_tables, trigger a synchronous load
     # as a fallback to guarantee data availability.
     if state.dets_initialized and state.ets_initialized do
-      do_sync_dets_load()
+      do_sync_dets_load(state)
       %{state | loaded_from_dets: true, loading: false}
     else
       state
     end
   end
 
-  defp do_insert_record(run_id, record) do
-    :ets.insert(@table, {run_id, record})
+  defp do_insert_record(state, run_id, record) do
+    :ets.insert(state.table, {run_id, record})
 
-    if dets_open?() do
-      :dets.insert(@dets_table, {run_id, record})
+    if state_dets_open?(state) do
+      :dets.insert(state.dets_table, {run_id, record})
     end
 
     :ok
@@ -451,7 +497,8 @@ defmodule CodingAgent.RunGraphServer do
 
   defp get_record_field(_record, _key), do: nil
 
-  defp do_sync_dets_load do
+  defp do_sync_dets_load(state) do
+    if is_function(state.before_dets_load, 0), do: state.before_dets_load.()
     now = System.system_time(:second)
 
     :dets.foldl(
@@ -466,26 +513,13 @@ defmodule CodingAgent.RunGraphServer do
             record
           end
 
-        :ets.insert(@table, {run_id, record})
+        :ets.insert(state.table, {run_id, record})
         :ok
       end,
       :ok,
-      @dets_table
+      state.dets_table
     )
   end
-
-  defp start_async_dets_load(%{dets_initialized: true, ets_initialized: true} = state) do
-    server = self()
-
-    Task.start(fn ->
-      do_sync_dets_load()
-      send(server, :dets_load_complete)
-    end)
-
-    %{state | loading: true, loaded_from_dets: true}
-  end
-
-  defp start_async_dets_load(state), do: state
 
   defp start_async_cleanup(state) do
     # If a cleanup is already in progress, skip
@@ -497,7 +531,7 @@ defmodule CodingAgent.RunGraphServer do
       ttl = Application.get_env(:coding_agent, :run_graph_ttl_seconds, @default_ttl_seconds)
 
       Task.start(fn ->
-        deleted = do_cleanup_chunked(ttl)
+        deleted = do_cleanup_chunked(state, ttl)
         send(server, {:cleanup_complete, ref, deleted})
       end)
 
@@ -507,7 +541,7 @@ defmodule CodingAgent.RunGraphServer do
 
   # Chunked cleanup: collect expired IDs then delete in chunks to avoid
   # holding the scheduler for too long on large tables.
-  defp do_cleanup_chunked(ttl_seconds) do
+  defp do_cleanup_chunked(state, ttl_seconds) do
     now = System.system_time(:second)
 
     expired_ids =
@@ -520,17 +554,17 @@ defmodule CodingAgent.RunGraphServer do
           end
         end,
         [],
-        @table
+        state.table
       )
 
     expired_ids
     |> Enum.chunk_every(@cleanup_chunk_size)
     |> Enum.each(fn chunk ->
       Enum.each(chunk, fn run_id ->
-        :ets.delete(@table, run_id)
+        :ets.delete(state.table, run_id)
 
-        if dets_open?() do
-          :dets.delete(@dets_table, run_id)
+        if state_dets_open?(state) do
+          :dets.delete(state.dets_table, run_id)
         end
       end)
 
@@ -538,8 +572,8 @@ defmodule CodingAgent.RunGraphServer do
       Process.sleep(0)
     end)
 
-    if dets_open?() and expired_ids != [] do
-      :dets.sync(@dets_table)
+    if state_dets_open?(state) and expired_ids != [] do
+      :dets.sync(state.dets_table)
     end
 
     length(expired_ids)
@@ -557,6 +591,12 @@ defmodule CodingAgent.RunGraphServer do
     else
       false
     end
+  end
+
+  defp state_dets_open?(state) do
+    :dets.info(state.dets_table) != :undefined
+  rescue
+    _ -> false
   end
 
   defp schedule_cleanup do

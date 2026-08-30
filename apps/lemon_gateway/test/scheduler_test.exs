@@ -221,6 +221,47 @@ defmodule LemonGateway.SchedulerTest do
       Process.exit(worker2, :kill)
     end
 
+    test "tokenized slot requests deduplicate and replace only after cancellation" do
+      blocker = spawn(fn -> Process.sleep(:infinity) end)
+      worker = spawn(fn -> Process.sleep(:infinity) end)
+      blocker_ref = Process.monitor(blocker)
+      slot_ref = make_ref()
+      token1 = make_ref()
+      token2 = make_ref()
+
+      state = %{
+        max: 1,
+        in_flight: %{
+          slot_ref => %{worker: blocker, thread_key: :blocker, mon_ref: blocker_ref}
+        },
+        waitq: :queue.new(),
+        monitors: %{blocker => blocker_ref},
+        worker_counts: %{blocker => 1}
+      }
+
+      {:noreply, state} =
+        Scheduler.handle_cast({:request_slot, worker, :thread, token1}, state)
+
+      {:noreply, duplicate_state} =
+        Scheduler.handle_cast({:request_slot, worker, :thread, token2}, state)
+
+      assert :queue.len(duplicate_state.waitq) == 1
+      assert duplicate_state.worker_counts[worker] == 1
+
+      {:noreply, cancelled_state} =
+        Scheduler.handle_cast({:cancel_slot_request, worker, token1}, duplicate_state)
+
+      assert :queue.is_empty(cancelled_state.waitq)
+
+      {:noreply, replacement_state} =
+        Scheduler.handle_cast({:request_slot, worker, :thread, token2}, cancelled_state)
+
+      assert [%{token: ^token2}] = :queue.to_list(replacement_state.waitq)
+
+      Process.exit(blocker, :kill)
+      Process.exit(worker, :kill)
+    end
+
     test "submit path does not block on worker enqueue" do
       if is_nil(Process.whereis(Elixir.LemonGateway.ThreadRegistry)) do
         {:ok, _} =

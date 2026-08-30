@@ -441,6 +441,15 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "cwd" => :string
       }
     },
+    "skills.hermes.catalog" => %{
+      optional: %{
+        "cwd" => :string,
+        "query" => :string,
+        "category" => :string,
+        "collection" => :string,
+        "details" => :boolean
+      }
+    },
     "skills.install" => %{
       required: %{
         "skillKey" => :string

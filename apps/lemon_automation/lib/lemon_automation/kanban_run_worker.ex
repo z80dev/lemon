@@ -3,7 +3,7 @@ defmodule LemonAutomation.KanbanRunWorker do
 
   alias LemonAutomation.{KanbanWorktree, RunCompletionWaiter}
   alias LemonAgent.Workspace.KanbanStore
-  alias LemonCore.{Bus, Id, SessionKey}
+  alias LemonCore.{Id, SessionKey}
 
   @default_timeout_ms 300_000
 
@@ -15,9 +15,6 @@ defmodule LemonAutomation.KanbanRunWorker do
     run_id = Keyword.get(opts, :run_id, Id.run_id())
 
     with {:ok, workspace} <- prepare_workspace(task, opts) do
-      topic = Bus.run_topic(run_id)
-      Bus.subscribe(topic)
-
       params =
         build_params(
           task,
@@ -26,46 +23,26 @@ defmodule LemonAutomation.KanbanRunWorker do
         )
 
       try do
-        submit_and_wait(router_mod, waiter_mod, params, run_id, topic, timeout_ms, wait_opts)
+        case RunCompletionWaiter.submit_and_wait(params,
+               router_mod: router_mod,
+               waiter_mod: waiter_mod,
+               bus_mod: Keyword.get(opts, :bus_mod, LemonCore.Bus),
+               timeout_ms: timeout_ms,
+               wait_opts: wait_opts
+             ) do
+          {:ok, completed_run_id, _output} -> {:ok, %{run_id: completed_run_id}}
+          {:error, {:timeout, _run_id}} -> {:error, :timeout}
+          {:error, {:run_failed, _run_id, reason}} -> {:error, reason}
+          {:error, {:submit_failed, reason}} -> {:error, reason}
+          {:error, reason} -> {:error, reason}
+        end
       rescue
         error ->
           {:error, Exception.message(error)}
       catch
         :exit, reason ->
           {:error, {:exit, reason}}
-      after
-        Bus.unsubscribe(topic)
       end
-    end
-  end
-
-  defp submit_and_wait(router_mod, waiter_mod, params, run_id, topic, timeout_ms, wait_opts) do
-    case router_mod.submit(params) do
-      {:ok, ^run_id} ->
-        case waiter_mod.wait_already_subscribed(run_id, timeout_ms, wait_opts) do
-          {:ok, _result} -> {:ok, %{run_id: run_id}}
-          :timeout -> {:error, :timeout}
-          {:error, reason} -> {:error, reason}
-          other -> {:error, other}
-        end
-
-      {:ok, other_run_id} ->
-        Bus.unsubscribe(topic)
-
-        case waiter_mod.wait(other_run_id, timeout_ms, wait_opts) do
-          {:ok, _result} -> {:ok, %{run_id: other_run_id}}
-          :timeout -> {:error, :timeout}
-          {:error, reason} -> {:error, reason}
-          other -> {:error, other}
-        end
-
-      {:error, reason} ->
-        Bus.unsubscribe(topic)
-        {:error, reason}
-
-      other ->
-        Bus.unsubscribe(topic)
-        {:error, {:unexpected_submit_result, other}}
     end
   end
 

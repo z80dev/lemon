@@ -5,7 +5,7 @@ defmodule CodingAgent.Session.PromptComposerTest do
 
   @moduletag :tmp_dir
 
-  test "compose_system_prompt/6 injects relevant skills for current prompt context", %{
+  test "compose_system_prompt/6 keeps turn-specific skill relevance out of the prompt", %{
     tmp_dir: tmp_dir
   } do
     workspace_dir = Path.join(tmp_dir, "workspace")
@@ -31,7 +31,7 @@ defmodule CodingAgent.Session.PromptComposerTest do
       """
     )
 
-    prompt =
+    github_prompt =
       PromptComposer.compose_system_prompt(
         tmp_dir,
         nil,
@@ -41,9 +41,20 @@ defmodule CodingAgent.Session.PromptComposerTest do
         "please open a GitHub pull request and monitor CI"
       )
 
-    assert String.contains?(prompt, "<relevant-skills>")
-    assert String.contains?(prompt, "github-pr-workflow")
-    assert String.contains?(prompt, "Use `read_skill` with <key>")
-    refute String.contains?(prompt, "Full body should stay behind read_skill.")
+    unrelated_prompt =
+      PromptComposer.compose_system_prompt(
+        tmp_dir,
+        nil,
+        nil,
+        workspace_dir,
+        :main,
+        "explain an unrelated algorithm"
+      )
+
+    assert github_prompt == unrelated_prompt
+    refute String.contains?(github_prompt, "<relevant-skills>")
+    assert String.contains?(github_prompt, "<key>github-pr-workflow</key>")
+    assert String.contains?(github_prompt, "Use `read_skill` with <key>")
+    refute String.contains?(github_prompt, "Full body should stay behind read_skill.")
   end
 end

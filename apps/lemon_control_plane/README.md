@@ -485,6 +485,7 @@ when to render the full payload.
 | Method | Scope | Description |
 |--------|-------|-------------|
 | `skills.status` | read | List skills with readiness details plus activation/source/missing-requirement summaries |
+| `skills.hermes.catalog` | read | Browse the live official Hermes catalog by category, collection, or query |
 | `skills.bins` | read | Get skill bin paths plus bin/requirement counts and cleanup summary |
 | `skills.install` | admin | Install a skill plus install-source return-state and approval-context cleanup summary |
 | `skills.update` | admin | Update/configure a skill plus env-key/update-mode summary with sensitive env response redaction |
