@@ -8,6 +8,12 @@ defmodule LemonAutomation.RunCompletionWaiter do
   submitting first and subscribing afterwards; a router run may complete
   synchronously during `submit/1`.
 
+  Lifecycle owners may install an `:on_submitting` claim callback. It runs with
+  the fixed run ID before router submission and must return `:ok`; rejecting the
+  claim prevents submission. This lets a hard-stop owner publish abort ownership
+  before the router can accept the run, while retaining the pre-subscription
+  guarantee for synchronous completion.
+
   The router is required to return the assigned run id. A different id is
   reported explicitly because subscribing to the replacement after submission
   would reintroduce the completion race.
@@ -38,6 +44,8 @@ defmodule LemonAutomation.RunCompletionWaiter do
     * `:bus_mod` - bus module implementing `subscribe/1` and `unsubscribe/1`
     * `:timeout_ms` - terminal wait timeout
     * `:wait_opts` - options forwarded to the waiter
+    * `:on_submitting` - ownership claim invoked before router submission; it
+      must return `:ok` or `{:error, reason}`
     * `:on_submitted` - callback invoked with the authoritative router run ID
     * `:on_terminal` - callback invoked with the same run ID after waiting
 
@@ -59,27 +67,31 @@ defmodule LemonAutomation.RunCompletionWaiter do
     bus_mod.subscribe(topic)
 
     try do
-      case safe_submit(router_mod, params) do
-        {:ok, ^run_id} ->
-          :ok = notify(Keyword.get(opts, :on_submitted), run_id)
+      with :ok <- claim_submission(Keyword.get(opts, :on_submitting), run_id) do
+        case safe_submit(router_mod, params) do
+          {:ok, ^run_id} ->
+            :ok = notify(Keyword.get(opts, :on_submitted), run_id)
 
-          result =
-            normalize_wait_result(
-              run_id,
-              waiter_mod.wait_already_subscribed(run_id, timeout_ms, wait_opts)
-            )
+            result =
+              normalize_wait_result(
+                run_id,
+                waiter_mod.wait_already_subscribed(run_id, timeout_ms, wait_opts)
+              )
 
-          :ok = notify(Keyword.get(opts, :on_terminal), run_id)
-          result
+            :ok = notify(Keyword.get(opts, :on_terminal), run_id)
+            result
 
-        {:ok, other_run_id} ->
-          {:error, {:unexpected_run_id, run_id, other_run_id}}
+          {:ok, other_run_id} ->
+            {:error, {:unexpected_run_id, run_id, other_run_id}}
 
-        {:error, reason} ->
-          {:error, {:submit_failed, reason}}
+          {:error, reason} ->
+            {:error, {:submit_failed, reason}}
 
-        other ->
-          {:error, {:submit_failed, {:unexpected_submit_result, other}}}
+          other ->
+            {:error, {:submit_failed, {:unexpected_submit_result, other}}}
+        end
+      else
+        {:error, reason} -> {:error, {:submit_failed, {:submission_claim_rejected, reason}}}
       end
     rescue
       error -> {:error, {:submit_failed, {:exception, error}}}
@@ -130,6 +142,16 @@ defmodule LemonAutomation.RunCompletionWaiter do
   defp notify(callback, run_id) when is_function(callback, 1) do
     callback.(run_id)
     :ok
+  end
+
+  defp claim_submission(nil, _run_id), do: :ok
+
+  defp claim_submission(callback, run_id) when is_function(callback, 1) do
+    case callback.(run_id) do
+      :ok -> :ok
+      {:error, reason} -> {:error, reason}
+      other -> {:error, {:unexpected_claim_result, other}}
+    end
   end
 
   defp normalize_wait_result(run_id, {:ok, output}), do: {:ok, run_id, output}

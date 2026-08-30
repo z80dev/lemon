@@ -88,7 +88,7 @@ Two additional state races were confirmed and fixed:
   reservations during DETS recovery. Both join tools also release reservations
   in `after` blocks. A process-death regression verifies cleanup.
 
-One cross-owner race remains open because its complete fix belongs at the
+The cross-owner GoalLoop race found in the chaos review is now closed at the
 router run-ownership boundary:
 
 - A hard GoalLoop stop can land after the router accepted a run but before
@@ -100,9 +100,12 @@ router run-ownership boundary:
   result was `active_run_id: nil`, `abort_result: :no_abort`, and a successful
   hard-stop reply. The production sequence has the same window:
   `router.submit/1` returns `{:ok, run_id}` before `notify(on_submitted, run_id)`
-  records the ID in the manager. Closing it requires an abort tombstone or an
-  atomic submit/ownership handshake in the router lifecycle, so an abort that
-  arrives before ownership publication also cancels a just-accepted run.
+  records the ID in the manager. `RunCompletionWaiter` now performs a
+  synchronous ownership claim before router submission, and `RunOrchestrator`
+  serializes fixed-ID abort tombstones with acceptance. Therefore either abort
+  wins and submission is rejected, or submission wins and ordinary cancellation
+  sees the accepted run. The deterministic acceptance-window regression and 32
+  barrier-synchronized races leave no live run after hard stop.
 
 ## Next high-value improvements
 

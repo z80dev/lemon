@@ -101,11 +101,13 @@ stops at `max_ticks`, failure, timeout, or a terminal judge verdict. Passing
 manager scheduler scans active goals and re-starts only those persisted loops
 when no loop for that session is already running. Loop status and auto state are
 stored in `LemonAgent.Workspace.GoalStore` and emitted as redacted goal events.
-The manager records the router-accepted run ID for the active judge or
-continuation. A hard stop (the default) disables auto restart, aborts that run
-once, kills the loop task, and prevents another tick. A graceful stop disables
-auto restart and lets the bounded loop finish. Manager call deadlines are
-computed above configured judge/continuation wait deadlines.
+The manager synchronously claims the fixed run ID before each judge or
+continuation enters router submission. A hard stop (the default) disables auto
+restart, aborts that owned run once, kills the loop task, and prevents another
+tick. Router abort tombstones are serialized with submission acceptance, so a
+hard stop cannot miss a run accepted before the submit callback returns. A
+graceful stop disables auto restart and lets the bounded loop finish. Manager
+call deadlines are computed above configured judge/continuation wait deadlines.
 
 `GoalJudge` supports explicit verdicts for tests/manual control, a pluggable
 `judge_runner` route with `judge_model` metadata, and deterministic fallback
@@ -123,6 +125,8 @@ Every automation path that both submits and waits uses
 `RunCompletionWaiter.submit_and_wait/2`. Cron, goal judge, autonomous goal
 continuation, timer heartbeat, and Kanban worker runs subscribe to their fixed
 run id before router submission and always unsubscribe after a terminal result.
+A goal-loop ownership claim runs synchronously after subscription and before
+submission; rejection prevents the router call.
 A router run-id mismatch is an explicit error rather than a late subscription
 to a replacement id, because a synchronous completion may already have fired.
 

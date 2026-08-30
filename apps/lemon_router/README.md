@@ -40,7 +40,7 @@ Channel transport or gateway-native ingress
 | Module | Responsibility |
 | --- | --- |
 | `LemonRouter.Router` | Main inbound entrypoint, session-key resolution, pending-compaction preparation, control-plane abort/keepalive hooks |
-| LemonRouter.RunOrchestrator (internal) | Builds router-owned submissions from `LemonCore.RunRequest` and hands them to `SessionCoordinator` |
+| LemonRouter.RunOrchestrator (internal) | Builds router-owned submissions, serializes fixed-ID abort tombstones with acceptance, and hands accepted work to `SessionCoordinator` |
 | `LemonRouter.SessionCoordinator` | Single owner of per-conversation queue semantics and active-run handoff |
 | Router internal session read model | Internal read model over coordinator-owned active session state |
 | `LemonRouter.ConversationKey` | Canonical conversation-key selection from structured resume or session key |

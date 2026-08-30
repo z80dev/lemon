@@ -76,12 +76,14 @@ and stops at `max_ticks`, failure, timeout, or a terminal judge verdict. Passing
 manager scheduler scans active goals and re-starts only persisted auto loops
 when no loop for that session is already running. Focused tests cover that
 persisted-auto path through the real goal loop and router judge runner.
-The manager captures the authoritative router run id after each accepted judge
-or continuation submission. `stop_loop/2` defaults to hard stop: it disables
-auto restart, aborts that active router run once, kills the loop task, and
-prevents another tick. `mode: :graceful` disables auto restart but lets the
-already bounded loop finish. The outer `run_once/2` call timeout encloses the
-configured judge/continuation wait deadlines.
+Before each judge or continuation submission, the manager synchronously claims
+the fixed router run id from `RunCompletionWaiter`. `stop_loop/2` defaults to
+hard stop: it disables auto restart, aborts that owned router run once, kills
+the loop task, and prevents another tick. The router serializes an abort
+tombstone with submission acceptance, so a stop cannot miss a run between
+acceptance and the later submitted callback. `mode: :graceful` disables auto
+restart but lets the already bounded loop finish. The outer `run_once/2` call
+timeout encloses the configured judge/continuation wait deadlines.
 
 `GoalJudge` supports explicit verdicts, a pluggable `judge_runner` with
 `judge_model` metadata, and deterministic fallback. `GoalJudge.RouterRunner`
@@ -97,6 +99,8 @@ continuation.
 All automation paths that submit and then wait use
 `RunCompletionWaiter.submit_and_wait/2`. It assigns a fixed run id and owns the
 subscription from before router submission through terminal wait cleanup.
+Goal loops also use its synchronous pre-submit ownership claim; a rejected
+claim prevents the router call entirely.
 Router run-id mismatches are explicit errors; callers never subscribe to a
 replacement id after submission because a synchronous completion could already
 have been lost. Cron, goal judge, autonomous goal continuation, timer heartbeat,

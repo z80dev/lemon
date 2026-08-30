@@ -106,6 +106,7 @@ defmodule LemonAutomation.GoalContinuation do
         bus_mod: Keyword.get(opts, :bus_mod, LemonCore.Bus),
         timeout_ms: Keyword.get(opts, :wait_timeout_ms, 300_000),
         wait_opts: Keyword.get(opts, :wait_opts, []),
+        on_submitting: Keyword.get(opts, :on_submitting),
         on_submitted: Keyword.get(opts, :on_submitted),
         on_terminal: Keyword.get(opts, :on_terminal)
       )
