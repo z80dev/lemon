@@ -184,6 +184,12 @@ All field access uses `LemonCore.MapHelpers.get_key/2` for atom-or-string key lo
 3. On valid token -> store SHA256 hash of token in session under `:lemon_web_auth`
 4. On invalid/missing -> 401 Unauthorized (halts pipeline)
 
+Valid query-token authentication must redirect server-side to the same path
+and non-token query parameters with `token` removed before any page renders.
+Bearer authentication establishes the session marker without redirecting.
+Never regress this to JavaScript-only cleanup: address history, referrers, and
+screenshots exist before client code runs.
+
 The `:management_browser` pipeline always uses `required: true`. Do not move
 management routes into the optional pipeline.
 

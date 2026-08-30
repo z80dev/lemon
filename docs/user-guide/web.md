@@ -71,9 +71,10 @@ the token once:
 http://127.0.0.1:4080/manage?token=<your-token>
 ```
 
-The browser removes the token from the address after establishing the signed
-session. The management page shows local runtime health, live named-node names,
-and durable-session counts. From there you can:
+The server validates the token, stores only a derived signed-session marker,
+and redirects to the same address without `token` before rendering the page.
+The management page then shows local runtime health, live named-node names, and
+durable-session counts. From there you can:
 
 - search session keys, titles, prompts, and answers, then filter active,
   archived, or all sessions;
@@ -100,8 +101,9 @@ The Web UI binds to localhost in the supported local launch path. To require a
 token for chat as well, set a high-entropy `LEMON_WEB_ACCESS_TOKEN` before
 starting Lemon. The management surface always requires this token and returns
 HTTP 503 when it is not configured. `lemon web` passes URL-safe configured
-tokens to the browser for the one-time login; the client removes the query
-parameter after the authenticated session cookie is established.
+tokens to the browser for the one-time login; the server consumes the query
+parameter with an immediate token-free redirect after the authenticated
+session cookie is established.
 
 For a remote deployment, terminate TLS in front of Lemon and require the token.
 Do not expose an unauthenticated HTTP listener to an untrusted network.

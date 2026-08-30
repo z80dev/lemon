@@ -13,7 +13,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - An authenticated Lemon Web session-management shell with runtime and live-node
   status, durable search/resume, title/pin/archive controls, redacted structured
   run/tool inspection, bounded JSON/Markdown export, and exact-candidate guarded
-  prune. Named chat routes now reconstruct durable history before resuming.
+  prune. Query-token bootstrap redirects server-side to a clean URL before
+  rendering, and named chat routes reconstruct durable history before resuming.
 - A shared `LemonCore.SessionLifecycle` service and control-plane
   `sessions.metadata.patch`, `sessions.export`, and `sessions.prune` methods.
   Export fails closed against raw run/event payloads and secrets; prune commits

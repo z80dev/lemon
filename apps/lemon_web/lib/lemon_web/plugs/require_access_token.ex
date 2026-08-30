@@ -11,7 +11,9 @@ defmodule LemonWeb.Plugs.RequireAccessToken do
 
   Routes that pass `required: true` fail closed with HTTP 503 when no token is
   configured. This is used for the management surface while the local chat
-  route keeps the backwards-compatible optional gate.
+  route keeps the backwards-compatible optional gate. A valid query token is
+  consumed with a server-side redirect to the same URL without `token`; bearer
+  authentication does not redirect.
   """
 
   @behaviour Plug
@@ -30,12 +32,22 @@ defmodule LemonWeb.Plugs.RequireAccessToken do
         if required?, do: unavailable(conn), else: conn
 
       expected ->
-        fresh_token = token_from_authorization_header(conn) || token_from_query(conn)
+        header_token = token_from_authorization_header(conn)
+        query_token = token_from_query(conn)
 
         cond do
-          is_binary(fresh_token) ->
-            if secure_equal?(fresh_token, expected) do
+          is_binary(header_token) ->
+            if secure_equal?(header_token, expected) do
               put_session(conn, @session_key, session_marker(expected))
+            else
+              conn |> delete_session(@session_key) |> unauthorized()
+            end
+
+          is_binary(query_token) ->
+            if secure_equal?(query_token, expected) do
+              conn
+              |> put_session(@session_key, session_marker(expected))
+              |> redirect_without_query_token()
             else
               conn |> delete_session(@session_key) |> unauthorized()
             end
@@ -106,6 +118,22 @@ defmodule LemonWeb.Plugs.RequireAccessToken do
     conn
     |> put_resp_content_type("text/plain")
     |> send_resp(401, "Unauthorized")
+    |> halt()
+  end
+
+  defp redirect_without_query_token(conn) do
+    query =
+      conn
+      |> fetch_query_params()
+      |> Map.fetch!(:query_params)
+      |> Map.delete("token")
+      |> URI.encode_query()
+
+    location = if query == "", do: conn.request_path, else: "#{conn.request_path}?#{query}"
+
+    conn
+    |> put_resp_header("location", location)
+    |> send_resp(302, "")
     |> halt()
   end
 
