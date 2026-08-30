@@ -455,19 +455,29 @@ defmodule LemonCore.Update.Remote do
          {:ok, receipt} <- ReceiptStore.fetch_receipt(receipt_id, opts),
          :ok <- validate_rollback_receipt(receipt, confirm, opts),
          {:ok, checkpoint} <- ReceiptStore.fetch_checkpoint(receipt["checkpoint_id"], opts),
-         :ok <- verify_checkpoint(receipt, checkpoint, opts),
-         :ok <- ManagedInstall.flip(receipt["from_version"], opts),
-         :ok <- ManagedInstall.verify_active(receipt["from_version"], opts),
+         :ok <- verify_checkpoint(receipt, checkpoint, opts) do
+      perform_rollback(receipt, opts)
+    end
+  end
+
+  # Recovery belongs strictly inside the post-flip boundary. Validation
+  # failures (including a stale current pointer) must never move the pointer.
+  defp perform_rollback(receipt, opts) do
+    previous = receipt["to_version"]
+    target = receipt["from_version"]
+
+    with :ok <- ManagedInstall.flip(target, opts),
+         :ok <- ManagedInstall.verify_active(target, opts),
          {:ok, rollback_receipt} <- put_rollback_receipt(receipt, opts) do
       {:ok,
        %{
-         active: receipt["from_version"],
+         active: target,
          restart_required: true,
          receipt: rollback_receipt
        }}
     else
       {:error, reason} ->
-        maybe_restore_rollback_source(receipt_id, opts)
+        _ = ManagedInstall.restore_after_failed_flip(previous, target, opts)
         {:error, reason}
     end
   end
@@ -532,19 +542,6 @@ defmodule LemonCore.Update.Remote do
       },
       opts
     )
-  end
-
-  # If the pointer was flipped but writing/verifying the rollback receipt
-  # failed, return it to the update receipt's source version. Fetching is
-  # bounded and receipt-derived; no caller-controlled path is used.
-  defp maybe_restore_rollback_source(receipt_id, opts) do
-    case ReceiptStore.fetch_receipt(receipt_id, opts) do
-      {:ok, %{"action" => "apply", "to_version" => version}} ->
-        if ManagedInstall.active(opts) != version, do: ManagedInstall.flip(version, opts)
-
-      _ ->
-        :ok
-    end
   end
 
   # Downloads, extraction, and validation, with a guaranteed cleanup of the

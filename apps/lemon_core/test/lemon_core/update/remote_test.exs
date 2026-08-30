@@ -873,6 +873,11 @@ defmodule LemonCore.Update.RemoteTest do
         confirm: receipt["rollback_digest"]
       ]
 
+      assert {:error, :confirmation_mismatch} =
+               Remote.rollback(Keyword.put(rollback_opts, :confirm, String.duplicate("0", 64)))
+
+      assert {:ok, "2099.01.0"} = File.read_link(Path.join([state, "versions", "current"]))
+
       assert {:ok, %{active: "2020.01.0", receipt: rollback_receipt}} =
                Remote.rollback(rollback_opts)
 
@@ -881,6 +886,36 @@ defmodule LemonCore.Update.RemoteTest do
       assert {:ok, [latest, original]} = Remote.history(Keyword.put(rollback_opts, :limit, 2))
       assert latest["action"] == "rollback"
       assert original["id"] == receipt["id"]
+    end
+
+    test "a stale rollback receipt never moves a newer active pointer", %{tmp_dir: tmp_dir} do
+      {bytes, sha256, size} = build_fixture_tarball(tmp_dir)
+      artifacts = [artifact("pkg.tar.gz", "test_profile", "test-platform", sha256, size)]
+      body = manifest("2099.01.0", artifacts)
+      router = artifact_router(body, "/releases/download/v2099.01.0/pkg.tar.gz", bytes)
+      base_url = start_server(router)
+      {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
+      opts = remote_opts(base_url, home, release_root)
+
+      assert {:ok, %{receipt: receipt}} = apply_confirmed(opts)
+
+      newer = Path.join([state, "versions", "2100.01.0"])
+      File.mkdir_p!(Path.join(newer, "bin"))
+      write_executable!(Path.join(newer, "bin/lemon"), "#!/bin/sh\necho 2100.01.0\n")
+      current = Path.join([state, "versions", "current"])
+      File.rm!(current)
+      :ok = File.ln_s("2100.01.0", current)
+
+      stale_opts = [
+        paths_opts: [home_dir: home],
+        release_root: newer,
+        current_version: "2100.01.0",
+        receipt: receipt["id"],
+        confirm: receipt["rollback_digest"]
+      ]
+
+      assert {:error, :stale_current_version} = Remote.rollback(stale_opts)
+      assert {:ok, "2100.01.0"} = File.read_link(current)
     end
 
     test "post-promotion verification failure restores the exact old pointer", %{tmp_dir: tmp_dir} do
