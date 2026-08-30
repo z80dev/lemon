@@ -263,11 +263,19 @@ Environment variables override file values. Common overrides:
 - `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` — shared WebSocket operator credential;
   required by default for every WebSocket operator connection. Named node
   pairing supplies the same value from `LEMON_NODE_OPERATOR_TOKEN` on the
-  joining host.
+  joining host. The source `./bin/lemon-tui` launcher generates an ephemeral
+  value when it owns a fresh local runtime; persistent or existing runtimes
+  require the operator to provide the same high-entropy value to both runtime
+  and client.
 - `LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK` — explicit legacy
   compatibility opt-in (`true`/`false` or `1`/`0`) for tokenless operator
   connections from direct loopback peers. Defaults to `false`; never enable it
   for a reverse-proxied control plane.
+
+The browser monitoring client intentionally has no build-time or URL-based
+operator-token setting. Lemon does not yet implement the short-lived delegated
+browser-session exchange needed to authenticate that client safely. Never
+place the shared server token in `VITE_*` configuration.
 - `LEMON_PROVIDER_ROUTING_ENABLED`, `LEMON_PROVIDER_FALLBACK_PROVIDERS`, `LEMON_PROVIDER_ROUTING_REQUIRE_CREDENTIALS`
 - `LEMON_THEME`, `LEMON_DEBUG`
 - `<PROVIDER>_API_KEY`, `<PROVIDER>_BASE_URL` (e.g., `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`, `OPENCODE_API_KEY`, `ZAI_API_KEY`, `MINIMAX_API_KEY`)

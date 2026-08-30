@@ -6,6 +6,9 @@
 # is not written to this file. Set LEMON_CONTROL_PLANE_OPERATOR_TOKEN for normal
 # WebSocket operator access. Legacy tokenless loopback access is disabled unless
 # LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK=true is explicitly set.
+# The source ./bin/lemon-tui launcher generates a process-scoped token for a
+# runtime it starts; attaching to an existing runtime requires its matching env
+# value. Never put the shared token in a browser VITE_* variable or URL.
 # Named node pairing sends the operator token from LEMON_NODE_OPERATOR_TOKEN on
 # the joining host.
 

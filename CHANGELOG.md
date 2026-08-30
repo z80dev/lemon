@@ -32,6 +32,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   node pairing reports credential problems without exposing secrets. Tokenless
   loopback operator access is now a default-off explicit compatibility opt-in,
   and browser clients keep operator credentials out of WebSocket URLs.
+- The source TUI launcher now gives a fresh launcher-owned daemon and client the
+  same high-entropy process-scoped operator token, keeps it out of arguments and
+  disk, stops that daemon with the TUI, and fails closed when attaching to an
+  existing runtime without its configured token.
 - Named execution nodes now cancel destination work when callers time out,
   disappear, reconnect, or lose their controller socket; bind stored tokens to
   the paired node identity; persist fast results without racing dispatch; and

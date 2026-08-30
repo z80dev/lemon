@@ -172,4 +172,7 @@ For a source checkout, use the `./bin/lemon` wrapper for Lemon commands:
 
 The source wrapper follows the same setup and provider behavior described
 above. `./bin/lemon-tui` is the development TUI entry point after the source
-runtime is configured.
+runtime is configured. When it starts a fresh runtime, the launcher generates
+and shares an in-memory operator token with the TUI, then stops that owned
+runtime when the TUI exits. To attach to a persistent runtime, export the same
+high-entropy `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` used to start that runtime.
