@@ -137,6 +137,31 @@ defmodule LemonAutomation.BlueprintTest do
   end
 
   @tag :tmp_dir
+  test "rejects symlinked profile configuration boundaries before planning", %{tmp_dir: root} do
+    profile_id = unique_id("symlink-profile")
+    bundle_id = unique_id("symlink-profile-bundle")
+    automation_id = unique_id("symlink-profile-job")
+    profile_opts = profile_opts(root)
+    assert {:ok, profile} = ProfileStore.create(%{id: profile_id}, profile_opts)
+    bundle = write_bundle(root, bundle_id, automation_id)
+
+    outside = Path.join(root, "outside-skills.json")
+    File.write!(outside, Jason.encode!(%{"disabled" => ["daily-note"]}))
+
+    config_path = LemonSkills.Config.project_config_file(profile["paths"]["workspace"])
+    File.ln_s!(outside, config_path)
+
+    opts = [profile_opts: profile_opts, refresh_fun: fn _ -> :ok end]
+
+    assert {:error, {:symlink_not_allowed, _}} =
+             Blueprint.preview(bundle, profile_id, opts)
+
+    assert File.read!(outside) == Jason.encode!(%{"disabled" => ["daily-note"]})
+    refute File.exists?(Path.join(profile["paths"]["skills"], "daily-note"))
+    refute Enum.any?(CronManager.list(), &(&1.agent_id == profile_id))
+  end
+
+  @tag :tmp_dir
   test "rejects command fields, secret values, symlinks, and archives without echoing values", %{
     tmp_dir: root
   } do
@@ -171,6 +196,13 @@ defmodule LemonAutomation.BlueprintTest do
     File.write!(outside, "outside")
     File.mkdir_p!(Path.join(skill, "references"))
     File.ln_s!(outside, Path.join([skill, "references", "escape.txt"]))
+    assert {:error, {:symlink_not_allowed, _}} = Blueprint.validate(bundle)
+
+    File.rm_rf!(Path.join(bundle, "skills"))
+    outside_skills = Path.join(root, "outside-skills")
+    File.mkdir_p!(Path.join(outside_skills, "daily-note"))
+    File.write!(Path.join([outside_skills, "daily-note", "SKILL.md"]), safe_skill("daily-note"))
+    File.ln_s!(outside_skills, Path.join(bundle, "skills"))
     assert {:error, {:symlink_not_allowed, _}} = Blueprint.validate(bundle)
   end
 

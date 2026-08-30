@@ -99,6 +99,12 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.SkillsInstall,
     LemonControlPlane.Methods.SkillsUpdate,
     LemonControlPlane.Methods.ExtensionsStatus,
+    # Portable skill bundles and automation blueprints
+    LemonControlPlane.Methods.BlueprintsList,
+    LemonControlPlane.Methods.BlueprintsInspect,
+    LemonControlPlane.Methods.BlueprintsValidate,
+    LemonControlPlane.Methods.BlueprintsPreview,
+    LemonControlPlane.Methods.BlueprintsActivate,
     # Sessions
     LemonControlPlane.Methods.SessionsList,
     LemonControlPlane.Methods.SessionsPreview,

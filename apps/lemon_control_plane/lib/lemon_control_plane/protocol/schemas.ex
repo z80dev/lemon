@@ -534,6 +534,30 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "env" => :map
       }
     },
+    "blueprints.list" => %{},
+    "blueprints.inspect" => %{
+      required: %{
+        "bundleId" => :string
+      }
+    },
+    "blueprints.validate" => %{
+      required: %{
+        "bundleId" => :string
+      }
+    },
+    "blueprints.preview" => %{
+      required: %{
+        "bundleId" => :string,
+        "profileId" => :string
+      }
+    },
+    "blueprints.activate" => %{
+      required: %{
+        "bundleId" => :string,
+        "profileId" => :string,
+        "confirmationDigest" => :string
+      }
+    },
 
     # Session methods
     "sessions.list" => %{

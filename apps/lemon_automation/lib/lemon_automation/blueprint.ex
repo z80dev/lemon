@@ -76,8 +76,18 @@ defmodule LemonAutomation.Blueprint do
             case File.lstat(path) do
               {:ok, %File.Stat{type: :directory}} ->
                 case inspect(path) do
-                  {:ok, summary} -> {[summary | valid], invalid, was_truncated}
-                  {:error, _} -> {valid, invalid + 1, was_truncated}
+                  {:ok, %{"id" => ^name} = summary} ->
+                    if Regex.match?(@id_regex, name) do
+                      {[summary | valid], invalid, was_truncated}
+                    else
+                      {valid, invalid + 1, was_truncated}
+                    end
+
+                  {:error, _} ->
+                    {valid, invalid + 1, was_truncated}
+
+                  _ ->
+                    {valid, invalid + 1, was_truncated}
                 end
 
               _ ->
@@ -169,7 +179,9 @@ defmodule LemonAutomation.Blueprint do
 
   defp build_plan(path, profile_id, opts) do
     with {:ok, bundle} <- load(path),
+         :ok <- require_expected_bundle_id(bundle, opts),
          {:ok, profile} <- profile_get(profile_id, opts),
+         :ok <- validate_profile_boundaries(profile),
          {:ok, skill_actions} <- plan_skills(bundle, profile),
          {:ok, desired_job} <- desired_job(bundle, profile) do
       definition = definition_projection(bundle, profile, desired_job)
@@ -374,6 +386,8 @@ defmodule LemonAutomation.Blueprint do
          true <-
            raw["path"] == expected_path ||
              error(:invalid_skill_path, "Skill path must use the portable skills/<key> layout"),
+         {:ok, _skills_root} <-
+           require_directory(Path.join(root, "skills"), :invalid_skill_path),
          full_path = Path.join(root, expected_path),
          {:ok, full_path} <- require_directory(full_path, :invalid_skill_path),
          {:ok, stats} <- scan_skill_tree(full_path),
@@ -689,7 +703,8 @@ defmodule LemonAutomation.Blueprint do
       "skills" => Enum.map(bundle.skills, & &1.manifest_projection),
       "automations" => Enum.map(bundle.automations, & &1.projection),
       "validation" => %{
-        "valid" => validated?,
+        "valid" => true,
+        "validationRequested" => validated?,
         "symlinksAllowed" => false,
         "archivesAllowed" => false,
         "commandJobsAllowed" => false,
@@ -749,6 +764,12 @@ defmodule LemonAutomation.Blueprint do
   end
 
   defp apply_skills(state, opts) do
+    with :ok <- validate_profile_boundaries(state.profile) do
+      do_apply_skills(state, opts)
+    end
+  end
+
+  defp do_apply_skills(state, opts) do
     actions = Enum.filter(state.skill_actions, &(&1.action in [:create, :create_enable]))
     workspace = state.profile["paths"]["workspace"]
     config_path = Config.project_config_file(workspace)
@@ -838,7 +859,7 @@ defmodule LemonAutomation.Blueprint do
     stage =
       Path.join(skills_root, ".bundle-stage-#{System.unique_integer([:positive, :monotonic])}")
 
-    with :ok <- File.mkdir_p(skills_root) |> map_write_error(:skill_write_failed),
+    with :ok <- require_profile_directory(skills_root),
          :ok <- ensure_absent(stage),
          :ok <- File.mkdir(stage) |> map_write_error(:skill_write_failed),
          :ok <- copy_staged_skills(actions, stage),
@@ -1324,6 +1345,70 @@ defmodule LemonAutomation.Blueprint do
       {:ok, profile} -> {:ok, profile}
       {:error, :not_found} -> error(:profile_not_found, "Profile does not exist")
       _ -> error(:invalid_profile, "Profile is invalid or unavailable")
+    end
+  end
+
+  defp require_expected_bundle_id(bundle, opts) do
+    case Keyword.get(opts, :expected_bundle_id) do
+      nil -> :ok
+      expected when expected == bundle.id -> :ok
+      _ -> error(:bundle_id_mismatch, "Catalog bundle ID does not match its manifest")
+    end
+  end
+
+  defp validate_profile_boundaries(%{"paths" => paths}) when is_map(paths) do
+    with {:ok, home} <- expand_profile_path(paths["home"]),
+         {:ok, workspace} <- expand_profile_path(paths["workspace"]),
+         {:ok, skills} <- expand_profile_path(paths["skills"]),
+         true <-
+           workspace == Path.join(home, "workspace") ||
+             error(:invalid_profile_boundary, "Profile workspace boundary is invalid"),
+         true <-
+           skills == Path.join([workspace, ".lemon", "skill"]) ||
+             error(:invalid_profile_boundary, "Profile skill boundary is invalid"),
+         :ok <- require_profile_directory(home),
+         :ok <- require_profile_directory(workspace),
+         :ok <- require_profile_directory(Path.join(workspace, ".lemon")),
+         :ok <- require_profile_directory(skills),
+         :ok <- require_profile_config(Config.project_config_file(workspace)) do
+      :ok
+    end
+  end
+
+  defp validate_profile_boundaries(_),
+    do: error(:invalid_profile_boundary, "Profile filesystem boundaries are invalid")
+
+  defp expand_profile_path(path) when is_binary(path) and path != "", do: {:ok, Path.expand(path)}
+
+  defp expand_profile_path(_),
+    do: error(:invalid_profile_boundary, "Profile filesystem boundaries are invalid")
+
+  defp require_profile_directory(path) do
+    case File.lstat(path) do
+      {:ok, %File.Stat{type: :directory}} ->
+        :ok
+
+      {:ok, %File.Stat{type: :symlink}} ->
+        error(:symlink_not_allowed, "Profile paths cannot be symlinks")
+
+      _ ->
+        error(:invalid_profile_boundary, "Profile directory boundary is unavailable")
+    end
+  end
+
+  defp require_profile_config(path) do
+    case File.lstat(path) do
+      {:error, :enoent} ->
+        :ok
+
+      {:ok, %File.Stat{type: :regular}} ->
+        :ok
+
+      {:ok, %File.Stat{type: :symlink}} ->
+        error(:symlink_not_allowed, "Profile configuration cannot be a symlink")
+
+      _ ->
+        error(:invalid_profile_boundary, "Profile configuration boundary is invalid")
     end
   end
 
