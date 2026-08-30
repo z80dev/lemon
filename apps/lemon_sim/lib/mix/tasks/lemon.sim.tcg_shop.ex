@@ -22,6 +22,8 @@ defmodule Mix.Tasks.Lemon.Sim.TcgShop do
 
   use Mix.Task
 
+  alias Mix.Tasks.Lemon.Sim.Common
+
   @switches [
     persist: :boolean,
     max_turns: :integer,
@@ -42,7 +44,7 @@ defmodule Mix.Tasks.Lemon.Sim.TcgShop do
     if opts[:help] do
       Mix.shell().info(@moduledoc)
     else
-      ensure_runtime_started!()
+      Common.ensure_runtime_and_core_started()
       run_simulation(opts)
     end
   end
@@ -51,13 +53,13 @@ defmodule Mix.Tasks.Lemon.Sim.TcgShop do
     run_opts =
       []
       |> apply_preset(opts[:preset])
-      |> maybe_put(:max_days, opts[:max_days])
-      |> maybe_put(:seed, opts[:seed])
-      |> maybe_put(:sim_id, opts[:sim_id])
-      |> maybe_put(:persist?, opts[:persist])
-      |> maybe_put(:driver_max_turns, opts[:max_turns])
-      |> maybe_put(:artifact_dir, opts[:artifact_dir])
-      |> maybe_put(:deterministic_artifacts?, opts[:deterministic_artifacts])
+      |> Common.maybe_put(:max_days, opts[:max_days])
+      |> Common.maybe_put(:seed, opts[:seed])
+      |> Common.maybe_put(:sim_id, opts[:sim_id])
+      |> Common.maybe_put(:persist?, opts[:persist])
+      |> Common.maybe_put(:driver_max_turns, opts[:max_turns])
+      |> Common.maybe_put(:artifact_dir, opts[:artifact_dir])
+      |> Common.maybe_put(:deterministic_artifacts?, opts[:deterministic_artifacts])
 
     strategy = opts[:offline_strategy] || "baseline"
 
@@ -100,9 +102,6 @@ defmodule Mix.Tasks.Lemon.Sim.TcgShop do
     exit({:shutdown, 1})
   end
 
-  defp maybe_put(opts, _key, nil), do: opts
-  defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
-
   defp print_usage_summary(%{usage: usage_path}) do
     with {:ok, body} <- File.read(usage_path),
          {:ok, usage} <- Jason.decode(body) do
@@ -111,9 +110,4 @@ defmodule Mix.Tasks.Lemon.Sim.TcgShop do
   end
 
   defp print_usage_summary(_artifacts), do: :ok
-
-  defp ensure_runtime_started! do
-    Application.ensure_all_started(:lemon_sim)
-    Application.ensure_all_started(:lemon_core)
-  end
 end

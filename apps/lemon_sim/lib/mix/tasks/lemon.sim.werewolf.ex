@@ -1,6 +1,8 @@
 defmodule Mix.Tasks.Lemon.Sim.Werewolf do
   use Mix.Task
 
+  alias Mix.Tasks.Lemon.Sim.Common
+
   alias LemonSim.LLM.GameHelpers.Config, as: SimConfig
 
   @shortdoc "Run the LemonSim Werewolf social-deduction example"
@@ -48,7 +50,7 @@ defmodule Mix.Tasks.Lemon.Sim.Werewolf do
         Mix.raise("pass either --model or --models, not both")
 
       true ->
-        if Keyword.get(deps, :ensure_runtime?, true), do: ensure_runtime_started!()
+        if Keyword.get(deps, :ensure_runtime?, true), do: Common.ensure_runtime_started!()
         run_simulation(opts, deps)
     end
   end
@@ -59,11 +61,11 @@ defmodule Mix.Tasks.Lemon.Sim.Werewolf do
 
     base_run_opts =
       []
-      |> maybe_put(:persist?, opts[:persist])
-      |> maybe_put(:driver_max_turns, opts[:max_turns] || opts[:max_driver_turns])
-      |> maybe_put(:player_count, opts[:player_count])
-      |> maybe_put(:seed, opts[:seed])
-      |> maybe_put(:sim_id, opts[:sim_id])
+      |> Common.maybe_put(:persist?, opts[:persist])
+      |> Common.maybe_put(:driver_max_turns, opts[:max_turns] || opts[:max_driver_turns])
+      |> Common.maybe_put(:player_count, opts[:player_count])
+      |> Common.maybe_put(:seed, opts[:seed])
+      |> Common.maybe_put(:sim_id, opts[:sim_id])
 
     result =
       if opts[:models] do
@@ -72,14 +74,14 @@ defmodule Mix.Tasks.Lemon.Sim.Werewolf do
 
         base_run_opts
         |> Keyword.put(:seed, effective_seed)
-        |> maybe_put(:model_assignments, assignments)
-        |> maybe_put(:transcript_path, transcript_path(opts))
+        |> Common.maybe_put(:model_assignments, assignments)
+        |> Common.maybe_put(:transcript_path, transcript_path(opts))
         |> then(&runner.(:multi, &1))
       else
         maybe_seed_random(opts[:seed])
 
         base_run_opts
-        |> maybe_put(:model, resolve_model_override(opts[:model], config, deps))
+        |> Common.maybe_put(:model, resolve_model_override(opts[:model], config, deps))
         |> then(&runner.(:single, &1))
       end
 
@@ -180,16 +182,6 @@ defmodule Mix.Tasks.Lemon.Sim.Werewolf do
     :rand.seed(:exsss, {seed, seed + 1, seed + 2})
     :ok
   end
-
-  defp ensure_runtime_started! do
-    case Application.ensure_all_started(:lemon_sim) do
-      {:ok, _started} -> :ok
-      {:error, reason} -> Mix.raise("failed to start lemon_sim runtime: #{inspect(reason)}")
-    end
-  end
-
-  defp maybe_put(opts, _key, nil), do: opts
-  defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
 
   defp print_help do
     Mix.shell().info("""
