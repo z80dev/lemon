@@ -10,6 +10,7 @@ import {
 } from "../../src/protocol/errors.ts";
 import { ControlPlaneMethods } from "../../src/protocol/methods.ts";
 import type { ChatDeltaEvent } from "../../src/protocol/types.ts";
+import { AUTHENTICATED_CONNECT_PARAMS } from "./fixtures/control-plane-connect-contract.ts";
 
 const teardown: Array<() => void> = [];
 
@@ -61,6 +62,21 @@ describe("handshake", () => {
 		client.events.on("hello-ok", ({ resumed }) => seen.push(resumed));
 		await client.connect();
 		expect(seen).toEqual([false]);
+	});
+
+	test("sends authenticated connect params using the server contract envelope", async () => {
+		const server = await withServer();
+		const client = makeClient(server.url, {
+			clientId: AUTHENTICATED_CONNECT_PARAMS.client.id,
+			token: AUTHENTICATED_CONNECT_PARAMS.auth.token,
+		});
+
+		await client.connect();
+
+		const connect = server.requestsFor("connect");
+		expect(connect).toHaveLength(1);
+		expect(connect[0].params).toEqual(AUTHENTICATED_CONNECT_PARAMS);
+		expect(connect[0].params).not.toHaveProperty("token");
 	});
 
 	test("an auth rejection rejects connect()", async () => {

@@ -54,5 +54,10 @@ npm run dev
 ## Build
 
 ```bash
+npm run typecheck
 npm run build
 ```
+
+Type checking first generates the private shared workspace declarations. The
+build generates ignored `shared/dist` and `server/dist` directories before
+building the Vite application.
