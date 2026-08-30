@@ -38,6 +38,7 @@ defmodule LemonBrowser.HybridBackendTest do
   setup do
     :ok = BackendRegistry.register(:hybrid_local_test, LocalBackend)
     :ok = BackendRegistry.register(:hybrid_public_test, PublicBackend)
+    session_id = "hybrid-session-#{System.unique_integer([:positive])}"
 
     on_exit(fn ->
       BackendRegistry.unregister(:hybrid_local_test)
@@ -46,7 +47,7 @@ defmodule LemonBrowser.HybridBackendTest do
 
     {:ok,
      opts: [
-       session_id: "hybrid-session",
+       session_id: session_id,
        run_id: "run-one",
        hybrid_local_backend: :hybrid_local_test,
        hybrid_public_backend: :hybrid_public_test,
