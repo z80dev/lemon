@@ -891,7 +891,11 @@ payloads.
 
 - Use `async: true` for method tests that don't depend on shared state
 - Tests requiring the full runtime should be marked `async: false`
-- The `test_helper.exs` stops and restarts `:lemon_channels` (and related apps) to ensure a clean baseline; it also disables Telegram
+- The `test_helper.exs` stops and restarts `:lemon_channels` (and related apps),
+  then explicitly ensures `:lemon_control_plane` is running. Umbrella app suites
+  share one BEAM, so the suite must establish its own supervised Registry/ETS
+  baseline even when an earlier app suite stopped the control plane; it also
+  disables Telegram.
 - Mock external dependencies; test method logic in isolation
 - Test error cases: missing params, invalid auth, not found scenarios
 - For WebSocket tests, use `test/lemon_control_plane/ws/connection_test.exs` as the reference pattern
