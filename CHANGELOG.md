@@ -16,6 +16,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - A shared `LemonCore.Setup.Readiness` contract plus a fail-closed Web first-run
   guide, live config/secret refresh, active-run stop control, and accessible
   responsive status/composer states.
+- Durable same-session heartbeats with idle-only recurring turns, queued-user
+  priority, missed-tick coalescing, pause/resume/clear lifecycle, restart-safe
+  fire claims, reset tombstones, logical session-key resolution, an admin
+  `sessions.heartbeat` API, and TUI `/heartbeat`/`/hb` commands.
 - Portable Hermes-compatible slash-command discovery metadata for channel and
   interactive clients, exposed through the read-only `commands.catalog`
   control-plane method while preserving Lemon's router/session ownership and

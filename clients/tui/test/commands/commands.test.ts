@@ -105,6 +105,61 @@ describe("routing commands", () => {
 	});
 });
 
+describe("session heartbeat", () => {
+	const activeHeartbeat = {
+		sessionKey: "tui-session",
+		action: "status",
+		heartbeat: {
+			configured: true,
+			status: "active",
+			prompt: "check CI and open reviews",
+			intervalSeconds: 600,
+			fireCount: 2,
+			nextInSeconds: 599,
+		},
+	};
+
+	test("/heartbeat every sets a recurring same-session prompt", async () => {
+		harness.server.respondWith("sessions.heartbeat", activeHeartbeat);
+
+		await harness.run("/heartbeat every 10m check CI and open reviews");
+
+		expect(harness.server.requestsFor("sessions.heartbeat")[0].params).toEqual({
+			sessionKey: "tui-session",
+			action: "set",
+			prompt: "check CI and open reviews",
+			intervalSeconds: 600,
+		});
+		expect(harness.host.text).toContain("heartbeat set");
+		expect(harness.host.text).toContain("every 10m");
+		expect(harness.host.text).toContain("fired 2×");
+	});
+
+	test("/hb is the status alias and lifecycle actions preserve the session key", async () => {
+		harness.server.respondWith("sessions.heartbeat", activeHeartbeat);
+
+		await harness.run("/hb");
+		await harness.run("/heartbeat pause");
+		await harness.run("/heartbeat resume");
+		await harness.run("/heartbeat off");
+
+		expect(harness.server.requestsFor("sessions.heartbeat").map((frame) => frame.params)).toEqual([
+			{ sessionKey: "tui-session", action: "status" },
+			{ sessionKey: "tui-session", action: "pause" },
+			{ sessionKey: "tui-session", action: "resume" },
+			{ sessionKey: "tui-session", action: "clear" },
+		]);
+	});
+
+	test("rejects intervals below the durable runtime minimum locally", async () => {
+		await harness.run("/heartbeat every 59s check too often");
+
+		expect(harness.server.requestsFor("sessions.heartbeat")).toHaveLength(0);
+		expect(harness.host.last?.level).toBe("error");
+		expect(harness.host.text).toContain("minimum is 60s");
+	});
+});
+
 describe("diagnostics", () => {
 	test("/status renders a card from status + health", async () => {
 		harness.server.respondWith("status", {

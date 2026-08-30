@@ -88,6 +88,7 @@ The control plane provides the external interface for clients (TUI, web, mobile,
 | `LemonControlPlane.Methods.Registry` | `lib/lemon_control_plane/methods/registry.ex` | Method dispatch registry (ETS); `dispatch/3`, `register/1`, `unregister/1`. Also defines `LemonControlPlane.Method` behaviour. |
 | `LemonControlPlane.Methods.CommandsCatalog` | `lib/lemon_control_plane/methods/commands_catalog.ex` | Read-only `commands.catalog` discovery projection over `LemonChannels.CommandCatalog`; execution remains with consuming surfaces and runtime owners. |
 | `LemonControlPlane.Methods.Background*` / `SessionBtw` | `lib/lemon_control_plane/methods/background_commands.ex` | Provider-backed lifecycle RPCs for isolated `/bg` sessions and bounded no-tools `/btw` questions; the control plane owns only validation and wire projection. |
+| `LemonControlPlane.Methods.SessionHeartbeat` | `lib/lemon_control_plane/methods/session_heartbeat.ex` | Admin projection for status/set/pause/resume/clear of a live durable coding-session heartbeat; validates provider state before returning it. |
 | `LemonControlPlane.Protocol.Frames` | `lib/lemon_control_plane/protocol/frames.ex` | Protocol frame encoding/decoding; `parse/1`, `encode_response/2`, `encode_event/4`, `encode_hello_ok/1` |
 | `LemonControlPlane.Protocol.Errors` | `lib/lemon_control_plane/protocol/errors.ex` | Standard error constructors; `invalid_request/1`, `not_found/1`, `forbidden/1`, etc. |
 | `LemonControlPlane.Protocol.Schemas` | `lib/lemon_control_plane/protocol/schemas.ex` | Param and event payload schema validation; `validate/2`, `validate_event/2` |
@@ -213,6 +214,7 @@ Supported types: `:string`, `:integer`, `:boolean`, `:map`, `:list`, `:any`.
 | `sessions.preview` | read | Preview truncated session messages plus sensitive-preview redaction, truncation summary, and cleanup flags |
 | `sessions.patch` | admin | Modify session policy/model/thinking overrides plus patch summary and cleanup flags |
 | `sessions.reset` | admin | Clear session history plus cleanup summary |
+| `sessions.heartbeat` | admin | Inspect or set/pause/resume/clear one live session's idle-only recurring prompt by logical session key; ambiguous ownership is a conflict |
 | `sessions.delete` | admin | Delete a session plus cleanup summary |
 | `sessions.compact` | admin | Compact session storage plus no-text cleanup summary |
 | `session.detail` | read | Deep session/run internals with summary, sensitive preview/run-internal redaction, and explicit opt-ins for full text, raw run events, and run records |

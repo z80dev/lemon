@@ -108,6 +108,56 @@ export const compressCommand: SlashCommand = {
 	},
 };
 
+export const heartbeatCommand: SlashCommand = {
+	name: "heartbeat",
+	aliases: ["hb"],
+	summary: "run one recurring prompt in this session whenever it is idle",
+	usage: "[every <interval> <prompt> | status | pause | resume | clear]",
+	group: "sessions",
+	methods: [METHOD.sessionHeartbeat],
+	async run(ctx) {
+		const arg = ctx.rest.trim();
+		const lower = arg.toLowerCase();
+
+		if (!arg || lower === "status") {
+			const result = await ctx.methods.sessionHeartbeat({
+				sessionKey: ctx.session.key,
+				action: "status",
+			});
+			ctx.ui.noticeBlock(heartbeatStatusLines(result));
+			return;
+		}
+
+		if (lower === "pause" || lower === "resume" || ["clear", "stop", "off"].includes(lower)) {
+			const action = lower === "pause" || lower === "resume" ? lower : "clear";
+			const result = await ctx.methods.sessionHeartbeat({
+				sessionKey: ctx.session.key,
+				action,
+			});
+			ctx.ui.noticeBlock(heartbeatStatusLines(result, action));
+			return;
+		}
+
+		const parsed = parseHeartbeatSet(arg);
+		if (!parsed) {
+			ctx.ui.notice(`usage: /heartbeat ${heartbeatCommand.usage}`, "error");
+			return;
+		}
+		if (parsed.intervalSeconds < 60) {
+			ctx.ui.notice("heartbeat interval is too small — minimum is 60s", "error");
+			return;
+		}
+
+		const result = await ctx.methods.sessionHeartbeat({
+			sessionKey: ctx.session.key,
+			action: "set",
+			prompt: parsed.prompt,
+			intervalSeconds: parsed.intervalSeconds,
+		});
+		ctx.ui.noticeBlock(heartbeatStatusLines(result, "set"));
+	},
+};
+
 export const backgroundCommand: SlashCommand = {
 	name: "bg",
 	summary: "start and manage background tasks",
@@ -347,4 +397,72 @@ function describeTask(task: unknown): string {
 function oneLine(text: string, max = 100): string {
 	const flat = text.replace(/\s+/g, " ").trim();
 	return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
+
+const HEARTBEAT_UNIT_SECONDS: Record<string, number> = {
+	s: 1,
+	sec: 1,
+	secs: 1,
+	second: 1,
+	seconds: 1,
+	m: 60,
+	min: 60,
+	mins: 60,
+	minute: 60,
+	minutes: 60,
+	h: 3600,
+	hr: 3600,
+	hrs: 3600,
+	hour: 3600,
+	hours: 3600,
+	d: 86400,
+	day: 86400,
+	days: 86400,
+};
+
+function parseHeartbeatSet(text: string): { intervalSeconds: number; prompt: string } | undefined {
+	const match = text.match(
+		/^\s*(?:every\s+)?(\d+(?:\.\d+)?)\s*(s|secs?|seconds?|m|mins?|minutes?|h|hrs?|hours?|d|days?)\s+([\s\S]+)$/i,
+	);
+	if (!match) return undefined;
+	const value = Number.parseFloat(match[1]);
+	const unitSeconds = HEARTBEAT_UNIT_SECONDS[match[2].toLowerCase()];
+	const prompt = match[3].trim();
+	if (!Number.isFinite(value) || value <= 0 || !unitSeconds || !prompt) return undefined;
+	return { intervalSeconds: Math.floor(value * unitSeconds), prompt };
+}
+
+function heartbeatStatusLines(result: unknown, action?: string): string[] {
+	const record = asRecord(result);
+	const heartbeat = asRecord(record?.heartbeat);
+	if (!heartbeat || heartbeat.configured !== true) {
+		return [action === "clear" ? "heartbeat cleared" : "no heartbeat is configured"];
+	}
+
+	const status = pickString(heartbeat, "status") ?? "unknown";
+	const intervalSeconds = pickNumber(heartbeat, "intervalSeconds");
+	const prompt = pickString(heartbeat, "prompt") ?? "";
+	const fireCount = pickNumber(heartbeat, "fireCount") ?? 0;
+	const nextIn = pickNumber(heartbeat, "nextInSeconds");
+	const interval = intervalSeconds ? formatHeartbeatInterval(intervalSeconds) : "?";
+	const title =
+		action === "set"
+			? "heartbeat set"
+			: action === "pause"
+				? "heartbeat paused"
+				: action === "resume"
+					? "heartbeat resumed"
+					: "heartbeat";
+
+	return [
+		`${title} · ${status} · every ${interval}${nextIn !== undefined ? ` · next in ~${nextIn}s` : ""}${fireCount > 0 ? ` · fired ${fireCount}×` : ""}`,
+		prompt,
+	].filter((line) => line.length > 0);
+}
+
+function formatHeartbeatInterval(seconds: number): string {
+	if (seconds % 86400 === 0) return `${seconds / 86400}d`;
+	if (seconds % 3600 === 0) return `${seconds / 3600}h`;
+	if (seconds % 60 === 0) return `${seconds / 60}m`;
+	return `${seconds}s`;
 }

@@ -7,6 +7,10 @@ as historical evidence, not current upstream truth.
 
 ## Source baseline and reproducibility
 
+The focused [runtime functionality audit](../reviews/hermes-runtime-functionality-audit-2026-08-30.md)
+records the implementation evidence for durable same-session heartbeats and
+the remaining harness-level gaps found during this refresh.
+
 This refresh uses official upstream source and documentation, not a local
 Hermes checkout:
 
