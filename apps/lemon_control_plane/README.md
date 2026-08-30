@@ -542,10 +542,13 @@ its own cwd. This is native Lemon execution, not a vendor CLI runner.
 
 Request and result payloads are enforced against the hello policy's
 `maxPayload` byte limit (1 MiB by default) and shared depth/item-count bounds.
-Raw results still travel privately to the invocation's source recipient, but
-durable invocation status and `node.invoke.completed` events retain only
-content-free byte/type/depth/item summaries. They never persist or broadcast
-the raw remote result or error.
+Raw request arguments exist only in the targeted live dispatch; durable
+invocation records retain a content-free argument summary. Raw results still
+travel privately to the invocation's source recipient, and awaited
+`browser.request` calls consume that private delivery directly. Durable
+invocation status and `node.invoke.completed` events retain only content-free
+byte/type/depth/item summaries. They never persist or broadcast the raw request,
+remote result, or error.
 
 ### Channels and Transports
 
@@ -613,7 +616,7 @@ the raw remote result or error.
 | `last-heartbeat` | read | Get last heartbeat for an agent plus response summary and redaction flags |
 | `talk.mode` | write | Get or set talk mode for a session plus audio/transcript cleanup summary |
 | `browser.status` | read | Inspect local browser driver status, artifacts, browser nodes, and live browser proof state |
-| `browser.request` | write | Send a browser request with route-policy and result cleanup summaries |
+| `browser.request` | write | Send a browser request with route-policy summaries and optional private awaited result delivery |
 | `media.status` | read | Inspect redacted generated-media job/artifact metadata plus provider-backed media proof lane state |
 | `checkpoint.status` | read | Inspect redacted checkpoint-store metadata plus filtered lifecycle event counts/history |
 | `checkpoint.diff` | read | Preview filesystem changes for a checkpoint with path/diff cleanup summary |

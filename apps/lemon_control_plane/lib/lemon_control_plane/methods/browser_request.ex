@@ -3,6 +3,8 @@ defmodule LemonControlPlane.Methods.BrowserRequest do
   Handler for the browser.request control plane method.
 
   Proxies browser automation requests to a paired browser node.
+  Awaited requests consume the registry's private terminal delivery directly;
+  durable invocation records remain summary-only.
 
   ## Supported Methods
 
@@ -25,6 +27,7 @@ defmodule LemonControlPlane.Methods.BrowserRequest do
   @behaviour LemonControlPlane.Method
 
   alias LemonControlPlane.NodeStore
+  alias LemonControlPlane.Methods.NodeInvokeResult
   alias LemonControlPlane.Protocol.Errors
   alias LemonBrowser.RoutePolicy
 
@@ -172,32 +175,22 @@ defmodule LemonControlPlane.Methods.BrowserRequest do
   end
 
   defp await_invoke(%{"invokeId" => invoke_id} = invoke, timeout_ms) when is_binary(invoke_id) do
-    deadline = System.monotonic_time(:millisecond) + max(0, timeout_ms)
+    receive do
+      {:lemon_node_result, ^invoke_id, result} ->
+        finish_awaited_invoke(invoke, invoke_id, result)
+    after
+      max(0, timeout_ms) ->
+        # The registry owns the remote cancellation and sends the same private
+        # terminal notification whether its timer or this local deadline wins.
+        :ok = LemonCore.NodeRegistry.cancel(invoke_id, :timeout)
 
-    poll = fn ->
-      case NodeStore.get_invocation(invoke_id) do
-        nil ->
-          :pending
-
-        inv when is_map(inv) ->
-          status = get_field(inv, :status)
-          result = get_field(inv, :result)
-          error = get_field(inv, :error)
-
-          cond do
-            status in [:completed, "completed"] ->
-              {:done, %{"status" => "completed", "ok" => true, "result" => result}}
-
-            status in [:error, "error"] ->
-              {:done, %{"status" => "error", "ok" => false, "error" => error}}
-
-            true ->
-              :pending
-          end
-      end
+        receive do
+          {:lemon_node_result, ^invoke_id, result} ->
+            finish_awaited_invoke(invoke, invoke_id, result)
+        after
+          0 -> {:ok, invoke}
+        end
     end
-
-    await_loop(invoke, deadline, poll)
   end
 
   defp await_invoke(invoke, _timeout_ms), do: {:ok, invoke}
@@ -282,22 +275,22 @@ defmodule LemonControlPlane.Methods.BrowserRequest do
     }
   end
 
-  defp await_loop(invoke, deadline, poll) do
-    now = System.monotonic_time(:millisecond)
+  defp finish_awaited_invoke(invoke, invoke_id, result) do
+    :ok = NodeInvokeResult.record_registry_result(invoke_id, result)
+    {:ok, Map.merge(invoke, awaited_result(result))}
+  end
 
-    if now >= deadline do
-      # Timed out waiting; return the pending invocation.
-      {:ok, invoke}
-    else
-      case poll.() do
-        {:done, extra} ->
-          {:ok, Map.merge(invoke, extra)}
+  defp awaited_result({:ok, result}) do
+    %{"status" => "completed", "ok" => true, "result" => result}
+  end
 
-        :pending ->
-          Process.sleep(50)
-          await_loop(invoke, deadline, poll)
-      end
-    end
+  defp awaited_result({:error, {:remote, error}}) do
+    %{"status" => "error", "ok" => false, "error" => error}
+  end
+
+  defp awaited_result({:error, reason}) do
+    error = inspect(reason, limit: 20, printable_limit: 1_000)
+    %{"status" => "error", "ok" => false, "error" => error}
   end
 
   defp find_browser_node(nil) do

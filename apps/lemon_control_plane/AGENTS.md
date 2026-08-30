@@ -352,10 +352,12 @@ An approved pairing ID may reissue a fresh one-time challenge for its existing
 durable node identity, allowing the joining worker to recover from socket loss
 after approval or challenge consumption without orphaning the reserved name.
 Named-node requests/results enforce the advertised `maxPayload` (1 MiB by
-default) plus shared depth/item-count limits. The raw terminal result is sent
-only to the source recipient; durable invocation status and
-`node.invoke.completed` events contain content-free summaries, never raw remote
-result/error values.
+default) plus shared depth/item-count limits. Raw request arguments exist only
+in the targeted live dispatch; durable invocation records retain a content-free
+argument summary. The raw terminal result is sent only to the source recipient,
+and awaited `browser.request` calls consume that private registry delivery
+directly. Durable invocation status and `node.invoke.completed` events contain
+content-free summaries, never raw request, result, or error values.
 
 The source-checkout coding worker advertises `coding_agent.run` version 1 and
 targeted cancellation. Its payload is a JSON-safe execution request/result
@@ -413,7 +415,7 @@ resolves its own credentials and cwd. This path uses the native
 | `last-heartbeat` | read | Get last heartbeat for an agent plus response summary and redaction flags |
 | `talk.mode` | write | Get or set talk mode for a session plus audio/transcript cleanup summary |
 | `browser.status` | read | Inspect local browser driver status, artifacts, browser nodes, and live browser proof state |
-| `browser.request` | write | Send a browser request with route-policy and result cleanup summaries |
+| `browser.request` | write | Send a browser request with route-policy summaries and optional private awaited result delivery |
 | `checkpoint.status` | read | Inspect redacted checkpoint-store metadata plus filtered lifecycle event counts/history |
 | `checkpoint.diff` | read | Preview filesystem changes for a checkpoint with path/diff cleanup summary |
 | `checkpoint.restore` | write | Restore all or selected checkpoint paths with restore cleanup summary |
