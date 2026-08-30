@@ -55,8 +55,12 @@ defmodule LemonCli.ProfileCommandTest do
       restore_env(:lemon_core, :router_bridge, previous_bridge)
       restore_env(:lemon_cli, :control_plane_client, previous_control_plane_client)
       Application.delete_env(:lemon_cli, :profile_command_test_pid)
-      LemonRouter.AgentProfiles.reload()
-      _ = LemonRouter.AgentProfiles.list()
+
+      if Process.whereis(LemonRouter.AgentProfiles) do
+        LemonRouter.AgentProfiles.reload()
+        _ = LemonRouter.AgentProfiles.list()
+      end
+
       File.rm_rf!(root)
     end)
 

@@ -25,9 +25,15 @@ defmodule Mix.Tasks.Lemon.Secrets.InitTest do
 
     # Store original HOME
     original_home = System.get_env("HOME")
+    original_secrets_config = Application.get_env(:lemon_core, LemonCore.Secrets)
 
     # Set HOME to mock directory
     System.put_env("HOME", mock_home)
+
+    # Mix-task tests must never touch the developer's real macOS Keychain.
+    # MasterKey provider tests exercise that selection contract with doubles;
+    # this suite verifies CLI behavior against an isolated file provider.
+    Application.put_env(:lemon_core, LemonCore.Secrets, key_providers: [:file])
 
     on_exit(fn ->
       # Restore original HOME
@@ -35,6 +41,12 @@ defmodule Mix.Tasks.Lemon.Secrets.InitTest do
         System.put_env("HOME", original_home)
       else
         System.delete_env("HOME")
+      end
+
+      if original_secrets_config do
+        Application.put_env(:lemon_core, LemonCore.Secrets, original_secrets_config)
+      else
+        Application.delete_env(:lemon_core, LemonCore.Secrets)
       end
 
       # Clean up temp directory
@@ -86,16 +98,11 @@ defmodule Mix.Tasks.Lemon.Secrets.InitTest do
 
       output = capture_io(fn -> Init.run([]) end)
 
-      if macos?() do
-        # The keychain is the provisioning target on macOS; nothing on disk.
-        assert output =~ "initialized in keychain"
-      else
-        assert output =~ key_path
-        assert {:ok, stat} = File.stat(key_path)
-        assert rem(stat.mode, 0o1000) == 0o600
-        assert {:ok, decoded} = key_path |> File.read!() |> String.trim() |> Base.decode64()
-        assert byte_size(decoded) == 32
-      end
+      assert output =~ key_path
+      assert {:ok, stat} = File.stat(key_path)
+      assert rem(stat.mode, 0o1000) == 0o600
+      assert {:ok, decoded} = key_path |> File.read!() |> String.trim() |> Base.decode64()
+      assert byte_size(decoded) == 32
     end
 
     test "--target file provisions the key file on any platform", %{mock_home: mock_home} do
@@ -126,8 +133,6 @@ defmodule Mix.Tasks.Lemon.Secrets.InitTest do
       refute File.read!(key_path) == original
     end
   end
-
-  defp macos?, do: match?({:unix, :darwin}, :os.type())
 
   describe "Mix.Task integration" do
     test "task can be retrieved via Mix.Task.get" do

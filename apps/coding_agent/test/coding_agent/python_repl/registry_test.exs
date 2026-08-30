@@ -960,7 +960,7 @@ defmodule CodingAgent.PythonRepl.RegistryTest do
         scope_id: "registry-#{suffix}-#{System.unique_integer([:positive])}",
         agent_id: "agent",
         cwd: System.tmp_dir!(),
-        interpreter: "/bin/true",
+        interpreter: System.find_executable("true") || raise("true executable is required"),
         helpers: [],
         protocol_version: 1
       })

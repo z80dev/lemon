@@ -47,6 +47,11 @@ defmodule CodingAgent.ToolsTest do
         "webfetch",
         "websearch",
         "browser_navigate",
+        "browser_exec",
+        "browser_tabs",
+        "browser_tab_open",
+        "browser_tab_close",
+        "browser_tab_activate",
         "browser_snapshot",
         "browser_get_content",
         "browser_click",
@@ -78,7 +83,8 @@ defmodule CodingAgent.ToolsTest do
         "agent",
         "parent_question",
         "tool_auth",
-        "extensions_status"
+        "extensions_status",
+        "computer_use"
       ]
 
       Enum.each(expected_tools, fn expected_name ->
@@ -86,13 +92,13 @@ defmodule CodingAgent.ToolsTest do
       end)
     end
 
-    # Pins the platform's own 52 builtins. Satellite tools (x_api, lemon_honcho)
+    # Pins the platform's own 58 builtins. Satellite tools (x_api, lemon_honcho)
     # register through LemonAgent.ToolRegistry when their app is running in the
     # test VM, so they are subtracted rather than counted. See
     # tool_precedence_test.exs for registry contributions.
-    test "returns exactly 52 builtin tools plus registered extras" do
+    test "returns exactly 58 builtin tools plus registered extras" do
       tools = Tools.coding_tools(@test_cwd)
-      assert length(builtins_only(tools)) == 52
+      assert length(builtins_only(tools)) == 58
     end
 
     test "passes cwd to each tool" do
@@ -111,7 +117,7 @@ defmodule CodingAgent.ToolsTest do
 
       # Should not raise any errors
       assert is_list(tools)
-      assert length(builtins_only(tools)) == 52
+      assert length(builtins_only(tools)) == 58
     end
   end
 
@@ -247,14 +253,14 @@ defmodule CodingAgent.ToolsTest do
       end)
     end
 
-    test "returns 53 builtin tools (includes truncate plus skill_manage, memory tools, session_search, checkpoint, browser, media status/generation, kanban, LSP diagnostics, and parent_question) plus registered extras" do
+    test "returns 59 builtin tools (coding tools plus truncate) plus registered extras" do
       tools_map = Tools.all_tools(@test_cwd)
 
       registered =
         MapSet.new(LemonAgent.ToolRegistry.all(), fn {name, _} -> Atom.to_string(name) end)
 
       builtins = Map.reject(tools_map, fn {name, _tool} -> MapSet.member?(registered, name) end)
-      assert map_size(builtins) == 53
+      assert map_size(builtins) == 59
     end
 
     test "tool names match map keys" do

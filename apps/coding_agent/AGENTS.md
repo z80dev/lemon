@@ -72,7 +72,7 @@ clear both mirrors so diagnostics never report already-consumed work.
 
 Tools are divided into two sets. `coding_tools/2` is the default set passed to sessions; `all_tools/2` includes extras not in the default set.
 
-**Default `coding_tools/2`** (66 tools registered in `CodingAgent.Tools.coding_tools/2` and `@builtin_tools` in `ToolRegistry`):
+**Default `coding_tools/2`** (58 platform builtins, plus any non-conflicting tools registered by satellite apps):
 
 | Category | Tools |
 |----------|-------|

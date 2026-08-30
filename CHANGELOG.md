@@ -163,6 +163,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Persistent Python kernels now preserve parent/child stdout and stderr ordering
+  instead of allowing block-buffered parent output to appear after child-process
+  output.
 - MCP HTTP transports now supervise the protocol server and Bandit listener as
   one lifecycle and track live node-local instances through supervised members,
   preventing stale or orphaned processes across child failures, concurrent
