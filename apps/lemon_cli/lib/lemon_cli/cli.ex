@@ -22,6 +22,8 @@ defmodule LemonCli.CLI do
       profile <list|show|create|clone|rename|export|delete|roster|chat>
       backup <contract|create|list|verify|restore> [options]
       context <preview|resolve> <reference>... [bounded options]
+      sessions <list|search|show|history|title|pin|unpin|archive|restore|export|prune|delete>
+      completion <bash|zsh|fish>
 
   `model` delegates to provider onboarding; `gateway setup` delegates to the
   gateway setup adapters.
@@ -36,6 +38,7 @@ defmodule LemonCli.CLI do
   alias LemonCore.Secrets
   alias LemonCore.Secrets.EnvCatalog
   alias LemonCore.Secrets.MasterKey
+  alias LemonCli.CommandRegistry
 
   defmodule Error do
     @moduledoc """
@@ -48,8 +51,6 @@ defmodule LemonCli.CLI do
 
     defexception [:message, exit_code: 1]
   end
-
-  @commands ~w(setup model gateway doctor config secrets channels profile backup context)
 
   @exit_ok 0
   @exit_error 1
@@ -122,19 +123,23 @@ defmodule LemonCli.CLI do
     @exit_ok
   end
 
-  defp dispatch([command | rest]) when command in @commands do
+  defp dispatch([command | rest]) do
     # Intercept help anywhere in the command's arguments — including after
     # subcommand words like `gateway setup --help` — so nothing downstream
     # (wizard, provider picker, gateway adapters, prompts on EOF) ever runs.
-    if help_requested?(rest) do
-      print_command_usage(command)
-      @exit_ok
+    if CommandRegistry.command?(command) do
+      if help_requested?(rest) do
+        print_command_usage(command)
+        @exit_ok
+      else
+        run_command(command, rest)
+      end
     else
-      run_command(command, rest)
+      unknown_command(command)
     end
   end
 
-  defp dispatch([command | _rest]) do
+  defp unknown_command(command) do
     IO.puts(:stderr, "Unknown command: #{command}")
     IO.puts(:stderr, "")
     print_usage(:stderr)
@@ -153,6 +158,8 @@ defmodule LemonCli.CLI do
   defp run_command("profile", args), do: LemonCli.ProfileCommand.run(args)
   defp run_command("backup", args), do: run_backup(args)
   defp run_command("context", args), do: LemonCli.ContextCommand.run(args)
+  defp run_command("sessions", args), do: LemonCli.SessionsCommand.run(args)
+  defp run_command("completion", args), do: LemonCli.CompletionCommand.run(args)
 
   # ──────────────────────────────────────────────────────────────────────────
   # setup / model / gateway
@@ -471,18 +478,8 @@ defmodule LemonCli.CLI do
     end
   end
 
-  defp print_config_usage(device \\ :stdio) do
-    IO.puts(device, """
-    Usage: lemon config [validate|show] [options]
-
-    Commands:
-      validate   Validate the current configuration
-      show       Show the current configuration
-
-    Options:
-      --verbose, -v           Verbose output
-      --project-dir, -p PATH  Project directory for project-config checks
-    """)
+  defp print_config_usage(device) do
+    IO.write(device, CommandRegistry.help("config"))
   end
 
   # ──────────────────────────────────────────────────────────────────────────
@@ -808,18 +805,7 @@ defmodule LemonCli.CLI do
   defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
 
   defp print_secrets_usage do
-    IO.puts("""
-    Usage: lemon secrets <command> [args]
-
-    Commands:
-      status
-      init [--target file|keychain] [--force]
-      set <name> <value> [--provider P] [--expires-at N]
-      list
-      delete <name>
-      check
-      import-env [--dry-run] [--force]
-    """)
+    IO.write(CommandRegistry.help("secrets"))
   end
 
   # ──────────────────────────────────────────────────────────────────────────
@@ -1195,149 +1181,16 @@ defmodule LemonCli.CLI do
   end
 
   defp print_usage(device \\ :stdio) do
-    IO.puts(device, """
-    Usage: lemon <command> [options]
-
-    Commands:
-      setup [provider|runtime|gateway|doctor]   First-time setup and configuration
-      model [--provider P] [--token T] [flags]  Onboard an AI provider
-      gateway setup [transport] [flags]         Configure gateway adapters
-      doctor [--verbose] [--json] [--bundle]    Run diagnostics / write support bundle
-      config [validate|show]                    Validate or show configuration
-      secrets <status|init|set|list|delete|check|import-env>
-      channels [--project-dir PATH] [--json]    Channel launch readiness
-      profile <subcommand> [options]             Manage isolated agent profiles
-      backup <contract|create|list|verify|restore>  Back up durable user state
-      context <preview|resolve> <refs> [options] Preview or resolve bounded context
-
-    Run `lemon <command> --help` for command options.
-    """)
+    IO.write(device, CommandRegistry.help())
   end
 
-  defp print_command_usage("setup") do
-    IO.puts("""
-    Usage: lemon setup [provider|runtime|gateway|doctor] [options]
+  defp print_command_usage(command), do: IO.write(CommandRegistry.help(command))
 
-    Subcommands:
-      provider [args]   Configure an AI provider (same flags as `lemon model`)
-      runtime [args]    Configure runtime profile and port bindings
-      gateway [args]    Configure gateway adapters
-      doctor [args]     Validate config and report health
-
-    Options:
-      --non-interactive, -n   Skip prompts, use defaults / CLI flags
-      --config-path PATH      Config file to read/write (full wizard only)
-    """)
+  defp print_backup_usage(device) do
+    IO.write(device, CommandRegistry.help("backup"))
   end
 
-  defp print_command_usage("model") do
-    IO.puts("""
-    Usage: lemon model [provider] [options]
-
-    Onboards an AI provider: OAuth or API-key credentials are stored in the
-    encrypted secrets store and referenced from config.toml. Without a
-    provider, an interactive picker is shown.
-
-    Options:
-      --provider P            Provider id (or pass it positionally)
-      --token T               Non-interactive API key
-      --auth oauth|api_key    Authentication mode
-      --secret-name NAME      Secret name to store the credential under
-      --model M               Default model when used with --set-default
-      --set-default           Set the provider/model as default
-      --config-path PATH      Config file to update
-    """)
-  end
-
-  defp print_command_usage("gateway") do
-    IO.puts("""
-    Usage: lemon gateway setup [transport] [options]
-
-    Options:
-      --transport NAME, -t    Gateway adapter (e.g. telegram, discord)
-      --non-interactive, -n   Skip prompts
-    """)
-  end
-
-  defp print_command_usage("doctor"), do: print_doctor_usage()
-
-  defp print_command_usage("config"), do: print_config_usage()
-
-  defp print_command_usage("secrets"), do: print_secrets_usage()
-
-  defp print_command_usage("channels") do
-    IO.puts("""
-    Usage: lemon channels [options]
-
-    Options:
-      --project-dir PATH  Project root to scan (defaults to the cwd)
-      --json              Emit the raw redacted readiness JSON
-    """)
-  end
-
-  defp print_command_usage("profile") do
-    IO.puts("""
-    Usage: lemon profile <command> [options]
-
-    Commands:
-      list [--json]
-      show <id> [--json]
-      create <id> [--name NAME] [--model MODEL] [--node NODE]
-      clone <source> <new-id> [--name NAME]
-      rename <id> <name>
-      export <id> <path> [--force]
-      delete <id> --confirm <id>
-      roster [--json]
-      chat <id> <message> [--model MODEL] [--queue-mode MODE] [--json]
-
-    Lifecycle commands write the canonical global [profiles.<id>] record and
-    keep each profile under ~/.lemon/profiles/<id>. Exports are credential-safe
-    selected-file snapshots and never include sessions or memory.
-    """)
-  end
-
-  defp print_command_usage("backup"), do: print_backup_usage()
-  defp print_command_usage("context"), do: LemonCli.ContextCommand.print_usage()
-
-  defp print_backup_usage(device \\ :stdio) do
-    IO.puts(device, """
-    Usage: lemon backup <command> [options]
-
-    Commands:
-      contract [--include-credentials] [--json]
-          Show the versioned ~/.lemon data and exclusion contract.
-      create [--output PATH] [--include-credentials] [--json]
-          Create and verify an atomic private backup directory bundle.
-      list [--root PATH] [--json]
-          List aggregate manifest metadata without file contents.
-      verify BUNDLE [--target PATH] [--json]
-          Verify schema, permissions, exact file set, sizes, and checksums.
-          Emits the target-bound overwrite confirmation.
-      restore BUNDLE [--target PATH] [--overwrite --confirm TOKEN] [--json]
-          Verify before mutation and restore additively. Differing files are
-          refused unless overwrite uses the exact token from `verify` for the
-          same manifest and normalized target.
-
-    Exit codes:
-      0  success
-      1  verification or operational failure
-      2  invalid command or options
-
-    Credential material is excluded unless --include-credentials is explicit.
-    Secret values and backed-up file contents are never printed.
-    """)
-  end
-
-  defp print_doctor_usage(device \\ :stdio) do
-    IO.puts(device, """
-    Usage: lemon doctor [options]
-
-    Options:
-      --verbose, -v       Show all checks including passing and skipped ones
-      --json              Output results as a JSON document (CI-friendly)
-      --project-dir PATH  Use a specific project directory for checks
-      --bundle [PATH]     Write a redacted support bundle zip
-      --bundle-path PATH  Write the support bundle to a specific path
-    """)
+  defp print_doctor_usage(device) do
+    IO.write(device, CommandRegistry.help("doctor"))
   end
 end

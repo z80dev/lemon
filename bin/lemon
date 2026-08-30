@@ -14,6 +14,8 @@
 #   ./bin/lemon node join --name worker --controller wss://controller.example/ws
 #   ./bin/lemon config validate
 #   ./bin/lemon context preview '@file:README.md' --root "$PWD"
+#   ./bin/lemon sessions list --limit 20
+#   ./bin/lemon completion zsh
 #   ./bin/lemon doctor --json
 #   ./bin/lemon backup create --json
 #   ./bin/lemon web
@@ -57,6 +59,8 @@ Usage: ./bin/lemon [options]
        ./bin/lemon profile <list|show|create|clone|rename|export|delete|roster|chat>
        ./bin/lemon config validate
        ./bin/lemon context preview '@file:README.md' --root "$PWD"
+       ./bin/lemon sessions <list|search|show|history|title|pin|unpin|archive|restore|export|prune|delete>
+       ./bin/lemon completion <bash|zsh|fish>
        ./bin/lemon doctor --json
        ./bin/lemon backup create --json
        ./bin/lemon web [--no-open]
@@ -116,6 +120,18 @@ warn() {
 
 error() {
   echo -e "${RED}[lemon]${NC} $1" >&2
+}
+
+run_source_runtime_cli() {
+  cd "$LEMON_ROOT"
+  # Completion and JSON session output must remain machine-clean on stdout.
+  # Compile quietly first, then use the same fixed-expression, argv-as-data
+  # boundary as packaged releases.
+  mix deps.get >/dev/null
+  mix compile >/dev/null
+  export LEMON_CLI_LAUNCHER=source
+  exec mix run --no-start --no-compile --no-deps-check \
+    -e 'LemonCli.CLI.main(System.argv())' -- "$@"
 }
 
 web_healthy() {
@@ -347,6 +363,14 @@ if [[ "${1:-}" == "context" ]]; then
   # JSON command boundary itself; MIX_QUIET covers Mix's compile progress.
   export MIX_QUIET=1
   exec mix run --no-start -e 'System.halt(LemonCli.CLI.run(["context" | System.argv()]))' -- "$@"
+fi
+
+if [[ "${1:-}" == "sessions" ]]; then
+  run_source_runtime_cli "$@"
+fi
+
+if [[ "${1:-}" == "completion" ]]; then
+  run_source_runtime_cli "$@"
 fi
 
 if [[ "${1:-}" == "doctor" ]]; then
