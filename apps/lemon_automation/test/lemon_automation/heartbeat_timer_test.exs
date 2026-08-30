@@ -1,119 +1,237 @@
 defmodule LemonAutomation.HeartbeatTimerTest do
-  @moduledoc """
-  Tests for timer-based heartbeat execution.
-
-  These tests verify that sub-minute heartbeats use LemonRouter.submit/1
-  instead of the non-existent LemonGateway.Run.start/1.
-  """
   use ExUnit.Case, async: false
 
-  alias LemonAutomation.HeartbeatManager
+  alias LemonAgent.Workspace.HeartbeatStore
+  alias LemonAutomation.{CronManager, CronStore, HeartbeatManager}
+  alias LemonCore.{Bus, Event}
+
+  defmodule SynchronousRouter do
+    @moduledoc false
+
+    def submit(params) do
+      send(:persistent_term.get({__MODULE__, :test_pid}), {:timer_router_submit, params})
+
+      send(
+        self(),
+        Event.new(:run_completed, %{completed: %{ok: true, answer: "HEARTBEAT_OK"}})
+      )
+
+      {:ok, params.run_id}
+    end
+  end
+
+  defmodule BlockingRouter do
+    @moduledoc false
+
+    def submit(params) do
+      test_pid = :persistent_term.get({__MODULE__, :test_pid})
+      send(test_pid, {:timer_router_started, self(), params})
+
+      receive do
+        :release -> :ok
+      end
+
+      send(
+        self(),
+        Event.new(:run_completed, %{completed: %{ok: true, answer: "HEARTBEAT_OK"}})
+      )
+
+      {:ok, params.run_id}
+    end
+  end
+
+  defmodule ErrorRouter do
+    @moduledoc false
+    def submit(_params), do: {:error, :busy}
+  end
+
+  def handle_telemetry(event, measurements, metadata, pid) do
+    send(pid, {:heartbeat_skip_telemetry, event, measurements, metadata})
+  end
 
   setup do
-    {:ok, _} = Application.ensure_all_started(:lemon_automation)
+    previous_router = Application.get_env(:lemon_automation, :heartbeat_router_mod)
+    previous_waiter = Application.get_env(:lemon_automation, :heartbeat_waiter_mod)
+    previous_bus = Application.get_env(:lemon_automation, :heartbeat_bus_mod)
 
-    # Clean up stores after each test
     on_exit(fn ->
-      try do
-        LemonCore.Store.list(:heartbeat_config)
-        |> Enum.each(fn {k, _} ->
-          LemonCore.Store.delete(:heartbeat_config, k)
-        end)
-
-        LemonCore.Store.list(:heartbeat_last)
-        |> Enum.each(fn {k, _} ->
-          LemonCore.Store.delete(:heartbeat_last, k)
-        end)
-      rescue
-        _ -> :ok
-      end
+      restore_env(:heartbeat_router_mod, previous_router)
+      restore_env(:heartbeat_waiter_mod, previous_waiter)
+      restore_env(:heartbeat_bus_mod, previous_bus)
+      :persistent_term.erase({SynchronousRouter, :test_pid})
+      :persistent_term.erase({BlockingRouter, :test_pid})
     end)
 
     :ok
   end
 
-  describe "timer-based heartbeat scheduling" do
-    test "update_config schedules timer for sub-minute intervals" do
-      agent_id = "timer-test-agent-#{System.unique_integer([:positive])}"
+  test "records synchronous timer completion and suppression in HeartbeatStore" do
+    agent_id = unique_agent()
+    stats_before = HeartbeatManager.stats()
+    :persistent_term.put({SynchronousRouter, :test_pid}, self())
+    Application.put_env(:lemon_automation, :heartbeat_router_mod, SynchronousRouter)
+    Bus.subscribe("cron")
 
-      config = %{
-        enabled: true,
-        # 30 seconds - sub-minute
-        interval_ms: 30_000,
-        prompt: "HEARTBEAT"
-      }
+    try do
+      assert :ok = configure_timer(agent_id)
+      send(HeartbeatManager, {:timer_heartbeat, agent_id})
 
-      # Store config and update via GenServer
-      LemonCore.Store.put(:heartbeat_config, agent_id, config)
+      assert_receive {:timer_router_submit, params}, 500
+      assert params.meta.timer_based
+      assert params.run_id
 
-      # This should schedule a timer-based heartbeat
-      HeartbeatManager.update_config(agent_id, config)
+      assert eventually(fn ->
+               case HeartbeatStore.get_last(agent_id) do
+                 %{status: :ok, terminal_status: :completed, suppressed: true} -> true
+                 _ -> false
+               end
+             end)
 
-      # Give time for the cast to be processed
-      Process.sleep(50)
+      last = HeartbeatStore.get_last(agent_id)
+      assert last.response == "HEARTBEAT_OK"
+      assert last.router_run_id == params.run_id
+      assert CronStore.get_run(last.run_id) == nil
+      assert_receive %Event{type: :heartbeat_suppressed}, 500
 
-      # The config should be stored
-      stored_config = LemonCore.Store.get(:heartbeat_config, agent_id)
-      assert stored_config[:enabled] == true or stored_config["enabled"] == true
-    end
-
-    test "update_config with disabled: true cancels timer" do
-      agent_id = "timer-cancel-test-#{System.unique_integer([:positive])}"
-
-      # First enable a heartbeat
-      enable_config = %{
-        enabled: true,
-        interval_ms: 30_000,
-        prompt: "HEARTBEAT"
-      }
-
-      LemonCore.Store.put(:heartbeat_config, agent_id, enable_config)
-      HeartbeatManager.update_config(agent_id, enable_config)
-      Process.sleep(50)
-
-      # Now disable it
-      disable_config = %{enabled: false}
-      HeartbeatManager.update_config(agent_id, disable_config)
-      Process.sleep(50)
-
-      # Should not crash
-      assert true
-    end
-
-    test "timer heartbeats use LemonRouter.submit path" do
-      # This test verifies the code path exists and doesn't call LemonGateway.Run.start/1
-      # We can't easily test the full path without mocking LemonRouter,
-      # but we can verify the module structure is correct
-
-      # The execute_timer_heartbeat function should exist and not reference LemonGateway.Run.start
-      # This is verified by reading the source code during implementation
-
-      # We test that HeartbeatManager starts without errors
-      assert Process.whereis(HeartbeatManager) != nil or true
-    end
-
-    test "process_response accepts map runs (timer heartbeat events)" do
-      run = %{
-        id: "timer-heartbeat-test-#{System.unique_integer([:positive])}",
-        job_id: "timer-heartbeat-test-job-#{System.unique_integer([:positive])}",
-        status: :failed
-      }
-
-      # Timer-based heartbeats broadcast maps, not %CronRun{} structs. This should not crash.
-      assert {:ok, false} = HeartbeatManager.process_response(run, "HEARTBEAT_ERROR: :noproc")
-      assert {:ok, false} = HeartbeatManager.process_response(run, "HEARTBEAT_OK")
-      assert {:ok, false} = HeartbeatManager.process_response(run, nil)
-    end
-  end
-
-  describe "stats/0" do
-    test "returns statistics map" do
       stats = HeartbeatManager.stats()
-
-      assert is_map(stats)
-      assert Map.has_key?(stats, :total_heartbeats)
-      assert Map.has_key?(stats, :suppressed)
-      assert Map.has_key?(stats, :alerts)
+      assert stats.total_heartbeats == stats_before.total_heartbeats + 1
+      assert stats.suppressed == stats_before.suppressed + 1
+      assert eventually(fn -> not in_flight?(agent_id) end)
+    after
+      Bus.unsubscribe("cron")
+      cleanup_agent(agent_id)
     end
   end
+
+  test "records timer submission failures as terminal alerts" do
+    agent_id = unique_agent()
+    stats_before = HeartbeatManager.stats()
+    Application.put_env(:lemon_automation, :heartbeat_router_mod, ErrorRouter)
+
+    try do
+      assert :ok = configure_timer(agent_id)
+      send(HeartbeatManager, {:timer_heartbeat, agent_id})
+
+      assert eventually(fn ->
+               case HeartbeatStore.get_last(agent_id) do
+                 %{status: :failed, terminal_status: :failed, suppressed: false} -> true
+                 _ -> false
+               end
+             end)
+
+      last = HeartbeatStore.get_last(agent_id)
+      assert last.response =~ "HEARTBEAT_ERROR"
+      assert eventually(fn -> not in_flight?(agent_id) end)
+
+      stats = HeartbeatManager.stats()
+      assert stats.total_heartbeats == stats_before.total_heartbeats + 1
+      assert stats.alerts == stats_before.alerts + 1
+    after
+      cleanup_agent(agent_id)
+    end
+  end
+
+  test "skips overlapping timer ticks and clears the in-flight guard" do
+    agent_id = unique_agent()
+    stats_before = HeartbeatManager.stats()
+    handler_id = {__MODULE__, self(), make_ref()}
+    :persistent_term.put({BlockingRouter, :test_pid}, self())
+    Application.put_env(:lemon_automation, :heartbeat_router_mod, BlockingRouter)
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:lemon, :heartbeat, :skipped],
+        &__MODULE__.handle_telemetry/4,
+        self()
+      )
+
+    try do
+      assert :ok = configure_timer(agent_id)
+      send(HeartbeatManager, {:timer_heartbeat, agent_id})
+
+      assert_receive {:timer_router_started, worker_pid, first_params}, 500
+      assert in_flight?(agent_id)
+
+      send(HeartbeatManager, {:timer_heartbeat, agent_id})
+
+      assert_receive {:heartbeat_skip_telemetry, [:lemon, :heartbeat, :skipped], %{count: 1},
+                      %{agent_id: ^agent_id, reason: :overlap}},
+                     500
+
+      refute_receive {:timer_router_started, _, _}, 50
+
+      stats = HeartbeatManager.stats()
+      assert stats.skipped_overlap == stats_before.skipped_overlap + 1
+
+      send(worker_pid, :release)
+
+      assert eventually(fn ->
+               case HeartbeatStore.get_last(agent_id) do
+                 %{router_run_id: run_id, suppressed: true} when run_id == first_params.run_id ->
+                   true
+
+                 _ ->
+                   false
+               end
+             end)
+
+      assert eventually(fn -> not in_flight?(agent_id) end)
+    after
+      :telemetry.detach(handler_id)
+      cleanup_agent(agent_id)
+    end
+  end
+
+  defp configure_timer(agent_id) do
+    HeartbeatManager.update_config(agent_id, %{
+      enabled: true,
+      interval_ms: 10_000,
+      prompt: "HEARTBEAT"
+    })
+  end
+
+  defp in_flight?(agent_id) do
+    HeartbeatManager
+    |> :sys.get_state()
+    |> Map.fetch!(:in_flight)
+    |> Map.has_key?(agent_id)
+  end
+
+  defp cleanup_agent(agent_id) do
+    if Process.whereis(HeartbeatManager) do
+      _ = HeartbeatManager.update_config(agent_id, %{enabled: false})
+    end
+
+    CronManager.list()
+    |> Enum.filter(&(&1.name == "heartbeat-#{agent_id}"))
+    |> Enum.each(&CronManager.remove(&1.id))
+
+    HeartbeatStore.delete_config(agent_id)
+    HeartbeatStore.delete_last(agent_id)
+  end
+
+  defp eventually(fun, timeout_ms \\ 1_000) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_eventually(fun, deadline)
+  end
+
+  defp do_eventually(fun, deadline) do
+    cond do
+      fun.() ->
+        true
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        false
+
+      true ->
+        Process.sleep(5)
+        do_eventually(fun, deadline)
+    end
+  end
+
+  defp restore_env(key, nil), do: Application.delete_env(:lemon_automation, key)
+  defp restore_env(key, value), do: Application.put_env(:lemon_automation, key, value)
+
+  defp unique_agent, do: "heartbeat-timer-#{System.unique_integer([:positive])}"
 end

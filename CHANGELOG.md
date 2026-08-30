@@ -26,6 +26,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   submit errors with injection-safe whole-entry history envelopes; and cleared
   stale session follow-up diagnostics/background compaction when turns end or a
   new prompt supersedes the snapshot.
+- Heartbeat reconfiguration now updates cron jobs with mutable fields only,
+  disables the superseded cron or timer mechanism, preserves nonrepresentable
+  intervals with exact timers, records timer terminal/suppression state, and
+  skips overlapping timer runs with telemetry. Automation submit-and-wait paths
+  now subscribe before submission through one fixed-run-id lifecycle, closing
+  synchronous-completion races in cron, goal, heartbeat, and Kanban runs.
 - Async subagent launches now fail and terminalize their bookkeeping when the
   supervised worker cannot start, completed task/agent followup delivery
   contains router exits, and lane-scheduled jobs no longer process a duplicate

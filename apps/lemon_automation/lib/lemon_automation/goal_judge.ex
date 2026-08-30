@@ -74,6 +74,7 @@ defmodule LemonAutomation.GoalJudge do
       run_id: Keyword.get(opts, :judge_run_id),
       router_mod: Keyword.get(opts, :judge_router_mod, LemonRouter),
       waiter_mod: Keyword.get(opts, :judge_waiter_mod, LemonAutomation.RunCompletionWaiter),
+      bus_mod: Keyword.get(opts, :judge_bus_mod, LemonCore.Bus),
       wait_timeout_ms: Keyword.get(opts, :judge_wait_timeout_ms, 60_000),
       wait_opts: Keyword.get(opts, :judge_wait_opts, [])
     }

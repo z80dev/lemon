@@ -2,7 +2,7 @@ defmodule LemonAutomation.RunSubmitter do
   @moduledoc false
 
   alias LemonAutomation.{CronContext, CronJob, CronMemory, CronRun, RunCompletionWaiter}
-  alias LemonCore.{Bus, SessionKey}
+  alias LemonCore.SessionKey
 
   @default_timeout_ms 300_000
   @cron_blocked_tools ["cron"]
@@ -15,48 +15,42 @@ defmodule LemonAutomation.RunSubmitter do
     waiter_mod = Keyword.get(opts, :waiter_mod, RunCompletionWaiter)
     wait_opts = Keyword.get(opts, :wait_opts, [])
 
-    # Pre-generate run_id and subscribe to bus BEFORE submitting to avoid
-    # race condition where run completes before we subscribe
     run_id = Keyword.get(opts, :run_id, LemonCore.Id.run_id())
-    topic = Bus.run_topic(run_id)
-    Bus.subscribe(topic)
-
     params = build_params(job, run, run_id, opts)
     memory_mod = Keyword.get(opts, :memory_mod, CronMemory)
 
     result =
-      try do
-        case router_mod.submit(params) do
-          {:ok, ^run_id} ->
-            # Already subscribed above, just wait for completion
-            waiter_mod.wait_already_subscribed(run_id, timeout_ms, wait_opts)
-
-          {:ok, other_run_id} ->
-            # Router used a different run_id than expected
-            Bus.unsubscribe(topic)
-            waiter_mod.wait(other_run_id, timeout_ms, wait_opts)
-
-          {:error, reason} ->
-            Bus.unsubscribe(topic)
-            {:error, inspect(reason)}
-
-          other ->
-            Bus.unsubscribe(topic)
-            {:error, "Unexpected submit result: #{inspect(other)}"}
-        end
-      rescue
-        e ->
-          Bus.unsubscribe(topic)
-          {:error, Exception.message(e)}
-      catch
-        :exit, reason ->
-          Bus.unsubscribe(topic)
-          {:error, "Exit: #{inspect(reason)}"}
-      end
+      params
+      |> RunCompletionWaiter.submit_and_wait(
+        router_mod: router_mod,
+        waiter_mod: waiter_mod,
+        bus_mod: Keyword.get(opts, :bus_mod, LemonCore.Bus),
+        timeout_ms: timeout_ms,
+        wait_opts: wait_opts
+      )
+      |> normalize_submit_result()
 
     _ = append_memory(memory_mod, job, run, params, result)
     result
   end
+
+  defp normalize_submit_result({:ok, _run_id, output}), do: {:ok, output}
+  defp normalize_submit_result({:error, {:timeout, _run_id}}), do: :timeout
+
+  defp normalize_submit_result({:error, {:run_failed, _run_id, reason}}),
+    do: {:error, inspect(reason)}
+
+  defp normalize_submit_result({:error, {:submit_failed, {:exception, error}}}),
+    do: {:error, Exception.message(error)}
+
+  defp normalize_submit_result({:error, {:submit_failed, {:exit, reason}}}),
+    do: {:error, "Exit: #{inspect(reason)}"}
+
+  defp normalize_submit_result({:error, {:submit_failed, {:unexpected_submit_result, other}}}),
+    do: {:error, "Unexpected submit result: #{inspect(other)}"}
+
+  defp normalize_submit_result({:error, {:submit_failed, reason}}), do: {:error, inspect(reason)}
+  defp normalize_submit_result({:error, reason}), do: {:error, inspect(reason)}
 
   @doc false
   @spec build_params(CronJob.t(), CronRun.t(), binary() | nil, keyword()) :: map()
