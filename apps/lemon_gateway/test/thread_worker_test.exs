@@ -5,6 +5,20 @@ defmodule LemonGateway.ThreadWorkerTest do
   alias LemonGateway.ThreadWorker
   alias LemonCore.ResumeToken
 
+  defmodule SelectiveFailingRunSupervisor do
+    alias LemonGateway.ExecutionRequest
+
+    def start_run(%{execution_request: %ExecutionRequest{prompt: "malformed"} = request}) do
+      if pid = :persistent_term.get({__MODULE__, :notify_pid}, nil) do
+        send(pid, {:run_start_attempt, request.run_id})
+      end
+
+      {:error, :malformed_request}
+    end
+
+    def start_run(args), do: LemonGateway.RunSupervisor.start_run(args)
+  end
+
   defmodule ThreadWorkerSlowExecutor do
     @behaviour LemonGateway.Executor
 
@@ -103,6 +117,62 @@ defmodule LemonGateway.ThreadWorkerTest do
     assert_completed_request(request)
 
     assert eventually(fn -> not Process.alive?(worker) end)
+  end
+
+  test "bounds total start attempts, terminalizes once, and advances FIFO queue" do
+    session_key = "thread-worker:#{System.unique_integer([:positive])}"
+    thread_key = {:session, session_key}
+
+    :persistent_term.put({SelectiveFailingRunSupervisor, :notify_pid}, self())
+
+    on_exit(fn ->
+      :persistent_term.erase({SelectiveFailingRunSupervisor, :notify_pid})
+    end)
+
+    worker =
+      start_supervised!(
+        {ThreadWorker, thread_key: thread_key, run_supervisor: SelectiveFailingRunSupervisor}
+      )
+
+    failed = request(session_key, "malformed", self())
+    succeeding = request(session_key, "after", self())
+    LemonCore.Bus.subscribe(LemonCore.Bus.run_topic(failed.run_id))
+
+    GenServer.cast(worker, {:enqueue, failed})
+    GenServer.cast(worker, {:enqueue, succeeding})
+
+    for _ <- 1..3 do
+      assert_receive {:run_start_attempt, run_id}, 1_000
+      assert run_id == failed.run_id
+    end
+
+    refute_receive {:run_start_attempt, _}, 100
+
+    assert_receive {:lemon_gateway_run_completed, ^failed,
+                    %{
+                      __event__: :completed,
+                      ok: false,
+                      error: %{
+                        type: :run_start_failed,
+                        reason: :malformed_request,
+                        attempts: 3
+                      }
+                    }},
+                   1_000
+
+    assert_receive %LemonCore.Event{
+                     type: :run_completed,
+                     meta: %{
+                       run_id: failed_run_id,
+                       synthetic: true,
+                       failure_stage: :run_start
+                     }
+                   },
+                   1_000
+
+    assert failed_run_id == failed.run_id
+    refute_receive {:lemon_gateway_run_completed, ^failed, _}, 100
+    assert_completed_request(succeeding)
   end
 
   defp request(session_key, prompt, notify_pid) do

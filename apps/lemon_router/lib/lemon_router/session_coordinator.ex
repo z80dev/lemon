@@ -10,13 +10,18 @@ defmodule LemonRouter.SessionCoordinator do
   `LemonCore.EventBridge.subscribe_run/1` call on accepted router submissions.
   This coordinator only cleans up event bridge subscriptions when queued or
   pending submissions are later dropped from reducer state.
+
+  If a queued submission cannot start, the coordinator emits one synthetic
+  structured completion before dropping its bridge subscription and advances
+  to the next queued submission. A child found in `RunRegistry` after an
+  ambiguous supervisor error is adopted instead, avoiding double completion.
   """
 
   use GenServer
 
   require Logger
 
-  alias LemonCore.MapHelpers
+  alias LemonCore.{Bus, Events, MapHelpers}
 
   alias LemonRouter.{
     PhasePublisher,
@@ -472,39 +477,111 @@ defmodule LemonRouter.SessionCoordinator do
   defp maybe_start_next(%SessionState{active: nil, queue: [next | rest]} = state, opts) do
     case RunStarter.start(next, self(), state.conversation_key) do
       {:ok, pid} when is_pid(pid) ->
-        mon_ref = Process.monitor(pid)
-
-        started_submission =
-          maybe_emit_waiting_for_slot(next, Keyword.get(opts, :emit_phase?, true))
-
-        put_active_session_registry(started_submission)
-
-        next_state = %SessionState{
-          state
-          | active: %{
-              pid: pid,
-              mon_ref: mon_ref,
-              run_id: started_submission.run_id,
-              session_key: started_submission.session_key,
-              submission: started_submission
-            },
-            queue: rest
-        }
+        next_state = activate_submission(state, next, rest, pid, opts)
 
         if opts[:return_result?], do: {next_state, :started}, else: {next_state, :ok}
 
       {:error, reason} ->
-        Logger.warning(
-          "SessionCoordinator failed to start run run_id=#{inspect(next.run_id)} key=#{inspect(state.conversation_key)} reason=#{inspect(reason)}"
-        )
+        case partially_started_run_pid(next.run_id) do
+          pid when is_pid(pid) ->
+            Logger.warning(
+              "SessionCoordinator adopting partially started run run_id=#{inspect(next.run_id)} " <>
+                "key=#{inspect(state.conversation_key)} start_error=#{inspect(reason)}"
+            )
 
-        next_state = %SessionState{state | queue: rest}
+            next_state = activate_submission(state, next, rest, pid, opts)
+            if opts[:return_result?], do: {next_state, :started}, else: {next_state, :ok}
 
-        if opts[:return_result?], do: {next_state, {:error, reason}}, else: {next_state, :ok}
+          nil ->
+            Logger.warning(
+              "SessionCoordinator failed to start run run_id=#{inspect(next.run_id)} key=#{inspect(state.conversation_key)} reason=#{inspect(reason)}"
+            )
+
+            emit_start_failure(next, reason)
+            if rest != [], do: send(self(), :maybe_start_next)
+
+            next_state = %SessionState{state | queue: rest}
+
+            if opts[:return_result?],
+              do: {next_state, {:error, reason}},
+              else: {next_state, :ok}
+        end
     end
   end
 
   defp maybe_start_next(state, _opts), do: {state, :noop}
+
+  defp activate_submission(%SessionState{} = state, next, rest, pid, opts) do
+    mon_ref = Process.monitor(pid)
+
+    started_submission =
+      maybe_emit_waiting_for_slot(next, Keyword.get(opts, :emit_phase?, true))
+
+    put_active_session_registry(started_submission)
+
+    %SessionState{
+      state
+      | active: %{
+          pid: pid,
+          mon_ref: mon_ref,
+          run_id: started_submission.run_id,
+          session_key: started_submission.session_key,
+          submission: started_submission
+        },
+        queue: rest
+    }
+  end
+
+  defp partially_started_run_pid(run_id) when is_binary(run_id) do
+    case Registry.lookup(LemonRouter.RunRegistry, run_id) do
+      [{pid, _} | _] when is_pid(pid) -> if Process.alive?(pid), do: pid
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp partially_started_run_pid(_run_id), do: nil
+
+  defp emit_start_failure(%Submission{} = submission, reason) do
+    safe_reason = start_failure_reason(reason)
+
+    event =
+      LemonCore.Event.new(
+        :run_completed,
+        Events.RunCompleted.new(%{
+          completed:
+            Events.Completion.new(%{
+              ok: false,
+              error: %{type: :run_start_failed, reason: safe_reason},
+              answer: ""
+            }),
+          duration_ms: 0
+        }),
+        %{
+          run_id: submission.run_id,
+          session_key: submission.session_key,
+          synthetic: true,
+          failure_stage: :run_start
+        }
+      )
+
+    Bus.broadcast(Bus.run_topic(submission.run_id), event)
+  rescue
+    error ->
+      Logger.error(
+        "SessionCoordinator failed to emit start failure run_id=#{inspect(submission.run_id)} " <>
+          "error=#{Exception.message(error)}"
+      )
+
+      :ok
+  end
+
+  defp start_failure_reason(reason)
+       when is_atom(reason) or is_binary(reason) or is_number(reason),
+       do: reason
+
+  defp start_failure_reason(reason), do: inspect(reason, limit: 20, printable_limit: 1_000)
 
   defp maybe_emit_waiting_for_slot(%Submission{} = submission, true) do
     if phase_emission_enabled?(submission) do

@@ -530,6 +530,51 @@ defmodule LemonRouter.RunProcessTest do
   end
 
   describe ":submit_to_gateway retry/backoff" do
+    test "terminalizes exactly once when runtime submission never succeeds" do
+      run_id = "run_#{System.unique_integer([:positive])}"
+      session_key = SessionKey.main("test-agent")
+      job = make_test_request(run_id)
+
+      :persistent_term.put({RejectingScheduler, :notify_pid}, self())
+      LemonCore.Bus.subscribe(LemonCore.Bus.session_topic(session_key))
+
+      on_exit(fn ->
+        :persistent_term.erase({RejectingScheduler, :notify_pid})
+      end)
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 execution_request: job,
+                 gateway_scheduler: RejectingScheduler,
+                 gateway_submit_deadline_ms: 120
+               })
+
+      assert_receive %LemonCore.Event{
+                       type: :run_completed,
+                       payload: %{
+                         completed: %{
+                           ok: false,
+                           error: %{
+                             type: :runtime_submission_failed,
+                             reason: :temporary_failure
+                           }
+                         }
+                       },
+                       meta: %{
+                         run_id: ^run_id,
+                         session_key: ^session_key,
+                         synthetic: true,
+                         failure_stage: :runtime_submission
+                       }
+                     },
+                     1_000
+
+      refute_receive %LemonCore.Event{type: :run_completed, meta: %{run_id: ^run_id}}, 300
+      assert eventually(fn -> not Process.alive?(pid) end)
+    end
+
     test "does not mark run submitted when scheduler rejects execution" do
       run_id = "run_#{System.unique_integer([:positive])}"
       session_key = SessionKey.main("test-agent")

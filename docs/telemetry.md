@@ -172,6 +172,16 @@ Last segment is built at runtime from an atom argument
 These are the clearest saturation signal in the system: `waitq > 0` means runs are waiting
 for an engine slot. The empty metadata means they cannot be correlated to a run or session.
 
+### Engine-lock observation — `[:lemon, :gateway, :engine_lock, ...]`
+
+| Event | Measurements | Metadata |
+|---|---|---|
+| `[:lemon, :gateway, :engine_lock, :over_age_live_owner]` | `count: 1`, `age_ms`, `threshold_ms` | redacted `thread_key` and owner process representations |
+
+This event is observational: it means an exclusive owner is still alive beyond
+the configured age threshold. The sweep does not release or transfer the lock;
+ownership changes only on explicit release or confirmed owner death.
+
 ### Agent loop — `[:lemon_agent, ...]`
 
 | Event | Measurements | Metadata | Emitter |

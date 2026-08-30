@@ -3,8 +3,8 @@ defmodule LemonGateway.EngineLock do
   Mutex lock preventing concurrent engine runs on the same session.
 
   Provides fair FIFO queueing with configurable timeouts. Monitors lock
-  holders and automatically releases locks when processes die. Periodically
-  sweeps stale locks that exceed `max_lock_age_ms`.
+  holders and automatically releases locks when processes die. Periodic sweeps
+  report over-age live owners but never transfer exclusivity based on age alone.
   """
   use GenServer
   require Logger
@@ -230,36 +230,46 @@ defmodule LemonGateway.EngineLock do
           acc
 
         lock ->
-          if stale_lock?(lock, now_ms, acc.max_lock_age_ms) do
+          if not Process.alive?(lock.owner) do
             age_ms = lock_age_ms(lock, now_ms)
 
             Logger.warning(
-              "Reclaiming stale engine lock #{inspect(thread_key)} after #{age_ms}ms"
+              "Reclaiming engine lock from dead owner key=#{inspect(thread_key)} after #{age_ms}ms"
             )
 
             Process.demonitor(lock.mon_ref, [:flush])
             release_and_next(acc, thread_key)
           else
+            maybe_report_over_age_live_owner(thread_key, lock, now_ms, acc.max_lock_age_ms)
             acc
           end
       end
     end)
   end
 
-  defp stale_lock?(lock, now_ms, max_lock_age_ms) do
-    owner_dead? = not Process.alive?(lock.owner)
+  defp maybe_report_over_age_live_owner(thread_key, lock, now_ms, max_lock_age_ms)
+       when is_integer(max_lock_age_ms) do
+    age_ms = lock_age_ms(lock, now_ms)
 
-    expired? =
-      case {Map.get(lock, :acquired_at_ms), max_lock_age_ms} do
-        {acquired_at_ms, value} when is_integer(acquired_at_ms) and is_integer(value) ->
-          now_ms - acquired_at_ms > value
+    if age_ms > max_lock_age_ms do
+      Logger.warning(
+        "Engine lock owner remains live beyond age threshold key=#{inspect(thread_key)} " <>
+          "owner=#{inspect(lock.owner)} age_ms=#{age_ms} threshold_ms=#{max_lock_age_ms}"
+      )
 
-        _ ->
-          false
-      end
+      LemonCore.Telemetry.emit(
+        [:lemon, :gateway, :engine_lock, :over_age_live_owner],
+        %{count: 1, age_ms: age_ms, threshold_ms: max_lock_age_ms},
+        %{thread_key: inspect(thread_key), owner: inspect(lock.owner)}
+      )
+    end
 
-    owner_dead? or expired?
+    :ok
+  rescue
+    _ -> :ok
   end
+
+  defp maybe_report_over_age_live_owner(_thread_key, _lock, _now_ms, _max_lock_age_ms), do: :ok
 
   defp lock_age_ms(lock, now_ms) do
     case Map.get(lock, :acquired_at_ms) do
