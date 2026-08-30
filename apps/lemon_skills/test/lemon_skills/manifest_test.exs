@@ -215,6 +215,35 @@ defmodule LemonSkills.ManifestTest do
       manifest = %{"tags" => "not-a-list"}
       assert {:error, _} = Manifest.validate(manifest)
     end
+
+    test "rejects unsafe or unbounded prompt metadata" do
+      assert {:error, reason} = Manifest.validate(%{"name" => "safe\nforged"})
+      assert reason =~ "single line"
+
+      assert {:error, reason} =
+               Manifest.validate(%{"description" => "safe\u202Ehidden"})
+
+      assert reason =~ "bidirectional"
+
+      assert {:error, reason} = Manifest.validate(%{"description" => "   "})
+      assert reason =~ "must not be empty"
+
+      assert {:error, reason} = Manifest.validate(%{"name" => String.duplicate("x", 129)})
+      assert reason =~ "too long"
+    end
+
+    test "validates tags and keywords as bounded safe string lists" do
+      assert {:ok, _} =
+               Manifest.validate(%{"tags" => ["elixir"], "keywords" => ["beam-runtime"]})
+
+      assert {:error, reason} = Manifest.validate(%{"keywords" => ["ok", 42]})
+      assert reason =~ "list of strings"
+
+      assert {:error, reason} =
+               Manifest.validate(%{"tags" => Enum.map(1..33, &"tag-#{&1}")})
+
+      assert reason =~ "too many"
+    end
   end
 
   describe "parse_and_validate/1" do

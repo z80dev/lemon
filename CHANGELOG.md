@@ -10,6 +10,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Skill manifests now reject unsafe or oversized prompt metadata, relevance
+  searches use cached excerpts/status views outside the Registry server, and
+  prompt listings expose bounded source/trust provenance with deterministic
+  ordering.
 - Product releases can now be cut and published from one manual Release
   workflow dispatch; the workflow derives CalVer, consumes the Unreleased
   notes, commits and tags the release, verifies every artifact, publishes the

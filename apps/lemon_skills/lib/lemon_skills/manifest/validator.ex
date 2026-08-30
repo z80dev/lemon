@@ -22,6 +22,15 @@ defmodule LemonSkills.Manifest.Validator do
 
   @v2_platforms ~w(linux darwin win32 any)
 
+  # Prompt-facing metadata is deliberately much smaller than a SKILL.md body.
+  # These limits are enforced at ingestion so every downstream renderer and
+  # relevance query can treat the normalized manifest as bounded data.
+  @max_name_bytes 128
+  @max_description_bytes 1_024
+  @max_list_items 32
+  @max_list_item_bytes 128
+  @unsafe_metadata ~r/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F\x{061C}\x{200E}\x{200F}\x{202A}-\x{202E}\x{2066}-\x{2069}]/u
+
   @type manifest :: map()
   @type error :: String.t()
 
@@ -64,15 +73,82 @@ defmodule LemonSkills.Manifest.Validator do
   # ---------------------------------------------------------------------------
 
   defp validate_legacy_fields(manifest) do
-    cond do
-      has_field?(manifest, "requires") and not is_map(manifest["requires"]) ->
+    with :ok <- validate_optional_metadata_string(manifest, "name", @max_name_bytes),
+         :ok <-
+           validate_optional_metadata_string(
+             manifest,
+             "description",
+             @max_description_bytes
+           ),
+         :ok <- validate_metadata_list(manifest, "tags"),
+         :ok <- validate_metadata_list(manifest, "keywords") do
+      if has_field?(manifest, "requires") and not is_map(manifest["requires"]) do
         {:error, "requires must be a map"}
+      else
+        :ok
+      end
+    end
+  end
 
-      has_field?(manifest, "tags") and not is_list(manifest["tags"]) ->
-        {:error, "tags must be a list"}
+  defp validate_optional_metadata_string(manifest, key, max_bytes) do
+    case Map.fetch(manifest, key) do
+      :error ->
+        :ok
+
+      {:ok, value} when not is_binary(value) ->
+        {:error, "#{key} must be a string"}
+
+      {:ok, value} ->
+        validate_metadata_string(value, key, max_bytes)
+    end
+  end
+
+  defp validate_metadata_string(value, key, max_bytes) do
+    cond do
+      not String.valid?(value) ->
+        {:error, "#{key} must be valid UTF-8"}
+
+      String.trim(value) == "" ->
+        {:error, "#{key} must not be empty"}
+
+      byte_size(value) > max_bytes ->
+        {:error, "#{key} is too long (max #{max_bytes} bytes)"}
+
+      String.contains?(value, ["\n", "\r"]) ->
+        {:error, "#{key} must be a single line"}
+
+      Regex.match?(@unsafe_metadata, value) ->
+        {:error, "#{key} contains control or bidirectional characters"}
 
       true ->
         :ok
+    end
+  end
+
+  defp validate_metadata_list(manifest, key) do
+    case Map.get(manifest, key) do
+      nil ->
+        :ok
+
+      list when is_list(list) and length(list) <= @max_list_items ->
+        Enum.reduce_while(list, :ok, fn value, :ok ->
+          case value do
+            value when is_binary(value) ->
+              case validate_metadata_string(value, "#{key} entry", @max_list_item_bytes) do
+                :ok -> {:cont, :ok}
+                {:error, _} = error -> {:halt, error}
+              end
+
+            _ ->
+              {:halt, {:error, "#{key} must be a list of strings"}}
+          end
+        end)
+
+      list when is_list(list) ->
+        {:error, "#{key} has too many entries (max #{@max_list_items})"}
+
+      _ ->
+        {:error, "#{key} must be a list"}
     end
   end
 

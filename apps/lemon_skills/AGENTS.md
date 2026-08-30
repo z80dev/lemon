@@ -2,9 +2,9 @@
 
 ## Quick Orientation
 
-LemonSkills is the skill management system for the Lemon agent platform. It provides a GenServer-based registry that discovers, caches, and serves skill content (SKILL.md files) from multiple directory sources. Skills are **not executed** by this app -- they are text documents loaded into agent system prompts to give agents specialized knowledge and instructions.
+LemonSkills is the skill management system for the Lemon agent platform. It provides a GenServer-based registry that discovers, caches, and serves skill content (SKILL.md files) from multiple directory sources. Skills are **not executed** by this app -- the system prompt lists their metadata and agents explicitly load selected content as specialized knowledge and instructions.
 
-**Core loop**: On startup, load skills from disk into memory. At runtime, agents query for relevant skills by key or context string. Skills can also be installed from Git repos or discovered from GitHub.
+**Core loop**: On startup, load skills plus bounded search excerpts and requirement views from disk into memory. At runtime, agents query cached entries by key or context string; full skill semantics are loaded explicitly with `read_skill`. Skills can also be installed from Git repos or discovered from GitHub.
 
 **Entry point**: `LemonSkills` (the facade module) delegates everything to sub-modules. Start reading there.
 
@@ -127,13 +127,19 @@ The YAML/TOML parser in `manifest.ex` is hand-rolled. It handles:
 
 It does NOT handle: YAML anchors/references, multi-line strings, flow sequences/mappings, complex nesting beyond 2 levels. All manifest keys are strings (not atoms).
 
+When present, `name` and `description` must be non-empty, single-line, valid UTF-8 strings without control or bidirectional formatting characters. They are bounded to 128 and 1,024 bytes respectively. `tags` and `keywords` must be lists of at most 32 strings, with each item subject to the same safe-text checks and a 128-byte limit. Missing `name`/`description` remain compatible with legacy manifests and use registry defaults.
+
 ### Registry State
 
 The Registry GenServer holds:
 - `global_skills`: `%{key => Entry.t()}` -- loaded eagerly on startup
 - `project_skills`: `%{cwd => %{key => Entry.t()}}` -- loaded lazily per cwd
+- `global_search` / `project_search`: precomputed lower-cased metadata, keywords, and bounded body excerpts
+- `global_views` / `project_views`: cached requirement/provenance views used by prompt rendering
 
 When listing/getting, project skills override global skills on key collision. Skills are sorted by key for deterministic ordering (important for stable system prompts and prompt caching).
+
+Disk reads and requirement/config checks happen at startup, explicit refresh, and register/unregister boundaries. `find_relevant/2` takes a short cached snapshot from the GenServer and scores it in the caller process, so concurrent lookups do not serialize body reads or scoring in the registry. Call `LemonSkills.refresh/1` after external edits or PATH/environment changes.
 
 ### Relevance Scoring
 
@@ -149,6 +155,9 @@ When listing/getting, project skills override global skills on key collision. Sk
 - Project-source bonus: +1000 after a positive relevance match
 
 Body content is truncated to 10,000 chars before scoring to avoid performance issues with large SKILL.md files.
+Equal scores are ordered by skill key for deterministic prompts and telemetry.
+
+Prompt metadata is defensively flattened, bounded, XML-escaped, and includes explicit `source_kind` / `trust_level` fields. Community, project, and local metadata is relevance data rather than instruction authority.
 
 ### Approval Gating
 

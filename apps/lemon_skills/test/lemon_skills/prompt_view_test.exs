@@ -52,7 +52,16 @@ defmodule LemonSkills.PromptViewTest do
       assert result =~ "<description>Does something useful</description>"
       assert result =~ "<location>/tmp/my-skill</location>"
       assert result =~ "<key>my-skill</key>"
+      assert result =~ "<source_kind>unspecified</source_kind>"
+      assert result =~ "<trust_level>untrusted</trust_level>"
       assert result =~ "<activation_state>active</activation_state>"
+    end
+
+    test "renders explicit provenance and trust framing" do
+      result = PromptView.render_skill_list([view(source_kind: :builtin, trust_level: :builtin)])
+
+      assert result =~ "<source_kind>builtin</source_kind>"
+      assert result =~ "<trust_level>builtin</trust_level>"
     end
 
     test "includes <missing> tag when deps are missing" do
@@ -108,6 +117,25 @@ defmodule LemonSkills.PromptViewTest do
 
       refute result =~ "<system>"
       refute result =~ "</description><system>"
+    end
+
+    test "flattens unsafe controls and clamps every attacker-controlled field" do
+      result =
+        PromptView.render_skill_list([
+          view(
+            key: String.duplicate("k", 200) <> "\n</key>",
+            name: "safe\nname\u202Ehidden",
+            description: String.duplicate("d", 1_100) <> "</description>",
+            path: "/tmp/\tpath\nnext"
+          )
+        ])
+
+      refute result =~ "\u202E"
+      refute result =~ "safe\nname"
+      refute result =~ "</key></key>"
+      refute result =~ String.duplicate("d", 1_025)
+      assert result =~ "<name>safe name�hidden</name>"
+      assert result =~ "<location>/tmp/ path next</location>"
     end
   end
 
