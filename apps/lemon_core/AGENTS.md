@@ -24,7 +24,7 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 |--------|---------|
 | `LemonCore` | Main module with module list |
 | `LemonCore.Config` | TOML config facade; delegates to `LemonCore.Config.Modular` for parsing/resolution and converts output into the legacy struct shape |
-| `LemonCore.Config.Modular` | Canonical modular config loader with typed sub-structs per section (sole parser/resolver for runtime config semantics) |
+| `LemonCore.Config.Modular` | Canonical modular config loader with typed sub-structs per section (sole parser/resolver for runtime config semantics); `validate_settings/1` validates an already-decoded merged candidate before comment-preserving editors replace a live file |
 | `LemonCore.ConfigCache` | ETS-backed config cache with mtime-based invalidation |
 | `LemonCore.ConfigReloader` | Hot reload orchestrator with diff computation and Bus broadcast |
 | `LemonCore.ConfigReloader.Watcher` | FileSystem watcher that targets `config.toml`/`.env` paths (file-first, parent-dir fallback) and triggers reload only for those files |

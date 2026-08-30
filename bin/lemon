@@ -379,7 +379,9 @@ fi
 if [[ "${1:-}" == "providers" ]]; then
   shift
   cd "$LEMON_ROOT"
-  exec mix lemon.providers "$@"
+  export MIX_QUIET=1
+  exec mix run --no-start \
+    -e 'System.halt(LemonCli.CLI.run(["providers" | System.argv()]))' -- "$@"
 fi
 
 if [[ "${1:-}" == "policy" ]]; then

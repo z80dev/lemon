@@ -63,7 +63,7 @@ means Hermes has a current user-facing behavior with no equivalent Lemon path.
 | Memory | Session search plus long-term memories and learning flows | SQLite full-text durable memory, provider fan-out, session ingest, Honcho provider, scoped tools; context references can select an always-redacted canonical session export | **Covered** for retrieval/storage and bounded source selection. Hermes `/learn` and journey/learning-graph UX remain a **gap**. |
 | Skills | Install/list/remove skills and official catalog | Registry, discovery, linting, install/import/manage tools, official Hermes catalog browser, curator flows | **Covered**. Ecosystem breadth and single-command import polish still vary. |
 | Subagents/delegation | Native subagents, background work, parent interaction | Native `task`, routed `agent`, budgets, run graph, parent questions, isolated `/bg`, named remote nodes | **Lead**. Restart reconciliation for persisted nonterminal asynchronous records and caller-selected join timeouts remain reliability gaps. |
-| Provider/model choice | Multiple providers, credential pools, fallback, selectable presets and MoA | Provider registry, credential pools, fallback, session pins, routing policy, live model selection | **Covered** for normal models. Named mixture-of-agents presets and the Portal subscription proxy remain **gaps**. |
+| Provider/model choice | Multiple providers, `hermes auth` credential-pool management, `hermes fallback` inspection/editing, selectable presets and MoA | Provider registry, credential pools, fallback, session pins, routing policy, live model selection, and source/packaged `lemon providers` plus admin `providers.configure` inspection/editing | **Covered** for normal models and operational fallback/pool management. Named mixture-of-agents presets and the Portal subscription proxy remain **gaps**. |
 | Context management | Auto/lean compaction, micro-compaction, tool search | Auto-compaction, overflow recovery, tool-result spill, guardrails, progressive disclosure | **Covered** for context survival. Per-result micro-compaction and provider-native compaction are **gaps**. |
 | Approvals and trust | Tool policy, managed scope, sandbox/egress options | Central exec approvals, tool policy profiles, untrusted-result fencing, capability boundaries, node authentication | **Covered/lead** in local policy. Host-side egress credential injection and managed secret-source adapters are **gaps**. |
 | Reliability | Persistent sessions, cron recovery, background processes | OTP supervision, durable stores, retries, run ownership, terminalization, named-node cancellation | **Lead**, with the asynchronous boot reconciler noted above still missing. |
@@ -100,6 +100,29 @@ using Lemon's session ownership model:
 
 See [Session heartbeats](../user-guide/session-heartbeats.md) for usage and the
 focused live-runtime proof.
+
+## Provider auth and fallback follow-on
+
+A follow-on source audit compared Hermes's official
+[`hermes auth`](https://github.com/NousResearch/hermes-agent/blob/4f22543509d1b91dc45bcb369447126c5eb14fb7/website/docs/reference/cli-commands.md)
+and
+[`hermes fallback`](https://github.com/NousResearch/hermes-agent/blob/4f22543509d1b91dc45bcb369447126c5eb14fb7/website/docs/user-guide/features/fallback-providers.md)
+surfaces with Lemon's actual runtime. Lemon already had the harder execution
+semantics—credential pools, health cooldowns, session pins, and provider
+fallback—but only the contributor Mix task and read-only `providers.status`
+made that state operationally visible. Installed users could not safely edit
+fallbacks or pool references.
+
+That UX gap is now closed by one shared provider-configuration boundary used by
+source and packaged `lemon providers` commands and the admin-scoped
+`providers.configure` method. It edits only `runtime.provider_routing`, accepts
+credential references rather than values, preserves comments, validates before
+atomic replacement, previews by default at the service/RPC boundary, and
+requires exact confirmation for destructive changes. Responses are redacted to
+provider/pool names and counts. A deterministic provider-stub smoke starts the
+real Lemon applications and proves the configured credential rotation,
+cross-provider fallback, destructive guard, and no-fallback HTTP 400 terminal
+path without using live credentials.
 
 ## Prioritized remaining runtime work
 

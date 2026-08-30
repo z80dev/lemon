@@ -19,6 +19,7 @@ defmodule LemonCli.CLI do
       config [validate|show] [--verbose] [--project-dir PATH]
       secrets <status|init|set|list|delete|check|import-env>
       channels [--project-dir PATH] [--json]
+      providers [status|fallback|pool] [options]
       profile <list|show|create|clone|rename|export|delete|roster|chat>
       backup <contract|create|list|verify|restore> [options]
       context <preview|resolve> <reference>... [bounded options]
@@ -49,7 +50,7 @@ defmodule LemonCli.CLI do
     defexception [:message, exit_code: 1]
   end
 
-  @commands ~w(setup model gateway doctor config secrets channels profile backup context)
+  @commands ~w(setup model gateway doctor config secrets channels providers profile backup context)
 
   @exit_ok 0
   @exit_error 1
@@ -150,6 +151,7 @@ defmodule LemonCli.CLI do
   defp run_command("config", args), do: run_config(args)
   defp run_command("secrets", args), do: run_secrets(args)
   defp run_command("channels", args), do: run_channels(args)
+  defp run_command("providers", args), do: LemonCli.ProvidersCommand.run(args)
   defp run_command("profile", args), do: LemonCli.ProfileCommand.run(args)
   defp run_command("backup", args), do: run_backup(args)
   defp run_command("context", args), do: LemonCli.ContextCommand.run(args)
@@ -1206,6 +1208,7 @@ defmodule LemonCli.CLI do
       config [validate|show]                    Validate or show configuration
       secrets <status|init|set|list|delete|check|import-env>
       channels [--project-dir PATH] [--json]    Channel launch readiness
+      providers [status|fallback|pool] [options] Provider readiness and routing
       profile <subcommand> [options]             Manage isolated agent profiles
       backup <contract|create|list|verify|restore>  Back up durable user state
       context <preview|resolve> <refs> [options] Preview or resolve bounded context
@@ -1274,6 +1277,8 @@ defmodule LemonCli.CLI do
       --json              Emit the raw redacted readiness JSON
     """)
   end
+
+  defp print_command_usage("providers"), do: LemonCli.ProvidersCommand.print_usage()
 
   defp print_command_usage("profile") do
     IO.puts("""

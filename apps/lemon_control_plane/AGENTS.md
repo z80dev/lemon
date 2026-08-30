@@ -195,6 +195,7 @@ Supported types: `:string`, `:integer`, `:boolean`, `:map`, `:list`, `:any`.
 | `logs.tail` | read | Tail recent log lines with filter summary, cleanup flags, and sensitive log-value redaction |
 | `models.list` | read | List available AI models plus capability/provider summaries |
 | `providers.status` | read | Redacted provider credential readiness, route preview, fallback candidates, config-shape diagnostics, live fallback proof status, and top-level summary |
+| `providers.configure` | admin | Preview or apply comment-preserving fallback and credential-pool reference edits; destructive changes require exact operation confirmation and responses never include credential references |
 | `memory.status` | read | Redacted memory-provider registry metadata plus provider health and searchable-scope summaries |
 | `proofs.status` | read | Redacted live-proof diagnostics with top-level counts and launch-gate summaries for Discord DM, Discord client-click, provider media, and terminal backends |
 | `extensions.status` | read | Redacted extension/plugin load, conflict, provider, WASM diagnostics, and host/runtime summary |

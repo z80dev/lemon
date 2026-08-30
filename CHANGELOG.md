@@ -10,6 +10,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Source and packaged `lemon providers` readiness and routing management with
+  comment-preserving fallback and credential-pool reference edits, stable
+  redacted JSON/exit codes, exact confirmation for destructive changes, and a
+  matching admin-scoped `providers.configure` control-plane method.
 - A client-independent `LemonCore.Context` preview/resolve contract and
   packaged `lemon context` command for bounded `@file`, `@folder`, `@git-diff`,
   `@url`, and redacted `@session` references. PDF, DOCX, XLSX, PPTX, notebook,

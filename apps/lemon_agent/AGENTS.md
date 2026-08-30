@@ -55,6 +55,7 @@ LemonAgent.Supervisor (:one_for_one)
 | `lib/agent_core/abort_signal.ex` | ETS-based abort flag. `new/0` creates a ref, `abort/1` sets it, `aborted?/1` checks it. Fast reads via `read_concurrency: true`. |
 | `lib/agent_core/proxy.ex` | SSE proxy for routing LLM calls through an HTTP server. Reconstructs partial `AssistantMessage` from stripped delta events. |
 | `lib/agent_core/text_generation.ex` | Simple `complete_text/4` bridge so callers don't import `LemonAi` directly. |
+| `lib/lemon_agent/model_runtime/provider_configuration.ex` | Shared provider-routing mutation boundary for packaged/source CLI and control-plane callers. It edits only `runtime.provider_routing`, preserves comments, validates and atomically replaces TOML, requires explicit apply plus operation-bound confirmation for destructive changes, and returns counts without credential references. |
 | `lib/agent_core/agent_registry.ex` | Thin wrapper around `Registry`. Keys are `{session_id, role, index}` tuples. `via/1`, `lookup/1`, `list_by_session/1`, `list_by_role/1`. |
 | `lib/agent_core/subagent_supervisor.ex` | `DynamicSupervisor` for subagent processes. Children are `:temporary`. `start_subagent/1` accepts `registry_key:` option. |
 | `lib/agent_core/application.ex` | OTP app. Starts the supervision tree. |

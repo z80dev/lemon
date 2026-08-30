@@ -45,9 +45,45 @@ release and source-checkout behavior aligned.
 | Validate/show config | `lemon config validate` | `./bin/lemon config validate` | `mix lemon.config validate` |
 | Manage encrypted secrets | `lemon secrets status` | `./bin/lemon secrets status` | `mix lemon.secrets.status` |
 | Inspect channel readiness | `lemon channels` | `./bin/lemon channels` | `mix lemon.channels` |
+| Inspect/edit provider routing | `lemon providers status|fallback|pool` | `./bin/lemon providers status|fallback|pool` | `mix lemon.providers` (read-only) |
 | Back up or restore durable user state | `lemon backup create` | `./bin/lemon backup create` | Call `LemonCli.CLI.run/1` from contributor tooling |
 | Manage specialist profiles | `lemon profile list` | `./bin/lemon profile list` | Use the same packaged command boundary |
 | Preview/resolve bounded context | `lemon context preview|resolve ...` | `./bin/lemon context preview|resolve ...` | Call `LemonCore.Context` from IEx/tests |
+
+## Provider readiness and routing
+
+`lemon providers` uses one Mix-free handler in source and packaged runtimes.
+Status includes credential readiness, the effective fallback route, and
+credential-pool counts, but never raw keys, secret names, credential references,
+base URLs, or environment-variable names.
+
+```bash
+lemon providers status --json
+lemon providers fallback add zai
+lemon providers pool set burst --provider openai --provider zai \
+  --strategy round_robin --activate
+lemon providers pool credential add burst openai secret:openai_backup
+```
+
+Credential pool entries are references only: `secret:NAME` keeps values in the
+encrypted Lemon secret store and `env:NAME` resolves from the process
+environment. Raw credential values are rejected instead of being copied into
+TOML.
+
+Mutations apply immediately unless `--dry-run` is passed. Removing a fallback,
+deleting or updating an existing pool, and removing or clearing credentials are
+destructive operations. Preview first to obtain the operation-bound confirmation
+value, then repeat with `--confirm`:
+
+```bash
+lemon providers fallback remove zai --dry-run --json
+lemon providers fallback remove zai --confirm zai
+```
+
+The command preserves comments and unrelated config, validates the complete
+resulting TOML, and atomically replaces only the selected global or project
+config. Success exits `0`, operation/config failures exit `1`, and invalid
+arguments exit `2`; `--json` emits one redacted document.
 
 ## Backup and restore
 
