@@ -1,6 +1,6 @@
 # Hermes parity implementation initiatives
 
-Status: active
+Status: implemented; final integration gates pending
 Owner: Codex
 Baseline: `ff4adf1e`
 Source matrix: [`lemon-hermes-gap-audit-2026-08-11.md`](lemon-hermes-gap-audit-2026-08-11.md)
@@ -64,6 +64,14 @@ one-way digests; revision confirmation covers every persisted document field;
 the final constant-time comparison and FTS+row deletion share one Store/SQLite
 transaction. A richer graph/timeline and free-form editing remain follow-ons,
 not reasons to create a second learning database.
+
+Profile lifecycle now also reaches `/manage/profiles` over the canonical
+`LemonCore.ProfileStore`: bounded roster/detail projection, preview-first
+create/clone/rename/delete, opaque revision checks, exact-ID recoverable delete,
+and canonical chat links. Session statistics now reuse
+`LemonCore.SessionLifecycle` for bounded exact aggregates through source/package
+CLI and a read-scoped authenticated control-plane method; the service does not
+invent message totals the canonical stores cannot prove.
 
 The second initiative now has source/package CLI, authenticated Web, and Bun
 TUI verticals over one `LemonAutomation.Blueprint.Catalog` boundary. The Web path

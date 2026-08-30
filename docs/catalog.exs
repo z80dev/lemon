@@ -70,6 +70,7 @@
     %{path: "docs/user-guide/setup.md", last_reviewed: ~D[2026-08-30], max_age_days: 60},
     %{path: "docs/user-guide/cli.md", last_reviewed: ~D[2026-08-30], max_age_days: 60, public: true},
     %{path: "docs/user-guide/backups.md", last_reviewed: ~D[2026-08-30], max_age_days: 60, public: true},
+    %{path: "docs/user-guide/updates.md", last_reviewed: ~D[2026-08-30], max_age_days: 60, public: true},
     %{path: "docs/user-guide/profiles.md", last_reviewed: ~D[2026-08-30], max_age_days: 60, public: true},
     %{path: "docs/user-guide/web.md", last_reviewed: ~D[2026-08-30], max_age_days: 60, public: true},
     %{path: "docs/user-guide/session-heartbeats.md", last_reviewed: ~D[2026-08-30], max_age_days: 60, public: true},

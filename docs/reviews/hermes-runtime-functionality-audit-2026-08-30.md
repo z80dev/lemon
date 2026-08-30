@@ -39,16 +39,16 @@ could not persist one recurring instruction inside the current conversation and
 re-enter that conversation only when idle. This pass closes that gap end to end.
 
 The remaining gaps are no longer one missing agent loop. They cluster around
-learn-from-source review, proactive automation suggestions and richer templates,
-host-side egress credential injection, micro-compaction, and a few
-restart/ergonomic edges in asynchronous delegation.
+proactive automation suggestions and richer templates, host-side egress
+credential injection, micro-compaction, publisher-authenticated updates, and a
+few restart/ergonomic edges in asynchronous delegation.
 
-The first-class profile backend also now reaches the terminal product shell:
-the TUI browses the live node-aware roster, opens stable canonical chats,
-performs the lifecycle actions already supported by the authenticated control
-plane, and routes subsequent ordinary prompts through `profile.chat`. This is
-an ergonomic parity closure over Lemon's existing multi-profile runtime, not a
-new profile engine or persistence layer.
+The first-class profile backend also now reaches both product shells: the TUI
+browses the live node-aware roster, opens stable canonical chats, and routes
+ordinary prompts through `profile.chat`; token-required Web management adds
+preview-first create/clone/rename/recoverable-delete over the same store. This
+is an ergonomic parity closure, not a second profile engine or persistence
+layer.
 
 ## Detailed parity matrix
 
@@ -63,7 +63,7 @@ means Hermes has a current user-facing behavior with no equivalent Lemon path.
 | Web search and extraction | Search, page fetch, browser and managed tool gateway | Provider-neutral search/extraction with fallback plus multi-tab browser and computer use; `LemonCore.Context` safely previews/resolves public URLs and format-sniffed PDF/Office/notebook/text content through the packaged CLI | **Covered** for bounded text extraction. Scanned/encrypted/font-encoded PDFs deliberately fail closed rather than invoking an unbounded external extractor. |
 | Python/code execution | Python execution and programmatic tool calling | `execute_code`, persistent Python kernels, tool calls and structured results | **Covered**. |
 | MCP and LSP | MCP tools and progressive disclosure | MCP client/server bridge, LSP driver, capability-aware progressive disclosure | **Covered**. Hermes's single catalog UX is somewhat simpler; Lemon has stronger backend separation. |
-| Session durability | Persistent sessions, resume, search, export/prune/stats commands | JSONL tree sessions, branch navigation, durable history, search, runtime diagnostics | **Covered** for core work. Friendly export/prune/stats commands remain a **gap**. |
+| Session durability | Persistent sessions, resume, search, export/prune/stats commands | Shared redacted lifecycle over JSONL/store history with source/package CLI, Web, and TUI search/resume/title/pin/archive/export/prune/delete plus bounded exact aggregate statistics through CLI and read-scoped control plane | **Covered/near** across daily workflows. Lineage, read state, recovery/recap, and richer export formats remain gaps. |
 | Checkpoints and rollback | Automatic file checkpoints, list/inspect/restore | Checkpoint/diff/restore tools plus tree-structured session history | **Covered**. Lemon should still consolidate the user guide and make rollback discoverable in every client. |
 | Same-session heartbeat | One persisted recurring prompt, idle-only firing, pause/resume/clear, missed-tick coalescing | Added in this pass: durable JSONL heartbeat, same transcript/provider path, user-message priority, pause/resume/clear, restart restore, reset tombstone | **Covered** after this pass. |
 | Cron and scheduling | Cron jobs, isolated scheduled turns, schedule management | Cron manager with agent and command jobs, pause/resume/abort, retries/jitter, monitor recovery, preflight, model-drift guard, chained context, and a source/packaged catalog blueprint CLI over exact-confirmed profile skill + cron activation | **Lead** on lifecycle controls. The first safe blueprint UX is covered; richer forms and consent-first suggestions remain a **gap**. |
@@ -71,12 +71,12 @@ means Hermes has a current user-facing behavior with no equivalent Lemon path.
 | Skills | Install/list/remove skills and official catalog | Registry, discovery, linting, install/import/manage tools, official Hermes catalog browser, curator flows | **Covered**. Ecosystem breadth and single-command import polish still vary. |
 | Subagents/delegation | Native subagents, background work, parent interaction | Native `task`, routed `agent`, budgets, run graph, parent questions, isolated `/bg`, named remote nodes | **Lead**. Restart reconciliation for persisted nonterminal asynchronous records and caller-selected join timeouts remain reliability gaps. |
 | Provider/model choice | Multiple providers, `hermes auth` credential-pool management, `hermes fallback` inspection/editing, selectable presets and MoA | Provider registry, credential pools, fallback, session pins, routing policy, live model selection, and source/packaged `lemon providers` plus admin `providers.configure` inspection/editing | **Covered** for normal models and operational fallback/pool management. Named mixture-of-agents presets and the Portal subscription proxy remain **gaps**. |
-| Specialist profiles and roster | Hermes exposes selectable agent configuration/profile workflows around its runtime | Lemon has durable user-managed profiles, isolated derived workspaces, node-aware roster, stable canonical chats, packaged CLI, authenticated control-plane lifecycle, and a TUI roster/picker plus guarded lifecycle commands | **Covered** for Lemon's profile workflow. Web form editing, import/restore, profile-scoped cron management, and merged multi-controller rosters remain separate gaps. |
+| Specialist profiles and roster | Hermes exposes selectable agent configuration/profile workflows around its runtime | Lemon has durable profiles, isolated derived workspaces, node-aware roster, stable canonical chats, packaged CLI/control plane, TUI roster/lifecycle, and token-required preview-first Web management | **Covered** for normal lifecycle across CLI/TUI/Web. Import/restore, profile-scoped cron, groups, and merged multi-controller rosters remain gaps. |
 | Context management | Auto/lean compaction, micro-compaction, tool search | Auto-compaction, overflow recovery, tool-result spill, guardrails, progressive disclosure | **Covered** for context survival. Per-result micro-compaction and provider-native compaction are **gaps**. |
 | Approvals and trust | Tool policy, managed scope, sandbox/egress options | Central exec approvals, tool policy profiles, untrusted-result fencing, capability boundaries, node authentication, and explicitly enabled supervised 1Password/Bitwarden/argv-only secret sources behind the encrypted store | **Covered/lead** in local policy and host credential sourcing. Host-side egress credential injection remains a **gap**. |
 | Reliability | Persistent sessions, cron recovery, background processes | OTP supervision, durable stores, retries, run ownership, terminalization, named-node cancellation | **Lead**, with the asynchronous boot reconciler noted above still missing. |
 | Observability | CLI diagnostics, telemetry and session inspection | structured introspection, run graph, usage/cost diagnostics, proof artifacts, health/readiness, support bundles | **Lead**. |
-| Updates and scripting | update command, backup/recovery, config/model/session/cron CLIs | Release channels plus registry-driven non-mutating update plan, exact-confirm apply, private history/receipt-bound rollback; setup/doctor/config/secrets/model/provider/usage/proof commands; script send; and source/packaged atomic backup/verify/restore | **Covered/lead** for safe managed-release and local-state recovery lifecycle. Schema-2 manifests checksum-authenticate artifacts but lack publisher signatures, and the current streaming client has a post-download rather than exact in-flight byte cutoff. Aggregate session stats and some install-plugin ergonomics remain gaps. |
+| Updates and scripting | update command, backup/recovery, config/model/session/cron CLIs | Release channels plus registry-driven non-mutating update plan, exact-confirm apply, private history/receipt-bound rollback; setup/doctor/config/secrets/model/provider/session-statistics/proof commands; script send; and source/packaged atomic backup/verify/restore | **Covered/lead** for safe managed-release and local-state recovery lifecycle. Schema-2 manifests checksum-authenticate artifacts but lack publisher signatures, and the current client has a post-download rather than exact in-flight byte cutoff. Some install-plugin and fleet-restart ergonomics remain gaps. |
 
 ## Same-session heartbeat delivered in this pass
 
@@ -193,9 +193,6 @@ prose, prompt/skill content, paths, and the operator token remain absent.
 
 ### P1 — high-value user parity
 
-- Extend the shipped bounded context/document service into an auditable
-  learn-from-source review over existing memory and skill stores; keep review
-  separate from activation.
 - Extend the shipped 1Password, Bitwarden Secrets Manager, and bounded
   command-backed sources only when a new adapter can preserve the shared
   argv-only runner, bootstrap non-recursion, and value-free diagnostic contract.
