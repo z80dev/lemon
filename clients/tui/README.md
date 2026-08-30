@@ -72,7 +72,11 @@ and control plane authoritative:
 | `/status`, `/usage` | Show control-plane health/runtime and usage/quota summaries. |
 | `/agents`, `/tasks` | Show the Lemon agent directory and active/recent subagent tasks. |
 | `/compress` | Compact the current session through `sessions.compact`. |
-| `/bg <prompt>` | Start background work through `background.start` when the daemon advertises it. |
+| `/bg <prompt>` or `/bg start <prompt>` | Start background work through `background.start`, inheriting the TUI's durable session key, cwd, model, and reasoning level. The full returned id is displayed intact for lifecycle commands. |
+| `/bg list [status]` | List durable background runs, optionally filtered by lifecycle status. |
+| `/bg status <id>` | Inspect one background run without truncating its id. |
+| `/bg result <id>` | Fetch the completed answer, or report that it is not ready yet. |
+| `/bg cancel <id>` | Cancel a queued or running background task. |
 | `/btw <question>` | Ask an isolated side question through `session.btw` when advertised. |
 | `/commands [command]` | Prefer the daemon's `commands.catalog`; fall back to the TUI's local registry during rolling upgrades. |
 | `/help [command]` | Show the local TUI command and key reference, including unavailable capability annotations. |

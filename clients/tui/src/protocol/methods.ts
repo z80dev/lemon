@@ -49,6 +49,10 @@ export const METHOD = {
 	commandsCatalog: "commands.catalog",
 	agentsList: "agents.list",
 	backgroundStart: "background.start",
+	backgroundList: "background.list",
+	backgroundStatus: "background.status",
+	backgroundResult: "background.result",
+	backgroundCancel: "background.cancel",
 	sessionBtw: "session.btw",
 	modelsList: "models.list",
 	approvalResolve: "exec.approval.resolve",
@@ -194,6 +198,7 @@ export class ControlPlaneMethods {
 		params: {
 			prompt: string;
 			sessionId?: string;
+			sessionKey?: string;
 			cwd?: string;
 			model?: string;
 			thinkingLevel?: string;
@@ -203,8 +208,36 @@ export class ControlPlaneMethods {
 		return this.#call<Record<string, unknown>>(METHOD.backgroundStart, params, options);
 	}
 
+	backgroundList(
+		params?: { status?: string },
+		options?: RequestOptions,
+	): Promise<Record<string, unknown>> {
+		return this.#call<Record<string, unknown>>(METHOD.backgroundList, params, options);
+	}
+
+	backgroundStatus(
+		params: { id: string },
+		options?: RequestOptions,
+	): Promise<Record<string, unknown>> {
+		return this.#call<Record<string, unknown>>(METHOD.backgroundStatus, params, options);
+	}
+
+	backgroundResult(
+		params: { id: string },
+		options?: RequestOptions,
+	): Promise<Record<string, unknown>> {
+		return this.#call<Record<string, unknown>>(METHOD.backgroundResult, params, options);
+	}
+
+	backgroundCancel(
+		params: { id: string },
+		options?: RequestOptions,
+	): Promise<Record<string, unknown>> {
+		return this.#call<Record<string, unknown>>(METHOD.backgroundCancel, params, options);
+	}
+
 	sessionBtw(
-		params: { sessionId: string; question: string; timeoutMs?: number },
+		params: { question: string; sessionId?: string; sessionKey?: string; timeoutMs?: number },
 		options?: RequestOptions,
 	): Promise<Record<string, unknown>> {
 		return this.#call<Record<string, unknown>>(METHOD.sessionBtw, params, options);

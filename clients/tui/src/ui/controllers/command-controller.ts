@@ -132,6 +132,7 @@ export class CommandController {
 	#context() {
 		return {
 			store: this.#options.store,
+			cwd: this.#options.cwd,
 			session: this.#options.store.focused,
 			methods: this.#options.methods,
 			client: this.#options.client,
