@@ -10,6 +10,7 @@ defmodule CodingAgent.Tools.Read do
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Security.ToolResultTrust
   alias LemonAi.Types.{TextContent, ImageContent}
   alias CodingAgent.Tools.ACPFileBridge
   alias CodingAgent.Tools.FileValidation
@@ -93,7 +94,9 @@ defmodule CodingAgent.Tools.Read do
     if aborted?(signal) do
       {:error, "Operation aborted"}
     else
-      do_execute(params, signal, cwd, opts)
+      params
+      |> do_execute(signal, cwd, opts)
+      |> ToolResultTrust.untrusted(:local_file)
     end
   end
 

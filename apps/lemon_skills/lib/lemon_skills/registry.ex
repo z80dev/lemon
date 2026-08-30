@@ -35,9 +35,17 @@ defmodule LemonSkills.Registry do
 
   alias LemonSkills.{Entry, Manifest, Config, Discovery, Lockfile}
 
+  @identity_check_interval_ms 50
+
   @type state :: %{
           global_skills: %{String.t() => Entry.t()},
-          project_skills: %{String.t() => %{String.t() => Entry.t()}}
+          project_skills: %{String.t() => %{String.t() => Entry.t()}},
+          global_search: map(),
+          project_search: map(),
+          global_identity: term(),
+          project_identities: %{String.t() => term()},
+          global_identity_checked_at: integer() | nil,
+          project_identity_checked_at: %{String.t() => integer() | nil}
         }
 
   # ============================================================================
@@ -66,9 +74,22 @@ defmodule LemonSkills.Registry do
 
     if refresh do
       refresh(opts)
+    else
+      ensure_current(cwd)
     end
 
     GenServer.call(__MODULE__, {:list, cwd})
+  end
+
+  @doc false
+  @spec list_views(keyword()) :: [LemonSkills.SkillView.t()]
+  def list_views(opts \\ []) do
+    cwd = Keyword.get(opts, :cwd)
+    disabled = disabled_keys(cwd)
+
+    opts
+    |> list()
+    |> Enum.map(&LemonSkills.SkillView.from_entry(&1, cwd: cwd, disabled_keys: disabled))
   end
 
   @doc """
@@ -124,9 +145,12 @@ defmodule LemonSkills.Registry do
 
     if refresh? do
       refresh(cwd: cwd)
+    else
+      ensure_current(cwd)
     end
 
-    GenServer.call(__MODULE__, {:find_relevant, cwd, context, max_results})
+    documents = GenServer.call(__MODULE__, {:search_snapshot, cwd})
+    score_documents(documents, context, max_results, disabled_keys(cwd))
   end
 
   @doc """
@@ -167,6 +191,7 @@ defmodule LemonSkills.Registry do
   @spec get(String.t(), keyword()) :: {:ok, Entry.t()} | :error
   def get(key, opts \\ []) do
     cwd = Keyword.get(opts, :cwd)
+    ensure_current(cwd)
     GenServer.call(__MODULE__, {:get, key, cwd})
   end
 
@@ -182,7 +207,8 @@ defmodule LemonSkills.Registry do
   @spec refresh(keyword()) :: :ok
   def refresh(opts \\ []) do
     cwd = Keyword.get(opts, :cwd)
-    GenServer.call(__MODULE__, {:refresh, cwd})
+    {global_identity, project_identity} = cache_identity(cwd)
+    GenServer.call(__MODULE__, {:refresh, cwd, global_identity, project_identity})
   end
 
   @doc """
@@ -288,11 +314,23 @@ defmodule LemonSkills.Registry do
   def init(_opts) do
     state = %{
       global_skills: %{},
-      project_skills: %{}
+      project_skills: %{},
+      global_search: %{},
+      project_search: %{},
+      global_identity: nil,
+      project_identities: %{},
+      global_identity_checked_at: nil,
+      project_identity_checked_at: %{}
     }
 
     # Load global skills on startup
-    state = load_global_skills(state)
+    {global_identity, _project_identity} = cache_identity(nil)
+
+    state = %{
+      load_global_skills(state)
+      | global_identity: global_identity,
+        global_identity_checked_at: monotonic_ms()
+    }
 
     {:ok, state}
   end
@@ -326,39 +364,93 @@ defmodule LemonSkills.Registry do
   end
 
   @impl true
-  def handle_call({:find_relevant, cwd, context, max_results}, _from, state) do
-    {skills, state} = merge_skills(state, cwd)
+  def handle_call({:search_snapshot, cwd}, _from, state) do
+    state = ensure_project_loaded(state, cwd)
 
-    context_lower = String.downcase(context)
-    context_words = extract_words(context_lower)
+    documents =
+      if is_binary(cwd) do
+        Map.get(state.project_search, cwd, %{})
+      else
+        state.global_search
+      end
 
-    entries =
-      skills
-      |> Map.values()
-      |> Enum.filter(fn entry ->
-        entry.enabled and not Config.skill_disabled?(entry.key, cwd)
-      end)
-      |> Enum.map(fn entry ->
-        {entry, calculate_relevance(entry, context_lower, context_words)}
-      end)
-      |> Enum.filter(fn {_entry, score} -> score > 0 end)
-      |> Enum.map(fn {entry, score} -> {entry, score + source_priority_bonus(entry)} end)
-      |> Enum.sort_by(fn {_entry, score} -> score end, :desc)
-      |> Enum.take(max_results)
-      |> Enum.map(fn {entry, _score} -> entry end)
-
-    {:reply, entries, state}
+    {:reply, Map.values(documents), state}
   end
 
   @impl true
-  def handle_call({:refresh, nil}, _from, state) do
-    state = load_global_skills(%{state | global_skills: %{}})
-    {:reply, :ok, state}
+  def handle_call({:refresh, nil, global_identity, _project_identity}, _from, state) do
+    state =
+      load_global_skills(%{
+        state
+        | global_skills: %{},
+          global_search: %{},
+          project_skills: %{},
+          project_search: %{},
+          project_identities: %{},
+          project_identity_checked_at: %{}
+      })
+
+    {:reply, :ok,
+     %{
+       state
+       | global_identity: global_identity,
+         global_identity_checked_at: monotonic_ms()
+     }}
   end
 
-  @impl true
-  def handle_call({:refresh, cwd}, _from, state) do
+  def handle_call(
+        {:refresh, cwd, global_identity, project_identity},
+        _from,
+        state
+      ) do
+    state = maybe_reload_global(state, global_identity)
     state = load_project_skills(state, cwd)
+
+    {:reply, :ok,
+     %{
+       state
+       | project_identities: Map.put(state.project_identities, cwd, project_identity),
+         project_identity_checked_at:
+           Map.put(state.project_identity_checked_at, cwd, monotonic_ms())
+     }}
+  end
+
+  @impl true
+  def handle_call({:reserve_identity_check, cwd, now}, _from, state) do
+    check_global? = identity_check_due?(state.global_identity_checked_at, now)
+
+    check_project? =
+      is_binary(cwd) and
+        identity_check_due?(Map.get(state.project_identity_checked_at, cwd), now)
+
+    state =
+      if check_global? do
+        %{state | global_identity_checked_at: now}
+      else
+        state
+      end
+
+    state =
+      if check_project? do
+        %{
+          state
+          | project_identity_checked_at: Map.put(state.project_identity_checked_at, cwd, now)
+        }
+      else
+        state
+      end
+
+    {:reply, {check_global?, check_project?}, state}
+  end
+
+  @impl true
+  def handle_call(
+        {:ensure_current, cwd, global_identity, project_identity},
+        _from,
+        state
+      ) do
+    state = maybe_reload_global(state, global_identity)
+    state = maybe_reload_project(state, cwd, project_identity)
     {:reply, :ok, state}
   end
 
@@ -370,7 +462,8 @@ defmodule LemonSkills.Registry do
 
   @impl true
   def handle_call({:unregister, key, :global, _cwd}, _from, state) do
-    state = %{state | global_skills: Map.delete(state.global_skills, key)}
+    global_skills = Map.delete(state.global_skills, key)
+    state = rebuild_global_derived(%{state | global_skills: global_skills})
     {:reply, :ok, state}
   end
 
@@ -379,6 +472,7 @@ defmodule LemonSkills.Registry do
     project_skills = Map.get(state.project_skills, cwd, %{})
     project_skills = Map.delete(project_skills, key)
     state = %{state | project_skills: Map.put(state.project_skills, cwd, project_skills)}
+    state = rebuild_project_derived(state, cwd)
     {:reply, :ok, state}
   end
 
@@ -399,7 +493,7 @@ defmodule LemonSkills.Registry do
     # Hydrate provenance from the global lockfile where records are present.
     skills = hydrate_from_lockfile(skills, :global)
 
-    %{state | global_skills: skills}
+    rebuild_global_derived(%{state | global_skills: skills})
   end
 
   defp load_project_skills(state, cwd) when is_binary(cwd) do
@@ -419,7 +513,8 @@ defmodule LemonSkills.Registry do
     skills = hydrate_from_lockfile(skills, {:project, cwd})
 
     project_skills = Map.put(state.project_skills, cwd, skills)
-    %{state | project_skills: project_skills}
+    state = %{state | project_skills: project_skills}
+    rebuild_project_derived(state, cwd)
   end
 
   defp load_skills_from_dir(dir, source) do
@@ -484,32 +579,12 @@ defmodule LemonSkills.Registry do
 
   defp ensure_project_loaded(state, _cwd), do: state
 
-  defp calculate_relevance(%Entry{} = entry, context_lower, context_words) do
-    key_lower = String.downcase(entry.key || "")
-    name_lower = String.downcase(entry.name || entry.key || "")
-    desc_lower = String.downcase(entry.description || "")
-    # Read and score against the body content as a low-weight signal.
-    body_lower =
-      case Entry.content(entry) do
-        {:ok, content} ->
-          content
-          |> Manifest.parse_body()
-          |> String.slice(0, 10_000)
-          |> String.downcase()
-
-        _ ->
-          ""
-      end
-
-    # Extract keywords from manifest if available
-    keywords_lower =
-      case entry.manifest do
-        %{keywords: keywords} when is_list(keywords) ->
-          Enum.map(keywords, &String.downcase/1)
-
-        _ ->
-          []
-      end
+  defp calculate_relevance(document, context_lower, context_words) do
+    key_lower = document.key_lower
+    name_lower = document.name_lower
+    desc_lower = document.description_lower
+    body_lower = document.body_lower
+    keywords_lower = document.keywords_lower
 
     # Calculate name scores (strongest signal)
     exact_name_match =
@@ -575,7 +650,7 @@ defmodule LemonSkills.Registry do
   end
 
   # Prefer project-local skills over global ones when both are relevant.
-  defp source_priority_bonus(%Entry{source: :project}), do: 1000
+  defp source_priority_bonus(%{entry: %Entry{source: :project}}), do: 1000
   defp source_priority_bonus(_), do: 0
 
   defp extract_words(text) when is_binary(text) do
@@ -604,7 +679,9 @@ defmodule LemonSkills.Registry do
   end
 
   defp add_entry(state, %Entry{source: :global} = entry) do
-    %{state | global_skills: Map.put(state.global_skills, entry.key, entry)}
+    state
+    |> Map.put(:global_skills, Map.put(state.global_skills, entry.key, entry))
+    |> rebuild_global_derived()
   end
 
   defp add_entry(state, %Entry{source: :project, path: path} = entry) do
@@ -612,11 +689,221 @@ defmodule LemonSkills.Registry do
     cwd = path |> Path.dirname() |> Path.dirname() |> Path.dirname()
     project_skills = Map.get(state.project_skills, cwd, %{})
     project_skills = Map.put(project_skills, entry.key, entry)
-    %{state | project_skills: Map.put(state.project_skills, cwd, project_skills)}
+    state = %{state | project_skills: Map.put(state.project_skills, cwd, project_skills)}
+    rebuild_project_derived(state, cwd)
   end
 
   defp add_entry(state, entry) do
     # Default to global for other sources (URLs, etc.)
-    %{state | global_skills: Map.put(state.global_skills, entry.key, entry)}
+    state
+    |> Map.put(:global_skills, Map.put(state.global_skills, entry.key, entry))
+    |> rebuild_global_derived()
   end
+
+  defp score_documents(documents, context, max_results, disabled) do
+    context_lower = String.downcase(context)
+    context_words = extract_words(context_lower)
+
+    documents
+    |> Enum.filter(fn document ->
+      document.entry.enabled and document.entry.key not in disabled
+    end)
+    |> Enum.map(fn document ->
+      score = calculate_relevance(document, context_lower, context_words)
+      {document, score}
+    end)
+    |> Enum.filter(fn {_document, score} -> score > 0 end)
+    |> Enum.map(fn {document, score} ->
+      {document, score + source_priority_bonus(document)}
+    end)
+    |> Enum.sort_by(fn {document, score} -> {-score, document.entry.key || ""} end)
+    |> Enum.take(normalize_max_results(max_results))
+    |> Enum.map(fn {document, _score} -> document.entry end)
+  end
+
+  defp normalize_max_results(value) when is_integer(value) and value > 0, do: value
+  defp normalize_max_results(_value), do: 0
+
+  defp rebuild_global_derived(state) do
+    search = build_search_documents(state.global_skills)
+
+    %{
+      state
+      | global_search: search,
+        project_skills: %{},
+        project_search: %{},
+        project_identities: %{},
+        project_identity_checked_at: %{}
+    }
+  end
+
+  defp rebuild_project_derived(state, cwd) do
+    project_skills = Map.get(state.project_skills, cwd, %{})
+
+    # Global SKILL.md bodies have already been read into global_search. Only
+    # new/overriding project entries need disk reads at this boundary.
+    project_documents = build_search_documents(project_skills)
+    search = Map.merge(state.global_search, project_documents)
+
+    %{
+      state
+      | project_search: Map.put(state.project_search, cwd, search)
+    }
+  end
+
+  defp build_search_documents(skills) do
+    Map.new(skills, fn {key, entry} ->
+      body_lower =
+        case Entry.content(entry) do
+          {:ok, content} ->
+            content
+            |> Manifest.parse_body()
+            |> String.slice(0, 10_000)
+            |> String.downcase()
+
+          _ ->
+            ""
+        end
+
+      keywords =
+        case entry.manifest do
+          %{"keywords" => values} when is_list(values) -> values
+          %{keywords: values} when is_list(values) -> values
+          _ -> []
+        end
+
+      document = %{
+        entry: entry,
+        key_lower: String.downcase(entry.key || ""),
+        name_lower: String.downcase(entry.name || entry.key || ""),
+        description_lower: String.downcase(entry.description || ""),
+        keywords_lower: Enum.map(keywords, &String.downcase/1),
+        body_lower: body_lower
+      }
+
+      {key, document}
+    end)
+  end
+
+  defp disabled_keys(cwd) do
+    Config.load_config(cwd)
+    |> Map.get("disabled", [])
+    |> Enum.filter(&is_binary/1)
+    |> MapSet.new()
+  end
+
+  # File discovery/status consumers call this outside the Registry process.
+  # The filesystem walk therefore does not serialize unrelated lookups; only a
+  # changed identity asks the GenServer to rebuild its cached entries/excerpts.
+  defp ensure_current(cwd) do
+    now = monotonic_ms()
+
+    case GenServer.call(__MODULE__, {:reserve_identity_check, cwd, now}) do
+      {false, false} ->
+        :ok
+
+      {check_global?, check_project?} ->
+        {global_identity, project_identity} =
+          cache_identity(cwd, check_global?, check_project?)
+
+        GenServer.call(
+          __MODULE__,
+          {:ensure_current, cwd, global_identity, project_identity}
+        )
+    end
+  end
+
+  defp identity_check_due?(nil, _now), do: true
+
+  defp identity_check_due?(last_checked_at, now),
+    do: now - last_checked_at >= @identity_check_interval_ms
+
+  defp maybe_reload_global(%{global_identity: identity} = state, identity), do: state
+  defp maybe_reload_global(state, nil), do: state
+
+  defp maybe_reload_global(state, identity) do
+    %{load_global_skills(state) | global_identity: identity}
+  end
+
+  defp maybe_reload_project(state, _cwd, nil), do: state
+
+  defp maybe_reload_project(state, cwd, identity) when is_binary(cwd) do
+    if Map.get(state.project_identities, cwd) == identity do
+      state
+    else
+      state = load_project_skills(state, cwd)
+
+      %{
+        state
+        | project_identities: Map.put(state.project_identities, cwd, identity)
+      }
+    end
+  end
+
+  defp maybe_reload_project(state, _cwd, _identity), do: state
+
+  defp cache_identity(cwd) do
+    global = scope_identity(Config.global_skills_dirs(), Lockfile.path(:global))
+
+    project =
+      if is_binary(cwd) do
+        scope_identity(Config.project_skills_dirs(cwd), Lockfile.path({:project, cwd}))
+      end
+
+    {global, project}
+  end
+
+  defp cache_identity(cwd, check_global?, check_project?) do
+    global =
+      if check_global?, do: scope_identity(Config.global_skills_dirs(), Lockfile.path(:global))
+
+    project =
+      if check_project? and is_binary(cwd) do
+        scope_identity(Config.project_skills_dirs(cwd), Lockfile.path({:project, cwd}))
+      end
+
+    {global, project}
+  end
+
+  defp scope_identity(dirs, lockfile) do
+    files =
+      dirs
+      |> Enum.flat_map(&skill_file_identities/1)
+      |> Enum.sort()
+
+    {dirs, files, file_identity(lockfile)}
+  end
+
+  defp skill_file_identities(dir) do
+    case File.ls(dir) do
+      {:ok, names} ->
+        names
+        |> Enum.sort()
+        |> Enum.flat_map(fn name ->
+          skill_file = Path.join([dir, name, "SKILL.md"])
+
+          if File.regular?(skill_file) do
+            [{skill_file, file_identity(skill_file)}]
+          else
+            []
+          end
+        end)
+
+      {:error, _reason} ->
+        []
+    end
+  end
+
+  defp file_identity(path) do
+    with {:ok, stat} <- File.stat(path, time: :posix),
+         {:ok, content} <- File.read(path) do
+      digest = :crypto.hash(:sha256, content)
+
+      {:ok, stat.type, stat.size, stat.mtime, stat.ctime, stat.mode, stat.inode, digest}
+    else
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp monotonic_ms, do: System.monotonic_time(:millisecond)
 end

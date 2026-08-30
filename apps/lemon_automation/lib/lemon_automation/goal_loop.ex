@@ -1,7 +1,14 @@
 defmodule LemonAutomation.GoalLoop do
-  @moduledoc false
+  @moduledoc """
+  Applies judge verdicts to durable goals and runs bounded autonomous loops.
 
-  alias LemonAutomation.{GoalContinuation, GoalJudge, RunCompletionWaiter}
+  Autonomous continuation ticks wait through the shared race-free
+  submit-and-wait lifecycle. The completion topic is subscribed before the
+  continuation is submitted, so a router/runtime that completes synchronously
+  cannot strand the loop until timeout.
+  """
+
+  alias LemonAutomation.{GoalContinuation, GoalJudge}
   alias LemonAgent.Workspace.GoalStore
 
   @spec run_once(binary(), keyword()) ::
@@ -46,9 +53,12 @@ defmodule LemonAutomation.GoalLoop do
   end
 
   defp run_autonomous_tick(session_key, opts, tick_count, max_ticks, _last_result) do
-    case run_once(session_key, opts) do
-      {:ok, %{verdict: %{action: :continue}, run_id: run_id} = result} when is_binary(run_id) ->
-        case wait_for_run(run_id, opts) do
+    tick_opts = Keyword.put(opts, :await_completion, true)
+
+    case run_once(session_key, tick_opts) do
+      {:ok, %{verdict: %{action: :continue}, run_id: run_id, completion: completion} = result}
+      when is_binary(run_id) ->
+        case completion do
           {:ok, _output} ->
             maybe_sleep(opts)
             run_autonomous_tick(session_key, opts, tick_count + 1, max_ticks, result)
@@ -164,13 +174,6 @@ defmodule LemonAutomation.GoalLoop do
         GoalStore.pause(session_key, opts)
         {:error, {:judge_failed, reason}}
     end
-  end
-
-  defp wait_for_run(run_id, opts) do
-    waiter_mod = Keyword.get(opts, :waiter_mod, RunCompletionWaiter)
-    timeout_ms = Keyword.get(opts, :wait_timeout_ms, 300_000)
-    wait_opts = Keyword.get(opts, :wait_opts, [])
-    waiter_mod.wait(run_id, timeout_ms, wait_opts)
   end
 
   defp maybe_sleep(opts) do

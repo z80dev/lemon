@@ -4,6 +4,7 @@ defmodule CodingAgent.Tools.AgentTest do
 
   alias CodingAgent.Session.Presentation
   alias LemonAgent.Test.Mocks
+  alias LemonAgent.AbortSignal
   alias Elixir.CodingAgent.{RunGraph, Subagents, TaskStore}
   alias Elixir.CodingAgent.Tools.Agent, as: AgentTool
   alias CodingAgent.Messages
@@ -867,6 +868,43 @@ defmodule CodingAgent.Tools.AgentTest do
     assert LemonAgent.get_text(poll) == "hello from store"
   end
 
+  test "watcher timeout marks tracking lost and reconciles a late successful completion" do
+    result =
+      AgentTool.execute(
+        "call_late_completion",
+        %{
+          "agent_id" => "oracle",
+          "prompt" => "finish after local watcher timeout",
+          "async" => true,
+          "auto_followup" => false
+        },
+        nil,
+        nil,
+        "/tmp",
+        run_orchestrator: __MODULE__.AgentTestStubRunOrchestrator,
+        session_key: "agent:main:main",
+        agent_tool_watcher_timeout_ms: 20,
+        agent_tool_reconciliation_timeout_ms: 1_000
+      )
+
+    assert_receive {:router_submit, %RunRequest{}, 1}
+
+    wait_until(fn ->
+      match?(
+        {:ok, %{status: :tracking_lost}, _events},
+        TaskStore.get(result.details.task_id)
+      )
+    end)
+
+    assert {:ok, %{status: :running}} = RunGraph.get(result.details.run_id)
+    complete_delegated_run(result.details.run_id, "late success")
+
+    completed = wait_for_completed(result.details.task_id)
+    assert completed.details.status == "completed"
+    assert LemonAgent.get_text(completed) == "late success"
+    assert {:ok, %{status: :completed}} = RunGraph.get(result.details.run_id)
+  end
+
   test "poll returns error for unknown task id" do
     assert {:error, "Unknown task_id: missing_task"} =
              AgentTool.execute(
@@ -971,6 +1009,59 @@ defmodule CodingAgent.Tools.AgentTest do
     refute_receive {:session_async_followup, %CustomMessage{}}, 100
   end
 
+  test "wait_any join suppresses only its returned delegated winner" do
+    task_a = queue_delegated_run("wait-any-a")
+    task_b = queue_delegated_run("wait-any-b")
+
+    joiner =
+      Task.async(fn ->
+        AgentTool.execute(
+          "call_wait_any",
+          %{
+            "action" => "join",
+            "task_ids" => [task_a.details.task_id, task_b.details.task_id],
+            "mode" => "wait_any"
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
+      end)
+
+    wait_for_followup_suppression(task_a.details.task_id)
+    wait_for_followup_suppression(task_b.details.task_id)
+    complete_delegated_run(task_b.details.run_id, "winner")
+
+    assert %LemonAgent.Types.AgentToolResult{details: %{mode: "wait_any"}} =
+             Task.await(joiner, 1_000)
+
+    refute TaskStore.auto_followup_suppressed?(task_a.details.task_id)
+    assert TaskStore.auto_followup_suppressed?(task_b.details.task_id)
+  end
+
+  test "aborted delegated join releases transient followup suppression" do
+    task = queue_delegated_run("abort-join")
+    signal = AbortSignal.new()
+
+    joiner =
+      Task.async(fn ->
+        AgentTool.execute(
+          "call_abort_join",
+          %{"action" => "join", "task_id" => task.details.task_id},
+          signal,
+          nil,
+          "/tmp",
+          []
+        )
+      end)
+
+    wait_for_followup_suppression(task.details.task_id)
+    AbortSignal.abort(signal)
+    assert {:error, "Operation aborted"} = Task.await(joiner, 1_000)
+    refute TaskStore.auto_followup_suppressed?(task.details.task_id)
+  end
+
   test "join returns error for unknown task id" do
     assert {:error, "Unknown task_id: missing_task"} =
              AgentTool.execute(
@@ -1007,6 +1098,18 @@ defmodule CodingAgent.Tools.AgentTest do
       _ ->
         Process.sleep(25)
         wait_for_completed(task_id, attempts - 1)
+    end
+  end
+
+  defp wait_until(fun, attempts \\ 100)
+  defp wait_until(_fun, 0), do: flunk("condition did not become true")
+
+  defp wait_until(fun, attempts) do
+    if fun.() do
+      :ok
+    else
+      Process.sleep(10)
+      wait_until(fun, attempts - 1)
     end
   end
 

@@ -9,7 +9,7 @@ defmodule LemonAutomation.RunSubmitterTest do
 
     def submit(params) do
       send(self(), {:router_submit, params})
-      {:ok, "run_ok"}
+      {:ok, params.run_id}
     end
   end
 
@@ -40,7 +40,7 @@ defmodule LemonAutomation.RunSubmitterTest do
   defmodule Waiter do
     @moduledoc false
 
-    def wait(run_id, timeout_ms, _opts) do
+    def wait_already_subscribed(run_id, timeout_ms, _opts) do
       send(self(), {:wait_called, run_id, timeout_ms})
       {:ok, "done"}
     end
@@ -145,10 +145,11 @@ defmodule LemonAutomation.RunSubmitterTest do
              )
 
     assert_receive {:router_submit, params}
+    submitted_run_id = params.run_id
     assert params.meta.cron_run_id == "run_submit"
     assert params.session_key != job.session_key
     assert SessionKey.valid?(params.session_key)
-    assert_receive {:wait_called, "run_ok", 42_000}
+    assert_receive {:wait_called, ^submitted_run_id, 42_000}
 
     assert {:ok, memory_text} = File.read(job.memory_file)
     assert memory_text =~ "## Run run_submit"

@@ -243,21 +243,99 @@ defmodule CodingAgent.TaskStoreTest do
 
     test "handles concurrent event appends" do
       task_id = TaskStore.new_task(%{description: "Concurrent events"})
+      parent = self()
 
-      # Use higher delays to reduce contention
       tasks =
         Enum.map(1..20, fn i ->
           Task.async(fn ->
-            Process.sleep(Enum.random(1..10))
+            send(parent, {:ready, self()})
+
+            receive do
+              :append -> :ok
+            end
+
             TaskStore.append_event(task_id, %{index: i})
           end)
         end)
 
+      workers = for _ <- tasks, do: assert_receive({:ready, pid}) && pid
+      Enum.each(workers, &send(&1, :append))
       Enum.each(tasks, &Task.await/1)
 
       assert {:ok, _, events} = TaskStore.get(task_id)
-      # Due to race conditions, we may not get all 20, but should get most
-      assert length(events) >= 10
+      assert length(events) == 20
+      assert MapSet.new(Enum.map(events, & &1.index)) == MapSet.new(1..20)
+    end
+
+    test "terminal transition, events, and followup suppression remain coherent" do
+      task_id = TaskStore.new_task(%{description: "Lifecycle race"})
+      parent = self()
+
+      operations =
+        [
+          fn -> TaskStore.mark_running(task_id) end,
+          fn -> TaskStore.finish(task_id, %{winner: :finish}) end,
+          fn -> TaskStore.fail(task_id, :failed) end,
+          fn -> TaskStore.suppress_auto_followup(task_id) end
+        ] ++
+          Enum.map(1..20, fn index ->
+            fn -> TaskStore.append_event(task_id, %{index: index}) end
+          end)
+
+      tasks =
+        Enum.map(operations, fn operation ->
+          Task.async(fn ->
+            send(parent, {:ready, self()})
+
+            receive do
+              :go -> operation.()
+            end
+          end)
+        end)
+
+      workers = for _ <- tasks, do: assert_receive({:ready, pid}) && pid
+      Enum.each(workers, &send(&1, :go))
+      assert Enum.all?(Task.await_many(tasks), &(&1 == :ok))
+
+      assert {:ok, record, events} = TaskStore.get(task_id)
+      assert record.status in [:completed, :error]
+      assert Map.has_key?(record, :result) != Map.has_key?(record, :error)
+      assert is_integer(record.auto_followup_suppressed_at)
+      assert MapSet.new(Enum.map(events, & &1.index)) == MapSet.new(1..20)
+
+      terminal_record = record
+      assert :ok = TaskStore.mark_running(task_id)
+      assert :ok = TaskStore.finish(task_id, %{winner: :late_finish})
+      assert :ok = TaskStore.fail(task_id, :late_failure)
+      assert {:ok, ^terminal_record, _events} = TaskStore.get(task_id)
+    end
+
+    test "join reservations are released when their owner crashes" do
+      task_id = TaskStore.new_task(%{description: "Interrupted join"})
+      parent = self()
+
+      owner =
+        spawn(fn ->
+          join_token = make_ref()
+          :ok = TaskStore.begin_auto_followup_join([task_id], join_token)
+          send(parent, {:reserved, self()})
+
+          receive do
+            :finish -> TaskStore.finish_auto_followup_join([task_id], [], join_token)
+          end
+        end)
+
+      assert_receive {:reserved, ^owner}
+      assert TaskStore.auto_followup_suppressed?(task_id)
+
+      Process.exit(owner, :kill)
+
+      CodingAgent.AsyncHelpers.assert_eventually(fn ->
+        not TaskStore.auto_followup_suppressed?(task_id)
+      end)
+
+      assert {:ok, record, _events} = TaskStore.get(task_id)
+      assert Map.get(record, :auto_followup_join_tokens, []) == []
     end
   end
 

@@ -22,6 +22,7 @@ defmodule LemonAgent.Context do
   Several truncation strategies are available:
 
   - `:sliding_window` - Keep most recent N messages (default)
+  - `:keep_bookends` - Keep balanced oldest/newest messages within both limits
   - `:keep_system_user` - Keep system prompt + first user message + recent
   - `:summarize_old` - Replace old messages with a summary (requires LLM call)
 
@@ -235,8 +236,11 @@ defmodule LemonAgent.Context do
   @doc """
   Truncates message history to fit within limits.
 
-  Uses a sliding window strategy by default, keeping the most recent messages.
-  The first user message is always preserved to maintain conversation context.
+  Uses a sliding window strategy by default, keeping the most recent messages
+  in their original order. The first user message is always preserved to
+  maintain conversation context. Assistant tool-call messages and their
+  contiguous tool-result messages are treated as atomic transcript units, so
+  truncation never creates an orphaned call or result.
 
   ## Options
 
@@ -248,7 +252,7 @@ defmodule LemonAgent.Context do
   ## Strategies
 
   - `:sliding_window` - Keep most recent messages within limits
-  - `:keep_bookends` - Keep first and last N messages, drop middle
+  - `:keep_bookends` - Keep balanced oldest/newest messages within both limits
 
   ## Returns
 
@@ -416,58 +420,149 @@ defmodule LemonAgent.Context do
     if length(messages) <= max_messages and estimate_size(messages, nil) <= max_chars do
       messages
     else
-      # Find first user message if we need to preserve it
-      {first_user, first_user_idx} =
+      units = transcript_units(messages)
+
+      # Find first user message if we need to preserve it. A user message is a
+      # standalone unit, but retaining the unit rather than the bare message
+      # keeps this invariant explicit if message shapes evolve later.
+      {_first_user, first_user_idx} =
         if keep_first_user do
           find_first_user_message(messages)
         else
           {nil, nil}
         end
 
-      # Start with recent messages and work backward
-      recent_messages = Enum.reverse(messages)
-      reserved_chars = if first_user, do: message_char_count(first_user), else: 0
+      reserved_unit =
+        Enum.find(units, fn unit ->
+          is_integer(first_user_idx) and first_user_idx in unit.range
+        end)
 
-      {kept_reversed, _char_total} =
-        recent_messages
-        |> Enum.reduce_while({[], reserved_chars}, fn msg, {acc, chars} ->
-          msg_chars = message_char_count(msg)
-          new_chars = chars + msg_chars
-          new_count = length(acc) + 1 + if(first_user, do: 1, else: 0)
+      recent_units =
+        if reserved_unit do
+          Enum.filter(units, &(&1.first_index > reserved_unit.first_index))
+        else
+          units
+        end
 
-          if new_count <= max_messages and new_chars <= max_chars do
-            {:cont, {[msg | acc], new_chars}}
+      reserved_count = if reserved_unit, do: reserved_unit.count, else: 0
+      reserved_chars = if reserved_unit, do: reserved_unit.chars, else: 0
+
+      # Traversing newest-to-oldest while prepending produces chronological
+      # order directly. Do not reverse this accumulator a second time.
+      {kept_units, _count, _chars} =
+        recent_units
+        |> Enum.reverse()
+        |> Enum.reduce({[], reserved_count, reserved_chars}, fn unit, {acc, count, chars} ->
+          if count + unit.count <= max_messages and chars + unit.chars <= max_chars do
+            {[unit | acc], count + unit.count, chars + unit.chars}
           else
-            {:halt, {acc, chars}}
+            {acc, count, chars}
           end
         end)
 
-      kept = Enum.reverse(kept_reversed)
-
-      # Prepend first user message if needed and not already included
-      if first_user && first_user_idx && first_user_idx >= length(messages) - length(kept) do
-        # First user message is already in the kept set
-        kept
-      else
-        if first_user do
-          [first_user | kept]
-        else
-          kept
-        end
-      end
+      [reserved_unit]
+      |> Enum.reject(&is_nil/1)
+      |> Kernel.++(kept_units)
+      |> flatten_units()
     end
   end
 
-  defp truncate_bookends(messages, max_messages, _max_chars) do
-    if length(messages) <= max_messages do
+  defp truncate_bookends(messages, max_messages, max_chars) do
+    if length(messages) <= max_messages and estimate_size(messages, nil) <= max_chars do
       messages
     else
-      half = div(max_messages, 2)
-      first_half = Enum.take(messages, half)
-      last_half = Enum.take(messages, -half)
-      first_half ++ last_half
+      units = transcript_units(messages)
+
+      {selected, _count, _chars} =
+        units
+        |> bookend_indices()
+        |> Enum.reduce({MapSet.new(), 0, 0}, fn index, {selected, count, chars} ->
+          unit = Enum.at(units, index)
+
+          if count + unit.count <= max_messages and chars + unit.chars <= max_chars do
+            {MapSet.put(selected, index), count + unit.count, chars + unit.chars}
+          else
+            {selected, count, chars}
+          end
+        end)
+
+      units
+      |> Enum.with_index()
+      |> Enum.filter(fn {_unit, index} -> MapSet.member?(selected, index) end)
+      |> Enum.map(&elem(&1, 0))
+      |> flatten_units()
     end
   end
+
+  # A tool transcript is valid only when the assistant call and its immediately
+  # following results survive together. Grouping before either truncation
+  # strategy makes that structural rule independent of size-selection policy.
+  defp transcript_units(messages), do: transcript_units(messages, 0, [])
+
+  defp transcript_units([], _index, acc), do: Enum.reverse(acc)
+
+  defp transcript_units([message | rest], index, acc) do
+    if assistant_tool_call_message?(message) do
+      {results, remaining} = Enum.split_while(rest, &tool_result_message?/1)
+      unit_messages = [message | results]
+      count = length(unit_messages)
+
+      unit = %{
+        messages: unit_messages,
+        count: count,
+        chars: Enum.reduce(unit_messages, 0, &(message_char_count(&1) + &2)),
+        first_index: index,
+        range: index..(index + count - 1)
+      }
+
+      transcript_units(remaining, index + count, [unit | acc])
+    else
+      unit = %{
+        messages: [message],
+        count: 1,
+        chars: message_char_count(message),
+        first_index: index,
+        range: index..index
+      }
+
+      transcript_units(rest, index + 1, [unit | acc])
+    end
+  end
+
+  defp assistant_tool_call_message?(%{role: role, content: content})
+       when role in [:assistant, "assistant"] and is_list(content),
+       do: Enum.any?(content, &tool_call_block?/1)
+
+  defp assistant_tool_call_message?(%{"role" => role, "content" => content})
+       when role in [:assistant, "assistant"] and is_list(content),
+       do: Enum.any?(content, &tool_call_block?/1)
+
+  defp assistant_tool_call_message?(_message), do: false
+
+  defp tool_call_block?(%{type: type}) when type in [:tool_call, "tool_call"], do: true
+  defp tool_call_block?(%{"type" => type}) when type in [:tool_call, "tool_call"], do: true
+  defp tool_call_block?(_block), do: false
+
+  defp tool_result_message?(%{role: role}) when role in [:tool_result, "tool_result"], do: true
+
+  defp tool_result_message?(%{"role" => role}) when role in [:tool_result, "tool_result"],
+    do: true
+
+  defp tool_result_message?(_message), do: false
+
+  defp flatten_units(units), do: Enum.flat_map(units, & &1.messages)
+
+  defp bookend_indices(units) do
+    do_bookend_indices(0, length(units) - 1, :first, []) |> Enum.reverse()
+  end
+
+  defp do_bookend_indices(left, right, _side, acc) when left > right, do: acc
+
+  defp do_bookend_indices(left, right, :first, acc),
+    do: do_bookend_indices(left + 1, right, :last, [left | acc])
+
+  defp do_bookend_indices(left, right, :last, acc),
+    do: do_bookend_indices(left, right - 1, :first, [right | acc])
 
   defp find_first_user_message(messages) do
     messages

@@ -1,5 +1,13 @@
 defmodule CodingAgent.Session.CompactionLifecycle do
-  @moduledoc false
+  @moduledoc """
+  Owns the CodingAgent session's background auto-compaction lifecycle.
+
+  Auto-compaction runs only against the session signature it captured. If a
+  new prompt arrives while that background snapshot is being compacted, the
+  worker is canceled and demonitoring/timer cleanup happens synchronously
+  before the prompt is deferred. This keeps prompt latency independent of the
+  stale worker and prevents its late result from mutating the new turn.
+  """
 
   require Logger
 
@@ -24,6 +32,23 @@ defmodule CodingAgent.Session.CompactionLifecycle do
       callbacks.ui_set_working_message,
       callbacks.ui_notify
     )
+  end
+
+  @spec cancel_for_new_prompt(map(), callbacks(map())) :: map()
+  def cancel_for_new_prompt(%{auto_compaction_in_progress: false} = state, _callbacks),
+    do: state
+
+  def cancel_for_new_prompt(state, callbacks) do
+    state =
+      state
+      |> CompactionManager.maybe_kill_background_task(
+        state.auto_compaction_task_pid,
+        :superseded_by_prompt
+      )
+      |> CompactionManager.clear_auto_compaction_state()
+
+    callbacks.ui_set_working_message.(state, nil)
+    state
   end
 
   @spec maybe_trigger(map(), pid(), callbacks(map())) :: map()

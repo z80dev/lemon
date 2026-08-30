@@ -843,12 +843,33 @@ defmodule LemonGateway.EngineLockTest do
       |> start_engine_lock()
     end
 
-    test "reclaims locks older than max_lock_age_ms", %{lock: lock} do
+    test "does not transfer an over-age lock while its owner is alive", %{lock: lock} do
+      handler_id = "engine-lock-over-age-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:lemon, :gateway, :engine_lock, :over_age_live_owner],
+          fn event, measurements, metadata, test_pid ->
+            send(test_pid, {:engine_lock_telemetry, event, measurements, metadata})
+          end,
+          self()
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
       {:ok, _release} = GenServer.call(lock, {:acquire, :stale_key, 5_000})
 
       Process.sleep(150)
 
-      assert {:ok, _release} = GenServer.call(lock, {:acquire, :stale_key, 300}, 1_000)
+      assert {:error, :timeout} = GenServer.call(lock, {:acquire, :stale_key, 60}, 1_000)
+
+      assert_receive {:engine_lock_telemetry,
+                      [:lemon, :gateway, :engine_lock, :over_age_live_owner],
+                      %{age_ms: age_ms, threshold_ms: 120}, %{thread_key: ":stale_key"}},
+                     500
+
+      assert age_ms > 120
     end
 
     test "does not reclaim fresh locks before max age", %{lock: lock} do

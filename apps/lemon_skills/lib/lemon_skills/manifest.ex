@@ -136,13 +136,13 @@ defmodule LemonSkills.Manifest do
   @doc "Get required binaries (legacy `requires.bins` field)."
   @spec required_bins(manifest()) :: [String.t()]
   def required_bins(manifest) do
-    manifest |> Map.get("requires", %{}) |> Map.get("bins", []) |> ensure_list()
+    manifest |> nested_map("requires") |> Map.get("bins", []) |> ensure_string_list()
   end
 
   @doc "Get required config/env vars from legacy `requires.config`."
   @spec required_config(manifest()) :: [String.t()]
   def required_config(manifest) do
-    manifest |> Map.get("requires", %{}) |> Map.get("config", []) |> ensure_list()
+    manifest |> nested_map("requires") |> Map.get("config", []) |> ensure_string_list()
   end
 
   @doc "Get v2 `required_environment_variables` (falls back to `requires.config`)."
@@ -150,26 +150,26 @@ defmodule LemonSkills.Manifest do
   def required_environment_variables(manifest) do
     case Map.get(manifest, "required_environment_variables") do
       nil -> required_config(manifest)
-      vars -> ensure_list(vars)
+      vars -> ensure_string_list(vars)
     end
   end
 
   @doc "Get v2 `requires_tools` list."
   @spec requires_tools(manifest()) :: [String.t()]
   def requires_tools(manifest) do
-    manifest |> Map.get("requires_tools", []) |> ensure_list()
+    manifest |> Map.get("requires_tools", []) |> ensure_string_list()
   end
 
   @doc "Get v2 `fallback_for_tools` list."
   @spec fallback_for_tools(manifest()) :: [String.t()]
   def fallback_for_tools(manifest) do
-    manifest |> Map.get("fallback_for_tools", []) |> ensure_list()
+    manifest |> Map.get("fallback_for_tools", []) |> ensure_string_list()
   end
 
   @doc "Get v2 `platforms` list (defaults to `[\"any\"]` when absent)."
   @spec platforms(manifest()) :: [String.t()]
   def platforms(manifest) do
-    manifest |> Map.get("platforms", ["any"]) |> ensure_list()
+    manifest |> Map.get("platforms", ["any"]) |> ensure_string_list()
   end
 
   @doc "Get v2 `references` list."
@@ -185,7 +185,14 @@ defmodule LemonSkills.Manifest do
   """
   @spec lemon_category(manifest()) :: String.t() | nil
   def lemon_category(manifest) do
-    get_in(manifest, ["metadata", "lemon", "category"])
+    manifest
+    |> nested_map("metadata")
+    |> nested_map("lemon")
+    |> Map.get("category")
+    |> case do
+      category when is_binary(category) -> category
+      _ -> nil
+    end
   end
 
   # ---------------------------------------------------------------------------
@@ -201,4 +208,16 @@ defmodule LemonSkills.Manifest do
 
   defp ensure_list(v) when is_list(v), do: v
   defp ensure_list(_), do: []
+
+  defp ensure_string_list(v) when is_list(v), do: Enum.filter(v, &is_binary/1)
+  defp ensure_string_list(_), do: []
+
+  defp nested_map(map, key) when is_map(map) do
+    case Map.get(map, key) do
+      nested when is_map(nested) -> nested
+      _ -> %{}
+    end
+  end
+
+  defp nested_map(_value, _key), do: %{}
 end

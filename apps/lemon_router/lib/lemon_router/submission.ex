@@ -4,7 +4,8 @@ defmodule LemonRouter.Submission do
 
   `LemonCore.RunRequest` remains the permissive router-facing boundary and
   `LemonCore.ExecutionCommand` is the runtime-facing execution contract.
-  This struct owns the normalized router handoff in between.
+  This struct owns the normalized router handoff in between, including the
+  pending-compaction marker that may be consumed after coordinator acceptance.
   """
 
   alias LemonCore.{ExecutionCommand, MapHelpers, RunPhase}
@@ -19,6 +20,7 @@ defmodule LemonRouter.Submission do
     run_supervisor: LemonRouter.RunSupervisor,
     run_process_module: LemonRouter.RunProcess,
     run_process_opts: %{},
+    pending_compaction_marker: nil,
     meta: %{},
     current_phase: nil
   ]
@@ -32,6 +34,7 @@ defmodule LemonRouter.Submission do
           run_supervisor: module() | pid() | atom(),
           run_process_module: module(),
           run_process_opts: map(),
+          pending_compaction_marker: map() | nil,
           meta: map(),
           current_phase: RunPhase.t() | nil
         }
@@ -88,6 +91,7 @@ defmodule LemonRouter.Submission do
       run_process_module:
         MapHelpers.get_key(attrs, :run_process_module) || LemonRouter.RunProcess,
       run_process_opts: normalize_run_process_opts(MapHelpers.get_key(attrs, :run_process_opts)),
+      pending_compaction_marker: MapHelpers.get_key(attrs, :pending_compaction_marker),
       meta: normalize_meta(MapHelpers.get_key(attrs, :meta)),
       current_phase: current_phase
     }

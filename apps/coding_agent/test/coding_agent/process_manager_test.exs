@@ -21,6 +21,16 @@ defmodule CodingAgent.ProcessManagerTest do
   end
 
   describe "exec/1" do
+    test "falls back to direct execution when LaneQueue exits" do
+      assert {:ok, process_id} =
+               ProcessManager.exec(
+                 command: "echo lane-fallback",
+                 lane_queue: :missing_lane_queue_for_process_manager_test
+               )
+
+      assert is_binary(process_id)
+    end
+
     test "starts a background process and returns process_id" do
       assert {:ok, process_id} = ProcessManager.exec(command: "sleep 60")
       assert is_binary(process_id)

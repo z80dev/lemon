@@ -404,6 +404,8 @@ Key env vars:
 3. Add to `CodingAgent.Tools` registry
 4. Update tool policy if needed
 
+Data-bearing tool output must follow `LemonAgent.Types.AgentToolResult.trust`: ordinary local file/search/shell results, remote/API data, and community/project skill content are untrusted and fenced at the pre-LLM boundary. Intentional bootstrap instruction loading and audited builtin skill semantics are the explicit trusted paths.
+
 ### Adding an AI Provider
 
 1. Create provider module in `apps/lemon_ai/lib/lemon_ai/providers/`

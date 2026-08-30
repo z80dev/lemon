@@ -59,7 +59,11 @@ Inbound transport
 - Router may reference `LemonChannels.Dispatcher`, but not `LemonChannels.OutboundPayload`.
 - Router may emit `LemonCore.DeliveryIntent`, but channel renderers decide payload shape.
 - Router builds `%LemonCore.ExecutionCommand{}` and calls the configured `LemonCore.EngineRuntime`; it must not construct `%LemonGateway.ExecutionRequest{}` or call `LemonGateway.Runtime` directly.
+- Run-specific aborts are serialized through `RunOrchestrator` before coordinator/process cancellation. Its bounded tombstone map rejects a fixed run ID when abort wins the submission race; when submission wins, the same serialization guarantees normal cancellation sees the accepted run.
 - Router owns pending-compaction prompt mutation.
+- Fresh pending-compaction markers are prepared before submission but consumed
+  only after `SessionCoordinator.submit/2` accepts the run; submission errors
+  preserve the marker for retry, while stale/empty markers may clear eagerly.
 - Router uses `PendingCompactionStore`; it must not touch Telegram message-index tables directly.
 - Router uses `LemonChannels.TargetDirectory` for human-friendly channel target discovery; it must not read Telegram or Discord known-target stores directly.
 - Queue semantics belong in `SessionCoordinator`, not in gateway workers.
@@ -204,6 +208,17 @@ it keeps the full in-memory action order and leaves presentation budgeting to
 the renderer/channel layer.
 Aborted runs that never bind to a live gateway run must still synthesize `:run_completed`; otherwise
 `SessionCoordinator` will retain the session as busy forever.
+An owner that knows a fixed run ID before submission may abort it safely: the
+orchestrator tombstone prevents later acceptance, while an already accepted run
+continues through the normal exactly-once abort completion path.
+Runtime submission retries are bounded by a pre-start deadline. Persistent runtime
+unavailability or rejection must synthesize exactly one structured `:run_completed`
+failure so `SessionCoordinator` releases the conversation; transient outages may
+retry with backoff until that deadline.
+If a queued submission later fails in `RunStarter`, `SessionCoordinator` emits one
+structured start-failure completion before bridge cleanup and advances to the next
+queued submission. An ambiguously started child already present in `RunRegistry`
+must be adopted instead of receiving a second synthetic completion.
 Started runs that lose their gateway process before the router binds a monitor must also synthesize
 `:run_completed`, but only after a short completion grace window so a real late `:run_completed`
 from the bus can win over the synthetic fallback.
@@ -216,6 +231,8 @@ the gateway or user explicitly ends them.
 Update:
 
 - `router.ex` for inbound prompt rewriting
+- `pending_compaction.ex` for shared preparation, secure history envelopes,
+  whole-entry truncation, and post-submit consumption
 - `run_process/compaction_trigger.ex` for marker creation and overflow handling
 - `pending_compaction_store.ex` for storage access if needed
 

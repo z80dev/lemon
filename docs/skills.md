@@ -1,10 +1,10 @@
 # LemonSkills - Skill Definitions and Loading
 
-This document describes the `LemonSkills` module for managing reusable knowledge modules that get injected into agent context when relevant.
+This document describes the `LemonSkills` module for managing reusable knowledge modules that agents load explicitly when relevant.
 
 ## Overview
 
-Skills are markdown files with YAML frontmatter that contain domain-specific knowledge. When a user's request matches a skill's description, the skill content is automatically injected into the system prompt to provide the agent with relevant context.
+Skills are markdown files with YAML frontmatter that contain domain-specific knowledge. The stable system prompt lists bounded, escaped metadata for available skills; agents use `read_skill` to load selected semantics. Relevance selection uses cached metadata, keywords, and bounded body excerpts without injecting turn-specific skill bodies into the system prompt.
 
 ## Location
 
@@ -63,6 +63,10 @@ await Bun.write("./output.txt", "Hello, World!");
 |-------|----------|-------------|
 | `name` | No | Skill identifier (defaults to directory name) |
 | `description` | Yes | Used for relevance matching |
+| `tags` | No | Up to 32 bounded safe strings |
+| `keywords` | No | Up to 32 bounded relevance terms |
+
+Present names and descriptions must be non-empty, single-line, valid UTF-8 without control or bidirectional formatting characters. Names are limited to 128 bytes, descriptions to 1,024 bytes, and each tag/keyword or requirement item to 128 bytes; list fields accept at most 32 string entries. Prompt rendering applies an additional defensive flatten/clamp/XML-escape pass and includes source/trust provenance. Community, project, and local metadata is treated as untrusted relevance data.
 
 ## API Reference
 
@@ -104,6 +108,8 @@ skills = LemonSkills.find_relevant("I need to read and write files", max_results
 **Options:**
 - `:cwd` - Project working directory (optional)
 - `:max_results` - Maximum number of skills to return (default: 3)
+
+Search documents are precomputed and automatically invalidated when a coalesced content-identity check detects skill-file, directory-set, or lockfile changes. Calls score the cached snapshot outside the Registry GenServer and break equal scores by key. Requirement/status views use current PATH, environment, and disabled-skill config rather than cached readiness. The identity check interval is 50 ms; use `refresh: true` or `LemonSkills.refresh/1` when immediate read-after-write visibility is required.
 
 ### status/2
 
@@ -350,7 +356,7 @@ skills = LemonSkills.list(cwd: cwd)
 # Or find relevant skills based on user query
 relevant = LemonSkills.find_relevant(user_query, cwd: cwd, max_results: 3)
 
-# Skills are automatically injected into the system prompt when relevant
+# Relevance is turn-local; call read_skill to load the selected content
 ```
 
 Agent tool usage emits skill-specific telemetry:

@@ -15,9 +15,23 @@ defmodule LemonAutomation.HeartbeatManager do
 
   Suppressed responses:
   - Are NOT broadcast to channels
-  - ARE logged to run history
+  - ARE persisted in cron history or the timer heartbeat store
   - ARE counted in metrics
   - Emit a `:heartbeat_suppressed` event
+
+  ## Scheduling and lifecycle
+
+  Intervals that a five-field cron expression can represent exactly use a cron
+  job. Other intervals use an Erlang timer even when they are longer than one
+  minute; for example, 90 minutes and 5 hours remain exact instead of being
+  rounded or converted to uneven cron steps. Reconfiguration disables the old
+  mechanism before enabling the new one.
+
+  Timer heartbeats allow at most one in-flight run per agent. Overlapping timer
+  ticks are skipped, counted in `stats/0`, logged, and reported through telemetry.
+  Every timer terminal result is processed through
+  the same suppression path as cron heartbeats and persisted in
+  `LemonAgent.Workspace.HeartbeatStore`.
 
   ## Usage
 
@@ -35,7 +49,7 @@ defmodule LemonAutomation.HeartbeatManager do
 
   use GenServer
 
-  alias LemonAutomation.{CronJob, CronRun, CronStore, CronManager, Events}
+  alias LemonAutomation.{CronJob, CronManager, CronRun, CronStore, Events, RunCompletionWaiter}
   alias LemonAgent.Workspace.HeartbeatStore
   alias LemonCore.Bus
 
@@ -118,9 +132,37 @@ defmodule LemonAutomation.HeartbeatManager do
 
   Called by set-heartbeats control plane method to update config.
   """
-  @spec update_config(String.t(), map()) :: :ok
+  @spec update_config(String.t(), map()) :: :ok | {:error, term()}
   def update_config(agent_id, config) do
-    GenServer.cast(__MODULE__, {:update_config, agent_id, config})
+    GenServer.call(__MODULE__, {:update_config, agent_id, config})
+  end
+
+  @doc false
+  @spec scheduling_mode(integer()) :: {:cron, binary()} | :timer | {:error, :invalid_interval}
+  def scheduling_mode(interval_ms) when not is_integer(interval_ms) or interval_ms <= 0,
+    do: {:error, :invalid_interval}
+
+  def scheduling_mode(interval_ms) when rem(interval_ms, 60_000) != 0, do: :timer
+
+  def scheduling_mode(interval_ms) do
+    minutes = div(interval_ms, 60_000)
+
+    cond do
+      minutes < 60 and rem(60, minutes) == 0 ->
+        {:cron, "*/#{minutes} * * * *"}
+
+      rem(minutes, 60) != 0 ->
+        :timer
+
+      div(minutes, 60) == 24 ->
+        {:cron, "0 0 * * *"}
+
+      div(minutes, 60) < 24 and rem(24, div(minutes, 60)) == 0 ->
+        {:cron, "0 */#{div(minutes, 60)} * * *"}
+
+      true ->
+        :timer
+    end
   end
 
   @doc """
@@ -152,10 +194,12 @@ defmodule LemonAutomation.HeartbeatManager do
       custom_patterns: [],
       active_heartbeats: %{},
       timer_configs: %{},
+      in_flight: %{},
       stats: %{
         total_heartbeats: 0,
         suppressed: 0,
-        alerts: 0
+        alerts: 0,
+        skipped_overlap: 0
       }
     }
 
@@ -173,7 +217,10 @@ defmodule LemonAutomation.HeartbeatManager do
       configs when is_list(configs) ->
         Enum.reduce(configs, state, fn {agent_id, config}, acc ->
           if config[:enabled] || config["enabled"] do
-            schedule_heartbeat_job(agent_id, config, acc)
+            case schedule_heartbeat_job(agent_id, config, acc) do
+              {:ok, next_state} -> next_state
+              {:error, _reason, next_state} -> next_state
+            end
           else
             acc
           end
@@ -191,9 +238,9 @@ defmodule LemonAutomation.HeartbeatManager do
     job_id = Map.get(run, :job_id) || Map.get(run, "job_id")
     run_id = Map.get(run, :id) || Map.get(run, "id")
 
-    job = if job_id, do: CronStore.get_job(job_id), else: nil
+    job = heartbeat_job(run, job_id)
 
-    if job && heartbeat?(job) do
+    if job do
       # Parity: use exact match only
       suppressed = healthy_response?(response)
 
@@ -202,10 +249,12 @@ defmodule LemonAutomation.HeartbeatManager do
 
       last_result = %{
         timestamp_ms: System.system_time(:millisecond),
-        status: if(suppressed, do: :ok, else: :alert),
+        status: heartbeat_status(run, suppressed),
+        terminal_status: run_value(run, :status),
         response: response,
         suppressed: suppressed,
         run_id: run_id,
+        router_run_id: run_value(run, :run_id),
         job_id: job_id
       }
 
@@ -222,7 +271,7 @@ defmodule LemonAutomation.HeartbeatManager do
                 %{} = m -> m |> CronRun.from_map() |> CronRun.suppress()
               end
 
-            CronStore.put_run(updated_run)
+            if not timer_heartbeat_run?(run), do: CronStore.put_run(updated_run)
             Events.emit_heartbeat_suppressed(updated_run, job)
 
             update_in(s.stats.suppressed, &(&1 + 1))
@@ -240,6 +289,21 @@ defmodule LemonAutomation.HeartbeatManager do
   end
 
   @impl true
+  def handle_call({:update_config, agent_id, config}, _from, state) do
+    config = merge_heartbeat_config(agent_id, config)
+    Logger.debug("[HeartbeatManager] Config updated for agent #{agent_id}: #{inspect(config)}")
+
+    case schedule_heartbeat_job(agent_id, config, state) do
+      {:ok, state} ->
+        HeartbeatStore.put_config(agent_id, config)
+        {:reply, :ok, state}
+
+      {:error, reason, state} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  @impl true
   def handle_call(:stats, _from, state) do
     {:reply, state.stats, state}
   end
@@ -249,87 +313,75 @@ defmodule LemonAutomation.HeartbeatManager do
     {:noreply, update_in(state.custom_patterns, &[pattern | &1])}
   end
 
-  @impl true
-  def handle_cast({:update_config, agent_id, config}, state) do
-    # Store configuration (set-heartbeats already stores to :heartbeat_config)
-    Logger.debug("[HeartbeatManager] Config updated for agent #{agent_id}: #{inspect(config)}")
-
-    # Schedule or cancel heartbeat cron job based on enabled state
-    state = schedule_heartbeat_job(agent_id, config, state)
-
-    {:noreply, state}
-  end
-
-  # Schedule a heartbeat cron job when enabled, or remove it when disabled
-  # Supports both cron-based scheduling (>=60s) and timer-based scheduling (<60s)
+  # Schedule a heartbeat using cron when the interval maps exactly to the cron
+  # grammar, otherwise preserve the exact interval with an OTP timer.
   defp schedule_heartbeat_job(agent_id, config, state) do
     enabled = config[:enabled] || config["enabled"]
 
     if enabled do
-      # Create or update the heartbeat cron job
       interval_ms = config[:interval_ms] || config["interval_ms"] || 60_000
       prompt = config[:prompt] || config["prompt"] || "HEARTBEAT"
-
-      # Session key for heartbeat runs
       session_key = "agent:#{agent_id}:heartbeat"
 
-      # For sub-minute intervals, use timer-based scheduling
-      # For intervals >= 60s, use cron-based scheduling with exact seconds
-      if interval_ms < 60_000 do
-        # Sub-minute interval - use timer-based scheduling
-        schedule_timer_heartbeat(agent_id, interval_ms, prompt, session_key, state)
-      else
-        # Use cron-based scheduling
-        schedule_cron_heartbeat(agent_id, interval_ms, prompt, session_key, state)
+      case scheduling_mode(interval_ms) do
+        :timer ->
+          schedule_timer_heartbeat(agent_id, interval_ms, prompt, session_key, state)
+
+        {:cron, schedule} ->
+          schedule_cron_heartbeat(
+            agent_id,
+            interval_ms,
+            prompt,
+            session_key,
+            schedule,
+            state
+          )
+
+        {:error, reason} ->
+          {:error, reason, state}
       end
     else
-      # Disable or remove the heartbeat job and cancel any timer
       state = cancel_timer_heartbeat(agent_id, state)
-
-      case find_heartbeat_job(agent_id) do
-        nil ->
-          state
-
-        existing ->
-          case CronManager.update(existing.id, %{enabled: false}) do
-            {:ok, _} ->
-              Logger.info("[HeartbeatManager] Disabled heartbeat job for agent #{agent_id}")
-
-            {:error, reason} ->
-              Logger.error(
-                "[HeartbeatManager] Failed to disable heartbeat job: #{inspect(reason)}"
-              )
-          end
-
-          # Remove from active heartbeats
-          update_in(state, [:active_heartbeats], &Map.delete(&1 || %{}, agent_id))
-      end
+      disable_cron_heartbeat(agent_id, state)
     end
   end
 
-  # Schedule timer-based heartbeat for sub-minute intervals
+  defp merge_heartbeat_config(agent_id, config) do
+    existing = HeartbeatStore.get_config(agent_id) || %{}
+    Map.merge(existing, config)
+  rescue
+    _ -> config
+  end
+
+  # Schedule timer-based heartbeat when cron cannot express the interval exactly.
   defp schedule_timer_heartbeat(agent_id, interval_ms, prompt, session_key, state) do
-    # Cancel any existing timer for this agent
     state = cancel_timer_heartbeat(agent_id, state)
 
-    # Store the heartbeat config for timer-based execution
-    heartbeat_config = %{
-      agent_id: agent_id,
-      interval_ms: interval_ms,
-      prompt: prompt,
-      session_key: session_key
-    }
+    case disable_cron_heartbeat(agent_id, state) do
+      {:ok, state} ->
+        heartbeat_config = %{
+          agent_id: agent_id,
+          interval_ms: interval_ms,
+          prompt: prompt,
+          session_key: session_key
+        }
 
-    # Schedule the first timer
-    timer_ref = Process.send_after(self(), {:timer_heartbeat, agent_id}, interval_ms)
+        timer_ref = Process.send_after(self(), {:timer_heartbeat, agent_id}, interval_ms)
 
-    Logger.info(
-      "[HeartbeatManager] Scheduled timer-based heartbeat for agent #{agent_id} every #{interval_ms}ms"
-    )
+        Logger.info(
+          "[HeartbeatManager] Scheduled timer-based heartbeat for agent #{agent_id} every #{interval_ms}ms"
+        )
 
-    state
-    |> put_in([:active_heartbeats, agent_id], {:timer, timer_ref})
-    |> put_in([:timer_configs, agent_id], heartbeat_config)
+        state =
+          state
+          |> put_in([:active_heartbeats, agent_id], {:timer, timer_ref})
+          |> put_in([:timer_configs, agent_id], heartbeat_config)
+
+        {:ok, state}
+
+      {:error, reason, state} ->
+        {:error, reason, state}
+    end
   end
 
   # Cancel timer-based heartbeat
@@ -347,13 +399,9 @@ defmodule LemonAutomation.HeartbeatManager do
     end
   end
 
-  # Schedule cron-based heartbeat for intervals >= 60s
-  defp schedule_cron_heartbeat(agent_id, interval_ms, prompt, session_key, state) do
-    # Cancel any timer-based heartbeat first
+  # Schedule cron-based heartbeat for exactly representable minute/hour intervals.
+  defp schedule_cron_heartbeat(agent_id, interval_ms, prompt, session_key, schedule, state) do
     state = cancel_timer_heartbeat(agent_id, state)
-
-    # Build cron schedule from interval - use exact seconds-based schedule
-    schedule = build_cron_schedule_from_ms(interval_ms)
 
     job_params = %{
       name: "heartbeat-#{agent_id}",
@@ -380,27 +428,55 @@ defmodule LemonAutomation.HeartbeatManager do
               "[HeartbeatManager] Created heartbeat job for agent #{agent_id}: #{job.id}"
             )
 
-            put_in(state, [:active_heartbeats, agent_id], job.id)
+            {:ok, put_in(state, [:active_heartbeats, agent_id], job.id)}
 
           {:error, reason} ->
             Logger.error("[HeartbeatManager] Failed to create heartbeat job: #{inspect(reason)}")
-            state
+            {:error, reason, state}
         end
 
       existing ->
-        # Update existing job
-        case CronManager.update(existing.id, job_params) do
+        update_params = %{
+          schedule: schedule,
+          enabled: true,
+          prompt: prompt,
+          timezone: "UTC",
+          jitter_sec: 0,
+          timeout_ms: 30_000,
+          meta: %{heartbeat: true, agent_id: agent_id, interval_ms: interval_ms}
+        }
+
+        case CronManager.update(existing.id, update_params) do
           {:ok, job} ->
             Logger.info(
               "[HeartbeatManager] Updated heartbeat job for agent #{agent_id}: #{job.id}"
             )
 
-            put_in(state, [:active_heartbeats, agent_id], job.id)
+            {:ok, put_in(state, [:active_heartbeats, agent_id], job.id)}
 
           {:error, reason} ->
             Logger.error("[HeartbeatManager] Failed to update heartbeat job: #{inspect(reason)}")
-            state
+            {:error, reason, state}
         end
+    end
+  end
+
+  defp disable_cron_heartbeat(agent_id, state) do
+    case find_heartbeat_job(agent_id) do
+      %CronJob{enabled: true} = existing ->
+        case CronManager.update(existing.id, %{enabled: false}) do
+          {:ok, _} ->
+            Logger.info("[HeartbeatManager] Disabled heartbeat job for agent #{agent_id}")
+
+            {:ok, update_in(state, [:active_heartbeats], &Map.delete(&1 || %{}, agent_id))}
+
+          {:error, reason} ->
+            Logger.error("[HeartbeatManager] Failed to disable heartbeat job: #{inspect(reason)}")
+            {:error, {:disable_cron_failed, reason}, state}
+        end
+
+      _ ->
+        {:ok, update_in(state, [:active_heartbeats], &Map.delete(&1 || %{}, agent_id))}
     end
   end
 
@@ -421,27 +497,6 @@ defmodule LemonAutomation.HeartbeatManager do
     _ -> nil
   end
 
-  # Build a cron schedule from interval in milliseconds
-  # This handles exact intervals without truncation
-  defp build_cron_schedule_from_ms(interval_ms) when interval_ms >= 3_600_000 do
-    # Run every N hours (interval >= 1 hour)
-    hours = div(interval_ms, 3_600_000)
-    "0 */#{hours} * * *"
-  end
-
-  defp build_cron_schedule_from_ms(interval_ms) when interval_ms >= 60_000 do
-    # Run every N minutes
-    # Convert to minutes, rounding to nearest minute for cron compatibility
-    minutes = div(interval_ms + 30_000, 60_000)
-    minutes = max(1, minutes)
-    "*/#{minutes} * * * *"
-  end
-
-  defp build_cron_schedule_from_ms(_) do
-    # Sub-minute intervals shouldn't use cron, but fallback to every minute
-    "* * * * *"
-  end
-
   @impl true
   def handle_info(%LemonCore.Event{type: :cron_run_completed, payload: payload}, state) do
     case LemonCore.Events.coerce(:cron_run_completed, payload) do
@@ -460,18 +515,63 @@ defmodule LemonAutomation.HeartbeatManager do
   def handle_info({:timer_heartbeat, agent_id}, state) do
     case get_in(state, [:timer_configs, agent_id]) do
       nil ->
-        # Config was removed, don't reschedule
         {:noreply, state}
 
       config ->
-        # Execute the heartbeat
-        execute_timer_heartbeat(config)
-
-        # Reschedule the next heartbeat
         timer_ref = Process.send_after(self(), {:timer_heartbeat, agent_id}, config.interval_ms)
         state = put_in(state, [:active_heartbeats, agent_id], {:timer, timer_ref})
 
-        {:noreply, state}
+        case get_in(state, [:in_flight, agent_id]) do
+          nil ->
+            case execute_timer_heartbeat(config) do
+              {:ok, pid, synthetic_run_id} ->
+                monitor_ref = Process.monitor(pid)
+
+                in_flight = %{
+                  pid: pid,
+                  monitor_ref: monitor_ref,
+                  synthetic_run_id: synthetic_run_id
+                }
+
+                {:noreply, put_in(state, [:in_flight, agent_id], in_flight)}
+
+              {:error, reason, synthetic_run} ->
+                Logger.error(
+                  "[HeartbeatManager] Failed to start timer heartbeat for #{agent_id}: #{inspect(reason)}"
+                )
+
+                Events.emit_run_completed(synthetic_run)
+                {:noreply, state}
+            end
+
+          _in_flight ->
+            :telemetry.execute(
+              [:lemon, :heartbeat, :skipped],
+              %{count: 1},
+              %{agent_id: agent_id, reason: :overlap}
+            )
+
+            Logger.warning(
+              "[HeartbeatManager] Skipped timer heartbeat for #{agent_id}: previous run still in flight"
+            )
+
+            {:noreply, update_in(state.stats.skipped_overlap, &(&1 + 1))}
+        end
+    end
+  end
+
+  @impl true
+  def handle_info({:timer_heartbeat_finished, agent_id, pid}, state) do
+    {:noreply, clear_in_flight(state, agent_id, pid)}
+  end
+
+  @impl true
+  def handle_info({:DOWN, monitor_ref, :process, pid, _reason}, state) do
+    case Enum.find(state.in_flight, fn {_agent_id, run} ->
+           run.pid == pid and run.monitor_ref == monitor_ref
+         end) do
+      {agent_id, _run} -> {:noreply, clear_in_flight(state, agent_id, pid)}
+      nil -> {:noreply, state}
     end
   end
 
@@ -480,86 +580,115 @@ defmodule LemonAutomation.HeartbeatManager do
     {:noreply, state}
   end
 
-  # Execute a timer-based heartbeat by triggering a run via LemonRouter
   defp execute_timer_heartbeat(config) do
     %{agent_id: agent_id, prompt: prompt, session_key: session_key} = config
-
-    # Create a synthetic run for this heartbeat
     synthetic_run_id = "timer-heartbeat-#{agent_id}-#{System.system_time(:millisecond)}"
+    router_run_id = LemonCore.Id.run_id()
+    started_at_ms = System.system_time(:millisecond)
 
     Logger.debug("[HeartbeatManager] Executing timer-based heartbeat for agent #{agent_id}")
 
     job = timer_heartbeat_job(agent_id, session_key, prompt)
 
-    Events.emit_run_started(timer_heartbeat_run(job, synthetic_run_id, :running), job)
+    started_run =
+      timer_heartbeat_run(job, synthetic_run_id, :running,
+        run_id: router_run_id,
+        started_at_ms: started_at_ms
+      )
 
-    # Submit via LemonRouter (the same path CronManager uses)
-    # Important: do NOT let background heartbeats crash the HeartbeatManager.
-    # Use an unlinked task and catch exits from LemonRouter.submit/1.
-    _ =
-      start_background_task(fn ->
-        params = %{
-          origin: :cron,
-          session_key: session_key,
-          prompt: prompt,
-          agent_id: agent_id,
-          meta: %{
-            heartbeat: true,
-            timer_based: true,
-            synthetic_run_id: synthetic_run_id
-          }
-        }
+    Events.emit_run_started(started_run, job)
+    manager = self()
 
-        submit_result =
-          try do
-            LemonRouter.submit(params)
-          catch
-            :exit, reason -> {:error, reason}
-          end
+    case start_background_task(fn ->
+           try do
+             params = %{
+               origin: :cron,
+               run_id: router_run_id,
+               session_key: session_key,
+               prompt: prompt,
+               agent_id: agent_id,
+               meta: %{
+                 heartbeat: true,
+                 timer_based: true,
+                 synthetic_run_id: synthetic_run_id
+               }
+             }
 
-        case submit_result do
-          {:ok, run_id} ->
-            # Wait for run completion via LemonCore.Bus events
-            result = wait_for_heartbeat_completion(run_id, 30_000)
+             params
+             |> RunCompletionWaiter.submit_and_wait(
+               router_mod:
+                 Application.get_env(:lemon_automation, :heartbeat_router_mod, LemonRouter),
+               waiter_mod:
+                 Application.get_env(
+                   :lemon_automation,
+                   :heartbeat_waiter_mod,
+                   RunCompletionWaiter
+                 ),
+               bus_mod: Application.get_env(:lemon_automation, :heartbeat_bus_mod, LemonCore.Bus),
+               timeout_ms: 30_000
+             )
+             |> timer_terminal_run(started_run)
+             |> Events.emit_run_completed()
+           rescue
+             error ->
+               started_run
+               |> timer_failed_run({:exception, error})
+               |> Events.emit_run_completed()
+           catch
+             :exit, reason ->
+               started_run
+               |> timer_failed_run({:exit, reason})
+               |> Events.emit_run_completed()
+           after
+             send(manager, {:timer_heartbeat_finished, agent_id, self()})
+           end
+         end) do
+      {:ok, pid} ->
+        {:ok, pid, synthetic_run_id}
 
-            case result do
-              {:ok, output} ->
-                Events.emit_run_completed(
-                  timer_heartbeat_run(job, synthetic_run_id, :completed,
-                    run_id: run_id,
-                    output: output
-                  )
-                )
+      {:error, reason} ->
+        {:error, reason, timer_failed_run(started_run, {:task_start_failed, reason})}
+    end
+  end
 
-              {:error, reason} ->
-                Logger.error(
-                  "[HeartbeatManager] Timer heartbeat failed for #{agent_id}: #{inspect(reason)}"
-                )
+  defp timer_terminal_run({:ok, run_id, output}, started_run) do
+    started_run
+    |> Map.put(:run_id, run_id)
+    |> CronRun.complete(output)
+  end
 
-                Events.emit_run_completed(
-                  timer_heartbeat_run(job, synthetic_run_id, :failed,
-                    run_id: run_id,
-                    output: "HEARTBEAT_ERROR: #{inspect(reason)}",
-                    error: reason
-                  )
-                )
-            end
+  defp timer_terminal_run({:error, {:timeout, run_id}}, started_run) do
+    started_run
+    |> Map.put(:run_id, run_id)
+    |> CronRun.timeout()
+  end
 
-          {:error, reason} ->
-            Logger.error(
-              "[HeartbeatManager] Failed to submit timer heartbeat for #{agent_id}: #{inspect(reason)}"
-            )
+  defp timer_terminal_run({:error, {:run_failed, run_id, reason}}, started_run) do
+    started_run
+    |> Map.put(:run_id, run_id)
+    |> timer_failed_run(reason)
+  end
 
-            Events.emit_run_completed(
-              timer_heartbeat_run(job, synthetic_run_id, :failed,
-                output: "HEARTBEAT_ERROR: Failed to submit: #{inspect(reason)}",
-                error: reason
-              )
-            )
-        end
-      end)
+  defp timer_terminal_run({:error, reason}, started_run),
+    do: timer_failed_run(started_run, reason)
 
-    :ok
+  defp timer_failed_run(started_run, reason) do
+    error = inspect(reason)
+
+    started_run
+    |> CronRun.fail(error)
+    |> Map.put(:output, "HEARTBEAT_ERROR: #{error}")
+  end
+
+  defp clear_in_flight(state, agent_id, pid) do
+    case get_in(state, [:in_flight, agent_id]) do
+      %{pid: ^pid, monitor_ref: monitor_ref} ->
+        Process.demonitor(monitor_ref, [:flush])
+        update_in(state, [:in_flight], &Map.delete(&1 || %{}, agent_id))
+
+      _ ->
+        state
+    end
   end
 
   defp start_background_task(fun) when is_function(fun, 0) do
@@ -582,39 +711,6 @@ defmodule LemonAutomation.HeartbeatManager do
     end
   end
 
-  # Wait for run completion via LemonCore.Bus events
-  defp wait_for_heartbeat_completion(run_id, timeout_ms) do
-    topic = "run:#{run_id}"
-
-    # Subscribe to run events
-    LemonCore.Bus.subscribe(topic)
-
-    try do
-      receive do
-        %LemonCore.Event{type: :run_completed, payload: payload} ->
-          extract_heartbeat_output(payload)
-
-        %LemonCore.Event{type: :run_failed, payload: payload} ->
-          {:error, heartbeat_failure_reason(LemonCore.Events.coerce(:run_failed, payload))}
-      after
-        timeout_ms ->
-          {:error, :timeout}
-      end
-    after
-      LemonCore.Bus.unsubscribe(topic)
-    end
-  end
-
-  defp heartbeat_failure_reason(%LemonCore.Events.RunFailed{reason: reason})
-       when not is_nil(reason),
-       do: reason
-
-  defp heartbeat_failure_reason(payload) when is_map(payload) do
-    heartbeat_value(payload, :reason) || heartbeat_value(payload, :error) || "unknown"
-  end
-
-  defp heartbeat_failure_reason(_payload), do: "unknown"
-
   # Timer heartbeats have no CronStore-backed job or run, but they publish on the same
   # "cron" topic as scheduled jobs. Building the same structs the scheduled path uses keeps
   # both emitters on one payload shape instead of two that consumers must guess between.
@@ -630,13 +726,13 @@ defmodule LemonAutomation.HeartbeatManager do
     }
   end
 
-  defp timer_heartbeat_run(%CronJob{} = job, synthetic_run_id, status, attrs \\ []) do
+  defp timer_heartbeat_run(%CronJob{} = job, synthetic_run_id, status, attrs) do
     %CronRun{
       id: synthetic_run_id,
       job_id: job.id,
       run_id: Keyword.get(attrs, :run_id),
       status: status,
-      started_at_ms: System.system_time(:millisecond),
+      started_at_ms: Keyword.get(attrs, :started_at_ms, System.system_time(:millisecond)),
       triggered_by: :schedule,
       output: Keyword.get(attrs, :output),
       error: Keyword.get(attrs, :error),
@@ -649,25 +745,40 @@ defmodule LemonAutomation.HeartbeatManager do
     }
   end
 
-  # Extract output from run completion payload. The router nests the engine result under
-  # `:completed`; older/synthetic emitters put the text at the top level.
-  defp extract_heartbeat_output(payload) do
-    completed = heartbeat_value(payload, :completed) || payload
+  defp heartbeat_job(run, job_id) do
+    case if(job_id, do: CronStore.get_job(job_id)) do
+      %CronJob{} = job ->
+        if heartbeat?(job), do: job
 
-    output =
-      heartbeat_value(completed, :output) ||
-        heartbeat_value(completed, :answer) ||
-        heartbeat_value(completed, :result) ||
-        heartbeat_value(payload, :output) ||
-        heartbeat_value(payload, :answer) ||
-        heartbeat_value(payload, :result)
-
-    {:ok, output}
+      nil ->
+        if timer_heartbeat_run?(run) do
+          agent_id = run_meta_value(run, :agent_id) || "default"
+          session_key = run_meta_value(run, :session_key) || "agent:#{agent_id}:heartbeat"
+          timer_heartbeat_job(agent_id, session_key, nil)
+        end
+    end
+  rescue
+    _ -> nil
   end
 
-  defp heartbeat_value(map, key) when is_map(map) do
-    Map.get(map, key) || Map.get(map, Atom.to_string(key))
+  defp timer_heartbeat_run?(run) do
+    run_meta_value(run, :timer_based) == true and run_meta_value(run, :heartbeat) == true
   end
 
-  defp heartbeat_value(_map, _key), do: nil
+  defp heartbeat_status(run, suppressed) do
+    case run_value(run, :status) do
+      status when status in [:failed, "failed"] -> :failed
+      status when status in [:timeout, "timeout"] -> :timeout
+      status when status in [:aborted, "aborted"] -> :aborted
+      _ -> if(suppressed, do: :ok, else: :alert)
+    end
+  end
+
+  defp run_meta_value(run, key), do: run |> run_value(:meta) |> map_value(key)
+  defp run_value(run, key), do: map_value(run, key)
+
+  defp map_value(map, key) when is_map(map),
+    do: Map.get(map, key) || Map.get(map, Atom.to_string(key))
+
+  defp map_value(_map, _key), do: nil
 end
