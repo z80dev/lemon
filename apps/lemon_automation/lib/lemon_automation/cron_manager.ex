@@ -64,7 +64,7 @@ defmodule LemonAutomation.CronManager do
 
   use GenServer
 
-  @vsn 1
+  @vsn 2
 
   alias LemonAutomation.{
     CronCommandRunner,
@@ -96,7 +96,8 @@ defmodule LemonAutomation.CronManager do
   Start the CronManager GenServer.
   """
   def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    name = Keyword.get(opts, :name, __MODULE__)
+    GenServer.start_link(__MODULE__, opts, name: name)
   end
 
   @doc """
@@ -202,7 +203,7 @@ defmodule LemonAutomation.CronManager do
   # ============================================================================
 
   @impl true
-  def init(_opts) do
+  def init(opts) do
     # Load existing jobs from storage
     jobs = CronStore.list_jobs()
 
@@ -215,14 +216,38 @@ defmodule LemonAutomation.CronManager do
         job
       end)
 
-    recover_stale_active_runs(jobs)
+    state = %{
+      jobs: Map.new(jobs, &{&1.id, &1}),
+      tasks: %{},
+      task_refs: %{},
+      retry_timer: nil,
+      task_supervisor:
+        Keyword.get(
+          opts,
+          :task_supervisor,
+          Application.get_env(:lemon_automation, :cron_task_supervisor, @task_supervisor)
+        ),
+      standalone_mode:
+        Keyword.get(
+          opts,
+          :standalone_mode,
+          Application.get_env(:lemon_automation, :cron_standalone_mode, false)
+        ),
+      state_vsn: @vsn
+    }
+
+    state =
+      state
+      |> recover_stale_active_runs()
+      |> dispatch_due_retries()
+      |> schedule_retry_tick()
 
     # Schedule first tick
     schedule_tick()
 
     Logger.info("[CronManager] Started with #{length(jobs)} jobs")
 
-    {:ok, %{jobs: Map.new(jobs, &{&1.id, &1}), state_vsn: @vsn}}
+    {:ok, state}
   end
 
   @impl true
@@ -373,7 +398,7 @@ defmodule LemonAutomation.CronManager do
           triggered_by: :manual
         })
 
-        run = execute_job(job, :manual)
+        {run, state} = execute_job(job, :manual, [], state)
         {:reply, {:ok, run}, state}
 
       :error ->
@@ -391,23 +416,12 @@ defmodule LemonAutomation.CronManager do
         if CronRun.active?(run) do
           abort_router_run(run)
 
-          aborted = CronRun.abort(run, "Run aborted by operator")
-          CronStore.put_run(aborted)
+          {aborted, state} =
+            terminalize_run(state, run, {:aborted, "Run aborted by operator"},
+              audit_action: :run_aborted
+            )
 
-          CronStore.record_audit(:run_aborted, %{
-            job_id: aborted.job_id,
-            run_id: aborted.id,
-            router_run_id: aborted.run_id,
-            source: :cron_manager,
-            status: aborted.status,
-            triggered_by: aborted.triggered_by,
-            reason: aborted.error
-          })
-
-          Events.emit_run_completed(aborted)
-          maybe_forward_summary_to_base_session(aborted)
-
-          {:reply, {:ok, aborted}, state}
+          {:reply, {:ok, aborted}, stop_tracked_task(state, run.id)}
         else
           {:reply, {:error, :not_active}, state}
         end
@@ -441,7 +455,7 @@ defmodule LemonAutomation.CronManager do
           if triggered_by == :schedule do
             run_scheduled_job(job, state, LemonCore.Clock.now_ms())
           else
-            execute_job(job, triggered_by)
+            {_run, state} = execute_job(job, triggered_by, [], state)
             state
           end
 
@@ -458,85 +472,74 @@ defmodule LemonAutomation.CronManager do
 
   @impl true
   def handle_info({:submit_claimed_run, job_id, run_id}, state) do
-    with %CronJob{enabled: true} = job <- Map.get(state.jobs, job_id),
-         %CronRun{status: :running} = run <- CronStore.get_run(run_id) do
-      submit_claimed_run(job, run)
-    else
-      %CronRun{} = run ->
-        Logger.debug(
-          "[CronManager] Skipping claimed cron run submit for #{run.id}: status=#{inspect(run.status)}"
-        )
+    state =
+      with %CronJob{enabled: true} = job <- Map.get(state.jobs, job_id),
+           %CronRun{status: :running} = run <- CronStore.get_run(run_id) do
+        submit_claimed_run(job, run, state)
+      else
+        %CronRun{} = run ->
+          Logger.debug(
+            "[CronManager] Skipping claimed cron run submit for #{run.id}: status=#{inspect(run.status)}"
+          )
 
-      _ ->
-        Logger.debug(
-          "[CronManager] Skipping claimed cron run submit for #{inspect(run_id)}: job or run unavailable"
-        )
-    end
+          state
+
+        _ ->
+          Logger.debug(
+            "[CronManager] Skipping claimed cron run submit for #{inspect(run_id)}: job or run unavailable"
+          )
+
+          state
+      end
 
     {:noreply, state}
   end
 
   @impl true
-  def handle_info({:retry_job, job_id, retry_opts}, state) do
-    case Map.get(state.jobs, job_id) do
-      %CronJob{enabled: true} = job ->
-        if job_active_run_locked?(job) do
-          Logger.info("[CronManager] Skipping retry for #{job.id}: active run already exists")
-        else
-          execute_job(job, :retry, retry_opts)
-        end
-
-      _ ->
-        Logger.debug("[CronManager] Skipping retry for #{inspect(job_id)}: not found or disabled")
-    end
-
+  def handle_info(:retry_tick, state) do
+    state = %{state | retry_timer: nil}
+    state = state |> dispatch_due_retries() |> schedule_retry_tick()
     {:noreply, state}
   end
 
   @impl true
   def handle_info({:run_complete, run_id, result}, state) do
-    case CronStore.get_run(run_id) do
+    {_run, state} = terminalize_run_id(state, run_id, result)
+    {:noreply, stop_tracked_task(state, run_id)}
+  end
+
+  @impl true
+  def handle_info({ref, result}, state) when is_reference(ref) do
+    case Map.get(state.task_refs, ref) do
       nil ->
         {:noreply, state}
 
-      %CronRun{} = run ->
-        if CronRun.finished?(run) do
-          {:noreply, state}
-        else
-          updated_run =
-            case result do
-              {:ok, output} ->
-                CronRun.complete(run, output)
+      run_id ->
+        Process.demonitor(ref, [:flush])
+        state = remove_tracked_task(state, run_id, ref)
+        {_run, state} = terminalize_run_id(state, run_id, result)
+        {:noreply, state}
+    end
+  end
 
-              {:error, error} ->
-                CronRun.fail(run, error)
+  @impl true
+  def handle_info({:DOWN, ref, :process, _pid, reason}, state) do
+    case Map.get(state.task_refs, ref) do
+      nil ->
+        {:noreply, state}
 
-              :timeout ->
-                CronRun.timeout(run)
+      run_id ->
+        state = remove_tracked_task(state, run_id, ref)
 
-              {:preflight_skip, failure} ->
-                run
-                |> CronRun.fail(CronPreflight.format_failure(failure))
-                |> then(&%{&1 | meta: Map.put(&1.meta || %{}, :preflight_failure, failure)})
-            end
+        {_run, state} =
+          terminalize_run_id(
+            state,
+            run_id,
+            {:error, "cron worker exited before terminal result: #{inspect(reason, limit: 120)}"},
+            audit_action: :worker_down
+          )
 
-          job = Map.get(state.jobs, updated_run.job_id)
-          {updated_run, deliver?} = CronMonitor.apply_policy(job, updated_run)
-
-          # A preflight skip persists until an operator acts, so identical
-          # repeats are deduped rather than forwarded on every occurrence.
-          {updated_run, deliver?} =
-            case CronMonitor.apply_preflight_policy(job, updated_run) do
-              {run, true} -> {run, deliver?}
-              {run, false} -> {run, false}
-            end
-
-          CronStore.put_run(updated_run)
-          Events.emit_run_completed(updated_run)
-          if deliver?, do: maybe_forward_summary_to_base_session(updated_run)
-          maybe_schedule_retry(job, updated_run)
-          {:noreply, state}
-        end
+        {:noreply, state}
     end
   end
 
@@ -578,16 +581,21 @@ defmodule LemonAutomation.CronManager do
 
     all_jobs = Map.values(state.jobs)
     LemonCore.Telemetry.cron_tick(length(all_jobs))
-    recover_stale_active_runs(all_jobs)
+    state = recover_stale_active_runs(state, now)
 
     # Find due jobs
     due_jobs =
       all_jobs
       |> Enum.filter(&CronJob.due?/1)
 
-    Enum.reduce(due_jobs, state, fn job, acc ->
-      run_scheduled_job(job, acc, now)
-    end)
+    state =
+      Enum.reduce(due_jobs, state, fn job, acc ->
+        run_scheduled_job(job, acc, now)
+      end)
+
+    state
+    |> dispatch_due_retries()
+    |> schedule_retry_tick()
   end
 
   defp job_active_run_locked?(%CronJob{} = job) do
@@ -601,34 +609,25 @@ defmodule LemonAutomation.CronManager do
       false
   end
 
-  defp recover_stale_active_runs(jobs) when is_list(jobs) do
-    now = LemonCore.Clock.now_ms()
-    Enum.each(jobs, &recover_stale_active_runs(&1, now))
+  defp recover_stale_active_runs(state, now \\ LemonCore.Clock.now_ms()) do
+    Enum.reduce(Map.values(state.jobs), state, fn job, state ->
+      recover_stale_active_runs(job, now, state)
+    end)
   end
 
-  defp recover_stale_active_runs(%CronJob{} = job, now) do
-    job.id
-    |> CronStore.active_runs()
-    |> Enum.each(fn run ->
+  defp recover_stale_active_runs(%CronJob{} = job, now, state) do
+    Enum.reduce(CronStore.active_runs(job.id), state, fn run, state ->
       if stale_run?(run, job, now) do
-        timed_out = CronRun.timeout(run)
-        CronStore.put_run(timed_out)
-
-        CronStore.record_audit(:stale_run_recovered, %{
-          job_id: timed_out.job_id,
-          run_id: timed_out.id,
-          router_run_id: timed_out.run_id,
-          source: :cron_manager,
-          status: timed_out.status,
-          triggered_by: timed_out.triggered_by,
-          reason: timed_out.error
-        })
-
-        Events.emit_run_completed(timed_out)
+        {_timed_out, state} =
+          terminalize_run(state, run, :timeout, audit_action: :stale_run_recovered)
 
         Logger.warning(
           "[CronManager] Recovered stale active run #{run.id} for job #{job.id} as timeout"
         )
+
+        state
+      else
+        state
       end
     end)
   rescue
@@ -636,6 +635,8 @@ defmodule LemonAutomation.CronManager do
       Logger.warning(
         "[CronManager] Failed to recover stale active cron runs for #{job.id}: #{Exception.message(error)}"
       )
+
+      state
   end
 
   defp stale_run?(%CronRun{started_at_ms: started_at_ms}, %CronJob{timeout_ms: timeout_ms}, now)
@@ -645,7 +646,7 @@ defmodule LemonAutomation.CronManager do
 
   defp stale_run?(_run, _job, _now), do: false
 
-  defp execute_job(job, triggered_by, opts \\ []) do
+  defp execute_job(job, triggered_by, opts, state) do
     run = CronRun.new(job.id, triggered_by)
     CronStore.put_run(run)
 
@@ -681,9 +682,9 @@ defmodule LemonAutomation.CronManager do
 
     Events.emit_run_started(run, job)
 
-    submit_claimed_run(job, run)
+    state = submit_claimed_run(job, run, state)
 
-    run
+    {run, state}
   end
 
   defp run_scheduled_job(%CronJob{} = job, state, now) do
@@ -736,7 +737,7 @@ defmodule LemonAutomation.CronManager do
             Process.send_after(self(), {:submit_claimed_run, job.id, run.id}, delay)
 
           _ ->
-            submit_claimed_run(job, run)
+            send(self(), {:submit_claimed_run, job.id, run.id})
         end
 
         {:ok, run}
@@ -756,34 +757,46 @@ defmodule LemonAutomation.CronManager do
     end
   end
 
-  defp submit_claimed_run(%CronJob{} = job, %CronRun{} = run) do
-    _ =
-      start_background_task(fn ->
-        result =
-          case preflight_mod().check(job) do
-            :ok ->
-              case CronJob.execution_mode(job) do
-                :command -> command_runner().submit(job, run, run_id: run.run_id)
-                :agent -> run_submitter().submit(job, run, run_id: run.run_id)
-              end
-
-            {:skip, failure} ->
-              CronStore.record_audit(:preflight_failed, %{
-                job_id: job.id,
-                run_id: run.id,
-                router_run_id: run.run_id,
-                source: :cron_manager,
-                triggered_by: run.triggered_by,
-                reason: CronPreflight.format_failure(failure)
-              })
-
-              {:preflight_skip, failure}
+  defp submit_claimed_run(%CronJob{} = job, %CronRun{} = run, state) do
+    fun = fn ->
+      case preflight_mod().check(job) do
+        :ok ->
+          case CronJob.execution_mode(job) do
+            :command -> command_runner().submit(job, run, run_id: run.run_id)
+            :agent -> run_submitter().submit(job, run, run_id: run.run_id)
           end
 
-        send(__MODULE__, {:run_complete, run.id, result})
-      end)
+        {:skip, failure} ->
+          CronStore.record_audit(:preflight_failed, %{
+            job_id: job.id,
+            run_id: run.id,
+            router_run_id: run.run_id,
+            source: :cron_manager,
+            triggered_by: run.triggered_by,
+            reason: CronPreflight.format_failure(failure)
+          })
 
-    :ok
+          {:preflight_skip, failure}
+      end
+    end
+
+    case start_monitored_task(fun, state) do
+      {:ok, task} ->
+        state
+        |> put_in([:tasks, run.id], task)
+        |> put_in([:task_refs, task.ref], run.id)
+
+      {:error, reason} ->
+        {_failed, state} =
+          terminalize_run(
+            state,
+            run,
+            {:error, "failed to start cron worker: #{inspect(reason, limit: 120)}"},
+            audit_action: :worker_start_failed
+          )
+
+        state
+    end
   end
 
   # Record the global default model at creation time so the drift guard has a
@@ -839,42 +852,245 @@ defmodule LemonAutomation.CronManager do
     end
   end
 
-  defp maybe_schedule_retry(%CronJob{} = job, %CronRun{} = run) do
-    if retryable_run?(run) do
-      current_attempt = retry_attempt(run)
-      max_retries = max_retries(job)
-
-      if current_attempt < max_retries do
-        next_attempt = current_attempt + 1
-        delay_ms = retry_delay_ms(job)
-
-        retry_opts = [
-          retry_attempt: next_attempt,
-          retry_of: run.id,
-          retry_root_id: retry_root_id(run),
-          source_triggered_by: run.triggered_by
-        ]
-
-        Process.send_after(self(), {:retry_job, job.id, retry_opts}, delay_ms)
-
-        CronStore.record_audit(:retry_scheduled, %{
-          job_id: job.id,
-          run_id: run.id,
-          router_run_id: run.run_id,
-          source: :cron_manager,
-          status: run.status,
-          triggered_by: run.triggered_by,
-          reason: "retry #{next_attempt}/#{max_retries}"
-        })
-
-        Logger.info(
-          "[CronManager] Scheduled retry #{next_attempt}/#{max_retries} for job #{job.id} after #{delay_ms}ms"
-        )
-      end
+  # Every terminal path enters here: normal task replies, task start failures,
+  # monitored `:DOWN`, operator aborts, wake completions, and stale recovery.
+  # The persisted terminal status is the idempotency boundary; late messages
+  # observe a finished run and cannot re-apply monitor, delivery, or retry policy.
+  defp terminalize_run_id(state, run_id, result, opts \\ []) do
+    case CronStore.get_run(run_id) do
+      %CronRun{} = run -> terminalize_run(state, run, result, opts)
+      nil -> {nil, state}
     end
   end
 
-  defp maybe_schedule_retry(_job, _run), do: :ok
+  defp terminalize_run(state, %CronRun{} = run, result, opts) do
+    if CronRun.finished?(run) do
+      {run, state}
+    else
+      job = Map.get(state.jobs, run.job_id) || CronStore.get_job(run.job_id)
+      updated_run = terminal_result(run, result)
+      {updated_run, deliver?} = CronMonitor.apply_policy(job, updated_run)
+
+      {updated_run, deliver?} =
+        case CronMonitor.apply_preflight_policy(job, updated_run) do
+          {policy_run, true} -> {policy_run, deliver?}
+          {policy_run, false} -> {policy_run, false}
+        end
+
+      {updated_run, retry_intent} = persist_retry_intent(job, updated_run)
+
+      updated_run =
+        %{updated_run | meta: Map.put(updated_run.meta || %{}, :terminalization_applied, true)}
+
+      CronStore.put_run(updated_run)
+      maybe_record_terminal_audit(Keyword.get(opts, :audit_action), updated_run)
+      maybe_record_retry_audit(job, updated_run, retry_intent)
+      Events.emit_run_completed(updated_run)
+      if deliver?, do: maybe_forward_summary_to_base_session(updated_run)
+
+      state = state |> dispatch_due_retries() |> schedule_retry_tick()
+      {updated_run, state}
+    end
+  end
+
+  defp terminal_result(run, {:ok, output}), do: CronRun.complete(run, output)
+  defp terminal_result(run, :timeout), do: CronRun.timeout(run)
+  defp terminal_result(run, {:aborted, reason}), do: CronRun.abort(run, to_error(reason))
+
+  defp terminal_result(run, {:preflight_skip, failure}) do
+    run
+    |> CronRun.fail(CronPreflight.format_failure(failure))
+    |> then(&%{&1 | meta: Map.put(&1.meta || %{}, :preflight_failure, failure)})
+  end
+
+  defp terminal_result(run, {:error, error}), do: CronRun.fail(run, to_error(error))
+
+  defp terminal_result(run, other),
+    do: CronRun.fail(run, "unexpected cron result: #{inspect(other)}")
+
+  defp to_error(error) when is_binary(error), do: error
+  defp to_error(error), do: inspect(error, limit: 120)
+
+  defp maybe_record_terminal_audit(nil, _run), do: :ok
+
+  defp maybe_record_terminal_audit(action, run) do
+    CronStore.record_audit(action, %{
+      job_id: run.job_id,
+      run_id: run.id,
+      router_run_id: run.run_id,
+      source: :cron_manager,
+      status: run.status,
+      triggered_by: run.triggered_by,
+      reason: run.error
+    })
+  end
+
+  defp maybe_record_retry_audit(_job, _run, :none), do: :ok
+
+  defp maybe_record_retry_audit(job, run, {:scheduled, next_attempt, due_at_ms}) do
+    CronStore.record_audit(:retry_scheduled, %{
+      job_id: run.job_id,
+      run_id: run.id,
+      router_run_id: run.run_id,
+      source: :cron_manager,
+      status: run.status,
+      triggered_by: run.triggered_by,
+      reason: "retry #{next_attempt}/#{max_retries(job)} due at #{due_at_ms}"
+    })
+
+    Logger.info(
+      "[CronManager] Persisted retry #{next_attempt}/#{max_retries(job)} for job #{job.id}"
+    )
+  end
+
+  defp stop_tracked_task(state, run_id) do
+    case Map.get(state.tasks, run_id) do
+      %Task{} = task ->
+        _ = Task.shutdown(task, :brutal_kill)
+        remove_tracked_task(state, run_id, task.ref)
+
+      _ ->
+        state
+    end
+  end
+
+  defp remove_tracked_task(state, run_id, ref) do
+    state
+    |> update_in([:tasks], &Map.delete(&1 || %{}, run_id))
+    |> update_in([:task_refs], &Map.delete(&1 || %{}, ref))
+  end
+
+  defp persist_retry_intent(%CronJob{} = job, %CronRun{} = run) do
+    current_attempt = retry_attempt(run)
+    max_retries = max_retries(job)
+
+    if retryable_run?(run) and current_attempt < max_retries do
+      next_attempt = current_attempt + 1
+      due_at_ms = LemonCore.Clock.now_ms() + retry_delay_ms(job)
+
+      meta =
+        (run.meta || %{})
+        |> Map.put(:retry_due_at_ms, due_at_ms)
+        |> Map.put(:retry_next_attempt, next_attempt)
+        |> Map.put(:retry_root_id, retry_root_id(run))
+
+      {%{run | meta: meta}, {:scheduled, next_attempt, due_at_ms}}
+    else
+      {run, :none}
+    end
+  end
+
+  defp persist_retry_intent(_job, run), do: {run, :none}
+
+  defp dispatch_due_retries(state) do
+    now = LemonCore.Clock.now_ms()
+
+    Enum.reduce(CronStore.pending_retries(), state, fn source_run, state ->
+      due_at_ms = meta_value(source_run.meta, :retry_due_at_ms)
+      job = Map.get(state.jobs, source_run.job_id)
+
+      cond do
+        not is_integer(due_at_ms) or due_at_ms > now ->
+          state
+
+        not match?(%CronJob{enabled: true}, job) ->
+          state
+
+        retry_blocked_by_other_active_run?(job, source_run) ->
+          state
+
+        true ->
+          claim_and_submit_retry(job, source_run, state)
+      end
+    end)
+  rescue
+    error ->
+      Logger.warning(
+        "[CronManager] Failed to dispatch durable retries: #{Exception.message(error)}"
+      )
+
+      state
+  end
+
+  defp retry_blocked_by_other_active_run?(job, source_run) do
+    expected_retry_id =
+      CronStore.retry_run_id(
+        retry_root_id(source_run),
+        meta_value(source_run.meta, :retry_next_attempt)
+      )
+
+    Enum.any?(CronStore.active_runs(job.id), &(&1.id != expected_retry_id))
+  end
+
+  defp claim_and_submit_retry(%CronJob{} = job, %CronRun{} = source_run, state) do
+    router_run_id = router_run_id_for(job)
+
+    case CronStore.claim_retry_run(job, source_run, router_run_id) do
+      {:ok, retry_run} ->
+        mark_retry_dispatched(source_run, retry_run.id)
+
+        CronStore.record_audit(:retry_started, %{
+          job_id: job.id,
+          run_id: retry_run.id,
+          router_run_id: retry_run.run_id,
+          source: :cron_manager,
+          status: retry_run.status,
+          triggered_by: :retry,
+          reason: "retry #{retry_attempt(retry_run)}/#{max_retries(job)}"
+        })
+
+        Events.emit_run_started(retry_run, job)
+        submit_claimed_run(job, retry_run, state)
+
+      {:error, :exists} ->
+        retry_run_id =
+          CronStore.retry_run_id(
+            retry_root_id(source_run),
+            meta_value(source_run.meta, :retry_next_attempt)
+          )
+
+        mark_retry_dispatched(source_run, retry_run_id)
+        state
+
+      {:error, reason} ->
+        Logger.warning(
+          "[CronManager] Failed to claim retry for #{source_run.id}: #{inspect(reason)}"
+        )
+
+        state
+    end
+  end
+
+  defp mark_retry_dispatched(source_run, retry_run_id) do
+    meta =
+      (source_run.meta || %{})
+      |> Map.put(:retry_dispatched_run_id, retry_run_id)
+
+    CronStore.put_run(%{source_run | meta: meta})
+  end
+
+  defp schedule_retry_tick(state) do
+    if state.retry_timer, do: Process.cancel_timer(state.retry_timer)
+
+    case CronStore.pending_retries() do
+      [] ->
+        %{state | retry_timer: nil}
+
+      retries ->
+        now = LemonCore.Clock.now_ms()
+
+        due_at_ms =
+          retries
+          |> Enum.map(&meta_value(&1.meta, :retry_due_at_ms))
+          |> Enum.filter(&is_integer/1)
+          |> Enum.min(fn -> now + @tick_interval_ms end)
+
+        # A past-due retry may be waiting for another active run. Poll gently;
+        # the persisted due time remains the authority across restarts.
+        delay_ms = if due_at_ms <= now, do: 1_000, else: due_at_ms - now
+        %{state | retry_timer: Process.send_after(self(), :retry_tick, delay_ms)}
+    end
+  end
 
   # Preflight skips are configuration problems, not transient failures: retrying
   # within one backoff window is pure noise. The next scheduled occurrence
@@ -934,25 +1150,27 @@ defmodule LemonAutomation.CronManager do
     end
   end
 
-  defp start_background_task(fun) when is_function(fun, 0) do
-    case Task.Supervisor.start_child(@task_supervisor, fun) do
-      {:ok, pid} ->
-        {:ok, pid}
+  defp start_monitored_task(fun, state) when is_function(fun, 0) do
+    supervisor = state.task_supervisor
 
-      {:error, {:noproc, _}} ->
-        Task.start(fun)
-
-      {:error, :noproc} ->
-        Task.start(fun)
-
-      {:error, reason} ->
-        Logger.warning(
-          "[CronManager] Failed to start supervised task: #{inspect(reason)}; falling back to Task.start/1"
-        )
-
-        Task.start(fun)
+    if supervisor_alive?(supervisor) do
+      {:ok, Task.Supervisor.async_nolink(supervisor, fun)}
+    else
+      if state.standalone_mode do
+        {:ok, Task.async(fun)}
+      else
+        {:error, :task_supervisor_unavailable}
+      end
     end
+  rescue
+    error -> {:error, {:task_start_exception, error}}
+  catch
+    :exit, reason -> {:error, {:task_start_exit, reason}}
   end
+
+  defp supervisor_alive?(pid) when is_pid(pid), do: Process.alive?(pid)
+  defp supervisor_alive?(name) when is_atom(name), do: is_pid(Process.whereis(name))
+  defp supervisor_alive?(_), do: false
 
   defp validate_params(params) do
     required = [:name, :schedule]
@@ -1287,11 +1505,24 @@ defmodule LemonAutomation.CronManager do
   defp migrate_state(_old_vsn, %{jobs: jobs} = state) when is_map(jobs) do
     state
     |> Map.put_new(:jobs, %{})
+    |> Map.put_new(:tasks, %{})
+    |> Map.put_new(:task_refs, %{})
+    |> Map.put_new(:retry_timer, nil)
+    |> Map.put_new(:task_supervisor, @task_supervisor)
+    |> Map.put_new(:standalone_mode, false)
     |> Map.put(:state_vsn, @vsn)
   end
 
   defp migrate_state(_old_vsn, _state) do
-    %{jobs: %{}, state_vsn: @vsn}
+    %{
+      jobs: %{},
+      tasks: %{},
+      task_refs: %{},
+      retry_timer: nil,
+      task_supervisor: @task_supervisor,
+      standalone_mode: false,
+      state_vsn: @vsn
+    }
   end
 
   # Cron runs execute in isolated sub-sessions. To make outcomes visible in the

@@ -337,6 +337,79 @@ defmodule LemonAgent.Workspace.KanbanStore do
     end
   end
 
+  @doc """
+  Reclaim one task only when the caller still owns the supplied lease ID.
+
+  Dispatcher stop/restart paths use this guard so a late result from an old
+  worker cannot clear or terminalize a newer worker's lease.
+  """
+  @spec reclaim_task_lease(binary(), binary(), keyword()) :: {:ok, map()} | {:error, term()}
+  def reclaim_task_lease(task_id, lease_id, opts \\ [])
+      when is_binary(task_id) and is_binary(lease_id) do
+    with {:ok, task, board} <- fetch_task_with_lease(task_id, lease_id) do
+      now = now_ms()
+      target_status = string_opt(opts[:to_status]) || List.first(board.columns) || "todo"
+
+      updated =
+        task
+        |> Map.put(:status, target_status)
+        |> Map.put(:updated_at_ms, now)
+        |> Map.put(:meta, clear_lease(task.meta))
+
+      with :ok <- Store.put(@tasks_table, task.id, updated) do
+        emit(:kanban_task_reclaimed, board, updated, opts)
+        {:ok, updated}
+      end
+    end
+  end
+
+  @doc """
+  Reclaim every lease owned by a dispatcher worker ID on a board.
+
+  This is the dispatcher restart reconciliation boundary for unexpired leases
+  whose former worker task no longer has a live owner.
+  """
+  @spec reclaim_worker_leases(binary(), binary(), keyword()) :: {:ok, [map()]} | {:error, term()}
+  def reclaim_worker_leases(board_id, worker_id, opts \\ [])
+      when is_binary(board_id) and is_binary(worker_id) do
+    with {:ok, _board} <- fetch_board(board_id) do
+      reclaimed =
+        board_id
+        |> list_tasks(limit: 10_000)
+        |> Enum.filter(&(lease_worker_id(active_lease(&1)) == worker_id))
+        |> Enum.flat_map(fn task ->
+          case reclaim_task_lease(task.id, lease_id(active_lease(task)), opts) do
+            {:ok, reclaimed} -> [reclaimed]
+            {:error, :stale_lease} -> []
+            {:error, _reason} -> []
+          end
+        end)
+
+      {:ok, reclaimed}
+    end
+  end
+
+  @doc """
+  Complete a task only if the supplied lease is still authoritative.
+  """
+  @spec complete_leased_task(binary(), binary(), keyword()) :: {:ok, map()} | {:error, term()}
+  def complete_leased_task(task_id, lease_id, opts \\ []) do
+    with {:ok, _task, _board} <- fetch_task_with_lease(task_id, lease_id) do
+      complete_task(task_id, opts)
+    end
+  end
+
+  @doc """
+  Fail a task only if the supplied lease is still authoritative.
+  """
+  @spec fail_leased_task(binary(), binary(), binary(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  def fail_leased_task(task_id, lease_id, reason, opts \\ []) do
+    with {:ok, _task, _board} <- fetch_task_with_lease(task_id, lease_id) do
+      fail_task(task_id, reason, opts)
+    end
+  end
+
   @spec clear_board(binary(), keyword()) :: :ok | {:error, term()}
   def clear_board(board_id, opts \\ []) when is_binary(board_id) do
     board = get_board(board_id)
@@ -573,6 +646,29 @@ defmodule LemonAgent.Workspace.KanbanStore do
       _ -> nil
     end
   end
+
+  defp fetch_task_with_lease(task_id, lease_id) do
+    case get_task(task_id) do
+      %{} = task when map_size(task) == 0 ->
+        {:error, :not_found}
+
+      task ->
+        with {:ok, board} <- fetch_board(task.board_id),
+             ^lease_id <- lease_id(active_lease(task)) do
+          {:ok, task, board}
+        else
+          {:error, _} = error -> error
+          nil -> {:error, :stale_lease}
+          _other_lease -> {:error, :stale_lease}
+        end
+    end
+  end
+
+  defp lease_id(%{} = lease), do: lease["id"] || lease[:id]
+  defp lease_id(_), do: nil
+
+  defp lease_worker_id(%{} = lease), do: lease["workerId"] || lease[:workerId]
+  defp lease_worker_id(_), do: nil
 
   defp lease_attempt(task) do
     case active_lease(task) do

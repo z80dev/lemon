@@ -40,7 +40,7 @@ CronManager (tick every 60s)
                             +-- calls LemonRouter.submit(params)
                             +-- waits for terminal event and unsubscribes
                             |
-                            +-- sends {:run_complete, run_id, result} to CronManager
+                            +-- returns through a monitored Task ref owned by CronManager
                                     |
                                     +-- updates CronStore
                                     +-- emits :cron_run_completed
@@ -53,8 +53,10 @@ pending/running runs for the same job, then claims a deterministic scheduled-run
 slot through `LemonCore.Store.put_new/3`. It skips duplicate scheduled starts
 while an active run exists, and competing dispatchers claiming the same scheduled
 slot preserve the first persisted run instead of overwriting it. Active runs
-older than the job's `timeout_ms` are recovered as `:timeout` so a crashed
-runtime cannot leave the job locked forever. On `CronManager` restart, persisted
+older than the job's `timeout_ms` are recovered through the normal terminalizer
+as `:timeout`, including monitor suppression, forwarding, audit, and retry
+policy, so a crashed runtime cannot leave the job locked forever. On
+`CronManager` restart, persisted
 jobs are reloaded and the same active-run recovery path runs during
 initialization, so a manager crash cannot immediately double-submit a scheduled
 job that already has a pending/running persisted run. The opt-in
@@ -66,8 +68,13 @@ Discord plugins, completes channel-peer cron runs through `CronManager`, and
 proves forwarded run history plus outbox delivery without exposing raw channel,
 peer, session, or cron IDs in the proof artifact.
 Scheduled failures and timeouts can retry when `max_retries` is greater than
-zero. Retries are separate `CronRun` records with `triggered_by: :retry` and
-redacted lineage metadata; manual and wake runs do not retry by default.
+zero. The terminal source run persists retry due time, attempt, and root/source
+lineage. Restart rebuilds the wake timer from that state, while a deterministic
+retry ID and atomic claim enforce one run per `{root, attempt}`. Retries are
+separate `CronRun` records with `triggered_by: :retry`; manual and wake runs do
+not retry by default. Cron workers are monitored supervised tasks, so
+supervisor start failures and worker `:DOWN` messages terminalize immediately.
+An unsupervised fallback is available only in explicit standalone mode.
 Operators can abort an active cron run by cron run id. The abort path calls the
 underlying LemonRouter run cancellation when the router run is still active,
 persists the cron run as `:aborted`, emits the normal completion event, and
@@ -94,6 +101,11 @@ stops at `max_ticks`, failure, timeout, or a terminal judge verdict. Passing
 manager scheduler scans active goals and re-starts only those persisted loops
 when no loop for that session is already running. Loop status and auto state are
 stored in `LemonAgent.Workspace.GoalStore` and emitted as redacted goal events.
+The manager records the router-accepted run ID for the active judge or
+continuation. A hard stop (the default) disables auto restart, aborts that run
+once, kills the loop task, and prevents another tick. A graceful stop disables
+auto restart and lets the bounded loop finish. Manager call deadlines are
+computed above configured judge/continuation wait deadlines.
 
 `GoalJudge` supports explicit verdicts for tests/manual control, a pluggable
 `judge_runner` route with `judge_model` metadata, and deterministic fallback
@@ -128,6 +140,11 @@ is a git repository. The worktree layer creates
 `<repo>/.worktrees/kanban-<task_id>` on a
 `lemon-kanban/<task_id>` branch before submitting the router run, so broad
 multi-agent execution does not share one mutable checkout.
+Stopping a board is a hard cancellation: worker pids are killed and their exact
+lease IDs are reclaimed before return. Completion/failure writes require the
+same lease ID, so late worker results cannot mutate a newer lease. Starting a
+board reconciles unexpired leases left by the same dispatcher worker ID after a
+manager restart.
 
 **HeartbeatManager** subscribes to the `"cron"` bus and auto-processes every
 `:cron_run_completed` event, checking for the exact `"HEARTBEAT_OK"` response to
@@ -492,6 +509,7 @@ MIX_ENV=test mix test \
   apps/lemon_automation/test/lemon_automation/cron_store_test.exs \
   apps/lemon_automation/test/lemon_automation/cron_run_test.exs \
   apps/lemon_automation/test/lemon_automation/cron_manager_retry_test.exs \
+  apps/lemon_automation/test/lemon_automation/cron_manager_worker_lifecycle_test.exs \
   apps/lemon_automation/test/lemon_automation/cron_manager_scheduler_lock_test.exs \
   apps/lemon_automation/test/lemon_automation/cron_manager_update_test.exs \
   apps/lemon_automation/test/lemon_automation/cron_manager_forwarding_test.exs \
@@ -546,7 +564,8 @@ mix test --cover apps/lemon_automation
 | `cron_run_test.exs` | CronRun state transitions, duration computation, serialization |
 | `cron_schedule_test.exs` | Cron parsing, next_run computation, matches?, common patterns |
 | `cron_store_test.exs` | Persistence CRUD, filtering, ordering, cleanup_old_runs |
-| `cron_manager_retry_test.exs` | Scheduled failure retry/backoff and manual no-retry behavior |
+| `cron_manager_retry_test.exs` | Scheduled retry/backoff, restart reconstruction, deterministic attempt uniqueness, stale recovery, and manual no-retry behavior |
+| `cron_manager_worker_lifecycle_test.exs` | Monitored submitter crash and task-supervisor start failure terminalization |
 | `cron_manager_scheduler_lock_test.exs` | Scheduled ticks and manager restarts skip duplicate launches when a persisted active run exists and recover stale active runs as timeouts |
 | `cron_manager_update_test.exs` | Immutable field rejection, mutable field updates |
 | `cron_manager_forwarding_test.exs` | Summary forwarding to main/channel_peer sessions and channel outbox delivery |
@@ -556,9 +575,9 @@ mix test --cover apps/lemon_automation
 | `heartbeat_timer_test.exs` | Timer-based sub-minute heartbeats |
 | `run_completion_waiter_test.exs` | Bus-based completion waiting, output truncation |
 | `run_submitter_test.exs` | Router submission, session key forking, error handling, memory file writes |
-| `goal_loop_test.exs` | Goal loop verdicts, bounded loops, auto scheduling, router judge proof |
+| `goal_loop_test.exs` | Goal loop verdicts, bounded loops, auto scheduling, router judge proof, authoritative run tracking, and hard-stop abort/no-next-tick semantics |
 | `goal_judge_router_live_test.exs` | Opt-in provider-backed router judge proof; passed locally on 2026-05-15 with Z.ai `glm-5-turbo` |
-| `kanban_dispatcher_test.exs` | Durable kanban task leasing, bounded concurrency, real-worker dispatch proof, completion, failure, crash marking, and lease reclaim |
+| `kanban_dispatcher_test.exs` | Durable kanban task leasing, bounded concurrency, real-worker dispatch proof, completion, failure, crash marking, hard-stop reclaim, stale-result rejection, and restart reconciliation |
 | `kanban_dispatcher_live_test.exs` | Opt-in provider-backed dispatcher proof; passed locally on 2026-05-15 with Z.ai `glm-5-turbo` |
 | `kanban_run_worker_test.exs` | Router request construction, run wait behavior, and failure return for leased kanban tasks |
 | `wake_test.exs` | Wake triggering, batch operations, pattern matching, agent filtering |

@@ -38,6 +38,8 @@ defmodule LemonAutomation.RunCompletionWaiter do
     * `:bus_mod` - bus module implementing `subscribe/1` and `unsubscribe/1`
     * `:timeout_ms` - terminal wait timeout
     * `:wait_opts` - options forwarded to the waiter
+    * `:on_submitted` - callback invoked with the authoritative router run ID
+    * `:on_terminal` - callback invoked with the same run ID after waiting
 
   Returns the fixed run id with successful output. Submission, timeout, run
   failure, mismatched-run-id, and unexpected waiter results remain distinct so
@@ -59,10 +61,16 @@ defmodule LemonAutomation.RunCompletionWaiter do
     try do
       case safe_submit(router_mod, params) do
         {:ok, ^run_id} ->
-          normalize_wait_result(
-            run_id,
-            waiter_mod.wait_already_subscribed(run_id, timeout_ms, wait_opts)
-          )
+          :ok = notify(Keyword.get(opts, :on_submitted), run_id)
+
+          result =
+            normalize_wait_result(
+              run_id,
+              waiter_mod.wait_already_subscribed(run_id, timeout_ms, wait_opts)
+            )
+
+          :ok = notify(Keyword.get(opts, :on_terminal), run_id)
+          result
 
         {:ok, other_run_id} ->
           {:error, {:unexpected_run_id, run_id, other_run_id}}
@@ -115,6 +123,13 @@ defmodule LemonAutomation.RunCompletionWaiter do
     error -> {:error, {:exception, error}}
   catch
     :exit, reason -> {:error, {:exit, reason}}
+  end
+
+  defp notify(nil, _run_id), do: :ok
+
+  defp notify(callback, run_id) when is_function(callback, 1) do
+    callback.(run_id)
+    :ok
   end
 
   defp normalize_wait_result(run_id, {:ok, output}), do: {:ok, run_id, output}

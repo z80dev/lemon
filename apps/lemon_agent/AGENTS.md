@@ -250,6 +250,13 @@ end
 
 10. **Context truncation preserves transcript structure.** Sliding-window output stays in original chronological order. Both strategies retain an assistant tool-call message and its contiguous tool results as one unit, dropping the whole unit when it cannot fit; bookends treats both `max_messages` and `max_chars` as hard limits.
 
+11. **Kanban terminal writes are lease-guarded.** Automation dispatchers must
+    retain the leased task's `kanbanLease.id` and use
+    `KanbanStore.complete_leased_task/3`, `fail_leased_task/4`, or
+    `reclaim_task_lease/3`. A stale lease returns `{:error, :stale_lease}` and
+    must not mutate a newer worker's task. Dispatcher restart paths use
+    `reclaim_worker_leases/3` before leasing new work for the same worker ID.
+
 
 ## How This App Connects to Other Umbrella Apps
 
