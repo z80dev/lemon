@@ -174,6 +174,21 @@ defmodule LemonCli.CommandRegistry do
       ]
     },
     %{
+      name: "blueprints",
+      summary: "Review and activate cataloged skill automation blueprints",
+      usage: "lemon blueprints [list|inspect|validate|preview|activate] [options]",
+      subcommands: subcommands(~w(list inspect validate preview activate)),
+      options: [
+        option("--profile ID", ["--profile"], "Target profile for preview or activation"),
+        option("--confirm DIGEST", ["--confirm"], "Exact digest from a fresh preview"),
+        option("--json", ["--json"], "Emit one sanitized JSON document")
+      ],
+      details: [
+        "With no arguments, the command lists the local catalog. A bundle ID plus --profile is shorthand for preview and never mutates state.",
+        "Activation accepts catalog IDs only and requires the exact confirmation digest from a fresh plan. Bundle paths, archives, commands, environment overrides, and secret values are not CLI inputs."
+      ]
+    },
+    %{
       name: "profile",
       summary: "Manage isolated agent profiles",
       usage: "lemon profile <command> [options]",

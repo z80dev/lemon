@@ -230,8 +230,24 @@ header, at least one skill, and exactly one cron automation:
 
 ### Review and activate
 
-Connect to the authenticated control-plane WebSocket as an operator, then use
-the catalog-scoped methods. RPC never accepts an arbitrary filesystem path:
+Start the unified runtime, then use the same catalog-scoped CLI in a source
+checkout or packaged release. The packaged launcher starts its daemon when
+needed; source users run `./bin/lemon --daemon` first. With no arguments the
+family lists the bounded catalog, and a bundle ID plus `--profile` is preview
+shorthand:
+
+```bash
+lemon blueprints
+lemon blueprints inspect daily-note
+lemon blueprints validate daily-note --json
+lemon blueprints daily-note --profile operator
+lemon blueprints preview daily-note --profile operator --json
+```
+
+These commands never accept an arbitrary filesystem path. The CLI delegates to
+the authenticated catalog-scoped control-plane methods rather than loading the
+bundle or starting automation in its one-shot VM. Direct WebSocket clients can
+use the same RPCs:
 
 ```json
 {"type":"req","id":"1","method":"blueprints.list","params":{}}
@@ -244,6 +260,13 @@ the catalog-scoped methods. RPC never accepts an arbitrary filesystem path:
 actions, target profile, content hashes, schedule, enabled state, and cleanup
 flags. The response deliberately contains prompt byte/hash metadata rather than
 prompt text. If the plan is correct, send its exact `confirmationDigest`:
+
+```bash
+lemon blueprints activate daily-note --profile operator \
+  --confirm <digest-from-preview>
+```
+
+Or through JSON-RPC:
 
 ```json
 {"type":"req","id":"5","method":"blueprints.activate","params":{"bundleId":"daily-note","profileId":"operator","confirmationDigest":"<digest from preview>"}}
@@ -270,7 +293,8 @@ This first vertical does not provide archive import, signing, publishing, a
 remote registry, command blueprints, heartbeats, multiple jobs per bundle, or a
 TUI/Web catalog. Use the local `LemonAutomation.Blueprint` service directly
 only for trusted source-checkout administration that genuinely needs a local
-path; remote clients should use the catalog-scoped RPC.
+path; normal operators should use `lemon blueprints`, and remote clients should
+use the catalog-scoped RPC.
 
 Run the booted-runtime proof to activate the disabled example, verify
 profile-local discovery and persisted provenance, replay it without a

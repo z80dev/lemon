@@ -13,7 +13,7 @@
 #   bin/lemon                 # interactive terminal: launches the TUI (daemon auto-start)
 #
 #   bin/lemon tui|web|start|daemon|stop|restart|status|remote|eval|rpc|version|update
-#   bin/lemon setup|model|gateway|config|context|secrets|channels|profile|backup|sessions|completion|doctor
+#   bin/lemon setup|model|gateway|config|context|secrets|channels|providers|blueprints|profile|backup|sessions|completion|doctor
 #   bin/lemon --help
 
 set -euo pipefail
@@ -54,6 +54,8 @@ Commands:
   context [args]        Preview or resolve bounded context references
   secrets [args]        Manage secrets
   channels [args]       Configure channel adapters
+  providers [args]      Inspect provider readiness and manage routing
+  blueprints [args]     Review or activate cataloged automation blueprints
   backup [args]         Create, verify, list, or restore user-state backups
   profile [args]        Manage profiles and submit canonical profile chats
   sessions [args]       Inspect, export, or safely prune durable sessions
@@ -536,6 +538,53 @@ EOF
       if ! control_plane_healthy "$control_port"; then
         info "daemon not running; starting it for profile chat"
         start_daemon
+
+        healthy=""
+        for ((attempt = 1; attempt <= 30; attempt++)); do
+          if control_plane_healthy "$control_port"; then
+            healthy=1
+            break
+          fi
+          sleep 1
+        done
+
+        if [ -z "$healthy" ]; then
+          error "daemon did not become healthy on port $control_port within 30s"
+          error "check 'lemon status' and 'lemon doctor', then retry"
+          exit 1
+        fi
+      fi
+    fi
+
+    run_runtime_cli "$@"
+    ;;
+
+  blueprints)
+    if [ "${2:-}" != "help" ] && [ "${2:-}" != "--help" ] && [ "${2:-}" != "-h" ]; then
+      require_cmd curl
+      control_port="${LEMON_CONTROL_PLANE_PORT:-4040}"
+
+      if ! [[ "$control_port" =~ ^[0-9]+$ ]]; then
+        error "Invalid LEMON_CONTROL_PLANE_PORT value: $control_port"
+        exit 1
+      fi
+
+      if ! control_plane_healthy "$control_port"; then
+        blueprint_json=""
+        for blueprint_arg in "$@"; do
+          if [ "$blueprint_arg" = "--json" ]; then
+            blueprint_json=1
+            break
+          fi
+        done
+
+        if [ -n "$blueprint_json" ]; then
+          info "daemon not running; starting it for blueprint management" >&2
+          start_daemon >&2
+        else
+          info "daemon not running; starting it for blueprint management"
+          start_daemon
+        fi
 
         healthy=""
         for ((attempt = 1; attempt <= 30; attempt++)); do

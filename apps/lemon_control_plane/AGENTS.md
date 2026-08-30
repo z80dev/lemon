@@ -452,6 +452,12 @@ mutation delegates to `LemonAutomation.Blueprint`, which binds the target
 profile and current destination state and creates cron jobs only through
 `CronManager.add_new/1`.
 
+`lemon blueprints` is the source and packaged CLI projection over these exact
+methods. Its one-shot VM must not load bundle paths or start automation; the
+packaged launcher starts the existing runtime when necessary, preview is the
+default bundle-ID action, and only `blueprints.activate` carries the exact
+fresh confirmation digest to this long-running service.
+
 ### Voice / TTS (capability-gated)
 
 | Method | Scope | Description |

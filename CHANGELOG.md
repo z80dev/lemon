@@ -16,7 +16,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   environments, fail-closed fallback behavior, optional bounded in-memory
   caching, and source/packaged `lemon secrets sources status|test` diagnostics
   that expose readiness/provenance only.
-
+- Source and packaged `lemon blueprints` catalog list, sanitized inspect and
+  validate, non-mutating default preview, and exact-digest activation over the
+  existing authenticated control-plane/`CronManager` path, with stable redacted
+  JSON/exit codes, registry-driven help/completion, duplicate-safe results, and
+  real source plus assembled minimal-runtime proof.
 - Source and packaged `lemon sessions` commands for bounded list/search/show
   and redacted history, title/pin/archive lifecycle, always-redacted
   JSON/Markdown export, exact-candidate preview-confirm prune, and verified

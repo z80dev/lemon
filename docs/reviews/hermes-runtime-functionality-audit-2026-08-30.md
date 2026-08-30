@@ -39,8 +39,8 @@ could not persist one recurring instruction inside the current conversation and
 re-enter that conversation only when idle. This pass closes that gap end to end.
 
 The remaining gaps are no longer one missing agent loop. They cluster around
-document ingestion, proactive automation templates, host-side egress
-credential injection, micro-compaction, session housekeeping commands, and a few
+learn-from-source review, proactive automation suggestions and richer templates,
+host-side egress credential injection, micro-compaction, and a few
 restart/ergonomic edges in asynchronous delegation.
 
 The first-class profile backend also now reaches the terminal product shell:
@@ -66,7 +66,7 @@ means Hermes has a current user-facing behavior with no equivalent Lemon path.
 | Session durability | Persistent sessions, resume, search, export/prune/stats commands | JSONL tree sessions, branch navigation, durable history, search, runtime diagnostics | **Covered** for core work. Friendly export/prune/stats commands remain a **gap**. |
 | Checkpoints and rollback | Automatic file checkpoints, list/inspect/restore | Checkpoint/diff/restore tools plus tree-structured session history | **Covered**. Lemon should still consolidate the user guide and make rollback discoverable in every client. |
 | Same-session heartbeat | One persisted recurring prompt, idle-only firing, pause/resume/clear, missed-tick coalescing | Added in this pass: durable JSONL heartbeat, same transcript/provider path, user-message priority, pause/resume/clear, restart restore, reset tombstone | **Covered** after this pass. |
-| Cron and scheduling | Cron jobs, isolated scheduled turns, schedule management | Cron manager with agent and command jobs, pause/resume/abort, retries/jitter, monitor recovery, preflight, model-drift guard, chained context | **Lead** on lifecycle controls. Blueprints/forms and consent-first suggestions remain a **gap**. |
+| Cron and scheduling | Cron jobs, isolated scheduled turns, schedule management | Cron manager with agent and command jobs, pause/resume/abort, retries/jitter, monitor recovery, preflight, model-drift guard, chained context, and a source/packaged catalog blueprint CLI over exact-confirmed profile skill + cron activation | **Lead** on lifecycle controls. The first safe blueprint UX is covered; richer forms and consent-first suggestions remain a **gap**. |
 | Memory | Session search plus long-term memories and learning flows | SQLite full-text durable memory, provider fan-out, session ingest, Honcho provider, scoped tools; context references can select an always-redacted canonical session export | **Covered** for retrieval/storage and bounded source selection. Hermes `/learn` and journey/learning-graph UX remain a **gap**. |
 | Skills | Install/list/remove skills and official catalog | Registry, discovery, linting, install/import/manage tools, official Hermes catalog browser, curator flows | **Covered**. Ecosystem breadth and single-command import polish still vary. |
 | Subagents/delegation | Native subagents, background work, parent interaction | Native `task`, routed `agent`, budgets, run graph, parent questions, isolated `/bg`, named remote nodes | **Lead**. Restart reconciliation for persisted nonterminal asynchronous records and caller-selected join timeouts remain reliability gaps. |
@@ -132,6 +132,29 @@ real Lemon applications and proves the configured credential rotation,
 cross-provider fallback, destructive guard, and no-fallback HTTP 400 terminal
 path without using live credentials.
 
+## Automation blueprint UX follow-on
+
+The already-safe `LemonAutomation.Blueprint` and catalog-scoped control-plane
+methods now have one shared source and packaged CLI surface:
+
+- `lemon blueprints` lists the bounded local catalog; inspect and validate show
+  only normalized hashes, counts, provenance, policy, and schedule metadata.
+- A bundle ID plus `--profile` previews by default. The CLI sends no root,
+  path, prompt, skill body, command, environment, or secret field.
+- `activate` is the only mutation and requires the exact 64-character digest
+  from a fresh preview. The long-running control plane re-plans under the
+  existing lock and creates the stable job only through `CronManager.add_new/1`.
+- Repeating preview plus activation reports `unchanged` and retains one job.
+  JSON success/error documents and exit codes are stable and redact transport
+  reasons rather than stringifying runtime terms.
+
+The live blueprint CLI proof drives both the source launcher and an assembled
+`lemon_runtime_min` instance against separate temporary homes, catalogs,
+profiles, stores, and ports. Both paths perform list/inspect/validate, preview,
+activation, and duplicate-safe replay through the real control-plane and cron
+manager while asserting that catalog paths, prompt text, the operator token,
+and the isolated secrets key never appear in CLI output.
+
 ## Prioritized remaining runtime work
 
 ### P0 — reliability and safety closure
@@ -148,14 +171,15 @@ path without using live credentials.
 - Extend the shipped bounded context/document service into an auditable
   learn-from-source review over existing memory and skill stores; keep review
   separate from activation.
-- Add automation blueprints plus an opt-in suggestion workflow; keep suggestions
-  advisory until a user confirms the schedule and destination.
 - Extend the shipped 1Password, Bitwarden Secrets Manager, and bounded
   command-backed sources only when a new adapter can preserve the shared
   argv-only runner, bootstrap non-recursion, and value-free diagnostic contract.
+- Add an opt-in automation suggestion workflow and richer safe template forms;
+  keep suggestions advisory until a user confirms the schedule and destination.
 - Add named mixture-of-agents presets through Lemon's existing model-routing
   boundary rather than a parallel agent engine.
-- Add session export, prune, and stats commands to the unified CLI/control plane.
+- Add aggregate session statistics without expanding the redacted lifecycle
+  boundary.
 
 ### P2 — refinement
 
@@ -195,3 +219,17 @@ restores an overdue JSONL session, resolves a logical key that is deliberately
 different from its persisted header ID, dispatches the recurring turn through
 the normal provider stream, exercises pause/resume/clear through
 `sessions.heartbeat`, reloads the file, and verifies the clear tombstone.
+
+Blueprint CLI changes should additionally keep these lanes green:
+
+```bash
+MIX_ENV=test mix compile --warnings-as-errors
+MIX_ENV=test mix test \
+  apps/lemon_cli/test/lemon_cli/blueprints_command_test.exs \
+  apps/lemon_cli/test/lemon_cli/command_registry_test.exs \
+  apps/lemon_automation/test/lemon_automation/blueprint_test.exs \
+  apps/lemon_control_plane/test/lemon_control_plane/methods/blueprints_test.exs \
+  apps/lemon_control_plane/test/lemon_control_plane/protocol/schemas_test.exs --seed 1
+bash -n bin/lemon rel/overlays/bin/lemon scripts/live_blueprint_cli_smoke
+scripts/live_blueprint_cli_smoke
+```

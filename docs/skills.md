@@ -189,6 +189,9 @@ deterministic audit, project config, registry refresh, profile store, and cron
 manager into one preview-confirm-activate workflow. It does not add a second
 skill registry. Remote operators address only safe IDs below
 `~/.lemon/bundles`; local service callers may validate a trusted unpacked path.
+The source and packaged `lemon blueprints` CLI is the normal operator UX over
+that catalog-scoped control-plane boundary; a bundle ID plus `--profile`
+previews by default, and mutation requires the exact fresh digest.
 See the [skills user guide](user-guide/skills.md#portable-skill-and-automation-bundles)
 for the version 1 manifest, exact confirmation flow, policy boundary, and
 disabled example.
