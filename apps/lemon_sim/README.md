@@ -80,6 +80,12 @@ mix lemon.sim.werewolf --player-count 5 --models anthropic:claude-sonnet-4-20250
 mix run apps/lemon_sim/priv/scripts/werewolf_5model.exs
 ```
 
+The `mix lemon.sim.*` wrappers share their runtime startup, optional keyword,
+and simple provider/model parsing through `Mix.Tasks.Lemon.Sim.Common`.
+Provider-qualified model specs accept registered provider names plus the
+existing `gemini`, `gemini-cli`, `gemini_cli`, and `openai_codex` aliases;
+unknown provider strings are rejected without creating atoms.
+
 A single `mix lemon.sim.replay <scenario> <log>` task renders JSONL transcripts
 for every scenario. For example, a Werewolf transcript produced by
 `mix lemon.sim.werewolf --models ... --transcript-path path.jsonl`:
@@ -231,7 +237,9 @@ The standard anatomy is:
 
 Keep scenario-specific rules in `LemonSim.Examples.*`. Shared runner,
 model-loop, artifact, and verification logic belongs in `Kernel`, `LLM`, or
-`Bench`.
+`Bench`. Mix-task-only startup and option plumbing belongs in the ordinary
+functions in `Mix.Tasks.Lemon.Sim.Common`, not in scenario modules or task
+macros.
 
 ## Spectator UI
 

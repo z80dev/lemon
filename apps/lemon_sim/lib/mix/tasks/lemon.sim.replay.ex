@@ -1,6 +1,8 @@
 defmodule Mix.Tasks.Lemon.Sim.Replay do
   use Mix.Task
 
+  alias Mix.Tasks.Lemon.Sim.Common
+
   @shortdoc "Generate a video replay from any scenario game log"
 
   # scenario name => that scenario's VideoGenerator module. Every value `use`s
@@ -128,12 +130,12 @@ defmodule Mix.Tasks.Lemon.Sim.Replay do
 
     gen_opts =
       []
-      |> maybe_put(:output, opts[:output])
-      |> maybe_put(:fps, opts[:fps])
-      |> maybe_put(:hold_frames, opts[:hold_frames])
-      |> maybe_put(:width, opts[:width])
-      |> maybe_put(:height, opts[:height])
-      |> maybe_put(:keep_frames, opts[:keep_frames])
+      |> Common.maybe_put(:output, opts[:output])
+      |> Common.maybe_put(:fps, opts[:fps])
+      |> Common.maybe_put(:hold_frames, opts[:hold_frames])
+      |> Common.maybe_put(:width, opts[:width])
+      |> Common.maybe_put(:height, opts[:height])
+      |> Common.maybe_put(:keep_frames, opts[:keep_frames])
 
     case generator.generate(log_path, gen_opts) do
       {:ok, video_path} ->
@@ -164,9 +166,6 @@ defmodule Mix.Tasks.Lemon.Sim.Replay do
   end
 
   defp scenarios_list, do: @generators |> Map.keys() |> Enum.sort() |> Enum.join(", ")
-
-  defp maybe_put(opts, _key, nil), do: opts
-  defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
 
   defp format_file_size(bytes) when bytes < 1024, do: "#{bytes} B"
   defp format_file_size(bytes) when bytes < 1_048_576, do: "#{Float.round(bytes / 1024, 1)} KB"

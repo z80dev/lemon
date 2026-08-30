@@ -1,6 +1,8 @@
 defmodule Mix.Tasks.Lemon.Sim.Skirmish do
   use Mix.Task
 
+  alias Mix.Tasks.Lemon.Sim.Common
+
   @shortdoc "Run the LemonSim skirmish self-play example"
 
   @moduledoc """
@@ -32,49 +34,21 @@ defmodule Mix.Tasks.Lemon.Sim.Skirmish do
         Mix.raise("invalid options: #{inspect(invalid)}")
 
       true ->
-        ensure_runtime_started!()
+        Common.ensure_runtime_started!()
 
         log_path = resolve_log_path(opts[:log])
 
         run_opts =
           []
-          |> maybe_put(:persist?, opts[:persist])
-          |> maybe_put(:driver_max_turns, opts[:max_turns] || opts[:max_driver_turns])
-          |> maybe_put(:model, resolve_model(opts[:model]))
-          |> maybe_put(:log_path, log_path)
+          |> Common.maybe_put(:persist?, opts[:persist])
+          |> Common.maybe_put(:driver_max_turns, opts[:max_turns] || opts[:max_driver_turns])
+          |> Common.maybe_put(:model, Common.resolve_model(opts[:model]))
+          |> Common.maybe_put(:log_path, log_path)
 
         case LemonSim.Examples.Skirmish.run(run_opts) do
           {:ok, _final_state} -> :ok
           {:error, reason} -> Mix.raise("skirmish sim failed: #{inspect(reason)}")
         end
-    end
-  end
-
-  defp ensure_runtime_started! do
-    case Application.ensure_all_started(:lemon_sim) do
-      {:ok, _started} -> :ok
-      {:error, reason} -> Mix.raise("failed to start lemon_sim runtime: #{inspect(reason)}")
-    end
-  end
-
-  defp resolve_model(nil), do: nil
-  defp resolve_model(""), do: nil
-
-  defp resolve_model(model_spec) when is_binary(model_spec) do
-    trimmed = String.trim(model_spec)
-
-    case String.split(trimmed, ":", parts: 2) do
-      [provider, model_id] ->
-        provider_atom = normalize_provider(provider)
-
-        model =
-          LemonAi.Models.get_model(provider_atom, model_id) ||
-            LemonAi.Models.get_model(String.to_atom(String.trim(provider)), model_id)
-
-        model || Mix.raise("unknown model #{inspect(model_id)} for provider #{inspect(provider)}")
-
-      [_model_id] ->
-        LemonAi.Models.find_by_id(trimmed) || Mix.raise("unknown model #{inspect(trimmed)}")
     end
   end
 
@@ -88,18 +62,6 @@ defmodule Mix.Tasks.Lemon.Sim.Skirmish do
       )
 
   defp resolve_log_path(path), do: path
-
-  defp maybe_put(opts, _key, nil), do: opts
-  defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
-
-  defp normalize_provider(provider) do
-    case provider |> String.trim() |> String.downcase() |> String.replace("-", "_") do
-      "gemini" -> :google_gemini_cli
-      "gemini_cli" -> :google_gemini_cli
-      "openai_codex" -> :"openai-codex"
-      normalized -> String.to_atom(normalized)
-    end
-  end
 
   defp print_help do
     Mix.shell().info("""

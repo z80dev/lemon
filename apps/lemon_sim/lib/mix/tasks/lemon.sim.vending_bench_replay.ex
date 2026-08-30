@@ -9,6 +9,8 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBenchReplay do
 
   use Mix.Task
 
+  alias Mix.Tasks.Lemon.Sim.Common
+
   @switches [
     output_dir: :string,
     help: :boolean
@@ -27,12 +29,12 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBenchReplay do
         exit({:shutdown, 1})
 
       true ->
-        ensure_runtime_started!()
+        Common.ensure_runtime_and_core_started()
         [artifact_dir | _] = argv
 
         replay_opts =
           []
-          |> maybe_put(:output_dir, opts[:output_dir])
+          |> Common.maybe_put(:output_dir, opts[:output_dir])
 
         case LemonSim.Examples.VendingBench.Replay.write_browser(artifact_dir, replay_opts) do
           {:ok, paths} ->
@@ -44,13 +46,5 @@ defmodule Mix.Tasks.Lemon.Sim.VendingBenchReplay do
             exit({:shutdown, 1})
         end
     end
-  end
-
-  defp maybe_put(opts, _key, nil), do: opts
-  defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
-
-  defp ensure_runtime_started! do
-    Application.ensure_all_started(:lemon_sim)
-    Application.ensure_all_started(:lemon_core)
   end
 end

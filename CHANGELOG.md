@@ -10,6 +10,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- LemonSim Mix tasks now share ordinary runtime, option, and bounded
+  provider/model helpers instead of maintaining two dozen private copies;
+  arbitrary provider CLI input no longer creates atoms.
 - Product releases can now be cut and published from one manual Release
   workflow dispatch; the workflow derives CalVer, consumes the Unreleased
   notes, commits and tags the release, verifies every artifact, publishes the
