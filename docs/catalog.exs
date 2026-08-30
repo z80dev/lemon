@@ -80,6 +80,7 @@
     %{path: "docs/plans/lemon-sim-vendingbench-exemplary-2026-07-04.md", last_reviewed: ~D[2026-08-09], max_age_days: 30},
     %{path: "docs/plans/lemon-stack-reshape-2026-07-02.md", last_reviewed: ~D[2026-07-02], max_age_days: 365},
     %{path: "docs/plans/lemon-hermes-gap-audit-2026-08-11.md", last_reviewed: ~D[2026-08-30], max_age_days: 60},
+    %{path: "docs/plans/2026-08-30-hermes-parity-initiatives.md", last_reviewed: ~D[2026-08-30], max_age_days: 60},
     %{path: "docs/plans/lemon-improvement-plan-2026-08-12.md", last_reviewed: ~D[2026-08-12], max_age_days: 60},
     %{path: "docs/architecture/overview.md", last_reviewed: ~D[2026-08-10], max_age_days: 60},
     %{path: "docs/plans/2026-03-19-ai-boundary-extraction-plan.md", last_reviewed: ~D[2026-07-02], max_age_days: 365},
