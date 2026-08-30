@@ -1,6 +1,15 @@
 defmodule LemonAutomation.GoalContinuation do
-  @moduledoc false
+  @moduledoc """
+  Builds and submits one durable-goal continuation.
 
+  One-shot callers submit asynchronously. Autonomous goal loops pass
+  `await_completion: true`; that path uses
+  `LemonAutomation.RunCompletionWaiter.submit_and_wait/2`, so the completion
+  subscription exists before router submission and even synchronous terminal
+  events are observed.
+  """
+
+  alias LemonAutomation.RunCompletionWaiter
   alias LemonAgent.Workspace.GoalStore
 
   @spec continue_once(binary(), keyword()) ::
@@ -10,9 +19,9 @@ defmodule LemonAutomation.GoalContinuation do
          :ok <- budget_available?(goal, opts),
          run_id = Keyword.get(opts, :run_id, LemonCore.Id.run_id()),
          params = build_params(goal, run_id, opts),
-         {:ok, submitted_run_id} <- submit(params, opts),
+         {:ok, submitted_run_id, completion} <- submit(params, opts),
          {:ok, updated} <- GoalStore.record_continuation(session_key, submitted_run_id) do
-      {:ok, %{run_id: submitted_run_id, goal: updated, params: params}}
+      {:ok, %{run_id: submitted_run_id, goal: updated, params: params, completion: completion}}
     end
   end
 
@@ -82,11 +91,38 @@ defmodule LemonAutomation.GoalContinuation do
   defp parse_positive_integer(_), do: nil
 
   defp submit(params, opts) do
+    if Keyword.get(opts, :await_completion, false) do
+      submit_and_wait(params, opts)
+    else
+      submit_only(params, opts)
+    end
+  end
+
+  defp submit_and_wait(params, opts) do
+    result =
+      RunCompletionWaiter.submit_and_wait(params,
+        router_mod: Keyword.get(opts, :router_mod, LemonRouter),
+        waiter_mod: Keyword.get(opts, :waiter_mod, RunCompletionWaiter),
+        bus_mod: Keyword.get(opts, :bus_mod, LemonCore.Bus),
+        timeout_ms: Keyword.get(opts, :wait_timeout_ms, 300_000),
+        wait_opts: Keyword.get(opts, :wait_opts, [])
+      )
+
+    case result do
+      {:ok, run_id, output} -> {:ok, run_id, {:ok, output}}
+      {:error, {:run_failed, run_id, reason}} -> {:ok, run_id, {:error, reason}}
+      {:error, {:timeout, run_id}} -> {:ok, run_id, :timeout}
+      {:error, {:submit_failed, reason}} -> {:error, reason}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp submit_only(params, opts) do
     router_mod = Keyword.get(opts, :router_mod, LemonRouter)
 
     try do
       case router_mod.submit(params) do
-        {:ok, run_id} when is_binary(run_id) -> {:ok, run_id}
+        {:ok, run_id} when is_binary(run_id) -> {:ok, run_id, :not_awaited}
         {:error, reason} -> {:error, reason}
         other -> {:error, {:unexpected_submit_result, other}}
       end

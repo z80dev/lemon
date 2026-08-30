@@ -13,6 +13,21 @@ defmodule LemonAutomation.GoalLoopTest do
     end
   end
 
+  defmodule SynchronousLoopRouter do
+    @moduledoc false
+
+    def submit(params) do
+      send(params.meta.test_pid, {:router_submit, params})
+
+      send(
+        self(),
+        LemonCore.Event.new(:run_completed, %{completed: %{ok: true, answer: "done now"}})
+      )
+
+      {:ok, params.run_id}
+    end
+  end
+
   defmodule ContinueJudge do
     @moduledoc false
 
@@ -37,7 +52,7 @@ defmodule LemonAutomation.GoalLoopTest do
   defmodule WaiterOk do
     @moduledoc false
 
-    def wait(run_id, timeout_ms, opts) do
+    def wait_already_subscribed(run_id, timeout_ms, opts) do
       send(opts[:test_pid], {:wait_for_run, run_id, timeout_ms})
       {:ok, "done"}
     end
@@ -46,7 +61,7 @@ defmodule LemonAutomation.GoalLoopTest do
   defmodule WaiterTimeout do
     @moduledoc false
 
-    def wait(_run_id, _timeout_ms, _opts), do: :timeout
+    def wait_already_subscribed(_run_id, _timeout_ms, _opts), do: :timeout
   end
 
   defmodule JudgeRouterOk do
@@ -61,7 +76,7 @@ defmodule LemonAutomation.GoalLoopTest do
   defmodule JudgeWaiterDone do
     @moduledoc false
 
-    def wait(run_id, timeout_ms, _opts) do
+    def wait_already_subscribed(run_id, timeout_ms, _opts) do
       send(Process.get(:goal_loop_test_pid), {:judge_wait, run_id, timeout_ms})
       {:ok, ~s({"action":"done","reason":"finished by judge"})}
     end
@@ -389,6 +404,29 @@ defmodule LemonAutomation.GoalLoopTest do
     assert_receive {:wait_for_run, "run_auto", 42}
     assert_receive {:wait_for_run, "run_auto", 42}
     assert GoalStore.get(session_key).continuation_count == 2
+  end
+
+  test "autonomous loop observes a continuation completed synchronously during submit", %{
+    session_key: session_key
+  } do
+    assert {:ok, _goal} =
+             GoalStore.set(session_key, "Finish synchronously",
+               agent_id: "agent_1",
+               meta: %{"testPid" => self()}
+             )
+
+    assert {:ok, %{status: :limit_reached, tick_count: 1}} =
+             GoalLoop.run_autonomous(session_key,
+               judge_mod: ContinueJudge,
+               router_mod: SynchronousLoopRouter,
+               run_id: "run_sync_goal",
+               max_ticks: 1,
+               wait_timeout_ms: 10,
+               meta: %{test_pid: self()}
+             )
+
+    assert_receive {:router_submit, %{run_id: "run_sync_goal"}}
+    refute_received %LemonCore.Event{type: :run_completed}
   end
 
   test "autonomous loop pauses the goal when a continuation times out", %{
