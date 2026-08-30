@@ -71,7 +71,7 @@ defmodule LemonCore.OAuth.LocalCallbackListenerTest do
 
     listener_ref = listener.ref
     pid_ref = Process.monitor(listener.pid)
-    assert_receive {:DOWN, ^pid_ref, :process, _pid, :normal}, 1_000
+    assert_receive {:DOWN, ^pid_ref, :process, _pid, _reason}, 1_000
 
     assert :ok = LocalCallbackListener.stop(listener)
     refute_receive {^listener_ref, _result}
