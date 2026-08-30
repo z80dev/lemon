@@ -380,24 +380,26 @@ defmodule LemonChannels.PortableCommand do
   defp ask_side_question("", _context), do: {:error, "Usage: /btw <question>"}
 
   defp ask_side_question(question, context) do
-    with session_key when is_binary(session_key) and session_key != "" <- context[:session_key] do
-      opts = maybe_put([], :timeout_ms, context[:timeout_ms])
+    case context[:session_key] do
+      session_key when is_binary(session_key) and session_key != "" ->
+        opts = maybe_put([], :timeout_ms, context[:timeout_ms])
 
-      case runtime_call(:side_query, [session_key, question, opts], {:error, :unavailable}) do
-        {:ok, answer} when is_binary(answer) ->
-          {:ok, answer}
+        case runtime_call(:side_query, [session_key, question, opts], {:error, :unavailable}) do
+          {:ok, answer} when is_binary(answer) ->
+            {:ok, answer}
 
-        {:error, :unavailable} ->
-          {:error, "Side questions are unavailable in this Lemon runtime."}
+          {:error, :unavailable} ->
+            {:error, "Side questions are unavailable in this Lemon runtime."}
 
-        {:error, _reason} ->
-          {:error, "Side question could not be answered. Check Lemon runtime logs."}
+          {:error, _reason} ->
+            {:error, "Side question could not be answered. Check Lemon runtime logs."}
 
-        _ ->
-          {:error, "Side question failed."}
-      end
-    else
-      _ -> {:error, "No current session is available for /btw."}
+          _ ->
+            {:error, "Side question failed."}
+        end
+
+      _ ->
+        {:error, "No current session is available for /btw."}
     end
   end
 
