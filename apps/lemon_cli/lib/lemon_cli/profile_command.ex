@@ -139,13 +139,17 @@ defmodule LemonCli.ProfileCommand do
   end
 
   defp roster(args) do
-    with {:ok, opts, []} <- parse(args, @common) do
-      profiles = ProfileStore.list(store_opts(opts)) |> Enum.map(&roster_entry/1)
-      output(%{"profiles" => profiles, "count" => length(profiles)}, opts, &print_roster/1)
-      @exit_ok
-    else
-      {:ok, _opts, _rest} -> usage_error("Usage: lemon profile roster [--json]")
-      {:error, reason} -> usage_error(reason)
+    case parse(args, @common) do
+      {:ok, opts, []} ->
+        profiles = ProfileStore.list(store_opts(opts)) |> Enum.map(&roster_entry/1)
+        output(%{"profiles" => profiles, "count" => length(profiles)}, opts, &print_roster/1)
+        @exit_ok
+
+      {:ok, _opts, _rest} ->
+        usage_error("Usage: lemon profile roster [--json]")
+
+      {:error, reason} ->
+        usage_error(reason)
     end
   end
 

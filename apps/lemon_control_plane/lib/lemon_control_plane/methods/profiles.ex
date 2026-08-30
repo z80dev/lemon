@@ -95,6 +95,7 @@ defmodule LemonControlPlane.Methods.ProfilesSupport do
 end
 
 defmodule LemonControlPlane.Methods.ProfilesList do
+  @moduledoc false
   @behaviour LemonControlPlane.Method
 
   @impl true
@@ -111,6 +112,7 @@ defmodule LemonControlPlane.Methods.ProfilesList do
 end
 
 defmodule LemonControlPlane.Methods.ProfilesGet do
+  @moduledoc false
   @behaviour LemonControlPlane.Method
 
   @impl true
@@ -129,6 +131,7 @@ defmodule LemonControlPlane.Methods.ProfilesGet do
 end
 
 defmodule LemonControlPlane.Methods.ProfilesCreate do
+  @moduledoc false
   @behaviour LemonControlPlane.Method
   alias LemonControlPlane.Methods.ProfilesSupport
 
@@ -150,6 +153,7 @@ defmodule LemonControlPlane.Methods.ProfilesCreate do
 end
 
 defmodule LemonControlPlane.Methods.ProfilesClone do
+  @moduledoc false
   @behaviour LemonControlPlane.Method
   alias LemonControlPlane.Methods.ProfilesSupport
 
@@ -175,6 +179,7 @@ defmodule LemonControlPlane.Methods.ProfilesClone do
 end
 
 defmodule LemonControlPlane.Methods.ProfilesRename do
+  @moduledoc false
   @behaviour LemonControlPlane.Method
   alias LemonControlPlane.Methods.ProfilesSupport
 
@@ -196,6 +201,7 @@ defmodule LemonControlPlane.Methods.ProfilesRename do
 end
 
 defmodule LemonControlPlane.Methods.ProfilesExport do
+  @moduledoc false
   @behaviour LemonControlPlane.Method
   alias LemonControlPlane.Methods.ProfilesSupport
 
@@ -235,6 +241,7 @@ defmodule LemonControlPlane.Methods.ProfilesExport do
 end
 
 defmodule LemonControlPlane.Methods.ProfilesDelete do
+  @moduledoc false
   @behaviour LemonControlPlane.Method
   alias LemonControlPlane.Methods.ProfilesSupport
 
@@ -269,6 +276,7 @@ defmodule LemonControlPlane.Methods.ProfilesDelete do
 end
 
 defmodule LemonControlPlane.Methods.ProfilesRoster do
+  @moduledoc false
   @behaviour LemonControlPlane.Method
 
   @impl true
@@ -291,6 +299,7 @@ defmodule LemonControlPlane.Methods.ProfilesRoster do
 end
 
 defmodule LemonControlPlane.Methods.ProfileChat do
+  @moduledoc false
   @behaviour LemonControlPlane.Method
   alias LemonControlPlane.Methods.ProfilesSupport
 
