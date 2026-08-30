@@ -754,7 +754,7 @@ defmodule LemonAutomation.Blueprint do
     config_path = Config.project_config_file(workspace)
     config_snapshot = snapshot_file(config_path)
 
-    case stage_and_commit_skills(actions, state.profile["paths"]["skills"]) do
+    case stage_and_commit_skills(actions, state.profile["paths"]["skills"], opts) do
       {:ok, created} ->
         case enable_profile_skills(state.bundle.skills, workspace) do
           :ok ->
@@ -832,22 +832,64 @@ defmodule LemonAutomation.Blueprint do
     end
   end
 
-  defp stage_and_commit_skills([], _skills_root), do: {:ok, []}
+  defp stage_and_commit_skills([], _skills_root, _opts), do: {:ok, []}
 
-  defp stage_and_commit_skills(actions, skills_root) do
+  defp stage_and_commit_skills(actions, skills_root, opts) do
     stage =
       Path.join(skills_root, ".bundle-stage-#{System.unique_integer([:positive, :monotonic])}")
 
     with :ok <- File.mkdir_p(skills_root) |> map_write_error(:skill_write_failed),
          :ok <- ensure_absent(stage),
          :ok <- File.mkdir(stage) |> map_write_error(:skill_write_failed),
-         :ok <- copy_staged_skills(actions, stage) do
+         :ok <- copy_staged_skills(actions, stage),
+         :ok <- run_stage_hook(opts, stage),
+         :ok <- verify_staged_skills(actions, stage) do
       commit_staged_skills(actions, stage, [])
     else
       {:error, _} = error ->
         _ = File.rm_rf(stage)
         error
     end
+  end
+
+  defp run_stage_hook(opts, stage) do
+    case Keyword.get(opts, :after_stage_fun) do
+      fun when is_function(fun, 1) ->
+        case fun.(stage) do
+          :ok -> :ok
+          _ -> error(:staged_bundle_changed, "Staged skill verification hook failed")
+        end
+
+      _ ->
+        :ok
+    end
+  rescue
+    _ -> error(:staged_bundle_changed, "Staged skill verification hook failed")
+  end
+
+  defp verify_staged_skills(actions, stage) do
+    Enum.reduce_while(actions, :ok, fn action, :ok ->
+      staged = Path.join(stage, action.skill.key)
+
+      with {:ok, stats} <- scan_skill_tree(staged),
+           true <-
+             stats.files == action.skill.file_count ||
+               error(:staged_bundle_changed, "Staged skill file count changed"),
+           true <-
+             stats.bytes == action.skill.bytes ||
+               error(:staged_bundle_changed, "Staged skill byte count changed"),
+           {:ok, hash} <- Bundle.compute_hash(staged) |> map_bundle_error(),
+           true <-
+             hash == action.skill.bundle_hash ||
+               error(:staged_bundle_changed, "Staged skill content changed"),
+           :ok <- validate_skill_manifest(staged),
+           :ok <- require_clean_audit(staged) do
+        {:cont, :ok}
+      else
+        {:error, _} = error -> {:halt, error}
+        _ -> {:halt, error(:staged_bundle_changed, "Staged skill verification failed")}
+      end
+    end)
   end
 
   defp copy_staged_skills(actions, stage) do
