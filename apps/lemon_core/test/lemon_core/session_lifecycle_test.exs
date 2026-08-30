@@ -46,6 +46,24 @@ defmodule LemonCore.SessionLifecycleTest do
     assert Enum.map(result.sessions, & &1.session_key) == [first]
   end
 
+  test "ignores malformed legacy session-index rows without hiding valid sessions" do
+    suffix = unique_suffix()
+    session_key = "agent:lifecycle_malformed_#{suffix}:main"
+    malformed_key = "malformed-session-row-#{suffix}"
+
+    on_exit(fn ->
+      cleanup_sessions([session_key])
+      Store.delete(:sessions_index, malformed_key)
+    end)
+
+    seed_session(session_key, "run-malformed-#{suffix}", "valid prompt", "valid answer")
+    assert :ok = Store.put(:sessions_index, malformed_key, %{session_key: nil, run_count: 1})
+
+    result = SessionLifecycle.list(query: "lifecycle_malformed_#{suffix}")
+
+    assert Enum.map(result.sessions, & &1.session_key) == [session_key]
+  end
+
   test "returns full resumable history only when callers explicitly disable redaction" do
     suffix = unique_suffix()
     session_key = "agent:resume_#{suffix}:main"

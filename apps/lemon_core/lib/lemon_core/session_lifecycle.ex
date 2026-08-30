@@ -7,6 +7,9 @@ defmodule LemonCore.SessionLifecycle do
   search/listing, title/pin/archive metadata, redacted portable exports, and a
   confirmation-bound prune flow.
 
+  Session discovery ignores malformed legacy index rows so one damaged record
+  cannot hide otherwise valid sessions from operator surfaces.
+
   Pruning is intentionally guarded: previews are dry-run by default, archived
   sessions are the default (and safest) candidate set, pinned sessions are
   excluded unless explicitly requested, and execution requires the token from
@@ -222,8 +225,17 @@ defmodule LemonCore.SessionLifecycle do
   defp all_sessions do
     RunStore.list_sessions()
     |> Enum.flat_map(fn
-      {_key, session} when is_map(session) -> [merge_metadata(session)]
-      _other -> []
+      {_key, session} when is_map(session) ->
+        case read(session, :session_key) do
+          session_key when is_binary(session_key) and session_key != "" ->
+            [merge_metadata(session)]
+
+          _invalid_or_legacy_row ->
+            []
+        end
+
+      _other ->
+        []
     end)
   end
 
