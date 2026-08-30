@@ -51,6 +51,24 @@ Barrier-based regressions cover exact event retention, finish/fail/suppression
 interleavings, exact high-concurrency token and cost sums, `max_children: 1`,
 idempotent completion aggregation, and DETS-load/live-write ordering.
 
+## Coordination and local scheduling follow-up
+
+- Parent-question creation and terminal transitions now use a serialized
+  owner. Exact parent session plus agent authorization replaces nil/wildcard
+  matching, and concurrent answer/timeout/cancel races emit one terminal event.
+- `Session.deliver_parent_question/2` starts idle parent turns. Matching task or
+  agent joins poll the question store and yield `needs_parent_answer`, avoiding
+  a parent/child clarification deadlock while preserving the visible question.
+- Join followup suppression is a transient reservation until the outcome is
+  known. `wait_any` keeps only the completed winner suppressed; aborted,
+  failed, unknown, and clarification-interrupted joins release reservations.
+- `LaneQueue` monitors queued callers, removes abandoned jobs, and contains
+  task-supervisor admission failures. `ProcessManager` catches queue call exits
+  before taking its direct-execution fallback.
+- A delegated completion watcher timeout now records `tracking_lost` locally,
+  leaves a still-running router run authoritative, and performs bounded
+  reconciliation so a late success can still become terminal.
+
 ## Next high-value improvements
 
 ### 1. Make async lifecycle ownership reusable
@@ -92,13 +110,13 @@ background lanes. Retain `Parallel.Semaphore` for standalone batch helpers that
 do not enter a lane. Before removal, add a concurrency test that covers queue
 ordering, cancellation, and separate lane progress.
 
-### 4. Make joins abort-aware and explicitly bounded
+### 4. Add an explicit caller-selected join timeout
 
-`agent action=join` waits with `:infinity` after the tool's one-time abort check.
-The completion watcher has its own long timeout, so a missing terminal signal
-can occupy the parent turn for a long time. Add a join timeout parameter with a
-documented default and thread the abort signal through the wait. A timed-out or
-aborted join should stop waiting without changing the child run's state.
+Task and agent joins now poll the abort signal while waiting, reject unknown run
+ids explicitly, and yield when a child clarification opens. They still have no
+caller-selected timeout parameter. Add one with a documented default; timeout
+must stop waiting and release transient followup reservations without changing
+the child run's state.
 
 ### 5. Centralize the policy for background-task startup failure
 

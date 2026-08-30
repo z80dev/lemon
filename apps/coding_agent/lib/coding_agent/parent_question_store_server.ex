@@ -14,6 +14,7 @@ defmodule CodingAgent.ParentQuestionStoreServer do
   @dets_table :coding_agent_parent_questions_dets
   @default_ttl_seconds 86_400
   @cleanup_interval_seconds 300
+  @max_events 100
 
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
@@ -36,6 +37,30 @@ defmodule CodingAgent.ParentQuestionStoreServer do
 
   def clear(server \\ __MODULE__) do
     GenServer.call(server, :clear, 5_000)
+  end
+
+  @doc "Atomically create a request when its child scope has no open request."
+  @spec create(map(), GenServer.server()) :: {:ok, map()} | {:error, :already_waiting}
+  def create(record, server \\ __MODULE__) when is_map(record) do
+    GenServer.call(server, {:create, record}, 10_000)
+  end
+
+  @doc "Atomically transition a waiting request and return the winning record."
+  @spec transition(String.t(), atom(), map(), term(), GenServer.server()) ::
+          {:ok, map()} | {:error, term()}
+  def transition(request_id, status, updates, authorization \\ :none, server \\ __MODULE__)
+      when is_binary(request_id) and is_atom(status) and is_map(updates) do
+    GenServer.call(
+      server,
+      {:transition, request_id, status, updates, authorization},
+      10_000
+    )
+  end
+
+  @doc "Atomically append a bounded lifecycle event."
+  @spec append_event(String.t(), term(), GenServer.server()) :: :ok
+  def append_event(request_id, event, server \\ __MODULE__) when is_binary(request_id) do
+    GenServer.call(server, {:append_event, request_id, event}, 10_000)
   end
 
   @impl true
@@ -62,6 +87,69 @@ defmodule CodingAgent.ParentQuestionStoreServer do
   @impl true
   def handle_call(:ensure_table, _from, state) do
     state = ensure_tables(state)
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:create, record}, _from, state) do
+    state = ensure_tables(state)
+    child_scope_id = Map.fetch!(record, :child_scope_id)
+
+    if waiting_for_child_scope?(child_scope_id) do
+      {:reply, {:error, :already_waiting}, state}
+    else
+      request_id = Map.fetch!(record, :id)
+      do_insert_record(request_id, record, [])
+      {:reply, {:ok, record}, state}
+    end
+  end
+
+  def handle_call(
+        {:transition, request_id, status, updates, authorization},
+        _from,
+        state
+      ) do
+    state = ensure_tables(state)
+
+    reply =
+      case :ets.lookup(@table, request_id) do
+        [{^request_id, %{status: :waiting} = record, events}] ->
+          with :ok <- authorize(record, authorization) do
+            now = System.system_time(:second)
+
+            updated =
+              record
+              |> Map.merge(updates)
+              |> Map.put(:status, status)
+              |> Map.put(:completed_at, now)
+              |> Map.put(:updated_at, now)
+
+            do_insert_record(request_id, updated, events)
+            {:ok, updated}
+          end
+
+        [{^request_id, record, _events}] ->
+          {:error, {:invalid_status, Map.get(record, :status)}}
+
+        _ ->
+          {:error, :not_found}
+      end
+
+    {:reply, reply, state}
+  end
+
+  def handle_call({:append_event, request_id, event}, _from, state) do
+    state = ensure_tables(state)
+
+    case :ets.lookup(@table, request_id) do
+      [{^request_id, record, events}] ->
+        updated_events = [event | events] |> Enum.take(@max_events)
+        updated_record = Map.put(record, :updated_at, System.system_time(:second))
+        do_insert_record(request_id, updated_record, updated_events)
+
+      _ ->
+        :ok
+    end
+
     {:reply, :ok, state}
   end
 
@@ -218,6 +306,43 @@ defmodule CodingAgent.ParentQuestionStoreServer do
     end
 
     length(expired_ids)
+  end
+
+  defp waiting_for_child_scope?(child_scope_id) do
+    :ets.foldl(
+      fn
+        {_id, %{child_scope_id: ^child_scope_id, status: :waiting}, _events}, _acc -> true
+        _entry, acc -> acc
+      end,
+      false,
+      @table
+    )
+  end
+
+  defp authorize(_record, :none), do: :ok
+
+  defp authorize(record, {:parent, session_key, agent_id}) do
+    if non_empty_binary?(session_key) and non_empty_binary?(agent_id) and
+         session_key == Map.get(record, :parent_session_key) and
+         agent_id == Map.get(record, :parent_agent_id) do
+      :ok
+    else
+      {:error, :wrong_parent}
+    end
+  end
+
+  defp authorize(_record, _authorization), do: {:error, :wrong_parent}
+
+  defp non_empty_binary?(value), do: is_binary(value) and String.trim(value) != ""
+
+  defp do_insert_record(request_id, record, events) do
+    :ets.insert(@table, {request_id, record, events})
+
+    if dets_open?() do
+      :dets.insert(@dets_table, {request_id, record, events})
+    end
+
+    :ok
   end
 
   defp expired_record?(record, now, ttl_seconds) do

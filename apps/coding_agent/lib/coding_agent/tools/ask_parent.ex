@@ -140,8 +140,8 @@ defmodule CodingAgent.Tools.AskParent do
       not is_pid(parent_session_pid) or not Process.alive?(parent_session_pid) ->
         {:error, "Parent session is unavailable"}
 
-      not function_exported?(parent_session_module, :follow_up, 2) ->
-        {:error, "Parent session does not support follow_up/2"}
+      not function_exported?(parent_session_module, :deliver_parent_question, 2) ->
+        {:error, "Parent session does not support parent-question delivery"}
 
       true ->
         {:ok,
@@ -182,7 +182,7 @@ defmodule CodingAgent.Tools.AskParent do
   defp notify_parent(request, context) do
     text = build_parent_follow_up_text(request)
 
-    case context.parent_session_module.follow_up(context.parent_session_pid, text) do
+    case context.parent_session_module.deliver_parent_question(context.parent_session_pid, text) do
       :ok ->
         :ok
 

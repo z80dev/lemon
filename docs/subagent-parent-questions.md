@@ -163,7 +163,10 @@ Parent question submitted as request <request_id>. Waiting for answer.
 2. Lemon validates that the session has a live parent context and no open parent-question request for the same child run.
 3. Lemon persists a parent-question request record.
 4. Lemon emits `:parent_question_requested` to child and parent run topics and records introspection.
-5. Lemon sends a structured follow-up message into the parent session.
+5. Lemon calls `Session.deliver_parent_question/2`. An idle parent starts a
+   turn immediately; a streaming parent receives the same visible follow-up.
+   A parent blocked in `task` or `agent` join yields with
+   `needs_parent_answer` when the matching request opens.
 6. The child blocks waiting for an answer or timeout.
 7. The parent answers through a resolver path.
 8. Lemon persists the answer, emits `:parent_question_answered`, and wakes the waiting `ask_parent` tool execution.
@@ -267,6 +270,12 @@ Phase 1 should expose a minimal parent-facing tool:
 Under the hood that tool resolves requests through:
 
 - `CodingAgent.ParentQuestions.answer(request_id, answer_text, opts \\ [])`
+
+The resolver must supply the exact non-empty parent `session_key` and
+`agent_id`; nil is never a wildcard. Creation and terminal transitions run
+through `ParentQuestionStoreServer`, which atomically enforces one waiting
+request per child scope and first-writer-wins terminal state. Only the winning
+answer, timeout, cancellation, or error transition emits its terminal event.
 
 Useful future surfaces:
 
