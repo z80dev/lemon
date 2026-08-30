@@ -460,7 +460,7 @@ resolves its own credentials and cwd. This path uses the native
 
 | Role | Scopes | How established |
 |------|--------|-----------------|
-| `operator` | `admin`, `read`, `write`, `approvals`, `pairing` | Configured `LEMON_CONTROL_PLANE_OPERATOR_TOKEN`; tokenless only for a direct loopback peer when unconfigured |
+| `operator` | `admin`, `read`, `write`, `approvals`, `pairing` | Configured `LEMON_CONTROL_PLANE_OPERATOR_TOKEN`; legacy tokenless direct-loopback access requires an explicit compatibility opt-in |
 | `node` | `invoke`, `event` | Token from `connect.challenge` after node pairing |
 | `device` | `control` | Token from `connect.challenge` after device pairing |
 
@@ -485,10 +485,11 @@ Scope strings in `connect` params: `operator.admin`, `operator.read`, `operator.
 3. Server responds with `hello-ok` frame (not a `res` frame) containing `features.methods`, `features.events`, `snapshot`, `auth`, and `policy`
 4. All subsequent requests use the established auth context
 
-The HTTP router passes the actual socket peer into authorization. A configured
-operator token is required for every operator connection and compared in
-constant time. When it is unconfigured, only direct loopback peers retain the
-legacy tokenless operator path; non-loopback peers fail closed. Node/device
+The HTTP router passes the actual socket peer into authorization. An operator
+token is required by default for every operator connection and compared in
+constant time. `LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK=true`
+explicitly restores the legacy tokenless path for direct loopback peers only;
+it defaults to `false`, and non-loopback peers always fail closed. Node/device
 session tokens derive role and scopes only from known stored identity types.
 
 ### Token-Based Auth (Nodes/Devices)
@@ -773,10 +774,11 @@ LemonControlPlane.EventBridge.subscribe_run("some-run-id")
 
 Control-plane WebSocket operator authentication uses
 `LEMON_CONTROL_PLANE_OPERATOR_TOKEN`. The HTTP router must pass the actual socket
-peer to `WS.Connection`; tokenless operator compatibility is loopback-only when
-the token is unconfigured. Do not restore params-only node/device roles or map an
-unknown session-token identity to operator scopes. Keep credentials out of auth
-contexts, logs, status formatting, and error payloads.
+peer to `WS.Connection`; tokenless operator compatibility must remain default-off
+and, when explicitly enabled, direct-loopback-only. Do not restore params-only
+node/device roles or map an unknown session-token identity to operator scopes.
+Keep credentials out of URLs, auth contexts, logs, status formatting, and error
+payloads.
 
 - Use `async: true` for method tests that don't depend on shared state
 - Tests requiring the full runtime should be marked `async: false`

@@ -94,7 +94,7 @@ defmodule LemonControlPlane.Auth.AuthorizeTest do
       assert {:error, {:unauthorized, message}} =
                Authorize.from_params(%{"role" => "operator"}, local?: false)
 
-      assert message =~ "Remote operator access is disabled"
+      assert message =~ "Operator authentication is required"
       assert message =~ "LEMON_CONTROL_PLANE_OPERATOR_TOKEN"
     end
   end

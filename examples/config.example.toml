@@ -3,9 +3,11 @@
 # Plaintext api_key is supported but discouraged; use it only for quick local testing.
 #
 # Control-plane operator authentication is environment-only so the shared secret
-# is not written to this file. Set LEMON_CONTROL_PLANE_OPERATOR_TOKEN whenever
-# ws://.../ws is reachable beyond a direct loopback client. Named node pairing
-# sends the same value from LEMON_NODE_OPERATOR_TOKEN on the joining host.
+# is not written to this file. Set LEMON_CONTROL_PLANE_OPERATOR_TOKEN for normal
+# WebSocket operator access. Legacy tokenless loopback access is disabled unless
+# LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK=true is explicitly set.
+# Named node pairing sends the operator token from LEMON_NODE_OPERATOR_TOKEN on
+# the joining host.
 
 [providers.anthropic]
 api_key_secret = "anthropic_api_key"

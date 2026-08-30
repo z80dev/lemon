@@ -91,30 +91,15 @@ interface PendingRequest {
 
 /**
  * Build the control-plane WebSocket URL.
- * Uses VITE_LEMON_CP_URL if set, otherwise same-origin /ws.
- * Appends `?token=TOKEN` if a token is provided and not already present.
+ * Uses VITE_LEMON_CP_URL if set, otherwise same-origin /ws. Authentication
+ * credentials are deliberately excluded and travel only in `connect.auth`.
  */
-export function buildControlPlaneUrl(token?: string): string {
+export function buildControlPlaneUrl(): string {
   const envUrl = (import.meta.env.VITE_LEMON_CP_URL as string | undefined)?.trim();
-  const base = envUrl || (() => {
+  return envUrl || (() => {
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     return `${proto}//${window.location.host}/ws`;
   })();
-
-  if (!token) {
-    return base;
-  }
-
-  try {
-    const parsed = new URL(base, `${window.location.protocol}//${window.location.host}`);
-    if (!parsed.searchParams.has('token')) {
-      parsed.searchParams.set('token', token);
-    }
-    return parsed.toString();
-  } catch {
-    const sep = base.includes('?') ? '&' : '?';
-    return `${base}${sep}token=${encodeURIComponent(token)}`;
-  }
 }
 
 // ============================================================================

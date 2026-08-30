@@ -738,7 +738,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
       end
 
     cond do
-      String.contains?(message, "remote operator access is disabled") ->
+      String.contains?(message, "operator authentication is required") ->
         :controller_operator_token_not_configured
 
       String.contains?(message, "operator token is required") ->
