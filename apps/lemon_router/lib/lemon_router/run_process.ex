@@ -12,6 +12,7 @@ defmodule LemonRouter.RunProcess do
   - Subscribes to Bus for run events
   - Maintains metadata snapshot
   - Emits router-level events
+  - Bounds pre-start runtime submission retries with a terminal watchdog
 
   Heavy logic is delegated to focused submodules:
   - `RunProcess.Watchdog` -- idle-run watchdog timer
@@ -33,6 +34,7 @@ defmodule LemonRouter.RunProcess do
 
   @gateway_submit_retry_base_ms 100
   @gateway_submit_retry_max_ms 2_000
+  @gateway_submit_deadline_ms 30_000
   @abort_completion_grace_ms 150
   @gateway_bind_grace_ms 200
   @gateway_missing_completion_grace_ms 1_500
@@ -110,6 +112,7 @@ defmodule LemonRouter.RunProcess do
     run_orchestrator = opts[:run_orchestrator] || LemonRouter.RunOrchestrator
     run_watchdog_timeout_ms = Watchdog.resolve_run_watchdog_timeout_ms(opts)
     run_watchdog_confirm_timeout_ms = Watchdog.resolve_run_watchdog_confirm_timeout_ms(opts)
+    gateway_submit_deadline_ms = gateway_submit_deadline_ms(opts)
 
     with %ExecutionCommand{} = request <- opts[:execution_request],
          {:ok, execution_request} <-
@@ -152,6 +155,12 @@ defmodule LemonRouter.RunProcess do
         engine_runtime: engine_runtime,
         run_orchestrator: run_orchestrator,
         gateway_submit_attempt: 0,
+        gateway_submit_deadline_ms: gateway_submit_deadline_ms,
+        gateway_submit_deadline_at_ms:
+          System.monotonic_time(:millisecond) + gateway_submit_deadline_ms,
+        gateway_submit_deadline_ref: nil,
+        gateway_submit_last_error: nil,
+        gateway_submit_terminalized?: false,
         gateway_submitted?: false,
         gateway_run_pid: nil,
         gateway_run_ref: nil,
@@ -187,7 +196,7 @@ defmodule LemonRouter.RunProcess do
         send(self(), :submit_to_gateway)
       end
 
-      {:ok, state}
+      {:ok, maybe_schedule_gateway_submit_deadline(state)}
     else
       _ -> {:stop, {:invalid_execution_request, run_id}}
     end
@@ -207,31 +216,38 @@ defmodule LemonRouter.RunProcess do
                 "session_key=#{inspect(state.session_key)}"
             )
 
-            {:noreply, %{state | gateway_submitted?: true, gateway_submit_attempt: 0}}
+            {:noreply,
+             state
+             |> cancel_gateway_submit_deadline()
+             |> Map.merge(%{gateway_submitted?: true, gateway_submit_attempt: 0})}
 
           {:error, reason} ->
-            delay_ms = gateway_submit_retry_delay_ms(state.gateway_submit_attempt)
-            Process.send_after(self(), :submit_to_gateway, delay_ms)
-
-            Logger.warning(
-              "Engine runtime rejected submit for run_id=#{inspect(state.run_id)} " <>
-                "reason=#{inspect(reason)}; retrying in #{delay_ms}ms " <>
-                "(attempt=#{state.gateway_submit_attempt + 1})"
-            )
-
-            {:noreply, %{state | gateway_submit_attempt: state.gateway_submit_attempt + 1}}
+            retry_runtime_submission(state, reason, "Engine runtime rejected submit")
         end
 
       true ->
-        delay_ms = gateway_submit_retry_delay_ms(state.gateway_submit_attempt)
-        Process.send_after(self(), :submit_to_gateway, delay_ms)
+        retry_runtime_submission(state, :runtime_unavailable, "Engine runtime unavailable")
+    end
+  end
 
-        Logger.warning(
-          "Engine runtime unavailable; retrying submit for run_id=#{inspect(state.run_id)} " <>
-            "in #{delay_ms}ms (attempt=#{state.gateway_submit_attempt + 1})"
+  def handle_info({:gateway_submit_deadline, deadline_ref}, state) do
+    cond do
+      state.gateway_submit_deadline_ref != deadline_ref ->
+        {:noreply, state}
+
+      state.gateway_submitted? or state.aborted or state.completed ->
+        {:noreply, %{state | gateway_submit_deadline_ref: nil}}
+
+      true ->
+        state = %{state | gateway_submit_deadline_ref: nil}
+
+        Logger.error(
+          "RunProcess runtime submission deadline exceeded run_id=#{inspect(state.run_id)} " <>
+            "session_key=#{inspect(state.session_key)} attempts=#{state.gateway_submit_attempt} " <>
+            "last_error=#{inspect(state.gateway_submit_last_error)}"
         )
 
-        {:noreply, %{state | gateway_submit_attempt: state.gateway_submit_attempt + 1}}
+        {:noreply, terminalize_gateway_submission(state)}
     end
   end
 
@@ -671,6 +687,8 @@ defmodule LemonRouter.RunProcess do
 
   @impl true
   def terminate(reason, state) do
+    _ = cancel_gateway_submit_deadline(state)
+
     if is_pid(state.coordinator_pid) do
       send(state.coordinator_pid, {:run_process_terminated, state.run_id, reason})
     end
@@ -941,5 +959,99 @@ defmodule LemonRouter.RunProcess do
     exponential = @gateway_submit_retry_base_ms * :math.pow(2, attempt)
     delay_ms = round(exponential)
     min(delay_ms, @gateway_submit_retry_max_ms)
+  end
+
+  defp gateway_submit_deadline_ms(opts) do
+    case opts[:gateway_submit_deadline_ms] do
+      value when is_integer(value) and value > 0 -> value
+      _ -> @gateway_submit_deadline_ms
+    end
+  end
+
+  defp maybe_schedule_gateway_submit_deadline(%{submit_to_gateway?: false} = state), do: state
+
+  defp maybe_schedule_gateway_submit_deadline(state) do
+    deadline_ref = make_ref()
+
+    Process.send_after(
+      self(),
+      {:gateway_submit_deadline, deadline_ref},
+      state.gateway_submit_deadline_ms
+    )
+
+    %{state | gateway_submit_deadline_ref: deadline_ref}
+  end
+
+  defp cancel_gateway_submit_deadline(%{gateway_submit_deadline_ref: nil} = state), do: state
+
+  defp cancel_gateway_submit_deadline(state) do
+    %{state | gateway_submit_deadline_ref: nil}
+  end
+
+  defp retry_runtime_submission(state, reason, log_prefix) do
+    next_attempt = state.gateway_submit_attempt + 1
+    now_ms = System.monotonic_time(:millisecond)
+
+    if now_ms >= state.gateway_submit_deadline_at_ms do
+      {:noreply,
+       terminalize_gateway_submission(%{
+         state
+         | gateway_submit_attempt: next_attempt,
+           gateway_submit_last_error: reason
+       })}
+    else
+      delay_ms = gateway_submit_retry_delay_ms(state.gateway_submit_attempt)
+      remaining_ms = max(state.gateway_submit_deadline_at_ms - now_ms, 0)
+      Process.send_after(self(), :submit_to_gateway, min(delay_ms, remaining_ms))
+
+      Logger.warning(
+        "#{log_prefix} for run_id=#{inspect(state.run_id)} reason=#{inspect(reason)}; " <>
+          "retrying in #{min(delay_ms, remaining_ms)}ms (attempt=#{next_attempt})"
+      )
+
+      {:noreply,
+       %{
+         state
+         | gateway_submit_attempt: next_attempt,
+           gateway_submit_last_error: reason
+       }}
+    end
+  end
+
+  defp terminalize_gateway_submission(%{gateway_submit_terminalized?: true} = state), do: state
+
+  defp terminalize_gateway_submission(state) do
+    error = %{
+      type: :runtime_submission_failed,
+      reason: state.gateway_submit_last_error || :runtime_unavailable,
+      attempts: state.gateway_submit_attempt,
+      deadline_ms: state.gateway_submit_deadline_ms
+    }
+
+    event =
+      LemonCore.Event.new(
+        :run_completed,
+        Events.RunCompleted.new(%{
+          completed:
+            Events.Completion.new(%{
+              ok: false,
+              error: error,
+              answer: ""
+            }),
+          duration_ms: LemonCore.Clock.now_ms() - state.start_ts_ms
+        }),
+        %{
+          run_id: state.run_id,
+          session_key: state.session_key,
+          synthetic: true,
+          failure_stage: :runtime_submission
+        }
+      )
+
+    Bus.broadcast(Bus.run_topic(state.run_id), event)
+
+    state
+    |> cancel_gateway_submit_deadline()
+    |> Map.put(:gateway_submit_terminalized?, true)
   end
 end

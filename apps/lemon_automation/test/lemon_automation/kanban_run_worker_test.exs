@@ -105,19 +105,20 @@ defmodule LemonAutomation.KanbanRunWorkerTest do
 
     assert_receive {:router_submit, params}
     assert params.run_id == "run_worktree"
-    assert params.cwd == Path.join([repo, ".worktrees", "kanban-#{task.id}"])
+    expected_cwd = Path.join([repo, ".worktrees", "kanban-#{task.id}"])
+    assert File.stat!(params.cwd).inode == File.stat!(expected_cwd).inode
     assert File.exists?(Path.join(params.cwd, ".git"))
     assert File.exists?(Path.join(params.cwd, "README.md"))
-    assert params.meta.kanban_worktree_root == repo
+    assert File.stat!(params.meta.kanban_worktree_root).inode == File.stat!(repo).inode
     assert params.meta.kanban_worktree_path == params.cwd
     assert params.meta.kanban_worktree_branch == "lemon-kanban/#{task.id}"
     assert_receive {:wait_subscribed, "run_worktree", _}
   end
 
-  test "waits on the router returned run id when it differs" do
+  test "rejects a router run id mismatch without opening a racy second wait" do
     {:ok, task} = sample_task()
 
-    assert {:ok, %{run_id: "run_other"}} =
+    assert {:error, {:unexpected_run_id, "run_expected", "run_other"}} =
              KanbanRunWorker.run(task,
                router_mod: KanbanRouterOtherRun,
                waiter_mod: KanbanWaiterOk,
@@ -127,7 +128,8 @@ defmodule LemonAutomation.KanbanRunWorkerTest do
 
     assert_receive {:router_submit, params}
     assert params.run_id == "run_expected"
-    assert_receive {:wait, "run_other", 456}
+    refute_receive {:wait, "run_other", 456}
+    refute_receive {:wait_subscribed, _, _}
   end
 
   test "returns router errors for dispatcher failure marking" do

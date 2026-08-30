@@ -2,6 +2,7 @@ defmodule CodingAgent.Session.StateTest do
   use ExUnit.Case, async: true
 
   alias LemonAgent.Types.AgentTool
+  alias LemonAi.Types.{TextContent, ToolResultMessage}
   alias CodingAgent.Session.State
 
   test "normalize_extra_tools keeps only AgentTool structs" do
@@ -22,6 +23,34 @@ defmodule CodingAgent.Session.StateTest do
     assert opts.max_thinking_bytes == 1_024
     assert opts.max_tool_result_images == 0
     assert is_binary(opts.spill_dir)
+  end
+
+  test "pre-LLM transform bounds untrusted output while preserving one complete fence" do
+    transform =
+      State.build_transform_context(nil, %{
+        enabled: true,
+        mode: :trim,
+        max_tool_result_bytes: 1_024,
+        max_tool_result_images: 0,
+        max_thinking_bytes: 0,
+        max_tool_call_arg_string_bytes: 1_024,
+        spill_dir: nil
+      })
+
+    message = %ToolResultMessage{
+      tool_call_id: "oversize",
+      tool_name: "read",
+      trust: :untrusted,
+      content: [%TextContent{text: String.duplicate("x", 10_000)}]
+    }
+
+    assert {:ok, [%ToolResultMessage{content: [%TextContent{text: text}]}]} =
+             transform.([message], nil)
+
+    assert byte_size(text) <= 1_024
+    assert text =~ "...[content truncated]"
+    assert marker_count(text, "<<<EXTERNAL_UNTRUSTED_CONTENT>>>") == 1
+    assert marker_count(text, "<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>") == 1
   end
 
   test "build_prompt_message preserves plain text without images" do
@@ -69,5 +98,9 @@ defmodule CodingAgent.Session.StateTest do
     assert next_state.overflow_recovery_started_at_ms == nil
     assert next_state.overflow_recovery_error_reason == nil
     assert next_state.overflow_recovery_partial_state == nil
+  end
+
+  defp marker_count(text, marker) do
+    text |> String.split(marker) |> length() |> Kernel.-(1)
   end
 end

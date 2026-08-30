@@ -11,13 +11,24 @@ defmodule LemonRouter.RunOrchestrator do
   # - Building a router-owned `Submission` plus core `ExecutionCommand`
   # - Delegating run-start mechanics to `LemonRouter.RunStarter`
   # - Subscribing external event bridges before coordinator handoff
+  # - Consuming prepared compaction markers only after coordinator acceptance
 
   use GenServer
 
   require Logger
 
   alias LemonCore.{Introspection, MapHelpers, RunRequest, SessionKey}
-  alias LemonRouter.{RunProcess, RunStarter, SessionCoordinator, Submission, SubmissionBuilder}
+
+  alias LemonRouter.{
+    PendingCompaction,
+    RunProcess,
+    RunStarter,
+    SessionCoordinator,
+    Submission,
+    SubmissionBuilder
+  }
+
+  @abort_tombstone_ttl_ms 300_000
 
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
@@ -64,6 +75,18 @@ defmodule LemonRouter.RunOrchestrator do
   def submit(server, request) when is_map(request) or is_list(request) do
     normalized = RunRequest.new(request)
     submit(server, normalized)
+  end
+
+  @doc false
+  @spec register_abort(binary(), term()) :: :ok
+  def register_abort(run_id, reason) when is_binary(run_id) do
+    register_abort(__MODULE__, run_id, reason)
+  end
+
+  @doc false
+  @spec register_abort(GenServer.server(), binary(), term()) :: :ok
+  def register_abort(server, run_id, reason) when is_binary(run_id) do
+    GenServer.call(server, {:register_abort, run_id, reason})
   end
 
   @doc """
@@ -133,7 +156,8 @@ defmodule LemonRouter.RunOrchestrator do
     state = %{
       run_supervisor: Keyword.get(opts, :run_supervisor, LemonRouter.RunSupervisor),
       run_process_module: Keyword.get(opts, :run_process_module, RunProcess),
-      run_process_opts: run_process_opts
+      run_process_opts: run_process_opts,
+      abort_tombstones: %{}
     }
 
     {:ok, state}
@@ -141,8 +165,29 @@ defmodule LemonRouter.RunOrchestrator do
 
   @impl true
   def handle_call({:submit, %RunRequest{} = params}, _from, state) do
-    result = do_submit(params, state)
+    state = prune_abort_tombstones(state)
+    params = ensure_run_id(params)
+
+    result =
+      case Map.get(state.abort_tombstones, params.run_id) do
+        %{reason: reason} -> reject_tombstoned_submission(params, reason)
+        nil -> do_submit(params, state)
+      end
+
     {:reply, result, state}
+  end
+
+  def handle_call({:register_abort, run_id, reason}, _from, state) do
+    state = prune_abort_tombstones(state)
+
+    tombstone = %{
+      reason: reason,
+      inserted_at_ms: System.monotonic_time(:millisecond)
+    }
+
+    emit_abort_tombstone_telemetry(:registered, reason)
+
+    {:reply, :ok, %{state | abort_tombstones: Map.put(state.abort_tombstones, run_id, tombstone)}}
   end
 
   def handle_call(
@@ -164,9 +209,9 @@ defmodule LemonRouter.RunOrchestrator do
     agent_id = params.agent_id || SessionKey.agent_id(session_key) || "default"
     queue_mode = params.queue_mode || :collect
 
-    # Generate run_id (honor caller-provided run_id for cron jobs to avoid race conditions)
-    run_id = params.run_id || LemonCore.Id.run_id()
-    request = %RunRequest{params | run_id: run_id}
+    # The serialized submit boundary fixes the ID before checking abort tombstones.
+    run_id = params.run_id
+    request = params
 
     # Emit introspection event for orchestration start
     Introspection.record(
@@ -191,6 +236,11 @@ defmodule LemonRouter.RunOrchestrator do
           :ok ->
             execution_request = submission.execution_request
             meta = submission.meta || %{}
+
+            PendingCompaction.consume(
+              submission.session_key,
+              submission.pending_compaction_marker
+            )
 
             Introspection.record(
               :orchestration_resolved,
@@ -257,6 +307,59 @@ defmodule LemonRouter.RunOrchestrator do
       |> Submission.new!()
 
     RunStarter.start(submission, coordinator_pid, conversation_key)
+  end
+
+  defp ensure_run_id(%RunRequest{run_id: run_id} = request)
+       when is_binary(run_id) and run_id != "",
+       do: request
+
+  defp ensure_run_id(%RunRequest{} = request) do
+    %RunRequest{request | run_id: LemonCore.Id.run_id()}
+  end
+
+  defp reject_tombstoned_submission(%RunRequest{} = request, reason) do
+    agent_id = request.agent_id || SessionKey.agent_id(request.session_key) || "default"
+
+    Introspection.record(
+      :orchestration_failed,
+      %{reason: "run_aborted_before_submission"},
+      run_id: request.run_id,
+      session_key: request.session_key,
+      agent_id: agent_id,
+      engine: "lemon",
+      provenance: :direct
+    )
+
+    emit_abort_tombstone_telemetry(:submission_rejected, reason)
+    {:error, {:run_aborted, reason}}
+  end
+
+  defp prune_abort_tombstones(state) do
+    cutoff = System.monotonic_time(:millisecond) - @abort_tombstone_ttl_ms
+
+    tombstones =
+      Enum.reduce(state.abort_tombstones, %{}, fn
+        {run_id, %{inserted_at_ms: inserted_at_ms} = tombstone}, acc
+        when is_integer(inserted_at_ms) and inserted_at_ms >= cutoff ->
+          Map.put(acc, run_id, tombstone)
+
+        _expired, acc ->
+          acc
+      end)
+
+    %{state | abort_tombstones: tombstones}
+  end
+
+  defp emit_abort_tombstone_telemetry(event, reason) do
+    LemonCore.Telemetry.emit(
+      [:lemon, :router, :run_abort_tombstone, event],
+      %{count: 1},
+      %{reason: safe_error_label(reason)}
+    )
+  rescue
+    _ -> :ok
+  catch
+    _, _ -> :ok
   end
 
   defp normalize_run_process_opts(opts) when is_map(opts), do: opts

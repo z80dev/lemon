@@ -3,15 +3,18 @@ defmodule CodingAgent.TaskStore do
   ETS-backed store for tracking async task tool runs.
 
   Stores task status and a bounded list of recent events for polling.
-  The actual ETS table is owned by TaskStoreServer to ensure proper
-  lifecycle management and DETS persistence.
+  The actual ETS table is owned by `TaskStoreServer`, which serializes every
+  mutation before updating ETS and DETS. Reads remain direct ETS lookups.
+
+  Lifecycle transitions are monotonic and idempotent: queued tasks may become
+  running or terminal, running tasks may become terminal, and terminal tasks
+  never change status or terminal payload. This makes late progress/start
+  messages and competing finish/fail calls safe.
   """
 
   alias CodingAgent.TaskStoreServer
 
   @table :coding_agent_tasks
-  @dets_table :coding_agent_tasks_dets
-  @max_events 100
   @default_ttl_seconds 86_400
 
   @type task_id :: String.t()
@@ -36,7 +39,7 @@ defmodule CodingAgent.TaskStore do
         attrs
       )
 
-    insert_record(task_id, record, [])
+    TaskStoreServer.insert_record(task_id, record, [])
     task_id
   end
 
@@ -45,18 +48,7 @@ defmodule CodingAgent.TaskStore do
   """
   @spec append_event(task_id(), term()) :: :ok
   def append_event(task_id, event) when is_binary(task_id) do
-    ensure_table()
-
-    case :ets.lookup(@table, task_id) do
-      [{^task_id, record, events}] ->
-        events = [event | events] |> Enum.take(@max_events)
-        record = Map.put(record, :updated_at, System.system_time(:second))
-        insert_record(task_id, record, events)
-        :ok
-
-      _ ->
-        :ok
-    end
+    TaskStoreServer.append_event(task_id, event)
   end
 
   @doc """
@@ -64,7 +56,7 @@ defmodule CodingAgent.TaskStore do
   """
   @spec mark_running(task_id()) :: :ok
   def mark_running(task_id) when is_binary(task_id) do
-    update_record(task_id, fn record ->
+    TaskStoreServer.transition(task_id, :running, fn record ->
       record
       |> Map.put(:status, :running)
       |> Map.put(:started_at, System.system_time(:second))
@@ -76,7 +68,7 @@ defmodule CodingAgent.TaskStore do
   """
   @spec finish(task_id(), term()) :: :ok
   def finish(task_id, result) when is_binary(task_id) do
-    update_record(task_id, fn record ->
+    TaskStoreServer.transition(task_id, :completed, fn record ->
       record
       |> Map.put(:status, :completed)
       |> Map.put(:result, result)
@@ -89,7 +81,7 @@ defmodule CodingAgent.TaskStore do
   """
   @spec fail(task_id(), term()) :: :ok
   def fail(task_id, error) when is_binary(task_id) do
-    update_record(task_id, fn record ->
+    TaskStoreServer.transition(task_id, :error, fn record ->
       record
       |> Map.put(:status, :error)
       |> Map.put(:error, error)
@@ -98,13 +90,40 @@ defmodule CodingAgent.TaskStore do
   end
 
   @doc """
+  Mark local completion tracking as lost without declaring the delegated run
+  failed. A later authoritative result may still complete or fail this task.
+  """
+  @spec mark_tracking_lost(task_id(), term()) :: :ok
+  def mark_tracking_lost(task_id, reason) when is_binary(task_id) do
+    TaskStoreServer.transition(task_id, :tracking_lost, fn record ->
+      record
+      |> Map.put(:status, :tracking_lost)
+      |> Map.put(:tracking_error, reason)
+      |> Map.put(:tracking_lost_at, System.system_time(:second))
+    end)
+  end
+
+  @doc """
   Suppress async auto followup delivery for a task that is being explicitly joined.
   """
   @spec suppress_auto_followup(task_id()) :: :ok
   def suppress_auto_followup(task_id) when is_binary(task_id) do
-    update_record(task_id, fn record ->
+    TaskStoreServer.update_record(task_id, fn record ->
       Map.put(record, :auto_followup_suppressed_at, System.system_time(:second))
     end)
+  end
+
+  @doc "Reserve followup delivery while an explicit multi-task join chooses its result."
+  @spec begin_auto_followup_join([task_id()], reference()) :: :ok
+  def begin_auto_followup_join(task_ids, join_token) when is_list(task_ids) do
+    TaskStoreServer.begin_auto_followup_join(task_ids, join_token)
+  end
+
+  @doc "Resolve a join reservation, permanently suppressing only selected tasks."
+  @spec finish_auto_followup_join([task_id()], [task_id()], reference()) :: :ok
+  def finish_auto_followup_join(task_ids, suppressed_task_ids, join_token)
+      when is_list(task_ids) and is_list(suppressed_task_ids) do
+    TaskStoreServer.finish_auto_followup_join(task_ids, suppressed_task_ids, join_token)
   end
 
   @doc """
@@ -113,8 +132,12 @@ defmodule CodingAgent.TaskStore do
   @spec auto_followup_suppressed?(task_id()) :: boolean()
   def auto_followup_suppressed?(task_id) when is_binary(task_id) do
     case get(task_id) do
-      {:ok, record, _events} -> not is_nil(Map.get(record, :auto_followup_suppressed_at))
-      _ -> false
+      {:ok, record, _events} ->
+        not is_nil(Map.get(record, :auto_followup_suppressed_at)) or
+          Map.get(record, :auto_followup_join_tokens, []) != []
+
+      _ ->
+        false
     end
   end
 
@@ -174,13 +197,7 @@ defmodule CodingAgent.TaskStore do
   """
   @spec insert_record(task_id(), map(), [term()]) :: :ok
   def insert_record(task_id, record, events) do
-    :ets.insert(@table, {task_id, record, events})
-
-    if dets_open?() do
-      :dets.insert(@dets_table, {task_id, record, events})
-    end
-
-    :ok
+    TaskStoreServer.insert_record(task_id, record, events)
   end
 
   @doc """
@@ -188,13 +205,7 @@ defmodule CodingAgent.TaskStore do
   """
   @spec delete_task(task_id()) :: :ok
   def delete_task(task_id) do
-    :ets.delete(@table, task_id)
-
-    if dets_open?() do
-      :dets.delete(@dets_table, task_id)
-    end
-
-    :ok
+    TaskStoreServer.delete_task(task_id)
   end
 
   @doc """
@@ -202,33 +213,13 @@ defmodule CodingAgent.TaskStore do
   """
   @spec dets_open?() :: boolean()
   def dets_open? do
-    :dets.info(@dets_table) != :undefined
-  rescue
-    _ -> false
+    TaskStoreServer.dets_open?()
   end
 
   # Private Functions
 
   defp ensure_table do
     TaskStoreServer.ensure_table(CodingAgent.TaskStoreServer)
-  end
-
-  defp update_record(task_id, fun) do
-    ensure_table()
-
-    case :ets.lookup(@table, task_id) do
-      [{^task_id, record, events}] ->
-        updated =
-          record
-          |> fun.()
-          |> Map.put(:updated_at, System.system_time(:second))
-
-        insert_record(task_id, updated, events)
-        :ok
-
-      _ ->
-        :ok
-    end
   end
 
   defp generate_id do

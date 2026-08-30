@@ -56,6 +56,9 @@ The main coding agent implementation for the Lemon AI assistant platform. This a
 
 Session lifecycle calls to `save/1` and auto-compaction state reads are treated as best-effort.
 When downstream store or agent processes time out, callers should log and continue instead of crashing the session/runner process.
+The session's steering/follow-up queues are diagnostic mirrors of queues owned
+by `LemonAgent.Agent`; all terminal, cancel, error, abort, and agent-exit paths
+clear both mirrors so diagnostics never report already-consumed work.
 
 ### Tools
 
@@ -191,12 +194,12 @@ Internal `task` children default to the `:leaf_worker` policy. They keep normal 
 
 | Module | Purpose |
 |--------|---------|
-| `CodingAgent.BudgetTracker` | Token/cost budget tracking per run |
+| `CodingAgent.BudgetTracker` | Atomic token/cost accounting plus child reservation/completion tracking per run |
 | `CodingAgent.BudgetEnforcer` | Budget limit enforcement |
 | `CodingAgent.ParentQuestions` | ETS+DETS-backed child-to-parent clarification request store with lifecycle events |
 | `CodingAgent.ParentQuestionStoreServer` | Owns the ParentQuestions ETS/DETS tables and cleanup |
 | `CodingAgent.RunGraph` | ETS-backed parent/child run relationships |
-| `CodingAgent.RunGraphServer` | DETS persistence for run graph |
+| `CodingAgent.RunGraphServer` | Serialized run/budget mutation authority with synchronous DETS startup recovery |
 
 ### Memory & Context
 
@@ -210,7 +213,7 @@ Internal `task` children default to the `:leaf_worker` policy. They keep normal 
 | `CodingAgent.PromptBuilder` | Higher-level prompt builder adding skills, commands, @mentions sections |
 | `CodingAgent.ResourceLoader` | Loads CLAUDE.md/AGENTS.md from cwd up to filesystem root, then home dir |
 
-`CodingAgent.Session` now composes `ContextGuardrails -> UntrustedToolBoundary -> custom transform_context` at the pre-LLM boundary. Oversized tool results are truncated with stable spill references under `~/.lemon/agent/sessions/<encoded-cwd>/spill/<session-id>/...` so the model can fetch full payloads via file tools when needed.
+`CodingAgent.Session` composes `ContextGuardrails -> UntrustedToolBoundary -> custom transform_context` at the pre-LLM boundary. Oversized tool results are truncated with stable spill references under `~/.lemon/agent/sessions/<encoded-cwd>/spill/<session-id>/...` so the model can fetch full payloads via file tools when needed. The untrusted boundary fences ordinary `read`, `grep`, `find`, `bash`, and community/project `read_skill` output using source-aware labels, strips unsafe control/bidirectional characters, and keeps the complete envelope within the configured result budget. Idempotence uses an opaque marker added only to the ephemeral pre-LLM copy; tool-returned metadata cannot claim that wrapping already happened. The audited `webfetch`/`websearch` paths retain their existing single external-content fence. Intentional AGENTS/bootstrap loading and builtin skills whose installed bundle matches the release bundle remain explicit trusted instruction paths.
 Its public GenServer shell stays `CodingAgent.Session`, but the larger internal concern clusters are now split into helper modules under `lib/coding_agent/session/`:
 - `Lifecycle` for startup, extension reload, and reset orchestration
 - `State` for state-building, prompt/reset shaping, diagnostics, and guardrail transform composition
@@ -242,8 +245,8 @@ Its public GenServer shell stays `CodingAgent.Session`, but the larger internal 
 | `CodingAgent.ProcessSession` | GenServer for a single background process |
 | `CodingAgent.ProcessStore` | ETS store for background process state |
 | `LemonCore.TerminalBackend` / `TerminalBackends` | Shared backend contract and registry for supervised terminal/process execution |
-| `CodingAgent.TaskStore` | ETS+DETS store for async task tool runs |
-| `CodingAgent.TaskStoreServer` | Owns the TaskStore ETS/DETS tables |
+| `CodingAgent.TaskStore` | Read facade for the ETS+DETS async-task store and monotonic lifecycle API |
+| `CodingAgent.TaskStoreServer` | Serializes task records, events, suppression, terminal transitions, and persistence |
 | `CodingAgent.TaskProgressBindingStore` | ETS-backed parent-task surface bindings for async child runs; lazily restores `TaskProgressBindingServer` if the child is missing at runtime |
 
 `CodingAgent.Tools.Task` now emits lifecycle events (`:task_started`, `:task_completed`, `:task_error`, `:task_timeout`, `:task_aborted`) to both `LemonCore.Bus` (`run:*` topics) and `LemonCore.Introspection`, with run/parent/session/agent lineage metadata for monitoring UIs.
@@ -258,8 +261,9 @@ Its public entry module stays `CodingAgent.Tools.Task`, but the internals are no
 `CodingAgent.Tools.Task` now defaults omitted `async` to `true`, matching the tool contract. Internal task runs also infer a restrictive `tool_policy` plus a verification-prefixed prompt when the request explicitly says `use ... tools only`, so tool-constrained subtasks do not answer from model priors with the default full toolset.
 When an internal task omits `model`, `Task.Params` resolves the inherited model from the live parent session before falling back to captured tool opts, so Telegram/session-scoped `/model` overrides still propagate into async child sessions.
 Internal task child sessions now poll for aborts/session exit in `Task.Runner`, with an optional explicit `task_session_timeout_ms` guard when callers want a bounded wait. If a provider stream wedges or the child session dies without a terminal event, the task still fails with a timeout/session-exit error instead of leaving `task action=join` and the parent Telegram thread stuck indefinitely.
-Async task launch is fail-fast: if `CodingAgent.TaskSupervisor` cannot accept the worker, `Task.Execution` returns an error and terminalizes the `TaskStore`, `RunGraph`, budget, lifecycle event, and progress-binding state instead of returning a permanently queued receipt. Once an async task has terminalized, auto-followup routing is best-effort and contains router exits so delivery outages do not crash the completed worker. `LaneQueue` consumes the task monitor when it receives a result, avoiding a duplicate normal `:DOWN` pass for every successful job.
-Async delegated-agent runs mirror the router run id into `RunGraph`; the completion watcher advances both `RunGraph` and `TaskStore`, which makes `agent action=join` wait on the production lifecycle rather than treating an unknown graph entry as already terminal. Explicit agent joins suppress automatic completion followups. If the watcher cannot start, the agent tool returns a `tracking_error` receipt with task/run ids and terminalizes its local tracking records; watcher and followup exits are contained.
+Async task launch is fail-fast: if `CodingAgent.TaskSupervisor` cannot accept the worker, `Task.Execution` returns an error and terminalizes the `TaskStore`, `RunGraph`, budget, lifecycle event, and progress-binding state instead of returning a permanently queued receipt. Once an async task has terminalized, auto-followup routing is best-effort and contains router exits so delivery outages do not crash the completed worker. `LaneQueue` consumes the task monitor when it receives a result, monitors queued callers so abandoned work is removed, and contains `Task.Supervisor` admission/start exits per job so one failure does not terminate the queue. `ProcessManager` treats LaneQueue `GenServer.call` exits as an unavailable-queue fallback, not only raised exceptions.
+Task lifecycle writes are serialized by `TaskStoreServer`. Event appends and followup suppression cannot overwrite each other, terminal status/payload is first-writer-wins across finish/fail races, and late `mark_running` calls cannot revive terminal tasks. Transient join reservations are owned and monitored by `TaskStoreServer`: a crashed joiner releases its reservations, and stale persisted reservations are discarded on store restart instead of suppressing completion forever. `RunGraphServer` synchronously loads DETS before startup readiness and serializes initial inserts/deletes as well as lifecycle updates, so a live write cannot be overwritten by a late startup fold.
+Async delegated-agent runs mirror the router run id into `RunGraph`; the completion watcher advances both `RunGraph` and `TaskStore`, which makes `agent action=join` wait on the production lifecycle rather than treating an unknown graph entry as already terminal. Explicit joins use transient followup reservations: `wait_all` suppresses completed joined tasks, while `wait_any` permanently suppresses only its completed winner and releases losers or failed/aborted joins. If the watcher cannot start, the agent tool returns a `tracking_error` receipt with task/run ids and terminalizes its local tracking records; watcher and followup exits are contained. A watcher timeout does not authoritatively fail a still-running router run: the task enters `:tracking_lost`, the run graph stays running, and a bounded reconciliation wait can still record a late terminal result.
 Queued async task results should be treated as launch receipts. When a workflow needs one final answer in the same turn, the model/tooling should keep the returned `task_id`s and call `task action=join` before responding instead of relying on later auto-followup delivery to stitch the workflow back together. `task action=join` now suppresses the later async completion followup for those task ids so the parent session does not receive a second completion prompt after it already waited. Task result surfaces (`poll`, `join`, `get`, and auto-followup) are intentionally sanitized to visible assistant output plus task metadata, without leaking stored events, tool-call internals, or thinking deltas back into the parent session. Structured child reasoning is preserved in `details.reasoning` and projected as a reasoning action for operator surfaces, but it is not embedded as `[thinking]` text in parent-visible task answers. For non-terminal tasks, `poll` and `get` behave as status queries: they return the task status in user-visible text and keep the latest structured `current_action`/`reasoning` metadata in `details` instead of surfacing raw command/tool event text as answer content. Async followup delivery also idempotently backfills terminal task/run state, so a delivered completion message cannot leave the task store stranded in `queued` or `running`. Auto-followup forwards the full visible task answer into the followup path instead of slicing it to a fixed prefix before routing, and router fallbacks are native followup runs. Any transport-specific chunking happens later at the channel layer.
 Sessions with an approval context subscribe to the shared `exec_approvals` topic and rebroadcast matching request/resolution records as status-only approval action events. These events use the same RunTranslator path as tool and reasoning events for native gateway and LemonRunner parity, and they must not enter the delta channel.
 
@@ -297,7 +301,7 @@ boundary: it runs a fixed command through every available registered backend,
 records hashed proof JSON, skips unavailable backends, and fails the smoke on
 backend errors or missing expected output.
 
-Child sessions launched through `CodingAgent.Tools.Task` can receive a child-only `ask_parent` extra tool when they have a live parent session plus run lineage. The parent answers through the default `parent_question` tool, and `CodingAgent.ParentQuestions` persists request state plus broadcasts lifecycle events (`:parent_question_requested`, `:parent_question_answered`, `:parent_question_timed_out`, `:parent_question_cancelled`, `:parent_question_error`). Native task sessions preserve async `task_id`, status, latest `current_action`, and tool-reported metadata so router/channel layers can keep later `task action=poll` updates and failed command summaries attached to the original task status surface.
+Child sessions launched through `CodingAgent.Tools.Task` can receive a child-only `ask_parent` extra tool when they have a live parent session plus run lineage. `Session.deliver_parent_question/2` starts an idle parent turn and queues the same visible question for a streaming parent; task/agent joins observe matching open questions and yield with `needs_parent_answer` so parent and child cannot deadlock. The parent answers through the default `parent_question` tool with exact matching session and agent identity. `ParentQuestionStoreServer` serializes one-open-per-child-scope creation and first-writer-wins answer/timeout/cancel/error transitions, so exactly one terminal lifecycle event is broadcast (`:parent_question_answered`, `:parent_question_timed_out`, `:parent_question_cancelled`, or `:parent_question_error`). Native task sessions preserve async `task_id`, status, latest `current_action`, and tool-reported metadata so router/channel layers can keep later `task action=poll` updates and failed command summaries attached to the original task status surface.
 When compacted history is restored, `SessionManager` preserves older async followup entries as
 custom `async_followup` messages with provenance metadata so the next LLM projection still knows
 which system-delivered completions came from task/delegated runs.
@@ -517,6 +521,8 @@ The final system prompt is built in this order (later parts are appended):
 
 The composed prompt is refreshed before each user prompt to pick up edits to workspace/memory files.
 
+The available-skills listing is part of the cacheable system prefix, but turn-specific relevance results are not. `CodingAgent.Session` keeps displayable selected keys in turn-local state for missed-skill introspection and emits relevance-render telemetry without persisting or presenting a synthetic relevance message. This keeps the system prompt byte-stable across unrelated turns while retaining telemetry about skills the model could have loaded.
+
 ## Budget Tracking
 
 Budgets track token/cost resource usage per run with parent/child inheritance via `RunGraph`:
@@ -538,7 +544,7 @@ CodingAgent.BudgetTracker.check_budget(run_id)
 # Returns: :ok | {:warning, message} | {:exceeded, message}
 ```
 
-`CodingAgent.BudgetEnforcer` wraps the tracker and raises on exceeded budgets during agent runs.
+`CodingAgent.BudgetEnforcer` wraps the tracker and raises on exceeded budgets during agent runs. Usage increments execute as one `RunGraphServer` mutation. Child starts atomically reserve a child id against `max_children`; only a successful reservation launches work, and repeated completion callbacks release/aggregate that child's usage once.
 
 ## Extension System
 
@@ -634,6 +640,7 @@ Compaction:
 - Generates an LLM summary of compacted messages
 - Preserves file operation context
 - Estimates request size from conversation messages plus system prompt and tool schema payloads
+- Cancels and demonitors an in-flight background auto-compaction snapshot when a new idle prompt arrives; late results are ignored and cannot mutate the new turn
 - Overflow recovery is also attempted if context window is exhausted mid-run
 
 Settings controlling compaction (in `SettingsManager`/`config.toml`):

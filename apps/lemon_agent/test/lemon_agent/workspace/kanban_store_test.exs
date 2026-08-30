@@ -149,4 +149,40 @@ defmodule LemonAgent.Workspace.KanbanStoreTest do
     assert failed.meta["lastFailure"]["reason"] == "needs human"
     refute Map.has_key?(failed.meta, "kanbanLease")
   end
+
+  test "concurrent dispatchers cannot lease the same task more than once" do
+    assert {:ok, board} =
+             KanbanStore.create_board("Lease contention", columns: ["todo", "doing", "done"])
+
+    assert {:ok, task} = KanbanStore.create_task(board.id, "Exactly once")
+
+    parent = self()
+
+    contenders =
+      for index <- 1..64 do
+        Task.async(fn ->
+          send(parent, {:lease_contender_ready, self()})
+
+          receive do
+            :lease_now -> KanbanStore.lease_task(board.id, "worker-#{index}")
+          end
+        end)
+      end
+
+    contender_pids =
+      for _ <- contenders do
+        assert_receive {:lease_contender_ready, pid}, 1_000
+        pid
+      end
+
+    Enum.each(contender_pids, &send(&1, :lease_now))
+    results = Task.await_many(contenders, 5_000)
+
+    assert [{:ok, leased}] = Enum.filter(results, &match?({:ok, _task}, &1))
+    assert leased.id == task.id
+    assert Enum.count(results, &(&1 == {:error, :no_available_task})) == 63
+
+    persisted = KanbanStore.get_task(task.id)
+    assert persisted.meta["kanbanLease"]["id"] == leased.meta["kanbanLease"]["id"]
+  end
 end

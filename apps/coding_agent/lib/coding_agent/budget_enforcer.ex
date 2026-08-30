@@ -182,15 +182,25 @@ defmodule CodingAgent.BudgetEnforcer do
   """
   @spec on_subagent_spawn(String.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def on_subagent_spawn(parent_id, child_id, opts \\ []) do
-    # Record child started
-    :ok = BudgetTracker.child_started(parent_id, child_id)
+    case BudgetTracker.child_started(parent_id, child_id, opts) do
+      :ok ->
+        Logger.debug("Spawned subagent #{child_id} from #{parent_id}")
+        :ok
 
-    # Create child budget with inherited limits
-    child_budget = BudgetTracker.create_subagent_budget(parent_id, opts)
-    BudgetTracker.store_budget(child_id, child_budget)
+      {:error, :max_children_exceeded} ->
+        budget = BudgetTracker.get_budget(parent_id) || %{max_children: nil, active_children: 0}
 
-    Logger.debug("Spawned subagent #{child_id} from #{parent_id}")
-    :ok
+        {:error, :budget_exceeded,
+         %{
+           type: :max_children_exceeded,
+           limit: budget.max_children,
+           active: budget.active_children,
+           parent_id: parent_id
+         }}
+
+      {:error, _reason} = error ->
+        error
+    end
   end
 
   @doc """

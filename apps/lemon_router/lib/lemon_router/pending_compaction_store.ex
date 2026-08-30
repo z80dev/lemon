@@ -1,6 +1,9 @@
 defmodule LemonRouter.PendingCompactionStore do
   @moduledoc """
   Router-owned typed wrapper for pending-compaction markers.
+
+  Marker lifecycle policy, prompt preparation, and post-submit consumption live
+  in `LemonRouter.PendingCompaction`; this module remains the storage boundary.
   """
 
   alias LemonCore.Store

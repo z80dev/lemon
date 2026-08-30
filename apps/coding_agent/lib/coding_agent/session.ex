@@ -10,6 +10,11 @@ defmodule CodingAgent.Session do
   - Steering and follow-up message queues
   - Navigation through session tree
 
+  Queue fields in Session state are diagnostic mirrors; every terminal path
+  clears them because `LemonAgent.Agent` owns actual queue consumption. A new
+  idle prompt also cancels any background auto-compaction snapshot before
+  dispatch, so stale compaction cannot delay or mutate the new turn.
+
   ## Usage
 
       {:ok, session} = CodingAgent.Session.start_link(
@@ -85,6 +90,7 @@ defmodule CodingAgent.Session do
     :model,
     :thinking_level,
     :system_prompt,
+    :relevant_skill_keys,
     :explicit_system_prompt,
     :prompt_template,
     :workspace_dir,
@@ -148,6 +154,7 @@ defmodule CodingAgent.Session do
           model: LemonAi.Types.Model.t(),
           thinking_level: LemonAgent.Types.thinking_level(),
           system_prompt: String.t(),
+          relevant_skill_keys: [String.t()],
           explicit_system_prompt: String.t() | nil,
           prompt_template: String.t() | nil,
           workspace_dir: String.t(),
@@ -339,6 +346,23 @@ defmodule CodingAgent.Session do
   @spec follow_up(GenServer.server(), String.t()) :: :ok
   def follow_up(session, text) do
     GenServer.cast(session, {:follow_up, text})
+  end
+
+  @doc """
+  Deliver a child clarification question to its parent session.
+
+  Unlike a normal follow-up cast, an idle parent immediately starts a turn.
+  A streaming parent receives the question as a follow-up; join tools also
+  observe the persisted request and return so the follow-up can be processed.
+  """
+  @spec deliver_parent_question(GenServer.server(), String.t()) ::
+          :ok | {:error, :session_unavailable}
+  def deliver_parent_question(session, text) do
+    try do
+      GenServer.call(session, {:deliver_parent_question, text}, 5_000)
+    catch
+      :exit, _reason -> {:error, :session_unavailable}
+    end
   end
 
   @doc """
@@ -635,6 +659,7 @@ defmodule CodingAgent.Session do
     if state.is_streaming do
       {:reply, {:error, :already_streaming}, state}
     else
+      state = CompactionLifecycle.cancel_for_new_prompt(state, session_callbacks())
       {state, recalled} = refresh_turn_context(state, text)
 
       user_message =
@@ -667,6 +692,7 @@ defmodule CodingAgent.Session do
   # and queued, while `outgoing` is the same message with this turn's recalled
   # context attached and is only ever handed to the agent.
   def handle_call({:handle_async_followup, message_or_attrs}, _from, state) do
+    state = CompactionLifecycle.cancel_for_new_prompt(state, session_callbacks())
     message = State.build_async_followup_message(message_or_attrs)
     {state, recalled} = refresh_turn_context(state, message_skill_context(message))
     state = persist_message(state, message)
@@ -684,6 +710,29 @@ defmodule CodingAgent.Session do
           queue = :queue.in(message, state.follow_up_queue)
           {:reply, :ok, %{state | follow_up_queue: queue}}
       end
+    else
+      timer_ref =
+        Process.send_after(self(), {:do_prompt, outgoing, state.system_prompt}, @prompt_defer_ms)
+
+      {:reply, :ok, State.begin_prompt(state, timer_ref)}
+    end
+  end
+
+  def handle_call({:deliver_parent_question, text}, _from, state) do
+    {state, recalled} = refresh_turn_context(state, text)
+
+    message = %LemonAi.Types.UserMessage{
+      role: :user,
+      content: text,
+      timestamp: System.system_time(:millisecond)
+    }
+
+    outgoing = attach_recalled_context(message, recalled)
+
+    if state.is_streaming do
+      LemonAgent.Agent.follow_up(state.agent, outgoing, system_prompt: state.system_prompt)
+      queue = :queue.in(message, state.follow_up_queue)
+      {:reply, :ok, %{state | follow_up_queue: queue}}
     else
       timer_ref =
         Process.send_after(self(), {:do_prompt, outgoing, state.system_prompt}, @prompt_defer_ms)
@@ -975,7 +1024,14 @@ defmodule CodingAgent.Session do
 
   def handle_cast(:abort, state) do
     had_pending_prompt = not is_nil(state.pending_prompt_timer_ref)
-    state = state |> cancel_pending_prompt() |> CompactionManager.clear_overflow_recovery_state()
+
+    state =
+      state
+      |> cancel_pending_prompt()
+      |> CompactionLifecycle.cancel_for_new_prompt(session_callbacks())
+      |> CompactionManager.clear_overflow_recovery_state()
+      |> Map.put(:follow_up_queue, :queue.new())
+
     LemonAgent.Agent.abort(state.agent)
 
     if had_pending_prompt do
@@ -983,7 +1039,9 @@ defmodule CodingAgent.Session do
       # event so subscribers don't wait for a lifecycle event that never comes.
       Notifier.broadcast_event(state, {:canceled, :assistant_aborted})
       Notifier.complete_event_streams(state, {:canceled, :assistant_aborted})
-      {:noreply, %{state | steering_queue: :queue.new(), event_streams: %{}}}
+
+      {:noreply,
+       %{state | steering_queue: :queue.new(), follow_up_queue: :queue.new(), event_streams: %{}}}
     else
       {:noreply, state}
     end
@@ -1056,6 +1114,8 @@ defmodule CodingAgent.Session do
       |> Map.put(:is_streaming, false)
       |> cancel_pending_prompt()
       |> CompactionManager.clear_overflow_recovery_state()
+      |> Map.put(:steering_queue, :queue.new())
+      |> Map.put(:follow_up_queue, :queue.new())
 
     {:noreply, state}
   end
@@ -1165,6 +1225,13 @@ defmodule CodingAgent.Session do
   @spec terminate(term(), t()) :: :ok
   @impl true
   def terminate(_reason, state) do
+    _ =
+      CompactionManager.maybe_kill_background_task(
+        state,
+        state.auto_compaction_task_pid,
+        :session_terminated
+      )
+
     Lifecycle.detach_owner_on_terminate(
       state.python_repl_mod,
       self(),
@@ -1420,12 +1487,40 @@ defmodule CodingAgent.Session do
   # different answers for one turn.
   @spec refresh_turn_context(t(), String.t()) :: {t(), [ContextRegistry.section()]}
   defp refresh_turn_context(state, skill_context) do
+    relevant_skill_keys = relevant_skill_keys(state, skill_context)
+
     {system_sections, user_sections} =
       state
       |> collect_contributed_sections(skill_context)
       |> ContextRegistry.split()
 
+    state = %{state | relevant_skill_keys: relevant_skill_keys}
     {refresh_system_prompt(state, skill_context, system_sections), user_sections}
+  end
+
+  defp relevant_skill_keys(_state, context) when context in [nil, ""], do: []
+
+  defp relevant_skill_keys(state, context) when is_binary(context) do
+    views =
+      context
+      |> LemonSkills.find_relevant(cwd: state.cwd, max_results: 3, refresh: false)
+      |> Enum.map(&LemonSkills.SkillView.from_entry(&1, cwd: state.cwd))
+      |> Enum.filter(&LemonSkills.SkillView.displayable?/1)
+
+    _rendered_for_telemetry =
+      LemonSkills.PromptView.render_relevant_skills(views,
+        cwd: state.cwd,
+        run_id: state.run_id,
+        session_key: state.session_key,
+        session_id: state.session_manager && state.session_manager.header.id,
+        agent_id: state.agent_id
+      )
+
+    Enum.map(views, & &1.key)
+  rescue
+    _ -> []
+  catch
+    _, _ -> []
   end
 
   # The registry already isolates each contributor, so a broken satellite costs

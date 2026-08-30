@@ -55,7 +55,7 @@
 
 | Doc | What it covers |
 |-----|---------------|
-| [assistant_bootstrap_contract.md](assistant_bootstrap_contract.md) | How sessions bootstrap: system prompt assembly, skill injection, context setup |
+| [assistant_bootstrap_contract.md](assistant_bootstrap_contract.md) | How sessions bootstrap: system prompt assembly, skill discovery/loading, context setup |
 | [context.md](context.md) | Context management, compaction, branch summarization, token budgets |
 | [subagent-parent-questions.md](subagent-parent-questions.md) | Design for the `ask_parent` clarification path from child subagents back to their parent session |
 | [reviews/assistant-runtime-polish-audit-2026-08-30.md](reviews/assistant-runtime-polish-audit-2026-08-30.md) | Assistant-focused audit of tasks, delegated agents, async lifecycle, joins, skills, and background work |

@@ -34,10 +34,17 @@ defmodule LemonGateway.Cwd do
         cwd
 
       config when is_list(config) ->
-        Keyword.get(config, :default_cwd) || Keyword.get(config, "default_cwd")
+        Keyword.get(config, :default_cwd) || proplist_get(config, "default_cwd")
 
       _ ->
         nil
+    end
+  end
+
+  defp proplist_get(config, key) do
+    case List.keyfind(config, key, 0) do
+      {^key, value} -> value
+      _ -> nil
     end
   end
 

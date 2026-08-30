@@ -10,6 +10,18 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Skill manifests now reject unsafe or oversized prompt metadata, relevance
+  searches use cached excerpts/status views outside the Registry server, and
+  prompt listings expose bounded source/trust provenance with deterministic
+  ordering.
+- Turn-specific skill relevance no longer changes the cacheable system prompt;
+  missed-skill introspection uses turn-local keys, and local file/search/shell
+  plus community skill results are fenced as untrusted data before model calls.
+- Skill discovery now invalidates content-addressed caches after file, directory,
+  lockfile, environment, or disabled-config changes; malformed typed metadata is
+  rejected without crashing. Pre-LLM tool fencing ignores spoofed trust metadata,
+  bounds hostile text, avoids double-fencing web output, and attests builtin skill
+  content against the bundled release copy before granting instruction trust.
 - Product releases can now be cut and published from one manual Release
   workflow dispatch; the workflow derives CalVer, consumes the Unreleased
   notes, commits and tags the release, verifies every artifact, publishes the
@@ -17,12 +29,57 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Router and gateway launch lifecycle now bounds pre-start runtime submission
+  and run-launch retries, emits one structured terminal failure before queue
+  cleanup, deduplicates tokenized scheduler requests, preserves engine-lock
+  exclusivity for live owners, and observes over-age live locks without stealing
+  them. Gateway cwd fallback also accepts mixed-key proplists without crashing.
+- Async task lifecycle, event retention, and join-followup suppression are now
+  serialized and terminal state is first-writer-wins. Run-budget usage and
+  child admission are atomic, repeated child completion aggregates once, and
+  RunGraph finishes DETS recovery before accepting live calls.
+- Corrected context truncation ordering, hard bookends character limits, and
+  atomic tool-call/result retention; made pending-compaction retries survive
+  submit errors with injection-safe whole-entry history envelopes; and cleared
+  stale session follow-up diagnostics/background compaction when turns end or a
+  new prompt supersedes the snapshot.
+- Heartbeat reconfiguration now updates cron jobs with mutable fields only,
+  disables the superseded cron or timer mechanism, preserves nonrepresentable
+  intervals with exact timers, records timer terminal/suppression state, and
+  skips overlapping timer runs with telemetry. Automation submit-and-wait paths
+  now subscribe before submission through one fixed-run-id lifecycle, closing
+  synchronous-completion races in cron, goal, heartbeat, and Kanban runs.
+- Cron retries now persist due time and lineage across manager restarts, claim
+  deterministic attempt IDs, and share one terminal policy path for normal,
+  stale, aborted, start-failed, and crashed-worker outcomes. Cron work is
+  monitored under the automation task supervisor, with unsupervised execution
+  reserved for explicit standalone mode.
+- Kanban board stop now hard-cancels owned workers and reclaims their exact
+  leases immediately; lease-guarded completion rejects late results, and board
+  restart reconciles unexpired leases from the prior dispatcher. Board-scoped
+  mutation locks also prevent concurrent dispatchers from leasing the same task
+  or racing a stale terminal write against a replacement lease. Goal-loop hard
+  stop now claims the fixed run ID before submission, aborts that authoritative
+  router run once, and prevents another tick. Router abort tombstones close the
+  accepted-before-callback window without delaying stop; graceful stop still
+  lets the bounded loop finish and API deadlines enclose configured
+  judge/continuation waits.
 - Async subagent launches now fail and terminalize their bookkeeping when the
   supervised worker cannot start, completed task/agent followup delivery
   contains router exits, and lane-scheduled jobs no longer process a duplicate
   normal monitor event after every result. Delegated agent runs now participate
   in the run graph used by `agent action=join`, and explicit joins suppress the
   redundant automatic completion followup.
+- Child `ask_parent` requests now wake idle parent sessions and release parents
+  blocked in task/agent joins so clarification cannot deadlock. Parent-question
+  creation and terminal transitions are serialized, resolver authorization is
+  exact to both session and agent, and terminal lifecycle events emit once.
+- Multi-task `wait_any` joins now suppress automatic followup only for the
+  completed winner; failed, aborted, crashed, and restarted joins release
+  transient suppression.
+  Lane queues discard abandoned callers and contain per-job admission failure,
+  while delegated watcher timeouts preserve still-running router authority and
+  reconcile late completion from a `tracking_lost` state.
 
 ### Removed
 

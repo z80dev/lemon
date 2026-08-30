@@ -81,9 +81,11 @@ defmodule CodingAgent.ProcessManager do
 
   defp exec_with_lane_queue(command, opts) do
     # Submit to LaneQueue :background_exec lane
+    lane_queue = Keyword.get(opts, :lane_queue, CodingAgent.LaneQueue)
+
     result =
       CodingAgent.LaneQueue.run(
-        CodingAgent.LaneQueue,
+        lane_queue,
         :background_exec,
         fn -> do_exec(command, Keyword.put(opts, :use_lane_queue, false)) end,
         %{type: :background_exec, command: command}
@@ -98,6 +100,13 @@ defmodule CodingAgent.ProcessManager do
     e ->
       Logger.warning(
         "LaneQueue unavailable for background exec, falling back to direct: #{inspect(e)}"
+      )
+
+      do_exec(command, opts)
+  catch
+    :exit, reason ->
+      Logger.warning(
+        "LaneQueue exited during background exec, falling back to direct: #{inspect(reason)}"
       )
 
       do_exec(command, opts)
