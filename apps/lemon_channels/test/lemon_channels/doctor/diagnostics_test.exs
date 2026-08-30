@@ -117,6 +117,14 @@ defmodule LemonChannels.Doctor.DiagnosticsTest do
     assert "rollback" in discord.slash_commands.expected_commands
     assert "kanban" in discord.slash_commands.expected_commands
     assert "media" in discord.slash_commands.expected_commands
+
+    assert discord.slash_commands.compatibility_commands == %{
+             checkpoint: true,
+             rollback: true,
+             kanban: true,
+             media: true
+           }
+
     assert discord.slash_commands.live_registration_proof_required == true
     assert discord.slash_commands.live_registration_proof_source == "live_discord_matrix"
 

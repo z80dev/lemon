@@ -41,6 +41,11 @@ if [ -z "$toolchain_asdf_data_dir" ] && [ -n "${HOME:-}" ] && [ -d "$HOME/.asdf"
   toolchain_asdf_data_dir="$HOME/.asdf"
 fi
 
+# Mix installs the Hex SCM archive below MIX_HOME. Fixture commands replace
+# HOME to isolate Lemon config and secrets, but that must not also hide the
+# already-verified source toolchain halfway through this proof.
+toolchain_mix_home="${MIX_HOME:-${HOME:?HOME is required}/.mix}"
+
 SKIP_DOCTOR=false
 
 while [ "$#" -gt 0 ]; do
@@ -172,6 +177,8 @@ preserve_toolchain() {
   if [ -n "$toolchain_asdf_data_dir" ]; then
     export ASDF_DATA_DIR="$toolchain_asdf_data_dir"
   fi
+
+  export MIX_HOME="$toolchain_mix_home"
 }
 
 # Keep fixture readiness independent of any developer or CI credential that

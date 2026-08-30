@@ -501,6 +501,11 @@ doctor framework through the reference runtime's registrations in
 `ProofSpec` implements `LemonCore.Doctor.ChannelProofs`; adding a platform gate
 or proof check name means editing `ProofSpec`, not core.
 
+Discord diagnostics also publish a redacted `compatibility_commands` map for
+the generated `checkpoint`, `rollback`, `kanban`, and `media` slash schemas.
+Keep those booleans derived from `SlashCommands.slash_commands/0`; the static
+names are release-readiness sentinels, not a second command registry.
+
 All of it must stay redacted. Discord DM, free-response, reconnect, slash
 registration, deterministic slash and real client-click gates use
 `Doctor.Diagnostics` plus sanitized `LemonCore.Doctor.ProofDiagnostics`

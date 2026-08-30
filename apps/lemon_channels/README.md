@@ -514,6 +514,11 @@ Supports edit, delete, images, files, and threads.
 - `/rollback status`, `/rollback events limit:<n>`, `/rollback diff checkpoint_id:<id>`, `/rollback restore checkpoint_id:<id> confirm:true` -- Hermes-style alias for the same preview checkpoint rollback controls
 - `/media status` -- preview generated-media job status with redacted type/status/artifact counts and cleanup policy
 
+Channel diagnostics expose the expected slash-command inventory plus boolean
+`compatibility_commands` coverage for `checkpoint`, `rollback`, `kanban`, and
+`media`. Support bundles and release-readiness checks can therefore detect a
+generated command-schema regression without inspecting Discord credentials.
+
 #### Delivery Notes
 
 - Shared-channel debounce buffering is keyed by channel, thread, and session/user identity so rapid messages from different Discord users do not get merged into one run.
