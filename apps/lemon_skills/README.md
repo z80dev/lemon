@@ -68,7 +68,7 @@ LemonSkills does not execute skills directly. Instead, it serves as a **content 
 
 1. **Registration** -- On application start, the `Registry` GenServer loads all skills from global and project directories into an in-memory cache. Built-in skills are seeded first via `BuiltinSeeder`.
 2. **Retrieval** -- Agents and tools query the registry for skills by key or by relevance to a context string. The `find_relevant/2` function scores skills using keyword matching across name, description, keywords, and body content.
-3. **Content delivery** -- The `Entry.content/1` function reads the raw `SKILL.md` content, which is then injected into agent system prompts or returned via the `read_skill` tool.
+3. **Content delivery** -- The stable system prompt receives bounded metadata through `PromptView`; full `SKILL.md` content is read only when a caller requests `Entry.content/1`, normally through the `read_skill` tool.
 4. **Status gating** -- Before a skill is used, `Status.check/2` verifies that required binaries and environment variables are present.
 5. **Installation** -- New skills can be installed from Git repositories or local paths, with approval gating via `LemonCore.ExecApprovals`.
 6. **Audit** -- All non-builtin installs and updates run through deterministic audit checks plus an optional LLM reviewer. `:block` verdicts fail the operation, and `:warn` verdicts require explicit approval before the skill is kept.
@@ -112,7 +112,7 @@ The OTP application (`LemonSkills.Application`) performs two actions on start:
 | `LemonSkills.Tools.MediaGenerateVideo` | `lib/lemon_skills/tools/media_generate_video.ex` | Agent tool for managed video generation artifacts |
 | `LemonSkills.Tools.Kanban` | `lib/lemon_skills/tools/kanban.ex` | Agent tool for durable Lemon kanban boards and tasks |
 | `LemonSkills.SkillView` | `lib/lemon_skills/skill_view.ex` | Display projection of an entry: active state and what is missing |
-| `LemonSkills.PromptView` | `lib/lemon_skills/prompt_view.ex` | Renders skills into an agent's system prompt |
+| `LemonSkills.PromptView` | `lib/lemon_skills/prompt_view.ex` | Renders bounded skill metadata into an agent's system prompt |
 | `LemonSkills.McpSource` | `lib/lemon_skills/mcp_source.ex` | MCP servers as a runtime tool source (stdio, HTTP, SSE) |
 | `LemonSkills.Source` | `lib/lemon_skills/source.ex` | Behaviour every skill source implements; `Sources.*` are its implementations |
 | `LemonSkills.SourceRouter` | `lib/lemon_skills/source_router.ex` | Resolves a URL or path to the source module that handles it |
@@ -275,14 +275,12 @@ Detailed audit state is persisted separately from provenance lockfiles:
 
 ## How Skills Are Executed (Consumed)
 
-Skills are not executed by this app. They are consumed as text content by agents. The typical flow:
+Skills are not executed by this app. They are consumed as text content by agents. The typical flow is explicit:
 
-1. An agent session calls `LemonSkills.find_relevant("kubernetes deployment")` to get contextually relevant skills.
-2. For each returned entry, `LemonSkills.Entry.content(entry)` reads the SKILL.md content.
-3. The content is injected into the agent's system prompt or context window.
-4. The agent follows the instructions in the skill content.
-
-Alternatively, agents can use the `read_skill` tool to fetch skill content on demand during a conversation.
+1. The stable system prompt lists bounded metadata for every displayable skill.
+2. `LemonSkills.find_relevant("kubernetes deployment")` can select turn-local relevance keys without changing that prompt.
+3. The agent calls `read_skill` for the selected key (or an application caller explicitly invokes `LemonSkills.Entry.content/1`).
+4. The returned full content enters the conversation under the caller's trust boundary, and the agent follows the selected skill only after that explicit load.
 
 ## Built-in Skills
 

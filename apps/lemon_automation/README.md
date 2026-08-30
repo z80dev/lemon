@@ -363,9 +363,12 @@ results = LemonAutomation.Wake.trigger_matching("heartbeat")
 results = LemonAutomation.Wake.trigger_for_agent("agent_abc")
 ```
 
-### Heartbeat Jobs
+### Heartbeats
 
-Heartbeats are cron jobs for agent health checks. A job is treated as a heartbeat if its name contains `"heartbeat"` (case-insensitive) or its `meta` has `heartbeat: true` (atom key).
+Heartbeats are scheduled agent health checks. Intervals that remain exact at
+UTC day boundaries use cron jobs; every other positive interval uses an Erlang
+timer. A cron job is treated as a heartbeat if its name contains `"heartbeat"`
+(case-insensitive) or its `meta` has `heartbeat: true` (atom key).
 
 ```elixir
 # Create a heartbeat job
@@ -377,7 +380,7 @@ Heartbeats are cron jobs for agent health checks. A job is treated as a heartbea
   prompt: "HEARTBEAT"
 })
 
-# Configure heartbeat via HeartbeatManager (creates/updates cron job automatically)
+# Configure a cron-exact heartbeat via HeartbeatManager
 LemonAutomation.HeartbeatManager.update_config("agent_abc", %{
   enabled: true,
   interval_ms: 300_000,
@@ -572,7 +575,7 @@ mix test --cover apps/lemon_automation
 | `events_test.exs` | Event emission for all event types |
 | `heartbeat_manager_test.exs` | Suppression logic, heartbeat? detection |
 | `heartbeat_scheduling_test.exs` | Cron-based heartbeat scheduling and interval conversion |
-| `heartbeat_timer_test.exs` | Timer-based sub-minute heartbeats |
+| `heartbeat_timer_test.exs` | Exact timer-based heartbeats for intervals cron cannot represent, including terminal persistence and overlap suppression |
 | `run_completion_waiter_test.exs` | Bus-based completion waiting, output truncation |
 | `run_submitter_test.exs` | Router submission, session key forking, error handling, memory file writes |
 | `goal_loop_test.exs` | Goal loop verdicts, bounded loops, auto scheduling, router judge proof, authoritative run tracking, and hard-stop abort/no-next-tick semantics |
