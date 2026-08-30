@@ -98,7 +98,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   packaged `lemon profile` commands; matching control-plane methods; and TUI
   `/profiles` roster/picker plus `/profile` inspection, canonical-chat, and
   guarded lifecycle commands. Normal TUI prompts in an opened profile route
-  through `profile.chat`, preserving derived workspaces and named nodes.
+  through `profile.chat`, preserving derived workspaces and named nodes. The
+  authenticated Web shell now adds a responsive `/manage/profiles` roster and
+  preview-first create/clone/rename/recoverable-delete journey with stale
+  revision refusal, exact delete confirmation, canonical-chat links, and no
+  profile paths or system prompts retained in LiveView state.
 - `lemon web [--no-open]` in source and full packaged launchers, with daemon
   auto-start, exact Web health polling, browser opening, and actionable profile
   or startup errors.

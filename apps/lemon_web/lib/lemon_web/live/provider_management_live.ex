@@ -185,6 +185,7 @@ defmodule LemonWeb.ProviderManagementLive do
           <nav aria-label="Management sections" class="management-header-actions">
             <.link href={~p"/manage"} class="management-secondary-link">Sessions</.link>
             <.link href={~p"/manage/blueprints"} class="management-secondary-link">Blueprints</.link>
+            <.link href={~p"/manage/profiles"} class="management-secondary-link">Profiles</.link>
             <.link href={~p"/"} class="management-secondary-link">Open chat</.link>
             <button type="button" phx-click="refresh" class="management-primary-button">
               Refresh

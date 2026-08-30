@@ -803,6 +803,152 @@
   text-transform: uppercase;
 }
 
+.profile-preview {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(18rem, 0.8fr);
+  gap: 1rem;
+  margin-bottom: 1rem;
+  padding: 1rem;
+  border: 1px solid #fbbf24;
+  border-radius: 1rem;
+  background: #fffbeb;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+}
+
+.profile-preview code,
+.profile-facts code {
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.profile-apply-form {
+  display: grid;
+  align-content: center;
+  gap: 0.65rem;
+}
+
+.profile-management-grid {
+  display: grid;
+  grid-template-columns: minmax(18rem, 0.72fr) minmax(0, 1.28fr);
+  align-items: start;
+  gap: 1rem;
+}
+
+.profile-create-panel { grid-column: 1 / -1; }
+
+.profile-filter-form { grid-template-columns: minmax(0, 1fr); }
+
+.profile-roster-row {
+  display: flex;
+  width: 100%;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.9rem 1rem;
+  border: 0;
+  border-bottom: 1px solid #e2e8f0;
+  background: #fff;
+  color: #0f172a;
+  text-align: left;
+}
+
+.profile-roster-row:hover { background: #f8fafc; }
+.profile-roster-row-selected { background: #fffbeb; }
+
+.profile-roster-row:focus-visible {
+  position: relative;
+  outline: 3px solid rgba(245, 158, 11, 0.45);
+  outline-offset: -3px;
+}
+
+.profile-roster-copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.1rem;
+}
+
+.profile-roster-copy strong,
+.profile-roster-meta {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-roster-meta { color: #475569; font-size: 0.75rem; }
+
+.profile-availability {
+  flex: 0 0 auto;
+  padding: 0.2rem 0.5rem;
+  border-radius: 9999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.profile-availability-online { background: #d1fae5; color: #065f46; }
+.profile-availability-offline { background: #e2e8f0; color: #334155; }
+
+.profile-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  padding: 1rem;
+  border-bottom: 1px solid #e2e8f0;
+  background: #f8fafc;
+}
+
+.profile-facts > div { min-width: 0; }
+.profile-facts dt { color: #64748b; font-size: 0.72rem; font-weight: 650; text-transform: uppercase; }
+.profile-facts dd { margin-top: 0.2rem; color: #0f172a; overflow-wrap: anywhere; }
+
+.profile-form-stack {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+}
+
+.profile-form-card,
+.profile-delete-card {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.85rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.75rem;
+  background: #fff;
+}
+
+.profile-form-card h3,
+.profile-delete-card h3 { color: #0f172a; font-weight: 700; }
+.profile-form-card p,
+.profile-delete-card p { color: #64748b; font-size: 0.75rem; }
+.profile-form-card > button,
+.profile-delete-card > button { justify-self: start; }
+
+.profile-form-fields {
+  display: grid;
+  grid-template-columns: minmax(8rem, 0.42fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+}
+
+.profile-create-form {
+  display: grid;
+  gap: 0.8rem;
+  padding: 1rem;
+}
+
+.profile-create-form > button { justify-self: start; }
+
+.profile-empty,
+.profile-empty-detail {
+  padding: 1.5rem 1rem;
+  color: #64748b;
+  text-align: center;
+}
+
+.profile-empty-detail h2 { color: #334155; font-weight: 700; }
+
 @media (max-width: 860px) {
   .management-layout { grid-template-columns: minmax(0, 1fr); }
   .management-session-list,
@@ -810,7 +956,10 @@
   .provider-management-grid,
   .provider-preview,
   .blueprint-management-grid,
-  .blueprint-preview { grid-template-columns: minmax(0, 1fr); }
+  .blueprint-preview,
+  .profile-management-grid,
+  .profile-preview { grid-template-columns: minmax(0, 1fr); }
+  .profile-create-panel { grid-column: auto; }
   .provider-panel-wide { grid-column: auto; }
   .blueprint-catalog-list { max-height: 28rem; }
 }
@@ -839,4 +988,9 @@
   .blueprint-automation-facts,
   .blueprint-plan-facts { grid-template-columns: minmax(0, 1fr); }
   .blueprint-profile-form .management-primary-button { width: 100%; }
+  .profile-facts,
+  .profile-form-fields { grid-template-columns: minmax(0, 1fr); }
+  .profile-form-card > button,
+  .profile-delete-card > button,
+  .profile-create-form > button { width: 100%; }
 }
