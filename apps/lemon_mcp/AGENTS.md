@@ -47,7 +47,6 @@ lib/
   lemon_mcp.ex                     # Public façade: protocol_version/0, parse_request/1,
                                    #   create_response/2, create_error/3-4, encode!/1
   lemon_mcp/
-    application.ex                 # OTP application; supervision tree (currently no children)
     protocol.ex                    # All MCP message structs + encode/decode + builder helpers
     client.ex                      # GenServer client (stdio transport, state machine)
     client/
@@ -377,16 +376,17 @@ Standard JSON-RPC 2.0 codes used throughout:
 
 Use `Protocol.error_code(:atom)` to convert; falls back to `-32603` for unknown atoms.
 
-## Supervision Tree
+## Lifecycle and Release Composition
 
-The application's supervision tree is currently minimal:
+`lemon_mcp` is a library application. It has no application callback or
+supervisor and starts no processes by default. `LemonMCP.Client`,
+`LemonMCP.Server`, and the transport modules are started on demand; the host
+application that needs one owns its supervision strategy.
 
-```
-LemonMCP.Supervisor (one_for_one)
-  (empty — no children started by default)
-```
-
-`LemonMCP.Server` and `LemonMCP.Transport.HTTP` are started on demand by callers, not by the application supervisor. If you need them always running, add them to `LemonMCP.Application.start/2`.
+The `lemon_runtime_min` and `lemon_runtime_full` releases explicitly include
+`lemon_mcp: :load` before `coding_agent` and `lemon_skills`. This assembles and
+loads the client modules so `LemonSkills.McpSource.mcp_enabled?/0` can discover
+them, without pretending the MCP library owns long-lived runtime processes.
 
 ## Testing Guidance
 
@@ -394,7 +394,7 @@ LemonMCP.Supervisor (one_for_one)
 
 ```bash
 # All lemon_mcp tests (from umbrella root)
-mix test apps/lemon_mcp
+mix test apps/lemon_mcp/test
 
 # Specific file
 mix test apps/lemon_mcp/test/lemon_mcp/server/handler_test.exs
@@ -475,7 +475,10 @@ end
 
 - **HTTP transport port defaults to `0` in test env.** `@default_port` is set at compile time via `Mix.env()`. In test, a random available port is assigned, which avoids conflicts. To find the actual port in tests, inspect the Bandit supervisor or use the server PID.
 
-- **`LemonMCP.Application` supervision tree is empty.** The application starts but supervises nothing by default. All server/transport processes must be started explicitly by the consuming app (e.g. `lemon_channels`). If you want fault-tolerant MCP services, add them to a supervisor in the host app rather than modifying `LemonMCP.Application`.
+- **There is no `LemonMCP.Application` callback.** All client, server, and
+  transport processes must be started and supervised by the consuming app.
+  Keep the runtime release entry at `:load`; changing it to `:permanent` does
+  not create useful lifecycle ownership.
 
 - **`ToolAdapter` calls `module.tool/2` during both `list_tools/1` and `call_tool/3`.** The tool definition is fetched twice per operation. If constructing the `AgentTool` struct is expensive, this could matter.
 
@@ -483,4 +486,9 @@ end
 
 - **`coding_agent`** (dependency): `ToolAdapter` maps `CodingAgent.Tools.*` module names to MCP tool definitions. All `@builtin_tools` entries reference `CodingAgent.Tools` modules.
 - **`agent_core`** (dependency): `LemonAgent.Types.AgentToolResult` and `LemonAgent.Types.AgentTool` are used by `ToolAdapter` for result conversion.
-- **Consumers**: Any app wanting to expose Lemon tools over MCP or consume external MCP servers depends on `{:lemon_mcp, in_umbrella: true}` and calls `LemonMCP.Client.start_link/1`, `LemonMCP.Client.HTTP.start_link/1`, or `LemonMCP.Transport.HTTP.start_link/1`.
+- **Consumers**: Apps with a direct compile-time dependency use
+  `{:lemon_mcp, in_umbrella: true}` and call `LemonMCP.Client.start_link/1`,
+  `LemonMCP.Client.HTTP.start_link/1`, or
+  `LemonMCP.Transport.HTTP.start_link/1`. `LemonSkills.McpSource` deliberately
+  discovers the client dynamically; the runtime release contract assembles the
+  library for that path.
