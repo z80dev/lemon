@@ -38,8 +38,9 @@ and redacted session exports; its document boundary sniffs PDF, DOCX, XLSX,
 PPTX, ipynb, and text content before extraction. The packaged/source
 `lemon context` command reuses that service. Archive expansion/traversal,
 root/symlink, URL SSRF/redirect, sensitive-output, and operation-budget cases
-are covered by focused adversarial tests. Learn-from-source review remains a
-separate follow-on over the existing memory/skill stores.
+are covered by focused adversarial tests. Learn-from-source review and exact
+confirmation now compose those sources with canonical memory and audited skill
+drafts; a learning-graph UI remains a later presentation layer.
 
 ## Integration gates
 

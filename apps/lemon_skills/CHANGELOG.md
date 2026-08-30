@@ -14,6 +14,14 @@ modules nothing outside the package touches are marked internal.
 
 ### Added
 
+- `LemonSkills.Learn` composes bounded context resolution, durable memory, and
+  audited synthesis drafts into a non-mutating review plus exact-digest
+  confirmation workflow. Reviews expose only hashes, counts, audit codes, and
+  conflicts; confirmation re-resolves changed sources before atomic
+  create-if-absent writes, preserves inspectable hashed provenance, disables
+  optional LLM audit for selected source text, and rolls back a newly created
+  draft if the memory write returns, raises, throws, or exits with failure.
+
 - Dynamic official Hermes skill discovery and sparse import via
   `LemonSkills.Sources.Hermes`, `hermes:` installer identifiers, the
   `mix lemon.skill hermes` browser, and the control-plane catalog used by the

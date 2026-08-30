@@ -269,6 +269,24 @@ defmodule LemonCli.CommandRegistry do
       ]
     },
     %{
+      name: "learn",
+      summary: "Review and confirm bounded learning from sources",
+      usage: "lemon learn [review|confirm] <reference>... [options]",
+      subcommands: subcommands(~w(review confirm)),
+      options: [
+        option("--root PATH", ["--root"], "Root for confined local sources"),
+        option("--agent-id ID", ["--agent-id"], "Durable memory owner"),
+        option("--session-key KEY", ["--session-key"], "Explicit learning session"),
+        option("--project", ["--project"], "Use the project draft scope"),
+        option("--confirm DIGEST", ["--confirm"], "Exact digest from a fresh review"),
+        option("--json", ["--json"], "Emit one sanitized JSON document")
+      ],
+      details: [
+        "Review is the default and never writes state. Confirm re-resolves every source and fails closed when source content, audit state, or destination conflicts changed.",
+        "Output contains hashes, counts, audit codes, and conflict state only; source text, prompts, paths, URLs, secret names, and secret values are omitted."
+      ]
+    },
+    %{
       name: "completion",
       summary: "Generate shell completion scripts",
       usage: "lemon completion <bash|zsh|fish>",

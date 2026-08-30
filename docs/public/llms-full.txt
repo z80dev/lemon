@@ -428,7 +428,7 @@ silent permissions.
 | `lemon_automation` | `lemon_agent`, `lemon_core`, `lemon_router`, `lemon_skills` | `lemon_agent`, `lemon_core`, `lemon_router`, `lemon_skills` | *(none)* |
 | `lemon_browser` | `lemon_core` | `lemon_core` | *(none)* |
 | `lemon_channels` | `lemon_agent`, `lemon_core`, `lemon_media` | `lemon_agent`, `lemon_core`, `lemon_media` | *(none)* |
-| `lemon_cli` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory` | *(none)* |
+| `lemon_cli` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory`, `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory`, `lemon_skills` | *(none)* |
 | `lemon_control_plane` | `lemon_agent`, `lemon_ai`, `lemon_automation`, `lemon_browser`, `lemon_channels`, `lemon_core`, `lemon_lsp`, `lemon_media`, `lemon_memory`, `lemon_router`, `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_automation`, `lemon_browser`, `lemon_channels`, `lemon_core`, `lemon_lsp`, `lemon_media`, `lemon_memory`, `lemon_router`, `lemon_skills` | *(none)* |
 | `lemon_core` | *(none)* | *(none)* | *(none)* |
 | `lemon_evals` | `coding_agent`, `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_skills` | `coding_agent`, `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_skills` | *(none)* |
@@ -2133,9 +2133,10 @@ The largest remaining differences are product integration and usability:
 - Hermes exposes an extensive coherent CLI. Lemon's packaged CLI covers setup,
   model, gateway, doctor, config, secrets, and channels; additional operations
   are split across the source wrapper, Mix tasks, TUI, and JSON-RPC.
-- Hermes has richer session search/export/archive/prune, update/backup/profile
-  lifecycle, external secret sources, and an outbound credential-injection
-  proxy.
+- Hermes has richer update/profile lifecycle and an outbound
+  credential-injection proxy. Lemon now has read-only 1Password, Bitwarden, and
+  argv-only command sources behind its encrypted store, but no general egress
+  broker that withholds credentials from arbitrary remote/browser/tool work.
 - Hermes documentation has a more complete install-to-daily-use information
   architecture and many more task guides. Lemon's architecture and proof docs
   are deep, but some user workflows remain under-documented.
@@ -2175,8 +2176,8 @@ Do not choose Lemon yet if your requirement depends on:
 - isolated user-created profiles/bots with clone/export/delete and group-chat UX
 - complete session search/export/archive/pin/prune workflows
 - an integrated update-plan/rollback and whole-data backup/restore lifecycle
-- 1Password/Bitwarden/command-backed secret sources or a general egress
-  credential broker
+- a general egress credential broker that withholds real credentials from
+  arbitrary remote/browser/tool execution
 - a hosted managed service
 - Discord behavior beyond the live-proven text-first and file-delivery boundary
 
@@ -2672,7 +2673,8 @@ Lemon uses a single canonical configuration file in TOML format. Configuration i
 1. Global: `~/.lemon/config.toml`
 2. Project: `<project>/.lemon/config.toml` (overrides global)
 3. Environment variables (override file values; `.env` may auto-populate missing env vars at startup)
-4. Lemon secrets referenced from config (for secret-backed fields)
+4. Credential references resolved through Lemon's encrypted store, explicitly
+   enabled external sources, and the ordinary same-name environment fallback
 
 Runtime state and policy are separate from config. Per-session or per-route "current"
 model/thinking values override config defaults at runtime, but they are not persisted in
@@ -3049,6 +3051,7 @@ Use only these top-level sections:
 - `defaults`
 - `runtime`
 - `features`
+- `secrets.sources.<source_id>`
 - `profiles.<agent_id>`
 - `providers.<name>`
 - `gateway`
@@ -3061,6 +3064,128 @@ Deprecated sections now fail validation and runtime loading:
 - `[agents.<id>]` -> move to `[profiles.<id>]`
 - `[agent.tools.*]` -> move to `[runtime.tools.*]`
 - `[tools.*]` -> move to `[runtime.tools.*]`
+
+## External secret sources
+
+External sources are read-only adapters integrated into
+`LemonCore.Secrets.resolve/2`; they are not another secret store. Resolution is
+ordered as follows:
+
+1. Lemon's encrypted store;
+2. enabled external sources ordered by `priority`, then source id;
+3. the same-name environment variable when `env_fallback` is enabled.
+
+A successful source that does not contain the requested name continues to the
+next source. Any enabled source configuration, spawn, timeout, output, parse,
+or bootstrap failure stops resolution before the ordinary environment
+fallback. This fail-closed behavior prevents an unhealthy configured manager
+from being silently bypassed. `env_fallback: false` disables both the external
+and environment fallbacks; internal bootstrap reads use only the encrypted
+store and ordinary environment path so sources cannot recurse.
+
+Every source requires the exact TOML boolean `enabled = true`. A quoted
+`"true"`, unknown setting, unknown source type, relative executable path with a
+slash, shell command string, or out-of-range limit fails validation. Programs
+are started directly from an argv array, never through a shell. Each child gets
+only a small operating environment (`HOME`, platform path/temp/locale fields,
+and `NO_COLOR`) plus explicitly passed variables. Stdout and stderr are
+captured together under one byte limit and are never returned in errors,
+status, logs, or proof output.
+
+Common source settings:
+
+| Setting | Default | Contract |
+| --- | --- | --- |
+| `type` | required | `onepassword`, `bitwarden`, or `command` |
+| `enabled` | `false` | Only the exact boolean `true` enables execution |
+| `priority` | `100` | Integer `0..1000`; lower runs first |
+| `executable` | provider default | Absolute path or bare executable name |
+| `timeout_ms` | `3000` | Integer `100..30000` |
+| `max_output_bytes` | `65536` | Integer `1..1048576`, stdout and stderr combined |
+| `cache_ttl_ms` | `0` | Integer `0..300000`; `0` disables caching |
+
+The optional cache is bounded to 32 process-local entries and disappears on
+restart. It never persists source values to config or the encrypted store.
+
+### 1Password
+
+Map each Lemon secret name to an `op://` reference. Lemon invokes `op read
+--no-newline [--account ACCOUNT] -- REFERENCE` separately for each mapping.
+If `auth_secret` is set, Lemon resolves that bootstrap credential only from its
+existing encrypted store or same-name environment fallback and gives it to the
+child as `auth_env`. Without `auth_secret`, an already authenticated local `op`
+session or the named ambient auth variable may be used.
+
+```toml
+[secrets.sources.onepassword]
+type = "onepassword"
+enabled = true
+priority = 10
+executable = "op"
+timeout_ms = 3000
+max_output_bytes = 65536
+cache_ttl_ms = 0
+account = "team"
+auth_secret = "op_service_account_token"
+auth_env = "OP_SERVICE_ACCOUNT_TOKEN"
+refs = { anthropic_api_key = "op://Lemon/Anthropic/api-key", openai_api_key = "op://Lemon/OpenAI/api-key" }
+```
+
+### Bitwarden Secrets Manager
+
+Bitwarden uses `bws secret list PROJECT_ID --output json` and accepts only a
+JSON list of unique non-empty `{"key": ..., "value": ...}` objects. Store the
+bootstrap access token in Lemon under `access_token_secret`, or provide the
+same-name environment variable. `access_token_env` controls the variable name
+passed to `bws`; an optional `server_url` must be credential-free HTTPS with no
+query or fragment.
+
+```toml
+[secrets.sources.bitwarden]
+type = "bitwarden"
+enabled = true
+priority = 20
+executable = "bws"
+project_id = "team-project-id"
+access_token_secret = "bws_access_token"
+access_token_env = "BWS_ACCESS_TOKEN"
+# server_url = "https://vault.example.com"
+```
+
+### Arbitrary command
+
+Command sources accept only an argv array. Output is UTF-8 `NAME=VALUE`, one
+entry per line; blank lines and lines beginning with `#` are ignored. Names
+must be unique and values non-empty. `pass_env` copies only the listed ambient
+variables. `secret_env` maps a child environment name to an existing Lemon
+encrypted-store/same-name-environment secret; it never resolves another
+external source.
+
+```toml
+[secrets.sources.local_helper]
+type = "command"
+enabled = true
+priority = 30
+argv = ["/usr/local/bin/lemon-secret-helper", "export", "--profile", "prod"]
+timeout_ms = 2000
+max_output_bytes = 32768
+cache_ttl_ms = 0
+pass_env = ["HELPER_PROFILE"]
+secret_env = { HELPER_TOKEN = "helper_bootstrap_token" }
+```
+
+Inspect readiness without invoking any source, then perform a redaction-safe
+live test:
+
+```bash
+lemon secrets sources status --json
+lemon secrets sources test --json
+lemon secrets sources test local_helper
+```
+
+These commands reveal source id/type, readiness, provenance, counts, output
+byte count, duration, and stable error kinds only. They never reveal secret
+values. `lemon secrets check` reports a resolved credential only as `present`.
 
 ## Dotenv Autoload
 
@@ -20034,11 +20159,11 @@ must not be copied into new plans.
 | User job | Hermes at pinned upstream | Lemon at pinned baseline | Status | Priority | Concrete next closure |
 | --- | --- | --- | --- | --- | --- |
 | Keep durable personal and project memory | Hermes combines local USER/MEMORY files, session search, background review/curation, a learning journey, and a broad set of [memory providers](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory-providers). | Lemon has SQLite FTS memory, redaction-aware ingest, provider fan-out, session search, project context, memory tools, scheduled skill synthesis/curation, and a production Honcho integration. Local and Honcho are the implemented providers; adaptive features remain intentionally opt-in. | Near for durable recall; partial for ecosystem/UX | Medium | Add a memory browser with provenance/edit/delete, measure whether safe defaults should enable recall, and prioritize provider conformance over provider count. |
-| Teach the agent from a URL, directory, or corpus and inspect what it learned | Hermes exposes `/learn`, curator flows, and the Journey learning graph/timeline. | Lemon synthesizes candidates from finalized runs and can curate/install skills, but has no direct “learn this source” job or learning-graph UI. | Missing | Medium | Build an auditable ingestion job that shows sources, proposed memories/skills, conflicts, and approval before write; visualize the same records rather than inventing a second learning store. |
+| Teach the agent from a URL, directory, or corpus and inspect what it learned | Hermes exposes `/learn`, curator flows, and the Journey learning graph/timeline. | Lemon now exposes source/packaged `lemon learn` and authenticated `learn.review`/`learn.confirm` over the existing bounded context, durable memory, deterministic skill audit, and synthesis-draft stores. Review is non-mutating and content-free; confirmation re-resolves sources and requires an exact fresh digest. A learning-graph/timeline UI is not implemented. | Near for auditable ingestion; partial for visualization | Medium | Add a memory/learning browser over the same provenance records; do not add a second learning database. |
 | Find, audit, install, update, bundle, and distribute skills | Hermes's [skills system](https://hermes-agent.nousresearch.com/docs/user-guide/features/skills) includes a Hub, taps, bundles, a large catalog, publishing, audit, curator, and profile distributions. | Lemon has agentskills-compatible discovery, local/project/builtin precedence, official Hermes catalog import, risk audit, trust metadata, atomic install/update, curator, model-facing management, and MCP-based discovery. Versioned unpacked bundles now reuse those audits for explicit profile-local enablement, with safe catalog list/inspect/validate/preview RPC. Lemon still lacks a signed public registry/index, taps, publishing/export, archive import, and TUI/Web bundle UX. | Near in engine; first bundle vertical shipped, partial in ecosystem | Medium | Add signed index/distribution and export/publish lifecycle, then TUI/Web browse/review/activate UX over the existing bundle service. Do not weaken the unpacked, path-bounded activation policy for archive convenience. |
 | Schedule recurring agent and script work safely | Hermes provides cron, heartbeats, recurring [loops](https://hermes-agent.nousresearch.com/docs/user-guide/features/loops), monitor jobs, no-agent scripts, chaining, blueprints, suggestions, preflight, and multiple delivery modes. | Lemon has durable cron, exact timers, jitter/retries/lineage, overlap locks, pause/resume/abort/run-now, heartbeat suppression, monitor mode, command jobs, chaining, preflight, default-model drift guard, goal continuation/auto loops, and kanban dispatch. A versioned agent-cron blueprint now requires an exact plan digest, persists bundle/definition provenance, enables skills in the derived profile workspace, and replays without duplicate jobs through the existing scheduler. | Near in engine; first blueprint vertical shipped, partial in UX | Medium | Add natural-language recurring-loop commands, suggestions, and TUI/Web/packaged CLI blueprint management. Expand beyond one agent cron only when a concrete workflow preserves exact confirmation and existing cron/heartbeat stores. |
 | Review dangerous actions and constrain agent execution | Hermes documents smart/manual/off [approvals and security](https://hermes-agent.nousresearch.com/docs/user-guide/security), deny rules, circuit breakers, container isolation, checkpoints, and managed scope. | Lemon has centralized execution approvals, per-node policies, tool policy profiles, structured approval events across interfaces, file/checkpoint guards, URL/SSRF policy, extension capability approvals, redaction, support-bundle cleanup, and proof artifacts. | **Parity+** in auditable policy; partial in enterprise scope | Medium | Add admin-pinned managed settings and a human-readable policy editor. Preserve Lemon's proof/redaction advantages. |
-| Keep credentials out of config and remote sandboxes | Hermes resolves credentials from 1Password, Bitwarden, or an arbitrary command and can inject them through an [egress proxy](https://hermes-agent.nousresearch.com/docs/user-guide/egress/iron-proxy) so a remote sandbox never receives the real secret. | Lemon encrypts a local secret store, uses platform key storage or a protected master-key file, supports OAuth token persistence, redacts outputs, and avoids sending resolved provider credentials to named nodes. It has no external secret-source interface or general credential-injecting egress proxy for arbitrary tools. | Partial | **High** | Add a supervised secret-source behavior (1Password/Bitwarden/command implementations) and design an explicit outbound credential-broker boundary for remote/browser/tool workloads. |
+| Keep credentials out of config and remote sandboxes | Hermes resolves credentials from 1Password, Bitwarden, or an arbitrary command and can inject them through an [egress proxy](https://hermes-agent.nousresearch.com/docs/user-guide/egress/iron-proxy) so a remote sandbox never receives the real secret. | Lemon's encrypted store now resolves through explicitly enabled, ordered [`LemonCore.Secrets.External`](../../apps/lemon_core/lib/lemon_core/secrets/external.ex) adapters for 1Password, Bitwarden Secrets Manager, and argv-only command helpers. One shared supervised runner enforces exact config, minimal child environments, stable redacted failures, timeout/output bounds, and optional bounded process-local caching; source/packaged `lemon secrets sources status|test` exposes only readiness/provenance/count metadata. Encrypted-store values still win, enabled-source failures stop before environment fallback, bootstrap credentials cannot recurse, and named nodes still receive destination-local rather than controller-resolved credentials. A general credential-injecting egress proxy for arbitrary remote/browser/tool work is not implemented. | Near for host provider credentials; partial for remote/tool egress | **High** | Design and prove an explicit outbound credential-broker boundary for remote/browser/tool workloads without passing real secrets into those execution environments. |
 | Install extensions and hooks without patching core | Hermes supports typed plugins across providers, memory, browsers, media, cron, observability, platforms, dashboard, and terminal environments, plus hooks and package lifecycle UI/CLI; see [plugins](https://hermes-agent.nousresearch.com/docs/user-guide/features/plugins). | Lemon has MCP clients/server bridge, native extension manifests, WASM tools, OAuth-aware remote MCP, capability approvals, conflict rules, supervised hosts, registry metadata, and platform contract tests. Third-party distribution and end-user lifecycle remain preview. | Different | Medium | Finish one signed package/install/update/remove flow with compatibility and capability review, then expose host health in Web/TUI. Do not create a second plugin format for every subsystem. |
 | Update, back up, migrate, recover, and uninstall the product | Hermes has update check/plan/backup, receipts, multi-profile restart/version verification, full backup/import, profile distributions, checkpoints, doctor/dump/debug/logs/status/insights, completions, and uninstall commands; see [updating](https://hermes-agent.nousresearch.com/docs/getting-started/updating). | Lemon now has a documented, versioned `~/.lemon` data contract and source/packaged `backup contract/create/list/verify/restore` lifecycle with atomic private bundles, exact checksums, credential exclusions, guarded overwrite, and rollback receipts. It also has release channels and signed checksums, source `lemon update --check`, config/skill migration, installer/uninstaller, doctor/support bundles, readiness/proofs, and hot reload. Update plan/apply/rollback receipts, fleet/profile restart, and shell completion remain absent. | Near for local backup/recovery; partial overall | **High** | Add update plan/apply/rollback receipts and shell completions, then prove recovery across a real version transition. |
 | Read task-oriented and machine-readable documentation | Hermes offers structured learning paths, user/task guides, full references, FAQs, edit links, and both curated/full machine indexes. | Lemon's VitePress site builds and has deep architecture/test plans, but navigation favors internal launch artifacts, several user features lack task guides, CLI reference is incomplete, and stale claims persisted in prominent pages. This refresh adds a task-first quickstart plus generated `llms.txt` and `llms-full.txt`. | Partial | **High** | Continue the install → first task → daily use → administration → troubleshooting information architecture, generate CLI/config/tool references, and demote historical plans from the primary navigation. |
@@ -20101,9 +20226,11 @@ These are intentionally vertical bundles rather than isolated modules.
 5. **Install/update/backup** — the documented, atomic, verified user-state
    backup/restore vertical is now implemented in source and packaged CLI.
    Widen supported installation and add update plan/apply/rollback receipts.
-6. **Secret sources and outbound credential boundary** — external secret
-   providers plus credential brokerage for arbitrary remote/browser/tool
-   execution.
+6. **Outbound credential boundary** — supervised external 1Password,
+   Bitwarden, and argv-only command sources are implemented behind the
+   encrypted Lemon store. Next add credential brokerage for arbitrary
+   remote/browser/tool execution without handing those environments the real
+   secret.
 
 ### Medium: capability completion and polish
 
@@ -23988,9 +24115,11 @@ Source: https://z80dev.github.io/lemon/security/secrets-keychain-audit-matrix
 
 # Secrets + Keychain Audit Matrix
 
-_Last updated: 2026-02-25_
+_Last updated: 2026-08-30_
 
-This document captures the current, tested contract for Lemon secret resolution across keychain, encrypted store, and environment fallback paths.
+This document captures the current, tested contract for Lemon secret resolution
+across keychain, encrypted store, explicitly enabled external sources, and
+environment fallback paths.
 
 ## Flow Matrix
 
@@ -23999,8 +24128,10 @@ This document captures the current, tested contract for Lemon secret resolution 
 | macOS Keychain master key | `LemonCore.Secrets.MasterKey.init/1` -> `Keychain.put_master_key/2` | `LemonCore.Secrets.MasterKey.resolve/1` -> `Keychain.get_master_key/1` | On `:missing` / `:keychain_unavailable` / command failures, tries env master key, then local file | `apps/lemon_core/lib/lemon_core/secrets/keychain.ex`, `apps/lemon_core/lib/lemon_core/secrets/master_key.ex` |
 | Master key env fallback | Manual set of `LEMON_SECRETS_MASTER_KEY` (external) | `MasterKey.resolve/1` via `resolve_from_env/1` | On missing env, tries `~/.lemon/secrets_master_key`; malformed env still fails as `:invalid_master_key` | `apps/lemon_core/lib/lemon_core/secrets/master_key.ex` |
 | Local master key file fallback | `~/.lemon/secrets_master_key` | `MasterKey.resolve/1` via local file fallback | Returns `:missing_master_key` or `:invalid_master_key` when no valid source exists | `apps/lemon_core/lib/lemon_core/secrets/master_key.ex` |
-| Encrypted secret store | `LemonCore.Secrets.set/3` (AES-256-GCM at rest) | `LemonCore.Secrets.get/2`, `resolve/2`, `exists?/2` | `resolve/2` can fallback to env by same secret name (`env_fallback: true`) | `apps/lemon_core/lib/lemon_core/secrets.ex` |
-| Coding Agent provider secret refs | Configured `api_key_secret` names in provider config | `CodingAgent.Session.resolve_secret_api_key/1` -> `LemonCore.Secrets.resolve/2` | Store first, env fallback enabled | `apps/coding_agent/lib/coding_agent/session.ex` |
+| Encrypted secret store | `LemonCore.Secrets.set/3` (AES-256-GCM at rest) | `LemonCore.Secrets.get/2`, `resolve/2`, `exists?/2` | `resolve/2` uses store, enabled external sources, then same-name env when `env_fallback: true` | `apps/lemon_core/lib/lemon_core/secrets.ex` |
+| External secret sources | Read-only; no external result is persisted | `LemonCore.Secrets.External` invokes 1Password, Bitwarden, or argv-only command adapters under shared supervision | Ordered by priority/id; a source miss continues, but any enabled-source failure stops before env fallback | `apps/lemon_core/lib/lemon_core/secrets/external.ex`, `apps/lemon_core/lib/lemon_core/secrets/source_runner.ex` |
+| External bootstrap credentials | Existing Lemon encrypted secret or same-name env only | `LemonCore.Secrets.resolve_local/2` from a source adapter | Never invokes an external source, preventing recursion | `apps/lemon_core/lib/lemon_core/secrets.ex`, `apps/lemon_core/lib/lemon_core/secrets/source/` |
+| Coding Agent provider secret refs | Configured `api_key_secret` names in provider config | `CodingAgent.Session.resolve_secret_api_key/1` -> `LemonCore.Secrets.resolve/2` | Store first, enabled external sources second, env fallback last | `apps/coding_agent/lib/coding_agent/session.ex` |
 
 ## Keychain Error Semantics (Current Contract)
 
@@ -24044,6 +24175,12 @@ Additional nuance:
 - `mix lemon.secrets.init` is the preferred bootstrap path everywhere: it stores the generated key in the keychain on macOS and writes the key file (`0600`) on other platforms. It refuses to overwrite an existing key file unless `--force` is passed.
 - For local non-macOS development, keep `~/.lemon/secrets_master_key` as the canonical master key file. `bin/lemon` will export that value into `LEMON_SECRETS_MASTER_KEY` before boot when the file exists.
 - `secrets.list` and `secrets.status` return metadata only (never plaintext secret values).
+- `lemon secrets sources status|test` returns only source readiness,
+  provenance, counts, byte counts, duration, and stable error kinds. Combined
+  stdout/stderr and resolved values are never included.
+- External commands are direct argv execution with exact configuration,
+  minimal child environments, `100..30000` ms timeouts, `1..1048576` byte
+  output bounds, and an optional bounded process-local cache that defaults off.
 - If keychain prompts are denied (`User interaction is not allowed`), Lemon can still operate via env fallback when configured.
 
 ## Validation References
@@ -24051,6 +24188,10 @@ Additional nuance:
 - `apps/lemon_core/test/lemon_core/secrets/keychain_test.exs`
 - `apps/lemon_core/test/lemon_core/secrets/master_key_test.exs`
 - `apps/lemon_core/test/lemon_core/secrets_test.exs`
+- `apps/lemon_core/test/lemon_core/secrets/external_test.exs`
+- `apps/lemon_core/test/lemon_core/secrets/source_contract_test.exs`
+- `apps/lemon_core/test/lemon_core/config/secrets_test.exs`
+- `apps/lemon_cli/test/lemon_cli/secret_sources_command_test.exs`
 
 ---
 
@@ -31800,6 +31941,20 @@ Lemon exposes the same Mix-free command families from an installed
 `lemon_runtime_min` or `lemon_runtime_full` release and from a source checkout.
 Use `lemon ...` after installation and `./bin/lemon ...` in the repository.
 
+## Learn from bounded sources
+
+```bash
+lemon learn '@file:docs/runbook.md' --root "$PWD" --json
+lemon learn confirm '@file:docs/runbook.md' --root "$PWD" \
+  --confirm <exact-review-digest> --json
+```
+
+Review is the default and never writes. Confirmation re-runs the bounded
+context selection and destination checks, then writes one canonical memory row
+and one audited skill draft only when the exact digest still matches. Responses
+omit source text, prompts, paths, URLs, secret names, and secret values. See
+[Learn from files, folders, and URLs](learn-from-sources.md).
+
 The runtime command boundary has stable exit codes:
 
 - `0` means the command completed successfully;
@@ -31820,13 +31975,14 @@ arguments remain human-readable usage errors with exit code `2`.
 | `gateway` | Configure Telegram or Discord |
 | `doctor` | Run diagnostics or create a support bundle |
 | `config` | Validate or show resolved configuration |
-| `secrets` | Manage encrypted credentials |
+| `secrets` | Manage encrypted credentials and inspect external read-only sources |
 | `channels` | Inspect channel launch readiness |
 | `providers` | Inspect provider readiness and manage routing |
 | `blueprints` | Review and exactly confirm cataloged skill automation bundles |
 | `profile` | Manage isolated specialist profiles |
 | `backup` | Create, verify, list, or restore user-state backups |
 | `context` | Preview or resolve bounded context references |
+| `learn` | Review bounded sources and exactly confirm memory plus a skill draft |
 | `sessions` | Inspect and manage durable sessions |
 | `completion` | Generate shell completion scripts |
 
@@ -31835,6 +31991,35 @@ runtime lifecycle. Run `lemon --help` or `./bin/lemon --help` for that exact
 launcher. Completion generation detects the launcher, so it does not advertise
 packaged daemon commands in a source checkout or source-only commands in an
 installed release.
+
+## External secret sources
+
+External source diagnostics are available through the same packaged and source
+command boundary:
+
+```bash
+lemon secrets sources status
+lemon secrets sources status --json
+lemon secrets sources test
+lemon secrets sources test vault --json
+
+# Source checkout
+./bin/lemon secrets sources test --source-id vault
+```
+
+`status` validates configuration plus executable/bootstrap readiness without
+executing the source. `test` runs all enabled sources, or one named source,
+under the configured timeout and output bound. Human and JSON responses expose
+only source id/type, readiness, provenance, counts, byte counts, duration, and
+stable error kinds; they never include secret values. Operational test failure
+exits `1`, invalid options exit `2`, and an empty/not-configured selection is an
+operational failure.
+
+`lemon secrets check` likewise reports only `present` for resolved entries; it
+does not print prefixes or suffixes. External sources remain read-only
+fallbacks behind the encrypted Lemon store. See
+[External secret sources](../config.md#external-secret-sources) for the exact
+configuration and fail-closed resolution contract.
 
 ## Portable blueprints
 
@@ -32742,6 +32927,97 @@ Worth knowing before you go looking for them:
 
 ---
 
+Source: https://z80dev.github.io/lemon/user-guide/learn-from-sources
+
+# Learn from files, folders, and URLs
+
+Lemon can turn bounded context sources into durable memory and a reviewable
+skill draft without executing the source or creating another learning
+database. The workflow is always review first: the first command does not write
+anything, and the second command must repeat the exact source selection with
+the confirmation digest from that review.
+
+## Review without writing
+
+```bash
+lemon learn \
+  '@file:docs/operations.md' \
+  '@folder:runbooks' \
+  '@url:https://example.com/public-guide' \
+  --root "$PWD" \
+  --agent-id operator \
+  --json
+```
+
+A source checkout uses `./bin/lemon learn ...` with the same arguments. Review
+returns:
+
+- selected source/item/byte and omission counts;
+- SHA-256 provenance and content digests, never source paths or URLs;
+- the deterministic memory ID, scope, action, summary size, and digest;
+- the synthesis-draft key, action, bundle size/digest, audit verdict, and audit
+  rule identifiers;
+- destination conflicts and `canConfirm`;
+- one exact `confirmationDigest`.
+
+It never returns source text, extracted document text, a generated prompt,
+skill body, local path, URL, secret name, or secret value. Content selected by
+`LemonCore.Context` is redacted again at the durable-memory boundary.
+
+## Confirm the exact fresh plan
+
+Repeat every reference and option from review:
+
+```bash
+lemon learn confirm \
+  '@file:docs/operations.md' \
+  '@folder:runbooks' \
+  '@url:https://example.com/public-guide' \
+  --root "$PWD" \
+  --agent-id operator \
+  --confirm <64-character-review-digest> \
+  --json
+```
+
+Confirmation re-resolves all sources under the same byte, item, page, depth,
+archive, redirect, SSRF, and timeout limits. It also checks the current memory
+row, draft destination, and deterministic skill audit. A changed source,
+changed destination, collision, or blocked audit fails closed before a durable
+write.
+
+On success Lemon writes one deterministic `LemonMemory.Document` through the
+existing SQLite memory store and one audited candidate through the existing
+synthesis `DraftStore`. The skill is not installed or executed; it remains in
+the ordinary draft/promotion flow for inspection and editing. Both records
+carry the source content digest and hashed per-source provenance; the draft
+also carries its exact source memory document ID and audited bundle digest.
+They remain ordinary records: remove the memory by exact document ID through
+`LemonMemory.Store.delete_document/1` and the candidate by exact key through
+`LemonSkills.Synthesis.DraftStore.delete/2`.
+
+Run review again after confirmation to get an idempotent `unchanged` plan. This
+fresh digest can be confirmed without creating a duplicate memory row or skill
+draft.
+
+## Scope and safety
+
+- Local paths remain confined to `--root`; traversal, symlinks, and special
+  files are rejected or omitted.
+- URLs use DNS/IP-pinned public HTTP(S) fetching and revalidate every redirect.
+- PDF, Office, notebook, archive, folder, and text extraction use the same
+  explicit limits documented in [Context references](context-references.md).
+- `--project` writes the candidate draft under the project `.lemon` scope;
+  otherwise it uses the existing global draft scope.
+- `--agent-id` selects the durable memory owner. `--session-key` is available
+  for an explicit canonical learning session.
+- Learning uses only the deterministic skill audit. It never sends selected
+  source content to the optional LLM audit reviewer.
+
+The authenticated control plane exposes the same service as `learn.review`
+(read scope) and `learn.confirm` (admin scope).
+
+---
+
 Source: https://z80dev.github.io/lemon/user-guide/memory
 
 # Memory User Guide
@@ -33125,6 +33401,24 @@ lemon profile chat research "Map the unresolved questions"
 lemon profile roster
 ```
 
+The terminal UI exposes the same server-owned records. Run `/profiles` for a
+filterable node-aware roster; selecting an entry opens its stable
+`agent:<id>:main` conversation. `/profile current`, `/profile show <id>`, and
+`/profile open <id>` inspect or select a profile. After selection, ordinary
+prompt submissions use `profile.chat` rather than generic `chat.send`, so the
+daemon still derives the profile workspace and named-node route:
+
+```text
+/profiles
+/profile create research --name "Research" --model openai:gpt-5 --node newphy
+/profile chat research Map the unresolved questions
+```
+
+The TUI also supports `clone`, `rename`, credential-safe `export`, and guarded
+`delete` subcommands. Use `/profile help` for exact syntax. Delete requires the
+same profile ID again through `--confirm`; the TUI never accepts a profile home
+or workspace path. Export's destination is the sole lifecycle output path.
+
 In an installed release, `profile chat` uses the authenticated local control
 plane and starts the packaged daemon when it is not already healthy. In a
 source checkout, start `./bin/lemon --daemon` first; the one-shot
@@ -33203,8 +33497,11 @@ credential-free by construction.
 
 This first-class vertical covers durable local records, isolated assistant
 workspaces, lifecycle, canonical one-to-one chat, node routing, and a roster.
-Group rooms, profile-scoped cron management, import/restore, a TUI/Web profile
-editor, and merged multi-controller rosters remain separate product work.
+Group rooms, profile-scoped cron management, import/restore, a Web form editor,
+free-form TUI field editing, and merged multi-controller rosters remain
+separate product work. The TUI command/picker lifecycle is complete for the
+existing control-plane API; it intentionally does not invent APIs for those
+remaining surfaces.
 
 ---
 

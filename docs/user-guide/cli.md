@@ -4,6 +4,20 @@ Lemon exposes the same Mix-free command families from an installed
 `lemon_runtime_min` or `lemon_runtime_full` release and from a source checkout.
 Use `lemon ...` after installation and `./bin/lemon ...` in the repository.
 
+## Learn from bounded sources
+
+```bash
+lemon learn '@file:docs/runbook.md' --root "$PWD" --json
+lemon learn confirm '@file:docs/runbook.md' --root "$PWD" \
+  --confirm <exact-review-digest> --json
+```
+
+Review is the default and never writes. Confirmation re-runs the bounded
+context selection and destination checks, then writes one canonical memory row
+and one audited skill draft only when the exact digest still matches. Responses
+omit source text, prompts, paths, URLs, secret names, and secret values. See
+[Learn from files, folders, and URLs](learn-from-sources.md).
+
 The runtime command boundary has stable exit codes:
 
 - `0` means the command completed successfully;
@@ -31,6 +45,7 @@ arguments remain human-readable usage errors with exit code `2`.
 | `profile` | Manage isolated specialist profiles |
 | `backup` | Create, verify, list, or restore user-state backups |
 | `context` | Preview or resolve bounded context references |
+| `learn` | Review bounded sources and exactly confirm memory plus a skill draft |
 | `sessions` | Inspect and manage durable sessions |
 | `completion` | Generate shell completion scripts |
 
