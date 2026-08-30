@@ -17,6 +17,7 @@ document that workflow, and prove it against a running Lemon instance.
 |---|---|---|---|
 | Management Web and sessions | `feat/parity-web-admin` | `lemon_web`, shared session lifecycle API, related control-plane methods | Authenticated real-browser workflow against a running source runtime; session mutation and redacted export/prune tests |
 | Profiles and provider orchestration | `feat/parity-profiles-models` + TUI client follow-up | First-class user profiles, roster/canonical chat, packaged CLI/control plane/TUI, provider pool/fallback UX | Isolated profile lifecycle plus provider-routing proof through a real control plane or packaged CLI; authenticated real-WebSocket TUI profile proof |
+| TUI session lifecycle | `feat/parity-tui-sessions` | Bun TUI over the shared session lifecycle; no client persistence | Authenticated real-Bandit plus production typed Bun client proof for search/resume/metadata/redacted export/exact prune/delete over isolated session rows |
 | Operations and secret sources | `feat/parity-ops-lifecycle` | `~/.lemon` data contract, backup/verify/restore, update receipts/rollback where safe, external secret-source boundary | Adversarial tests and isolated-HOME source/package backup/restore and secret-resolution proof |
 
 ## Wave 2
@@ -49,6 +50,9 @@ separate follow-on over the existing memory/skill stores.
   pages do not become a second persistence or configuration layer.
 - Secret values, prompts, raw paths, and unredacted session content must not
   enter status APIs, receipts, logs, or proof artifacts.
+- TUI session mutations are never queued while offline. Exact-key operations
+  must verify their target; prune/delete remain preview-confirm workflows, and
+  refused or stale mutations preserve local drafts and do not claim success.
 - Focused tests run in each lane. After integration, authoritative umbrella and
   client suites run serially to avoid shared build and environment pollution.
 - Source and assembled release launchers must both be exercised. Browser work

@@ -22,6 +22,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   JSON/Markdown export, exact-candidate preview-confirm prune, and verified
   exact-key delete; plus registry-generated `lemon completion bash|zsh|fish`
   scripts that preserve source and release launcher-specific commands.
+- Bun TUI session lifecycle parity over the same authenticated control-plane
+  service: live `/sessions` search/filter/picker UX; `/session` inspect, resume,
+  title, pin, archive, redacted preview/export, exact-candidate guarded prune,
+  and verified export-before-delete. Destructive mutations are never queued
+  offline, refused/stale results do not discard drafts, and list/status/error
+  rendering omits paths, prompts, credentials, and unredacted content.
 - Source and packaged `lemon providers` readiness and routing management with
   comment-preserving fallback and credential-pool reference edits, stable
   redacted JSON/exit codes, exact confirmation for destructive changes, and a

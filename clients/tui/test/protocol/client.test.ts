@@ -166,6 +166,22 @@ describe("request correlation", () => {
 	});
 });
 
+describe("session lifecycle offline safety", () => {
+	test("metadata, prune, delete, and export never enter the reconnect queue", async () => {
+		const client = makeClient("ws://127.0.0.1:1/ws");
+		const methods = new ControlPlaneMethods(client);
+		for (const request of [
+			methods.sessionsMetadataPatch({ sessionKey: "s1", pinned: true }),
+			methods.sessionsPrune({ olderThanMs: 1, dryRun: false, confirmToken: "token" }),
+			methods.sessionsDelete({ sessionKey: "s1" }),
+			methods.sessionsExport({ sessionKey: "s1", format: "json" }),
+		]) {
+			await expect(request).rejects.toBeInstanceOf(NotConnectedError);
+		}
+		expect(client.queued).toHaveLength(0);
+	});
+});
+
 describe("events", () => {
 	test("demuxes server events to typed listeners", async () => {
 		const server = await withServer();

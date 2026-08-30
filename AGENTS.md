@@ -380,6 +380,15 @@ workspace or named-node route. TUI lifecycle commands call the existing
 `profiles.*` methods; they do not persist a client-side profile store or accept
 caller-controlled profile workspace paths.
 
+The Bun TUI also consumes the shared `sessions.*` lifecycle directly: its live
+search/filter picker, exact-key resume, title/pin/archive edits, redacted
+preview/export, guarded prune, and verified delete do not introduce a second
+session store. Keep destructive lifecycle calls non-queued while offline.
+Prune must bind confirmation to the server's exact candidate set; delete may
+forget local UI state only after a verified server receipt. Session lists,
+status, picker details, errors, and proof output must never expose prompts,
+responses, credentials, raw local paths, or arbitrary server error details.
+
 ### Key Dependencies Between Apps
 
 Derived from complete `deps/0` bodies in the `mix.exs` files and enforced by
@@ -643,7 +652,9 @@ Each app has its own `AGENTS.md` with detailed context:
 *Last updated: 2026-08-30* (external 1Password, Bitwarden, and argv-only command
 secret sources now share one supervised, bounded, fail-closed resolver and
 redacted source/packaged diagnostics; the TUI discovers and manages server-owned
-profiles while preserving canonical `profile.chat` routing; the Mix-free command registry drives runtime
+profiles while preserving canonical `profile.chat` routing and consumes the
+shared redacted, exact-confirm session lifecycle without client persistence;
+the Mix-free command registry drives runtime
 dispatch/help/completion and the packaged/source sessions CLI reuses the shared
 redacted lifecycle; architecture reporting parses complete `deps/0`
 bodies and distinguishes direct dependencies from reference-only exceptions;

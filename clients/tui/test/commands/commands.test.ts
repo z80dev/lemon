@@ -543,12 +543,26 @@ describe("sessions and history", () => {
 		expect(harness.host.text).toContain("12000 → 4000 tokens");
 	});
 
-	test("/session delete asks before it deletes", async () => {
-		harness.server.respondWith("sessions.delete", { ok: true });
+	test("/session delete previews and requires the exact key before it deletes", async () => {
+		harness.server.respondWith("sessions.list", {
+			sessions: [
+				{
+					sessionKey: "tui-session",
+					runCount: 1,
+					pinned: false,
+					archived: false,
+				},
+			],
+		});
+		harness.server.respondWith("sessions.delete", {
+			deleted: true,
+			sessionKey: "tui-session",
+			summary: { existed: true, verified: true },
+		});
 		await harness.run("/session delete");
 		expect(harness.server.requestsFor("sessions.delete")).toHaveLength(0);
 		expect(harness.host.last?.level).toBe("warning");
-		await harness.run("/session delete tui-session");
+		await harness.run("/session delete tui-session --confirm tui-session");
 		expect(harness.server.requestsFor("sessions.delete")[0].params).toEqual({
 			sessionKey: "tui-session",
 		});

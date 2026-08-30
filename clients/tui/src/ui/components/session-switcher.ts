@@ -87,7 +87,16 @@ export class SessionSwitcher {
 		if (this.#rows.length === 0) {
 			// The focused session always exists locally, so an empty merge means the
 			// daemon answered nothing and the local store was somehow empty too.
-			this.#rows = [{ key: focusedKey, active: false, local: true, unread: 0 }];
+			this.#rows = [
+				{
+					key: focusedKey,
+					active: false,
+					local: true,
+					unread: 0,
+					pinned: false,
+					archived: false,
+				},
+			];
 		}
 		this.#overlay = new PickerOverlay({
 			title: "sessions",
@@ -251,8 +260,19 @@ export function describeSessionRow(row: SessionRow, focusedKey: string, now: num
 		row.active ? `${theme.spinnerFrames[0]} busy` : "idle",
 		row.unread > 0 ? `${row.unread} unread` : undefined,
 		row.runCount !== undefined ? `${row.runCount} run(s)` : undefined,
+		row.pinned ? "pinned" : undefined,
+		row.archived ? "archived" : undefined,
 		row.local ? undefined : "not loaded",
 		relativeAge(row.updatedAtMs, now),
 	].filter((mark): mark is string => Boolean(mark));
-	return { value: row.key, label: row.key, description: marks.join(" · ") };
+	return {
+		value: row.key,
+		label: row.title ? `${shortTitle(row.title)} (${row.key})` : row.key,
+		description: marks.join(" · "),
+	};
+}
+
+function shortTitle(title: string): string {
+	const flat = title.replace(/\s+/g, " ").trim();
+	return flat.length > 60 ? `${flat.slice(0, 59)}…` : flat;
 }
