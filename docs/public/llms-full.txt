@@ -2851,6 +2851,17 @@ chat_id = 12345678
 agent_id = "default"
 ```
 
+`LemonCore.ProfileStore` is the lifecycle owner for user-managed profiles.
+Commands such as `lemon profile create research` patch only the selected
+`[profiles.<id>]` table, preserving unrelated global-config keys and comments.
+Managed records may include `name`, `description`, `avatar`, `model`,
+`system_prompt`, `node`, `status`, `profile_version`, `created_at`, and
+`updated_at`. Home/workspace paths and the stable `agent:<id>:main` session key
+are derived from the validated ID rather than stored; do not add credentials or
+filesystem paths to the profile table. See
+[User-managed profiles](user-guide/profiles.md) for clone, credential-safe
+export, recoverable deletion, and named-node routing.
+
 ## Native Execution and Subagents
 
 Lemon uses its native executor for every top-level TUI and gateway run. Configure
@@ -19960,9 +19971,9 @@ must not be copied into new plans.
 | User job | Hermes at pinned upstream | Lemon at pinned baseline | Status | Priority | Concrete next closure |
 | --- | --- | --- | --- | --- | --- |
 | Install on a supported computer and reach first chat | The [installer](https://hermes-agent.nousresearch.com/docs/getting-started/installation) covers one-line shell, PowerShell/native Windows, desktop installers, WSL, Nix/NixOS, Termux, Docker, and setup entry. Quick Portal setup can authorize model plus hosted search/image/TTS/browser services through one account; see pinned [quickstart](https://github.com/NousResearch/hermes-agent/blob/4f22543509d1b91dc45bcb369447126c5eb14fb7/website/docs/getting-started/quickstart.md). | [Install Lemon](../install.md) now provides verified one-line release installation, idempotent setup, and a first-TUI readiness gate for macOS and Linux artifacts. Provider credentials are configured individually; Linux requires the documented glibc baseline. No native Windows, Nix, Android, or desktop installer. | Partial | **High** | Add a platform-aware launcher UX, native Windows or an explicit supported WSL path, broader Linux compatibility, and an optional bundled account/OAuth path for a useful no-key first run. |
-| Discover and administer the product from one CLI | Hermes documents roughly sixty top-level families in its pinned [CLI reference](https://github.com/NousResearch/hermes-agent/blob/4f22543509d1b91dc45bcb369447126c5eb14fb7/website/docs/reference/cli-commands.md): chat, models/fallback/MoA, sessions, cron, profiles, skills, memory, approvals, backups, updates, logs, plugins, MCP, completions, and more. | Packaged [`LemonCli.CLI`](../../apps/lemon_cli/lib/lemon_cli/cli.ex) has eight families: setup, model, gateway, doctor, config, secrets, channels, and the source/packaged-parity backup lifecycle. Source `bin/lemon` adds node, send, media, model/provider inspection, policy, proofs, readiness, skill, usage, and update through Mix tasks. Backup has consistent help, JSON, and exit behavior, but there is still no single stable command map or completion surface. | Partial | **High** | Promote the remaining supported runtime surfaces into the packaged CLI, with consistent help/JSON/errors, shell completions, and a generated reference. |
+| Discover and administer the product from one CLI | Hermes documents roughly sixty top-level families in its pinned [CLI reference](https://github.com/NousResearch/hermes-agent/blob/4f22543509d1b91dc45bcb369447126c5eb14fb7/website/docs/reference/cli-commands.md): chat, models/fallback/MoA, sessions, cron, profiles, skills, memory, approvals, backups, updates, logs, plugins, MCP, completions, and more. | Packaged [`LemonCli.CLI`](../../apps/lemon_cli/lib/lemon_cli/cli.ex) now has nine families: setup, model, gateway, doctor, config, secrets, channels, verified backup/restore, and a complete profile lifecycle/canonical-chat surface. Source `bin/lemon` adds node, send, media, model/provider inspection, policy, proofs, readiness, skill, usage, and update through Mix tasks. Backup and profile commands have consistent help/JSON/errors, but there is still no single generated command map or completion surface. | Partial | **High** | Promote the remaining supported runtime surfaces into the packaged CLI, then generate the reference and shell completions from one registry. |
 | Use a polished native daily-agent interface | The pinned [Desktop guide](https://github.com/NousResearch/hermes-agent/blob/4f22543509d1b91dc45bcb369447126c5eb14fb7/website/docs/user-guide/desktop.md) covers onboarding, tabs/panes, chat, artifacts, files, terminal, git/worktrees, reviews, memory, voice, settings, plugins, multi-profile concurrency, and remote connections. | Lemon has a capable Bun TUI, a session LiveView, JSON-RPC clients, and LemonSim UI. It has no native desktop product or a single interface that composes files, terminal, artifacts, git review, memory, settings, and remote connections. | Missing | **High** | Choose and ship a desktop/product-shell strategy. A wrapper is useful only if it owns onboarding, connection management, updates, file/artifact UX, and settings—not merely a WebView around chat. |
-| Create durable specialist agents and collaborate among them | [Bot Mode](https://hermes-agent.nousresearch.com/docs/user-guide/bot-mode) presents profiles as bots with independent config/model/memory/skills/SOUL, canonical chats, cron routines, DMs, groups, cross-machine roster, and remote creation. Profiles also have full [CLI lifecycle](https://hermes-agent.nousresearch.com/docs/reference/profile-commands). | Lemon has named agents/personas, native child sessions, router delegation, kanban, agent inboxes, and authenticated named execution nodes. It does not offer isolated user-managed agent homes, profile create/clone/export/delete, canonical bot chats, a roster, or group-room UX. | Partial | **High** | Define a first-class profile record over existing agent/node primitives, including isolated config/memory/skills, create/clone/export lifecycle, canonical chat, and TUI/Web roster before attempting group rooms. |
+| Create durable specialist agents and collaborate among them | [Bot Mode](https://hermes-agent.nousresearch.com/docs/user-guide/bot-mode) presents profiles as bots with independent config/model/memory/skills/SOUL, canonical chats, cron routines, DMs, groups, cross-machine roster, and remote creation. Profiles also have full [CLI lifecycle](https://hermes-agent.nousresearch.com/docs/reference/profile-commands). | Lemon now has a first-class profile record over its existing router agents and named nodes: isolated homes/workspaces, create/list/show/clone/rename/credential-safe-export/recoverable-delete, stable `agent:<id>:main` chats, named-node routing, a node-aware roster, packaged CLI, and control-plane RPCs. Group rooms, profile-scoped cron, import/restore, and TUI/Web profile editors remain absent. | **Near** for lifecycle/canonical chat; partial for collaboration UI | **High** | Add the TUI/Web profile picker/editor and profile-scoped automation next; design group rooms only after those shared lifecycle APIs have real client use. |
 | Manage several local or remote runtimes from one client | Hermes Desktop registers local, URL, SSH, Docker, and cloud connections and merges their agent rosters; see [multi-connection Desktop](https://hermes-agent.nousresearch.com/docs/user-guide/multi-connection-desktop). | Lemon's authenticated named nodes are stronger as native remote execution workers and have real name-based routing, cancellation, pairing, and presence. The TUI/Web do not provide a multi-controller connection registry or merged agent/session roster. | Different | **High** | Preserve Lemon's execution-node advantage, then add connection profiles, health/re-auth UX, and a merged node/agent/session picker. |
 | Administer a machine in the browser | Hermes's [Web Dashboard](https://hermes-agent.nousresearch.com/docs/user-guide/features/web-dashboard) manages profiles, real TUI chat, status/resources, a large config surface, credentials, sessions, models, skills, MCP, pairing, webhooks, gateways, memory, cron, plugins, logs, and analytics. | [`LemonWeb.Router`](../../apps/lemon_web/lib/lemon_web/router.ex) now has a fail-closed token-required `/manage` shell for runtime health, sanitized live-node presence, and durable session operations, alongside chat and `/healthz`. Provider credentials/pools, approvals, cron, skills/MCP, memory, logs, and config do not yet have equivalent Web journeys. | Partial, first vertical shipped | **High** | Extend the authenticated shell one existing service at a time: providers/credentials, approvals, cron, skills/MCP, memory, logs, and config. Keep each mutation scoped and browser-tested. |
 | Browse, search, resume, export, archive, and safely prune sessions | Hermes [sessions](https://hermes-agent.nousresearch.com/docs/user-guide/sessions) support workspace-aware resume, rename/pin/archive/read state, FTS search, rich filtering, lineage, redacted JSONL/HTML/Markdown/QMD/trace exports, verified delete-after-export, prune, handoff, recovery, and recap. | `LemonCore.SessionLifecycle` now composes the canonical stores for bounded search, title/pin/archive, redacted JSON/Markdown export, verified delete, and exact-candidate guarded prune. Web supports list/search/inspect/resume/export/mutation/prune, and authenticated control-plane RPCs expose the redacted lifecycle. TUI and packaged CLI do not yet expose the shared lifecycle; lineage, handoff, recovery, recap, read state, and richer formats remain gaps. | Near in service/Web; partial cross-client | **High** | Reuse the shared lifecycle in TUI and packaged CLI, then add lineage/read state and recovery/backup semantics without introducing another store. |
@@ -32683,6 +32694,124 @@ yet fully translate Hermes cron jobs, gateway bindings, provider pools, MCP
 servers, plugin state, checkpoints, browser state, or exact run-history replay.
 Those files are either skipped or archived for manual review so the migration
 does not silently invent unsafe Lemon config.
+
+---
+
+Source: https://z80dev.github.io/lemon/user-guide/profiles
+
+# User-managed profiles
+
+Profiles let one Lemon runtime host durable specialist agents without adding a
+second execution engine. A profile is the canonical `[profiles.<id>]` router
+record plus an isolated home derived from its validated ID:
+
+```text
+~/.lemon/profiles/research/
+├── config.toml
+├── profile.json
+├── sessions/
+└── workspace/
+    ├── memory/
+    └── .lemon/skill/
+```
+
+The profile ID is stable. Its main conversation is always
+`agent:<id>:main`; renaming the display name does not fork or lose that chat.
+The native `coding_agent -> lemon_agent -> lemon_ai` path remains unchanged.
+
+## Create and chat
+
+```bash
+lemon profile create research \
+  --name "Research" \
+  --description "Evidence-first research specialist" \
+  --model openai:gpt-5
+
+lemon profile show research
+lemon profile chat research "Map the unresolved questions"
+lemon profile roster
+```
+
+In an installed release, `profile chat` uses the authenticated local control
+plane and starts the packaged daemon when it is not already healthy. In a
+source checkout, start `./bin/lemon --daemon` first; the one-shot
+`./bin/lemon profile chat ...` process then submits to that runtime rather than
+starting a second router whose work would disappear when the CLI exits.
+
+Use `--node <name>` at creation time to route canonical chat through an
+authenticated named execution node. The roster reports `local`, `online`, or
+`offline`. For named execution, provider credentials and the effective working
+directory stay destination-local; `profile_id` lets the destination derive its
+own profile workspace rather than trusting a controller filesystem path.
+
+All lifecycle reads support `--json`. Chat also accepts `--model` and
+`--queue-mode collect|followup|steer|interrupt` overrides. Its working boundary
+remains the derived profile workspace; generic chat/delegation APIs own any
+explicit project-directory selection. Omitting overrides uses the profile and
+normal runtime defaults.
+
+## Clone, rename, and delete
+
+```bash
+lemon profile clone research research-copy --name "Research Copy"
+lemon profile rename research "Research Prime"
+lemon profile delete research-copy --confirm research-copy
+```
+
+Clone copies regular profile-home files but rejects symlinks and special files.
+Rename updates only presentation metadata. Delete refuses the reserved
+`default` profile, requires an exact matching confirmation value, and moves the
+managed home to `~/.lemon/trash/profiles/` before removing its TOML table. A
+failed config commit restores the home.
+
+Lifecycle config edits are serialized and atomically replace the global config
+file. Targeted TOML patching preserves unrelated tables, unknown keys, and
+comments instead of decoding and rewriting the entire user file.
+
+## Credential-safe export
+
+```bash
+lemon profile export research ./research-profile.json
+```
+
+The default export is deliberately selected-file, not a backup of the entire
+home. It includes portable profile metadata, profile-local config, known
+bootstrap markdown, and text files under the profile skill tree. Before
+encoding it redacts sensitive assignments and recognizable inline credential
+patterns.
+
+It does not include:
+
+- sessions or message history;
+- memory content or artifacts;
+- binary files or special files;
+- secret-like paths such as `.env`, token, password, credential, or private-key
+  files.
+
+The JSON `exportPolicy` and command result report selected file, omission, and
+redaction counts. There is intentionally no packaged CLI option to include
+secrets. Review any export before sharing it.
+
+## Control-plane API
+
+Clients can use the equivalent JSON-RPC methods:
+
+- `profiles.list`, `profiles.get`, and `profiles.roster` (`read` scope);
+- `profiles.create`, `profiles.clone`, `profiles.rename`, `profiles.export`, and
+  `profiles.delete` (`admin` scope);
+- `profile.chat` (`write` scope).
+
+`profile.chat` returns the run ID and stable session key without echoing the
+prompt. It does not accept a caller-supplied working directory or node: both
+come from the validated profile record. Lifecycle and export summaries are
+credential-free by construction.
+
+## Current boundaries
+
+This first-class vertical covers durable local records, isolated assistant
+workspaces, lifecycle, canonical one-to-one chat, node routing, and a roster.
+Group rooms, profile-scoped cron management, import/restore, a TUI/Web profile
+editor, and merged multi-controller rosters remain separate product work.
 
 ---
 

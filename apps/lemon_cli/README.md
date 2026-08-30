@@ -46,6 +46,7 @@ release and source-checkout behavior aligned.
 | Manage encrypted secrets | `lemon secrets status` | `./bin/lemon secrets status` | `mix lemon.secrets.status` |
 | Inspect channel readiness | `lemon channels` | `./bin/lemon channels` | `mix lemon.channels` |
 | Back up or restore durable user state | `lemon backup create` | `./bin/lemon backup create` | Call `LemonCli.CLI.run/1` from contributor tooling |
+| Manage specialist profiles | `lemon profile list` | `./bin/lemon profile list` | Use the same packaged command boundary |
 
 ## Backup and restore
 
@@ -62,6 +63,38 @@ Credential-bearing files are excluded unless `backup create
 --include-credentials` is explicit. See
 [Back up and restore Lemon user state](../../docs/user-guide/backups.md) for the
 complete format, exclusion, permissions, rollback, and compatibility contract.
+
+## User-managed profiles
+
+Profiles are durable router agents, not alternate engines. Each validated ID
+maps to `[profiles.<id>]`, a stable `agent:<id>:main` chat, and an isolated
+`~/.lemon/profiles/<id>/workspace/` used for bootstrap, memory paths, and skills.
+
+```bash
+lemon profile create research --name "Research" --model openai:gpt-5
+lemon profile clone research research-copy --name "Research Copy"
+lemon profile show research --json
+lemon profile roster
+lemon profile chat research "Review this week's notes"
+lemon profile export research ./research-profile.json
+lemon profile delete research-copy --confirm research-copy
+```
+
+`rename` changes the display name without changing the stable ID or chat.
+Deletion requires exact-ID confirmation and moves the managed home into Lemon's
+trash before removing config. Export is selected-file and credential-safe by
+default: it excludes sessions, memory, artifacts, binaries, and secret-like
+paths; redacts sensitive assignments and token patterns; and reports omission
+and redaction counts. There is no CLI switch to include secrets.
+
+Lifecycle commands run in the release CLI's fresh, non-booted VM. Canonical
+chat is different: it must outlive that one-shot process, so the CLI connects
+to the authenticated loopback control plane and calls `profile.chat`. The
+packaged launcher starts the daemon when needed; source users start
+`./bin/lemon --daemon` before `./bin/lemon profile chat`. The request sends only
+the profile ID, prompt, queue mode, and optional model override—working
+directory and execution node are resolved again from the profile by the
+long-running runtime.
 
 ## First-run setup and readiness
 

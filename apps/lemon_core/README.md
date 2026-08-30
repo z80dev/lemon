@@ -259,7 +259,9 @@ default suggestions just because the upstream provider documents them.
 - `providers` -- LLM API keys and base URLs (anthropic, openai, openai-codex, opencode, kimi, google)
 - `defaults` -- Preferred home for default provider/model/thinking level/engine
 - `runtime` -- Runtime behavior (compaction, retry, shell, tools, cli, extensions, theme)
-- `profiles` -- Per-agent profiles with tool policies
+- `profiles` -- Per-agent identity/model/node defaults and tool policies. The
+  user-managed lifecycle lives in `LemonCore.ProfileStore`, with derived homes
+  at `~/.lemon/profiles/<id>/` and stable `agent:<id>:main` session keys.
 - `agent` -- Legacy alias for runtime/default settings (still supported)
 - `agents` -- Legacy alias for profile settings (still supported)
 - `tui` -- Theme, debug mode

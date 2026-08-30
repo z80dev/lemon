@@ -242,6 +242,16 @@ name = "Default Agent"
 # deny = []
 # require_approval = ["bash", "write", "edit"]
 
+# User-managed specialist profiles can be created with `lemon profile create`.
+# Their stable IDs derive ~/.lemon/profiles/<id>/ and agent:<id>:main; do not
+# configure filesystem paths here.
+# [profiles.research]
+# name = "Research"
+# description = "Evidence-first research specialist"
+# model = "openai:gpt-5"
+# system_prompt = "Cite primary sources and state uncertainty."
+# node = "local" # or the name of an authenticated execution node
+
 # --- Feature Flags ---
 # Each flag is an operator kill switch for a subsystem; all ship enabled.
 # Valid states: "off" | "opt-in" | "default-on"

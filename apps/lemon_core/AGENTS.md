@@ -187,13 +187,26 @@ provider/model-match rules.
 
 - `[defaults]` - Default provider, model, thinking level, engine
 - `[runtime]` - Runtime behavior (compaction, retry, shell, provider_routing, tools, cli, extensions, theme, budget_defaults)
-- `[profiles.<id>]` - Per-agent profiles with tool policies
+- `[profiles.<id>]` - Per-agent profiles with identity, model/node defaults, and tool policies. `LemonCore.ProfileStore` is the user-managed lifecycle boundary; it patches only the selected table and derives isolated homes under `~/.lemon/profiles/<id>/`.
 - `[providers.<name>]` - LLM API keys, base URLs, and secret refs (anthropic, openai, openai-codex, opencode, opencode_go, github_copilot, kimi, zai, minimax, google, google_vertex, azure_openai_responses, amazon_bedrock). Secret-ref fields: `api_key_secret`, `oauth_secret`, `project_secret`, `location_secret`, etc.
 - `[gateway]` - Max concurrent runs, engine bindings, SMS/voice/webhook settings, projects. Per-platform sub-tables (`[gateway.<id>]`) and their `enable_<id>` flags are resolved and validated by the app that implements the platform; see `LemonCore.Config.Gateway.Channel`. Secret-ref fields: `bot_token_secret`, `auth_token_secret`, `wallet_key_secret`.
 - `[tui]` - Theme, debug mode
 - `[logging]` - File logging, level, rotation
 
 **Deprecated sections cause hard failure**: `[agent]`, `[agents.*]`, `[agent.tools.*]`, and top-level `[tools.*]` are no longer supported and will fail validation with migration guidance. Use `[defaults]`/`[runtime]` instead of `[agent]`, `[profiles.<id>]` instead of `[agents.<id>]`, and `[runtime.tools.*]` instead of `[agent.tools.*]` or `[tools.*]`.
+
+### User-managed profile lifecycle
+
+`LemonCore.ProfileStore` is deliberately a metadata/filesystem service. It may
+return derived home/workspace/memory/skill/session paths and canonical session
+keys, but must not depend on `coding_agent`, `lemon_skills`, or router runtime
+modules. Lifecycle writes are serialized per config path, use same-directory
+atomic replacement, and preserve unknown TOML keys/comments. Profile IDs are
+validated before path derivation; symlinked/special homes are rejected. Delete
+requires exact-ID confirmation and moves the home to `~/.lemon/trash/profiles`
+before removing config. Default exports include only selected text bootstrap,
+profile-local config, and skill files after credential redaction; sessions,
+memory, artifacts, binaries, and secret-like paths remain omitted.
 
 ### Config vs Runtime State
 

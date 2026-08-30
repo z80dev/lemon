@@ -15,6 +15,9 @@
 - **Model-agnostic** — Connect to 27 configured LLM providers, including Anthropic, OpenAI, Google Gemini, Bedrock, Azure, and OpenAI-compatible services. Lemon provides unified streaming, automatic retries, rate limiting, and cost accounting (`lemon_ai`); compatible local endpoints can be configured separately.
 - **Coding agent and MCP** — Native tool execution, MCP (Model Context Protocol) client/server bridge, native in-process subagent orchestration, browser automation, and LSP integration.
 - **Durable memory** — SQLite-backed full-text recall, document ingestion, and a provider interface for optional semantic backends, including Honcho long-term memory integration (`lemon_memory`).
+- **User-managed profiles** — Create durable specialist agents with stable chats,
+  separate bootstrap/memory/skill workspaces, optional model/node assignment,
+  node-aware roster status, safe clone/export, and guarded deletion.
 - **LemonSim and benchmark arenas** — Event-sourced simulation worlds (Werewolf, Space Station, Stock Market, Survivor, Poker) and reproducible offline benchmark scoring without provider API keys.
 - **Supervised on the BEAM** — Each agent run is an isolated OTP process. Separate conversations execute concurrently, crashed workers are supervised, and durable session state survives individual requests.
 
@@ -75,6 +78,17 @@ lemon web
 
 See [Use Lemon in a Browser](docs/user-guide/web.md) for setup recovery,
 access-control, and headless launch details.
+
+Create a specialist profile and send work to its canonical chat:
+
+```bash
+lemon profile create research --name "Research" --model openai:gpt-5
+lemon profile chat research "Summarize the open questions"
+lemon profile roster
+```
+
+See [User-managed profiles](docs/user-guide/profiles.md) for lifecycle,
+filesystem isolation, named-node routing, and export safeguards.
 
 ---
 

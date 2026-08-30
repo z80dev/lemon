@@ -13,7 +13,7 @@
 #   bin/lemon                 # interactive terminal: launches the TUI (daemon auto-start)
 #
 #   bin/lemon tui|web|start|daemon|stop|restart|status|remote|eval|rpc|version|update
-#   bin/lemon setup|model|gateway|config|secrets|channels|backup|doctor
+#   bin/lemon setup|model|gateway|config|secrets|channels|profile|backup|doctor
 #   bin/lemon --help
 
 set -euo pipefail
@@ -54,6 +54,7 @@ Commands:
   secrets [args]        Manage secrets
   channels [args]       Configure channel adapters
   backup [args]         Create, verify, list, or restore user-state backups
+  profile [args]        Manage profiles and submit canonical profile chats
   doctor [args]         Run runtime diagnostics
   doctor --bundle [path] Generate a support bundle (default: ~/.lemon/support-bundle-<ts>.zip)
   --help, -h            Show this help
@@ -516,6 +517,40 @@ EOF
     # leading "--" in System.argv() (elixir only strips one CLI boundary
     # marker), silently breaking LemonCore.Update.CLI's OptionParser.parse.
     exec "$RELEASE_BIN" eval 'LemonCore.Update.CLI.main(System.argv())' "$@"
+    ;;
+
+  profile)
+    if [ "${2:-}" = "chat" ]; then
+      require_cmd curl
+      control_port="${LEMON_CONTROL_PLANE_PORT:-4040}"
+
+      if ! [[ "$control_port" =~ ^[0-9]+$ ]]; then
+        error "Invalid LEMON_CONTROL_PLANE_PORT value: $control_port"
+        exit 1
+      fi
+
+      if ! control_plane_healthy "$control_port"; then
+        info "daemon not running; starting it for profile chat"
+        start_daemon
+
+        healthy=""
+        for ((attempt = 1; attempt <= 30; attempt++)); do
+          if control_plane_healthy "$control_port"; then
+            healthy=1
+            break
+          fi
+          sleep 1
+        done
+
+        if [ -z "$healthy" ]; then
+          error "daemon did not become healthy on port $control_port within 30s"
+          error "check 'lemon status' and 'lemon doctor', then retry"
+          exit 1
+        fi
+      fi
+    fi
+
+    run_runtime_cli "$@"
     ;;
 
   setup|model|gateway|config|secrets|channels|backup)
