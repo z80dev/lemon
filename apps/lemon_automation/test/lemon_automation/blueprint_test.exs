@@ -111,6 +111,32 @@ defmodule LemonAutomation.BlueprintTest do
   end
 
   @tag :tmp_dir
+  test "revalidates staged skill bytes before any profile or cron commit", %{tmp_dir: root} do
+    profile_id = unique_id("stage-profile")
+    bundle_id = unique_id("stage-bundle")
+    automation_id = unique_id("stage-job")
+    profile_opts = profile_opts(root)
+    assert {:ok, profile} = ProfileStore.create(%{id: profile_id}, profile_opts)
+    bundle = write_bundle(root, bundle_id, automation_id)
+
+    base_opts = [profile_opts: profile_opts, refresh_fun: fn _ -> :ok end]
+    assert {:ok, preview} = Blueprint.preview(bundle, profile_id, base_opts)
+
+    mutation = fn stage ->
+      File.write!(Path.join([stage, "daily-note", "SKILL.md"]), safe_skill("mutated"))
+      :ok
+    end
+
+    opts = Keyword.put(base_opts, :after_stage_fun, mutation)
+
+    assert {:error, {:staged_bundle_changed, _}} =
+             Blueprint.activate(bundle, profile_id, preview["confirmationDigest"], opts)
+
+    refute File.exists?(Path.join(profile["paths"]["skills"], "daily-note"))
+    assert CronStore.get_job(preview["automation"]["id"]) == nil
+  end
+
+  @tag :tmp_dir
   test "rejects command fields, secret values, symlinks, and archives without echoing values", %{
     tmp_dir: root
   } do
