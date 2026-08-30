@@ -16,8 +16,14 @@ defmodule CodingAgent.ExecutionNode.Worker do
   alias LemonGateway.ExecutionRequest
 
   @protocol_version 1
+  @max_control_text_bytes 16 * 1_024
   @capabilities %{
     "coding_agent.run" => %{"version" => @protocol_version},
+    "node.invoke.control" => %{
+      "version" => @protocol_version,
+      "operations" => ["steer", "redirect"],
+      "maxTextBytes" => @max_control_text_bytes
+    },
     "node.invoke.cancel" => true
   }
 
@@ -338,6 +344,9 @@ defmodule CodingAgent.ExecutionNode.Worker do
   defp handle_socket_response({:invoke_result, _invoke_id}, _result, state),
     do: {:noreply, state}
 
+  defp handle_socket_response({:invoke_control_result, _control_id}, _result, state),
+    do: {:noreply, state}
+
   defp handle_socket_response(tag, {:error, reason}, state)
        when tag in [:pair_request, :pair_approve] do
     handle_pairing_error(reason, state)
@@ -416,6 +425,14 @@ defmodule CodingAgent.ExecutionNode.Worker do
       invocation ->
         _ = state.executor_module.cancel(invocation.context)
         {:noreply, remove_invocation(state, invoke_id)}
+    end
+  end
+
+  defp handle_node_event("node.invoke.control", payload, state) do
+    if targeted?(payload, state) do
+      {:noreply, apply_invocation_control(state, payload)}
+    else
+      {:noreply, state}
     end
   end
 
@@ -523,6 +540,98 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
     state
   end
+
+  defp apply_invocation_control(state, payload) do
+    control_id = payload["controlId"]
+    invoke_id = payload["invokeId"]
+    run_id = payload["runId"]
+    operation = control_operation(payload["operation"])
+    text = payload["text"]
+
+    if valid_control_identity?(control_id, invoke_id, run_id) do
+      result =
+        case Map.get(state.invocations, invoke_id) do
+          nil ->
+            {:error, "terminal"}
+
+          %{run_id: invocation_run_id} when invocation_run_id != run_id ->
+            {:error, "run_mismatch"}
+
+          invocation ->
+            execute_invocation_control(state, invocation, operation, text)
+        end
+
+      send_control_result(state, control_id, invoke_id, run_id, result)
+    else
+      state
+    end
+  end
+
+  defp execute_invocation_control(_state, _invocation, :invalid, _text),
+    do: {:error, "unsupported_operation"}
+
+  defp execute_invocation_control(_state, _invocation, _operation, text)
+       when not is_binary(text),
+       do: {:error, "invalid_text"}
+
+  defp execute_invocation_control(_state, _invocation, _operation, ""),
+    do: {:error, "invalid_text"}
+
+  defp execute_invocation_control(_state, _invocation, _operation, text)
+       when byte_size(text) > @max_control_text_bytes,
+       do: {:error, "text_too_large"}
+
+  defp execute_invocation_control(state, invocation, operation, text) do
+    if String.valid?(text) do
+      try do
+        case apply(state.executor_module, operation, [invocation.context, text]) do
+          :ok -> :ok
+          {:error, :unsupported} -> {:error, "unsupported"}
+          {:error, _reason} -> {:error, "rejected"}
+          _other -> {:error, "rejected"}
+        end
+      rescue
+        _error -> {:error, "executor_error"}
+      catch
+        :exit, _reason -> {:error, "executor_unavailable"}
+        _kind, _reason -> {:error, "executor_error"}
+      end
+    else
+      {:error, "invalid_text"}
+    end
+  end
+
+  defp send_control_result(state, control_id, invoke_id, run_id, result) do
+    params = %{
+      "controlId" => control_id,
+      "invokeId" => invoke_id,
+      "runId" => run_id,
+      "accepted" => result == :ok
+    }
+
+    params =
+      case result do
+        {:error, reason} -> Map.put(params, "reason", reason)
+        :ok -> params
+      end
+
+    request(
+      state,
+      "node.invoke.control.result",
+      params,
+      {:invoke_control_result, control_id}
+    )
+
+    state
+  end
+
+  defp valid_control_identity?(control_id, invoke_id, run_id) do
+    Enum.all?([control_id, invoke_id, run_id], &(is_binary(&1) and &1 != ""))
+  end
+
+  defp control_operation("steer"), do: :steer
+  defp control_operation("redirect"), do: :redirect
+  defp control_operation(_operation), do: :invalid
 
   defp validate_payload(args, state) do
     case LemonCore.JSONPayload.validate(args, max_bytes: payload_limit(state)) do

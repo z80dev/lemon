@@ -1132,6 +1132,17 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "error" => :string
       }
     },
+    "node.invoke.control.result" => %{
+      required: %{
+        "controlId" => :string,
+        "invokeId" => :string,
+        "runId" => :string,
+        "accepted" => :boolean
+      },
+      optional: %{
+        "reason" => :string
+      }
+    },
     "node.event" => %{
       required: %{
         "eventType" => :string

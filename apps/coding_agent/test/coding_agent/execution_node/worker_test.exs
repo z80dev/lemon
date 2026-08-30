@@ -55,6 +55,11 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
       send(Process.whereis(:execution_node_worker_test), {:executor_cancelled, context})
       :ok
     end
+
+    def steer(context, text) do
+      send(Process.whereis(:execution_node_worker_test), {:executor_steered, context, text})
+      :ok
+    end
   end
 
   setup do
@@ -167,6 +172,63 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
     })
 
     assert_receive {:executor_cancelled, ^context}
+    Process.exit(context.runner_pid, :kill)
+    GenServer.stop(worker)
+  end
+
+  @tag :tmp_dir
+  test "steers the live invocation context and acknowledges only after executor acceptance", %{
+    tmp_dir: tmp_dir
+  } do
+    {:ok, worker} = start_worker(tmp_dir, token: "node-token")
+    assert_receive {:socket_started, socket, _opts}
+
+    send(worker, {
+      :execution_node_socket,
+      socket,
+      {:connected, %{"auth" => %{"clientId" => "node-1"}}}
+    })
+
+    invoke(
+      worker,
+      socket,
+      "invoke-steer",
+      "node-1",
+      %{
+        "version" => 1,
+        "runId" => "run-steer",
+        "prompt" => "long run",
+        "cwd" => nil,
+        "meta" => %{}
+      }
+    )
+
+    assert_receive {:executor_started, _request, _opts, ^worker, _run_ref, context}
+
+    send(worker, {
+      :execution_node_socket,
+      socket,
+      {:event, "node.invoke.control",
+       %{
+         "nodeId" => "node-1",
+         "controlId" => "control-steer",
+         "invokeId" => "invoke-steer",
+         "runId" => "run-steer",
+         "operation" => "steer",
+         "text" => "focus on the protocol"
+       }}
+    })
+
+    assert_receive {:executor_steered, ^context, "focus on the protocol"}
+
+    assert_receive {:socket_request, ^socket, "node.invoke.control.result",
+                    %{
+                      "controlId" => "control-steer",
+                      "invokeId" => "invoke-steer",
+                      "runId" => "run-steer",
+                      "accepted" => true
+                    }, {:invoke_control_result, "control-steer"}, 30_000}
+
     Process.exit(context.runner_pid, :kill)
     GenServer.stop(worker)
   end

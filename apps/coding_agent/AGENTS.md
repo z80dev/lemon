@@ -822,9 +822,9 @@ a verified overlay such as Tailscale.
 Node names are trimmed and durably unique per controller. `node.list` reports
 paired identities with online/offline status derived from the live registry;
 only an authenticated live connection is executable. The worker advertises
-`coding_agent.run` version 1 and targeted cancellation, accepts only that run
-method, strips `meta.node` before local execution, and validates the selected
-local working directory.
+`coding_agent.run` version 1, invocation-bound steer/redirect, and targeted
+cancellation. It accepts only that run method, strips `meta.node` before local
+execution, and validates the selected local working directory.
 
 The cross-node payload includes only JSON-safe execution request data such as
 prompt, images, session/run identity, resume token, tool policy, metadata, and
@@ -839,8 +839,11 @@ destination work. Relative explicit paths resolve from the worker's configured
 default cwd, and an omitted `--cwd` uses the shell directory from which the join
 command was launched. Stored credentials are bound to the paired node ID, so a
 swapped token file cannot silently turn one named host into another host's
-executor. Remote steer/redirect are unsupported. No vendor CLI runner is used
-anywhere in this path.
+executor. Remote steer/redirect correction text is UTF-8 and capped at 16 KiB;
+the controller reports acceptance only after the authenticated destination has
+applied it to the live native session context. Terminal races, stale sessions,
+disconnects, and acknowledgement timeouts fail closed. No vendor CLI runner is
+used anywhere in this path.
 
 The socket sends a 25-second protocol ping to remain below the controller's
 idle timeout. Pairing reconnects resume the same pairing ID, and an approved

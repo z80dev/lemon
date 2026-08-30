@@ -187,6 +187,7 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.NodeDescribe,
     LemonControlPlane.Methods.NodeInvoke,
     LemonControlPlane.Methods.NodeInvokeResult,
+    LemonControlPlane.Methods.NodeInvokeControlResult,
     LemonControlPlane.Methods.NodeEvent,
     # System methods
     LemonControlPlane.Methods.SystemPresence,

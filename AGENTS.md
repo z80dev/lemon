@@ -329,7 +329,10 @@ live, uniquely named execution node. Omit it or use `"local"` for local
 execution. Only JSON-safe execution-request data crosses the WebSocket
 boundary; resolved provider credentials, callbacks, executor options, and
 source process state do not. Explicit cancellation is routed to the targeted
-destination run, while disconnects fail its pending invocations.
+destination run. Steer and redirect are bound to the same invocation, run, and
+authenticated node session; only bounded correction text crosses, and the
+source reports success only after the destination native session accepts it.
+Disconnects, stale sessions, terminal races, and timeouts fail closed.
 
 Outbound message delivery goes through `lemon_channels` (Telegram, Discord, WhatsApp, XMTP, email adapters).
 The control plane (`lemon_control_plane`) provides the JSON-RPC API used by TUI/web clients.
