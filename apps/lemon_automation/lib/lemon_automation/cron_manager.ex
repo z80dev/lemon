@@ -887,7 +887,7 @@ defmodule LemonAutomation.CronManager do
       Events.emit_run_completed(updated_run)
       if deliver?, do: maybe_forward_summary_to_base_session(updated_run)
 
-      state = schedule_retry_tick(state)
+      state = state |> dispatch_due_retries() |> schedule_retry_tick()
       {updated_run, state}
     end
   end
