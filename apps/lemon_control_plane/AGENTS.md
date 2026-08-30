@@ -507,12 +507,14 @@ Token validation is handled by `LemonControlPlane.Auth.TokenStore` (backed by `L
 
 `./bin/lemon node join --pair` automates this exchange for the named coding
 worker when its operator connection has pairing scope. The worker persists the
-issued session token in a mode-0600 destination file keyed by node name and
-records the exact controller URL; reuse fails closed when that controller does
-not match. The stored file does not extend server-side token expiry, and the
-CLI does not refresh it automatically. Restoring an expired node requires
-operator pairing action; a new identity can reuse the name only after the old
-durable identity is renamed.
+issued session and recovery credentials in a mode-0600 destination file keyed
+by durable node ID and records the exact controller URL; reuse fails closed
+when that controller does not match. After the seven-day session expires,
+`--pair` recovers the same durable node and issues a fresh session while
+revoking older sessions. Controller renames remain valid because recovery uses
+the node ID and controller's current name. An explicit operator-authorized
+`--pair --repair --node-id ID` rotates recovery credentials for compatible
+legacy records that lack one.
 
 ## Presence System
 
@@ -691,15 +693,21 @@ Start the controller normally, then run from the destination source checkout:
 ```bash
 LEMON_NODE_OPERATOR_TOKEN=... ./bin/lemon node join \
   --name worker-1 \
-  --controller ws://controller:4040/ws \
+  --controller wss://controller.example/ws \
   --pair \
   --cwd /srv/project
 ```
 
-Later starts omit `--pair` and reuse the controller-bound token. Use
+Later starts omit `--pair` and reuse the controller-bound token. Re-run with
+`--pair` when that seven-day session expires. Use
 `LEMON_NODE_TOKEN` to supply an existing token without placing it in shell
 history. A name must be unique on the controller, and the destination cwd must
 already exist.
+
+Non-loopback plaintext `ws://` is rejected by default. A Tailscale deployment
+may use `--controller ws://controller:4040/ws --allow-insecure-controller`
+only after verifying that the complete path stays on the authenticated,
+encrypted overlay; otherwise use `wss://`.
 
 ### Run Tests
 

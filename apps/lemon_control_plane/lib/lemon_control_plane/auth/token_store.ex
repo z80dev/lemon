@@ -118,6 +118,26 @@ defmodule LemonControlPlane.Auth.TokenStore do
 
   def revoke(_), do: :ok
 
+  @doc "Revokes every token for one durable node or device identity."
+  @spec revoke_identity(String.t(), String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def revoke_identity(type, identity_id)
+      when is_binary(type) and is_binary(identity_id) and identity_id != "" do
+    tokens = Store.list(@store_namespace)
+
+    matching =
+      Enum.filter(tokens, fn {_token, info} ->
+        identity = get_field(info, :identity)
+        identity_type(identity) == type and stored_identity_id(identity, type) == identity_id
+      end)
+
+    Enum.each(matching, fn {token, _info} -> Store.delete(@store_namespace, token) end)
+    {:ok, length(matching)}
+  rescue
+    error -> {:error, error}
+  end
+
+  def revoke_identity(_type, _identity_id), do: {:ok, 0}
+
   @doc """
   Get token info without validating expiration.
   Useful for debugging and admin purposes.
@@ -182,4 +202,15 @@ defmodule LemonControlPlane.Auth.TokenStore do
         []
     end
   end
+
+  defp identity_type(identity) when is_map(identity), do: get_field(identity, :type)
+  defp identity_type(_identity), do: nil
+
+  defp stored_identity_id(identity, "node") when is_map(identity),
+    do: get_field(identity, :nodeId) || get_field(identity, :node_id)
+
+  defp stored_identity_id(identity, "device") when is_map(identity),
+    do: get_field(identity, :deviceId) || get_field(identity, :device_id)
+
+  defp stored_identity_id(_identity, _type), do: nil
 end

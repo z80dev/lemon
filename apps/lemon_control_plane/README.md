@@ -313,17 +313,25 @@ challenge exchange when the connecting operator has pairing scope:
 ```bash
 LEMON_NODE_OPERATOR_TOKEN=... ./bin/lemon node join \
   --name worker-1 \
-  --controller ws://controller:4040/ws \
+  --controller wss://controller.example/ws \
   --pair \
   --cwd /srv/project
 ```
 
-The CLI stores its copy of the issued session token on the destination in a
-private file keyed by node name and bound to the exact controller URL.
-Subsequent starts omit `--pair`. The persisted local record does not extend
-server-side expiry or refresh automatically; restoring an expired node needs
-operator pairing action. A new identity cannot reuse the old name until that
-durable identity is renamed.
+The CLI stores the issued session and recovery credentials on the destination
+in a private file keyed by durable node ID and bound to the exact controller
+URL. Subsequent starts omit `--pair`. Re-run with `--pair` after session expiry:
+the recovery exchange retains the existing identity and current durable name,
+then revokes older node sessions as it issues the new one. Controller renames
+therefore do not strand the destination credential. Compatible legacy records
+without a recovery credential require the explicit operator-authorized
+`--pair --repair --node-id ID` migration path.
+
+Non-loopback plaintext `ws://` is rejected by default. Prefer `wss://`. An
+explicit `--allow-insecure-controller` override is acceptable only for
+development or over a verified encrypted overlay such as Tailscale; for
+example, `--controller ws://controller:4040/ws
+--allow-insecure-controller` after verifying the route stays on that overlay.
 
 Pairing approval is retry-safe for the same pairing ID: an authorized retry
 reissues a one-time challenge for the existing durable node identity. This lets

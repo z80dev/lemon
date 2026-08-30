@@ -210,26 +210,33 @@ Join a destination from a source checkout with:
 ```bash
 LEMON_NODE_OPERATOR_TOKEN=... ./bin/lemon node join \
   --name worker-1 \
-  --controller ws://controller:4040/ws \
+  --controller wss://controller.example/ws \
   --pair \
   --cwd /srv/project
 ```
 
 On first connection, `--pair` creates the durable controller identity and
-stores its issued seven-day session token in a mode-0600 file under
-`~/.lemon/nodes/execution/`; the containing directory is mode 0700. Each record
-is keyed by a hash of the node name and includes the exact controller URL, so
-reuse fails closed for a different controller. The local record persists, but
-does not extend server-side token expiry. Later starts omit `--pair`. The CLI
-does not refresh an expired token automatically; restoring the node requires
-operator pairing action, and a new identity can reuse its name only after the
-old durable identity is renamed.
+stores its issued seven-day session plus recovery credential in a mode-0600
+file under `~/.lemon/nodes/execution/`; the containing directory is mode 0700.
+Each record is keyed by a hash of the durable node ID and includes the exact
+controller URL, so reuse fails closed for a different controller. Later starts
+omit `--pair`. Re-run with `--pair` after session expiry to keep the same
+identity and controller-side name while rotating the session and revoking older
+ones. Controller renames do not change the local key. Compatible legacy records
+without recovery credentials use the explicit operator-authorized
+`--pair --repair --node-id ID` migration path.
 
 `LEMON_NODE_OPERATOR_TOKEN` supplies pairing authority and is used only during
 pairing. `LEMON_NODE_TOKEN` supplies an existing session token. Prefer these
 environment variables to `--operator-token` / `--token` so credentials do not
 enter shell history. These values are runtime CLI inputs, not `config.toml`
 keys.
+
+Non-loopback controllers require `wss://` by default. Plaintext `ws://` needs
+`--allow-insecure-controller` or
+`LEMON_NODE_ALLOW_INSECURE_CONTROLLER=true`, and that override is acceptable
+only for development or a verified authenticated and encrypted overlay such as
+Tailscale.
 
 Provider credentials and default cwd are destination-local. If the `agent`
 tool omits `cwd`, the destination uses the directory passed to `node join`; an
@@ -289,7 +296,7 @@ place the shared server token in `VITE_*` configuration.
 - `LEMON_DOCKER_TERMINAL_READ_ONLY_ROOTFS`, `LEMON_DOCKER_TERMINAL_TMPFS_SIZE`, `LEMON_DOCKER_TERMINAL_ALLOWED_IMAGES`
 - `LEMON_SSH_TERMINAL_TARGET`, `LEMON_SSH_TERMINAL_WORKDIR`, `LEMON_SSH_TERMINAL_PORT`, `LEMON_SSH_TERMINAL_CONNECT_TIMEOUT`, `LEMON_SSH_TERMINAL_STRICT_HOST_KEY_CHECKING`, `LEMON_SSH_TERMINAL_ALLOWED_TARGETS`
 - `LEMON_GATEWAY_HEALTH_PORT`, `LEMON_ROUTER_HEALTH_PORT`
-- `LEMON_NODE_OPERATOR_TOKEN`, `LEMON_NODE_TOKEN`
+- `LEMON_NODE_OPERATOR_TOKEN`, `LEMON_NODE_TOKEN`, `LEMON_NODE_ALLOW_INSECURE_CONTROLLER`
 - `LEMON_LOG_FILE`, `LEMON_LOG_LEVEL`
 - `BRAVE_API_KEY`, `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, `FIRECRAWL_API_KEY`
 

@@ -58,6 +58,9 @@ defmodule LemonControlPlane.Methods.NodePairApprove do
               expires_at_ms && expires_at_ms < now ->
                 {:error, Errors.invalid_request("Pairing request has expired")}
 
+              recovery_request?(request) ->
+                approve_recovery_pairing(pairing_id, request, now)
+
               true ->
                 approve_pairing(
                   pairing_id,
@@ -69,6 +72,42 @@ defmodule LemonControlPlane.Methods.NodePairApprove do
                 )
             end
         end
+    end
+  end
+
+  defp approve_recovery_pairing(pairing_id, request, now) do
+    node_id = get_field(request, :node_id)
+
+    case NodeStore.get_node(node_id) do
+      node when is_map(node) ->
+        node_name = normalize_name(get_field(node, :name))
+        node_type = get_field(node, :type) || "generic"
+        capabilities = get_field(node, :capabilities) || %{}
+        {node_token, updated_node} = recovery_credential(request, node)
+
+        with :ok <- NodeStore.reserve_node_name(node_name, node_id),
+             :ok <- NodeStore.put_node(node_id, updated_node) do
+          issue_challenge(
+            pairing_id,
+            request,
+            node_id,
+            node_name,
+            node_type,
+            capabilities,
+            node_token,
+            now,
+            true
+          )
+        else
+          {:error, {:name_taken, _name}} ->
+            {:error, Errors.conflict("Node name is already in use")}
+
+          {:error, reason} ->
+            {:error, Errors.internal_error("Failed to recover node pairing", reason)}
+        end
+
+      _ ->
+        {:error, Errors.conflict("Approved pairing node is no longer available")}
     end
   end
 
@@ -140,8 +179,7 @@ defmodule LemonControlPlane.Methods.NodePairApprove do
         stored_name = get_field(node, :name)
 
         if stored_name == node_name do
-          node_token = generate_node_token()
-          updated_node = Map.put(node, :token_hash, hash_token(node_token))
+          {node_token, updated_node} = recovery_credential(request, node)
 
           with :ok <- NodeStore.reserve_node_name(node_name, node_id),
                :ok <- NodeStore.put_node(node_id, updated_node) do
@@ -206,7 +244,6 @@ defmodule LemonControlPlane.Methods.NodePairApprove do
       {:ok,
        %{
          "nodeId" => node_id,
-         "token" => node_token,
          "challengeToken" => challenge_token,
          "approved" => true,
          "summary" => %{
@@ -218,7 +255,7 @@ defmodule LemonControlPlane.Methods.NodePairApprove do
            "challengeExpiresAtMs" => challenge_expires_at,
            "capabilityCount" => capability_count(capabilities),
            "credentialDelivery" => %{
-             "includesNodeToken" => true,
+             "includesNodeToken" => is_binary(node_token),
              "includesChallengeToken" => true
            },
            "cleanup" => %{
@@ -227,7 +264,8 @@ defmodule LemonControlPlane.Methods.NodePairApprove do
              "includesStoredTokenHash" => false
            }
          }
-       }}
+       }
+       |> maybe_put_node_token(node_token)}
     else
       {:error, reason} ->
         {:error, Errors.internal_error("Failed to issue node pairing challenge", reason)}
@@ -251,6 +289,30 @@ defmodule LemonControlPlane.Methods.NodePairApprove do
   defp hash_token(token) do
     :crypto.hash(:sha256, token) |> Base.encode16(case: :lower)
   end
+
+  defp recovery_request?(request) do
+    is_binary(get_field(request, :node_id)) and
+      get_field(request, :recovery_mode) in [
+        :recovery_token,
+        "recovery_token",
+        :operator_repair,
+        "operator_repair"
+      ]
+  end
+
+  defp recovery_credential(request, node) do
+    if get_field(request, :recovery_mode) in [:recovery_token, "recovery_token"] do
+      {nil, node}
+    else
+      token = generate_node_token()
+      {token, Map.put(node, :token_hash, hash_token(token))}
+    end
+  end
+
+  defp maybe_put_node_token(response, token) when is_binary(token),
+    do: Map.put(response, "token", token)
+
+  defp maybe_put_node_token(response, _token), do: response
 
   # Safe map access supporting both atom and string keys
   # This handles JSONL reload where keys become strings

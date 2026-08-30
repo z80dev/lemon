@@ -269,16 +269,22 @@ npm run dev      # Watch mode
 ./bin/lemon send --to telegram:<chat_id> "done"  # Script notification to Telegram/Discord
 ./bin/lemon send --to discord:#ops --attach report.txt --attach trace.log "done"  # Upload script artifacts
 ./bin/lemon send --dry-run --to discord:#ops --attach report.txt "done"  # Validate without delivery
-./bin/lemon node join --name worker-1 --controller ws://controller:4040/ws --pair --cwd /path/to/project
+./bin/lemon node join --name worker-1 --controller wss://controller.example/ws --pair --cwd /path/to/project
 ./bin/lemon-tui    # Dev TUI; securely token-pairs with a launcher-owned runtime
 ```
 
 The named-node command runs a destination-side worker capable of starting
 native coding sessions against an already-running controller. Use `--pair` on
-first connection; later starts reuse the private token stored for that node
-name and exact controller URL.
+first connection; later starts reuse the private token stored for that durable
+node ID and exact controller URL. Re-run with `--pair` to rotate an expired
+seven-day session without creating a second identity or colliding with its
+name. Use `--pair --repair --node-id ID` with operator authorization only when
+migrating an older local record that has no recovery credential.
 Prefer `LEMON_NODE_OPERATOR_TOKEN` / `LEMON_NODE_TOKEN` over token flags. The
 `--cwd` directory and provider credentials belong to the destination machine.
+Non-loopback controllers require `wss://` by default. Plaintext `ws://` needs
+`--allow-insecure-controller` and is acceptable only for development or across
+a verified encrypted overlay such as Tailscale.
 
 On Linux and other non-keychain environments, keep `~/.lemon/secrets_master_key` as the canonical local master key file. `./bin/lemon` now normalizes `LEMON_SECRETS_MASTER_KEY` from that file at startup so stale inherited shell env does not break provider or transport secret decryption.
 
@@ -381,6 +387,7 @@ Key env vars:
 - `LEMON_WEREWOLF_HOSTED_ENABLED` / `LEMON_WEREWOLF_HOST_CREATE_TOKEN` / `LEMON_WEREWOLF_HOSTED_*` - Opt-in HTTPS hosted Werewolf, creation access, room TTL/retention, and bounded AI configuration
 - `LEMON_GATEWAY_HEALTH_PORT` / `LEMON_ROUTER_HEALTH_PORT` - Health server port overrides for local parallel runtimes
 - `LEMON_NODE_OPERATOR_TOKEN` / `LEMON_NODE_TOKEN` - Pairing-only operator token or existing session token for `./bin/lemon node join`; prefer these to CLI token flags
+- `LEMON_NODE_ALLOW_INSECURE_CONTROLLER` - Explicitly permit non-loopback plaintext `ws://` for development or a verified encrypted overlay only; secure `wss://` remains the default
 - `LEMON_TELEGRAM_DEFAULT_CHAT_ID` / `LEMON_DISCORD_DEFAULT_CHANNEL_ID` - Optional env overrides for `./bin/lemon send`; config fallbacks live in `[gateway.telegram] default_chat_id/default_thread_id/default_topic_id` and `[gateway.discord] default_channel_id/default_thread_id`
 - `DEEPGRAM_API_KEY` - Speech-to-text
 - `ELEVENLABS_API_KEY` / `ELEVENLABS_VOICE_ID` - TTS

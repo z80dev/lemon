@@ -55,7 +55,7 @@ The main coding agent implementation for the Lemon AI assistant platform. This a
 | `CodingAgent.SessionRootSupervisor` | Top-level supervisor for all session infra |
 | `CodingAgent.ExecutionNode.Worker` | Authenticated named-node worker that maintains application-level health keepalives and executes targeted `coding_agent.run` requests through the native executor |
 | `CodingAgent.ExecutionNode.Socket` | Reconnecting control-plane WebSocket client with authenticated handshakes and redacted status |
-| `CodingAgent.ExecutionNode.TokenStore` | Mode-0600, node-name-keyed local session-token storage |
+| `CodingAgent.ExecutionNode.TokenStore` | Mode-0600, durable-node-ID-keyed local session and recovery credential storage with legacy-name migration |
 | `CodingAgent.Executor.RemoteSessionRunner` | Source-side bridge from one native gateway execution to one live named node |
 | `CodingAgent.Executor.RemoteRequestCodec` | JSON-safe request/result boundary with destination-local cwd semantics |
 
@@ -711,17 +711,21 @@ With the default `:steer_backlog` config, live streaming parent sessions now att
 Run a native worker against a Lemon controller from the source checkout:
 
 ```bash
-./bin/lemon node join --name worker-name --controller ws://controller:4040/ws --pair --cwd /path/to/project
+./bin/lemon node join --name worker-name --controller wss://controller.example/ws --pair --cwd /path/to/project
 ```
 
 `--pair` creates a controller-owned durable node identity, exchanges its
-one-time challenge for a seven-day session token, and stores that token under
-`~/.lemon/nodes/execution/<sha256-of-node-name>.json`. The directory is mode
-0700 and each record is mode 0600. Records include the exact controller URL;
-later starts omit `--pair` and reuse a record only when its controller matches.
-The CLI does not refresh the server-side token automatically after its
-seven-day expiry; restoring the node requires operator pairing action, and a
-new identity can reuse the name only after the old durable identity is renamed.
+one-time challenge for a seven-day session token, and stores the session plus
+recovery credential under a durable-node-ID-keyed file in
+`~/.lemon/nodes/execution/`. The directory is mode 0700 and each record is mode
+0600. Records include the exact controller URL; later starts omit `--pair` and
+reuse a record only when its controller matches. After session expiry, re-run
+with `--pair`: the recovery credential preserves the same ID and current
+controller-side name while the new challenge revokes every older node session.
+Controller renames therefore do not invalidate the local credential. Legacy
+records with a node ID but no recovery credential require the explicit
+operator-authorized `--pair --repair --node-id ID` path, which rotates the
+recovery credential instead of creating another node.
 Prefer `LEMON_NODE_OPERATOR_TOKEN` and `LEMON_NODE_TOKEN` to the corresponding
 CLI flags so credentials do not enter shell history.
 For a controller configured with `LEMON_CONTROL_PLANE_OPERATOR_TOKEN`, the
@@ -729,6 +733,10 @@ joining host's `LEMON_NODE_OPERATOR_TOKEN` must contain the same value; remote
 controllers fail closed when operator authentication is not configured.
 Pairing reports missing, wrong, and controller-misconfigured credentials
 without echoing them.
+Non-loopback controllers require `wss://`. `--allow-insecure-controller` (or
+`LEMON_NODE_ALLOW_INSECURE_CONTROLLER=true`) permits plaintext `ws://` only for
+development or when the entire path is already authenticated and encrypted by
+a verified overlay such as Tailscale.
 
 Node names are trimmed and durably unique per controller. `node.list` reports
 paired identities with online/offline status derived from the live registry;

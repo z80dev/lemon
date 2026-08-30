@@ -292,7 +292,13 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
     send(worker, {
       :execution_node_socket,
       pairing_socket,
-      {:response, :pair_approve, {:ok, %{"challengeToken" => "challenge", "nodeId" => "node-1"}}}
+      {:response, :pair_approve,
+       {:ok,
+        %{
+          "challengeToken" => "challenge",
+          "nodeId" => "node-1",
+          "token" => "recovery-token"
+        }}}
     })
 
     assert_receive {:socket_request, ^pairing_socket, "connect.challenge",
@@ -313,13 +319,179 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
     assert node_socket != pairing_socket
     assert get_in(node_opts, [:connect_params, "auth", "token"]) == "session-token"
 
-    assert {:ok, stored} = TokenStore.load("newphy", root: Path.join(tmp_dir, "tokens"))
+    assert {:ok, stored} =
+             TokenStore.load("newphy",
+               root: Path.join(tmp_dir, "tokens"),
+               controller: "ws://controller:4040/ws"
+             )
+
     assert stored["token"] == "session-token"
     assert stored["nodeId"] == "node-1"
-    assert {:ok, path} = TokenStore.path("newphy", root: Path.join(tmp_dir, "tokens"))
+    assert stored["recoveryToken"] == "recovery-token"
+    assert {:ok, path} = TokenStore.node_path("node-1", root: Path.join(tmp_dir, "tokens"))
     assert {:ok, %{mode: file_mode}} = File.stat(path)
     assert Bitwise.band(file_mode, 0o777) == 0o600
 
+    GenServer.stop(worker)
+  end
+
+  @tag :tmp_dir
+  test "re-pairs a stored node ID with its recovery credential after session expiry", %{
+    tmp_dir: tmp_dir
+  } do
+    token_root = Path.join(tmp_dir, "tokens")
+
+    assert :ok =
+             TokenStore.save(
+               "newphy",
+               %{
+                 "token" => "expired-session",
+                 "nodeId" => "node-1",
+                 "controller" => "ws://controller:4040/ws",
+                 "recoveryToken" => "recovery-secret"
+               },
+               root: token_root
+             )
+
+    {:ok, worker} = start_worker(tmp_dir, pair: true, operator_token: "operator-secret")
+    assert_receive {:socket_started, socket, _opts}
+    send(worker, {:execution_node_socket, socket, {:connected, %{}}})
+
+    assert_receive {:socket_request, ^socket, "node.pair.request", pair_params, :pair_request,
+                    30_000}
+
+    assert pair_params["nodeId"] == "node-1"
+    assert pair_params["recoveryToken"] == "recovery-secret"
+    refute Map.has_key?(pair_params, "repair")
+
+    GenServer.stop(worker)
+  end
+
+  @tag :tmp_dir
+  test "uses explicit operator repair for a legacy credential without a recovery token", %{
+    tmp_dir: tmp_dir
+  } do
+    token_root = Path.join(tmp_dir, "tokens")
+
+    assert :ok =
+             TokenStore.save(
+               "newphy",
+               %{
+                 "token" => "legacy-session",
+                 "nodeId" => "legacy-node-1",
+                 "controller" => "ws://controller:4040/ws"
+               },
+               root: token_root
+             )
+
+    {:ok, worker} =
+      start_worker(tmp_dir,
+        pair: true,
+        repair: true,
+        node_id: "legacy-node-1",
+        operator_token: "operator-secret"
+      )
+
+    assert_receive {:socket_started, socket, _opts}
+    send(worker, {:execution_node_socket, socket, {:connected, %{}}})
+
+    assert_receive {:socket_request, ^socket, "node.pair.request", pair_params, :pair_request,
+                    30_000}
+
+    assert pair_params["nodeId"] == "legacy-node-1"
+    assert pair_params["repair"] == true
+    refute Map.has_key?(pair_params, "recoveryToken")
+
+    GenServer.stop(worker)
+  end
+
+  @tag :tmp_dir
+  test "loads the durable node credential after the configured name changes", %{tmp_dir: tmp_dir} do
+    token_root = Path.join(tmp_dir, "tokens")
+
+    assert :ok =
+             TokenStore.save(
+               "Before Rename",
+               %{
+                 "token" => "session-token",
+                 "nodeId" => "node-1",
+                 "controller" => "ws://controller:4040/ws"
+               },
+               root: token_root
+             )
+
+    {:ok, worker} =
+      Worker.start_link(
+        node_name: "After Rename",
+        node_id: "node-1",
+        controller: "ws://controller:4040/ws",
+        allow_insecure_controller: true,
+        cwd: tmp_dir,
+        notify_pid: self(),
+        socket_module: FakeSocket,
+        socket_opts: [test_pid: self()],
+        executor_module: FakeExecutor,
+        token_store_opts: [root: token_root]
+      )
+
+    assert_receive {:socket_started, socket, socket_opts}
+    assert get_in(socket_opts, [:connect_params, "auth", "token"]) == "session-token"
+
+    send(worker, {
+      :execution_node_socket,
+      socket,
+      {:connected, %{"auth" => %{"clientId" => "node-1"}}}
+    })
+
+    assert_receive {:execution_node_worker, ^worker, {:status, :online, "node-1"}}
+    GenServer.stop(worker)
+  end
+
+  @tag :tmp_dir
+  test "blocks non-loopback plaintext controllers unless explicitly overridden", %{
+    tmp_dir: tmp_dir
+  } do
+    previous_trap_exit = Process.flag(:trap_exit, true)
+    on_exit(fn -> Process.flag(:trap_exit, previous_trap_exit) end)
+
+    assert {:error, :insecure_controller_url} =
+             Worker.start_link(
+               node_name: "secure-default",
+               controller: "ws://controller.internal:4040/ws",
+               token: "token",
+               cwd: tmp_dir,
+               socket_module: FakeSocket,
+               socket_opts: [test_pid: self()]
+             )
+
+    assert {:ok, worker} =
+             Worker.start_link(
+               node_name: "trusted-overlay",
+               controller: "ws://100.100.100.100:4040/ws",
+               allow_insecure_controller: true,
+               token: "token",
+               cwd: tmp_dir,
+               socket_module: FakeSocket,
+               socket_opts: [test_pid: self()]
+             )
+
+    assert_receive {:socket_started, _socket, _opts}
+    GenServer.stop(worker)
+  end
+
+  @tag :tmp_dir
+  test "allows plaintext loopback without an override", %{tmp_dir: tmp_dir} do
+    assert {:ok, worker} =
+             Worker.start_link(
+               node_name: "loopback",
+               controller: "ws://127.0.0.1:4040/ws",
+               token: "token",
+               cwd: tmp_dir,
+               socket_module: FakeSocket,
+               socket_opts: [test_pid: self()]
+             )
+
+    assert_receive {:socket_started, _socket, _opts}
     GenServer.stop(worker)
   end
 
@@ -481,6 +653,7 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
       [
         node_name: "newphy",
         controller: "ws://controller:4040/ws",
+        allow_insecure_controller: true,
         cwd: tmp_dir,
         notify_pid: self(),
         socket_module: FakeSocket,

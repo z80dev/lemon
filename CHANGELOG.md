@@ -26,6 +26,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Named execution nodes now recover the same durable identity after their
+  seven-day session expires, survive controller-side renames, revoke older
+  sessions on rotation, and provide an explicit repair path for legacy local
+  credentials. Non-loopback plaintext controller connections now fail closed
+  unless development or a verified encrypted overlay is explicitly selected.
 - Closed unauthenticated named-node operator access on the control-plane
   WebSocket: non-loopback operators now fail closed, configured operator tokens
   use constant-time validation, unknown session identities cannot escalate, and
