@@ -43,6 +43,7 @@ defmodule CodingAgent.Session.EventHandlerTest do
       hooks: [],
       is_streaming: true,
       steering_queue: :queue.new(),
+      follow_up_queue: :queue.from_list([:pending_follow_up]),
       event_streams: %{}
     }
 
@@ -89,6 +90,7 @@ defmodule CodingAgent.Session.EventHandlerTest do
       result = EventHandler.handle({:agent_end, []}, state, callbacks)
 
       assert result.is_streaming == false
+      assert :queue.is_empty(result.follow_up_queue)
       assert_receive {:working_msg, nil}
       assert_receive {:complete, {:agent_end, []}}
     end
@@ -100,6 +102,7 @@ defmodule CodingAgent.Session.EventHandlerTest do
       result = EventHandler.handle({:error, :timeout, nil}, state, callbacks)
 
       assert result.is_streaming == false
+      assert :queue.is_empty(result.follow_up_queue)
       assert_receive {:working_msg, nil}
       assert_receive {:notify, msg, :error}
       assert msg =~ "timeout"
@@ -113,6 +116,7 @@ defmodule CodingAgent.Session.EventHandlerTest do
       result = EventHandler.handle({:canceled, :user_abort}, state, callbacks)
 
       assert result.is_streaming == false
+      assert :queue.is_empty(result.follow_up_queue)
       assert_receive {:working_msg, nil}
       assert_receive {:complete, {:canceled, :user_abort}}
     end
@@ -135,6 +139,7 @@ defmodule CodingAgent.Session.EventHandlerTest do
 
       assert result.is_streaming == false
       assert :queue.is_empty(result.steering_queue)
+      assert :queue.is_empty(result.follow_up_queue)
       assert result.event_streams == %{}
       assert_receive {:working_msg, nil}
       assert_receive {:complete, {:turn_end, ^aborted_msg, []}}
@@ -189,6 +194,7 @@ defmodule CodingAgent.Session.EventHandlerTest do
 
       assert result.is_streaming == false
       assert :queue.is_empty(result.steering_queue)
+      assert :queue.is_empty(result.follow_up_queue)
       assert result.event_streams == %{}
       assert_receive {:persist, ^aborted_msg}
       assert_receive {:working_msg, nil}
@@ -242,12 +248,14 @@ defmodule CodingAgent.Session.EventHandlerTest do
         hooks: [],
         is_streaming: true,
         steering_queue: :queue.from_list([:pending1, :pending2]),
+        follow_up_queue: :queue.from_list([:pending_follow_up]),
         event_streams: %{"s1" => :r1}
       }
 
       result = EventHandler.handle({:agent_end, []}, state, callbacks)
 
       assert :queue.is_empty(result.steering_queue)
+      assert :queue.is_empty(result.follow_up_queue)
       assert result.event_streams == %{}
     end
   end

@@ -56,6 +56,9 @@ The main coding agent implementation for the Lemon AI assistant platform. This a
 
 Session lifecycle calls to `save/1` and auto-compaction state reads are treated as best-effort.
 When downstream store or agent processes time out, callers should log and continue instead of crashing the session/runner process.
+The session's steering/follow-up queues are diagnostic mirrors of queues owned
+by `LemonAgent.Agent`; all terminal, cancel, error, abort, and agent-exit paths
+clear both mirrors so diagnostics never report already-consumed work.
 
 ### Tools
 
@@ -634,6 +637,7 @@ Compaction:
 - Generates an LLM summary of compacted messages
 - Preserves file operation context
 - Estimates request size from conversation messages plus system prompt and tool schema payloads
+- Cancels and demonitors an in-flight background auto-compaction snapshot when a new idle prompt arrives; late results are ignored and cannot mutate the new turn
 - Overflow recovery is also attempted if context window is exhausted mid-run
 
 Settings controlling compaction (in `SettingsManager`/`config.toml`):

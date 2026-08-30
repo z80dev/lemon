@@ -10,6 +10,11 @@ defmodule CodingAgent.Session do
   - Steering and follow-up message queues
   - Navigation through session tree
 
+  Queue fields in Session state are diagnostic mirrors; every terminal path
+  clears them because `LemonAgent.Agent` owns actual queue consumption. A new
+  idle prompt also cancels any background auto-compaction snapshot before
+  dispatch, so stale compaction cannot delay or mutate the new turn.
+
   ## Usage
 
       {:ok, session} = CodingAgent.Session.start_link(
@@ -635,6 +640,7 @@ defmodule CodingAgent.Session do
     if state.is_streaming do
       {:reply, {:error, :already_streaming}, state}
     else
+      state = CompactionLifecycle.cancel_for_new_prompt(state, session_callbacks())
       {state, recalled} = refresh_turn_context(state, text)
 
       user_message =
@@ -667,6 +673,7 @@ defmodule CodingAgent.Session do
   # and queued, while `outgoing` is the same message with this turn's recalled
   # context attached and is only ever handed to the agent.
   def handle_call({:handle_async_followup, message_or_attrs}, _from, state) do
+    state = CompactionLifecycle.cancel_for_new_prompt(state, session_callbacks())
     message = State.build_async_followup_message(message_or_attrs)
     {state, recalled} = refresh_turn_context(state, message_skill_context(message))
     state = persist_message(state, message)
@@ -975,7 +982,14 @@ defmodule CodingAgent.Session do
 
   def handle_cast(:abort, state) do
     had_pending_prompt = not is_nil(state.pending_prompt_timer_ref)
-    state = state |> cancel_pending_prompt() |> CompactionManager.clear_overflow_recovery_state()
+
+    state =
+      state
+      |> cancel_pending_prompt()
+      |> CompactionLifecycle.cancel_for_new_prompt(session_callbacks())
+      |> CompactionManager.clear_overflow_recovery_state()
+      |> Map.put(:follow_up_queue, :queue.new())
+
     LemonAgent.Agent.abort(state.agent)
 
     if had_pending_prompt do
@@ -983,7 +997,9 @@ defmodule CodingAgent.Session do
       # event so subscribers don't wait for a lifecycle event that never comes.
       Notifier.broadcast_event(state, {:canceled, :assistant_aborted})
       Notifier.complete_event_streams(state, {:canceled, :assistant_aborted})
-      {:noreply, %{state | steering_queue: :queue.new(), event_streams: %{}}}
+
+      {:noreply,
+       %{state | steering_queue: :queue.new(), follow_up_queue: :queue.new(), event_streams: %{}}}
     else
       {:noreply, state}
     end
@@ -1056,6 +1072,8 @@ defmodule CodingAgent.Session do
       |> Map.put(:is_streaming, false)
       |> cancel_pending_prompt()
       |> CompactionManager.clear_overflow_recovery_state()
+      |> Map.put(:steering_queue, :queue.new())
+      |> Map.put(:follow_up_queue, :queue.new())
 
     {:noreply, state}
   end
@@ -1165,6 +1183,13 @@ defmodule CodingAgent.Session do
   @spec terminate(term(), t()) :: :ok
   @impl true
   def terminate(_reason, state) do
+    _ =
+      CompactionManager.maybe_kill_background_task(
+        state,
+        state.auto_compaction_task_pid,
+        :session_terminated
+      )
+
     Lifecycle.detach_owner_on_terminate(
       state.python_repl_mod,
       self(),

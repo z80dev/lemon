@@ -6,17 +6,15 @@ defmodule LemonRouter.Router do
   - Normalizing inbound messages from different channels
   - Routing to the appropriate session
   - Handling abort requests
-  - Applying pending compaction for all channels
+  - Preparing pending compaction for channel submissions and consuming markers
+    only after submission succeeds
   """
 
   alias LemonCore.RunRequest
   alias LemonCore.SessionKey
-  alias LemonRouter.RunOrchestrator
+  alias LemonRouter.{PendingCompaction, RunOrchestrator}
 
   require Logger
-
-  # Pending compaction markers older than 12 hours are considered stale.
-  @pending_compaction_ttl_ms 12 * 60 * 60 * 1000
 
   @doc """
   Handle an inbound message from a channel.
@@ -42,6 +40,7 @@ defmodule LemonRouter.Router do
     # Submit to orchestrator
     case run_orchestrator().submit(request) do
       {:ok, _run_id} ->
+        PendingCompaction.consume(session_key, PendingCompaction.prepared_marker(meta))
         :ok
 
       {:error, reason} ->
@@ -240,141 +239,22 @@ defmodule LemonRouter.Router do
   end
 
   # ---------------------------------------------------------------------------
-  # Generic pending-compaction consumer
+  # Generic pending-compaction preparation
   # ---------------------------------------------------------------------------
 
   @doc false
   def maybe_apply_pending_compaction(msg, meta, session_key) do
-    case LemonRouter.PendingCompactionStore.get(session_key) do
-      pending when is_map(pending) ->
-        if pending_compaction_fresh?(pending) do
-          apply_compaction(msg, meta, session_key, pending)
-        else
-          # Stale marker — delete and proceed without compaction.
-          _ = LemonRouter.PendingCompactionStore.delete(session_key)
-
-          Logger.debug(
-            "Router cleared stale pending compaction session_key=#{inspect(session_key)}"
-          )
-
-          {msg, meta}
-        end
-
-      _ ->
-        {msg, meta}
-    end
+    {text, marker} = PendingCompaction.prepare(msg.message.text, session_key, :channel)
+    meta = PendingCompaction.put_prepared_marker(meta, marker)
+    {%{msg | message: Map.put(msg.message, :text, text)}, meta}
   rescue
     _ -> {msg, meta}
   end
-
-  defp apply_compaction(msg, meta, session_key, _pending) do
-    transcript =
-      LemonCore.RunStore.history(session_key, limit: 8)
-      |> format_run_history_transcript(max_chars: 8_000)
-
-    if transcript != "" do
-      _ = LemonRouter.PendingCompactionStore.delete(session_key)
-      text = build_pending_compaction_prompt(transcript, msg.message.text || "")
-
-      Logger.warning(
-        "Router applying pending compaction session_key=#{inspect(session_key)} " <>
-          "transcript_chars=#{byte_size(transcript)}"
-      )
-
-      {%{msg | message: Map.put(msg.message, :text, text)}, meta}
-    else
-      # No transcript to compact with; clear marker so we don't keep
-      # re-attempting compaction on every inbound.
-      _ = LemonRouter.PendingCompactionStore.delete(session_key)
-      {msg, meta}
-    end
-  rescue
-    _ -> {msg, meta}
-  end
-
-  defp pending_compaction_fresh?(pending) when is_map(pending) do
-    set_at_ms = pending[:set_at_ms] || pending["set_at_ms"]
-
-    cond do
-      is_integer(set_at_ms) ->
-        System.system_time(:millisecond) - set_at_ms <= @pending_compaction_ttl_ms
-
-      true ->
-        true
-    end
-  rescue
-    _ -> false
-  end
-
-  defp pending_compaction_fresh?(_), do: false
 
   @doc false
   def build_pending_compaction_prompt(transcript, user_text)
-      when is_binary(transcript) and is_binary(user_text) do
-    user_text = String.trim(user_text)
-
-    base =
-      [
-        "The previous conversation reached the model context limit.",
-        "Use this compact transcript as prior context and continue.",
-        "",
-        "<previous_conversation>",
-        transcript,
-        "</previous_conversation>"
-      ]
-      |> Enum.join("\n")
-
-    if user_text == "" do
-      String.trim(base <> "\n\nContinue.")
-    else
-      String.trim(base <> "\n\nUser:\n" <> user_text)
-    end
-  end
+      when is_binary(transcript) and is_binary(user_text),
+      do: PendingCompaction.build_prompt(transcript, user_text)
 
   def build_pending_compaction_prompt(_transcript, user_text), do: user_text
-
-  defp format_run_history_transcript(history, opts) when is_list(history) do
-    max_chars = Keyword.get(opts, :max_chars, 12_000)
-
-    text =
-      history
-      |> Enum.reverse()
-      |> Enum.map(&format_run_history_entry/1)
-      |> Enum.reject(&(&1 == ""))
-      |> Enum.join("\n\n")
-      |> String.trim()
-
-    if String.length(text) > max_chars do
-      String.slice(text, String.length(text) - max_chars, max_chars)
-    else
-      text
-    end
-  rescue
-    _ -> ""
-  end
-
-  defp format_run_history_transcript(_other, _opts), do: ""
-
-  defp format_run_history_entry({_run_id, data}) when is_map(data) do
-    summary = data[:summary] || data["summary"] || %{}
-    prompt = summary[:prompt] || summary["prompt"] || ""
-    answer = summary[:answer] || summary["answer"] || ""
-
-    parts =
-      []
-      |> maybe_append("User: " <> String.trim(prompt), prompt)
-      |> maybe_append("Assistant: " <> String.trim(answer), answer)
-
-    Enum.join(parts, "\n")
-  end
-
-  defp format_run_history_entry(_), do: ""
-
-  defp maybe_append(parts, text, raw) do
-    if is_binary(raw) and String.trim(raw) != "" do
-      parts ++ [text]
-    else
-      parts
-    end
-  end
 end

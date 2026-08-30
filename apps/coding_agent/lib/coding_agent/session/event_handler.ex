@@ -1,5 +1,12 @@
 defmodule CodingAgent.Session.EventHandler do
-  @moduledoc false
+  @moduledoc """
+  Applies LemonAgent events to CodingAgent session state.
+
+  Terminal events always clear both session-side queue mirrors. LemonAgent owns
+  actual steering/follow-up consumption; the mirrors exist only for session
+  diagnostics and must not report messages that the underlying loop already
+  consumed or discarded.
+  """
 
   alias CodingAgent.Extensions
   alias LemonCore.Introspection
@@ -35,7 +42,11 @@ defmodule CodingAgent.Session.EventHandler do
       %LemonAi.Types.AssistantMessage{stop_reason: :aborted} ->
         callbacks.set_working_message.(state, nil)
         callbacks.complete_event_streams.(state, {:turn_end, message, tool_results})
-        %{state | is_streaming: false, steering_queue: :queue.new(), event_streams: %{}}
+
+        state
+        |> clear_terminal_queues()
+        |> Map.put(:is_streaming, false)
+        |> Map.put(:event_streams, %{})
 
       _ ->
         state
@@ -61,7 +72,11 @@ defmodule CodingAgent.Session.EventHandler do
       %LemonAi.Types.AssistantMessage{stop_reason: :aborted} ->
         callbacks.set_working_message.(new_state, nil)
         callbacks.complete_event_streams.(new_state, {:canceled, :assistant_aborted})
-        %{new_state | is_streaming: false, steering_queue: :queue.new(), event_streams: %{}}
+
+        new_state
+        |> clear_terminal_queues()
+        |> Map.put(:is_streaming, false)
+        |> Map.put(:event_streams, %{})
 
       _ ->
         new_state
@@ -111,7 +126,12 @@ defmodule CodingAgent.Session.EventHandler do
     callbacks.complete_event_streams.(state, {:agent_end, messages})
 
     # Check if compaction is needed
-    new_state = %{state | is_streaming: false, steering_queue: :queue.new(), event_streams: %{}}
+    new_state =
+      state
+      |> clear_terminal_queues()
+      |> Map.put(:is_streaming, false)
+      |> Map.put(:event_streams, %{})
+
     callbacks.maybe_trigger_compaction.(new_state)
   end
 
@@ -122,7 +142,10 @@ defmodule CodingAgent.Session.EventHandler do
     # Complete all event streams with the error event
     callbacks.complete_event_streams.(state, {:error, reason, partial_state})
 
-    %{state | is_streaming: false, event_streams: %{}}
+    state
+    |> clear_terminal_queues()
+    |> Map.put(:is_streaming, false)
+    |> Map.put(:event_streams, %{})
   end
 
   def handle({:canceled, reason}, state, callbacks) do
@@ -132,11 +155,20 @@ defmodule CodingAgent.Session.EventHandler do
     # Complete all event streams with the canceled event
     callbacks.complete_event_streams.(state, {:canceled, reason})
 
-    %{state | is_streaming: false, steering_queue: :queue.new(), event_streams: %{}}
+    state
+    |> clear_terminal_queues()
+    |> Map.put(:is_streaming, false)
+    |> Map.put(:event_streams, %{})
   end
 
   def handle(_event, state, _callbacks) do
     state
+  end
+
+  defp clear_terminal_queues(state) do
+    state
+    |> Map.put(:steering_queue, :queue.new())
+    |> Map.put(:follow_up_queue, :queue.new())
   end
 
   defp maybe_record_missed_skills(state, messages) do

@@ -115,8 +115,15 @@ IO.puts("Dropped #{dropped_count} messages")
 
 | Strategy | Description |
 |----------|-------------|
-| `:sliding_window` | Keep most recent messages within limits (default) |
-| `:keep_bookends` | Keep first and last N messages, drop middle |
+| `:sliding_window` | Keep the most recent messages within limits and in original chronological order (default) |
+| `:keep_bookends` | Keep a balanced set of oldest/newest messages within both the message and character limits |
+
+Both strategies preserve assistant tool transcripts atomically: an assistant
+message containing tool calls and its contiguous tool-result messages are kept
+or dropped as one unit. This prevents truncation from manufacturing orphaned
+tool calls/results that provider transcript validation would reject. Bookends
+treats `max_messages` and `max_chars` as hard limits; sliding-window mode may
+still exceed a limit only for the documented `keep_first_user: true` reservation.
 
 ### make_transform/1
 

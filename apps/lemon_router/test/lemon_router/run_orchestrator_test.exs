@@ -3,7 +3,7 @@ defmodule LemonRouter.RunOrchestratorTest do
 
   alias LemonCore.RunRequest
   alias LemonCore.ResumeToken
-  alias LemonRouter.RunOrchestrator
+  alias LemonRouter.{PendingCompactionStore, RunOrchestrator}
 
   @moduledoc """
   Tests for RunOrchestrator including cwd and tool_policy override handling.
@@ -333,6 +333,103 @@ defmodule LemonRouter.RunOrchestratorTest do
       assert_receive {:bridge_subscribed, run_id}, 500
       assert_receive {:bridge_unsubscribed, ^run_id}, 500
       refute_receive {:bridge_unsubscribed, ^run_id}, 100
+    end
+
+    test "failed channel submission preserves its pending compaction marker" do
+      run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+
+      {:ok, orchestrator_pid} =
+        GenServer.start_link(
+          RunOrchestrator,
+          run_supervisor: run_supervisor,
+          run_process_module: RunOrchestratorFailingRunProcess
+        )
+
+      session_key = "agent:compaction-fail:test:#{System.unique_integer([:positive])}"
+
+      marker = %{
+        reason: "near_limit",
+        session_key: session_key,
+        set_at_ms: System.system_time(:millisecond)
+      }
+
+      LemonCore.RunHistoryStore.put(
+        session_key,
+        System.system_time(:millisecond),
+        "run-before-failure",
+        %{summary: %{prompt: "prior question", answer: "prior answer"}}
+      )
+
+      PendingCompactionStore.put(session_key, marker)
+
+      on_exit(fn ->
+        if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
+        LemonCore.RunHistoryStore.delete_session(session_key)
+        PendingCompactionStore.delete(session_key)
+      end)
+
+      assert {:error, :run_failed_to_start} =
+               RunOrchestrator.submit(
+                 orchestrator_pid,
+                 request(%{
+                   origin: :channel,
+                   session_key: session_key,
+                   agent_id: "test",
+                   prompt: "continue"
+                 })
+               )
+
+      assert PendingCompactionStore.get(session_key) == marker
+    end
+
+    test "accepted channel submission consumes its pending compaction marker" do
+      run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+
+      {:ok, orchestrator_pid} =
+        GenServer.start_link(
+          RunOrchestrator,
+          run_supervisor: run_supervisor,
+          run_process_module: CapturingRunProcess,
+          run_process_opts: %{notify_pid: self()}
+        )
+
+      session_key = "agent:compaction-ok:test:#{System.unique_integer([:positive])}"
+
+      marker = %{
+        reason: "near_limit",
+        session_key: session_key,
+        set_at_ms: System.system_time(:millisecond)
+      }
+
+      LemonCore.RunHistoryStore.put(
+        session_key,
+        System.system_time(:millisecond),
+        "run-before-success",
+        %{summary: %{prompt: "prior question", answer: "prior answer"}}
+      )
+
+      PendingCompactionStore.put(session_key, marker)
+
+      on_exit(fn ->
+        if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
+        LemonCore.RunHistoryStore.delete_session(session_key)
+        PendingCompactionStore.delete(session_key)
+      end)
+
+      assert {:ok, _run_id} =
+               RunOrchestrator.submit(
+                 orchestrator_pid,
+                 request(%{
+                   origin: :channel,
+                   session_key: session_key,
+                   agent_id: "test",
+                   prompt: "continue"
+                 })
+               )
+
+      assert_receive {:captured_job, execution_request}, 500
+      assert execution_request.prompt =~ "prior question"
+      assert PendingCompactionStore.get(session_key) == nil
     end
   end
 

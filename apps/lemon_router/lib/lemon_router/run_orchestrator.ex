@@ -11,13 +11,22 @@ defmodule LemonRouter.RunOrchestrator do
   # - Building a router-owned `Submission` plus core `ExecutionCommand`
   # - Delegating run-start mechanics to `LemonRouter.RunStarter`
   # - Subscribing external event bridges before coordinator handoff
+  # - Consuming prepared compaction markers only after coordinator acceptance
 
   use GenServer
 
   require Logger
 
   alias LemonCore.{Introspection, MapHelpers, RunRequest, SessionKey}
-  alias LemonRouter.{RunProcess, RunStarter, SessionCoordinator, Submission, SubmissionBuilder}
+
+  alias LemonRouter.{
+    PendingCompaction,
+    RunProcess,
+    RunStarter,
+    SessionCoordinator,
+    Submission,
+    SubmissionBuilder
+  }
 
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
@@ -191,6 +200,11 @@ defmodule LemonRouter.RunOrchestrator do
           :ok ->
             execution_request = submission.execution_request
             meta = submission.meta || %{}
+
+            PendingCompaction.consume(
+              submission.session_key,
+              submission.pending_compaction_marker
+            )
 
             Introspection.record(
               :orchestration_resolved,

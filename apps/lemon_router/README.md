@@ -27,7 +27,7 @@ Channel transport or gateway-native ingress
   - policy, model, and engine resolution
   - resume resolution and conversation-key selection
   - queue semantics: `collect`, `followup`, `steer`, `steer_backlog`, `interrupt`
-  - pending-compaction prompt rewriting
+  - transactional pending-compaction prompt rewriting
   - semantic stream and tool-status coalescing
 - Router does not own:
   - Telegram or Discord rendering details
@@ -39,7 +39,7 @@ Channel transport or gateway-native ingress
 
 | Module | Responsibility |
 | --- | --- |
-| `LemonRouter.Router` | Main inbound entrypoint, session-key resolution, pending-compaction application, control-plane abort/keepalive hooks |
+| `LemonRouter.Router` | Main inbound entrypoint, session-key resolution, pending-compaction preparation, control-plane abort/keepalive hooks |
 | LemonRouter.RunOrchestrator (internal) | Builds router-owned submissions from `LemonCore.RunRequest` and hands them to `SessionCoordinator` |
 | `LemonRouter.SessionCoordinator` | Single owner of per-conversation queue semantics and active-run handoff |
 | Router internal session read model | Internal read model over coordinator-owned active session state |
@@ -50,6 +50,7 @@ Channel transport or gateway-native ingress
 | LemonRouter.ChannelsDelivery (internal) | Narrow bridge from router-adjacent automation delivery requests into `LemonChannels`; must not construct `OutboundPayload` or own channel rendering |
 | `LemonRouter.StreamCoalescer` | Semantic answer coalescing that emits `DeliveryIntent` snapshots/finalization |
 | `LemonRouter.ToolStatusCoalescer` | Semantic tool-status coalescing that emits `DeliveryIntent` snapshots/finalization |
+| `LemonRouter.PendingCompaction` | Shared pending-compaction preparation, injection-safe JSONL history envelopes, whole-entry truncation, and post-submit marker consumption |
 | `LemonRouter.PendingCompactionStore` | Router-owned typed wrapper for pending-compaction markers |
 | `LemonRouter.AgentEndpointStore` | Router-owned typed wrapper for persistent endpoint aliases |
 | `LemonRouter.AgentInbox` | BEAM-local send API with selectors, fanout, and queue-mode selection |
@@ -99,6 +100,13 @@ Queue-mode behavior lives here:
 - `:steer_backlog` attempts in-run steer and falls back to collect
 - active async task/delegated auto-followups are promoted to `:steer` so completions try to reach the live parent run before falling back to a queued followup
 - `:interrupt` cancels the active run and inserts the new request at the front
+
+Pending compaction is coupled to this submission boundary. Fresh markers remain
+stored while the compacted prompt is prepared and are deleted only after the
+coordinator accepts the submission, so admission/start errors remain retryable.
+Stale markers and markers with no usable history clear eagerly. Prior run
+summaries are carried as JSONL with escaped envelope characters and are bounded
+by dropping complete oldest run entries rather than slicing through role data.
 
 ## Output Semantics
 

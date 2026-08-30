@@ -17,6 +17,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Corrected context truncation ordering, hard bookends character limits, and
+  atomic tool-call/result retention; made pending-compaction retries survive
+  submit errors with injection-safe whole-entry history envelopes; and cleared
+  stale session follow-up diagnostics/background compaction when turns end or a
+  new prompt supersedes the snapshot.
 - Async subagent launches now fail and terminalize their bookkeeping when the
   supervised worker cannot start, completed task/agent followup delivery
   contains router exits, and lane-scheduled jobs no longer process a duplicate
