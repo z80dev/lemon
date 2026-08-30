@@ -45,6 +45,9 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.EventBridge` | Cross-app event translation |
 | `LemonCore.NodeRegistry` | Live named-node registry and targeted invocation broker; binds results/cancellation to the selected node connection and retains monotonic per-node credential-generation floors |
 | `LemonCore.JSONPayload` | Shared byte/depth/item validation for JSON protocol boundaries; defaults to the control-plane 1 MiB payload policy |
+| `LemonCore.Context` | Canonical bounded preview/resolve service for root-confined files/folders, git diffs, public URLs, redacted sessions, and format-sniffed documents |
+| `LemonCore.Context.Document` | PDF/DOCX/XLSX/PPTX/ipynb/text extraction with pre-inflation archive and explicit page/item/depth/byte limits |
+| `LemonCore.Context.URLFetcher` | DNS/IP-pinned HTTP(S) fetches with SSRF, redirect, credential, body-size, and timeout defenses |
 | `LemonCore.InboundMessage` | Normalized inbound message from any channel; adapters build the struct directly |
 | `LemonCore.RunRequest` | Canonical run submission struct used by router-facing callers |
 | `LemonCore.ExecutionCommand` | Canonical execution command handed from router to a configured engine runtime |

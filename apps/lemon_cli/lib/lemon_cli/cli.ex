@@ -21,6 +21,7 @@ defmodule LemonCli.CLI do
       channels [--project-dir PATH] [--json]
       profile <list|show|create|clone|rename|export|delete|roster|chat>
       backup <contract|create|list|verify|restore> [options]
+      context <preview|resolve> <reference>... [bounded options]
 
   `model` delegates to provider onboarding; `gateway setup` delegates to the
   gateway setup adapters.
@@ -48,7 +49,7 @@ defmodule LemonCli.CLI do
     defexception [:message, exit_code: 1]
   end
 
-  @commands ~w(setup model gateway doctor config secrets channels profile backup)
+  @commands ~w(setup model gateway doctor config secrets channels profile backup context)
 
   @exit_ok 0
   @exit_error 1
@@ -151,6 +152,7 @@ defmodule LemonCli.CLI do
   defp run_command("channels", args), do: run_channels(args)
   defp run_command("profile", args), do: LemonCli.ProfileCommand.run(args)
   defp run_command("backup", args), do: run_backup(args)
+  defp run_command("context", args), do: LemonCli.ContextCommand.run(args)
 
   # ──────────────────────────────────────────────────────────────────────────
   # setup / model / gateway
@@ -1206,6 +1208,7 @@ defmodule LemonCli.CLI do
       channels [--project-dir PATH] [--json]    Channel launch readiness
       profile <subcommand> [options]             Manage isolated agent profiles
       backup <contract|create|list|verify|restore>  Back up durable user state
+      context <preview|resolve> <refs> [options] Preview or resolve bounded context
 
     Run `lemon <command> --help` for command options.
     """)
@@ -1323,6 +1326,8 @@ defmodule LemonCli.CLI do
     Secret values and backed-up file contents are never printed.
     """)
   end
+
+  defp print_command_usage("context"), do: LemonCli.ContextCommand.print_usage()
 
   defp print_doctor_usage(device \\ :stdio) do
     IO.puts(device, """

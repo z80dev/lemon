@@ -47,6 +47,7 @@ release and source-checkout behavior aligned.
 | Inspect channel readiness | `lemon channels` | `./bin/lemon channels` | `mix lemon.channels` |
 | Back up or restore durable user state | `lemon backup create` | `./bin/lemon backup create` | Call `LemonCli.CLI.run/1` from contributor tooling |
 | Manage specialist profiles | `lemon profile list` | `./bin/lemon profile list` | Use the same packaged command boundary |
+| Preview/resolve bounded context | `lemon context preview|resolve ...` | `./bin/lemon context preview|resolve ...` | Call `LemonCore.Context` from IEx/tests |
 
 ## Backup and restore
 
@@ -95,6 +96,17 @@ packaged launcher starts the daemon when needed; source users start
 the profile ID, prompt, queue mode, and optional model override—working
 directory and execution node are resolved again from the profile by the
 long-running runtime.
+
+## Context references
+
+`lemon context preview` and `lemon context resolve` are packaged adapters over
+the shared `LemonCore.Context` service. They accept root-confined
+`@file:`/`@folder:`, shell-free `@git-diff`, SSRF-guarded `@url:`, and redacted
+`@session:` references. PDF, DOCX, XLSX, PPTX, and ipynb content is sniffed
+from bytes and selected under explicit byte/page/item/depth/time/archive
+limits. Preview performs the exact selection but omits selected text; resolve
+returns selected redacted text plus omission metadata. See
+[`docs/user-guide/context-references.md`](../../docs/user-guide/context-references.md).
 
 ## First-run setup and readiness
 

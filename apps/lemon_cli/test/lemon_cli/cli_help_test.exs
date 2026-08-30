@@ -21,7 +21,8 @@ defmodule LemonCli.CLIHelpTest do
     {["config", "--help"], "Usage: lemon config", "Validating Lemon configuration"},
     {["secrets", "--help"], "Usage: lemon secrets", "No secrets configured"},
     {["channels", "--help"], "Usage: lemon channels", "Lemon Channels"},
-    {["backup", "--help"], "Usage: lemon backup", "Backup created"}
+    {["backup", "--help"], "Usage: lemon backup", "Backup created"},
+    {["context", "--help"], "Usage: lemon context", "Context preview:"}
   ]
 
   setup do

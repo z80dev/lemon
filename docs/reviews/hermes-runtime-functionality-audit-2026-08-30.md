@@ -53,14 +53,14 @@ means Hermes has a current user-facing behavior with no equivalent Lemon path.
 | --- | --- | --- | --- |
 | Shell and process work | Shell execution, background processes, process inspection, terminal backends | Approval-gated shell, process manager, background-process state, persistent execution lanes, policy profiles | **Covered**. Hermes has more terminal-backend packaging; no core work-loop blocker. |
 | Files and source search | Read/write/patch, grep/find, repo inspection | Read/write/patch, safe local mutation preflight, grep/find, git and repository tools, spill references | **Covered/lead** on mutation safety. |
-| Web search and extraction | Search, page fetch, browser and managed tool gateway | Provider-neutral search/extraction with fallback plus multi-tab browser and computer use | **Covered**. Rich PDF/Office/notebook extraction through `read_file` remains a **gap**. |
+| Web search and extraction | Search, page fetch, browser and managed tool gateway | Provider-neutral search/extraction with fallback plus multi-tab browser and computer use; `LemonCore.Context` safely previews/resolves public URLs and format-sniffed PDF/Office/notebook/text content through the packaged CLI | **Covered** for bounded text extraction. Scanned/encrypted/font-encoded PDFs deliberately fail closed rather than invoking an unbounded external extractor. |
 | Python/code execution | Python execution and programmatic tool calling | `execute_code`, persistent Python kernels, tool calls and structured results | **Covered**. |
 | MCP and LSP | MCP tools and progressive disclosure | MCP client/server bridge, LSP driver, capability-aware progressive disclosure | **Covered**. Hermes's single catalog UX is somewhat simpler; Lemon has stronger backend separation. |
 | Session durability | Persistent sessions, resume, search, export/prune/stats commands | JSONL tree sessions, branch navigation, durable history, search, runtime diagnostics | **Covered** for core work. Friendly export/prune/stats commands remain a **gap**. |
 | Checkpoints and rollback | Automatic file checkpoints, list/inspect/restore | Checkpoint/diff/restore tools plus tree-structured session history | **Covered**. Lemon should still consolidate the user guide and make rollback discoverable in every client. |
 | Same-session heartbeat | One persisted recurring prompt, idle-only firing, pause/resume/clear, missed-tick coalescing | Added in this pass: durable JSONL heartbeat, same transcript/provider path, user-message priority, pause/resume/clear, restart restore, reset tombstone | **Covered** after this pass. |
 | Cron and scheduling | Cron jobs, isolated scheduled turns, schedule management | Cron manager with agent and command jobs, pause/resume/abort, retries/jitter, monitor recovery, preflight, model-drift guard, chained context | **Lead** on lifecycle controls. Blueprints/forms and consent-first suggestions remain a **gap**. |
-| Memory | Session search plus long-term memories and learning flows | SQLite full-text durable memory, provider fan-out, session ingest, Honcho provider, scoped tools | **Covered** for retrieval/storage. Hermes `/learn` and journey/learning-graph UX remain a **gap**. |
+| Memory | Session search plus long-term memories and learning flows | SQLite full-text durable memory, provider fan-out, session ingest, Honcho provider, scoped tools; context references can select an always-redacted canonical session export | **Covered** for retrieval/storage and bounded source selection. Hermes `/learn` and journey/learning-graph UX remain a **gap**. |
 | Skills | Install/list/remove skills and official catalog | Registry, discovery, linting, install/import/manage tools, official Hermes catalog browser, curator flows | **Covered**. Ecosystem breadth and single-command import polish still vary. |
 | Subagents/delegation | Native subagents, background work, parent interaction | Native `task`, routed `agent`, budgets, run graph, parent questions, isolated `/bg`, named remote nodes | **Lead**. Restart reconciliation for persisted nonterminal asynchronous records and caller-selected join timeouts remain reliability gaps. |
 | Provider/model choice | Multiple providers, credential pools, fallback, selectable presets and MoA | Provider registry, credential pools, fallback, session pins, routing policy, live model selection | **Covered** for normal models. Named mixture-of-agents presets and the Portal subscription proxy remain **gaps**. |
@@ -114,8 +114,9 @@ focused live-runtime proof.
 
 ### P1 — high-value user parity
 
-- Add one document-ingestion path for PDF, Office, and notebook text extraction
-  with bounded output and provenance.
+- Extend the shipped bounded context/document service into an auditable
+  learn-from-source review over existing memory and skill stores; keep review
+  separate from activation.
 - Add automation blueprints plus an opt-in suggestion workflow; keep suggestions
   advisory until a user confirms the schedule and destination.
 - Add managed 1Password, Bitwarden Secrets Manager, and bounded command-backed

@@ -65,6 +65,11 @@ enabled = true
 max_retries = 3
 base_delay_ms = 1000
 
+# `lemon context preview|resolve` budgets are explicit per invocation rather
+# than persisted here. This prevents shared config from silently raising a
+# caller's file/URL/archive/page/item/time limits. See
+# docs/user-guide/context-references.md for the bounded flags and defaults.
+
 # Programmatic tool calling: the model submits a python3 script that can call a fixed
 # allowlist of agent tools (read, grep, find, ls, webfetch); only what the script prints
 # comes back. The script runs as HOST CODE with bash-equivalent permissions — this is not
