@@ -165,7 +165,7 @@ apps/
 ├── lemon_honcho/        # Honcho-backed long-term memory: registers a LemonMemory provider and agent tools
 ├── lemon_lsp/           # LSP server registry and supervised JSON-RPC sessions
 ├── lemon_mcp/           # MCP (Model Context Protocol) server/client bridge for CodingAgent tools
-├── lemon_media/         # Media job supervisor, metadata store, and mix lemon.media
+├── lemon_media/         # Media Task.Supervisor, metadata store, and mix lemon.media
 ├── lemon_memory/        # Durable agent memory: SQLite full-text store, provider fan-out search, run ingest, redaction
 ├── lemon_platform_test/ # Contract-test kit (ExUnit case templates) for Lemon extension behaviours
 ├── lemon_router/        # Message routing, agent directory, run orchestration, queue semantics
@@ -559,4 +559,5 @@ Each app has its own `AGENTS.md` with detailed context:
 *Last updated: 2026-08-30* (architecture reporting now parses complete `deps/0`
 bodies and distinguishes direct dependencies from reference-only exceptions;
 `lemon_mcp` is assembled as a library-only `:load` application with no empty
-application supervisor)
+application supervisor; one-shot media jobs use `Task.Supervisor` rather than a
+bespoke worker GenServer)
