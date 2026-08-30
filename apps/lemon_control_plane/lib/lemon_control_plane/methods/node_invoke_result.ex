@@ -66,6 +66,14 @@ defmodule LemonControlPlane.Methods.NodeInvokeResult do
 
       {:error, :not_found} ->
         complete_legacy_invocation(authenticated_node_id, invoke_id, result, error)
+
+      {:error, {:invalid_payload, reason}} ->
+        {:error,
+         Errors.error(
+           :invalid_request,
+           "result violates JSON payload policy",
+           payload_error_kind(reason)
+         )}
     end
   end
 
@@ -115,9 +123,21 @@ defmodule LemonControlPlane.Methods.NodeInvokeResult do
   end
 
   defp settle_and_reply(invocation, invoke_id, result, error) do
-    :ok = settle(invocation, invoke_id, result, error)
+    case LemonCore.JSONPayload.validate(%{"result" => result, "error" => error},
+           max_bytes: LemonControlPlane.max_payload()
+         ) do
+      {:ok, _stats} ->
+        :ok = settle(invocation, invoke_id, result, error)
+        accepted_reply(get_field(invocation, :node_id), invoke_id, result, error)
 
-    accepted_reply(get_field(invocation, :node_id), invoke_id, result, error)
+      {:error, reason} ->
+        {:error,
+         Errors.error(
+           :invalid_request,
+           "result violates JSON payload policy",
+           payload_error_kind(reason)
+         )}
+    end
   end
 
   defp accepted_reply(node_id, invoke_id, result, error) do
@@ -154,11 +174,17 @@ defmodule LemonControlPlane.Methods.NodeInvokeResult do
   end
 
   defp settle(invocation, invoke_id, result, error) do
+    summary_opts = [max_bytes: LemonControlPlane.max_payload()]
+    result_summary = LemonCore.JSONPayload.summary(result, summary_opts)
+    error_summary = LemonCore.JSONPayload.summary(error, summary_opts)
+
     updated =
-      Map.merge(invocation, %{
+      invocation
+      |> Map.drop([:result, "result", :error, "error"])
+      |> Map.merge(%{
         status: if(error, do: :error, else: :completed),
-        result: result,
-        error: error,
+        result_summary: result_summary,
+        error_summary: error_summary,
         completed_at_ms: System.system_time(:millisecond)
       })
 
@@ -167,8 +193,8 @@ defmodule LemonControlPlane.Methods.NodeInvokeResult do
         LemonCore.Event.new(:node_invoke_completed, %{
           invoke_id: invoke_id,
           node_id: get_field(invocation, :node_id),
-          result: result,
-          error: error,
+          result_summary: result_summary,
+          error_summary: error_summary,
           ok: is_nil(error)
         })
 
@@ -178,6 +204,12 @@ defmodule LemonControlPlane.Methods.NodeInvokeResult do
   end
 
   defp pending?(invocation), do: get_field(invocation, :status) in [:pending, "pending"]
+
+  defp payload_error_kind({kind, _detail})
+       when kind in [:max_bytes, :max_depth, :max_items, :not_json_safe],
+       do: kind
+
+  defp payload_error_kind(_reason), do: :invalid
 
   defp get_field(map, key) when is_map(map) and is_atom(key) do
     Map.get(map, key) || Map.get(map, Atom.to_string(key))

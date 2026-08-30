@@ -36,6 +36,8 @@ defmodule CodingAgent.ExecutionNode.Worker do
     :node_id,
     :expected_node_id,
     :pairing_stage,
+    :pairing_id,
+    :max_payload_bytes,
     invocations: %{},
     run_refs: %{}
   ]
@@ -71,7 +73,8 @@ defmodule CodingAgent.ExecutionNode.Worker do
        executor_module: Keyword.get(opts, :executor_module, CodingAgent.Executor),
        token_store_module: Keyword.get(opts, :token_store_module, TokenStore),
        token_store_opts: Keyword.get(opts, :token_store_opts, []),
-       notify_pid: Keyword.get(opts, :notify_pid)
+       notify_pid: Keyword.get(opts, :notify_pid),
+       max_payload_bytes: LemonCore.JSONPayload.default_max_bytes()
      }}
   end
 
@@ -128,17 +131,13 @@ defmodule CodingAgent.ExecutionNode.Worker do
       ) do
     case state.socket_mode do
       :pairing ->
-        params = %{
-          "nodeType" => "coding_agent",
-          "nodeName" => state.name,
-          "capabilities" => @capabilities
-        }
-
-        request(state, "node.pair.request", params, :pair_request)
+        state = update_payload_limit(state, hello)
+        state = resume_pairing(state)
         notify(state, {:status, :pairing})
-        {:noreply, %{state | pairing_stage: :requesting}}
+        {:noreply, state}
 
       :node ->
+        state = update_payload_limit(state, hello)
         node_id = get_in(hello, ["auth", "clientId"])
 
         cond do
@@ -195,10 +194,33 @@ defmodule CodingAgent.ExecutionNode.Worker do
         {:noreply, state}
 
       invoke_id ->
-        invocations =
-          update_in(state.invocations, [invoke_id, :deltas], fn deltas -> [text | deltas] end)
+        invocation = Map.fetch!(state.invocations, invoke_id)
+        next_bytes = invocation.delta_bytes + byte_size(text)
+        next_count = invocation.delta_count + 1
 
-        {:noreply, %{state | invocations: invocations}}
+        if next_bytes > result_content_limit(state) or
+             next_count > LemonCore.JSONPayload.default_max_items() do
+          _ = state.executor_module.cancel(invocation.context)
+
+          state =
+            state
+            |> send_invoke_error(invoke_id, :result_payload_limit_exceeded)
+            |> remove_invocation(invoke_id)
+
+          {:noreply, state}
+        else
+          invocations =
+            Map.update!(state.invocations, invoke_id, fn current ->
+              %{
+                current
+                | deltas: [text | current.deltas],
+                  delta_bytes: next_bytes,
+                  delta_count: next_count
+              }
+            end)
+
+          {:noreply, %{state | invocations: invocations}}
+        end
     end
   end
 
@@ -235,7 +257,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
     case payload["pairingId"] do
       pairing_id when is_binary(pairing_id) and pairing_id != "" ->
         request(state, "node.pair.approve", %{"pairingId" => pairing_id}, :pair_approve)
-        {:noreply, %{state | pairing_stage: :approving}}
+        {:noreply, %{state | pairing_id: pairing_id, pairing_stage: :approving}}
 
       _ ->
         {:stop, {:pairing_failed, :missing_pairing_id}, state}
@@ -293,14 +315,39 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   defp handle_socket_response(tag, {:error, reason}, state)
        when tag in [:pair_request, :pair_approve] do
-    {:stop, {:pairing_failed, safe_reason(reason)}, state}
+    handle_pairing_error(reason, state)
   end
 
   defp handle_socket_response({:pair_challenge, _node_id}, {:error, reason}, state) do
-    {:stop, {:pairing_failed, safe_reason(reason)}, state}
+    handle_pairing_error(reason, state)
   end
 
   defp handle_socket_response(_tag, _result, state), do: {:noreply, state}
+
+  defp handle_pairing_error(reason, state) when reason in [:disconnected, :timeout] do
+    state = if reason == :timeout, do: resume_pairing(state), else: state
+    {:noreply, state}
+  end
+
+  defp handle_pairing_error(reason, state),
+    do: {:stop, {:pairing_failed, safe_reason(reason)}, state}
+
+  defp resume_pairing(%{pairing_id: pairing_id} = state)
+       when is_binary(pairing_id) and pairing_id != "" do
+    request(state, "node.pair.approve", %{"pairingId" => pairing_id}, :pair_approve)
+    %{state | pairing_stage: :approving}
+  end
+
+  defp resume_pairing(state) do
+    params = %{
+      "nodeType" => "coding_agent",
+      "nodeName" => state.name,
+      "capabilities" => @capabilities
+    }
+
+    request(state, "node.pair.request", params, :pair_request)
+    %{state | pairing_stage: :requesting}
+  end
 
   defp handle_node_event("node.invoke.request", payload, state) do
     if targeted?(payload, state) do
@@ -320,6 +367,9 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
         not is_map(args) ->
           {:noreply, send_invoke_error(state, invoke_id, :invalid_arguments)}
+
+        payload_error = validate_payload(args, state) ->
+          {:noreply, send_invoke_error(state, invoke_id, payload_error)}
 
         true ->
           {:noreply, start_invocation(state, invoke_id, args)}
@@ -356,6 +406,8 @@ defmodule CodingAgent.ExecutionNode.Worker do
         context: context,
         monitor_ref: monitor_ref,
         deltas: [],
+        delta_bytes: 0,
+        delta_count: 0,
         run_id: request.run_id
       }
 
@@ -421,10 +473,15 @@ defmodule CodingAgent.ExecutionNode.Worker do
       }
     }
 
-    request(state, "node.invoke.result", %{"invokeId" => invoke_id, "result" => result}, {
-      :invoke_result,
-      invoke_id
-    })
+    params = %{"invokeId" => invoke_id, "result" => result}
+
+    case LemonCore.JSONPayload.validate(params, max_bytes: result_content_limit(state)) do
+      {:ok, _stats} ->
+        request(state, "node.invoke.result", params, {:invoke_result, invoke_id})
+
+      {:error, _reason} ->
+        send_invoke_error(state, invoke_id, :result_payload_limit_exceeded)
+    end
 
     remove_invocation(state, invoke_id)
   end
@@ -439,6 +496,34 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
     state
   end
+
+  defp validate_payload(args, state) do
+    case LemonCore.JSONPayload.validate(args, max_bytes: payload_limit(state)) do
+      {:ok, _stats} -> nil
+      {:error, reason} -> {:invalid_request_payload, payload_error_kind(reason)}
+    end
+  end
+
+  defp payload_error_kind({kind, _detail})
+       when kind in [:max_bytes, :max_depth, :max_items, :not_json_safe],
+       do: kind
+
+  defp payload_error_kind(_reason), do: :invalid
+
+  defp update_payload_limit(state, hello) do
+    advertised = get_in(hello, ["policy", "maxPayload"])
+
+    if is_integer(advertised) and advertised > 0 do
+      %{state | max_payload_bytes: advertised}
+    else
+      state
+    end
+  end
+
+  defp payload_limit(%{max_payload_bytes: bytes}) when is_integer(bytes) and bytes > 0, do: bytes
+  defp payload_limit(_state), do: LemonCore.JSONPayload.default_max_bytes()
+
+  defp result_content_limit(state), do: max(payload_limit(state) - 8_192, 1)
 
   defp remove_invocation(state, invoke_id) do
     case Map.pop(state.invocations, invoke_id) do

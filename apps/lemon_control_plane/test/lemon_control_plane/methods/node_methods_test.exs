@@ -133,6 +133,7 @@ defmodule LemonControlPlane.Methods.NodeMethodsTest do
 
     test "processes result when invocation exists" do
       invoke_id = "invoke-#{System.unique_integer()}"
+      :ok = LemonCore.Bus.subscribe("nodes")
 
       # Store a mock invocation
       invocation = %{
@@ -163,7 +164,14 @@ defmodule LemonControlPlane.Methods.NodeMethodsTest do
       # Verify invocation was updated
       updated = LemonCore.Store.get(:node_invocations, invoke_id)
       assert updated.status == :completed
-      assert updated.result == %{"data" => "test"}
+      refute Map.has_key?(updated, :result)
+      assert updated.result_summary.present == true
+      assert updated.result_summary.kind == :object
+
+      assert_receive %LemonCore.Event{type: :node_invoke_completed, payload: event_payload}
+      refute Map.has_key?(event_payload, :result)
+      refute Map.has_key?(event_payload, :error)
+      assert event_payload.result_summary.kind == :object
 
       # Cleanup
       LemonCore.Store.delete(:node_invocations, invoke_id)
@@ -195,7 +203,9 @@ defmodule LemonControlPlane.Methods.NodeMethodsTest do
       # Verify invocation was updated with error
       updated = LemonCore.Store.get(:node_invocations, invoke_id)
       assert updated.status == :error
-      assert updated.error == "Something went wrong"
+      refute Map.has_key?(updated, :error)
+      assert updated.error_summary.present == true
+      assert updated.error_summary.kind == :string
 
       # Cleanup
       LemonCore.Store.delete(:node_invocations, invoke_id)

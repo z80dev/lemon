@@ -88,6 +88,20 @@ defmodule LemonCore.NodeRegistryTest do
     assert_receive {:lemon_node_result, ^invoke_id, {:ok, %{"answer" => "done"}}}
   end
 
+  test "rejects an invocation when the full request envelope exceeds maxPayload" do
+    assert :ok = NodeRegistry.register("node-1", "newphy", self())
+
+    assert {:error, {:invalid_payload, {:max_bytes, 160}}} =
+             NodeRegistry.invoke(
+               "newphy",
+               "coding_agent.run",
+               %{"prompt" => String.duplicate("x", 128)},
+               max_payload_bytes: 160
+             )
+
+    refute_receive {:node_event, "node.invoke.request", _payload}
+  end
+
   test "fails an active invocation when its node disconnects" do
     node = spawn(fn -> Process.sleep(:infinity) end)
     assert :ok = NodeRegistry.register("node-1", "newphy", node)

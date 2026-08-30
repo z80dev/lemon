@@ -787,8 +787,12 @@ defmodule LemonControlPlane.EventBridge do
        "invokeId" => payload[:invoke_id],
        "nodeId" => payload[:node_id],
        "ok" => payload[:ok],
-       "result" => payload[:result],
-       "error" => payload[:error]
+       "resultSummary" => stringify_keys(payload[:result_summary] || %{}),
+       "errorSummary" => stringify_keys(payload[:error_summary] || %{}),
+       "cleanup" => %{
+         "includesResult" => false,
+         "includesError" => false
+       }
      }}
   end
 

@@ -497,6 +497,18 @@ it automatically; restoring an expired node requires operator pairing action,
 and the durable name reservation must be changed first if a new identity needs
 to reuse that name.
 
+The worker sends a WebSocket ping every 25 seconds so the controller's idle
+timeout does not interrupt live-node registration. During `--pair`, transient
+socket loss resumes the same pairing ID; approving an already approved pairing
+reissues a one-time challenge for the same durable node, including when the
+previous challenge response was lost after token issuance.
+
+Named-node requests and results use the controller's advertised `maxPayload`
+byte limit (1 MiB by default) plus shared depth and item-count limits. Streaming
+answer accumulation is cancelled before it can exceed that boundary, and the
+worker returns a compact protocol error instead of retaining an unbounded
+result.
+
 ### Application Environment
 
 | Key | Default | Description |

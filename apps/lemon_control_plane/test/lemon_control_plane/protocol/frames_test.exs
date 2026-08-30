@@ -48,6 +48,25 @@ defmodule LemonControlPlane.Protocol.FramesTest do
       assert {:error, {:invalid_frame, "request frame must have id and method"}} =
                Frames.parse(json)
     end
+
+    test "enforces configured byte and shared depth limits" do
+      oversized =
+        Jason.encode!(%{
+          "type" => "req",
+          "id" => "req-large",
+          "method" => "node.invoke",
+          "params" => %{"value" => String.duplicate("x", 128)}
+        })
+
+      assert {:error, {:max_bytes, 80}} = Frames.parse(oversized, max_payload: 80)
+
+      deeply_nested =
+        Enum.reduce(1..40, true, fn index, acc -> %{"level-#{index}" => acc} end)
+        |> then(&%{"type" => "req", "id" => "deep", "method" => "node.invoke", "params" => &1})
+        |> Jason.encode!()
+
+      assert {:error, {:max_depth, 32}} = Frames.parse(deeply_nested)
+    end
   end
 
   describe "encode_response/2" do
