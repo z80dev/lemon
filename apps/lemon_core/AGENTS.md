@@ -517,6 +517,14 @@ Onboarding, setup, and Hermes migration tasks live in `apps/lemon_cli`; see
 
 ### Quality Tasks
 
+The architecture check parses the complete `deps/0` body in every umbrella
+`mix.exs`, including dependency lists wrapped by `Lemon.HexPackage.deps/1`.
+The direct-dependency policy is exact: both an undeclared edge and a policy
+permission left behind after an edge is removed fail the check. Cross-app source
+references that intentionally avoid a direct Mix dependency live in the
+separate reference-only exception map and are shown separately in the generated
+architecture table.
+
 ```bash
 # Run all quality checks
 mix lemon.quality
