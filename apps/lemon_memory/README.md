@@ -17,6 +17,7 @@ agent platform. It is usable on its own — its only Lemon dependency is
 | `LemonMemory.Providers.Local` | The built-in provider over `LemonMemory.Store` |
 | `LemonMemory.Ingest` | Writes finished runs into memory, invoked from the store's finalize-run hook |
 | `LemonMemory.Safety` | Redaction and size limits applied before anything is persisted |
+| `LemonMemory.Lifecycle` | Bounded/redacted browse, provenance inspection, and exact revision-bound delete for operator clients |
 | `LemonMemory.SessionSearch` | Scoped search across sessions, agents and workspaces |
 | `LemonMemory.TaskFingerprint` | Stable fingerprints for recognising repeated work |
 
@@ -28,6 +29,15 @@ remove one exact record; deletion removes its FTS row in the same SQLite
 transaction. Ordinary run ingest remains asynchronous.
 `LemonMemory.Safety.redact/1` removes common secret-shaped values before a
 caller builds the bounded document summary.
+
+Authenticated operator surfaces use `LemonMemory.Lifecycle`, not raw Store
+rows. It lists or searches at most 50 results from a bounded recent window,
+filters by scope, safe agent label, one-way workspace digest, and memory kind,
+and displays only Safety-redacted summaries plus digest-only learned-source
+provenance. Deletion is non-mutating until previewed and re-confirmed with the
+exact fresh digest. `Store.delete_document_if_unchanged/3` performs the final
+constant-time revision comparison and removes both the SQLite row and FTS row
+inside one transaction.
 
 `mix lemon.memory` inspects and searches the store from the command line.
 

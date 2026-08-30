@@ -35,6 +35,7 @@ defmodule LemonWeb.Router do
 
     live("/", ManagementLive, :index)
     live("/blueprints", BlueprintManagementLive, :index)
+    live("/memory", MemoryManagementLive, :index)
     live("/providers", ProviderManagementLive, :index)
     live("/sessions/:session_key", ManagementLive, :show)
     get("/sessions/:session_key/export/:format", SessionExportController, :show)

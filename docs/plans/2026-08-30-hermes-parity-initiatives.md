@@ -43,6 +43,15 @@ are covered by focused adversarial tests. Learn-from-source review and exact
 confirmation now compose those sources with canonical memory and audited skill
 drafts; a learning-graph UI remains a later presentation layer.
 
+The memory presentation follow-up is now shipped at `/manage/memory` over the
+canonical `LemonMemory.Store`. `LemonMemory.Lifecycle` owns bounded
+list/search/filter, centralized operator redaction, digest-only learned-source
+provenance, and preview-first exact single-record deletion. Workspaces are
+one-way digests; revision confirmation covers every persisted document field;
+the final constant-time comparison and FTS+row deletion share one Store/SQLite
+transaction. A richer graph/timeline and free-form editing remain follow-ons,
+not reasons to create a second learning database.
+
 The second initiative now has source/package CLI and authenticated Web
 verticals over one `LemonAutomation.Blueprint.Catalog` boundary. The Web path
 is `/manage/blueprints`: it keeps manifest prose and executable/source content

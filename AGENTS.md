@@ -427,7 +427,7 @@ lemon_browser ────────→ lemon_core
 lemon_lsp ────────────→ lemon_core
 lemon_media ──────────→ lemon_core
 lemon_platform_test ──→ lemon_core, lemon_channels, lemon_memory, lemon_ai, lemon_agent (all optional: true)
-lemon_web ────────────→ lemon_agent, lemon_automation, lemon_core, lemon_router
+lemon_web ────────────→ lemon_agent, lemon_automation, lemon_core, lemon_memory, lemon_router
 x_api ────────────────→ lemon_core, lemon_channels, lemon_agent, lemon_ai, lemon_platform_test*
 lemon_ai ─────────────→ (no umbrella deps - standalone LLM client library)
 lemon_core ───────────→ (no umbrella deps - foundational shared library)
@@ -658,7 +658,9 @@ Each app has its own `AGENTS.md` with detailed context:
 
 ---
 
-*Last updated: 2026-08-30* (external 1Password, Bitwarden, and argv-only command
+*Last updated: 2026-08-30* (authenticated Web memory management now consumes
+the shared bounded/redacted `LemonMemory.Lifecycle` rather than raw store rows;
+external 1Password, Bitwarden, and argv-only command
 secret sources now share one supervised, bounded, fail-closed resolver and
 redacted source/packaged diagnostics; the TUI discovers and manages server-owned
 profiles while preserving canonical `profile.chat` routing and consumes the
