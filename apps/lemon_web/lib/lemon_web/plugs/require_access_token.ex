@@ -1,6 +1,6 @@
 defmodule LemonWeb.Plugs.RequireAccessToken do
   @moduledoc """
-  Optional token gate for the dashboard.
+  Token gate for browser routes.
 
   When `:lemon_web, :access_token` is configured, requests must provide the
   token via one of:
@@ -8,6 +8,10 @@ defmodule LemonWeb.Plugs.RequireAccessToken do
   - `Authorization: Bearer <token>`
   - query string `?token=<token>`
   - existing session auth marker (`:lemon_web_auth`)
+
+  Routes that pass `required: true` fail closed with HTTP 503 when no token is
+  configured. This is used for the management surface while the local chat
+  route keeps the backwards-compatible optional gate.
   """
 
   @behaviour Plug
@@ -18,10 +22,12 @@ defmodule LemonWeb.Plugs.RequireAccessToken do
 
   def init(opts), do: opts
 
-  def call(conn, _opts) do
+  def call(conn, opts) do
+    required? = Keyword.get(opts, :required, false) == true
+
     case configured_token() do
       token when token in [nil, ""] ->
-        conn
+        if required?, do: unavailable(conn), else: conn
 
       expected ->
         fresh_token = token_from_authorization_header(conn) || token_from_query(conn)
@@ -100,6 +106,13 @@ defmodule LemonWeb.Plugs.RequireAccessToken do
     conn
     |> put_resp_content_type("text/plain")
     |> send_resp(401, "Unauthorized")
+    |> halt()
+  end
+
+  defp unavailable(conn) do
+    conn
+    |> put_resp_content_type("text/plain")
+    |> send_resp(503, "Management access token is not configured")
     |> halt()
   end
 end

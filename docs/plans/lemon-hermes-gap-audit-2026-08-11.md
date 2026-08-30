@@ -108,8 +108,8 @@ must not be copied into new plans.
 | Use a polished native daily-agent interface | The pinned [Desktop guide](https://github.com/NousResearch/hermes-agent/blob/4f22543509d1b91dc45bcb369447126c5eb14fb7/website/docs/user-guide/desktop.md) covers onboarding, tabs/panes, chat, artifacts, files, terminal, git/worktrees, reviews, memory, voice, settings, plugins, multi-profile concurrency, and remote connections. | Lemon has a capable Bun TUI, a session LiveView, JSON-RPC clients, and LemonSim UI. It has no native desktop product or a single interface that composes files, terminal, artifacts, git review, memory, settings, and remote connections. | Missing | **High** | Choose and ship a desktop/product-shell strategy. A wrapper is useful only if it owns onboarding, connection management, updates, file/artifact UX, and settings—not merely a WebView around chat. |
 | Create durable specialist agents and collaborate among them | [Bot Mode](https://hermes-agent.nousresearch.com/docs/user-guide/bot-mode) presents profiles as bots with independent config/model/memory/skills/SOUL, canonical chats, cron routines, DMs, groups, cross-machine roster, and remote creation. Profiles also have full [CLI lifecycle](https://hermes-agent.nousresearch.com/docs/reference/profile-commands). | Lemon has named agents/personas, native child sessions, router delegation, kanban, agent inboxes, and authenticated named execution nodes. It does not offer isolated user-managed agent homes, profile create/clone/export/delete, canonical bot chats, a roster, or group-room UX. | Partial | **High** | Define a first-class profile record over existing agent/node primitives, including isolated config/memory/skills, create/clone/export lifecycle, canonical chat, and TUI/Web roster before attempting group rooms. |
 | Manage several local or remote runtimes from one client | Hermes Desktop registers local, URL, SSH, Docker, and cloud connections and merges their agent rosters; see [multi-connection Desktop](https://hermes-agent.nousresearch.com/docs/user-guide/multi-connection-desktop). | Lemon's authenticated named nodes are stronger as native remote execution workers and have real name-based routing, cancellation, pairing, and presence. The TUI/Web do not provide a multi-controller connection registry or merged agent/session roster. | Different | **High** | Preserve Lemon's execution-node advantage, then add connection profiles, health/re-auth UX, and a merged node/agent/session picker. |
-| Administer a machine in the browser | Hermes's [Web Dashboard](https://hermes-agent.nousresearch.com/docs/user-guide/features/web-dashboard) manages profiles, real TUI chat, status/resources, a large config surface, credentials, sessions, models, skills, MCP, pairing, webhooks, gateways, memory, cron, plugins, logs, and analytics. | [`LemonWeb.Router`](../../apps/lemon_web/lib/lemon_web/router.ex) exposes only chat at `/` and `/sessions/:session_key`, plus `/healthz`. It supports streaming, tool cards, and multi-file upload. Rich operator methods exist in the control plane, but the old `/ops` dashboard no longer exists. | Partial | **High** | Build an authenticated management shell over the existing control-plane methods, starting with runtime health, sessions, providers/credentials, approvals, cron, skills/MCP, memory, nodes, logs, and config. Delete stale `/ops` claims from old ledgers. |
-| Browse, search, resume, export, archive, and safely prune sessions | Hermes [sessions](https://hermes-agent.nousresearch.com/docs/user-guide/sessions) support workspace-aware resume, rename/pin/archive/read state, FTS search, rich filtering, lineage, redacted JSONL/HTML/Markdown/QMD/trace exports, verified delete-after-export, prune, handoff, recovery, and recap. | The TUI [`session.ts`](../../clients/tui/src/commands/session.ts) provides merged active/stored listing, switch/new/reset/delete/info/resume/history and unread state. Lemon stores durable run/session history and exposes control-plane reads, but lacks supported search/export/archive/pin/rename/prune/backup workflows and Web session management. | Partial | **High** | Add a shared session-service lifecycle API, then expose it identically in TUI, packaged CLI, and Web. Start with search, title/pin/archive, redacted export, and guarded prune. |
+| Administer a machine in the browser | Hermes's [Web Dashboard](https://hermes-agent.nousresearch.com/docs/user-guide/features/web-dashboard) manages profiles, real TUI chat, status/resources, a large config surface, credentials, sessions, models, skills, MCP, pairing, webhooks, gateways, memory, cron, plugins, logs, and analytics. | [`LemonWeb.Router`](../../apps/lemon_web/lib/lemon_web/router.ex) now has a fail-closed token-required `/manage` shell for runtime health, sanitized live-node presence, and durable session operations, alongside chat and `/healthz`. Provider credentials/pools, approvals, cron, skills/MCP, memory, logs, and config do not yet have equivalent Web journeys. | Partial, first vertical shipped | **High** | Extend the authenticated shell one existing service at a time: providers/credentials, approvals, cron, skills/MCP, memory, logs, and config. Keep each mutation scoped and browser-tested. |
+| Browse, search, resume, export, archive, and safely prune sessions | Hermes [sessions](https://hermes-agent.nousresearch.com/docs/user-guide/sessions) support workspace-aware resume, rename/pin/archive/read state, FTS search, rich filtering, lineage, redacted JSONL/HTML/Markdown/QMD/trace exports, verified delete-after-export, prune, handoff, recovery, and recap. | `LemonCore.SessionLifecycle` now composes the canonical stores for bounded search, title/pin/archive, redacted JSON/Markdown export, verified delete, and exact-candidate guarded prune. Web supports list/search/inspect/resume/export/mutation/prune, and authenticated control-plane RPCs expose the redacted lifecycle. TUI and packaged CLI do not yet expose the shared lifecycle; lineage, handoff, recovery, recap, read state, and richer formats remain gaps. | Near in service/Web; partial cross-client | **High** | Reuse the shared lifecycle in TUI and packaged CLI, then add lineage/read state and recovery/backup semantics without introducing another store. |
 
 ### Agent runtime, models, tools, context, and media
 
@@ -155,8 +155,9 @@ At the Lemon baseline:
    and still characterized binary installation as future work.
 3. `compare.md` listed shipped provider fallback, cron, goal, kanban, LSP,
    browser, media, checkpoint, API, and ACP capabilities as future targets.
-4. The old feature matrix still claims a Web `/ops` surface that does not exist
-   in the current `lemon_web` router.
+4. The old feature matrix claimed a removed Web `/ops` surface. The current
+   router instead provides a focused token-required `/manage` session vertical;
+   historical `/ops` claims remain invalid and should not be restored.
 5. Lemon has strong implementation documents for many tools but lacks a complete
    user-facing CLI reference, session guide, automation guide, Web guide,
    provider/auth guide, node guide, extension install guide, and task-recipe
@@ -177,18 +178,20 @@ These are intentionally vertical bundles rather than isolated modules.
 
 ### High: product shell and daily operation
 
-1. **Management Web vertical** — authenticated shell; runtime health; sessions;
-   providers/credentials/fallback pools; approvals; cron; skills/MCP; memory;
-   nodes; logs; config. Reuse JSON-RPC and do real browser tests against a running
-   Lemon instance.
+1. **Management Web vertical** — the authenticated shell, runtime/live-node
+   health, and complete session slice are implemented over shared services.
+   Continue with providers/credentials/fallback pools, approvals, cron,
+   skills/MCP, memory, logs, and config, with real browser tests per slice.
 2. **Packaged CLI convergence** — promote supported source-only and TUI-only
    operations into `LemonCli.CLI`; consistent help/JSON/errors; generate the
    reference and completions from the command registry.
 3. **Profile/bot primitive** — isolated homes and capability config; create,
    clone, rename, export, delete; canonical chat; agent/node roster. Add group
    rooms only after this lifecycle is boring and reliable.
-4. **Session lifecycle** — shared search/title/pin/archive/export/prune service,
-   surfaced in TUI, CLI, and Web with redaction and verified-before-delete.
+4. **Session lifecycle** — the shared service, authenticated RPC, and Web are
+   implemented with redaction and verified-before-delete. Surface the same API
+   in TUI and packaged CLI; then add lineage/read state/recovery rather than a
+   parallel store.
 5. **Install/update/backup** — widen supported installation, add update
    plan/apply/rollback receipts, and make backup/restore cover the documented
    data contract.

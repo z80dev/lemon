@@ -1,6 +1,6 @@
 # lemon_web AGENTS.md
 
-Phoenix web interface for Lemon with LiveView. Provides a real-time agent dashboard.
+Phoenix web interface for Lemon with LiveView. Provides real-time agent chat and authenticated session operations.
 
 ## Quick Orientation
 
@@ -10,7 +10,9 @@ Key entry points:
 - **Router**: `lib/lemon_web/router.ex` -- all routes defined here
 - **Endpoint**: `lib/lemon_web/endpoint.ex` -- HTTP pipeline and socket config
 - **Main LiveView**: `lib/lemon_web/live/session_live.ex` -- the dashboard chat UI
-- **Auth plug**: `lib/lemon_web/plugs/require_access_token.ex` -- optional token gate
+- **Management LiveView**: `lib/lemon_web/live/management_live.ex` -- session/runtime operations
+- **Session export**: `lib/lemon_web/controllers/session_export_controller.ex` -- redacted downloads
+- **Auth plug**: `lib/lemon_web/plugs/require_access_token.ex` -- optional chat or required management token gate
 
 ## Purpose and Responsibilities
 
@@ -22,6 +24,9 @@ Key entry points:
 - **Authentication**: Optional access token protection via Bearer header, query param, or session
 - **First-run readiness**: Shared `LemonCore.Setup.Readiness` state blocks doomed prompt/upload submissions and gives exact setup recovery
 - **Run control**: Active browser runs expose cancellation through `LemonRouter.abort_run/2`
+- **Session lifecycle**: Shared `LemonCore.SessionLifecycle` list/search/title/pin/archive/export/prune operations; never duplicate its stores
+- **Management security**: `/manage` fails closed without a configured access token; inspection/export are always redacted
+- **Resume**: Named chat routes reconstruct durable prompt/tool/answer history using the internal trusted unredacted mode
 
 ## Phoenix Architecture Overview
 
@@ -31,7 +36,8 @@ Key entry points:
 │  ├── Socket "/live" → Phoenix.LiveView.Socket                 │
 │  ├── Static assets                                            │
 │  └── Router (LemonWeb.Router)                                 │
-│       └── Pipeline :browser → RequireAccessToken              │
+│       ├── Pipeline :browser → optional RequireAccessToken     │
+│       └── Pipeline :management_browser → required token       │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -39,7 +45,7 @@ Key entry points:
 
 - `LemonWeb.Application` - Supervisor with `Telemetry` and `Endpoint` (`:one_for_one`)
 - `LemonWeb.Endpoint` - HTTP/WebSocket endpoint (uses Bandit); session stored in signed cookie `_lemon_web_key`
-- `LemonWeb.Router` - Routes: `/` (index), `/sessions/:session_key` (show)
+- `LemonWeb.Router` - Chat routes plus token-required `/manage` list/detail/export routes
 - `LemonWeb.Telemetry` - Phoenix telemetry metrics
 
 ## LiveView Structure
@@ -81,6 +87,25 @@ The UI must fail closed while `LemonCore.Setup.Readiness.ready?/1` is false:
 do not consume uploads, append a user message, or call `LemonRouter.submit/1`.
 The terminal setup flow owns mutations; the Web surface is a read-only status
 and recovery guide until a future settings journey is designed.
+
+Named session mounts also call `SessionLifecycle.history/2` with
+`redact: false` to reconstruct the user's private conversation in order. This
+mode is restricted to the in-process chat resume path. Management inspection,
+downloads, and operator JSON-RPC must remain redacted.
+
+### ManagementLive
+
+`LemonWeb.ManagementLive` is the focused operations shell. It reads runtime
+health and sanitized named-node presence, lists/searches durable sessions,
+mutates title/pin/archive metadata, renders redacted structured runs/tools,
+links back to chat resume, and drives confirmation-bound prune. It must use
+`LemonCore.SessionLifecycle` rather than reading or deleting store tables
+directly.
+
+Prune UI rules are security properties: preview first; archived-only and
+unpinned by default; show exact candidate keys; keep the opaque confirmation
+token server-side; and require a new preview after any lifecycle mutation.
+Never add raw event/run dumps to management inspection or exports.
 
 ### Message Structure
 
@@ -151,13 +176,16 @@ All field access uses `LemonCore.MapHelpers.get_key/2` for atom-or-string key lo
 
 **`LemonWeb.Plugs.RequireAccessToken`** - Pipeline plug:
 
-1. If no `:access_token` configured (nil or `""`) -> allow all
+1. If no `:access_token` is configured, optional chat routes pass; routes with `required: true` return HTTP 503
 2. Token sources (checked in order):
    - `Authorization: Bearer <token>` header
    - Query param `?token=<token>`
    - Session marker (`:lemon_web_auth`)
 3. On valid token -> store SHA256 hash of token in session under `:lemon_web_auth`
 4. On invalid/missing -> 401 Unauthorized (halts pipeline)
+
+The `:management_browser` pipeline always uses `required: true`. Do not move
+management routes into the optional pipeline.
 
 **Configuration:**
 ```elixir
@@ -399,7 +427,7 @@ When testing routes behind `RequireAccessToken`, either:
 
 | Config Key | Env Var | Default | Purpose |
 |------------|---------|---------|---------|
-| `:access_token` | `LEMON_WEB_ACCESS_TOKEN` | `nil` | Dashboard auth token |
+| `:access_token` | `LEMON_WEB_ACCESS_TOKEN` | `nil` | Optional chat gate; required for management |
 | `:uploads_dir` | `LEMON_WEB_UPLOADS_DIR` | `System.tmp_dir! <> "/lemon_web_uploads"` | File upload storage |
 | Endpoint `:url` | `LEMON_WEB_HOST` | `"localhost"` | Production hostname |
 | Endpoint `:http` | `LEMON_WEB_PORT` | `4080` | HTTP listen port |
@@ -420,6 +448,7 @@ apps/lemon_web/
 |   |-- require_access_token.ex         # Auth plug (optional token gate)
 |-- lib/lemon_web/live/
 |   |-- session_live.ex                 # Main dashboard LiveView
+|   |-- management_live.ex              # Authenticated session operations
 |   |-- components/
 |       |-- file_upload_component.ex    # Upload UI with progress bars
 |       |-- message_component.ex        # Chat message bubbles

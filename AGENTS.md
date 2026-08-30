@@ -387,7 +387,7 @@ Key env vars:
 - `LEMON_LOG_LEVEL` - Log level (debug/info/warning/error)
 - `LEMON_STORE_PATH` - Persistent store path
 - `LEMON_HARNESS_SKILLS_DIR` - Override harness-compatible global skills path (`~/.agents/skills`) for isolated runtimes/tests
-- `LEMON_WEB_ACCESS_TOKEN` - Web UI auth token
+- `LEMON_WEB_ACCESS_TOKEN` - Optional chat gate and required credential for the `/manage` session-operations shell
 - `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` - Shared WebSocket operator credential required by default and used for named-node pairing against an authenticated controller
 - `LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK` - Explicit, default-off legacy tokenless loopback compatibility
 - `LEMON_WEB_HOST` / `LEMON_WEB_PORT` - Web server binding (prod)
@@ -533,6 +533,7 @@ This repository includes an optional pre-push hook that uses **kimi** to review 
 - `docs/assistant_bootstrap_contract.md` - Bootstrap contract
 - `docs/context.md` - Context management
 - `docs/long-running-agent-harnesses.md` - Long-running harness primitives that keep coding sessions structured across multi-step work
+- `docs/user-guide/web.md` - Browser chat/resume plus authenticated session management, redacted export, and guarded prune
 - `docs/plans/2026-03-19-ai-boundary-extraction-plan.md` - Plan for moving auth/config/storage ownership out of `apps/lemon_ai` before extracting it into its own repo
 - `docs/subagent-parent-questions.md` - Design for subagent-to-parent clarification requests via a narrow `ask_parent` path
 - `docs/telemetry.md` - Telemetry and observability

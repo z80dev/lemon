@@ -3,11 +3,12 @@ defmodule LemonWeb.SessionLive do
 
   use LemonWeb, :live_view
 
-  alias LemonCore.{Bus, MapHelpers, SessionKey}
+  alias LemonCore.{Bus, MapHelpers, SessionKey, SessionLifecycle}
   alias LemonCore.Setup.Readiness
   alias LemonWeb.Live.Components.{FileUploadComponent, MessageComponent}
 
   @max_messages 250
+  @max_history_runs 100
 
   @impl true
   def mount(params, _session, socket) do
@@ -20,6 +21,7 @@ defmodule LemonWeb.SessionLive do
     end
 
     setup_state = setup_readiness()
+    messages = history_messages(session_key)
 
     socket =
       socket
@@ -27,7 +29,7 @@ defmodule LemonWeb.SessionLive do
       |> assign(:session_key, session_key)
       |> assign(:agent_id, agent_id)
       |> assign(:prompt, "")
-      |> assign(:messages, [])
+      |> assign(:messages, messages)
       |> assign(:last_run_id, nil)
       |> assign(:run_status, :idle)
       |> assign(:setup_state, setup_state)
@@ -230,10 +232,15 @@ defmodule LemonWeb.SessionLive do
               <h1 class="mt-1 text-lg font-semibold text-slate-900 sm:text-xl">Chat</h1>
               <p class="mt-1 text-sm text-slate-600">Your local agent workspace.</p>
             </div>
-            <span class={setup_badge_class(@setup_ready?)} data-testid="setup-status">
-              <span class="h-2 w-2 rounded-full bg-current" aria-hidden="true"></span>
-              {if @setup_ready?, do: "Ready", else: "Setup needed"}
-            </span>
+            <div class="flex flex-col items-end gap-2">
+              <span class={setup_badge_class(@setup_ready?)} data-testid="setup-status">
+                <span class="h-2 w-2 rounded-full bg-current" aria-hidden="true"></span>
+                {if @setup_ready?, do: "Ready", else: "Setup needed"}
+              </span>
+              <.link href={~p"/manage"} class="text-xs font-medium text-slate-600 underline">
+                Manage sessions
+              </.link>
+            </div>
           </div>
           <details class="mt-3 text-xs text-slate-500">
             <summary class="cursor-pointer rounded font-medium focus:outline-none focus:ring">Session details</summary>
@@ -647,6 +654,80 @@ defmodule LemonWeb.SessionLive do
 
   defp trim_messages(messages) when length(messages) <= @max_messages, do: messages
   defp trim_messages(messages), do: Enum.take(messages, -@max_messages)
+
+  defp history_messages(session_key) do
+    session_key
+    |> SessionLifecycle.history(limit: @max_history_runs, redact: false)
+    |> Enum.flat_map(&run_messages/1)
+    |> trim_messages()
+  rescue
+    _ -> []
+  catch
+    :exit, _ -> []
+  end
+
+  defp run_messages(run) do
+    run_id = run.run_id || "unknown"
+    ts_ms = run.started_at_ms || 0
+
+    prompt =
+      if is_binary(run.prompt) and run.prompt != "" do
+        [
+          %{
+            id: history_message_id(run_id, "user"),
+            kind: :user,
+            content: run.prompt,
+            ts_ms: ts_ms
+          }
+        ]
+      else
+        []
+      end
+
+    tools =
+      run.tools
+      |> Enum.with_index()
+      |> Enum.map(fn {tool, index} ->
+        %{
+          id: history_message_id(run_id, "tool-#{index}"),
+          kind: :tool_call,
+          event: %{
+            action: %{
+              title: tool.title,
+              kind: tool.kind,
+              detail: tool.detail
+            },
+            phase: tool.phase,
+            ok: tool.ok,
+            message: tool.message
+          },
+          ts_ms: ts_ms
+        }
+      end)
+
+    answer =
+      if is_binary(run.answer) and run.answer != "" do
+        [
+          %{
+            id: history_message_id(run_id, "assistant"),
+            kind: :assistant,
+            run_id: run_id,
+            content: run.answer,
+            pending: false,
+            ts_ms: ts_ms
+          }
+        ]
+      else
+        []
+      end
+
+    prompt ++ tools ++ answer
+  end
+
+  defp history_message_id(run_id, suffix) do
+    digest = :crypto.hash(:sha256, "#{run_id}:#{suffix}") |> Base.url_encode64(padding: false)
+    "history-#{binary_part(digest, 0, 16)}"
+  end
 
   defp resolve_session_key(params) when is_map(params) do
     candidate = params["session_key"]

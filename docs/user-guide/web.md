@@ -58,15 +58,50 @@ under **Session details** when debugging, but are hidden during ordinary use.
 
 Each browser tab gets its own stable session in `sessionStorage`. Use
 `/sessions/<session-key>` only when deliberately attaching to a known Lemon
-session.
+session. Named routes reload durable prompt, tool, and answer history before
+subscribing to new streaming events, so an existing conversation can be
+continued rather than merely reused as an empty routing key.
+
+## Manage durable sessions
+
+Set `LEMON_WEB_ACCESS_TOKEN`, launch the full runtime, and open `/manage` with
+the token once:
+
+```text
+http://127.0.0.1:4080/manage?token=<your-token>
+```
+
+The browser removes the token from the address after establishing the signed
+session. The management page shows local runtime health, live named-node names,
+and durable-session counts. From there you can:
+
+- search session keys, titles, prompts, and answers, then filter active,
+  archived, or all sessions;
+- add a title, pin important work, archive completed work, and resume a chat;
+- inspect redacted prompts, answers, and structured tool activity;
+- download bounded, redacted JSON or Markdown exports; and
+- preview and confirm pruning of archived, unpinned sessions older than a
+  chosen threshold.
+
+Prune never accepts a count-only confirmation. The preview token binds the
+threshold and exact candidate identities plus their current lifecycle state.
+If any candidate changes, no deletion occurs and the page asks for a fresh
+preview. Export and inspection omit raw run records, raw event payloads,
+credentials, and secret values and report any size-bound run omissions.
+
+This is the first management vertical, not yet a complete machine dashboard.
+Provider credentials/fallback pools, approvals, automation, skills/MCP, memory,
+logs, and configuration still use their existing CLI/TUI/control-plane
+surfaces.
 
 ## Access control
 
 The Web UI binds to localhost in the supported local launch path. To require a
-token as well, set a high-entropy `LEMON_WEB_ACCESS_TOKEN` before starting
-Lemon. `lemon web` passes URL-safe configured tokens to the browser for the
-one-time login; the client removes the query parameter after the authenticated
-session cookie is established.
+token for chat as well, set a high-entropy `LEMON_WEB_ACCESS_TOKEN` before
+starting Lemon. The management surface always requires this token and returns
+HTTP 503 when it is not configured. `lemon web` passes URL-safe configured
+tokens to the browser for the one-time login; the client removes the query
+parameter after the authenticated session cookie is established.
 
 For a remote deployment, terminate TLS in front of Lemon and require the token.
 Do not expose an unauthenticated HTTP listener to an untrusted network.
@@ -82,6 +117,7 @@ Do not expose an unauthenticated HTTP listener to an untrusted network.
 | Minimal-profile error | Reinstall with `LEMON_PROFILE=full`. |
 | Browser did not open | Use `lemon web --no-open` and open the printed URL manually. |
 | HTTP 401 | Launch through `lemon web` with the same `LEMON_WEB_ACCESS_TOKEN`, or supply the token once as `?token=...`. |
+| Management HTTP 503 | Set a non-empty `LEMON_WEB_ACCESS_TOKEN`, restart Lemon, and authenticate once. |
 
 The UI ships its CSS and Phoenix client assets inside the Lemon release. It
 does not require a JavaScript or CSS CDN at runtime. The page includes a skip
