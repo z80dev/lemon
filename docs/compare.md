@@ -1,103 +1,103 @@
 # Compare Lemon
 
-Last reviewed: 2026-05-15
-
-Lemon is a local-first AI agent runtime. It is not trying to be only a chat UI,
-only a coding CLI, or only an eval harness. The product goal is "Hermes, but
-better, on the BEAM": reach Hermes-level daily-agent capability, then use OTP
-supervision, process isolation, event streams, durable state, and runtime
-introspection to make those capabilities more operable.
+Lemon is a local-first, BEAM-native AI agent runtime. It is not only a chat UI,
+coding CLI, or evaluation harness. The product goal is to make daily-agent work
+easy to install and operate while using OTP supervision, process isolation,
+durable events, explicit policy, and replayable state underneath.
 
 ## Positioning
 
-| Category | What users usually get | Where Lemon is aiming |
+| Category | Typical strength | Lemon's approach |
 | --- | --- | --- |
-| Hosted assistants | Fast onboarding, managed infrastructure, limited local control | Local runtime ownership, local files and secrets, configurable providers/models, supportable self-hosting |
-| Single-engine coding CLIs | Strong terminal workflows tied to one vendor CLI | One native supervised conversation runtime with native in-process subagent orchestration |
-| Agent harnesses | Repeatable tool loops, transcripts, and eval focus | Hermes-class harness behavior combined with BEAM-supervised memory, skills, channels, browser/media workers, terminal backends, and operator interfaces |
-| Chat bridges | Messaging access to an assistant | Channel adapters connected to the same runtime, runs, approvals, sessions, and diagnostics |
-| Internal automation scripts | Local control but limited product surface | Supervised BEAM runtime, JSON-RPC control plane, Web/TUI/Telegram surfaces, doctor checks, release profiles |
+| Hosted assistants | Immediate onboarding and managed infrastructure | Local runtime ownership, local files and secrets, configurable providers, and supportable self-hosting |
+| Vendor coding CLIs | Polished repository workflow tied to one provider runtime | One native supervised runtime with provider/model routing, persistent sessions, tools, and in-process subagents |
+| Agent harnesses | Repeatable tool loops, transcripts, and evaluation | A production assistant stack plus deterministic LemonSim worlds and replay verification |
+| Chat bridges | Reach an assistant from messaging apps | Channel adapters share the same sessions, approvals, memory, tools, events, and diagnostics |
+| Automation scripts | Flexible local control with limited product lifecycle | Durable cron, heartbeats, monitor jobs, goal loops, kanban workers, retries, lineage, and preflight under supervision |
 
-## Main Differentiators
+## Current strengths
 
-| Area | Lemon direction | Current launch evidence |
+| Area | Current Lemon capability | Evidence |
 | --- | --- | --- |
-| Runtime model | Supervised local-first runtime with explicit control-plane APIs | [Architecture Overview](architecture/overview.md), [BEAM Agents](beam_agents.md) |
-| Execution model | One native executor with provider/model routing and native in-process subagents | [Model Selection](model-selection-decoupling.md), [Configuration](config.md) |
-| Harness behavior | Tool execution, approval, transcript, eval, and long-running run support | [Hermes Feature Matrix](plans/lemon-hermes-feature-parity-matrix-2026-05-12.md), [Hermes Parity Scorecard](plans/lemon-hermes-agent-harness-parity-scorecard.md), [Testing](testing.md) |
-| Memory and skills | Durable context plus reusable task packs | [Memory Guide](user-guide/memory.md), [Skills Overview](skills.md) |
-| Interfaces | Terminal, Web, control plane, stable Telegram and Discord text-first support, and preview gateway adapters | [Interface Supportability Audit](plans/lemon-1.0-interface-supportability-audit-2026-05-11.md) |
-| BEAM parity targets | Browser/media jobs, checkpoint rollback, API/editor adapters, terminal backends, persistent goals, kanban boards, LSP diagnostics, cron, provider routing, and plugin hosts as supervised runtime surfaces | [Hermes Feature Matrix](plans/lemon-hermes-feature-parity-matrix-2026-05-12.md), [Mainstream Readiness Plan](plans/lemon-1.0-mainstream-readiness.md) |
-| Operations | Doctor checks, support bundles, release profiles, smoke tests, and quality gates | [Release Checklist](release/release_checklist_and_support_policy.md), [Safety](security/safety.md) |
+| Runtime | Supervised BEAM applications, one native executor, typed events, durable run state, hot reload, and explicit control-plane APIs | [Architecture](architecture/overview.md), [BEAM agents](beam_agents.md), [Hot reload](runtime-hot-reload.md) |
+| Models | Provider/model selection, custom endpoints, live provider fallback, credential pools, cooldowns, and per-session pinning | [Model selection](model-selection-decoupling.md), [Configuration](config.md), [Testing](testing.md) |
+| Harness | Native subagents, approval-aware tools, redirect/steer/abort, progressive tool disclosure, programmatic tool calling, compaction, and long-running goal support | [Context](context.md), [Execute Code](tools/execute-code.md), [Harness scorecard](plans/lemon-hermes-agent-harness-parity-scorecard.md) |
+| Browser and media | Supervised browser automation, Web search/fetch, downloads/uploads, screenshots, computer use, media jobs, and artifacts | [Web and Browser Tools](tools/web.md), [Media Tools](tools/media.md) |
+| Memory and skills | SQLite full-text memory, project context, Honcho integration, skill discovery/audit/install/update, and opt-in synthesis/curation | [Memory](user-guide/memory.md), [Honcho](user-guide/honcho.md), [Skills](user-guide/skills.md), [Adaptive behavior](user-guide/adaptive.md) |
+| Automation | Durable cron and timers, retries/lineage, overlap locks, monitor suppression, no-agent commands, chaining, model-drift guard, preflight, goals, and kanban | [Configuration](config.md), [Testing](testing.md), [Support](support.md) |
+| Multi-machine work | Authenticated named execution nodes route native Lemon agent runs to destination-local workspaces and credentials | [Architecture](architecture/overview.md) |
+| Safety and operations | Central approvals, URL and extension policy, redaction, doctor checks, support bundles, readiness/proof artifacts, release channels, and canonical test lanes | [Safety](security/safety.md), [Support](support.md), [Versioning](release/versioning_and_channels.md), [Testing](testing.md) |
+| Simulation | Event-sourced worlds, deterministic replay verification, leagues, ratings, hosted observation, and benchmark artifacts | [Benchmark quickstart](benchmarks/quickstart.md), [Platform guarantees](benchmarks/platform.md) |
 
-## Reality Check
+## Hermes comparison
 
-Lemon is pre-1.0. The source install path, release profiles, product smoke, docs
-site, support bundle, and Web operations views are being hardened toward the
-stable launch goal.
+Lemon's current runtime closes several old Hermes gaps: `execute_code`,
+progressive tool disclosure, three-way interruption, provider/credential
+failover, browser automation, and high-quality cron internals are implemented.
+The largest remaining differences are product integration and usability:
 
-What is ready enough to evaluate:
+- Hermes has a native desktop, multi-profile Bot Mode, a broad management Web
+  dashboard, and multi-connection roster. Lemon has strong TUI/control-plane/node
+  primitives but no equivalent integrated product shell.
+- Hermes exposes an extensive coherent CLI. Lemon's packaged CLI covers setup,
+  model, gateway, doctor, config, secrets, and channels; additional operations
+  are split across the source wrapper, Mix tasks, TUI, and JSON-RPC.
+- Hermes has richer session search/export/archive/prune, update/backup/profile
+  lifecycle, external secret sources, and an outbound credential-injection
+  proxy.
+- Hermes documentation has a more complete install-to-daily-use information
+  architecture and many more task guides. Lemon's architecture and proof docs
+  are deep, but some user workflows remain under-documented.
 
-- source install on a developer machine
-- provider configuration through setup docs and secrets commands
-- local runtime startup through `./bin/lemon-tui` or `./bin/lemon`
-- doctor diagnostics and redacted support bundles
-- Hermes-class parity tracking through the launch scorecard
-- first-party text web search/fetch behavior in supported agent runs
-- control-plane and doctor introspection for runtime health, recent runs, run
-  detail, and approvals (the standalone Web operations dashboard was removed; the
-  Web surface is the session UI)
-- preview operator-controlled cron and scheduled automation through first-party
-  runtime/Web paths
-- release artifact profiles verified locally
+The current, source-pinned comparison is the
+[Hermes Functionality and UX Gap Audit](plans/lemon-hermes-gap-audit-2026-08-11.md).
+It records the exact official Hermes and Lemon revisions, corrections to stale
+findings, evidence for every status, and prioritized vertical implementation
+bundles. The older
+[May feature matrix](plans/lemon-hermes-feature-parity-matrix-2026-05-12.md) is
+historical evidence only.
 
-Current BEAM parity targets that are not yet stable public promises:
+## What is ready to evaluate
 
-- final launch screenshots and videos
-- ACP editor integration or OpenAI-compatible Chat Completions/Responses API
-  parity
-- stable checkpoint/rollback beyond the preview file-tool boundary
-- persistent `/goal`-style continuation loops
-- durable multi-agent kanban boards
-- LSP semantic diagnostics after file edits
-- production-grade cron scheduling guarantees or unrestricted model-facing cron
-  management
-- first-class browser automation, media generation, image analysis, or voice/TTS
-  behavior
-- provider routing, fallback providers, credential pools, and profile
-  distribution parity
-- full Web operations coverage for skills, logs, channels, and deeper config
-- broad clean-container or clean-VM install matrix
-- hosted service support
-- Windows-native support outside WSL experimentation
+- verified one-line release installation on documented macOS and Linux targets
+- idempotent first-run setup and provider onboarding
+- the Bun terminal UI and Phoenix session Web UI
+- stable Telegram and Discord text-first support
+- durable sessions, streaming, tools, approvals, queues, memory, and skills
+- provider fallback and credential-pool resilience
+- browser, media, execute-code, LSP, checkpoint, API, ACP, MCP, and WASM preview
+  surfaces behind their documented gates
+- cron, heartbeats, monitor jobs, goals, and kanban through control-plane and
+  runtime surfaces
+- local and authenticated named-node agent execution
+- doctor diagnostics, support bundles, readiness/proof commands, release
+  profiles, and deterministic LemonSim demos
+
+## Important current limits
+
+Do not choose Lemon yet if your requirement depends on:
+
+- a polished native desktop for non-technical users
+- native Windows, Nix/NixOS, Android/Termux, or broad older-Linux installation
+- a management Web dashboard for configuration, sessions, cron, skills, memory,
+  providers, nodes, and logs
+- isolated user-created profiles/bots with clone/export/delete and group-chat UX
+- complete session search/export/archive/pin/prune workflows
+- an integrated update-plan/rollback and whole-data backup/restore lifecycle
+- 1Password/Bitwarden/command-backed secret sources or a general egress
+  credential broker
+- a hosted managed service
 - Discord behavior beyond the live-proven text-first and file-delivery boundary
-- production support for third-party plugins or unofficial MCP servers
 
-These are not rejected features. They are the next parity surfaces to build with
-BEAM supervision, explicit state machines, telemetry, support bundles, and live
-proof before broad public claims.
+These are active parity targets, not rejected features. They need end-to-end
+product surfaces, documentation, safety policy, and live-instance proof before
+broad support claims.
 
-## When Lemon Is the Right Fit
+## Evaluation path
 
-Use Lemon when you want:
-
-- a local-first assistant runtime that can work inside real repositories
-- a multi-engine setup instead of committing to one coding CLI
-- durable project memory and reusable skills
-- channel access without losing runtime observability
-- a supportable self-hosted agent system with quality gates
-
-Do not pick Lemon yet if you need:
-
-- a fully managed hosted assistant
-- one-click public binary installation across all operating systems
-- a non-technical end-user product
-
-## Evaluation Path
-
-1. Install from [Install Lemon](install.md).
-2. Run `mix lemon.doctor`.
-3. Start the TUI with `./bin/lemon-tui`.
-4. Exercise a deterministic flow from [Demo Lemon](demo.md).
-5. Check current gaps in the [Mainstream Readiness Plan](plans/lemon-1.0-mainstream-readiness.md).
-6. Use [Support](support.md) if you hit setup or runtime issues.
+1. Follow [Install Lemon](install.md).
+2. Complete [Setup](user-guide/setup.md).
+3. Start the TUI and run [Demo Lemon](demo.md).
+4. Exercise the workflows relevant to you, then inspect the
+   [current Hermes gap audit](plans/lemon-hermes-gap-audit-2026-08-11.md).
+5. Use [Support](support.md) for diagnostics and a redacted support bundle.

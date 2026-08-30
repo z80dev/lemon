@@ -24,10 +24,19 @@ npm ci
 npm audit --audit-level=high
 npm run build
 
+for asset in llms.txt llms-full.txt; do
+  if [ ! -s "$DOCS_COPY/.vitepress/dist/$asset" ]; then
+    echo "missing generated machine-readable docs asset: $asset" >&2
+    exit 1
+  fi
+done
+
+cd "$ROOT/docs"
+
 find . -name "*.md" \
   ! -path "./.vitepress/*" \
   ! -path "./node_modules/*" \
-  | xargs npx markdown-link-check \
+  | xargs "$DOCS_COPY/node_modules/.bin/markdown-link-check" \
       --config .mlc.json \
       --quiet
 
