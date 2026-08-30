@@ -32,7 +32,9 @@ defmodule LemonAutomation.GoalJudge.RouterRunner do
              waiter_mod: waiter_mod,
              bus_mod: Map.get(context, :bus_mod, LemonCore.Bus),
              timeout_ms: timeout_ms,
-             wait_opts: wait_opts
+             wait_opts: wait_opts,
+             on_submitted: Map.get(context, :on_submitted),
+             on_terminal: Map.get(context, :on_terminal)
            ),
          {:ok, verdict} <- parse_verdict(output) do
       {:ok, verdict}
