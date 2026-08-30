@@ -358,6 +358,7 @@ when to render the full payload.
 | `node.rename` | write | Rename a node plus summary and cleanup flags |
 | `node.invoke` | write | Invoke a method on one authenticated live node plus arg/result cleanup summary |
 | `node.invoke.result` | invoke | Owning node reports an invocation result; another node cannot settle it |
+| `node.invoke.control.result` | invoke | Owning node acknowledges steer/redirect against the exact live invocation and run identity |
 | `node.event` | event | Node sends an event (node-only) plus payload summary and cleanup flags |
 | `node.pair.request` | pairing | Request to pair a node plus pairing-code delivery summary |
 | `node.pair.list` | pairing | List pending pairing requests plus summary and cleanup flags |
@@ -371,7 +372,12 @@ identities but derives status from `LemonCore.NodeRegistry`, so only a currently
 authenticated WebSocket can receive work. Pending invocations are bound to one
 node ID, fail when the node disconnects, and accept explicit targeted
 cancellation. Registry timeouts fail the source recipient but do not by
-themselves claim that destination execution was cancelled.
+themselves claim that destination execution was cancelled. Steer and redirect
+are separate invocation-bound controls: the registry pins each one to the
+original node connection, credential generation, invocation ID, and run ID,
+and reports acceptance only after the worker applies the bounded text to its
+live native executor context. Terminal races, disconnects, and acknowledgement
+timeouts are rejected rather than guessed successful.
 
 An approved pairing ID may reissue a fresh one-time challenge for its existing
 durable node identity, allowing the joining worker to recover from socket loss

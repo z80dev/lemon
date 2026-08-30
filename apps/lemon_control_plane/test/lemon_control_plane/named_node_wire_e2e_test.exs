@@ -25,6 +25,16 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
       send(context.runner_pid, :stop)
       :ok
     end
+
+    def steer(context, text) do
+      send(Process.whereis(__MODULE__), {:fake_executor_steered, context, text})
+      :ok
+    end
+
+    def redirect(context, text) do
+      send(Process.whereis(__MODULE__), {:fake_executor_redirected, context, text})
+      :ok
+    end
   end
 
   setup do
@@ -116,6 +126,26 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
     assert request.cwd == tmp_dir
     assert run_opts == %{cwd: tmp_dir, run_id: "wire-run-#{suffix}"}
 
+    assert {:ok, control_id} =
+             LemonCore.NodeRegistry.control(invoke_id, :steer, "stay on the wire",
+               recipient: self(),
+               timeout_ms: 3_000
+             )
+
+    assert_receive {:fake_executor_steered, ^context, "stay on the wire"}, 3_000
+
+    assert_receive {:lemon_node_control_result, ^control_id, ^invoke_id, :ok}, 3_000
+
+    assert {:ok, redirect_id} =
+             LemonCore.NodeRegistry.control(invoke_id, :redirect, "take the safer route",
+               recipient: self(),
+               timeout_ms: 3_000
+             )
+
+    assert_receive {:fake_executor_redirected, ^context, "take the safer route"}, 3_000
+
+    assert_receive {:lemon_node_control_result, ^redirect_id, ^invoke_id, :ok}, 3_000
+
     send(worker, {:engine_delta, run_ref, "wire "})
     send(worker, {:engine_delta, run_ref, "complete"})
 
@@ -137,6 +167,10 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
     assert get_in(result, ["completed", "answer"]) == "wire complete"
     assert get_in(result, ["completed", "usage", "input_tokens"]) == 3
     assert NodeStore.get_invocation(invoke_id) == nil
+
+    assert {:error, :terminal} =
+             LemonCore.NodeRegistry.control(invoke_id, :steer, "too late")
+
     send(context.runner_pid, :stop)
 
     assert {:ok, cancel_id} =

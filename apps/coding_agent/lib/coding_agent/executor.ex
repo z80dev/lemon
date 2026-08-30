@@ -50,7 +50,9 @@ defmodule CodingAgent.Executor do
   def cancel(_ctx), do: :ok
 
   @impl true
-  def steer(%{runner_module: RemoteSessionRunner}, _text), do: {:error, :unsupported}
+  def steer(%{runner_pid: pid, runner_module: RemoteSessionRunner}, text) when is_pid(pid) do
+    RemoteSessionRunner.steer(pid, text)
+  end
 
   def steer(%{runner_pid: pid}, text) when is_pid(pid) do
     SessionRunner.steer(pid, text)
@@ -59,7 +61,9 @@ defmodule CodingAgent.Executor do
   def steer(_ctx, _text), do: {:error, :unsupported}
 
   @impl true
-  def redirect(%{runner_module: RemoteSessionRunner}, _text), do: {:error, :unsupported}
+  def redirect(%{runner_pid: pid, runner_module: RemoteSessionRunner}, text) when is_pid(pid) do
+    RemoteSessionRunner.redirect(pid, text)
+  end
 
   def redirect(%{runner_pid: pid}, text) when is_pid(pid) do
     SessionRunner.redirect(pid, text)

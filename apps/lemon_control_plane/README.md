@@ -539,6 +539,7 @@ when to render the full payload.
 | `node.rename` | write | Rename a node plus summary and cleanup flags |
 | `node.invoke` | write | Invoke a method on one authenticated live node plus arg/result cleanup summary |
 | `node.invoke.result` | invoke | Owning node reports an invocation result; results from another node are rejected |
+| `node.invoke.control.result` | invoke | Owning node acknowledges steer/redirect against the exact live invocation and run |
 | `node.event` | event | Node sends an event (node-only) plus payload summary and cleanup flags |
 | `node.pair.request` | pairing | Request to pair a node plus pairing-code delivery summary |
 | `node.pair.list` | pairing | List pending pairing requests plus summary and cleanup flags |
@@ -551,7 +552,11 @@ the same uniqueness while connections are online. A durable record alone is
 not executable: `node.invoke` fails with `UNAVAILABLE` unless its authenticated
 WebSocket is registered. Pending invocations are bound to their node ID, fail
 when that connection disconnects, and support targeted `node.invoke.cancel`
-delivery through the internal registry path.
+delivery through the internal registry path. Invocation-bound `steer` and
+`redirect` carry only bounded UTF-8 correction text and exact
+control/invocation/run identity. The controller reports success only after the
+owning authenticated worker applies the operation to its live native executor
+context.
 
 For coding delegation the supported worker method is versioned
 `coding_agent.run`. The WebSocket payload contains JSON-safe execution request

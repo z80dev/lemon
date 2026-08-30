@@ -17,8 +17,18 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
   @engine "lemon"
   @method "coding_agent.run"
   @default_timeout_ms 30 * 60 * 1_000
+  @default_control_timeout_ms 5_000
 
-  defstruct [:node, :invoke_id, :sink_pid, :run_ref, :request, :timeout_ms]
+  defstruct [
+    :node,
+    :invoke_id,
+    :sink_pid,
+    :run_ref,
+    :request,
+    :timeout_ms,
+    :control_timeout_ms,
+    pending_controls: %{}
+  ]
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
@@ -26,6 +36,19 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
     GenServer.call(pid, {:cancel, reason})
   catch
     :exit, _ -> :ok
+  end
+
+  @spec steer(pid(), String.t()) :: :ok | {:error, term()}
+  def steer(pid, text), do: control(pid, :steer, text)
+
+  @spec redirect(pid(), String.t()) :: :ok | {:error, term()}
+  def redirect(pid, text), do: control(pid, :redirect, text)
+
+  defp control(pid, operation, text) do
+    GenServer.call(pid, {:control, operation, text}, @default_control_timeout_ms + 2_000)
+  catch
+    :exit, {:timeout, _call} -> {:error, :timeout}
+    :exit, _reason -> {:error, :terminal}
   end
 
   @impl true
@@ -37,11 +60,14 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
     run_opts = Keyword.get(opts, :opts, %{})
     timeout_ms = get_opt(run_opts, :remote_timeout_ms) || @default_timeout_ms
 
+    control_timeout_ms = control_timeout(get_opt(run_opts, :remote_control_timeout_ms))
+
     {:ok,
      %__MODULE__{
        node: node,
        request: request,
        timeout_ms: timeout_ms,
+       control_timeout_ms: control_timeout_ms,
        sink_pid: sink_pid,
        run_ref: run_ref
      }, {:continue, :invoke}}
@@ -78,7 +104,29 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
   @impl true
   def handle_call({:cancel, reason}, _from, state) do
     :ok = NodeRegistry.cancel(state.invoke_id, reason)
+    state = reply_pending_controls(state, {:error, :cancelled})
     {:stop, :normal, :ok, state}
+  end
+
+  def handle_call({:control, _operation, _text}, _from, %{invoke_id: nil} = state) do
+    {:reply, {:error, :not_ready}, state}
+  end
+
+  def handle_call({:control, operation, text}, from, state) do
+    case NodeRegistry.control(state.invoke_id, operation, text,
+           recipient: self(),
+           timeout_ms: state.control_timeout_ms
+         ) do
+      {:ok, control_id} ->
+        pending_controls = Map.put(state.pending_controls, control_id, from)
+        {:noreply, %{state | pending_controls: pending_controls}}
+
+      {:error, :terminal} ->
+        {:reply, {:error, :terminal}, state}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
   end
 
   @impl true
@@ -88,7 +136,7 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
       {:error, reason} -> emit_error(state, reason)
     end
 
-    {:stop, :normal, state}
+    {:stop, :normal, reply_pending_controls(state, {:error, :terminal})}
   end
 
   def handle_info(
@@ -96,7 +144,21 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
         %{invoke_id: invoke_id} = state
       ) do
     emit_error(state, reason)
-    {:stop, :normal, state}
+    {:stop, :normal, reply_pending_controls(state, {:error, :terminal})}
+  end
+
+  def handle_info(
+        {:lemon_node_control_result, control_id, invoke_id, result},
+        %{invoke_id: invoke_id} = state
+      ) do
+    case Map.pop(state.pending_controls, control_id) do
+      {nil, _pending_controls} ->
+        {:noreply, state}
+
+      {from, pending_controls} ->
+        GenServer.reply(from, result)
+        {:noreply, %{state | pending_controls: pending_controls}}
+    end
   end
 
   def handle_info(_message, state), do: {:noreply, state}
@@ -141,5 +203,21 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
       value when is_integer(value) and value > 0 -> value
       _ -> LemonCore.JSONPayload.default_max_bytes()
     end
+  end
+
+  # Keep the public GenServer call deadline above every registry acknowledgement
+  # deadline so callers receive the registry's explicit timeout result.
+  defp control_timeout(value)
+       when is_integer(value) and value > 0 and value <= @default_control_timeout_ms,
+       do: value
+
+  defp control_timeout(_value), do: @default_control_timeout_ms
+
+  defp reply_pending_controls(state, result) do
+    Enum.each(state.pending_controls, fn {_control_id, from} ->
+      GenServer.reply(from, result)
+    end)
+
+    %{state | pending_controls: %{}}
   end
 end
