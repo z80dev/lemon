@@ -151,9 +151,9 @@ defmodule LemonChannels.CommandCatalog do
       "command" => "/bg",
       "aliases" => [],
       "description" =>
-        "Run a prompt in an independent background Lemon session while this session stays available.",
+        "Start or inspect an independent background Lemon session while this session stays available.",
       "category" => "session",
-      "arguments" => "<prompt>",
+      "arguments" => "<prompt> | list | status <id> | result <id> | cancel <id>",
       "argumentMode" => "text",
       "busyPolicy" => "dispatch",
       "readOnly" => false,

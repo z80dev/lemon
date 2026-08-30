@@ -11,6 +11,10 @@ defmodule LemonChannels.PortableCommand do
   alias LemonCore.{RouterBridge, Store, UsageDiagnostics}
 
   @default_limit 10
+  @public_statuses ~w(
+    accepted active blocked cancelled completed error failed idle killed lost
+    pending queued recorded running tracking_lost
+  )
 
   @type context :: %{
           optional(:session_key) => binary(),
@@ -30,7 +34,7 @@ defmodule LemonChannels.PortableCommand do
       {:ok, %{"name" => "agents"}} -> {:ok, render_tasks()}
       {:ok, %{"name" => "compress"}} -> compact(context)
       {:ok, %{"name" => name}} when name in ["commands", "help"] -> {:ok, render_help(args)}
-      {:ok, %{"name" => "bg"}} -> start_background(args, context)
+      {:ok, %{"name" => "bg"}} -> background(args, context)
       {:ok, %{"name" => "btw"}} -> ask_side_question(args, context)
       {:ok, command_meta} -> {:error, usage(command_meta)}
       :error -> {:error, "Unknown command. Use /commands to see the portable Lemon commands."}
@@ -68,7 +72,7 @@ defmodule LemonChannels.PortableCommand do
 
   defp recent_line({run_id, run}) when is_map(run) do
     summary = get(run, :summary) || %{}
-    status = get(summary, :status) || get(summary, :reason) || "recorded"
+    status = get(summary, :status) || "recorded"
     "Latest: #{normalize_label(status)} (#{short_id(run_id)})"
   end
 
@@ -183,7 +187,29 @@ defmodule LemonChannels.PortableCommand do
     end
   end
 
-  defp start_background("", _context), do: {:error, "Usage: /bg <prompt>"}
+  defp background("", _context), do: {:error, background_usage()}
+
+  defp background(args, context) do
+    case String.split(args, ~r/\s+/, parts: 2) do
+      ["list"] ->
+        list_background()
+
+      ["status", id] ->
+        with_background_id(id, &background_status/1)
+
+      ["result", id] ->
+        with_background_id(id, &background_result/1)
+
+      ["cancel", id] ->
+        with_background_id(id, &cancel_background/1)
+
+      [command] when command in ["status", "result", "cancel"] ->
+        {:error, background_usage()}
+
+      _ ->
+        start_background(args, context)
+    end
+  end
 
   defp start_background(prompt, context) do
     opts =
@@ -194,13 +220,141 @@ defmodule LemonChannels.PortableCommand do
       |> maybe_put(:thinking_level, context[:thinking_level])
 
     case runtime_call(:background_start, [prompt, opts], {:error, :unavailable}) do
-      {:ok, %{id: id}} -> {:ok, "Background run started: #{short_id(id)}"}
-      {:ok, %{"id" => id}} -> {:ok, "Background run started: #{short_id(id)}"}
-      {:error, :unavailable} -> {:error, "Background runs are unavailable in this Lemon runtime."}
-      {:error, reason} -> {:error, "Background run failed to start: #{normalize_label(reason)}"}
-      _ -> {:error, "Background run failed to start."}
+      {:ok, %{id: id}} when is_binary(id) ->
+        background_started_result(id)
+
+      {:ok, %{"id" => id}} when is_binary(id) ->
+        background_started_result(id)
+
+      {:error, :unavailable} ->
+        {:error, "Background runs are unavailable in this Lemon runtime."}
+
+      {:error, _reason} ->
+        {:error, "Background run could not be started. Check Lemon runtime logs."}
+
+      _ ->
+        {:error, "Background run failed to start."}
     end
   end
+
+  defp list_background do
+    case runtime_call(:background_list, [[]], {:error, :unavailable}) do
+      runs when is_list(runs) ->
+        {:ok, render_background_list(runs)}
+
+      {:error, :unavailable} ->
+        {:error, "Background runs are unavailable in this Lemon runtime."}
+
+      {:error, _reason} ->
+        {:error, "Background runs could not be listed. Check Lemon runtime logs."}
+
+      _ ->
+        {:error, "Background runs could not be listed."}
+    end
+  end
+
+  defp background_status(id) do
+    case runtime_call(:background_status, [id], {:error, :unavailable}) do
+      {:ok, status} when is_map(status) -> {:ok, render_background_status(status, id)}
+      {:error, :not_found} -> {:error, "Background run not found."}
+      {:error, :unavailable} -> {:error, "Background runs are unavailable in this Lemon runtime."}
+      {:error, _reason} -> {:error, "Background status is unavailable. Check Lemon runtime logs."}
+      _ -> {:error, "Background status is unavailable."}
+    end
+  end
+
+  defp background_result(id) do
+    case runtime_call(:background_result, [id], {:error, :unavailable}) do
+      {:ok, answer} when is_binary(answer) -> {:ok, "Background result #{id}\n#{answer}"}
+      {:error, :not_ready} -> {:ok, "Background run #{id} is not finished yet."}
+      {:error, :not_found} -> {:error, "Background run not found."}
+      {:error, :cancelled} -> {:ok, "Background run #{id} was cancelled."}
+      {:error, :lost} -> {:ok, "Background run #{id} was interrupted before completion."}
+      {:error, :unavailable} -> {:error, "Background runs are unavailable in this Lemon runtime."}
+      {:error, _reason} -> {:error, "Background result is unavailable. Check Lemon runtime logs."}
+      _ -> {:error, "Background result is unavailable."}
+    end
+  end
+
+  defp cancel_background(id) do
+    case runtime_call(:background_cancel, [id], {:error, :unavailable}) do
+      :ok ->
+        {:ok, "Cancelled background run #{id}."}
+
+      {:error, :not_found} ->
+        {:error, "Background run not found."}
+
+      {:error, :already_terminal} ->
+        {:ok, "Background run #{id} has already finished."}
+
+      {:error, :unavailable} ->
+        {:error, "Background runs are unavailable in this Lemon runtime."}
+
+      {:error, _reason} ->
+        {:error, "Background run could not be cancelled. Check Lemon runtime logs."}
+
+      _ ->
+        {:error, "Background run could not be cancelled."}
+    end
+  end
+
+  defp render_background_list(runs) do
+    rows =
+      runs
+      |> Enum.map(&background_row/1)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.take(@default_limit)
+
+    case rows do
+      [] -> "No background runs are recorded."
+      _ -> Enum.join(["Background runs (#{length(rows)})" | rows], "\n")
+    end
+  end
+
+  defp background_row(run) when is_map(run) do
+    with id when is_binary(id) <- get(run, :id),
+         true <- valid_background_id?(id) do
+      "• #{id} — #{normalize_label(get(run, :status) || "recorded")}"
+    else
+      _ -> nil
+    end
+  end
+
+  defp background_row(_), do: nil
+
+  defp render_background_status(status, requested_id) do
+    lifecycle = normalize_label(get(status, :status) || "recorded")
+    result = if get(status, :result_available) == true, do: "available", else: "not available"
+
+    "Background run #{requested_id}\nStatus: #{lifecycle}\nResult: #{result}"
+  end
+
+  defp background_started(id) do
+    "Background run started: #{id}\n" <>
+      "Use /bg status #{id}, /bg result #{id}, or /bg cancel #{id}."
+  end
+
+  defp background_started_result(id) do
+    if valid_background_id?(id) do
+      {:ok, background_started(id)}
+    else
+      {:error, "Background run started without a usable id. Check Lemon runtime logs."}
+    end
+  end
+
+  defp background_usage do
+    "Usage: /bg <prompt> | /bg list | /bg status <id> | /bg result <id> | /bg cancel <id>"
+  end
+
+  defp with_background_id(id, fun) when is_function(fun, 1) do
+    if valid_background_id?(id), do: fun.(id), else: {:error, "Background run id is invalid."}
+  end
+
+  defp valid_background_id?(id) when is_binary(id) do
+    byte_size(id) <= 128 and String.match?(id, ~r/^[A-Za-z0-9_-]+$/)
+  end
+
+  defp valid_background_id?(_), do: false
 
   defp ask_side_question("", _context), do: {:error, "Usage: /btw <question>"}
 
@@ -215,8 +369,8 @@ defmodule LemonChannels.PortableCommand do
         {:error, :unavailable} ->
           {:error, "Side questions are unavailable in this Lemon runtime."}
 
-        {:error, reason} ->
-          {:error, "Side question failed: #{normalize_label(reason)}"}
+        {:error, _reason} ->
+          {:error, "Side question could not be answered. Check Lemon runtime logs."}
 
         _ ->
           {:error, "Side question failed."}
@@ -267,10 +421,10 @@ defmodule LemonChannels.PortableCommand do
     do: value |> Atom.to_string() |> normalize_label()
 
   defp normalize_label(value) when is_binary(value) do
-    value |> String.replace("_", " ") |> bounded_text(60)
+    if value in @public_statuses, do: String.replace(value, "_", " "), else: "recorded"
   end
 
-  defp normalize_label(value), do: value |> inspect() |> bounded_text(60)
+  defp normalize_label(_value), do: "recorded"
 
   defp bounded_text(value, max) when is_binary(value) do
     value |> String.replace(~r/\s+/, " ") |> String.trim() |> String.slice(0, max)

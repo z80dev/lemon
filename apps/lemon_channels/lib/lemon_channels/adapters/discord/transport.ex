@@ -815,11 +815,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   defp handle_portable_interaction(interaction, state, command) do
-    session_key = interaction_session_key(interaction, state)
-    channel_id = interaction |> map_get(:channel_id) |> parse_id()
-    thread_id = interaction_thread_id(interaction)
-    scope = %ChatScope{transport: :discord, chat_id: channel_id, topic_id: thread_id}
-
     args =
       case command do
         "help" -> option_value(interaction, "filter")
@@ -828,23 +823,34 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         _ -> ""
       end
 
-    context = %{
-      session_key: session_key,
-      cwd: BindingResolver.resolve_cwd(scope)
-    }
+    inbound = interaction_to_inbound(interaction, "/#{command} #{args}", state)
 
-    run = fn ->
-      case LemonChannels.PortableCommand.handle(command, args, context) do
-        {:ok, result} -> result
-        {:error, message} -> message
+    if allowed_inbound?(inbound, state) and binding_allowed?(inbound, state) do
+      session_key = inbound.meta[:session_key]
+      channel_id = inbound.meta[:channel_id]
+      thread_id = inbound.meta[:thread_id]
+      scope = %ChatScope{transport: :discord, chat_id: channel_id, topic_id: thread_id}
+
+      context = %{
+        session_key: session_key,
+        cwd: BindingResolver.resolve_cwd(scope)
+      }
+
+      run = fn ->
+        case LemonChannels.PortableCommand.handle(command, args, context) do
+          {:ok, result} -> result
+          {:error, message} -> message
+        end
       end
-    end
 
-    if command == "btw" do
-      respond_ephemeral(interaction, "Answering side question…")
-      _ = Task.start(fn -> send_followup(interaction, run.()) end)
+      if command == "btw" do
+        respond_ephemeral(interaction, "Answering side question…")
+        _ = Task.start(fn -> send_followup(interaction, run.()) end)
+      else
+        respond_ephemeral(interaction, run.())
+      end
     else
-      respond_ephemeral(interaction, run.())
+      respond_ephemeral(interaction, "This command is not available in this Discord location.")
     end
 
     state

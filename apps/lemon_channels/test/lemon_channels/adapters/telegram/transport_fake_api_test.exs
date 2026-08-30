@@ -48,6 +48,14 @@ defmodule LemonChannels.Adapters.Telegram.TransportFakeApiTest do
     end
   end
 
+  defmodule FakeBackgroundRuntime do
+    def background_start("index the repository", _opts) do
+      {:ok, %{id: "bg_telegram_full_identifier", status: :queued}}
+    end
+
+    def background_result("bg_telegram_full_identifier"), do: {:ok, "Telegram checks passed."}
+  end
+
   setup do
     stop_transport()
     FakeAPI.reset()
@@ -145,6 +153,72 @@ defmodule LemonChannels.Adapters.Telegram.TransportFakeApiTest do
                )
 
       assert text =~ "Information"
+      refute_received {:inbound, _msg}
+    end
+
+    test "portable /bg returns a full id and retrieves its result through Telegram" do
+      chat_id = 310_010
+      gateway_config_key = :"Elixir.LemonGateway.Config"
+      previous_gateway_config = Application.get_env(:lemon_gateway, gateway_config_key)
+      previous_runtime = Application.get_env(:lemon_control_plane, :agent_runtime_provider)
+
+      Application.put_env(:lemon_gateway, gateway_config_key, %{
+        telegram: %{bot_token: "fake-token", api_mod: FakeAPI}
+      })
+
+      Application.put_env(
+        :lemon_control_plane,
+        :agent_runtime_provider,
+        FakeBackgroundRuntime
+      )
+
+      on_exit(fn ->
+        if previous_gateway_config do
+          Application.put_env(:lemon_gateway, gateway_config_key, previous_gateway_config)
+        else
+          Application.delete_env(:lemon_gateway, gateway_config_key)
+        end
+
+        if previous_runtime do
+          Application.put_env(:lemon_control_plane, :agent_runtime_provider, previous_runtime)
+        else
+          Application.delete_env(:lemon_control_plane, :agent_runtime_provider)
+        end
+      end)
+
+      assert {:ok, _pid} = start_transport(%{allowed_chat_ids: [chat_id]})
+
+      _update = FakeAPI.simulate_message(chat_id, "/bg index the repository")
+
+      assert {:ok, %{fun: :send_message, args: [^chat_id, receipt, _, _]}} =
+               FakeAPI.await_send(
+                 fn
+                   %{fun: :send_message, args: [^chat_id, text, _, _]} ->
+                     String.contains?(text, "Background run started: bg_telegram_full_identifier")
+
+                   _ ->
+                     false
+                 end,
+                 2_000
+               )
+
+      assert receipt =~ "/bg result bg_telegram_full_identifier"
+
+      _update = FakeAPI.simulate_message(chat_id, "/bg result bg_telegram_full_identifier")
+
+      assert {:ok, %{fun: :send_message, args: [^chat_id, result, _, _]}} =
+               FakeAPI.await_send(
+                 fn
+                   %{fun: :send_message, args: [^chat_id, text, _, _]} ->
+                     String.contains?(text, "Background result bg_telegram_full_identifier")
+
+                   _ ->
+                     false
+                 end,
+                 2_000
+               )
+
+      assert result =~ "Telegram checks passed."
       refute_received {:inbound, _msg}
     end
 

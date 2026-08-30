@@ -20,6 +20,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   control plane. Background runs are isolated full-tool sessions; side
   questions use bounded no-tools transcript snapshots without changing parent
   history.
+- Channel `/bg` receipts now retain the complete durable job id and Telegram and
+  Discord expose `/bg list`, `/bg status <id>`, `/bg result <id>`, and `/bg
+  cancel <id>`. Discord portable slash commands also enforce configured
+  guild/channel and binding policy before execution, and channel command errors
+  no longer render arbitrary internal runtime reasons.
 - Hermes-compatible `/bg` backend sessions with durable lifecycle ids,
   isolated full-tool execution, status/result/list/cancel APIs, and
   restart-safe lost-run reporting; plus bounded `/btw` no-tools queries over

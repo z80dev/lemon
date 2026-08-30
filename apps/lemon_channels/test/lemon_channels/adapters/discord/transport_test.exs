@@ -41,6 +41,24 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
     def unreact(_channel_id, _message_id, _emoji), do: {:ok}
   end
 
+  defmodule FakePortableRuntime do
+    def background_start("index the repository", _opts) do
+      notify(:background_start)
+      {:ok, %{id: "bg_discord_full_identifier", status: :queued}}
+    end
+
+    def background_result("bg_discord_full_identifier") do
+      notify(:background_result)
+      {:ok, "Discord checks passed."}
+    end
+
+    defp notify(event) do
+      if pid = :persistent_term.get({__MODULE__, :test_pid}, nil) do
+        send(pid, {event, self()})
+      end
+    end
+  end
+
   @gateway_config_key :"Elixir.LemonGateway.Config"
 
   test "ignores messages authored by the bot" do
@@ -309,6 +327,79 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
     assert hd(commands["bg"].options).required
     assert hd(commands["btw"].options).required
     refute hd(commands["help"].options).required
+  end
+
+  test "portable slash commands reject denied guilds" do
+    assert_portable_interaction_denied(%{
+      allowed_guild_ids: MapSet.new([999]),
+      allowed_channel_ids: nil,
+      deny_unbound_channels: false
+    })
+  end
+
+  test "portable slash commands reject denied channels" do
+    assert_portable_interaction_denied(%{
+      allowed_guild_ids: nil,
+      allowed_channel_ids: MapSet.new([999]),
+      deny_unbound_channels: false
+    })
+  end
+
+  test "portable slash commands reject unbound guild channels when configured" do
+    denied_interaction =
+      interaction("bg", option("prompt", "index the repository"), %{
+        channel_id: "1475727417372049999",
+        guild_id: "1475727417372049998"
+      })
+
+    assert_portable_interaction_denied(
+      %{
+        allowed_guild_ids: nil,
+        allowed_channel_ids: nil,
+        deny_unbound_channels: true
+      },
+      denied_interaction
+    )
+  end
+
+  test "portable /bg returns a full id and retrieves its result through Discord" do
+    with_portable_runtime(fn ->
+      with_interaction_responder(fn ->
+        start_interaction = interaction("bg", option("prompt", "index the repository"))
+        state = discord_message_state()
+
+        assert {:noreply, ^state} =
+                 Transport.handle_info(
+                   {:discord_event, {:INTERACTION_CREATE, start_interaction, nil}},
+                   state
+                 )
+
+        assert_receive {:background_start, _}
+
+        assert_receive {:interaction_response, ^start_interaction,
+                        %{type: 4, data: %{content: receipt, flags: 64}}}
+
+        assert receipt =~ "Background run started: bg_discord_full_identifier"
+        assert receipt =~ "/bg result bg_discord_full_identifier"
+
+        result_interaction =
+          interaction("bg", option("prompt", "result bg_discord_full_identifier"))
+
+        assert {:noreply, ^state} =
+                 Transport.handle_info(
+                   {:discord_event, {:INTERACTION_CREATE, result_interaction, nil}},
+                   state
+                 )
+
+        assert_receive {:background_result, _}
+
+        assert_receive {:interaction_response, ^result_interaction,
+                        %{type: 4, data: %{content: result, flags: 64}}}
+
+        assert result =~ "Background result bg_discord_full_identifier"
+        assert result =~ "Discord checks passed."
+      end)
+    end)
   end
 
   test "exports media slash command schema" do
@@ -970,6 +1061,47 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
       fun.()
     after
       Application.delete_env(:lemon_channels, :discord_interaction_responder)
+    end
+  end
+
+  defp assert_portable_interaction_denied(state_overrides, denied_interaction \\ nil) do
+    with_portable_runtime(fn ->
+      with_interaction_responder(fn ->
+        interaction =
+          denied_interaction || interaction("bg", option("prompt", "index the repository"))
+
+        state = Map.merge(discord_message_state(), state_overrides)
+
+        assert {:noreply, ^state} =
+                 Transport.handle_info(
+                   {:discord_event, {:INTERACTION_CREATE, interaction, nil}},
+                   state
+                 )
+
+        assert_receive {:interaction_response, ^interaction,
+                        %{
+                          type: 4,
+                          data: %{
+                            content: "This command is not available in this Discord location.",
+                            flags: 64
+                          }
+                        }}
+
+        refute_receive {:background_start, _}, 50
+      end)
+    end)
+  end
+
+  defp with_portable_runtime(fun) do
+    previous = Application.get_env(:lemon_control_plane, :agent_runtime_provider)
+    :persistent_term.put({FakePortableRuntime, :test_pid}, self())
+    Application.put_env(:lemon_control_plane, :agent_runtime_provider, FakePortableRuntime)
+
+    try do
+      fun.()
+    after
+      :persistent_term.erase({FakePortableRuntime, :test_pid})
+      restore_env(:lemon_control_plane, :agent_runtime_provider, previous)
     end
   end
 
