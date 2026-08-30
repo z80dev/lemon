@@ -237,6 +237,21 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
              submit_discord_text("/redirect use the staging db")
   end
 
+  test "/steer message prefix submits a steer queue mode" do
+    assert %{queue_mode: :steer, prompt: "focus on the current failure"} =
+             submit_discord_text("/steer focus on the current failure")
+  end
+
+  test "/queue message prefix submits a follow-up queue mode" do
+    assert %{queue_mode: :followup, prompt: "then run the full suite"} =
+             submit_discord_text("/queue then run the full suite")
+  end
+
+  test "/q is the Hermes-compatible queue alias" do
+    assert %{queue_mode: :followup, prompt: "summarize the diff"} =
+             submit_discord_text("/q summarize the diff")
+  end
+
   test "plain messages mentioning redirect keep the default queue mode" do
     run_request = submit_discord_text("please redirect the build output")
 
@@ -261,6 +276,27 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
     assert options["correction"].type == 3
     assert options["correction"].required
     assert "redirect" in Enum.map(Transport.slash_commands(), & &1.name)
+  end
+
+  test "exports Hermes-compatible queue and steer slash commands" do
+    commands = Map.new(Transport.slash_commands(), &{&1.name, &1})
+
+    assert commands["queue"].description == "Queue a follow-up prompt behind the active run"
+    assert commands["q"].description == "Alias for /queue"
+
+    assert commands["steer"].description ==
+             "Steer the active run with an additional instruction"
+
+    assert hd(commands["queue"].options).required
+    assert hd(commands["steer"].options).required
+  end
+
+  test "exports Hermes-compatible lifecycle aliases" do
+    commands = Map.new(Transport.slash_commands(), &{&1.name, &1})
+
+    assert commands["reset"].description == "Alias for /session new"
+    assert commands["reasoning"].description == "Alias for /thinking"
+    assert commands["stop"].description == "Alias for /cancel"
   end
 
   test "exports media slash command schema" do
@@ -398,7 +434,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
       assert proof["proof_object"] == "lemon.discord_slash_client_click"
       assert proof["proof_scope"] == "discord_slash_client_click_observed"
       assert proof["status"] == "completed"
-      assert proof["coverage"]["registered_command_count"] == 17
+      assert proof["coverage"]["registered_command_count"] == length(Transport.slash_commands())
       assert proof["coverage"]["client_click_command_count"] == 1
       assert proof["coverage"]["real_client_click_proof"] == true
       assert proof["details"]["command"] == "media"

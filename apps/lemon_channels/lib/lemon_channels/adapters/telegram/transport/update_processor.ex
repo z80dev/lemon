@@ -348,6 +348,12 @@ defmodule LemonChannels.Adapters.Telegram.Transport.UpdateProcessor do
         match_override?(trimmed, "steer") ->
           {:steer, strip_queue_prefix(trimmed, "/steer")}
 
+        match_override?(trimmed, "queue") ->
+          followup_override(trimmed, "/queue", text)
+
+        match_override?(trimmed, "q") ->
+          followup_override(trimmed, "/q", text)
+
         match_override?(trimmed, "followup") ->
           {:followup, strip_queue_prefix(trimmed, "/followup")}
 
@@ -376,6 +382,16 @@ defmodule LemonChannels.Adapters.Telegram.Transport.UpdateProcessor do
     case strip_queue_prefix(trimmed, prefix) do
       "" -> {nil, original_text}
       rest -> {:redirect, rest}
+    end
+  end
+
+  # Hermes-compatible `/queue` and `/q` enqueue a follow-up prompt behind the
+  # active turn. A bare command has no prompt, so leave it untouched for the
+  # command surface to render usage instead of submitting an empty run.
+  defp followup_override(trimmed, prefix, original_text) do
+    case strip_queue_prefix(trimmed, prefix) do
+      "" -> {nil, original_text}
+      rest -> {:followup, rest}
     end
   end
 

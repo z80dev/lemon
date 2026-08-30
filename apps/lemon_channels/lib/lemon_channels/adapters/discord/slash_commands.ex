@@ -66,6 +66,12 @@ defmodule LemonChannels.Adapters.Discord.SlashCommands do
     ]
   }
 
+  @reasoning_command %{
+    @thinking_command
+    | name: "reasoning",
+      description: "Alias for /thinking"
+  }
+
   @resume_command %{
     name: "resume",
     description: "Switch to a previous session",
@@ -84,10 +90,49 @@ defmodule LemonChannels.Adapters.Discord.SlashCommands do
     ]
   }
 
+  @queue_command %{
+    name: "queue",
+    description: "Queue a follow-up prompt behind the active run",
+    type: 1,
+    options: [
+      %{type: 3, name: "prompt", description: "Follow-up prompt", required: true}
+    ]
+  }
+
+  @q_command %{
+    @queue_command
+    | name: "q",
+      description: "Alias for /queue"
+  }
+
+  @steer_command %{
+    name: "steer",
+    description: "Steer the active run with an additional instruction",
+    type: 1,
+    options: [
+      %{type: 3, name: "prompt", description: "Steering instruction", required: true}
+    ]
+  }
+
   @cancel_command %{
     name: "cancel",
     description: "Cancel the current run",
     type: 1
+  }
+
+  @stop_command %{
+    @cancel_command
+    | name: "stop",
+      description: "Alias for /cancel"
+  }
+
+  @reset_command %{
+    name: "reset",
+    description: "Alias for /session new",
+    type: 1,
+    options: [
+      %{type: 3, name: "project", description: "Project path or ID", required: false}
+    ]
   }
 
   @checkpoint_command %{
@@ -493,9 +538,15 @@ defmodule LemonChannels.Adapters.Discord.SlashCommands do
       @session_command,
       @model_command,
       @thinking_command,
+      @reasoning_command,
       @resume_command,
       @redirect_command,
+      @queue_command,
+      @q_command,
+      @steer_command,
       @cancel_command,
+      @stop_command,
+      @reset_command,
       @checkpoint_command,
       @rollback_command,
       @goal_command,

@@ -38,8 +38,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CommandRouter do
 
   @spec handle_inbound_message(map(), map(), callbacks()) :: map()
   def handle_inbound_message(state, inbound, callbacks) do
-    text = inbound.message.text || ""
-    original_text = text
+    original_text = inbound.message.text || ""
+    text = Commands.canonicalize_portable_alias(original_text)
+    inbound = %{inbound | message: Map.put(inbound.message, :text, text)}
     bot_username = callbacks.bot_username
 
     {state, handled_model_picker?} =

@@ -217,6 +217,28 @@ defmodule LemonChannels.Adapters.Telegram.TransportUpdateProcessorTest do
     assert accepted.message.text == "look at the logs"
   end
 
+  test "/queue submits a follow-up prompt" do
+    assert {:ok, accepted} =
+             route_text("/queue run the focused tests", allow_queue_override: true)
+
+    assert accepted.meta[:queue_mode] == :followup
+    assert accepted.message.text == "run the focused tests"
+  end
+
+  test "/q is the Hermes-compatible queue alias" do
+    assert {:ok, accepted} = route_text("/q inspect the failure", allow_queue_override: true)
+
+    assert accepted.meta[:queue_mode] == :followup
+    assert accepted.message.text == "inspect the failure"
+  end
+
+  test "bare /queue remains available to the command surface" do
+    assert {:ok, accepted} = route_text("/queue", allow_queue_override: true)
+
+    refute accepted.meta[:queue_mode] == :followup
+    assert accepted.message.text == "/queue"
+  end
+
   test "text merely mentioning redirect is not an override" do
     assert {:ok, accepted} =
              route_text("please redirect the build output", allow_queue_override: true)

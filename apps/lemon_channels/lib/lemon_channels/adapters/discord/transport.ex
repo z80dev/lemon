@@ -455,7 +455,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   defp submit_inbound_now(state, inbound) do
-    {redirect_override, inbound} = apply_redirect_prefix(inbound)
+    {queue_override, inbound} = apply_queue_prefix(inbound)
 
     channel_id = inbound.meta[:channel_id]
     thread_id = inbound.meta[:thread_id]
@@ -493,7 +493,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       |> maybe_put(:model_scope, model_scope)
       |> maybe_put(:thinking_level, thinking_hint)
       |> maybe_put(:thinking_scope, thinking_scope)
-      |> maybe_put(:queue_mode, redirect_override)
+      |> maybe_put(:queue_mode, queue_override)
 
     # Track for reaction updates
     state =
@@ -573,27 +573,27 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     "Resume engine #{inspect(engine)} is not supported here. Use a Lemon resume token instead."
   end
 
-  # Text-prefix form of the /redirect slash command: `!redirect <correction>`
-  # or `/redirect <correction>`. A bare prefix carries no correction and is
-  # left alone. Ungated — Discord has no `allow_queue_override` equivalent.
-  defp apply_redirect_prefix(inbound) do
-    case parse_redirect_prefix(inbound.message && Map.get(inbound.message, :text)) do
-      {:redirect, rest} ->
-        {:redirect, %{inbound | message: Map.put(inbound.message, :text, rest)}}
+  # Text-prefix forms of the portable queue commands. A bare prefix carries no
+  # prompt and is left alone for the command surface to explain. Discord has no
+  # `allow_queue_override` gate, matching its existing /redirect behavior.
+  defp apply_queue_prefix(inbound) do
+    case parse_queue_prefix(inbound.message && Map.get(inbound.message, :text)) do
+      {queue_mode, rest} ->
+        {queue_mode, %{inbound | message: Map.put(inbound.message, :text, rest)}}
 
       :none ->
         {nil, inbound}
     end
   end
 
-  defp parse_redirect_prefix(text) when is_binary(text) do
+  defp parse_queue_prefix(text) when is_binary(text) do
     trimmed = String.trim_leading(text)
 
-    case Regex.run(~r/^[!\/]redirect(?:\s+(.*))?$/is, trimmed) do
-      [_, rest] ->
+    case Regex.run(~r/^(?:(!redirect)|\/(redirect|steer|queue|q))(?:\s+(.*))?$/is, trimmed) do
+      [_, bang_redirect, slash_command, rest] ->
         case String.trim_leading(rest) do
           "" -> :none
-          correction -> {:redirect, correction}
+          prompt -> {queue_mode_for_prefix(bang_redirect, slash_command), prompt}
         end
 
       _ ->
@@ -601,7 +601,19 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     end
   end
 
-  defp parse_redirect_prefix(_text), do: :none
+  defp parse_queue_prefix(_text), do: :none
+
+  defp queue_mode_for_prefix(bang_redirect, _slash_command)
+       when is_binary(bang_redirect) and bang_redirect != "",
+       do: :redirect
+
+  defp queue_mode_for_prefix(_bang_redirect, slash_command) do
+    case String.downcase(slash_command || "") do
+      "redirect" -> :redirect
+      "steer" -> :steer
+      command when command in ["queue", "q"] -> :followup
+    end
+  end
 
   # ============================================================================
   # Interaction Handling (Slash Commands + Component Interactions)
@@ -639,14 +651,32 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       "thinking" ->
         handle_thinking_interaction(interaction, state)
 
+      "reasoning" ->
+        handle_thinking_interaction(interaction, state)
+
       "resume" ->
         handle_resume_interaction(interaction, state)
 
       "redirect" ->
         handle_redirect_interaction(interaction, state)
 
+      "queue" ->
+        handle_queue_interaction(interaction, state, :followup)
+
+      "q" ->
+        handle_queue_interaction(interaction, state, :followup)
+
+      "steer" ->
+        handle_queue_interaction(interaction, state, :steer)
+
       "cancel" ->
         handle_cancel_interaction(interaction, state)
+
+      "stop" ->
+        handle_cancel_interaction(interaction, state)
+
+      "reset" ->
+        handle_new_session(interaction, state, option_value(interaction, "project"))
 
       "checkpoint" ->
         handle_checkpoint_interaction(interaction, state)
@@ -755,6 +785,28 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       end
     else
       respond_ephemeral(interaction, "Correction cannot be empty.")
+      state
+    end
+  end
+
+  defp handle_queue_interaction(interaction, state, queue_mode)
+       when queue_mode in [:followup, :steer] do
+    prompt = option_value(interaction, "prompt")
+
+    if is_binary(prompt) and String.trim(prompt) != "" do
+      response = if(queue_mode == :steer, do: "Steering…", else: "Queued as follow-up")
+      respond_ephemeral(interaction, response)
+
+      inbound = interaction_to_inbound(interaction, prompt, state)
+      inbound = %{inbound | meta: Map.put(inbound.meta || %{}, :queue_mode, queue_mode)}
+
+      if allowed_inbound?(inbound, state) and binding_allowed?(inbound, state) do
+        submit_inbound_now(state, inbound)
+      else
+        state
+      end
+    else
+      respond_ephemeral(interaction, "Prompt cannot be empty.")
       state
     end
   end

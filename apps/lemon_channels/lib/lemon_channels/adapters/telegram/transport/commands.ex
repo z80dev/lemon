@@ -71,6 +71,30 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Commands do
   # Telegram command parsing helpers
   # ---------------------------------------------------------------------------
 
+  @portable_aliases %{
+    "reset" => "new",
+    "reasoning" => "thinking",
+    "stop" => "cancel"
+  }
+
+  @doc """
+  Normalize Hermes-compatible aliases to Lemon's canonical channel commands.
+
+  Leading whitespace and Telegram's optional `@BotName` suffix are preserved.
+  """
+  def canonicalize_portable_alias(text) when is_binary(text) do
+    case Regex.run(~r/^(\s*)\/(reset|reasoning|stop)(@[\w_]+)?(?=\s|$)(.*)$/is, text) do
+      [_, leading, command, target, rest] ->
+        canonical = Map.fetch!(@portable_aliases, String.downcase(command))
+        leading <> "/" <> canonical <> (target || "") <> rest
+
+      _ ->
+        text
+    end
+  end
+
+  def canonicalize_portable_alias(text), do: text
+
   @doc """
   Check whether `text` starts with `/cmd` (optionally suffixed with `@BotName`).
   """
