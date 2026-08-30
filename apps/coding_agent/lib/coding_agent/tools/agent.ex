@@ -1127,7 +1127,8 @@ defmodule CodingAgent.Tools.Agent do
     timeout_ms = Map.get(params, "timeout_ms", @default_sync_timeout_ms)
     tool_policy = Map.get(params, "tool_policy")
     meta = Map.get(params, "meta")
-    delegated_cwd = Map.get(params, "cwd")
+    raw_delegated_cwd = Map.get(params, "cwd")
+    delegated_cwd = normalize_optional_string(raw_delegated_cwd)
     raw_node = Map.get(params, "node")
     node = normalize_optional_string(raw_node)
     model = Map.get(params, "model")
@@ -1170,7 +1171,7 @@ defmodule CodingAgent.Tools.Agent do
       not is_nil(meta) and not is_map(meta) ->
         {:error, "meta must be an object"}
 
-      not is_nil(delegated_cwd) and not is_binary(delegated_cwd) ->
+      not is_nil(raw_delegated_cwd) and not is_binary(raw_delegated_cwd) ->
         {:error, "cwd must be a string"}
 
       not is_nil(raw_node) and not is_binary(raw_node) ->

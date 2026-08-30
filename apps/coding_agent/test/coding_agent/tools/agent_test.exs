@@ -307,6 +307,29 @@ defmodule CodingAgent.Tools.AgentTest do
     assert req.meta[:remote_cwd_explicit] == false
     refute Map.has_key?(req.meta, :remote_cwd)
 
+    empty_cwd_result =
+      AgentTool.execute(
+        "call_named_node_empty_cwd",
+        %{
+          "agent_id" => "oracle",
+          "prompt" => "use the destination cwd",
+          "node" => "newphy",
+          "cwd" => "",
+          "async" => true,
+          "auto_followup" => false
+        },
+        nil,
+        nil,
+        "/source/lemon",
+        run_orchestrator: __MODULE__.AgentTestStubRunOrchestrator,
+        session_key: "agent:main:main"
+      )
+
+    assert empty_cwd_result.details.node == "newphy"
+    assert_receive {:router_submit, %RunRequest{} = empty_cwd_req, 2}
+    assert empty_cwd_req.meta[:remote_cwd_explicit] == false
+    refute Map.has_key?(empty_cwd_req.meta, :remote_cwd)
+
     assert {:error, "node must be a string"} =
              AgentTool.execute(
                "call_bad_node",
