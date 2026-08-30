@@ -32,6 +32,7 @@ defmodule LemonControlPlane.WS.Connection do
     :auth,
     :connected,
     :event_seq,
+    :local?,
     :state_version,
     :subscription_mode,
     :subscriptions
@@ -42,6 +43,7 @@ defmodule LemonControlPlane.WS.Connection do
           auth: Authorize.auth_context() | nil,
           connected: boolean(),
           event_seq: non_neg_integer(),
+          local?: boolean(),
           state_version: map(),
           subscription_mode: :all | :custom | nil,
           subscriptions: MapSet.t()
@@ -50,14 +52,16 @@ defmodule LemonControlPlane.WS.Connection do
   ## WebSock Callbacks
 
   @impl WebSock
-  def init(_opts) do
+  def init(opts) do
     conn_id = LemonCore.Id.uuid()
+    local? = opts |> Keyword.get(:peer) |> local_peer?()
 
     state = %__MODULE__{
       conn_id: conn_id,
       auth: nil,
       connected: false,
       event_seq: 0,
+      local?: local?,
       state_version: %{},
       subscription_mode: :all,
       subscriptions: MapSet.new()
@@ -198,7 +202,7 @@ defmodule LemonControlPlane.WS.Connection do
   ## Connect Handshake
 
   defp handle_connect(id, params, state) do
-    case Authorize.from_params(params || %{}) do
+    case Authorize.from_params(params || %{}, local?: state.local?) do
       {:ok, auth} ->
         case register_node_connection(auth) do
           :ok ->
@@ -208,9 +212,12 @@ defmodule LemonControlPlane.WS.Connection do
             {:push, {:text, Frames.encode_response(id, {:error, error})}, state}
         end
 
-      {:error, reason} ->
-        error = Errors.unauthorized(inspect(reason))
+      {:error, {:unauthorized, _message} = error} ->
         # For auth errors, we still send a res frame with the error
+        {:push, {:text, Frames.encode_response(id, {:error, error})}, state}
+
+      {:error, _reason} ->
+        error = Errors.unauthorized()
         {:push, {:text, Frames.encode_response(id, {:error, error})}, state}
     end
   end
@@ -431,6 +438,19 @@ defmodule LemonControlPlane.WS.Connection do
   end
 
   defp authenticated_node_identity?(_identity, _node_id), do: false
+
+  # Direct in-process callers do not have a network peer and keep the local
+  # compatibility behavior. The HTTP router always supplies the actual socket
+  # peer, so non-loopback clients cannot inherit an unauthenticated operator.
+  defp local_peer?(nil), do: true
+  defp local_peer?({127, _b, _c, _d}), do: true
+  defp local_peer?({0, 0, 0, 0, 0, 0, 0, 1}), do: true
+
+  defp local_peer?({0, 0, 0, 0, 0, 65_535, mapped_prefix, _last})
+       when mapped_prefix in 0x7F00..0x7FFF,
+       do: true
+
+  defp local_peer?(_peer), do: false
 
   defp get_field(map, key) when is_map(map) and is_atom(key) do
     Map.get(map, key) || Map.get(map, Atom.to_string(key))

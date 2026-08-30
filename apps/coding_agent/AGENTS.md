@@ -724,6 +724,11 @@ seven-day expiry; restoring the node requires operator pairing action, and a
 new identity can reuse the name only after the old durable identity is renamed.
 Prefer `LEMON_NODE_OPERATOR_TOKEN` and `LEMON_NODE_TOKEN` to the corresponding
 CLI flags so credentials do not enter shell history.
+For a controller configured with `LEMON_CONTROL_PLANE_OPERATOR_TOKEN`, the
+joining host's `LEMON_NODE_OPERATOR_TOKEN` must contain the same value; remote
+controllers fail closed when operator authentication is not configured.
+Pairing reports missing, wrong, and controller-misconfigured credentials
+without echoing them.
 
 Node names are trimmed and durably unique per controller. `node.list` reports
 paired identities with online/offline status derived from the live registry;

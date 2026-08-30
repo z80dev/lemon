@@ -80,7 +80,7 @@ The control plane provides the external interface for clients (TUI, web, mobile,
 | `LemonControlPlane.Presence` | `lib/lemon_control_plane/presence.ex` | Connected client tracking (ETS-backed GenServer) |
 | `LemonControlPlane.NodeStore` | `lib/lemon_control_plane/node_store.ex` | Durable node identities, unique-name reservations, pairing challenges, and invocation status |
 | `LemonControlPlane.EventBridge` | `lib/lemon_control_plane/event_bridge.ex` | Bus events -> WebSocket fanout (GenServer + Task.Supervisor) |
-| `LemonControlPlane.Auth.Authorize` | `lib/lemon_control_plane/auth/authorize.ex` | Role-based access control; `from_params/1`, `authorize/3`, `default_operator/0` |
+| `LemonControlPlane.Auth.Authorize` | `lib/lemon_control_plane/auth/authorize.ex` | Role-based access control; peer-aware `from_params/2`, constant-time operator-token validation, `authorize/3`, `default_operator/0` |
 | `LemonControlPlane.Auth.TokenStore` | `lib/lemon_control_plane/auth/token_store.ex` | Token storage/validation for node/device auth (backed by `LemonCore.Store`) |
 | `LemonControlPlane.AgentIdentityStore` | `lib/lemon_control_plane/agent_identity_store.ex` | Typed wrapper for persisted agent identity records |
 | `LemonControlPlane.UpdateStore` | `lib/lemon_control_plane/update_store.ex` | Typed wrapper for update config and pending-update state |
@@ -451,7 +451,7 @@ resolves its own credentials and cwd. This path uses the native
 
 | Role | Scopes | How established |
 |------|--------|-----------------|
-| `operator` | `admin`, `read`, `write`, `approvals`, `pairing` | Default (no token); scope list in `connect` params |
+| `operator` | `admin`, `read`, `write`, `approvals`, `pairing` | Configured `LEMON_CONTROL_PLANE_OPERATOR_TOKEN`; tokenless only for a direct loopback peer when unconfigured |
 | `node` | `invoke`, `event` | Token from `connect.challenge` after node pairing |
 | `device` | `control` | Token from `connect.challenge` after device pairing |
 
@@ -467,7 +467,7 @@ Scope strings in `connect` params: `operator.admin`, `operator.read`, `operator.
      "id": "uuid",
      "method": "connect",
      "params": {
-       "auth": {"token": "optional-token"},
+       "auth": {"token": "configured-operator-token"},
        "role": "operator",
        "scopes": ["operator.read", "operator.write"]
      }
@@ -476,7 +476,11 @@ Scope strings in `connect` params: `operator.admin`, `operator.read`, `operator.
 3. Server responds with `hello-ok` frame (not a `res` frame) containing `features.methods`, `features.events`, `snapshot`, `auth`, and `policy`
 4. All subsequent requests use the established auth context
 
-Without a token, operators receive the scopes listed in `connect` params (or all operator scopes by default). With a valid token, role and scopes are derived from the stored identity.
+The HTTP router passes the actual socket peer into authorization. A configured
+operator token is required for every operator connection and compared in
+constant time. When it is unconfigured, only direct loopback peers retain the
+legacy tokenless operator path; non-loopback peers fail closed. Node/device
+session tokens derive role and scopes only from known stored identity types.
 
 ### Token-Based Auth (Nodes/Devices)
 
@@ -757,6 +761,13 @@ LemonControlPlane.EventBridge.subscribe_run("some-run-id")
 ```
 
 ## Testing Guidelines
+
+Control-plane WebSocket operator authentication uses
+`LEMON_CONTROL_PLANE_OPERATOR_TOKEN`. The HTTP router must pass the actual socket
+peer to `WS.Connection`; tokenless operator compatibility is loopback-only when
+the token is unconfigured. Do not restore params-only node/device roles or map an
+unknown session-token identity to operator scopes. Keep credentials out of auth
+contexts, logs, status formatting, and error payloads.
 
 - Use `async: true` for method tests that don't depend on shared state
 - Tests requiring the full runtime should be marked `async: false`

@@ -34,6 +34,18 @@ defmodule LemonControlPlane.Env do
       apps: [:lemon_control_plane]
     },
     %{
+      name: :lemon_control_plane_operator_token,
+      env_var: "LEMON_CONTROL_PLANE_OPERATOR_TOKEN",
+      aliases: [],
+      type: :string,
+      default: nil,
+      doc: "Shared operator credential required by control-plane WebSocket operator connections.",
+      secret?: true,
+      required?: false,
+      area: :endpoints,
+      apps: [:lemon_control_plane]
+    },
+    %{
       name: :lemon_openai_compat_api_token,
       env_var: "LEMON_OPENAI_COMPAT_API_TOKEN",
       aliases: ["LEMON_OPENAI_COMPAT_TOKEN"],

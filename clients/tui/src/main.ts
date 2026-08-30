@@ -40,6 +40,9 @@ Options:
 
 Environment:
   LEMON_WS_URL                Default control-plane URL
+  LEMON_CONTROL_PLANE_OPERATOR_TOKEN
+                              Operator credential for authenticated control planes
+  LEMON_WS_TOKEN              Legacy TUI alias for the operator credential
   LEMON_CONTROL_PLANE_PORT    Port used to build the default URL (default 4040)
   LEMON_TUI_VERSION           Overrides the reported version
   LEMON_TUI_ASCII=1           Force the ASCII glyph set
@@ -52,6 +55,10 @@ export function defaultUrl(env: NodeJS.ProcessEnv = process.env): string {
 	const port = env.LEMON_CONTROL_PLANE_PORT?.trim();
 	if (port) return `ws://127.0.0.1:${port}/ws`;
 	return DEFAULT_WS_URL;
+}
+
+export function operatorToken(env: NodeJS.ProcessEnv = process.env): string | undefined {
+	return env.LEMON_CONTROL_PLANE_OPERATOR_TOKEN?.trim() || env.LEMON_WS_TOKEN?.trim() || undefined;
 }
 
 export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env): CliOptions {
@@ -186,6 +193,7 @@ export async function main(argv: string[] = Bun.argv.slice(2)): Promise<number> 
 	return await new Promise<number>((resolve) => {
 		const app = new AppShell({
 			url: options.url,
+			operatorToken: operatorToken(),
 			sessionKey: options.sessionKey,
 			version,
 			themePreference: theme.preference,

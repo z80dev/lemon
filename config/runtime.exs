@@ -203,6 +203,12 @@ if is_binary(control_plane_port) do
   config :lemon_control_plane, :port, String.to_integer(control_plane_port)
 end
 
+control_plane_operator_token = normalized_env.("LEMON_CONTROL_PLANE_OPERATOR_TOKEN")
+
+if is_binary(control_plane_operator_token) do
+  config :lemon_control_plane, :operator_token, control_plane_operator_token
+end
+
 gateway_health_port = normalized_env.("LEMON_GATEWAY_HEALTH_PORT")
 
 if is_binary(gateway_health_port) do

@@ -61,7 +61,7 @@ The server runs on [Bandit](https://github.com/mtrudel/bandit) with [Plug](https
 1. A JSON text frame arrives on the WebSocket connection.
 2. `Protocol.Frames.parse/1` decodes and validates the frame structure.
 3. If the connection has not yet completed the handshake, only `connect` is allowed; all other methods return `HANDSHAKE_REQUIRED`.
-4. For `connect`, `Auth.Authorize.from_params/1` establishes the auth context and a `hello-ok` frame is returned.
+4. For `connect`, `Auth.Authorize.from_params/2` establishes the auth context from the credential and actual socket peer, and a `hello-ok` frame is returned.
 5. For all other methods, `Protocol.Schemas.validate/2` checks required/optional parameter types.
 6. `Methods.Registry.dispatch/3` looks up the handler module in the ETS table.
 7. `Auth.Authorize.authorize/3` verifies the connection has the required scopes for the method.
@@ -262,13 +262,37 @@ for HTTP.
 
 | Role | Scopes | How Established |
 |------|--------|-----------------|
-| `operator` | `admin`, `read`, `write`, `approvals`, `pairing` | Default (no token); or explicitly via `connect` params |
+| `operator` | `admin`, `read`, `write`, `approvals`, `pairing` | `LEMON_CONTROL_PLANE_OPERATOR_TOKEN`; tokenless only for a direct loopback peer when no operator token is configured |
 | `node` | `invoke`, `event` | Token from `connect.challenge` after node pairing |
 | `device` | `control` | Token from `connect.challenge` after device pairing |
 
 Scope strings used in `connect` params: `operator.admin`, `operator.read`, `operator.write`, `operator.approvals`, `operator.pairing`, `node.invoke`, `node.event`, `device.control`.
 
-Without a token, operators receive the scopes listed in `connect` params (or all operator scopes by default). With a valid token, role and scopes are derived from the stored identity.
+Set `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` to a high-entropy value whenever `/ws`
+is reachable by another host or through a reverse proxy. Operator clients send
+that value as `auth.token` in the `connect` request. Comparison uses fixed-length
+SHA-256 digests and `Plug.Crypto.secure_compare/2`; the credential is not retained
+in the connection auth context or returned in status data.
+
+When no operator token is configured, only a direct loopback socket peer keeps
+the legacy tokenless operator behavior. A non-loopback peer fails closed, and a
+reverse proxy must not be treated as a safe loopback exception: configure the
+token on the controller and forward operator credentials through the WebSocket
+handshake. Unknown node/device session identity types are rejected and cannot
+fall back to an operator role.
+
+For a named coding execution node, use the same credential only for initial
+pairing:
+
+```bash
+export LEMON_CONTROL_PLANE_OPERATOR_TOKEN="$(openssl rand -hex 32)" # controller
+export LEMON_NODE_OPERATOR_TOKEN="$LEMON_CONTROL_PLANE_OPERATOR_TOKEN" # joining host
+./bin/lemon node join --name worker-name --controller wss://controller.example/ws --pair
+```
+
+Prefer `LEMON_NODE_OPERATOR_TOKEN` to `--operator-token` so the credential does
+not enter shell history. After pairing, the worker stores and uses its separate
+node session token; it does not retain the operator credential.
 
 ### Token-Based Authentication (Nodes/Devices)
 

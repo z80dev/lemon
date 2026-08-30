@@ -3,6 +3,7 @@ import {
 	defaultUrl,
 	hasInteractiveTerminal,
 	main,
+	operatorToken,
 	parseArgs,
 	resolveVersion,
 	satisfiesVersion,
@@ -48,6 +49,18 @@ describe("defaultUrl", () => {
 			"ws://127.0.0.1:5555/ws",
 		);
 		expect(defaultUrl({} as NodeJS.ProcessEnv)).toBe("ws://127.0.0.1:4040/ws");
+	});
+});
+
+describe("operatorToken", () => {
+	test("prefers the dedicated control-plane credential and supports the legacy TUI alias", () => {
+		expect(
+			operatorToken({
+				LEMON_CONTROL_PLANE_OPERATOR_TOKEN: " dedicated ",
+				LEMON_WS_TOKEN: "legacy",
+			} as NodeJS.ProcessEnv),
+		).toBe("dedicated");
+		expect(operatorToken({ LEMON_WS_TOKEN: " legacy " } as NodeJS.ProcessEnv)).toBe("legacy");
 	});
 });
 
