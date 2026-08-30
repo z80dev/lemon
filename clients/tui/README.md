@@ -17,6 +17,12 @@ same value to the daemon and TUI through their environment, and stops that
 launcher-owned daemon when the TUI exits. The token is not written to disk,
 placed in command arguments, or printed.
 
+Every runtime started by `../../bin/lemon-tui` is launcher-owned and stopped
+with the TUI, including when `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` was already
+set. For a persistent daemon, start `../../bin/lemon --daemon` separately with
+the token, then launch the TUI with the same token; the launcher never stops an
+already-running runtime.
+
 To attach to a persistent or already-running daemon, set the same
 `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` in both launch environments. The launcher
 cannot recover an existing process's secret and fails closed when it is absent.

@@ -336,6 +336,12 @@ runtime, set the same `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` when starting the
 runtime and launching the TUI. An existing runtime's secret cannot be safely
 discovered, so tokenless attachment fails by default.
 
+Runtime ownership is independent of token origin: every daemon started by
+`./bin/lemon-tui` is stopped when that client exits, including when the token
+was preconfigured. Start `./bin/lemon --daemon` separately before attaching if
+the source runtime must remain persistent; already-running runtimes are never
+stopped by the TUI launcher.
+
 ### Web client (`lemon-web`)
 
 ```bash

@@ -113,4 +113,14 @@ fi
 [[ "$(<"$LEMON_TUI_TEST_CLIENT_TOKEN")" == "$stable_token" ]]
 ! grep -Fq -- "$stable_token" "$TEST_DIR/stable-output"
 
+stable_runtime_pid="$(<"$LEMON_TUI_TEST_RUNTIME_PID")"
+for _ in $(seq 1 50); do
+  kill -0 "$stable_runtime_pid" 2>/dev/null || break
+  sleep 0.1
+done
+if kill -0 "$stable_runtime_pid" 2>/dev/null; then
+  echo "preconfigured-token runtime was not stopped" >&2
+  exit 1
+fi
+
 echo "lemon-tui auth bootstrap tests passed"

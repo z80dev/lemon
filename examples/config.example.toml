@@ -8,7 +8,9 @@
 # LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK=true is explicitly set.
 # The source ./bin/lemon-tui launcher generates a process-scoped token for a
 # runtime it starts; attaching to an existing runtime requires its matching env
-# value. Never put the shared token in a browser VITE_* variable or URL.
+# value. Every runtime it starts is stopped with the TUI, even with a
+# preconfigured token; start persistent runtimes separately with ./bin/lemon
+# --daemon. Never put the shared token in a browser VITE_* variable or URL.
 # Named node pairing sends the operator token from LEMON_NODE_OPERATOR_TOKEN on
 # the joining host. Named workers require wss:// for non-loopback controllers by
 # default. LEMON_NODE_ALLOW_INSECURE_CONTROLLER=true is an explicit development

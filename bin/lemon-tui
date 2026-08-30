@@ -43,10 +43,10 @@ error() {
 PORT="${LEMON_CONTROL_PLANE_PORT:-4040}"
 RUNTIME_LAUNCHER="${LEMON_TUI_RUNTIME_LAUNCHER:-$LEMON_ROOT/bin/lemon}"
 RUNTIME_PID_FILE=""
-OWNED_RUNTIME=0
+STARTED_RUNTIME=0
 
 cleanup() {
-  if [[ "$OWNED_RUNTIME" == "1" && -n "$RUNTIME_PID_FILE" && -f "$RUNTIME_PID_FILE" ]]; then
+  if [[ "$STARTED_RUNTIME" == "1" && -n "$RUNTIME_PID_FILE" && -f "$RUNTIME_PID_FILE" ]]; then
     runtime_pid="$(<"$RUNTIME_PID_FILE")"
 
     if [[ "$runtime_pid" =~ ^[0-9]+$ && "$runtime_pid" -gt 1 ]] && kill -0 "$runtime_pid" 2>/dev/null; then
@@ -111,11 +111,14 @@ if ! runtime_healthy; then
     fi
 
     export LEMON_CONTROL_PLANE_OPERATOR_TOKEN
-    OWNED_RUNTIME=1
-    RUNTIME_PID_FILE="$(mktemp "${TMPDIR:-/tmp}/lemon-tui-runtime.XXXXXX")"
-    chmod 600 "$RUNTIME_PID_FILE"
-    export LEMON_RUNTIME_PID_FILE="$RUNTIME_PID_FILE"
   fi
+
+  # Process ownership follows who started the runtime, not who supplied its
+  # credential. Every daemon started here must be reaped when this TUI exits.
+  STARTED_RUNTIME=1
+  RUNTIME_PID_FILE="$(mktemp "${TMPDIR:-/tmp}/lemon-tui-runtime.XXXXXX")"
+  chmod 600 "$RUNTIME_PID_FILE"
+  export LEMON_RUNTIME_PID_FILE="$RUNTIME_PID_FILE"
 
   warn "No control-plane runtime detected on :${PORT}; starting ./bin/lemon --daemon"
   "$RUNTIME_LAUNCHER" --daemon --port "$PORT"
