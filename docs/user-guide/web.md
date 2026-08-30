@@ -75,7 +75,7 @@ session. Named routes reload durable prompt, tool, and answer history before
 subscribing to new streaming events, so an existing conversation can be
 continued rather than merely reused as an empty routing key.
 
-## Manage durable sessions
+## Management access
 
 Set `LEMON_WEB_ACCESS_TOKEN`, launch the full runtime, and open `/manage` with
 the token once:
@@ -86,7 +86,8 @@ http://127.0.0.1:4080/manage?token=<your-token>
 
 The server validates the token, stores only a derived signed-session marker,
 and redirects to the same address without `token` before rendering the page.
-The management page then shows local runtime health, live named-node names, and
+The server validates the same token for every page under `/manage`. The
+sessions page shows local runtime health, live named-node names, and
 durable-session counts. From there you can:
 
 - search session keys, titles, prompts, and answers, then filter active,
@@ -103,10 +104,34 @@ If any candidate changes, no deletion occurs and the page asks for a fresh
 preview. Export and inspection omit raw run records, raw event payloads,
 credentials, and secret values and report any size-bound run omissions.
 
-This is the first management vertical, not yet a complete machine dashboard.
-Provider credentials/fallback pools, approvals, automation, skills/MCP, memory,
-logs, and configuration still use their existing CLI/TUI/control-plane
-surfaces.
+### Manage provider routing
+
+Choose **Providers** from the sessions page, or open `/manage/providers`, to
+inspect effective routing without displaying config paths, prompts, base URLs,
+environment-variable names, secret names, or credential references. The page
+supports:
+
+- ordered fallback append, removal, and clear;
+- credential-pool create/update, strategy selection, activation, and delete;
+- credential-reference add, remove, and provider-level clear; and
+- redacted pool/reference counts plus the active pool.
+
+Every mutation starts as a preview and writes nothing. The preview is bound to
+an opaque revision of the target config; if another process changes that config
+before apply, Lemon rejects the stale apply and keeps the non-secret form draft
+for another preview. Removing or clearing fallbacks, updating or deleting an
+existing pool, and removing or clearing credential references also require the
+provider or pool confirmation shown by the preview to be typed exactly.
+
+Credential references accept only `secret:NAME` or `env:NAME`. Their names are
+entered through a password field, filtered from LiveView logs, and never stored
+in socket draft state or rendered back into HTML. For an apply, the browser asks
+you to re-enter the same reference and Lemon compares only its digest before
+calling the shared provider-configuration service. The service remains the
+single owner of comment-preserving validation and atomic TOML replacement.
+
+Approvals, automation, skills/MCP, memory, logs, and broader configuration still
+use their existing CLI/TUI/control-plane surfaces.
 
 ## Access control
 
@@ -133,6 +158,7 @@ Do not expose an unauthenticated HTTP listener to an untrusted network.
 | Browser did not open | Use `lemon web --no-open` and open the printed URL manually. |
 | HTTP 401 | Launch through `lemon web` with the same `LEMON_WEB_ACCESS_TOKEN`, or supply the token once as `?token=...`. |
 | Management HTTP 503 | Set a non-empty `LEMON_WEB_ACCESS_TOKEN`, restart Lemon, and authenticate once. |
+| Provider preview became stale | Keep the preserved non-secret draft, review the refreshed status, and preview the exact change again. |
 | Active-run choices disappeared | The run finished or is no longer eligible. Send the preserved draft as a new message, or choose **Check status** if the run is still active elsewhere. |
 
 The UI ships its CSS and Phoenix client assets inside the Lemon release. It

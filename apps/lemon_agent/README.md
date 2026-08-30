@@ -81,6 +81,7 @@ The supervisor uses a `:one_for_one` strategy. Each child is independent:
 | LemonAgent.AbortSignal.TableOwner (internal) | `lib/agent_core/abort_signal/table_owner.ex` | GenServer that owns the abort signal ETS table and acts as heir for table survival. |
 | `LemonAgent.Proxy` | `lib/agent_core/proxy.ex` | SSE proxy stream function for routing LLM calls through a server. Reconstructs partial `AssistantMessage` from bandwidth-optimized SSE events. Includes `ProxyStreamOptions` struct. |
 | `LemonAgent.TextGeneration` | `lib/agent_core/text_generation.ex` | Lightweight text completion bridge. `complete_text/4` wraps `LemonAi.complete/3` so callers stay within architecture boundaries without importing `LemonAi` directly. |
+| `LemonAgent.ModelRuntime.ProviderConfiguration` | `lib/lemon_agent/model_runtime/provider_configuration.ex` | Shared comment-preserving provider fallback/pool mutation boundary. Preview results carry an opaque config revision; applies can reject concurrent edits, and destructive operations require exact confirmation without returning credential references. |
 
 ### Types
 

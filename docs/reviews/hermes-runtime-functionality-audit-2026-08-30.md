@@ -124,6 +124,13 @@ real Lemon applications and proves the configured credential rotation,
 cross-provider fallback, destructive guard, and no-fallback HTTP 400 terminal
 path without using live credentials.
 
+The same boundary now powers the authenticated `/manage/providers` page. Its
+fallback, pool, activation, and credential-reference controls are preview-first,
+bind apply to an opaque target-config revision, require exact confirmation for
+destructive changes, and render only provider/pool identities and counts.
+Credential references are re-entered for apply, filtered from LiveView logs,
+and never retained or rendered.
+
 ## Prioritized remaining runtime work
 
 ### P0 — reliability and safety closure

@@ -86,7 +86,9 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
     lemon_sim_ui: [:lemon_ai, :lemon_core, :lemon_sim],
     lemon_skills: [:lemon_agent, :lemon_ai, :lemon_core, :lemon_media, :lemon_memory],
     lemon_tcg: [:lemon_agent, :lemon_ai, :lemon_core, :lemon_sim],
-    lemon_web: [:lemon_core, :lemon_router],
+    # The management UI consumes the agent-owned provider configuration
+    # boundary; mutation and redaction semantics stay centralized there.
+    lemon_web: [:lemon_agent, :lemon_core, :lemon_router],
     # test-only: runs XApi.ChannelAdapter through the Plugin contract kit
     x_api: [:lemon_agent, :lemon_ai, :lemon_channels, :lemon_core, :lemon_platform_test]
   }

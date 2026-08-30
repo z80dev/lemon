@@ -431,6 +431,7 @@ defmodule LemonWebTest do
     assert session_css =~ "@media (max-width: 640px)"
     management_css = File.read!(Path.join(static_root, "management.css"))
     assert management_css =~ ".management-layout"
+    assert management_css =~ ".provider-management-grid"
     assert management_css =~ "@media (max-width: 640px)"
 
     root_layout =

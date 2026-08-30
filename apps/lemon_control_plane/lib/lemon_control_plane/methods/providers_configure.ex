@@ -54,6 +54,7 @@ defmodule LemonControlPlane.Methods.ProvidersConfigure do
               :invalid_name,
               :invalid_provider,
               :invalid_providers,
+              :invalid_revision,
               :invalid_scope,
               :invalid_strategy,
               :missing_parameter
@@ -61,5 +62,6 @@ defmodule LemonControlPlane.Methods.ProvidersConfigure do
        do: :invalid_request
 
   defp rpc_code(:confirmation_required), do: :conflict
+  defp rpc_code(:stale_configuration), do: :conflict
   defp rpc_code(_), do: :internal_error
 end

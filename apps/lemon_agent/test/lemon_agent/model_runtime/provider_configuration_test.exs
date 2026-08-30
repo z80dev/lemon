@@ -189,6 +189,36 @@ defmodule LemonAgent.ModelRuntime.ProviderConfigurationTest do
     assert File.read!(ctx.config_path) == "# unchanged\n"
   end
 
+  test "rejects an apply when the target changed after preview", ctx do
+    File.write!(ctx.config_path, "# original\n")
+
+    assert {:ok, preview} =
+             ProviderConfiguration.configure(%{
+               "action" => "fallback.add",
+               "provider" => "zai",
+               "scope" => "project",
+               "projectDir" => ctx.project
+             })
+
+    assert is_binary(preview["configRevision"])
+    assert preview["configRevision"] != preview["proposedConfigRevision"]
+
+    File.write!(ctx.config_path, "# changed elsewhere\n")
+
+    assert {:error, :stale_configuration, message} =
+             ProviderConfiguration.configure(%{
+               "action" => "fallback.add",
+               "provider" => "zai",
+               "apply" => true,
+               "expectedRevision" => preview["configRevision"],
+               "scope" => "project",
+               "projectDir" => ctx.project
+             })
+
+    assert message == "Provider configuration changed after the preview; preview again"
+    assert File.read!(ctx.config_path) == "# changed elsewhere\n"
+  end
+
   test "validates Lemon config before replacing the target file", ctx do
     original = """
     # legacy config must remain untouched on failure

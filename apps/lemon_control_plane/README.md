@@ -371,6 +371,7 @@ Each method declares required scopes. A connection must have at least one matchi
 | `logs.tail` | read | Tail recent log lines with filter summary, cleanup flags, and sensitive log-value redaction |
 | `models.list` | read | List available AI models plus capability/provider summaries |
 | `providers.status` | read | Redacted provider credential readiness, route preview, fallback candidates, config-shape diagnostics, live fallback proof status, and top-level summary |
+| `providers.configure` | admin | Preview or apply fallback/pool/reference edits through the shared comment-preserving service; `expectedRevision` rejects stale applies, destructive changes require exact confirmation, and responses omit credential references |
 | `memory.status` | read | Redacted memory-provider registry metadata plus provider health and searchable-scope summaries |
 | `proofs.status` | read | Redacted live-proof diagnostics with top-level counts and launch-gate summaries for Discord DM, Discord slash registration, Discord client-click, provider media, and terminal backends |
 | `readiness.status` | read | Compact launch-readiness summary for doctor, Telegram/Discord gates, shared proof-gate counts/statuses, provider-media proof, proof totals, unresolved gates with summary reason-kind lists, and cleanup flags |

@@ -428,7 +428,7 @@ silent permissions.
 | `lemon_automation` | `lemon_agent`, `lemon_core`, `lemon_router`, `lemon_skills` | `lemon_agent`, `lemon_core`, `lemon_router`, `lemon_skills` | *(none)* |
 | `lemon_browser` | `lemon_core` | `lemon_core` | *(none)* |
 | `lemon_channels` | `lemon_agent`, `lemon_core`, `lemon_media` | `lemon_agent`, `lemon_core`, `lemon_media` | *(none)* |
-| `lemon_cli` | `lemon_ai`, `lemon_core`, `lemon_memory` | `lemon_ai`, `lemon_core`, `lemon_memory` | *(none)* |
+| `lemon_cli` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory` | *(none)* |
 | `lemon_control_plane` | `lemon_agent`, `lemon_ai`, `lemon_automation`, `lemon_browser`, `lemon_channels`, `lemon_core`, `lemon_lsp`, `lemon_media`, `lemon_memory`, `lemon_router`, `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_automation`, `lemon_browser`, `lemon_channels`, `lemon_core`, `lemon_lsp`, `lemon_media`, `lemon_memory`, `lemon_router`, `lemon_skills` | *(none)* |
 | `lemon_core` | *(none)* | *(none)* | *(none)* |
 | `lemon_evals` | `coding_agent`, `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_skills` | `coding_agent`, `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_skills` | *(none)* |
@@ -444,7 +444,7 @@ silent permissions.
 | `lemon_sim_ui` | `lemon_ai`, `lemon_core`, `lemon_sim` | `lemon_ai`, `lemon_core`, `lemon_sim` | *(none)* |
 | `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_media`, `lemon_memory` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_media`, `lemon_memory` | *(none)* |
 | `lemon_tcg` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_sim` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_sim` | *(none)* |
-| `lemon_web` | `lemon_core`, `lemon_router` | `lemon_core`, `lemon_router` | *(none)* |
+| `lemon_web` | `lemon_agent`, `lemon_core`, `lemon_router` | `lemon_agent`, `lemon_core`, `lemon_router` | *(none)* |
 | `x_api` | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_platform_test` | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_platform_test` | *(none)* |
 <!-- architecture_policy:end -->
 
@@ -3194,8 +3194,9 @@ Provider onboarding flows:
 - Write the relevant `providers.<provider>` config keys
 - Support `--set-default`, `--model`, and `--config-path`
 
-Provider readiness is visible through the read-only control-plane
-`providers.status` method. It uses the same
+Provider readiness is visible through the source and packaged
+`lemon providers status` command and the read-only control-plane
+`providers.status` method. They use the same
 `LemonAgent.ModelRuntime.Credentials` credential resolver as model execution, so env keys, encrypted
 secret references, OAuth/default-secret paths, and provider-specific credential
 shapes are checked the same way runtime calls check them. The response reports
@@ -3203,6 +3204,48 @@ booleans such as `credentialReady`, `apiKeyConfigured`,
 `apiKeySecretConfigured`, `oauthSecretConfigured`, `baseUrlConfigured`, and
 `envConfigured`; it does not return raw API keys, secret names, base URLs, or
 env var names.
+
+Fallbacks and credential-pool references can be edited through the same
+packaged/source command boundary:
+
+```bash
+# Installed release (use ./bin/lemon from a source checkout)
+lemon providers fallback add zai
+lemon providers pool set burst --provider openai --provider zai \
+  --strategy round_robin --activate
+lemon providers pool credential add burst openai secret:openai_backup
+lemon providers status --json
+```
+
+Only explicit `secret:NAME` and `env:NAME` references are accepted for pool
+credentials; values remain owned by the encrypted secret store or process
+environment. The command preserves unrelated comments, validates the complete
+resulting TOML, and atomically replaces the selected global or project config.
+Mutations apply by default; use `--dry-run` to preview. Removing a fallback,
+deleting or updating an existing pool, and removing or clearing credential
+references require the exact confirmation value shown by the preview:
+
+```bash
+lemon providers fallback remove zai --dry-run --json
+lemon providers fallback remove zai --confirm zai
+```
+
+The admin-scoped `providers.configure` control-plane method exposes the same
+actions (`fallback.add`, `fallback.remove`, `fallback.clear`, `pool.upsert`,
+`pool.delete`, `pool.credential.add`, `pool.credential.remove`, and
+`pool.credential.clear`). RPC mutations are preview-only unless `apply: true`
+is explicit. Remote callers may select `global` or `project` scope but cannot
+provide an arbitrary config path. Results expose provider and pool names plus
+counts; they never include raw keys, secret names, credential references, base
+URLs, or environment-variable names.
+
+Preview results include an opaque `configRevision`. A caller that passes it
+back as `expectedRevision` on apply gets an atomic stale-write guard: the shared
+service compares the revision while holding its target-config lock and rejects
+the mutation if any config content changed after preview. `/manage/providers`
+uses this contract for all Web mutations, then adds exact confirmation for
+destructive actions and requires credential-reference values to be re-entered
+instead of retaining them in LiveView state.
 
 Memory-provider readiness is visible through read-only `memory.status` and
 support-bundle `memory_diagnostics.json`. These surfaces expose
@@ -3237,7 +3280,9 @@ credential_pool = "burst"
 distribution = { openai = 70, zai = 20, anthropic = 10 }
 ```
 
-`providers.status` includes a redacted `routing` block with the requested
+`providers.status` and `lemon providers status` include a redacted
+`routingConfig` block for effective fallback/pool configuration and a `routing`
+block with the requested
 provider/model, selected provider/model, fallback candidates, candidate
 readiness booleans, selected routing profile, selected credential pool,
 profile distribution weights, pool provider names, pool strategy, and
@@ -9449,6 +9494,7 @@ lemon gateway setup
 lemon config validate
 lemon secrets status
 lemon channels
+lemon providers status
 lemon doctor
 
 # Source checkout
@@ -9458,6 +9504,7 @@ lemon doctor
 ./bin/lemon config validate
 ./bin/lemon secrets status
 ./bin/lemon channels
+./bin/lemon providers status
 ./bin/lemon doctor
 ./bin/lemon node join --name worker-1 --controller ws://controller:4040/ws --pair --cwd /srv/project
 ```
@@ -9483,7 +9530,7 @@ Getting a fresh checkout or a fresh machine to a working agent.
 | `mix lemon.onboard.copilot` | Interactive onboarding for the GitHub Copilot provider. |
 | `mix lemon.onboard.gemini` | Interactive onboarding for the Google Gemini CLI provider. |
 | `mix lemon.onboard.antigravity` | Interactive onboarding for the Google Antigravity provider. |
-| `mix lemon.providers` | Show redacted provider readiness. |
+| `mix lemon.providers` | Show redacted provider readiness. This contributor task remains read-only; use `lemon providers` / `./bin/lemon providers` for fallback and credential-pool reference edits. |
 | `mix lemon.workspace` | Initialize `~/.lemon/agent/workspace` bootstrap files. |
 | `mix lemon.update` | Update Lemon: config migration and bundled-skill sync. |
 | `mix lemon.hermes.audit` | Audit Hermes data compatibility without writing files. |
@@ -33987,8 +34034,21 @@ not become ready, run `lemon doctor` and follow its recovery guidance.
 
 Once the page shows **Ready**, enter a prompt or attach up to five files (20 MB
 each). Responses and tool activity stream into the page. While a run is active,
-choose **Stop** to request cancellation. Session identifiers are available
-under **Session details** when debugging, but are hidden during ordinary use.
+the composer switches to text-only active-run controls:
+
+- **Follow-up** queues a separate turn after the current run finishes.
+- **Steer** adds guidance to the current run without replacing its direction.
+- **Redirect** replaces the pending direction while preserving tool work that
+  has already completed.
+
+The page discovers active work when a named session is opened, rechecks the
+same shared router state before submitting guidance, and keeps the draft if the
+run ended in the meantime. A successful message confirms what was requested;
+a refused request uses a bounded explanation and never displays node
+credentials, remote paths, or internal runtime terms. Choose **Check status**
+to reconcile the controls manually or **Stop** to request cancellation of the
+actual active run. Session and run identifiers remain hidden during ordinary
+use and are available under **Session details** only when debugging.
 
 Each browser tab gets its own stable session in `sessionStorage`. Use
 `/sessions/<session-key>` only when deliberately attaching to a known Lemon
@@ -33996,7 +34056,7 @@ session. Named routes reload durable prompt, tool, and answer history before
 subscribing to new streaming events, so an existing conversation can be
 continued rather than merely reused as an empty routing key.
 
-## Manage durable sessions
+## Management access
 
 Set `LEMON_WEB_ACCESS_TOKEN`, launch the full runtime, and open `/manage` with
 the token once:
@@ -34007,7 +34067,8 @@ http://127.0.0.1:4080/manage?token=<your-token>
 
 The server validates the token, stores only a derived signed-session marker,
 and redirects to the same address without `token` before rendering the page.
-The management page then shows local runtime health, live named-node names, and
+The server validates the same token for every page under `/manage`. The
+sessions page shows local runtime health, live named-node names, and
 durable-session counts. From there you can:
 
 - search session keys, titles, prompts, and answers, then filter active,
@@ -34024,10 +34085,34 @@ If any candidate changes, no deletion occurs and the page asks for a fresh
 preview. Export and inspection omit raw run records, raw event payloads,
 credentials, and secret values and report any size-bound run omissions.
 
-This is the first management vertical, not yet a complete machine dashboard.
-Provider credentials/fallback pools, approvals, automation, skills/MCP, memory,
-logs, and configuration still use their existing CLI/TUI/control-plane
-surfaces.
+### Manage provider routing
+
+Choose **Providers** from the sessions page, or open `/manage/providers`, to
+inspect effective routing without displaying config paths, prompts, base URLs,
+environment-variable names, secret names, or credential references. The page
+supports:
+
+- ordered fallback append, removal, and clear;
+- credential-pool create/update, strategy selection, activation, and delete;
+- credential-reference add, remove, and provider-level clear; and
+- redacted pool/reference counts plus the active pool.
+
+Every mutation starts as a preview and writes nothing. The preview is bound to
+an opaque revision of the target config; if another process changes that config
+before apply, Lemon rejects the stale apply and keeps the non-secret form draft
+for another preview. Removing or clearing fallbacks, updating or deleting an
+existing pool, and removing or clearing credential references also require the
+provider or pool confirmation shown by the preview to be typed exactly.
+
+Credential references accept only `secret:NAME` or `env:NAME`. Their names are
+entered through a password field, filtered from LiveView logs, and never stored
+in socket draft state or rendered back into HTML. For an apply, the browser asks
+you to re-enter the same reference and Lemon compares only its digest before
+calling the shared provider-configuration service. The service remains the
+single owner of comment-preserving validation and atomic TOML replacement.
+
+Approvals, automation, skills/MCP, memory, logs, and broader configuration still
+use their existing CLI/TUI/control-plane surfaces.
 
 ## Access control
 
@@ -34054,6 +34139,8 @@ Do not expose an unauthenticated HTTP listener to an untrusted network.
 | Browser did not open | Use `lemon web --no-open` and open the printed URL manually. |
 | HTTP 401 | Launch through `lemon web` with the same `LEMON_WEB_ACCESS_TOKEN`, or supply the token once as `?token=...`. |
 | Management HTTP 503 | Set a non-empty `LEMON_WEB_ACCESS_TOKEN`, restart Lemon, and authenticate once. |
+| Provider preview became stale | Keep the preserved non-secret draft, review the refreshed status, and preview the exact change again. |
+| Active-run choices disappeared | The run finished or is no longer eligible. Send the preserved draft as a new message, or choose **Check status** if the run is still active elsewhere. |
 
 The UI ships its CSS and Phoenix client assets inside the Lemon release. It
 does not require a JavaScript or CSS CDN at runtime. The page includes a skip

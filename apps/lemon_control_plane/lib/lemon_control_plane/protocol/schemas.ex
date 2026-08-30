@@ -136,6 +136,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "pool" => :string,
         "strategy" => :string,
         "credentialRef" => :string,
+        "expectedRevision" => :string,
         "apply" => :boolean,
         "activate" => :boolean,
         "confirm" => :string,

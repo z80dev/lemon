@@ -67,13 +67,14 @@ authentication establishes the same marker without redirecting.
 | Path | Handler | Description |
 |------|---------|-------------|
 | `/manage` | `ManagementLive` | Runtime/node status and searchable active/archived sessions |
+| `/manage/providers` | `ProviderManagementLive` | Redacted provider fallback/pool/reference preview and apply |
 | `/manage/sessions/:session_key` | `ManagementLive` | Redacted run/tool inspection and lifecycle controls |
 | `/manage/sessions/:session_key/export/:format` | `SessionExportController` | Always-redacted `json` or `markdown` download |
 
 ### Query Parameters
 
 - `/?agent_id=<id>` -- Sets the agent for the auto-generated session (default: `"default"`)
-- `/?token=<token>` -- Authenticates the request (stripped from URL by client-side JS after consumption)
+- `/?token=<token>` -- Authenticates the request (stripped by an immediate server redirect before rendering)
 - `/sessions/:session_key?token=<token>` -- Same token authentication for named sessions
 
 ## LiveView Pages
@@ -130,6 +131,22 @@ Management inspection and downloads are always redacted and never expose raw
 run records or event payloads. Chat resume is an internal trusted consumer of
 unredacted history so the user can continue their own conversation; no operator
 JSON-RPC method offers that mode.
+
+### ProviderManagementLive (`/manage/providers`)
+
+The provider page depends on the existing
+`LemonAgent.ModelRuntime.ProviderConfiguration` service rather than owning a
+second config writer. It shows only validated provider/pool identifiers and
+credential-reference counts, and supports ordered fallback add/remove/clear,
+pool create/update/activate/delete, and credential-reference add/remove/clear.
+
+Every change is preview-first. Apply passes the preview's opaque config
+revision back to the service, so any concurrent target change rejects the
+write. Destructive operations also require the exact provider/pool confirmation
+shown in the preview. Credential-reference values are password-masked, filtered
+from LiveView logs, omitted from socket drafts, and re-entered on apply; the UI
+keeps only a digest long enough to match the exact preview. Service errors are
+mapped to bounded fixed text and never rendered verbatim.
 
 ## Components
 
@@ -246,6 +263,7 @@ config :lemon_web, :uploads_dir, Path.join(System.tmp_dir!(), "lemon_web_uploads
 
 | App | Purpose |
 |-----|---------|
+| `lemon_agent` | Shared provider configuration validation, atomic mutation, revision, confirmation, and redaction boundary |
 | `lemon_core` | PubSub, session keys/events, shared session lifecycle, runtime health, and live node presence |
 | `lemon_router` | Request routing (`LemonRouter.submit/1`) for submitting prompts to agents |
 
@@ -299,6 +317,7 @@ apps/lemon_web/
 |       |-- live/
 |       |   |-- session_live.ex                    # Main dashboard LiveView
 |       |   |-- management_live.ex                 # Authenticated session operations LiveView
+|       |   |-- provider_management_live.ex        # Authenticated provider-routing LiveView
 |       |   |-- components/
 |       |       |-- file_upload_component.ex        # File upload UI
 |       |       |-- message_component.ex            # Chat message bubbles

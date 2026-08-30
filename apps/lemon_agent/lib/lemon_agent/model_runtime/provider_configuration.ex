@@ -10,7 +10,9 @@ defmodule LemonAgent.ModelRuntime.ProviderConfiguration do
 
   Mutations default to preview-only. Callers must pass `apply: true`; destructive
   actions additionally require the operation-specific confirmation value
-  returned in `confirmation`.
+  returned in `confirmation`. Preview results also include an opaque
+  `configRevision`; passing it back as `expectedRevision` makes preview/apply
+  workflows fail closed when the target changed in between.
   """
 
   alias LemonAgent.ModelRuntime.ProviderNames
@@ -57,6 +59,7 @@ defmodule LemonAgent.ModelRuntime.ProviderConfiguration do
 
   defp configure_locked(action, params, target, project_dir) do
     with {:ok, original} <- read_config(target.path),
+         :ok <- validate_expected_revision(original, params),
          {:ok, decoded} <- decode_config(original),
          {:ok, mutation} <- mutate(action, params, original, decoded),
          {:ok, decoded_after} <- decode_config(mutation.content),
@@ -77,6 +80,8 @@ defmodule LemonAgent.ModelRuntime.ProviderConfiguration do
          "changed" => mutation.changed,
          "targetScope" => target.scope,
          "destructive" => mutation.destructive,
+         "configRevision" => config_revision(original),
+         "proposedConfigRevision" => config_revision(mutation.content),
          "confirmation" => confirmation_summary(mutation),
          "routingConfig" => snapshot(effective),
          "proposedRoutingConfig" => proposed,
@@ -233,6 +238,24 @@ defmodule LemonAgent.ModelRuntime.ProviderConfiguration do
     end
   end
 
+  defp validate_expected_revision(content, params) do
+    case param(params, "expectedRevision") do
+      nil ->
+        :ok
+
+      expected when is_binary(expected) ->
+        if secure_compare(expected, config_revision(content)) do
+          :ok
+        else
+          {:error, :stale_configuration,
+           "Provider configuration changed after the preview; preview again"}
+        end
+
+      _ ->
+        {:error, :invalid_revision, "Provider configuration revision is not valid"}
+    end
+  end
+
   defp maybe_write(%{changed: false}, _path, _params), do: :ok
   defp maybe_write(_mutation, _path, params) when not is_map(params), do: :ok
 
@@ -319,8 +342,15 @@ defmodule LemonAgent.ModelRuntime.ProviderConfiguration do
       "includesCredentialReferences" => false,
       "includesRawBaseUrls" => false,
       "includesEnvVarNames" => false,
+      "includesConfigPaths" => false,
       "preservesUnrelatedConfig" => true
     }
+  end
+
+  defp config_revision(content) when is_binary(content) do
+    content
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.url_encode64(padding: false)
   end
 
   defp credential_counts(credentials) when is_map(credentials) do
