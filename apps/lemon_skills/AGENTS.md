@@ -135,11 +135,11 @@ The Registry GenServer holds:
 - `global_skills`: `%{key => Entry.t()}` -- loaded eagerly on startup
 - `project_skills`: `%{cwd => %{key => Entry.t()}}` -- loaded lazily per cwd
 - `global_search` / `project_search`: precomputed lower-cased metadata, keywords, and bounded body excerpts
-- `global_views` / `project_views`: cached requirement/provenance views used by prompt rendering
+- `global_identity` / `project_identities`: content-addressed snapshots of discovered `SKILL.md` files and lockfiles
 
 When listing/getting, project skills override global skills on key collision. Skills are sorted by key for deterministic ordering (important for stable system prompts and prompt caching).
 
-Disk reads and requirement/config checks happen at startup, explicit refresh, and register/unregister boundaries. `find_relevant/2` takes a short cached snapshot from the GenServer and scores it in the caller process, so concurrent lookups do not serialize body reads or scoring in the registry. Call `LemonSkills.refresh/1` after external edits or PATH/environment changes.
+Search documents are rebuilt at startup, register/unregister boundaries, and when a 50 ms coalesced identity check observes a changed skill file, directory set, or lockfile. The identity scan hashes file content outside the Registry process, so same-size rewrites invalidate safely without serializing callers behind filesystem I/O. Requirement/provenance views are built from cached entries plus current PATH, environment, and disabled-skill config on each call. `find_relevant/2` takes a short cached snapshot from the GenServer and scores it in the caller process. `LemonSkills.refresh/1` remains available for an immediate forced refresh.
 
 ### Relevance Scoring
 

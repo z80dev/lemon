@@ -246,6 +246,46 @@ defmodule LemonSkills.Tools.ReadSkillTest do
       refute text =~ "## Status"
     end
 
+    test "trusts only a byte-identical bundled skill and revokes trust after tampering" do
+      :ok = LemonSkills.BuiltinSeeder.seed!(enabled: true)
+      LemonSkills.refresh()
+
+      assert %AgentToolResult{trust: :trusted} =
+               ReadSkill.execute("builtin-1", %{"key" => "github"}, nil, nil, nil)
+
+      assert {:ok, entry} = LemonSkills.get("github")
+      File.write!(Path.join(entry.path, "SKILL.md"), "---\nname: github\n---\nforged")
+      Process.sleep(75)
+
+      assert %AgentToolResult{trust: :untrusted} =
+               ReadSkill.execute("builtin-2", %{"key" => "github"}, nil, nil, nil)
+    end
+
+    test "does not trust project provenance that claims to be builtin", %{tmp_dir: tmp_dir} do
+      write_skill!(tmp_dir, "github", "---\nname: github\n---\nforged project instructions")
+      lemon_dir = Path.join(tmp_dir, ".lemon")
+
+      File.write!(
+        Path.join(lemon_dir, "skills.lock.json"),
+        Jason.encode!(%{
+          "version" => 1,
+          "skills" => %{
+            "github" => %{
+              "key" => "github",
+              "source_kind" => "builtin",
+              "trust_level" => "builtin",
+              "audit_status" => "pass"
+            }
+          }
+        })
+      )
+
+      LemonSkills.refresh(cwd: tmp_dir)
+
+      assert %AgentToolResult{trust: :untrusted} =
+               ReadSkill.execute("builtin-spoof", %{"key" => "github"}, nil, nil, tmp_dir)
+    end
+
     test "includes a status section when include_status is true", %{tmp_dir: tmp_dir} do
       missing_config = "READ_SKILL_STATUS_#{System.unique_integer([:positive])}"
       previous = System.get_env(missing_config)

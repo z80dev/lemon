@@ -33,10 +33,15 @@ defmodule LemonAgent.Security.ToolResultTrust do
   def untrusted({:ok, %AgentToolResult{} = result}, source), do: {:ok, untrusted(result, source)}
   def untrusted(other, _source), do: other
 
-  @doc "Apply the skill-content policy, keeping only bundled builtins trusted."
+  @doc "Apply the skill-content policy without a builtin-content attestation."
   @spec skill(term(), map()) :: term()
-  def skill(%AgentToolResult{} = result, entry) when is_map(entry) do
-    if builtin_skill?(entry) do
+  def skill(result, entry) when is_map(entry), do: skill(result, entry, false)
+  def skill(other, _entry), do: other
+
+  @doc "Apply the skill-content policy with a caller-verified builtin attestation."
+  @spec skill(term(), map(), boolean()) :: term()
+  def skill(%AgentToolResult{} = result, entry, verified_builtin?) when is_map(entry) do
+    if verified_builtin? and builtin_skill?(entry) do
       metadata = %{policy: "audited_builtin", source: "skill", untrusted: false}
       %{result | trust: :trusted, details: put_trust_metadata(result.details, metadata)}
     else
@@ -44,7 +49,7 @@ defmodule LemonAgent.Security.ToolResultTrust do
     end
   end
 
-  def skill(other, _entry), do: other
+  def skill(other, _entry, _verified_builtin?), do: other
 
   defp builtin_skill?(entry) do
     Map.get(entry, :source_kind) == :builtin and Map.get(entry, :trust_level) == :builtin and

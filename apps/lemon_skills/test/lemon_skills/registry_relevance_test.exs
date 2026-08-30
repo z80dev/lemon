@@ -216,7 +216,7 @@ defmodule LemonSkills.RegistryRelevanceTest do
     assert hd(results).key == "project-skill"
   end
 
-  test "reuses cached body excerpts until an explicit refresh", %{tmp_dir: tmp_dir} do
+  test "invalidates cached body excerpts when SKILL.md changes", %{tmp_dir: tmp_dir} do
     skill_dir = Path.join([tmp_dir, ".lemon", "skill", "cached-body"])
     skill_file = Path.join(skill_dir, "SKILL.md")
     File.mkdir_p!(skill_dir)
@@ -231,15 +231,71 @@ defmodule LemonSkills.RegistryRelevanceTest do
 
     File.write!(
       skill_file,
-      "---\nname: Cached Body\ndescription: Generic helper\n---\nnebularneedle"
+      "---\nname: Cached Body\ndescription: Generic helper\n---\ncosmicneedle"
     )
 
-    assert [%{key: "cached-body"}] = LemonSkills.find_relevant("quasarneedle", cwd: tmp_dir)
-    assert [] = LemonSkills.find_relevant("nebularneedle", cwd: tmp_dir)
+    Process.sleep(75)
+
+    assert [] = LemonSkills.find_relevant("quasarneedle", cwd: tmp_dir)
+    assert [%{key: "cached-body"}] = LemonSkills.find_relevant("cosmicneedle", cwd: tmp_dir)
+  end
+
+  test "invalidates disabled filtering and requirement views without refresh", %{tmp_dir: tmp_dir} do
+    env_key = "LEMON_SKILL_CACHE_PROBE_#{System.unique_integer([:positive])}"
+    System.delete_env(env_key)
+    on_exit(fn -> System.delete_env(env_key) end)
+
+    skill_dir = Path.join([tmp_dir, ".lemon", "skill", "dynamic-status"])
+    File.mkdir_p!(skill_dir)
+
+    File.write!(
+      Path.join(skill_dir, "SKILL.md"),
+      "---\nname: Dynamic Status\ndescription: statuscacheprobe helper\nrequires:\n  config:\n    - #{env_key}\n---\nbody"
+    )
 
     LemonSkills.refresh(cwd: tmp_dir)
-    assert [] = LemonSkills.find_relevant("quasarneedle", cwd: tmp_dir)
-    assert [%{key: "cached-body"}] = LemonSkills.find_relevant("nebularneedle", cwd: tmp_dir)
+
+    assert [%{activation_state: :not_ready}] =
+             LemonSkills.Registry.list_views(cwd: tmp_dir)
+             |> Enum.filter(&(&1.key == "dynamic-status"))
+
+    System.put_env(env_key, "present")
+
+    assert [%{activation_state: :active}] =
+             LemonSkills.Registry.list_views(cwd: tmp_dir)
+             |> Enum.filter(&(&1.key == "dynamic-status"))
+
+    File.mkdir_p!(Path.join(tmp_dir, ".lemon"))
+
+    File.write!(
+      Path.join([tmp_dir, ".lemon", "skills.json"]),
+      ~s({"disabled":["dynamic-status"]})
+    )
+
+    Process.sleep(75)
+
+    assert [] = LemonSkills.find_relevant("statuscacheprobe", cwd: tmp_dir)
+
+    assert [%{activation_state: :hidden}] =
+             LemonSkills.Registry.list_views(cwd: tmp_dir)
+             |> Enum.filter(&(&1.key == "dynamic-status"))
+  end
+
+  test "discovers added and removed skill paths without refresh", %{tmp_dir: tmp_dir} do
+    LemonSkills.refresh(cwd: tmp_dir)
+    assert :error = LemonSkills.get("late-skill", cwd: tmp_dir)
+
+    skill_dir = Path.join([tmp_dir, ".lemon", "skill", "late-skill"])
+    File.mkdir_p!(skill_dir)
+    File.write!(Path.join(skill_dir, "SKILL.md"), "---\nname: Late Skill\n---\nbody")
+
+    Process.sleep(75)
+
+    assert {:ok, %{key: "late-skill"}} = LemonSkills.get("late-skill", cwd: tmp_dir)
+
+    File.rm_rf!(skill_dir)
+    Process.sleep(75)
+    assert :error = LemonSkills.get("late-skill", cwd: tmp_dir)
   end
 
   test "breaks equal-score ties by stable skill key", %{tmp_dir: tmp_dir} do

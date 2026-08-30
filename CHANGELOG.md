@@ -17,6 +17,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Turn-specific skill relevance no longer changes the cacheable system prompt;
   missed-skill introspection uses turn-local keys, and local file/search/shell
   plus community skill results are fenced as untrusted data before model calls.
+- Skill discovery now invalidates content-addressed caches after file, directory,
+  lockfile, environment, or disabled-config changes; malformed typed metadata is
+  rejected without crashing. Pre-LLM tool fencing ignores spoofed trust metadata,
+  bounds hostile text, avoids double-fencing web output, and attests builtin skill
+  content against the bundled release copy before granting instruction trust.
 - Product releases can now be cut and published from one manual Release
   workflow dispatch; the workflow derives CalVer, consumes the Unreleased
   notes, commits and tags the release, verifies every artifact, publishes the
