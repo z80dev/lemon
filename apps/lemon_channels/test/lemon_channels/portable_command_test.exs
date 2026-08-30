@@ -3,7 +3,7 @@ defmodule LemonChannels.PortableCommandTest do
 
   alias LemonChannels.PortableCommand
 
-  defmodule FakeRuntime do
+  defmodule PortableCommandFakeRuntime do
     def list_tasks do
       [
         {"task-1234567890",
@@ -28,7 +28,12 @@ defmodule LemonChannels.PortableCommandTest do
 
   setup do
     previous = Application.get_env(:lemon_control_plane, :agent_runtime_provider)
-    Application.put_env(:lemon_control_plane, :agent_runtime_provider, FakeRuntime)
+
+    Application.put_env(
+      :lemon_control_plane,
+      :agent_runtime_provider,
+      PortableCommandFakeRuntime
+    )
 
     on_exit(fn ->
       if previous do

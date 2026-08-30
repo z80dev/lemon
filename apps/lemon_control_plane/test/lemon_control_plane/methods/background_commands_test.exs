@@ -13,7 +13,7 @@ defmodule LemonControlPlane.Methods.BackgroundCommandsTest do
 
   alias LemonControlPlane.Protocol.Schemas
 
-  defmodule FakeRuntime do
+  defmodule BackgroundCommandsFakeRuntime do
     def background_start("run checks", opts) do
       send(self(), {:background_start, opts})
       {:ok, %{id: "bg_123", status: :queued}}
@@ -39,7 +39,12 @@ defmodule LemonControlPlane.Methods.BackgroundCommandsTest do
 
   setup do
     previous = Application.get_env(:lemon_control_plane, :agent_runtime_provider)
-    Application.put_env(:lemon_control_plane, :agent_runtime_provider, FakeRuntime)
+
+    Application.put_env(
+      :lemon_control_plane,
+      :agent_runtime_provider,
+      BackgroundCommandsFakeRuntime
+    )
 
     on_exit(fn ->
       if previous do
