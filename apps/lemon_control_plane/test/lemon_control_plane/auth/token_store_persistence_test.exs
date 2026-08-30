@@ -16,6 +16,10 @@ defmodule LemonControlPlane.Auth.TokenStorePersistenceTest do
         LemonCore.Store.list(:session_tokens) |> Enum.each(fn {k, _} ->
           LemonCore.Store.delete(:session_tokens, k)
         end)
+
+        LemonCore.Store.list(:session_token_heads) |> Enum.each(fn {k, _} ->
+          LemonCore.Store.delete(:session_token_heads, k)
+        end)
       rescue
         _ -> :ok
       end
@@ -177,6 +181,57 @@ defmodule LemonControlPlane.Auth.TokenStorePersistenceTest do
       assert expired_count == 1
 
       assert LemonCore.Store.get(:session_tokens, token) == nil
+    end
+  end
+
+  describe "atomic node session replacement" do
+    test "concurrent replacements leave exactly one accepted credential" do
+      node_id = "atomic-node-#{System.unique_integer([:positive])}"
+      identity = %{"type" => "node", "nodeId" => node_id}
+
+      replacements =
+        1..12
+        |> Enum.map(fn index ->
+          token = "atomic-token-#{index}-#{System.unique_integer([:positive])}"
+
+          Task.async(fn ->
+            {token, TokenStore.replace_node_session(token, identity, ttl_ms: 60_000)}
+          end)
+        end)
+        |> Enum.map(&Task.await(&1, 2_000))
+
+      assert Enum.all?(replacements, fn {_token, result} -> match?({:ok, _}, result) end)
+
+      accepted =
+        Enum.filter(replacements, fn {token, _result} ->
+          match?({:ok, _identity}, TokenStore.validate(token))
+        end)
+
+      assert [{accepted_token, {:ok, accepted_info}}] = accepted
+      generation = accepted_info.identity["sessionGeneration"]
+      assert generation == TokenStore.current_node_generation(node_id)
+      assert generation == 12
+      accepted_identity = accepted_info.identity
+      assert {:ok, ^accepted_identity} = TokenStore.validate(accepted_token)
+    end
+
+    test "replacement switches directly from old token to new generation" do
+      node_id = "rotated-node-#{System.unique_integer([:positive])}"
+      identity = %{"type" => "node", "nodeId" => node_id}
+
+      assert {:ok, first} =
+               TokenStore.replace_node_session("first-token", identity, ttl_ms: 60_000)
+
+      first_identity = first.identity
+      assert {:ok, ^first_identity} = TokenStore.validate("first-token")
+
+      assert {:ok, second} =
+               TokenStore.replace_node_session("second-token", identity, ttl_ms: 60_000)
+
+      assert second.identity["sessionGeneration"] == first.identity["sessionGeneration"] + 1
+      assert {:error, :invalid_token} = TokenStore.validate("first-token")
+      second_identity = second.identity
+      assert {:ok, ^second_identity} = TokenStore.validate("second-token")
     end
   end
 

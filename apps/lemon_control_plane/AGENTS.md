@@ -351,6 +351,11 @@ themselves claim that destination execution was cancelled.
 An approved pairing ID may reissue a fresh one-time challenge for its existing
 durable node identity, allowing the joining worker to recover from socket loss
 after approval or challenge consumption without orphaning the reserved name.
+Challenge exchange is an atomic take: concurrent exchanges can issue at most
+one credential. Node credential replacement is also serialized per durable
+identity. Advancing its session generation immediately invalidates the prior
+token, closes the prior live socket, and prevents that socket from settling
+work dispatched by another generation.
 Named-node requests/results enforce the advertised `maxPayload` (1 MiB by
 default) plus shared depth/item-count limits. Raw request arguments exist only
 in the targeted live dispatch; durable invocation records retain a content-free
@@ -509,9 +514,11 @@ Token validation is handled by `LemonControlPlane.Auth.TokenStore` (backed by `L
 worker when its operator connection has pairing scope. The worker persists the
 issued session and recovery credentials in a mode-0600 destination file keyed
 by durable node ID and records the exact controller URL; reuse fails closed
-when that controller does not match. After the seven-day session expires,
+when that controller does not match. ID-based recovery material is not loaded
+unless the caller supplies that exact stored controller URL. After the
+seven-day session expires,
 `--pair` recovers the same durable node and issues a fresh session while
-revoking older sessions. Controller renames remain valid because recovery uses
+atomically revoking older sessions and their live sockets. Controller renames remain valid because recovery uses
 the node ID and controller's current name. An explicit operator-authorized
 `--pair --repair --node-id ID` rotates recovery credentials for compatible
 legacy records that lack one.

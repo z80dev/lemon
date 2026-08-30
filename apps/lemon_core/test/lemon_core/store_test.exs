@@ -446,6 +446,44 @@ defmodule LemonCore.StoreTest do
       assert owner in 1..12
     end
 
+    test "generic take allows exactly one concurrent consumer" do
+      key = "take_#{unique_token()}"
+      assert :ok = Store.put(:node_challenges, key, %{node_id: "node-1"})
+
+      results =
+        1..12
+        |> Enum.map(fn _ -> Task.async(fn -> Store.take(:node_challenges, key) end) end)
+        |> Enum.map(&Task.await(&1, 2_000))
+
+      assert Enum.count(results, &(&1 == %{node_id: "node-1"})) == 1
+      assert Enum.count(results, &is_nil/1) == 11
+      assert Store.get(:node_challenges, key) == nil
+    end
+
+    test "generic compare_and_swap serializes concurrent replacements" do
+      key = "cas_#{unique_token()}"
+      assert :ok = Store.put(:session_token_heads, key, %{generation: 1})
+
+      results =
+        2..13
+        |> Enum.map(fn generation ->
+          Task.async(fn ->
+            Store.compare_and_swap(
+              :session_token_heads,
+              key,
+              %{generation: 1},
+              %{generation: generation}
+            )
+          end)
+        end)
+        |> Enum.map(&Task.await(&1, 2_000))
+
+      assert Enum.count(results, &(&1 == :ok)) == 1
+      assert Enum.count(results, &(&1 == {:error, :mismatch})) == 11
+      assert %{generation: generation} = Store.get(:session_token_heads, key)
+      assert generation in 2..13
+    end
+
     test "finalize_run writes history to RunHistoryStore" do
       token = unique_token()
       key = session_key(token)

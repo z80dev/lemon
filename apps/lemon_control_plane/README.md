@@ -306,6 +306,11 @@ node session token; it does not retain the operator credential.
 the approval challenge or session token.
 
 Token validation is handled by `Auth.TokenStore`, backed by `LemonCore.Store` under the `:session_tokens` namespace. Tokens are validated on each connection attempt and expired tokens are cleaned up lazily.
+One-time challenges are consumed atomically, so concurrent exchanges cannot
+mint multiple credentials. Node credentials have a controller-side generation:
+replacement atomically advances the generation, immediately invalidates the
+older token and live socket, and rejects results submitted by that stale
+connection.
 
 The source-checkout execution-node CLI performs the request, approval, and
 challenge exchange when the connecting operator has pairing scope:
@@ -320,7 +325,8 @@ LEMON_NODE_OPERATOR_TOKEN=... ./bin/lemon node join \
 
 The CLI stores the issued session and recovery credentials on the destination
 in a private file keyed by durable node ID and bound to the exact controller
-URL. Subsequent starts omit `--pair`. Re-run with `--pair` after session expiry:
+URL. ID-based lookup does not expose its recovery material unless the caller
+supplies that exact controller URL. Subsequent starts omit `--pair`. Re-run with `--pair` after session expiry:
 the recovery exchange retains the existing identity and current durable name,
 then revokes older node sessions as it issues the new one. Controller renames
 therefore do not strand the destination credential. Compatible legacy records

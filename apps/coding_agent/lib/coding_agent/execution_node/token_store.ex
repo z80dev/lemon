@@ -27,7 +27,8 @@ defmodule CodingAgent.ExecutionNode.TokenStore do
   def load_node(node_id, opts \\ []) when is_binary(node_id) do
     with {:ok, path} <- node_path(node_id, opts),
          {:ok, record} <- read_record(path),
-         true <- record["nodeId"] == String.trim(node_id) do
+         true <- record["nodeId"] == String.trim(node_id),
+         :ok <- exact_controller_match(record, opts) do
       {:ok, record}
     else
       {:error, :enoent} -> {:error, :not_found}
@@ -167,6 +168,16 @@ defmodule CodingAgent.ExecutionNode.TokenStore do
     stored_alias = record["localName"] || record["nodeName"]
     controller_matches = is_nil(controller) or record["controller"] == controller
     stored_alias == alias_name and controller_matches
+  end
+
+  defp exact_controller_match(record, opts) do
+    case Keyword.get(opts, :controller) do
+      controller when is_binary(controller) and controller != "" ->
+        if record["controller"] == controller, do: :ok, else: {:error, :controller_mismatch}
+
+      _ ->
+        {:error, :controller_required}
+    end
   end
 
   defp read_record(path) do

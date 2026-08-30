@@ -10,6 +10,7 @@ defmodule LemonControlPlane.Methods.NodeInvokeResult do
   @behaviour LemonControlPlane.Method
 
   alias LemonControlPlane.NodeStore
+  alias LemonControlPlane.Auth.TokenStore
   alias LemonControlPlane.Protocol.Errors
 
   @impl true
@@ -23,6 +24,8 @@ defmodule LemonControlPlane.Methods.NodeInvokeResult do
     auth = ctx[:auth] || ctx
     role = get_field(auth, :role)
     authenticated_node_id = get_field(auth, :client_id)
+    connection_pid = ctx[:conn_pid]
+    generation = session_generation(auth)
     invoke_id = params["invokeId"] || params["invoke_id"]
     result = params["result"]
     error = params["error"]
@@ -37,8 +40,21 @@ defmodule LemonControlPlane.Methods.NodeInvokeResult do
       not is_binary(invoke_id) or String.trim(invoke_id) == "" ->
         {:error, Errors.invalid_request("invokeId must be a non-empty string")}
 
+      not is_pid(connection_pid) ->
+        {:error, Errors.forbidden("Authenticated node connection is required")}
+
+      not current_session?(authenticated_node_id, generation) ->
+        {:error, Errors.forbidden("Node session has been superseded")}
+
       true ->
-        complete_invocation(authenticated_node_id, invoke_id, result, error)
+        complete_invocation(
+          authenticated_node_id,
+          connection_pid,
+          generation,
+          invoke_id,
+          result,
+          error
+        )
     end
   end
 
@@ -56,8 +72,22 @@ defmodule LemonControlPlane.Methods.NodeInvokeResult do
     settle_pending(invoke_id, nil, inspect(reason))
   end
 
-  defp complete_invocation(authenticated_node_id, invoke_id, result, error) do
-    case LemonCore.NodeRegistry.complete(authenticated_node_id, invoke_id, result, error) do
+  defp complete_invocation(
+         authenticated_node_id,
+         connection_pid,
+         generation,
+         invoke_id,
+         result,
+         error
+       ) do
+    case LemonCore.NodeRegistry.complete_session(
+           authenticated_node_id,
+           connection_pid,
+           generation,
+           invoke_id,
+           result,
+           error
+         ) do
       :ok ->
         settle_live_result(authenticated_node_id, invoke_id, result, error)
 
@@ -66,6 +96,9 @@ defmodule LemonControlPlane.Methods.NodeInvokeResult do
 
       {:error, :not_found} ->
         complete_legacy_invocation(authenticated_node_id, invoke_id, result, error)
+
+      {:error, :stale_session} ->
+        {:error, Errors.forbidden("Invocation belongs to a superseded node session")}
 
       {:error, {:invalid_payload, reason}} ->
         {:error,
@@ -204,6 +237,24 @@ defmodule LemonControlPlane.Methods.NodeInvokeResult do
   end
 
   defp pending?(invocation), do: get_field(invocation, :status) in [:pending, "pending"]
+
+  defp session_generation(auth) do
+    auth
+    |> get_field(:identity)
+    |> case do
+      identity when is_map(identity) -> get_field(identity, :sessionGeneration) || 0
+      _ -> 0
+    end
+  end
+
+  defp current_session?(node_id, generation) when is_integer(generation) do
+    case TokenStore.current_node_generation(node_id) do
+      nil -> generation == 0
+      current -> current == generation
+    end
+  end
+
+  defp current_session?(_node_id, _generation), do: false
 
   defp payload_error_kind({kind, _detail})
        when kind in [:max_bytes, :max_depth, :max_items, :not_json_safe],

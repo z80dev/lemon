@@ -31,6 +31,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   sessions on rotation, and provide an explicit repair path for legacy local
   credentials. Non-loopback plaintext controller connections now fail closed
   unless development or a verified encrypted overlay is explicitly selected.
+- Named-node challenge exchange and per-identity credential replacement are now
+  atomic. Rotation closes stale live sockets, binds result settlement to the
+  authorized connection generation, and withholds ID-based recovery material
+  unless the exact stored controller is supplied.
 - Closed unauthenticated named-node operator access on the control-plane
   WebSocket: non-loopback operators now fail closed, configured operator tokens
   use constant-time validation, unknown session identities cannot escalate, and

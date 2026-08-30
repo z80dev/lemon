@@ -32,7 +32,19 @@ defmodule LemonCore.NodeRegistry do
   @spec register(String.t(), String.t(), pid(), map()) :: :ok | {:error, term()}
   def register(node_id, name, pid, metadata \\ %{})
       when is_binary(node_id) and is_binary(name) and is_pid(pid) and is_map(metadata) do
-    GenServer.call(__MODULE__, {:register, node_id, String.trim(name), pid, metadata})
+    GenServer.call(__MODULE__, {:register, node_id, String.trim(name), pid, 0, metadata, false})
+  end
+
+  @doc "Registers the authenticated connection and credential generation for a node session."
+  @spec register_session(String.t(), String.t(), pid(), non_neg_integer(), map()) ::
+          :ok | {:error, term()}
+  def register_session(node_id, name, pid, generation, metadata \\ %{})
+      when is_binary(node_id) and is_binary(name) and is_pid(pid) and
+             is_integer(generation) and generation >= 0 and is_map(metadata) do
+    GenServer.call(
+      __MODULE__,
+      {:register, node_id, String.trim(name), pid, generation, metadata, true}
+    )
   end
 
   @spec unregister(String.t(), pid()) :: :ok
@@ -94,6 +106,25 @@ defmodule LemonCore.NodeRegistry do
     GenServer.call(__MODULE__, {:complete, node_id, invoke_id, result, error})
   end
 
+  @doc "Completes an invocation only from the connection generation that received it."
+  @spec complete_session(String.t(), pid(), non_neg_integer(), String.t(), term(), term()) ::
+          :ok | {:error, term()}
+  def complete_session(node_id, connection_pid, generation, invoke_id, result, error \\ nil)
+      when is_binary(node_id) and is_pid(connection_pid) and is_integer(generation) and
+             generation >= 0 and is_binary(invoke_id) do
+    GenServer.call(
+      __MODULE__,
+      {:complete_session, node_id, connection_pid, generation, invoke_id, result, error}
+    )
+  end
+
+  @doc "Revokes a live connection from any credential generation older than `generation`."
+  @spec revoke_session(String.t(), non_neg_integer()) :: :ok
+  def revoke_session(node_id, generation)
+      when is_binary(node_id) and is_integer(generation) and generation >= 0 do
+    GenServer.call(__MODULE__, {:revoke_session, node_id, generation})
+  end
+
   @doc "Pushes an event directly to one live node connection."
   @spec push(String.t(), String.t(), map()) :: :ok | {:error, :not_found}
   def push(name_or_id, event_name, payload)
@@ -107,16 +138,17 @@ defmodule LemonCore.NodeRegistry do
   end
 
   @impl true
-  def handle_call({:register, _node_id, "", _pid, _metadata}, _from, state) do
+  def handle_call({:register, _node_id, "", _pid, _generation, _metadata, _revoke?}, _from, state) do
     {:reply, {:error, :invalid_name}, state}
   end
 
-  def handle_call({:register, node_id, name, pid, metadata}, _from, state) do
+  def handle_call({:register, node_id, name, pid, generation, metadata, revoke?}, _from, state) do
     case Map.get(state.names, name) do
       existing_id when is_binary(existing_id) and existing_id != node_id ->
         {:reply, {:error, {:name_taken, name}}, state}
 
       _ ->
+        if revoke?, do: revoke_replaced_connection(state, node_id, pid, generation)
         state = remove_node(state, node_id, :reconnected)
         monitor_ref = Process.monitor(pid)
 
@@ -125,6 +157,7 @@ defmodule LemonCore.NodeRegistry do
           name: name,
           pid: pid,
           metadata: metadata,
+          generation: generation,
           connected_at_ms: System.system_time(:millisecond),
           monitor_ref: monitor_ref
         }
@@ -229,6 +262,7 @@ defmodule LemonCore.NodeRegistry do
               id: invoke_id,
               node_id: node.id,
               node_pid: node.pid,
+              node_generation: node.generation,
               recipient: recipient,
               recipient_ref: recipient_ref,
               timer_ref: timer_ref,
@@ -285,24 +319,39 @@ defmodule LemonCore.NodeRegistry do
         {:reply, {:error, :wrong_node}, state}
 
       invocation ->
-        case JSONPayload.validate(%{"result" => result, "error" => error},
-               max_bytes: invocation.max_payload_bytes
-             ) do
-          {:ok, _stats} ->
-            cancel_invocation_monitors(invocation)
-            reply = if is_nil(error), do: {:ok, result}, else: {:error, {:remote, error}}
-            notify(invocation, reply)
+        complete_invocation(invocation, invoke_id, result, error, state)
+    end
+  end
 
-            {:reply, :ok, %{state | invocations: Map.delete(state.invocations, invoke_id)}}
+  def handle_call(
+        {:complete_session, node_id, connection_pid, generation, invoke_id, result, error},
+        _from,
+        state
+      ) do
+    case {Map.get(state.nodes, node_id), Map.get(state.invocations, invoke_id)} do
+      {_node, nil} ->
+        {:reply, {:error, :not_found}, state}
 
-          {:error, reason} ->
-            cancel_invocation_monitors(invocation)
-            cancel_remote_invocation(state, invoke_id, invocation, {:invalid_payload, reason})
-            notify(invocation, {:error, {:invalid_remote_payload, payload_error_kind(reason)}})
+      {_node, %{node_id: expected_node_id}} when expected_node_id != node_id ->
+        {:reply, {:error, :wrong_node}, state}
 
-            {:reply, {:error, {:invalid_payload, reason}},
-             %{state | invocations: Map.delete(state.invocations, invoke_id)}}
-        end
+      {%{pid: ^connection_pid, generation: ^generation},
+       %{node_pid: ^connection_pid, node_generation: ^generation} = invocation} ->
+        complete_invocation(invocation, invoke_id, result, error, state)
+
+      _ ->
+        {:reply, {:error, :stale_session}, state}
+    end
+  end
+
+  def handle_call({:revoke_session, node_id, generation}, _from, state) do
+    case Map.get(state.nodes, node_id) do
+      %{generation: current_generation, pid: pid} when current_generation < generation ->
+        send(pid, {:node_session_revoked, node_id, generation})
+        {:reply, :ok, remove_node(state, node_id, :credential_rotated)}
+
+      _ ->
+        {:reply, :ok, state}
     end
   end
 
@@ -352,6 +401,37 @@ defmodule LemonCore.NodeRegistry do
 
   defp public_node(node) do
     Map.take(node, [:id, :name, :pid, :metadata, :connected_at_ms])
+  end
+
+  defp revoke_replaced_connection(state, node_id, replacement_pid, generation) do
+    case Map.get(state.nodes, node_id) do
+      %{pid: pid} when pid != replacement_pid ->
+        send(pid, {:node_session_revoked, node_id, generation})
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp complete_invocation(invocation, invoke_id, result, error, state) do
+    case JSONPayload.validate(%{"result" => result, "error" => error},
+           max_bytes: invocation.max_payload_bytes
+         ) do
+      {:ok, _stats} ->
+        cancel_invocation_monitors(invocation)
+        reply = if is_nil(error), do: {:ok, result}, else: {:error, {:remote, error}}
+        notify(invocation, reply)
+
+        {:reply, :ok, %{state | invocations: Map.delete(state.invocations, invoke_id)}}
+
+      {:error, reason} ->
+        cancel_invocation_monitors(invocation)
+        cancel_remote_invocation(state, invoke_id, invocation, {:invalid_payload, reason})
+        notify(invocation, {:error, {:invalid_remote_payload, payload_error_kind(reason)}})
+
+        {:reply, {:error, {:invalid_payload, reason}},
+         %{state | invocations: Map.delete(state.invocations, invoke_id)}}
+    end
   end
 
   defp remove_node(state, node_id, reason) do

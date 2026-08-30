@@ -40,19 +40,8 @@ defmodule LemonControlPlane.Methods.ConnectChallenge do
     else
       case verify_challenge(challenge, ctx) do
         {:ok, identity} ->
-          # Generate session token
           token = generate_session_token()
-
-          # A node has one current session credential. Exchanging a fresh
-          # challenge rotates it and revokes every older session for that ID.
-          with :ok <- revoke_previous_node_sessions(identity),
-               {:ok, _token_info} <-
-                 TokenStore.store(token, identity,
-                   ttl_ms: @token_ttl_ms,
-                   conn_id: ctx[:conn_id]
-                 ) do
-            verified_response(identity, token)
-          end
+          issue_session(identity, token, ctx)
 
         {:error, reason} ->
           {:error, Errors.unauthorized(reason)}
@@ -83,19 +72,37 @@ defmodule LemonControlPlane.Methods.ConnectChallenge do
      }}
   end
 
-  defp revoke_previous_node_sessions(%{"type" => "node", "nodeId" => node_id})
+  defp issue_session(%{"type" => "node", "nodeId" => node_id} = identity, token, ctx)
        when is_binary(node_id) do
-    case TokenStore.revoke_identity("node", node_id) do
-      {:ok, _count} -> :ok
-      {:error, reason} -> {:error, reason}
+    with {:ok, token_info} <-
+           TokenStore.replace_node_session(token, identity,
+             ttl_ms: @token_ttl_ms,
+             conn_id: ctx[:conn_id]
+           ),
+         {:ok, generation} <- session_generation(token_info.identity),
+         :ok <- LemonCore.NodeRegistry.revoke_session(node_id, generation) do
+      verified_response(token_info.identity, token)
     end
   end
 
-  defp revoke_previous_node_sessions(_identity), do: :ok
+  defp issue_session(identity, token, ctx) do
+    with {:ok, _token_info} <-
+           TokenStore.store(token, identity,
+             ttl_ms: @token_ttl_ms,
+             conn_id: ctx[:conn_id]
+           ) do
+      verified_response(identity, token)
+    end
+  end
+
+  defp session_generation(%{"sessionGeneration" => generation}) when is_integer(generation),
+    do: {:ok, generation}
+
+  defp session_generation(_identity), do: {:error, :invalid_session_generation}
 
   defp verify_challenge(challenge, ctx) do
     # Check if this is a device pairing verification
-    case DevicePairingStore.get_challenge(challenge) do
+    case DevicePairingStore.take_challenge(challenge) do
       nil ->
         # Check if it's a node pairing verification
         verify_node_challenge(challenge, ctx)
@@ -105,9 +112,6 @@ defmodule LemonControlPlane.Methods.ConnectChallenge do
         expires_at = pairing_info[:expires_at_ms] || pairing_info["expires_at_ms"]
 
         if expires_at && expires_at > System.system_time(:millisecond) do
-          # Clean up the challenge after successful verification (one-time use)
-          DevicePairingStore.delete_challenge(challenge)
-
           {:ok,
            %{
              "type" => "device",
@@ -115,10 +119,11 @@ defmodule LemonControlPlane.Methods.ConnectChallenge do
              "deviceName" => pairing_info[:device_name] || pairing_info["device_name"]
            }}
         else
-          # Clean up expired challenge
-          DevicePairingStore.delete_challenge(challenge)
           {:error, "Challenge expired"}
         end
+
+      {:error, _reason} ->
+        {:error, "Challenge store unavailable"}
 
       _ ->
         verify_node_challenge(challenge, ctx)
@@ -127,7 +132,7 @@ defmodule LemonControlPlane.Methods.ConnectChallenge do
 
   defp verify_node_challenge(challenge, _ctx) do
     # Check against stored node challenges
-    case NodeStore.get_challenge(challenge) do
+    case NodeStore.take_challenge(challenge) do
       nil ->
         {:error, "Invalid challenge"}
 
@@ -135,9 +140,6 @@ defmodule LemonControlPlane.Methods.ConnectChallenge do
         expires_at = node_info[:expires_at_ms] || node_info["expires_at_ms"]
 
         if expires_at && expires_at > System.system_time(:millisecond) do
-          # Clean up the challenge after successful verification (one-time use)
-          NodeStore.delete_challenge(challenge)
-
           {:ok,
            %{
              "type" => "node",
@@ -145,10 +147,11 @@ defmodule LemonControlPlane.Methods.ConnectChallenge do
              "nodeName" => node_info[:node_name] || node_info["node_name"]
            }}
         else
-          # Clean up expired challenge
-          NodeStore.delete_challenge(challenge)
           {:error, "Challenge expired"}
         end
+
+      {:error, _reason} ->
+        {:error, "Challenge store unavailable"}
 
       _ ->
         {:error, "Invalid challenge"}
