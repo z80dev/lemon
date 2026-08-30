@@ -12,7 +12,7 @@ let harness: Harness;
 
 beforeEach(async () => {
 	initTheme({ colorLevel: 3 });
-	harness = await createHarness({ sessionKey: "tui-session" });
+	harness = await createHarness({ sessionKey: "tui-session", cwd: "/workspace/project" });
 });
 
 afterEach(() => {
@@ -285,10 +285,11 @@ describe("runs and goals", () => {
 		expect(harness.host.text).toContain("task-done");
 	});
 
-	test("/bg and /btw use their capability-advertised backend contracts", async () => {
+	test("/bg and /btw inherit the durable session key and current TUI context", async () => {
 		harness.store.focused.model = "gpt-5";
 		harness.store.focused.thinkingLevel = "high";
-		harness.server.respondWith("background.start", { id: "bg-1", status: "running" });
+		const id = "019d-background-run-full-identifier-1234567890";
+		harness.server.respondWith("background.start", { id, status: "queued" });
 		harness.server.respondWith("session.btw", { answer: "The quick answer." });
 
 		await harness.run("/bg investigate the flaky test");
@@ -296,15 +297,63 @@ describe("runs and goals", () => {
 
 		expect(harness.server.requestsFor("background.start")[0].params).toEqual({
 			prompt: "investigate the flaky test",
-			sessionId: "tui-session",
+			sessionKey: "tui-session",
+			cwd: "/workspace/project",
 			model: "gpt-5",
 			thinkingLevel: "high",
 		});
+		expect(harness.server.requestsFor("background.start")[0].params).not.toHaveProperty(
+			"sessionId",
+		);
 		expect(harness.server.requestsFor("session.btw")[0].params).toEqual({
-			sessionId: "tui-session",
+			sessionKey: "tui-session",
 			question: "what changed?",
 		});
+		expect(harness.host.text).toContain(id);
 		expect(harness.host.text).toContain("The quick answer.");
+	});
+
+	test("/bg exposes list, status, result, and cancel lifecycle operations with full ids", async () => {
+		const id = "019d-background-run-full-identifier-abcdefghijklmnopqrstuvwxyz";
+		harness.server.respondWith("background.list", {
+			runs: [
+				{
+					id,
+					status: "running",
+					parent_session_key: "tui-session",
+					result_available: false,
+				},
+			],
+			total: 1,
+		});
+		harness.server.respondWith("background.status", {
+			id,
+			status: "completed",
+			session_id: "bg_session_1",
+			parent_session_key: "tui-session",
+			result_available: true,
+		});
+		harness.server.respondWith("background.result", {
+			id,
+			ready: true,
+			answer: "All checks passed.",
+		});
+		harness.server.respondWith("background.cancel", { id, cancelled: true });
+
+		await harness.run("/bg list running");
+		await harness.run(`/bg status ${id}`);
+		await harness.run(`/bg result ${id}`);
+		await harness.run(`/bg cancel ${id}`);
+
+		expect(harness.server.requestsFor("background.list")[0].params).toEqual({
+			status: "running",
+		});
+		expect(harness.server.requestsFor("background.status")[0].params).toEqual({ id });
+		expect(harness.server.requestsFor("background.result")[0].params).toEqual({ id });
+		expect(harness.server.requestsFor("background.cancel")[0].params).toEqual({ id });
+		expect(harness.host.text).toContain(id);
+		expect(harness.host.text).toContain("All checks passed.");
+		expect(harness.host.text).toContain("cancelled");
 	});
 });
 
@@ -481,11 +530,18 @@ describe("client-local commands", () => {
 
 	test("/commands prefers the server catalog", async () => {
 		harness.server.respondWith("commands.catalog", {
-			commands: [{ name: "queue", usage: "[prompt]", summary: "queue work", aliases: ["q"] }],
+			commands: [
+				{
+					name: "queue",
+					arguments: "<prompt>",
+					description: "queue work",
+					aliases: ["/q"],
+				},
+			],
 		});
 		await harness.run("/commands");
 		expect(harness.host.text).toContain("daemon catalog");
-		expect(harness.host.text).toContain("/queue [prompt]");
+		expect(harness.host.text).toContain("/queue <prompt>");
 		expect(harness.host.text).toContain("aliases: /q");
 	});
 

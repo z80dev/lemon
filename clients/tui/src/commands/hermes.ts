@@ -110,24 +110,40 @@ export const compressCommand: SlashCommand = {
 
 export const backgroundCommand: SlashCommand = {
 	name: "bg",
-	summary: "start a background task",
-	usage: "<prompt>",
+	summary: "start and manage background tasks",
+	usage: "<prompt> | start <prompt> | list [status] | status <id> | result <id> | cancel <id>",
 	group: "runs",
-	methods: [METHOD.backgroundStart],
-	async run(ctx) {
+	availableWhen(ctx) {
+		return BACKGROUND_METHODS.some((method) => ctx.methods.supports(method))
+			? true
+			: "daemon does not expose background command methods";
+	},
+	async run(ctx, argv) {
 		if (!ctx.rest) {
-			ctx.ui.notice("usage: /bg <prompt>", "error");
+			ctx.ui.notice(`usage: /bg ${backgroundCommand.usage}`, "error");
 			return;
 		}
-		const result = await ctx.methods.backgroundStart({
-			prompt: ctx.rest,
-			sessionId: ctx.session.key,
-			...(ctx.session.model ? { model: ctx.session.model } : {}),
-			...(ctx.session.thinkingLevel ? { thinkingLevel: ctx.session.thinkingLevel } : {}),
-		});
-		const id = pickString(result, "id", "taskId", "runId") ?? "started";
-		const status = pickString(result, "status");
-		ctx.ui.notice(`background ${id}${status ? ` · ${status}` : ""}`);
+
+		const action = argv[0]?.toLowerCase();
+		switch (action) {
+			case "list":
+				await listBackgroundRuns(ctx, argv[1]);
+				return;
+			case "status":
+				await showBackgroundStatus(ctx, requiredBackgroundId(ctx, argv[1], "status"));
+				return;
+			case "result":
+				await showBackgroundResult(ctx, requiredBackgroundId(ctx, argv[1], "result"));
+				return;
+			case "cancel":
+				await cancelBackgroundRun(ctx, requiredBackgroundId(ctx, argv[1], "cancel"));
+				return;
+			case "start":
+				await startBackgroundRun(ctx, restAfterFirstWord(ctx.rest));
+				return;
+			default:
+				await startBackgroundRun(ctx, ctx.rest);
+		}
 	},
 };
 
@@ -143,7 +159,7 @@ export const btwCommand: SlashCommand = {
 			return;
 		}
 		const result = await ctx.methods.sessionBtw({
-			sessionId: ctx.session.key,
+			sessionKey: ctx.session.key,
 			question: ctx.rest,
 		});
 		const answer = pickString(result, "answer", "response", "text", "result");
@@ -173,7 +189,7 @@ export function serverCatalogLines(result: unknown, filter?: string): string[] {
 	for (const row of matching) {
 		const name = pickString(row, "name", "command")?.replace(/^\//, "");
 		if (!name) continue;
-		const usage = pickString(row, "usage", "args");
+		const usage = pickString(row, "arguments", "usage", "args");
 		const summary = pickString(row, "summary", "description", "help") ?? "";
 		const aliases = asArray(asRecord(row)?.aliases)
 			.map(String)
@@ -183,6 +199,128 @@ export function serverCatalogLines(result: unknown, filter?: string): string[] {
 		);
 	}
 	return lines;
+}
+
+const BACKGROUND_METHODS = [
+	METHOD.backgroundStart,
+	METHOD.backgroundList,
+	METHOD.backgroundStatus,
+	METHOD.backgroundResult,
+	METHOD.backgroundCancel,
+] as const;
+
+async function startBackgroundRun(ctx: CommandContext, prompt: string): Promise<void> {
+	if (!prompt) {
+		ctx.ui.notice("usage: /bg start <prompt>", "error");
+		return;
+	}
+	if (!requireMethod(ctx, METHOD.backgroundStart)) return;
+	const result = await ctx.methods.backgroundStart({
+		prompt,
+		sessionKey: ctx.session.key,
+		...(ctx.cwd ? { cwd: ctx.cwd } : {}),
+		...(ctx.session.model ? { model: ctx.session.model } : {}),
+		...(ctx.session.thinkingLevel ? { thinkingLevel: ctx.session.thinkingLevel } : {}),
+	});
+	const id = pickString(result, "id", "taskId", "runId") ?? "(id unavailable)";
+	const status = pickString(result, "status");
+	ctx.ui.noticeBlock([
+		`background ${status ?? "started"}`,
+		`id: ${id}`,
+		`inspect: /bg status ${id} · result: /bg result ${id} · cancel: /bg cancel ${id}`,
+	]);
+}
+
+async function listBackgroundRuns(ctx: CommandContext, status?: string): Promise<void> {
+	if (!requireMethod(ctx, METHOD.backgroundList)) return;
+	const result = await ctx.methods.backgroundList(status ? { status } : undefined);
+	const runs = asArray(result.runs);
+	if (runs.length === 0) {
+		ctx.ui.notice(`no background tasks${status ? ` with status ${status}` : ""}`);
+		return;
+	}
+	const lines = [`background tasks — ${runs.length}${status ? ` · ${status}` : ""}`];
+	for (const run of runs) lines.push(`  ${describeBackgroundRun(run)}`);
+	ctx.ui.noticeBlock(lines);
+}
+
+async function showBackgroundStatus(ctx: CommandContext, id: string | undefined): Promise<void> {
+	if (!id || !requireMethod(ctx, METHOD.backgroundStatus)) return;
+	const result = await ctx.methods.backgroundStatus({ id });
+	ctx.ui.noticeBlock(backgroundStatusLines(result, id));
+}
+
+async function showBackgroundResult(ctx: CommandContext, id: string | undefined): Promise<void> {
+	if (!id || !requireMethod(ctx, METHOD.backgroundResult)) return;
+	const result = await ctx.methods.backgroundResult({ id });
+	if (result.ready !== true) {
+		ctx.ui.noticeBlock(["background result not ready", `id: ${id}`]);
+		return;
+	}
+	const answer = pickString(result, "answer") ?? "(empty result)";
+	ctx.ui.noticeBlock(["background result", `id: ${id}`, answer]);
+}
+
+async function cancelBackgroundRun(ctx: CommandContext, id: string | undefined): Promise<void> {
+	if (!id || !requireMethod(ctx, METHOD.backgroundCancel)) return;
+	const result = await ctx.methods.backgroundCancel({ id });
+	ctx.ui.notice(`background ${id} ${result.cancelled === true ? "cancelled" : "cancel requested"}`);
+}
+
+function requiredBackgroundId(
+	ctx: CommandContext,
+	id: string | undefined,
+	action: "status" | "result" | "cancel",
+): string | undefined {
+	if (id) return id;
+	ctx.ui.notice(`usage: /bg ${action} <id>`, "error");
+	return undefined;
+}
+
+function requireMethod(ctx: CommandContext, method: (typeof BACKGROUND_METHODS)[number]): boolean {
+	if (ctx.methods.supports(method)) return true;
+	ctx.ui.notice(
+		`/${backgroundCommand.name} is unavailable: daemon does not support ${method}`,
+		"warning",
+	);
+	return false;
+}
+
+function backgroundStatusLines(result: unknown, fallbackId: string): string[] {
+	const id = pickString(result, "id") ?? fallbackId;
+	const lines = ["background status", `id: ${id}`];
+	const fields = [
+		["status", pickString(result, "status")],
+		["session", pickString(result, "session_id", "sessionId")],
+		["parent", pickString(result, "parent_session_key", "parentSessionKey")],
+		[
+			"result",
+			result && typeof result === "object" && "result_available" in result
+				? (result as { result_available?: unknown }).result_available === true
+					? "available"
+					: "not ready"
+				: undefined,
+		],
+		["updated", humanTime(pickNumber(result, "updated_at", "updatedAtMs"))],
+		["error", pickString(result, "error")],
+	] as const;
+	for (const [label, value] of fields) if (value) lines.push(`${label}: ${value}`);
+	return lines;
+}
+
+function describeBackgroundRun(run: unknown): string {
+	return [
+		pickString(run, "id") ?? "?",
+		pickString(run, "status"),
+		pickString(run, "parent_session_key", "parentSessionKey"),
+		humanTime(pickNumber(run, "updated_at", "updatedAtMs")),
+	]
+		.filter(Boolean)
+		.join(" · ");
+}
+
+function restAfterFirstWord(text: string): string {
+	return text.replace(/^\S+\s*/, "").trim();
 }
 
 function localCatalogLines(ctx: CommandContext, filter?: string): string[] {

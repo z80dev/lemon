@@ -61,6 +61,7 @@ async function bootApp(sessionKey = "tui-test") {
 		version: "test",
 		client,
 		terminal,
+		cwd: process.cwd(),
 		onExit: (code) => exits.push(code),
 		// Deterministic branch: the real poll would depend on the checkout.
 		readBranch: async () => "main",
@@ -110,6 +111,32 @@ describe("slash commands in the app", () => {
 		await app.submit("/nonsense");
 		expect(chatText(app)).toContain("unknown command");
 		expect(server.requestsFor("chat.send")).toHaveLength(0);
+	});
+
+	test("/bg carries app context and supports result retrieval end to end", async () => {
+		const { app, server } = await bootApp("durable-tui-session");
+		const id = "019d-full-background-id-0123456789abcdefghijklmnopqrstuvwxyz";
+		server.respondWith("background.start", { id, status: "queued" });
+		server.respondWith("background.result", {
+			id,
+			ready: true,
+			answer: "Background work finished.",
+		});
+
+		await app.submit("/model gpt-4o");
+		await app.submit("/reasoning high");
+		await app.submit("/bg inspect the workspace");
+		await app.submit(`/bg result ${id}`);
+
+		expect(server.requestsFor("background.start")[0].params).toEqual({
+			prompt: "inspect the workspace",
+			sessionKey: "durable-tui-session",
+			cwd: process.cwd(),
+			model: "gpt-4o",
+			thinkingLevel: "high",
+		});
+		expect(chatText(app)).toContain(id);
+		expect(chatText(app)).toContain("Background work finished.");
 	});
 });
 

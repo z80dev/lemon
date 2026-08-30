@@ -116,6 +116,8 @@ export interface CommandHost {
 
 export interface CommandContext {
 	store: AppStore;
+	/** The TUI's resolved project working directory. */
+	cwd?: string;
 	/** The session the command applies to: whatever is focused at dispatch. */
 	session: SessionStore;
 	methods: ControlPlaneMethods;

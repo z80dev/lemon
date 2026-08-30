@@ -122,9 +122,9 @@ export interface Harness {
 }
 
 export async function createHarness(
-	options: FakeControlPlaneOptions & { sessionKey?: string } = {},
+	options: FakeControlPlaneOptions & { sessionKey?: string; cwd?: string } = {},
 ): Promise<Harness> {
-	const { sessionKey = "tui-test", ...serverOptions } = options;
+	const { sessionKey = "tui-test", cwd = process.cwd(), ...serverOptions } = options;
 	const server = await FakeControlPlane.start(serverOptions);
 	const client = new ControlPlaneClient({
 		url: server.url,
@@ -140,7 +140,7 @@ export async function createHarness(
 		},
 	});
 
-	const base = () => ({ store, session: store.focused, methods, client, ui: host });
+	const base = () => ({ store, session: store.focused, methods, client, ui: host, cwd });
 
 	return {
 		server,
