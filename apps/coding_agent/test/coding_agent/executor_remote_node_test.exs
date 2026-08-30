@@ -74,6 +74,49 @@ defmodule CodingAgent.ExecutorRemoteNodeTest do
                     }}
   end
 
+  test "a canonical profile request reaches the executor-selected named node" do
+    assert :ok = NodeRegistry.register("node-profile", "newphy", self())
+
+    profile = %{
+      "id" => "research",
+      "name" => "Research",
+      "node" => "newphy",
+      "model" => nil,
+      "canonicalSessionKey" => "agent:research:main",
+      "paths" => %{"workspace" => "/controller-only/profile/workspace"}
+    }
+
+    assert {:ok, canonical} =
+             LemonCore.ProfileStore.chat_request(profile, "remote profile work",
+               meta: %{node: "forged", profile_id: "forged"}
+             )
+
+    execution = %ExecutionRequest{
+      run_id: "profile-node-route",
+      session_key: canonical.session_key,
+      prompt: canonical.prompt,
+      cwd: canonical.cwd,
+      conversation_key: {:session, canonical.session_key},
+      meta: canonical.meta
+    }
+
+    assert {:ok, run_ref, %{runner_module: RemoteSessionRunner}} =
+             Executor.start_run(execution, %{}, self())
+
+    assert_receive {:node_event, "node.invoke.request", invocation}
+    assert invocation["nodeName"] == "newphy"
+    assert invocation["args"]["cwd"] == nil
+    assert invocation["args"]["meta"]["profile_id"] == "research"
+
+    assert :ok =
+             NodeRegistry.complete("node-profile", invocation["invokeId"], %{
+               "ok" => true,
+               "answer" => "routed"
+             })
+
+    assert_receive {:engine_event, ^run_ref, %{__event__: :completed, ok: true}}
+  end
+
   test "preserves an explicitly supplied remote cwd verbatim" do
     assert :ok = NodeRegistry.register("node-1", "newphy", self())
 

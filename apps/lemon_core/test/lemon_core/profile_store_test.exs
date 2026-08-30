@@ -221,6 +221,35 @@ defmodule LemonCore.ProfileStoreTest do
     assert {:error, :reserved_profile} = ProfileStore.delete("default", confirm: "default")
   end
 
+  test "canonical chat binds validated profile identity and node over caller metadata" do
+    profile = %{
+      "id" => "remote",
+      "node" => "newphy",
+      "model" => "openai:gpt-5",
+      "canonicalSessionKey" => "agent:remote:main",
+      "paths" => %{"workspace" => "/controller/profile/workspace"}
+    }
+
+    assert {:ok, request} =
+             ProfileStore.chat_request(profile, "route me",
+               meta: %{
+                 "profile_id" => "also-forged",
+                 "node" => "local",
+                 profile_id: "forged",
+                 node: "ophy"
+               }
+             )
+
+    assert request.meta.profile_id == "remote"
+    assert request.meta.node == "newphy"
+    refute Map.has_key?(request.meta, "profile_id")
+    refute Map.has_key?(request.meta, "node")
+    assert request.cwd == nil
+
+    assert {:error, {:invalid_field, :node}} =
+             ProfileStore.chat_request(%{profile | "node" => "../bad-node"}, "route me")
+  end
+
   defp opts(root) do
     state = Path.join(root, "state")
     [home_state_dir: state, config_path: Path.join(state, "config.toml")]

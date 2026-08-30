@@ -150,7 +150,7 @@ defmodule LemonCli.ProfileCommand do
   end
 
   defp chat(args) do
-    spec = @common ++ [model: :string, cwd: :string, queue_mode: :string]
+    spec = @common ++ [model: :string, queue_mode: :string]
 
     with {:ok, opts, [id | prompt_parts]} when prompt_parts != [] <- parse(args, spec),
          {:ok, profile} <- ProfileStore.get(id, store_opts(opts)),
@@ -158,7 +158,6 @@ defmodule LemonCli.ProfileCommand do
          {:ok, request} <-
            ProfileStore.chat_request(profile, Enum.join(prompt_parts, " "),
              model: opts[:model],
-             cwd: opts[:cwd],
              queue_mode: queue_mode(opts[:queue_mode]),
              meta: %{profile_cli: true}
            ),

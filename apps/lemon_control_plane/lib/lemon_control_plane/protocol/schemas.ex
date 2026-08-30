@@ -178,7 +178,6 @@ defmodule LemonControlPlane.Protocol.Schemas do
       required: %{"id" => :string, "prompt" => :string},
       optional: %{
         "model" => :string,
-        "cwd" => :string,
         "queueMode" => :string
       }
     },

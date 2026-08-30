@@ -170,17 +170,15 @@ defmodule LemonCore.ProfileStore do
   def chat_request(profile, prompt, opts \\ []) when is_map(profile) do
     with id when is_binary(id) <- profile["id"],
          :ok <- validate_id(id),
-         {:ok, prompt} <- bounded_string(prompt, :prompt, @max_prompt_bytes) do
-      node = profile["node"] || "local"
-
-      base_meta =
-        if node == "local" do
-          %{profile_id: id}
-        else
-          %{profile_id: id, node: node}
-        end
-
-      meta = Map.merge(base_meta, Keyword.get(opts, :meta, %{}))
+         {:ok, prompt} <- bounded_string(prompt, :prompt, @max_prompt_bytes),
+         {:ok, node} <- normalize_node(profile["node"]) do
+      meta =
+        opts
+        |> Keyword.get(:meta, %{})
+        |> Map.delete("profile_id")
+        |> Map.delete("node")
+        |> Map.put(:profile_id, id)
+        |> Map.put(:node, node)
 
       cwd =
         case Keyword.fetch(opts, :cwd) do
