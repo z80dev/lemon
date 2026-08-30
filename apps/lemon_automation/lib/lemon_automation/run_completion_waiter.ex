@@ -67,31 +67,33 @@ defmodule LemonAutomation.RunCompletionWaiter do
     bus_mod.subscribe(topic)
 
     try do
-      with :ok <- claim_submission(Keyword.get(opts, :on_submitting), run_id) do
-        case safe_submit(router_mod, params) do
-          {:ok, ^run_id} ->
-            :ok = notify(Keyword.get(opts, :on_submitted), run_id)
+      case claim_submission(Keyword.get(opts, :on_submitting), run_id) do
+        :ok ->
+          case safe_submit(router_mod, params) do
+            {:ok, ^run_id} ->
+              :ok = notify(Keyword.get(opts, :on_submitted), run_id)
 
-            result =
-              normalize_wait_result(
-                run_id,
-                waiter_mod.wait_already_subscribed(run_id, timeout_ms, wait_opts)
-              )
+              result =
+                normalize_wait_result(
+                  run_id,
+                  waiter_mod.wait_already_subscribed(run_id, timeout_ms, wait_opts)
+                )
 
-            :ok = notify(Keyword.get(opts, :on_terminal), run_id)
-            result
+              :ok = notify(Keyword.get(opts, :on_terminal), run_id)
+              result
 
-          {:ok, other_run_id} ->
-            {:error, {:unexpected_run_id, run_id, other_run_id}}
+            {:ok, other_run_id} ->
+              {:error, {:unexpected_run_id, run_id, other_run_id}}
 
-          {:error, reason} ->
-            {:error, {:submit_failed, reason}}
+            {:error, reason} ->
+              {:error, {:submit_failed, reason}}
 
-          other ->
-            {:error, {:submit_failed, {:unexpected_submit_result, other}}}
-        end
-      else
-        {:error, reason} -> {:error, {:submit_failed, {:submission_claim_rejected, reason}}}
+            other ->
+              {:error, {:submit_failed, {:unexpected_submit_result, other}}}
+          end
+
+        {:error, reason} ->
+          {:error, {:submit_failed, {:submission_claim_rejected, reason}}}
       end
     rescue
       error -> {:error, {:submit_failed, {:exception, error}}}

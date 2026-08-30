@@ -28,6 +28,12 @@ Regression coverage exercises failed supervised launches, production-path
 agent joins, followup suppression, exit containment, and successful lane
 monitor cleanup.
 
+Final validation also tightened the pre-LLM trust boundary: canonical web-tool
+envelopes remain single-wrapped, but a raw `webfetch` or `websearch` result is
+now fenced instead of being trusted solely because of its tool name. The
+baseline prompt-injection eval and a focused raw-web regression cover this
+distinction.
+
 ## Follow-up state-consistency pass
 
 The task-state stores now enforce the single-writer boundaries assumed by the
