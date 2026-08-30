@@ -732,31 +732,33 @@ defmodule LemonWeb.ProviderManagementLive do
   defp sanitize_routing(_routing), do: @empty_routing
 
   defp sanitize_pool(pool) when is_map(pool) do
-    with name when is_binary(name) <- safe_optional_identifier(pool["name"]) do
-      counts =
-        pool
-        |> Map.get("credentialCounts", %{})
-        |> Enum.flat_map(fn {provider, count} ->
-          case {safe_optional_identifier(provider), safe_count(count)} do
-            {provider, count} when is_binary(provider) -> [{provider, count}]
-            _ -> []
-          end
-        end)
-        |> Enum.sort()
-        |> Map.new()
+    case safe_optional_identifier(pool["name"]) do
+      name when is_binary(name) ->
+        counts =
+          pool
+          |> Map.get("credentialCounts", %{})
+          |> Enum.flat_map(fn {provider, count} ->
+            case {safe_optional_identifier(provider), safe_count(count)} do
+              {provider, count} when is_binary(provider) -> [{provider, count}]
+              _ -> []
+            end
+          end)
+          |> Enum.sort()
+          |> Map.new()
 
-      [
-        %{
-          "name" => name,
-          "providers" => safe_identifier_list(pool["providers"]),
-          "strategy" =>
-            if(pool["strategy"] == "round_robin", do: "round_robin", else: "priority"),
-          "credentialCounts" => counts,
-          "credentialReferenceCount" => counts |> Map.values() |> Enum.sum()
-        }
-      ]
-    else
-      _ -> []
+        [
+          %{
+            "name" => name,
+            "providers" => safe_identifier_list(pool["providers"]),
+            "strategy" =>
+              if(pool["strategy"] == "round_robin", do: "round_robin", else: "priority"),
+            "credentialCounts" => counts,
+            "credentialReferenceCount" => counts |> Map.values() |> Enum.sum()
+          }
+        ]
+
+      _ ->
+        []
     end
   end
 
