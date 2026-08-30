@@ -1186,6 +1186,7 @@ defmodule LemonCli.CLI do
     IO.write(device, CommandRegistry.help())
   end
 
+  defp print_command_usage("providers"), do: LemonCli.ProvidersCommand.print_usage()
   defp print_command_usage(command), do: IO.write(CommandRegistry.help(command))
 
   defp print_backup_usage(device) do
