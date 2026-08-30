@@ -652,5 +652,17 @@
     owner: "@z80",
     last_reviewed: ~D[2026-08-10],
     max_age_days: 90
+  },
+  %{
+    path: "docs/ci/self-hosted-runner.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-08-30],
+    max_age_days: 90
+  },
+  %{
+    path: "docs/reviews/issue-33-comment.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-08-30],
+    max_age_days: 90
   }
 ]
