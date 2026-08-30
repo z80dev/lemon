@@ -207,6 +207,14 @@ it keeps the full in-memory action order and leaves presentation budgeting to
 the renderer/channel layer.
 Aborted runs that never bind to a live gateway run must still synthesize `:run_completed`; otherwise
 `SessionCoordinator` will retain the session as busy forever.
+Runtime submission retries are bounded by a pre-start deadline. Persistent runtime
+unavailability or rejection must synthesize exactly one structured `:run_completed`
+failure so `SessionCoordinator` releases the conversation; transient outages may
+retry with backoff until that deadline.
+If a queued submission later fails in `RunStarter`, `SessionCoordinator` emits one
+structured start-failure completion before bridge cleanup and advances to the next
+queued submission. An ambiguously started child already present in `RunRegistry`
+must be adopted instead of receiving a second synthetic completion.
 Started runs that lose their gateway process before the router binds a monitor must also synthesize
 `:run_completed`, but only after a short completion grace window so a real late `:run_completed`
 from the bus can win over the synthetic fallback.

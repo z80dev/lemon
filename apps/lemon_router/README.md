@@ -108,6 +108,15 @@ Stale markers and markers with no usable history clear eagerly. Prior run
 summaries are carried as JSONL with escaped envelope characters and are bounded
 by dropping complete oldest run entries rather than slicing through role data.
 
+Run admission is terminally bounded at both router boundaries. `RunProcess`
+backs off through transient runtime outages only until its pre-start deadline;
+persistent unavailability or rejection emits one structured synthetic
+`:run_completed` event so the active conversation is released. If a queued child
+cannot start later, `SessionCoordinator` emits the corresponding structured
+start-failure completion before cleaning up its event-bridge subscription and
+continues with the next queued submission. A child already registered after an
+ambiguous supervisor error is adopted to avoid double completion.
+
 ## Output Semantics
 
 Router coalescers only track semantic state:
