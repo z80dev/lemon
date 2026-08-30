@@ -63,8 +63,14 @@ Telegram and Discord execute the portable information/session commands through
 modes; reset/reasoning/stop reuse the native new/thinking/cancel handlers;
 status and usage read redacted core diagnostics; agent/task inspection and
 compaction call the registered agent-runtime provider. `/bg` starts an isolated
-full-tool session, while `/btw` runs asynchronously from a no-tools transcript
-snapshot so neither blocks the channel transport nor mutates parent history.
+full-tool session and returns its complete durable id; `/bg list`, `/bg status
+<id>`, `/bg result <id>`, and `/bg cancel <id>` expose the lifecycle from the
+same Telegram or Discord conversation. `/btw` runs asynchronously from a
+no-tools transcript snapshot so it does not block the channel transport or
+mutate parent history. Discord applies the configured guild/channel allowlists
+and binding requirement before any portable slash command executes. Channel
+responses map runtime failures to stable public messages and leave internal
+error details in runtime logs.
 
 ```elixir
 LemonChannels.CommandCatalog.catalog()
@@ -72,6 +78,7 @@ LemonChannels.CommandCatalog.find("/q")
 LemonChannels.CommandCatalog.categories()
 LemonChannels.CommandCatalog.summary()
 LemonChannels.PortableCommand.handle("status", "", %{session_key: session_key})
+LemonChannels.PortableCommand.handle("bg", "result bg_...", %{session_key: session_key})
 ```
 
 ### Delivery Groups

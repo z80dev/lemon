@@ -182,10 +182,15 @@ defmodule LemonChannels.Adapters.Discord.SlashCommands do
 
   @bg_command %{
     name: "bg",
-    description: "Start an isolated background Lemon run",
+    description: "Start or inspect an isolated background Lemon run",
     type: 1,
     options: [
-      %{type: 3, name: "prompt", description: "Background prompt", required: true}
+      %{
+        type: 3,
+        name: "prompt",
+        description: "Prompt, or list/status/result/cancel",
+        required: true
+      }
     ]
   }
 
