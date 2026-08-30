@@ -6,7 +6,7 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
   alias LemonControlPlane.NodeStore
   alias LemonGateway.ExecutionRequest
 
-  defmodule FakeExecutor do
+  defmodule NamedNodeWireExecutor do
     @moduledoc false
 
     def start_run(%ExecutionRequest{} = request, opts, sink_pid) do
@@ -27,7 +27,7 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
   end
 
   setup do
-    true = Process.register(self(), FakeExecutor)
+    true = Process.register(self(), NamedNodeWireExecutor)
     :ok
   end
 
@@ -77,7 +77,7 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
                cwd: tmp_dir,
                token: token,
                notify_pid: self(),
-               executor_module: FakeExecutor,
+               executor_module: NamedNodeWireExecutor,
                socket_opts: [reconnect_delay_ms: 10]
              ]
            ]},
