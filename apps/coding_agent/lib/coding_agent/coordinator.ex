@@ -244,38 +244,56 @@ defmodule CodingAgent.Coordinator do
         {id, spec}
       end)
 
-    # Start all subagents
-    {started, state} =
-      Enum.reduce(specs_with_ids, {[], state}, fn {id, spec}, {acc, st} ->
-        case start_subagent(id, spec, st) do
-          {:ok, subagent_state, new_state} ->
-            {[{id, spec, {:ok, subagent_state}} | acc], new_state}
+    if timeout <= 0 do
+      # A zero deadline cannot accept useful work. Return a bounded result
+      # without starting a child whose synchronous prompt handshake could
+      # outlive the caller's selected deadline and take down this coordinator.
+      results =
+        Enum.map(specs_with_ids, fn {id, _spec} ->
+          %{
+            id: id,
+            status: :timeout,
+            result: nil,
+            error: :timeout,
+            session_id: nil
+          }
+        end)
 
-          {:error, reason} ->
-            {[{id, spec, {:error, reason}} | acc], st}
-        end
-      end)
+      {:reply, results, state}
+    else
+      # Start all subagents
+      {started, state} =
+        Enum.reduce(specs_with_ids, {[], state}, fn {id, spec}, {acc, st} ->
+          case start_subagent(id, spec, st) do
+            {:ok, subagent_state, new_state} ->
+              {[{id, spec, {:ok, subagent_state}} | acc], new_state}
 
-    started = Enum.reverse(started)
+            {:error, reason} ->
+              {[{id, spec, {:error, reason}} | acc], st}
+          end
+        end)
 
-    # Collect results with timeout
-    {results, final_state} = collect_results(started, timeout, state)
+      started = Enum.reverse(started)
 
-    # Map results back to the original spec order
-    results_map = Map.new(results, fn result -> {result.id, result} end)
+      # Collect results with timeout
+      {results, final_state} = collect_results(started, timeout, state)
 
-    ordered_results =
-      Enum.map(specs_with_ids, fn {id, _spec} ->
-        Map.get(results_map, id, %{
-          id: id,
-          status: :error,
-          result: nil,
-          error: :not_found,
-          session_id: nil
-        })
-      end)
+      # Map results back to the original spec order
+      results_map = Map.new(results, fn result -> {result.id, result} end)
 
-    {:reply, ordered_results, final_state}
+      ordered_results =
+        Enum.map(specs_with_ids, fn {id, _spec} ->
+          Map.get(results_map, id, %{
+            id: id,
+            status: :error,
+            result: nil,
+            error: :not_found,
+            session_id: nil
+          })
+        end)
+
+      {:reply, ordered_results, final_state}
+    end
   end
 
   def handle_call(:list_active, _from, state) do

@@ -191,7 +191,9 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
       results = Coordinator.run_subagents(coordinator, specs, timeout: 0)
 
       assert [result] = results
-      assert result.status in [:timeout, :error]
+      assert result.status == :timeout
+      assert Coordinator.list_active(coordinator) == []
+      assert Process.alive?(coordinator)
     end
 
     @tag :tmp_dir
