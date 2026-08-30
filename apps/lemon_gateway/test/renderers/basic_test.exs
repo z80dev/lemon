@@ -27,6 +27,15 @@ defmodule LemonGateway.Renderers.BasicTest do
     assert state.resume_line == "test resume abc"
   end
 
+  test "started renders running when a remote execution has no resume token yet" do
+    state = Basic.init(%{engine: "lemon"})
+
+    {state, result} = Basic.apply_event(state, Event.started(%{engine: "lemon", resume: nil}))
+
+    assert {:render, %{text: "Running…", status: :running}} = result
+    assert state.resume_line == nil
+  end
+
   test "completed includes resume line even if started not seen" do
     token = %ResumeToken{engine: "test", value: "xyz"}
     state = Basic.init(%{engine: __MODULE__.BasicTestEngine})

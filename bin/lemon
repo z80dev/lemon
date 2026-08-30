@@ -11,6 +11,7 @@
 #   ./bin/lemon setup runtime --non-interactive
 #   ./bin/lemon model --provider anthropic
 #   ./bin/lemon gateway setup telegram --non-interactive
+#   ./bin/lemon node join --name worker --controller wss://controller.example/ws
 #   ./bin/lemon config validate
 #   ./bin/lemon doctor --json
 #   ./bin/lemon send --to telegram:<chat_id> "deploy finished"
@@ -47,6 +48,7 @@ Usage: ./bin/lemon [options]
        ./bin/lemon setup runtime --non-interactive
        ./bin/lemon model --provider anthropic
        ./bin/lemon gateway setup [transport] --non-interactive
+       ./bin/lemon node join --name NAME --controller wss://HOST/ws
        ./bin/lemon channels
        ./bin/lemon config validate
        ./bin/lemon doctor --json
@@ -76,6 +78,8 @@ Options:
 
 Environment fallbacks:
   LEMON_CONTROL_PLANE_PORT
+  LEMON_CONTROL_PLANE_OPERATOR_TOKEN
+  LEMON_RUNTIME_PID_FILE (daemon launcher lifecycle handoff)
   LEMON_WEB_PORT
   LEMON_SIM_UI_PORT
   LEMON_GATEWAY_HEALTH_PORT
@@ -186,6 +190,28 @@ if [[ "${1:-}" == "gateway" ]]; then
     *)
       error "Unknown gateway command: $gateway_action"
       show_gateway_help >&2
+      exit 2
+      ;;
+  esac
+fi
+
+if [[ "${1:-}" == "node" ]]; then
+  shift
+  node_action="${1:-}"
+
+  case "$node_action" in
+    join)
+      shift
+      export LEMON_NODE_LAUNCH_CWD="$LAUNCH_CWD"
+      cd "$LEMON_ROOT"
+      exec mix run --no-start -e 'CodingAgent.ExecutionNode.CLI.main(System.argv())' -- "$@"
+      ;;
+    ""|help|--help|-h)
+      cd "$LEMON_ROOT"
+      exec mix run --no-start -e 'IO.puts(CodingAgent.ExecutionNode.CLI.help())'
+      ;;
+    *)
+      error "Unknown node command: $node_action"
       exit 2
       ;;
   esac
@@ -492,6 +518,12 @@ if [[ "$DAEMON" == "1" ]]; then
   PID=$!
   sleep 2
   if kill -0 "$PID" 2>/dev/null; then
+    if [[ -n "${LEMON_RUNTIME_PID_FILE:-}" ]]; then
+      umask 077
+      printf '%s\n' "$PID" > "$LEMON_RUNTIME_PID_FILE"
+      chmod 600 "$LEMON_RUNTIME_PID_FILE"
+    fi
+
     info "Runtime started in background (pid: $PID)"
     info "Logs: /tmp/lemon-runtime.log"
     exit 0

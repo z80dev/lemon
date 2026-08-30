@@ -32,7 +32,7 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.Secrets.Keychain` | macOS keychain integration for master key storage |
 | `LemonCore.Secrets.MasterKey` | Master key resolution (keychain first, then env var) |
 | `LemonCore.OAuth.LocalCallbackListener` | Caller-owned one-shot localhost OAuth callback listener; monitors its listener manager so early failure returns immediately instead of consuming the authorization timeout |
-| `LemonCore.Store` | Storage GenServer with pluggable backends and `put_new/3` insert-if-absent claims |
+| `LemonCore.Store` | Storage GenServer with pluggable backends, `put_new/3` claims, serialized `take/2`, and exact-value `compare_and_swap/4` |
 | `LemonCore.Store.ReadCache` | ETS read cache for hot domains (`:chat`, `:runs`, `:progress`, `:sessions_index`, plus tables collaborators add with `register_cached_table/1`) |
 | `LemonCore.Store.EtsBackend` | In-memory ETS (ephemeral, default) with `:ets.insert_new/2` claims |
 | `LemonCore.Store.SqliteBackend` | SQLite with WAL mode (persistent) and `ON CONFLICT DO NOTHING` claims |
@@ -40,6 +40,8 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.Bus` | PubSub wrapper with topic helpers |
 | `LemonCore.Event` | Canonical event struct for Bus and persistence |
 | `LemonCore.EventBridge` | Cross-app event translation |
+| `LemonCore.NodeRegistry` | Live named-node registry and targeted invocation broker; binds results/cancellation to the selected node connection and retains monotonic per-node credential-generation floors |
+| `LemonCore.JSONPayload` | Shared byte/depth/item validation for JSON protocol boundaries; defaults to the control-plane 1 MiB payload policy |
 | `LemonCore.InboundMessage` | Normalized inbound message from any channel; adapters build the struct directly |
 | `LemonCore.RunRequest` | Canonical run submission struct used by router-facing callers |
 | `LemonCore.ExecutionCommand` | Canonical execution command handed from router to a configured engine runtime |

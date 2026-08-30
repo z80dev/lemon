@@ -188,6 +188,70 @@ Delegated tasks run as native in-process subagents (child `CodingAgent.Session`
 executions) when the agent invokes its `task` tool. There are no vendor CLI task
 runners and no `[runtime.cli.*]` configuration.
 
+### Named Execution Nodes
+
+The `agent` tool can route a delegated run to an authenticated execution node
+with its optional `node` parameter. Omit `node` or use `"local"` for the
+controller host. A named value must be online in the controller's live node
+registry. This placement is a per-run tool parameter, not a TOML engine or
+provider setting:
+
+```json
+{
+  "action": "run",
+  "agent_id": "default",
+  "prompt": "Run the focused checks.",
+  "node": "worker-1"
+}
+```
+
+Join a destination from a source checkout with:
+
+```bash
+LEMON_NODE_OPERATOR_TOKEN=... ./bin/lemon node join \
+  --name worker-1 \
+  --controller wss://controller.example/ws \
+  --pair \
+  --cwd /srv/project
+```
+
+On first connection, `--pair` creates the durable controller identity and
+stores its issued seven-day session plus recovery credential in a mode-0600
+file under `~/.lemon/nodes/execution/`; the containing directory is mode 0700.
+Each record is keyed by a hash of the durable node ID and includes the exact
+controller URL, so reuse fails closed for a different controller. The token
+store requires that exact URL even for direct durable-ID lookup and returns no
+recovery material for a missing or mismatched controller. Later starts
+omit `--pair`. Re-run with `--pair` after session expiry to keep the same
+identity and controller-side name while rotating the session and revoking older
+tokens and live sockets. Concurrent challenge exchange can mint only one
+credential, and result settlement is accepted only from the connection and
+session generation that received the invocation. Controller renames do not
+change the local key. Compatible legacy records
+without recovery credentials use the explicit operator-authorized
+`--pair --repair --node-id ID` migration path.
+
+`LEMON_NODE_OPERATOR_TOKEN` supplies pairing authority and is used only during
+pairing. `LEMON_NODE_TOKEN` supplies an existing session token. Prefer these
+environment variables to `--operator-token` / `--token` so credentials do not
+enter shell history. These values are runtime CLI inputs, not `config.toml`
+keys.
+
+Non-loopback controllers require `wss://` by default. Plaintext `ws://` needs
+`--allow-insecure-controller` or
+`LEMON_NODE_ALLOW_INSECURE_CONTROLLER=true`, and that override is acceptable
+only for development or a verified authenticated and encrypted overlay such as
+Tailscale.
+
+Provider credentials and default cwd are destination-local. If the `agent`
+tool omits `cwd`, the destination uses the directory passed to `node join`; an
+explicit `cwd` is resolved and validated on that machine. Only JSON-safe run
+data crosses the controller WebSocket. Source executor options, resolved
+provider credentials, callbacks, and BEAM state do not. Explicit cancellation
+is delivered to the targeted worker; disconnects fail pending invocations.
+Remote execution still uses the native `CodingAgent.Executor`, never a vendor
+CLI runner.
+
 ### Removed Top-Level Engine Configuration
 
 Remove these legacy keys and tables from global and project configuration:
@@ -208,6 +272,25 @@ own parameters.
 Environment variables override file values. Common overrides:
 
 - `LEMON_DEFAULT_PROVIDER`, `LEMON_DEFAULT_MODEL`
+- `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` — shared WebSocket operator credential;
+  required by default for every WebSocket operator connection. Named node
+  pairing supplies the same value from `LEMON_NODE_OPERATOR_TOKEN` on the
+  joining host. The source `./bin/lemon-tui` launcher generates an ephemeral
+  value when it owns a fresh local runtime; persistent or existing runtimes
+  require the operator to provide the same high-entropy value to both runtime
+  and client. Token origin does not control process lifetime: every runtime
+  started by `./bin/lemon-tui` is stopped with the TUI. Start persistent
+  runtimes separately with `./bin/lemon --daemon`, then attach with the same
+  token.
+- `LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK` — explicit legacy
+  compatibility opt-in (`true`/`false` or `1`/`0`) for tokenless operator
+  connections from direct loopback peers. Defaults to `false`; never enable it
+  for a reverse-proxied control plane.
+
+The browser monitoring client intentionally has no build-time or URL-based
+operator-token setting. Lemon does not yet implement the short-lived delegated
+browser-session exchange needed to authenticate that client safely. Never
+place the shared server token in `VITE_*` configuration.
 - `LEMON_PROVIDER_ROUTING_ENABLED`, `LEMON_PROVIDER_FALLBACK_PROVIDERS`, `LEMON_PROVIDER_ROUTING_REQUIRE_CREDENTIALS`
 - `LEMON_THEME`, `LEMON_DEBUG`
 - `<PROVIDER>_API_KEY`, `<PROVIDER>_BASE_URL` (e.g., `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`, `OPENCODE_API_KEY`, `ZAI_API_KEY`, `MINIMAX_API_KEY`)
@@ -221,6 +304,7 @@ Environment variables override file values. Common overrides:
 - `LEMON_DOCKER_TERMINAL_READ_ONLY_ROOTFS`, `LEMON_DOCKER_TERMINAL_TMPFS_SIZE`, `LEMON_DOCKER_TERMINAL_ALLOWED_IMAGES`
 - `LEMON_SSH_TERMINAL_TARGET`, `LEMON_SSH_TERMINAL_WORKDIR`, `LEMON_SSH_TERMINAL_PORT`, `LEMON_SSH_TERMINAL_CONNECT_TIMEOUT`, `LEMON_SSH_TERMINAL_STRICT_HOST_KEY_CHECKING`, `LEMON_SSH_TERMINAL_ALLOWED_TARGETS`
 - `LEMON_GATEWAY_HEALTH_PORT`, `LEMON_ROUTER_HEALTH_PORT`
+- `LEMON_NODE_OPERATOR_TOKEN`, `LEMON_NODE_TOKEN`, `LEMON_NODE_ALLOW_INSECURE_CONTROLLER`
 - `LEMON_LOG_FILE`, `LEMON_LOG_LEVEL`
 - `BRAVE_API_KEY`, `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, `FIRECRAWL_API_KEY`
 

@@ -105,6 +105,7 @@ failures.
 - [`docs/tools/firecrawl.md`](tools/firecrawl.md)
 - [`docs/tools/media.md`](tools/media.md)
 - [`docs/tools/lsp.md`](tools/lsp.md)
+- [`docs/tools/omp-tooling-audit.md`](tools/omp-tooling-audit.md) - Source-backed OMP tool comparison, shipped mutation hardening, and prioritized Lemon tool roadmap
 - [`docs/tools/openai-compatible-api.md`](tools/openai-compatible-api.md)
 - [`docs/tools/acp.md`](tools/acp.md)
 - [`docs/tools/wasm.md`](tools/wasm.md)

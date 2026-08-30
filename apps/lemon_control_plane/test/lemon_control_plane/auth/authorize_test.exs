@@ -5,9 +5,17 @@ defmodule LemonControlPlane.Auth.AuthorizeTest do
 
   setup do
     clear_session_tokens()
+    previous_operator_token = Application.get_env(:lemon_control_plane, :operator_token)
+    Application.delete_env(:lemon_control_plane, :operator_token)
 
     on_exit(fn ->
       clear_session_tokens()
+
+      if is_nil(previous_operator_token) do
+        Application.delete_env(:lemon_control_plane, :operator_token)
+      else
+        Application.put_env(:lemon_control_plane, :operator_token, previous_operator_token)
+      end
     end)
 
     :ok
@@ -29,52 +37,65 @@ defmodule LemonControlPlane.Auth.AuthorizeTest do
       assert ctx.identity == nil
     end
 
-    test "parses node role with default scopes" do
-      {:ok, ctx} =
-        Authorize.from_params(%{
-          "role" => "node",
-          "client" => %{"id" => "node-123"}
-        })
+    test "does not accept params-only node or device roles" do
+      assert {:error, {:unauthorized, "A valid node session token is required"}} =
+               Authorize.from_params(%{"role" => "node", "client" => %{"id" => "node-123"}})
 
-      assert ctx.role == :node
-      assert ctx.scopes == [:invoke, :event]
-      assert ctx.token == nil
-      assert ctx.client_id == "node-123"
-      assert ctx.identity == nil
-    end
-
-    test "parses device role with default scopes" do
-      {:ok, ctx} =
-        Authorize.from_params(%{
-          "role" => "device",
-          "client" => %{"id" => "device-456"}
-        })
-
-      assert ctx.role == :device
-      assert ctx.scopes == [:control]
-      assert ctx.token == nil
-      assert ctx.client_id == "device-456"
-      assert ctx.identity == nil
+      assert {:error, {:unauthorized, "A valid device session token is required"}} =
+               Authorize.from_params(%{
+                 "role" => "device",
+                 "client" => %{"id" => "device-456"}
+               })
     end
   end
 
   describe "from_params/1 token path" do
-    test "falls back to operator read scope for unknown identity type" do
+    test "unknown stored identity cannot escalate to operator" do
       token = "unknown-identity-token-#{System.unique_integer([:positive])}"
       identity = %{"type" => "service", "serviceId" => "svc-1"}
 
       {:ok, _} = TokenStore.store(token, identity)
 
-      {:ok, ctx} =
-        Authorize.from_params(%{
-          "auth" => %{"token" => token}
-        })
+      assert {:error, {:unauthorized, "Unsupported token identity"}} =
+               Authorize.from_params(%{"auth" => %{"token" => token}})
+    end
+
+    test "configured operator token rejects missing and wrong credentials and accepts the right one" do
+      operator_token = "operator-secret-#{System.unique_integer([:positive])}"
+      Application.put_env(:lemon_control_plane, :operator_token, operator_token)
+
+      assert {:error, {:unauthorized, "Operator token is required"}} =
+               Authorize.from_params(%{"role" => "operator"})
+
+      assert {:error, {:unauthorized, "Operator token is invalid"}} =
+               Authorize.from_params(%{
+                 "role" => "operator",
+                 "auth" => %{"token" => "wrong-operator-secret"}
+               })
+
+      assert {:ok, ctx} =
+               Authorize.from_params(%{
+                 "role" => "operator",
+                 "auth" => %{"token" => operator_token},
+                 "client" => %{"id" => "authenticated-operator"}
+               })
 
       assert ctx.role == :operator
-      assert ctx.scopes == [:read]
-      assert ctx.token == token
-      assert ctx.client_id == nil
-      assert ctx.identity == identity
+      assert ctx.scopes == [:admin, :read, :write, :approvals, :pairing]
+      assert ctx.client_id == "authenticated-operator"
+      assert ctx.token == nil
+      refute inspect(ctx) =~ operator_token
+    end
+
+    test "tokenless operator compatibility is loopback-only when no token is configured" do
+      assert {:ok, %{role: :operator}} =
+               Authorize.from_params(%{"role" => "operator"}, local?: true)
+
+      assert {:error, {:unauthorized, message}} =
+               Authorize.from_params(%{"role" => "operator"}, local?: false)
+
+      assert message =~ "Operator authentication is required"
+      assert message =~ "LEMON_CONTROL_PLANE_OPERATOR_TOKEN"
     end
   end
 

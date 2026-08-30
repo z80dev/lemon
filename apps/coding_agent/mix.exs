@@ -37,6 +37,7 @@ defmodule CodingAgent.MixProject do
       {:lemon_browser, in_umbrella: true},
       {:lemon_platform_test, in_umbrella: true, only: :test, runtime: false},
       {:jason, "~> 1.4"},
+      {:websockex, "~> 0.4"},
       {:req, "~> 0.5"},
       {:readability, "~> 0.12"},
       {:httpoison, "~> 3.0", override: true}

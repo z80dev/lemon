@@ -8,6 +8,7 @@ defmodule LemonCore.Application do
   - The `LemonCore.Bus` backend - Phoenix.PubSub, or a Registry when
     `phoenix_pubsub` is not available
   - `LemonCore.ACPClientBridge` - Registry for direct ACP client request/reply
+  - `LemonCore.NodeRegistry` - Live named execution-node registry and invocation broker
   - LemonCore.ConfigCache - Configuration caching service
   - LemonCore.Store - Key-value storage backend
   - LemonCore.RunHistoryStore - Per-session run history (separate SQLite DB)
@@ -61,8 +62,9 @@ defmodule LemonCore.Application do
       [
         LemonCore.Bus.child_spec_for_backend(),
         LemonCore.ACPClientBridge,
+        LemonCore.NodeRegistry,
         {LemonCore.ConfigCache, config_cache_opts},
-        LemonCore.Store,
+        LemonCore.Store
       ] ++
         sqlite_children() ++
         [

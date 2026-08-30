@@ -98,7 +98,13 @@ defmodule CodingAgent.Tools.Agent do
           },
           "cwd" => %{
             "type" => "string",
-            "description" => "Optional delegated working directory (defaults to current cwd)"
+            "description" =>
+              "Optional delegated working directory. Local runs default to the current cwd; named-node runs default to the destination cwd."
+          },
+          "node" => %{
+            "type" => "string",
+            "description" =>
+              "Optional execution node name. Omit or use local for this node; named nodes use their own credentials and default cwd unless cwd is explicit."
           },
           "meta" => %{
             "type" => "object",
@@ -407,7 +413,8 @@ defmodule CodingAgent.Tools.Agent do
         run_id: run_id,
         agent_id: validated.agent_id,
         delegated_session_key: delegated_session_key,
-        role: validated.role_id
+        role: validated.role_id,
+        node: result_node(validated)
       })
 
     :ok = register_delegated_run(run_id, task_id, validated, delegated_session_key)
@@ -446,7 +453,8 @@ defmodule CodingAgent.Tools.Agent do
         agent_id: validated.agent_id,
         session_key: delegated_session_key,
         auto_followup: validated.auto_followup,
-        role: validated.role_id
+        role: validated.role_id,
+        node: result_node(validated)
       }
     }
   end
@@ -483,6 +491,7 @@ defmodule CodingAgent.Tools.Agent do
         session_key: delegated_session_key,
         auto_followup: false,
         role: validated.role_id,
+        node: result_node(validated),
         error: inspect(reason)
       }
     }
@@ -507,7 +516,8 @@ defmodule CodingAgent.Tools.Agent do
           task_id: task_id,
           agent_id: validated.agent_id,
           delegated_session_key: delegated_session_key,
-          description: validated.description
+          description: validated.description,
+          node: result_node(validated)
         })
     end
   end
@@ -526,7 +536,8 @@ defmodule CodingAgent.Tools.Agent do
               agent_id: validated.agent_id,
               session_key: delegated_session_key,
               duration_ms: completion.duration_ms,
-              role: validated.role_id
+              role: validated.role_id,
+              node: result_node(validated)
             }
           }
         else
@@ -567,6 +578,15 @@ defmodule CodingAgent.Tools.Agent do
       meta =
         base_meta
         |> Map.merge(validated.meta)
+        |> Map.drop([
+          :node,
+          "node",
+          :remote_cwd,
+          "remote_cwd",
+          :remote_cwd_explicit,
+          "remote_cwd_explicit"
+        ])
+        |> put_execution_node(validated)
         |> compact_map()
 
       request =
@@ -679,7 +699,8 @@ defmodule CodingAgent.Tools.Agent do
           run_id: run_id,
           agent_id: validated.agent_id,
           delegated_session_key: delegated_session_key,
-          role: validated.role_id
+          role: validated.role_id,
+          node: result_node(validated)
         })
 
         if validated.auto_followup and not TaskStore.auto_followup_suppressed?(task_id) do
@@ -1233,7 +1254,10 @@ defmodule CodingAgent.Tools.Agent do
     timeout_ms = Map.get(params, "timeout_ms", @default_sync_timeout_ms)
     tool_policy = Map.get(params, "tool_policy")
     meta = Map.get(params, "meta")
-    delegated_cwd = Map.get(params, "cwd")
+    raw_delegated_cwd = Map.get(params, "cwd")
+    delegated_cwd = normalize_optional_string(raw_delegated_cwd)
+    raw_node = Map.get(params, "node")
+    node = normalize_optional_string(raw_node)
     model = Map.get(params, "model")
     role_cwd = delegated_cwd || cwd
 
@@ -1274,8 +1298,11 @@ defmodule CodingAgent.Tools.Agent do
       not is_nil(meta) and not is_map(meta) ->
         {:error, "meta must be an object"}
 
-      not is_nil(delegated_cwd) and not is_binary(delegated_cwd) ->
+      not is_nil(raw_delegated_cwd) and not is_binary(raw_delegated_cwd) ->
         {:error, "cwd must be a string"}
+
+      not is_nil(raw_node) and not is_binary(raw_node) ->
+        {:error, "node must be a string"}
 
       not is_nil(model) and not is_binary(model) ->
         {:error, "model must be a string"}
@@ -1301,6 +1328,7 @@ defmodule CodingAgent.Tools.Agent do
            tool_policy: tool_policy,
            meta: meta || %{},
            cwd: delegated_cwd,
+           node: node,
            model: normalize_optional_string(model)
          }}
     end
@@ -1389,6 +1417,7 @@ defmodule CodingAgent.Tools.Agent do
               task_id: task_id,
               status: "completed",
               result: result,
+              node: Map.get(record, :node, "local"),
               events: Enum.take(events, -5)
             }
           }
@@ -1403,6 +1432,7 @@ defmodule CodingAgent.Tools.Agent do
             task_id: task_id,
             status: "error",
             error: error,
+            node: Map.get(record, :node, "local"),
             events: Enum.take(events, -5)
           }
         }
@@ -1416,6 +1446,7 @@ defmodule CodingAgent.Tools.Agent do
             run_id: Map.get(record, :run_id),
             agent_id: Map.get(record, :agent_id),
             session_key: Map.get(record, :delegated_session_key),
+            node: Map.get(record, :node, "local"),
             events: Enum.take(events, -5)
           }
         }
@@ -1487,6 +1518,25 @@ defmodule CodingAgent.Tools.Agent do
     |> Map.new()
   end
 
+  defp put_execution_node(meta, %{node: nil}), do: meta
+
+  defp put_execution_node(meta, %{node: "local"}) do
+    Map.put(meta, :node, "local")
+  end
+
+  defp put_execution_node(meta, %{node: node, cwd: cwd}) do
+    meta
+    |> Map.put(:node, node)
+    |> Map.put(:remote_cwd_explicit, is_binary(cwd))
+    |> maybe_put_remote_cwd(cwd)
+  end
+
+  defp maybe_put_remote_cwd(meta, cwd) when is_binary(cwd), do: Map.put(meta, :remote_cwd, cwd)
+  defp maybe_put_remote_cwd(meta, _cwd), do: meta
+
+  defp result_node(%{node: node}) when is_binary(node), do: node
+  defp result_node(_), do: "local"
+
   defp format_error(nil), do: "unknown"
   defp format_error(error) when is_binary(error), do: error
   defp format_error(error), do: inspect(error)
@@ -1520,6 +1570,7 @@ defmodule CodingAgent.Tools.Agent do
     - queue_mode: delegated run submission mode (default: collect)
     - followup_queue_mode: delegated completion delivery mode (default: app config, fallback: followup)
     - model: optional model override (e.g., "gemini-2.5-pro" for complex tasks)
+    - node: optional named execution node (omitted or "local" runs locally)
     """
     |> String.trim()
   end

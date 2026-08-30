@@ -1,6 +1,6 @@
 # LemonCore
 
-Foundational shared library for the Lemon umbrella project. All other apps depend on `lemon_core` -- it provides configuration management, encrypted secrets, pluggable storage, an event bus, session routing primitives, idempotency, execution approvals, telemetry, and quality tooling.
+Foundational shared library for the Lemon umbrella project. All other apps depend on `lemon_core` -- it provides configuration management, encrypted secrets, pluggable storage, an event bus, live named-node invocation routing, session routing primitives, idempotency, execution approvals, telemetry, and quality tooling.
 
 This app has **zero dependencies on other umbrella apps** and must remain that way.
 
@@ -50,11 +50,13 @@ This app has **zero dependencies on other umbrella apps** and must remain that w
 | # | Child | Purpose |
 |---|-------|---------|
 | 1 | `Phoenix.PubSub` (name: `LemonCore.PubSub`), or a `Registry` | Backbone for the Bus; see `LemonCore.Bus` for which one is used |
-| 2 | `LemonCore.ConfigCache` | ETS-backed config cache with TTL fingerprinting |
-| 3 | `LemonCore.Store` | Key-value storage GenServer with pluggable backends |
-| 4 | `LemonCore.RunHistoryStore` | Run history persistence (only when `:exqlite` is available) |
-| 5 | `LemonCore.ConfigReloader` | Reload orchestrator with diff computation |
-| 6 | `LemonCore.ConfigReloader.Watcher` | FileSystem watcher for `config.toml` and `.env` |
+| 2 | `LemonCore.ACPClientBridge` | Registry for direct ACP client request/reply |
+| 3 | `LemonCore.NodeRegistry` | Live named-node registry and targeted invocation broker |
+| 4 | `LemonCore.ConfigCache` | ETS-backed config cache with TTL fingerprinting |
+| 5 | `LemonCore.Store` | Key-value storage GenServer with pluggable backends |
+| 6 | `LemonCore.RunHistoryStore` | Run history persistence (only when `:exqlite` is available) |
+| 7 | `LemonCore.ConfigReloader` | Reload orchestrator with diff computation |
+| 8 | `LemonCore.ConfigReloader.Watcher` | FileSystem watcher for `config.toml` and `.env` |
 
 Durable memory moved to `lemon_memory`, the workspace stores to `agent_core`,
 and provider credential-pool rotation to `lemon_agent`
@@ -408,7 +410,7 @@ MyApp.WidgetStore.put(id, widget)
 widget = MyApp.WidgetStore.get(id)
 ```
 
-`put_new/3` is the insert-if-absent primitive for durable claims. It returns `:ok` for the first writer and `{:error, :exists}` for later writers without overwriting the original value.
+`put_new/3` is the insert-if-absent primitive for durable claims. It returns `:ok` for the first writer and `{:error, :exists}` for later writers without overwriting the original value. `take/2` atomically consumes a key, and `compare_and_swap/4` replaces a value only when its exact expected value is still current; both are serialized inside the Store process.
 
 Store calls are fail-soft: if the GenServer is overloaded/unavailable, write APIs return `{:error, :store_unavailable}` and read/list APIs return `nil`/`[]`.
 

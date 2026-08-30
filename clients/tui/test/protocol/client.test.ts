@@ -55,6 +55,19 @@ describe("handshake", () => {
 		expect(states).toContain("online");
 	});
 
+	test("sends the operator token in the auth envelope without logging it", async () => {
+		const server = await withServer();
+		const token = "control-plane-operator-secret";
+		const client = makeClient(server.url, { token });
+
+		await client.connect();
+
+		const connect = server.requestsFor("connect");
+		expect(connect).toHaveLength(1);
+		expect(connect[0].params).toMatchObject({ auth: { token } });
+		expect(client.recentFrames().join("\n")).not.toContain(token);
+	});
+
 	test("hello-ok event reports the first handshake as not resumed", async () => {
 		const server = await withServer();
 		const client = makeClient(server.url);

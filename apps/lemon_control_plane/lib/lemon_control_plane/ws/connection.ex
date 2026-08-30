@@ -6,7 +6,7 @@ defmodule LemonControlPlane.WS.Connection do
 
   - Handshake via `connect` method followed by `hello-ok` frame
   - Request/response frame handling
-  - Event broadcasting
+  - Event broadcasting and targeted execution-node delivery
   - Connection lifecycle management
 
   ## Protocol Flow
@@ -24,13 +24,15 @@ defmodule LemonControlPlane.WS.Connection do
 
   alias LemonControlPlane.Protocol.{Frames, Errors}
   alias LemonControlPlane.Auth.Authorize
-  alias LemonControlPlane.Methods.Registry
+  alias LemonControlPlane.Methods.{NodeInvokeResult, Registry}
+  alias LemonControlPlane.NodeStore
 
   defstruct [
     :conn_id,
     :auth,
     :connected,
     :event_seq,
+    :local?,
     :state_version,
     :subscription_mode,
     :subscriptions
@@ -41,6 +43,7 @@ defmodule LemonControlPlane.WS.Connection do
           auth: Authorize.auth_context() | nil,
           connected: boolean(),
           event_seq: non_neg_integer(),
+          local?: boolean(),
           state_version: map(),
           subscription_mode: :all | :custom | nil,
           subscriptions: MapSet.t()
@@ -49,14 +52,23 @@ defmodule LemonControlPlane.WS.Connection do
   ## WebSock Callbacks
 
   @impl WebSock
-  def init(_opts) do
+  def init(opts) do
     conn_id = LemonCore.Id.uuid()
+
+    local? =
+      opts |> Keyword.get(:peer) |> local_peer?() and
+        Application.get_env(
+          :lemon_control_plane,
+          :allow_unauthenticated_loopback_operator,
+          false
+        ) == true
 
     state = %__MODULE__{
       conn_id: conn_id,
       auth: nil,
       connected: false,
       event_seq: 0,
+      local?: local?,
       state_version: %{},
       subscription_mode: :all,
       subscriptions: MapSet.new()
@@ -69,7 +81,23 @@ defmodule LemonControlPlane.WS.Connection do
 
   @impl WebSock
   def handle_in({text, [opcode: :text]}, state) do
-    case Frames.parse(text) do
+    max_payload = LemonControlPlane.max_payload()
+
+    if byte_size(text) > max_payload do
+      error = Errors.invalid_request("Payload exceeds maxPayload policy")
+      {:push, {:text, Frames.encode_response("unknown", {:error, error})}, state}
+    else
+      parse_text_frame(text, state, max_payload)
+    end
+  end
+
+  def handle_in({_data, [opcode: :binary]}, state) do
+    error = Errors.invalid_request("Binary frames not supported")
+    {:push, {:text, Frames.encode_response("unknown", {:error, error})}, state}
+  end
+
+  defp parse_text_frame(text, state, max_payload) do
+    case Frames.parse(text, max_payload: max_payload) do
       {:ok, frame} ->
         handle_frame(frame, state)
 
@@ -80,15 +108,26 @@ defmodule LemonControlPlane.WS.Connection do
       {:error, {:invalid_frame, reason}} ->
         error = Errors.invalid_request(reason)
         {:push, {:text, Frames.encode_response("unknown", {:error, error})}, state}
+
+      {:error, {limit, _value}}
+      when limit in [:max_bytes, :max_depth, :max_items, :not_json_safe] ->
+        error = Errors.invalid_request("Payload violates JSON boundary policy")
+        {:push, {:text, Frames.encode_response("unknown", {:error, error})}, state}
     end
   end
 
-  def handle_in({_data, [opcode: :binary]}, state) do
-    error = Errors.invalid_request("Binary frames not supported")
-    {:push, {:text, Frames.encode_response("unknown", {:error, error})}, state}
+  @impl WebSock
+  def handle_info({:node_event, event_name, payload}, state) do
+    state = increment_event_seq(state)
+    frame = Frames.encode_event(event_name, payload, state.event_seq, state.state_version)
+    {:push, {:text, frame}, state}
   end
 
-  @impl WebSock
+  def handle_info({:lemon_node_result, invoke_id, result}, state) do
+    :ok = NodeInvokeResult.record_registry_result(invoke_id, result)
+    {:ok, state}
+  end
+
   def handle_info({:event, event_name, payload}, state) do
     if subscribed_to_event?(state, event_name, payload) do
       state = increment_event_seq(state)
@@ -113,6 +152,14 @@ defmodule LemonControlPlane.WS.Connection do
 
   def handle_info({:push_frame, frame}, state) when is_binary(frame) do
     {:push, {:text, frame}, state}
+  end
+
+  def handle_info({:node_session_revoked, node_id, generation}, state) do
+    Logger.info(
+      "Closing superseded node session #{state.conn_id} for #{node_id} before generation #{generation}"
+    )
+
+    {:stop, :normal, state}
   end
 
   def handle_info({:subscribe_topics, topics}, state) do
@@ -157,6 +204,7 @@ defmodule LemonControlPlane.WS.Connection do
     # Unregister from presence
     if state.connected do
       unregister_presence(state)
+      unregister_node_connection(state)
     end
 
     :ok
@@ -185,33 +233,47 @@ defmodule LemonControlPlane.WS.Connection do
   ## Connect Handshake
 
   defp handle_connect(id, params, state) do
-    case Authorize.from_params(params || %{}) do
+    case Authorize.from_params(params || %{}, local?: state.local?) do
       {:ok, auth} ->
-        state = %{state | auth: auth, connected: true}
+        case register_node_connection(auth) do
+          :ok ->
+            finish_connect(auth, state)
 
-        # Register with presence
-        register_presence(state)
+          {:error, error} ->
+            {:push, {:text, Frames.encode_response(id, {:error, error})}, state}
+        end
 
-        # Build hello-ok response - connect uses a dedicated hello-ok handshake frame.
-        hello_ok =
-          Frames.encode_hello_ok(%{
-            conn_id: state.conn_id,
-            methods: Registry.list_methods(),
-            events: Frames.supported_events(),
-            snapshot: build_snapshot(state),
-            auth: build_auth_response(auth)
-          })
-
-        Logger.info("WebSocket connection established: #{state.conn_id}, role: #{auth.role}")
-
-        # Only send hello-ok, NOT an additional res frame.
-        {:push, {:text, hello_ok}, state}
-
-      {:error, reason} ->
-        error = Errors.unauthorized(inspect(reason))
+      {:error, {:unauthorized, _message} = error} ->
         # For auth errors, we still send a res frame with the error
         {:push, {:text, Frames.encode_response(id, {:error, error})}, state}
+
+      {:error, _reason} ->
+        error = Errors.unauthorized()
+        {:push, {:text, Frames.encode_response(id, {:error, error})}, state}
     end
+  end
+
+  defp finish_connect(auth, state) do
+    state = %{state | auth: auth, connected: true}
+
+    # Register with presence
+    register_presence(state)
+
+    # Build hello-ok response - connect uses a dedicated hello-ok handshake frame.
+    hello_ok =
+      Frames.encode_hello_ok(%{
+        conn_id: state.conn_id,
+        methods: Registry.list_methods(),
+        events: Frames.supported_events(),
+        snapshot: build_snapshot(state),
+        auth: build_auth_response(auth),
+        max_payload: LemonControlPlane.max_payload()
+      })
+
+    Logger.info("WebSocket connection established: #{state.conn_id}, role: #{auth.role}")
+
+    # Only send hello-ok, NOT an additional res frame.
+    {:push, {:text, hello_ok}, state}
   end
 
   ## Method Dispatch
@@ -318,6 +380,116 @@ defmodule LemonControlPlane.WS.Connection do
     else
       base
     end
+  end
+
+  defp register_node_connection(%{role: :node} = auth) do
+    node_id = auth.client_id
+    identity = Map.get(auth, :identity)
+
+    cond do
+      not authenticated_node_identity?(identity, node_id) ->
+        {:error, Errors.unauthorized("A valid node session token is required")}
+
+      not is_binary(node_id) or node_id == "" ->
+        {:error, Errors.unauthorized("Node identity is missing a node ID")}
+
+      true ->
+        case NodeStore.get_node(node_id) do
+          nil ->
+            {:error, Errors.unauthorized("Paired node was not found")}
+
+          node ->
+            register_durable_node(node_id, node, auth)
+        end
+    end
+  end
+
+  defp register_node_connection(_auth), do: :ok
+
+  defp register_durable_node(node_id, node, auth) do
+    name = get_field(node, :name)
+
+    with true <- is_binary(name) and String.trim(name) != "",
+         :ok <- NodeStore.reserve_node_name(name, node_id),
+         :ok <- register_live_node(node_id, name, node, auth) do
+      case mark_node_status(node_id, node, :online) do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          LemonCore.NodeRegistry.unregister(node_id, self())
+          {:error, Errors.internal_error("Failed to persist node connection", reason)}
+      end
+    else
+      false ->
+        {:error, Errors.unauthorized("Paired node has no durable name")}
+
+      {:error, {:name_taken, _name}} ->
+        {:error, Errors.conflict("Node name is already in use")}
+
+      {:error, :invalid_name} ->
+        {:error, Errors.unauthorized("Paired node has no durable name")}
+
+      {:error, reason} ->
+        {:error, Errors.internal_error("Failed to register node connection", reason)}
+    end
+  end
+
+  defp register_live_node(node_id, name, node, auth) do
+    generation = get_field(auth.identity || %{}, :sessionGeneration) || 0
+
+    LemonCore.NodeRegistry.register_session(node_id, name, self(), generation, %{
+      type: get_field(node, :type),
+      capabilities: get_field(node, :capabilities) || %{}
+    })
+  end
+
+  defp unregister_node_connection(%{auth: %{role: :node, client_id: node_id}})
+       when is_binary(node_id) do
+    LemonCore.NodeRegistry.unregister(node_id, self())
+
+    unless LemonCore.NodeRegistry.online?(node_id) do
+      case NodeStore.get_node(node_id) do
+        node when is_map(node) -> mark_node_status(node_id, node, :offline)
+        _ -> :ok
+      end
+    end
+  end
+
+  defp unregister_node_connection(_state), do: :ok
+
+  defp mark_node_status(node_id, node, status) do
+    NodeStore.put_node(
+      node_id,
+      Map.merge(node, %{status: status, last_seen_ms: System.system_time(:millisecond)})
+    )
+  end
+
+  defp authenticated_node_identity?(identity, node_id) when is_map(identity) do
+    type = Map.get(identity, "type") || Map.get(identity, :type)
+    identity_node_id = Map.get(identity, "nodeId") || Map.get(identity, "node_id")
+    type == "node" and identity_node_id == node_id
+  end
+
+  defp authenticated_node_identity?(_identity, _node_id), do: false
+
+  # The HTTP router always supplies the actual socket peer. A loopback peer is
+  # eligible for tokenless compatibility only when the operator explicitly
+  # enables it; merely arriving from a local proxy is never sufficient by
+  # default. Direct callers of Authorize.from_params/1 retain their separate
+  # in-process compatibility behavior.
+  defp local_peer?(nil), do: true
+  defp local_peer?({127, _b, _c, _d}), do: true
+  defp local_peer?({0, 0, 0, 0, 0, 0, 0, 1}), do: true
+
+  defp local_peer?({0, 0, 0, 0, 0, 65_535, mapped_prefix, _last})
+       when mapped_prefix in 0x7F00..0x7FFF,
+       do: true
+
+  defp local_peer?(_peer), do: false
+
+  defp get_field(map, key) when is_map(map) and is_atom(key) do
+    Map.get(map, key) || Map.get(map, Atom.to_string(key))
   end
 
   defp register_presence(state) do

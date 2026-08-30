@@ -68,7 +68,7 @@ export interface ControlPlaneClientOptions {
 	/** Client identity reported in the handshake. */
 	clientId?: string;
 	role?: string;
-	/** Optional auth token. Local operators send none and receive all scopes. */
+	/** Optional operator token, sent inside the control-plane `auth` envelope. */
 	token?: string;
 	requestTimeoutMs?: number;
 	queueableMethods?: Iterable<string>;

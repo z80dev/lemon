@@ -69,6 +69,8 @@ import { getEditorTheme } from "./ui/theme/tui-adapters.ts";
 
 export interface AppShellOptions {
 	url: string;
+	/** Shared control-plane operator credential. Never displayed or logged. */
+	operatorToken?: string;
 	/** Session to talk to. Defaults to a fresh `tui-<timestamp>` key. */
 	sessionKey?: string;
 	version?: string;
@@ -145,7 +147,8 @@ export class AppShell {
 		this.#version = options.version ?? "dev";
 		this.#onExit = options.onExit;
 		this.#cwd = options.cwd ?? process.cwd();
-		this.client = options.client ?? new ControlPlaneClient({ url: options.url });
+		this.client =
+			options.client ?? new ControlPlaneClient({ url: options.url, token: options.operatorToken });
 		this.methods = new ControlPlaneMethods(this.client);
 		this.tui = options.tui ?? new TUI(options.terminal ?? new ProcessTerminal());
 		this.store = new AppStore(options.sessionKey ?? defaultSessionKey());

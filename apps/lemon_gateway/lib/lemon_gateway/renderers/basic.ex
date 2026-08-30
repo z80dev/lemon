@@ -147,6 +147,7 @@ defmodule LemonGateway.Renderers.Basic do
   end
 
   defp format_resume(nil, _resume), do: nil
+  defp format_resume(_engine, nil), do: nil
   defp format_resume(_engine, %ResumeToken{} = resume), do: ResumeToken.format_plain(resume)
 
   defp maybe_apply_resume_from_completed(state, completed) do

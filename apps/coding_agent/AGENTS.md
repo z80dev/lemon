@@ -53,6 +53,11 @@ The main coding agent implementation for the Lemon AI assistant platform. This a
 | `CodingAgent.SessionSupervisor` | DynamicSupervisor for session processes |
 | `CodingAgent.SessionRegistry` | Registry for session lookup by ID |
 | `CodingAgent.SessionRootSupervisor` | Top-level supervisor for all session infra |
+| `CodingAgent.ExecutionNode.Worker` | Authenticated named-node worker that maintains application-level health keepalives and executes targeted `coding_agent.run` requests through the native executor |
+| `CodingAgent.ExecutionNode.Socket` | Reconnecting control-plane WebSocket client with authenticated handshakes and redacted status |
+| `CodingAgent.ExecutionNode.TokenStore` | Mode-0600, durable-node-ID-keyed local session and recovery credential storage with legacy-name migration |
+| `CodingAgent.Executor.RemoteSessionRunner` | Source-side bridge from one native gateway execution to one live named node |
+| `CodingAgent.Executor.RemoteRequestCodec` | JSON-safe request/result boundary with destination-local cwd semantics |
 
 Session lifecycle calls to `save/1` and auto-compaction state reads are treated as best-effort.
 When downstream store or agent processes time out, callers should log and continue instead of crashing the session/runner process.
@@ -153,6 +158,15 @@ requirement state for resume flows.
 pass `checkpoint_paths` and a session id, and commands such as `rm`, `mv`,
 `sed -i`, `find ... -delete`, `git reset`, or `git clean` will create a
 filesystem checkpoint before backend launch.
+Local `patch` calls prepare all hunks before the first mutation, reject duplicate
+paths and existing move destinations, revalidate each operation immediately
+before commit, and exclusively create new targets. Commits remain sequential: a
+later I/O failure reports the already-committed prefix and any possibly changed
+current paths instead of attempting a destructive rollback. Local `write` calls
+canonicalize the path used for validation and mutation, then reject symlinks,
+caller-controlled symlinked parent components, directories, and special files by default;
+`allow_symlinks: true` is an internal trusted-caller override. Keep ACP-backed
+mutation semantics separate from these local filesystem claims.
 
 `lsp_diagnostics` is the model-facing diagnostics tool. It runs workspace-aware
 file diagnostics with graceful fallback when a checker is unavailable, and
@@ -189,6 +203,12 @@ the `kanban` tool through tool policy to avoid recursive board management.
 | `CodingAgent.ToolPolicy` | Tool allow/deny/approval policies; predefined profiles (`:full_access`, `:orchestrator`, `:leaf_worker`, `:read_only`, `:safe_mode`, `:subagent_restricted`, `:no_external`, `:minimal_core`) |
 
 Internal `task` children default to the `:leaf_worker` policy. They keep normal work tools such as `read`, `write`, and `bash`, but recursive `task`/`agent` delegation is blocked unless a caller passes an explicit `tool_policy` override.
+
+The `agent` tool's optional `node` parameter selects execution placement for a
+delegated router run. Omit it or use `"local"` for the controller host. Named
+values resolve through the live `LemonCore.NodeRegistry`; omitted `cwd` uses the
+destination worker's default, while an explicit `cwd` is interpreted and
+validated on that destination. `task` stays in-process on the current host.
 
 ### Budget & Resource Management
 
@@ -702,6 +722,70 @@ With the default `:steer_backlog` config, live streaming parent sessions now att
 
 ## Common Tasks
 
+### Joining a Named Execution Node
+
+Run a native worker against a Lemon controller from the source checkout:
+
+```bash
+./bin/lemon node join --name worker-name --controller wss://controller.example/ws --pair --cwd /path/to/project
+```
+
+`--pair` creates a controller-owned durable node identity, exchanges its
+one-time challenge for a seven-day session token, and stores the session plus
+recovery credential under a durable-node-ID-keyed file in
+`~/.lemon/nodes/execution/`. The directory is mode 0700 and each record is mode
+0600. Records include the exact controller URL; later starts omit `--pair` and
+reuse a record only when its controller matches. Durable-ID lookup requires the
+controller argument and returns no session or recovery material when it is
+missing or differs from the stored controller. After session expiry, re-run
+with `--pair`: the recovery credential preserves the same ID and current
+controller-side name while the new challenge revokes every older node session.
+Controller renames therefore do not invalidate the local credential. Legacy
+records with a node ID but no recovery credential require the explicit
+operator-authorized `--pair --repair --node-id ID` path, which rotates the
+recovery credential instead of creating another node.
+Prefer `LEMON_NODE_OPERATOR_TOKEN` and `LEMON_NODE_TOKEN` to the corresponding
+CLI flags so credentials do not enter shell history.
+For a controller configured with `LEMON_CONTROL_PLANE_OPERATOR_TOKEN`, the
+joining host's `LEMON_NODE_OPERATOR_TOKEN` must contain the same value; remote
+controllers fail closed when operator authentication is not configured.
+Pairing reports missing, wrong, and controller-misconfigured credentials
+without echoing them.
+Non-loopback controllers require `wss://`. `--allow-insecure-controller` (or
+`LEMON_NODE_ALLOW_INSECURE_CONTROLLER=true`) permits plaintext `ws://` only for
+development or when the entire path is already authenticated and encrypted by
+a verified overlay such as Tailscale.
+
+Node names are trimmed and durably unique per controller. `node.list` reports
+paired identities with online/offline status derived from the live registry;
+only an authenticated live connection is executable. The worker advertises
+`coding_agent.run` version 1 and targeted cancellation, accepts only that run
+method, strips `meta.node` before local execution, and validates the selected
+local working directory.
+
+The cross-node payload includes only JSON-safe execution request data such as
+prompt, images, session/run identity, resume token, tool policy, metadata, and
+explicit cwd intent. Source-side executor options, provider credentials,
+callbacks, and BEAM process state are never serialized. The destination
+resolves its own provider credentials, restores `resume_source` to the
+`:auto`/`:explicit` semantics used by the native runner, and uses its own
+default cwd. Explicit
+cancellation sends `node.invoke.cancel`; a source timeout, caller death,
+explicit cancel, node replacement, or WebSocket disconnect also cancels the
+destination work. Relative explicit paths resolve from the worker's configured
+default cwd, and an omitted `--cwd` uses the shell directory from which the join
+command was launched. Stored credentials are bound to the paired node ID, so a
+swapped token file cannot silently turn one named host into another host's
+executor. Remote steer/redirect are unsupported. No vendor CLI runner is used
+anywhere in this path.
+
+The socket sends a 25-second protocol ping to remain below the controller's
+idle timeout. Pairing reconnects resume the same pairing ID, and an approved
+pairing can reissue a one-time challenge for the same durable node if the prior
+challenge response was lost. Requests/results obey the advertised `maxPayload`
+(1 MiB by default) plus shared depth/item limits; streaming output is cancelled
+before unbounded accumulation.
+
 ### Running Tests
 
 ```bash
@@ -831,6 +915,9 @@ apps/coding_agent/
 |   |   +-- subagents.ex, mentions.ex         # Subagent definitions and @mention parsing
 |   |   +-- commands.ex                       # Slash command loading
 |   |   +-- coordinator.ex                    # Concurrent subagent orchestration
+|   |   +-- executor.ex                       # Local/named-node native runner selection
+|   |   +-- executor/                         # Local/remote session runners and wire codec
+|   |   +-- execution_node/                   # CLI, worker, WebSocket client, token storage
 |   |   +-- lane_queue.ex                     # Concurrency-capped lane queue
 |   |   +-- parallel.ex                       # Semaphore and bounded parallelism
 |   |   +-- process_manager.ex                # DynamicSupervisor for background processes
@@ -844,7 +931,6 @@ apps/coding_agent/
 |   |   +-- progress.ex                       # Progress reporting
 |   |   +-- ui.ex                             # Pluggable UI abstraction
 |   |   +-- ui/context.ex                     # UI context helpers
-|   |   +-- cli_runners/                      # CLI runner integrations
 |   +-- mix/tasks/                            # Mix tasks
 +-- test/
 |   +-- coding_agent/
@@ -938,6 +1024,11 @@ Key config paths (via `CodingAgent.Config`):
 | `extensions_dir/0` | `~/.lemon/agent/extensions/` |
 | `workspace_dir/0` | `~/.lemon/agent/workspace/` (assistant home bootstrap dir, distinct from `cwd`) |
 | `project_extensions_dir/1` | `<cwd>/.lemon/extensions/` |
+
+Execution-node tokens are not config keys. `LEMON_NODE_OPERATOR_TOKEN` is read
+only for `--pair`, and `LEMON_NODE_TOKEN` can supply an existing session token
+without writing it to shell history. An explicit `--token` overrides the stored
+record for that process; pairing still writes the newly issued session token.
 
 Provider API key resolution is handled by `CodingAgent.Session.ModelResolver` with fixed precedence:
 1. Provider env vars (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc.)
