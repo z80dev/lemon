@@ -294,7 +294,7 @@ export type ConnectionState = "connecting" | "online" | "offline" | "reconnectin
 
 export interface ConnectParams {
 	role?: string;
-	token?: string;
+	auth?: { token: string };
 	client?: { id: string; [key: string]: unknown };
 	[key: string]: unknown;
 }

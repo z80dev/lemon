@@ -1,6 +1,8 @@
 defmodule CodingAgent.ExecutionNode.WorkerTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias CodingAgent.ExecutionNode.{TokenStore, Worker}
   alias LemonCore.ResumeToken
   alias LemonGateway.ExecutionRequest
@@ -267,6 +269,37 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
   end
 
   @tag :tmp_dir
+  test "fails pairing with a redacted actionable reason when the controller requires a token", %{
+    tmp_dir: tmp_dir
+  } do
+    Process.flag(:trap_exit, true)
+    {:ok, worker} = start_worker(tmp_dir, pair: true)
+    assert_receive {:socket_started, socket, socket_opts}
+    refute Map.has_key?(socket_opts[:connect_params], "auth")
+
+    secret = "must-never-appear-in-the-exit-reason"
+
+    log =
+      capture_log(fn ->
+        send(worker, {
+          :execution_node_socket,
+          socket,
+          {:authentication_error,
+           %{
+             "code" => "UNAUTHORIZED",
+             "message" => "Operator token is required",
+             "details" => secret
+           }}
+        })
+
+        assert_receive {:execution_node_worker, ^worker, {:status, :authentication_error}}
+        assert_receive {:EXIT, ^worker, :operator_token_required}
+      end)
+
+    refute log =~ secret
+  end
+
+  @tag :tmp_dir
   test "rejects a stored token that authenticates as a different node", %{tmp_dir: tmp_dir} do
     token_root = Path.join(tmp_dir, "tokens")
 
@@ -293,7 +326,8 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
 
     assert_receive {:EXIT, ^worker,
                     {:authenticated_node_id_mismatch,
-                     %{expected: "expected-node", actual: "different-node"}}}
+                     %{expected: "expected-node", actual: "different-node"}}},
+                   1_000
   end
 
   @tag :tmp_dir

@@ -129,6 +129,8 @@ defmodule CodingAgent.ExecutionNode.CLI do
       --cwd PATH                Default local working directory (default: current directory)
       --help, -h                Show this help
 
+    LEMON_NODE_OPERATOR_TOKEN must match the controller's
+    LEMON_CONTROL_PLANE_OPERATOR_TOKEN when operator authentication is enabled.
     Prefer LEMON_NODE_OPERATOR_TOKEN and LEMON_NODE_TOKEN over command-line token
     flags so credentials do not enter shell history. Stored node tokens live only
     on this machine in a mode-0600 file keyed by node name.
@@ -136,6 +138,26 @@ defmodule CodingAgent.ExecutionNode.CLI do
   end
 
   defp blank?(value), do: not is_binary(value) or String.trim(value) == ""
+
+  defp format_reason(:operator_token_required) do
+    "the controller requires an operator token for pairing; set LEMON_NODE_OPERATOR_TOKEN or pass --operator-token"
+  end
+
+  defp format_reason(:operator_token_invalid) do
+    "the controller rejected the operator token; check LEMON_NODE_OPERATOR_TOKEN or --operator-token"
+  end
+
+  defp format_reason(:controller_operator_token_not_configured) do
+    "the remote controller has not configured LEMON_CONTROL_PLANE_OPERATOR_TOKEN; configure it on the controller before pairing"
+  end
+
+  defp format_reason(:operator_authentication_failed) do
+    "operator authentication failed while pairing"
+  end
+
+  defp format_reason(:node_authentication_failed) do
+    "node authentication failed; re-pair the node or provide a valid LEMON_NODE_TOKEN"
+  end
 
   defp format_reason(reason) do
     reason

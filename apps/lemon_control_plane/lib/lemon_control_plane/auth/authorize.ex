@@ -4,7 +4,8 @@ defmodule LemonControlPlane.Auth.Authorize do
 
   Implements role-based access control with the following roles:
 
-  - `operator` - Default role for admin/operator clients
+  - `operator` - Admin/operator clients authenticated by the configured operator
+    token, with a tokenless compatibility path limited to loopback connections
   - `node` - Role for paired nodes (browser extensions, etc.)
   - `device` - Role for paired devices
 
@@ -34,10 +35,11 @@ defmodule LemonControlPlane.Auth.Authorize do
 
   ## Token-Based Authentication
 
-  When a token is provided via `auth.token`, it is validated against the
-  TokenStore. If valid, the identity from the token determines the role
-  and scopes. This is used for node/device connections that completed
-  the challenge flow.
+  When a token is provided via `auth.token`, it is first compared in constant
+  time with the configured control-plane operator token. Otherwise it is
+  validated against the TokenStore and the stored identity determines the role
+  and scopes. Unknown stored identity types fail closed instead of inheriting an
+  operator role.
   """
 
   alias LemonControlPlane.Auth.TokenStore
@@ -64,75 +66,120 @@ defmodule LemonControlPlane.Auth.Authorize do
   @doc """
   Creates a new auth context from connection parameters.
 
-  If a token is provided, it will be validated and the identity
-  extracted to determine role and scopes.
+  If a token is provided, it will be validated and the identity extracted to
+  determine role and scopes. `:local?` defaults to true for direct in-process
+  callers; the WebSocket boundary always supplies the actual peer classification.
   """
   @spec from_params(map()) :: {:ok, auth_context()} | {:error, term()}
-  def from_params(params) do
+  def from_params(params), do: from_params(params, local?: true)
+
+  @spec from_params(map(), keyword()) :: {:ok, auth_context()} | {:error, term()}
+  def from_params(params, opts) do
     token = get_in(params, ["auth", "token"])
+    requested_role = parse_role(params["role"])
+    local? = Keyword.get(opts, :local?, true)
+    configured_operator_token = operator_token()
 
-    # If token is provided, validate it and use identity for auth
-    case validate_token(token) do
-      {:ok, identity} ->
-        # Token is valid - derive role and scopes from identity
-        {role, scopes, client_id} = identity_to_auth(identity)
+    cond do
+      requested_role == :operator and
+          secure_token_match?(token, configured_operator_token) ->
+        operator_context(params)
 
-        {:ok,
-         %{
-           role: role,
-           scopes: scopes,
-           token: token,
-           client_id: client_id,
-           identity: identity
-         }}
+      present?(token) ->
+        authenticate_session_token(token, requested_role, configured_operator_token)
 
-      {:error, :invalid_token} when token != nil and token != "" ->
-        # Token was provided but is invalid
-        {:error, {:unauthorized, "Invalid token"}}
+      requested_role != :operator ->
+        {:error, {:unauthorized, "A valid #{requested_role} session token is required"}}
 
-      {:error, :expired_token} when token != nil and token != "" ->
-        # Token was provided but has expired - this is also an auth error
-        {:error, {:unauthorized, "Token has expired"}}
+      present?(configured_operator_token) ->
+        {:error, {:unauthorized, "Operator token is required"}}
 
-      _ ->
-        # No token or empty token - use params-based auth
-        role = parse_role(params["role"])
-        scopes = parse_scopes(params["scopes"], role)
+      local? ->
+        operator_context(params)
 
-        {:ok,
-         %{
-           role: role,
-           scopes: scopes,
-           token: token,
-           client_id: get_in(params, ["client", "id"]),
-           identity: nil
-         }}
+      true ->
+        {:error,
+         {:unauthorized,
+          "Remote operator access is disabled until LEMON_CONTROL_PLANE_OPERATOR_TOKEN is configured"}}
     end
   end
 
-  # Validate token if provided
-  defp validate_token(nil), do: {:error, :no_token}
-  defp validate_token(""), do: {:error, :no_token}
+  defp authenticate_session_token(token, requested_role, configured_operator_token) do
+    case TokenStore.validate(token) do
+      {:ok, identity} ->
+        with {:ok, {role, scopes, client_id}} <- identity_to_auth(identity) do
+          {:ok,
+           %{
+             role: role,
+             scopes: scopes,
+             token: nil,
+             client_id: client_id,
+             identity: identity
+           }}
+        end
 
-  defp validate_token(token) do
-    TokenStore.validate(token)
+      {:error, :expired_token} ->
+        {:error, {:unauthorized, "Token has expired"}}
+
+      {:error, :invalid_token}
+      when requested_role == :operator and is_binary(configured_operator_token) ->
+        {:error, {:unauthorized, "Operator token is invalid"}}
+
+      {:error, :invalid_token} ->
+        {:error, {:unauthorized, "Invalid token"}}
+    end
+  end
+
+  defp operator_context(params) do
+    {:ok,
+     %{
+       role: :operator,
+       scopes: parse_scopes(params["scopes"], :operator),
+       token: nil,
+       client_id: get_in(params, ["client", "id"]),
+       identity: nil
+     }}
   end
 
   # Convert identity from token to role, scopes, and client_id
   defp identity_to_auth(%{"type" => "node"} = identity) do
     node_id = identity["nodeId"] || identity["node_id"]
-    {:node, [:invoke, :event], node_id}
+    {:ok, {:node, [:invoke, :event], node_id}}
   end
 
   defp identity_to_auth(%{"type" => "device"} = identity) do
     device_id = identity["deviceId"] || identity["device_id"]
-    {:device, [:control], device_id}
+    {:ok, {:device, [:control], device_id}}
   end
 
   defp identity_to_auth(_identity) do
-    # Unknown identity type - default to minimal permissions
-    {:operator, [:read], nil}
+    {:error, {:unauthorized, "Unsupported token identity"}}
   end
+
+  defp operator_token do
+    (Application.get_env(:lemon_control_plane, :operator_token) ||
+       System.get_env("LEMON_CONTROL_PLANE_OPERATOR_TOKEN"))
+    |> normalize_token()
+  end
+
+  # Hashing first keeps the secure comparison input length fixed and avoids
+  # leaking the configured token length through an early size check.
+  defp secure_token_match?(left, right) when is_binary(left) and is_binary(right) do
+    Plug.Crypto.secure_compare(:crypto.hash(:sha256, left), :crypto.hash(:sha256, right))
+  end
+
+  defp secure_token_match?(_left, _right), do: false
+
+  defp normalize_token(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      token -> token
+    end
+  end
+
+  defp normalize_token(_value), do: nil
+
+  defp present?(value), do: is_binary(value) and value != ""
 
   @doc """
   Creates a default operator auth context with all scopes.

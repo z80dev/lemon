@@ -708,7 +708,11 @@ Run a native worker against a Lemon controller from the source checkout:
 
 Subsequent starts reuse the private node-name-keyed token. Prefer
 `LEMON_NODE_OPERATOR_TOKEN` and `LEMON_NODE_TOKEN` to the corresponding CLI
-flags so credentials do not enter shell history. The worker accepts only the
+flags so credentials do not enter shell history. For a controller configured
+with `LEMON_CONTROL_PLANE_OPERATOR_TOKEN`, the joining host's
+`LEMON_NODE_OPERATOR_TOKEN` must contain the same value; remote controllers fail
+closed when operator authentication is not configured. Pairing reports missing,
+wrong, and controller-misconfigured credentials without echoing them. The worker accepts only the
 versioned `coding_agent.run` protocol, strips `meta.node` before local execution,
 validates the selected local working directory, resolves relative invocation paths
 from the node's configured default cwd, and handles targeted cancellation. Losing

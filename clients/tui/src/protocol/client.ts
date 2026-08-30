@@ -68,7 +68,7 @@ export interface ControlPlaneClientOptions {
 	/** Client identity reported in the handshake. */
 	clientId?: string;
 	role?: string;
-	/** Optional auth token. Local operators send none and receive all scopes. */
+	/** Optional operator token, sent inside the control-plane `auth` envelope. */
 	token?: string;
 	requestTimeoutMs?: number;
 	queueableMethods?: Iterable<string>;
@@ -339,7 +339,7 @@ export class ControlPlaneClient {
 			role: this.#role,
 			client: { id: this.#clientId },
 		};
-		if (this.#token) params.token = this.#token;
+		if (this.#token) params.auth = { token: this.#token };
 		const frame = makeReq("connect", params);
 		this.#handshakeId = frame.id;
 		if (!this.#socket.send(encodeFrame(frame))) {

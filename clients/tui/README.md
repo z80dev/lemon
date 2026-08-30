@@ -10,6 +10,11 @@ Installed users get this client as a compiled per-platform binary
 (`~/.lemon/versions/<v>/tui/bin/lemon-tui`); plain `lemon` in an interactive
 terminal launches it, auto-starting the daemon first. See `docs/install.md`.
 
+When the daemon sets `LEMON_CONTROL_PLANE_OPERATOR_TOKEN`, launch the TUI with
+the same environment value. The client sends it only inside the WebSocket
+`connect.auth` envelope and does not include it in its debug frame summaries.
+`LEMON_WS_TOKEN` remains a legacy client-side alias.
+
 ## Features
 
 - Streaming markdown transcript committed to native terminal scrollback

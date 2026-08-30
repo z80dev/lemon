@@ -182,11 +182,21 @@ defmodule CodingAgent.ExecutionNode.Worker do
   end
 
   def handle_info(
-        {:execution_node_socket, socket, {:authentication_error, _error}},
+        {:execution_node_socket, socket, {:authentication_error, error}},
         %{socket: socket} = state
       ) do
     notify(state, {:status, :authentication_error})
-    {:stop, :authentication_failed, state}
+
+    send(
+      self(),
+      {:stop_after_authentication_error, authentication_failure_reason(error, state.socket_mode)}
+    )
+
+    {:noreply, state}
+  end
+
+  def handle_info({:stop_after_authentication_error, reason}, state) do
+    {:stop, reason, state}
   end
 
   def handle_info({:engine_delta, run_ref, text}, state) when is_binary(text) do
@@ -634,6 +644,31 @@ defmodule CodingAgent.ExecutionNode.Worker do
   end
 
   defp maybe_put_auth(params, _token), do: params
+
+  defp authentication_failure_reason(error, :pairing) do
+    message =
+      case error do
+        %{"message" => message} when is_binary(message) -> String.downcase(message)
+        _ -> ""
+      end
+
+    cond do
+      String.contains?(message, "remote operator access is disabled") ->
+        :controller_operator_token_not_configured
+
+      String.contains?(message, "operator token is required") ->
+        :operator_token_required
+
+      String.contains?(message, "operator token is invalid") ->
+        :operator_token_invalid
+
+      true ->
+        :operator_authentication_failed
+    end
+  end
+
+  defp authentication_failure_reason(_error, :node), do: :node_authentication_failed
+  defp authentication_failure_reason(_error, _mode), do: :authentication_failed
 
   defp value(map, key) when is_map(map), do: Map.get(map, key) || Map.get(map, key_atom(key))
   defp value(_map, _key), do: nil
