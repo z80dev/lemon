@@ -181,8 +181,14 @@ defmodule LemonCore.SessionLifecycle do
 
   @doc "Delete all core-owned state for one session and verify it is gone."
   @spec delete(String.t()) :: {:ok, map()} | {:error, term()}
-  def delete(session_key) when is_binary(session_key) do
+  def delete(session_key) when is_binary(session_key), do: delete(session_key, [])
+
+  @doc false
+  @spec delete(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def delete(session_key, opts) when is_binary(session_key) and is_list(opts) do
     existed = get(session_key) != nil
+    run_delete_fun = Keyword.get(opts, :run_delete_fun, &RunStore.delete_session/1)
+    canonical_verify_fun = Keyword.get(opts, :canonical_verify_fun, &verify_canonical_deleted/1)
 
     snapshots = %{
       chat: ChatStateStore.get(session_key),
@@ -194,8 +200,9 @@ defmodule LemonCore.SessionLifecycle do
       with :ok <- normalize_delete_result(ChatStateStore.delete(session_key)),
            :ok <- normalize_delete_result(PolicyStore.delete_session(session_key)),
            :ok <- normalize_delete_result(SessionMetadataStore.delete(session_key)),
-           :ok <- normalize_delete_result(RunStore.delete_session(session_key)),
-           :ok <- verify_deleted(session_key) do
+           :ok <- verify_ancillary_deleted(session_key),
+           :ok <- normalize_delete_result(run_delete_fun.(session_key)),
+           :ok <- canonical_verify_fun.(session_key) do
         {:ok, %{session_key: session_key, existed: existed, verified: true}}
       end
 
@@ -204,6 +211,9 @@ defmodule LemonCore.SessionLifecycle do
         ok
 
       {:error, reason} ->
+        # Canonical run deletion is the final mutation. If that commit or its
+        # verification fails, we can restore the ancillary snapshots, but we
+        # deliberately do not claim the run history itself was recoverable.
         restore_ancillary_state(session_key, snapshots)
         {:error, reason}
     end
@@ -509,17 +519,23 @@ defmodule LemonCore.SessionLifecycle do
     }
   end
 
-  defp verify_deleted(session_key) do
-    index_gone? = get(session_key) == nil
-    history_gone? = RunStore.history(session_key, limit: 1) == []
+  defp verify_ancillary_deleted(session_key) do
     chat_gone? = is_nil(ChatStateStore.get(session_key))
     policy_gone? = is_nil(PolicyStore.get_session(session_key))
     metadata_gone? = default_metadata?(SessionMetadataStore.get(session_key))
 
-    if index_gone? and history_gone? and chat_gone? and policy_gone? and metadata_gone? do
+    if chat_gone? and policy_gone? and metadata_gone? do
       :ok
     else
-      {:error, :deletion_not_verified}
+      {:error, :ancillary_deletion_not_verified}
+    end
+  end
+
+  defp verify_canonical_deleted(session_key) do
+    if get(session_key) == nil and RunStore.history(session_key, limit: 1) == [] do
+      :ok
+    else
+      {:error, :canonical_deletion_not_verified}
     end
   end
 
