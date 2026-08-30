@@ -22,7 +22,7 @@ defmodule LemonAi.Providers.Anthropic do
   @behaviour LemonAi.Provider
 
   alias LemonAi.EventStream
-  alias LemonAi.Providers.HttpTrace
+  alias LemonAi.Providers.{HttpTrace, RetryHelper}
   import LemonAi.Providers.AssistantMessageHelper
 
   alias LemonAi.Types.{
@@ -352,7 +352,7 @@ defmodule LemonAi.Providers.Anthropic do
       {:ok, %Req.Response{status: status} = response} = wrapped_response ->
         if attempt < @max_retries and
              retryable_http_response?(response, initial_state.model) do
-          retry_delay = retry_delay_ms(attempt)
+          retry_delay = RetryHelper.exponential_backoff_with_jitter(@base_retry_delay_ms, attempt)
 
           debug_log("retry_http", %{
             status: status,
@@ -377,8 +377,8 @@ defmodule LemonAi.Providers.Anthropic do
 
       {:error, reason} = error ->
         if attempt < @max_retries and not saw_meaningful_output and
-             retryable_transport_error?(reason) do
-          retry_delay = retry_delay_ms(attempt)
+             RetryHelper.retryable_transport_error?(reason) do
+          retry_delay = RetryHelper.exponential_backoff_with_jitter(@base_retry_delay_ms, attempt)
 
           debug_log("retry_transport", %{
             reason: inspect(reason),
@@ -414,20 +414,8 @@ defmodule LemonAi.Providers.Anthropic do
   defp content_size(%{output: %{content: content}}) when is_list(content), do: length(content)
   defp content_size(_), do: 0
 
-  defp retry_delay_ms(attempt) when is_integer(attempt) and attempt >= 0 do
-    base = (@base_retry_delay_ms * :math.pow(2, attempt)) |> trunc()
-    half = max(div(base, 2), 1)
-    half + :rand.uniform(half)
-  end
-
-  defp retryable_http_status?(status) when is_integer(status) do
-    status in [408, 409, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524]
-  end
-
-  defp retryable_http_status?(_), do: false
-
   defp retryable_http_response?(%Req.Response{status: status} = response, model) do
-    retryable_http_status?(status) or retryable_kimi_empty_400?(response, model)
+    RetryHelper.retryable_http_status?(status) or retryable_kimi_empty_400?(response, model)
   end
 
   defp retryable_kimi_empty_400?(%Req.Response{status: 400} = response, %Model{provider: provider})
@@ -451,40 +439,6 @@ defmodule LemonAi.Providers.Anthropic do
   end
 
   defp empty_stream_buffer?(_), do: true
-
-  defp retryable_transport_error?(%Req.TransportError{reason: reason}) do
-    retryable_transport_reason?(reason)
-  end
-
-  defp retryable_transport_error?(reason), do: retryable_transport_reason?(reason)
-
-  defp retryable_transport_reason?(reason)
-       when reason in [
-              :timeout,
-              :closed,
-              :econnrefused,
-              :econnreset,
-              :enetdown,
-              :enetwork_unreachable,
-              :nxdomain,
-              :ehostunreach,
-              :unreachable
-            ],
-       do: true
-
-  defp retryable_transport_reason?({:tls_alert, {_alert, _detail}}), do: true
-  defp retryable_transport_reason?({:failed_connect, _}), do: true
-  defp retryable_transport_reason?({:closed, _}), do: true
-
-  defp retryable_transport_reason?(reason) when is_tuple(reason) do
-    reason_text = reason |> inspect() |> String.downcase()
-
-    String.contains?(reason_text, "timeout") or
-      String.contains?(reason_text, "temporarily unavailable") or
-      String.contains?(reason_text, "bad_record_mac")
-  end
-
-  defp retryable_transport_reason?(_), do: false
 
   # ============================================================================
   # SSE Parsing
