@@ -93,9 +93,13 @@ defmodule LemonControlPlane.Protocol.Frames do
 
   Returns `{:ok, frame}` or `{:error, reason}`.
   """
-  @spec parse(binary()) :: {:ok, request()} | {:error, term()}
-  def parse(data) when is_binary(data) do
+  @spec parse(binary(), keyword()) :: {:ok, request()} | {:error, term()}
+  def parse(data, opts \\ []) when is_binary(data) do
     with {:ok, decoded} <- Jason.decode(data),
+         {:ok, _stats} <-
+           LemonCore.JSONPayload.validate(decoded,
+             max_bytes: opts[:max_payload] || LemonControlPlane.max_payload()
+           ),
          {:ok, frame} <- validate_request(decoded) do
       {:ok, frame}
     else
@@ -204,7 +208,7 @@ defmodule LemonControlPlane.Protocol.Frames do
       },
       "snapshot" => opts[:snapshot] || %{},
       "policy" => %{
-        "maxPayload" => opts[:max_payload] || 1_048_576,
+        "maxPayload" => opts[:max_payload] || LemonControlPlane.max_payload(),
         "maxBufferedBytes" => opts[:max_buffered_bytes] || 8_388_608,
         "tickIntervalMs" => opts[:tick_interval_ms] || 1000
       }

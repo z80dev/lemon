@@ -117,6 +117,7 @@ defmodule CodingAgent.Tools.AgentTest do
     assert Map.has_key?(tool.parameters["properties"], "task_ids")
     assert Map.has_key?(tool.parameters["properties"], "mode")
     assert Map.has_key?(tool.parameters["properties"], "followup_queue_mode")
+    assert Map.has_key?(tool.parameters["properties"], "node")
     refute Map.has_key?(tool.parameters["properties"], "engine_id")
     assert tool.parameters["properties"]["agent_id"]["enum"] == ["coder", "default", "oracle"]
   end
@@ -208,6 +209,7 @@ defmodule CodingAgent.Tools.AgentTest do
     assert result.details.status == "queued"
     assert is_binary(result.details.task_id)
     assert is_binary(result.details.run_id)
+    assert result.details.node == "local"
 
     assert {:ok,
             %{
@@ -225,6 +227,7 @@ defmodule CodingAgent.Tools.AgentTest do
     assert req.prompt == "Answer with hello"
     assert req.model == "openai:gpt-4.1"
     assert req.session_key == result.details.session_key
+    refute Map.has_key?(req.meta, :node)
 
     completed =
       Event.new(
@@ -239,6 +242,104 @@ defmodule CodingAgent.Tools.AgentTest do
     assert LemonAgent.get_text(poll) == "hello from oracle"
 
     assert {:ok, %{status: :completed}} = RunGraph.get(result.details.run_id)
+  end
+
+  test "named node is validated and carried through delegated metadata and results" do
+    result =
+      AgentTool.execute(
+        "call_named_node",
+        %{
+          "agent_id" => "oracle",
+          "prompt" => "run on the build box",
+          "node" => "newphy",
+          "cwd" => "projects/lemon",
+          "async" => true,
+          "auto_followup" => false,
+          "meta" => %{"node" => "attempted-override"}
+        },
+        nil,
+        nil,
+        "/source/lemon",
+        run_orchestrator: __MODULE__.AgentTestStubRunOrchestrator,
+        session_key: "agent:main:main"
+      )
+
+    assert result.details.status == "queued"
+    assert result.details.node == "newphy"
+
+    assert_receive {:router_submit, %RunRequest{} = req, 1}
+    assert req.meta[:node] == "newphy"
+    assert req.meta[:remote_cwd_explicit] == true
+    assert req.meta[:remote_cwd] == "projects/lemon"
+
+    poll =
+      AgentTool.execute(
+        "poll_named",
+        %{"action" => "poll", "task_id" => result.details.task_id},
+        nil,
+        nil,
+        "/tmp",
+        []
+      )
+
+    assert poll.details.node == "newphy"
+  end
+
+  test "named node without cwd selects the destination default and rejects non-string nodes" do
+    result =
+      AgentTool.execute(
+        "call_named_node_default_cwd",
+        %{
+          "agent_id" => "oracle",
+          "prompt" => "use the destination cwd",
+          "node" => "newphy",
+          "async" => true,
+          "auto_followup" => false
+        },
+        nil,
+        nil,
+        "/source/lemon",
+        run_orchestrator: __MODULE__.AgentTestStubRunOrchestrator,
+        session_key: "agent:main:main"
+      )
+
+    assert result.details.node == "newphy"
+    assert_receive {:router_submit, %RunRequest{} = req, 1}
+    assert req.meta[:remote_cwd_explicit] == false
+    refute Map.has_key?(req.meta, :remote_cwd)
+
+    empty_cwd_result =
+      AgentTool.execute(
+        "call_named_node_empty_cwd",
+        %{
+          "agent_id" => "oracle",
+          "prompt" => "use the destination cwd",
+          "node" => "newphy",
+          "cwd" => "",
+          "async" => true,
+          "auto_followup" => false
+        },
+        nil,
+        nil,
+        "/source/lemon",
+        run_orchestrator: __MODULE__.AgentTestStubRunOrchestrator,
+        session_key: "agent:main:main"
+      )
+
+    assert empty_cwd_result.details.node == "newphy"
+    assert_receive {:router_submit, %RunRequest{} = empty_cwd_req, 2}
+    assert empty_cwd_req.meta[:remote_cwd_explicit] == false
+    refute Map.has_key?(empty_cwd_req.meta, :remote_cwd)
+
+    assert {:error, "node must be a string"} =
+             AgentTool.execute(
+               "call_bad_node",
+               %{"agent_id" => "oracle", "prompt" => "bad", "node" => 123},
+               nil,
+               nil,
+               "/tmp",
+               run_orchestrator: __MODULE__.AgentTestStubRunOrchestrator
+             )
   end
 
   test "async run reports a tracking error when its completion watcher cannot start" do

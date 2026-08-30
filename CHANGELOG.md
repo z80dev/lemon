@@ -8,6 +8,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Added
+
+- Named execution nodes can now pair with a Lemon controller through
+  `./bin/lemon node join`, advertise live presence under a unique name, and
+  run native delegated `CodingAgent.Session` work selected by the `agent`
+  tool's `node` parameter. Pairing persists a private, controller-bound token
+  on the destination machine; remote runs keep credentials and default working
+  directories destination-local and support targeted cancellation.
+
 ### Changed
 
 - Local coding-agent patches now preflight every hunk before mutation, reject
@@ -35,6 +44,35 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Named execution nodes now recover the same durable identity after their
+  seven-day session expires, survive controller-side renames, revoke older
+  sessions on rotation, and provide an explicit repair path for legacy local
+  credentials. Non-loopback plaintext controller connections now fail closed
+  unless development or a verified encrypted overlay is explicitly selected.
+- Named-node challenge exchange and per-identity credential replacement are now
+  atomic. Rotation closes stale live sockets, binds result settlement to the
+  authorized connection generation, retains a monotonic generation floor
+  against delayed handshakes, and withholds ID-based recovery material unless
+  the exact stored controller is supplied.
+- Closed unauthenticated named-node operator access on the control-plane
+  WebSocket: non-loopback operators now fail closed, configured operator tokens
+  use constant-time validation, unknown session identities cannot escalate, and
+  node pairing reports credential problems without exposing secrets. Tokenless
+  loopback operator access is now a default-off explicit compatibility opt-in,
+  and browser clients keep operator credentials out of WebSocket URLs.
+- The source TUI launcher now gives a fresh launcher-owned daemon and client the
+  same high-entropy process-scoped operator token, keeps it out of arguments and
+  disk, stops every daemon it starts with the TUI regardless of whether the
+  token was generated or preconfigured, and fails closed when attaching to an
+  existing runtime without its configured token.
+- Named execution nodes now cancel destination work when callers time out,
+  disappear, reconnect, or lose their controller socket; bind stored tokens to
+  the paired node identity; persist fast results without racing dispatch; and
+  resolve relative/default working directories from the joining shell. Node
+  sockets now send idle keepalives, pairing resumes safely after approval or a
+  lost challenge response, bounded JSON request/result limits prevent
+  unbounded worker output, and durable status/events retain only redacted
+  result summaries while private source delivery remains intact.
 - Router and gateway launch lifecycle now bounds pre-start runtime submission
   and run-launch retries, emits one structured terminal failure before queue
   cleanup, deduplicates tokenized scheduler requests, preserves engine-lock

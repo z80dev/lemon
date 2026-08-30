@@ -947,7 +947,11 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "nodeName" => :string
       },
       optional: %{
-        "expiresInMs" => :integer
+        "expiresInMs" => :integer,
+        "capabilities" => :map,
+        "nodeId" => :string,
+        "recoveryToken" => :string,
+        "repair" => :boolean
       }
     },
     "node.pair.list" => %{optional: %{}},

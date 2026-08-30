@@ -38,6 +38,7 @@ lemon doctor
 ./bin/lemon secrets status
 ./bin/lemon channels
 ./bin/lemon doctor
+./bin/lemon node join --name worker-1 --controller ws://controller:4040/ws --pair --cwd /srv/project
 ```
 
 The installed `lemon` runtime CLI is included in the minimal and full release
@@ -206,6 +207,32 @@ mix lemon.sim.score  apps/lemon_sim/priv/game_logs/vending_bench/vb_ci
 `scripts/release_package` is a shell **script**, not a `mix` task — invoke it
 directly (`scripts/release_package <package>`). It is not listed by
 `mix lemon.help`.
+
+`./bin/lemon node join` is also a source wrapper, not a Mix task. It starts a
+long-lived native coding execution worker and therefore has no `mix
+lemon.node.*` entry:
+
+```bash
+LEMON_NODE_OPERATOR_TOKEN=... ./bin/lemon node join \
+  --name worker-1 \
+  --controller wss://controller.example/ws \
+  --pair \
+  --cwd /srv/project
+```
+
+Use `--pair` when creating the controller identity. Later starts reuse the
+private, controller-bound token stored by durable node ID on the destination.
+Re-run with `--pair` after the controller's seven-day session-token expiry to
+recover the same durable node and revoke older sessions. Use the explicit
+operator-authorized `--pair --repair --node-id ID` path only for a legacy record
+without a recovery credential.
+Prefer `LEMON_NODE_OPERATOR_TOKEN` / `LEMON_NODE_TOKEN` over token flags; node
+names must be unique on the controller, and the destination cwd must already
+exist.
+
+Non-loopback controllers require `wss://` by default. Plaintext `ws://` needs
+`--allow-insecure-controller` and is acceptable only for development or across
+a verified encrypted overlay such as Tailscale.
 
 ---
 
