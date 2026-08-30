@@ -342,6 +342,10 @@ fi
 if [[ "${1:-}" == "context" ]]; then
   shift
   cd "$LEMON_ROOT"
+  # Keep structured stdout parseable even when this first invocation needs to
+  # compile changed source files. Runtime application logs are silenced by the
+  # JSON command boundary itself; MIX_QUIET covers Mix's compile progress.
+  export MIX_QUIET=1
   exec mix run --no-start -e 'System.halt(LemonCli.CLI.run(["context" | System.argv()]))' -- "$@"
 fi
 

@@ -2,6 +2,7 @@ defmodule LemonCli.ContextCommand do
   @moduledoc "Packaged CLI adapter for the canonical `LemonCore.Context` service."
 
   alias LemonCore.Context
+  alias LemonCli.Onboarding.LogSilencer
 
   @exit_ok 0
   @exit_error 1
@@ -31,17 +32,21 @@ defmodule LemonCli.ContextCommand do
         usage_error("At least one context reference is required")
 
       true ->
-        _ = Application.ensure_all_started(:lemon_core)
-        service_opts = service_opts(opts)
+        json? = opts[:json] == true
 
         result =
-          if action == "preview",
-            do: Context.preview(references, service_opts),
-            else: Context.resolve(references, service_opts)
+          LogSilencer.with_quiet_logs(json?, fn ->
+            _ = Application.ensure_all_started(:lemon_core)
+            service_opts = service_opts(opts)
+
+            if action == "preview",
+              do: Context.preview(references, service_opts),
+              else: Context.resolve(references, service_opts)
+          end)
 
         case result do
           {:ok, response} ->
-            print_response(response, opts[:json] == true)
+            print_response(response, json?)
             @exit_ok
 
           {:error, reason} ->
