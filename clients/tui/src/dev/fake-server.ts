@@ -116,6 +116,11 @@ const DEFAULT_METHODS = [
 	"config.set",
 	"skills.hermes.catalog",
 	"skills.install",
+	"blueprints.list",
+	"blueprints.inspect",
+	"blueprints.validate",
+	"blueprints.preview",
+	"blueprints.activate",
 ];
 
 const DEFAULT_EVENTS = ["agent", "chat", "goal", "tick", "presence", "health", "shutdown"];

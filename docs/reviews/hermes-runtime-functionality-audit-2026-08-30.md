@@ -170,6 +170,16 @@ LiveView projection excludes manifest prose, prompts, skill bodies, commands,
 environment values, paths, tokens, and service error terms from socket state
 and rendered HTML.
 
+The Bun TUI now projects the same boundary through `/blueprints` and
+`/blueprint`. Its picker, inspect/validate receipts, profile preview, and
+activation state allow only bounded IDs, counts, actions, booleans, and
+digests. Activation obtains a fresh preview before sending a nonqueueable admin
+request; wrong or stale digests mutate nothing, clear the pending plan, and
+preserve the profile draft. An authenticated real-Bandit proof drives the
+production Bun client through list/inspect/validate, non-mutating preview,
+wrong-digest refusal, exact create, and unchanged replay while planted manifest
+prose, prompt/skill content, paths, and the operator token remain absent.
+
 ## Prioritized remaining runtime work
 
 ### P0 — reliability and safety closure

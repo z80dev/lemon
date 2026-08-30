@@ -460,6 +460,14 @@ packaged launcher starts the existing runtime when necessary, preview is the
 default bundle-ID action, and only `blueprints.activate` carries the exact
 fresh confirmation digest to this long-running service.
 
+The Bun TUI uses the same methods for `/blueprints` and `/blueprint`. Its own
+projection is intentionally narrower than the RPC: only bounded IDs, counts,
+actions, booleans, and digests may enter terminal state. It obtains a fresh
+preview before activation, disables offline queuing for the admin request, and
+clears refused/stale plans while preserving the profile draft. Keep free-form
+manifest prose, prompts, skill text, schedules, commands, environment values,
+paths, URLs, tokens, secrets, and raw error terms out of terminal rendering.
+
 Learn methods may accept bounded context references and an explicit root, but
 must never return source text, generated prompts, paths, URLs, secret names, or
 secret values. `learn.confirm` delegates to `LemonSkills.Learn`; do not persist

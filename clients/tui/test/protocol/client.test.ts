@@ -182,6 +182,21 @@ describe("session lifecycle offline safety", () => {
 	});
 });
 
+describe("blueprint activation offline safety", () => {
+	test("activation never enters the reconnect queue", async () => {
+		const client = makeClient("ws://127.0.0.1:1/ws");
+		const methods = new ControlPlaneMethods(client);
+		await expect(
+			methods.blueprintsActivate({
+				bundleId: "daily-note",
+				profileId: "operator",
+				confirmationDigest: "a".repeat(64),
+			}),
+		).rejects.toBeInstanceOf(NotConnectedError);
+		expect(client.queued).toHaveLength(0);
+	});
+});
+
 describe("events", () => {
 	test("demuxes server events to typed listeners", async () => {
 		const server = await withServer();

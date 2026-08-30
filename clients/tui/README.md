@@ -63,6 +63,11 @@ legacy client-side alias; it does not configure the daemon.
   guarded create/clone/rename/export/delete lifecycle commands. Ordinary
   prompts in an opened profile use `profile.chat`, preserving the server-owned
   derived workspace and named-node route.
+- `/blueprints` bounded catalog picker plus `/blueprint` content-free inspect,
+  validate, profile preview, and exact-digest activation. The TUI re-previews
+  before every mutation, never queues activation offline, preserves the profile
+  draft after refusal, and reports create-once or unchanged replay without
+  retaining manifest prose or executable/source content.
 - Progressive-disclosure status bar (model + context gauge pinned), git
   branch, connection state, session counters.
 - Dark/light themes with OSC 11 terminal-background auto-detection; mouse
@@ -100,6 +105,8 @@ and control plane authoritative:
 | `/session preview\|export …` | Read a bounded redacted preview or write a digest-verified JSON/Markdown export through a private atomic file operation. Use `/session help` for exact syntax. |
 | `/session prune --older-than <cutoff> …` | Preview the complete exact candidate set and receive its confirmation token; repeat with `--confirm <token>` to prune only an unchanged set. Archived, unpinned sessions are the safe default. |
 | `/session delete [key] …` | Preview one exact durable session, then repeat its key with `--confirm`; optionally use `--export json\|markdown` to verify a redacted export before verified deletion. |
+| `/blueprints [bundle-id filter]` | Browse bounded catalog IDs/counts, then inspect the selected entry through the shared authenticated service. |
+| `/blueprint [help\|list\|inspect\|validate\|preview\|activate] …` | Inspect and validate content-free metadata, preview one profile without mutation, or activate only after a fresh exact digest match. Refused/stale plans preserve the profile draft and never queue offline. |
 
 Use `/quit` (or the existing keyboard exit binding) to leave the TUI. `/clear`
 remains visual-only: it clears terminal scrollback and the rendered transcript
@@ -130,6 +137,7 @@ production typed Bun client against isolated server-owned state:
 cd ../..
 MIX_ENV=test mix test apps/lemon_control_plane/test/lemon_control_plane/tui_profiles_wire_e2e_test.exs --seed 1
 MIX_ENV=test mix test apps/lemon_control_plane/test/lemon_control_plane/tui_sessions_wire_e2e_test.exs --seed 1
+MIX_ENV=test mix test apps/lemon_control_plane/test/lemon_control_plane/tui_blueprints_wire_e2e_test.exs --seed 1
 ```
 
 Profile commands deliberately do not accept a profile home or workspace path.
@@ -143,6 +151,14 @@ local paths. Export content comes from the server's redacted contract; the TUI
 then verifies its key, format, byte count, and SHA-256 before a private write.
 Delete only forgets the local transcript after the server returns a verified
 receipt. Prune confirmation binds the cutoff, flags, and exact candidate set.
+
+Blueprint picker, status, preview, and receipt views intentionally render only
+bounded IDs, counts, actions, booleans, and digests. Free-form manifest names or
+descriptions, prompts, skill bodies, schedules, commands, environment values,
+paths, URLs, tokens, secrets, and raw daemon errors are discarded before TUI
+state. Activation re-previews through `blueprints.preview`, requires its exact
+fresh digest, then calls nonqueueable `blueprints.activate`; replay with the new
+unchanged digest leaves one scheduler job.
 
 ### Layout
 

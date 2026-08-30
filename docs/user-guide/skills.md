@@ -278,6 +278,24 @@ same exact profile skill and cron actions. Type the displayed digest to apply.
 The Web socket deliberately omits free-form manifest prose as well as prompts,
 skill bodies, commands, environment values, paths, tokens, and secrets.
 
+The Bun TUI uses the same catalog and activation service:
+
+```text
+/blueprints
+/blueprint inspect daily-note
+/blueprint validate daily-note
+/blueprint preview daily-note --profile operator
+/blueprint activate daily-note --profile operator --confirm <digest-from-preview>
+```
+
+The picker and command receipts are deliberately narrower than the RPC and Web
+projections: only bounded IDs, counts, actions, booleans, and digests enter
+terminal state. Every activation obtains a fresh preview before mutation,
+refuses a changed or incorrect digest without calling activate, never queues
+the admin method offline, clears the pending plan on refusal, and preserves the
+bounded profile draft. Preview again after a create to obtain the new unchanged
+digest for duplicate-safe replay.
+
 Activation reloads and re-plans under a lock. Any content change, destination
 change, existing-ID conflict, or stale digest rejects the operation. A
 successful activation copies the skill only into the profile's derived
@@ -296,8 +314,8 @@ and again on the staged copy before any rename. Public results omit absolute
 paths, skill bodies, prompt text, command text, and secret values.
 
 This first vertical does not provide archive import, signing, publishing, a
-remote registry, command blueprints, heartbeats, multiple jobs per bundle, or a
-TUI catalog. Use the local `LemonAutomation.Blueprint` service directly
+remote registry, command blueprints, heartbeats, or multiple jobs per bundle.
+Use the local `LemonAutomation.Blueprint` service directly
 only for trusted source-checkout administration that genuinely needs a local
 path; normal operators should use `lemon blueprints`, and remote clients should
 use the catalog-scoped RPC.
