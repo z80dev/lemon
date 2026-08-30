@@ -231,6 +231,11 @@ commits product version metadata, creates the annotated tag, builds and verifies
 all native artifacts, publishes the GitHub Release, and then promotes mutable
 GHCR channel tags. See `docs/release/versioning_and_channels.md`.
 
+Both runtime profiles assemble `lemon_mcp` with the OTP release mode `:load`
+before its dynamic consumers. MCP is a library application with no application
+callback; consuming applications supervise every client, server, or transport
+process they start.
+
 ### TUI Client (Bun)
 
 ```bash
@@ -548,4 +553,6 @@ Each app has its own `AGENTS.md` with detailed context:
 
 ---
 
-*Last updated: 2026-08-21* (`lemon_cli_runners` removed — vendor CLI task runners are gone and all subagents are native in-process `CodingAgent.Session` executions coordinated by `CodingAgent.Coordinator`: 25-app structure tree, dependency graph regenerated from mix.exs, message flow, doc index, and app guide table)
+*Last updated: 2026-08-30* (`lemon_mcp` is assembled as a library-only `:load`
+application in both runtime releases; it owns no application callback or empty
+supervisor)

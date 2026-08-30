@@ -491,6 +491,9 @@ steps.
 - [ ] Run `scripts/test clients`.
 - [ ] Build `lemon_runtime_min` with `MIX_ENV=prod mix release lemon_runtime_min --overwrite`.
 - [ ] Build `lemon_runtime_full` with `MIX_ENV=prod mix release lemon_runtime_full --overwrite`.
+- [ ] Confirm the release-composition contract test proves both runtime
+      profiles assemble `lemon_mcp` as `:load` and that
+      `LemonSkills.McpSource.mcp_enabled?/0` succeeds with the shipped library.
 - [ ] Build local Sim UI assets and `sim_broadcast_platform` with
       `MIX_ENV=prod mix sim_ui.assets.deploy` and
       `MIX_ENV=prod mix release sim_broadcast_platform --overwrite`.

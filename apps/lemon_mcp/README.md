@@ -31,7 +31,6 @@ end
 ## Modules
 
 - `LemonMCP` - Main module with protocol version
-- `LemonMCP.Application` - OTP application supervision tree
 - `LemonMCP.Protocol` - MCP message types and JSON-RPC handling
 - `LemonMCP.Client` - GenServer client for managing stdio MCP connections, including optional `sampling/createMessage` callback or policy handling
 - `LemonMCP.Sampling` - Redacted policy wrapper for reviewed model-backed stdio sampling callbacks
@@ -42,6 +41,12 @@ end
 - `LemonMCP.Transport.HTTP` - Streamable HTTP JSON-RPC transport for MCP servers
 - `LemonMCP.Client.HTTP` - Streamable HTTP client for external MCP servers, including JSON responses, per-request SSE responses, session/protocol headers, OAuth protected-resource / authorization-server metadata discovery, optional OAuth client-credentials token acquisition with form-post or HTTP Basic client authentication, refresh-token grant retry when a token response supplies a refresh token, authorization-code PKCE callback/token exchange for public clients, injectable token-cache load/save hooks, and one-shot bearer reacquisition after later 401 challenges
 - `LemonMCP.Client.SSE` - legacy HTTP+SSE client for external MCP servers
+
+`lemon_mcp` is a library application: it has no application callback and starts
+no processes by default. Callers start and supervise the client, server, and
+transport processes they use. Lemon's minimal and full OTP releases include the
+library with `:load`, which makes these modules available to dynamic consumers
+such as `LemonSkills.McpSource` without adding a no-op supervisor.
 
 ## Usage
 
@@ -237,7 +242,7 @@ Standard JSON-RPC 2.0 error codes:
 Run the test suite:
 
 ```bash
-mix test
+mix test apps/lemon_mcp/test
 ```
 
 ## Configuration Options

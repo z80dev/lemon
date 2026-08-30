@@ -130,6 +130,11 @@ MIX_ENV=prod mix sim_ui.assets.deploy
 MIX_ENV=prod mix release sim_broadcast_platform
 ```
 
+Both full and minimal runtime compositions assemble `lemon_mcp` with release
+mode `:load`. The library has no application callback and starts no processes;
+this entry makes its client modules available to `LemonSkills.McpSource` while
+the consuming application remains responsible for supervising each connection.
+
 The full profile bundles both web surfaces. `lemon_sim_ui` has an esbuild/
 tailwind pipeline, so it needs `sim_ui.assets.deploy`; `lemon_web` ships static
 files with no pipeline, so it needs the digest step only. Skipping either one
@@ -293,8 +298,8 @@ endpoint during release boot before the eval expression is executed.
 
 | Profile | Apps | Use case |
 |---|---|---|
-| `lemon_runtime_min` | gateway, CLI, router, channels, control-plane | Headless / API-only server |
-| `lemon_runtime_full` | + automation, skills, web, sim-ui | Full local runtime with UI |
+| `lemon_runtime_min` | gateway, CLI, router, channels, control-plane; MCP client library loaded on demand | Headless / API-only server |
+| `lemon_runtime_full` | + automation, skills, web, sim-ui; MCP client library loaded on demand | Full local runtime with UI |
 | `sim_broadcast_platform` | lemon_core, lemon_sim, lemon_sim_ui | Public sim broadcast deployment |
 | `lemon_tui` | `tui/bin/lemon-tui` | Bun-compiled client pseudo-profile, not a BEAM release |
 

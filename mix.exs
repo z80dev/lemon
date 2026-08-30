@@ -73,6 +73,11 @@ defmodule Lemon.MixProject do
   # registration a satellite performs happens in its `start/2`. The omission is
   # silent, which is why both are listed in both runtimes rather than only in
   # the full one; an unconfigured satellite registers nothing and costs nothing.
+  #
+  # lemon_mcp is different again: it is a library with no application callback.
+  # Both runtimes load it explicitly so LemonSkills.McpSource can discover the
+  # client modules dynamically, while callers remain responsible for supervising
+  # every MCP client, server, and transport process they start.
   defp releases do
     [
       lemon_runtime_min: [
@@ -84,6 +89,7 @@ defmodule Lemon.MixProject do
           lemon_browser: :permanent,
           lemon_media: :permanent,
           lemon_lsp: :permanent,
+          lemon_mcp: :load,
           coding_agent: :permanent,
           lemon_gateway: :permanent,
           lemon_cli: :permanent,
@@ -105,6 +111,7 @@ defmodule Lemon.MixProject do
           lemon_browser: :permanent,
           lemon_media: :permanent,
           lemon_lsp: :permanent,
+          lemon_mcp: :load,
           coding_agent: :permanent,
           lemon_gateway: :permanent,
           lemon_cli: :permanent,

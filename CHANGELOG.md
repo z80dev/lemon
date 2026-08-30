@@ -17,6 +17,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Packaged minimal and full runtimes now assemble the MCP client library, so
+  configured MCP tools are discoverable without starting a no-op application
+  supervisor.
 - Async subagent launches now fail and terminalize their bookkeeping when the
   supervised worker cannot start, completed task/agent followup delivery
   contains router exits, and lane-scheduled jobs no longer process a duplicate
