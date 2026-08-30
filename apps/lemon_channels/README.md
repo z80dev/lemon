@@ -1,6 +1,6 @@
 # LemonChannels
 
-Channel adapter layer for the Lemon AI assistant platform. Provides a pluggable adapter system for external messaging platforms (Telegram, Discord, X/Twitter, XMTP), a router-facing semantic delivery dispatcher, channel-owned presentation state, a reliable outbox delivery queue with retry, chunking, deduplication, and rate limiting, and inbound message normalization that submits canonical `LemonCore.RunRequest` structs to the router.
+Channel adapter layer for the Lemon AI assistant platform. Provides a pluggable adapter system for external messaging platforms (Telegram, Discord, X/Twitter, XMTP, WhatsApp), a router-facing semantic delivery dispatcher, channel-owned presentation state, a reliable outbox delivery queue with retry, chunking, deduplication, and rate limiting, and inbound message normalization that submits canonical `LemonCore.RunRequest` structs to the router.
 
 This app depends only on `lemon_core` (in-umbrella), plus `jason`, `earmark_parser`, `req`, and `nostrum` (runtime: false).
 
@@ -68,6 +68,9 @@ LemonChannels.Application
     |   +-- Discord.Transport             (Nostrum consumer)
     +-- XApi.TokenManager                 (if configured, GenServer from apps/x_api)
     +-- XMTP.Transport                    (if configured, GenServer + Port)
+    +-- WhatsApp.Supervisor               (if configured)
+        +-- WhatsApp.AsyncSupervisor      (Task.Supervisor)
+        +-- WhatsApp.Transport            (GenServer + Port)
 ```
 
 Adapters are selected from `config :lemon_channels, :adapters` during application boot. Each adapter runs under the `AdapterSupervisor` DynamicSupervisor; adapter modules may still no-op internally when credentials or transport-specific enablement are absent.
@@ -533,13 +536,29 @@ Web3 messaging adapter. Supports threads only (no edit, delete, voice, images, f
 | `XMTP` (plugin) | Plugin behaviour implementation |
 | `XMTP.Transport` | GenServer for message send/receive, `normalize_inbound_message/1`, `deliver/1` |
 | `XMTP.Bridge` | Communication with the Node.js bridge (connect, poll, send_message) |
-| `XMTP.PortServer` | Port process management for the Node.js bridge subprocess |
+| `XMTP.PortServer` | XMTP-specific public wrapper around the shared Node.js port lifecycle |
 
-XMTP uses a Node.js bridge process managed via an Erlang Port. The bridge handles the XMTP protocol specifics while the Elixir side manages lifecycle, message normalization, and delivery through the standard plugin interface.
+XMTP uses a Node.js bridge process managed via an Erlang Port. The bridge handles the XMTP protocol specifics while the Elixir side manages lifecycle, message normalization, and delivery through the standard plugin interface. `XMTP.PortServer` supplies the XMTP script name, event tag, and log label to the internal `LemonChannels.PortBridge` GenServer.
 
 #### Configuration
 
 Add `LemonChannels.Adapters.Xmtp` to `config :lemon_channels, :adapters`. The XMTP transport still checks `enable_xmtp: true` before starting its bridge.
+
+### WhatsApp
+
+**Plugin ID**: `"whatsapp"` | **Chunk limit**: 4096
+
+The WhatsApp adapter uses its own Node.js bridge script and event tag behind the same internal port lifecycle as XMTP.
+
+#### Module Layout
+
+| Module | Purpose |
+|--------|---------|
+| `WhatsApp` (plugin) | Plugin behaviour implementation |
+| `WhatsApp.Supervisor` | Starts the async supervisor and transport when credentials are configured |
+| `WhatsApp.Transport` | GenServer for message send/receive and bridge event handling |
+| `WhatsApp.Bridge` | Communication with the Node.js bridge |
+| `WhatsApp.PortServer` | WhatsApp-specific public wrapper around `LemonChannels.PortBridge` |
 
 ## Adding a New Channel Adapter
 
@@ -646,6 +665,7 @@ Adapters run under `LemonChannels.AdapterSupervisor` (DynamicSupervisor).
 | `LemonChannels.Capabilities` | Capability type definitions and defaults |
 | `LemonChannels.PresentationState` | Channels-owned message-id/send-vs-edit state per `{route, run, surface}` |
 | `LemonChannels.OutboundPayload` | Core delivery struct with constructors |
+| `LemonChannels.PortBridge` (internal) | Shared line-delimited JSON port lifecycle used by the XMTP and WhatsApp public PortServer wrappers |
 | `LemonChannels.BindingResolver` | Chat scope to project/agent/cwd/queue binding resolution (delegates to LemonCore) |
 | `LemonChannels.GatewayConfig` | Thin delegation to `LemonCore.GatewayConfig` |
 | LemonChannels.Runtime (internal) | Runtime bridge for session/run cancel, keepalive, and busy checks via `LemonCore.RouterBridge` |
@@ -719,7 +739,17 @@ Adapters run under `LemonChannels.AdapterSupervisor` (DynamicSupervisor).
 | `Adapters.XMTP` | Plugin behaviour implementation |
 | `XMTP.Transport` | Message send/receive GenServer |
 | `XMTP.Bridge` | Node.js bridge communication |
-| `XMTP.PortServer` | Port process management |
+| `XMTP.PortServer` | XMTP-specific public wrapper around `LemonChannels.PortBridge` |
+
+### WhatsApp
+
+| Module | Purpose |
+|--------|---------|
+| `Adapters.WhatsApp` | Plugin behaviour implementation |
+| `WhatsApp.Supervisor` | Credentials-gated adapter supervisor |
+| `WhatsApp.Transport` | Message send/receive GenServer |
+| `WhatsApp.Bridge` | Node.js bridge communication |
+| `WhatsApp.PortServer` | WhatsApp-specific public wrapper around `LemonChannels.PortBridge` |
 
 ## Testing
 
@@ -753,6 +783,7 @@ mix test apps/lemon_channels/test/lemon_channels/outbox_test.exs
 | `telegram/file_transfer_test.exs` | File handling |
 | `media_status_message_test.exs` | Telegram `/media` command recognition and redacted status formatting |
 | `capabilities_test.exs` | Includes X adapter capability lookup |
+| `port_bridge_contract_test.exs` | Shared XMTP/WhatsApp PortServer API, parser, event-tag, and reconnect contract |
 
 ### Mock Adapter Pattern
 
