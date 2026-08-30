@@ -284,6 +284,7 @@ npm run dev      # Watch mode
 ./bin/lemon backup create --json  # Atomic, verified durable-user-state backup
 ./bin/lemon backup verify ~/.lemon/backups/<bundle>.lemonbackup --json
 ./bin/lemon sessions list --limit 20 --json  # Bounded durable session inventory
+./bin/lemon sessions stats --active --json  # Exact redacted aggregate statistics
 ./bin/lemon blueprints daily-note --profile operator --json  # Preview a catalog bundle without mutation
 ./bin/lemon completion zsh  # Generate source-launcher-aware completion
 ./bin/lemon node join --name worker-1 --controller wss://controller.example/ws --pair --cwd /path/to/project
@@ -316,9 +317,10 @@ target root.
 
 `lemon sessions` and `./bin/lemon sessions` reuse
 `LemonCore.SessionLifecycle`: history and exports remain redacted, reads are
-bounded, single deletion is verified and exact-key confirmed, and prune must
-preview before using the exact candidate-bound token with the preview's
-millisecond cutoff. `LemonCli.CommandRegistry` is the runtime-family source for
+bounded, aggregate statistics return exact totals with capped safe dimensions,
+single deletion is verified and exact-key confirmed, and prune must preview
+before using the exact candidate-bound token with the preview's millisecond
+cutoff. `LemonCli.CommandRegistry` is the runtime-family source for
 dispatch, help, and Bash/Zsh/Fish completion; keep source-only and
 release-only launcher commands in their separate registry sets.
 

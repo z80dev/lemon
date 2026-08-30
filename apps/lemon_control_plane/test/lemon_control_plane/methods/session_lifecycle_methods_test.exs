@@ -8,7 +8,8 @@ defmodule LemonControlPlane.Methods.SessionLifecycleMethodsTest do
     SessionsExport,
     SessionsList,
     SessionsMetadataPatch,
-    SessionsPrune
+    SessionsPrune,
+    SessionsStats
   }
 
   alias LemonControlPlane.Protocol.Schemas
@@ -96,6 +97,33 @@ defmodule LemonControlPlane.Methods.SessionLifecycleMethodsTest do
     assert cleanup["maxBytes"] >= exported["bytes"]
   end
 
+  test "sessions.stats exposes exact filtered aggregates without session or content fields" do
+    suffix = unique_suffix()
+    session_key = "agent:cp_stats_#{suffix}:main"
+    secret = "cp-stats-secret-#{suffix}"
+
+    on_exit(fn -> SessionLifecycle.delete(session_key) end)
+    seed_session(session_key, "run-cp-stats-#{suffix}", "token=#{secret}", "done")
+    assert {:ok, _} = SessionLifecycle.patch(session_key, %{pinned: true})
+
+    assert {:ok, report} =
+             SessionsStats.handle(
+               %{"query" => "cp_stats_#{suffix}", "pinned" => true, "groupLimit" => 5},
+               %{}
+             )
+
+    assert report["redacted"] == true
+    assert report["totals"]["matchedSessions"] == 1
+    assert report["totals"]["pinnedSessions"] == 1
+    assert report["totals"]["runs"] >= 1
+    assert report["cleanup"]["includesSessionKeys"] == false
+    refute inspect(report) =~ session_key
+    refute inspect(report) =~ secret
+
+    assert {:error, {:invalid_params, _, nil}} =
+             SessionsStats.handle(%{"query" => String.duplicate("x", 513)}, %{})
+  end
+
   test "sessions.prune requires a matching preview token and sessions.delete removes metadata" do
     suffix = unique_suffix()
     session_key = "agent:cp_prune_#{suffix}:main"
@@ -165,9 +193,12 @@ defmodule LemonControlPlane.Methods.SessionLifecycleMethodsTest do
                "format" => "markdown"
              })
 
+    assert :ok = Schemas.validate("sessions.stats", %{"groupLimit" => 10})
+
     assert Authorize.required_scopes("sessions.metadata.patch") == [:admin]
     assert Authorize.required_scopes("sessions.prune") == [:admin]
     assert Authorize.required_scopes("sessions.export") == [:read]
+    assert Authorize.required_scopes("sessions.stats") == [:read]
   end
 
   defp seed_session(session_key, run_id, prompt, answer, events \\ [], updated_at_ms \\ nil) do

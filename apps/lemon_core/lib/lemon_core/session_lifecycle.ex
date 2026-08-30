@@ -27,6 +27,10 @@ defmodule LemonCore.SessionLifecycle do
   @max_export_text_bytes 16_000
   @max_export_collection_items 100
   @max_export_depth 6
+  @default_stats_group_limit 10
+  @max_stats_group_limit 50
+  @max_stats_query_bytes 512
+  @stats_version 1
   @export_version 1
   @prune_version 1
   @sensitive_key_fragments ~w(api_key apikey authorization bearer credential master_key oauth password private_key secret token wallet_key)
@@ -63,7 +67,9 @@ defmodule LemonCore.SessionLifecycle do
       |> filter_boolean(:pinned, Keyword.get(opts, :pinned, :all))
       |> filter_boolean(:archived, Keyword.get(opts, :archived, :all))
       |> filter_query(query, opts)
-      |> Enum.sort_by(fn row -> {not row.pinned, -(row.updated_at_ms || 0)} end)
+      |> Enum.sort_by(fn row ->
+        {not row.pinned, -(row.updated_at_ms || 0), row.session_key}
+      end)
 
     matched = length(sessions)
 
@@ -76,6 +82,72 @@ defmodule LemonCore.SessionLifecycle do
     _ -> %{sessions: [], total: 0, matched: 0}
   catch
     :exit, _ -> %{sessions: [], total: 0, matched: 0}
+  end
+
+  @doc """
+  Aggregate durable-session statistics without returning conversation content.
+
+  The report uses the same agent, pin, archive, and redacted-history query
+  filters as `list/1`. Totals are exact for valid canonical session-index rows;
+  dimension responses are bounded and deterministically ordered. Session keys,
+  titles, prompts, answers, paths, URLs, and credential material are never
+  included.
+  """
+  @spec stats(keyword()) ::
+          {:ok, map()} | {:error, :invalid_query | :session_store_unavailable}
+  def stats(opts \\ []), do: stats(opts, RunStore)
+
+  @doc false
+  @spec stats(keyword(), module()) ::
+          {:ok, map()} | {:error, :invalid_query | :session_store_unavailable}
+  def stats(opts, run_store) when is_list(opts) and is_atom(run_store) do
+    query = normalize_query(Keyword.get(opts, :query))
+
+    with :ok <- validate_stats_query(query) do
+      group_limit =
+        bounded_integer(
+          Keyword.get(opts, :group_limit),
+          @default_stats_group_limit,
+          1,
+          @max_stats_group_limit
+        )
+
+      all = all_sessions(run_store)
+
+      matched =
+        all
+        |> filter_equal(:agent_id, Keyword.get(opts, :agent_id))
+        |> filter_boolean(:pinned, Keyword.get(opts, :pinned, :all))
+        |> filter_boolean(:archived, Keyword.get(opts, :archived, :all))
+        |> filter_query(query, opts, run_store)
+
+      {:ok,
+       %{
+         version: @stats_version,
+         redacted: true,
+         filters: stats_filters(opts, query),
+         totals: stats_totals(all, matched),
+         breakdowns: %{
+           agents: dimension_breakdown(matched, :agent_id, group_limit),
+           origins: dimension_breakdown(matched, :origin, group_limit)
+         },
+         cleanup: %{
+           includes_session_keys: false,
+           includes_titles: false,
+           includes_messages: false,
+           includes_prompts: false,
+           includes_answers: false,
+           includes_paths: false,
+           includes_urls: false,
+           includes_credentials: false,
+           max_dimension_entries: group_limit
+         }
+       }}
+    end
+  rescue
+    _ -> {:error, :session_store_unavailable}
+  catch
+    :exit, _ -> {:error, :session_store_unavailable}
   end
 
   @doc "Fetch one durable session row, or `nil` when the session is unknown."
@@ -222,8 +294,10 @@ defmodule LemonCore.SessionLifecycle do
     end
   end
 
-  defp all_sessions do
-    RunStore.list_sessions()
+  defp all_sessions, do: all_sessions(RunStore)
+
+  defp all_sessions(run_store) do
+    run_store.list_sessions()
     |> Enum.flat_map(fn
       {_key, session} when is_map(session) ->
         case read(session, :session_key) do
@@ -279,6 +353,12 @@ defmodule LemonCore.SessionLifecycle do
   defp filter_query(rows, nil, _opts), do: rows
 
   defp filter_query(rows, query, opts) do
+    filter_query(rows, query, opts, RunStore)
+  end
+
+  defp filter_query(rows, nil, _opts, _run_store), do: rows
+
+  defp filter_query(rows, query, opts, run_store) do
     history_limit =
       bounded_integer(Keyword.get(opts, :search_history_limit), 25, 1, @default_history_limit)
 
@@ -289,12 +369,13 @@ defmodule LemonCore.SessionLifecycle do
         |> Enum.map_join("\n", &to_string/1)
         |> String.downcase()
 
-      String.contains?(row_text, query) or history_matches?(row.session_key, query, history_limit)
+      String.contains?(row_text, query) or
+        history_matches?(row.session_key, query, history_limit, run_store)
     end)
   end
 
-  defp history_matches?(session_key, query, limit) do
-    RunStore.history(session_key, limit: limit)
+  defp history_matches?(session_key, query, limit, run_store) do
+    run_store.history(session_key, limit: limit)
     |> Enum.any?(fn {_run_id, data} ->
       summary = read(data, :summary) || %{}
       completed = read(summary, :completed) || %{}
@@ -310,6 +391,101 @@ defmodule LemonCore.SessionLifecycle do
   catch
     :exit, _ -> false
   end
+
+  defp stats_filters(opts, query) do
+    %{
+      agent_id: present_filter?(Keyword.get(opts, :agent_id)),
+      pinned: normalized_boolean_filter(Keyword.get(opts, :pinned, :all)),
+      archived: normalized_boolean_filter(Keyword.get(opts, :archived, :all)),
+      query: not is_nil(query),
+      query_bytes: if(is_binary(query), do: byte_size(query), else: 0)
+    }
+  end
+
+  defp stats_totals(all, matched) do
+    timestamps =
+      matched
+      |> Enum.map(& &1.updated_at_ms)
+      |> Enum.filter(&is_integer/1)
+
+    %{
+      store_sessions: length(all),
+      matched_sessions: length(matched),
+      active_sessions: Enum.count(matched, &(not &1.archived)),
+      archived_sessions: Enum.count(matched, & &1.archived),
+      pinned_sessions: Enum.count(matched, & &1.pinned),
+      unpinned_sessions: Enum.count(matched, &(not &1.pinned)),
+      titled_sessions: Enum.count(matched, &present_filter?(&1.title)),
+      runs: Enum.reduce(matched, 0, fn row, total -> total + row.run_count end),
+      oldest_updated_at_ms: min_or_nil(timestamps),
+      newest_updated_at_ms: max_or_nil(timestamps)
+    }
+  end
+
+  defp dimension_breakdown(rows, field, limit) do
+    frequencies =
+      rows
+      |> Enum.map(&(Map.get(&1, field) |> safe_dimension()))
+      |> Enum.frequencies()
+
+    entries =
+      frequencies
+      |> Enum.sort_by(fn {value, count} -> {-count, value} end)
+      |> Enum.take(limit)
+      |> Enum.map(fn {value, count} -> %{value: value, count: count} end)
+
+    %{
+      entries: entries,
+      distinct: map_size(frequencies),
+      omitted: max(map_size(frequencies) - length(entries), 0)
+    }
+  end
+
+  defp safe_dimension(nil), do: "unknown"
+
+  defp safe_dimension(value) do
+    original = value |> stringify() |> String.trim()
+    redacted = redact_text(original)
+
+    cond do
+      original == "" ->
+        "unknown"
+
+      redacted != original or path_or_url?(original) ->
+        "redacted:" <> (original |> sha256() |> binary_part(0, 12))
+
+      true ->
+        original
+        |> String.replace(~r/\s+/, " ")
+        |> truncate_dimension()
+    end
+  end
+
+  defp path_or_url?(value) do
+    String.contains?(value, ["/", "\\", "://"]) or
+      String.starts_with?(String.downcase(value), ["file:", "http:", "https:"])
+  end
+
+  defp truncate_dimension(value) when byte_size(value) <= 96, do: value
+
+  defp truncate_dimension(value) do
+    value
+    |> binary_part(0, 96)
+    |> String.replace_invalid()
+    |> Kernel.<>("…")
+  end
+
+  defp present_filter?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present_filter?(_value), do: false
+
+  defp normalized_boolean_filter(value) when is_boolean(value), do: value
+  defp normalized_boolean_filter(_value), do: "all"
+
+  defp min_or_nil([]), do: nil
+  defp min_or_nil(values), do: Enum.min(values)
+
+  defp max_or_nil([]), do: nil
+  defp max_or_nil(values), do: Enum.max(values)
 
   defp format_run(run_id, data, redact?) do
     summary = read(data, :summary) || %{}
@@ -687,6 +863,12 @@ defmodule LemonCore.SessionLifecycle do
   end
 
   defp normalize_query(_value), do: nil
+
+  defp validate_stats_query(query)
+       when is_binary(query) and byte_size(query) > @max_stats_query_bytes,
+       do: {:error, :invalid_query}
+
+  defp validate_stats_query(_query), do: :ok
 
   defp require_timestamp(value) when is_integer(value) and value > 0, do: {:ok, value}
   defp require_timestamp(_value), do: {:error, :invalid_older_than_ms}

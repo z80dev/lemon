@@ -60,7 +60,7 @@ Usage: ./bin/lemon [options]
        ./bin/lemon profile <list|show|create|clone|rename|export|delete|roster|chat>
        ./bin/lemon config validate
        ./bin/lemon context preview '@file:README.md' --root "$PWD"
-       ./bin/lemon sessions <list|search|show|history|title|pin|unpin|archive|restore|export|prune|delete>
+       ./bin/lemon sessions <list|search|stats|show|history|title|pin|unpin|archive|restore|export|prune|delete>
        ./bin/lemon blueprints [list|inspect|validate|preview|activate]
        ./bin/lemon completion <bash|zsh|fish>
        ./bin/lemon doctor --json

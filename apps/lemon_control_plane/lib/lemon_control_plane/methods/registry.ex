@@ -111,6 +111,7 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.LearnConfirm,
     # Sessions
     LemonControlPlane.Methods.SessionsList,
+    LemonControlPlane.Methods.SessionsStats,
     LemonControlPlane.Methods.SessionsPreview,
     LemonControlPlane.Methods.SessionsDelete,
     LemonControlPlane.Methods.SessionsPatch,

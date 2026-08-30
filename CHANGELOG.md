@@ -69,7 +69,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   destructive changes, and stale-preview rejection through opaque config
   revisions. Credential references are password-masked, filtered from logs,
   re-entered for apply, and never retained or rendered by the LiveView.
-- Source and packaged `lemon sessions` commands for bounded list/search/show
+- Source and packaged `lemon sessions` commands for bounded list/search/show,
+  exact redacted aggregate statistics with capped agent/origin breakdowns,
   and redacted history, title/pin/archive lifecycle, always-redacted
   JSON/Markdown export, exact-candidate preview-confirm prune, and verified
   exact-key delete; plus registry-generated `lemon completion bash|zsh|fish`

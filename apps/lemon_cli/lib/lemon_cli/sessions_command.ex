@@ -7,8 +7,8 @@ defmodule LemonCli.SessionsCommand do
   exact session key before the lifecycle service performs verified deletion.
   """
 
-  alias LemonCore.SessionLifecycle
   alias LemonCli.CommandRegistry
+  alias LemonCore.SessionLifecycle
 
   @exit_ok 0
   @exit_error 1
@@ -20,6 +20,7 @@ defmodule LemonCli.SessionsCommand do
   @spec run([String.t()]) :: 0 | 1 | 2
   def run(["list" | args]), do: list(args, nil)
   def run(["search" | args]), do: search(args)
+  def run(["stats" | args]), do: stats(args)
   def run(["show" | args]), do: show(args)
   def run(["history" | args]), do: history(args)
   def run(["title" | args]), do: title(args)
@@ -31,6 +32,60 @@ defmodule LemonCli.SessionsCommand do
   def run(["prune" | args]), do: prune(args)
   def run(["delete" | args]), do: delete(args)
   def run(_args), do: usage_error("Missing or invalid sessions command.")
+
+  defp stats(args) do
+    with {:ok, parsed} <- parse_stats_options(args),
+         {:ok, query} <- optional_query(parsed.positionals),
+         {:ok, group_limit} <-
+           bounded_option(parsed.options[:group_limit], 10, 1, 50, "group limit"),
+         {:ok, pinned} <- paired_filter(parsed.options, :pinned, :unpinned),
+         {:ok, archived} <- paired_filter(parsed.options, :archived, :active),
+         :ok <- ensure_started(),
+         {:ok, report} <-
+           SessionLifecycle.stats(
+             query: query,
+             agent_id: parsed.options[:agent_id],
+             pinned: pinned,
+             archived: archived,
+             group_limit: group_limit
+           ) do
+      if parsed.options[:json], do: json_success(%{stats: report}), else: print_stats(report)
+      @exit_ok
+    else
+      {:error, :session_store_unavailable} ->
+        failure(
+          "session_store_unavailable",
+          "Session statistics are temporarily unavailable.",
+          json_requested?(args)
+        )
+
+      {:error, message} when is_binary(message) ->
+        usage_error(message)
+    end
+  end
+
+  defp parse_stats_options(args) do
+    parse(args,
+      group_limit: :integer,
+      agent_id: :string,
+      pinned: :boolean,
+      unpinned: :boolean,
+      archived: :boolean,
+      active: :boolean,
+      json: :boolean
+    )
+  end
+
+  defp optional_query([]), do: {:ok, nil}
+
+  defp optional_query(parts) do
+    query = Enum.join(parts, " ")
+
+    case validate_query(query) do
+      :ok -> {:ok, query}
+      {:error, message} -> {:error, message}
+    end
+  end
 
   defp search(args) do
     with {:ok, parsed} <- parse_list_options(args),
@@ -574,6 +629,35 @@ defmodule LemonCli.SessionsCommand do
     IO.puts("Archived: #{session.archived}")
     IO.puts("Created: #{format_time(session.created_at_ms)}")
     IO.puts("Updated: #{format_time(session.updated_at_ms)}")
+  end
+
+  defp print_stats(report) do
+    totals = report.totals
+
+    IO.puts("Redacted session statistics")
+
+    IO.puts(
+      "Sessions: #{totals.matched_sessions} matched of #{totals.store_sessions} stored " <>
+        "(#{totals.active_sessions} active, #{totals.archived_sessions} archived, " <>
+        "#{totals.pinned_sessions} pinned)"
+    )
+
+    IO.puts("Runs: #{totals.runs}")
+    print_breakdown("Agents", report.breakdowns.agents)
+    print_breakdown("Origins", report.breakdowns.origins)
+  end
+
+  defp print_breakdown(label, breakdown) do
+    values =
+      breakdown.entries
+      |> Enum.map_join(", ", fn entry -> "#{entry.value}=#{entry.count}" end)
+      |> case do
+        "" -> "none"
+        present -> present
+      end
+
+    suffix = if breakdown.omitted > 0, do: " (+#{breakdown.omitted} more)", else: ""
+    IO.puts("#{label}: #{values}#{suffix}")
   end
 
   defp print_history(session, []) do

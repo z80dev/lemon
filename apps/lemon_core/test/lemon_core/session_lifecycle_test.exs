@@ -15,6 +15,11 @@ defmodule LemonCore.SessionLifecycleTest do
     :ok
   end
 
+  defmodule FailingRunStore do
+    def list_sessions, do: raise("private store failure /tmp/not-for-users")
+    def history(_session_key, _opts), do: []
+  end
+
   test "lists, filters, pins, archives, and searches metadata plus redacted history" do
     suffix = unique_suffix()
     first = "agent:lifecycle_#{suffix}:web:browser:unknown:first"
@@ -62,6 +67,99 @@ defmodule LemonCore.SessionLifecycleTest do
     result = SessionLifecycle.list(query: "lifecycle_malformed_#{suffix}")
 
     assert Enum.map(result.sessions, & &1.session_key) == [session_key]
+  end
+
+  test "statistics are exact for matched rows, bounded, stable, redacted, and filter-consistent" do
+    suffix = unique_suffix()
+    prefix = "stats_#{suffix}"
+    malformed_key = "malformed-stats-row-#{suffix}"
+
+    rows = [
+      {"agent:#{prefix}:one", "alpha", :cli, 3, false, false},
+      {"agent:#{prefix}:two", "alpha", :cli, 2, true, false},
+      {"agent:#{prefix}:three", "beta", :web, 5, false, true},
+      {"agent:#{prefix}:four", "gamma", :web, 7, false, false},
+      {"agent:#{prefix}:five", "/Users/private/token=planted-secret", :api, 11, false, false}
+    ]
+
+    on_exit(fn ->
+      cleanup_sessions(Enum.map(rows, &elem(&1, 0)))
+      Store.delete(:sessions_index, malformed_key)
+    end)
+
+    rows
+    |> Enum.with_index()
+    |> Enum.each(fn {{session_key, agent_id, origin, run_count, pinned, archived}, i} ->
+      timestamp = 1_700_000_000_000 + i
+
+      :ok =
+        Store.put(:sessions_index, session_key, %{
+          session_key: session_key,
+          agent_id: agent_id,
+          origin: origin,
+          created_at_ms: timestamp,
+          updated_at_ms: timestamp,
+          run_count: run_count
+        })
+
+      if pinned or archived do
+        assert {:ok, _} =
+                 SessionLifecycle.patch(session_key, %{pinned: pinned, archived: archived})
+      end
+    end)
+
+    assert :ok = Store.put(:sessions_index, malformed_key, %{session_key: nil, run_count: 999})
+
+    assert {:ok, report} = SessionLifecycle.stats(query: prefix, group_limit: 2)
+    listed = SessionLifecycle.list(query: prefix, limit: 100)
+
+    assert report.version == 1
+    assert report.redacted
+    assert report.totals.matched_sessions == listed.matched
+    assert report.totals.matched_sessions == 5
+    assert report.totals.active_sessions == 4
+    assert report.totals.archived_sessions == 1
+    assert report.totals.pinned_sessions == 1
+    assert report.totals.runs == 28
+    assert report.totals.oldest_updated_at_ms == 1_700_000_000_000
+    assert report.totals.newest_updated_at_ms == 1_700_000_000_004
+
+    assert report.breakdowns.agents.entries == [
+             %{value: "alpha", count: 2},
+             %{value: "beta", count: 1}
+           ]
+
+    assert report.breakdowns.agents.distinct == 4
+    assert report.breakdowns.agents.omitted == 2
+
+    # The deterministic tie-breaker is ascending value.
+    assert report.breakdowns.origins.entries == [
+             %{value: "cli", count: 2},
+             %{value: "web", count: 2}
+           ]
+
+    assert {:ok, expanded} = SessionLifecycle.stats(query: prefix, group_limit: 50)
+    serialized = inspect(expanded)
+    refute serialized =~ "/Users/private"
+    refute serialized =~ "planted-secret"
+    refute serialized =~ "agent:#{prefix}"
+    assert serialized =~ "redacted:"
+    assert report.cleanup.max_dimension_entries == 2
+    assert report.cleanup.includes_prompts == false
+  end
+
+  test "statistics expose stable empty and unavailable results without leaking errors" do
+    assert {:ok, empty} =
+             SessionLifecycle.stats(agent_id: "definitely_missing_#{unique_suffix()}")
+
+    assert empty.totals.matched_sessions == 0
+    assert empty.totals.runs == 0
+    assert empty.totals.oldest_updated_at_ms == nil
+    assert empty.breakdowns.agents.entries == []
+    assert empty.breakdowns.origins.entries == []
+
+    assert {:error, :session_store_unavailable} =
+             SessionLifecycle.stats([], FailingRunStore)
   end
 
   test "returns full resumable history only when callers explicitly disable redaction" do

@@ -123,8 +123,10 @@ document on stderr and use exit `1`; invalid arguments use exit `2`.
 ## Durable session management
 
 `lemon sessions` adapts `LemonCore.SessionLifecycle` without reimplementing
-store queries. List/search/show/history reads are bounded, history is always
-redacted, title/pin/archive updates require an existing session, exports are
+store queries. List/search/show/history reads are bounded; `sessions stats`
+returns exact matched/store/run/status totals with capped, path-safe agent and
+origin dimensions; history is always redacted. Title/pin/archive updates
+require an existing session, exports are
 selected-field and always redacted, and delete reports success only after the
 shared service verifies canonical history and ancillary state are gone.
 
