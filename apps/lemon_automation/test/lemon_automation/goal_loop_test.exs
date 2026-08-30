@@ -27,6 +27,48 @@ defmodule LemonAutomation.GoalLoopTest do
     end
   end
 
+  defmodule AcceptedWindowLoopRouter do
+    @moduledoc false
+
+    def submit(params) do
+      test_pid = :persistent_term.get({__MODULE__, :test_pid})
+      result = LemonRouter.submit(params)
+      send(test_pid, {:accepted_before_submit_return, params, self(), result})
+
+      receive do
+        {:return_submit, run_id} when run_id == params.run_id -> result
+      after
+        5_000 -> {:error, :test_submit_release_timeout}
+      end
+    end
+
+    def abort_run(run_id, reason) do
+      send(
+        :persistent_term.get({__MODULE__, :test_pid}),
+        {:accepted_window_abort, run_id, reason}
+      )
+
+      LemonRouter.abort_run(run_id, reason)
+    end
+  end
+
+  defmodule BlockingGoalRuntime do
+    @moduledoc false
+
+    def available?, do: true
+    def run_pid(_run_id), do: nil
+
+    def submit_execution(%LemonCore.ExecutionCommand{} = command) do
+      send(:persistent_term.get({__MODULE__, :test_pid}), {:blocking_goal_execution, command})
+      :ok
+    end
+
+    def cancel_by_run_id(run_id, reason) do
+      send(:persistent_term.get({__MODULE__, :test_pid}), {:blocking_goal_cancel, run_id, reason})
+      :ok
+    end
+  end
+
   defmodule BlockingLoopWaiter do
     @moduledoc false
 
@@ -183,10 +225,14 @@ defmodule LemonAutomation.GoalLoopTest do
     session_key = "goal-loop-test-#{System.unique_integer([:positive])}"
     Process.put(:goal_loop_test_pid, self())
     :persistent_term.put({AbortableLoopRouter, :test_pid}, self())
+    :persistent_term.put({AcceptedWindowLoopRouter, :test_pid}, self())
+    :persistent_term.put({BlockingGoalRuntime, :test_pid}, self())
 
     on_exit(fn ->
       GoalStore.clear(session_key)
       :persistent_term.erase({AbortableLoopRouter, :test_pid})
+      :persistent_term.erase({AcceptedWindowLoopRouter, :test_pid})
+      :persistent_term.erase({BlockingGoalRuntime, :test_pid})
     end)
 
     {:ok, session_key: session_key}
@@ -648,6 +694,88 @@ defmodule LemonAutomation.GoalLoopTest do
     assert {:error, :not_running} = GenServer.call(manager, {:stop_loop, session_key, :hard})
     refute_receive {:abortable_abort, ^run_id, _reason}, 200
     refute_receive {:abortable_submit, _params, _pid}, 200
+
+    goal = GoalStore.get(session_key)
+    assert get_in(goal.meta, ["goalLoop", "status"]) == "stopped"
+    assert get_in(goal.meta, ["goalLoop", "lastRunId"]) == run_id
+  end
+
+  test "hard stop owns and aborts a run accepted before submit returns", %{
+    session_key: session_key
+  } do
+    original_runtime = Application.get_env(:lemon_router, :engine_runtime)
+    Application.put_env(:lemon_router, :engine_runtime, BlockingGoalRuntime)
+    {:ok, _apps} = Application.ensure_all_started(:lemon_router)
+    on_exit(fn -> restore_router_env(:engine_runtime, original_runtime) end)
+
+    assert {:ok, _goal} =
+             GoalStore.set(session_key, "Stop inside the acceptance window",
+               agent_id: "default",
+               meta: %{"testPid" => self()}
+             )
+
+    manager =
+      start_supervised!(
+        {GoalLoopManager,
+         name: :"goal_loop_manager_test_#{System.unique_integer([:positive])}",
+         scheduler_interval_ms: 0}
+      )
+
+    run_id = "goal_acceptance_window_#{System.unique_integer([:positive])}"
+    run_topic = LemonCore.Bus.run_topic(run_id)
+    LemonCore.Bus.subscribe(run_topic)
+    on_exit(fn -> LemonCore.Bus.unsubscribe(run_topic) end)
+
+    assert {:ok, _loop} =
+             GenServer.call(
+               manager,
+               {:start_loop, session_key,
+                [
+                  judge_mod: ContinueJudge,
+                  router_mod: AcceptedWindowLoopRouter,
+                  waiter_mod: BlockingLoopWaiter,
+                  run_id: run_id,
+                  max_ticks: 3,
+                  wait_timeout_ms: 60_000,
+                  meta: %{test_pid: self()}
+                ]}
+             )
+
+    assert_receive {:accepted_before_submit_return, %{run_id: ^run_id}, loop_pid, {:ok, ^run_id}},
+                   1_000
+
+    assert_receive {:blocking_goal_execution, %LemonCore.ExecutionCommand{run_id: ^run_id}}, 1_000
+
+    assert get_in(:sys.get_state(manager), [:loops, session_key, :active_run]) == %{
+             id: run_id,
+             kind: :continuation,
+             router_mod: AcceptedWindowLoopRouter,
+             phase: :submitting,
+             aborted: false
+           }
+
+    assert {:ok, %{mode: :hard, loop: %{active_run_id: ^run_id, status: "stopped"}}} =
+             GenServer.call(manager, {:stop_loop, session_key, :hard})
+
+    assert_receive {:accepted_window_abort, ^run_id, :goal_loop_hard_stop}, 1_000
+    assert_receive {:blocking_goal_cancel, ^run_id, :goal_loop_hard_stop}, 1_000
+    eventually(fn -> refute Process.alive?(loop_pid) end)
+
+    assert_receive %LemonCore.Event{
+                     type: :run_completed,
+                     meta: %{run_id: ^run_id},
+                     payload: completion_payload
+                   },
+                   1_000
+
+    completion = LemonCore.Events.coerce(:run_completed, completion_payload).completed
+    assert completion.ok == false
+    refute_receive %LemonCore.Event{type: :run_completed, meta: %{run_id: ^run_id}}, 250
+    refute LemonRouter.run_active?(run_id)
+
+    refute_receive {:blocking_waiter, ^run_id, _timeout, _pid}, 100
+    refute_receive {:accepted_window_abort, ^run_id, _reason}, 100
+    assert {:error, :not_running} = GenServer.call(manager, {:stop_loop, session_key, :hard})
 
     goal = GoalStore.get(session_key)
     assert get_in(goal.meta, ["goalLoop", "status"]) == "stopped"

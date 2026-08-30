@@ -123,6 +123,8 @@ remain available as a persisted, queryable alternative.
 | `[:lemon, :run, :start]` | `ts_ms` | `run_id`, `session_key`, `engine`, `origin` | [`run.ex:259`](../apps/lemon_gateway/lib/lemon_gateway/run.ex) via `DependencyManager.emit_telemetry(:run_start, ...)`, when the gateway starts the engine run |
 | `[:lemon, :run, :first_token]` | `latency_ms` | `run_id` | [`run.ex:428`](../apps/lemon_gateway/lib/lemon_gateway/run.ex), on the first engine delta of the run |
 | `[:lemon, :run, :stop]` | `duration_ms`, `ok` (boolean) | `run_id` | [`run.ex:611`](../apps/lemon_gateway/lib/lemon_gateway/run.ex), at finalize; `ok` distinguishes success from `{:error, _}`. Not emitted if the run process crashes before finalize |
+| `[:lemon, :router, :run_abort_tombstone, :registered]` | `count: 1` | bounded `reason` label | `LemonRouter.RunOrchestrator`, when a fixed run ID is marked aborted at the serialized submission boundary |
+| `[:lemon, :router, :run_abort_tombstone, :submission_rejected]` | `count: 1` | bounded `reason` label | `LemonRouter.RunOrchestrator`, when a later submission is rejected by that tombstone |
 
 ### Cron — `[:lemon, :cron, ...]`
 
@@ -130,14 +132,14 @@ remain available as a persisted, queryable alternative.
 |---|---|---|---|
 | `[:lemon, :cron, :tick]` | `job_count` | `%{}` (empty) | `LemonCore.Telemetry.cron_tick/1`, called from [`cron_manager.ex`](../apps/lemon_automation/lib/lemon_automation/cron_manager.ex) once per scheduler tick as a liveness heartbeat with the count of registered jobs |
 
-Cron terminalization, retry reconstruction, Kanban hard-stop lease reclaim,
-and goal-loop run abortion do not add telemetry events. Their restart-safe
+Cron terminalization, retry reconstruction, and Kanban hard-stop lease reclaim
+do not add telemetry events. Their restart-safe
 evidence is durable state/audit plus Bus lifecycle events: CronManager writes
 terminal runs and retry lineage before emitting `:cron_run_completed`, Kanban
 guards terminal writes by lease ID, and GoalLoopManager stores the authoritative
-router run ID in goal-loop status. Operators should use those persisted records
-for exact lifecycle counts; `[:lemon, :cron, :tick]` remains only a liveness
-signal.
+router run ID in goal-loop status. Goal-loop hard stops additionally expose the
+router tombstone counters above, but operators should use persisted goal state
+for exact lifecycle counts; `[:lemon, :cron, :tick]` remains only a liveness signal.
 
 ### Heartbeats — `[:lemon, :heartbeat, ...]`
 

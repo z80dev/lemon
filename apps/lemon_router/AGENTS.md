@@ -59,6 +59,7 @@ Inbound transport
 - Router may reference `LemonChannels.Dispatcher`, but not `LemonChannels.OutboundPayload`.
 - Router may emit `LemonCore.DeliveryIntent`, but channel renderers decide payload shape.
 - Router builds `%LemonCore.ExecutionCommand{}` and calls the configured `LemonCore.EngineRuntime`; it must not construct `%LemonGateway.ExecutionRequest{}` or call `LemonGateway.Runtime` directly.
+- Run-specific aborts are serialized through `RunOrchestrator` before coordinator/process cancellation. Its bounded tombstone map rejects a fixed run ID when abort wins the submission race; when submission wins, the same serialization guarantees normal cancellation sees the accepted run.
 - Router owns pending-compaction prompt mutation.
 - Fresh pending-compaction markers are prepared before submission but consumed
   only after `SessionCoordinator.submit/2` accepts the run; submission errors
@@ -207,6 +208,9 @@ it keeps the full in-memory action order and leaves presentation budgeting to
 the renderer/channel layer.
 Aborted runs that never bind to a live gateway run must still synthesize `:run_completed`; otherwise
 `SessionCoordinator` will retain the session as busy forever.
+An owner that knows a fixed run ID before submission may abort it safely: the
+orchestrator tombstone prevents later acceptance, while an already accepted run
+continues through the normal exactly-once abort completion path.
 Runtime submission retries are bounded by a pre-start deadline. Persistent runtime
 unavailability or rejection must synthesize exactly one structured `:run_completed`
 failure so `SessionCoordinator` releases the conversation; transient outages may

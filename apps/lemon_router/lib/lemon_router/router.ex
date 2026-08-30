@@ -161,9 +161,15 @@ defmodule LemonRouter.Router do
 
   @doc """
   Abort a specific run by ID.
+
+  The abort is first serialized with router submission acceptance. If the run
+  has not reached the orchestrator yet, a bounded tombstone rejects that future
+  submission; if it was already accepted, the normal coordinator and process
+  cancellation paths apply.
   """
   @spec abort_run(run_id :: binary(), reason :: term()) :: :ok
   def abort_run(run_id, reason \\ :user_requested) do
+    register_abort_tombstone(run_id, reason)
     session_coordinator().abort_run(run_id, reason)
 
     case Registry.lookup(LemonRouter.RunRegistry, run_id) do
@@ -171,9 +177,18 @@ defmodule LemonRouter.Router do
         LemonRouter.RunProcess.abort(pid, reason)
 
       _ ->
-        # Run not found, might have already completed
+        # Run not found: it either completed or the tombstone will reject a
+        # submission that has not reached the serialized orchestrator yet.
         :ok
     end
+  end
+
+  defp register_abort_tombstone(run_id, reason) do
+    RunOrchestrator.register_abort(run_id, reason)
+  rescue
+    _ -> :ok
+  catch
+    :exit, _ -> :ok
   end
 
   @doc """

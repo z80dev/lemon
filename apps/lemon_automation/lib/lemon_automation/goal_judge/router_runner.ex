@@ -33,6 +33,7 @@ defmodule LemonAutomation.GoalJudge.RouterRunner do
              bus_mod: Map.get(context, :bus_mod, LemonCore.Bus),
              timeout_ms: timeout_ms,
              wait_opts: wait_opts,
+             on_submitting: Map.get(context, :on_submitting),
              on_submitted: Map.get(context, :on_submitted),
              on_terminal: Map.get(context, :on_terminal)
            ),

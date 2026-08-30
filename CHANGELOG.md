@@ -54,9 +54,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   restart reconciles unexpired leases from the prior dispatcher. Board-scoped
   mutation locks also prevent concurrent dispatchers from leasing the same task
   or racing a stale terminal write against a replacement lease. Goal-loop hard
-  stop now aborts the authoritative router run once and prevents another tick,
-  while graceful stop lets the bounded loop finish and API deadlines enclose
-  configured judge/continuation waits.
+  stop now claims the fixed run ID before submission, aborts that authoritative
+  router run once, and prevents another tick. Router abort tombstones close the
+  accepted-before-callback window without delaying stop; graceful stop still
+  lets the bounded loop finish and API deadlines enclose configured
+  judge/continuation waits.
 - Async subagent launches now fail and terminalize their bookkeeping when the
   supervised worker cannot start, completed task/agent followup delivery
   contains router exits, and lane-scheduled jobs no longer process a duplicate
