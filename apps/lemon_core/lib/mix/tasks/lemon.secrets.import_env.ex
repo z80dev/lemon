@@ -39,6 +39,10 @@ defmodule Mix.Tasks.Lemon.Secrets.ImportEnv do
     "OPENROUTER_API_KEY",
     "FIRECRAWL_API_KEY",
     "BRAVE_API_KEY",
+    "EXA_API_KEY",
+    "BROWSERBASE_API_KEY",
+    "BROWSER_USE_API_KEY",
+    "CAMOFOX_API_KEY",
     "GITHUB_TOKEN",
     # X/Twitter API
     "X_API_CLIENT_ID",

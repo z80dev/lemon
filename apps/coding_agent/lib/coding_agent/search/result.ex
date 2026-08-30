@@ -59,6 +59,60 @@ defmodule CodingAgent.Search.Result do
   def wrap(nil), do: ""
   def wrap(value), do: ExternalContent.wrap_web_content(value, :web_search)
 
+  def wrap_fetch_content(value, max_chars) when is_binary(value) and is_integer(max_chars) do
+    wrapper_with_warning = ExternalContent.wrap_web_content("", :web_fetch)
+
+    wrapper_without_warning =
+      ExternalContent.wrap_external_content("", source: :web_fetch, include_warning: false)
+
+    include_warning = String.length(wrapper_with_warning) <= max_chars
+
+    wrapper_overhead =
+      if include_warning,
+        do: String.length(wrapper_with_warning),
+        else: String.length(wrapper_without_warning)
+
+    max_inner = max(max_chars - wrapper_overhead, 0)
+    {truncated, truncated?} = bounded_text(value, max_inner)
+    wrapped = wrap_fetch_text(truncated, include_warning)
+
+    {final_wrapped, final_truncated, final_raw} =
+      if String.length(wrapped) > max_chars do
+        adjusted_max_inner = max(max_inner - (String.length(wrapped) - max_chars), 0)
+        {adjusted, adjusted_truncated?} = bounded_text(value, adjusted_max_inner)
+        {wrap_fetch_text(adjusted, include_warning), adjusted_truncated?, adjusted}
+      else
+        {wrapped, truncated?, truncated}
+      end
+
+    %{
+      text: final_wrapped,
+      truncated: final_truncated,
+      raw_length: String.length(final_raw),
+      wrapped_length: String.length(final_wrapped),
+      warning_included: include_warning
+    }
+  end
+
+  def wrap_fetch_field(nil), do: nil
+  def wrap_fetch_field(""), do: nil
+
+  def wrap_fetch_field(value) do
+    ExternalContent.wrap_external_content(to_string_safe(value),
+      source: :web_fetch,
+      include_warning: false
+    )
+  end
+
+  def fetch_trust_metadata(wrapped, wrapped_title \\ nil) do
+    wrapped_fields = if wrapped_title in [nil, ""], do: ["text"], else: ["text", "title"]
+
+    ExternalContent.web_trust_metadata(:web_fetch, wrapped_fields,
+      key_style: :camel_case,
+      warning_included: wrapped.warning_included
+    )
+  end
+
   def truncate(nil, _max_chars), do: nil
 
   def truncate(value, max_chars)
@@ -88,6 +142,20 @@ defmodule CodingAgent.Search.Result do
   def format_reason(reason), do: inspect(reason)
 
   def elapsed_ms(started_ms), do: System.monotonic_time(:millisecond) - started_ms
+
+  defp bounded_text(value, max_chars) do
+    if String.length(value) <= max_chars do
+      {value, false}
+    else
+      {String.slice(value, 0, max_chars), true}
+    end
+  end
+
+  defp wrap_fetch_text(content, true), do: ExternalContent.wrap_web_content(content, :web_fetch)
+
+  defp wrap_fetch_text(content, false) do
+    ExternalContent.wrap_external_content(content, source: :web_fetch, include_warning: false)
+  end
 
   defp site_name(nil), do: nil
 

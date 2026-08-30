@@ -4,7 +4,7 @@
 external-content tools:
 
 - `websearch`: query registered providers. Bundled providers are Brave
-  (default), Perplexity Sonar, keyless DuckDuckGo, and user-hosted SearXNG.
+  (default), Exa, Perplexity Sonar, keyless DuckDuckGo, and user-hosted SearXNG.
 - `webfetch`: extract readable content through registered providers. Guarded
   direct extraction is the default and optionally falls back to Firecrawl.
 - `browser_navigate`: navigate the supervised local browser session.
@@ -28,6 +28,10 @@ external-content tools:
   final Telegram/Discord answer path.
 - `browser_analyze`: capture a managed screenshot and pass it through
   `media_analyze_image` in one supervised BEAM-owned operation.
+- `browser_exec`: run a bounded BUA-style program of up to 25 typed browser
+  actions; raw CDP steps require explicit developer mode.
+- `computer_use`: capture and drive native apps through cua-driver with SOM,
+  vision, or AX state and background-first input delivery.
 
 ## Search and extraction providers
 
@@ -48,6 +52,7 @@ direct extraction are terminal and never fall back through a remote extractor.
 | Provider | Capability | Setup |
 |---|---|---|
 | `brave` | search | `BRAVE_API_KEY` or `runtime.tools.web.search.api_key` |
+| `exa` | search/highlights and batch extract | `EXA_API_KEY` or configured key |
 | `perplexity` | search/answer | `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or configured key |
 | `duckduckgo` | keyless search | none |
 | `searxng` | search | `runtime.tools.web.search.providers.searxng.base_url` |
@@ -70,6 +75,33 @@ cd clients/lemon-browser-node
 npm install
 npm run build
 ```
+
+Additional built-ins cover Browserbase (`browserbase`), Browser Use Cloud
+(`browser_use`), Firecrawl hosted browser sessions (`firecrawl`), Camofox
+REST/Firefox (`camofox`), and explicit local/public routing (`hybrid`). Hosted
+backends require an exact Lemon `session_id`, create one provider session per
+session/profile/run scope, attach the Node driver without launching a browser,
+redact CDP authority from status, and release provider state on idle. Camofox
+uses snapshot refs such as `@e5` as selectors. Hybrid requires
+`LEMON_BROWSER_HYBRID_PUBLIC_BACKEND`; local/private URLs stay on its local
+backend, public URLs use that configured backend, and provider failure never
+falls back across identities.
+
+`browser_exec` is the provider-neutral Browser Use Agent code-mode equivalent.
+Its program is a bounded typed action list rather than arbitrary Python, so
+Lemon can audit every navigation, input, evaluation, screenshot, and tab step.
+Use `targetId = "$active"` to carry the prior tab result. A `cdp` step requires
+`browser_developer_mode: true`; `Browser.close`, `Target.closeTarget`, and raw
+download-policy mutation remain blocked.
+
+`computer_use` drives native desktop apps through a lazily started private
+`cua-driver` daemon in standard permission mode. Capture supports `som`,
+`vision`, and `ax`; input supports element or coordinates, click variants,
+drag, scroll, type, key/hotkey, value setting, app focus, and optional
+post-action capture. Input defaults to `background`. Foreground focus is an
+explicit escalation, capture artifacts follow browser retention, driver
+session ids are derived hashes, and timeouts/errors are not automatically
+replayed because the external effect may already have happened.
 
 By default the helper launches local Chrome/Chromium and connects over CDP on
 `127.0.0.1`. Set `LEMON_BROWSER_CDP_ENDPOINT` or pass `--cdp-endpoint` to the
@@ -285,6 +317,7 @@ export FIRECRAWL_API_KEY="..."       # optional; used by webfetch fallback
 Key resolution behavior:
 
 - Brave search uses `runtime.tools.web.search.api_key`, then `BRAVE_API_KEY`.
+- Exa uses `runtime.tools.web.search.providers.exa.api_key`, then `EXA_API_KEY`.
 - Perplexity search uses `runtime.tools.web.search.perplexity.api_key`, then `PERPLEXITY_API_KEY`, then `OPENROUTER_API_KEY`.
 - Firecrawl uses `runtime.tools.web.fetch.firecrawl.api_key`, then `FIRECRAWL_API_KEY`.
 

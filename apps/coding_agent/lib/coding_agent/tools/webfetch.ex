@@ -165,6 +165,12 @@ defmodule CodingAgent.Tools.WebFetch do
       },
       "firecrawl" => %{
         extract: fn _request -> perform_firecrawl_fetch(url, extract_mode, max_chars, runtime) end
+      },
+      "exa" => %{
+        api_key: runtime.exa.api_key,
+        base_url: runtime.exa.base_url,
+        timeout_ms: runtime.timeout_ms,
+        http_post: runtime.http_post
       }
     }
 
@@ -938,6 +944,8 @@ defmodule CodingAgent.Tools.WebFetch do
     web_cfg = tools_cfg |> get_map_value(:web, %{}) |> ensure_map()
     fetch_cfg = web_cfg |> get_map_value(:fetch, %{}) |> ensure_map()
     firecrawl_cfg = fetch_cfg |> get_map_value(:firecrawl, %{}) |> ensure_map()
+    provider_cfgs = fetch_cfg |> get_map_value(:providers, %{}) |> ensure_map()
+    exa_cfg = provider_cfgs |> get_map_value(:exa, %{}) |> ensure_map()
     cache_cfg = web_cfg |> get_map_value(:cache, %{}) |> ensure_map()
 
     cache_max_entries =
@@ -1041,6 +1049,15 @@ defmodule CodingAgent.Tools.WebFetch do
             value -> max(value, 0)
           end,
         timeout_seconds: firecrawl_timeout
+      },
+      exa: %{
+        api_key:
+          normalize_optional_string(get_map_value(exa_cfg, :api_key, nil)) ||
+            resolve_secret_ref(get_map_value(exa_cfg, :api_key_secret, nil)) ||
+            normalize_optional_string(Secrets.fetch_value("EXA_API_KEY")),
+        base_url:
+          normalize_optional_string(get_map_value(exa_cfg, :base_url, nil)) ||
+            "https://api.exa.ai"
       },
       http_get: Keyword.get(opts, :http_get, &Req.get/2),
       http_post: Keyword.get(opts, :http_post, &Req.post/2)

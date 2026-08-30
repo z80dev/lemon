@@ -581,7 +581,7 @@ Lemon includes web tools under `runtime.tools.web`. For full setup and troublesh
 ```toml
 [runtime.tools.web.search]
 enabled = true
-provider = "brave"   # brave | perplexity | duckduckgo | searxng | extension id
+provider = "brave"   # brave | exa | perplexity | duckduckgo | searxng | extension id
 max_results = 5
 timeout_seconds = 30
 cache_ttl_minutes = 15
@@ -601,6 +601,10 @@ model = "perplexity/sonar-pro"
 base_url = "https://search.example.com"
 # Optional bearer token or Lemon secret name.
 api_key_secret = "SEARXNG_API_KEY"
+
+[runtime.tools.web.search.providers.exa]
+# Optional if EXA_API_KEY is set.
+api_key = "<exa-api-key>"
 
 [runtime.tools.web.fetch]
 enabled = true
@@ -640,6 +644,13 @@ environment variables select an existing CDP browser or the opt-in MV3 relay:
 | `LEMON_BROWSER_CDP_PORT` | `18800` | Managed local Chrome CDP port |
 | `LEMON_BROWSER_RELAY_PORT` | `9224` | Loopback MV3 relay port |
 | `LEMON_BROWSER_RELAY_TOKEN` | none | Required relay shared secret |
+| `LEMON_BROWSER_BACKEND` | `local` | `local`, `controller`, `hybrid`, `browserbase`, `browser_use`, `firecrawl`, or `camofox` |
+| `LEMON_BROWSER_HYBRID_LOCAL_BACKEND` | `local` | Local/private route used by `hybrid` |
+| `LEMON_BROWSER_HYBRID_PUBLIC_BACKEND` | none | Required public route used by `hybrid` |
+| `BROWSERBASE_API_KEY` / `BROWSERBASE_PROJECT_ID` | none | Browserbase hosted sessions |
+| `BROWSER_USE_API_KEY` | none | Browser Use Cloud hosted sessions |
+| `CAMOFOX_URL` / `CAMOFOX_API_KEY` | none | Camofox REST/Firefox server |
+| `LEMON_CUA_DRIVER_CMD` | PATH lookup | cua-driver executable for `computer_use` |
 
 For the existing-Chrome relay, set `LEMON_BROWSER_CDP_ENDPOINT` to
 `ws://127.0.0.1:<port>/cdp?token=<token>` and set attach-only mode. Treat that

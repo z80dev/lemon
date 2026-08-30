@@ -3,7 +3,7 @@ defmodule CodingAgent.Tools.WebSearch do
   WebSearch tool for the coding agent.
 
   Uses the capability-aware search provider registry. Bundled providers include
-  Brave Search, Perplexity Sonar, keyless DuckDuckGo, and configurable SearXNG.
+  Brave Search, Exa, Perplexity Sonar, keyless DuckDuckGo, and configurable SearXNG.
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
@@ -471,6 +471,33 @@ defmodule CodingAgent.Tools.WebSearch do
   end
 
   defp resolve_api_config("duckduckgo", _runtime), do: {:ok, %{}}
+
+  defp resolve_api_config("exa", runtime) do
+    config = provider_config(runtime, "exa")
+
+    api_key =
+      normalize_optional_string(get_map_value(config, :api_key, nil)) ||
+        resolve_secret_ref(get_map_value(config, :api_key_secret, nil)) ||
+        env_optional("EXA_API_KEY")
+
+    if api_key do
+      {:ok,
+       %{
+         api_key: api_key,
+         base_url:
+           normalize_optional_string(get_map_value(config, :base_url, nil)) ||
+             "https://api.exa.ai"
+       }}
+    else
+      {:error,
+       %{
+         "error" => "missing_exa_api_key",
+         "message" =>
+           "websearch (exa) needs an API key. Set EXA_API_KEY or configure runtime.tools.web.search.providers.exa.api_key.",
+         "docs" => "docs/tools/web.md"
+       }}
+    end
+  end
 
   defp resolve_api_config("searxng", runtime) do
     config = provider_config(runtime, "searxng")

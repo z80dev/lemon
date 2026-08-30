@@ -23,6 +23,11 @@ export async function dispatchBrowserRequest(
       return chrome.activateTab(requiredTargetId(input));
     case 'browser.tabClose':
       return chrome.closeTab(requiredTargetId(input));
+    case 'browser.cdp': {
+      const command = optionalString(input.method);
+      if (!command) throw new Error('CDP method is required');
+      return chrome.sendCdp(command, asArgs(input.params), optionalString(input.targetId) ?? undefined);
+    }
     default: {
       const targetId = optionalString(input.targetId);
       const pageArgs = { ...input };

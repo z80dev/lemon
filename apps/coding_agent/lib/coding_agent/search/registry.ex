@@ -132,6 +132,7 @@ defmodule CodingAgent.Search.Registry do
   defp builtin_specs do
     [
       {"brave", CodingAgent.Search.Providers.Brave, 100},
+      {"exa", CodingAgent.Search.Providers.Exa, 95},
       {"perplexity", CodingAgent.Search.Providers.Perplexity, 90},
       {"duckduckgo", CodingAgent.Search.Providers.DuckDuckGo, 50},
       {"searxng", CodingAgent.Search.Providers.Searxng, 40},

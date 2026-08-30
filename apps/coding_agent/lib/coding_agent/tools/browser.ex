@@ -27,12 +27,18 @@ defmodule CodingAgent.Tools.Browser do
               :browser_backend,
               :browser_controller_id,
               :browser_profile_id,
+              :browser_provider_config,
+              :browser_hybrid_local_backend,
+              :browser_hybrid_public_backend,
               :session_id,
               :run_id
             ])
             |> Enum.map(fn
               {:browser_backend, value} -> {:backend, value}
               {:browser_controller_id, value} -> {:controller_id, value}
+              {:browser_provider_config, value} -> {:provider_config, value}
+              {:browser_hybrid_local_backend, value} -> {:hybrid_local_backend, value}
+              {:browser_hybrid_public_backend, value} -> {:hybrid_public_backend, value}
               pair -> pair
             end)
 

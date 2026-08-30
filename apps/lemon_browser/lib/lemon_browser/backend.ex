@@ -11,6 +11,9 @@ defmodule LemonBrowser.Backend do
 
   @callback id() :: atom()
   @callback available?() :: boolean()
+  @callback available?(keyword()) :: boolean()
   @callback request(String.t(), map(), pos_integer(), keyword()) :: result()
   @callback status(keyword()) :: map()
+
+  @optional_callbacks available?: 1
 end

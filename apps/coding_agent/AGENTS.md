@@ -64,14 +64,14 @@ clear both mirrors so diagnostics never report already-consumed work.
 
 Tools are divided into two sets. `coding_tools/2` is the default set passed to sessions; `all_tools/2` includes extras not in the default set.
 
-**Default `coding_tools/2`** (59 tools registered in `CodingAgent.Tools.coding_tools/2` and `@builtin_tools` in `ToolRegistry`):
+**Default `coding_tools/2`** (66 tools registered in `CodingAgent.Tools.coding_tools/2` and `@builtin_tools` in `ToolRegistry`):
 
 | Category | Tools |
 |----------|-------|
 | **File Operations / Skills** | `read`, `read_skill`, `skill_manage`, `memory_topic`, `memory`, `search_memory`, `session_search`, `checkpoint`, `write`, `edit`, `patch`, `hashline_edit`, `lsp_diagnostics`, `ls` |
 | **Search** | `grep`, `find` |
 | **Execution** | `bash` (`execute_code` is a config-gated builtin appended last in `@builtin_tools`: default-off via `[runtime.tools.execute_code] enabled`, bash-equivalent, and filtered out of the disclosed set unless enabled) |
-| **Web / Browser / Media** | `websearch`, `webfetch`, `browser_tabs`, `browser_tab_open`, `browser_tab_activate`, `browser_tab_close`, `browser_navigate`, `browser_snapshot`, `browser_get_content`, `browser_click`, `browser_type`, `browser_hover`, `browser_select_option`, `browser_upload_file`, `browser_download`, `browser_press`, `browser_scroll`, `browser_back`, `browser_wait_for_selector`, `browser_evaluate`, `browser_events`, `browser_get_cookies`, `browser_set_cookies`, `browser_clear_state`, `browser_screenshot`, `browser_analyze`, `media_status`, `media_generate_image`, `media_generate_speech`, `media_transcribe_audio`, `media_analyze_image`, `media_generate_video` |
+| **Web / Browser / Media** | `websearch`, `webfetch`, `browser_tabs`, `browser_tab_open`, `browser_tab_activate`, `browser_tab_close`, `browser_navigate`, `browser_snapshot`, `browser_get_content`, `browser_click`, `browser_type`, `browser_hover`, `browser_select_option`, `browser_upload_file`, `browser_download`, `browser_press`, `browser_scroll`, `browser_back`, `browser_wait_for_selector`, `browser_evaluate`, `browser_events`, `browser_get_cookies`, `browser_set_cookies`, `browser_clear_state`, `browser_screenshot`, `browser_analyze`, `browser_exec`, `computer_use`, `media_status`, `media_generate_image`, `media_generate_speech`, `media_transcribe_audio`, `media_analyze_image`, `media_generate_video` |
 | **Task/Agent** | `task`, `agent`, `parent_question`, `todo`, `kanban` |
 | **Social** | `x_search`, `post_to_x`, `get_x_mentions` |
 | **System** | `tool_auth`, `extensions_status` |
@@ -133,13 +133,20 @@ bytes, and invisible/bidirectional controls. Use `memory_topic` for longer
 structured notes under `memory/topics/`.
 
 `websearch` and `webfetch` resolve their backends through
-`CodingAgent.Search.Registry`. Bundled providers include Brave, Perplexity,
-keyless DuckDuckGo, SearXNG, guarded direct extraction, and Firecrawl.
+`CodingAgent.Search.Registry`. Bundled providers include Brave, Exa search and
+contents extraction, Perplexity, keyless DuckDuckGo, SearXNG, guarded direct
+extraction, and Firecrawl.
 Providers implement `CodingAgent.Search.Provider`, declare `:search` and/or
 `:extract`, run behind bounded isolation and deterministic fallback, and may be
 registered by trusted extensions with provider type `:search`. Concurrent
 identical requests are coalesced by `CodingAgent.Search.SingleFlight` before
 successful results enter the existing bounded/persistent web cache.
+
+`browser_exec` is the bounded provider-neutral BUA-style program surface; raw
+CDP steps require explicit developer mode. `computer_use` is the separate
+native-app surface backed by exact-session cua-driver state. It defaults to
+background input delivery, returns driver verification verdicts, writes managed
+capture artifacts, and never automatically replays an uncertain action.
 
 `session_search` is the Hermes-compatible no-LLM recall tool. It infers
 discovery, scroll, or browse mode from the argument shape and reads from Lemon's

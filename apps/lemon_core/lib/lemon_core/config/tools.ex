@@ -216,6 +216,7 @@ defmodule LemonCore.Config.Tools do
       cache_ttl_minutes:
         Env.get(:lemon_web_search_cache_ttl, default: search["cache_ttl_minutes"] || 15),
       api_key_secret: normalize_optional_string(search["api_key_secret"]),
+      providers: ensure_map(search["providers"]),
       failover: resolve_search_failover(search),
       perplexity: resolve_perplexity(search)
     }
@@ -225,6 +226,9 @@ defmodule LemonCore.Config.Tools do
   defp normalize_optional_string(""), do: nil
   defp normalize_optional_string(str) when is_binary(str), do: str
   defp normalize_optional_string(_), do: nil
+
+  defp ensure_map(value) when is_map(value), do: value
+  defp ensure_map(_value), do: %{}
 
   defp resolve_search_failover(search) do
     failover = search["failover"] || %{}
@@ -283,6 +287,7 @@ defmodule LemonCore.Config.Tools do
             )
         ),
       allowed_hostnames: resolve_allowed_hostnames(fetch),
+      providers: ensure_map(fetch["providers"]),
       firecrawl: resolve_firecrawl(fetch)
     }
   end

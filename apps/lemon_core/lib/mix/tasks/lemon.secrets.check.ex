@@ -37,6 +37,10 @@ defmodule Mix.Tasks.Lemon.Secrets.Check do
     "OPENROUTER_API_KEY",
     "FIRECRAWL_API_KEY",
     "BRAVE_API_KEY",
+    "EXA_API_KEY",
+    "BROWSERBASE_API_KEY",
+    "BROWSER_USE_API_KEY",
+    "CAMOFOX_API_KEY",
     "GITHUB_TOKEN",
     # X/Twitter API
     "X_API_CLIENT_ID",
@@ -67,9 +71,7 @@ defmodule Mix.Tasks.Lemon.Secrets.Check do
       |> Enum.max()
 
     # Header
-    Mix.shell().info(
-      String.pad_trailing("NAME", max_name_len) <> "  SOURCE   VALUE"
-    )
+    Mix.shell().info(String.pad_trailing("NAME", max_name_len) <> "  SOURCE   VALUE")
 
     Mix.shell().info(String.duplicate("-", max_name_len + 30))
 

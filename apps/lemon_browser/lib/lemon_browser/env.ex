@@ -10,6 +10,115 @@ defmodule LemonBrowser.Env do
 
   @declarations [
     %{
+      name: :lemon_browser_backend,
+      env_var: "LEMON_BROWSER_BACKEND",
+      aliases: [],
+      type: :string,
+      default: "local",
+      doc:
+        "Browser backend id: local, controller, hybrid, browserbase, browser_use, firecrawl, or camofox.",
+      secret?: false,
+      required?: false,
+      area: :browser,
+      apps: [:lemon_browser]
+    },
+    %{
+      name: :lemon_browser_hybrid_local_backend,
+      env_var: "LEMON_BROWSER_HYBRID_LOCAL_BACKEND",
+      aliases: [],
+      type: :string,
+      default: "local",
+      doc: "Local/private backend selected by the hybrid browser router.",
+      secret?: false,
+      required?: false,
+      area: :browser,
+      apps: [:lemon_browser]
+    },
+    %{
+      name: :lemon_browser_hybrid_public_backend,
+      env_var: "LEMON_BROWSER_HYBRID_PUBLIC_BACKEND",
+      aliases: [],
+      type: :string,
+      default: nil,
+      doc: "Explicit hosted backend selected by the hybrid router for public URLs.",
+      secret?: false,
+      required?: false,
+      area: :browser,
+      apps: [:lemon_browser]
+    },
+    %{
+      name: :lemon_cua_driver_cmd,
+      env_var: "LEMON_CUA_DRIVER_CMD",
+      aliases: [],
+      type: :string,
+      default: nil,
+      doc: "Path or executable name for the cua-driver used by computer_use.",
+      secret?: false,
+      required?: false,
+      area: :browser,
+      apps: [:lemon_browser]
+    },
+    %{
+      name: :browserbase_api_key,
+      env_var: "BROWSERBASE_API_KEY",
+      aliases: [],
+      type: :string,
+      default: nil,
+      doc: "Browserbase API key for hosted browser sessions.",
+      secret?: true,
+      required?: false,
+      area: :browser,
+      apps: [:lemon_browser]
+    },
+    %{
+      name: :browserbase_project_id,
+      env_var: "BROWSERBASE_PROJECT_ID",
+      aliases: [],
+      type: :string,
+      default: nil,
+      doc: "Browserbase project id for hosted browser sessions.",
+      secret?: false,
+      required?: false,
+      area: :browser,
+      apps: [:lemon_browser]
+    },
+    %{
+      name: :browser_use_api_key,
+      env_var: "BROWSER_USE_API_KEY",
+      aliases: [],
+      type: :string,
+      default: nil,
+      doc: "Browser Use Cloud API key for hosted browser sessions.",
+      secret?: true,
+      required?: false,
+      area: :browser,
+      apps: [:lemon_browser]
+    },
+    %{
+      name: :camofox_url,
+      env_var: "CAMOFOX_URL",
+      aliases: [],
+      type: :string,
+      default: nil,
+      doc: "Base URL for a Camofox REST/Firefox browser server.",
+      secret?: false,
+      required?: false,
+      area: :browser,
+      apps: [:lemon_browser]
+    },
+    %{
+      name: :camofox_api_key,
+      env_var: "CAMOFOX_API_KEY",
+      aliases: [],
+      type: :string,
+      default: nil,
+      doc: "Optional bearer key for the configured Camofox server.",
+      secret?: true,
+      required?: false,
+      area: :browser,
+      apps: [:lemon_browser]
+    },
+    %{
       name: :lemon_browser_attach_only,
       env_var: "LEMON_BROWSER_ATTACH_ONLY",
       aliases: [],

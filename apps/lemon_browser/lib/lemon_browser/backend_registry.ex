@@ -9,7 +9,12 @@ defmodule LemonBrowser.BackendRegistry do
   @key {__MODULE__, :backends}
   @builtins %{
     local: LemonBrowser.Backends.Local,
-    controller: LemonBrowser.Backends.Controller
+    controller: LemonBrowser.Backends.Controller,
+    hybrid: LemonBrowser.Backends.Hybrid,
+    browserbase: LemonBrowser.Backends.Browserbase,
+    browser_use: LemonBrowser.Backends.BrowserUse,
+    firecrawl: LemonBrowser.Backends.Firecrawl,
+    camofox: LemonBrowser.Backends.Camofox
   }
 
   @spec register(atom() | String.t(), module()) :: :ok | {:error, term()}

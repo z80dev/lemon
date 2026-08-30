@@ -47,4 +47,23 @@ describe('dispatchBrowserRequest', () => {
       'targetId is required',
     );
   });
+
+  it('routes raw CDP commands with params and an optional target', async () => {
+    const chrome = {
+      sendCdp: vi.fn().mockResolvedValue({ result: { value: 42 } }),
+    } as any;
+
+    const result = await dispatchBrowserRequest(chrome, 'browser.cdp', {
+      method: 'Runtime.evaluate',
+      params: { expression: '6 * 7' },
+      targetId: 'tab-2',
+    });
+
+    expect(chrome.sendCdp).toHaveBeenCalledWith(
+      'Runtime.evaluate',
+      { expression: '6 * 7' },
+      'tab-2',
+    );
+    expect(result).toEqual({ result: { value: 42 } });
+  });
 });

@@ -26,7 +26,7 @@ defmodule CodingAgent.Search.RegistryTest do
     assert "duckduckgo" in ids
     assert "searxng" in ids
 
-    assert %{count: 6, search_count: 4, extract_count: 2} = Registry.status()
+    assert %{count: 7, search_count: 5, extract_count: 3} = Registry.status()
   end
 
   test "registers and unregisters a valid runtime provider" do

@@ -65,6 +65,7 @@ defmodule LemonBrowser.MixProject do
     Lemon.HexPackage.deps([
       {:lemon_core, in_umbrella: true},
       {:jason, "~> 1.4"},
+      {:req, "~> 0.5"},
       # API documentation
       {:ex_doc, "~> 0.34", only: :dev, runtime: false}
     ])

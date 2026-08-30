@@ -14,6 +14,10 @@ agent platform. Its only Lemon dependency is `lemon_core`.
 | `LemonBrowser` | Backend-neutral request/status facade |
 | `LemonBrowser.Backend` | Contract for local, paired-node, and controller backends |
 | `LemonBrowser.BackendRegistry` | Built-in-safe runtime backend registry |
+| `LemonBrowser.CloudSession` | Exact-session hosted CDP lifecycle and attach-only driver ownership |
+| `LemonBrowser.CamofoxSession` | Exact-session Camofox REST/Firefox adapter |
+| `LemonBrowser.HybridRouter` | Per-session local/private versus public-provider route memory |
+| `LemonBrowser.ComputerUseSession` | cua-driver desktop capture/input state and verdict handling |
 | `LemonBrowser.LocalServer` | Supervised driver process: `request/3`, `status/0`, `stop/1` |
 | `LemonBrowser.ControllerBroker` | Single-use controller tickets, exact identity binding, capability checks, timeouts |
 | `LemonBrowser.RoutePolicy` | Navigation classification and guardrails: `validate_navigation/2`, `safe/1` |
@@ -53,6 +57,13 @@ configured `:lemon_browser, :backend` (default `:local`) or an explicit
 silently switching to another browser identity or profile. Runtime packages can
 implement `LemonBrowser.Backend` and register it with
 `LemonBrowser.BackendRegistry`; built-in backend IDs cannot be replaced.
+
+Built-ins are `local`, `controller`, `hybrid`, `browserbase`, `browser_use`,
+`firecrawl`, and `camofox`. Hosted CDP sessions are created lazily, attached by
+the Node/Playwright driver in attach-only mode, scoped to the exact Lemon
+session/profile/run, and explicitly released after bounded idle time. The
+hybrid backend requires an explicit public backend and never treats a hosted
+failure as permission to fall back to a different local identity.
 
 ## Vetting a URL first
 
@@ -108,6 +119,14 @@ the requests in flight fail; the next request starts a fresh one.
 | `LEMON_BROWSER_CDP_PORT` | `18800` | Local CDP port for a managed browser (positive integers only) |
 | `LEMON_BROWSER_RELAY_TOKEN` | — | Required shared secret for the loopback MV3 extension/CDP relay |
 | `LEMON_BROWSER_RELAY_PORT` | `9224` | Loopback MV3 relay port |
+| `LEMON_BROWSER_BACKEND` | `local` | Built-in browser backend id |
+| `LEMON_BROWSER_HYBRID_LOCAL_BACKEND` | `local` | Hybrid route for local/private targets |
+| `LEMON_BROWSER_HYBRID_PUBLIC_BACKEND` | — | Required hybrid route for public targets |
+| `BROWSERBASE_API_KEY` / `BROWSERBASE_PROJECT_ID` | — | Browserbase hosted sessions |
+| `BROWSER_USE_API_KEY` | — | Browser Use Cloud hosted sessions |
+| `FIRECRAWL_API_KEY` | — | Firecrawl hosted browser sessions |
+| `CAMOFOX_URL` / `CAMOFOX_API_KEY` | — | Camofox REST/Firefox server |
+| `LEMON_CUA_DRIVER_CMD` | `cua-driver` on PATH | Computer-use driver executable |
 
 ### Existing signed-in Chrome
 
@@ -117,6 +136,23 @@ The relay lets Lemon use opted-in existing Chrome tabs and authenticated
 sessions without launching Chrome with a debugging profile. It is token-gated
 by default and ignores `Browser.close` so an attached agent cannot terminate
 the user's browser.
+
+## Browser programs, raw CDP, and computer use
+
+`browser_exec` is the model-facing BUA-style program surface. It runs a bounded
+list of typed browser actions instead of arbitrary host Python, making the same
+program portable across local Chrome, extension CDP, hosted CDP, and compatible
+REST backends. Raw `browser.cdp` is available only when
+`browser_developer_mode: true`; browser lifecycle and download-policy commands
+remain blocked even in developer mode.
+
+`computer_use` is separate from page automation. It uses `cua-driver` for
+macOS, Windows, and Linux native apps, supports SOM, vision, and AX capture,
+element or coordinate actions, drag/scroll/keyboard/value input, app/window
+discovery, and explicit foreground escalation. It defaults to background
+delivery, stores captures under the managed browser artifact directory, keeps
+driver state bound to the exact Lemon session, surfaces cua-driver's verification
+verdict, and never replays an action after an uncertain transport outcome.
 
 ## Artifacts
 

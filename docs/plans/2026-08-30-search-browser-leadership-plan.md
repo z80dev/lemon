@@ -207,8 +207,26 @@ redaction boundaries.
 
 Two intentionally bounded follow-ups do not block this scope:
 
-- Browserbase/Camofox-style hosted browser adapters can be added through the
-  backend registry if product demand justifies the external dependency.
 - Automation uses disposable Chrome. A user's real signed-in tab still
   requires their explicit extension-toolbar click; that consent boundary is
   deliberately not bypassed by an automated proof.
+
+## 2026-08-30 Hermes Browser/CUA Expansion
+
+The follow-up parity audit closed the hosted-browser and computer-use gaps:
+
+- Exa now provides search/highlights and batch contents extraction through the
+  same provider registry and untrusted-content boundary.
+- Browserbase, Browser Use Cloud, and Firecrawl have exact-session hosted-CDP
+  lifecycle adapters; Camofox has an exact-session REST/Firefox adapter.
+- The hybrid backend keeps private/local targets local, routes public targets
+  only to an explicit hosted backend, remembers the route per session, and
+  never falls back across identities after provider failure.
+- `browser_exec` provides a bounded provider-neutral BUA-style action program.
+  Raw CDP requires developer mode and still blocks browser termination and raw
+  download-policy mutation.
+- `computer_use` covers Hermes' capture, click variants, drag, scroll, type,
+  key, set-value, wait, app/window discovery, and focus vocabulary through a
+  private standard-mode cua-driver daemon. State and artifacts are exact-session
+  scoped/redacted, input is background-first, foreground is explicit, verdicts
+  are surfaced, and uncertain actions are never automatically replayed.

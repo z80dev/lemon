@@ -227,6 +227,24 @@ export class ChromeSession {
     return { closed: true, targetId, activeTargetId: this.activeTargetId ?? activeTargetId };
   }
 
+  async sendCdp(
+    method: string,
+    params: Record<string, unknown> = {},
+    targetId?: string,
+  ): Promise<unknown> {
+    if (!method || !method.includes('.')) {
+      throw new Error('CDP method must be a qualified domain.method name');
+    }
+
+    const page = await this.getPage(targetId);
+    const session = await page.context().newCDPSession(page);
+    try {
+      return await session.send(method as never, params as never);
+    } finally {
+      await session.detach().catch(() => undefined);
+    }
+  }
+
   private async launchChrome(): Promise<void> {
     const exe = this.cfg.executablePath || defaultChromeExecutable();
     if (!exe) {

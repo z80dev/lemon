@@ -12,12 +12,17 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 - Extensible capability-aware web search/extraction providers with deterministic
   fallback, provider isolation, request-level selection, extension registration,
-  keyless DuckDuckGo and configurable SearXNG search, and concurrent
+  keyless DuckDuckGo, configurable SearXNG, Exa search/highlights and batch
+  contents extraction, and concurrent
   single-flight request coalescing
 - Backend-neutral multi-tab browser control with stable target IDs, safe
   attached-browser lifecycle semantics, authenticated single-use controller
   tickets, and a bundled token-gated Manifest V3 relay for existing signed-in
   Chrome tabs
+- Hosted browser lifecycle adapters for Browserbase, Browser Use Cloud,
+  Firecrawl, and Camofox; explicit public/local hybrid routing; bounded
+  `browser_exec` programs with developer-gated raw CDP; and cross-platform
+  `computer_use` backed by exact-session cua-driver state
 - Redaction-safe live leadership acceptance harnesses covering real
   `gpt-5.6-luna`/`xhigh` search fallback, multi-source synthesis, multi-tab and
   stale-target browser control, screenshot analysis, extension relay ownership,
