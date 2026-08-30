@@ -28,7 +28,7 @@ defmodule LemonMedia.MixProject do
   defp description do
     "Media job tracking for Lemon agents: a redacted metadata store for " <>
       "generated images, video, audio and transcriptions, with supervised " <>
-      "job workers, lifecycle broadcasts and retention cleanup."
+      "one-shot jobs, lifecycle broadcasts and retention cleanup."
   end
 
   defp package do

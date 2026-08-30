@@ -3,8 +3,12 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
   Canonical source of truth for architecture dependency policy.
 
   This module defines which umbrella apps may directly depend on which other
-  umbrella apps. The current policy is enforced; the target policy captures the
-  tighter post-migration shape and is used for non-failing drift reports.
+  umbrella apps. The direct-dependency policy is exact: permissions that no
+  longer appear in `mix.exs` are stale and fail the architecture check.
+
+  Cross-app source references that intentionally do not create a direct Mix
+  dependency are listed separately as reference-only exceptions. An exception
+  permits namespace use; it never permits adding a dependency to `mix.exs`.
   """
 
   @type app :: atom()
@@ -51,12 +55,7 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
       :lemon_core,
       :lemon_skills
     ],
-    lemon_gateway: [
-      :lemon_agent,
-      :lemon_ai,
-      :lemon_automation,
-      :lemon_core
-    ],
+    lemon_gateway: [:lemon_agent, :lemon_core],
     # A satellite: it implements platform contracts (a memory provider, a
     # context contributor, agent tools) and registers itself on the way up, so
     # it depends on the platform while nothing in the platform names it.
@@ -73,7 +72,6 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
       :lemon_ai,
       :lemon_channels,
       :lemon_core,
-      :lemon_gateway,
       :lemon_memory
     ],
     lemon_router: [
@@ -93,10 +91,15 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
     x_api: [:lemon_agent, :lemon_ai, :lemon_channels, :lemon_core, :lemon_platform_test]
   }
 
+  # Gateway tools still use LemonAi content structs and probe the optional
+  # LemonAutomation cron runtime without making either app a direct dependency.
+  # Keeping these exceptions separate prevents them from silently authorizing a
+  # future mix.exs edge.
+  @reference_only_namespace_exceptions %{
+    lemon_gateway: [:lemon_ai, :lemon_automation]
+  }
+
   @target_allowed_direct_deps @current_allowed_direct_deps
-                              |> Map.update!(:lemon_gateway, fn deps ->
-                                deps -- [:lemon_ai, :lemon_automation, :lemon_channels]
-                              end)
 
   @spec current_allowed_direct_deps() :: dependency_map()
   def current_allowed_direct_deps do
@@ -111,6 +114,18 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
   @spec target_allowed_direct_deps() :: dependency_map()
   def target_allowed_direct_deps do
     normalize_dependency_map(@target_allowed_direct_deps)
+  end
+
+  @doc """
+  Returns namespace owners that an app may reference without declaring a direct
+  umbrella dependency.
+
+  These are source-reference exceptions only. They are deliberately excluded
+  from `allowed_direct_deps/0`.
+  """
+  @spec reference_only_namespace_exceptions() :: dependency_map()
+  def reference_only_namespace_exceptions do
+    normalize_dependency_map(@reference_only_namespace_exceptions)
   end
 
   defp normalize_dependency_map(deps) do

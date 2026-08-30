@@ -31,7 +31,6 @@ end
 ## Modules
 
 - `LemonMCP` - Main module with protocol version
-- `LemonMCP.Application` - OTP application supervision tree
 - `LemonMCP.Protocol` - MCP message types and JSON-RPC handling
 - `LemonMCP.Client` - GenServer client for managing stdio MCP connections, including optional `sampling/createMessage` callback or policy handling
 - `LemonMCP.Sampling` - Redacted policy wrapper for reviewed model-backed stdio sampling callbacks
@@ -39,9 +38,30 @@ end
 - `LemonMCP.Server.Handler` - Server request handler
 - `LemonMCP.ToolAdapter` - Adapter that exposes CodingAgent tools over MCP
 - `LemonMCP.Transport.Stdio` - Stdio transport for MCP servers
-- `LemonMCP.Transport.HTTP` - Streamable HTTP JSON-RPC transport for MCP servers
+- `LemonMCP.Transport.HTTP` - Streamable HTTP JSON-RPC transport whose internal one-for-all supervisor owns the MCP server and Bandit listener as one lifecycle
 - `LemonMCP.Client.HTTP` - Streamable HTTP client for external MCP servers, including JSON responses, per-request SSE responses, session/protocol headers, OAuth protected-resource / authorization-server metadata discovery, optional OAuth client-credentials token acquisition with form-post or HTTP Basic client authentication, refresh-token grant retry when a token response supplies a refresh token, authorization-code PKCE callback/token exchange for public clients, injectable token-cache load/save hooks, and one-shot bearer reacquisition after later 401 challenges
 - `LemonMCP.Client.SSE` - legacy HTTP+SSE client for external MCP servers
+
+`lemon_mcp` is a library application: it has no application callback and starts
+no processes by default. Callers start and supervise the client, server, and
+transport processes they use. Lemon's minimal and full OTP releases include the
+library with `:load`, which makes these modules available to dynamic consumers
+such as `LemonSkills.McpSource` without adding a no-op supervisor.
+Release smoke builds both profiles and evaluates this contract inside each
+packaged release. The artifact boot verifier repeats it against each min/full
+release tarball, including loaded-but-not-started application state and the
+absence of an application callback.
+
+Starting `LemonMCP.Transport.HTTP` returns its unnamed transport supervisor.
+That supervisor owns a node-local registry member, the protocol
+`LemonMCP.Server`, and Bandit listener with a `:one_for_all` strategy, so all
+children are replaced as a group and no stale or orphaned server survives a
+transport restart. Serialized registry updates retain concurrent starts;
+normal shutdown unregisters immediately, while later reads and registrations
+prune members left by abnormal shutdown. `get_server_pid/0` resolves the current
+node's latest child instead of caching a child PID across restarts and falls
+back to an older live transport when the latest stops. Pass the supervisor returned by
+`start_link/1` to `get_server_pid/1` when multiple transports are running.
 
 ## Usage
 
@@ -237,7 +257,7 @@ Standard JSON-RPC 2.0 error codes:
 Run the test suite:
 
 ```bash
-mix test
+mix test apps/lemon_mcp/test
 ```
 
 ## Configuration Options

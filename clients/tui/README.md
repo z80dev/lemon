@@ -5,6 +5,8 @@ The lemon terminal client: a Bun application built on
 (differential terminal renderer with native-scrollback streaming) that talks
 to a running lemon daemon over the control-plane WebSocket
 (`ws://127.0.0.1:4040/ws` by default).
+When a token is configured, the handshake sends it in the control plane's
+`params.auth.token` envelope.
 
 Installed users get this client as a compiled per-platform binary
 (`~/.lemon/versions/<v>/tui/bin/lemon-tui`); plain `lemon` in an interactive

@@ -1,6 +1,8 @@
 defmodule Mix.Tasks.Lemon.Sim.Legislature do
   use Mix.Task
 
+  alias Mix.Tasks.Lemon.Sim.Common
+
   @shortdoc "Run the LemonSim Legislature self-play example"
 
   @moduledoc """
@@ -33,58 +35,19 @@ defmodule Mix.Tasks.Lemon.Sim.Legislature do
         Mix.raise("invalid options: #{inspect(invalid)}")
 
       true ->
-        ensure_runtime_started!()
+        Common.ensure_runtime_started!()
 
         run_opts =
           []
-          |> maybe_put(:persist?, opts[:persist])
-          |> maybe_put(:driver_max_turns, opts[:max_turns] || opts[:max_driver_turns])
-          |> maybe_put(:model, resolve_model(opts[:model]))
-          |> maybe_put(:player_count, opts[:player_count])
+          |> Common.maybe_put(:persist?, opts[:persist])
+          |> Common.maybe_put(:driver_max_turns, opts[:max_turns] || opts[:max_driver_turns])
+          |> Common.maybe_put(:model, Common.resolve_model(opts[:model]))
+          |> Common.maybe_put(:player_count, opts[:player_count])
 
         case LemonSim.Examples.Legislature.run(run_opts) do
           {:ok, _final_state} -> :ok
           {:error, reason} -> Mix.raise("legislature sim failed: #{inspect(reason)}")
         end
-    end
-  end
-
-  defp ensure_runtime_started! do
-    case Application.ensure_all_started(:lemon_sim) do
-      {:ok, _started} -> :ok
-      {:error, reason} -> Mix.raise("failed to start lemon_sim runtime: #{inspect(reason)}")
-    end
-  end
-
-  defp resolve_model(nil), do: nil
-  defp resolve_model(""), do: nil
-
-  defp resolve_model(model_spec) when is_binary(model_spec) do
-    trimmed = String.trim(model_spec)
-
-    case String.split(trimmed, ":", parts: 2) do
-      [provider, model_id] ->
-        provider
-        |> normalize_provider()
-        |> then(fn provider_atom ->
-          LemonAi.Models.get_model(provider_atom, model_id) ||
-            Mix.raise("unknown model #{inspect(model_id)} for provider #{inspect(provider)}")
-        end)
-
-      [_model_id] ->
-        LemonAi.Models.find_by_id(trimmed) || Mix.raise("unknown model #{inspect(trimmed)}")
-    end
-  end
-
-  defp maybe_put(opts, _key, nil), do: opts
-  defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
-
-  defp normalize_provider(provider) do
-    case provider |> String.trim() |> String.downcase() |> String.replace("-", "_") do
-      "gemini" -> :google_gemini_cli
-      "gemini_cli" -> :google_gemini_cli
-      "openai_codex" -> :"openai-codex"
-      normalized -> String.to_atom(normalized)
     end
   end
 

@@ -286,6 +286,10 @@ jobs:
         working-directory: clients/lemon-web
         run: npm ci
 
+      - name: lemon-web clean startup contract
+        working-directory: clients/lemon-web
+        run: npm run test:startup-contract
+
       - name: lemon-web typecheck
         working-directory: clients/lemon-web
         run: npm run typecheck

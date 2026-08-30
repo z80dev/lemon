@@ -1,7 +1,8 @@
 name: Release Smoke Tests
 
-# Assembles runtime releases, verifies they start and pass doctor checks,
-# then tears down. Runs on PRs touching release-related files and weekly.
+# Assembles both runtime releases, verifies their packaged library contracts,
+# then verifies they start and pass doctor checks before teardown. Runs on PRs
+# touching release-related files and weekly.
 
 permissions:
   contents: read
@@ -13,6 +14,8 @@ on:
       - "mix.lock"
       - "apps/lemon_core/lib/lemon_core/runtime/**"
       - "apps/lemon_core/lib/mix/tasks/lemon.doctor.ex"
+      - "apps/lemon_mcp/**"
+      - "apps/lemon_skills/lib/lemon_skills/mcp_source.ex"
       - "apps/lemon_sim/lib/lemon_sim/examples/werewolf/**"
       - "apps/lemon_sim_ui/**"
       - "config/prod.exs"
@@ -32,10 +35,10 @@ on:
   workflow_dispatch:
     inputs:
       profile:
-        description: "Core release profile to smoke-test; Sim UI is covered by the container job"
+        description: Release profile to smoke-test
         type: choice
         required: true
-        default: "lemon_runtime_min"
+        default: lemon_runtime_min
         options:
           - lemon_runtime_min
           - lemon_runtime_full
@@ -60,8 +63,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        profile:
-          - ${{ github.event.inputs.profile || 'lemon_runtime_min' }}
+        profile: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('["{0}"]', github.event.inputs.profile) || '["lemon_runtime_min","lemon_runtime_full"]') }}
 
     steps:
       - name: Checkout
@@ -94,6 +96,39 @@ jobs:
         run: mix release ${{ matrix.profile }} --overwrite
         env:
           MIX_ENV: prod
+
+      - name: Verify packaged MCP library contract
+        run: |
+          RELEASE_BIN="./_build/prod/rel/${{ matrix.profile }}/bin/${{ matrix.profile }}"
+
+          env -u LEMON_MCP_DISABLED "$RELEASE_BIN" eval '
+            client_loaded = Code.ensure_loaded?(LemonMCP.Client)
+            source_loaded = Code.ensure_loaded?(LemonSkills.McpSource)
+
+            checks = %{
+              client_loaded: client_loaded,
+              source_loaded: source_loaded,
+              source_enabled: source_loaded and LemonSkills.McpSource.mcp_enabled?(),
+              application_loaded:
+                Enum.any?(Application.loaded_applications(), fn {app, _, _} ->
+                  app == :lemon_mcp
+                end),
+              application_not_started:
+                not Enum.any?(Application.started_applications(), fn {app, _, _} ->
+                  app == :lemon_mcp
+                end),
+              no_application_callback: Application.spec(:lemon_mcp, :mod) == [],
+              no_application_module: not Code.ensure_loaded?(LemonMCP.Application)
+            }
+
+            failures = for {name, false} <- checks, do: name
+
+            if failures != [] do
+              raise "packaged MCP library contract failed: #{inspect(failures)}"
+            end
+
+            IO.puts("packaged MCP library contract passed: #{inspect(checks)}")
+          '
 
       - name: Write fixture config
         run: |

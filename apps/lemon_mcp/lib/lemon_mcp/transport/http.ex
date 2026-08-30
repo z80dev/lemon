@@ -5,6 +5,11 @@ defmodule LemonMCP.Transport.HTTP do
   Provides an HTTP endpoint that accepts MCP protocol messages via POST requests.
   Supports both single requests and batch requests (JSON-RPC spec).
 
+  `start_link/1` starts an unnamed internal `:one_for_all` supervisor that owns
+  both the `LemonMCP.Server` process and the Bandit listener. A failure of
+  either child therefore replaces the pair without leaving an orphaned protocol
+  server or a listener holding a stale server PID.
+
   ## Configuration
 
       config :lemon_mcp, :http_transport,
@@ -50,10 +55,11 @@ defmodule LemonMCP.Transport.HTTP do
   alias LemonMCP.Protocol
   alias LemonMCP.Server
   alias LemonMCP.Server.Handler
+  alias LemonMCP.Transport.HTTP.RegistryMember
+  alias LemonMCP.Transport.HTTP.Supervisor, as: TransportSupervisor
 
   @default_port if(Code.ensure_loaded?(Mix) and Mix.env() == :test, do: 0, else: 4048)
   @default_ip {127, 0, 0, 1}
-
   plug(Plug.Logger, log: :debug)
 
   plug(Plug.Parsers,
@@ -151,24 +157,11 @@ defmodule LemonMCP.Transport.HTTP do
       port = Keyword.get(opts, :port, @default_port)
       ip = Keyword.get(opts, :ip, @default_ip)
 
-      # Start the MCP server first
-      server_opts = build_server_opts(opts)
-      {:ok, server_pid} = Server.start_link(server_opts)
-
       Logger.info("Starting MCP HTTP transport on #{format_ip(ip)}:#{port}")
 
-      # Use Bandit to serve the Plug with the MCP server in assigns
-      bandit_opts = [
-        plug: {__MODULE__, mcp_server: server_pid},
-        ip: ip,
-        port: port,
-        scheme: :http
-      ]
+      opts = opts |> Keyword.put(:port, port) |> Keyword.put(:ip, ip)
 
-      # Store server pid for later retrieval
-      :persistent_term.put({__MODULE__, :mcp_server}, server_pid)
-
-      Bandit.start_link(bandit_opts)
+      TransportSupervisor.start_link(opts)
     else
       Logger.info("MCP HTTP transport disabled")
       :ignore
@@ -176,18 +169,25 @@ defmodule LemonMCP.Transport.HTTP do
   end
 
   @doc """
-  Returns the MCP server PID if the transport is running.
+  Returns an MCP server PID if a transport is running.
+
+  The zero-arity compatibility lookup prefers the most recently started live
+  transport and falls back to an older live instance when that transport stops.
+  Use `get_server_pid/1` when more than one HTTP transport is running.
   """
   @spec get_server_pid() :: pid() | nil
   def get_server_pid do
-    case :persistent_term.get({__MODULE__, :mcp_server}, nil) do
-      pid when is_pid(pid) ->
-        if Process.alive?(pid), do: pid, else: nil
-
-      _ ->
-        nil
-    end
+    RegistryMember.supervisors()
+    |> Enum.find_value(&get_server_pid/1)
   end
+
+  @doc "Returns the current MCP server child for one HTTP transport supervisor."
+  @spec get_server_pid(Supervisor.supervisor()) :: pid() | nil
+  def get_server_pid(supervisor) when is_pid(supervisor) do
+    if Process.alive?(supervisor), do: TransportSupervisor.server_pid(supervisor)
+  end
+
+  def get_server_pid(_supervisor), do: nil
 
   @doc """
   Returns whether the HTTP transport is enabled.
@@ -224,7 +224,7 @@ defmodule LemonMCP.Transport.HTTP do
   @impl true
   def call(conn, opts) do
     # Inject the MCP server into conn.assigns before routing
-    server_pid = Keyword.get(opts, :mcp_server)
+    server_pid = resolve_server_pid(opts)
     conn = Plug.Conn.assign(conn, :mcp_server, server_pid)
     super(conn, opts)
   end
@@ -233,19 +233,11 @@ defmodule LemonMCP.Transport.HTTP do
   # Private Functions
   # ============================================================================
 
-  defp build_server_opts(opts) do
-    [
-      server_name: Keyword.get(opts, :server_name, "Lemon MCP Server"),
-      server_version: Keyword.get(opts, :server_version, "0.1.0"),
-      tool_provider: Keyword.get(opts, :tool_provider),
-      tools: Keyword.get(opts, :tools),
-      tool_handler: Keyword.get(opts, :tool_handler),
-      resources: Keyword.get(opts, :resources),
-      resource_handler: Keyword.get(opts, :resource_handler),
-      prompts: Keyword.get(opts, :prompts),
-      prompt_handler: Keyword.get(opts, :prompt_handler)
-    ]
-    |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+  defp resolve_server_pid(opts) do
+    case Keyword.fetch(opts, :mcp_server) do
+      {:ok, server} -> server
+      :error -> opts |> Keyword.get(:mcp_supervisor) |> TransportSupervisor.server_pid()
+    end
   end
 
   defp get_request_body(conn) do

@@ -4,65 +4,14 @@ import {
   type ControlPlaneConnectionHandler,
   type HelloOkSnapshot,
 } from './controlPlaneTransport';
-
-// ============================================================================
-// MockWebSocket
-// ============================================================================
-
-class MockWebSocket {
-  static instances: MockWebSocket[] = [];
-
-  // WebSocket readyState constants
-  static readonly CONNECTING = 0;
-  static readonly OPEN = 1;
-  static readonly CLOSING = 2;
-  static readonly CLOSED = 3;
-
-  readyState: number = MockWebSocket.CONNECTING;
-  onopen: ((ev: Event) => void) | null = null;
-  onmessage: ((ev: MessageEvent) => void) | null = null;
-  onclose: ((ev: CloseEvent) => void) | null = null;
-  onerror: ((ev: Event) => void) | null = null;
-  sentMessages: string[] = [];
-
-  constructor(public url: string) {
-    MockWebSocket.instances.push(this);
-  }
-
-  send(data: string): void {
-    this.sentMessages.push(data);
-  }
-
-  close(): void {
-    this.readyState = MockWebSocket.CLOSED;
-  }
-
-  // Test helpers
-  simulateOpen(): void {
-    this.readyState = MockWebSocket.OPEN;
-    this.onopen?.(new Event('open'));
-  }
-
-  simulateMessage(data: unknown): void {
-    this.onmessage?.(new MessageEvent('message', { data: JSON.stringify(data) }));
-  }
-
-  simulateClose(code = 1000): void {
-    this.readyState = MockWebSocket.CLOSED;
-    this.onclose?.(new CloseEvent('close', { code, wasClean: code === 1000 }));
-  }
-
-  simulateError(): void {
-    this.onerror?.(new Event('error'));
-  }
-}
+import { MockWebSocket } from '../test/MockWebSocket';
 
 // ============================================================================
 // Test setup / teardown
 // ============================================================================
 
 beforeEach(() => {
-  MockWebSocket.instances = [];
+  MockWebSocket.reset();
   vi.stubGlobal('WebSocket', MockWebSocket);
   vi.useFakeTimers();
 });

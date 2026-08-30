@@ -11,8 +11,8 @@ agent platform. Its only Lemon dependency is `lemon_core`.
 | Module | Purpose |
 |---|---|
 | `LemonMedia.MediaJobs` | The job record store: `record/2`, `recent/1`, `summary/1`, `cleanup/1` |
-| `LemonMedia.MediaJobSupervisor` | Dynamic supervisor for job workers, with `start_job/2` and `status/0` |
-| `LemonMedia.MediaJobWorker` | Runs one job, recording `queued → running → completed`/`failed` as it goes |
+| `LemonMedia.MediaJobSupervisor` | `Task.Supervisor` facade for one-shot jobs, with `start_job/2` and `status/0` |
+| `LemonMedia.MediaJobWorker` | Stateless job runner that records `queued → running → completed`/`failed` |
 
 `mix lemon.media` inspects jobs and artifacts from the command line.
 
@@ -33,7 +33,7 @@ LemonMedia.MediaJobs.record(
 )
 ```
 
-Or let a supervised worker run it and record each transition:
+Or let a supervised task run it and record each transition:
 
 ```elixir
 {:ok, _pid, job} =
@@ -45,6 +45,12 @@ Or let a supervised worker run it and record each transition:
 
 Each lifecycle transition is broadcast on the `"media_jobs"` topic of
 `LemonCore.PubSub` as `{:media_job, event, job}`.
+
+Jobs are temporary supervised tasks: a crash or cancellation is not restarted.
+The returned PID remains the cancellation handle. As before, terminating it
+does not invent a terminal transition; the last durable record remains
+`:running` unless the runner itself returns or raises and the job records a
+normal completion or failure.
 
 Job types are `:media`, `:image`, `:video`, `:audio`, `:tts`, `:stt`, `:vision`
 and `:browser`; statuses are `:queued`, `:running`, `:completed`, `:failed` and

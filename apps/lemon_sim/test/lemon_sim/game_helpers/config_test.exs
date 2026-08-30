@@ -38,6 +38,16 @@ defmodule LemonSim.LLM.GameHelpers.ConfigTest do
     assert model.id == "gemini-2.5-pro"
   end
 
+  test "model specs resolve bounded providers in colon, slash, and default-provider forms" do
+    colon_model = Config.resolve_model_spec(nil, "openai:gpt-4.1")
+    slash_model = Config.resolve_model_spec(nil, "openai/gpt-4.1")
+    default_model = Config.resolve_model_spec(:openai, "gpt-4.1")
+
+    assert colon_model.provider == :openai
+    assert slash_model == colon_model
+    assert default_model == colon_model
+  end
+
   test "provider_name canonicalizes gemini aliases to google_gemini_cli" do
     assert Config.provider_name(:gemini) == "google_gemini_cli"
     assert Config.provider_name("gemini-cli") == "google_gemini_cli"
@@ -49,6 +59,26 @@ defmodule LemonSim.LLM.GameHelpers.ConfigTest do
     assert Config.provider_name("openai_codex") == "openai-codex"
     assert Config.normalize_provider("openai-codex") == :"openai-codex"
     assert Config.normalize_provider("openai_codex") == :"openai-codex"
+  end
+
+  test "unknown provider input is rejected without interning a BEAM atom" do
+    provider_name = "unknown_provider_#{System.unique_integer([:positive])}"
+
+    assert_raise ArgumentError, fn -> String.to_existing_atom(provider_name) end
+    assert Config.normalize_provider(provider_name) == nil
+    assert Config.resolve_model_spec(nil, "#{provider_name}:missing-model") == nil
+    assert_raise ArgumentError, fn -> String.to_existing_atom(provider_name) end
+  end
+
+  test "configured model errors accept a scenario-specific label" do
+    config = %{
+      agent: %{default_provider: "unknown", default_model: "missing"},
+      providers: LemonCore.Config.Providers.resolve(%{})
+    }
+
+    assert_raise RuntimeError, ~r/^Auction House example requires a valid default model\./, fn ->
+      Config.resolve_configured_model!(config, "auction", error_label: "Auction House example")
+    end
   end
 
   test "gemini oauth secret resolves to provider-ready json credentials" do

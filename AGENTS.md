@@ -166,7 +166,7 @@ apps/
 ├── lemon_honcho/        # Honcho-backed long-term memory: registers a LemonMemory provider and agent tools
 ├── lemon_lsp/           # LSP server registry and supervised JSON-RPC sessions
 ├── lemon_mcp/           # MCP (Model Context Protocol) server/client bridge for CodingAgent tools
-├── lemon_media/         # Media job supervisor, metadata store, and mix lemon.media
+├── lemon_media/         # Media Task.Supervisor, metadata store, and mix lemon.media
 ├── lemon_memory/        # Durable agent memory: SQLite full-text store, provider fan-out search, run ingest, redaction
 ├── lemon_platform_test/ # Contract-test kit (ExUnit case templates) for Lemon extension behaviours
 ├── lemon_router/        # Message routing, agent directory, run orchestration, queue semantics
@@ -232,6 +232,11 @@ commits product version metadata, creates the annotated tag, builds and verifies
 all native artifacts, publishes the GitHub Release, and then promotes mutable
 GHCR channel tags. See `docs/release/versioning_and_channels.md`.
 
+Both runtime profiles assemble `lemon_mcp` with the OTP release mode `:load`
+before its dynamic consumers. MCP is a library application with no application
+callback; consuming applications supervise every client, server, or transport
+process they start.
+
 ### TUI Client (Bun)
 
 ```bash
@@ -247,7 +252,8 @@ bun src/main.ts      # Dev mode
 ```bash
 cd clients/lemon-web
 npm install
-npm run dev      # Start web server + frontend
+npm run dev      # Build shared once, then start shared/server/web watchers
+npm start        # Build generated shared/server entrypoints, then start the server
 npm run build    # Build shared/server/web packages
 npm run test:coverage
 ```
@@ -329,7 +335,10 @@ The control plane (`lemon_control_plane`) provides the JSON-RPC API used by TUI/
 
 ### Key Dependencies Between Apps
 
-Derived from mix.exs files and enforced by `mix lemon.quality` (architecture boundary check):
+Derived from complete `deps/0` bodies in the `mix.exs` files and enforced by
+`mix lemon.quality` (architecture boundary check). The direct policy must match
+this graph exactly; reference-only namespace exceptions are tracked separately
+and do not permit adding a Mix dependency:
 
 ```
 lemon_control_plane ──→ lemon_core, lemon_memory, lemon_browser, lemon_media, lemon_lsp, lemon_router, lemon_channels, lemon_skills, lemon_automation, lemon_agent, lemon_ai
@@ -580,4 +589,10 @@ Each app has its own `AGENTS.md` with detailed context:
 
 ---
 
-*Last updated: 2026-08-30* (documented named execution nodes: controller pairing, live name-based routing, destination-local cwd/credentials, cancellation, and the native-only execution boundary)
+*Last updated: 2026-08-30* (architecture reporting now parses complete `deps/0`
+bodies and distinguishes direct dependencies from reference-only exceptions;
+`lemon_mcp` is assembled as a library-only `:load` application with no empty
+application supervisor; one-shot media jobs use `Task.Supervisor` rather than a
+bespoke worker GenServer; documented named execution nodes including controller
+pairing, live name-based routing, destination-local cwd/credentials,
+cancellation, and the native-only execution boundary)

@@ -1,6 +1,8 @@
 defmodule Mix.Tasks.Lemon.Sim.Poker do
   use Mix.Task
 
+  alias Mix.Tasks.Lemon.Sim.Common
+
   alias LemonCore.Config.Modular
   alias LemonSim.Examples.Helpers, as: GameHelpers
   alias LemonSim.Examples.Poker.Artifacts
@@ -50,7 +52,7 @@ defmodule Mix.Tasks.Lemon.Sim.Poker do
         Mix.raise("pass either --model or --models, not both")
 
       true ->
-        ensure_runtime_started!()
+        Common.ensure_runtime_started!()
         config = Modular.load(project_dir: File.cwd!())
 
         run_opts =
@@ -120,13 +122,6 @@ defmodule Mix.Tasks.Lemon.Sim.Poker do
       api_key = GameConfig.resolve_provider_api_key!(model.provider, config, "poker")
       {player_id, {model, api_key}}
     end)
-  end
-
-  defp ensure_runtime_started! do
-    case Application.ensure_all_started(:lemon_sim) do
-      {:ok, _started} -> :ok
-      {:error, reason} -> Mix.raise("failed to start lemon_sim runtime: #{inspect(reason)}")
-    end
   end
 
   defp resolve_model(nil, _config), do: nil

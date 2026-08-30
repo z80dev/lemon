@@ -1,21 +1,25 @@
 defmodule LemonMedia.MediaJobSupervisor do
   @moduledoc """
-  Dynamic supervisor for BEAM-native media job workers.
+  Task supervisor facade for BEAM-native media jobs.
   """
-
-  use DynamicSupervisor
 
   alias LemonMedia.MediaJobWorker
   alias LemonMedia.MediaJobs
 
   @spec start_link(keyword()) :: Supervisor.on_start()
-  def start_link(opts \\ []) do
-    DynamicSupervisor.start_link(__MODULE__, opts, name: __MODULE__)
+  def start_link(_opts \\ []) do
+    Task.Supervisor.start_link(name: __MODULE__)
   end
 
-  @impl true
-  def init(_opts) do
-    DynamicSupervisor.init(strategy: :one_for_one)
+  @spec child_spec(keyword()) :: Supervisor.child_spec()
+  def child_spec(opts) do
+    %{
+      id: __MODULE__,
+      start: {__MODULE__, :start_link, [opts]},
+      restart: :permanent,
+      shutdown: :infinity,
+      type: :supervisor
+    }
   end
 
   @spec status() :: map()
@@ -31,7 +35,7 @@ defmodule LemonMedia.MediaJobSupervisor do
         }
 
       _pid ->
-        counts = DynamicSupervisor.count_children(__MODULE__)
+        counts = Supervisor.count_children(__MODULE__)
 
         %{
           supervised: true,
@@ -61,17 +65,20 @@ defmodule LemonMedia.MediaJobSupervisor do
 
     with {:ok, queued_job} <- MediaJobs.record(queued_attrs, record_opts),
          worker_attrs <- Map.put(attrs, :job_id, queued_job.job_id),
-         {:ok, pid} <- DynamicSupervisor.start_child(__MODULE__, child_spec(worker_attrs, opts)) do
+         {:ok, pid} <- start_task(worker_attrs, opts) do
       {:ok, pid, queued_job}
     end
   end
 
-  defp child_spec(attrs, opts) do
-    %{
-      id: MediaJobWorker,
-      start: {MediaJobWorker, :start_link, [[attrs: attrs, opts: opts]]},
-      restart: :temporary
-    }
+  defp start_task(attrs, opts) do
+    Task.Supervisor.start_child(
+      __MODULE__,
+      MediaJobWorker,
+      :run,
+      [[attrs: attrs, opts: opts]],
+      restart: :temporary,
+      shutdown: 5_000
+    )
   end
 
   defp record_opts(opts) do

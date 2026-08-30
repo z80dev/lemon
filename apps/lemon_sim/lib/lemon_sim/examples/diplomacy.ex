@@ -13,7 +13,7 @@ defmodule LemonSim.Examples.Diplomacy do
   Win condition: First to control 7+ territories, or most territories after 10 rounds.
   """
 
-  alias LemonCore.Config.{Modular, Providers}
+  alias LemonCore.Config.Modular
   alias LemonCore.MapHelpers
 
   alias LemonSim.Examples.Diplomacy.{
@@ -24,6 +24,7 @@ defmodule LemonSim.Examples.Diplomacy do
   }
 
   alias LemonSim.LLM.Deciders.ToolLoopDecider
+  alias LemonSim.LLM.GameHelpers.Config
   alias LemonSim.LLM.Projectors.SectionedProjector
   alias LemonSim.Kernel.{Runner, State, Store}
 
@@ -299,11 +300,15 @@ defmodule LemonSim.Examples.Diplomacy do
   @spec default_opts(keyword()) :: keyword()
   def default_opts(overrides \\ []) when is_list(overrides) do
     config = Modular.load(project_dir: File.cwd!())
-    model = Keyword.get_lazy(overrides, :model, fn -> resolve_configured_model!(config) end)
+
+    model =
+      Keyword.get_lazy(overrides, :model, fn ->
+        Config.resolve_configured_model!(config, "diplomacy", error_label: "Diplomacy example")
+      end)
 
     stream_options =
       Keyword.get_lazy(overrides, :stream_options, fn ->
-        %{api_key: resolve_provider_api_key!(model.provider, config)}
+        %{api_key: Config.resolve_provider_api_key!(model.provider, config, "diplomacy")}
       end)
 
     projector_opts()
@@ -473,155 +478,8 @@ defmodule LemonSim.Examples.Diplomacy do
     end)
   end
 
-  # -- Config resolution --
-
-  defp resolve_configured_model!(config) do
-    provider = config.agent.default_provider
-    model_spec = config.agent.default_model
-
-    case resolve_model_spec(provider, model_spec) do
-      %LemonAi.Types.Model{} = model ->
-        apply_provider_base_url(model, config)
-
-      nil ->
-        raise """
-        Diplomacy example requires a valid default model.
-        Configure [defaults].provider + [defaults].model (or [agent].default_*) in Lemon config,
-        or pass an explicit model via the mix task.
-        """
-    end
-  end
-
-  defp resolve_model_spec(provider, model_spec) when is_binary(model_spec) do
-    trimmed = String.trim(model_spec)
-
-    cond do
-      trimmed == "" ->
-        nil
-
-      String.contains?(trimmed, ":") ->
-        case String.split(trimmed, ":", parts: 2) do
-          [provider_name, model_id] -> lookup_model(provider_name, model_id)
-          _ -> nil
-        end
-
-      String.contains?(trimmed, "/") ->
-        case String.split(trimmed, "/", parts: 2) do
-          [provider_name, model_id] -> lookup_model(provider_name, model_id)
-          _ -> lookup_model(provider, trimmed)
-        end
-
-      true ->
-        lookup_model(provider, trimmed)
-    end
-  end
-
-  defp resolve_model_spec(_provider, _model_spec), do: nil
-
-  defp lookup_model(nil, model_id), do: LemonAi.Models.find_by_id(model_id)
-  defp lookup_model("", model_id), do: LemonAi.Models.find_by_id(model_id)
-
-  defp lookup_model(provider, model_id) when is_binary(provider) and is_binary(model_id) do
-    normalized = normalize_provider(provider)
-
-    LemonAi.Models.get_model(normalized, model_id) ||
-      LemonAi.Models.get_model(String.to_atom(String.trim(provider)), model_id)
-  end
-
-  defp apply_provider_base_url(%LemonAi.Types.Model{} = model, config) do
-    provider_name = provider_name(model.provider)
-    provider_cfg = Providers.get_provider(config.providers, provider_name)
-    base_url = provider_cfg[:base_url]
-
-    if is_binary(base_url) and base_url != "" and base_url != model.base_url do
-      %{model | base_url: base_url}
-    else
-      model
-    end
-  end
-
-  defp resolve_provider_api_key!(provider, config) do
-    provider_name = provider_name(provider)
-    provider_cfg = Providers.get_provider(config.providers, provider_name)
-
-    cond do
-      provider_name == "openai-codex" ->
-        case LemonAgent.ModelRuntime.Credentials.resolve_provider_api_key("openai-codex", %{
-               "openai-codex" => %{"auth_source" => "oauth"}
-             }) do
-          token when is_binary(token) and token != "" ->
-            token
-
-          _ ->
-            raise "diplomacy sim requires an OpenAI Codex access token"
-        end
-
-      is_binary(provider_cfg[:api_key]) and provider_cfg[:api_key] != "" ->
-        provider_cfg[:api_key]
-
-      is_binary(provider_cfg[:api_key_secret]) ->
-        case LemonCore.Secrets.resolve(provider_cfg[:api_key_secret], env_fallback: true) do
-          {:ok, value, _source} when is_binary(value) and value != "" ->
-            resolve_secret_api_key(provider_cfg[:api_key_secret], value)
-
-          {:error, reason} ->
-            raise "diplomacy sim could not resolve #{provider_name} credentials: #{inspect(reason)}"
-        end
-
-      true ->
-        raise "diplomacy sim requires configured credentials for #{provider_name}"
-    end
-  end
-
-  @provider_aliases %{
-    "gemini" => "google_gemini_cli",
-    "gemini_cli" => "google_gemini_cli",
-    "gemini-cli" => "google_gemini_cli",
-    "openai_codex" => "openai-codex"
-  }
-
-  defp provider_name(provider) when is_atom(provider),
-    do: provider |> Atom.to_string() |> canonical_provider_name()
-
-  defp provider_name(provider) when is_binary(provider), do: canonical_provider_name(provider)
-
   defp maybe_put(opts, _key, nil), do: opts
   defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
-
-  defp normalize_provider(provider_name) do
-    provider_name
-    |> String.trim()
-    |> String.downcase()
-    |> String.replace("-", "_")
-    |> canonical_provider_name()
-    |> String.to_atom()
-  end
-
-  defp canonical_provider_name(provider_name) do
-    normalized =
-      provider_name
-      |> String.trim()
-      |> String.downcase()
-
-    Map.get(@provider_aliases, normalized, normalized)
-  end
-
-  defp resolve_secret_api_key(secret_name, secret_value)
-       when is_binary(secret_name) and is_binary(secret_value) do
-    case LemonAi.Auth.OAuthSecretResolver.resolve_api_key_from_secret(
-           secret_name,
-           secret_value
-         ) do
-      {:ok, resolved_api_key} when is_binary(resolved_api_key) and resolved_api_key != "" ->
-        resolved_api_key
-
-      :ignore ->
-        secret_value
-
-      {:error, _reason} ->
-        secret_value
-    end
-  end
 
   defp get(map, key, default) when is_map(map) and is_atom(key) do
     Map.get(map, key, Map.get(map, Atom.to_string(key), default))

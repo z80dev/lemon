@@ -93,6 +93,7 @@ and `lemon_lsp`. Core doctor diagnostics may probe them at runtime, but
 | `LemonCore.GatewayConfig` | Unified gateway config access merging TOML, app env, and transport overrides |
 | `LemonCore.Dotenv` | `.env` file loader preserving existing env vars |
 | `LemonCore.Logging` | Runtime log-to-file handler from `[logging]` config |
+| `LemonCore.OAuth.LocalCallbackListener` | One-shot localhost OAuth callback capture with monitored listener failure and bounded wait/cleanup |
 
 ### Doctor and Support
 
@@ -139,6 +140,7 @@ ids, message bodies, proof details, credentials, or secret names.
 |--------|---------|
 | `LemonCore.Secrets` | Encrypted secrets API (get/set/list/delete/resolve with env fallback) |
 | `LemonCore.Secrets.Crypto` | AES-256-GCM encryption with HKDF-SHA256 key derivation |
+| `LemonCore.Secrets.EnvCatalog` | Ordered environment-secret catalog for packaged and Mix check/import commands |
 | `LemonCore.Secrets.Keychain` | macOS Keychain integration for master key storage |
 | `LemonCore.Secrets.MasterKey` | Master key resolution chain (keychain -> env var) |
 
@@ -370,6 +372,11 @@ status = LemonCore.Secrets.status()
 ```
 
 Secrets automatically fall back to environment variables of the same name. Use `env_fallback: false` to disable. Secret reads update usage metadata (`usage_count`, `last_used_at`) without mutating `updated_at`.
+
+`LemonCore.Secrets.EnvCatalog.names/0` is the canonical ordered set used by
+the packaged `lemon secrets check` / `lemon secrets import-env` commands and
+their Mix equivalents. It is intentionally separate from the release-profile
+runtime declarations in `LemonCore.Env`.
 
 ## Storage Backends
 

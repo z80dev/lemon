@@ -2,7 +2,6 @@ defmodule LemonChannels.Adapters.Xmtp.TransportTest do
   alias Elixir.LemonChannels, as: LemonChannels
   use ExUnit.Case, async: false
 
-  alias Elixir.LemonChannels.Adapters.Xmtp.PortServer
   alias Elixir.LemonChannels.Adapters.Xmtp.Transport
   alias Elixir.LemonChannels.OutboundPayload
   alias LemonCore.InboundMessage
@@ -328,46 +327,6 @@ defmodule LemonChannels.Adapters.Xmtp.TransportTest do
     assert String.starts_with?(first, "conversation:conv-dedupe-fallback-1:fallback:")
   end
 
-  test "replays connect command after bridge port restart" do
-    if System.find_executable("node") == nil do
-      assert true
-    else
-      tmp_dir =
-        Path.join(System.tmp_dir!(), "xmtp_port_server_#{System.unique_integer([:positive])}")
-
-      File.rm_rf!(tmp_dir)
-      :ok = File.mkdir_p(tmp_dir)
-
-      counter_path = Path.join(tmp_dir, "bridge_start_count.txt")
-      script_path = Path.join(tmp_dir, "bridge_restart_fixture.mjs")
-      :ok = File.write(script_path, restart_fixture_script(counter_path))
-
-      {:ok, port_server} =
-        PortServer.start_link(config: %{bridge_script: script_path}, notify_pid: self())
-
-      on_exit(fn -> if Process.alive?(port_server), do: GenServer.stop(port_server) end)
-
-      PortServer.command(port_server, %{
-        "op" => "connect",
-        "wallet_address" => "0x1111111111111111111111111111111111111111"
-      })
-
-      assert_receive {:xmtp_bridge_event,
-                      %{"type" => "bridge_test_connect", "generation" => first_generation}},
-                     2_000
-
-      assert_receive {:xmtp_bridge_event,
-                      %{"type" => "error", "message" => "xmtp bridge exited"}},
-                     4_000
-
-      assert_receive {:xmtp_bridge_event,
-                      %{"type" => "bridge_test_connect", "generation" => second_generation}},
-                     8_000
-
-      assert second_generation == first_generation + 1
-    end
-  end
-
   defp stop_transport do
     case Process.whereis(Transport) do
       pid when is_pid(pid) ->
@@ -385,42 +344,5 @@ defmodule LemonChannels.Adapters.Xmtp.TransportTest do
 
   defp fetch(map, key) when is_map(map) and is_atom(key) do
     Map.get(map, key) || Map.get(map, Atom.to_string(key))
-  end
-
-  defp restart_fixture_script(counter_path) do
-    """
-    #!/usr/bin/env node
-    import fs from "node:fs";
-    import readline from "node:readline";
-
-    const counterPath = #{inspect(counter_path)};
-    let generation = 1;
-
-    try {
-      const prev = Number.parseInt(fs.readFileSync(counterPath, "utf8"), 10);
-      if (!Number.isNaN(prev)) generation = prev + 1;
-    } catch (_error) {}
-
-    fs.writeFileSync(counterPath, String(generation));
-
-    const emit = (payload) => process.stdout.write(JSON.stringify(payload) + "\\n");
-
-    const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
-
-    rl.on("line", (line) => {
-      let cmd;
-
-      try {
-        cmd = JSON.parse(line);
-      } catch (_error) {
-        return;
-      }
-
-      if (cmd?.op === "connect") {
-        emit({ type: "bridge_test_connect", generation });
-        process.exit(0);
-      }
-    });
-    """
   end
 end

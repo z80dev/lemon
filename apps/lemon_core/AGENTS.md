@@ -28,8 +28,10 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.ConfigReloader.Watcher` | FileSystem watcher that targets `config.toml`/`.env` paths (file-first, parent-dir fallback) and triggers reload only for those files |
 | `LemonCore.Secrets` | Encrypted secrets API (get/set/list/delete) |
 | `LemonCore.Secrets.Crypto` | AES-256-GCM encryption with HKDF key derivation |
+| `LemonCore.Secrets.EnvCatalog` | Ordered environment-secret catalog shared by packaged and Mix check/import commands |
 | `LemonCore.Secrets.Keychain` | macOS keychain integration for master key storage |
 | `LemonCore.Secrets.MasterKey` | Master key resolution (keychain first, then env var) |
+| `LemonCore.OAuth.LocalCallbackListener` | Caller-owned one-shot localhost OAuth callback listener; monitors its listener manager so early failure returns immediately instead of consuming the authorization timeout |
 | `LemonCore.Store` | Storage GenServer with pluggable backends, `put_new/3` claims, serialized `take/2`, and exact-value `compare_and_swap/4` |
 | `LemonCore.Store.ReadCache` | ETS read cache for hot domains (`:chat`, `:runs`, `:progress`, `:sessions_index`, plus tables collaborators add with `register_cached_table/1`) |
 | `LemonCore.Store.EtsBackend` | In-memory ETS (ephemeral, default) with `:ets.insert_new/2` claims |
@@ -249,6 +251,12 @@ exists? = LemonCore.Secrets.exists?("api_key")
 ### Env Fallback
 
 Secrets automatically fallback to environment variables (same name). Use `env_fallback: false` to disable.
+
+`LemonCore.Secrets.EnvCatalog` owns the ordered set of environment-backed
+credentials shown by `secrets check` and considered by `secrets import-env` in
+both packaged releases and Mix tasks. Add operator-facing default import/check
+names there. Do not derive this list from `LemonCore.Env`: that registry owns
+runtime declarations and varies with the release profile.
 
 ## Storage Backends
 
@@ -510,6 +518,10 @@ mix lemon.secrets.set API_KEY abc123 --provider manual --expires-at 173568960000
 
 # Delete a secret
 mix lemon.secrets.delete API_KEY
+
+# Check/import the shared environment-secret catalog
+mix lemon.secrets.check
+mix lemon.secrets.import_env --dry-run
 ```
 
 ### Onboarding Tasks
@@ -518,6 +530,14 @@ Onboarding, setup, and Hermes migration tasks live in `apps/lemon_cli`; see
 `apps/lemon_cli/README.md`.
 
 ### Quality Tasks
+
+The architecture check parses the complete `deps/0` body in every umbrella
+`mix.exs`, including dependency lists wrapped by `Lemon.HexPackage.deps/1`.
+The direct-dependency policy is exact: both an undeclared edge and a policy
+permission left behind after an edge is removed fail the check. Cross-app source
+references that intentionally avoid a direct Mix dependency live in the
+separate reference-only exception map and are shown separately in the generated
+architecture table.
 
 ```bash
 # Run all quality checks
@@ -533,6 +553,14 @@ mix lemon.quality --validate-config
 # Specific root directory
 mix lemon.quality --root /path/to/repo
 ```
+
+The docs catalog uses a data-only `%{defaults: ..., entries: ...}` structure.
+Keep shared ownership and age policy in `defaults`; entry overrides should only
+describe exceptions. `DocsCatalog` deliberately decodes a bounded AST instead
+of evaluating the file. `DocsCheck` treats the Git index (`git ls-files`) as
+the source of truth for repository coverage and uses a filesystem fallback only
+for synthetic non-Git test roots. Catalog `last_reviewed` is the canonical
+freshness date; do not introduce a second document-footer review date.
 
 ### Store Tasks
 

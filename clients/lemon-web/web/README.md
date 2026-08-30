@@ -55,6 +55,13 @@ Session list behavior is opinionated by default:
 - `System: OFF` hides cron/heartbeat/delegate noise sessions unless explicitly enabled.
 - Session history preserves richer metadata from directory/snapshot sources even when `sessions.list` returns minimal records.
 
+Monitoring state is intentionally split by responsibility under `src/store/`:
+`monitoringReducers.ts` owns snapshots, event routing, and the public reducer
+surface; `monitoringListReducers.ts` normalizes list/status responses; and
+`monitoringReducerHelpers.ts` contains record construction and merge helpers.
+Keep protocol-shape normalization out of the Zustand store wrapper so reducer
+behavior remains independently testable.
+
 ## Local development
 
 ```bash
@@ -63,8 +70,26 @@ npm install
 npm run dev
 ```
 
+The root `predev` hook builds `shared/dist` before the server and workspace
+watchers start, so local development is deterministic from a clean checkout.
+
+## Start the server
+
+```bash
+npm start
+```
+
+The root `prestart` hook rebuilds the ignored shared and server entrypoints
+before launching `server/dist/index.js`; generated `dist` files do not need to
+be present in Git.
+
 ## Build
 
 ```bash
+npm run typecheck
 npm run build
 ```
+
+Type checking first generates the private shared workspace declarations. The
+build generates ignored `shared/dist` and `server/dist` directories before
+building the Vite application.
