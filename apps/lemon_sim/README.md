@@ -98,6 +98,10 @@ A single `mix lemon.sim.replay <scenario> <log>` task renders JSONL transcripts
 for every scenario. For example, a Werewolf transcript produced by
 `mix lemon.sim.werewolf --models ... --transcript-path path.jsonl`:
 
+Scenario log modules keep their domain-specific step and terminal metadata,
+while `LemonSim.Examples.GameLog` provides the shared file lifecycle, JSONL
+envelopes, event normalization, timestamps, and JSON-safe encoding.
+
 ```bash
 mix lemon.sim.replay werewolf apps/lemon_sim/priv/game_logs/werewolf_4model.jsonl
 mix lemon.sim.replay skirmish priv/game_logs/abc123.jsonl --output replay.mp4 --fps 4
