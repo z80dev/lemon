@@ -329,6 +329,13 @@ which routes to the control-plane `exec.approval.resolve` method. Use
 `/approval` or `/approval list` to refresh the current pending approval
 snapshot from `exec.approvals.get`.
 
+The source launcher creates a high-entropy process-scoped operator token when
+it boots a new local runtime, shares it only through the daemon and TUI process
+environments, and stops that owned runtime when the TUI exits. For a persistent
+runtime, set the same `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` when starting the
+runtime and launching the TUI. An existing runtime's secret cannot be safely
+discovered, so tokenless attachment fails by default.
+
 ### Web client (`lemon-web`)
 
 ```bash
@@ -337,6 +344,13 @@ npm start
 ```
 
 Connects to `http://localhost:4080` (the web Phoenix endpoint).
+
+The separate browser monitoring client has no delegated browser-session login
+exchange today. It therefore does not receive the server's shared operator
+token and cannot connect to an authenticated control plane. Do not put that
+secret in a `VITE_*` variable or URL, and do not enable tokenless loopback
+behind a reverse proxy. Authenticated browser monitoring requires a future
+short-lived, scoped server-issued browser credential flow.
 
 
 ---

@@ -270,7 +270,7 @@ npm run dev      # Watch mode
 ./bin/lemon send --to discord:#ops --attach report.txt --attach trace.log "done"  # Upload script artifacts
 ./bin/lemon send --dry-run --to discord:#ops --attach report.txt "done"  # Validate without delivery
 ./bin/lemon node join --name worker-1 --controller ws://controller:4040/ws --pair --cwd /path/to/project
-./bin/lemon-tui    # Dev TUI; runs clients/tui/src/main.ts and auto-starts runtime
+./bin/lemon-tui    # Dev TUI; securely token-pairs with a launcher-owned runtime
 ```
 
 The named-node command runs a destination-side worker capable of starting

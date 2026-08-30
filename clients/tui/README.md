@@ -10,10 +10,19 @@ Installed users get this client as a compiled per-platform binary
 (`~/.lemon/versions/<v>/tui/bin/lemon-tui`); plain `lemon` in an interactive
 terminal launches it, auto-starting the daemon first. See `docs/install.md`.
 
-When the daemon sets `LEMON_CONTROL_PLANE_OPERATOR_TOKEN`, launch the TUI with
-the same environment value. The client sends it only inside the WebSocket
-`connect.auth` envelope and does not include it in its debug frame summaries.
-`LEMON_WS_TOKEN` remains a legacy client-side alias.
+The source launcher `../../bin/lemon-tui` securely bootstraps a fresh local
+runtime: when no runtime is listening and no token is configured, it generates
+a high-entropy process-scoped `LEMON_CONTROL_PLANE_OPERATOR_TOKEN`, passes the
+same value to the daemon and TUI through their environment, and stops that
+launcher-owned daemon when the TUI exits. The token is not written to disk,
+placed in command arguments, or printed.
+
+To attach to a persistent or already-running daemon, set the same
+`LEMON_CONTROL_PLANE_OPERATOR_TOKEN` in both launch environments. The launcher
+cannot recover an existing process's secret and fails closed when it is absent.
+The client sends the token only inside the WebSocket `connect.auth` envelope
+and does not include it in debug frame summaries. `LEMON_WS_TOKEN` remains a
+legacy client-side alias; it does not configure the daemon.
 
 ## Features
 
