@@ -53,6 +53,9 @@ The main coding agent implementation for the Lemon AI assistant platform. This a
 | `CodingAgent.SessionSupervisor` | DynamicSupervisor for session processes |
 | `CodingAgent.SessionRegistry` | Registry for session lookup by ID |
 | `CodingAgent.SessionRootSupervisor` | Top-level supervisor for all session infra |
+| `CodingAgent.ExecutionNode.Worker` | Authenticated named-node worker that executes targeted `coding_agent.run` requests through the native executor |
+| `CodingAgent.ExecutionNode.Socket` | Reconnecting control-plane WebSocket client with authenticated handshakes and redacted status |
+| `CodingAgent.ExecutionNode.TokenStore` | Mode-0600, node-name-keyed local session-token storage |
 
 Session lifecycle calls to `save/1` and auto-compaction state reads are treated as best-effort.
 When downstream store or agent processes time out, callers should log and continue instead of crashing the session/runner process.
@@ -694,6 +697,20 @@ The `Task` and `Agent` tools can use `Subagents` to prepend a role prompt before
 With the default `:steer_backlog` config, live streaming parent sessions now attempt in-session steer delivery before router backlog fallback so async task/agent completions can converge back into the active turn.
 
 ## Common Tasks
+
+### Joining a Named Execution Node
+
+Run a native worker against a Lemon controller from the source checkout:
+
+```bash
+./bin/lemon node join --name worker-name --controller ws://controller:4040/ws --pair --cwd /path/to/project
+```
+
+Subsequent starts reuse the private node-name-keyed token. Prefer
+`LEMON_NODE_OPERATOR_TOKEN` and `LEMON_NODE_TOKEN` to the corresponding CLI
+flags so credentials do not enter shell history. The worker accepts only the
+versioned `coding_agent.run` protocol, strips `meta.node` before local execution,
+validates the selected local working directory, and handles targeted cancellation.
 
 ### Running Tests
 
