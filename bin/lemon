@@ -434,11 +434,15 @@ if [[ -z "${LEMON_SECRETS_MASTER_KEY:-}" ]] && command -v security >/dev/null 2>
       return
     fi
 
-    for existing in "${KEYCHAIN_CANDIDATES[@]}"; do
-      if [[ "$existing" == "$candidate" ]]; then
-        return
-      fi
-    done
+    # macOS ships Bash 3.2, where expanding an empty array under `set -u`
+    # raises an unbound-variable error. Guard the expansion until populated.
+    if (( ${#KEYCHAIN_CANDIDATES[@]} > 0 )); then
+      for existing in "${KEYCHAIN_CANDIDATES[@]}"; do
+        if [[ "$existing" == "$candidate" ]]; then
+          return
+        fi
+      done
+    fi
 
     KEYCHAIN_CANDIDATES+=("$candidate")
   }
@@ -451,15 +455,17 @@ if [[ -z "${LEMON_SECRETS_MASTER_KEY:-}" ]] && command -v security >/dev/null 2>
 
   append_keychain_candidate "$HOME/Library/Keychains/login.keychain-db"
 
-  for keychain_path in "${KEYCHAIN_CANDIDATES[@]}"; do
-    if MASTER_KEY_FROM_KEYCHAIN="$(security find-generic-password -s "Lemon Secrets" -a default -w "$keychain_path" 2>/dev/null)"; then
-      if [[ -n "$MASTER_KEY_FROM_KEYCHAIN" ]]; then
-        export LEMON_SECRETS_MASTER_KEY="$MASTER_KEY_FROM_KEYCHAIN"
-        info "Loaded secrets master key from keychain."
-        break
+  if (( ${#KEYCHAIN_CANDIDATES[@]} > 0 )); then
+    for keychain_path in "${KEYCHAIN_CANDIDATES[@]}"; do
+      if MASTER_KEY_FROM_KEYCHAIN="$(security find-generic-password -s "Lemon Secrets" -a default -w "$keychain_path" 2>/dev/null)"; then
+        if [[ -n "$MASTER_KEY_FROM_KEYCHAIN" ]]; then
+          export LEMON_SECRETS_MASTER_KEY="$MASTER_KEY_FROM_KEYCHAIN"
+          info "Loaded secrets master key from keychain."
+          break
+        fi
       fi
-    fi
-  done
+    done
+  fi
 fi
 
 cd "$LEMON_ROOT"
