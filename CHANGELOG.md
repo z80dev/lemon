@@ -51,7 +51,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   reserved for explicit standalone mode.
 - Kanban board stop now hard-cancels owned workers and reclaims their exact
   leases immediately; lease-guarded completion rejects late results, and board
-  restart reconciles unexpired leases from the prior dispatcher. Goal-loop hard
+  restart reconciles unexpired leases from the prior dispatcher. Board-scoped
+  mutation locks also prevent concurrent dispatchers from leasing the same task
+  or racing a stale terminal write against a replacement lease. Goal-loop hard
   stop now aborts the authoritative router run once and prevents another tick,
   while graceful stop lets the bounded loop finish and API deadlines enclose
   configured judge/continuation waits.
@@ -66,7 +68,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   creation and terminal transitions are serialized, resolver authorization is
   exact to both session and agent, and terminal lifecycle events emit once.
 - Multi-task `wait_any` joins now suppress automatic followup only for the
-  completed winner; failed and aborted joins release transient suppression.
+  completed winner; failed, aborted, crashed, and restarted joins release
+  transient suppression.
   Lane queues discard abandoned callers and contain per-job admission failure,
   while delegated watcher timeouts preserve still-running router authority and
   reconcile late completion from a `tracking_lost` state.

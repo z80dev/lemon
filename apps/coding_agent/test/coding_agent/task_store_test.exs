@@ -309,6 +309,34 @@ defmodule CodingAgent.TaskStoreTest do
       assert :ok = TaskStore.fail(task_id, :late_failure)
       assert {:ok, ^terminal_record, _events} = TaskStore.get(task_id)
     end
+
+    test "join reservations are released when their owner crashes" do
+      task_id = TaskStore.new_task(%{description: "Interrupted join"})
+      parent = self()
+
+      owner =
+        spawn(fn ->
+          join_token = make_ref()
+          :ok = TaskStore.begin_auto_followup_join([task_id], join_token)
+          send(parent, {:reserved, self()})
+
+          receive do
+            :finish -> TaskStore.finish_auto_followup_join([task_id], [], join_token)
+          end
+        end)
+
+      assert_receive {:reserved, ^owner}
+      assert TaskStore.auto_followup_suppressed?(task_id)
+
+      Process.exit(owner, :kill)
+
+      CodingAgent.AsyncHelpers.assert_eventually(fn ->
+        not TaskStore.auto_followup_suppressed?(task_id)
+      end)
+
+      assert {:ok, record, _events} = TaskStore.get(task_id)
+      assert Map.get(record, :auto_followup_join_tokens, []) == []
+    end
   end
 
   describe "TaskStoreServer" do

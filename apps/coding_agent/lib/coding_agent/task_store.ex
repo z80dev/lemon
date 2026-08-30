@@ -116,38 +116,14 @@ defmodule CodingAgent.TaskStore do
   @doc "Reserve followup delivery while an explicit multi-task join chooses its result."
   @spec begin_auto_followup_join([task_id()], reference()) :: :ok
   def begin_auto_followup_join(task_ids, join_token) when is_list(task_ids) do
-    Enum.each(task_ids, fn task_id ->
-      TaskStoreServer.update_record(task_id, fn record ->
-        tokens = Map.get(record, :auto_followup_join_tokens, [])
-        Map.put(record, :auto_followup_join_tokens, Enum.uniq([join_token | tokens]))
-      end)
-    end)
-
-    :ok
+    TaskStoreServer.begin_auto_followup_join(task_ids, join_token)
   end
 
   @doc "Resolve a join reservation, permanently suppressing only selected tasks."
   @spec finish_auto_followup_join([task_id()], [task_id()], reference()) :: :ok
   def finish_auto_followup_join(task_ids, suppressed_task_ids, join_token)
       when is_list(task_ids) and is_list(suppressed_task_ids) do
-    suppressed = MapSet.new(suppressed_task_ids)
-
-    Enum.each(task_ids, fn task_id ->
-      TaskStoreServer.update_record(task_id, fn record ->
-        record =
-          Map.update(record, :auto_followup_join_tokens, [], fn tokens ->
-            Enum.reject(tokens, &(&1 == join_token))
-          end)
-
-        if MapSet.member?(suppressed, task_id) do
-          Map.put(record, :auto_followup_suppressed_at, System.system_time(:second))
-        else
-          record
-        end
-      end)
-    end)
-
-    :ok
+    TaskStoreServer.finish_auto_followup_join(task_ids, suppressed_task_ids, join_token)
   end
 
   @doc """

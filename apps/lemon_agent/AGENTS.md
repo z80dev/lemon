@@ -259,6 +259,9 @@ end
     `reclaim_task_lease/3`. A stale lease returns `{:error, :stale_lease}` and
     must not mutate a newer worker's task. Dispatcher restart paths use
     `reclaim_worker_leases/3` before leasing new work for the same worker ID.
+    Kanban task read-modify-write operations share a board-scoped global lock,
+    so concurrent dispatchers cannot both claim one available task and a lease
+    check cannot race a newer lease write.
 
 12. **Tool invocation does not confer trust.** Tool authors must label data-bearing results with `ToolResultTrust`; downstream coding-agent transforms fence `:untrusted` text before model calls while leaving persisted/operator-facing output unchanged.
 

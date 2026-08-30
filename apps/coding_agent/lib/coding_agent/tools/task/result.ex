@@ -49,33 +49,40 @@ defmodule CodingAgent.Tools.Task.Result do
          {:ok, mode} <- validate_join_mode(params),
          {:ok, run_ids} <- resolve_run_ids(task_ids) do
       join_token = make_ref()
-      TaskStore.begin_auto_followup_join(task_ids, join_token)
 
-      case JoinAwait.await(run_ids, task_ids, mode, signal) do
-        {:ok, join_result} ->
-          suppressed = joined_completion_task_ids(task_ids, join_result)
-          TaskStore.finish_auto_followup_join(task_ids, suppressed, join_token)
-          build_join_result(task_ids, join_result)
+      try do
+        TaskStore.begin_auto_followup_join(task_ids, join_token)
 
-        {:parent_question, request} ->
-          TaskStore.finish_auto_followup_join(task_ids, [], join_token)
-          build_parent_question_result(task_ids, mode, request)
+        case JoinAwait.await(run_ids, task_ids, mode, signal) do
+          {:ok, join_result} ->
+            suppressed = joined_completion_task_ids(task_ids, join_result)
+            TaskStore.finish_auto_followup_join(task_ids, suppressed, join_token)
+            build_join_result(task_ids, join_result)
 
-        {:error, :aborted} ->
-          TaskStore.finish_auto_followup_join(task_ids, [], join_token)
-          {:error, "Operation aborted"}
+          {:parent_question, request} ->
+            build_parent_question_result(task_ids, mode, request)
 
-        {:error, {:unknown_run, run_id}} ->
-          TaskStore.finish_auto_followup_join(task_ids, [], join_token)
-          {:error, "Unknown run_id: #{run_id}"}
+          {:error, :aborted} ->
+            {:error, "Operation aborted"}
 
-        {:error, reason} ->
-          TaskStore.finish_auto_followup_join(task_ids, [], join_token)
-          {:error, reason}
+          {:error, {:unknown_run, run_id}} ->
+            {:error, "Unknown run_id: #{run_id}"}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+      after
+        release_join_reservation(task_ids, join_token)
       end
     else
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp release_join_reservation(task_ids, join_token) do
+    TaskStore.finish_auto_followup_join(task_ids, [], join_token)
+  catch
+    :exit, _reason -> :ok
   end
 
   @spec build_async_result(String.t(), String.t(), String.t() | nil) :: AgentToolResult.t()

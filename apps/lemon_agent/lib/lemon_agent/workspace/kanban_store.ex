@@ -156,24 +156,26 @@ defmodule LemonAgent.Workspace.KanbanStore do
 
   @spec update_task(binary(), keyword() | map(), keyword()) :: {:ok, map()} | {:error, term()}
   def update_task(task_id, attrs, opts \\ []) when is_binary(task_id) do
-    case get_task(task_id) do
-      %{} = task when map_size(task) == 0 ->
-        {:error, :not_found}
+    with_task_board_lock(task_id, fn ->
+      case get_task(task_id) do
+        %{} = task when map_size(task) == 0 ->
+          {:error, :not_found}
 
-      task ->
-        with {:ok, board} <- fetch_board(task.board_id),
-             {:ok, updated} <- apply_task_attrs(task, board, attrs) do
-          updated =
-            updated
-            |> Map.put(:updated_at_ms, now_ms())
-            |> Map.put(:completed_at_ms, completed_at(updated.status, updated.completed_at_ms))
+        task ->
+          with {:ok, board} <- fetch_board(task.board_id),
+               {:ok, updated} <- apply_task_attrs(task, board, attrs) do
+            updated =
+              updated
+              |> Map.put(:updated_at_ms, now_ms())
+              |> Map.put(:completed_at_ms, completed_at(updated.status, updated.completed_at_ms))
 
-          with :ok <- Store.put(@tasks_table, task.id, updated) do
-            emit(:kanban_task_updated, board, updated, opts)
-            {:ok, updated}
+            with :ok <- Store.put(@tasks_table, task.id, updated) do
+              emit(:kanban_task_updated, board, updated, opts)
+              {:ok, updated}
+            end
           end
-        end
-    end
+      end
+    end)
   end
 
   @spec add_comment(binary(), binary(), keyword()) :: {:ok, map()} | {:error, term()}
@@ -185,156 +187,127 @@ defmodule LemonAgent.Workspace.KanbanStore do
         {:error, :empty_comment}
 
       true ->
-        case get_task(task_id) do
-          %{} = task when map_size(task) == 0 ->
-            {:error, :not_found}
+        with_task_board_lock(task_id, fn ->
+          case get_task(task_id) do
+            %{} = task when map_size(task) == 0 ->
+              {:error, :not_found}
 
-          task ->
-            with {:ok, board} <- fetch_board(task.board_id) do
-              now = now_ms()
+            task ->
+              with {:ok, board} <- fetch_board(task.board_id) do
+                now = now_ms()
 
-              comment = %{
-                "id" => comment_id(),
-                "author" => string_opt(opts[:author]),
-                "body" => body,
-                "createdAtMs" => now
-              }
+                comment = %{
+                  "id" => comment_id(),
+                  "author" => string_opt(opts[:author]),
+                  "body" => body,
+                  "createdAtMs" => now
+                }
 
-              updated =
-                task
-                |> Map.put(:comments, task.comments ++ [comment])
-                |> Map.put(:updated_at_ms, now)
+                updated =
+                  task
+                  |> Map.put(:comments, task.comments ++ [comment])
+                  |> Map.put(:updated_at_ms, now)
 
-              with :ok <- Store.put(@tasks_table, task.id, updated) do
-                emit(:kanban_task_commented, board, updated, opts)
-                {:ok, updated}
+                with :ok <- Store.put(@tasks_table, task.id, updated) do
+                  emit(:kanban_task_commented, board, updated, opts)
+                  {:ok, updated}
+                end
               end
-            end
-        end
+          end
+        end)
     end
   end
 
   @spec lease_task(binary(), binary(), keyword()) :: {:ok, map()} | {:error, term()}
   def lease_task(board_id, worker_id, opts \\ [])
       when is_binary(board_id) and is_binary(worker_id) do
-    with {:ok, board} <- fetch_board(board_id) do
-      from_status = string_opt(opts[:from_status]) || List.first(board.columns) || "todo"
-      to_status = lease_status(board.columns)
-      lease_ms = positive_limit(opts[:lease_ms], 300_000)
+    with_board_lock(board_id, fn ->
+      with {:ok, board} <- fetch_board(board_id) do
+        from_status = string_opt(opts[:from_status]) || List.first(board.columns) || "todo"
+        to_status = lease_status(board.columns)
+        lease_ms = positive_limit(opts[:lease_ms], 300_000)
 
-      case next_available_task(board, from_status) do
-        nil ->
-          {:error, :no_available_task}
+        case next_available_task(board, from_status) do
+          nil ->
+            {:error, :no_available_task}
 
-        task ->
-          now = now_ms()
+          task ->
+            now = now_ms()
 
-          lease = %{
-            "id" => lease_id(),
-            "workerId" => worker_id,
-            "leasedAtMs" => now,
-            "expiresAtMs" => now + lease_ms,
-            "attempt" => lease_attempt(task) + 1
-          }
+            lease = %{
+              "id" => lease_id(),
+              "workerId" => worker_id,
+              "leasedAtMs" => now,
+              "expiresAtMs" => now + lease_ms,
+              "attempt" => lease_attempt(task) + 1
+            }
 
-          updated =
-            task
-            |> Map.put(:status, to_status)
-            |> Map.put(:assignee, task.assignee || worker_id)
-            |> Map.put(:worker_profile, string_opt(opts[:worker_profile]) || task.worker_profile)
-            |> Map.put(:updated_at_ms, now)
-            |> Map.put(:meta, task.meta |> normalize_meta() |> Map.put("kanbanLease", lease))
+            updated =
+              task
+              |> Map.put(:status, to_status)
+              |> Map.put(:assignee, task.assignee || worker_id)
+              |> Map.put(
+                :worker_profile,
+                string_opt(opts[:worker_profile]) || task.worker_profile
+              )
+              |> Map.put(:updated_at_ms, now)
+              |> Map.put(:meta, task.meta |> normalize_meta() |> Map.put("kanbanLease", lease))
 
-          with :ok <- Store.put(@tasks_table, task.id, updated) do
-            emit(:kanban_task_leased, board, updated, opts)
-            {:ok, updated}
-          end
+            with :ok <- Store.put(@tasks_table, task.id, updated) do
+              emit(:kanban_task_leased, board, updated, opts)
+              {:ok, updated}
+            end
+        end
       end
-    end
+    end)
   end
 
   @spec complete_task(binary(), keyword()) :: {:ok, map()} | {:error, term()}
   def complete_task(task_id, opts \\ []) when is_binary(task_id) do
-    case get_task(task_id) do
-      %{} = task when map_size(task) == 0 ->
-        {:error, :not_found}
+    with_task_board_lock(task_id, fn ->
+      case get_task(task_id) do
+        %{} = task when map_size(task) == 0 ->
+          {:error, :not_found}
 
-      task ->
-        with {:ok, board} <- fetch_board(task.board_id) do
-          now = now_ms()
-
-          updated =
-            task
-            |> Map.put(:status, "done")
-            |> Map.put(:run_id, string_opt(opts[:run_id]) || task.run_id)
-            |> Map.put(:updated_at_ms, now)
-            |> Map.put(:completed_at_ms, now)
-            |> Map.put(:meta, clear_lease(task.meta))
-
-          with :ok <- Store.put(@tasks_table, task.id, updated) do
-            emit(:kanban_task_completed, board, updated, opts)
-            {:ok, updated}
+        task ->
+          with {:ok, board} <- fetch_board(task.board_id) do
+            complete_task_unlocked(task, board, opts)
           end
-        end
-    end
+      end
+    end)
   end
 
   @spec fail_task(binary(), binary(), keyword()) :: {:ok, map()} | {:error, term()}
   def fail_task(task_id, reason, opts \\ []) when is_binary(task_id) and is_binary(reason) do
-    case get_task(task_id) do
-      %{} = task when map_size(task) == 0 ->
-        {:error, :not_found}
+    with_task_board_lock(task_id, fn ->
+      case get_task(task_id) do
+        %{} = task when map_size(task) == 0 ->
+          {:error, :not_found}
 
-      task ->
-        with {:ok, board} <- fetch_board(task.board_id) do
-          now = now_ms()
-          status = if "blocked" in board.columns, do: "blocked", else: List.first(board.columns)
-
-          failure = %{
-            "reason" => String.trim(reason),
-            "workerId" => string_opt(opts[:worker_id]),
-            "atMs" => now
-          }
-
-          updated =
-            task
-            |> Map.put(:status, status || "todo")
-            |> Map.put(:updated_at_ms, now)
-            |> Map.put(:completed_at_ms, nil)
-            |> Map.put(:meta, task.meta |> clear_lease() |> Map.put("lastFailure", failure))
-
-          with :ok <- Store.put(@tasks_table, task.id, updated) do
-            emit(:kanban_task_failed, board, updated, opts)
-            {:ok, updated}
+        task ->
+          with {:ok, board} <- fetch_board(task.board_id) do
+            fail_task_unlocked(task, board, reason, opts)
           end
-        end
-    end
+      end
+    end)
   end
 
   @spec reclaim_expired_leases(binary(), keyword()) :: {:ok, [map()]} | {:error, term()}
   def reclaim_expired_leases(board_id, opts \\ []) when is_binary(board_id) do
-    with {:ok, board} <- fetch_board(board_id) do
-      now = now_ms()
-      target_status = string_opt(opts[:to_status]) || List.first(board.columns) || "todo"
+    with_board_lock(board_id, fn ->
+      with {:ok, board} <- fetch_board(board_id) do
+        now = now_ms()
+        target_status = string_opt(opts[:to_status]) || List.first(board.columns) || "todo"
 
-      reclaimed =
-        board_id
-        |> list_tasks(limit: 10_000)
-        |> Enum.filter(&expired_lease?(&1, now))
-        |> Enum.map(fn task ->
-          updated =
-            task
-            |> Map.put(:status, target_status)
-            |> Map.put(:updated_at_ms, now)
-            |> Map.put(:meta, clear_lease(task.meta))
+        reclaimed =
+          board_id
+          |> list_tasks(limit: 10_000)
+          |> Enum.filter(&expired_lease?(&1, now))
+          |> Enum.map(fn task -> reclaim_task_unlocked(task, board, target_status, opts) end)
 
-          :ok = Store.put(@tasks_table, task.id, updated)
-          emit(:kanban_task_reclaimed, board, updated, opts)
-          updated
-        end)
-
-      {:ok, reclaimed}
-    end
+        {:ok, reclaimed}
+      end
+    end)
   end
 
   @doc """
@@ -346,21 +319,12 @@ defmodule LemonAgent.Workspace.KanbanStore do
   @spec reclaim_task_lease(binary(), binary(), keyword()) :: {:ok, map()} | {:error, term()}
   def reclaim_task_lease(task_id, lease_id, opts \\ [])
       when is_binary(task_id) and is_binary(lease_id) do
-    with {:ok, task, board} <- fetch_task_with_lease(task_id, lease_id) do
-      now = now_ms()
-      target_status = string_opt(opts[:to_status]) || List.first(board.columns) || "todo"
-
-      updated =
-        task
-        |> Map.put(:status, target_status)
-        |> Map.put(:updated_at_ms, now)
-        |> Map.put(:meta, clear_lease(task.meta))
-
-      with :ok <- Store.put(@tasks_table, task.id, updated) do
-        emit(:kanban_task_reclaimed, board, updated, opts)
-        {:ok, updated}
+    with_task_board_lock(task_id, fn ->
+      with {:ok, task, board} <- fetch_task_with_lease(task_id, lease_id) do
+        target_status = string_opt(opts[:to_status]) || List.first(board.columns) || "todo"
+        {:ok, reclaim_task_unlocked(task, board, target_status, opts)}
       end
-    end
+    end)
   end
 
   @doc """
@@ -372,21 +336,19 @@ defmodule LemonAgent.Workspace.KanbanStore do
   @spec reclaim_worker_leases(binary(), binary(), keyword()) :: {:ok, [map()]} | {:error, term()}
   def reclaim_worker_leases(board_id, worker_id, opts \\ [])
       when is_binary(board_id) and is_binary(worker_id) do
-    with {:ok, _board} <- fetch_board(board_id) do
-      reclaimed =
-        board_id
-        |> list_tasks(limit: 10_000)
-        |> Enum.filter(&(lease_worker_id(active_lease(&1)) == worker_id))
-        |> Enum.flat_map(fn task ->
-          case reclaim_task_lease(task.id, lease_id(active_lease(task)), opts) do
-            {:ok, reclaimed} -> [reclaimed]
-            {:error, :stale_lease} -> []
-            {:error, _reason} -> []
-          end
-        end)
+    with_board_lock(board_id, fn ->
+      with {:ok, board} <- fetch_board(board_id) do
+        target_status = string_opt(opts[:to_status]) || List.first(board.columns) || "todo"
 
-      {:ok, reclaimed}
-    end
+        reclaimed =
+          board_id
+          |> list_tasks(limit: 10_000)
+          |> Enum.filter(&(lease_worker_id(active_lease(&1)) == worker_id))
+          |> Enum.map(&reclaim_task_unlocked(&1, board, target_status, opts))
+
+        {:ok, reclaimed}
+      end
+    end)
   end
 
   @doc """
@@ -394,9 +356,11 @@ defmodule LemonAgent.Workspace.KanbanStore do
   """
   @spec complete_leased_task(binary(), binary(), keyword()) :: {:ok, map()} | {:error, term()}
   def complete_leased_task(task_id, lease_id, opts \\ []) do
-    with {:ok, _task, _board} <- fetch_task_with_lease(task_id, lease_id) do
-      complete_task(task_id, opts)
-    end
+    with_task_board_lock(task_id, fn ->
+      with {:ok, task, board} <- fetch_task_with_lease(task_id, lease_id) do
+        complete_task_unlocked(task, board, opts)
+      end
+    end)
   end
 
   @doc """
@@ -405,8 +369,79 @@ defmodule LemonAgent.Workspace.KanbanStore do
   @spec fail_leased_task(binary(), binary(), binary(), keyword()) ::
           {:ok, map()} | {:error, term()}
   def fail_leased_task(task_id, lease_id, reason, opts \\ []) do
-    with {:ok, _task, _board} <- fetch_task_with_lease(task_id, lease_id) do
-      fail_task(task_id, reason, opts)
+    with_task_board_lock(task_id, fn ->
+      with {:ok, task, board} <- fetch_task_with_lease(task_id, lease_id) do
+        fail_task_unlocked(task, board, reason, opts)
+      end
+    end)
+  end
+
+  defp complete_task_unlocked(task, board, opts) do
+    now = now_ms()
+
+    updated =
+      task
+      |> Map.put(:status, "done")
+      |> Map.put(:run_id, string_opt(opts[:run_id]) || task.run_id)
+      |> Map.put(:updated_at_ms, now)
+      |> Map.put(:completed_at_ms, now)
+      |> Map.put(:meta, clear_lease(task.meta))
+
+    with :ok <- Store.put(@tasks_table, task.id, updated) do
+      emit(:kanban_task_completed, board, updated, opts)
+      {:ok, updated}
+    end
+  end
+
+  defp fail_task_unlocked(task, board, reason, opts) do
+    now = now_ms()
+    status = if "blocked" in board.columns, do: "blocked", else: List.first(board.columns)
+
+    failure = %{
+      "reason" => String.trim(reason),
+      "workerId" => string_opt(opts[:worker_id]),
+      "atMs" => now
+    }
+
+    updated =
+      task
+      |> Map.put(:status, status || "todo")
+      |> Map.put(:updated_at_ms, now)
+      |> Map.put(:completed_at_ms, nil)
+      |> Map.put(:meta, task.meta |> clear_lease() |> Map.put("lastFailure", failure))
+
+    with :ok <- Store.put(@tasks_table, task.id, updated) do
+      emit(:kanban_task_failed, board, updated, opts)
+      {:ok, updated}
+    end
+  end
+
+  defp reclaim_task_unlocked(task, board, target_status, opts) do
+    updated =
+      task
+      |> Map.put(:status, target_status)
+      |> Map.put(:updated_at_ms, now_ms())
+      |> Map.put(:meta, clear_lease(task.meta))
+
+    :ok = Store.put(@tasks_table, task.id, updated)
+    emit(:kanban_task_reclaimed, board, updated, opts)
+    updated
+  end
+
+  defp with_task_board_lock(task_id, fun) do
+    case get_task(task_id) do
+      %{} = task when map_size(task) == 0 ->
+        {:error, :not_found}
+
+      task ->
+        with_board_lock(task.board_id, fun)
+    end
+  end
+
+  defp with_board_lock(board_id, fun) do
+    case :global.trans({{__MODULE__, board_id}, self()}, fun, [node()]) do
+      :aborted -> {:error, :lock_aborted}
+      result -> result
     end
   end
 
