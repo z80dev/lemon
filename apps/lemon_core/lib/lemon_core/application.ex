@@ -11,6 +11,8 @@ defmodule LemonCore.Application do
   - `LemonCore.NodeRegistry` - Live named execution-node registry and invocation broker
   - LemonCore.ConfigCache - Configuration caching service
   - LemonCore.Store - Key-value storage backend
+  - `LemonCore.Secrets.SourceTaskSupervisor` - Bounded external-source tasks
+  - `LemonCore.Secrets.SourceCache` - Bounded optional process-local source cache
   - LemonCore.RunHistoryStore - Per-session run history (separate SQLite DB)
   - LemonCore.ConfigReloader - Runtime config reload orchestrator
   - LemonCore.ConfigReloader.Watcher - File-system watcher for config changes
@@ -64,7 +66,9 @@ defmodule LemonCore.Application do
         LemonCore.ACPClientBridge,
         LemonCore.NodeRegistry,
         {LemonCore.ConfigCache, config_cache_opts},
-        LemonCore.Store
+        LemonCore.Store,
+        {Task.Supervisor, name: LemonCore.Secrets.SourceTaskSupervisor},
+        LemonCore.Secrets.SourceCache
       ] ++
         sqlite_children() ++
         [

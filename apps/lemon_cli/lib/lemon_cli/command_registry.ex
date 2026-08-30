@@ -126,14 +126,18 @@ defmodule LemonCli.CommandRegistry do
         %{name: "list", summary: "List metadata without values"},
         %{name: "delete", summary: "Delete one secret"},
         %{name: "check", summary: "Check configured credential sources"},
-        %{name: "import-env", summary: "Import selected environment credentials"}
+        %{name: "import-env", summary: "Import selected environment credentials"},
+        %{name: "sources", summary: "Inspect or test external secret sources"}
       ],
       options: [
         option("--target file|keychain", ["--target"], "Master-key target for init"),
         option("--provider NAME", ["--provider"], "Metadata provider for set"),
         option("--expires-at N", ["--expires-at"], "Expiry timestamp for set"),
         option("--dry-run", ["--dry-run"], "Preview environment imports"),
-        option("--force", ["--force"], "Confirm the selected replacement operation")
+        option("--force", ["--force"], "Confirm the selected replacement operation"),
+        option("--project-dir PATH", ["--project-dir"], "Project directory for source config"),
+        option("--source-id ID", ["--source-id"], "Test one external source"),
+        option("--json", ["--json"], "Emit redacted source readiness JSON")
       ]
     },
     %{

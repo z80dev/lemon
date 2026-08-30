@@ -24,7 +24,7 @@ arguments remain human-readable usage errors with exit code `2`.
 | `gateway` | Configure Telegram or Discord |
 | `doctor` | Run diagnostics or create a support bundle |
 | `config` | Validate or show resolved configuration |
-| `secrets` | Manage encrypted credentials |
+| `secrets` | Manage encrypted credentials and inspect external read-only sources |
 | `channels` | Inspect channel launch readiness |
 | `profile` | Manage isolated specialist profiles |
 | `backup` | Create, verify, list, or restore user-state backups |
@@ -37,6 +37,35 @@ runtime lifecycle. Run `lemon --help` or `./bin/lemon --help` for that exact
 launcher. Completion generation detects the launcher, so it does not advertise
 packaged daemon commands in a source checkout or source-only commands in an
 installed release.
+
+## External secret sources
+
+External source diagnostics are available through the same packaged and source
+command boundary:
+
+```bash
+lemon secrets sources status
+lemon secrets sources status --json
+lemon secrets sources test
+lemon secrets sources test vault --json
+
+# Source checkout
+./bin/lemon secrets sources test --source-id vault
+```
+
+`status` validates configuration plus executable/bootstrap readiness without
+executing the source. `test` runs all enabled sources, or one named source,
+under the configured timeout and output bound. Human and JSON responses expose
+only source id/type, readiness, provenance, counts, byte counts, duration, and
+stable error kinds; they never include secret values. Operational test failure
+exits `1`, invalid options exit `2`, and an empty/not-configured selection is an
+operational failure.
+
+`lemon secrets check` likewise reports only `present` for resolved entries; it
+does not print prefixes or suffixes. External sources remain read-only
+fallbacks behind the encrypted Lemon store. See
+[External secret sources](../config.md#external-secret-sources) for the exact
+configuration and fail-closed resolution contract.
 
 ## Durable sessions
 

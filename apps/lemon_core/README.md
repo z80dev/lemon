@@ -26,8 +26,8 @@ This app has **zero dependencies on other umbrella apps** and must remain that w
           |                    |                    |
 +---------+--------+ +--------+--------+ +---------+--------+
 | LemonCore.Secrets| | LemonCore.Store | | LemonCore.Bus    |
-| .Crypto          | | .EtsBackend     | | (Phoenix.PubSub) |
-| .Keychain        | | .SqliteBackend  | |                  |
+| .Crypto/.External| | .EtsBackend     | | (Phoenix.PubSub) |
+| .Source/.Runner  | | .SqliteBackend  | |                  |
 | .MasterKey       | | .JsonlBackend   | | LemonCore.Event  |
 +------------------+ | .ReadCache      | +------------------+
                      +-----------------+
@@ -59,9 +59,11 @@ This app has **zero dependencies on other umbrella apps** and must remain that w
 | 3 | `LemonCore.NodeRegistry` | Live named-node registry and targeted invocation broker |
 | 4 | `LemonCore.ConfigCache` | ETS-backed config cache with TTL fingerprinting |
 | 5 | `LemonCore.Store` | Key-value storage GenServer with pluggable backends |
-| 6 | `LemonCore.RunHistoryStore` | Run history persistence (only when `:exqlite` is available) |
-| 7 | `LemonCore.ConfigReloader` | Reload orchestrator with diff computation |
-| 8 | `LemonCore.ConfigReloader.Watcher` | FileSystem watcher for `config.toml` and `.env` |
+| 6 | `LemonCore.Secrets.SourceTaskSupervisor` | Owns bounded external-source tasks |
+| 7 | `LemonCore.Secrets.SourceCache` | Bounded optional process-local source cache |
+| 8 | `LemonCore.RunHistoryStore` | Run history persistence (only when `:exqlite` is available) |
+| 9 | `LemonCore.ConfigReloader` | Reload orchestrator with diff computation |
+| 10 | `LemonCore.ConfigReloader.Watcher` | FileSystem watcher for `config.toml` and `.env` |
 
 Durable memory moved to `lemon_memory`, the workspace stores to `agent_core`,
 and provider credential-pool rotation to `lemon_agent`
@@ -81,6 +83,7 @@ and `lemon_lsp`. Core doctor diagnostics may probe them at runtime, but
 | `LemonCore.Config` | Canonical TOML config loader with global/project merge and env overrides |
 | `LemonCore.Config.Modular` | Newer typed config interface delegating to per-domain sub-modules |
 | `LemonCore.Config.Providers` | LLM provider config (API keys, base URLs, secret refs, OAuth) |
+| `LemonCore.Config.Secrets` | Exact configuration for explicitly enabled external secret sources |
 | `LemonCore.Config.Agent` | Agent behavior settings sub-module |
 | `LemonCore.Config.Gateway` | Gateway settings sub-module |
 | `LemonCore.Config.Tools` | Web tools and WASM config sub-module |
@@ -144,9 +147,13 @@ ids, message bodies, proof details, credentials, or secret names.
 
 | Module | Purpose |
 |--------|---------|
-| `LemonCore.Secrets` | Encrypted secrets API (get/set/list/delete/resolve with env fallback) |
+| `LemonCore.Secrets` | Encrypted secrets API and store/external/environment resolution |
 | `LemonCore.Secrets.Crypto` | AES-256-GCM encryption with HKDF-SHA256 key derivation |
 | `LemonCore.Secrets.EnvCatalog` | Ordered environment-secret catalog for packaged and Mix check/import commands |
+| `LemonCore.Secrets.External` | Ordered, supervised, fail-closed external-source orchestration and redacted diagnostics |
+| `LemonCore.Secrets.Source` | Read-only source behaviour implemented by 1Password, Bitwarden, and command adapters |
+| `LemonCore.Secrets.SourceRunner` | Minimal-environment argv runner with timeout and output caps |
+| `LemonCore.Secrets.SourceCache` | Bounded optional process-local TTL cache |
 | `LemonCore.Secrets.Keychain` | macOS Keychain integration for master key storage |
 | `LemonCore.Secrets.MasterKey` | Master key resolution chain (keychain -> env var) |
 
@@ -368,8 +375,9 @@ For local Linux/dev usage, treat `~/.lemon/secrets_master_key` as the canonical 
 # Retrieve a secret
 {:ok, value} = LemonCore.Secrets.get("api_key")
 
-# Resolve (store first, then env fallback)
+# Resolve (store first, then external sources, then env fallback)
 {:ok, value, :store} = LemonCore.Secrets.resolve("api_key")
+{:ok, value, "external:command:local_helper"} = LemonCore.Secrets.resolve("api_key")
 {:ok, value, :env} = LemonCore.Secrets.resolve("MISSING_FROM_STORE")
 
 # Convenience (returns value or nil)
@@ -388,7 +396,27 @@ exists? = LemonCore.Secrets.exists?("api_key")
 status = LemonCore.Secrets.status()
 ```
 
-Secrets automatically fall back to environment variables of the same name. Use `env_fallback: false` to disable. Secret reads update usage metadata (`usage_count`, `last_used_at`) without mutating `updated_at`.
+External sources are read-only fallbacks behind the encrypted store and ahead
+of environment variables. They are disabled unless their config contains the
+exact boolean `enabled = true`. Enabled-source failures stop resolution before
+environment fallback; a source that succeeds without the requested name may
+continue. Use `env_fallback: false` to disable both external and environment
+fallbacks. Secret reads update usage metadata (`usage_count`, `last_used_at`)
+without mutating `updated_at`.
+
+1Password, Bitwarden Secrets Manager, and arbitrary argv-only command adapters
+share one supervised runner with exact config validation, minimal child
+environments, stable redacted errors, and configured time/output limits. The
+optional bounded process-local cache defaults off. Inspect or live-test them
+without revealing values:
+
+```bash
+lemon secrets sources status --json
+lemon secrets sources test [source-id] --json
+```
+
+See [`docs/config.md`](../../docs/config.md#external-secret-sources) for the
+exact source schemas and bootstrap rules.
 
 `LemonCore.Secrets.EnvCatalog.names/0` is the canonical ordered set used by
 the packaged `lemon secrets check` / `lemon secrets import-env` commands and

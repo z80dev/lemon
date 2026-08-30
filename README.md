@@ -21,6 +21,9 @@
 - **Durable session operations** — Search and inspect bounded redacted history,
   title/pin/archive sessions, create redacted exports, and preview-confirm
   verified pruning from the packaged or source CLI.
+- **Local-first credential resolution** — Keep encrypted secrets in Lemon or
+  explicitly opt in to supervised 1Password, Bitwarden Secrets Manager, and
+  argv-only command sources with fail-closed bounds and value-free diagnostics.
 - **LemonSim and benchmark arenas** — Event-sourced simulation worlds (Werewolf, Space Station, Stock Market, Survivor, Poker) and reproducible offline benchmark scoring without provider API keys.
 - **Supervised on the BEAM** — Each agent run is an isolated OTP process. Separate conversations execute concurrently, crashed workers are supervised, and durable session state survives individual requests.
 
@@ -53,6 +56,18 @@ Verify your setup with the diagnostic doctor:
 ```bash
 lemon doctor
 ```
+
+Optional external secret managers remain read-only fallbacks behind Lemon's
+encrypted store. Configure them under `[secrets.sources.<id>]`, then inspect or
+live-test readiness without printing values:
+
+```bash
+lemon secrets sources status
+lemon secrets sources test --json
+```
+
+See [External secret sources](docs/config.md#external-secret-sources) for the
+exact schemas, bootstrap rules, and security contract.
 
 Create a verified private backup of durable `~/.lemon` state before changing
 machines or performing maintenance:
@@ -207,7 +222,7 @@ Lemon is organized as an Elixir umbrella split into 9 modular core packages, a r
 | Package | Role & Contents |
 | --- | --- |
 | [`lemon_ai`](apps/lemon_ai/README.md) | Provider-agnostic LLM client (27 configured providers), streaming API, rate limiting, circuit breaker, cost tracking |
-| [`lemon_core`](apps/lemon_core/README.md) | Shared bus, `Event` envelopes, `Store` (ETS/JSONL/SQLite), encrypted secrets, config management |
+| [`lemon_core`](apps/lemon_core/README.md) | Shared bus, `Event` envelopes, `Store` (ETS/JSONL/SQLite), encrypted secrets plus bounded external sources, config management |
 | [`lemon_agent`](apps/lemon_agent/README.md) | Core agentic loop, tool registry, subagents, and model runtime |
 | [`lemon_memory`](apps/lemon_memory/README.md) | SQLite full-text search, memory provider registry, document ingestion pipeline, session search |
 | [`lemon_media`](apps/lemon_media/README.md) | Redacted-by-construction media job records, hashing, and audio/image processing |

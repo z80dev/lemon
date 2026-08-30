@@ -35,6 +35,11 @@ Packaged and Mix `secrets check` / `secrets import-env` commands read the same
 ordered environment-secret names from `LemonCore.Secrets.EnvCatalog`, keeping
 release and source-checkout behavior aligned.
 
+External 1Password, Bitwarden Secrets Manager, and command sources remain
+read-only fallbacks behind the encrypted Lemon store. Their source and packaged
+diagnostics share `lemon secrets sources status|test`; both surfaces report
+only readiness, stable provenance, counts, byte counts, and error kinds.
+
 | Purpose | Installed release | Source checkout | Contributor Mix adapter |
 | --- | --- | --- | --- |
 | First-time setup | `lemon setup` | `./bin/lemon setup` | `mix lemon.setup` |
@@ -44,6 +49,7 @@ release and source-checkout behavior aligned.
 | Open the local Web UI | `lemon web` | `./bin/lemon web` | Start the full runtime directly |
 | Validate/show config | `lemon config validate` | `./bin/lemon config validate` | `mix lemon.config validate` |
 | Manage encrypted secrets | `lemon secrets status` | `./bin/lemon secrets status` | `mix lemon.secrets.status` |
+| Inspect/test external secret sources | `lemon secrets sources status` | `./bin/lemon secrets sources test` | Use the same Mix-free command boundary |
 | Inspect channel readiness | `lemon channels` | `./bin/lemon channels` | `mix lemon.channels` |
 | Inspect/edit provider routing | `lemon providers status|fallback|pool` | `./bin/lemon providers status|fallback|pool` | `mix lemon.providers` (read-only) |
 | Back up or restore durable user state | `lemon backup create` | `./bin/lemon backup create` | Call `LemonCli.CLI.run/1` from contributor tooling |
@@ -56,8 +62,9 @@ release and source-checkout behavior aligned.
 
 `LemonCli.CommandRegistry` is the single source for Mix-free runtime-family
 dispatch, top-level help, command help, and shell completion metadata. It
-contains setup, model, gateway, doctor, config, secrets, channels, profile,
-backup, context, sessions, and completion. Launcher-only metadata is separated
+contains setup, model, gateway, doctor, config, secrets (including external
+source diagnostics), channels, profile, backup, context, sessions, and
+completion. Launcher-only metadata is separated
 into source and release sets so generated scripts never advertise commands the
 current launcher cannot run.
 
@@ -116,6 +123,23 @@ The command preserves comments and unrelated config, validates the complete
 resulting TOML, and atomically replaces only the selected global or project
 config. Success exits `0`, operation/config failures exit `1`, and invalid
 arguments exit `2`; `--json` emits one redacted document.
+
+## External secret sources
+
+`lemon secrets sources status` validates the configured sources and checks
+binary/bootstrap readiness without invoking a provider. `lemon secrets sources
+test [source-id]` invokes each selected enabled source under LemonCore's bounded
+supervisor. The test result contains the source id/type, readiness, provenance,
+secret count, output byte count, duration, or a stable error kind; it never
+contains a value.
+
+Sources are explicitly opt-in (`enabled = true`) and execute an argument vector
+directly. Shell command strings and interpolation are not accepted. A source
+failure stops credential resolution before the ordinary environment fallback;
+a successful source that simply lacks the requested name may continue to the
+next source and then the environment. See
+[`docs/config.md`](../../docs/config.md#external-secret-sources) for the exact
+schema, bounds, and bootstrap-secret rules.
 
 ## Backup and restore
 
