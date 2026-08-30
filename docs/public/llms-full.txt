@@ -19958,7 +19958,7 @@ must not be copied into new plans.
 | --- | --- | --- |
 | No programmatic tool calling | [`execute_code.ex`](../../apps/coding_agent/lib/coding_agent/tools/execute_code.ex) provides bounded Python RPC over an allowlist; [usage docs](../tools/execute-code.md) cover per-call and persistent kernels. | Disabled by default and its allowlist is smaller than the whole tool catalog, but the mechanism exists end to end. |
 | No progressive tool disclosure | [`tool_disclosure.ex`](../../apps/coding_agent/lib/coding_agent/tool_disclosure.ex) freezes a session catalog and substitutes `tool_search`/`tool_invoke` when schema cost crosses the configured budget. | Built-ins stay visible; deferred MCP/extension/WASM tools still pass the normal policy and approval path. |
-| No redirect interruption | [`AbortSignal`](../../apps/lemon_agent/lib/lemon_agent/abort_signal.ex), the [streaming loop](../../apps/lemon_agent/lib/lemon_agent/loop/streaming.ex), and [`CodingAgent.Session`](../../apps/coding_agent/lib/coding_agent/session.ex) implement redirect while preserving completed tool results and degrading to steer during tool execution. | Local native runs support it. Remote named-node steering/redirect remains an explicit boundary. |
+| No redirect interruption | [`AbortSignal`](../../apps/lemon_agent/lib/lemon_agent/abort_signal.ex), the [streaming loop](../../apps/lemon_agent/lib/lemon_agent/loop/streaming.ex), and [`CodingAgent.Session`](../../apps/coding_agent/lib/coding_agent/session.ex) implement redirect while preserving completed tool results and degrading to steer during tool execution. | Local and named-node native runs support invocation-bound steer/redirect with authenticated destination acknowledgement and fail-closed terminal races. Control-plane chat methods and the TUI preserve redirect as a distinct mode; equivalent Web discoverability remains. |
 | Provider fallback was only a preview ordering | [`ProviderRouting`](../../apps/lemon_agent/lib/lemon_agent/model_runtime/provider_routing.ex) builds route candidates; [`ProviderFallback`](../../apps/coding_agent/lib/coding_agent/session/provider_fallback.ex) executes per-turn provider and credential failover with cooldowns and session pinning. | Runtime resilience is implemented; self-service pool/fallback administration is still weak. |
 | No same-provider credential rotation | [`ProviderPoolRotator`](../../apps/lemon_agent/lib/lemon_agent/model_runtime/provider_pool_rotator.ex) and session fallback implement pool rotation; [live test guidance](../testing.md) covers invalid-to-valid credential proof. | No Hermes-like `auth`/pool management UX in the packaged CLI or Web. |
 | Cron lacked monitor mode, command jobs, chaining, drift guard, and preflight | [`CronManager`](../../apps/lemon_automation/lib/lemon_automation/cron_manager.ex), [`CronMonitor`](../../apps/lemon_automation/lib/lemon_automation/cron_monitor.ex), [`CronContext`](../../apps/lemon_automation/lib/lemon_automation/cron_context.ex), [`CronPreflight`](../../apps/lemon_automation/lib/lemon_automation/cron_preflight.ex), and [`CronCommandRunner`](../../apps/lemon_automation/lib/lemon_automation/cron_command_runner.ex) implement all five. [`Blueprint`](../../apps/lemon_automation/lib/lemon_automation/blueprint.ex) now adds one exact-confirmed skill + agent-cron template vertical. | Blueprint suggestions/catalog UX, richer template shapes, and a simple recurring `/loop` UX remain gaps. |
@@ -19983,7 +19983,7 @@ must not be copied into new plans.
 | User job | Hermes at pinned upstream | Lemon at pinned baseline | Status | Priority | Concrete next closure |
 | --- | --- | --- | --- | --- | --- |
 | Configure models, auth pools, fallback, and per-task routing | Hermes has interactive provider/model setup, OAuth credentials, credential pools, ordered fallbacks, auxiliary task models, provider routing, custom endpoints, and selectable [Mixture of Agents](https://hermes-agent.nousresearch.com/docs/user-guide/features/mixture-of-agents) presets. The [provider catalog](https://hermes-agent.nousresearch.com/docs/integrations/providers) is user-facing. | Lemon supports a broad provider set, custom endpoints, model catalogs, per-session resolution, live provider fallback, credential pools, cooldowns, and route preview. Setup can configure a provider and default model. Pool/fallback editing is not a cohesive end-user workflow; MoA reference fan-out/presets are absent. | Near at runtime; partial in UX | **High** | Ship `lemon auth`, `lemon fallback`, and pool commands plus equivalent Web forms and health proof. Treat MoA as a separate opt-in orchestration feature with cost/budget visibility. |
-| Interrupt, steer, or redirect a running agent | Hermes distinguishes hard interrupt, non-canceling steer, and model-request redirect. | Lemon implements the same local-native semantics through router queue modes, `CodingAgent.Session`, and `LemonAgent.Loop`. | Near | Medium | Expose all three consistently in every client and carry steer/redirect over named-node invocation rather than falling back at the remote boundary. |
+| Interrupt, steer, or redirect a running agent | Hermes distinguishes hard interrupt, non-canceling steer, and model-request redirect. | Lemon implements the same semantics through router queue modes, `CodingAgent.Session`, and `LemonAgent.Loop`; named-node runs carry bounded steer/redirect controls to the actual destination session and wait for authenticated acceptance. Control-plane chat methods and the TUI keep `queueMode: steer` and `queueMode: redirect` distinct, with dedicated `/steer` and `/redirect` commands. | Near | Medium | Add equivalent redirect discoverability to Lemon Web and any future client without collapsing it into steer. |
 | Avoid context bloat from large tool catalogs and intermediate data | Hermes documents [Tool Search](https://hermes-agent.nousresearch.com/docs/user-guide/features/tool-search), [`execute_code`](https://hermes-agent.nousresearch.com/docs/user-guide/features/code-execution), result offloading, and multiple compaction paths. | Lemon has frozen progressive disclosure, `execute_code`, output truncation/blob offload, context guardrails, summarization/hybrid compaction, overflow recovery, and cache-stable tool catalogs. | Near | Medium | Enable and explain safe defaults, widen the execute-code allowlist based on policy, and add live compaction/cost observability rather than another mechanism. |
 | Browse and operate the Web or desktop | Hermes exposes local/cloud browser providers, browser profiles, computer use, screenshots, and document/deliverable workflows in its [tools overview](https://hermes-agent.nousresearch.com/docs/user-guide/features/tools). | Lemon has a deep supervised browser driver, CDP/Playwright client, route policy, downloads/uploads, events/cookies/state, screenshots, image analysis, artifacts, and a `computer_use` tool. | **Parity+** for browser automation; partial for integrated desktop use | Medium | Promote one stable browser setup path and surface live driver/session/artifact state in the product UI. Keep computer use separately approval-gated. |
 | Attach files and reference repository context naturally | Hermes supports `@file`, `@folder`, `@git-diff`, `@url`, session references, PDF/Office/notebook extraction, and deliverable attachments; see [context references](https://hermes-agent.nousresearch.com/docs/user-guide/features/context-references) and [document extraction](https://hermes-agent.nousresearch.com/docs/user-guide/features/document-extraction). | Lemon agents can read/search files, inspect git through tools, accept Web uploads, and create media artifacts. There is no consistent composer-level reference syntax or general PDF/Office/notebook extraction pipeline. | Partial | Medium | Add a client-independent context-reference resolver with explicit previews/budgets, then safe extractors for PDF, DOCX, XLSX, PPTX, and notebooks. |
@@ -20084,7 +20084,8 @@ These are intentionally vertical bundles rather than isolated modules.
     controls.
 12. One polished voice workflow in the primary interface.
 13. Extension package lifecycle and host-health UX.
-14. Remote steer/redirect plus multi-controller connection management.
+14. Multi-controller connection management and merged node/session roster UX;
+    authenticated remote steer/redirect is now closed.
 
 ## Lemon advantages to preserve
 
@@ -31747,6 +31748,108 @@ backup for recovery.
 
 ---
 
+Source: https://z80dev.github.io/lemon/user-guide/context-references
+
+# Context references and document extraction
+
+Lemon has one client-independent context service for inspecting and selecting
+repository, URL, document, diff, and prior-session material before it is handed
+to another workflow. The source and packaged launchers expose that service as
+`lemon context`; both commands return the same versioned, redacted contract.
+
+## Preview before resolving
+
+Use preview to run the real selection and safety checks without returning the
+selected text:
+
+```bash
+./bin/lemon context preview \
+  '@file:docs/brief.docx' \
+  '@folder:notes' \
+  '@git-diff' \
+  --root "$PWD" \
+  --max-bytes 120000 \
+  --json
+```
+
+Resolve uses the same budget and returns the selected text:
+
+```bash
+./bin/lemon context resolve '@file:analysis.ipynb' --root "$PWD"
+```
+
+Installed releases use `lemon context ...` with the same arguments. Quote
+references in a shell so characters such as `?`, `*`, and `~` are not expanded
+before Lemon receives them.
+
+## Reference forms
+
+| Form | Selection |
+| --- | --- |
+| `@file:<path>` | One regular file below `--root`. PDF, Office, notebook, and text formats are sniffed from bytes. |
+| `@folder:<path>` | Deterministic recursive selection of regular files below `--root`. |
+| `@git-diff` | Unstaged working-tree diff for `--root`. |
+| `@git-diff:staged` | Staged diff. |
+| `@git-diff:<revision>` | Diff from a validated revision. Git is invoked directly, never through a shell. |
+| `@url:<http(s)-url>` | Public URL fetched through DNS/IP SSRF checks and redirect revalidation. |
+| `@session:<session-key>` | Existing canonical, always-redacted Markdown session export. |
+
+Local paths are expanded beneath the selected root. Absolute paths outside the
+root, `..` traversal, symlinks at any selected component, special files, and
+symlinked folder entries are rejected or recorded as omissions. Folder walks
+never follow symlinks.
+
+## Budget and output contract
+
+Every response is version `1` and contains:
+
+- the exact effective input, output, item, depth, page, archive, ratio, and
+  operation-time limits;
+- selected source metadata and, for resolve, selected redacted text;
+- selected byte/item/source counts and a redaction count;
+- structured omissions for unsupported, unsafe, over-budget, truncated, or
+  unavailable material.
+
+The useful CLI bounds are `--max-bytes`, `--max-input-bytes`, `--max-items`,
+`--max-pages`, `--max-depth`, and `--timeout-ms`. The operation timeout is
+hard-capped at 60 seconds. Limits are per invocation by design: a shared config
+file cannot silently raise a caller's review budget.
+
+Sensitive-looking assignments, bearer credentials, and private-key blocks are
+redacted from selected text. URL output strips credentials, query strings, and
+fragments from returned metadata; session keys are represented by a short
+SHA-256 label. The selected text remains untrusted source material and should
+not be treated as instructions.
+
+## Document formats and safety
+
+Lemon recognizes content rather than trusting extensions:
+
+- PDF files start with the PDF signature. Literal text operators are selected;
+  page count is bounded before selection.
+- DOCX, XLSX, and PPTX are identified from ZIP members. Only the minimum text
+  members are inflated.
+- ipynb files must be JSON notebooks with a supported notebook structure. Cell
+  source is selected; rich outputs are omitted.
+- valid UTF-8 otherwise falls back to plain text.
+
+Office containers are rejected before extraction when they exceed member,
+expanded-byte, or compression-ratio limits, or contain absolute/traversal
+member names. Macros, embedded objects, external relationships, notebook
+outputs, and non-text payloads are never executed or selected.
+
+The built-in PDF reader is deliberately conservative. Scanned, encrypted, and
+many font-encoded or compressed-content PDFs return `pdf_text_unavailable`
+instead of invoking an external program or guessing. Convert such a document
+to trusted text with an operator-reviewed tool, then reference that text.
+
+URL requests accept only HTTP(S), reject URL credentials, `.local`, loopback,
+private, link-local, multicast, and metadata targets, connect to the validated
+IP while retaining the original TLS SNI/Host identity, revalidate every
+redirect, and cap request body and wall-clock time.
+
+---
+
 Source: https://z80dev.github.io/lemon/user-guide/honcho
 
 # Honcho Memory User Guide
@@ -33879,7 +33982,9 @@ it is released when the process dies, for any reason, including the node being k
 
 What happens to the second message instead of being dropped is the job of
 `LemonRouter.SessionCoordinator` — one process per conversation — which interprets queue
-modes (`:steer`, `:steer_backlog`, `:collect`, `:interrupt`). The decisions themselves live
+modes (`:followup`, `:steer`, `:steer_backlog`, `:redirect`, `:collect`, `:interrupt`).
+Redirect replaces only the active model request while keeping completed tool work; steer
+does not cancel that request. The decisions themselves live
 in [`session_transitions.ex`](../apps/lemon_router/lib/lemon_router/session_transitions.ex)
 as a pure reducer; the process only performs the I/O the reducer asks for.
 
