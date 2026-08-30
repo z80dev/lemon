@@ -212,6 +212,7 @@ and the harmless disabled example under
 | `LemonAutomation` | `lib/lemon_automation.ex` | Top-level facade with `defdelegate` functions |
 | `LemonAutomation.Application` | `lib/lemon_automation/application.ex` | OTP application and supervisor setup |
 | `LemonAutomation.Blueprint` | `lib/lemon_automation/blueprint.ex` | Validates, previews, digest-confirms, and idempotently activates portable profile skill + cron bundles |
+| `LemonAutomation.Blueprint.Catalog` | `lib/lemon_automation/blueprint/catalog.ex` | Resolves bounded local bundle IDs and provides the shared Web/control-plane list, inspect, validate, preview, and activate boundary |
 | `LemonAutomation.CronManager` | `lib/lemon_automation/cron_manager.ex` | Core scheduling GenServer; owns in-memory job state, persists to CronStore, handles ticks, execution, and completion |
 | `LemonAutomation.CronJob` | `lib/lemon_automation/cron_job.ex` | Job struct with CRUD operations, `due?/1` predicate, serialization |
 | `LemonAutomation.CronRun` | `lib/lemon_automation/cron_run.ex` | Run struct with state machine transitions (pending -> running -> completed/failed/timeout/aborted) |

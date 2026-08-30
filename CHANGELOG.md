@@ -31,6 +31,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   existing authenticated control-plane/`CronManager` path, with stable redacted
   JSON/exit codes, registry-driven help/completion, duplicate-safe results, and
   real source plus assembled minimal-runtime proof.
+- Token-required Web blueprint management at `/manage/blueprints`, backed by
+  the shared `LemonAutomation.Blueprint.Catalog` service. The responsive page
+  lists only safe IDs/counts, validates bundles, previews profile-local skill
+  and schedule actions without mutation, requires the exact fresh digest, and
+  reports create-once or unchanged replay without retaining manifest prose,
+  prompts, skill bodies, paths, commands, environment values, or secrets.
 - Authenticated Web provider-routing management at `/manage/providers`, with
   redacted effective status, ordered fallback controls, credential-pool and
   credential-reference lifecycle, preview-first writes, exact confirmation for

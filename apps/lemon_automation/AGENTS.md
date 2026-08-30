@@ -143,6 +143,11 @@ copied bytes, enables profile-local skills, and calls `CronManager.add_new/1`
 last. The create-once manager/store path must never overwrite an existing
 stable ID. Version 1 remains agent-prompt-only and rejects commands, archives,
 symlinks, environment/cwd overrides, secret-like values, and non-UTC schedules.
+`LemonAutomation.Blueprint.Catalog` is the shared caller boundary for Web and
+control-plane clients: it derives the canonical catalog path from trusted
+profile options, accepts only bounded bundle IDs, rejects traversal and
+symlinked entries, enforces manifest/directory identity, and delegates all
+inspection, validation, preview, and activation semantics to `Blueprint`.
 
 ## Key Flow Details
 
@@ -164,8 +169,9 @@ symlinks, environment/cwd overrides, secret-like values, and non-UTC schedules.
 - Cron lifecycle actions write durable operator audit events to `:cron_audit_events`. The audit stream covers job create/update/pause/resume/delete, manual run requests, run start/abort/retry/stale recovery, and scheduled-run claim/suppression decisions. Audit entries keep operator-useful IDs in the store; support-bundle diagnostics redact those IDs.
 - `cron.status` reads the durable cron run and audit stores directly for operator-facing scheduler-health counters: active run locks, retry runs, suppressed scheduled slots, stale-run recoveries, scheduled retries, and next/last run timestamps.
 - Portable bundle activation must remain preview-first and content-free at the
-  control-plane boundary. Keep arbitrary paths local-only; RPC resolves a safe
-  `bundleId` below `~/.lemon/bundles`, returns no prompt/skill/path/secret text,
+  Web/control-plane boundary. Keep arbitrary paths local-only;
+  `Blueprint.Catalog` resolves a safe `bundleId` below `~/.lemon/bundles`,
+  returns no prompt/skill/path/secret text,
   and requires the exact fresh `confirmationDigest` for mutation.
 - Source and packaged `lemon blueprints` are thin clients of that RPC boundary.
   Do not move bundle loading or scheduler startup into the one-shot CLI VM;

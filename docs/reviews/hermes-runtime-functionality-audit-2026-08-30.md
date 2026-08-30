@@ -162,6 +162,14 @@ destructive changes, and render only provider/pool identities and counts.
 Credential references are re-entered for apply, filtered from LiveView logs,
 and never retained or rendered.
 
+The authenticated `/manage/blueprints` page now consumes the shared
+`LemonAutomation.Blueprint.Catalog` boundary. It exposes bounded-ID catalog
+selection and validation, read-only profile previews, exact digest
+confirmation, stale-plan refusal, and duplicate-safe replay. Its independent
+LiveView projection excludes manifest prose, prompts, skill bodies, commands,
+environment values, paths, tokens, and service error terms from socket state
+and rendered HTML.
+
 ## Prioritized remaining runtime work
 
 ### P0 — reliability and safety closure

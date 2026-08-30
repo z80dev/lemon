@@ -28,6 +28,7 @@ Key entry points:
   follow-up/steer/redirect submission through the shared router contracts
 - **Session lifecycle**: Shared `LemonCore.SessionLifecycle` list/search/title/pin/archive/export/prune operations; never duplicate its stores
 - **Provider lifecycle**: Shared `LemonAgent.ModelRuntime.ProviderConfiguration` preview/apply boundary; never edit provider TOML directly from the Web app
+- **Blueprint lifecycle**: Shared `LemonAutomation.Blueprint.Catalog` bounded-ID, validation, digest, and activation boundary; never read bundle paths or create cron/profile records directly
 - **Management security**: `/manage` fails closed without a configured access token; inspection/export are always redacted
 - **Resume**: Named chat routes reconstruct durable prompt/tool/answer history using the internal trusted unredacted mode
 
@@ -48,7 +49,7 @@ Key entry points:
 
 - `LemonWeb.Application` - Supervisor with `Telemetry` and `Endpoint` (`:one_for_one`)
 - `LemonWeb.Endpoint` - HTTP/WebSocket endpoint (uses Bandit); session stored in signed cookie `_lemon_web_key`
-- `LemonWeb.Router` - Chat routes plus token-required `/manage` session/export and `/manage/providers` routes
+- `LemonWeb.Router` - Chat routes plus token-required `/manage` session/export, `/manage/providers`, and `/manage/blueprints` routes
 - `LemonWeb.Telemetry` - Phoenix telemetry metrics
 
 ## LiveView Structure
@@ -141,6 +142,23 @@ Phoenix logs, are hashed only long enough to match preview with re-entry, and
 must never be copied into socket drafts or rendered HTML. Stale and refused
 mutations keep non-secret drafts; stale previews are cleared so they cannot be
 replayed.
+
+### BlueprintManagementLive
+
+`LemonWeb.BlueprintManagementLive` uses the automation-owned
+`LemonAutomation.Blueprint.Catalog` service also consumed by control-plane
+methods. The Web app must not resolve catalog paths, read manifests, copy
+skills, or write cron/profile stores itself.
+
+Only regex-constrained IDs, bounded counts, parsed schedule/enabled/action
+fields, audit enums, and the fresh confirmation digest may enter LiveView
+state. Free-form bundle/automation names and descriptions, prompts, skill
+bodies, commands, environment values, tokens, and paths are excluded even
+though lower-level inspection responses may contain some manifest metadata.
+Preview is read-only. Activation requires retyping the exact 64-character
+digest; a catalog/profile/destination change fails closed, clears the stale
+preview, and keeps the profile draft. A successful replay reports `unchanged`
+and preserves one stable cron job.
 
 ### Message Structure
 
@@ -502,6 +520,7 @@ apps/lemon_web/
 |-- lib/lemon_web/live/
 |   |-- session_live.ex                 # Main dashboard LiveView
 |   |-- management_live.ex              # Authenticated session operations
+|   |-- blueprint_management_live.ex    # Authenticated exact-confirmed blueprint activation
 |   |-- provider_management_live.ex     # Authenticated provider-routing operations
 |   |-- components/
 |       |-- file_upload_component.ex    # Upload UI with progress bars

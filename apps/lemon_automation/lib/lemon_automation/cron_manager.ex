@@ -292,7 +292,10 @@ defmodule LemonAutomation.CronManager do
 
         Events.emit_job_created(job)
 
-        Logger.info("[CronManager] Added job: #{job.id} (#{job.name})")
+        # Names may originate in untrusted portable manifests. Keep routine
+        # lifecycle logs identifier-only; operators can inspect authorized
+        # structured job state when they need the display name.
+        Logger.info("[CronManager] Added job: #{job.id}")
         {:reply, {:ok, job}, put_in(state.jobs[job.id], job)}
 
       {:error, _} = error ->
@@ -327,7 +330,7 @@ defmodule LemonAutomation.CronManager do
                 })
 
                 Events.emit_job_created(job)
-                Logger.info("[CronManager] Added claimed job: #{job.id} (#{job.name})")
+                Logger.info("[CronManager] Added claimed job: #{job.id}")
                 {:reply, {:ok, job}, put_in(state.jobs[job.id], job)}
 
               {:error, :exists} ->

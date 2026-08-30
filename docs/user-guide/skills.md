@@ -272,6 +272,12 @@ Or through JSON-RPC:
 {"type":"req","id":"5","method":"blueprints.activate","params":{"bundleId":"daily-note","profileId":"operator","confirmationDigest":"<digest from preview>"}}
 ```
 
+Or open the token-required Web management page at `/manage/blueprints`. The
+browser lists safe IDs/counts, validates the selected entry, and previews the
+same exact profile skill and cron actions. Type the displayed digest to apply.
+The Web socket deliberately omits free-form manifest prose as well as prompts,
+skill bodies, commands, environment values, paths, tokens, and secrets.
+
 Activation reloads and re-plans under a lock. Any content change, destination
 change, existing-ID conflict, or stale digest rejects the operation. A
 successful activation copies the skill only into the profile's derived
@@ -291,7 +297,7 @@ paths, skill bodies, prompt text, command text, and secret values.
 
 This first vertical does not provide archive import, signing, publishing, a
 remote registry, command blueprints, heartbeats, multiple jobs per bundle, or a
-TUI/Web catalog. Use the local `LemonAutomation.Blueprint` service directly
+TUI catalog. Use the local `LemonAutomation.Blueprint` service directly
 only for trusted source-checkout administration that genuinely needs a local
 path; normal operators should use `lemon blueprints`, and remote clients should
 use the catalog-scoped RPC.
