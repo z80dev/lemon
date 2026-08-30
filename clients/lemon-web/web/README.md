@@ -43,6 +43,13 @@ Session list behavior is opinionated by default:
 - `System: OFF` hides cron/heartbeat/delegate noise sessions unless explicitly enabled.
 - Session history preserves richer metadata from directory/snapshot sources even when `sessions.list` returns minimal records.
 
+Monitoring state is intentionally split by responsibility under `src/store/`:
+`monitoringReducers.ts` owns snapshots, event routing, and the public reducer
+surface; `monitoringListReducers.ts` normalizes list/status responses; and
+`monitoringReducerHelpers.ts` contains record construction and merge helpers.
+Keep protocol-shape normalization out of the Zustand store wrapper so reducer
+behavior remains independently testable.
+
 ## Local development
 
 ```bash
