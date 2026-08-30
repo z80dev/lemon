@@ -9,6 +9,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportFakeApiTest do
   use ExUnit.Case, async: false
 
   alias LemonChannels.Telegram.FakeAPI
+  alias LemonChannels.Adapters.Telegram
 
   defmodule FakeApiTestRouter do
     def handle_inbound(msg) do
@@ -108,6 +109,45 @@ defmodule LemonChannels.Adapters.Telegram.TransportFakeApiTest do
   end
 
   describe "transport round trip" do
+    test "portable /commands is handled by the running transport and delivered through Telegram" do
+      chat_id = 310_000
+      gateway_config_key = :"Elixir.LemonGateway.Config"
+      previous_gateway_config = Application.get_env(:lemon_gateway, gateway_config_key)
+
+      Application.put_env(:lemon_gateway, gateway_config_key, %{
+        telegram: %{bot_token: "fake-token", api_mod: FakeAPI}
+      })
+
+      on_exit(fn ->
+        if previous_gateway_config do
+          Application.put_env(:lemon_gateway, gateway_config_key, previous_gateway_config)
+        else
+          Application.delete_env(:lemon_gateway, gateway_config_key)
+        end
+      end)
+
+      assert {:ok, _pid} = start_transport(%{allowed_chat_ids: [chat_id]})
+
+      _update = FakeAPI.simulate_message(chat_id, "/commands")
+
+      assert {:ok, %{fun: :send_message, args: [^chat_id, text, _opts, _parse_mode]}} =
+               FakeAPI.await_send(
+                 fn
+                   %{fun: :send_message, args: [^chat_id, text, _, _]} ->
+                     String.contains?(text, "/queue <prompt>") and
+                       String.contains?(text, "/bg <prompt>") and
+                       String.contains?(text, "/btw <question>")
+
+                   _ ->
+                     false
+                 end,
+                 2_000
+               )
+
+      assert text =~ "Information"
+      refute_received {:inbound, _msg}
+    end
+
     test "inbound private message flows through the pipeline to router and captured outbound" do
       chat_id = 310_001
       assert {:ok, _pid} = start_transport(%{allowed_chat_ids: [chat_id]})
@@ -205,7 +245,12 @@ defmodule LemonChannels.Adapters.Telegram.TransportFakeApiTest do
       }
       |> Map.merge(overrides)
 
-    LemonChannels.Adapters.Telegram.Transport.start_link(config: config)
+    case LemonChannels.Registry.register(Telegram) do
+      :ok -> :ok
+      {:error, :already_registered} -> :ok
+    end
+
+    Telegram.Transport.start_link(config: config)
   end
 
   defp restore_router_bridge(nil), do: Application.delete_env(:lemon_core, :router_bridge)
@@ -216,6 +261,10 @@ defmodule LemonChannels.Adapters.Telegram.TransportFakeApiTest do
       if Process.alive?(pid) do
         GenServer.stop(pid, :normal)
       end
+    end
+
+    if Process.whereis(LemonChannels.Registry) do
+      LemonChannels.Registry.unregister("telegram")
     end
   catch
     :exit, _ -> :ok
