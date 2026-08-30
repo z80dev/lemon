@@ -23,8 +23,9 @@ defmodule LemonSkills.Tools.ReadSkill do
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Security.ToolResultTrust
   alias LemonAi.Types.TextContent
-  alias LemonSkills.{Registry, Entry, Manifest, PathBoundary, SkillView}
+  alias LemonSkills.{Bundle, Registry, Entry, Manifest, PathBoundary, SkillView}
 
   @doc """
   Returns the ReadSkill tool definition.
@@ -164,12 +165,16 @@ defmodule LemonSkills.Tools.ReadSkill do
 
     case Registry.get(key, opts) do
       {:ok, entry} ->
-        result = build_result(entry, view_opts, opts)
+        result =
+          entry
+          |> build_result(view_opts, opts)
+          |> ToolResultTrust.skill(entry, verified_builtin?(entry))
+
         emit_skill_load(entry, view_opts, tool_call_id, cwd, telemetry_context, :ok)
         result
 
       :error ->
-        result = build_not_found_result(key, opts)
+        result = build_not_found_result(key, opts) |> ToolResultTrust.untrusted(:skill)
         emit_skill_load_miss(key, view_opts, tool_call_id, cwd, telemetry_context)
         result
     end
@@ -422,6 +427,31 @@ defmodule LemonSkills.Tools.ReadSkill do
   defp format_source(:project), do: "Project (.lemon/skill)"
   defp format_source(url) when is_binary(url), do: url
   defp format_source(other), do: inspect(other)
+
+  # Provenance is user-editable lockfile data, so builtin fields alone are not
+  # an instruction-trust attestation. The installed bundle must still be byte-
+  # identical to the corresponding bundle shipped in this Lemon release.
+  defp verified_builtin?(%Entry{
+         source: :global,
+         source_kind: :builtin,
+         trust_level: :builtin,
+         audit_status: audit_status,
+         key: key,
+         path: installed_path
+       })
+       when audit_status not in [:warn, :block] do
+    with priv_dir when is_list(priv_dir) <- :code.priv_dir(:lemon_skills),
+         canonical_path <- Path.join([List.to_string(priv_dir), "builtin_skills", key]),
+         true <- File.dir?(canonical_path),
+         {:ok, canonical_hash} <- Bundle.compute_hash(canonical_path),
+         {:ok, ^canonical_hash} <- Bundle.compute_hash(installed_path) do
+      true
+    else
+      _ -> false
+    end
+  end
+
+  defp verified_builtin?(_entry), do: false
 
   defp source_key(source) when is_atom(source), do: source
   defp source_key(source) when is_binary(source), do: source

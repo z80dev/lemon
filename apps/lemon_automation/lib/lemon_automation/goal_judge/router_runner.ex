@@ -26,23 +26,25 @@ defmodule LemonAutomation.GoalJudge.RouterRunner do
       }
       |> maybe_put(:model, Map.get(context, :model))
 
-    with {:ok, submitted_run_id} <- submit(router_mod, params),
-         {:ok, output} <- waiter_mod.wait(submitted_run_id, timeout_ms, wait_opts),
+    with {:ok, _submitted_run_id, output} <-
+           RunCompletionWaiter.submit_and_wait(params,
+             router_mod: router_mod,
+             waiter_mod: waiter_mod,
+             bus_mod: Map.get(context, :bus_mod, LemonCore.Bus),
+             timeout_ms: timeout_ms,
+             wait_opts: wait_opts,
+             on_submitting: Map.get(context, :on_submitting),
+             on_submitted: Map.get(context, :on_submitted),
+             on_terminal: Map.get(context, :on_terminal)
+           ),
          {:ok, verdict} <- parse_verdict(output) do
       {:ok, verdict}
-    end
-  end
-
-  defp submit(router_mod, params) do
-    case router_mod.submit(params) do
-      {:ok, run_id} when is_binary(run_id) -> {:ok, run_id}
+    else
+      {:error, {:run_failed, _run_id, reason}} -> {:error, reason}
+      {:error, {:timeout, _run_id}} -> {:error, :timeout}
+      {:error, {:submit_failed, reason}} -> {:error, reason}
       {:error, reason} -> {:error, reason}
-      other -> {:error, {:unexpected_submit_result, other}}
     end
-  rescue
-    error -> {:error, error}
-  catch
-    :exit, reason -> {:error, {:exit, reason}}
   end
 
   defp parse_verdict(output) when is_binary(output) do

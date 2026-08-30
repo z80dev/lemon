@@ -94,9 +94,14 @@ defmodule CodingAgent.PromptBuilder do
   @spec build_skills_section(String.t(), String.t(), pos_integer(), map()) :: String.t()
   def build_skills_section(cwd, context, max_skills \\ 3, opts \\ %{}) do
     if context != "" do
+      relevant_keys =
+        context
+        |> LemonSkills.find_relevant(cwd: cwd, max_results: max_skills, refresh: false)
+        |> MapSet.new(& &1.key)
+
       views =
-        LemonSkills.find_relevant(context, cwd: cwd, max_results: max_skills, refresh: true)
-        |> Enum.map(&LemonSkills.SkillView.from_entry(&1, cwd: cwd))
+        LemonSkills.Registry.list_views(cwd: cwd)
+        |> Enum.filter(&MapSet.member?(relevant_keys, &1.key))
         |> Enum.filter(&LemonSkills.SkillView.displayable?/1)
 
       LemonSkills.PromptView.render_relevant_skills(views, skill_trace_opts(opts, cwd))

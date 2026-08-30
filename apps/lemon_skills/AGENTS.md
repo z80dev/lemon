@@ -2,9 +2,9 @@
 
 ## Quick Orientation
 
-LemonSkills is the skill management system for the Lemon agent platform. It provides a GenServer-based registry that discovers, caches, and serves skill content (SKILL.md files) from multiple directory sources. Skills are **not executed** by this app -- they are text documents loaded into agent system prompts to give agents specialized knowledge and instructions.
+LemonSkills is the skill management system for the Lemon agent platform. It provides a GenServer-based registry that discovers, caches, and serves skill content (SKILL.md files) from multiple directory sources. Skills are **not executed** by this app -- the system prompt lists their metadata and agents explicitly load selected content as specialized knowledge and instructions.
 
-**Core loop**: On startup, load skills from disk into memory. At runtime, agents query for relevant skills by key or context string. Skills can also be installed from Git repos or discovered from GitHub.
+**Core loop**: On startup, load skills plus bounded search excerpts and requirement views from disk into memory. At runtime, agents query cached entries by key or context string; full skill semantics are loaded explicitly with `read_skill`. Skills can also be installed from Git repos or discovered from GitHub.
 
 **Entry point**: `LemonSkills` (the facade module) delegates everything to sub-modules. Start reading there.
 
@@ -128,13 +128,19 @@ Nous Research skills. Keep `hermes:` identifiers routed through `Installer` so
 official-source audit and approval remain mandatory; do not copy these bundles
 directly into the registry.
 
+When present, `name` and `description` must be non-empty, single-line, valid UTF-8 strings without control or bidirectional formatting characters. They are bounded to 128 and 1,024 bytes respectively. `tags` and `keywords` must be lists of at most 32 strings, with each item subject to the same safe-text checks and a 128-byte limit. Missing `name`/`description` remain compatible with legacy manifests and use registry defaults.
+
 ### Registry State
 
 The Registry GenServer holds:
 - `global_skills`: `%{key => Entry.t()}` -- loaded eagerly on startup
 - `project_skills`: `%{cwd => %{key => Entry.t()}}` -- loaded lazily per cwd
+- `global_search` / `project_search`: precomputed lower-cased metadata, keywords, and bounded body excerpts
+- `global_identity` / `project_identities`: content-addressed snapshots of discovered `SKILL.md` files and lockfiles
 
 When listing/getting, project skills override global skills on key collision. Skills are sorted by key for deterministic ordering (important for stable system prompts and prompt caching).
+
+Search documents are rebuilt at startup, register/unregister boundaries, and when a 50 ms coalesced identity check observes a changed skill file, directory set, or lockfile. The identity scan hashes file content outside the Registry process, so same-size rewrites invalidate safely without serializing callers behind filesystem I/O. Requirement/provenance views are built from cached entries plus current PATH, environment, and disabled-skill config on each call. `find_relevant/2` takes a short cached snapshot from the GenServer and scores it in the caller process. `LemonSkills.refresh/1` remains available for an immediate forced refresh.
 
 ### Relevance Scoring
 
@@ -150,6 +156,9 @@ When listing/getting, project skills override global skills on key collision. Sk
 - Project-source bonus: +1000 after a positive relevance match
 
 Body content is truncated to 10,000 chars before scoring to avoid performance issues with large SKILL.md files.
+Equal scores are ordered by skill key for deterministic prompts and telemetry.
+
+Prompt metadata is defensively flattened, bounded, XML-escaped, and includes explicit `source_kind` / `trust_level` fields. Community, project, and local metadata is relevance data rather than instruction authority.
 
 ### Approval Gating
 
@@ -315,7 +324,7 @@ HttpMock.stub("https://skills.lemon.agent/", {:error, :nxdomain})
 
 | App | How it uses LemonSkills |
 |-----|------------------------|
-| `coding_agent` | Calls `LemonSkills.find_relevant/2` to inject skill content into agent system prompts; wraps `LemonSkills.Tools.ReadSkill` and `LemonSkills.Tools.SkillManage` as agent tools; shares `agent_dir` config (fallback: `config :coding_agent, :agent_dir`) |
+| `coding_agent` | Lists bounded skill metadata in the stable system prompt, uses `LemonSkills.find_relevant/2` for turn-local missed-skill introspection, and exposes `LemonSkills.Tools.ReadSkill` / `LemonSkills.Tools.SkillManage` for explicit content loading and management; shares `agent_dir` config (fallback: `config :coding_agent, :agent_dir`) |
 | `lemon_agent` | Provides the common tool structs used by every module under `LemonSkills.Tools` |
 
 ### Shared Configuration

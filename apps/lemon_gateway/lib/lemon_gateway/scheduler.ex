@@ -4,6 +4,9 @@ defmodule LemonGateway.Scheduler do
 
   Manages a pool of execution slots (`max_concurrent_runs`) and routes incoming
   execution requests to `ThreadWorker` processes keyed by conversation.
+  Production workers attach a generation token to slot requests. Duplicate or
+  overlapping tokenized requests are ignored, and timed-out generations are
+  explicitly expired before a worker requests another slot.
   """
   use GenServer
   require Logger
@@ -32,6 +35,18 @@ defmodule LemonGateway.Scheduler do
   @spec request_slot(pid(), term()) :: :ok
   def request_slot(worker_pid, thread_key) do
     GenServer.cast(__MODULE__, {:request_slot, worker_pid, thread_key})
+  end
+
+  @doc "Requests a slot for one worker generation, deduplicating overlaps."
+  @spec request_slot(pid(), term(), reference()) :: :ok
+  def request_slot(worker_pid, thread_key, token) when is_reference(token) do
+    GenServer.cast(__MODULE__, {:request_slot, worker_pid, thread_key, token})
+  end
+
+  @doc "Cancels one outstanding tokenized slot request."
+  @spec cancel_slot_request(pid(), reference()) :: :ok
+  def cancel_slot_request(worker_pid, token) when is_pid(worker_pid) and is_reference(token) do
+    GenServer.cast(__MODULE__, {:cancel_slot_request, worker_pid, token})
   end
 
   @doc "Releases an execution slot, allowing the next queued worker to proceed."
@@ -91,75 +106,25 @@ defmodule LemonGateway.Scheduler do
   end
 
   def handle_cast({:request_slot, worker_pid, thread_key}, state) do
-    if map_size(state.in_flight) < state.max do
-      slot_ref = make_ref()
-      {state, mon_ref} = ensure_monitor(state, worker_pid)
+    grant_or_queue_slot(worker_pid, thread_key, nil, state)
+  end
 
-      in_flight =
-        Map.put(state.in_flight, slot_ref, %{
-          worker: worker_pid,
-          thread_key: thread_key,
-          mon_ref: mon_ref,
-          granted_at_ms: System.monotonic_time(:millisecond)
-        })
-
-      # Safely send slot grant with error handling
-      case safe_send_slot_granted(worker_pid, slot_ref) do
-        :ok ->
-          Logger.debug(
-            "Scheduler granted slot worker=#{inspect(worker_pid)} thread_key=#{inspect(thread_key)} " <>
-              "in_flight=#{map_size(in_flight)}/#{state.max}"
-          )
-
-          emit_scheduler_telemetry(:slot_granted, %{
-            in_flight: map_size(in_flight),
-            max: state.max,
-            waitq: :queue.len(state.waitq),
-            wait_ms: 0
-          })
-
-          {:noreply, %{state | in_flight: in_flight}}
-
-        {:error, :dead_worker} ->
-          # Worker died before we could send - clean up and try next
-          Logger.warning(
-            "Scheduler: worker #{inspect(worker_pid)} died before slot could be granted, skipping"
-          )
-
-          state = maybe_demonitor_worker(state, %{worker: worker_pid, mon_ref: mon_ref})
-          {:noreply, grant_until_full(state)}
-      end
-    else
-      {state, mon_ref} = ensure_monitor(state, worker_pid)
-      queued_at_ms = System.monotonic_time(:millisecond)
-
-      waitq =
-        :queue.in(
-          %{
-            worker: worker_pid,
-            thread_key: thread_key,
-            mon_ref: mon_ref,
-            queued_at_ms: queued_at_ms
-          },
-          state.waitq
-        )
-
-      slot_request_times = Map.put(slot_request_times(state), worker_pid, queued_at_ms)
-
+  def handle_cast({:request_slot, worker_pid, thread_key, token}, state) do
+    if tokenized_request_outstanding?(state, worker_pid) do
       Logger.debug(
-        "Scheduler queued slot request worker=#{inspect(worker_pid)} thread_key=#{inspect(thread_key)} " <>
-          "in_flight=#{map_size(state.in_flight)}/#{state.max} waitq=#{:queue.len(waitq)}"
+        "Scheduler ignored overlapping slot request worker=#{inspect(worker_pid)} " <>
+          "thread_key=#{inspect(thread_key)} token=#{inspect(token)}"
       )
 
-      emit_scheduler_telemetry(:slot_queued, %{
-        in_flight: map_size(state.in_flight),
-        max: state.max,
-        waitq: :queue.len(waitq)
-      })
-
-      {:noreply,
-       state |> Map.put(:waitq, waitq) |> Map.put(:slot_request_times, slot_request_times)}
+      {:noreply, state}
+    else
+      grant_or_queue_slot(worker_pid, thread_key, token, state)
     end
+  end
+
+  def handle_cast({:cancel_slot_request, worker_pid, token}, state) do
+    state = cancel_tokenized_request(state, worker_pid, token)
+    {:noreply, grant_until_full(state)}
   end
 
   def handle_cast({:release_slot, slot_ref}, state) do
@@ -188,6 +153,78 @@ defmodule LemonGateway.Scheduler do
     })
 
     {:noreply, grant_until_full(state)}
+  end
+
+  defp grant_or_queue_slot(worker_pid, thread_key, token, state) do
+    if map_size(state.in_flight) < state.max do
+      slot_ref = make_ref()
+      {state, mon_ref} = ensure_monitor(state, worker_pid)
+
+      in_flight =
+        Map.put(state.in_flight, slot_ref, %{
+          worker: worker_pid,
+          thread_key: thread_key,
+          token: token,
+          mon_ref: mon_ref,
+          granted_at_ms: System.monotonic_time(:millisecond)
+        })
+
+      case safe_send_slot_granted(worker_pid, slot_ref, token) do
+        :ok ->
+          Logger.debug(
+            "Scheduler granted slot worker=#{inspect(worker_pid)} thread_key=#{inspect(thread_key)} " <>
+              "in_flight=#{map_size(in_flight)}/#{state.max}"
+          )
+
+          emit_scheduler_telemetry(:slot_granted, %{
+            in_flight: map_size(in_flight),
+            max: state.max,
+            waitq: :queue.len(state.waitq),
+            wait_ms: 0
+          })
+
+          {:noreply, %{state | in_flight: in_flight}}
+
+        {:error, :dead_worker} ->
+          Logger.warning(
+            "Scheduler: worker #{inspect(worker_pid)} died before slot could be granted, skipping"
+          )
+
+          state = maybe_demonitor_worker(state, %{worker: worker_pid, mon_ref: mon_ref})
+          {:noreply, grant_until_full(state)}
+      end
+    else
+      {state, mon_ref} = ensure_monitor(state, worker_pid)
+      queued_at_ms = System.monotonic_time(:millisecond)
+
+      waitq =
+        :queue.in(
+          %{
+            worker: worker_pid,
+            thread_key: thread_key,
+            token: token,
+            mon_ref: mon_ref,
+            queued_at_ms: queued_at_ms
+          },
+          state.waitq
+        )
+
+      slot_request_times = Map.put(slot_request_times(state), worker_pid, queued_at_ms)
+
+      Logger.debug(
+        "Scheduler queued slot request worker=#{inspect(worker_pid)} thread_key=#{inspect(thread_key)} " <>
+          "in_flight=#{map_size(state.in_flight)}/#{state.max} waitq=#{:queue.len(waitq)}"
+      )
+
+      emit_scheduler_telemetry(:slot_queued, %{
+        in_flight: map_size(state.in_flight),
+        max: state.max,
+        waitq: :queue.len(waitq)
+      })
+
+      {:noreply,
+       state |> Map.put(:waitq, waitq) |> Map.put(:slot_request_times, slot_request_times)}
+    end
   end
 
   @impl true
@@ -261,6 +298,7 @@ defmodule LemonGateway.Scheduler do
 
             # Clean up monitor for this stale request, threading state
             acc_state = maybe_demonitor_worker(acc_state, entry)
+            maybe_notify_slot_expired(entry)
             {q, stale_acc + 1, times_acc, acc_state}
           else
             {:queue.in(entry, q), stale_acc, Map.put(times_acc, worker, queued_at), acc_state}
@@ -281,10 +319,15 @@ defmodule LemonGateway.Scheduler do
   end
 
   # Safely send slot grant message with error handling
-  defp safe_send_slot_granted(worker_pid, slot_ref) do
+  defp safe_send_slot_granted(worker_pid, slot_ref, token) do
     try do
       if Process.alive?(worker_pid) do
-        send(worker_pid, {:slot_granted, slot_ref})
+        if is_reference(token) do
+          send(worker_pid, {:slot_granted, slot_ref, token})
+        else
+          send(worker_pid, {:slot_granted, slot_ref})
+        end
+
         :ok
       else
         {:error, :dead_worker}
@@ -305,12 +348,13 @@ defmodule LemonGateway.Scheduler do
           slot_ref = make_ref()
 
           # Check if worker is still alive before granting
-          case safe_send_slot_granted(worker_pid, slot_ref) do
+          case safe_send_slot_granted(worker_pid, slot_ref, Map.get(entry, :token)) do
             :ok ->
               in_flight =
                 Map.put(state.in_flight, slot_ref, %{
                   worker: worker_pid,
                   thread_key: thread_key,
+                  token: Map.get(entry, :token),
                   mon_ref: mon_ref,
                   granted_at_ms: System.monotonic_time(:millisecond)
                 })
@@ -463,6 +507,51 @@ defmodule LemonGateway.Scheduler do
 
     {:queue.from_list(kept), length(removed)}
   end
+
+  defp tokenized_request_outstanding?(state, worker_pid) do
+    Enum.any?(state.in_flight, fn {_slot_ref, entry} ->
+      entry.worker == worker_pid and is_reference(Map.get(entry, :token))
+    end) or
+      Enum.any?(:queue.to_list(state.waitq), fn entry ->
+        Map.get(entry, :worker) == worker_pid and is_reference(Map.get(entry, :token))
+      end)
+  end
+
+  defp cancel_tokenized_request(state, worker_pid, token) do
+    {in_flight, removed_in_flight} =
+      Enum.reduce(state.in_flight, {%{}, []}, fn {slot_ref, entry}, {kept, removed} ->
+        if entry.worker == worker_pid and Map.get(entry, :token) == token do
+          {kept, [Map.put(entry, :slot_ref, slot_ref) | removed]}
+        else
+          {Map.put(kept, slot_ref, entry), removed}
+        end
+      end)
+
+    {kept_waiters, removed_waiters} =
+      state.waitq
+      |> :queue.to_list()
+      |> Enum.split_with(fn entry ->
+        not (Map.get(entry, :worker) == worker_pid and Map.get(entry, :token) == token)
+      end)
+
+    removed_entries = removed_in_flight ++ removed_waiters
+
+    state =
+      Enum.reduce(removed_entries, %{state | in_flight: in_flight}, fn entry, acc ->
+        maybe_demonitor_worker(acc, entry)
+      end)
+
+    state
+    |> Map.put(:waitq, :queue.from_list(kept_waiters))
+    |> Map.put(:slot_request_times, Map.delete(slot_request_times(state), worker_pid))
+  end
+
+  defp maybe_notify_slot_expired(%{worker: worker, token: token})
+       when is_pid(worker) and is_reference(token) do
+    send(worker, {:slot_request_expired, token})
+  end
+
+  defp maybe_notify_slot_expired(_entry), do: :ok
 
   defp wait_time_ms(%{queued_at_ms: queued_at_ms})
        when is_integer(queued_at_ms) and queued_at_ms > 0 do

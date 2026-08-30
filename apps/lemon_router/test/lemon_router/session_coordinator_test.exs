@@ -405,6 +405,53 @@ defmodule LemonRouter.SessionCoordinatorTest do
     assert_receive {:bridge_unsubscribed, "run2"}, 500
   end
 
+  test "queued start failure emits one terminal completion and advances the queue", %{
+    run_supervisor: run_supervisor
+  } do
+    key = {:session, unique_session_key()}
+
+    :ok = submit(key, "run1", "one", :collect, run_supervisor)
+    assert_receive {:started, "run1", _}, 500
+
+    :ok = LemonCore.EventBridge.subscribe_run("run2")
+    assert_receive {:bridge_subscribed, "run2"}, 500
+    LemonCore.Bus.subscribe(LemonCore.Bus.run_topic("run2"))
+
+    failing_submission =
+      submission(key, "run2", "two", :collect, run_supervisor,
+        run_process_module: SessionCoordinatorFailingRunProcess
+      )
+
+    :ok = SessionCoordinator.submit(key, failing_submission)
+    :ok = submit(key, "run3", "three", :collect, run_supervisor)
+
+    [{_, active_pid, _, _}] = DynamicSupervisor.which_children(run_supervisor)
+    GenServer.stop(active_pid, :normal)
+
+    assert_receive %LemonCore.Event{
+                     type: :run_completed,
+                     payload: %{
+                       completed: %{
+                         ok: false,
+                         error: %{type: :run_start_failed, reason: :run_failed_to_start}
+                       }
+                     },
+                     meta: %{
+                       run_id: "run2",
+                       synthetic: true,
+                       failure_stage: :run_start
+                     }
+                   },
+                   500
+
+    refute_receive %LemonCore.Event{type: :run_completed, meta: %{run_id: "run2"}}, 100
+    assert_receive {:bridge_unsubscribed, "run2"}, 500
+    assert_receive {:started, "run3", _}, 500
+
+    SessionCoordinator.cancel(elem(key, 1), :user_requested)
+    assert_receive {:aborted, "run3", :user_requested}, 500
+  end
+
   test "steer dispatch failure falls back to queued work correctly", %{
     run_supervisor: run_supervisor
   } do

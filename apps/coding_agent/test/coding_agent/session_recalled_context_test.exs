@@ -242,6 +242,68 @@ defmodule CodingAgent.SessionRecalledContextTest do
       assert last_user_content(messages) == "why is the build slow?"
     end
 
+    test "skill relevance keeps the cacheable prompt stable and stays out of persistence" do
+      Contributor.forget()
+
+      cwd =
+        Path.join(
+          System.tmp_dir!(),
+          "session_skill_cache_#{System.unique_integer([:positive])}"
+        )
+
+      skill_dir = Path.join([cwd, ".lemon", "skill", "cache-probe"])
+      File.mkdir_p!(skill_dir)
+
+      File.write!(
+        Path.join(skill_dir, "SKILL.md"),
+        "---\nname: Cache Probe\ndescription: Generic helper\nkeywords:\n  - quasarprobe\n---\nbody"
+      )
+
+      on_exit(fn -> File.rm_rf(cwd) end)
+      LemonSkills.refresh(cwd: cwd)
+
+      handler_id =
+        "session-skill-relevance-#{System.unique_integer([:positive, :monotonic])}"
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:lemon_skills, :skill, :prompt_render],
+          fn event, measurements, metadata, owner ->
+            send(owner, {:skill_relevance, event, measurements, metadata})
+          end,
+          self()
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+      session = start_session(cwd: cwd)
+
+      :ok = Session.prompt(session, "quasarprobe")
+      {_first_messages, first_system_prompt} = await_sent()
+
+      assert_receive {:skill_relevance, [:lemon_skills, :skill, :prompt_render], %{count: 1},
+                      %{surface: "relevant", skill_keys: ["cache-probe"]}}
+
+      eventually_idle(session)
+      assert Session.get_state(session).relevant_skill_keys == ["cache-probe"]
+
+      :ok = Session.prompt(session, "unrelated request")
+      {_second_messages, second_system_prompt} = await_sent()
+      eventually_idle(session)
+
+      assert first_system_prompt == second_system_prompt
+      refute first_system_prompt =~ "<relevant-skills>"
+      assert first_system_prompt =~ "<key>cache-probe</key>"
+      refute "cache-probe" in Session.get_state(session).relevant_skill_keys
+
+      assert session
+             |> Session.get_messages()
+             |> Enum.filter(&match?(%UserMessage{}, &1))
+             |> Enum.map(& &1.content) == ["quasarprobe", "unrelated request"]
+
+      assert transcript_contents(session) == ["quasarprobe", "unrelated request"]
+    end
+
     test "a user message that ends in the closing delimiter survives with no contributor" do
       # The configuration where this bites hardest: nothing is contributed, so
       # nothing was ever attached, and a strip that recognised the delimiter
@@ -615,6 +677,19 @@ defmodule CodingAgent.SessionRecalledContextTest do
              )
 
       unsubscribe.()
+    end
+  end
+
+  defp eventually_idle(session, attempts \\ 100)
+
+  defp eventually_idle(_session, 0), do: flunk("session did not become idle")
+
+  defp eventually_idle(session, attempts) do
+    if Session.get_state(session).is_streaming do
+      Process.sleep(10)
+      eventually_idle(session, attempts - 1)
+    else
+      :ok
     end
   end
 end

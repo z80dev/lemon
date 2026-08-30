@@ -3,7 +3,7 @@ defmodule LemonRouter.RunOrchestratorTest do
 
   alias LemonCore.RunRequest
   alias LemonCore.ResumeToken
-  alias LemonRouter.RunOrchestrator
+  alias LemonRouter.{PendingCompactionStore, RunOrchestrator}
 
   @moduledoc """
   Tests for RunOrchestrator including cwd and tool_policy override handling.
@@ -32,6 +32,9 @@ defmodule LemonRouter.RunOrchestratorTest do
     def init(opts) do
       {:ok, opts}
     end
+
+    @impl true
+    def handle_cast({:abort, _reason}, state), do: {:stop, :normal, state}
   end
 
   defmodule CapturingRunProcess do
@@ -271,6 +274,108 @@ defmodule LemonRouter.RunOrchestratorTest do
   end
 
   describe "admission control" do
+    test "an abort tombstone rejects a later submission with the same fixed run id" do
+      run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+
+      {:ok, orchestrator_pid} =
+        GenServer.start_link(
+          RunOrchestrator,
+          run_supervisor: run_supervisor,
+          run_process_module: BlockingRunProcess
+        )
+
+      on_exit(fn ->
+        if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
+      end)
+
+      run_id = "run_tombstoned_#{System.unique_integer([:positive])}"
+      session_key = "agent:tombstone:test:#{System.unique_integer([:positive])}"
+
+      assert :ok = RunOrchestrator.register_abort(orchestrator_pid, run_id, :hard_stop)
+
+      assert {:error, {:run_aborted, :hard_stop}} =
+               RunOrchestrator.submit(
+                 orchestrator_pid,
+                 request(%{
+                   run_id: run_id,
+                   origin: :goal,
+                   session_key: session_key,
+                   agent_id: "test",
+                   prompt: "must not start"
+                 })
+               )
+
+      refute_receive {:bridge_subscribed, ^run_id}, 100
+      assert %{active: 0} = DynamicSupervisor.count_children(run_supervisor)
+    end
+
+    test "concurrent abort and submission leave no accepted run alive across repetitions" do
+      run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+
+      {:ok, orchestrator_pid} =
+        GenServer.start_link(
+          RunOrchestrator,
+          run_supervisor: run_supervisor,
+          run_process_module: BlockingRunProcess
+        )
+
+      run_ids =
+        for iteration <- 1..32 do
+          run_id = "run_abort_race_#{iteration}_#{System.unique_integer([:positive])}"
+          session_key = "agent:abort-race:test:#{iteration}:#{System.unique_integer([:positive])}"
+          parent = self()
+
+          submit_task =
+            Task.async(fn ->
+              send(parent, {:ready, self()})
+              receive do: (:go -> :ok)
+
+              RunOrchestrator.submit(
+                orchestrator_pid,
+                request(%{
+                  run_id: run_id,
+                  origin: :goal,
+                  session_key: session_key,
+                  agent_id: "test",
+                  prompt: "race"
+                })
+              )
+            end)
+
+          abort_task =
+            Task.async(fn ->
+              send(parent, {:ready, self()})
+              receive do: (:go -> :ok)
+
+              :ok = RunOrchestrator.register_abort(orchestrator_pid, run_id, :hard_stop)
+              :ok = LemonRouter.SessionCoordinator.abort_run(run_id, :hard_stop)
+            end)
+
+          assert_receive {:ready, submit_pid}, 500
+          assert_receive {:ready, abort_pid}, 500
+          send(submit_pid, :go)
+          send(abort_pid, :go)
+
+          assert Task.await(abort_task, 2_000) == :ok
+
+          assert Task.await(submit_task, 2_000) in [
+                   {:ok, run_id},
+                   {:error, {:run_aborted, :hard_stop}}
+                 ]
+
+          assert eventually(fn ->
+                   LemonRouter.SessionCoordinator.active_run({:session, session_key}) == :none
+                 end)
+
+          run_id
+        end
+
+      on_exit(fn ->
+        Enum.each(run_ids, &LemonCore.EventBridge.unsubscribe_run/1)
+        if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
+      end)
+    end
+
     test "returns :run_capacity_reached when bounded run supervisor is saturated" do
       run_supervisor =
         start_supervised!({DynamicSupervisor, strategy: :one_for_one, max_children: 1})
@@ -333,6 +438,103 @@ defmodule LemonRouter.RunOrchestratorTest do
       assert_receive {:bridge_subscribed, run_id}, 500
       assert_receive {:bridge_unsubscribed, ^run_id}, 500
       refute_receive {:bridge_unsubscribed, ^run_id}, 100
+    end
+
+    test "failed channel submission preserves its pending compaction marker" do
+      run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+
+      {:ok, orchestrator_pid} =
+        GenServer.start_link(
+          RunOrchestrator,
+          run_supervisor: run_supervisor,
+          run_process_module: RunOrchestratorFailingRunProcess
+        )
+
+      session_key = "agent:compaction-fail:test:#{System.unique_integer([:positive])}"
+
+      marker = %{
+        reason: "near_limit",
+        session_key: session_key,
+        set_at_ms: System.system_time(:millisecond)
+      }
+
+      LemonCore.RunHistoryStore.put(
+        session_key,
+        System.system_time(:millisecond),
+        "run-before-failure",
+        %{summary: %{prompt: "prior question", answer: "prior answer"}}
+      )
+
+      PendingCompactionStore.put(session_key, marker)
+
+      on_exit(fn ->
+        if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
+        LemonCore.RunHistoryStore.delete_session(session_key)
+        PendingCompactionStore.delete(session_key)
+      end)
+
+      assert {:error, :run_failed_to_start} =
+               RunOrchestrator.submit(
+                 orchestrator_pid,
+                 request(%{
+                   origin: :channel,
+                   session_key: session_key,
+                   agent_id: "test",
+                   prompt: "continue"
+                 })
+               )
+
+      assert PendingCompactionStore.get(session_key) == marker
+    end
+
+    test "accepted channel submission consumes its pending compaction marker" do
+      run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+
+      {:ok, orchestrator_pid} =
+        GenServer.start_link(
+          RunOrchestrator,
+          run_supervisor: run_supervisor,
+          run_process_module: CapturingRunProcess,
+          run_process_opts: %{notify_pid: self()}
+        )
+
+      session_key = "agent:compaction-ok:test:#{System.unique_integer([:positive])}"
+
+      marker = %{
+        reason: "near_limit",
+        session_key: session_key,
+        set_at_ms: System.system_time(:millisecond)
+      }
+
+      LemonCore.RunHistoryStore.put(
+        session_key,
+        System.system_time(:millisecond),
+        "run-before-success",
+        %{summary: %{prompt: "prior question", answer: "prior answer"}}
+      )
+
+      PendingCompactionStore.put(session_key, marker)
+
+      on_exit(fn ->
+        if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
+        LemonCore.RunHistoryStore.delete_session(session_key)
+        PendingCompactionStore.delete(session_key)
+      end)
+
+      assert {:ok, _run_id} =
+               RunOrchestrator.submit(
+                 orchestrator_pid,
+                 request(%{
+                   origin: :channel,
+                   session_key: session_key,
+                   agent_id: "test",
+                   prompt: "continue"
+                 })
+               )
+
+      assert_receive {:captured_job, execution_request}, 500
+      assert execution_request.prompt =~ "prior question"
+      assert PendingCompactionStore.get(session_key) == nil
     end
   end
 
@@ -735,6 +937,24 @@ defmodule LemonRouter.RunOrchestratorTest do
   end
 
   defp request(attrs), do: RunRequest.new(attrs)
+
+  defp eventually(fun, timeout_ms \\ 1_000) when is_function(fun, 0) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_eventually(fun, deadline)
+  end
+
+  defp do_eventually(fun, deadline) do
+    if fun.() do
+      true
+    else
+      if System.monotonic_time(:millisecond) >= deadline do
+        false
+      else
+        Process.sleep(10)
+        do_eventually(fun, deadline)
+      end
+    end
+  end
 
   defp unique_oracle_session_key do
     "agent:oracle:main:#{System.unique_integer([:positive])}"

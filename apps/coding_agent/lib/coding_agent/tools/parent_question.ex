@@ -63,12 +63,7 @@ defmodule CodingAgent.Tools.ParentQuestion do
     session_key = Keyword.get(opts, :session_key)
     agent_id = Keyword.get(opts, :agent_id)
 
-    requests =
-      ParentQuestions.list(
-        status: :waiting,
-        parent_session_key: session_key,
-        parent_agent_id: agent_id
-      )
+    requests = ParentQuestions.list_for_parent(session_key, agent_id)
 
     text =
       case requests do
@@ -148,8 +143,8 @@ defmodule CodingAgent.Tools.ParentQuestion do
           {:error, :not_found} ->
             {:error, "Unknown request_id: #{request_id}"}
 
-          {:error, :wrong_session} ->
-            {:error, "Request #{request_id} does not belong to this session"}
+          {:error, :wrong_parent} ->
+            {:error, "Request #{request_id} does not belong to this session and agent"}
 
           {:error, {:invalid_status, status}} ->
             {:error, "Request #{request_id} is already #{status}"}

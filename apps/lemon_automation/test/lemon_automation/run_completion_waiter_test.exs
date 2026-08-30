@@ -23,6 +23,88 @@ defmodule LemonAutomation.RunCompletionWaiterTest do
     end
   end
 
+  defmodule InlineCompletionRouter do
+    @moduledoc false
+
+    def submit(params) do
+      send(
+        self(),
+        LemonCore.Event.new(:run_completed, %{
+          completed: %{ok: true, answer: "completed during submit"}
+        })
+      )
+
+      {:ok, params.run_id}
+    end
+  end
+
+  defmodule ClaimAwareRouter do
+    @moduledoc false
+
+    def submit(params) do
+      send(params.test_pid, {:router_submit_started, params.run_id})
+
+      send(
+        self(),
+        LemonCore.Event.new(:run_completed, %{
+          completed: %{ok: true, answer: "claimed and completed"}
+        })
+      )
+
+      {:ok, params.run_id}
+    end
+  end
+
+  test "submit_and_wait/2 observes synchronous completion and removes its subscription" do
+    Process.put(:run_completion_waiter_test_pid, self())
+
+    assert {:ok, "run_sync", "completed during submit"} =
+             RunCompletionWaiter.submit_and_wait(%{run_id: "run_sync", prompt: "now"},
+               router_mod: InlineCompletionRouter,
+               bus_mod: TestBus,
+               timeout_ms: 10
+             )
+
+    assert_received {:bus_subscribed, "run:run_sync"}
+    assert_received {:bus_unsubscribed, "run:run_sync"}
+    refute_received %LemonCore.Event{type: :run_completed}
+  end
+
+  test "submission ownership is claimed before the router can accept the fixed run id" do
+    Process.put(:run_completion_waiter_test_pid, self())
+    test_pid = self()
+
+    assert {:ok, "run_claimed", "claimed and completed"} =
+             RunCompletionWaiter.submit_and_wait(
+               %{run_id: "run_claimed", prompt: "now", test_pid: test_pid},
+               router_mod: ClaimAwareRouter,
+               bus_mod: TestBus,
+               timeout_ms: 10,
+               on_submitting: fn run_id ->
+                 send(test_pid, {:submission_claimed, run_id})
+                 :ok
+               end
+             )
+
+    assert_received {:submission_claimed, "run_claimed"}
+    assert_received {:router_submit_started, "run_claimed"}
+  end
+
+  test "a rejected ownership claim prevents router submission" do
+    Process.put(:run_completion_waiter_test_pid, self())
+
+    assert {:error, {:submit_failed, {:submission_claim_rejected, :stopped}}} =
+             RunCompletionWaiter.submit_and_wait(
+               %{run_id: "run_rejected_claim", prompt: "never submit", test_pid: self()},
+               router_mod: ClaimAwareRouter,
+               bus_mod: TestBus,
+               on_submitting: fn _run_id -> {:error, :stopped} end
+             )
+
+    refute_received {:router_submit_started, "run_rejected_claim"}
+    assert_received {:bus_unsubscribed, "run:run_rejected_claim"}
+  end
+
   test "wait/3 subscribes, extracts completion output, and unsubscribes" do
     parent = self()
 

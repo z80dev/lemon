@@ -76,7 +76,7 @@ The supervisor uses a `:one_for_one` strategy. Each child is independent:
 | Module | File | Purpose |
 |--------|------|---------|
 | `LemonAgent.EventStream` | `lib/agent_core/event_stream.ex` | GenServer-based async event producer/consumer. Bounded queue with backpressure (`push/2` returns `:ok` or `{:error, :overflow}`). Owner monitoring, task linking, configurable timeout. Drop strategies: `:error`, `:drop_oldest`, `:drop_newest`. |
-| `LemonAgent.Context` | `lib/agent_core/context.ex` | Context window management. `estimate_size/2`, `estimate_tokens/1`, `truncate/2` (sliding window and bookends strategies), `make_transform/1` for `AgentLoopConfig.transform_context`, `stats/2`, `check_size/3`. |
+| `LemonAgent.Context` | `lib/agent_core/context.ex` | Context window management. `truncate/2` keeps retained messages chronological, enforces both bookends limits, and treats assistant tool-call/result transcripts atomically; also provides `estimate_size/2`, `estimate_tokens/1`, `make_transform/1`, `stats/2`, and `check_size/3`. |
 | `LemonAgent.AbortSignal` | `lib/agent_core/abort_signal.ex` | ETS-based cooperative abort signaling. `new/0`, `abort/1`, `aborted?/1`, `clear/1`. Used by the loop and tool execution to check for cancellation. |
 | LemonAgent.AbortSignal.TableOwner (internal) | `lib/agent_core/abort_signal/table_owner.ex` | GenServer that owns the abort signal ETS table and acts as heir for table survival. |
 | `LemonAgent.Proxy` | `lib/agent_core/proxy.ex` | SSE proxy stream function for routing LLM calls through a server. Reconstructs partial `AssistantMessage` from bandwidth-optimized SSE events. Includes `ProxyStreamOptions` struct. |
