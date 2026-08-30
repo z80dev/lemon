@@ -8,6 +8,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Added
+
+- Named execution nodes can now pair with a Lemon controller through
+  `./bin/lemon node join`, advertise live presence under a unique name, and
+  run native delegated `CodingAgent.Session` work selected by the `agent`
+  tool's `node` parameter. Pairing persists a private, controller-bound token
+  on the destination machine; remote runs keep credentials and default working
+  directories destination-local and support targeted cancellation.
+
 ### Changed
 
 - Product releases can now be cut and published from one manual Release

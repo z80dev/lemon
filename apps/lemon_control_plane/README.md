@@ -6,6 +6,11 @@ HTTP and WebSocket control plane API server for the Lemon agent system. Provides
 
 LemonControlPlane is the external interface through which clients (terminal UI, web dashboards, mobile apps, browser extensions) interact with the Lemon agent runtime. It exposes 100+ JSON-RPC-style methods over WebSocket for submitting agent runs, managing sessions, configuring the system, scheduling cron jobs, pairing nodes/devices, and streaming real-time events.
 
+It is also the controller transport for named coding execution nodes. Paired
+nodes authenticate as the restricted `node` role, register one live connection
+under a durable unique name, and receive targeted native `coding_agent.run`
+invocations through `LemonCore.NodeRegistry`.
+
 The server runs on [Bandit](https://github.com/mtrudel/bandit) with [Plug](https://github.com/elixir-plug/plug) routing, and uses [WebSockAdapter](https://github.com/phoenixframework/websock_adapter) for WebSocket upgrades.
 
 ## Architecture
@@ -268,12 +273,32 @@ Without a token, operators receive the scopes listed in `connect` params (or all
 ### Token-Based Authentication (Nodes/Devices)
 
 1. Node calls `node.pair.request` with nodeType and nodeName.
-2. Operator approves via `node.pair.approve`.
-3. Node calls `node.pair.verify` with the pairing code and receives a challenge.
-4. Node calls `connect.challenge` with the challenge and receives a session token (default TTL: 7 days).
-5. Node uses `{"auth": {"token": "..."}}` in future `connect` calls.
+2. Operator approves via `node.pair.approve`, which returns a one-time challenge.
+3. Node calls `connect.challenge` with that challenge and receives a session token (TTL: seven days for this pairing flow).
+4. Node uses `{"auth": {"token": "..."}}` in future `connect` calls.
+
+`node.pair.verify` is the public pairing-code status check; it does not deliver
+the approval challenge or session token.
 
 Token validation is handled by `Auth.TokenStore`, backed by `LemonCore.Store` under the `:session_tokens` namespace. Tokens are validated on each connection attempt and expired tokens are cleaned up lazily.
+
+The source-checkout execution-node CLI performs the request, approval, and
+challenge exchange when the connecting operator has pairing scope:
+
+```bash
+LEMON_NODE_OPERATOR_TOKEN=... ./bin/lemon node join \
+  --name worker-1 \
+  --controller ws://controller:4040/ws \
+  --pair \
+  --cwd /srv/project
+```
+
+The CLI stores its copy of the issued session token on the destination in a
+private file keyed by node name and bound to the exact controller URL.
+Subsequent starts omit `--pair`. The persisted local record does not extend
+server-side expiry or refresh automatically; restoring an expired node needs
+operator pairing action. A new identity cannot reuse the old name until that
+durable identity is renamed.
 
 ### Method Scopes
 
@@ -460,17 +485,30 @@ when to render the full payload.
 
 | Method | Scope | Description |
 |--------|-------|-------------|
-| `node.list` | read | List paired nodes plus summary and cleanup flags |
+| `node.list` | read | List durable paired nodes with live-registry online/offline status plus summary and cleanup flags |
 | `node.describe` | read | Get node details with redacted metadata summary and cleanup flags |
 | `node.rename` | write | Rename a node plus summary and cleanup flags |
-| `node.invoke` | write | Invoke a method on a node plus arg/result cleanup summary |
-| `node.invoke.result` | invoke | Node reports invocation result (node-only) plus result/error cleanup summary |
+| `node.invoke` | write | Invoke a method on one authenticated live node plus arg/result cleanup summary |
+| `node.invoke.result` | invoke | Owning node reports an invocation result; results from another node are rejected |
 | `node.event` | event | Node sends an event (node-only) plus payload summary and cleanup flags |
 | `node.pair.request` | pairing | Request to pair a node plus pairing-code delivery summary |
 | `node.pair.list` | pairing | List pending pairing requests plus summary and cleanup flags |
 | `node.pair.approve` | pairing | Approve a pairing request plus token/challenge delivery summary |
 | `node.pair.reject` | pairing | Reject a pairing request plus cleanup flags |
 | `node.pair.verify` | pairing | Verify a pairing code plus status cleanup summary |
+
+Paired names are durably unique per controller, and the live registry enforces
+the same uniqueness while connections are online. A durable record alone is
+not executable: `node.invoke` fails with `UNAVAILABLE` unless its authenticated
+WebSocket is registered. Pending invocations are bound to their node ID, fail
+when that connection disconnects, and support targeted `node.invoke.cancel`
+delivery through the internal registry path.
+
+For coding delegation the supported worker method is versioned
+`coding_agent.run`. The WebSocket payload contains JSON-safe execution request
+data, not resolved model credentials, callbacks, source process state, or
+executor options. The destination selects its own credentials and validates
+its own cwd. This is native Lemon execution, not a vendor CLI runner.
 
 ### Channels and Transports
 
@@ -709,6 +747,10 @@ In test mode, the port defaults to `0` (OS-assigned) to avoid conflicts.
 ```bash
 # Start the umbrella (control plane starts automatically)
 iex -S mix
+
+# From a destination source checkout, pair a named native execution node
+LEMON_NODE_OPERATOR_TOKEN=... ./bin/lemon node join --name worker-1 \
+  --controller ws://localhost:4040/ws --pair --cwd /path/to/project
 
 # Run tests
 mix test apps/lemon_control_plane

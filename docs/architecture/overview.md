@@ -27,8 +27,9 @@ For system diagrams see `docs/diagrams/`. For per-app details see each `apps/*/R
 5. **Multi-Provider Abstraction** — unified interface for 26 LLM providers with
    automatic model configuration and cost tracking.
 
-6. **Native Top-Level Execution** — every product run uses Lemon's in-process
-   executor. Subagents also run natively in-process; there are no external CLI
+6. **Native Execution** — every product run uses Lemon's executor. Local runs
+   stay in-process; named-node runs cross an authenticated WebSocket and enter
+   the same native executor on the destination. There are no external CLI
    runners.
 
 ---
@@ -79,6 +80,12 @@ For system diagrams see `docs/diagrams/`. For per-app details see each `apps/*/R
 ```
 
 See `docs/diagrams/architecture.svg` for the full visual diagram.
+
+The diagram's `CodingAgent.Session` box can be local or destination-side.
+`CodingAgent.Executor` chooses the local `SessionRunner` unless request metadata
+names a live execution node. In that case `RemoteSessionRunner` routes through
+`LemonCore.NodeRegistry` and the control-plane WebSocket to a native
+destination `CodingAgent.Executor`.
 
 ---
 
@@ -230,7 +237,7 @@ that no arrow ever runs from `published` into the outer three tiers.
 
 ## Data Flow
 
-Four main paths through the system:
+Five main paths through the system:
 
 1. **Direct (TUI/Web)**: JSON-RPC → `debug_agent_rpc` → `coding_agent_ui` → Session → LemonAgent → Tools/LemonAi
 
@@ -239,6 +246,10 @@ Four main paths through the system:
 3. **Channel (Telegram etc.)**: Message → LemonChannels → Router → StreamCoalescer → Outbox
 
 4. **Automation**: CronManager tick → Due jobs → Router → HeartbeatManager → EventBus
+
+5. **Named execution node**: `agent(node: NAME)` → Router → Gateway →
+   `CodingAgent.Executor.RemoteSessionRunner` → `LemonCore.NodeRegistry` →
+   authenticated control-plane WebSocket → destination `CodingAgent.Executor`
 
 See `docs/diagrams/data-flow.svg` for the full diagram.
 
@@ -253,8 +264,9 @@ User message
       → ModelSelection.resolve/1  (explicit → meta → session → profile → history → default)
       → Lane selection (main/subagent/background)
       → Native execution (`ExecutionCommand` → `ExecutionRequest` → `CodingAgent.Executor`)
-        → Tool execution (isolated Task processes)
-        → LLM streaming (event stream per response)
+        → local `SessionRunner`, or named `RemoteSessionRunner` → destination native session
+          → Tool execution (isolated Task processes)
+          → LLM streaming (event stream per response)
       → Outcome recording (RunOutcome → MemoryDocument)
       → Routing feedback entry
 ```
@@ -267,8 +279,10 @@ Top-level execution is a single native path:
 RunRequest → ExecutionCommand → ExecutionRequest → CodingAgent.Executor
 ```
 
-Those request shapes contain no execution-runner selector, `Job` adapter, or
-execution catalog. `LemonCore.EngineRuntime` remains the name of the runtime
+Those request shapes contain no vendor execution-runner selector, `Job`
+adapter, or execution catalog. An optional node placement lives in request
+metadata and chooses local execution or a live named destination without
+changing the executor implementation. `LemonCore.EngineRuntime` remains the name of the runtime
 boundary, but it resolves only the fixed native executor. Run events and durable
 results retain `engine: "lemon"` as provenance:
 it records how a run was executed; it does not select how a future top-level run
@@ -279,10 +293,21 @@ accepts only native (`"lemon"`) tokens for explicit or automatic top-level
 resume. It retains older `ChatState.last_engine` and token values for history and
 rollback, but quarantines non-native values from resumption.
 
-Subagents execute natively in-process through the `task`/`agent` tools — each
-delegated task is a child `CodingAgent.Session` coordinated by
-`CodingAgent.Coordinator`. A subagent retains its own task provenance; it
-cannot alter the executor used for a product run.
+The `task` tool and `@name` personas execute as native in-process child
+`CodingAgent.Session` processes coordinated by `CodingAgent.Coordinator`. The
+`agent` tool instead delegates through the router, where placement can remain
+local or select a named native destination.
+
+The `agent` tool is the placement boundary for named delegation. Omitted
+`node` / `node: "local"` stays on the controller host; another name resolves
+through the live registry. Omitted cwd becomes the destination worker's
+default, while explicit cwd is resolved on the destination. Only JSON-safe
+request/result fields cross the WebSocket: provider credentials, callbacks,
+executor options, and source BEAM state remain local. Node names are durably
+unique per controller and executable only while authenticated and live.
+Explicit aborts emit targeted cancellation; disconnects fail pending
+invocations. The destination strips the node selector before running, which
+prevents recursive remote selection. Remote steer and redirect are unsupported.
 
 ### Lane scheduling
 
