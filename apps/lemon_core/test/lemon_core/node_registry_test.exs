@@ -90,18 +90,36 @@ defmodule LemonCore.NodeRegistryTest do
 
   test "strict completion is bound to the receiving connection and generation" do
     other = spawn(fn -> Process.sleep(:infinity) end)
-    assert :ok = NodeRegistry.register_session("node-1", "newphy", self(), 7)
+    assert :ok = NodeRegistry.register_session("strict-node", "newphy", self(), 7)
     assert {:ok, invoke_id} = NodeRegistry.invoke("newphy", "coding_agent.run", %{})
     assert_receive {:node_event, "node.invoke.request", %{"invokeId" => ^invoke_id}}
 
     assert {:error, :stale_session} =
-             NodeRegistry.complete_session("node-1", other, 7, invoke_id, %{"wrong" => true})
+             NodeRegistry.complete_session(
+               "strict-node",
+               other,
+               7,
+               invoke_id,
+               %{"wrong" => true}
+             )
 
     assert {:error, :stale_session} =
-             NodeRegistry.complete_session("node-1", self(), 6, invoke_id, %{"old" => true})
+             NodeRegistry.complete_session(
+               "strict-node",
+               self(),
+               6,
+               invoke_id,
+               %{"old" => true}
+             )
 
     assert :ok =
-             NodeRegistry.complete_session("node-1", self(), 7, invoke_id, %{"ok" => true})
+             NodeRegistry.complete_session(
+               "strict-node",
+               self(),
+               7,
+               invoke_id,
+               %{"ok" => true}
+             )
 
     assert_receive {:lemon_node_result, ^invoke_id, {:ok, %{"ok" => true}}}
     Process.exit(other, :kill)
@@ -111,19 +129,47 @@ defmodule LemonCore.NodeRegistryTest do
     parent = self()
     stale = spawn(fn -> relay(parent, :stale_session) end)
 
-    assert :ok = NodeRegistry.register_session("node-1", "newphy", stale, 3)
+    assert :ok = NodeRegistry.register_session("rotating-node", "newphy", stale, 3)
     assert {:ok, invoke_id} = NodeRegistry.invoke("newphy", "coding_agent.run", %{})
 
     assert_receive {:stale_session,
                     {:node_event, "node.invoke.request", %{"invokeId" => ^invoke_id}}}
 
-    assert :ok = NodeRegistry.revoke_session("node-1", 4)
-    assert_receive {:stale_session, {:node_session_revoked, "node-1", 4}}
+    assert :ok = NodeRegistry.revoke_session("rotating-node", 4)
+    assert_receive {:stale_session, {:node_session_revoked, "rotating-node", 4}}
 
     assert_receive {:lemon_node_result, ^invoke_id,
                     {:error, {:node_disconnected, :credential_rotated}}}
 
-    refute NodeRegistry.online?("node-1")
+    refute NodeRegistry.online?("rotating-node")
+    Process.exit(stale, :kill)
+  end
+
+  test "revoke before a delayed handshake retains the authorized generation floor" do
+    assert :ok = NodeRegistry.revoke_session("delayed-handshake-node", 2)
+
+    assert {:error, :stale_session} =
+             NodeRegistry.register_session("delayed-handshake-node", "delayed", self(), 1)
+
+    refute NodeRegistry.online?("delayed-handshake-node")
+    assert :ok = NodeRegistry.register_session("delayed-handshake-node", "delayed", self(), 2)
+    assert NodeRegistry.online?("delayed-handshake-node")
+  end
+
+  test "a lower generation cannot replace a higher live session" do
+    parent = self()
+    current = spawn(fn -> relay(parent, :current_session) end)
+    stale = spawn(fn -> relay(parent, :stale_session) end)
+
+    assert :ok = NodeRegistry.register_session("monotonic-node", "monotonic", current, 5)
+
+    assert {:error, :stale_session} =
+             NodeRegistry.register_session("monotonic-node", "monotonic", stale, 4)
+
+    assert {:ok, %{pid: ^current}} = NodeRegistry.resolve("monotonic-node")
+    refute_receive {:current_session, {:node_session_revoked, _, _}}
+
+    Process.exit(current, :kill)
     Process.exit(stale, :kill)
   end
 

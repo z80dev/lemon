@@ -9,6 +9,9 @@ defmodule LemonCore.NodeRegistry do
   The registry deliberately tracks live connections only. Pairing credentials
   and durable node metadata remain owned by the control plane; a node is
   executable only while its authenticated connection is registered here.
+  Per-node authorized session-generation floors are retained in memory so a
+  delayed handshake cannot re-register a credential generation that has
+  already been superseded.
   """
 
   use GenServer
@@ -134,7 +137,7 @@ defmodule LemonCore.NodeRegistry do
 
   @impl true
   def init(_opts) do
-    {:ok, %{nodes: %{}, names: %{}, invocations: %{}}}
+    {:ok, %{nodes: %{}, names: %{}, invocations: %{}, generation_floors: %{}}}
   end
 
   @impl true
@@ -143,32 +146,17 @@ defmodule LemonCore.NodeRegistry do
   end
 
   def handle_call({:register, node_id, name, pid, generation, metadata, revoke?}, _from, state) do
-    case Map.get(state.names, name) do
-      existing_id when is_binary(existing_id) and existing_id != node_id ->
+    existing_id = Map.get(state.names, name)
+
+    cond do
+      generation < authorized_generation_floor(state, node_id) ->
+        {:reply, {:error, :stale_session}, state}
+
+      is_binary(existing_id) and existing_id != node_id ->
         {:reply, {:error, {:name_taken, name}}, state}
 
-      _ ->
-        if revoke?, do: revoke_replaced_connection(state, node_id, pid, generation)
-        state = remove_node(state, node_id, :reconnected)
-        monitor_ref = Process.monitor(pid)
-
-        node = %{
-          id: node_id,
-          name: name,
-          pid: pid,
-          metadata: metadata,
-          generation: generation,
-          connected_at_ms: System.system_time(:millisecond),
-          monitor_ref: monitor_ref
-        }
-
-        state = %{
-          state
-          | nodes: Map.put(state.nodes, node_id, node),
-            names: Map.put(state.names, name, node_id)
-        }
-
-        {:reply, :ok, state}
+      true ->
+        {:reply, :ok, register_node(state, node_id, name, pid, generation, metadata, revoke?)}
     end
   end
 
@@ -345,9 +333,16 @@ defmodule LemonCore.NodeRegistry do
   end
 
   def handle_call({:revoke_session, node_id, generation}, _from, state) do
+    generation_floor = max(generation, authorized_generation_floor(state, node_id))
+
+    state = %{
+      state
+      | generation_floors: Map.put(state.generation_floors, node_id, generation_floor)
+    }
+
     case Map.get(state.nodes, node_id) do
-      %{generation: current_generation, pid: pid} when current_generation < generation ->
-        send(pid, {:node_session_revoked, node_id, generation})
+      %{generation: current_generation, pid: pid} when current_generation < generation_floor ->
+        send(pid, {:node_session_revoked, node_id, generation_floor})
         {:reply, :ok, remove_node(state, node_id, :credential_rotated)}
 
       _ ->
@@ -401,6 +396,38 @@ defmodule LemonCore.NodeRegistry do
 
   defp public_node(node) do
     Map.take(node, [:id, :name, :pid, :metadata, :connected_at_ms])
+  end
+
+  defp authorized_generation_floor(state, node_id) do
+    retained_floor = Map.get(state.generation_floors, node_id, 0)
+
+    case Map.get(state.nodes, node_id) do
+      %{generation: live_generation} -> max(retained_floor, live_generation)
+      nil -> retained_floor
+    end
+  end
+
+  defp register_node(state, node_id, name, pid, generation, metadata, revoke?) do
+    if revoke?, do: revoke_replaced_connection(state, node_id, pid, generation)
+    state = remove_node(state, node_id, :reconnected)
+    monitor_ref = Process.monitor(pid)
+
+    node = %{
+      id: node_id,
+      name: name,
+      pid: pid,
+      metadata: metadata,
+      generation: generation,
+      connected_at_ms: System.system_time(:millisecond),
+      monitor_ref: monitor_ref
+    }
+
+    %{
+      state
+      | nodes: Map.put(state.nodes, node_id, node),
+        names: Map.put(state.names, name, node_id),
+        generation_floors: Map.put(state.generation_floors, node_id, generation)
+    }
   end
 
   defp revoke_replaced_connection(state, node_id, replacement_pid, generation) do
