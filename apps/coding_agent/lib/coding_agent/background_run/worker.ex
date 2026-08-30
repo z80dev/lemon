@@ -74,7 +74,7 @@ defmodule CodingAgent.BackgroundRun.Worker do
     TaskStore.cancel(state.id, reason)
     AbortSignal.abort(state.signal)
     abort_live_session(state.session_id)
-    emit(state, :background_run_cancelled, %{status: :cancelled, reason: safe_reason(reason)})
+    emit(state, :background_run_cancelled, %{status: :cancelled, reason: :cancelled})
     {:reply, :ok, state}
   end
 
@@ -157,7 +157,7 @@ defmodule CodingAgent.BackgroundRun.Worker do
 
       _ ->
         TaskStore.fail(state.id, reason)
-        emit(state, :background_run_error, %{status: :error, error: safe_reason(reason)})
+        emit(state, :background_run_error, %{status: :error, error: :failed})
     end
   end
 
@@ -198,8 +198,4 @@ defmodule CodingAgent.BackgroundRun.Worker do
   catch
     :exit, _ -> :ok
   end
-
-  defp safe_reason(reason) when is_atom(reason), do: reason
-  defp safe_reason(reason) when is_binary(reason), do: String.slice(reason, 0, 500)
-  defp safe_reason(_reason), do: :internal_error
 end

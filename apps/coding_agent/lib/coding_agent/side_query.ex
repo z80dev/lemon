@@ -25,7 +25,18 @@ defmodule CodingAgent.SideQuery do
   @type source :: pid() | String.t() | %{required(:messages) => list()}
 
   @doc "Run a synchronous no-tools question against an immutable parent-context snapshot."
-  @spec ask(source(), String.t(), keyword()) :: {:ok, String.t()} | {:error, term()}
+  @spec ask(source(), String.t(), keyword()) ::
+          {:ok, String.t()}
+          | {:error,
+             :empty_question
+             | :invalid_question
+             | :invalid_source
+             | :session_not_found
+             | :session_unavailable
+             | :history_unavailable
+             | :timeout
+             | :cancelled
+             | :query_failed}
   def ask(source, question, opts \\ [])
 
   def ask(source, question, opts) when is_binary(question) and is_list(opts) do
@@ -156,9 +167,13 @@ defmodule CodingAgent.SideQuery do
     try do
       case runner.(session_opts, question, signal, timeout_ms) do
         {:ok, answer} when is_binary(answer) -> {:ok, answer}
-        {:error, reason} -> {:error, reason}
-        other -> {:error, {:unexpected_result, other}}
+        {:error, reason} -> {:error, public_run_error(reason)}
+        _other -> {:error, :query_failed}
       end
+    rescue
+      _error -> {:error, :query_failed}
+    catch
+      _kind, _reason -> {:error, :query_failed}
     after
       AbortSignal.abort(signal)
       AbortSignal.clear(signal)
@@ -261,6 +276,12 @@ defmodule CodingAgent.SideQuery do
       _ -> @default_timeout_ms
     end
   end
+
+  defp public_run_error(:timeout), do: :timeout
+  defp public_run_error({:timeout, _detail}), do: :timeout
+  defp public_run_error(:cancelled), do: :cancelled
+  defp public_run_error(:aborted), do: :cancelled
+  defp public_run_error(_reason), do: :query_failed
 
   defp generate_session_id do
     "btw_" <> (:crypto.strong_rand_bytes(16) |> Base.encode16(case: :lower))

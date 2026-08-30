@@ -19,7 +19,9 @@ defmodule CodingAgent.BackgroundRun do
   @type id :: String.t()
 
   @doc "Start an isolated full-tool background session and return its durable id immediately."
-  @spec start(String.t(), keyword()) :: {:ok, %{id: id(), status: :queued}} | {:error, term()}
+  @spec start(String.t(), keyword()) ::
+          {:ok, %{id: id(), status: :queued}}
+          | {:error, :empty_prompt | :invalid_prompt | :start_failed}
   def start(prompt, opts \\ [])
 
   def start(prompt, opts) when is_binary(prompt) and is_list(opts) do
@@ -58,7 +60,7 @@ defmodule CodingAgent.BackgroundRun do
   @doc "Return the completed visible answer without internal events or reasoning."
   @spec result(id()) ::
           {:ok, String.t()}
-          | {:error, :not_found | :not_ready | :cancelled | :lost | {:failed, term()}}
+          | {:error, :not_found | :not_ready | :cancelled | :lost | :failed}
   def result(id) when is_binary(id) do
     case get_record(id) do
       {:ok, %{status: :completed, result: %{answer: answer}}} when is_binary(answer) ->
@@ -73,8 +75,8 @@ defmodule CodingAgent.BackgroundRun do
       {:ok, %{status: :lost}} ->
         {:error, :lost}
 
-      {:ok, record} ->
-        {:error, {:failed, Map.get(record, :error, :unknown)}}
+      {:ok, _record} ->
+        {:error, :failed}
 
       {:error, :not_found} = error ->
         error
@@ -136,7 +138,7 @@ defmodule CodingAgent.BackgroundRun do
 
       {:error, reason} ->
         TaskStore.fail(id, {:start_failed, reason})
-        {:error, {:start_failed, reason}}
+        {:error, :start_failed}
     end
   end
 
@@ -215,14 +217,15 @@ defmodule CodingAgent.BackgroundRun do
       started_at: Map.get(record, :started_at),
       completed_at: Map.get(record, :completed_at),
       result_available: record.status == :completed,
-      error: if(record.status in [:error, :lost, :cancelled], do: safe_error(record[:error]))
+      error: public_error_code(record.status)
     }
   end
 
-  defp safe_error(error) when is_atom(error), do: error
-  defp safe_error(error) when is_binary(error), do: String.slice(error, 0, 500)
-  defp safe_error(nil), do: nil
-  defp safe_error(_), do: :internal_error
+  defp public_error_code(:error), do: :failed
+  defp public_error_code(:lost), do: :lost
+  defp public_error_code(:killed), do: :killed
+  defp public_error_code(:cancelled), do: :cancelled
+  defp public_error_code(_status), do: nil
 
   defp timeout_ms(opts) do
     case Keyword.get(opts, :timeout_ms, @default_timeout_ms) do

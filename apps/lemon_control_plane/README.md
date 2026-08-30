@@ -579,6 +579,13 @@ remote result, or error.
 | `transports.status` | read | Status of configured legacy gateway transports plus registry/module health summary |
 | `channels.logout` | admin | Logout from a channel plus credential/state cleanup summary |
 
+Background and side-query RPCs treat the registered agent runtime as an
+untrusted public-boundary provider. Lifecycle maps are projected through an
+allowlist, persisted error values are replaced with stable `errorCode` values,
+and RPC failures return fixed operation-specific messages plus a bounded
+`details.code`. Provider terms, paths, credential text, and arbitrary fields
+are never copied into the JSON-RPC response.
+
 ### Skills
 
 | Method | Scope | Description |

@@ -388,6 +388,13 @@ resolves its own credentials and cwd. This path uses the native
 | `transports.status` | read | Status of configured legacy gateway transports plus registry/module health summary |
 | `channels.logout` | admin | Logout from a channel plus credential/state cleanup summary |
 
+The background/side-query provider boundary is fail-closed. Project only the
+documented lifecycle fields, derive terminal `errorCode` from status, and map
+all provider failures to fixed operation-specific JSON-RPC messages and
+`details.code` values. Never stringify provider return maps or attach raw
+reason terms: they may contain persisted errors, local paths, provider
+metadata, or credentials.
+
 ### Skills
 
 | Method | Scope | Description |

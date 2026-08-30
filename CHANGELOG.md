@@ -51,6 +51,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Background and side-query public APIs now use stable content-free failure
+  classifications; their control-plane RPCs allowlist lifecycle fields and
+  return fixed bounded error codes/messages without provider terms, persisted
+  errors, filesystem paths, or credential details.
 - Packaged and Mix secrets check/import commands now share one ordered
   environment-credential catalog instead of maintaining three copies
 - LemonSim scenarios now share one bounded model/provider/credential resolver;

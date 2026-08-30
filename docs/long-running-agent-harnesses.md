@@ -44,12 +44,17 @@ Long-running implementation tasks can drift when the agent has no durable task m
 the lifecycle. The worker runs through the native coding session and subagent
 lane with the default full toolset. Its session key is `background:<id>`;
 `opts[:session_key]`, when present, is stored only as parent lineage.
+Runtime error terms are retained only in the internal task record. Public
+status/results expose stable classifications; control-plane projections use
+content-free `errorCode` values and discard arbitrary provider fields.
 
 `CodingAgent.SideQuery.ask(source, question, opts)` returns the visible answer
 synchronously. `source` accepts a live session pid/id, a durable Lemon channel
 session key, or a `%{messages: messages, system_prompt: prompt}` map. Side
 queries are capped at 30 seconds by default (120 seconds maximum), explicitly
 set `tools: []`, and run under their own `side_query:*` session key.
+Failures are reported with stable bounded codes rather than provider messages,
+paths, or credential-bearing details.
 
 ## Progress snapshot API
 
