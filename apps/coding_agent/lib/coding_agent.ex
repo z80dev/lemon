@@ -115,4 +115,10 @@ defmodule CodingAgent do
   """
   @spec load_settings(String.t()) :: CodingAgent.SettingsManager.t()
   defdelegate load_settings(cwd), to: CodingAgent.SettingsManager, as: :load
+
+  @doc "Start a durable isolated full-tool background run."
+  defdelegate start_background(prompt, opts \\ []), to: CodingAgent.BackgroundRun, as: :start
+
+  @doc "Run a bounded no-tools question against a live session or durable session key."
+  defdelegate ask_btw(source, question, opts \\ []), to: CodingAgent.SideQuery, as: :ask
 end

@@ -30,6 +30,8 @@ defmodule CodingAgent.Session.Lifecycle do
     session_file = Keyword.get(opts, :session_file)
     session_id = Keyword.get(opts, :session_id)
     parent_session = Keyword.get(opts, :parent_session)
+    context_snapshot = normalize_context_snapshot(Keyword.get(opts, :context_snapshot))
+    initial_messages = normalize_initial_messages(Keyword.get(opts, :initial_messages))
     ui_context = Keyword.get(opts, :ui_context)
     custom_tools = Keyword.get(opts, :tools)
     extra_tools = State.normalize_extra_tools(Keyword.get(opts, :extra_tools, []))
@@ -66,20 +68,26 @@ defmodule CodingAgent.Session.Lifecycle do
     agent_id = Keyword.get(opts, :agent_id, "default")
 
     system_prompt =
-      PromptComposer.compose_system_prompt(
-        cwd,
-        explicit_system_prompt,
-        prompt_template,
-        workspace_dir,
-        session_scope,
-        "",
-        %{
-          run_id: run_id,
-          session_key: session_key,
-          session_id: session_manager.header.id,
-          agent_id: agent_id
-        }
-      )
+      case context_snapshot do
+        %{system_prompt: prompt} ->
+          prompt
+
+        nil ->
+          PromptComposer.compose_system_prompt(
+            cwd,
+            explicit_system_prompt,
+            prompt_template,
+            workspace_dir,
+            session_scope,
+            "",
+            %{
+              run_id: run_id,
+              session_key: session_key,
+              session_id: session_manager.header.id,
+              agent_id: agent_id
+            }
+          )
+      end
 
     model = ModelResolver.resolve_session_model(Keyword.get(opts, :model), settings_manager)
     thinking_level = Keyword.get(opts, :thinking_level) || settings_manager.default_thinking_level
@@ -189,7 +197,17 @@ defmodule CodingAgent.Session.Lifecycle do
 
     LemonAgent.Agent.subscribe(agent, session_pid)
 
-    messages = Persistence.restore_messages_from_session(session_manager)
+    messages =
+      case context_snapshot do
+        %{messages: snapshot_messages} ->
+          Persistence.prepare_initial_messages(snapshot_messages, session_manager)
+
+        nil ->
+          case initial_messages do
+            nil -> Persistence.restore_messages_from_session(session_manager)
+            messages -> Persistence.prepare_initial_messages(messages, session_manager)
+          end
+      end
 
     if messages != [] do
       LemonAgent.Agent.replace_messages(agent, messages)
@@ -217,6 +235,7 @@ defmodule CodingAgent.Session.Lifecycle do
       # `tool_opts` from state rather than from the original opts.
       tool_disclosure: Keyword.get(opts, :tool_disclosure),
       session_scope: session_scope,
+      context_frozen: not is_nil(context_snapshot),
       is_streaming: false,
       pending_prompt_timer_ref: nil,
       event_listeners: [],
@@ -260,6 +279,16 @@ defmodule CodingAgent.Session.Lifecycle do
 
     {:ok, state, lifecycle.extension_status_report}
   end
+
+  defp normalize_context_snapshot(%{messages: messages, system_prompt: system_prompt})
+       when is_list(messages) and is_binary(system_prompt) do
+    %{messages: messages, system_prompt: system_prompt}
+  end
+
+  defp normalize_context_snapshot(_), do: nil
+
+  defp normalize_initial_messages(messages) when is_list(messages), do: messages
+  defp normalize_initial_messages(_), do: nil
 
   @spec reload_extensions(Session.t()) ::
           {:ok, Extensions.extension_status_report() | nil, Session.t()}

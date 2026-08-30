@@ -22,12 +22,14 @@ defmodule CodingAgent.Application do
 
     children = [
       {Registry, keys: :unique, name: CodingAgent.SessionRegistry},
+      {Registry, keys: :unique, name: CodingAgent.BackgroundRun.Registry},
       {Registry, keys: :unique, name: CodingAgent.ProcessRegistry},
       {Registry, keys: :unique, name: CodingAgent.RateLimitHealerRegistry},
       {Task.Supervisor, name: CodingAgent.Search.TaskSupervisor},
       CodingAgent.Search.SingleFlight,
       CodingAgent.Tools.TodoStoreOwner,
       CodingAgent.SessionSupervisor,
+      CodingAgent.BackgroundRun.Supervisor,
       CodingAgent.Wasm.SidecarSupervisor,
       CodingAgent.Tools.Task.LiveBridgeSupervisor,
       {Task.Supervisor, name: CodingAgent.TaskSupervisor},

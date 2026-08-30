@@ -50,6 +50,12 @@ defmodule CodingAgent.Session.Persistence do
     |> restore_valid_tool_transcript(session)
   end
 
+  @doc false
+  @spec prepare_initial_messages([map()], Session.t()) :: [map()]
+  def prepare_initial_messages(messages, session) when is_list(messages) do
+    restore_valid_tool_transcript(messages, session)
+  end
+
   @spec maybe_register_session(Session.t(), String.t(), boolean(), atom()) :: :ok
   def maybe_register_session(_session_manager, _cwd, false, _registry), do: :ok
 

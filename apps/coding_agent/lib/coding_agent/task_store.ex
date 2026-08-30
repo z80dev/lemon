@@ -90,6 +90,23 @@ defmodule CodingAgent.TaskStore do
   end
 
   @doc """
+  Cancel a queued or running task with a durable reason.
+
+  Cancellation is a terminal, first-writer-wins transition. The owner of the
+  actual work remains responsible for signalling the live process; this store
+  method only records the authoritative lifecycle state.
+  """
+  @spec cancel(task_id(), term()) :: :ok
+  def cancel(task_id, reason \\ :cancelled) when is_binary(task_id) do
+    TaskStoreServer.transition(task_id, :cancelled, fn record ->
+      record
+      |> Map.put(:status, :cancelled)
+      |> Map.put(:error, reason)
+      |> Map.put(:completed_at, System.system_time(:second))
+    end)
+  end
+
+  @doc """
   Mark local completion tracking as lost without declaring the delegated run
   failed. A later authoritative result may still complete or fail this task.
   """

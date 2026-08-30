@@ -404,7 +404,10 @@ defmodule CodingAgent.TaskStoreServer do
             record
             |> Map.delete(:auto_followup_join_tokens)
             |> then(fn record ->
-              if Map.get(record, :status) in [:running, :tracking_lost] do
+              status = Map.get(record, :status)
+
+              if status in [:running, :tracking_lost] or
+                   (status == :queued and Map.get(record, :kind) == :background_command) do
                 record
                 |> Map.put(:status, :lost)
                 |> Map.put(:error, :lost_on_restart)
@@ -553,7 +556,7 @@ defmodule CodingAgent.TaskStoreServer do
   defp expired_record?(record, now, ttl_seconds) do
     status = Map.get(record, :status)
 
-    if status in [:completed, :error, :lost] do
+    if status in @terminal_statuses do
       completed_at =
         Map.get(record, :completed_at) || Map.get(record, :updated_at) ||
           Map.get(record, :inserted_at)

@@ -10,6 +10,7 @@ Long-running implementation tasks can drift when the agent has no durable task m
 - todo dependency/progress tracking
 - checkpoint/resume snapshots plus preview filesystem rollback snapshots
 - unified progress snapshots
+- durable isolated background-command lifecycle and bounded no-tools side queries
 - control-plane introspection via `agent.progress`
 
 ## Core modules
@@ -26,6 +27,29 @@ Long-running implementation tasks can drift when the agent has no durable task m
   - Preview diff and restore all or selected paths from filesystem checkpoints
 - `CodingAgent.Progress`
   - Aggregates todo + requirements + checkpoint stats into one snapshot payload
+- `CodingAgent.BackgroundRun`
+  - Starts an isolated native full-tool session and immediately returns a durable id
+  - Lists, inspects, retrieves, and cooperatively cancels background work
+  - Treats a parent session key strictly as lineage metadata
+- `CodingAgent.SideQuery`
+  - Answers a bounded no-tools question from an immutable live context snapshot,
+    a durable channel session key, or an explicit transcript snapshot
+  - Uses a separate ephemeral session and never appends to the source conversation
+
+## Hermes background and side-query APIs
+
+`CodingAgent.BackgroundRun.start(prompt, opts)` returns
+`{:ok, %{id: id, status: :queued}}`. Surfaces can use
+`BackgroundRun.list/1`, `status/1`, `result/1`, and `cancel/2` for the rest of
+the lifecycle. The worker runs through the native coding session and subagent
+lane with the default full toolset. Its session key is `background:<id>`;
+`opts[:session_key]`, when present, is stored only as parent lineage.
+
+`CodingAgent.SideQuery.ask(source, question, opts)` returns the visible answer
+synchronously. `source` accepts a live session pid/id, a durable Lemon channel
+session key, or a `%{messages: messages, system_prompt: prompt}` map. Side
+queries are capped at 30 seconds by default (120 seconds maximum), explicitly
+set `tools: []`, and run under their own `side_query:*` session key.
 
 ## Progress snapshot API
 
