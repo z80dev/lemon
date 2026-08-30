@@ -355,6 +355,10 @@ Hermes-compatible background commands use the same native runtime. Call
 use `list/1`, `status/1`, `result/1`, or `cancel/2`. Each run owns a fresh
 full-tool session on the subagent lane; `:session_key` is retained only as
 lineage metadata, and neither the prompt nor result is appended to that parent.
+Channel surfaces use `list_scoped/2`, `status_scoped/2`, `result_scoped/2`, and
+`cancel_scoped/3`, which require that lineage key and make a foreign id
+indistinguishable from a missing id. The unscoped lifecycle remains reserved for
+trusted operator/control-plane views.
 Queued/running background records recover as `:lost` after a VM restart rather
 than pretending an in-memory worker survived.
 Internal worker/provider failures remain in the task store for runtime

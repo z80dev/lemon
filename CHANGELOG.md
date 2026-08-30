@@ -24,7 +24,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   Discord expose `/bg list`, `/bg status <id>`, `/bg result <id>`, and `/bg
   cancel <id>`. Discord portable slash commands also enforce configured
   guild/channel and binding policy before execution, and channel command errors
-  no longer render arbitrary internal runtime reasons.
+  no longer render arbitrary internal runtime reasons. Background lifecycle
+  access is scoped to its originating channel session so foreign ids are hidden
+  as not found, and Discord now applies the same policy gate to every application
+  command before reset/reasoning/cancel or other command dispatch.
 - Hermes-compatible `/bg` backend sessions with durable lifecycle ids,
   isolated full-tool execution, status/result/list/cancel APIs, and
   restart-safe lost-run reporting; plus bounded `/btw` no-tools queries over

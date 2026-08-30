@@ -49,11 +49,26 @@ defmodule CodingAgent.ControlPlaneProvider do
     |> CodingAgent.BackgroundRun.list()
   end
 
+  def background_list_scoped(session_key, opts) do
+    opts
+    |> normalize_background_list_opts()
+    |> then(&CodingAgent.BackgroundRun.list_scoped(session_key, &1))
+  end
+
   def background_status(id), do: CodingAgent.BackgroundRun.status(id)
+
+  def background_status_scoped(id, session_key),
+    do: CodingAgent.BackgroundRun.status_scoped(id, session_key)
 
   def background_result(id), do: CodingAgent.BackgroundRun.result(id)
 
+  def background_result_scoped(id, session_key),
+    do: CodingAgent.BackgroundRun.result_scoped(id, session_key)
+
   def background_cancel(id), do: CodingAgent.BackgroundRun.cancel(id)
+
+  def background_cancel_scoped(id, session_key),
+    do: CodingAgent.BackgroundRun.cancel_scoped(id, session_key)
 
   def side_query(source, question, opts), do: CodingAgent.SideQuery.ask(source, question, opts)
 

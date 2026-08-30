@@ -317,7 +317,11 @@ Task lifecycle writes are serialized by `TaskStoreServer`. Event appends and fol
 Hermes-compatible `/bg` work enters through `CodingAgent.BackgroundRun`. It
 returns a durable `TaskStore` id immediately, owns a separately supervised
 full-tool session on the `:subagent` lane, and exposes list/status/result/cancel
-without appending to a parent. A supplied channel `session_key` is lineage only;
+without appending to a parent. Channel callers must use the `*_scoped` lifecycle
+functions: they require the originating `session_key`, filter lists by that key,
+and return `:not_found` for missing or foreign ids. The unscoped functions remain
+available for trusted operator/control-plane inspection. A supplied channel
+`session_key` is also retained as lineage metadata;
 queued or running background records become `:lost` after restart because the
 in-memory session cannot be resumed implicitly. `/btw` uses
 `CodingAgent.SideQuery.ask/3`: a new session receives either one atomic frozen

@@ -42,15 +42,47 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
   end
 
   defmodule FakePortableRuntime do
-    def background_start("index the repository", _opts) do
+    def background_start("index the repository", opts) do
+      :persistent_term.put({__MODULE__, :owner_session}, opts[:session_key])
       notify(:background_start)
       {:ok, %{id: "bg_discord_full_identifier", status: :queued}}
     end
 
-    def background_result("bg_discord_full_identifier") do
-      notify(:background_result)
-      {:ok, "Discord checks passed."}
+    def background_list_scoped(session_key, []) do
+      if owner?(session_key) do
+        [%{id: "bg_discord_full_identifier", status: :completed, result_available: true}]
+      else
+        []
+      end
     end
+
+    def background_status_scoped("bg_discord_full_identifier", session_key) do
+      if owner?(session_key),
+        do:
+          {:ok, %{id: "bg_discord_full_identifier", status: :completed, result_available: true}},
+        else: {:error, :not_found}
+    end
+
+    def background_result_scoped("bg_discord_full_identifier", session_key) do
+      if owner?(session_key) do
+        notify(:background_result)
+        {:ok, "Discord checks passed."}
+      else
+        {:error, :not_found}
+      end
+    end
+
+    def background_cancel_scoped("bg_discord_full_identifier", session_key) do
+      if owner?(session_key) do
+        notify(:background_cancel)
+        :ok
+      else
+        {:error, :not_found}
+      end
+    end
+
+    defp owner?(session_key),
+      do: session_key == :persistent_term.get({__MODULE__, :owner_session}, nil)
 
     defp notify(event) do
       if pid = :persistent_term.get({__MODULE__, :test_pid}, nil) do
@@ -362,6 +394,50 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
     )
   end
 
+  test "all lifecycle aliases reject denied guilds, channels, and unbound locations" do
+    interactions = [
+      interaction("reset", []),
+      interaction("session", subcommand("new")),
+      interaction("reasoning", option("level", "high")),
+      interaction("thinking", option("level", "high")),
+      interaction("stop", []),
+      interaction("cancel", [])
+    ]
+
+    policies = [
+      %{allowed_guild_ids: MapSet.new([999]), allowed_channel_ids: nil},
+      %{allowed_guild_ids: nil, allowed_channel_ids: MapSet.new([999])},
+      %{
+        allowed_guild_ids: nil,
+        allowed_channel_ids: nil,
+        deny_unbound_channels: true
+      }
+    ]
+
+    with_interaction_responder(fn ->
+      for policy <- policies, interaction <- interactions do
+        state = Map.merge(discord_message_state(), policy)
+
+        assert {:noreply, ^state} =
+                 Transport.handle_info(
+                   {:discord_event, {:INTERACTION_CREATE, interaction, nil}},
+                   state
+                 )
+
+        assert_receive {:interaction_response, ^interaction,
+                        %{
+                          type: 4,
+                          data: %{
+                            content: "This command is not available in this Discord location.",
+                            flags: 64
+                          }
+                        }}
+      end
+
+      refute_receive {:abort_run, _, _}, 50
+    end)
+  end
+
   test "portable /bg returns a full id and retrieves its result through Discord" do
     with_portable_runtime(fn ->
       with_interaction_responder(fn ->
@@ -398,6 +474,44 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
 
         assert result =~ "Background result bg_discord_full_identifier"
         assert result =~ "Discord checks passed."
+      end)
+    end)
+  end
+
+  test "portable /bg lifecycle is isolated between Discord user principals" do
+    with_portable_runtime(fn ->
+      with_interaction_responder(fn ->
+        owner = interaction("bg", option("prompt", "index the repository"))
+        state = discord_message_state()
+
+        assert {:noreply, ^state} =
+                 Transport.handle_info({:discord_event, {:INTERACTION_CREATE, owner, nil}}, state)
+
+        assert_receive {:background_start, _}
+        assert_receive {:interaction_response, ^owner, %{type: 4}}
+
+        foreign_user = %{user: %{id: "1476753643834183999"}}
+
+        for {prompt, expected} <- [
+              {"list", "No background runs are recorded."},
+              {"status bg_discord_full_identifier", "Background run not found."},
+              {"result bg_discord_full_identifier", "Background run not found."},
+              {"cancel bg_discord_full_identifier", "Background run not found."}
+            ] do
+          foreign =
+            interaction("bg", option("prompt", prompt), %{member: foreign_user})
+
+          assert {:noreply, ^state} =
+                   Transport.handle_info(
+                     {:discord_event, {:INTERACTION_CREATE, foreign, nil}},
+                     state
+                   )
+
+          assert_receive {:interaction_response, ^foreign,
+                          %{type: 4, data: %{content: ^expected, flags: 64}}}
+        end
+
+        refute_receive {:background_cancel, _}, 50
       end)
     end)
   end
@@ -1101,6 +1215,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
       fun.()
     after
       :persistent_term.erase({FakePortableRuntime, :test_pid})
+      :persistent_term.erase({FakePortableRuntime, :owner_session})
       restore_env(:lemon_control_plane, :agent_runtime_provider, previous)
     end
   end

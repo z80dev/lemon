@@ -104,6 +104,54 @@ defmodule CodingAgent.BackgroundRunTest do
     refute inspect(events) =~ "/Users/alice"
   end
 
+  test "scoped lifecycle hides foreign runs and permits their owning session" do
+    owner_a = "agent:default:telegram:acct:dm:1"
+    owner_b = "agent:default:telegram:acct:dm:2"
+    test_pid = self()
+
+    completed_runner = fn _session_opts, prompt, _signal, _timeout_ms -> {:ok, prompt} end
+
+    assert {:ok, %{id: completed_id}} =
+             BackgroundRun.start("owner A answer",
+               session_key: owner_a,
+               runner: completed_runner
+             )
+
+    assert {:ok, "owner A answer"} = await_result(completed_id)
+
+    blocking_runner = fn _session_opts, _prompt, signal, _timeout_ms ->
+      send(test_pid, :owner_b_started)
+      wait_for_abort(signal)
+      send(test_pid, :owner_b_aborted)
+      {:error, :cancelled}
+    end
+
+    assert {:ok, %{id: running_id}} =
+             BackgroundRun.start("owner B work", session_key: owner_b, runner: blocking_runner)
+
+    assert_receive :owner_b_started, 1_000
+
+    assert [%{id: ^completed_id}] = BackgroundRun.list_scoped(owner_a)
+    assert [%{id: ^running_id}] = BackgroundRun.list_scoped(owner_b)
+    assert [] = BackgroundRun.list_scoped(nil)
+
+    assert {:ok, %{id: ^completed_id}} = BackgroundRun.status_scoped(completed_id, owner_a)
+    assert {:ok, "owner A answer"} = BackgroundRun.result_scoped(completed_id, owner_a)
+
+    for result <- [
+          BackgroundRun.status_scoped(completed_id, owner_b),
+          BackgroundRun.result_scoped(completed_id, owner_b),
+          BackgroundRun.cancel_scoped(running_id, owner_a),
+          BackgroundRun.status_scoped(completed_id, nil)
+        ] do
+      assert result == {:error, :not_found}
+    end
+
+    refute_received :owner_b_aborted
+    assert :ok = BackgroundRun.cancel_scoped(running_id, owner_b)
+    assert_receive :owner_b_aborted, 1_000
+  end
+
   test "side query freezes a live parent snapshot, has no tools, and does not append", %{
     tmp_dir: tmp_dir
   } do

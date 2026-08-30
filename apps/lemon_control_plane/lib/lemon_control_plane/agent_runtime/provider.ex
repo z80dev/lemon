@@ -57,6 +57,19 @@ defmodule LemonControlPlane.AgentRuntime.Provider do
   @doc "Cancels one queued or running background session."
   @callback background_cancel(String.t()) :: :ok | {:error, term()}
 
+  @doc "List background runs owned by one parent session key."
+  @callback background_list_scoped(String.t(), keyword()) :: [map()] | {:error, term()}
+
+  @doc "Read background status only when owned by one parent session key."
+  @callback background_status_scoped(String.t(), String.t()) :: {:ok, map()} | {:error, term()}
+
+  @doc "Read a background result only when owned by one parent session key."
+  @callback background_result_scoped(String.t(), String.t()) ::
+              {:ok, String.t()} | {:error, term()}
+
+  @doc "Cancel a background run only when owned by one parent session key."
+  @callback background_cancel_scoped(String.t(), String.t()) :: :ok | {:error, term()}
+
   @doc "Answers a bounded no-tools question against a frozen session context."
   @callback side_query(pid() | session_key() | map(), String.t(), keyword()) ::
               {:ok, String.t()} | {:error, term()}
@@ -95,6 +108,10 @@ defmodule LemonControlPlane.AgentRuntime.Provider do
                       background_status: 1,
                       background_result: 1,
                       background_cancel: 1,
+                      background_list_scoped: 2,
+                      background_status_scoped: 2,
+                      background_result_scoped: 2,
+                      background_cancel_scoped: 2,
                       side_query: 3,
                       run_graph: 1,
                       progress_snapshot: 2,
