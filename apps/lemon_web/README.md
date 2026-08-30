@@ -60,8 +60,9 @@ Includes `RequireAccessToken` plug. When `LEMON_WEB_ACCESS_TOKEN` is set, reques
 
 The `/manage` surface always requires a configured `LEMON_WEB_ACCESS_TOKEN`.
 It returns HTTP 503 when no token is configured and HTTP 401 for missing or
-invalid credentials; successful authentication stores only a token-derived
-session marker.
+invalid credentials. A valid query token stores only a token-derived session
+marker and immediately redirects to the same URL with `token` removed; bearer
+authentication establishes the same marker without redirecting.
 
 | Path | Handler | Description |
 |------|---------|-------------|
@@ -180,7 +181,7 @@ and fail closed without a configured token.
    - `Authorization: Bearer <token>` header
    - `?token=<token>` query parameter
    - Session marker (SHA256 hash stored in cookie under `:lemon_web_auth`)
-3. On valid token: a SHA256 hash is stored in the session so subsequent requests skip the token check
+3. On valid token: a SHA256 hash is stored in the session so subsequent requests skip the token check; query bootstrap redirects server-side to a token-free URL while bearer auth continues directly
 4. On invalid or missing token: responds with `401 Unauthorized` and halts
 
 **Token comparison** uses constant-time comparison via `Plug.Crypto.secure_compare/2`.

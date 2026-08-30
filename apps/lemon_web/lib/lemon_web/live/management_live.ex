@@ -392,7 +392,11 @@ defmodule LemonWeb.ManagementLive do
                 <button type="submit" class="management-secondary-button">Save title</button>
               </.form>
 
-              <div class="management-export-row" aria-label="Redacted session exports">
+              <div
+                class="management-export-row"
+                role="group"
+                aria-label="Redacted session exports"
+              >
                 <span class="text-xs text-slate-500">Always redacted; raw events and secrets omitted.</span>
                 <.link
                   href={~p"/manage/sessions/#{@selected.session_key}/export/json"}

@@ -5,7 +5,9 @@ defmodule LemonWeb.ManagementLiveTest do
 
   import Phoenix.ConnTest
   import Phoenix.LiveViewTest
-  import Plug.Conn, only: [get_resp_header: 2]
+  import Plug.Conn, only: [get_resp_header: 2, put_req_header: 3]
+
+  import ExUnit.CaptureLog
 
   alias LemonCore.{RunStore, SessionLifecycle, Store}
 
@@ -35,15 +37,48 @@ defmodule LemonWeb.ManagementLiveTest do
     assert get(build_conn(), "/") |> html_response(200) =~ "Your local agent workspace"
   end
 
-  test "management routes reject invalid credentials and retain a valid browser session", %{
+  test "query bootstrap redirects cleanly and retains a valid browser session", %{
     token: token
   } do
     Application.put_env(:lemon_web, :access_token, token)
 
     assert get(build_conn(), "/manage?token=wrong") |> response(401) == "Unauthorized"
 
-    conn = get(build_conn(), "/manage?token=#{token}")
+    log =
+      capture_log(fn ->
+        conn = get(build_conn(), "/manage?view=all&token=#{token}")
+        assert redirected_to(conn, 302) == "/manage?view=all"
+        refute response(conn, 302) =~ token
+
+        conn = conn |> recycle() |> get("/manage?view=all")
+        html = html_response(conn, 200)
+        assert html =~ "Session management"
+        refute html =~ token
+        refute html =~ "token="
+      end)
+
+    refute log =~ token
+    assert log =~ ~s|"token" => "[FILTERED]"|
+
+    conn = authenticated_conn(token)
     assert html_response(conn, 200) =~ "Session management"
+
+    conn = conn |> recycle() |> get("/manage")
+    assert html_response(conn, 200) =~ "Session management"
+  end
+
+  test "bearer authentication does not redirect and establishes the browser session", %{
+    token: token
+  } do
+    Application.put_env(:lemon_web, :access_token, token)
+
+    conn =
+      build_conn()
+      |> put_req_header("authorization", "Bearer #{token}")
+      |> get("/manage")
+
+    assert html_response(conn, 200) =~ "Session management"
+    assert get_resp_header(conn, "location") == []
 
     conn = conn |> recycle() |> get("/manage")
     assert html_response(conn, 200) =~ "Session management"
@@ -72,7 +107,7 @@ defmodule LemonWeb.ManagementLiveTest do
     assert {:ok, _session} = SessionLifecycle.patch(session_key, %{title: "Launch room"})
     Application.put_env(:lemon_web, :access_token, token)
 
-    {:ok, view, html} = live(build_conn(), "/manage/sessions/#{session_key}?token=#{token}")
+    {:ok, view, html} = live(authenticated_conn(token), "/manage/sessions/#{session_key}")
 
     assert html =~ "Launch room"
     assert html =~ "Inspect repository"
@@ -115,7 +150,7 @@ defmodule LemonWeb.ManagementLiveTest do
     # Chat resume is an internal trusted surface and intentionally reconstructs
     # the unredacted durable transcript; operator RPC/export paths never do.
     {:ok, resumed, resume_html} =
-      live(build_conn(), "/sessions/#{session_key}?token=#{token}")
+      live(authenticated_conn(token), "/sessions/#{session_key}")
 
     assert resume_html =~ "api_key=#{secret} launch checklist"
     assert resume_html =~ "Bearer #{secret}"
@@ -133,7 +168,7 @@ defmodule LemonWeb.ManagementLiveTest do
     seed_session(session_key, "run-web-export-#{suffix}", "token=#{secret}", "Bearer #{secret}")
     Application.put_env(:lemon_web, :access_token, token)
 
-    conn = get(build_conn(), "/manage?token=#{token}")
+    conn = authenticated_conn(token)
     conn = conn |> recycle() |> get("/manage/sessions/#{session_key}/export/json")
 
     body = response(conn, 200)
@@ -164,7 +199,7 @@ defmodule LemonWeb.ManagementLiveTest do
     assert {:ok, _} = SessionLifecycle.patch(fresh, %{archived: true})
 
     Application.put_env(:lemon_web, :access_token, token)
-    {:ok, view, _html} = live(build_conn(), "/manage?token=#{token}")
+    {:ok, view, _html} = live(authenticated_conn(token), "/manage")
 
     assert render_click(view, "confirm-prune") =~ "Preview the exact candidate set"
 
@@ -223,6 +258,13 @@ defmodule LemonWeb.ManagementLiveTest do
         reason: nil
       }
     }
+  end
+
+  defp authenticated_conn(token) do
+    Application.put_env(:lemon_web, :access_token, token)
+    conn = get(build_conn(), "/manage?token=#{token}")
+    assert redirected_to(conn, 302) == "/manage"
+    conn |> recycle() |> get("/manage")
   end
 
   defp unique_suffix, do: System.unique_integer([:positive, :monotonic])
