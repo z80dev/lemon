@@ -1,8 +1,8 @@
 # Hermes parity implementation initiatives
 
-Status: active  
-Owner: Codex  
-Baseline: `ff4adf1e`  
+Status: active
+Owner: Codex
+Baseline: `ff4adf1e`
 Source matrix: [`lemon-hermes-gap-audit-2026-08-11.md`](lemon-hermes-gap-audit-2026-08-11.md)
 
 This program converts the remaining source-pinned Hermes comparison into
