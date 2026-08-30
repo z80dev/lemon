@@ -329,6 +329,87 @@ defmodule LemonAgent.ContextTest do
       assert last_content == "Message 10"
     end
 
+    test "sliding window retains the newest messages in chronological order" do
+      messages =
+        for i <- 1..6 do
+          Mocks.assistant_message("Message #{i}")
+        end
+
+      {truncated, dropped} =
+        Context.truncate(messages,
+          max_messages: 3,
+          strategy: :sliding_window,
+          keep_first_user: false
+        )
+
+      assert Enum.map(truncated, &hd(&1.content).text) == ["Message 4", "Message 5", "Message 6"]
+      assert dropped == 3
+    end
+
+    test "sliding window keeps assistant tool calls and results atomically" do
+      call = Mocks.tool_call("lookup", %{"query" => "recent"}, id: "call-recent")
+      assistant = Mocks.assistant_message_with_tool_calls([call])
+      result = Mocks.tool_result_message("call-recent", "lookup", "found")
+
+      messages = [
+        Mocks.user_message("first"),
+        Mocks.assistant_message("older"),
+        assistant,
+        result,
+        Mocks.user_message("continue")
+      ]
+
+      {fits, _} =
+        Context.truncate(messages,
+          max_messages: 3,
+          keep_first_user: false,
+          strategy: :sliding_window
+        )
+
+      assert fits == [assistant, result, List.last(messages)]
+
+      {cannot_fit, _} =
+        Context.truncate(messages,
+          max_messages: 2,
+          keep_first_user: false,
+          strategy: :sliding_window
+        )
+
+      refute assistant in cannot_fit
+      refute result in cannot_fit
+    end
+
+    test "bookends enforces max_chars without slicing messages" do
+      messages = [
+        Mocks.user_message("aa"),
+        Mocks.assistant_message("bbbb"),
+        Mocks.user_message("cc")
+      ]
+
+      {truncated, dropped} =
+        Context.truncate(messages,
+          max_messages: 3,
+          max_chars: 4,
+          strategy: :keep_bookends
+        )
+
+      assert truncated == [hd(messages), List.last(messages)]
+      assert Context.estimate_size(truncated, nil) == 4
+      assert dropped == 1
+    end
+
+    test "bookends keeps tool transcript groups whole" do
+      call = Mocks.tool_call("lookup", %{}, id: "bookend-call")
+      assistant = Mocks.assistant_message_with_tool_calls([call])
+      result = Mocks.tool_result_message("bookend-call", "lookup", "result")
+      messages = [assistant, result, Mocks.user_message("middle"), Mocks.user_message("last")]
+
+      {truncated, _} =
+        Context.truncate(messages, max_messages: 2, strategy: :keep_bookends)
+
+      assert truncated == [assistant, result]
+    end
+
     test "emits telemetry when truncating", %{handler_id: handler_id, collector: collector} do
       attach_telemetry([[:lemon_agent, :context, :truncated]], handler_id, collector)
 
@@ -611,8 +692,7 @@ defmodule LemonAgent.ContextTest do
       {truncated, _dropped} =
         Context.truncate(messages, max_messages: 5, strategy: :keep_bookends)
 
-      # With max_messages: 5, half = 2, so we get first 2 + last 2 = 4
-      assert length(truncated) == 4
+      assert length(truncated) == 5
     end
 
     test "bookends strategy keeps all when within limits" do
@@ -984,9 +1064,8 @@ defmodule LemonAgent.ContextTest do
 
       {truncated, dropped} = Context.truncate(messages, max_messages: 5, strategy: :keep_bookends)
 
-      # half = 2 (div 5, 2), so first 2 + last 2 = 4
-      assert length(truncated) == 4
-      assert dropped == 6
+      assert length(truncated) == 5
+      assert dropped == 5
     end
 
     test "odd message count with odd max_messages" do
@@ -997,9 +1076,8 @@ defmodule LemonAgent.ContextTest do
 
       {truncated, dropped} = Context.truncate(messages, max_messages: 5, strategy: :keep_bookends)
 
-      # half = 2, so first 2 + last 2 = 4
-      assert length(truncated) == 4
-      assert dropped == 7
+      assert length(truncated) == 5
+      assert dropped == 6
     end
 
     test "max_messages: 1 with bookends strategy" do
@@ -1011,8 +1089,8 @@ defmodule LemonAgent.ContextTest do
       {truncated, _dropped} =
         Context.truncate(messages, max_messages: 1, strategy: :keep_bookends)
 
-      # half = 0, so empty result from take operations
-      assert truncated == []
+      assert length(truncated) == 1
+      assert Map.get(hd(truncated), :content) == "Msg 1"
     end
 
     test "max_messages: 2 with bookends strategy" do
@@ -1023,7 +1101,6 @@ defmodule LemonAgent.ContextTest do
 
       {truncated, dropped} = Context.truncate(messages, max_messages: 2, strategy: :keep_bookends)
 
-      # half = 1, so first 1 + last 1 = 2
       assert length(truncated) == 2
       assert dropped == 8
       assert Map.get(hd(truncated), :content) == "Msg 1"
@@ -1038,9 +1115,8 @@ defmodule LemonAgent.ContextTest do
 
       {truncated, dropped} = Context.truncate(messages, max_messages: 3, strategy: :keep_bookends)
 
-      # half = 1, so first 1 + last 1 = 2
-      assert length(truncated) == 2
-      assert dropped == 8
+      assert length(truncated) == 3
+      assert dropped == 7
     end
 
     test "bookends with exactly max_messages count" do
