@@ -25,32 +25,71 @@ defmodule CodingAgent.Security.UntrustedToolBoundary do
 
   defp wrap_message(%ToolResultMessage{trust: trust} = message)
        when trust in [:untrusted, "untrusted"] do
-    %{message | content: Enum.map(message.content || [], &wrap_content_block/1)}
+    boundary = trust_boundary(message.details)
+    source = trust_source(boundary)
+
+    if wrapping_applied?(boundary) do
+      message
+    else
+      %{message | content: Enum.map(message.content || [], &wrap_content_block(&1, source))}
+    end
   end
 
   defp wrap_message(other), do: other
 
-  defp wrap_content_block(%TextContent{text: text} = block) when is_binary(text) do
-    %{block | text: wrap_text(text)}
+  defp wrap_content_block(%TextContent{text: text} = block, source) when is_binary(text) do
+    %{block | text: wrap_text(text, source)}
   end
 
-  defp wrap_content_block(%{type: :text, text: text} = block) when is_binary(text) do
-    %{block | text: wrap_text(text)}
+  defp wrap_content_block(%{type: :text, text: text} = block, source) when is_binary(text) do
+    %{block | text: wrap_text(text, source)}
   end
 
-  defp wrap_content_block(%{"type" => "text", "text" => text} = block) when is_binary(text) do
-    Map.put(block, "text", wrap_text(text))
+  defp wrap_content_block(%{"type" => "text", "text" => text} = block, source)
+       when is_binary(text) do
+    Map.put(block, "text", wrap_text(text, source))
   end
 
-  defp wrap_content_block(block), do: block
+  defp wrap_content_block(block, _source), do: block
 
-  defp wrap_text(text) do
+  defp wrap_text(text, source) do
     if already_wrapped?(text) do
       text
     else
-      ExternalContent.wrap_external_content(text, source: :api, include_warning: true)
+      ExternalContent.wrap_external_content(text, source: source, include_warning: true)
     end
   end
+
+  defp trust_source(boundary) when is_map(boundary) do
+    source = Map.get(boundary, :source) || Map.get(boundary, "source")
+
+    case source do
+      value when is_binary(value) -> String.to_existing_atom(value)
+      value when is_atom(value) -> value
+      _ -> :api
+    end
+  rescue
+    ArgumentError -> :api
+  end
+
+  defp trust_source(_boundary), do: :api
+
+  defp trust_boundary(details) when is_map(details) do
+    Map.get(details, :trust_boundary) || Map.get(details, "trust_boundary") ||
+      Map.get(details, :trust_metadata) || Map.get(details, "trust_metadata") ||
+      Map.get(details, :trustMetadata) || Map.get(details, "trustMetadata") || %{}
+  end
+
+  defp trust_boundary(_details), do: %{}
+
+  defp wrapping_applied?(boundary) when is_map(boundary) do
+    Map.get(boundary, :wrapping_applied) == true or
+      Map.get(boundary, "wrapping_applied") == true or
+      Map.get(boundary, :wrappingApplied) == true or
+      Map.get(boundary, "wrappingApplied") == true
+  end
+
+  defp wrapping_applied?(_boundary), do: false
 
   defp already_wrapped?(text) when is_binary(text) do
     trimmed = String.trim(text)

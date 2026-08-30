@@ -10,6 +10,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Skill manifests now reject unsafe or oversized prompt metadata, relevance
+  searches use cached excerpts/status views outside the Registry server, and
+  prompt listings expose bounded source/trust provenance with deterministic
+  ordering.
+- Turn-specific skill relevance no longer changes the cacheable system prompt;
+  missed-skill introspection uses turn-local keys, and local file/search/shell
+  plus community skill results are fenced as untrusted data before model calls.
 - Product releases can now be cut and published from one manual Release
   workflow dispatch; the workflow derives CalVer, consumes the Unreleased
   notes, commits and tags the release, verifies every artifact, publishes the

@@ -27,6 +27,25 @@ defmodule CodingAgent.Security.UntrustedToolBoundaryTest do
     assert content_again.text == content.text
   end
 
+  test "does not double wrap a web result that omitted the prose warning" do
+    prewrapped =
+      "<<<EXTERNAL_UNTRUSTED_CONTENT>>>\nweb payload\n<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>"
+
+    message = %ToolResultMessage{
+      role: :tool_result,
+      tool_call_id: "call_web_prewrapped",
+      tool_name: "webfetch",
+      trust: :untrusted,
+      details: %{"trustMetadata" => %{"source" => "web_fetch", "wrappingApplied" => true}},
+      content: [%TextContent{type: :text, text: prewrapped}],
+      is_error: false,
+      timestamp: 1
+    }
+
+    assert {:ok, [after_boundary]} = UntrustedToolBoundary.transform([message], nil)
+    assert [%TextContent{text: ^prewrapped}] = after_boundary.content
+  end
+
   test "does not change trusted tool results or other messages" do
     trusted = %ToolResultMessage{
       role: :tool_result,

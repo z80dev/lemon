@@ -1,10 +1,10 @@
 # LemonSkills - Skill Definitions and Loading
 
-This document describes the `LemonSkills` module for managing reusable knowledge modules that get injected into agent context when relevant.
+This document describes the `LemonSkills` module for managing reusable knowledge modules that agents load explicitly when relevant.
 
 ## Overview
 
-Skills are markdown files with YAML frontmatter that contain domain-specific knowledge. When a user's request matches a skill's description, the skill content is automatically injected into the system prompt to provide the agent with relevant context.
+Skills are markdown files with YAML frontmatter that contain domain-specific knowledge. The stable system prompt lists bounded, escaped metadata for available skills; agents use `read_skill` to load selected semantics. Relevance selection uses cached metadata, keywords, and bounded body excerpts without injecting turn-specific skill bodies into the system prompt.
 
 ## Location
 
@@ -63,6 +63,10 @@ await Bun.write("./output.txt", "Hello, World!");
 |-------|----------|-------------|
 | `name` | No | Skill identifier (defaults to directory name) |
 | `description` | Yes | Used for relevance matching |
+| `tags` | No | Up to 32 bounded safe strings |
+| `keywords` | No | Up to 32 bounded relevance terms |
+
+Present names and descriptions must be non-empty, single-line, valid UTF-8 without control or bidirectional formatting characters. Names are limited to 128 bytes, descriptions to 1,024 bytes, and each tag/keyword to 128 bytes. Prompt rendering applies an additional defensive flatten/clamp/XML-escape pass and includes source/trust provenance. Community, project, and local metadata is treated as untrusted relevance data.
 
 ## API Reference
 
@@ -104,6 +108,8 @@ skills = LemonSkills.find_relevant("I need to read and write files", max_results
 **Options:**
 - `:cwd` - Project working directory (optional)
 - `:max_results` - Maximum number of skills to return (default: 3)
+
+Search documents and requirement views are precomputed at refresh/mutation boundaries. Calls score a cached snapshot outside the Registry GenServer and break equal scores by key. Use `refresh: true` or call `LemonSkills.refresh/1` after external skill/config edits or PATH/environment changes.
 
 ### status/2
 

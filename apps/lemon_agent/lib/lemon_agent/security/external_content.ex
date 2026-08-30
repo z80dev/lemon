@@ -22,10 +22,24 @@ defmodule LemonAgent.Security.ExternalContent do
     api: "API",
     web_search: "Web Search",
     web_fetch: "Web Fetch",
+    local_file: "Local File",
+    local_search: "Local Search",
+    shell: "Shell Output",
+    skill: "Skill Content",
     unknown: "External"
   }
 
-  @type source :: :email | :webhook | :api | :web_search | :web_fetch | :unknown
+  @type source ::
+          :email
+          | :webhook
+          | :api
+          | :web_search
+          | :web_fetch
+          | :local_file
+          | :local_search
+          | :shell
+          | :skill
+          | :unknown
   @type key_style :: :snake_case | :camel_case
   @type web_source :: :web_search | :web_fetch
 
@@ -76,13 +90,14 @@ defmodule LemonAgent.Security.ExternalContent do
     key_style = normalize_key_style(Keyword.get(opts, :key_style, :snake_case))
     wrapped_fields = normalize_wrapped_fields(Keyword.get(opts, :wrapped_fields, []))
     warning_included = normalize_optional_boolean(Keyword.get(opts, :warning_included))
+    wrapping_applied = Keyword.get(opts, :wrapping_applied, true) == true
 
     metadata =
       %{
         "untrusted" => true,
         "source" => Atom.to_string(normalized_source),
         "source_label" => Map.get(@source_labels, normalized_source, "External"),
-        "wrapping_applied" => true,
+        "wrapping_applied" => wrapping_applied,
         "wrapped_fields" => wrapped_fields
       }
       |> maybe_put("warning_included", warning_included)
@@ -131,7 +146,17 @@ defmodule LemonAgent.Security.ExternalContent do
   end
 
   defp normalize_source(source)
-       when source in [:email, :webhook, :api, :web_search, :web_fetch],
+       when source in [
+              :email,
+              :webhook,
+              :api,
+              :web_search,
+              :web_fetch,
+              :local_file,
+              :local_search,
+              :shell,
+              :skill
+            ],
        do: source
 
   defp normalize_source(:unknown), do: :unknown
@@ -144,6 +169,10 @@ defmodule LemonAgent.Security.ExternalContent do
       "web_search" -> :web_search
       "web-fetch" -> :web_fetch
       "web_fetch" -> :web_fetch
+      "local_file" -> :local_file
+      "local_search" -> :local_search
+      "shell" -> :shell
+      "skill" -> :skill
       _ -> :unknown
     end
   end

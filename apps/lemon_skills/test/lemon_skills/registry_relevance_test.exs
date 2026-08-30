@@ -1,5 +1,5 @@
 defmodule LemonSkills.RegistryRelevanceTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   @moduletag :tmp_dir
 
@@ -131,7 +131,9 @@ defmodule LemonSkills.RegistryRelevanceTest do
     assert best.key == "kubernetes"
   end
 
-  test "find_relevant/2 scores keywords highly", %{tmp_dir: tmp_dir} do
+  test "find_relevant/2 matches string-key keywords with no other matching signal", %{
+    tmp_dir: tmp_dir
+  } do
     # Create skills where one has matching keywords
     keyword_dir = Path.join([tmp_dir, ".lemon", "skill", "docker-expert"])
     other_dir = Path.join([tmp_dir, ".lemon", "skill", "other-skill"])
@@ -144,7 +146,10 @@ defmodule LemonSkills.RegistryRelevanceTest do
       ---
       name: docker-expert
       description: A generic skill
-      keywords: ["docker", "container", "deployment"]
+      keywords:
+        - docker
+        - container
+        - deployment
       ---
 
       body
@@ -165,7 +170,8 @@ defmodule LemonSkills.RegistryRelevanceTest do
 
     LemonSkills.refresh(cwd: tmp_dir)
 
-    # Keyword match should win when other skill has no match
+    # The key, name, description, and body do not contain "docker". This is a
+    # keyword-only match and protects the parser's string-key manifest shape.
     [best | _] = LemonSkills.find_relevant("docker", cwd: tmp_dir, max_results: 2)
     assert best.key == "docker-expert"
   end
@@ -208,5 +214,78 @@ defmodule LemonSkills.RegistryRelevanceTest do
     # Both have similar relevance, but project skill should be first
     results = LemonSkills.find_relevant("matching term", cwd: tmp_dir, max_results: 2)
     assert hd(results).key == "project-skill"
+  end
+
+  test "reuses cached body excerpts until an explicit refresh", %{tmp_dir: tmp_dir} do
+    skill_dir = Path.join([tmp_dir, ".lemon", "skill", "cached-body"])
+    skill_file = Path.join(skill_dir, "SKILL.md")
+    File.mkdir_p!(skill_dir)
+
+    File.write!(
+      skill_file,
+      "---\nname: Cached Body\ndescription: Generic helper\n---\nquasarneedle"
+    )
+
+    LemonSkills.refresh(cwd: tmp_dir)
+    assert [%{key: "cached-body"}] = LemonSkills.find_relevant("quasarneedle", cwd: tmp_dir)
+
+    File.write!(
+      skill_file,
+      "---\nname: Cached Body\ndescription: Generic helper\n---\nnebularneedle"
+    )
+
+    assert [%{key: "cached-body"}] = LemonSkills.find_relevant("quasarneedle", cwd: tmp_dir)
+    assert [] = LemonSkills.find_relevant("nebularneedle", cwd: tmp_dir)
+
+    LemonSkills.refresh(cwd: tmp_dir)
+    assert [] = LemonSkills.find_relevant("quasarneedle", cwd: tmp_dir)
+    assert [%{key: "cached-body"}] = LemonSkills.find_relevant("nebularneedle", cwd: tmp_dir)
+  end
+
+  test "breaks equal-score ties by stable skill key", %{tmp_dir: tmp_dir} do
+    for key <- ["zeta-helper", "alpha-helper"] do
+      skill_dir = Path.join([tmp_dir, ".lemon", "skill", key])
+      File.mkdir_p!(skill_dir)
+
+      File.write!(
+        Path.join(skill_dir, "SKILL.md"),
+        "---\nname: Generic Helper\ndescription: Handles tieprobe jobs\n---\nbody"
+      )
+    end
+
+    LemonSkills.refresh(cwd: tmp_dir)
+
+    assert Enum.map(LemonSkills.find_relevant("tieprobe", cwd: tmp_dir), & &1.key) == [
+             "alpha-helper",
+             "zeta-helper"
+           ]
+  end
+
+  test "serves concurrent cached relevance and lookup calls", %{tmp_dir: tmp_dir} do
+    skill_dir = Path.join([tmp_dir, ".lemon", "skill", "parallel-helper"])
+    File.mkdir_p!(skill_dir)
+
+    File.write!(
+      Path.join(skill_dir, "SKILL.md"),
+      "---\nname: Parallel Helper\ndescription: Handles concurrencyprobe jobs\n---\nbody"
+    )
+
+    LemonSkills.refresh(cwd: tmp_dir)
+
+    tasks =
+      for index <- 1..40 do
+        Task.async(fn ->
+          if rem(index, 2) == 0 do
+            LemonSkills.find_relevant("concurrencyprobe", cwd: tmp_dir, max_results: 1)
+          else
+            LemonSkills.get("parallel-helper", cwd: tmp_dir)
+          end
+        end)
+      end
+
+    results = Task.await_many(tasks, 2_000)
+
+    assert Enum.count(results, &match?([%{key: "parallel-helper"}], &1)) == 20
+    assert Enum.count(results, &match?({:ok, %{key: "parallel-helper"}}, &1)) == 20
   end
 end

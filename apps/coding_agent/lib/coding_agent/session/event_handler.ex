@@ -172,7 +172,7 @@ defmodule CodingAgent.Session.EventHandler do
   end
 
   defp maybe_record_missed_skills(state, messages) do
-    relevant_keys = extract_relevant_skill_keys(Map.get(state, :system_prompt, ""))
+    relevant_keys = Map.get(state, :relevant_skill_keys) || []
     loaded_keys = extract_loaded_skill_keys(messages)
     missed_keys = relevant_keys -- loaded_keys
 
@@ -191,21 +191,6 @@ defmodule CodingAgent.Session.EventHandler do
       )
     end
   end
-
-  defp extract_relevant_skill_keys(prompt) when is_binary(prompt) do
-    ~r/<relevant-skills>(.*?)<\/relevant-skills>/s
-    |> Regex.scan(prompt, capture: :all_but_first)
-    |> Enum.flat_map(fn [block] ->
-      ~r/<key>\s*([^<]+?)\s*<\/key>/
-      |> Regex.scan(block, capture: :all_but_first)
-      |> List.flatten()
-    end)
-    |> Enum.map(&String.trim/1)
-    |> Enum.reject(&(&1 == ""))
-    |> Enum.uniq()
-  end
-
-  defp extract_relevant_skill_keys(_prompt), do: []
 
   defp extract_loaded_skill_keys(messages) when is_list(messages) do
     messages

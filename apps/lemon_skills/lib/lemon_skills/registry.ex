@@ -37,7 +37,11 @@ defmodule LemonSkills.Registry do
 
   @type state :: %{
           global_skills: %{String.t() => Entry.t()},
-          project_skills: %{String.t() => %{String.t() => Entry.t()}}
+          project_skills: %{String.t() => %{String.t() => Entry.t()}},
+          global_search: map(),
+          project_search: map(),
+          global_views: [LemonSkills.SkillView.t()],
+          project_views: map()
         }
 
   # ============================================================================
@@ -69,6 +73,18 @@ defmodule LemonSkills.Registry do
     end
 
     GenServer.call(__MODULE__, {:list, cwd})
+  end
+
+  @doc false
+  @spec list_views(keyword()) :: [LemonSkills.SkillView.t()]
+  def list_views(opts \\ []) do
+    cwd = Keyword.get(opts, :cwd)
+
+    if Keyword.get(opts, :refresh, false) do
+      refresh(cwd: cwd)
+    end
+
+    GenServer.call(__MODULE__, {:list_views, cwd})
   end
 
   @doc """
@@ -126,7 +142,8 @@ defmodule LemonSkills.Registry do
       refresh(cwd: cwd)
     end
 
-    GenServer.call(__MODULE__, {:find_relevant, cwd, context, max_results})
+    documents = GenServer.call(__MODULE__, {:search_snapshot, cwd})
+    score_documents(documents, context, max_results)
   end
 
   @doc """
@@ -288,7 +305,11 @@ defmodule LemonSkills.Registry do
   def init(_opts) do
     state = %{
       global_skills: %{},
-      project_skills: %{}
+      project_skills: %{},
+      global_search: %{},
+      project_search: %{},
+      global_views: [],
+      project_views: %{}
     }
 
     # Load global skills on startup
@@ -313,6 +334,20 @@ defmodule LemonSkills.Registry do
   end
 
   @impl true
+  def handle_call({:list_views, cwd}, _from, state) do
+    state = ensure_project_loaded(state, cwd)
+
+    views =
+      if is_binary(cwd) do
+        Map.get(state.project_views, cwd, [])
+      else
+        state.global_views
+      end
+
+    {:reply, views, state}
+  end
+
+  @impl true
   def handle_call({:get, key, cwd}, _from, state) do
     {skills, state} = merge_skills(state, cwd)
 
@@ -326,33 +361,32 @@ defmodule LemonSkills.Registry do
   end
 
   @impl true
-  def handle_call({:find_relevant, cwd, context, max_results}, _from, state) do
-    {skills, state} = merge_skills(state, cwd)
+  def handle_call({:search_snapshot, cwd}, _from, state) do
+    state = ensure_project_loaded(state, cwd)
 
-    context_lower = String.downcase(context)
-    context_words = extract_words(context_lower)
+    documents =
+      if is_binary(cwd) do
+        Map.get(state.project_search, cwd, %{})
+      else
+        state.global_search
+      end
 
-    entries =
-      skills
-      |> Map.values()
-      |> Enum.filter(fn entry ->
-        entry.enabled and not Config.skill_disabled?(entry.key, cwd)
-      end)
-      |> Enum.map(fn entry ->
-        {entry, calculate_relevance(entry, context_lower, context_words)}
-      end)
-      |> Enum.filter(fn {_entry, score} -> score > 0 end)
-      |> Enum.map(fn {entry, score} -> {entry, score + source_priority_bonus(entry)} end)
-      |> Enum.sort_by(fn {_entry, score} -> score end, :desc)
-      |> Enum.take(max_results)
-      |> Enum.map(fn {entry, _score} -> entry end)
-
-    {:reply, entries, state}
+    {:reply, Map.values(documents), state}
   end
 
   @impl true
   def handle_call({:refresh, nil}, _from, state) do
-    state = load_global_skills(%{state | global_skills: %{}})
+    state =
+      load_global_skills(%{
+        state
+        | global_skills: %{},
+          global_search: %{},
+          global_views: [],
+          project_skills: %{},
+          project_search: %{},
+          project_views: %{}
+      })
+
     {:reply, :ok, state}
   end
 
@@ -370,7 +404,8 @@ defmodule LemonSkills.Registry do
 
   @impl true
   def handle_call({:unregister, key, :global, _cwd}, _from, state) do
-    state = %{state | global_skills: Map.delete(state.global_skills, key)}
+    global_skills = Map.delete(state.global_skills, key)
+    state = rebuild_global_derived(%{state | global_skills: global_skills})
     {:reply, :ok, state}
   end
 
@@ -379,6 +414,7 @@ defmodule LemonSkills.Registry do
     project_skills = Map.get(state.project_skills, cwd, %{})
     project_skills = Map.delete(project_skills, key)
     state = %{state | project_skills: Map.put(state.project_skills, cwd, project_skills)}
+    state = rebuild_project_derived(state, cwd)
     {:reply, :ok, state}
   end
 
@@ -399,7 +435,7 @@ defmodule LemonSkills.Registry do
     # Hydrate provenance from the global lockfile where records are present.
     skills = hydrate_from_lockfile(skills, :global)
 
-    %{state | global_skills: skills}
+    rebuild_global_derived(%{state | global_skills: skills})
   end
 
   defp load_project_skills(state, cwd) when is_binary(cwd) do
@@ -419,7 +455,8 @@ defmodule LemonSkills.Registry do
     skills = hydrate_from_lockfile(skills, {:project, cwd})
 
     project_skills = Map.put(state.project_skills, cwd, skills)
-    %{state | project_skills: project_skills}
+    state = %{state | project_skills: project_skills}
+    rebuild_project_derived(state, cwd)
   end
 
   defp load_skills_from_dir(dir, source) do
@@ -484,32 +521,12 @@ defmodule LemonSkills.Registry do
 
   defp ensure_project_loaded(state, _cwd), do: state
 
-  defp calculate_relevance(%Entry{} = entry, context_lower, context_words) do
-    key_lower = String.downcase(entry.key || "")
-    name_lower = String.downcase(entry.name || entry.key || "")
-    desc_lower = String.downcase(entry.description || "")
-    # Read and score against the body content as a low-weight signal.
-    body_lower =
-      case Entry.content(entry) do
-        {:ok, content} ->
-          content
-          |> Manifest.parse_body()
-          |> String.slice(0, 10_000)
-          |> String.downcase()
-
-        _ ->
-          ""
-      end
-
-    # Extract keywords from manifest if available
-    keywords_lower =
-      case entry.manifest do
-        %{keywords: keywords} when is_list(keywords) ->
-          Enum.map(keywords, &String.downcase/1)
-
-        _ ->
-          []
-      end
+  defp calculate_relevance(document, context_lower, context_words) do
+    key_lower = document.key_lower
+    name_lower = document.name_lower
+    desc_lower = document.description_lower
+    body_lower = document.body_lower
+    keywords_lower = document.keywords_lower
 
     # Calculate name scores (strongest signal)
     exact_name_match =
@@ -575,7 +592,7 @@ defmodule LemonSkills.Registry do
   end
 
   # Prefer project-local skills over global ones when both are relevant.
-  defp source_priority_bonus(%Entry{source: :project}), do: 1000
+  defp source_priority_bonus(%{entry: %Entry{source: :project}}), do: 1000
   defp source_priority_bonus(_), do: 0
 
   defp extract_words(text) when is_binary(text) do
@@ -604,7 +621,9 @@ defmodule LemonSkills.Registry do
   end
 
   defp add_entry(state, %Entry{source: :global} = entry) do
-    %{state | global_skills: Map.put(state.global_skills, entry.key, entry)}
+    state
+    |> Map.put(:global_skills, Map.put(state.global_skills, entry.key, entry))
+    |> rebuild_global_derived()
   end
 
   defp add_entry(state, %Entry{source: :project, path: path} = entry) do
@@ -612,11 +631,124 @@ defmodule LemonSkills.Registry do
     cwd = path |> Path.dirname() |> Path.dirname() |> Path.dirname()
     project_skills = Map.get(state.project_skills, cwd, %{})
     project_skills = Map.put(project_skills, entry.key, entry)
-    %{state | project_skills: Map.put(state.project_skills, cwd, project_skills)}
+    state = %{state | project_skills: Map.put(state.project_skills, cwd, project_skills)}
+    rebuild_project_derived(state, cwd)
   end
 
   defp add_entry(state, entry) do
     # Default to global for other sources (URLs, etc.)
-    %{state | global_skills: Map.put(state.global_skills, entry.key, entry)}
+    state
+    |> Map.put(:global_skills, Map.put(state.global_skills, entry.key, entry))
+    |> rebuild_global_derived()
+  end
+
+  defp score_documents(documents, context, max_results) do
+    context_lower = String.downcase(context)
+    context_words = extract_words(context_lower)
+
+    documents
+    |> Enum.filter(& &1.enabled)
+    |> Enum.map(fn document ->
+      score = calculate_relevance(document, context_lower, context_words)
+      {document, score}
+    end)
+    |> Enum.filter(fn {_document, score} -> score > 0 end)
+    |> Enum.map(fn {document, score} ->
+      {document, score + source_priority_bonus(document)}
+    end)
+    |> Enum.sort_by(fn {document, score} -> {-score, document.entry.key || ""} end)
+    |> Enum.take(normalize_max_results(max_results))
+    |> Enum.map(fn {document, _score} -> document.entry end)
+  end
+
+  defp normalize_max_results(value) when is_integer(value) and value > 0, do: value
+  defp normalize_max_results(_value), do: 0
+
+  defp rebuild_global_derived(state) do
+    disabled = disabled_keys(nil)
+    search = build_search_documents(state.global_skills, disabled)
+    views = build_views(state.global_skills, nil, disabled)
+
+    %{
+      state
+      | global_search: search,
+        global_views: views,
+        project_skills: %{},
+        project_search: %{},
+        project_views: %{}
+    }
+  end
+
+  defp rebuild_project_derived(state, cwd) do
+    project_skills = Map.get(state.project_skills, cwd, %{})
+    merged_skills = Map.merge(state.global_skills, project_skills)
+    disabled = disabled_keys(cwd)
+
+    # Global SKILL.md bodies have already been read into global_search. Only
+    # new/overriding project entries need disk reads at this boundary.
+    project_documents = build_search_documents(project_skills, disabled)
+
+    search =
+      state.global_search
+      |> Map.merge(project_documents)
+      |> Map.new(fn {key, document} ->
+        {key, %{document | enabled: document.entry.enabled and key not in disabled}}
+      end)
+
+    %{
+      state
+      | project_search: Map.put(state.project_search, cwd, search),
+        project_views:
+          Map.put(state.project_views, cwd, build_views(merged_skills, cwd, disabled))
+    }
+  end
+
+  defp build_search_documents(skills, disabled) do
+    Map.new(skills, fn {key, entry} ->
+      body_lower =
+        case Entry.content(entry) do
+          {:ok, content} ->
+            content
+            |> Manifest.parse_body()
+            |> String.slice(0, 10_000)
+            |> String.downcase()
+
+          _ ->
+            ""
+        end
+
+      keywords =
+        case entry.manifest do
+          %{"keywords" => values} when is_list(values) -> values
+          %{keywords: values} when is_list(values) -> values
+          _ -> []
+        end
+
+      document = %{
+        entry: entry,
+        key_lower: String.downcase(entry.key || ""),
+        name_lower: String.downcase(entry.name || entry.key || ""),
+        description_lower: String.downcase(entry.description || ""),
+        keywords_lower: Enum.map(keywords, &String.downcase/1),
+        body_lower: body_lower,
+        enabled: entry.enabled and key not in disabled
+      }
+
+      {key, document}
+    end)
+  end
+
+  defp build_views(skills, cwd, disabled) do
+    skills
+    |> Map.values()
+    |> Enum.map(&LemonSkills.SkillView.from_entry(&1, cwd: cwd, disabled_keys: disabled))
+    |> Enum.sort_by(&(&1.key || ""))
+  end
+
+  defp disabled_keys(cwd) do
+    Config.load_config(cwd)
+    |> Map.get("disabled", [])
+    |> Enum.filter(&is_binary/1)
+    |> MapSet.new()
   end
 end

@@ -90,6 +90,7 @@ defmodule CodingAgent.Session do
     :model,
     :thinking_level,
     :system_prompt,
+    :relevant_skill_keys,
     :explicit_system_prompt,
     :prompt_template,
     :workspace_dir,
@@ -153,6 +154,7 @@ defmodule CodingAgent.Session do
           model: LemonAi.Types.Model.t(),
           thinking_level: LemonAgent.Types.thinking_level(),
           system_prompt: String.t(),
+          relevant_skill_keys: [String.t()],
           explicit_system_prompt: String.t() | nil,
           prompt_template: String.t() | nil,
           workspace_dir: String.t(),
@@ -1485,12 +1487,27 @@ defmodule CodingAgent.Session do
   # different answers for one turn.
   @spec refresh_turn_context(t(), String.t()) :: {t(), [ContextRegistry.section()]}
   defp refresh_turn_context(state, skill_context) do
+    relevant_skill_keys = relevant_skill_keys(state.cwd, skill_context)
+
     {system_sections, user_sections} =
       state
       |> collect_contributed_sections(skill_context)
       |> ContextRegistry.split()
 
+    state = %{state | relevant_skill_keys: relevant_skill_keys}
     {refresh_system_prompt(state, skill_context, system_sections), user_sections}
+  end
+
+  defp relevant_skill_keys(_cwd, context) when context in [nil, ""], do: []
+
+  defp relevant_skill_keys(cwd, context) when is_binary(context) do
+    context
+    |> LemonSkills.find_relevant(cwd: cwd, max_results: 3, refresh: false)
+    |> Enum.map(& &1.key)
+  rescue
+    _ -> []
+  catch
+    _, _ -> []
   end
 
   # The registry already isolates each contributor, so a broken satellite costs

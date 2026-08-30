@@ -34,6 +34,10 @@ defmodule CodingAgent.Session.PromptComposer do
   different answers for the same turn, one placed in the system prompt and one
   in the user message. A caller with no sections of its own (a one-shot build
   outside a session) simply omits the key and gets the collect it always did.
+
+  `skill_context` remains the turn query supplied to context contributors. It
+  does not add relevance-selected skill metadata to the system prompt; the
+  complete bounded available-skills list is stable across unrelated turns.
   """
   @spec compose_system_prompt(
           String.t(),

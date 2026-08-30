@@ -319,6 +319,11 @@ included.
 into persisted `:skill_load_observed`, `:skill_write_observed`, and
 `:skill_prompt_render_observed` records, and updates `LemonSkills.Usage` counters.
 
+At session end, missed-skill introspection compares the exact relevance keys cached in the
+session for that turn with successful `read_skill` load observations. It does not parse
+turn-specific XML from the system prompt; no relevance block is added to that cacheable
+prompt or to the persisted conversation.
+
 ### Hosted sim rooms — `[:lemon_sim_ui, :hosted_werewolf, ...]`
 
 Emitted through `LemonSimUi.HostedGame.emit/3`

@@ -7,6 +7,7 @@ defmodule CodingAgent.Tools.Grep do
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Security.ToolResultTrust
   alias LemonAi.Types.TextContent
   alias CodingAgent.Tools.FileValidation
   alias CodingAgent.Tools.PathHelpers
@@ -83,7 +84,9 @@ defmodule CodingAgent.Tools.Grep do
     if aborted?(signal) do
       {:error, "Operation aborted"}
     else
-      do_execute(params, signal, cwd, opts)
+      params
+      |> do_execute(signal, cwd, opts)
+      |> ToolResultTrust.untrusted(:local_search)
     end
   end
 
