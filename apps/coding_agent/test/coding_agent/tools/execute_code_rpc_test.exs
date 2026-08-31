@@ -497,18 +497,232 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
     end
   end
 
+  describe "read_text_blocks/2" do
+    test "returns blocks in id order regardless of creation order", %{rpc_dir: rpc_dir} do
+      write_text_block(rpc_dir, 3, "third")
+      write_text_block(rpc_dir, 1, "first")
+      write_text_block(rpc_dir, 2, "second")
+
+      assert Rpc.read_text_blocks(rpc_dir, max_text_bytes: 1_000) ==
+               ["first", "second", "third"]
+    end
+
+    test "a planted symlink at a block name is skipped, not followed", %{rpc_dir: rpc_dir} do
+      victim =
+        Path.join(Path.dirname(rpc_dir), "text-victim-#{System.unique_integer([:positive])}.txt")
+
+      File.write!(victim, "INJECTED VIA SYMLINK")
+      on_exit(fn -> File.rm(victim) end)
+      File.ln_s!(victim, Path.join(rpc_dir, "text-1.json"))
+
+      assert Rpc.read_text_blocks(rpc_dir) == []
+      assert File.read!(victim) == "INJECTED VIA SYMLINK"
+    end
+
+    test "an oversized block file is skipped without crashing", %{
+      rpc_dir: rpc_dir
+    } do
+      write_text_block(rpc_dir, 1, String.duplicate("a", 10_000))
+
+      assert Rpc.read_text_blocks(rpc_dir, max_text_bytes: 16) == []
+    end
+
+    test "blocks beyond the cumulative budget are skipped without crashing", %{rpc_dir: rpc_dir} do
+      write_text_block(rpc_dir, 1, "0123456789")
+      write_text_block(rpc_dir, 2, "0123456789")
+
+      assert Rpc.read_text_blocks(rpc_dir, max_text_bytes: 10) == ["0123456789"]
+    end
+  end
+
+  describe "notify collection" do
+    test "notifications are consumed and forwarded in order through on_update", %{
+      rpc_dir: rpc_dir
+    } do
+      test = self()
+
+      write_notify(rpc_dir, 2, "second")
+      write_notify(rpc_dir, 1, "first")
+      write_request(rpc_dir, 1, "echo", %{"value" => "alongside"})
+
+      stats =
+        Rpc.process_pending(
+          ctx(rpc_dir,
+            on_update: fn %AgentToolResult{} = partial ->
+              send(test, {:notify, hd(partial.content).text})
+            end
+          ),
+          Rpc.initial_stats()
+        )
+
+      first = receive(do: ({:notify, m} -> m))
+      second = receive(do: ({:notify, m} -> m))
+      assert {first, second} == {"notify: first", "notify: second"}
+
+      # Requests are unaffected by the side channel.
+      assert stats.calls == 1
+      assert Path.wildcard(Path.join(rpc_dir, "notify-*.json")) == []
+    end
+
+    test "a nil on_update consumes and drops notifications", %{rpc_dir: rpc_dir} do
+      for n <- 1..3, do: write_notify(rpc_dir, n, "ignored-#{n}")
+
+      stats = Rpc.process_pending(ctx(rpc_dir), Rpc.initial_stats())
+
+      assert stats.calls == 0
+      assert Path.wildcard(Path.join(rpc_dir, "notify-*.json")) == []
+    end
+
+    test "forwarding stops at 64 messages; the rest are still consumed", %{rpc_dir: rpc_dir} do
+      test = self()
+
+      for n <- 1..70, do: write_notify(rpc_dir, n, "flood-#{n}")
+
+      ctx =
+        ctx(rpc_dir,
+          on_update: fn %AgentToolResult{} = partial ->
+            send(test, {:notify, hd(partial.content).text})
+          end
+        )
+
+      _stats = Rpc.process_pending(ctx, Rpc.initial_stats())
+
+      assert collect_notifications(0) == 64
+      assert Path.wildcard(Path.join(rpc_dir, "notify-*.json")) == []
+    end
+
+    test "a forwarded message is capped at 4 KiB", %{rpc_dir: rpc_dir} do
+      test = self()
+
+      write_notify(rpc_dir, 1, String.duplicate("x", 10_000))
+
+      ctx =
+        ctx(rpc_dir,
+          on_update: fn %AgentToolResult{} = partial ->
+            send(test, {:notify, hd(partial.content).text})
+          end
+        )
+
+      _stats = Rpc.process_pending(ctx, Rpc.initial_stats())
+
+      assert_received {:notify, message}
+      assert byte_size(message) == byte_size("notify: ") + 4_096
+    end
+  end
+
+  describe "parallel dispatch" do
+    test "claimed requests run concurrently up to max_parallel_rpc", %{rpc_dir: rpc_dir} do
+      test = self()
+
+      blockers = %{
+        "block" =>
+          stub_tool("block", fn params ->
+            send(test, {:inflight, params["value"], self()})
+            receive(do: (:release -> text(params["value"])))
+          end)
+      }
+
+      for id <- 1..3, do: write_request(rpc_dir, id, "block", %{"value" => "v#{id}"})
+
+      pump =
+        Task.async(fn ->
+          Rpc.process_pending(ctx(rpc_dir, tools: blockers), Rpc.initial_stats())
+        end)
+
+      # All three are in flight together, before any is released: dispatch
+      # genuinely overlapped (a serial pump would sit in the first blocker's
+      # receive until its own deadline).
+      pids =
+        for _ <- 1..3,
+            do: assert_receive({:inflight, _value, blocker}, 2_000) |> then(&elem(&1, 2))
+
+      for pid <- pids, do: send(pid, :release)
+
+      stats = Task.await(pump, 5_000)
+      assert stats.calls == 3
+
+      for id <- 1..3 do
+        expected = "v" <> Integer.to_string(id)
+        assert %{"ok" => true, "content" => ^expected} = read_response(rpc_dir, id)
+      end
+    end
+
+    test "concurrency is bounded: the third request waits for a wave slot", %{rpc_dir: rpc_dir} do
+      test = self()
+
+      blockers = %{
+        "block" =>
+          stub_tool("block", fn params ->
+            send(test, {:inflight, params["value"], self()})
+            receive(do: (:release -> text(params["value"])))
+          end)
+      }
+
+      for id <- 1..3, do: write_request(rpc_dir, id, "block", %{"value" => "v#{id}"})
+
+      pump =
+        Task.async(fn ->
+          Rpc.process_pending(
+            ctx(rpc_dir, tools: blockers, max_parallel_rpc: 2),
+            Rpc.initial_stats()
+          )
+        end)
+
+      first = assert_receive({:inflight, _value, blocker}, 2_000) |> then(&elem(&1, 2))
+      second = assert_receive({:inflight, _value, blocker}, 2_000) |> then(&elem(&1, 2))
+      refute_receive {:inflight, _, _}, 100
+
+      # Dispatch is wave-based: the whole first wave must complete before the
+      # third request claims the freed slots.
+      send(first, :release)
+      send(second, :release)
+      third = assert_receive({:inflight, _value, blocker}, 2_000) |> then(&elem(&1, 2))
+      send(third, :release)
+
+      stats = Task.await(pump, 5_000)
+      assert stats.calls == 3
+    end
+
+    test "a replayed id under parallel load is still refused exactly once", %{rpc_dir: rpc_dir} do
+      tools = %{"order" => stub_tool("order", fn params -> text(params["value"] || "") end)}
+      ctx = ctx(rpc_dir, tools: tools)
+
+      for id <- 1..4, do: write_request(rpc_dir, id, "order", %{"value" => "first-wave-#{id}"})
+      stats = Rpc.process_pending(ctx, Rpc.initial_stats())
+      assert stats.calls == 4
+
+      # The shim consumes responses, so remove them to expose the replay path.
+      for id <- 1..4, do: File.rm!(Path.join(rpc_dir, "res-#{id}.json"))
+
+      # After the parallel wave, the same ids are replays: answered in
+      # writing, never re-dispatched, and the call budget is untouched.
+      for id <- 1..4, do: write_request(rpc_dir, id, "order", %{"value" => "replay-#{id}"})
+      stats = Rpc.process_pending(ctx, stats)
+
+      assert stats.calls == 4
+      assert stats.errors == 4
+
+      for id <- 1..4 do
+        assert %{"id" => ^id, "ok" => false, "error" => "rpc request already processed"} =
+                 read_response(rpc_dir, id)
+      end
+    end
+  end
+
   # ==========================================================================
   # Helpers
   # ==========================================================================
 
   defp ctx(rpc_dir, overrides \\ []) do
     %{
-      tools: stub_tools(),
+      tools: Keyword.get(overrides, :tools, stub_tools()),
       tool_policy: Keyword.get(overrides, :tool_policy),
       approval_context: Keyword.get(overrides, :approval_context),
       max_calls: Keyword.get(overrides, :max_calls, 100),
       max_result_bytes: Keyword.get(overrides, :max_result_bytes, 5_242_880),
       max_requests_per_sweep: Keyword.get(overrides, :max_requests_per_sweep, 100),
+      max_parallel_rpc: Keyword.get(overrides, :max_parallel_rpc, 4),
+      on_update: Keyword.get(overrides, :on_update),
       signal: Keyword.get(overrides, :signal),
       rpc_dir: rpc_dir,
       token: Keyword.get(overrides, :token, @token),
@@ -636,6 +850,28 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
       {:ordered, id} -> id
     after
       5_000 -> flunk("expected another ordered rpc request")
+    end
+  end
+
+  defp write_text_block(rpc_dir, n, body) do
+    write_atomically(rpc_dir, "text-#{n}.json", %{"n" => n, "text" => body})
+  end
+
+  defp write_notify(rpc_dir, n, msg) do
+    write_atomically(rpc_dir, "notify-#{n}.json", %{"n" => n, "msg" => msg})
+  end
+
+  defp write_atomically(rpc_dir, name, payload) do
+    tmp = Path.join(rpc_dir, name <> ".tmp")
+    File.write!(tmp, Jason.encode!(payload))
+    File.rename!(tmp, Path.join(rpc_dir, name))
+  end
+
+  defp collect_notifications(seen) do
+    receive do
+      {:notify, _message} -> collect_notifications(seen + 1)
+    after
+      0 -> seen
     end
   end
 end

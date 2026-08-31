@@ -234,6 +234,14 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
                  )
       end
 
+      for invalid_parallel <- [0, -1, "4"] do
+        assert {:error, {:invalid_ctx, :max_parallel_rpc}} =
+                 RpcServer.start_link(
+                   ctx(rpc_dir, max_parallel_rpc: invalid_parallel),
+                   rpc: FakeRpc
+                 )
+      end
+
       assert {:error, {:invalid_ctx, :poll_interval_ms}} =
                RpcServer.start_link(ctx(rpc_dir), rpc: FakeRpc, poll_interval_ms: 0)
     end
@@ -358,6 +366,37 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
       refute_receive {:dispatched, _}, 10
 
       assert :ok = RpcServer.stop(server)
+    end
+  end
+
+  describe "notify side channel" do
+    test "the real pump forwards notify frames through the server's ctx on_update", %{
+      rpc_dir: rpc_dir
+    } do
+      test = self()
+
+      {:ok, server} =
+        start_server(
+          ctx(rpc_dir,
+            on_update: fn %AgentToolResult{} = partial ->
+              send(test, {:notify, hd(partial.content).text})
+            end
+          ),
+          rpc: Rpc
+        )
+
+      for n <- 1..2 do
+        tmp = Path.join(rpc_dir, "notify-#{n}.json.tmp")
+        File.write!(tmp, Jason.encode!(%{"n" => n, "msg" => "progress #{n}"}))
+        File.rename!(tmp, Path.join(rpc_dir, "notify-#{n}.json"))
+      end
+
+      first = receive(do: ({:notify, m} -> m))
+      second = receive(do: ({:notify, m} -> m))
+      assert {first, second} == {"notify: progress 1", "notify: progress 2"}
+
+      assert :ok = RpcServer.stop(server)
+      assert File.ls(rpc_dir) == {:ok, []}
     end
   end
 
@@ -494,6 +533,8 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
       max_calls: Keyword.get(overrides, :max_calls, 100),
       max_result_bytes: Keyword.get(overrides, :max_result_bytes, 5_242_880),
       max_requests_per_sweep: Keyword.get(overrides, :max_requests_per_sweep, 100),
+      max_parallel_rpc: Keyword.get(overrides, :max_parallel_rpc),
+      on_update: Keyword.get(overrides, :on_update),
       signal: Keyword.get(overrides, :signal),
       rpc_dir: rpc_dir,
       token: Keyword.get(overrides, :token, @token),

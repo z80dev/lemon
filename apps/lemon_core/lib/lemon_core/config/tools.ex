@@ -51,7 +51,8 @@ defmodule LemonCore.Config.Tools do
   - `LEMON_WASM_ENABLED`, `LEMON_WASM_AUTO_BUILD`
   - `LEMON_EXECUTE_CODE_ENABLED`, `LEMON_EXECUTE_CODE_TIMEOUT_MS`,
     `LEMON_EXECUTE_CODE_KERNEL_MODE`, `LEMON_EXECUTE_CODE_KERNEL_IDLE_TIMEOUT_MS`,
-    `LEMON_EXECUTE_CODE_MAX_LIVE_KERNELS`, `LEMON_EXECUTE_CODE_MAX_QUEUED_CELLS_PER_KERNEL`
+    `LEMON_EXECUTE_CODE_MAX_LIVE_KERNELS`, `LEMON_EXECUTE_CODE_MAX_QUEUED_CELLS_PER_KERNEL`,
+    `LEMON_EXECUTE_CODE_MAX_TEXT_BYTES`, `LEMON_EXECUTE_CODE_MAX_PARALLEL_RPC`
   - `LEMON_TOOL_DISCLOSURE_ENABLED`, `LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS`,
     `LEMON_TOOL_DISCLOSURE_CATALOG_TOKENS`
 
@@ -137,6 +138,8 @@ defmodule LemonCore.Config.Tools do
           max_rpc_calls: integer(),
           max_rpc_result_bytes: integer(),
           max_output_bytes: integer(),
+          max_text_bytes: pos_integer(),
+          max_parallel_rpc: pos_integer(),
           tools: [String.t()],
           kernel_mode: String.t(),
           kernel_idle_timeout_ms: pos_integer(),
@@ -430,6 +433,18 @@ defmodule LemonCore.Config.Tools do
         ),
       max_output_bytes:
         Env.get(:lemon_execute_code_max_output_bytes, default: ec["max_output_bytes"] || 50_000),
+      max_text_bytes:
+        resolve_execute_code_bound(
+          "LEMON_EXECUTE_CODE_MAX_TEXT_BYTES",
+          ec["max_text_bytes"],
+          65_536
+        ),
+      max_parallel_rpc:
+        resolve_execute_code_bound(
+          "LEMON_EXECUTE_CODE_MAX_PARALLEL_RPC",
+          ec["max_parallel_rpc"],
+          4
+        ),
       tools: resolve_execute_code_tools(ec),
       kernel_mode: resolve_execute_code_kernel_mode(ec),
       kernel_idle_timeout_ms:
@@ -610,6 +625,8 @@ defmodule LemonCore.Config.Tools do
         "kernel_mode" => "per_call",
         "kernel_idle_timeout_ms" => 1_800_000,
         "max_live_kernels" => 16,
+        "max_text_bytes" => 65_536,
+        "max_parallel_rpc" => 4,
         "max_queued_cells_per_kernel" => 8
       },
       "disclosure" => %{

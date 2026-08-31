@@ -462,7 +462,8 @@ defmodule LemonCore.Config.ToolsTest do
       assert config.execute_code.max_rpc_calls == 100
       assert config.execute_code.max_rpc_result_bytes == 5_242_880
       assert config.execute_code.max_output_bytes == 50_000
-      assert config.execute_code.tools == []
+      assert config.execute_code.max_text_bytes == 65_536
+      assert config.execute_code.max_parallel_rpc == 4
       assert config.execute_code.kernel_mode == "per_call"
       assert config.execute_code.kernel_idle_timeout_ms == 1_800_000
       assert config.execute_code.max_live_kernels == 16
@@ -479,7 +480,8 @@ defmodule LemonCore.Config.ToolsTest do
             "max_rpc_calls" => 12,
             "max_rpc_result_bytes" => 1_024,
             "max_output_bytes" => 2_048,
-            "tools" => ["read", "grep"],
+            "max_text_bytes" => 4_096,
+            "max_parallel_rpc" => 2,
             "kernel_mode" => "session",
             "kernel_idle_timeout_ms" => 600_000,
             "max_live_kernels" => 3,
@@ -496,7 +498,8 @@ defmodule LemonCore.Config.ToolsTest do
       assert config.execute_code.max_rpc_calls == 12
       assert config.execute_code.max_rpc_result_bytes == 1_024
       assert config.execute_code.max_output_bytes == 2_048
-      assert config.execute_code.tools == ["read", "grep"]
+      assert config.execute_code.max_text_bytes == 4_096
+      assert config.execute_code.max_parallel_rpc == 2
       assert config.execute_code.kernel_mode == "session"
       assert config.execute_code.kernel_idle_timeout_ms == 600_000
       assert config.execute_code.max_live_kernels == 3
@@ -512,6 +515,8 @@ defmodule LemonCore.Config.ToolsTest do
       System.put_env("LEMON_EXECUTE_CODE_KERNEL_IDLE_TIMEOUT_MS", "240000")
       System.put_env("LEMON_EXECUTE_CODE_MAX_LIVE_KERNELS", "5")
       System.put_env("LEMON_EXECUTE_CODE_MAX_QUEUED_CELLS_PER_KERNEL", "4")
+      System.put_env("LEMON_EXECUTE_CODE_MAX_TEXT_BYTES", "1024")
+      System.put_env("LEMON_EXECUTE_CODE_MAX_PARALLEL_RPC", "9")
 
       settings = %{
         "tools" => %{
@@ -538,11 +543,15 @@ defmodule LemonCore.Config.ToolsTest do
       assert config.execute_code.kernel_idle_timeout_ms == 240_000
       assert config.execute_code.max_live_kernels == 5
       assert config.execute_code.max_queued_cells_per_kernel == 4
+      assert config.execute_code.max_text_bytes == 1_024
+      assert config.execute_code.max_parallel_rpc == 9
 
       System.delete_env("LEMON_EXECUTE_CODE_KERNEL_MODE")
       System.delete_env("LEMON_EXECUTE_CODE_KERNEL_IDLE_TIMEOUT_MS")
       System.delete_env("LEMON_EXECUTE_CODE_MAX_LIVE_KERNELS")
       System.delete_env("LEMON_EXECUTE_CODE_MAX_QUEUED_CELLS_PER_KERNEL")
+      System.delete_env("LEMON_EXECUTE_CODE_MAX_TEXT_BYTES")
+      System.delete_env("LEMON_EXECUTE_CODE_MAX_PARALLEL_RPC")
     end
 
     test "defaults/0 documents the execute_code section" do
@@ -553,6 +562,8 @@ defmodule LemonCore.Config.ToolsTest do
                "max_rpc_calls" => 100,
                "max_rpc_result_bytes" => 5_242_880,
                "max_output_bytes" => 50_000,
+               "max_text_bytes" => 65_536,
+               "max_parallel_rpc" => 4,
                "tools" => [],
                "kernel_mode" => "per_call",
                "kernel_idle_timeout_ms" => 1_800_000,

@@ -629,6 +629,78 @@ defmodule CodingAgent.Tools.ExecuteCodeAdversarialTest do
     end
   end
 
+  describe "planted result-channel files" do
+    test "a text-<id>.json symlink cannot inject a result block", %{tmp_dir: cwd} do
+      victim =
+        Path.join(Path.dirname(cwd), "block-victim-#{System.unique_integer([:positive])}.txt")
+
+      File.write!(victim, "INJECTED RESULT VIA SYMLINK")
+      on_exit(fn -> File.rm(victim) end)
+
+      runner = fn command, _runner_cwd, runner_opts ->
+        base = command_base(command)
+        rpc_dir = discover_rpc_dir!(base)
+        File.ln_s!(victim, Path.join(rpc_dir, "text-1.json"))
+
+        {:ok,
+         %BashExecutor.Result{
+           output: "done",
+           exit_code: 0,
+           cancelled: false,
+           truncated: false,
+           full_output_path: nil
+         }}
+      end
+
+      result =
+        ExecuteCode.execute(
+          "call-1",
+          %{"script" => "unused"},
+          nil,
+          nil,
+          cwd,
+          opts(%{}, script_runner: runner)
+        )
+
+      # The planted link is skipped like the res-<id>.json defense: the
+      # victim is untouched and the result is exactly the honest stdout.
+      assert [%TextContent{text: "done"}] = result.content
+      assert File.read!(victim) == "INJECTED RESULT VIA SYMLINK"
+    end
+
+    test "an oversized planted text block is skipped without crashing", %{tmp_dir: cwd} do
+      runner = fn command, _runner_cwd, _runner_opts ->
+        base = command_base(command)
+        rpc_dir = discover_rpc_dir!(base)
+
+        tmp = Path.join(rpc_dir, "text-1.json.tmp")
+        File.write!(tmp, Jason.encode!(%{"n" => 1, "text" => String.duplicate("z", 5_000_000)}))
+        File.rename!(tmp, Path.join(rpc_dir, "text-1.json"))
+
+        {:ok,
+         %BashExecutor.Result{
+           output: "done",
+           exit_code: 0,
+           cancelled: false,
+           truncated: false,
+           full_output_path: nil
+         }}
+      end
+
+      result =
+        ExecuteCode.execute(
+          "call-1",
+          %{"script" => "unused"},
+          nil,
+          nil,
+          cwd,
+          opts(%{}, script_runner: runner)
+        )
+
+      assert [%TextContent{text: "done"}] = result.content
+    end
+  end
+
   # ==========================================================================
   # Helpers
   # ==========================================================================

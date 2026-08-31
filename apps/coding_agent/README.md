@@ -126,12 +126,15 @@ CodingAgent.Supervisor (one_for_one)
 
 `execute_code` is programmatic tool calling: the model submits a python3 script that can
 call a fixed compile-time allowlist of agent tools (`read`, `grep`, `find`, `ls`,
-`webfetch`) through policy- and approval-gated helpers, and only what the script prints
-comes back. It is bash-equivalent host code, not a sandbox. The default `kernel_mode =
-"per_call"` runs every script in a fresh process; the opt-in `"session"` mode reuses one
-supervised persistent interpreter per session/cwd/interpreter/helper identity whose state
-is live process memory only (never durable) and is discarded on reset, close, idle reap,
-or cancellation. See `docs/tools/execute-code.md` for the full contract.
+`webfetch`) through policy- and approval-gated helpers. The result comes back via the
+shim's `text()` blocks (write-through flushed, so they survive a timeout kill), with
+stdout/stderr demoted to a labeled diagnostics tail; `notify()` streams progress and
+`batch()` runs helper calls in parallel. It is bash-equivalent host code, not a sandbox.
+The default `kernel_mode = "per_call"` runs every script in a fresh process; the opt-in
+`"session"` mode reuses one supervised persistent interpreter per
+session/cwd/interpreter/helper identity whose state is live process memory only (never
+durable) and is discarded on reset, close, idle reap, or cancellation. See
+`docs/tools/execute-code.md` for the full contract.
 
 `browser_screenshot` writes screenshot bytes to local artifacts by default
 instead of returning base64 to the model. Pass `includeImage: true` only when a

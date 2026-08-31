@@ -1,13 +1,50 @@
 defmodule CodingAgent.Tools.ExecuteCode do
   @moduledoc """
   Programmatic tool calling: the model submits a python3 script, the script
-  calls agent tools through pre-imported helper functions, and only what the
-  script prints comes back as the tool result.
+  calls agent tools through pre-imported helper functions, and the script's
+  *result* reaches the model through an explicit channel rather than by
+  accident of stdout.
 
   This is the context lever. A script can read fifty files, grep a whole tree,
-  or fetch a page and then print a three-line summary; the intermediate tool
+  or fetch a page and then emit a three-line summary; the intermediate tool
   results travel over a file-based RPC protocol in a per-invocation temp
   directory and never enter the model transcript.
+
+  ## Result channels
+
+  Three shim helpers besides the tool stubs shape what comes back:
+
+    * `text(s)` — the result. Each call atomically flushes a numbered
+      `text-<n>.json` block into the rpc dir (write-through, never at exit),
+      under a lock, within the `max_text_bytes` budget; an over-budget call
+      raises `ToolError` and keeps the blocks already flushed. After the run
+      — including a timeout/abort kill — the flushed blocks are read in order
+      and assembled as the labeled result, with stdout/stderr demoted to a
+      clearly labeled diagnostics tail (already capped at `max_output_bytes`).
+      This fixes two defects of the stdout-only era: incidental prints and
+      library warnings no longer impersonate the answer, and a deliberate
+      result now survives the kill that discards half-captured stdout
+      mid-line.
+    * `notify(msg)` — a fire-and-forget side channel. The RPC pump consumes
+      `notify-<n>.json` frames on every sweep and forwards each message to
+      the tool's `on_update` callback as a partial update (bounded: 4 KiB per
+      message, 64 per run, silently dropped beyond), so long scripts can
+      surface progress without splitting into separate calls.
+    * `batch([(tool, params), ...])` — parallel helper calls. Each element
+      runs the plain blocking call inside a bounded thread pool; the pump
+      dispatches claimed requests as supervised tasks in waves of
+      `max_parallel_rpc` (default 4), so a batch of independent reads really
+      does overlap. Claiming — authentication, replay detection, and the call
+      budget — stays serialized in the pump, so accounting remains exact under
+      concurrency.
+
+  Backward compatibility is byte-exact: a script that never calls `text()`
+  gets the historic stdout-only result, unchanged, in both kernel modes.
+
+  Stderr stays merged into stdout (the `BashExecutor` default) on purpose:
+  the port has no separate stderr capture, so un-merging would silently
+  *discard* stderr (python tracebacks included) instead of surfacing it in
+  the diagnostics tail. Merged, it is visible and labeled.
 
   ## Shape of a per-call run (default `kernel_mode = "per_call"`)
 
@@ -135,7 +172,7 @@ defmodule CodingAgent.Tools.ExecuteCode do
           "script" => %{
             "type" => "string",
             "description" =>
-              "The python3 script to run. Its stdout (and stderr) is the tool result."
+              "The python3 script to run. Call text() to append blocks to the tool result; anything the script prints to stdout/stderr is returned only as a labeled diagnostics tail."
           },
           "timeout_ms" => %{
             "type" => "integer",
@@ -177,23 +214,32 @@ defmodule CodingAgent.Tools.ExecuteCode do
           "Kernel mode: per_call — each script runs in a fresh python3 process and nothing survives across calls; reset is accepted but has no effect."
       end
 
+    channel_sentence =
+      "The script also has text(s), which appends a numbered block to the tool result (its total bytes are capped; blocks are flushed per call, so they survive a timeout), notify(msg), which streams a progress line to the conversation without waiting, and batch([(tool, params), ...]), which runs several helper calls in parallel and returns their results in order."
+
+    result_sentence =
+      "Build the answer with text(): only the text() blocks are the result, while everything the script prints to stdout/stderr is appended as a clearly labeled diagnostics tail — a script that never calls text() keeps the historic stdout-only result."
+
     "Run a python3 script for multi-step exploration. " <>
       mode_sentence <>
       helper_sentence <>
-      " Intermediate results stay out of the conversation — only what the script prints to stdout is returned, so filter and aggregate in the script and print a compact final answer." <>
-      " Limits: #{config.timeout_ms} ms wall time, #{config.max_rpc_calls} tool calls, #{config.max_rpc_result_bytes} total tool-result bytes, stdout capped at #{config.max_output_bytes} bytes." <>
+      " " <>
+      channel_sentence <>
+      " " <>
+      result_sentence <>
+      " Limits: #{config.timeout_ms} ms wall time, #{config.max_rpc_calls} tool calls with at most #{config.max_parallel_rpc} dispatched in parallel, #{config.max_rpc_result_bytes} total tool-result bytes, text() blocks capped at #{config.max_text_bytes} bytes, stdout capped at #{config.max_output_bytes} bytes." <>
       " The script cannot import lemon internals beyond these helpers; traceback line numbers are offset by 1. Requires python3 on the host."
   end
 
   @doc """
   Execute a python3 script.
 
-  ## Parameters
-
     * `params` - Map containing "script" (required), optional "timeout_ms", and
       optional boolean "reset" (validated; per-call runs treat it as redundant)
     * `signal` - Abort signal reference for cancellation (can be nil)
-    * `on_update` - Streaming callback (unused: script output is not streamed)
+    * `on_update` - Streaming callback: each `notify()` message the script
+      emits is forwarded as a partial `AgentToolResult` (nil consumes and
+      drops them instead)
     * `cwd` - Working directory the script runs in
     * `opts` - Tool options (`:settings_manager`, `:tool_policy`,
       `:approval_context`, `:session_id`, `:session_pid`, `:session_module`,
@@ -209,7 +255,7 @@ defmodule CodingAgent.Tools.ExecuteCode do
           cwd :: String.t(),
           opts :: keyword()
         ) :: AgentToolResult.t() | {:error, term()}
-  def execute(_tool_call_id, params, signal, _on_update, cwd, opts) do
+  def execute(_tool_call_id, params, signal, on_update, cwd, opts) do
     if signal && AbortSignal.aborted?(signal) do
       %AgentToolResult{content: [%TextContent{text: "Script cancelled."}]}
     else
@@ -220,8 +266,8 @@ defmodule CodingAgent.Tools.ExecuteCode do
            :ok <- check_reset(params),
            {:ok, python} <- resolve_python(config, opts) do
         case config.kernel_mode do
-          "session" -> run_session(script, python, config, params, signal, cwd, opts)
-          "per_call" -> run(script, python, config, params, signal, cwd, opts)
+          "session" -> run_session(script, python, config, params, signal, on_update, cwd, opts)
+          "per_call" -> run(script, python, config, params, signal, on_update, cwd, opts)
         end
       end
     end
@@ -324,7 +370,7 @@ defmodule CodingAgent.Tools.ExecuteCode do
     end
   end
 
-  defp run(script, python, config, params, signal, cwd, opts) do
+  defp run(script, python, config, params, signal, on_update, cwd, opts) do
     started_at = System.monotonic_time(:microsecond)
     timeout_ms = clamp_timeout(Map.get(params, "timeout_ms"), config)
 
@@ -350,6 +396,8 @@ defmodule CodingAgent.Tools.ExecuteCode do
             approval_context: Keyword.get(opts, :approval_context),
             max_calls: config.max_rpc_calls,
             max_result_bytes: config.max_rpc_result_bytes,
+            max_parallel_rpc: config.max_parallel_rpc,
+            on_update: on_update,
             signal: signal,
             rpc_dir: rpc_dir,
             token: token,
@@ -358,8 +406,14 @@ defmodule CodingAgent.Tools.ExecuteCode do
 
           {outcome, task_result, stats} = Rpc.serve(task, ctx)
 
+          # text() blocks are flushed to disk as they are written, so they are
+          # already complete on disk whether the script exited normally or was
+          # killed by the wall clock/abort; read them while the workspace
+          # still exists, before the after-clause tears it down.
+          text_blocks = Rpc.read_text_blocks(rpc_dir, max_text_bytes: config.max_text_bytes)
+
           emit_telemetry(started_at, stats, task_result)
-          format(outcome, task_result, stats, signal, timeout_ms)
+          format(outcome, task_result, stats, signal, timeout_ms, text_blocks)
         after
           bounded_tree_removal(base, "execute_code workspace")
         end
@@ -374,7 +428,7 @@ defmodule CodingAgent.Tools.ExecuteCode do
   # Session execution deliberately has a separate entry point from `run/6`.
   # The per-call path remains byte-for-byte compatible for the default mode;
   # this path owns a fresh bridge and re-evaluates all authority for every cell.
-  defp run_session(script, python, config, params, signal, cwd, opts) do
+  defp run_session(script, python, config, params, signal, on_update, cwd, opts) do
     started_at = clock_now(opts)
     timeout_ms = clamp_timeout(Map.get(params, "timeout_ms"), config)
     deadline_ms = started_at + timeout_ms
@@ -387,6 +441,7 @@ defmodule CodingAgent.Tools.ExecuteCode do
           config,
           params,
           signal,
+          on_update,
           cwd,
           opts,
           reason,
@@ -403,6 +458,7 @@ defmodule CodingAgent.Tools.ExecuteCode do
           config,
           params,
           signal,
+          on_update,
           cwd,
           opts,
           key,
@@ -446,6 +502,7 @@ defmodule CodingAgent.Tools.ExecuteCode do
          config,
          params,
          signal,
+         on_update,
          cwd,
          opts,
          key,
@@ -462,7 +519,7 @@ defmodule CodingAgent.Tools.ExecuteCode do
           {:ok, base, bridge} ->
             cell_signal = AbortSignal.new()
 
-            case start_rpc_server(bridge, config, cell_signal, cwd, opts) do
+            case start_rpc_server(bridge, config, cell_signal, on_update, cwd, opts) do
               {:ok, rpc_server} ->
                 try do
                   request = %{
@@ -476,7 +533,7 @@ defmodule CodingAgent.Tools.ExecuteCode do
                     kernel_idle_timeout_ms: config.kernel_idle_timeout_ms,
                     max_queued_cells: config.max_queued_cells_per_kernel,
                     max_output_bytes: config.max_output_bytes,
-                    helper_source: PythonShim.render_module(config.tools)
+                    helper_source: PythonShim.render_module(config.tools, config.max_text_bytes)
                   }
 
                   request =
@@ -510,6 +567,12 @@ defmodule CodingAgent.Tools.ExecuteCode do
 
                     stats = rpc_stats(rpc_server_module, rpc_server)
 
+                    # Same write-through guarantee as the per-call path: read
+                    # whatever the cell flushed before it ended — including a
+                    # timeout or abort kill — while the bridge still exists.
+                    text_blocks =
+                      Rpc.read_text_blocks(bridge.dir, max_text_bytes: config.max_text_bytes)
+
                     case format_session_result(
                            result,
                            stats,
@@ -517,7 +580,8 @@ defmodule CodingAgent.Tools.ExecuteCode do
                            timeout_ms,
                            reset_performed,
                            started_at,
-                           opts
+                           opts,
+                           text_blocks
                          ) do
                       {:prestart_fallback, reason} ->
                         session_fallback(
@@ -526,6 +590,7 @@ defmodule CodingAgent.Tools.ExecuteCode do
                           config,
                           params,
                           signal,
+                          on_update,
                           cwd,
                           opts,
                           reason,
@@ -571,6 +636,7 @@ defmodule CodingAgent.Tools.ExecuteCode do
           config,
           params,
           signal,
+          on_update,
           cwd,
           opts,
           reason,
@@ -632,7 +698,7 @@ defmodule CodingAgent.Tools.ExecuteCode do
     end
   end
 
-  defp start_rpc_server(bridge, config, signal, cwd, opts) do
+  defp start_rpc_server(bridge, config, signal, on_update, cwd, opts) do
     rpc_server = Keyword.get(opts, :rpc_server, RpcServer)
 
     ctx = %{
@@ -641,6 +707,8 @@ defmodule CodingAgent.Tools.ExecuteCode do
       approval_context: Keyword.get(opts, :approval_context),
       max_calls: config.max_rpc_calls,
       max_result_bytes: config.max_rpc_result_bytes,
+      max_parallel_rpc: config.max_parallel_rpc,
+      on_update: on_update,
       signal: signal,
       rpc_dir: bridge.dir,
       token: bridge.token,
@@ -789,12 +857,13 @@ defmodule CodingAgent.Tools.ExecuteCode do
          timeout_ms,
          reset_performed,
          started_at,
-         opts
+         opts,
+         text_blocks
        ) do
     result = %{reason: :timeout, state_retained: false, kernel_reused: false}
 
     session_tool_result(
-      session_text(result, {:error, signal, timeout_ms}),
+      session_text(result, {:error, signal, timeout_ms}, text_blocks),
       result,
       stats,
       reset_performed,
@@ -810,10 +879,11 @@ defmodule CodingAgent.Tools.ExecuteCode do
          _timeout_ms,
          reset_performed,
          started_at,
-         opts
+         opts,
+         text_blocks
        ) do
     session_tool_result(
-      "Script cancelled.",
+      assemble_channel_text("Script cancelled.", text_blocks, "", false, nil),
       %{reason: :cancelled, state_retained: false, kernel_reused: false},
       stats,
       reset_performed,
@@ -829,7 +899,8 @@ defmodule CodingAgent.Tools.ExecuteCode do
          _timeout_ms,
          reset_performed,
          started_at,
-         opts
+         opts,
+         _text_blocks
        ) do
     session_tool_result(
       "execute_code session task exited: #{inspect(reason)}",
@@ -848,11 +919,12 @@ defmodule CodingAgent.Tools.ExecuteCode do
          _timeout_ms,
          reset_performed,
          started_at,
-         opts
+         opts,
+         text_blocks
        )
        when is_map(result) do
     session_tool_result(
-      session_text(result, :ok),
+      session_text(result, :ok, text_blocks),
       result,
       stats,
       reset_performed,
@@ -868,12 +940,14 @@ defmodule CodingAgent.Tools.ExecuteCode do
          timeout_ms,
          reset_performed,
          started_at,
-         _opts
+         _opts,
+         _text_blocks
        )
        when reason in [:capacity_exhausted, :registry_unavailable, :startup_failed] do
     # These are the only façade failures known to occur before a cell starts.
     # A Session result such as :worker_exit or :queue_full is intentionally not
-    # retried in a fresh interpreter.
+    # retried in a fresh interpreter, and a cell that never started cannot have
+    # flushed text blocks.
     _ = {stats, signal, timeout_ms, reset_performed, started_at}
     {:prestart_fallback, reason}
   end
@@ -885,11 +959,12 @@ defmodule CodingAgent.Tools.ExecuteCode do
          timeout_ms,
          reset_performed,
          started_at,
-         opts
+         opts,
+         text_blocks
        )
        when is_map(result) do
     session_tool_result(
-      session_text(result, {:error, signal, timeout_ms}),
+      session_text(result, {:error, signal, timeout_ms}, text_blocks),
       result,
       stats,
       reset_performed,
@@ -905,7 +980,8 @@ defmodule CodingAgent.Tools.ExecuteCode do
          _timeout_ms,
          reset_performed,
          started_at,
-         opts
+         opts,
+         _text_blocks
        ) do
     session_tool_result(
       "execute_code session returned an invalid result: #{inspect(other)}",
@@ -917,35 +993,59 @@ defmodule CodingAgent.Tools.ExecuteCode do
     )
   end
 
-  defp session_text(result, :ok) do
+  # A script that never called text() keeps its exact pre-channel transcript
+  # shape (byte-for-byte), so existing prompts and caches are unaffected.
+  defp session_text(result, :ok, []) do
     case Map.get(result, :output, "") do
       "" -> "(script produced no output)"
       output -> maybe_full_output(output, result)
     end
   end
 
-  defp session_text(result, {:error, signal, timeout_ms}) do
+  defp session_text(result, {:error, signal, timeout_ms}, []) do
     output = Map.get(result, :output, "")
-
-    headline =
-      case Map.get(result, :reason) do
-        :timeout ->
-          "Script timed out after #{timeout_ms}ms."
-
-        :cancelled ->
-          if(signal && AbortSignal.aborted?(signal),
-            do: "Script cancelled.",
-            else: "Script cancelled."
-          )
-
-        :exception ->
-          exception_headline(Map.get(result, :exception))
-
-        reason ->
-          "execute_code session failed: #{inspect(reason)}"
-      end
+    headline = session_error_headline(result, signal, timeout_ms)
 
     if output == "", do: headline, else: "#{headline}\n\n#{maybe_full_output(output, result)}"
+  end
+
+  defp session_text(result, :ok, text_blocks) do
+    assemble_channel_text(
+      nil,
+      text_blocks,
+      Map.get(result, :output, ""),
+      Map.get(result, :truncated, false),
+      Map.get(result, :full_output_path)
+    )
+  end
+
+  defp session_text(result, {:error, signal, timeout_ms}, text_blocks) do
+    assemble_channel_text(
+      session_error_headline(result, signal, timeout_ms),
+      text_blocks,
+      Map.get(result, :output, ""),
+      Map.get(result, :truncated, false),
+      Map.get(result, :full_output_path)
+    )
+  end
+
+  defp session_error_headline(result, signal, timeout_ms) do
+    case Map.get(result, :reason) do
+      :timeout ->
+        "Script timed out after #{timeout_ms}ms."
+
+      :cancelled ->
+        if(signal && AbortSignal.aborted?(signal),
+          do: "Script cancelled.",
+          else: "Script cancelled."
+        )
+
+      :exception ->
+        exception_headline(Map.get(result, :exception))
+
+      reason ->
+        "execute_code session failed: #{inspect(reason)}"
+    end
   end
 
   defp exception_headline(%{name: name, message: message})
@@ -1005,6 +1105,7 @@ defmodule CodingAgent.Tools.ExecuteCode do
          config,
          params,
          signal,
+         on_update,
          cwd,
          opts,
          reason,
@@ -1015,7 +1116,7 @@ defmodule CodingAgent.Tools.ExecuteCode do
     # `python` is resolved before this path. A missing scope occurs after
     # resolution, while facade admission failures reach this helper with nil.
     python = python || resolve_fallback_python(config, opts)
-    result = run(script, python, config, params, signal, cwd, opts)
+    result = run(script, python, config, params, signal, on_update, cwd, opts)
 
     case result do
       %AgentToolResult{} = tool_result ->
@@ -1090,7 +1191,7 @@ defmodule CodingAgent.Tools.ExecuteCode do
            PrivateTmp.write_file(
              base,
              "lemon_tools.py",
-             PythonShim.render_prelude(rpc_dir, token, config.tools)
+             PythonShim.render_prelude(rpc_dir, token, config.tools, config.max_text_bytes)
            ),
          :ok <-
            PrivateTmp.write_file(
@@ -1134,14 +1235,21 @@ defmodule CodingAgent.Tools.ExecuteCode do
     "'" <> String.replace(path, "'", "'\"'\"'") <> "'"
   end
 
-  defp format(:exit, reason, _stats, _signal, _timeout_ms),
+  defp format(:exit, reason, _stats, _signal, _timeout_ms, _text_blocks),
     do: {:error, "execute_code runner crashed: #{inspect(reason)}"}
 
-  defp format(:ok, {:error, reason}, _stats, _signal, _timeout_ms),
+  defp format(:ok, {:error, reason}, _stats, _signal, _timeout_ms, _text_blocks),
     do: {:error, "Error executing script: #{inspect(reason)}"}
 
-  defp format(:ok, {:ok, %BashExecutor.Result{} = result}, stats, signal, timeout_ms) do
-    text = result_text(result, signal, timeout_ms)
+  defp format(
+         :ok,
+         {:ok, %BashExecutor.Result{} = result},
+         stats,
+         signal,
+         timeout_ms,
+         text_blocks
+       ) do
+    text = result_text(result, signal, timeout_ms, text_blocks)
     used_webfetch? = MapSet.member?(stats.tools_used, "webfetch")
 
     %AgentToolResult{
@@ -1156,10 +1264,13 @@ defmodule CodingAgent.Tools.ExecuteCode do
     }
   end
 
-  defp format(:ok, other, _stats, _signal, _timeout_ms),
+  defp format(:ok, other, _stats, _signal, _timeout_ms, _text_blocks),
     do: {:error, "Error executing script: #{inspect(other)}"}
 
-  defp result_text(%BashExecutor.Result{cancelled: true} = result, signal, timeout_ms) do
+  # A run without text() blocks keeps its exact pre-channel shape: cancelled
+  # and timeout headlines, truncation spill markers, exit-code lines, and the
+  # "(script produced no output)" teaching line all stay byte-identical.
+  defp result_text(%BashExecutor.Result{cancelled: true} = result, signal, timeout_ms, []) do
     headline =
       if signal && AbortSignal.aborted?(signal) do
         "Script cancelled."
@@ -1173,7 +1284,7 @@ defmodule CodingAgent.Tools.ExecuteCode do
     end
   end
 
-  defp result_text(%BashExecutor.Result{exit_code: 0} = result, _signal, _timeout_ms) do
+  defp result_text(%BashExecutor.Result{exit_code: 0} = result, _signal, _timeout_ms, []) do
     output = result.output || ""
 
     cond do
@@ -1188,7 +1299,7 @@ defmodule CodingAgent.Tools.ExecuteCode do
     end
   end
 
-  defp result_text(%BashExecutor.Result{} = result, _signal, _timeout_ms) do
+  defp result_text(%BashExecutor.Result{} = result, _signal, _timeout_ms, []) do
     output = result.output || ""
 
     cond do
@@ -1201,6 +1312,80 @@ defmodule CodingAgent.Tools.ExecuteCode do
       true ->
         "Script exited with code #{result.exit_code}"
     end
+  end
+
+  # Result-channel assembly, used whenever the script called text() at least
+  # once: headline -> the text() blocks verbatim in flush order, labeled as
+  # the script's result -> a clearly labeled diagnostics tail. The tail is
+  # stdout/stderr as captured — already capped at `max_output_bytes` by
+  # BashExecutor per-call (stderr is deliberately still merged into stdout,
+  # because stopping the merge would discard stderr entirely rather than
+  # surface it here) and by the PythonRepl cell pipeline in session mode. A
+  # killed run still shows its flushed blocks; only the partial stdout of the
+  # kill is diagnostic. The exit-code line moves into the headline slot so
+  # the deliberate result, not incidental output, closes the message.
+  defp result_text(%BashExecutor.Result{cancelled: true} = result, signal, timeout_ms, blocks) do
+    headline =
+      if signal && AbortSignal.aborted?(signal) do
+        "Script cancelled."
+      else
+        "Script timed out after #{timeout_ms}ms."
+      end
+
+    assemble_channel_text(
+      headline,
+      blocks,
+      result.output || "",
+      result.truncated,
+      result.full_output_path
+    )
+  end
+
+  defp result_text(%BashExecutor.Result{exit_code: 0} = result, _signal, _timeout_ms, blocks) do
+    assemble_channel_text(
+      nil,
+      blocks,
+      result.output || "",
+      result.truncated,
+      result.full_output_path
+    )
+  end
+
+  defp result_text(%BashExecutor.Result{} = result, _signal, _timeout_ms, blocks) do
+    assemble_channel_text(
+      "Script exited with code #{result.exit_code}",
+      blocks,
+      result.output || "",
+      result.truncated,
+      result.full_output_path
+    )
+  end
+
+  defp assemble_channel_text(headline, [], _output, _truncated, _full_output_path), do: headline
+
+  defp assemble_channel_text(headline, blocks, output, truncated, full_output_path)
+       when is_list(blocks) and blocks != [] do
+    body =
+      if output == "" do
+        "(script produced no output)"
+      else
+        output
+      end
+
+    body =
+      if truncated && full_output_path do
+        "#{body}\n\n[Full output saved to: #{full_output_path}]"
+      else
+        body
+      end
+
+    [
+      headline,
+      "Script result (text()):\n" <> Enum.join(blocks, "\n"),
+      "Diagnostics (stdout/stderr, not the result):\n" <> body
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join("\n\n")
   end
 
   defp build_details(%BashExecutor.Result{} = result, stats) do

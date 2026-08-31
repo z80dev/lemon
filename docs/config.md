@@ -643,11 +643,13 @@ max_tool_invoke_depth = 4
 ## Execute Code (`execute_code`)
 
 `execute_code` is programmatic tool calling: the model submits a python3 script that can
-call a fixed allowlist of agent tools (`read`, `grep`, `find`, `ls`, `webfetch`), and only
-what the script prints comes back. It is disabled by default and **bash-equivalent** — the
-script runs as host code with the user's permissions, not in a sandbox. For the full
-behavior, security, and lifecycle contract see
-[`docs/tools/execute-code.md`](tools/execute-code.md).
+call a fixed allowlist of agent tools (`read`, `grep`, `find`, `ls`, `webfetch`). The
+result comes back through `text()` blocks; stdout/stderr is returned as a labeled
+diagnostics tail (a script that never calls `text()` keeps the stdout-only result), and
+`notify()`/`batch()` add streaming updates and parallel helper calls. It is disabled by
+default and **bash-equivalent** — the script runs as host code with the user's
+permissions, not in a sandbox. For the full behavior, security, and lifecycle contract
+see [`docs/tools/execute-code.md`](tools/execute-code.md).
 
 ```toml
 [runtime.tools.execute_code]
@@ -656,7 +658,9 @@ python_path = ""              # empty = find python3 on PATH
 timeout_ms = 120000           # end-to-end wall-time cap per run, including session queue wait
 max_rpc_calls = 100           # helper calls per run
 max_rpc_result_bytes = 5242880
-max_output_bytes = 50000
+max_output_bytes = 50000      # stdout/stderr cap, returned as the diagnostics tail
+max_text_bytes = 65536        # total text() result-block bytes per run
+max_parallel_rpc = 4          # helper calls the pump dispatches concurrently
 tools = []                    # helper subset; empty = full fixed allowlist
 
 # Persistent-kernel opt-in:

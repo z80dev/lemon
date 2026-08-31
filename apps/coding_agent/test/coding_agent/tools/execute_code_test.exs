@@ -33,7 +33,7 @@ defmodule CodingAgent.Tools.ExecuteCodeSchemaTest do
       for name <- Config.allowlist(), do: assert(tool.description =~ "#{name}(")
       assert tool.description =~ "45000 ms wall time"
       assert tool.description =~ "9 tool calls"
-      assert tool.description =~ "only what the script prints to stdout is returned"
+      assert tool.description =~ "only the text() blocks are the result"
       assert tool.description =~ "offset by 1"
     end
 
@@ -167,6 +167,19 @@ defmodule CodingAgent.Tools.ExecuteCodeSchemaTest do
       refute module =~ "_TOKEN = \""
     end
 
+    test "the result channels are always present, budget baked in" do
+      module = PythonShim.render_module(["read"], 2_048)
+
+      assert module =~ "_TEXT_BUDGET = 2048"
+      assert module =~ "def text(s):"
+      assert module =~ "def notify(msg):"
+      assert module =~ "def batch(calls):"
+      assert module =~ "threading.Lock()"
+
+      # The default budget matches Config's pinned default.
+      assert PythonShim.render_module([]) =~ "_TEXT_BUDGET = 65536"
+    end
+
     test "a configured prelude embeds its rpc dir and token exactly once, json-escaped" do
       token = "token-0123"
       prelude = PythonShim.render_prelude("/tmp/it's here", token, Config.allowlist())
@@ -216,12 +229,12 @@ defmodule CodingAgent.Tools.ExecuteCodeSchemaTest do
              ] = Jason.decode!(output)
     end
 
-    test "the import line only imports enabled names" do
+    test "the import line only imports enabled tool names plus the channels" do
       assert PythonShim.import_line(["read", "ls"]) ==
-               "from lemon_tools import ToolError, read, ls"
+               "from lemon_tools import ToolError, read, ls, text, notify, batch"
 
       assert PythonShim.import_line(Config.allowlist()) ==
-               "from lemon_tools import ToolError, read, grep, find, ls, webfetch"
+               "from lemon_tools import ToolError, read, grep, find, ls, webfetch, text, notify, batch"
     end
 
     test "render_script adds exactly one line" do
@@ -759,6 +772,177 @@ defmodule CodingAgent.Tools.ExecuteCodeTest do
     end
   end
 
+  describe "text() result channel" do
+    test "blocks return in flush order with stdout demoted to a labeled diagnostics tail", %{
+      tmp_dir: cwd
+    } do
+      script = """
+      print("DeprecationWarning: incidental library noise")
+      text("deliberate answer: 42")
+      text("second deliberate line")
+      print("more incidental output")
+      """
+
+      result = run(cwd, script)
+      body = text(result)
+
+      assert result.details.exit_code == 0
+      assert body =~ "Script result (text()):"
+
+      # The blocks are the labeled result, verbatim, in order.
+      assert index_of(body, "deliberate answer: 42") < index_of(body, "second deliberate line")
+      assert index_of(body, "second deliberate line") < index_of(body, "Diagnostics")
+
+      # Stdout never impersonates the result: it only appears after the
+      # diagnostics label.
+      diagnostics_at = index_of(body, "Diagnostics (stdout/stderr, not the result):")
+      assert diagnostics_at < index_of(body, "DeprecationWarning")
+      assert diagnostics_at < index_of(body, "more incidental output")
+    end
+
+    test "an over-budget text() call raises ToolError and the flushed partial blocks still return",
+         %{tmp_dir: cwd} do
+      script = """
+      text("0123456789")
+      try:
+          text("X")
+          print("NO ERROR")
+      except Exception as e:
+          print(str(e))
+      """
+
+      result = run(cwd, script, opts(%{max_text_bytes: 10}))
+      body = text(result)
+      # The refusing call surfaces like every other limit violation, in the
+      # diagnostics tail...
+      assert body =~ "text() byte budget exceeded"
+      assert body =~ "cap 10"
+      # ...while every block flushed before the refusal is still the result.
+      assert index_of(body, "0123456789") < index_of(body, "Diagnostics")
+      assert body =~ "text() byte budget exceeded"
+    end
+
+    test "blocks flushed before a wall-clock kill survive into the result", %{tmp_dir: cwd} do
+      script = """
+      text("partial answer survives the kill")
+      while True:
+          pass
+      """
+
+      result = run(cwd, script, opts(%{timeout_ms: 2_000}))
+      body = text(result)
+
+      assert body =~ "Script timed out after 2000ms."
+
+      assert index_of(body, "Script timed out after 2000ms.") <
+               index_of(body, "partial answer survives the kill")
+
+      assert index_of(body, "partial answer survives the kill") < index_of(body, "Diagnostics")
+    end
+
+    test "a script that never calls text() keeps the historic stdout-only result", %{tmp_dir: cwd} do
+      result = run(cwd, ~s|print("plain output")|)
+
+      assert text(result) == "plain output\n"
+      assert result.details.exit_code == 0
+    end
+  end
+
+  describe "notify() streaming" do
+    test "on_update receives notify() messages in order during the run", %{tmp_dir: cwd} do
+      test_pid = self()
+
+      on_update = fn %AgentToolResult{content: [%TextContent{text: message} | _]} ->
+        send(test_pid, {:notification, message})
+      end
+
+      script = """
+      import time
+      notify("step one")
+      notify("step two")
+      time.sleep(0.3)
+      print("done")
+      """
+
+      result = ExecuteCode.execute("call-1", %{"script" => script}, nil, on_update, cwd, opts())
+
+      assert text(result) =~ "done"
+
+      # Both arrived, in flush order (receive drains the mailbox oldest-first).
+      first = receive(do: ({:notification, message} -> message))
+      second = receive(do: ({:notification, message} -> message))
+      assert {first, second} == {"notify: step one", "notify: step two"}
+    end
+
+    test "a nil on_update consumes notifications without crashing the run", %{tmp_dir: cwd} do
+      script = """
+      import time
+      notify("ignored one")
+      notify("ignored two")
+      time.sleep(0.3)
+      print("still fine")
+      """
+
+      result = run(cwd, script)
+
+      assert text(result) =~ "still fine"
+      assert result.details.exit_code == 0
+    end
+  end
+
+  describe "batch() parallel helper calls" do
+    test "a batch of blocking calls overlaps: every call is in flight before any completes",
+         %{tmp_dir: cwd} do
+      # A barrier tool that only returns once `needed` calls are concurrently
+      # in flight. Under serial dispatch the first call would spin to its
+      # deadline alone and report a barrier timeout; only real parallel
+      # dispatch can open the barrier.
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+      read_override = barrier_read_override(counter, 3)
+
+      script = """
+      results = batch([
+          ("read", {"value": "r1"}),
+          ("read", {"value": "r2"}),
+          ("read", {"value": "r3"}),
+      ])
+      print("|".join(results))
+      """
+
+      result =
+        run(
+          cwd,
+          script,
+          opts(%{},
+            execute_code_tool_overrides: %{"read" => read_override}
+          )
+        )
+
+      on_exit(fn -> if Process.alive?(counter), do: Agent.stop(counter) end)
+
+      assert text(result) =~ "r1|r2|r3"
+      refute text(result) =~ "BARRIER TIMEOUT"
+      assert result.details.rpc_calls == 3
+    end
+
+    test "the call limit stays exact when a batch exceeds the remaining budget", %{tmp_dir: cwd} do
+      script = """
+      try:
+          batch([("ls", {}), ("ls", {}), ("ls", {})])
+          print("NO ERROR")
+      except Exception as e:
+          print(str(e))
+      """
+
+      result = run(cwd, script, opts(%{max_rpc_calls: 2}))
+
+      assert text(result) =~ "rpc call limit exceeded (max 2 calls per script)"
+      assert result.details.rpc_calls == 2
+      assert result.details.rpc_errors == 1
+    end
+  end
+
   # ==========================================================================
   # Helpers
   # ==========================================================================
@@ -817,4 +1001,49 @@ defmodule CodingAgent.Tools.ExecuteCodeTest do
   end
 
   defp text(%AgentToolResult{content: [%TextContent{text: text} | _]}), do: text
+
+  defp index_of(haystack, needle) do
+    {index, _} = :binary.match(haystack, needle)
+    index
+  end
+
+  # A helper stub that returns only once `needed` calls are concurrently in
+  # flight (a barrier): proof by construction that dispatch overlapped.
+  defp barrier_read_override(counter, needed) do
+    %AgentTool{
+      name: "read",
+      description: "barrier read",
+      label: "read",
+      parameters: %{"type" => "object", "properties" => %{}},
+      execute: fn _id, params, _signal, _on_update ->
+        _in_flight = Agent.get_and_update(counter, fn n -> {n + 1, n + 1} end)
+
+        if spin_until(fn -> Agent.get(counter, & &1) >= needed end, 10_000) do
+          %AgentToolResult{content: [%TextContent{text: params["value"] || ""}]}
+        else
+          %AgentToolResult{content: [%TextContent{text: "BARRIER TIMEOUT"}]}
+        end
+      end
+    }
+  end
+
+  defp spin_until(fun, deadline_ms) do
+    deadline = System.monotonic_time(:millisecond) + deadline_ms
+
+    if fun.() do
+      true
+    else
+      spin_wait(fun, deadline)
+    end
+  end
+
+  defp spin_wait(fun, deadline) do
+    if System.monotonic_time(:millisecond) >= deadline do
+      false
+    else
+      Process.sleep(10)
+
+      if fun.(), do: true, else: spin_wait(fun, deadline)
+    end
+  end
 end

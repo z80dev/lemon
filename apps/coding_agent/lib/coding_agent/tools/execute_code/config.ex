@@ -16,6 +16,11 @@ defmodule CodingAgent.Tools.ExecuteCode.Config do
   unrecognized stays `per_call`, so a config mistake can never silently enable
   persistence. The bounds are consumed by the `CodingAgent.PythonRepl`
   session path; `per_call` runs ignore them.
+
+  `max_text_bytes` bounds the `text()` result channel and `max_parallel_rpc`
+  bounds how many helper calls the RPC pump dispatches concurrently per
+  sweep; both clamp to positive integers, so a config mistake can never
+  disable either bound.
   """
 
   @rpc_allowlist ~w(read grep find ls webfetch)
@@ -24,6 +29,8 @@ defmodule CodingAgent.Tools.ExecuteCode.Config do
   @default_max_rpc_calls 100
   @default_max_rpc_result_bytes 5_242_880
   @default_max_output_bytes 50_000
+  @default_max_text_bytes 65_536
+  @default_max_parallel_rpc 4
   @default_kernel_mode "per_call"
   @default_kernel_idle_timeout_ms 1_800_000
   @default_max_live_kernels 16
@@ -36,6 +43,8 @@ defmodule CodingAgent.Tools.ExecuteCode.Config do
           max_rpc_calls: pos_integer(),
           max_rpc_result_bytes: pos_integer(),
           max_output_bytes: pos_integer(),
+          max_text_bytes: pos_integer(),
+          max_parallel_rpc: pos_integer(),
           kernel_mode: kernel_mode(),
           kernel_idle_timeout_ms: pos_integer(),
           max_live_kernels: pos_integer(),
@@ -56,6 +65,8 @@ defmodule CodingAgent.Tools.ExecuteCode.Config do
             max_rpc_calls: @default_max_rpc_calls,
             max_rpc_result_bytes: @default_max_rpc_result_bytes,
             max_output_bytes: @default_max_output_bytes,
+            max_text_bytes: @default_max_text_bytes,
+            max_parallel_rpc: @default_max_parallel_rpc,
             kernel_mode: @default_kernel_mode,
             kernel_idle_timeout_ms: @default_kernel_idle_timeout_ms,
             max_live_kernels: @default_max_live_kernels,
@@ -92,6 +103,8 @@ defmodule CodingAgent.Tools.ExecuteCode.Config do
       max_rpc_result_bytes:
         parse_positive_integer(ec["max_rpc_result_bytes"], @default_max_rpc_result_bytes),
       max_output_bytes: parse_positive_integer(ec["max_output_bytes"], @default_max_output_bytes),
+      max_text_bytes: parse_positive_integer(ec["max_text_bytes"], @default_max_text_bytes),
+      max_parallel_rpc: parse_positive_integer(ec["max_parallel_rpc"], @default_max_parallel_rpc),
       kernel_mode: parse_kernel_mode(ec["kernel_mode"]),
       kernel_idle_timeout_ms:
         parse_positive_integer(ec["kernel_idle_timeout_ms"], @default_kernel_idle_timeout_ms),

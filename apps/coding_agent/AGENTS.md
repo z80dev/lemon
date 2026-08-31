@@ -75,8 +75,12 @@ Tools are divided into two sets. `coding_tools/2` is the default set passed to s
 
 `execute_code` is programmatic tool calling: the model submits a python3 script that
 invokes a fixed compile-time helper allowlist (`read`, `grep`, `find`, `ls`, `webfetch`)
-through the same policy/approval path as direct tool calls, and only printed output
-returns. It runs as host code with bash-equivalent authority -- never a sandbox. The
+through the same policy/approval path as direct tool calls. The result comes back via
+the shim's `text()` blocks -- each flushed to disk per call, so deliberate results
+survive a timeout/abort kill -- with stdout/stderr demoted to a labeled diagnostics
+tail; `notify()` streams progress through the tool's update callback and `batch()`
+dispatches parallel helper calls (pump waves bounded by `max_parallel_rpc`). It runs as
+host code with bash-equivalent authority -- never a sandbox. The
 default `kernel_mode = "per_call"` gives every run a fresh process; the opt-in `"session"`
 mode dispatches serialized cells to a persistent supervised interpreter keyed by persisted
 session id + agent id + canonical cwd/interpreter + helper set + protocol version (see

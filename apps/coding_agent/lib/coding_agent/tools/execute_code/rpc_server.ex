@@ -61,7 +61,6 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
   (`CodingAgent.Tools.ExecuteCode.Rpc`), which is injected via the `:rpc`
   option so tests can substitute a fake. The server treats pump stats as
   opaque and only calls:
-
     * `process_pending(ctx, stats)` — one bounded sweep over `ctx.rpc_dir`.
       It selects at most `ctx.max_requests_per_sweep` regular request files or
       symlinks (100 by default) in ascending id order before decoding or
@@ -77,7 +76,10 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
       atomically, and returns updated stats. The stats carry the pump's
       replay-tracking state, so a request id that was already answered —
       including one replayed after its response was consumed — is refused and
-      never re-dispatched.
+      never re-dispatched. Sweeps also consume `notify-*.json` side-channel
+      frames, forwarding each through `ctx.on_update` when present (see
+      `Rpc` for the caps); `text-*.json` result blocks are never touched by
+      the sweep — the owning execute process reads them after the cell ends.
     * `process_request(id, ctx, stats)` — the single-request building block
       shared with `Rpc.serve/2`; not called by this server, which always
       sweeps via `process_pending/2`.
@@ -124,7 +126,9 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
           required(:rpc_dir) => String.t(),
           required(:token) => String.t(),
           optional(:poll_interval_ms) => pos_integer(),
-          optional(:max_requests_per_sweep) => pos_integer()
+          optional(:max_requests_per_sweep) => pos_integer(),
+          optional(:max_parallel_rpc) => pos_integer(),
+          optional(:on_update) => (LemonAgent.Types.AgentToolResult.t() -> :ok) | nil
         }
 
   @type option ::
@@ -392,17 +396,24 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
   end
 
   defp validate_optional_ctx(ctx) do
-    case Map.fetch(ctx, :max_requests_per_sweep) do
-      :error ->
-        :ok
+    Enum.reduce_while([:max_requests_per_sweep, :max_parallel_rpc], :ok, fn key, :ok ->
+      case Map.fetch(ctx, key) do
+        :error ->
+          {:cont, :ok}
 
-      {:ok, value} ->
-        if valid_ctx_value?(:max_requests_per_sweep, value) do
-          :ok
-        else
-          {:error, {:invalid_ctx, :max_requests_per_sweep}}
-        end
-    end
+        {:ok, value} when is_nil(value) ->
+          # nil means "not configured": the shared pump applies its own
+          # default, exactly like an absent key.
+          {:cont, :ok}
+
+        {:ok, value} ->
+          if valid_ctx_value?(key, value) do
+            {:cont, :ok}
+          else
+            {:halt, {:error, {:invalid_ctx, key}}}
+          end
+      end
+    end)
   end
 
   defp valid_ctx_value?(:rpc_dir, value), do: is_binary(value) and value != ""
@@ -411,6 +422,7 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
   defp valid_ctx_value?(:max_calls, value), do: is_integer(value) and value > 0
   defp valid_ctx_value?(:max_result_bytes, value), do: is_integer(value) and value > 0
   defp valid_ctx_value?(:max_requests_per_sweep, value), do: is_integer(value) and value > 0
+  defp valid_ctx_value?(:max_parallel_rpc, value), do: is_integer(value) and value > 0
 
   defp resolve_poll_interval(ctx, opts) do
     value =

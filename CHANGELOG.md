@@ -10,6 +10,18 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- `execute_code` gained an explicit result channel: `text()` blocks are the tool
+  result (write-through flushed per call, so they survive a timeout/abort kill),
+  while stdout/stderr is demoted to a clearly labeled diagnostics tail. Scripts
+  that never call `text()` keep the historic stdout-only result byte-for-byte.
+  New knobs: `max_text_bytes` (text budget, default 64 KiB) and
+  `max_parallel_rpc` (pump dispatch concurrency, default 4).
+- `execute_code` scripts gained `notify(msg)` — a streaming side channel whose
+  messages are forwarded to the tool's partial-update callback (capped at 4 KiB
+  per message, 64 per run) — and `batch([...])`, which runs helper calls in
+  parallel through the pump's bounded wave dispatch with exact call-limit,
+  replay, and byte-budget accounting.
+
 - Product releases can now be cut and published from one manual Release
   workflow dispatch; the workflow derives CalVer, consumes the Unreleased
   notes, commits and tags the release, verifies every artifact, publishes the
